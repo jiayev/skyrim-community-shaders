@@ -142,6 +142,7 @@ struct PhysicalSky final : public Feature
 		float rayMarchRange = 32.f;     // km
 		float shadowVolumeRange = 8.f;  // km
 		uint32_t cloudMaxStep = 97;
+		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
 
@@ -202,8 +203,8 @@ struct PhysicalSky final : public Feature
 		// VOLUMETRIC CLOUDS (toggle + shadow-cookie parameters for GetDirlightTransmittance)
 		uint enableVolumetricClouds;
 		float shadowVolumeRange;
-		float volCloudBottom;  //
-		float volCloudThickness;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
 		float3 volCloudScatter;  //
 		float volCloudAverageDensity;
 		float3 volCloudAbsorption;  //
@@ -248,7 +249,6 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> detailErosionNoiseSrv = nullptr;
 
 	TextureManager ndfTexManager{ "Cloud Map" };
-	NdfSettings ndfSettings = HpGeneratedCloudMapSettings{};
 	NdfManager ndfManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
@@ -267,8 +267,8 @@ struct PhysicalSky final : public Feature
 		float planetRadius;
 		float2 activeFrameDim;
 
-		float cloudBottom;
-		float cloudThickness;
+		float lowestCloudAltitude;
+		float highestCloudAltitude;
 		float2 weatherCenter;
 		float weatherWorldSize;
 		float highCloudEnabled;

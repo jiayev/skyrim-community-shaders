@@ -19,114 +19,6 @@ namespace
 	constexpr float MetersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_M; }
 	constexpr float PerMeterToPerGameUnit(float value) { return value * Util::Units::GAME_UNIT_TO_M; }
 
-	uint32_t HashNoise3D(int x, int y, int z, uint32_t seed)
-	{
-		uint32_t h = static_cast<uint32_t>(x) * 374761393u + static_cast<uint32_t>(y) * 668265263u +
-		             static_cast<uint32_t>(z) * 2246822519u + seed * 3266489917u;
-		h = (h ^ (h >> 13u)) * 1274126177u;
-		return h ^ (h >> 16u);
-	}
-
-	int WrapNoiseCoordinate(int value, int period)
-	{
-		value %= period;
-		return value < 0 ? value + period : value;
-	}
-
-	float PeriodicValueNoise3D(float x, float y, float z, int period, uint32_t seed)
-	{
-		const int ix = static_cast<int>(std::floor(x));
-		const int iy = static_cast<int>(std::floor(y));
-		const int iz = static_cast<int>(std::floor(z));
-		const float fx = x - static_cast<float>(ix);
-		const float fy = y - static_cast<float>(iy);
-		const float fz = z - static_cast<float>(iz);
-		const float sx = fx * fx * (3.0f - 2.0f * fx);
-		const float sy = fy * fy * (3.0f - 2.0f * fy);
-		const float sz = fz * fz * (3.0f - 2.0f * fz);
-		const auto sample = [&](int ox, int oy, int oz) {
-			const uint32_t h = HashNoise3D(
-				WrapNoiseCoordinate(ix + ox, period),
-				WrapNoiseCoordinate(iy + oy, period),
-				WrapNoiseCoordinate(iz + oz, period), seed);
-			return static_cast<float>(h) / 4294967295.0f;
-		};
-		const float z0 = std::lerp(
-			std::lerp(sample(0, 0, 0), sample(1, 0, 0), sx),
-			std::lerp(sample(0, 1, 0), sample(1, 1, 0), sx), sy);
-		const float z1 = std::lerp(
-			std::lerp(sample(0, 0, 1), sample(1, 0, 1), sx),
-			std::lerp(sample(0, 1, 1), sample(1, 1, 1), sx), sy);
-		return std::lerp(z0, z1, sz);
-	}
-
-	float PeriodicFbm3D(float u, float v, float w, int basePeriod, uint32_t seed)
-	{
-		float value = 0.0f;
-		float amplitude = 0.5f;
-		float amplitudeSum = 0.0f;
-		int period = std::max(basePeriod, 1);
-		for (uint32_t octave = 0; octave < 4; ++octave) {
-			value += PeriodicValueNoise3D(u * period, v * period, w * period, period, seed + octave * 17u) * amplitude;
-			amplitudeSum += amplitude;
-			amplitude *= 0.5f;
-			period *= 2;
-		}
-		return std::clamp(value / amplitudeSum, 0.0f, 1.0f);
-	}
-
-	winrt::com_ptr<ID3D11ShaderResourceView> CreateDetailErosionNoise(ID3D11Device* device)
-	{
-		constexpr uint32_t dimension = 32u;
-		std::vector<uint8_t> data(dimension * dimension * dimension * 4u);
-		for (uint32_t z = 0; z < dimension; ++z) {
-			for (uint32_t y = 0; y < dimension; ++y) {
-				for (uint32_t x = 0; x < dimension; ++x) {
-					const float u = (static_cast<float>(x) + 0.5f) / dimension;
-					const float v = (static_cast<float>(y) + 0.5f) / dimension;
-					const float w = (static_cast<float>(z) + 0.5f) / dimension;
-					const float wispyLow = PeriodicFbm3D(u, v, w, 3, 11u);
-					const float wispyHigh = PeriodicFbm3D(u, v, w, 7, 29u);
-					const float billowyLow = 1.0f - std::abs(PeriodicFbm3D(u, v, w, 4, 47u) * 2.0f - 1.0f);
-					const float billowyHigh = 1.0f - std::abs(PeriodicFbm3D(u, v, w, 9, 71u) * 2.0f - 1.0f);
-					const size_t index = ((static_cast<size_t>(z) * dimension + y) * dimension + x) * 4u;
-					data[index + 0] = static_cast<uint8_t>(std::clamp(wispyLow, 0.0f, 1.0f) * 255.0f + 0.5f);
-					data[index + 1] = static_cast<uint8_t>(std::clamp(wispyHigh, 0.0f, 1.0f) * 255.0f + 0.5f);
-					data[index + 2] = static_cast<uint8_t>(std::clamp(billowyLow, 0.0f, 1.0f) * 255.0f + 0.5f);
-					data[index + 3] = static_cast<uint8_t>(std::clamp(billowyHigh, 0.0f, 1.0f) * 255.0f + 0.5f);
-				}
-			}
-		}
-
-		D3D11_TEXTURE3D_DESC textureDesc{
-			.Width = dimension,
-			.Height = dimension,
-			.Depth = dimension,
-			.MipLevels = 1,
-			.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-			.Usage = D3D11_USAGE_IMMUTABLE,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE,
-			.CPUAccessFlags = 0,
-			.MiscFlags = 0
-		};
-		D3D11_SUBRESOURCE_DATA initialData{
-			.pSysMem = data.data(),
-			.SysMemPitch = dimension * 4u,
-			.SysMemSlicePitch = dimension * dimension * 4u
-		};
-		winrt::com_ptr<ID3D11Texture3D> texture;
-		DX::ThrowIfFailed(device->CreateTexture3D(&textureDesc, &initialData, texture.put()));
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{
-			.Format = textureDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
-			.Texture3D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		winrt::com_ptr<ID3D11ShaderResourceView> srv;
-		DX::ThrowIfFailed(device->CreateShaderResourceView(texture.get(), &srvDesc, srv.put()));
-		return srv;
-	}
-
 	bool IsVolumeTexture(ID3D11ShaderResourceView* srv)
 	{
 		if (!srv)
@@ -155,18 +47,11 @@ void PhysicalSky::LoadCloudTextures()
 		baseShapeNoiseSrv = nullptr;
 	}
 
-	detailErosionNoiseSrv = nullptr;
-	const auto erosionPath = L"Data\\Textures\\PhysicalSky\\erosion_noise.dds";
-	const HRESULT erosionResult = DirectX::CreateDDSTextureFromFile(device, context, erosionPath, nullptr, detailErosionNoiseSrv.put());
-	if (SUCCEEDED(erosionResult) && !IsVolumeTexture(detailErosionNoiseSrv.get())) {
-		logger::warn("Ignoring detail erosion texture because it is not a 3D texture: {}", std::filesystem::path(erosionPath).string());
-		detailErosionNoiseSrv = nullptr;
-	}
-	if (!detailErosionNoiseSrv) {
-		detailErosionNoiseSrv = CreateDetailErosionNoise(device);
-		if (FAILED(erosionResult))
-			logger::info("Using generated detail erosion noise; {} was not found.", std::filesystem::path(erosionPath).string());
-	}
+	// Nubis is the authored 128^3 RGBA volume used by the original cloud model:
+	// R/G are the low/high wispy fields and B/A are the low/high billowy fields.
+	// Keep a second SRV reference because the shader deliberately samples the same
+	// volume at independent base-shape and detail-erosion frequencies.
+	detailErosionNoiseSrv = baseShapeNoiseSrv;
 }
 
 void PhysicalSky::SetupVolumetricResources()
@@ -451,12 +336,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	// A short-lived generated-map default enlarged the horizontal distribution to
 	// 192 km without changing the physical layer thickness. Restore the compatible
 	// 64 km extent for configurations that received that exact transient default.
-	if (ndfSettings.generationVersion < 1u) {
-		if (std::abs(ndfSettings.worldSize - 192.0f) < 0.001f) {
-			ndfSettings.worldSize = 64.0f;
+	auto& cloudMap = settings.cloudMap;
+	if (cloudMap.generationVersion < 1u) {
+		if (std::abs(cloudMap.worldSize - 192.0f) < 0.001f) {
+			cloudMap.worldSize = 64.0f;
 			volMainHistoryValid = false;
 		}
-		ndfSettings.generationVersion = 1u;
+		cloudMap.generationVersion = 1u;
 	}
 	if (maxNoiseScale > 0.001f || low.detailNoiseScale > 0.01f) {
 		low.noiseScale = float3{ 0.000045f, 0.00007f, 0.000045f };
@@ -488,10 +374,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
 		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
-		.cloudBottom = KilometersToGameUnits(low.bottom),
-		.cloudThickness = KilometersToGameUnits(low.thickness),
-		.weatherCenter = { KilometersToGameUnits(ndfSettings.center.x), KilometersToGameUnits(ndfSettings.center.y) },
-		.weatherWorldSize = KilometersToGameUnits(ndfSettings.worldSize),
+		.lowestCloudAltitude = KilometersToGameUnits(settings.cloudLayer.lowestAltitude),
+		.highestCloudAltitude = KilometersToGameUnits(settings.cloudLayer.highestAltitude),
+		.weatherCenter = { KilometersToGameUnits(cloudMap.center.x), KilometersToGameUnits(cloudMap.center.y) },
+		.weatherWorldSize = KilometersToGameUnits(cloudMap.worldSize),
 		.highCloudEnabled = high.enabled ? 1.0f : 0.0f,
 		.noiseWindOffset = noiseWindOffset,
 		// Noise frequencies are authored in inverse metres; shader positions are game units.
@@ -598,7 +484,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto hpTextures = ndfManager.GetHpTextures(ndfSettings, ndfTexManager);
+	auto hpTextures = ndfManager.GetHpTextures(cloudMap, ndfTexManager);
 	if (!hpTextures.lowWeather || !hpTextures.highWeather || !hpTextures.profile || !hpTextures.scCell || !hpTextures.highCell || !hpTextures.highWarp || !hpTextures.highWisp)
 		return;
 
@@ -773,7 +659,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			context->CSSetShader(csVolCubemap.get(), nullptr, 0);
 
 			globals::profiler->BeginPass("PhysicalSky::VolumetricCubemap");
-			context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 6);
+			// The shader maps these two slices to one opposite-face pair and cycles
+			// through all three pairs over consecutive frames.
+			context->Dispatch((kVolCubeSize + 7u) >> 3, (kVolCubeSize + 7u) >> 3, 2);
 			globals::profiler->EndPass();
 			state->EndPerfEvent();
 		}

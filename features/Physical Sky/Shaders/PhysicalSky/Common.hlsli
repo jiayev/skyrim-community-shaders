@@ -575,7 +575,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 		float3 transmittance = 1.0;
 
-		if (!data.enableVolumetricClouds || data.volCloudThickness <= 0)
+		if (!data.enableVolumetricClouds || data.highestCloudAltitude <= data.lowestCloudAltitude)
 			return transmittance;
 
 		float3 posRelative = worldPosAbs;
@@ -600,7 +600,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		// the receiver intersection follows the light propagation direction. Keep
 		// the signed near root: receivers below the shell must remain fully shadowed.
 		const float3 lightForward = -shadowLightDir;
-		const float sphereRadius = data.rPlanet + data.volCloudBottom;
+		const float sphereRadius = data.rPlanet + data.lowestCloudAltitude;
 		const float b = dot(posPlanet, lightForward);
 		const float c = dot(posPlanet, posPlanet) - sphereRadius * sphereRadius;
 		const float discriminant = b * b - c;
