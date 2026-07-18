@@ -35,8 +35,8 @@ SamplerState TileableSampler : register(s2);
 
 struct CloudLayer
 {
-	float bottom;
-	float thickness;
+	float lowestAltitude;
+	float highestAltitude;
 	float3 scatter;
 	float3 absorption;
 };
@@ -56,8 +56,8 @@ struct VolumetricCloudData
 	float planetRadius;
 	float2 activeFrameDim;
 
-	float cloudBottom;
-	float cloudThickness;
+	float lowestCloudAltitude;
+	float highestCloudAltitude;
 	float2 weatherCenter;
 	float weatherWorldSize;
 	float highCloudEnabled;
@@ -167,13 +167,18 @@ struct VolumetricCloudData
 CloudLayer GetCloudLayer(VolumetricCloudData info)
 {
 	CloudLayer cloud;
-	cloud.bottom = info.cloudBottom;
-	cloud.thickness = info.cloudThickness;
+	cloud.lowestAltitude = info.lowestCloudAltitude;
+	cloud.highestAltitude = info.highestCloudAltitude;
 	// View extinction is scalar; the tint is applied only to light-path extinction.
 	// The coefficient is authored per metre while march distances are game units.
 	cloud.scatter = GAME_UNIT_TO_M;
 	cloud.absorption = 0.0;
 	return cloud;
+}
+
+float GetCloudAltitudeRange(CloudLayer cloud)
+{
+	return max(cloud.highestAltitude - cloud.lowestAltitude, GAME_UNITS_PER_METER);
 }
 
 StructuredBuffer<VolumetricCloudData> VolumetricCloudBuffer : register(t0);
@@ -311,7 +316,7 @@ groupshared sh2 gCloudAmbientSHB[256];
 	const float2 sampleCoord = (float2(tid.xy) + 0.5) / 16.0;
 	const float3 shSampleDir = SphericalHarmonics::GetUniformSphereSample(sampleCoord.x, sampleCoord.y);
 	const float3 rayDir = float3(shSampleDir.x, shSampleDir.z, shSampleDir.y);
-	const float3 cloudCenterPlanet = float3(0.0, 0.0, info.planetRadius + info.cloudBottom + 0.5 * info.cloudThickness);
+	const float3 cloudCenterPlanet = float3(0.0, 0.0, info.planetRadius + 0.5 * (info.lowestCloudAltitude + info.highestCloudAltitude));
 	const float planetVisibility = RayIntersectSphereCentered(cloudCenterPlanet, rayDir, info.planetRadius) > 0.0 ? 0.0 : 1.0;
 	const float3 skyColor = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(rayDir), 0).rgb * planetVisibility;
 	const float shFactor = 4.0 * Math::PI / 256.0;
@@ -386,8 +391,8 @@ bool snapCloudShell(inout RayMarchInfo ray, CloudLayer cloud, VolumetricCloudDat
 	const float3 origin_planet = ray.eye_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float radial_distance = length(origin_planet);
 	const float cos_chi = dot(origin_planet, ray.ray_dir) / max(radial_distance, 1e-5);
-	const float2 inner = IntersectSpherePair(origin_planet, ray.ray_dir, info.planetRadius + cloud.bottom);
-	const float2 outer = IntersectSpherePair(origin_planet, ray.ray_dir, info.planetRadius + cloud.bottom + cloud.thickness);
+	const float2 inner = IntersectSpherePair(origin_planet, ray.ray_dir, info.planetRadius + cloud.lowestAltitude);
+	const float2 outer = IntersectSpherePair(origin_planet, ray.ray_dir, info.planetRadius + cloud.highestAltitude);
 	if (outer.y < 0.0)
 		return false;
 
@@ -415,7 +420,7 @@ bool snapCloudShell(inout RayMarchInfo ray, CloudLayer cloud, VolumetricCloudDat
 float CloudLightExitDistance(float3 pos, float3 dir, CloudLayer cloud, VolumetricCloudData info)
 {
 	const float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	const float2 outer = IntersectSpherePair(pos_planet, dir, info.planetRadius + cloud.bottom + cloud.thickness);
+	const float2 outer = IntersectSpherePair(pos_planet, dir, info.planetRadius + cloud.highestAltitude);
 	return max(outer.y, 0.0);
 }
 
@@ -480,8 +485,9 @@ float HPEvaluateBoundaryLight(float3 pos, float3 sunDir)
 	float hR = HPEvaluateTopHeightProxy(pos.xy + float2(sampleStep, 0.0));
 	float hD = HPEvaluateTopHeightProxy(pos.xy - float2(0.0, sampleStep));
 	float hU = HPEvaluateTopHeightProxy(pos.xy + float2(0.0, sampleStep));
-	float dHdx = (hR - hL) * info.cloudThickness / max(2.0 * sampleStep, 1.0);
-	float dHdy = (hU - hD) * info.cloudThickness / max(2.0 * sampleStep, 1.0);
+	const float cloudAltitudeRange = max(info.highestCloudAltitude - info.lowestCloudAltitude, GAME_UNITS_PER_METER);
+	float dHdx = (hR - hL) * cloudAltitudeRange / max(2.0 * sampleStep, 1.0);
+	float dHdy = (hU - hD) * cloudAltitudeRange / max(2.0 * sampleStep, 1.0);
 	float3 topNormal = normalize(float3(-dHdx, -dHdy, 1.0));
 	float wrap = 0.5;
 	float lit = saturate((dot(topNormal, sunDir) + wrap) / (1.0 + wrap));
@@ -509,11 +515,11 @@ NDFInfo sampleNDF(float3 pos, CloudLayer cloud)
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	float planet_z = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
-	if (planet_z < cloud.bottom || planet_z > cloud.bottom + cloud.thickness)
+	if (planet_z < cloud.lowestAltitude || planet_z > cloud.highestAltitude)
 		return ndf;
 
 	ndf.in_layer = true;
-	ndf.height_fraction = saturate((planet_z - cloud.bottom) / max(cloud.thickness, 1e-5));
+	ndf.height_fraction = saturate((planet_z - cloud.lowestAltitude) / GetCloudAltitudeRange(cloud));
 
 	return ndf;
 }
@@ -552,12 +558,6 @@ float sampleCloudDensity(
 	float radialDist = saturate(length(weatherUV - 0.5) * 2.0);
 	float3 profiles = TexHpProfile.SampleLevel(TransmittanceSampler, float2(localHeight, radialDist), 0).rgb;
 	float heightGradient = lerp(HPLowTypeValue(cloudType, profiles.r, profiles.g, profiles.b), profiles.r, scStr);
-	// Coverage-driven height warping can sample the interior of a profile at the
-	// outer shell boundary. Preserve the cloud-volume contract that density reaches
-	// zero at both physical altitude limits instead of clipping a dense column there.
-	const float shellBoundaryFade = smoothstep(0.0, 0.02, ndf.height_fraction) *
-	                                (1.0 - smoothstep(0.98, 1.0, ndf.height_fraction));
-	heightGradient *= shellBoundaryFade;
 	// Noise parameters use X/vertical/Y ordering. Convert the game's Z-up position
 	// and horizontal wind displacement before applying the authored frequencies.
 	float3 noisePosition = float3(pos.x, pos.z, pos.y);
@@ -571,7 +571,9 @@ float sampleCloudDensity(
 	if (is_expensive) {
 		float3 detailWind = float3(info.noiseWindOffset.x, 0.0, info.noiseWindOffset.y) * info.detailNoiseScale * info.detailNoiseWindSpeed;
 		detailWind.y += info.elapsedTimeSeconds * info.detailNoiseVerticalWindSpeed;
-		float4 d = TexDetailErosionNoise.SampleLevel(TileableSampler, float3(pos.x, -pos.z, pos.y) * info.detailNoiseScale + info.noiseOffset * 0.5 + detailWind, 0);
+		const float eyeDistanceMeters = max(eye_dist, 0.0) * GAME_UNIT_TO_M;
+		const float erosionMip = 4.0 * saturate((eyeDistanceMeters - 3000.0) / (100000.0 - 3000.0));
+		float4 d = TexDetailErosionNoise.SampleLevel(TileableSampler, float3(pos.x, -pos.z, pos.y) * info.detailNoiseScale + info.noiseOffset * 0.5 + detailWind, erosionMip);
 		billowy = (d.b * info.billowyLow + d.a * info.billowyHigh) * bottomNoiseFade;
 		wispy = (d.r * info.wispyLow + d.g * info.wispyHigh) * bottomNoiseFade;
 	}
@@ -628,8 +630,10 @@ float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 	return shadow;
 }
 
-// sample sun transmittance / shadowing
-float3 sampleSunTransmittance(
+// Evaluate only the cloud column here. External directional, terrain, and
+// atmospheric attenuation is sampled at the ray endpoints and interpolated in
+// RenderVolumetricCloudRay, matching the reference environment-lighting setup.
+void sampleCloudSelfShadow(
 	float3 pos, float local_height, float3 sun_dir,
 	out float light_extinction_od, out float phi_fwd)
 {
@@ -638,44 +642,6 @@ float3 sampleSunTransmittance(
 
 	light_extinction_od = 0.0;
 	phi_fwd = 0.0;
-
-	float3 shadow = 1.0;
-
-	float3 pos_world = pos + float3(0, 0, info.bottomZ);
-	float3 pos_world_relative = pos_world - FrameBuffer::CameraPosAdjust.xyz;
-	float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-
-	// earth shadowing
-	[branch] if (RayIntersectSphereCentered(pos_planet, sun_dir, info.planetRadius) > 0.0) return 0;
-
-	// dir shadow map
-	{
-		DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
-		float shadow_depth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(pos_world_relative));
-		[branch] if (directionalShadowLightData.EndSplitDistances.y > 0.0 &&
-					 shadow_depth < directionalShadowLightData.EndSplitDistances.y)
-		{
-			float cascade_select = saturate(
-				(shadow_depth - directionalShadowLightData.StartSplitDistances.y) /
-				(directionalShadowLightData.EndSplitDistances.x - directionalShadowLightData.StartSplitDistances.y));
-			uint cascade_index = uint(cascade_select);
-			float3 positionLS = mul(directionalShadowLightData.ShadowProj[cascade_index], float4(pos_world, 1)).xyz;
-			float4 depths = TexDirectShadows.GatherRed(TransmittanceSampler, float3(saturate(positionLS.xy), cascade_index), 0);
-			shadow *= dot(float4(depths > positionLS.z), 0.25);
-		}
-	}
-	[branch] if (all(shadow < 1e-8)) return 0;
-
-	// terrain shadow
-	shadow *= TerrainShadows::GetTerrainShadow(pos_world, TransmittanceSampler);
-	[branch] if (all(shadow < 1e-8)) return 0;
-
-	// atmosphere
-	{
-		float2 lut_uv = TrLutUvPlanet(pos_planet, sun_dir);
-		shadow *= TexTransmittance.SampleLevel(TransmittanceSampler, lut_uv, 0).rgb;
-	}
-	[branch] if (all(shadow < 1e-8)) return 0;
 
 	// cloud self-shadowing
 	{
@@ -704,7 +670,7 @@ float3 sampleSunTransmittance(
 			float3 vis_pos = pos + sun_dir * dist;
 			NDFInfo _;
 			const float mip_offset = (float)i / max((float)(visibility_step - 1u), 1.0) * 3.0;
-			const float density = sampleCloudDensity(vis_pos, 1e8, cloud, mip_offset, true, _);
+			const float density = sampleCloudDensity(vis_pos, 0.0, cloud, mip_offset, true, _);
 			const float width_m = width * GAME_UNIT_TO_M;
 			const float dist_m = dist * GAME_UNIT_TO_M;
 			const float sigma_t_per_game_unit = density * dot(cloud.scatter + cloud.absorption, float3(0.2126, 0.7152, 0.0722));
@@ -723,8 +689,6 @@ float3 sampleSunTransmittance(
 			step_width *= cone_ratio;
 		}
 	}
-
-	return shadow;
 }
 
 float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
@@ -734,9 +698,10 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 	if (info.highCloudEnabled <= 0.0)
 		return 0.0;
 	float planetZ = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
-	if (planetZ < info.cloudBottom || planetZ > info.cloudBottom + info.cloudThickness)
+	if (planetZ < info.lowestCloudAltitude || planetZ > info.highestCloudAltitude)
 		return 0.0;
-	normalizedHeight = saturate((planetZ - info.cloudBottom) / max(info.cloudThickness, 1.0));
+	normalizedHeight = saturate((planetZ - info.lowestCloudAltitude) /
+								max(info.highestCloudAltitude - info.lowestCloudAltitude, GAME_UNITS_PER_METER));
 	float2 uv = HPWeatherUV(pos.xy, info);
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
@@ -816,13 +781,26 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float low_mean_weight = 0.0;
 	float low_mean_depth = 0.0;
 	bool low_valid = false;
+	// These directions and multipliers are constant for the entire ray. HP prepares
+	// its environment lighting before marching; sampling them inside every dense
+	// step needlessly multiplied the ambient texture cost.
+	const float3 ambient_sky_top = SampleCloudAmbientSkyView(float3(0, 0, 1));
+	const float3 ambient_sky_bottom = SampleCloudAmbientSkyView(float3(0, 0, -1));
+	const float3 ambient_top = ambient_sky_top * info.ambientTopMultiplier;
+	const float3 ambient_bottom = ambient_sky_bottom * info.ambientBottomMultiplier;
+	// HP/HDRP evaluate environment lighting once for the ray endpoints. Keep that
+	// evaluation lazy so rays that only cross empty weather regions pay nothing.
+	bool external_sun_ready = false;
+	float3 external_sun_start = 1.0;
+	float3 external_sun_end = 1.0;
 
 	// HPTraceVolumetricRay: distance-adaptive coarse probing followed by a quarter-size
 	// integration step after a density hit.  This is deliberately distance driven rather
 	// than a fixed step budget so near, thin clouds cannot be skipped wholesale.
 	const float step_large_raw = ray.march_dist / max((float)info.cloudMaxStep, 1.0);
-	const float step_large_near_cap = cloud.thickness * 0.0625;
-	const float step_large_far_cap = cloud.thickness * 0.5;
+	const float cloudAltitudeRange = GetCloudAltitudeRange(cloud);
+	const float step_large_near_cap = cloudAltitudeRange * 0.0625;
+	const float step_large_far_cap = cloudAltitudeRange * 0.5;
 	float dist = jitter * step_large_near_cap;
 	const uint max_iterations = info.cloudMaxStep * 4u;
 	[loop] for (uint iteration = 0u; iteration < max_iterations && dist < ray.march_dist; ++iteration)
@@ -847,6 +825,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			// scattering
 			[branch] if (max(extinction.x, max(extinction.y, extinction.z)) > 1e-7)
 			{
+				[branch] if (!external_sun_ready)
+				{
+					external_sun_start = sampleExternalSunTransmittance(ray.start_pos, cloud_light_dir);
+					external_sun_end = sampleExternalSunTransmittance(ray.start_pos + ray.ray_dir * ray.march_dist, cloud_light_dir);
+					external_sun_ready = true;
+				}
 				low_valid = true;
 				const float transmittance_weighted_density = ray.transmittance.x * cloud_density;
 				low_mean_depth += absolute_dist * transmittance_weighted_density;
@@ -855,7 +839,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				// dir light
 				float light_extinction_od;
 				float phi_fwd;
-				const float3 external_sun = sampleSunTransmittance(pos, ndf.local_height, cloud_light_dir, light_extinction_od, phi_fwd);
+				sampleCloudSelfShadow(pos, ndf.local_height, cloud_light_dir, light_extinction_od, phi_fwd);
+				const float relative_ray_distance = saturate(dist / max(ray.march_dist, 1.0));
+				const float3 external_sun = lerp(external_sun_start, external_sun_end, relative_ray_distance);
 				float3 directional_lum = 0.0;
 				[unroll] for (uint octave = 0; octave < 3; ++octave)
 				{
@@ -886,8 +872,6 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				// Evaluate top and bottom ambient independently. The solar optical depth
 				// provides the upward AO proxy used by the reference implementation.
 				const float upward_ao = exp(-light_extinction_od * max(cloud_light_dir.z, 0.05) * max(info.aoUpwardScale, 0.0));
-				const float3 ambient_top = SampleCloudAmbientSkyView(float3(0, 0, 1)) * info.ambientTopMultiplier;
-				const float3 ambient_bottom = SampleCloudAmbientSkyView(float3(0, 0, -1)) * info.ambientBottomMultiplier;
 				const float3 ambient_term = ambient_top * upward_ao + ambient_bottom * (1.0 - ndf.height_fraction);
 				in_scatter += ambient_term * scatter_source;
 
@@ -909,13 +893,31 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	float high_mean_weight = 0.0;
 	float high_mean_depth = 0.0;
 	bool high_valid = false;
-	if (info.highCloudEnabled > 0.0) {
+	// Match HP's whole-ray high-cloud gate. Most rays cross weather-map regions
+	// without high coverage and should not pay for 2 * primarySteps density tests.
+	float high_gate_coverage = 0.0;
+	[branch] if (info.highCloudEnabled > 0.0)
+	{
+		const float2 high_gate_uv = HPWeatherUV(ray.start_pos.xy, info);
+		if (all(high_gate_uv >= 0.0) && all(high_gate_uv <= 1.0))
+			high_gate_coverage = TexHpHighWeather.SampleLevel(TransmittanceSampler, high_gate_uv, 2).r;
+	}
+	if (info.highCloudEnabled > 0.0 && high_gate_coverage > 0.001) {
 		const float3 lowLum = ray.lum;
 		const float3 lowTransmittance = ray.transmittance;
 		float3 highLum = 0.0;
 		float3 highTransmittance = 1.0;
-		uint hiSteps = max(info.cloudMaxStep * 2u, 4u);
-		float hiStep = ray.march_dist / (float)hiSteps;
+		const float hiCos = dot(ray.ray_dir, cloud_light_dir);
+		const float3 hiPhase = float3(
+			Phase::HG(hiCos, info.highForwardEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity),
+			Phase::HG(hiCos, info.highForwardEccentricity * info.highMSEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity * info.highMSEccentricity),
+			Phase::HG(hiCos, info.highForwardEccentricity * info.highMSEccentricity * info.highMSEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity * info.highMSEccentricity * info.highMSEccentricity));
+		const float3 hiAmbientTop = ambient_sky_top * info.highAmbientTopMultiplier;
+		const float3 hiAmbientBottom = ambient_sky_bottom * info.ambientBottomMultiplier * info.highAmbientBottomMultiplier;
+		const float3 hiSkyBlend = SampleCloudAmbientSkyView(ray.ray_dir);
+		const uint hiSteps = max(info.cloudMaxStep * 2u, 4u);
+		const uint hiLightSteps = max(info.lightSteps, 1u);
+		const float hiStep = ray.march_dist / (float)hiSteps;
 		float hiDist = jitter * hiStep;
 		[loop] for (uint hi = 0; hi < hiSteps && hiDist < ray.march_dist; ++hi, hiDist += hiStep)
 		{
@@ -925,6 +927,12 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			float hiDensity = EvaluateHighCloudDensity(hiPos, hiNormH);
 			if (hiDensity <= 0.001)
 				continue;
+			[branch] if (!external_sun_ready)
+			{
+				external_sun_start = sampleExternalSunTransmittance(ray.start_pos, cloud_light_dir);
+				external_sun_end = sampleExternalSunTransmittance(ray.start_pos + ray.ray_dir * ray.march_dist, cloud_light_dir);
+				external_sun_ready = true;
+			}
 			high_valid = true;
 			const float transmittance_weighted_density = highTransmittance.x * hiDensity;
 			high_mean_depth += hiAbsDist * transmittance_weighted_density;
@@ -934,10 +942,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			const float hiMsWeight = hiWeather.a;
 			float3 hiExtinction = hiDensity * info.highViewAbsorption * hiMsWeight * GAME_UNIT_TO_M;
 			float3 hiTransmittance = exp(-hiExtinction * hiStep);
-			float hiCos = dot(ray.ray_dir, cloud_light_dir);
-			const float3 hiExternalSun = sampleExternalSunTransmittance(hiPos, cloud_light_dir);
+			const float3 hiExternalSun = lerp(external_sun_start, external_sun_end, saturate(hiDist / max(ray.march_dist, 1.0)));
 			float hiExtinctionSum = 0.0;
-			const uint hiLightSteps = max(info.lightSteps, 1u);
 			const float hiLightDistance = min(CloudLightExitDistance(hiPos, cloud_light_dir, cloud, info), 3000.0 * GAME_UNITS_PER_METER);
 			const float hiLightStep = hiLightDistance / hiLightSteps;
 			[loop] for (uint j = 0u; j < hiLightSteps; ++j)
@@ -950,16 +956,11 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			float3 hiDirectionalLum = 0.0;
 			[unroll] for (uint octave = 0u; octave < 3u; ++octave)
 			{
-				const float eccentricityScale = pow(info.highMSEccentricity, octave);
-				const float octavePhase = Phase::HG(hiCos, info.highForwardEccentricity * eccentricityScale) + Phase::HG(hiCos, -info.highBackwardEccentricity * eccentricityScale);
-				hiDirectionalLum += exp(-hiLightExtinction * pow(info.highMSAttenuation, octave)) * octavePhase * pow(info.highMSContribution, octave);
+				hiDirectionalLum += exp(-hiLightExtinction * pow(info.highMSAttenuation, octave)) * hiPhase[octave] * pow(info.highMSContribution, octave);
 			}
 			const float powder = CloudPowderEffect(hiDensity, hiCos, info.powderIntensity);
 			hiDirectionalLum *= powder;
-			const float3 hiAmbientTop = SampleCloudAmbientSkyView(float3(0, 0, 1)) * info.highAmbientTopMultiplier;
-			const float3 hiAmbientBottom = SampleCloudAmbientSkyView(float3(0, 0, -1)) * info.ambientBottomMultiplier * info.highAmbientBottomMultiplier;
 			float3 hiAmbient = lerp(hiAmbientBottom, hiAmbientTop, hiNormH);
-			float3 hiSkyBlend = SampleCloudAmbientSkyView(ray.ray_dir);
 			float3 hiLum = (hiExternalSun * dirlightColor * hiDirectionalLum + hiAmbient) * hiMsWeight;
 			hiLum = lerp(hiLum, hiSkyBlend, smoothstep(0.0, 1.0, hiNormH) * info.highSkyBlendStrength);
 			float3 hiIntegral = hiLum * (1.0 - hiTransmittance);
@@ -973,7 +974,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 		if (high_valid) {
 			const float cameraAltitude = length(ray.eye_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
-			const float highCloudBottomAltitude = info.cloudBottom + info.highCloudBottom * info.cloudThickness;
+			const float highCloudBottomAltitude = lerp(info.lowestCloudAltitude, info.highestCloudAltitude, info.highCloudBottom);
 			if (cameraAltitude >= highCloudBottomAltitude)
 				ray.lum = highLum + highTransmittance * lowLum;
 			else
@@ -1110,20 +1111,25 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 
 	uint3 dims;
 	RWTexCubeTr.GetDimensions(dims.x, dims.y, dims.z);
-	if (any(tid >= dims))
+	if (any(tid.xy >= dims.xy) || tid.z >= 2u)
 		return;
+	// Update one opposite-face pair per frame. All six faces are refreshed within
+	// three frames, cutting the full cloud trace cost to one third without adding
+	// a cubemap history/reprojection path.
+	const uint face_pair = SharedData::FrameCountAlwaysActive % 3u;
+	const uint3 output_tid = uint3(tid.xy, face_pair * 2u + tid.z);
 
 	// Sky capture has no temporal integration, so its ray starts at the slab boundary.
 	const float ray_jitter = 0.0;
 
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
-	const float3 ray_dir = GetCubemapSamplingVector(tid, RWTexCubeTr);
+	const float3 ray_dir = GetCubemapSamplingVector(output_tid, RWTexCubeTr);
 	// Sky-capture clouds are combined in the sky path and do not receive the
 	// main-view aerial-perspective pass.
 	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, ray_jitter, -1.0);
 
-	RWTexCubeTr[tid] = result.transmittance;
-	RWTexCubeLum[tid] = result.lum;
+	RWTexCubeTr[output_tid] = result.transmittance;
+	RWTexCubeLum[output_tid] = result.lum;
 };
 
 float2 GetPreviousCloudUv(float2 logic_uv, float depth, out bool valid)
@@ -1395,13 +1401,33 @@ bool SampleCloudFallback(uint2 intermediateCoord, uint2 dims, float referenceDep
 	RWTexAux[tid] = aux;
 };
 
-[numthreads(8, 8, 1)] void upscale(uint2 tid : SV_DispatchThreadID) {
+// An 8x8 full-resolution group touches only a 6x6 region of the half-resolution
+// input for its 3x3 bilateral neighborhoods. Cache that region once, as HDRP's
+// cloud denoiser does, instead of issuing 27 texture reads per output pixel.
+groupshared float4 CloudUpscaleTrLds[36];
+groupshared float4 CloudUpscaleLumLds[36];
+groupshared float4 CloudUpscaleAuxLds[36];
+
+[numthreads(8, 8, 1)] void upscale(
+	uint2 tid : SV_DispatchThreadID,
+	uint3 groupThreadId : SV_GroupThreadID,
+	uint groupIndex : SV_GroupIndex) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const uint2 active_intermediate_dims = (uint2(info.activeFrameDim) + 1u) / 2u;
+	const uint2 full_group_origin = tid - groupThreadId.xy;
+	const int2 intermediate_group_origin = int2(full_group_origin / 2u);
+	if (groupIndex < 36u) {
+		const int2 local_load = int2(groupIndex % 6u, groupIndex / 6u);
+		const int2 load_coord = clamp(intermediate_group_origin + local_load - 1, 0, int2(active_intermediate_dims) - 1);
+		CloudUpscaleTrLds[groupIndex] = TexVolUpscaleTr[load_coord];
+		CloudUpscaleLumLds[groupIndex] = float4(TexVolUpscaleLum[load_coord], 0.0);
+		CloudUpscaleAuxLds[groupIndex] = TexVolUpscaleAux[load_coord];
+	}
+	GroupMemoryBarrierWithGroupSync();
+
 	if (any(tid >= uint2(info.activeFrameDim)))
 		return;
 
-	const uint2 active_intermediate_dims = (uint2(info.activeFrameDim) + 1u) / 2u;
-	const int2 intermediate_coord = min(int2(tid / 2u), int2(active_intermediate_dims) - 1);
 	const float2 subPixelCenter = (float2(tid & 1u) - 0.5) * 0.5;
 	const float reference_depth = EncodeCloudDepth(ReconstructSceneRayDistance(tid, info));
 	const float encoded_ray_range = EncodeCloudDepth(info.rayMarchRange);
@@ -1414,24 +1440,27 @@ bool SampleCloudFallback(uint2 intermediateCoord, uint2 dims, float referenceDep
 	{
 		[unroll] for (int x = -1; x <= 1; ++x)
 		{
-			const int2 tap = clamp(intermediate_coord + int2(x, y), 0, int2(active_intermediate_dims) - 1);
-			const float4 tap_aux = TexVolUpscaleAux[tap];
+			const int2 local_tap = int2(groupThreadId.xy / 2u) + int2(x, y) + 1;
+			const uint lds_index = uint(local_tap.y * 6 + local_tap.x);
+			const float4 tap_aux = CloudUpscaleAuxLds[lds_index];
 			const bool tap_is_sky = CloudDepthIsSky(tap_aux.y, encoded_ray_range);
 			const float2 delta = float2(x, y) - subPixelCenter;
 			const float spatial_weight = exp(-dot(delta, delta));
 			const float depth_weight = CloudBilateralDepthWeight(tap_aux.y, reference_depth);
 			const float pixel_status = saturate(tap_aux.z);
 			const float weight = spatial_weight * depth_weight * (tap_is_sky == reference_is_sky ? 1.0 : 0.0) * pixel_status;
-			tr_sum += TexVolUpscaleTr[tap] * weight;
-			lum_sum += TexVolUpscaleLum[tap] * weight;
+			tr_sum += CloudUpscaleTrLds[lds_index] * weight;
+			lum_sum += CloudUpscaleLumLds[lds_index].rgb * weight;
 			aux_sum += tap_aux * weight;
 			weight_sum += weight;
 		}
 	}
 
-	const float4 center_tr = TexVolUpscaleTr[intermediate_coord];
-	const float3 center_lum = TexVolUpscaleLum[intermediate_coord];
-	const float4 center_aux = TexVolUpscaleAux[intermediate_coord];
+	const int2 local_center = int2(groupThreadId.xy / 2u) + 1;
+	const uint center_index = uint(local_center.y * 6 + local_center.x);
+	const float4 center_tr = CloudUpscaleTrLds[center_index];
+	const float3 center_lum = CloudUpscaleLumLds[center_index].rgb;
+	const float4 center_aux = CloudUpscaleAuxLds[center_index];
 	float4 tr = weight_sum > 1e-5 ? tr_sum / weight_sum : center_tr;
 	float3 lum = weight_sum > 1e-5 ? lum_sum / weight_sum : center_lum;
 	float4 aux = weight_sum > 1e-5 ? aux_sum / weight_sum : center_aux;
@@ -1486,7 +1515,7 @@ bool IntersectCloudSphere(float3 origin, float3 dir, float radius, out float2 in
 	// Put every ray just outside the top of the shell. A fixed displacement along
 	// the light direction fails at low solar elevations because it can remain below
 	// the cloud base and then trace away from the clouds.
-	const float outer_radius = info.planetRadius + cloud.bottom + cloud.thickness;
+	const float outer_radius = info.planetRadius + cloud.highestAltitude;
 	float3 origin_planet = origin + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	if (length(origin_planet) < outer_radius) {
 		float2 lift_hits;
@@ -1500,8 +1529,8 @@ bool IntersectCloudSphere(float3 origin, float3 dir, float radius, out float2 in
 
 	const float3 ray_dir = -shadow_light_dir;
 	float2 inner_hits, outer_hits;
-	const bool hit_inner = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + cloud.bottom, inner_hits);
-	const bool hit_outer = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + cloud.bottom + cloud.thickness, outer_hits);
+	const bool hit_inner = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + cloud.lowestAltitude, inner_hits);
+	const bool hit_outer = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + cloud.highestAltitude, outer_hits);
 	if (!hit_inner || !hit_outer) {
 		RWShadowVolume[tid] = float4(0.0, 1.0, 0.0, 0.0);
 		return;
@@ -1525,7 +1554,7 @@ bool IntersectCloudSphere(float3 origin, float3 dir, float radius, out float2 in
 		NDFInfo ndf;
 		float low_density = sampleCloudDensity(pos, dist, cloud, 1.0, false, ndf);
 		if (low_density > 0.001)
-			low_density = sampleCloudDensity(pos, dist, cloud, 0.0, true, ndf);
+			low_density = sampleCloudDensity(pos, 0.0, cloud, 0.0, true, ndf);
 
 		// The visible result contains a separate high layer. Its ground shadow must
 		// use the same density field and the direct-light absorption parameters.

@@ -56,6 +56,8 @@ struct HpGeneratedCloudMapSettings
 	float2 center = { 0.f, 0.f };
 	float lowCoverage = 0.62f;
 	float lowContrast = 1.25f;
+	// Fraction of the weather field occupied by full-strength stratocumulus mask
+	// regions. Runtime stratocumulus intensity is controlled separately.
 	float stratocumulus = 0.35f;
 	float highCoverage = 0.28f;
 	float highContrast = 1.1f;
@@ -66,9 +68,6 @@ using NdfSettings = HpGeneratedCloudMapSettings;
 
 struct HpLowCloudSettings
 {
-	// Kilometres. This is the shared physical shell used by low and high clouds.
-	float bottom = 0.5f;
-	float thickness = 2.5f;
 	// Inverse metres. The base field is intentionally kilometre-scale; the profile
 	// texture, rather than high-frequency 3D noise, defines the vertical silhouette.
 	float3 noiseScale = { 0.000045f, 0.00007f, 0.000045f };
@@ -189,6 +188,10 @@ struct HpPhiFwdSettings
 
 struct CloudLayer
 {
+	// Kilometres above the local ground reference. These are the shared physical
+	// shell boundaries; individual cloud types distribute themselves inside it.
+	float lowestAltitude = 0.5f;
+	float highestAltitude = 3.0f;
 	HpLowCloudSettings low;
 	HpStratocumulusSettings stratocumulus;
 	HpHighCloudSettings high;
@@ -224,7 +227,7 @@ struct NdfManager
 
 	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
 	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
-	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
+	void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
 	void UpdateNdf(const NdfSettings& ndfSettings);
 	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
 	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, TextureManager& texManager);
@@ -238,5 +241,12 @@ private:
 	float generatedStratocumulus = -1.0f;
 	float generatedHighCoverage = -1.0f;
 	float generatedHighContrast = -1.0f;
+	int deferredGenerationFrame = -1;
+	std::vector<float> cachedCoverageField;
+	std::vector<float> cachedCloudType;
+	std::vector<float> cachedScRegion;
+	std::vector<float> cachedHighField;
+	std::vector<float> cachedHighType;
+	std::vector<float> cachedHighScatterField;
 	void GenerateDefaultTextures(const NdfSettings& ndfSettings);
 };
