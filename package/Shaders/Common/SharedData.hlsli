@@ -256,10 +256,10 @@ namespace SharedData
 
 	struct SSGISettings
 	{
+		uint Enabled;
 		uint EnableIL;
 		uint DebugMode;
 		uint pad0;
-		uint pad1;
 	};
 
 	struct SSRSettings
