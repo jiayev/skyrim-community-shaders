@@ -59,6 +59,7 @@ public:
 		bool frameGenerationAllowInMenus = false;
 		uint streamlineLogLevel = 0;  // 0=Off, 1=Default, 2=Verbose
 		float sharpnessFSR = 0.0f;
+		bool sharpnessEnabledDLSS = false;
 		float sharpnessDLSS = 0.0f;
 		uint presetDLSS = 0;  // 0=Default, 1=J, 2=K, 3=L, 4=M
 		bool reflexLowLatencyMode = false;
@@ -175,9 +176,11 @@ public:
 	bool previousUpscalingWasActive = false;
 	bool depthUpscaleUseWideKernel = false;
 
-	/// Set by MenuOpenCloseEventHandler when LoadingMenu closes (cell/worldspace transitions,
-	/// initial load). Consumed at the start of Upscale() to force a one-frame DLSS feature
-	/// rebuild.
+	/**
+	 * Set by MenuOpenCloseEventHandler when LoadingMenu closes (cell/worldspace transitions,
+	 * initial load). Consumed at the start of Upscale() to force a one-frame DLSS feature
+	 * rebuild.
+	 */
 	std::atomic<bool> pendingDLSSReset{ false };
 
 	void CopySharedD3D12Resources();

@@ -51,6 +51,8 @@ void State::Draw()
 	ZoneScoped;
 
 	auto shaderCache = globals::shaderCache;
+	auto weatherManager = globals::weatherManager;
+	auto sceneSettingsManager = globals::sceneSettingsManager;
 	auto& terrainBlending = globals::features::terrainBlending;
 	auto& terrainHelper = globals::features::terrainHelper;
 	auto& cloudShadows = globals::features::cloudShadows;
@@ -62,11 +64,11 @@ void State::Draw()
 
 	if (shaderCache->IsEnabled()) {
 		// Process deferred cell transitions (interior detection)
-		SceneSettingsManager::GetSingleton()->Update();
+		sceneSettingsManager->Update();
 
 		if (csEditor.loaded) {
 			ZoneScopedN("WeatherManager::UpdateFeatures");
-			WeatherManager::GetSingleton()->UpdateFeatures();
+			weatherManager->UpdateFeatures();
 		}
 
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
@@ -172,6 +174,14 @@ void State::Debug()
 	}
 }
 
+/**
+ * @brief Resets per-frame state and publishes frame counter to off-thread readers.
+ *
+ * Ends the current profiler frame, resets all loaded features, updates the
+ * timer if the game is not paused, caches current menu open states, clears
+ * shader descriptor tracking, increments and atomically publishes the frame
+ * count, and disables reflection and improved snow shaders.
+ */
 void State::Reset()
 {
 	globals::profiler->EndFrame();
@@ -198,6 +208,8 @@ void State::Reset()
 	lastVertexDescriptor = 0;
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
+	// Publish for off-thread readers (e.g. the MCP listener thread).
+	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 
 	if (auto* imageSpaceManager = RE::ImageSpaceManager::GetSingleton()) {
 		auto& BSImagespaceShaderApplyReflections = imageSpaceManager->GetRuntimeData().BSImagespaceShaderApplyReflections;
@@ -231,10 +243,10 @@ void State::Setup()
 	globals::deferred->SetupResources();
 
 	// Load per-weather settings after features are setup
-	WeatherManager::GetSingleton()->LoadPerWeatherSettingsFromDisk();
+	globals::weatherManager->LoadPerWeatherSettingsFromDisk();
 
 	// Load scene-specific settings (Interior Only, etc.)
-	SceneSettingsManager::GetSingleton()->LoadAll();
+	globals::sceneSettingsManager->LoadAll();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)

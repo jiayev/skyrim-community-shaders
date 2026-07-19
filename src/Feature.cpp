@@ -20,6 +20,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PhysicalSky.h"
+#include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/ScreenSpaceShadows.h"
@@ -210,6 +211,10 @@ void Feature::WriteDiskCacheInfo(CSimpleIniA& a_ini)
 	a_ini.SetValue(ini_name.c_str(), "Version", version.c_str());
 }
 
+/**
+ * @brief Provides access to the registry of all known features.
+ * @return A constant reference to the vector of all known feature instances.
+ */
 const std::vector<Feature*>& Feature::GetFeatureList()
 {
 	static std::vector<Feature*> features = {
@@ -242,6 +247,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::extendedTranslucency,
 		&globals::features::upscaling,
 		&globals::features::renderDoc,
+		&globals::features::remoteControl,
 		&globals::features::csEditor,
 		&globals::features::screenshotFeature,
 		&globals::features::linearLighting,
@@ -338,6 +344,18 @@ std::string Feature::GetDisplayCategory() const
 		return T("feature.category.water", "Water");
 
 	return std::string(category);
+}
+
+std::string Feature::GetReleaseStageTag(ReleaseStage stage)
+{
+	switch (stage) {
+	case ReleaseStage::Alpha:
+		return T("menu.features.tag_alpha", "[ALPHA]");
+	case ReleaseStage::Beta:
+		return T("menu.features.tag_beta", "[BETA]");
+	default:
+		return {};
+	}
 }
 
 void Feature::DrawUnloadedUI()

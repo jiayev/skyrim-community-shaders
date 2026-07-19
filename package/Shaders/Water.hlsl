@@ -47,6 +47,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
+#	include "Common/Shading.hlsli"
 #	include "Common/Color.hlsli"
 #	include "Common/BRDF.hlsli"
 #	include "Common/Game.hlsli"
@@ -817,7 +818,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 		result.rippleInfo.w = splashIntensity;
 	}
 	float3 rippleNormal = normalize(raindropInfo.xyz);
-	finalNormal = WetnessEffects::ReorientNormal(rippleNormal, finalNormal);
+	finalNormal = ReorientNormal(rippleNormal, finalNormal);
 #			endif
 
 	result.normal = finalNormal;

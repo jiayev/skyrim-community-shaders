@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Buffer.h"
+
 struct IBL : Feature
 {
 public:
@@ -28,15 +30,21 @@ public:
 	ID3D11ComputeShader* diffuseIBLCS = nullptr;
 
 	virtual void RestoreDefaultSettings() override;
+	/** @brief Draws the ImGui settings UI for IBL intensity, saturation, DALC, and fog options. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
+	/** @brief Registers IBL parameters as weather-interpolatable variables. */
 	virtual void RegisterWeatherVariables() override;
 
+	/** @brief Binds IBL and static fallback textures as pixel shader resources for the reflections prepass. */
 	virtual void ReflectionsPrepass() override;
+	/** @brief Projects environment and sky cubemaps into spherical harmonics and binds the resulting IBL textures. */
 	virtual void Prepass() override;
+	/** @brief Creates IBL textures, compiles the diffuse IBL compute shader, and loads static fallback cubemaps. */
 	virtual void SetupResources() override;
+	/** @brief Releases the cached diffuse IBL compute shader so it can be recompiled. */
 	virtual void ClearShaderCache() override;
 
 	struct Settings
@@ -51,13 +59,34 @@ public:
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky, 3: DALC + Sky (Directional)
-		uint DisableInInteriors = 1;
-		float pad1 = 0.0f;
+		bool DisableInInteriors = true;
+		bool DisableInWorldMap = true;
+		bool DisableInLoadingScreen = true;
 	} settings;
+
+	struct alignas(16) PerFrame
+	{
+		uint EnableIBL;
+		uint PreserveFogLuminance;
+		uint UseStaticIBL;
+		float DALCAmount;
+		float EnvIBLScale;
+		float SkyIBLScale;
+		float EnvIBLSaturation;
+		float SkyIBLSaturation;
+		float FogAmount;
+		uint DALCMode;
+		float pad0[2];
+	};
+	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
 	eastl::unique_ptr<Texture2D> staticDiffuseIBLTexture = nullptr;
 	eastl::unique_ptr<Texture2D> staticSpecularIBLTexture = nullptr;
 
-	Settings GetCommonBufferData() const;
+	/** @brief Builds the GPU constant-buffer data, forcing EnableIBL off when IsDisabledForCurrentScene(). */
+	PerFrame GetCommonBufferData() const;
+	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map, interiors). */
+	bool IsDisabledForCurrentScene() const;
+	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();
 };

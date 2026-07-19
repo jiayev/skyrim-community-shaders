@@ -398,7 +398,7 @@ void ExponentialHeightFog::Prepass()
 	auto& skylighting = globals::features::skylighting;
 	const bool hasIBL = ibl.loaded &&
 	                    ibl.settings.EnableIBL != 0 &&
-	                    !(ibl.settings.DisableInInteriors && Util::IsInterior()) &&
+	                    !ibl.IsDisabledForCurrentScene() &&
 	                    ibl.envIBLTexture &&
 	                    ibl.skyIBLTexture;
 	const bool hasPhysicalSky = physicalSky.loaded && physicalSky.texTrLut;
