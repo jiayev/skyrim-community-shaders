@@ -449,6 +449,9 @@ void Raytracing::DrawAdvancedSettings()
 
 	auto& advSettings = settings.CreationEngineRaytracingSettings.AdvancedSettings;
 
+	const auto maxThreads = std::max(1u, std::thread::hardware_concurrency() - 1u);
+	ImGui::SliderInt(T(TKEY("num_worker_threads"), "Number of Worker Threads"), reinterpret_cast<int*>(&advSettings.NumWorkerThreads), 1, maxThreads);
+
 	ImGui::SliderFloat(T(TKEY("texture_lod_bias"), "Texture LOD Bias"), &advSettings.TexLODBias, -4.0f, 4.0f, "%.1f");
 
 	ImGui::Checkbox(T(TKEY("variable_update_rate"), "Variable Update Rate"), &advSettings.VariableUpdateRate);

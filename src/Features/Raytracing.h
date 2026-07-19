@@ -267,6 +267,7 @@ struct CreationEngineRaytracing
 
 	struct AdvancedSettings
 	{
+		uint NumWorkerThreads = 8;
 		float TexLODBias = -1.0f;
 		bool VariableUpdateRate = true;
 		bool GGXEnergyConservation = true;
@@ -281,6 +282,7 @@ struct CreationEngineRaytracing
 
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
 			AdvancedSettings,
+			NumWorkerThreads,
 			TexLODBias,
 			VariableUpdateRate,
 			GGXEnergyConservation,
