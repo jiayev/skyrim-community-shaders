@@ -264,7 +264,7 @@ void ScreenSpaceGI::SetupResources()
 
 		auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 		mainTex.texture->GetDesc(&texDesc);
-		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 5;
 
@@ -274,7 +274,7 @@ void ScreenSpaceGI::SetupResources()
 
 			for (uint i = 0; i < 5; ++i) {
 				D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
-					.Format = DXGI_FORMAT_R11G11B10_FLOAT,
+					.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 					.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
 					.Texture2D = { .MipSlice = i }
 				};
@@ -439,6 +439,7 @@ void ScreenSpaceGI::SetupNRDResources()
 		texNRDOutputSH1->CreateSRV(srvDesc);
 		texNRDOutputSH1->CreateUAV(uavDesc);
 
+		const float clearColor[4] = {};
 		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInputSH1->uav.get(), clearColor);
 		globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutputSH1->uav.get(), clearColor);
 	} else {
