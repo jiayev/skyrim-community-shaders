@@ -56,11 +56,22 @@ struct HpGeneratedCloudMapSettings
 	float2 center = { 0.f, 0.f };
 	float lowCoverage = 0.62f;
 	float lowContrast = 1.25f;
-	// Fraction of the weather field occupied by full-strength stratocumulus mask
-	// regions. Runtime stratocumulus intensity is controlled separately.
-	float stratocumulus = 0.35f;
+	// Shares are measured over generated low-cloud coverage. Cu/Tcu/Cb weights
+	// are normalized after the independent stratocumulus share is assigned.
+	float stratocumulus = 0.20f;
+	float cumulusWeight = 0.62f;
+	float toweringCumulusWeight = 0.28f;
+	float cumulonimbusWeight = 0.10f;
+	// Physical vertical development for each profile family in kilometres. The
+	// shared cloud shell remains only a safety bound, so raising its ceiling does
+	// not stretch shallow clouds into full-height columns.
+	float cumulusDepth = 1.2f;
+	float toweringCumulusDepth = 3.0f;
+	float cumulonimbusDepth = 10.0f;
 	float highCoverage = 0.28f;
 	float highContrast = 1.1f;
+	float altostratusWeight = 0.68f;
+	float altocumulusWeight = 0.32f;
 	HpTextureOverrideSettings overrides;
 };
 
@@ -109,8 +120,9 @@ struct HpStratocumulusSettings
 {
 	float2 cellScale = { 6.f, 6.f };
 	float worleyStrength = 0.65f;
-	// Fraction of the shared physical shell occupied by stratocumulus profiles.
-	float heightScale = 0.28f;
+	// Physical vertical development in kilometres; converted to a fraction of
+	// the shared shell when populating the shader buffer.
+	float verticalDepth = 0.8f;
 	float detailStrength = 0.32f;
 	float cellThickPow = 1.7f;
 	float cellThickStrength = 0.85f;
@@ -228,9 +240,9 @@ struct NdfManager
 	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
 	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
 	void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
-	void UpdateNdf(const NdfSettings& ndfSettings);
-	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
-	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, TextureManager& texManager);
+	void UpdateNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
+	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
+	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
 
 private:
 	uint32_t generatedWeatherDim = 0;
@@ -239,8 +251,17 @@ private:
 	float generatedLowCoverage = -1.0f;
 	float generatedLowContrast = -1.0f;
 	float generatedStratocumulus = -1.0f;
+	float generatedCumulusWeight = -1.0f;
+	float generatedToweringCumulusWeight = -1.0f;
+	float generatedCumulonimbusWeight = -1.0f;
 	float generatedHighCoverage = -1.0f;
 	float generatedHighContrast = -1.0f;
+	float generatedAltostratusWeight = -1.0f;
+	float generatedAltocumulusWeight = -1.0f;
+	float generatedCumulusDepth = -1.0f;
+	float generatedToweringCumulusDepth = -1.0f;
+	float generatedCumulonimbusDepth = -1.0f;
+	float generatedLayerDepth = -1.0f;
 	int deferredGenerationFrame = -1;
 	std::vector<float> cachedCoverageField;
 	std::vector<float> cachedCloudType;
@@ -248,5 +269,5 @@ private:
 	std::vector<float> cachedHighField;
 	std::vector<float> cachedHighType;
 	std::vector<float> cachedHighScatterField;
-	void GenerateDefaultTextures(const NdfSettings& ndfSettings);
+	void GenerateDefaultTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
 };

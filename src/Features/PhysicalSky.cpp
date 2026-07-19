@@ -43,8 +43,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	lowCoverage,
 	lowContrast,
 	stratocumulus,
+	cumulusWeight,
+	toweringCumulusWeight,
+	cumulonimbusWeight,
+	cumulusDepth,
+	toweringCumulusDepth,
+	cumulonimbusDepth,
 	highCoverage,
 	highContrast,
+	altostratusWeight,
+	altocumulusWeight,
 	overrides)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -87,7 +95,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpStratocumulusSettings,
 	cellScale,
 	worleyStrength,
-	heightScale,
+	verticalDepth,
 	detailStrength,
 	cellThickPow,
 	cellThickStrength,
@@ -675,7 +683,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 	{
 		ImGui::SliderFloat2(T(TKEY("sc_cell_scale"), "Sc Cell Scale"), &sc.cellScale.x, 0.1f, 32.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("sc_strength"), "Sc Strength"), &sc.worleyStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("sc_height_scale"), "Sc Height Scale"), &sc.heightScale, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("sc_vertical_depth"), "Sc Vertical Depth"), &sc.verticalDepth, 0.1f, 3.f, "%.2f km");
 		ImGui::SliderFloat(T(TKEY("sc_detail_strength"), "Sc Detail Strength"), &sc.detailStrength, 0.f, 2.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("sc_cell_thickness"), "Sc Cell Thickness"), &sc.cellThickStrength, 0.f, 1.f, "%.2f");
 	}
@@ -1072,7 +1080,7 @@ void PhysicalSky::Prepass()
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
-			ndfManager.UpdateNdf(settings.cloudMap);
+			ndfManager.UpdateNdf(settings.cloudMap, settings.cloudLayer);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
 

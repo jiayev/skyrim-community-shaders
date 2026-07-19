@@ -351,6 +351,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	}
 
 	const float timeSeconds = state->timer * 1e-3f;
+	const float cloudLayerDepth = std::max(settings.cloudLayer.highestAltitude - settings.cloudLayer.lowestAltitude, 0.05f);
 	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
 	const float2 windDir = windLen > 1e-4f ? low.windDirection / windLen : float2{ 1.f, 0.f };
 	const float2 noiseWindOffset = windDir * MetersToGameUnits(low.windSpeed * timeSeconds);
@@ -414,7 +415,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.coverTopCurvePow = low.coverTopCurvePow,
 		.scCellScale = sc.cellScale,
 		.scWorleyStrength = sc.worleyStrength,
-		.scHeightScale = sc.heightScale,
+		.scHeightScale = std::clamp(sc.verticalDepth / cloudLayerDepth, 0.001f, 1.0f),
 		.scDetailStrength = sc.detailStrength,
 		.scCellThickPow = sc.cellThickPow,
 		.scCellThickStrength = sc.cellThickStrength,
@@ -484,7 +485,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto hpTextures = ndfManager.GetHpTextures(cloudMap, ndfTexManager);
+	auto hpTextures = ndfManager.GetHpTextures(cloudMap, settings.cloudLayer, ndfTexManager);
 	if (!hpTextures.lowWeather || !hpTextures.highWeather || !hpTextures.profile || !hpTextures.scCell || !hpTextures.highCell || !hpTextures.highWarp || !hpTextures.highWisp)
 		return;
 
