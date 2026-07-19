@@ -38,7 +38,7 @@ SamplerState LinearSampler : register(s1);
 
 #define Pow2(x) ((x) * (x))
 
-float4 ImportanceSampleGGX(float2 E, float a2)
+float3 ImportanceSampleGGX(float2 E, float a2)
 {
 	float Phi = 2 * Math::PI * E.x;
 	float CosTheta = sqrt((1 - E.y) / (1 + (a2 - 1) * E.y));
@@ -49,11 +49,7 @@ float4 ImportanceSampleGGX(float2 E, float a2)
 	H.y = SinTheta * sin(Phi);
 	H.z = CosTheta;
 
-	float d = (CosTheta * a2 - CosTheta) * CosTheta + 1;
-	float D = a2 / (Math::PI * d * d);
-	float PDF = D * CosTheta;
-
-	return float4(H, PDF);
+	return H;
 }
 
 float3 SampleGGXVNDF(float3 Ve, float alpha_x, float alpha_y, float U1, float U2)
@@ -134,19 +130,17 @@ float2 SampleRandomVector2DBaked(uint2 pixel)
 
 float3 Sample_GGX_VNDF_Hemisphere(float3 Ve, float alpha, float U1, float U2) { return SampleGGXVNDF(Ve, alpha, alpha, U1, U2); }
 
-float3 SampleReflectionVector(float3 view_direction, float3 normal, float roughness, int2 dispatch_thread_id, out float pdf)
+float3 SampleReflectionVector(float3 view_direction, float3 normal, float roughness, int2 dispatch_thread_id)
 {
 	if (roughness < 0.001f) {
-		pdf = 1.0f;
 		return reflect(view_direction, normal);
 	}
 	float3x3 tbn_transform = CreateSpecTBN(normal);
 	float3 view_direction_tbn = mul(-view_direction, tbn_transform);
 	float2 u = SampleRandomVector2DBaked(dispatch_thread_id);
-	float4 sampled_normal_tbn = ImportanceSampleGGX(u, roughness * roughness * roughness * roughness);
-	float3 reflected_direction_tbn = reflect(-view_direction_tbn, sampled_normal_tbn.xyz);
+	float3 sampled_normal_tbn = ImportanceSampleGGX(u, roughness * roughness * roughness * roughness);
+	float3 reflected_direction_tbn = reflect(-view_direction_tbn, sampled_normal_tbn);
 	float3x3 inv_tbn_transform = transpose(tbn_transform);
-	pdf = sampled_normal_tbn.w;
 	return mul(reflected_direction_tbn, inv_tbn_transform);
 }
 
@@ -185,7 +179,7 @@ float3 InvProjectPosition(float3 coord, float4x4 mat)
 
 float2 SSRT_GetMipResolution(float2 screen_dimensions, int mip_level)
 {
-	return screen_dimensions * pow(0.5, mip_level);
+	return screen_dimensions * exp2(-float(mip_level));
 }
 
 float SSRT_LoadDepth(int2 pixel_coordinate, int mip)
@@ -221,11 +215,9 @@ bool SSRT_AdvanceRay(float3 origin,
 	float3 inv_direction,
 	float2 current_mip_position,
 	float2 current_mip_resolution_inv,
-	uint current_mip_level,
 	float2 floor_offset,
 	float2 uv_offset,
 	float surface_z,
-	float thickness,
 	inout float3 position,
 	inout float current_t)
 {
@@ -245,8 +237,12 @@ bool SSRT_AdvanceRay(float3 origin,
 	return skipped_tile;
 }
 
-float3 SSRT_HierarchicalRaymarch(float3 origin, float3 direction, float2 screen_size, int most_detailed_mip, float roughness, float thickness,
-	uint max_traversal_intersections, out bool valid_hit, out uint _num_iters)
+float3 SSRT_HierarchicalRaymarch(float3 origin,
+	float3 direction,
+	float2 screen_size,
+	int most_detailed_mip,
+	uint max_traversal_intersections,
+	out bool valid_hit)
 {
 	const float3 inv_direction = abs(direction) > float(1.0e-12) ? float(1.0) / direction : SSRT_FLOAT_MAX;
 
@@ -263,8 +259,8 @@ float3 SSRT_HierarchicalRaymarch(float3 origin, float3 direction, float2 screen_
 	float3 position;
 	SSRT_InitialAdvanceRay(origin, direction, inv_direction, current_mip_resolution, current_mip_resolution_inv, floor_offset, uv_offset, position, current_t);
 
-	_num_iters = uint(0);
-	while (_num_iters < max_traversal_intersections && current_mip >= most_detailed_mip) {
+	uint num_iters = 0;
+	while (num_iters < max_traversal_intersections && current_mip >= most_detailed_mip) {
 		if (any(position.xy > float2(1.0, 1.0)) || any(position.xy < float2(0.0, 0.0)))
 			break;
 		if (position.z > float(1.0) - float(1.0e-6))
@@ -272,18 +268,18 @@ float3 SSRT_HierarchicalRaymarch(float3 origin, float3 direction, float2 screen_
 
 		float2 current_mip_position = current_mip_resolution * position.xy;
 		float surface_z = SSRT_LoadDepth(current_mip_position * FrameBuffer::DynamicResolutionParams1.xy, current_mip);
-		bool skipped_tile =
-			SSRT_AdvanceRay(origin, direction, inv_direction, current_mip_position, current_mip_resolution_inv, current_mip, floor_offset, uv_offset, surface_z, thickness, position, current_t);
+		bool skipped_tile = SSRT_AdvanceRay(origin, direction, inv_direction, current_mip_position, current_mip_resolution_inv, floor_offset, uv_offset, surface_z, position, current_t);
 		bool nextMipIsOutOfRange = skipped_tile && (current_mip >= SSRT_DEPTH_HIERARCHY_MAX_MIP);
 		if (!nextMipIsOutOfRange) {
 			current_mip += skipped_tile ? 1 : -1;
 			current_mip_resolution *= skipped_tile ? 0.5 : 2;
 			current_mip_resolution_inv *= skipped_tile ? 2 : 0.5;
 		}
-		++_num_iters;
+		++num_iters;
 	}
 
-	valid_hit = (_num_iters <= max_traversal_intersections);
+	// A hit is complete only after traversal descends past the finest tested mip.
+	valid_hit = current_mip < most_detailed_mip;
 	return position;
 }
 
@@ -291,8 +287,16 @@ float3 SSRT_HierarchicalRaymarch(float3 origin, float3 direction, float2 screen_
 // Hit validation
 ///////////////////////////////////////////////////////////////////////////////
 
-float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, float2 screen_size, float depth_buffer_thickness, out float occlusion, out bool isBackfaceHit)
+float SSRT_ValidateHit(float3 hit,
+	float2 uv,
+	float3 view_space_ray_origin,
+	float2 screen_size,
+	float depth_buffer_thickness,
+	out float ray_length,
+	out float occlusion,
+	out bool isBackfaceHit)
 {
+	ray_length = 0.0f;
 	occlusion = 1.f;
 	isBackfaceHit = false;
 
@@ -309,15 +313,14 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	float3 view_space_surface = SSRT_ScreenSpaceToViewSpace(float3(hit.xy, surface_z));
 	float3 view_space_hit = SSRT_ScreenSpaceToViewSpace(hit);
 	float distance = length(view_space_surface - view_space_hit);
+	float3 view_space_ray_direction = view_space_hit - view_space_ray_origin;
+	ray_length = length(view_space_ray_direction);
 
 	float confidence = 1.0f - smoothstep(0.0f, depth_buffer_thickness, distance);
 	confidence *= confidence;
 
-	float3 hit_normalVS;
-	float hit_roughness;
-	GetNormalRoughness(texel_coords, hit_normalVS, hit_roughness);
-	float3 hit_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(hit_normalVS, 0)).xyz);
-	if (dot(hit_normal, world_space_ray_direction) > 0) {
+	float3 hit_normalVS = GBuffer::DecodeNormal(NormalRoughnessTexture[texel_coords].xy);
+	if (dot(hit_normalVS, view_space_ray_direction) > 0) {
 		occlusion = 1 - confidence;
 		isBackfaceHit = true;
 		return 0;
@@ -352,20 +355,24 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	outPixelPos = DTid.xy;
 #endif
 
+	const uint2 activeScreenSize = (uint2)(screen_size * FrameBuffer::DynamicResolutionParams1.xy);
+	if (any(fullResCoords >= activeScreenSize)) {
+		OutSpecRadianceHitDist[outPixelPos] = 0;
+		return;
+	}
+
+	float depth = DepthTexture[fullResCoords].x;
+	if (depth >= 1.0 - 1e-6) {
+		OutSpecRadianceHitDist[outPixelPos] = 0;
+		return;
+	}
+
 	float2 uv = float2(fullResCoords + 0.5) * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;
 
 	float3 normalVS;
 	float roughness;
 	GetNormalRoughness(fullResCoords, normalVS, roughness);
 	roughness = clamp(roughness, 0.02f, 1.0f);
-
-	float depth = DepthTexture[fullResCoords].x;
-
-	bool isSky = depth >= 1.0 - 1e-6;
-	if (isSky || any(fullResCoords >= (uint2)(screen_size * FrameBuffer::DynamicResolutionParams1.xy))) {
-		OutSpecRadianceHitDist[outPixelPos] = 0;
-		return;
-	}
 
 	int most_detailed_mip = min(1, (int)SSRT_DEPTH_HIERARCHY_MAX_MIP);
 
@@ -379,50 +386,38 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 
 	float3 screen_uv_space_ray_origin = float3(uv, z);
 	float3 view_space_ray = InvProjectPosition(screen_uv_space_ray_origin, FrameBuffer::CameraProjInverse);
-	float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 	float3 view_space_surface_normal = normalVS;
 	float3 view_space_ray_direction = normalize(view_space_ray);
 	float viewZ = abs(view_space_ray.z);
 	static const float3 kHitDistParams = float3(HitDistA, HitDistB, HitDistC);
 
-	float3 world_space_origin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
+#if defined(DYNAMIC_CUBEMAPS) && defined(SKYLIGHTING)
+	float3 unbiased_view_space_ray = view_space_ray;
+#endif
 
 	view_space_ray += view_space_surface_normal * NormalBias * view_space_ray.z * GAME_UNIT_TO_M;
 
-	float pdf;
-	float3 view_space_reflected_direction = SampleReflectionVector(view_space_ray_direction, view_space_surface_normal, roughness, fullResCoords, pdf);
+	float3 view_space_reflected_direction = SampleReflectionVector(view_space_ray_direction, view_space_surface_normal, roughness, fullResCoords);
 	screen_uv_space_ray_origin = ProjectPosition(view_space_ray, FrameBuffer::CameraProj);
 	float3 screen_space_ray_direction = ProjectDirection(view_space_ray, view_space_reflected_direction, screen_uv_space_ray_origin, FrameBuffer::CameraProj);
-	float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz;
-
-	float3 world_space_ray_origin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 
 	// Ray march
 	bool valid_hit;
-	uint numIterations;
 	float thickness = SpecThickness + roughness * 10.0;
 	float3 hit = SSRT_HierarchicalRaymarch(screen_uv_space_ray_origin,
 		screen_space_ray_direction,
 		depth_screen_size,
 		most_detailed_mip,
-		roughness,
-		thickness,
 		HIZ_MAX_ITERATIONS,
-		valid_hit, numIterations);
+		valid_hit);
 
-	float3 world_space_hit = InvProjectPosition(hit, FrameBuffer::CameraViewProjInverse);
-	float3 world_space_ray = world_space_hit - world_space_ray_origin;
-	float world_ray_length = length(world_space_ray);
-	float occlusion;
+	float ray_length = 0.0f;
+	float occlusion = 1.0f;
 	bool isBackfaceHit = false;
-	float confidence = valid_hit ? SSRT_ValidateHit(hit,
-									   uv,
-									   world_space_ray,
-									   screen_size,
-									   thickness,
-									   occlusion,
-									   isBackfaceHit) :
-	                               0;
+	float confidence = 0.0f;
+	if (valid_hit) {
+		confidence = SSRT_ValidateHit(hit, uv, view_space_ray, screen_size, thickness, ray_length, occlusion, isBackfaceHit);
+	}
 	float screenConfidence = isBackfaceHit ? 1.0 : confidence;
 	float3 sampleColor = 0;
 	if (confidence > 0.0f) {
@@ -430,10 +425,11 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 		sampleColor *= SharedData::ssrSettings.SpecularMult;
 	}
 
-	const float NdotV = saturate(dot(normalize(view_space_ray), view_space_surface_normal));
-
 #if defined(DYNAMIC_CUBEMAPS)
 	if (SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
+		float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz;
+		float3 biased_view_space_ray_direction = normalize(view_space_ray);
+		const float NdotV = saturate(dot(biased_view_space_ray_direction, view_space_surface_normal));
 		float3 envSampleRaw = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 		float3 envColor = envSampleRaw;
 
@@ -468,12 +464,13 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 
 #	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior) {
-			float3 positionMS = world_space_origin;
+			float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
+			float3 positionMS = mul(FrameBuffer::CameraViewInverse, float4(unbiased_view_space_ray, 1)).xyz;
 
 			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
 			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, normalize(view_space_ray), roughness), fadeOutFactor);
+			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
 
 			float3 envSkyColor = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 			float3 skyColor = max(envSkyColor - envSampleRaw, 0);
@@ -504,7 +501,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 
 	float normHitDist;
 	if (screenConfidence > 0.0f) {
-		normHitDist = REBLUR_FrontEnd_GetNormHitDist(world_ray_length, viewZ, kHitDistParams, roughness);
+		normHitDist = REBLUR_FrontEnd_GetNormHitDist(ray_length, viewZ, kHitDistParams, roughness);
 	} else if (confidence > 0.0f) {
 		normHitDist = 1.0;
 	} else {

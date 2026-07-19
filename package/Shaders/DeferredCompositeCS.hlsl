@@ -116,41 +116,43 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 
-#if defined(SSGI)
 	float ssgiAo = 1.0;
-
 	if (depth < 1.0 - 1e-6) {
+		float3 multiBounceSSGIAo = 1.0;
+#if defined(SSGI)
 		ssgiAo = SampleSSGIAO(dispatchID.xy);
 		float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 		float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
 		ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));
-		float3 multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
+		multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
 
 		if (SharedData::ssgiSettings.EnableIL != 0) {
 			// IL replaces directional ambient in the deferred main view, so there is no ambient term to reconstruct here.
 			linDiffuseColor *= sqrt(multiBounceSSGIAo);
-		} else {
+		} else
+#endif
+		{
 			float3 directionalAmbientColor = 0;
 
-#	if defined(IBL)
+#if defined(IBL)
 			if (SharedData::iblSettings.EnableIBL) {
 				float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
-#		if defined(SKYLIGHTING)
+#	if defined(SKYLIGHTING)
 				float3 positionMS = positionWS.xyz;
 				sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 				float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
 				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
-#		else
+#	else
 				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
-#		endif
+#	endif
 
 				directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
 				directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
 				directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
 				directionalAmbientColor = max(0, directionalAmbientColor);
 			} else
-#	endif
+#endif
 			{
 				directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 				directionalAmbientColor *= albedo;
@@ -181,7 +183,6 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 			linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 		}
 	}
-#endif
 
 	float3 color = linDiffuseColor + specularColor;
 

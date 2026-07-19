@@ -84,6 +84,7 @@ public:
 		// mix
 		float AOPower = 1.0f;
 		float GIStrength = 1.0f;
+		bool EnableMultiBounce = false;
 		bool UseDynamicCubemapsAsFallback = true;
 		float DiffuseCubemapMult = 1.0f;
 		// NRD REBLUR
@@ -93,7 +94,6 @@ public:
 
 	struct alignas(16) SSGICB
 	{
-		float4x4 PrevInvViewMat;
 		float2 NDCToViewMul;
 		float2 NDCToViewAdd;
 
@@ -111,7 +111,7 @@ public:
 		float GIStrength;
 		float DiffuseCubemapMult;
 		uint UseDynamicCubemap;
-		uint pad0;
+		uint MultiBounceMode;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSGICB);
 	eastl::unique_ptr<ConstantBuffer> ssgiCB;
@@ -129,7 +129,14 @@ public:
 	eastl::unique_ptr<Texture2D> texNoise = nullptr;
 	eastl::unique_ptr<Texture2D> texWorkingDepth = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavWorkingDepth[5] = { nullptr };
-	eastl::unique_ptr<Texture2D> texPrevGeo = nullptr;
+	// Full-resolution geometry history is ping-ponged so radiance prefiltering can
+	// read the previous frame while the normal pass writes the current frame.
+	eastl::unique_ptr<Texture2D> texHistoryGeo[2] = { nullptr, nullptr };
+	uint historyGeoWriteIndex = 0;
+	bool hasMultiBounceHistory = false;
+	bool hasFullResolutionMultiBounceHistory = false;
+	bool multiBounceHistoryUsesNRDOutput = false;
+	uint32_t lastMultiBounceHistoryFrame = 0;
 	eastl::unique_ptr<Texture2D> texRadiance = nullptr;
 	winrt::com_ptr<ID3D11UnorderedAccessView> uavRadiance[5] = { nullptr };
 	eastl::unique_ptr<Texture2D> texNormal = nullptr;

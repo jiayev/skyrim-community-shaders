@@ -1118,6 +1118,8 @@
     "feature.screen_space_gi.key_feature_3": "Improved visual depth and atmosphere",
     "feature.screen_space_gi.key_feature_4": "NVIDIA REBLUR temporal denoising",
     "feature.screen_space_gi.key_feature_5": "Configurable quality and performance settings",
+    "feature.screen_space_gi.multi_bounce": "Multi-Bounce",
+    "feature.screen_space_gi.multi_bounce_tooltip": "Feed the previous frame's reprojected, post-albedo indirect radiance back into the source radiance pyramid.",
     "feature.screen_space_gi.name": "Screen Space GI",
     "feature.screen_space_gi.quality_performance": "Quality/Performance",
     "feature.screen_space_gi.reblur_denoiser": "REBLUR Denoiser",
