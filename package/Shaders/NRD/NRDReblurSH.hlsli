@@ -134,16 +134,23 @@ float4 NRD_FrontEnd_PackNormalAndRoughness(float3 N, float roughness, float mate
 	return p;
 }
 
-// --- Hit distance normalization (must match nrd::ReblurSettings::hitDistanceParameters) ---
-// f = (A + |viewZ| * B) * lerp(1, C, exp2(D * roughness^2))
-// For diffuse (roughness = 1): f ≈ A + |viewZ| * B  (since exp2(D) ≈ 0 for D = -25)
+// --- Hit distance normalization (must match the linked NRD 4.17 implementation) ---
+
+float _NRD_GetSpecMagicCurve(float roughness, float power)
+{
+	float f = 1.0 - exp2(-200.0 * roughness * roughness);
+	f *= pow(saturate(roughness), power);
+	return f;
+}
 
 float REBLUR_FrontEnd_GetNormHitDist(float hitDist, float viewZ,
-	float4 hitDistParams /* = float4(3, 0.1, 20, -25) */, float roughness = 1.0)
+	float3 hitDistParams /* = float3(3, 0.1, 20) */, float roughness = 1.0)
 {
+	float smc = _NRD_GetSpecMagicCurve(roughness, 0.5);
 	float f = (hitDistParams.x + abs(viewZ) * hitDistParams.y) *
-	          lerp(1.0, hitDistParams.z, exp2(hitDistParams.w * roughness * roughness));
-	return saturate(hitDist / max(f, NRD_EPS));
+	          lerp(hitDistParams.z, 1.0, smc);
+	hitDist = saturate(hitDist / f);
+	return max(hitDist, NRD_EPS);
 }
 
 // --- REBLUR front-end SH packing ---

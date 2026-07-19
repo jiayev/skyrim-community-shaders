@@ -215,8 +215,14 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	commonSettings.cameraJitterPrev[0] = prevJitter.x;
 	commonSettings.cameraJitterPrev[1] = prevJitter.y;
 
-	commonSettings.frameIndex = frameIndex++;
+	const uint32_t gameFrame = globals::state->frameCount;
+	commonSettings.frameIndex = gameFrame;
 	commonSettings.denoisingRange = 1e6f;
+
+	if (!hasCommonFrameHistory || gameFrame != lastCommonGameFrame + 1)
+		commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
+	lastCommonGameFrame = gameFrame;
+	hasCommonFrameHistory = true;
 
 	prevWorldToViewMat = worldToViewMat;
 	prevProjMatrix = projMat;
@@ -242,7 +248,7 @@ void NRD::ApplyReblurSettings(nrd::ReblurSettings& out, const REBLURSettings& in
 	out.lobeAngleFraction = std::clamp(in.LobeAngleFraction, 0.0f, 1.0f);
 	out.roughnessFraction = std::clamp(in.RoughnessFraction, 0.0f, 1.0f);
 	out.planeDistanceSensitivity = std::max(in.PlaneDistanceSensitivity, 0.0f);
-	out.enableAntiFirefly = false;
+	out.enableAntiFirefly = true;
 	out.hitDistanceReconstructionMode = static_cast<nrd::HitDistanceReconstructionMode>(std::min(in.HitDistanceReconstructionMode, 2u));
 	out.checkerboardMode = checkerboard;
 }

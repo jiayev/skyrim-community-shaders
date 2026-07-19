@@ -155,4 +155,6 @@ public:
 
 	NRDReblurIntegration nrdReblur;
 	nrd::ReblurSettings reblurSettings{};
+	bool resetReblurHistory = true;
+	bool nrdReblurUsesSH = false;
 };

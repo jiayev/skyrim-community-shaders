@@ -37,6 +37,7 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 {
 	settings = {};
 	recompileFlag = true;
+	resetReblurHistory = true;
 }
 
 void ScreenSpaceGI::DrawSettings()
@@ -53,7 +54,8 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+		if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled))
+			resetReblurHistory = true;
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
@@ -96,6 +98,7 @@ void ScreenSpaceGI::DrawSettings()
 
 		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
+			resetReblurHistory = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
@@ -112,7 +115,8 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto visualGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::SliderFloat(T(TKEY("ao_power"), "AO Power"), &settings.AOPower, 0.f, 6.f, "%.2f");
+		if (ImGui::SliderFloat(T(TKEY("ao_power"), "AO Power"), &settings.AOPower, 0.f, 6.f, "%.2f"))
+			resetReblurHistory = true;
 
 		{
 			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
@@ -140,10 +144,11 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR);
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR))
+			resetReblurHistory = true;
 
 		if (settings.EnableREBLUR)
-			globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
+			resetReblurHistory |= globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
 	}
 
 	///////////////////////////////
@@ -172,6 +177,7 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	recompileFlag = true;
+	resetReblurHistory = true;
 }
 
 void ScreenSpaceGI::SaveSettings(json& o_json)
@@ -183,6 +189,7 @@ void ScreenSpaceGI::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	resetReblurHistory = true;
 
 	logger::debug("Creating buffers...");
 	{
@@ -332,6 +339,11 @@ void ScreenSpaceGI::SetupResources()
 
 void ScreenSpaceGI::SetupNRDResources()
 {
+	resetReblurHistory = true;
+	const bool useSH = settings.EnableGI && settings.EnableSH;
+	if (nrdReblurUsesSH != useSH)
+		recompileFlag = true;
+
 	uint32_t fullW, fullH;
 	if (texRadiance) {
 		fullW = texRadiance->desc.Width;
@@ -376,13 +388,7 @@ void ScreenSpaceGI::SetupNRDResources()
 	texNRDOutput->CreateSRV(srvDesc);
 	texNRDOutput->CreateUAV(uavDesc);
 
-	const float clearColor[4] = {};
-	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDInput->uav.get(), clearColor);
-	globals::d3d::context->ClearUnorderedAccessViewFloat(texNRDOutput->uav.get(), clearColor);
-
-	const bool enableSH = settings.EnableSH && settings.EnableGI;
-
-	if (enableSH) {
+	if (useSH) {
 		texNRDInputSH1 = eastl::make_unique<Texture2D>(texDesc, "SSGI::NRDInputSH1");
 		texNRDInputSH1->CreateSRV(srvDesc);
 		texNRDInputSH1->CreateUAV(uavDesc);
@@ -398,8 +404,9 @@ void ScreenSpaceGI::SetupNRDResources()
 		texNRDOutputSH1.reset();
 	}
 
-	auto denoiser = enableSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
+	auto denoiser = useSH ? nrd::Denoiser::REBLUR_DIFFUSE_SH : nrd::Denoiser::REBLUR_DIFFUSE;
 	nrdReblur.Init(fullW, fullH, denoiser, 0);
+	nrdReblurUsesSH = useSH;
 
 	globals::deferred->ClearShaderCache();
 }
@@ -529,6 +536,10 @@ void ScreenSpaceGI::DrawSSGI()
 
 	//////////////////////////////////////////////////////
 
+	const bool useSH = settings.EnableGI && settings.EnableSH;
+	if (nrdReblurUsesSH != useSH)
+		SetupNRDResources();
+
 	if (recompileFlag)
 		ClearShaderCache();
 
@@ -646,8 +657,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		uavs.at(0) = texNRDInput->uav.get();
 		uavs.at(1) = texPrevGeo->uav.get();
-		const bool enableSH = settings.EnableSH && settings.EnableGI;
-		if (enableSH && texNRDInputSH1)
+		if (useSH && texNRDInputSH1)
 			uavs.at(2) = texNRDInputSH1->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -666,10 +676,14 @@ void ScreenSpaceGI::DrawSSGI()
 	if (settings.EnableREBLUR && nrdReblur.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - REBLUR");
 
-		nrdReblur.SetCommonSettings(nrdSvc.GetCommonSettings());
+		auto commonSettings = nrdSvc.GetCommonSettings();
+		commonSettings.splitScreen = settings.Reblur.SplitScreen;
+		if (resetReblurHistory)
+			commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
+		nrdReblur.SetCommonSettings(commonSettings);
 
 		nrdSvc.ApplyReblurSettings(reblurSettings, settings.Reblur,
-			settings.HalfRes ? nrd::CheckerboardMode::WHITE : nrd::CheckerboardMode::OFF);
+			settings.HalfRes ? nrd::CheckerboardMode::BLACK : nrd::CheckerboardMode::OFF);
 		nrdReblur.SetDenoiserSettings(&reblurSettings);
 
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_MV, nrdSvc.GetMotionVectorSRV());
@@ -677,8 +691,7 @@ void ScreenSpaceGI::DrawSSGI()
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_NORMAL_ROUGHNESS, nrdSvc.GetNormalRoughnessSRV());
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_VIEWZ, nrdSvc.GetViewZSRV());
 
-		const bool enableSH = settings.EnableSH && settings.EnableGI;
-		if (enableSH && texNRDInputSH1) {
+		if (useSH && texNRDInputSH1) {
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH0, texNRDInput->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::IN_DIFF_SH1, texNRDInputSH1->srv.get());
 			nrdReblur.SetNamedSRV(nrd::ResourceType::OUT_DIFF_SH0, texNRDOutput->srv.get());
@@ -693,6 +706,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		globals::profiler->BeginPass("ScreenSpaceGI::Reblur");
 		nrdReblur.Dispatch();
+		resetReblurHistory = false;
 		globals::profiler->EndPass();
 	}
 

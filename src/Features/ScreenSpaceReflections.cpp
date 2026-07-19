@@ -27,9 +27,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HitDistA,
 	HitDistB,
 	HitDistC,
-	HitDistD,
 	EnableREBLUR,
-	Reblur)
+	Reblur,
+	SpecularPrepassBlurRadius,
+	UsePrepassOnlyForSpecularMotionEstimation)
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -37,6 +38,7 @@ void ScreenSpaceReflections::RestoreDefaultSettings()
 {
 	settings = {};
 	recompileFlag = true;
+	resetReblurHistory = true;
 }
 
 void ScreenSpaceReflections::DrawSettings()
@@ -61,6 +63,7 @@ void ScreenSpaceReflections::DrawSettings()
 
 		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
+			resetReblurHistory = true;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
@@ -96,10 +99,11 @@ void ScreenSpaceReflections::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("occlusion_strength"), "Occlusion Strength"), &settings.OcclusionStrength, 0.0f, 1.0f, "%.2f");
 
 			ImGui::SeparatorText(T(TKEY("nrd_hit_distance_parameters"), "NRD Hit Distance Parameters"));
-			ImGui::SliderFloat(T(TKEY("hit_dist_a"), "Hit Dist A"), &settings.HitDistA, 1.0f, 1000.0f, "%.1f");
-			ImGui::SliderFloat(T(TKEY("hit_dist_b"), "Hit Dist B"), &settings.HitDistB, 0.0f, 1.0f, "%.3f");
-			ImGui::SliderFloat(T(TKEY("hit_dist_c"), "Hit Dist C"), &settings.HitDistC, 0.0f, 200.0f, "%.1f");
-			ImGui::SliderFloat(T(TKEY("hit_dist_d"), "Hit Dist D"), &settings.HitDistD, -200.0f, 0.0f, "%.1f");
+			bool hitDistanceChanged = false;
+			hitDistanceChanged |= ImGui::SliderFloat(T(TKEY("hit_dist_a"), "Hit Dist A"), &settings.HitDistA, 1.0f, 1000.0f, "%.1f");
+			hitDistanceChanged |= ImGui::SliderFloat(T(TKEY("hit_dist_b"), "Hit Dist B"), &settings.HitDistB, 0.0f, 1.0f, "%.3f");
+			hitDistanceChanged |= ImGui::SliderFloat(T(TKEY("hit_dist_c"), "Hit Dist C"), &settings.HitDistC, 1.0f, 200.0f, "%.1f");
+			resetReblurHistory |= hitDistanceChanged;
 		}
 	}
 
@@ -108,10 +112,16 @@ void ScreenSpaceReflections::DrawSettings()
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR);
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR))
+			resetReblurHistory = true;
 
-		if (settings.EnableREBLUR)
-			globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssr_reblur");
+		if (settings.EnableREBLUR) {
+			resetReblurHistory |= globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssr_reblur");
+			if (showAdvanced) {
+				resetReblurHistory |= ImGui::SliderFloat(T(TKEY("specular_prepass_blur_radius"), "Specular Pre-pass Radius"), &settings.SpecularPrepassBlurRadius, 0.0f, 75.0f, "%.1f px");
+				resetReblurHistory |= ImGui::Checkbox(T(TKEY("specular_prepass_motion_only"), "Use Pre-pass Only for Motion Estimation"), &settings.UsePrepassOnlyForSpecularMotionEstimation);
+			}
+		}
 	}
 
 	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
@@ -137,6 +147,7 @@ void ScreenSpaceReflections::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	recompileFlag = true;
+	resetReblurHistory = true;
 }
 
 void ScreenSpaceReflections::SaveSettings(json& o_json)
@@ -148,6 +159,7 @@ void ScreenSpaceReflections::SetupResources()
 {
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
+	resetReblurHistory = true;
 
 	logger::debug("ScreenSpaceReflections: creating buffers");
 	{
@@ -332,7 +344,6 @@ void ScreenSpaceReflections::UpdateSB()
 	data.HitDistA = settings.HitDistA;
 	data.HitDistB = settings.HitDistB;
 	data.HitDistC = settings.HitDistC;
-	data.HitDistD = settings.HitDistD;
 
 	ssrCB->Update(data);
 }
@@ -468,13 +479,19 @@ void ScreenSpaceReflections::DrawSSR()
 		if (globals::state->frameAnnotations)
 			globals::state->BeginPerfEvent("SSR - REBLUR Specular");
 
-		nrdReblurSpecular.SetCommonSettings(nrdSvc.GetCommonSettings());
+		auto commonSettings = nrdSvc.GetCommonSettings();
+		commonSettings.splitScreen = settings.Reblur.SplitScreen;
+		if (resetReblurHistory)
+			commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
+		nrdReblurSpecular.SetCommonSettings(commonSettings);
 
 		nrdSvc.ApplyReblurSettings(reblurSpecularSettings, settings.Reblur,
 			settings.HalfRes ? nrd::CheckerboardMode::BLACK : nrd::CheckerboardMode::OFF);
 		reblurSpecularSettings.hitDistanceParameters.A = settings.HitDistA;
 		reblurSpecularSettings.hitDistanceParameters.B = settings.HitDistB;
 		reblurSpecularSettings.hitDistanceParameters.C = settings.HitDistC;
+		reblurSpecularSettings.specularPrepassBlurRadius = std::max(settings.SpecularPrepassBlurRadius, 0.0f);
+		reblurSpecularSettings.usePrepassOnlyForSpecularMotionEstimation = settings.UsePrepassOnlyForSpecularMotionEstimation;
 		nrdReblurSpecular.SetDenoiserSettings(&reblurSpecularSettings);
 
 		nrdReblurSpecular.SetNamedSRV(nrd::ResourceType::IN_MV, nrdSvc.GetMotionVectorSRV());
@@ -487,6 +504,7 @@ void ScreenSpaceReflections::DrawSSR()
 
 		globals::profiler->BeginPass("ScreenSpaceReflections::ReblurSpecular");
 		nrdReblurSpecular.Dispatch();
+		resetReblurHistory = false;
 		globals::profiler->EndPass();
 
 		if (globals::state->frameAnnotations)

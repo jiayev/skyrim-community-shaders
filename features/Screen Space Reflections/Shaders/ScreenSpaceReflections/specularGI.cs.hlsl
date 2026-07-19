@@ -383,7 +383,7 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 	float3 view_space_surface_normal = normalVS;
 	float3 view_space_ray_direction = normalize(view_space_ray);
 	float viewZ = abs(view_space_ray.z);
-	static const float4 kHitDistParams = float4(HitDistA, HitDistB, HitDistC, HitDistD);
+	static const float3 kHitDistParams = float3(HitDistA, HitDistB, HitDistC);
 
 	float3 world_space_origin = mul(FrameBuffer::CameraViewInverse, float4(view_space_ray, 1)).xyz;
 
