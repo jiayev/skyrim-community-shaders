@@ -276,15 +276,6 @@ Texture2D<float4> TexMsLut : register(t113);
 		}
 	}
 
-	float GetApShadowedMultiScatterVisibility(float shadow, float3 multiScatter)
-	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
-
-		float shadowableLum = Color::RGBToLuminance(max(0.0, data.sunlightColor));
-		float unshadowedLum = Color::RGBToLuminance(max(0.0, data.masserColor + data.secundaColor + multiScatter));
-		return (unshadowedLum + shadowableLum * (1.0 - saturate(shadow))) / max(unshadowedLum + shadowableLum, 1e-6);
-	}
-
 #ifndef PS_PREPASS_RSRCS
 
 	float GetApShadow(uint2 pxCoord)
@@ -450,7 +441,7 @@ Texture2D<float4> TexMsLut : register(t113);
 		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 
-		apColor.rgb *= GetApShadowedMultiScatterVisibility(shadow, SampleApMultiScatter(sampSv));
+		apColor.rgb *= 1 - shadow;
 
 		if (data.tonemapper == 1)
 			apColor.rgb = Color::LinearToSkyrimGamma(apColor.rgb);
