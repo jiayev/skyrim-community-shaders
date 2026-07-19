@@ -301,7 +301,7 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 		return float4(0.0, 0.0, 0.0, 1.0);
 	const float depthSlice = lerp(0.5 / apDims.z, 1.0 - 0.5 / apDims.z, saturate(distance / AP_MAX_DIST));
 	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(SkyViewLutUv(viewDir), depthSlice), 0);
-	ap.rgb *= GetApShadowedMultiScatterVisibility(shadow, SampleCloudApMultiScatter());
+	ap.rgb *= 1 - shadow;
 	ap.rgb *= data.apLumMix;
 	ap.a = lerp(1.0, ap.a, data.apTrMix);
 	return ap;
