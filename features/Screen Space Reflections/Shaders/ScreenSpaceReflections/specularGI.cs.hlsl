@@ -474,20 +474,39 @@ float SSRT_ValidateHit(float3 hit,
 #		endif
 				envColor += skyColor;
 			}
+			envColor = Color::IrradianceToLinear(envColor);
 		} else
 #	endif
 		{
+			float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
 #	if defined(SKYLIGHTING)
-			if (!SharedData::InInterior) {
-				float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-				float3 skyColor = max(fullSample - envSampleRaw, 0);
-				envColor += skyColor;
-				envColor *= skylightingSpecular;
+			if (SharedData::InInterior) {
+				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+				envColor = Color::IrradianceToLinear((envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular);
+			} else {
+				float3 fullIrradiance = 0;
+				if (skylightingSpecular > 0.0) {
+					float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+					float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+					fullIrradiance = Color::IrradianceToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
+				}
+
+				float3 envIrradiance = 0;
+				if (skylightingSpecular < 1.0) {
+					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+					float dalcScaled = Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColorSpecular) * skylightingSpecular);
+					envIrradiance = Color::IrradianceToLinear((envSampleRaw / max(envLum, 0.001)) * dalcScaled);
+				}
+
+				envColor = lerp(envIrradiance, fullIrradiance, skylightingSpecular);
 			}
+#	else
+			float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+			float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+			envColor = Color::IrradianceToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
 #	endif
 		}
 
-		envColor = Color::IrradianceToLinear(envColor);
 		envColor *= SpecCubemapMult;
 		float ao = lerp(1.0, occlusion, OcclusionStrength);
 		ao = GetSpecularOcclusionFromAmbientOcclusion(NdotV, ao, roughness);
