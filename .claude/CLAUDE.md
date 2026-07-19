@@ -13,11 +13,22 @@ This is a Windows-specific project requiring Visual Studio and Windows SDK. If w
 powershell.exe -Command "./BuildRelease.bat [PRESET_NAME]"
 ```
 
-### Primary Build Command
+### Primary Build Commands
+
+One-click wrappers — each configures CMake automatically on first run (no
+manual `cmake` step ever needed) and bootstraps the VS x64 environment when
+required:
 
 ```bash
-./BuildRelease.bat [PRESET_NAME]
+./BuildRelease.bat   # Shipping build: ALL preset, /O2 /GL /LTCG, full PDB, all packages
+./BuildDev.bat       # Developer build: optimized DLL + AIO folder in build/ALL/aio
+./BuildDevFast.bat   # Fastest iteration: Ninja, /Od, incremental link, DLL only
+./BuildPR.bat        # CI parity: /O2 no-LTO, public-symbols PDB, AIO zip
+./BuildDebug.bat     # Debug config (ALL-DEBUG preset, CommonLib from source)
 ```
+
+`BuildRelease.bat` is also the generic engine: `./BuildRelease.bat [BUILD_PRESET] [CONFIGURE_PRESET]`
+(configure preset defaults to the build preset name).
 
 **Available Presets** (from CMakePresets.json):
 
@@ -108,11 +119,11 @@ cmake --build ./build/ALL --target PREPARE_AIO
 # Prepare shaders only (useful for CI shader validation)
 cmake --build ./build/ALL --target prepare_shaders
 
-# Fast shader-only deployment (no DLL build, no tests - for dev iteration)
+# Fast shader-only deployment (no DLL build - for dev iteration)
 # See docs/development/shader-workflow.md for details
 cmake --build ./build/ALL --target COPY_SHADERS
 
-# Full deployment with DLL build and tests
+# Full deployment with DLL build
 cmake --build ./build/ALL --target DEPLOY_ALL
 
 # Create AIO zip package (when AIO_ZIP_TO_DIST=ON)
@@ -334,6 +345,41 @@ Modular ImGui-based configuration interface with specialized renderers for diffe
 
 Feature versions are automatically extracted from `.ini` files and compiled into `FeatureVersions.h` at build time for backward compatibility checking.
 
+### Release Stages (Alpha / Beta)
+
+Features can declare a release-maturity stage in their `.ini` `[Info]` section. This drives the default-enabled state, a UI marker, and the version-audit policy.
+
+**Declaring a stage** (in `features/<Feature>/Shaders/Features/<Feature>.ini`):
+
+```ini
+[Info]
+Version = 0-2-0
+Beta = True
+```
+
+-   Flags: `Alpha` or `Beta`. Truthy values are `true`, `1`, `yes`, `on` (case-insensitive). Absent or non-truthy means full **Release**.
+-   `Alpha` takes precedence over `Beta` when both are set.
+-   The flag line must start the line (after optional whitespace). The CMake parser in `CMakeLists.txt` and the Python parser in `tools/feature_version_audit.py` are both line-anchored; **keep these two regexes in sync** so build-time classification and audit enforcement agree.
+
+**Build-time baking**: `CMakeLists.txt` collects flagged features into `FEATURE_ALPHA_NAMES` / `FEATURE_BETA_NAMES` in the generated `FeatureVersions.h` (same mechanism as `FEATURE_CORE_NAMES`).
+
+**Runtime API** (`src/Feature.h`):
+
+-   `Feature::GetReleaseStage()` returns `ReleaseStage::{Release, Beta, Alpha}` by looking the short name up in the baked sets. Resolve it once and pass it around; it is not cached.
+-   `IsAlpha()` / `IsBeta()` convenience predicates.
+-   `static GetReleaseStageTag(ReleaseStage)` returns the localized `[ALPHA]` / `[BETA]` marker (empty for Release). It takes the stage so callers that already resolved it avoid a redundant lookup.
+-   `IsDisabledByDefault()` returns `true` for any non-Release stage, so **Alpha/Beta features start disabled on first install**. Users can still enable them via the "Disable at Boot" menu. Do not add a redundant `IsDisabledByDefault` override on a feature that already carries a stage flag.
+
+**UI**: `FeatureListRenderer` draws the stage tag next to the feature name. Alpha uses the theme `StatusPalette.Error` color, Beta uses `StatusPalette.Warning`.
+
+**Versioning convention** (enforced by `tools/feature_version_audit.py`):
+
+-   Pre-release features use `0.x` versions. Entering pre-release from a release/fresh baseline: Beta starts at `0-2-0`, Alpha at `0-1-0`.
+-   `alpha -> beta` bumps the minor and resets the patch.
+-   Within the same pre-release stage, normal semver applies inside `0.x`.
+-   A breaking change (`feat!:` / `BREAKING CHANGE:`) on a pre-release feature **promotes it to release `1-0-0` and strips the Alpha/Beta flag**. `--apply-bumps` performs both the version bump and the flag removal automatically.
+-   Stage transitions are exact-match enforced (they may legitimately lower the version, e.g. release `1.x` -> beta `0-2-0`), unlike the lenient `>` check used within a stage.
+
 ## Key Development Patterns
 
 ### Memory Management
@@ -450,9 +496,9 @@ Conventional commits drive semantic-release. `feat:` triggers a minor bump, `fix
 **Branch lineage invariant:** `main` becomes an ancestor of `dev` at **each minor/major promotion** (every tag on `main` is then reachable from `dev`). Current-line hotfixes intentionally let `main` diverge from `dev` until the next promotion folds them back in. `dev` is **never rewritten** — the `Release: Semantic Version` workflow reconciles per promotion source:
 
 -   **dev → main promotion** (minor/major): if interim hotfixes have diverged `main`, the workflow first **merges `main` into `dev`** (a single ancestry-only merge commit; the merge tree equals `dev`'s, with version-bump files resolved to `dev`, and any non-`dev`-sourced divergence hard-fails before pushing). That merge is a fast-forward push of `dev` (**no force** — the App's PR-bypass authorizes it). Then `main` FFs to the merge commit, semantic-release appends `chore(release):`, and `dev` FFs to absorb it. A best-effort step dedups the new release's notes of the carried-over hotfix entries.
--   **hotfix-staging → main promotion** (current-line patch): `main` fast-forwards to the hotfix-staging SHA and semantic-release appends `chore(release):`. **`dev` is not touched** — it is reconciled at the next minor/major promotion via the merge above. No rebase, no force-push of `dev`.
+-   **hotfix-staging → main promotion** (current-line patch): `main` fast-forwards to the hotfix-staging SHA and semantic-release appends `chore(release):`. The workflow then **resets the maintenance branch (`hotfix/X.Y.x`) to the released `main` tip** (force-with-lease), so the next current-line patch's staging branch is built on `main` and still fast-forwards it. Without this, the maintenance branch keeps its PR merge commit and never absorbs `main`'s `chore(release):`, so the **second** consecutive current-line patch fails validation with `hotfix-staging ff_target … is not a fast-forward of main`. **`dev` is not touched** — it is reconciled at the next minor/major promotion via the merge above. No rebase, no force-push of `dev`.
 
-**Prerequisite:** the release App (`community-shaders-release-bot`) must be in the **"Allow specified actors to bypass required pull requests"** list for **both `main` and `dev`** — the app token alone cannot bypass the PR requirement, so a missing entry fails the FF push with `GH006: Changes must be made through a pull request`.
+**Prerequisite:** the release App (`community-shaders-release-bot`) must be in the **"Allow specified actors to bypass required pull requests"** list for **both `main` and `dev`** — the app token alone cannot bypass the PR requirement, so a missing entry fails the FF push with `GH006: Changes must be made through a pull request`. `hotfix/*` is not branch-protected, so the post-patch maintenance-branch reconcile force-pushes it with the App's normal write access (no bypass entry needed).
 
 **Patch flow (current line _or_ older line, same staging mechanism):**
 
@@ -461,7 +507,7 @@ Conventional commits drive semantic-release. `feat:` triggers a minor bump, `fix
 3. PR checks build a `vX.Y.Z-prNNNN` prerelease for verification.
 4. Merge the candidate PR.
 5. Cut the release:
-    - **Current line** (`main` is on `X.Y`): dispatch **Release: Semantic Version** on `main` with `ff_target = <hotfix-staging branch tip SHA>` — **not** the `hotfix/X.Y.x` tip, which is a merge commit that `main`'s branch protection rejects. Use the second parent of the merge commit: `git rev-parse origin/hotfix/X.Y.x^2`. `dev` is left untouched and is reconciled at the next minor/major promotion.
+    - **Current line** (`main` is on `X.Y`): dispatch **Release: Semantic Version** on `main` with `ff_target = <hotfix-staging branch tip SHA>` — **not** the `hotfix/X.Y.x` tip, which is a merge commit that `main`'s branch protection rejects. Use the second parent of the merge commit: `git rev-parse origin/hotfix/X.Y.x^2`. After cutting the patch the workflow resets `hotfix/X.Y.x` to the new `main` tip so the next current-line patch fast-forwards cleanly; `dev` is left untouched and is reconciled at the next minor/major promotion.
     - **Older line** (`main` has shipped a newer minor/major): dispatch **Release: Semantic Version** on `hotfix/X.Y.x` with `ff_target` empty.
 
 **Minor/major release flow:**
@@ -471,7 +517,7 @@ Conventional commits drive semantic-release. `feat:` triggers a minor bump, `fix
 
 **Things agents should not do without explicit user direction:**
 
--   Force-push or rebase `main`, `dev`, or any `hotfix/*` branch. (The release workflow reconciles `dev` only via fast-forward and ancestry-only merge commits — it never rewrites `dev`.)
+-   Force-push or rebase `main` or `dev`. (The release workflow reconciles `dev` only via fast-forward and ancestry-only merge commits — it never rewrites `dev`.) The workflow itself does force-reset `hotfix/X.Y.x` to `main` after a current-line patch; do not do this by hand outside that flow.
 -   Manually create tags matching `v*` (semantic-release owns these).
 -   Bump `CMakeLists.txt`'s `VERSION` field outside the release workflow.
 -   PR a feature branch directly into `main`.
