@@ -76,10 +76,11 @@ struct ScreenSpaceReflections : Feature
 		float HitDistA = 210.0f;
 		float HitDistB = 0.1f;
 		float HitDistC = 20.0f;
-		float HitDistD = -25.0f;
 
 		bool EnableREBLUR = true;
 		NRD::REBLURSettings Reblur;
+		float SpecularPrepassBlurRadius = 50.0f;
+		bool UsePrepassOnlyForSpecularMotionEstimation = true;
 	} settings;
 
 	struct alignas(16) SSRCB
@@ -103,9 +104,6 @@ struct ScreenSpaceReflections : Feature
 		float HitDistA;
 		float HitDistB;
 		float HitDistC;
-
-		float HitDistD;
-		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSRCB);
 	eastl::unique_ptr<ConstantBuffer> ssrCB;
@@ -140,4 +138,5 @@ struct ScreenSpaceReflections : Feature
 
 	NRDReblurIntegration nrdReblurSpecular;
 	nrd::ReblurSettings reblurSpecularSettings{};
+	bool resetReblurHistory = true;
 };

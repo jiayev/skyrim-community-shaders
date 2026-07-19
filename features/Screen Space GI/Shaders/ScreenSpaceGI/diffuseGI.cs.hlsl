@@ -192,7 +192,9 @@ float3 SamplePreviousGIRadiance(float2 uv, float3 viewspaceNormal, float3 viewVe
 	NRD_SG sg = REBLUR_BackEnd_UnpackSh(
 		srcPrevGI.SampleLevel(samplerPointClamp, prevUV, 0),
 		srcPrevGISH1.SampleLevel(samplerPointClamp, prevUV, 0));
-	return max(0, NRD_SG_ResolveDiffuse(sg, viewspaceNormal, viewVec, 1.0));
+	float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
+	float3 worldView = ViewToWorldVector(viewVec, FrameBuffer::CameraViewInverse);
+	return max(0, NRD_SG_ResolveDiffuse(sg, worldNormal, worldView, 1.0));
 #else
 	float3 radiance;
 	float normHitDist;
@@ -230,6 +232,7 @@ void CalculateGI(
 	float3 fallbackRadiance = 0;
 #ifdef SSGI_SH
 	float3 totalDirection = 0;
+	float3 fallbackDirection = 0;
 #endif
 
 	[loop] for (uint rotation = 0; rotation < SSGI_ROTATION_COUNT; rotation++)
@@ -349,7 +352,7 @@ void CalculateGI(
 				float3 contrib = SampleDiffuseFallbackCubemap(worldPos, worldNormal, worldDir) * openWeight;
 				fallbackRadiance += contrib;
 #	ifdef SSGI_SH
-				totalDirection += rayDir * Color::RGBToLuminance(contrib);
+				fallbackDirection += rayDir * Color::RGBToLuminance(contrib);
 #	endif
 
 				globalOccludedBitfieldCopy >>= maskSize;
@@ -361,15 +364,30 @@ void CalculateGI(
 	normHitDist /= SSGI_ROTATION_COUNT;
 	totalRadiance /= SSGI_ROTATION_COUNT;
 	fallbackRadiance /= SSGI_ROTATION_COUNT;
+#ifdef SSGI_SH
+	totalDirection /= SSGI_ROTATION_COUNT;
+	fallbackDirection /= SSGI_ROTATION_COUNT;
+#endif
 
 	normHitDist = saturate(normHitDist);
-	normHitDist = 1 - pow(abs(1 - normHitDist), AOPower);
+	// REBLUR defines normalized hit distance as diffuse AO/visibility: nearby occlusion tends to 0,
+	// while open or distant geometry tends to 1. Exact 0 is reserved for an invalid/skipped lobe.
+	normHitDist = AOPower > 0 ? max(pow(saturate(1 - normHitDist), AOPower), NRD_EPS) : 1;
+#ifdef SSGI_SH
+	float fallbackLuminance = Color::RGBToLuminance(fallbackRadiance);
+#endif
 	fallbackRadiance = pow(abs(fallbackRadiance), SSGI_FALLBACK_POWER) * DiffuseCubemapMult;
 
 	o_ao = normHitDist;
 	o_radiance = totalRadiance + fallbackRadiance;
 #ifdef SSGI_SH
-	o_direction = normalize(totalDirection + 1e-6);
+	// NRD SH stores the first directional moment. Keep its magnitude (directionality) and use
+	// world space so temporal history and the world-space resolve guides share one basis.
+	float fallbackLuminanceScale = Color::RGBToLuminance(fallbackRadiance) / max(fallbackLuminance, EPSILON_DIVISION);
+	float3 directionalMoment = totalDirection + fallbackDirection * fallbackLuminanceScale;
+	float radianceLuminance = Color::RGBToLuminance(o_radiance);
+	float3 averageDirectionVS = directionalMoment / max(radianceLuminance, EPSILON_DIVISION);
+	o_direction = ViewToWorldVector(averageDirectionVS, FrameBuffer::CameraViewInverse);
 #endif
 }
 
@@ -407,13 +425,13 @@ void CalculateGI(
 	half2 encodedWorldNormal = GBuffer::EncodeNormal(worldNormal);
 	outPrevGeo[pxCoord] = half3(viewspaceZ, encodedWorldNormal);
 
-	float ao = 0;
+	float normHitDist = 0;
 	float3 radiance = 0;
 #ifdef SSGI_SH
 	float3 direction = 0;
 #endif
 
-	CalculateGI(pxCoord, uv, viewspaceZ, viewspaceNormal, ao, radiance
+	CalculateGI(pxCoord, uv, viewspaceZ, viewspaceNormal, normHitDist, radiance
 #ifdef SSGI_SH
 		,
 		direction
@@ -424,9 +442,9 @@ void CalculateGI(
 
 #ifdef SSGI_SH
 	float4 sh1;
-	outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackSh(radiance, ao, direction, sh1, true);
+	outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackSh(radiance, normHitDist, direction, sh1, true);
 	outSH1[outCoord] = sh1;
 #else
-	outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(radiance, ao, true);
+	outRadianceHitDist[outCoord] = REBLUR_FrontEnd_PackRadianceAndNormHitDist(radiance, normHitDist, true);
 #endif
 }

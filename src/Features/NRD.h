@@ -64,17 +64,17 @@ struct NRD : Feature
 	{
 		uint32_t MaxAccumulatedFrameNum = 30;
 		uint32_t MaxFastAccumulatedFrameNum = 6;
-		uint32_t MaxStabilizedFrameNum = 5;
+		uint32_t MaxStabilizedFrameNum = nrd::REBLUR_MAX_HISTORY_FRAME_NUM;
 		uint32_t HistoryFixFrameNum = 3;
 		uint32_t HistoryFixBasePixelStride = 14;
-		uint32_t HistoryFixAlternatePixelStride = 1;
+		uint32_t HistoryFixAlternatePixelStride = 14;
 		float FastHistoryClampingSigmaScale = 2.0f;
 		float MinHitDistanceWeight = 0.1f;
 		float MinBlurRadius = 1.0f;
-		float MaxBlurRadius = 35.0f;
-		float LobeAngleFraction = 0.5f;
+		float MaxBlurRadius = 30.0f;
+		float LobeAngleFraction = 0.15f;
 		float RoughnessFraction = 0.15f;
-		float PlaneDistanceSensitivity = 0.005f;
+		float PlaneDistanceSensitivity = 0.02f;
 		float SplitScreen = 0.0f;
 		uint32_t HitDistanceReconstructionMode = 0;
 	};
@@ -104,7 +104,6 @@ struct NRD : Feature
 
 	// Shared per-frame state. Tracked here so every consumer sees identical
 	// prev-frame matrices and a single monotonic frame counter.
-	uint32_t frameIndex = 0;
 	Matrix worldToViewMat{};
 	Matrix prevWorldToViewMat{};
 	Matrix prevProjMatrix{};
@@ -112,6 +111,8 @@ struct NRD : Feature
 	nrd::CommonSettings commonSettings{};
 	bool commonSettingsValidThisFrame = false;
 	bool guidesReadyThisFrame = false;
+	bool hasCommonFrameHistory = false;
+	uint32_t lastCommonGameFrame = 0;
 
 	// Shared guide textures owned by NRD.
 	eastl::unique_ptr<Texture2D> texNRDViewZ = nullptr;

@@ -58,13 +58,13 @@ float SampleSSGIAO(uint2 pixCoord)
 {
 #	if defined(SSGI_SH)
 	NRD_SG sg = REBLUR_BackEnd_UnpackSh(SsgiTexture[pixCoord], SsgiSH1Texture[pixCoord]);
-	return 1.0 - saturate(sg.normHitDist);
+	return saturate(sg.normHitDist);
 #	else
 	float4 data = SsgiTexture[pixCoord];
 	float normHitDist;
 	float3 radiance;
 	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(data, radiance, normHitDist);
-	return 1.0 - saturate(normHitDist);
+	return saturate(normHitDist);
 #	endif
 }
 #endif
