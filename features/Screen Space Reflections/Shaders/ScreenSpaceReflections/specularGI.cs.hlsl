@@ -481,15 +481,13 @@ float SSRT_ValidateHit(float3 hit, float2 uv, float3 world_space_ray_direction, 
 #		if defined(IBL)
 			if (SharedData::iblSettings.EnableIBL) {
 				skyColor *= SharedData::iblSettings.SkyIBLScale;
-				envColor += skyColor * skylightingSpecular;
-				// Mode 3: Skylighting also dims the env part
-				if (SharedData::iblSettings.DALCMode == 3) {
-					envColor *= skylightingSpecular;
-				}
+				envColor += skyColor;
+				envColor *= skylightingSpecular;
 			} else
 #		endif
 			{
-				envColor += skyColor * skylightingSpecular;
+				envColor += skyColor;
+				envColor *= skylightingSpecular;
 			}
 		}
 #	endif

@@ -331,8 +331,10 @@ void Deferred::DeferredPasses()
 		nrd.PrepareGuides();
 
 	auto& ssgi = globals::features::screenSpaceGI;
-	if (ssgi.loaded)
+	if (ssgi.loaded) {
 		ssgi.DrawSSGI();
+		ssgi.Composite();
+	}
 
 	auto& ssr = globals::features::screenSpaceReflections;
 	if (ssr.loaded)

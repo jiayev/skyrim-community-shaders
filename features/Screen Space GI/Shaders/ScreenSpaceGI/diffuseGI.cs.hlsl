@@ -170,15 +170,13 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 #		if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
 			skyColor *= SharedData::iblSettings.SkyIBLScale;
-			envColor += skyColor * skylightingDiffuse;
-			// Mode 3: Skylighting also dims the env part
-			if (SharedData::iblSettings.DALCMode == 3) {
-				envColor *= skylightingDiffuse;
-			}
+			envColor += skyColor;
+			envColor *= skylightingDiffuse;
 		} else
 #		endif
 		{
-			envColor += skyColor * skylightingDiffuse;
+			envColor += skyColor;
+			envColor *= skylightingDiffuse;
 		}
 	}
 #	endif

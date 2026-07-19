@@ -54,20 +54,18 @@ Texture2D<float4> SsgiTexture : register(t9);
 Texture2D<float4> SsgiSH1Texture : register(t10);
 #	endif
 
-void SampleSSGIDiffuse(uint2 pixCoord, float3 normalWS, float3 viewWS, out float ao, out float3 il)
+float SampleSSGIAO(uint2 pixCoord)
 {
 #	if defined(SSGI_SH)
 	NRD_SG sg = REBLUR_BackEnd_UnpackSh(SsgiTexture[pixCoord], SsgiSH1Texture[pixCoord]);
-	ao = 1.0 - saturate(sg.normHitDist);
-	float3 radiance = NRD_SG_ResolveDiffuse(sg, normalWS, viewWS, 1.0);
+	return 1.0 - saturate(sg.normHitDist);
 #	else
 	float4 data = SsgiTexture[pixCoord];
 	float normHitDist;
 	float3 radiance;
 	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(data, radiance, normHitDist);
-	ao = 1.0 - saturate(normHitDist);
+	return 1.0 - saturate(normHitDist);
 #	endif
-	il = max(0, radiance * SharedData::ssgiSettings.DiffuseMult);
 }
 #endif
 
@@ -122,60 +120,61 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 	float ssgiAo = 1.0;
 
 	if (depth < 1.0 - 1e-6) {
-		float3 V_ssgi = -normalize(positionWS.xyz);
-		float3 ssgiIl;
-		SampleSSGIDiffuse(dispatchID.xy, normalWS, V_ssgi, ssgiAo, ssgiIl);
-
+		ssgiAo = SampleSSGIAO(dispatchID.xy);
 		float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 		float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
 		ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));
 		float3 multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
 
-		float3 directionalAmbientColor = 0;
+		if (SharedData::ssgiSettings.EnableIL != 0) {
+			// IL replaces directional ambient in the deferred main view, so there is no ambient term to reconstruct here.
+			linDiffuseColor *= sqrt(multiBounceSSGIAo);
+		} else {
+			float3 directionalAmbientColor = 0;
 
 #	if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
-			float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+			if (SharedData::iblSettings.EnableIBL) {
+				float3 vanillaDALC = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 
 #		if defined(SKYLIGHTING)
-			float3 positionMS = positionWS.xyz;
-			sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
-			float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
-			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
+				float3 positionMS = positionWS.xyz;
+				sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
+				float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
+				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
 #		else
-			directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
+				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
 #		endif
 
-			directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
-			directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
-			directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
-			directionalAmbientColor = max(0, directionalAmbientColor);
-		} else
+				directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
+				directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
+				directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
+				directionalAmbientColor = max(0, directionalAmbientColor);
+			} else
 #	endif
-		{
-			directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
-			directionalAmbientColor *= albedo;
+			{
+				directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+				directionalAmbientColor *= albedo;
 
-			directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
-			directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
-			directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
-			directionalAmbientColor = max(0, directionalAmbientColor);
-		}
+				directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
+				directionalAmbientColor.x = MasksTexture[dispatchID.xy].z;
+				directionalAmbientColor = Color::YCoCgToRGB(directionalAmbientColor);
+				directionalAmbientColor = max(0, directionalAmbientColor);
+			}
 
-		float maxScale = 1.0;
-		if (directionalAmbientColor.x > 0.0)
-			maxScale = min(maxScale, diffuseColor.x / directionalAmbientColor.x);
-		if (directionalAmbientColor.y > 0.0)
-			maxScale = min(maxScale, diffuseColor.y / directionalAmbientColor.y);
-		if (directionalAmbientColor.z > 0.0)
-			maxScale = min(maxScale, diffuseColor.z / directionalAmbientColor.z);
-		directionalAmbientColor *= maxScale;
+			float maxScale = 1.0;
+			if (directionalAmbientColor.x > 0.0)
+				maxScale = min(maxScale, diffuseColor.x / directionalAmbientColor.x);
+			if (directionalAmbientColor.y > 0.0)
+				maxScale = min(maxScale, diffuseColor.y / directionalAmbientColor.y);
+			if (directionalAmbientColor.z > 0.0)
+				maxScale = min(maxScale, diffuseColor.z / directionalAmbientColor.z);
+			directionalAmbientColor *= maxScale;
 
-		diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
+			diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
+			linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
+			linDiffuseColor *= sqrt(multiBounceSSGIAo);
+			diffuseColor = Color::IrradianceToGamma(linDiffuseColor);
 
-		if (SharedData::ssgiSettings.DiffuseMult > 0) {
-			linDiffuseColor += ssgiIl * linAlbedo;
-		} else {
 			float3 linDirectionalAmbientColor = Color::IrradianceToLinear(directionalAmbientColor);
 			directionalAmbientColor = Color::IrradianceToGamma(linDirectionalAmbientColor * multiBounceSSGIAo);
 			diffuseColor += directionalAmbientColor;

@@ -2987,7 +2987,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(DEFERRED)
-	if (SharedData::ssgiSettings.DiffuseMult > 0.0)
+	if (SharedData::ssgiSettings.EnableIL != 0 && !inReflection)
 		directionalAmbientColor = 0;
 #	endif
 
