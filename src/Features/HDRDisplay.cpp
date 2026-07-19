@@ -302,7 +302,6 @@ void HDRDisplay::DrawSettings()
 
 	ImGui::Spacing();
 
-	// Gate HDR checkbox behind monitor detection
 	bool oldEnableHDR;
 	bool currentEnableHDR;
 	{
@@ -311,8 +310,8 @@ void HDRDisplay::DrawSettings()
 		currentEnableHDR = settings.enableHDR;
 	}
 
-	// Disable checkbox if no HDR monitor detected AND HDR is not already enabled
-	// (Allow disabling HDR even on SDR if it's already on from saved settings)
+	// Disable the checkbox only when no HDR monitor is detected AND HDR is not already on
+	// (allow disabling HDR even on SDR if it was enabled from saved settings).
 	if (!isHDRMonitor && !currentEnableHDR) {
 		ImGui::BeginDisabled();
 	}
@@ -380,7 +379,6 @@ void HDRDisplay::DrawSettings()
 		}
 	}
 
-	// Show notice if HDR is enabled on SDR monitor
 	{
 		std::lock_guard<std::mutex> lock(settingsMutex);
 		if (!isHDRMonitor && settings.enableHDR) {
@@ -442,7 +440,6 @@ void HDRDisplay::DrawSettings()
 		ImGui::Separator();
 		ImGui::Spacing();
 
-		// Add smaller "don't show again" checkbox
 		bool dontShowWarning;
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
@@ -460,7 +457,6 @@ void HDRDisplay::DrawSettings()
 		ImGui::PopStyleVar();
 	}
 
-	// HDR settings sliders
 	bool isHDREnabled;
 	{
 		std::lock_guard<std::mutex> lock(settingsMutex);
@@ -611,7 +607,6 @@ void HDRDisplay::PostPostLoad()
 
 void HDRDisplay::SetupResources()
 {
-	// Clean up existing resources to prevent memory leaks on re-initialization
 	if (hdrTexture || outputTexture || uiTexture || hdrDataCB) {
 		DestroyResources();
 	}
@@ -626,7 +621,6 @@ void HDRDisplay::SetupResources()
 		logger::info("[HDR] Auto-configured HDR based on display: {}", isHDRMonitor ? "enabled" : "disabled");
 	}
 
-	// Cache display max luminance for UI display
 	cachedDisplayMaxLuminance = GetDisplayMaxLuminance();
 
 	// Set up swap chain color space BEFORE querying format and creating textures
@@ -657,7 +651,6 @@ void HDRDisplay::SetupResources()
 																"other");
 	}
 
-	// Intermediate texture for HDR processing
 	texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 	srvDesc.Format = texDesc.Format;
 	uavDesc.Format = texDesc.Format;
@@ -700,7 +693,6 @@ void HDRDisplay::SetupResources()
 	uiTexture->CreateSRV(uiSrvDesc);
 	uiTexture->CreateUAV(uiUavDesc);
 
-	// Create RTV for UI texture
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
 	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 	rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -731,7 +723,6 @@ void HDRDisplay::BeginUIRendering()
 
 	auto context = globals::d3d::context;
 
-	// Release any existing saved render targets before overwriting
 	if (savedRTV) {
 		savedRTV->Release();
 		savedRTV = nullptr;
@@ -741,7 +732,6 @@ void HDRDisplay::BeginUIRendering()
 		savedDSV = nullptr;
 	}
 
-	// Save current render target so we can restore after ImGui
 	context->OMGetRenderTargets(1, &savedRTV, &savedDSV);
 
 	// Do NOT clear - vanilla UI has already rendered to uiTexture via SetUIBuffer()
@@ -754,7 +744,6 @@ void HDRDisplay::BeginUIRendering()
 
 void HDRDisplay::EndUIRendering()
 {
-	// Skip if D3D12 frame gen is active
 	if (globals::features::upscaling.d3d12SwapChainActive)
 		return;
 
@@ -763,7 +752,6 @@ void HDRDisplay::EndUIRendering()
 
 	auto context = globals::d3d::context;
 
-	// Restore original render target
 	context->OMSetRenderTargets(1, &savedRTV, savedDSV);
 
 	if (savedRTV) {
@@ -791,7 +779,6 @@ void HDRDisplay::RedirectFramebuffer()
 
 	auto& fb = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
 
-	// Save originals
 	savedFramebufferTexture = fb.texture;
 	savedFramebufferSRV = fb.SRV;
 	savedFramebufferRTV = fb.RTV;
@@ -888,20 +875,16 @@ void HDRDisplay::SetUIBuffer()
 	if (!GetHDROutputCS())
 		return;
 
-	// Skip if resources aren't ready
 	if (!uiTexture || !uiTexture->rtv || !hdrDataCB || !outputTexture)
 		return;
 
-	// Save original RTV for restoration after Present
 	if (!savedFramebufferRTV) {
 		savedFramebufferRTV = fb.RTV;
 	}
 
-	// Clear UI texture before vanilla UI renders
 	float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	globals::d3d::context->ClearRenderTargetView(uiTexture->rtv.get(), clearColor);
 
-	// Redirect to our UI texture
 	fb.RTV = uiTexture->rtv.get();
 	globals::d3d::context->OMSetRenderTargets(1, &fb.RTV, nullptr);
 }
@@ -1120,18 +1103,15 @@ HRESULT HDRDisplay::HandleSwapChainPresent(
 
 void HDRDisplay::ClearUIBuffer()
 {
-	// Skip if D3D12 frame gen is active
 	if (globals::features::upscaling.d3d12SwapChainActive)
 		return;
 
 	if (!uiTexture || !uiTexture->rtv)
 		return;
 
-	// Clear UI buffer with transparent black for next frame
 	float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	globals::d3d::context->ClearRenderTargetView(uiTexture->rtv.get(), clearColor);
 
-	// Restore original framebuffer RTV
 	if (savedFramebufferRTV) {
 		auto& data = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kFRAMEBUFFER];
 		data.RTV = savedFramebufferRTV;
@@ -1155,7 +1135,6 @@ void HDRDisplay::ApplyHDR()
 	auto state = globals::state;
 	auto renderer = globals::game::renderer;
 
-	// Update constant buffer before applying HDR
 	UpdateHDRData();
 
 	state->BeginPerfEvent("HDR Processing");
@@ -1187,7 +1166,6 @@ void HDRDisplay::ApplyHDR()
 				// uiBufferWrapped for FidelityFX UI composition.
 				context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11, framebufferRT.texture);
 			} else {
-				// Normal path: copy directly to swap chain back buffer
 				ID3D11Texture2D* backBuffer = nullptr;
 				HRESULT hr = globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
 				if (SUCCEEDED(hr) && backBuffer) {
@@ -1203,18 +1181,13 @@ void HDRDisplay::ApplyHDR()
 		DispatchHDROutput(sceneSRV, uiSRV, outputTexture->uav.get());
 	}
 
-	// Copy result to appropriate destination
-	// When Frame Gen is active, copy to the D3D12 swap chain buffer
-	// Otherwise copy directly to the D3D11 swap chain back buffer
 	if (upscaling.d3d12SwapChainActive) {
-		// Frame Gen path: copy to D3D12 swap chain wrapped buffer
 		if (upscaling.dx12SwapChain.swapChainBufferWrapped &&
 			upscaling.dx12SwapChain.swapChainBufferWrapped->resource11 &&
 			outputTexture && outputTexture->resource) {
 			context->CopyResource(upscaling.dx12SwapChain.swapChainBufferWrapped->resource11, outputTexture->resource.get());
 		}
 	} else {
-		// Normal path: copy directly to swap chain back buffer
 		ID3D11Texture2D* backBuffer = nullptr;
 		HRESULT hr = globals::d3d::swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
 		if (SUCCEEDED(hr) && backBuffer) {
@@ -1542,7 +1515,6 @@ void HDRDisplay::ScaleUIBrightnessForFG()
 
 	state->BeginPerfEvent("UI Brightness Scale");
 
-	// Update constant buffer with current settings
 	UpdateHDRData();
 
 	auto dispatchCount = Util::GetScreenDispatchCount(false);
@@ -1561,7 +1533,6 @@ void HDRDisplay::ScaleUIBrightnessForFG()
 		globals::profiler->EndPass();
 	}
 
-	// Cleanup
 	uavs[0] = nullptr;
 	context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	cbs[0] = nullptr;
