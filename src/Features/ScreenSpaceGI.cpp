@@ -9,6 +9,7 @@
 #include "NRD.h"
 #include "Skylighting.h"
 #include "State.h"
+#include "TerrainBlending.h"
 #include "Upscaling.h"
 #include "Util.h"
 
@@ -406,7 +407,7 @@ void ScreenSpaceGI::SetupNRDResources()
 void ScreenSpaceGI::ClearShaderCache()
 {
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
-		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute
+		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute, &compositeCompute
 	};
 
 	for (auto shader : shaderPtrs)
@@ -431,8 +432,18 @@ void ScreenSpaceGI::CompileComputeShaders()
 			{ &prefilterNormalCompute, "prefilterNormal.cs.hlsl", {} },
 			{ &giCompute, "diffuseGI.cs.hlsl", {} },
 		};
+	if (settings.EnableGI)
+		shaderInfos.push_back({ &compositeCompute, "composite.cs.hlsl", {} });
 
 	for (auto& info : shaderInfos) {
+		if (info.programPtr == &compositeCompute) {
+			if (settings.EnableSH && settings.EnableGI)
+				info.defines.push_back({ "SSGI_SH", "" });
+			if (globals::features::terrainBlending.loaded)
+				info.defines.push_back({ "TERRAIN_BLENDING", "" });
+			continue;
+		}
+
 		if (settings.EnableGI)
 			info.defines.push_back({ "GI", "" });
 		if (settings.EnableSH && settings.EnableGI)
@@ -696,6 +707,49 @@ void ScreenSpaceGI::DrawSSGI()
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
+void ScreenSpaceGI::Composite()
+{
+	if (!(settings.Enabled && settings.EnableGI && compositeCompute))
+		return;
+
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Composite");
+
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+	auto& rts = renderer->GetRuntimeData().renderTargets;
+	auto& main = rts[globals::deferred->forwardRenderTargets[0]];
+
+	std::array<ID3D11ShaderResourceView*, 5> srvs = {
+		rts[ALBEDO].SRV,
+		rts[NORMALROUGHNESS].SRV,
+		Util::GetCurrentSceneDepthSRV(false),
+		GetDiffuseOutputTexture(),
+		GetDiffuseSH1Texture()
+	};
+
+	context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+
+	ID3D11UnorderedAccessView* mainUAV = main.UAV;
+	context->CSSetUnorderedAccessViews(0, 1, &mainUAV, nullptr);
+
+	auto* sharedDataBuf = globals::state->sharedDataCB->CB();
+	context->CSSetConstantBuffers(5, 1, &sharedDataBuf);
+	context->CSSetShader(compositeCompute.get(), nullptr, 0);
+
+	auto dispatchCount = Util::GetScreenDispatchCount(true);
+	globals::profiler->BeginPass("ScreenSpaceGI::Composite");
+	context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+	globals::profiler->EndPass();
+
+	srvs.fill(nullptr);
+	context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+
+	mainUAV = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &mainUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+}
+
 ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseOutputTexture()
 {
 	if (loaded && settings.Enabled && settings.EnableREBLUR && nrdReblur.IsValid() &&
@@ -720,7 +774,7 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 {
 	SharedData data;
-	data.DiffuseMult = (settings.Enabled && settings.EnableGI) ? 1.0f : 0.0f;
+	data.EnableIL = settings.Enabled && settings.EnableGI;
 	data.DebugMode = 0;
 	data.pad0 = 0;
 	data.pad1 = 0;

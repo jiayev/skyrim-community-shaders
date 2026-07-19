@@ -58,8 +58,10 @@ public:
 	/** @brief Checks whether all required compute shaders and the noise texture loaded successfully. */
 	bool ShadersOK();
 
-	/** @brief Executes the full SSGI pipeline: depth prefilter, radiance fetch, GI, blur, and upsample. */
+	/** @brief Executes the full SSGI pipeline: depth prefilter, radiance fetch, GI, and denoising. */
 	void DrawSSGI();
+	/** @brief Composites SSGI indirect diffuse lighting into the main render target before SSR tracing. */
+	void Composite();
 	/** @brief Updates the SSGI constant buffer with current camera, resolution, and settings data. */
 	void UpdateSB();
 	void SetupNRDResources();
@@ -116,7 +118,7 @@ public:
 
 	struct alignas(16) SharedData
 	{
-		float DiffuseMult;
+		uint EnableIL;
 		uint DebugMode;
 		uint pad0;
 		uint pad1;
@@ -149,6 +151,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> prefilterRadianceCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> prefilterNormalCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> giCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> compositeCompute = nullptr;
 
 	NRDReblurIntegration nrdReblur;
 	nrd::ReblurSettings reblurSettings{};
