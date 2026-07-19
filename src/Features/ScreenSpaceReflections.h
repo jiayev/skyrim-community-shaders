@@ -133,6 +133,7 @@ struct ScreenSpaceReflections : Feature
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
 
 	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZDepthCompute = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZMipsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> depthDownsampleCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> specularGICompute = nullptr;
 

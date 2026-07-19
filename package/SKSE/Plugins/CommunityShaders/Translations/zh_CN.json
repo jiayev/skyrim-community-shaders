@@ -980,6 +980,8 @@
     "feature.screen_space_gi.key_feature_3": "提升视觉深度和氛围",
     "feature.screen_space_gi.key_feature_4": "NVIDIA REBLUR 时间降噪",
     "feature.screen_space_gi.key_feature_5": "可配置的质量和性能设置",
+    "feature.screen_space_gi.multi_bounce": "多次弹射",
+    "feature.screen_space_gi.multi_bounce_tooltip": "将上一帧经过重投影并乘过源表面反照率的间接光反馈到源辐射度金字塔。",
     "feature.screen_space_gi.name": "屏幕空间GI",
     "feature.screen_space_gi.quality_performance": "质量/性能",
     "feature.screen_space_gi.reblur_denoiser": "REBLUR 降噪器",

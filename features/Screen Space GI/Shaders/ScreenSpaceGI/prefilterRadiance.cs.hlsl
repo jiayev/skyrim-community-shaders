@@ -22,11 +22,10 @@
 Texture2D<float4> srcRadiance : register(t0);
 #ifdef GI
 Texture2D<float4> srcPrevSsgi : register(t1);
-#	ifdef SSGI_SH
-Texture2D<float4> srcPrevSsgiSH1 : register(t2);
-Texture2D<float> srcWorkingDepth : register(t3);
-Texture2D<float2> srcNormal : register(t4);
-#	endif
+Texture2D<float3> srcCurrentGeo : register(t2);
+Texture2D<float2> srcMotion : register(t3);
+Texture2D<float3> srcPrevGeo : register(t4);
+Texture2D<unorm float3> srcAlbedo : register(t5);
 #endif
 
 RWTexture2D<float3> outRadiance0 : register(u0);
@@ -44,28 +43,45 @@ float3 RadianceMIPFilter(float3 radiance0, float3 radiance1, float3 radiance2, f
 #ifdef GI
 float3 LoadSsgiMultiBounce(uint2 pixCoord)
 {
-	float4 packed = srcPrevSsgi[pixCoord];
-
-#	ifdef SSGI_SH
-	float viewspaceZ = READ_DEPTH(srcWorkingDepth, pixCoord);
+	float3 currentGeo = srcCurrentGeo[pixCoord];
+	float viewspaceZ = currentGeo.x;
 	if (viewspaceZ <= FP_Z)
 		return 0;
 
 	float2 uv = (pixCoord + 0.5) * RCP_OUT_FRAME_DIM;
-	float2 normalizedScreenPos = uv;
-	float3 viewspacePos = ScreenToViewPosition(normalizedScreenPos, viewspaceZ);
-	float3 viewspaceNormal = GBuffer::DecodeNormal(srcNormal[pixCoord]);
-	float3 normalWS = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
-	float3 viewWS = ViewToWorldVector(normalize(-viewspacePos), FrameBuffer::CameraViewInverse);
+	float2 previousScreenUV = uv + srcMotion[pixCoord];
+	if (any(previousScreenUV <= 0.0) || any(previousScreenUV >= 1.0))
+		return 0;
 
-	NRD_SG sg = REBLUR_BackEnd_UnpackSh(packed, srcPrevSsgiSH1[pixCoord]);
-	return NRD_SG_ResolveDiffuse(sg, normalWS, viewWS, 1.0);
-#	else
-	float normHitDist;
-	float3 radiance;
-	REBLUR_BackEnd_UnpackRadianceAndNormHitDist(packed, radiance, normHitDist);
-	return radiance;
-#	endif
+	float2 previousTextureUV = FrameBuffer::GetPreviousDynamicResolutionAdjustedScreenPosition(previousScreenUV);
+	float3 previousGeo = srcPrevGeo.SampleLevel(samplerPointClamp, previousTextureUV, 0);
+	if (previousGeo.x <= FP_Z)
+		return 0;
+
+	float3 viewspacePos = ScreenToViewPosition(uv, viewspaceZ);
+	float3 worldPos = ViewToWorldPosition(viewspacePos, FrameBuffer::CameraViewInverse);
+	float3 previousWorldPos = worldPos + FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz;
+	float4 previousClip = mul(FrameBuffer::CameraPreviousViewProjUnjittered, float4(previousWorldPos, 1.0));
+	if (previousClip.w <= 0.0)
+		return 0;
+	float previousExpectedZ = abs(previousClip.w);
+	float depthTolerance = max(1.0, abs(previousExpectedZ) * 0.02);
+	if (abs(previousGeo.x - previousExpectedZ) > depthTolerance)
+		return 0;
+
+	float3 normalWS = GBuffer::DecodeNormal(currentGeo.yz);
+	float3 previousNormalWS = GBuffer::DecodeNormal(previousGeo.yz);
+	if (dot(normalWS, previousNormalWS) < 0.85)
+		return 0;
+
+	float4 packed = srcPrevSsgi.SampleLevel(samplerPointClamp, previousTextureUV, 0);
+	// Both REBLUR diffuse formats store total illumination as YCoCg in SH0/base.
+	// SH1 contains only the directional moment and is unnecessary for feedback.
+	float3 illumination = _NRD_YCoCgToLinear(packed.xyz);
+
+	// History becomes a light source only after reflection by the source surface.
+	float3 sourceAlbedo = Color::IrradianceToLinear(srcAlbedo[pixCoord] / Color::PBRLightingScale);
+	return max(0, illumination) * saturate(sourceAlbedo);
 }
 #endif
 
@@ -88,10 +104,13 @@ groupshared float3 g_scratchRadiance[8][8];
 	float3 radiance3 = Color::RadianceToLinear(float3(rad0.y, rad1.y, rad2.y));
 
 #ifdef GI
-	radiance0 += LoadSsgiMultiBounce(pixCoord + uint2(0, 0));
-	radiance1 += LoadSsgiMultiBounce(pixCoord + uint2(1, 0));
-	radiance2 += LoadSsgiMultiBounce(pixCoord + uint2(0, 1));
-	radiance3 += LoadSsgiMultiBounce(pixCoord + uint2(1, 1));
+	[branch] if (MultiBounceMode >= 2)
+	{
+		radiance0 += LoadSsgiMultiBounce(pixCoord + uint2(0, 0));
+		radiance1 += LoadSsgiMultiBounce(pixCoord + uint2(1, 0));
+		radiance2 += LoadSsgiMultiBounce(pixCoord + uint2(0, 1));
+		radiance3 += LoadSsgiMultiBounce(pixCoord + uint2(1, 1));
+	}
 #endif
 
 	outRadiance0[pixCoord + uint2(0, 0)] = radiance0;

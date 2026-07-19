@@ -26,6 +26,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Thickness,
 	AOPower,
 	GIStrength,
+	EnableMultiBounce,
 	UseDynamicCubemapsAsFallback,
 	DiffuseCubemapMult,
 	EnableREBLUR,
@@ -38,6 +39,9 @@ void ScreenSpaceGI::RestoreDefaultSettings()
 	settings = {};
 	recompileFlag = true;
 	resetReblurHistory = true;
+	hasMultiBounceHistory = false;
+	hasFullResolutionMultiBounceHistory = false;
+	multiBounceHistoryUsesNRDOutput = false;
 }
 
 void ScreenSpaceGI::DrawSettings()
@@ -54,8 +58,10 @@ void ScreenSpaceGI::DrawSettings()
 
 	if (ImGui::BeginTable("Toggles", 4)) {
 		ImGui::TableNextColumn();
-		if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled))
+		if (ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled)) {
 			resetReblurHistory = true;
+			hasMultiBounceHistory = false;
+		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable Screen Space Global Illumination. When disabled, all other settings are ignored."));
 		}
@@ -99,13 +105,17 @@ void ScreenSpaceGI::DrawSettings()
 		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
 			recompileFlag = true;
 			resetReblurHistory = true;
+			hasMultiBounceHistory = false;
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
 		}
 
 		if (showAdvanced) {
-			ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32);
+			if (ImGui::SliderInt(T(TKEY("steps_per_slice"), "Steps Per Slice"), (int*)&settings.NumSteps, 1, 32)) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
 		}
 	}
 
@@ -120,21 +130,40 @@ void ScreenSpaceGI::DrawSettings()
 
 		{
 			auto ilGuard = Util::DisableGuard(!settings.EnableGI);
-			ImGui::SliderFloat(T(TKEY("il_source_brightness"), "IL Source Brightness"), &settings.GIStrength, 0.f, 6.f, "%.2f");
+			if (ImGui::SliderFloat(T(TKEY("il_source_brightness"), "IL Source Brightness"), &settings.GIStrength, 0.f, 6.f, "%.2f")) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
+			if (ImGui::Checkbox(T(TKEY("multi_bounce"), "Multi-Bounce"), &settings.EnableMultiBounce)) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("multi_bounce_tooltip"), "Feed the previous frame's reprojected, post-albedo indirect radiance back into the source radiance pyramid."));
+			}
 
-			ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback);
+			if (ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps_as_fallback"), "Use Dynamic Cubemaps as Fallback"), &settings.UseDynamicCubemapsAsFallback)) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_as_fallback_tooltip"), "Where indirect rays miss the screen, sample dynamic cubemaps for diffuse fallback."));
 			}
 			{
 				auto cubemapGuard = Util::DisableGuard(!settings.UseDynamicCubemapsAsFallback);
-				ImGui::SliderFloat(T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier"), &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f");
+				if (ImGui::SliderFloat(T(TKEY("diffuse_cubemap_multiplier"), "Diffuse Cubemap Multiplier"), &settings.DiffuseCubemapMult, 0.0f, 5.0f, "%.2f")) {
+					resetReblurHistory = true;
+					hasMultiBounceHistory = false;
+				}
 			}
 		}
 
 		if (showAdvanced) {
 			ImGui::Separator();
-			ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.Thickness, 0.f, 0.2f, "%.3f");
+			if (ImGui::SliderFloat(T(TKEY("thickness"), "Thickness"), &settings.Thickness, 0.f, 0.2f, "%.3f")) {
+				resetReblurHistory = true;
+				hasMultiBounceHistory = false;
+			}
 		}
 	}
 
@@ -144,8 +173,10 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR))
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR)) {
 			resetReblurHistory = true;
+			hasMultiBounceHistory = false;
+		}
 
 		if (settings.EnableREBLUR)
 			resetReblurHistory |= globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
@@ -160,7 +191,8 @@ void ScreenSpaceGI::DrawSettings()
 
 		BUFFER_VIEWER_NODE(texNoise, debugRescale)
 		BUFFER_VIEWER_NODE(texWorkingDepth, debugRescale)
-		BUFFER_VIEWER_NODE(texPrevGeo, debugRescale)
+		BUFFER_VIEWER_NODE(texHistoryGeo[0], debugRescale)
+		BUFFER_VIEWER_NODE(texHistoryGeo[1], debugRescale)
 		BUFFER_VIEWER_NODE(texRadiance, debugRescale)
 		BUFFER_VIEWER_NODE(texNRDInput, debugRescale)
 		BUFFER_VIEWER_NODE(texNRDOutput, debugRescale)
@@ -178,6 +210,9 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	settings = o_json;
 	recompileFlag = true;
 	resetReblurHistory = true;
+	hasMultiBounceHistory = false;
+	hasFullResolutionMultiBounceHistory = false;
+	multiBounceHistoryUsesNRDOutput = false;
 }
 
 void ScreenSpaceGI::SaveSettings(json& o_json)
@@ -190,6 +225,10 @@ void ScreenSpaceGI::SetupResources()
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	resetReblurHistory = true;
+	hasMultiBounceHistory = false;
+	hasFullResolutionMultiBounceHistory = false;
+	multiBounceHistoryUsesNRDOutput = false;
+	historyGeoWriteIndex = 0;
 
 	logger::debug("Creating buffers...");
 	{
@@ -273,10 +312,10 @@ void ScreenSpaceGI::SetupResources()
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
 
 		srvDesc.Format = uavDesc.Format = texDesc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
-		{
-			texPrevGeo = eastl::make_unique<Texture2D>(texDesc, "SSGI::PrevGeo");
-			texPrevGeo->CreateSRV(srvDesc);
-			texPrevGeo->CreateUAV(uavDesc);
+		for (uint i = 0; i < 2; ++i) {
+			texHistoryGeo[i] = eastl::make_unique<Texture2D>(texDesc, i == 0 ? "SSGI::HistoryGeo0" : "SSGI::HistoryGeo1");
+			texHistoryGeo[i]->CreateSRV(srvDesc);
+			texHistoryGeo[i]->CreateUAV(uavDesc);
 		}
 
 		SetupNRDResources();
@@ -340,6 +379,9 @@ void ScreenSpaceGI::SetupResources()
 void ScreenSpaceGI::SetupNRDResources()
 {
 	resetReblurHistory = true;
+	hasMultiBounceHistory = false;
+	hasFullResolutionMultiBounceHistory = false;
+	multiBounceHistoryUsesNRDOutput = false;
 	const bool useSH = settings.EnableGI && settings.EnableSH;
 	if (nrdReblurUsesSH != useSH)
 		recompileFlag = true;
@@ -485,18 +527,12 @@ void ScreenSpaceGI::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	static float4x4 prevInvView = {};
-
 	SSGICB data;
 	{
 		const auto& projMat = globals::game::frameBufferCached.GetCameraProj();
-		const auto& viewMat = globals::game::frameBufferCached.GetCameraView();
 
-		data.PrevInvViewMat = prevInvView;
 		data.NDCToViewMul = { 2.0f / projMat(0, 0), -2.0f / projMat(1, 1) };
 		data.NDCToViewAdd = { -1.0f / projMat(0, 0), 1.0f / projMat(1, 1) };
-
-		prevInvView = viewMat.Invert();
 
 		data.TexDim = res;
 		data.RcpTexDim = float2(1.0f) / res;
@@ -511,7 +547,12 @@ void ScreenSpaceGI::UpdateSB()
 		data.GIStrength = settings.GIStrength;
 		data.DiffuseCubemapMult = settings.DiffuseCubemapMult;
 		data.UseDynamicCubemap = (settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded) ? 1u : 0u;
-		data.pad0 = 0;
+		const bool hasContinuousHistory = hasMultiBounceHistory &&
+		                                  globals::state->frameCount == lastMultiBounceHistoryFrame + 1;
+		const bool trackMultiBounce = settings.EnableGI && settings.EnableMultiBounce;
+		const bool injectMultiBounce = trackMultiBounce && hasContinuousHistory && hasFullResolutionMultiBounceHistory;
+		// 0: disabled, 1: populate history, 2: populate and inject valid history.
+		data.MultiBounceMode = injectMultiBounce ? 2u : (trackMultiBounce ? 1u : 0u);
 	}
 
 	ssgiCB->Update(data);
@@ -537,6 +578,7 @@ void ScreenSpaceGI::DrawSSGI()
 	//////////////////////////////////////////////////////
 
 	const bool useSH = settings.EnableGI && settings.EnableSH;
+	const bool trackMultiBounce = settings.EnableGI && settings.EnableMultiBounce;
 	if (nrdReblurUsesSH != useSH)
 		SetupNRDResources();
 
@@ -591,32 +633,7 @@ void ScreenSpaceGI::DrawSSGI()
 		globals::profiler->EndPass();
 	}
 
-	// Prefilter radiance mip chain (reads main RT directly)
-	{
-		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Radiance");
-
-		resetViews();
-		srvs.at(0) = rts[deferred->forwardRenderTargets[0]].SRV;
-		srvs.at(1) = GetDiffuseOutputTexture();
-		if (settings.EnableSH && settings.EnableGI)
-			srvs.at(2) = GetDiffuseSH1Texture();
-		srvs.at(3) = texWorkingDepth->srv.get();
-		srvs.at(4) = rts[NORMALROUGHNESS].SRV;
-		uavs.at(0) = uavRadiance[0].get();
-		uavs.at(1) = uavRadiance[1].get();
-		uavs.at(2) = uavRadiance[2].get();
-		uavs.at(3) = uavRadiance[3].get();
-		uavs.at(4) = uavRadiance[4].get();
-
-		context->CSSetShaderResources(0, 5, srvs.data());
-		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
-		context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
-		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterRadiance");
-		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
-		globals::profiler->EndPass();
-	}
-
-	// Prefilter normals
+	// Prefilter normals and write the current full-resolution geometry history.
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Normals");
 
@@ -627,11 +644,43 @@ void ScreenSpaceGI::DrawSSGI()
 		uavs.at(2) = uavNormal[2].get();
 		uavs.at(3) = uavNormal[3].get();
 		uavs.at(4) = uavNormal[4].get();
+		if (trackMultiBounce) {
+			srvs.at(1) = texWorkingDepth->srv.get();
+			uavs.at(5) = texHistoryGeo[historyGeoWriteIndex]->uav.get();
+		}
 
-		context->CSSetShaderResources(0, 1, srvs.data());
-		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
+		context->CSSetShaderResources(0, trackMultiBounce ? 2u : 1u, srvs.data());
+		context->CSSetUnorderedAccessViews(0, trackMultiBounce ? 6u : 5u, uavs.data(), nullptr);
 		context->CSSetShader(prefilterNormalCompute.get(), nullptr, 0);
 		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterNormals");
+		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
+		globals::profiler->EndPass();
+	}
+
+	// Prefilter source radiance. Multi-bounce history is reprojected, converted
+	// from illumination to post-albedo outgoing radiance, and injected here once.
+	{
+		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - Prefilter Radiance");
+
+		resetViews();
+		srvs.at(0) = rts[deferred->forwardRenderTargets[0]].SRV;
+		if (trackMultiBounce) {
+			srvs.at(1) = (multiBounceHistoryUsesNRDOutput ? texNRDOutput : texNRDInput)->srv.get();
+			srvs.at(2) = texHistoryGeo[historyGeoWriteIndex]->srv.get();
+			srvs.at(3) = rts[RE::RENDER_TARGETS::kMOTION_VECTOR].SRV;
+			srvs.at(4) = texHistoryGeo[historyGeoWriteIndex ^ 1]->srv.get();
+			srvs.at(5) = rts[ALBEDO].SRV;
+		}
+		uavs.at(0) = uavRadiance[0].get();
+		uavs.at(1) = uavRadiance[1].get();
+		uavs.at(2) = uavRadiance[2].get();
+		uavs.at(3) = uavRadiance[3].get();
+		uavs.at(4) = uavRadiance[4].get();
+
+		context->CSSetShaderResources(0, trackMultiBounce ? 6u : 1u, srvs.data());
+		context->CSSetUnorderedAccessViews(0, 5, uavs.data(), nullptr);
+		context->CSSetShader(prefilterRadianceCompute.get(), nullptr, 0);
+		globals::profiler->BeginPass("ScreenSpaceGI::PrefilterRadiance");
 		context->Dispatch((resolution[0] + 15u) >> 4, (resolution[1] + 15u) >> 4, 1);
 		globals::profiler->EndPass();
 	}
@@ -656,7 +705,6 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(8) = texNormal->srv.get();
 
 		uavs.at(0) = texNRDInput->uav.get();
-		uavs.at(1) = texPrevGeo->uav.get();
 		if (useSH && texNRDInputSH1)
 			uavs.at(2) = texNRDInputSH1->uav.get();
 
@@ -673,6 +721,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 	// REBLUR diffuse denoising via core NRD service
 	auto& nrdSvc = globals::features::nrd;
+	bool producedDenoisedHistory = false;
 	if (settings.EnableREBLUR && nrdReblur.IsValid() && nrdSvc.loaded && nrdSvc.AreGuidesReady()) {
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - REBLUR");
 
@@ -706,8 +755,21 @@ void ScreenSpaceGI::DrawSSGI()
 
 		globals::profiler->BeginPass("ScreenSpaceGI::Reblur");
 		nrdReblur.Dispatch();
+		producedDenoisedHistory = true;
 		resetReblurHistory = false;
 		globals::profiler->EndPass();
+	}
+
+	if (trackMultiBounce) {
+		hasMultiBounceHistory = true;
+		hasFullResolutionMultiBounceHistory = !settings.HalfRes || producedDenoisedHistory;
+		multiBounceHistoryUsesNRDOutput = producedDenoisedHistory;
+		lastMultiBounceHistoryFrame = globals::state->frameCount;
+		historyGeoWriteIndex ^= 1;
+	} else {
+		hasMultiBounceHistory = false;
+		hasFullResolutionMultiBounceHistory = false;
+		multiBounceHistoryUsesNRDOutput = false;
 	}
 
 	// cleanup

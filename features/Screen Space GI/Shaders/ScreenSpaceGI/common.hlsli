@@ -25,7 +25,6 @@
 
 cbuffer SSGICB : register(b1)
 {
-	float4x4 PrevInvViewMat;
 	float2 NDCToViewMul;
 	float2 NDCToViewAdd;
 
@@ -44,6 +43,7 @@ cbuffer SSGICB : register(b1)
 	float GIStrength;
 	float DiffuseCubemapMult;
 	uint UseDynamicCubemap;
+	uint MultiBounceMode;
 };
 
 SamplerState samplerPointClamp : register(s0);

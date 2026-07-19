@@ -280,6 +280,7 @@ void ScreenSpaceReflections::SetupResources()
 void ScreenSpaceReflections::ClearShaderCache()
 {
 	prefilterHiZDepthCompute = nullptr;
+	prefilterHiZMipsCompute = nullptr;
 	depthDownsampleCompute = nullptr;
 	specularGICompute = nullptr;
 	CompileComputeShaders();
@@ -291,6 +292,8 @@ void ScreenSpaceReflections::CompileComputeShaders()
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "prefilterHiZDepth.cs.hlsl";
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), {}, "cs_5_0")))
 			prefilterHiZDepthCompute.attach(rawPtr);
+		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), { { "FUSED_HIZ_MIPS", "" } }, "cs_5_0")))
+			prefilterHiZMipsCompute.attach(rawPtr);
 	}
 	{
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "depthDownsample.cs.hlsl";
@@ -317,7 +320,7 @@ void ScreenSpaceReflections::CompileComputeShaders()
 
 bool ScreenSpaceReflections::ShadersOK()
 {
-	return prefilterHiZDepthCompute && depthDownsampleCompute && specularGICompute;
+	return prefilterHiZDepthCompute && prefilterHiZMipsCompute && depthDownsampleCompute && specularGICompute;
 }
 
 void ScreenSpaceReflections::UpdateSB()
@@ -398,8 +401,26 @@ void ScreenSpaceReflections::DrawSSR()
 
 		auto depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
 
-		// Copy NDC depth → Hi-Z mip 0
-		{
+		uint firstDownsampleMip = 0;
+		const bool canFuseFirstFiveMips = numHiZMips >= 5 &&
+		                                  (texHiZDepth->desc.Width & 15u) == 0 &&
+		                                  (texHiZDepth->desc.Height & 15u) == 0;
+		if (canFuseFirstFiveMips) {
+			// Build mip 0-4 in one pass. Each group covers a 16x16 source tile,
+			// then performs the same min-Z reduction in group-shared memory.
+			resetViews();
+			auto srv = depth.depthSRV;
+			context->CSSetShaderResources(0, 1, &srv);
+			std::array<ID3D11UnorderedAccessView*, 5> uavs;
+			for (uint i = 0; i < (uint)uavs.size(); ++i)
+				uavs[i] = hiZDepthUAVs[i].get();
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(prefilterHiZMipsCompute.get(), nullptr, 0);
+			context->Dispatch(((uint)dynres.x + 15) / 16, ((uint)dynres.y + 15) / 16, 1);
+			firstDownsampleMip = 4;
+		} else {
+			// Small or non-16-aligned render targets keep the generic path so its
+			// NPOT edge-reduction behavior remains unchanged.
 			resetViews();
 			auto srv = depth.depthSRV;
 			context->CSSetShaderResources(0, 1, &srv);
@@ -410,7 +431,7 @@ void ScreenSpaceReflections::DrawSSR()
 		}
 
 		// Min-Z downsample mip chain
-		for (uint i = 0; i < numHiZMips - 1; ++i) {
+		for (uint i = firstDownsampleMip; i < numHiZMips - 1; ++i) {
 			uint outW = std::max(1u, (uint)size.x >> (i + 1));
 			uint outH = std::max(1u, (uint)size.y >> (i + 1));
 
