@@ -465,6 +465,13 @@ float HPLowTypeValue(float cloudType, float cu, float tcu, float cb)
 	return cloudType < 0.5 ? lerp(cu, tcu, cloudType * 2.0) : lerp(tcu, cb, (cloudType - 0.5) * 2.0);
 }
 
+float HPLowTopDevelopment(float cloudType)
+{
+	// Coverage mainly develops deep convection. Shallow and towering cumulus
+	// retain their species profile instead of inheriting the full-column stretch.
+	return HPLowTypeValue(cloudType, 0.08, 0.42, 1.0);
+}
+
 float HPEvaluateTopHeightProxy(float2 worldXY)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -473,7 +480,8 @@ float HPEvaluateTopHeightProxy(float2 worldXY)
 		return 0.0;
 	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, uv, 0);
 	float coverageHeight = saturate(HPPositivePow(weather.r, max(info.coverageHeightContrast, 0.001)) * info.coverageHeightIntensity);
-	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength);
+	float development = HPLowTopDevelopment(weather.g) * (1.0 - saturate(info.scWorleyStrength * weather.b));
+	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength * development);
 	return saturate(coverageHeight * topScale / max(info.coverTopMax, 1.0));
 }
 
@@ -551,7 +559,8 @@ float sampleCloudDensity(
 	const float edgeSoftness = info.highDensitySoftAIntensity *
 	                           (1.0 - HPPositivePow(saturate(highWeather.a), max(info.highDensitySoftAContrast, 0.01)));
 
-	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength);
+	float topDevelopment = HPLowTopDevelopment(cloudType);
+	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength * topDevelopment);
 	float heightForLut = ndf.height_fraction / (1.0 + (topScale - 1.0) * ndf.height_fraction);
 	float localHeight = lerp(heightForLut, saturate(ndf.height_fraction / max(info.scHeightScale, 0.01)), scStr);
 	ndf.local_height = localHeight;

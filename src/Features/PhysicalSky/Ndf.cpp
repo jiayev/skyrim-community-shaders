@@ -5,8 +5,10 @@
 #include "Util.h"
 
 #include <DDSTextureLoader.h>
+#include <array>
 #include <cmath>
 #include <imgui_stdlib.h>
+#include <numeric>
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
 
@@ -210,6 +212,35 @@ namespace
 		return t * t * (3.0f - 2.0f * t);
 	}
 
+	uint32_t ScoreBin(float value)
+	{
+		return std::min(static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f) * 256.0f), 255u);
+	}
+
+	float HistogramQuantile(const std::array<uint32_t, 256>& histogram, float fractionBelow)
+	{
+		const uint64_t total = std::accumulate(histogram.begin(), histogram.end(), uint64_t{ 0 });
+		if (total == 0)
+			return 0.5f;
+		const uint64_t target = static_cast<uint64_t>(std::clamp(fractionBelow, 0.0f, 1.0f) * static_cast<float>(total - 1));
+		uint64_t cumulative = 0;
+		for (uint32_t bin = 0; bin < histogram.size(); ++bin) {
+			cumulative += histogram[bin];
+			if (cumulative > target)
+				return (static_cast<float>(bin) + 0.5f) / 256.0f;
+		}
+		return 1.0f;
+	}
+
+	float HistogramSplitThreshold(const std::array<uint32_t, 256>& histogram, float fractionBelow)
+	{
+		if (fractionBelow <= 0.0f)
+			return -1.0f;
+		if (fractionBelow >= 1.0f)
+			return 2.0f;
+		return HistogramQuantile(histogram, fractionBelow);
+	}
+
 	void DrawTextureOverride(const char* label, std::string& path, TextureManager& texManager)
 	{
 		const char* generated = T(TKEY("generated"), "Generated");
@@ -228,7 +259,7 @@ namespace
 void NdfManager::SetupResources()
 {
 	logger::debug("Creating generated cloud map resources...");
-	GenerateDefaultTextures(HpGeneratedCloudMapSettings{});
+	GenerateDefaultTextures(HpGeneratedCloudMapSettings{}, CloudLayer{});
 }
 
 void NdfManager::CompileShaders()
@@ -272,11 +303,30 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texMa
 	deferWhileEditing();
 	ImGui::SliderFloat(T(TKEY("low_contrast"), "Low Contrast"), &ndfSettings.lowContrast, 0.25f, 4.f, "%.2f");
 	deferWhileEditing();
-	ImGui::SliderFloat(T(TKEY("stratocumulus"), "Stratocumulus"), &ndfSettings.stratocumulus, 0.f, 1.f, "%.2f");
+	ImGui::SeparatorText(T(TKEY("low_cloud_species"), "Low Cloud Species"));
+	ImGui::SliderFloat(T(TKEY("stratocumulus_share"), "Stratocumulus Share"), &ndfSettings.stratocumulus, 0.f, 1.f, "%.2f");
 	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("cumulus_weight"), "Cumulus Weight"), &ndfSettings.cumulusWeight, 0.f, 1.f, "%.2f");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("towering_cumulus_weight"), "Towering Cumulus Weight"), &ndfSettings.toweringCumulusWeight, 0.f, 1.f, "%.2f");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("cumulonimbus_weight"), "Cumulonimbus Weight"), &ndfSettings.cumulonimbusWeight, 0.f, 1.f, "%.2f");
+	deferWhileEditing();
+	ImGui::TextWrapped("%s", T(TKEY("cloud_species_weight_hint"), "Weights are normalized within cloud-covered regions. Set a weight to zero to disable that species."));
+	ImGui::SliderFloat(T(TKEY("cumulus_vertical_depth"), "Cumulus Vertical Depth"), &ndfSettings.cumulusDepth, 0.2f, 5.f, "%.2f km");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("towering_cumulus_vertical_depth"), "Towering Cumulus Vertical Depth"), &ndfSettings.toweringCumulusDepth, 0.5f, 10.f, "%.2f km");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("cumulonimbus_vertical_depth"), "Cumulonimbus Vertical Depth"), &ndfSettings.cumulonimbusDepth, 1.f, 16.f, "%.2f km");
+	deferWhileEditing();
+	ImGui::SeparatorText(T(TKEY("high_cloud_species"), "High Cloud Species"));
 	ImGui::SliderFloat(T(TKEY("high_coverage"), "High Coverage"), &ndfSettings.highCoverage, 0.f, 1.f, "%.2f");
 	deferWhileEditing();
 	ImGui::SliderFloat(T(TKEY("high_contrast"), "High Contrast"), &ndfSettings.highContrast, 0.25f, 4.f, "%.2f");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("altostratus_weight"), "Altostratus Weight"), &ndfSettings.altostratusWeight, 0.f, 1.f, "%.2f");
+	deferWhileEditing();
+	ImGui::SliderFloat(T(TKEY("altocumulus_weight"), "Altocumulus Weight"), &ndfSettings.altocumulusWeight, 0.f, 1.f, "%.2f");
 	deferWhileEditing();
 
 	ImGui::SeparatorText(T(TKEY("texture_overrides"), "Texture Overrides"));
@@ -290,19 +340,19 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texMa
 	DrawTextureOverride(T(TKEY("high_wisp"), "High Wisp"), ndfSettings.overrides.highWispPath, texManager);
 }
 
-void NdfManager::UpdateNdf(const NdfSettings& ndfSettings)
+void NdfManager::UpdateNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer)
 {
-	GenerateDefaultTextures(ndfSettings);
+	GenerateDefaultTextures(ndfSettings, cloudLayer);
 }
 
-ID3D11ShaderResourceView* NdfManager::GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager)
+ID3D11ShaderResourceView* NdfManager::GetNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager)
 {
-	return GetHpTextures(ndfSettings, texManager).lowWeather;
+	return GetHpTextures(ndfSettings, cloudLayer, texManager).lowWeather;
 }
 
-HpCloudTextureSet NdfManager::GetHpTextures(const NdfSettings& ndfSettings, TextureManager& texManager)
+HpCloudTextureSet NdfManager::GetHpTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager)
 {
-	GenerateDefaultTextures(ndfSettings);
+	GenerateDefaultTextures(ndfSettings, cloudLayer);
 	const auto resolveTexture = [&](const std::string& path, ID3D11ShaderResourceView* fallback) {
 		if (path.empty())
 			return fallback;
@@ -323,11 +373,12 @@ HpCloudTextureSet NdfManager::GetHpTextures(const NdfSettings& ndfSettings, Text
 	};
 }
 
-void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
+void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer)
 {
 	const uint32_t weatherDim = std::clamp(ndfSettings.weatherDim, 128u, 1024u);
 	const uint32_t profileWidth = std::clamp(ndfSettings.profileWidth, 64u, 512u);
 	const uint32_t profileHeight = std::clamp(ndfSettings.profileHeight, 16u, 256u);
+	const float layerDepth = std::max(cloudLayer.highestAltitude - cloudLayer.lowestAltitude, 0.05f);
 	const bool haveGeneratedTextures = texLowWeather && texHighWeather && texProfile && texScCell && texHighCell && texHighWarp && texHighWisp;
 	// While an ImGui control is actively dragged, keep rendering the last committed
 	// maps. Rebuild once on release instead of synchronously regenerating every
@@ -337,13 +388,21 @@ void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
 
 	const size_t weatherPixelCount = static_cast<size_t>(weatherDim) * weatherDim;
 	const bool weatherLayoutChanged = generatedWeatherDim != weatherDim || cachedCoverageField.size() != weatherPixelCount;
-	const bool profileLayoutChanged = !texProfile || generatedProfileWidth != profileWidth || generatedProfileHeight != profileHeight;
+	const bool profileChanged = !texProfile || generatedProfileWidth != profileWidth || generatedProfileHeight != profileHeight ||
+	                            generatedLayerDepth != layerDepth || generatedCumulusDepth != ndfSettings.cumulusDepth ||
+	                            generatedToweringCumulusDepth != ndfSettings.toweringCumulusDepth ||
+	                            generatedCumulonimbusDepth != ndfSettings.cumulonimbusDepth;
 	const bool lowWeatherChanged = weatherLayoutChanged || !texLowWeather ||
 	                               generatedLowCoverage != ndfSettings.lowCoverage || generatedLowContrast != ndfSettings.lowContrast ||
-	                               generatedStratocumulus != ndfSettings.stratocumulus;
+	                               generatedStratocumulus != ndfSettings.stratocumulus ||
+	                               generatedCumulusWeight != ndfSettings.cumulusWeight ||
+	                               generatedToweringCumulusWeight != ndfSettings.toweringCumulusWeight ||
+	                               generatedCumulonimbusWeight != ndfSettings.cumulonimbusWeight;
 	const bool highWeatherChanged = weatherLayoutChanged || !texHighWeather ||
-	                                generatedHighCoverage != ndfSettings.highCoverage || generatedHighContrast != ndfSettings.highContrast;
-	if (!weatherLayoutChanged && !profileLayoutChanged && !lowWeatherChanged && !highWeatherChanged)
+	                                generatedHighCoverage != ndfSettings.highCoverage || generatedHighContrast != ndfSettings.highContrast ||
+	                                generatedAltostratusWeight != ndfSettings.altostratusWeight ||
+	                                generatedAltocumulusWeight != ndfSettings.altocumulusWeight;
+	if (!weatherLayoutChanged && !profileChanged && !lowWeatherChanged && !highWeatherChanged)
 		return;
 
 	if (weatherLayoutChanged) {
@@ -362,50 +421,92 @@ void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
 			for (uint32_t x = 0; x < weatherDim; ++x) {
 				const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(weatherDim);
 				const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(weatherDim);
-				const float warpX = (Fbm(u * 2.5f + 13.0f, v * 2.5f - 7.0f, 3u) - 0.5f) * 0.20f;
-				const float warpY = (Fbm(u * 2.5f - 5.0f, v * 2.5f + 11.0f, 5u) - 0.5f) * 0.20f;
+				// Build a hierarchy instead of treating every channel as unrelated FBM:
+				// synoptic moisture and fronts define cloud systems, while meso-scale
+				// convection selects the vertical family inside those systems.
+				const float warpX = (Fbm(u * 1.6f + 13.0f, v * 1.6f - 7.0f, 3u) - 0.5f) * 0.28f;
+				const float warpY = (Fbm(u * 1.6f - 5.0f, v * 1.6f + 11.0f, 5u) - 0.5f) * 0.28f;
 				const float warpedU = u + warpX;
 				const float warpedV = v + warpY;
-				const float macro = Fbm(warpedU * 6.0f, warpedV * 6.0f, 11u);
-				const float meso = Fbm(warpedU * 14.0f + 17.0f, warpedV * 14.0f, 23u);
-				const float fine = Fbm(warpedU * 28.0f, warpedV * 28.0f + 9.0f, 37u);
-				const float typeMacro = Fbm(warpedU * 3.0f + 31.0f, warpedV * 3.0f - 19.0f, 43u);
-				const float typeMeso = Fbm(warpedU * 7.0f - 7.0f, warpedV * 7.0f + 23.0f, 47u);
-				const float scMacro = Fbm(warpedU * 5.0f - 29.0f, warpedV * 5.0f + 5.0f, 59u);
-				const float scMeso = Fbm(warpedU * 12.0f + 7.0f, warpedV * 12.0f - 13.0f, 61u);
-				const float highMacro = Fbm((u + warpX * 0.5f) * 4.0f + 3.0f, (v + warpY * 0.5f) * 4.0f - 5.0f, 71u);
-				const float highMeso = Fbm(warpedU * 10.0f - 17.0f, warpedV * 10.0f + 29.0f, 73u);
+				const float synopticMoisture = Fbm(warpedU * 2.1f + 3.0f, warpedV * 2.1f - 5.0f, 11u);
+				const float mesoMoisture = Fbm(warpedU * 5.4f + 17.0f, warpedV * 5.4f, 23u);
+				const float fineMoisture = Fbm(warpedU * 13.0f, warpedV * 13.0f + 9.0f, 37u);
+				const float dryIntrusion = Fbm(warpedU * 3.2f - 11.0f, warpedV * 3.2f + 19.0f, 41u);
+
+				// Narrow contours of another large-scale field form broken frontal bands.
+				const float frontDriver = Fbm(warpedU * 1.35f + 31.0f, warpedV * 1.35f - 19.0f, 43u);
+				const float frontDistance = std::abs(frontDriver - 0.5f) * 2.0f;
+				const float frontCore = 1.0f - SmoothStep(0.03f, 0.14f, frontDistance);
+				const float frontBreakup = 0.35f + 0.65f * SmoothStep(0.28f, 0.72f, Fbm(warpedU * 6.5f - 7.0f, warpedV * 6.5f + 23.0f, 47u));
+				const float frontalBand = frontCore * frontBreakup;
+
+				const float coverageField = std::clamp(
+					0.05f + synopticMoisture * 0.58f + mesoMoisture * 0.22f + fineMoisture * 0.12f + frontalBand * 0.22f - dryIntrusion * 0.12f,
+					0.0f, 1.0f);
+				const float convectionNoise = Fbm(warpedU * 8.5f + 7.0f, warpedV * 8.5f - 13.0f, 53u);
+				const float convection = SmoothStep(0.34f, 0.64f, convectionNoise) * SmoothStep(0.28f, 0.64f, coverageField);
+				const float typeVariation = Fbm(warpedU * 4.0f - 29.0f, warpedV * 4.0f + 5.0f, 59u);
+				const float typeDriver = std::clamp(
+					0.12f + convection * 0.58f + coverageField * 0.34f + typeVariation * 0.16f - frontalBand * 0.22f,
+					0.0f, 1.0f);
+
+				const float upperWarpX = (Fbm(u * 1.2f + 37.0f, v * 1.2f - 17.0f, 67u) - 0.5f) * 0.20f;
+				const float upperWarpY = (Fbm(u * 1.2f - 23.0f, v * 1.2f + 41.0f, 69u) - 0.5f) * 0.20f;
+				const float upperU = u + upperWarpX;
+				const float upperV = v + upperWarpY;
+				const float upperSynoptic = Fbm(upperU * 1.8f + 3.0f, upperV * 1.8f - 5.0f, 71u);
+				const float upperMeso = Fbm(upperU * 5.5f - 17.0f, upperV * 5.5f + 29.0f, 73u);
+				const float anvilOutflow = SmoothStep(0.56f, 0.82f, typeDriver) * SmoothStep(0.36f, 0.70f, coverageField);
+				const float highField = std::clamp(
+					upperSynoptic * 0.52f + upperMeso * 0.20f + frontalBand * 0.30f + anvilOutflow * 0.34f - dryIntrusion * 0.08f,
+					0.0f, 1.0f);
+				const float upperCellular = Fbm(upperU * 7.0f + 41.0f, upperV * 7.0f - 37.0f, 79u);
+				const float highTypeDriver = std::clamp(
+					0.10f + upperCellular * 0.72f + anvilOutflow * 0.50f + typeVariation * 0.10f - frontalBand * 0.28f,
+					0.0f, 1.0f);
+
+				// The finite generated map fades before its boundary so sampling outside
+				// the map cannot reveal a rectangular wall of cloud.
+				const float edgeDistance = std::max(std::abs(u - 0.5f), std::abs(v - 0.5f)) * 2.0f;
+				const float edgeFade = 1.0f - SmoothStep(0.86f, 1.0f, edgeDistance);
 
 				const size_t pixel = static_cast<size_t>(y) * weatherDim + x;
-				cachedCoverageField[pixel] = macro * 0.68f + meso * 0.24f + fine * 0.08f;
-				// HP expects G to select distinct Cu/Tcu/Cb profile families. A raw
-				// continuous noise field spends most of the map blending profiles and
-				// visually collapses them into one generic cloud. Keep broad categorical
-				// plateaus with narrow, filterable transitions between the three types.
-				const float typeDriver = (typeMacro * 0.72f + typeMeso * 0.28f) * 0.72f + cachedCoverageField[pixel] * 0.28f;
-				const float cuToTcu = SmoothStep(0.40f, 0.47f, typeDriver);
-				const float tcuToCb = SmoothStep(0.54f, 0.62f, typeDriver);
-				cachedCloudType[pixel] = std::lerp(std::lerp(0.08f, 0.50f, cuToTcu), 0.92f, tcuToCb);
-				cachedScRegion[pixel] = scMacro * 0.75f + scMeso * 0.25f;
-				cachedHighField[pixel] = highMacro * 0.8f + highMeso * 0.2f;
-				// High G is an As/Ac selector, not a generic blend weight. Preserve
-				// coherent regions of both cloud families.
-				cachedHighType[pixel] = SmoothStep(0.48f, 0.60f, Fbm(warpedU * 5.0f + 41.0f, warpedV * 5.0f - 37.0f, 79u));
-				cachedHighScatterField[pixel] = highMacro * 0.7f + highMeso * 0.3f;
+				cachedCoverageField[pixel] = coverageField * edgeFade;
+				// Cache suitability rather than a pre-baked type. Coverage-aware
+				// quantiles assign the requested species shares when the low map is built.
+				cachedCloudType[pixel] = typeDriver;
+				const float stableNoise = Fbm(warpedU * 3.8f + 5.0f, warpedV * 3.8f - 31.0f, 61u);
+				cachedScRegion[pixel] = std::clamp(
+											0.14f + stableNoise * 0.48f + frontalBand * 0.50f + coverageField * 0.18f - convection * 0.42f,
+											0.0f, 1.0f) *
+				                        edgeFade;
+				cachedHighField[pixel] = highField * edgeFade;
+				cachedHighType[pixel] = highTypeDriver;
+				cachedHighScatterField[pixel] = std::clamp(upperSynoptic * 0.45f + frontalBand * 0.25f + anvilOutflow * 0.30f, 0.0f, 1.0f) * edgeFade;
 
 				const size_t i = pixel * 4u;
-				const uint8_t cell = ToByte(PeriodicCellNoise(u, v, 4, 89u));
-				const uint8_t highCell = ToByte(PeriodicCellNoise(u, v, 3, 101u));
-				const uint8_t wisp = ToByte(std::pow(std::abs(PeriodicFbm(u, v, 8, 139u) * 2.0f - 1.0f), 2.0f));
-				scCell[i + 0] = scCell[i + 1] = scCell[i + 2] = cell;
+				const float cellWarpX = (PeriodicFbm(u, v, 2, 83u) - 0.5f) * 0.08f;
+				const float cellWarpY = (PeriodicFbm(u + 0.31f, v + 0.57f, 2, 87u) - 0.5f) * 0.08f;
+				const float cell = PeriodicCellNoise(u + cellWarpX, v + cellWarpY, 4, 89u) * 0.78f +
+				                   PeriodicCellNoise(u + cellWarpX + 0.17f, v + cellWarpY - 0.23f, 9, 97u) * 0.22f;
+				const float highCell = PeriodicCellNoise(u - cellWarpY, v + cellWarpX, 3, 101u) * 0.82f +
+				                       PeriodicCellNoise(u - cellWarpY + 0.29f, v + cellWarpX + 0.11f, 7, 107u) * 0.18f;
+				const float wispField = PeriodicFbm(u, v, 7, 139u);
+				const float wispCross = PeriodicFbm(u + v, v - u, 6, 149u);
+				const float wisp = std::pow(std::clamp(1.0f - std::abs(wispField * 2.0f - 1.0f), 0.0f, 1.0f), 4.0f) *
+				                   std::clamp(0.55f + wispCross * 0.45f, 0.0f, 1.0f);
+				const uint8_t cellByte = ToByte(cell);
+				const uint8_t highCellByte = ToByte(highCell);
+				const uint8_t wispByte = ToByte(wisp);
+				scCell[i + 0] = scCell[i + 1] = scCell[i + 2] = cellByte;
 				scCell[i + 3] = 255;
-				hiCell[i + 0] = hiCell[i + 1] = hiCell[i + 2] = highCell;
+				hiCell[i + 0] = hiCell[i + 1] = hiCell[i + 2] = highCellByte;
 				hiCell[i + 3] = 255;
 				hiWarp[i + 0] = ToByte(PeriodicFbm(u, v, 2, 113u));
 				hiWarp[i + 1] = ToByte(PeriodicFbm(u + 0.37f, v + 0.61f, 2, 127u));
 				hiWarp[i + 2] = 128;
 				hiWarp[i + 3] = 255;
-				hiWisp[i + 0] = hiWisp[i + 1] = hiWisp[i + 2] = wisp;
+				hiWisp[i + 0] = hiWisp[i + 1] = hiWisp[i + 2] = wispByte;
 				hiWisp[i + 3] = 255;
 			}
 		}
@@ -418,24 +519,46 @@ void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
 
 	if (lowWeatherChanged) {
 		std::vector<uint8_t> low(weatherPixelCount * 4u);
+		std::vector<float> coverageValues(weatherPixelCount);
 		const float lowCoverage = std::clamp(ndfSettings.lowCoverage, 0.0f, 1.0f);
 		const float lowThreshold = 0.70f - lowCoverage * 0.48f;
 		const float lowContrast = std::max(ndfSettings.lowContrast, 0.01f);
 		const float scAmount = std::clamp(ndfSettings.stratocumulus, 0.0f, 1.0f);
-		const float scThreshold = 0.72f - scAmount * 0.44f;
+		std::array<uint32_t, 256> scHistogram{};
 		for (size_t pixel = 0; pixel < weatherPixelCount; ++pixel) {
 			const float coverageMask = lowCoverage > 0.0f ? std::clamp((cachedCoverageField[pixel] - lowThreshold) / 0.28f, 0.0f, 1.0f) : 0.0f;
-			const float coverage = std::pow(coverageMask, lowContrast);
-			const float cloudType = cachedCloudType[pixel];
-			// HP low B is a spatial Sc mask. Encode full-strength regions and let the
-			// independent ScWorleyStrength parameter control blending in the shader;
-			// treating this setting as another amplitude multiplier attenuated it twice.
-			const float scRegion = scAmount > 0.0f ? SmoothStep(scThreshold, scThreshold + 0.16f, cachedScRegion[pixel]) : 0.0f;
-			const float sc = scRegion * (1.0f - SmoothStep(0.30f, 0.58f, cloudType));
+			coverageValues[pixel] = std::pow(coverageMask, lowContrast);
+			if (coverageValues[pixel] >= 0.05f)
+				++scHistogram[ScoreBin(cachedScRegion[pixel])];
+		}
+		const float scThreshold = HistogramSplitThreshold(scHistogram, 1.0f - scAmount);
+
+		// Rank the remaining covered area by convective suitability. This keeps Cb
+		// in moist, unstable regions while making the requested weights correspond
+		// to actual map area instead of opaque noise thresholds.
+		std::array<uint32_t, 256> typeHistogram{};
+		for (size_t pixel = 0; pixel < weatherPixelCount; ++pixel) {
+			const bool sc = coverageValues[pixel] >= 0.05f && cachedScRegion[pixel] >= scThreshold;
+			if (coverageValues[pixel] >= 0.05f && !sc)
+				++typeHistogram[ScoreBin(cachedCloudType[pixel])];
+		}
+		const float cuWeight = std::max(ndfSettings.cumulusWeight, 0.0f);
+		const float tcuWeight = std::max(ndfSettings.toweringCumulusWeight, 0.0f);
+		const float cbWeight = std::max(ndfSettings.cumulonimbusWeight, 0.0f);
+		const float weightSum = cuWeight + tcuWeight + cbWeight;
+		const float cuShare = weightSum > 1e-5f ? cuWeight / weightSum : 1.0f;
+		const float tcuShare = weightSum > 1e-5f ? tcuWeight / weightSum : 0.0f;
+		const float cuThreshold = HistogramSplitThreshold(typeHistogram, cuShare);
+		const float tcuThreshold = HistogramSplitThreshold(typeHistogram, cuShare + tcuShare);
+
+		for (size_t pixel = 0; pixel < weatherPixelCount; ++pixel) {
+			const bool scRegion = coverageValues[pixel] >= 0.05f && cachedScRegion[pixel] >= scThreshold;
+			const float typeScore = cachedCloudType[pixel];
+			const float cloudType = scRegion ? 0.0f : (typeScore < cuThreshold ? 0.0f : (typeScore < tcuThreshold ? 0.5f : 1.0f));
 			const size_t i = pixel * 4u;
-			low[i + 0] = ToByte(coverage);
+			low[i + 0] = ToByte(coverageValues[pixel]);
 			low[i + 1] = ToByte(cloudType);
-			low[i + 2] = ToByte(sc);
+			low[i + 2] = scRegion ? 255 : 0;
 			low[i + 3] = 0;
 		}
 		UploadGeneratedTexture(texLowWeather, weatherDim, weatherDim, "PhysicalSky::HpLowWeather", low);
@@ -443,40 +566,55 @@ void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
 
 	if (highWeatherChanged) {
 		std::vector<uint8_t> high(weatherPixelCount * 4u);
+		std::vector<float> highCoverageValues(weatherPixelCount);
 		const float highCoverage = std::clamp(ndfSettings.highCoverage, 0.0f, 1.0f);
-		const float highThreshold = 0.70f - 0.50f * highCoverage;
+		const float highThreshold = 0.66f - 0.50f * highCoverage;
 		const float highContrast = std::max(ndfSettings.highContrast, 0.01f);
+		std::array<uint32_t, 256> highTypeHistogram{};
 		for (size_t pixel = 0; pixel < weatherPixelCount; ++pixel) {
 			const float highMask = highCoverage > 0.0f ? std::clamp((cachedHighField[pixel] - highThreshold) / 0.22f, 0.0f, 1.0f) : 0.0f;
-			const float hiCov = std::pow(highMask, highContrast);
+			highCoverageValues[pixel] = std::pow(highMask, highContrast);
+			if (highCoverageValues[pixel] >= 0.05f)
+				++highTypeHistogram[ScoreBin(cachedHighType[pixel])];
+		}
+		const float asWeight = std::max(ndfSettings.altostratusWeight, 0.0f);
+		const float acWeight = std::max(ndfSettings.altocumulusWeight, 0.0f);
+		const float highWeightSum = asWeight + acWeight;
+		const float asShare = highWeightSum > 1e-5f ? asWeight / highWeightSum : 1.0f;
+		const float asThreshold = HistogramSplitThreshold(highTypeHistogram, asShare);
+		for (size_t pixel = 0; pixel < weatherPixelCount; ++pixel) {
+			const float hiCov = highCoverageValues[pixel];
+			const float highType = cachedHighType[pixel] < asThreshold ? 0.0f : 1.0f;
 			// A is the high-cloud multiple-scattering/thickness weight. It must be
 			// zero outside the R coverage mask; the previous independent noise floor
 			// affected low-cloud edge softness even where no high cloud existed.
 			const float scatterWeight = hiCov * std::clamp(0.35f + cachedHighScatterField[pixel] * 0.65f, 0.0f, 1.0f);
 			const size_t i = pixel * 4u;
 			high[i + 0] = ToByte(hiCov);
-			high[i + 1] = ToByte(cachedHighType[pixel]);
+			high[i + 1] = ToByte(highType);
 			high[i + 2] = 0;
 			high[i + 3] = ToByte(scatterWeight);
 		}
 		UploadGeneratedTexture(texHighWeather, weatherDim, weatherDim, "PhysicalSky::HpHighWeather", high);
 	}
 
-	if (profileLayoutChanged) {
+	if (profileChanged) {
 		std::vector<uint8_t> profile(static_cast<size_t>(profileWidth) * profileHeight * 4u);
 		for (uint32_t y = 0; y < profileHeight; ++y) {
 			for (uint32_t x = 0; x < profileWidth; ++x) {
 				const float h = (static_cast<float>(x) + 0.5f) / static_cast<float>(profileWidth);
 				const float radial = (static_cast<float>(y) + 0.5f) / static_cast<float>(profileHeight);
-				const float bottom = SmoothStep(0.0f, 0.08f, h);
-				// RGB are complete, deliberately distinct vertical profiles as required
-				// by HP: Cu is shallow, Tcu occupies most of the middle slab, and Cb
-				// reaches the top. Radial attenuation keeps the finite weather-map edge
-				// from ending in equally tall columns without changing channel meaning.
-				const float radialTopShift = 0.08f * radial * radial;
-				const float cu = bottom * (1.0f - SmoothStep(0.34f - radialTopShift, 0.48f - radialTopShift, h));
-				const float tcu = bottom * (1.0f - SmoothStep(0.52f - radialTopShift, 0.66f - radialTopShift, h));
-				const float cb = bottom * (1.0f - SmoothStep(0.86f - radialTopShift, 0.99f - radialTopShift, h));
+				const auto profileForDepth = [&](float requestedDepth) {
+					const float radialVariation = 1.0f - 0.12f * radial * radial;
+					const float effectiveDepth = std::clamp(requestedDepth * radialVariation, 0.05f, layerDepth);
+					const float localHeight = h * layerDepth / effectiveDepth;
+					const float bottom = SmoothStep(0.0f, 0.10f, localHeight);
+					const float top = 1.0f - SmoothStep(0.70f, 1.0f, localHeight);
+					return bottom * top;
+				};
+				const float cu = profileForDepth(std::max(ndfSettings.cumulusDepth, 0.05f));
+				const float tcu = profileForDepth(std::max(ndfSettings.toweringCumulusDepth, 0.05f));
+				const float cb = profileForDepth(std::max(ndfSettings.cumulonimbusDepth, 0.05f));
 				const size_t i = (static_cast<size_t>(y) * profileWidth + x) * 4u;
 				profile[i + 0] = ToByte(cu);
 				profile[i + 1] = ToByte(tcu);
@@ -493,8 +631,17 @@ void NdfManager::GenerateDefaultTextures(const NdfSettings& ndfSettings)
 	generatedLowCoverage = ndfSettings.lowCoverage;
 	generatedLowContrast = ndfSettings.lowContrast;
 	generatedStratocumulus = ndfSettings.stratocumulus;
+	generatedCumulusWeight = ndfSettings.cumulusWeight;
+	generatedToweringCumulusWeight = ndfSettings.toweringCumulusWeight;
+	generatedCumulonimbusWeight = ndfSettings.cumulonimbusWeight;
 	generatedHighCoverage = ndfSettings.highCoverage;
 	generatedHighContrast = ndfSettings.highContrast;
+	generatedAltostratusWeight = ndfSettings.altostratusWeight;
+	generatedAltocumulusWeight = ndfSettings.altocumulusWeight;
+	generatedCumulusDepth = ndfSettings.cumulusDepth;
+	generatedToweringCumulusDepth = ndfSettings.toweringCumulusDepth;
+	generatedCumulonimbusDepth = ndfSettings.cumulonimbusDepth;
+	generatedLayerDepth = layerDepth;
 }
 
 #undef I18N_KEY_PREFIX
