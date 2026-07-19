@@ -230,22 +230,18 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
 					envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
 					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
-#		if defined(SKYLIGHTING)
-					envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingSpecular : 1.0;
-					skySpecular *= skylightingSpecular;
-#		elif defined(INTERIOR)
-					skySpecular = 0;
-#		endif
 				} else {
 					float3 ratio = ImageBasedLighting::GetIBLRatio();
 					envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
 					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
-#		if defined(SKYLIGHTING)
-					skySpecular *= skylightingSpecular;
-#		elif defined(INTERIOR)
-					skySpecular = 0;
-#		endif
 				}
+#		if defined(SKYLIGHTING)
+				if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
+					envSpecular *= skylightingSpecular;
+				skySpecular *= skylightingSpecular;
+#		elif defined(INTERIOR)
+				skySpecular = 0;
+#		endif
 				if (SharedData::InInterior) {
 					skySpecular = 0;
 				}

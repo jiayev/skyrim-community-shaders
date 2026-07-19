@@ -14,6 +14,9 @@
 #include "Common/SharedData.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceReflections/common.hlsli"
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
+#endif
 
 Texture2D<float> DepthTexture : register(t0);
 Texture2D<unorm float3> NormalRoughnessTexture : register(t1);
@@ -433,36 +436,8 @@ float SSRT_ValidateHit(float3 hit,
 		float3 envSampleRaw = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 		float3 envColor = envSampleRaw;
 
-#	if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
-			uint dalcMode = SharedData::iblSettings.DALCMode;
-
-			if (dalcMode >= 2) {
-				// Mode 2/3: DALC-normalized env scaled by DALCAmount
-				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-				float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
-				envColor = (envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular * SharedData::iblSettings.DALCAmount;
-			} else {
-				// Mode 0/1: ratio-based
-				float3 dalc0 = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 0))));
-				float3 envAvg = EnvTexture.SampleLevel(LinearSampler, float3(0, 0, 0), 15);
-
-				if (dalcMode == 1) {
-					// Color Ratio: per-channel
-					float3 ratio = dalc0 / max(envAvg, 0.001);
-					envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
-				} else {
-					// Luminance Ratio: scalar
-					float dalcLum = Color::RGBToLuminance(dalc0);
-					float envLum = Color::RGBToLuminance(envAvg);
-					float ratio = (envLum > 0.001) ? (dalcLum / envLum) : 1.0;
-					envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
-				}
-			}
-		}
-#	endif
-
 #	if defined(SKYLIGHTING)
+		float skylightingSpecular = 1.0;
 		if (!SharedData::InInterior) {
 			float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 			float3 positionMS = mul(FrameBuffer::CameraViewInverse, float4(unbiased_view_space_ray, 1)).xyz;
@@ -470,24 +445,47 @@ float SSRT_ValidateHit(float3 hit,
 			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
 			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
+			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
+		}
+#	endif
 
-			float3 envSkyColor = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-			float3 skyColor = max(envSkyColor - envSampleRaw, 0);
+#	if defined(IBL)
+		if (SharedData::iblSettings.EnableIBL) {
+			uint dalcMode = SharedData::iblSettings.DALCMode;
 
-#		if defined(IBL)
-			if (SharedData::iblSettings.EnableIBL) {
-				skyColor *= SharedData::iblSettings.SkyIBLScale;
-				envColor += skyColor;
-				envColor *= skylightingSpecular;
-			} else
+			if (dalcMode >= 2) {
+				// Mode 2: DALC-normalized env scaled by DALCAmount
+				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
+				float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
+				envColor = (envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular * SharedData::iblSettings.DALCAmount;
+			} else {
+				// Mode 0/1: ratio-based
+				float3 ratio = ImageBasedLighting::GetIBLRatio();
+				envColor = envSampleRaw * ratio * SharedData::iblSettings.EnvIBLScale;
+			}
+
+			if (!SharedData::InInterior) {
+				float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+				float3 skyColor = max(fullSample - envSampleRaw, 0) * SharedData::iblSettings.SkyIBLScale;
+#		if defined(SKYLIGHTING)
+				skyColor *= skylightingSpecular;
+				if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
+					envColor *= skylightingSpecular;
 #		endif
-			{
+				envColor += skyColor;
+			}
+		} else
+#	endif
+		{
+#	if defined(SKYLIGHTING)
+			if (!SharedData::InInterior) {
+				float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
+				float3 skyColor = max(fullSample - envSampleRaw, 0);
 				envColor += skyColor;
 				envColor *= skylightingSpecular;
 			}
-		}
 #	endif
+		}
 
 		envColor = Color::IrradianceToLinear(envColor);
 		envColor *= SpecCubemapMult;

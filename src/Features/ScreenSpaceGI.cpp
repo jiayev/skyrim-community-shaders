@@ -691,6 +691,7 @@ void ScreenSpaceGI::DrawSSGI()
 		TracyD3D11Zone(globals::state->tracyCtx, "SSGI - GI");
 
 		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		auto& ibl = globals::features::ibl;
 		auto& skylighting = globals::features::skylighting;
 
 		resetViews();
@@ -704,12 +705,14 @@ void ScreenSpaceGI::DrawSSGI()
 		if (dynamicCubemaps.loaded && skylighting.loaded)
 			srvs.at(6) = skylighting.texProbeArray->srv.get();
 		srvs.at(8) = texNormal->srv.get();
+		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
 
 		uavs.at(0) = texNRDInput->uav.get();
 		if (useSH && texNRDInputSH1)
 			uavs.at(2) = texNRDInputSH1->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(76, 1, &envIBLSrv);
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(giCompute.get(), nullptr, 0);
 
@@ -718,6 +721,9 @@ void ScreenSpaceGI::DrawSSGI()
 		globals::profiler->BeginPass("ScreenSpaceGI::GI");
 		context->Dispatch((dispatchX + 7u) >> 3, (dispatchY + 7u) >> 3, 1);
 		globals::profiler->EndPass();
+
+		envIBLSrv = nullptr;
+		context->CSSetShaderResources(76, 1, &envIBLSrv);
 	}
 
 	// REBLUR diffuse denoising via core NRD service
