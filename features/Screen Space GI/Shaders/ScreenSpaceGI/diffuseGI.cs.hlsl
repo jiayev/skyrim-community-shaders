@@ -60,6 +60,9 @@
 #include "Common/Math.hlsli"
 #include "NRD/NRDReblurSH.hlsli"
 #include "ScreenSpaceGI/common.hlsli"
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
+#endif
 
 Texture2D<float> srcWorkingDepth : register(t0);
 Texture2D<float3> srcRadiance : register(t2);
@@ -187,58 +190,55 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 	float3 envSampleRaw = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
 	float3 envColor = envSampleRaw;
 
-#	if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		uint dalcMode = SharedData::iblSettings.DALCMode;
-
-		if (dalcMode >= 2) {
-			// Mode 2/3: DALC-normalized env scaled by DALCAmount
-			float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 15));
-			float3 dalc = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
-			envColor = (envSampleRaw / max(envLum, 0.001)) * dalc * SharedData::iblSettings.DALCAmount;
-		} else {
-			// Mode 0/1: ratio-based
-			float3 dalc0 = Color::Ambient(max(0, SharedData::GetAmbient(float3(0, 0, 0))));
-			float3 envAvg = EnvTexture.SampleLevel(samplerLinearClamp, float3(0, 0, 0), 15);
-
-			if (dalcMode == 1) {
-				// Color Ratio: per-channel
-				float3 ratio = dalc0 / max(envAvg, 0.001);
-				envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
-			} else {
-				// Luminance Ratio: scalar
-				float dalcLum = Color::RGBToLuminance(dalc0);
-				float envLum = Color::RGBToLuminance(envAvg);
-				float ratio = (envLum > 0.001) ? (dalcLum / envLum) : 1.0;
-				envColor = envSampleRaw * lerp(1.0, ratio, SharedData::iblSettings.DALCAmount) * SharedData::iblSettings.EnvIBLScale;
-			}
-		}
-	}
-#	endif
-
 #	if defined(SKYLIGHTING)
+	float skylightingDiffuse = 1.0;
 	if (!SharedData::InInterior) {
 		float fadeOutFactor = Skylighting::GetFadeOutFactor(worldPos);
 		float3 skylightingNormal = normalize(float3(worldNormal.xy, max(0, worldNormal.z)));
 		float skylightingBoost = 1.0 + saturate(worldNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
 		sh2 skylightingSH = Skylighting::Sample(worldPos, worldDir);
-		float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor) * skylightingBoost;
-		float3 envSkyColor = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
-		float3 skyColor = max(envSkyColor - envSampleRaw, 0);
+		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor) * skylightingBoost;
+	}
+#	endif
 
-#		if defined(IBL)
-		if (SharedData::iblSettings.EnableIBL) {
-			skyColor *= SharedData::iblSettings.SkyIBLScale;
-			envColor += skyColor;
-			envColor *= skylightingDiffuse;
-		} else
+#	if defined(IBL)
+	if (SharedData::iblSettings.EnableIBL) {
+		uint dalcMode = SharedData::iblSettings.DALCMode;
+
+		if (dalcMode >= 2) {
+			// Mode 2: DALC-normalized env scaled by DALCAmount
+			float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 15));
+			float3 dalc = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
+			envColor = (envSampleRaw / max(envLum, 0.001)) * dalc * SharedData::iblSettings.DALCAmount;
+		} else {
+			// Mode 0/1: ratio-based
+			float3 saturatedEnv = Color::Saturation(envSampleRaw, SharedData::iblSettings.EnvIBLSaturation);
+			float3 ratio = ImageBasedLighting::GetIBLRatio();
+			envColor = saturatedEnv * ratio * SharedData::iblSettings.EnvIBLScale;
+		}
+
+		if (!SharedData::InInterior) {
+			float3 fullSample = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+			float3 skyColor = Color::Saturation(max(fullSample - envSampleRaw, 0), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+#		if defined(SKYLIGHTING)
+			skyColor *= skylightingDiffuse;
+			if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
+				envColor *= skylightingDiffuse;
 #		endif
-		{
+			envColor += skyColor;
+		}
+	} else
+#	endif
+	{
+#	if defined(SKYLIGHTING)
+		if (!SharedData::InInterior) {
+			float3 fullSample = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+			float3 skyColor = max(fullSample - envSampleRaw, 0);
 			envColor += skyColor;
 			envColor *= skylightingDiffuse;
 		}
-	}
 #	endif
+	}
 
 	return Color::IrradianceToLinear(envColor);
 }

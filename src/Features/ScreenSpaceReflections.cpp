@@ -463,6 +463,7 @@ void ScreenSpaceReflections::DrawSSR()
 		auto main = rts[globals::deferred->forwardRenderTargets[0]];
 
 		auto& dynamicCubemaps = globals::features::dynamicCubemaps;
+		auto& ibl = globals::features::ibl;
 		auto& skylighting = globals::features::skylighting;
 
 		resetViews();
@@ -474,10 +475,12 @@ void ScreenSpaceReflections::DrawSSR()
 		specSRVs[4] = dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr;
 		specSRVs[5] = dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr;
 		specSRVs[6] = dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr;
+		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
 
 		ID3D11UnorderedAccessView* specUAV = texNRDSpecInput->uav.get();
 
 		context->CSSetShaderResources(0, (uint)specSRVs.size(), specSRVs.data());
+		context->CSSetShaderResources(76, 1, &envIBLSrv);
 		context->CSSetUnorderedAccessViews(0, 1, &specUAV, nullptr);
 		context->CSSetShader(specularGICompute.get(), nullptr, 0);
 
@@ -487,6 +490,8 @@ void ScreenSpaceReflections::DrawSSR()
 		context->Dispatch((specDispatchX + 7u) >> 3, (specDispatchY + 7u) >> 3, 1);
 		globals::profiler->EndPass();
 
+		envIBLSrv = nullptr;
+		context->CSSetShaderResources(76, 1, &envIBLSrv);
 		resetViews();
 
 		if (globals::state->frameAnnotations)
