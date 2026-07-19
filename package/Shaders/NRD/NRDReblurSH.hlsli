@@ -115,13 +115,13 @@ float3 _NRD_EncodeNormalRoughness101010(float3 n, float roughness)
 void NRD_BackEnd_UnpackNormalAndRoughness(float4 p, out float3 N, out float roughness)
 {
 	float3 r = p.xyz;
+	float signedRoughness = 2.0 * r.z - 1.0;
 	N.x = r.x - r.y;
 	N.y = r.x + r.y - 1.0;
-	N.z = 1.0 - abs(N.x) - abs(N.y);
-	float t = saturate(-N.z);
-	N.xy += N.xy >= 0.0 ? -t : t;
+	N.z = signedRoughness < 0.0 ? -1.0 : 1.0;
+	N.z *= 1.0 - abs(N.x) - abs(N.y);
 	N = normalize(N);
-	roughness = abs(2.0 * r.z - 1.0);
+	roughness = abs(signedRoughness);
 }
 
 // Pack world-space normal + linear roughness + materialID into R10G10B10A2.
