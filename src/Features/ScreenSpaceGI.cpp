@@ -850,11 +850,12 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 
 ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 {
-	SharedData data;
-	data.EnableIL = settings.Enabled && settings.EnableGI;
+	SharedData data{};
+	const bool enabled = loaded && settings.Enabled;
+	data.Enabled = enabled ? 1u : 0u;
+	data.EnableIL = (enabled && settings.EnableGI) ? 1u : 0u;
 	data.DebugMode = 0;
 	data.pad0 = 0;
-	data.pad1 = 0;
 	return data;
 }
 

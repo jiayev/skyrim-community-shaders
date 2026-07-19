@@ -118,10 +118,10 @@ public:
 
 	struct alignas(16) SharedData
 	{
+		uint Enabled;
 		uint EnableIL;
 		uint DebugMode;
 		uint pad0;
-		uint pad1;
 	};
 
 	SharedData GetCommonBufferData();
