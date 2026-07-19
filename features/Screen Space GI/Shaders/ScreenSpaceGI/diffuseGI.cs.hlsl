@@ -227,20 +227,19 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 #		endif
 			envColor += skyColor;
 		}
+		envColor = Color::IrradianceToLinear(envColor);
 	} else
 #	endif
 	{
+		float3 directionalAmbient = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
+		envColor = Color::IrradianceToLinear(directionalAmbient);
 #	if defined(SKYLIGHTING)
-		if (!SharedData::InInterior) {
-			float3 fullSample = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
-			float3 skyColor = max(fullSample - envSampleRaw, 0);
-			envColor += skyColor;
+		if (!SharedData::InInterior)
 			envColor *= skylightingDiffuse;
-		}
 #	endif
 	}
 
-	return Color::IrradianceToLinear(envColor);
+	return envColor;
 }
 #endif
 
