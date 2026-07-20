@@ -23,6 +23,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableSH,
 	NumSteps,
 	HalfRes,
+	QuarterRes,
 	Thickness,
 	AOPower,
 	GIStrength,
@@ -102,13 +103,35 @@ void ScreenSpaceGI::DrawSettings()
 	{
 		auto qualityGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
+		int resolutionMode = settings.QuarterRes ? 2 : (settings.HalfRes ? 1 : 0);
+		bool resolutionChanged = false;
+		if (ImGui::BeginTable("SSGI Resolution", 3)) {
+			ImGui::TableNextColumn();
+			resolutionChanged |= ImGui::RadioButton(T(TKEY("full_resolution"), "Full Resolution"), &resolutionMode, 0);
+
+			ImGui::TableNextColumn();
+			resolutionChanged |= ImGui::RadioButton(T(TKEY("half_resolution"), "1/2 Resolution"), &resolutionMode, 1);
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
+			}
+
+			ImGui::TableNextColumn();
+			{
+				auto quarterResGuard = Util::DisableGuard(!settings.EnableREBLUR);
+				resolutionChanged |= ImGui::RadioButton(T(TKEY("quarter_resolution"), "1/4 Resolution"), &resolutionMode, 2);
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("%s", T(TKEY("quarter_resolution_tooltip"), "Trace one pixel per 2x2 block with a rotating pattern. REBLUR reconstructs the missing pixels."));
+				}
+			}
+
+			ImGui::EndTable();
+		}
+		if (resolutionChanged) {
+			settings.HalfRes = resolutionMode == 1;
+			settings.QuarterRes = resolutionMode == 2;
 			recompileFlag = true;
 			resetReblurHistory = true;
 			hasMultiBounceHistory = false;
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
 		}
 
 		if (showAdvanced) {
@@ -174,6 +197,10 @@ void ScreenSpaceGI::DrawSettings()
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
 		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR)) {
+			if (!settings.EnableREBLUR && settings.QuarterRes) {
+				settings.QuarterRes = false;
+				recompileFlag = true;
+			}
 			resetReblurHistory = true;
 			hasMultiBounceHistory = false;
 		}
@@ -208,6 +235,10 @@ void ScreenSpaceGI::DrawSettings()
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (settings.QuarterRes)
+		settings.HalfRes = false;
+	if (!settings.EnableREBLUR)
+		settings.QuarterRes = false;
 	recompileFlag = true;
 	resetReblurHistory = true;
 	hasMultiBounceHistory = false;
@@ -498,7 +529,9 @@ void ScreenSpaceGI::CompileComputeShaders()
 			info.defines.push_back({ "GI", "" });
 		if (settings.EnableSH && settings.EnableGI)
 			info.defines.push_back({ "SSGI_SH", "" });
-		if (settings.HalfRes)
+		if (settings.QuarterRes)
+			info.defines.push_back({ "SSGI_QUARTER", "" });
+		else if (settings.HalfRes)
 			info.defines.push_back({ "SSGI_HALF", "" });
 		if (globals::features::dynamicCubemaps.loaded)
 			info.defines.push_back({ "DYNAMIC_CUBEMAPS", "" });
@@ -713,11 +746,17 @@ void ScreenSpaceGI::DrawSSGI()
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(76, 1, &envIBLSrv);
+		if (settings.QuarterRes) {
+			const float clearColor[4] = {};
+			context->ClearUnorderedAccessViewFloat(texNRDInput->uav.get(), clearColor);
+			if (useSH && texNRDInputSH1)
+				context->ClearUnorderedAccessViewFloat(texNRDInputSH1->uav.get(), clearColor);
+		}
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(giCompute.get(), nullptr, 0);
 
-		uint dispatchX = settings.HalfRes ? (resolution[0] + 1) / 2 : resolution[0];
-		uint dispatchY = resolution[1];
+		uint dispatchX = (settings.HalfRes || settings.QuarterRes) ? (resolution[0] + 1) / 2 : resolution[0];
+		uint dispatchY = settings.QuarterRes ? (resolution[1] + 1) / 2 : resolution[1];
 		globals::profiler->BeginPass("ScreenSpaceGI::GI");
 		context->Dispatch((dispatchX + 7u) >> 3, (dispatchY + 7u) >> 3, 1);
 		globals::profiler->EndPass();
@@ -740,6 +779,13 @@ void ScreenSpaceGI::DrawSSGI()
 
 		nrdSvc.ApplyReblurSettings(reblurSettings, settings.Reblur,
 			settings.HalfRes ? nrd::CheckerboardMode::BLACK : nrd::CheckerboardMode::OFF);
+		if (settings.QuarterRes) {
+			if (reblurSettings.hitDistanceReconstructionMode == nrd::HitDistanceReconstructionMode::OFF)
+				reblurSettings.hitDistanceReconstructionMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
+			// Probabilistic inputs require spatial reuse to redistribute the
+			// probability-compensated radiance before temporal accumulation.
+			reblurSettings.diffusePrepassBlurRadius = std::max(reblurSettings.maxBlurRadius, 1.0f);
+		}
 		nrdReblur.SetDenoiserSettings(&reblurSettings);
 
 		nrdReblur.SetNamedSRV(nrd::ResourceType::IN_MV, nrdSvc.GetMotionVectorSRV());
@@ -769,7 +815,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 	if (trackMultiBounce) {
 		hasMultiBounceHistory = true;
-		hasFullResolutionMultiBounceHistory = !settings.HalfRes || producedDenoisedHistory;
+		hasFullResolutionMultiBounceHistory = (!settings.HalfRes && !settings.QuarterRes) || producedDenoisedHistory;
 		multiBounceHistoryUsesNRDOutput = producedDenoisedHistory;
 		lastMultiBounceHistoryFrame = globals::state->frameCount;
 		historyGeoWriteIndex ^= 1;
@@ -858,7 +904,7 @@ bool ScreenSpaceGI::HasFullResolutionDiffuseOutput()
 {
 	if (!loaded || !settings.Enabled || !GetDiffuseOutputTexture())
 		return false;
-	if (!settings.HalfRes)
+	if (!settings.HalfRes && !settings.QuarterRes)
 		return true;
 	return settings.EnableREBLUR && nrdReblur.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady();
 }

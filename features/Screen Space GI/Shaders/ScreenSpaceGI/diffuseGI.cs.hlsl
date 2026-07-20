@@ -477,7 +477,15 @@ void CalculateGI(
 [numthreads(8, 8, 1)] void main(const uint2 dtid : SV_DispatchThreadID) {
 	const float2 frameScale = FrameDim * RcpTexDim;
 
-#if defined(SSGI_HALF)
+#if defined(SSGI_QUARTER)
+	// Trace one pixel per 2x2 block. Cycle through all four phases so REBLUR's
+	// hit-distance reconstruction and temporal accumulation receive fresh data.
+	uint2 phaseOffset = uint2(FrameIndex & 1u, (FrameIndex >> 1u) & 1u);
+	uint2 pxCoord = dtid * 2u + phaseOffset;
+	if (any(pxCoord >= uint2(FrameDim)))
+		return;
+	uint2 outCoord = pxCoord;
+#elif defined(SSGI_HALF)
 	uint colOffset = (dtid.y + FrameIndex) & 1;
 	uint2 pxCoord = uint2(dtid.x * 2 + colOffset, dtid.y);
 	uint2 outCoord = dtid.xy;
@@ -517,6 +525,12 @@ void CalculateGI(
 	);
 
 	radiance = filterNaN(radiance);
+
+#ifdef SSGI_QUARTER
+	// One out of four pixels carries a sample. Compensate its energy so the
+	// spatially and temporally filtered signal remains unbiased.
+	radiance *= 4.0;
+#endif
 
 #ifdef SSGI_SH
 	float4 sh1;
