@@ -244,7 +244,7 @@ namespace ImageBasedLighting
 			SharedData::skylightingSettings.MinDiffuseVisibility);
 		skyVisibility = saturate(skyVisibility * visibilityScale);
 
-		float3 linEnv;
+		float3 linEnv = 0.0;
 		if (SharedData::iblSettings.DALCMode >= 2) {
 			// DALC is already a directional ambient result rather than incident
 			// radiance SH, so use the full-Env geometric response for this path.
