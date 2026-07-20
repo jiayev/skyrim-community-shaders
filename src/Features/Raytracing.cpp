@@ -451,6 +451,9 @@ void Raytracing::DrawAdvancedSettings()
 
 	auto& advSettings = settings.CreationEngineRaytracingSettings.AdvancedSettings;
 
+	const auto maxThreads = std::max(1u, std::thread::hardware_concurrency() - 1u);
+	ImGui::SliderInt(T(TKEY("num_worker_threads"), "Number of Worker Threads"), reinterpret_cast<int*>(&advSettings.NumWorkerThreads), 1, maxThreads);
+
 	ImGui::SliderFloat(T(TKEY("texture_lod_bias"), "Texture LOD Bias"), &advSettings.TexLODBias, -4.0f, 4.0f, "%.1f");
 
 	ImGui::Checkbox(T(TKEY("variable_update_rate"), "Variable Update Rate"), &advSettings.VariableUpdateRate);
@@ -757,6 +760,7 @@ void Raytracing::DrawExperimentalSettings()
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
 	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
+	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
 	DrawEnumRadio(
 		T(TKEY("texture_mode"), "Texture Mode"),
@@ -917,6 +921,18 @@ void Raytracing::DrawDebugSettings()
 			waterFlowMap->resource11->GetDesc(&desc);
 
 			ImGui::ImageWithBg(waterFlowMap->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
+		const auto waterDisplacementLabel = StableLabel(T(TKEY("debug_displacement"), "Water Displacement"), "Water Displacement");
+		if (ImGui::TreeNode(waterDisplacementLabel.c_str())) {
+			auto renderer = globals::game::renderer;
+			auto displacement = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kWATER_DISPLACEMENT];
+
+			D3D11_TEXTURE2D_DESC desc;
+			displacement.texture->GetDesc(&desc);
+
+			ImGui::ImageWithBg(displacement.SRV, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
 			ImGui::TreePop();
 		}
 
@@ -1432,6 +1448,31 @@ void Raytracing::SkyCubeToHemi() const
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
+void Raytracing::CopyWaterFlowap() const
+{
+	auto* context = globals::d3d::context;
+
+	auto clearFlowMap = [&]() {
+		const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		context->ClearRenderTargetView(waterFlowMap->rtv, clearColor);
+	};
+
+	REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
+	auto* flowMapSourceTex = gFlowMapSourceTex.get();
+	if (!flowMapSourceTex) {
+		clearFlowMap();
+		return;
+	}
+
+	auto* sourceTexture = flowMapSourceTex->get();
+	if (!sourceTexture || !sourceTexture->rendererTexture || !sourceTexture->rendererTexture->texture) {
+		clearFlowMap();
+		return;
+	}
+
+	context->CopyResource(waterFlowMap->resource11, sourceTexture->rendererTexture->texture);
+}
+
 void Raytracing::ConvertTextures()
 {
 	auto renderer = globals::game::renderer;
@@ -1493,6 +1534,8 @@ void Raytracing::DeferredPasses()
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
 	}
+
+	CopyWaterFlowap();
 
 	globals::dx12Interop->Fence([&]() {
 		creationEngineRaytracing->Execute();

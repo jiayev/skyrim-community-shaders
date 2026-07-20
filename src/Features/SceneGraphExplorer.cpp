@@ -109,8 +109,19 @@ void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
 		}
 
 		if (node) {
+			int32_t switchIndex = -1;
+			if (auto switchNode = node->AsSwitchNode())
+				switchIndex = switchNode->index;
+
 			for (auto& child : node->GetChildren()) {
+				bool isActiveSwitchNode = (switchIndex >= 0) && child->parentIndex == static_cast<uint32_t>(switchIndex);
+				if (isActiveSwitchNode)
+					ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 255, 255));
+
 				DrawObject(child.get());
+
+				if (isActiveSwitchNode)
+					ImGui::PopStyleColor();
 			}
 		}
 

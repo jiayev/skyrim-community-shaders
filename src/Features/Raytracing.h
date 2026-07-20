@@ -268,6 +268,7 @@ struct CreationEngineRaytracing
 
 	struct AdvancedSettings
 	{
+		uint NumWorkerThreads = 8;
 		float TexLODBias = -1.0f;
 		bool VariableUpdateRate = true;
 		bool GGXEnergyConservation = true;
@@ -282,6 +283,7 @@ struct CreationEngineRaytracing
 
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
 			AdvancedSettings,
+			NumWorkerThreads,
 			TexLODBias,
 			VariableUpdateRate,
 			GGXEnergyConservation,
@@ -422,13 +424,14 @@ struct CreationEngineRaytracing
 		bool PathTracingCull = false;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
+		bool GlobalLights = false;
 		TextureStreamingMode TextureStreamingMode = TextureStreamingMode::Off;
 		uint32_t TextureBudgetMB = 0;
 		uint32_t TextureMaxMipBias = 2;
 
 		bool operator==(const ExperimentalSettings&) const = default;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, TextureStreamingMode, TextureBudgetMB, TextureMaxMipBias)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, GlobalLights, TextureStreamingMode, TextureBudgetMB, TextureMaxMipBias)
 	};
 
 	struct DebugSettings
@@ -488,7 +491,7 @@ struct CreationEngineRaytracing
 		ID3D12Resource* native = nullptr;
 		ID3D11Texture2D* shared = nullptr;
 	};
-	
+
 	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 	HMODULE handle = nullptr;
@@ -672,6 +675,7 @@ struct Raytracing : public OverlayFeature
 	void UpdateFeatureData();
 	void UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailTexture);
 	void SkyCubeToHemi() const;
+	void CopyWaterFlowap() const;
 	void ConvertTextures();
 	void DeferredPasses();
 	void GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance);
@@ -834,7 +838,7 @@ struct Raytracing : public OverlayFeature
 						dx12Interop->ga->BeginCapture();
 					}
 
-					// Clear render targets 
+					// Clear render targets
 					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
@@ -899,37 +903,17 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct CreateFlowMap
+		struct CopyToWaterFlowmap
 		{
-			static void thunk(void* a1, RE::TESObjectCELL* a2, RE::BSTriShape* a3)
+			static void thunk(void* a1)
 			{
-				func(a1, a2, a3);
+				func(a1);
 
 				auto& rt = globals::features::raytracing;
-				if (!rt.initialized || rt.forcedDisabled || !rt.waterFlowMap || !rt.waterFlowMap->resource11)
+				if (!rt.initialized || rt.forcedDisabled)
 					return;
 
-				auto* context = globals::d3d::context;
-
-				auto clearFlowMap = [&]() {
-					const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-					context->ClearRenderTargetView(rt.waterFlowMap->rtv, clearColor);
-				};
-
-				REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
-				auto* flowMapSourceTex = gFlowMapSourceTex.get();
-				if (!flowMapSourceTex) {
-					clearFlowMap();
-					return;
-				}
-
-				auto* sourceTexture = flowMapSourceTex->get();
-				if (!sourceTexture || !sourceTexture->rendererTexture || !sourceTexture->rendererTexture->texture) {
-					clearFlowMap();
-					return;
-				}
-
-				context->CopyResource(rt.waterFlowMap->resource11, sourceTexture->rendererTexture->texture);
+				rt.CopyWaterFlowap();
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -940,7 +924,7 @@ struct Raytracing : public OverlayFeature
 			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 			stl::write_vfunc<0x1, BSImagespaceShaderRefraction_Render>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
-			stl::detour_thunk<CreateFlowMap>(REL::RelocationID(31231, 32031));
+			stl::write_thunk_call<CopyToWaterFlowmap>(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242));
 		}
 	};
 
