@@ -40,7 +40,8 @@ struct CreationEngineRaytracing
 	{
 		None,
 		GlobalIllumination,
-		PathTracing
+		PathTracing,
+		Debug
 	};
 
 	enum class Denoiser
@@ -266,6 +267,7 @@ struct CreationEngineRaytracing
 
 	struct AdvancedSettings
 	{
+		uint NumWorkerThreads = 8;
 		float TexLODBias = -1.0f;
 		bool VariableUpdateRate = true;
 		bool GGXEnergyConservation = true;
@@ -280,6 +282,7 @@ struct CreationEngineRaytracing
 
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
 			AdvancedSettings,
+			NumWorkerThreads,
 			TexLODBias,
 			VariableUpdateRate,
 			GGXEnergyConservation,
@@ -370,13 +373,14 @@ struct CreationEngineRaytracing
 		bool PathTracingCull = false;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
+		bool GlobalLights = false;
 		TextureStreamingMode TextureStreamingMode = TextureStreamingMode::Off;
 		uint32_t TextureBudgetMB = 0;
 		uint32_t TextureMaxMipBias = 2;
 
 		bool operator==(const ExperimentalSettings&) const = default;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, TextureStreamingMode, TextureBudgetMB, TextureMaxMipBias)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, GlobalLights, TextureStreamingMode, TextureBudgetMB, TextureMaxMipBias)
 	};
 
 	struct DebugSettings
@@ -392,7 +396,8 @@ struct CreationEngineRaytracing
 	struct PassTiming
 	{
 		eastl::string name;
-		float timing;
+		float gpuTiming;
+		float cpuTiming;
 	};
 
 	struct Settings
@@ -434,14 +439,15 @@ struct CreationEngineRaytracing
 		ID3D11Texture2D* shared = nullptr;
 	};
 
+	static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+
 	HMODULE handle = nullptr;
 
 	using InitializeRendererFn = bool (*)(ID3D11Device5*, ID3D12Device5*, ID3D12CommandQueue*, ID3D12CommandQueue*, ID3D12CommandQueue*);
 	using InitializeFn = void (*)(Settings);
 	using UpdateCameraFn = void (*)();
 	using ExecuteFn = void (*)();
-	using WaitExecutionFn = void (*)();
-	using PostExecutionFn = void (*)();
+	using PostExecutionFn = uint32_t (*)();
 	using GetResolutionFn = void (*)(uint32_t&, uint32_t&);
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
 	using UpdateFeatureDataFn = void (*)(void*, uint32_t);
@@ -451,7 +457,7 @@ struct CreationEngineRaytracing
 	using UpdateSettingsFn = void (*)(Settings);
 	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
-	using GetSharedTexturesFn = void (*)(SharedTexture&, SharedTexture&, SharedTexture&, SharedTexture&);
+	using GetSharedTexturesFn = void (*)(SharedTexture*, SharedTexture*, SharedTexture*, SharedTexture*);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(ID3D12Resource*);
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
@@ -463,7 +469,6 @@ struct CreationEngineRaytracing
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
 	ExecuteFn Execute = nullptr;
-	WaitExecutionFn WaitExecution = nullptr;
 	PostExecutionFn PostExecution = nullptr;
 	SetResolutionFn SetResolution = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
@@ -497,7 +502,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(Initialize);
 		LOAD_FN(UpdateCamera);
 		LOAD_FN(Execute);
-		LOAD_FN(WaitExecution);
 		LOAD_FN(PostExecution);
 		LOAD_FN(SetResolution);
 		LOAD_FN(UpdateFeatureData);
@@ -553,7 +557,10 @@ struct Raytracing : public OverlayFeature
 
 	// Functionality
 	virtual inline std::string_view GetShaderDefineName() override { return "RAYTRACING"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override { return t == RE::BSShader::Type::Lighting || t == RE::BSShader::Type::Grass; };
+	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
+	{
+		return t == RE::BSShader::Type::Lighting || t == RE::BSShader::Type::Grass || t == RE::BSShader::Type::Sky;
+	};
 
 	// Settings & UI
 	virtual void RestoreDefaultSettings() override;
@@ -611,6 +618,7 @@ struct Raytracing : public OverlayFeature
 	void UpdateFeatureData();
 	void UpdateSkinDetailNormal(ID3D11Texture2D* skinDetailTexture);
 	void SkyCubeToHemi() const;
+	void CopyWaterFlowap() const;
 	void ConvertTextures();
 	void DeferredPasses();
 	void GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance);
@@ -705,12 +713,12 @@ struct Raytracing : public OverlayFeature
 	winrt::com_ptr<ID3D11SamplerState> samplerState = nullptr;
 
 	// Available when Pathtracing
-	eastl::unique_ptr<WrappedResource> depthTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> motionVectorsTexture = nullptr;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> depthTexture;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> motionVectorsTexture;
 
 	// Available for both GI and PT
-	eastl::unique_ptr<WrappedResource> mainTexture = nullptr;
-	eastl::unique_ptr<WrappedResource> diffuseAlbedoTexture = nullptr;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> mainTexture;
+	eastl::array<eastl::unique_ptr<WrappedResource>, CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT> diffuseAlbedoTexture;
 
 	winrt::com_ptr<ID3D12Resource> albedoTexture = nullptr;
 	eastl::unique_ptr<WrappedResource> normalRoughnessTexture = nullptr;
@@ -725,6 +733,8 @@ struct Raytracing : public OverlayFeature
 	eastl::unique_ptr<CreationEngineRaytracing> creationEngineRaytracing = nullptr;
 
 	eastl::vector<CreationEngineRaytracing::PassTiming> passTimings;
+
+	uint32_t currentFrame;
 
 	struct alignas(16) ScreenData
 	{
@@ -763,8 +773,14 @@ struct Raytracing : public OverlayFeature
 
 					rt.creationEngineRaytracing->UpdateCamera();
 
-					// Executes the render graph for path tracing, no dependecy on any game render target so we start as early as possible
-					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing) {
+					auto dx12Interop = globals::dx12Interop;
+					if (dx12Interop->pixCapture && !dx12Interop->pixCaptureStarted) {
+						dx12Interop->pixCaptureStarted = true;
+						dx12Interop->ga->BeginCapture();
+					}
+
+					// Clear render targets
+					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;
@@ -788,8 +804,6 @@ struct Raytracing : public OverlayFeature
 								context->ClearRenderTargetView(renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR].RTV, clearColor);
 							}
 						}
-
-						rt.creationEngineRaytracing->Execute();
 					}
 				}
 
@@ -830,37 +844,17 @@ struct Raytracing : public OverlayFeature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
-		struct CreateFlowMap
+		struct CopyToWaterFlowmap
 		{
-			static void thunk(void* a1, RE::TESObjectCELL* a2, RE::BSTriShape* a3)
+			static void thunk(void* a1)
 			{
-				func(a1, a2, a3);
+				func(a1);
 
 				auto& rt = globals::features::raytracing;
-				if (!rt.initialized || rt.forcedDisabled || !rt.waterFlowMap || !rt.waterFlowMap->resource11)
+				if (!rt.initialized || rt.forcedDisabled)
 					return;
 
-				auto* context = globals::d3d::context;
-
-				auto clearFlowMap = [&]() {
-					const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-					context->ClearRenderTargetView(rt.waterFlowMap->rtv, clearColor);
-				};
-
-				REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
-				auto* flowMapSourceTex = gFlowMapSourceTex.get();
-				if (!flowMapSourceTex) {
-					clearFlowMap();
-					return;
-				}
-
-				auto* sourceTexture = flowMapSourceTex->get();
-				if (!sourceTexture || !sourceTexture->rendererTexture || !sourceTexture->rendererTexture->texture) {
-					clearFlowMap();
-					return;
-				}
-
-				context->CopyResource(rt.waterFlowMap->resource11, sourceTexture->rendererTexture->texture);
+				rt.CopyWaterFlowap();
 			}
 
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -871,7 +865,7 @@ struct Raytracing : public OverlayFeature
 			stl::detour_thunk<Main_RenderWorld>(REL::RelocationID(100424, 107142));
 			stl::detour_thunk<Main_RenderWaterEffects>(REL::RelocationID(35561, 36560));
 			stl::write_vfunc<0x1, BSImagespaceShaderRefraction_Render>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
-			stl::detour_thunk<CreateFlowMap>(REL::RelocationID(31231, 32031));
+			stl::write_thunk_call<CopyToWaterFlowmap>(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242));
 		}
 	};
 

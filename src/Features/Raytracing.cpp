@@ -164,7 +164,7 @@ void Raytracing::DrawSettings()
 	if (forcedDisabledReason)
 		ImGui::BeginDisabled();
 
-	auto ceRTSettingsBefore = settings.CreationEngineRaytracingSettings;
+	auto ceRTSettingsBefore = GetSettings();
 
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.CreationEngineRaytracingSettings.Enabled);
 
@@ -176,6 +176,7 @@ void Raytracing::DrawSettings()
 			T(TKEY("mode_none"), "None"),
 			T(TKEY("mode_global_illumination"), "Global Illumination"),
 			T(TKEY("mode_path_tracing"), "Path Tracing"),
+			T(TKEY("mode_path_debug"), "Debug"),
 		});
 
 	DrawEnumRadio(
@@ -228,7 +229,7 @@ void Raytracing::DrawSettings()
 	if (forcedDisabledReason)
 		ImGui::EndDisabled();
 
-	if (ceRTSettingsBefore != settings.CreationEngineRaytracingSettings)
+	if (ceRTSettingsBefore != GetSettings())
 		UpdateSettings();
 }
 
@@ -236,8 +237,7 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 {
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
-	// Only if PIX is enabled (globals::dx12Interop.enablePIXCapture)
-	certSettings.DebugSettings.Markers = false;
+	certSettings.DebugSettings.Markers = globals::state->interopLoadPIX;
 	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
 
 	return certSettings;
@@ -449,6 +449,9 @@ void Raytracing::DrawAdvancedSettings()
 
 	auto& advSettings = settings.CreationEngineRaytracingSettings.AdvancedSettings;
 
+	const auto maxThreads = std::max(1u, std::thread::hardware_concurrency() - 1u);
+	ImGui::SliderInt(T(TKEY("num_worker_threads"), "Number of Worker Threads"), reinterpret_cast<int*>(&advSettings.NumWorkerThreads), 1, maxThreads);
+
 	ImGui::SliderFloat(T(TKEY("texture_lod_bias"), "Texture LOD Bias"), &advSettings.TexLODBias, -4.0f, 4.0f, "%.1f");
 
 	ImGui::Checkbox(T(TKEY("variable_update_rate"), "Variable Update Rate"), &advSettings.VariableUpdateRate);
@@ -623,6 +626,7 @@ void Raytracing::DrawExperimentalSettings()
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
 	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
+	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
 	DrawEnumRadio(
 		T(TKEY("texture_mode"), "Texture Mode"),
@@ -726,8 +730,8 @@ void Raytracing::DrawDebugSettings()
 			ID3D11ShaderResourceView* srv = nullptr;
 
 			if (Mode() == CreationEngineRaytracing::Mode::PathTracing) {
-				depthTexture->resource11->GetDesc(&desc);
-				srv = depthTexture->srv;
+				depthTexture[currentFrame]->resource11->GetDesc(&desc);
+				srv = depthTexture[currentFrame]->srv;
 			} else {
 				const auto& mainDepth = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 				mainDepth.texture->GetDesc(&desc);
@@ -741,9 +745,9 @@ void Raytracing::DrawDebugSettings()
 		const auto mainLabel = StableLabel(T(TKEY("debug_main"), "Main"), "Main");
 		if (ImGui::TreeNode(mainLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			mainTexture->resource11->GetDesc(&desc);
+			mainTexture[currentFrame]->resource11->GetDesc(&desc);
 
-			ImGui::Image(mainTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(mainTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -759,9 +763,9 @@ void Raytracing::DrawDebugSettings()
 		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
 		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			diffuseAlbedoTexture->resource11->GetDesc(&desc);
+			diffuseAlbedoTexture[currentFrame]->resource11->GetDesc(&desc);
 
-			ImGui::Image(diffuseAlbedoTexture->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(diffuseAlbedoTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -783,6 +787,18 @@ void Raytracing::DrawDebugSettings()
 			waterFlowMap->resource11->GetDesc(&desc);
 
 			ImGui::ImageWithBg(waterFlowMap->srv, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
+			ImGui::TreePop();
+		}
+
+		const auto waterDisplacementLabel = StableLabel(T(TKEY("debug_displacement"), "Water Displacement"), "Water Displacement");
+		if (ImGui::TreeNode(waterDisplacementLabel.c_str())) {
+			auto renderer = globals::game::renderer;
+			auto displacement = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kWATER_DISPLACEMENT];
+
+			D3D11_TEXTURE2D_DESC desc;
+			displacement.texture->GetDesc(&desc);
+
+			ImGui::ImageWithBg(displacement.SRV, { desc.Width * debugRescale, desc.Height * debugRescale }, { 0, 0 }, { 1, 1 }, { 0, 0, 0, 1 });
 			ImGui::TreePop();
 		}
 
@@ -834,31 +850,29 @@ void Raytracing::DrawOverlay()
 	const auto overlayTitle = StableLabel(T(TKEY("overlay_title"), "Raytracing Overlay"), "RaytracingOverlay");
 	ImGui::Begin(overlayTitle.c_str(), NULL, windowFlags);
 
-	auto DrawRow = [](const char* label, float gpums) {
+	auto DrawRow = [](const char* label, float cpuMS, float gpuMS) {
 		ImGui::TableNextRow();
 
 		ImGui::TableNextColumn();
 		ImGui::TextUnformatted(label);
 
 		ImGui::TableNextColumn();
-		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpums);
+		ImGui::Text(T(TKEY("overlay_cpu_ms"), "%g ms"), cpuMS);
+
+		ImGui::TableNextColumn();
+		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpuMS);
 	};
 
-	if (ImGui::BeginTable("Passes", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+	if (ImGui::BeginTable("Passes", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
 		ImGui::TableSetupColumn(T(TKEY("overlay_pass"), "Pass"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_cpu"), "CPU"));
 		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
-		float totalTime = 0.0f;
-
 		for (const auto& passTiming : passTimings) {
 			if (settings.PerfOverlay == OverlayMode::Complete)
-				DrawRow(passTiming.name.c_str(), passTiming.timing);
-
-			totalTime += passTiming.timing;
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
 		}
-
-		DrawRow(T(TKEY("overlay_total"), "Total"), totalTime);
 
 		ImGui::EndTable();
 	}
@@ -1070,20 +1084,24 @@ void Raytracing::SetupResources()
 		creationEngineRaytracing->Initialize(GetSettings());
 
 		creationEngineRaytracing->SetResolution(mainDesc.Width, mainDesc.Height);
+
+		// Inputs for GI
 		creationEngineRaytracing->SetSharedTextures(albedoTexture.get(), normalRoughnessTexture->GetResource(), gnmaoTexture.get());
 
-		// Diffuse Albedo Texture
+		// Outputs from both PT and GI
 		{
-			CreationEngineRaytracing::SharedTexture depth;
-			CreationEngineRaytracing::SharedTexture motionVector;
-			CreationEngineRaytracing::SharedTexture main;
-			CreationEngineRaytracing::SharedTexture diffuseAlbedo;
+			CreationEngineRaytracing::SharedTexture depth[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture motionVector[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture main[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
+			CreationEngineRaytracing::SharedTexture diffuseAlbedo[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT];
 			creationEngineRaytracing->GetSharedTextures(depth, motionVector, main, diffuseAlbedo);
 
-			depthTexture = eastl::make_unique<WrappedResource>(depth.native, depth.shared);
-			motionVectorsTexture = eastl::make_unique<WrappedResource>(motionVector.native, motionVector.shared);
-			mainTexture = eastl::make_unique<WrappedResource>(main.native, main.shared);
-			diffuseAlbedoTexture = eastl::make_unique<WrappedResource>(diffuseAlbedo.native, diffuseAlbedo.shared);
+			for (size_t i = 0; i < CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT; i++) {
+				depthTexture[i] = eastl::make_unique<WrappedResource>(depth[i].native, depth[i].shared);
+				motionVectorsTexture[i] = eastl::make_unique<WrappedResource>(motionVector[i].native, motionVector[i].shared);
+				mainTexture[i] = eastl::make_unique<WrappedResource>(main[i].native, main[i].shared);
+				diffuseAlbedoTexture[i] = eastl::make_unique<WrappedResource>(diffuseAlbedo[i].native, diffuseAlbedo[i].shared);
+			}
 		}
 	}
 
@@ -1272,6 +1290,31 @@ void Raytracing::SkyCubeToHemi() const
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 }
 
+void Raytracing::CopyWaterFlowap() const
+{
+	auto* context = globals::d3d::context;
+
+	auto clearFlowMap = [&]() {
+		const float clearColor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		context->ClearRenderTargetView(waterFlowMap->rtv, clearColor);
+	};
+
+	REL::Relocation<RE::NiPointer<RE::NiSourceTexture>*> gFlowMapSourceTex{ REL::RelocationID(527694, 414616) };
+	auto* flowMapSourceTex = gFlowMapSourceTex.get();
+	if (!flowMapSourceTex) {
+		clearFlowMap();
+		return;
+	}
+
+	auto* sourceTexture = flowMapSourceTex->get();
+	if (!sourceTexture || !sourceTexture->rendererTexture || !sourceTexture->rendererTexture->texture) {
+		clearFlowMap();
+		return;
+	}
+
+	context->CopyResource(waterFlowMap->resource11, sourceTexture->rendererTexture->texture);
+}
+
 void Raytracing::ConvertTextures()
 {
 	auto renderer = globals::game::renderer;
@@ -1305,7 +1348,7 @@ void Raytracing::ConvertTextures()
 
 	ID3D11UnorderedAccessView* uavs[] = {
 		normalRoughnessTexture->uav,
-		diffuseAlbedoTexture->uav
+		diffuseAlbedoTexture[currentFrame]->uav
 	};
 
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -1326,16 +1369,21 @@ void Raytracing::DeferredPasses()
 
 	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
 		ConvertTextures();
-
-		globals::dx12Interop->Fence([&]() {
-			// Executes the render graph for Global Illumination, depends on gbuffer render targets so we call it late
-			creationEngineRaytracing->Execute();
-		});
 	}
 
-	// Waits for execution to finish (blocks CPU)
-	// TODO: Implement double buffering to avoid stalling the CPU while waiting for GPU results
-	creationEngineRaytracing->WaitExecution();
+	CopyWaterFlowap();
+
+	globals::dx12Interop->Fence([&]() {
+		creationEngineRaytracing->Execute();
+		currentFrame = creationEngineRaytracing->PostExecution();
+	});
+
+	auto dx12Interop = globals::dx12Interop;
+	if (dx12Interop->pixCapture && dx12Interop->pixCaptureStarted) {
+		dx12Interop->ga->EndCapture();
+		dx12Interop->pixCapture = false;
+		dx12Interop->pixCaptureStarted = false;
+	}
 
 	if (settings.PerfOverlay != OverlayMode::None)
 		creationEngineRaytracing->GetPassTimings(passTimings);
@@ -1358,6 +1406,7 @@ void Raytracing::DeferredPasses()
 
 	const bool globalIllumation = (mode == CreationEngineRaytracing::Mode::GlobalIllumination);
 	const bool pathtracing = (mode == CreationEngineRaytracing::Mode::PathTracing);
+	const bool debug = (mode == CreationEngineRaytracing::Mode::Debug);
 
 	// Fog management
 	{
@@ -1373,12 +1422,22 @@ void Raytracing::DeferredPasses()
 		auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
 		auto& BSImagespaceShaderISSAOBlurH = imageSpaceManager->GetRuntimeData().BSImagespaceShaderISSAOBlurH;
 
-		// Toggle vanilla SSAO
+		// Toggle vanilla SSAO - Doesn't work for SE?
 		static bool* enableSSAO = reinterpret_cast<bool*>(reinterpret_cast<uintptr_t>(BSImagespaceShaderISSAOBlurH.get()) + 0x50LL);
 		if (enableSSAO)
 			ssaoEnabled = true;
 
-		*enableSSAO = (globalIllumation || pathtracing) ? false : ssaoEnabled;
+		const bool shouldEnableSSAO = (globalIllumation || pathtracing || debug) ? false : ssaoEnabled;
+
+		*enableSSAO = shouldEnableSSAO;
+
+		// Toggle vanilla SSAO v2
+		if (auto iniSettingCollection = globals::game::iniPrefSettingCollection) {
+			if (auto setting = iniSettingCollection->GetSetting("bSAOEnable:Display")) {
+				if (setting->data.b != shouldEnableSSAO)
+					setting->data.b = shouldEnableSSAO;
+			}
+		}
 	}
 
 	auto* context = globals::d3d::context;
@@ -1391,7 +1450,7 @@ void Raytracing::DeferredPasses()
 			ID3D11Buffer* cb = screenCB->CB();
 			context->CSSetConstantBuffers(0, 1, &cb);
 
-			context->CSSetShaderResources(0, 1, &mainTexture->srv);
+			context->CSSetShaderResources(0, 1, &mainTexture[currentFrame]->srv);
 
 			ID3D11UnorderedAccessView* uav = main.UAV;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
@@ -1402,7 +1461,7 @@ void Raytracing::DeferredPasses()
 			uav = nullptr;
 			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		}
-	} else if (pathtracing) {
+	} else if (pathtracing || debug) {
 		// Blend pathtracing and sky (colors and motion vectors)
 		{
 			auto& mv = renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
@@ -1413,8 +1472,8 @@ void Raytracing::DeferredPasses()
 			context->CSSetConstantBuffers(0, 1, &cb);
 
 			ID3D11ShaderResourceView* srvs[] = {
-				mainTexture->srv,
-				motionVectorsTexture->srv
+				mainTexture[currentFrame]->srv,
+				motionVectorsTexture[currentFrame]->srv
 			};
 			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1485,7 +1544,7 @@ void Raytracing::DeferredPasses()
 			// Set up pixel shader
 			context->PSSetShader(copyDepthPS.get(), nullptr, 0);
 
-			ID3D11ShaderResourceView* srvs[] = { depthTexture->srv };
+			ID3D11ShaderResourceView* srvs[] = { depthTexture[currentFrame]->srv };
 
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
@@ -1534,7 +1593,7 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture->GetResource();
+	diffuseAlbedo = diffuseAlbedoTexture[currentFrame]->GetResource();
 	normalRoughness = normalRoughnessTexture->GetResource();
 
 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
