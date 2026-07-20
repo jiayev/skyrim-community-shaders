@@ -79,6 +79,7 @@ public:
 		// performance/quality
 		uint NumSteps = 8u;
 		bool HalfRes = true;
+		bool QuarterRes = false;
 		// visual
 		float Thickness = 0.1f;
 		// mix
