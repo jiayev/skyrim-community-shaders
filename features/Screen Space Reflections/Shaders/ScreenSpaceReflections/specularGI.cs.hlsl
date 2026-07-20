@@ -31,6 +31,12 @@ TextureCube<float3> EnvReflectionsTexture : register(t5);
 #	endif
 #endif
 
+#if defined(SSGI)
+// Both REBLUR diffuse encodings (radiance and SH) store normalized hit
+// distance / AO in SH0.a, so this does not depend on SSGI's SH mode.
+Texture2D<float4> SsgiTexture : register(t7);
+#endif
+
 RWTexture2D<float4> OutSpecRadianceHitDist : register(u0);
 
 SamplerState LinearSampler : register(s1);
@@ -432,21 +438,31 @@ float SSRT_ValidateHit(float3 hit,
 	if (SpecUseDynamicCubemap != 0 && (confidence < 0.999f)) {
 		float3 world_space_reflected_direction = mul(FrameBuffer::CameraViewInverse, float4(view_space_reflected_direction, 0)).xyz;
 		float3 biased_view_space_ray_direction = normalize(view_space_ray);
-		const float NdotV = saturate(dot(biased_view_space_ray_direction, view_space_surface_normal));
+		const float NdotV = saturate(dot(-biased_view_space_ray_direction, view_space_surface_normal));
 		float3 envSampleRaw = EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-		float3 envColor = envSampleRaw;
+		float3 linEnvSample = Color::IrradianceToLinear(envSampleRaw);
+		float3 linFullSample = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0));
+		float3 linSkySample = max(0.0, linFullSample - linEnvSample);
+		float linEnvLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15)));
+		float3 envColor;
+		float3 skyColor;
 
 #	if defined(SKYLIGHTING)
-		float skylightingSpecular = 1.0;
+		float skyVisibility = 1.0;
+		float envVisibility = 1.0;
 		if (!SharedData::InInterior) {
 			float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 			float3 positionMS = mul(FrameBuffer::CameraViewInverse, float4(unbiased_view_space_ray, 1)).xyz;
 
-			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
+			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_normal);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
-			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
+			sh2 directionalLobe = SphericalHarmonics::Evaluate(normalize(world_space_reflected_direction));
+			skyVisibility = Skylighting::EvaluateSkySpecular(skylightingSH, directionalLobe, fadeOutFactor);
+			envVisibility = Skylighting::EvaluateEnvironmentSpecular(skylightingSH, directionalLobe, fadeOutFactor);
 		}
+#	else
+		float skyVisibility = 1.0;
+		float envVisibility = 1.0;
 #	endif
 
 #	if defined(IBL)
@@ -454,61 +470,40 @@ float SSRT_ValidateHit(float3 hit,
 			uint dalcMode = SharedData::iblSettings.DALCMode;
 
 			if (dalcMode >= 2) {
-				// Mode 2: DALC-normalized env scaled by DALCAmount
-				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-				float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
-				envColor = (envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular * SharedData::iblSettings.DALCAmount;
+				float3 linDALC = Color::IrradianceToLinear(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction))) * Color::ReflectionNormalisationScale);
+				envColor = (linEnvSample / max(linEnvLum, 0.001)) * linDALC * SharedData::iblSettings.DALCAmount;
 			} else {
-				// Mode 0/1: ratio-based
 				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envColor = envSampleRaw * ratio * SharedData::iblSettings.EnvIBLScale;
+				envColor = Color::Saturation(linEnvSample, SharedData::iblSettings.EnvIBLSaturation) * ratio * SharedData::iblSettings.EnvIBLScale;
 			}
+			skyColor = Color::Saturation(linSkySample, SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 
 			if (!SharedData::InInterior) {
-				float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-				float3 skyColor = max(fullSample - envSampleRaw, 0) * SharedData::iblSettings.SkyIBLScale;
-#		if defined(SKYLIGHTING)
-				skyColor *= skylightingSpecular;
-				if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
-					envColor *= skylightingSpecular;
-#		endif
-				envColor += skyColor;
+				envColor *= envVisibility;
+				skyColor *= skyVisibility;
+			} else {
+				skyColor = 0.0;
 			}
-			envColor = Color::IrradianceToLinear(envColor);
+			envColor += skyColor;
 		} else
 #	endif
 		{
-			float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction)))) * Color::ReflectionNormalisationScale;
-#	if defined(SKYLIGHTING)
-			if (SharedData::InInterior) {
-				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-				envColor = Color::IrradianceToLinear((envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular);
-			} else {
-				float3 fullIrradiance = 0;
-				if (skylightingSpecular > 0.0) {
-					float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-					float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-					fullIrradiance = Color::IrradianceToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
-				}
-
-				float3 envIrradiance = 0;
-				if (skylightingSpecular < 1.0) {
-					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-					float dalcScaled = Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColorSpecular) * skylightingSpecular);
-					envIrradiance = Color::IrradianceToLinear((envSampleRaw / max(envLum, 0.001)) * dalcScaled);
-				}
-
-				envColor = lerp(envIrradiance, fullIrradiance, skylightingSpecular);
-			}
-#	else
-			float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
-			float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-			envColor = Color::IrradianceToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
-#	endif
+			float3 linDALC = Color::IrradianceToLinear(Color::Ambient(max(0, SharedData::GetAmbient(world_space_reflected_direction))) * Color::ReflectionNormalisationScale);
+			float3 exposure = linDALC / max(linEnvLum, 0.001);
+			envColor = linEnvSample * exposure;
+			skyColor = SharedData::InInterior ? 0.0 : linSkySample * exposure * skyVisibility;
+			if (!SharedData::InInterior)
+				envColor *= envVisibility;
+			envColor += skyColor;
 		}
 
 		envColor *= SpecCubemapMult;
-		float ao = lerp(1.0, occlusion, OcclusionStrength);
+		float localVisibility = occlusion;
+#	if defined(SSGI)
+		if (SpecUseSSGIAO != 0)
+			localVisibility *= saturate(SsgiTexture[fullResCoords].w);
+#	endif
+		float ao = lerp(1.0, localVisibility, OcclusionStrength);
 		ao = GetSpecularOcclusionFromAmbientOcclusion(NdotV, ao, roughness);
 		envColor *= ao;
 		sampleColor.xyz = lerp(envColor, sampleColor.xyz, confidence);

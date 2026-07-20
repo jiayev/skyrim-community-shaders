@@ -154,13 +154,13 @@ namespace ShadowSampling
 	}
 
 #if defined(SKYLIGHTING) && !defined(INTERIOR)
-	float3 GetAmbientLighting(float3 normal, float skylightingDiffuse)
+	float3 GetAmbientLighting(float3 normal, float skyDiffuseVisibility, float envDiffuseVisibility, sh2 skyVisibilitySH, float fadeOutFactor)
 	{
 		float3 ambientColor = GetRawAmbientLighting(normal);
 
 #	if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
-			ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ImageBasedLightingNormal, skylightingDiffuse);
+			ambientColor = ImageBasedLighting::GetDiffuseIBLRadianceWeighted(ambientColor, ImageBasedLightingNormal, skyVisibilitySH, fadeOutFactor);
 		}
 #	endif
 
@@ -180,13 +180,13 @@ namespace ShadowSampling
 	}
 
 #if defined(SKYLIGHTING) && !defined(INTERIOR)
-	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
+	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skyDiffuseVisibility, float envDiffuseVisibility, sh2 skyVisibilitySH, float fadeOutFactor)
 #else
 	void ExtractLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor)
 #endif
 	{
 #if defined(SKYLIGHTING) && !defined(INTERIOR)
-		float3 ambientColorAmb = GetAmbientLighting(LightingSampleNormal, skylightingDiffuse);
+		float3 ambientColorAmb = GetAmbientLighting(LightingSampleNormal, skyDiffuseVisibility, envDiffuseVisibility, skyVisibilitySH, fadeOutFactor);
 #else
 		float3 ambientColorAmb = GetAmbientLighting(LightingSampleNormal);
 #endif

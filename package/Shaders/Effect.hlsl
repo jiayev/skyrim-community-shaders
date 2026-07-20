@@ -469,14 +469,14 @@ cbuffer PerGeometry : register(b2)
 
 #	include "Common/ShadowSampling.hlsli"
 
-float3 GetEffectAmbientLighting(float skylightingDiffuse)
+float3 GetEffectAmbientLighting(float skyDiffuseVisibility, float envDiffuseVisibility)
 {
 	float3 ambientColor = ShadowSampling::GetRawAmbientLighting(ShadowSampling::LightingSampleNormal);
 
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 #		if defined(SKYLIGHTING)
-		ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skylightingDiffuse);
+		ambientColor = ImageBasedLighting::GetDiffuseIBLOccluded(ambientColor, ShadowSampling::ImageBasedLightingNormal, skyDiffuseVisibility, envDiffuseVisibility);
 #		else
 		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, ShadowSampling::ImageBasedLightingNormal);
 #		endif
@@ -486,9 +486,9 @@ float3 GetEffectAmbientLighting(float skylightingDiffuse)
 	return ambientColor;
 }
 
-void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skylightingDiffuse)
+void ExtractEffectLighting(float3 inputColor, out float3 dirColor, out float3 ambientColor, float skyDiffuseVisibility, float envDiffuseVisibility)
 {
-	float3 ambientColorAmb = GetEffectAmbientLighting(skylightingDiffuse);
+	float3 ambientColorAmb = GetEffectAmbientLighting(skyDiffuseVisibility, envDiffuseVisibility);
 	float3 dirLightColorDir = ShadowSampling::GetDirectionalLighting();
 
 	float inputLuma = Color::RGBToLuminance(inputColor);
@@ -512,25 +512,28 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	float3 color = DLightColor.xyz * Color::EffectLightingMult();
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	if (suppressExternalEmittance) {
-		color = GetEffectAmbientLighting(1.0) + ShadowSampling::GetDirectionalLighting();
+		color = GetEffectAmbientLighting(1.0, 1.0) + ShadowSampling::GetDirectionalLighting();
 	}
 
 #		if defined(SKYLIGHTING)
-	float skylightingDiffuse = 1.0;
+	float skyDiffuseVisibility = 1.0;
+	float envDiffuseVisibility = 1.0;
 	if (!SharedData::InInterior) {
 		float3 positionMSSkylight = worldPosition;
 
 		sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(positionMSSkylight));
+		float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMSSkylight);
+		skyDiffuseVisibility = Skylighting::EvaluateSkyDiffuse(skylightingSH, float3(0, 0, 1), fadeOutFactor);
+		envDiffuseVisibility = Skylighting::EvaluateEnvironmentDiffuse(skylightingSH, float3(0, 0, 1), fadeOutFactor);
 	}
 #		endif
 
 	float3 dirColor;
 	float3 ambientColor;
 #		if defined(SKYLIGHTING)
-	ExtractEffectLighting(color, dirColor, ambientColor, skylightingDiffuse);
+	ExtractEffectLighting(color, dirColor, ambientColor, skyDiffuseVisibility, envDiffuseVisibility);
 #		else
-	ExtractEffectLighting(color, dirColor, ambientColor, 1.0);
+	ExtractEffectLighting(color, dirColor, ambientColor, 1.0, 1.0);
 #		endif
 
 	float3 viewDirection = normalize(worldPosition.xyz);
@@ -559,7 +562,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 #			endif
 	{
 		ambientColor = Color::IrradianceToLinear(ambientColor);
-		ambientColor *= skylightingDiffuse;
+		ambientColor *= envDiffuseVisibility;
 		ambientColor = Color::IrradianceToGamma(ambientColor);
 	}
 #		endif
@@ -584,11 +587,12 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 {
 	float3 dirColor;
 	float3 ambientColor;
-	float skylightingDiffuse = 1.0;
+	float skyDiffuseVisibility = 1.0;
+	float envDiffuseVisibility = 1.0;
 #		if defined(SKYLIGHTING)
-	ExtractEffectLighting(color, dirColor, ambientColor, skylightingDiffuse);
+	ExtractEffectLighting(color, dirColor, ambientColor, skyDiffuseVisibility, envDiffuseVisibility);
 #		else
-	ExtractEffectLighting(color, dirColor, ambientColor, 1.0);
+	ExtractEffectLighting(color, dirColor, ambientColor, 1.0, 1.0);
 #		endif
 
 	static const uint sampleCount = 8;
