@@ -700,7 +700,7 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(3) = texNoise->srv.get();
 		if (dynamicCubemaps.loaded) {
 			srvs.at(4) = dynamicCubemaps.envTexture->srv.get();
-			srvs.at(5) = dynamicCubemaps.envReflectionsTexture->srv.get();
+			srvs.at(5) = (dynamicCubemaps.activeReflections ? dynamicCubemaps.envReflectionsTexture : dynamicCubemaps.envTexture)->srv.get();
 		}
 		if (dynamicCubemaps.loaded && skylighting.loaded)
 			srvs.at(6) = skylighting.texProbeArray->srv.get();
@@ -852,6 +852,15 @@ ID3D11ShaderResourceView* ScreenSpaceGI::GetDiffuseSH1Texture()
 	else if (texNRDInputSH1)
 		return texNRDInputSH1->srv.get();
 	return nullptr;
+}
+
+bool ScreenSpaceGI::HasFullResolutionDiffuseOutput()
+{
+	if (!loaded || !settings.Enabled || !GetDiffuseOutputTexture())
+		return false;
+	if (!settings.HalfRes)
+		return true;
+	return settings.EnableREBLUR && nrdReblur.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady();
 }
 
 ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()

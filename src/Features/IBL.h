@@ -17,7 +17,7 @@ public:
 	{
 		return { T("feature.ibl.description", "Replaces the game's ambient lighting with physically-based IBL derived from cubemap spherical harmonics."),
 			{ T("feature.ibl.key_feature_1", "Projects environment and sky cubemaps into spherical harmonics (SH) for irradiance"),
-				T("feature.ibl.key_feature_2", "Dual IBL sources: environment cubemap (Dynamic Cubemaps) and Skyrim's native sky reflections cubemap"),
+				T("feature.ibl.key_feature_2", "Source-separated IBL: Dynamic Cubemaps Env and Full maps provide Env/Sky, with Skyrim's native sky reflections as fallback"),
 				T("feature.ibl.key_feature_3", "DALC brightness matching to keep IBL consistent with the game's ambient light levels"),
 				T("feature.ibl.key_feature_4", "Configurable per-source intensity, saturation, fog mixing, and per-weather overrides"),
 				T("feature.ibl.key_feature_5", "Static IBL fallback textures for out-of-world objects (e.g. inventory items)") } };
@@ -28,6 +28,7 @@ public:
 	Texture2D* envIBLTexture = nullptr;
 	Texture2D* skyIBLTexture = nullptr;
 	ID3D11ComputeShader* diffuseIBLCS = nullptr;
+	ID3D11ComputeShader* skyDiffuseIBLCS = nullptr;
 
 	virtual void RestoreDefaultSettings() override;
 	/** @brief Draws the ImGui settings UI for IBL intensity, saturation, DALC, and fog options. */
@@ -59,7 +60,6 @@ public:
 		float SkyIBLSaturation = 1.0f;
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
-		uint SkylightingAffectsEnv = 0;
 		bool DisableInInteriors = true;
 		bool DisableInWorldMap = true;
 		bool DisableInLoadingScreen = true;
@@ -77,8 +77,7 @@ public:
 		float SkyIBLSaturation;
 		float FogAmount;
 		uint DALCMode;
-		uint SkylightingAffectsEnv;
-		float pad0;
+		float pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -91,4 +90,6 @@ public:
 	bool IsDisabledForCurrentScene() const;
 	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();
+	/** @brief Returns the sky-only SH projection shader, subtracting Dynamic Cubemaps Env from Full when available. */
+	ID3D11ComputeShader* GetSkyDiffuseIBLCS();
 };

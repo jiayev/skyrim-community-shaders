@@ -164,8 +164,8 @@ namespace SphericalHarmonics
 	// Computes the SH coefficients of a SH function representing the result of the multiplication of two SH functions. (from [4])
 	// If sources have N bands, this product will result in 2N*1 bands as signal multiplication can add frequencies (think about two lobes intersecting).
 	// To avoid that, the result can be truncated to N bands. It will just have a lower frequency, i.e. less details. (from [2], SH Products p.7)
-	// Note: - the code from [4] has been adapted to match the mapping from [2] we use.
-	//		 - !!! Be aware that this code has note yet be tested !!!
+	// Note: the code from [4] has been adapted to match the mapping from [2] we use.
+	// Its retained L0/L1 coefficients have been validated against numerical sphere projection.
 	sh2 Product(sh2 shL, sh2 shR)
 	{
 		const float factor = 1.0f / (2.0f * sqrt(Math::PI));
@@ -174,6 +174,65 @@ namespace SphericalHarmonics
 							shL.x * shR.y + shL.y * shR.x,
 							shL.x * shR.z + shL.z * shR.x,
 							shL.x * shR.w + shL.w * shR.x);
+	}
+
+	// Fits the lowest-order full-sphere visibility whose moments over a
+	// rotationally symmetric +Z cap match the measured cap SH. This is an
+	// informed continuation for unmeasured side/down directions: L0 carries
+	// enclosure, horizontal L1 carries lateral asymmetry, and vertical L1
+	// distinguishes overhead occlusion from horizon/wall occlusion.
+	sh2 ExtrapolateZonalCapVisibility(sh2 capVisibilitySH, sh2 openCapSH)
+	{
+		const float y00 = 0.28209479177387814347f;
+		const float y1 = 0.48860251190291992159f;
+		const sh2 fullVisibilitySH = float4(sqrt(4.0f * Math::PI), 0.0f, 0.0f, 0.0f);
+
+		// openCapSH.x = Y00 * 2 PI (1 - cos(maxZenith)).
+		float capSolidAngle = max(0.0f, openCapSH.x / y00);
+		float capCos = clamp(1.0f - capSolidAngle / (2.0f * Math::PI), -1.0f, 1.0f);
+
+		// Gram matrix integrals of the L0/L1 basis over the cap. Symmetry leaves
+		// a 2x2 block for {L0,L1z} and equal scalar terms for L1x/L1y.
+		float capCos2 = capCos * capCos;
+		float capCos3 = capCos2 * capCos;
+		float a00 = 0.5f * (1.0f - capCos);
+		float a0z = 0.25f * sqrt(3.0f) * (1.0f - capCos2);
+		float azz = 0.5f * (1.0f - capCos3);
+		float ah = 0.5f - 0.75f * capCos + 0.25f * capCos3;
+		float determinant = a00 * azz - a0z * a0z;
+
+		// Degenerate tiny caps cannot constrain a global fit; retain the previous
+		// conservative visible completion in that pathological case.
+		if (determinant <= 1e-6f || ah <= 1e-6f)
+			return capVisibilitySH + fullVisibilitySH - openCapSH;
+
+		sh2 fittedVisibilitySH;
+		fittedVisibilitySH.x = (azz * capVisibilitySH.x - a0z * capVisibilitySH.z) / determinant;
+		fittedVisibilitySH.z = (a00 * capVisibilitySH.z - a0z * capVisibilitySH.x) / determinant;
+		fittedVisibilitySH.y = capVisibilitySH.y / ah;
+		fittedVisibilitySH.w = capVisibilitySH.w / ah;
+
+		// Bound the linear SH function globally while retaining its directionality.
+		// Its range is mean +/- Y1*length(c1). If that range is wider than one,
+		// scale it to [0,1]; otherwise translate it only as far as necessary.
+		float meanVisibility = y00 * fittedVisibilitySH.x;
+		float directionalLength = length(fittedVisibilitySH.yzw);
+		float directionalExcursion = y1 * directionalLength;
+		float visibilitySpan = 2.0f * directionalExcursion;
+		if (visibilitySpan > 1.0f) {
+			fittedVisibilitySH.yzw /= visibilitySpan;
+			meanVisibility = 0.5f;
+		} else {
+			float minVisibility = meanVisibility - directionalExcursion;
+			float maxVisibility = meanVisibility + directionalExcursion;
+			if (minVisibility < 0.0f)
+				meanVisibility -= minVisibility;
+			else if (maxVisibility > 1.0f)
+				meanVisibility -= maxVisibility - 1.0f;
+		}
+		fittedVisibilitySH.x = saturate(meanVisibility) / y00;
+
+		return fittedVisibilitySH;
 	}
 
 	// Convolves a SH function using a Hanning filtering. This helps reducing ringing and negative values. (from [2], Windowing p.16)

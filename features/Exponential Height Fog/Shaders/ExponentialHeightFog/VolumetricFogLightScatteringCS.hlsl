@@ -215,10 +215,13 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 	float3 skyDirection = abs(phaseG) > 0.001f ? normalize(-viewDirection * phaseG) : 0.0f.xxx;
 	float3 skyVisibilityDirection = abs(phaseG) > 0.001f ? skyDirection : float3(0.0f, 0.0f, 1.0f);
 	float skyVisibility = 1.0f;
+	float envVisibility = 1.0f;
 	if (VolumetricFogHasSkylighting && !SharedData::InInterior) {
 		float3 skylightingPosition = positionWS;
 		sh2 skylightingSH = Skylighting::SampleNoBias(skylightingPosition);
-		skyVisibility = Skylighting::EvaluateDiffuse(skylightingSH, skyVisibilityDirection, Skylighting::GetFadeOutFactor(skylightingPosition));
+		float fadeOutFactor = Skylighting::GetFadeOutFactor(skylightingPosition);
+		skyVisibility = Skylighting::EvaluateSkyDiffuse(skylightingSH, skyVisibilityDirection, fadeOutFactor);
+		envVisibility = Skylighting::EvaluateEnvironmentDiffuse(skylightingSH, skyVisibilityDirection, fadeOutFactor);
 	}
 
 	float3 skyLighting =
@@ -226,7 +229,7 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 		SharedData::exponentialHeightFogSettings.fogInscatteringColor.a *
 		skyVisibility;
 	[branch] if (VolumetricFogHasIBL)
-		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility);
+		skyLighting = ImageBasedLighting::GetIBLColorOccluded(skyDirection, skyVisibility, envVisibility);
 
 	return skyLighting *
 	       SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;

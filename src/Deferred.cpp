@@ -361,21 +361,21 @@ void Deferred::DeferredPasses()
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
 		ID3D11ShaderResourceView* srvs[15]{
-			specular.SRV,                                                                                   // t0  SpecularTexture
-			albedo.SRV,                                                                                     // t1  AlbedoTexture
-			normalRoughness.SRV,                                                                            // t2  NormalRoughnessTexture
-			masks.SRV,                                                                                      // t3  MasksTexture
-			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                        // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
-			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                             // t5  ReflectanceTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                       // t6  EnvTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,            // t7  EnvReflectionsTexture
-			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,  // t8  SkylightingProbeArray
-			ssgiOutput,                                                                                     // t9  SsgiTexture / SH0
-			ssgiSH1Output,                                                                                  // t10 SsgiSH1Texture
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                            // t11 EnvIBLTexture
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                            // t12 SkyIBLTexture
-			ssrOutput,                                                                                      // t13 SsrTexture (Screen Space Reflections)
-			masks2.SRV,                                                                                     // t14 Masks2Texture (vertexAO in .x)
+			specular.SRV,                                                                                                                                            // t0  SpecularTexture
+			albedo.SRV,                                                                                                                                              // t1  AlbedoTexture
+			normalRoughness.SRV,                                                                                                                                     // t2  NormalRoughnessTexture
+			masks.SRV,                                                                                                                                               // t3  MasksTexture
+			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                                                                                 // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                                                                                      // t5  ReflectanceTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                                                                                // t6  EnvTexture
+			dynamicCubemaps.loaded ? (dynamicCubemaps.activeReflections ? dynamicCubemaps.envReflectionsTexture : dynamicCubemaps.envTexture)->srv.get() : nullptr,  // t7 Full source, or Env when unavailable
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,                                                           // t8  SkylightingProbeArray
+			ssgiOutput,                                                                                                                                              // t9  SsgiTexture / SH0
+			ssgiSH1Output,                                                                                                                                           // t10 SsgiSH1Texture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                                                                                     // t11 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                                                                                     // t12 SkyIBLTexture
+			ssrOutput,                                                                                                                                               // t13 SsrTexture (Screen Space Reflections)
+			masks2.SRV,                                                                                                                                              // t14 Masks2Texture (vertexAO in .x)
 		};
 
 		if (dynamicCubemaps.loaded)

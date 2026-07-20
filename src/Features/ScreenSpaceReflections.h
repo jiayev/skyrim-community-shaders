@@ -104,6 +104,9 @@ struct ScreenSpaceReflections : Feature
 		float HitDistA;
 		float HitDistB;
 		float HitDistC;
+
+		uint SpecUseSSGIAO;
+		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SSRCB);
 	eastl::unique_ptr<ConstantBuffer> ssrCB;

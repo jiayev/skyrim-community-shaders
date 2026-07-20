@@ -5,6 +5,7 @@
 #include "I18n/I18n.h"
 #include "IBL.h"
 #include "NRD.h"
+#include "ScreenSpaceGI.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -310,6 +311,8 @@ void ScreenSpaceReflections::CompileComputeShaders()
 			defines.push_back({ "SKYLIGHTING", "" });
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", "" });
+		if (globals::features::screenSpaceGI.loaded)
+			defines.push_back({ "SSGI", "" });
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "specularGI.cs.hlsl";
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
 			specularGICompute.attach(rawPtr);
@@ -329,7 +332,7 @@ void ScreenSpaceReflections::UpdateSB()
 	float2 dynres = Util::ConvertToDynamic(res);
 	dynres = { floor(dynres.x), floor(dynres.y) };
 
-	SSRCB data;
+	SSRCB data{};
 	data.TexDim = res;
 	data.RcpTexDim = float2(1.0f) / res;
 	data.FrameDim = dynres;
@@ -347,6 +350,7 @@ void ScreenSpaceReflections::UpdateSB()
 	data.HitDistA = settings.HitDistA;
 	data.HitDistB = settings.HitDistB;
 	data.HitDistC = settings.HitDistC;
+	data.SpecUseSSGIAO = globals::features::screenSpaceGI.HasFullResolutionDiffuseOutput() ? 1u : 0u;
 
 	ssrCB->Update(data);
 }
@@ -467,14 +471,15 @@ void ScreenSpaceReflections::DrawSSR()
 		auto& skylighting = globals::features::skylighting;
 
 		resetViews();
-		std::array<ID3D11ShaderResourceView*, 7> specSRVs = { nullptr };
+		std::array<ID3D11ShaderResourceView*, 8> specSRVs = { nullptr };
 		specSRVs[0] = depth.depthSRV;
 		specSRVs[1] = normal.SRV;
 		specSRVs[2] = main.SRV;
 		specSRVs[3] = texHiZDepth->srv.get();
 		specSRVs[4] = dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr;
-		specSRVs[5] = dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr;
+		specSRVs[5] = dynamicCubemaps.loaded ? (dynamicCubemaps.activeReflections ? dynamicCubemaps.envReflectionsTexture : dynamicCubemaps.envTexture)->srv.get() : nullptr;
 		specSRVs[6] = dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr;
+		specSRVs[7] = globals::features::screenSpaceGI.HasFullResolutionDiffuseOutput() ? globals::features::screenSpaceGI.GetDiffuseOutputTexture() : nullptr;
 		ID3D11ShaderResourceView* envIBLSrv = ibl.loaded && ibl.envIBLTexture ? ibl.envIBLTexture->srv.get() : nullptr;
 
 		ID3D11UnorderedAccessView* specUAV = texNRDSpecInput->uav.get();

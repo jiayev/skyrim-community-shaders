@@ -150,6 +150,8 @@ public:
 
 	ID3D11ShaderResourceView* GetDiffuseOutputTexture();
 	ID3D11ShaderResourceView* GetDiffuseSH1Texture();
+	/** @brief True when the diffuse output can be indexed directly with full-resolution pixel coordinates. */
+	bool HasFullResolutionDiffuseOutput();
 
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;

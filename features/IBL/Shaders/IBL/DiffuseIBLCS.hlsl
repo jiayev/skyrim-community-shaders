@@ -4,6 +4,9 @@
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 
 TextureCube<float4> EnvTexture : register(t0);
+#if defined(SEPARATE_SKY_SOURCE)
+TextureCube<float4> EnvOnlyTexture : register(t1);
+#endif
 RWTexture2D<sh2> IBLTexture : register(u0);
 
 SamplerState LinearSampler : register(s0);
@@ -34,7 +37,12 @@ groupshared sh2 sharedB[TOTAL_SAMPLES];
 	float3 rayDir = SphericalHarmonics::GetUniformSphereSample(sampleCoord.x, sampleCoord.y);
 
 	// Sample cubemap with optimized direction
-	float3 color = EnvTexture.SampleLevel(LinearSampler, -rayDir, 0).xyz;
+	// SH projection and all subsequent source separation must operate on radiance.
+	float3 color = Color::IrradianceToLinear(EnvTexture.SampleLevel(LinearSampler, -rayDir, 0).xyz);
+#if defined(SEPARATE_SKY_SOURCE)
+	float3 envOnly = Color::IrradianceToLinear(EnvOnlyTexture.SampleLevel(LinearSampler, -rayDir, 0).xyz);
+	color = max(0.0, color - envOnly);
+#endif
 
 	// Compute spherical harmonics basis for this direction
 	sh2 sh = SphericalHarmonics::Evaluate(rayDir);
