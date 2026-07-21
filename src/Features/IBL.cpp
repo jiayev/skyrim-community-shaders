@@ -24,6 +24,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
+	SkylightingAffectsEnv,
 	DisableInInteriors,
 	DisableInWorldMap,
 	DisableInLoadingScreen)
@@ -71,8 +72,14 @@ void IBL::DrawSettings()
 								  "How the DALC-to-IBL brightness ratio is computed:\n"
 								  "Luminance Ratio: Scalar ratio from overall luminance (loses DALC color tint).\n"
 								  "Color Ratio: Per-channel ratio (preserves DALC color tint).\n"
-								  "DALC + Sky: Treats vanilla ambient as full-environment radiance, with source-separated sky IBL added on top."));
+								  "DALC + Sky: Uses vanilla ambient as base, with sky IBL added on top."));
 		}
+	}
+	ImGui::Checkbox(T(TKEY("skylighting_affects_env"), "Skylighting Affects Env/DALC"), (bool*)&settings.SkylightingAffectsEnv);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("skylighting_affects_env_tooltip"),
+							  "Applies Skylighting visibility to both sky IBL and the environment/DALC contribution.\n"
+							  "When disabled, Skylighting only modulates sky IBL."));
 	}
 	ImGui::Checkbox(T(TKEY("use_static_ibl"), "Use Static IBL For Out-of-World Objects"), (bool*)&settings.UseStaticIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -106,9 +113,10 @@ void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	if (settings.DALCMode == 3) {
-		// Mode 3 formerly meant directional DALC. DALC is now consistently
-		// treated as full-environment radiance, so mode 2 has the same semantics.
+		// Preserve the former "DALC + Sky (Directional)" result with the new
+		// independent source mode and Skylighting option.
 		settings.DALCMode = 2;
+		settings.SkylightingAffectsEnv = 1;
 	}
 }
 
@@ -204,7 +212,8 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.EnvIBLSaturation = settings.EnvIBLSaturation,
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
-		.DALCMode = settings.DALCMode
+		.DALCMode = settings.DALCMode,
+		.SkylightingAffectsEnv = settings.SkylightingAffectsEnv
 	};
 }
 
@@ -257,41 +266,36 @@ void IBL::Prepass()
 		context->PSSetShaderResources(76, 2, views);
 	}
 
-	std::array<ID3D11ShaderResourceView*, 2> srvs = {
-		(dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr,
-		nullptr
-	};
+	std::array<ID3D11ShaderResourceView*, 1> srvs = { (dynamicCubemaps.loaded && envTexture) ? envTexture->srv.get() : nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { envIBLTexture->uav.get() };
 	std::array<ID3D11SamplerState*, 1> samplers = { Deferred::GetSingleton()->linearSampler };
 
-	// Keep Env radiance SH current in every DALC mode. Besides direct diffuse
-	// IBL, it is now the low-frequency radiance term used to weight spatial
-	// visibility for prefiltered cubemap fallback.
-	samplers[0] = Deferred::GetSingleton()->linearSampler;
-	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-	if (settings.EnableIBL) {
+	// IBL - Environment cubemap SH projection (skip for DALC-based modes that don't use EnvIBL)
+	if (settings.DALCMode < 2) {
+		samplers[0] = Deferred::GetSingleton()->linearSampler;
+
+		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
 		globals::profiler->BeginPass("IBL::EnvDiffuseIBL");
 		context->Dispatch(1, 1, 1);
 		globals::profiler->EndPass();
+	} else {
+		// Still need to set sampler and shader for sky IBL dispatch below
+		context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+		context->CSSetShader(GetDiffuseIBLCS(), nullptr, 0);
 	}
 
-	// Sky IBL uses the same source decomposition as specular fallback. With
-	// Dynamic Cubemaps it projects max(Full - Env, 0); otherwise the game's
-	// native reflections cubemap remains the sky source.
+	// IBL with sky (use game's native reflections cubemap directly)
 	{
 		auto renderer = globals::game::renderer;
 		auto& reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
-		const bool useDynamicSources = dynamicCubemaps.loaded && dynamicCubemaps.activeReflections && dynamicCubemaps.envReflectionsTexture && envTexture;
-		srvs.at(0) = useDynamicSources ? dynamicCubemaps.envReflectionsTexture->srv.get() : reflections.SRV;
-		srvs.at(1) = useDynamicSources ? envTexture->srv.get() : nullptr;
+		srvs.at(0) = reflections.SRV;
 		uavs.at(0) = skyIBLTexture->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(GetSkyDiffuseIBLCS(), nullptr, 0);
 		globals::profiler->BeginPass("IBL::SkyDiffuseIBL");
 		context->Dispatch(1, 1, 1);
 		globals::profiler->EndPass();
@@ -319,7 +323,6 @@ void IBL::Prepass()
 void IBL::SetupResources()
 {
 	GetDiffuseIBLCS();
-	GetSkyDiffuseIBLCS();
 
 	{
 		D3D11_TEXTURE2D_DESC texDesc{
@@ -435,9 +438,6 @@ void IBL::ClearShaderCache()
 	if (diffuseIBLCS)
 		diffuseIBLCS->Release();
 	diffuseIBLCS = nullptr;
-	if (skyDiffuseIBLCS)
-		skyDiffuseIBLCS->Release();
-	skyDiffuseIBLCS = nullptr;
 }
 
 ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
@@ -448,14 +448,4 @@ ID3D11ComputeShader* IBL::GetDiffuseIBLCS()
 	if (!diffuseIBLCS)
 		diffuseIBLCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\IBL\\DiffuseIBLCS.hlsl", defines, "cs_5_0"));
 	return diffuseIBLCS;
-}
-
-ID3D11ComputeShader* IBL::GetSkyDiffuseIBLCS()
-{
-	std::vector<std::pair<const char*, const char*>> defines;
-	if (globals::features::dynamicCubemaps.loaded)
-		defines.push_back({ "SEPARATE_SKY_SOURCE", nullptr });
-	if (!skyDiffuseIBLCS)
-		skyDiffuseIBLCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\IBL\\DiffuseIBLCS.hlsl", defines, "cs_5_0"));
-	return skyDiffuseIBLCS;
 }

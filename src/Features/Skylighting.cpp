@@ -39,8 +39,8 @@ void Skylighting::ResetSkylighting()
 void Skylighting::DrawSettings()
 {
 	ImGui::Text("%s", T(TKEY("min_visibility_desc"), "Minimum visibility values. Diffuse darkens objects. Specular removes the sky from reflections."));
-	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.0f, 1.f, "%.2f");
-	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.0f, 1.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("diffuse_min_visibility"), "Diffuse Min Visibility"), &settings.MinDiffuseVisibility, 0.01f, 1.f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("specular_min_visibility"), "Specular Min Visibility"), &settings.MinSpecularVisibility, 0.01f, 1.f, "%.2f");
 
 	ImGui::Separator();
 
@@ -188,26 +188,9 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	float3 cellIDDiff = prevCellID - cellID;
 	prevCellID = cellID;
 
-	// The probe stores visibility only over the sampled sky cap.  The matching
-	// open-sky SH is used by shaders both to normalize sky visibility and to
-	// recover the cap geometry for bounded low-frequency Env visibility extrapolation.
-	const float cosMaxZenith = std::cos(settings.MaxZenith);
-	const float sinMaxZenith = std::sin(settings.MaxZenith);
-	constexpr float pi = 3.14159265358979323846f;
-	const float capSolidAngle = 2.0f * pi * (1.0f - cosMaxZenith);
-	const float y00 = 0.28209479177387814347f;
-	const float y10 = 0.48860251190291992159f;
-	const float4 openSkySH = {
-		y00 * capSolidAngle,
-		0.0f,
-		y10 * pi * sinMaxZenith * sinMaxZenith,
-		0.0f
-	};
-
 	return {
 		.OcclusionViewProj = OcclusionTransform,
-		.OcclusionDir = { OcclusionDir.x, OcclusionDir.y, OcclusionDir.z, capSolidAngle },
-		.OpenSkySH = openSkySH,
+		.OcclusionDir = OcclusionDir,
 		.PosOffset = cellOrigin - eyePos,
 		.ArrayOrigin = {
 			((int)cellID.x - probeArrayDims[0] / 2) % probeArrayDims[0],
@@ -551,7 +534,6 @@ void Skylighting::RenderOcclusion()
 				precip->lastCubeSize = PrecipitationShaderCubeSize;
 
 				float2 vPoint;
-				float sampledCosTheta;
 				{
 					constexpr float rcpRandMax = 1.f / RAND_MAX;
 					static int randSeed = std::rand();
@@ -568,18 +550,14 @@ void Skylighting::RenderOcclusion()
 						randSeed = std::rand();
 					}
 
-					// Uniform-solid-angle sampling of the configured sky cap.
-					// The previous disk mapping was cosine weighted but the probe
-					// estimator treated it as uniform, effectively applying cosine twice.
-					const float cosMaxZenith = cos(settings.MaxZenith);
-					sampledCosTheta = 1.0f - vPoint.x * (1.0f - cosMaxZenith);
-					const float sinTheta = sqrt(std::max(0.0f, 1.0f - sampledCosTheta * sampledCosTheta));
+					// disc transformation
+					vPoint.x = sqrt(vPoint.x * sin(settings.MaxZenith));
 					vPoint.y *= 6.28318530718f;
 
-					vPoint = { sinTheta * cos(vPoint.y), sinTheta * sin(vPoint.y) };
+					vPoint = { vPoint.x * cos(vPoint.y), vPoint.x * sin(vPoint.y) };
 				}
 
-				float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sampledCosTheta };
+				float3 PrecipitationShaderDirectionF = -float3{ vPoint.x, vPoint.y, sqrt(1 - vPoint.LengthSquared()) };
 				PrecipitationShaderDirectionF.Normalize();
 
 				PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };

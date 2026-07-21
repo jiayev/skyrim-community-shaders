@@ -51,15 +51,14 @@ public:
 	struct Settings
 	{
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
-		float MinDiffuseVisibility = 0.0f;
-		float MinSpecularVisibility = 0.0f;
+		float MinDiffuseVisibility = 0.1f;
+		float MinSpecularVisibility = 0.1f;
 	} settings;
 
 	struct SkylightingCB
 	{
 		REX::W32::XMFLOAT4X4 OcclusionViewProj;
-		float4 OcclusionDir;  // xyz: sampled sky direction, w: sampled cap solid angle
-		float4 OpenSkySH;     // SH projection of a fully visible sampled sky cap
+		float4 OcclusionDir;
 
 		float3 PosOffset;  // cell origin in camera model space
 		uint _pad0;

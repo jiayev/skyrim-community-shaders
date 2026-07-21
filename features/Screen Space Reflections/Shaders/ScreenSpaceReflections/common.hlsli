@@ -25,9 +25,6 @@ cbuffer SSRCB : register(b1)
 	float HitDistA;
 	float HitDistB;
 	float HitDistC;
-
-	uint SpecUseSSGIAO;
-	float3 pad0;
 };
 
 SamplerState samplerPointClamp : register(s0);

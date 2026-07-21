@@ -178,9 +178,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
 
-#	if defined(HORIZON_FIX)
+#		if defined(HORIZON_FIX)
 	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
-#	endif
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -795,7 +795,7 @@ WaterNormalData GetWaterNormal(PS_INPUT input, float distanceFactor, float norma
 	return result;
 }
 
-float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skySpecularVisibility, float envSpecularVisibility)
+float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection, float distanceFactor, float skylightingSpecular)
 {
 	if (!(Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Reflections))
 		return ReflectionColor.xyz * VarAmounts.y;
@@ -808,10 +808,15 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	if (SharedData::InInterior) {
 		dynamicCubemap = DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 	} else {
-		float3 envIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
-		float3 fullIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
-		float3 skyIrradiance = max(0.0, fullIrradiance - envIrradiance);
-		dynamicCubemap = Color::IrradianceToGamma(envIrradiance * envSpecularVisibility + skyIrradiance * skySpecularVisibility);
+		float3 specularIrradiance = 1.0;
+		if (skylightingSpecular < 1.0)
+			specularIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+
+		float3 specularIrradianceReflections = 1.0;
+		if (skylightingSpecular > 0.0)
+			specularIrradianceReflections = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+
+		dynamicCubemap = Color::IrradianceToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
 	}
 
 	float reflectionAmount = saturate(length(input.WPosition.xyz) / 1024.0);
@@ -1042,10 +1047,9 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 positionMSSkylight = input.WPosition.xyz;
 
 	sh2 skylightingSH = Skylighting::SampleNoBias(positionMSSkylight);
-	float skylightingFadeOutFactor = Skylighting::GetFadeOutFactor(input.WPosition.xyz);
-	float skylighting = Skylighting::EvaluateSkyDirectionalVisibility(skylightingSH, float3(0, 0, 1), skylightingFadeOutFactor);
-	float skyDiffuseVisibility = Skylighting::EvaluateSkyDiffuse(skylightingSH, float3(0, 0, 1), skylightingFadeOutFactor);
-	float envDiffuseVisibility = Skylighting::EvaluateEnvironmentDiffuse(skylightingSH, float3(0, 0, 1), skylightingFadeOutFactor);
+	float skylighting = SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1));
+
+	float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, float3(0, 0, 1), Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 
 	wetnessOcclusion = inWorld ? pow(saturate(skylighting), 2) : 0;
 #			endif
@@ -1060,8 +1064,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #			if defined(SKYLIGHTING)
 	sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normal, -viewDirection, 0.0);
-	float skySpecularVisibility = Skylighting::EvaluateSkySpecular(skylightingSH, specularLobe, skylightingFadeOutFactor);
-	float envSpecularVisibility = Skylighting::EvaluateEnvironmentSpecular(skylightingSH, specularLobe, skylightingFadeOutFactor);
+	float skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, specularLobe, Skylighting::GetFadeOutFactor(input.WPosition.xyz));
 #			endif
 
 	float fresnel = GetFresnelValue(normal, viewDirection);
@@ -1093,9 +1096,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 
 #				if defined(SKYLIGHTING)
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, skySpecularVisibility, envSpecularVisibility);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, skylightingSpecular);
 #				else
-	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, 1.0, 1.0);
+	float3 specularColor = GetWaterSpecularColor(input, normal, viewDirection, distanceFactor, 1.0);
 #				endif
 
 	DiffuseOutput diffuseOutput = GetWaterDiffuseColor(input, normal, viewDirection, distanceMul, depthControl.y, fresnel, viewPosition, depth);
@@ -1106,12 +1109,19 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 dirColor;
 	float3 ambientColor;
 #				if defined(SKYLIGHTING) && !defined(INTERIOR)
-	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor, skyDiffuseVisibility, envDiffuseVisibility, skylightingSH, skylightingFadeOutFactor);
+	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor, skylightingDiffuse);
 #				else
 	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor);
 #				endif
 
 	dirColor *= dirShadow;
+
+#				if defined(SKYLIGHTING)
+	ambientColor = Color::IrradianceToLinear(ambientColor);
+	ambientColor *= skylightingDiffuse;
+	ambientColor = Color::IrradianceToGamma(ambientColor);
+#				endif
+
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;
 
 	float3 diffuseColor = lerp(diffuseOutput.refractionColor, diffuseOutput.refractionDiffuseColor, diffuseOutput.refractionMul);

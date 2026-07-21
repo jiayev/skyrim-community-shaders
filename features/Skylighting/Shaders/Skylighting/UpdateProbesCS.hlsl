@@ -10,7 +10,7 @@ SamplerComparisonState comparisonSampler : register(s0);
 
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID) {
 	const float fadeInThreshold = 15;
-	const sh2 openSkySH = SharedData::skylightingSettings.OpenSkySH;
+	const static sh2 unitSH = Skylighting::UNIT_SH;
 	const SharedData::SkylightingSettings settings = SharedData::skylightingSettings;
 	uint3 cellID = uint3(max(int3(dtid) - settings.ArrayOrigin.xyz, 0) % Skylighting::ARRAY_DIM);
 	uint3 validMin = (uint3)max(0, settings.ValidMargin.xyz);
@@ -27,22 +27,20 @@ SamplerComparisonState comparisonSampler : register(s0);
 		uint accumFrames = isValid ? (outAccumFramesArray[dtid] + 1) : 1;
 		float visibility = srcOcclusionDepth.SampleCmpLevelZero(comparisonSampler, occlusionUV, cellCentreOS.z);
 
-		// OcclusionDir is sampled uniformly over the configured sky cap, so the
-		// unbiased Monte Carlo weight is the cap's solid angle stored in w.
-		sh2 occlusionSH = SphericalHarmonics::Scale(SphericalHarmonics::Evaluate(settings.OcclusionDir.xyz), visibility * settings.OcclusionDir.w);
+		sh2 occlusionSH = SphericalHarmonics::Scale(SphericalHarmonics::Evaluate(settings.OcclusionDir.xyz), visibility * 4.0 * Math::PI);  // 4 pi from monte carlo
 		if (isValid) {
 			float lerpFactor = rcp(accumFrames);
-			sh2 prevProbeSH = openSkySH;
+			sh2 prevProbeSH = unitSH;
 			if (accumFrames > 1)
-				prevProbeSH += (outProbeArray[dtid] - openSkySH) * fadeInThreshold / min(fadeInThreshold, accumFrames - 1);  // inverse confidence
+				prevProbeSH += (outProbeArray[dtid] - unitSH) * fadeInThreshold / min(fadeInThreshold, accumFrames - 1);  // inverse confidence
 			occlusionSH = lerp(prevProbeSH, occlusionSH, lerpFactor);
 		}
-		occlusionSH = lerp(openSkySH, occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
+		occlusionSH = lerp(unitSH, occlusionSH, min(fadeInThreshold, accumFrames) / fadeInThreshold);  // confidence fade in
 
 		outProbeArray[dtid] = occlusionSH;
 		outAccumFramesArray[dtid] = accumFrames;
 	} else if (!isValid) {
-		outProbeArray[dtid] = openSkySH;
+		outProbeArray[dtid] = unitSH;
 		outAccumFramesArray[dtid] = 0;
 	}
 }

@@ -185,35 +185,20 @@ void IntegrateBitfield(
 }
 
 #if defined(DYNAMIC_CUBEMAPS)
-#	if defined(SKYLIGHTING)
-float3 SampleDiffuseFallbackCubemap(
-	float3 worldDir, float3 visibilityDirectionMoment,
-	sh2 skyVisibilitySH, sh2 envVisibilitySH, float fadeOutFactor)
-#	else
-float3 SampleDiffuseFallbackCubemap(float3 worldDir)
-#	endif
+float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 worldDir)
 {
 	float3 envSampleRaw = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
-	float3 linEnvSample = Color::IrradianceToLinear(envSampleRaw);
-	float3 linFullSample = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP));
-	float3 linSkySample = max(0.0, linFullSample - linEnvSample);
-	float linEnvLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 15)));
-	float3 envColor;
-	float3 skyColor;
+	float3 envColor = envSampleRaw;
 
 #	if defined(SKYLIGHTING)
-	float skyVisibility = 1.0;
-	float envVisibility = 1.0;
+	float skylightingDiffuse = 1.0;
 	if (!SharedData::InInterior) {
-		sh2 visibilityResponseLobe = SphericalHarmonics::Evaluate(visibilityDirectionMoment);
-		skyVisibility = Skylighting::MixDiffuse(
-			Skylighting::EvaluateSkyVisibility(skyVisibilitySH, visibilityResponseLobe, fadeOutFactor));
-		envVisibility = Skylighting::MixDiffuse(
-			Skylighting::EvaluateFullSphereVisibility(envVisibilitySH, visibilityResponseLobe, fadeOutFactor));
+		float fadeOutFactor = Skylighting::GetFadeOutFactor(worldPos);
+		float3 skylightingNormal = normalize(float3(worldNormal.xy, max(0, worldNormal.z)));
+		float skylightingBoost = 1.0 + saturate(worldNormal.z) * (1.0 - SharedData::skylightingSettings.MinDiffuseVisibility);
+		sh2 skylightingSH = Skylighting::Sample(worldPos, worldDir);
+		skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, skylightingNormal, fadeOutFactor) * skylightingBoost;
 	}
-#	else
-	float skyVisibility = 1.0;
-	float envVisibility = 1.0;
 #	endif
 
 #	if defined(IBL)
@@ -221,32 +206,37 @@ float3 SampleDiffuseFallbackCubemap(float3 worldDir)
 		uint dalcMode = SharedData::iblSettings.DALCMode;
 
 		if (dalcMode >= 2) {
-			// DALC is a full-environment source and uses macro Env visibility.
-			float3 linDALC = Color::IrradianceToLinear(Color::Ambient(max(0, SharedData::GetAmbient(worldDir))));
-			envColor = (linEnvSample / max(linEnvLum, 0.001)) * linDALC * SharedData::iblSettings.DALCAmount;
+			// Mode 2: DALC-normalized env scaled by DALCAmount
+			float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 15));
+			float3 dalc = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
+			envColor = (envSampleRaw / max(envLum, 0.001)) * dalc * SharedData::iblSettings.DALCAmount;
 		} else {
+			// Mode 0/1: ratio-based
+			float3 saturatedEnv = Color::Saturation(envSampleRaw, SharedData::iblSettings.EnvIBLSaturation);
 			float3 ratio = ImageBasedLighting::GetIBLRatio();
-			envColor = Color::Saturation(linEnvSample, SharedData::iblSettings.EnvIBLSaturation) * ratio * SharedData::iblSettings.EnvIBLScale;
+			envColor = saturatedEnv * ratio * SharedData::iblSettings.EnvIBLScale;
 		}
-		skyColor = Color::Saturation(linSkySample, SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 
 		if (!SharedData::InInterior) {
-			envColor *= envVisibility;
-			skyColor *= skyVisibility;
-		} else {
-			skyColor = 0.0;
+			float3 fullSample = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+			float3 skyColor = Color::Saturation(max(fullSample - envSampleRaw, 0), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+#		if defined(SKYLIGHTING)
+			skyColor *= skylightingDiffuse;
+			if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
+				envColor *= skylightingDiffuse;
+#		endif
+			envColor += skyColor;
 		}
-		envColor += skyColor;
+		envColor = Color::IrradianceToLinear(envColor);
 	} else
 #	endif
 	{
-		float3 linDALC = Color::IrradianceToLinear(Color::Ambient(max(0, SharedData::GetAmbient(worldDir))));
-		float3 exposure = linDALC / max(linEnvLum, 0.001);
-		envColor = linEnvSample * exposure;
-		skyColor = SharedData::InInterior ? 0.0 : linSkySample * exposure * skyVisibility;
+		float3 directionalAmbient = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
+		envColor = Color::IrradianceToLinear(directionalAmbient);
+#	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior)
-			envColor *= envVisibility;
-		envColor += skyColor;
+			envColor *= skylightingDiffuse;
+#	endif
 	}
 
 	return envColor;
@@ -385,18 +375,8 @@ void CalculateGI(
 
 #if defined(DYNAMIC_CUBEMAPS)
 		if (UseDynamicCubemap != 0) {
-#	if defined(SKYLIGHTING)
-			float fallbackFadeOutFactor = 1.0;
-			sh2 fallbackSkyVisibilitySH = Skylighting::FULL_VISIBILITY_SH;
-			sh2 fallbackEnvVisibilitySH = Skylighting::FULL_VISIBILITY_SH;
-			if (!SharedData::InInterior) {
-				float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse);
-				float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
-				fallbackFadeOutFactor = Skylighting::GetFadeOutFactor(worldPos);
-				fallbackSkyVisibilitySH = Skylighting::Sample(worldPos, worldNormal);
-				fallbackEnvVisibilitySH = Skylighting::GetMacroEnvironmentVisibilitySH(fallbackSkyVisibilitySH);
-			}
-#	endif
+			float3 worldPos = ViewToWorldPosition(pixCenterPos, FrameBuffer::CameraViewInverse);
+			float3 worldNormal = ViewToWorldVector(viewspaceNormal, FrameBuffer::CameraViewInverse);
 			[unroll] for (uint j = 0; j < SSGI_FALLBACK_SAMPLE_COUNT; j++)
 			{
 				uint maskSize = SSGI_MAX_RAY / SSGI_FALLBACK_SAMPLE_COUNT;
@@ -415,19 +395,9 @@ void CalculateGI(
 				if (openWeight <= 0)
 					continue;
 
-				// The first moment's length encodes the angular spread of this open
-				// sector. Preserve it for L0+L1 visibility evaluation; normalizing it
-				// would incorrectly turn every sector into a delta direction.
-				float3 directionMoment = openDirectionWeight / openWeight;
-				float3 worldDirectionMoment = ViewToWorldVector(directionMoment, FrameBuffer::CameraViewInverse);
-				float3 worldDir = normalize(worldDirectionMoment);
-#	if defined(SKYLIGHTING)
-				float3 fallbackSample = SampleDiffuseFallbackCubemap(
-					worldDir, worldDirectionMoment,
-					fallbackSkyVisibilitySH, fallbackEnvVisibilitySH, fallbackFadeOutFactor);
-#	else
-				float3 fallbackSample = SampleDiffuseFallbackCubemap(worldDir);
-#	endif
+				float3 rayDir = normalize(openDirectionWeight / openWeight);
+				float3 worldDir = ViewToWorldVector(rayDir, FrameBuffer::CameraViewInverse);
+				float3 fallbackSample = SampleDiffuseFallbackCubemap(worldPos, worldNormal, worldDir);
 				float3 contrib = fallbackSample * openWeight;
 				fallbackRadiance += contrib;
 #	ifdef SSGI_SH

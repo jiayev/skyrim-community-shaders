@@ -14,13 +14,7 @@ namespace Skylighting
 	Texture3D<sh2> SkylightingProbeArray : register(t50);
 #endif
 
-	// SH projections of constant full-sphere visibility and the two z hemispheres.
-	// Probes themselves contain only the sampled upper sky cap; FULL_VISIBILITY_SH
-	// remains the no-op sentinel for interiors and positions outside the probe grid.
-	const static sh2 FULL_VISIBILITY_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
-	const static sh2 UPPER_HEMISPHERE_SH = float4(sqrt(Math::PI), 0, 0.5 * sqrt(3.0 * Math::PI), 0);
-	const static sh2 LOWER_HEMISPHERE_SH = float4(sqrt(Math::PI), 0, -0.5 * sqrt(3.0 * Math::PI), 0);
-	const static sh2 UNIT_SH = FULL_VISIBILITY_SH;  // Compatibility alias for non-world call sites.
+	const static sh2 UNIT_SH = float4(sqrt(4.0 * Math::PI), 0, 0, 0);
 
 	const static uint3 ARRAY_DIM = uint3(256, 256, 128);
 	const static float3 ARRAY_SIZE = 10000.f * float3(1, 1, 0.5);
@@ -44,72 +38,18 @@ namespace Skylighting
 		return lerp(SharedData::skylightingSettings.MinSpecularVisibility, 1.0, visibility);
 	}
 
-	sh2 GetMacroEnvironmentVisibilitySH(sh2 skyVisibilitySH)
+	float EvaluateDiffuse(sh2 skylightingSH, float3 normal, float fadeOutFactor = 1.0)
 	{
-		// Infer the lowest-frequency bounded full-sphere visibility consistent
-		// with the measured sky cap instead of assuming every unmeasured direction
-		// is visible. A fully open cap still reconstructs exact full visibility.
-		return SphericalHarmonics::ExtrapolateZonalCapVisibility(
-			skyVisibilitySH, SharedData::skylightingSettings.OpenSkySH);
+		float visibility = SphericalHarmonics::FuncProductIntegral(skylightingSH, SphericalHarmonics::EvaluateCosineLobe(normal)) / Math::PI;
+		visibility = lerp(1.0, saturate(visibility), fadeOutFactor);
+		return MixDiffuse(visibility);
 	}
 
-	float EvaluateSkyVisibility(sh2 skyVisibilitySH, sh2 responseLobe, float fadeOutFactor = 1.0)
+	float EvaluateSpecular(sh2 skylightingSH, sh2 specularLobe, float fadeOutFactor = 1.0)
 	{
-		float openResponse = SphericalHarmonics::FuncProductIntegral(SharedData::skylightingSettings.OpenSkySH, responseLobe);
-		float visibleResponse = max(0.0, SphericalHarmonics::FuncProductIntegral(skyVisibilitySH, responseLobe));
-		float visibility = openResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / openResponse) : 1.0;
-		return lerp(1.0, visibility, fadeOutFactor);
-	}
-
-	float EvaluateSkyDirectionalVisibility(sh2 skyVisibilitySH, float3 direction, float fadeOutFactor = 1.0)
-	{
-		return EvaluateSkyVisibility(skyVisibilitySH, SphericalHarmonics::Evaluate(normalize(direction)), fadeOutFactor);
-	}
-
-	float EvaluateSkyDiffuse(sh2 skyVisibilitySH, float3 normal, float fadeOutFactor = 1.0)
-	{
-		return MixDiffuse(EvaluateSkyVisibility(skyVisibilitySH, SphericalHarmonics::EvaluateCosineLobe(normal), fadeOutFactor));
-	}
-
-	float EvaluateFullSphereVisibility(sh2 visibilitySH, sh2 responseLobe, float fadeOutFactor = 1.0)
-	{
-		float openResponse = SphericalHarmonics::FuncProductIntegral(FULL_VISIBILITY_SH, responseLobe);
-		float visibleResponse = max(0.0, SphericalHarmonics::FuncProductIntegral(visibilitySH, responseLobe));
-		float visibility = openResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / openResponse) : 1.0;
-		visibility = lerp(1.0, visibility, fadeOutFactor);
-		return visibility;
-	}
-
-	float EvaluateEnvironmentVisibility(sh2 skyVisibilitySH, sh2 responseLobe, float fadeOutFactor = 1.0)
-	{
-		return EvaluateFullSphereVisibility(GetMacroEnvironmentVisibilitySH(skyVisibilitySH), responseLobe, fadeOutFactor);
-	}
-
-	float EvaluateEnvironmentDiffuse(sh2 skyVisibilitySH, float3 normal, float fadeOutFactor = 1.0)
-	{
-		return MixDiffuse(EvaluateEnvironmentVisibility(
-			skyVisibilitySH, SphericalHarmonics::EvaluateCosineLobe(normal), fadeOutFactor));
-	}
-
-	float EvaluateSkySpecular(sh2 skyVisibilitySH, sh2 specularLobe, float fadeOutFactor = 1.0)
-	{
-		return MixSpecular(EvaluateSkyVisibility(skyVisibilitySH, specularLobe, fadeOutFactor));
-	}
-
-	float EvaluateEnvironmentSpecular(sh2 skyVisibilitySH, sh2 specularLobe, float fadeOutFactor = 1.0)
-	{
-		return MixSpecular(EvaluateEnvironmentVisibility(skyVisibilitySH, specularLobe, fadeOutFactor));
-	}
-
-	// Legacy ambient consumers represent full-environment/DALC illumination.
-	float EvaluateDiffuse(sh2 skyVisibilitySH, float3 normal, float fadeOutFactor = 1.0)
-	{
-		return EvaluateEnvironmentDiffuse(skyVisibilitySH, normal, fadeOutFactor);
-	}
-
-	float EvaluateSpecular(sh2 skyVisibilitySH, sh2 specularLobe, float fadeOutFactor = 1.0)
-	{
-		return EvaluateEnvironmentSpecular(skyVisibilitySH, specularLobe, fadeOutFactor);
+		float visibility = SphericalHarmonics::FuncProductIntegral(skylightingSH, specularLobe);
+		visibility = lerp(1.0, saturate(visibility), fadeOutFactor);
+		return MixSpecular(visibility);
 	}
 
 #if defined(PSHADER)
@@ -137,7 +77,7 @@ namespace Skylighting
 #if defined(PSHADER) || defined(SKYLIGHTING_PROBE_REGISTER)
 	sh2 Sample(float3 positionMS, float3 normalWS)
 	{
-		sh2 scaledUnitSH = FULL_VISIBILITY_SH / 1e-10;
+		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
 		if (SharedData::InInterior)
 			return scaledUnitSH;
@@ -200,14 +140,14 @@ namespace Skylighting
 		biasedNormal = normalize(biasedNormal);
 
 		sh2 skylightingSH = Sample(positionMS, normalWS);
-		float skylightingDiffuse = EvaluateEnvironmentDiffuse(skylightingSH, biasedNormal, fadeOutFactor);
+		float skylightingDiffuse = EvaluateDiffuse(skylightingSH, biasedNormal, fadeOutFactor);
 
 		return saturate(skylightingDiffuse / max(vertexAO, 1e-5));
 	}
 
 	sh2 SampleNoBias(float3 positionMS)
 	{
-		sh2 scaledUnitSH = FULL_VISIBILITY_SH / 1e-10;
+		sh2 scaledUnitSH = UNIT_SH / 1e-10;
 
 		if (SharedData::InInterior)
 			return scaledUnitSH;

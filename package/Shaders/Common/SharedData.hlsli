@@ -134,8 +134,7 @@ namespace SharedData
 	struct SkylightingSettings
 	{
 		row_major float4x4 OcclusionViewProj;
-		float4 OcclusionDir;  // xyz: sampled sky direction, w: sampled cap solid angle
-		float4 OpenSkySH;
+		float4 OcclusionDir;
 
 		float4 PosOffset;   // xyz: cell origin in camera model space
 		uint4 ArrayOrigin;  // xyz: array origin
@@ -205,7 +204,8 @@ namespace SharedData
 		float SkyIBLSaturation;
 		float FogAmount;
 		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
-		float2 pad0;
+		uint SkylightingAffectsEnv;
+		float pad0;
 	};
 
 	struct ExtendedTranslucencySettings
