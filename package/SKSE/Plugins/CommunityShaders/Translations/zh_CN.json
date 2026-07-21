@@ -555,7 +555,7 @@
     "feature.dynamic_cubemaps.key_feature_1": "实时环境捕获，生成逼真反射",
     "feature.dynamic_cubemaps.key_feature_2": "基于摄像机位置的动态立方体贴图生成",
     "feature.dynamic_cubemaps.key_feature_3": "增强的水面反射，包含环境细节",
-    "feature.dynamic_cubemaps.key_feature_4": "支持标准和VR两种渲染模式",
+    "feature.dynamic_cubemaps.key_feature_4": "优化的立方体贴图推理与辐照度计算",
     "feature.dynamic_cubemaps.name": "动态立方体贴图",
     "feature.dynamic_cubemaps.roughness": "粗糙度",
     "feature.dynamic_cubemaps.screen_space_reflections": "屏幕空间反射",
