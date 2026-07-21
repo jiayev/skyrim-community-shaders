@@ -149,6 +149,7 @@ public:
 
 	// Static UI helper methods
 	static void SetupImGuiStyle(const class Menu& menu);
+	static void InitDefaultFontConfig(ImFontConfig& config);
 	static bool ReloadFont(const class Menu& menu, float& cachedFontSize);
 	static void ForceApplyDefaultTheme();  // Force Default.json colors to ImGui (bypass hardcoded defaults)
 
@@ -190,6 +191,7 @@ public:
 		static constexpr float SEPARATOR_THICKNESS = 3.0f;
 		static constexpr float UNDOCKED_ICON_ITEM_SPACING = 6.0f;
 		static constexpr float POPUP_BUTTON_WIDTH = 180.0f;
+		static constexpr float EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA = 0.35f;  // Extra backdrop dim while the CS Editor viewport is open
 
 		// Feature header constants
 		static constexpr float DEFAULT_FEATURE_TITLE_SCALE = 1.5f;  // Default scale for feature title text
