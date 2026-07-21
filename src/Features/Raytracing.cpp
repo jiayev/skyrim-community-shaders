@@ -693,6 +693,7 @@ void Raytracing::DrawReSTIRPTSettings()
 	}
 
 	// Temporal Resampling
+	ImGui::PushID("TemporalResampling");
 	ImGui::Separator();
 	ImGui::Text("%s", T(TKEY("restir_pt_temporal_resampling"), "Temporal Resampling"));
 
@@ -715,7 +716,10 @@ void Raytracing::DrawReSTIRPTSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("restir_pt_temporal_visibility_tooltip"), "Trace visibility ray before combining temporal sample.\nReduces bias at the cost of one extra ray per pixel."));
 
+	ImGui::PopID();
+
 	// Spatial Resampling
+	ImGui::PushID("SpatialResampling");
 	ImGui::Separator();
 	ImGui::Text("%s", T(TKEY("restir_pt_spatial_resampling"), "Spatial Resampling"));
 
@@ -744,6 +748,8 @@ void Raytracing::DrawReSTIRPTSettings()
 		if (ImGui::SliderFloat(T(TKEY("restir_pt_boiling_filter_strength"), "Boiling Filter Strength"), &ptSettings.BoilingFilterStrength, 0.0f, 1.0f, "%.2f"))
 			ptSettings.BoilingFilterStrength = std::clamp(ptSettings.BoilingFilterStrength, 0.0f, 1.0f);
 	}
+
+	ImGui::PopID();
 
 	ImGui::PopID();
 
