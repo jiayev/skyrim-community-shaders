@@ -16,6 +16,8 @@
 
 #include "IconsFontAwesome5.h"
 
+#define I18N_KEY_PREFIX "feature.post_processing.color_grading."
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ColorGrading::Settings,
 	skipLDR,
@@ -60,13 +62,13 @@ bool exposureSlider(float* val)
 
 	bool retval;
 	if constexpr (num == 1)
-		retval = ImGui::SliderFloat("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = ImGui::SliderFloat(T(TKEY("exposure"), "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 2)
-		retval = Util::ShiftSlider<2>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<2>(T(TKEY("exposure"), "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 3)
-		retval = Util::ShiftSlider<3>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<3>(T(TKEY("exposure"), "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
 	else if constexpr (num == 4)
-		retval = Util::ShiftSlider<4>("Exposure", tempVal, -4.f, 4.f, "%+.2f EV");
+		retval = Util::ShiftSlider<4>(T(TKEY("exposure"), "Exposure"), tempVal, -4.f, 4.f, "%+.2f EV");
 
 	for (int i = 0; i < num; i++)
 		val[i] = exp2(tempVal[i]);
@@ -108,112 +110,117 @@ struct TonemapperInfo
 	static auto& GetTonemappers()
 	{
 		using f4 = float4;
-		constexpr auto shiftHint = []() { ImGui::TextWrapped("Press Shift to control all channels at the same time."); };
-
 		static std::vector<TonemapperInfo> tonemappers = {
 			{ "Reinhard"sv, "Reinhard"sv,
-				"Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."sv, 0, 0, false, 0, 0,
+				T(TKEY("tonemapper.reinhard.description"), "Mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002."), 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Reinhard Extended"sv, "ReinhardExt"sv,
-				"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
-				"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."sv,
+				T(TKEY("tonemapper.reinhard_extended.description"),
+					"Extended mapping proposed in \"Photographic Tone Reproduction for Digital Images\" by Reinhard et al. 2002. "
+					"An additional user parameter specifies the smallest luminance that is mapped to 1, which allows high luminances to burn out."),
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("White Point", &params[0].y, 0.f, 10.f, "%.2f"); },
+					ImGui::SliderFloat(T(TKEY("white_point"), "White Point"), &params[0].y, 0.f, 10.f, "%.2f"); },
 				{ f4{ 1.f, 2.f, 0.f, 0.f } } },
 
 			{ "Hejl Burgess-Dawson Filmic"sv, "HejlBurgessDawsonFilmic"sv,
-				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
-				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
+				T(TKEY("tonemapper.hejl_burgess_dawson_filmic.description"),
+					"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
+					"See his blog post about \"Approximating Film with Tonemapping\"."),
 				0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Aldridge Filmic"sv, "AldridgeFilmic"sv,
-				"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
-				"See his blog post about \"Approximating Film with Tonemapping\"."sv,
+				T(TKEY("tonemapper.aldridge_filmic.description"),
+					"Variation of the Hejl and Burgess-Dawson filmic curve done by Graham Aldridge. "
+					"See his blog post about \"Approximating Film with Tonemapping\"."),
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Cutoff", &params[0].y, 0.f, .5f, "%.2f"); },
+					ImGui::SliderFloat(T(TKEY("cutoff"), "Cutoff"), &params[0].y, 0.f, .5f, "%.2f"); },
 				{ f4{ 1.f, .19f, 0.f, 0.f } } },
 
 			{ "Lottes Filmic/AMD Curve"sv, "LottesFilmic"sv,
-				"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
-				"Also known as the \"AMD curve\"."sv,
+				T(TKEY("tonemapper.lottes_filmic.description"),
+					"Filmic curve by Timothy Lottes, described in his GDC talk \"Advanced Techniques and Optimization of HDR Color Pipelines\". "
+					"Also known as the \"AMD curve\"."),
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Contrast", &params[0].y, 1.f, 2.f, "%.2f");
-					ImGui::SliderFloat("Shoulder", &params[0].z, 0.01f, 2.f, "%.2f");
-					ImGui::SliderFloat("Maximum HDR Value", &params[0].w, 1.f, 10.f, "%.2f");
-					ImGui::SliderFloat("Input Mid-Level", &params[1].x, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Output Mid-Level", &params[1].y, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("contrast"), "Contrast"), &params[0].y, 1.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("shoulder"), "Shoulder"), &params[0].z, 0.01f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("maximum_hdr_value"), "Maximum HDR Value"), &params[0].w, 1.f, 10.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("input_mid_level"), "Input Mid-Level"), &params[1].x, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("output_mid_level"), "Output Mid-Level"), &params[1].y, 0.f, 1.f, "%.2f");
 					drawHDRStatus(); },
 				{ f4{ 1.f, 1.6f, 0.977f, 8.f }, f4{ 0.18f, 0.267f, 0.f, 0.f } } },
 
 			{ "Day Filmic/Insomniac Curve"sv, "DayFilmic"sv,
-				"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
-				"Also known as the \"Insomniac curve\"."sv,
+				T(TKEY("tonemapper.day_filmic.description"),
+					"Filmic curve by Mike Day, described in his document \"An efficient and user-friendly tone mapping operator\". "
+					"Also known as the \"Insomniac curve\"."),
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Black Point", &params[0].y, 0.f, 5.f, "%.2f");
-					ImGui::SliderFloat("White Point", &params[0].z, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("black_point"), "Black Point"), &params[0].y, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("white_point"), "White Point"), &params[0].z, 0.f, 5.f, "%.2f");
 
-					ImGui::SliderFloat("Cross-over Point", &params[0].w, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("cross_over_point"), "Cross-over Point"), &params[0].w, 0.f, 5.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Point where the toe and shoulder are pieced together into a single curve.");
-					ImGui::SliderFloat("Shoulder Strength", &params[1].x, 0.f, 1.f, "%.2f");
+						ImGui::Text(T(TKEY("cross_over_point_tooltip"), "Point where the toe and shoulder are pieced together into a single curve."));
+					ImGui::SliderFloat(T(TKEY("shoulder_strength"), "Shoulder Strength"), &params[1].x, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the shoulder.");
-					ImGui::SliderFloat("Toe Strength", &params[1].y, 0.f, 1.f, "%.2f");
+						ImGui::Text(T(TKEY("shoulder_strength_tooltip"), "Amount of blending between a straight-line curve and a purely asymptotic curve for the shoulder."));
+					ImGui::SliderFloat(T(TKEY("toe_strength"), "Toe Strength"), &params[1].y, 0.f, 1.f, "%.2f");
 					if (auto _tt = Util::HoverTooltipWrapper())
-						ImGui::Text("Amount of blending between a straight-line curve and a purely asymptotic curve for the toe."); },
+						ImGui::Text(T(TKEY("toe_strength_tooltip"), "Amount of blending between a straight-line curve and a purely asymptotic curve for the toe.")); },
 				{ f4{ 1.f, 0.f, 2.f, 0.3f }, f4{ 0.8f, 0.7f, 0.f, 0.f } } },
 
 			{ "Uchimura/Grand Turismo Curve"sv, "UchimuraFilmic"sv,
-				"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
-				"Also known as the \"Gran Turismo curve\"."sv,
+				T(TKEY("tonemapper.uchimura_filmic.description"),
+					"Filmic curve by Hajime Uchimura, described in his CEDEC talk \"HDR Theory and Practice\". Characterised by its middle linear section. "
+					"Also known as the \"Gran Turismo curve\"."),
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Max Brightness", &params[0].y, 0.01f, 2.f, "%.2f");
-					ImGui::SliderFloat("Contrast", &params[0].z, 0.f, 5.f, "%.2f");
-					ImGui::SliderFloat("Linear Section Start", &params[0].w, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Linear Section Length", &params[1].x, .01f, .99f, "%.2f");
-					ImGui::SliderFloat("Black Tightness Shape", &params[1].y, 1.f, 3.f, "%.2f");
-					ImGui::SliderFloat("Black Tightness Offset", &params[1].z, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("max_brightness"), "Max Brightness"), &params[0].y, 0.01f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("contrast"), "Contrast"), &params[0].z, 0.f, 5.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("linear_section_start"), "Linear Section Start"), &params[0].w, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("linear_section_length"), "Linear Section Length"), &params[1].x, .01f, .99f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("black_tightness_shape"), "Black Tightness Shape"), &params[1].y, 1.f, 3.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("black_tightness_offset"), "Black Tightness Offset"), &params[1].z, 0.f, 1.f, "%.2f");
 					drawHDRStatus(); },
 				{ f4{ 1.f, 1.f, 1.f, .22f }, f4{ 0.4f, 1.33f, 0.f, 0.f } } },
 
 			{ "AgX Minimal"sv, "AgxMinimal"sv,
-				"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
-				"Originally created by bwrensch, and improved by Troy Sobotka. Internally uses AgX input transform."sv,
+				T(TKEY("tonemapper.agx_minimal.description"),
+					"Minimal version of Troy Sobotka's AgX using a 6th order polynomial approximation. "
+					"Originally created by bwrensch, and improved by Troy Sobotka. Internally uses AgX input transform."),
 				0, 0, false, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Slope", &params[0].y, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat("Power", &params[0].z, 0.f, 2.f, "%.2f");
-					ImGui::SliderFloat("Offset", &params[0].w, -1.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Saturation", &params[1].x, 0.f, 2.f, "%.2f"); },
+					ImGui::SliderFloat(T(TKEY("slope"), "Slope"), &params[0].y, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("power"), "Power"), &params[0].z, 0.f, 2.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("offset"), "Offset"), &params[0].w, -1.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("saturation"), "Saturation"), &params[1].x, 0.f, 2.f, "%.2f"); },
 				{ f4{ 1.f, 1.f, 1.f, 0.f }, f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Melon"sv, "MelonTonemap"sv,
-				"Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."sv, 0, 0, false, 0, 0,
+				T(TKEY("tonemapper.melon.description"), "Tonemapper designed by TripleMelon to fix the ACES issue of intense colour being shifted."), 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Kajiya"sv, "KajiyaTonemap"sv,
-				"Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."sv, 0, 0, false, 0, 0,
+				T(TKEY("tonemapper.kajiya.description"), "Tonemapper designed by Tomasz Stachowiak/Embark for their real time ray tracing engine Kajiya."), 0, 0, false, 0, 0,
 				[](CTP& params) { exposureSlider(&params[0].x); },
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "GT7"sv, "GT7ToneMapping"sv,
-				"Tonemapper designed for Gran Turismo 7."sv, 2, 2, true, 2, 2,
+				T(TKEY("tonemapper.gt7.description"), "Tonemapper designed for Gran Turismo 7."), 2, 2, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
 					drawHDRStatus();
@@ -221,7 +228,7 @@ struct TonemapperInfo
 				{ f4{ 1.f, 0.f, 1000.f, 0.f } } },
 
 			{ "PsychoV"sv, "PsychoVTonemap"sv,
-				"PsychoV 17 tonemapper by Carlos Lopez, from RenoDX."sv,
+				T(TKEY("tonemapper.psychov.description"), "PsychoV 17 tonemapper by Carlos Lopez, from RenoDX."),
 				0, 0, true, 0, 0,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
@@ -230,43 +237,43 @@ struct TonemapperInfo
 				{ f4{ 1.f, 0.f, 0.f, 0.f } } },
 
 			{ "Neutwo"sv, "NeutwoTonemap"sv,
-				"Neutwo tonemapper by Carlos Lopez, from RenoDX."sv,
+				T(TKEY("tonemapper.neutwo.description"), "Neutwo tonemapper by Carlos Lopez, from RenoDX."),
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Clip Point", &params[0].y, 1.f, 100.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("clip_point"), "Clip Point"), &params[0].y, 1.f, 100.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 100.f, 0.f, 0.f } } },
 
 			{ "ACES"sv, "ACESTonemap"sv,
-				"ACES RRT+ODT tonemapper implementation from RenoDX."sv,
+				T(TKEY("tonemapper.aces.description"), "ACES RRT+ODT tonemapper implementation from RenoDX."),
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Min Luminance", &params[0].y, 0.0001f, 1.f, "%.4f");
+					ImGui::SliderFloat(T(TKEY("min_luminance"), "Min Luminance"), &params[0].y, 0.0001f, 1.f, "%.4f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.0001f, 0.f, 0.f } } },
 
 			{ "Frostbite"sv, "FrostbiteTonemap"sv,
-				"Frostbite HDR display mapping implementation from RenoDX, based on EA's Frostbite color grading and display presentation work."sv,
+				T(TKEY("tonemapper.frostbite.description"), "Frostbite HDR display mapping implementation from RenoDX, based on EA's Frostbite color grading and display presentation work."),
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("Rolloff Start", &params[0].y, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Saturation Boost", &params[0].z, 0.f, 1.f, "%.2f");
-					ImGui::SliderFloat("Hue Correction", &params[0].w, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("rolloff_start"), "Rolloff Start"), &params[0].y, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("saturation_boost"), "Saturation Boost"), &params[0].z, 0.f, 1.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("hue_correction"), "Hue Correction"), &params[0].w, 0.f, 1.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 0.25f, 0.3f, 0.6f } } },
 
 			{ "Hermite Spline"sv, "HermiteSplineTonemap"sv,
-				"Hermite spline tonemapper by Musa, from RenoDX."sv,
+				T(TKEY("tonemapper.hermite_spline.description"), "Hermite spline tonemapper by Musa, from RenoDX."),
 				0, 0, true, 2, 2,
 				[](CTP& params) {
 					exposureSlider(&params[0].x);
-					ImGui::SliderFloat("White Clip", &params[0].y, 1.f, 500.f, "%.2f");
+					ImGui::SliderFloat(T(TKEY("white_clip"), "White Clip"), &params[0].y, 1.f, 500.f, "%.2f");
 					drawHDRStatus();
 				},
 				{ f4{ 1.f, 100.f, 0.f, 0.f } } }
@@ -296,49 +303,49 @@ struct TonemapperInfo
 
 void ColorGrading::DrawSettings()
 {
-	ImGui::Checkbox("Skip LDR Color Grading", &settings.skipLDR);
+	ImGui::Checkbox(T(TKEY("skip_ldr_color_grading"), "Skip LDR Color Grading"), &settings.skipLDR);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Skip color grading after tonemapping. This includes Lift Gamma Gain. Will be automatically skipped with HDR on.");
+		ImGui::Text(T(TKEY("skip_ldr_color_grading_tooltip"), "Skip color grading after tonemapping. This includes Lift Gamma Gain. Will be automatically skipped with HDR on."));
 
-	ImGui::Checkbox("Skip LUT (Direct Color Grading)", &settings.skipLUT);
+	ImGui::Checkbox(T(TKEY("skip_lut_direct_color_grading"), "Skip LUT (Direct Color Grading)"), &settings.skipLUT);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Skip baking color grading into a LUT and apply it directly per-pixel. More accurate but slower.");
+		ImGui::Text(T(TKEY("skip_lut_direct_color_grading_tooltip"), "Skip baking color grading into a LUT and apply it directly per-pixel. More accurate but slower."));
 
-	ImGui::Checkbox("Convert Linear to Log Before HDR Color Grading", &settings.useLog);
+	ImGui::Checkbox(T(TKEY("convert_linear_to_log_before_hdr_color_grading"), "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
 	if (settings.useLog) {
-		ImGui::Checkbox("Convert Log to Linear After HDR Color Grading", &settings.invertLog);
-		ImGui::Combo("Log Type", (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
+		ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &settings.invertLog);
+		ImGui::Combo(T(TKEY("log_type"), "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
-	ImGui::SeparatorText("Color Grading");
+	ImGui::SeparatorText(T(TKEY("color_grading"), "Color Grading"));
 	{
-		ImGui::SliderFloat("Input Gamma", &settings.inOutGamma.z, 0.f, 3.f, "%.3f");
-		ImGui::SliderFloat("Output Gamma", &settings.inOutGamma.w, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("input_gamma"), "Input Gamma"), &settings.inOutGamma.z, 0.f, 3.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("output_gamma"), "Output Gamma"), &settings.inOutGamma.w, 0.f, 3.f, "%.3f");
 
-		ImGui::Text("Pre-Tonemapping Settings");
-		if (ImGui::TreeNode("Exposure/Temperature/Tint")) {
+		ImGui::Text(T(TKEY("pre_tonemapping_settings"), "Pre-Tonemapping Settings"));
+		if (ImGui::TreeNode(T(TKEY("exposure_temperature_tint"), "Exposure/Temperature/Tint"))) {
 			exposureSlider(&settings.exposureTemperatureTint.x);
-			ImGui::SliderFloat("Temperature", &settings.exposureTemperatureTint.y, 10.f, 150.f, "%1.f00K");
-			ImGui::SliderFloat("Tint", &settings.exposureTemperatureTint.z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("temperature"), "Temperature"), &settings.exposureTemperatureTint.y, 10.f, 150.f, "%1.f00K");
+			ImGui::SliderFloat(T(TKEY("tint"), "Tint"), &settings.exposureTemperatureTint.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("ASC CDL")) {
-			Util::ShiftSlider("Slope", &settings.slope.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider("Power", &settings.power.x, 0.f, 2.f, "%.2f");
-			Util::ShiftSlider("Offset", &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
+		if (ImGui::TreeNode(T(TKEY("asc_cdl"), "ASC CDL"))) {
+			Util::ShiftSlider(T(TKEY("slope"), "Slope"), &settings.slope.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider(T(TKEY("power"), "Power"), &settings.power.x, 0.f, 2.f, "%.2f");
+			Util::ShiftSlider(T(TKEY("offset"), "Offset"), &settings.cdlOffset.x, -1.f, 1.f, "%.2f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("OKLCH Saturation")) {
-			ImGui::SliderFloat("Saturation", &settings.oklchSaturation.x, 0.f, 2.f, "%.3f");
-			ImGui::SliderFloat("Vibrance", &settings.oklchSaturation.y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat("Hue Shift", &settings.oklchSaturation.z, -1.f, 1.f, "%.3f");
+		if (ImGui::TreeNode(T(TKEY("oklch_saturation"), "OKLCH Saturation"))) {
+			ImGui::SliderFloat(T(TKEY("saturation"), "Saturation"), &settings.oklchSaturation.x, 0.f, 2.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("vibrance"), "Vibrance"), &settings.oklchSaturation.y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("hue_shift"), "Hue Shift"), &settings.oklchSaturation.z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("OKLCH Color Mixer")) {
-			ImGui::Text("Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space.");
+		if (ImGui::TreeNode(T(TKEY("oklch_color_mixer"), "OKLCH Color Mixer"))) {
+			ImGui::Text(T(TKEY("oklch_color_mixer_tooltip"), "Adjust brightness, vibrance and hue shift of specific hues in the perceptually uniform OKLCH space."));
 			constexpr std::array<ImColor, 7> hues = { {
 				{ 255, 0, 0 },
 				{ 182, 124, 1 },
@@ -361,46 +368,46 @@ void ColorGrading::DrawSettings()
 				}
 				ImGui::EndTable();
 			}
-			ImGui::SliderFloat("Hue Shift", &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
-			ImGui::SliderFloat("Vibrance", &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
-			ImGui::SliderFloat("Brightness", &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("hue_shift"), "Hue Shift"), &settings.oklchColorMixer[hueId].x, -1.f, 1.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("vibrance"), "Vibrance"), &settings.oklchColorMixer[hueId].y, 0.f, 3.f, "%.3f");
+			ImGui::SliderFloat(T(TKEY("brightness"), "Brightness"), &settings.oklchColorMixer[hueId].z, -1.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Shadows/Midtones/Highlights")) {
-			Util::ShiftSlider("Shadows Gain", &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider("Shadows Offset", &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider("Midtones Gain", &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider("Midtones Offset", &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
-			Util::ShiftSlider("Highlights Gain", &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider("Highlights Offset", &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
-			ImGui::InputFloat2("Shadows Start/End", &settings.shadowsHighlightsRange.x, "%.3f");
-			ImGui::InputFloat2("Highlights Start/End", &settings.shadowsHighlightsRange.z, "%.3f");
+		if (ImGui::TreeNode(T(TKEY("shadows_midtones_highlights"), "Shadows/Midtones/Highlights"))) {
+			Util::ShiftSlider(T(TKEY("shadows_gain"), "Shadows Gain"), &settings.shadowsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider(T(TKEY("shadows_offset"), "Shadows Offset"), &settings.shadowsOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider(T(TKEY("midtones_gain"), "Midtones Gain"), &settings.midtonesGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider(T(TKEY("midtones_offset"), "Midtones Offset"), &settings.midtonesOffset.x, -0.5f, 0.5f, "%.3f");
+			Util::ShiftSlider(T(TKEY("highlights_gain"), "Highlights Gain"), &settings.highlightsGain.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider(T(TKEY("highlights_offset"), "Highlights Offset"), &settings.highlightsOffset.x, -0.5f, 0.5f, "%.3f");
+			ImGui::InputFloat2(T(TKEY("shadows_start_end"), "Shadows Start/End"), &settings.shadowsHighlightsRange.x, "%.3f");
+			ImGui::InputFloat2(T(TKEY("highlights_start_end"), "Highlights Start/End"), &settings.shadowsHighlightsRange.z, "%.3f");
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Contrast")) {
-			Util::ShiftSlider("Contrast", &settings.contrast.x, 0.f, 2.f, "%.3f");
-			Util::ShiftSlider("Pivot", &settings.pivot.x, 0.f, 1.f, "%.3f");
+		if (ImGui::TreeNode(T(TKEY("contrast"), "Contrast"))) {
+			Util::ShiftSlider(T(TKEY("contrast"), "Contrast"), &settings.contrast.x, 0.f, 2.f, "%.3f");
+			Util::ShiftSlider(T(TKEY("pivot"), "Pivot"), &settings.pivot.x, 0.f, 1.f, "%.3f");
 			ImGui::TreePop();
 		}
 
-		ImGui::Text("Post-Tonemapping Settings");
-		if (ImGui::TreeNode("Lift Gamma Gain")) {
-			ImGui::DragFloat4("Lift", &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
-			ImGui::DragFloat4("Gamma", &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
-			ImGui::DragFloat4("Gain", &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
+		ImGui::Text(T(TKEY("post_tonemapping_settings"), "Post-Tonemapping Settings"));
+		if (ImGui::TreeNode(T(TKEY("lift_gamma_gain"), "Lift Gamma Gain"))) {
+			ImGui::DragFloat4(T(TKEY("lift"), "Lift"), &settings.lift.x, 1e-3f, -1.f, 1.f, "%.3f");
+			ImGui::DragFloat4(T(TKEY("gamma"), "Gamma"), &settings.gamma.x, 1e-3f, -1.5f, 1.5f, "%.3f");
+			ImGui::DragFloat4(T(TKEY("gain"), "Gain"), &settings.gain.x, 1e-3f, 0.f, 2.f, "%.3f");
 			ImGui::TreePop();
 		}
 	}
 
-	ImGui::SeparatorText("Tonemapping");
-	ImGui::Checkbox("Enable Tonemapping", &settings.enableTonemap);
+	ImGui::SeparatorText(T(TKEY("tonemapping"), "Tonemapping"));
+	ImGui::Checkbox(T(TKEY("enable_tonemapping"), "Enable Tonemapping"), &settings.enableTonemap);
 	if (settings.enableTonemap) {
 		auto& hdrRef = globals::features::hdrDisplay;
 		const bool hdrActive = hdrRef.loaded && hdrRef.settings.enableHDR;
 
-		if (ImGui::Checkbox("Use OpenDRT", &settings.useOpenDrt))
+		if (ImGui::Checkbox(T(TKEY("use_open_drt"), "Use OpenDRT"), &settings.useOpenDrt))
 			recompileFlag = true;
 
 		if (settings.useOpenDrt) {
@@ -414,7 +421,7 @@ void ColorGrading::DrawSettings()
 		} else {
 			auto& tonemappers = TonemapperInfo::GetTonemappers();
 
-			if (ImGui::BeginCombo("Tonemapper", tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
+			if (ImGui::BeginCombo(T(TKEY("tonemapper"), "Tonemapper"), tonemappers[tonemapperType].name.data(), ImGuiComboFlags_HeightLargest)) {
 				for (int i = 0; i < (int)tonemappers.size(); ++i) {
 					// Hide non-HDR tonemappers when HDR is active
 					if (hdrActive && !tonemappers[i].supportsHDR)
@@ -435,7 +442,7 @@ void ColorGrading::DrawSettings()
 			ImGui::Spacing();
 			ImGui::TextWrapped(tonemappers[tonemapperType].desc.data());
 			ImGui::Spacing();
-			if (ImGui::Button("Reset", { -1, 0 }))
+			if (ImGui::Button(T(TKEY("reset"), "Reset"), { -1, 0 }))
 				settings.tonemapParams = tonemappers[tonemapperType].default_settings;
 			ImGui::Spacing();
 
@@ -445,12 +452,12 @@ void ColorGrading::DrawSettings()
 		}
 
 		// Tonemapping curve visualization (GPU-evaluated, RGB overlay)
-		if (ImGui::TreeNode("Curve Preview")) {
+		if (ImGui::TreeNode(T(TKEY("curve_preview"), "Curve Preview"))) {
 			curveReadbackRequested = true;
 			curveReadbackRequestFrame = ImGui::GetFrameCount();
 
 			if (settings.skipLUT) {
-				ImGui::TextDisabled("Enable LUT generation to see curve preview (uncheck 'Skip LUT')");
+				ImGui::TextDisabled(T(TKEY("curve_preview_requires_lut"), "Enable LUT generation to see curve preview (uncheck 'Skip LUT')"));
 			} else {
 				// Determine Y-axis max from data
 				float yMax = 1.f;
@@ -524,15 +531,15 @@ void ColorGrading::DrawSettings()
 					dl->AddLine({ mousePos.x, canvasPos.y }, { mousePos.x, canvasPos.y + canvasSize.y }, IM_COL32(200, 200, 200, 100));
 
 					ImGui::BeginTooltip();
-					ImGui::Text("Pre:  %.3f", preValue);
-					ImGui::TextColored(ImVec4(0.9f, 0.25f, 0.25f, 1), "Post R: %.3f", curveR[idx]);
-					ImGui::TextColored(ImVec4(0.25f, 0.8f, 0.25f, 1), "Post G: %.3f", curveG[idx]);
-					ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.95f, 1), "Post B: %.3f", curveB[idx]);
+					ImGui::Text(T(TKEY("curve_preview_pre"), "Pre:  %.3f"), preValue);
+					ImGui::TextColored(ImVec4(0.9f, 0.25f, 0.25f, 1), T(TKEY("curve_preview_post_r"), "Post R: %.3f"), curveR[idx]);
+					ImGui::TextColored(ImVec4(0.25f, 0.8f, 0.25f, 1), T(TKEY("curve_preview_post_g"), "Post G: %.3f"), curveG[idx]);
+					ImGui::TextColored(ImVec4(0.35f, 0.35f, 0.95f, 1), T(TKEY("curve_preview_post_b"), "Post B: %.3f"), curveB[idx]);
 					ImGui::EndTooltip();
 				}
 
 				// Axis labels
-				ImGui::TextDisabled("Pre: 0 - %.1f (HDR linear)  |  Post: 0 - %.1f%s", CurveMaxInput, yMax, hdrActive ? " (HDR)" : "");
+				ImGui::TextDisabled(T(TKEY("curve_preview_axis"), "Pre: 0 - %.1f (HDR linear)  |  Post: 0 - %.1f%s"), CurveMaxInput, yMax, hdrActive ? T(TKEY("curve_preview_hdr_suffix"), " (HDR)") : "");
 			}
 			ImGui::TreePop();
 		} else {
@@ -540,13 +547,13 @@ void ColorGrading::DrawSettings()
 		}
 	}
 
-	ImGui::SeparatorText("Game Color Grading");
-	ImGui::SliderFloat3("Cinematic Blend", &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
+	ImGui::SeparatorText(T(TKEY("game_color_grading"), "Game Color Grading"));
+	ImGui::SliderFloat3(T(TKEY("cinematic_blend"), "Cinematic Blend"), &settings.gameCinematicBlend.x, 0.f, 1.f, "%.3f");
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Saturation, Brightness and Contrast.");
-	ImGui::SliderFloat("Fade Blend", &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
-	ImGui::SliderFloat("Tint Blend", &settings.gameTintBlend, 0.f, 1.f, "%.3f");
-	ImGui::SeparatorText("Color Space Transform");
+		ImGui::Text(T(TKEY("cinematic_blend_tooltip"), "Saturation, Brightness and Contrast."));
+	ImGui::SliderFloat(T(TKEY("fade_blend"), "Fade Blend"), &settings.gameFadeBlend, 0.f, 1.f, "%.3f");
+	ImGui::SliderFloat(T(TKEY("tint_blend"), "Tint Blend"), &settings.gameTintBlend, 0.f, 1.f, "%.3f");
+	ImGui::SeparatorText(T(TKEY("color_space_transform"), "Color Space Transform"));
 	{
 		auto& spaces = getAvailableColorSpaces();
 		auto& hdr = globals::features::hdrDisplay;
@@ -559,20 +566,20 @@ void ColorGrading::DrawSettings()
 		auto& llSettings = globals::features::linearLighting.settings;
 		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
 		const char* inputSpaceName = wideGamutActive ? spaces[5] : spaces[0];
-		ImGui::TextDisabled("Input Color Space: %s (%s)", inputSpaceName, wideGamutActive ? "auto-detected from Linear Lighting ACEScg" : "fixed");
-		ImGui::Combo("Working Color Space", &settings.processColorSpace, spaces.data(), (int)spaces.size());
-		ImGui::TextDisabled("Output Color Space: %s (auto from HDR Display)", spaces[outputColorSpace]);
+		ImGui::TextDisabled(T(TKEY("input_color_space"), "Input Color Space: %s (%s)"), inputSpaceName, wideGamutActive ? T(TKEY("input_color_space_auto_detected"), "auto-detected from Linear Lighting ACEScg") : T(TKEY("input_color_space_fixed"), "fixed"));
+		ImGui::Combo(T(TKEY("working_color_space"), "Working Color Space"), &settings.processColorSpace, spaces.data(), (int)spaces.size());
+		ImGui::TextDisabled(T(TKEY("output_color_space"), "Output Color Space: %s (auto from HDR Display)"), spaces[outputColorSpace]);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("Output switches automatically: SDR -> sRGB, HDR -> BT2020.");
+			ImGui::Text(T(TKEY("output_color_space_tooltip"), "Output switches automatically: SDR -> sRGB, HDR -> BT2020."));
 
 		UpdateColorSpaceTransforms(hdrEnabled);
 	}
 
-	if (ImGui::Button("Save LUT and Output Image")) {
+	if (ImGui::Button(T(TKEY("save_lut_and_output_image"), "Save LUT and Output Image"))) {
 		saveImagesFlag = true;
 	}
 	ImGui::SameLine();
-	ImGui::Text("Output will be saved to: %s", outputPath.c_str());
+	ImGui::Text(T(TKEY("output_saved_to"), "Output will be saved to: %s"), outputPath.c_str());
 }
 
 void ColorGrading::RestoreDefaultSettings()
@@ -1093,3 +1100,5 @@ void ColorGrading::OutputTextures()
 	DX::ThrowIfFailed(SaveToDDSFile(lutImage.GetImages(), lutImage.GetImageCount(), lutImage.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, lutPath.c_str()));
 	DX::ThrowIfFailed(SaveToDDSFile(colorImage.GetImages(), colorImage.GetImageCount(), colorImage.GetMetadata(), DirectX::DDS_FLAGS::DDS_FLAGS_NONE, colorPath.c_str()));
 }
+
+#undef I18N_KEY_PREFIX
