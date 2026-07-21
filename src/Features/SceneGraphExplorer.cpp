@@ -48,8 +48,12 @@ void SceneGraphExplorer::DrawOverlay()
 		return;
 
 	auto* sceneGraph = RE::Main::GetSingleton()->WorldRootNode();
-
 	DrawObject(sceneGraph, true);
+
+	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
+	for (size_t i = 0; i < ARRAYSIZE(shaderManager.shadowSceneNode); i++) {
+		DrawObject(shaderManager.shadowSceneNode[i], true);
+	}
 }
 
 void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
@@ -105,8 +109,19 @@ void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
 		}
 
 		if (node) {
+			int32_t switchIndex = -1;
+			if (auto switchNode = node->AsSwitchNode())
+				switchIndex = switchNode->index;
+
 			for (auto& child : node->GetChildren()) {
+				bool isActiveSwitchNode = (switchIndex >= 0) && child->parentIndex == static_cast<uint32_t>(switchIndex);
+				if (isActiveSwitchNode)
+					ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 255, 255));
+
 				DrawObject(child.get());
+
+				if (isActiveSwitchNode)
+					ImGui::PopStyleColor();
 			}
 		}
 

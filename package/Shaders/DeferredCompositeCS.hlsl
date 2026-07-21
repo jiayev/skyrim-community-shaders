@@ -46,11 +46,11 @@ Texture2D<float4> SsgiSpecularTexture : register(t13);
 
 void SampleSSGI(uint2 pixCoord, float3 normalWS, out float ao, out float3 il)
 {
-	ao = 1 - SsgiAoTexture[pixCoord];
+	ao = 1 - SsgiAoTexture[pixCoord].x;
 	float4 ssgiIlYSh = SsgiYTexture[pixCoord];
 	// without ZH hallucination
 	// float ssgiIlY = SphericalHarmonics::FuncProductIntegral(ssgiIlYSh, SphericalHarmonics::EvaluateCosineLobe(normalWS));
-	float ssgiIlY = SphericalHarmonics::SHHallucinateZH3Irradiance(ssgiIlYSh, normalWS);
+	float ssgiIlY = SphericalHarmonics::SHHallucinateZH3Irradiance(ssgiIlYSh, normalWS).x;
 	float2 ssgiIlCoCg = SsgiCoCgTexture[pixCoord];
 	il = max(0, Color::YCoCgToRGB(float3(ssgiIlY, ssgiIlCoCg)));
 }
@@ -114,7 +114,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 
-#if defined(SSGI) && !defined(RAYTRACING)
+#if defined(SSGI)
 
 	float ssgiAo;
 	float3 ssgiIl;
@@ -183,7 +183,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float3 color = linDiffuseColor + specularColor;
 
 #if defined(DYNAMIC_CUBEMAPS)
-
+	
+#	if defined(RAYTRACING)
+	if (SharedData::raytracingSettings.Reflection > 0.5f) {
+#	endif	
+	
 	float3 reflectance = ReflectanceTexture[dispatchID.xy];
 
 	if (any(reflectance > 0.0)) {
@@ -288,7 +292,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		color += reflectance * finalIrradiance;
 	}
 
-#endif  // DYNAMIC_CUBEMAPS
+#	if defined(RAYTRACING)
+	}
+#	endif
+	
+#endif
 
 	color = Color::IrradianceToGamma(color);
 
