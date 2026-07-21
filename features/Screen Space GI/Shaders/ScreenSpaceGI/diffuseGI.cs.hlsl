@@ -88,7 +88,7 @@ static const uint SSGI_ROTATION_COUNT = 1;
 static const uint SSGI_FALLBACK_SAMPLE_COUNT = 4;
 static const float SSGI_EXP_FACTOR = 2.0;
 static const float SSGI_FALLBACK_POWER = 1.0;
-static const float SSGI_FALLBACK_RADIANCE_MIP = 0.0;
+static const float SSGI_FALLBACK_MIP = 3.0;
 
 // sin/cos of the positive bit-center offsets from the projected receiver normal.
 // The negative half is mirrored, reducing the table and avoiding per-bit sincos.
@@ -193,9 +193,9 @@ float3 SampleDiffuseFallbackCubemap(
 float3 SampleDiffuseFallbackCubemap(float3 worldDir)
 #	endif
 {
-	float3 envSampleRaw = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_RADIANCE_MIP);
+	float3 envSampleRaw = EnvTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
 	float3 linEnvSample = Color::IrradianceToLinear(envSampleRaw);
-	float3 linFullSample = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_RADIANCE_MIP));
+	float3 linFullSample = Color::IrradianceToLinear(EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP));
 	float3 linSkySample = max(0.0, linFullSample - linEnvSample);
 	float linEnvLum = Color::RGBToLuminance(Color::IrradianceToLinear(EnvTexture.SampleLevel(samplerLinearClamp, worldDir, 15)));
 	float3 envColor;

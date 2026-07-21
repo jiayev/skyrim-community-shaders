@@ -104,16 +104,6 @@ namespace ImageBasedLighting
 		return float3(colorR, colorG, colorB) / Math::PI;
 	}
 
-	/// Evaluates a source constrained to the sky hemisphere without synthesizing a ZH3 back lobe.
-	float3 EvaluateSkyDiffuseIBL(sh2 shR, sh2 shG, sh2 shB, float3 rayDir)
-	{
-		sh2 cosineLobe = SphericalHarmonics::EvaluateCosineLobe(rayDir);
-		float colorR = SphericalHarmonics::FuncProductIntegral(shR, cosineLobe);
-		float colorG = SphericalHarmonics::FuncProductIntegral(shG, cosineLobe);
-		float colorB = SphericalHarmonics::FuncProductIntegral(shB, cosineLobe);
-		return float3(colorR, colorG, colorB) / Math::PI;
-	}
-
 	/// Get Env IBL color from environment cubemap SH (without sky)
 	float3 GetEnvIBL(float3 rayDir)
 	{
@@ -130,7 +120,7 @@ namespace ImageBasedLighting
 		sh2 shR = SkyIBLTexture.Load(int3(0, 0, 0));
 		sh2 shG = SkyIBLTexture.Load(int3(1, 0, 0));
 		sh2 shB = SkyIBLTexture.Load(int3(2, 0, 0));
-		return max(0, EvaluateSkyDiffuseIBL(shR, shG, shB, rayDir));
+		return max(0, EvaluateDiffuseIBL(shR, shG, shB, rayDir));
 	}
 
 	float3 GetSkyIBLOccluded(float3 rayDir, float visibility)
@@ -283,7 +273,7 @@ namespace ImageBasedLighting
 		}
 
 		float3 linSky = Color::Saturation(
-							max(0.0, EvaluateSkyDiffuseIBL(skySHR, skySHG, skySHB, rayDir)), SharedData::iblSettings.SkyIBLSaturation) *
+							max(0.0, EvaluateDiffuseIBL(skySHR, skySHG, skySHB, rayDir)), SharedData::iblSettings.SkyIBLSaturation) *
 		                SharedData::iblSettings.SkyIBLScale * skyVisibility;
 		return Color::IrradianceToGamma(linEnv + linSky);
 	}
