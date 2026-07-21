@@ -57,7 +57,7 @@ namespace Skylighting
 	{
 		float openResponse = SphericalHarmonics::FuncProductIntegral(SharedData::skylightingSettings.OpenSkySH, responseLobe);
 		float visibleResponse = max(0.0, SphericalHarmonics::FuncProductIntegral(skyVisibilitySH, responseLobe));
-		float visibility = openResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / openResponse) : 1.0;
+		float visibility = openResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / openResponse) : 0.0;
 		return lerp(1.0, visibility, fadeOutFactor);
 	}
 

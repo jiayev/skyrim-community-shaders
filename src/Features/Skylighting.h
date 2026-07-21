@@ -51,8 +51,8 @@ public:
 	struct Settings
 	{
 		float MaxZenith = 3.1415926f / 2.f;  // 90 deg
-		float MinDiffuseVisibility = 0.0f;
-		float MinSpecularVisibility = 0.0f;
+		float MinDiffuseVisibility = 0.01f;
+		float MinSpecularVisibility = 0.01f;
 	} settings;
 
 	struct SkylightingCB

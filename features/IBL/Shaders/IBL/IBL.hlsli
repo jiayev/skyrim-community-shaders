@@ -30,7 +30,7 @@ namespace ImageBasedLighting
 											   SphericalHarmonics::Product(radianceSH, referenceVisibilitySH), responseLobe));
 		float visibleResponse = max(0.0, SphericalHarmonics::FuncProductIntegral(
 											 SphericalHarmonics::Product(radianceSH, visibilitySH), responseLobe));
-		return referenceResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / referenceResponse) : 1.0;
+		return referenceResponse > EPSILON_WEIGHT_SUM ? saturate(visibleResponse / referenceResponse) : 0.0;
 	}
 
 	float GetSourceRadianceWeightedVisibility(
