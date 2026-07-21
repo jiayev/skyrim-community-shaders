@@ -11,6 +11,7 @@
 #include "Features/GrassLighting.h"
 #include "Features/HDRDisplay.h"
 #include "Features/HairSpecular.h"
+#include "Features/HorizonFix.h"
 #include "Features/IBL.h"
 #include "Features/InteriorSun.h"
 #include "Features/InverseSquareLighting.h"
@@ -39,10 +40,12 @@
 #include "Features/WaterEffects.h"
 #include "Features/WetnessEffects.h"
 #include "Menu.h"
+#include "SceneSettingsManager.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/Game.h"
+#include "WeatherManager.h"
 
 namespace globals
 {
@@ -66,6 +69,7 @@ namespace globals
 		LinearLighting linearLighting{};
 		LODBlending lodBlending{};
 		HairSpecular hairSpecular{};
+		HorizonFix horizonFix{};
 		InteriorSun interiorSun{};
 		InverseSquareLighting inverseSquareLighting{};
 		ScreenSpaceGI screenSpaceGI{};
@@ -159,6 +163,8 @@ namespace globals
 	Deferred* deferred = nullptr;
 	Menu* menu = nullptr;
 	SIE::ShaderCache* shaderCache = nullptr;
+	WeatherManager* weatherManager = nullptr;
+	SceneSettingsManager* sceneSettingsManager = nullptr;
 
 	static Profiler profilerInstance;
 	Profiler* profiler = &profilerInstance;
@@ -169,6 +175,8 @@ namespace globals
 		state = State::GetSingleton();
 		menu = Menu::GetSingleton();
 		deferred = Deferred::GetSingleton();
+		weatherManager = WeatherManager::GetSingleton();
+		sceneSettingsManager = SceneSettingsManager::GetSingleton();
 	}
 
 	void ReInit()
