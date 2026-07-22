@@ -761,6 +761,8 @@
     "feature.ibl.sky_ibl_saturation_tooltip": "天空IBL的颜色饱和度。\n较低值产生更中性的环境光；较高值产生更鲜艳的颜色。",
     "feature.ibl.sky_ibl_scale": "天空IBL缩放",
     "feature.ibl.sky_ibl_scale_tooltip": "天空IBL的强度倍率（来自游戏的原始反射立方体贴图）。\n控制天空对环境光照的贡献强度。",
+    "feature.ibl.skylighting_affects_env": "天光影响环境/DALC",
+    "feature.ibl.skylighting_affects_env_tooltip": "将天光可见性同时应用于天空IBL和环境/DALC贡献。\n禁用时，天光仅调节天空IBL。",
     "feature.ibl.use_static_ibl": "对世界外物体使用静态IBL",
     "feature.ibl.use_static_ibl_tooltip": "对在游戏世界外渲染的物体（如物品栏物品、加载画面）使用预烘焙的静态IBL立方体贴图纹理。",
     "feature.interior_sun.description": "允许太阳和月亮的光线和阴影照射到室内空间。",
