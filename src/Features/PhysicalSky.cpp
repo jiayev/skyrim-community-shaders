@@ -220,6 +220,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	cloudMaxStep,
+	temporalAccumulationFactor,
+	ghostingReduction,
 	cloudMap,
 	cloudLayer)
 
@@ -643,6 +645,8 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
 		uint32_t minLightStep = 1, maxLightStep = 16;
 		ImGui::SliderScalar(T(TKEY("light_steps"), "Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
+		ImGui::SliderFloat(T(TKEY("temporal_accumulation"), "Temporal Accumulation"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
+		ImGui::Checkbox(T(TKEY("ghosting_reduction"), "Ghosting Reduction"), &settings.ghostingReduction);
 	}
 
 	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
@@ -972,6 +976,7 @@ void PhysicalSky::Reset()
 	if (!allGood) {
 		cbData.enabled = allGood;
 		linearLighting.isDirLightLinear = false;
+		volMainHistoryValid = false;
 		return;
 	}
 
