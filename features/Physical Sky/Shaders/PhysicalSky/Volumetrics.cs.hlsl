@@ -813,17 +813,13 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	const float cloudAltitudeRange = GetCloudAltitudeRange(cloud);
 	const float step_large_near_cap = cloudAltitudeRange * 0.0625;
 	const float step_large_far_cap = cloudAltitudeRange * 0.5;
-	// Jitter inside the actual first coarse step. Using the near slab cap here
-	// can skip farther than the adaptive view/ray budget allows.
-	const float initial_view_cap = max(ray.start_dist * 0.125, GAME_UNITS_PER_METER);
-	const float initial_step_large = min(step_large_raw, min(initial_view_cap, step_large_near_cap));
-	float dist = jitter * initial_step_large;
+	float dist = jitter * step_large_near_cap;
 	const uint max_iterations = info.cloudMaxStep * 4u;
 	[loop] for (uint iteration = 0u; iteration < max_iterations && dist < ray.march_dist; ++iteration)
 	{
 		const float dist_norm = saturate(dist / max(info.rayMarchRange, 1.0));
 		const float absolute_dist = ray.start_dist + dist;
-		const float view_cap = max(absolute_dist * 0.125, GAME_UNITS_PER_METER);
+		const float view_cap = max(absolute_dist * 0.125, 1.0);
 		const float slab_cap = lerp(step_large_near_cap, step_large_far_cap, dist_norm * dist_norm);
 		const float step_large = min(step_large_raw, min(view_cap, slab_cap));
 		const float step_small = step_large * 0.25;
@@ -848,9 +844,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 					external_sun_ready = true;
 				}
 				low_valid = true;
-				// This is a ray integral. Include the adaptive sample length so
-				// regions receiving smaller steps are not over-represented.
-				const float transmittance_weighted_density = ray.transmittance.x * cloud_density * step_small;
+				const float transmittance_weighted_density = ray.transmittance.x * cloud_density;
 				low_mean_depth += absolute_dist * transmittance_weighted_density;
 				low_mean_weight += transmittance_weighted_density;
 
@@ -869,16 +863,19 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				}
 				const float extinction_scalar = dot(extinction, float3(0.2126, 0.7152, 0.0722));
 				const float scatter_od = extinction_scalar * 0.999 * step_small;
-				// HP's remapped source already integrates this step's scattering OD.
-				// Multiplying another (1 - exp(-OD)) would count the step twice.
-				float scatter_source = 1.0 - exp(-scatter_od / max(info.scatterSourceODScale, 0.001));
-				scatter_source = HPPositivePow(saturate(scatter_source), max(info.scatterSourceCurvePow, 0.01));
+				const float scatter_fraction = 1.0 - exp(-scatter_od);
+				float scatter_gate = 1.0 - exp(-scatter_od / max(info.scatterSourceODScale, 0.001));
+				scatter_gate = HPPositivePow(saturate(scatter_gate), max(info.scatterSourceCurvePow, 0.01));
+				// The remapped source is an edge-validity gate, not the Beer-Lambert
+				// integral itself. Multiplying by the physical scattered fraction keeps
+				// both direct and ambient radiance bounded by this sample's optical depth.
+				const float scatter_source = scatter_fraction * scatter_gate;
 				float3 in_scatter = directional_lum * external_sun * dirlightColor * scatter_source;
 
 				// Additive isotropic diffuse field, independent from directional multiple scattering.
-				// HP's one-dimensional diffusion proxy absorbs the omitted Green-kernel,
-				// 1 / D, and volume-measure constants into the authored intensity.
-				float phiScalar = info.phiFwdIntensity * phi_fwd;
+				// Convert the accumulated isotropic fluence to radiance with the Green kernel's 1 / (4 pi).
+				// Keeping this normalization explicit lets the intensity remain a unit-scale artistic control.
+				float phiScalar = info.phiFwdIntensity * phi_fwd * (0.25 * RCP_PI);
 				phiScalar = info.phiFwdCompress > 0.0 ? (1.0 - exp(-phiScalar * info.phiFwdCompress)) / info.phiFwdCompress : phiScalar;
 				const float3 sample_transmittance = exp(-step_small * extinction);
 				const float3 phi_luminance = phiScalar * external_sun * dirlightColor;
@@ -949,7 +946,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				external_sun_ready = true;
 			}
 			high_valid = true;
-			const float transmittance_weighted_density = highTransmittance.x * hiDensity * hiStep;
+			const float transmittance_weighted_density = highTransmittance.x * hiDensity;
 			high_mean_depth += hiAbsDist * transmittance_weighted_density;
 			high_mean_weight += transmittance_weighted_density;
 			const float2 hiWeatherUv = HPWeatherUV(hiPos.xy, info);
