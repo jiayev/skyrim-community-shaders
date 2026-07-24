@@ -142,6 +142,8 @@ struct PhysicalSky final : public Feature
 		float rayMarchRange = 32.f;     // km
 		float shadowVolumeRange = 8.f;  // km
 		uint32_t cloudMaxStep = 97;
+		float temporalAccumulationFactor = 0.95f;
+		bool ghostingReduction = true;
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
@@ -372,7 +374,10 @@ struct PhysicalSky final : public Feature
 		float2 rcpLowFrameDim;
 		uint historyValid;
 		float elapsedTimeSeconds;
-		uint padding[2];
+		float temporalAccumulationFactor;
+		float cloudHistoryInvalidation;
+		uint ghostingReduction;
+		uint padding[3];
 	};
 
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;

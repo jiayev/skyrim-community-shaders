@@ -318,9 +318,12 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryWidth = textureW;
 		volHistoryHeight = textureH;
 	}
-	const float sunHistoryDot = volHistorySunDir.x * cloudLightDir.x + volHistorySunDir.y * cloudLightDir.y + volHistorySunDir.z * cloudLightDir.z;
-	if (sunHistoryDot < 0.999390827f)  // Invalidate history after a 2 degree sun change.
-		volMainHistoryValid = false;
+	const float sunHistoryDot = std::clamp(
+		volHistorySunDir.x * cloudLightDir.x + volHistorySunDir.y * cloudLightDir.y + volHistorySunDir.z * cloudLightDir.z,
+		-1.0f,
+		1.0f);
+	const float sunAngleDifferenceDegrees = std::acos(sunHistoryDot) * (180.0f / std::numbers::pi_v<float>);
+	const float cloudHistoryInvalidation = std::clamp(1.0f - sunAngleDifferenceDegrees / 10.0f, 0.0f, 1.0f);
 
 	auto& low = settings.cloudLayer.low;
 	auto& sc = settings.cloudLayer.stratocumulus;
@@ -480,7 +483,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.rcpLowFrameDim = { 1.0f / static_cast<float>((renderW + 3u) / 4u), 1.0f / static_cast<float>((renderH + 3u) / 4u) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
 		.elapsedTimeSeconds = timeSeconds,
-		.padding = { 0u, 0u },
+		.temporalAccumulationFactor = std::clamp(settings.temporalAccumulationFactor, 0.0f, 1.0f),
+		.cloudHistoryInvalidation = cloudHistoryInvalidation,
+		.ghostingReduction = settings.ghostingReduction ? 1u : 0u,
+		.padding = { 0u, 0u, 0u },
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
