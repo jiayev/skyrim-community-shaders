@@ -497,6 +497,7 @@ struct CreationEngineRaytracing
 	HMODULE handle = nullptr;
 
 	using InitializeRendererFn = bool (*)(ID3D11Device5*, ID3D12Device5*, ID3D12CommandQueue*, ID3D12CommandQueue*, ID3D12CommandQueue*);
+	using InitializeVulkanRendererFn = bool (*)(void* instance, void* physicalDevice, void* device, void* graphicsQueue, int graphicsQueueIndex, void* transferQueue, int transferQueueIndex, void* computeQueue, int computeQueueIndex);
 	using InitializeFn = void (*)(Settings);
 	using UpdateCameraFn = void (*)();
 	using ExecuteFn = void (*)();
@@ -520,6 +521,7 @@ struct CreationEngineRaytracing
 	using GetSceneGraphCountersFn = void (*)(uint32_t& textures, uint32_t& models, uint32_t& instances);
 
 	InitializeRendererFn InitializeRenderer = nullptr;
+	InitializeVulkanRendererFn InitializeVulkanRenderer = nullptr;	
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
 	ExecuteFn Execute = nullptr;
@@ -554,6 +556,7 @@ struct CreationEngineRaytracing
 		}
 
 		LOAD_FN(InitializeRenderer);
+		LOAD_FN(InitializeVulkanRenderer);		
 		LOAD_FN(Initialize);
 		LOAD_FN(UpdateCamera);
 		LOAD_FN(Execute);
@@ -826,7 +829,7 @@ struct Raytracing : public OverlayFeature
 			{
 				auto& rt = globals::features::raytracing;
 
-				if (rt.Available()) {
+				if (rt.Mode() != CreationEngineRaytracing::Mode::None) {
 					rt.UpdateFeatureData();
 					rt.SkyCubeToHemi();
 
@@ -895,7 +898,7 @@ struct Raytracing : public OverlayFeature
 			static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 			{
 				auto& rt = globals::features::raytracing;
-				if (rt.Available() && rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
+				if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing)
 					return;
 
 				func(imageSpaceShader, shape, param);

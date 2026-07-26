@@ -615,7 +615,7 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	// when the user selects DLSS and the Raytracing Denoiser is set to DLSS_RR.
 	if (settings.upscaleMethod == UpscaleMethod::kDLSS) {
 		auto& rt = globals::features::raytracing;
-		if (rt.Available() &&
+		if ((rt.Mode() != CreationEngineRaytracing::Mode::None) &&
 			rt.settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR &&
 			(streamline.loadedFeatures & Streamline::Features::kDLSS_RR)) {
 			return UpscaleMethod::kDLSS_RR;
@@ -1049,7 +1049,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 
 	auto& rt = globals::features::raytracing;
-	if (rt.Available())
+	if (rt.Mode() != CreationEngineRaytracing::Mode::None)
 		rt.UpdateJitter(jitter);
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
