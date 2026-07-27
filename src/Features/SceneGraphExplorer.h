@@ -65,6 +65,7 @@ struct SceneGraphExplorer : public OverlayFeature
 	virtual void DrawOverlay() override;
 
 	void DrawObject(RE::NiAVObject* object, bool root = false);
+	void DumpSceneGraph();
 
 	////////////////////////////////////////////////// Feature Specific Data
 	struct Settings

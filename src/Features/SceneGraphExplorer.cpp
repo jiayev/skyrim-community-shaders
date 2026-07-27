@@ -9,8 +9,10 @@
 #include "SceneGraphExplorer.h"
 
 #include "../I18n/I18n.h"
+#include "../Utils/FileSystem.h"
 #include "Globals.h"
 #include "State.h"
+#include <fstream>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SceneGraphExplorer::Settings,
@@ -38,6 +40,9 @@ void SceneGraphExplorer::SaveSettings(json& o_json)
 void SceneGraphExplorer::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
+
+	if (ImGui::Button("Dump SceneGraph"))
+		DumpSceneGraph();
 }
 
 #undef I18N_KEY_PREFIX
@@ -49,11 +54,51 @@ void SceneGraphExplorer::DrawOverlay()
 
 	auto* sceneGraph = RE::Main::GetSingleton()->WorldRootNode();
 	DrawObject(sceneGraph, true);
+}
 
-	auto& shaderManager = RE::BSShaderManager::State::GetSingleton();
-	for (size_t i = 0; i < ARRAYSIZE(shaderManager.shadowSceneNode); i++) {
-		DrawObject(shaderManager.shadowSceneNode[i], true);
+static json BuildObjectJson(RE::NiAVObject* object)
+{
+	if (!object)
+		return nullptr;
+
+	json j;
+	j["class_type"] = object->GetRTTI()->name;
+	j["name"] = object->name.c_str();
+
+	auto* node = object->AsNode();
+	if (node) {
+		j["children"] = json::array();
+		for (auto& child : node->GetChildren()) {
+			auto childJson = BuildObjectJson(child.get());
+			if (!childJson.is_null())
+				j["children"].push_back(childJson);
+		}
+	} else {
+		j["children"] = json::array();
 	}
+
+	return j;
+}
+
+void SceneGraphExplorer::DumpSceneGraph()
+{
+	auto* sceneGraph = RE::Main::GetSingleton()->WorldRootNode();
+	if (!sceneGraph)
+		return;
+
+	auto path = Util::PathHelpers::GetCommunityShaderPath() / "SceneGraph.json";
+	Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
+
+	json j = BuildObjectJson(sceneGraph);
+
+	std::ofstream file(path);
+	if (!file.is_open()) {
+		logger::error("Failed to open SceneGraph.json for writing: {}", path.string());
+		return;
+	}
+
+	file << j.dump(4) << std::endl;
+	logger::info("SceneGraph dumped to {}", path.string());
 }
 
 void SceneGraphExplorer::DrawObject(RE::NiAVObject* object, bool root)
