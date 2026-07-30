@@ -271,6 +271,17 @@ void Raytracing::DrawGeneralSettings()
 		// Samples Per Pixel
 		if (ImGui::SliderInt(T(TKEY("samples_per_pixel"), "Samples Per Pixel"), &rtSettings.SamplesPerPixel, 1, 32))
 			rtSettings.SamplesPerPixel = std::clamp(rtSettings.SamplesPerPixel, 1, 32);
+
+		// Russian Roulette
+		DrawEnumRadio(
+				T(TKEY("russian_roulette"), "Russian Roulette"),
+				"RussianRoulette",
+				rtSettings.RussianRoulette,
+				std::array{
+					T(TKEY("rr_none"), "Disabled"),
+					T(TKEY("rr_standard"), "Standard"),
+					T(TKEY("rr_enhanced"), "Enhanced")
+				});	
 	}
 
 	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD)
