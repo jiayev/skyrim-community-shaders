@@ -1554,7 +1554,7 @@ void Raytracing::DeferredPasses()
 	}
 }
 
-void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance)
+void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specMotionVectors)
 {
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
@@ -1562,7 +1562,7 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	diffuseAlbedo = diffuseAlbedoTexture[currentFrame]->GetResource();
 	normalRoughness = normalRoughnessTexture->GetResource();
 
-	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
+	creationEngineRaytracing->GetRRInput(specularAlbedo, specMotionVectors);
 }
 
 RE::BSEventNotifyControl Raytracing::BGSActorCellEventHandler::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*)

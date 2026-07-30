@@ -125,7 +125,7 @@ struct Raytracing : public OverlayFeature
 	void CopyWaterFlowap() const;
 	void ConvertTextures();
 	void DeferredPasses();
-	void GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance);
+	void GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specMotionVectors);
 
 	CreationEngineRaytracing::Settings GetSettings() const;
 

@@ -714,7 +714,7 @@ void Streamline::EvaluateDLSS(ID3D12GraphicsCommandList4* commandList, sl::Viewp
 
 void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::ViewportHandle vp,
 	ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, ID3D12Resource* reactiveMask,
-	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness, ID3D12Resource* specHitDistance,
+	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness, ID3D12Resource* specMotionVectors,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth)
 {
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, D3D12_RESOURCE_STATE_COMMON };
@@ -727,7 +727,7 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 	sl::Resource diffuseAlbedoRes = { sl::ResourceType::eTex2d, diffuseAlbedo, 0 };
 	sl::Resource specularAlbedoRes = { sl::ResourceType::eTex2d, specularAlbedo, 0 };
 	sl::Resource normalRoughnessRes = { sl::ResourceType::eTex2d, normalRoughness, 0 };
-	sl::Resource specHitDistanceRes = { sl::ResourceType::eTex2d, specHitDistance, 0 };
+	sl::Resource specMotionVectorsRes = { sl::ResourceType::eTex2d, specMotionVectors, 0 };
 
 	if (!CheckFrameConstants(vp))
 		return;
@@ -744,7 +744,7 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 		{ &diffuseAlbedoRes, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &specularAlbedoRes, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &normalRoughnessRes, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &specHitDistanceRes, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
+		{ &specMotionVectorsRes, sl::kBufferTypeSpecularMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
 	};
 
 	if (SL_FAILED(result, slSetTag(vp, tags, _countof(tags), commandList))) {
@@ -824,9 +824,9 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	ID3D12Resource* diffuseAlbedo = nullptr;
 	ID3D12Resource* specularAlbedo = nullptr;
 	ID3D12Resource* normalRoughness = nullptr;
-	ID3D12Resource* specHitDistance = nullptr;
+	ID3D12Resource* specMotionVectors = nullptr;
 
-	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance);
+	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specMotionVectors);
 
 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
@@ -837,7 +837,7 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	EvaluateDLSSD(a_commandList, viewport,
 		a_input, a_output,
 		a_depth, a_motionVectors, a_reactiveMask,
-		diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance,
+		diffuseAlbedo, specularAlbedo, normalRoughness, specMotionVectors,
 		extentIn, extentOut, (uint)screenSize.x);
 }
 
