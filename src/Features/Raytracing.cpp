@@ -238,7 +238,19 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
 	certSettings.DebugSettings.Markers = globals::state->interopLoadPIX;
-	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
+
+	switch (settings.PerfOverlay) {
+	case OverlayMode::Simple:
+	case OverlayMode::Complete:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Standard;
+		break;
+	case OverlayMode::Extended:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Extended;
+		break;
+	default:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Disabled;
+		break;
+	}
 
 	return certSettings;
 }
@@ -834,8 +846,11 @@ void Raytracing::DrawOverlay()
 		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
-		for (const auto& passTiming : passTimings) {
-			if (settings.PerfOverlay == OverlayMode::Complete)
+		if (settings.PerfOverlay == OverlayMode::Simple) {
+			const auto& passTiming = passTimings.back();
+			DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+		} else if (settings.PerfOverlay == OverlayMode::Complete || settings.PerfOverlay == OverlayMode::Extended) {
+			for (const auto& passTiming : passTimings)
 				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
 		}
 

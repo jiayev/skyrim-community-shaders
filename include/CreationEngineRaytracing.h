@@ -358,10 +358,17 @@ struct CreationEngineRaytracing
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(ExperimentalSettings, PathTracingCull, TextureMode, TextureCutOff, GlobalLights)
 	};
 
+	enum struct TimingMode
+	{
+		Disabled,
+		Standard,
+		Extended
+	};
+
 	struct DebugSettings
 	{
 		bool Markers = false;
-		bool Timings = false;
+		TimingMode Timings = TimingMode::Disabled;
 
 		bool operator==(const DebugSettings&) const = default;
 
