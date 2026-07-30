@@ -150,7 +150,8 @@ struct Raytracing : public OverlayFeature
 	{
 		None,
 		Simple,
-		Complete
+		Complete,
+		Extended
 	};
 
 	////////////////////////////////////////////////// Feature Specific Data

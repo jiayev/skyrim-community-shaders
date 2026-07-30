@@ -679,6 +679,7 @@ void Raytracing::DrawDebugSettings()
 			T(TKEY("performance_overlay_none"), "None"),
 			T(TKEY("performance_overlay_simple"), "Simple"),
 			T(TKEY("performance_overlay_complete"), "Complete"),
+			T(TKEY("performance_overlay_extended"), "Extended")
 		});
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
