@@ -53,7 +53,7 @@ struct CreationEngineRaytracing
 	{
 		int Bounces = 2;
 		int SamplesPerPixel = 1;
-		RussianRoulette RussianRoulette = RussianRoulette::Enhanced;
+		RussianRoulette RussianRoulette = RussianRoulette::Standard;
 
 		bool operator==(const struct RaytracingSettings&) const = default;
 
@@ -225,7 +225,7 @@ struct CreationEngineRaytracing
 
 	struct SSSSettings
 	{
-		bool Enabled = true;
+		bool Enabled = false;
 		int SampleCount = 1;
 		float MaxSampleRadius = 1.0f;
 		bool EnableTransmission = true;
@@ -348,7 +348,7 @@ struct CreationEngineRaytracing
 
 	struct ExperimentalSettings
 	{
-		bool PathTracingCull = false;
+		bool PathTracingCull = true;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
 		bool GlobalLights = false;
