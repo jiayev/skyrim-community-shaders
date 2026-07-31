@@ -170,12 +170,12 @@ struct CreationEngineRaytracing
 
 	struct LightingSettings
 	{
-		float Directional = 1.0f;
-		float Point = 1.0f;
+		float Directional = 5.0f;
+		float Point = 5.0f;
 		bool LodDimmer = false;
-		float Emissive = 1.0f;
-		float Effect = 1.0f;
-		float Sky = 1.0f;
+		float Emissive = 5.0f;
+		float Effect = 5.0f;
+		float Sky = 5.0f;
 
 		bool operator==(const LightingSettings&) const = default;
 
