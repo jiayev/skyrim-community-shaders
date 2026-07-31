@@ -293,7 +293,17 @@ void Raytracing::DrawGeneralSettings()
 					T(TKEY("rr_none"), "Disabled"),
 					T(TKEY("rr_standard"), "Standard"),
 					T(TKEY("rr_enhanced"), "Enhanced")
-				});	
+				});
+
+		// Global Illumination Resolution Scale
+		if (ceRTSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::GlobalIllumination) {
+			ImGui::SliderFloat(T(TKEY("resolution_scale"), "Resolution Scale"), &rtSettings.ResolutionScale, 0.1f, 1.0f, "%.05f");
+
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("resolution_scale_tooltip"),
+									  "Internal raytracing resolution."));
+			}
+		}
 	}
 
 	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD)

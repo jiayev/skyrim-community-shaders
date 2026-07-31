@@ -54,10 +54,11 @@ struct CreationEngineRaytracing
 		int Bounces = 2;
 		int SamplesPerPixel = 1;
 		RussianRoulette RussianRoulette = RussianRoulette::Standard;
+		float ResolutionScale = 1.0f;
 
 		bool operator==(const struct RaytracingSettings&) const = default;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RaytracingSettings, Bounces, SamplesPerPixel, RussianRoulette)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RaytracingSettings, Bounces, SamplesPerPixel, RussianRoulette, ResolutionScale)
 	};
 
 	struct ReblurSettings
