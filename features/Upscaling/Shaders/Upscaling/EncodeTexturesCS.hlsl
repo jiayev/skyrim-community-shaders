@@ -27,11 +27,13 @@ RWTexture2D<float> DepthOutput : register(u3);
 	float transparencyCompositionMask = NormalsWaterMask[dispatchID.xy].z;
 
 #if defined(DLSS) || defined(DLSS_RR)
+	float2 motionVector = MotionVectorMask[dispatchID.xy];
+
+#	if defined(DLSS)	
 	float depth = DepthMask[dispatchID.xy];
 	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, SharedData::GetScreenDepth(depth));
 
 	// Find longest motion vector in 5x5 neighborhood
-	float2 motionVector = MotionVectorMask[dispatchID.xy];
 	float2 longestMotionVector = motionVector;
 	float maxMotionLengthSq = dot(motionVector, motionVector);
 
@@ -63,6 +65,9 @@ RWTexture2D<float> DepthOutput : register(u3);
 	}
 
 	MotionVectorOutput[dispatchID.xy] = lerp(longestMotionVector, motionVector, nearFactor);
+#	elif defined(DLSS_RR)
+	MotionVectorOutput[dispatchID.xy] = motionVector;	
+#	endif	
 #endif
 
 #if defined(DEPTH_OUTPUT)

@@ -1156,13 +1156,18 @@ void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	
+	auto& sharedResources = globals::dx12Interop->sharedResources;
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	context->CopyResource(globals::dx12Interop->sharedResources.main->resource11, main.texture);
+	context->CopyResource(sharedResources.main->resource11, main.texture);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 	if (!preserveMotionVector)
-		context->CopyResource(globals::dx12Interop->sharedResources.motionVector->resource11, motionVector.texture);
+		context->CopyResource(sharedResources.motionVector->resource11, motionVector.texture);
+
+	if (reactiveMaskTexture)
+		context->CopyResource(sharedResources.reactiveMask->resource11, reactiveMaskTexture->resource.get());
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1508,7 +1513,13 @@ void Upscaling::EncodeTextures()
 		uint32_t renderWidth = (uint32_t)renderSize.x;
 		uint32_t renderHeight = (uint32_t)renderSize.y;
 
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[4] = { 
+			temporalAAMask.SRV, 
+			normals.SRV,
+			motionVector.SRV, 
+			depth.depthSRV 
+		};
+
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
