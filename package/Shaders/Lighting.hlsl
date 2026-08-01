@@ -3431,7 +3431,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(RAYTRACING)
 	psout.Masks2 = float4(vertexAOMask, metallic, 1.0f - ao, psout.Diffuse.w);
-#else
+#		else
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion
 	// for pixels that do not write to this RT (sky, water, grass, effects).
 	psout.Masks2 = float4(vertexAOMask, 0, 0, 0);
