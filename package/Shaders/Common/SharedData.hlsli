@@ -6,8 +6,6 @@
 
 namespace SharedData
 {
-
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
@@ -248,6 +246,59 @@ namespace SharedData
 		uint pad0;
 	};
 
+	struct ENBSettings
+	{
+		uint Enable;
+		float ColorPow;
+		float LightSpriteIntensity;
+		float FireIntensity;
+
+		float FireCurve;
+		uint EnableRain;
+		float RainMotionStretch;
+		float RainMotionTransparency;
+
+		float CloudsCurve;
+		float CloudsDesaturation;
+		float CloudsEdgeIntensity;
+		float CloudsEdgeMoonMultiplier;
+
+		uint EnableProceduralSun;
+		float ProceduralSunDiskRadiusSq;
+		float ProceduralSunDiskEdgeScale;
+		float ProceduralSunGlowIntensity;
+
+		float ProceduralSunCoronaFalloff;
+		float ProceduralSunCoronaScale;
+		uint UseProceduralGradientWeights;
+		float ProceduralGradientWeightCurve;
+
+		float ParticleIntensity;
+		float ParticleLightingInfluence;
+		float ParticleAmbientInfluence;
+		float ParticlePointLightingInfluence;
+
+		uint EnableVolumetricRays;
+		float VolumetricRaysIntensity;
+		float VolumetricRaysExtinction;
+		float VolumetricRaysSkyColorAmount;
+
+		float VolumetricRaysDesaturation;
+		float3 VolumetricRaysColorFilter;
+
+		uint EnableCloudsScattering;
+		float SkyScatteringIntensity;
+		float SkyScatteringAmount;
+		float SkyScatteringColorFromSun;
+
+		float3 SkyScatteringColor;
+		float SkyScatteringCloudsLightingSunMultiplier;
+
+		float SkyScatteringCloudsLightingMoonIntensity;
+		uint pad0;
+		uint pad1;
+		uint pad2;
+	};
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
@@ -326,6 +377,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		ENBSettings enbSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
@@ -389,7 +441,5 @@ namespace SharedData
 	{
 		return SphericalHarmonics::Unproject(AmbientSHR, AmbientSHG, AmbientSHB, normal);
 	}
-
-#endif  // PSHADER
 }
 #endif  // __SHARED_DATA_DEPENDENCY_HLSL__
