@@ -1,6 +1,7 @@
 #include "Common/Color.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/SharedData.hlsli"
 #include "Raytracing/Includes/Common.hlsli"
 
 Texture2D<unorm half4> NormalSmoothness : register(t0);
@@ -26,6 +27,11 @@ SamplerState Sampler : register(s0);
 	const float4 albedo = Albedo.SampleLevel(Sampler, uv, 0);
 	const float metallic = VAOMAO.SampleLevel(Sampler, uv, 0).y;
 
-	DiffuseAlbedo[id] = float4(Color::SrgbToLinear(albedo.rgb) * (1.0f - metallic), albedo.a);
+	const bool linearLighting = SharedData::linearLightingSettings.enableLinearLighting;
+	
+	const float3 linearAlbedo = linearLighting ? albedo.rgb : Color::SrgbToLinear(albedo.rgb);
+	
+	// If Linear Lighting is enabled Albedo is already in linear space
+	DiffuseAlbedo[id] = float4(linearAlbedo * (1.0f - metallic), albedo.a);
 #endif
 }
