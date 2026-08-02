@@ -9,7 +9,6 @@ namespace SharedData
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
-		row_major float3x4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
 		float4 SunDirection;
