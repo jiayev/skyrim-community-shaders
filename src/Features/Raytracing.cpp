@@ -297,11 +297,25 @@ void Raytracing::DrawGeneralSettings()
 
 		// Global Illumination Resolution Scale
 		if (ceRTSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::GlobalIllumination) {
-			ImGui::SliderFloat(T(TKEY("resolution_scale"), "Resolution Scale"), &rtSettings.ResolutionScale, 0.1f, 1.0f, "%.05f");
+			const bool resScale = (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD);
+
+			if (!resScale)
+				ImGui::BeginDisabled();
+
+			ImGui::SliderFloat(T(TKEY("resolution_scale"), "Resolution Scale"), &rtSettings.ResolutionScale, 0.25f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("resolution_scale_tooltip"),
 									  "Internal raytracing resolution."));
+			}
+
+			if (!resScale) {
+				ImGui::EndDisabled();
+
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("%s", T(TKEY("resolution_scale_disabled_tooltip"),
+										  "Only available when using NRD denoiser."));
+				}
 			}
 		}
 	}
