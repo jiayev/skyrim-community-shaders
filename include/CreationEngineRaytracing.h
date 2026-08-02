@@ -341,6 +341,13 @@ struct CreationEngineRaytracing
 			EnableFinalVisibility, EnableFinalMIS)
 	};
 
+	enum struct PTCullMode : uint32_t
+	{
+		Disabled = 0,
+		Enabled = 1,
+		Full = 2
+	};
+
 	enum struct TextureMode : uint32_t
 	{
 		Share = 0,
@@ -349,7 +356,7 @@ struct CreationEngineRaytracing
 
 	struct ExperimentalSettings
 	{
-		bool PathTracingCull = true;
+		PTCullMode PathTracingCull = PTCullMode::Enabled;
 		TextureMode TextureMode = TextureMode::Share;
 		uint32_t TextureCutOff = 0;
 		bool GlobalLights = false;

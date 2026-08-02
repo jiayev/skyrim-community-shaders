@@ -672,7 +672,16 @@ void Raytracing::DrawExperimentalSettings()
 
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
-	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
+	DrawEnumRadio(
+		T(TKEY("path_tracing_cull"), "Path Tracing Cull"),
+		"PathTracingCull",
+		experimentalSettings.PathTracingCull,
+		std::array{
+			T(TKEY("path_tracing_cull_disabled"), "Disabled"),
+			T(TKEY("path_tracing_cull_enabled"), "Enabled"),
+			T(TKEY("path_tracing_cull_full"), "Full (Non-Selective)"),
+		});
+
 	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
 	DrawEnumRadio(

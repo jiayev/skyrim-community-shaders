@@ -143,7 +143,8 @@ struct Raytracing : public OverlayFeature
 
 	inline bool IsPathTracingCull() const
 	{
-		return Mode() == CreationEngineRaytracing::Mode::PathTracing && settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull;
+		return Mode() == CreationEngineRaytracing::Mode::PathTracing 
+			&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 	}
 
 	enum struct OverlayMode
