@@ -880,8 +880,10 @@ void Raytracing::DrawOverlay()
 		ImGui::TableHeadersRow();
 
 		if (settings.PerfOverlay == OverlayMode::Simple) {
-			const auto& passTiming = passTimings.back();
-			DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+			if (!passTimings.empty()) {
+				const auto& passTiming = passTimings.back();
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+			}
 		} else if (settings.PerfOverlay == OverlayMode::Complete || settings.PerfOverlay == OverlayMode::Extended) {
 			for (const auto& passTiming : passTimings)
 				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
