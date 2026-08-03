@@ -18,7 +18,7 @@ endif()
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.7.0
+    VERSION 1.8.0
     LANGUAGES CXX
 )
 
@@ -52,6 +52,11 @@ option(
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(
+    ENABLE_ENB_EXTENDER
+    "Enable ENBExtender reimplementation (weather blending, time-of-day, technique bindings)"
+    ON
+)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
@@ -97,6 +102,8 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
+find_package(effects11 CONFIG REQUIRED)
+
 if(DEVBENCH_BRIDGE)
     find_package(devbench-api CONFIG REQUIRED)
 endif()
@@ -120,6 +127,7 @@ include(FidelityFX-SDK)
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
+    PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 
 file(
@@ -168,6 +176,8 @@ target_link_libraries(
         d3d12.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
+        Microsoft::Effects11
+        windowsapp
         windowscodecs
 )
 
@@ -634,7 +644,9 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
 
-    set(_feature_shader_paths_file "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt")
+    set(_feature_shader_paths_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt"
+    )
     file(WRITE "${_feature_shader_paths_file}" "")
     foreach(_fpath IN LISTS FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
@@ -895,7 +907,9 @@ if(NOT DEFINED ENV{CommunityShadersOutputDir})
     )
 endif()
 
-find_program(SEVENZ_EXECUTABLE NAMES 7z 7za
+find_program(
+    SEVENZ_EXECUTABLE
+    NAMES 7z 7za
     PATHS "C:/Program Files/7-Zip" "C:/Program Files (x86)/7-Zip"
     DOC "7-Zip archiver for compressed packages"
 )
@@ -1001,9 +1015,11 @@ if(AIO_ZIP_TO_DIST)
     if(SEVENZ_EXECUTABLE)
         add_custom_command(
             OUTPUT ${AIO_ZIP_STAMP}
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
             COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_ARCHIVE}"
-            COMMAND "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_ARCHIVE}" *
+            COMMAND
+                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_ARCHIVE}" *
             COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
             WORKING_DIRECTORY ${AIO_DIR}
             DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
@@ -1013,7 +1029,8 @@ if(AIO_ZIP_TO_DIST)
         message(WARNING "7z not found; AIO archive will use uncompressed zip")
         add_custom_command(
             OUTPUT ${AIO_ZIP_STAMP}
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
             COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=zip -- .
             COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
             WORKING_DIRECTORY ${AIO_DIR}
@@ -1135,7 +1152,8 @@ if(TARGET PREPARE_AIO)
             OUTPUT ${AIO_PACKAGE}
             COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
             COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
-            COMMAND "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_PACKAGE}" *
+            COMMAND
+                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_PACKAGE}" *
             WORKING_DIRECTORY ${AIO_DIR}
             DEPENDS
                 ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp

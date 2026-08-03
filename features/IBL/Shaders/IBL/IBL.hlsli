@@ -116,29 +116,33 @@ namespace ImageBasedLighting
 	{
 		float3 linEnv, linSky;
 		if (SharedData::iblSettings.DALCMode >= 2) {
-			linEnv = Color::IrradianceToLinear(vanillaDALC * SharedData::iblSettings.DALCAmount);
+			linEnv = vanillaDALC * SharedData::iblSettings.DALCAmount;
 			linSky = GetSkyIBLColor(rayDir);
 		} else {
 			linEnv = GetEnvIBLColor(rayDir);
 			linSky = GetSkyIBLColor(rayDir);
 		}
-		return Color::IrradianceToGamma(linEnv + linSky);
+#if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable)
+			linSky *= saturate(-rayDir.z * 0.65 + 0.35);
+#endif
+		return linEnv + linSky;
 	}
 
-	/// Compute diffuse IBL ambient (gamma-space) with visibility applied per DALCMode.
+	/// Compute diffuse IBL ambient with a skylighting visibility factor applied per DALCMode
 	/// visibility: scalar skylighting factor (already computed in Lighting.hlsl).
 	float3 GetDiffuseIBLOccluded(float3 vanillaDALC, float3 rayDir, float visibility)
 	{
 		float3 linEnv, linSky;
 		if (SharedData::iblSettings.DALCMode >= 2) {
-			linEnv = Color::IrradianceToLinear(vanillaDALC * SharedData::iblSettings.DALCAmount);
+			linEnv = vanillaDALC * SharedData::iblSettings.DALCAmount;
 		} else {
 			linEnv = GetEnvIBLColor(rayDir);
 		}
 		if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
 			linEnv *= visibility;
 		linSky = GetSkyIBLColorOccluded(rayDir, visibility);
-		return Color::IrradianceToGamma(linEnv + linSky);
+		return linEnv + linSky;
 	}
 
 	// ============================================================================
@@ -170,7 +174,7 @@ namespace ImageBasedLighting
 		float3 iblColor;
 		if (SharedData::iblSettings.DALCMode >= 2) {
 			float3 dalc0 = Color::Ambient(SharedData::GetAmbient(0.f));
-			iblColor = Color::IrradianceToLinear(dalc0 * SharedData::iblSettings.DALCAmount) + GetSkyIBLColor(float3(0, 0, 0));
+			iblColor = dalc0 * SharedData::iblSettings.DALCAmount + GetSkyIBLColor(float3(0, 0, 0));
 		} else {
 			iblColor = GetEnvIBLColor(float3(0, 0, 0)) + GetSkyIBLColor(float3(0, 0, 0));
 		}
