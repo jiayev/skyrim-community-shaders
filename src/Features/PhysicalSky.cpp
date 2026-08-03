@@ -40,8 +40,18 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	profileHeight,
 	worldSize,
 	center,
-	lowCoverage,
-	lowContrast,
+	seed,
+	skyCoverage,
+	cloudSize,
+	instability,
+	character,
+	breakup,
+	highCoverage,
+	coverageEdgeWidth,
+	highCoverageEdgeWidth,
+	frontStrength,
+	frontBearing,
+	domeStrength,
 	stratocumulus,
 	cumulusWeight,
 	toweringCumulusWeight,
@@ -49,8 +59,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	cumulusDepth,
 	toweringCumulusDepth,
 	cumulonimbusDepth,
-	highCoverage,
-	highContrast,
 	altostratusWeight,
 	altocumulusWeight,
 	overrides)
@@ -929,11 +937,14 @@ bool PhysicalSky::ShadersOK()
 {
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
 	                     texTrLut && texSvLut && texApLut && texApShadow;
+	// The cloud maps themselves are created lazily by the first generation
+	// dispatch, so readiness is a property of the generation shaders. The render
+	// path still verifies every texture before binding.
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux && texVolUpscaleTr && texVolUpscaleLum && texVolUpscaleAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
-								   texShadowVolume && texShadowVolumeTemp && baseShapeNoiseSrv && detailErosionNoiseSrv && ndfManager.texLowWeather && ndfManager.texHighWeather && ndfManager.texProfile);
+								   texShadowVolume && texShadowVolumeTemp && baseShapeNoiseSrv && detailErosionNoiseSrv && ndfManager.ShadersReady());
 	return baseShadersOk && volumetricShadersOk;
 }
 
