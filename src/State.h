@@ -62,8 +62,8 @@ public:
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
 	// Frame time tracking per shader type (in milliseconds)
-	float frameTimePerType[RE::BSShader::Type::Total + 1];      ///< Per-type frame time in milliseconds.
-	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1]; ///< EMA-smoothed per-type frame time in milliseconds.
+	float frameTimePerType[RE::BSShader::Type::Total + 1];        ///< Per-type frame time in milliseconds.
+	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];  ///< EMA-smoothed per-type frame time in milliseconds.
 
 	// Timing state for per-type frame time tracking using QueryPerformanceCounter
 	LARGE_INTEGER frameTimingFrequency;
@@ -87,6 +87,37 @@ public:
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
 
+	/**
+	 * @brief Which feature owns the HDR tonemap pass this frame.
+	 *
+	 * Effects11 and Post Processing both replace the vanilla ISHDR tonemap and cannot
+	 * coexist: Effects11 skips the whole pass, while Post Processing relies on it running
+	 * so ISHDR can take its passthrough branch. Exactly one owner is resolved per frame.
+	 */
+	enum class TonemapOwner
+	{
+		kVanilla,         ///< Vanilla ISHDR tonemap runs unmodified.
+		kPostProcessing,  ///< Post Processing pipeline drives tonemapping.
+		kEffects11        ///< Effects11 (ENB-compatible) replaces the pass entirely.
+	};
+
+	/**
+	 * @brief Resolves the tonemap owner for the current frame (cached once per frame).
+	 *
+	 * Effects11 wins when both features want the pass, because it applies a whole-preset
+	 * look that degrades badly when partially applied. The choice is surfaced in both
+	 * feature UIs so the loser is not silently disabled.
+	 *
+	 * @return The feature owning tonemapping this frame.
+	 */
+	TonemapOwner GetTonemapOwner();
+
+	/**
+	 * @brief Dispatches the HDR tonemap pass to the resolved owner.
+	 * @param a_input Render target holding the scene color to tonemap.
+	 * @param a_output Render target receiving the tonemapped result.
+	 * @return True if the vanilla pass was fully replaced and must not be invoked.
+	 */
 	bool HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 
 	/**
@@ -232,33 +263,33 @@ public:
 	/**
 	 * Bitflags describing extra shader-specific properties.
 	 */
-	
+
 	/**
 	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is cached as open.
 	 * @returns true if either the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
 	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
 	 * @returns true if the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Updates the shared constant buffer data based on world state and rendering pass.
 	 * @param a_inWorld Whether the camera is in world space.
 	 * @param a_prepass Whether this is a prepass rendering phase.
 	 */
-	
+
 	/**
 	 * Updates sky shader permutation based on the current render pass.
 	 * @param a_pass The render pass to inspect.
 	 */
-	
+
 	/**
 	 * Checks whether directional shadows are available for the current scene.
 	 * @returns true if directional shadows are present, false otherwise.

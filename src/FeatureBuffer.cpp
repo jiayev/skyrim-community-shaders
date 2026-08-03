@@ -64,5 +64,5 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::exponentialHeightFog.GetCommonBufferData(),
 		globals::features::truePBR.settings,
 		globals::features::skin.GetCommonBufferData(),
-		globals::features::postProcessing.settings);
+		globals::features::postProcessing.GetCommonBufferData());
 }

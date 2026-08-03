@@ -13,8 +13,9 @@
 #include "Features/Effects11.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
-#include "Features/ScreenshotFeature.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PostProcessing.h"
+#include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
 #include "Features/Upscaling.h"
@@ -289,11 +290,22 @@ namespace PostProcessingExtensions
 	{
 		static void thunk(RE::ImageSpaceManager* a1, RE::ImageSpaceEffect* a2, uint32_t a3, uint32_t a4, RE::ImageSpaceShaderParam* a5)
 		{
-			if (!globals::state->IsMainOrLoadingMenuOpen() &&
-				globals::state->HandlePostProcessing(
-					static_cast<RE::RENDER_TARGET>(a3),
-					static_cast<RE::RENDER_TARGET>(a4)))
+			auto* state = globals::state;
+			const auto input = static_cast<RE::RENDER_TARGET>(a3);
+			const auto output = static_cast<RE::RENDER_TARGET>(a4);
+
+			// Effects11 replaces the pass outright; when it does, the vanilla call is skipped
+			// and HandlePostProcessing fixes up the render-target state the pass would have set.
+			if (state->HandlePostProcessing(input, output))
 				return;
+
+			// Post Processing runs its pipeline into kMAIN/kMAIN_COPY, then lets the vanilla
+			// pass run so ISHDR can take its POSTPROCESS passthrough branch. It also runs when
+			// the vanilla tonemap owns the frame, since most of its effects are pre-tonemap.
+			auto& postProcessing = globals::features::postProcessing;
+			if (postProcessing.loaded)
+				postProcessing.PreProcess(input);
+
 			func(a1, a2, a3, a4, a5);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -476,8 +488,8 @@ struct BSInputDeviceManager_PollInputDevices
 
 			if (*a_events) {
 				if (auto device = (*a_events)->GetDevice()) {
-						// Block all devices except gamepad when menu is open
-						blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
+					// Block all devices except gamepad when menu is open
+					blockedDevice = (device != RE::INPUT_DEVICES::INPUT_DEVICE::kGamepad);
 				}
 			}
 		}

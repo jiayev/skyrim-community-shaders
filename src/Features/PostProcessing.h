@@ -58,6 +58,24 @@ struct PostProcessing : Feature
 	virtual void SaveSettings(json& o_json) override;
 	virtual void RestoreDefaultSettings() override;
 
+	/**
+	 * @brief Whether Post Processing wants to replace the vanilla tonemap this frame.
+	 *
+	 * Queried by State::GetTonemapOwner() to arbitrate against Effects11. Note this is
+	 * narrower than "is the pipeline active": with DisableVanillaTonemapping off the
+	 * pipeline still runs its effects and then hands off to the vanilla tonemap.
+	 */
+	bool WantsTonemapOwnership() const;
+
+	/**
+	 * @brief Builds the shared-buffer payload, masking flags the arbiter has revoked.
+	 *
+	 * DisableVanillaTonemapping is forced to 0 unless Post Processing actually owns the
+	 * tonemap, so ISHDR and HDROutputCS do not assume a linear, already-tonemapped scene
+	 * when another feature produced the image.
+	 */
+	Settings GetCommonBufferData();
+
 	json pendingSettings = {};
 
 	void ProcessSettings(json& o_json);
@@ -103,7 +121,7 @@ struct PostProcessing : Feature
 	virtual void PostPostLoad() override;
 	virtual void Prepass() override;
 
-	void PreProcess();
+	void PreProcess(RE::RENDER_TARGET a_input);
 	void DrawBeforeUpscaling();
 	void ClearBorderMotionVectorsForFrameGen();
 	void DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor);
@@ -134,27 +152,9 @@ struct PostProcessing : Feature
 
 	/////////////////////////////////////////////////////////////////////////////////
 
-	struct BSImagespaceShaderHDRTonemapBlendCinematic_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			if (globals::features::postProcessing.loaded)
-				globals::features::postProcessing.PreProcess();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct BSImagespaceShaderHDRTonemapBlendCinematicFade_SetupTechnique
-	{
-		static void thunk(RE::BSShader* a_shader, RE::BSShaderMaterial* a_material)
-		{
-			if (globals::features::postProcessing.loaded)
-				globals::features::postProcessing.PreProcess();
-			func(a_shader, a_material);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
+	// Tonemap-time entry is driven by PostProcessingExtensions::Main_HDRTonemapBlendCinematic_Render
+	// (Hooks.cpp), which arbitrates between this feature and Effects11. Only the refraction
+	// hook remains here, and it just flags which buffer the scene currently lives in.
 
 	struct BSImagespaceShaderRefraction_SetupTechnique
 	{
