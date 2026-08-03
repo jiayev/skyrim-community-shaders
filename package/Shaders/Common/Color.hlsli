@@ -227,6 +227,10 @@ namespace Color
 
 	float3 Diffuse(float3 color)
 	{
+#	if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable)
+			color = pow(abs(color), SharedData::enbSettings.ColorPow);
+#	endif
 #	if defined(TRUE_PBR)
 		// TRUE_PBR: input is already linear sRGB; gamut-convert only
 		return ENABLE_LL ? GamutTransform(color) : LinearToSrgb(color);

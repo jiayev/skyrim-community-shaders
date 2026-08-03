@@ -4,6 +4,11 @@
 #include "State.h"
 #include "Util.h"
 
+#include "Effects11.h"
+#include "Effects11/SettingManager.h"
+#include "Globals.h"
+#include "Utils/Game.h"
+
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -37,6 +42,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+			return;
+		}
+	}
+
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -121,7 +134,7 @@ void LinearLighting::Prepass()
 	if (!settings.enableLinearLighting || isMainLoadingMenu)
 		return;
 
-	auto imageSpaceManager = RE::ImageSpaceManager::GetSingleton();
+	auto imageSpaceManager = globals::game::imageSpaceManager;
 	if (!imageSpaceManager)
 		return;
 
@@ -177,6 +190,26 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.skyGamma = settings.skyGamma;
 	data.waterGamma = settings.waterGamma;
 	data.vlGamma = settings.vlGamma;
+
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			data.enableLinearLighting = false;
+			data.lightGamma = 1.0f;
+			data.colorGamma = 1.0f;
+			data.emitColorGamma = 1.0f;
+			data.glowmapGamma = 1.0f;
+			data.ambientGamma = 1.0f;
+			data.fogGamma = 1.0f;
+			data.fogAlphaGamma = 1.0f;
+			data.effectGamma = 1.0f;
+			data.effectAlphaGamma = 1.0f;
+			data.skyGamma = 1.0f;
+			data.waterGamma = 1.0f;
+			data.vlGamma = 1.0f;
+		}
+	}
+
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
 	data.directionalLightMult = settings.directionalLightMult;
 	data.pointLightMult = settings.pointLightMult;
@@ -189,6 +222,25 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
+
+	// Override multipliers to neutral values when ENB PP is active
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			data.vanillaDiffuseColorMult = 1.0f;
+			data.directionalLightMult = 1.0f;
+			data.pointLightMult = 1.0f;
+			data.ambientMult = 1.0f;
+			data.emitColorMult = 1.0f;
+			data.glowmapMult = 1.0f;
+			data.effectLightingMult = 1.0f;
+			data.membraneEffectMult = 1.0f;
+			data.bloodEffectMult = 1.0f;
+			data.projectedEffectMult = 1.0f;
+			data.deferredEffectMult = 1.0f;
+			data.otherEffectMult = 1.0f;
+		}
+	}
 	return data;
 }
 
