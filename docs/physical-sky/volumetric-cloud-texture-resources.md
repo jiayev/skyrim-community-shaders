@@ -20,15 +20,15 @@ It does not specify transient render targets such as cloud luminance, transmitta
 | ---------------------- | -------------: | ------------------------- | ----------------------- | ---------------- |
 | Base shape volume      |           `t5` | `Texture3D<unorm float4>` | `nubis.dds`             | Yes              |
 | Detail erosion volume  |           `t6` | `Texture3D<unorm float4>` | Same SRV as `nubis.dds` | No separate file |
-| Low weather map        |           `t7` | `Texture2D<float4>`       | CPU-generated           | No               |
-| High weather map       |           `t8` | `Texture2D<float4>`       | CPU-generated           | No               |
-| Low-cloud profile LUT  |          `t11` | `Texture2D<float4>`       | CPU-generated           | No               |
-| Stratocumulus cell map |          `t12` | `Texture2D<float4>`       | CPU-generated           | No               |
-| High-cloud cell map    |          `t13` | `Texture2D<float4>`       | CPU-generated           | No               |
-| High-cloud warp map    |          `t14` | `Texture2D<float4>`       | CPU-generated           | No               |
-| High-cloud wisp map    |          `t15` | `Texture2D<float4>`       | CPU-generated           | No               |
+| Low weather map        |           `t7` | `Texture2D<float4>`       | GPU-generated           | No               |
+| High weather map       |           `t8` | `Texture2D<float4>`       | GPU-generated           | No               |
+| Low-cloud profile LUT  |          `t11` | `Texture2D<float4>`       | GPU-generated           | No               |
+| Stratocumulus cell map |          `t12` | `Texture2D<float4>`       | GPU-generated           | No               |
+| High-cloud cell map    |          `t13` | `Texture2D<float4>`       | GPU-generated           | No               |
+| High-cloud warp map    |          `t14` | `Texture2D<float4>`       | GPU-generated           | No               |
+| High-cloud wisp map    |          `t15` | `Texture2D<float4>`       | GPU-generated           | No               |
 
-The renderer requires all nine SRVs to exist. Only the 3D Nubis volume must be supplied on disk; the seven 2D cloud-description resources are created automatically and may be replaced individually with DDS files.
+The renderer requires all nine SRVs to exist. Only the 3D Nubis volume must be supplied on disk; the seven 2D cloud-description resources are generated on the GPU and may be replaced individually with DDS files.
 
 ## Directories and deployment
 
@@ -88,12 +88,16 @@ cloudMap.overrides.highWispPath
 
 Two sampler conventions are used:
 
-| Convention     | Filtering          | Addressing  | Resources                                       |
-| -------------- | ------------------ | ----------- | ----------------------------------------------- |
-| Finite/clamped | Min/mag/mip linear | Clamp U/V/W | Low weather, high weather, profile              |
-| Tileable       | Min/mag/mip linear | Wrap U/V/W  | Nubis, Sc cell, high cell, high warp, high wisp |
+| Convention | Filtering          | Addressing  | Resources                                                                  |
+| ---------- | ------------------ | ----------- | -------------------------------------------------------------------------- |
+| Clamped    | Min/mag/mip linear | Clamp U/V/W | Profile LUT                                                                |
+| Tileable   | Min/mag/mip linear | Wrap U/V/W  | Nubis, low weather, high weather, Sc cell, high cell, high warp, high wisp |
 
-Tileable resources must be seamless across every wrapped axis. For the 3D volume this means seamless X, Y, and Z boundaries. For auxiliary 2D maps it means seamless U and V boundaries.
+Tileable resources must be seamless across every wrapped axis. For the 3D volume this means seamless X, Y, and Z boundaries. For 2D maps it means seamless U and V boundaries.
+
+The weather maps are tileable. They describe a repeating synoptic pattern rather than a finite rectangle of cloud, so an override that is not seamless will show a visible grid of discontinuities at every tile boundary.
+
+The profile LUT is the only clamped resource. Both of its axes are bounded quantities — normalized height and normalized distance from the cloud centre — so wrapping them would be meaningless.
 
 ### Mips
 
@@ -108,17 +112,17 @@ Tileable resources must be seamless across every wrapped axis. For the 3D volume
 Weather UV is calculated as:
 
 ```text
-uv = (worldXY - weatherCenter) / weatherWorldSize + 0.5
+uv = (worldXY - weatherCenter - windOffset) / weatherWorldSize + 0.5
 ```
 
 Therefore:
 
 -   U increases with world X;
 -   V increases with world Y;
--   `(0.5, 0.5)` is `weatherCenter`;
--   the map covers a square with side length `weatherWorldSize`;
--   values outside `[0, 1]` are explicitly rejected before sampling;
--   coverage should fade to zero near every map edge to prevent a vertical rectangular cloud wall.
+-   `(0.5, 0.5)` is `weatherCenter` at zero wind displacement;
+-   one tile covers a square with side length `weatherWorldSize`, and the pattern repeats outside it;
+-   UV is wrapped, not rejected, so the map has no boundary and needs no edge fade;
+-   `windOffset` is the accumulated wind displacement shared with the 3D shape noise, so the whole cloud system advects downwind rather than staying pinned to world coordinates.
 
 `weatherCenter` and `weatherWorldSize` are authored in kilometres and converted to game units before shader use.
 
@@ -181,65 +185,72 @@ If `nubis.dds` is missing, fails to load, or is not a 3D texture, both base and 
 
 ### Definition
 
-| Property                | Value                             |
-| ----------------------- | --------------------------------- |
-| Binding                 | `t7`                              |
-| Resource type           | 2D texture                        |
-| Generated dimensions    | `weatherDim x weatherDim`         |
-| Default dimension       | `512 x 512`                       |
-| Allowed generated range | `128` to `1024` per axis          |
-| Generated format        | `R8G8B8A8_UNORM`                  |
-| Addressing              | Clamp; outside-map UV is rejected |
-| Current sampled mip     | 0                                 |
+| Property                | Value                      |
+| ----------------------- | -------------------------- |
+| Binding                 | `t7`                       |
+| Resource type           | 2D texture                 |
+| Generated dimensions    | `weatherDim x weatherDim`  |
+| Default dimension       | `512 x 512`                |
+| Allowed generated range | `128` to `1024` per axis   |
+| Generated format        | `R8G8B8A8_UNORM`           |
+| Addressing              | Wrap; must tile seamlessly |
+| Current sampled mip     | 0                          |
 
 ### Channel contract
 
-| Channel | Meaning                   | Required range                          |
-| ------- | ------------------------- | --------------------------------------- |
-| R       | Low-cloud coverage        | `0` = clear, `1` = maximum coverage     |
-| G       | Cu/TCu/Cb type coordinate | `0` = Cu, `0.5` = TCu, `1` = Cb         |
-| B       | Stratocumulus region mask | `0` = normal low cloud, `1` = Sc region |
-| A       | Reserved                  | Write `0`                               |
+| Channel | Meaning                    | Required range                          |
+| ------- | -------------------------- | --------------------------------------- |
+| R       | Low-cloud coverage         | `0` = clear, `1` = maximum coverage     |
+| G       | Cu/TCu/Cb type coordinate  | `0` = Cu, `0.5` = TCu, `1` = Cb         |
+| B       | Stratocumulus region mask  | `0` = normal low cloud, `1` = Sc region |
+| A       | Cloud-body radial distance | `0` = cloud centre, `1` = cloud edge    |
 
 G is a continuous selector. Values between the three anchors interpolate profile, detail strength, density multiplier, and cloud-top development. Authored maps may use continuous transition bands, but broad regions should remain near the anchor values so distinct species do not collapse into one generic blend.
 
 B selects the separate stratocumulus path. It is not a fourth interval in G. The generated map writes a binary B mask; linear filtering supplies soft boundaries.
 
+A is the second axis of the profile LUT lookup. It must be the distance from the centre of the cloud body that owns the pixel, normalized so that `0` is the core and `1` is the outer edge, and it must reset per cloud body rather than growing monotonically across the map. This is what gives a cumulus its dome: the profile collapses toward the cloud's own rim. A single map-wide gradient here flattens every cloud into a slab.
+
 ### Generated behavior
 
-The current generator builds coherent moisture systems, frontal bands, dry intrusions, convection, and stable regions. It then:
+The generator builds three morphologies with distinct spatial signatures and blends them by the Character setting:
 
-1. determines the actually covered low-cloud pixels;
-2. allocates the requested stratocumulus share to stable regions;
-3. normalizes Cu/TCu/Cb weights over the remaining covered area;
-4. ranks those pixels by convective suitability;
-5. assigns Cu to lower suitability, TCu to intermediate suitability, and Cb to the strongest convection.
+-   **convective cells** — jittered feature points gated on synoptic moisture, producing discrete cloud bodies with real gaps and a natural per-body radial coordinate;
+-   **stratiform sheets** — a broad smooth field modulated by open or closed cells depending on instability;
+-   **frontal bands** — narrow contours stretched along an integer lattice direction so they stay tileable.
 
-The generated map fades R to zero near its finite boundary.
+It then solves the requested coverage and species shares as histogram quantiles:
+
+1. the low-cloud potential threshold is solved so the covered area equals the requested sky coverage;
+2. the stratocumulus share is solved over the covered area only;
+3. Cu/TCu/Cb thresholds are solved over the covered area that stratocumulus did not claim, with the weights biased by instability;
+4. the same procedure runs independently for the high-cloud layer.
+
+Because coverage is fixed by a quantile, the shaping controls (edge width, break-up, cloud size) change how the cloud is distributed without changing how much of it there is.
 
 ### Override authoring requirements
 
--   R must be zero at the outer border unless a deliberate hard map boundary is wanted.
+-   R, G, B, and A must all tile seamlessly. There is no edge fade and no map boundary.
 -   G should describe coherent cloud systems, not high-frequency noise.
 -   Cb regions should be sparse and associated with high coverage or convective structures.
 -   B should favor broad, stable regions and should not overlap every high-convection region.
--   Set A to zero for forward compatibility.
+-   A must be per cloud body. Writing `0` everywhere makes every cloud a full-depth slab; a map-wide radial gradient reintroduces the flattening this channel exists to fix.
 -   Do not use the channel layout of an unrelated weather-map format without explicitly repacking it.
 
 ## 3. High Weather map
 
 ### Definition
 
-| Property                | Value                             |
-| ----------------------- | --------------------------------- |
-| Binding                 | `t8`                              |
-| Resource type           | 2D texture                        |
-| Generated dimensions    | `weatherDim x weatherDim`         |
-| Default dimension       | `512 x 512`                       |
-| Allowed generated range | `128` to `1024` per axis          |
-| Generated format        | `R8G8B8A8_UNORM`                  |
-| Addressing              | Clamp; outside-map UV is rejected |
-| Sampled mips            | 0 and 2                           |
+| Property                | Value                      |
+| ----------------------- | -------------------------- |
+| Binding                 | `t8`                       |
+| Resource type           | 2D texture                 |
+| Generated dimensions    | `weatherDim x weatherDim`  |
+| Default dimension       | `512 x 512`                |
+| Allowed generated range | `128` to `1024` per axis   |
+| Generated format        | `R8G8B8A8_UNORM`           |
+| Addressing              | Wrap; must tile seamlessly |
+| Sampled mips            | 0 and 2                    |
 
 ### Channel contract
 
@@ -274,7 +285,7 @@ Consequently A is always zero where R is zero and normally remains positive wher
 -   Keep A zero wherever R is zero.
 -   Do not fill A with an unrelated noise floor; it would alter low-cloud softness even in nominally clear high-cloud regions.
 -   G should form coherent As/Ac regions. The shader samples G at mip 0.
--   Fade R and A to zero near the finite weather-map boundary.
+-   All channels must tile seamlessly. There is no finite map boundary to fade toward.
 
 ## 4. Low-cloud Profile LUT
 
@@ -296,14 +307,16 @@ Consequently A is always zero where R is zero and normally remains positive wher
 
 ```text
 U = local normalized cloud height
-V = radial distance from the weather-map center
+V = radial distance from the centre of the cloud body
 ```
 
-U is zero at the shared cloud-layer bottom and increases upward after coverage-driven cloud-top development and stratocumulus height compression. V is:
+U is zero at the shared cloud-layer bottom and increases upward after coverage-driven cloud-top development and stratocumulus height compression. V is read directly from the Low Weather alpha channel:
 
 ```text
-saturate(length(weatherUV - 0.5) * 2)
+saturate(lowWeather.a)
 ```
+
+V is per cloud body, not per map. It is `0` at the core of the cloud the sample belongs to and `1` at that cloud's rim, so the profile can thin toward each cloud's own edge and produce a dome. Sourcing V from the distance to the weather-map centre instead would apply one gradient across the entire sky and flatten every cloud.
 
 ### Channel contract
 
@@ -318,7 +331,9 @@ The Low Weather G channel selects or interpolates RGB. Stratocumulus uses the Cu
 
 ### Generated behavior
 
-The generated profiles use physical vertical development depths in kilometres. The shared lowest/highest cloud altitudes are only bounds. Increasing the highest altitude therefore does not proportionally stretch Cu and TCu through the entire shell. Each generated channel contains a smooth cloud-bottom ramp and a tapered cloud top.
+The generated profiles use physical vertical development depths in kilometres, scaled by the Instability setting. The shared lowest/highest cloud altitudes are only bounds. Increasing the highest altitude therefore does not proportionally stretch Cu and TCu through the entire shell.
+
+Along V, the usable depth falls off as `sqrt(1 - V^2)` scaled by Dome Strength, while the cloud base stays anchored at `U = 0` for every V. That matches a real cumulus, which has a flat base at the lifting condensation level and a domed top.
 
 ### Override authoring requirements
 
@@ -327,7 +342,7 @@ The generated profiles use physical vertical development depths in kilometres. T
 -   R should be shallow, G should support deeper vertical development, and B may reach the upper shell for Cb.
 -   Avoid a profile that remains near one over its full U range; it produces solid vertical columns.
 -   Keep profiles smooth enough for linear sampling. Sharp one-texel height transitions produce horizontal density bands.
--   V variation should be gradual. It represents large radial variation, not per-cloud high-frequency noise.
+-   Depth should decrease as V increases, and the base should stay anchored at `U = 0` across V. A profile that is constant in V renders flat-topped slabs.
 
 ## 5. Stratocumulus Cell map
 
@@ -451,15 +466,19 @@ The generated texture uses thin periodic ridges modulated by a secondary cross-f
 
 ## Generated-resource lifecycle
 
-Generated 2D textures are GPU `R8G8B8A8_UNORM` resources with render-target and shader-resource bindings. The CPU uploads mip 0 and the D3D11 runtime generates the complete mip chain.
+Generated 2D textures are GPU `R8G8B8A8_UNORM` resources with unordered-access, render-target, and shader-resource bindings. They are written directly by compute shaders in `features/Physical Sky/Shaders/PhysicalSky/CloudMapGen.cs.hlsl`, after which the D3D11 runtime generates the complete mip chain.
 
-Generation is divided so unrelated changes do not rebuild everything:
+Generation runs as five compute passes:
 
--   changing `weatherDim` rebuilds all weather and auxiliary maps;
--   changing low coverage, low contrast, Sc share, or Cu/TCu/Cb weights rebuilds Low Weather;
--   changing high coverage, high contrast, or As/Ac weights rebuilds High Weather;
--   changing profile dimensions, shared cloud-layer depth, or Cu/TCu/Cb physical depth rebuilds the Profile LUT;
--   while a relevant UI slider is actively dragged, the previous generated texture remains active and one rebuild occurs after release.
+1. **generateFields** — evaluates the convective, stratiform, and frontal morphologies into intermediate field targets;
+2. **buildHistogram** — accumulates 256-bin histograms of those fields with atomics;
+3. **solveThresholds** — a single 256-thread group scans each histogram and solves the threshold that yields the requested area fraction;
+4. **composeMaps** — writes Low Weather, High Weather, and the four auxiliary maps;
+5. **composeProfile** — writes the Profile LUT.
+
+Passes 2 and 3 run three times. Each round is gated on thresholds the previous round solved: coverage first, then the stratocumulus split measured over the covered area, then the Cu/TCu/Cb split measured over what stratocumulus did not claim. This is what makes the species shares shares of cloudy sky rather than of the whole map.
+
+Because the whole rebuild is a handful of small dispatches, there is no deferral, throttling, or partial-invalidation scheme. Any changed generation input rebuilds every map in the same frame, so UI sliders and external controllers driving the same settings behave identically. A hash of the generation inputs skips redundant dispatches on unchanged frames; it is an optimization, not a correctness dependency.
 
 Generated texture names visible in graphics debuggers are GPU labels, not disk filenames.
 
@@ -516,11 +535,12 @@ Before shipping a texture set, verify all of the following:
 -   [ ] Nubis tiles across X, Y, and Z and contains continuous adjacent slices.
 -   [ ] Nubis includes at least mips 0 through 4; a full chain is preferred.
 -   [ ] Every 2D override is a non-sRGB `Texture2D`, not an array, cubemap, or volume.
--   [ ] Low Weather uses `R=coverage, G=Cu/TCu/Cb, B=Sc, A=0`.
+-   [ ] Low Weather uses `R=coverage, G=Cu/TCu/Cb, B=Sc, A=cloud-body radial`.
 -   [ ] High Weather uses `R=coverage, G=As/Ac, B=0, A=thickness/MS weight`.
 -   [ ] High Weather contains a valid mip 2 with area-averaged R coverage.
--   [ ] Weather coverage and High Weather A fade to zero at the finite map boundary.
--   [ ] Profile uses `U=height, V=radial distance, RGB=Cu/TCu/Cb` and returns to zero at each cloud top.
+-   [ ] Low Weather and High Weather tile seamlessly in U/V; neither relies on an edge fade.
+-   [ ] Low Weather A resets per cloud body rather than forming one map-wide gradient.
+-   [ ] Profile uses `U=height, V=cloud-body radial, RGB=Cu/TCu/Cb`, thins as V increases, and returns to zero at each cloud top.
 -   [ ] Sc Cell, High Cell, High Warp, and High Wisp tile seamlessly in U/V.
 -   [ ] High Warp is centered around neutral RG `0.5, 0.5`.
 -   [ ] High Wisp uses bright values for erosion, not preservation.

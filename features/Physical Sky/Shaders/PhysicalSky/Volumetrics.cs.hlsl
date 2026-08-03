@@ -458,9 +458,13 @@ float CloudPowderEffect(float cloudDensity, float cosAngle, float intensity)
 	return lerp(1.0, lerp(1.0, powder, smoothstep(0.5, -0.5, cosAngle)), intensity);
 }
 
+// The weather map is a seamlessly tiling synoptic pattern rather than a finite
+// rectangle, so it is sampled with a wrapping sampler and never needs a bounds
+// test. Subtracting the accumulated wind displacement advects the whole cloud
+// system downwind, matching the 3D shape noise that uses the same offset.
 float2 HPWeatherUV(float2 worldXY, VolumetricCloudData info)
 {
-	return (worldXY - info.weatherCenter) / max(info.weatherWorldSize, 1.0) + 0.5;
+	return (worldXY - info.weatherCenter - info.noiseWindOffset) / max(info.weatherWorldSize, 1.0) + 0.5;
 }
 
 float HPLowTypeValue(float cloudType, float cu, float tcu, float cb)
@@ -479,9 +483,7 @@ float HPEvaluateTopHeightProxy(float2 worldXY)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	float2 uv = HPWeatherUV(worldXY, info);
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, uv, 0);
+	float4 weather = TexHpLowWeather.SampleLevel(TileableSampler, uv, 0);
 	float coverageHeight = saturate(HPPositivePow(weather.r, max(info.coverageHeightContrast, 0.001)) * info.coverageHeightIntensity);
 	float development = HPLowTopDevelopment(weather.g) * (1.0 - saturate(info.scWorleyStrength * weather.b));
 	float topScale = lerp(1.0, max(info.coverTopMax, 1.0), HPPositivePow(coverageHeight, max(info.coverTopCurvePow, 0.01)) * info.coverTopStrength * development);
@@ -544,9 +546,7 @@ float sampleCloudDensity(
 		return 0;
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float2 weatherUV = HPWeatherUV(pos.xy, info);
-	if (any(weatherUV < 0.0) || any(weatherUV > 1.0))
-		return 0.0;
-	float4 weather = TexHpLowWeather.SampleLevel(TransmittanceSampler, weatherUV, 0);
+	float4 weather = TexHpLowWeather.SampleLevel(TileableSampler, weatherUV, 0);
 	float coverageRaw = weather.r;
 	float cloudType = weather.g;
 	float scMask = weather.b;
@@ -558,7 +558,7 @@ float sampleCloudDensity(
 	coverage = lerp(coverage, scCoverage * scCell, scStr);
 	if (coverage < 0.1)
 		return 0.0;
-	const float4 highWeather = TexHpHighWeather.SampleLevel(TransmittanceSampler, weatherUV, 0);
+	const float4 highWeather = TexHpHighWeather.SampleLevel(TileableSampler, weatherUV, 0);
 	const float edgeSoftness = info.highDensitySoftAIntensity *
 	                           (1.0 - HPPositivePow(saturate(highWeather.a), max(info.highDensitySoftAContrast, 0.01)));
 
@@ -567,7 +567,11 @@ float sampleCloudDensity(
 	float heightForLut = ndf.height_fraction / (1.0 + (topScale - 1.0) * ndf.height_fraction);
 	float localHeight = lerp(heightForLut, saturate(ndf.height_fraction / max(info.scHeightScale, 0.01)), scStr);
 	ndf.local_height = localHeight;
-	float radialDist = saturate(length(weatherUV - 0.5) * 2.0);
+	// The profile LUT's second axis is the distance from the cloud body's own
+	// centre, supplied by the generator in the weather map's alpha channel. Using
+	// the distance from the weather map centre instead would impose a single
+	// map-wide gradient, flattening every cloud into a slab.
+	float radialDist = saturate(weather.a);
 	float3 profiles = TexHpProfile.SampleLevel(TransmittanceSampler, float2(localHeight, radialDist), 0).rgb;
 	float heightGradient = lerp(HPLowTypeValue(cloudType, profiles.r, profiles.g, profiles.b), profiles.r, scStr);
 	// Noise parameters use X/vertical/Y ordering. Convert the game's Z-up position
@@ -715,13 +719,14 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 	normalizedHeight = saturate((planetZ - info.lowestCloudAltitude) /
 								max(info.highestCloudAltitude - info.lowestCloudAltitude, GAME_UNITS_PER_METER));
 	float2 uv = HPWeatherUV(pos.xy, info);
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-	float4 hiWeather = TexHpHighWeather.SampleLevel(TransmittanceSampler, uv, 0);
+	float4 hiWeather = TexHpHighWeather.SampleLevel(TileableSampler, uv, 0);
 	float hiCoverage = hiWeather.r;
 	float hiType = hiWeather.g;
 	if (hiCoverage < 0.001)
 		return 0.0;
+	// The weather UV already advects with the wind, so the cell, warp, and wisp
+	// patterns travel with the cloud system they belong to. This offset is an
+	// additional drift relative to that system.
 	float2 hiWindUV = info.noiseWindOffset / max(info.weatherWorldSize, 1.0);
 	float2 cellUV = uv * info.highCellScale + hiWindUV * info.highCellWindSpeed;
 	float2 warpUV = uv * info.highCellWarpScale + hiWindUV * info.highCellWindSpeed * 0.5;
@@ -911,8 +916,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 	[branch] if (info.highCloudEnabled > 0.0)
 	{
 		const float2 high_gate_uv = HPWeatherUV(ray.start_pos.xy, info);
-		if (all(high_gate_uv >= 0.0) && all(high_gate_uv <= 1.0))
-			high_gate_coverage = TexHpHighWeather.SampleLevel(TransmittanceSampler, high_gate_uv, 2).r;
+		high_gate_coverage = TexHpHighWeather.SampleLevel(TileableSampler, high_gate_uv, 2).r;
 	}
 	if (info.highCloudEnabled > 0.0 && high_gate_coverage > 0.001) {
 		const float3 lowLum = ray.lum;
@@ -950,7 +954,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 			high_mean_depth += hiAbsDist * transmittance_weighted_density;
 			high_mean_weight += transmittance_weighted_density;
 			const float2 hiWeatherUv = HPWeatherUV(hiPos.xy, info);
-			const float4 hiWeather = any(hiWeatherUv < 0.0) || any(hiWeatherUv > 1.0) ? 0.0 : TexHpHighWeather.SampleLevel(TransmittanceSampler, hiWeatherUv, 0);
+			const float4 hiWeather = TexHpHighWeather.SampleLevel(TileableSampler, hiWeatherUv, 0);
 			const float hiMsWeight = hiWeather.a;
 			float3 hiExtinction = hiDensity * info.highViewAbsorption * hiMsWeight * GAME_UNIT_TO_M;
 			float3 hiTransmittance = exp(-hiExtinction * hiStep);
@@ -1576,7 +1580,7 @@ bool IntersectCloudSphere(float3 origin, float3 dir, float radius, out float2 in
 		float3 optical_depth = info.scatterTint * cloud.scatter * low_density;
 		if (high_density > 0.001) {
 			const float2 high_uv = HPWeatherUV(pos.xy, info);
-			const float high_cover = any(high_uv < 0.0) || any(high_uv > 1.0) ? 0.0 : TexHpHighWeather.SampleLevel(TransmittanceSampler, high_uv, 0).r;
+			const float high_cover = TexHpHighWeather.SampleLevel(TileableSampler, high_uv, 0).r;
 			optical_depth += info.scatterTint * high_density * info.highLightAbsorption * GAME_UNIT_TO_M *
 			                 (1.0 + high_cover * info.highCoverAbsorptionStrength);
 		}

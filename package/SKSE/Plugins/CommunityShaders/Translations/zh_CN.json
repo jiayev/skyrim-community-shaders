@@ -1018,7 +1018,6 @@
     "feature.physical_sky.high_cell_scale": "高云细胞缩放",
     "feature.physical_sky.high_cloud_species": "高空云种",
     "feature.physical_sky.high_clouds": "高空云",
-    "feature.physical_sky.high_contrast": "高空云对比度",
     "feature.physical_sky.high_coverage": "高空云覆盖率",
     "feature.physical_sky.high_density": "高云密度",
     "feature.physical_sky.high_sky_blend": "高云天空混合",
@@ -1045,8 +1044,6 @@
     "feature.physical_sky.load": "加载",
     "feature.physical_sky.loaded_textures": "已加载纹理",
     "feature.physical_sky.low_cloud_species": "低云云种",
-    "feature.physical_sky.low_contrast": "低云对比度",
-    "feature.physical_sky.low_coverage": "低云覆盖率",
     "feature.physical_sky.low_weather": "低云天气图",
     "feature.physical_sky.lowest_cloud_altitude": "最低云层高度",
     "feature.physical_sky.masser": "Masser",
@@ -2277,5 +2274,8 @@
     "ui.copy": "复制",
     "ui.dont_ask_again": "不再提示",
     "ui.search": "搜索...",
-    "ui.search_features": "搜索功能..."
+    "ui.search_features": "搜索功能...",
+    "feature.physical_sky.high_contrast": "高空云对比度",
+    "feature.physical_sky.low_contrast": "低云对比度",
+    "feature.physical_sky.low_coverage": "低云覆盖率"
 }

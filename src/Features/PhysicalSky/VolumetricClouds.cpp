@@ -347,6 +347,15 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		}
 		cloudMap.generationVersion = 1u;
 	}
+	// Version 2 replaced the open-loop coverage threshold with a solved quantile
+	// and the summed-FBM field with a convective/stratiform/frontal model. The
+	// removed lowCoverage and lowContrast keys have no equivalent under the new
+	// semantics, so stored configurations fall back to the new defaults rather
+	// than carrying a value that no longer means what it used to.
+	if (cloudMap.generationVersion < 2u) {
+		cloudMap.generationVersion = 2u;
+		volMainHistoryValid = false;
+	}
 	if (maxNoiseScale > 0.001f || low.detailNoiseScale > 0.01f) {
 		low.noiseScale = float3{ 0.000045f, 0.00007f, 0.000045f };
 		low.detailNoiseScale = 0.00019f;

@@ -54,8 +54,38 @@ struct HpGeneratedCloudMapSettings
 	// vertical shared cloud layer, but their default feature scales are paired.
 	float worldSize = 64.f;
 	float2 center = { 0.f, 0.f };
-	float lowCoverage = 0.62f;
-	float lowContrast = 1.25f;
+	uint32_t seed = 1337;
+
+	// --- Primary controls -------------------------------------------------
+	// Each of these maps onto one solved quantity in the generator rather than
+	// onto an opaque noise threshold.
+
+	// Fraction of the sky carrying low cloud. The generator solves the field
+	// threshold by histogram quantile, so this is the actual covered area.
+	float skyCoverage = 0.38f;
+	// Horizontal diameter of a single convective cloud body, in kilometres.
+	float cloudSize = 2.4f;
+	// Atmospheric instability: drives the Cu -> TCu -> Cb species mix and the
+	// vertical development of each species.
+	float instability = 0.45f;
+	// 0 = discrete convective cells, 1 = continuous stratiform sheets.
+	float character = 0.35f;
+	// Separation between convective cloud bodies. Independent of coverage: the
+	// same cloud area is redistributed into fewer, denser bodies.
+	float breakup = 0.45f;
+	// Fraction of the sky carrying high cloud, solved the same way.
+	float highCoverage = 0.28f;
+
+	// --- Advanced ---------------------------------------------------------
+	// Edge softness of the coverage ramp. Unlike the former contrast control,
+	// this cannot change how much sky is covered.
+	float coverageEdgeWidth = 0.45f;
+	float highCoverageEdgeWidth = 0.5f;
+	// Frontal band contribution to coverage, and the band bearing in degrees.
+	float frontStrength = 0.35f;
+	float frontBearing = 45.f;
+	// Radial dome falloff applied to the profile LUT. 0 = flat slabs.
+	float domeStrength = 0.85f;
 	// Shares are measured over generated low-cloud coverage. Cu/Tcu/Cb weights
 	// are normalized after the independent stratocumulus share is assigned.
 	float stratocumulus = 0.20f;
@@ -68,8 +98,6 @@ struct HpGeneratedCloudMapSettings
 	float cumulusDepth = 1.2f;
 	float toweringCumulusDepth = 3.0f;
 	float cumulonimbusDepth = 10.0f;
-	float highCoverage = 0.28f;
-	float highContrast = 1.1f;
 	float altostratusWeight = 0.68f;
 	float altocumulusWeight = 0.32f;
 	HpTextureOverrideSettings overrides;
@@ -224,8 +252,6 @@ struct HpCloudTextureSet
 
 struct NdfManager
 {
-	constexpr static uint16_t kNdfDim = 256;
-
 	eastl::unique_ptr<Texture2D> texLowWeather = nullptr;
 	eastl::unique_ptr<Texture2D> texHighWeather = nullptr;
 	eastl::unique_ptr<Texture2D> texProfile = nullptr;
@@ -236,38 +262,73 @@ struct NdfManager
 
 	void SetupResources();
 	void CompileShaders();
+	bool ShadersReady() const;
 
 	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
 	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
 	void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
+	/** @brief Regenerates the cloud maps if any generation input changed. */
 	void UpdateNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
 	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
 	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
 
 private:
+	// Generation is GPU-side, so it is cheap enough to re-run whenever an input
+	// changes without deferring or throttling. The hash exists only to skip
+	// redundant dispatches on unchanged frames.
+	size_t generatedHash = 0;
 	uint32_t generatedWeatherDim = 0;
 	uint32_t generatedProfileWidth = 0;
 	uint32_t generatedProfileHeight = 0;
-	float generatedLowCoverage = -1.0f;
-	float generatedLowContrast = -1.0f;
-	float generatedStratocumulus = -1.0f;
-	float generatedCumulusWeight = -1.0f;
-	float generatedToweringCumulusWeight = -1.0f;
-	float generatedCumulonimbusWeight = -1.0f;
-	float generatedHighCoverage = -1.0f;
-	float generatedHighContrast = -1.0f;
-	float generatedAltostratusWeight = -1.0f;
-	float generatedAltocumulusWeight = -1.0f;
-	float generatedCumulusDepth = -1.0f;
-	float generatedToweringCumulusDepth = -1.0f;
-	float generatedCumulonimbusDepth = -1.0f;
-	float generatedLayerDepth = -1.0f;
-	int deferredGenerationFrame = -1;
-	std::vector<float> cachedCoverageField;
-	std::vector<float> cachedCloudType;
-	std::vector<float> cachedScRegion;
-	std::vector<float> cachedHighField;
-	std::vector<float> cachedHighType;
-	std::vector<float> cachedHighScatterField;
-	void GenerateDefaultTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
+
+	// Intermediate morphology fields consumed by the histogram and compose passes.
+	eastl::unique_ptr<Texture2D> texFieldLow = nullptr;
+	eastl::unique_ptr<Texture2D> texFieldHigh = nullptr;
+	eastl::unique_ptr<Buffer> bufHistogram = nullptr;
+	eastl::unique_ptr<Buffer> bufThresholds = nullptr;
+	eastl::unique_ptr<ConstantBuffer> cbGen = nullptr;
+
+	winrt::com_ptr<ID3D11ComputeShader> csFields = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csHistogram = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csSolve = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCompose = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csProfile = nullptr;
+
+	struct GenCB
+	{
+		uint32_t weatherDim[2];
+		uint32_t profileDim[2];
+
+		uint32_t cellPeriod;
+		uint32_t seed;
+		uint32_t solveRound;
+		float skyCoverage;
+
+		float highCoverage;
+		float instability;
+		float character;
+		float breakup;
+
+		float coverageEdgeWidth;
+		float highCoverageEdgeWidth;
+		float frontStrength;
+		float domeStrength;
+
+		float frontNormal[2];
+		float frontTangent[2];
+
+		float scShare;
+		float cuShare;
+		float tcuShare;
+		float asShare;
+
+		float cumulusDepth;
+		float toweringCumulusDepth;
+		float cumulonimbusDepth;
+		float layerDepth;
+	};
+	STATIC_ASSERT_ALIGNAS_16(GenCB);
+
+	bool EnsureResources(const NdfSettings& ndfSettings);
+	void GenerateTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
 };
