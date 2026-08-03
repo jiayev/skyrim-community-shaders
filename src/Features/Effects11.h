@@ -110,5 +110,21 @@ public:
 	void ModifySky(RE::BSRenderPass* Pass);
 	__declspec(noinline) void ModifyParticle(RE::BSRenderPass* Pass);
 	void ParticleShaderHacks();
-	bool HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
+
+	/**
+	 * @brief Whether Effects11 wants to replace the vanilla tonemap this frame.
+	 *
+	 * Queried by State::GetTonemapOwner() to arbitrate against Post Processing. Does not
+	 * render anything; refreshes per-frame common data as a side effect.
+	 */
+	bool WantsTonemapOwnership();
+
+	/**
+	 * @brief Runs the ENB effect chain in place of the vanilla tonemap pass.
+	 * @param a_input Render target holding the scene color to tonemap.
+	 * @param a_output Render target receiving the tonemapped result.
+	 * @return True if the chain ran; false if the effect manager is not yet initialized,
+	 *         in which case the caller must fall back to the vanilla pass.
+	 */
+	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 };

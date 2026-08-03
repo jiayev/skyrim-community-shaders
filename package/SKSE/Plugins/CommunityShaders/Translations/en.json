@@ -1622,6 +1622,7 @@
     "feature.post_processing.selected_feature_is_not_valid": "Selected feature is not valid.",
     "feature.post_processing.tint_values": "Tint Values:",
     "feature.post_processing.tint_values_detail": "Tint Amount: %.3f\nTint Color: (%.3f, %.3f, %.3f)",
+    "feature.post_processing.tonemap_owned_by_effects11": "Tonemapping is currently handled by Effects 11. Post Processing effects that run before tonemapping still apply. To use Post Processing tonemapping instead, either disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting.",
     "feature.post_processing.vignette.anamorphic_squeeze": "Anamorphic Squeeze",
     "feature.post_processing.vignette.description": "Simulates natural vignetting caused by angled rays hitting the film or sensor array.",
     "feature.post_processing.vignette.focal_length": "Focal Length",
