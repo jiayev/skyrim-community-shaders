@@ -356,9 +356,27 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		cloudMap.generationVersion = 2u;
 		volMainHistoryValid = false;
 	}
+	// Version 3 retunes the shape-noise frequencies. The previous base period was
+	// 22 km horizontally, so a 2.4 km cloud spanned only 14 of the volume's 128
+	// texels and adjacent clouds sampled nearly the same stretch of noise, carving
+	// them into near-identical shapes. Only configurations still holding the exact
+	// superseded defaults are retuned; hand-authored frequencies are preserved.
+	if (cloudMap.generationVersion < 3u) {
+		const auto isLegacy = [](float value, float legacy) { return std::abs(value - legacy) < 1e-7f; };
+		if (isLegacy(low.noiseScale.x, 0.000045f) && isLegacy(low.noiseScale.y, 0.00007f) &&
+			isLegacy(low.noiseScale.z, 0.000045f)) {
+			low.noiseScale = float3{ 0.0001f, 0.000145f, 0.0001f };
+			volMainHistoryValid = false;
+		}
+		if (isLegacy(low.detailNoiseScale, 0.00019f)) {
+			low.detailNoiseScale = 0.00042f;
+			volMainHistoryValid = false;
+		}
+		cloudMap.generationVersion = 3u;
+	}
 	if (maxNoiseScale > 0.001f || low.detailNoiseScale > 0.01f) {
-		low.noiseScale = float3{ 0.000045f, 0.00007f, 0.000045f };
-		low.detailNoiseScale = 0.00019f;
+		low.noiseScale = float3{ 0.0001f, 0.000145f, 0.0001f };
+		low.detailNoiseScale = 0.00042f;
 		volMainHistoryValid = false;
 	}
 
