@@ -716,9 +716,7 @@ void Streamline::EvaluateDLSS(ID3D12GraphicsCommandList4* commandList, sl::Viewp
 
 void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::ViewportHandle vp,
 	ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, [[ maybe_unused ]] ID3D12Resource* reactiveMask,
-	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, 
-	ID3D12Resource* normalRoughness, 
-	ID3D12Resource* diffRayDirHitDist, ID3D12Resource* specRayDirHitDist,
+	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness,  ID3D12Resource* specHitDist,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth)
 {
 	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
@@ -732,8 +730,7 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 	sl::Resource specularAlbedoRes = { sl::ResourceType::eTex2d, specularAlbedo, 0 };
 	sl::Resource normalRoughnessRes = { sl::ResourceType::eTex2d, normalRoughness, 0 };
 
-	sl::Resource diffRayDirHitDistRes = { sl::ResourceType::eTex2d, diffRayDirHitDist, D3D12_RESOURCE_STATE_COMMON };
-	sl::Resource specRayDirHitDistRes = { sl::ResourceType::eTex2d, specRayDirHitDist, D3D12_RESOURCE_STATE_COMMON };
+	sl::Resource specHitDistRes = { sl::ResourceType::eTex2d, specHitDist, D3D12_RESOURCE_STATE_COMMON };
 
 	if (!CheckFrameConstants(vp))
 		return;
@@ -752,8 +749,7 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 		{ &specularAlbedoRes, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &normalRoughnessRes, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 
-		{ &diffRayDirHitDistRes, sl::kBufferTypeDiffuseRayDirectionHitDistance, sl::ResourceLifecycle::eOnlyValidNow, &extentIn },
-		{ &specRayDirHitDistRes, sl::kBufferTypeSpecularRayDirectionHitDistance, sl::ResourceLifecycle::eOnlyValidNow, &extentIn }
+		{ &specHitDistRes, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eOnlyValidNow, &extentIn }
 	};
 
 	if (SL_FAILED(result, slSetTag(vp, tags, _countof(tags), commandList))) {
@@ -833,10 +829,9 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	ID3D12Resource* diffuseAlbedo = nullptr;
 	ID3D12Resource* specularAlbedo = nullptr;
 	ID3D12Resource* normalRoughness = nullptr;
-	ID3D12Resource* diffRayDirHitDist = nullptr;
-	ID3D12Resource* specRayDirHitDist = nullptr;
+	ID3D12Resource* specHitDist = nullptr;
 
-	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, diffRayDirHitDist, specRayDirHitDist);
+	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDist);
 
 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
@@ -848,7 +843,7 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 		a_input, a_output,
 		a_depth, a_motionVectors, a_reactiveMask,
 		diffuseAlbedo, specularAlbedo, normalRoughness, 
-		diffRayDirHitDist, specRayDirHitDist,
+		specHitDist,
 		extentIn, extentOut, (uint)screenSize.x);
 }
 
