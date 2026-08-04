@@ -320,6 +320,7 @@ CloudFields EvaluateFields(float2 uv)
 // (1 - coverage), so a floor that is too low would select map area that never
 // resolves into visible cloud and break the "coverage means coverage" contract.
 static const float kCoverageFloor = 0.35;
+static const float kCoverageCeiling = 0.85;
 
 // Coverage remap. A pixel is cloudy exactly when its potential exceeds the
 // solved threshold, so the covered area fraction equals the quantile the
@@ -331,7 +332,7 @@ float ApplyCoverage(float potential, float threshold, float edgeWidth)
 		return 0.0;
 	const float headroom = max(1.0 - threshold, 1e-3);
 	const float t = saturate((potential - threshold) / (max(edgeWidth, 0.05) * headroom));
-	return lerp(kCoverageFloor, 1.0, t);
+	return lerp(kCoverageFloor, kCoverageCeiling, t);
 }
 
 uint ScoreBin(float value)

@@ -107,11 +107,9 @@ using NdfSettings = HpGeneratedCloudMapSettings;
 
 struct HpLowCloudSettings
 {
-	// Inverse metres. The base field is intentionally kilometre-scale; the profile
-	// texture, rather than high-frequency 3D noise, defines the vertical silhouette.
-	float3 noiseScale = { 0.000045f, 0.00007f, 0.000045f };
+	float3 noiseScale = { 0.0001f, 0.000145f, 0.0001f };
 	float3 noiseOffset = { 0.f, 0.f, 0.f };
-	float detailNoiseScale = 0.00019f;
+	float detailNoiseScale = 0.00042f;
 	float2 windDirection = { 1.f, 0.2f };
 	float windSpeed = 12.f;
 	float baseNoiseWindSpeed = 1.f;
