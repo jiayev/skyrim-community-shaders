@@ -165,6 +165,20 @@ namespace
 			ImGui::EndCombo();
 		}
 	}
+
+	/**
+	 * @brief Draws a slider for a normalized [0, 1] setting using percent units.
+	 *
+	 * ImGui formats the raw backing value, so a 0-1 fraction shown with a percent
+	 * format string would display 0.38 as "0 %". Editing a scaled copy keeps the
+	 * stored value normalized while the control reads and drags in percent.
+	 */
+	void SliderPercent(const char* label, float& normalizedValue)
+	{
+		float percent = std::clamp(normalizedValue, 0.0f, 1.0f) * 100.0f;
+		if (ImGui::SliderFloat(label, &percent, 0.0f, 100.0f, "%.0f %%"))
+			normalizedValue = std::clamp(percent, 0.0f, 100.0f) / 100.0f;
+	}
 }
 
 void NdfManager::SetupResources()
@@ -264,7 +278,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texMa
 
 	ImGui::SeparatorText(T(TKEY("cloud_field"), "Cloud Field"));
 	{
-		ImGui::SliderFloat(T(TKEY("sky_coverage"), "Sky Coverage"), &ndfSettings.skyCoverage, 0.f, 1.f, "%.0f %%", ImGuiSliderFlags_None);
+		SliderPercent(T(TKEY("sky_coverage"), "Sky Coverage"), ndfSettings.skyCoverage);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("sky_coverage_tooltip"), "Fraction of the sky carrying low cloud. Solved exactly, so the value matches what you see."));
 
@@ -284,7 +298,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texMa
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("breakup_tooltip"), "Separation between cloud bodies. Coverage stays fixed: the same cloud area is redistributed into fewer, denser bodies."));
 
-		ImGui::SliderFloat(T(TKEY("high_coverage"), "High Cloud Coverage"), &ndfSettings.highCoverage, 0.f, 1.f, "%.0f %%");
+		SliderPercent(T(TKEY("high_coverage"), "High Cloud Coverage"), ndfSettings.highCoverage);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("high_coverage_tooltip"), "Fraction of the sky carrying altostratus and altocumulus."));
 	}
