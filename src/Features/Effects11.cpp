@@ -517,6 +517,11 @@ void Effects11::OnSkyUpdateColors(RE::Sky* a_sky)
 		OverrideWeather(a_sky);
 }
 
+bool Effects11::ReplacedTonemapperThisFrame() const
+{
+	return tonemapReplacedFrame == globals::state->frameCount;
+}
+
 bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
 {
 	CheckCommonData();
@@ -527,7 +532,10 @@ bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET
 	if (enableEffect && !settingManager.GetValue<bool>("UseOriginalPostProcessing", "EFFECT")) {
 		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
 		// Only claim the tonemap pass if the effect chain actually wrote the output
-		return effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output]);
+		if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
+			tonemapReplacedFrame = globals::state->frameCount;
+			return true;
+		}
 	}
 	return false;
 }
