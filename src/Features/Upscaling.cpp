@@ -1148,7 +1148,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 }
 
-void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
+void Upscaling::CopySharedD3D12Resources()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
@@ -1163,8 +1163,7 @@ void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 	context->CopyResource(sharedResources.main->resource11, main.texture);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	if (!preserveMotionVector)
-		context->CopyResource(sharedResources.motionVector->resource11, motionVector.texture);
+	context->CopyResource(sharedResources.motionVector->resource11, motionVector.texture);
 
 	if (reactiveMaskTexture)
 		context->CopyResource(sharedResources.reactiveMask->resource11, reactiveMaskTexture->resource.get());
@@ -1195,7 +1194,7 @@ void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 		ID3D11ShaderResourceView* views[1] = { depth.depthSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11RenderTargetView* rtvs[1] = { globals::dx12Interop->sharedResources.depth->rtv };
+		ID3D11RenderTargetView* rtvs[1] = { sharedResources.depth->rtv };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
@@ -1867,7 +1866,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.ConvertColorSpace(true);
 
 		if (upscaling.d3d12Mode)
-			upscaling.CopySharedD3D12Resources(upscaleMethod == UpscaleMethod::kDLSS_RR);
+			upscaling.CopySharedD3D12Resources();
 
 		upscaling.PerformUpscaling();
 

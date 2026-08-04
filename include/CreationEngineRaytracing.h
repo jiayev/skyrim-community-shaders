@@ -446,7 +446,7 @@ struct CreationEngineRaytracing
 	using SetWaterFlowMapFn = void (*)(ID3D12Resource*);
 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
 	using UpdateSettingsFn = void (*)(Settings);
-	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&);
+	using GetRRInputFn = void (*)(ID3D12Resource*&, ID3D12Resource*&, ID3D12Resource*&);
 	using SetSharedTexturesFn = void (*)(ID3D12Resource*, ID3D12Resource*, ID3D12Resource*);
 	using GetSharedTexturesFn = void (*)(SharedTexture*, SharedTexture*, SharedTexture*, SharedTexture*);
 	using UpdateJitterFn = void (*)(float2);
