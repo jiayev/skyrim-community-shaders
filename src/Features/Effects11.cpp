@@ -465,8 +465,6 @@ void Effects11::CheckCommonData()
 		bool isMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
 		auto& effectManager = EffectManager::GetSingleton();
 
-		// A stale enbseries.ini can leave UseEffect on with no preset present; stay inert rather
-		// than applying ENB overrides no .fx file backs
 		enableEffect = !isMenuOpen && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
 
 		auto& weatherManager = WeatherManager::GetSingleton();
