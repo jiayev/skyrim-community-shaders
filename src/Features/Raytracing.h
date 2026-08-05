@@ -147,6 +147,15 @@ struct Raytracing : public OverlayFeature
 			&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 	}
 
+	inline uint32_t GetDiffuseAlbedoIndex() const
+	{
+		// Use only the first texture since the only use will be as DLSS RR input
+		if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
+			return 0;
+
+		return currentFrame;
+	}
+
 	enum struct OverlayMode
 	{
 		None,

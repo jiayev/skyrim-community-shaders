@@ -773,9 +773,9 @@ void Raytracing::DrawDebugSettings()
 		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
 		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			diffuseAlbedoTexture[currentFrame]->resource11->GetDesc(&desc);
+			diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->resource11->GetDesc(&desc);
 
-			ImGui::Image(diffuseAlbedoTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -1091,7 +1091,7 @@ void Raytracing::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		// Normal Roughness Texture
-		texDesc.Format = DXGI_FORMAT_R16G16B16A16_SNORM;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		normalRoughnessTexture = eastl::make_unique<WrappedResource>(texDesc);
 	}
 
@@ -1341,8 +1341,7 @@ void Raytracing::ConvertTextures()
 	auto* frameBufferCB = *globals::game::perFrame.get();
 	context->CSSetConstantBuffers(12, 1, &frameBufferCB);
 
-	bool isRayReconstruction = globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS_RR;
-
+	const bool isRayReconstruction = globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS_RR;
 	uint shaderIndex = isRayReconstruction ? 1 : 0;
 	context->CSSetShader(convertTexturesCS[shaderIndex].get(), nullptr, 0);
 
@@ -1358,12 +1357,9 @@ void Raytracing::ConvertTextures()
 
 	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-	auto sampler = samplerState.get();
-	context->CSSetSamplers(0, 1, &sampler);
-
 	ID3D11UnorderedAccessView* uavs[] = {
 		normalRoughnessTexture->uav,
-		diffuseAlbedoTexture[currentFrame]->uav
+		diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->uav
 	};
 
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -1382,9 +1378,8 @@ void Raytracing::DeferredPasses()
 	if (!settings.CreationEngineRaytracingSettings.Enabled || Mode() == CreationEngineRaytracing::Mode::None)
 		return;
 
-	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
+	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
 		ConvertTextures();
-	}
 
 	CopyWaterFlowap();
 
@@ -1610,7 +1605,7 @@ void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture[currentFrame]->GetResource();
+	diffuseAlbedo = diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->GetResource();
 	normalRoughness = normalRoughnessTexture->GetResource();
 
 	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDist);
