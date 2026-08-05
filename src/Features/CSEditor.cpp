@@ -749,7 +749,13 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 		ImGui::PopStyleColor();
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+		if (EditorWindow::AreWeatherLockHooksInstalled()) {
+			ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
+		} else {
+			// MaintainWeatherLock still re-applies the lock every frame without the call-site
+			// redirects, so the lock works but weather can visibly flash before correcting.
+			ImGui::Text("%s", T(TKEY("lock_weather_unavailable_tooltip"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting"));
+		}
 	}
 
 	// Weather Selection - now with colored text
