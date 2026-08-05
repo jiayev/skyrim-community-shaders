@@ -52,9 +52,9 @@ struct Skin : Feature
 	/** @brief Loads the skin detail normal map DDS texture and creates its shader resource view. */
 	void LoadSkinDetailTexture();
 
-	struct Settings
+	/** @brief Appearance settings that can be overridden per race (and, later, per actor). */
+	struct SkinProfile
 	{
-		bool EnableSkin = true;
 		float SkinMainRoughness = 0.7f;
 		float SkinSecondRoughness = 0.35f;
 		float SkinSpecularTexMultiplier = 1.0f;
@@ -69,17 +69,28 @@ struct Skin : Feature
 		float SkinDetailStrength = 0.25f;
 		float SkinDetailTiling = 10.0f;
 		float BodyTilingMultiplier = 2.0f;
-		float ExtraSkinWetness = 0.0f;
-		float WetFadeTime = 10.0f;
-		float StartSweat = 0.75f;
-		float FullSweat = 0.15f;
-		float4 WetParams = { 512.0f, 0.7f, 10.0f, 4.0f };
 		float Translucency = 0.1f;
 		float sssWidth = 0.2f;
 		bool UseSSS = true;
 		float FuzzStrength = 1.0f;
 		float FuzzRoughness = 0.35f;
 		float FuzzF0 = 0.045f;
+	};
+
+	struct Settings
+	{
+		bool EnableSkin = true;
+		float ExtraSkinWetness = 0.0f;
+		float WetFadeTime = 10.0f;
+		float StartSweat = 0.75f;
+		float FullSweat = 0.15f;
+		float4 WetParams = { 512.0f, 0.7f, 10.0f, 4.0f };
+
+		SkinProfile DefaultProfile;
+		/** @brief Named profile pool, shared by any number of bindings. */
+		std::map<std::string, SkinProfile> Profiles;
+		/** @brief Race editor ID -> profile name. */
+		std::map<std::string, std::string> RaceProfiles;
 	} settings;
 
 	struct alignas(16) SkinData
@@ -96,12 +107,51 @@ struct Skin : Feature
 	struct alignas(16) PerGeometryData
 	{
 		float4 skinPerGeometry;
+		SkinData profile;
 	};
 
 	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
 	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
+	uint32_t currentProfileIndex = UINT32_MAX;
+	uint32_t currentProfileRevision = 0;
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
+
+	/** @brief GPU-ready profile data; index 0 is always the default profile. */
+	std::vector<SkinData> profileData;
+	std::unordered_map<std::string, uint32_t> profileNameToIndex;
+	std::unordered_map<RE::FormID, uint32_t> raceProfileIndex;
+	uint32_t profileDataRevision = 0;
+	bool profileBindingsDirty = true;
+
+	/** @brief Packs a profile plus the global (non-per-race) settings into GPU data. */
+	SkinData MakeProfileData(const SkinProfile& a_profile) const;
+	/** @brief Rebuilds the GPU profile array, bumping the revision when the contents change. */
+	void RebuildProfileData();
+	/** @brief Drops cached race->profile resolutions, forcing them to be resolved again. */
+	void InvalidateProfileBindings();
+	/**
+	 * @brief Resolves the profile index used for a race, caching the result by race form ID.
+	 * @param a_race The race to resolve, may be null.
+	 * @return Index into profileData; 0 when no override applies.
+	 */
+	uint32_t GetProfileIndexForRace(const RE::TESRace* a_race);
+
+	/** @brief Draws the global (non-per-race) settings block. */
+	void DrawGlobalSettings();
+	/** @brief Draws the profile selector plus add/duplicate/rename/delete controls. */
+	void DrawProfileManager();
+	/** @brief Draws every per-race-able setting of the given profile. */
+	void DrawProfileSettings(SkinProfile& a_profile);
+	/** @brief Draws the race to profile binding table. */
+	void DrawRaceBindings();
+	/** @brief Collects all races with an editor ID for the binding UI. */
+	void RefreshRaceList();
+
+	std::string uiSelectedProfile;  // empty = default profile
+	std::string uiPendingRace;
+	std::string uiProfileNameBuffer;
+	std::vector<std::pair<std::string, std::string>> raceList;  // editor ID, display name
 
 	struct ExtraTextures
 	{
@@ -117,6 +167,7 @@ struct Skin : Feature
 	{
 		float4 wetness = { 0.0f, 0.0f, 0.0f, 0.0f };
 		uint frameCount = 0;
+		uint32_t profileIndex = 0;
 	};
 
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
@@ -137,9 +188,10 @@ struct Skin : Feature
 	/**
 	 * @brief Computes per-geometry wetness data (sweat, water submersion, fade) for an actor.
 	 * @param geometry The geometry to retrieve wetness data for.
+	 * @param a_profileIndex Receives the profile index resolved for the geometry's actor.
 	 * @return A float4 containing (sweat, waterWetness, positionZ, waterDepth).
 	 */
-	float4 GetWetness(RE::BSGeometry* geometry);
+	float4 GetWetness(RE::BSGeometry* geometry, uint32_t& a_profileIndex);
 
 	/**
 	 * @brief Discovers and loads extra skin textures (RFAOS, wetness) based on the material's texture set.

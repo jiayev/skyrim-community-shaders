@@ -21,7 +21,19 @@ namespace Skin
 	cbuffer SkinPerGeometry : register(b7)
 	{
 		float4 skinPerGeometry;
+		SharedData::SkinData skinPerGeometryProfile;
 	};
+
+	// Resolved per geometry: the profile bound to the drawn actor's race, or the default profile.
+	SharedData::SkinData GetSkinData()
+	{
+		return skinPerGeometryProfile;
+	}
+#else
+	SharedData::SkinData GetSkinData()
+	{
+		return SharedData::skinData;
+	}
 #endif
 #if defined(SKIN)
 	Texture2D<float4> TexSkinDetailNormal : register(t72);
@@ -125,13 +137,14 @@ namespace Skin
 			lightingOutput.specular += fuzzSpecular * material.FuzzWeight;
 		}
 
+		SharedData::SkinData skinData = GetSkinData();
 		float3 sssTransmittance = SSSSTransmittance(
-									  SharedData::skinData.sssParams.x,
-									  SharedData::skinData.sssParams.y,
+									  skinData.sssParams.x,
+									  skinData.sssParams.y,
 									  N,
 									  L,
 									  material.Thickness) *
-		                          SharedData::skinData.sssParams.w;
+		                          skinData.sssParams.w;
 		lightingOutput.transmission = min(sssTransmittance * context.lightColor * context.softShadow * material.BaseColor, context.lightColor);
 	}
 
