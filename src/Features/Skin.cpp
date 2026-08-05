@@ -1,5 +1,6 @@
 #include "Skin.h"
 #include <DirectXTex.h>
+#include <imgui_stdlib.h>
 
 #include "Deferred.h"
 #include "Globals.h"
@@ -7,12 +8,13 @@
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/Form.h"
+#include "Utils/UI.h"
 
 #include "I18n/I18n.h"
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	Skin::Settings,
-	EnableSkin,
+	Skin::SkinProfile,
 	SkinMainRoughness,
 	SkinSecondRoughness,
 	SkinSpecularTexMultiplier,
@@ -27,17 +29,38 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkinDetailStrength,
 	SkinDetailTiling,
 	BodyTilingMultiplier,
-	ExtraSkinWetness,
-	WetFadeTime,
-	StartSweat,
-	FullSweat,
-	WetParams,
 	Translucency,
 	sssWidth,
 	UseSSS,
 	FuzzStrength,
 	FuzzRoughness,
 	FuzzF0);
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Skin::Settings,
+	EnableSkin,
+	ExtraSkinWetness,
+	WetFadeTime,
+	StartSweat,
+	FullSweat,
+	WetParams,
+	DefaultProfile,
+	Profiles,
+	RaceProfiles);
+
+namespace
+{
+	std::string MakeUniqueProfileName(const std::map<std::string, Skin::SkinProfile>& a_profiles, const std::string& a_name)
+	{
+		if (!a_profiles.contains(a_name))
+			return a_name;
+		for (uint32_t i = 2;; ++i) {
+			auto candidate = std::format("{} {}", a_name, i);
+			if (!a_profiles.contains(candidate))
+				return candidate;
+		}
+	}
+}
 
 void Skin::DrawSettings()
 {
@@ -46,34 +69,231 @@ void Skin::DrawSettings()
 	ImGui::Text("%s", T("feature.skin.advanced_skin_shader_using_dual_specular_lobes", "Advanced Skin Shader using dual specular lobes."));
 
 	ImGui::Spacing();
-	ImGui::SliderFloat(T("feature.skin.primary_roughness", "Primary Roughness"), &settings.SkinMainRoughness, 0.0f, 1.0f, "%.2f");
+
+	if (ImGui::CollapsingHeader(T("feature.skin.profiles_section", "Skin Profiles"), ImGuiTreeNodeFlags_DefaultOpen))
+		DrawProfileManager();
+
+	if (ImGui::CollapsingHeader(T("feature.skin.race_bindings_section", "Race Bindings"), ImGuiTreeNodeFlags_DefaultOpen))
+		DrawRaceBindings();
+
+	if (ImGui::CollapsingHeader(T("feature.skin.global_section", "Wetness (Global)"), ImGuiTreeNodeFlags_DefaultOpen))
+		DrawGlobalSettings();
+
+	ImGui::Spacing();
+
+	if (ImGui::Button(T("feature.skin.reload_skin_detail_texture", "Reload Skin Detail Texture"))) {
+		ReloadSkinDetail();
+	}
+
+	BUFFER_VIEWER_NODE(texSkinDetail, 1.0f)
+}
+
+void Skin::DrawProfileManager()
+{
+	const char* defaultLabel = T("feature.skin.default_profile", "[Default]");
+
+	if (!uiSelectedProfile.empty() && !settings.Profiles.contains(uiSelectedProfile))
+		uiSelectedProfile.clear();
+
+	if (ImGui::BeginCombo(T("feature.skin.editing_profile", "Editing Profile"), uiSelectedProfile.empty() ? defaultLabel : uiSelectedProfile.c_str())) {
+		if (ImGui::Selectable(defaultLabel, uiSelectedProfile.empty()))
+			uiSelectedProfile.clear();
+		for (auto& [name, profile] : settings.Profiles) {
+			if (ImGui::Selectable(name.c_str(), name == uiSelectedProfile))
+				uiSelectedProfile = name;
+		}
+		ImGui::EndCombo();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.the_default_profile_is_used_by_every_race", "The default profile is used by every race without its own binding."));
+	}
+
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.4f);
+	ImGui::InputTextWithHint("##SkinProfileName", T("feature.skin.profile_name_hint", "Profile name"), &uiProfileNameBuffer);
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(uiProfileNameBuffer.empty());
+	if (ImGui::Button(T("feature.skin.add_profile", "Add"))) {
+		auto name = MakeUniqueProfileName(settings.Profiles, uiProfileNameBuffer);
+		settings.Profiles[name] = uiSelectedProfile.empty() ? settings.DefaultProfile : settings.Profiles[uiSelectedProfile];
+		uiSelectedProfile = name;
+		uiProfileNameBuffer.clear();
+		InvalidateProfileBindings();
+	}
+	ImGui::EndDisabled();
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.creates_a_copy_of_the_profile_being_edited", "Creates a copy of the profile being edited."));
+	}
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(uiProfileNameBuffer.empty() || uiSelectedProfile.empty());
+	if (ImGui::Button(T("feature.skin.rename_profile", "Rename"))) {
+		auto node = settings.Profiles.extract(uiSelectedProfile);
+		auto newName = MakeUniqueProfileName(settings.Profiles, uiProfileNameBuffer);
+		node.key() = newName;
+		settings.Profiles.insert(std::move(node));
+		for (auto& [race, profileName] : settings.RaceProfiles) {
+			if (profileName == uiSelectedProfile)
+				profileName = newName;
+		}
+		uiSelectedProfile = newName;
+		uiProfileNameBuffer.clear();
+		InvalidateProfileBindings();
+	}
+	ImGui::EndDisabled();
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(uiSelectedProfile.empty());
+	if (ImGui::Button(T("feature.skin.delete_profile", "Delete"))) {
+		settings.Profiles.erase(uiSelectedProfile);
+		for (auto it = settings.RaceProfiles.begin(); it != settings.RaceProfiles.end();)
+			it = it->second == uiSelectedProfile ? settings.RaceProfiles.erase(it) : std::next(it);
+		uiSelectedProfile.clear();
+		InvalidateProfileBindings();
+	}
+	ImGui::EndDisabled();
+
+	ImGui::Separator();
+
+	DrawProfileSettings(uiSelectedProfile.empty() ? settings.DefaultProfile : settings.Profiles[uiSelectedProfile]);
+}
+
+void Skin::DrawRaceBindings()
+{
+	if (raceList.empty())
+		RefreshRaceList();
+
+	if (settings.Profiles.empty()) {
+		ImGui::Text("%s", T("feature.skin.create_a_profile_first_to_bind_it_to", "Create a profile first to bind it to a race."));
+		return;
+	}
+
+	const char* raceComboId = T("feature.skin.race", "Race");
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+	if (ImGui::BeginCombo(raceComboId, uiPendingRace.empty() ? T("feature.skin.select_a_race", "Select a race") : uiPendingRace.c_str())) {
+		auto searchText = Util::DrawComboSearchInput(raceComboId);
+		for (auto& [editorID, displayName] : raceList) {
+			if (searchText.empty() || Util::StringMatchesSearch(displayName, searchText)) {
+				if (ImGui::Selectable(displayName.c_str(), editorID == uiPendingRace)) {
+					uiPendingRace = editorID;
+					Util::ClearComboSearch(raceComboId);
+					break;
+				}
+			}
+		}
+		ImGui::EndCombo();
+	} else {
+		Util::ClearComboSearch(raceComboId);
+	}
+
+	ImGui::SameLine();
+	ImGui::BeginDisabled(uiPendingRace.empty());
+	if (ImGui::Button(T("feature.skin.bind_race", "Bind"))) {
+		settings.RaceProfiles[uiPendingRace] = uiSelectedProfile.empty() ? settings.Profiles.begin()->first : uiSelectedProfile;
+		uiPendingRace.clear();
+		InvalidateProfileBindings();
+	}
+	ImGui::EndDisabled();
+
+	ImGui::SameLine();
+	if (ImGui::Button(T("feature.skin.refresh_race_list", "Refresh Races")))
+		RefreshRaceList();
+
+	if (settings.RaceProfiles.empty())
+		return;
+
+	std::string pendingErase;
+	if (ImGui::BeginTable("##SkinRaceBindings", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+		ImGui::TableSetupColumn(T("feature.skin.race", "Race"));
+		ImGui::TableSetupColumn(T("feature.skin.profile", "Profile"));
+		ImGui::TableSetupColumn("##SkinRaceBindingActions");
+		ImGui::TableHeadersRow();
+
+		for (auto& [raceEditorID, profileName] : settings.RaceProfiles) {
+			ImGui::PushID(raceEditorID.c_str());
+			ImGui::TableNextRow();
+
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(raceEditorID.c_str());
+
+			ImGui::TableNextColumn();
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			if (ImGui::BeginCombo("##SkinRaceProfile", profileName.c_str())) {
+				for (auto& [name, profile] : settings.Profiles) {
+					if (ImGui::Selectable(name.c_str(), name == profileName)) {
+						profileName = name;
+						InvalidateProfileBindings();
+					}
+				}
+				ImGui::EndCombo();
+			}
+
+			ImGui::TableNextColumn();
+			if (ImGui::Button(T("feature.skin.remove_binding", "Remove")))
+				pendingErase = raceEditorID;
+
+			ImGui::PopID();
+		}
+		ImGui::EndTable();
+	}
+
+	if (!pendingErase.empty()) {
+		settings.RaceProfiles.erase(pendingErase);
+		InvalidateProfileBindings();
+	}
+}
+
+void Skin::RefreshRaceList()
+{
+	raceList.clear();
+
+	auto dataHandler = RE::TESDataHandler::GetSingleton();
+	if (!dataHandler)
+		return;
+
+	for (auto race : dataHandler->GetFormArray<RE::TESRace>()) {
+		if (!race)
+			continue;
+		auto editorID = Util::GetFormEditorID(race);
+		if (editorID.empty())
+			continue;
+		const char* fullName = race->GetFullName();
+		raceList.emplace_back(editorID, fullName && *fullName ? std::format("{} ({})", fullName, editorID) : editorID);
+	}
+
+	std::sort(raceList.begin(), raceList.end(), [](const auto& a_lhs, const auto& a_rhs) { return a_lhs.second < a_rhs.second; });
+}
+
+void Skin::DrawProfileSettings(SkinProfile& a_profile)
+{
+	ImGui::SliderFloat(T("feature.skin.primary_roughness", "Primary Roughness"), &a_profile.SkinMainRoughness, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.controls_microscopic_roughness_of_stratum_corneum_layer", "Controls microscopic roughness of stratum corneum layer"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.secondary_roughness", "Secondary Roughness"), &settings.SkinSecondRoughness, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.secondary_roughness", "Secondary Roughness"), &a_profile.SkinSecondRoughness, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.smoothness_of_epidermal_cell_layer_reflections", "Smoothness of epidermal cell layer reflections"));
 		ImGui::BulletText(T("feature.skin.should_be_30_50_lower_than_primary", "Should be 30-50%% lower than Primary"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.specular_texture_multiplier", "Specular Texture Multiplier"), &settings.SkinSpecularTexMultiplier, 0.0f, 10.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.specular_texture_multiplier", "Specular Texture Multiplier"), &a_profile.SkinSpecularTexMultiplier, 0.0f, 10.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.multiplier_for_specular_map", "Multiplier for specular map"));
 		ImGui::BulletText("%s", T("feature.skin.a_multiplier_for_the_vanilla_specular_map_applied", "A multiplier for the vanilla specular map, applied to the first layer's roughness"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.secondary_specular_strength", "Secondary Specular Strength"), &settings.SecondarySpecularStrength, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.secondary_specular_strength", "Secondary Specular Strength"), &a_profile.SecondarySpecularStrength, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.intensity_of_secondary_specular_highlights", "Intensity of secondary specular highlights"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.fresnel_f0", "Fresnel F0"), &settings.F0, 0.0f, 0.1f, "%.4f");
+	ImGui::SliderFloat(T("feature.skin.fresnel_f0", "Fresnel F0"), &a_profile.F0, 0.0f, 0.1f, "%.4f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.fresnel_reflectance", "Fresnel reflectance"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.base_color_multiplier", "Base Color Multiplier"), &settings.BaseColorMultiplier, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.base_color_multiplier", "Base Color Multiplier"), &a_profile.BaseColorMultiplier, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.multiplier_for_the_base_color_texture", "Multiplier for the base color texture"));
 	}
@@ -81,39 +301,62 @@ void Skin::DrawSettings()
 	ImGui::Spacing();
 	ImGui::Text("%s", T("feature.skin.options_for_additional_roughness_and_specular_maps", "Options for additional roughness and specular maps."));
 
-	ImGui::SliderFloat(T("feature.skin.physical_main_roughness_multiplier", "Physical Main Roughness Multiplier"), &settings.PhysicalMainRoughnessMultiplier, 0.0f, 2.0f, "%.2f");
-	ImGui::SliderFloat(T("feature.skin.physical_second_roughness_multiplier", "Physical Second Roughness Multiplier"), &settings.PhysicalSecondRoughnessMultiplier, 0.0f, 2.0f, "%.2f");
-	ImGui::SliderFloat(T("feature.skin.physical_specular_multiplier", "Physical Specular Multiplier"), &settings.PhysicalSpecularStrength, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.physical_main_roughness_multiplier", "Physical Main Roughness Multiplier"), &a_profile.PhysicalMainRoughnessMultiplier, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.physical_second_roughness_multiplier", "Physical Second Roughness Multiplier"), &a_profile.PhysicalSecondRoughnessMultiplier, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.physical_specular_multiplier", "Physical Specular Multiplier"), &a_profile.PhysicalSpecularStrength, 0.0f, 2.0f, "%.2f");
 
 	ImGui::Spacing();
 
-	ImGui::SliderFloat(T("feature.skin.extra_edge_roughness", "Extra Edge Roughness"), &settings.ExtraEdgeRoughness, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.extra_edge_roughness", "Extra Edge Roughness"), &a_profile.ExtraEdgeRoughness, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.extra_roughness_at_the_edges_of_the_skin", "Extra roughness at the edges of the skin, to approximate peach fuzz on the face."));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.fuzz_strength", "Fuzz Strength"), &settings.FuzzStrength, 0.0f, 2.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.fuzz_strength", "Fuzz Strength"), &a_profile.FuzzStrength, 0.0f, 2.0f, "%.2f");
 
-	ImGui::SliderFloat(T("feature.skin.fuzz_roughness", "Fuzz Roughness"), &settings.FuzzRoughness, 0.1f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.fuzz_roughness", "Fuzz Roughness"), &a_profile.FuzzRoughness, 0.1f, 1.0f, "%.2f");
 
-	ImGui::SliderFloat(T("feature.skin.fuzz_f0", "Fuzz F0"), &settings.FuzzF0, 0.0f, 0.5f, "%.4f");
+	ImGui::SliderFloat(T("feature.skin.fuzz_f0", "Fuzz F0"), &a_profile.FuzzF0, 0.0f, 0.5f, "%.4f");
 
 	ImGui::Spacing();
 
-	ImGui::Checkbox(T("feature.skin.enable_sss_transmission", "Enable SSS Transmission"), &settings.UseSSS);
+	ImGui::Checkbox(T("feature.skin.enable_sss_transmission", "Enable SSS Transmission"), &a_profile.UseSSS);
 
-	ImGui::SliderFloat(T("feature.skin.translucency", "Translucency"), &settings.Translucency, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.translucency", "Translucency"), &a_profile.Translucency, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.translucency_of_the_sss_transmittance_effect", "Translucency of the SSS Transmittance effect"));
 	}
 
-	ImGui::SliderFloat(T("feature.skin.sss_width", "SSS Width"), &settings.sssWidth, 0.0f, 1.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.skin.sss_width", "SSS Width"), &a_profile.sssWidth, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.width_of_the_sss_transmittance_effect", "Width of the SSS Transmittance effect"));
 	}
 
 	ImGui::Spacing();
 
+	ImGui::Checkbox(T("feature.skin.enable_skin_detail", "Enable Skin Detail"), &a_profile.EnableSkinDetail);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.enable_skin_detail_texture", "Enable skin detail texture"));
+	}
+
+	ImGui::SliderFloat(T("feature.skin.skin_detail_strength", "Skin Detail Strength"), &a_profile.SkinDetailStrength, -2.0f, 2.0f);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.strength_of_skin_detail_texture", "Strength of skin detail texture"));
+	}
+
+	ImGui::SliderFloat(T("feature.skin.skin_detail_tiling", "Skin Detail Tiling"), &a_profile.SkinDetailTiling, 1.0f, 50.0f, "%1.f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.the_more_tiling_the_more_detailed_the_skin", "The more tiling, the more detailed the skin will be"));
+	}
+
+	ImGui::SliderFloat(T("feature.skin.body_tiling_multiplier", "Body Tiling Multiplier"), &a_profile.BodyTilingMultiplier, 0.5f, 5.0f, "%.1f");
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T("feature.skin.multiply_the_tiling_for_the_body_to_match", "Multiply the tiling for the body to match the face"));
+	}
+}
+
+void Skin::DrawGlobalSettings()
+{
 	ImGui::SliderFloat(T("feature.skin.extra_skin_wetness", "Extra Skin Wetness"), &settings.ExtraSkinWetness, 0.0f, 2.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.adds_a_constant_layer_of_wetness_to_all", "Adds a constant layer of wetness to all skin, making it look slightly damp or sweaty at all times, even when not in water or exerting effort."));
@@ -151,34 +394,6 @@ void Skin::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.controls_how_bumpy_wet_skin_appears_higher_values", "Controls how bumpy wet skin appears. Higher values create more visible surface ripples and distortion on wet areas."));
 	}
-
-	ImGui::Spacing();
-
-	ImGui::Checkbox(T("feature.skin.enable_skin_detail", "Enable Skin Detail"), &settings.EnableSkinDetail);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("feature.skin.enable_skin_detail_texture", "Enable skin detail texture"));
-	}
-
-	ImGui::SliderFloat(T("feature.skin.skin_detail_strength", "Skin Detail Strength"), &settings.SkinDetailStrength, -2.0f, 2.0f);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("feature.skin.strength_of_skin_detail_texture", "Strength of skin detail texture"));
-	}
-
-	ImGui::SliderFloat(T("feature.skin.skin_detail_tiling", "Skin Detail Tiling"), &settings.SkinDetailTiling, 1.0f, 50.0f, "%1.f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("feature.skin.the_more_tiling_the_more_detailed_the_skin", "The more tiling, the more detailed the skin will be"));
-	}
-
-	ImGui::SliderFloat(T("feature.skin.body_tiling_multiplier", "Body Tiling Multiplier"), &settings.BodyTilingMultiplier, 0.5f, 5.0f, "%.1f");
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T("feature.skin.multiply_the_tiling_for_the_body_to_match", "Multiply the tiling for the body to match the face"));
-	}
-
-	if (ImGui::Button(T("feature.skin.reload_skin_detail_texture", "Reload Skin Detail Texture"))) {
-		ReloadSkinDetail();
-	}
-
-	BUFFER_VIEWER_NODE(texSkinDetail, 1.0f)
 }
 
 void Skin::LoadSkinDetailTexture()
@@ -222,6 +437,8 @@ void Skin::SetupResources()
 	LoadSkinDetailTexture();
 
 	PerGeometryCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<PerGeometryData>());
+
+	RebuildProfileData();
 }
 
 void Skin::ReloadSkinDetail()
@@ -233,6 +450,8 @@ void Skin::ReloadSkinDetail()
 void Skin::Prepass()
 {
 	auto context = globals::d3d::context;
+
+	RebuildProfileData();
 
 	if (texSkinDetail) {
 		ID3D11ShaderResourceView* srv = texSkinDetail->srv.get();
@@ -261,22 +480,80 @@ void Skin::PostPostLoad()
 	Hooks::Install();
 }
 
-Skin::SkinData Skin::GetCommonBufferData()
+Skin::SkinData Skin::MakeProfileData(const SkinProfile& a_profile) const
 {
 	SkinData data{};
-	data.skinParams = float4(settings.SkinMainRoughness, settings.SkinSecondRoughness, settings.SkinSpecularTexMultiplier, float(settings.EnableSkin));
-	data.skinParams2 = float4(settings.SecondarySpecularStrength, settings.ExtraSkinWetness, settings.F0, settings.BaseColorMultiplier);
-	data.skinDetailParams = float4(settings.SkinDetailTiling, settings.BodyTilingMultiplier, settings.SkinDetailStrength, float(settings.EnableSkinDetail && settings.EnableSkin));
-	data.sssParams = float4(settings.Translucency, settings.sssWidth, 0.0f, float(settings.UseSSS));
-	data.fuzzParams = float4(settings.FuzzStrength, settings.FuzzRoughness, settings.FuzzF0, settings.ExtraEdgeRoughness);
-	data.physicalParams = float4(settings.PhysicalMainRoughnessMultiplier, settings.PhysicalSecondRoughnessMultiplier, settings.PhysicalSpecularStrength, 0.0f);
+	data.skinParams = float4(a_profile.SkinMainRoughness, a_profile.SkinSecondRoughness, a_profile.SkinSpecularTexMultiplier, float(settings.EnableSkin));
+	data.skinParams2 = float4(a_profile.SecondarySpecularStrength, settings.ExtraSkinWetness, a_profile.F0, a_profile.BaseColorMultiplier);
+	data.skinDetailParams = float4(a_profile.SkinDetailTiling, a_profile.BodyTilingMultiplier, a_profile.SkinDetailStrength, float(a_profile.EnableSkinDetail && settings.EnableSkin));
+	data.sssParams = float4(a_profile.Translucency, a_profile.sssWidth, 0.0f, float(a_profile.UseSSS));
+	data.fuzzParams = float4(a_profile.FuzzStrength, a_profile.FuzzRoughness, a_profile.FuzzF0, a_profile.ExtraEdgeRoughness);
+	data.physicalParams = float4(a_profile.PhysicalMainRoughnessMultiplier, a_profile.PhysicalSecondRoughnessMultiplier, a_profile.PhysicalSpecularStrength, 0.0f);
 	data.wetParams = settings.WetParams;
 	return data;
+}
+
+Skin::SkinData Skin::GetCommonBufferData()
+{
+	return MakeProfileData(settings.DefaultProfile);
+}
+
+void Skin::RebuildProfileData()
+{
+	if (profileBindingsDirty) {
+		profileNameToIndex.clear();
+		raceProfileIndex.clear();
+	}
+
+	std::vector<SkinData> newData;
+	newData.reserve(settings.Profiles.size() + 1);
+	newData.push_back(MakeProfileData(settings.DefaultProfile));
+
+	for (const auto& [name, profile] : settings.Profiles) {
+		if (profileBindingsDirty)
+			profileNameToIndex[name] = static_cast<uint32_t>(newData.size());
+		newData.push_back(MakeProfileData(profile));
+	}
+
+	profileBindingsDirty = false;
+
+	if (newData.size() != profileData.size() ||
+		std::memcmp(newData.data(), profileData.data(), newData.size() * sizeof(SkinData)) != 0) {
+		profileData = std::move(newData);
+		++profileDataRevision;
+	}
+}
+
+void Skin::InvalidateProfileBindings()
+{
+	profileBindingsDirty = true;
+}
+
+uint32_t Skin::GetProfileIndexForRace(const RE::TESRace* a_race)
+{
+	if (!a_race || settings.RaceProfiles.empty())
+		return 0;
+
+	if (auto cached = raceProfileIndex.find(a_race->formID); cached != raceProfileIndex.end())
+		return cached->second;
+
+	uint32_t index = 0;
+	if (auto binding = settings.RaceProfiles.find(Util::GetFormEditorID(a_race)); binding != settings.RaceProfiles.end()) {
+		if (auto profile = profileNameToIndex.find(binding->second); profile != profileNameToIndex.end())
+			index = profile->second;
+	}
+
+	raceProfileIndex[a_race->formID] = index;
+	return index;
 }
 
 void Skin::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (!o_json.contains("DefaultProfile"))  // legacy flat layout
+		settings.DefaultProfile = o_json.get<SkinProfile>();
+	InvalidateProfileBindings();
+	RebuildProfileData();
 }
 
 void Skin::SaveSettings(json& o_json)
@@ -287,6 +564,10 @@ void Skin::SaveSettings(json& o_json)
 void Skin::RestoreDefaultSettings()
 {
 	settings = {};
+	uiSelectedProfile.clear();
+	uiPendingRace.clear();
+	InvalidateProfileBindings();
+	RebuildProfileData();
 }
 
 // By PO3
@@ -329,9 +610,10 @@ float Skin::GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a
 	return waterHeight;
 }
 
-float4 Skin::GetWetness(RE::BSGeometry* geometry)
+float4 Skin::GetWetness(RE::BSGeometry* geometry, uint32_t& a_profileIndex)
 {
 	float4 wetness = float4(0.0f, 0.0f, 0.0f, 0.0f);
+	a_profileIndex = 0;
 	auto userData = geometry->GetUserData();
 	if (userData && userData->formType == RE::FormType::ActorCharacter) {
 		auto actor = static_cast<RE::Character*>(userData);
@@ -345,9 +627,12 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 		auto [it, inserted] = actorWetnessMap.try_emplace(actorFormID);
 		auto& cached = it->second;
 		if (!inserted && cached.frameCount == currentFrame) {
+			a_profileIndex = cached.profileIndex;
 			return cached.wetness;
 		}
 		cached.frameCount = currentFrame;
+		cached.profileIndex = GetProfileIndexForRace(actor->GetRace());
+		a_profileIndex = cached.profileIndex;
 
 		const float positionZ = actor->GetPositionZ();
 		wetness.z = positionZ;
@@ -572,13 +857,22 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	auto context = globals::d3d::context;
 
 	if (settings.EnableSkin) {
-		auto geometry = a_pass->geometry;
-		float4 wetness = GetWetness(geometry);
+		if (profileData.empty())
+			RebuildProfileData();
 
-		if (currentWetness != wetness) {
+		auto geometry = a_pass->geometry;
+		uint32_t profileIndex = 0;
+		float4 wetness = GetWetness(geometry, profileIndex);
+		if (profileIndex >= profileData.size())
+			profileIndex = 0;
+
+		if (currentWetness != wetness || currentProfileIndex != profileIndex || currentProfileRevision != profileDataRevision) {
 			currentWetness = wetness;
+			currentProfileIndex = profileIndex;
+			currentProfileRevision = profileDataRevision;
 			PerGeometryData perGeometryData{};
 			perGeometryData.skinPerGeometry = wetness;
+			perGeometryData.profile = profileData[profileIndex];
 			PerGeometryCB->Update(perGeometryData);
 		}
 
