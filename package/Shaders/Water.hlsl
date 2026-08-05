@@ -827,19 +827,17 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			endif
 
 #			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
-	float pointingDirection = dot(viewDirection, R);
-	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R);
-	float ssrAmount = min(pointingAlignment, pointingDirection);
-	if (SSRParams.x > 0.0 && ssrAmount > 0.0) {
-		float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
-		float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
-		float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-		float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-		float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
-		reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
-	}
+	float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
+	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
+	float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
+	float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
+	float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
+	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
+	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
 	return reflectionColor;
@@ -1072,6 +1070,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			if defined(SPECULAR) && (NUM_SPECULAR_LIGHTS != 0)
 	float3 finalColor = 0.0.xxx;
 
+#				if !defined(LIGHT_LIMIT_FIX)
 	[unroll] for (int lightIndex = 0; lightIndex < NUM_SPECULAR_LIGHTS; ++lightIndex)
 	{
 		float3 lightVector = LightPos[lightIndex].xyz - (PosAdjust.xyz + input.WPosition.xyz);
@@ -1082,6 +1081,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz) * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
 	}
+#				endif
 
 	finalColor *= fresnel;
 #				if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
@@ -1108,11 +1108,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 dirColor;
 	float3 ambientColor;
-#				if defined(SKYLIGHTING) && !defined(INTERIOR)
-	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor, skylightingDiffuse);
-#				else
 	ShadowSampling::ExtractLighting(diffuseOutput.refractionDiffuseColor, dirColor, ambientColor);
-#				endif
 
 	dirColor *= dirShadow;
 

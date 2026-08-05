@@ -62,8 +62,8 @@ public:
 	int drawCalls[RE::BSShader::Type::Total + 1];
 
 	// Frame time tracking per shader type (in milliseconds)
-	float frameTimePerType[RE::BSShader::Type::Total + 1];      ///< Per-type frame time in milliseconds.
-	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1]; ///< EMA-smoothed per-type frame time in milliseconds.
+	float frameTimePerType[RE::BSShader::Type::Total + 1];        ///< Per-type frame time in milliseconds.
+	float smoothFrameTimePerType[RE::BSShader::Type::Total + 1];  ///< EMA-smoothed per-type frame time in milliseconds.
 
 	// Timing state for per-type frame time tracking using QueryPerformanceCounter
 	LARGE_INTEGER frameTimingFrequency;
@@ -86,6 +86,8 @@ public:
 	void Reset();
 	/** @brief One-time post-D3D setup: creates resources, probes GPU caps, initializes features. */
 	void Setup();
+
+	bool HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
 
 	/**
 	 * @brief Loads settings from disk (default, then user, then overrides).
@@ -230,33 +232,33 @@ public:
 	/**
 	 * Bitflags describing extra shader-specific properties.
 	 */
-	
+
 	/**
 	 * Bitflags describing extra feature-specific properties related to terrain displacement and material models.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is cached as open.
 	 * @returns true if either the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Checks whether the main menu or loading menu is open, querying the UI if provided.
 	 * @param ui Pointer to the UI manager; if non-null, performs live menu checks as a fallback.
 	 * @returns true if the main menu or loading menu is open, false otherwise.
 	 */
-	
+
 	/**
 	 * Updates the shared constant buffer data based on world state and rendering pass.
 	 * @param a_inWorld Whether the camera is in world space.
 	 * @param a_prepass Whether this is a prepass rendering phase.
 	 */
-	
+
 	/**
 	 * Updates sky shader permutation based on the current render pass.
 	 * @param a_pass The render pass to inspect.
 	 */
-	
+
 	/**
 	 * Checks whether directional shadows are available for the current scene.
 	 * @returns true if directional shadows are present, false otherwise.
@@ -329,7 +331,6 @@ public:
 	struct alignas(16) SharedDataCB
 	{
 		float4 WaterData[25];
-		DirectX::XMFLOAT3X4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
 		float4 SunDirection;

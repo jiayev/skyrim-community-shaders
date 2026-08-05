@@ -6,12 +6,9 @@
 
 namespace SharedData
 {
-
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
-		row_major float3x4 DirectionalAmbient;
 		float4 DirLightDirection;
 		float4 DirLightColor;
 		float4 SunDirection;
@@ -57,9 +54,8 @@ namespace SharedData
 		bool EnableTerrainParallax;
 		bool EnableHeightBlending;
 		bool EnableShadows;
-		bool ExtendShadows;
 		bool EnableParallaxWarpingFix;
-		bool pad0;
+		uint2 pad0;
 	};
 
 	struct CubemapCreatorSettings
@@ -185,11 +181,11 @@ namespace SharedData
 		uint3 pad;
 	};
 
+	/** @brief Terrain Variation feature settings. */
 	struct TerrainVariationSettings
 	{
-		uint enableTilingFix;
-		uint enableLODTerrainTilingFix;
-		float2 pad0;
+		uint enableLODTerrainTilingFix;  ///< 1 = apply variation to LOD terrain.
+		uint3 pad;
 	};
 
 	struct IBLSettings
@@ -248,6 +244,46 @@ namespace SharedData
 		uint pad0;
 	};
 
+	struct ENBSettings
+	{
+		uint Enable;
+		float ColorPow;
+		float LightSpriteIntensity;
+		float FireIntensity;
+
+		float FireCurve;
+		uint EnableRain;
+		float RainMotionStretch;
+		float RainMotionTransparency;
+
+		float CloudsCurve;
+		float CloudsDesaturation;
+		float CloudsEdgeIntensity;
+		float CloudsEdgeMoonMultiplier;
+
+		uint EnableProceduralSun;
+		float ProceduralSunDiskRadiusSq;
+		float ProceduralSunDiskEdgeScale;
+		float ProceduralSunGlowIntensity;
+
+		float ProceduralSunCoronaFalloff;
+		float ProceduralSunCoronaScale;
+		uint UseProceduralGradientWeights;
+		float ProceduralGradientWeightCurve;
+
+		float ParticleIntensity;
+		float ParticleLightingInfluence;
+		float ParticleAmbientInfluence;
+		float ParticlePointLightingInfluence;
+
+		uint EnableVolumetricRays;
+		float VolumetricRaysIntensity;
+		float VolumetricRaysExtinction;
+		float VolumetricRaysSkyColorAmount;
+
+		float VolumetricRaysDesaturation;
+		float3 VolumetricRaysColorFilter;
+	};
 	struct TerrainBlendingSettings
 	{
 		uint Enabled;
@@ -342,6 +378,7 @@ namespace SharedData
 		IBLSettings iblSettings;
 		ExtendedTranslucencySettings extendedTranslucencySettings;
 		LinearLightingSettings linearLightingSettings;
+		ENBSettings enbSettings;
 		TerrainBlendingSettings terrainBlendingSettings;
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
@@ -406,7 +443,5 @@ namespace SharedData
 	{
 		return SphericalHarmonics::Unproject(AmbientSHR, AmbientSHG, AmbientSHB, normal);
 	}
-
-#endif  // PSHADER
 }
 #endif  // __SHARED_DATA_DEPENDENCY_HLSL__

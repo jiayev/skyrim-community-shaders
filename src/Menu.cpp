@@ -898,6 +898,9 @@ void Menu::DrawDisableAtBootSettings()
 
 		// Display sorted features
 		for (auto* feature : featureList) {
+			if (feature->IsHiddenUnreleased())
+				continue;
+
 			const std::string featureName = feature->GetShortName();
 			bool isDisabled = disabledFeatures.contains(featureName) && disabledFeatures[featureName];
 
@@ -1112,6 +1115,16 @@ void Menu::ProcessInputEventQueue()
 				}
 				return false;
 			};
+
+			// Hardcoded Shift+Enter toggle for the CS menu (always available)
+			if (event.IsDown() && key == VK_RETURN && (GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
+				if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+					IsEnabled = !IsEnabled;
+					if (IsEnabled)
+						ImGui::GetIO().ClearInputKeys();
+				}
+				continue;
+			}
 
 			if (!event.IsPressed()) {
 				// Skip key release if it was used to close the first-time setup dialog
