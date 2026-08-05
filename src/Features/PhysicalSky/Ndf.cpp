@@ -179,6 +179,142 @@ namespace
 		if (ImGui::SliderFloat(label, &percent, 0.0f, 100.0f, "%.0f %%"))
 			normalizedValue = std::clamp(percent, 0.0f, 100.0f) / 100.0f;
 	}
+
+	// Temporary authoring aid: one-click starting points for the generator.
+	//
+	// A preset only touches the fields that describe the weather itself. Map
+	// resolution, world size, centre, seed, and texture overrides are deliberately
+	// left alone so applying one does not discard the user's rig or reshuffle the
+	// pattern they are looking at.
+	struct CloudMapPreset
+	{
+		// Localized strings are not stored here: tools/extract-i18n.py only sees
+		// literal T("key", "default") pairs, so they live in DrawPresetLabel below.
+		int id;
+
+		float skyCoverage;
+		float cloudSize;
+		float instability;
+		float character;
+		float breakup;
+		float highCoverage;
+
+		float coverageEdgeWidth;
+		float highCoverageEdgeWidth;
+		float frontStrength;
+		float domeStrength;
+
+		float stratocumulus;
+		float cumulusWeight;
+		float toweringCumulusWeight;
+		float cumulonimbusWeight;
+
+		float cumulusDepth;
+		float toweringCumulusDepth;
+		float cumulonimbusDepth;
+
+		float altostratusWeight;
+		float altocumulusWeight;
+	};
+
+	constexpr std::array kCloudMapPresets = {
+		// Fair-weather cumulus: small, well separated, shallow, no deep convection.
+		CloudMapPreset{ 0,
+			0.22f, 1.6f, 0.20f, 0.10f, 0.65f, 0.12f,
+			0.35f, 0.5f, 0.10f, 0.95f,
+			0.05f, 0.90f, 0.10f, 0.00f,
+			0.9f, 2.0f, 6.0f,
+			0.55f, 0.45f },
+		// Broken cumulus: a lively midpoint, more sky covered and some towers.
+		CloudMapPreset{ 1,
+			0.45f, 2.8f, 0.45f, 0.25f, 0.45f, 0.28f,
+			0.45f, 0.5f, 0.25f, 0.90f,
+			0.15f, 0.60f, 0.32f, 0.08f,
+			1.3f, 3.2f, 8.0f,
+			0.60f, 0.40f },
+		// Overcast stratocumulus: continuous sheet, almost no vertical development.
+		CloudMapPreset{ 2,
+			0.92f, 7.0f, 0.08f, 0.92f, 0.15f, 0.45f,
+			0.75f, 0.7f, 0.35f, 0.25f,
+			0.85f, 0.15f, 0.00f, 0.00f,
+			0.7f, 1.5f, 4.0f,
+			0.85f, 0.15f },
+		// Warm front: layered stratiform bands plus a heavy altostratus veil.
+		CloudMapPreset{ 3,
+			0.70f, 5.0f, 0.22f, 0.75f, 0.25f, 0.78f,
+			0.65f, 0.8f, 0.85f, 0.45f,
+			0.55f, 0.30f, 0.15f, 0.00f,
+			1.0f, 2.6f, 7.0f,
+			0.90f, 0.10f },
+		// Storm: deep convection, large cells, wide separation, anvil-heavy above.
+		CloudMapPreset{ 4,
+			0.55f, 6.0f, 0.95f, 0.15f, 0.70f, 0.60f,
+			0.40f, 0.6f, 0.45f, 0.80f,
+			0.05f, 0.20f, 0.35f, 0.45f,
+			1.8f, 5.0f, 12.0f,
+			0.45f, 0.55f },
+	};
+
+	/** @brief Localized button label for a preset. */
+	const char* GetPresetLabel(int id)
+	{
+		switch (id) {
+		case 0:
+			return T(TKEY("preset_fair"), "Fair Weather");
+		case 1:
+			return T(TKEY("preset_broken"), "Broken Cumulus");
+		case 2:
+			return T(TKEY("preset_overcast"), "Overcast");
+		case 3:
+			return T(TKEY("preset_front"), "Frontal Band");
+		default:
+			return T(TKEY("preset_storm"), "Thunderstorm");
+		}
+	}
+
+	/** @brief Localized hover description for a preset. */
+	const char* GetPresetTooltip(int id)
+	{
+		switch (id) {
+		case 0:
+			return T(TKEY("preset_fair_tooltip"), "Scattered fair-weather cumulus. Small, well-separated, shallow clouds under a mostly clear sky.");
+		case 1:
+			return T(TKEY("preset_broken_tooltip"), "A lively convective sky. Larger cumulus with some towering development and moderate high cloud.");
+		case 2:
+			return T(TKEY("preset_overcast_tooltip"), "A continuous stratocumulus deck. Nearly full coverage, flat, with very little vertical development.");
+		case 3:
+			return T(TKEY("preset_front_tooltip"), "An approaching warm front. Layered stratiform bands with an extensive altostratus veil above.");
+		default:
+			return T(TKEY("preset_storm_tooltip"), "Deep convection. Large, widely separated cells reaching cumulonimbus depth with heavy anvil outflow.");
+		}
+	}
+
+	void ApplyCloudMapPreset(NdfSettings& s, const CloudMapPreset& p)
+	{
+		s.skyCoverage = p.skyCoverage;
+		s.cloudSize = p.cloudSize;
+		s.instability = p.instability;
+		s.character = p.character;
+		s.breakup = p.breakup;
+		s.highCoverage = p.highCoverage;
+
+		s.coverageEdgeWidth = p.coverageEdgeWidth;
+		s.highCoverageEdgeWidth = p.highCoverageEdgeWidth;
+		s.frontStrength = p.frontStrength;
+		s.domeStrength = p.domeStrength;
+
+		s.stratocumulus = p.stratocumulus;
+		s.cumulusWeight = p.cumulusWeight;
+		s.toweringCumulusWeight = p.toweringCumulusWeight;
+		s.cumulonimbusWeight = p.cumulonimbusWeight;
+
+		s.cumulusDepth = p.cumulusDepth;
+		s.toweringCumulusDepth = p.toweringCumulusDepth;
+		s.cumulonimbusDepth = p.cumulonimbusDepth;
+
+		s.altostratusWeight = p.altostratusWeight;
+		s.altocumulusWeight = p.altocumulusWeight;
+	}
 }
 
 void NdfManager::SetupResources()
@@ -275,6 +411,30 @@ const char* NdfManager::GetSettingsHint(const NdfSettings&)
 void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager)
 {
 	ImGui::TextWrapped("%s", GetSettingsHint(ndfSettings));
+
+	ImGui::SeparatorText(T(TKEY("cloud_map_presets"), "Presets"));
+	{
+		// Buttons wrap to the panel width rather than assuming a fixed column count.
+		const float spacing = ImGui::GetStyle().ItemSpacing.x;
+		const float available = ImGui::GetContentRegionAvail().x;
+		float lineWidth = 0.0f;
+		for (size_t i = 0; i < kCloudMapPresets.size(); ++i) {
+			const auto& preset = kCloudMapPresets[i];
+			const char* label = GetPresetLabel(preset.id);
+			const float width = ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			if (i > 0 && lineWidth + spacing + width <= available) {
+				ImGui::SameLine();
+				lineWidth += spacing + width;
+			} else {
+				lineWidth = width;
+			}
+			if (ImGui::Button(label))
+				ApplyCloudMapPreset(ndfSettings, preset);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", GetPresetTooltip(preset.id));
+		}
+		ImGui::TextWrapped("%s", T(TKEY("cloud_map_presets_hint"), "Presets only set the weather description. Map resolution, world size, centre, seed, and texture overrides are left unchanged."));
+	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_field"), "Cloud Field"));
 	{
