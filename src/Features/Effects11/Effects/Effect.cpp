@@ -13,6 +13,11 @@
 #include "Features/Effects11/SettingsPatches.h"
 #include "Features/Effects11/ShaderPatches.h"
 
+std::filesystem::path Effect::GetFilePath() const
+{
+	return PresetManager::GetSingleton().GetENBSeriesPath() / GetName();
+}
+
 bool Effect::Load()
 {
 	std::filesystem::path iniPath = PresetManager::GetSingleton().GetENBSeriesPath() / (GetName() + ".ini");
@@ -21,13 +26,6 @@ bool Effect::Load()
 		logger::info("[EFFECTS11] Could not find ini file '{}' for effect '{}', using defaults", iniPath.string(), GetName());
 		return true;
 	}
-
-	auto writeTime = std::filesystem::last_write_time(iniPath);
-	if (writeTime == lastIniWriteTime) {
-		logger::info("[EFFECTS11] Skipping unchanged ini file '{}' for effect '{}'", iniPath.string(), GetName());
-		return true;
-	}
-	lastIniWriteTime = writeTime;
 
 	std::string section = GetName();
 	std::transform(section.begin(), section.end(), section.begin(), ::toupper);
@@ -119,6 +117,10 @@ bool Effect::Load()
 
 void Effect::Save()
 {
+	// Nothing loaded means nothing to persist; writing would leave stub ini files in the preset
+	if (!IsCompiled())
+		return;
+
 	std::filesystem::path iniPath = PresetManager::GetSingleton().GetENBSeriesPath() / (GetName() + ".ini");
 
 	std::string section = GetName();
@@ -197,15 +199,16 @@ bool Effect::Apply()
 
 	if (!LoadFXFile()) {
 		if (!filePresent) {
+			// A missing optional effect is normal, a missing required one means there is no preset
 			if (IsRequired()) {
-				errors.push_back("Required effect file not found");
-				logger::error("[EFFECTS11] Required effect file not found for '{}'", GetName());
+				logger::error("[EFFECTS11] Required effect file not found: '{}'", GetFilePath().string());
 				return false;
 			}
-			logger::info("[EFFECTS11] Effect file not found for '{}', skipping", GetName());
+			logger::info("[EFFECTS11] Effect file not found, skipping: '{}'", GetFilePath().string());
 			return true;
 		}
-		logger::error("[EFFECTS11] Failed to compile FX file for effect '{}'", GetName());
+		// The file exists but could not be read or compiled; errors holds the specific reason
+		logger::error("[EFFECTS11] Failed to load '{}': {}", GetFilePath().string(), errors.empty() ? "unknown error" : errors.back());
 		return false;
 	}
 
@@ -244,14 +247,12 @@ void Effect::Unload()
 	filePresent = false;
 	errors.clear();
 
-	lastIniWriteTime = {};
-
 	logger::info("[EFFECTS11] Unloaded effect '{}'", GetName());
 }
 
 bool Effect::LoadFXFile()
 {
-	auto filePath = PresetManager::GetSingleton().GetENBSeriesPath() / GetName();
+	auto filePath = GetFilePath();
 
 	if (!std::filesystem::exists(filePath)) {
 		filePresent = false;

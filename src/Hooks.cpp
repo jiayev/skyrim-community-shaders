@@ -262,7 +262,8 @@ namespace WeatherExtensions
 		static void thunk(RE::Sky* sky, float a_delta)
 		{
 			func(sky, a_delta);
-			globals::features::effects11.OnSkyUpdateColors(sky);
+			if (globals::features::effects11.loaded)
+				globals::features::effects11.OnSkyUpdateColors(sky);
 			globals::features::skySync.OnSkyUpdateColors(sky);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;

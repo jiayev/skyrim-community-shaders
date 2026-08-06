@@ -49,6 +49,10 @@ void MenuManager::RenderSettingsPanel()
 	auto& settingManager = SettingManager::GetSingleton();
 	auto& effectManager = EffectManager::GetSingleton();
 
+	// Without a preset there is no ini to write back to, so saving would only create stubs
+	const bool presetLoaded = effectManager.IsPresetLoaded();
+
+	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Button("Save & Apply")) {
 		settingManager.Save();
 		effectManager.Save();
@@ -59,6 +63,7 @@ void MenuManager::RenderSettingsPanel()
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Save all settings, then reload and recompile shaders");
 	}
+	ImGui::EndDisabled();
 
 	ImGui::SameLine();
 
@@ -83,6 +88,7 @@ void MenuManager::RenderSettingsPanel()
 
 	ImGui::SameLine();
 
+	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Button("Save")) {
 		settingManager.Save();
 		effectManager.Save();
@@ -90,6 +96,7 @@ void MenuManager::RenderSettingsPanel()
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Save all settings to enbseries.ini, weather files, and effect configurations");
 	}
+	ImGui::EndDisabled();
 
 	ImGui::Separator();
 
@@ -335,6 +342,7 @@ void MenuManager::RenderAllSettings()
 								switch (settingInfo->type) {
 								case SettingType::Bool:
 									{
+										// Covers both a missing preset and one whose enbeffect.fx failed to compile
 										const bool noPreset = category == "GLOBAL" && settingKey == "UseEffect" && !EffectManager::GetSingleton().IsPresetLoaded();
 
 										bool v = !noPreset && settingManager.GetValue<bool>(settingID, true);
@@ -347,7 +355,7 @@ void MenuManager::RenderAllSettings()
 										if (noPreset) {
 											ImGui::SameLine();
 											ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Warning);
-											ImGui::TextUnformatted(T("feature.effects11.no_preset_detected", "No preset detected"));
+											ImGui::TextUnformatted(T("feature.effects11.no_valid_preset", "No valid preset loaded"));
 											ImGui::PopStyleColor();
 										}
 										break;
