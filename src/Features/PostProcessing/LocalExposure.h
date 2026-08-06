@@ -17,7 +17,7 @@
 ///   2. Compute highlight, midtone, and shadow exposure candidates
 ///   3. Build luminance and weight pyramids
 ///   4. Reconstruct the fused result across the configured mip range
-///   5. Guided-upsample the fused result into a full-resolution multiplier
+///   5. Joint-bilateral upsample the fused result using full-resolution log luminance
 struct LocalExposure : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Local Exposure"; }
@@ -87,7 +87,7 @@ struct LocalExposure : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> setupCS = nullptr;       // Compute synthetic exposure lums and weights
 	winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;  // Iterative mip downsample
 	winrt::com_ptr<ID3D11ComputeShader> blendCS = nullptr;       // Gaussian/Laplacian exposure-fusion reconstruction
-	winrt::com_ptr<ID3D11ComputeShader> computeExpCS = nullptr;  // Guided upsample to full-res multiplier
+	winrt::com_ptr<ID3D11ComputeShader> computeExpCS = nullptr;  // Joint-bilateral upsample to full-res multiplier
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;

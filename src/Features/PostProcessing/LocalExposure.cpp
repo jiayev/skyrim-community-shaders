@@ -382,7 +382,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// === Pass 4: Guided upsample and output raw-HDR exposure multiplier ===
+	// === Pass 4: Joint-bilateral upsample and output raw-HDR exposure multiplier ===
 	{
 		globals::profiler->BeginPass("PostProcessing::LocalExposure::ComputeExposure");
 		state->BeginPerfEvent("Compute Exposure");
