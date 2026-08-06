@@ -1,6 +1,7 @@
 /// Local Exposure Compute Shader
 /// Exposure-fusion local adaptation adapted to output a raw-HDR multiplier
-/// consumed later by Composite.
+/// consumed later by Composite. The final reconstruction uses the scene's log
+/// luminance as a range guide without requiring a separate 3D bilateral grid.
 ///
 /// Raw scene color is normalized with global exposure when available so the
 /// exposure-fusion weights operate in a stable perceptual luminance range.
@@ -82,6 +83,23 @@ float3 NormalizeWeights(float3 weights)
 	return weights / (weights.x + weights.y + weights.z + 0.00001);
 }
 
+// Four-tap cardinal cubic B-spline weights. Unlike a fixed moving regression
+// window, samples enter and leave the footprint with zero weight, keeping the
+// reconstructed exposure continuous as scene features move across mip texels.
+float4 CubicBSplineWeights(float t)
+{
+	float t2 = t * t;
+	float t3 = t2 * t;
+	float omt = 1.0 - t;
+
+	return float4(
+			   omt * omt * omt,
+			   3.0 * t3 - 6.0 * t2 + 4.0,
+			   -3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0,
+			   t3) /
+	       6.0;
+}
+
 [numthreads(8, 8, 1)] void CSSetup(uint2 tid : SV_DispatchThreadID) {
 	if (tid.x >= InputWidth || tid.y >= InputHeight)
 		return;
@@ -108,9 +126,31 @@ float3 NormalizeWeights(float3 weights)
 	if (any(tid >= outDims))
 		return;
 
+	uint2 inDims;
+	TexInput0.GetDimensions(inDims.x, inDims.y);
+
 	float2 uv = (float2(tid) + 0.5) / float2(outDims);
-	RWTexOutput0[tid] = TexInput0.SampleLevel(LinearSampler, uv, 0);
-	RWTexOutput1[tid] = TexInput1.SampleLevel(LinearSampler, uv, 0);
+	float2 inputPixelSize = 1.0 / float2(inDims);
+	float2 minUV = inputPixelSize * 0.5;
+	float2 maxUV = 1.0 - minUV;
+	float4 exposureSum = 0.0;
+	float4 weightSum = 0.0;
+
+	// Four bilinear samples form a wider 4x4 low-pass footprint. The additional
+	// prefiltering makes the pyramid substantially less phase-sensitive during
+	// camera motion than a single 2x2 bilinear sample.
+	[unroll] for (int y = -1; y <= 1; y += 2)
+	{
+		[unroll] for (int x = -1; x <= 1; x += 2)
+		{
+			float2 sampleUV = clamp(uv + float2(x, y) * inputPixelSize, minUV, maxUV);
+			exposureSum += TexInput0.SampleLevel(LinearSampler, sampleUV, 0);
+			weightSum += TexInput1.SampleLevel(LinearSampler, sampleUV, 0);
+		}
+	}
+
+	RWTexOutput0[tid] = exposureSum * 0.25;
+	RWTexOutput1[tid] = weightSum * 0.25;
 }
 
 [numthreads(8, 8, 1)] void CSBlend(uint2 tid : SV_DispatchThreadID) {
@@ -147,45 +187,49 @@ float3 NormalizeWeights(float3 weights)
 
 	uint2 displayDims;
 	TexInput2.GetDimensions(displayDims.x, displayDims.y);
-	float2 displayPixelSize = 1.0 / float2(displayDims);
-
-	float momentX = 0.0;
-	float momentY = 0.0;
-	float momentX2 = 0.0;
-	float momentXY = 0.0;
-	float ws = 0.0;
-
-	[unroll] for (int dy = -1; dy <= 1; dy++)
-	{
-		[unroll] for (int dx = -1; dx <= 1; dx++)
-		{
-			float2 sampleUV = uv + float2(dx, dy) * displayPixelSize;
-			sampleUV = clamp(sampleUV, displayPixelSize * 0.5, 1.0 - displayPixelSize * 0.5);
-
-			float x = TexInput1.SampleLevel(LinearSampler, sampleUV, 0).g;
-			float y = TexInput2.SampleLevel(LinearSampler, sampleUV, 0).r;
-			float w = exp(-0.5 * float(dx * dx + dy * dy) / (0.7 * 0.7));
-
-			momentX += x * w;
-			momentY += y * w;
-			momentX2 += x * x * w;
-			momentXY += x * y * w;
-			ws += w;
-		}
-	}
-
-	momentX /= ws;
-	momentY /= ws;
-	momentX2 /= ws;
-	momentXY /= ws;
-
-	float A = (momentXY - momentX * momentY) / (max(momentX2 - momentX * momentX, 0.0) + 0.00001);
-	float B = momentY - A * momentX;
-
 	float3 preExposedColor = TexInput0[tid].rgb * GetPreExposure();
 	float linearLuminance = LinearLuminance(preExposedColor);
 	float guideLuminance = ExposureFusionTonemap(linearLuminance);
-	float fusedLuminance = max(A * guideLuminance + B, 0.0);
+	float guideLogLuminance = log2(linearLuminance);
+
+	float2 displayPosition = uv * float2(displayDims) - 0.5;
+	int2 basePosition = int2(floor(displayPosition));
+	float4 weightX = CubicBSplineWeights(frac(displayPosition.x));
+	float4 weightY = CubicBSplineWeights(frac(displayPosition.y));
+	float fusedLuminance = 0.0;
+	float totalWeight = 0.0;
+
+	// Smooth spatially in the display mip while rejecting samples from a
+	// different log-luminance range.
+	// Accumulating the already reconstructed fusion value preserves the existing
+	// Laplacian result and avoids per-block regression coefficients.
+	[unroll] for (int y = 0; y < 4; y++)
+	{
+		[unroll] for (int x = 0; x < 4; x++)
+		{
+			int2 samplePosition = clamp(basePosition + int2(x - 1, y - 1), int2(0, 0), int2(displayDims) - 1);
+			float sampleGuide = TexInput1.Load(int3(samplePosition, 0)).g;
+			float sampleFusion = TexInput2.Load(int3(samplePosition, 0)).r;
+			float sampleLogLuminance = log2(max(ExposureFusionInverseTonemap(sampleGuide), 1e-5));
+			float logLuminanceDelta = sampleLogLuminance - guideLogLuminance;
+			float spatialWeight = weightX[x] * weightY[y];
+			// Roughly one EV of range tolerance. exp2 is intentional: the guide is
+			// already expressed in stops and this gives a soft, stable rejection.
+			float rangeWeight = exp2(-0.5 * logLuminanceDelta * logLuminanceDelta);
+			float sampleWeight = spatialWeight * rangeWeight;
+
+			fusedLuminance += sampleFusion * sampleWeight;
+			totalWeight += sampleWeight;
+		}
+	}
+
+	float fallbackFusion = TexInput2.SampleLevel(LinearSampler, uv, 0).r;
+	float bilateralFusion = fusedLuminance / max(totalWeight, 1e-5);
+	// Sparse range support occurs on sub-pixel highlights. Falling back toward
+	// the broad spatial reconstruction avoids unstable amplification there.
+	float bilateralConfidence = smoothstep(0.02, 0.20, totalWeight);
+	fusedLuminance = max(lerp(fallbackFusion, bilateralFusion, bilateralConfidence), 0.0);
+
 	float localExposure = ExposureFusionInverseTonemap(fusedLuminance) / linearLuminance;
 
 	float shadowProtection = 1.0 - smoothstep(0.045, 0.18, linearLuminance);
@@ -193,6 +237,11 @@ float3 NormalizeWeights(float3 weights)
 
 	localExposure = guideLuminance > DarkThreshold ? localExposure :
 	                                                 lerp(1.0, localExposure, (guideLuminance / DarkThreshold) * (guideLuminance / DarkThreshold));
+
+	// Pyramid reconstruction can overshoot near high-contrast edges. Exposure
+	// fusion is a blend of these three candidates, so values outside their range
+	// are reconstruction artifacts and are a major source of motion pumping.
+	localExposure = clamp(localExposure, min(HighlightExposure, 1.0), max(ShadowExposure, 1.0));
 
 	if (UseGlobalExposure == 0)
 		localExposure *= ManualExposure;
