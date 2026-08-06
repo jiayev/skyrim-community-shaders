@@ -94,6 +94,15 @@ void Effects11::DrawSettings()
 	MenuManager::GetSingleton().RenderImGui();
 }
 
+void Effects11::ToggleEnabled()
+{
+	if (!EffectManager::GetSingleton().IsPresetLoaded())
+		return;
+	auto& settingManager = SettingManager::GetSingleton();
+	const uint32_t id = settingManager.GetSettingID("UseEffect", "GLOBAL");
+	settingManager.SetValue<bool>(id, !settingManager.GetValue<bool>(id));
+}
+
 void Effects11::LoadRaindropTexture()
 {
 	raindropTexture = nullptr;
