@@ -123,8 +123,14 @@ public:
 	 * @brief Runs the ENB effect chain in place of the vanilla tonemap pass.
 	 * @param a_input Render target holding the scene color to tonemap.
 	 * @param a_output Render target receiving the tonemapped result.
-	 * @return True if the chain ran; false if the effect manager is not yet initialized,
-	 *         in which case the caller must fall back to the vanilla pass.
+	 * @return True only if the chain wrote the output; false means the caller must fall
+	 *         back to the vanilla pass.
 	 */
 	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
+
+	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
+	bool ReplacedTonemapperThisFrame() const;
+
+private:
+	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
 };

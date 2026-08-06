@@ -463,9 +463,10 @@ void Effects11::CheckCommonData()
 		auto& settingManager = SettingManager::GetSingleton();
 		auto ui = globals::game::ui;
 		bool isMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
-		enableEffect = !isMenuOpen && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL");
-
 		auto& effectManager = EffectManager::GetSingleton();
+
+		enableEffect = !isMenuOpen && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
+
 		auto& weatherManager = WeatherManager::GetSingleton();
 
 		effectManager.UpdateCommonData();
@@ -524,7 +525,8 @@ bool Effects11::WantsTonemapOwnership()
 	// checked at render time, the arbiter would still report Effects11 as the owner while the
 	// vanilla pass ran, having already stripped Post Processing's tonemap flag and skipped its
 	// pipeline for that frame.
-	if (!EffectManager::GetSingleton().IsInitialized())
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized() || !effectManager.IsPresetLoaded())
 		return false;
 
 	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");
@@ -537,12 +539,26 @@ bool Effects11::RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_out
 		return false;
 
 	auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
-	effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output]);
-	return true;
+	// Only report replacement after the effect chain actually wrote the output.
+	if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
+		tonemapReplacedFrame = globals::state->frameCount;
+		return true;
+	}
+	return false;
+}
+
+bool Effects11::ReplacedTonemapperThisFrame() const
+{
+	return tonemapReplacedFrame == globals::state->frameCount;
 }
 
 void Effects11::ModifySky(RE::BSRenderPass* Pass)
 {
+	// State::UpdateSkyShaderPermutation ran first and already flagged both the sun disc and its
+	// glare; only narrow that to the disc when a preset is actually driving the procedural sun
+	if (!enableEffect)
+		return;
+
 	if (!Pass || !Pass->shaderProperty) {
 		return;
 	}
