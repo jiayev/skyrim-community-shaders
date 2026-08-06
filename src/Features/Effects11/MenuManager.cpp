@@ -5,6 +5,7 @@
 #include "Features/Effects11/ShaderPatches.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "SettingManager.h"
 #include "State.h"
@@ -51,6 +52,10 @@ void MenuManager::RenderSettingsPanel()
 	auto& settingManager = SettingManager::GetSingleton();
 	auto& effectManager = EffectManager::GetSingleton();
 
+	// Without a preset there is no ini to write back to, so saving would only create stubs
+	const bool presetLoaded = effectManager.IsPresetLoaded();
+
+	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Button("Save & Apply")) {
 		settingManager.Save();
 		effectManager.Save();
@@ -61,6 +66,7 @@ void MenuManager::RenderSettingsPanel()
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Save all settings, then reload and recompile shaders");
 	}
+	ImGui::EndDisabled();
 
 	ImGui::SameLine();
 
@@ -85,6 +91,7 @@ void MenuManager::RenderSettingsPanel()
 
 	ImGui::SameLine();
 
+	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Button("Save")) {
 		settingManager.Save();
 		effectManager.Save();
@@ -92,6 +99,7 @@ void MenuManager::RenderSettingsPanel()
 	if (ImGui::IsItemHovered()) {
 		ImGui::SetTooltip("Save all settings to enbseries.ini, weather files, and effect configurations");
 	}
+	ImGui::EndDisabled();
 
 	ImGui::Separator();
 
@@ -347,9 +355,21 @@ void MenuManager::RenderAllSettings()
 								switch (settingInfo->type) {
 								case SettingType::Bool:
 									{
-										bool v = settingManager.GetValue<bool>(settingID, true);
+										// Covers both a missing preset and one whose enbeffect.fx failed to compile
+										const bool noPreset = category == "GLOBAL" && settingKey == "UseEffect" && !EffectManager::GetSingleton().IsPresetLoaded();
+
+										bool v = !noPreset && settingManager.GetValue<bool>(settingID, true);
+										ImGui::BeginDisabled(noPreset);
 										if (ImGui::Checkbox(("##" + settingKey).c_str(), &v)) {
 											settingManager.SetValue<bool>(settingID, v);
+										}
+										ImGui::EndDisabled();
+
+										if (noPreset) {
+											ImGui::SameLine();
+											ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Warning);
+											ImGui::TextUnformatted(T("feature.effects11.no_valid_preset", "No valid preset loaded"));
+											ImGui::PopStyleColor();
 										}
 										break;
 									}

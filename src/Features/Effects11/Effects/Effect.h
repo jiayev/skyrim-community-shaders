@@ -32,6 +32,9 @@ public:
 	bool IsFilePresent() const { return filePresent; }
 	const std::vector<std::string>& GetErrors() const { return errors; }
 
+	/** @brief Absolute path of this effect's .fx file inside the resolved preset folder. */
+	std::filesystem::path GetFilePath() const;
+
 	virtual void Execute() = 0;
 	virtual void UpdateEffectVariables() {}
 
@@ -223,9 +226,6 @@ public:
 	};
 
 	std::vector<UIDefineInfo> uiDefines;
-
-	// INI file modification time tracking to skip redundant reloads
-	std::filesystem::file_time_type lastIniWriteTime{};
 
 	struct TechniqueSequenceResult
 	{

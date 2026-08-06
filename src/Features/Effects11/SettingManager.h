@@ -1,6 +1,5 @@
 #pragma once
 
-#include <filesystem>
 #include <map>
 #include <optional>
 #include <shared_mutex>
@@ -204,10 +203,6 @@ private:
 
 	float timeOfDay1[4] = { 0, 0, 0, 0 };
 	float timeOfDay2[4] = { 0, 0, 0, 0 };
-
-	// INI file modification time tracking to skip redundant reloads
-	std::filesystem::file_time_type lastMainIniWriteTime{};
-	std::unordered_map<std::string, std::filesystem::file_time_type> weatherFileWriteTimes;
 
 	mutable std::shared_mutex mutex;
 

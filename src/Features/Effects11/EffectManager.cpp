@@ -5,6 +5,7 @@
 #include "Globals.h"
 #include "State.h"
 
+#include "PresetManager.h"
 #include "SettingManager.h"
 #include "TextureManager.h"
 #include "WeatherManager.h"
@@ -90,6 +91,27 @@ void EffectManager::Initialize()
 
 }
 
+void EffectManager::LogPresetStatus() const
+{
+	auto& presetManager = PresetManager::GetSingleton();
+
+	if (IsPresetLoaded()) {
+		logger::info("[EFFECTS11] Preset loaded from '{}', settings from '{}'",
+			presetManager.GetENBSeriesPath().string(),
+			presetManager.GetENBSeriesIniPath().string());
+		return;
+	}
+
+	// Effects11 stays inert without a preset, so make the reason findable
+	if (!enbEffect.IsFilePresent()) {
+		logger::warn("[EFFECTS11] No preset in use: '{}' not found", enbEffect.GetFilePath().string());
+	} else {
+		const auto& errors = enbEffect.GetErrors();
+		logger::error("[EFFECTS11] No preset in use: '{}' failed to load: {}", enbEffect.GetFilePath().string(),
+			errors.empty() ? "unknown error" : errors.back());
+	}
+}
+
 void EffectManager::Apply()
 {
 	globals::features::effects11.LoadRaindropTexture();
@@ -107,13 +129,14 @@ void EffectManager::Apply()
 			effect->LoadWeatherData();
 	}
 #endif
+
+	LogPresetStatus();
 }
 
 void EffectManager::Load()
 {
 	Effect* allEffects[] = { &enbBloom, &enbLens, &enbAdaptation, &enbEffect, &enbEffectPostPass };
 	for (auto* effect : allEffects) {
-		effect->lastIniWriteTime = {};
 		effect->Load();
 		effect->UpdateUIVariables();
 	}
@@ -313,16 +336,21 @@ void EffectManager::ExecuteEffect(EffectBase& a_effect, uint32_t enableSettingID
 	a_effect.profiler = nullptr;
 }
 
-void EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, [[maybe_unused]] RE::BSGraphics::RenderTargetData& a_output)
+bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE::BSGraphics::RenderTargetData& a_output)
 {
 	if (!initialized)
-		return;
+		return false;
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 
 	if (!rasterizerState || !blendState || !quadVertexBuffer || !inputLayout || !renderer)
-		return;
+		return false;
+
+	// Without a preset nothing writes TextureSDRTemp, so the output RT would be copied from a
+	// never-written texture, i.e. a black screen
+	if (!IsPresetLoaded())
+		return false;
 
 	D3D11FullStateBackup stateBackup;
 	stateBackup.Save(context);
@@ -373,7 +401,8 @@ void EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, [[
 	textureManager.IncrementTextureSwap();
 
 	auto* textureSDRTemp = textureManager.GetCommonTexture("TextureSDRTemp");
-	if (textureSDRTemp && a_output.RTV) {
+	const bool wroteOutput = textureSDRTemp && a_output.RTV;
+	if (wroteOutput) {
 		globals::profiler->BeginPass("Effects11::CopyToOutput");
 		CopyTexture(textureSDRTemp->srv.get(), a_output.RTV);
 		globals::profiler->EndPass();
@@ -381,6 +410,8 @@ void EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, [[
 
 	stateBackup.Restore(context);
 	stateBackup.Release();
+
+	return wroteOutput;
 }
 
 std::string EffectManager::LoadShaderFile(const char* path)

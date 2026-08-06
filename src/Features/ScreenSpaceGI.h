@@ -35,6 +35,8 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 
+	/** @brief Registers the loading screen listener that resets the temporal history. */
+	virtual void PostPostLoad() override;
 	/** @brief Creates GPU textures, samplers, constant buffers, and compiles compute shaders. */
 	virtual void SetupResources() override;
 	/** @brief Releases and recompiles all SSGI compute shaders. */
@@ -54,6 +56,18 @@ public:
 	bool recompileFlag = false;
 	uint outputAoIdx = 0;
 	uint outputIlIdx = 0;
+
+	// Loading screen radiance decays at only 1/MaxAccumFrames per frame, bleeding the old scene
+	// into the new one for some frames.
+	std::atomic<bool> queuedResetHistory{ true };
+
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
+
+		static bool Register();
+	};
 
 	struct Settings
 	{
