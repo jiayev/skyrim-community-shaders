@@ -221,19 +221,22 @@ void State::Reset()
 	globals::profiler->EndFrame();
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
-	if (!globals::game::ui->GameIsPaused())
-		timer += RE::GetSecondsSinceLastFrame();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
 	if (auto ui = globals::game::ui) {
+		if (!ui->GameIsPaused())
+			timer += RE::GetSecondsSinceLastFrame();
+
 		isMainMenuOpen = ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
 		isLoadingMenuOpen = ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 		isMapMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		isStatsMenuOpen = ui->IsMenuOpen(RE::StatsMenu::MENU_NAME);
 	} else {
 		isMainMenuOpen = false;
 		isLoadingMenuOpen = false;
 		isMapMenuOpen = false;
+		isStatsMenuOpen = false;
 	}
 
 	lastModifiedPixelDescriptor = 0;
