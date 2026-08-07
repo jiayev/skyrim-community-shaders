@@ -576,8 +576,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (SharedData::iblSettings.EnableIBL)
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 #			endif
-}
-#		endif
 
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
