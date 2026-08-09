@@ -213,8 +213,9 @@ void IBL::RegisterWeatherVariables()
 
 IBL::PerFrame IBL::GetCommonBufferData() const
 {
+	const bool sceneDisabled = IsDisabledForCurrentScene();
 	PerFrame data = {
-		.EnableIBL = IsDisabledForCurrentScene() ? 0u : settings.EnableIBL,
+		.EnableIBL = sceneDisabled ? 0u : settings.EnableIBL,
 		.PreserveFogLuminance = settings.PreserveFogLuminance,
 		.UseStaticIBL = settings.UseStaticIBL,
 		.DALCAmount = settings.DALCAmount,
@@ -226,7 +227,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.DALCMode = settings.DALCMode
 	};
 
-	if (globals::features::effects11.loaded) {
+	if (!sceneDisabled && globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
 			auto& settingManager = SettingManager::GetSingleton();
