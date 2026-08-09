@@ -83,8 +83,8 @@ float3 NormalizeWeights(float3 weights)
 	return weights / (weights.x + weights.y + weights.z + 0.00001);
 }
 
-// Four-tap cardinal cubic B-spline weights. Unlike a fixed moving regression
-// window, samples enter and leave the footprint with zero weight, keeping the
+// Four-tap cardinal cubic B-spline weights. Unlike a box-weighted window,
+// samples enter and leave the footprint with zero weight, keeping the
 // reconstructed exposure continuous as scene features move across mip texels.
 float4 CubicBSplineWeights(float t)
 {
@@ -196,13 +196,13 @@ float4 CubicBSplineWeights(float t)
 	int2 basePosition = int2(floor(displayPosition));
 	float4 weightX = CubicBSplineWeights(frac(displayPosition.x));
 	float4 weightY = CubicBSplineWeights(frac(displayPosition.y));
-	float fusedLuminance = 0.0;
+	float momentGuide = 0.0, momentFusion = 0.0, momentGuideSq = 0.0, momentGuideFusion = 0.0;
 	float totalWeight = 0.0;
 
 	// Smooth spatially in the display mip while rejecting samples from a
-	// different log-luminance range.
-	// Accumulating the already reconstructed fusion value preserves the existing
-	// Laplacian result and avoids per-block regression coefficients.
+	// different log-luminance range. The moments feed a local linear fit against
+	// the guide, so the reconstructed fusion value keeps its dependence on scene
+	// luminance instead of collapsing to a neighbourhood average.
 	[unroll] for (int y = 0; y < 4; y++)
 	{
 		[unroll] for (int x = 0; x < 4; x++)
@@ -218,17 +218,29 @@ float4 CubicBSplineWeights(float t)
 			float rangeWeight = exp2(-0.5 * logLuminanceDelta * logLuminanceDelta);
 			float sampleWeight = spatialWeight * rangeWeight;
 
-			fusedLuminance += sampleFusion * sampleWeight;
+			momentGuide += sampleGuide * sampleWeight;
+			momentFusion += sampleFusion * sampleWeight;
+			momentGuideSq += sampleGuide * sampleGuide * sampleWeight;
+			momentGuideFusion += sampleGuide * sampleFusion * sampleWeight;
 			totalWeight += sampleWeight;
 		}
 	}
 
+	float invWeight = 1.0 / max(totalWeight, 1e-5);
+	float meanGuide = momentGuide * invWeight;
+	float meanFusion = momentFusion * invWeight;
+	float fitSlope = (momentGuideFusion * invWeight - meanGuide * meanFusion) /
+	                 (max(momentGuideSq * invWeight - meanGuide * meanGuide, 0.0) + 0.00001);
+	float fitOffset = meanFusion - fitSlope * meanGuide;
+
 	float fallbackFusion = TexInput2.SampleLevel(LinearSampler, uv, 0).r;
-	float bilateralFusion = fusedLuminance / max(totalWeight, 1e-5);
+	// Evaluated at the full-resolution guide: this is what transports scene detail
+	// into the ratio below, which a plain weighted mean would divide back out.
+	float bilateralFusion = fitSlope * guideLuminance + fitOffset;
 	// Sparse range support occurs on sub-pixel highlights. Falling back toward
 	// the broad spatial reconstruction avoids unstable amplification there.
 	float bilateralConfidence = smoothstep(0.02, 0.20, totalWeight);
-	fusedLuminance = max(lerp(fallbackFusion, bilateralFusion, bilateralConfidence), 0.0);
+	float fusedLuminance = max(lerp(fallbackFusion, bilateralFusion, bilateralConfidence), 0.0);
 
 	float localExposure = ExposureFusionInverseTonemap(fusedLuminance) / linearLuminance;
 
