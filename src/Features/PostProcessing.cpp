@@ -503,6 +503,11 @@ void PostProcessing::CopyToRenderTarget(
 	ID3D11Texture2D* srcTex,
 	ID3D11ShaderResourceView* srcSRV)
 {
+	// D3D11 rejects a copy whose source and destination are the same resource, which happens
+	// whenever the pipeline left the image in the buffer we are writing back to.
+	if (targetRT.texture == srcTex)
+		return;
+
 	auto context = globals::d3d::context;
 
 	D3D11_TEXTURE2D_DESC srcDesc;
@@ -591,6 +596,12 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 	auto renderer = globals::game::renderer;
 
 	auto& upscaling = globals::features::upscaling;
+
+	// This runs before the HDR chain, so ISRefraction still has kMAIN_COPY bound as a render
+	// target. D3D11 silently nulls any SRV of a resource that is also an output, which would
+	// make the pipeline sample black instead of the scene.
+	globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);
+	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
 	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
 
