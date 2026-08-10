@@ -3,6 +3,7 @@
 #include "IconsFontAwesome5.h"
 #include "imgui_stdlib.h"
 
+#include "Menu.h"
 #include "Profiler.h"
 #include "State.h"
 #include "Util.h"
@@ -58,22 +59,29 @@ void PostProcessing::DrawSettings()
 	ImGui::EndGroup();
 
 	ImGui::Separator();
-	ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypass);
-	ImGui::SameLine();
 
-	// Effects11 replaces the whole tonemap pass, so this toggle would have no effect while
-	// it owns the frame. Disable it rather than let it silently do nothing.
-	const bool tonemapTakenByEffects11 = globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
+	// Effects11 replaces the whole tonemap pass, so these toggles would have no effect while
+	// it owns the frame. Disable them rather than let them silently do nothing.
+	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
 
 	ImGui::BeginDisabled(tonemapTakenByEffects11);
+
+	// A disabled checkbox never reports a click, so bypass keeps its stored value while forced on.
+	bool bypassDisplay = bypass || tonemapTakenByEffects11;
+	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
+		bypass = bypassDisplay;
+
+	ImGui::SameLine();
 	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
 	ImGui::EndDisabled();
 
 	if (tonemapTakenByEffects11) {
+		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
 		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
 									 "Tonemapping is currently handled by Effects 11. Post Processing effects that run "
 									 "before tonemapping still apply. To use Post Processing tonemapping instead, either "
 									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
+		ImGui::PopStyleColor();
 	}
 
 	ImGui::Separator();
@@ -554,7 +562,7 @@ void PostProcessing::DrawFeature(PostProcessFeature& feature, PostProcessFeature
 
 void PostProcessing::DrawBeforeUpscaling()
 {
-	if (bypass)
+	if (bypass || IsTonemapOwnedByEffects11())
 		return;
 
 	auto& upscaling = globals::features::upscaling;
@@ -564,7 +572,7 @@ void PostProcessing::DrawBeforeUpscaling()
 	auto renderer = globals::game::renderer;
 	auto state = globals::state;
 
-	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool inMainLoadingMenu = state->IsMainOrLoadingMenuOpen();
 	auto gameTexMain = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	PostProcessFeature::TextureInfo lastTexColor = { gameTexMain.texture, gameTexMain.SRV };
 
@@ -603,7 +611,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 	globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
-	bool inMainLoadingMenu = globals::game::ui && (globals::game::ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || globals::game::ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME));
+	bool inMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 
 	auto& gameTexMainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	auto& gameTexMainCopyRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN_COPY];
@@ -646,7 +654,9 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 
 void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 {
-	if (bypass)
+	// Effects11 owns the image, so no letterbox is drawn and zeroing its motion vectors
+	// would hand frame generation a band of static pixels over live scene content.
+	if (bypass || IsTonemapOwnedByEffects11())
 		return;
 
 	auto borderIdx = static_cast<size_t>(FeaturePipelineIndex::Border);
@@ -660,6 +670,11 @@ void PostProcessing::ClearBorderMotionVectorsForFrameGen()
 bool PostProcessing::WantsTonemapOwnership() const
 {
 	return !bypass && settings.DisableVanillaTonemapping != 0;
+}
+
+bool PostProcessing::IsTonemapOwnedByEffects11() const
+{
+	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
 }
 
 PostProcessing::Settings PostProcessing::GetCommonBufferData()
