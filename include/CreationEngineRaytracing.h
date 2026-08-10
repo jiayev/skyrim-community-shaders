@@ -241,7 +241,7 @@ struct CreationEngineRaytracing
 
 	struct SHaRCSettings
 	{
-		bool Enabled = true;
+		bool Enabled = false;
 		float SceneScale = 1.0f;
 		int AccumFrameNum = 10;
 		int StaleFrameNum = 64;
