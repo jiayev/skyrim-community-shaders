@@ -68,6 +68,14 @@ struct PostProcessing : Feature
 	bool WantsTonemapOwnership() const;
 
 	/**
+	 * @brief Whether Effects11 replaced the tonemap this frame.
+	 *
+	 * The pipeline's output is discarded in that case, so every entry point that would
+	 * write to a game render target must bail out rather than do work nothing consumes.
+	 */
+	bool IsTonemapOwnedByEffects11() const;
+
+	/**
 	 * @brief Builds the shared-buffer payload, masking flags the arbiter has revoked.
 	 *
 	 * DisableVanillaTonemapping is forced to 0 unless Post Processing actually owns the
