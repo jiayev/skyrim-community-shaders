@@ -101,7 +101,9 @@ struct Raytracing : public OverlayFeature
 	void DataLoaded() override;
 
 	void DrawGeneralSettings();
+	void DrawNRDSettings();
 	void DrawReblurSettings();
+	void DrawRelaxSettings();
 	void DrawSHaRCSettings();
 	void DrawSSSSettings();
 	void DrawAdvancedSettings();

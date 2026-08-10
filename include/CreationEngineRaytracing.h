@@ -26,7 +26,8 @@ struct CreationEngineRaytracing
 	enum class Denoiser
 	{
 		None,
-		NRD,
+		NRD_Reblur,
+		NRD_Relax,
 		DLSS_RR,
 		Accumulation
 	};
@@ -61,7 +62,53 @@ struct CreationEngineRaytracing
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(RaytracingSettings, Bounces, SamplesPerPixel, RussianRoulette, ResolutionScale)
 	};
 
-	struct ReblurSettings
+	struct NRDSettings
+	{
+		// Parameters shared by both NVIDIA NRD denoisers (REBLUR and RELAX).
+
+		// [0; maxFastAccumulatedFrameNum) - number of reconstructed frames after history reset
+		uint32_t historyFixFrameNum = 3;
+
+		// (> 0) - base stride between pixels in 5x5 history reconstruction kernel
+		uint32_t historyFixBasePixelStride = 14;
+		uint32_t historyFixAlternatePixelStride = 14;  // see "historyFixAlternatePixelStrideMaterialID"
+
+		// [1; 3] - standard deviation scale of the color box for clamping slow "main" history to responsive "fast" history
+		float fastHistoryClampingSigmaScale = 2.0f;  // 2 is old default, 1.5 works well even for dirty signals, 1.1 is a safe value for occlusion denoising
+
+		// (pixels) - pre-accumulation spatial reuse pass blur radius (0 = disabled, must be used in case of badly defined signals and probabilistic sampling)
+		float diffusePrepassBlurRadius = 30.0f;
+		float specularPrepassBlurRadius = 50.0f;
+
+		// (0; 0.2] - bigger values reduce sensitivity to shadows in spatial passes, smaller values are recommended for signals with relatively clean hit distance (like RTXDI/RESTIR)
+		float minHitDistanceWeight = 0.1f;
+
+		// (normalized %) - base fraction of diffuse or specular lobe angle used to drive normal based rejection
+		float lobeAngleFraction = 0.15f;
+
+		// (normalized %) - base fraction of center roughness used to drive roughness based rejection
+		float roughnessFraction = 0.15f;
+
+		// Helps to mitigate fireflies emphasized by DLSS. Very cheap and unbiased in most of the cases, better keep in enabled to maximize quality
+		bool enableAntiFirefly = true;
+
+		bool operator==(const NRDSettings&) const = default;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
+			NRDSettings,
+			historyFixFrameNum,
+			historyFixBasePixelStride,
+			historyFixAlternatePixelStride,
+			fastHistoryClampingSigmaScale,
+			diffusePrepassBlurRadius,
+			specularPrepassBlurRadius,
+			minHitDistanceWeight,
+			lobeAngleFraction,
+			roughnessFraction,
+			enableAntiFirefly)
+	};
+
+	struct NRDReblurSettings
 	{
 		// [0; REBLUR_MAX_HISTORY_FRAME_NUM] - maximum number of linearly accumulated frames
 		// Always accumulate in "seconds" not in "frames", use "GetMaxAccumulatedFrameNum" for conversion
@@ -77,36 +124,11 @@ struct CreationEngineRaytracing
 		// Values ">= maxAccumulatedFrameNum" get clamped to "maxAccumulatedFrameNum"
 		uint32_t maxStabilizedFrameNum = 63;
 
-		// [0; maxFastAccumulatedFrameNum) - number of reconstructed frames after history reset
-		uint32_t historyFixFrameNum = 3;
-
-		// (> 0) - base stride between pixels in 5x5 history reconstruction kernel
-		uint32_t historyFixBasePixelStride = 14;
-		uint32_t historyFixAlternatePixelStride = 14;  // see "historyFixAlternatePixelStrideMaterialID"
-
-		// [1; 3] - standard deviation scale of the color box for clamping slow "main" history to responsive "fast" history
-		// REBLUR clamps the spatially processed "main" history to the spatially unprocessed "fast" history. It implies using smaller variance scaling than in RELAX.
-		// A bit smaller values (> 1) may be used with clean signals. The implementation will adjust this under the hood if spatial sampling is disabled
-		float fastHistoryClampingSigmaScale = 2.0f;  // 2 is old default, 1.5 works well even for dirty signals, 1.1 is a safe value for occlusion denoising
-
-		// (pixels) - pre-accumulation spatial reuse pass blur radius (0 = disabled, must be used in case of badly defined signals and probabilistic sampling)
-		float diffusePrepassBlurRadius = 30.0f;
-		float specularPrepassBlurRadius = 50.0f;
-
-		// (0; 0.2] - bigger values reduce sensitivity to shadows in spatial passes, smaller values are recommended for signals with relatively clean hit distance (like RTXDI/RESTIR)
-		float minHitDistanceWeight = 0.1f;
-
 		// (pixels) - min denoising radius (for converged state)
 		float minBlurRadius = 1.0f;
 
 		// (pixels) - base (max) denoising radius (gets reduced over time)
 		float maxBlurRadius = 30.0f;
-
-		// (normalized %) - base fraction of diffuse or specular lobe angle used to drive normal based rejection
-		float lobeAngleFraction = 0.15f;
-
-		// (normalized %) - base fraction of center roughness used to drive roughness based rejection
-		float roughnessFraction = 0.15f;
 
 		// (normalized %) - represents maximum allowed deviation from the local tangent plane
 		float planeDistanceSensitivity = 0.02f;
@@ -116,9 +138,6 @@ struct CreationEngineRaytracing
 
 		// [1; 3] - undesired sporadic outliers suppression to keep output stable (smaller values maximize suppression in exchange of bias)
 		float fireflySuppressorMinRelativeScale = 2.0f;
-
-		// Helps to mitigate fireflies emphasized by DLSS. Very cheap and unbiased in most of the cases, better keep in enabled to maximize quality
-		bool enableAntiFirefly = true;
 
 		// In rare cases, when bright samples are so sparse that any other bright neighbor can't
 		// be reached, pre-pass transforms a standalone bright pixel into a standalone bright blob,
@@ -133,30 +152,67 @@ struct CreationEngineRaytracing
 		// History length is measured in frames, it can be in "[0; maxAccumulatedFrameNum]" range
 		bool returnHistoryLengthInsteadOfOcclusion = false;
 
-		bool operator==(const ReblurSettings&) const = default;
+		bool operator==(const NRDReblurSettings&) const = default;
 
 		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
-			ReblurSettings,
+			NRDReblurSettings,
 			maxAccumulatedFrameNum,
 			maxFastAccumulatedFrameNum,
 			maxStabilizedFrameNum,
-			historyFixFrameNum,
-			historyFixBasePixelStride,
-			historyFixAlternatePixelStride,
-			fastHistoryClampingSigmaScale,
-			diffusePrepassBlurRadius,
-			specularPrepassBlurRadius,
-			minHitDistanceWeight,
 			minBlurRadius,
 			maxBlurRadius,
-			lobeAngleFraction,
-			roughnessFraction,
 			planeDistanceSensitivity,
 			specularProbabilityThresholdsForMvModification,
 			fireflySuppressorMinRelativeScale,
-			enableAntiFirefly,
 			usePrepassOnlyForSpecularMotionEstimation,
 			returnHistoryLengthInsteadOfOcclusion)
+	};
+
+	struct NRDRelaxSettings
+	{
+		// [0; RELAX_MAX_HISTORY_FRAME_NUM] - maximum number of linearly accumulated frames
+		uint32_t diffuseMaxAccumulatedFrameNum = 30;
+		uint32_t specularMaxAccumulatedFrameNum = 30;
+
+		// [0; maxAccumulatedFrameNum) - maximum number of linearly accumulated frames for fast history
+		// Values ">= maxAccumulatedFrameNum" disable fast history
+		uint32_t diffuseMaxFastAccumulatedFrameNum = 6;
+		uint32_t specularMaxFastAccumulatedFrameNum = 6;
+
+		// A-trous edge stopping luminance sensitivity
+		float diffusePhiLuminance = 2.0f;
+		float specularPhiLuminance = 1.0f;
+
+		// [2; 8] - number of iterations for A-Trous wavelet transform
+		uint32_t atrousIterationNum = 3;
+
+		// (>= 0) - how much variance we inject to specular if reprojection confidence is low
+		float specularVarianceBoost = 0.0f;
+
+		// (degrees) - slack for the specular lobe angle used in normal based rejection during A-Trous passes
+		float specularLobeAngleSlack = 0.15f;
+
+		// (normalized %) - depth threshold for spatial passes
+		float depthThreshold = 0.003f;
+
+		// Roughness based rejection
+		bool enableRoughnessEdgeStopping = true;
+
+		bool operator==(const NRDRelaxSettings&) const = default;
+
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(
+			NRDRelaxSettings,
+			diffuseMaxAccumulatedFrameNum,
+			specularMaxAccumulatedFrameNum,
+			diffuseMaxFastAccumulatedFrameNum,
+			specularMaxFastAccumulatedFrameNum,
+			diffusePhiLuminance,
+			specularPhiLuminance,
+			atrousIterationNum,
+			specularVarianceBoost,
+			specularLobeAngleSlack,
+			depthThreshold,
+			enableRoughnessEdgeStopping)
 	};
 
 	struct MaterialSettings
@@ -396,7 +452,9 @@ struct CreationEngineRaytracing
 		GeneralSettings GeneralSettings;
 		LightingSettings LightingSettings;
 		RaytracingSettings RaytracingSettings;
-		ReblurSettings ReblurSettings;
+		NRDSettings NRDSettings;
+		NRDReblurSettings NRDReblurSettings;
+		NRDRelaxSettings NRDRelaxSettings;
 		MaterialSettings MaterialSettings;
 		SHaRCSettings SHaRCSettings;
 		AdvancedSettings AdvancedSettings;
@@ -413,7 +471,9 @@ struct CreationEngineRaytracing
 			GeneralSettings,
 			LightingSettings,
 			RaytracingSettings,
-			ReblurSettings,
+			NRDSettings,
+			NRDReblurSettings,
+			NRDRelaxSettings,
 			MaterialSettings,
 			SHaRCSettings,
 			AdvancedSettings,
