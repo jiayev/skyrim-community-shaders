@@ -64,6 +64,8 @@ static json BuildObjectJson(RE::NiAVObject* object)
 	json j;
 	j["class_type"] = object->GetRTTI()->name;
 	j["name"] = object->name.c_str();
+	j["flags"] = std::format("0x{:08X}", object->GetFlags().underlying());
+	j["ptr"] = std::format("{}", fmt::ptr(object));
 
 	auto* node = object->AsNode();
 	if (node) {
