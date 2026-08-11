@@ -612,7 +612,7 @@ Upscaling::UpscaleMethod Upscaling::GetUpscaleMethod() const
 	// when the user selects DLSS and the Raytracing Denoiser is set to DLSS_RR.
 	if (settings.upscaleMethod == UpscaleMethod::kDLSS) {
 		auto& rt = globals::features::raytracing;
-		if (rt.Available() &&
+		if ((rt.Mode() != CreationEngineRaytracing::Mode::None) &&
 			rt.settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR &&
 			(streamline.loadedFeatures & Streamline::Features::kDLSS_RR)) {
 			return UpscaleMethod::kDLSS_RR;
@@ -1049,7 +1049,7 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	}
 
 	auto& rt = globals::features::raytracing;
-	if (rt.Available())
+	if (rt.Mode() != CreationEngineRaytracing::Mode::None)
 		rt.UpdateJitter(jitter);
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
@@ -1148,7 +1148,7 @@ void Upscaling::ClearShaderCache()
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 }
 
-void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
+void Upscaling::CopySharedD3D12Resources()
 {
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
@@ -1156,13 +1156,17 @@ void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;
+	
+	auto& sharedResources = globals::dx12Interop->sharedResources;
 
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	context->CopyResource(globals::dx12Interop->sharedResources.main->resource11, main.texture);
+	context->CopyResource(sharedResources.main->resource11, main.texture);
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-	if (!preserveMotionVector)
-		context->CopyResource(globals::dx12Interop->sharedResources.motionVector->resource11, motionVector.texture);
+	context->CopyResource(sharedResources.motionVector->resource11, motionVector.texture);
+
+	if (reactiveMaskTexture)
+		context->CopyResource(sharedResources.reactiveMask->resource11, reactiveMaskTexture->resource.get());
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 
@@ -1190,7 +1194,7 @@ void Upscaling::CopySharedD3D12Resources(bool preserveMotionVector)
 		ID3D11ShaderResourceView* views[1] = { depth.depthSRV };
 		context->PSSetShaderResources(0, ARRAYSIZE(views), views);
 
-		ID3D11RenderTargetView* rtvs[1] = { globals::dx12Interop->sharedResources.depth->rtv };
+		ID3D11RenderTargetView* rtvs[1] = { sharedResources.depth->rtv };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
 		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
@@ -1508,7 +1512,13 @@ void Upscaling::EncodeTextures()
 		uint32_t renderWidth = (uint32_t)renderSize.x;
 		uint32_t renderHeight = (uint32_t)renderSize.y;
 
-		ID3D11ShaderResourceView* views[4] = { temporalAAMask.SRV, normals.SRV, motionVector.SRV, depth.depthSRV };
+		ID3D11ShaderResourceView* views[4] = { 
+			temporalAAMask.SRV, 
+			normals.SRV,
+			motionVector.SRV, 
+			depth.depthSRV 
+		};
+
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		context->CSSetShader(GetEncodeTexturesCS(), nullptr, 0);
@@ -1856,7 +1866,7 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		upscaling.ConvertColorSpace(true);
 
 		if (upscaling.d3d12Mode)
-			upscaling.CopySharedD3D12Resources(upscaleMethod == UpscaleMethod::kDLSS_RR);
+			upscaling.CopySharedD3D12Resources();
 
 		upscaling.PerformUpscaling();
 

@@ -119,7 +119,7 @@ public:
 
 	void EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::ViewportHandle vp,
 		ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, ID3D12Resource* reactiveMask,
-		ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness, ID3D12Resource* specHitDistance,
+		ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness,  ID3D12Resource* specHitDist,
 		const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth);
 
 	// Necessary for DX12 mode for garbage collection since there is no swapchain present, where these methods would normally be called

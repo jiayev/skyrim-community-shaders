@@ -185,7 +185,8 @@ void Raytracing::DrawSettings()
 		settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser,
 		std::array{
 			T(TKEY("denoiser_none"), "None"),
-			T(TKEY("denoiser_nrd"), "NRD"),
+			T(TKEY("denoiser_nrd_reblur"), "NRD Reblur"),
+			T(TKEY("denoiser_nrd_relax"), "NRD Relax"),
 			T(TKEY("denoiser_dlss_rr"), "DLSS RR"),
 			T(TKEY("denoiser_accumulation"), "Accumulation"),
 		});
@@ -239,7 +240,19 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
 	certSettings.DebugSettings.Markers = globals::state->interopLoadPIX;
-	certSettings.DebugSettings.Timings = settings.PerfOverlay != OverlayMode::None;
+
+	switch (settings.PerfOverlay) {
+	case OverlayMode::Simple:
+	case OverlayMode::Complete:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Standard;
+		break;
+	case OverlayMode::Extended:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Extended;
+		break;
+	default:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Disabled;
+		break;
+	}
 
 	return certSettings;
 }
@@ -272,10 +285,45 @@ void Raytracing::DrawGeneralSettings()
 		// Samples Per Pixel
 		if (ImGui::SliderInt(T(TKEY("samples_per_pixel"), "Samples Per Pixel"), &rtSettings.SamplesPerPixel, 1, 32))
 			rtSettings.SamplesPerPixel = std::clamp(rtSettings.SamplesPerPixel, 1, 32);
+
+		// Russian Roulette
+		DrawEnumRadio(
+			T(TKEY("russian_roulette"), "Russian Roulette"),
+			"RussianRoulette",
+			rtSettings.RussianRoulette,
+			std::array{
+				T(TKEY("rr_none"), "Disabled"),
+				T(TKEY("rr_standard"), "Standard"),
+				T(TKEY("rr_enhanced"), "Enhanced") });
+
+		// Global Illumination Resolution Scale
+		if (ceRTSettings.GeneralSettings.Mode == CreationEngineRaytracing::Mode::GlobalIllumination) {
+			const auto& denoiser = ceRTSettings.GeneralSettings.Denoiser;
+			const bool resScale = (denoiser == CreationEngineRaytracing::Denoiser::NRD_Reblur ||
+								   denoiser == CreationEngineRaytracing::Denoiser::NRD_Relax);
+
+			if (!resScale)
+				ImGui::BeginDisabled();
+
+			ImGui::SliderFloat(T(TKEY("resolution_scale"), "Resolution Scale"), &rtSettings.ResolutionScale, 0.25f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+			if (auto _tt = Util::HoverTooltipWrapper()) {
+				ImGui::Text("%s", T(TKEY("resolution_scale_tooltip"),
+									  "Internal raytracing resolution."));
+			}
+
+			if (!resScale) {
+				ImGui::EndDisabled();
+
+				if (auto _tt = Util::HoverTooltipWrapper()) {
+					ImGui::Text("%s", T(TKEY("resolution_scale_disabled_tooltip"),
+										  "Only available when using NRD denoiser."));
+				}
+			}
+		}
 	}
 
-	if (ceRTSettings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::NRD)
-		DrawReblurSettings();
+	DrawNRDSettings();
 
 	DrawSHaRCSettings();
 
@@ -319,13 +367,62 @@ void Raytracing::DrawGeneralSettings()
 	ImGui::EndTabItem();
 }
 
+void Raytracing::DrawNRDSettings()
+{
+	const auto& denoiser = settings.CreationEngineRaytracingSettings.GeneralSettings.Denoiser;
+	const bool reblur = (denoiser == CreationEngineRaytracing::Denoiser::NRD_Reblur);
+	const bool relax = (denoiser == CreationEngineRaytracing::Denoiser::NRD_Relax);
+
+	if (!reblur && !relax)
+		return;
+
+	if (!ImGui::CollapsingHeader(T(TKEY("nrd"), "NRD")))
+		return;
+
+	auto& nrdSettings = settings.CreationEngineRaytracingSettings.NRDSettings;
+
+	if (ImGui::InputScalar(T(TKEY("history_fix_frames"), "History Fix Frames"), ImGuiDataType_U32, &nrdSettings.historyFixFrameNum))
+		ClampSetting(nrdSettings.historyFixFrameNum, 0u, 3u);
+
+	if (ImGui::InputScalar(T(TKEY("history_fix_base_pixel_stride"), "History Fix Base Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixBasePixelStride))
+		ClampSetting(nrdSettings.historyFixBasePixelStride, 1u, 64u);
+
+	if (ImGui::InputScalar(T(TKEY("history_fix_alternate_pixel_stride"), "History Fix Alternate Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixAlternatePixelStride))
+		ClampSetting(nrdSettings.historyFixAlternatePixelStride, 1u, 64u);
+
+	if (ImGui::SliderFloat(T(TKEY("fast_history_clamping_sigma_scale"), "Fast History Clamping Sigma Scale"), &nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
+		ClampSetting(nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("diffuse_prepass_blur_radius"), "Diffuse Prepass Blur Radius"), &nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+		ClampSetting(nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("specular_prepass_blur_radius"), "Specular Prepass Blur Radius"), &nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+		ClampSetting(nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("min_hit_distance_weight"), "Min Hit Distance Weight"), &nrdSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
+		ClampSetting(nrdSettings.minHitDistanceWeight, 0.001f, 0.2f);
+
+	if (ImGui::SliderFloat(T(TKEY("lobe_angle_fraction"), "Lobe Angle Fraction"), &nrdSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
+		ClampSetting(nrdSettings.lobeAngleFraction, 0.0f, 1.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("roughness_fraction"), "Roughness Fraction"), &nrdSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
+		ClampSetting(nrdSettings.roughnessFraction, 0.0f, 1.0f);
+
+	ImGui::Checkbox(T(TKEY("enable_anti_firefly"), "Enable Anti Firefly"), &nrdSettings.enableAntiFirefly);
+
+	if (reblur)
+		DrawReblurSettings();
+	else if (relax)
+		DrawRelaxSettings();
+}
+
 void Raytracing::DrawReblurSettings()
 {
 	if (!ImGui::CollapsingHeader(T(TKEY("reblur"), "Reblur"))) {
 		return;
 	}
 
-	auto& reblurSettings = settings.CreationEngineRaytracingSettings.ReblurSettings;
+	auto& reblurSettings = settings.CreationEngineRaytracingSettings.NRDReblurSettings;
 
 	if (ImGui::InputScalar(T(TKEY("max_accumulated_frames"), "Max Accumulated Frames"), ImGuiDataType_U32, &reblurSettings.maxAccumulatedFrameNum))
 		ClampSetting(reblurSettings.maxAccumulatedFrameNum, 0u, 63u);
@@ -336,38 +433,11 @@ void Raytracing::DrawReblurSettings()
 	if (ImGui::InputScalar(T(TKEY("max_stabilized_frames"), "Max Stabilized Frames"), ImGuiDataType_U32, &reblurSettings.maxStabilizedFrameNum))
 		ClampSetting(reblurSettings.maxStabilizedFrameNum, 0u, reblurSettings.maxAccumulatedFrameNum);
 
-	if (ImGui::InputScalar(T(TKEY("history_fix_frames"), "History Fix Frames"), ImGuiDataType_U32, &reblurSettings.historyFixFrameNum))
-		ClampSetting(reblurSettings.historyFixFrameNum, 0u, reblurSettings.maxFastAccumulatedFrameNum);
-
-	if (ImGui::InputScalar(T(TKEY("history_fix_base_pixel_stride"), "History Fix Base Pixel Stride"), ImGuiDataType_U32, &reblurSettings.historyFixBasePixelStride))
-		ClampSetting(reblurSettings.historyFixBasePixelStride, 1u, 64u);
-
-	if (ImGui::InputScalar(T(TKEY("history_fix_alternate_pixel_stride"), "History Fix Alternate Pixel Stride"), ImGuiDataType_U32, &reblurSettings.historyFixAlternatePixelStride))
-		ClampSetting(reblurSettings.historyFixAlternatePixelStride, 1u, 64u);
-
-	if (ImGui::SliderFloat(T(TKEY("fast_history_clamping_sigma_scale"), "Fast History Clamping Sigma Scale"), &reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
-		ClampSetting(reblurSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f);
-
-	if (ImGui::SliderFloat(T(TKEY("diffuse_prepass_blur_radius"), "Diffuse Prepass Blur Radius"), &reblurSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
-		ClampSetting(reblurSettings.diffusePrepassBlurRadius, 0.0f, 100.0f);
-
-	if (ImGui::SliderFloat(T(TKEY("specular_prepass_blur_radius"), "Specular Prepass Blur Radius"), &reblurSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
-		ClampSetting(reblurSettings.specularPrepassBlurRadius, 0.0f, 100.0f);
-
-	if (ImGui::SliderFloat(T(TKEY("min_hit_distance_weight"), "Min Hit Distance Weight"), &reblurSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
-		ClampSetting(reblurSettings.minHitDistanceWeight, 0.001f, 0.2f);
-
 	if (ImGui::SliderFloat(T(TKEY("min_blur_radius"), "Min Blur Radius"), &reblurSettings.minBlurRadius, 0.0f, 10.0f, "%.2f"))
 		ClampSetting(reblurSettings.minBlurRadius, 0.0f, 10.0f);
 
 	if (ImGui::SliderFloat(T(TKEY("max_blur_radius"), "Max Blur Radius"), &reblurSettings.maxBlurRadius, 0.0f, 100.0f, "%.1f"))
 		ClampSetting(reblurSettings.maxBlurRadius, 0.0f, 100.0f);
-
-	if (ImGui::SliderFloat(T(TKEY("lobe_angle_fraction"), "Lobe Angle Fraction"), &reblurSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
-		ClampSetting(reblurSettings.lobeAngleFraction, 0.0f, 1.0f);
-
-	if (ImGui::SliderFloat(T(TKEY("roughness_fraction"), "Roughness Fraction"), &reblurSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
-		ClampSetting(reblurSettings.roughnessFraction, 0.0f, 1.0f);
 
 	if (ImGui::SliderFloat(T(TKEY("plane_distance_sensitivity"), "Plane Distance Sensitivity"), &reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f, "%.3f"))
 		ClampSetting(reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f);
@@ -380,9 +450,49 @@ void Raytracing::DrawReblurSettings()
 	if (ImGui::SliderFloat(T(TKEY("firefly_suppressor_min_relative_scale"), "Firefly Suppressor Min Relative Scale"), &reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f, "%.2f"))
 		ClampSetting(reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f);
 
-	ImGui::Checkbox(T(TKEY("enable_anti_firefly"), "Enable Anti Firefly"), &reblurSettings.enableAntiFirefly);
 	ImGui::Checkbox(T(TKEY("use_prepass_only_for_specular_motion_estimation"), "Use Prepass Only For Specular Motion Estimation"), &reblurSettings.usePrepassOnlyForSpecularMotionEstimation);
 	ImGui::Checkbox(T(TKEY("return_history_length_instead_of_occlusion"), "Return History Length Instead Of Occlusion"), &reblurSettings.returnHistoryLengthInsteadOfOcclusion);
+}
+
+void Raytracing::DrawRelaxSettings()
+{
+	if (!ImGui::CollapsingHeader(T(TKEY("relax"), "Relax"))) {
+		return;
+	}
+
+	auto& relaxSettings = settings.CreationEngineRaytracingSettings.NRDRelaxSettings;
+
+	if (ImGui::InputScalar(T(TKEY("diffuse_max_accumulated_frames"), "Diffuse Max Accumulated Frames"), ImGuiDataType_U32, &relaxSettings.diffuseMaxAccumulatedFrameNum))
+		ClampSetting(relaxSettings.diffuseMaxAccumulatedFrameNum, 0u, 63u);
+
+	if (ImGui::InputScalar(T(TKEY("specular_max_accumulated_frames"), "Specular Max Accumulated Frames"), ImGuiDataType_U32, &relaxSettings.specularMaxAccumulatedFrameNum))
+		ClampSetting(relaxSettings.specularMaxAccumulatedFrameNum, 0u, 63u);
+
+	if (ImGui::InputScalar(T(TKEY("diffuse_max_fast_accumulated_frames"), "Diffuse Max Fast Accumulated Frames"), ImGuiDataType_U32, &relaxSettings.diffuseMaxFastAccumulatedFrameNum))
+		ClampSetting(relaxSettings.diffuseMaxFastAccumulatedFrameNum, 0u, relaxSettings.diffuseMaxAccumulatedFrameNum);
+
+	if (ImGui::InputScalar(T(TKEY("specular_max_fast_accumulated_frames"), "Specular Max Fast Accumulated Frames"), ImGuiDataType_U32, &relaxSettings.specularMaxFastAccumulatedFrameNum))
+		ClampSetting(relaxSettings.specularMaxFastAccumulatedFrameNum, 0u, relaxSettings.specularMaxAccumulatedFrameNum);
+
+	if (ImGui::SliderFloat(T(TKEY("diffuse_phi_luminance"), "Diffuse Phi Luminance"), &relaxSettings.diffusePhiLuminance, 0.0f, 10.0f, "%.2f"))
+		ClampSetting(relaxSettings.diffusePhiLuminance, 0.0f, 10.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("specular_phi_luminance"), "Specular Phi Luminance"), &relaxSettings.specularPhiLuminance, 0.0f, 10.0f, "%.2f"))
+		ClampSetting(relaxSettings.specularPhiLuminance, 0.0f, 10.0f);
+
+	if (ImGui::InputScalar(T(TKEY("atrous_iteration_num"), "A-Trous Iteration Num"), ImGuiDataType_U32, &relaxSettings.atrousIterationNum))
+		ClampSetting(relaxSettings.atrousIterationNum, 2u, 8u);
+
+	if (ImGui::SliderFloat(T(TKEY("specular_variance_boost"), "Specular Variance Boost"), &relaxSettings.specularVarianceBoost, 0.0f, 10.0f, "%.2f"))
+		ClampSetting(relaxSettings.specularVarianceBoost, 0.0f, 10.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("specular_lobe_angle_slack"), "Specular Lobe Angle Slack"), &relaxSettings.specularLobeAngleSlack, 0.0f, 1.0f, "%.3f"))
+		ClampSetting(relaxSettings.specularLobeAngleSlack, 0.0f, 1.0f);
+
+	if (ImGui::SliderFloat(T(TKEY("depth_threshold"), "Depth Threshold"), &relaxSettings.depthThreshold, 0.0f, 0.1f, "%.4f"))
+		ClampSetting(relaxSettings.depthThreshold, 0.0f, 0.1f);
+
+	ImGui::Checkbox(T(TKEY("enable_roughness_edge_stopping"), "Enable Roughness Edge Stopping"), &relaxSettings.enableRoughnessEdgeStopping);
 }
 
 void Raytracing::DrawSHaRCSettings()
@@ -458,8 +568,6 @@ void Raytracing::DrawAdvancedSettings()
 	ImGui::Checkbox(T(TKEY("variable_update_rate"), "Variable Update Rate"), &advSettings.VariableUpdateRate);
 
 	ImGui::Checkbox(T(TKEY("ggx_energy_conservation"), "GGX Energy Conservation"), &advSettings.GGXEnergyConservation);
-
-	ImGui::Checkbox(T(TKEY("per_light_tlas"), "Per Light Top-Level Acceleration Structures"), &advSettings.PerLightTLAS);
 
 	ImGui::Checkbox(T(TKEY("ris_enabled"), "Resampled Importance Sampling"), &advSettings.RIS.Enabled);
 
@@ -764,7 +872,16 @@ void Raytracing::DrawExperimentalSettings()
 
 	auto& experimentalSettings = settings.CreationEngineRaytracingSettings.ExperimentalSettings;
 
-	ImGui::Checkbox(T(TKEY("path_tracing_cull"), "Path Tracing Cull"), &experimentalSettings.PathTracingCull);
+	DrawEnumRadio(
+		T(TKEY("path_tracing_cull"), "Path Tracing Cull"),
+		"PathTracingCull",
+		experimentalSettings.PathTracingCull,
+		std::array{
+			T(TKEY("path_tracing_cull_disabled"), "Disabled"),
+			T(TKEY("path_tracing_cull_enabled"), "Enabled"),
+			T(TKEY("path_tracing_cull_full"), "Full (Non-Selective)"),
+		});
+
 	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
 	DrawEnumRadio(
@@ -807,7 +924,7 @@ void Raytracing::DrawDebugSettings()
 			T(TKEY("performance_overlay_none"), "None"),
 			T(TKEY("performance_overlay_simple"), "Simple"),
 			T(TKEY("performance_overlay_complete"), "Complete"),
-		});
+			T(TKEY("performance_overlay_extended"), "Extended") });
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
 
@@ -855,9 +972,9 @@ void Raytracing::DrawDebugSettings()
 		const auto diffuseAlbedoLabel = StableLabel(T(TKEY("debug_diffuse_albedo"), "Diffuse Albedo"), "DiffuseAlbedo");
 		if (ImGui::TreeNode(diffuseAlbedoLabel.c_str())) {
 			D3D11_TEXTURE2D_DESC desc;
-			diffuseAlbedoTexture[currentFrame]->resource11->GetDesc(&desc);
+			diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->resource11->GetDesc(&desc);
 
-			ImGui::Image(diffuseAlbedoTexture[currentFrame]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
+			ImGui::Image(diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->srv, { desc.Width * debugRescale, desc.Height * debugRescale });
 			ImGui::TreePop();
 		}
 
@@ -961,8 +1078,13 @@ void Raytracing::DrawOverlay()
 		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
 		ImGui::TableHeadersRow();
 
-		for (const auto& passTiming : passTimings) {
-			if (settings.PerfOverlay == OverlayMode::Complete)
+		if (settings.PerfOverlay == OverlayMode::Simple) {
+			if (!passTimings.empty()) {
+				const auto& passTiming = passTimings.back();
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+			}
+		} else if (settings.PerfOverlay == OverlayMode::Complete || settings.PerfOverlay == OverlayMode::Extended) {
+			for (const auto& passTiming : passTimings)
 				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
 		}
 
@@ -1168,7 +1290,7 @@ void Raytracing::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		// Normal Roughness Texture
-		texDesc.Format = DXGI_FORMAT_R16G16B16A16_SNORM;
+		texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 		normalRoughnessTexture = eastl::make_unique<WrappedResource>(texDesc);
 	}
 
@@ -1418,8 +1540,7 @@ void Raytracing::ConvertTextures()
 	auto* frameBufferCB = *globals::game::perFrame.get();
 	context->CSSetConstantBuffers(12, 1, &frameBufferCB);
 
-	bool isRayReconstruction = globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS_RR;
-
+	const bool isRayReconstruction = globals::features::upscaling.GetUpscaleMethod() == Upscaling::UpscaleMethod::kDLSS_RR;
 	uint shaderIndex = isRayReconstruction ? 1 : 0;
 	context->CSSetShader(convertTexturesCS[shaderIndex].get(), nullptr, 0);
 
@@ -1435,12 +1556,9 @@ void Raytracing::ConvertTextures()
 
 	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-	auto sampler = samplerState.get();
-	context->CSSetSamplers(0, 1, &sampler);
-
 	ID3D11UnorderedAccessView* uavs[] = {
 		normalRoughnessTexture->uav,
-		diffuseAlbedoTexture[currentFrame]->uav
+		diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->uav
 	};
 
 	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -1459,9 +1577,8 @@ void Raytracing::DeferredPasses()
 	if (!settings.CreationEngineRaytracingSettings.Enabled || Mode() == CreationEngineRaytracing::Mode::None)
 		return;
 
-	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination) {
+	if (Mode() == CreationEngineRaytracing::Mode::GlobalIllumination)
 		ConvertTextures();
-	}
 
 	CopyWaterFlowap();
 
@@ -1680,15 +1797,15 @@ void Raytracing::DeferredPasses()
 	}
 }
 
-void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDistance)
+void Raytracing::GetRayReconstructionInputs(ID3D12Resource*& diffuseAlbedo, ID3D12Resource*& specularAlbedo, ID3D12Resource*& normalRoughness, ID3D12Resource*& specHitDist)
 {
 	if (Mode() != CreationEngineRaytracing::Mode::GlobalIllumination && Mode() != CreationEngineRaytracing::Mode::PathTracing)
 		return;
 
-	diffuseAlbedo = diffuseAlbedoTexture[currentFrame]->GetResource();
+	diffuseAlbedo = diffuseAlbedoTexture[GetDiffuseAlbedoIndex()]->GetResource();
 	normalRoughness = normalRoughnessTexture->GetResource();
 
-	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDistance);
+	creationEngineRaytracing->GetRRInput(specularAlbedo, specHitDist);
 }
 
 RE::BSEventNotifyControl Raytracing::BGSActorCellEventHandler::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*)
