@@ -5,6 +5,8 @@
 /// Purkinje effect is applied after compositing on the final perceived image.
 /// Uses #ifdef HAS_BLOOM / HAS_LENS_FLARE / HAS_GLARE / HAS_EXPOSURE / HAS_LOCAL_EXPOSURE to control behavior.
 
+#include "Common/Color.hlsli"
+
 Texture2D<float4> TexColor : register(t0);
 
 #ifdef HAS_BLOOM
@@ -24,7 +26,54 @@ StructuredBuffer<float> TexAdaptation : register(t4);
 #endif
 
 #ifdef HAS_LOCAL_EXPOSURE
-Texture2D<float> TexLocalExposure : register(t5);
+Texture2D<float> TexLocalExposureBase : register(t5);
+
+cbuffer LocalExposureCB : register(b2)
+{
+	float ManualExposure : packoffset(c0.x);
+	float Strength : packoffset(c0.y);
+	float HighlightContrast : packoffset(c0.z);
+	float ShadowContrast : packoffset(c0.w);
+	float DetailStrength : packoffset(c1.x);
+	float MiddleGreyBias : packoffset(c1.w);
+	float HighlightThreshold : packoffset(c2.x);
+	float ShadowThreshold : packoffset(c2.y);
+	float HighlightThresholdStrength : packoffset(c2.z);
+	float ShadowThresholdStrength : packoffset(c2.w);
+	float LogLuminanceMin : packoffset(c4.x);
+};
+
+float RemapBaseContrast(float centeredBase)
+{
+	bool isHighlight = centeredBase >= 0.0;
+	float magnitude = abs(centeredBase);
+	float contrast = isHighlight ? HighlightContrast : ShadowContrast;
+	float threshold = isHighlight ? HighlightThreshold : ShadowThreshold;
+	float thresholdStrength = isHighlight ? HighlightThresholdStrength : ShadowThresholdStrength;
+
+	// Preserve tones near middle grey, then release smoothly into the selected
+	// base contrast. At full threshold strength the protected shoulder persists.
+	float transitionWidth = rcp(max(1.0 - thresholdStrength, 1e-3));
+	float release = smoothstep(threshold, threshold + transitionWidth, magnitude);
+	float protectedOffset = min(magnitude, threshold) * (1.0 - release);
+	float remappedMagnitude = magnitude * contrast + protectedOffset * (1.0 - contrast);
+	return centeredBase < 0.0 ? -remappedMagnitude : remappedMagnitude;
+}
+
+float ComputeLocalExposure(float3 sceneColor, float baseLogLuminance, float globalExposure, float middleGreyCompensation)
+{
+	float sceneLuminance = Color::RGBToLuminance(max(sceneColor, 0.0));
+	float sceneLogLuminance = log2(max(sceneLuminance, exp2(LogLuminanceMin)));
+	float logGlobalExposure = log2(max(globalExposure, 1e-5));
+	float exposedLogLuminance = sceneLogLuminance + logGlobalExposure;
+	float exposedBase = baseLogLuminance + logGlobalExposure;
+	float detail = exposedLogLuminance - exposedBase;
+	float middleGrey = log2(0.18 * middleGreyCompensation) + MiddleGreyBias;
+	float remappedBase = middleGrey + RemapBaseContrast(exposedBase - middleGrey);
+	float targetLogLuminance = remappedBase + detail * DetailStrength;
+	float logAdjustment = (targetLogLuminance - exposedLogLuminance) * Strength;
+	return exp2(clamp(logAdjustment, -8.0, 8.0));
+}
 #endif
 
 #ifdef HAS_EXPOSURE
@@ -139,9 +188,10 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 	float globalExposure = 0.18 * ExposureCompensation / clamp(avgLuma, AdaptationRange.x, AdaptationRange.y);
 
 	// Formula: SceneColor * GlobalExposure * LocalExposure + Bloom * GlobalExposure
-	// LocalExposure multiplier from the Local Exposure pass (1.0 if not enabled)
+	// LocalExposure multiplier derived from the base luminance pass (1.0 if not enabled)
 #	ifdef HAS_LOCAL_EXPOSURE
-	float localExposure = TexLocalExposure[tid];
+	float baseLogLuminance = TexLocalExposureBase[tid];
+	float localExposure = ComputeLocalExposure(sceneColor, baseLogLuminance, globalExposure, ExposureCompensation);
 #	else
 	float localExposure = 1.0;
 #	endif
@@ -160,9 +210,9 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 #else
 	// No global exposure
 #	ifdef HAS_LOCAL_EXPOSURE
-	// Apply local exposure without global exposure
-	float localExposure = TexLocalExposure[tid];
-	float3 result = sceneColor * localExposure + bloomContrib;
+	float baseLogLuminance = TexLocalExposureBase[tid];
+	float localExposure = ComputeLocalExposure(sceneColor, baseLogLuminance, ManualExposure, 1.0);
+	float3 result = sceneColor * ManualExposure * localExposure + bloomContrib;
 #	else
 	// No exposure at all: simple additive composite
 	float3 result = sceneColor + bloomContrib;

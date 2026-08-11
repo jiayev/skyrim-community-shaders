@@ -199,13 +199,18 @@
     "Local Exposure": {
         "enabled": true,
         "settings": {
-            "BoostLocalContrast": false,
-            "DisplayMip": 2,
+            "BaseBlend": 0.5,
+            "BaseMip": 7.0,
+            "DetailStrength": 1.0,
             "Exposure": 0.699999988079071,
-            "ExposurePreferenceSigma": 5.0,
-            "Highlights": 1.5,
-            "Mip": 6,
-            "Shadows": 1.0
+            "HighlightContrast": 0.75,
+            "HighlightThreshold": 1.0,
+            "HighlightThresholdStrength": 0.5,
+            "MiddleGreyBias": 0.0,
+            "ShadowContrast": 0.800000011920929,
+            "ShadowThreshold": 1.0,
+            "ShadowThresholdStrength": 0.5,
+            "Strength": 1.0
         }
     },
     "Motion Blur": {
