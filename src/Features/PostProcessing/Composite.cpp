@@ -134,9 +134,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 	//   t2 = flare texture (if available)
 	//   t3 = glare texture (if available)
 	//   t4 = adaptation buffer (if exposure enabled)
-	//   t5 = local exposure texture (if local exposure enabled)
+	//   t5 = local exposure base luminance (if local exposure enabled)
 	//   u0 = output
 	//   b1 = auto exposure constant buffer (if exposure enabled)
+	//   b2 = local exposure constant buffer (if local exposure enabled)
 	std::array<ID3D11ShaderResourceView*, 6> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
 
@@ -162,7 +163,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 		context->CSSetConstantBuffers(1, 1, &cb);
 	}
 	if (hasLocalExposure) {
-		srvs[5] = localExposure->GetExposureSRV();
+		srvs[5] = localExposure->GetBaseLuminanceSRV();
+
+		ID3D11Buffer* cb = localExposure->GetConstantBuffer();
+		context->CSSetConstantBuffers(2, 1, &cb);
 	}
 
 	uavs[0] = texOutput->uav.get();
@@ -186,6 +190,10 @@ void Composite::Draw(TextureInfo& inout_tex)
 	if (hasExposure) {
 		ID3D11Buffer* nullCB = nullptr;
 		context->CSSetConstantBuffers(1, 1, &nullCB);
+	}
+	if (hasLocalExposure) {
+		ID3D11Buffer* nullCB = nullptr;
+		context->CSSetConstantBuffers(2, 1, &nullCB);
 	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };

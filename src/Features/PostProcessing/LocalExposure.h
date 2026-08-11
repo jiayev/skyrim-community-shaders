@@ -5,19 +5,10 @@
 #include "Buffer.h"
 
 /// Local Exposure
-/// Generates a per-pixel exposure multiplier using exposure-fusion local
-/// tonemapping. Runs before Auto Exposure and is consumed by Composite.
-/// The main color texture is not modified by this pass.
-///
-/// Reference:
-///   https://bartwronski.com/2022/02/28/exposure-fusion-local-tonemapping-for-real-time-rendering/
-///
-/// Algorithm:
-///   1. Normalize raw HDR input with global exposure when available
-///   2. Compute highlight, midtone, and shadow exposure candidates
-///   3. Build luminance and weight pyramids
-///   4. Reconstruct the fused result across the configured mip range
-///   5. Joint-bilateral upsample the fused result using full-resolution log luminance
+/// Separates scene luminance into an edge-aware base layer and a detail layer.
+/// The base layer is generated here without modifying scene color; Composite
+/// combines it with the current global exposure and applies the final local
+/// adjustment.
 struct LocalExposure : public PostProcessFeature
 {
 	virtual inline std::string GetType() const override { return "Local Exposure"; }
@@ -25,69 +16,78 @@ struct LocalExposure : public PostProcessFeature
 	virtual inline std::string GetDesc() const override
 	{
 		return T("feature.post_processing.local_exposure.description",
-			"Local Exposure brightens shadows and compresses highlights based on local neighborhood luminance. Runs before Auto Exposure and is applied in the Composite pass.");
+			"Local Exposure balances bright and dark regions while retaining edge detail. Its luminance analysis is combined with Auto Exposure in the Composite pass.");
 	}
 	virtual bool WritesToMainTexture() const override { return false; }
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
 
 	struct Settings
 	{
-		float Exposure = 0.7f;                 // Manual input normalization when Auto Exposure is unavailable
-		float Shadows = 1.0f;                  // Shadow recovery EV
-		float Highlights = 1.5f;               // Highlight recovery EV
-		float ExposurePreferenceSigma = 5.0f;  // Exposure selection sharpness
-		uint Mip = 6;                          // Coarsest pyramid level used for reconstruction
-		uint DisplayMip = 2;                   // Finest reconstructed level before guided upsample
-		bool BoostLocalContrast = false;       // Weight Laplacian bands by local contrast
+		float Exposure = 0.7f;
+		float Strength = 1.0f;
+		float HighlightContrast = 0.75f;
+		float ShadowContrast = 0.8f;
+		float DetailStrength = 1.0f;
+		float BaseBlend = 0.5f;
+		float BaseMip = 7.0f;
+		float MiddleGreyBias = 0.0f;
+		float HighlightThreshold = 1.0f;
+		float ShadowThreshold = 1.0f;
+		float HighlightThresholdStrength = 0.5f;
+		float ShadowThresholdStrength = 0.5f;
 	} settings;
 
-	// Constant buffer for the compute shader
+	// Constant buffer shared by luminance analysis and Composite.
 	struct alignas(16) LocalExposureCB
 	{
 		float ManualExposure;
-		float HighlightExposure;
-		float ShadowExposure;
-		float ExposurePreferenceSigmaSq;
+		float Strength;
+		float HighlightContrast;
+		float ShadowContrast;
+
+		float DetailStrength;
+		float BaseBlend;
+		float BaseMip;
+		float MiddleGreyBias;
+
+		float HighlightThreshold;
+		float ShadowThreshold;
+		float HighlightThresholdStrength;
+		float ShadowThresholdStrength;
+
 		uint InputWidth;
 		uint InputHeight;
-		uint MipLevel;
-		uint DisplayMip;
-		uint CurrentMip;
-		uint HasCoarserMip;
-		uint BoostLocalContrast;
-		uint UseGlobalExposure;
-		float ExposureCompensation;
-		float AdaptationMin;
-		float AdaptationMax;
-		float DarkThreshold;
+		uint ActiveMipCount;
+		uint Padding0;
+
+		float LogLuminanceMin;
+		float LogLuminanceMax;
+		float Padding1[2];
 	};
+
 	std::unique_ptr<ConstantBuffer> localExposureCB = nullptr;
 
 	// Textures
 	static constexpr uint s_MaxMips = 10;
+	static constexpr uint s_GridDepth = 32;
+	static constexpr uint s_GridTileSize = 64;
 
-	eastl::unique_ptr<Texture2D> texExposures = nullptr;  // RGBA16F, RGB = highlights/midtones/shadows
-	eastl::unique_ptr<Texture2D> texWeights = nullptr;    // RGBA16F, normalized synthetic exposure weights
-	eastl::unique_ptr<Texture2D> texAssemble = nullptr;   // R16F, reconstructed fusion result
+	eastl::unique_ptr<Texture2D> texLogLuminance = nullptr;
+	eastl::unique_ptr<Texture3D> texLuminanceGrid = nullptr;
+	eastl::unique_ptr<Texture2D> texBaseLuminance = nullptr;
 
-	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips> exposureMipSRVs = {};
-	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_MaxMips> exposureMipUAVs = {};
-	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips> weightMipSRVs = {};
-	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_MaxMips> weightMipUAVs = {};
-	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips> assembleMipSRVs = {};
-	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_MaxMips> assembleMipUAVs = {};
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips> logLuminanceMipSRVs = {};
+	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_MaxMips> logLuminanceMipUAVs = {};
 	uint numMips = 0;
-
-	eastl::unique_ptr<Texture2D> texExposure = nullptr;  // R16F, full res - the output exposure map
 
 	// Sampler
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
 
 	// Compute shaders
-	winrt::com_ptr<ID3D11ComputeShader> setupCS = nullptr;       // Compute synthetic exposure lums and weights
-	winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;  // Iterative mip downsample
-	winrt::com_ptr<ID3D11ComputeShader> blendCS = nullptr;       // Gaussian/Laplacian exposure-fusion reconstruction
-	winrt::com_ptr<ID3D11ComputeShader> computeExpCS = nullptr;  // Joint-bilateral upsample to full-res multiplier
+	winrt::com_ptr<ID3D11ComputeShader> setupCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> gridCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> resolveCS = nullptr;
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
@@ -100,7 +100,7 @@ struct LocalExposure : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 
-	/// Get the local exposure texture SRV (R16F, full resolution, per-pixel multiplier).
-	/// Consumed by the Composite pass.
-	ID3D11ShaderResourceView* GetExposureSRV() const { return texExposure ? texExposure->srv.get() : nullptr; }
+	/// Get the full-resolution base log-luminance texture consumed by Composite.
+	ID3D11ShaderResourceView* GetBaseLuminanceSRV() const { return texBaseLuminance ? texBaseLuminance->srv.get() : nullptr; }
+	ID3D11Buffer* GetConstantBuffer() const { return localExposureCB ? localExposureCB->CB() : nullptr; }
 };
