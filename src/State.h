@@ -302,6 +302,13 @@ public:
 		return IsMainOrLoadingMenuOpen() ||
 		       (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME)));
 	}
+	/** @brief Full-screen menus drawing their own art, which must not be graded by post-process effects. */
+	bool IsFullScreenMenuOpen() const { return IsMainOrLoadingMenuOpen() || isMapMenuOpen || isStatsMenuOpen; }
+	/** @brief Gameplay is paused or suspended behind a menu. Cached menus are kept explicit in case a mod clears kPausesGame. */
+	bool IsPausedOrMenuOpen(RE::UI* ui) const
+	{
+		return (ui && ui->GameIsPaused()) || IsMainOrLoadingMenuOpen(ui) || isMapMenuOpen;
+	}
 
 	void UpdateSharedData(bool a_inWorld, bool a_prepass);
 	void UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass);

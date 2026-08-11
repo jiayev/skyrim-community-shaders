@@ -1235,9 +1235,8 @@ bool Upscaling::IsFrameGenerationActive() const
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 {
-	auto* ui = globals::game::ui;
 	auto* state = globals::state;
-	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
+	const bool menuOpen = state && state->IsPausedOrMenuOpen(globals::game::ui);
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
