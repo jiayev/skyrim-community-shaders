@@ -376,7 +376,26 @@ bool Streamline::CheckFrameConstants(sl::ViewportHandle p_viewport)
 	slConstants.cameraViewToClip = *(sl::float4x4*)&cameraViewToClip;
 	slConstants.depthInverted = sl::Boolean::eFalse;
 
-	recalculateCameraMatrices(slConstants);
+	// Replaces "recalculateCameraMatrices"
+	{
+		// Streamline requires row-major, unjittered matrices.
+		// The Transpose() converts the engine's matrix layout to Streamline's row-major layout.
+		const auto currentViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+		const auto previousViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
+
+		const sl::float4x4 currentViewProjSL = *reinterpret_cast<const sl::float4x4*>(&currentViewProj);
+		const sl::float4x4 previousViewProjSL = *reinterpret_cast<const sl::float4x4*>(&previousViewProj);
+
+		// clip(current) -> clip(previous), matching MotionBlur::GetSSMotionVector.
+		sl::float4x4 inverseCurrentViewProj;
+		sl::matrixFullInvert(inverseCurrentViewProj, currentViewProjSL);
+		sl::matrixMul(slConstants.clipToPrevClip, inverseCurrentViewProj, previousViewProjSL);
+
+		sl::matrixFullInvert(slConstants.prevClipToClip, slConstants.clipToPrevClip);
+
+		// This remains the inverse of the unjittered projection, not view-projection.
+		sl::matrixFullInvert(slConstants.clipToCameraView, slConstants.cameraViewToClip);	
+	}
 
 	auto& upscaling = globals::features::upscaling;
 	auto jitter = upscaling.jitter;
@@ -510,23 +529,6 @@ void Streamline::SetDLSSOptions(sl::ViewportHandle p_viewport, uint32_t width)
 void Streamline::SetDLSSDOptions(sl::ViewportHandle p_viewport, uint32_t width)
 {
 	sl::DLSSDOptions dlssOptions{};
-
-	auto worldToCameraView = globals::game::frameBufferCached.GetCameraView().Transpose();
-	auto cameraViewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
-
-	dlssOptions.worldToCameraView = sl::float4x4{
-		sl::float4{ worldToCameraView._11, worldToCameraView._12, worldToCameraView._13, worldToCameraView._14 },
-		sl::float4{ worldToCameraView._21, worldToCameraView._22, worldToCameraView._23, worldToCameraView._24 },
-		sl::float4{ worldToCameraView._31, worldToCameraView._32, worldToCameraView._33, worldToCameraView._34 },
-		sl::float4{ worldToCameraView._41, worldToCameraView._42, worldToCameraView._43, worldToCameraView._44 }
-	};
-
-	dlssOptions.cameraViewToWorld = sl::float4x4{
-		sl::float4{ cameraViewToWorld._11, cameraViewToWorld._12, cameraViewToWorld._13, cameraViewToWorld._14 },
-		sl::float4{ cameraViewToWorld._21, cameraViewToWorld._22, cameraViewToWorld._23, cameraViewToWorld._24 },
-		sl::float4{ cameraViewToWorld._31, cameraViewToWorld._32, cameraViewToWorld._33, cameraViewToWorld._34 },
-		sl::float4{ cameraViewToWorld._41, cameraViewToWorld._42, cameraViewToWorld._43, cameraViewToWorld._44 }
-	};
 
 	switch (globals::features::upscaling.settings.qualityMode) {
 	case 1:
@@ -681,7 +683,7 @@ void Streamline::EvaluateDLSS(ID3D12GraphicsCommandList4* commandList, sl::Viewp
 		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },  // kBufferTypeReactiveMaskHint
-																														  //{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
+		//{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 	};
 
 	if (SL_FAILED(result, slSetTag(vp, tags, _countof(tags), commandList))) {
@@ -713,24 +715,26 @@ void Streamline::EvaluateDLSS(ID3D12GraphicsCommandList4* commandList, sl::Viewp
 }
 
 void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::ViewportHandle vp,
-	ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, ID3D12Resource* reactiveMask,
-	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness, ID3D12Resource* specHitDistance,
+	ID3D12Resource* colorIn, ID3D12Resource* colorOut, ID3D12Resource* depth, ID3D12Resource* mvec, [[ maybe_unused ]] ID3D12Resource* reactiveMask,
+	ID3D12Resource* diffuseAlbedo, ID3D12Resource* specularAlbedo, ID3D12Resource* normalRoughness,  ID3D12Resource* specHitDist,
 	const sl::Extent& extentIn, const sl::Extent& extentOut, uint32_t outputWidth)
 {
-	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, D3D12_RESOURCE_STATE_COMMON };
-	sl::Resource colorOutRes = { sl::ResourceType::eTex2d, colorOut, D3D12_RESOURCE_STATE_COMMON };
+	sl::Resource colorInRes = { sl::ResourceType::eTex2d, colorIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
+	sl::Resource colorOutRes = { sl::ResourceType::eTex2d, colorOut, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE };
 	sl::Resource depthRes = { sl::ResourceType::eTex2d, depth, 0 };
 	sl::Resource mvecRes = { sl::ResourceType::eTex2d, mvec, 0 };
-	sl::Resource reactiveMaskRes = { sl::ResourceType::eTex2d, reactiveMask, 0 };
+	//sl::Resource reactiveMaskRes = { sl::ResourceType::eTex2d, reactiveMask, 0 };
 	//sl::Resource transparencyMaskRes = { sl::ResourceType::eTex2d, transparencyMask, 0 };
 
 	sl::Resource diffuseAlbedoRes = { sl::ResourceType::eTex2d, diffuseAlbedo, 0 };
 	sl::Resource specularAlbedoRes = { sl::ResourceType::eTex2d, specularAlbedo, 0 };
 	sl::Resource normalRoughnessRes = { sl::ResourceType::eTex2d, normalRoughness, 0 };
-	sl::Resource specHitDistanceRes = { sl::ResourceType::eTex2d, specHitDistance, 0 };
+
+	sl::Resource specHitDistRes = { sl::ResourceType::eTex2d, specHitDist, D3D12_RESOURCE_STATE_COMMON };
 
 	if (!CheckFrameConstants(vp))
 		return;
+
 	SetDLSSDOptions(vp, outputWidth);
 
 	sl::ResourceTag tags[] = {
@@ -738,13 +742,14 @@ void Streamline::EvaluateDLSSD(ID3D12GraphicsCommandList4* commandList, sl::View
 		{ &colorOutRes, sl::kBufferTypeScalingOutputColor, sl::ResourceLifecycle::eOnlyValidNow, &extentOut },
 		{ &depthRes, sl::kBufferTypeDepth, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &mvecRes, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
+		//{ &reactiveMaskRes, sl::kBufferTypeBiasCurrentColorHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		//{ &transparencyMaskRes, sl::kBufferTypeTransparencyHint, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 
 		{ &diffuseAlbedoRes, sl::kBufferTypeAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &specularAlbedoRes, sl::kBufferTypeSpecularAlbedo, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
 		{ &normalRoughnessRes, sl::kBufferTypeNormalRoughness, sl::ResourceLifecycle::eValidUntilPresent, &extentIn },
-		{ &specHitDistanceRes, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eValidUntilPresent, &extentIn }
+
+		{ &specHitDistRes, sl::kBufferTypeSpecularHitDistance, sl::ResourceLifecycle::eOnlyValidNow, &extentIn }
 	};
 
 	if (SL_FAILED(result, slSetTag(vp, tags, _countof(tags), commandList))) {
@@ -824,9 +829,9 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	ID3D12Resource* diffuseAlbedo = nullptr;
 	ID3D12Resource* specularAlbedo = nullptr;
 	ID3D12Resource* normalRoughness = nullptr;
-	ID3D12Resource* specHitDistance = nullptr;
+	ID3D12Resource* specHitDist = nullptr;
 
-	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance);
+	globals::features::raytracing.GetRayReconstructionInputs(diffuseAlbedo, specularAlbedo, normalRoughness, specHitDist);
 
 	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 	auto renderSize = Util::ConvertToDynamic(screenSize);
@@ -837,7 +842,8 @@ void Streamline::DenoiseUpscale(ID3D12GraphicsCommandList4* a_commandList, ID3D1
 	EvaluateDLSSD(a_commandList, viewport,
 		a_input, a_output,
 		a_depth, a_motionVectors, a_reactiveMask,
-		diffuseAlbedo, specularAlbedo, normalRoughness, specHitDistance,
+		diffuseAlbedo, specularAlbedo, normalRoughness, 
+		specHitDist,
 		extentIn, extentOut, (uint)screenSize.x);
 }
 
