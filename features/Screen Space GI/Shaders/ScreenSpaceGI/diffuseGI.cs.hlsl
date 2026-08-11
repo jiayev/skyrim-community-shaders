@@ -419,7 +419,7 @@ void CalculateGI(
 	normHitDist = saturate(normHitDist);
 	// REBLUR defines normalized hit distance as diffuse AO/visibility: nearby occlusion tends to 0,
 	// while open or distant geometry tends to 1. Exact 0 is reserved for an invalid/skipped lobe.
-	normHitDist = AOPower > 0 ? max(pow(saturate(1 - normHitDist), AOPower), NRD_EPS) : 1;
+	normHitDist = max(saturate(1 - normHitDist), NRD_EPS);
 #ifdef SSGI_SH
 	float fallbackLuminance = _NRD_LinearToYCoCg(fallbackRadiance).x;
 #endif
@@ -427,7 +427,8 @@ void CalculateGI(
 	// The open-bit integration supplies directional visibility, while the final
 	// GTAO visibility also represents unresolved local occlusion. Apply both to
 	// ambient cubemap fallback; screen-space hit radiance remains unchanged.
-	fallbackRadiance *= normHitDist;
+	// AOPower shapes only this fallback occlusion: traced GI already carries its own visibility.
+	fallbackRadiance *= pow(normHitDist, AOPower);
 
 	o_ao = normHitDist;
 	o_radiance = totalRadiance + fallbackRadiance;
