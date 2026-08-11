@@ -221,19 +221,22 @@ void State::Reset()
 	globals::profiler->EndFrame();
 
 	Feature::ForEachLoadedFeature("Reset", [](Feature* feature) { feature->Reset(); });
-	if (!globals::game::ui->GameIsPaused())
-		timer += RE::GetSecondsSinceLastFrame();
 
 	// Cache menu open states once per frame to avoid repeated IsMenuOpen calls
 	// (each call constructs a BSFixedString, which is expensive at scale).
 	if (auto ui = globals::game::ui) {
+		if (!ui->GameIsPaused())
+			timer += RE::GetSecondsSinceLastFrame();
+
 		isMainMenuOpen = ui->IsMenuOpen(RE::MainMenu::MENU_NAME);
 		isLoadingMenuOpen = ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
 		isMapMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
+		isStatsMenuOpen = ui->IsMenuOpen(RE::StatsMenu::MENU_NAME);
 	} else {
 		isMainMenuOpen = false;
 		isLoadingMenuOpen = false;
 		isMapMenuOpen = false;
+		isStatsMenuOpen = false;
 	}
 
 	lastModifiedPixelDescriptor = 0;
@@ -416,6 +419,14 @@ void State::Load(ConfigMode a_configMode, bool a_allowReload)
 		for (auto* feature : Feature::GetFeatureList()) {
 			try {
 				const std::string featureName = feature->GetShortName();
+				// Resolved here rather than in Feature::Load so features disabled at boot,
+				// which never reach Load, still report their install state to the UI.
+				std::error_code ec;
+				const bool iniExists = std::filesystem::exists(Util::PathHelpers::GetFeatureIniPath(featureName), ec);
+				// exists() reports false on error, so treat an unreadable path as installed rather than letting a probe failure hide the feature.
+				if (ec)
+					logger::warn("Could not determine install state for feature '{}': {}", featureName, ec.message());
+				feature->installed = ec || iniExists;
 				if (!disabledFeatures.contains(featureName) && feature->IsDisabledByDefault()) {
 					disabledFeatures[featureName] = true;
 					logger::info("Feature '{}' is disabled by default", featureName);

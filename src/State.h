@@ -293,6 +293,7 @@ public:
 	bool isMainMenuOpen = false;
 	bool isLoadingMenuOpen = false;
 	bool isMapMenuOpen = false;
+	bool isStatsMenuOpen = false;
 	/** @brief Returns true if the cached main-menu or loading-menu state is open. */
 	bool IsMainOrLoadingMenuOpen() const { return isMainMenuOpen || isLoadingMenuOpen; }
 	/** @brief Returns true if main/loading menu is open, with a live fallback query via the UI pointer. */
