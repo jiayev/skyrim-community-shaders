@@ -10,6 +10,7 @@
 #define GRID_THREAD_SIZE 8
 #define GRID_SAMPLE_STRIDE 8
 #define GRID_QUANTIZATION 4096
+#define MAX_BLUR_RADIUS 64
 
 cbuffer LocalExposureCB : register(b1)
 {
@@ -20,7 +21,7 @@ cbuffer LocalExposureCB : register(b1)
 
 	float DetailStrength;
 	float BaseBlend;
-	float BaseMip;
+	float BlurRadius;
 	float MiddleGreyBias;
 
 	float HighlightThreshold;
@@ -30,8 +31,8 @@ cbuffer LocalExposureCB : register(b1)
 
 	uint InputWidth;
 	uint InputHeight;
-	uint ActiveMipCount;
-	uint Padding0;
+	uint BlurredWidth;
+	uint BlurredHeight;
 
 	float LogLuminanceMin;
 	float LogLuminanceMax;
@@ -41,7 +42,9 @@ cbuffer LocalExposureCB : register(b1)
 Texture2D<float4> TexColor : register(t0);
 Texture2D<float> TexLogLuminance : register(t1);
 Texture3D<float2> TexLuminanceGrid : register(t2);
+Texture2D<float> TexBlurredLuminance : register(t3);
 SamplerState LinearSampler : register(s0);
+SamplerState MirrorSampler : register(s1);
 
 RWTexture2D<float> RWTexOutput : register(u0);
 RWTexture3D<float2> RWTexLuminanceGrid : register(u1);
@@ -77,6 +80,42 @@ float SceneLogLuminance(float3 color)
 	result += TexLogLuminance.SampleLevel(LinearSampler, uv + float2(-radius.x, radius.y), 0);
 	result += TexLogLuminance.SampleLevel(LinearSampler, uv + float2(radius.x, radius.y), 0);
 	RWTexOutput[tid] = result * 0.25;
+}
+
+float BlurLogLuminance(uint2 tid, float2 direction)
+{
+	uint2 outputSize;
+	RWTexOutput.GetDimensions(outputSize.x, outputSize.y);
+	float2 uv = (float2(tid) + 0.5) / float2(outputSize);
+	float2 texelSize = rcp(float2(outputSize));
+	float sigma = max(BlurRadius * 0.173, 0.5);
+	float result = 0.0;
+	float weightSum = 0.0;
+	int kernelRadius = min((int)ceil(BlurRadius), MAX_BLUR_RADIUS);
+
+	[loop] for (int offset = -kernelRadius; offset <= kernelRadius; offset++)
+	{
+		float weight = exp2(-0.72134752 * offset * offset / (sigma * sigma));
+		result += TexLogLuminance.SampleLevel(MirrorSampler, uv + direction * texelSize * offset, 0) * weight;
+		weightSum += weight;
+	}
+
+	return result / max(weightSum, 1e-5);
+}
+
+[numthreads(8, 8, 1)] void CSBlurHorizontal(uint2 tid : SV_DispatchThreadID) {
+	if (tid.x >= BlurredWidth || tid.y >= BlurredHeight)
+		return;
+
+	RWTexOutput[tid] = BlurLogLuminance(tid, float2(1.0, 0.0));
+}
+
+	[numthreads(8, 8, 1)] void CSBlurVertical(uint2 tid : SV_DispatchThreadID)
+{
+	if (tid.x >= BlurredWidth || tid.y >= BlurredHeight)
+		return;
+
+	RWTexOutput[tid] = BlurLogLuminance(tid, float2(0.0, 1.0));
 }
 
 groupshared uint ThreadGridWeights[GRID_DEPTH][GRID_THREAD_SIZE * GRID_THREAD_SIZE];
@@ -126,30 +165,13 @@ groupshared uint ThreadGridLogSums[GRID_DEPTH][GRID_THREAD_SIZE * GRID_THREAD_SI
 			gridLogSum += ThreadGridLogSums[groupIndex][threadIndex];
 		}
 
-		const float normalization = rcp((float)(GRID_QUANTIZATION * GRID_TILE_SIZE * GRID_TILE_SIZE));
-		RWTexLuminanceGrid[uint3(groupID.xy, groupIndex)] = float2(gridLogSum, gridWeight) * normalization;
+		const float decodeScale = rcp((float)GRID_QUANTIZATION);
+		RWTexLuminanceGrid[uint3(groupID.xy, groupIndex)] = float2(gridLogSum, gridWeight) * decodeScale;
 	}
 }
 
-float SampleBroadBase(float2 uv)
+	[numthreads(8, 8, 1)] void CSResolveBaseLuminance(uint2 tid : SV_DispatchThreadID)
 {
-	float mip = min(BaseMip, (float)(ActiveMipCount - 1));
-	float2 stepUV = exp2(mip) / float2(InputWidth, InputHeight);
-	float result = 0.0;
-
-	[unroll] for (int y = -1; y <= 1; y++)
-	{
-		[unroll] for (int x = -1; x <= 1; x++)
-		{
-			float weight = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
-			result += TexLogLuminance.SampleLevel(LinearSampler, uv + float2(x, y) * stepUV, mip) * weight;
-		}
-	}
-
-	return result * (1.0 / 16.0);
-}
-
-[numthreads(8, 8, 1)] void CSResolveBaseLuminance(uint2 tid : SV_DispatchThreadID) {
 	if (tid.x >= InputWidth || tid.y >= InputHeight)
 		return;
 
@@ -164,12 +186,10 @@ float SampleBroadBase(float2 uv)
 	gridUV.z = (normalizedLog * (gridDepth - 1) + 0.5) / gridDepth;
 
 	float2 gridMoments = TexLuminanceGrid.SampleLevel(LinearSampler, gridUV, 0);
-	float bilateralBase = lerp(LogLuminanceMin, LogLuminanceMax, gridMoments.x / max(gridMoments.y, 1e-5));
-	float broadBase = SampleBroadBase(uv);
+	float broadBase = TexBlurredLuminance.SampleLevel(LinearSampler, uv, 0);
+	float bilateralBase = broadBase;
+	if (gridMoments.y >= 0.001)
+		bilateralBase = lerp(LogLuminanceMin, LogLuminanceMax, gridMoments.x / gridMoments.y);
 
-	// Isolated range cells are unreliable at thin highlights and frame edges.
-	// Fade them into the broad base before applying the user-controlled blend.
-	float gridConfidence = smoothstep(0.00015, 0.0015, gridMoments.y);
-	float edgeAwareBase = lerp(broadBase, bilateralBase, gridConfidence);
-	RWTexOutput[tid] = lerp(edgeAwareBase, broadBase, BaseBlend);
+	RWTexOutput[tid] = lerp(bilateralBase, broadBase, BaseBlend);
 }

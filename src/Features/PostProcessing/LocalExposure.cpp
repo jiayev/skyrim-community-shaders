@@ -1,5 +1,7 @@
 #include "LocalExposure.h"
 
+#include "Features/PostProcessing.h"
+#include "HistogramAutoExposure.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
@@ -12,7 +14,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ShadowContrast,
 	DetailStrength,
 	BaseBlend,
-	BaseMip,
+	BlurredLuminanceKernelSize,
 	MiddleGreyBias,
 	HighlightThreshold,
 	ShadowThreshold,
@@ -21,9 +23,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LocalExposure::DrawSettings()
 {
-	ImGui::SliderFloat(T("feature.post_processing.local_exposure.exposure", "Exposure"), &settings.Exposure, 0.f, 4.f, "%.2f");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.local_exposure.manual_brightness_normalization_used_when_histogram_auto_exposure", "Manual brightness normalization used when Histogram Auto Exposure is disabled. Higher values make the scene behave brighter."));
+	auto* exposure = owner ? owner->GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure) : nullptr;
+	if (!exposure || !exposure->enabled) {
+		ImGui::SliderFloat(T("feature.post_processing.local_exposure.exposure", "Exposure"), &settings.Exposure, 0.f, 4.f, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.post_processing.local_exposure.manual_brightness_normalization_used_when_histogram_auto_exposure", "Manual brightness normalization used when Histogram Auto Exposure is disabled. Higher values make the scene behave brighter."));
+	}
 
 	ImGui::SliderFloat(T("feature.post_processing.local_exposure.strength", "Strength"), &settings.Strength, 0.f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
@@ -45,10 +50,9 @@ void LocalExposure::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.local_exposure.base_blend_tooltip", "Blends the edge-aware base with a broad smooth base. Higher values reduce halos and keep large highlights natural."));
 
-	const float maxMip = std::max(1.f, static_cast<float>(numMips > 0 ? numMips - 1 : 0));
-	ImGui::SliderFloat(T("feature.post_processing.local_exposure.coarse_scale_mip", "Coarse Scale (Mip)"), &settings.BaseMip, 1.f, maxMip, "%.1f mip", ImGuiSliderFlags_AlwaysClamp);
+	ImGui::SliderFloat(T("feature.post_processing.local_exposure.blurred_luminance_kernel_size", "Blurred Luminance Kernel Size"), &settings.BlurredLuminanceKernelSize, 0.f, 100.f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.local_exposure.largest_image_scale_used_by_the_effect_higher", "Largest image scale used by the effect. Higher values affect broader lighting regions."));
+		ImGui::Text(T("feature.post_processing.local_exposure.blurred_luminance_kernel_size_tooltip", "Sets the broad luminance blur diameter as a percentage of screen width."));
 
 	if (ImGui::TreeNodeEx(T("feature.post_processing.local_exposure.advanced", "Advanced"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::SliderFloat(T("feature.post_processing.local_exposure.middle_grey_bias", "Middle Grey Bias"), &settings.MiddleGreyBias, -4.f, 4.f, "%+.2f EV");
@@ -166,26 +170,60 @@ void LocalExposure::SetupResources()
 		texDesc.Height = (fullH + s_GridTileSize - 1) / s_GridTileSize;
 		texDesc.Depth = s_GridDepth;
 		texDesc.MipLevels = 1;
-		texDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		texDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
 		texLuminanceGrid = eastl::make_unique<Texture3D>(texDesc, "LocalExposure Luminance Grid");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		srvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
 		srvDesc.Texture3D.MostDetailedMip = 0;
 		srvDesc.Texture3D.MipLevels = 1;
 		texLuminanceGrid->CreateSRV(srvDesc);
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-		uavDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		uavDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
 		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
 		uavDesc.Texture3D.MipSlice = 0;
 		uavDesc.Texture3D.FirstWSlice = 0;
 		uavDesc.Texture3D.WSize = texDesc.Depth;
 		texLuminanceGrid->CreateUAV(uavDesc);
+	}
+
+	// Create low-resolution textures for the broad luminance blur.
+	{
+		const uint blurMip = std::min(s_BlurMip, numMips - 1);
+		D3D11_TEXTURE2D_DESC texDesc = {};
+		texDesc.Width = std::max(1u, fullW >> blurMip);
+		texDesc.Height = std::max(1u, fullH >> blurMip);
+		texDesc.MipLevels = 1;
+		texDesc.ArraySize = 1;
+		texDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		texDesc.SampleDesc.Count = 1;
+		texDesc.Usage = D3D11_USAGE_DEFAULT;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+
+		auto createBlurTexture = [&](eastl::unique_ptr<Texture2D>& texture, const char* name) {
+			texture = eastl::make_unique<Texture2D>(texDesc, name);
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+			srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
+			srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = 1;
+			texture->CreateSRV(srvDesc);
+
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+			uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			uavDesc.Texture2D.MipSlice = 0;
+			texture->CreateUAV(uavDesc);
+		};
+
+		createBlurTexture(texBlurTemp, "LocalExposure Blur Temp");
+		createBlurTexture(texBlurredLuminance, "LocalExposure Blurred Luminance");
 	}
 
 	// Create output base-luminance texture (full resolution, R16F)
@@ -227,6 +265,10 @@ void LocalExposure::SetupResources()
 
 		auto device = globals::d3d::device;
 		DX::ThrowIfFailed(device->CreateSamplerState(&sampDesc, linearSampler.put()));
+
+		sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_MIRROR;
+		sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_MIRROR;
+		DX::ThrowIfFailed(device->CreateSamplerState(&sampDesc, mirrorSampler.put()));
 	}
 
 	// Create constant buffer
@@ -238,7 +280,7 @@ void LocalExposure::SetupResources()
 void LocalExposure::ClearShaderCache()
 {
 	const auto shaderPtrs = std::array{
-		&setupCS, &downsampleCS, &gridCS, &resolveCS
+		&setupCS, &downsampleCS, &blurHorizontalCS, &blurVerticalCS, &gridCS, &resolveCS
 	};
 
 	for (auto shader : shaderPtrs)
@@ -263,6 +305,8 @@ void LocalExposure::CompileComputeShaders()
 	std::vector<ShaderCompileInfo> shaderInfos = {
 		{ &setupCS, "localexposure.cs.hlsl", {}, "CSSetupLogLuminance" },
 		{ &downsampleCS, "localexposure.cs.hlsl", {}, "CSDownsampleLogLuminance" },
+		{ &blurHorizontalCS, "localexposure.cs.hlsl", {}, "CSBlurHorizontal" },
+		{ &blurVerticalCS, "localexposure.cs.hlsl", {}, "CSBlurVertical" },
 		{ &gridCS, "localexposure.cs.hlsl", {}, "CSBuildLuminanceGrid" },
 		{ &resolveCS, "localexposure.cs.hlsl", {}, "CSResolveBaseLuminance" },
 	};
@@ -286,9 +330,12 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 	inout_tex.tex->GetDesc(&mainDesc);
 	uint fullW = mainDesc.Width;
 	uint fullH = mainDesc.Height;
-	const uint maxMip = numMips > 0 ? numMips - 1 : 0;
-	const float baseMip = std::clamp(settings.BaseMip, 0.f, (float)maxMip);
-	const uint activeMip = std::min((uint)std::ceil(baseMip), maxMip);
+	const uint blurMip = std::min(s_BlurMip, numMips - 1);
+	const uint blurWidth = texBlurredLuminance->desc.Width;
+	const uint blurHeight = texBlurredLuminance->desc.Height;
+	const float blurRadius = std::min(
+		blurWidth * std::clamp(settings.BlurredLuminanceKernelSize, 0.f, 100.f) * 0.005f,
+		(float)s_MaxBlurRadius);
 
 	// Update constant buffer
 	LocalExposureCB cbData = {
@@ -298,7 +345,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		.ShadowContrast = std::clamp(settings.ShadowContrast, 0.f, 1.f),
 		.DetailStrength = std::clamp(settings.DetailStrength, 0.f, 2.f),
 		.BaseBlend = std::clamp(settings.BaseBlend, 0.f, 1.f),
-		.BaseMip = baseMip,
+		.BlurRadius = blurRadius,
 		.MiddleGreyBias = settings.MiddleGreyBias,
 		.HighlightThreshold = std::max(settings.HighlightThreshold, 0.f),
 		.ShadowThreshold = std::max(settings.ShadowThreshold, 0.f),
@@ -306,8 +353,8 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		.ShadowThresholdStrength = std::clamp(settings.ShadowThresholdStrength, 0.f, 1.f),
 		.InputWidth = fullW,
 		.InputHeight = fullH,
-		.ActiveMipCount = activeMip + 1,
-		.Padding0 = 0,
+		.BlurredWidth = blurWidth,
+		.BlurredHeight = blurHeight,
 		.LogLuminanceMin = -13.f,
 		.LogLuminanceMax = 18.f,
 		.Padding1 = {},
@@ -317,10 +364,10 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 	ID3D11Buffer* cb = localExposureCB->CB();
 	context->CSSetConstantBuffers(1, 1, &cb);
 
-	ID3D11SamplerState* sampler = linearSampler.get();
-	context->CSSetSamplers(0, 1, &sampler);
+	std::array<ID3D11SamplerState*, 2> samplers = { linearSampler.get(), mirrorSampler.get() };
+	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
-	std::array<ID3D11ShaderResourceView*, 3> srvs = { nullptr };
+	std::array<ID3D11ShaderResourceView*, 4> srvs = { nullptr };
 	std::array<ID3D11UnorderedAccessView*, 2> uavs = { nullptr };
 
 	auto resetViews = [&]() {
@@ -356,7 +403,7 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		globals::profiler->BeginPass("PostProcessing::LocalExposure::Pyramid");
 		state->BeginPerfEvent("Build Luminance Pyramid");
 
-		for (uint i = 1; i <= activeMip; i++) {
+		for (uint i = 1; i <= blurMip; i++) {
 			srvs[1] = logLuminanceMipSRVs[i - 1].get();
 			uavs[0] = logLuminanceMipUAVs[i].get();
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -373,7 +420,32 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// === Pass 3: Build the edge-aware luminance grid ===
+	// === Pass 3: Blur broad luminance ===
+	{
+		globals::profiler->BeginPass("PostProcessing::LocalExposure::Blur");
+		state->BeginPerfEvent("Blur Broad Luminance");
+
+		srvs[1] = logLuminanceMipSRVs[blurMip].get();
+		uavs[0] = texBlurTemp->uav.get();
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(blurHorizontalCS.get(), nullptr, 0);
+		context->Dispatch((blurWidth + 7) >> 3, (blurHeight + 7) >> 3, 1);
+		resetViews();
+
+		srvs[1] = texBlurTemp->srv.get();
+		uavs[0] = texBlurredLuminance->uav.get();
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(blurVerticalCS.get(), nullptr, 0);
+		context->Dispatch((blurWidth + 7) >> 3, (blurHeight + 7) >> 3, 1);
+		resetViews();
+
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
+	}
+
+	// === Pass 4: Build the edge-aware luminance grid ===
 	{
 		globals::profiler->BeginPass("PostProcessing::LocalExposure::Grid");
 		state->BeginPerfEvent("Build Edge-aware Grid");
@@ -390,13 +462,14 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// === Pass 4: Resolve the base layer ===
+	// === Pass 5: Resolve the base layer ===
 	{
 		globals::profiler->BeginPass("PostProcessing::LocalExposure::Resolve");
 		state->BeginPerfEvent("Resolve Base Luminance");
 
 		srvs[1] = texLogLuminance->srv.get();
 		srvs[2] = texLuminanceGrid->srv.get();
+		srvs[3] = texBlurredLuminance->srv.get();
 		uavs[0] = texBaseLuminance->uav.get();
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -412,8 +485,8 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 	context->CSSetShader(nullptr, nullptr, 0);
 	cb = nullptr;
 	context->CSSetConstantBuffers(1, 1, &cb);
-	sampler = nullptr;
-	context->CSSetSamplers(0, 1, &sampler);
+	samplers.fill(nullptr);
+	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
 	// NOTE: We do not modify inout_tex. Composite consumes the base luminance map.
 	state->EndPerfEvent();
