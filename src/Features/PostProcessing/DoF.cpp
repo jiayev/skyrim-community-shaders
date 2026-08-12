@@ -19,6 +19,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	FNumber,
 	FarPlaneMaxBlur,
 	NearPlaneMaxBlur,
+	UseAdaptiveGather,
+	GatherQuality,
+	BokehMode,
+	BokehBladeCount,
+	BokehBladeRoundness,
+	UseSparseHighlights,
+	SparseHighlightThreshold,
+	SparseHighlightContrast,
+	SparseHighlightBudget,
 	BlurQuality,
 	NearFarDistanceCompensation,
 	HighlightBoost,
@@ -52,13 +61,50 @@ void DoF::DrawSettings()
 	ImGui::SliderFloat(T("feature.post_processing.do_f.max_near_coc_radius", "Max Near Blur Radius"), &settings.MaxNearCoCRadius, 0.001f, 0.1f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.do_f.max_near_coc_radius_desc", "Upper bound of the near field blur disc radius, as a fraction of the screen width."));
-	ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
+	ImGui::Checkbox(T("feature.post_processing.do_f.adaptive_gather", "Adaptive Gather"), &settings.UseAdaptiveGather);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.do_f.adaptive_gather_desc", "Uses a fixed low-sample kernel and a CoC-aware image pyramid."));
+	if (settings.UseAdaptiveGather)
+		ImGui::Combo(T("feature.post_processing.do_f.gather_quality", "Gather Quality"), &settings.GatherQuality, "Performance (4 rings)\0Quality (5 rings)\0");
+	if (settings.UseAdaptiveGather) {
+		ImGui::Checkbox(T("feature.post_processing.do_f.sparse_highlights", "Sparse Highlight Splatting"), &settings.UseSparseHighlights);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.post_processing.do_f.sparse_highlights_desc", "Draws isolated bright pixels as continuous aperture splats. Work is capped by a fixed per-frame budget."));
+		if (settings.UseSparseHighlights) {
+			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_threshold", "Sparse Highlight Threshold"), &settings.SparseHighlightThreshold, 0.25f, 8.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_contrast", "Sparse Highlight Contrast"), &settings.SparseHighlightContrast, 1.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_budget", "Sparse Highlight Budget"), &settings.SparseHighlightBudget, 0.01f, 0.25f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		}
+	}
+	if (!settings.UseAdaptiveGather)
+		ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Compatibility Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_busy_factor", "Bokeh Busy Factor"), &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.petzval_strength", "Petzval Strength"), &settings.PetzvalStrength, 0.0f, 2.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_boost", "Highlight Boost"), &settings.HighlightBoost, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.post_blur_smoothing", "Post Blur Smoothing"), &settings.PostBlurSmoothing, 0.0f, 2.0f, "%.2f");
-	ImGui::Combo(T("feature.post_processing.do_f.highlight_custom_shape", "Highlight Custom Shape"), &settings.HighlightShape, "Circle (No custom shape)\0Heart\0Hexagon\0Circle with fringe\0Hexagon with fringe\0Star\0Square\0");
+	ImGui::Combo(T("feature.post_processing.do_f.bokeh_mode", "Bokeh Mode"), &settings.BokehMode, "Procedural\0Custom Texture (Higher Cost)\0");
+	if (settings.BokehMode == 0) {
+		ImGui::SliderInt(T("feature.post_processing.do_f.bokeh_blade_count", "Aperture Blades"), &settings.BokehBladeCount, 4, 16, "%d", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_blade_roundness", "Blade Roundness"), &settings.BokehBladeRoundness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+		if (!settings.UseAdaptiveGather)
+			ImGui::TextDisabled(T("feature.post_processing.do_f.procedural_requires_adaptive", "Procedural blades require Adaptive Gather; the compatibility path uses a circle."));
+	} else if (owner) {
+		const int shapeCount = owner->bokehResources.GetTotalShapeCount();
+		settings.HighlightShape = std::clamp(settings.HighlightShape, 1, std::max(shapeCount, 1));
+		const int selectedShape = settings.HighlightShape - 1;
+		if (ImGui::BeginCombo(T("feature.post_processing.do_f.highlight_custom_shape", "Custom Aperture Texture"), owner->bokehResources.GetShapeName(selectedShape))) {
+			for (int i = 0; i < shapeCount; ++i) {
+				const bool selected = i == selectedShape;
+				if (ImGui::Selectable(owner->bokehResources.GetShapeName(i), selected))
+					settings.HighlightShape = i + 1;
+				if (selected)
+					ImGui::SetItemDefaultFocus();
+			}
+			ImGui::EndCombo();
+		}
+		ImGui::TextDisabled(T("feature.post_processing.do_f.custom_shape_cost", "Custom textures preserve arbitrary silhouettes but add a texture lookup per gather tap."));
+	}
 	ImGui::SliderFloat(T("feature.post_processing.do_f.highlight_shape_rotation", "Highlight Shape Rotation"), &settings.HighlightShapeRotationAngle, 0.0f, 1.0f, "%.2f");
 	ImGui::Checkbox(T("feature.post_processing.do_f.target_focus", "Target Focus"), &settings.targetFocus);
 	ImGui::SliderFloat(T("feature.post_processing.do_f.target_focus_focal_length", "Target Focus Focal Length"), &settings.targetFocusFocalLength, 1.0f, 300.0f, "%.1f mm");
@@ -81,10 +127,13 @@ void DoF::DrawSettings()
 		BUFFER_VIEWER_NODE(texCoCTile, debugRescale)
 		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
 		BUFFER_VIEWER_NODE(texCoCTileDilated, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
-
 		BUFFER_VIEWER_NODE(texPreBlurred, debugRescale)
+		BUFFER_VIEWER_NODE(texGatherColor[0], debugRescale)
+		BUFFER_VIEWER_NODE(texGatherColor[1], debugRescale)
+		BUFFER_VIEWER_NODE(texGatherColor[2], debugRescale)
+		BUFFER_VIEWER_NODE(texGatherCoC[0], debugRescale)
+		BUFFER_VIEWER_NODE(texGatherCoC[1], debugRescale)
+		BUFFER_VIEWER_NODE(texGatherCoC[2], debugRescale)
 		BUFFER_VIEWER_NODE(texFarBlurred, debugRescale)
 		BUFFER_VIEWER_NODE(texNearBlurred, debugRescale)
 
@@ -109,6 +158,71 @@ void DoF::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+void DoF::UpdateProceduralBokehSamples(bool force)
+{
+	if (!proceduralBokehSamples)
+		return;
+
+	const int bladeCount = std::clamp(settings.BokehBladeCount, 4, 16);
+	const float roundness = std::clamp(settings.BokehBladeRoundness, 0.0f, 1.0f);
+	if (!force && bladeCount == cachedBokehBladeCount && roundness == cachedBokehBladeRoundness)
+		return;
+
+	constexpr float pi = std::numbers::pi_v<float>;
+	constexpr float tau = 2.0f * pi;
+	const float sector = tau / float(bladeCount);
+	const float circumRadius = std::sqrt((2.0f * pi) / (float(bladeCount) * std::sin(sector)));
+	const float incircleRadius = circumRadius * std::cos(pi / float(bladeCount));
+	auto boundaryRadius = [&](float angle) {
+		const float edgeNormal = (std::floor(angle / sector) + 0.5f) * sector;
+		const float alpha = std::remainder(angle - edgeNormal, sector);
+		const float polygonRadius = incircleRadius / std::max(std::cos(alpha), 1e-4f);
+		return std::lerp(polygonRadius, 1.0f, roundness);
+	};
+
+	// Linear interpolation between a regular polygon and a circle needs a small area correction at
+	// intermediate roundness. Integrating the radial function keeps blur energy independent of UI.
+	constexpr int integrationSteps = 2048;
+	float twiceArea = 0.0f;
+	for (int i = 0; i < integrationSteps; ++i) {
+		const float angle = (float(i) + 0.5f) * tau / float(integrationSteps);
+		const float radius = boundaryRadius(angle);
+		twiceArea += radius * radius * tau / float(integrationSteps);
+	}
+	const float areaScale = std::sqrt((2.0f * pi) / std::max(twiceArea, 1e-4f));
+	proceduralBokehAreaScale = areaScale;
+
+	std::array<BokehResources::ShapeSample, BokehResources::GATHER_SAMPLE_COUNT> samples{};
+	int sampleIndex = 0;
+	float maxRadius = 1.0f;
+	for (int ring = 1; ring <= 5; ++ring) {
+		const int samplesOnRing = ring * 8;
+		// Leave half a sample footprint outside the last ring. This places the ring centers at
+		// r/(ringCount+0.5), so bilinear footprints cover the aperture edge instead of piling their
+		// centers directly onto it.
+		const float ringRadius = float(ring) / 5.5f;
+		const float angleOffset = (ring & 1) ? pi / float(samplesOnRing) : 0.0f;
+		for (int i = 0; i < samplesOnRing; ++i) {
+			const float angle = angleOffset + float(i) * tau / float(samplesOnRing);
+			const float radius = ringRadius * boundaryRadius(angle) * areaScale;
+			const float fourRingScale = ring <= 4 ? (5.5f / 4.5f) : 1.0f;
+			maxRadius = std::max(maxRadius, radius * fourRingScale);
+			samples[sampleIndex++] = {
+				std::cos(angle) * radius,
+				std::sin(angle) * radius,
+				float(ring - 1) / 5.0f,
+				ringRadius
+			};
+		}
+	}
+
+	proceduralBokehSamples->Update(samples.data(), sizeof(samples));
+	const float analyticMaxRadius = std::lerp(circumRadius, 1.0f, roundness) * areaScale;
+	proceduralBokehMaxRadius = std::max(maxRadius, analyticMaxRadius);
+	cachedBokehBladeCount = bladeCount;
+	cachedBokehBladeRoundness = roundness;
+}
+
 void DoF::SetupResources()
 {
 	auto renderer = globals::game::renderer;
@@ -116,7 +230,13 @@ void DoF::SetupResources()
 
 	logger::debug("Creating buffers...");
 	{
-		dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>());
+		dofCB = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<DoFCB>(), "DoF::Constants");
+		proceduralBokehSamples = eastl::make_unique<StructuredBuffer>(
+			StructuredBufferDesc<BokehResources::ShapeSample>((uint64_t)BokehResources::GATHER_SAMPLE_COUNT, false, true),
+			BokehResources::GATHER_SAMPLE_COUNT,
+			"DoF::ProceduralBokehSamples");
+		proceduralBokehSamples->CreateSRV();
+		UpdateProceduralBokehSamples(true);
 	}
 
 	logger::debug("Creating 2D textures...");
@@ -142,58 +262,84 @@ void DoF::SetupResources()
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MiscFlags = 0;
 
-		texOutput = eastl::make_unique<Texture2D>(texDesc);
+		texOutput = eastl::make_unique<Texture2D>(texDesc, "DoF::Output");
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
 
-		texPostSmooth = eastl::make_unique<Texture2D>(texDesc);
+		texPostSmooth = eastl::make_unique<Texture2D>(texDesc, "DoF::PostSmooth");
 		texPostSmooth->CreateSRV(srvDesc);
 		texPostSmooth->CreateUAV(uavDesc);
 
-		texPostSmooth2 = eastl::make_unique<Texture2D>(texDesc);
+		texPostSmooth2 = eastl::make_unique<Texture2D>(texDesc, "DoF::PostSmooth2");
 		texPostSmooth2->CreateSRV(srvDesc);
 		texPostSmooth2->CreateUAV(uavDesc);
 
 		D3D11_TEXTURE2D_DESC texDescHalf = texDesc;
-		texDescHalf.Width /= 2;
-		texDescHalf.Height /= 2;
+		texDescHalf.Width = std::max(1u, texDescHalf.Width / 2u);
+		texDescHalf.Height = std::max(1u, texDescHalf.Height / 2u);
 
-		texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf);
+		texPreBlurred = eastl::make_unique<Texture2D>(texDescHalf, "DoF::SetupColor");
 		texPreBlurred->CreateSRV(srvDesc);
 		texPreBlurred->CreateUAV(uavDesc);
 
-		texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf);
+		D3D11_TEXTURE2D_DESC texDescSparse = texDescHalf;
+		texDescSparse.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDescHalf = {
+			.Format = texDescSparse.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		texSparseFar = eastl::make_unique<Texture2D>(texDescSparse, "DoF::SparseFar");
+		texSparseFar->CreateSRV(srvDesc);
+		texSparseFar->CreateRTV(rtvDescHalf);
+
+		texSparseNear = eastl::make_unique<Texture2D>(texDescSparse, "DoF::SparseNear");
+		texSparseNear->CreateSRV(srvDesc);
+		texSparseNear->CreateRTV(rtvDescHalf);
+
+		texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf, "DoF::FarLayer");
 		texFarBlurred->CreateSRV(srvDesc);
 		texFarBlurred->CreateUAV(uavDesc);
 
-		texNearBlurred = eastl::make_unique<Texture2D>(texDescHalf);
+		texNearBlurred = eastl::make_unique<Texture2D>(texDescHalf, "DoF::NearLayer");
 		texNearBlurred->CreateSRV(srvDesc);
 		texNearBlurred->CreateUAV(uavDesc);
 
-		texBlurredFiltered = eastl::make_unique<Texture2D>(texDescHalf);
+		texBlurredFiltered = eastl::make_unique<Texture2D>(texDescHalf, "DoF::FarFiltered");
 		texBlurredFiltered->CreateSRV(srvDesc);
 		texBlurredFiltered->CreateUAV(uavDesc);
+
+		D3D11_TEXTURE2D_DESC texDescGather = texDescHalf;
+		for (size_t i = 0; i < texGatherColor.size(); ++i) {
+			texDescGather.Width = std::max(1u, (texDescGather.Width + 1u) / 2u);
+			texDescGather.Height = std::max(1u, (texDescGather.Height + 1u) / 2u);
+			texGatherColor[i] = eastl::make_unique<Texture2D>(texDescGather, std::format("DoF::GatherColor{}", i + 1).c_str());
+			texGatherColor[i]->CreateSRV(srvDesc);
+			texGatherColor[i]->CreateUAV(uavDesc);
+		}
 
 		// CoC buffers. R16_FLOAT is plenty: the CoC is a screen width fraction clamped to ~0.025, so
 		// half float resolves it to better than 1/40th of a pixel.
 		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
 		texDescHalf.Format = DXGI_FORMAT_R16_FLOAT;
 
-		texCoC = eastl::make_unique<Texture2D>(texDesc);
+		texCoC = eastl::make_unique<Texture2D>(texDesc, "DoF::FullCoC");
 		texCoC->CreateSRV(srvDesc);
 		texCoC->CreateUAV(uavDesc);
 
-		texCoCHalf = eastl::make_unique<Texture2D>(texDescHalf);
+		texCoCHalf = eastl::make_unique<Texture2D>(texDescHalf, "DoF::SetupCoC");
 		texCoCHalf->CreateSRV(srvDesc);
 		texCoCHalf->CreateUAV(uavDesc);
 
-		texCoCBlur1 = eastl::make_unique<Texture2D>(texDescHalf);
-		texCoCBlur1->CreateSRV(srvDesc);
-		texCoCBlur1->CreateUAV(uavDesc);
-
-		texCoCBlur2 = eastl::make_unique<Texture2D>(texDescHalf);
-		texCoCBlur2->CreateSRV(srvDesc);
-		texCoCBlur2->CreateUAV(uavDesc);
+		texDescGather = texDescHalf;
+		for (size_t i = 0; i < texGatherCoC.size(); ++i) {
+			texDescGather.Width = std::max(1u, (texDescGather.Width + 1u) / 2u);
+			texDescGather.Height = std::max(1u, (texDescGather.Height + 1u) / 2u);
+			texDescGather.Format = DXGI_FORMAT_R16_FLOAT;
+			texGatherCoC[i] = eastl::make_unique<Texture2D>(texDescGather, std::format("DoF::GatherCoC{}", i + 1).c_str());
+			texGatherCoC[i]->CreateSRV(srvDesc);
+			texGatherCoC[i]->CreateUAV(uavDesc);
+		}
 
 		// CoC tile buffers: one texel per 16x16 full res pixels, holding (min, max) signed CoC.
 		// RGBA16F rather than RG16F because only the RGBA/R/RG32 families are guaranteed to support
@@ -208,15 +354,15 @@ void DoF::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDescTile = uavDesc;
 		uavDescTile.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-		texCoCTile = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTile = eastl::make_unique<Texture2D>(texDescTile, "DoF::CoCTile");
 		texCoCTile->CreateSRV(srvDescTile);
 		texCoCTile->CreateUAV(uavDescTile);
 
-		texCoCTileTmp = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTileTmp = eastl::make_unique<Texture2D>(texDescTile, "DoF::CoCTileTemporary");
 		texCoCTileTmp->CreateSRV(srvDescTile);
 		texCoCTileTmp->CreateUAV(uavDescTile);
 
-		texCoCTileDilated = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTileDilated = eastl::make_unique<Texture2D>(texDescTile, "DoF::CoCTileDilated");
 		texCoCTileDilated->CreateSRV(srvDescTile);
 		texCoCTileDilated->CreateUAV(uavDescTile);
 
@@ -225,15 +371,68 @@ void DoF::SetupResources()
 		texDesc.Width = 1;
 		texDesc.Height = 1;
 
-		texFocus = eastl::make_unique<Texture2D>(texDesc);
+		texFocus = eastl::make_unique<Texture2D>(texDesc, "DoF::Focus");
 		texFocus->CreateSRV(srvDesc);
 		texFocus->CreateUAV(uavDesc);
 
-		texPreFocus = eastl::make_unique<Texture2D>(texDesc);
+		texPreFocus = eastl::make_unique<Texture2D>(texDesc, "DoF::PreviousFocus");
 		texPreFocus->CreateSRV(srvDesc);
 		texPreFocus->CreateUAV(uavDesc);
 
 		g_TDM = reinterpret_cast<TDM_API::IVTDM2*>(TDM_API::RequestPluginAPI(TDM_API::InterfaceVersion::V2));
+	}
+
+	logger::debug("Creating sparse bokeh resources...");
+	{
+		const uint halfPixelCount = std::max(1u, texPreBlurred->desc.Width * texPreBlurred->desc.Height);
+		sparseHighlightCapacity = std::max(1u, (uint)std::ceil((float)halfPixelCount * 0.25f));
+		auto sparseDesc = StructuredBufferDesc<SparseBokeh>((uint64_t)sparseHighlightCapacity, true, false);
+		sparseBokehBuffer = eastl::make_unique<StructuredBuffer>(sparseDesc, sparseHighlightCapacity, "DoF::SparseBokehList");
+		sparseBokehBuffer->CreateSRV();
+		sparseBokehBuffer->CreateUAV();
+
+		D3D11_BUFFER_DESC argsDesc{};
+		// The first four uints are DrawInstancedIndirect arguments. The fifth is a raw atomic
+		// raster-work counter, which bounds large-quad overdraw independently of candidate count.
+		argsDesc.ByteWidth = sizeof(uint) * 5;
+		argsDesc.Usage = D3D11_USAGE_DEFAULT;
+		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+		sparseIndirectArgs = eastl::make_unique<Buffer>(argsDesc, nullptr, "DoF::SparseIndirectArgs");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUAVDesc{};
+		argsUAVDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		argsUAVDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		argsUAVDesc.Buffer.NumElements = 5;
+		argsUAVDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		sparseIndirectArgs->CreateUAV(argsUAVDesc);
+
+		D3D11_BLEND_DESC blendDesc{};
+		blendDesc.IndependentBlendEnable = TRUE;
+		for (int i = 0; i < 2; ++i) {
+			blendDesc.RenderTarget[i].BlendEnable = TRUE;
+			blendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
+			blendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
+			blendDesc.RenderTarget[i].BlendOp = D3D11_BLEND_OP_ADD;
+			blendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
+			blendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
+			blendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+			blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		}
+		DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, sparseAdditiveBlendState.put()));
+		Util::SetResourceName(sparseAdditiveBlendState.get(), "DoF::SparseAdditiveBlend");
+
+		D3D11_RASTERIZER_DESC rasterizerDesc{};
+		rasterizerDesc.FillMode = D3D11_FILL_SOLID;
+		rasterizerDesc.CullMode = D3D11_CULL_NONE;
+		rasterizerDesc.DepthClipEnable = TRUE;
+		DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, sparseRasterizerState.put()));
+		Util::SetResourceName(sparseRasterizerState.get(), "DoF::SparseRasterizer");
+
+		D3D11_DEPTH_STENCIL_DESC depthDesc{};
+		depthDesc.DepthEnable = FALSE;
+		depthDesc.StencilEnable = FALSE;
+		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthDesc, sparseDepthStencilState.put()));
+		Util::SetResourceName(sparseDepthStencilState.get(), "DoF::SparseDepthState");
 	}
 
 	// Bokeh shapes are loaded by PostProcessing::bokehResources (shared with LensFlare)
@@ -250,6 +449,7 @@ void DoF::SetupResources()
 			.MaxLOD = D3D11_FLOAT32_MAX
 		};
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, linearSampler.put()));
+		Util::SetResourceName(linearSampler.get(), "DoF::LinearSampler");
 	}
 
 	CompileComputeShaders();
@@ -263,12 +463,19 @@ void DoF::ClearShaderCache()
 		&CoCTileFlattenCS,
 		&CoCTileDilateHCS,
 		&CoCTileDilateVCS,
-		&CoCGaussian1CS,
-		&CoCGaussian2CS,
 		&DownsampleCS,
+		&DownsampleLegacyCS,
+		&ReduceColorCoCCS,
+		&ReduceColorCS,
+		&SparseBokehExtractCS,
+		&SparseBokehFinalizeCS,
 		&FarBlurCS,
 		&NearBlurCS,
-		&TentFilterCS,
+		&FarGatherCS[0],
+		&FarGatherCS[1],
+		&NearGatherCS[0],
+		&NearGatherCS[1],
+		&GatherPostfilterCS,
 		&CombinerCS,
 		&PostSmoothing1CS,
 		&PostSmoothing2AndFocusingCS
@@ -279,6 +486,8 @@ void DoF::ClearShaderCache()
 			(*shader)->Release();
 			shader->detach();
 		}
+	SparseBokehVS = nullptr;
+	SparseBokehPS = nullptr;
 
 	CompileComputeShaders();
 }
@@ -300,12 +509,19 @@ void DoF::CompileComputeShaders()
 			{ &CoCTileFlattenCS, "dof.cs.hlsl", {}, "CS_CoCTileFlatten" },
 			{ &CoCTileDilateHCS, "dof.cs.hlsl", {}, "CS_CoCTileDilateH" },
 			{ &CoCTileDilateVCS, "dof.cs.hlsl", {}, "CS_CoCTileDilateV" },
-			{ &CoCGaussian1CS, "dof.cs.hlsl", {}, "CS_CoCGaussian1" },
-			{ &CoCGaussian2CS, "dof.cs.hlsl", {}, "CS_CoCGaussian2" },
 			{ &DownsampleCS, "dof.cs.hlsl", {}, "CS_Downsample" },
+			{ &DownsampleLegacyCS, "dof.cs.hlsl", {}, "CS_DownsampleLegacy" },
+			{ &ReduceColorCoCCS, "dof.cs.hlsl", {}, "CS_ReduceColorCoC" },
+			{ &ReduceColorCS, "dof.cs.hlsl", {}, "CS_ReduceColor" },
+			{ &SparseBokehExtractCS, "dof.cs.hlsl", {}, "CS_SparseBokehExtract" },
+			{ &SparseBokehFinalizeCS, "dof.cs.hlsl", {}, "CS_SparseBokehFinalize" },
 			{ &FarBlurCS, "dof.cs.hlsl", {}, "CS_FarBlur" },
 			{ &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" },
-			{ &TentFilterCS, "dof.cs.hlsl", {}, "CS_TentFilter" },
+			{ &FarGatherCS[0], "dof.cs.hlsl", { { "GATHER_RING_COUNT", "4" } }, "CS_FarGather" },
+			{ &FarGatherCS[1], "dof.cs.hlsl", { { "GATHER_RING_COUNT", "5" } }, "CS_FarGather" },
+			{ &NearGatherCS[0], "dof.cs.hlsl", { { "GATHER_RING_COUNT", "4" } }, "CS_NearGather" },
+			{ &NearGatherCS[1], "dof.cs.hlsl", { { "GATHER_RING_COUNT", "5" } }, "CS_NearGather" },
+			{ &GatherPostfilterCS, "dof.cs.hlsl", {}, "CS_GatherPostfilter" },
 			{ &CombinerCS, "dof.cs.hlsl", {}, "CS_Combiner" },
 			{ &PostSmoothing1CS, "dof.cs.hlsl", {}, "CS_PostSmoothing1" },
 			{ &PostSmoothing2AndFocusingCS, "dof.cs.hlsl", {}, "CS_PostSmoothing2AndFocusing" }
@@ -316,6 +532,168 @@ void DoF::CompileComputeShaders()
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
 			info.programPtr->attach(rawPtr);
 	}
+
+	SparseBokehVS = nullptr;
+	SparseBokehPS = nullptr;
+	auto sparsePath = std::filesystem::path("Data\\Shaders\\PostProcessing\\DoF\\dof_sparse.hlsl");
+	if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(sparsePath.c_str(), {}, "vs_5_0", "VS_SparseBokeh")))
+		SparseBokehVS.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11PixelShader*>(Util::CompileShader(sparsePath.c_str(), {}, "ps_5_0", "PS_SparseBokeh")))
+		SparseBokehPS.attach(rawPtr);
+}
+
+void DoF::DrawSparseBokeh(ID3D11ShaderResourceView* customShapeSRV)
+{
+	if (!SparseBokehVS || !SparseBokehPS || !sparseBokehBuffer || !sparseIndirectArgs ||
+		!texSparseFar || !texSparseNear)
+		return;
+
+	auto context = globals::d3d::context;
+	ID3D11InputLayout* savedInputLayout = nullptr;
+	ID3D11Buffer* savedIndexBuffer = nullptr;
+	DXGI_FORMAT savedIndexFormat = DXGI_FORMAT_UNKNOWN;
+	UINT savedIndexOffset = 0;
+	D3D11_PRIMITIVE_TOPOLOGY savedTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+	context->IAGetInputLayout(&savedInputLayout);
+	context->IAGetIndexBuffer(&savedIndexBuffer, &savedIndexFormat, &savedIndexOffset);
+	context->IAGetPrimitiveTopology(&savedTopology);
+
+	ID3D11VertexShader* savedVS = nullptr;
+	ID3D11HullShader* savedHS = nullptr;
+	ID3D11DomainShader* savedDS = nullptr;
+	ID3D11GeometryShader* savedGS = nullptr;
+	ID3D11PixelShader* savedPS = nullptr;
+	context->VSGetShader(&savedVS, nullptr, nullptr);
+	context->HSGetShader(&savedHS, nullptr, nullptr);
+	context->DSGetShader(&savedDS, nullptr, nullptr);
+	context->GSGetShader(&savedGS, nullptr, nullptr);
+	context->PSGetShader(&savedPS, nullptr, nullptr);
+
+	ID3D11RasterizerState* savedRasterizerState = nullptr;
+	D3D11_VIEWPORT savedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	UINT savedViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	D3D11_RECT savedScissorRects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	UINT savedScissorRectCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	context->RSGetState(&savedRasterizerState);
+	context->RSGetViewports(&savedViewportCount, savedViewports);
+	context->RSGetScissorRects(&savedScissorRectCount, savedScissorRects);
+
+	ID3D11RenderTargetView* savedRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
+	ID3D11DepthStencilView* savedDSV = nullptr;
+	ID3D11BlendState* savedBlendState = nullptr;
+	FLOAT savedBlendFactor[4]{};
+	UINT savedSampleMask = 0;
+	ID3D11DepthStencilState* savedDepthStencilState = nullptr;
+	UINT savedStencilRef = 0;
+	context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, savedRTVs, &savedDSV);
+	context->OMGetBlendState(&savedBlendState, savedBlendFactor, &savedSampleMask);
+	context->OMGetDepthStencilState(&savedDepthStencilState, &savedStencilRef);
+
+	ID3D11ShaderResourceView* savedVSSRV = nullptr;
+	ID3D11Buffer* savedVSCB = nullptr;
+	ID3D11ShaderResourceView* savedPSSRVs[2]{};
+	ID3D11SamplerState* savedPSSampler = nullptr;
+	ID3D11Buffer* savedPSCB = nullptr;
+	context->VSGetShaderResources(0, 1, &savedVSSRV);
+	context->VSGetConstantBuffers(1, 1, &savedVSCB);
+	context->PSGetShaderResources(0, 2, savedPSSRVs);
+	context->PSGetSamplers(0, 1, &savedPSSampler);
+	context->PSGetConstantBuffers(1, 1, &savedPSCB);
+	const float clear[4] = {};
+	context->ClearRenderTargetView(texSparseFar->rtv.get(), clear);
+	context->ClearRenderTargetView(texSparseNear->rtv.get(), clear);
+
+	D3D11_VIEWPORT viewport{};
+	viewport.Width = (float)texSparseFar->desc.Width;
+	viewport.Height = (float)texSparseFar->desc.Height;
+	viewport.MaxDepth = 1.0f;
+	context->RSSetViewports(1, &viewport);
+	context->RSSetState(sparseRasterizerState.get());
+	context->IASetInputLayout(nullptr);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+	context->VSSetShader(SparseBokehVS.get(), nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(SparseBokehPS.get(), nullptr, 0);
+	context->OMSetBlendState(sparseAdditiveBlendState.get(), nullptr, 0xffffffff);
+	context->OMSetDepthStencilState(sparseDepthStencilState.get(), 0);
+
+	ID3D11RenderTargetView* rtvs[2] = { texSparseFar->rtv.get(), texSparseNear->rtv.get() };
+	context->OMSetRenderTargets(2, rtvs, nullptr);
+	ID3D11ShaderResourceView* views[2] = { sparseBokehBuffer->SRV(), customShapeSRV };
+	context->VSSetShaderResources(0, 1, views);
+	context->PSSetShaderResources(0, 2, views);
+	ID3D11SamplerState* sampler = linearSampler.get();
+	context->PSSetSamplers(0, 1, &sampler);
+	ID3D11Buffer* constantBuffer = dofCB->CB();
+	context->VSSetConstantBuffers(1, 1, &constantBuffer);
+	context->PSSetConstantBuffers(1, 1, &constantBuffer);
+
+	context->DrawInstancedIndirect(sparseIndirectArgs->resource.get(), 0);
+
+	ID3D11ShaderResourceView* nullViews[2] = {};
+	context->VSSetShaderResources(0, 1, nullViews);
+	context->PSSetShaderResources(0, 2, nullViews);
+	context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, savedRTVs, savedDSV);
+	context->OMSetBlendState(savedBlendState, savedBlendFactor, savedSampleMask);
+	context->OMSetDepthStencilState(savedDepthStencilState, savedStencilRef);
+	context->RSSetViewports(savedViewportCount, savedViewports);
+	context->RSSetScissorRects(savedScissorRectCount, savedScissorRects);
+	context->RSSetState(savedRasterizerState);
+	context->IASetInputLayout(savedInputLayout);
+	context->IASetIndexBuffer(savedIndexBuffer, savedIndexFormat, savedIndexOffset);
+	context->IASetPrimitiveTopology(savedTopology);
+	context->VSSetShader(savedVS, nullptr, 0);
+	context->HSSetShader(savedHS, nullptr, 0);
+	context->DSSetShader(savedDS, nullptr, 0);
+	context->GSSetShader(savedGS, nullptr, 0);
+	context->PSSetShader(savedPS, nullptr, 0);
+	context->VSSetShaderResources(0, 1, &savedVSSRV);
+	context->VSSetConstantBuffers(1, 1, &savedVSCB);
+	context->PSSetShaderResources(0, 2, savedPSSRVs);
+	context->PSSetSamplers(0, 1, &savedPSSampler);
+	context->PSSetConstantBuffers(1, 1, &savedPSCB);
+
+	if (savedInputLayout)
+		savedInputLayout->Release();
+	if (savedIndexBuffer)
+		savedIndexBuffer->Release();
+	if (savedVS)
+		savedVS->Release();
+	if (savedHS)
+		savedHS->Release();
+	if (savedDS)
+		savedDS->Release();
+	if (savedGS)
+		savedGS->Release();
+	if (savedPS)
+		savedPS->Release();
+	if (savedRasterizerState)
+		savedRasterizerState->Release();
+	for (auto* rtv : savedRTVs) {
+		if (rtv)
+			rtv->Release();
+	}
+	if (savedDSV)
+		savedDSV->Release();
+	if (savedBlendState)
+		savedBlendState->Release();
+	if (savedDepthStencilState)
+		savedDepthStencilState->Release();
+	if (savedVSSRV)
+		savedVSSRV->Release();
+	if (savedVSCB)
+		savedVSCB->Release();
+	for (auto* srv : savedPSSRVs) {
+		if (srv)
+			srv->Release();
+	}
+	if (savedPSSampler)
+		savedPSSampler->Release();
+	if (savedPSCB)
+		savedPSCB->Release();
 }
 
 // Thanks Ershin!
@@ -438,14 +816,44 @@ void DoF::Draw(TextureInfo& inout_tex)
 	const uint halfResY = std::max(1u, (uint)res.y / 2);
 	const uint tileDimX = std::max(1u, (halfResX + 7) / 8);
 	const uint tileDimY = std::max(1u, (halfResY + 7) / 8);
+	const size_t gatherQuality = (size_t)std::clamp(settings.GatherQuality, 0, 1);
+	UpdateProceduralBokehSamples();
 
-	// The near gather's kernel radius comes from the gaussian dilated near CoC, whose reach is
-	// MaxNearCoCRadius * width * NearPlaneMaxBlur. The tile dilation has to cover at least that or
-	// the group uniform early out would skip pixels the gaussian legitimately reaches, so the reach
-	// is clamped back to whatever the (bounded) dilation radius can actually guarantee.
-	const float wantNearRadiusPx = std::max(settings.MaxNearCoCRadius, 1e-4f) * res.x * std::max(nearBlur, 0.0f);
-	const uint tileDilateRadius = std::min(48u, (uint)std::ceil(wantNearRadiusPx / 16.0f) + 1u);
-	const float nearGaussianReachPx = std::min(wantNearRadiusPx, (float)(tileDilateRadius - 1u) * 16.0f);
+	const int requestedBokehMode = std::clamp(settings.BokehMode, 0, 1);
+	int customShapeIndex = 0;
+	ID3D11ShaderResourceView* customShapeSRV = nullptr;
+	ID3D11ShaderResourceView* customShapeSampleSRV = nullptr;
+	if (owner && requestedBokehMode == 1) {
+		customShapeIndex = std::clamp(settings.HighlightShape - 1, 0, std::max(owner->bokehResources.GetTotalShapeCount() - 1, 0));
+		customShapeSRV = owner->bokehResources.GetShapeSRV(customShapeIndex);
+		customShapeSampleSRV = owner->bokehResources.GetShapeSampleSRV(customShapeIndex);
+	}
+	const uint bokehMode = requestedBokehMode == 1 && customShapeSRV && customShapeSampleSRV ? 1u : 0u;
+	ID3D11ShaderResourceView* bokehSampleSRV = bokehMode == 1 ? customShapeSampleSRV : proceduralBokehSamples->SRV();
+	const float customShapeRadiusScale = bokehMode == 1 ? owner->bokehResources.GetShapeSampleRadiusScale(customShapeIndex) : 1.0f;
+	const float bokehMaxRadius = bokehMode == 1 ? owner->bokehResources.GetShapeSampleMaxRadius(customShapeIndex) : proceduralBokehMaxRadius;
+	const bool adaptiveGatherReady = DownsampleCS && ReduceColorCoCCS && ReduceColorCS &&
+	                                 FarGatherCS[gatherQuality] && NearGatherCS[gatherQuality] && bokehSampleSRV;
+	const bool useAdaptiveGather = settings.UseAdaptiveGather && adaptiveGatherReady;
+	const uint64_t halfPixelCount = (uint64_t)halfResX * halfResY;
+	const uint sparseHighlightMaxCount = std::min(
+		sparseHighlightCapacity,
+		(uint)std::min<uint64_t>(
+			std::numeric_limits<uint>::max(),
+			(uint64_t)std::ceil((double)halfPixelCount * std::clamp(settings.SparseHighlightBudget, 0.0f, 0.25f))));
+	const uint sparseHighlightWorkBudget = (uint)std::min<uint64_t>(
+		std::numeric_limits<uint>::max(),
+		(uint64_t)std::ceil((double)halfPixelCount * std::clamp(settings.SparseHighlightBudget, 0.0f, 0.25f)));
+	const bool useSparseHighlights = useAdaptiveGather && settings.UseSparseHighlights && sparseHighlightMaxCount > 0 &&
+	                                 SparseBokehExtractCS && SparseBokehFinalizeCS && SparseBokehVS && SparseBokehPS &&
+	                                 sparseBokehBuffer && sparseIndirectArgs;
+
+	// Tile propagation carries the near disc reach itself, so the same low-resolution dilation used
+	// for group culling now replaces the two old half-resolution Gaussian passes.
+	const float wantNearRadiusPx = std::max(settings.MaxNearCoCRadius, 1e-4f) * res.x * std::max(nearBlur, 0.0f) * bokehMaxRadius;
+	constexpr float conservativeTileStepPx = 16.0f * 0.70710678f;
+	const uint tileDilateRadius = wantNearRadiusPx > 0.0f ? std::min(48u, (uint)std::ceil(wantNearRadiusPx / conservativeTileStepPx) + 1u) : 0u;
+	const float nearMaxReachPx = tileDilateRadius > 0u ? std::min(wantNearRadiusPx, (float)(tileDilateRadius - 1u) * conservativeTileStepPx) : 0.0f;
 
 	DoFCB dofData = {
 		.TransitionSpeed = settings.TransitionSpeed,
@@ -460,7 +868,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.BokehBusyFactor = settings.BokehBusyFactor,
 		.HighlightBoost = settings.HighlightBoost,
 		.PostBlurSmoothing = settings.PostBlurSmoothing,
-		.HighlightShape = (uint)settings.HighlightShape,
+		.HighlightShape = bokehMode == 1 ? (uint)settings.HighlightShape : 0u,
 		.HighlightShapeRotationAngle = settings.HighlightShapeRotationAngle,
 		.PetzvalStrength = settings.PetzvalStrength,
 		.AutoFocus = autoFocus,
@@ -471,12 +879,23 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.CoCTileDimY = tileDimY,
 		.HalfResDimX = halfResX,
 		.HalfResDimY = halfResY,
-		.NearGaussianReachPx = nearGaussianReachPx
+		.BokehMode = bokehMode,
+		.CustomShapeRadiusScale = customShapeRadiusScale,
+		.BokehMaxRadius = bokehMaxRadius,
+		.NearMaxReachPx = nearMaxReachPx,
+		.SparseHighlightEnabled = useSparseHighlights,
+		.SparseHighlightMaxCount = sparseHighlightMaxCount,
+		.SparseHighlightThreshold = std::max(settings.SparseHighlightThreshold, 0.0f),
+		.SparseHighlightContrast = std::max(settings.SparseHighlightContrast, 1.0f),
+		.BokehBladeCount = (uint)std::clamp(settings.BokehBladeCount, 4, 16),
+		.BokehBladeRoundness = std::clamp(settings.BokehBladeRoundness, 0.0f, 1.0f),
+		.ProceduralBokehAreaScale = proceduralBokehAreaScale,
+		.SparseHighlightWorkBudget = sparseHighlightWorkBudget
 	};
 	dofCB->Update(dofData);
 
-	std::array<ID3D11ShaderResourceView*, 12> srvs = {};
-	std::array<ID3D11UnorderedAccessView*, 4> uavs = {};
+	std::array<ID3D11ShaderResourceView*, 22> srvs = {};
+	std::array<ID3D11UnorderedAccessView*, 6> uavs = {};
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
 	auto cb = dofCB->CB();
 	auto resetViews = [&]() {
@@ -542,19 +961,65 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(0) = texPreBlurred->uav.get();
 		uavs.at(2) = texCoCHalf->uav.get();
+		if (useSparseHighlights) {
+			const uint indirectArgsClear[5] = { 4u, 0u, 0u, 0u, 0u };
+			context->UpdateSubresource(sparseIndirectArgs->resource.get(), 0, nullptr, indirectArgsClear, 0, 0);
+			uavs.at(4) = sparseIndirectArgs->uav.get();
+			uavs.at(5) = sparseBokehBuffer->UAV();
+		}
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(DownsampleCS.get(), nullptr, 0);
+		context->CSSetShader(
+			useSparseHighlights ? SparseBokehExtractCS.get() :
+			useAdaptiveGather   ? DownsampleCS.get() :
+								  DownsampleLegacyCS.get(),
+			nullptr,
+			0);
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
+		if (useSparseHighlights) {
+			context->CSSetShader(SparseBokehFinalizeCS.get(), nullptr, 0);
+			context->Dispatch(1, 1, 1);
+		}
 
 		resetViews();
 		state->EndPerfEvent();
 		globals::profiler->EndPass();
 	}
 
-	// CoC tile flatten + separable min/max dilation, at 1/16 of the full resolution.
+	if (useSparseHighlights) {
+		globals::profiler->BeginPass("PostProcessing::DoF::SparseBokeh");
+		state->BeginPerfEvent("Sparse Bokeh");
+		DrawSparseBokeh(bokehMode == 1 ? customShapeSRV : nullptr);
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
+	}
+
+	// CoC-aware color pyramid for the fixed gather. Each tap can cover a footprint comparable to
+	// the spacing between samples instead of always reading a single half-resolution texel.
+	if (useAdaptiveGather) {
+		globals::profiler->BeginPass("PostProcessing::DoF::GatherReduce");
+		state->BeginPerfEvent("Gather Reduce");
+		for (size_t i = 0; i < texGatherColor.size(); ++i) {
+			auto* sourceColor = i == 0 ? texPreBlurred.get() : texGatherColor[i - 1].get();
+			auto* sourceCoC = i == 0 ? texCoCHalf.get() : texGatherCoC[i - 1].get();
+			srvs.at(0) = sourceColor->srv.get();
+			srvs.at(18) = sourceCoC->srv.get();
+			uavs.at(0) = texGatherColor[i]->uav.get();
+			uavs.at(2) = texGatherCoC[i]->uav.get();
+
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(ReduceColorCoCCS.get(), nullptr, 0);
+			context->Dispatch((texGatherColor[i]->desc.Width + 7u) >> 3, (texGatherColor[i]->desc.Height + 7u) >> 3, 1);
+			resetViews();
+		}
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
+	}
+
+	// CoC tile flatten + separable min/max/reach propagation, at 1/16 of full resolution.
 	{
 		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
 		state->BeginPerfEvent("CoC Tile");
@@ -594,35 +1059,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// CoC Gaussian Blur: dilates the per tile near CoC into the smooth near field mask.
-	{
-		globals::profiler->BeginPass("PostProcessing::DoF::CoCBlur");
-		state->BeginPerfEvent("CoC Gaussian Blur");
-		srvs.at(10) = texCoCTile->srv.get();
-		uavs.at(2) = texCoCBlur1->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(CoCGaussian1CS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
-
-		resetViews();
-
-		srvs.at(4) = texCoCBlur1->srv.get();
-		uavs.at(2) = texCoCBlur2->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(CoCGaussian2CS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
-
-		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
-	}
-
 	// Gather
 	{
 		globals::profiler->BeginPass("PostProcessing::DoF::FarBlur");
@@ -630,34 +1066,71 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(0) = texPreBlurred->srv.get();
 		srvs.at(9) = texCoCHalf->srv.get();
 		srvs.at(10) = texCoCTile->srv.get();
-		if (owner)
-			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
+		if (useAdaptiveGather) {
+			for (size_t i = 0; i < texGatherColor.size(); ++i) {
+				srvs.at(12 + i) = texGatherColor[i]->srv.get();
+				srvs.at(15 + i) = texGatherCoC[i]->srv.get();
+			}
+			srvs.at(19) = bokehSampleSRV;
+			if (bokehMode == 1)
+				srvs.at(8) = customShapeSRV;
+		} else if (bokehMode == 1) {
+			srvs.at(8) = customShapeSRV;
+		}
 		uavs.at(0) = texFarBlurred->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(FarBlurCS.get(), nullptr, 0);
+		context->CSSetShader(useAdaptiveGather ? FarGatherCS[gatherQuality].get() : FarBlurCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
 		state->EndPerfEvent();
 		globals::profiler->EndPass();
 
-		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
-		state->BeginPerfEvent("Near Blur");
 		srvs.at(0) = texFarBlurred->srv.get();
-		srvs.at(4) = texCoCBlur2->srv.get();
 		srvs.at(9) = texCoCHalf->srv.get();
 		srvs.at(11) = texCoCTileDilated->srv.get();
-		if (owner)
-			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
+		if (useAdaptiveGather) {
+			// The near layer gathers the already resolved far result, so give it a matching color-only
+			// pyramid while reusing the setup CoC pyramid for footprint selection.
+			globals::profiler->BeginPass("PostProcessing::DoF::GatherReduceNear");
+			state->BeginPerfEvent("Gather Reduce Near");
+			for (size_t i = 0; i < texGatherColor.size(); ++i) {
+				auto* sourceColor = i == 0 ? texFarBlurred.get() : texGatherColor[i - 1].get();
+				srvs.at(0) = sourceColor->srv.get();
+				uavs.at(0) = texGatherColor[i]->uav.get();
+				context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+				context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+				context->CSSetShader(ReduceColorCS.get(), nullptr, 0);
+				context->Dispatch((texGatherColor[i]->desc.Width + 7u) >> 3, (texGatherColor[i]->desc.Height + 7u) >> 3, 1);
+				resetViews();
+			}
+			state->EndPerfEvent();
+			globals::profiler->EndPass();
+			srvs.at(0) = texFarBlurred->srv.get();
+			srvs.at(9) = texCoCHalf->srv.get();
+			srvs.at(11) = texCoCTileDilated->srv.get();
+			for (size_t i = 0; i < texGatherColor.size(); ++i) {
+				srvs.at(12 + i) = texGatherColor[i]->srv.get();
+				srvs.at(15 + i) = texGatherCoC[i]->srv.get();
+			}
+			srvs.at(19) = bokehSampleSRV;
+			if (bokehMode == 1)
+				srvs.at(8) = customShapeSRV;
+		} else if (bokehMode == 1) {
+			srvs.at(8) = customShapeSRV;
+		}
+
+		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
+		state->BeginPerfEvent("Near Blur");
 		uavs.at(0) = texNearBlurred->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(NearBlurCS.get(), nullptr, 0);
+		context->CSSetShader(useAdaptiveGather ? NearGatherCS[gatherQuality].get() : NearBlurCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
@@ -665,17 +1138,21 @@ void DoF::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// Tent Filter
+	// Component-wise median removes isolated gather noise without rounding off the aperture as the
+	// old tent blur did. Apply it to both convolution layers; setup color is dead after near gather
+	// and serves as the near-layer destination without another allocation.
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::TentFilter");
-		state->BeginPerfEvent("Tent Filter");
+		globals::profiler->BeginPass("PostProcessing::DoF::GatherPostfilter");
+		state->BeginPerfEvent("Gather Postfilter");
 		srvs.at(0) = texFarBlurred->srv.get();
+		srvs.at(6) = texNearBlurred->srv.get();
 		uavs.at(0) = texBlurredFiltered->uav.get();
+		uavs.at(3) = texPreBlurred->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(TentFilterCS.get(), nullptr, 0);
+		context->CSSetShader(GatherPostfilterCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
@@ -694,7 +1171,11 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
 		srvs.at(5) = texBlurredFiltered->srv.get();
-		srvs.at(6) = texNearBlurred->srv.get();
+		srvs.at(6) = texPreBlurred->srv.get();
+		if (useSparseHighlights) {
+			srvs.at(20) = texSparseFar->srv.get();
+			srvs.at(21) = texSparseNear->srv.get();
+		}
 		uavs.at(0) = doPostSmoothing ? texPostSmooth->uav.get() : texOutput->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
