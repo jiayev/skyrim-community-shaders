@@ -212,7 +212,7 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 #	ifdef HAS_LOCAL_EXPOSURE
 	float baseLogLuminance = TexLocalExposureBase[tid];
 	float localExposure = ComputeLocalExposure(sceneColor, baseLogLuminance, ManualExposure, 1.0);
-	float3 result = sceneColor * ManualExposure * localExposure + bloomContrib;
+	float3 result = (sceneColor * localExposure + bloomContrib) * ManualExposure;
 #	else
 	// No exposure at all: simple additive composite
 	float3 result = sceneColor + bloomContrib;

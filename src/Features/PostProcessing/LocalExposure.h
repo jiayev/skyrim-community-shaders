@@ -29,7 +29,7 @@ struct LocalExposure : public PostProcessFeature
 		float ShadowContrast = 0.8f;
 		float DetailStrength = 1.0f;
 		float BaseBlend = 0.5f;
-		float BaseMip = 7.0f;
+		float BlurredLuminanceKernelSize = 50.0f;
 		float MiddleGreyBias = 0.0f;
 		float HighlightThreshold = 1.0f;
 		float ShadowThreshold = 1.0f;
@@ -47,7 +47,7 @@ struct LocalExposure : public PostProcessFeature
 
 		float DetailStrength;
 		float BaseBlend;
-		float BaseMip;
+		float BlurRadius;
 		float MiddleGreyBias;
 
 		float HighlightThreshold;
@@ -57,8 +57,8 @@ struct LocalExposure : public PostProcessFeature
 
 		uint InputWidth;
 		uint InputHeight;
-		uint ActiveMipCount;
-		uint Padding0;
+		uint BlurredWidth;
+		uint BlurredHeight;
 
 		float LogLuminanceMin;
 		float LogLuminanceMax;
@@ -69,11 +69,15 @@ struct LocalExposure : public PostProcessFeature
 
 	// Textures
 	static constexpr uint s_MaxMips = 10;
+	static constexpr uint s_BlurMip = 5;
+	static constexpr uint s_MaxBlurRadius = 64;
 	static constexpr uint s_GridDepth = 32;
 	static constexpr uint s_GridTileSize = 64;
 
 	eastl::unique_ptr<Texture2D> texLogLuminance = nullptr;
 	eastl::unique_ptr<Texture3D> texLuminanceGrid = nullptr;
+	eastl::unique_ptr<Texture2D> texBlurTemp = nullptr;
+	eastl::unique_ptr<Texture2D> texBlurredLuminance = nullptr;
 	eastl::unique_ptr<Texture2D> texBaseLuminance = nullptr;
 
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_MaxMips> logLuminanceMipSRVs = {};
@@ -82,10 +86,13 @@ struct LocalExposure : public PostProcessFeature
 
 	// Sampler
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> mirrorSampler = nullptr;
 
 	// Compute shaders
 	winrt::com_ptr<ID3D11ComputeShader> setupCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> blurHorizontalCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> blurVerticalCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> gridCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> resolveCS = nullptr;
 

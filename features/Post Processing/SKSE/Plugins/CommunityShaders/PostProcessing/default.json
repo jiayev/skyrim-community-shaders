@@ -200,7 +200,7 @@
         "enabled": true,
         "settings": {
             "BaseBlend": 0.5,
-            "BaseMip": 7.0,
+            "BlurredLuminanceKernelSize": 50.0,
             "DetailStrength": 1.0,
             "Exposure": 0.699999988079071,
             "HighlightContrast": 0.75,
