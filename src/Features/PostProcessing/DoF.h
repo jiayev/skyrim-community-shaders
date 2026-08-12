@@ -31,6 +31,9 @@ struct DoF : public PostProcessFeature
 		float PetzvalStrength = 0.0f;
 		int HighlightShape = 0;
 		float HighlightShapeRotationAngle = 0.0f;
+		// Max blur disc radius, as a fraction of the screen width (cf. UE5 r.DOF.Kernel.Max*Radius).
+		float MaxNearCoCRadius = 0.025f;
+		float MaxFarCoCRadius = 0.025f;
 		bool targetFocus = false;
 		float targetFocusFocalLength = 50.0f;
 		bool consoleSelection = false;
@@ -54,7 +57,9 @@ struct DoF : public PostProcessFeature
 		float HighlightShapeRotationAngle;
 		float PetzvalStrength;
 		uint AutoFocus;
-		uint pad[3];
+		float MaxNearCoCRadius;
+		float MaxFarCoCRadius;
+		uint pad;
 	};
 
 	eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
@@ -64,7 +69,6 @@ struct DoF : public PostProcessFeature
 	eastl::unique_ptr<Texture2D> texFarBlurred = nullptr;
 	eastl::unique_ptr<Texture2D> texNearBlurred = nullptr;
 	eastl::unique_ptr<Texture2D> texBlurredFiltered = nullptr;
-	eastl::unique_ptr<Texture2D> texBlurredFull = nullptr;
 	eastl::unique_ptr<Texture2D> texPostSmooth = nullptr;
 	eastl::unique_ptr<Texture2D> texPostSmooth2 = nullptr;
 	eastl::unique_ptr<Texture2D> texFocus = nullptr;

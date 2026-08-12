@@ -205,8 +205,8 @@ void LocalExposure::SetupResources()
 		texDesc.Usage = D3D11_USAGE_DEFAULT;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 
-		auto createBlurTexture = [&](eastl::unique_ptr<Texture2D>& texture, const char* name) {
-			texture = eastl::make_unique<Texture2D>(texDesc, name);
+		auto createBlurTexture = [&](eastl::unique_ptr<Texture2D>& texture, const char* debugName) {
+			texture = eastl::make_unique<Texture2D>(texDesc, debugName);
 
 			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 			srvDesc.Format = DXGI_FORMAT_R16_FLOAT;
