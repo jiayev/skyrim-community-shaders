@@ -27,6 +27,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PetzvalStrength,
 	HighlightShape,
 	HighlightShapeRotationAngle,
+	MaxNearCoCRadius,
+	MaxFarCoCRadius,
 	targetFocus,
 	targetFocusFocalLength,
 	consoleSelection)
@@ -44,6 +46,12 @@ void DoF::DrawSettings()
 	ImGui::SliderFloat(T("feature.post_processing.do_f.f_number", "F-Number"), &settings.FNumber, 1.0f, 22.0f, "f/%.1f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.far_plane_max_blur", "Far Plane Max Blur"), &settings.FarPlaneMaxBlur, 0.0f, 8.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_plane_max_blur", "Near Plane Max Blur"), &settings.NearPlaneMaxBlur, 0.0f, 4.0f, "%.2f");
+	ImGui::SliderFloat(T("feature.post_processing.do_f.max_far_coc_radius", "Max Far Blur Radius"), &settings.MaxFarCoCRadius, 0.001f, 0.1f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.do_f.max_far_coc_radius_desc", "Upper bound of the far field blur disc radius, as a fraction of the screen width. Caps how expensive/undersampled the gather can get."));
+	ImGui::SliderFloat(T("feature.post_processing.do_f.max_near_coc_radius", "Max Near Blur Radius"), &settings.MaxNearCoCRadius, 0.001f, 0.1f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T("feature.post_processing.do_f.max_near_coc_radius_desc", "Upper bound of the near field blur disc radius, as a fraction of the screen width."));
 	ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.bokeh_busy_factor", "Bokeh Busy Factor"), &settings.BokehBusyFactor, 0.0f, 1.0f, "%.2f");
@@ -136,10 +144,6 @@ void DoF::SetupResources()
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
 		texOutput->CreateUAV(uavDesc);
-
-		texBlurredFull = eastl::make_unique<Texture2D>(texDesc);
-		texBlurredFull->CreateSRV(srvDesc);
-		texBlurredFull->CreateUAV(uavDesc);
 
 		texPostSmooth = eastl::make_unique<Texture2D>(texDesc);
 		texPostSmooth->CreateSRV(srvDesc);
@@ -425,7 +429,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.HighlightShape = (uint)settings.HighlightShape,
 		.HighlightShapeRotationAngle = settings.HighlightShapeRotationAngle,
 		.PetzvalStrength = settings.PetzvalStrength,
-		.AutoFocus = autoFocus
+		.AutoFocus = autoFocus,
+		.MaxNearCoCRadius = std::max(settings.MaxNearCoCRadius, 1e-4f),
+		.MaxFarCoCRadius = std::max(settings.MaxFarCoCRadius, 1e-4f)
 	};
 	dofCB->Update(dofData);
 
@@ -630,6 +636,10 @@ void DoF::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
+	// Post Smoothing only touches out of focus highlights; when it's disabled the combiner can write
+	// straight into the output and we save two full res passes.
+	const bool doPostSmoothing = settings.PostBlurSmoothing >= 0.01f;
+
 	// Combiner
 	{
 		globals::profiler->BeginPass("PostProcessing::DoF::Combiner");
@@ -638,7 +648,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(3) = texCoC->srv.get();
 		srvs.at(5) = texBlurredFiltered->srv.get();
 		srvs.at(6) = texNearBlurred->srv.get();
-		uavs.at(0) = texPostSmooth->uav.get();
+		uavs.at(0) = doPostSmoothing ? texPostSmooth->uav.get() : texOutput->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -652,7 +662,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	}
 
 	// Post Smooth
-	{
+	if (doPostSmoothing) {
 		globals::profiler->BeginPass("PostProcessing::DoF::PostSmooth");
 		state->BeginPerfEvent("Post Smooth");
 		srvs.at(0) = texPostSmooth->srv.get();

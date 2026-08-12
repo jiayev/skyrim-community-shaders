@@ -149,33 +149,37 @@ cbuffer DoFCB : register(b1)
 	float HighlightShapeRotationAngle;
 	float PetzvalStrength;
 	uint AutoFocus;
-	uint3 pad;
+	float MaxNearCoCRadius;
+	float MaxFarCoCRadius;
+	uint pad;
 };
 
-#define SENSOR_SIZE 0.024f
+// Sensor width the FocalLength control is expressed for (35mm full frame).
+#define SENSOR_WIDTH_MM 36.0f
 
-static const float blurPixelSizeLength = length(SharedData::BufferDim.zw) * 0.5f;
-static const float invBlurPixelSizeLength = 1.0f / blurPixelSizeLength;
+// --------------------------------------------------------------------------------------------
+// CoC units
+//
+// A CoC value in this shader is a *signed blur disc radius expressed as a fraction of the screen
+// width*: negative = near field (in front of the focal plane), positive = far field.
+// This matches UE5's DiaphragmDOF convention (`InfinityBackgroundCocRadius` is in horizontal
+// ViewportUV units) and makes every threshold below expressible in pixels, which is what the
+// gather kernel actually operates in.
+// --------------------------------------------------------------------------------------------
+static const float cocToPixels = SharedData::BufferDim.x;    // CoC fraction -> full-res pixels
+static const float onePixelInCoC = SharedData::BufferDim.z;  // "less than a pixel of blur" == in focus
+
+// Largest offset in the 18-tap gaussian table below, used to normalise the near CoC dilation.
+static const float gaussianMaxOffset = 33.4421011704f;
+// Near CoC radius (in pixels) at which the near field layer becomes fully opaque.
+static const float nearFullOpacityPixels = 8.0f;
 
 struct FocusInfo
 {
 	float2 texcoord;
-	float focusDepth;
+	float focusDepth;  // in KM, as stored in the 1x1 focus texture
 	float focusDepthInM;
 	float focusDepthInMM;
-	float pixelSizeLength;
-	float nearPlaneInMM;
-	float farPlaneInMM;
-};
-
-struct DiscBlurInfo
-{
-	float2 texcoord;
-	float numberOfRings;
-	float farPlaneMaxBlurInPixels;
-	float nearPlaneMaxBlurInPixels;
-	float cocFactorPerPixel;
-	float highlightBoostFactor;
 };
 
 float GetDepth(float2 uv)
@@ -192,21 +196,10 @@ float PreviousFocus()
 
 void FillFocusInfoData(inout FocusInfo toFill)
 {
-	// Reshade depth buffer ranges from 0.0->1.0, where 1.0 is 1000 in world units. All camera element sizes are in mm, so we state 1 in world units is
-	// 1 meter. This means to calculate from the linearized depth buffer value to meter we have to multiply by 1000.
-	// Manual focus value is already in meter (well, sort of. This differs per game so we silently assume it's meter), so we first divide it by
-	// 1000 to make it equal to a depth value read from the depth linearized depth buffer.
-	// Read from sampler on current focus which is a 1x1 texture filled with the actual depth value of the focus point to use.
+	// The 1x1 focus texture holds the focus distance in KM (see CS_UpdateFocus / GetDepth).
 	toFill.focusDepth = PreviousFocus();
-	toFill.focusDepthInM = toFill.focusDepth * 1000.0;          // km to m
-	toFill.focusDepthInMM = toFill.focusDepthInM * 1000.0;      // m to mm
-	toFill.pixelSizeLength = length(SharedData::BufferDim.xy);  // in pixels
-
-	// HyperFocal calculation, see https://photo.stackexchange.com/a/33898. Useful to calculate the edges of the depth of field area
-	float hyperFocal = (FocalLength * FocalLength) / (FNumber * SENSOR_SIZE);
-	float hyperFocalFocusDepthFocus = (hyperFocal * toFill.focusDepthInMM);
-	toFill.nearPlaneInMM = (hyperFocalFocusDepthFocus / (hyperFocal + (toFill.focusDepthInMM - FocalLength)));  // in mm
-	toFill.farPlaneInMM = hyperFocalFocusDepthFocus / (hyperFocal - (toFill.focusDepthInMM - FocalLength));     // in mm
+	toFill.focusDepthInM = toFill.focusDepth * 1000.0;      // km -> m
+	toFill.focusDepthInMM = toFill.focusDepthInM * 1000.0;  // m -> mm
 }
 
 // Gets the tap from the shape pointed at with the shapeSampler specified, over the angle specified, from the distance of the center in shapeRingDistance
@@ -230,19 +223,24 @@ float CalculateBlurDiscSize(FocusInfo focusInfo)
 	float pixelDepth = GetDepth(focusInfo.texcoord);
 	float pixelDepthInM = pixelDepth * 1000.0;  // in meter
 
-	// CoC (blur disc size) calculation based on [Lee2008]
-	// CoC = ((EF / Zf - F) * (abs(Z-Zf) / Z)
-	// where E is aperture size in mm, F is focal length in mm, Zf is depth of focal plane in mm, Z is depth of pixel in mm.
-	// To calculate aperture in mm, we use D = F/N, where F is focal length and N is f-number
-	// For the people getting confused:
-	// Remember element sizes are in mm, our depth sizes are in meter, so we have to divide S1 by 1000 to get from meter -> mm. We don't have to
-	// divide the elements in the 'abs(x-S1)/x' part, as the 1000.0 will then simply be muted out (as  a / (x/1000) == a * (1000/x))
-	// formula: (((f*f) / N) / ((S1/1000.0) -f)) * (abs(x - S1) / x)
-	// where f = FocalLength, N = FNumber, S1 = focusInfo.focusDepthInM, x = pixelDepthInM. In-lined to save on registers.
-	float cocInMM = (((FocalLength * FocalLength) / FNumber) / ((focusInfo.focusDepthInM / 1000.0) - FocalLength)) *
-	                (abs(pixelDepthInM - focusInfo.focusDepthInM) / (pixelDepthInM + (pixelDepthInM == 0)));
-	float toReturn = max(abs(cocInMM) * SENSOR_SIZE, 0);  // divide by sensor size to get coc in % of screen (or better: in sampler units)
-	return (pixelDepth < focusInfo.focusDepth) ? -toReturn : toReturn;
+	// CoC (blur disc DIAMETER on the sensor, in mm) based on [Lee2008]:
+	//     CoC = ((f*f) / N) / (S1 - f) * (|Z - S1| / Z)
+	// where f = FocalLength (mm), N = FNumber, S1 = focus distance, Z = pixel depth.
+	// f and S1 must be in the SAME unit for the (S1 - f) term, so S1 has to be in mm.
+	// The (|Z - S1| / Z) term is dimensionless and can stay in meters.
+	float focalPlaneOffsetInMM = max(focusInfo.focusDepthInMM - FocalLength, 1e-3f);
+	float cocDiameterInMM = (((FocalLength * FocalLength) / FNumber) / focalPlaneOffsetInMM) *
+	                        (abs(pixelDepthInM - focusInfo.focusDepthInM) / max(pixelDepthInM, 1e-6f));
+
+	// sensor-space diameter (mm) -> screen-space radius (fraction of the screen width)
+	float cocRadius = (0.5f * cocDiameterInMM) * (1.0f / SENSOR_WIDTH_MM);
+
+	// Clamp the kernel so an extreme focus setup can never blow up the gather.
+	// Equivalent of UE5's r.DOF.Kernel.MaxForegroundRadius / MaxBackgroundRadius.
+	bool isNearField = pixelDepth < focusInfo.focusDepth;
+	cocRadius = min(cocRadius, isNearField ? MaxNearCoCRadius : MaxFarCoCRadius);
+
+	return isNearField ? -cocRadius : cocRadius;
 }
 
 float GetBlurDiscRadiusFromSource(Texture2D<float> source, float2 texcoord, bool flattenToZero)
@@ -253,7 +251,10 @@ float GetBlurDiscRadiusFromSource(Texture2D<float> source, float2 texcoord, bool
 	return (flattenToZero && coc >= 0) ? 0 : abs(coc);
 }
 
-float PerformSingleValueGaussianBlur(Texture2D<float> source, float2 texcoord, float2 offsetWeight, bool flattenToZero)
+// Blurs (dilates) the near field CoC so the near layer can bleed over the geometry in front of it.
+// `direction` is float2(1,0) or float2(0,1); the step is scaled so the widest tap lands at roughly
+// the largest possible near blur radius.
+float PerformSingleValueGaussianBlur(Texture2D<float> source, float2 texcoord, float2 direction, bool flattenToZero)
 {
 	const float offset[18] = { 0.0, 1.4953705027, 3.4891992113, 5.4830312105, 7.4768683759, 9.4707125766, 11.4645656736, 13.4584295168, 15.4523059431, 17.4461967743, 19.4661974725, 21.4627427973, 23.4592916956, 25.455844494, 27.4524015179, 29.4489630909, 31.445529535, 33.4421011704 };
 	const float weight[18] = { 0.033245, 0.0659162217, 0.0636705814, 0.0598194658, 0.0546642566, 0.0485871646, 0.0420045997, 0.0353207015, 0.0288880982, 0.0229808311, 0.0177815511, 0.013382297, 0.0097960001, 0.0069746748, 0.0048301008, 0.0032534598, 0.0021315311, 0.0013582974 };
@@ -261,7 +262,8 @@ float PerformSingleValueGaussianBlur(Texture2D<float> source, float2 texcoord, f
 	float coc = GetBlurDiscRadiusFromSource(source, texcoord, flattenToZero);
 	coc *= weight[0];
 
-	float2 factorToUse = offsetWeight * NearPlaneMaxBlur * 0.8f;
+	float maxNearRadiusInPixels = MaxNearCoCRadius * cocToPixels * max(NearPlaneMaxBlur, 0.0f);
+	float2 factorToUse = direction * SharedData::BufferDim.zw * (maxNearRadiusInPixels / gaussianMaxOffset);
 	for (int i = 1; i < 18; ++i) {
 		float2 coordOffset = factorToUse * offset[i];
 		float weightSample = weight[i];
@@ -269,22 +271,13 @@ float PerformSingleValueGaussianBlur(Texture2D<float> source, float2 texcoord, f
 		coc += GetBlurDiscRadiusFromSource(source, texcoord - coordOffset, flattenToZero) * weightSample;
 	}
 
-	return saturate(coc);
-}
-
-float3 ConeOverlap(float3 fragment)
-{
-	float k = 0.4 * 0.33;
-	float2 f = float2(1 - 2 * k, k);
-	float3x3 m = float3x3(f.xyy, f.yxy, f.yyx);
-	return mul(fragment, m);
+	return min(coc, MaxNearCoCRadius);
 }
 
 float3 AccentuateWhites(float3 fragment)
 {
 	// apply small tow to the incoming fragment, so the whitepoint gets slightly lower than max.
 	// We don't need to de-tonemap since we are under HDR.
-	// fragment = pow(abs(ConeOverlap(fragment)), 1);
 	return fragment / (HighlightBoost > 0.f ? max((1.001 - (HighlightBoost * fragment)), 0.001) : 1.0f);
 }
 
@@ -310,33 +303,32 @@ float2 ApplyPetzvalMorph(float2 pointOffset, float2 texcoord)
 	return radialAxis * (radialComponent * radialScale) + tangentialAxis * (tangentialComponent * tangentialScale);
 }
 
-// calculate the sample weight based on the values specified.
-float CalculateSampleWeight(float sampleRadiusInCoC, float ringDistanceInCoC)
+// Scatter-as-gather intersection test: how much of the sample's blur disc covers this fragment.
+// Both arguments are in full-res PIXELS, so the +0.5 is the usual half-pixel anti-aliasing term
+// (cf. UE5 DOFGatherKernel.ush ComputeSampleIntersection).
+float CalculateSampleWeight(float sampleRadiusInPixels, float ringDistanceInPixels)
 {
-	return saturate(sampleRadiusInCoC - (ringDistanceInCoC * NearFarDistanceCompensation) + 0.5);
+	return saturate(sampleRadiusInPixels - (ringDistanceInPixels * NearFarDistanceCompensation) + 0.5);
 }
 
-float2 MorphPointOffsetWithAnamorphicDeltas(float2 pointOffset, float4 anamorphicFactors, float2x2 anamorphicRotationMatrix)
+// Clamps a texel coordinate to the buffer. Without this the -1/-3 offsets below underflow the
+// unsigned coordinate at the top/left edge of the screen, the out of bounds load returns 0 and the
+// min gather collapses to 0, which kills the near field blur along those edges.
+int2 ClampToBuffer(int2 coord)
 {
-	pointOffset.x = pointOffset.x * anamorphicFactors.x + pointOffset.x * anamorphicFactors.z;
-	pointOffset.y = pointOffset.y * anamorphicFactors.y + pointOffset.y * anamorphicFactors.w;
-	return mul(pointOffset, anamorphicRotationMatrix);
+	return clamp(coord, int2(0, 0), int2(SharedData::BufferDim.xy) - 1);
 }
 
 // Gathers min CoC from a horizontal range of pixels around the pixel at texcoord, for a range of -TILE_SIZE+1 to +TILE_SIZE+1.
 // returns minCoC
 float PerformTileGatherHorizontal(uint2 DTid)
 {
-	float tileSize = 1;
+	const int tileSize = 1;
 	float minCoC = 10;
-	float coc;
-	float2 offset = uint2(1, 0);
-	for (float i = 0; i <= tileSize; ++i) {
-		coc = TexCoCInput[DTid + offset].r;
-		minCoC = min(minCoC, coc);
-		coc = TexCoCInput[DTid - offset].r;
-		minCoC = min(minCoC, coc);
-		offset.x += 1;
+	int2 base = int2(DTid);
+	for (int i = 1; i <= tileSize + 1; ++i) {
+		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + int2(i, 0))].r);
+		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base - int2(i, 0))].r);
 	}
 	return minCoC;
 }
@@ -345,16 +337,12 @@ float PerformTileGatherHorizontal(uint2 DTid)
 // returns min CoC
 float PerformTileGatherVertical(uint2 DTid)
 {
-	float tileSize = 1;
+	const int tileSize = 1;
 	float minCoC = 10;
-	float coc;
-	float2 offset = uint2(0, 1);
-	for (float i = 0; i <= tileSize; ++i) {
-		coc = TexCoCInput[DTid + offset].r;
-		minCoC = min(minCoC, coc);
-		coc = TexCoCInput[DTid - offset].r;
-		minCoC = min(minCoC, coc);
-		offset.y += 1;
+	int2 base = int2(DTid);
+	for (int i = 1; i <= tileSize + 1; ++i) {
+		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + int2(0, i))].r);
+		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base - int2(0, i))].r);
 	}
 	return minCoC;
 }
@@ -362,35 +350,20 @@ float PerformTileGatherVertical(uint2 DTid)
 // Gathers the min CoC of the tile at texcoord and the 8 tiles around it.
 float PerformNeighborTileGather(uint2 DTid)
 {
+	const int tileSizeX = 1;
+	const int tileSizeY = 1;
 	float minCoC = 10;
-	float tileSizeX = 1;
-	float tileSizeY = 1;
+	int2 base = int2(DTid);
 	// tile is TILE_SIZE*2+1 wide. So add that and substract that to get to neighbor tile right/left.
 	// 3x3 around center.
-	uint2 baseOffset = uint2(tileSizeX * 2 + 1, tileSizeY * 2 + 1);
-	for (float i = -1; i < 2; i++) {
-		for (float j = -1; j < 2; j++) {
-			uint2 coordOffset = uint2(baseOffset.x * i, baseOffset.y * j);
-			float coc = TexCoCInput[DTid + coordOffset].r;
-			minCoC = min(minCoC, coc);
+	int2 baseOffset = int2(tileSizeX * 2 + 1, tileSizeY * 2 + 1);
+	for (int i = -1; i < 2; i++) {
+		for (int j = -1; j < 2; j++) {
+			int2 coordOffset = int2(baseOffset.x * i, baseOffset.y * j);
+			minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + coordOffset)].r);
 		}
 	}
 	return minCoC;
-}
-
-// Performs a small blur to the out of focus areas using a lower amount of rings. Additionally it calculates the luma of the fragment into alpha
-// and makes sure the fragment post-blur has the maximum luminosity from the taken samples to preserve harder edges on highlights.
-// In:	blurInfo, the pre-calculated disc blur information from the vertex shader.
-// 		source, the source buffer to read RGBA data from
-// Out: RGBA fragment that's the result of the disc-blur on the pixel at texcoord in source. A contains luma of RGB.
-float4 PerformPreDiscBlur(DiscBlurInfo blurInfo, Texture2D source)
-{
-	const float radiusFactor = 1.0 / max(blurInfo.numberOfRings, 1);
-	const float pointsFirstRing = max(blurInfo.numberOfRings - 3, 2);  // each ring has a multiple of this value of sample points.
-
-	float4 fragment = source.SampleLevel(LinearSampler, blurInfo.texcoord, 0);
-	fragment.rgb = AccentuateWhites(fragment.rgb);
-	return fragment;
 }
 
 float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 DTid, float2 offsetWeight)
@@ -403,9 +376,8 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	float fragmentLuma = Color::RGBToLuminance(fragment.rgb);
 	float4 originalFragment = fragment;
 	float absoluteCoC = abs(coc);
-	float lengthPixelSize = length(float2(SharedData::BufferDim.z, SharedData::BufferDim.w));
 
-	if (absoluteCoC < 0.2 || PostBlurSmoothing < 0.01 || fragmentLuma < 0.3) {
+	if (absoluteCoC < onePixelInCoC || PostBlurSmoothing < 0.01 || fragmentLuma < 0.3) {
 		// in focus or postblur smoothing isn't enabled or not really a highlight, ignore
 		return fragment;
 	}
@@ -417,13 +389,13 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 		float2 coordOffset = factorToUse * offset[i];
 		float weightSample = weight[i];
 		float sampleCoC = TexCoCInput.SampleLevel(LinearSampler, texcoord + coordOffset, 0).r;
-		float maskFactor = abs(sampleCoC) < 0.2;
+		float maskFactor = abs(sampleCoC) < onePixelInCoC;
 
 		fragment += (originalFragment * maskFactor * weightSample) +
 		            (source.SampleLevel(LinearSampler, texcoord + coordOffset, 0) * (1 - maskFactor) * weightSample);
 
 		sampleCoC = TexCoCInput.SampleLevel(LinearSampler, texcoord - coordOffset, 0).r;
-		maskFactor = abs(sampleCoC) < 0.2;
+		maskFactor = abs(sampleCoC) < onePixelInCoC;
 
 		fragment += (originalFragment * maskFactor * weightSample) +
 		            (source.SampleLevel(LinearSampler, texcoord - coordOffset, 0) * (1 - maskFactor) * weightSample);
@@ -469,74 +441,69 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	[numthreads(8, 8, 1)] void CS_CoCGaussian1(uint2 DTid : SV_DispatchThreadID)
 {
 	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(2.0f * SharedData::BufferDim.z, 0.0f), true);
+	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(1.0f, 0.0f), true);
 }
 
 [numthreads(8, 8, 1)] void CS_CoCGaussian2(uint2 DTid : SV_DispatchThreadID) {
 	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(0.0f, 2.0f * SharedData::BufferDim.w), false);
+	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(0.0f, 1.0f), false);
 }
 
+	// Pre pass: half res downsample of the scene colour with the highlight boost applied.
 	[numthreads(8, 8, 1)] void CS_Blur(uint2 DTid : SV_DispatchThreadID)
 {
-	DiscBlurInfo blurInfo;
-	blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	blurInfo.numberOfRings = round(BlurQuality);
-	blurInfo.farPlaneMaxBlurInPixels = (FarPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.nearPlaneMaxBlurInPixels = (NearPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.cocFactorPerPixel = blurPixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;  // not needed for near plane.
-	// Pre Blur
-	float4 color = PerformPreDiscBlur(blurInfo, TexColor);
-	RWTexOut[DTid] = color;
+	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+	float4 fragment = TexColor.SampleLevel(LinearSampler, uv, 0);
+	fragment.rgb = AccentuateWhites(fragment.rgb);
+	RWTexOut[DTid] = fragment;
 }
 
 [numthreads(8, 8, 1)] void CS_FarBlur(uint2 DTid : SV_DispatchThreadID) {
-	DiscBlurInfo blurInfo;
-	blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	blurInfo.numberOfRings = round(BlurQuality);
-	blurInfo.farPlaneMaxBlurInPixels = (FarPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.nearPlaneMaxBlurInPixels = (NearPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.cocFactorPerPixel = blurPixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;  // not needed for near plane.
+	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+	float numberOfRings = round(BlurQuality);
 
 	const float pointsFirstRing = 7;  // each ring has a multiple of this value of sample points.
 	float4 color = TexColor[DTid];
 	float colorRadius = TexCoCInput[2 * DTid].r;
 	// we'll not process near plane fragments as they're processed in a separate pass.
-	if (colorRadius < blurPixelSizeLength || blurInfo.farPlaneMaxBlurInPixels <= 0) {
+	if (colorRadius < onePixelInCoC || FarPlaneMaxBlur <= 0) {
 		// near plane fragment, will be done in near plane pass
 		RWTexOut[DTid] = color;
 		return;
 	}
+
+	// gather kernel radius for this fragment, in full-res pixels
+	float kernelRadiusInPixels = colorRadius * FarPlaneMaxBlur * cocToPixels;
+
 	float bokehBusyFactorToUse = saturate(1.0 - BokehBusyFactor);  // use the busy factor as an edge bias on the blur, not the highlights
-	float4 average = float4(color.rgb * colorRadius * bokehBusyFactorToUse, bokehBusyFactorToUse);
+	float4 average = float4(color.rgb * bokehBusyFactorToUse, bokehBusyFactorToUse);
 	float2 pointOffset = float2(0, 0);
-	float2 ringRadiusDeltaCoords = (SharedData::BufferDim.zw * blurInfo.farPlaneMaxBlurInPixels * colorRadius) / blurInfo.numberOfRings;
+	float2 ringRadiusDeltaCoords = (SharedData::BufferDim.zw * kernelRadiusInPixels) / numberOfRings;
 	float2 currentRingRadiusCoords = ringRadiusDeltaCoords;
-	float cocPerRing = (colorRadius * FarPlaneMaxBlur) / blurInfo.numberOfRings;
-	float ringDistance = 0;
+	float pixelsPerRing = kernelRadiusInPixels / numberOfRings;
+	float ringDistanceInPixels = 0;
 	float pointsOnRing = pointsFirstRing;
 	bool useShape = HighlightShape > 0;
 	float4 shapeTap = float4(1.0f, 1.0f, 1.0f, 1.0f);
-	for (float ringIndex = 0; ringIndex < blurInfo.numberOfRings; ringIndex++) {
+	for (float ringIndex = 0; ringIndex < numberOfRings; ringIndex++) {
 		float anglePerPoint = Math::TAU / pointsOnRing;
 		float angle = anglePerPoint;
-		float ringWeight = lerp(ringIndex / blurInfo.numberOfRings, 1, bokehBusyFactorToUse);
-		ringDistance += cocPerRing;
-		float shapeRingDistance = ((ringIndex + 1) / blurInfo.numberOfRings) * 0.5f;
+		float ringWeight = lerp(ringIndex / numberOfRings, 1, bokehBusyFactorToUse);
+		ringDistanceInPixels += pixelsPerRing;
+		float shapeRingDistance = ((ringIndex + 1) / numberOfRings) * 0.5f;
 		for (float pointNumber = 0; pointNumber < pointsOnRing; pointNumber++) {
 			sincos(angle, pointOffset.y, pointOffset.x);
 			// shapeLuma is in Alpha
 			if (useShape)
 				shapeTap = GetShapeTap(angle, shapeRingDistance);
-			else
-				pointOffset = ApplyPetzvalMorph(pointOffset, blurInfo.texcoord);
-			float2 tapCoords = float2(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords));
+			pointOffset = ApplyPetzvalMorph(pointOffset, texcoord);
+			float2 tapCoords = float2(texcoord + (pointOffset * currentRingRadiusCoords));
 			float sampleRadius = TexCoCInput.SampleLevel(LinearSampler, tapCoords, 0).r;
 			float4 tap = 0;
-			float weight = (sampleRadius >= 0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur, ringDistance) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
+			float weight = (sampleRadius >= 0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur * cocToPixels, ringDistanceInPixels) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
 			// adjust the weight for samples which are in front of the fragment, as they have to get their weight boosted so we don't see edges bleeding through.
 			// as otherwise they'll get a weight that's too low relatively to the pixels sampled from the plane the fragment is in.The 3.0 value is empirically determined.
-			weight *= (1.0 + min(FarPlaneMaxBlur, 3.0f) * saturate(colorRadius - sampleRadius));
+			weight *= (1.0 + min(FarPlaneMaxBlur, 3.0f) * saturate((colorRadius - sampleRadius) * cocToPixels));
 			if (weight > 0)
 				tap = TexColor.SampleLevel(LinearSampler, tapCoords, 0);
 			average.rgb += tap.rgb * weight;
@@ -552,19 +519,14 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 
 	[numthreads(8, 8, 1)] void CS_NearBlur(uint2 DTid : SV_DispatchThreadID)
 {
-	DiscBlurInfo blurInfo;
-	blurInfo.texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	blurInfo.numberOfRings = round(BlurQuality);
-	blurInfo.farPlaneMaxBlurInPixels = (FarPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.nearPlaneMaxBlurInPixels = (NearPlaneMaxBlur * 0.01f) * invBlurPixelSizeLength;
-	blurInfo.cocFactorPerPixel = blurPixelSizeLength * blurInfo.farPlaneMaxBlurInPixels;  // not needed for near plane.
+	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
 
 	float4 color = TexColor[DTid];
-	// r contains blurred CoC, g contains original CoC. Original is negative.
-	float2 colorRadii = float2(TexCoCBlurredInput[DTid], TexCoCInput[2 * DTid]);
-	float colorRadiusToUse = colorRadii.r;
+	// blurred (dilated, always positive) near CoC and the original signed CoC for this fragment.
+	float blurredCoC = TexCoCBlurredInput[DTid];
+	float pixelCoC = TexCoCInput[2 * DTid];
 
-	if (colorRadii.r <= blurPixelSizeLength) {
+	if (blurredCoC <= onePixelInCoC || NearPlaneMaxBlur <= 0) {
 		// the blurred CoC value is still 0, we'll never end up with a pixel that has a different value than color, so abort now by
 		// returning the color we already read.
 		color.a = 0;
@@ -573,14 +535,13 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	}
 
 	// use one extra ring as undersampling is really prominent in near-camera objects.
-	float numberOfRings = max(blurInfo.numberOfRings, 1) + 1;
+	float numberOfRings = max(round(BlurQuality), 1) + 1;
 	float pointsFirstRing = 7;
-	// luma is stored in alpha
 	float bokehBusyFactorToUse = saturate(1.0 - BokehBusyFactor);  // use the busy factor as an edge bias on the blur, not the highlights
-	float4 average = float4(color.rgb * colorRadiusToUse * bokehBusyFactorToUse, bokehBusyFactorToUse);
+	float4 average = float4(color.rgb * bokehBusyFactorToUse, bokehBusyFactorToUse);
 	float2 pointOffset = float2(0, 0);
-	float nearPlaneBlurInPixels = blurInfo.nearPlaneMaxBlurInPixels * colorRadiusToUse;
-	float2 ringRadiusDeltaCoords = float2(SharedData::BufferDim.z, SharedData::BufferDim.w) * (nearPlaneBlurInPixels / (numberOfRings - 1));
+	float kernelRadiusInPixels = blurredCoC * NearPlaneMaxBlur * cocToPixels;
+	float2 ringRadiusDeltaCoords = SharedData::BufferDim.zw * (kernelRadiusInPixels / (numberOfRings - 1));
 	float pointsOnRing = pointsFirstRing;
 	float2 currentRingRadiusCoords = ringRadiusDeltaCoords;
 	bool useShape = HighlightShape > 0;
@@ -596,23 +557,28 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 			// shapeLuma is in Alpha
 			if (useShape)
 				shapeTap = GetShapeTap(angle, shapeRingDistance);
-			else
-				pointOffset = ApplyPetzvalMorph(pointOffset, blurInfo.texcoord);
-			float2 tapCoords = float2(blurInfo.texcoord + (pointOffset * currentRingRadiusCoords));
-			float4 tap = TexColor.SampleLevel(LinearSampler, tapCoords, 0);
-			// r contains blurred CoC, g contains original CoC. Original can be negative
-			float2 sampleRadii = float2(TexCoCBlurredInput.SampleLevel(LinearSampler, tapCoords, 0), TexCoCInput.SampleLevel(LinearSampler, tapCoords, 0));
-			float blurredSampleRadius = sampleRadii.r;
+			pointOffset = ApplyPetzvalMorph(pointOffset, texcoord);
+			float2 tapCoords = float2(texcoord + (pointOffset * currentRingRadiusCoords));
 			float sampleWeight = weight * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
-			average.rgb += tap.rgb * sampleWeight;
-			average.w += sampleWeight;
+			if (sampleWeight > 0) {
+				float4 tap = TexColor.SampleLevel(LinearSampler, tapCoords, 0);
+				average.rgb += tap.rgb * sampleWeight;
+				average.w += sampleWeight;
+			}
 			angle += anglePerPoint;
 		}
 		pointsOnRing += pointsFirstRing;
 		currentRingRadiusCoords += ringRadiusDeltaCoords;
 	}
 	average.rgb /= (average.w + (average.w == 0));
-	float alpha = saturate((min(2.5, NearPlaneMaxBlur) + 0.4) * (colorRadiusToUse > 0.1 ? (colorRadii.g <= 0 ? 2 : 1) * colorRadiusToUse : max(colorRadiusToUse, -colorRadii.g)));
+
+	// Opacity of the near field layer. Expressed in pixels so it is independent of the CoC scale.
+	float blurredCoCInPixels = blurredCoC * cocToPixels;
+	float pixelCoCInPixels = -pixelCoC * cocToPixels;  // > 0 when this fragment is itself in the near field
+	float coverage = (blurredCoCInPixels > 1.0f) ? ((pixelCoC <= 0) ? 2.0f : 1.0f) * blurredCoCInPixels :
+	                                               max(blurredCoCInPixels, pixelCoCInPixels);
+	float alpha = saturate((min(2.5, NearPlaneMaxBlur) + 0.4) * coverage * (1.0f / nearFullOpacityPixels));
+
 	color.rgb = average.rgb;
 	color.a = alpha;
 	RWTexOut[DTid] = color;
@@ -645,9 +611,9 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	float pixelCoC = TexCoCInput[DTid].r;
 	// multiply with far plane max blur so if we need to have 0 blur we get full res
 	float realCoC = pixelCoC * saturate(FarPlaneMaxBlur);
-	// all CoC's > 0.1 are full far fragment, below that, we're going to blend. This avoids shimmering far plane without the need of a
-	// 'magic' number to boost up the alpha.
-	float blendFactor = (realCoC > 0.1) ? 1 : smoothstep(0, 1, (realCoC / 0.1));
+	// Fully use the (half res) far field once the blur disc is bigger than a couple of pixels, and
+	// blend below that so leaving the focal plane doesn't pop in resolution.
+	float blendFactor = smoothstep(0.0f, 1.0f, saturate(realCoC / (2.0f * onePixelInCoC)));
 	float4 color;
 	color = lerp(originalFragment, farFragment, blendFactor);
 	color.rgb = lerp(color.rgb, nearFragment.rgb, nearFragment.a * (NearPlaneMaxBlur != 0));
@@ -668,8 +634,9 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	float4 color = PerformFullFragmentGaussianBlur(TexPostSmoothInput, uv, DTid, float2(0.0, (SharedData::BufferDim.w)));
 	float4 originalColor = TexColor[DTid];
 
-	float coc = abs(TexCoCInput[DTid].r);
-	color.rgb = lerp(originalColor.rgb, color.rgb, saturate(coc < length(SharedData::BufferDim.zw) ? 0 : 4 * coc));
+	// Ramp the smoothed result back in over the first few pixels of blur so in-focus geometry is untouched.
+	float cocInPixels = abs(TexCoCInput[DTid].r) * cocToPixels;
+	color.rgb = lerp(originalColor.rgb, color.rgb, saturate(cocInPixels < 1.0f ? 0.0f : cocInPixels * 0.25f));
 
 	RWTexOut[DTid] = float4(color.rgb, 1.0f);
 }
