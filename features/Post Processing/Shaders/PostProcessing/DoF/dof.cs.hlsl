@@ -118,18 +118,22 @@
 RWTexture2D<float4> RWTexOut : register(u0);
 RWTexture2D<float> RWFocus : register(u1);
 RWTexture2D<float> RWTexCoC : register(u2);
+RWTexture2D<float4> RWTexCoCTile : register(u3);
 
 SamplerState LinearSampler : register(s0);
 
 Texture2D<float4> TexColor : register(t0);
 Texture2D<float> TexPreviousFocus : register(t1);
 Texture2D<float> DepthTexture : register(t2);
-Texture2D<float> TexCoCInput : register(t3);
-Texture2D<float> TexCoCBlurredInput : register(t4);
+Texture2D<float> TexCoCInput : register(t3);         // full res CoC
+Texture2D<float> TexCoCBlurredInput : register(t4);  // half res, dilated+blurred near CoC (positive)
 Texture2D<float4> TexFarBlur : register(t5);
 Texture2D<float4> TexNearBlur : register(t6);
 Texture2D<float4> TexPostSmoothInput : register(t7);
 Texture2D<float4> TexBokehShape : register(t8);
+Texture2D<float> TexCoCHalf : register(t9);           // half res CoC (bilateral downsample of t3)
+Texture2D<float4> TexCoCTile : register(t10);         // per tile (min, max) signed CoC
+Texture2D<float4> TexCoCTileDilated : register(t11);  // (min, max) dilated over the max near blur reach
 
 cbuffer DoFCB : register(b1)
 {
@@ -151,11 +155,21 @@ cbuffer DoFCB : register(b1)
 	uint AutoFocus;
 	float MaxNearCoCRadius;
 	float MaxFarCoCRadius;
-	uint pad;
+	uint TileDilateRadius;  // in tiles
+	uint2 CoCTileDim;
+	uint2 HalfResDim;
+	float NearGaussianReachPx;  // kept <= TileDilateRadius * tile size so the near early out is exact
+	float3 pad;
 };
 
 // Sensor width the FocalLength control is expressed for (35mm full frame).
 #define SENSOR_WIDTH_MM 36.0f
+
+// One CoC tile covers exactly one gather thread group: 8x8 half res pixels == 16x16 full res pixels.
+// Because of that a gather group can take a *group uniform* (scalar) early out branch from a single
+// tile fetch indexed by SV_GroupID, which is where most of the win comes from.
+#define COC_TILE_SIZE_HALFRES 8
+#define COC_TILE_SIZE_FULLRES 16
 
 // --------------------------------------------------------------------------------------------
 // CoC units
@@ -173,6 +187,9 @@ static const float onePixelInCoC = SharedData::BufferDim.z;  // "less than a pix
 static const float gaussianMaxOffset = 33.4421011704f;
 // Near CoC radius (in pixels) at which the near field layer becomes fully opaque.
 static const float nearFullOpacityPixels = 8.0f;
+// A tile whose CoC spread is below this fraction of its max needs no depth layer resolving, so the
+// gather can drop a ring (cf. UE5 DOFGatherTileSuggest.ush FAST_GATHERING_COC_ERROR).
+static const float fastGatherCoCError = 0.05f;
 
 struct FocusInfo
 {
@@ -251,26 +268,48 @@ float GetBlurDiscRadiusFromSource(Texture2D<float> source, float2 texcoord, bool
 	return (flattenToZero && coc >= 0) ? 0 : abs(coc);
 }
 
-// Blurs (dilates) the near field CoC so the near layer can bleed over the geometry in front of it.
-// `direction` is float2(1,0) or float2(0,1); the step is scaled so the widest tap lands at roughly
-// the largest possible near blur radius.
-float PerformSingleValueGaussianBlur(Texture2D<float> source, float2 texcoord, float2 direction, bool flattenToZero)
+// Near field magnitude (always >= 0) of the tile covering `texcoord`. The tile buffer is 1/16 res,
+// the linear sampler upsamples it and the 18 tap gaussian below smooths the remaining blockiness.
+float GetNearCoCFromTile(float2 texcoord)
 {
-	const float offset[18] = { 0.0, 1.4953705027, 3.4891992113, 5.4830312105, 7.4768683759, 9.4707125766, 11.4645656736, 13.4584295168, 15.4523059431, 17.4461967743, 19.4661974725, 21.4627427973, 23.4592916956, 25.455844494, 27.4524015179, 29.4489630909, 31.445529535, 33.4421011704 };
-	const float weight[18] = { 0.033245, 0.0659162217, 0.0636705814, 0.0598194658, 0.0546642566, 0.0485871646, 0.0420045997, 0.0353207015, 0.0288880982, 0.0229808311, 0.0177815511, 0.013382297, 0.0097960001, 0.0069746748, 0.0048301008, 0.0032534598, 0.0021315311, 0.0013582974 };
+	return max(-TexCoCTile.SampleLevel(LinearSampler, texcoord, 0).x, 0.0f);
+}
 
-	float coc = GetBlurDiscRadiusFromSource(source, texcoord, flattenToZero);
-	coc *= weight[0];
+static const float gaussianOffset[18] = { 0.0, 1.4953705027, 3.4891992113, 5.4830312105, 7.4768683759, 9.4707125766, 11.4645656736, 13.4584295168, 15.4523059431, 17.4461967743, 19.4661974725, 21.4627427973, 23.4592916956, 25.455844494, 27.4524015179, 29.4489630909, 31.445529535, 33.4421011704 };
+static const float gaussianWeight[18] = { 0.033245, 0.0659162217, 0.0636705814, 0.0598194658, 0.0546642566, 0.0485871646, 0.0420045997, 0.0353207015, 0.0288880982, 0.0229808311, 0.0177815511, 0.013382297, 0.0097960001, 0.0069746748, 0.0048301008, 0.0032534598, 0.0021315311, 0.0013582974 };
 
-	float maxNearRadiusInPixels = MaxNearCoCRadius * cocToPixels * max(NearPlaneMaxBlur, 0.0f);
-	float2 factorToUse = direction * SharedData::BufferDim.zw * (maxNearRadiusInPixels / gaussianMaxOffset);
+// Step (in UV) so the widest tap of the gaussian lands at the near field reach. This is what
+// actually dilates the near field over the geometry in front of it. The reach is computed CPU side
+// and clamped to the tile dilation radius so CS_NearBlur's group uniform early out can never skip a
+// pixel this gaussian would have reached.
+float2 GetNearCoCGaussianStep(float2 direction)
+{
+	return direction * SharedData::BufferDim.zw * (NearGaussianReachPx / gaussianMaxOffset);
+}
+
+// Pass 1: dilate the per tile near CoC horizontally.
+float PerformNearCoCGaussianFromTile(float2 texcoord, float2 direction)
+{
+	float coc = GetNearCoCFromTile(texcoord) * gaussianWeight[0];
+	float2 step = GetNearCoCGaussianStep(direction);
 	for (int i = 1; i < 18; ++i) {
-		float2 coordOffset = factorToUse * offset[i];
-		float weightSample = weight[i];
-		coc += GetBlurDiscRadiusFromSource(source, texcoord + coordOffset, flattenToZero) * weightSample;
-		coc += GetBlurDiscRadiusFromSource(source, texcoord - coordOffset, flattenToZero) * weightSample;
+		float2 coordOffset = step * gaussianOffset[i];
+		coc += GetNearCoCFromTile(texcoord + coordOffset) * gaussianWeight[i];
+		coc += GetNearCoCFromTile(texcoord - coordOffset) * gaussianWeight[i];
 	}
+	return min(coc, MaxNearCoCRadius);
+}
 
+// Pass 2: same, vertically, over the (already positive) result of pass 1.
+float PerformNearCoCGaussian(Texture2D<float> source, float2 texcoord, float2 direction)
+{
+	float coc = source.SampleLevel(LinearSampler, texcoord, 0).x * gaussianWeight[0];
+	float2 step = GetNearCoCGaussianStep(direction);
+	for (int i = 1; i < 18; ++i) {
+		float2 coordOffset = step * gaussianOffset[i];
+		coc += source.SampleLevel(LinearSampler, texcoord + coordOffset, 0).x * gaussianWeight[i];
+		coc += source.SampleLevel(LinearSampler, texcoord - coordOffset, 0).x * gaussianWeight[i];
+	}
 	return min(coc, MaxNearCoCRadius);
 }
 
@@ -311,59 +350,22 @@ float CalculateSampleWeight(float sampleRadiusInPixels, float ringDistanceInPixe
 	return saturate(sampleRadiusInPixels - (ringDistanceInPixels * NearFarDistanceCompensation) + 0.5);
 }
 
-// Clamps a texel coordinate to the buffer. Without this the -1/-3 offsets below underflow the
-// unsigned coordinate at the top/left edge of the screen, the out of bounds load returns 0 and the
-// min gather collapses to 0, which kills the near field blur along those edges.
+// Clamps a texel coordinate to the buffer.
 int2 ClampToBuffer(int2 coord)
 {
 	return clamp(coord, int2(0, 0), int2(SharedData::BufferDim.xy) - 1);
 }
 
-// Gathers min CoC from a horizontal range of pixels around the pixel at texcoord, for a range of -TILE_SIZE+1 to +TILE_SIZE+1.
-// returns minCoC
-float PerformTileGatherHorizontal(uint2 DTid)
+int2 ClampToHalfRes(int2 coord)
 {
-	const int tileSize = 1;
-	float minCoC = 10;
-	int2 base = int2(DTid);
-	for (int i = 1; i <= tileSize + 1; ++i) {
-		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + int2(i, 0))].r);
-		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base - int2(i, 0))].r);
-	}
-	return minCoC;
+	return clamp(coord, int2(0, 0), int2(HalfResDim) - 1);
 }
 
-// Gathers min CoC from a vertical range of pixels around the pixel at texcoord from the high-res focus plane, for a range of -TILE_SIZE+1 to +TILE_SIZE+1.
-// returns min CoC
-float PerformTileGatherVertical(uint2 DTid)
+// Fetches the (min, max) signed CoC of the tile a gather group lives in. `Gid` is SV_GroupID, which
+// maps 1:1 onto the tile grid, so the result is group uniform and the branches using it are scalar.
+float2 LoadTileCoCMinMax(Texture2D<float4> tiles, uint2 Gid)
 {
-	const int tileSize = 1;
-	float minCoC = 10;
-	int2 base = int2(DTid);
-	for (int i = 1; i <= tileSize + 1; ++i) {
-		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + int2(0, i))].r);
-		minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base - int2(0, i))].r);
-	}
-	return minCoC;
-}
-
-// Gathers the min CoC of the tile at texcoord and the 8 tiles around it.
-float PerformNeighborTileGather(uint2 DTid)
-{
-	const int tileSizeX = 1;
-	const int tileSizeY = 1;
-	float minCoC = 10;
-	int2 base = int2(DTid);
-	// tile is TILE_SIZE*2+1 wide. So add that and substract that to get to neighbor tile right/left.
-	// 3x3 around center.
-	int2 baseOffset = int2(tileSizeX * 2 + 1, tileSizeY * 2 + 1);
-	for (int i = -1; i < 2; i++) {
-		for (int j = -1; j < 2; j++) {
-			int2 coordOffset = int2(baseOffset.x * i, baseOffset.y * j);
-			minCoC = min(minCoC, TexCoCInput[ClampToBuffer(base + coordOffset)].r);
-		}
-	}
-	return minCoC;
+	return tiles[min(Gid, CoCTileDim - 1)].xy;
 }
 
 float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 DTid, float2 offsetWeight)
@@ -415,7 +417,6 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 		return;
 
 	float2 uv = (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	float4 color = TexColor[DTid];
 
 	FocusInfo focusInfo;
 	focusInfo.texcoord = uv;
@@ -425,48 +426,132 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	RWTexCoC[DTid] = coc;
 }
 
-[numthreads(8, 8, 1)] void CS_CoCTile1(uint2 DTid : SV_DispatchThreadID) {
-	RWTexCoC[DTid] = PerformTileGatherHorizontal(DTid);
+// Flattens the full res CoC into one (min, max) per 16x16 pixel tile. Uses GatherRed so each
+// iteration pulls 4 texels; the whole pass reads the full res CoC exactly once.
+[numthreads(8, 8, 1)] void CS_CoCTileFlatten(uint2 DTid : SV_DispatchThreadID) {
+	if (any(DTid >= CoCTileDim))
+		return;
+
+	int2 base = int2(DTid) * COC_TILE_SIZE_FULLRES;
+	float2 minMax = float2(1e4f, -1e4f);
+	[loop] for (int y = 0; y < COC_TILE_SIZE_FULLRES; y += 2)
+	{
+		[loop] for (int x = 0; x < COC_TILE_SIZE_FULLRES; x += 2)
+		{
+			float2 uv = (float2(base + int2(x, y)) + 1.0f) * SharedData::BufferDim.zw;
+			float4 g = TexCoCInput.GatherRed(LinearSampler, uv);
+			minMax.x = min(minMax.x, min(min(g.x, g.y), min(g.z, g.w)));
+			minMax.y = max(minMax.y, max(max(g.x, g.y), max(g.z, g.w)));
+		}
+	}
+	RWTexCoCTile[DTid] = float4(minMax, 0.0f, 0.0f);
 }
 
-	[numthreads(8, 8, 1)] void CS_CoCTile2(uint2 DTid : SV_DispatchThreadID)
+	// Separable min/max dilation of the tile buffer over the largest near blur reach, so the near
+	// gather can take a group uniform early out. Separable costs 2*(2R+1) instead of (2R+1)^2; it
+	// over dilates the corners of the square, which is conservative and therefore safe.
+	[numthreads(8, 8, 1)] void CS_CoCTileDilateH(uint2 DTid : SV_DispatchThreadID)
 {
-	RWTexCoC[DTid] = PerformTileGatherVertical(DTid);
+	if (any(DTid >= CoCTileDim))
+		return;
+
+	int radius = (int)TileDilateRadius;
+	int maxX = (int)CoCTileDim.x - 1;
+	float2 minMax = float2(1e4f, -1e4f);
+	[loop] for (int i = -radius; i <= radius; ++i)
+	{
+		float2 s = TexCoCTile[uint2(clamp((int)DTid.x + i, 0, maxX), DTid.y)].xy;
+		minMax.x = min(minMax.x, s.x);
+		minMax.y = max(minMax.y, s.y);
+	}
+	RWTexCoCTile[DTid] = float4(minMax, 0.0f, 0.0f);
 }
 
-[numthreads(8, 8, 1)] void CS_CoCTileNeighbor(uint2 DTid : SV_DispatchThreadID) {
-	RWTexCoC[DTid] = PerformNeighborTileGather(DTid);
+[numthreads(8, 8, 1)] void CS_CoCTileDilateV(uint2 DTid : SV_DispatchThreadID) {
+	if (any(DTid >= CoCTileDim))
+		return;
+
+	int radius = (int)TileDilateRadius;
+	int maxY = (int)CoCTileDim.y - 1;
+	float2 minMax = float2(1e4f, -1e4f);
+	[loop] for (int i = -radius; i <= radius; ++i)
+	{
+		float2 s = TexCoCTile[uint2(DTid.x, clamp((int)DTid.y + i, 0, maxY))].xy;
+		minMax.x = min(minMax.x, s.x);
+		minMax.y = max(minMax.y, s.y);
+	}
+	RWTexCoCTile[DTid] = float4(minMax, 0.0f, 0.0f);
 }
 
 	[numthreads(8, 8, 1)] void CS_CoCGaussian1(uint2 DTid : SV_DispatchThreadID)
 {
 	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(1.0f, 0.0f), true);
+	RWTexCoC[DTid] = PerformNearCoCGaussianFromTile(uv, float2(1.0f, 0.0f));
 }
 
 [numthreads(8, 8, 1)] void CS_CoCGaussian2(uint2 DTid : SV_DispatchThreadID) {
 	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	RWTexCoC[DTid] = PerformSingleValueGaussianBlur(TexCoCInput, uv, float2(0.0f, 1.0f), false);
+	RWTexCoC[DTid] = PerformNearCoCGaussian(TexCoCBlurredInput, uv, float2(0.0f, 1.0f));
 }
 
-	// Pre pass: half res downsample of the scene colour with the highlight boost applied.
-	[numthreads(8, 8, 1)] void CS_Blur(uint2 DTid : SV_DispatchThreadID)
+	// Half res downsample of the scene colour and the CoC.
+	//
+	// The CoC is averaged (matching what the bilinear taps in the gather kernels used to see when
+	// they read the full res CoC), and the colour is averaged with a bilateral weight keyed off that
+	// CoC so a sharp foreground fragment cannot be smeared into a blurry background texel.
+	[numthreads(8, 8, 1)] void CS_Downsample(uint2 DTid : SV_DispatchThreadID)
 {
-	float2 uv = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
-	float4 fragment = TexColor.SampleLevel(LinearSampler, uv, 0);
-	fragment.rgb = AccentuateWhites(fragment.rgb);
-	RWTexOut[DTid] = fragment;
+	if (any(DTid >= HalfResDim))
+		return;
+
+	int2 base = int2(DTid) * 2;
+	float3 tapColor[4];
+	float tapCoC[4];
+	[unroll] for (int i = 0; i < 4; ++i)
+	{
+		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1));
+		tapColor[i] = TexColor[p].rgb;
+		tapCoC[i] = TexCoCInput[p].r;
+	}
+
+	float outCoC = 0.25f * (tapCoC[0] + tapCoC[1] + tapCoC[2] + tapCoC[3]);
+
+	float3 sum = 0.0f;
+	float weightSum = 0.0f;
+	[unroll] for (int j = 0; j < 4; ++j)
+	{
+		// full rejection once a sample's blur disc is 4px away from the texel's representative one
+		float w = max(saturate(1.0f - abs(tapCoC[j] - outCoC) * cocToPixels * 0.25f), 1.0f / 16.0f);
+		sum += tapColor[j] * w;
+		weightSum += w;
+	}
+
+	RWTexOut[DTid] = float4(AccentuateWhites(sum / weightSum), 1.0f);
+	RWTexCoC[DTid] = outCoC;
 }
 
-[numthreads(8, 8, 1)] void CS_FarBlur(uint2 DTid : SV_DispatchThreadID) {
-	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
+[numthreads(8, 8, 1)] void CS_FarBlur(uint2 DTid : SV_DispatchThreadID, uint2 Gid : SV_GroupID) {
+	float4 color = TexColor[DTid];
+
+	// Group uniform early out: nothing in this tile has a far field blur disc worth gathering.
+	float2 tileCoC = LoadTileCoCMinMax(TexCoCTile, Gid);
+	if (tileCoC.y < onePixelInCoC || FarPlaneMaxBlur <= 0) {
+		RWTexOut[DTid] = color;
+		return;
+	}
+
 	float numberOfRings = round(BlurQuality);
+	// Group uniform fast gather: a tile with a near constant CoC has no depth layers to resolve, so
+	// one ring less is indistinguishable and saves ~1/4 of the taps at the default quality.
+	if ((tileCoC.y - max(tileCoC.x, 0.0f)) < tileCoC.y * fastGatherCoCError)
+		numberOfRings = max(numberOfRings - 1.0f, 2.0f);
+
+	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
 
 	const float pointsFirstRing = 7;  // each ring has a multiple of this value of sample points.
-	float4 color = TexColor[DTid];
-	float colorRadius = TexCoCInput[2 * DTid].r;
+	float colorRadius = TexCoCHalf[DTid].r;
 	// we'll not process near plane fragments as they're processed in a separate pass.
-	if (colorRadius < onePixelInCoC || FarPlaneMaxBlur <= 0) {
+	if (colorRadius < onePixelInCoC) {
 		// near plane fragment, will be done in near plane pass
 		RWTexOut[DTid] = color;
 		return;
@@ -498,7 +583,7 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 				shapeTap = GetShapeTap(angle, shapeRingDistance);
 			pointOffset = ApplyPetzvalMorph(pointOffset, texcoord);
 			float2 tapCoords = float2(texcoord + (pointOffset * currentRingRadiusCoords));
-			float sampleRadius = TexCoCInput.SampleLevel(LinearSampler, tapCoords, 0).r;
+			float sampleRadius = TexCoCHalf.SampleLevel(LinearSampler, tapCoords, 0).r;
 			float4 tap = 0;
 			float weight = (sampleRadius >= 0) * ringWeight * CalculateSampleWeight(sampleRadius * FarPlaneMaxBlur * cocToPixels, ringDistanceInPixels) * (shapeTap.a > 0.01 ? 1.0f : 0.0f);
 			// adjust the weight for samples which are in front of the fragment, as they have to get their weight boosted so we don't see edges bleeding through.
@@ -517,16 +602,28 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 	RWTexOut[DTid] = color;
 }
 
-	[numthreads(8, 8, 1)] void CS_NearBlur(uint2 DTid : SV_DispatchThreadID)
+	[numthreads(8, 8, 1)] void CS_NearBlur(uint2 DTid : SV_DispatchThreadID, uint2 Gid : SV_GroupID)
 {
+	float4 color = TexColor[DTid];
+
+	// Group uniform early out. The near kernel radius comes from the dilated+blurred near CoC, so the
+	// test has to use the tile buffer dilated over that same reach or we would skip pixels the
+	// gaussian legitimately reaches.
+	float2 tileCoC = LoadTileCoCMinMax(TexCoCTileDilated, Gid);
+	float nearReach = max(-tileCoC.x, 0.0f);
+	if (nearReach <= onePixelInCoC || NearPlaneMaxBlur <= 0) {
+		color.a = 0;
+		RWTexOut[DTid] = color;
+		return;
+	}
+
 	float2 texcoord = 2.0f * (DTid.xy + 0.5f) * SharedData::BufferDim.zw;
 
-	float4 color = TexColor[DTid];
-	// blurred (dilated, always positive) near CoC and the original signed CoC for this fragment.
+	// blurred (dilated, always positive) near CoC and the signed CoC for this fragment.
 	float blurredCoC = TexCoCBlurredInput[DTid];
-	float pixelCoC = TexCoCInput[2 * DTid];
+	float pixelCoC = TexCoCHalf[DTid];
 
-	if (blurredCoC <= onePixelInCoC || NearPlaneMaxBlur <= 0) {
+	if (blurredCoC <= onePixelInCoC) {
 		// the blurred CoC value is still 0, we'll never end up with a pixel that has a different value than color, so abort now by
 		// returning the color we already read.
 		color.a = 0;
@@ -586,16 +683,16 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 
 [numthreads(8, 8, 1)] void CS_TentFilter(uint2 DTid : SV_DispatchThreadID) {
 	float4 average;
-	uint4 offset = uint4(1, 1, -1, 0);
-	average = TexColor[DTid - offset.xy];
-	average += TexColor[DTid - offset.wy] * 2;
-	average += TexColor[DTid - offset.zy];
-	average += TexColor[DTid + offset.zw] * 2;
+	int2 base = int2(DTid);
+	average = TexColor[ClampToHalfRes(base + int2(-1, -1))];
+	average += TexColor[ClampToHalfRes(base + int2(0, -1))] * 2;
+	average += TexColor[ClampToHalfRes(base + int2(1, -1))];
+	average += TexColor[ClampToHalfRes(base + int2(-1, 0))] * 2;
 	average += TexColor[DTid] * 4;
-	average += TexColor[DTid + offset.xw] * 2;
-	average += TexColor[DTid + offset.zy];
-	average += TexColor[DTid + offset.wy] * 2;
-	average += TexColor[DTid + offset.xy];
+	average += TexColor[ClampToHalfRes(base + int2(1, 0))] * 2;
+	average += TexColor[ClampToHalfRes(base + int2(-1, 1))];
+	average += TexColor[ClampToHalfRes(base + int2(0, 1))] * 2;
+	average += TexColor[ClampToHalfRes(base + int2(1, 1))];
 	average /= 16;
 	RWTexOut[DTid] = average;
 }

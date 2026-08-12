@@ -77,9 +77,10 @@ void DoF::DrawSettings()
 		BUFFER_VIEWER_NODE(texPreFocus, 64.0f)
 
 		BUFFER_VIEWER_NODE(texCoC, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCHalf, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCTile, debugRescale)
 		BUFFER_VIEWER_NODE(texCoCTileTmp, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileTmp2, debugRescale)
-		BUFFER_VIEWER_NODE(texCoCTileNeighbor, debugRescale)
+		BUFFER_VIEWER_NODE(texCoCTileDilated, debugRescale)
 		BUFFER_VIEWER_NODE(texCoCBlur1, debugRescale)
 		BUFFER_VIEWER_NODE(texCoCBlur2, debugRescale)
 
@@ -173,26 +174,18 @@ void DoF::SetupResources()
 		texBlurredFiltered->CreateSRV(srvDesc);
 		texBlurredFiltered->CreateUAV(uavDesc);
 
-		texDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		texDescHalf.Format = DXGI_FORMAT_R32_FLOAT;
-		srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		// CoC buffers. R16_FLOAT is plenty: the CoC is a screen width fraction clamped to ~0.025, so
+		// half float resolves it to better than 1/40th of a pixel.
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R16_FLOAT;
+		texDescHalf.Format = DXGI_FORMAT_R16_FLOAT;
 
 		texCoC = eastl::make_unique<Texture2D>(texDesc);
 		texCoC->CreateSRV(srvDesc);
 		texCoC->CreateUAV(uavDesc);
 
-		texCoCTileTmp = eastl::make_unique<Texture2D>(texDesc);
-		texCoCTileTmp->CreateSRV(srvDesc);
-		texCoCTileTmp->CreateUAV(uavDesc);
-
-		texCoCTileTmp2 = eastl::make_unique<Texture2D>(texDesc);
-		texCoCTileTmp2->CreateSRV(srvDesc);
-		texCoCTileTmp2->CreateUAV(uavDesc);
-
-		texCoCTileNeighbor = eastl::make_unique<Texture2D>(texDesc);
-		texCoCTileNeighbor->CreateSRV(srvDesc);
-		texCoCTileNeighbor->CreateUAV(uavDesc);
+		texCoCHalf = eastl::make_unique<Texture2D>(texDescHalf);
+		texCoCHalf->CreateSRV(srvDesc);
+		texCoCHalf->CreateUAV(uavDesc);
 
 		texCoCBlur1 = eastl::make_unique<Texture2D>(texDescHalf);
 		texCoCBlur1->CreateSRV(srvDesc);
@@ -202,6 +195,33 @@ void DoF::SetupResources()
 		texCoCBlur2->CreateSRV(srvDesc);
 		texCoCBlur2->CreateUAV(uavDesc);
 
+		// CoC tile buffers: one texel per 16x16 full res pixels, holding (min, max) signed CoC.
+		// RGBA16F rather than RG16F because only the RGBA/R/RG32 families are guaranteed to support
+		// typed UAV stores on D3D11 feature level 11_0 hardware.
+		D3D11_TEXTURE2D_DESC texDescTile = texDesc;
+		texDescTile.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		texDescTile.Width = std::max(1u, (texDesc.Width / 2 + 7) / 8);
+		texDescTile.Height = std::max(1u, (texDesc.Height / 2 + 7) / 8);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDescTile = srvDesc;
+		srvDescTile.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDescTile = uavDesc;
+		uavDescTile.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+		texCoCTile = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTile->CreateSRV(srvDescTile);
+		texCoCTile->CreateUAV(uavDescTile);
+
+		texCoCTileTmp = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTileTmp->CreateSRV(srvDescTile);
+		texCoCTileTmp->CreateUAV(uavDescTile);
+
+		texCoCTileDilated = eastl::make_unique<Texture2D>(texDescTile);
+		texCoCTileDilated->CreateSRV(srvDescTile);
+		texCoCTileDilated->CreateUAV(uavDescTile);
+
+		// The 1x1 focus texture stores a distance in km and wants the full float range.
+		texDesc.Format = srvDesc.Format = uavDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		texDesc.Width = 1;
 		texDesc.Height = 1;
 
@@ -240,12 +260,12 @@ void DoF::ClearShaderCache()
 	const auto shaderPtrs = std::array{
 		&UpdateFocusCS,
 		&CalculateCoCCS,
-		&CoCTile1CS,
-		&CoCTile2CS,
-		&CoCTileNeighbor,
+		&CoCTileFlattenCS,
+		&CoCTileDilateHCS,
+		&CoCTileDilateVCS,
 		&CoCGaussian1CS,
 		&CoCGaussian2CS,
-		&BlurCS,
+		&DownsampleCS,
 		&FarBlurCS,
 		&NearBlurCS,
 		&TentFilterCS,
@@ -277,12 +297,12 @@ void DoF::CompileComputeShaders()
 		shaderInfos = {
 			{ &UpdateFocusCS, "dof.cs.hlsl", {}, "CS_UpdateFocus" },
 			{ &CalculateCoCCS, "dof.cs.hlsl", {}, "CS_CalculateCoC" },
-			{ &CoCTile1CS, "dof.cs.hlsl", {}, "CS_CoCTile1" },
-			{ &CoCTile2CS, "dof.cs.hlsl", {}, "CS_CoCTile2" },
-			{ &CoCTileNeighbor, "dof.cs.hlsl", {}, "CS_CoCTileNeighbor" },
+			{ &CoCTileFlattenCS, "dof.cs.hlsl", {}, "CS_CoCTileFlatten" },
+			{ &CoCTileDilateHCS, "dof.cs.hlsl", {}, "CS_CoCTileDilateH" },
+			{ &CoCTileDilateVCS, "dof.cs.hlsl", {}, "CS_CoCTileDilateV" },
 			{ &CoCGaussian1CS, "dof.cs.hlsl", {}, "CS_CoCGaussian1" },
 			{ &CoCGaussian2CS, "dof.cs.hlsl", {}, "CS_CoCGaussian2" },
-			{ &BlurCS, "dof.cs.hlsl", {}, "CS_Blur" },
+			{ &DownsampleCS, "dof.cs.hlsl", {}, "CS_Downsample" },
 			{ &FarBlurCS, "dof.cs.hlsl", {}, "CS_FarBlur" },
 			{ &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" },
 			{ &TentFilterCS, "dof.cs.hlsl", {}, "CS_TentFilter" },
@@ -413,6 +433,20 @@ void DoF::Draw(TextureInfo& inout_tex)
 	}
 	debugFocusPlane = manualFocus;
 	state->BeginPerfEvent("Depth of Field");
+
+	const uint halfResX = std::max(1u, (uint)res.x / 2);
+	const uint halfResY = std::max(1u, (uint)res.y / 2);
+	const uint tileDimX = std::max(1u, (halfResX + 7) / 8);
+	const uint tileDimY = std::max(1u, (halfResY + 7) / 8);
+
+	// The near gather's kernel radius comes from the gaussian dilated near CoC, whose reach is
+	// MaxNearCoCRadius * width * NearPlaneMaxBlur. The tile dilation has to cover at least that or
+	// the group uniform early out would skip pixels the gaussian legitimately reaches, so the reach
+	// is clamped back to whatever the (bounded) dilation radius can actually guarantee.
+	const float wantNearRadiusPx = std::max(settings.MaxNearCoCRadius, 1e-4f) * res.x * std::max(nearBlur, 0.0f);
+	const uint tileDilateRadius = std::min(48u, (uint)std::ceil(wantNearRadiusPx / 16.0f) + 1u);
+	const float nearGaussianReachPx = std::min(wantNearRadiusPx, (float)(tileDilateRadius - 1u) * 16.0f);
+
 	DoFCB dofData = {
 		.TransitionSpeed = settings.TransitionSpeed,
 		.FocusCoord = settings.FocusCoord,
@@ -431,12 +465,18 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.PetzvalStrength = settings.PetzvalStrength,
 		.AutoFocus = autoFocus,
 		.MaxNearCoCRadius = std::max(settings.MaxNearCoCRadius, 1e-4f),
-		.MaxFarCoCRadius = std::max(settings.MaxFarCoCRadius, 1e-4f)
+		.MaxFarCoCRadius = std::max(settings.MaxFarCoCRadius, 1e-4f),
+		.TileDilateRadius = tileDilateRadius,
+		.CoCTileDimX = tileDimX,
+		.CoCTileDimY = tileDimY,
+		.HalfResDimX = halfResX,
+		.HalfResDimY = halfResY,
+		.NearGaussianReachPx = nearGaussianReachPx
 	};
 	dofCB->Update(dofData);
 
-	std::array<ID3D11ShaderResourceView*, 9> srvs = { inout_tex.srv, texPreFocus->srv.get(), depthSRV, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	std::array<ID3D11UnorderedAccessView*, 3> uavs = { texOutput->uav.get(), texFocus->uav.get(), texCoC->uav.get() };
+	std::array<ID3D11ShaderResourceView*, 12> srvs = {};
+	std::array<ID3D11UnorderedAccessView*, 4> uavs = {};
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
 	auto cb = dofCB->CB();
 	auto resetViews = [&]() {
@@ -451,8 +491,10 @@ void DoF::Draw(TextureInfo& inout_tex)
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	uint dispatchWidth = ((uint)res.x + 7) >> 3;
 	uint dispatchHeight = ((uint)res.y + 7) >> 3;
-	uint dispatchWidthBlur = ((uint)(res.x / 2) + 7) >> 3;
-	uint dispatchHeightBlur = ((uint)(res.y / 2) + 7) >> 3;
+	uint dispatchWidthBlur = (halfResX + 7) >> 3;
+	uint dispatchHeightBlur = (halfResY + 7) >> 3;
+	uint dispatchWidthTile = (tileDimX + 7) >> 3;
+	uint dispatchHeightTile = (tileDimY + 7) >> 3;
 
 	// Update Focus
 	{
@@ -491,51 +533,72 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	resetViews();
 
-	// CoC Tile
+	// Half res downsample of colour + CoC (bilateral). Everything the gather kernels read is half res
+	// from here on.
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
-		state->BeginPerfEvent("CoC Tile");
+		globals::profiler->BeginPass("PostProcessing::DoF::Downsample");
+		state->BeginPerfEvent("Downsample");
+		srvs.at(0) = inout_tex.srv;
 		srvs.at(3) = texCoC->srv.get();
-		uavs.at(2) = texCoCTileTmp->uav.get();
+		uavs.at(0) = texPreBlurred->uav.get();
+		uavs.at(2) = texCoCHalf->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(CoCTile1CS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidth, dispatchHeight, 1);
-
-		resetViews();
-
-		srvs.at(3) = texCoCTileTmp->srv.get();
-		uavs.at(2) = texCoCTileTmp2->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(CoCTile2CS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidth, dispatchHeight, 1);
-
-		resetViews();
-
-		srvs.at(3) = texCoCTileTmp2->srv.get();
-		uavs.at(2) = texCoCTileNeighbor->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(CoCTileNeighbor.get(), nullptr, 0);
-		context->Dispatch(dispatchWidth, dispatchHeight, 1);
+		context->CSSetShader(DownsampleCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
 
 		resetViews();
 		state->EndPerfEvent();
 		globals::profiler->EndPass();
 	}
 
-	// CoC Gaussian Blur (coc uses srv3 and uav2)
+	// CoC tile flatten + separable min/max dilation, at 1/16 of the full resolution.
+	{
+		globals::profiler->BeginPass("PostProcessing::DoF::CoCTile");
+		state->BeginPerfEvent("CoC Tile");
+		srvs.at(3) = texCoC->srv.get();
+		uavs.at(3) = texCoCTile->uav.get();
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+		context->CSSetShader(CoCTileFlattenCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthTile, dispatchHeightTile, 1);
+
+		resetViews();
+
+		srvs.at(10) = texCoCTile->srv.get();
+		uavs.at(3) = texCoCTileTmp->uav.get();
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+		context->CSSetShader(CoCTileDilateHCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthTile, dispatchHeightTile, 1);
+
+		resetViews();
+
+		srvs.at(10) = texCoCTileTmp->srv.get();
+		uavs.at(3) = texCoCTileDilated->uav.get();
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+
+		context->CSSetShader(CoCTileDilateVCS.get(), nullptr, 0);
+		context->Dispatch(dispatchWidthTile, dispatchHeightTile, 1);
+
+		resetViews();
+		state->EndPerfEvent();
+		globals::profiler->EndPass();
+	}
+
+	// CoC Gaussian Blur: dilates the per tile near CoC into the smooth near field mask.
 	{
 		globals::profiler->BeginPass("PostProcessing::DoF::CoCBlur");
 		state->BeginPerfEvent("CoC Gaussian Blur");
-		srvs.at(3) = texCoCTileNeighbor->srv.get();
+		srvs.at(10) = texCoCTile->srv.get();
 		uavs.at(2) = texCoCBlur1->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -546,7 +609,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 		resetViews();
 
-		srvs.at(3) = texCoCBlur1->srv.get();
+		srvs.at(4) = texCoCBlur1->srv.get();
 		uavs.at(2) = texCoCBlur2->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
@@ -560,30 +623,13 @@ void DoF::Draw(TextureInfo& inout_tex)
 		globals::profiler->EndPass();
 	}
 
-	// Blur
+	// Gather
 	{
-		globals::profiler->BeginPass("PostProcessing::DoF::PreBlur");
-		state->BeginPerfEvent("Pre Blur");
-		srvs.at(0) = inout_tex.srv;
-		srvs.at(3) = texCoC->srv.get();
-		srvs.at(4) = texCoCBlur2->srv.get();
-		uavs.at(0) = texPreBlurred->uav.get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->CSSetShader(BlurCS.get(), nullptr, 0);
-		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
-
-		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
-
 		globals::profiler->BeginPass("PostProcessing::DoF::FarBlur");
 		state->BeginPerfEvent("Far Blur");
 		srvs.at(0) = texPreBlurred->srv.get();
-		srvs.at(3) = texCoC->srv.get();
-		srvs.at(4) = texCoCBlur2->srv.get();
+		srvs.at(9) = texCoCHalf->srv.get();
+		srvs.at(10) = texCoCTile->srv.get();
 		if (owner)
 			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
 		uavs.at(0) = texFarBlurred->uav.get();
@@ -601,8 +647,9 @@ void DoF::Draw(TextureInfo& inout_tex)
 		globals::profiler->BeginPass("PostProcessing::DoF::NearBlur");
 		state->BeginPerfEvent("Near Blur");
 		srvs.at(0) = texFarBlurred->srv.get();
-		srvs.at(3) = texCoCTileNeighbor->srv.get();
 		srvs.at(4) = texCoCBlur2->srv.get();
+		srvs.at(9) = texCoCHalf->srv.get();
+		srvs.at(11) = texCoCTileDilated->srv.get();
 		if (owner)
 			srvs.at(8) = owner->bokehResources.GetShapeSRV(std::clamp(settings.HighlightShape - 1, 0, BokehResources::NUM_BUILTIN_SHAPES - 1));
 		uavs.at(0) = texNearBlurred->uav.get();

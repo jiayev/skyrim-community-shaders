@@ -59,8 +59,16 @@ struct DoF : public PostProcessFeature
 		uint AutoFocus;
 		float MaxNearCoCRadius;
 		float MaxFarCoCRadius;
-		uint pad;
+		uint TileDilateRadius;
+		// packs as HLSL `uint2 CoCTileDim; uint2 HalfResDim;`
+		uint CoCTileDimX;
+		uint CoCTileDimY;
+		uint HalfResDimX;
+		uint HalfResDimY;
+		float NearGaussianReachPx;
+		float pad[3];
 	};
+	static_assert(sizeof(DoFCB) == 112, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
 
 	eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 
@@ -74,21 +82,22 @@ struct DoF : public PostProcessFeature
 	eastl::unique_ptr<Texture2D> texFocus = nullptr;
 	eastl::unique_ptr<Texture2D> texPreFocus = nullptr;
 	eastl::unique_ptr<Texture2D> texCoC = nullptr;
+	eastl::unique_ptr<Texture2D> texCoCHalf = nullptr;
+	eastl::unique_ptr<Texture2D> texCoCTile = nullptr;
 	eastl::unique_ptr<Texture2D> texCoCTileTmp = nullptr;
-	eastl::unique_ptr<Texture2D> texCoCTileTmp2 = nullptr;
-	eastl::unique_ptr<Texture2D> texCoCTileNeighbor = nullptr;
+	eastl::unique_ptr<Texture2D> texCoCTileDilated = nullptr;
 	eastl::unique_ptr<Texture2D> texCoCBlur1 = nullptr;
 	eastl::unique_ptr<Texture2D> texCoCBlur2 = nullptr;
 	// Bokeh shapes are provided by PostProcessing::bokehResources (shared with LensFlare)
 
 	winrt::com_ptr<ID3D11ComputeShader> UpdateFocusCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> CalculateCoCCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> CoCTile1CS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> CoCTile2CS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> CoCTileNeighbor = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> CoCTileFlattenCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> CoCTileDilateHCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> CoCTileDilateVCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> CoCGaussian1CS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> CoCGaussian2CS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> BlurCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> DownsampleCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> FarBlurCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> NearBlurCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> TentFilterCS = nullptr;
