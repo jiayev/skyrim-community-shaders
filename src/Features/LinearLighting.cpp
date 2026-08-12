@@ -129,7 +129,7 @@ void LinearLighting::SetupResources()
 
 void LinearLighting::Prepass()
 {
-	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	dirLightMult = 1.0f;
 	if (!settings.enableLinearLighting || isMainLoadingMenu)
 		return;
@@ -172,7 +172,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		data.enableLinearLighting = false;
 		return data;
 	}
-	bool isMainLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	auto data = PerFrameData{};
 	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
 	data.enableACEScg = settings.enableACEScg && settings.enableLinearLighting && !isMainLoadingMenu;
