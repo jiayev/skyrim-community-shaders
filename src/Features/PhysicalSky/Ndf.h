@@ -212,6 +212,16 @@ struct HpLightingSettings
 	float scatterSourceCurvePow = 1.f;
 	float powderIntensity = 0.35f;
 	uint32_t lightSteps = 6;
+	// 0 = dual-lobe Henyey-Greenstein (default, uses the eccentricity sliders)
+	// 1 = approximate Mie (HG + Draine fit); physically parameterised, so the
+	//     eccentricity sliders have no effect on it.
+	uint32_t phaseModel = 0;
+	// 0 = legacy scalar in-scattering integral
+	// 1 = Frostbite energy-conserving per-channel albedo * (1 - transmittance)
+	uint32_t scatterIntegration = 0;
+	// Fades the secondary (light) march step budget down to one step with view
+	// distance. 0 disables the LOD, 1 applies it fully.
+	float lightStepDistanceLod = 1.f;
 };
 
 struct HpPhiFwdSettings

@@ -351,7 +351,7 @@ struct PhysicalSky final : public Feature
 		float scatterSourceCurvePow;
 		float powderIntensity;
 		uint lightSteps;
-		uint _padPrimarySteps;
+		uint cloudPhaseModel;
 		float phiFwdIntensity;
 		float phiFwdDepthPow;
 		float phiFwdDepthBias;
@@ -377,7 +377,9 @@ struct PhysicalSky final : public Feature
 		float temporalAccumulationFactor;
 		float cloudHistoryInvalidation;
 		uint ghostingReduction;
-		uint padding[3];
+		uint scatterIntegration;
+		float lightStepDistanceLod;
+		uint padding;
 	};
 
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;

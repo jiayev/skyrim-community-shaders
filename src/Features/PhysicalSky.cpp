@@ -163,7 +163,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	scatterSourceODScale,
 	scatterSourceCurvePow,
 	powderIntensity,
-	lightSteps)
+	lightSteps,
+	phaseModel,
+	scatterIntegration,
+	lightStepDistanceLod)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpPhiFwdSettings,
@@ -653,6 +656,9 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
 		uint32_t minLightStep = 1, maxLightStep = 16;
 		ImGui::SliderScalar(T(TKEY("light_steps"), "Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
+		ImGui::SliderFloat(T(TKEY("light_step_distance_lod"), "Light Step Distance LOD"), &lighting.lightStepDistanceLod, 0.f, 1.f, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("light_step_distance_lod_desc"), "Fades the light-march step budget down to a single step with view distance, matching the erosion mip ramp (3 km to 100 km). 0 disables the LOD."));
 		ImGui::SliderFloat(T(TKEY("temporal_accumulation"), "Temporal Accumulation"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 		ImGui::Checkbox(T(TKEY("ghosting_reduction"), "Ghosting Reduction"), &settings.ghostingReduction);
 	}
@@ -716,6 +722,22 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
 	{
+		{
+			static const char* phaseModelNames[] = { "Dual-Lobe HG", "Approximate Mie" };
+			int phaseModel = static_cast<int>(std::min(lighting.phaseModel, 1u));
+			if (ImGui::Combo(T(TKEY("cloud_phase_model"), "Phase Model"), &phaseModel, phaseModelNames, IM_ARRAYSIZE(phaseModelNames)))
+				lighting.phaseModel = static_cast<uint32_t>(phaseModel);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("cloud_phase_model_desc"), "Dual-Lobe HG: the original two Henyey-Greenstein lobes driven by the eccentricity sliders below.\nApproximate Mie: an HG + Draine numerical fit of Mie scattering for a water droplet, which reproduces the forward peak, fogbow and glory. It is physically parameterised, so the forward and backward eccentricity sliders do not affect it."));
+		}
+		{
+			static const char* scatterIntegrationNames[] = { "Legacy", "Energy Conserving" };
+			int scatterIntegration = static_cast<int>(std::min(lighting.scatterIntegration, 1u));
+			if (ImGui::Combo(T(TKEY("cloud_scatter_integration"), "Scatter Integration"), &scatterIntegration, scatterIntegrationNames, IM_ARRAYSIZE(scatterIntegrationNames)))
+				lighting.scatterIntegration = static_cast<uint32_t>(scatterIntegration);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("cloud_scatter_integration_desc"), "Legacy: scalar 1 - exp(-sigma_s * ds) with a fixed 0.999 albedo, driven by luminance extinction.\nEnergy Conserving: the analytical per-channel form albedo * (1 - transmittance). Matches the coloured transmittance instead of a luminance-collapsed approximation; may need Scatter Source OD Scale retuning."));
+		}
 		ImGui::ColorEdit3(T(TKEY("scatter_tint"), "Scatter Tint"), &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		ImGui::SliderFloat(T(TKEY("forward_eccentricity"), "Forward Eccentricity"), &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("backward_eccentricity"), "Backward Eccentricity"), &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
