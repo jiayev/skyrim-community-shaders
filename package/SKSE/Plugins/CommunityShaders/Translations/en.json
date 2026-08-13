@@ -1267,7 +1267,7 @@
     "feature.post_processing.do_f.sparse_highlight_contrast": "Sparse Highlight Contrast",
     "feature.post_processing.do_f.sparse_highlight_threshold": "Sparse Highlight Threshold",
     "feature.post_processing.do_f.sparse_highlights": "Sparse Highlight Splatting",
-    "feature.post_processing.do_f.sparse_highlights_desc": "Draws isolated bright pixels as continuous aperture splats. Candidate count and rasterized area are capped by a fixed per-frame budget.",
+    "feature.post_processing.do_f.sparse_highlights_desc": "Draws isolated bright pixels as continuous aperture splats. Work is capped by a fixed per-frame budget.",
     "feature.post_processing.do_f.target_focus": "Target Focus",
     "feature.post_processing.do_f.target_focus_focal_length": "Target Focus Focal Length",
     "feature.post_processing.do_f.transition_speed": "Transition Speed",
