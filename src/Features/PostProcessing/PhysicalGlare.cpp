@@ -6,6 +6,21 @@
 #include "State.h"
 #include "Util.h"
 
+namespace
+{
+	uint NormaliseFFTResolution(int resolution)
+	{
+		const uint clamped = std::clamp(static_cast<uint>(std::max(resolution, 0)), PhysicalGlare::FFT_MIN, PhysicalGlare::FFT_MAX);
+		// Preserve at least the requested detail for hand-edited configurations.
+		return std::bit_ceil(clamped);
+	}
+
+	uint GetFFTVariant(uint resolution)
+	{
+		return static_cast<uint>(std::countr_zero(resolution) - std::countr_zero(PhysicalGlare::FFT_MIN));
+	}
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalGlare::Settings,
 	ThresholdEV,
@@ -288,8 +303,8 @@ void PhysicalGlare::DrawSettings()
 	}
 
 	if (ImGui::CollapsingHeader(T("feature.post_processing.physical_glare.debug", "Debug"))) {
-		if (texGlareResult)
-			ImGui::Image(texGlareResult->srv.get(), { 256.f, 256.f });
+		if (texGlarePacked)
+			ImGui::Image(texGlarePacked->srv.get(), { 256.f, 256.f });
 	}
 }
 
@@ -312,6 +327,7 @@ void PhysicalGlare::CreateFFTTextures(uint resolution)
 {
 	currentFFTResolution = resolution;
 	psfDirty = true;
+	apertureDirty = true;
 
 	D3D11_TEXTURE2D_DESC texDesc = {
 		.Width = resolution,
@@ -352,26 +368,20 @@ void PhysicalGlare::CreateFFTTextures(uint resolution)
 		texPSF_FFT[ch]->CreateUAV(uavDesc);
 	}
 
-	// Glare result and history (RGBA16F, FFT resolution)
-	D3D11_TEXTURE2D_DESC glareDesc = texDesc;
-	glareDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-	srvDesc.Format = glareDesc.Format;
-	uavDesc.Format = glareDesc.Format;
+	texApertureBase = eastl::make_unique<Texture2D>(texDesc);
+	texApertureBase->CreateSRV(srvDesc);
+	texApertureBase->CreateUAV(uavDesc);
 
-	texGlareResult = eastl::make_unique<Texture2D>(glareDesc);
-	texGlareResult->CreateSRV(srvDesc);
-	texGlareResult->CreateUAV(uavDesc);
+	// Pack the three R32F IFFT real components without precision loss so the
+	// full-resolution upsample can filter RGB in one operation.
+	D3D11_TEXTURE2D_DESC packedDesc = texDesc;
+	packedDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	srvDesc.Format = packedDesc.Format;
+	uavDesc.Format = packedDesc.Format;
 
-	texGlarePrev = eastl::make_unique<Texture2D>(glareDesc);
-	texGlarePrev->CreateSRV(srvDesc);
-	texGlarePrev->CreateUAV(uavDesc);
-
-	// Clear glare history to zero — D3D11 USAGE_DEFAULT textures have undefined content
-	// which may contain NaN/Inf, poisoning the temporal blend permanently
-	auto context = globals::d3d::context;
-	const FLOAT clearColor[4] = { 0.f, 0.f, 0.f, 0.f };
-	context->ClearUnorderedAccessViewFloat(texGlareResult->uav.get(), clearColor);
-	context->ClearUnorderedAccessViewFloat(texGlarePrev->uav.get(), clearColor);
+	texGlarePacked = eastl::make_unique<Texture2D>(packedDesc);
+	texGlarePacked->CreateSRV(srvDesc);
+	texGlarePacked->CreateUAV(uavDesc);
 }
 
 void PhysicalGlare::SetupResources()
@@ -386,7 +396,7 @@ void PhysicalGlare::SetupResources()
 
 	logger::debug("PhysicalGlare: Creating FFT textures...");
 	{
-		currentFFTResolution = std::clamp((uint)settings.FFTResolution, FFT_MIN, FFT_MAX);
+		currentFFTResolution = NormaliseFFTResolution(settings.FFTResolution);
 		CreateFFTTextures(currentFFTResolution);
 	}
 
@@ -449,7 +459,7 @@ void PhysicalGlare::SetupResources()
 void PhysicalGlare::ClearShaderCache()
 {
 	auto const shaderPtrs = std::array{
-		&thresholdCS, &apertureCS, &psfCS, &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS, &multiplyCS, &compositeCS
+		&thresholdCS, &apertureCS, &tearFilmCS, &psfCS, &multiplyCS, &packCS, &compositeCS
 	};
 
 	for (auto shader : shaderPtrs)
@@ -457,6 +467,17 @@ void PhysicalGlare::ClearShaderCache()
 			(*shader)->Release();
 			shader->detach();
 		}
+
+	for (auto shaders : { &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS }) {
+		for (auto& shader : *shaders) {
+			if (shader) {
+				shader->Release();
+				shader.detach();
+			}
+		}
+	}
+	psfDirty = true;
+	apertureDirty = true;
 
 	CompileComputeShaders();
 }
@@ -471,18 +492,23 @@ void PhysicalGlare::CompileComputeShaders()
 		std::string entry = "main";
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &thresholdCS, "threshold.cs.hlsl", {}, "CS_Threshold" },
-			{ &apertureCS, "aperture.cs.hlsl", {}, "CS_Aperture" },
-			{ &psfCS, "psf.cs.hlsl", {}, "CS_ChromaticBlur" },
-			{ &fftRowCS, "fft.cs.hlsl", { { "ROW_PASS", "" }, { "FORWARD", "" } }, "CS_FFT" },
-			{ &fftColCS, "fft.cs.hlsl", { { "COL_PASS", "" }, { "FORWARD", "" } }, "CS_FFT" },
-			{ &fftRowInvCS, "fft.cs.hlsl", { { "ROW_PASS", "" }, { "INVERSE", "" } }, "CS_FFT" },
-			{ &fftColInvCS, "fft.cs.hlsl", { { "COL_PASS", "" }, { "INVERSE", "" } }, "CS_FFT" },
-			{ &multiplyCS, "multiply.cs.hlsl", {}, "CS_Multiply" },
-			{ &compositeCS, "composite.cs.hlsl", {}, "CS_Composite" },
-		};
+	std::vector<ShaderCompileInfo> shaderInfos = {
+		{ &thresholdCS, "threshold.cs.hlsl", {}, "CS_Threshold" },
+		{ &apertureCS, "aperture.cs.hlsl", {}, "CS_Aperture" },
+		{ &tearFilmCS, "tearfilm.cs.hlsl", {}, "CS_TearFilm" },
+		{ &psfCS, "psf.cs.hlsl", {}, "CS_ChromaticBlur" },
+		{ &multiplyCS, "multiply.cs.hlsl", {}, "CS_Multiply" },
+		{ &packCS, "pack.cs.hlsl", {}, "CS_Pack" },
+		{ &compositeCS, "composite.cs.hlsl", {}, "CS_Composite" },
+	};
+
+	static constexpr std::array<const char*, FFT_VARIANT_COUNT> fftSizes = { "128", "256", "512", "1024" };
+	for (uint i = 0; i < FFT_VARIANT_COUNT; ++i) {
+		shaderInfos.push_back({ &fftRowCS[i], "fft.cs.hlsl", { { "ROW_PASS", "" }, { "FORWARD", "" }, { "FFT_SIZE", fftSizes[i] } }, "CS_FFT" });
+		shaderInfos.push_back({ &fftColCS[i], "fft.cs.hlsl", { { "COL_PASS", "" }, { "FORWARD", "" }, { "FFT_SIZE", fftSizes[i] } }, "CS_FFT" });
+		shaderInfos.push_back({ &fftRowInvCS[i], "fft.cs.hlsl", { { "ROW_PASS", "" }, { "INVERSE", "" }, { "FFT_SIZE", fftSizes[i] } }, "CS_FFT" });
+		shaderInfos.push_back({ &fftColInvCS[i], "fft.cs.hlsl", { { "COL_PASS", "" }, { "INVERSE", "" }, { "FFT_SIZE", fftSizes[i] } }, "CS_FFT" });
+	}
 
 	for (auto& info : shaderInfos) {
 		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\PhysicalGlare") / info.filename;
@@ -493,46 +519,86 @@ void PhysicalGlare::CompileComputeShaders()
 
 bool PhysicalGlare::NeedsPSFRegeneration() const
 {
+	const bool pupilMode = settings.ApertureMode == 1;
+	const bool lensMode = !pupilMode;
+
 	return psfDirty ||
 	       cachedPSFParams.ApertureMode != settings.ApertureMode ||
-	       cachedPSFParams.ApertureBlades != settings.ApertureBlades ||
-	       cachedPSFParams.ApertureRotation != settings.ApertureRotation ||
-	       cachedPSFParams.ScatterStrength != settings.ScatterStrength ||
-	       cachedPSFParams.FFTResolution != settings.FFTResolution ||
-	       cachedPSFParams.EnableEyelashes != settings.EnableEyelashes ||
-	       cachedPSFParams.EyelashCount != settings.EyelashCount ||
-	       cachedPSFParams.EyelashLength != settings.EyelashLength ||
-	       cachedPSFParams.EyelashCurvature != settings.EyelashCurvature ||
+	       (lensMode && cachedPSFParams.ApertureBlades != settings.ApertureBlades) ||
+	       (lensMode && cachedPSFParams.ApertureRotation != settings.ApertureRotation) ||
+	       (pupilMode && cachedPSFParams.ScatterStrength != settings.ScatterStrength) ||
+	       cachedPSFParams.FFTResolution != static_cast<int>(currentFFTResolution) ||
+	       (pupilMode && cachedPSFParams.EnableEyelashes != settings.EnableEyelashes) ||
+	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCount != settings.EyelashCount) ||
+	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashLength != settings.EyelashLength) ||
+	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCurvature != settings.EyelashCurvature) ||
 	       cachedPSFParams.FresnelExponent != settings.FresnelExponent ||
 	       cachedPSFParams.ChromaticSpread != settings.ChromaticSpread ||
 	       cachedPSFParams.FStop != settings.FStop ||
 	       cachedPSFParams.PSFSharpness != settings.PSFSharpness ||
 	       cachedPSFParams.PSFNoiseFloor != settings.PSFNoiseFloor ||
-	       cachedPSFParams.ParticleCount != settings.ParticleCount ||
-	       cachedPSFParams.ParticleSize != settings.ParticleSize ||
-	       cachedPSFParams.GratingCount != settings.GratingCount ||
-	       cachedPSFParams.GratingStrength != settings.GratingStrength ||
-	       cachedPSFParams.TearFilmStrength != settings.TearFilmStrength ||
-	       cachedPSFParams.TearFilmSpeed != settings.TearFilmSpeed ||
-	       cachedPSFParams.TearFilmComplexity != settings.TearFilmComplexity ||
-	       cachedPSFParams.SutureBranches != settings.SutureBranches ||
-	       cachedPSFParams.SutureStrength != settings.SutureStrength ||
-	       cachedPSFParams.SutureWidth != settings.SutureWidth ||
-	       cachedPSFParams.StarburstCount != settings.StarburstCount ||
-	       cachedPSFParams.StarburstStrength != settings.StarburstStrength ||
-	       cachedPSFParams.StarburstIrregularity != settings.StarburstIrregularity ||
-	       cachedPSFParams.DustCount != settings.DustCount ||
-	       cachedPSFParams.DustSize != settings.DustSize ||
-	       cachedPSFParams.BladeRoughnessFreq != settings.BladeRoughnessFreq ||
-	       cachedPSFParams.BladeRoughnessAmp != settings.BladeRoughnessAmp ||
-	       cachedPSFParams.ScratchCount != settings.ScratchCount ||
-	       cachedPSFParams.ScratchOpacity != settings.ScratchOpacity ||
-	       cachedPSFParams.ScratchLength != settings.ScratchLength ||
-	       cachedPSFParams.ScratchWidth != settings.ScratchWidth ||
+	       (pupilMode && cachedPSFParams.ParticleCount != settings.ParticleCount) ||
+	       (pupilMode && cachedPSFParams.ParticleSize != settings.ParticleSize) ||
+	       (pupilMode && cachedPSFParams.GratingCount != settings.GratingCount) ||
+	       (pupilMode && cachedPSFParams.GratingStrength != settings.GratingStrength) ||
+	       (pupilMode && cachedPSFParams.TearFilmStrength != settings.TearFilmStrength) ||
+	       (pupilMode && settings.TearFilmStrength > 0.f && cachedPSFParams.TearFilmSpeed != settings.TearFilmSpeed) ||
+	       (pupilMode && settings.TearFilmStrength > 0.f && cachedPSFParams.TearFilmComplexity != settings.TearFilmComplexity) ||
+	       (pupilMode && cachedPSFParams.SutureBranches != settings.SutureBranches) ||
+	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureStrength != settings.SutureStrength) ||
+	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureWidth != settings.SutureWidth) ||
+	       (pupilMode && cachedPSFParams.StarburstCount != settings.StarburstCount) ||
+	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstStrength != settings.StarburstStrength) ||
+	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != settings.StarburstIrregularity) ||
+	       (lensMode && cachedPSFParams.DustCount != settings.DustCount) ||
+	       (lensMode && settings.DustCount > 0 && cachedPSFParams.DustSize != settings.DustSize) ||
+	       (lensMode && cachedPSFParams.BladeRoughnessAmp != settings.BladeRoughnessAmp) ||
+	       (lensMode && settings.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != settings.BladeRoughnessFreq) ||
+	       (lensMode && cachedPSFParams.ScratchCount != settings.ScratchCount) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != settings.ScratchOpacity) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchLength != settings.ScratchLength) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchWidth != settings.ScratchWidth) ||
 	       cachedPSFParams.SphericalAberration != settings.SphericalAberration ||
 	       cachedPSFParams.KernelScale != settings.KernelScale ||
 	       cachedPSFParams.UseAP1 != (globals::features::linearLighting.settings.enableACEScg && globals::features::linearLighting.settings.enableLinearLighting) ||
-	       settings.TearFilmStrength > 0.f;  // force per-frame regen when active
+	       (pupilMode && settings.TearFilmStrength > 0.f);  // animated tear film changes the PSF every frame
+}
+
+bool PhysicalGlare::NeedsApertureRegeneration() const
+{
+	const bool pupilMode = settings.ApertureMode == 1;
+	const bool lensMode = !pupilMode;
+
+	return apertureDirty ||
+	       cachedPSFParams.ApertureMode != settings.ApertureMode ||
+	       (lensMode && cachedPSFParams.ApertureBlades != settings.ApertureBlades) ||
+	       (lensMode && cachedPSFParams.ApertureRotation != settings.ApertureRotation) ||
+	       (pupilMode && cachedPSFParams.ScatterStrength != settings.ScatterStrength) ||
+	       cachedPSFParams.FFTResolution != static_cast<int>(currentFFTResolution) ||
+	       cachedPSFParams.FresnelExponent != settings.FresnelExponent ||
+	       cachedPSFParams.FStop != settings.FStop ||
+	       (pupilMode && cachedPSFParams.EnableEyelashes != settings.EnableEyelashes) ||
+	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCount != settings.EyelashCount) ||
+	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashLength != settings.EyelashLength) ||
+	       (pupilMode && cachedPSFParams.ParticleCount != settings.ParticleCount) ||
+	       (pupilMode && cachedPSFParams.ParticleSize != settings.ParticleSize) ||
+	       (pupilMode && cachedPSFParams.GratingCount != settings.GratingCount) ||
+	       (pupilMode && cachedPSFParams.GratingStrength != settings.GratingStrength) ||
+	       (pupilMode && cachedPSFParams.SutureBranches != settings.SutureBranches) ||
+	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureStrength != settings.SutureStrength) ||
+	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureWidth != settings.SutureWidth) ||
+	       (pupilMode && cachedPSFParams.StarburstCount != settings.StarburstCount) ||
+	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstStrength != settings.StarburstStrength) ||
+	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != settings.StarburstIrregularity) ||
+	       (lensMode && cachedPSFParams.DustCount != settings.DustCount) ||
+	       (lensMode && settings.DustCount > 0 && cachedPSFParams.DustSize != settings.DustSize) ||
+	       (lensMode && cachedPSFParams.BladeRoughnessAmp != settings.BladeRoughnessAmp) ||
+	       (lensMode && settings.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != settings.BladeRoughnessFreq) ||
+	       (lensMode && cachedPSFParams.ScratchCount != settings.ScratchCount) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != settings.ScratchOpacity) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchLength != settings.ScratchLength) ||
+	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchWidth != settings.ScratchWidth) ||
+	       cachedPSFParams.SphericalAberration != settings.SphericalAberration;
 }
 
 void PhysicalGlare::GeneratePSF()
@@ -596,60 +662,88 @@ void PhysicalGlare::GeneratePSF()
 	ID3D11Buffer* cb = glareCB->CB();
 	context->CSSetConstantBuffers(1, 1, &cb);
 
-	// ===== Step 1: Render aperture polygon =====
-	// Output: texFFT[0][0] (real = aperture value, imag = 0)
-	{
-		ID3D11UnorderedAccessView* uav = texFFT[0][0]->uav.get();
+	// ===== Step 1: Cache the static aperture response =====
+	if (NeedsApertureRegeneration()) {
+		// Tear film is applied separately below; all expensive static geometry
+		// and scatter masks remain cached across animated frames.
+		GlareCB apertureCBData = cbData;
+		apertureCBData.TearFilmStrength = 0.f;
+		glareCB->Update(apertureCBData);
+		cb = glareCB->CB();
+		context->CSSetConstantBuffers(1, 1, &cb);
+
+		ID3D11UnorderedAccessView* uav = texApertureBase->uav.get();
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(apertureCS.get(), nullptr, 0);
 		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
 		uav = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		apertureDirty = false;
 	}
 
-	// ===== Step 2: FFT aperture (Fraunhofer diffraction) =====
-	// texFFT[0][0] -> row FFT -> texFFT[0][1] -> col FFT -> texFFT[0][0]
-	// Now texFFT[0][0] holds the complex diffraction amplitude F(u,v)
-	DispatchFFT(fftRowCS.get(), texFFT[0][0].get(), texFFT[0][1].get(), currentFFTResolution);
-	DispatchFFT(fftColCS.get(), texFFT[0][1].get(), texFFT[0][0].get(), currentFFTResolution);
+	glareCB->Update(cbData);
+	cb = glareCB->CB();
+	context->CSSetConstantBuffers(1, 1, &cb);
 
-	// ===== Step 3: Chromatic blur per RGB channel =====
-	// Reads texFFT[0][0] (diffraction amplitude, t0), writes texFFT[ch][1] (u0)
+	const uint fftVariant = GetFFTVariant(currentFFTResolution);
+	Texture2D* diffraction = nullptr;
+	if (settings.ApertureMode == 1 && settings.TearFilmStrength > 0.f) {
+		ID3D11ShaderResourceView* srv = texApertureBase->srv.get();
+		ID3D11UnorderedAccessView* uav = texFFT[0][0]->uav.get();
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(tearFilmCS.get(), nullptr, 0);
+		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
+
+		srv = nullptr;
+		uav = nullptr;
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+
+		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[0][0].get(), texFFT[0][1].get(), currentFFTResolution);
+		DispatchFFT(fftColCS[fftVariant].get(), texFFT[0][1].get(), texFFT[0][0].get(), currentFFTResolution);
+		diffraction = texFFT[0][0].get();
+	} else {
+		context->CopyResource(texFFT[0][0]->resource.get(), texApertureBase->resource.get());
+		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[0][0].get(), texFFT[0][1].get(), currentFFTResolution);
+		DispatchFFT(fftColCS[fftVariant].get(), texFFT[0][1].get(), texFFT[0][0].get(), currentFFTResolution);
+		diffraction = texFFT[0][0].get();
+	}
+
+	// ===== Step 2: Chromatic blur for all RGB channels =====
+	// Reads the cached/current diffraction amplitude and writes texFFT[ch][1].
 	// Computes |F|² at wavelength-dependent UV scales with CIE spectral weighting
 	{
 		ID3D11SamplerState* sampler = wrapSampler.get();
 		context->CSSetSamplers(0, 1, &sampler);
 
-		for (int ch = 0; ch < 3; ch++) {
-			cbData.ChannelIndex = (uint)ch;
-			glareCB->Update(cbData);
-			cb = glareCB->CB();
-			context->CSSetConstantBuffers(1, 1, &cb);
+		ID3D11ShaderResourceView* srv = diffraction->srv.get();
+		std::array<ID3D11UnorderedAccessView*, 3> uavs = {
+			texFFT[0][1]->uav.get(),
+			texFFT[1][1]->uav.get(),
+			texFFT[2][1]->uav.get(),
+		};
 
-			ID3D11ShaderResourceView* srv = texFFT[0][0]->srv.get();
-			ID3D11UnorderedAccessView* uav = texFFT[ch][1]->uav.get();
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(psfCS.get(), nullptr, 0);
+		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
-			context->CSSetShaderResources(0, 1, &srv);
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-			context->CSSetShader(psfCS.get(), nullptr, 0);
-			context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
-
-			srv = nullptr;
-			uav = nullptr;
-			context->CSSetShaderResources(0, 1, &srv);
-			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		}
+		srv = nullptr;
+		uavs.fill(nullptr);
+		context->CSSetShaderResources(0, 1, &srv);
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
 		sampler = nullptr;
 		context->CSSetSamplers(0, 1, &sampler);
 	}
 
-	// ===== Step 4: FFT each channel's PSF for frequency-domain storage =====
+	// ===== Step 3: FFT each channel's PSF for frequency-domain storage =====
 	// texFFT[ch][1] -> row FFT -> texFFT[ch][0] -> col FFT -> texPSF_FFT[ch]
 	for (int ch = 0; ch < 3; ch++) {
-		DispatchFFT(fftRowCS.get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
-		DispatchFFT(fftColCS.get(), texFFT[ch][0].get(), texPSF_FFT[ch].get(), currentFFTResolution);
+		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
+		DispatchFFT(fftColCS[fftVariant].get(), texFFT[ch][0].get(), texPSF_FFT[ch].get(), currentFFTResolution);
 	}
 
 	// Cache parameters
@@ -657,7 +751,7 @@ void PhysicalGlare::GeneratePSF()
 	cachedPSFParams.ApertureBlades = settings.ApertureBlades;
 	cachedPSFParams.ApertureRotation = settings.ApertureRotation;
 	cachedPSFParams.ScatterStrength = settings.ScatterStrength;
-	cachedPSFParams.FFTResolution = settings.FFTResolution;
+	cachedPSFParams.FFTResolution = static_cast<int>(currentFFTResolution);
 	cachedPSFParams.EnableEyelashes = settings.EnableEyelashes;
 	cachedPSFParams.EyelashCount = settings.EyelashCount;
 	cachedPSFParams.EyelashLength = settings.EyelashLength;
@@ -720,13 +814,13 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	state->BeginPerfEvent("Physical Glare");
 
 	// Handle FFT resolution change
-	uint targetRes = std::clamp((uint)settings.FFTResolution, FFT_MIN, FFT_MAX);
+	uint targetRes = NormaliseFFTResolution(settings.FFTResolution);
 	if (targetRes != currentFFTResolution) {
 		CreateFFTTextures(targetRes);
 	}
 
 	// Accumulate tear film time
-	if (settings.TearFilmStrength > 0.f) {
+	if (settings.ApertureMode == 1 && settings.TearFilmStrength > 0.f) {
 		tearFilmTimeAccum += *globals::game::deltaTime;
 	}
 
@@ -822,56 +916,77 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	}
 
 	// ========== Step 3: Forward FFT on scene (per channel) ==========
+	const uint fftVariant = GetFFTVariant(currentFFTResolution);
 	for (int ch = 0; ch < 3; ch++) {
 		// Row FFT: texFFT[ch][0] -> texFFT[ch][1]
-		DispatchFFT(fftRowCS.get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
+		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
 		// Col FFT: texFFT[ch][1] -> texFFT[ch][0]
-		DispatchFFT(fftColCS.get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
+		DispatchFFT(fftColCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
 	}
 
 	// ========== Step 4: Frequency-domain multiply (scene * PSF) ==========
 	{
-		// Input: texFFT[ch][0] (scene FFT), texPSF_FFT[ch]
-		// Output: texFFT[ch][1]
-		std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr, nullptr };
-		std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
+		std::array<ID3D11ShaderResourceView*, 6> srvs = {
+			texFFT[0][0]->srv.get(),
+			texPSF_FFT[0]->srv.get(),
+			texFFT[1][0]->srv.get(),
+			texPSF_FFT[1]->srv.get(),
+			texFFT[2][0]->srv.get(),
+			texPSF_FFT[2]->srv.get(),
+		};
+		std::array<ID3D11UnorderedAccessView*, 3> uavs = {
+			texFFT[0][1]->uav.get(), texFFT[1][1]->uav.get(), texFFT[2][1]->uav.get()
+		};
 
-		for (int ch = 0; ch < 3; ch++) {
-			srvs[0] = texFFT[ch][0]->srv.get();
-			srvs[1] = texPSF_FFT[ch]->srv.get();
-			uavs[0] = texFFT[ch][1]->uav.get();
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		context->CSSetShader(multiplyCS.get(), nullptr, 0);
+		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
 
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-			context->CSSetShader(multiplyCS.get(), nullptr, 0);
-			context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
-
-			srvs.fill(nullptr);
-			uavs.fill(nullptr);
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		}
+		srvs.fill(nullptr);
+		uavs.fill(nullptr);
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 	}
 
 	// ========== Step 5: Inverse FFT (per channel) ==========
 	for (int ch = 0; ch < 3; ch++) {
 		// Row IFFT: texFFT[ch][1] -> texFFT[ch][0]
-		DispatchFFT(fftRowInvCS.get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
+		DispatchFFT(fftRowInvCS[fftVariant].get(), texFFT[ch][1].get(), texFFT[ch][0].get(), currentFFTResolution);
 		// Col IFFT: texFFT[ch][0] -> texFFT[ch][1]
-		DispatchFFT(fftColInvCS.get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
+		DispatchFFT(fftColInvCS[fftVariant].get(), texFFT[ch][0].get(), texFFT[ch][1].get(), currentFFTResolution);
 	}
 	globals::profiler->EndPass();
+
+	// Pack the three real components into one RGBA32F texture. Filtering this
+	// texture is channel-wise identical to filtering the three R32F sources.
+	{
+		std::array<ID3D11ShaderResourceView*, 3> srvs = {
+			texFFT[0][1]->srv.get(),
+			texFFT[1][1]->srv.get(),
+			texFFT[2][1]->srv.get(),
+		};
+		ID3D11UnorderedAccessView* uav = texGlarePacked->uav.get();
+
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetShader(packCS.get(), nullptr, 0);
+		context->Dispatch((currentFFTResolution + 7) >> 3, (currentFFTResolution + 7) >> 3, 1);
+
+		srvs.fill(nullptr);
+		uav = nullptr;
+		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	}
 
 	// ========== Step 6: Composite (upsample + add to scene) ==========
 	globals::profiler->BeginPass("PostProcessing::PhysicalGlare::Composite");
 	{
-		// t0 = scene, t1/t2/t3 = IFFT result R/G/B (texFFT[ch][1]),
+		// t0 = scene, t1 = packed RGB IFFT result,
 		// u0 = output
-		std::array<ID3D11ShaderResourceView*, 4> srvs = {
+		std::array<ID3D11ShaderResourceView*, 2> srvs = {
 			inout_tex.srv,
-			texFFT[0][1]->srv.get(),
-			texFFT[1][1]->srv.get(),
-			texFFT[2][1]->srv.get(),
+			texGlarePacked->srv.get(),
 		};
 		std::array<ID3D11UnorderedAccessView*, 1> uavs = {
 			texOutput->uav.get(),
