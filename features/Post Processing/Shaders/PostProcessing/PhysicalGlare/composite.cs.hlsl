@@ -16,10 +16,8 @@
 //   [1] Delavennat (2021), Physically-based Real-time Glare, LiU.
 //   [4] Jimenez (2012), Filmic SMAA, SIGGRAPH — bicubic via HW bilinear.
 
-Texture2D<float4> TexScene : register(t0);   // Original scene (full resolution)
-Texture2D<float2> TexIFFT_R : register(t1);  // IFFT result, R channel (FFT resolution)
-Texture2D<float2> TexIFFT_G : register(t2);  // IFFT result, G channel (FFT resolution)
-Texture2D<float2> TexIFFT_B : register(t3);  // IFFT result, B channel (FFT resolution)
+Texture2D<float4> TexScene : register(t0);     // Original scene (full resolution)
+Texture2D<float4> TexIFFT_RGB : register(t1);  // Packed RGB real components (FFT resolution)
 
 RWTexture2D<float4> RWTexOutput : register(u0);  // Final composited output (full resolution)
 
@@ -85,13 +83,12 @@ cbuffer GlareCB : register(b1)
 };
 
 // ---------------------------------------------------------------------------
-// Catmull-Rom bicubic upsample (4 bilinear taps → 16-texel footprint).
+// Catmull-Rom bicubic upsample (9 bilinear taps → 16-texel footprint).
 // Dramatically reduces blocky artifacts when upsampling from FFT resolution
-// (e.g. 768→2160p = 2.8×).  Cost: 4 SampleLevel per channel vs 1 — negligible
-// for a full-screen composite that's bandwidth-bound anyway.
+// while the packed RGB source lets every tap filter all channels together.
 // Ref: Jimenez, "Filmic SMAA" (SIGGRAPH 2012), bicubic with HW bilinear.
 // ---------------------------------------------------------------------------
-float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, float2 texSize)
+float3 CatmullRomSampleRGB(Texture2D<float4> tex, SamplerState samp, float2 uv, float2 texSize)
 {
 	float2 samplePos = uv * texSize;
 	float2 texPos1 = floor(samplePos - 0.5) + 0.5;
@@ -103,7 +100,7 @@ float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, floa
 	float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
 	float2 w3 = f * f * (-0.5 + 0.5 * f);
 
-	// Combine pairs for 4 bilinear taps instead of 16 point samples
+	// Combine the centre pairs for 9 bilinear taps instead of 16 point samples
 	float2 w12 = w1 + w2;
 	float2 offset12 = w2 / max(w12, 1e-6);
 
@@ -111,18 +108,18 @@ float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, floa
 	float2 texPos3 = (texPos1 + 2.0) / texSize;
 	float2 texPos12 = (texPos1 + offset12) / texSize;
 
-	float result = 0.0;
-	result += tex.SampleLevel(samp, float2(texPos0.x, texPos0.y), 0).x * w0.x * w0.y;
-	result += tex.SampleLevel(samp, float2(texPos12.x, texPos0.y), 0).x * w12.x * w0.y;
-	result += tex.SampleLevel(samp, float2(texPos3.x, texPos0.y), 0).x * w3.x * w0.y;
+	float3 result = 0.0;
+	result += tex.SampleLevel(samp, float2(texPos0.x, texPos0.y), 0).rgb * w0.x * w0.y;
+	result += tex.SampleLevel(samp, float2(texPos12.x, texPos0.y), 0).rgb * w12.x * w0.y;
+	result += tex.SampleLevel(samp, float2(texPos3.x, texPos0.y), 0).rgb * w3.x * w0.y;
 
-	result += tex.SampleLevel(samp, float2(texPos0.x, texPos12.y), 0).x * w0.x * w12.y;
-	result += tex.SampleLevel(samp, float2(texPos12.x, texPos12.y), 0).x * w12.x * w12.y;
-	result += tex.SampleLevel(samp, float2(texPos3.x, texPos12.y), 0).x * w3.x * w12.y;
+	result += tex.SampleLevel(samp, float2(texPos0.x, texPos12.y), 0).rgb * w0.x * w12.y;
+	result += tex.SampleLevel(samp, float2(texPos12.x, texPos12.y), 0).rgb * w12.x * w12.y;
+	result += tex.SampleLevel(samp, float2(texPos3.x, texPos12.y), 0).rgb * w3.x * w12.y;
 
-	result += tex.SampleLevel(samp, float2(texPos0.x, texPos3.y), 0).x * w0.x * w3.y;
-	result += tex.SampleLevel(samp, float2(texPos12.x, texPos3.y), 0).x * w12.x * w3.y;
-	result += tex.SampleLevel(samp, float2(texPos3.x, texPos3.y), 0).x * w3.x * w3.y;
+	result += tex.SampleLevel(samp, float2(texPos0.x, texPos3.y), 0).rgb * w0.x * w3.y;
+	result += tex.SampleLevel(samp, float2(texPos12.x, texPos3.y), 0).rgb * w12.x * w3.y;
+	result += tex.SampleLevel(samp, float2(texPos3.x, texPos3.y), 0).rgb * w3.x * w3.y;
 
 	return result;
 }
@@ -142,10 +139,7 @@ float CatmullRomSample(Texture2D<float2> tex, SamplerState samp, float2 uv, floa
 
 	// Bicubic (Catmull-Rom) upsample — eliminates blocky artifacts at high upscale ratios
 	float2 texSize = float2(FFTResolution, FFTResolution);
-	float glareR = max(0, CatmullRomSample(TexIFFT_R, LinearSampler, ifftUV, texSize));
-	float glareG = max(0, CatmullRomSample(TexIFFT_G, LinearSampler, ifftUV, texSize));
-	float glareB = max(0, CatmullRomSample(TexIFFT_B, LinearSampler, ifftUV, texSize));
-	float3 glare = float3(glareR, glareG, glareB);
+	float3 glare = max(0, CatmullRomSampleRGB(TexIFFT_RGB, LinearSampler, ifftUV, texSize));
 
 	// Sanitize extreme values
 	glare = min(glare, 65000.0);
