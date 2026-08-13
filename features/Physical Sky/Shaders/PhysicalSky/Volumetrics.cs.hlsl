@@ -138,7 +138,7 @@ struct VolumetricCloudData
 	float scatterSourceCurvePow;
 	float powderIntensity;
 	uint lightSteps;
-	uint _padPrimarySteps;
+	uint cloudPhaseModel;
 	float phiFwdIntensity;
 	float phiFwdDepthPow;
 	float phiFwdDepthBias;
@@ -164,7 +164,9 @@ struct VolumetricCloudData
 	float temporalAccumulationFactor;
 	float cloudHistoryInvalidation;
 	uint ghostingReduction;
-	uint3 padding;
+	uint scatterIntegration;
+	float lightStepDistanceLod;
+	uint padding;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -427,7 +429,9 @@ float CloudLightExitDistance(float3 pos, float3 dir, CloudLayer cloud, Volumetri
 	return max(outer.y, 0.0);
 }
 
-float CloudRayJitter(uint2 pixelCoord, uint sampleIndex)
+// Legacy hash-white jitter. Kept so the previous look can be restored without a
+// code revert; define PHYSKY_CLOUD_JITTER_LEGACY to select it.
+float CloudRayJitterLegacy(uint2 pixelCoord, uint sampleIndex)
 {
 	// Spatial samples remain hash-white, while the sixteen temporal samples are
 	// stratified and permuted per pixel. This avoids large frame-to-frame gaps in
@@ -440,6 +444,38 @@ float CloudRayJitter(uint2 pixelCoord, uint sampleIndex)
 	const uint sampleHash = Random::pcg3d(uint3(pixelCoord, sampleIndex ^ 0x68bc21ebu)).y;
 	const float withinStratum = float(sampleHash >> 8u) * (1.0 / 16777216.0);
 	return (float(stratum) + withinStratum) * (1.0 / 16.0);
+}
+
+// Interleaved gradient noise (Jimenez, "Next Generation Post Processing in Call
+// of Duty: Advanced Warfare"). Cheap screen-space sequence whose power spectrum
+// is close to blue noise, which is what the temporal resolve wants: the error of
+// neighbouring pixels is decorrelated, so a 3x3 filter already removes most of it.
+float CloudInterleavedGradientNoise(float2 pixelCoord)
+{
+	return frac(52.9829189 * frac(dot(pixelCoord, float2(0.06711056, 0.00583715))));
+}
+
+// Spatiotemporal blue noise without a lookup texture. Advancing every pixel by
+// the same golden-ratio increment is a rigid shift of the value distribution, so
+// the spatial blue-noise spectrum survives while consecutive frames decorrelate
+// (Heitz et al., "Analysis of Sample Correlations for Monte Carlo Rendering").
+// `dimension` decorrelates independent uses within one frame (ray start vs. light
+// cone offset) by rotating the sequence with a second irrational increment.
+float CloudBlueNoise(uint2 pixelCoord, uint sampleIndex, uint dimension)
+{
+	const float goldenRatioConjugate = 0.6180339887498949;      // 1 / phi
+	const float plasticConstantConjugate = 0.7548776662466927;  // 1 / rho
+	const float spatial = CloudInterleavedGradientNoise(float2(pixelCoord) + float2(dimension * 17u, dimension * 29u));
+	return frac(spatial + float(sampleIndex) * goldenRatioConjugate + float(dimension) * plasticConstantConjugate);
+}
+
+float CloudRayJitter(uint2 pixelCoord, uint sampleIndex)
+{
+#ifdef PHYSKY_CLOUD_JITTER_LEGACY
+	return CloudRayJitterLegacy(pixelCoord, sampleIndex);
+#else
+	return CloudBlueNoise(pixelCoord, sampleIndex, 0u);
+#endif
 }
 
 float HPPositivePow(float x, float p)
@@ -650,7 +686,7 @@ float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
 // atmospheric attenuation is sampled at the ray endpoints and interpolated in
 // RenderVolumetricCloudRay, matching the reference environment-lighting setup.
 void sampleCloudSelfShadow(
-	float3 pos, float local_height, float3 sun_dir,
+	float3 pos, float local_height, float3 sun_dir, uint visibility_step, float cone_jitter,
 	out float light_extinction_od, out float phi_fwd)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -661,7 +697,7 @@ void sampleCloudSelfShadow(
 
 	// cloud self-shadowing
 	{
-		uint visibility_step = max(info.lightSteps, 1u);
+		visibility_step = max(visibility_step, 1u);
 		const static float cone_ratio = 2.0;
 		const static float cone_min_step = 5.0 * GAME_UNITS_PER_METER;
 		const static float cone_max_distance = 6000.0 * GAME_UNITS_PER_METER;
@@ -682,7 +718,12 @@ void sampleCloudSelfShadow(
 			float width = min(step_width, cover_dist - cum_dist);
 			if (width <= 0.0)
 				break;
-			float dist = cum_dist + width * 0.5;
+			// A single stratified offset shared by the whole cone replaces the fixed
+			// midpoint. Sampling always at the centre of a geometrically growing step
+			// produces fixed-position banding in the self-shadow term; offsetting it
+			// with blue noise turns that bias into temporally resolvable noise. One
+			// offset per cone (rather than per step) keeps the added variance low.
+			float dist = cum_dist + width * cone_jitter;
 			float3 vis_pos = pos + sun_dir * dist;
 			NDFInfo _;
 			const float mip_offset = (float)i / max((float)(visibility_step - 1u), 1.0) * 3.0;
@@ -752,6 +793,74 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 	return max(0.0, density * info.highDensityMultiplier);
 }
 
+// ---------------------------------------------------------------------------
+// Cloud phase function models.
+//   0 = dual-lobe Henyey-Greenstein (original behaviour, forward + backward g)
+//   1 = approximate Mie: HG + Draine numerical fit for a 5 um droplet
+//       (Jendersie & d'Eon 2023, constants as used by three-geospatial).
+//       This model is physically parameterised, so the forward/backward
+//       eccentricity sliders do not apply to it.
+// Each octave of the multiple-scattering sum reuses the same model with its
+// anisotropy attenuated by msEccentricity^octave (Frostbite).
+// ---------------------------------------------------------------------------
+#define PHYSKY_CLOUD_PHASE_HG_DUAL_LOBE 0u
+#define PHYSKY_CLOUD_PHASE_APPROX_MIE 1u
+
+// Per-step in-scattering integral.
+//   0 = legacy scalar (1 - exp(-sigma_s * ds)) driven by luminance extinction
+//   1 = Frostbite 5.6.3 energy-conserving per-channel albedo * (1 - T)
+#define PHYSKY_CLOUD_SCATTER_INTEGRAL_LEGACY 0u
+#define PHYSKY_CLOUD_SCATTER_INTEGRAL_ENERGY_CONSERVING 1u
+
+float CloudPhaseSingle(float cos_theta, float fwd_g, float bwd_g, float anisotropy, uint model)
+{
+	// Numerical fit of Mie scattering for a water droplet (Jendersie & d'Eon 2023);
+	// the constants are the ones three-geospatial uses for cloud droplets.
+	const float kMieHgG = 0.988176691700256;
+	const float kMieDraineG = 0.5556712547839497;
+	const float kMieDraineAlpha = 21.995520856274638;
+	const float kMieDraineWeight = 0.4819554318404214;
+
+	// Both models are evaluated unconditionally: this runs once per ray as a
+	// precalculation, not per march step, and a single return keeps the compiler
+	// from reporting the whole call chain as possibly uninitialized.
+	const float mie = lerp(
+		Phase::HG(cos_theta, kMieHgG * anisotropy),
+		Phase::Draine(cos_theta, kMieDraineG * anisotropy, kMieDraineAlpha),
+		kMieDraineWeight);
+	const float dual_lobe = Phase::HG(cos_theta, fwd_g * anisotropy) + Phase::HG(cos_theta, -bwd_g * anisotropy);
+	return model == PHYSKY_CLOUD_PHASE_APPROX_MIE ? mie : dual_lobe;
+}
+
+float3 CloudPhaseOctaves(float cos_theta, float fwd_g, float bwd_g, float ms_eccentricity, uint model)
+{
+	const float a1 = ms_eccentricity;
+	const float a2 = ms_eccentricity * ms_eccentricity;
+	return float3(
+		CloudPhaseSingle(cos_theta, fwd_g, bwd_g, 1.0, model),
+		CloudPhaseSingle(cos_theta, fwd_g, bwd_g, a1, model),
+		CloudPhaseSingle(cos_theta, fwd_g, bwd_g, a2, model));
+}
+
+// Distance LOD for the secondary (light) march. Far clouds contribute a few
+// pixels each, so paying the full light-cone budget there is wasted work. The
+// range matches the erosion mip ramp in sampleCloudDensity so both LODs move
+// together. `jitter` performs stochastic rounding, which keeps the expected step
+// count continuous and prevents a visible LOD ring in the distance.
+uint CloudLightStepCount(float eye_dist, float jitter, VolumetricCloudData info)
+{
+	const float kLightLodStartMeters = 3000.0;
+	const float kLightLodEndMeters = 100000.0;
+	const uint base_steps = max(info.lightSteps, 1u);
+	const float eye_dist_m = max(eye_dist, 0.0) * GAME_UNIT_TO_M;
+	// A zero LOD scale collapses to lod = 0, which reproduces the fixed budget, so
+	// no separate early-out branch is needed.
+	const float lod = saturate((eye_dist_m - kLightLodStartMeters) / (kLightLodEndMeters - kLightLodStartMeters)) *
+	                  saturate(info.lightStepDistanceLod);
+	const float steps_f = lerp((float)base_steps, 1.0, lod);
+	return (uint)clamp(floor(steps_f + jitter), 1.0, (float)base_steps);
+}
+
 struct VolumetricCloudResult
 {
 	float3 transmittance;
@@ -761,7 +870,7 @@ struct VolumetricCloudResult
 	float scatter_weight;
 };
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, float jitter, float ap_shadow)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, float solid_dist, bool is_sky, float jitter, float2 light_jitter, float ap_shadow)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -789,10 +898,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 
 	///////////// precalc
 	const float cos_theta = dot(ray.ray_dir, cloud_light_dir);
-	const float3 cloud_phase = float3(
-		Phase::HG(cos_theta, info.forwardEccentricity) + Phase::HG(cos_theta, -info.backwardEccentricity),
-		Phase::HG(cos_theta, info.forwardEccentricity * info.msEccentricity) + Phase::HG(cos_theta, -info.backwardEccentricity * info.msEccentricity),
-		Phase::HG(cos_theta, info.forwardEccentricity * info.msEccentricity * info.msEccentricity) + Phase::HG(cos_theta, -info.backwardEccentricity * info.msEccentricity * info.msEccentricity));
+	const float3 cloud_phase = CloudPhaseOctaves(
+		cos_theta, info.forwardEccentricity, info.backwardEccentricity, info.msEccentricity, info.cloudPhaseModel);
 
 	///////////// ray march
 	float low_mean_weight = 0.0;
@@ -856,7 +963,8 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				// dir light
 				float light_extinction_od;
 				float phi_fwd;
-				sampleCloudSelfShadow(pos, ndf.local_height, cloud_light_dir, light_extinction_od, phi_fwd);
+				const uint light_steps = CloudLightStepCount(absolute_dist, light_jitter.y, info);
+				sampleCloudSelfShadow(pos, ndf.local_height, cloud_light_dir, light_steps, light_jitter.x, light_extinction_od, phi_fwd);
 				const float relative_ray_distance = saturate(dist / max(ray.march_dist, 1.0));
 				const float3 external_sun = lerp(external_sun_start, external_sun_end, relative_ray_distance);
 				float3 directional_lum = 0.0;
@@ -868,13 +976,35 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				}
 				const float extinction_scalar = dot(extinction, float3(0.2126, 0.7152, 0.0722));
 				const float scatter_od = extinction_scalar * 0.999 * step_small;
-				const float scatter_fraction = 1.0 - exp(-scatter_od);
 				float scatter_gate = 1.0 - exp(-scatter_od / max(info.scatterSourceODScale, 0.001));
 				scatter_gate = HPPositivePow(saturate(scatter_gate), max(info.scatterSourceCurvePow, 0.01));
-				// The remapped source is an edge-validity gate, not the Beer-Lambert
-				// integral itself. Multiplying by the physical scattered fraction keeps
-				// both direct and ambient radiance bounded by this sample's optical depth.
-				const float scatter_source = scatter_fraction * scatter_gate;
+				const float3 sample_transmittance = exp(-step_small * extinction);
+
+				// The remapped gate is an edge-validity control, not the Beer-Lambert
+				// integral itself. It multiplies whichever scattered fraction is chosen
+				// below, so both direct and ambient radiance stay bounded by this
+				// sample's optical depth.
+				float3 scatter_source;
+				[branch] if (info.scatterIntegration == PHYSKY_CLOUD_SCATTER_INTEGRAL_ENERGY_CONSERVING)
+				{
+					// Frostbite 5.6.3 analytical integration of in-scattered light over
+					// the step: integral(S * sigma_s * exp(-sigma_t * t), t = 0..ds)
+					//   = S * (sigma_s / sigma_t) * (1 - T).
+					// sigma_s / sigma_t is the single-scattering albedo; the density
+					// factor cancels, so it is a per-channel constant of the medium.
+					// Unlike the legacy form this is evaluated per channel, which keeps
+					// the scattered colour consistent with the coloured transmittance
+					// instead of driving it from a luminance-collapsed extinction.
+					const float3 albedo = cloud.scatter / max(cloud.scatter + cloud.absorption, 1e-7);
+					scatter_source = albedo * (1.0 - sample_transmittance) * scatter_gate;
+				}
+				else
+				{
+					// Legacy: scalar (1 - exp(-sigma_s * ds)) with a hard-coded 0.999
+					// albedo. Agrees with the form above to first order and in the
+					// optically thick limit, and differs mainly by being achromatic.
+					scatter_source = (1.0 - exp(-scatter_od)) * scatter_gate;
+				}
 				float3 in_scatter = directional_lum * external_sun * dirlightColor * scatter_source;
 
 				// Additive isotropic diffuse field, independent from directional multiple scattering.
@@ -882,7 +1012,6 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				// Keeping this normalization explicit lets the intensity remain a unit-scale artistic control.
 				float phiScalar = info.phiFwdIntensity * phi_fwd * (0.25 * RCP_PI);
 				phiScalar = info.phiFwdCompress > 0.0 ? (1.0 - exp(-phiScalar * info.phiFwdCompress)) / info.phiFwdCompress : phiScalar;
-				const float3 sample_transmittance = exp(-step_small * extinction);
 				const float3 phi_luminance = phiScalar * external_sun * dirlightColor;
 				in_scatter += phi_luminance * (1.0 - sample_transmittance);
 
@@ -1060,6 +1189,12 @@ float ReconstructSceneRayDistance(uint2 fullPixelCoord, VolumetricCloudData info
 	const uint2 full_px_coords = full_resolution ? px_coords : min(intermediate_coord * 2u, uint2(info.activeFrameDim) - 1u);
 
 	const float ray_jitter = CloudRayJitter(intermediate_coord, frame_index >> 2u);
+	// Decorrelated from the ray-start offset so the primary march and the light
+	// cone do not share the same error pattern. x offsets the light cone samples,
+	// y drives the stochastic rounding of the light step count.
+	const float2 light_jitter = float2(
+		CloudBlueNoise(intermediate_coord, frame_index >> 2u, 1u),
+		CloudBlueNoise(intermediate_coord, frame_index >> 2u, 2u));
 
 	///////////// get start and end
 	const float depth = TexDepth[full_px_coords.xy];
@@ -1077,7 +1212,7 @@ float ReconstructSceneRayDistance(uint2 fullPixelCoord, VolumetricCloudData info
 	const float3 ray_dir = pos_world.xyz / solid_dist;
 
 	const float ap_shadow = SampleCloudApShadow(full_px_coords);
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, ray_jitter, ap_shadow);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, solid_dist, is_sky, ray_jitter, light_jitter, ap_shadow);
 
 	RWTexTr[px_coords] = float4(result.transmittance, CloudAlphaFromTransmittance(result.transmittance));
 	RWTexLum[px_coords] = result.lum;
@@ -1135,14 +1270,16 @@ float3 GetCubemapSamplingVector(uint3 threadId, in RWTexture2DArray<float3> outp
 	const uint face_pair = SharedData::FrameCountAlwaysActive % 3u;
 	const uint3 output_tid = uint3(tid.xy, face_pair * 2u + tid.z);
 
-	// Sky capture has no temporal integration, so its ray starts at the slab boundary.
+	// Sky capture has no temporal integration, so its ray starts at the slab boundary
+	// and the light cone keeps its unjittered midpoint sampling.
 	const float ray_jitter = 0.0;
+	const float2 light_jitter = 0.5;
 
 	const float3 eye_pos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float3 ray_dir = GetCubemapSamplingVector(output_tid, RWTexCubeTr);
 	// Sky-capture clouds are combined in the sky path and do not receive the
 	// main-view aerial-perspective pass.
-	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, ray_jitter, -1.0);
+	VolumetricCloudResult result = RenderVolumetricCloudRay(ray_dir, eye_pos, info.rayMarchRange, true, ray_jitter, light_jitter, -1.0);
 
 	RWTexCubeTr[output_tid] = result.transmittance;
 	RWTexCubeLum[output_tid] = result.lum;

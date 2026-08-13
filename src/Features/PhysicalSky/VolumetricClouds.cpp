@@ -488,7 +488,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.scatterSourceCurvePow = lighting.scatterSourceCurvePow,
 		.powderIntensity = lighting.powderIntensity,
 		.lightSteps = lighting.lightSteps,
-		._padPrimarySteps = 0u,
+		.cloudPhaseModel = lighting.phaseModel,
 		.phiFwdIntensity = phi.intensity,
 		.phiFwdDepthPow = phi.depthPow,
 		.phiFwdDepthBias = phi.depthBias,
@@ -513,7 +513,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.temporalAccumulationFactor = std::clamp(settings.temporalAccumulationFactor, 0.0f, 1.0f),
 		.cloudHistoryInvalidation = cloudHistoryInvalidation,
 		.ghostingReduction = settings.ghostingReduction ? 1u : 0u,
-		.padding = { 0u, 0u, 0u },
+		.scatterIntegration = lighting.scatterIntegration,
+		.lightStepDistanceLod = std::clamp(lighting.lightStepDistanceLod, 0.0f, 1.0f),
+		.padding = 0u,
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
