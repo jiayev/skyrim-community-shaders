@@ -120,13 +120,79 @@ struct Skin : Feature
 
 	/** @brief GPU-ready profile data; index 0 is always the default profile. */
 	std::vector<SkinData> profileData;
+	/** @brief CPU-side profiles parallel to profileData (index-aligned), kept as the partial-merge base. */
+	std::vector<SkinProfile> profileBaseData;
 	std::unordered_map<std::string, uint32_t> profileNameToIndex;
 	std::unordered_map<RE::FormID, uint32_t> raceProfileIndex;
 	uint32_t profileDataRevision = 0;
 	bool profileBindingsDirty = true;
 
+	/** @brief Override key scope: per-NIF mesh vs per-NPC base form ID. */
+	enum class OverrideKind
+	{
+		Nif,
+		BaseId
+	};
+
+	/** @brief Per-NIF / Per-BaseID JSON override store (Data\Shaders\Skin\Overrides). */
+	struct OverrideStore
+	{
+		/** @brief A resolved override entry in the effective (merged) view. */
+		struct Entry
+		{
+			std::string source;  // "User" or the mod .json file name
+			bool isUser = false;
+			json partial;  // partial SkinProfile JSON
+		};
+
+		/** @brief Effective merged NIF overrides (user wins); normalized key -> entry. */
+		std::unordered_map<std::string, Entry> nifOverrides;
+		/** @brief Effective merged BaseID overrides (user wins); normalized key -> entry. */
+		std::unordered_map<std::string, Entry> baseIdOverrides;
+		/** @brief User-authored NIF partials, persisted to User\SkinOverrides.user.json. */
+		std::unordered_map<std::string, json> userNifOverrides;
+		/** @brief User-authored BaseID partials, persisted to User\SkinOverrides.user.json. */
+		std::unordered_map<std::string, json> userBaseIdOverrides;
+		/** @brief Last scanned override file set: file path -> last write time. */
+		std::unordered_map<std::string, std::filesystem::file_time_type> fileTimes;
+		/** @brief Bumped whenever the override set changes; invalidates per-geometry caches. */
+		uint32_t revision = 0;
+
+		/** @brief Scans the overrides directory (and User subfolder) and reloads when the file set changes. */
+		void Refresh();
+		/** @brief Returns the effective partial override for a kind + normalized key, or nullptr. */
+		const json* Lookup(OverrideKind a_kind, const std::string& a_key) const;
+		/** @brief Adds/overwrites a user override and persists it. */
+		void AddOverride(OverrideKind a_kind, const std::string& a_key, const json& a_partial);
+		/** @brief Removes a user override (revealing any mod override underneath) and persists. */
+		void RemoveOverride(OverrideKind a_kind, const std::string& a_key);
+		/** @brief Writes the user override file to disk. */
+		void SaveUserOverrides();
+		/** @brief True when no overrides of either kind are loaded. */
+		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty(); }
+	};
+
+	/** @brief Per-geometry override resolution cache, keyed by geometry pointer. */
+	struct GeometryOverrideCacheEntry
+	{
+		bool initialized = false;
+		std::string nifKey;
+		std::string baseIdKey;
+		uint32_t profileIndex = UINT32_MAX;
+		uint32_t baseProfileRevision = UINT32_MAX;
+		uint32_t overrideRevision = UINT32_MAX;
+		SkinData merged{};
+	};
+
+	OverrideStore overrideStore;
+	std::unordered_map<RE::BSGeometry*, GeometryOverrideCacheEntry> geometryOverrideCache;
+	uint32_t lastOverrideScanFrame = 0;
+	uint32_t currentOverrideRevision = 0;
+
 	/** @brief Packs a profile plus the global (non-per-race) settings into GPU data. */
 	SkinData MakeProfileData(const SkinProfile& a_profile) const;
+	/** @brief Merges a partial JSON override onto a base profile and packs the result for the GPU. */
+	SkinData ApplyOverride(const SkinProfile& a_base, const json& a_override) const;
 	/** @brief Rebuilds the GPU profile array, bumping the revision when the contents change. */
 	void RebuildProfileData();
 	/** @brief Drops cached race->profile resolutions, forcing them to be resolved again. */
@@ -148,11 +214,43 @@ struct Skin : Feature
 	void DrawRaceBindings();
 	/** @brief Collects all races with an editor ID for the binding UI. */
 	void RefreshRaceList();
+	/** @brief Draws the per-NIF JSON override manager UI. */
+	void DrawNifOverrides();
+	/** @brief Resolves a reference into the pending pick state (key, label, skin flag). */
+	void ResolveUiPick(RE::TESObjectREFR* a_ref);
+	/** @brief Opens the override editor for a key, seeded from the given base profile. */
+	void BeginOverrideEdit(OverrideKind a_kind, const std::string& a_key, const SkinProfile& a_base, const std::string& a_baseLabel, bool a_isNew);
+	/** @brief Derives a normalized NIF override key for a reference (MODL path, else first geometry node name). */
+	std::string DeriveNifKeyForRef(RE::TESObjectREFR* a_ref) const;
+	/** @brief True if any geometry of the reference uses a skin shader. */
+	bool ReferenceHasSkin(RE::TESObjectREFR* a_ref) const;
+	/** @brief Returns the race for an actor reference, or null. */
+	RE::TESRace* GetRaceForRef(RE::TESObjectREFR* a_ref) const;
+	/** @brief Returns a partial profile JSON containing only fields that differ from the base. */
+	json DiffProfile(const SkinProfile& a_base, const SkinProfile& a_full) const;
 
 	std::string uiSelectedProfile;  // empty = default profile
 	std::string uiPendingRace;
 	std::string uiProfileNameBuffer;
 	std::vector<std::pair<std::string, std::string>> raceList;  // editor ID, display name
+
+	// Per-NIF / Per-BaseID override UI state
+	std::string uiPickKey;        // normalized NIF key of the last pick
+	std::string uiPickBaseIdKey;  // normalized BaseID key (empty for non-actors)
+	std::string uiPickRefLabel;   // human-readable target label
+	std::string uiPickMessage;    // non-empty = info/error message to show
+	bool uiPickValid = false;
+	bool uiPickHasSkin = false;
+	SkinProfile uiPickBase;       // base profile for a new override (race profile or default)
+	std::string uiPickBaseLabel;  // "Default" or the race editor ID
+
+	bool uiOverrideEditorOpen = false;
+	bool uiOverrideEditorIsNew = false;
+	OverrideKind uiOverrideEditorKind = OverrideKind::Nif;
+	std::string uiOverrideEditorKey;
+	std::string uiOverrideEditorBaseLabel;
+	SkinProfile uiOverrideEditorBase;
+	SkinProfile uiOverrideEditorProfile;
 
 	struct ExtraTextures
 	{
