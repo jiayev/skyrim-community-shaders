@@ -41,6 +41,7 @@ cbuffer LocalExposureCB : register(b2)
 	float HighlightThresholdStrength : packoffset(c2.z);
 	float ShadowThresholdStrength : packoffset(c2.w);
 	float LogLuminanceMin : packoffset(c4.x);
+	float LogLuminanceMax : packoffset(c4.y);
 };
 
 float RemapBaseContrast(float centeredBase)
@@ -57,13 +58,17 @@ float RemapBaseContrast(float centeredBase)
 	float release = smoothstep(threshold, threshold + transitionWidth, magnitude);
 	float protectedOffset = min(magnitude, threshold) * (1.0 - release);
 	float remappedMagnitude = magnitude * contrast + protectedOffset * (1.0 - contrast);
-	return centeredBase < 0.0 ? -remappedMagnitude : remappedMagnitude;
+
+	if (isHighlight && magnitude > threshold)
+		remappedMagnitude = max(remappedMagnitude, threshold);
+
+	return isHighlight ? remappedMagnitude : -remappedMagnitude;
 }
 
 float ComputeLocalExposure(float3 sceneColor, float baseLogLuminance, float globalExposure, float middleGreyCompensation)
 {
 	float sceneLuminance = Color::RGBToLuminance(max(sceneColor, 0.0));
-	float sceneLogLuminance = log2(max(sceneLuminance, exp2(LogLuminanceMin)));
+	float sceneLogLuminance = clamp(log2(max(sceneLuminance, exp2(LogLuminanceMin))), LogLuminanceMin, LogLuminanceMax);
 	float logGlobalExposure = log2(max(globalExposure, 1e-5));
 	float exposedLogLuminance = sceneLogLuminance + logGlobalExposure;
 	float exposedBase = baseLogLuminance + logGlobalExposure;

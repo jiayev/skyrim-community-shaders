@@ -201,17 +201,17 @@
     "Local Exposure": {
         "enabled": true,
         "settings": {
-            "BaseBlend": 0.5,
+            "BaseBlend": 0.6,
             "BlurredLuminanceKernelSize": 50.0,
             "DetailStrength": 1.0,
             "Exposure": 0.699999988079071,
             "HighlightContrast": 0.75,
             "HighlightThreshold": 1.0,
-            "HighlightThresholdStrength": 0.5,
+            "HighlightThresholdStrength": 1.0,
             "MiddleGreyBias": 0.0,
             "ShadowContrast": 0.800000011920929,
             "ShadowThreshold": 1.0,
-            "ShadowThresholdStrength": 0.5,
+            "ShadowThresholdStrength": 1.0,
             "Strength": 1.0
         }
     },

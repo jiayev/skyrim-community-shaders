@@ -28,13 +28,13 @@ struct LocalExposure : public PostProcessFeature
 		float HighlightContrast = 0.75f;
 		float ShadowContrast = 0.8f;
 		float DetailStrength = 1.0f;
-		float BaseBlend = 0.5f;
+		float BaseBlend = 0.6f;
 		float BlurredLuminanceKernelSize = 50.0f;
 		float MiddleGreyBias = 0.0f;
 		float HighlightThreshold = 1.0f;
 		float ShadowThreshold = 1.0f;
-		float HighlightThresholdStrength = 0.5f;
-		float ShadowThresholdStrength = 0.5f;
+		float HighlightThresholdStrength = 1.0f;
+		float ShadowThresholdStrength = 1.0f;
 	} settings;
 
 	// Constant buffer shared by luminance analysis and Composite.
