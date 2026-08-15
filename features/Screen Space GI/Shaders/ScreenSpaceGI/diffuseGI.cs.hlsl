@@ -69,7 +69,7 @@ Texture2D<float3> srcRadiance : register(t2);
 Texture2D<unorm float2> srcNoise : register(t3);
 #if defined(DYNAMIC_CUBEMAPS)
 TextureCube<float3> EnvTexture : register(t4);
-TextureCube<float3> EnvReflectionsTexture : register(t5);
+TextureCube<float3> ReflectionCubemap : register(t5);
 #	if defined(SKYLIGHTING)
 #		define SKYLIGHTING_PROBE_REGISTER t6
 #		include "Skylighting/Skylighting.hlsli"
@@ -218,8 +218,8 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 		}
 
 		if (!SharedData::InInterior) {
-			float3 fullSample = EnvReflectionsTexture.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
-			float3 skyColor = Color::Saturation(max(fullSample - envSampleRaw, 0), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+			float3 skySample = ReflectionCubemap.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
+			float3 skyColor = Color::Saturation(skySample, SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 			skyColor *= skylightingDiffuse;
 			if (SharedData::iblSettings.SkylightingAffectsEnv != 0)

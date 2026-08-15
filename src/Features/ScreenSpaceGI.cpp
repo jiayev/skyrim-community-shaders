@@ -753,8 +753,9 @@ void ScreenSpaceGI::DrawSSGI()
 		srvs.at(2) = texRadiance->srv.get();
 		srvs.at(3) = texNoise->srv.get();
 		if (dynamicCubemaps.loaded) {
+			auto& reflections = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 			srvs.at(4) = dynamicCubemaps.envTexture->srv.get();
-			srvs.at(5) = dynamicCubemaps.envReflectionsTexture->srv.get();
+			srvs.at(5) = reflections.SRV;
 		}
 		if (dynamicCubemaps.loaded && skylighting.loaded)
 			srvs.at(6) = skylighting.texProbeArray->srv.get();
