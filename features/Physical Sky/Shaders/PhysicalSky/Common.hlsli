@@ -582,6 +582,16 @@ Texture2D<float4> TexMsLut : register(t113);
 		if (any(uv <= 0.0) || any(uv >= 1.0))
 			return 1.0;
 
+		// The cookie is a finite, camera-centred projection. Returning fully lit only
+		// after crossing its UV boundary exposes that square as a hard edge in Effect
+		// lighting. Fade the last eight texels to the neutral border value instead.
+		// Expressing the guard band in texels keeps its filter footprint stable when
+		// the cookie resolution changes.
+		uint shadowTexWidth, shadowTexHeight;
+		TexShadowVolume.GetDimensions(shadowTexWidth, shadowTexHeight);
+		const float2 edgeDistanceTexels = min(uv, 1.0 - uv) * float2(shadowTexWidth, shadowTexHeight);
+		const float cookieCoverage = smoothstep(0.5, 8.0, min(edgeDistanceTexels.x, edgeDistanceTexels.y));
+
 		const float4 cloudShadow = TexShadowVolume.SampleLevel(samp, uv, 0);
 		if (cloudShadow.y == 1.0)
 			return 1.0;
@@ -598,7 +608,8 @@ Texture2D<float4> TexMsLut : register(t113);
 		const float zCoord = discriminant >= 0.0 ? -b - sqrt(discriminant) : 0.0;
 		const float zCoordKm = zCoord * GAME_UNIT_TO_M * 0.001;
 		const float shadowRange = saturate((zCoordKm - cloudShadow.x) / max(cloudShadow.z - cloudShadow.x, 1e-5));
-		return lerp(cloudShadow.y, 1.0, shadowRange).xxx;
+		const float columnTransmittance = lerp(cloudShadow.y, 1.0, shadowRange);
+		return lerp(1.0, columnTransmittance, cookieCoverage).xxx;
 	}
 #endif
 

@@ -33,133 +33,76 @@ namespace nlohmann
 	void from_json(const json&, TextureManager&);
 }
 
-struct HpTextureOverrideSettings
+struct TexNdfSettings
 {
-	std::string lowWeatherPath;
-	std::string highWeatherPath;
-	std::string profilePath;
-	std::string scCellPath;
-	std::string highCellPath;
-	std::string highWarpPath;
-	std::string highWispPath;
+	std::string texPath;
 };
 
-struct HpGeneratedCloudMapSettings
+struct CumuliformNdfSettings
 {
-	uint32_t generationVersion = 0;
-	uint32_t weatherDim = 512;
-	uint32_t profileWidth = 256;
-	uint32_t profileHeight = 64;
-	// Horizontal weather-map extent in kilometres. It is independent of the
-	// vertical shared cloud layer, but their default feature scales are paired.
-	float worldSize = 64.f;
-	float2 center = { 0.f, 0.f };
-	uint32_t seed = 1337;
-
-	// --- Primary controls -------------------------------------------------
-	// Each of these maps onto one solved quantity in the generator rather than
-	// onto an opaque noise threshold.
-
-	// Fraction of the sky carrying low cloud. The generator solves the field
-	// threshold by histogram quantile, so this is the actual covered area.
-	float skyCoverage = 0.38f;
-	// Horizontal diameter of a single convective cloud body, in kilometres.
-	float cloudSize = 2.4f;
-	// Atmospheric instability: drives the Cu -> TCu -> Cb species mix and the
-	// vertical development of each species.
-	float instability = 0.45f;
-	// 0 = discrete convective cells, 1 = continuous stratiform sheets.
-	float character = 0.35f;
-	// Separation between convective cloud bodies. Independent of coverage: the
-	// same cloud area is redistributed into fewer, denser bodies.
-	float breakup = 0.45f;
-	// Fraction of the sky carrying high cloud, solved the same way.
-	float highCoverage = 0.28f;
-
-	// --- Advanced ---------------------------------------------------------
-	// Edge softness of the coverage ramp. Unlike the former contrast control,
-	// this cannot change how much sky is covered.
-	float coverageEdgeWidth = 0.45f;
-	float highCoverageEdgeWidth = 0.5f;
-	// Frontal band contribution to coverage, and the band bearing in degrees.
-	float frontStrength = 0.35f;
-	float frontBearing = 45.f;
-	// Radial dome falloff applied to the profile LUT. 0 = flat slabs.
-	float domeStrength = 0.85f;
-	// Shares are measured over generated low-cloud coverage. Cu/Tcu/Cb weights
-	// are normalized after the independent stratocumulus share is assigned.
-	float stratocumulus = 0.20f;
-	float cumulusWeight = 0.62f;
-	float toweringCumulusWeight = 0.28f;
-	float cumulonimbusWeight = 0.10f;
-	// Physical vertical development for each profile family in kilometres. The
-	// shared cloud shell remains only a safety bound, so raising its ceiling does
-	// not stretch shallow clouds into full-height columns.
-	float cumulusDepth = 1.2f;
-	float toweringCumulusDepth = 3.0f;
-	float cumulonimbusDepth = 10.0f;
-	float altostratusWeight = 0.68f;
-	float altocumulusWeight = 0.32f;
-	HpTextureOverrideSettings overrides;
+	DirectX::XMUINT2 scale0 = { 10, 10 };
+	float2 offset0 = { 3.f, 3.f };
+	DirectX::XMUINT2 scale1 = { 20, 20 };
+	float2 offset1 = { 6.f, 6.f };
+	DirectX::XMUINT2 scale2 = { 40, 40 };
+	float2 offset2 = { 24.f, 24.f };
+	float2 clipRange = { 0.4f, 1.f };
+	float power = 0.7f;
+	float wispiness = 0.1f;
+	float rot0 = 1.f;
+	float rot1 = 2.f;
+	float rot2 = 3.f;
+	float _pad = 0.f;
 };
 
-using NdfSettings = HpGeneratedCloudMapSettings;
+using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
+
+struct NdfManager
+{
+	constexpr static uint16_t kNdfDim = 256;
+
+	eastl::unique_ptr<Texture2D> texNdfOutput = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> cumuliformProgram = nullptr;
+	eastl::unique_ptr<ConstantBuffer> cumuliformCb = {};
+
+	void SetupResources();
+	void CompileShaders();
+
+	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
+	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
+	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
+	void UpdateNdf(const NdfSettings& ndfSettings);
+	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
+};
 
 struct HpLowCloudSettings
 {
-	float3 noiseScale = { 0.0001f, 0.000145f, 0.0001f };
+	// Absolute altitude of the shared low-cloud condensation base, in kilometres.
+	float baseAltitude = 1.0f;
+	float thickness = 0.3f;
+	float2 ndfScale = { 16.f, 16.f };
+	// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
+	float noiseCompositeScale = 0.2f;
 	float3 noiseOffset = { 0.f, 0.f, 0.f };
-	float detailNoiseScale = 0.00042f;
 	float2 windDirection = { 1.f, 0.2f };
 	float windSpeed = 12.f;
-	float baseNoiseWindSpeed = 1.f;
-	float detailNoiseWindSpeed = 1.5f;
-	float detailNoiseVerticalWindSpeed = 0.08f;
-	float billowyLow = 0.55f;
-	float billowyHigh = 0.45f;
-	float wispyLow = 0.45f;
-	float wispyHigh = 0.55f;
-	float detailStrengthCu = 0.35f;
-	float detailStrengthTcu = 0.55f;
-	float detailStrengthCb = 0.75f;
-	float densityThreshold = 0.05f;
-	float densityMultiplier = 0.09f;
-	float densityMultiplierCu = 0.85f;
-	float densityMultiplierTcu = 1.1f;
-	float densityMultiplierCb = 1.35f;
-	float bottomSmoothHeight = 0.08f;
-	float bottomSmoothPow = 2.f;
-	float wispyEdgeWidth = 0.25f;
-	float wispyReach = 0.18f;
-	float wispyTopHeight = 0.72f;
-	float wispyTopHardness = 0.25f;
-	float coverageCoverIntensity = 1.f;
-	float coverageCoverContrast = 1.f;
-	float coverageHeightIntensity = 1.f;
-	float coverageHeightContrast = 1.f;
-	float coverTopStrength = 0.65f;
-	float coverTopMax = 2.f;
-	float coverTopCurvePow = 1.f;
-};
-
-struct HpStratocumulusSettings
-{
-	float2 cellScale = { 6.f, 6.f };
-	float worleyStrength = 0.65f;
-	// Physical vertical development in kilometres; converted to a fraction of
-	// the shared shell when populating the shader buffer.
-	float verticalDepth = 0.8f;
-	float detailStrength = 0.32f;
-	float cellThickPow = 1.7f;
-	float cellThickStrength = 0.85f;
-	float cellNoiseStrength = 1.25f;
-	float coverageIntensity = 1.15f;
-	float coverageContrast = 1.25f;
+	// Optical scale applied to normalized reconstructed density after NDF shaping.
+	float extinctionCoefficient = 0.09f;
 };
 
 struct HpHighCloudSettings
 {
 	bool enabled = true;
+	uint32_t weatherDim = 512;
+	float weatherWorldSize = 64.f;
+	float2 weatherCenter = { 0.f, 0.f };
+	uint32_t weatherSeed = 1337;
+	float coverage = 0.28f;
+	float coverageEdgeWidth = 0.5f;
+	float frontStrength = 0.35f;
+	float frontBearing = 45.f;
+	float altostratusWeight = 0.68f;
+	float altocumulusWeight = 0.32f;
 	float2 cellScale = { 4.f, 4.f };
 	float cellWindSpeed = 1.35f;
 	float2 cellWarpScale = { 1.5f, 1.5f };
@@ -167,9 +110,10 @@ struct HpHighCloudSettings
 	float cellThickStrength = 0.75f;
 	float asCellThickStrength = 0.25f;
 	float cellThickPow = 1.6f;
-	// Normalized positions inside the shared physical shell, not kilometres.
-	float bottom = 0.58f;
-	float top = 0.92f;
+	// Absolute altitude band in kilometres. High clouds do not share the low-cloud
+	// NDF coordinate frame.
+	float bottomAltitude = 6.0f;
+	float topAltitude = 12.0f;
 	float bottomCoverageScale = 0.35f;
 	float heightCurvePow = 0.85f;
 	float densityThreshold = 0.08f;
@@ -177,8 +121,6 @@ struct HpHighCloudSettings
 	float softness = 0.04f;
 	float2 wispScale = { 7.f, 7.f };
 	float wispStrength = 0.18f;
-	float horizonDistanceStart = 18000.f;
-	float horizonDistanceEnd = 65000.f;
 	float densityMultiplier = 0.35f;
 	float densitySoftAIntensity = 0.3f;
 	float densitySoftAContrast = 1.5f;
@@ -186,9 +128,12 @@ struct HpHighCloudSettings
 	float densityModAContrast = 1.5f;
 	float forwardEccentricity = 0.78f;
 	float backwardEccentricity = 0.22f;
-	float ambientTopMultiplier = 1.8f;
-	float ambientBottomMultiplier = 0.65f;
-	float skyBlendStrength = 0.35f;
+	// Unit multipliers preserve the radiance reconstructed from the sky probe.
+	float ambientTopMultiplier = 1.f;
+	float ambientBottomMultiplier = 1.f;
+	// 1 preserves integrated cloud radiance; lower values artistically blend the
+	// high-cloud top toward the view-direction environment probe.
+	float skyBlendStrength = 1.f;
 	float msAttenuation = 0.55f;
 	float msContribution = 0.5f;
 	float msEccentricity = 0.55f;
@@ -202,8 +147,9 @@ struct HpLightingSettings
 	float3 scatterTint = { 1.f, 1.f, 1.f };
 	float forwardEccentricity = 0.85f;
 	float backwardEccentricity = 0.3f;
-	float ambientTopMultiplier = 1.6f;
-	float ambientBottomMultiplier = 0.75f;
+	// Unit multipliers preserve the radiance reconstructed from the sky probe.
+	float ambientTopMultiplier = 1.f;
+	float ambientBottomMultiplier = 1.f;
 	float aoUpwardScale = 1.f;
 	float msAttenuation = 0.5f;
 	float msContribution = 0.5f;
@@ -236,34 +182,23 @@ struct HpPhiFwdSettings
 
 struct CloudLayer
 {
-	// Kilometres above the local ground reference. These are the shared physical
-	// shell boundaries; individual cloud types distribute themselves inside it.
-	float lowestAltitude = 0.5f;
-	float highestAltitude = 3.0f;
 	HpLowCloudSettings low;
-	HpStratocumulusSettings stratocumulus;
 	HpHighCloudSettings high;
 	HpLightingSettings lighting;
 	HpPhiFwdSettings phiFwd;
 };
 
-struct HpCloudTextureSet
+struct HighCloudTextureSet
 {
-	ID3D11ShaderResourceView* lowWeather = nullptr;
 	ID3D11ShaderResourceView* highWeather = nullptr;
-	ID3D11ShaderResourceView* profile = nullptr;
-	ID3D11ShaderResourceView* scCell = nullptr;
 	ID3D11ShaderResourceView* highCell = nullptr;
 	ID3D11ShaderResourceView* highWarp = nullptr;
 	ID3D11ShaderResourceView* highWisp = nullptr;
 };
 
-struct NdfManager
+struct HighCloudMapManager
 {
-	eastl::unique_ptr<Texture2D> texLowWeather = nullptr;
 	eastl::unique_ptr<Texture2D> texHighWeather = nullptr;
-	eastl::unique_ptr<Texture2D> texProfile = nullptr;
-	eastl::unique_ptr<Texture2D> texScCell = nullptr;
 	eastl::unique_ptr<Texture2D> texHighCell = nullptr;
 	eastl::unique_ptr<Texture2D> texHighWarp = nullptr;
 	eastl::unique_ptr<Texture2D> texHighWisp = nullptr;
@@ -271,14 +206,7 @@ struct NdfManager
 	void SetupResources();
 	void CompileShaders();
 	bool ShadersReady() const;
-
-	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
-	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
-	void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
-	/** @brief Regenerates the cloud maps if any generation input changed. */
-	void UpdateNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
-	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
-	HpCloudTextureSet GetHpTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer, TextureManager& texManager);
+	HighCloudTextureSet GetTextures(const HpHighCloudSettings& settings);
 
 private:
 	// Generation is GPU-side, so it is cheap enough to re-run whenever an input
@@ -286,11 +214,8 @@ private:
 	// redundant dispatches on unchanged frames.
 	size_t generatedHash = 0;
 	uint32_t generatedWeatherDim = 0;
-	uint32_t generatedProfileWidth = 0;
-	uint32_t generatedProfileHeight = 0;
 
 	// Intermediate morphology fields consumed by the histogram and compose passes.
-	eastl::unique_ptr<Texture2D> texFieldLow = nullptr;
 	eastl::unique_ptr<Texture2D> texFieldHigh = nullptr;
 	eastl::unique_ptr<Buffer> bufHistogram = nullptr;
 	eastl::unique_ptr<Buffer> bufThresholds = nullptr;
@@ -300,43 +225,24 @@ private:
 	winrt::com_ptr<ID3D11ComputeShader> csHistogram = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csSolve = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csCompose = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csProfile = nullptr;
 
 	struct GenCB
 	{
 		uint32_t weatherDim[2];
-		uint32_t profileDim[2];
-
-		uint32_t cellPeriod;
 		uint32_t seed;
 		uint32_t solveRound;
-		float skyCoverage;
 
-		float highCoverage;
-		float instability;
-		float character;
-		float breakup;
-
-		float coverageEdgeWidth;
+		float coverage;
 		float highCoverageEdgeWidth;
 		float frontStrength;
-		float domeStrength;
+		float asShare;
 
 		float frontNormal[2];
 		float frontTangent[2];
-
-		float scShare;
-		float cuShare;
-		float tcuShare;
-		float asShare;
-
-		float cumulusDepth;
-		float toweringCumulusDepth;
-		float cumulonimbusDepth;
-		float layerDepth;
+		float padding[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(GenCB);
 
-	bool EnsureResources(const NdfSettings& ndfSettings);
-	void GenerateTextures(const NdfSettings& ndfSettings, const CloudLayer& cloudLayer);
+	bool EnsureResources(const HpHighCloudSettings& settings);
+	void GenerateTextures(const HpHighCloudSettings& settings);
 };
