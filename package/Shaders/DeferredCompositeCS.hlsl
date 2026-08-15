@@ -236,8 +236,6 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				}
 #		if defined(SKYLIGHTING)
-				if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
-					envSpecular *= skylightingSpecular;
 				skySpecular *= skylightingSpecular;
 #		elif defined(INTERIOR)
 				skySpecular = 0;

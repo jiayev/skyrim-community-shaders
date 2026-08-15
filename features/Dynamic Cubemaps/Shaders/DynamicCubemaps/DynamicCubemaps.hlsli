@@ -72,8 +72,6 @@ namespace DynamicCubemaps
 					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				}
 #			if defined(SKYLIGHTING)
-				if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
-					envSpecular *= skylightingSpecular;
 				skySpecular *= skylightingSpecular;
 #			endif
 				if (SharedData::InInterior) {

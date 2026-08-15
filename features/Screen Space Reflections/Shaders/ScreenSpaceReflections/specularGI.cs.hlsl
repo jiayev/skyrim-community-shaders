@@ -469,8 +469,6 @@ float SSRT_ValidateHit(float3 hit,
 				float3 skyColor = max(fullSample - envSampleRaw, 0) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				skyColor *= skylightingSpecular;
-				if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
-					envColor *= skylightingSpecular;
 #		endif
 				envColor += skyColor;
 			}
