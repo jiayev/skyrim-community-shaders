@@ -445,7 +445,7 @@ float SSRT_ValidateHit(float3 hit,
 			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
 			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(view_space_surface_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
+			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(world_space_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
 		}
 #	endif
 
