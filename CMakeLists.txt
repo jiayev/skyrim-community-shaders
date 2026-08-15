@@ -134,10 +134,7 @@ target_include_directories(
         ${DETOURS_INCLUDE_DIRS}
 )
 
-target_compile_definitions(
-    ${PROJECT_NAME}
-    PRIVATE SK_HDR_PNG_COMMUNITY_SHADERS
-)
+target_compile_definitions(${PROJECT_NAME} PRIVATE SK_HDR_PNG_COMMUNITY_SHADERS)
 
 target_link_libraries(
     ${PROJECT_NAME}
@@ -249,11 +246,19 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
     # retains its prior value (the version major, above) when a REGEX MATCH misses.
     set(_STAGE_ALPHA "")
     set(_STAGE_BETA "")
-    string(REGEX MATCH "(^|[\r\n])[ \t]*[Aa]lpha[ \t]*=[ \t]*([A-Za-z0-9]+)" _STAGE_ALPHA_MATCH "${CONFIG_VALUE}")
+    string(
+        REGEX MATCH "(^|[\r\n])[ \t]*[Aa]lpha[ \t]*=[ \t]*([A-Za-z0-9]+)"
+        _STAGE_ALPHA_MATCH
+        "${CONFIG_VALUE}"
+    )
     if(_STAGE_ALPHA_MATCH)
         string(TOLOWER "${CMAKE_MATCH_2}" _STAGE_ALPHA)
     endif()
-    string(REGEX MATCH "(^|[\r\n])[ \t]*[Bb]eta[ \t]*=[ \t]*([A-Za-z0-9]+)" _STAGE_BETA_MATCH "${CONFIG_VALUE}")
+    string(
+        REGEX MATCH "(^|[\r\n])[ \t]*[Bb]eta[ \t]*=[ \t]*([A-Za-z0-9]+)"
+        _STAGE_BETA_MATCH
+        "${CONFIG_VALUE}"
+    )
     if(_STAGE_BETA_MATCH)
         string(TOLOWER "${CMAKE_MATCH_2}" _STAGE_BETA)
     endif()
@@ -641,6 +646,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             file(
                 GLOB_RECURSE _feat_shaders
                 LIST_DIRECTORIES FALSE
+                CONFIGURE_DEPENDS
                 "${_fpath}/Shaders/*"
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
@@ -999,10 +1005,7 @@ set(CORE_PACKAGE "${DIST_PATH}/${PROJECT_NAME}-${UTC_NOW}.zip")
 # CORE_SOURCES = all content copied to the AIO directory + the SKSE plugin dll.
 # No CONFIGURE_DEPENDS: packaging runs from a fresh CI configure, and omitting
 # it keeps these globs out of the VS generator's per-build VerifyGlobs walk.
-file(
-    GLOB_RECURSE CORE_SOURCES
-    "${CMAKE_SOURCE_DIR}/package/*"
-)
+file(GLOB_RECURSE CORE_SOURCES "${CMAKE_SOURCE_DIR}/package/*")
 # Add SKSE plugin dll as dependency (use target-file generator expression so CMake
 # knows the actual output path of the target at build time)
 list(APPEND CORE_SOURCES "$<TARGET_FILE:${PROJECT_NAME}>")
@@ -1024,8 +1027,8 @@ add_custom_command(
     OUTPUT ${CORE_PACKAGE}
     DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
     COMMAND
-        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${FEATURE_PATH}
-        --component SKSE
+        ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
+        --prefix ${FEATURE_PATH} --component SKSE
     COMMAND
         ${CMAKE_COMMAND} -E copy_directory ${CORE_FEATURE_PATHS} ${FEATURE_PATH}
     COMMAND ${CMAKE_COMMAND} -E rm -f -- ${FEATURE_PATH}/Core
@@ -1051,8 +1054,7 @@ foreach(FEATURE_PATH ${FEATURE_PATHS})
 
     add_custom_command(
         OUTPUT ${FEATURE_PACKAGE}
-        COMMAND
-            ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=zip -- .
+        COMMAND ${CMAKE_COMMAND} -E tar cfv ${FEATURE_PACKAGE} --format=zip -- .
         WORKING_DIRECTORY "${FEATURE_PATH}"
         DEPENDS ${FEATURE_SOURCES}
         COMMENT "Creating ${FEATURE} zip package"
@@ -1069,15 +1071,15 @@ endforeach()
 if(TARGET PREPARE_AIO)
     add_custom_target(
         "AIO"
-        DEPENDS
-            ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-            copy_shaders.stamp
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp copy_shaders.stamp
     )
 else()
     add_custom_command(
         OUTPUT ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll
         DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
-        COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
+        COMMAND
+            ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
+            --prefix ${AIO_DIR}
         COMMENT "Installing to AIO folder"
     )
     add_custom_target("AIO" DEPENDS ${AIO_DIR}/SKSE/Plugins/${PROJECT_NAME}.dll)
@@ -1102,7 +1104,9 @@ else()
         OUTPUT ${AIO_PACKAGE}
         DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${AIO_DIR}
-        COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG> --prefix ${AIO_DIR}
+        COMMAND
+            ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
+            --prefix ${AIO_DIR}
         COMMAND
             ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
             ${AIO_PACKAGE} --format=zip -- .

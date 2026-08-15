@@ -17,7 +17,6 @@ namespace
 {
 	constexpr float KilometersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_KM; }
 	constexpr float MetersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_M; }
-	constexpr float PerMeterToPerGameUnit(float value) { return value * Util::Units::GAME_UNIT_TO_M; }
 
 	bool IsVolumeTexture(ID3D11ShaderResourceView* srv)
 	{
@@ -43,15 +42,12 @@ void PhysicalSky::LoadCloudTextures()
 
 	loadDDS(L"Data\\Textures\\PhysicalSky\\nubis.dds", baseShapeNoiseSrv);
 	if (baseShapeNoiseSrv && !IsVolumeTexture(baseShapeNoiseSrv.get())) {
-		logger::warn("Ignoring base shape noise because it is not a 3D texture.");
+		logger::warn("Ignoring Nubis noise composite because it is not a 3D texture.");
 		baseShapeNoiseSrv = nullptr;
 	}
 
-	// Nubis is the authored 128^3 RGBA volume used by the original cloud model:
-	// R/G are the low/high wispy fields and B/A are the low/high billowy fields.
-	// Keep a second SRV reference because the shader deliberately samples the same
-	// volume at independent base-shape and detail-erosion frequencies.
-	detailErosionNoiseSrv = baseShapeNoiseSrv;
+	loadDDS(L"Data\\Textures\\PhysicalSky\\top_lut.dds", cloudTopLutSrv);
+	loadDDS(L"Data\\Textures\\PhysicalSky\\bottom_lut.dds", cloudBottomLutSrv);
 }
 
 void PhysicalSky::SetupVolumetricResources()
@@ -243,6 +239,7 @@ void PhysicalSky::SetupVolumetricResources()
 	// Load textures and NDF
 	LoadCloudTextures();
 	ndfManager.SetupResources();
+	highCloudMapManager.SetupResources();
 
 	CompileVolumetricShaders();
 }
@@ -274,15 +271,15 @@ void PhysicalSky::CompileVolumetricShaders()
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.data())))
 			info.csPtr->attach(rawPtr);
 	}
-
 	ndfManager.CompileShaders();
+	highCloudMapManager.CompileShaders();
 }
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 {
 	if (!csVolMainView || !csVolReproject || !csVolUpscale || !csVolShadowVolume || !csVolShadowFilter || !csVolCubemap || !csVolAmbientSH)
 		return;
-	if (!baseShapeNoiseSrv || !detailErosionNoiseSrv)
+	if (!baseShapeNoiseSrv || !cloudTopLutSrv || !cloudBottomLutSrv)
 		return;
 
 	auto state = globals::state;
@@ -326,67 +323,33 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float cloudHistoryInvalidation = std::clamp(1.0f - sunAngleDifferenceDegrees / 10.0f, 0.0f, 1.0f);
 
 	auto& low = settings.cloudLayer.low;
-	auto& sc = settings.cloudLayer.stratocumulus;
 	auto& high = settings.cloudLayer.high;
 	auto& lighting = settings.cloudLayer.lighting;
 	auto& phi = settings.cloudLayer.phiFwd;
 
-	// The previous defaults preserved the old engine-space frequencies after the
-	// unit conversion, which made both shape fields tens of times too small. Replace
-	// that legacy range with the kilometre-scale sampling frequencies used by the
-	// current density model. Custom values already in the new range are untouched.
-	const float maxNoiseScale = std::max(low.noiseScale.x, std::max(low.noiseScale.y, low.noiseScale.z));
-	// A short-lived generated-map default enlarged the horizontal distribution to
-	// 192 km without changing the physical layer thickness. Restore the compatible
-	// 64 km extent for configurations that received that exact transient default.
-	auto& cloudMap = settings.cloudMap;
-	if (cloudMap.generationVersion < 1u) {
-		if (std::abs(cloudMap.worldSize - 192.0f) < 0.001f) {
-			cloudMap.worldSize = 64.0f;
-			volMainHistoryValid = false;
-		}
-		cloudMap.generationVersion = 1u;
-	}
-	// Version 2 replaced the open-loop coverage threshold with a solved quantile
-	// and the summed-FBM field with a convective/stratiform/frontal model. The
-	// removed lowCoverage and lowContrast keys have no equivalent under the new
-	// semantics, so stored configurations fall back to the new defaults rather
-	// than carrying a value that no longer means what it used to.
-	if (cloudMap.generationVersion < 2u) {
-		cloudMap.generationVersion = 2u;
-		volMainHistoryValid = false;
-	}
-	// Version 3 retunes the shape-noise frequencies. The previous base period was
-	// 22 km horizontally, so a 2.4 km cloud spanned only 14 of the volume's 128
-	// texels and adjacent clouds sampled nearly the same stretch of noise, carving
-	// them into near-identical shapes. Only configurations still holding the exact
-	// superseded defaults are retuned; hand-authored frequencies are preserved.
-	if (cloudMap.generationVersion < 3u) {
-		const auto isLegacy = [](float value, float legacy) { return std::abs(value - legacy) < 1e-7f; };
-		if (isLegacy(low.noiseScale.x, 0.000045f) && isLegacy(low.noiseScale.y, 0.00007f) &&
-			isLegacy(low.noiseScale.z, 0.000045f)) {
-			low.noiseScale = float3{ 0.0001f, 0.000145f, 0.0001f };
-			volMainHistoryValid = false;
-		}
-		if (isLegacy(low.detailNoiseScale, 0.00019f)) {
-			low.detailNoiseScale = 0.00042f;
-			volMainHistoryValid = false;
-		}
-		cloudMap.generationVersion = 3u;
-	}
-	if (maxNoiseScale > 0.001f || low.detailNoiseScale > 0.01f) {
-		low.noiseScale = float3{ 0.0001f, 0.000145f, 0.0001f };
-		low.detailNoiseScale = 0.00042f;
-		volMainHistoryValid = false;
-	}
+	low.thickness = std::clamp(low.thickness, 0.05f, 3.0f);
+	low.ndfScale.x = std::clamp(low.ndfScale.x, 1.0f, 50.0f);
+	low.ndfScale.y = std::clamp(low.ndfScale.y, 1.0f, 50.0f);
+	low.noiseCompositeScale = std::clamp(low.noiseCompositeScale, 0.02f, 8.0f);
+	high.weatherDim = std::clamp(high.weatherDim, 128u, 1024u);
+	high.weatherWorldSize = std::clamp(high.weatherWorldSize, 8.0f, 256.0f);
 
 	const float timeSeconds = state->timer * 1e-3f;
-	const float cloudLayerDepth = std::max(settings.cloudLayer.highestAltitude - settings.cloudLayer.lowestAltitude, 0.05f);
 	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
 	const float2 windDir = windLen > 1e-4f ? low.windDirection / windLen : float2{ 1.f, 0.f };
 	const float2 noiseWindOffset = windDir * MetersToGameUnits(low.windSpeed * timeSeconds);
-	const float highCloudBottom = std::clamp(high.bottom, 0.0f, 1.0f);
-	const float highCloudTop = std::clamp(std::max(high.top, highCloudBottom), highCloudBottom, 1.0f);
+	const float2 crossWind = { -windDir.y, windDir.x };
+	const float2 shearDirection = (windDir * 0.78f + crossWind * 0.36f) / std::sqrt(0.78f * 0.78f + 0.36f * 0.36f);
+	const float2 noiseHeightShear = shearDirection * KilometersToGameUnits(low.noiseCompositeScale * 0.04f);
+	const float lowCloudBaseKm = std::max(low.baseAltitude, 0.0f);
+	const float lowCloudDepthKm = low.thickness;
+	const float lowCloudTopKm = lowCloudBaseKm + lowCloudDepthKm;
+	const float lowTraceDepthKm = lowCloudDepthKm;
+	const float lowCloudTraceTopKm = lowCloudBaseKm + lowTraceDepthKm;
+	const float highCloudBottomKm = std::max(high.bottomAltitude, 0.0f);
+	const float highCloudTopKm = std::max(high.topAltitude, highCloudBottomKm + 0.1f);
+	const float traceBottomKm = high.enabled ? std::min(lowCloudBaseKm, highCloudBottomKm) : lowCloudBaseKm;
+	const float traceTopKm = high.enabled ? std::max(lowCloudTraceTopKm, highCloudTopKm) : lowCloudTraceTopKm;
 
 	constexpr bool fullResolutionMainView = false;
 	const uint32_t lowW = texVolLowTr->desc.Width;
@@ -405,53 +368,22 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
 		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
-		.lowestCloudAltitude = KilometersToGameUnits(settings.cloudLayer.lowestAltitude),
-		.highestCloudAltitude = KilometersToGameUnits(settings.cloudLayer.highestAltitude),
-		.weatherCenter = { KilometersToGameUnits(cloudMap.center.x), KilometersToGameUnits(cloudMap.center.y) },
-		.weatherWorldSize = KilometersToGameUnits(cloudMap.worldSize),
+		.lowestCloudAltitude = KilometersToGameUnits(traceBottomKm),
+		.highestCloudAltitude = KilometersToGameUnits(traceTopKm),
+		.lowCloudBaseAltitude = KilometersToGameUnits(lowCloudBaseKm),
+		.lowCloudTopAltitude = KilometersToGameUnits(lowCloudTopKm),
+		.lowCloudTraceTopAltitude = KilometersToGameUnits(lowCloudTraceTopKm),
+		.weatherCenter = { KilometersToGameUnits(high.weatherCenter.x), KilometersToGameUnits(high.weatherCenter.y) },
+		.weatherWorldSize = KilometersToGameUnits(high.weatherWorldSize),
 		.highCloudEnabled = high.enabled ? 1.0f : 0.0f,
+		.lowNdfFrequency = { Util::Units::GAME_UNIT_TO_KM / low.ndfScale.x, Util::Units::GAME_UNIT_TO_KM / low.ndfScale.y },
 		.noiseWindOffset = noiseWindOffset,
-		// Noise frequencies are authored in inverse metres; shader positions are game units.
-		.noiseScale = low.noiseScale * Util::Units::GAME_UNIT_TO_M,
-		.detailNoiseScale = PerMeterToPerGameUnit(low.detailNoiseScale),
+		// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
+		.noiseFrequency = 1.0f / KilometersToGameUnits(low.noiseCompositeScale),
 		.noiseOffset = low.noiseOffset,
-		.baseNoiseWindSpeed = low.baseNoiseWindSpeed,
-		.detailNoiseWindSpeed = low.detailNoiseWindSpeed,
-		.detailNoiseVerticalWindSpeed = low.detailNoiseVerticalWindSpeed,
-		.billowyLow = low.billowyLow,
-		.billowyHigh = low.billowyHigh,
-		.wispyLow = low.wispyLow,
-		.wispyHigh = low.wispyHigh,
-		.detailStrengthCu = low.detailStrengthCu,
-		.detailStrengthTcu = low.detailStrengthTcu,
-		.detailStrengthCb = low.detailStrengthCb,
-		.densityThreshold = low.densityThreshold,
-		.densityMultiplier = low.densityMultiplier,
-		.densityMultiplierCu = low.densityMultiplierCu,
-		.densityMultiplierTcu = low.densityMultiplierTcu,
-		.densityMultiplierCb = low.densityMultiplierCb,
-		.bottomSmoothHeight = low.bottomSmoothHeight,
-		.bottomSmoothPow = low.bottomSmoothPow,
-		.wispyEdgeWidth = low.wispyEdgeWidth,
-		.wispyReach = low.wispyReach,
-		.wispyTopHeight = low.wispyTopHeight,
-		.wispyTopHardness = low.wispyTopHardness,
-		.coverageCoverIntensity = low.coverageCoverIntensity,
-		.coverageCoverContrast = low.coverageCoverContrast,
-		.coverageHeightIntensity = low.coverageHeightIntensity,
-		.coverageHeightContrast = low.coverageHeightContrast,
-		.coverTopStrength = low.coverTopStrength,
-		.coverTopMax = low.coverTopMax,
-		.coverTopCurvePow = low.coverTopCurvePow,
-		.scCellScale = sc.cellScale,
-		.scWorleyStrength = sc.worleyStrength,
-		.scHeightScale = std::clamp(sc.verticalDepth / cloudLayerDepth, 0.001f, 1.0f),
-		.scDetailStrength = sc.detailStrength,
-		.scCellThickPow = sc.cellThickPow,
-		.scCellThickStrength = sc.cellThickStrength,
-		.scCellNoiseStrength = sc.cellNoiseStrength,
-		.scCoverageIntensity = sc.coverageIntensity,
-		.scCoverageContrast = sc.coverageContrast,
+		.extinctionCoefficient = low.extinctionCoefficient,
+		.noiseHeightShear = noiseHeightShear,
+		._padNoise = 0.0f,
 		.highCellScale = high.cellScale,
 		.highCellWindSpeed = high.cellWindSpeed,
 		.highCellWarpScale = high.cellWarpScale,
@@ -459,8 +391,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highCellThickStrength = high.cellThickStrength,
 		.highAsCellThickStrength = high.asCellThickStrength,
 		.highCellThickPow = high.cellThickPow,
-		.highCloudBottom = highCloudBottom,
-		.highCloudTop = highCloudTop,
+		.highCloudBottom = KilometersToGameUnits(highCloudBottomKm),
+		.highCloudTop = KilometersToGameUnits(highCloudTopKm),
 		.highBottomCoverageScale = high.bottomCoverageScale,
 		.highHeightCurvePow = high.heightCurvePow,
 		.highDensityThreshold = high.densityThreshold,
@@ -468,8 +400,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highCloudSoftness = high.softness,
 		.highWispScale = high.wispScale,
 		.highWispStrength = high.wispStrength,
-		.highHorizonDistanceStart = MetersToGameUnits(high.horizonDistanceStart),
-		.highHorizonDistanceEnd = MetersToGameUnits(high.horizonDistanceEnd),
 		.highDensityMultiplier = high.densityMultiplier,
 		.highDensitySoftAIntensity = high.densitySoftAIntensity,
 		.highDensitySoftAContrast = high.densitySoftAContrast,
@@ -509,7 +439,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.lowFrameDim = { static_cast<float>((renderW + 3u) / 4u), static_cast<float>((renderH + 3u) / 4u) },
 		.rcpLowFrameDim = { 1.0f / static_cast<float>((renderW + 3u) / 4u), 1.0f / static_cast<float>((renderH + 3u) / 4u) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
-		.elapsedTimeSeconds = timeSeconds,
 		.temporalAccumulationFactor = std::clamp(settings.temporalAccumulationFactor, 0.0f, 1.0f),
 		.cloudHistoryInvalidation = cloudHistoryInvalidation,
 		.ghostingReduction = settings.ghostingReduction ? 1u : 0u,
@@ -520,27 +449,31 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto hpTextures = ndfManager.GetHpTextures(cloudMap, settings.cloudLayer, ndfTexManager);
-	if (!hpTextures.lowWeather || !hpTextures.highWeather || !hpTextures.profile || !hpTextures.scCell || !hpTextures.highCell || !hpTextures.highWarp || !hpTextures.highWisp)
+	auto* ndfSrv = ndfManager.GetNdf(ndfSettings, ndfTexManager);
+	auto highTextures = highCloudMapManager.GetTextures(high);
+	if (!ndfSrv || (high.enabled && (!highTextures.highWeather || !highTextures.highCell || !highTextures.highWarp || !highTextures.highWisp)))
 		return;
 
-	std::array<ID3D11ShaderResourceView*, 16> srvs = {
+	std::array<ID3D11ShaderResourceView*, 19> srvs = {
 		volCloudSb->SRV(),                                                                                             // t0
 		texTrLut->srv.get(),                                                                                           // t1
 		texMsLut->srv.get(),                                                                                           // t2
 		texApLut->srv.get(),                                                                                           // t3
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
-		baseShapeNoiseSrv.get(),                                                                                       // t5 base shape noise
-		detailErosionNoiseSrv.get(),                                                                                   // t6 detail erosion noise
-		hpTextures.lowWeather,                                                                                         // t7
-		hpTextures.highWeather,                                                                                        // t8
+		baseShapeNoiseSrv.get(),                                                                                       // t5 authored Nubis RGBA noise composite
+		nullptr,                                                                                                       // t6 reserved
+		ndfSrv,                                                                                                        // t7 five-layer NDF
+		nullptr,                                                                                                       // t8 unused by Nubis low clouds
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
-		hpTextures.profile,                                                                                            // t11
-		hpTextures.scCell,                                                                                             // t12
-		hpTextures.highCell,                                                                                           // t13
-		hpTextures.highWarp,                                                                                           // t14
-		hpTextures.highWisp,                                                                                           // t15
+		highTextures.highWeather,                                                                                      // t11
+		nullptr,                                                                                                       // t12 unused by Nubis low clouds
+		highTextures.highCell,                                                                                         // t13
+		highTextures.highWarp,                                                                                         // t14
+		highTextures.highWisp,                                                                                         // t15
+		nullptr,                                                                                                       // t16 ambient SH (bound per pass)
+		cloudTopLutSrv.get(),                                                                                          // t17 Nubis top profile
+		cloudBottomLutSrv.get(),                                                                                       // t18 Nubis bottom profile
 	};
 	ID3D11ShaderResourceView* ambientShSrv = texVolCloudAmbientSH ? texVolCloudAmbientSH->srv.get() : nullptr;
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap && texVolCloudAmbientSH) {
@@ -705,13 +638,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[17] = {};
+		ID3D11ShaderResourceView* nullSrvs[19] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[4] = {};
 		ID3D11ShaderResourceView* nullHistorySrvs[11] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};
-		context->CSSetShaderResources(0, 17, nullSrvs);
+		context->CSSetShaderResources(0, 19, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
 		context->CSSetShaderResources(24, 11, nullHistorySrvs);
 		ID3D11ShaderResourceView* nullFilterSrv = nullptr;

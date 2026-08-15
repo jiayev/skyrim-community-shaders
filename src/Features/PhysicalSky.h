@@ -144,7 +144,6 @@ struct PhysicalSky final : public Feature
 		uint32_t cloudMaxStep = 97;
 		float temporalAccumulationFactor = 0.95f;
 		bool ghostingReduction = true;
-		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
 
@@ -248,10 +247,13 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texShadowVolumeTemp = nullptr;  // first Gaussian filter target
 
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> detailErosionNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
 
 	TextureManager ndfTexManager{ "Cloud Map" };
+	NdfSettings ndfSettings = CumuliformNdfSettings{};
 	NdfManager ndfManager;
+	HighCloudMapManager highCloudMapManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
 	struct VolumetricCloudSB
@@ -271,50 +273,20 @@ struct PhysicalSky final : public Feature
 
 		float lowestCloudAltitude;
 		float highestCloudAltitude;
+		float lowCloudBaseAltitude;
+		float lowCloudTopAltitude;
+		float lowCloudTraceTopAltitude;
+
 		float2 weatherCenter;
 		float weatherWorldSize;
 		float highCloudEnabled;
+		float2 lowNdfFrequency;
 		float2 noiseWindOffset;
-		float3 noiseScale;
-		float detailNoiseScale;
+		float noiseFrequency;
 		float3 noiseOffset;
-		float baseNoiseWindSpeed;
-		float detailNoiseWindSpeed;
-		float detailNoiseVerticalWindSpeed;
-		float billowyLow;
-		float billowyHigh;
-		float wispyLow;
-		float wispyHigh;
-		float detailStrengthCu;
-		float detailStrengthTcu;
-		float detailStrengthCb;
-		float densityThreshold;
-		float densityMultiplier;
-		float densityMultiplierCu;
-		float densityMultiplierTcu;
-		float densityMultiplierCb;
-		float bottomSmoothHeight;
-		float bottomSmoothPow;
-		float wispyEdgeWidth;
-		float wispyReach;
-		float wispyTopHeight;
-		float wispyTopHardness;
-		float coverageCoverIntensity;
-		float coverageCoverContrast;
-		float coverageHeightIntensity;
-		float coverageHeightContrast;
-		float coverTopStrength;
-		float coverTopMax;
-		float coverTopCurvePow;
-		float2 scCellScale;
-		float scWorleyStrength;
-		float scHeightScale;
-		float scDetailStrength;
-		float scCellThickPow;
-		float scCellThickStrength;
-		float scCellNoiseStrength;
-		float scCoverageIntensity;
-		float scCoverageContrast;
+		float extinctionCoefficient;
+		float2 noiseHeightShear;
+		float _padNoise;
 		float2 highCellScale;
 		float highCellWindSpeed;
 		float2 highCellWarpScale;
@@ -331,8 +303,6 @@ struct PhysicalSky final : public Feature
 		float highCloudSoftness;
 		float2 highWispScale;
 		float highWispStrength;
-		float highHorizonDistanceStart;
-		float highHorizonDistanceEnd;
 		float highDensityMultiplier;
 		float highDensitySoftAIntensity;
 		float highDensitySoftAContrast;
@@ -373,7 +343,6 @@ struct PhysicalSky final : public Feature
 		float2 lowFrameDim;
 		float2 rcpLowFrameDim;
 		uint historyValid;
-		float elapsedTimeSeconds;
 		float temporalAccumulationFactor;
 		float cloudHistoryInvalidation;
 		uint ghostingReduction;
@@ -381,7 +350,6 @@ struct PhysicalSky final : public Feature
 		float lightStepDistanceLod;
 		uint padding;
 	};
-
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
