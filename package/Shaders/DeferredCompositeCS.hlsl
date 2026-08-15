@@ -122,6 +122,8 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 	if (depth < 1.0 - 1e-6 && SharedData::ssgiSettings.Enabled != 0) {
 		float3 multiBounceSSGIAo = 1.0;
 		ssgiAo = SampleSSGIAO(dispatchID.xy);
+		if (SharedData::ssgiSettings.EnableIL == 0)
+			ssgiAo = pow(max(ssgiAo, EPSILON_DIVISION), SharedData::ssgiSettings.AOPower);
 		float3 linAlbedo = Color::IrradianceToLinear(albedo / Color::PBRLightingScale);
 		float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
 		ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));

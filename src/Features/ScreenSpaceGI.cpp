@@ -932,7 +932,7 @@ ScreenSpaceGI::SharedData ScreenSpaceGI::GetCommonBufferData()
 	data.Enabled = enabled ? 1u : 0u;
 	data.EnableIL = (enabled && settings.EnableGI) ? 1u : 0u;
 	data.DebugMode = 0;
-	data.pad0 = 0;
+	data.AOPower = settings.AOPower;
 	return data;
 }
 

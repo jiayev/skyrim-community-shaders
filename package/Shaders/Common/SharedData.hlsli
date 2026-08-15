@@ -295,7 +295,7 @@ namespace SharedData
 		uint Enabled;
 		uint EnableIL;
 		uint DebugMode;
-		uint pad0;
+		float AOPower;
 	};
 
 	struct SSRSettings
