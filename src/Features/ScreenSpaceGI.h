@@ -60,7 +60,7 @@ public:
 
 	/** @brief Executes the full SSGI pipeline: depth prefilter, radiance fetch, GI, and denoising. */
 	void DrawSSGI();
-	/** @brief Composites SSGI indirect diffuse lighting into the main render target before SSR tracing. */
+	/** @brief Composites this frame's SSGI indirect diffuse lighting into the main render target before downstream screen-space passes. */
 	void Composite();
 	/** @brief Updates the SSGI constant buffer with current camera, resolution, and settings data. */
 	void UpdateSB();
@@ -165,4 +165,7 @@ public:
 	nrd::ReblurSettings reblurSettings{};
 	bool resetReblurHistory = true;
 	bool nrdReblurUsesSH = false;
+	// Prevent downstream passes from sampling stale GI when this frame could not
+	// produce a complete SSGI output (disabled feature, shader failure, etc.).
+	bool outputReady = false;
 };

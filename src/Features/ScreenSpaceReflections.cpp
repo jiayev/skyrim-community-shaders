@@ -39,6 +39,7 @@ void ScreenSpaceReflections::RestoreDefaultSettings()
 	settings = {};
 	recompileFlag = true;
 	resetReblurHistory = true;
+	outputReady = false;
 }
 
 void ScreenSpaceReflections::DrawSettings()
@@ -61,9 +62,12 @@ void ScreenSpaceReflections::DrawSettings()
 	{
 		auto enabledGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
-			recompileFlag = true;
-			resetReblurHistory = true;
+		{
+			auto halfResGuard = Util::DisableGuard(!settings.EnableREBLUR);
+			if (ImGui::Checkbox(T(TKEY("half_resolution_checkerboard"), "Half Resolution (Checkerboard)"), &settings.HalfRes)) {
+				recompileFlag = true;
+				resetReblurHistory = true;
+			}
 		}
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("half_resolution_checkerboard_tooltip"), "Trace half the columns in a checkerboard pattern. NRD reconstructs the missing pixels."));
@@ -112,8 +116,13 @@ void ScreenSpaceReflections::DrawSettings()
 	{
 		auto denoiseGuard = Util::DisableGuard(!settings.Enabled);
 
-		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR))
+		if (ImGui::Checkbox(T(TKEY("enable_reblur"), "Enable REBLUR"), &settings.EnableREBLUR)) {
+			if (!settings.EnableREBLUR && settings.HalfRes) {
+				settings.HalfRes = false;
+				recompileFlag = true;
+			}
 			resetReblurHistory = true;
+		}
 
 		if (settings.EnableREBLUR) {
 			resetReblurHistory |= globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssr_reblur");
@@ -146,8 +155,11 @@ void ScreenSpaceReflections::DrawSettings()
 void ScreenSpaceReflections::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (!settings.EnableREBLUR)
+		settings.HalfRes = false;
 	recompileFlag = true;
 	resetReblurHistory = true;
+	outputReady = false;
 }
 
 void ScreenSpaceReflections::SaveSettings(json& o_json)
@@ -160,6 +172,7 @@ void ScreenSpaceReflections::SetupResources()
 	auto renderer = globals::game::renderer;
 	auto device = globals::d3d::device;
 	resetReblurHistory = true;
+	outputReady = false;
 
 	logger::debug("ScreenSpaceReflections: creating buffers");
 	{
@@ -279,6 +292,7 @@ void ScreenSpaceReflections::SetupResources()
 
 void ScreenSpaceReflections::ClearShaderCache()
 {
+	outputReady = false;
 	prefilterHiZDepthCompute = nullptr;
 	prefilterHiZMipsCompute = nullptr;
 	depthDownsampleCompute = nullptr;
@@ -353,6 +367,11 @@ void ScreenSpaceReflections::UpdateSB()
 
 void ScreenSpaceReflections::DrawSSR()
 {
+	outputReady = false;
+
+	if (recompileFlag)
+		ClearShaderCache();
+
 	if (!(settings.Enabled && ShadersOK() && texHiZDepth && texNRDSpecInput))
 		return;
 
@@ -361,9 +380,6 @@ void ScreenSpaceReflections::DrawSSR()
 
 	if (globals::state->frameAnnotations)
 		globals::state->BeginPerfEvent("SSR");
-
-	if (recompileFlag)
-		ClearShaderCache();
 
 	UpdateSB();
 
@@ -545,6 +561,7 @@ void ScreenSpaceReflections::DrawSSR()
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 	context->CSSetShader(nullptr, nullptr, 0);
+	outputReady = true;
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -552,7 +569,7 @@ void ScreenSpaceReflections::DrawSSR()
 
 ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
 {
-	if (!loaded || !settings.Enabled)
+	if (!outputReady || !loaded || !settings.Enabled)
 		return nullptr;
 	if (settings.EnableREBLUR && nrdReblurSpecular.IsValid() && globals::features::nrd.loaded && globals::features::nrd.AreGuidesReady())
 		return texNRDSpecOutput->srv.get();
@@ -562,7 +579,7 @@ ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
 ScreenSpaceReflections::SharedData ScreenSpaceReflections::GetCommonBufferData()
 {
 	SharedData data;
-	data.Enabled = (loaded && settings.Enabled) ? 1u : 0u;
+	data.Enabled = (loaded && settings.Enabled && !recompileFlag && ShadersOK() && texHiZDepth && texNRDSpecInput) ? 1u : 0u;
 	data.SpecularMult = settings.SpecularMult;
 	data.pad0 = 0;
 	data.pad1 = 0;

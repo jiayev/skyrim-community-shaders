@@ -140,4 +140,6 @@ struct ScreenSpaceReflections : Feature
 	NRDReblurIntegration nrdReblurSpecular;
 	nrd::ReblurSettings reblurSpecularSettings{};
 	bool resetReblurHistory = true;
+	// True only after the current DrawSSR invocation has produced a trace output.
+	bool outputReady = false;
 };
