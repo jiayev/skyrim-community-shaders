@@ -102,13 +102,13 @@ VertexOutput VS_SparseBokeh(uint vertexID : SV_VertexID, uint instanceID : SV_In
 	return output;
 }
 
-float ProceduralApertureCoverage(float2 point)
+float ProceduralApertureCoverage(float2 inputPoint)
 {
-	float radius = length(point);
+	float radius = length(inputPoint);
 	if (radius <= 1e-5f)
 		return 1.0f;
 
-	float angle = atan2(point.y, point.x);
+	float angle = atan2(inputPoint.y, inputPoint.x);
 	angle = angle < 0.0f ? angle + Math::TAU : angle;
 	float sector = Math::TAU / max((float)BokehBladeCount, 4.0f);
 	float edgeNormal = (floor(angle / sector) + 0.5f) * sector;

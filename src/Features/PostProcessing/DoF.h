@@ -30,10 +30,6 @@ struct DoF : public PostProcessFeature
 		int BokehMode = 0;
 		int BokehBladeCount = 6;
 		float BokehBladeRoundness = 1.0f;
-		bool UseSparseHighlights = true;
-		float SparseHighlightThreshold = 1.0f;
-		float SparseHighlightContrast = 1.25f;
-		float SparseHighlightBudget = 0.1f;
 		float BlurQuality = 7.0f;
 		float NearFarDistanceCompensation = 1.0f;
 		float BokehBusyFactor = 0.5f;
@@ -80,29 +76,12 @@ struct DoF : public PostProcessFeature
 		float CustomShapeRadiusScale;
 		float BokehMaxRadius;
 		float NearMaxReachPx;
-		uint SparseHighlightEnabled;
-		uint SparseHighlightMaxCount;
-		float SparseHighlightThreshold;
-		float SparseHighlightContrast;
 		uint BokehBladeCount;
 		float BokehBladeRoundness;
 		float ProceduralBokehAreaScale;
-		uint SparseHighlightWorkBudget;
+		uint pad;
 	};
-	static_assert(sizeof(DoFCB) == 144, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
-
-	struct alignas(16) SparseBokeh
-	{
-		float centerX;
-		float centerY;
-		float radiusInPixels;
-		float signedCoC;
-		float colorR;
-		float colorG;
-		float colorB;
-		float pad;
-	};
-	static_assert(sizeof(SparseBokeh) == 32);
+	static_assert(sizeof(DoFCB) == 128, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
 
 	eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 	eastl::unique_ptr<StructuredBuffer> proceduralBokehSamples = nullptr;
@@ -110,12 +89,9 @@ struct DoF : public PostProcessFeature
 	float cachedBokehBladeRoundness = -1.0f;
 	float proceduralBokehMaxRadius = 1.0f;
 	float proceduralBokehAreaScale = 1.0f;
-	uint sparseHighlightCapacity = 0;
 
 	eastl::unique_ptr<Texture2D> texOutput = nullptr;
 	eastl::unique_ptr<Texture2D> texPreBlurred = nullptr;
-	eastl::unique_ptr<Texture2D> texSparseFar = nullptr;
-	eastl::unique_ptr<Texture2D> texSparseNear = nullptr;
 	eastl::unique_ptr<Texture2D> texFarBlurred = nullptr;
 	eastl::unique_ptr<Texture2D> texNearBlurred = nullptr;
 	eastl::unique_ptr<Texture2D> texBlurredFiltered = nullptr;
@@ -132,8 +108,6 @@ struct DoF : public PostProcessFeature
 	// the scene color target format is not guaranteed to have an alpha channel.
 	std::array<eastl::unique_ptr<Texture2D>, 3> texGatherColor = {};
 	std::array<eastl::unique_ptr<Texture2D>, 3> texGatherCoC = {};
-	eastl::unique_ptr<StructuredBuffer> sparseBokehBuffer = nullptr;
-	eastl::unique_ptr<Buffer> sparseIndirectArgs = nullptr;
 	// Bokeh shapes are provided by PostProcessing::bokehResources (shared with LensFlare)
 
 	winrt::com_ptr<ID3D11ComputeShader> UpdateFocusCS = nullptr;
@@ -145,8 +119,6 @@ struct DoF : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> DownsampleLegacyCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> ReduceColorCoCCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> ReduceColorCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> SparseBokehExtractCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> SparseBokehFinalizeCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> FarBlurCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> NearBlurCS = nullptr;
 	std::array<winrt::com_ptr<ID3D11ComputeShader>, 2> FarGatherCS = {};
@@ -155,13 +127,8 @@ struct DoF : public PostProcessFeature
 	winrt::com_ptr<ID3D11ComputeShader> CombinerCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> PostSmoothing1CS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> PostSmoothing2AndFocusingCS = nullptr;
-	winrt::com_ptr<ID3D11VertexShader> SparseBokehVS = nullptr;
-	winrt::com_ptr<ID3D11PixelShader> SparseBokehPS = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> linearSampler = nullptr;
-	winrt::com_ptr<ID3D11BlendState> sparseAdditiveBlendState = nullptr;
-	winrt::com_ptr<ID3D11RasterizerState> sparseRasterizerState = nullptr;
-	winrt::com_ptr<ID3D11DepthStencilState> sparseDepthStencilState = nullptr;
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
@@ -175,7 +142,6 @@ struct DoF : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 	void UpdateProceduralBokehSamples(bool force = false);
-	void DrawSparseBokeh(ID3D11ShaderResourceView* customShapeSRV);
 
 	RE::NiPoint3 GetCameraPos();
 	bool GetInDialogue();

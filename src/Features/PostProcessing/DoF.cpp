@@ -6,8 +6,6 @@
 #include "Util.h"
 
 #include "I18n/I18n.h"
-#include <DDSTextureLoader.h>
-#include <DirectXTex.h>
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	DoF::Settings,
@@ -24,10 +22,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	BokehMode,
 	BokehBladeCount,
 	BokehBladeRoundness,
-	UseSparseHighlights,
-	SparseHighlightThreshold,
-	SparseHighlightContrast,
-	SparseHighlightBudget,
 	BlurQuality,
 	NearFarDistanceCompensation,
 	HighlightBoost,
@@ -66,16 +60,6 @@ void DoF::DrawSettings()
 		ImGui::Text(T("feature.post_processing.do_f.adaptive_gather_desc", "Uses a fixed low-sample kernel and a CoC-aware image pyramid."));
 	if (settings.UseAdaptiveGather)
 		ImGui::Combo(T("feature.post_processing.do_f.gather_quality", "Gather Quality"), &settings.GatherQuality, "Performance (4 rings)\0Quality (5 rings)\0");
-	if (settings.UseAdaptiveGather) {
-		ImGui::Checkbox(T("feature.post_processing.do_f.sparse_highlights", "Sparse Highlight Splatting"), &settings.UseSparseHighlights);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text(T("feature.post_processing.do_f.sparse_highlights_desc", "Draws isolated bright pixels as continuous aperture splats. Work is capped by a fixed per-frame budget."));
-		if (settings.UseSparseHighlights) {
-			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_threshold", "Sparse Highlight Threshold"), &settings.SparseHighlightThreshold, 0.25f, 8.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_contrast", "Sparse Highlight Contrast"), &settings.SparseHighlightContrast, 1.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.do_f.sparse_highlight_budget", "Sparse Highlight Budget"), &settings.SparseHighlightBudget, 0.01f, 0.25f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-		}
-	}
 	if (!settings.UseAdaptiveGather)
 		ImGui::SliderFloat(T("feature.post_processing.do_f.blur_quality", "Compatibility Blur Quality"), &settings.BlurQuality, 2.0f, 30.0f, "%.1f");
 	ImGui::SliderFloat(T("feature.post_processing.do_f.near_far_plane_distance_compenation", "Near-Far Plane Distance Compenation"), &settings.NearFarDistanceCompensation, 1.0f, 5.0f, "%.2f");
@@ -282,21 +266,6 @@ void DoF::SetupResources()
 		texPreBlurred->CreateSRV(srvDesc);
 		texPreBlurred->CreateUAV(uavDesc);
 
-		D3D11_TEXTURE2D_DESC texDescSparse = texDescHalf;
-		texDescSparse.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDescHalf = {
-			.Format = texDescSparse.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		texSparseFar = eastl::make_unique<Texture2D>(texDescSparse, "DoF::SparseFar");
-		texSparseFar->CreateSRV(srvDesc);
-		texSparseFar->CreateRTV(rtvDescHalf);
-
-		texSparseNear = eastl::make_unique<Texture2D>(texDescSparse, "DoF::SparseNear");
-		texSparseNear->CreateSRV(srvDesc);
-		texSparseNear->CreateRTV(rtvDescHalf);
-
 		texFarBlurred = eastl::make_unique<Texture2D>(texDescHalf, "DoF::FarLayer");
 		texFarBlurred->CreateSRV(srvDesc);
 		texFarBlurred->CreateUAV(uavDesc);
@@ -382,59 +351,6 @@ void DoF::SetupResources()
 		g_TDM = reinterpret_cast<TDM_API::IVTDM2*>(TDM_API::RequestPluginAPI(TDM_API::InterfaceVersion::V2));
 	}
 
-	logger::debug("Creating sparse bokeh resources...");
-	{
-		const uint halfPixelCount = std::max(1u, texPreBlurred->desc.Width * texPreBlurred->desc.Height);
-		sparseHighlightCapacity = std::max(1u, (uint)std::ceil((float)halfPixelCount * 0.25f));
-		auto sparseDesc = StructuredBufferDesc<SparseBokeh>((uint64_t)sparseHighlightCapacity, true, false);
-		sparseBokehBuffer = eastl::make_unique<StructuredBuffer>(sparseDesc, sparseHighlightCapacity, "DoF::SparseBokehList");
-		sparseBokehBuffer->CreateSRV();
-		sparseBokehBuffer->CreateUAV();
-
-		D3D11_BUFFER_DESC argsDesc{};
-		// The first four uints are DrawInstancedIndirect arguments. The fifth is a raw atomic
-		// raster-work counter, which bounds large-quad overdraw independently of candidate count.
-		argsDesc.ByteWidth = sizeof(uint) * 5;
-		argsDesc.Usage = D3D11_USAGE_DEFAULT;
-		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS | D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
-		sparseIndirectArgs = eastl::make_unique<Buffer>(argsDesc, nullptr, "DoF::SparseIndirectArgs");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUAVDesc{};
-		argsUAVDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		argsUAVDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		argsUAVDesc.Buffer.NumElements = 5;
-		argsUAVDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		sparseIndirectArgs->CreateUAV(argsUAVDesc);
-
-		D3D11_BLEND_DESC blendDesc{};
-		blendDesc.IndependentBlendEnable = TRUE;
-		for (int i = 0; i < 2; ++i) {
-			blendDesc.RenderTarget[i].BlendEnable = TRUE;
-			blendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
-			blendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
-			blendDesc.RenderTarget[i].BlendOp = D3D11_BLEND_OP_ADD;
-			blendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
-			blendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
-			blendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_ADD;
-			blendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
-		}
-		DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, sparseAdditiveBlendState.put()));
-		Util::SetResourceName(sparseAdditiveBlendState.get(), "DoF::SparseAdditiveBlend");
-
-		D3D11_RASTERIZER_DESC rasterizerDesc{};
-		rasterizerDesc.FillMode = D3D11_FILL_SOLID;
-		rasterizerDesc.CullMode = D3D11_CULL_NONE;
-		rasterizerDesc.DepthClipEnable = TRUE;
-		DX::ThrowIfFailed(device->CreateRasterizerState(&rasterizerDesc, sparseRasterizerState.put()));
-		Util::SetResourceName(sparseRasterizerState.get(), "DoF::SparseRasterizer");
-
-		D3D11_DEPTH_STENCIL_DESC depthDesc{};
-		depthDesc.DepthEnable = FALSE;
-		depthDesc.StencilEnable = FALSE;
-		DX::ThrowIfFailed(device->CreateDepthStencilState(&depthDesc, sparseDepthStencilState.put()));
-		Util::SetResourceName(sparseDepthStencilState.get(), "DoF::SparseDepthState");
-	}
-
 	// Bokeh shapes are loaded by PostProcessing::bokehResources (shared with LensFlare)
 
 	logger::debug("Creating samplers...");
@@ -467,8 +383,6 @@ void DoF::ClearShaderCache()
 		&DownsampleLegacyCS,
 		&ReduceColorCoCCS,
 		&ReduceColorCS,
-		&SparseBokehExtractCS,
-		&SparseBokehFinalizeCS,
 		&FarBlurCS,
 		&NearBlurCS,
 		&FarGatherCS[0],
@@ -486,9 +400,6 @@ void DoF::ClearShaderCache()
 			(*shader)->Release();
 			shader->detach();
 		}
-	SparseBokehVS = nullptr;
-	SparseBokehPS = nullptr;
-
 	CompileComputeShaders();
 }
 
@@ -513,8 +424,6 @@ void DoF::CompileComputeShaders()
 			{ &DownsampleLegacyCS, "dof.cs.hlsl", {}, "CS_DownsampleLegacy" },
 			{ &ReduceColorCoCCS, "dof.cs.hlsl", {}, "CS_ReduceColorCoC" },
 			{ &ReduceColorCS, "dof.cs.hlsl", {}, "CS_ReduceColor" },
-			{ &SparseBokehExtractCS, "dof.cs.hlsl", {}, "CS_SparseBokehExtract" },
-			{ &SparseBokehFinalizeCS, "dof.cs.hlsl", {}, "CS_SparseBokehFinalize" },
 			{ &FarBlurCS, "dof.cs.hlsl", {}, "CS_FarBlur" },
 			{ &NearBlurCS, "dof.cs.hlsl", {}, "CS_NearBlur" },
 			{ &FarGatherCS[0], "dof.cs.hlsl", { { "GATHER_RING_COUNT", "4" } }, "CS_FarGather" },
@@ -532,168 +441,6 @@ void DoF::CompileComputeShaders()
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
 			info.programPtr->attach(rawPtr);
 	}
-
-	SparseBokehVS = nullptr;
-	SparseBokehPS = nullptr;
-	auto sparsePath = std::filesystem::path("Data\\Shaders\\PostProcessing\\DoF\\dof_sparse.hlsl");
-	if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(sparsePath.c_str(), {}, "vs_5_0", "VS_SparseBokeh")))
-		SparseBokehVS.attach(rawPtr);
-	if (auto rawPtr = reinterpret_cast<ID3D11PixelShader*>(Util::CompileShader(sparsePath.c_str(), {}, "ps_5_0", "PS_SparseBokeh")))
-		SparseBokehPS.attach(rawPtr);
-}
-
-void DoF::DrawSparseBokeh(ID3D11ShaderResourceView* customShapeSRV)
-{
-	if (!SparseBokehVS || !SparseBokehPS || !sparseBokehBuffer || !sparseIndirectArgs ||
-		!texSparseFar || !texSparseNear)
-		return;
-
-	auto context = globals::d3d::context;
-	ID3D11InputLayout* savedInputLayout = nullptr;
-	ID3D11Buffer* savedIndexBuffer = nullptr;
-	DXGI_FORMAT savedIndexFormat = DXGI_FORMAT_UNKNOWN;
-	UINT savedIndexOffset = 0;
-	D3D11_PRIMITIVE_TOPOLOGY savedTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-	context->IAGetInputLayout(&savedInputLayout);
-	context->IAGetIndexBuffer(&savedIndexBuffer, &savedIndexFormat, &savedIndexOffset);
-	context->IAGetPrimitiveTopology(&savedTopology);
-
-	ID3D11VertexShader* savedVS = nullptr;
-	ID3D11HullShader* savedHS = nullptr;
-	ID3D11DomainShader* savedDS = nullptr;
-	ID3D11GeometryShader* savedGS = nullptr;
-	ID3D11PixelShader* savedPS = nullptr;
-	context->VSGetShader(&savedVS, nullptr, nullptr);
-	context->HSGetShader(&savedHS, nullptr, nullptr);
-	context->DSGetShader(&savedDS, nullptr, nullptr);
-	context->GSGetShader(&savedGS, nullptr, nullptr);
-	context->PSGetShader(&savedPS, nullptr, nullptr);
-
-	ID3D11RasterizerState* savedRasterizerState = nullptr;
-	D3D11_VIEWPORT savedViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-	UINT savedViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-	D3D11_RECT savedScissorRects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-	UINT savedScissorRectCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-	context->RSGetState(&savedRasterizerState);
-	context->RSGetViewports(&savedViewportCount, savedViewports);
-	context->RSGetScissorRects(&savedScissorRectCount, savedScissorRects);
-
-	ID3D11RenderTargetView* savedRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]{};
-	ID3D11DepthStencilView* savedDSV = nullptr;
-	ID3D11BlendState* savedBlendState = nullptr;
-	FLOAT savedBlendFactor[4]{};
-	UINT savedSampleMask = 0;
-	ID3D11DepthStencilState* savedDepthStencilState = nullptr;
-	UINT savedStencilRef = 0;
-	context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, savedRTVs, &savedDSV);
-	context->OMGetBlendState(&savedBlendState, savedBlendFactor, &savedSampleMask);
-	context->OMGetDepthStencilState(&savedDepthStencilState, &savedStencilRef);
-
-	ID3D11ShaderResourceView* savedVSSRV = nullptr;
-	ID3D11Buffer* savedVSCB = nullptr;
-	ID3D11ShaderResourceView* savedPSSRVs[2]{};
-	ID3D11SamplerState* savedPSSampler = nullptr;
-	ID3D11Buffer* savedPSCB = nullptr;
-	context->VSGetShaderResources(0, 1, &savedVSSRV);
-	context->VSGetConstantBuffers(1, 1, &savedVSCB);
-	context->PSGetShaderResources(0, 2, savedPSSRVs);
-	context->PSGetSamplers(0, 1, &savedPSSampler);
-	context->PSGetConstantBuffers(1, 1, &savedPSCB);
-	const float clear[4] = {};
-	context->ClearRenderTargetView(texSparseFar->rtv.get(), clear);
-	context->ClearRenderTargetView(texSparseNear->rtv.get(), clear);
-
-	D3D11_VIEWPORT viewport{};
-	viewport.Width = (float)texSparseFar->desc.Width;
-	viewport.Height = (float)texSparseFar->desc.Height;
-	viewport.MaxDepth = 1.0f;
-	context->RSSetViewports(1, &viewport);
-	context->RSSetState(sparseRasterizerState.get());
-	context->IASetInputLayout(nullptr);
-	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_UNKNOWN, 0);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-	context->VSSetShader(SparseBokehVS.get(), nullptr, 0);
-	context->HSSetShader(nullptr, nullptr, 0);
-	context->DSSetShader(nullptr, nullptr, 0);
-	context->GSSetShader(nullptr, nullptr, 0);
-	context->PSSetShader(SparseBokehPS.get(), nullptr, 0);
-	context->OMSetBlendState(sparseAdditiveBlendState.get(), nullptr, 0xffffffff);
-	context->OMSetDepthStencilState(sparseDepthStencilState.get(), 0);
-
-	ID3D11RenderTargetView* rtvs[2] = { texSparseFar->rtv.get(), texSparseNear->rtv.get() };
-	context->OMSetRenderTargets(2, rtvs, nullptr);
-	ID3D11ShaderResourceView* views[2] = { sparseBokehBuffer->SRV(), customShapeSRV };
-	context->VSSetShaderResources(0, 1, views);
-	context->PSSetShaderResources(0, 2, views);
-	ID3D11SamplerState* sampler = linearSampler.get();
-	context->PSSetSamplers(0, 1, &sampler);
-	ID3D11Buffer* constantBuffer = dofCB->CB();
-	context->VSSetConstantBuffers(1, 1, &constantBuffer);
-	context->PSSetConstantBuffers(1, 1, &constantBuffer);
-
-	context->DrawInstancedIndirect(sparseIndirectArgs->resource.get(), 0);
-
-	ID3D11ShaderResourceView* nullViews[2] = {};
-	context->VSSetShaderResources(0, 1, nullViews);
-	context->PSSetShaderResources(0, 2, nullViews);
-	context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, savedRTVs, savedDSV);
-	context->OMSetBlendState(savedBlendState, savedBlendFactor, savedSampleMask);
-	context->OMSetDepthStencilState(savedDepthStencilState, savedStencilRef);
-	context->RSSetViewports(savedViewportCount, savedViewports);
-	context->RSSetScissorRects(savedScissorRectCount, savedScissorRects);
-	context->RSSetState(savedRasterizerState);
-	context->IASetInputLayout(savedInputLayout);
-	context->IASetIndexBuffer(savedIndexBuffer, savedIndexFormat, savedIndexOffset);
-	context->IASetPrimitiveTopology(savedTopology);
-	context->VSSetShader(savedVS, nullptr, 0);
-	context->HSSetShader(savedHS, nullptr, 0);
-	context->DSSetShader(savedDS, nullptr, 0);
-	context->GSSetShader(savedGS, nullptr, 0);
-	context->PSSetShader(savedPS, nullptr, 0);
-	context->VSSetShaderResources(0, 1, &savedVSSRV);
-	context->VSSetConstantBuffers(1, 1, &savedVSCB);
-	context->PSSetShaderResources(0, 2, savedPSSRVs);
-	context->PSSetSamplers(0, 1, &savedPSSampler);
-	context->PSSetConstantBuffers(1, 1, &savedPSCB);
-
-	if (savedInputLayout)
-		savedInputLayout->Release();
-	if (savedIndexBuffer)
-		savedIndexBuffer->Release();
-	if (savedVS)
-		savedVS->Release();
-	if (savedHS)
-		savedHS->Release();
-	if (savedDS)
-		savedDS->Release();
-	if (savedGS)
-		savedGS->Release();
-	if (savedPS)
-		savedPS->Release();
-	if (savedRasterizerState)
-		savedRasterizerState->Release();
-	for (auto* rtv : savedRTVs) {
-		if (rtv)
-			rtv->Release();
-	}
-	if (savedDSV)
-		savedDSV->Release();
-	if (savedBlendState)
-		savedBlendState->Release();
-	if (savedDepthStencilState)
-		savedDepthStencilState->Release();
-	if (savedVSSRV)
-		savedVSSRV->Release();
-	if (savedVSCB)
-		savedVSCB->Release();
-	for (auto* srv : savedPSSRVs) {
-		if (srv)
-			srv->Release();
-	}
-	if (savedPSSampler)
-		savedPSSampler->Release();
-	if (savedPSCB)
-		savedPSCB->Release();
 }
 
 // Thanks Ershin!
@@ -835,18 +582,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 	const bool adaptiveGatherReady = DownsampleCS && ReduceColorCoCCS && ReduceColorCS &&
 	                                 FarGatherCS[gatherQuality] && NearGatherCS[gatherQuality] && bokehSampleSRV;
 	const bool useAdaptiveGather = settings.UseAdaptiveGather && adaptiveGatherReady;
-	const uint64_t halfPixelCount = (uint64_t)halfResX * halfResY;
-	const uint sparseHighlightMaxCount = std::min(
-		sparseHighlightCapacity,
-		(uint)std::min<uint64_t>(
-			std::numeric_limits<uint>::max(),
-			(uint64_t)std::ceil((double)halfPixelCount * std::clamp(settings.SparseHighlightBudget, 0.0f, 0.25f))));
-	const uint sparseHighlightWorkBudget = (uint)std::min<uint64_t>(
-		std::numeric_limits<uint>::max(),
-		(uint64_t)std::ceil((double)halfPixelCount * std::clamp(settings.SparseHighlightBudget, 0.0f, 0.25f)));
-	const bool useSparseHighlights = useAdaptiveGather && settings.UseSparseHighlights && sparseHighlightMaxCount > 0 &&
-	                                 SparseBokehExtractCS && SparseBokehFinalizeCS && SparseBokehVS && SparseBokehPS &&
-	                                 sparseBokehBuffer && sparseIndirectArgs;
 
 	// Tile propagation carries the near disc reach itself, so the same low-resolution dilation used
 	// for group culling now replaces the two old half-resolution Gaussian passes.
@@ -883,19 +618,15 @@ void DoF::Draw(TextureInfo& inout_tex)
 		.CustomShapeRadiusScale = customShapeRadiusScale,
 		.BokehMaxRadius = bokehMaxRadius,
 		.NearMaxReachPx = nearMaxReachPx,
-		.SparseHighlightEnabled = useSparseHighlights,
-		.SparseHighlightMaxCount = sparseHighlightMaxCount,
-		.SparseHighlightThreshold = std::max(settings.SparseHighlightThreshold, 0.0f),
-		.SparseHighlightContrast = std::max(settings.SparseHighlightContrast, 1.0f),
 		.BokehBladeCount = (uint)std::clamp(settings.BokehBladeCount, 4, 16),
 		.BokehBladeRoundness = std::clamp(settings.BokehBladeRoundness, 0.0f, 1.0f),
 		.ProceduralBokehAreaScale = proceduralBokehAreaScale,
-		.SparseHighlightWorkBudget = sparseHighlightWorkBudget
+		.pad = 0
 	};
 	dofCB->Update(dofData);
 
-	std::array<ID3D11ShaderResourceView*, 22> srvs = {};
-	std::array<ID3D11UnorderedAccessView*, 6> uavs = {};
+	std::array<ID3D11ShaderResourceView*, 20> srvs = {};
+	std::array<ID3D11UnorderedAccessView*, 4> uavs = {};
 	std::array<ID3D11SamplerState*, 1> samplers = { linearSampler.get() };
 	auto cb = dofCB->CB();
 	auto resetViews = [&]() {
@@ -961,37 +692,14 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(3) = texCoC->srv.get();
 		uavs.at(0) = texPreBlurred->uav.get();
 		uavs.at(2) = texCoCHalf->uav.get();
-		if (useSparseHighlights) {
-			const uint indirectArgsClear[5] = { 4u, 0u, 0u, 0u, 0u };
-			context->UpdateSubresource(sparseIndirectArgs->resource.get(), 0, nullptr, indirectArgsClear, 0, 0);
-			uavs.at(4) = sparseIndirectArgs->uav.get();
-			uavs.at(5) = sparseBokehBuffer->UAV();
-		}
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 
-		context->CSSetShader(
-			useSparseHighlights ? SparseBokehExtractCS.get() :
-			useAdaptiveGather   ? DownsampleCS.get() :
-								  DownsampleLegacyCS.get(),
-			nullptr,
-			0);
+		context->CSSetShader(useAdaptiveGather ? DownsampleCS.get() : DownsampleLegacyCS.get(), nullptr, 0);
 		context->Dispatch(dispatchWidthBlur, dispatchHeightBlur, 1);
-		if (useSparseHighlights) {
-			context->CSSetShader(SparseBokehFinalizeCS.get(), nullptr, 0);
-			context->Dispatch(1, 1, 1);
-		}
 
 		resetViews();
-		state->EndPerfEvent();
-		globals::profiler->EndPass();
-	}
-
-	if (useSparseHighlights) {
-		globals::profiler->BeginPass("PostProcessing::DoF::SparseBokeh");
-		state->BeginPerfEvent("Sparse Bokeh");
-		DrawSparseBokeh(bokehMode == 1 ? customShapeSRV : nullptr);
 		state->EndPerfEvent();
 		globals::profiler->EndPass();
 	}
@@ -1172,10 +880,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 		srvs.at(3) = texCoC->srv.get();
 		srvs.at(5) = texBlurredFiltered->srv.get();
 		srvs.at(6) = texPreBlurred->srv.get();
-		if (useSparseHighlights) {
-			srvs.at(20) = texSparseFar->srv.get();
-			srvs.at(21) = texSparseNear->srv.get();
-		}
 		uavs.at(0) = doPostSmoothing ? texPostSmooth->uav.get() : texOutput->uav.get();
 
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());

@@ -123,17 +123,6 @@ RWTexture2D<float4> RWTexOut : register(u0);
 RWTexture2D<float> RWFocus : register(u1);
 RWTexture2D<float> RWTexCoC : register(u2);
 RWTexture2D<float4> RWTexCoCTile : register(u3);
-RWByteAddressBuffer SparseIndirectArgs : register(u4);
-
-struct SparseBokehData
-{
-	float2 center;
-	float radiusInPixels;
-	float signedCoC;
-	float3 color;
-	float pad;
-};
-RWStructuredBuffer<SparseBokehData> RWSparseBokeh : register(u5);
 
 SamplerState LinearSampler : register(s0);
 
@@ -160,8 +149,6 @@ Texture2D<float> TexReduceCoCInput : register(t18);
 // Keeping w separate is essential for polygon corners: shaped xy may extend beyond unit radius,
 // but its intersection distance still belongs to the same canonical gather ring.
 StructuredBuffer<float4> BokehSamples : register(t19);
-Texture2D<float4> TexSparseFar : register(t20);
-Texture2D<float4> TexSparseNear : register(t21);
 
 cbuffer DoFCB : register(b1)
 {
@@ -190,14 +177,10 @@ cbuffer DoFCB : register(b1)
 	float CustomShapeRadiusScale;  // normalises the custom aperture to the area of a unit circle
 	float BokehMaxRadius;
 	float NearMaxReachPx;
-	uint SparseHighlightEnabled;
-	uint SparseHighlightMaxCount;
-	float SparseHighlightThreshold;
-	float SparseHighlightContrast;
 	uint BokehBladeCount;
 	float BokehBladeRoundness;
 	float ProceduralBokehAreaScale;
-	uint SparseHighlightWorkBudget;
+	uint Padding;
 };
 
 // Sensor width the FocalLength control is expressed for (35mm full frame).
@@ -561,98 +544,6 @@ float3 ReduceColorWithCoC(float3 tapColor[4], float tapCoC[4], float outCoC, flo
 	RWTexCoC[DTid] = outCoC;
 }
 
-bool TryReserveSparseWork(uint work)
-{
-	uint observed = SparseIndirectArgs.Load(16);
-	[loop] for (uint attempt = 0; attempt < 16; ++attempt)
-	{
-		if (work > SparseHighlightWorkBudget || observed > SparseHighlightWorkBudget - work)
-			return false;
-		uint original;
-		SparseIndirectArgs.InterlockedCompareExchange(16, observed, observed + work, original);
-		if (original == observed)
-			return true;
-		observed = original;
-	}
-	return false;
-}
-
-// Extract at most one isolated highlight from each full-resolution 2x2 group. Accepted energy is
-// removed from the setup color and emitted as one continuous aperture splat later in the frame.
-[numthreads(8, 8, 1)] void CS_SparseBokehExtract(uint2 DTid : SV_DispatchThreadID) {
-	if (any(DTid >= HalfResDim))
-		return;
-
-	int2 base = int2(DTid) * 2;
-	float3 tapColor[4];
-	float tapCoC[4];
-	float tapLuma[4];
-	uint maxIndex = 0;
-	[unroll] for (uint i = 0; i < 4; ++i)
-	{
-		int2 p = ClampToBuffer(base + int2(i & 1, i >> 1));
-		tapColor[i] = TexColor[p].rgb;
-		tapCoC[i] = TexCoCInput[p].r;
-		tapLuma[i] = Color::RGBToLuminance(AccentuateWhites(tapColor[i]));
-		if (tapLuma[i] > tapLuma[maxIndex])
-			maxIndex = i;
-	}
-
-	float planeScale = tapCoC[maxIndex] < 0.0f ? NearPlaneMaxBlur : FarPlaneMaxBlur;
-	float radiusInPixels = abs(tapCoC[maxIndex]) * planeScale * cocToPixels;
-	float otherLuma = 0.0f;
-	float3 otherColor = 0.0f;
-	[unroll] for (uint j = 0; j < 4; ++j)
-	{
-		if (j != maxIndex) {
-			otherLuma = max(otherLuma, tapLuma[j]);
-			otherColor += tapColor[j];
-		}
-	}
-	otherColor *= 1.0f / 3.0f;
-	bool isCandidate = radiusInPixels >= 3.0f &&
-	                   tapLuma[maxIndex] >= SparseHighlightThreshold &&
-	                   tapLuma[maxIndex] >= max(otherLuma * SparseHighlightContrast, otherLuma + 0.25f);
-
-	// Pixel shader cost follows the rasterized bounding quad, not the number of candidates. Reserve
-	// that area atomically so large custom shapes cannot create an unbounded overdraw tail.
-	float quadHalfExtent = radiusInPixels * 0.5f * BokehMaxRadius;
-	uint quadWork = (uint)ceil(4.0f * quadHalfExtent * quadHalfExtent);
-	quadWork = max(quadWork, 1u);
-	if (isCandidate && TryReserveSparseWork(quadWork)) {
-		uint listIndex;
-		// Offset 12 temporarily holds the uncapped candidate count. A one-thread finalize pass
-		// clamps it into DrawInstancedIndirect's InstanceCount field at offset 4.
-		SparseIndirectArgs.InterlockedAdd(12, 1, listIndex);
-		if (listIndex < SparseHighlightMaxCount) {
-			float3 sparseColor = max(AccentuateWhites(tapColor[maxIndex]) - AccentuateWhites(otherColor), 0.0f);
-			tapColor[maxIndex] = min(tapColor[maxIndex], otherColor);
-			SparseBokehData item;
-			item.center = float2(DTid) + (float2(maxIndex & 1, maxIndex >> 1) + 0.5f) * 0.5f;
-			item.radiusInPixels = radiusInPixels * 0.5f;
-			item.signedCoC = tapCoC[maxIndex];
-			item.color = sparseColor * 0.25f;
-			item.pad = 0.0f;
-			RWSparseBokeh[listIndex] = item;
-		} else {
-			uint ignored;
-			SparseIndirectArgs.InterlockedAdd(16, 0u - quadWork, ignored);
-		}
-	}
-
-	float outCoC = SelectSetupCoC(tapCoC);
-	float3 outColor = ReduceColorWithCoC(tapColor, tapCoC, outCoC, 0.25f);
-	RWTexOut[DTid] = float4(AccentuateWhites(outColor), 1.0f);
-	RWTexCoC[DTid] = outCoC;
-}
-
-	[numthreads(1, 1, 1)] void CS_SparseBokehFinalize(uint3 DTid : SV_DispatchThreadID)
-{
-	uint candidateCount = SparseIndirectArgs.Load(12);
-	SparseIndirectArgs.Store(4, min(candidateCount, SparseHighlightMaxCount));
-	SparseIndirectArgs.Store(12, 0);
-}
-
 // Generic 2x2 pyramid reduction. The source sizes are queried from the bound resources so the
 // same shader handles half -> quarter -> eighth -> sixteenth, including odd dimensions.
 [numthreads(8, 8, 1)] void CS_ReduceColorCoC(uint2 DTid : SV_DispatchThreadID) {
@@ -714,18 +605,46 @@ float GetGatherMip(float kernelRadiusInPixels)
 
 float3 SampleGatherColor(float2 uv, float mip)
 {
-	[branch] if (mip < 0.5f) return TexColor.SampleLevel(LinearSampler, uv, 0).rgb;
-	[branch] if (mip < 1.5f) return TexGatherColor1.SampleLevel(LinearSampler, uv, 0).rgb;
-	[branch] if (mip < 2.5f) return TexGatherColor2.SampleLevel(LinearSampler, uv, 0).rgb;
-	return TexGatherColor3.SampleLevel(LinearSampler, uv, 0).rgb;
+	float3 sampleColor = 0.0f;
+	[branch] if (mip < 0.5f)
+	{
+		sampleColor = TexColor.SampleLevel(LinearSampler, uv, 0).rgb;
+	}
+	else if (mip < 1.5f)
+	{
+		sampleColor = TexGatherColor1.SampleLevel(LinearSampler, uv, 0).rgb;
+	}
+	else if (mip < 2.5f)
+	{
+		sampleColor = TexGatherColor2.SampleLevel(LinearSampler, uv, 0).rgb;
+	}
+	else
+	{
+		sampleColor = TexGatherColor3.SampleLevel(LinearSampler, uv, 0).rgb;
+	}
+	return sampleColor;
 }
 
 float SampleGatherCoC(float2 uv, float mip)
 {
-	[branch] if (mip < 0.5f) return TexCoCHalf.SampleLevel(LinearSampler, uv, 0).r;
-	[branch] if (mip < 1.5f) return TexGatherCoC1.SampleLevel(LinearSampler, uv, 0).r;
-	[branch] if (mip < 2.5f) return TexGatherCoC2.SampleLevel(LinearSampler, uv, 0).r;
-	return TexGatherCoC3.SampleLevel(LinearSampler, uv, 0).r;
+	float sampleCoC = 0.0f;
+	[branch] if (mip < 0.5f)
+	{
+		sampleCoC = TexCoCHalf.SampleLevel(LinearSampler, uv, 0).r;
+	}
+	else if (mip < 1.5f)
+	{
+		sampleCoC = TexGatherCoC1.SampleLevel(LinearSampler, uv, 0).r;
+	}
+	else if (mip < 2.5f)
+	{
+		sampleCoC = TexGatherCoC2.SampleLevel(LinearSampler, uv, 0).r;
+	}
+	else
+	{
+		sampleCoC = TexGatherCoC3.SampleLevel(LinearSampler, uv, 0).r;
+	}
+	return sampleCoC;
 }
 
 struct AdaptiveBokehSample
@@ -1156,16 +1075,7 @@ float4 GatherMedianAt(Texture2D<float4> inputTexture, uint2 pixel)
 	float blendFactor = smoothstep(0.0f, 1.0f, saturate(realCoC / (2.0f * onePixelInCoC)));
 	float4 color;
 	color = lerp(originalFragment, farFragment, blendFactor);
-	if (SparseHighlightEnabled != 0) {
-		float4 sparseFar = TexSparseFar.SampleLevel(LinearSampler, uv, 0);
-		float sparseFarVisibility = pixelCoC >= 0.0f ? 1.0f : saturate(1.0f + pixelCoC * cocToPixels);
-		color.rgb += sparseFar.rgb * sparseFarVisibility;
-	}
 	color.rgb = lerp(color.rgb, nearFragment.rgb, nearFragment.a * (NearPlaneMaxBlur != 0));
-	if (SparseHighlightEnabled != 0) {
-		float4 sparseNear = TexSparseNear.SampleLevel(LinearSampler, uv, 0);
-		color.rgb += sparseNear.rgb;
-	}
 	color.a = 1.0;
 	RWTexOut[DTid] = color;
 }
