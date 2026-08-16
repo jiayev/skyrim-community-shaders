@@ -272,7 +272,7 @@ void Skin::DrawProfileManager()
 
 	ImGui::Separator();
 
-	DrawProfileSettings(uiSelectedProfile.empty() ? settings.DefaultProfile : settings.Profiles[uiSelectedProfile]);
+	DrawProfileSettings(uiSelectedProfile.empty() ? settings.DefaultProfile : settings.Profiles[uiSelectedProfile], "Profile");
 }
 
 void Skin::DrawRaceBindings()
@@ -381,8 +381,10 @@ void Skin::RefreshRaceList()
 	std::sort(raceList.begin(), raceList.end(), [](const auto& a_lhs, const auto& a_rhs) { return a_lhs.second < a_rhs.second; });
 }
 
-void Skin::DrawProfileSettings(SkinProfile& a_profile)
+void Skin::DrawProfileSettings(SkinProfile& a_profile, const char* a_id)
 {
+	ImGui::PushID(a_id);
+
 	ImGui::SliderFloat(T("feature.skin.primary_roughness", "Primary Roughness"), &a_profile.SkinMainRoughness, 0.0f, 1.0f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.controls_microscopic_roughness_of_stratum_corneum_layer", "Controls microscopic roughness of stratum corneum layer"));
@@ -470,6 +472,8 @@ void Skin::DrawProfileSettings(SkinProfile& a_profile)
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("feature.skin.multiply_the_tiling_for_the_body_to_match", "Multiply the tiling for the body to match the face"));
 	}
+
+	ImGui::PopID();
 }
 
 void Skin::DrawGlobalSettings()
@@ -553,29 +557,37 @@ bool Skin::ReferenceHasSkin(RE::TESObjectREFR* a_ref) const
 	return hasSkin;
 }
 
-std::string Skin::DeriveNifKeyForRef(RE::TESObjectREFR* a_ref) const
+std::vector<std::string> Skin::DeriveNifKeysForRef(RE::TESObjectREFR* a_ref) const
 {
-	std::string key;
+	std::vector<std::string> keys;
+	auto addKey = [&](std::string a_key) {
+		a_key = NormalizeNifKey(a_key);
+		if (a_key.empty())
+			return;
+		if (std::find(keys.begin(), keys.end(), a_key) == keys.end())
+			keys.push_back(std::move(a_key));
+	};
+
+	// The reference's own model path is the primary key for statics, armor, weapons...
 	if (a_ref) {
 		if (auto* base = a_ref->GetObjectReference()) {
 			if (auto* model = base->As<RE::TESModel>()) {
 				if (const char* path = model->GetModel())
-					key = path;
+					addKey(path);
 			}
 		}
 	}
-	if (key.empty()) {
-		if (auto* root = a_ref ? a_ref->Get3D() : nullptr) {
-			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) {
-				if (const char* name = a_geometry->name.c_str()) {
-					key = name;
-					return RE::BSVisit::BSVisitControl::kStop;
-				}
-				return RE::BSVisit::BSVisitControl::kContinue;
-			});
-		}
+
+	// Actors are made of several geometries (body, hands, feet, armor addons, ...);
+	// collect each unique key with the same logic the runtime lookup uses.
+	if (auto* root = a_ref ? a_ref->Get3D() : nullptr) {
+		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) {
+			addKey(DeriveNifKey(a_geometry));
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
 	}
-	return NormalizeNifKey(key);
+
+	return keys;
 }
 
 json Skin::DiffProfile(const SkinProfile& a_base, const SkinProfile& a_full) const
@@ -594,6 +606,7 @@ void Skin::ResolveUiPick(RE::TESObjectREFR* a_ref)
 {
 	uiPickValid = false;
 	uiPickHasSkin = false;
+	uiPickNifKeys.clear();
 	uiPickKey.clear();
 	uiPickBaseIdKey.clear();
 	uiPickRefLabel.clear();
@@ -612,7 +625,9 @@ void Skin::ResolveUiPick(RE::TESObjectREFR* a_ref)
 	if (uiPickRefLabel.empty())
 		uiPickRefLabel = std::format("0x{:08X}", a_ref->GetFormID());
 
-	uiPickKey = DeriveNifKeyForRef(a_ref);
+	uiPickNifKeys = DeriveNifKeysForRef(a_ref);
+	if (!uiPickNifKeys.empty())
+		uiPickKey = uiPickNifKeys.front();
 	uiPickHasSkin = ReferenceHasSkin(a_ref);
 
 	if (a_ref->formType == RE::FormType::ActorCharacter) {
@@ -678,13 +693,26 @@ void Skin::DrawNifOverrides()
 
 	if (uiPickValid) {
 		ImGui::Text("%s: %s", T("feature.skin.pick_target", "Target"), uiPickRefLabel.c_str());
-		if (!uiPickKey.empty())
-			ImGui::Text("%s: %s", T("feature.skin.pick_key", "NIF Key"), uiPickKey.c_str());
+		if (!uiPickNifKeys.empty()) {
+			if (uiPickNifKeys.size() == 1) {
+				ImGui::Text("%s: %s", T("feature.skin.pick_key", "NIF Key"), uiPickKey.c_str());
+			} else {
+				ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.7f);
+				if (ImGui::BeginCombo(T("feature.skin.pick_key", "NIF Key"), uiPickKey.c_str())) {
+					for (const auto& nifKey : uiPickNifKeys) {
+						if (ImGui::Selectable(nifKey.c_str(), nifKey == uiPickKey))
+							uiPickKey = nifKey;
+					}
+					ImGui::EndCombo();
+				}
+			}
+		}
 		if (!uiPickBaseIdKey.empty())
 			ImGui::Text("%s: %s", T("feature.skin.ov_baseid_key", "BaseID"), uiPickBaseIdKey.c_str());
-		if (uiPickHasSkin)
+		if (uiPickHasSkin) {
 			ImGui::TextColored(okColor, "%s", T("feature.skin.pick_has_skin", "Skin: yes"));
-		else
+			ImGui::Text("%s: %s", T("feature.skin.ov_base", "Base"), uiPickBaseLabel.c_str());
+		} else
 			ImGui::TextColored(warnColor, "%s", T("feature.skin.pick_no_skin", "Skin: no (target has no skin material)"));
 	}
 
@@ -769,8 +797,34 @@ void Skin::DrawNifOverrides()
 			ImGui::EndTable();
 		}
 
-		if (!editKey.empty())
-			BeginOverrideEdit(editKind, editKey, settings.DefaultProfile, "Default", false);
+		if (!editKey.empty()) {
+			SkinProfile base = settings.DefaultProfile;
+			std::string baseLabel = "Default";
+
+			// Re-resolve the base for BaseID overrides from the NPC's race so the
+			// editor matches the runtime merge chain instead of always assuming Default.
+			if (editKind == OverrideKind::BaseId) {
+				try {
+					const RE::FormID formID = static_cast<RE::FormID>(std::stoul(editKey, nullptr, 16));
+					if (auto* npc = RE::TESForm::LookupByID<RE::TESNPC>(formID)) {
+						if (auto* race = npc->race) {
+							auto editorID = Util::GetFormEditorID(race);
+							if (!editorID.empty() && settings.RaceProfiles.contains(editorID)) {
+								const uint32_t idx = GetProfileIndexForRace(race);
+								if (idx < profileBaseData.size()) {
+									base = profileBaseData[idx];
+									baseLabel = editorID;
+								}
+							}
+						}
+					}
+				} catch (const std::exception&) {
+					// Malformed key; fall back to Default.
+				}
+			}
+
+			BeginOverrideEdit(editKind, editKey, base, baseLabel, false);
+		}
 		if (!eraseKey.empty())
 			overrideStore.RemoveOverride(eraseKind, eraseKey);
 	}
@@ -789,7 +843,7 @@ void Skin::DrawNifOverrides()
 		else
 			ImGui::TextColored(warnColor, "Chain: Default -> Race(%s) -> %s override", uiOverrideEditorBaseLabel.c_str(), kindName);
 
-		DrawProfileSettings(uiOverrideEditorProfile);
+		DrawProfileSettings(uiOverrideEditorProfile, "OverrideEditor");
 
 		json diff = DiffProfile(uiOverrideEditorBase, uiOverrideEditorProfile);
 		std::string diffFields;
@@ -1501,17 +1555,14 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			perGeometryProfile = entry.merged;
 		}
 
-		if (currentWetness != wetness || currentProfileIndex != profileIndex ||
-			currentProfileRevision != profileDataRevision || currentOverrideRevision != overrideStore.revision) {
-			currentWetness = wetness;
-			currentProfileIndex = profileIndex;
-			currentProfileRevision = profileDataRevision;
-			currentOverrideRevision = overrideStore.revision;
-			PerGeometryData perGeometryData{};
-			perGeometryData.skinPerGeometry = wetness;
-			perGeometryData.profile = perGeometryProfile;
-			PerGeometryCB->Update(perGeometryData);
-		}
+		// PerGeometryCB is shared across all geometry passes, so it must be refreshed
+		// for every pass. A global "last update" guard is not valid here because two
+		// geometries can share the same wetness/profile/revision and still need
+		// different merged profile data (different NIF/BaseID overrides).
+		PerGeometryData perGeometryData{};
+		perGeometryData.skinPerGeometry = wetness;
+		perGeometryData.profile = perGeometryProfile;
+		PerGeometryCB->Update(perGeometryData);
 
 		ID3D11Buffer* buffer = { PerGeometryCB->CB() };
 		context->PSSetConstantBuffers(7, 1, &buffer);
