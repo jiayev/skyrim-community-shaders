@@ -112,9 +112,6 @@ struct Skin : Feature
 	};
 
 	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
-	float4 currentWetness = { 0.0f, 0.0f, 0.0f, 0.0f };
-	uint32_t currentProfileIndex = UINT32_MAX;
-	uint32_t currentProfileRevision = 0;
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
 
@@ -175,19 +172,18 @@ struct Skin : Feature
 	/** @brief Per-geometry override resolution cache, keyed by geometry pointer. */
 	struct GeometryOverrideCacheEntry
 	{
+		SkinData merged{};
 		bool initialized = false;
 		std::string nifKey;
 		std::string baseIdKey;
 		uint32_t profileIndex = UINT32_MAX;
 		uint32_t baseProfileRevision = UINT32_MAX;
 		uint32_t overrideRevision = UINT32_MAX;
-		SkinData merged{};
 	};
 
 	OverrideStore overrideStore;
 	std::unordered_map<RE::BSGeometry*, GeometryOverrideCacheEntry> geometryOverrideCache;
 	uint32_t lastOverrideScanFrame = 0;
-	uint32_t currentOverrideRevision = 0;
 
 	/** @brief Packs a profile plus the global (non-per-race) settings into GPU data. */
 	SkinData MakeProfileData(const SkinProfile& a_profile) const;
@@ -208,8 +204,11 @@ struct Skin : Feature
 	void DrawGlobalSettings();
 	/** @brief Draws the profile selector plus add/duplicate/rename/delete controls. */
 	void DrawProfileManager();
-	/** @brief Draws every per-race-able setting of the given profile. */
-	void DrawProfileSettings(SkinProfile& a_profile);
+	/** @brief Draws every per-race-able setting of the given profile.
+	 *  @param a_id Unique ImGui ID scope. DrawProfileSettings is called from several
+	 *  sections at the same time (main editor and override editor), so every call
+	 *  site must supply a distinct ID prefix to avoid widget ID collisions. */
+	void DrawProfileSettings(SkinProfile& a_profile, const char* a_id);
 	/** @brief Draws the race to profile binding table. */
 	void DrawRaceBindings();
 	/** @brief Collects all races with an editor ID for the binding UI. */
@@ -220,8 +219,12 @@ struct Skin : Feature
 	void ResolveUiPick(RE::TESObjectREFR* a_ref);
 	/** @brief Opens the override editor for a key, seeded from the given base profile. */
 	void BeginOverrideEdit(OverrideKind a_kind, const std::string& a_key, const SkinProfile& a_base, const std::string& a_baseLabel, bool a_isNew);
-	/** @brief Derives a normalized NIF override key for a reference (MODL path, else first geometry node name). */
-	std::string DeriveNifKeyForRef(RE::TESObjectREFR* a_ref) const;
+	/** @brief Derives all unique normalized NIF override keys for a reference.
+	 *  @return The target's MODL key (when present) followed by every unique
+	 *  per-geometry key, in scenegraph traversal order. Geometry keys use the
+	 *  same logic as the runtime override lookup, so the pick UI and the
+	 *  rendered result stay aligned. */
+	std::vector<std::string> DeriveNifKeysForRef(RE::TESObjectREFR* a_ref) const;
 	/** @brief True if any geometry of the reference uses a skin shader. */
 	bool ReferenceHasSkin(RE::TESObjectREFR* a_ref) const;
 	/** @brief Returns the race for an actor reference, or null. */
@@ -235,10 +238,11 @@ struct Skin : Feature
 	std::vector<std::pair<std::string, std::string>> raceList;  // editor ID, display name
 
 	// Per-NIF / Per-BaseID override UI state
-	std::string uiPickKey;        // normalized NIF key of the last pick
-	std::string uiPickBaseIdKey;  // normalized BaseID key (empty for non-actors)
-	std::string uiPickRefLabel;   // human-readable target label
-	std::string uiPickMessage;    // non-empty = info/error message to show
+	std::vector<std::string> uiPickNifKeys;  // all unique NIF keys derived from the last pick
+	std::string uiPickKey;                   // currently selected NIF key from uiPickNifKeys
+	std::string uiPickBaseIdKey;             // normalized BaseID key (empty for non-actors)
+	std::string uiPickRefLabel;              // human-readable target label
+	std::string uiPickMessage;               // non-empty = info/error message to show
 	bool uiPickValid = false;
 	bool uiPickHasSkin = false;
 	SkinProfile uiPickBase;       // base profile for a new override (race profile or default)
