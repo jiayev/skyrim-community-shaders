@@ -94,6 +94,15 @@ void Effects11::DrawSettings()
 	MenuManager::GetSingleton().RenderImGui();
 }
 
+void Effects11::ToggleEnabled()
+{
+	if (!EffectManager::GetSingleton().IsPresetLoaded())
+		return;
+	auto& settingManager = SettingManager::GetSingleton();
+	const uint32_t id = settingManager.GetSettingID("UseEffect", "GLOBAL");
+	settingManager.SetValue<bool>(id, !settingManager.GetValue<bool>(id));
+}
+
 void Effects11::LoadRaindropTexture()
 {
 	raindropTexture = nullptr;
@@ -461,11 +470,9 @@ void Effects11::CheckCommonData()
 		ENBHelper::Update();
 
 		auto& settingManager = SettingManager::GetSingleton();
-		auto ui = globals::game::ui;
-		bool isMenuOpen = ui->IsMenuOpen(RE::MapMenu::MENU_NAME);
 		auto& effectManager = EffectManager::GetSingleton();
 
-		enableEffect = !isMenuOpen && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
+		enableEffect = !globals::state->IsFullScreenMenuOpen() && globals::shaderCache->IsEnabled() && settingManager.GetValue<bool>("UseEffect", "GLOBAL") && effectManager.IsPresetLoaded();
 
 		auto& weatherManager = WeatherManager::GetSingleton();
 
@@ -625,7 +632,7 @@ void Effects11::DrawVolumetricRays()
 	if (globals::game::sky && globals::game::sky->flags.any(RE::Sky::Flags::kHideSky))
 		return;
 
-	if (globals::state->isMapMenuOpen)
+	if (globals::state->IsFullScreenMenuOpen())
 		return;
 
 	auto& settingManager = SettingManager::GetSingleton();

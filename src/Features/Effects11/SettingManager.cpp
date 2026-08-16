@@ -5,6 +5,7 @@
 #include <Windows.h>
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <string>
 #include <tuple>
 
@@ -501,16 +502,10 @@ void SettingManager::LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs
 		return;
 	}
 
-	auto writeTime = std::filesystem::last_write_time(filePath);
-
-	// Snapshot allSettings and check for changes under a short shared lock
+	// Snapshot allSettings under a short shared lock
 	std::vector<Setting> settingsCopy;
 	{
 		std::shared_lock lock(mutex);
-		auto it = weatherFileWriteTimes.find(filePath);
-		if (it != weatherFileWriteTimes.end() && it->second == writeTime) {
-			return;  // File unchanged since last load
-		}
 		settingsCopy = allSettings;
 	}
 
@@ -529,7 +524,6 @@ void SettingManager::LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs
 	// Store loaded values for all provided weather IDs under write lock
 	{
 		std::unique_lock lock(mutex);
-		weatherFileWriteTimes[filePath] = writeTime;
 		for (uint32_t weatherID : weatherIDs) {
 			weatherData[weatherID] = loadedValues;
 			lastSavedWeatherData[weatherID] = loadedValues;
@@ -617,7 +611,6 @@ void SettingManager::ReloadAllWeatherSettings()
 	{
 		std::unique_lock lock(mutex);
 		weatherData.clear();
-		weatherFileWriteTimes.clear();  // Force re-read of all weather files
 	}
 	auto& weatherManager = WeatherManager::GetSingleton();
 	weatherManager.Initialize();
@@ -639,16 +632,11 @@ void SettingManager::LoadFromFile(const std::string& filePath)
 		return;
 	}
 
-	auto writeTime = std::filesystem::last_write_time(absPath);
-
 	// Snapshot settings and identify weather categories under brief shared lock
 	std::vector<Setting> settingsCopy;
 	std::vector<std::string> weatherCategories;
 	{
 		std::shared_lock lock(mutex);
-		if (writeTime == lastMainIniWriteTime) {
-			return;  // File unchanged since last load
-		}
 		settingsCopy = allSettings;
 		for (const auto& [catName, catData] : categories) {
 			for (const auto& [key, settingID] : catData.settings) {
@@ -697,7 +685,6 @@ void SettingManager::LoadFromFile(const std::string& filePath)
 	// Store results under unique lock
 	{
 		std::unique_lock lock(mutex);
-		lastMainIniWriteTime = writeTime;
 		allSettings = std::move(settingsCopy);
 
 		// Apply weather ignore settings
@@ -1045,10 +1032,6 @@ void SettingManager::SetIgnoreWeatherSystemInterior(const std::string& category,
 
 void SettingManager::Load()
 {
-	{
-		std::unique_lock lock(mutex);
-		lastMainIniWriteTime = {};
-	}
 	LoadFromFile(PresetManager::GetSingleton().GetENBSeriesIniPath().string());
 	ReloadAllWeatherSettings();
 }
