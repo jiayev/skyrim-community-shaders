@@ -85,7 +85,6 @@ struct Skin : Feature
 		float StartSweat = 0.75f;
 		float FullSweat = 0.15f;
 		float4 WetParams = { 512.0f, 0.7f, 10.0f, 4.0f };
-		bool UseDynamicWetness = false;
 
 		SkinProfile DefaultProfile;
 		/** @brief Named profile pool, shared by any number of bindings. */
@@ -328,6 +327,4 @@ struct Skin : Feature
 			return;
 		}
 	};
-
-	bool isDynamicWetnessAvailable = false;
 };
