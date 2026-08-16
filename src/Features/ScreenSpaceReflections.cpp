@@ -145,6 +145,12 @@ void ScreenSpaceReflections::DrawSettings()
 			BUFFER_VIEWER_NODE(texNRDSpecInput, debugRescale)
 		if (texNRDSpecOutput)
 			BUFFER_VIEWER_NODE(texNRDSpecOutput, debugRescale)
+		if (auto validation = settings.Reblur.EnableValidation ? nrdReblurSpecular.GetValidationSRV() : nullptr) {
+			if (ImGui::TreeNode("NRD Validation")) {
+				ImGui::Image(validation, { nrdReblurSpecular.GetWidth() * debugRescale, nrdReblurSpecular.GetHeight() * debugRescale });
+				ImGui::TreePop();
+			}
+		}
 
 		ImGui::TreePop();
 	}
@@ -523,6 +529,7 @@ void ScreenSpaceReflections::DrawSSR()
 
 		auto commonSettings = nrdSvc.GetCommonSettings();
 		commonSettings.splitScreen = settings.Reblur.SplitScreen;
+		commonSettings.enableValidation = settings.Reblur.EnableValidation;
 		if (resetReblurHistory)
 			commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
 		nrdReblurSpecular.SetCommonSettings(commonSettings);
@@ -581,7 +588,7 @@ ScreenSpaceReflections::SharedData ScreenSpaceReflections::GetCommonBufferData()
 	SharedData data;
 	data.Enabled = (loaded && settings.Enabled && !recompileFlag && ShadersOK() && texHiZDepth && texNRDSpecInput) ? 1u : 0u;
 	data.SpecularMult = settings.SpecularMult;
+	data.SpecCubemapMult = settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded ? settings.SpecCubemapMult : 0.0f;
 	data.pad0 = 0;
-	data.pad1 = 0;
 	return data;
 }

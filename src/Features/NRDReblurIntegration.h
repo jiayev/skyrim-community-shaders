@@ -32,6 +32,10 @@ public:
 	void SetNamedSRV(nrd::ResourceType type, ID3D11ShaderResourceView* srv);
 	void SetNamedUAV(nrd::ResourceType type, ID3D11UnorderedAccessView* uav);
 
+	ID3D11ShaderResourceView* GetValidationSRV() const { return m_validation.srv.get(); }
+	uint32_t GetWidth() const { return m_width; }
+	uint32_t GetHeight() const { return m_height; }
+
 	// Execute all compute dispatches for this denoiser.
 	void Dispatch();
 
@@ -52,16 +56,20 @@ private:
 	void DestroyPipelines();
 	void CreateConstantBuffer(uint32_t maxSize);
 	void CreateSamplers();
+	void CreateValidationTexture();
+	void DestroyValidationTexture();
 
 	ID3D11View* ResolveResource(const nrd::ResourceDesc& res);
 
 	nrd::Instance* m_instance = nullptr;
 	nrd::Identifier m_identifier = 0;
 	uint32_t m_width = 0, m_height = 0;
+	bool m_validationEnabled = false;
 
 	// Permanent pool (history) + transient pool (can alias between frames)
 	eastl::vector<PoolTexture> m_permanentPool;
 	eastl::vector<PoolTexture> m_transientPool;
+	PoolTexture m_validation;
 
 	// Per-pipeline DX11 compute shaders (indexed by PipelineDesc order)
 	eastl::vector<winrt::com_ptr<ID3D11ComputeShader>> m_pipelines;

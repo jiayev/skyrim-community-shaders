@@ -59,6 +59,13 @@ void NRD::SaveSettings(json& o_json)
 
 void NRD::SetupResources()
 {
+	commonSettingsValidThisFrame = false;
+	guidesReadyThisFrame = false;
+	hasCommonFrameHistory = false;
+	lastCommonGameFrame = 0;
+	prevResourceSize[0] = prevResourceSize[1] = 0;
+	prevRectSize[0] = prevRectSize[1] = 0;
+
 	auto renderer = globals::game::renderer;
 	auto mainTex = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 	D3D11_TEXTURE2D_DESC mainDesc;
@@ -183,14 +190,19 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	auto fullH = texNRDViewZ ? texNRDViewZ->desc.Height : (uint32_t)screenSize.y;
 
 	commonSettings = nrd::CommonSettings{};
-	commonSettings.resourceSize[0] = (uint16_t)fullW;
-	commonSettings.resourceSize[1] = (uint16_t)fullH;
-	commonSettings.resourceSizePrev[0] = commonSettings.resourceSize[0];
-	commonSettings.resourceSizePrev[1] = commonSettings.resourceSize[1];
-	commonSettings.rectSize[0] = (uint16_t)dynres.x;
-	commonSettings.rectSize[1] = (uint16_t)dynres.y;
-	commonSettings.rectSizePrev[0] = commonSettings.rectSize[0];
-	commonSettings.rectSizePrev[1] = commonSettings.rectSize[1];
+	const uint16_t resourceSize[2] = { (uint16_t)fullW, (uint16_t)fullH };
+	const uint16_t rectSize[2] = { (uint16_t)dynres.x, (uint16_t)dynres.y };
+	const bool resourceSizeChanged = hasCommonFrameHistory &&
+	                                 (resourceSize[0] != prevResourceSize[0] || resourceSize[1] != prevResourceSize[1]);
+
+	commonSettings.resourceSize[0] = resourceSize[0];
+	commonSettings.resourceSize[1] = resourceSize[1];
+	commonSettings.resourceSizePrev[0] = hasCommonFrameHistory ? prevResourceSize[0] : resourceSize[0];
+	commonSettings.resourceSizePrev[1] = hasCommonFrameHistory ? prevResourceSize[1] : resourceSize[1];
+	commonSettings.rectSize[0] = rectSize[0];
+	commonSettings.rectSize[1] = rectSize[1];
+	commonSettings.rectSizePrev[0] = hasCommonFrameHistory ? prevRectSize[0] : rectSize[0];
+	commonSettings.rectSizePrev[1] = hasCommonFrameHistory ? prevRectSize[1] : rectSize[1];
 
 	auto viewMat = globals::game::frameBufferCached.GetCameraView().Transpose();
 	auto projMat = globals::game::frameBufferCached.GetCameraProj().Transpose();
@@ -219,7 +231,9 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	commonSettings.frameIndex = gameFrame;
 	commonSettings.denoisingRange = 1e6f;
 
-	if (!hasCommonFrameHistory || gameFrame != lastCommonGameFrame + 1)
+	// A changing rect is normal dynamic-resolution operation; NRD consumes both
+	// rectSize and rectSizePrev and should retain history across that transition.
+	if (!hasCommonFrameHistory || gameFrame != lastCommonGameFrame + 1 || resourceSizeChanged)
 		commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
 	lastCommonGameFrame = gameFrame;
 	hasCommonFrameHistory = true;
@@ -227,6 +241,10 @@ const nrd::CommonSettings& NRD::GetCommonSettings()
 	prevWorldToViewMat = worldToViewMat;
 	prevProjMatrix = projMat;
 	prevJitter = jitter;
+	prevResourceSize[0] = resourceSize[0];
+	prevResourceSize[1] = resourceSize[1];
+	prevRectSize[0] = rectSize[0];
+	prevRectSize[1] = rectSize[1];
 
 	commonSettingsValidThisFrame = true;
 	return commonSettings;
@@ -251,6 +269,7 @@ void NRD::ApplyReblurSettings(nrd::ReblurSettings& out, const REBLURSettings& in
 	out.enableAntiFirefly = true;
 	out.hitDistanceReconstructionMode = static_cast<nrd::HitDistanceReconstructionMode>(std::min(in.HitDistanceReconstructionMode, 2u));
 	out.checkerboardMode = checkerboard;
+	out.returnHistoryLengthInsteadOfOcclusion = in.ReturnHistoryLength;
 }
 
 bool NRD::DrawReblurSettings(REBLURSettings& s, bool showAdvanced, const char* tag)
@@ -310,6 +329,8 @@ bool NRD::DrawReblurSettings(REBLURSettings& s, bool showAdvanced, const char* t
 		ImGui::SeparatorText("Debug");
 		{
 			changed |= ImGui::SliderFloat("Split Screen", &s.SplitScreen, 0.0f, 1.0f, "%.2f");
+			changed |= ImGui::Checkbox("NRD Validation Overlay", &s.EnableValidation);
+			changed |= ImGui::Checkbox("Output History Length", &s.ReturnHistoryLength);
 
 			static const char* hitDistReconModes[] = { "OFF", "AREA_3X3", "AREA_5X5" };
 			int hdMode = (int)s.HitDistanceReconstructionMode;

@@ -97,6 +97,7 @@ void NRDReblurIntegration::Shutdown()
 {
 	DestroyPipelines();
 	DestroyPoolTextures();
+	DestroyValidationTexture();
 	m_constantBuffer = nullptr;
 	for (auto& s : m_samplers)
 		s = nullptr;
@@ -114,12 +115,19 @@ void NRDReblurIntegration::Resize(uint32_t halfWidth, uint32_t halfHeight)
 	m_height = halfHeight;
 	DestroyPoolTextures();
 	CreatePoolTextures(halfWidth, halfHeight);
+	DestroyValidationTexture();
 }
 
 void NRDReblurIntegration::SetCommonSettings(const nrd::CommonSettings& settings)
 {
-	if (m_instance)
+	if (m_instance) {
+		m_validationEnabled = settings.enableValidation;
+		if (m_validationEnabled) {
+			CreateValidationTexture();
+			SetNamedUAV(nrd::ResourceType::OUT_VALIDATION, m_validation.uav.get());
+		}
 		nrd::SetCommonSettings(*m_instance, settings);
+	}
 }
 
 void NRDReblurIntegration::SetDenoiserSettings(const void* settings)
@@ -333,6 +341,33 @@ void NRDReblurIntegration::DestroyPoolTextures()
 {
 	m_permanentPool.clear();
 	m_transientPool.clear();
+}
+
+void NRDReblurIntegration::CreateValidationTexture()
+{
+	if (m_validation.texture)
+		return;
+
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = m_width;
+	desc.Height = m_height;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	auto device = globals::d3d::device;
+	DX::ThrowIfFailed(device->CreateTexture2D(&desc, nullptr, m_validation.texture.put()));
+	DX::ThrowIfFailed(device->CreateShaderResourceView(m_validation.texture.get(), nullptr, m_validation.srv.put()));
+	DX::ThrowIfFailed(device->CreateUnorderedAccessView(m_validation.texture.get(), nullptr, m_validation.uav.put()));
+	Util::SetResourceName(m_validation.texture.get(), "NRD::Validation");
+}
+
+void NRDReblurIntegration::DestroyValidationTexture()
+{
+	m_validation = {};
+	m_validationEnabled = false;
 }
 
 void NRDReblurIntegration::CreatePipelines()

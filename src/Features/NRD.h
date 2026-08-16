@@ -77,6 +77,8 @@ struct NRD : Feature
 		float PlaneDistanceSensitivity = 0.02f;
 		float SplitScreen = 0.0f;
 		uint32_t HitDistanceReconstructionMode = 0;
+		bool EnableValidation = false;
+		bool ReturnHistoryLength = false;
 	};
 
 	// Translate the UI struct into an nrd::ReblurSettings, applying common
@@ -113,6 +115,8 @@ struct NRD : Feature
 	bool guidesReadyThisFrame = false;
 	bool hasCommonFrameHistory = false;
 	uint32_t lastCommonGameFrame = 0;
+	uint16_t prevResourceSize[2] = {};
+	uint16_t prevRectSize[2] = {};
 
 	// Shared guide textures owned by NRD.
 	eastl::unique_ptr<Texture2D> texNRDViewZ = nullptr;
@@ -141,4 +145,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RoughnessFraction,
 	PlaneDistanceSensitivity,
 	SplitScreen,
-	HitDistanceReconstructionMode)
+	HitDistanceReconstructionMode,
+	EnableValidation,
+	ReturnHistoryLength)

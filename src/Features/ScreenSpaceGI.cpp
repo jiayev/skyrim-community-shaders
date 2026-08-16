@@ -234,6 +234,12 @@ void ScreenSpaceGI::DrawSettings()
 			BUFFER_VIEWER_NODE(texNRDInputSH1, debugRescale)
 		if (texNRDOutputSH1)
 			BUFFER_VIEWER_NODE(texNRDOutputSH1, debugRescale)
+		if (auto validation = settings.Reblur.EnableValidation ? nrdReblur.GetValidationSRV() : nullptr) {
+			if (ImGui::TreeNode("NRD Validation")) {
+				ImGui::Image(validation, { nrdReblur.GetWidth() * debugRescale, nrdReblur.GetHeight() * debugRescale });
+				ImGui::TreePop();
+			}
+		}
 
 		ImGui::TreePop();
 	}
@@ -795,6 +801,7 @@ void ScreenSpaceGI::DrawSSGI()
 
 		auto commonSettings = nrdSvc.GetCommonSettings();
 		commonSettings.splitScreen = settings.Reblur.SplitScreen;
+		commonSettings.enableValidation = settings.Reblur.EnableValidation;
 		if (resetReblurHistory)
 			commonSettings.accumulationMode = nrd::AccumulationMode::CLEAR_AND_RESTART;
 		nrdReblur.SetCommonSettings(commonSettings);

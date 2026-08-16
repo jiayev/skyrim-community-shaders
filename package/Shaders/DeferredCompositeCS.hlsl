@@ -202,16 +202,6 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, V, roughness);
 
 		float3 finalIrradiance = 0;
-
-#	if defined(SSR)
-		if (SharedData::ssrSettings.Enabled != 0) {
-			float3 tracedSpecular;
-			float specNormHitDist;
-			SampleSSRTracedSpecular(dispatchID.xy, tracedSpecular, specNormHitDist);
-
-			finalIrradiance = tracedSpecular;
-		} else
-#	endif
 		{
 			float directionalAmbientColorSpecular = Color::RGBToLuminance(Color::Ambient(max(0, SharedData::GetAmbient(R)))) * Color::ReflectionNormalisationScale;
 
@@ -279,6 +269,18 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 				finalIrradiance = Color::IrradianceToLinear(specularIrradiance);
 #	endif
 			}
+
+#	if defined(SSR)
+			if (SharedData::ssrSettings.Enabled != 0) {
+				float3 tracedSpecular;
+				float specNormHitDist;
+				SampleSSRTracedSpecular(dispatchID.xy, tracedSpecular, specNormHitDist);
+
+				float tracedAvailability = saturate(specNormHitDist / NRD_EPS);
+				float3 fallbackIrradiance = finalIrradiance * SharedData::ssrSettings.SpecCubemapMult;
+				finalIrradiance = lerp(fallbackIrradiance, tracedSpecular, tracedAvailability);
+			}
+#	endif
 
 #	if defined(SSGI)
 			if (SharedData::ssgiSettings.Enabled != 0) {

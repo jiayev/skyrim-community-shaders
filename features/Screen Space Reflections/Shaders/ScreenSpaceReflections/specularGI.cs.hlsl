@@ -441,11 +441,12 @@ float SSRT_ValidateHit(float3 hit,
 		if (!SharedData::InInterior) {
 			float3 world_space_normal = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 			float3 positionMS = mul(FrameBuffer::CameraViewInverse, float4(unbiased_view_space_ray, 1)).xyz;
+			float3 world_space_view = -normalize(positionMS);
 
 			sh2 skylightingSH = Skylighting::Sample(positionMS, world_space_reflected_direction);
 			float fadeOutFactor = Skylighting::GetFadeOutFactor(positionMS);
 			float3 skylightingNormal = normalize(float3(world_space_normal.xy, max(0, world_space_normal.z)));
-			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(world_space_normal, biased_view_space_ray_direction, roughness), fadeOutFactor);
+			skylightingSpecular = Skylighting::EvaluateSpecular(skylightingSH, SphericalHarmonics::FauxSpecularLobe(world_space_normal, world_space_view, roughness), fadeOutFactor);
 		}
 #	endif
 
@@ -510,15 +511,12 @@ float SSRT_ValidateHit(float3 hit,
 		ao = GetSpecularOcclusionFromAmbientOcclusion(NdotV, ao, roughness);
 		envColor *= ao;
 		sampleColor.xyz = lerp(envColor, sampleColor.xyz, confidence);
-		confidence = 1;
 	}
 #endif
 
 	float normHitDist;
-	if (screenConfidence > 0.0f) {
+	if (screenConfidence > 0.01f) {
 		normHitDist = REBLUR_FrontEnd_GetNormHitDist(ray_length, viewZ, kHitDistParams, roughness);
-	} else if (confidence > 0.0f) {
-		normHitDist = 1.0;
 	} else {
 		normHitDist = 0.0;
 	}

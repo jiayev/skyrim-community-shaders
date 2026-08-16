@@ -78,7 +78,12 @@ struct ScreenSpaceReflections : Feature
 		float HitDistC = 20.0f;
 
 		bool EnableREBLUR = true;
-		NRD::REBLURSettings Reblur;
+		NRD::REBLURSettings Reblur = {
+			.MaxAccumulatedFrameNum = 20,
+			.MaxFastAccumulatedFrameNum = 4,
+			.MaxStabilizedFrameNum = 20,
+			.FastHistoryClampingSigmaScale = 1.5f,
+		};
 		float SpecularPrepassBlurRadius = 50.0f;
 		bool UsePrepassOnlyForSpecularMotionEstimation = true;
 	} settings;
@@ -112,8 +117,8 @@ struct ScreenSpaceReflections : Feature
 	{
 		uint Enabled;
 		float SpecularMult;
+		float SpecCubemapMult;
 		uint pad0;
-		uint pad1;
 	};
 
 	SharedData GetCommonBufferData();
