@@ -43,6 +43,14 @@ SamplerState LinearSampler : register(s0);
 #	include "NRD/NRDReblurSH.hlsli"
 #endif
 
+#if defined(DEBUG_VIEW)
+cbuffer DeferredDebugCB : register(b13)
+{
+	uint DebugView;
+	float3 DebugPad;
+};
+#endif
+
 float GetSpecularOcclusionFromAmbientOcclusion(float NdotV, float ao, float roughness)
 {
 	return saturate(pow(abs(NdotV + ao), exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
@@ -103,6 +111,10 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 	float3 specularColor = SpecularTexture[dispatchID.xy];
 	float3 albedo = AlbedoTexture[dispatchID.xy];
 
+#if defined(DEBUG_VIEW)
+	float3 inputDiffuseColor = diffuseColor;
+#endif
+
 	float depth = DepthTexture[dispatchID.xy];
 	float4 positionWS = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	positionWS = mul(FrameBuffer::CameraViewProjInverse, positionWS);
@@ -112,6 +124,11 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 		MotionVectorsRW[dispatchID.xy] = MotionBlur::GetSSMotionVector(positionWS, positionWS);  // Apply sky motion vectors
 
 	float glossiness = normalGlossiness.z;
+
+#if defined(DEBUG_VIEW)
+	float3 debugV = -normalize(positionWS.xyz);
+	float3 debugCubemapIrradiance = 0;
+#endif
 
 	float3 linDiffuseColor = Color::IrradianceToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
@@ -270,6 +287,10 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 #	endif
 			}
 
+#	if defined(DEBUG_VIEW)
+			debugCubemapIrradiance = finalIrradiance;
+#	endif
+
 #	if defined(SSR)
 			if (SharedData::ssrSettings.Enabled != 0) {
 				float3 tracedSpecular;
@@ -307,6 +328,61 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 		color = normalVS;
 	} else {
 		color = glossiness;
+	}
+
+#endif
+
+#if defined(DEBUG_VIEW)
+
+	if (DebugView != 0) {
+		float roughness = 1.0 - glossiness;
+
+		if (DebugView == 1) {
+			color = albedo;
+		} else if (DebugView == 2) {
+#	if defined(DYNAMIC_CUBEMAPS)
+			color = ReflectanceTexture[dispatchID.xy];
+#	else
+			color = 0;
+#	endif
+		} else if (DebugView == 3) {
+			color = normalVS;
+		} else if (DebugView == 4) {
+			color = roughness;
+		} else if (DebugView == 5) {
+			color = MasksTexture[dispatchID.xy];
+		} else if (DebugView == 6) {
+			color = inputDiffuseColor;
+		} else if (DebugView == 7) {
+			color = Color::IrradianceToGamma(max(specularColor, 0));
+		} else if (DebugView == 8) {
+#	if defined(SSGI)
+#		if defined(SSGI_SH)
+			NRD_SG sg = REBLUR_BackEnd_UnpackSh(SsgiTexture[dispatchID.xy], SsgiSH1Texture[dispatchID.xy]);
+			color = NRD_SG_ResolveDiffuse(sg, normalWS, debugV, roughness);
+#		else
+			float normHitDist;
+			REBLUR_BackEnd_UnpackRadianceAndNormHitDist(SsgiTexture[dispatchID.xy], color, normHitDist);
+#		endif
+			color = Color::IrradianceToGamma(max(color, 0));
+#	else
+			color = 0;
+#	endif
+		} else if (DebugView == 9) {
+#	if defined(SSR)
+			float normHitDist;
+			REBLUR_BackEnd_UnpackRadianceAndNormHitDist(SsrTexture[dispatchID.xy], color, normHitDist);
+			color = Color::IrradianceToGamma(max(color, 0));
+#	else
+			color = 0;
+#	endif
+		} else if (DebugView == 10) {
+#	if defined(DYNAMIC_CUBEMAPS)
+			color = Color::IrradianceToGamma(max(debugCubemapIrradiance, 0));
+#	else
+			color = 0;
+#	endif
+		}
 	}
 
 #endif

@@ -2,6 +2,7 @@
 
 #include <DDSTextureLoader.h>
 
+#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -184,6 +185,9 @@ void Deferred::SetupResources()
 		delete directionalShadowLights;
 		directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
 		directionalShadowLights->CreateSRV(srvDesc);
+
+		delete debugViewCB;
+		debugViewCB = nullptr;
 	}
 }
 
@@ -387,6 +391,18 @@ void Deferred::DeferredPasses()
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
+		if (debugView != DebugView::Off) {
+			if (!debugViewCB) {
+				debugViewCB = new ConstantBuffer(ConstantBufferDesc<DebugViewCB>(), "Deferred::DebugViewCB");
+			}
+			DebugViewCB cb{};
+			cb.mode = static_cast<uint>(debugView);
+			debugViewCB->Update(cb);
+
+			ID3D11Buffer* debugBuf = debugViewCB->CB();
+			context->CSSetConstantBuffers(13, 1, &debugBuf);
+		}
+
 		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
 		context->CSSetShader(shader, nullptr, 0);
 
@@ -408,6 +424,11 @@ void Deferred::DeferredPasses()
 
 		ID3D11Buffer* buffers[1] = { nullptr };
 		context->CSSetConstantBuffers(12, 1, buffers);
+
+		if (debugViewCB) {
+			ID3D11Buffer* nullDebugBuf = nullptr;
+			context->CSSetConstantBuffers(13, 1, &nullDebugBuf);
+		}
 
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
@@ -596,12 +617,42 @@ void Deferred::ClearShaderCache()
 	}
 }
 
+void Deferred::DrawSettings()
+{
+	const char* items[] = {
+		T("menu.advanced.deferred_debug_view.off", "Off"),
+		T("menu.advanced.deferred_debug_view.albedo", "Albedo"),
+		T("menu.advanced.deferred_debug_view.reflectance", "Reflectance"),
+		T("menu.advanced.deferred_debug_view.normal", "Normal"),
+		T("menu.advanced.deferred_debug_view.roughness", "Roughness"),
+		T("menu.advanced.deferred_debug_view.mask", "Mask"),
+		T("menu.advanced.deferred_debug_view.diffuse", "Diffuse"),
+		T("menu.advanced.deferred_debug_view.specular", "Specular"),
+		T("menu.advanced.deferred_debug_view.ssgi", "SSGI"),
+		T("menu.advanced.deferred_debug_view.ssr", "SSR"),
+		T("menu.advanced.deferred_debug_view.dynamic_cubemaps", "Dynamic Cubemaps")
+	};
+
+	int current = static_cast<int>(debugView);
+	if (ImGui::Combo(T("menu.advanced.deferred_debug_view", "Deferred Debug View"), &current, items, IM_ARRAYSIZE(items))) {
+		DebugView next = static_cast<DebugView>(current);
+		bool wasOff = debugView == DebugView::Off;
+		bool nowOff = next == DebugView::Off;
+		debugView = next;
+		if (wasOff != nowOff)
+			ClearShaderCache();
+	}
+}
+
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 {
 	if (!mainCompositeCS) {
 		logger::debug("Compiling DeferredCompositeCS");
 
 		std::vector<std::pair<const char*, const char*>> defines;
+
+		if (debugView != DebugView::Off)
+			defines.push_back({ "DEBUG_VIEW", nullptr });
 
 		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
@@ -638,6 +689,9 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
+
+		if (debugView != DebugView::Off)
+			defines.push_back({ "DEBUG_VIEW", nullptr });
 
 		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
