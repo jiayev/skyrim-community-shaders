@@ -250,10 +250,10 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 	const float3 inv_direction = abs(direction) > float(1.0e-12) ? float(1.0) / direction : SSRT_FLOAT_MAX;
 
 	int current_mip = most_detailed_mip;
-	float2 current_mip_resolution = SSRT_GetMipResolution(screen_size, current_mip);
+	float2 current_mip_resolution = SSRT_GetMipResolution(screen_size, current_mip) * FrameBuffer::DynamicResolutionParams1.xy;
 	float2 current_mip_resolution_inv = rcp(current_mip_resolution);
 
-	float2 uv_offset = 0.005 * exp2(most_detailed_mip) / screen_size;
+	float2 uv_offset = 0.005 * exp2(most_detailed_mip) / (screen_size * FrameBuffer::DynamicResolutionParams1.xy);
 	uv_offset = direction.xy < 0 ? -uv_offset : uv_offset;
 
 	float2 floor_offset = direction.xy < 0 ? 0 : 1;
@@ -270,7 +270,7 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 			break;
 
 		float2 current_mip_position = current_mip_resolution * position.xy;
-		float surface_z = SSRT_LoadDepth(current_mip_position * FrameBuffer::DynamicResolutionParams1.xy, current_mip);
+		float surface_z = SSRT_LoadDepth(current_mip_position, current_mip);
 		bool skipped_tile = SSRT_AdvanceRay(origin, direction, inv_direction, current_mip_position, current_mip_resolution_inv, floor_offset, uv_offset, surface_z, position, current_t);
 		bool nextMipIsOutOfRange = skipped_tile && (current_mip >= SSRT_DEPTH_HIERARCHY_MAX_MIP);
 		if (!nextMipIsOutOfRange) {
@@ -281,8 +281,7 @@ float3 SSRT_HierarchicalRaymarch(float3 origin,
 		++num_iters;
 	}
 
-	// A hit is complete only after traversal descends past the finest tested mip.
-	valid_hit = current_mip < most_detailed_mip;
+	valid_hit = num_iters <= max_traversal_intersections;
 	return position;
 }
 
@@ -329,8 +328,9 @@ float SSRT_ValidateHit(float3 hit,
 		return 0;
 	}
 
+	float2 render_size = screen_size * FrameBuffer::DynamicResolutionParams1.xy;
 	float2 manhattan_dist = abs(hit.xy - uv);
-	if ((manhattan_dist.x < (2.f / screen_size.x)) && (manhattan_dist.y < (2.f / screen_size.y))) {
+	if ((manhattan_dist.x < (2.f / render_size.x)) && (manhattan_dist.y < (2.f / render_size.y))) {
 		occlusion = 1 - confidence;
 		return 0;
 	}
@@ -377,7 +377,7 @@ float SSRT_ValidateHit(float3 hit,
 	GetNormalRoughness(fullResCoords, normalVS, roughness);
 	roughness = clamp(roughness, 0.02f, 1.0f);
 
-	int most_detailed_mip = min(1, (int)SSRT_DEPTH_HIERARCHY_MAX_MIP);
+	int most_detailed_mip = HIZ_MIN_MIP;
 
 	float z;
 	if (most_detailed_mip == 0) {

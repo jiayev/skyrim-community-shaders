@@ -201,6 +201,8 @@ void ScreenSpaceReflections::SetupResources()
 			while ((minDim >> numHiZMips) >= 16 && numHiZMips < kMaxHiZMips)
 				++numHiZMips;
 
+			numHiZMips = std::max(numHiZMips, 7u);
+
 			D3D11_TEXTURE2D_DESC hizDesc{
 				.Width = fullW,
 				.Height = fullH,

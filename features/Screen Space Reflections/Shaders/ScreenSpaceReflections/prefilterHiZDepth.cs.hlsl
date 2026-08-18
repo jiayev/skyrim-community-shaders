@@ -24,8 +24,10 @@ float Min4(float a, float b, float c, float d)
 
 	// Do not return before the group barriers. The C++ path only selects this
 	// variant when both texture dimensions are 16-aligned, so the padded dynamic-
-	// resolution edge remains in bounds and uses the same 2x2 min reduction.
-	const uint2 maxCoord = textureSize - 1;
+	// resolution edge remains in bounds. Clamp source reads to the dynres active
+	// region so padding threads never feed stale depth outside it into the min-z
+	// reduction (they fold the edge texel instead).
+	const uint2 maxCoord = min(textureSize, (uint2)FrameDim) - 1;
 	const float depth0 = srcDepth[min(pixelCoord + uint2(0, 0), maxCoord)];
 	const float depth1 = srcDepth[min(pixelCoord + uint2(1, 0), maxCoord)];
 	const float depth2 = srcDepth[min(pixelCoord + uint2(0, 1), maxCoord)];
