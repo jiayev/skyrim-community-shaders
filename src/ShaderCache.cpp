@@ -3152,6 +3152,8 @@ namespace SIE
 
 	void ShaderCache::ProcessCompilationSet(std::stop_token stoken, SIE::ShaderCompilationTask task)
 	{
+		const SKSE::stl::scope_exit releaseSlot([this]() noexcept { compilationSet.ReleaseDispatchSlot(); });
+
 		if (stoken.stop_requested()) {
 			return;
 		}
@@ -3184,7 +3186,7 @@ namespace SIE
 		// still reads high briefly, which would otherwise underflow uint64_t (logs as ~2^64-1).
 		const uint64_t total = compilationSet.totalTasks.load(std::memory_order_relaxed);
 		const uint64_t done = compilationSet.completedTasks.load(std::memory_order_relaxed) +
-		                     compilationSet.failedTasks.load(std::memory_order_relaxed);
+		                      compilationSet.failedTasks.load(std::memory_order_relaxed);
 		// This task has already finished running, but Complete(task) has not yet updated the counters.
 		// Include the current task in the local progress snapshot so the logged remaining count is accurate.
 		const uint64_t doneIncludingCurrent = (done < total) ? (done + 1) : total;
@@ -3351,9 +3353,9 @@ namespace SIE
 		if (!conditionVariable.wait(
 				lock, stoken,
 				[this, &shaderCache]() { return !availableTasks.empty() &&
-			                                    // Dispatch when pool has room. Use < (not <=) so that after
-			                                    // push_task() the total never exceeds the limit.
-			                                    (int)shaderCache->compilationPool.get_tasks_total() <
+			                                    // Use < (not <=) so push_task() never exceeds the limit. Throttled on
+			                                    // this count, not compilationPool's shared total, since EnqueueComputeShaderCompile() bypasses this gate.
+			                                    static_cast<int32_t>(dispatchedTasksInFlight.load(std::memory_order_relaxed)) <
 			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
 			return std::nullopt;
@@ -3386,7 +3388,18 @@ namespace SIE
 		}
 
 		tasksInProgress.insert(task);
+		dispatchedTasksInFlight.fetch_add(1, std::memory_order_relaxed);
 		return task;
+	}
+
+	void CompilationSet::ReleaseDispatchSlot()
+	{
+		{
+			// Unlocked, this could race WaitTake()'s predicate check and lose the notify.
+			std::scoped_lock lock(compilationMutex);
+			dispatchedTasksInFlight.fetch_sub(1, std::memory_order_relaxed);
+		}
+		conditionVariable.notify_one();
 	}
 
 	void CompilationSet::Add(const ShaderCompilationTask& task)
