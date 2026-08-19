@@ -111,7 +111,8 @@ struct PostProcessing : Feature
 		COUNT
 	};
 
-	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
+	/// shared_ptr, not unique_ptr: see PostProcessFeature's weak_ptr callback contract.
+	std::array<std::shared_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
 
 	BokehResources bokehResources;
 

@@ -6,11 +6,16 @@ void PostProcessFeature::CompileComputeShadersAsync(std::wstring_view sourceDir,
 		auto path = std::filesystem::path(sourceDir) / info.filename;
 		globals::shaderCache->EnqueueComputeShaderCompile(
 			path.wstring(), info.entry, info.defines,
-			[this, ptr = info.programPtr, generation = shaderGeneration.load(std::memory_order_relaxed)](ID3D11ComputeShader* shader) {
+			[weak = weak_from_this(), ptr = info.programPtr, generation = shaderGeneration.load(std::memory_order_relaxed)](ID3D11ComputeShader* shader) {
 				if (!shader)
 					return;
-				std::lock_guard lock(shaderMutex);
-				if (shaderGeneration.load(std::memory_order_relaxed) != generation) {
+				auto self = weak.lock();
+				if (!self) {
+					shader->Release();
+					return;
+				}
+				std::lock_guard lock(self->shaderMutex);
+				if (self->shaderGeneration.load(std::memory_order_relaxed) != generation) {
 					shader->Release();
 					return;
 				}
