@@ -1,5 +1,6 @@
 #include "LUT.h"
 
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -213,44 +214,39 @@ void LUT::ReadTexture(std::filesystem::path path)
 
 void LUT::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&lutCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/LUT");
 	CompileComputeShaders();
 }
 
 void LUT::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
-		std::string entry = "main";
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &lutCS, "lut.cs.hlsl" },
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &lutCS, "lut.cs.hlsl" },
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\LUT") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\LUT", shaderInfos);
 }
 
 void LUT::Draw(TextureInfo& inout_tex)
 {
 	if (LutType == -1)
+		return;
+
+	if (!AllShadersReady({ &lutCS }))
 		return;
 
 	globals::profiler->BeginPass("PostProcessing::LUT");

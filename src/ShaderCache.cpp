@@ -11,6 +11,7 @@
 
 #include "Deferred.h"
 #include "State.h"
+#include "Utils/D3D.h"
 
 #include "Features/DynamicCubemaps.h"
 
@@ -2358,6 +2359,206 @@ namespace SIE
 	void ShaderCache::SetDump(bool value)
 	{
 		isDump = value;
+	}
+
+	namespace
+	{
+		// Cache directory under Data/ShaderCache/<source-relative parent>, so all of a
+		// feature's compute shaders group together and DeleteDiskCache() removes them.
+		std::wstring GetStandaloneComputeCacheDir(const std::filesystem::path& sourcePath)
+		{
+			std::wstring rel;
+			bool pastShaders = false;
+			for (const auto& part : sourcePath.parent_path()) {
+				if (!pastShaders) {
+					if (part == L"Shaders")
+						pastShaders = true;
+					continue;
+				}
+				if (!rel.empty())
+					rel += L"/";
+				rel += part.wstring();
+			}
+			if (!pastShaders)
+				rel = sourcePath.parent_path().wstring();
+			return std::format(L"Data/ShaderCache/{}", rel);
+		}
+	}
+
+	void ShaderCache::EnqueueComputeShaderCompile(
+		std::wstring sourcePath,
+		std::string entryPoint,
+		std::vector<std::pair<const char*, const char*>> defines,
+		ComputeShaderReadyCallback onReady)
+	{
+		compilationPool.detach_task(
+			[this, sourcePath = std::move(sourcePath), entryPoint = std::move(entryPoint),
+				defines = std::move(defines), onReady = std::move(onReady)]() mutable {
+				auto device = globals::d3d::device;
+				auto* state = globals::state;
+				if (!device || !state) {
+					onReady(nullptr);
+					return;
+				}
+
+				const std::filesystem::path srcPath{ sourcePath };
+				const std::string srcPathStr = Util::WStringToString(sourcePath);
+				if (!std::filesystem::exists(srcPath)) {
+					logger::error("Failed to compile compute shader; {} does not exist", srcPathStr);
+					onReady(nullptr);
+					return;
+				}
+
+				std::string defineSlug;
+				for (const auto& d : defines) {
+					if (!d.first || !d.first[0])
+						continue;
+					if (!defineSlug.empty())
+						defineSlug += "_";
+					defineSlug += d.first;
+					if (d.second && d.second[0]) {
+						defineSlug += "=";
+						defineSlug += d.second;
+					}
+				}
+				for (auto& c : defineSlug) {
+					if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '=')
+						c = '_';
+				}
+				const std::wstring entryPointW(entryPoint.begin(), entryPoint.end());
+				const auto globalDefinesSuffixNarrow = Util::GetShaderDefinesSuffix(state->shaderDefinesString);
+				const std::wstring globalDefinesSuffix(globalDefinesSuffixNarrow.begin(), globalDefinesSuffixNarrow.end());
+				const std::wstring defineSlugW(defineSlug.begin(), defineSlug.end());
+				const std::wstring diskPath = defineSlug.empty() ?
+			                                      std::format(L"{}/{}{}.cso", GetStandaloneComputeCacheDir(srcPath), entryPointW, globalDefinesSuffix) :
+			                                      std::format(L"{}/{}_{}{}.cso", GetStandaloneComputeCacheDir(srcPath), entryPointW, defineSlugW, globalDefinesSuffix);
+				ID3D11ComputeShader* shader = nullptr;
+				bool diskCacheOutdated = true;
+
+				if (IsDiskCache() && std::filesystem::exists(diskPath)) {
+					// This repo has no shader-manifest digest; reuse the main cache's
+					// mtime-based invalidation policy instead.
+					std::error_code ec;
+					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
+					if (ec) {
+						logger::debug("Failed to read standalone compute cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+					} else {
+						const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(srcPath, ec));
+						if (ec) {
+							logger::debug("Failed to read compute shader source mtime for {}: {}", srcPathStr, ec.message());
+						} else if (sourceTime > diskCacheTime) {
+							logger::debug("Disk-cached standalone compute shader {}:{} outdated: source is newer than cache", srcPathStr, entryPoint);
+						} else {
+							diskCacheOutdated = false;
+						}
+					}
+				}
+
+				if (!diskCacheOutdated) {
+					ID3DBlob* blob = nullptr;
+					if (SUCCEEDED(D3DReadFileToBlob(diskPath.c_str(), &blob)) && blob) {
+						HRESULT hr = device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &shader);
+						if (SUCCEEDED(hr)) {
+							Util::SetResourceName(shader, "%s:%s", srcPathStr.c_str(), entryPoint.c_str());
+							logger::debug("Loaded standalone compute shader {}:{} from {}", srcPathStr, entryPoint, Util::WStringToString(diskPath));
+						} else {
+							logger::warn("Failed to create compute shader from cached blob for {}:{}", srcPathStr, entryPoint);
+						}
+						blob->Release();
+					} else {
+						logger::warn("Failed to read cached compute shader {}", Util::WStringToString(diskPath));
+					}
+				}
+
+				if (!shader) {
+					Util::CustomInclude include;
+
+					std::vector<D3D_SHADER_MACRO> macros;
+					for (const auto& d : defines) {
+						if (d.first && d.first[0])
+							macros.push_back({ d.first, d.second });
+					}
+					if (state->IsDeveloperMode()) {
+						macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
+						macros.push_back({ "D3DCOMPILE_DEBUG", "" });
+					}
+					auto shaderDefines = state->GetDefines();
+					if (!shaderDefines->empty()) {
+						for (unsigned int i = 0; i < shaderDefines->size(); i++)
+							macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
+					}
+					macros.push_back({ "COMPUTESHADER", "" });
+					macros.push_back({ "WINPC", "" });
+					macros.push_back({ "DX11", "" });
+					macros.push_back({ nullptr, nullptr });
+
+					uint32_t flags = !state->IsDeveloperMode() ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
+					if (state->enablePartialPrecision.load(std::memory_order_relaxed))
+						flags |= D3DCOMPILE_PARTIAL_PRECISION;
+					if (state->enableAvoidFlowControl.load(std::memory_order_relaxed))
+						flags |= D3DCOMPILE_AVOID_FLOW_CONTROL;
+					if (IsDiskCache())
+						flags |= D3DCOMPILE_SKIP_VALIDATION;
+
+					ID3DBlob* shaderBlob = nullptr;
+					ID3DBlob* errorBlob = nullptr;
+					if (FAILED(D3DCompileFromFile(srcPath.c_str(), macros.data(), &include, entryPoint.c_str(), "cs_5_0", flags, 0, &shaderBlob, &errorBlob))) {
+						logger::warn("Standalone compute shader compilation failed for {}:{}:\n{}",
+							srcPathStr, entryPoint, errorBlob ? static_cast<char*>(errorBlob->GetBufferPointer()) : "Unknown error");
+						if (errorBlob)
+							errorBlob->Release();
+						if (shaderBlob)
+							shaderBlob->Release();
+						onReady(nullptr);
+						return;
+					}
+					if (errorBlob) {
+						logger::debug("Shader logs:\n{}", static_cast<char*>(errorBlob->GetBufferPointer()));
+						errorBlob->Release();
+					}
+
+					HRESULT hr = device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &shader);
+					if (FAILED(hr)) {
+						logger::warn("Failed to create compute shader for {}:{}", srcPathStr, entryPoint);
+						shaderBlob->Release();
+						onReady(nullptr);
+						return;
+					}
+					Util::SetResourceName(shader, "%s:%s", srcPathStr.c_str(), entryPoint.c_str());
+
+					if (IsDiskCache()) {
+						const auto cacheDir = GetStandaloneComputeCacheDir(srcPath);
+						std::error_code ec;
+						std::filesystem::create_directories(cacheDir, ec);
+						if (FAILED(D3DWriteBlobToFile(shaderBlob, diskPath.c_str(), true))) {
+							logger::error("Failed to save standalone compute shader to {}", Util::WStringToString(diskPath));
+						} else {
+							logger::debug("Saved standalone compute shader {}:{} to {}", srcPathStr, entryPoint, Util::WStringToString(diskPath));
+						}
+					}
+					shaderBlob->Release();
+				}
+
+				onReady(shader);
+			});
+	}
+
+	void ShaderCache::ClearStandaloneComputeCache(std::wstring_view relativeDir)
+	{
+		// Same bar as DeleteDiskCache(): never delete outside Data/ShaderCache.
+		if (relativeDir.empty() || relativeDir.find(L"..") != std::wstring_view::npos ||
+			std::filesystem::path(relativeDir).is_absolute()) {
+			logger::error("Refusing to clear standalone compute cache for unsafe path {}",
+				Util::WStringToString(std::wstring(relativeDir)));
+			return;
+		}
+
+		std::error_code ec;
+		std::filesystem::remove_all(std::filesystem::path(L"Data/ShaderCache") / relativeDir, ec);
+		if (ec) {
+			logger::warn("Failed to remove standalone compute cache dir {}: {}",
+				Util::WStringToString(std::wstring(relativeDir)), ec.message());
+		}
 	}
 
 	bool ShaderCache::IsDiskCache() const

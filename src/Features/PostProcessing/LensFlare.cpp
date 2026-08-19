@@ -2,6 +2,7 @@
 
 #include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -347,32 +348,29 @@ void LensFlare::CreateFFTTextures(uint resolution)
 
 void LensFlare::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&thresholdCS, &ghostHaloCS, &blurDownCS, &blurUpCS, &mixCS,
 		&fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS, &fftMultiplyCS,
 		&bokehPrepareCS, &fftThresholdCS, &fftGhostComposeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/LensFlare");
 	CompileComputeShaders();
 }
 
 void LensFlare::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
-		std::string entry = "main";
-	};
-
-	std::vector<ShaderCompileInfo> shaderInfos = {
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
 		{ &thresholdCS, "lensflare.cs.hlsl", {}, "CSThreshold" },
 		{ &ghostHaloCS, "lensflare.cs.hlsl", {}, "CSGhostHalo" },
 		{ &blurDownCS, "lensflare.cs.hlsl", {}, "CSFlareDown" },
@@ -382,16 +380,7 @@ void LensFlare::CompileComputeShaders()
 		{ &bokehPrepareCS, "lensflare_fft.cs.hlsl", {}, "CSBokehPrepare" },
 		{ &fftThresholdCS, "lensflare_fft.cs.hlsl", {}, "CSFFTThreshold" },
 		{ &fftGhostComposeCS, "lensflare_fft.cs.hlsl", {}, "CSFFTGhostCompose" },
-	};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\LensFlare") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
-
-	// FFT shaders — self-contained in lensflare_fft.cs.hlsl with LensFlareConstants CB
-	std::vector<ShaderCompileInfo> fftShaderInfos = {
+		// FFT shaders — self-contained in lensflare_fft.cs.hlsl with LensFlareConstants CB
 		{ &fftRowCS, "lensflare_fft.cs.hlsl", { { "ROW_PASS", "" }, { "FORWARD", "" } }, "CS_FFT" },
 		{ &fftColCS, "lensflare_fft.cs.hlsl", { { "COL_PASS", "" }, { "FORWARD", "" } }, "CS_FFT" },
 		{ &fftRowInvCS, "lensflare_fft.cs.hlsl", { { "ROW_PASS", "" }, { "INVERSE", "" } }, "CS_FFT" },
@@ -399,15 +388,7 @@ void LensFlare::CompileComputeShaders()
 		{ &fftMultiplyCS, "lensflare_fft.cs.hlsl", {}, "CS_Multiply" },
 	};
 
-	for (auto& info : fftShaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\LensFlare") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
-
-	if (!thresholdCS || !ghostHaloCS || !mixCS) {
-		logger::error("Failed to compile lens flare compute shaders!");
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\LensFlare", shaderInfos);
 }
 
 void LensFlare::DispatchFFT(ID3D11ComputeShader* shader, Texture2D* input, Texture2D* output, uint resolution)
@@ -472,7 +453,7 @@ void LensFlare::DrawFast(TextureInfo& inout_tex, LensFlareCB& data)
 	};
 
 	// === Pass 2: Ghost + Halo — half res → half res ===
-	if (!debugsettings.disableGhosts && ghostHaloCS) {
+	if (!debugsettings.disableGhosts && AllShadersReady({ &ghostHaloCS })) {
 		data.OutputWidth = (float)halfW;
 		data.OutputHeight = (float)halfH;
 		data.InputWidth = (float)halfW;
@@ -491,7 +472,7 @@ void LensFlare::DrawFast(TextureInfo& inout_tex, LensFlareCB& data)
 	}
 
 	// === Pass 3: Kawase blur ===
-	if (!debugsettings.disableBlur && blurDownCS && blurUpCS) {
+	if (!debugsettings.disableBlur && AllShadersReady({ &blurDownCS, &blurUpCS })) {
 		for (int iter = 0; iter < debugsettings.blurIterations; iter++) {
 			data.OutputWidth = (float)quarterW;
 			data.OutputHeight = (float)quarterH;
@@ -532,6 +513,11 @@ void LensFlare::DrawQuality(TextureInfo& inout_tex, LensFlareCB& data)
 {
 	std::ignore = inout_tex;
 	auto context = globals::d3d::context;
+
+	if (!AllShadersReady({ &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS, &bokehPrepareCS,
+			&fftMultiplyCS, &fftThresholdCS, &fftGhostComposeCS }))
+		return;
+
 	uint N = currentFFTResolution;
 	uint halfW = texThreshold->desc.Width;
 	uint halfH = texThreshold->desc.Height;
@@ -780,7 +766,7 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 
 	// === Pass 1: Threshold — full res input → half res output ===
-	if (!debugsettings.disableThreshold && thresholdCS) {
+	if (!debugsettings.disableThreshold && AllShadersReady({ &thresholdCS })) {
 		data.OutputWidth = (float)halfW;
 		data.OutputHeight = (float)halfH;
 		data.InputWidth = (float)fullW;
@@ -799,14 +785,16 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	}
 
 	// === Ghost + Halo generation (mode-dependent) ===
-	if ((mode == GhostMode::Quality || mode == GhostMode::Ultra) && fftRowCS && fftColCS && fftMultiplyCS && fftThresholdCS && fftGhostComposeCS) {
+	if ((mode == GhostMode::Quality || mode == GhostMode::Ultra) &&
+		AllShadersReady({ &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS, &bokehPrepareCS,
+			&fftMultiplyCS, &fftThresholdCS, &fftGhostComposeCS })) {
 		DrawQuality(inout_tex, data);
 	} else {
 		DrawFast(inout_tex, data);
 	}
 
 	// === Pass 4: Mix ghost+halo → full res output ===
-	if (mixCS) {
+	if (AllShadersReady({ &mixCS })) {
 		data.OutputWidth = (float)fullW;
 		data.OutputHeight = (float)fullH;
 		data.InputWidth = (float)halfW;

@@ -2,9 +2,14 @@
 
 #include <BS_thread_pool.hpp>
 #include <efsw/efsw.hpp>
+#include <functional>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "Utils/WinApi.h"
+
+struct ID3D11ComputeShader;
 
 using namespace std::chrono;
 
@@ -454,6 +459,33 @@ namespace SIE
 			uint32_t descriptor);
 		RE::BSGraphics::ComputeShader* GetComputeShader(const RE::BSShader& shader,
 			uint32_t descriptor);
+
+		/// Callback fired once a standalone compute shader finishes compiling or
+		/// loads from disk. Runs on a compilation-pool worker thread; the pointer
+		/// is null on failure (never throws). The caller owns thread-safe storage.
+		/// A non-null pointer is one owned reference: the callback must either
+		/// take ownership (e.g. winrt::com_ptr::attach) or Release() it.
+		using ComputeShaderReadyCallback = std::function<void(ID3D11ComputeShader*)>;
+
+		/// @brief Compile (or load from the disk cache) a standalone compute shader
+		///        on the shared compilation pool, off the calling thread.
+		/// @param sourcePath  HLSL source path under Data/Shaders (e.g.
+		///                    Data\\Shaders\\PostProcessing\\DoF\\dof.cs.hlsl).
+		/// @param entryPoint  HLSL entry function name.
+		/// @param defines     Preprocessor macro name/value pairs; the caller must
+		///                    keep each string alive until the callback fires
+		///                    (string literals satisfy this).
+		/// @param onReady     Invoked exactly once when the shader is ready.
+		void EnqueueComputeShaderCompile(
+			std::wstring sourcePath,
+			std::string entryPoint,
+			std::vector<std::pair<const char*, const char*>> defines,
+			ComputeShaderReadyCallback onReady);
+
+		/// @brief Deletes a standalone compute-shader feature's own disk-cache
+		///        subtree (e.g. L"PostProcessing/DoF"), without touching any
+		///        other feature's cache.
+		void ClearStandaloneComputeCache(std::wstring_view relativeDir);
 
 		RE::BSGraphics::VertexShader* MakeAndAddVertexShader(const RE::BSShader& shader,
 			uint32_t descriptor);

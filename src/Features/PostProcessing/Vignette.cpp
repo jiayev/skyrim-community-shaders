@@ -1,6 +1,7 @@
 #include "Vignette.h"
 
 #include "I18n/I18n.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -84,43 +85,38 @@ void Vignette::SetupResources()
 
 void Vignette::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&vignetteCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Vignette");
 	CompileComputeShaders();
 }
 
 void Vignette::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
-		std::string entry = "main";
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &vignetteCS, "vignette.cs.hlsl" },
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &vignetteCS, "vignette.cs.hlsl" },
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\Vignette") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\Vignette", shaderInfos);
 }
 
 void Vignette::Draw(TextureInfo& inout_tex)
 {
+	if (!AllShadersReady({ &vignetteCS }))
+		return;
+
 	globals::profiler->BeginPass("PostProcessing::Vignette");
 	auto context = globals::d3d::context;
 

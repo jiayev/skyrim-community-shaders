@@ -3,6 +3,7 @@
 #include "Features/LinearLighting.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -458,41 +459,38 @@ void PhysicalGlare::SetupResources()
 
 void PhysicalGlare::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	auto const shaderPtrs = std::array{
 		&thresholdCS, &apertureCS, &tearFilmCS, &psfCS, &multiplyCS, &packCS, &compositeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
 
-	for (auto shaders : { &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS }) {
-		for (auto& shader : *shaders) {
-			if (shader) {
-				shader->Release();
-				shader.detach();
+		for (auto shaders : { &fftRowCS, &fftColCS, &fftRowInvCS, &fftColInvCS }) {
+			for (auto& shader : *shaders) {
+				if (shader) {
+					shader->Release();
+					shader.detach();
+				}
 			}
 		}
 	}
 	psfDirty = true;
 	apertureDirty = true;
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/PhysicalGlare");
 	CompileComputeShaders();
 }
 
 void PhysicalGlare::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines;
-		std::string entry = "main";
-	};
-
-	std::vector<ShaderCompileInfo> shaderInfos = {
+	std::vector<ComputeShaderCompileInfo> shaderInfos = {
 		{ &thresholdCS, "threshold.cs.hlsl", {}, "CS_Threshold" },
 		{ &apertureCS, "aperture.cs.hlsl", {}, "CS_Aperture" },
 		{ &tearFilmCS, "tearfilm.cs.hlsl", {}, "CS_TearFilm" },
@@ -510,11 +508,7 @@ void PhysicalGlare::CompileComputeShaders()
 		shaderInfos.push_back({ &fftColInvCS[i], "fft.cs.hlsl", { { "COL_PASS", "" }, { "INVERSE", "" }, { "FFT_SIZE", fftSizes[i] } }, "CS_FFT" });
 	}
 
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\PhysicalGlare") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\PhysicalGlare", shaderInfos);
 }
 
 bool PhysicalGlare::NeedsPSFRegeneration() const
@@ -810,6 +804,33 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 {
 	auto state = globals::state;
 	auto context = globals::d3d::context;
+
+	if (!AllShadersReady({
+			&thresholdCS,
+			&apertureCS,
+			&tearFilmCS,
+			&psfCS,
+			&multiplyCS,
+			&packCS,
+			&compositeCS,
+			&fftRowCS[0],
+			&fftRowCS[1],
+			&fftRowCS[2],
+			&fftRowCS[3],
+			&fftColCS[0],
+			&fftColCS[1],
+			&fftColCS[2],
+			&fftColCS[3],
+			&fftRowInvCS[0],
+			&fftRowInvCS[1],
+			&fftRowInvCS[2],
+			&fftRowInvCS[3],
+			&fftColInvCS[0],
+			&fftColInvCS[1],
+			&fftColInvCS[2],
+			&fftColInvCS[3],
+		}))
+		return;
 
 	state->BeginPerfEvent("Physical Glare");
 

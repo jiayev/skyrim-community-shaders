@@ -1,6 +1,11 @@
 #pragma once
 
 #include "Feature.h"
+#include "ShaderCache.h"
+
+#include <atomic>
+#include <mutex>
+#include <span>
 
 struct PostProcessing;
 
@@ -10,6 +15,42 @@ struct PostProcessFeature
 
 	bool enabled = true;
 	PostProcessing* owner = nullptr;
+
+	/// One compute-shader entry point to compile via CompileComputeShadersAsync().
+	struct ComputeShaderCompileInfo
+	{
+		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
+		std::string_view filename;
+		std::vector<std::pair<const char*, const char*>> defines;
+		std::string entry = "main";
+	};
+
+	/// Compile callbacks fire on the shader-cache pool while Draw() reads on the
+	/// render thread; guards every compute-shader com_ptr member below.
+	mutable std::mutex shaderMutex;
+
+	/// Bumped by ClearShaderCache; a compile callback started before the bump
+	/// discards its result instead of attaching a superseded shader.
+	std::atomic<uint64_t> shaderGeneration{ 0 };
+
+	/// @brief Call at the start of ClearShaderCache(), before re-enqueuing
+	///        compiles, so in-flight callbacks from the previous generation
+	///        release their shader instead of attaching it.
+	void BumpShaderGeneration() { shaderGeneration.fetch_add(1, std::memory_order_relaxed); }
+
+	/// @brief Enqueues every entry in `infos` on ShaderCache's async compute-shader
+	///        path (see ShaderCache::EnqueueComputeShaderCompile). Returns
+	///        immediately; each shader attaches to its programPtr under
+	///        shaderMutex once its own compile/cache-load completes, unless
+	///        ClearShaderCache() has since bumped shaderGeneration, in which
+	///        case the shader is released instead.
+	/// @param sourceDir Directory the entries' filenames are relative to (e.g.
+	///        "Data\\Shaders\\PostProcessing\\DoF").
+	void CompileComputeShadersAsync(std::wstring_view sourceDir, std::span<const ComputeShaderCompileInfo> infos);
+
+	/// @brief Thread-safe readiness check for a Draw() dispatch: true only if every
+	///        listed shader has already attached. Takes shaderMutex.
+	bool AllShadersReady(std::initializer_list<const winrt::com_ptr<ID3D11ComputeShader>*> shaders) const;
 
 	virtual std::string GetType() const = 0;
 	virtual std::string GetDisplayName() const { return GetType(); }

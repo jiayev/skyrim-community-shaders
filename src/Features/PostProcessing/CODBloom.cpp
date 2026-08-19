@@ -1,6 +1,7 @@
 #include "CODBloom.h"
 
 #include "I18n/I18n.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -134,49 +135,44 @@ void CODBloom::SetupResources()
 
 void CODBloom::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	auto const shaderPtrs = std::array{
 		&thresholdCS, &downsampleCS, &downsampleFirstMipCS, &upsampleCS, &compositeCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/CODBloom");
 	CompileComputeShaders();
 }
 
 void CODBloom::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines;
-		std::string entry = "main";
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &thresholdCS, "bloom.cs.hlsl", {}, "CS_Threshold" },
+		{ &downsampleCS, "bloom.cs.hlsl", {}, "CS_Downsample" },
+		{ &downsampleFirstMipCS, "bloom.cs.hlsl", { { "FIRST_MIP", "" } }, "CS_Downsample" },
+		{ &upsampleCS, "bloom.cs.hlsl", {}, "CS_Upsample" },
+		{ &compositeCS, "bloom.cs.hlsl", {}, "CS_Composite" }
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &thresholdCS, "bloom.cs.hlsl", {}, "CS_Threshold" },
-			{ &downsampleCS, "bloom.cs.hlsl", {}, "CS_Downsample" },
-			{ &downsampleFirstMipCS, "bloom.cs.hlsl", { { "FIRST_MIP", "" } }, "CS_Downsample" },
-			{ &upsampleCS, "bloom.cs.hlsl", {}, "CS_Upsample" },
-			{ &compositeCS, "bloom.cs.hlsl", {}, "CS_Composite" }
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\CODBloom") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\CODBloom", shaderInfos);
 }
 
 void CODBloom::Draw(TextureInfo& inout_tex)
 {
 	auto state = globals::state;
 	auto context = globals::d3d::context;
+
+	if (!AllShadersReady({ &thresholdCS, &downsampleFirstMipCS, &downsampleCS, &upsampleCS }))
+		return;
 
 	state->BeginPerfEvent("COD Bloom");
 
