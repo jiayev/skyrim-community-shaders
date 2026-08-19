@@ -2391,7 +2391,7 @@ namespace SIE
 		std::vector<std::pair<const char*, const char*>> defines,
 		ComputeShaderReadyCallback onReady)
 	{
-		compilationPool.detach_task(
+		compilationSet.EnqueueAux(
 			[this, sourcePath = std::move(sourcePath), entryPoint = std::move(entryPoint),
 				defines = std::move(defines), onReady = std::move(onReady)]() mutable {
 				auto device = globals::d3d::device;
@@ -3143,10 +3143,24 @@ namespace SIE
 		managementThread = GetCurrentThread();
 		SetThreadPriority(managementThread, THREAD_PRIORITY_BELOW_NORMAL);
 		while (!stoken.stop_requested()) {
-			const auto& task = compilationSet.WaitTake(stoken);
-			if (!task.has_value())
-				break;  // exit because thread told to end
-			compilationPool.detach_task([this, stoken, t = task.value()] { ProcessCompilationSet(stoken, t); });
+			auto next = compilationSet.TryTakeNext(stoken);
+			if (!next.has_value()) {
+				if (stoken.stop_requested())
+					break;  // exit because thread told to end
+				continue;   // spurious wake or lost a race; re-check
+			}
+			std::visit([this, stoken](auto&& work) {
+				using T = std::decay_t<decltype(work)>;
+				if constexpr (std::is_same_v<T, ShaderCompilationTask>) {
+					compilationPool.detach_task([this, stoken, t = work] { ProcessCompilationSet(stoken, t); });
+				} else {
+					compilationPool.detach_task([this, work = std::move(work)]() mutable {
+						const SKSE::stl::scope_exit releaseSlot([this]() noexcept { compilationSet.ReleaseDispatchSlot(); });
+						work();
+					});
+				}
+			},
+				std::move(*next));
 		}
 	}
 
@@ -3346,15 +3360,14 @@ namespace SIE
 		return priority;
 	}
 
-	std::optional<ShaderCompilationTask> CompilationSet::WaitTake(std::stop_token stoken)
+	std::optional<std::variant<ShaderCompilationTask, std::function<void()>>> CompilationSet::TryTakeNext(std::stop_token stoken)
 	{
 		std::unique_lock lock(compilationMutex);
 		auto shaderCache = globals::shaderCache;
 		if (!conditionVariable.wait(
 				lock, stoken,
-				[this, &shaderCache]() { return !availableTasks.empty() &&
-			                                    // Use < (not <=) so push_task() never exceeds the limit. Throttled on
-			                                    // this count, not compilationPool's shared total, since EnqueueComputeShaderCompile() bypasses this gate.
+				[this, &shaderCache]() { return (!availableTasks.empty() || !pendingAuxTasks.empty()) &&
+			                                    // Use < (not <=) so push_task() never exceeds the limit.
 			                                    static_cast<int32_t>(dispatchedTasksInFlight.load(std::memory_order_relaxed)) <
 			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
@@ -3368,36 +3381,50 @@ namespace SIE
 			lastCalculation = lastReset;
 		}
 
-		// Startup policy: keep dispatching the hardest queued work first.
-		// This preserves the existing priority score while preventing light tasks
-		// from bypassing queued heavy shaders and stretching the tail.
-		auto bestIt = availableTasks.end();
+		// Matrix tasks are checked before aux so queued shader work always wins
+		// admission over standalone compute-shader work when both are ready.
 		if (!availableTasks.empty()) {
-			bestIt = std::prev(availableTasks.end());
+			// Startup policy: keep dispatching the hardest queued work first.
+			// This preserves the existing priority score while preventing light tasks
+			// from bypassing queued heavy shaders and stretching the tail.
+			auto bestIt = std::prev(availableTasks.end());
+			ShaderCompilationTask task = *bestIt;
+			availableTasks.erase(bestIt);
+
+			if (task.GetPriority() >= kHeavyPriorityThreshold) {
+				heavyTasksInFlight.fetch_add(1, std::memory_order_relaxed);
+			}
+
+			tasksInProgress.insert(task);
+			dispatchedTasksInFlight.fetch_add(1, std::memory_order_relaxed);
+			return std::variant<ShaderCompilationTask, std::function<void()>>(std::in_place_index<0>, task);
 		}
 
-		if (bestIt == availableTasks.end()) {
-			return std::nullopt;
+		if (!pendingAuxTasks.empty()) {
+			auto work = std::move(pendingAuxTasks.front());
+			pendingAuxTasks.pop_front();
+			dispatchedTasksInFlight.fetch_add(1, std::memory_order_relaxed);
+			return std::variant<ShaderCompilationTask, std::function<void()>>(std::in_place_index<1>, std::move(work));
 		}
 
-		ShaderCompilationTask task = *bestIt;
-		availableTasks.erase(bestIt);
-
-		if (task.GetPriority() >= kHeavyPriorityThreshold) {
-			heavyTasksInFlight.fetch_add(1, std::memory_order_relaxed);
-		}
-
-		tasksInProgress.insert(task);
-		dispatchedTasksInFlight.fetch_add(1, std::memory_order_relaxed);
-		return task;
+		return std::nullopt;
 	}
 
 	void CompilationSet::ReleaseDispatchSlot()
 	{
 		{
-			// Unlocked, this could race WaitTake()'s predicate check and lose the notify.
+			// Unlocked, this could race TryTakeNext()'s predicate check and lose the notify.
 			std::scoped_lock lock(compilationMutex);
 			dispatchedTasksInFlight.fetch_sub(1, std::memory_order_relaxed);
+		}
+		conditionVariable.notify_one();
+	}
+
+	void CompilationSet::EnqueueAux(std::function<void()> work)
+	{
+		{
+			std::scoped_lock lock(compilationMutex);
+			pendingAuxTasks.push_back(std::move(work));
 		}
 		conditionVariable.notify_one();
 	}
@@ -3414,7 +3441,7 @@ namespace SIE
 			queuedTask.SetEnqueuedQpc(now.QuadPart);
 			auto [_, wasAdded] = availableTasks.insert(queuedTask);
 			if (wasAdded) {
-				// Increment counters inside the lock so that WaitTake, which reads
+				// Increment counters inside the lock so that TryTakeNext, which reads
 				// IsCompiling() after waking up, sees the updated totalTasks and
 				// does NOT incorrectly treat the new work as a "fresh start" and
 				// reset the session clock via its !IsCompiling() branch.
@@ -3567,6 +3594,7 @@ namespace SIE
 	{
 		std::scoped_lock lock(compilationMutex);
 		availableTasks.clear();
+		pendingAuxTasks.clear();
 		tasksInProgress.clear();
 		processedTasks.clear();
 		totalTasks = 0;

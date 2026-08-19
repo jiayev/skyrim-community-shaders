@@ -1,10 +1,12 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <deque>
 #include <efsw/efsw.hpp>
 #include <functional>
 #include <string_view>
 #include <unordered_set>
+#include <variant>
 #include <vector>
 
 #include "Utils/WinApi.h"
@@ -230,15 +232,23 @@ namespace SIE
 			completionTime.store(0, std::memory_order_relaxed);
 		}
 
-		/** @brief Blocks until a task is available or the stop token is signalled. */
-		std::optional<ShaderCompilationTask> WaitTake(std::stop_token stoken);
+		/** @brief Blocks until a dispatch slot and some work (a queued permutation-matrix
+		 *  task, or -- only once the matrix is empty -- a queued aux closure) are both
+		 *  available, or the stop token is signalled. The matrix always wins admission
+		 *  over aux when both are ready, preserving LPT priority ordering. */
+		std::optional<std::variant<ShaderCompilationTask, std::function<void()>>> TryTakeNext(std::stop_token stoken);
 		/** @brief Enqueues a task for compilation. */
 		void Add(const ShaderCompilationTask& task);
 		/** @brief Marks a task as finished and records its timing metrics. */
 		void Complete(const ShaderCompilationTask& task);
-		/** @brief Frees a dispatch slot and wakes WaitTake(). Call even on a stale-generation
+		/** @brief Frees a dispatch slot and wakes TryTakeNext(). Call even on a stale-generation
 		 *  task -- it still held a real slot, and nothing else wakes a waiter blocked on it. */
 		void ReleaseDispatchSlot();
+		/** @brief Queues a compile closure that isn't a ShaderCompilationTask (currently:
+		 *  standalone compute-shader compiles from PostProcessFeature::CompileComputeShadersAsync)
+		 *  to share the same dispatchedTasksInFlight budget as the main permutation matrix,
+		 *  instead of being submitted to compilationPool independently of it. Wakes TryTakeNext(). */
+		void EnqueueAux(std::function<void()> work);
 		/** @brief Resets all task queues and counters for a fresh compilation pass. */
 		void Clear();
 		/** @brief Formats a millisecond duration into a human-readable time string. */
@@ -250,7 +260,7 @@ namespace SIE
 		std::atomic<uint64_t> completedTasks = 0;
 		std::atomic<uint64_t> totalTasks = 0;
 		std::atomic<uint64_t> failedTasks = 0;
-		std::atomic<uint32_t> dispatchedTasksInFlight = 0;  // WaitTake()'s own throttle count, distinct from compilationPool's shared total
+		std::atomic<uint32_t> dispatchedTasksInFlight = 0;  // Admission budget enforced by TryTakeNext()
 		std::atomic<uint64_t> cacheHitTasks = 0;            // number of compiles of a previously seen shader combo
 		std::atomic<uint64_t> diskHitTasks = 0;             // tasks resolved from disk cache rather than compiled
 		std::atomic<uint64_t> diskHitPriorityWeight = 0;    // cumulative priority weight of disk-hit tasks
@@ -306,6 +316,7 @@ namespace SIE
 		std::set<ShaderCompilationTask, TaskPriorityLess> availableTasks;
 		std::set<ShaderCompilationTask, TaskPriorityLess> tasksInProgress;
 		std::set<ShaderCompilationTask, TaskPriorityLess> processedTasks;  // completed or failed
+		std::deque<std::function<void()>> pendingAuxTasks;                 // see EnqueueAux/TryTakeNext
 		std::condition_variable_any conditionVariable;
 	};
 
