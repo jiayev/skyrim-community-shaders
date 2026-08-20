@@ -230,6 +230,9 @@ void PhysicalSky::SetupVolumetricResources()
 		texShadowVolume = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::VolumetricCloudShadowVolume");
 		texShadowVolume->CreateSRV(srv_desc);
 		texShadowVolume->CreateUAV(uav_desc);
+
+		FLOAT shadowVolumeClr[4] = { 0.f, 0.f, 0.f, 0.f };
+		context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowVolumeClr);
 	}
 
 	// Load textures and NDF
