@@ -133,7 +133,8 @@ struct VolumetricCloudData
 	uint ghostingReduction;
 	uint scatterIntegration;
 	float lightStepDistanceLod;
-	uint padding;
+	float shadowVolumeBottom;
+	float shadowVolumeTop;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -174,7 +175,7 @@ Texture2D<sh2> TexCloudAmbientSH : register(t16);
 Texture2D<unorm float> TexCloudTopLUT : register(t17);
 Texture2D<unorm float> TexCloudBottomLUT : register(t18);
 
-Texture2D<float4> TexShadowVolume : register(t23);
+Texture3D<float> TexShadowVolume : register(t23);
 Texture2D<float4> TexVolHistoryTr : register(t26);
 Texture2D<float3> TexVolHistoryLum : register(t27);
 Texture2D<float4> TexVolHistoryAux : register(t28);
@@ -184,7 +185,6 @@ Texture2D<float4> TexVolLowAux : register(t31);
 Texture2D<float4> TexVolUpscaleTr : register(t32);
 Texture2D<float3> TexVolUpscaleLum : register(t33);
 Texture2D<float4> TexVolUpscaleAux : register(t34);
-Texture2D<float4> TexShadowFilterInput : register(t35);
 
 float3 GetSceneDirectionalLightColor()
 {
@@ -204,7 +204,7 @@ RWTexture2D<float4> RWTexTr : register(u0);
 RWTexture2D<float3> RWTexLum : register(u1);
 RWTexture2D<float4> RWTexAux : register(u2);
 
-RWTexture2D<float4> RWShadowVolume : register(u0);
+RWTexture3D<float> RWShadowVolume : register(u0);
 
 RWTexture2DArray<float3> RWTexCubeTr : register(u0);
 RWTexture2DArray<float3> RWTexCubeLum : register(u1);
@@ -401,6 +401,13 @@ float CloudLightExitDistance(float3 pos, float3 dir, float topAltitude, Volumetr
 	const float3 pos_planet = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float2 outer = IntersectSpherePair(pos_planet, dir, info.planetRadius + topAltitude);
 	return max(outer.y, 0.0);
+}
+
+float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOuter)
+{
+	float innerDist = max(RayIntersectSphereCentered(orig, dir, rInner), 0);
+	float outerDist = max(RayIntersectSphereCentered(orig, dir, rOuter), 0);
+	return abs(outerDist - innerDist);
 }
 
 // Hash-white spatial noise with a stratified temporal sequence. IGN was briefly
@@ -1606,136 +1613,93 @@ groupshared float4 CloudUpscaleAuxLds[36];
 	RWTexAux[tid] = aux;
 };
 
-bool IntersectCloudSphere(float3 origin, float3 dir, float radius, out float2 intersections)
-{
-	const float b = dot(origin, dir);
-	const float c = dot(origin, origin) - radius * radius;
-	const float discriminant = b * b - c;
-	if (discriminant < 0.0) {
-		intersections = 0.0;
-		return false;
-	}
-	const float root = sqrt(discriminant);
-	intersections = float2(-b - root, -b + root);
-	return intersections.y >= 0.0;
-}
+#define NTHREADS 256
+groupshared float g_density[NTHREADS];
 
-[numthreads(8, 8, 1)] void renderShadowVolume(uint2 tid : SV_DispatchThreadID) {
+// Accumulate the low-cloud extinction column along the light direction into the
+// camera-centred shadow volume. Each thread group walks one light ray through the
+// volume with a parallel prefix sum, blending the result into the previous frame.
+[numthreads(NTHREADS, 1, 1)] void renderShadowVolume(const uint gtid : SV_GroupThreadID, const uint2 gid : SV_GroupID) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
-	const float3 shadow_light_dir = info.dirlightDir;
-	uint2 dims;
-	RWShadowVolume.GetDimensions(dims.x, dims.y);
-	if (any(tid >= dims))
-		return;
-	if (shadow_light_dir.z <= 1e-4) {
-		RWShadowVolume[tid] = float4(0.0, 1.0, 0.0, 0.0);
-		return;
+
+	uint3 dims;
+	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
+	const float3 rcp_dims = 1.0 / float3(dims);
+	const float shadow_thickness = max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0);
+	const float3 scale = float3(info.shadowVolumeRange.xx, shadow_thickness);
+	const float3 rcp_scale = 1.0 / scale;
+
+	const float3 ray_dir = -info.dirlightDir;  // from sun
+
+	float3 ray_px_increment = ray_dir * rcp_scale * dims;
+	const float dir_max_component = max(max(abs(ray_px_increment.x), abs(ray_px_increment.y)), abs(ray_px_increment.z));
+
+	uint3 start_px;
+	bool3 component_mask = false;
+	if (abs(ray_px_increment.x) == dir_max_component) {
+		start_px = uint3(ray_px_increment.x > 0 ? 0 : dims.x - 1, gid);
+		component_mask.x = true;
+	} else if (abs(ray_px_increment.y) == dir_max_component) {
+		start_px = uint3(gid.x, ray_px_increment.y > 0 ? 0 : dims.y - 1, gid.y);
+		component_mask.y = true;
+	} else {
+		start_px = uint3(gid, ray_px_increment.z > 0 ? 0 : dims.z - 1);
+		component_mask.z = true;
 	}
+	ray_px_increment /= dir_max_component;
+	const float3 ray_uv_increment = ray_px_increment * rcp_dims;
+	const float3 start_uv = (start_px + 0.5) * rcp_dims;
+	const float3 raw_thread_uv = start_uv + gtid * ray_uv_increment;
 
-	float3 right, up;
-	GetCloudShadowBasis(shadow_light_dir, right, up);
-	const float3 camera = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
-	const float shadow_width = max(info.shadowVolumeRange, 1.0);
-	const float2 uv = float2(tid) / max(float2(dims - 1u), 1.0.xx);
-	float3 origin = camera + ((uv.x - 0.5) * right + (uv.y - 0.5) * up) * shadow_width;
+	const bool is_valid_x = component_mask.x && raw_thread_uv.x > 0 && raw_thread_uv.x < 1;
+	const bool is_valid_y = component_mask.y && raw_thread_uv.y > 0 && raw_thread_uv.y < 1;
+	const bool is_valid_z = component_mask.z && raw_thread_uv.z > 0 && raw_thread_uv.z < 1;
+	const bool is_valid = is_valid_x || is_valid_y || is_valid_z;
 
-	// Put every ray just outside the top of the shell. A fixed displacement along
-	// the light direction fails at low solar elevations because it can remain below
-	// the cloud base and then trace away from the clouds.
-	const float outer_radius = info.planetRadius + info.highestCloudAltitude;
-	float3 origin_planet = origin + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	if (length(origin_planet) < outer_radius) {
-		float2 lift_hits;
-		if (!IntersectCloudSphere(origin_planet, shadow_light_dir, outer_radius, lift_hits) || lift_hits.y < 0.0) {
-			RWShadowVolume[tid] = float4(0.0, 1.0, 0.0, 0.0);
-			return;
-		}
-		origin += shadow_light_dir * (lift_hits.y + GAME_UNITS_PER_METER);
-		origin_planet = origin + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
+	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
+	const uint3 thread_px_coord = thread_uv * dims;
+
+	float past_density = RWShadowVolume[thread_px_coord];
+	if (ISNAN(past_density))
+		past_density = 0;
+
+	if (is_valid) {
+		const float3 pos = float3(FrameBuffer::CameraPosAdjust.xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * thread_uv.z);
+
+		// fetch density using only ndf
+		CloudDensityContext _;
+		float density = sampleCloudDensity(pos, cloud, 2, false, _) * length(ray_uv_increment * scale);  // scaled by ray length
+
+		// average visibility for boundary
+		float3 prev_uv = thread_uv - ray_uv_increment;
+		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust.xy + (prev_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * prev_uv.z);
+		if ((any(prev_uv < 0) || any(prev_uv > 1)) && prev_pos.z > info.shadowVolumeBottom && prev_pos.z < info.shadowVolumeTop)
+			density += InBetweenSphereDistance(
+						   prev_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir,
+						   info.planetRadius + info.shadowVolumeBottom, info.planetRadius + info.shadowVolumeTop) *
+			           info.extinctionCoefficient;
+
+		g_density[gtid] = density;
 	}
+	GroupMemoryBarrierWithGroupSync();
 
-	const float3 ray_dir = -shadow_light_dir;
-	float2 inner_hits, outer_hits;
-	const bool hit_inner = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + info.lowestCloudAltitude, inner_hits);
-	const bool hit_outer = IntersectCloudSphere(origin_planet, ray_dir, info.planetRadius + info.highestCloudAltitude, outer_hits);
-	if (!hit_inner || !hit_outer) {
-		RWShadowVolume[tid] = float4(0.0, 1.0, 0.0, 0.0);
-		return;
-	}
-
-	const float start_dist = max(outer_hits.x, 0.0);
-	const float end_dist = max(inner_hits.x, start_dist);
-	const float total_dist = end_dist - start_dist;
-	const float step_size = total_dist / 16.0;
-	float transmittance = 1.0;
-	float closest = 3.402823466e+38;
-	float farthest = 0.0;
-	bool valid = false;
-	[loop] for (uint i = 1u; i < 16u; ++i)
+	// parallel summation
+	[unroll] for (uint offset = 1; offset < NTHREADS; offset <<= 1)
 	{
-		const float dist = start_dist + step_size * i;
-		const float3 pos = origin + ray_dir * dist;
-
-		// Match the main-view visibility test: probe the same Nubis composite one
-		// mip coarser before evaluating mip-zero density.
-		CloudDensityContext density_context;
-		float low_density = sampleCloudDensity(pos, cloud, 1.0, false, density_context);
-		if (low_density > 0.001)
-			low_density = sampleCloudDensityFromContext(density_context, 0.0, true);
-
-		// The visible result contains a separate high layer. Its ground shadow must
-		// use the same density field and the direct-light absorption parameters.
-		float high_height;
-		float4 high_weather;
-		const float high_density = EvaluateHighCloudDensity(pos, high_height, high_weather);
-		float3 optical_depth = info.scatterTint * cloud.scatter * low_density;
-		if (high_density > 0.001) {
-			const float high_cover = high_weather.r;
-			optical_depth += info.scatterTint * high_density * info.highLightAbsorption * GAME_UNIT_TO_M *
-			                 (1.0 + high_cover * info.highCoverAbsorptionStrength);
-		}
-
-		if (low_density > 0.001 || high_density > 0.001) {
-			closest = min(closest, total_dist - step_size * (i + 1u));
-			farthest = max(farthest, total_dist - step_size * i);
-			const float3 extinction = exp(-optical_depth * step_size);
-			transmittance *= dot(extinction, float3(0.2126, 0.7152, 0.0722));
-			valid = true;
-		}
-	}
-	// R16F cannot represent cloud-shell distances in game units. Store the two
-	// distance channels in kilometres; transmittance and validity stay unitless.
-	RWShadowVolume[tid] = valid ? float4(EncodeCloudDepth(closest), transmittance, EncodeCloudDepth(farthest), 1.0) : float4(0.0, 1.0, 0.0, 0.0);
-}
-
-	[numthreads(8, 8, 1)] void filterShadowVolume(uint2 tid : SV_DispatchThreadID)
-{
-	uint2 dims;
-	RWShadowVolume.GetDimensions(dims.x, dims.y);
-	if (any(tid >= dims))
-		return;
-	float3 shadow_sum = 0.0;
-	float3 weight_sum = 0.0;
-	[unroll] for (int y = -1; y <= 1; ++y)
-	{
-		[unroll] for (int x = -1; x <= 1; ++x)
-		{
-			const uint2 tap = uint2(clamp(int2(tid) + int2(x, y), 0, int2(dims) - 1));
-			const float3 shadow = TexShadowFilterInput[tap].xyz;
-			const float weight = exp(-float(x * x + y * y) / 0.81);
-			if (shadow.y != 1.0) {
-				shadow_sum.xz += shadow.xz * weight;
-				weight_sum.xz += weight;
+		if (is_valid && gtid >= offset) {
+			if (all(floor(raw_thread_uv - ray_uv_increment * offset) == floor(raw_thread_uv)))  // no wraparound happened
+			{
+				float current_density = g_density[gtid];
+				float sample_density = g_density[gtid - offset];
+				g_density[gtid] = current_density + sample_density;
 			}
-			shadow_sum.y += shadow.y * weight;
-			weight_sum.y += weight;
 		}
+		GroupMemoryBarrierWithGroupSync();
 	}
-	const float3 center = TexShadowFilterInput[tid].xyz;
-	RWShadowVolume[tid] = float4(
-		weight_sum.x > 0.0 ? shadow_sum.x / weight_sum.x : center.x,
-		shadow_sum.y / max(weight_sum.y, 1e-5),
-		weight_sum.z > 0.0 ? shadow_sum.z / weight_sum.z : center.z,
-		1.0);
+
+	// save
+	if (is_valid) {
+		RWShadowVolume[thread_px_coord] = lerp(past_density, g_density[gtid], 0.1f);
+	}
 }

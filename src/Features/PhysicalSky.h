@@ -201,7 +201,7 @@ struct PhysicalSky final : public Feature
 		float silverLiningMix;  //
 		float silverLiningSpread;
 
-		// VOLUMETRIC CLOUDS (toggle + shadow-cookie parameters for GetDirlightTransmittance)
+		// VOLUMETRIC CLOUDS (toggle + shadow-volume parameters for GetDirlightTransmittance)
 		uint enableVolumetricClouds;
 		float shadowVolumeRange;
 		float lowestCloudAltitude;  //
@@ -209,11 +209,12 @@ struct PhysicalSky final : public Feature
 		float3 volCloudScatter;  //
 		float volCloudAverageDensity;
 		float3 volCloudAbsorption;  //
+		float volCloudLowBottom;
+		float volCloudLowThickness;
 
 		// SETTINGS
 		uint lightSkyStatics;
-		float skyStaticsBrightness;
-		uint pad0[2];
+		float skyStaticsBrightness;  //
 	} cbData;
 	STATIC_ASSERT_ALIGNAS_16(CbData);
 
@@ -226,6 +227,7 @@ struct PhysicalSky final : public Feature
 	// Volumetric cloud resources
 	constexpr static uint16_t kShadowVolW = 256;
 	constexpr static uint16_t kShadowVolH = 256;
+	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
 	constexpr static uint16_t kVolCloudDownsample = 4;
 
@@ -241,10 +243,9 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
-	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;         // low-resolution cubemap transmittance result
-	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;        // low-resolution cubemap luminance result
-	eastl::unique_ptr<Texture2D> texShadowVolume = nullptr;      // light-space cloud shadow cookie
-	eastl::unique_ptr<Texture2D> texShadowVolumeTemp = nullptr;  // first Gaussian filter target
+	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;     // low-resolution cubemap transmittance result
+	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;    // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
@@ -348,7 +349,8 @@ struct PhysicalSky final : public Feature
 		uint ghostingReduction;
 		uint scatterIntegration;
 		float lightStepDistanceLod;
-		uint padding;
+		float shadowVolumeBottom;
+		float shadowVolumeTop;
 	};
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
@@ -362,7 +364,6 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolUpscale = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolShadowFilter = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 

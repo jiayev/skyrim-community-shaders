@@ -369,14 +369,15 @@ namespace SharedData
 		float shadowVolumeRange;
 		float lowestCloudAltitude;  //
 		float highestCloudAltitude;
-		float3 volCloudScatter;
-		float volCloudAverageDensity;  //
-		float3 volCloudAbsorption;
+		float3 volCloudScatter;  //
+		float volCloudAverageDensity;
+		float3 volCloudAbsorption;  //
+		float volCloudLowBottom;
+		float volCloudLowThickness;
 
 		// SETTINGS
-		uint lightSkyStatics;  //
-		float skyStaticsBrightness;
-		uint2 pad0;
+		uint lightSkyStatics;
+		float skyStaticsBrightness;  //
 	};
 
 	cbuffer FeatureData : register(b6)

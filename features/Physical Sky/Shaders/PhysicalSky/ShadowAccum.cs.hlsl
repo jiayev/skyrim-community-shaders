@@ -10,7 +10,7 @@
 #define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
-Texture2D<float4> TexShadowVolume : register(t5);
+Texture3D<float> TexShadowVolume : register(t5);
 #include "PhysicalSky/Common.hlsli"
 
 #if defined(HALF_RES)

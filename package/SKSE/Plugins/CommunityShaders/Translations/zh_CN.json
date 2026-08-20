@@ -1141,7 +1141,7 @@
     "feature.physical_sky.secunda": "Secunda",
     "feature.physical_sky.secunda_direction": "Secunda 方向",
     "feature.physical_sky.shader_status": "着色器状态：",
-    "feature.physical_sky.shadow_volume_range": "阴影 Cookie 范围",
+    "feature.physical_sky.shadow_volume_range": "阴影体积范围",
     "feature.physical_sky.silver_lining_accent": "银边强调",
     "feature.physical_sky.silver_lining_spread": "银边扩散",
     "feature.physical_sky.sky_coverage": "天空覆盖率",
