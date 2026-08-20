@@ -410,6 +410,42 @@ float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOute
 	return abs(outerDist - innerDist);
 }
 
+float2 RayIntersectAABB(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 boxMax)
+{
+	float3 raySign = float3(rayDir.x < 0 ? -1 : 1, rayDir.y < 0 ? -1 : 1, rayDir.z < 0 ? -1 : 1);
+	float3 safeRayDir = raySign * max(abs(rayDir), 1e-6);
+	float3 tMin = (boxMin - rayOrigin) / safeRayDir;
+	float3 tMax = (boxMax - rayOrigin) / safeRayDir;
+	float3 t1 = min(tMin, tMax);
+	float3 t2 = max(tMin, tMax);
+	float tNear = max(max(t1.x, t1.y), t1.z);
+	float tFar = min(min(t2.x, t2.y), t2.z);
+	return float2(tNear, tFar);
+}
+
+// Locate a light-column position inside the camera-centred shadow volume box.
+// Positions outside the box are marched along the light direction to their entry
+// point; the accumulated prefix sum there covers the remaining in-box column.
+float3 GetShadowVolumeSampleUvw(float3 pos, float3 rayDir, VolumetricCloudData info)
+{
+	const float shadow_thickness = max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0);
+	float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * info.shadowVolumeRange, info.shadowVolumeBottom);
+	float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * info.shadowVolumeRange, info.shadowVolumeTop);
+
+	float3 samplePos = pos;
+	if (any(pos < boundsMin) || any(pos > boundsMax)) {
+		float2 hitDists = RayIntersectAABB(pos, rayDir, boundsMin, boundsMax);
+		if (hitDists.x > hitDists.y)
+			return -1;
+		samplePos += (hitDists.x + 128) * rayDir;
+	}
+
+	float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, info.shadowVolumeBottom);
+	uvw /= float3(info.shadowVolumeRange.xx, shadow_thickness);
+	uvw.xy += 0.5;
+	return uvw;
+}
+
 // Hash-white spatial noise with a stratified temporal sequence. IGN was briefly
 // used here as an analytical substitute for blue noise, but its regular diagonal
 // structure remained visible after reprojection. Hash each use independently so
@@ -693,6 +729,26 @@ void sampleCloudSelfShadow(
 			}
 			cum_dist += width;
 			step_width *= cone_ratio;
+		}
+
+		// Far range (hybrid shadow volume): the temporally accumulated shadow volume
+		// supplies the rest of the light column beyond the cone endpoint. The cone
+		// march covers [pos, pos + sun_dir * cum_dist]; sampling the volume prefix at
+		// that endpoint adds exactly the column above it, so the two partition the
+		// occluders with no overlap. The volume stores density * path length in game
+		// units, hence the GAME_UNIT_TO_M conversion to optical depth.
+		const float3 tail_pos = pos + sun_dir * cum_dist;
+		const float3 tail_uvw = GetShadowVolumeSampleUvw(tail_pos, sun_dir, info);
+		[branch] if (all(tail_uvw >= 0))
+		{
+			light_extinction_od += TexShadowVolume.SampleLevel(TransmittanceSampler, tail_uvw, 0) * GAME_UNIT_TO_M;
+		}
+		else
+		{
+			light_extinction_od += InBetweenSphereDistance(
+									   tail_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), sun_dir,
+									   info.planetRadius + info.lowCloudBaseAltitude, info.planetRadius + info.lowCloudTopAltitude) *
+			                       info.extinctionCoefficient * 0.02 * GAME_UNIT_TO_M;
 		}
 	}
 }
