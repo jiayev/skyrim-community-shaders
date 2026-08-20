@@ -575,7 +575,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
 	{
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
-		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Cookie Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
+		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		uint32_t minStep = 1, maxStep = 200;
 		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
 		uint32_t minLightStep = 1, maxLightStep = 16;
@@ -894,10 +894,10 @@ bool PhysicalSky::ShadersOK()
 	                      (ndfManager.texNdfOutput && ndfManager.cumuliformProgram);
 	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux && texVolUpscaleTr && texVolUpscaleLum && texVolUpscaleAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
-								   texShadowVolume && texShadowVolumeTemp && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && highCloudMapsReady);
+								   texShadowVolume && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && highCloudMapsReady);
 	return baseShadersOk && volumetricShadersOk;
 }
 
@@ -907,6 +907,8 @@ void PhysicalSky::Reset()
 	const float lowCloudTopKm = settings.cloudLayer.low.baseAltitude + lowTraceDepthKm;
 	const float traceBottomKm = settings.cloudLayer.high.enabled ? std::min(settings.cloudLayer.low.baseAltitude, settings.cloudLayer.high.bottomAltitude) : settings.cloudLayer.low.baseAltitude;
 	const float traceTopKm = settings.cloudLayer.high.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.high.topAltitude) : lowCloudTopKm;
+	const float lowCloudBaseKm = std::max(settings.cloudLayer.low.baseAltitude, 0.f);
+	const float lowCloudThicknessKm = std::clamp(settings.cloudLayer.low.thickness, 0.05f, 3.0f);
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
 
@@ -999,12 +1001,13 @@ void PhysicalSky::Reset()
 		.shadowVolumeRange = settings.shadowVolumeRange / Util::Units::GAME_UNIT_TO_KM,
 		.lowestCloudAltitude = traceBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.highestCloudAltitude = traceTopKm / Util::Units::GAME_UNIT_TO_KM,
-		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * settings.cloudLayer.low.extinctionCoefficient * Util::Units::GAME_UNIT_TO_KM,
-		.volCloudAverageDensity = settings.cloudLayer.low.extinctionCoefficient,
-		.volCloudAbsorption = (float3(1.f) - settings.cloudLayer.lighting.scatterTint * 0.25f) * settings.cloudLayer.low.extinctionCoefficient * Util::Units::GAME_UNIT_TO_KM,
+		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * Util::Units::GAME_UNIT_TO_M,
+		.volCloudAverageDensity = settings.cloudLayer.low.extinctionCoefficient * 0.02f,
+		.volCloudAbsorption = float3(0.f),
+		.volCloudLowBottom = lowCloudBaseKm / Util::Units::GAME_UNIT_TO_KM,
+		.volCloudLowThickness = lowCloudThicknessKm / Util::Units::GAME_UNIT_TO_KM,
 		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
 		.skyStaticsBrightness = settings.skyStaticsBrightness,
-		.pad0 = { 0u, 0u },
 	};
 
 	if (settings.overrideDirLight) {
@@ -1050,7 +1053,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolShadowFilter && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
 			ndfManager.UpdateNdf(ndfSettings);
@@ -1095,8 +1098,6 @@ void PhysicalSky::Prepass()
 				context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
-			if (texShadowVolumeTemp)
-				context->ClearUnorderedAccessViewFloat(texShadowVolumeTemp->uav.get(), lumClr);
 			volMainHistoryValid = false;
 			volHistoryWidth = 0;
 			volHistoryHeight = 0;
@@ -1107,7 +1108,7 @@ void PhysicalSky::Prepass()
 		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
 		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
 
-		// Bind volumetric cloud results and shadow cookie for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
+		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
 			std::array<ID3D11ShaderResourceView*, 3> volSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume ? texShadowVolume->srv.get() : nullptr };
 			globals::d3d::context->PSSetShaderResources(110, (uint)volSrvs.size(), volSrvs.data());

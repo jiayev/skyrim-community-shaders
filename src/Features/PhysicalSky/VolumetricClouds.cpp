@@ -203,37 +203,33 @@ void PhysicalSky::SetupVolumetricResources()
 		context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
 	}
 
-	// Cloud shadow cookie and transient filter target.
+	// Shadow volume 3D texture
 	{
-		D3D11_TEXTURE2D_DESC tex_desc = {
+		D3D11_TEXTURE3D_DESC tex3d_desc = {
 			.Width = kShadowVolW,
 			.Height = kShadowVolH,
+			.Depth = kShadowVolD,
 			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-			.SampleDesc = { .Count = 1, .Quality = 0 },
+			.Format = DXGI_FORMAT_R16_FLOAT,
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
 			.CPUAccessFlags = 0,
 			.MiscFlags = 0
 		};
 		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
-			.Format = tex_desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			.Format = tex3d_desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D,
+			.Texture3D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
-			.Format = tex_desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
+			.Format = tex3d_desc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
+			.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = kShadowVolD }
 		};
 
-		texShadowVolume = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCloudShadowCookie");
+		texShadowVolume = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::VolumetricCloudShadowVolume");
 		texShadowVolume->CreateSRV(srv_desc);
 		texShadowVolume->CreateUAV(uav_desc);
-		texShadowVolumeTemp = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCloudShadowCookieTemp");
-		texShadowVolumeTemp->CreateSRV(srv_desc);
-		texShadowVolumeTemp->CreateUAV(uav_desc);
 	}
 
 	// Load textures and NDF
@@ -262,7 +258,6 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csVolReproject, "Volumetrics.cs.hlsl", {}, "reproject" },
 		ShaderInfo{ &csVolUpscale, "Volumetrics.cs.hlsl", {}, "upscale" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
-		ShaderInfo{ &csVolShadowFilter, "Volumetrics.cs.hlsl", {}, "filterShadowVolume" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" }
 	};
 
@@ -277,7 +272,7 @@ void PhysicalSky::CompileVolumetricShaders()
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 {
-	if (!csVolMainView || !csVolReproject || !csVolUpscale || !csVolShadowVolume || !csVolShadowFilter || !csVolCubemap || !csVolAmbientSH)
+	if (!csVolMainView || !csVolReproject || !csVolUpscale || !csVolShadowVolume || !csVolCubemap || !csVolAmbientSH)
 		return;
 	if (!baseShapeNoiseSrv || !cloudTopLutSrv || !cloudBottomLutSrv)
 		return;
@@ -444,7 +439,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.ghostingReduction = settings.ghostingReduction ? 1u : 0u,
 		.scatterIntegration = lighting.scatterIntegration,
 		.lightStepDistanceLod = std::clamp(lighting.lightStepDistanceLod, 0.0f, 1.0f),
-		.padding = 0u,
+		.shadowVolumeBottom = KilometersToGameUnits(lowCloudBaseKm),
+		.shadowVolumeTop = KilometersToGameUnits(lowCloudTopKm),
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -502,7 +498,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volumetricShadows.shadowView,                                                             // t20
 		directionalShadowLights,                                                                  // t21
 		terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,  // t22
-		nullptr,                                                                                  // t23 - shadow cookie (set per pass)
+		nullptr,                                                                                  // t23 - shadow volume (set per pass)
 	};
 
 	std::array<ID3D11SamplerState*, 3> samplers = { sampTileable.get(), sampTr.get(), sampSv.get() };
@@ -511,8 +507,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
 
 	if (a_pass == VolumetricCloudPass::kShadowVolume) {
-		// Shadow path: cookie trace followed by two 3x3 Gaussian filters.
-		state->BeginPerfEvent("Volumetric Clouds: Shadow Cookie");
+		// Shadow path: accumulate the cloud extinction column into the 3D shadow
+		// volume along the light direction.
+		state->BeginPerfEvent("Volumetric Clouds: Shadow Volume");
 		std::array<ID3D11UnorderedAccessView*, 2> uavs = { texShadowVolume->uav.get(), nullptr };
 		ID3D11ShaderResourceView* nullPsShadowSrv = nullptr;
 		context->PSSetShaderResources(112, 1, &nullPsShadowSrv);
@@ -523,25 +520,25 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
 
-		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowTrace");
-		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
+		// Dispatch based on dominant light direction component
+		const float shadowRangeGu = KilometersToGameUnits(settings.shadowVolumeRange);
+		const float shadowThicknessGu = KilometersToGameUnits(lowCloudTopKm - lowCloudBaseKm);
+		float3 ray_px_dir = { -cloudLightDir.x, -cloudLightDir.y, -cloudLightDir.z };
+		ray_px_dir.x *= kShadowVolW / shadowRangeGu;
+		ray_px_dir.y *= kShadowVolH / shadowRangeGu;
+		ray_px_dir.z *= kShadowVolD / shadowThicknessGu;
+		const float dir_max_component = std::max({ std::abs(ray_px_dir.x), std::abs(ray_px_dir.y), std::abs(ray_px_dir.z) });
+		uint32_t dispatch_size[2];
+		if (std::abs(ray_px_dir.x) == dir_max_component || std::abs(ray_px_dir.y) == dir_max_component) {
+			dispatch_size[0] = kShadowVolW;
+			dispatch_size[1] = kShadowVolD;
+		} else {
+			dispatch_size[0] = dispatch_size[1] = kShadowVolW;
+		}
+
+		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowVolume");
+		context->Dispatch(dispatch_size[0], dispatch_size[1], 1);
 		globals::profiler->EndPass();
-
-		ID3D11UnorderedAccessView* nullUav = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-		ID3D11ShaderResourceView* filterInput = texShadowVolume->srv.get();
-		context->CSSetShaderResources(35, 1, &filterInput);
-		uavs[0] = texShadowVolumeTemp->uav.get();
-		context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
-		context->CSSetShader(csVolShadowFilter.get(), nullptr, 0);
-		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
-
-		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-		filterInput = texShadowVolumeTemp->srv.get();
-		context->CSSetShaderResources(35, 1, &filterInput);
-		uavs[0] = texShadowVolume->uav.get();
-		context->CSSetUnorderedAccessViews(0, 1, uavs.data(), nullptr);
-		context->Dispatch((kShadowVolW + 7u) >> 3, (kShadowVolH + 7u) >> 3, 1);
 		state->EndPerfEvent();
 	}
 
@@ -647,8 +644,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetShaderResources(0, 19, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
 		context->CSSetShaderResources(24, 11, nullHistorySrvs);
-		ID3D11ShaderResourceView* nullFilterSrv = nullptr;
-		context->CSSetShaderResources(35, 1, &nullFilterSrv);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);
 		context->CSSetSamplers(2, 3, nullSamplers);
