@@ -1353,16 +1353,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 skinsk = 0;
 	float4 skinExtra = 0;
 	float4 skinWetnessSample = 0;
-	uint2 skinExtraDimensions = uint2(0, 0);
-	uint2 wetnessDimensions = uint2(0, 0);
-	bool hasSkinExtra = false;
-	bool hasSkinWetness = false;
+	bool hasSkinExtra = Skin::skinMaterialFlags.x > 0.5f;
+	bool hasSkinWetness = Skin::skinMaterialFlags.y > 0.5f;
 	if (skinEnabled) {
 		skinsk = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-		TexSkinExtraSampler.GetDimensions(skinExtraDimensions.x, skinExtraDimensions.y);
-		TexSkinWetnessSampler.GetDimensions(wetnessDimensions.x, wetnessDimensions.y);
-		hasSkinExtra = skinExtraDimensions.x > 32 && skinExtraDimensions.y > 32;
-		hasSkinWetness = wetnessDimensions.x > 32 && wetnessDimensions.y > 32;
 	}
 	float4 skinWetnessNormal = float4(0.f, 0.f, 0.f, 1.f);
 

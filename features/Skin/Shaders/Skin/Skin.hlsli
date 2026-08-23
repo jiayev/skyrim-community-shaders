@@ -21,6 +21,8 @@ namespace Skin
 	cbuffer SkinPerGeometry : register(b7)
 	{
 		float4 skinPerGeometry;
+		// x = HasRfaos, y = HasWetness. Fallback textures are always bound separately.
+		float4 skinMaterialFlags;
 		SharedData::SkinData skinPerGeometryProfile;
 	};
 
