@@ -40,11 +40,11 @@ struct TexNdfSettings
 
 struct CumuliformNdfSettings
 {
-	DirectX::XMUINT2 scale0 = { 10, 10 };
+	std::array<uint32_t, 2> scale0 = { 10, 10 };
 	float2 offset0 = { 3.f, 3.f };
-	DirectX::XMUINT2 scale1 = { 20, 20 };
+	std::array<uint32_t, 2> scale1 = { 20, 20 };
 	float2 offset1 = { 6.f, 6.f };
-	DirectX::XMUINT2 scale2 = { 40, 40 };
+	std::array<uint32_t, 2> scale2 = { 40, 40 };
 	float2 offset2 = { 24.f, 24.f };
 	float2 clipRange = { 0.4f, 1.f };
 	float power = 0.7f;
@@ -55,7 +55,18 @@ struct CumuliformNdfSettings
 	float _pad = 0.f;
 };
 
-using NdfSettings = std::variant<TexNdfSettings, CumuliformNdfSettings>;
+enum class NdfType : uint32_t
+{
+	Texture,
+	Cumuliform
+};
+
+struct NdfSettings
+{
+	NdfType type = NdfType::Cumuliform;
+	TexNdfSettings texture;
+	CumuliformNdfSettings cumuliform;
+};
 
 struct NdfManager
 {

@@ -372,7 +372,7 @@ void Deferred::DeferredPasses()
 			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,
 			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,
 		};
-		ID3D11ShaderResourceView* physSkyMsLut = physSky.loaded && physSky.texMsLut ? physSky.texMsLut->srv.get() : nullptr;  // t20 PhysicalSky Multiscatter LUT
+		ID3D11ShaderResourceView* physSkyApSunLut = physSky.loaded && physSky.texApSunLut ? physSky.texApSunLut->srv.get() : nullptr;  // t20 PhysicalSky direct solar AP LUT
 
 		ID3D11SamplerState* samplers[]{
 			dynamicCubemaps.loaded ? linearSampler : nullptr,
@@ -381,7 +381,7 @@ void Deferred::DeferredPasses()
 		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-		context->CSSetShaderResources(20, 1, &physSkyMsLut);
+		context->CSSetShaderResources(20, 1, &physSkyApSunLut);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);

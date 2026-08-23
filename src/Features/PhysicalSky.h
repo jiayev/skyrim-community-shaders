@@ -144,6 +144,7 @@ struct PhysicalSky final : public Feature
 		uint32_t cloudMaxStep = 97;
 		float temporalAccumulationFactor = 0.95f;
 		bool ghostingReduction = true;
+		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
 
@@ -207,7 +208,7 @@ struct PhysicalSky final : public Feature
 		float lowestCloudAltitude;  //
 		float highestCloudAltitude;
 		float3 volCloudScatter;  //
-		float volCloudAverageDensity;
+		float _padVolCloudScatter;
 		float3 volCloudAbsorption;  //
 		float volCloudLowBottom;
 		float volCloudLowThickness;
@@ -218,10 +219,11 @@ struct PhysicalSky final : public Feature
 	} cbData;
 	STATIC_ASSERT_ALIGNAS_16(CbData);
 
-	eastl::unique_ptr<Texture2D> texTrLut = nullptr;  // transmittance
-	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
-	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
-	eastl::unique_ptr<Texture3D> texApLut = nullptr;  // aerial perspective
+	eastl::unique_ptr<Texture2D> texTrLut = nullptr;     // transmittance
+	eastl::unique_ptr<Texture2D> texMsLut = nullptr;     // multiscattering
+	eastl::unique_ptr<Texture2D> texSvLut = nullptr;     // sky view
+	eastl::unique_ptr<Texture3D> texApLut = nullptr;     // aerial perspective
+	eastl::unique_ptr<Texture3D> texApSunLut = nullptr;  // direct solar single-scattering aerial perspective
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 
 	// Volumetric cloud resources
@@ -252,7 +254,6 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
 
 	TextureManager ndfTexManager{ "Cloud Map" };
-	NdfSettings ndfSettings = CumuliformNdfSettings{};
 	NdfManager ndfManager;
 	HighCloudMapManager highCloudMapManager;
 

@@ -164,6 +164,7 @@ Texture3D<float4> TexAerialPerspective : register(t3);
 Texture2D<float> TexDepth : register(t4);
 
 Texture3D<unorm float4> TexNubisNoise : register(t5);
+Texture3D<float4> TexAerialPerspectiveSun : register(t6);
 Texture2DArray<float> TexCloudNDF : register(t7);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
@@ -251,15 +252,6 @@ float3 EvaluateCloudEnvironmentRadiance(
 	return lerp(lower, upper, height);
 }
 
-float3 SampleCloudApMultiScatter()
-{
-	const SharedData::PhysSkyData data = SharedData::physSkyData;
-	float3 multiScatter = TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.sunDir.z), 0).rgb * data.sunlightColor;
-	multiScatter += TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.masserDir.z), 0).rgb * data.masserColor;
-	multiScatter += TexMultiScatter.SampleLevel(SkyViewSampler, TrLutUv(data.zCameraPlanet, data.secundaDir.z), 0).rgb * data.secundaColor;
-	return multiScatter;
-}
-
 float SampleCloudApShadow(uint2 fullPixelCoord)
 {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -279,8 +271,10 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	if (any(apDims == 0u))
 		return float4(0.0, 0.0, 0.0, 1.0);
 	const float depthSlice = lerp(0.5 / apDims.z, 1.0 - 0.5 / apDims.z, saturate(distance / AP_MAX_DIST));
-	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, float3(SkyViewLutUv(viewDir), depthSlice), 0);
-	ap.rgb *= 1 - shadow;
+	const float3 apUv = float3(SkyViewLutUv(viewDir), depthSlice);
+	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, apUv, 0);
+	const float3 apSun = TexAerialPerspectiveSun.SampleLevel(SkyViewSampler, apUv, 0).rgb;
+	ap.rgb = max(0.0, ap.rgb - apSun * saturate(shadow));
 	ap.rgb *= data.apLumMix;
 	ap.a = lerp(1.0, ap.a, data.apTrMix);
 	return ap;
@@ -403,13 +397,6 @@ float CloudLightExitDistance(float3 pos, float3 dir, float topAltitude, Volumetr
 	return max(outer.y, 0.0);
 }
 
-float InBetweenSphereDistance(float3 orig, float3 dir, float rInner, float rOuter)
-{
-	float innerDist = max(RayIntersectSphereCentered(orig, dir, rInner), 0);
-	float outerDist = max(RayIntersectSphereCentered(orig, dir, rOuter), 0);
-	return abs(outerDist - innerDist);
-}
-
 float2 RayIntersectAABB(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 boxMax)
 {
 	float3 raySign = float3(rayDir.x < 0 ? -1 : 1, rayDir.y < 0 ? -1 : 1, rayDir.z < 0 ? -1 : 1);
@@ -499,7 +486,7 @@ float2 CloudWeatherUV(float2 worldXY, VolumetricCloudData info)
 // is independent of both the high-cloud weather map and the 3D detail noise.
 float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 {
-	return worldXY * info.lowNdfFrequency;
+	return worldXY * info.lowNdfFrequency + 0.5;
 }
 
 float EvaluateCloudTopHeightProxy(float2 worldXY)
@@ -731,24 +718,16 @@ void sampleCloudSelfShadow(
 			step_width *= cone_ratio;
 		}
 
-		// Far range (hybrid shadow volume): the temporally accumulated shadow volume
-		// supplies the rest of the light column beyond the cone endpoint. The cone
-		// march covers [pos, pos + sun_dir * cum_dist]; sampling the volume prefix at
-		// that endpoint adds exactly the column above it, so the two partition the
-		// occluders with no overlap. The volume stores density * path length in game
-		// units, hence the GAME_UNIT_TO_M conversion to optical depth.
+		// Far range (hybrid shadow volume): when the cone endpoint is represented by
+		// the finite shadow volume, its prefix supplies the remaining known light
+		// column without overlapping the cone march. Outside that domain there is no
+		// cloud-density data, so no synthetic average-density occluder is introduced.
+		// The volume stores density * path length in game units.
 		const float3 tail_pos = pos + sun_dir * cum_dist;
 		const float3 tail_uvw = GetShadowVolumeSampleUvw(tail_pos, sun_dir, info);
 		[branch] if (all(tail_uvw >= 0))
 		{
 			light_extinction_od += TexShadowVolume.SampleLevel(TransmittanceSampler, tail_uvw, 0) * GAME_UNIT_TO_M;
-		}
-		else
-		{
-			light_extinction_od += InBetweenSphereDistance(
-									   tail_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), sun_dir,
-									   info.planetRadius + info.lowCloudBaseAltitude, info.planetRadius + info.lowCloudTopAltitude) *
-			                       info.extinctionCoefficient * 0.02 * GAME_UNIT_TO_M;
 		}
 	}
 }
@@ -1723,18 +1702,11 @@ groupshared float g_density[NTHREADS];
 	if (is_valid) {
 		const float3 pos = float3(FrameBuffer::CameraPosAdjust.xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * thread_uv.z);
 
-		// fetch density using only ndf
+		// Fetch only density represented inside this finite shadow volume. Prefixes
+		// start with zero extinction at the boundary instead of assuming a uniform
+		// cloud shell outside the represented domain.
 		CloudDensityContext _;
 		float density = sampleCloudDensity(pos, cloud, 2, false, _) * length(ray_uv_increment * scale);  // scaled by ray length
-
-		// average visibility for boundary
-		float3 prev_uv = thread_uv - ray_uv_increment;
-		float3 prev_pos = float3(FrameBuffer::CameraPosAdjust.xy + (prev_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * prev_uv.z);
-		if ((any(prev_uv < 0) || any(prev_uv > 1)) && prev_pos.z > info.shadowVolumeBottom && prev_pos.z < info.shadowVolumeTop)
-			density += InBetweenSphereDistance(
-						   prev_pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius), info.dirlightDir,
-						   info.planetRadius + info.shadowVolumeBottom, info.planetRadius + info.shadowVolumeTop) *
-			           info.extinctionCoefficient;
 
 		g_density[gtid] = density;
 	}

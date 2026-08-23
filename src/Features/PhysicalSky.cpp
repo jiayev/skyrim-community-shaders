@@ -23,6 +23,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	zBottom)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	TexNdfSettings,
+	texPath)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CumuliformNdfSettings,
+	scale0,
+	offset0,
+	scale1,
+	offset1,
+	scale2,
+	offset2,
+	clipRange,
+	power,
+	wispiness,
+	rot0,
+	rot1,
+	rot2)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	NdfSettings,
+	type,
+	texture,
+	cumuliform)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpLowCloudSettings,
 	baseAltitude,
 	thickness,
@@ -160,6 +185,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	cloudMaxStep,
 	temporalAccumulationFactor,
 	ghostingReduction,
+	cloudMap,
 	cloudLayer)
 
 namespace
@@ -689,7 +715,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
 	{
-		ndfManager.DrawNdfSettings(ndfSettings, ndfTexManager);
+		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();
 		if (baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv)
@@ -721,6 +747,7 @@ void PhysicalSky::SettingsDebug()
 		BUFFER_VIEWER_NODE_BULLET(texTrLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texMsLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texSvLut, 1.f);
+		BUFFER_VIEWER_NODE_BULLET(texApSunLut, 1.f);
 		BUFFER_VIEWER_NODE_BULLET(texApShadow, debugScale);
 	}
 }
@@ -816,6 +843,10 @@ void PhysicalSky::SetupResources()
 		texApLut = eastl::make_unique<Texture3D>(tex3dDesc);
 		texApLut->CreateSRV(srvDesc);
 		texApLut->CreateUAV(uavDesc);
+
+		texApSunLut = eastl::make_unique<Texture3D>(tex3dDesc);
+		texApSunLut->CreateSRV(srvDesc);
+		texApSunLut->CreateUAV(uavDesc);
 	}
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
@@ -886,11 +917,11 @@ void PhysicalSky::CompileShaders()
 bool PhysicalSky::ShadersOK()
 {
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
-	                     texTrLut && texSvLut && texApLut && texApShadow;
+	                     texTrLut && texSvLut && texApLut && texApSunLut && texApShadow;
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
-	const bool ndfReady = !std::holds_alternative<CumuliformNdfSettings>(ndfSettings) ||
+	const bool ndfReady = settings.cloudMap.type != NdfType::Cumuliform ||
 	                      (ndfManager.texNdfOutput && ndfManager.cumuliformProgram);
 	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
@@ -1002,7 +1033,7 @@ void PhysicalSky::Reset()
 		.lowestCloudAltitude = traceBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.highestCloudAltitude = traceTopKm / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * Util::Units::GAME_UNIT_TO_M,
-		.volCloudAverageDensity = settings.cloudLayer.low.extinctionCoefficient * 0.02f,
+		._padVolCloudScatter = 0.f,
 		.volCloudAbsorption = float3(0.f),
 		.volCloudLowBottom = lowCloudBaseKm / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudLowThickness = lowCloudThicknessKm / Util::Units::GAME_UNIT_TO_KM,
@@ -1041,8 +1072,8 @@ void PhysicalSky::ReflectionsPrepass()
 	if (cbData.enabled) {
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
-		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
-		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
+		ID3D11ShaderResourceView* apSunSrv = texApSunLut ? texApSunLut->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(113, 1, &apSunSrv);
 		if (texVolCubeTr && texVolCubeLum) {
 			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
 			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
@@ -1056,7 +1087,7 @@ void PhysicalSky::Prepass()
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
-			ndfManager.UpdateNdf(ndfSettings);
+			ndfManager.UpdateNdf(settings.cloudMap);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
 
@@ -1105,8 +1136,8 @@ void PhysicalSky::Prepass()
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
-		ID3D11ShaderResourceView* msSrv = texMsLut ? texMsLut->srv.get() : nullptr;
-		globals::d3d::context->PSSetShaderResources(113, 1, &msSrv);
+		ID3D11ShaderResourceView* apSunSrv = texApSunLut ? texApSunLut->srv.get() : nullptr;
+		globals::d3d::context->PSSetShaderResources(113, 1, &apSunSrv);
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
@@ -1166,8 +1197,8 @@ void PhysicalSky::GenerateLuts()
 		globals::profiler->EndPass();
 
 		// -> aerial perspective
-		uav = texApLut->uav.get();
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		std::array<ID3D11UnorderedAccessView*, 2> apUavs = { texApLut->uav.get(), texApSunLut->uav.get() };
+		context->CSSetUnorderedAccessViews(0, (int)apUavs.size(), apUavs.data(), nullptr);
 		context->CSSetShader(csApLutGen.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::AerialPerspectiveLut");
 		context->Dispatch((kApLutW + 7) >> 3, (kApLutH + 7) >> 3, 1);
@@ -1177,9 +1208,10 @@ void PhysicalSky::GenerateLuts()
 		samplers.fill(nullptr);
 		srvs.fill(nullptr);
 		uav = nullptr;
+		std::array<ID3D11UnorderedAccessView*, 2> nullUavs = {};
 
 		context->CSSetSamplers(0, (int)samplers.size(), samplers.data());
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetUnorderedAccessViews(0, (int)nullUavs.size(), nullUavs.data(), nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(nullptr, nullptr, 0);
 	}

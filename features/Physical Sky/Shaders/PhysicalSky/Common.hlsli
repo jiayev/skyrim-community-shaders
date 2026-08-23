@@ -45,13 +45,13 @@ namespace PhysSky
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t16);
 Texture2D<unorm float> TexApShadow : register(t17);
-Texture2D<float4> TexMsLut : register(t20);
+Texture3D<float4> TexApSunLut : register(t20);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
 Texture3D<float4> TexApLut : register(t63);
 Texture2D<unorm float> TexApShadow : register(t64);
-Texture2D<float4> TexMsLut : register(t113);
+Texture3D<float4> TexApSunLut : register(t113);
 #endif
 
 	static const float RCP_PI = 1 / Math::PI;  // PI
@@ -420,16 +420,6 @@ Texture2D<float4> TexMsLut : register(t113);
 #		endif
 #	endif
 
-	float3 SampleApMultiScatter(SamplerState samp)
-	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
-
-		float3 multiScatter = TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.sunDir.z), 0).rgb * data.sunlightColor;
-		multiScatter += TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.masserDir.z), 0).rgb * data.masserColor;
-		multiScatter += TexMsLut.SampleLevel(samp, TrLutUv(data.zCameraPlanet, data.secundaDir.z), 0).rgb * data.secundaColor;
-		return multiScatter;
-	}
-
 	float4 SampleAp(float3 viewDir, float dist, float shadow, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
@@ -440,8 +430,11 @@ Texture2D<float4> TexMsLut : register(t113);
 		TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
 		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
+		const float3 apSun = TexApSunLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0).rgb;
 
-		apColor.rgb *= 1 - shadow;
+		// AP shadows only occlude the direct solar single-scattering integral.
+		// Moonlight and the multi-scattering field are absent from apSun and remain unshadowed.
+		apColor.rgb = max(0.0, apColor.rgb - apSun * saturate(shadow));
 
 		if (data.tonemapper == 1)
 			apColor.rgb = Color::LinearToSkyrimGamma(apColor.rgb);
@@ -593,17 +586,12 @@ Texture2D<float4> TexMsLut : register(t113);
 		posRelative.z -= data.zBottom;
 
 		float3 uvw = GetShadowVolumeUvw(posRelative, GetCloudShadowLightDirection());
+		// The shadow volume has finite support. A ray outside it has no known cloud
+		// occluder; treating the missing path as an average-density cloud shell
+		// creates false full extinction for long, low-angle light paths.
 		float cloudDensity = 0;
 		if (all(uvw > 0) && all(uvw < 1)) {
 			cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
-		} else {
-			const float3 sunDir = GetCloudShadowLightDirection();
-			float3 posPlanet = posRelative + float3(-FrameBuffer::CameraPosAdjust.xy, data.rPlanet);
-			float rInner = data.rPlanet + data.volCloudLowBottom;
-			float rOuter = rInner + data.volCloudLowThickness;
-			float innerDist = max(RayIntersectSphere(posPlanet, sunDir, 0, rInner), 0);
-			float outerDist = max(RayIntersectSphere(posPlanet, sunDir, 0, rOuter), 0);
-			cloudDensity = abs(outerDist - innerDist) * data.volCloudAverageDensity;
 		}
 
 		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
