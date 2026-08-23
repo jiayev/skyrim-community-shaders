@@ -36,6 +36,12 @@ float2 hash22(int2 seed)
 	return Random::pcg2d(asuint(seed)) / 4294967295.f;
 }
 
+int2 WrapCell(int2 cell, uint2 period)
+{
+	int2 signedPeriod = int2(period);
+	return (cell % signedPeriod + signedPeriod) % signedPeriod;
+}
+
 float Worley(float2 uv, uint2 freq)
 {
 	int2 id = floor(uv);
@@ -47,7 +53,7 @@ float Worley(float2 uv, uint2 freq)
 		[unroll] for (int y = -1; y <= 1; ++y)
 		{
 			int2 offset = int2(x, y);
-			float2 h = hash22((id + offset) % freq) * .5 + .5;
+			float2 h = hash22(WrapCell(id + offset, freq)) * .5 + .5;
 			h += offset;
 			float2 d = p - h;
 			minDist = min(minDist, dot(d, d));
@@ -60,7 +66,7 @@ float Worley(float2 uv, uint2 freq)
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
 	uint3 dims;
 	RWTexOutput.GetDimensions(dims.x, dims.y, dims.z);
-	float2 uv = (tid + 0.5) / dims.xy;
+	float2 uv = tid / float2(dims.xy - 1);
 
 	float2x2 rotmat0 = rotationMatrix(rot0);
 	float2 uv0 = mul(rotmat0, uv * scale0) + offset0;

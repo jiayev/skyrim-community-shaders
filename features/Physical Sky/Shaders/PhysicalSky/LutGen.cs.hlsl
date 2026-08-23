@@ -12,12 +12,13 @@
 
 #if LUTGEN == 3
 RWTexture3D<float4> RWTexOutput : register(u0);
+RWTexture3D<float4> RWTexSunOutput : register(u1);
 #else
 RWTexture2D<float4> RWTexOutput : register(u0);
 #endif
 
 void rayMarch(
-	float3 pos, float3 rayDir, 
+	float3 pos, float3 rayDir,
 #if LUTGEN == 0
 	float3 sunDir,
 	inout float3 tr
@@ -31,7 +32,7 @@ void rayMarch(
 #elif LUTGEN == 3
 	uint2 tid, uint depth,
 	inout float3 tr,
-	inout float3 lum
+	inout float3 lum, inout float3 lumSun
 #endif
 )
 {
@@ -118,7 +119,7 @@ void rayMarch(
 
 		float2 lutUvSecunda = TrLutUvPlanet(curr_pos, data.secundaDir);
 		float3 trSecunda = TexTrLut.SampleLevel(SampTr, lutUvSecunda, 0).rgb;
-		
+
 		float3 psiMs = TexMsLut.SampleLevel(SampTr, lutUvSun, 0).rgb * data.sunlightColor;
 		psiMs += TexMsLut.SampleLevel(SampTr, lutUvMasser, 0).rgb * data.masserColor;
 		psiMs += TexMsLut.SampleLevel(SampTr, lutUvSecunda, 0).rgb * data.secundaColor;
@@ -127,6 +128,9 @@ void rayMarch(
 		float3 inscatter = (muSRayleigh * phaseRayleighSun + muSAerosol * phaseAerosolSun) * trSun;
 #	if LUTGEN != 1
 		inscatter *= data.sunlightColor;
+#		if LUTGEN == 3
+		const float3 inscatterSun = inscatter;
+#		endif
 		inscatter += (muSRayleigh * phaseRayleighMasser + muSAerosol * phaseAerosolMasser) * trMasser * data.masserColor;
 		inscatter += (muSRayleigh * phaseRayleighSecunda + muSAerosol * phaseAerosolSecunda) * trSecunda * data.secundaColor;
 		inscatter += scatterNoPhase * psiMs;
@@ -135,11 +139,15 @@ void rayMarch(
 		float3 scatterIntegeral = inscatter * scatterFactor;
 
 		lum += scatterIntegeral * tr;
+#	if LUTGEN == 3
+		lumSun += inscatterSun * scatterFactor * tr;
+#	endif
 #endif
 		tr *= trSample;
 
 #if LUTGEN == 3
 		RWTexOutput[uint3(tid.xy, i + 1)] = float4(lum, dot(tr, float3(0.2126, 0.7152, 0.0722)));
+		RWTexSunOutput[uint3(tid.xy, i + 1)] = float4(lumSun, 1.0);
 #endif
 	}
 
@@ -155,12 +163,12 @@ void rayMarch(
 #endif
 }
 
-[numthreads(8, 8, 1)] void main(uint3 tid
-								: SV_DispatchThreadID) {
+[numthreads(8, 8, 1)] void main(uint3 tid : SV_DispatchThreadID) {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
 
 #if LUTGEN == 3
 	RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
+	RWTexSunOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
 #endif
 
 	uint3 outDims;
@@ -220,6 +228,7 @@ void rayMarch(
 
 #elif LUTGEN == 3
 	float3 lum = 0;
-	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum);
+	float3 lumSun = 0;
+	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum, lumSun);
 #endif
 }

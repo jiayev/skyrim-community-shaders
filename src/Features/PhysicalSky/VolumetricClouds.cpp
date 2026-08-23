@@ -448,7 +448,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto* ndfSrv = ndfManager.GetNdf(ndfSettings, ndfTexManager);
+	auto* ndfSrv = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
 	auto highTextures = highCloudMapManager.GetTextures(high);
 	if (!ndfSrv || (high.enabled && (!highTextures.highWeather || !highTextures.highCell || !highTextures.highWarp || !highTextures.highWisp)))
 		return;
@@ -460,7 +460,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		texApLut->srv.get(),                                                                                           // t3
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
 		baseShapeNoiseSrv.get(),                                                                                       // t5 authored Nubis RGBA noise composite
-		nullptr,                                                                                                       // t6 reserved
+		texApSunLut->srv.get(),                                                                                        // t6 direct solar single-scattering AP LUT
 		ndfSrv,                                                                                                        // t7 five-layer NDF
 		nullptr,                                                                                                       // t8 unused by Nubis low clouds
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
