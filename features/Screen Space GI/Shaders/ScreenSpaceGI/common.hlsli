@@ -51,8 +51,10 @@ SamplerState samplerLinearClamp : register(s1);
 
 ///////////////////////////////////////////////////////////////////////////////
 
-// first person z
-#define FP_Z (18.0)
+// Use the engine's global near plane instead of a hard-coded first-person distance.
+// A large fixed threshold (18.0) culls visible close geometry and makes SSGI's
+// AO/visibility output zero for those pixels, which darkens surfaces near the camera.
+#define FP_Z (SharedData::CameraData.y)
 
 #define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 float filterNaN(float v)
