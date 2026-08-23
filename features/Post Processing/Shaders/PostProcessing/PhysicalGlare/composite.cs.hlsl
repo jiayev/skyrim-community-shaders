@@ -143,8 +143,6 @@ float3 CatmullRomSampleRGB(Texture2D<float4> tex, SamplerState samp, float2 uv, 
 
 	// Sanitize extreme values
 	glare = min(glare, 65000.0);
-	if (any(isnan(glare)) || any(isinf(glare)))
-		glare = 0;
 
 	// Energy-conserving glare contribution:
 	// Subtract the thresholded bright component and output the convolved

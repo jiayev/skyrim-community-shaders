@@ -154,7 +154,8 @@ float3 XYZToAP1(float3 xyz)
 	// making the PSF drop off faster → smaller glare on screen.
 	freq /= max(KernelScale, 0.01);
 
-	for (int w = 0; w < NUM_WAVELENGTHS; w++) {
+	[loop] for (int w = 0; w < NUM_WAVELENGTHS; w++)
+	{
 		float lambda = 380.0 + float(w) * (770.0 - 380.0) / float(NUM_WAVELENGTHS - 1);
 
 		// UV scale: physical scaling λ/575nm [1, section 2.3].

@@ -68,8 +68,8 @@ float4 ComputeBoxBounds(float2 dims)
 
 	// Optimized box check using precomputed bounds
 	bool inBox = validSample &&
-	             (pxCoord.x > boxBounds.x) && (pxCoord.x < boxBounds.z) &&
-	             (pxCoord.y > boxBounds.y) && (pxCoord.y < boxBounds.w);
+	             (float(pxCoord.x) > boxBounds.x) && (float(pxCoord.x) < boxBounds.z) &&
+	             (float(pxCoord.y) > boxBounds.y) && (float(pxCoord.y) < boxBounds.w);
 
 	if (inBox) {
 		float3 color = TexColor[pxCoord].rgb;
@@ -100,7 +100,7 @@ float4 ComputeBoxBounds(float2 dims)
 [numthreads(256, 1, 1)] void CS_Average(uint gidx : SV_GroupIndex) {
 	if (gidx == 0) {
 		float totalWeight = 0.0;
-		[unroll] for (uint i = FirstLuminanceBin; i < HistogramBins; ++i)
+		[loop] for (uint i = FirstLuminanceBin; i < HistogramBins; ++i)
 		{
 			totalWeight += (float)RWBufferHistogram[i];
 		}
@@ -112,7 +112,7 @@ float4 ComputeBoxBounds(float2 dims)
 			float weightedLogLum = 0.0;
 			float keptWeight = 0.0;
 
-			[unroll] for (uint bin = FirstLuminanceBin; bin < HistogramBins; ++bin)
+			[loop] for (uint bin = FirstLuminanceBin; bin < HistogramBins; ++bin)
 			{
 				float binWeight = (float)RWBufferHistogram[bin];
 
@@ -134,7 +134,7 @@ float4 ComputeBoxBounds(float2 dims)
 				avgLum = exp2(weightedLogLum / keptWeight);
 		}
 
-		[unroll] for (uint clearBin = 0; clearBin < HistogramBins; ++clearBin)
+		[loop] for (uint clearBin = 0; clearBin < HistogramBins; ++clearBin)
 		{
 			RWBufferHistogram[clearBin] = 0;
 		}

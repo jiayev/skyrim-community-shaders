@@ -15,7 +15,7 @@ cbuffer VignetteCB : register(b1)
 
 	float cos_view = length((uv - .5) * float2(1, Params0.w));
 	cos_view = Params0.x * rsqrt(cos_view * cos_view + Params0.x * Params0.x);
-	float vignette = pow(cos_view, Params0.z);
+	float vignette = pow(abs(cos_view), Params0.z);
 
 	color *= vignette;
 

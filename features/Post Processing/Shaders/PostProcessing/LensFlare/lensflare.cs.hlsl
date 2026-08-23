@@ -57,9 +57,9 @@ cbuffer LensFlareConstants : register(b1)
 // Utilities
 // ============================================================
 
-float GetGhostScale(int i)
+float GetGhostScale(uint i)
 {
-	return GhostScalesPacked[i / 4][i % 4];
+	return GhostScalesPacked[i / 4u][i % 4u];
 }
 
 // Fisheye UV distortion (based on Shadertoy by Crucifer)
@@ -138,7 +138,7 @@ float DiscMask(float2 screenPos)
 	[branch] if (GhostStrength > EPSILON)
 	{
 		// Chromatic aberration on input for ghosts
-		for (int i = 0; i < NUM_GHOSTS; i++) {
+		for (uint i = 0; i < (uint)NUM_GHOSTS; i++) {
 			float4 ghostColor = GhostColors[i];
 			float ghostScale = GetGhostScale(i);
 
