@@ -2,6 +2,9 @@
 
 #include "I18n/I18n.h"
 
+#include <mutex>
+#include <shared_mutex>
+
 /** @brief Advanced skin rendering feature with dual specular lobes, detail textures, and wetness effects. */
 struct Skin : Feature
 {
@@ -130,6 +133,36 @@ struct Skin : Feature
 		BaseId
 	};
 
+	struct ExtraTextures
+	{
+		RE::NiSourceTexturePtr rfaosTexture;
+		RE::NiSourceTexturePtr wetnessTexture;
+		std::string extraTexturePath;
+		std::string wetnessTexturePath;
+		bool hasExtraTexture = false;
+		bool hasWetnessTexture = false;
+	};
+
+	/** @brief A rule texture channel: inherit the previous value, disable it, or bind an explicit path. */
+	struct TextureChannel
+	{
+		enum class State
+		{
+			Inherit,
+			Disabled,
+			Path
+		};
+
+		State state = State::Inherit;
+		std::string path;
+	};
+
+	struct TextureMaterial
+	{
+		TextureChannel rfaos;
+		TextureChannel wetness;
+	};
+
 	/** @brief Per-NIF / Per-BaseID JSON override store (Data\Shaders\Skin\Overrides). */
 	struct OverrideStore
 	{
@@ -141,6 +174,34 @@ struct Skin : Feature
 			json partial;  // partial SkinProfile JSON
 		};
 
+		/** @brief Exact-match selector. All populated fields must match the rendered geometry. */
+		struct Selector
+		{
+			std::string nif;
+			std::string shape;
+			std::string baseId;
+			std::string race;
+			std::string normal;
+			std::string diffuse;
+
+			uint32_t Specificity() const;
+		};
+
+		/** @brief A unified rule may independently select a profile payload and/or texture material payload. */
+		struct Rule
+		{
+			std::string id;
+			std::string source;
+			bool isUser = false;
+			int32_t priority = 0;
+			uint32_t sourceOrder = 0;
+			Selector match;
+			std::string profile;
+			json profileOverrides = json::object();
+			std::string material;
+			TextureMaterial textures;
+		};
+
 		/** @brief Effective merged NIF overrides (user wins); normalized key -> entry. */
 		std::unordered_map<std::string, Entry> nifOverrides;
 		/** @brief Effective merged BaseID overrides (user wins); normalized key -> entry. */
@@ -149,6 +210,12 @@ struct Skin : Feature
 		std::unordered_map<std::string, json> userNifOverrides;
 		/** @brief User-authored BaseID partials, persisted to User\SkinOverrides.user.json. */
 		std::unordered_map<std::string, json> userBaseIdOverrides;
+		/** @brief Named partial profile payloads referenced by unified rules. */
+		std::unordered_map<std::string, Entry> namedProfiles;
+		/** @brief Named extra texture payloads referenced by unified rules. */
+		std::unordered_map<std::string, TextureMaterial> materials;
+		/** @brief Deterministically sorted unified rules; later matching rules have higher precedence. */
+		std::vector<Rule> rules;
 		/** @brief Last scanned override file set: file path -> last write time. */
 		std::unordered_map<std::string, std::filesystem::file_time_type> fileTimes;
 		/** @brief Bumped whenever the override set changes; invalidates per-geometry caches. */
@@ -165,29 +232,52 @@ struct Skin : Feature
 		/** @brief Writes the user override file to disk. */
 		void SaveUserOverrides();
 		/** @brief True when no overrides of either kind are loaded. */
-		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty(); }
+		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty() && rules.empty(); }
 	};
 
 	/** @brief Per-geometry override resolution cache, keyed by geometry pointer. */
 	struct GeometryOverrideCacheEntry
 	{
 		SkinData merged{};
+		ExtraTextures textures{};
 		bool initialized = false;
 		std::string nifKey;
+		std::string legacyNifKey;
+		std::string shapeKey;
 		std::string baseIdKey;
+		std::string raceKey;
+		std::string normalKey;
+		std::string diffuseKey;
+		uint32_t materialHash = 0;
 		uint32_t profileIndex = UINT32_MAX;
 		uint32_t baseProfileRevision = UINT32_MAX;
 		uint32_t overrideRevision = UINT32_MAX;
+		uint32_t previewRevision = UINT32_MAX;
 	};
 
 	OverrideStore overrideStore;
 	std::unordered_map<RE::BSGeometry*, GeometryOverrideCacheEntry> geometryOverrideCache;
+	std::unordered_map<std::string, ExtraTextures> configuredExtraTextures;
 	uint32_t lastOverrideScanFrame = 0;
+
+	struct GeometryOrigin
+	{
+		std::string nifKey;
+		std::string signature;
+	};
+	mutable std::shared_mutex geometryOriginMutex;
+	std::unordered_map<RE::BSGeometry*, GeometryOrigin> geometryOrigins;
+	std::unordered_map<std::string, std::string> signatureOrigins;
+	std::unordered_set<std::string> ambiguousOriginSignatures;
 
 	/** @brief Packs a profile plus the global (non-per-race) settings into GPU data. */
 	SkinData MakeProfileData(const SkinProfile& a_profile) const;
-	/** @brief Merges a partial JSON override onto a base profile and packs the result for the GPU. */
-	SkinData ApplyOverride(const SkinProfile& a_base, const json& a_override) const;
+	/** @brief Merges a partial JSON object onto a CPU-side profile. */
+	SkinProfile ApplyProfileOverride(const SkinProfile& a_base, const json& a_override) const;
+	/** @brief Records the source NIF of every geometry loaded by a BSStream. */
+	void RecordNifOrigins(RE::BSStream* a_stream, const char* a_path);
+	/** @brief Resolves the actual source NIF captured during stream loading, if known. */
+	std::string ResolveNifOrigin(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material) const;
 	/** @brief Rebuilds the GPU profile array, bumping the revision when the contents change. */
 	void RebuildProfileData();
 	/** @brief Drops cached race->profile resolutions, forcing them to be resolved again. */
@@ -219,10 +309,8 @@ struct Skin : Feature
 	/** @brief Opens the override editor for a key, seeded from the given base profile. */
 	void BeginOverrideEdit(OverrideKind a_kind, const std::string& a_key, const SkinProfile& a_base, const std::string& a_baseLabel, bool a_isNew);
 	/** @brief Derives all unique normalized NIF override keys for a reference.
-	 *  @return The target's MODL key (when present) followed by every unique
-	 *  per-geometry key, in scenegraph traversal order. Geometry keys use the
-	 *  same logic as the runtime override lookup, so the pick UI and the
-	 *  rendered result stay aligned. */
+	 *  @return The target's MODL key (when present), captured source NIFs, and
+	 *  legacy per-geometry keys in scenegraph traversal order. */
 	std::vector<std::string> DeriveNifKeysForRef(RE::TESObjectREFR* a_ref) const;
 	/** @brief True if any geometry of the reference uses a skin shader. */
 	bool ReferenceHasSkin(RE::TESObjectREFR* a_ref) const;
@@ -254,16 +342,10 @@ struct Skin : Feature
 	std::string uiOverrideEditorBaseLabel;
 	SkinProfile uiOverrideEditorBase;
 	SkinProfile uiOverrideEditorProfile;
-
-	struct ExtraTextures
-	{
-		RE::NiSourceTexturePtr rfaosTexture;
-		RE::NiSourceTexturePtr wetnessTexture;
-		std::string extraTexturePath;
-		std::string wetnessTexturePath;
-		bool hasExtraTexture = false;
-		bool hasWetnessTexture = false;
-	};
+	/** @brief Unsaved partial currently previewed by the override editor. */
+	json uiOverridePreviewPartial = json::object();
+	/** @brief Bumped whenever the preview changes or closes, invalidating geometry caches. */
+	uint32_t uiOverridePreviewRevision = 0;
 
 	struct ActorWetnessCacheEntry
 	{
@@ -302,6 +384,8 @@ struct Skin : Feature
 	 * @param i_hashKey The material hash key used for caching extra textures.
 	 */
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
+	/** @brief Loads an explicit RFAOS/wetness path pair without mutating the material texture set. */
+	ExtraTextures LoadConfiguredExtraTextures(const std::string& a_rfaosPath, const std::string& a_wetnessPath);
 
 	/** @brief Handles material setup for face/face-gen materials, loading extra skin textures as needed. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
@@ -314,6 +398,12 @@ struct Skin : Feature
 
 	struct Hooks
 	{
+		struct BSStream_Load3
+		{
+			static bool thunk(RE::BSStream* a_stream, const char* a_path);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		struct BSLightingShader_SetupGeometry
 		{
 			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
@@ -322,6 +412,7 @@ struct Skin : Feature
 
 		static void Install()
 		{
+			stl::write_vfunc<0x3, BSStream_Load3>(RE::VTABLE_BSStream[0]);
 			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 			logger::info("[Advanced Skin] Installed hooks");
 			return;

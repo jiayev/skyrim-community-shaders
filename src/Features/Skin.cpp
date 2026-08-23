@@ -71,18 +71,109 @@ namespace
 			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 		std::replace(a_key.begin(), a_key.end(), '\\', '/');
 		constexpr std::string_view kMeshesPrefix = "meshes/";
-		if (a_key.starts_with(kMeshesPrefix))
+		constexpr std::string_view kDataMeshesPrefix = "data/meshes/";
+		if (a_key.starts_with(kDataMeshesPrefix))
+			a_key.erase(0, kDataMeshesPrefix.size());
+		else if (a_key.starts_with(kMeshesPrefix))
 			a_key.erase(0, kMeshesPrefix.size());
+		else if (const auto pos = a_key.rfind("/meshes/"); pos != std::string::npos)
+			a_key.erase(0, pos + std::string_view("/meshes/").size());
 		return a_key;
 	}
 
-	/**
-	 * @brief Derives the per-NIF identity for a geometry.
-	 *
-	 * Prefers the base object's MODL path (reliable for statics, armor, weapons);
-	 * falls back to the geometry node name (e.g. body meshes whose MODL is empty).
-	 */
-	std::string DeriveNifKey(RE::BSGeometry* a_geometry)
+	std::string NormalizeIdentifier(std::string a_key)
+	{
+		std::transform(a_key.begin(), a_key.end(), a_key.begin(),
+			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return a_key;
+	}
+
+	/** @brief Normalizes texture paths while retaining the textures/ prefix used by the engine. */
+	std::string NormalizeTextureKey(std::string a_key)
+	{
+		a_key = NormalizeIdentifier(std::move(a_key));
+		std::replace(a_key.begin(), a_key.end(), '\\', '/');
+		constexpr std::string_view kDataPrefix = "data/";
+		if (a_key.starts_with(kDataPrefix))
+			a_key.erase(0, kDataPrefix.size());
+		else if (const auto pos = a_key.rfind("/textures/"); pos != std::string::npos)
+			a_key.erase(0, pos + 1);
+		return a_key;
+	}
+
+	Skin::TextureChannel ParseTextureChannel(const json& a_object, const char* a_key, const std::string& a_source)
+	{
+		Skin::TextureChannel channel;
+		if (!a_object.contains(a_key))
+			return channel;
+		const auto& value = a_object[a_key];
+		if (value.is_null()) {
+			channel.state = Skin::TextureChannel::State::Disabled;
+		} else if (value.is_string()) {
+			channel.path = NormalizeTextureKey(value.get<std::string>());
+			channel.state = channel.path.empty() ? Skin::TextureChannel::State::Disabled : Skin::TextureChannel::State::Path;
+		} else {
+			logger::warn("[Advanced Skin] Ignoring non-string texture channel '{}': {}", a_key, a_source);
+		}
+		return channel;
+	}
+
+	Skin::TextureMaterial ParseTextureMaterial(const json& a_object, const std::string& a_source)
+	{
+		Skin::TextureMaterial material;
+		if (!a_object.is_object())
+			return material;
+		for (auto it = a_object.begin(); it != a_object.end(); ++it) {
+			if (it.key() != "rfaos" && it.key() != "wetness")
+				logger::warn("[Advanced Skin] Ignoring unknown texture channel '{}': {}", it.key(), a_source);
+		}
+		material.rfaos = ParseTextureChannel(a_object, "rfaos", a_source);
+		material.wetness = ParseTextureChannel(a_object, "wetness", a_source);
+		return material;
+	}
+
+	void ApplyTextureChannel(std::string& a_path, const Skin::TextureChannel& a_channel)
+	{
+		if (a_channel.state == Skin::TextureChannel::State::Disabled)
+			a_path.clear();
+		else if (a_channel.state == Skin::TextureChannel::State::Path)
+			a_path = a_channel.path;
+	}
+
+	RE::BSLightingShaderMaterialBase const* GetLightingMaterial(RE::BSGeometry* a_geometry)
+	{
+		if (!a_geometry)
+			return nullptr;
+		auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
+		if (!property)
+			return nullptr;
+		auto* material = property->GetBaseMaterial();
+		if (!material || material->GetType() != RE::BSShaderMaterial::Type::kLighting)
+			return nullptr;
+		return static_cast<RE::BSLightingShaderMaterialBase const*>(material);
+	}
+
+	std::string GetTextureKey(RE::BSLightingShaderMaterialBase const* a_material, RE::BSTextureSet::Texture a_slot)
+	{
+		if (!a_material || !a_material->textureSet)
+			return {};
+		const char* path = a_material->textureSet->GetTexturePath(a_slot);
+		return path ? NormalizeTextureKey(path) : std::string{};
+	}
+
+	std::string MakeGeometrySignature(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material)
+	{
+		if (!a_geometry)
+			return {};
+		if (!a_material)
+			a_material = GetLightingMaterial(a_geometry);
+		const char* name = a_geometry->name.c_str();
+		return std::format("{}|{}|{}", NormalizeIdentifier(name ? name : ""),
+			GetTextureKey(a_material, RE::BSTextureSet::Texture::kDiffuse),
+			GetTextureKey(a_material, RE::BSTextureSet::Texture::kNormal));
+	}
+
+	std::string DeriveModelNifKey(RE::BSGeometry* a_geometry)
 	{
 		std::string key;
 		if (auto ref = a_geometry->GetUserData()) {
@@ -93,6 +184,13 @@ namespace
 				}
 			}
 		}
+		return NormalizeNifKey(key);
+	}
+
+	/** @brief Legacy NIF identity: base object MODL, then geometry name. */
+	std::string DeriveNifKey(RE::BSGeometry* a_geometry)
+	{
+		std::string key = DeriveModelNifKey(a_geometry);
 		if (key.empty()) {
 			if (const char* name = a_geometry->name.c_str())
 				key = name;
@@ -578,10 +676,11 @@ std::vector<std::string> Skin::DeriveNifKeysForRef(RE::TESObjectREFR* a_ref) con
 		}
 	}
 
-	// Actors are made of several geometries (body, hands, feet, armor addons, ...);
-	// collect each unique key with the same logic the runtime lookup uses.
+	// Actors are made of several geometries (body, hands, feet, armor addons, ...).
+	// Prefer the captured source NIF, then retain the legacy MODL/shape key.
 	if (auto* root = a_ref ? a_ref->Get3D() : nullptr) {
 		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) {
+			addKey(ResolveNifOrigin(a_geometry, GetLightingMaterial(a_geometry)));
 			addKey(DeriveNifKey(a_geometry));
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
@@ -672,6 +771,9 @@ void Skin::BeginOverrideEdit(OverrideKind a_kind, const std::string& a_key, cons
 			uiOverrideEditorProfile = mergedJson.get<SkinProfile>();
 		}
 	}
+
+	uiOverridePreviewPartial = DiffProfile(uiOverrideEditorBase, uiOverrideEditorProfile);
+	++uiOverridePreviewRevision;
 }
 
 void Skin::DrawNifOverrides()
@@ -846,6 +948,10 @@ void Skin::DrawNifOverrides()
 		DrawProfileSettings(uiOverrideEditorProfile, "OverrideEditor");
 
 		json diff = DiffProfile(uiOverrideEditorBase, uiOverrideEditorProfile);
+		if (diff != uiOverridePreviewPartial) {
+			uiOverridePreviewPartial = diff;
+			++uiOverridePreviewRevision;
+		}
 		std::string diffFields;
 		for (auto it = diff.begin(); it != diff.end(); ++it) {
 			if (!diffFields.empty())
@@ -861,10 +967,15 @@ void Skin::DrawNifOverrides()
 			else
 				overrideStore.RemoveOverride(uiOverrideEditorKind, uiOverrideEditorKey);
 			uiOverrideEditorOpen = false;
+			uiOverridePreviewPartial = json::object();
+			++uiOverridePreviewRevision;
 		}
 		ImGui::SameLine();
-		if (ImGui::Button(T("feature.skin.ov_cancel", "Cancel")))
+		if (ImGui::Button(T("feature.skin.ov_cancel", "Cancel"))) {
 			uiOverrideEditorOpen = false;
+			uiOverridePreviewPartial = json::object();
+			++uiOverridePreviewRevision;
+		}
 	}
 }
 
@@ -929,7 +1040,10 @@ void Skin::Prepass()
 	const uint currentFrame = globals::state->frameCount;
 	if (currentFrame - lastOverrideScanFrame >= 60) {
 		lastOverrideScanFrame = currentFrame;
+		const uint32_t previousRevision = overrideStore.revision;
 		overrideStore.Refresh();
+		if (overrideStore.revision != previousRevision)
+			configuredExtraTextures.clear();
 	}
 
 	if (texSkinDetail) {
@@ -954,9 +1068,78 @@ struct SKIN_BSLightingShader_SetupMaterial
 
 void Skin::PostPostLoad()
 {
-	logger::info("[Advanced Skin] Hooking BSLightingShader::SetupMaterial");
+	logger::info("[Advanced Skin] Hooking BSLightingShader and BSStream");
 	stl::write_vfunc<0x4, SKIN_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 	Hooks::Install();
+}
+
+void Skin::RecordNifOrigins(RE::BSStream* a_stream, const char* a_path)
+{
+	if (!a_stream)
+		return;
+	const char* loadedPath = a_stream->inputFilePath[0] ? a_stream->inputFilePath : a_path;
+	const std::string nifKey = loadedPath ? NormalizeNifKey(loadedPath) : std::string{};
+	if (nifKey.empty())
+		return;
+
+	std::vector<std::pair<RE::BSGeometry*, std::string>> loadedGeometries;
+	std::unordered_set<RE::BSGeometry*> visited;
+	auto record = [&](RE::BSGeometry* a_geometry) {
+		if (a_geometry && visited.insert(a_geometry).second)
+			loadedGeometries.emplace_back(a_geometry, MakeGeometrySignature(a_geometry, nullptr));
+	};
+	for (auto& object : a_stream->topObjects) {
+		if (!object)
+			continue;
+		if (auto* geometry = object->AsGeometry()) {
+			record(geometry);
+		} else if (auto* node = object->AsNode()) {
+			RE::BSVisit::TraverseScenegraphGeometries(node, [&](RE::BSGeometry* a_geometry) {
+				record(a_geometry);
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+		}
+	}
+
+	std::unique_lock lock(geometryOriginMutex);
+	if (geometryOrigins.size() > 65536)
+		geometryOrigins.clear();
+	if (signatureOrigins.size() + ambiguousOriginSignatures.size() > 65536) {
+		signatureOrigins.clear();
+		ambiguousOriginSignatures.clear();
+	}
+	for (auto& [geometry, signature] : loadedGeometries) {
+		geometryOrigins[geometry] = GeometryOrigin{ nifKey, signature };
+		if (signature.empty() || ambiguousOriginSignatures.contains(signature))
+			continue;
+		if (auto existing = signatureOrigins.find(signature); existing == signatureOrigins.end()) {
+			signatureOrigins.emplace(signature, nifKey);
+		} else if (existing->second != nifKey) {
+			signatureOrigins.erase(existing);
+			ambiguousOriginSignatures.insert(signature);
+		}
+	}
+}
+
+std::string Skin::ResolveNifOrigin(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material) const
+{
+	const std::string signature = MakeGeometrySignature(a_geometry, a_material);
+	std::shared_lock lock(geometryOriginMutex);
+	if (auto direct = geometryOrigins.find(a_geometry); direct != geometryOrigins.end() && direct->second.signature == signature)
+		return direct->second.nifKey;
+	if (!signature.empty() && !ambiguousOriginSignatures.contains(signature)) {
+		if (auto unique = signatureOrigins.find(signature); unique != signatureOrigins.end())
+			return unique->second;
+	}
+	return {};
+}
+
+bool Skin::Hooks::BSStream_Load3::thunk(RE::BSStream* a_stream, const char* a_path)
+{
+	const bool loaded = func(a_stream, a_path);
+	if (loaded)
+		globals::features::skin.RecordNifOrigins(a_stream, a_path);
+	return loaded;
 }
 
 Skin::SkinData Skin::MakeProfileData(const SkinProfile& a_profile) const
@@ -982,42 +1165,52 @@ void Skin::OverrideStore::Refresh()
 	auto rootDir = Util::PathHelpers::GetShadersPath() / "Skin" / "Overrides";
 	auto userDir = rootDir / "User";
 
-	// Snapshot the current file set + mtimes for both the mod (root) and user (User) directories.
 	std::unordered_map<std::string, std::filesystem::file_time_type> current;
-	auto scanDir = [&](const std::filesystem::path& dir) {
+	auto collectFiles = [&](const std::filesystem::path& dir) {
+		std::vector<std::filesystem::path> files;
 		std::error_code ec;
 		if (!std::filesystem::exists(dir, ec) || ec)
-			return;
+			return files;
 		for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
 			const auto& entry = *it;
-			if (!entry.is_regular_file(ec) || ec || entry.path().extension() != ".json")
+			auto extension = NormalizeIdentifier(entry.path().extension().string());
+			if (!entry.is_regular_file(ec) || ec || extension != ".json")
 				continue;
 			auto mtime = std::filesystem::last_write_time(entry.path(), ec);
-			if (!ec)
+			if (!ec) {
 				current[entry.path().string()] = mtime;
+				files.push_back(entry.path());
+			}
 		}
+		std::ranges::sort(files, [](const auto& a, const auto& b) {
+			return NormalizeIdentifier(a.filename().string()) < NormalizeIdentifier(b.filename().string());
+		});
+		return files;
 	};
-	scanDir(rootDir);
-	scanDir(userDir);
+	auto modFiles = collectFiles(rootDir);
+	auto userFiles = collectFiles(userDir);
 
 	if (current == fileTimes)
 		return;
 
-	// Parse mod (root) files first, then user files; user entries win on key conflicts.
 	std::unordered_map<std::string, Entry> modNif;
 	std::unordered_map<std::string, Entry> modBaseId;
 	std::unordered_map<std::string, json> userNif;
 	std::unordered_map<std::string, json> userBaseId;
-	auto parseDir = [&](const std::filesystem::path& dir, bool isUser) {
-		std::error_code ec;
-		if (!std::filesystem::exists(dir, ec) || ec)
-			return;
-		for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
-			const auto& dentry = *it;
-			if (!dentry.is_regular_file(ec) || ec || dentry.path().extension() != ".json")
-				continue;
-			const std::string filePath = dentry.path().string();
-			const std::string fileName = dentry.path().filename().string();
+	std::unordered_map<std::string, Entry> parsedProfiles;
+	std::unordered_map<std::string, TextureMaterial> parsedMaterials;
+	std::vector<Rule> parsedRules;
+
+	auto readSelectorString = [](const json& a_match, const char* a_key) -> std::string {
+		if (!a_match.contains(a_key) || !a_match[a_key].is_string())
+			return {};
+		return a_match[a_key].get<std::string>();
+	};
+
+	auto parseFiles = [&](const std::vector<std::filesystem::path>& files, bool isUser) {
+		for (const auto& path : files) {
+			const std::string filePath = path.string();
+			const std::string fileName = path.filename().string();
 			try {
 				std::ifstream file(filePath);
 				if (!file.is_open())
@@ -1048,13 +1241,96 @@ void Skin::OverrideStore::Refresh()
 							modBaseId[nkey] = Entry{ fileName, false, value };
 					}
 				}
+
+				if (j.contains("profiles") && j["profiles"].is_object()) {
+					for (const auto& [name, value] : j["profiles"].items()) {
+						if (!value.is_object()) {
+							logger::warn("[Advanced Skin] Ignoring invalid named profile '{}': {}", name, fileName);
+							continue;
+						}
+						json validated = SkinProfile{};
+						for (const auto& [field, fieldValue] : value.items()) {
+							if (!fieldValue.is_null())
+								validated[field] = fieldValue;
+						}
+						(void)validated.get<SkinProfile>();
+						parsedProfiles[NormalizeIdentifier(name)] = Entry{ fileName, isUser, value };
+					}
+				}
+
+				if (j.contains("materials") && j["materials"].is_object()) {
+					for (const auto& [name, value] : j["materials"].items()) {
+						if (!value.is_object()) {
+							logger::warn("[Advanced Skin] Ignoring invalid texture material '{}': {}", name, fileName);
+							continue;
+						}
+						parsedMaterials[NormalizeIdentifier(name)] = ParseTextureMaterial(value, std::format("{}:materials.{}", fileName, name));
+					}
+				}
+
+				if (j.contains("rules") && j["rules"].is_array()) {
+					const int32_t filePriority = j.value("priority", 0);
+					uint32_t sourceOrder = 0;
+					for (const auto& value : j["rules"]) {
+						const uint32_t currentOrder = sourceOrder++;
+						if (!value.is_object() || !value.contains("match") || !value["match"].is_object()) {
+							logger::warn("[Advanced Skin] Ignoring rule without an object 'match': {}#{}", fileName, currentOrder);
+							continue;
+						}
+						Rule rule;
+						rule.source = NormalizeIdentifier(fileName);
+						rule.isUser = isUser;
+						rule.priority = value.value("priority", filePriority);
+						rule.sourceOrder = currentOrder;
+						rule.id = value.value("id", std::format("{}#{}", fileName, currentOrder));
+						const auto& match = value["match"];
+						bool validSelector = true;
+						static constexpr std::array<std::string_view, 6> knownSelectorFields{ "nif", "shape", "baseid", "race", "normal", "diffuse" };
+						for (const auto& [field, selectorValue] : match.items()) {
+							if (std::ranges::find(knownSelectorFields, field) == knownSelectorFields.end() || !selectorValue.is_string()) {
+								logger::warn("[Advanced Skin] Ignoring rule '{}' with invalid selector field '{}': {}", rule.id, field, fileName);
+								validSelector = false;
+								break;
+							}
+						}
+						if (!validSelector)
+							continue;
+						rule.match.nif = NormalizeNifKey(readSelectorString(match, "nif"));
+						rule.match.shape = NormalizeIdentifier(readSelectorString(match, "shape"));
+						rule.match.baseId = NormalizeBaseIdKey(readSelectorString(match, "baseid"));
+						rule.match.race = NormalizeIdentifier(readSelectorString(match, "race"));
+						rule.match.normal = NormalizeTextureKey(readSelectorString(match, "normal"));
+						rule.match.diffuse = NormalizeTextureKey(readSelectorString(match, "diffuse"));
+						if (value.contains("profile") && value["profile"].is_string())
+							rule.profile = NormalizeIdentifier(value["profile"].get<std::string>());
+						if (value.contains("profileOverrides") && value["profileOverrides"].is_object()) {
+							json validated = SkinProfile{};
+							for (const auto& [field, fieldValue] : value["profileOverrides"].items()) {
+								if (!fieldValue.is_null())
+									validated[field] = fieldValue;
+							}
+							(void)validated.get<SkinProfile>();
+							rule.profileOverrides = value["profileOverrides"];
+						}
+						if (value.contains("material") && value["material"].is_string())
+							rule.material = NormalizeIdentifier(value["material"].get<std::string>());
+						if (value.contains("textures") && value["textures"].is_object())
+							rule.textures = ParseTextureMaterial(value["textures"], std::format("{}:rules.{}", fileName, rule.id));
+						if (rule.profile.empty() && rule.profileOverrides.empty() && rule.material.empty() &&
+							rule.textures.rfaos.state == TextureChannel::State::Inherit && rule.textures.wetness.state == TextureChannel::State::Inherit) {
+							logger::warn("[Advanced Skin] Ignoring rule '{}' without a profile or texture payload: {}", rule.id, fileName);
+							continue;
+						}
+						parsedRules.push_back(std::move(rule));
+					}
+				}
 			} catch (const std::exception& e) {
 				logger::error("[Advanced Skin] Failed to parse override file {}: {}", filePath, e.what());
 			}
 		}
 	};
-	parseDir(rootDir, false);
-	parseDir(userDir, true);
+	parseFiles(modFiles, false);
+	parseFiles(userFiles, true);
 
 	userNifOverrides = std::move(userNif);
 	userBaseIdOverrides = std::move(userBaseId);
@@ -1071,9 +1347,25 @@ void Skin::OverrideStore::Refresh()
 	for (auto& [key, partial] : userBaseIdOverrides)
 		baseIdOverrides[key] = Entry{ "User", true, partial };
 
+	namedProfiles = std::move(parsedProfiles);
+	materials = std::move(parsedMaterials);
+	std::ranges::stable_sort(parsedRules, [](const Rule& a, const Rule& b) {
+		return std::tuple{ a.isUser, a.priority, a.match.Specificity(), a.source, a.sourceOrder } <
+		       std::tuple{ b.isUser, b.priority, b.match.Specificity(), b.source, b.sourceOrder };
+	});
+	rules = std::move(parsedRules);
+
 	fileTimes = std::move(current);
 	++revision;
-	logger::info("[Advanced Skin] Loaded {} NIF / {} BaseID skin override(s) (revision {})", nifOverrides.size(), baseIdOverrides.size(), revision);
+	logger::info("[Advanced Skin] Loaded {} NIF / {} BaseID legacy override(s), {} profile(s), {} material(s), and {} rule(s) (revision {})",
+		nifOverrides.size(), baseIdOverrides.size(), namedProfiles.size(), materials.size(), rules.size(), revision);
+}
+
+uint32_t Skin::OverrideStore::Selector::Specificity() const
+{
+	return static_cast<uint32_t>(!nif.empty()) + static_cast<uint32_t>(!shape.empty()) +
+	       static_cast<uint32_t>(!baseId.empty()) + static_cast<uint32_t>(!race.empty()) +
+	       static_cast<uint32_t>(!normal.empty()) + static_cast<uint32_t>(!diffuse.empty());
 }
 
 const json* Skin::OverrideStore::Lookup(OverrideKind a_kind, const std::string& a_key) const
@@ -1135,14 +1427,14 @@ void Skin::OverrideStore::RemoveOverride(OverrideKind a_kind, const std::string&
 	Refresh();
 }
 
-Skin::SkinData Skin::ApplyOverride(const SkinProfile& a_base, const json& a_override) const
+Skin::SkinProfile Skin::ApplyProfileOverride(const SkinProfile& a_base, const json& a_override) const
 {
 	json mergedJson = a_base;
 	for (const auto& [key, value] : a_override.items()) {
 		if (!value.is_null())
 			mergedJson[key] = value;
 	}
-	return MakeProfileData(mergedJson.get<SkinProfile>());
+	return mergedJson.get<SkinProfile>();
 }
 
 void Skin::RebuildProfileData()
@@ -1371,6 +1663,46 @@ struct SkinExtendedRendererState
 	}
 } skinExtendedRendererState;
 
+Skin::ExtraTextures Skin::LoadConfiguredExtraTextures(const std::string& a_rfaosPath, const std::string& a_wetnessPath)
+{
+	const std::string rfaosPath = NormalizeTextureKey(a_rfaosPath);
+	const std::string wetnessPath = NormalizeTextureKey(a_wetnessPath);
+	const std::string cacheKey = std::format("{}\n{}", rfaosPath, wetnessPath);
+	if (auto cached = configuredExtraTextures.find(cacheKey); cached != configuredExtraTextures.end())
+		return cached->second;
+
+	const auto& stateData = globals::game::graphicsState->GetRuntimeData();
+	ExtraTextures result;
+	result.extraTexturePath = rfaosPath;
+	result.wetnessTexturePath = wetnessPath;
+	result.rfaosTexture = stateData.defaultTextureBlack;
+	result.wetnessTexture = stateData.defaultTextureBlack;
+
+	auto load = [](const std::string& a_path, RE::NiSourceTexturePtr& a_output) {
+		if (a_path.empty())
+			return false;
+		RE::NiPointer<RE::NiTexture> texture;
+		RE::BSShaderManager::GetTexture(a_path.c_str(), true, texture, false);
+		if (!texture || texture->GetRTTI() != globals::rtti::NiSourceTextureRTTI.get())
+			return false;
+		auto* source = static_cast<RE::NiSourceTexture*>(texture.get());
+		if (!source->rendererTexture || !source->rendererTexture->resourceView)
+			return false;
+		a_output = RE::NiPointer(source);
+		return true;
+	};
+
+	result.hasExtraTexture = load(rfaosPath, result.rfaosTexture);
+	result.hasWetnessTexture = load(wetnessPath, result.wetnessTexture);
+	if (!rfaosPath.empty() && !result.hasExtraTexture)
+		logger::warn("[Advanced Skin] Failed to load configured RFAOS texture: {}", rfaosPath);
+	if (!wetnessPath.empty() && !result.hasWetnessTexture)
+		logger::warn("[Advanced Skin] Failed to load configured wetness texture: {}", wetnessPath);
+
+	configuredExtraTextures.emplace(cacheKey, result);
+	return result;
+}
+
 void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey)
 {
 	if (!inTextureSet || material->normalTexture == nullptr) {
@@ -1508,11 +1840,18 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	auto context = globals::d3d::context;
 
-	if (settings.EnableSkin) {
+	if (settings.EnableSkin && a_pass && a_pass->geometry) {
 		if (profileData.empty())
 			RebuildProfileData();
 
 		auto geometry = a_pass->geometry;
+		RE::BSLightingShaderMaterialBase const* material = nullptr;
+		if (auto* property = a_pass->shaderProperty) {
+			if (auto* baseMaterial = property->GetBaseMaterial(); baseMaterial && baseMaterial->GetType() == RE::BSShaderMaterial::Type::kLighting)
+				material = static_cast<RE::BSLightingShaderMaterialBase const*>(baseMaterial);
+		}
+		const bool isSkinMaterial = material &&
+		                            (material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGen || material->GetFeature() == RE::BSShaderMaterial::Feature::kFaceGenRGBTint);
 		uint32_t profileIndex = 0;
 		float4 wetness = GetWetness(geometry, profileIndex);
 		if (profileIndex >= profileData.size())
@@ -1520,39 +1859,122 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 		SkinData perGeometryProfile = profileData[profileIndex];
 
-		if (!overrideStore.Empty()) {
+		if (!overrideStore.Empty() || uiOverrideEditorOpen) {
 			if (geometryOverrideCache.size() > 4096)
 				geometryOverrideCache.clear();
 
 			auto& entry = geometryOverrideCache[geometry];
-			if (!entry.initialized) {
+			const uint32_t materialHash = material ? material->hashKey : 0;
+			if (!entry.initialized || entry.materialHash != materialHash) {
 				entry.initialized = true;
-				entry.nifKey = DeriveNifKey(geometry);
+				entry.materialHash = materialHash;
+				entry.nifKey = ResolveNifOrigin(geometry, material);
+				if (entry.nifKey.empty())
+					entry.nifKey = DeriveModelNifKey(geometry);
+				entry.legacyNifKey = DeriveNifKey(geometry);
+				const char* geometryName = geometry->name.c_str();
+				entry.shapeKey = NormalizeIdentifier(geometryName ? geometryName : "");
 				entry.baseIdKey = DeriveBaseIdKey(geometry);
+				entry.normalKey = GetTextureKey(material, RE::BSTextureSet::Texture::kNormal);
+				entry.diffuseKey = GetTextureKey(material, RE::BSTextureSet::Texture::kDiffuse);
+				entry.raceKey.clear();
+				if (auto* userData = geometry->GetUserData(); userData && userData->formType == RE::FormType::ActorCharacter) {
+					if (auto* race = static_cast<RE::Character*>(userData)->GetRace())
+						entry.raceKey = NormalizeIdentifier(Util::GetFormEditorID(race));
+				}
+				entry.profileIndex = UINT32_MAX;
 			}
-			if (entry.profileIndex != profileIndex || entry.baseProfileRevision != profileDataRevision || entry.overrideRevision != overrideStore.revision) {
+			if (entry.profileIndex != profileIndex || entry.baseProfileRevision != profileDataRevision ||
+				entry.overrideRevision != overrideStore.revision || entry.previewRevision != uiOverridePreviewRevision) {
 				entry.profileIndex = profileIndex;
 				entry.baseProfileRevision = profileDataRevision;
 				entry.overrideRevision = overrideStore.revision;
-				entry.merged = profileData[profileIndex];
+				entry.previewRevision = uiOverridePreviewRevision;
+				SkinProfile resolvedProfile = profileIndex < profileBaseData.size() ? profileBaseData[profileIndex] : settings.DefaultProfile;
 
 				const json* nifPartial = entry.nifKey.empty() ? nullptr : overrideStore.Lookup(OverrideKind::Nif, entry.nifKey);
+				if (!nifPartial && !entry.legacyNifKey.empty() && entry.legacyNifKey != entry.nifKey)
+					nifPartial = overrideStore.Lookup(OverrideKind::Nif, entry.legacyNifKey);
+				const bool previewNif = uiOverrideEditorOpen && uiOverrideEditorKind == OverrideKind::Nif &&
+				                        (uiOverrideEditorKey == entry.nifKey || uiOverrideEditorKey == entry.legacyNifKey);
+				if (previewNif)
+					nifPartial = &uiOverridePreviewPartial;
+
 				const json* baseIdPartial = entry.baseIdKey.empty() ? nullptr : overrideStore.Lookup(OverrideKind::BaseId, entry.baseIdKey);
-				if ((nifPartial || baseIdPartial) && profileIndex < profileBaseData.size()) {
-					// Combine both partials; BaseID (more specific) wins on field conflicts.
-					json combined = json::object();
-					if (nifPartial)
-						combined = *nifPartial;
-					if (baseIdPartial) {
-						for (const auto& [field, value] : baseIdPartial->items()) {
-							if (!value.is_null())
-								combined[field] = value;
+				const bool previewBaseId = uiOverrideEditorOpen && uiOverrideEditorKind == OverrideKind::BaseId && uiOverrideEditorKey == entry.baseIdKey;
+				if (previewBaseId)
+					baseIdPartial = &uiOverridePreviewPartial;
+				if (nifPartial)
+					resolvedProfile = ApplyProfileOverride(resolvedProfile, *nifPartial);
+				if (baseIdPartial)
+					resolvedProfile = ApplyProfileOverride(resolvedProfile, *baseIdPartial);
+
+				ExtraTextures legacyTextures;
+				const auto& stateData = globals::game::graphicsState->GetRuntimeData();
+				legacyTextures.rfaosTexture = stateData.defaultTextureBlack;
+				legacyTextures.wetnessTexture = stateData.defaultTextureBlack;
+				if (isSkinMaterial && materialHash != 0) {
+					if (!skinExtraTextures.contains(materialHash))
+						SetupExtraTexture(material, material->textureSet.get(), materialHash);
+					if (auto legacy = skinExtraTextures.find(materialHash); legacy != skinExtraTextures.end())
+						legacyTextures = legacy->second;
+				}
+				std::string rfaosPath = NormalizeTextureKey(legacyTextures.extraTexturePath);
+				std::string wetnessPath = NormalizeTextureKey(legacyTextures.wetnessTexturePath);
+
+				auto matches = [&](const OverrideStore::Selector& match) {
+					return (match.nif.empty() || match.nif == entry.nifKey) &&
+					       (match.shape.empty() || match.shape == entry.shapeKey) &&
+					       (match.baseId.empty() || match.baseId == entry.baseIdKey) &&
+					       (match.race.empty() || match.race == entry.raceKey) &&
+					       (match.normal.empty() || match.normal == entry.normalKey) &&
+					       (match.diffuse.empty() || match.diffuse == entry.diffuseKey);
+				};
+
+				for (const auto& rule : overrideStore.rules) {
+					if (!matches(rule.match))
+						continue;
+					if (!rule.profile.empty()) {
+						if (auto named = overrideStore.namedProfiles.find(rule.profile); named != overrideStore.namedProfiles.end()) {
+							resolvedProfile = ApplyProfileOverride(resolvedProfile, named->second.partial);
+						} else {
+							for (const auto& [name, profile] : settings.Profiles) {
+								if (NormalizeIdentifier(name) == rule.profile) {
+									resolvedProfile = profile;
+									break;
+								}
+							}
 						}
 					}
-					entry.merged = ApplyOverride(profileBaseData[profileIndex], combined);
+					if (!rule.profileOverrides.empty())
+						resolvedProfile = ApplyProfileOverride(resolvedProfile, rule.profileOverrides);
+
+					if (isSkinMaterial) {
+						if (!rule.material.empty()) {
+							if (auto named = overrideStore.materials.find(rule.material); named != overrideStore.materials.end()) {
+								ApplyTextureChannel(rfaosPath, named->second.rfaos);
+								ApplyTextureChannel(wetnessPath, named->second.wetness);
+							}
+						}
+						ApplyTextureChannel(rfaosPath, rule.textures.rfaos);
+						ApplyTextureChannel(wetnessPath, rule.textures.wetness);
+					}
+				}
+
+				entry.merged = MakeProfileData(resolvedProfile);
+				if (rfaosPath == NormalizeTextureKey(legacyTextures.extraTexturePath) &&
+					wetnessPath == NormalizeTextureKey(legacyTextures.wetnessTexturePath)) {
+					entry.textures = legacyTextures;
+				} else {
+					entry.textures = LoadConfiguredExtraTextures(rfaosPath, wetnessPath);
 				}
 			}
 			perGeometryProfile = entry.merged;
+			if (isSkinMaterial && entry.textures.rfaosTexture && entry.textures.wetnessTexture) {
+				skinExtendedRendererState.SetExtraSkinPSTexture(
+					entry.textures.rfaosTexture->rendererTexture,
+					entry.textures.wetnessTexture->rendererTexture);
+			}
 		}
 
 		// PerGeometryCB is shared across all geometry passes, so it must be refreshed
