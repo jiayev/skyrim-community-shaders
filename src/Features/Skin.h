@@ -83,6 +83,8 @@ struct Skin : Feature
 	struct Settings
 	{
 		bool EnableSkin = true;
+		/** @brief Compatibility-only filename discovery. Disabled because GetTexture returns placeholders for missing resources. */
+		bool EnableLegacyExtraTextureDiscovery = false;
 		float ExtraSkinWetness = 0.0f;
 		float WetFadeTime = 10.0f;
 		float StartSweat = 0.75f;
@@ -110,6 +112,8 @@ struct Skin : Feature
 	struct alignas(16) PerGeometryData
 	{
 		float4 skinPerGeometry;
+		/** @brief x = HasRfaos, y = HasWetness. Explicit flags avoid inferring state from fallback texture dimensions. */
+		float4 materialFlags;
 		SkinData profile;
 	};
 
@@ -166,6 +170,13 @@ struct Skin : Feature
 	/** @brief Per-NIF / Per-BaseID JSON override store (Data\Shaders\Skin\Overrides). */
 	struct OverrideStore
 	{
+		enum class Domain
+		{
+			Surface,
+			Appearance,
+			Local
+		};
+
 		/** @brief A resolved override entry in the effective (merged) view. */
 		struct Entry
 		{
@@ -178,13 +189,54 @@ struct Skin : Feature
 		struct Selector
 		{
 			std::string nif;
+			std::string nifGlob;
 			std::string shape;
+			std::string shapeGlob;
 			std::string baseId;
+			std::string referenceId;
 			std::string race;
 			std::string normal;
+			std::string normalPrefix;
+			std::string normalGlob;
 			std::string diffuse;
+			std::string diffusePrefix;
+			std::string diffuseGlob;
+			std::string armor;
+			std::string armorAddon;
+			std::string slot;
+			std::string sex;
+			std::string shaderFeature;
+			std::string tag;
 
 			uint32_t Specificity() const;
+			bool HasActorSelector() const;
+			bool HasSurfaceSelector() const;
+		};
+
+		/** @brief One partial node in a typed, single-parent material-instance hierarchy. */
+		struct MaterialInstance
+		{
+			std::string id;
+			std::string parent;
+			std::string source;
+			bool isUser = false;
+			Domain domain = Domain::Surface;
+			json parameters = json::object();
+			TextureMaterial textures;
+			bool valid = true;
+		};
+
+		/** @brief Chooses one winner chain in exactly one composition domain. */
+		struct Binding
+		{
+			std::string id;
+			std::string source;
+			std::string use;
+			bool isUser = false;
+			Domain domain = Domain::Surface;
+			int32_t priority = 0;
+			uint32_t sourceOrder = 0;
+			Selector match;
 		};
 
 		/** @brief A unified rule may independently select a profile payload and/or texture material payload. */
@@ -216,6 +268,15 @@ struct Skin : Feature
 		std::unordered_map<std::string, TextureMaterial> materials;
 		/** @brief Deterministically sorted unified rules; later matching rules have higher precedence. */
 		std::vector<Rule> rules;
+		/** @brief Optional complete root material. advanced-skin:default falls back to settings.DefaultProfile. */
+		std::unordered_map<std::string, Entry> baseMaterials;
+		std::unordered_map<std::string, MaterialInstance> surfaceInstances;
+		std::unordered_map<std::string, MaterialInstance> appearanceInstances;
+		std::unordered_map<std::string, MaterialInstance> localInstances;
+		/** @brief tag -> recursive classifier expression (all/any/not plus selector leaves). */
+		std::unordered_map<std::string, json> classifiers;
+		/** @brief Deterministically sorted; the last matching binding in each domain is its winner. */
+		std::vector<Binding> bindings;
 		/** @brief Last scanned override file set: file path -> last write time. */
 		std::unordered_map<std::string, std::filesystem::file_time_type> fileTimes;
 		/** @brief Bumped whenever the override set changes; invalidates per-geometry caches. */
@@ -232,7 +293,29 @@ struct Skin : Feature
 		/** @brief Writes the user override file to disk. */
 		void SaveUserOverrides();
 		/** @brief True when no overrides of either kind are loaded. */
-		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty() && rules.empty(); }
+		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty() && rules.empty() && bindings.empty(); }
+	};
+
+	/** @brief Immutable facts used by classifiers and all three binding domains for one draw geometry. */
+	struct GeometryContext
+	{
+		std::string nif;
+		std::string legacyNif;
+		std::string shape;
+		std::string baseId;
+		std::string referenceId;
+		std::string race;
+		std::string normal;
+		std::string diffuse;
+		std::string armor;
+		std::string armorFormId;
+		std::string armorAddon;
+		std::string armorAddonFormId;
+		std::string slot;
+		std::string sex;
+		std::string shaderFeature;
+		std::unordered_set<std::string> tags;
+		uint64_t fingerprint = 0;
 	};
 
 	/** @brief Per-geometry override resolution cache, keyed by geometry pointer. */
@@ -240,7 +323,11 @@ struct Skin : Feature
 	{
 		SkinData merged{};
 		ExtraTextures textures{};
+		float4 materialFlags = { 0.0f, 0.0f, 0.0f, 0.0f };
 		bool initialized = false;
+		GeometryContext context{};
+		uint64_t contextIdentity = 0;
+		uint64_t contextFingerprint = 0;
 		std::string nifKey;
 		std::string legacyNifKey;
 		std::string shapeKey;
@@ -274,6 +361,12 @@ struct Skin : Feature
 	SkinData MakeProfileData(const SkinProfile& a_profile) const;
 	/** @brief Merges a partial JSON object onto a CPU-side profile. */
 	SkinProfile ApplyProfileOverride(const SkinProfile& a_base, const json& a_override) const;
+	GeometryContext BuildGeometryContext(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material) const;
+	bool MatchSelector(const OverrideStore::Selector& a_selector, const GeometryContext& a_context) const;
+	bool MatchClassifier(const json& a_expression, const GeometryContext& a_context, uint32_t a_depth = 0) const;
+	const OverrideStore::MaterialInstance* FindInstance(OverrideStore::Domain a_domain, const std::string& a_id) const;
+	void ApplyInstanceChain(OverrideStore::Domain a_domain, const std::string& a_leaf, SkinProfile& a_profile,
+		std::string& a_rfaosPath, std::string& a_wetnessPath) const;
 	/** @brief Records the source NIF of every geometry loaded by a BSStream. */
 	void RecordNifOrigins(RE::BSStream* a_stream, const char* a_path);
 	/** @brief Resolves the actual source NIF captured during stream loading, if known. */
