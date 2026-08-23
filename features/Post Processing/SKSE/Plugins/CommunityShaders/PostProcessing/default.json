@@ -101,7 +101,7 @@
             "PostBlurSmoothing": 0.0,
             "TransitionSpeed": 0.5,
             "consoleSelection": true,
-            "targetFocus": true,
+            "targetFocus": false,
             "targetFocusFocalLength": 50.0
         }
     },

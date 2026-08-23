@@ -480,15 +480,40 @@ bool DoF::GetInDialogue()
 
 float DoF::GetDistanceToReference(RE::TESObjectREFR* a_ref)
 {
-	RE::NiPoint3 cameraPosition = GetCameraPos();
+	auto* camera = RE::Main::WorldRootCamera();
+	RE::NiPoint3 cameraPosition = camera ? camera->world.translate : GetCameraPos();
+	return cameraPosition.GetDistance(GetReferenceFocusPosition(a_ref));
+}
+
+RE::NiPoint3 DoF::GetReferenceFocusPosition(RE::TESObjectREFR* a_ref)
+{
 	RE::NiPoint3 targetPosition = a_ref->GetPosition();
-	if (a_ref->GetFormType() == RE::FormType::ActorCharacter && !a_ref->IsPlayer()) {
+	if (a_ref->GetFormType() == RE::FormType::ActorCharacter) {
 		auto head = a_ref->GetNodeByName("NPC Head [Head]");
-		if (head) {
+		if (head)
 			targetPosition = head->world.translate;
-		}
 	}
-	return cameraPosition.GetDistance(targetPosition);
+	return targetPosition;
+}
+
+bool DoF::GetReferenceFocusCoord(RE::TESObjectREFR* a_ref, float2& a_focusCoord)
+{
+	auto* camera = RE::Main::WorldRootCamera();
+	if (!camera)
+		return false;
+
+	float screenX = 0.0f;
+	float screenY = 0.0f;
+	float screenZ = 0.0f;
+	if (!camera->WorldPtToScreenPt3(GetReferenceFocusPosition(a_ref), screenX, screenY, screenZ, 1e-5f) ||
+		!std::isfinite(screenX) || !std::isfinite(screenY) || screenZ <= 0.0f ||
+		screenX < 0.0f || screenX > 1.0f || screenY < 0.0f || screenY > 1.0f) {
+		return false;
+	}
+
+	// WorldPtToScreenPt3 uses a bottom-left origin; texture UVs use a top-left origin.
+	a_focusCoord = float2(screenX, 1.0f - screenY);
+	return true;
 }
 
 void DoF::Draw(TextureInfo& inout_tex)
@@ -506,6 +531,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 	float focusLen = settings.FocalLength;
 	float nearBlur = settings.NearPlaneMaxBlur;
 	float manualFocus = settings.ManualFocusPlane / 1000.0f;
+	float2 focusCoord = settings.FocusCoord;
 	debugFocusPlane = manualFocus;
 	bool autoFocus = settings.AutoFocus;
 
@@ -513,7 +539,6 @@ void DoF::Draw(TextureInfo& inout_tex)
 		focusLen = 1.0f;
 		nearBlur = 0.0f;
 		float targetFocusDistanceGame = 0;
-		auto targetFocusEnabled = false;
 		autoFocus = false;
 
 		RE::TESObjectREFR* target = nullptr;
@@ -522,14 +547,12 @@ void DoF::Draw(TextureInfo& inout_tex)
 			if (consoleRef && !consoleRef->IsDisabled() && !consoleRef->IsDeleted() && consoleRef->Is3DLoaded()) {
 				currentRef = consoleRef->formID;
 				target = consoleRef.get();
-				targetFocusEnabled = true;
 			} else {
 				currentRef = 0;
 			}
 
 		if (GetTargetLockEnabled()) {
 			target = g_TDM->GetCurrentTarget().get().get();
-			targetFocusEnabled = true;
 		}
 
 		if (GetInDialogue()) {
@@ -538,17 +561,20 @@ void DoF::Draw(TextureInfo& inout_tex)
 			} else {
 				target = RE::MenuTopicManager::GetSingleton()->lastSpeaker.get().get();
 			}
-			targetFocusEnabled = true;
 		}
-		if (target)
-			targetFocusDistanceGame = GetDistanceToReference(target);
-		debugDistance = targetFocusDistanceGame;
-		if (targetFocusEnabled) {
-			nearBlur = settings.NearPlaneMaxBlur;
-			focusLen = settings.targetFocusFocalLength;
-			manualFocus = Util::Units::GameUnitsToMeters(targetFocusDistanceGame) * 0.001f;  // in KM
-		} else {
+		if (!target)
 			return;
+
+		targetFocusDistanceGame = GetDistanceToReference(target);
+		debugDistance = targetFocusDistanceGame;
+		nearBlur = settings.NearPlaneMaxBlur;
+		focusLen = settings.targetFocusFocalLength;
+		if (GetReferenceFocusCoord(target, focusCoord)) {
+			// Sample the visible surface at the projected head/object position. This matches the
+			// view-space depth convention used by the CoC pass and avoids focusing behind a face.
+			autoFocus = true;
+		} else {
+			manualFocus = Util::Units::GameUnitsToMeters(targetFocusDistanceGame) * 0.001f;  // in KM
 		}
 	}
 	debugFocusPlane = manualFocus;
@@ -596,7 +622,7 @@ void DoF::Draw(TextureInfo& inout_tex)
 
 	DoFCB dofData = {
 		.TransitionSpeed = settings.TransitionSpeed,
-		.FocusCoord = settings.FocusCoord,
+		.FocusCoord = focusCoord,
 		.ManualFocusPlane = manualFocus,
 		.FocalLength = focusLen,
 		.FNumber = settings.FNumber,

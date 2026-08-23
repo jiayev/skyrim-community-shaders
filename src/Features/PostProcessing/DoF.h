@@ -144,6 +144,8 @@ struct DoF : public PostProcessFeature
 	void UpdateProceduralBokehSamples(bool force = false);
 
 	RE::NiPoint3 GetCameraPos();
+	RE::NiPoint3 GetReferenceFocusPosition(RE::TESObjectREFR* a_ref);
+	bool GetReferenceFocusCoord(RE::TESObjectREFR* a_ref, float2& a_focusCoord);
 	bool GetInDialogue();
 	bool GetTargetLockEnabled();
 	float GetDistanceToReference(RE::TESObjectREFR* a_ref);
