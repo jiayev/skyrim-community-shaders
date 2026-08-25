@@ -73,13 +73,8 @@ float4 PS_Threshold(FullscreenTriangleVSOutput input) : SV_Target
 
 float4 PS_Downsample(FullscreenTriangleVSOutput input) : SV_Target
 {
-	uint2 dims;
-	TexBloomIn.GetDimensions(dims.x, dims.y);
-
-	// Output mip is half the input mip, so the output pixel size in input uv
-	// space is 2 / inputDims.
-	float2 px_size = rcp(float2(dims)) * 2.0;
-	float2 uv = input.Position.xy * px_size;
+	float2 px_size = fwidth(input.TexCoord);
+	float2 uv = input.TexCoord;
 
 #ifdef FIRST_MIP
 	float3 col = DownsampleCODFirstMip(TexBloomIn, SampColor, uv, px_size).rgb;
@@ -95,13 +90,8 @@ float4 PS_Downsample(FullscreenTriangleVSOutput input) : SV_Target
 /// happens in the blend stage (see file header).
 float4 PS_Upsample(FullscreenTriangleVSOutput input) : SV_Target
 {
-	uint2 dims;
-	TexBloomIn.GetDimensions(dims.x, dims.y);
-
-	// Output mip is double the input mip, so the output pixel size in input uv
-	// space is 0.5 / inputDims.
-	float2 px_size = rcp(float2(dims)) * .5;
-	float2 uv = input.Position.xy * px_size;
+	float2 px_size = fwidth(input.TexCoord);
+	float2 uv = input.TexCoord;
 
 	float3 col = UpsampleCOD(TexBloomIn, uv, px_size * UpsampleRadius).rgb * UpsampleMult;
 	return float4(col, 1);
@@ -109,11 +99,8 @@ float4 PS_Upsample(FullscreenTriangleVSOutput input) : SV_Target
 
 float4 PS_Composite(FullscreenTriangleVSOutput input) : SV_Target
 {
-	uint2 dims;
-	TexBloomIn.GetDimensions(dims.x, dims.y);
-
-	float2 px_size = rcp(float2(dims)) * .5;
-	float2 uv = input.Position.xy * px_size;
+	float2 px_size = fwidth(input.TexCoord);
+	float2 uv = input.TexCoord;
 
 	float3 col = TexColor[input.Position.xy].rgb + UpsampleCOD(TexBloomIn, uv, px_size * UpsampleRadius).rgb * UpsampleMult;
 

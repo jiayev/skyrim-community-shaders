@@ -167,7 +167,6 @@ struct PostProcessing : Feature
 
 	eastl::unique_ptr<Texture2D> texCopyMain = nullptr;
 	eastl::unique_ptr<Texture2D> texCopyMainCopy = nullptr;
-	eastl::unique_ptr<Texture2D> texAfterTAA = nullptr;
 
 	/// Format-conversion copy pass (fullscreen triangle PS draw).
 	winrt::com_ptr<ID3D11PixelShader> copyPS = nullptr;

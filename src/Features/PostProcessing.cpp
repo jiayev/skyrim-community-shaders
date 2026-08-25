@@ -408,20 +408,8 @@ void PostProcessing::SetupResources()
 		gameTexMainCopy.texture->GetDesc(&texMainCopyDesc);
 		texDesc = texMainDesc;
 
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+		texDesc.MipLevels = 1;
+		texDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
@@ -435,10 +423,9 @@ void PostProcessing::SetupResources()
 
 		if (texMainCopyDesc.Format != texMainDesc.Format) {
 			texDesc = texMainCopyDesc;
-			srvDesc.Format = texDesc.Format;
 			rtvDesc.Format = texDesc.Format;
-			texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			texDesc.MipLevels = 1;
+			texDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
 			texDesc.MiscFlags = 0;
 
 			texCopyMainCopy = eastl::make_unique<Texture2D>(texDesc);
@@ -446,14 +433,6 @@ void PostProcessing::SetupResources()
 		} else {
 			texCopyMainCopy = nullptr;
 		}
-
-		texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-		srvDesc.Format = texDesc.Format;
-		uavDesc.Format = texDesc.Format;
-
-		texAfterTAA = eastl::make_unique<Texture2D>(texDesc);
-		texAfterTAA->CreateSRV(srvDesc);
-		texAfterTAA->CreateUAV(uavDesc);
 	}
 
 	if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\fullscreen.hlsli", {}, "vs_5_0", "FullscreenTriangleVS")))

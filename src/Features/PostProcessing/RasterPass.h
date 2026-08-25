@@ -22,8 +22,8 @@ namespace PostProcessingRaster
 	 *   - OM: render targets + DSV, blend state, depth-stencil state
 	 *   - RS: rasterizer state, viewports, scissor rects
 	 *   - IA: primitive topology + input layout (draws use no vertex buffer)
-	 *   - VS/PS: shader objects (resources/CBs/samplers are bound and cleaned by the
-	 *     caller, matching the existing compute-pass pattern)
+	 *   - VS/HS/DS/GS/PS: shader objects
+	 *   - PS: resource slots 0-5, constant-buffer slots 0-5, sampler slot 0
 	 */
 	struct RasterPass
 	{
@@ -76,6 +76,10 @@ namespace PostProcessingRaster
 		void Draw();
 
 	private:
+		static constexpr UINT kPSSRVCount = 6;
+		static constexpr UINT kPSCBCount = 6;
+		static constexpr UINT kPSSamplerCount = 1;
+
 		ID3D11DeviceContext* context;
 
 		ID3D11RenderTargetView* savedRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
@@ -93,6 +97,12 @@ namespace PostProcessingRaster
 		D3D11_PRIMITIVE_TOPOLOGY savedTopology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 		ID3D11InputLayout* savedInputLayout = nullptr;
 		ID3D11VertexShader* savedVS = nullptr;
+		ID3D11HullShader* savedHS = nullptr;
+		ID3D11DomainShader* savedDS = nullptr;
+		ID3D11GeometryShader* savedGS = nullptr;
 		ID3D11PixelShader* savedPS = nullptr;
+		std::array<ID3D11ShaderResourceView*, kPSSRVCount> savedPSSRVs = {};
+		std::array<ID3D11Buffer*, kPSCBCount> savedPSCBs = {};
+		std::array<ID3D11SamplerState*, kPSSamplerCount> savedPSSamplers = {};
 	};
 }

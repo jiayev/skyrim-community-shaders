@@ -208,13 +208,12 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 	ID3D11SamplerState* sampler = colorSampler.get();
 	auto* vs = owner->GetFullscreenVS();
 
-	context->PSSetConstantBuffers(1, 1, &cb);
-	context->PSSetSamplers(0, 1, &sampler);
-
 	// One raster scope for the whole mip chain: state save/restore once, then
 	// per-pass target/viewport/shader/blend switches. Targets are set before
 	// binding the input SRV so a mip never sits bound as SRV and RTV at once.
 	PostProcessingRaster::RasterPass pass(context);
+	context->PSSetConstantBuffers(1, 1, &cb);
+	context->PSSetSamplers(0, 1, &sampler);
 
 	// Threshold
 	{

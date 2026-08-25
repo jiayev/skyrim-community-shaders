@@ -166,16 +166,9 @@ void Composite::Draw(TextureInfo& inout_tex)
 	}
 	if (hasExposure) {
 		srvs[4] = exposure->GetAdaptationSRV();
-
-		// Bind the auto exposure constant buffer at b1
-		ID3D11Buffer* cb = exposure->GetConstantBuffer();
-		context->PSSetConstantBuffers(1, 1, &cb);
 	}
 	if (hasLocalExposure) {
 		srvs[5] = localExposure->GetBaseLuminanceSRV();
-
-		ID3D11Buffer* cb = localExposure->GetConstantBuffer();
-		context->PSSetConstantBuffers(2, 1, &cb);
 	}
 
 	uint width = texOutput->desc.Width;
@@ -184,6 +177,14 @@ void Composite::Draw(TextureInfo& inout_tex)
 	{
 		PostProcessingRaster::RasterPass pass(context);
 
+		if (hasExposure) {
+			ID3D11Buffer* cb = exposure->GetConstantBuffer();
+			context->PSSetConstantBuffers(1, 1, &cb);
+		}
+		if (hasLocalExposure) {
+			ID3D11Buffer* cb = localExposure->GetConstantBuffer();
+			context->PSSetConstantBuffers(2, 1, &cb);
+		}
 		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		pass.SetTargets({ texOutput->rtv.get() }, (float)width, (float)height);
 		pass.SetShaders(owner->GetFullscreenVS(), shader);
@@ -192,15 +193,6 @@ void Composite::Draw(TextureInfo& inout_tex)
 		// cleanup
 		srvs.fill(nullptr);
 		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-	}
-
-	if (hasExposure) {
-		ID3D11Buffer* nullCB = nullptr;
-		context->PSSetConstantBuffers(1, 1, &nullCB);
-	}
-	if (hasLocalExposure) {
-		ID3D11Buffer* nullCB = nullptr;
-		context->PSSetConstantBuffers(2, 1, &nullCB);
 	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };

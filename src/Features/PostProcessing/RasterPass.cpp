@@ -19,7 +19,13 @@ namespace PostProcessingRaster
 		context->IAGetInputLayout(&savedInputLayout);
 
 		context->VSGetShader(&savedVS, nullptr, nullptr);
+		context->HSGetShader(&savedHS, nullptr, nullptr);
+		context->DSGetShader(&savedDS, nullptr, nullptr);
+		context->GSGetShader(&savedGS, nullptr, nullptr);
 		context->PSGetShader(&savedPS, nullptr, nullptr);
+		context->PSGetShaderResources(0, kPSSRVCount, savedPSSRVs.data());
+		context->PSGetConstantBuffers(0, kPSCBCount, savedPSCBs.data());
+		context->PSGetSamplers(0, kPSSamplerCount, savedPSSamplers.data());
 
 		// Fullscreen triangle state: no vertex buffer, no input layout, no depth, no
 		// scissor (default rasterizer state), blending off until a pass opts in.
@@ -28,10 +34,16 @@ namespace PostProcessingRaster
 		context->RSSetState(nullptr);
 		context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFFu);
 		context->OMSetDepthStencilState(nullptr, 0);
+		context->HSSetShader(nullptr, nullptr, 0);
+		context->DSSetShader(nullptr, nullptr, 0);
+		context->GSSetShader(nullptr, nullptr, 0);
 	}
 
 	RasterPass::~RasterPass()
 	{
+		std::array<ID3D11ShaderResourceView*, kPSSRVCount> nullSRVs = {};
+		context->PSSetShaderResources(0, kPSSRVCount, nullSRVs.data());
+
 		context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, savedRTVs, savedDSV);
 		context->OMSetBlendState(savedBlendState, savedBlendFactor, savedSampleMask);
 		context->OMSetDepthStencilState(savedDepthStencilState, savedStencilRef);
@@ -44,7 +56,13 @@ namespace PostProcessingRaster
 		context->IASetInputLayout(savedInputLayout);
 
 		context->VSSetShader(savedVS, nullptr, 0);
+		context->HSSetShader(savedHS, nullptr, 0);
+		context->DSSetShader(savedDS, nullptr, 0);
+		context->GSSetShader(savedGS, nullptr, 0);
 		context->PSSetShader(savedPS, nullptr, 0);
+		context->PSSetShaderResources(0, kPSSRVCount, savedPSSRVs.data());
+		context->PSSetConstantBuffers(0, kPSCBCount, savedPSCBs.data());
+		context->PSSetSamplers(0, kPSSamplerCount, savedPSSamplers.data());
 
 		for (auto* rtv : savedRTVs)
 			if (rtv)
@@ -61,8 +79,23 @@ namespace PostProcessingRaster
 			savedInputLayout->Release();
 		if (savedVS)
 			savedVS->Release();
+		if (savedHS)
+			savedHS->Release();
+		if (savedDS)
+			savedDS->Release();
+		if (savedGS)
+			savedGS->Release();
 		if (savedPS)
 			savedPS->Release();
+		for (auto* srv : savedPSSRVs)
+			if (srv)
+				srv->Release();
+		for (auto* cb : savedPSCBs)
+			if (cb)
+				cb->Release();
+		for (auto* sampler : savedPSSamplers)
+			if (sampler)
+				sampler->Release();
 	}
 
 	void RasterPass::SetTargets(std::initializer_list<ID3D11RenderTargetView*> a_rtvs, float a_width, float a_height)
