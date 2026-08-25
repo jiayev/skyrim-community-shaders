@@ -7,7 +7,7 @@ cbuffer ShadowUpdateCB : register(b0)
 	float2 LightDeltaZ : packoffset(c0.z);  // per lightUVDir, normalised, [upper, lower] penumbra, should be negative
 	uint StartPxCoord : packoffset(c1.x);
 	float2 PxSize : packoffset(c1.y);
-	float pad : packoffset(c1.w);
+	float BlendWeight : packoffset(c1.w);
 	float2 PosRange : packoffset(c2.x);
 	float2 ZRange : packoffset(c2.z);
 }
@@ -62,6 +62,13 @@ float2 GetInterpolatedHeightRW(float2 pxCoord, bool isVertical)
 #define NTHREADS 128
 groupshared float2 g_shadowHeight[NTHREADS];
 
+// Offsets can span more than one dimension on small heightmaps, so wrap by modulo rather than a single step.
+uint GetWrappedCoord(int coord, uint dimension)
+{
+	uint magnitude = uint(abs(coord)) % dimension;
+	return coord < 0 ? (dimension - magnitude) % dimension : magnitude;
+}
+
 [numthreads(NTHREADS, 1, 1)] void main(const uint gtid : SV_GroupThreadID, const uint gid : SV_GroupID) {
 	uint2 dims;
 	TexHeight.GetDimensions(dims.x, dims.y);
@@ -79,9 +86,16 @@ groupshared float2 g_shadowHeight[NTHREADS];
 	float2 threadUV = rawThreadUV - floor(rawThreadUV);  // wraparound
 	float2 threadPxCoord = threadUV * dims;
 
+	// Derive UAV coordinates in pixel space so adjacent groups cannot race at UV boundaries.
+	int majorStep = (isVertical ? LightPxDir.y : LightPxDir.x) > 0.0 ? 1 : -1;
+	uint majorPxCoord = uint(int(StartPxCoord) + int(gtid) * majorStep);
+	float minorOffset = 0.5 + gtid * (isVertical ? LightPxDir.x : LightPxDir.y);
+	uint minorPxCoord = GetWrappedCoord(int(gid) + int(floor(minorOffset)), isVertical ? dims.x : dims.y);
+	uint2 outputPxCoord = isVertical ? uint2(minorPxCoord, majorPxCoord) : uint2(majorPxCoord, minorPxCoord);
+
 	float2 pastHeights = 0.0;
 	if (isValid) {
-		pastHeights = RWTexShadowHeights[uint2(threadPxCoord)];
+		pastHeights = RWTexShadowHeights[outputPxCoord];
 
 		// bifilter
 		float2 heights = GetInterpolatedHeight(threadPxCoord, isVertical).xx;
@@ -100,19 +114,26 @@ groupshared float2 g_shadowHeight[NTHREADS];
 	// simple parallel scan
 	[unroll] for (uint offset = 1; offset < NTHREADS; offset <<= 1)
 	{
+		bool combineHeights = false;
+		float2 currentHeights = 0.0;
+		float2 sampleHeights = 0.0;
 		if (isValid && gtid >= offset) {
 			if (all(floor(rawThreadUV - lightUVDir * offset) == floor(rawThreadUV)))  // no wraparound happened
 			{
-				float2 currentHeights = g_shadowHeight[gtid];
-				float2 sampleHeights = g_shadowHeight[gtid - offset] + LightDeltaZ * offset;
-				g_shadowHeight[gtid] = currentHeights.x > sampleHeights.x ? currentHeights : sampleHeights;
+				combineHeights = true;
+				currentHeights = g_shadowHeight[gtid];
+				sampleHeights = g_shadowHeight[gtid - offset] + LightDeltaZ * offset;
 			}
+		}
+		GroupMemoryBarrierWithGroupSync();
+		if (combineHeights) {
+			g_shadowHeight[gtid] = currentHeights.x > sampleHeights.x ? currentHeights : sampleHeights;
 		}
 		GroupMemoryBarrierWithGroupSync();
 	}
 
 	// save
 	if (isValid) {
-		RWTexShadowHeights[uint2(threadPxCoord)] = lerp(pastHeights, g_shadowHeight[gtid], 0.5f);
+		RWTexShadowHeights[outputPxCoord] = lerp(pastHeights, g_shadowHeight[gtid], BlendWeight);
 	}
 }
