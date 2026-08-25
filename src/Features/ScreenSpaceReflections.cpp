@@ -5,6 +5,7 @@
 #include "I18n/I18n.h"
 #include "IBL.h"
 #include "NRD.h"
+#include "ShaderCache.h"
 #include "Skylighting.h"
 #include "State.h"
 #include "Upscaling.h"
@@ -15,6 +16,7 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ScreenSpaceReflections::Settings,
 	Enabled,
+	ReplaceWaterSSR,
 	HalfRes,
 	SpecularMult,
 	SpecMaxSteps,
@@ -57,6 +59,13 @@ void ScreenSpaceReflections::DrawSettings()
 		globals::deferred->ClearShaderCache();
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("enabled_tooltip"), "Enable screen-space reflections. When disabled, the deferred composite falls back to cubemap-only reflections."));
+	}
+	{
+		auto waterSSRGuard = Util::DisableGuard(!settings.Enabled);
+		ImGui::Checkbox(T(TKEY("replace_water_ssr"), "Use Hi-Z SSR for Water"), &settings.ReplaceWaterSSR);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T(TKEY("replace_water_ssr_tooltip"), "Write the final water surface normal to a dedicated target, trace a sharp Hi-Z reflection in compute, then composite it after water refraction with Fresnel. The original water SSR, blur, and WaterBlend chain is skipped."));
+		}
 	}
 
 	{
@@ -145,6 +154,8 @@ void ScreenSpaceReflections::DrawSettings()
 			BUFFER_VIEWER_NODE(texNRDSpecInput, debugRescale)
 		if (texNRDSpecOutput)
 			BUFFER_VIEWER_NODE(texNRDSpecOutput, debugRescale)
+		if (texWaterNormal)
+			BUFFER_VIEWER_NODE(texWaterNormal, debugRescale)
 		if (auto validation = settings.Reblur.EnableValidation ? nrdReblurSpecular.GetValidationSRV() : nullptr) {
 			if (ImGui::TreeNode("NRD Validation")) {
 				ImGui::Image(validation, { nrdReblurSpecular.GetWidth() * debugRescale, nrdReblurSpecular.GetHeight() * debugRescale });
@@ -274,6 +285,52 @@ void ScreenSpaceReflections::SetupResources()
 			nrdReblurSpecular.Shutdown();
 			nrdReblurSpecular.Init(fullW, fullH, nrd::Denoiser::REBLUR_SPECULAR, 0);
 		}
+
+		// Full-resolution water normal + coverage. Water.hlsl writes the final
+		// perturbed world-space normal to MRT1 only for non-additive surface passes.
+		{
+			D3D11_TEXTURE2D_DESC normalDesc{
+				.Width = fullW,
+				.Height = fullH,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+				.SampleDesc = { 1, 0 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+			};
+			D3D11_SHADER_RESOURCE_VIEW_DESC normalSrvDesc{
+				.Format = normalDesc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 },
+			};
+			D3D11_RENDER_TARGET_VIEW_DESC normalRtvDesc{
+				.Format = normalDesc.Format,
+				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 },
+			};
+
+			texWaterNormal = eastl::make_unique<Texture2D>(normalDesc, "SSR::WaterNormal");
+			texWaterNormal->CreateSRV(normalSrvDesc);
+			texWaterNormal->CreateRTV(normalRtvDesc);
+			waterNormalClearFrame = static_cast<std::uint32_t>(-1);
+		}
+
+		// Snapshot of kMAIN after water has sampled refraction and finished shading.
+		// The compute pass reads this SRV while writing kMAIN through its UAV.
+		{
+			D3D11_TEXTURE2D_DESC copyDesc{};
+			mainTex.texture->GetDesc(&copyDesc);
+			copyDesc.Usage = D3D11_USAGE_DEFAULT;
+			copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			copyDesc.CPUAccessFlags = 0;
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC copySrvDesc{};
+			mainTex.SRV->GetDesc(&copySrvDesc);
+
+			texWaterColorCopy = eastl::make_unique<Texture2D>(copyDesc, "SSR::WaterColorCopy");
+			texWaterColorCopy->CreateSRV(copySrvDesc);
+		}
 	}
 
 	logger::debug("ScreenSpaceReflections: creating samplers");
@@ -305,6 +362,7 @@ void ScreenSpaceReflections::ClearShaderCache()
 	prefilterHiZMipsCompute = nullptr;
 	depthDownsampleCompute = nullptr;
 	specularGICompute = nullptr;
+	waterSSRCompute = nullptr;
 	CompileComputeShaders();
 }
 
@@ -335,6 +393,11 @@ void ScreenSpaceReflections::CompileComputeShaders()
 		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "specularGI.cs.hlsl";
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0")))
 			specularGICompute.attach(rawPtr);
+	}
+	{
+		auto path = std::filesystem::path("Data\\Shaders\\ScreenSpaceReflections") / "waterSSR.cs.hlsl";
+		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), {}, "cs_5_0")))
+			waterSSRCompute.attach(rawPtr);
 	}
 
 	recompileFlag = false;
@@ -379,6 +442,8 @@ void ScreenSpaceReflections::DrawSSR()
 
 	if (recompileFlag)
 		ClearShaderCache();
+
+	UpdateWaterBlendOverride();
 
 	if (!(settings.Enabled && ShadersOK() && texHiZDepth && texNRDSpecInput))
 		return;
@@ -576,6 +641,131 @@ void ScreenSpaceReflections::DrawSSR()
 		globals::state->EndPerfEvent();
 }
 
+void ScreenSpaceReflections::BindWaterNormalTarget(bool a_isCompute)
+{
+	if (a_isCompute || !IsWaterSSRReplacementActive() || !texWaterNormal || !texWaterNormal->rtv)
+		return;
+
+	auto* state = globals::state;
+	if (!state->currentShader || state->currentShader->shaderType.get() != RE::BSShader::Type::Water || state->activeReflections)
+		return;
+
+	// Water techniques 0..7 are the base pass followed by additive specular-light
+	// permutations. Only technique 0, LOD (9), and Simple (11) own a complete
+	// surface normal and therefore declare SV_Target1 in Water.hlsl.
+	const std::uint32_t technique = (state->currentPixelDescriptor >> 11) & 0xFu;
+	if (technique != 0 &&
+		technique != static_cast<std::uint32_t>(SIE::ShaderCache::WaterShaderTechniques::Lod) &&
+		technique != static_cast<std::uint32_t>(SIE::ShaderCache::WaterShaderTechniques::Simple))
+		return;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	if (!context || !renderer)
+		return;
+
+	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> currentRTVs{};
+	ID3D11DepthStencilView* currentDSV = nullptr;
+	context->OMGetRenderTargets(static_cast<UINT>(currentRTVs.size()), currentRTVs.data(), &currentDSV);
+
+	const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	bool canAppend = currentRTVs[0] == main.RTV;
+	for (std::size_t i = 1; i < currentRTVs.size(); ++i)
+		canAppend &= currentRTVs[i] == nullptr;
+
+	if (canAppend) {
+		if (waterNormalClearFrame != state->frameCount) {
+			constexpr float clear[4] = { 0.f, 0.f, 0.f, 0.f };
+			context->ClearRenderTargetView(texWaterNormal->rtv.get(), clear);
+			waterNormalClearFrame = state->frameCount;
+		}
+
+		ID3D11RenderTargetView* waterRTVs[2] = { currentRTVs[0], texWaterNormal->rtv.get() };
+		context->OMSetRenderTargets(2, waterRTVs, currentDSV);
+	}
+
+	for (auto* rtv : currentRTVs) {
+		if (rtv)
+			rtv->Release();
+	}
+	if (currentDSV)
+		currentDSV->Release();
+}
+
+void ScreenSpaceReflections::DrawWaterSSR()
+{
+	if (!IsWaterSSRReplacementActive() || !outputReady ||
+		!texWaterNormal || !texWaterColorCopy || !waterSSRCompute)
+		return;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	if (!context || !renderer)
+		return;
+
+	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& waterDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	if (!main.texture || !main.UAV || !waterDepth.depthSRV)
+		return;
+
+	ZoneScoped;
+	TracyD3D11Zone(globals::state->tracyCtx, "SSR - Water");
+	if (globals::state->frameAnnotations)
+		globals::state->BeginPerfEvent("SSR - Water");
+
+	// The post-water entry may still run on a frame that emitted no water draw.
+	// Clear here as a fallback so coverage from the previous frame cannot leak.
+	if (waterNormalClearFrame != globals::state->frameCount) {
+		constexpr float clear[4] = { 0.f, 0.f, 0.f, 0.f };
+		context->ClearRenderTargetView(texWaterNormal->rtv.get(), clear);
+		waterNormalClearFrame = globals::state->frameCount;
+	}
+
+	// The vanilla reflection chain is entered with all render targets and the
+	// depth-stencil unbound. Keep that contract while snapshotting kMAIN, then
+	// composite directly back into its UAV.
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	context->CopyResource(texWaterColorCopy->resource.get(), main.texture);
+
+	std::array<ID3D11ShaderResourceView*, 4> srvs{
+		waterDepth.depthSRV,
+		texWaterNormal->srv.get(),
+		texWaterColorCopy->srv.get(),
+		texHiZDepth->srv.get(),
+	};
+	ID3D11UnorderedAccessView* uav = main.UAV;
+	std::array<ID3D11SamplerState*, 2> samplers{ pointClampSampler.get(), linearClampSampler.get() };
+	ID3D11Buffer* cb = ssrCB->CB();
+	ID3D11Buffer* sharedData = globals::state->sharedDataCB->CB();
+
+	context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetSamplers(0, static_cast<UINT>(samplers.size()), samplers.data());
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetConstantBuffers(5, 1, &sharedData);
+	context->CSSetShader(waterSSRCompute.get(), nullptr, 0);
+
+	float2 size{ static_cast<float>(globals::game::graphicsState->screenWidth), static_cast<float>(globals::game::graphicsState->screenHeight) };
+	size = Util::ConvertToDynamic(size);
+	globals::profiler->BeginPass("ScreenSpaceReflections::WaterSSR");
+	context->Dispatch((static_cast<std::uint32_t>(size.x) + 7u) >> 3, (static_cast<std::uint32_t>(size.y) + 7u) >> 3, 1);
+	globals::profiler->EndPass();
+
+	std::array<ID3D11ShaderResourceView*, 4> nullSRVs{};
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	std::array<ID3D11SamplerState*, 2> nullSamplers{};
+	ID3D11Buffer* nullCB = nullptr;
+	context->CSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetSamplers(0, static_cast<UINT>(nullSamplers.size()), nullSamplers.data());
+	context->CSSetConstantBuffers(1, 1, &nullCB);
+	context->CSSetConstantBuffers(5, 1, &nullCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	if (globals::state->frameAnnotations)
+		globals::state->EndPerfEvent();
+}
+
 ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
 {
 	if (!outputReady || !loaded || !settings.Enabled)
@@ -585,12 +775,66 @@ ID3D11ShaderResourceView* ScreenSpaceReflections::GetOutputTexture()
 	return texNRDSpecInput->srv.get();
 }
 
+ID3D11ShaderResourceView* ScreenSpaceReflections::GetHiZDepthTexture()
+{
+	if (!loaded || !settings.Enabled || recompileFlag || !ShadersOK() || !texHiZDepth)
+		return nullptr;
+	return texHiZDepth->srv.get();
+}
+
+bool ScreenSpaceReflections::IsWaterSSRReplacementActive()
+{
+	return settings.ReplaceWaterSSR && GetHiZDepthTexture() != nullptr &&
+	       texWaterNormal && texWaterNormal->rtv && texWaterNormal->srv &&
+	       texWaterColorCopy && texWaterColorCopy->srv && waterSSRCompute;
+}
+
+void ScreenSpaceReflections::UpdateWaterBlendOverride()
+{
+	// Skyrim AE uses this flag to select TAA water blending and skip the explicit
+	// ISWaterBlend pass. Skyrim SE 1.5.97 does not read the field, so its pass is
+	// skipped by WaterBlendHistory::BSImagespaceShader_Render instead.
+	if (!REL::Module::IsAE())
+		return;
+
+	auto* imageSpaceManager = globals::game::imageSpaceManager;
+	auto* taa = imageSpaceManager ? imageSpaceManager->GetRuntimeData().BSImagespaceShaderISTemporalAA : nullptr;
+	auto* taaWaterBlendingEnabled = taa ? reinterpret_cast<bool*>(reinterpret_cast<std::uintptr_t>(taa) + 0x38) : nullptr;
+
+	if (!IsWaterSSRReplacementActive()) {
+		if (!waterBlendOverrideApplied || !taaWaterBlendingEnabled)
+			return;
+
+		if (taa == waterBlendOverrideTarget)
+			*taaWaterBlendingEnabled = originalTAAWaterBlendingState;
+
+		waterBlendOverrideTarget = nullptr;
+		waterBlendOverrideApplied = false;
+		return;
+	}
+
+	if (!taa)
+		return;
+
+	if (!waterBlendOverrideApplied || taa != waterBlendOverrideTarget) {
+		waterBlendOverrideTarget = taa;
+		originalTAAWaterBlendingState = *taaWaterBlendingEnabled;
+		waterBlendOverrideApplied = true;
+	}
+
+	*taaWaterBlendingEnabled = true;
+}
+
 ScreenSpaceReflections::SharedData ScreenSpaceReflections::GetCommonBufferData()
 {
 	SharedData data;
 	data.Enabled = (loaded && settings.Enabled && !recompileFlag && ShadersOK() && texHiZDepth && texNRDSpecInput) ? 1u : 0u;
 	data.SpecularMult = settings.SpecularMult;
 	data.SpecCubemapMult = settings.UseDynamicCubemapsAsFallback && globals::features::dynamicCubemaps.loaded ? settings.SpecCubemapMult : 0.0f;
-	data.pad0 = 0;
+	data.UseHiZForWater = IsWaterSSRReplacementActive() ? 1u : 0u;
+	data.MaxSteps = settings.SpecMaxSteps;
+	data.MaxMips = std::min(settings.SpecMaxSteps, numHiZMips);
+	data.Thickness = settings.SpecThickness;
+	data.NormalBias = settings.NormalBias;
 	return data;
 }

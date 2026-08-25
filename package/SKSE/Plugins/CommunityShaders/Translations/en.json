@@ -1173,6 +1173,8 @@
     "feature.screen_space_reflections.nrd_hit_distance_parameters": "NRD Hit Distance Parameters",
     "feature.screen_space_reflections.occlusion_strength": "Occlusion Strength",
     "feature.screen_space_reflections.reblur_denoiser": "REBLUR Denoiser",
+    "feature.screen_space_reflections.replace_water_ssr": "Use Hi-Z SSR for Water",
+    "feature.screen_space_reflections.replace_water_ssr_tooltip": "Write the final water surface normal to a dedicated target, trace a sharp Hi-Z reflection in compute, then composite it after water refraction with Fresnel. The original water SSR, blur, and WaterBlend chain is skipped.",
     "feature.screen_space_reflections.show_advanced_options": "Show Advanced Options",
     "feature.screen_space_reflections.specular_cubemap_multiplier": "Specular Cubemap Multiplier",
     "feature.screen_space_reflections.specular_multiplier": "Specular Multiplier",
