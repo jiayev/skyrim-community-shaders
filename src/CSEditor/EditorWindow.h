@@ -386,6 +386,10 @@ private:
 	float timeScaleSlider = kVanillaTimeScale;
 	bool timeRestoredForMenu = false;
 	bool wasPausedBeforeMenu = false;
+	// Each refresh recomputes the whole terrain shadow map, so scrubbing is throttled well below frame rate.
+	static constexpr double kGameHourScrubRefreshIntervalSeconds = 0.1;
+	double lastGameHourScrubRefreshTime = 0.0;
+	bool gameHourScrubRefreshIssued = false;
 
 	// Sorting state
 	enum class SortColumn

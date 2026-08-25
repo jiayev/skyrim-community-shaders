@@ -136,6 +136,12 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			break;
 		}
+	case SKSE::MessagingInterface::kPostLoadGame:
+		{
+			if (errors.empty())
+				Feature::ForEachLoadedFeature("GameLoaded", [](Feature* feature) { feature->GameLoaded(); });
+			break;
+		}
 	}
 }
 
