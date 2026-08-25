@@ -32,7 +32,6 @@ struct Skin : Feature
 		return t == RE::BSShader::Type::Lighting;
 	};
 
-
 	virtual void RestoreDefaultSettings() override;
 	/** @brief Draws the ImGui settings panel for Advanced Skin configuration. */
 	virtual void DrawSettings() override;
@@ -81,7 +80,6 @@ struct Skin : Feature
 		float FuzzStrength = 1.0f;
 		float FuzzRoughness = 0.35f;
 		float FuzzF0 = 0.045f;
-		bool UseDynamicWetness = false;
 	} settings;
 
 	struct alignas(16) SkinData
@@ -105,13 +103,6 @@ struct Skin : Feature
 	float playerStamina = 0.0f;
 	float playerStaminaMax = 0.0f;
 
-	struct WaterHeightCacheEntry
-	{
-		uint frameCount = 0;
-		float waterHeight = 0.0f;
-	};
-	std::unordered_map<uint32_t, WaterHeightCacheEntry> waterHeightCache;  // keyed by actor formID
-
 	struct ExtraTextures
 	{
 		RE::NiSourceTexturePtr rfaosTexture;
@@ -122,9 +113,15 @@ struct Skin : Feature
 		bool hasWetnessTexture = false;
 	};
 
+	struct ActorWetnessCacheEntry
+	{
+		float4 wetness = { 0.0f, 0.0f, 0.0f, 0.0f };
+		uint frameCount = 0;
+	};
+
 	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
 	std::unordered_map<uint32_t, ExtraTextures> skinExtraTextures;
-	std::unordered_map<uint32_t, float4> actorWetnessMap;  // keyed by actor formID
+	std::unordered_map<uint32_t, ActorWetnessCacheEntry> actorWetnessMap;  // keyed by actor formID
 
 	/** @brief Packs current skin settings into a GPU constant buffer data structure. */
 	SkinData GetCommonBufferData();
@@ -176,6 +173,4 @@ struct Skin : Feature
 			return;
 		}
 	};
-
-	bool isDynamicWetnessAvailable = false;
 };

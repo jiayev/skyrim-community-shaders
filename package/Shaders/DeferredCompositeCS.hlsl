@@ -214,7 +214,7 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 		float3 R = reflect(-V, normalWS);
 
 		float roughness = 1.0 - glossiness;
-		float level = roughness * 7.0;
+		float level = roughness * 8.0;
 
 		sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normalWS, V, roughness);
 
