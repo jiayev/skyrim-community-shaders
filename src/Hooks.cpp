@@ -491,6 +491,10 @@ struct BSInputDeviceManager_PollInputDevices
 		auto menu = globals::menu;
 
 		if (a_events) {
+			if (auto* inputManager = RE::BSInputDeviceManager::GetSingleton()) {
+				if (const auto* mouse = inputManager->GetMouse())
+					menu->RecordDirectInputWheelDelta(mouse->GetRuntimeData().dInputNextState.z);
+			}
 			menu->ProcessInputEvents(a_events);
 
 			if (*a_events) {
@@ -777,8 +781,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::CubeMapRenderTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			a_properties->height = 256;
+			a_properties->width = 256;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -788,8 +792,8 @@ namespace Hooks
 	{
 		static void thunk(RE::BSGraphics::Renderer* This, uint32_t a_target, RE::BSGraphics::DepthStencilTargetProperties* a_properties)
 		{
-			a_properties->height = 128;
-			a_properties->width = 128;
+			a_properties->height = 256;
+			a_properties->width = 256;
 			func(This, a_target, a_properties);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
