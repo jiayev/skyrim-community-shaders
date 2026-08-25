@@ -8,6 +8,8 @@
 #include "State.h"
 #include "Util.h"
 
+#include "PostProcessing/RasterPass.h"
+
 #include "Features/Upscaling.h"
 
 #include <format>
@@ -419,22 +421,28 @@ void PostProcessing::SetupResources()
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = texDesc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+
 		texCopyMain = eastl::make_unique<Texture2D>(texDesc);
-		texCopyMain->CreateUAV(uavDesc);
+		texCopyMain->CreateRTV(rtvDesc);
 
 		if (texMainCopyDesc.Format != texMainDesc.Format) {
 			texDesc = texMainCopyDesc;
 			srvDesc.Format = texDesc.Format;
-			uavDesc.Format = texDesc.Format;
+			rtvDesc.Format = texDesc.Format;
 			texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 			texDesc.MiscFlags = 0;
 
 			texCopyMainCopy = eastl::make_unique<Texture2D>(texDesc);
-			texCopyMainCopy->CreateUAV(uavDesc);
+			texCopyMainCopy->CreateRTV(rtvDesc);
 		} else {
 			texCopyMainCopy = nullptr;
 		}
@@ -448,8 +456,10 @@ void PostProcessing::SetupResources()
 		texAfterTAA->CreateUAV(uavDesc);
 	}
 
-	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\copy.cs.hlsl", {}, "cs_5_0")))
-		copyCS.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\fullscreen.hlsli", {}, "vs_5_0", "FullscreenTriangleVS")))
+		fullscreenVS.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\PostProcessing\\copy.ps.hlsl", {}, "ps_5_0")))
+		copyPS.attach(rawPtr);
 
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)].get()->enabled = false;
@@ -529,23 +539,21 @@ void PostProcessing::CopyToRenderTarget(
 		return;
 	}
 
-	if (!copyCS || !convertTex || !convertTex->uav || !convertTex->resource)
+	if (!copyPS || !fullscreenVS || !convertTex || !convertTex->rtv || !convertTex->resource)
 		return;
 
-	ID3D11ShaderResourceView* srv = srcSRV;
-	ID3D11UnorderedAccessView* uav = convertTex->uav.get();
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetShader(copyCS.get(), nullptr, 0);
-	context->Dispatch((convertTex->desc.Width + 7) >> 3, (convertTex->desc.Height + 7) >> 3, 1);
+		ID3D11ShaderResourceView* srv = srcSRV;
+		context->PSSetShaderResources(0, 1, &srv);
+		pass.SetTargets({ convertTex->rtv.get() }, (float)convertTex->desc.Width, (float)convertTex->desc.Height);
+		pass.SetShaders(fullscreenVS.get(), copyPS.get());
+		pass.Draw();
 
-	srv = nullptr;
-	uav = nullptr;
-
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetShader(nullptr, nullptr, 0);
+		srv = nullptr;
+		context->PSSetShaderResources(0, 1, &srv);
+	}
 
 	context->CopySubresourceRegion(targetRT.texture, 0, 0, 0, 0, convertTex->resource.get(), 0, nullptr);
 }

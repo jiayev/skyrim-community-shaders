@@ -2385,15 +2385,16 @@ namespace SIE
 		}
 	}
 
-	void ShaderCache::EnqueueComputeShaderCompile(
+	void ShaderCache::EnqueueStandaloneShaderCompile(
 		std::wstring sourcePath,
 		std::string entryPoint,
 		std::vector<std::pair<const char*, const char*>> defines,
-		ComputeShaderReadyCallback onReady)
+		StandaloneShaderClass shaderClass,
+		StandaloneShaderReadyCallback onReady)
 	{
 		compilationSet.EnqueueAux(
 			[this, sourcePath = std::move(sourcePath), entryPoint = std::move(entryPoint),
-				defines = std::move(defines), onReady = std::move(onReady)]() mutable {
+				defines = std::move(defines), shaderClass, onReady = std::move(onReady)]() mutable {
 				auto device = globals::d3d::device;
 				auto* state = globals::state;
 				if (!device || !state) {
@@ -2401,10 +2402,31 @@ namespace SIE
 					return;
 				}
 
+				const char* stageName;
+				const char* profile;
+				const wchar_t* cacheExt;
+				switch (shaderClass) {
+				case StandaloneShaderClass::Vertex:
+					stageName = "vertex";
+					profile = "vs_5_0";
+					cacheExt = L".vso";
+					break;
+				case StandaloneShaderClass::Pixel:
+					stageName = "pixel";
+					profile = "ps_5_0";
+					cacheExt = L".pso";
+					break;
+				default:
+					stageName = "compute";
+					profile = "cs_5_0";
+					cacheExt = L".cso";
+					break;
+				}
+
 				const std::filesystem::path srcPath{ sourcePath };
 				const std::string srcPathStr = Util::WStringToString(sourcePath);
 				if (!std::filesystem::exists(srcPath)) {
-					logger::error("Failed to compile compute shader; {} does not exist", srcPathStr);
+					logger::error("Failed to compile {} shader; {} does not exist", stageName, srcPathStr);
 					onReady(nullptr);
 					return;
 				}
@@ -2430,10 +2452,37 @@ namespace SIE
 				const std::wstring globalDefinesSuffix(globalDefinesSuffixNarrow.begin(), globalDefinesSuffixNarrow.end());
 				const std::wstring defineSlugW(defineSlug.begin(), defineSlug.end());
 				const std::wstring diskPath = defineSlug.empty() ?
-			                                      std::format(L"{}/{}{}.cso", GetStandaloneComputeCacheDir(srcPath), entryPointW, globalDefinesSuffix) :
-			                                      std::format(L"{}/{}_{}{}.cso", GetStandaloneComputeCacheDir(srcPath), entryPointW, defineSlugW, globalDefinesSuffix);
-				ID3D11ComputeShader* shader = nullptr;
+			                                      std::format(L"{}/{}{}{}", GetStandaloneComputeCacheDir(srcPath), entryPointW, globalDefinesSuffix, cacheExt) :
+			                                      std::format(L"{}/{}_{}{}{}", GetStandaloneComputeCacheDir(srcPath), entryPointW, defineSlugW, globalDefinesSuffix, cacheExt);
+
+				ID3D11DeviceChild* shader = nullptr;
 				bool diskCacheOutdated = true;
+
+				auto createShader = [&](ID3DBlob* blob) -> HRESULT {
+					switch (shaderClass) {
+					case StandaloneShaderClass::Vertex:
+						{
+							ID3D11VertexShader* created = nullptr;
+							HRESULT hr = device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &created);
+							shader = created;
+							return hr;
+						}
+					case StandaloneShaderClass::Pixel:
+						{
+							ID3D11PixelShader* created = nullptr;
+							HRESULT hr = device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &created);
+							shader = created;
+							return hr;
+						}
+					default:
+						{
+							ID3D11ComputeShader* created = nullptr;
+							HRESULT hr = device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &created);
+							shader = created;
+							return hr;
+						}
+					}
+				};
 
 				if (IsDiskCache() && std::filesystem::exists(diskPath)) {
 					// This repo has no shader-manifest digest; reuse the main cache's
@@ -2441,13 +2490,13 @@ namespace SIE
 					std::error_code ec;
 					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
 					if (ec) {
-						logger::debug("Failed to read standalone compute cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+						logger::debug("Failed to read standalone shader cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
 					} else {
 						const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(srcPath, ec));
 						if (ec) {
-							logger::debug("Failed to read compute shader source mtime for {}: {}", srcPathStr, ec.message());
+							logger::debug("Failed to read shader source mtime for {}: {}", srcPathStr, ec.message());
 						} else if (sourceTime > diskCacheTime) {
-							logger::debug("Disk-cached standalone compute shader {}:{} outdated: source is newer than cache", srcPathStr, entryPoint);
+							logger::debug("Disk-cached standalone {} shader {}:{} outdated: source is newer than cache", stageName, srcPathStr, entryPoint);
 						} else {
 							diskCacheOutdated = false;
 						}
@@ -2457,16 +2506,16 @@ namespace SIE
 				if (!diskCacheOutdated) {
 					ID3DBlob* blob = nullptr;
 					if (SUCCEEDED(D3DReadFileToBlob(diskPath.c_str(), &blob)) && blob) {
-						HRESULT hr = device->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &shader);
+						HRESULT hr = createShader(blob);
 						if (SUCCEEDED(hr)) {
 							Util::SetResourceName(shader, "%s:%s", srcPathStr.c_str(), entryPoint.c_str());
-							logger::debug("Loaded standalone compute shader {}:{} from {}", srcPathStr, entryPoint, Util::WStringToString(diskPath));
+							logger::debug("Loaded standalone {} shader {}:{} from {}", stageName, srcPathStr, entryPoint, Util::WStringToString(diskPath));
 						} else {
-							logger::warn("Failed to create compute shader from cached blob for {}:{}", srcPathStr, entryPoint);
+							logger::warn("Failed to create {} shader from cached blob for {}:{}", stageName, srcPathStr, entryPoint);
 						}
 						blob->Release();
 					} else {
-						logger::warn("Failed to read cached compute shader {}", Util::WStringToString(diskPath));
+						logger::warn("Failed to read cached {} shader {}", stageName, Util::WStringToString(diskPath));
 					}
 				}
 
@@ -2487,7 +2536,12 @@ namespace SIE
 						for (unsigned int i = 0; i < shaderDefines->size(); i++)
 							macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
 					}
-					macros.push_back({ "COMPUTESHADER", "" });
+					if (shaderClass == StandaloneShaderClass::Compute)
+						macros.push_back({ "COMPUTESHADER", "" });
+					else if (shaderClass == StandaloneShaderClass::Pixel)
+						macros.push_back({ "PSHADER", "" });
+					else
+						macros.push_back({ "VSHADER", "" });
 					macros.push_back({ "WINPC", "" });
 					macros.push_back({ "DX11", "" });
 					macros.push_back({ nullptr, nullptr });
@@ -2502,9 +2556,9 @@ namespace SIE
 
 					ID3DBlob* shaderBlob = nullptr;
 					ID3DBlob* errorBlob = nullptr;
-					if (FAILED(D3DCompileFromFile(srcPath.c_str(), macros.data(), &include, entryPoint.c_str(), "cs_5_0", flags, 0, &shaderBlob, &errorBlob))) {
-						logger::warn("Standalone compute shader compilation failed for {}:{}:\n{}",
-							srcPathStr, entryPoint, errorBlob ? static_cast<char*>(errorBlob->GetBufferPointer()) : "Unknown error");
+					if (FAILED(D3DCompileFromFile(srcPath.c_str(), macros.data(), &include, entryPoint.c_str(), profile, flags, 0, &shaderBlob, &errorBlob))) {
+						logger::warn("Standalone {} shader compilation failed for {}:{}:\n{}",
+							stageName, srcPathStr, entryPoint, errorBlob ? static_cast<char*>(errorBlob->GetBufferPointer()) : "Unknown error");
 						if (errorBlob)
 							errorBlob->Release();
 						if (shaderBlob)
@@ -2517,9 +2571,9 @@ namespace SIE
 						errorBlob->Release();
 					}
 
-					HRESULT hr = device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &shader);
+					HRESULT hr = createShader(shaderBlob);
 					if (FAILED(hr)) {
-						logger::warn("Failed to create compute shader for {}:{}", srcPathStr, entryPoint);
+						logger::warn("Failed to create {} shader for {}:{}", stageName, srcPathStr, entryPoint);
 						shaderBlob->Release();
 						onReady(nullptr);
 						return;
@@ -2531,15 +2585,28 @@ namespace SIE
 						std::error_code ec;
 						std::filesystem::create_directories(cacheDir, ec);
 						if (FAILED(D3DWriteBlobToFile(shaderBlob, diskPath.c_str(), true))) {
-							logger::error("Failed to save standalone compute shader to {}", Util::WStringToString(diskPath));
+							logger::error("Failed to save standalone {} shader to {}", stageName, Util::WStringToString(diskPath));
 						} else {
-							logger::debug("Saved standalone compute shader {}:{} to {}", srcPathStr, entryPoint, Util::WStringToString(diskPath));
+							logger::debug("Saved standalone {} shader {}:{} to {}", stageName, srcPathStr, entryPoint, Util::WStringToString(diskPath));
 						}
 					}
 					shaderBlob->Release();
 				}
 
 				onReady(shader);
+			});
+	}
+
+	void ShaderCache::EnqueueComputeShaderCompile(
+		std::wstring sourcePath,
+		std::string entryPoint,
+		std::vector<std::pair<const char*, const char*>> defines,
+		ComputeShaderReadyCallback onReady)
+	{
+		EnqueueStandaloneShaderCompile(std::move(sourcePath), std::move(entryPoint), std::move(defines),
+			StandaloneShaderClass::Compute,
+			[onReady = std::move(onReady)](ID3D11DeviceChild* shader) {
+				onReady(static_cast<ID3D11ComputeShader*>(shader));
 			});
 	}
 

@@ -135,7 +135,18 @@ struct PostProcessing : Feature
 	void ClearBorderMotionVectorsForFrameGen();
 	void DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor);
 
-	/// Copy lastTexColor to a render target, performing format conversion via copyCS if needed.
+	/**
+	 * @brief Copies the pipeline output into a game render target, converting the
+	 *        format via the copyPS fullscreen pass when the formats differ.
+	 *
+	 * Same-format copies go through CopySubresourceRegion directly; otherwise the
+	 * source is rendered into convertTex first and then copied.
+	 *
+	 * @param targetRT  Game render target receiving the image.
+	 * @param convertTex  Intermediate texture for format conversion (needs an RTV).
+	 * @param srcTex  Texture holding the pipeline output.
+	 * @param srcSRV  SRV of srcTex, sampled by the conversion pass.
+	 */
 	void CopyToRenderTarget(
 		RE::BSGraphics::RenderTargetData& targetRT,
 		Texture2D* convertTex,
@@ -157,7 +168,20 @@ struct PostProcessing : Feature
 	eastl::unique_ptr<Texture2D> texCopyMain = nullptr;
 	eastl::unique_ptr<Texture2D> texCopyMainCopy = nullptr;
 	eastl::unique_ptr<Texture2D> texAfterTAA = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> copyCS = nullptr;
+
+	/// Format-conversion copy pass (fullscreen triangle PS draw).
+	winrt::com_ptr<ID3D11PixelShader> copyPS = nullptr;
+
+	/// Shared fullscreen-triangle vertex shader for every raster pass in the
+	/// pipeline (compiled from PostProcessing/fullscreen.hlsli).
+	winrt::com_ptr<ID3D11VertexShader> fullscreenVS = nullptr;
+
+	/**
+	 * @brief Vertex shader every rasterized sub-feature draws with.
+	 * @return The shared fullscreen-triangle VS, or null until SetupResources
+	 *         succeeds; raster passes must skip when null.
+	 */
+	ID3D11VertexShader* GetFullscreenVS() const { return fullscreenVS.get(); }
 
 	/////////////////////////////////////////////////////////////////////////////////
 

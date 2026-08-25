@@ -1,6 +1,8 @@
 #include "Camera.h"
 
+#include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
+#include "RasterPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -87,28 +89,29 @@ void Camera::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
-		texOutput->CreateUAV(uavDesc);
+		texOutput->CreateRTV(rtvDesc);
 	}
 
 	logger::debug("Creating samplers...");
 	{
+		// Linear clamp filtering for the fisheye / chromatic aberration sampling.
 		D3D11_SAMPLER_DESC samplerDesc = {
 			.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-			.AddressU = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressV = D3D11_TEXTURE_ADDRESS_BORDER,
-			.AddressW = D3D11_TEXTURE_ADDRESS_BORDER,
+			.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP,
+			.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP,
 			.MaxAnisotropy = 1,
 			.MinLOD = 0,
 			.MaxLOD = D3D11_FLOAT32_MAX
@@ -117,9 +120,9 @@ void Camera::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, colorSampler.put()));
 	}
 
-	logger::debug("Creating compute shaders...");
+	logger::debug("Compiling shaders...");
 	{
-		CompileComputeShaders();
+		CompileRasterShaders();
 	}
 }
 
@@ -127,7 +130,7 @@ void Camera::ClearShaderCache()
 {
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
-		&cameraCS
+		&cameraPS
 	};
 
 	{
@@ -140,21 +143,23 @@ void Camera::ClearShaderCache()
 	}
 
 	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Camera");
-	CompileComputeShaders();
+	CompileRasterShaders();
 }
 
-void Camera::CompileComputeShaders()
+void Camera::CompileRasterShaders()
 {
-	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
-		{ &cameraCS, "camera.cs.hlsl", {}, "CS_Camera" }
+	const std::vector<PixelShaderCompileInfo> shaderInfos = {
+		{ &cameraPS, "camera.ps.hlsl" }
 	};
 
-	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\Camera", shaderInfos);
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\Camera", {}, shaderInfos);
 }
 
 void Camera::Draw(TextureInfo& inout_tex)
 {
-	if (!AllShadersReady({ &cameraCS }))
+	if (!owner || !owner->GetFullscreenVS())
+		return;
+	if (!AllShadersReady({ &cameraPS }))
 		return;
 
 	globals::profiler->BeginPass("PostProcessing::Camera");
@@ -174,26 +179,32 @@ void Camera::Draw(TextureInfo& inout_tex)
 
 	cameraCB->Update(data);
 
-	ID3D11ShaderResourceView* srv = inout_tex.srv;
-	ID3D11UnorderedAccessView* uav = texOutput->uav.get();
-	ID3D11Buffer* cb = cameraCB->CB();
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		ID3D11ShaderResourceView* srv = inout_tex.srv;
+		ID3D11Buffer* cb = cameraCB->CB();
+		// Film grain animates off SharedData::FrameCount (b5).
+		ID3D11Buffer* sharedDataBuf = globals::state->sharedDataCB->CB();
+		ID3D11SamplerState* sampler = colorSampler.get();
 
-	context->CSSetShader(cameraCS.get(), nullptr, 0);
-	context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+		context->PSSetConstantBuffers(1, 1, &cb);
+		context->PSSetConstantBuffers(5, 1, &sharedDataBuf);
+		context->PSSetSamplers(0, 1, &sampler);
+		context->PSSetShaderResources(0, 1, &srv);
+		pass.SetTargets({ texOutput->rtv.get() }, res.x, res.y);
+		pass.SetShaders(owner->GetFullscreenVS(), cameraPS.get());
+		pass.Draw();
 
-	srv = nullptr;
-	uav = nullptr;
-	cb = nullptr;
-
-	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
+		srv = nullptr;
+		cb = nullptr;
+		sharedDataBuf = nullptr;
+		sampler = nullptr;
+		context->PSSetShaderResources(0, 1, &srv);
+		context->PSSetConstantBuffers(1, 1, &cb);
+		context->PSSetConstantBuffers(5, 1, &sharedDataBuf);
+		context->PSSetSamplers(0, 1, &sampler);
+	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	globals::profiler->EndPass();

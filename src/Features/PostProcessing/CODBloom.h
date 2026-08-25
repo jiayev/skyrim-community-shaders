@@ -39,17 +39,22 @@ struct CODBloom : public PostProcessFeature
 
 	std::unique_ptr<Texture2D> texBloom = nullptr;
 	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, s_BloomMips> texBloomMipSRVs = { nullptr };
-	std::array<winrt::com_ptr<ID3D11UnorderedAccessView>, s_BloomMips> texBloomMipUAVs = { nullptr };
+	std::array<winrt::com_ptr<ID3D11RenderTargetView>, s_BloomMips> texBloomMipRTVs = { nullptr };
 
-	winrt::com_ptr<ID3D11ComputeShader> thresholdCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> downsampleCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> downsampleFirstMipCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> upsampleCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> compositeCS = nullptr;
+	/// Blend state for the upsample-accumulate passes: PS emits the scaled
+	/// upsample contribution, ROP adds it to the destination mip multiplied by
+	/// CurrentMipMult (SrcBlend = ONE, DestBlend = BLEND_FACTOR).
+	winrt::com_ptr<ID3D11BlendState> upsampleBlendState = nullptr;
+
+	winrt::com_ptr<ID3D11PixelShader> thresholdPS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> downsamplePS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> downsampleFirstMipPS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> upsamplePS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> compositePS = nullptr;
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
-	void CompileComputeShaders();
+	void CompileRasterShaders();
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json&) override;

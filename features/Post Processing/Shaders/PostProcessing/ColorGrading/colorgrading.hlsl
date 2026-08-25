@@ -2,9 +2,9 @@
 #include "Common/ColorSpaces.hlsli"
 #include "Common/Math.hlsli"
 
-#define LUT_SIZE 64
+#include "PostProcessing/fullscreen.hlsli"
 
-RWTexture2D<float4> RWTexOut : register(u0);
+#define LUT_SIZE 64
 
 Texture2D<float4> TexColor : register(t0);
 Texture3D<float4> TexLUT : register(t1);
@@ -59,8 +59,8 @@ cbuffer ColorCB : register(b1)
 	OpenDRTConfig odrtConfig;
 };
 
-#include "PostProcessing/ColorGrading/Include/OpenDRT.hlsli"
 #include "PostProcessing/ColorGrading/Include/GT7ToneMapping.hlsli"
+#include "PostProcessing/ColorGrading/Include/OpenDRT.hlsli"
 #include "PostProcessing/ColorGrading/Include/RenoDXToneMapping.hlsli"
 #include "PostProcessing/common.hlsli"
 namespace LogType
@@ -835,7 +835,10 @@ float3 ApplyLUT(float3 color)
 	return color;
 }
 
-[numthreads(8, 8, 1)] void CSColorGrading(uint2 DTid : SV_DispatchThreadID) {
+float4 PSColorGrading(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 DTid = uint2(input.Position.xy);
+
 	// Game cinematic
 	float3 color = pow(abs(TexColor[DTid].xyz), inOutGamma.z) * cinematic.y;
 	color = Saturation(color, cinematic.x);
@@ -856,7 +859,7 @@ float3 ApplyLUT(float3 color)
 	// Game fade
 	color = lerp(color, fade.xyz, fade.w);
 
-	RWTexOut[DTid] = float4(color, 1);
+	return float4(color, 1);
 }
 
 RWTexture3D<float4> RWLUT : register(u0);

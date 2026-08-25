@@ -5,6 +5,8 @@
 /// Purkinje effect is applied after compositing on the final perceived image.
 /// Uses #ifdef HAS_BLOOM / HAS_LENS_FLARE / HAS_GLARE / HAS_EXPOSURE / HAS_LOCAL_EXPOSURE to control behavior.
 
+#include "PostProcessing/fullscreen.hlsli"
+
 #include "Common/Color.hlsli"
 
 Texture2D<float4> TexColor : register(t0);
@@ -161,14 +163,9 @@ float3 PurkinjeShift(float3 c, float nightAdaptation)
 }
 #endif  // HAS_EXPOSURE
 
-RWTexture2D<float4> RWTexOutput : register(u0);
-
-[numthreads(8, 8, 1)] void CSComposite(uint2 tid : SV_DispatchThreadID) {
-	uint2 dims;
-	RWTexOutput.GetDimensions(dims.x, dims.y);
-
-	if (any(tid >= dims))
-		return;
+float4 PSComposite(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 tid = uint2(input.Position.xy);
 
 	float3 sceneColor = TexColor[tid].rgb;
 
@@ -224,5 +221,5 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 #	endif
 #endif
 
-	RWTexOutput[tid] = float4(result, 1);
+	return float4(result, 1);
 }

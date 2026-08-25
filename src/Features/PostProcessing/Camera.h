@@ -42,13 +42,13 @@ struct Camera : public PostProcessFeature
 
 	eastl::unique_ptr<Texture2D> texOutput = nullptr;
 
-	winrt::com_ptr<ID3D11ComputeShader> cameraCS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> cameraPS = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> colorSampler = nullptr;
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
-	void CompileComputeShaders();
+	void CompileRasterShaders();
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json&) override;

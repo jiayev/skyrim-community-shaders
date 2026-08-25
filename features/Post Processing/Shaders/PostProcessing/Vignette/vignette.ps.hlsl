@@ -1,4 +1,7 @@
-RWTexture2D<float4> RWTexOut : register(u0);
+// Vignette: purely per-pixel multiply. SV_Position at pixel centers is
+// tid + 0.5, so uvs derive straight from it.
+
+#include "PostProcessing/fullscreen.hlsli"
 
 Texture2D<float4> TexColor : register(t0);
 
@@ -8,7 +11,9 @@ cbuffer VignetteCB : register(b1)
 	float4 RcpDynRes;
 };
 
-[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+float4 main(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 tid = uint2(input.Position.xy);
 	float3 color = TexColor[tid].rgb;
 
 	float2 uv = (tid + .5) * RcpDynRes.xy;
@@ -19,5 +24,5 @@ cbuffer VignetteCB : register(b1)
 
 	color *= vignette;
 
-	RWTexOut[tid] = float4(color, 1);
+	return float4(color, 1);
 }

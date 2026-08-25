@@ -1,5 +1,6 @@
 #include "ColorGrading.h"
 
+#include "RasterPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -705,19 +706,19 @@ void ColorGrading::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texColor = std::make_unique<Texture2D>(texDesc);
 		texColor->CreateSRV(srvDesc);
-		texColor->CreateUAV(uavDesc);
+		texColor->CreateRTV(rtvDesc);
 
 		D3D11_TEXTURE3D_DESC lutTexDesc = {
 			.Width = LUTDim,
@@ -772,7 +773,7 @@ void ColorGrading::SetupResources()
 			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
 		};
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC curveSrvDesc = {
@@ -781,9 +782,9 @@ void ColorGrading::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC curveUavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC curveRtvDesc = {
 			.Format = curveTexDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
@@ -792,7 +793,7 @@ void ColorGrading::SetupResources()
 
 		texCurveOutput = eastl::make_unique<Texture2D>(curveTexDesc);
 		texCurveOutput->CreateSRV(curveSrvDesc);
-		texCurveOutput->CreateUAV(curveUavDesc);
+		texCurveOutput->CreateRTV(curveRtvDesc);
 
 		// Fill input with linear ramp [0, CurveMaxInput] in R=G=B
 		std::array<DirectX::PackedVector::XMHALF4, CurveSamples> rampData;
@@ -815,16 +816,14 @@ void ColorGrading::SetupResources()
 		device->CreateTexture2D(&stagingDesc, nullptr, curveStaging.put());
 	}
 
-	CompileComputeShaders();
+	CompileShaders();
 }
 
 void ColorGrading::ClearShaderCache()
 {
 	BumpShaderGeneration();
-	const auto shaderPtrs = std::array{
-		&colorgradingCS,
-		&lutgenCS
-	};
+	const auto shaderPtrs = std::array{ &colorgradingPS };
+	const auto computeShaderPtrs = std::array{ &lutgenCS };
 
 	{
 		std::lock_guard lock(shaderMutex);
@@ -833,24 +832,34 @@ void ColorGrading::ClearShaderCache()
 				(*shader)->Release();
 				shader->detach();
 			}
+		for (auto shader : computeShaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
 	}
 
 	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/ColorGrading");
-	CompileComputeShaders();
+	CompileShaders();
 }
 
-void ColorGrading::CompileComputeShaders()
+void ColorGrading::CompileShaders()
 {
 	const auto& tonemappers = TonemapperInfo::GetTonemappers();
 
 	auto tonemapFuncName = settings.useOpenDrt ? "OpenDRTTransform" : tonemappers[tonemapperType].func_name.data();
 
 	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
-		{ &colorgradingCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSColorGrading" },
-		{ &lutgenCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSLUTGen" },
+		{ &lutgenCS, "colorgrading.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSLUTGen" },
 	};
 
 	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\ColorGrading", shaderInfos);
+
+	const std::vector<PixelShaderCompileInfo> rasterInfos = {
+		{ &colorgradingPS, "colorgrading.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "PSColorGrading" },
+	};
+
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\ColorGrading", {}, rasterInfos);
 
 	recompileFlag = false;
 	curveNeedsUpdate = true;  // shader changed, curve must update
@@ -885,7 +894,9 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	if (recompileFlag)
 		ClearShaderCache();
 
-	if (!AllShadersReady({ &colorgradingCS, &lutgenCS }))
+	if (!AllShadersReady({ &colorgradingPS }) || !AllShadersReady({ &lutgenCS }))
+		return;
+	if (!owner || !owner->GetFullscreenVS())
 		return;
 
 	globals::profiler->BeginPass("PostProcessing::ColorGrading");
@@ -988,22 +999,34 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	}
 
 	// Apply Color Grading (via LUT or direct)
-	std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texLUT->srv.get() };
-	uav = texColor->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), srvs.data());
-	context->CSSetShader(colorgradingCS.get(), nullptr, 0);
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	context->Dispatch((texColor->desc.Width + 7) >> 3, (texColor->desc.Height + 7) >> 3, 1);
+		std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texLUT->srv.get() };
 
-	// clean up
-	srvs.fill(nullptr);
-	uav = nullptr;
+		ID3D11Buffer* psCB = cb;
+		std::array<ID3D11SamplerState*, 1> psSamplers = { linearSampler.get() };
+		context->PSSetConstantBuffers(1, 1, &psCB);
+		context->PSSetSamplers(0, 1, psSamplers.data());
+		context->PSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), srvs.data());
+		pass.SetTargets({ texColor->rtv.get() }, (float)texColor->desc.Width, (float)texColor->desc.Height);
+		pass.SetShaders(owner->GetFullscreenVS(), colorgradingPS.get());
+		pass.Draw();
+
+		// clean up
+		srvs.fill(nullptr);
+		psCB = nullptr;
+		psSamplers.fill(nullptr);
+		context->PSSetShaderResources(0, 2, srvs.data());
+		context->PSSetConstantBuffers(1, 1, &psCB);
+		context->PSSetSamplers(0, 1, psSamplers.data());
+	}
+
+	// clean up CS stage (CB/sampler stayed bound for LUT generation)
 	cb = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 2, srvs.data());
+	samplers.fill(nullptr);
 	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
+	context->CSSetSamplers(0, 1, samplers.data());
 
 	if (saveImagesFlag) {
 		saveImagesFlag = false;
@@ -1022,32 +1045,29 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		curveReadbackRequested = false;
 
 	// Debug: evaluate color grading pipeline on a neutral ramp for curve preview
-	if (curveReadbackActive && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingCS) {
+	if (curveReadbackActive && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingPS) {
 		curveNeedsUpdate = false;
-		// Re-bind CB and samplers for the curve dispatch
+		// Render the curve with the same PS on the 256x1 ramp input (same CB, same LUT)
+		PostProcessingRaster::RasterPass pass(context);
+
 		ID3D11Buffer* curveCB = colorCB->CB();
 		std::array<ID3D11SamplerState*, 1> curveSamplers = { linearSampler.get() };
-		context->CSSetConstantBuffers(1, 1, &curveCB);
-		context->CSSetSamplers(0, 1, curveSamplers.data());
-
-		// Dispatch colorgradingCS on the 256x1 ramp input (same CB, same LUT)
 		std::array<ID3D11ShaderResourceView*, 2> curveSRVs = { texCurveInput->srv.get(), texLUT ? texLUT->srv.get() : nullptr };
-		ID3D11UnorderedAccessView* curveUAV = texCurveOutput->uav.get();
 
-		context->CSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), curveSRVs.data());
-		context->CSSetUnorderedAccessViews(0, 1, &curveUAV, nullptr);
-		context->CSSetShader(colorgradingCS.get(), nullptr, 0);
-
-		context->Dispatch((CurveSamples + 7) >> 3, 1, 1);
+		context->PSSetConstantBuffers(1, 1, &curveCB);
+		context->PSSetSamplers(0, 1, curveSamplers.data());
+		context->PSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), curveSRVs.data());
+		pass.SetTargets({ texCurveOutput->rtv.get() }, (float)CurveSamples, 1.f);
+		pass.SetShaders(owner->GetFullscreenVS(), colorgradingPS.get());
+		pass.Draw();
 
 		// Clean up
-		curveUAV = nullptr;
 		curveSRVs.fill(nullptr);
 		curveCB = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &curveUAV, nullptr);
-		context->CSSetShaderResources(0, 2, curveSRVs.data());
-		context->CSSetConstantBuffers(1, 1, &curveCB);
-		context->CSSetShader(nullptr, nullptr, 0);
+		curveSamplers.fill(nullptr);
+		context->PSSetShaderResources(0, 2, curveSRVs.data());
+		context->PSSetConstantBuffers(1, 1, &curveCB);
+		context->PSSetSamplers(0, 1, curveSamplers.data());
 
 		// Readback
 		if (curveStaging) {

@@ -1,5 +1,7 @@
 #include "LUT.h"
 
+#include "Features/PostProcessing.h"
+#include "RasterPass.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
@@ -110,22 +112,22 @@ void LUT::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
-		texOutput->CreateUAV(uavDesc);
+		texOutput->CreateRTV(rtvDesc);
 	}
 
-	CompileComputeShaders();
+	CompileRasterShaders();
 }
 
 void LUT::ReadTexture(std::filesystem::path path)
@@ -216,7 +218,7 @@ void LUT::ClearShaderCache()
 {
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
-		&lutCS
+		&lutPS
 	};
 
 	{
@@ -229,16 +231,16 @@ void LUT::ClearShaderCache()
 	}
 
 	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/LUT");
-	CompileComputeShaders();
+	CompileRasterShaders();
 }
 
-void LUT::CompileComputeShaders()
+void LUT::CompileRasterShaders()
 {
-	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
-		{ &lutCS, "lut.cs.hlsl" },
+	const std::vector<PixelShaderCompileInfo> shaderInfos = {
+		{ &lutPS, "lut.ps.hlsl" },
 	};
 
-	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\LUT", shaderInfos);
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\LUT", {}, shaderInfos);
 }
 
 void LUT::Draw(TextureInfo& inout_tex)
@@ -246,7 +248,9 @@ void LUT::Draw(TextureInfo& inout_tex)
 	if (LutType == -1)
 		return;
 
-	if (!AllShadersReady({ &lutCS }))
+	if (!owner || !owner->GetFullscreenVS())
+		return;
+	if (!AllShadersReady({ &lutPS }))
 		return;
 
 	globals::profiler->BeginPass("PostProcessing::LUT");
@@ -262,30 +266,29 @@ void LUT::Draw(TextureInfo& inout_tex)
 	};
 	lutCB->Update(data);
 
-	ID3D11ShaderResourceView* srv[3] = {
-		inout_tex.srv,
-		LutType == 3 ? nullptr : texLUT2D->srv.get(),
-		LutType == 3 ? texLUT3D->srv.get() : nullptr
-	};
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	ID3D11UnorderedAccessView* uav = texOutput->uav.get();
-	ID3D11Buffer* cb = lutCB->CB();
+		ID3D11ShaderResourceView* srv[3] = {
+			inout_tex.srv,
+			LutType == 3 ? nullptr : texLUT2D->srv.get(),
+			LutType == 3 ? texLUT3D->srv.get() : nullptr
+		};
 
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 3, srv);
-	context->CSSetShader(lutCS.get(), nullptr, 0);
+		ID3D11Buffer* cb = lutCB->CB();
 
-	context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+		context->PSSetConstantBuffers(1, 1, &cb);
+		context->PSSetShaderResources(0, 3, srv);
+		pass.SetTargets({ texOutput->rtv.get() }, res.x, res.y);
+		pass.SetShaders(owner->GetFullscreenVS(), lutPS.get());
+		pass.Draw();
 
-	// clean up
-	std::fill(srv, srv + 3, nullptr);
-	uav = nullptr;
-	cb = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 3, srv);
-	context->CSSetConstantBuffers(0, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
+		// clean up
+		std::fill(srv, srv + 3, nullptr);
+		cb = nullptr;
+		context->PSSetShaderResources(0, 3, srv);
+		context->PSSetConstantBuffers(1, 1, &cb);
+	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	globals::profiler->EndPass();

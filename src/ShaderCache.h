@@ -482,6 +482,36 @@ namespace SIE
 		/// take ownership (e.g. winrt::com_ptr::attach) or Release() it.
 		using ComputeShaderReadyCallback = std::function<void(ID3D11ComputeShader*)>;
 
+		/// Shader class selector for the standalone (non-BSShader) async compile path.
+		enum class StandaloneShaderClass
+		{
+			Vertex,
+			Pixel,
+			Compute
+		};
+
+		/// Same contract as ComputeShaderReadyCallback, but for any shader class;
+		/// the pointer is the matching ID3D11VertexShader / ID3D11PixelShader /
+		/// ID3D11ComputeShader interface.
+		using StandaloneShaderReadyCallback = std::function<void(ID3D11DeviceChild*)>;
+
+		/// @brief Compile (or load from the disk cache) a standalone vertex/pixel/compute
+		///        shader on the shared compilation pool, off the calling thread.
+		/// @param sourcePath  HLSL source path under Data/Shaders (e.g.
+		///                    Data\\Shaders\\PostProcessing\\Vignette\\vignette.ps.hlsl).
+		/// @param entryPoint  HLSL entry function name.
+		/// @param defines     Preprocessor macro name/value pairs; the caller must
+		///                    keep each string alive until the callback fires
+		///                    (string literals satisfy this).
+		/// @param shaderClass Which shader stage to compile for.
+		/// @param onReady     Invoked exactly once when the shader is ready.
+		void EnqueueStandaloneShaderCompile(
+			std::wstring sourcePath,
+			std::string entryPoint,
+			std::vector<std::pair<const char*, const char*>> defines,
+			StandaloneShaderClass shaderClass,
+			StandaloneShaderReadyCallback onReady);
+
 		/// @brief Compile (or load from the disk cache) a standalone compute shader
 		///        on the shared compilation pool, off the calling thread.
 		/// @param sourcePath  HLSL source path under Data/Shaders (e.g.

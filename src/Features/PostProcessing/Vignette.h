@@ -28,11 +28,11 @@ struct Vignette : public PostProcessFeature
 
 	eastl::unique_ptr<Texture2D> texOutput = nullptr;
 
-	winrt::com_ptr<ID3D11ComputeShader> vignetteCS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> vignettePS = nullptr;
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
-	void CompileComputeShaders();
+	void CompileRasterShaders();
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json&) override;
