@@ -180,9 +180,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
 
-#	if defined(HORIZON_FIX)
+#		if defined(HORIZON_FIX)
 	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
-#	endif
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -1241,6 +1241,16 @@ PS_OUTPUT main(PS_INPUT input)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
 
+#						if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float3 waterViewDir = normalize(input.WPosition.xyz);
+		const float waterDist = length(input.WPosition.xyz);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
+		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+	}
+#						endif
+
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;
 	float3 fogColor = Color::Fog(input.FogParam.xyz);
@@ -1291,6 +1301,16 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 	float specularFraction = lerp(1, fresnel, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+
+#						if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float3 waterViewDir = normalize(input.WPosition.xyz);
+		const float waterDist = length(input.WPosition.xyz);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
+		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+	}
+#						endif
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;

@@ -867,10 +867,15 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(DEFERRED) && defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
 		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		const float physSkyDist = length(input.WorldPosition.xyz);
+#		if defined(ADDBLEND)
+		lightColor *= PhysSky::SampleAp(physSkyViewDir, input.Position.xy, physSkyDist, SampBaseSampler).w;
+#		elif !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
 		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0)
-			lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, length(input.WorldPosition.xyz), SampBaseSampler);
+			lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, physSkyDist, SampBaseSampler);
 		else
-			lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampBaseSampler);
+			lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, physSkyDist, SampBaseSampler);
+#		endif
 	}
 #	endif
 
@@ -937,6 +942,7 @@ PS_OUTPUT main(PS_INPUT input)
 	finalColor *= fogMul;
 #	endif
 	psout.Diffuse = finalColor;
+
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
 		if (SharedData::lightLimitFixSettings.LightsVisualisationMode == 0) {
