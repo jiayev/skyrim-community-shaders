@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace
@@ -46,10 +47,73 @@ void PhysicalSky::LoadCloudTextures()
 		baseShapeNoiseSrv = nullptr;
 	}
 
+	CreateNubisWarpTexture();
+
 	loadDDS(L"Data\\Textures\\PhysicalSky\\top_lut.dds", cloudTopLutSrv);
 	loadDDS(L"Data\\Textures\\PhysicalSky\\bottom_lut.dds", cloudBottomLutSrv);
 }
 
+void PhysicalSky::CreateNubisWarpTexture()
+{
+	auto device = globals::d3d::device;
+
+	constexpr UINT kDim = 128;
+	constexpr UINT kChannels = 4;
+
+	// Two independent tileable value-noise fields packed in R/G; the shader
+	// reconstructs the warp vector as (rg * 2 - 1). Matches the role of the 2D
+	// distortion texture Horizon Forbidden West samples ahead of the 3D composite.
+	auto lattice = [](uint32_t seed, uint32_t x, uint32_t y) {
+		uint32_t hsh = x * 374761393u + y * 668265263u + seed * 1442695041u;
+		hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
+		hsh ^= hsh >> 16;
+		return hsh / 4294967296.0f;
+	};
+	auto smooth = [](float t) { return t * t * (3.0f - 2.0f * t); };
+	auto valueNoise = [&](uint32_t seed, uint32_t period, float u, float v) {
+		const uint32_t x0 = static_cast<uint32_t>(u) % period;
+		const uint32_t y0 = static_cast<uint32_t>(v) % period;
+		const uint32_t x1 = (x0 + 1) % period;
+		const uint32_t y1 = (y0 + 1) % period;
+		const float fx = smooth(u - std::floor(u));
+		const float fy = smooth(v - std::floor(v));
+		const float a = std::lerp(lattice(seed, x0, y0), lattice(seed, x1, y0), fx);
+		const float b = std::lerp(lattice(seed, x0, y1), lattice(seed, x1, y1), fx);
+		return std::lerp(a, b, fy);
+	};
+
+	std::vector<uint8_t> pixels(kDim * kDim * kChannels);
+	for (uint32_t y = 0; y < kDim; ++y) {
+		for (uint32_t x = 0; x < kDim; ++x) {
+			const float u = x * (8.0f / kDim);
+			const float v = y * (8.0f / kDim);
+			for (uint32_t ch = 0; ch < 2; ++ch) {
+				const uint32_t seed = ch + 1;
+				const float n = valueNoise(seed, 8, u, v) * 0.75f + valueNoise(seed + 7, 16, u * 2.0f, v * 2.0f) * 0.25f;
+				pixels[(y * kDim + x) * kChannels + ch] = static_cast<uint8_t>(std::clamp(n, 0.0f, 1.0f) * 255.0f);
+			}
+			pixels[(y * kDim + x) * kChannels + 2] = 128;
+			pixels[(y * kDim + x) * kChannels + 3] = 255;
+		}
+	}
+
+	D3D11_TEXTURE2D_DESC texDesc{};
+	texDesc.Width = kDim;
+	texDesc.Height = kDim;
+	texDesc.MipLevels = 1;
+	texDesc.ArraySize = 1;
+	texDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	texDesc.SampleDesc = { 1, 0 };
+	texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+	texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	D3D11_SUBRESOURCE_DATA data{};
+	data.pSysMem = pixels.data();
+	data.SysMemPitch = kDim * kChannels;
+
+	winrt::com_ptr<ID3D11Texture2D> tex;
+	DX::ThrowIfFailed(device->CreateTexture2D(&texDesc, &data, tex.put()));
+	DX::ThrowIfFailed(device->CreateShaderResourceView(tex.get(), nullptr, nubisWarpSrv.put()));
+}
 void PhysicalSky::SetupVolumetricResources()
 {
 	auto device = globals::d3d::device;
@@ -381,7 +445,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.noiseOffset = low.noiseOffset,
 		.extinctionCoefficient = low.extinctionCoefficient,
 		.noiseHeightShear = noiseHeightShear,
-		._padNoise = 0.0f,
+		.warpFrequency = 1.0f / MetersToGameUnits(250.0f),
 		.highCellScale = high.cellScale,
 		.highCellWindSpeed = high.cellWindSpeed,
 		.highCellWarpScale = high.cellWarpScale,
@@ -462,7 +526,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		baseShapeNoiseSrv.get(),                                                                                       // t5 authored Nubis RGBA noise composite
 		texApSunLut->srv.get(),                                                                                        // t6 direct solar single-scattering AP LUT
 		ndfSrv,                                                                                                        // t7 five-layer NDF
-		nullptr,                                                                                                       // t8 unused by Nubis low clouds
+		nubisWarpSrv.get(),                                                                                            // t8 Nubis base UV warp
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
 		highTextures.highWeather,                                                                                      // t11
