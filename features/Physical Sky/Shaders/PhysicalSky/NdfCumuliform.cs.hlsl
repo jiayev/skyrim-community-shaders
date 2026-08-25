@@ -42,7 +42,11 @@ int2 WrapCell(int2 cell, uint2 period)
 	return (cell % signedPeriod + signedPeriod) % signedPeriod;
 }
 
-float Worley(float2 uv, uint2 freq)
+// The lattice stays axis-aligned and wrapped so the output remains tileable;
+// the per-octave rotation is applied to the distance metric instead of the
+// sample coordinates, because rotating the coordinates would break the wrap
+// period and leave a seam at every NDF tile.
+float Worley(float2 uv, uint2 freq, float2x2 shape)
 {
 	int2 id = floor(uv);
 	float2 p = frac(uv);
@@ -55,7 +59,7 @@ float Worley(float2 uv, uint2 freq)
 			int2 offset = int2(x, y);
 			float2 h = hash22(WrapCell(id + offset, freq)) * .5 + .5;
 			h += offset;
-			float2 d = p - h;
+			float2 d = mul(shape, p - h);
 			minDist = min(minDist, dot(d, d));
 		}
 	}
@@ -66,30 +70,30 @@ float Worley(float2 uv, uint2 freq)
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
 	uint3 dims;
 	RWTexOutput.GetDimensions(dims.x, dims.y, dims.z);
-	float2 uv = tid / float2(dims.xy - 1);
+	float2 uv = (tid + 0.5) / float2(dims.xy);
 
 	float2x2 rotmat0 = rotationMatrix(rot0);
-	float2 uv0 = mul(rotmat0, uv * scale0) + offset0;
+	float2 uv0 = uv * scale0 + offset0;
 	float noise0 =
-		Worley(uv0 + Random::R2Modified(0) * 100, scale0) * .625 +
-		Worley(uv0 * 2 + Random::R2Modified(1) * 100, scale0 * 2) * .25 +
-		Worley(uv0 * 4 + Random::R2Modified(2) * 100, scale0 * 4) * .125;
+		Worley(uv0 + Random::R2Modified(0) * 100, scale0, rotmat0) * .625 +
+		Worley(uv0 * 2 + Random::R2Modified(1) * 100, scale0 * 2, rotmat0) * .25 +
+		Worley(uv0 * 4 + Random::R2Modified(2) * 100, scale0 * 4, rotmat0) * .125;
 	noise0 = 1 - noise0;
 
 	float2x2 rotmat1 = rotationMatrix(rot1);
-	float2 uv1 = mul(rotmat1, uv * scale1) + offset1;
+	float2 uv1 = uv * scale1 + offset1;
 	float noise1 =
-		Worley(uv1 + Random::R2Modified(3) * 100, scale1) * .625 +
-		Worley(uv1 * 2 + Random::R2Modified(4) * 100, scale1 * 2) * .25 +
-		Worley(uv1 * 4 + Random::R2Modified(5) * 100, scale1 * 4) * .125;
+		Worley(uv1 + Random::R2Modified(3) * 100, scale1, rotmat1) * .625 +
+		Worley(uv1 * 2 + Random::R2Modified(4) * 100, scale1 * 2, rotmat1) * .25 +
+		Worley(uv1 * 4 + Random::R2Modified(5) * 100, scale1 * 4, rotmat1) * .125;
 	noise1 = 1 - noise1;
 
 	float2x2 rotmat2 = rotationMatrix(rot2);
-	float2 uv2 = mul(rotmat2, uv * scale2) + offset2;
+	float2 uv2 = uv * scale2 + offset2;
 	float noise2 =
-		Worley(uv2 + Random::R2Modified(6) * 100, scale2) * .625 +
-		Worley(uv2 * 2 + Random::R2Modified(7) * 100, scale2 * 2) * .25 +
-		Worley(uv2 * 4 + Random::R2Modified(8) * 100, scale2 * 4) * .125;
+		Worley(uv2 + Random::R2Modified(6) * 100, scale2, rotmat2) * .625 +
+		Worley(uv2 * 2 + Random::R2Modified(7) * 100, scale2 * 2, rotmat2) * .25 +
+		Worley(uv2 * 4 + Random::R2Modified(8) * 100, scale2 * 4, rotmat2) * .125;
 	noise2 = 1 - noise2;
 	float noise = noise0 * noise1 * noise2;
 	noise = saturate((noise - clip_range.x) / (clip_range.y - clip_range.x));

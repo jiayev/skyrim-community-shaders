@@ -565,7 +565,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 			float tFar = min(min(t2.x, t2.y), t2.z);
 			if (tNear > tFar || tFar < 0)
 				return -1;
-			samplePos += (max(tNear, 0) + 128) * sunDir;
+			samplePos += max(tFar - 128, max(tNear, 0)) * sunDir;
 		}
 
 		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, data.volCloudLowBottom);

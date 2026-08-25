@@ -71,7 +71,7 @@ struct VolumetricCloudData
 	float3 noiseOffset;
 	float extinctionCoefficient;
 	float2 noiseHeightShear;
-	float _padNoise;
+	float warpFrequency;
 	float2 highCellScale;
 	float highCellWindSpeed;
 	float2 highCellWarpScale;
@@ -166,6 +166,7 @@ Texture2D<float> TexDepth : register(t4);
 Texture3D<unorm float4> TexNubisNoise : register(t5);
 Texture3D<float4> TexAerialPerspectiveSun : register(t6);
 Texture2DArray<float> TexCloudNDF : register(t7);
+Texture2D<float4> TexNubisWarp : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
 Texture2D<float4> TexHpHighWeather : register(t11);
@@ -573,7 +574,30 @@ struct CloudDensityContext
 {
 	NDFInfo ndf;
 	float3 noise_coordinates;
+	float2 warp_coordinates;
+	float eye_distance;
 };
+
+float ReduceNubisErosion(float4 noise, NDFInfo ndf, float eye_distance)
+{
+	// nubis.dds is the authored 128^3, four-channel "Noise Composite" shown on
+	// page 33 of Nubis Evolved. This project's asset stores two wispy erosion
+	// variants in R/G and two billowy variants in B/A; it is not an R carrier plus
+	// GBA reconstruction texture. Reduce those variants to one scalar according to
+	// the dimensional profile.
+	const float wispyErosion = lerp(noise.r, noise.g, saturate(ndf.dimension_profile));
+	const float billowyGradient = pow(saturate(ndf.dimension_profile), 0.25);
+	const float billowyErosion = lerp(noise.b * 0.3, noise.a * 0.3, billowyGradient);
+	float erosion = lerp(wispyErosion, billowyErosion, saturate(ndf.bottom_value));
+
+	const float covRamp = saturate((ndf.coverage - 0.2) * 10.0);
+	const float relief = noise.a * 0.2 * (1.0 - pow(saturate(ndf.height_fraction * (5.0 + 5.0 * covRamp)), 3.0));
+	erosion = max(erosion - relief, 0.0);
+
+	const float distFade = saturate((eye_distance - 1000.0) * 0.001);
+	const float smoothErosion = lerp(noise.r, noise.b * 0.3, saturate(ndf.bottom_value));
+	return lerp(erosion, smoothErosion, distFade);
+}
 
 float sampleCloudDensityFromContext(
 	CloudDensityContext density_context, float mip_level, bool include_detail)
@@ -583,23 +607,30 @@ float sampleCloudDensityFromContext(
 		return 0.0;
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	// nubis.dds is the authored 128^3, four-channel "Noise Composite" shown on
-	// page 33 of Nubis Evolved. This project's asset stores two wispy erosion
-	// variants in R/G and two billowy variants in B/A; it is not an R carrier plus
-	// GBA reconstruction texture. Reduce those variants to one scalar according to
-	// the dimensional profile, then use the page-34 density equation.
-	const float noiseMip = max(mip_level + lerp(0.75, 0.15, saturate(ndf.dimension_profile)) + (include_detail ? 0.0 : 1.0), 0.0);
-	const float4 noise = saturate(TexNubisNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, noiseMip));
-	const float wispyErosion = lerp(noise.r, noise.g, saturate(ndf.dimension_profile));
-	const float billowyGradient = pow(saturate(ndf.dimension_profile), 0.25);
-	const float billowyErosion = lerp(noise.b * 0.3, noise.a * 0.3, billowyGradient);
-	const float erosionComposite = lerp(wispyErosion, billowyErosion, saturate(ndf.bottom_value));
 
-	// nubis.dds stores an erosion threshold, so invert it to the positive-density
-	// convention used by the presentation before applying:
-	// saturate(cloudNoiseComposite - (1 - dimensionalProfile)).
+	// Distorts the noise UVs with a 2D warp field that is
+	// strongest at the layer bottom (0.125 in noise-UV space below 2% height
+	// fraction) and fades to zero by 5%, breaking up the flat base without
+	// disturbing the cloud body.
+	const float bottomRamp = saturate((ndf.height_fraction - 0.02) * 33.3333);
+	const float2 warp = (TexNubisWarp.SampleLevel(TileableSampler, density_context.warp_coordinates, 0).rg * 2.0 - 1.0) *
+	                    (0.125 * (1.0 - bottomRamp));
+	const float3 noise_uv = density_context.noise_coordinates + float3(warp, 0.0);
+
+	const float baseMip = max(mip_level + saturate(ndf.dimension_profile) * 2.0, 0.0);
+	const float4 noise = saturate(TexNubisNoise.SampleLevel(TileableSampler, noise_uv, baseMip));
+	float erosionComposite = ReduceNubisErosion(noise, ndf, density_context.eye_distance);
+
+	if (include_detail) {
+		const float2 rotated = float2(0.920505 * noise_uv.x - 0.390731 * noise_uv.y, 0.390731 * noise_uv.x + 0.920505 * noise_uv.y);
+		const float3 detail_uv = float3(rotated * 0.345, noise_uv.z * 0.3);
+		const float4 detail = saturate(TexNubisNoise.SampleLevel(TileableSampler, detail_uv, baseMip + 1.0));
+		const float detailExp = 2.0 - 1.5 * saturate((ndf.height_fraction - 0.7) * 3.3333);
+		erosionComposite = lerp(erosionComposite, ReduceNubisErosion(pow(max(detail, 1e-5), detailExp), ndf, density_context.eye_distance), 0.35);
+	}
+
 	const float cloudNoiseComposite = 1.0 - erosionComposite;
-	const float normalizedDensity = saturate(cloudNoiseComposite - (1.0 - ndf.dimension_profile));
+	const float normalizedDensity = saturate(min(ndf.dimension_profile, 0.7) - 1.0 + 0.975 * cloudNoiseComposite);
 	return normalizedDensity * info.extinctionCoefficient;
 }
 
@@ -610,6 +641,8 @@ float sampleCloudDensity(
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	initNDFInfo(density_context.ndf);
 	density_context.noise_coordinates = 0.0;
+	density_context.warp_coordinates = 0.0;
+	density_context.eye_distance = 0.0;
 
 	const float planetHeight = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
 	if (planetHeight < cloud.lowestAltitude || planetHeight > cloud.highestAltitude)
@@ -625,6 +658,8 @@ float sampleCloudDensity(
 	const float3 shiftedPosition = pos + float3(heightShift, 0.0);
 	density_context.noise_coordinates = shiftedPosition * info.noiseFrequency + info.noiseOffset -
 	                                    float3(info.noiseWindOffset, 0.0) * info.noiseFrequency;
+	density_context.warp_coordinates = pos.xy * info.warpFrequency;
+	density_context.eye_distance = length(pos) * GAME_UNIT_TO_M;
 	return sampleCloudDensityFromContext(density_context, mip_level, include_detail);
 }
 

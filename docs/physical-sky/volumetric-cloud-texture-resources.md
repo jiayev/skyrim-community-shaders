@@ -18,9 +18,9 @@ the internal and boundary variation of that mass.
 | Resource                  | Binding | Type                      | Default source   |
 | ------------------------- | ------: | ------------------------- | ---------------- |
 | Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `nubis.dds`      |
-| Reserved                  |    `t6` | -                         | null             |
+| Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated    |
 | Low-cloud NDF             |    `t7` | `Texture2DArray<float>`   | GPU-generated    |
-| Reserved                  |    `t8` | -                         | null             |
+| Nubis base warp           |    `t8` | `Texture2D<unorm float4>` | CPU-generated    |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
 | High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
@@ -104,6 +104,23 @@ contract to this DDS produces incorrect, repetitive structure.
 `Noise Composite Scale` controls only the physical repeat length of
 `nubis.dds`. It does not change NDF coverage, height, or cloud species.
 
+Sampling reuses the detail machinery captured from Horizon Forbidden West:
+
+-   a tileable 2D warp field at `t8` distorts the noise UVs; its strength is
+    0.125 in noise-UV space below 2% height fraction and fades to zero by 5%,
+    breaking up the flat cloud base;
+-   the mip trend is coarser-with-profile, the continuous analogue of HFW's
+    `floor(profile * 3)`, keeping a smooth body and crisp wispy edges;
+-   when detail is enabled, a rotated second octave at 0.345x XY frequency and
+    0.3x Z frequency of the same volume is pow-shaped by height (exponent 2 at
+    the base to 0.5 at the top) and lerped in at 0.35, breaking up volume tiling;
+-   coverage-driven erosion relief near the layer bottom (HFW `_1573`) softens
+    sparse clouds instead of carving them with the same detail;
+-   the dimensional profile is capped at 0.7 with a 0.975 composite gain (HFW),
+    bounding peak optical density;
+-   beyond ~1 km the higher-frequency channel variants fade out (HFW `_1603`),
+    reducing far-distance shimmer.
+
 ## Profile LUTs
 
 `top_lut.dds` and `bottom_lut.dds` are required `128 x 128` R8 UNORM assets.
@@ -132,6 +149,7 @@ pre-HP path. High-cloud map generation remains an independent implementation.
 ## Static validation checklist
 
 -   `nubis.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
+-   The Nubis base warp texture is generated and bound at `t8`.
 -   Low NDF is a five-slice, linear `Texture2DArray` in the documented order.
 -   NDF coverage is generated independently from `nubis.dds`.
 -   Procedural minimum and maximum height form a valid interval.

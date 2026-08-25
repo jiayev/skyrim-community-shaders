@@ -250,6 +250,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> nubisWarpSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
 
@@ -288,7 +289,7 @@ struct PhysicalSky final : public Feature
 		float3 noiseOffset;
 		float extinctionCoefficient;
 		float2 noiseHeightShear;
-		float _padNoise;
+		float warpFrequency;
 		float2 highCellScale;
 		float highCellWindSpeed;
 		float2 highCellWarpScale;
@@ -379,6 +380,7 @@ struct PhysicalSky final : public Feature
 	void SetupVolumetricResources();
 	void CompileVolumetricShaders();
 	void LoadCloudTextures();
+	void CreateNubisWarpTexture();
 	void RenderVolumetricClouds(VolumetricCloudPass a_pass);
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
