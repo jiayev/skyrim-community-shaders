@@ -185,7 +185,7 @@ float ValidateHit(float3 hit, float2 originUV, float2 screenSize, float thicknes
 	float3 viewDirection = normalize(viewPosition);
 	float3 viewNormal = normalize(mul(FrameBuffer::CameraView, float4(normalize(waterNormal.xyz), 0.0)).xyz);
 
-	viewPosition += viewNormal * SharedData::ssrSettings.NormalBias * viewPosition.z * GAME_UNIT_TO_M;
+	viewPosition += viewNormal * NormalBias * viewPosition.z * GAME_UNIT_TO_M;
 	float3 reflectedDirection = reflect(viewDirection, viewNormal);
 	float3 projectedOrigin = ProjectPosition(viewPosition);
 	float3 projectedDirection = ProjectDirection(viewPosition, reflectedDirection, projectedOrigin);
@@ -195,11 +195,11 @@ float ValidateHit(float3 hit, float2 originUV, float2 screenSize, float thicknes
 		projectedOrigin,
 		projectedDirection,
 		float2(screenSize),
-		max(SharedData::ssrSettings.MaxMips, 1u) - 1u,
-		max(SharedData::ssrSettings.MaxSteps, 1u),
+		max(SpecMaxMips, 1u) - 1u,
+		max(SpecMaxSteps, 1u),
 		validHit);
 
-	float confidence = validHit ? ValidateHit(hit, uv, float2(screenSize), SharedData::ssrSettings.Thickness) : 0.0;
+	float confidence = validHit ? ValidateHit(hit, uv, float2(screenSize), SpecThickness) : 0.0;
 	if (confidence <= 0.0) {
 		OutScreenColor[pixel] = baseColor;
 		return;

@@ -147,7 +147,7 @@ struct ScreenSpaceReflections : Feature
 	eastl::unique_ptr<Texture2D> texNRDSpecInput = nullptr;
 	eastl::unique_ptr<Texture2D> texNRDSpecOutput = nullptr;
 
-	// Independent water SSR resources. The normal texture is written as MRT1 by
+	// Independent water SSR resources. The normal texture is written as MRT2 by
 	// the forward water shader; the color copy breaks the main-SRV/main-UAV hazard
 	// while the post-water compute pass composites in place.
 	eastl::unique_ptr<Texture2D> texWaterNormal = nullptr;
@@ -168,6 +168,7 @@ struct ScreenSpaceReflections : Feature
 	// True only after the current DrawSSR invocation has produced a trace output.
 	bool outputReady = false;
 	std::uint32_t waterNormalClearFrame = static_cast<std::uint32_t>(-1);
+	std::uint32_t waterSSRDrawFrame = static_cast<std::uint32_t>(-1);
 
 	void UpdateWaterBlendOverride();
 	RE::ImageSpaceManager::UNK_BSImagespaceShaderISTemporalAA* waterBlendOverrideTarget = nullptr;
