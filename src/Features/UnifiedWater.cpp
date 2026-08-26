@@ -13,10 +13,6 @@
 
 #include <imgui_internal.h>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	UnifiedWater::Settings,
-	UseOptimisedMeshes)
-
 namespace
 {
 	bool IsInteriorCellActive()
@@ -29,6 +25,14 @@ namespace
 		const auto player = RE::PlayerCharacter::GetSingleton();
 		const auto cell = player ? player->GetParentCell() : nullptr;
 		return cell && cell->IsInteriorCell();
+	}
+
+	/** @brief Logs the resource error alongside whether the process can see the loose file; the path stays relative so USVFS-virtualised files resolve. */
+	void LogMeshLoadFailure(RE::BSResource::ErrorCode error, const char* dataRelativePath)
+	{
+		std::error_code ec;
+		logger::error("[Unified Water] {} load failed: {}, loose file present: {}", dataRelativePath, magic_enum::enum_name(error),
+			std::filesystem::exists(std::filesystem::path("Data") / dataRelativePath, ec));
 	}
 
 	bool IsShortBranch(const std::uint8_t opcode)
@@ -63,34 +67,44 @@ namespace
 		logger::error("[Unified Water] Skipping {} patch at {:X}: unexpected branch bytes {:02X} {:02X}", label, address, bytes[0], bytes[1]);
 	}
 
-}
+	bool CanPatchBranch(const std::uintptr_t address)
+	{
+		const auto bytes = reinterpret_cast<const std::uint8_t*>(address);
+		return IsShortBranch(bytes[0]) || IsNearConditionalBranch(bytes[0], bytes[1]);
+	}
 
-void UnifiedWater::LoadSettings(json& o_json)
-{
-	settings = o_json;
-}
+	/** @brief Disables the vanilla LOD water and flow map paths that Unified Water supersedes. Irreversible, so it must only run once the mesh is validated. */
+	bool DisableVanillaWaterLOD()
+	{
+		// DataLoaded can run more than once, and re-patching a patched branch no longer matches either encoding
+		static bool patched = false;
+		if (patched)
+			return true;
 
-void UnifiedWater::SaveSettings(json& o_json)
-{
-	o_json = settings;
-}
+		// Skip iterating attached meshes and calling TESWaterSystem::AddLODWater, this is handled in Attach now
+		const auto attachedMeshAddLoop = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
+		const auto lodWaterAddLoop = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
 
-void UnifiedWater::RestoreDefaultSettings()
-{
-	settings = {};
+		if (!CanPatchBranch(attachedMeshAddLoop) || !CanPatchBranch(lodWaterAddLoop)) {
+			logger::error("[Unified Water] Unexpected branch bytes at {:X} or {:X}; another mod may patch the same code", attachedMeshAddLoop, lodWaterAddLoop);
+			return false;
+		}
+		patched = true;
+
+		PatchBranchToUnconditional(attachedMeshAddLoop, "attached mesh add loop");
+		PatchBranchToUnconditional(lodWaterAddLoop, "LOD water add loop");
+
+		// Patch out the compute shader calls that write to the flow map in Main::RenderWaterEffects
+		REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7), REL::NOP, 5);
+		REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A), REL::NOP, 5);
+		REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242), REL::NOP, 5);
+		return true;
+	}
+
 }
 
 void UnifiedWater::DrawSettings()
 {
-	ImGui::Checkbox(T(TKEY("use_optimised_meshes"), "Use Optimised Meshes"), &settings.UseOptimisedMeshes);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("use_optimised_meshes_tooltip"),
-							  "Uses meshes with significantly lower tri-count for improved performance with no visual quality loss.\n"
-							  "Will only affect newly created water - requires a change of location or game restart to take effect."));
-	}
-
-	ImGui::Spacing();
-
 	if (ImGui::TreeNodeEx(T(TKEY("debug"), "Debug"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		if (ImGui::Button(T(TKEY("regenerate_flowmap"), "Regenerate Flowmap")) && flowmap) {
 			if (flowmap->RegenerateAndLoadFlowmap())
@@ -173,37 +187,31 @@ void UnifiedWater::DataLoaded()
 	args.postProcess = false;
 	RE::NiPointer<RE::NiNode> nif;
 
+	const auto fail = [this](std::string reason) {
+		logger::error("[Unified Water] {}; distant water falls back to vanilla LOD", reason);
+		failedLoadedMessage = std::move(reason);
+	};
+
 	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\watermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load water mesh");
+		LogMeshLoadFailure(error, "meshes\\water\\WaterMesh.nif");
+		fail("Failed to load water mesh");
 		return;
 	}
 	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid water mesh hierarchy");
+		fail("Invalid water mesh hierarchy");
 		return;
 	}
 	const auto waterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
 	if (!waterShape) {
-		logger::error("[Unified Water] Water mesh does not contain valid TriShape");
+		fail("Water mesh does not contain valid TriShape");
 		return;
 	}
 	waterMesh = RE::NiPointer(waterShape);
 	logger::debug("[Unified Water] Water mesh loaded");
-
-	if (const auto error = RE::BSModelDB::Demand("meshes\\water\\optimisedwatermesh.nif", nif, args); error != RE::BSResource::ErrorCode::kNone) {
-		logger::error("[Unified Water] Failed to load optimised water mesh");
+	if (!DisableVanillaWaterLOD()) {
+		fail("Could not disable vanilla water LOD");
 		return;
 	}
-	if (!nif || nif->GetChildren().empty() || !nif->GetChildren().front()->AsNode() || nif->GetChildren().front()->AsNode()->GetChildren().empty()) {
-		logger::error("[Unified Water] Invalid optimised water mesh hierarchy");
-		return;
-	}
-	const auto optimisedWaterShape = nif->GetChildren().front()->AsNode()->GetChildren().front()->AsTriShape();
-	if (!optimisedWaterShape) {
-		logger::error("[Unified Water] Optimised water mesh does not contain valid TriShape");
-		return;
-	}
-	optimisedWaterMesh = RE::NiPointer(optimisedWaterShape);
-	logger::debug("[Unified Water] Optimised water mesh loaded");
 
 	flowmap = new Flowmap();
 	waterCache = new WaterCache();
@@ -422,12 +430,6 @@ void UnifiedWater::PostPostLoad()
 
 	stl::detour_thunk<BGSTerrainBlock_Attach>(REL::RelocationID(30934, 31737));
 
-	// Skip iterating attached meshes and calling TESWaterSystem::AddLODWater, this is handled in Attach now
-	const auto addLoopOffset = REL::RelocationID(30934, 31737).address() + REL::Relocate(0x109, 0x109);
-	const auto addLoopOffset2 = REL::RelocationID(30978, 31751).address() + REL::Relocate(0x54, 0xEA);
-	PatchBranchToUnconditional(addLoopOffset, "attached mesh add loop");
-	PatchBranchToUnconditional(addLoopOffset2, "LOD water add loop");
-
 	stl::detour_thunk<BGSTerrainBlock_Detach>(REL::RelocationID(30936, 31739));
 
 	stl::detour_thunk<BGSTerrainNode_UpdateWaterMeshSubVisibility>(REL::RelocationID(31059, 31846));
@@ -435,11 +437,6 @@ void UnifiedWater::PostPostLoad()
 	stl::detour_thunk<TESWaterSystem_UpdateDisplacementMeshPosition>(REL::RelocationID(31384, 32175));
 
 	stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
-
-	// Patch out the code compute shader calls that write to the flow map in Main::RenderWaterEffects
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1B7, 0x1F7), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x1EA, 0x22A), REL::NOP, 5);
-	REL::safe_fill(REL::RelocationID(35561, 36560).address() + REL::Relocate(0x202, 0x242), REL::NOP, 5);
 
 	gWaterLOD = reinterpret_cast<RE::NiNode**>(REL::RelocationID(516171, 402322).address());
 	gFlowMapSize = reinterpret_cast<int32_t*>(REL::RelocationID(527644, 414596).address());
@@ -451,13 +448,20 @@ void UnifiedWater::PostPostLoad()
 	logger::info("[Unified Water] Installed hooks");
 }
 
+namespace
+{
+	// Vanilla material CRC omits normal texture names, so distinct water forms can collide and
+	// steal each other's Normals01/02/03. Fold texture-name hashes into CRC via this side channel —
+	// never stash them in normalTexture1 (that used to null the pointer and kill BLEND_NORMALS scroll).
+	thread_local uint32_t t_waterNormalTextureHash = 0;
+	thread_local bool t_hasWaterNormalTextureHash = false;
+}
+
 void UnifiedWater::TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams::thunk(RE::TESWaterForm* form, RE::BSWaterShaderMaterial* material)
 {
-	// The game prefills the material and hashes its contents, it uses this hash to check if there is an existing identical material and swaps
-	// to using that material if so.
-	// Problem is it does not include all data from the form, especially normal textures which can cause problems with existing materials
-	// having their textures swapped out.
-	// This func hash the texture names and temporarily stashes them in a ptr slot, this is added to the hash in ComputeCRC and zeroed back out again
+	t_hasWaterNormalTextureHash = false;
+	t_waterNormalTextureHash = 0;
+
 	func(form, material);
 
 	uint32_t hash = 2166136261u;
@@ -472,16 +476,23 @@ void UnifiedWater::TESWaterSystem_InitializeWater_SetWaterShaderMaterialParams::
 	addStrToHash(form->noiseTextures[1].textureName.c_str());
 	addStrToHash(form->noiseTextures[2].textureName.c_str());
 	addStrToHash(form->noiseTextures[3].textureName.c_str());
-	uintptr_t bits = hash;
-	std::memcpy(&material->normalTexture1, &bits, sizeof(uintptr_t));
+	t_waterNormalTextureHash = hash;
+	t_hasWaterNormalTextureHash = true;
 }
 
 int32_t UnifiedWater::BSWaterShaderMaterial_ComputeCRC32::thunk(RE::BSWaterShaderMaterial* material, uint32_t srcHash)
 {
-	srcHash ^= static_cast<uint32_t>(reinterpret_cast<uint64_t>(material->normalTexture1.get())) + (srcHash << 6) + (srcHash >> 2);
-	constexpr auto zero = static_cast<uintptr_t>(0);
-	std::memcpy(&material->normalTexture1, &zero, sizeof(uintptr_t));
+	if (t_hasWaterNormalTextureHash) {
+		srcHash ^= t_waterNormalTextureHash + (srcHash << 6) + (srcHash >> 2);
+		t_hasWaterNormalTextureHash = false;
+		t_waterNormalTextureHash = 0;
+	}
 	return func(material, srcHash);
+}
+
+bool UnifiedWater::IsWaterDataReady() const
+{
+	return waterCache && waterMesh;
 }
 
 bool UnifiedWater::IsExteriorWorldspaceActive() const
@@ -507,7 +518,8 @@ void UnifiedWater::TES_SetWorldSpace::thunk(RE::TES* tes, RE::TESWorldSpace* wor
 
 	auto& singleton = globals::features::unifiedWater;
 	singleton.exteriorWorldspaceActive.store(worldSpace && isExterior, std::memory_order_release);
-	singleton.waterCache->SetCurrentWorldSpace(worldSpace);
+	if (singleton.IsWaterDataReady())
+		singleton.waterCache->SetCurrentWorldSpace(worldSpace);
 	singleton.UpdateWaterLODCull();
 }
 
@@ -517,12 +529,18 @@ void UnifiedWater::TES_DestroySkyCell::thunk(RE::TES* tes)
 
 	auto& singleton = globals::features::unifiedWater;
 	singleton.exteriorWorldspaceActive.store(false, std::memory_order_release);
-	singleton.waterCache->SetCurrentWorldSpace(nullptr);
+	if (singleton.IsWaterDataReady())
+		singleton.waterCache->SetCurrentWorldSpace(nullptr);
 	singleton.UpdateWaterLODCull();
 }
 
 void UnifiedWater::BGSTerrainNode_UpdateWaterMeshSubVisibility::thunk(const RE::BGSTerrainNode* node, RE::BSMultiBoundNode* waterParent)
 {
+	if (!globals::features::unifiedWater.IsWaterDataReady()) {
+		func(node, waterParent);
+		return;
+	}
+
 	if (!node || !waterParent)
 		return;
 
@@ -572,7 +590,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 	// Keeps the backing RuntimeCache alive for as long as `built` holds pointers into it.
 	WaterCache::InstructionResult instructionResult;
 
-	if (block && block->loaded && !block->attached && block->chunk && block->water) {
+	if (singleton.IsWaterDataReady() && block && block->loaded && !block->attached && block->chunk && block->water) {
 		// Keep terrain water alive while moving it out of its owning node
 		water = RE::NiPointer<RE::BSMultiBoundNode>(block->water);
 		block->chunk->DetachChild2(water.get());
@@ -628,8 +646,7 @@ void UnifiedWater::BGSTerrainBlock_Attach::thunk(RE::BGSTerrainBlock* block)
 
 			RE::NiCloningProcess cloningProcess;
 
-			const auto targetShape = lodLevel > 4 || singleton.settings.UseOptimisedMeshes ? singleton.optimisedWaterMesh : singleton.waterMesh;
-			RE::BSTriShape* shape = targetShape->CreateClone(cloningProcess)->AsTriShape();
+			RE::BSTriShape* shape = singleton.waterMesh->CreateClone(cloningProcess)->AsTriShape();
 
 			const auto posX = (instruction.x - node->baseCellX) * 4096.0f + instruction.size * 2048.0f;
 			const auto posY = (instruction.y - node->baseCellY) * 4096.0f + instruction.size * 2048.0f;
@@ -741,7 +758,7 @@ void UnifiedWater::BGSTerrainBlock_Detach::thunk(RE::BGSTerrainBlock* block)
 
 void UnifiedWater::BSWaterShader_SetupGeometry::thunk(RE::BSShader* waterShader, RE::BSRenderPass* pass)
 {
-	const auto& singleton = globals::features::unifiedWater;
+	auto& singleton = globals::features::unifiedWater;
 
 	if (singleton.IsExteriorWorldspaceActive() && singleton.flowmap && pass && pass->geometry) {
 		// ObjectUV.xyz below, xy contains width and height, z contains mesh scale
