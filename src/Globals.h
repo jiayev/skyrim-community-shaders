@@ -16,7 +16,11 @@ struct LinearLighting;
 struct LODBlending;
 struct InteriorSun;
 struct InverseSquareLighting;
+struct NRD;
+struct PhysicalSky;
 struct ScreenSpaceGI;
+struct ScreenSpaceReflections;
+struct ScreenSpacePointLightShadows;
 struct ScreenSpaceShadows;
 struct Skylighting;
 struct TerrainVariation;
@@ -26,6 +30,7 @@ struct TerrainBlending;
 struct TerrainHelper;
 struct TerrainShadows;
 struct UnifiedWater;
+struct VanillaFresnel;
 struct VolumetricLighting;
 struct WaterEffects;
 struct PerformanceOverlay;
@@ -38,8 +43,9 @@ struct Effects11;
 struct ExponentialHeightFog;
 struct HDRDisplay;
 struct PostProcessing;
-struct ScreenshotFeature;
 struct Skin;
+struct PseudoSunBounce;
+struct ScreenshotFeature;
 
 class State;
 class Deferred;
@@ -106,7 +112,11 @@ namespace globals
 		extern LODBlending lodBlending;
 		extern InteriorSun interiorSun;
 		extern InverseSquareLighting inverseSquareLighting;
+		extern NRD nrd;
+		extern PhysicalSky physicalSky;
 		extern ScreenSpaceGI screenSpaceGI;
+		extern ScreenSpaceReflections screenSpaceReflections;
+		extern ScreenSpacePointLightShadows screenSpacePointLightShadows;
 		extern ScreenSpaceShadows screenSpaceShadows;
 		extern Skylighting skylighting;
 		extern TerrainVariation terrainVariation;
@@ -116,6 +126,7 @@ namespace globals
 		extern TerrainHelper terrainHelper;
 		extern TerrainShadows terrainShadows;
 		extern UnifiedWater unifiedWater;
+		extern VanillaFresnel vanillaFresnel;
 		extern VolumetricLighting volumetricLighting;
 		extern WaterEffects waterEffects;
 		extern PerformanceOverlay performanceOverlay;
@@ -130,8 +141,9 @@ namespace globals
 		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
-		extern Skin skin;
 		extern PostProcessing postProcessing;
+		extern Skin skin;
+		extern PseudoSunBounce pseudoSunBounce;
 
 	}
 

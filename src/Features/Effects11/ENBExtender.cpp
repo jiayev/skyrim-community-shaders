@@ -90,10 +90,14 @@ namespace ENBExtender
 	{
 		std::string lower = widget;
 		std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-		if (lower == "dropdown") return Effect::UIWidgetType::Dropdown;
-		if (lower == "vector") return Effect::UIWidgetType::Vector;
-		if (lower == "quality") return Effect::UIWidgetType::Quality;
-		if (lower == "color") return Effect::UIWidgetType::Color;
+		if (lower == "dropdown")
+			return Effect::UIWidgetType::Dropdown;
+		if (lower == "vector")
+			return Effect::UIWidgetType::Vector;
+		if (lower == "quality")
+			return Effect::UIWidgetType::Quality;
+		if (lower == "color")
+			return Effect::UIWidgetType::Color;
 		return Effect::UIWidgetType::Default;
 	}
 
@@ -161,8 +165,8 @@ namespace ENBExtender
 			return false;
 
 		for (auto t = line.find_last_not_of(" \t\r");
-			 t != std::string::npos && line[t] == '\\';
-			 t = line.find_last_not_of(" \t\r")) {
+			t != std::string::npos && line[t] == '\\';
+			t = line.find_last_not_of(" \t\r")) {
 			line.erase(t);
 			std::string next;
 			if (!std::getline(stream, next))
@@ -201,8 +205,10 @@ namespace ENBExtender
 		if (equalsPos != std::string::npos) {
 			defaultVal = inner.substr(equalsPos + 1);
 			Trim(defaultVal, " \t;");
-			if (defaultVal == "false") defaultVal = "0";
-			else if (defaultVal == "true") defaultVal = "1";
+			if (defaultVal == "false")
+				defaultVal = "0";
+			else if (defaultVal == "true")
+				defaultVal = "1";
 		}
 
 		auto ann = [&](const char* name) { return ExtractAnnotation(annotations, name); };
@@ -216,8 +222,10 @@ namespace ENBExtender
 			if (GetPrivateProfileStringA(iniSection.c_str(), iniKey.c_str(), "", buf, sizeof(buf), iniPath.c_str()) > 0) {
 				std::string iniVal(buf);
 				Trim(iniVal);
-				if (iniVal == "false") iniVal = "0";
-				else if (iniVal == "true") iniVal = "1";
+				if (iniVal == "false")
+					iniVal = "0";
+				else if (iniVal == "true")
+					iniVal = "1";
 				finalVal = iniVal;
 			}
 		}
@@ -237,8 +245,18 @@ namespace ENBExtender
 				info.list = ann("UIList");
 
 				auto minStr = ann("UIMin"), maxStr = ann("UIMax");
-				if (!minStr.empty()) { if (isInt) info.intMin = SafeStoi(minStr); else info.floatMin = SafeStof(minStr); }
-				if (!maxStr.empty()) { if (isInt) info.intMax = SafeStoi(maxStr); else info.floatMax = SafeStof(maxStr); }
+				if (!minStr.empty()) {
+					if (isInt)
+						info.intMin = SafeStoi(minStr);
+					else
+						info.floatMin = SafeStof(minStr);
+				}
+				if (!maxStr.empty()) {
+					if (isInt)
+						info.intMax = SafeStoi(maxStr);
+					else
+						info.floatMax = SafeStof(maxStr);
+				}
 				auto orderStr = ann("UIOrdering");
 				if (!orderStr.empty()) {
 					info.ordering = SafeStoi(orderStr);
@@ -628,7 +646,6 @@ namespace ENBExtender
 		if (uiVar.type == Effect::UIVariableType::Float || uiVar.type == Effect::UIVariableType::Float2 ||
 			uiVar.type == Effect::UIVariableType::Float3 || uiVar.type == Effect::UIVariableType::Float4)
 			uiVar.separation = get("Separation");
-
 	}
 
 	static void ParseTimePeriod(Effect::UIVariable& uiVar)
@@ -667,16 +684,27 @@ namespace ENBExtender
 
 		if (typeDesc.Class == D3D_SVC_SCALAR) {
 			switch (typeDesc.Type) {
-			case D3D_SVT_FLOAT: out.type = Effect::UIVariableType::Float; break;
-			case D3D_SVT_INT: out.type = Effect::UIVariableType::Int; break;
-			case D3D_SVT_BOOL: out.type = Effect::UIVariableType::Bool; break;
-			default: return false;
+			case D3D_SVT_FLOAT:
+				out.type = Effect::UIVariableType::Float;
+				break;
+			case D3D_SVT_INT:
+				out.type = Effect::UIVariableType::Int;
+				break;
+			case D3D_SVT_BOOL:
+				out.type = Effect::UIVariableType::Bool;
+				break;
+			default:
+				return false;
 			}
 		} else if (typeDesc.Class == D3D_SVC_VECTOR && typeDesc.Type == D3D_SVT_FLOAT && typeDesc.Elements == 0) {
-			if (typeDesc.Columns == 2) out.type = Effect::UIVariableType::Float2;
-			else if (typeDesc.Columns == 3) out.type = Effect::UIVariableType::Float3;
-			else if (typeDesc.Columns == 4) out.type = Effect::UIVariableType::Float4;
-			else return false;
+			if (typeDesc.Columns == 2)
+				out.type = Effect::UIVariableType::Float2;
+			else if (typeDesc.Columns == 3)
+				out.type = Effect::UIVariableType::Float3;
+			else if (typeDesc.Columns == 4)
+				out.type = Effect::UIVariableType::Float4;
+			else
+				return false;
 		} else {
 			return false;
 		}
@@ -685,13 +713,23 @@ namespace ENBExtender
 
 		if (out.type == Effect::UIVariableType::Float || out.type == Effect::UIVariableType::Float2 ||
 			out.type == Effect::UIVariableType::Float3 || out.type == Effect::UIVariableType::Float4) {
-			auto s = get("UIMin"); if (!s.empty()) out.floatMin = SafeStof(s, out.floatMin);
-			s = get("UIMax"); if (!s.empty()) out.floatMax = SafeStof(s, out.floatMax);
+			auto s = get("UIMin");
+			if (!s.empty())
+				out.floatMin = SafeStof(s, out.floatMin);
+			s = get("UIMax");
+			if (!s.empty())
+				out.floatMax = SafeStof(s, out.floatMax);
 		} else if (out.type == Effect::UIVariableType::Int) {
-			auto s = get("UIMin"); if (!s.empty()) out.intMin = SafeStoi(s, out.intMin);
-			s = get("UIMax"); if (!s.empty()) out.intMax = SafeStoi(s, out.intMax);
+			auto s = get("UIMin");
+			if (!s.empty())
+				out.intMin = SafeStoi(s, out.intMin);
+			s = get("UIMax");
+			if (!s.empty())
+				out.intMax = SafeStoi(s, out.intMax);
 			if (out.widgetType == Effect::UIWidgetType::Dropdown) {
-				s = get("UIList"); if (!s.empty()) out.dropdownItems = ParseDropdownList(s);
+				s = get("UIList");
+				if (!s.empty())
+					out.dropdownItems = ParseDropdownList(s);
 			} else if (out.widgetType == Effect::UIWidgetType::Quality) {
 				out.dropdownItems = { "Very High", "High", "Medium", "Low", "Very Low" };
 				out.intMin = -1;
@@ -870,7 +908,6 @@ namespace ENBExtender
 			effect.uiVariables.push_back(uiVar);
 		}
 	}
-
 
 	void LoadTechniqueDropdownMetadata(Effect& effect)
 	{

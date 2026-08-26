@@ -18,7 +18,7 @@
 
 #include <DirectXTex.h>
 #pragma warning(push)
-#pragma warning(disable : 4244)  // double->float conversion in third-party header
+#pragma warning(disable: 4244)  // double->float conversion in third-party header
 #include <sk_hdr_png.hpp>
 #pragma warning(pop)
 
@@ -360,7 +360,6 @@ namespace
 			return src;
 		}
 
-
 		if (IsFlatHdrScreenshotCapture()) {
 			// Recompose from the clean scene with no UI buffer.
 			auto& hdr = globals::features::hdrDisplay;
@@ -645,15 +644,15 @@ void ScreenshotFeature::DrawSettings()
 
 	ImGui::SeparatorText(T(TKEY("output"), "Output"));
 
-	ImGui::Checkbox("Copy saved file to clipboard", &copyToClipboard);
+	ImGui::Checkbox(T(TKEY("copy_saved_file_to_clipboard"), "Copy saved file to clipboard"), &copyToClipboard);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("Places the saved screenshot on the clipboard as a file (paste in Explorer or attach in chat apps).");
+		ImGui::Text("%s", T(TKEY("copy_saved_file_to_clipboard_tooltip"), "Places the saved screenshot on the clipboard as a file (paste in Explorer or attach in chat apps)."));
 
 	if (!hdrCaptureAvailable) {
 		int sdrFormat = sdrUsePng ? 1 : 0;
-		ImGui::RadioButton("BMP (lossless)", &sdrFormat, 0);
+		ImGui::RadioButton(T(TKEY("bmp_lossless"), "BMP (lossless)"), &sdrFormat, 0);
 		ImGui::SameLine();
-		ImGui::RadioButton("PNG (lossless)", &sdrFormat, 1);
+		ImGui::RadioButton(T(TKEY("png_lossless"), "PNG (lossless)"), &sdrFormat, 1);
 		sdrUsePng = sdrFormat != 0;
 	}
 

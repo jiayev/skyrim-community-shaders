@@ -1,4 +1,5 @@
 #include "HairSpecular.h"
+#include "JiayeStatement.h"
 
 #include "../I18n/I18n.h"
 #include "Utils/D3D.h"
@@ -74,6 +75,8 @@ void HairSpecular::DrawSettings()
 	ImGui::SliderFloat(T(TKEY("self_shadow_strength"), "Self Shadow Strength"), &settings.SelfShadowStrength, 0.0f, 1.0f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("self_shadow_exponent"), "Self Shadow Exponent"), &settings.SelfShadowExponent, 0.0f, 10.0f, "%.2f");
 	ImGui::SliderFloat(T(TKEY("self_shadow_scale"), "Self Shadow Scale"), &settings.SelfShadowScale, 0.0f, 10.0f, "%.2f");
+
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void HairSpecular::LoadSettings(json& o_json)

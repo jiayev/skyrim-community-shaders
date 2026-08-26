@@ -4,11 +4,12 @@
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
 #include "Features/CloudShadows.h"
-#include "Globals.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
+#include "Globals.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -377,6 +378,9 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::cloudShadows.loaded) {
 			defines.emplace_back("CLOUD_SHADOWS", "");
 		}
+		if (globals::features::physicalSky.loaded) {
+			defines.emplace_back("PHYSICAL_SKY", "");
+		}
 		lightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
 	return lightScatteringCS;
@@ -415,12 +419,14 @@ void ExponentialHeightFog::Prepass()
 		lightLimitFix.lightGrid;
 	auto* depthSrv = Util::GetCurrentSceneDepthSRV(true);
 	auto& ibl = globals::features::ibl;
+	auto& physicalSky = globals::features::physicalSky;
 	auto& skylighting = globals::features::skylighting;
 	const bool hasIBL = ibl.loaded &&
 	                    ibl.settings.EnableIBL != 0 &&
 	                    !ibl.IsDisabledForCurrentScene() &&
 	                    ibl.envIBLTexture &&
 	                    ibl.skyIBLTexture;
+	const bool hasPhysicalSky = physicalSky.loaded && physicalSky.texTrLut;
 	const bool hasSkylighting = skylighting.loaded && skylighting.texProbeArray;
 
 	const bool temporalReprojection = Util::GetTemporal();
@@ -515,13 +521,24 @@ void ExponentialHeightFog::Prepass()
 		hasIBL ? ibl.skyIBLTexture->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(50, 1, &skylightingSrv);
+	ID3D11ShaderResourceView* physicalSkySrvs[4]{
+		hasPhysicalSky ? physicalSky.texTrLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texSvLut ? physicalSky.texSvLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApLut ? physicalSky.texApLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApShadow ? physicalSky.texApShadow->srv.get() : nullptr
+	};
+	ID3D11ShaderResourceView* physicalSkyShadowVolumeSrv = physicalSky.loaded && physicalSky.texShadowVolume ? physicalSky.texShadowVolume->srv.get() : nullptr;
+	context->CSSetShaderResources(61, 4, physicalSkySrvs);
 	context->CSSetShaderResources(76, 2, iblSrvs);
+	context->CSSetShaderResources(112, 1, &physicalSkyShadowVolumeSrv);
 
 	if (depthSrv) {
 		ID3D11UnorderedAccessView* uavs[1]{ conservativeDepth->uav.get() };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetConservativeDepthCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::ConservativeDepth");
 		context->Dispatch(groupX, groupY, 1);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -530,7 +547,9 @@ void ExponentialHeightFog::Prepass()
 		ID3D11UnorderedAccessView* uavs[1]{ vBufferA->uav.get() };
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetMaterialSetupCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::MaterialSetup");
 		context->Dispatch(groupX, groupY, groupZ);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -554,7 +573,9 @@ void ExponentialHeightFog::Prepass()
 		context->CSSetShaderResources(98, 1, &directionalShadowLightData);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetLightScatteringCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::LightScattering");
 		context->Dispatch(groupX, groupY, groupZ);
+		globals::profiler->EndPass();
 		uavs[0] = nullptr;
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 	}
@@ -565,7 +586,9 @@ void ExponentialHeightFog::Prepass()
 		context->CSSetShaderResources(0, 1, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetIntegrationCS(), nullptr, 0);
+		globals::profiler->BeginPass("ExponentialHeightFog::Integration");
 		context->Dispatch(groupX, groupY, 1);
+		globals::profiler->EndPass();
 	}
 
 	ID3D11ShaderResourceView* nullSrvs[5]{ nullptr, nullptr, nullptr, nullptr, nullptr };
@@ -579,6 +602,7 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
+	context->CSSetShaderResources(112, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 	context->CSSetSamplers(0, 2, nullSamplers);
 	context->CSSetConstantBuffers(0, 1, nullCb);

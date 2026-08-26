@@ -2,19 +2,23 @@
 
 #include <DDSTextureLoader.h>
 
+#include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
 
+#include "Features/CSEditor.h"
 #include "Features/DynamicCubemaps.h"
 #include "Features/Effects11.h"
 #include "Features/IBL.h"
+#include "Features/NRD.h"
+#include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/Skylighting.h"
 #include "Features/SubsurfaceScattering.h"
 #include "Features/TerrainBlending.h"
 #include "Features/Upscaling.h"
-#include "Features/CSEditor.h"
 
 #include "Hooks.h"
 
@@ -182,6 +186,9 @@ void Deferred::SetupResources()
 		delete directionalShadowLights;
 		directionalShadowLights = new Buffer(sbDesc, nullptr, "Deferred::DirectionalShadowLights");
 		directionalShadowLights->CreateSRV(srvDesc);
+
+		delete debugViewCB;
+		debugViewCB = nullptr;
 	}
 }
 
@@ -325,11 +332,23 @@ void Deferred::DeferredPasses()
 
 	auto& skylighting = globals::features::skylighting;
 
+	auto& nrd = globals::features::nrd;
+	if (nrd.loaded)
+		nrd.PrepareGuides();
+
 	auto& ssgi = globals::features::screenSpaceGI;
-	if (ssgi.loaded)
+	if (ssgi.loaded) {
 		ssgi.DrawSSGI();
-	auto [ssgi_ao, ssgi_y, ssgi_cocg, ssgi_gi_spec] = ssgi.GetOutputTextures();
-	bool ssgi_hq_spec = ssgi.settings.EnableExperimentalSpecularGI;
+		ssgi.Composite();
+	}
+
+	auto& ssr = globals::features::screenSpaceReflections;
+	if (ssr.loaded)
+		ssr.DrawSSR();
+
+	auto ssgiOutput = ssgi.GetDiffuseOutputTexture();
+	auto ssgiSH1Output = ssgi.GetDiffuseSH1Texture();
+	auto ssrOutput = ssr.GetOutputTexture();
 
 	auto dispatchCount = Util::GetScreenDispatchCount(true);
 
@@ -343,36 +362,59 @@ void Deferred::DeferredPasses()
 
 	auto& ibl = globals::features::ibl;
 
+	auto& physSky = globals::features::physicalSky;
+
 	// Deferred Composite
 	{
 		TracyD3D11Zone(globals::state->tracyCtx, "Deferred Composite");
 
-		ID3D11ShaderResourceView* srvs[16]{
-			specular.SRV,                                                                                    // t0  SpecularTexture
-			albedo.SRV,                                                                                      // t1  AlbedoTexture
-			normalRoughness.SRV,                                                                             // t2  NormalRoughnessTexture
-			masks.SRV,                                                                                       // t3  MasksTexture
-			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                         // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
-			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                              // t5  ReflectanceTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                        // t6  EnvTexture
-			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,             // t7  EnvReflectionsTexture
-			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,   // t8  SkylightingProbeArray
-			masks2.SRV,                                                                                      // t9  Masks2Texture (vertexAO in .x)
-			ssgi_ao,                                                                                         // t10 SsgiAoTexture
-			ssgi_hq_spec ? nullptr : ssgi_y,                                                                 // t11 SsgiYTexture
-			ssgi_hq_spec ? nullptr : ssgi_cocg,                                                              // t12 SsgiCoCgTexture
-			ssgi_hq_spec ? ssgi_gi_spec : nullptr,                                                           // t13 SsgiSpecularTexture
-			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                             // t14 EnvIBLTexture
-			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                             // t15 SkyIBLTexture
+		ID3D11ShaderResourceView* srvs[]{
+			specular.SRV,                                                                                   // t0  SpecularTexture
+			albedo.SRV,                                                                                     // t1  AlbedoTexture
+			normalRoughness.SRV,                                                                            // t2  NormalRoughnessTexture
+			masks.SRV,                                                                                      // t3  MasksTexture
+			dynamicCubemaps.loaded ? Util::GetCurrentSceneDepthSRV(false) : nullptr,                        // t4  DepthTexture (24/32-bit; HLSL type baked at compile via TERRAIN_BLENDING)
+			dynamicCubemaps.loaded ? reflectance.SRV : nullptr,                                             // t5  ReflectanceTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envTexture->srv.get() : nullptr,                       // t6  EnvTexture
+			dynamicCubemaps.loaded ? dynamicCubemaps.envReflectionsTexture->srv.get() : nullptr,            // t7  EnvReflectionsTexture
+			dynamicCubemaps.loaded && skylighting.loaded ? skylighting.texProbeArray->srv.get() : nullptr,  // t8  SkylightingProbeArray
+			ssgiOutput,                                                                                     // t9  SsgiTexture / SH0
+			ssgiSH1Output,                                                                                  // t10 SsgiSH1Texture
+			ibl.loaded ? ibl.envIBLTexture->srv.get() : nullptr,                                            // t11 EnvIBLTexture
+			ibl.loaded ? ibl.skyIBLTexture->srv.get() : nullptr,                                            // t12 SkyIBLTexture
+			ssrOutput,                                                                                      // t13 SsrTexture (Screen Space Reflections)
+			physSky.loaded ? physSky.texApLut->srv.get() : nullptr,                                         // t14 PhysicalSky AP LUT
+			physSky.loaded ? physSky.texApShadow->srv.get() : nullptr,                                      // t15 PhysicalSky AP Shadow
+			physSky.loaded && physSky.texVolTr ? physSky.texVolTr->srv.get() : nullptr,                     // t16 PhysicalSky Volumetric Transmittance
+			physSky.loaded && physSky.texVolLum ? physSky.texVolLum->srv.get() : nullptr,                   // t17 PhysicalSky Volumetric Luminance
+			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,       // t18 PhysicalSky Shadow Volume
+			masks2.SRV,                                                                                     // t19 Masks2Texture
 		};
+		ID3D11ShaderResourceView* physSkyApSunLut = physSky.loaded && physSky.texApSunLut ? physSky.texApSunLut->srv.get() : nullptr;  // t20 PhysicalSky direct solar AP LUT
 
-		if (dynamicCubemaps.loaded)
-			context->CSSetSamplers(0, 1, &linearSampler);
+		ID3D11SamplerState* samplers[]{
+			dynamicCubemaps.loaded ? linearSampler : nullptr,
+			physSky.loaded ? physSky.sampSv.get() : nullptr,
+		};
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		context->CSSetShaderResources(20, 1, &physSkyApSunLut);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+		if (debugView != DebugView::Off) {
+			if (!debugViewCB) {
+				debugViewCB = new ConstantBuffer(ConstantBufferDesc<DebugViewCB>(), "Deferred::DebugViewCB");
+			}
+			DebugViewCB cb{};
+			cb.mode = static_cast<uint>(debugView);
+			debugViewCB->Update(cb);
+
+			ID3D11Buffer* debugBuf = debugViewCB->CB();
+			context->CSSetConstantBuffers(13, 1, &debugBuf);
+		}
 
 		auto shader = interior ? GetComputeMainCompositeInterior() : GetComputeMainComposite();
 		context->CSSetShader(shader, nullptr, 0);
@@ -387,7 +429,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[21]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -395,6 +437,14 @@ void Deferred::DeferredPasses()
 
 		ID3D11Buffer* buffers[1] = { nullptr };
 		context->CSSetConstantBuffers(12, 1, buffers);
+
+		ID3D11SamplerState* samplers[2]{ nullptr, nullptr };
+		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
+
+		if (debugViewCB) {
+			ID3D11Buffer* nullDebugBuf = nullptr;
+			context->CSSetConstantBuffers(13, 1, &nullDebugBuf);
+		}
 
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
@@ -583,6 +633,33 @@ void Deferred::ClearShaderCache()
 	}
 }
 
+void Deferred::DrawSettings()
+{
+	const char* items[] = {
+		T("menu.advanced.deferred_debug_view.off", "Off"),
+		T("menu.advanced.deferred_debug_view.albedo", "Albedo"),
+		T("menu.advanced.deferred_debug_view.reflectance", "Reflectance"),
+		T("menu.advanced.deferred_debug_view.normal", "Normal"),
+		T("menu.advanced.deferred_debug_view.roughness", "Roughness"),
+		T("menu.advanced.deferred_debug_view.mask", "Mask"),
+		T("menu.advanced.deferred_debug_view.diffuse", "Diffuse"),
+		T("menu.advanced.deferred_debug_view.specular", "Specular"),
+		T("menu.advanced.deferred_debug_view.ssgi", "SSGI"),
+		T("menu.advanced.deferred_debug_view.ssr", "SSR"),
+		T("menu.advanced.deferred_debug_view.dynamic_cubemaps", "Dynamic Cubemaps")
+	};
+
+	int current = static_cast<int>(debugView);
+	if (ImGui::Combo(T("menu.advanced.deferred_debug_view", "Deferred Debug View"), &current, items, IM_ARRAYSIZE(items))) {
+		DebugView next = static_cast<DebugView>(current);
+		bool wasOff = debugView == DebugView::Off;
+		bool nowOff = next == DebugView::Off;
+		debugView = next;
+		if (wasOff != nowOff)
+			ClearShaderCache();
+	}
+}
+
 ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 {
 	if (!mainCompositeCS) {
@@ -590,17 +667,29 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 
 		std::vector<std::pair<const char*, const char*>> defines;
 
+		if (debugView != DebugView::Off)
+			defines.push_back({ "DEBUG_VIEW", nullptr });
+
 		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
 		if (globals::features::skylighting.loaded)
 			defines.push_back({ "SKYLIGHTING", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
+		if (globals::features::screenSpaceGI.loaded) {
 			defines.push_back({ "SSGI", nullptr });
+			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
+				defines.push_back({ "SSGI_SH", nullptr });
+		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });
+
+		if (globals::features::physicalSky.loaded)
+			defines.push_back({ "PHYSICAL_SKY", nullptr });
 
 		// TERRAIN_BLENDING flips DepthTexture's HLSL type from `Texture2D<unorm float>`
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
@@ -620,11 +709,20 @@ ID3D11ComputeShader* Deferred::GetComputeMainCompositeInterior()
 		std::vector<std::pair<const char*, const char*>> defines;
 		defines.push_back({ "INTERIOR", nullptr });
 
+		if (debugView != DebugView::Off)
+			defines.push_back({ "DEBUG_VIEW", nullptr });
+
 		if (globals::features::dynamicCubemaps.loaded)
 			defines.push_back({ "DYNAMIC_CUBEMAPS", nullptr });
 
-		if (globals::features::screenSpaceGI.loaded)
+		if (globals::features::screenSpaceGI.loaded) {
 			defines.push_back({ "SSGI", nullptr });
+			if (globals::features::screenSpaceGI.settings.EnableSH && globals::features::screenSpaceGI.settings.EnableGI)
+				defines.push_back({ "SSGI_SH", nullptr });
+		}
+
+		if (globals::features::screenSpaceReflections.loaded && globals::features::screenSpaceReflections.settings.Enabled)
+			defines.push_back({ "SSR", nullptr });
 
 		if (globals::features::ibl.loaded)
 			defines.push_back({ "IBL", nullptr });

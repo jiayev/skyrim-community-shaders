@@ -1,5 +1,6 @@
 #include "State.h"
 
+#include <cmath>
 #include <codecvt>
 
 #include <pystring/pystring.h>
@@ -21,6 +22,7 @@
 #include "Features/TerrainHelper.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
+#include "I18n/I18n.h"
 #include "Menu.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
@@ -882,8 +884,8 @@ void State::SetupResources()
 	sharedDataCB = new ConstantBuffer(ConstantBufferDesc<SharedDataCB>());
 
 	auto [data, size] = GetFeatureBufferData(false);
-	(void)data;
 	featureDataCB = new ConstantBuffer(ConstantBufferDesc((uint32_t)size));
+	delete[] data;
 
 	// Grab main texture to get resolution
 	D3D11_TEXTURE2D_DESC texDesc{};
@@ -1169,6 +1171,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto [data, size] = GetFeatureBufferData(a_inWorld);
 
 		featureDataCB->Update(data, size);
+
+		delete[] data;
 	}
 
 	auto* srv = Util::GetCurrentSceneDepthSRV(true);

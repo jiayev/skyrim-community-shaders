@@ -4,6 +4,7 @@
 #include "Deferred.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
+#include "PostProcessing.h"
 #include "State.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
@@ -16,8 +17,6 @@
 #include <cmath>
 #include <directx/d3dx12.h>
 #include <format>
-
-#include "Features/PostProcessing.h"
 
 #define I18N_KEY_PREFIX "feature.upscaling."
 
@@ -1671,15 +1670,11 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
-	auto& postProcessing = globals::features::postProcessing;
-	if (postProcessing.loaded) {
-		postProcessing.DrawBeforeUpscaling();
-	}
-
 	auto& upscaling = globals::features::upscaling;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
 	if (upscaling.ShouldUseFrameGenerationThisFrame()) {
+		auto& postProcessing = globals::features::postProcessing;
 		if (postProcessing.loaded)
 			postProcessing.ClearBorderMotionVectorsForFrameGen();
 		upscaling.CopySharedD3D12Resources();

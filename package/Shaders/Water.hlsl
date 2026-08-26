@@ -65,6 +65,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/Random.hlsli"
 #	include "Common/Shading.hlsli"
 #	include "Common/Color.hlsli"
+#	include "Common/BRDF.hlsli"
+#	include "Common/Game.hlsli"
 
 #	define WATER
 
@@ -178,9 +180,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.HPosition.z = heightMult * 0.5 + worldViewPos.z;
 	vsout.HPosition.w = worldViewPos.w;
 
-#	if defined(HORIZON_FIX)
+#		if defined(HORIZON_FIX)
 	vsout.HPosition.z = min(vsout.HPosition.z, vsout.HPosition.w * HorizonFix::FoldedDepth);
-#	endif
+#		endif
 
 #		if defined(STENCIL)
 	vsout.WorldPosition = worldPos;
@@ -306,6 +308,10 @@ struct PS_OUTPUT
 	float4 Lighting: SV_Target0;
 #	endif
 
+#	if defined(SSR) && (defined(SIMPLE) || defined(LOD) || (defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0))
+	float4 WaterNormal: SV_Target2;
+#	endif
+
 #	if defined(STENCIL)
 	float4 WaterMask: SV_Target0;
 	float2 MotionVector: SV_Target1;
@@ -379,12 +385,60 @@ cbuffer PerGeometry : register(b2)
 #		define SampColorSampler Normals01Sampler
 #		define LinearSampler Normals01Sampler
 
+static const float WATER_F0 = 0.02f;
+static const float WATER_SUN_ANGULAR_RADIUS = 0.00465f;
+
+float GetWaterProjectedSolidAngle(float cosAngularRadius)
+{
+	return max(Math::PI * (1.0f - cosAngularRadius * cosAngularRadius), EPSILON_DIVISION);
+}
+
+float GetWaterSunDiskCos()
+{
+	float cosAngularRadius = cos(WATER_SUN_ANGULAR_RADIUS);
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && SharedData::physSkyData.sunDiskCos > 0.0f)
+		cosAngularRadius = SharedData::physSkyData.sunDiskCos;
+#		endif
+	return cosAngularRadius;
+}
+
+float GetWaterFresnel(float cosTheta)
+{
+	return BRDF::F_Schlick(WATER_F0.xxx, saturate(cosTheta)).x;
+}
+
+float GetWaterDirectSpecularScale()
+{
+	return Color::PBRLightingCompensation * Color::PBRLightingScale;
+}
+
+float GetWaterDeltaLightDistributionFromCos(float3 normal, float3 viewDirection, float3 lightDirection, float cosAngularRadius)
+{
+	float3 V = -viewDirection;
+	float3 R = reflect(viewDirection, normal);
+
+	float NdotV = saturate(dot(normal, V));
+	float lightMask = step(cosAngularRadius, dot(R, lightDirection));
+
+	return lightMask * GetWaterFresnel(NdotV) / GetWaterProjectedSolidAngle(cosAngularRadius);
+}
+
+float GetWaterDeltaLightDistribution(float3 normal, float3 viewDirection, float3 lightDirection, float angularRadius)
+{
+	return GetWaterDeltaLightDistributionFromCos(normal, viewDirection, lightDirection, cos(angularRadius));
+}
+
 #		if defined(SKYLIGHTING)
 #			include "Skylighting/Skylighting.hlsli"
 #		endif
 
 #		if defined(EXP_HEIGHT_FOG)
 #			include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#		endif
+
+#		if defined(PHYSICAL_SKY)
+#			include "PhysicalSky/Common.hlsli"
 #		endif
 
 #		include "Common/ShadowSampling.hlsli"
@@ -827,17 +881,24 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			endif
 
 #			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
-	float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
-	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
-	float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
-	float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
-	float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
-	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
-	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
-	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
-	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
+#				if defined(SSR)
+	[branch] if (SharedData::ssrSettings.UseHiZForWater == 0)
+	{
+#				endif
+		float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
+		float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
+		float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
+		float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
+		float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
+		float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
+		float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
+		float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
+		float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+		float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+		reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
+#				if defined(SSR)
+	}
+#				endif
 #			endif
 
 	return reflectionColor;
@@ -867,8 +928,7 @@ float GetFresnelValue(float3 normal, float3 viewDirection)
 #			else
 	float3 actualNormal = normal;
 #			endif
-	float viewAngle = 1 - saturate(dot(-viewDirection, actualNormal));
-	return (1 - FresnelRI.x) * pow(viewAngle, 5) + FresnelRI.x;
+	return GetWaterFresnel(dot(-viewDirection, actualNormal));
 }
 
 struct DiffuseOutput
@@ -952,17 +1012,22 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 	if (Permutation::PixelShaderDescriptor & Permutation::WaterFlags::Interior)
 		return 0.0.xxx;
 
-	float3 reflectionDirection = reflect(viewDirection, normal);
-	float reflectionMul = exp2(VarAmounts.x * log2(saturate(dot(reflectionDirection, SunDir.xyz))));
+	float lightDistribution = GetWaterDeltaLightDistributionFromCos(normal, viewDirection, SunDir.xyz, GetWaterSunDiskCos());
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 sunColor = Color::DirectionalLight((SunColor.xyz * SunDir.w) / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
+	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * (1.0 - exp(-DeepColor.w)) * llDirLightMult;
+#				if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		sunColor *= PhysSky::SampleTr(normalize(reflect(viewDirection, normal)), DepthSampler);
+	sunColor *= PhysSky::GetDirlightTransmittance(worldPosition + FrameBuffer::CameraPosAdjust.xyz, DepthSampler);
+#				endif
+
 #				if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
 #				endif
-	return reflectionMul * sunColor;
+	return lightDistribution * sunColor * GetWaterDirectSpecularScale();
 #			endif
 }
 #		endif
@@ -977,6 +1042,10 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 
 #		if defined(IBL)
 #			include "IBL/IBL.hlsli"
+#		endif
+
+#		if defined(SSPLS)
+#			include "ScreenSpacePointLightShadows/SSPLS.hlsli"
 #		endif
 
 PS_OUTPUT main(PS_INPUT input)
@@ -1059,6 +1128,14 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	float3 normal = waterData.normal;
+
+#			if defined(SSR) && (defined(SIMPLE) || defined(LOD) || (defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0))
+	// Persist the exact perturbed normal used by forward water shading. It is in
+	// camera-relative world axes; the post-water compute pass transforms it to
+	// view space before tracing. Alpha is the per-pixel water coverage mask.
+	if (SharedData::ssrSettings.UseHiZForWater != 0)
+		psout.WaterNormal = float4(normal, 1.0);
+#			endif
 
 #			if defined(SKYLIGHTING)
 	sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normal, -viewDirection, 0.0);
@@ -1158,6 +1235,23 @@ PS_OUTPUT main(PS_INPUT input)
 
 			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
 			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * pow(HdotN, FresnelRI.z) * light.fade;
+
+#					if defined(SSPLS)
+			float lightAngle = dot(normal.xyz, normalizedLightDirection.xyz);
+			uint ssplsSteps = round(SharedData::ssplsSettings.StepLimit * (1.0 - saturate(viewPosition.z / SharedData::ssplsSettings.MaxDistance)));
+			[branch] if (
+				!FrameBuffer::FrameParams.z &&
+				SharedData::ssplsSettings.Enable &&
+				!(light.lightFlags & LightLimitFix::LightFlags::Simple) &&
+				lightAngle > 0.0)
+			{
+				float screenNoise = Random::InterleavedGradientNoise(input.HPosition.xy, SharedData::FrameCount);
+				float3 lightDirectionVS = FrameBuffer::WorldToView(light.positionWS.xyz, true) - viewPosition.xyz;
+				float SSPLSShadow = lerp(1.0, ScreenSpacePointLightShadows::GetShadow(LinearSampler, viewPosition, screenNoise, lightDirectionVS, ssplsSteps, light.radius, light.lightFlags & LightLimitFix::LightFlags::Shadow), SharedData::ssplsSettings.Strength);
+				lightColor *= SSPLSShadow;
+			}
+#					endif
+
 			specularLighting += lightColor * intensityMultiplier;
 		}
 	}
@@ -1182,6 +1276,16 @@ PS_OUTPUT main(PS_INPUT input)
 #					if defined(VC)
 	float specularFraction = lerp(1, fresnel * diffuseOutput.refractionMul, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+
+#						if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float3 waterViewDir = normalize(input.WPosition.xyz);
+		const float waterDist = length(input.WPosition.xyz);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
+		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+	}
+#						endif
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;
@@ -1233,6 +1337,16 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 	float specularFraction = lerp(1, fresnel, distanceBlendFactor);
 	float3 finalColorPreFog = lerp(diffuseOutput.refractionDiffuseColor, specularColor, specularFraction) + sunColor * depthControl.w;
+
+#						if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const float3 waterViewDir = normalize(input.WPosition.xyz);
+		const float waterDist = length(input.WPosition.xyz);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
+		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+	}
+#						endif
 
 #						if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = input.FogParam.w;

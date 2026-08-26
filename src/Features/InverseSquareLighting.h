@@ -23,10 +23,9 @@ public:
 				T("feature.inverse_square_lighting.key_feature_3", "Does not modify any existing lighting"),
 				T("feature.inverse_square_lighting.key_feature_4", "Requires the use of mods with lights enabled for inverse square falloff."),
 				T("feature.inverse_square_lighting.key_feature_5", "Full integration with Light Placer") } };
-	}
+	};
 
 	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
-
 
 	/** @brief Installs hooks for point light creation and luminance calculation. */
 	virtual void PostPostLoad() override;

@@ -3,8 +3,8 @@
 #include "IconsFontAwesome5.h"
 #include "imgui_stdlib.h"
 
+#include "JiayeStatement.h"
 #include "Menu.h"
-#include "Profiler.h"
 #include "State.h"
 #include "Util.h"
 
@@ -221,6 +221,8 @@ void PostProcessing::DrawSettings()
 		}
 		ImGui::TreePop();
 	}
+
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void PostProcessing::LoadSettings(json& o_json)

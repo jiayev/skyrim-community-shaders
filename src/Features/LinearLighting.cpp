@@ -9,6 +9,8 @@
 #include "Globals.h"
 #include "Utils/Game.h"
 
+#include "JiayeStatement.h"
+
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -105,6 +107,8 @@ void LinearLighting::DrawSettings()
 
 		ImGui::EndTabBar();
 	}
+
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 void LinearLighting::LoadSettings(json& o_json)

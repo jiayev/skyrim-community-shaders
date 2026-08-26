@@ -76,11 +76,7 @@ float smoothbumpstep(float edge0, float edge1, float x)
 		float depth = DepthTexture.SampleLevel(LinearSampler, uv, 0);
 		float linearDepth = SharedData::GetScreenDepth(depth);
 
-#if defined(REFLECTIONS)
-		if (linearDepth > 16.5) {  // Ignore objects which are too close
-#else
 		if (linearDepth > 16.5 && depth != 1.0) {  // Ignore objects which are too close or the sky
-#endif
 			half4 positionCS = half4(2 * half2(uv.x, -uv.y + 1) - 1, depth, 1);
 			positionCS = mul(FrameBuffer::CameraViewProjInverse, positionCS);
 			positionCS.xyz = positionCS.xyz / positionCS.w;

@@ -10,8 +10,8 @@
 namespace ImageBasedLighting
 {
 #if defined(IBL_DEFERRED)
-	Texture2D<sh2> EnvIBLTexture : register(t14);
-	Texture2D<sh2> SkyIBLTexture : register(t15);
+	Texture2D<sh2> EnvIBLTexture : register(t11);
+	Texture2D<sh2> SkyIBLTexture : register(t12);
 #else
 	Texture2D<sh2> EnvIBLTexture : register(t76);
 	Texture2D<sh2> SkyIBLTexture : register(t77);
@@ -44,7 +44,12 @@ namespace ImageBasedLighting
 		float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(shR, rayDir);
 		float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(shG, rayDir);
 		float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(shB, rayDir);
-		return float3(colorR, colorG, colorB) / Math::PI;
+		return max(0, float3(colorR, colorG, colorB) / Math::PI);
+	}
+
+	float3 GetSkyIBLOccluded(float3 rayDir, float visibility)
+	{
+		return GetSkyIBL(rayDir) * visibility;
 	}
 
 	// ============================================================================
@@ -63,7 +68,7 @@ namespace ImageBasedLighting
 		float colorR = SphericalHarmonics::SHHallucinateZH3Irradiance(iblSHR, float3(0, 0, 0));
 		float colorG = SphericalHarmonics::SHHallucinateZH3Irradiance(iblSHG, float3(0, 0, 0));
 		float colorB = SphericalHarmonics::SHHallucinateZH3Irradiance(iblSHB, float3(0, 0, 0));
-		float3 ibl0 = float3(colorR, colorG, colorB) / Math::PI;
+		float3 ibl0 = max(0, float3(colorR, colorG, colorB) / Math::PI);
 
 		if (SharedData::iblSettings.DALCMode == 1) {
 			float3 ratio = dalc0 / max(ibl0, 0.001);
@@ -94,6 +99,14 @@ namespace ImageBasedLighting
 		return Color::Saturation(GetSkyIBL(rayDir), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
 	}
 
+	float3 GetSkyIBLColorOccluded(float3 rayDir, float visibility)
+	{
+		if (SharedData::InInterior) {
+			return 0;
+		}
+		return Color::Saturation(GetSkyIBLOccluded(rayDir, visibility), SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
+	}
+
 	// ============================================================================
 	// High-level: compute the full diffuse ambient replacement
 	// ============================================================================
@@ -117,27 +130,36 @@ namespace ImageBasedLighting
 	}
 
 	/// Compute diffuse IBL ambient with a skylighting visibility factor applied per DALCMode
-	/// (mode 3 dims both DALC and sky; modes 0-2 dim only the sky contribution).
+	/// visibility: scalar skylighting factor (already computed in Lighting.hlsl).
 	float3 GetDiffuseIBLOccluded(float3 vanillaDALC, float3 rayDir, float visibility)
 	{
 		float3 linEnv, linSky;
-		if (SharedData::iblSettings.DALCMode == 3) {
-			linEnv = vanillaDALC * SharedData::iblSettings.DALCAmount * visibility;
-			linSky = GetSkyIBLColor(rayDir) * visibility;
-		} else if (SharedData::iblSettings.DALCMode == 2) {
+		if (SharedData::iblSettings.DALCMode >= 2) {
 			linEnv = vanillaDALC * SharedData::iblSettings.DALCAmount;
-			linSky = GetSkyIBLColor(rayDir) * visibility;
 		} else {
 			linEnv = GetEnvIBLColor(rayDir);
-			linSky = GetSkyIBLColor(rayDir) * visibility;
 		}
+		if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
+			linEnv *= visibility;
+		linSky = GetSkyIBLColorOccluded(rayDir, visibility);
 		return linEnv + linSky;
 	}
 
-	/// Combined env + sky IBL color with a visibility factor applied to the sky term.
+	// ============================================================================
+	// Convenience: combined IBL (for simple contexts)
+	// ============================================================================
+
+	float3 GetIBLColor(float3 rayDir)
+	{
+		return GetEnvIBLColor(rayDir) + GetSkyIBLColor(rayDir);
+	}
+
 	float3 GetIBLColorOccluded(float3 rayDir, float visibility)
 	{
-		return GetEnvIBLColor(rayDir) + GetSkyIBLColor(rayDir) * visibility;
+		float3 envColor = GetEnvIBLColor(rayDir);
+		if (!SharedData::InInterior && SharedData::iblSettings.SkylightingAffectsEnv != 0)
+			envColor *= visibility;
+		return envColor + GetSkyIBLColorOccluded(rayDir, visibility);
 	}
 
 #if defined(LIGHTING)

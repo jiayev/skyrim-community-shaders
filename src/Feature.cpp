@@ -20,11 +20,16 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/NRD.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
+#include "Features/PseudoSunBounce.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
 #include "Features/ScreenSpaceGI.h"
+#include "Features/ScreenSpacePointLightShadows.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
@@ -37,6 +42,7 @@
 #include "Features/TerrainVariation.h"
 #include "Features/UnifiedWater.h"
 #include "Features/Upscaling.h"
+#include "Features/VanillaFresnel.h"
 #include "Features/VolumetricLighting.h"
 #include "Features/VolumetricShadows.h"
 #include "Features/WaterEffects.h"
@@ -234,11 +240,15 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::performanceOverlay,
 		&globals::features::subsurfaceScattering,
 		&globals::features::terrainShadows,
+		&globals::features::nrd,
 		&globals::features::screenSpaceGI,
+		&globals::features::screenSpaceReflections,
+		&globals::features::screenSpacePointLightShadows,
 		&globals::features::skylighting,
 		&globals::features::skySync,
 		&globals::features::terrainBlending,
 		&globals::features::terrainHelper,
+		&globals::features::vanillaFresnel,
 		&globals::features::volumetricLighting,
 		&globals::features::lodBlending,
 		&globals::features::inverseSquareLighting,
@@ -258,8 +268,10 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::horizonFix,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
+		&globals::features::physicalSky,
+		&globals::features::postProcessing,
 		&globals::features::skin,
-		&globals::features::postProcessing
+		&globals::features::pseudoSunBounce
 	};
 
 	return features;
@@ -340,6 +352,8 @@ std::string Feature::GetDisplayCategory() const
 		return T("feature.category.materials", "Materials");
 	if (category == FeatureCategories::kOther)
 		return T("feature.category.other", "Other");
+	if (category == FeatureCategories::kPostProcessing)
+		return T("feature.category.post_processing", "Post-Processing");
 	if (category == FeatureCategories::kSky)
 		return T("feature.category.sky", "Sky");
 	if (category == FeatureCategories::kUtility)

@@ -10,9 +10,9 @@
 #define EFFECT
 
 #if defined(SOFT) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(VC) && \
-    !defined(LIGHTING) && !defined(PARTICLES) && !defined(STRIP_PARTICLES) &&                    \
-    !defined(BLOOD) && !defined(MEMBRANE) && !defined(ADDBLEND) && !defined(MULTBLEND) &&        \
-    !defined(MULTBLEND_DECAL) && !defined(ALPHA_TEST) && !defined(DEFERRED) && !defined(SKINNED)
+	!defined(LIGHTING) && !defined(PARTICLES) && !defined(STRIP_PARTICLES) &&                   \
+	!defined(BLOOD) && !defined(MEMBRANE) && !defined(ADDBLEND) && !defined(MULTBLEND) &&       \
+	!defined(MULTBLEND_DECAL) && !defined(ALPHA_TEST) && !defined(DEFERRED) && !defined(SKINNED)
 #	define IS_VOLUMETRIC_FOG
 #endif
 
@@ -475,6 +475,10 @@ cbuffer PerGeometry : register(b2)
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -527,6 +531,11 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
+#		endif
+
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
 #		endif
 
 #		if defined(SKYLIGHTING)
@@ -592,7 +601,12 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 		for (uint i = 0; i < sampleCount; i++) {
 			float t = (float(i) + noise) * rcpSampleCount;
 			float3 samplePositionWS = lerp(startPosition, endPosition, t);
-			shadow += ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust.xyz);
+			float sampleShadow = ShadowSampling::GetWorldShadow(samplePositionWS, FrameBuffer::CameraPosAdjust.xyz);
+#		if defined(PHYSICAL_SKY)
+			if (SharedData::physSkyData.enabled)
+				sampleShadow *= dot(PhysSky::GetDirlightTransmittance(samplePositionWS + FrameBuffer::CameraPosAdjust.xyz, SampDepthSampler), 1.0f.xxx / 3.0f);
+#		endif
+			shadow += sampleShadow;
 		}
 		shadow *= rcpSampleCount;
 	}
@@ -605,6 +619,11 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	}
+#		endif
+
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		dirColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDepthSampler);
 #		endif
 
 	return dirColor + ambientColor;
@@ -663,11 +682,14 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 propertyColor = Color::Effect(PropertyColor.xyz);
 	float shadowVariance = 1.0;
 
+	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
+	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
+
 #	if defined(EFFECTS11)
 	bool isFire = false;
 #		if defined(ADDBLEND)
 #			if defined(SOFT)
-    if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
+	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
 		isFire = true;
 #			elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
 	isFire = true;
@@ -686,8 +708,6 @@ PS_OUTPUT main(PS_INPUT input)
 #		if defined(LIGHT_LIMIT_FIX)
 	uint lightCount = 0;
 
-	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
-	float2 screenUV = FrameBuffer::ViewToUV(viewPosition);
 	bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
 
 	uint clusterIndex = 0;
@@ -801,6 +821,26 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
 
+	float effectNormalization = 1.0;
+#	if defined(IBL) && !defined(LIGHTING) && !defined(DEFERRED) && !defined(BLOOD)
+	if (SharedData::iblSettings.EnableIBL && SharedData::iblSettings.EffectNormalization && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		float3 ambientLevel = 0;
+		if (SharedData::iblSettings.DALCMode >= 2) {
+			// Mode 2: keep vanilla DALC, add sky IBL overlay
+			ambientLevel = Color::Ambient(max(0, SharedData::GetAmbient(0.f)));
+			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));
+		} else {
+			// Mode 0/1: replace with envIBL + skyIBL
+			ambientLevel = ImageBasedLighting::GetEnvIBLColor(float3(0, 0, 0));
+			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));
+		}
+		effectNormalization = Color::RGBToLuminance(ambientLevel);
+		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
+		effectNormalization = max(effectNormalization, SharedData::iblSettings.MinEffectMult);
+	}
+#	endif
+	lightColor *= effectNormalization;
+
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
@@ -808,11 +848,36 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(LIGHTING) && defined(VC) && defined(TEXCOORD) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(SOFT)
-	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0)
-		lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0) {
+#		if defined(PHYSICAL_SKY)
+		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
+			float3 sceneLighting = ShadowSampling::GetSceneLightingColor();
+			float3 skyStaticLighting = GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+			lightColor = baseColor.xyz * skyStaticLighting * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
+		} else
+#		endif
+		{
+			lightColor = GetLightingShadow(lightColor, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
+		}
+	}
 #	endif
 
 	lightColor = Color::EffectMult(lightColor);
+
+#	if !defined(DEFERRED) && defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		const float physSkyDist = length(input.WorldPosition.xyz);
+#		if defined(ADDBLEND)
+		lightColor *= PhysSky::SampleAp(physSkyViewDir, input.Position.xy, physSkyDist, SampBaseSampler).w;
+#		elif !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0)
+			lightColor = PhysSky::CompositeAerialPerspectiveReflection(lightColor, physSkyViewDir, physSkyDist, SampBaseSampler);
+		else
+			lightColor = PhysSky::CompositeAerialPerspective(lightColor, physSkyViewDir, input.Position.xy, screenUV, physSkyDist, SampBaseSampler);
+#		endif
+	}
+#	endif
 
 #	if !defined(MOTIONVECTORS_NORMALS)
 	float fogFactor = Color::FogAlpha(input.FogParam.w);
@@ -843,20 +908,20 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 	}
 #		endif
-#        if defined(ADDBLEND)
-#            if defined(EXP_HEIGHT_FOG)
-    float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
-#            else
-    float3 blendedColor = lightColor * (1 - fogFactor);
-#            endif
-#	if defined(EFFECTS11)
+#		if defined(ADDBLEND)
+#			if defined(EXP_HEIGHT_FOG)
+	float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
+#			else
+	float3 blendedColor = lightColor * (1 - fogFactor);
+#			endif
+#			if defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
 		if (isFire)
 			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
 		else
 			blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
 	}
-#	endif
+#			endif
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 #			if defined(EXP_HEIGHT_FOG)
 	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * vanillaFogFactor).xxx);
@@ -885,6 +950,7 @@ PS_OUTPUT main(PS_INPUT input)
 	finalColor *= fogMul;
 #	endif
 	psout.Diffuse = finalColor;
+
 #	if defined(LIGHTING) && defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
 		if (SharedData::lightLimitFixSettings.LightsVisualisationMode == 0) {

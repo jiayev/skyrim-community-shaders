@@ -1,4 +1,5 @@
 #include "Common/Color.hlsli"
+#include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
@@ -162,16 +163,45 @@ cbuffer AlphaTestRefCB : register(b11)
 #	include "Common/MotionBlur.hlsli"
 #	include "Common/SharedData.hlsli"
 
-#	if defined(EXP_HEIGHT_FOG)
-#		define SampColorSampler SampBaseSampler
-#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	if defined(CLOUD_SHADOWS)
+#		include "CloudShadows/CloudShadows.hlsli"
 #	endif
 
 #	ifdef HDR_OUTPUT
 #		include "HDRDisplay/HDRSun.hlsli"
+#		include "Common/Random.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY)
+#		define PS_SKY_SAMPLERS
+#		include "PhysicalSky/Common.hlsli"
+#		if defined(TEX) && defined(CLOUDS)
+#			define PS_CLOUDS
+#		endif
+#	endif
+
+#	if defined(EXP_HEIGHT_FOG)
+#		define SampColorSampler SampBlendSampler
+#		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
 Texture2D<float> TexDepthSampler : register(t17);
+
+#	if defined(PHYSICAL_SKY)
+float GetPhysSkyCloudShadow(float3 viewDir, uint2 pxCoord)
+{
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0) {
+#		if defined(CLOUD_SHADOWS)
+		float cloudCubeSample = CloudShadows::CloudShadowsTexture.SampleLevel(SampBaseSampler, viewDir, 0).x;
+		return saturate(cloudCubeSample * SharedData::cloudShadowsSettings.Opacity);
+#		else
+		return 0.0;
+#		endif
+	}
+
+	return PhysSky::GetApShadow(pxCoord);
+}
+#	endif
 
 #	if defined(EFFECTS11)
 float ComputeProceduralSun(float2 uv)
@@ -195,6 +225,15 @@ PS_OUTPUT main(PS_INPUT input)
 	// scalar in PParams.y to RGB; float3 matches output .xyz where skyScale is added.
 	float3 skyScale = Color::Sky(PParams.yyy);
 
+#	if defined(PS_CLOUDS)
+	float psCloudDist = 1e3f / 1.428e-2;
+	float3 viewDir = normalize(input.WorldPosition.xyz);
+#		if defined(CLOUD_SHADOWS)
+	if (SharedData::physSkyData.enabled)
+		psCloudDist = CloudShadows::IntersectCloudDist(float3(0, 0, 0), viewDir);
+#		endif
+#	endif
+
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
@@ -209,10 +248,31 @@ PS_OUTPUT main(PS_INPUT input)
 	baseColor.xyz = Color::Sky(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
+#		if defined(PHYSICAL_SKY)
+	bool enableProceduralSun = SharedData::physSkyData.sunDiskCos > 0.0 && SharedData::physSkyData.enabled && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun);
+	baseColor.xyz *= enableProceduralSun ? 0.f : 1.f;
+#		else
+	bool enableProceduralSun = false;
+#		endif
 
 #		if defined(HDR_OUTPUT)
 	float hdrSunGain = HDRSun::GetHdrSunGain(input.TexCoord0.xy, baseColor);
 	baseColor.xyz *= hdrSunGain;
+	if (HDRSun::IsHdrSunActive() && !enableProceduralSun) {
+		// Dither bright output to reduce banding in high-boost sun path.
+		// Same baseColor/skyScale treatment for DITHER and non-DITHER; DITHER adds noiseGrad later.
+		baseColor.xyz += (Random::InterleavedGradientNoise(input.Position.xy) - 0.5f) *
+		                 (saturate(hdrSunGain - 1.0f) / 255.0f);
+		skyScale = 0.0f;
+	}
+
+#			if defined(CLOUD_SHADOWS)
+	if (HDRSun::IsHdrSunActive() && !enableProceduralSun) {
+		float cloudMult = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
+		baseColor.xyz *= cloudMult;
+		baseColor.w *= cloudMult;
+	}
+#			endif
 #		endif
 
 #		if defined(TEX) && defined(EFFECTS11)
@@ -221,6 +281,16 @@ PS_OUTPUT main(PS_INPUT input)
 		baseColor.w = input.Color.w;
 		skyScale = 0.0;
 	}
+#		endif
+
+#		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
+	if (SharedData::physSkyData.enabled && SharedData::physSkyData.enableVanillaClouds)
+		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
+	else if (SharedData::physSkyData.enabled && !SharedData::physSkyData.enableVanillaClouds)
+		baseColor.a = 0;  // Hide vanilla clouds when disabled
+#		elif defined(PS_CLOUDS)
+	if (SharedData::physSkyData.enabled && !SharedData::physSkyData.enableVanillaClouds)
+		baseColor.a = 0;  // Hide vanilla clouds when disabled (no cloud shadows)
 #		endif
 
 #		if defined(DITHER)
@@ -235,13 +305,13 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 skyGradientColor = input.Color.xyz;
 
-#if defined(EFFECTS11)
+#				if defined(EFFECTS11)
 	float3 viewDirection = normalize(input.WorldPosition.xyz);
 	if (SharedData::enbSettings.UseProceduralGradientWeights) {
 		float gradientPosition = pow(1.0 - saturate(viewDirection.z), SharedData::enbSettings.ProceduralGradientWeightCurve);
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
-#endif
+#				endif
 	psout.Color.xyz = Color::Sky(skyGradientColor) + skyScale;
 
 	psout.Color.xyz *= 1.0 + noiseGrad;
@@ -260,10 +330,10 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
-#		if defined(CLOUDS) && defined(EFFECTS11)
+#			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable)
 		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::enbSettings.CloudsCurve);
-#		endif
+#			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
 	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
@@ -283,7 +353,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		if (SharedData::enbSettings.CloudsEdgeIntensity > 0.0) {
 			float cloudsEdgeAlpha = saturate(1.0 - baseColor.w);
-			
+
 			float3 sunPhase = pow(sunLighting, 32.0) * SharedData::SunColor.xyz * cloudsEdgeAlpha;
 			float3 masserPhase = pow(masserLighting, 32.0) * SharedData::MasserColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
 			float3 secundaPhase = pow(secundaLighting, 32.0) * SharedData::SecundaColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
@@ -303,8 +373,64 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color = float4(0, 0, 0, 1.0);
 #	endif  // OCCLUSION
 
-#	if defined(EXP_HEIGHT_FOG)
 	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+#		if defined(DITHER) && !defined(TEX)
+		// SKY
+		float3 skyViewDir = normalize(input.WorldPosition.xyz);
+		float skyShadow = GetPhysSkyCloudShadow(skyViewDir, input.Position.xy);
+		float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+		float3 physSkyColor = PhysSky::SampleSky(skyViewDir, skyShadow, PhysSky::SampSv);
+		float3 skyColor = physSkyColor;
+		if (SharedData::physSkyData.enableVolumetricClouds)
+			skyColor = inReflection ? PhysSky::CompositeVolumetricCloudsCube(physSkyColor, skyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv);
+		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
+
+#		elif defined(PS_CLOUDS)
+		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
+		float4 apColor = PhysSky::SampleAp(viewDir, psCloudDist, apShadow, PhysSky::SampSv);
+		psout.Color.xyz = psout.Color.xyz * apColor.a + apColor.rgb;
+#		elif defined(TEX) && defined(DEFERRED)
+		float3 sunDir = normalize(SharedData::physSkyData.sunDir);
+		float cosTheta = saturate(dot(normalize(input.WorldPosition.xyz), sunDir));
+		if (enableProceduralSun && cosTheta > SharedData::physSkyData.sunDiskCos && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
+			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
+			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
+			float3 limbFactor = Color::GamutTransform(PhysSky::LimbDarkenHestroffer(normDist));
+
+			const float softEdge = saturate(8.0f * (cosTheta - SharedData::physSkyData.sunDiskCos) / (1.0f - SharedData::physSkyData.sunDiskCos));
+			const float sunSolidAngle = Math::TAU * (1.0f - SharedData::physSkyData.sunDiskCos);
+			const float3 transmittance = PhysSky::SampleTr(normalize(input.WorldPosition.xyz), SampBlendSampler);
+			const float3 sunDiskRadiance = min((SharedData::physSkyData.sunlightColor / max(sunSolidAngle, 1e-6f)) * transmittance, 62250.0f);
+
+			float3 sunDiskColor = sunDiskRadiance * limbFactor * softEdge;
+			psout.Color.xyz = sunDiskColor;
+			psout.Color.w = 1.0;
+		} else if (enableProceduralSun) {
+			psout.Color = 0.0f;
+		}
+		if (SharedData::physSkyData.enableVolumetricClouds) {
+			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+			psout.Color.xyz = PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+		}
+#		else
+#			ifndef OCCLUSION
+		if (enableProceduralSun) {
+			psout.Color = 0.0f;
+		} else
+#			endif
+			if (SharedData::physSkyData.enableVolumetricClouds) {
+			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
+			float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+			psout.Color.xyz = inReflection ? PhysSky::CompositeVolumetricCloudsCube(psout.Color.xyz, physSkyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
+		}
+#		endif
+	}
+#	endif
+
+#	if defined(EXP_HEIGHT_FOG)
 	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
 		float3 skyFogPosition = normalize(input.FogPosition.xyz) * SharedData::CameraData.x;
 		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, FrameBuffer::CameraPosAdjust.xyz, psout.Color.xyz, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));

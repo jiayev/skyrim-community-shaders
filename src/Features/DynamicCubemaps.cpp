@@ -1,10 +1,12 @@
 #include "DynamicCubemaps.h"
 
-#include <cassert>
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
+#include <cassert>
 
+#include "Deferred.h"
 #include "I18n/I18n.h"
+#include "PhysicalSky.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -288,7 +290,7 @@ void DynamicCubemaps::UpdateCubemapCapture(bool a_reflections)
 	auto context = globals::d3d::context;
 
 	auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY];
-	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	auto& main = renderer->GetRuntimeData().renderTargets[globals::deferred->forwardRenderTargets[0]];
 
 	ID3D11ShaderResourceView* srvs[2] = { depth.depthSRV, main.SRV };
 	context->CSSetShaderResources(0, 2, srvs);
@@ -375,7 +377,11 @@ void DynamicCubemaps::Inferrence(bool a_reflections)
 
 	auto& cubemap = renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
 
-	ID3D11ShaderResourceView* srvs[3] = { (a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(), cubemap.SRV, defaultCubemap };
+	ID3D11ShaderResourceView* srvs[3] = {
+		(a_reflections ? envCaptureReflectionsTexture : envCaptureTexture)->srv.get(),
+		cubemap.SRV,
+		defaultCubemap
+	};
 	context->CSSetShaderResources(0, 3, srvs);
 
 	context->CSSetSamplers(0, 1, &computeSampler);
@@ -422,7 +428,6 @@ void DynamicCubemaps::Irradiance(bool a_reflections, uint32_t a_startLevel, uint
 			context->CopySubresourceRegion(a_reflections ? envReflectionsTexture->resource.get() : envTexture->resource.get(), D3D11CalcSubresource(0, face, MIPLEVELS), 0, 0, 0, envInferredTexture->resource.get(), srcSubresourceIndex, nullptr);
 		}
 
-
 		auto srv = envInferredTexture->srv.get();
 		context->GenerateMips(srv);
 	}
@@ -445,10 +450,9 @@ void DynamicCubemaps::Irradiance(bool a_reflections, uint32_t a_startLevel, uint
 			size /= 2;
 
 		// Suffix: A = level 1, BA = levels 2..N-1, BB = last level.
-		const char* suffix = (a_startLevel == 1) ? "A" : (a_endLevel == MIPLEVELS) ? "BB" : "BA";
-		const auto passName = a_reflections
-			? std::format("DynamicCubemaps::IrradianceReflections{}", suffix)
-			: std::format("DynamicCubemaps::Irradiance{}", suffix);
+		const char* suffix = (a_startLevel == 1) ? "A" : (a_endLevel == MIPLEVELS) ? "BB" :
+		                                                                             "BA";
+		const auto passName = a_reflections ? std::format("DynamicCubemaps::IrradianceReflections{}", suffix) : std::format("DynamicCubemaps::Irradiance{}", suffix);
 		globals::profiler->BeginPass(passName);
 		for (std::uint32_t level = a_startLevel; level < a_endLevel; level++, size /= 2) {
 			const UINT numGroups = (UINT)std::max(1u, (size + 7u) / 8u);
@@ -527,7 +531,6 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
 
-
 	auto dst = a_reflections ? envReflectionsTextureBC6H : envTextureBC6H;
 	context->CopyResource(dst->resource.get(), bc6hScratchTexture->resource.get());
 }
@@ -535,9 +538,9 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 /**
  * @brief Advances the cubemap update pipeline state machine by one task.
  *
- * Executes the next step in a multi-frame sequence that captures, infers, filters, 
- * and compresses environment cubemaps. Resets capture when game time jumps 
- * significantly and recompiles shaders if needed. Processes either the base or 
+ * Executes the next step in a multi-frame sequence that captures, infers, filters,
+ * and compresses environment cubemaps. Resets capture when game time jumps
+ * significantly and recompiles shaders if needed. Processes either the base or
  * reflection variant depending on the current task.
  */
 void DynamicCubemaps::UpdateCubemap()
@@ -569,7 +572,7 @@ void DynamicCubemaps::UpdateCubemap()
 		recompileFlag = false;
 	}
 
-	static constexpr uint32_t kIrradianceSplit  = 2;
+	static constexpr uint32_t kIrradianceSplit = 2;
 	static constexpr uint32_t kIrradianceSplitB = MIPLEVELS - 1;
 
 	switch (nextTask) {

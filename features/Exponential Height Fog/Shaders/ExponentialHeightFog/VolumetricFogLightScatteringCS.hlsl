@@ -20,6 +20,9 @@ RWTexture3D<float4> LightScattering : register(u0);
 #	include "LightLimitFix/LightLimitFix.hlsli"
 #	include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #endif
+#if defined(PHYSICAL_SKY)
+#	include "PhysicalSky/Common.hlsli"
+#endif
 #define SKYLIGHTING_PROBE_REGISTER t50
 #include "Skylighting/Skylighting.hlsli"
 
@@ -206,6 +209,10 @@ float SampleDirectionalWorldShadow(float3 positionWS)
 #if defined(CLOUD_SHADOWS)
 	worldShadow *= CloudShadows::GetCloudShadowMult(positionWS, LinearSampler);
 #endif
+#if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		worldShadow *= dot(PhysSky::GetDirlightTransmittance(positionWS + FrameBuffer::CameraPosAdjust.xyz, LinearSampler), 1.0f.xxx / 3.0f);
+#endif
 	return worldShadow;
 }
 
@@ -230,6 +237,19 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 
 	return skyLighting *
 	       SharedData::exponentialHeightFogSettings.volumetricSkyLightingIntensity;
+}
+
+float3 ComputeDirectionalLightColor()
+{
+	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5f), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+#if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), LinearSampler);
+		dirLightColor *= saturate(physSkyTransmittance);
+	}
+#endif
+	return dirLightColor;
 }
 
 #if defined(LIGHT_LIMIT_FIX)
@@ -330,7 +350,7 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	float directionalShadow = SampleDirectionalShadow(positionWS) *
 	                          SampleDirectionalWorldShadow(positionWS);
 	float3 directionalScattering =
-		SharedData::DirLightColor.xyz *
+		ComputeDirectionalLightColor() *
 		SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
 		directionalShadow *
 		phase *

@@ -151,7 +151,7 @@ namespace
 			return T("feature.category.lighting", "Lighting");
 		if (category == FeatureCategories::kMaterials)
 			return T("feature.category.materials", "Materials");
-		if (category == "Post-Processing")
+		if (category == FeatureCategories::kPostProcessing)
 			return T("feature.category.post_processing", "Post-Processing");
 		if (category == FeatureCategories::kOther)
 			return T("feature.category.other", "Other");

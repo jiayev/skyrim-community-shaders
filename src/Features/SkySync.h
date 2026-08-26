@@ -1,7 +1,8 @@
-﻿#pragma once
+#pragma once
 #include "RE/M/Moon.h"
-
 #include "Utils/Moon.h"
+
+struct PhysicalSky;
 
 /** @brief Synchronizes volumetric lighting and shadow direction with actual sun and moon positions. */
 struct SkySync : Feature
@@ -10,6 +11,8 @@ private:
 	static constexpr std::string_view MOD_ID = "153543";
 
 public:
+	friend struct PhysicalSky;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual std::string GetDisplayName() override { return T("feature.sky_sync.name", "Sky Sync"); }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
@@ -75,7 +78,6 @@ public:
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-
 private:
 	enum class CellFlagExt : uint16_t
 	{
@@ -124,9 +126,9 @@ private:
 		bool sunsetHeadingLocked = false;
 		float vlIntensityFactor = 1.0f;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], float fadeDuration, float fadeAdvance, bool a_immediateTransition);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
-		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir);
+		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
 		static void SetElevation(RE::NiPoint3& dir, float elevRadians);
 		static void ClampDirection(RE::NiPoint3& dir);
@@ -157,8 +159,10 @@ private:
 	float lastGameHour = -1.0f;
 	bool immediateTransitionReady = false;
 
+	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
+	std::optional<std::array<RE::NiColor, 3>> lightColors = {};
 	bool sunSetting = false;
 	bool sunRising = false;
 	bool sunBelowHorizon = false;

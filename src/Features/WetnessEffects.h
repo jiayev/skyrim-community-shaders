@@ -61,6 +61,13 @@ public:
 		float RippleRadius = 1.f;
 		float RippleBreadth = .5f;
 		float RippleLifetime = .5f;
+		float WallRainDensity = 1.0f;
+		float WallRainDropSize = 1.0f;
+		float WallRainSpeed = 1.0f;
+		float WallRainLayering = 1.0f;
+		float WallRainNormalStrength = 2.0f;
+		float WallRainWetness = 1.0f;
+		float WallRainDarkening = 0.65f;
 	};
 
 	struct alignas(16) PerFrame
@@ -71,7 +78,7 @@ public:
 		float Wetness;
 		float PuddleWetness;
 		Settings settings;
-		uint pad0;
+		uint pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -124,7 +131,6 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 
 	virtual void RestoreDefaultSettings() override;
-
 	/** @brief Returns the weather analysis configuration for the debug weather analysis panel. */
 	virtual WeatherAnalysisConfig GetWeatherAnalysisConfig() const override
 	{

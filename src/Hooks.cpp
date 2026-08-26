@@ -15,6 +15,7 @@
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PostProcessing.h"
+#include "Features/ScreenSpaceReflections.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
@@ -253,6 +254,9 @@ namespace WaterBlendHistory
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
+			if (globals::features::screenSpaceReflections.IsWaterSSRReplacementActive())
+				return;
+
 			auto& renderTargets = globals::game::shadowState->GetRuntimeData().renderTargets;
 
 			// Clear stale coverage left by discarded non-water pixels
@@ -263,6 +267,35 @@ namespace WaterBlendHistory
 				clearColor);
 
 			func(imageSpaceShader, shape, param);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+namespace WaterScreenSpaceReflections
+{
+	struct SkipWaterSSR
+	{
+		static void thunk()
+		{
+			auto& ssr = globals::features::screenSpaceReflections;
+			if (!ssr.IsWaterSSRReplacementActive()) {
+				func();
+			}
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RenderEffects
+	{
+		static void thunk(RE::BSShaderAccumulator* accumulator, std::uint32_t renderFlags)
+		{
+			func(accumulator, renderFlags);
+
+			if (!globals::state->IsRenderingReflections())
+				globals::features::screenSpaceReflections.DrawWaterSSR();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -428,6 +461,7 @@ void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
 	globals::state->Draw();
+	globals::features::screenSpaceReflections.BindWaterNormalTarget(isCompute);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1019,6 +1053,15 @@ namespace Hooks
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
+
+		// Skip the vanilla water reflection image-space chain. The replacement is
+		// dispatched after the main transparent effects list, which owns the forward
+		// water surface draws. Verified in Ghidra at
+		// BSShaderAccumulator::FinishAccumulating +0x572 (SE) / +0x55B (AE).
+		stl::write_thunk_call<WaterScreenSpaceReflections::SkipWaterSSR>(
+			REL::RelocationID(99938, 106583).address() + REL::Relocate(0x572, 0x55B));
+		stl::write_thunk_call<WaterScreenSpaceReflections::RenderEffects>(
+			REL::RelocationID(99939, 106584).address() + REL::Relocate(0x551, 0x543));
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

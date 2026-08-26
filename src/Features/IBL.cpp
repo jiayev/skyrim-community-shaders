@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
+#include "JiayeStatement.h"
 #include "Shadercache.h"
 #include "State.h"
 #include "WeatherVariableRegistry.h"
@@ -28,9 +29,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkyIBLSaturation,
 	FogAmount,
 	DALCMode,
+	SkylightingAffectsEnv,
 	DisableInInteriors,
 	DisableInWorldMap,
-	DisableInLoadingScreen)
+	DisableInLoadingScreen,
+	EffectNormalization,
+	EffectNormalizationMult,
+	MinEffectMult)
 
 void IBL::DrawSettings()
 {
@@ -72,8 +77,7 @@ void IBL::DrawSettings()
 		const char* dalcModeNames[] = {
 			T(TKEY("dalc_mode_luminance_ratio"), "Luminance Ratio"),
 			T(TKEY("dalc_mode_color_ratio"), "Color Ratio"),
-			T(TKEY("dalc_mode_dalc_plus_sky"), "DALC + Sky"),
-			T(TKEY("dalc_mode_dalc_plus_sky_directional"), "DALC + Sky (Directional)")
+			T(TKEY("dalc_mode_dalc_plus_sky"), "DALC + Sky")
 		};
 		int dalcMode = static_cast<int>(settings.DALCMode);
 		if (ImGui::Combo(T(TKEY("dalc_mode"), "DALC Mode"), &dalcMode, dalcModeNames, IM_ARRAYSIZE(dalcModeNames))) {
@@ -84,9 +88,14 @@ void IBL::DrawSettings()
 								  "How the DALC-to-IBL brightness ratio is computed:\n"
 								  "Luminance Ratio: Scalar ratio from overall luminance (loses DALC color tint).\n"
 								  "Color Ratio: Per-channel ratio (preserves DALC color tint).\n"
-								  "DALC + Sky: Uses vanilla ambient as base, sky IBL on top. Skylighting only affects sky.\n"
-								  "DALC + Sky (Directional): Same, but Skylighting also dims vanilla ambient per-direction."));
+								  "DALC + Sky: Uses vanilla ambient as base, with sky IBL added on top."));
 		}
+	}
+	ImGui::Checkbox(T(TKEY("skylighting_affects_env"), "Skylighting Affects Env/DALC"), (bool*)&settings.SkylightingAffectsEnv);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("skylighting_affects_env_tooltip"),
+							  "Applies Skylighting visibility to both sky IBL and the environment/DALC contribution.\n"
+							  "When disabled, Skylighting only modulates sky IBL."));
 	}
 	ImGui::Checkbox(T(TKEY("use_static_ibl"), "Use Static IBL For Out-of-World Objects"), (bool*)&settings.UseStaticIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -112,6 +121,14 @@ void IBL::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("disable_in_loading_screen_tooltip"), "Disables IBL during loading screens and the main menu."));
 	}
+	ImGui::Checkbox(T(TKEY("effect_normalization"), "Effect Normalization"), (bool*)&settings.EffectNormalization);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("effect_normalization_tooltip"), "Normalizes effect shader brightness based on IBL brightness."));
+	}
+	ImGui::SliderFloat(T(TKEY("effect_normalization_multiplier"), "Effect Normalization Multiplier"), &settings.EffectNormalizationMult, 0.0f, 100.0f, "%.2f");
+	ImGui::SliderFloat(T(TKEY("minimum_effect_multiplier"), "Minimum Effect Multiplier"), &settings.MinEffectMult, 0.0f, 10.0f, "%.2f");
+
+	JiayeStatement::GetSingleton()->DrawJSInfo();
 }
 
 #undef I18N_KEY_PREFIX
@@ -119,6 +136,12 @@ void IBL::DrawSettings()
 void IBL::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	if (settings.DALCMode == 3) {
+		// Preserve the former "DALC + Sky (Directional)" result with the new
+		// independent source mode and Skylighting option.
+		settings.DALCMode = 2;
+		settings.SkylightingAffectsEnv = 1;
+	}
 }
 
 void IBL::SaveSettings(json& o_json)
@@ -148,8 +171,8 @@ void IBL::RegisterWeatherVariables()
 	// Toggle IBL for this weather (SH-based ambient replaces vanilla)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::WeatherVariable<bool>>(
 		"EnableIBL",
-		"Enable IBL",
-		"Enable or disable SH-based ambient lighting for this weather",
+		T("feature.ibl.enable_ibl", "Enable IBL"),
+		T("feature.ibl.enable_ibl_weather_tooltip", "Enable or disable SH-based ambient lighting for this weather."),
 		(bool*)&settings.EnableIBL,
 		true,
 		[](const bool& from, const bool& to, float factor) {
@@ -159,8 +182,8 @@ void IBL::RegisterWeatherVariables()
 	// Intensity of environment IBL (from Dynamic Cubemaps)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"EnvIBLScale",
-		"Env IBL Scale",
-		"Intensity of environment IBL from the Dynamic Cubemaps environment cubemap",
+		T("feature.ibl.env_ibl_scale", "Env IBL Scale"),
+		T("feature.ibl.env_ibl_scale_weather_tooltip", "Intensity of environment IBL from the Dynamic Cubemaps environment cubemap."),
 		&settings.EnvIBLScale,
 		1.0f,
 		0.0f, 10.0f));
@@ -168,8 +191,8 @@ void IBL::RegisterWeatherVariables()
 	// Intensity of sky IBL (from the game's native reflections cubemap)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"SkyIBLScale",
-		"Sky IBL Scale",
-		"Intensity of sky IBL from the game's native reflections cubemap",
+		T("feature.ibl.sky_ibl_scale", "Sky IBL Scale"),
+		T("feature.ibl.sky_ibl_scale_weather_tooltip", "Intensity of sky IBL from the game's native reflections cubemap."),
 		&settings.SkyIBLScale,
 		1.0f,
 		0.0f, 10.0f));
@@ -177,8 +200,8 @@ void IBL::RegisterWeatherVariables()
 	// Color saturation of environment IBL
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"EnvIBLSaturation",
-		"Env IBL Saturation",
-		"Color saturation of the environment IBL ambient contribution",
+		T("feature.ibl.env_ibl_saturation", "Env IBL Saturation"),
+		T("feature.ibl.env_ibl_saturation_weather_tooltip", "Color saturation of the environment IBL ambient contribution."),
 		&settings.EnvIBLSaturation,
 		1.0f,
 		0.0f, 2.0f));
@@ -186,8 +209,8 @@ void IBL::RegisterWeatherVariables()
 	// Color saturation of sky IBL
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"SkyIBLSaturation",
-		"Sky IBL Saturation",
-		"Color saturation of the sky IBL ambient contribution",
+		T("feature.ibl.sky_ibl_saturation", "Sky IBL Saturation"),
+		T("feature.ibl.sky_ibl_saturation_weather_tooltip", "Color saturation of the sky IBL ambient contribution."),
 		&settings.SkyIBLSaturation,
 		1.0f,
 		0.0f, 2.0f));
@@ -195,8 +218,8 @@ void IBL::RegisterWeatherVariables()
 	// How much IBL brightness is matched to vanilla ambient (DALC)
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"DALCAmount",
-		"DALC Amount",
-		"Blend factor toward vanilla ambient brightness (0 = pure IBL, 1 = fully matched to DALC)",
+		T("feature.ibl.dalc_amount", "DALC Amount"),
+		T("feature.ibl.dalc_amount_weather_tooltip", "Blend factor toward vanilla ambient brightness (0 = pure IBL, 1 = fully matched to DALC)."),
 		&settings.DALCAmount,
 		1.0f,
 		0.0f, 1.0f));
@@ -204,8 +227,8 @@ void IBL::RegisterWeatherVariables()
 	// Fog color blending toward IBL ambient color
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"FogAmount",
-		"Fog Mix",
-		"Blends fog color toward IBL ambient color (0 = vanilla fog, 1 = fully IBL-tinted)",
+		T("feature.ibl.fog_mix", "Fog Mix"),
+		T("feature.ibl.fog_mix_weather_tooltip", "Blends fog color toward IBL ambient color (0 = vanilla fog, 1 = fully IBL-tinted)."),
 		&settings.FogAmount,
 		0.0f,
 		0.0f, 1.0f));
@@ -224,7 +247,8 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.EnvIBLSaturation = settings.EnvIBLSaturation,
 		.SkyIBLSaturation = settings.SkyIBLSaturation,
 		.FogAmount = settings.FogAmount,
-		.DALCMode = settings.DALCMode
+		.DALCMode = settings.DALCMode,
+		.SkylightingAffectsEnv = settings.SkylightingAffectsEnv
 	};
 
 	if (!sceneDisabled && globals::features::effects11.loaded) {

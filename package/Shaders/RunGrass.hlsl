@@ -5,6 +5,7 @@
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
 
 #define DEFERRED
@@ -279,6 +280,7 @@ struct PS_OUTPUT
 	float4 NormalGlossiness: SV_Target2;
 	float4 Albedo: SV_Target3;
 	float4 Specular: SV_Target4;
+	float4 Reflectance: SV_Target5;
 	float4 Masks: SV_Target6;
 	float4 Masks2: SV_Target7;
 #	endif  // RENDER_DEPTH
@@ -334,14 +336,11 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	if defined(SKYLIGHTING)
 #		define SKYLIGHTING_SHADOW_VIS
+#		include "Skylighting/Skylighting.hlsli"
 #	endif
 
 #	if defined(DYNAMIC_CUBEMAPS)
 #		include "DynamicCubemaps/DynamicCubemaps.hlsli"
-#	endif
-
-#	if defined(SKYLIGHTING)
-#		include "Skylighting/Skylighting.hlsli"
 #	endif
 
 #	if defined(IBL)
@@ -352,11 +351,23 @@ cbuffer AlphaTestRefCB : register(b11)
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
+#	if defined(PSEUDO_SUN_BOUNCE)
+#		include "PseudoSunBounce/sunbounce.hlsli"
+#	endif
+
 #	define LinearSampler SampBaseSampler
 
 #	include "Common/ShadowSampling.hlsli"
 #	ifdef GRASS_LIGHTING
 #		include "GrassLighting/GrassLighting.hlsli"
+
+#		if defined(WETNESS_EFFECTS)
+#			include "WetnessEffects/WetnessEffects.hlsli"
+#		endif
 
 float GetSoftLightMultiplier(float angle, float rolloff)
 {
@@ -436,6 +447,46 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!complex || SharedData::grassLightingSettings.OverrideComplexGrassSettings)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 
+#			if defined(VANILLA_FRESNEL)
+	const bool enableVanillaFresnel = SharedData::vanillaFresnelSettings.Enable;
+	float3 F0 = enableVanillaFresnel ? max(SharedData::vanillaFresnelSettings.MinF0, saturate(specColor.w * SharedData::grassLightingSettings.SpecularStrength * SharedData::vanillaFresnelSettings.BaseF0Multiplier / Math::PI)) : 0.0;
+#			else
+	float3 F0 = 0.0;
+#			endif
+	float roughness = saturate(1.0 - SharedData::grassLightingSettings.Glossiness * 0.01);
+
+	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
+	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	vertexColor /= max(vertexAO, EPSILON_DIVISION);
+
+#			if defined(SKYLIGHTING)
+	float3 positionMSSkylight = input.WorldPosition.xyz;
+	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#				endif
+	);
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
+#			endif  // SKYLIGHTING
+
+#			if defined(WETNESS_EFFECTS)
+	float nearFactor = smoothstep(4096.0 * 2.5, 0.0, viewPosition.z);
+	float waterHeight = SharedData::GetWaterData(input.WorldPosition.xyz).w;
+	float3 wetnessWorldPosition = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
+#				if defined(SKYLIGHTING)
+	float wetnessOcclusion = saturate(SphericalHarmonics::Unproject(skylightingSH, float3(0, 0, 1)));
+#				else
+	float wetnessOcclusion = 1.0;
+#				endif
+	WetnessEffects::SurfaceWetnessState wetnessState = WetnessEffects::GetSurfaceWetnessState(input.WorldPosition.xyz, wetnessWorldPosition, wetnessWorldPosition, normal, normalize(input.VertexNormal.xyz), waterHeight, wetnessOcclusion, nearFactor, -1.0, 0.0, false, false);
+#			endif
+
+#			if defined(WETNESS_EFFECTS)
+	float wetnessPorosity = 1.0;
+	WetnessEffects::ApplySurfaceWetnessAlbedo(baseColor.xyz, wetnessState, wetnessPorosity);
+#			endif
+
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
 	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 	float3 dirLightColorMultiplier = 1;
@@ -443,6 +494,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+	}
+#			endif
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColorMultiplier *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampColorSampler);
 	}
 #			endif
 
@@ -469,27 +527,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 lightsDiffuseColor = 0;
 	float3 lightsSpecularColor = 0;
+#			if defined(WETNESS_EFFECTS)
+	float3 wetnessDirectSpecularColor = 0;
+#			endif
 
+	float3 originDirLightColor = dirLightColor;
 	dirLightColor *= dirLightColorMultiplier;
 
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
-
-	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
-
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
-	vertexColor /= max(vertexAO, EPSILON_DIVISION);
-
-#			if defined(SKYLIGHTING)
-	float3 positionMSSkylight = input.WorldPosition.xyz;
-	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
-#				if defined(SKYLIGHTING_SHADOW_VIS)
-		,
-		skylightingShadowVisibility
-#				endif
-	);
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
-#			endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
 
@@ -500,8 +545,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
 
+	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
+	float3 dirSpecularColor = 0;
 	if (complex)
-		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
+		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::VanillaNormalization();
+#			if defined(WETNESS_EFFECTS)
+	WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
+#			endif
+	lightsDiffuseColor += dirDiffuseColor;
+	lightsSpecularColor += dirSpecularColor;
 
 #			if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
@@ -543,20 +595,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 				float3 normalizedLightDirection = normalize(lightDirection);
 
+				float3 pointLightColor = lightColor;
 				lightColor *= lightShadow;
 
 				float lightAngle = dot(normal, normalizedLightDirection);
 				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
-				float3 lightDiffuseColor;
-
-				lightDiffuseColor = lightColor * saturate(lightAngle);
+				float3 lightDiffuseColor = lightColor * saturate(lightAngle) * Color::VanillaNormalization();
+				float3 lightSpecularColor = 0;
 
 				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
 
-				lightsDiffuseColor += lightDiffuseColor * Color::VanillaNormalization();
-
 				if (complex)
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
+					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::VanillaNormalization();
+#				if defined(WETNESS_EFFECTS)
+				WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, pointLightColor, lightShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, lightDiffuseColor, lightSpecularColor, wetnessDirectSpecularColor);
+#				endif
+				lightsDiffuseColor += lightDiffuseColor;
+				lightsSpecularColor += lightSpecularColor;
 			}
 		}
 	}
@@ -571,6 +626,54 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
 #			endif
 
+	if (SharedData::ssgiSettings.EnableIL != 0)
+		directionalAmbientColor = 0;
+
+	float3 reflectance = 0;
+#			if defined(DYNAMIC_CUBEMAPS) && defined(VANILLA_FRESNEL)
+	if (SharedData::vanillaFresnelSettings.Enable) {
+		float2 specularBDRF = BRDF::EnvBRDF(roughness, saturate(dot(viewDirection, normal)));
+		reflectance = F0 * specularBDRF.x + specularBDRF.y;
+	}
+#			endif
+
+#			if defined(WETNESS_EFFECTS)
+	float3 wetnessReflectance = 0;
+	wetnessReflectance = WetnessEffects::ApplySurfaceWetnessIndirectLobeWeights(albedo, reflectance, wetnessState, viewDirection);
+#			endif
+
+#			if defined(PSEUDO_SUN_BOUNCE)
+	float3 specularBounce = 0;
+	if (!SharedData::InInterior && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
+		float cloudShadows = 1;
+#				if defined(CLOUD_SHADOWS)
+		cloudShadows = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, LinearSampler);
+#				endif
+		SunBounce::SH2_RGB sunBounceSH = SunBounce::CalcSunBounceSH(SharedData::DirLightDirection.xyz, originDirLightColor * cloudShadows,
+			SharedData::pseudoSunBounceSettings.groundAlbedo, SharedData::pseudoSunBounceSettings.wallAlbedo);
+
+		specularBounce = max(0, SunBounce::CalcFauxSpecularBounce(normal, viewDirection, saturate(1 - (0.01 * SharedData::grassLightingSettings.Glossiness)), sunBounceSH)) * SharedData::pseudoSunBounceSettings.intensity;
+
+		sunBounceSH.R = SphericalHarmonics::HanningConvolution(sunBounceSH.R, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.G = SphericalHarmonics::HanningConvolution(sunBounceSH.G, SharedData::pseudoSunBounceSettings.windowWidth);
+		sunBounceSH.B = SphericalHarmonics::HanningConvolution(sunBounceSH.B, SharedData::pseudoSunBounceSettings.windowWidth);
+
+		float3 bounceLighting;
+		bounceLighting.r = SphericalHarmonics::Unproject(sunBounceSH.R, -normal);
+		bounceLighting.g = SphericalHarmonics::Unproject(sunBounceSH.G, -normal);
+		bounceLighting.b = SphericalHarmonics::Unproject(sunBounceSH.B, -normal);
+
+		bounceLighting = max(0, bounceLighting);
+#				if defined(SKYLIGHTING)
+		float3 bouncedSkylighting = saturate(MultiBounceAO(SharedData::pseudoSunBounceSettings.groundAlbedo, skylightingDiffuse) * skylightingDiffuse);
+		bounceLighting *= bouncedSkylighting;
+		specularBounce *= bouncedSkylighting;
+#				endif
+
+		directionalAmbientColor += bounceLighting * SharedData::pseudoSunBounceSettings.intensity;
+	}
+#			endif
+
 	diffuseColor += directionalAmbientColor;
 	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;
@@ -582,7 +685,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 
 	specularColor += lightsSpecularColor;
-	specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
+#			if defined(VANILLA_FRESNEL)
+	if (!(SharedData::vanillaFresnelSettings.Enable && SharedData::vanillaFresnelSettings.EnableGGXOnGrass))
+#			endif
+		specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
+#			if defined(WETNESS_EFFECTS)
+	specularColor += wetnessDirectSpecularColor;
+#			endif
 
 #			if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
@@ -600,9 +709,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Diffuse.xyz = diffuseColor;
 #			endif
 
-	float3 normalVS = normalize(FrameBuffer::WorldToView(normal, false));
+	float3 outputNormal = normal;
+	float outputRoughness = roughness;
+#			if defined(WETNESS_EFFECTS)
+	WetnessEffects::ApplySurfaceWetnessOutput(wetnessState, outputNormal, outputRoughness);
+#			endif
+	float3 normalVS = normalize(FrameBuffer::WorldToView(outputNormal, false));
+#			if defined(WETNESS_EFFECTS)
+	psout.Reflectance = float4(reflectance + wetnessReflectance, 1);
+#			else
+	psout.Reflectance = float4(reflectance, 1);
+#			endif
 	psout.Albedo = float4(albedo, 1);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), specColor.w, 1);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(normalVS), 1.0 - outputRoughness, 1);
+
+#			if defined(PSEUDO_SUN_BOUNCE)
+	if (!SharedData::InInterior && SharedData::pseudoSunBounceSettings.intensity > 0.0) {
+		specularColor += specularBounce * reflectance;
+#				if defined(WETNESS_EFFECTS)
+		specularColor += specularBounce * wetnessReflectance;
+#				endif
+	}
+#			endif
 
 	psout.Specular = float4(specularColor, 1);
 	psout.Masks = float4(0, 0, Color::RGBToYCoCg(directionalAmbientColor).x, 0);
@@ -749,6 +877,17 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.xyz = diffuseColor;
 
 	psout.Diffuse.w = 1;
+
+#			if !defined(DEFERRED) && defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspectiveReflection(psout.Diffuse.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
+	}
+#			endif
 
 	psout.MotionVectors = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
 	psout.Normal.xy = GBuffer::EncodeNormal(FrameBuffer::WorldToView(normal, false));

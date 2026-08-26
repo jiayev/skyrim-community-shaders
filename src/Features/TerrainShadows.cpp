@@ -490,10 +490,18 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 	}
 
 	auto accumulator = *globals::game::currentAccumulator.get();
+	if (!accumulator)
+		return;
+
 	auto shadowSceneNode = accumulator->GetRuntimeData().activeShadowSceneNode;
 	if (!shadowSceneNode)
 		return false;
-	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
+
+	auto shadowSunLight = shadowSceneNode->GetRuntimeData().sunLight;
+	if (!shadowSunLight || !shadowSunLight->light)
+		return false;
+
+	auto sunLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSunLight->light.get());
 	if (!sunLight)
 		return false;
 	TracyD3D11Zone(globals::state->tracyCtx, "Terrain Occlusion - Update Shadows");
