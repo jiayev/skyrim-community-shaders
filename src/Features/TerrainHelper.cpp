@@ -214,6 +214,12 @@ struct TH_BSLightingShader_SetupMaterial
 {
 	static void thunk(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 	{
+		// A geometry with no resolvable material (e.g. a decal whose textures all
+		// failed to load) can reach here with material == nullptr; the original
+		// engine function dereferences it unconditionally.
+		if (!material)
+			return;
+
 		func(shader, material);
 
 		auto& terrainHelper = globals::features::terrainHelper;

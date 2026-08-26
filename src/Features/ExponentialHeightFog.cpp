@@ -1,12 +1,15 @@
 #include "ExponentialHeightFog.h"
 
 #include "Deferred.h"
+#include "Effects11.h"
+#include "Effects11/SettingManager.h"
 #include "Features/CloudShadows.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
 #include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
+#include "Globals.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -83,8 +86,30 @@ void ExponentialHeightFog::SaveSettings(json& o_json)
 	o_json = settings;
 }
 
+ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
+{
+	Settings data = settings;
+
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			data.enabled = 0;
+		}
+	}
+
+	return data;
+}
+
 void ExponentialHeightFog::DrawSettings()
 {
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+			return;
+		}
+	}
+
 	ImGui::Checkbox(T(TKEY("enable_exp_height_fog"), "Enable Exponential Height Fog"), (bool*)&settings.enabled);
 	Util::WeatherUI::SliderFloat(T(TKEY("start_distance"), "Start Distance"), this, "startDistance", &settings.startDistance, 0.0f, 100000.0f, "%.1f");
 	Util::WeatherUI::SliderFloat(T(TKEY("fog_height"), "Fog Height"), this, "fogHeight", &settings.fogHeight, -22000.0f, 22000.0f, "%.1f");
@@ -111,7 +136,7 @@ void ExponentialHeightFog::DrawSettings()
 	}
 	ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps"), "Use Dynamic Cubemaps for Inscattering"), (bool*)&settings.useDynamicCubemaps);
 	Util::WeatherUI::ColorEdit4(T(TKEY("inscattering_cubemap_tint"), "Inscattering Cubemap Tint"), this, "inscatteringTint", (float*)&settings.inscatteringTint);
-	ImGui::SliderFloat(T(TKEY("cubemap_mip_level"), "Cubemap Mip Level"), &settings.cubemapMipLevel, 1.0f, 7.0f, "%.1f");
+	ImGui::SliderFloat(T(TKEY("cubemap_mip_level"), "Cubemap Mip Level"), &settings.cubemapMipLevel, 1.0f, 8.0f, "%.1f");
 
 	ImGui::SeparatorText(T(TKEY("volumetric_fog"), "Volumetric Fog"));
 	Util::WeatherUI::Checkbox(T(TKEY("enable_volumetric_fog"), "Enable Volumetric Fog"), this, "volumetricFogEnabled", (bool*)&settings.volumetricFogEnabled);
@@ -595,6 +620,13 @@ void ExponentialHeightFog::Prepass()
 
 void ExponentialHeightFog::RegisterWeatherVariables()
 {
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			return;
+		}
+	}
+
 	auto* registry = WeatherVariables::GlobalWeatherRegistry::GetSingleton()->GetOrCreateFeatureRegistry(GetShortName());
 	registry->RegisterVariable(std::make_shared<WeatherVariables::FloatVariable>(
 		"Start Distance",

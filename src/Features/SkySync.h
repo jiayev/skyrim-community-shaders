@@ -69,6 +69,8 @@ public:
 	virtual void PostPostLoad() override;
 	/** @brief Checks for conflicting ESP files after game data is loaded. */
 	virtual void DataLoaded() override;
+	/** @brief Requests immediate celestial synchronization after loading an existing save. */
+	virtual void GameLoaded() override;
 
 	struct Sky_Update
 	{
@@ -117,13 +119,14 @@ private:
 		Caster target = Caster::Sun;
 		Caster previousTarget = Caster::Sun;
 		float fadeTimer = 0.0f;
+		float immediateTransitionRemaining = 0.0f;
 		bool transitioning = false;
 		bool sunriseReleased = false;
 		float frozenHeading = 0.0f;
 		bool sunsetHeadingLocked = false;
 		float vlIntensityFactor = 1.0f;
 
-		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration, float fadeAdvance);
+		void Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration, float fadeAdvance, bool a_immediateTransition);
 		void LockSunElevation(RE::NiPoint3 dirs[]);
 		static void SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color);
 		static void SetDirection(RE::NiPoint3& dir, float headingRadians, float elevRadians);
@@ -149,9 +152,12 @@ private:
 
 	bool moonAndStarsLoaded = false;
 	RE::TESObjectCELL* currentCell = nullptr;
+	bool currentCellInterior = false;
+	RE::TESWorldSpace* currentCellWorldspace = nullptr;
 	float sunAngle = 90.0f;
 	float currentSkyRotation = D3D11_FLOAT32_MAX;
 	float lastGameHour = -1.0f;
+	bool immediateTransitionReady = false;
 
 	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
@@ -164,7 +170,9 @@ private:
 
 	void DisableOnConflict(std::string_view conflictName);
 
-	void Update(const RE::Sky* sky);
+	void PreparePendingTransitions();
+
+	bool Update(const RE::Sky* sky);
 
 	void SetSunAngle();
 

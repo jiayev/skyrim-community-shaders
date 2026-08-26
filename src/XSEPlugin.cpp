@@ -10,7 +10,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 
-#include "ENB/ENBSeriesAPI.h"
 
 #define DLLEXPORT __declspec(dllexport)
 
@@ -136,16 +135,17 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			break;
 		}
+	case SKSE::MessagingInterface::kPostLoadGame:
+		{
+			if (errors.empty())
+				Feature::ForEachLoadedFeature("GameLoaded", [](Feature* feature) { feature->GameLoaded(); });
+			break;
+		}
 	}
 }
 
 bool Load()
 {
-	if (ENB_API::RequestENBAPI()) {
-		logger::info("ENB detected, disabling all hooks and features");
-		return true;
-	}
-
 	auto privateProfileRedirectorVersion = Util::GetDllVersion(L"Data/SKSE/Plugins/PrivateProfileRedirector.dll");
 	if (privateProfileRedirectorVersion.has_value() && privateProfileRedirectorVersion.value().compare(REL::Version(0, 6, 2)) == std::strong_ordering::less) {
 		stl::report_and_fail("Old version of PrivateProfileRedirector detected, 0.6.2+ required if using it."sv);
@@ -182,7 +182,9 @@ bool Load()
 		L"Data/SKSE/Plugins/SSEReShadeHelper.dll",
 		L"Data/SKSE/Plugins/TAASharpen.dll",
 		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
-		L"Data/SKSE/Plugins/MARA.dll"
+		L"Data/SKSE/Plugins/MARA.dll",
+		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll",
+	    L"Data/SKSE/Plugins/DynamicWetness.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {

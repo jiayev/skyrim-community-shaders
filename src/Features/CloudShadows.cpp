@@ -1,6 +1,9 @@
 #include "CloudShadows.h"
 
 #include "../I18n/I18n.h"
+#include "Effects11.h"
+#include "Effects11/SettingManager.h"
+#include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
 
@@ -12,6 +15,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void CloudShadows::DrawSettings()
 {
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+			return;
+		}
+	}
+
 	ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 4.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("opacity_tooltip"),
@@ -38,7 +49,24 @@ void CloudShadows::RestoreDefaultSettings()
 
 CloudShadows::Settings CloudShadows::GetCommonBufferData()
 {
-	return settings;
+	if (!loaded)
+		return settings;
+
+	auto data = settings;
+
+	if (globals::features::effects11.loaded) {
+		auto& enb = globals::features::effects11;
+		if (enb.enableEffect) {
+			auto& settingManager = SettingManager::GetSingleton();
+			if (settingManager.GetValue<bool>("EnableCloudShadows", "EFFECT")) {
+				data.Opacity = settingManager.GetInterpolatedTimeOfDayValue("Amount", "CLOUDSHADOWS");
+			} else {
+				data.Opacity = 0.0f;
+			}
+		}
+	}
+
+	return data;
 }
 
 void CloudShadows::CheckResourcesSide(int side)
@@ -228,6 +256,7 @@ void CloudShadows::EarlyPrepass()
 		PropagateToCompletion(previouslyRenderedSide);
 		previouslyRenderedSide = -1;
 	}
+	globalRenderedMask = 0;
 }
 
 void CloudShadows::SetupResources()

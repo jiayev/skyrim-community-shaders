@@ -10,7 +10,7 @@ public:
 
 	struct alignas(16) Settings
 	{
-		float Opacity = 0.8f;
+		float Opacity = 0.5f;
 		float pad[3];
 	};
 
@@ -75,11 +75,11 @@ public:
 	 */
 	void CheckResourcesSide(int side);
 	void PropagateToCompletion(int side);
-	int FindCloudLayer(RE::BSRenderPass* Pass);
 	/**
 	 * @brief Checks if the current sky render pass is rendering clouds to the reflections cubemap and flags it for override.
 	 * @param Pass The BSRenderPass being set up for rendering.
 	 */
+	int FindCloudLayer(RE::BSRenderPass* Pass);
 	void ModifySky(RE::BSRenderPass* Pass);
 
 	/** @brief Copies the cloud occlusion cubemap and binds it as a shader resource for the reflections prepass. */

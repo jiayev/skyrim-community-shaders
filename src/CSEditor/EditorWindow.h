@@ -165,6 +165,9 @@ public:
 	/** @brief Redirect the engine's weather-change call sites to the locked weather. Call once during plugin init. */
 	static void InstallWeatherLockHooks();
 
+	/** @brief Returns true if InstallWeatherLockHooks successfully redirected both call sets. */
+	static bool AreWeatherLockHooksInstalled();
+
 	/** @brief Repair the locked weather if the engine changed it or queued an override release. Call once per frame. */
 	static void MaintainWeatherLock();
 
@@ -383,6 +386,10 @@ private:
 	float timeScaleSlider = kVanillaTimeScale;
 	bool timeRestoredForMenu = false;
 	bool wasPausedBeforeMenu = false;
+	// Each refresh recomputes the whole terrain shadow map, so scrubbing is throttled well below frame rate.
+	static constexpr double kGameHourScrubRefreshIntervalSeconds = 0.1;
+	double lastGameHourScrubRefreshTime = 0.0;
+	bool gameHourScrubRefreshIssued = false;
 
 	// Sorting state
 	enum class SortColumn

@@ -18,7 +18,7 @@ endif()
 project(
     # gersemi: ignore
     CommunityShaders
-    VERSION 1.7.0
+    VERSION 1.8.0
     LANGUAGES CXX
 )
 
@@ -52,6 +52,11 @@ option(
     ON
 )
 option(TRACY_SUPPORT "Enable support for tracy profiler" OFF)
+option(
+    ENABLE_ENB_EXTENDER
+    "Enable ENBExtender reimplementation (weather blending, time-of-day, technique bindings)"
+    ON
+)
 message("\tAuto plugin deployment: ${AUTO_PLUGIN_DEPLOYMENT}")
 message("\tZip to dist: ${ZIP_TO_DIST}")
 message("\tAIO Zip to dist: ${AIO_ZIP_TO_DIST}")
@@ -97,6 +102,8 @@ find_package(unordered_dense CONFIG REQUIRED)
 find_package(efsw CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
 find_package(directx-headers CONFIG REQUIRED)
+find_package(effects11 CONFIG REQUIRED)
+
 if(DEVBENCH_BRIDGE)
     find_package(devbench-api CONFIG REQUIRED)
 endif()
@@ -109,6 +116,7 @@ include(FidelityFX-SDK)
 target_compile_definitions(
     ${PROJECT_NAME}
     PRIVATE "$<$<BOOL:${TRACY_SUPPORT}>:TRACY_SUPPORT>"
+    PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 
 file(
@@ -155,6 +163,8 @@ target_link_libraries(
         d3d12.lib
         Microsoft::DirectX-Headers
         ${DETOURS_LIBRARY}
+        Microsoft::Effects11
+        windowsapp
         windowscodecs
 )
 
@@ -268,6 +278,21 @@ foreach(FEATURE_PATH ${FEATURE_CONFIG_FILES})
         list(APPEND FEATURE_BETA_NAMES "\t\t\"${FEATURE}\"sv")
     endif()
 
+    # Detect the Unreleased flag, which gates UI visibility independently of the
+    # release stage above. Same line anchoring and CMAKE_MATCH_2 guard.
+    set(_STAGE_UNRELEASED "")
+    string(
+        REGEX MATCH "(^|[\r\n])[ \t]*[Uu]nreleased[ \t]*=[ \t]*([A-Za-z0-9]+)"
+        _STAGE_UNRELEASED_MATCH
+        "${CONFIG_VALUE}"
+    )
+    if(_STAGE_UNRELEASED_MATCH)
+        string(TOLOWER "${CMAKE_MATCH_2}" _STAGE_UNRELEASED)
+    endif()
+    if(_STAGE_UNRELEASED MATCHES "^(true|1|yes|on)$")
+        list(APPEND FEATURE_UNRELEASED_NAMES "\t\t\"${FEATURE}\"sv")
+    endif()
+
     # Detect core features by checking for the CORE marker file in the
     # feature root (features/<Folder>/CORE). FEATURE_PATH is
     # features/<Folder>/Shaders/Features/<ShortName>.ini, so the feature
@@ -290,6 +315,7 @@ string(REPLACE ";" ",\n" FEATURE_VERSIONS "${FEATURE_VERSIONS}")
 string(REPLACE ";" ",\n" FEATURE_CORE_NAMES "${FEATURE_CORE_NAMES}")
 string(REPLACE ";" ",\n" FEATURE_ALPHA_NAMES "${FEATURE_ALPHA_NAMES}")
 string(REPLACE ";" ",\n" FEATURE_BETA_NAMES "${FEATURE_BETA_NAMES}")
+string(REPLACE ";" ",\n" FEATURE_UNRELEASED_NAMES "${FEATURE_UNRELEASED_NAMES}")
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/cmake/FeatureVersions.h.in
@@ -391,6 +417,23 @@ endif()
 # # Automatic deployment
 # #######################################################################################################################
 file(GLOB FEATURE_PATHS LIST_DIRECTORIES true ${CMAKE_SOURCE_DIR}/features/*)
+# Drop empty leftover feature dirs (e.g. after a rename) so they do not create
+# Package-* targets or get copied into AIO / install trees as empty folders.
+set(_valid_feature_paths "")
+foreach(_fpath IN LISTS FEATURE_PATHS)
+    if(IS_DIRECTORY "${_fpath}")
+        file(GLOB_RECURSE _feat_files LIST_DIRECTORIES FALSE "${_fpath}/*")
+        if(_feat_files)
+            list(APPEND _valid_feature_paths "${_fpath}")
+        else()
+            get_filename_component(_feat_name "${_fpath}" NAME)
+            message(STATUS "Skipping empty feature directory: ${_feat_name}")
+        endif()
+    endif()
+endforeach()
+set(FEATURE_PATHS ${_valid_feature_paths})
+unset(_valid_feature_paths)
+unset(_feat_files)
 string(TIMESTAMP UTC_NOW "%Y-%m-%dT%H-%MZ" UTC)
 
 # Set AIO directory path used by multiple targets below
@@ -489,7 +532,15 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # timestamps for unchanged files and prevents downstream incremental
     # deploys from copying everything every build.
     set(_prepare_aio_cmds)
-    string(REPLACE ";" "\\;" _feature_paths_arg "${FEATURE_PATHS}")
+
+    # Write feature paths to a file so the cleanup script can read them.
+    # Passing paths with spaces via -D on the command line breaks quoting
+    # in the Visual Studio generator.
+    set(_feature_paths_file "${CMAKE_CURRENT_BINARY_DIR}/feature_paths.txt")
+    file(WRITE "${_feature_paths_file}" "")
+    foreach(_fpath IN LISTS FEATURE_PATHS)
+        file(APPEND "${_feature_paths_file}" "${_fpath}\n")
+    endforeach()
 
     # Ensure SKSE/Plugins dir exists
     # Note: DLL and PDB are copied via POST_BUILD command to avoid race conditions
@@ -508,7 +559,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=AIO
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_PATHS="${_feature_paths_arg}"
+        -DFEATURE_PATHS_FILE="${_feature_paths_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -613,18 +664,15 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
 
-    set(_feature_shader_paths)
+    set(_feature_shader_paths_file
+        "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt"
+    )
+    file(WRITE "${_feature_shader_paths_file}" "")
     foreach(_fpath IN LISTS FEATURE_PATHS)
         if(EXISTS "${_fpath}/Shaders")
-            list(APPEND _feature_shader_paths "${_fpath}/Shaders")
+            file(APPEND "${_feature_shader_paths_file}" "${_fpath}/Shaders\n")
         endif()
     endforeach()
-    string(
-        REPLACE ";"
-        "\\;"
-        _feature_shader_paths_arg
-        "${_feature_shader_paths}"
-    )
 
     list(
         APPEND _shader_copy_cmds
@@ -633,7 +681,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         -DMODE=SHADERS
         -DAIO_DIR="${AIO_DIR}"
         -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-        -DFEATURE_SHADER_PATHS="${_feature_shader_paths_arg}"
+        -DFEATURE_SHADER_PATHS_FILE="${_feature_shader_paths_file}"
         -P
         "${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake"
     )
@@ -678,8 +726,8 @@ endif()
 # Automatic deployment to CommunityShaders output directory.
 if(AUTO_PLUGIN_DEPLOYMENT)
     # Detect git HEAD changes (branch switch or new commit) and invalidate stale
-    # deploy state. BuildRelease.bat always reconfigures, so this runs on every
-    # build invocation. When HEAD changes we:
+    # deploy state. Shipping builds always reconfigure (dev wrappers may skip),
+    # so this runs on every shipping build invocation. When HEAD changes we:
     #   1. Clear the AIO directory so PREPARE_AIO re-copies everything with
     #      fresh timestamps (catches content-identical files cmake's
     #      copy_if_different would otherwise skip).
@@ -880,6 +928,13 @@ if(NOT DEFINED ENV{CommunityShadersOutputDir})
     )
 endif()
 
+find_program(
+    SEVENZ_EXECUTABLE
+    NAMES 7z 7za
+    PATHS "C:/Program Files/7-Zip" "C:/Program Files (x86)/7-Zip"
+    DOC "7-Zip archiver for compressed packages"
+)
+
 # Zip base CommunityShaders and all addons as their own zip in dist folder
 if(ZIP_TO_DIST)
     set(ZIP_DIR "${CMAKE_CURRENT_BINARY_DIR}/zip")
@@ -968,21 +1023,42 @@ if(AIO_ZIP_TO_DIST)
     # only rebuilds the archive when its inputs change. The archive filename
     # keeps the UTC timestamp as before, but the command writes a stable
     # stamp file that CMake can track as OUTPUT.
-    set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
+    if(SEVENZ_EXECUTABLE)
+        set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
+    else()
+        set(TARGET_AIO_ZIP "${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
+    endif()
     set(AIO_ARCHIVE "${CMAKE_SOURCE_DIR}/dist/${TARGET_AIO_ZIP}")
     set(AIO_ZIP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/aio_package.stamp")
 
     message("Zipping ${AIO_DIR} to ${AIO_ARCHIVE}")
 
-    add_custom_command(
-        OUTPUT ${AIO_ZIP_STAMP}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
-        COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=zip -- .
-        COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
-        WORKING_DIRECTORY ${AIO_DIR}
-        DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
-        COMMENT "Creating AIO archive ${AIO_ARCHIVE}"
-    )
+    if(SEVENZ_EXECUTABLE)
+        add_custom_command(
+            OUTPUT ${AIO_ZIP_STAMP}
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_ARCHIVE}"
+            COMMAND
+                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_ARCHIVE}" *
+            COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
+            WORKING_DIRECTORY ${AIO_DIR}
+            DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
+            COMMENT "Creating AIO archive ${AIO_ARCHIVE}"
+        )
+    else()
+        message(WARNING "7z not found; AIO archive will use uncompressed zip")
+        add_custom_command(
+            OUTPUT ${AIO_ZIP_STAMP}
+            COMMAND
+                ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/dist"
+            COMMAND ${CMAKE_COMMAND} -E tar cf ${AIO_ARCHIVE} --format=zip -- .
+            COMMAND ${CMAKE_COMMAND} -E touch ${AIO_ZIP_STAMP}
+            WORKING_DIRECTORY ${AIO_DIR}
+            DEPENDS PREPARE_AIO ${CMAKE_CURRENT_BINARY_DIR}/copy_shaders.stamp
+            COMMENT "Creating AIO archive ${AIO_ARCHIVE}"
+        )
+    endif()
 
     add_custom_target(AIO_ZIP_PACKAGE ALL DEPENDS ${AIO_ZIP_STAMP})
 endif()
@@ -1086,20 +1162,64 @@ else()
 endif()
 
 # Manual AIO package target
-set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
-if(TARGET PREPARE_AIO)
-    add_custom_command(
-        OUTPUT ${AIO_PACKAGE}
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
-        COMMAND ${CMAKE_COMMAND} -E tar cfv ${AIO_PACKAGE} --format=zip -- .
-        WORKING_DIRECTORY ${AIO_DIR}
-        DEPENDS
-            ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-            copy_shaders.stamp
-            ${PROJECT_NAME}
-        COMMENT "Creating AIO zip package (from prepared AIO dir)"
-    )
+if(SEVENZ_EXECUTABLE)
+    set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.7z")
 else()
+    set(AIO_PACKAGE "${DIST_PATH}/${PROJECT_NAME}_AIO-${UTC_NOW}.zip")
+endif()
+if(TARGET PREPARE_AIO)
+    if(SEVENZ_EXECUTABLE)
+        add_custom_command(
+            OUTPUT ${AIO_PACKAGE}
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
+            COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
+            COMMAND
+                "${SEVENZ_EXECUTABLE}" a -t7z -mx1 -mmt=on "${AIO_PACKAGE}" *
+            WORKING_DIRECTORY ${AIO_DIR}
+            DEPENDS
+                ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
+                copy_shaders.stamp
+                ${PROJECT_NAME}
+            COMMENT "Creating AIO archive (from prepared AIO dir)"
+        )
+    else()
+        add_custom_command(
+            OUTPUT ${AIO_PACKAGE}
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
+            COMMAND ${CMAKE_COMMAND} -E tar cfv ${AIO_PACKAGE} --format=zip -- .
+            WORKING_DIRECTORY ${AIO_DIR}
+            DEPENDS
+                ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
+                copy_shaders.stamp
+                ${PROJECT_NAME}
+            COMMENT "Creating AIO zip package (from prepared AIO dir)"
+        )
+    endif()
+else()
+    # AIO_PACKAGE is named .7z whenever 7-Zip exists, so this branch must honour
+    # SEVENZ_EXECUTABLE too or it emits a deflate zip wearing a .7z extension.
+    if(SEVENZ_EXECUTABLE)
+        set(AIO_ARCHIVE_COMMAND
+            "${SEVENZ_EXECUTABLE}"
+            a
+            -t7z
+            -mx1
+            -mmt=on
+            "${AIO_PACKAGE}"
+            *
+        )
+    else()
+        set(AIO_ARCHIVE_COMMAND
+            ${CMAKE_COMMAND}
+            -E
+            tar
+            cfv
+            ${AIO_PACKAGE}
+            --format=zip
+            --
+            .
+        )
+    endif()
     add_custom_command(
         OUTPUT ${AIO_PACKAGE}
         DEPENDS ${PROJECT_NAME} ${CORE_SOURCES}
@@ -1107,17 +1227,20 @@ else()
         COMMAND
             ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
             --prefix ${AIO_DIR}
-        COMMAND
-            ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${CMAKE_COMMAND} -E tar cfv
-            ${AIO_PACKAGE} --format=zip -- .
-        COMMENT "Creating AIO zip package (full install)"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${DIST_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E rm -f "${AIO_PACKAGE}"
+        COMMAND ${CMAKE_COMMAND} -E chdir ${AIO_DIR} ${AIO_ARCHIVE_COMMAND}
+        COMMENT "Creating AIO archive (full install)"
+        VERBATIM
     )
 endif()
 add_custom_target("Package-AIO-Manual" DEPENDS ${AIO_PACKAGE})
 
 message("*************************************************************")
 message("Community Shaders configuration complete")
-message("To prepare a ZIP package of AIO, Core, or Features")
+message(
+    "To prepare a package of AIO (.7z when 7-Zip is found), Core, or Features"
+)
 message("  Build cmake targets:")
 message("    - Package-Core: Core package")
 message("    - Package-AIO-Manual: AIO package (manual)")

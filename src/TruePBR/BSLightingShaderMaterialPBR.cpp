@@ -2,6 +2,20 @@
 
 #include "TruePBR.h"
 
+/** @brief Drops textureSet unless its NiRTTI derives from BSTextureSet; malformed meshes can link any block, and calling BSTextureSet virtuals on it is a CTD. */
+static void DiscardMislinkedTextureSet(RE::NiPointer<RE::BSTextureSet>& textureSet)
+{
+	if (textureSet == nullptr) {
+		return;
+	}
+
+	static const auto* textureSetRTTI = REL::Relocation<const RE::NiRTTI*>{ RE::BSTextureSet::Ni_RTTI }.get();
+	const RE::NiRTTI* rtti = textureSet->GetRTTI();
+	if (rtti == nullptr || !rtti->IsKindOf(textureSetRTTI)) {
+		textureSet.reset();
+	}
+}
+
 BSLightingShaderMaterialPBR::~BSLightingShaderMaterialPBR()
 {
 	All.erase(this);
@@ -101,6 +115,7 @@ std::uint32_t BSLightingShaderMaterialPBR::ComputeCRC32(uint32_t srcHash)
 	hashes.projectedMaterialLogMicrofacetDensity = projectedMaterialGlintParameters.logMicrofacetDensity * 100.f;
 	hashes.projectedMaterialMicrofacetRoughness = projectedMaterialGlintParameters.microfacetRoughness * 100.f;
 	hashes.projectedMaterialDensityRandomization = projectedMaterialGlintParameters.densityRandomization * 100.f;
+	DiscardMislinkedTextureSet(textureSet);
 	if (textureSet != nullptr) {
 		hashes.rmaodHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(RmaosTexture));
 		hashes.emissiveHash = RE::BSCRC32<const char*>()(textureSet->GetTexturePath(EmissiveTexture));
@@ -178,6 +193,7 @@ void BSLightingShaderMaterialPBR::OnLoadTextureSet(std::uint64_t arg1, RE::BSTex
 		if (inTextureSet != nullptr) {
 			textureSet = RE::NiPointer(inTextureSet);
 		}
+		DiscardMislinkedTextureSet(textureSet);
 		if (textureSet != nullptr) {
 			textureSet->SetTexture(RmaosTexture, rmaosTexture);
 			textureSet->SetTexture(EmissiveTexture, emissiveTexture);

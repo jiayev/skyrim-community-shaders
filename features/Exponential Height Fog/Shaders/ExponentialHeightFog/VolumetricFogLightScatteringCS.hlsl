@@ -343,11 +343,9 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	float extinction = materialScatteringAndExtinction.w;
 
 	float3 viewDirection = normalize(positionWS);
-
-	// Directional light uses isotropic phase (1/4PI) in the volume to avoid angular aliasing
-	// at the coarse froxel XY resolution. The actual per-pixel HG phase is applied at full
-	// resolution during compositing in SampleVolumetricFog().
-	float directionalPhase = 1.0f / (4.0f * Math::PI);
+	float phase = ExponentialHeightFog::HenyeyGreenstein(
+		dot(normalize(SharedData::DirLightDirection.xyz), viewDirection),
+		SharedData::exponentialHeightFogSettings.volumetricFogScatteringDistribution);
 
 	float directionalShadow = SampleDirectionalShadow(positionWS) *
 	                          SampleDirectionalWorldShadow(positionWS);
@@ -355,7 +353,7 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		ComputeDirectionalLightColor() *
 		SharedData::exponentialHeightFogSettings.volumetricDirectionalScatteringIntensity *
 		directionalShadow *
-		directionalPhase *
+		phase *
 		materialScatteringAndExtinction.rgb;
 
 	float3 skyScattering = ComputeSkyLightScattering(positionWS, viewDirection) *

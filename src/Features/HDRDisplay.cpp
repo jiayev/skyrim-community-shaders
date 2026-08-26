@@ -3,6 +3,7 @@
 #include "PCH.h"
 
 #include "Buffer.h"
+#include "Effects11.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
@@ -1568,10 +1569,8 @@ float4 HDRDisplay::GetSharedDataHDR() const
 		return { 0.0f, 0.0f, 0.0f, 0.0f };
 
 	auto* state = globals::state;
-	const bool isMainOrLoading = state->isMainMenuOpen || state->isLoadingMenuOpen;
-	auto* ui = globals::game::ui;
-	const bool inMenuOrPause =
-		ui && (ui->GameIsPaused() || state->isMainMenuOpen || state->isLoadingMenuOpen || state->isMapMenuOpen);
+	const bool isMainOrLoading = state->IsMainOrLoadingMenuOpen();
+	const bool inMenuOrPause = state->IsPausedOrMenuOpen(globals::game::ui);
 
 	float menuSceneEncoding = kHdrMenuSceneGameplay;
 	if (isMainOrLoading) {
@@ -1590,7 +1589,7 @@ float4 HDRDisplay::GetSharedDataHDR() const
 
 HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 {
-	bool isMainOrLoadingMenu = globals::state->isMainMenuOpen || globals::state->isLoadingMenuOpen;
+	bool isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	auto* ui = globals::game::ui;
 	bool skipUIComposite = IsFGCompositingThisFrame();
 
@@ -1612,6 +1611,7 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	// TweenMenu = pause UI. ScaleUIBrightnessForFG skips while GameIsPaused(), so HDROutputCS applies the same mid-alpha boost when compositing gamma UI.
 	data.fgTweenMenuMidAlphaBoost = (ui && ui->IsMenuOpen(RE::TweenMenu::MENU_NAME)) ? 1.f : 0.f;
 	data.previewSDR = 0.f;
+	data.applyAutoHDR = globals::features::effects11.ReplacedTonemapperThisFrame() ? 1.f : 0.f;
 	return data;
 }
 

@@ -1,8 +1,8 @@
 #include "Common/Color.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
-#include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
 struct VS_INPUT
@@ -38,6 +38,11 @@ struct VS_OUTPUT
 
 #if defined(TEX) || defined(DITHER) || defined(HORIZFADE)
 	float4 Color: COLOR0;
+#endif
+
+#if !defined(OCCLUSION) && !defined(MOONMASK) && !defined(HORIZFADE)
+	float4 SkyBlendColor0: TEXCOORD5;
+	float4 SkyBlendColor2: TEXCOORD6;
 #endif
 
 	float4 WorldPosition: POSITION1;
@@ -111,8 +116,9 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.Color.xyz = VParams * skyColor;
 	vsout.Color.w = BlendColor[0].w * input.Color.w;
-
-#	endif  // OCCLUSION MOONMASK HORIZFADE
+	vsout.SkyBlendColor0 = float4(BlendColor[0].xyz * VParams, 0);
+	vsout.SkyBlendColor2 = float4(BlendColor[2].xyz * VParams, 0);
+#	endif      // OCCLUSION MOONMASK HORIZFADE
 
 	vsout.Position = mul(WorldViewProj, inputPosition).xyww;
 	vsout.WorldPosition = mul(World, inputPosition);
@@ -197,6 +203,21 @@ float GetPhysSkyCloudShadow(float3 viewDir, uint2 pxCoord)
 }
 #	endif
 
+#	if defined(EFFECTS11)
+float ComputeProceduralSun(float2 uv)
+{
+	float2 p = uv * 2.0 - 1.0;
+	float dist = dot(p, p) - SharedData::enbSettings.ProceduralSunDiskRadiusSq;
+
+	float c = saturate(dist * SharedData::enbSettings.ProceduralSunCoronaScale);
+	float corona = (1.0 - c) * rcp(SharedData::enbSettings.ProceduralSunCoronaFalloff * c + 1.0) * SharedData::enbSettings.ProceduralSunGlowIntensity;
+
+	float disk = saturate(-dist * SharedData::enbSettings.ProceduralSunDiskEdgeScale);
+
+	return corona + disk;
+}
+#	endif
+
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
@@ -234,10 +255,8 @@ PS_OUTPUT main(PS_INPUT input)
 	bool enableProceduralSun = false;
 #		endif
 
-#		ifdef HDR_OUTPUT
-	float hdrSunGain = HDRSun::GetHdrSunGain(
-		input.TexCoord0.xy,
-		baseColor);
+#		if defined(HDR_OUTPUT)
+	float hdrSunGain = HDRSun::GetHdrSunGain(input.TexCoord0.xy, baseColor);
 	baseColor.xyz *= hdrSunGain;
 	if (HDRSun::IsHdrSunActive() && !enableProceduralSun) {
 		// Dither bright output to reduce banding in high-boost sun path.
@@ -256,6 +275,14 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 #		endif
 
+#		if defined(TEX) && defined(EFFECTS11)
+	if (SharedData::enbSettings.EnableProceduralSun && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
+		baseColor.xyz = ComputeProceduralSun(input.TexCoord0.xy);
+		baseColor.w = input.Color.w;
+		skyScale = 0.0;
+	}
+#		endif
+
 #		if defined(PS_CLOUDS) && defined(CLOUD_SHADOWS)
 	if (SharedData::physSkyData.enabled && SharedData::physSkyData.enableVanillaClouds)
 		baseColor.rgb = PhysSky::RelightCloud(baseColor, viewDir, float3(0, 0, 0) + viewDir * psCloudDist, PhysSky::SampTr, SampBaseSampler);
@@ -268,17 +295,26 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(DITHER)
 	float2 noiseGradUv = float2(0.125, 0.125) * input.Position.xy;
-	float noiseGrad =
-		TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x * 0.03125 + -0.0078125;
+	float noiseGrad = TexNoiseGradSampler.Sample(SampNoiseGradSampler, noiseGradUv).x * 0.03125 - 0.0078125;
+	noiseGrad *= 10.0;
 
 #			ifdef TEX
-	float3 skyVertColor = ENABLE_LL ? (input.Color.xyz + noiseGrad) : input.Color.xyz;
-	float3 sunGlareColor = Color::Sky(skyVertColor) * baseColor.xyz;
-	// Dither/noise term is the legacy sky path contribution for gradient smoothing.
-	psout.Color.xyz = (sunGlareColor + skyScale) + (ENABLE_LL ? 0.0 : noiseGrad);
+	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
-	psout.Color.xyz = skyScale + Color::Sky(input.Color.xyz + noiseGrad);
+	float3 skyGradientColor = input.Color.xyz;
+
+#				if defined(EFFECTS11)
+	float3 viewDirection = normalize(input.WorldPosition.xyz);
+	if (SharedData::enbSettings.UseProceduralGradientWeights) {
+		float gradientPosition = pow(1.0 - saturate(viewDirection.z), SharedData::enbSettings.ProceduralGradientWeightCurve);
+		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
+	}
+#				endif
+	psout.Color.xyz = Color::Sky(skyGradientColor) + skyScale;
+
+	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = input.Color.w;
 #			endif  // TEX
 
@@ -292,9 +328,45 @@ PS_OUTPUT main(PS_INPUT input)
 #		elif defined(HORIZFADE)
 	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
-#		else  // not DITHER, not MOONMASK, not HORIZFADE
+#		else
+
+#			if defined(CLOUDS) && defined(EFFECTS11)
+	if (SharedData::enbSettings.Enable)
+		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::enbSettings.CloudsCurve);
+#			endif
+
 	psout.Color.w = input.Color.w * baseColor.w;
 	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+
+#			if defined(CLOUDS) && defined(EFFECTS11)
+	if (SharedData::enbSettings.Enable) {
+		float3 cloudColor = psout.Color.xyz;
+		float3 viewDirection = normalize(input.WorldPosition.xyz);
+
+		cloudColor.xyz = lerp(abs(cloudColor.xyz), dot(cloudColor.xyz, 1.0 / 3.0), SharedData::enbSettings.CloudsDesaturation);
+
+		float cloudLuminance = dot(cloudColor.xyz, 1.0 / 3.0);
+
+		float sunLighting = saturate(dot(viewDirection, SharedData::SunDirection.xyz) * 0.5 + 0.5);
+		float masserLighting = saturate(dot(viewDirection, SharedData::MasserDirection.xyz) * 0.5 + 0.5);
+		float secundaLighting = saturate(dot(viewDirection, SharedData::SecundaDirection.xyz) * 0.5 + 0.5);
+
+		if (SharedData::enbSettings.CloudsEdgeIntensity > 0.0) {
+			float cloudsEdgeAlpha = saturate(1.0 - baseColor.w);
+
+			float3 sunPhase = pow(sunLighting, 32.0) * SharedData::SunColor.xyz * cloudsEdgeAlpha;
+			float3 masserPhase = pow(masserLighting, 32.0) * SharedData::MasserColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
+			float3 secundaPhase = pow(secundaLighting, 32.0) * SharedData::SecundaColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
+
+			float3 cloudsScatter = (sunPhase + masserPhase + secundaPhase) * SharedData::enbSettings.CloudsEdgeIntensity;
+
+			cloudColor += cloudLuminance * cloudsScatter;
+		}
+
+		psout.Color.xyz = cloudColor;
+		psout.Color.w = saturate(psout.Color.w);
+	}
+#			endif
 #		endif
 
 #	else
@@ -372,7 +444,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	psout.CloudShadows = float4(1, 1, 1, psout.Color.w);
+	psout.CloudShadows = psout.Color.w;
 
 	// Keep sun behind scene depth to prevent halo leaks through geometry.
 	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));

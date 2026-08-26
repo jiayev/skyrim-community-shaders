@@ -5,10 +5,10 @@
 #include "HDRDisplay.h"
 #include "Hooks.h"
 #include "State.h"
-#include "Utils/Game.h"
 #include "Upscaling/DX12SwapChain.h"
 #include "Upscaling/FidelityFX.h"
 #include "Upscaling/Streamline.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include <Windows.h>
 #include <algorithm>
@@ -68,9 +68,6 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 
 	auto& upscaling = globals::features::upscaling;
 	upscaling.LoadUpscalingSDKs();
-
-	if (upscaling.IsBackendInitialized())
-		upscaling.CheckBackendFeatures(pAdapter);
 
 	// FLIP_DISCARD requires BufferCount >= 2 and a flip-model-compatible (non-sRGB) format.
 	pSwapChainDesc->SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
@@ -145,7 +142,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 				// forward to the underlying D3D12 swap chain, causing
 				// E_NOINTERFACE.  The proxy must remain the outermost layer.
 				upscaling.SetBackendD3DDevice(*ppDevice);
-				// Some features (notably Reflex/PCL) may report availability only after device bind.
+				// Feature availability (notably Reflex/PCL) is only reliable after device bind.
 				upscaling.CheckBackendFeatures(pAdapter);
 				upscaling.PostBackendDevice();
 			}
@@ -174,7 +171,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChainUpscaling(
 		upscaling.UpgradeBackendInterface((void**)&(*ppDevice));
 		upscaling.UpgradeBackendInterface((void**)&(*ppSwapChain));
 		upscaling.SetBackendD3DDevice(*ppDevice);
-		// Re-check after device bind to ensure feature availability is accurate.
+		// Feature availability (notably Reflex/PCL) is only reliable after device bind.
 		upscaling.CheckBackendFeatures(pAdapter);
 		upscaling.PostBackendDevice();
 	}
@@ -534,7 +531,6 @@ void Upscaling::DataLoaded()
 	// The game defaults this to a non-zero value
 	static auto fDRClampOffset = RE::GetINISetting("fDRClampOffset:Display");
 	fDRClampOffset->data.f = 0.0f;
-
 }
 
 void Upscaling::Load()
@@ -1014,10 +1010,6 @@ void Upscaling::SetupResources()
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
 
-	// Setup HDR resources only when the HDR Display feature is loaded
-	if (globals::features::hdrDisplay.loaded) {
-		globals::features::hdrDisplay.SetupResources();
-	}
 }
 
 void Upscaling::ClearShaderCache()
@@ -1236,9 +1228,8 @@ bool Upscaling::IsFrameGenerationActive() const
 
 bool Upscaling::ShouldUseFrameGenerationThisFrame() const
 {
-	auto* ui = globals::game::ui;
 	auto* state = globals::state;
-	const bool menuOpen = (ui && ui->GameIsPaused()) || (state && state->IsMainOrLoadingMenuOpen(ui));
+	const bool menuOpen = state && state->IsPausedOrMenuOpen(globals::game::ui);
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
 }
 
@@ -1626,32 +1617,31 @@ void Upscaling::ApplySharpening()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Sharpening");
 
-	if (!settings.sharpnessEnabledDLSS)
-		return;
-
-	if (settings.sharpnessDLSS <= 0.0f)
-		return;
-
 	if (!sharpenerTexture)
 		return;
-
-	// Match FSR3's slider->RCAS conversion exactly (ffx_fsr3upscaler.cpp + FsrRcasCon):
-	//   sharpenessRemapped = -2*slider + 2   (sharpness in stops)
-	//   rcasAttenuation    = exp2(-sharpenessRemapped) = exp2(2*slider - 2)
-	float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
-	currentSharpness = exp2(-currentSharpness);
 
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	if (!main.UAV)
+	if (!main.texture)
 		return;
 
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	// Zero-copy path: DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
-	rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	if (settings.sharpnessEnabledDLSS && settings.sharpnessDLSS > 0.0f && main.UAV) {
+		// Match FSR3's slider->RCAS conversion exactly (ffx_fsr3upscaler.cpp + FsrRcasCon):
+		//   sharpenessRemapped = -2*slider + 2   (sharpness in stops)
+		//   rcasAttenuation    = exp2(-sharpenessRemapped) = exp2(2*slider - 2)
+		float currentSharpness = (-2.0f * settings.sharpnessDLSS) + 2.0f;
+		currentSharpness = exp2(-currentSharpness);
+
+		// DLSS has already written to sharpenerTexture; sharpen directly into kMAIN.UAV.
+		rcas.ApplySharpen(sharpenerTexture->srv.get(), main.UAV, currentSharpness);
+	} else {
+		// Sharpening is disabled: resolve the DLSS output without altering it.
+		context->CopyResource(main.texture, sharpenerTexture->resource.get());
+	}
 
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
