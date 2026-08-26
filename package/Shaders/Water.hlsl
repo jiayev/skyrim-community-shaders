@@ -307,7 +307,7 @@ struct PS_OUTPUT
 #	endif
 
 #	if defined(SSR) && (defined(SIMPLE) || defined(LOD) || (defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0))
-	float4 WaterNormal: SV_Target2;
+	float4 WaterNormal: SV_Target1;
 #	endif
 
 #	if defined(STENCIL)

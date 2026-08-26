@@ -261,27 +261,17 @@ namespace WaterBlendHistory
 
 namespace WaterScreenSpaceReflections
 {
-	struct SkipWaterSSR
+	struct RenderWaterSSR
 	{
 		static void thunk()
 		{
 			auto& ssr = globals::features::screenSpaceReflections;
 			if (!ssr.IsWaterSSRReplacementActive()) {
 				func();
+				return;
 			}
-		}
 
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct RenderEffects
-	{
-		static void thunk(RE::BSShaderAccumulator* accumulator, std::uint32_t renderFlags)
-		{
-			func(accumulator, renderFlags);
-
-			if (!globals::state->IsRenderingReflections())
-				globals::features::screenSpaceReflections.DrawWaterSSR();
+			ssr.DrawWaterSSR();
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1029,14 +1019,11 @@ namespace Hooks
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
 
-		// Skip the vanilla water reflection image-space chain. The replacement is
-		// dispatched after the main transparent effects list, which owns the forward
-		// water surface draws. Verified in Ghidra at
+		// Replace the whole vanilla water reflection image-space chain after the
+		// water surface and stencil passes have finished. Verified in Ghidra at
 		// BSShaderAccumulator::FinishAccumulating +0x572 (SE) / +0x55B (AE).
-		stl::write_thunk_call<WaterScreenSpaceReflections::SkipWaterSSR>(
+		stl::write_thunk_call<WaterScreenSpaceReflections::RenderWaterSSR>(
 			REL::RelocationID(99938, 106583).address() + REL::Relocate(0x572, 0x55B));
-		stl::write_thunk_call<WaterScreenSpaceReflections::RenderEffects>(
-			REL::RelocationID(99939, 106584).address() + REL::Relocate(0x551, 0x543));
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

@@ -242,11 +242,6 @@ public:
 		SuppressExternalEmittance = 1 << 5
 	};
 
-	[[nodiscard]] bool IsRenderingReflections() const
-	{
-		return (permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(ExtraShaderDescriptors::IsReflections)) != 0;
-	}
-
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
 	enum class ExtraFeatureDescriptors : uint32_t
 	{

@@ -287,7 +287,7 @@ void ScreenSpaceReflections::SetupResources()
 		}
 
 		// Full-resolution water normal + coverage. Water.hlsl writes the final
-		// perturbed world-space normal to MRT2 only for non-additive surface passes.
+		// perturbed world-space normal to MRT1 only for non-additive surface passes.
 		{
 			D3D11_TEXTURE2D_DESC normalDesc{
 				.Width = fullW,
@@ -647,12 +647,12 @@ void ScreenSpaceReflections::BindWaterNormalTarget(bool a_isCompute)
 		return;
 
 	auto* state = globals::state;
-	if (!state->currentShader || state->currentShader->shaderType.get() != RE::BSShader::Type::Water || state->IsRenderingReflections())
+	if (!state->currentShader || state->currentShader->shaderType.get() != RE::BSShader::Type::Water || state->activeReflections)
 		return;
 
 	// Water techniques 0..7 are the base pass followed by additive specular-light
 	// permutations. Only technique 0, LOD (9), and Simple (11) own a complete
-	// surface normal and therefore declare SV_Target2 in Water.hlsl.
+	// surface normal and therefore declare SV_Target1 in Water.hlsl.
 	const std::uint32_t technique = (state->currentPixelDescriptor >> 11) & 0xFu;
 	if (technique != 0 &&
 		technique != static_cast<std::uint32_t>(SIE::ShaderCache::WaterShaderTechniques::Lod) &&
@@ -660,15 +660,17 @@ void ScreenSpaceReflections::BindWaterNormalTarget(bool a_isCompute)
 		return;
 
 	auto* context = globals::d3d::context;
-	if (!context)
+	auto* renderer = globals::game::renderer;
+	if (!context || !renderer)
 		return;
 
 	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> currentRTVs{};
 	ID3D11DepthStencilView* currentDSV = nullptr;
 	context->OMGetRenderTargets(static_cast<UINT>(currentRTVs.size()), currentRTVs.data(), &currentDSV);
 
-	bool canAppend = currentRTVs[0] != nullptr && currentRTVs[2] == nullptr;
-	for (std::size_t i = 3; i < currentRTVs.size(); ++i)
+	const auto& main = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	bool canAppend = currentRTVs[0] == main.RTV;
+	for (std::size_t i = 1; i < currentRTVs.size(); ++i)
 		canAppend &= currentRTVs[i] == nullptr;
 
 	if (canAppend) {
@@ -678,8 +680,8 @@ void ScreenSpaceReflections::BindWaterNormalTarget(bool a_isCompute)
 			waterNormalClearFrame = state->frameCount;
 		}
 
-		ID3D11RenderTargetView* waterRTVs[3] = { currentRTVs[0], currentRTVs[1], texWaterNormal->rtv.get() };
-		context->OMSetRenderTargets(3, waterRTVs, currentDSV);
+		ID3D11RenderTargetView* waterRTVs[2] = { currentRTVs[0], texWaterNormal->rtv.get() };
+		context->OMSetRenderTargets(2, waterRTVs, currentDSV);
 	}
 
 	for (auto* rtv : currentRTVs) {
@@ -693,11 +695,7 @@ void ScreenSpaceReflections::BindWaterNormalTarget(bool a_isCompute)
 void ScreenSpaceReflections::DrawWaterSSR()
 {
 	if (!IsWaterSSRReplacementActive() || !outputReady ||
-		!texWaterNormal || !texWaterColorCopy || !waterSSRCompute || globals::state->IsRenderingReflections())
-		return;
-
-	const auto frameCount = globals::state->frameCount;
-	if (waterNormalClearFrame != frameCount || waterSSRDrawFrame == frameCount)
+		!texWaterNormal || !texWaterColorCopy || !waterSSRCompute)
 		return;
 
 	auto* context = globals::d3d::context;
@@ -710,26 +708,22 @@ void ScreenSpaceReflections::DrawWaterSSR()
 	if (!main.texture || !main.UAV || !waterDepth.depthSRV)
 		return;
 
-	std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> previousRTVs{};
-	ID3D11DepthStencilView* previousDSV = nullptr;
-	context->OMGetRenderTargets(static_cast<UINT>(previousRTVs.size()), previousRTVs.data(), &previousDSV);
-	if (previousRTVs[2] == texWaterNormal->rtv.get()) {
-		previousRTVs[2]->Release();
-		previousRTVs[2] = nullptr;
-	}
-	UINT previousRTVCount = 0;
-	for (UINT i = 0; i < static_cast<UINT>(previousRTVs.size()); ++i) {
-		if (previousRTVs[i])
-			previousRTVCount = i + 1;
-	}
-
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "SSR - Water");
 	if (globals::state->frameAnnotations)
 		globals::state->BeginPerfEvent("SSR - Water");
 
-	// Snapshot kMAIN without an output binding, then composite directly back into
-	// its UAV. Restore the game-owned output-merger state before returning.
+	// The post-water entry may still run on a frame that emitted no water draw.
+	// Clear here as a fallback so coverage from the previous frame cannot leak.
+	if (waterNormalClearFrame != globals::state->frameCount) {
+		constexpr float clear[4] = { 0.f, 0.f, 0.f, 0.f };
+		context->ClearRenderTargetView(texWaterNormal->rtv.get(), clear);
+		waterNormalClearFrame = globals::state->frameCount;
+	}
+
+	// The vanilla reflection chain is entered with all render targets and the
+	// depth-stencil unbound. Keep that contract while snapshotting kMAIN, then
+	// composite directly back into its UAV.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	context->CopyResource(texWaterColorCopy->resource.get(), main.texture);
 
@@ -743,77 +737,30 @@ void ScreenSpaceReflections::DrawWaterSSR()
 	std::array<ID3D11SamplerState*, 2> samplers{ pointClampSampler.get(), linearClampSampler.get() };
 	ID3D11Buffer* cb = ssrCB->CB();
 	ID3D11Buffer* sharedData = globals::state->sharedDataCB->CB();
-	ID3D11Buffer* frameBuffer = *globals::game::perFrame.get();
-
-	ID3D11ComputeShader* previousShader = nullptr;
-	std::array<ID3D11ShaderResourceView*, 4> previousSRVs{};
-	ID3D11UnorderedAccessView* previousUAV = nullptr;
-	std::array<ID3D11SamplerState*, 2> previousSamplers{};
-	ID3D11Buffer* previousCB1 = nullptr;
-	ID3D11Buffer* previousCB5 = nullptr;
-	ID3D11Buffer* previousCB12 = nullptr;
-
-	context->CSGetShader(&previousShader, nullptr, nullptr);
-	context->CSGetShaderResources(0, static_cast<UINT>(previousSRVs.size()), previousSRVs.data());
-	context->CSGetUnorderedAccessViews(0, 1, &previousUAV);
-	context->CSGetSamplers(0, static_cast<UINT>(previousSamplers.size()), previousSamplers.data());
-	context->CSGetConstantBuffers(1, 1, &previousCB1);
-	context->CSGetConstantBuffers(5, 1, &previousCB5);
-	context->CSGetConstantBuffers(12, 1, &previousCB12);
 
 	context->CSSetShaderResources(0, static_cast<UINT>(srvs.size()), srvs.data());
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetSamplers(0, static_cast<UINT>(samplers.size()), samplers.data());
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetConstantBuffers(5, 1, &sharedData);
-	context->CSSetConstantBuffers(12, 1, &frameBuffer);
 	context->CSSetShader(waterSSRCompute.get(), nullptr, 0);
 
 	float2 size{ static_cast<float>(globals::game::graphicsState->screenWidth), static_cast<float>(globals::game::graphicsState->screenHeight) };
 	size = Util::ConvertToDynamic(size);
 	globals::profiler->BeginPass("ScreenSpaceReflections::WaterSSR");
 	context->Dispatch((static_cast<std::uint32_t>(size.x) + 7u) >> 3, (static_cast<std::uint32_t>(size.y) + 7u) >> 3, 1);
-	waterSSRDrawFrame = frameCount;
 	globals::profiler->EndPass();
 
 	std::array<ID3D11ShaderResourceView*, 4> nullSRVs{};
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	std::array<ID3D11SamplerState*, 2> nullSamplers{};
+	ID3D11Buffer* nullCB = nullptr;
 	context->CSSetShaderResources(0, static_cast<UINT>(nullSRVs.size()), nullSRVs.data());
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-
-	context->CSSetShaderResources(0, static_cast<UINT>(previousSRVs.size()), previousSRVs.data());
-	context->CSSetUnorderedAccessViews(0, 1, &previousUAV, nullptr);
-	context->CSSetSamplers(0, static_cast<UINT>(previousSamplers.size()), previousSamplers.data());
-	context->CSSetConstantBuffers(1, 1, &previousCB1);
-	context->CSSetConstantBuffers(5, 1, &previousCB5);
-	context->CSSetConstantBuffers(12, 1, &previousCB12);
-	context->CSSetShader(previousShader, nullptr, 0);
-	context->OMSetRenderTargets(previousRTVCount, previousRTVs.data(), previousDSV);
-
-	for (auto* srv : previousSRVs) {
-		if (srv)
-			srv->Release();
-	}
-	if (previousUAV)
-		previousUAV->Release();
-	for (auto* sampler : previousSamplers) {
-		if (sampler)
-			sampler->Release();
-	}
-	if (previousCB1)
-		previousCB1->Release();
-	if (previousCB5)
-		previousCB5->Release();
-	if (previousCB12)
-		previousCB12->Release();
-	if (previousShader)
-		previousShader->Release();
-	for (auto* rtv : previousRTVs) {
-		if (rtv)
-			rtv->Release();
-	}
-	if (previousDSV)
-		previousDSV->Release();
+	context->CSSetSamplers(0, static_cast<UINT>(nullSamplers.size()), nullSamplers.data());
+	context->CSSetConstantBuffers(1, 1, &nullCB);
+	context->CSSetConstantBuffers(5, 1, &nullCB);
+	context->CSSetShader(nullptr, nullptr, 0);
 
 	if (globals::state->frameAnnotations)
 		globals::state->EndPerfEvent();
@@ -844,9 +791,9 @@ bool ScreenSpaceReflections::IsWaterSSRReplacementActive()
 
 void ScreenSpaceReflections::UpdateWaterBlendOverride()
 {
-	// Skyrim AE skips the explicit ISWaterBlend pass while this flag is set.
-	// Skyrim SE 1.5.97 does not read the field, so its pass is skipped by the
-	// BSImagespaceShaderISWaterBlend hook instead.
+	// Skyrim AE uses this flag to select TAA water blending and skip the explicit
+	// ISWaterBlend pass. Skyrim SE 1.5.97 does not read the field, so its pass is
+	// skipped by WaterBlendHistory::BSImagespaceShader_Render instead.
 	if (!REL::Module::IsAE())
 		return;
 
