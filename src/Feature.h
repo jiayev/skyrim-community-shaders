@@ -202,6 +202,9 @@ public:
 	/** @brief Called after all game data files have been loaded. */
 	virtual void DataLoaded() {}
 
+	/** @brief Called after loading an existing save. */
+	virtual void GameLoaded() {}
+
 	/** @brief Called after all SKSE plugins have finished PostLoad. */
 	virtual void PostPostLoad() {}
 

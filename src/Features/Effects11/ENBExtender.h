@@ -15,10 +15,6 @@ namespace ENBExtender
 	int SafeStoi(const std::string& s, int fallback = 0);
 	float SafeStof(const std::string& s, float fallback = 0.0f);
 
-	// KIEFX encoding
-	bool IsKIEFX(const std::string& content);
-	std::string DecodeKIEFX(const std::string& content);
-
 	// Source preprocessing
 	void ConvertExtenderSyntax(std::string& content, const std::filesystem::path& enbseriesPath, std::vector<Effect::UIDefineInfo>& uiDefines, const std::string& iniPath = "", const std::string& iniSection = "");
 	void ExpandStringificationMacros(std::string& source);

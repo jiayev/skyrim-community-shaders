@@ -10,6 +10,7 @@
 #include "Menu/BackgroundBlur.h"
 #include "PaletteWindow.h"
 #include "State.h"
+#include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "Weather/LightingTemplateWidget.h"
 #include "WeatherUtils.h"
@@ -2162,7 +2163,22 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	auto calendar = GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
-	ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
+	if (ImGui::IsItemActivated())
+		gameHourScrubRefreshIssued = false;
+
+	if (changed && ImGui::IsItemActive()) {
+		const double currentTime = ImGui::GetTime();
+		if (!gameHourScrubRefreshIssued || currentTime - lastGameHourScrubRefreshTime >= kGameHourScrubRefreshIntervalSeconds) {
+			Util::RequestTimeJumpTransition();
+			lastGameHourScrubRefreshTime = currentTime;
+			gameHourScrubRefreshIssued = true;
+		}
+	}
+
+	// Always refresh on release so the final value is reflected even if the throttle swallowed it.
+	if (ImGui::IsItemDeactivatedAfterEdit())
+		Util::RequestTimeJumpTransition();
 	return true;
 }
 

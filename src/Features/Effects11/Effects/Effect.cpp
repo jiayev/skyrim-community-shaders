@@ -279,7 +279,6 @@ bool Effect::LoadFXFile()
 	}
 	mainFile.close();
 
-	sourceCode = ENBExtender::DecodeKIEFX(sourceCode);
 
 	auto enbseriesPath = filePath.parent_path();
 	auto iniFilePath = enbseriesPath / (GetName() + ".ini");

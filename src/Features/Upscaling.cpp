@@ -1011,7 +1011,6 @@ void Upscaling::SetupResources()
 		dx12SwapChain.CreateSharedResources();
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
-
 }
 
 void Upscaling::ClearShaderCache()
