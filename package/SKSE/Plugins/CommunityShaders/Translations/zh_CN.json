@@ -1949,8 +1949,6 @@
     "feature.screen_space_reflections.nrd_hit_distance_parameters": "NRD 命中距离参数",
     "feature.screen_space_reflections.occlusion_strength": "遮蔽强度",
     "feature.screen_space_reflections.reblur_denoiser": "REBLUR 降噪器",
-    "feature.screen_space_reflections.replace_water_ssr": "为水面使用 Hi-Z SSR",
-    "feature.screen_space_reflections.replace_water_ssr_tooltip": "将最终水面法线写入独立 RT，由 Compute 使用 Hi-Z 追踪锐利反射，再在折射完成后按 Fresnel 合成。跳过原水面 SSR、模糊和 WaterBlend 链。",
     "feature.screen_space_reflections.show_advanced_options": "显示高级选项",
     "feature.screen_space_reflections.specular_cubemap_multiplier": "镜面立方体贴图倍率",
     "feature.screen_space_reflections.specular_multiplier": "镜面反射倍率",

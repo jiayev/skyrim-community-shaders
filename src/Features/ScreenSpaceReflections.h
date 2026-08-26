@@ -21,8 +21,6 @@ struct ScreenSpaceReflections : Feature
 	virtual inline std::string GetName() override { return "Screen Space Reflections"; }
 	virtual std::string GetDisplayName() override { return T("feature.screen_space_reflections.name", "Screen Space Reflections"); }
 	virtual inline std::string GetShortName() override { return "ScreenSpaceReflections"; }
-	virtual inline std::string_view GetShaderDefineName() override { return "SSR"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Water; }
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
@@ -52,13 +50,9 @@ struct ScreenSpaceReflections : Feature
 	bool ShadersOK();
 
 	void DrawSSR();
-	void DrawWaterSSR();
-	void BindWaterNormalTarget(bool a_isCompute);
 	void UpdateSB();
 
 	ID3D11ShaderResourceView* GetOutputTexture();
-	ID3D11ShaderResourceView* GetHiZDepthTexture();
-	bool IsWaterSSRReplacementActive();
 
 	//////////////////////////////////////////////////////////////////////////////////
 
@@ -67,7 +61,6 @@ struct ScreenSpaceReflections : Feature
 	struct Settings
 	{
 		bool Enabled = true;
-		bool ReplaceWaterSSR = false;
 		bool HalfRes = true;
 
 		float SpecularMult = 1.0f;
@@ -125,14 +118,8 @@ struct ScreenSpaceReflections : Feature
 		uint Enabled;
 		float SpecularMult;
 		float SpecCubemapMult;
-		uint UseHiZForWater;
-
-		uint MaxSteps;
-		uint MaxMips;
-		float Thickness;
-		float NormalBias;
+		uint pad0;
 	};
-	STATIC_ASSERT_ALIGNAS_16(SharedData);
 
 	SharedData GetCommonBufferData();
 
@@ -147,12 +134,6 @@ struct ScreenSpaceReflections : Feature
 	eastl::unique_ptr<Texture2D> texNRDSpecInput = nullptr;
 	eastl::unique_ptr<Texture2D> texNRDSpecOutput = nullptr;
 
-	// Independent water SSR resources. The normal texture is written as MRT2 by
-	// the forward water shader; the color copy breaks the main-SRV/main-UAV hazard
-	// while the post-water compute pass composites in place.
-	eastl::unique_ptr<Texture2D> texWaterNormal = nullptr;
-	eastl::unique_ptr<Texture2D> texWaterColorCopy = nullptr;
-
 	winrt::com_ptr<ID3D11SamplerState> linearClampSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> pointClampSampler = nullptr;
 
@@ -160,18 +141,10 @@ struct ScreenSpaceReflections : Feature
 	winrt::com_ptr<ID3D11ComputeShader> prefilterHiZMipsCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> depthDownsampleCompute = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> specularGICompute = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> waterSSRCompute = nullptr;
 
 	NRDReblurIntegration nrdReblurSpecular;
 	nrd::ReblurSettings reblurSpecularSettings{};
 	bool resetReblurHistory = true;
 	// True only after the current DrawSSR invocation has produced a trace output.
 	bool outputReady = false;
-	std::uint32_t waterNormalClearFrame = static_cast<std::uint32_t>(-1);
-	std::uint32_t waterSSRDrawFrame = static_cast<std::uint32_t>(-1);
-
-	void UpdateWaterBlendOverride();
-	RE::ImageSpaceManager::UNK_BSImagespaceShaderISTemporalAA* waterBlendOverrideTarget = nullptr;
-	bool originalTAAWaterBlendingState = false;
-	bool waterBlendOverrideApplied = false;
 };

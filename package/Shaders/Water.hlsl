@@ -308,10 +308,6 @@ struct PS_OUTPUT
 	float4 Lighting: SV_Target0;
 #	endif
 
-#	if defined(SSR) && (defined(SIMPLE) || defined(LOD) || (defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0))
-	float4 WaterNormal: SV_Target2;
-#	endif
-
 #	if defined(STENCIL)
 	float4 WaterMask: SV_Target0;
 	float2 MotionVector: SV_Target1;
@@ -881,24 +877,17 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 #			endif
 
 #			if !defined(LOD) && NUM_SPECULAR_LIGHTS == 0
-#				if defined(SSR)
-	[branch] if (SharedData::ssrSettings.UseHiZForWater == 0)
-	{
-#				endif
-		float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
-		float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
-		float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
-		float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
-		float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
-		float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
-		float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
-		float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
-		float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
-		reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
-#				if defined(SSR)
-	}
-#				endif
+	float pointingDirection = dot(viewDirection, R) * 0.5 + 0.5;
+	float pointingAlignment = dot(reflect(viewDirection, float3(0, 0, 1)), R) * 0.5 + 0.5;
+	float ssrAmount = sqrt(min(pointingAlignment, pointingDirection));
+	float2 ssrReflectionUv = ((FrameBuffer::DynamicResolutionParams2.xy * input.HPosition.xy) * SSRParams.zw) + 0.05 * normal.xy;
+	float2 ssrReflectionUvDR = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(ssrReflectionUv);
+	float4 ssrReflectionColorBlurred = SSRReflectionTex.Sample(SSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColorRaw = RawSSRReflectionTex.Sample(RawSSRReflectionSampler, ssrReflectionUvDR);
+	float4 ssrReflectionColor = lerp(ssrReflectionColorBlurred, ssrReflectionColorRaw, ssrAmount * 0.7);
+	float3 finalSsrReflectionColor = max(0, ssrReflectionColor.xyz);
+	float ssrFraction = saturate(ssrReflectionColor.w * distanceFactor * ssrAmount);
+	reflectionColor = lerp(reflectionColor, finalSsrReflectionColor, ssrFraction);
 #			endif
 
 	return reflectionColor;
@@ -1128,14 +1117,6 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	float3 normal = waterData.normal;
-
-#			if defined(SSR) && (defined(SIMPLE) || defined(LOD) || (defined(SPECULAR) && NUM_SPECULAR_LIGHTS == 0))
-	// Persist the exact perturbed normal used by forward water shading. It is in
-	// camera-relative world axes; the post-water compute pass transforms it to
-	// view space before tracing. Alpha is the per-pixel water coverage mask.
-	if (SharedData::ssrSettings.UseHiZForWater != 0)
-		psout.WaterNormal = float4(normal, 1.0);
-#			endif
 
 #			if defined(SKYLIGHTING)
 	sh2 specularLobe = SphericalHarmonics::FauxSpecularLobe(normal, -viewDirection, 0.0);

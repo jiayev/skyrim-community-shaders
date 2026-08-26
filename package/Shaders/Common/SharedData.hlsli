@@ -315,12 +315,7 @@ namespace SharedData
 		uint Enabled;
 		float SpecularMult;
 		float SpecCubemapMult;
-		uint UseHiZForWater;
-
-		uint MaxSteps;
-		uint MaxMips;
-		float Thickness;
-		float NormalBias;
+		uint pad0;
 	};
 
 	struct ExponentialHeightFogSettings
