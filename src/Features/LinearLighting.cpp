@@ -7,6 +7,8 @@
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
 #include "Globals.h"
+#include "Hooks.h"
+#include "ShaderCache.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
@@ -15,18 +17,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
-	lightGamma,
-	colorGamma,
-	emitColorGamma,
-	glowmapGamma,
-	ambientGamma,
-	fogGamma,
-	fogAlphaGamma,
-	effectGamma,
-	effectAlphaGamma,
-	skyGamma,
-	waterGamma,
-	vlGamma,
+	colorEncoding,
 	vanillaDiffuseColorMult,
 	directionalLightMult,
 	pointLightMult,
@@ -39,6 +30,155 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	projectedEffectMult,
 	deferredEffectMult,
 	otherEffectMult)
+
+namespace
+{
+	constexpr float GAME_GAMMA = 1.6f;
+	constexpr std::uint8_t RGB_MASK = 0b0111;
+	constexpr std::array CONSTANT_GROUP_NAMES{ std::string_view{ "PerTechnique" }, std::string_view{ "PerMaterial" }, std::string_view{ "PerGeometry" } };
+
+	enum class ShaderStage : std::uint8_t
+	{
+		Vertex,
+		Pixel
+	};
+
+	enum class ColorTransform : std::uint8_t
+	{
+		Standard,
+		Emissive
+	};
+
+	struct GammaToLinearLUT
+	{
+		static constexpr std::size_t Size = 256;
+
+		std::array<float, Size> srgb{};
+		std::array<float, Size> gameGamma{};
+
+		GammaToLinearLUT()
+		{
+			for (std::size_t i = 0; i < Size; ++i) {
+				const float encoded = static_cast<float>(i) / static_cast<float>(Size - 1);
+				srgb[i] = encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
+				gameGamma[i] = std::pow(encoded, GAME_GAMMA);
+			}
+		}
+	};
+
+	struct ColorField
+	{
+		RE::BSShader::Type shaderType;
+		ShaderStage stage;
+		RE::BSGraphics::ConstantGroupLevel group;
+		std::uint8_t variableIndex;
+		std::string_view variableName;
+		std::uint8_t elementCount;
+		std::uint8_t componentMask;
+		std::uint32_t requiredDescriptor;
+		std::uint32_t forbiddenDescriptor;
+		std::uint32_t excludedTechniques = 0;
+		ColorTransform transform = ColorTransform::Standard;
+		std::uint32_t includedTechniques = 0;
+	};
+
+	struct MappedColorBuffer
+	{
+		ID3D11Resource* resource;
+		void* data;
+		std::size_t byteWidth;
+		RE::BSShader::Type shaderType;
+		ShaderStage stage;
+		RE::BSGraphics::ConstantGroupLevel group;
+		std::uint32_t descriptor;
+		void* shaderObject;
+		const std::int8_t* constantTable;
+		std::size_t constantTableSize;
+		float emissiveMult;
+	};
+
+	struct LightColorBackup
+	{
+		RE::NiLight* light;
+		RE::NiColor color;
+	};
+
+	constexpr std::array COLOR_FIELDS{
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 14, "FogNearColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 15, "FogFarColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 23, "TintColor", 1, RGB_MASK, 0, 0, 0, ColorTransform::Standard, 1u << static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Hair) },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 25, "SpecularColor", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular), 0 },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 13, "ProjectedUVParams2", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV), static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr), 1u << static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle) },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "EmitColor", 1, RGB_MASK, 0, 0, 0, ColorTransform::Emissive },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "PointLightColor", 7, RGB_MASK, 0, 0 },
+
+		ColorField{ RE::BSShader::Type::DistantTree, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 1, "AmbientColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Sky, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 3, "BlendColor", 3, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "Color1", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
+		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 9, "Color2", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
+		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 10, "Color3", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
+
+		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 5, "FogNearColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 6, "FogFarColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 15, "BaseColor", 1, RGB_MASK, 0, static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor) },
+		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 0, "PropertyColor", 1, RGB_MASK, 0, static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor) },
+		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "MembraneRimColor", 1, RGB_MASK, 0, 0 },
+
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 9, "VSFogNearColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 10, "VSFogFarColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 1, "ShallowColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 2, "DeepColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 3, "ReflectionColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 12, "FogNearColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 13, "FogFarColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 15, "SunColor", 1, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 18, "LightColor", 8, RGB_MASK, 0, 0 },
+	};
+
+	thread_local std::vector<MappedColorBuffer> mappedColorBuffers;
+	thread_local std::vector<std::vector<LightColorBackup>> passLightColorBackups;
+
+	float DecodeLUT(float value, const std::array<float, GammaToLinearLUT::Size>& lut)
+	{
+		if (!std::isfinite(value) || value == 0.0f)
+			return value;
+
+		const float sign = std::signbit(value) ? -1.0f : 1.0f;
+		const float magnitude = std::abs(value);
+		if (magnitude > 1.0f)
+			return sign * magnitude;
+
+		const float position = magnitude * static_cast<float>(GammaToLinearLUT::Size - 1);
+		const auto lower = static_cast<std::size_t>(position);
+		const auto upper = std::min(lower + 1, GammaToLinearLUT::Size - 1);
+		return sign * std::lerp(lut[lower], lut[upper], position - static_cast<float>(lower));
+	}
+
+	std::uint32_t GetShaderTechnique(RE::BSShader::Type shaderType, std::uint32_t descriptor)
+	{
+		switch (shaderType) {
+		case RE::BSShader::Type::Lighting:
+			return (descriptor >> 24) & 0x3F;
+		case RE::BSShader::Type::Water:
+			return (descriptor >> 11) & 0xF;
+		case RE::BSShader::Type::Sky:
+			return descriptor & 0xFF;
+		default:
+			return descriptor;
+		}
+	}
+
+	void ConvertSRGBToAP1(float* color)
+	{
+		const float x = 0.4123907993f * color[0] + 0.3575843394f * color[1] + 0.1804807884f * color[2];
+		const float y = 0.2126390059f * color[0] + 0.7151686788f * color[1] + 0.0721923154f * color[2];
+		const float z = 0.0193308187f * color[0] + 0.1191947798f * color[1] + 0.9505321522f * color[2];
+
+		color[0] = 1.6410233797f * x - 0.3248032942f * y - 0.2364246952f * z;
+		color[1] = -0.6636628587f * x + 1.6153315917f * y + 0.0167563477f * z;
+		color[2] = 0.0117218943f * x - 0.0082844420f * y + 0.9883948585f * z;
+	}
+}
 
 void LinearLighting::DrawSettings()
 {
@@ -58,15 +198,14 @@ void LinearLighting::DrawSettings()
 							  "Requires Linear Lighting and Post Processing enabled.\n"
 							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
 
+	const char* colorEncodings[] = { "sRGB", "Linear", "Game Gamma" };
+	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
+	int colorEncoding = static_cast<int>(settings.colorEncoding);
+	if (ImGui::Combo(T(TKEY("color_encoding"), "Color Encoding"), &colorEncoding, colorEncodings, IM_ARRAYSIZE(colorEncodings)))
+		settings.colorEncoding = static_cast<uint>(colorEncoding);
+
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
-			ImGui::SeparatorText(T(TKEY("gamma_settings"), "Gamma Settings"));
-			ImGui::SliderFloat(T(TKEY("fog_gamma"), "Fog Gamma"), &settings.fogGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("fog_transparency_gamma"), "Fog Transparency Gamma"), &settings.fogAlphaGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("sky_gamma"), "Sky Gamma"), &settings.skyGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("vl_gamma"), "Volumetric Lighting Gamma"), &settings.vlGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("water_gamma"), "Water Gamma"), &settings.waterGamma, 0.1f, 3.0f, "%.2f");
-
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, 0.0f, 10.0f, "%.2f");
@@ -76,15 +215,6 @@ void LinearLighting::DrawSettings()
 		}
 
 		if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
-			ImGui::SeparatorText(T(TKEY("gamma_settings"), "Gamma Settings"));
-			ImGui::SliderFloat(T(TKEY("light_gamma"), "Light Gamma"), &settings.lightGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("color_gamma"), "Color Gamma"), &settings.colorGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("emissive_color_gamma"), "Emissive Color Gamma"), &settings.emitColorGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("glowmap_gamma"), "Glowmap Gamma"), &settings.glowmapGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("ambient_gamma"), "Ambient Gamma"), &settings.ambientGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("effect_gamma"), "Effect Gamma"), &settings.effectGamma, 0.1f, 3.0f, "%.2f");
-			ImGui::SliderFloat(T(TKEY("effect_transparency_gamma"), "Effect Transparency Gamma"), &settings.effectAlphaGamma, 0.1f, 3.0f, "%.2f");
-
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, 0.0f, 10.0f, "%.2f");
@@ -110,6 +240,7 @@ void LinearLighting::DrawSettings()
 void LinearLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -122,49 +253,6 @@ void LinearLighting::RestoreDefaultSettings()
 	settings = {};
 }
 
-void LinearLighting::SetupResources()
-{
-	PerGeometryCB = new ConstantBuffer(ConstantBufferDesc<PerGeometryData>());
-}
-
-void LinearLighting::Prepass()
-{
-	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
-	dirLightMult = 1.0f;
-	if (!settings.enableLinearLighting || isMainLoadingMenu)
-		return;
-
-	auto imageSpaceManager = globals::game::imageSpaceManager;
-	if (!imageSpaceManager)
-		return;
-
-	dirLightMult = imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
-}
-
-struct LinearLighting::Hooks
-{
-	struct BSLightingShader_SetupGeometry
-	{
-		static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
-		{
-			globals::features::linearLighting.BSLightingShader_SetupGeometry(Pass);
-			func(This, Pass, RenderFlags);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	static void Install()
-	{
-		stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-		logger::info("[LinearLighting] Installed hooks - BSLightingShader_SetupGeometry");
-	}
-};
-
-void LinearLighting::PostPostLoad()
-{
-	LinearLighting::Hooks::Install();
-}
-
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	if (!loaded) {
@@ -172,41 +260,15 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		data.enableLinearLighting = false;
 		return data;
 	}
-	bool isMainLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	auto data = PerFrameData{};
-	data.enableLinearLighting = settings.enableLinearLighting && !isMainLoadingMenu;
-	data.enableACEScg = settings.enableACEScg && settings.enableLinearLighting && !isMainLoadingMenu;
-	data.isDirLightLinear = isDirLightLinear;
-	data.dirLightMult = dirLightMult;
-	data.lightGamma = settings.lightGamma;
-	data.colorGamma = settings.colorGamma;
-	data.emitColorGamma = settings.emitColorGamma;
-	data.glowmapGamma = settings.glowmapGamma;
-	data.ambientGamma = settings.ambientGamma;
-	data.fogGamma = settings.fogGamma;
-	data.fogAlphaGamma = settings.fogAlphaGamma;
-	data.effectGamma = settings.effectGamma;
-	data.effectAlphaGamma = settings.effectAlphaGamma;
-	data.skyGamma = settings.skyGamma;
-	data.waterGamma = settings.waterGamma;
-	data.vlGamma = settings.vlGamma;
+	data.enableLinearLighting = IsColorManagementEnabled();
+	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting;
 
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
 		if (enb.enableEffect) {
 			data.enableLinearLighting = false;
-			data.lightGamma = 1.0f;
-			data.colorGamma = 1.0f;
-			data.emitColorGamma = 1.0f;
-			data.glowmapGamma = 1.0f;
-			data.ambientGamma = 1.0f;
-			data.fogGamma = 1.0f;
-			data.fogAlphaGamma = 1.0f;
-			data.effectGamma = 1.0f;
-			data.effectAlphaGamma = 1.0f;
-			data.skyGamma = 1.0f;
-			data.waterGamma = 1.0f;
-			data.vlGamma = 1.0f;
+			data.enableACEScg = false;
 		}
 	}
 
@@ -214,7 +276,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.directionalLightMult = settings.directionalLightMult;
 	data.pointLightMult = settings.pointLightMult;
 	data.ambientMult = settings.ambientMult;
-	data.emitColorMult = settings.emitColorMult;
 	data.glowmapMult = settings.glowmapMult;
 	data.effectLightingMult = settings.effectLightingMult;
 	data.membraneEffectMult = settings.membraneEffectMult;
@@ -231,7 +292,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 			data.directionalLightMult = 1.0f;
 			data.pointLightMult = 1.0f;
 			data.ambientMult = 1.0f;
-			data.emitColorMult = 1.0f;
 			data.glowmapMult = 1.0f;
 			data.effectLightingMult = 1.0f;
 			data.membraneEffectMult = 1.0f;
@@ -244,33 +304,202 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	return data;
 }
 
-RE::NiColor LinearLighting::ColorToLinear(RE::NiColor inColor, float gamma)
+bool LinearLighting::IsColorManagementEnabled() const
 {
-	RE::NiColor outColor;
-	outColor.red = std::pow(inColor.red, gamma);
-	outColor.green = std::pow(inColor.green, gamma);
-	outColor.blue = std::pow(inColor.blue, gamma);
-	return outColor;
+	if (!loaded || !settings.enableLinearLighting || !globals::shaderCache || !globals::shaderCache->IsEnabled() || globals::state->IsMainOrLoadingMenuOpen())
+		return false;
+
+	return !globals::features::effects11.loaded || !globals::features::effects11.enableEffect;
+}
+
+LinearLighting::ColorEncoding LinearLighting::GetColorEncoding() const
+{
+	const auto encoding = static_cast<ColorEncoding>(settings.colorEncoding);
+	return encoding <= ColorEncoding::GameGamma ? encoding : ColorEncoding::SRGB;
+}
+
+void LinearLighting::DecodeColor(float* color) const
+{
+	if (!IsColorManagementEnabled())
+		return;
+
+	static const GammaToLinearLUT lut;
+	switch (GetColorEncoding()) {
+	case ColorEncoding::SRGB:
+		for (std::size_t i = 0; i < 3; ++i) {
+			const float value = color[i];
+			if (std::abs(value) <= 1.0f) {
+				color[i] = DecodeLUT(value, lut.srgb);
+			} else {
+				const float magnitude = std::abs(value);
+				const float linear = magnitude <= 0.04045f ? magnitude / 12.92f : std::pow((magnitude + 0.055f) / 1.055f, 2.4f);
+				color[i] = std::copysign(linear, value);
+			}
+		}
+		break;
+	case ColorEncoding::GameGamma:
+		for (std::size_t i = 0; i < 3; ++i) {
+			const float value = color[i];
+			color[i] = std::abs(value) <= 1.0f ? DecodeLUT(value, lut.gameGamma) : std::copysign(std::pow(std::abs(value), GAME_GAMMA), value);
+		}
+		break;
+	case ColorEncoding::Linear:
+		break;
+	}
+
+	if (settings.enableACEScg)
+		ConvertSRGBToAP1(color);
+}
+
+RE::NiColor LinearLighting::DecodeColor(RE::NiColor color) const
+{
+	DecodeColor(&color.red);
+	return color;
+}
+
+void LinearLighting::BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShader::Type shaderType)
+{
+	auto& backups = passLightColorBackups.emplace_back();
+	const auto shaderClass = static_cast<std::size_t>(shaderType) - 1;
+	if (!IsColorManagementEnabled() || shaderClass >= std::size(globals::state->enabledClasses) || !globals::state->enabledClasses[shaderClass] || !pass || !pass->sceneLights)
+		return;
+
+	const bool directionalOnly = shaderType == RE::BSShader::Type::Lighting;
+	const std::uint32_t lightCount = directionalOnly ? std::min<std::uint32_t>(pass->numLights, 1) : pass->numLights;
+	backups.reserve(lightCount);
+	for (std::uint32_t index = 0; index < lightCount; ++index) {
+		auto* light = pass->sceneLights[index] ? pass->sceneLights[index]->light.get() : nullptr;
+		if (!light || std::find_if(backups.begin(), backups.end(), [light](const auto& backup) { return backup.light == light; }) != backups.end())
+			continue;
+		const bool alreadyManaged = std::any_of(passLightColorBackups.begin(), std::prev(passLightColorBackups.end()), [light](const auto& outerBackups) {
+			return std::any_of(outerBackups.begin(), outerBackups.end(), [light](const auto& backup) { return backup.light == light; });
+		});
+		if (alreadyManaged)
+			continue;
+
+		auto& diffuse = light->GetLightRuntimeData().diffuse;
+		backups.push_back({ light, diffuse });
+		diffuse = DecodeColor(diffuse);
+	}
+}
+
+void LinearLighting::EndPassColorManagement()
+{
+	if (passLightColorBackups.empty())
+		return;
+
+	for (const auto& backup : passLightColorBackups.back())
+		backup.light->GetLightRuntimeData().diffuse = backup.color;
+	passLightColorBackups.pop_back();
+}
+
+void LinearLighting::TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPPED_SUBRESOURCE* mappedResource)
+{
+	if (!IsColorManagementEnabled() || !resource || !mappedResource || !mappedResource->pData || !globals::state->currentShader ||
+		(!globals::state->customVertexShader && !globals::state->customPixelShader))
+		return;
+
+	const auto shaderType = globals::state->currentShader->shaderType.get();
+
+	auto track = [&](auto* sourceShader, void* customShader, ShaderStage stage, std::uint32_t descriptor) {
+		if (!sourceShader || !customShader)
+			return false;
+
+		for (std::size_t groupIndex = 0; groupIndex < 3; ++groupIndex) {
+			if (sourceShader->constantBuffers[groupIndex].buffer != resource)
+				continue;
+			D3D11_BUFFER_DESC desc{};
+			static_cast<ID3D11Buffer*>(resource)->GetDesc(&desc);
+
+			mappedColorBuffers.push_back({ resource,
+				mappedResource->pData,
+				desc.ByteWidth,
+				shaderType,
+				stage,
+				static_cast<RE::BSGraphics::ConstantGroupLevel>(groupIndex),
+				descriptor,
+				customShader,
+				sourceShader->constantTable.data(),
+				sourceShader->constantTable.size(),
+				currentEmissiveMult });
+			return true;
+		}
+
+		return false;
+	};
+
+	if (globals::game::currentVertexShader &&
+		track(*globals::game::currentVertexShader,
+			globals::state->customVertexShader ? globals::state->customVertexShader->shader : nullptr,
+			ShaderStage::Vertex,
+			globals::state->currentVertexDescriptor))
+		return;
+
+	if (globals::game::currentPixelShader && globals::state->customPixelShader)
+		track(*globals::game::currentPixelShader, globals::state->customPixelShader->shader, ShaderStage::Pixel, globals::state->currentPixelDescriptor);
+}
+
+void LinearLighting::ConvertMappedColorBuffer(ID3D11Resource* resource)
+{
+	const auto mapped = std::find_if(mappedColorBuffers.rbegin(), mappedColorBuffers.rend(), [resource](const auto& entry) {
+		return entry.resource == resource;
+	});
+	if (mapped == mappedColorBuffers.rend())
+		return;
+
+	const MappedColorBuffer buffer = *mapped;
+	mappedColorBuffers.erase(std::next(mapped).base());
+	if (!IsColorManagementEnabled())
+		return;
+
+	for (const auto& field : COLOR_FIELDS) {
+		const auto technique = GetShaderTechnique(buffer.shaderType, buffer.descriptor);
+		if (field.shaderType != buffer.shaderType || field.stage != buffer.stage || field.group != buffer.group ||
+			(field.requiredDescriptor && (buffer.descriptor & field.requiredDescriptor) != field.requiredDescriptor) ||
+			(field.forbiddenDescriptor && (buffer.descriptor & field.forbiddenDescriptor)) ||
+			(field.includedTechniques && (technique >= 32 || !(field.includedTechniques & (1u << technique)))) ||
+			(technique < 32 && (field.excludedTechniques & (1u << technique))))
+			continue;
+
+		if (field.variableIndex >= buffer.constantTableSize)
+			continue;
+		const auto groupIndex = static_cast<std::size_t>(field.group);
+		if (groupIndex >= CONSTANT_GROUP_NAMES.size() || !Hooks::HasShaderConstant(buffer.shaderObject, CONSTANT_GROUP_NAMES[groupIndex], field.variableName))
+			continue;
+
+		const auto offset = buffer.constantTable[field.variableIndex];
+		if (offset < 0)
+			continue;
+
+		for (std::size_t element = 0; element < field.elementCount; ++element) {
+			const std::size_t floatOffset = static_cast<std::size_t>(offset) + element * 4;
+			if ((floatOffset + 4) * sizeof(float) > buffer.byteWidth)
+				break;
+
+			auto* value = static_cast<float*>(buffer.data) + floatOffset;
+			if (field.transform == ColorTransform::Emissive) {
+				if (buffer.emissiveMult != 0.0f) {
+					for (std::size_t component = 0; component < 3; ++component)
+						value[component] /= buffer.emissiveMult;
+				}
+				DecodeColor(value);
+				for (std::size_t component = 0; component < 3; ++component)
+					value[component] *= buffer.emissiveMult * settings.emitColorMult;
+			} else if (field.componentMask == RGB_MASK) {
+				DecodeColor(value);
+			}
+		}
+	}
 }
 
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
+	currentEmissiveMult = 1.0f;
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
-	if (lightProperty != nullptr) {
-		float emissiveMult = 1.0f;
-		if (settings.enableLinearLighting) {
-			emissiveMult = lightProperty->emissiveMult;
-			PerGeometryData perGeometryData{};
-			perGeometryData.emissiveMult = emissiveMult;
-			PerGeometryCB->Update(perGeometryData);
-
-			ID3D11Buffer* buffer = { PerGeometryCB->CB() };
-			auto context = globals::d3d::context;
-			context->PSSetConstantBuffers(8, 1, &buffer);
-		}
-	}
+	if (lightProperty && IsColorManagementEnabled())
+		currentEmissiveMult = lightProperty->emissiveMult;
 }
 
 #undef I18N_KEY_PREFIX

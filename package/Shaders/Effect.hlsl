@@ -10,9 +10,9 @@
 #define EFFECT
 
 #if defined(SOFT) && defined(NORMALS) && defined(TEXTURE) && defined(FALLOFF) && defined(VC) && \
-    !defined(LIGHTING) && !defined(PARTICLES) && !defined(STRIP_PARTICLES) &&                    \
-    !defined(BLOOD) && !defined(MEMBRANE) && !defined(ADDBLEND) && !defined(MULTBLEND) &&        \
-    !defined(MULTBLEND_DECAL) && !defined(ALPHA_TEST) && !defined(DEFERRED) && !defined(SKINNED)
+	!defined(LIGHTING) && !defined(PARTICLES) && !defined(STRIP_PARTICLES) &&                   \
+	!defined(BLOOD) && !defined(MEMBRANE) && !defined(ADDBLEND) && !defined(MULTBLEND) &&       \
+	!defined(MULTBLEND_DECAL) && !defined(ALPHA_TEST) && !defined(DEFERRED) && !defined(SKINNED)
 #	define IS_VOLUMETRIC_FOG
 #endif
 
@@ -660,14 +660,14 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	float lightingInfluence = LightingInfluence.x;
-	float3 propertyColor = Color::Effect(PropertyColor.xyz);
+	float3 propertyColor = PropertyColor.xyz;
 	float shadowVariance = 1.0;
 
 #	if defined(EFFECTS11)
 	bool isFire = false;
 #		if defined(ADDBLEND)
 #			if defined(SOFT)
-    if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
+	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
 		isFire = true;
 #			elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
 	isFire = true;
@@ -711,8 +711,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
 			propertyColor += lightColor;
 		}
 	}
@@ -741,7 +740,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColorMul = float4(1, 1, 1, 1);
 #	else
 	float4 baseColorMul = BaseColor;
-	baseColorMul.xyz = Color::Effect(baseColorMul.xyz);
 #		if defined(VC) && !defined(PROJECTED_UV)
 	baseColorMul *= float4(Color::Effect(input.Color.xyz), input.Color.w);
 #		endif
@@ -815,8 +813,8 @@ PS_OUTPUT main(PS_INPUT input)
 	lightColor = Color::EffectMult(lightColor);
 
 #	if !defined(MOTIONVECTORS_NORMALS)
-	float fogFactor = Color::FogAlpha(input.FogParam.w);
-	float3 fogColor = Color::Fog(input.FogParam.xyz);
+	float fogFactor = input.FogParam.w;
+	float3 fogColor = input.FogParam.xyz;
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -843,20 +841,20 @@ PS_OUTPUT main(PS_INPUT input)
 		}
 	}
 #		endif
-#        if defined(ADDBLEND)
-#            if defined(EXP_HEIGHT_FOG)
-    float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
-#            else
-    float3 blendedColor = lightColor * (1 - fogFactor);
-#            endif
-#	if defined(EFFECTS11)
+#		if defined(ADDBLEND)
+#			if defined(EXP_HEIGHT_FOG)
+	float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
+#			else
+	float3 blendedColor = lightColor * (1 - fogFactor);
+#			endif
+#			if defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
 		if (isFire)
 			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
 		else
 			blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
 	}
-#	endif
+#			endif
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 #			if defined(EXP_HEIGHT_FOG)
 	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * vanillaFogFactor).xxx);
@@ -875,8 +873,6 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float3 blendedColor = lightColor.xyz;
 #	endif
-
-	alpha = Color::EffectAlpha(alpha);
 
 	float4 finalColor = float4(blendedColor, alpha);
 #	if defined(MULTBLEND_DECAL)

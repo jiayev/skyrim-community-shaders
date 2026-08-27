@@ -191,9 +191,7 @@ float ComputeProceduralSun(float2 uv)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-	// Color::Sky is float3->float3 (per-channel sky gamma). PParams.yyy broadcasts the packed
-	// scalar in PParams.y to RGB; float3 matches output .xyz where skyScale is added.
-	float3 skyScale = Color::Sky(PParams.yyy);
+	float3 skyScale = PParams.yyy;
 
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
@@ -229,20 +227,20 @@ PS_OUTPUT main(PS_INPUT input)
 	noiseGrad *= 10.0;
 
 #			ifdef TEX
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
 	float3 skyGradientColor = input.Color.xyz;
 
-#if defined(EFFECTS11)
+#				if defined(EFFECTS11)
 	float3 viewDirection = normalize(input.WorldPosition.xyz);
 	if (SharedData::enbSettings.UseProceduralGradientWeights) {
 		float gradientPosition = pow(1.0 - saturate(viewDirection.z), SharedData::enbSettings.ProceduralGradientWeightCurve);
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
-#endif
-	psout.Color.xyz = Color::Sky(skyGradientColor) + skyScale;
+#				endif
+	psout.Color.xyz = skyGradientColor + skyScale;
 
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = input.Color.w;
@@ -256,17 +254,17 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (input.Color.xyz * baseColor.xyz + skyScale);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
-#		if defined(CLOUDS) && defined(EFFECTS11)
+#			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable)
 		baseColor.xyz = pow(abs(baseColor.xyz), SharedData::enbSettings.CloudsCurve);
-#		endif
+#			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
@@ -283,7 +281,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 		if (SharedData::enbSettings.CloudsEdgeIntensity > 0.0) {
 			float cloudsEdgeAlpha = saturate(1.0 - baseColor.w);
-			
+
 			float3 sunPhase = pow(sunLighting, 32.0) * SharedData::SunColor.xyz * cloudsEdgeAlpha;
 			float3 masserPhase = pow(masserLighting, 32.0) * SharedData::MasserColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;
 			float3 secundaPhase = pow(secundaLighting, 32.0) * SharedData::SecundaColor.xyz * SharedData::enbSettings.CloudsEdgeMoonMultiplier * cloudsEdgeAlpha;

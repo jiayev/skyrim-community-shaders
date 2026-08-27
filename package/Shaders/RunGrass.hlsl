@@ -436,8 +436,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!complex || SharedData::grassLightingSettings.OverrideComplexGrassSettings)
 		baseColor.xyz *= SharedData::grassLightingSettings.BasicGrassBrightness;
 
-	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 	float3 dirLightColorMultiplier = 1;
 
 #			if defined(EXP_HEIGHT_FOG)
@@ -642,8 +641,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
@@ -690,8 +688,7 @@ PS_OUTPUT main(PS_INPUT input)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #				endif
 
-				const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-				float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
 
 				float lightShadow = 1.0;
 

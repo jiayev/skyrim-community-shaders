@@ -14,6 +14,7 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
+#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
@@ -22,6 +23,8 @@
 #include "Features/VolumetricLighting.h"
 
 std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+std::unordered_map<void*, std::unordered_map<std::string, bool>> ShaderConstantMap;
+std::mutex ShaderBytecodeMutex;
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
@@ -29,13 +32,49 @@ void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeL
 	auto codeCopy = std::make_unique<uint8_t[]>(BytecodeLength);
 	memcpy(codeCopy.get(), Bytecode, BytecodeLength);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
+	std::lock_guard lock(ShaderBytecodeMutex);
 	ShaderBytecodeMap.emplace(Shader, std::make_pair(std::move(codeCopy), BytecodeLength));
+	ShaderConstantMap.erase(Shader);
 }
 
 const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
+	std::lock_guard lock(ShaderBytecodeMutex);
 	return ShaderBytecodeMap.at(Shader);
+}
+
+bool Hooks::HasShaderConstant(void* shader, std::string_view bufferName, std::string_view variableName)
+{
+	if (!shader)
+		return false;
+
+	const std::string key = std::format("{}::{}", bufferName, variableName);
+	std::lock_guard lock(ShaderBytecodeMutex);
+	auto& constants = ShaderConstantMap[shader];
+	if (const auto cached = constants.find(key); cached != constants.end())
+		return cached->second;
+
+	const auto bytecode = ShaderBytecodeMap.find(shader);
+	if (bytecode == ShaderBytecodeMap.end())
+		return constants.emplace(key, false).first->second;
+
+	winrt::com_ptr<ID3D11ShaderReflection> reflector;
+	if (FAILED(D3DReflect(bytecode->second.first.get(), bytecode->second.second, IID_PPV_ARGS(&reflector))))
+		return constants.emplace(key, false).first->second;
+
+	auto* constantBuffer = reflector->GetConstantBufferByName(std::string(bufferName).c_str());
+	D3D11_SHADER_BUFFER_DESC bufferDesc{};
+	if (!constantBuffer || FAILED(constantBuffer->GetDesc(&bufferDesc)))
+		return constants.emplace(key, false).first->second;
+
+	for (std::uint32_t index = 0; index < bufferDesc.Variables; ++index) {
+		D3D11_SHADER_VARIABLE_DESC variableDesc{};
+		if (auto* variable = constantBuffer->GetVariableByIndex(index); variable && SUCCEEDED(variable->GetDesc(&variableDesc)) && std::string_view(variableDesc.Name) == variableName)
+			return constants.emplace(key, true).first->second;
+	}
+
+	return constants.emplace(key, false).first->second;
 }
 
 template <class ShaderType>
@@ -135,6 +174,8 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	// Only check against non-shader bits
 	state->permutationData.PixelShaderDescriptor &= ~state->modifiedPixelDescriptor;
 
+	state->customVertexShader = nullptr;
+	state->customPixelShader = nullptr;
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
 	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
@@ -145,12 +186,14 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		} else {
 			state->settingCustomShader = true;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+			state->customVertexShader = vertexShader;
 			*globals::game::currentVertexShader = vertexShader;
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 			if (skipPixelShader) {
 				pixelShader = nullptr;
 			}
 			*globals::game::currentPixelShader = pixelShader;
+			state->customPixelShader = pixelShader;
 			if (pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
 			state->settingCustomShader = false;
@@ -171,7 +214,11 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
+			auto& linearLighting = globals::features::linearLighting;
+			linearLighting.BSLightingShader_SetupGeometry(pass);
+			linearLighting.BeginPassColorManagement(pass, RE::BSShader::Type::Lighting);
 			func(shader, pass, renderFlags);
+			linearLighting.EndPassColorManagement();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -183,7 +230,10 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			auto& linearLighting = globals::features::linearLighting;
+			linearLighting.BeginPassColorManagement(pass, RE::BSShader::Type::Effect);
 			func(shader, pass, renderFlags);
+			linearLighting.EndPassColorManagement();
 			ExternalEmittance::UpdatePermutation(pass);
 			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
 		}
@@ -269,6 +319,38 @@ namespace WaterBlendHistory
 	};
 }
 
+namespace ImageSpaceColorManagement
+{
+	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType>
+	struct ISSAOComposite_Render
+	{
+		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
+		{
+			auto* shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(param);
+			float originalFogColors[6]{};
+			const auto imageSpaceClass = static_cast<std::size_t>(RE::BSShader::Type::ImageSpace) - 1;
+			const bool convert = globals::features::linearLighting.IsColorManagementEnabled() && globals::state->enabledClasses[imageSpaceClass] && shaderParam && shaderParam->pixelConstantGroup;
+			if (convert) {
+				auto* fogNearColor = shaderParam->pixelConstantGroup + 4;
+				auto* fogFarColor = shaderParam->pixelConstantGroup + 8;
+				std::copy_n(fogNearColor, 3, originalFogColors);
+				std::copy_n(fogFarColor, 3, originalFogColors + 3);
+				globals::features::linearLighting.DecodeColor(fogNearColor);
+				globals::features::linearLighting.DecodeColor(fogFarColor);
+			}
+
+			func(imageSpaceShader, shape, param);
+
+			if (convert) {
+				std::copy_n(originalFogColors, 3, shaderParam->pixelConstantGroup + 4);
+				std::copy_n(originalFogColors + 3, 3, shaderParam->pixelConstantGroup + 8);
+			}
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
 namespace WeatherExtensions
 {
 	struct Sky_UpdateColors
@@ -297,6 +379,25 @@ namespace WeatherExtensions
 					func(overridden, AmbientSpecularTint, AmbientSpecularFresnel);
 					return;
 				}
+			}
+
+			auto& linearLighting = globals::features::linearLighting;
+			if (linearLighting.IsColorManagementEnabled()) {
+				Effects11::DirectionalAmbientColors converted = DirectionalAmbientColors;
+				for (auto& axis : converted.directionalAmbientColors) {
+					for (auto& color : axis)
+						color = linearLighting.DecodeColor(color);
+				}
+
+				RE::NiColor convertedSpecularTint{};
+				auto* specularTint = AmbientSpecularTint;
+				if (AmbientSpecularTint) {
+					convertedSpecularTint = linearLighting.DecodeColor(*AmbientSpecularTint);
+					specularTint = &convertedSpecularTint;
+				}
+
+				func(converted, specularTint, AmbientSpecularFresnel);
+				return;
 			}
 			func(DirectionalAmbientColors, AmbientSpecularTint, AmbientSpecularFresnel);
 		}
@@ -730,6 +831,7 @@ namespace Hooks
 							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
 							if (vertexShader) {
 								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+								state->customVertexShader = vertexShader;
 								*globals::game::currentVertexShader = a_vertexShader;
 								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 								return;
@@ -741,6 +843,7 @@ namespace Hooks
 
 			globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
 
+			state->customVertexShader = nullptr;
 			*globals::game::currentVertexShader = a_vertexShader;
 			globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(a_vertexShader->shader), NULL, NULL);
 		}
@@ -763,6 +866,7 @@ namespace Hooks
 							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
 							if (pixelShader) {
 								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+								state->customPixelShader = pixelShader;
 								*globals::game::currentPixelShader = a_pixelShader;
 								return;
 							}
@@ -772,6 +876,7 @@ namespace Hooks
 			}
 
 			*globals::game::currentPixelShader = a_pixelShader;
+			state->customPixelShader = nullptr;
 
 			if (a_pixelShader)
 				globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(a_pixelShader->shader), NULL, NULL);
@@ -1019,6 +1124,10 @@ namespace Hooks
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
+		stl::write_vfunc<0x1, ImageSpaceColorManagement::ISSAOComposite_Render<RE::ImageSpaceManager::ISSAOCompositeFog>>(
+			RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
+		stl::write_vfunc<0x1, ImageSpaceColorManagement::ISSAOComposite_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog>>(
+			RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
 
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);

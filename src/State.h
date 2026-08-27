@@ -48,6 +48,8 @@ public:
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
+	RE::BSGraphics::VertexShader* customVertexShader = nullptr;
+	RE::BSGraphics::PixelShader* customPixelShader = nullptr;
 	RE::BSShader* currentShader = nullptr;
 	std::string adapterDescription = "";
 

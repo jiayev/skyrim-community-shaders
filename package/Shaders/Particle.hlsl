@@ -316,8 +316,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float4 sourceColor = TexSourceTexture.Sample(SampSourceTexture, input.TexCoord0);
-	float4 baseColor = input.Color * sourceColor;
+	float4 baseColor;
+#	if defined(GRAYSCALE_TO_COLOR)
+	baseColor = input.Color * sourceColor;
 	baseColor.xyz = Color::Diffuse(baseColor.xyz);
+#	else
+	baseColor.xyz = input.Color.xyz * Color::Diffuse(sourceColor.xyz);
+	baseColor.w = input.Color.w * sourceColor.w;
+#	endif
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
@@ -338,8 +344,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 
 	float unusedDetailedShadow;
-	float3 dirLightColor = Color::GamutTransform(SharedData::DirLightColor.xyz) * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
-	float3 ambientColor = Color::GamutTransform(max(0, SharedData::GetAmbient(float3(0, 0, 1))));
+	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
+	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, float3(0, 0, -1));
@@ -376,7 +382,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #		endif
 
-				float3 lightColor = Color::GamutTransform(light.color.xyz) * intensityMultiplier;
+				float3 lightColor = light.color.xyz * intensityMultiplier;
 				propertyColor += lightColor;
 			}
 		}

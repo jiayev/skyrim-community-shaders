@@ -216,25 +216,10 @@ namespace SharedData
 	{
 		uint enableLinearLighting;
 		uint enableACEScg;
-		uint isDirLightLinear;
-		float dirLightMult;
-		float lightGamma;
-		float colorGamma;
-		float emitColorGamma;
-		float glowmapGamma;
-		float ambientGamma;
-		float fogGamma;
-		float fogAlphaGamma;
-		float effectGamma;
-		float effectAlphaGamma;
-		float skyGamma;
-		float waterGamma;
-		float vlGamma;
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
 		float ambientMult;
-		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;
 		float membraneEffectMult;
@@ -242,6 +227,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float3 pad0;
 	};
 
 	struct ENBSettings

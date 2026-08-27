@@ -1458,7 +1458,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 hairTint = 0;
 
 	if (SharedData::hairSpecularSettings.Enabled) {
-		hairTint = lerp(1, Color::Diffuse(TintColor.xyz), Color::ColorToLinear(input.Color.y));
+		hairTint = lerp(1, TintColor.xyz, Color::ColorToLinear(input.Color.y));
 		baseColor.xyz *= hairTint;
 		baseColor.xyz = Hair::Saturation(baseColor.xyz, SharedData::hairSpecularSettings.HairSaturation);
 		baseColor.xyz *= SharedData::hairSpecularSettings.BaseColorMult;
@@ -1637,7 +1637,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projBaseColor = Color::ColorToLinear(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz) * Color::ColorToLinear(ProjectedUVParams2.xyz);
+		float3 projBaseColor = Color::ColorToLinear(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz);
+#			if defined(TRUE_PBR)
+		projBaseColor *= Color::GamutTransform(ProjectedUVParams2.xyz);
+#			else
+		projBaseColor *= ProjectedUVParams2.xyz;
+#			endif
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
@@ -1661,7 +1666,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SNOW
 	} else {
 		if (projWeight > 0) {
+#			if defined(TRUE_PBR)
 			baseColor.xyz = Color::Diffuse(ProjectedUVParams2.xyz);
+#			else
+			baseColor.xyz = ProjectedUVParams2.xyz;
+			baseColor.xyz *= Color::VanillaDiffuseColorMult();
+#			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
 #			endif  // SNOW
@@ -1935,7 +1945,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #			if defined(CREATOR)
 				if (SharedData::cubemapCreatorSettings.Enabled) {
-					material.F0 = Color::GamutTransform(Color::SrgbToLinear(SharedData::cubemapCreatorSettings.CubemapColor.rgb));
+					material.F0 = SharedData::cubemapCreatorSettings.CubemapColor.rgb;
 					material.Roughness = SharedData::cubemapCreatorSettings.CubemapColor.a;
 				}
 #			endif
@@ -2096,8 +2106,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	waterRoughnessSpecular = max(saturate(1.0 - wetnessGlossinessSpecular), wetnessMinPuddleRoughness);
 #	endif
 
-	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && (inWorld || inReflection) && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz);
 
 #	if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
@@ -2333,8 +2342,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-		const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-		float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * light.fade;
+		float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
 		float lightShadow = 1.0;
 
 		float shadowComponent = 1.0;
@@ -2429,7 +2437,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // EYE
 
 	// sRGB by default, linear if LL on
-	float3 emitColor = Color::EmitColor(EmitColor);
+	float3 emitColor = EmitColor;
 #	if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
 	bool hasEmissive = (0x3F & (Permutation::PixelShaderDescriptor >> 24)) == Permutation::LightingTechnique::Glowmap;
 #		if defined(TRUE_PBR)
@@ -2518,7 +2526,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(HAIR)
-	float3 vertexColor = lerp(1, Color::ColorToLinear(TintColor.xyz), Color::ColorToLinear(input.Color.y));
+	float3 vertexColor = lerp(1, TintColor.xyz, Color::ColorToLinear(input.Color.y));
 	float vertexAO = 1;
 #		if defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled)
@@ -2707,8 +2715,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 	color.xyz = Color::IrradianceToGamma(color.xyz);
-	float3 fogColor = Color::Fog(input.FogParam.xyz);
-	float fogFactor = Color::FogAlpha(input.FogParam.w);
+	float3 fogColor = input.FogParam.xyz;
+	float fogFactor = input.FogParam.w;
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);

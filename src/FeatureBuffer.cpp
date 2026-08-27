@@ -44,10 +44,13 @@ std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 
 std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
+	auto dynamicCubemapSettings = globals::features::dynamicCubemaps.settings;
+	globals::features::linearLighting.DecodeColor(&dynamicCubemapSettings.CubemapColor.x);
+
 	return _GetFeatureBufferData(
 		globals::features::grassLighting.settings,
 		globals::features::extendedMaterials.settings,
-		globals::features::dynamicCubemaps.settings,
+		dynamicCubemapSettings,
 		globals::features::terrainShadows.GetCommonBufferData(),
 		globals::features::lightLimitFix.GetCommonBufferData(),
 		globals::features::wetnessEffects.GetCommonBufferData(),
