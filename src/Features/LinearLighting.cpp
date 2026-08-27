@@ -406,7 +406,7 @@ void LinearLighting::TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPP
 			return false;
 
 		for (std::size_t groupIndex = 0; groupIndex < 3; ++groupIndex) {
-			if (sourceShader->constantBuffers[groupIndex].buffer != resource)
+			if (sourceShader->constantBuffers[groupIndex].buffer != reinterpret_cast<REX::W32::ID3D11Buffer*>(resource))
 				continue;
 			D3D11_BUFFER_DESC desc{};
 			static_cast<ID3D11Buffer*>(resource)->GetDesc(&desc);
