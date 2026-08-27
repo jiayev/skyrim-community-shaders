@@ -1058,7 +1058,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 
 		auto& lightRuntimeData = dirLight->GetLightRuntimeData();
-		const auto dirLightColor = globals::features::linearLighting.DecodeColor(lightRuntimeData.diffuse);
+		const auto dirLightColor = globals::features::linearLighting.ConvertLightColorToWorkingSpace(dirLight, lightRuntimeData.diffuse);
 		data.DirLightColor = { dirLightColor.red, dirLightColor.green, dirLightColor.blue, 1.0f };
 		data.DirLightColor *= lightRuntimeData.fade;
 

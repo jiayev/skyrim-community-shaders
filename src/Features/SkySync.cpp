@@ -2,6 +2,7 @@
 #include "../I18n/I18n.h"
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
+#include "LinearLighting.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
@@ -235,6 +236,8 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 {
 	func(sky);
 	auto& skySync = globals::features::skySync;
+	if (sky && sky->sun)
+		globals::features::linearLighting.ClearLightColorSpace(sky->sun->light.get());
 	skySync.PreparePendingTransitions();
 	if (skySync.Update(sky))
 		Util::CompleteCelestialTransition();
@@ -666,7 +669,5 @@ inline void SkySync::ShadowFader::ClampDirection(RE::NiPoint3& dir)
 
 	SetElevation(dir, minElev);
 }
-
-
 
 #undef I18N_KEY_PREFIX

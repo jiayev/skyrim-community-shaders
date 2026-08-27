@@ -8,6 +8,7 @@
 #include "Effects11/SettingManager.h"
 #include "Globals.h"
 #include "Hooks.h"
+#include "InverseSquareLighting/Common.h"
 #include "ShaderCache.h"
 #include "Utils/Game.h"
 
@@ -46,7 +47,8 @@ namespace
 	enum class ColorTransform : std::uint8_t
 	{
 		Standard,
-		Emissive
+		Emissive,
+		PointLights
 	};
 
 	struct GammaToLinearLUT
@@ -95,6 +97,7 @@ namespace
 		const std::int8_t* constantTable;
 		std::size_t constantTableSize;
 		float emissiveMult;
+		std::array<ColorManagement::ColorSpace, 8> lightColorSpaces;
 	};
 
 	struct LightColorBackup
@@ -110,7 +113,7 @@ namespace
 		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 25, "SpecularColor", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular), 0 },
 		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 13, "ProjectedUVParams2", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV), static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr), 1u << static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle) },
 		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "EmitColor", 1, RGB_MASK, 0, 0, 0, ColorTransform::Emissive },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "PointLightColor", 7, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "PointLightColor", 7, RGB_MASK, 0, 0, 0, ColorTransform::PointLights },
 
 		ColorField{ RE::BSShader::Type::DistantTree, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 1, "AmbientColor", 1, RGB_MASK, 0, 0 },
 		ColorField{ RE::BSShader::Type::Sky, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 3, "BlendColor", 3, RGB_MASK, 0, 0 },
@@ -131,8 +134,6 @@ namespace
 		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 3, "ReflectionColor", 1, RGB_MASK, 0, 0 },
 		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 12, "FogNearColor", 1, RGB_MASK, 0, 0 },
 		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 13, "FogFarColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 15, "SunColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 18, "LightColor", 8, RGB_MASK, 0, 0 },
 	};
 
 	thread_local std::vector<MappedColorBuffer> mappedColorBuffers;
@@ -318,13 +319,35 @@ LinearLighting::ColorEncoding LinearLighting::GetColorEncoding() const
 	return encoding <= ColorEncoding::GameGamma ? encoding : ColorEncoding::SRGB;
 }
 
-void LinearLighting::DecodeColor(float* color) const
+ColorManagement::ColorSpace LinearLighting::GetInputColorSpace() const
+{
+	return { GetColorEncoding(), ColorManagement::Gamut::SRGB };
+}
+
+ColorManagement::ColorSpace LinearLighting::GetLightColorSpace(const RE::NiLight* light) const
+{
+	if (light) {
+		if (const auto it = lightColorSpaceOverrides.find(light); it != lightColorSpaceOverrides.end()) {
+			const auto& diffuse = light->GetLightRuntimeData().diffuse;
+			if (diffuse.red == it->second.value.red && diffuse.green == it->second.value.green && diffuse.blue == it->second.value.blue)
+				return it->second.space;
+		}
+
+		if (const auto pointLight = skyrim_cast<RE::NiPointLight*>(const_cast<RE::NiLight*>(light));
+			pointLight && ISLCommon::RuntimeLightDataExt::Get(pointLight)->flags.any(LightLimitFix::LightFlags::Linear))
+			return ColorManagement::LinearSRGB;
+	}
+
+	return GetInputColorSpace();
+}
+
+void LinearLighting::ConvertColorToWorkingSpace(float* color, ColorManagement::ColorSpace sourceSpace) const
 {
 	if (!IsColorManagementEnabled())
 		return;
 
 	static const GammaToLinearLUT lut;
-	switch (GetColorEncoding()) {
+	switch (sourceSpace.encoding) {
 	case ColorEncoding::SRGB:
 		for (std::size_t i = 0; i < 3; ++i) {
 			const float value = color[i];
@@ -347,14 +370,52 @@ void LinearLighting::DecodeColor(float* color) const
 		break;
 	}
 
-	if (settings.enableACEScg)
+	if (sourceSpace.gamut == ColorManagement::Gamut::SRGB && settings.enableACEScg)
 		ConvertSRGBToAP1(color);
+}
+
+RE::NiColor LinearLighting::ConvertColorToWorkingSpace(RE::NiColor color, ColorManagement::ColorSpace sourceSpace) const
+{
+	ConvertColorToWorkingSpace(&color.red, sourceSpace);
+	return color;
+}
+
+void LinearLighting::DecodeColor(float* color) const
+{
+	ConvertColorToWorkingSpace(color, GetInputColorSpace());
 }
 
 RE::NiColor LinearLighting::DecodeColor(RE::NiColor color) const
 {
-	DecodeColor(&color.red);
+	return ConvertColorToWorkingSpace(color, GetInputColorSpace());
+}
+
+void LinearLighting::ConvertLightColorToWorkingSpace(const RE::NiLight* light, float* color) const
+{
+	ConvertColorToWorkingSpace(color, GetLightColorSpace(light));
+}
+
+RE::NiColor LinearLighting::ConvertLightColorToWorkingSpace(const RE::NiLight* light, RE::NiColor color) const
+{
+	ConvertLightColorToWorkingSpace(light, &color.red);
 	return color;
+}
+
+void LinearLighting::SetLightColor(RE::NiLight* light, ColorManagement::ColorValue color)
+{
+	if (!light)
+		return;
+
+	light->GetLightRuntimeData().diffuse = color.value;
+	lightColorSpaceOverrides.insert_or_assign(light, LightColorSpaceOverride{ color.value, color.space });
+}
+
+void LinearLighting::ClearLightColorSpace(const RE::NiLight* light)
+{
+	if (!light)
+		return;
+
+	lightColorSpaceOverrides.erase(light);
 }
 
 void LinearLighting::BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShader::Type shaderType)
@@ -379,7 +440,7 @@ void LinearLighting::BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShad
 
 		auto& diffuse = light->GetLightRuntimeData().diffuse;
 		backups.push_back({ light, diffuse });
-		diffuse = DecodeColor(diffuse);
+		diffuse = ConvertLightColorToWorkingSpace(light, diffuse);
 	}
 }
 
@@ -421,7 +482,8 @@ void LinearLighting::TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPP
 				customShader,
 				sourceShader->constantTable.data(),
 				sourceShader->constantTable.size(),
-				currentEmissiveMult });
+				currentEmissiveMult,
+				currentLightColorSpaces });
 			return true;
 		}
 
@@ -485,6 +547,8 @@ void LinearLighting::ConvertMappedColorBuffer(ID3D11Resource* resource)
 				DecodeColor(value);
 				for (std::size_t component = 0; component < 3; ++component)
 					value[component] *= buffer.emissiveMult * settings.emitColorMult;
+			} else if (field.transform == ColorTransform::PointLights) {
+				ConvertColorToWorkingSpace(value, buffer.lightColorSpaces[element + 1]);
 			} else if (field.componentMask == RGB_MASK) {
 				DecodeColor(value);
 			}
@@ -492,8 +556,22 @@ void LinearLighting::ConvertMappedColorBuffer(ID3D11Resource* resource)
 	}
 }
 
+void LinearLighting::PrepareLightColorManagement(RE::BSRenderPass* a_pass)
+{
+	currentLightColorSpaces.fill(GetInputColorSpace());
+	if (!IsColorManagementEnabled() || !a_pass || !a_pass->sceneLights)
+		return;
+
+	const auto lightCount = std::min<std::uint32_t>(a_pass->numLights, static_cast<std::uint32_t>(currentLightColorSpaces.size()));
+	for (std::uint32_t index = 0; index < lightCount; ++index) {
+		auto* light = a_pass->sceneLights[index] ? a_pass->sceneLights[index]->light.get() : nullptr;
+		currentLightColorSpaces[index] = GetLightColorSpace(light);
+	}
+}
+
 void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
+	PrepareLightColorManagement(a_pass);
 	currentEmissiveMult = 1.0f;
 	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;

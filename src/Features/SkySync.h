@@ -1,4 +1,5 @@
-﻿#pragma once
+#pragma once
+#include "ColorManagement.h"
 #include "RE/M/Moon.h"
 
 #include "Utils/Moon.h"
@@ -74,7 +75,6 @@ public:
 		static void thunk(RE::Sky* sky);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
-
 
 private:
 	enum class CellFlagExt : uint16_t

@@ -1,13 +1,13 @@
 #pragma once
 
+#include "ColorManagement.h"
+
+#include <array>
+#include <unordered_map>
+
 struct LinearLighting : Feature
 {
-	enum class ColorEncoding : uint
-	{
-		SRGB,
-		Linear,
-		GameGamma
-	};
+	using ColorEncoding = ColorManagement::Encoding;
 
 	static LinearLighting* GetSingleton()
 	{
@@ -87,12 +87,31 @@ struct LinearLighting : Feature
 
 	bool IsColorManagementEnabled() const;
 	ColorEncoding GetColorEncoding() const;
+	ColorManagement::ColorSpace GetInputColorSpace() const;
+	ColorManagement::ColorSpace GetLightColorSpace(const RE::NiLight* light) const;
 	RE::NiColor DecodeColor(RE::NiColor color) const;
 	void DecodeColor(float* color) const;
+	RE::NiColor ConvertColorToWorkingSpace(RE::NiColor color, ColorManagement::ColorSpace sourceSpace) const;
+	void ConvertColorToWorkingSpace(float* color, ColorManagement::ColorSpace sourceSpace) const;
+	RE::NiColor ConvertLightColorToWorkingSpace(const RE::NiLight* light, RE::NiColor color) const;
+	void ConvertLightColorToWorkingSpace(const RE::NiLight* light, float* color) const;
+	void SetLightColor(RE::NiLight* light, ColorManagement::ColorValue color);
+	void ClearLightColorSpace(const RE::NiLight* light);
 	void TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPPED_SUBRESOURCE* mappedResource);
 	void ConvertMappedColorBuffer(ID3D11Resource* resource);
 	void BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShader::Type shaderType);
 	void EndPassColorManagement();
 
+	void PrepareLightColorManagement(RE::BSRenderPass* a_pass);
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+
+private:
+	struct LightColorSpaceOverride
+	{
+		RE::NiColor value;
+		ColorManagement::ColorSpace space;
+	};
+
+	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
+	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;
 };
