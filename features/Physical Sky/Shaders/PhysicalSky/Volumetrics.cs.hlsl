@@ -190,16 +190,7 @@ Texture2D<float4> TexVolUpscaleAux : register(t34);
 
 float3 GetSceneDirectionalLightColor()
 {
-	const float linearLightingMultiplier =
-		SharedData::linearLightingSettings.enableLinearLighting &&
-				!SharedData::linearLightingSettings.isDirLightLinear &&
-				!SharedData::InInterior ?
-			SharedData::linearLightingSettings.dirLightMult :
-			1.0;
-	return Color::Light(
-			   SharedData::DirLightColor.xyz / max(linearLightingMultiplier, 1e-5),
-			   SharedData::linearLightingSettings.isDirLightLinear) *
-	       linearLightingMultiplier;
+	return Color::Light(SharedData::DirLightColor.xyz);
 }
 
 RWTexture2D<float4> RWTexTr : register(u0);

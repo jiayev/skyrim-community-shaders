@@ -998,7 +998,6 @@ void PhysicalSky::Reset()
 		if (skySync.loaded && skySync.settings.Enabled)
 			skySync.lightColors = std::nullopt;
 		cbData.enabled = allGood;
-		linearLighting.isDirLightLinear = false;
 		volMainHistoryValid = false;
 		return;
 	}
@@ -1078,15 +1077,12 @@ void PhysicalSky::Reset()
 	};
 
 	if (settings.overrideDirLight) {
-		linearLighting.isDirLightLinear = true;
 		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
 		auto LightConvFn = [pbrCompensationMult](float3 color) {
 			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
 		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
-	} else {
-		linearLighting.isDirLightLinear = false;
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };

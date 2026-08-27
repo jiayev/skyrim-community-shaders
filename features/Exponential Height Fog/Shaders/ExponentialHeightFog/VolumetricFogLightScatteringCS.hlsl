@@ -241,8 +241,7 @@ float3 ComputeSkyLightScattering(float3 positionWS, float3 viewDirection)
 
 float3 ComputeDirectionalLightColor()
 {
-	float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5f), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 #if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled) {
 		float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), LinearSampler);

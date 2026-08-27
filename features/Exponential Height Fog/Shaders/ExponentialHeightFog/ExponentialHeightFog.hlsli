@@ -211,8 +211,7 @@ namespace ExponentialHeightFog
 
 		// Calculate directional light inscattering using Henyey-Greenstein phase function
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
-			float llDirLightMult = SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear && !SharedData::InInterior ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 #if defined(PHYSICAL_SKY) && defined(COMMON_HLSLI)
 			if (SharedData::physSkyData.enabled) {
 				float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampColorSampler);
