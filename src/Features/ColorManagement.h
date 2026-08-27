@@ -1,7 +1,5 @@
 #pragma once
 
-#include "RE/N/NiColor.h"
-
 #include <cstdint>
 
 namespace ColorManagement
