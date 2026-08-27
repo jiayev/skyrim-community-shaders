@@ -1082,7 +1082,11 @@ void PhysicalSky::Reset()
 			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
-		skySync.lightColors = { LightConvFn(cbData.sunlightColor), LightConvFn(cbData.masserColor), LightConvFn(cbData.secundaColor) };
+		skySync.lightColors = std::array{
+			ColorManagement::ColorValue{ LightConvFn(cbData.sunlightColor), ColorManagement::LinearWorking },
+			ColorManagement::ColorValue{ LightConvFn(cbData.masserColor), ColorManagement::LinearWorking },
+			ColorManagement::ColorValue{ LightConvFn(cbData.secundaColor), ColorManagement::LinearWorking }
+		};
 	}
 
 	RE::NiPoint3 posCam = { 0, 0, 0 };

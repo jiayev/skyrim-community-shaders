@@ -265,7 +265,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			// light.color *= runtimeData.fade;
 			light.fade = runtimeData.fade;
 		}
-		globals::features::linearLighting.DecodeColor(&light.color.x);
+		globals::features::linearLighting.ConvertLightColorToWorkingSpace(niLight, &light.color.x);
 
 		light.fade *= bsLight->lodDimmer;
 
@@ -451,7 +451,7 @@ void LightLimitFix::UpdateLights()
 						// light.color *= runtimeData.fade;
 						light.fade = runtimeData.fade;
 					}
-					globals::features::linearLighting.DecodeColor(&light.color.x);
+					globals::features::linearLighting.ConvertLightColorToWorkingSpace(niLight, &light.color.x);
 
 					light.fade *= bsLight->lodDimmer;
 

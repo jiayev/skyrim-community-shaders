@@ -2,6 +2,7 @@
 #include "../I18n/I18n.h"
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
+#include "LinearLighting.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
@@ -237,6 +238,8 @@ void SkySync::Sky_Update::thunk(RE::Sky* sky)
 {
 	func(sky);
 	auto& skySync = globals::features::skySync;
+	if (sky && sky->sun)
+		globals::features::linearLighting.ClearLightColorSpace(sky->sun->light.get());
 	skySync.PreparePendingTransitions();
 	if (skySync.Update(sky))
 		Util::CompleteCelestialTransition();
@@ -517,7 +520,7 @@ void SkySync::ShadowFader::Reset()
 	sunsetHeadingLocked = false;
 }
 
-void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<RE::NiColor, 3>> colors, float fadeDuration, float fadeAdvance, bool a_immediateTransition)
+void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float intensities[], std::optional<std::array<ColorManagement::ColorValue, 3>> colors, float fadeDuration, float fadeAdvance, bool a_immediateTransition)
 {
 	auto isValidDir = [](const RE::NiPoint3& d) { return d.x != 0.0f || d.y != 0.0f || d.z != 0.0f; };
 
@@ -565,9 +568,9 @@ void SkySync::ShadowFader::Update(const RE::Sky* sky, RE::NiPoint3 dirs[], float
 		const bool hasCaster = target != Caster::None;
 		const int targetIdx = static_cast<int>(target);
 		const float intensity = hasCaster ? intensities[targetIdx] : 0.0f;
-		std::optional<RE::NiColor> color = std::nullopt;
+		std::optional<ColorManagement::ColorValue> color = std::nullopt;
 		if (colors)
-			color = hasCaster ? (*colors)[targetIdx] : RE::NiColor{ 0.0f, 0.0f, 0.0f };
+			color = hasCaster ? (*colors)[targetIdx] : ColorManagement::ColorValue{ RE::NiColor{ 0.0f, 0.0f, 0.0f }, (*colors)[0].space };
 		SetLighting(sky, currentDir, intensity, color);
 	};
 
@@ -634,7 +637,7 @@ void SkySync::ShadowFader::LockSunElevation(RE::NiPoint3 dirs[])
 	}
 }
 
-void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<RE::NiColor> color)
+void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, float intensity, std::optional<ColorManagement::ColorValue> color)
 {
 	ClampDirection(dir);
 
@@ -643,8 +646,12 @@ void SkySync::ShadowFader::SetLighting(const RE::Sky* sky, RE::NiPoint3 dir, flo
 	m.entry[1][0] = -dir.y;
 	m.entry[2][0] = -dir.z;
 
-	if (color.has_value())
-		sky->sun->light->GetLightRuntimeData().diffuse = *color * intensity;
+	if (color.has_value()) {
+		color->value *= intensity;
+		globals::features::linearLighting.SetLightColor(sky->sun->light.get(), *color);
+	} else {
+		globals::features::linearLighting.ClearLightColorSpace(sky->sun->light.get());
+	}
 
 	RE::NiUpdateData updateData;
 	sky->sun->light->Update(updateData);
