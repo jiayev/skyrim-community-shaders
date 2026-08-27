@@ -13,6 +13,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
+#include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
@@ -1059,7 +1060,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 
 		auto& lightRuntimeData = dirLight->GetLightRuntimeData();
-		data.DirLightColor = { lightRuntimeData.diffuse.red, lightRuntimeData.diffuse.green, lightRuntimeData.diffuse.blue, 1.0f };
+		const auto dirLightColor = globals::features::linearLighting.DecodeColor(lightRuntimeData.diffuse);
+		data.DirLightColor = { dirLightColor.red, dirLightColor.green, dirLightColor.blue, 1.0f };
 		data.DirLightColor *= lightRuntimeData.fade;
 
 		if (auto imageSpaceManager = globals::game::imageSpaceManager)
@@ -1117,6 +1119,26 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		if (auto sky = globals::game::sky) {
+			auto getMoonColor = [&](const RE::Moon* moon, const float4& baseColor, float baseIntensity) {
+				if (!globals::features::linearLighting.IsColorManagementEnabled())
+					return Util::Moon::GetBlendColor(moon, baseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
+				if (!moon || !moon->moonMesh)
+					return float4{};
+
+				const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(moon->moonMesh->GetGeometryRuntimeData().shaderProperty.get());
+				if (!prop)
+					return float4{};
+
+				float phase = 1.0f;
+				if (auto texture = prop->GetBaseTexture())
+					phase = Util::Moon::GetPhaseIntensityFactor(Util::Moon::GetPhaseFromTexture(texture->name.c_str()), globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
+
+				auto blendColor = globals::features::linearLighting.DecodeColor({ prop->kBlendColor.red, prop->kBlendColor.green, prop->kBlendColor.blue });
+				auto moonColor = globals::features::linearLighting.DecodeColor({ baseColor.x / baseIntensity, baseColor.y / baseIntensity, baseColor.z / baseIntensity });
+				const float intensity = baseIntensity * phase * prop->kBlendColor.alpha;
+				return float4{ blendColor.red * moonColor.red * intensity, blendColor.green * moonColor.green * intensity, blendColor.blue * moonColor.blue * intensity, prop->kBlendColor.alpha };
+			};
+
 			// Process sun
 			if (auto sun = sky->sun; sun && sun->root && sky->root) {
 				const auto& sunPos = sun->root->world.translate;
@@ -1126,8 +1148,10 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				data.SunDirection = { sunDirection.x, sunDirection.y, sunDirection.z, 0.0f };
 
 				if (sun->sunBase) {
-					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get()))
-						data.SunColor = { prop->kBlendColor.red * prop->kBlendColor.alpha, prop->kBlendColor.green * prop->kBlendColor.alpha, prop->kBlendColor.blue * prop->kBlendColor.alpha, prop->kBlendColor.alpha };
+					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get())) {
+						auto sunColor = globals::features::linearLighting.DecodeColor({ prop->kBlendColor.red, prop->kBlendColor.green, prop->kBlendColor.blue });
+						data.SunColor = { sunColor.red * prop->kBlendColor.alpha, sunColor.green * prop->kBlendColor.alpha, sunColor.blue * prop->kBlendColor.alpha, prop->kBlendColor.alpha };
+					}
 				}
 			}
 
@@ -1135,14 +1159,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
 				data.MasserDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
-					data.MasserColor = Util::Moon::GetBlendColor(masser, Util::Moon::MasserBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
+					data.MasserColor = getMoonColor(masser, Util::Moon::MasserBaseColor, 0.5f);
 			}
 
 			if (auto secunda = sky->secunda) {
 				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
 				data.SecundaDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
-					data.SecundaColor = Util::Moon::GetBlendColor(secunda, Util::Moon::SecundaBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
+					data.SecundaColor = getMoonColor(secunda, Util::Moon::SecundaBaseColor, 0.25f);
 			}
 		}
 

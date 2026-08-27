@@ -2,6 +2,8 @@
 
 namespace Hooks
 {
+	bool HasShaderConstant(void* shader, std::string_view bufferName, std::string_view variableName);
+
 	/** @brief Hook for BSShader::BeginTechnique that intercepts shader selection to substitute custom-compiled shaders from the shader cache. */
 	struct BSShader_BeginTechnique
 	{

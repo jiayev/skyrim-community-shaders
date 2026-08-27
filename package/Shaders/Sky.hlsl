@@ -221,9 +221,7 @@ float ComputeProceduralSun(float2 uv)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-	// Color::Sky is float3->float3 (per-channel sky gamma). PParams.yyy broadcasts the packed
-	// scalar in PParams.y to RGB; float3 matches output .xyz where skyScale is added.
-	float3 skyScale = Color::Sky(PParams.yyy);
+	float3 skyScale = PParams.yyy;
 
 #	if defined(PS_CLOUDS)
 	float psCloudDist = 1e3f / 1.428e-2;
@@ -299,7 +297,7 @@ PS_OUTPUT main(PS_INPUT input)
 	noiseGrad *= 10.0;
 
 #			ifdef TEX
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
@@ -312,7 +310,7 @@ PS_OUTPUT main(PS_INPUT input)
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
 #				endif
-	psout.Color.xyz = Color::Sky(skyGradientColor) + skyScale;
+	psout.Color.xyz = skyGradientColor + skyScale;
 
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = input.Color.w;
@@ -326,7 +324,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (input.Color.xyz * baseColor.xyz + skyScale);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
@@ -336,7 +334,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = Color::Sky(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {

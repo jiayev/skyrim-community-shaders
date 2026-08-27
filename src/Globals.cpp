@@ -291,6 +291,7 @@ namespace globals
 			if (hr == S_OK) {
 				if (*globals::game::perFrame.get() == pResource)
 					globals::game::mappedFrameBuffer = pMappedResource;
+				globals::features::linearLighting.TrackMappedColorBuffer(pResource, pMappedResource);
 			}
 			return hr;
 		}
@@ -306,6 +307,7 @@ namespace globals
 	{
 		static void thunk(ID3D11DeviceContext* This, ID3D11Resource* pResource, UINT Subresource)
 		{
+			globals::features::linearLighting.ConvertMappedColorBuffer(pResource);
 			if (*globals::game::perFrame.get() == pResource && globals::game::mappedFrameBuffer) {
 				CacheFramebuffer();
 			}

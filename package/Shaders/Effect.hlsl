@@ -679,7 +679,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 	float lightingInfluence = LightingInfluence.x;
-	float3 propertyColor = Color::Effect(PropertyColor.xyz);
+	float3 propertyColor = PropertyColor.xyz;
 	float shadowVariance = 1.0;
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
@@ -731,8 +731,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-			const bool isPointLightLinear = light.lightFlags & LightLimitFix::LightFlags::Linear;
-			float3 lightColor = Color::PointLight(light.color.xyz, isPointLightLinear) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
 			propertyColor += lightColor;
 		}
 	}
@@ -761,7 +760,6 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 baseColorMul = float4(1, 1, 1, 1);
 #	else
 	float4 baseColorMul = BaseColor;
-	baseColorMul.xyz = Color::Effect(baseColorMul.xyz);
 #		if defined(VC) && !defined(PROJECTED_UV)
 	baseColorMul *= float4(Color::Effect(input.Color.xyz), input.Color.w);
 #		endif
@@ -880,8 +878,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 
 #	if !defined(MOTIONVECTORS_NORMALS)
-	float fogFactor = Color::FogAlpha(input.FogParam.w);
-	float3 fogColor = Color::Fog(input.FogParam.xyz);
+	float fogFactor = input.FogParam.w;
+	float3 fogColor = input.FogParam.xyz;
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
 		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
@@ -940,8 +938,6 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float3 blendedColor = lightColor.xyz;
 #	endif
-
-	alpha = Color::EffectAlpha(alpha);
 
 	float4 finalColor = float4(blendedColor, alpha);
 #	if defined(MULTBLEND_DECAL)
