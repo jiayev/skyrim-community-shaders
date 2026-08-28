@@ -303,6 +303,7 @@ struct PS_OUTPUT
 {
 	float4 Diffuse: SV_Target0;
 	float4 MotionVectors: SV_Target1;
+	float4 NormalGlossiness: SV_Target2;
 };
 #endif
 
@@ -2887,10 +2888,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Diffuse.xyz = color.xyz;
 #	endif  // defined(LIGHT_LIMIT_FIX)
 
+#	if defined(DEFERRED)
 	psout.MotionVectors.xy = screenMotionVector.xy;
 	psout.MotionVectors.zw = float2(0, psout.Diffuse.w);
-
-#	if defined(DEFERRED)
 
 #		if defined(TERRAIN_BLENDING)
 	[flatten] if (SharedData::terrainBlendingSettings.Enabled)
@@ -2945,6 +2945,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
 		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
 	}
+#	endif
+
+#	if !defined(DEFERRED)
+	float3 ssrNormal = screenSpaceNormal;
+	ssrNormal.z = max(0.001, sqrt(8.0 - 8.0 * ssrNormal.z));
+	ssrNormal.xy /= ssrNormal.zz;
+
+	float4 normalAndSSR;
+	normalAndSSR.xy = ssrNormal.xy + 0.5.xx;
+	normalAndSSR.z = 0.0;
+	normalAndSSR.w = SSRParams.w * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
+
+	const bool outputColorToAuxiliaryTarget = SSRParams.z > 1e-5;
+	psout.NormalGlossiness = outputColorToAuxiliaryTarget ? psout.Diffuse : normalAndSSR;
+	psout.MotionVectors = outputColorToAuxiliaryTarget ? float4(1, 0, 0, 1) : float4(screenMotionVector, 0, 1);
 #	endif
 
 #	if defined(EMAT)

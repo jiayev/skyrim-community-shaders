@@ -89,9 +89,24 @@ namespace ShaderConstants
 			return instance;
 		}
 
-		const int32_t PBRFlags = 0;
-		const int32_t PBRParams1 = 1;
-		const int32_t PBRParams2 = 2;
+		const int32_t WorldViewProj = 0;
+		const int32_t WorldView = 1;
+		const int32_t World = 2;
+		const int32_t PreviousWorld = 3;
+		const int32_t FogNearColor = 4;
+		const int32_t WindVector = 5;
+		const int32_t WindTimer = 6;
+		const int32_t DirLightDirection = 7;
+		const int32_t PreviousWindTimer = 8;
+		const int32_t DirLightColor = 9;
+		const int32_t AlphaParam1 = 10;
+		const int32_t AmbientColor = 11;
+		const int32_t AlphaParam2 = 12;
+		const int32_t ScaleMask = 13;
+
+		const int32_t PBRFlags = 14;
+		const int32_t PBRParams1 = 15;
+		const int32_t PBRParams2 = 16;
 	};
 
 	struct EffectPS
@@ -609,6 +624,7 @@ namespace SIE
 
 		enum class GrassShaderTechniques
 		{
+			RenderDepthStencil = 7,
 			RenderDepth = 8,
 		};
 
