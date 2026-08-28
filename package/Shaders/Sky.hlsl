@@ -1,4 +1,4 @@
-#include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
@@ -196,15 +196,15 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
 #			endif
 #		else
 	float4 blendColor = TexBlendSampler.Sample(SampBlendSampler, input.TexCoord1.xy);
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	blendColor.xyz = Color::Sky(blendColor.xyz);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	blendColor.xyz = ColorManagement::DecodedColorTextureToWorking(blendColor.xyz);
+	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 

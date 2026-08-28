@@ -35,6 +35,7 @@ struct LinearLighting : Feature
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
 		uint colorEncoding = static_cast<uint>(ColorEncoding::SRGB);
+		uint vanillaTextureEncoding = static_cast<uint>(ColorEncoding::SRGB);
 
 		// Lighting multipliers
 		float vanillaDiffuseColorMult = 1.0f;
@@ -76,6 +77,7 @@ struct LinearLighting : Feature
 
 	/** @brief Draws the ImGui settings UI for color management and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
+	virtual void SetupResources() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -88,6 +90,7 @@ struct LinearLighting : Feature
 	bool IsColorManagementEnabled() const;
 	ColorEncoding GetColorEncoding() const;
 	ColorManagement::ColorSpace GetInputColorSpace() const;
+	ColorEncoding GetTextureInputEncoding() const;
 	ColorManagement::ColorSpace GetLightColorSpace(const RE::NiLight* light) const;
 	RE::NiColor DecodeColor(RE::NiColor color) const;
 	void DecodeColor(float* color) const;
@@ -114,4 +117,6 @@ private:
 
 	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
 	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;
+	ColorEncoding startupTextureInputEncoding = ColorEncoding::SRGB;
+	bool textureInputEncodingCaptured = false;
 };

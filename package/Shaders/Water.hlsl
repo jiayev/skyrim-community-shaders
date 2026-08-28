@@ -64,7 +64,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	include "Common/Permutation.hlsli"
 #	include "Common/Random.hlsli"
 #	include "Common/Shading.hlsli"
-#	include "Common/Color.hlsli"
+#	include "Common/ColorManagement.hlsli"
 
 #	define WATER
 
@@ -808,15 +808,15 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 	if (SharedData::InInterior) {
 		dynamicCubemap = DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 	} else {
-		float3 specularIrradiance = 1.0;
+		float3 workingSpecularIrradiance = 1.0;
 		if (skylightingSpecular < 1.0)
-			specularIrradiance = Color::IrradianceToLinear(DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+			workingSpecularIrradiance = DynamicCubemaps::EnvTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 
-		float3 specularIrradianceReflections = 1.0;
+		float3 workingSpecularIrradianceReflections = 1.0;
 		if (skylightingSpecular > 0.0)
-			specularIrradianceReflections = Color::IrradianceToLinear(DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz);
+			workingSpecularIrradianceReflections = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 
-		dynamicCubemap = Color::IrradianceToGamma(lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular));
+		dynamicCubemap = ColorManagement::WorkingColor::LerpInLinear(workingSpecularIrradiance, workingSpecularIrradianceReflections, skylightingSpecular);
 	}
 
 	float reflectionAmount = saturate(length(input.WPosition.xyz) / 1024.0);
@@ -1112,9 +1112,7 @@ PS_OUTPUT main(PS_INPUT input)
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-	ambientColor = Color::IrradianceToLinear(ambientColor);
-	ambientColor *= skylightingDiffuse;
-	ambientColor = Color::IrradianceToGamma(ambientColor);
+	ambientColor = ColorManagement::WorkingColor::ScaleByLinear(ambientColor, skylightingDiffuse);
 #				endif
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;

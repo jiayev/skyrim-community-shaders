@@ -1,4 +1,4 @@
-#include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/SharedData.hlsli"
@@ -167,9 +167,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (EyePosition.w != 0 && 1e-5 < snowMask) {
 		ao = min(1, SparklesParameters3.x + ao);
 	}
-	composedColor.xyz = Color::IrradianceToLinear(composedColor.xyz);
-	composedColor.xyz *= Color::IrradianceToLinear(ao);
-	composedColor.xyz = Color::IrradianceToGamma(composedColor.xyz);
+	composedColor.xyz = ColorManagement::WorkingColor::Modulate(composedColor.xyz, ao);
 #	endif
 
 	float depth = depthTex.SampleLevel(depthSampler, screenPosition, 0).x;

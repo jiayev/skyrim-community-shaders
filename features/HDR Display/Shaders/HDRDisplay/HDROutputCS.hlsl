@@ -1,6 +1,6 @@
 /**
  * @file HDROutputCS.hlsl
- * @brief HDR: gamma decode, paper-white × (nits/203), BT.2020, PQ. SDR: passthrough + UI.
+ * @brief HDR: gamma 2.2 decode, paper-white × (nits/203), BT.2020, PQ. SDR: passthrough + UI.
  */
 
 #include "Common/Color.hlsli"
@@ -21,7 +21,7 @@ cbuffer PerFrame : register(b0)
 	float isSceneLinear : packoffset(c1.y);
 	float isMainOrLoadingMenu : packoffset(c1.z);
 	float fgTweenMenuMidAlphaBoost : packoffset(c1.w);  ///< TweenMenu: soften AA band when compositing here (UIBrightnessCS skips while paused)
-	float previewSDR : packoffset(c2.x);                ///< 1.0 = emit sRGB SDR (crop preview) instead of PQ HDR10
+	float previewSDR : packoffset(c2.x);                ///< 1.0 = emit gamma 2.2 SDR (crop preview) instead of PQ HDR10
 	float applyAutoHDR : packoffset(c2.y);              ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
 }
 
@@ -45,9 +45,9 @@ cbuffer PerFrame : register(b0)
 		bool sceneIsLinear = isSceneLinear > 0.5 || postProcessOutput;
 
 		if (applyAutoHDR > 0.5) {
-			float3 outputColor = sceneIsLinear ? scene.xyz : Color::GammaToLinearSafe(scene.xyz);
+			float3 outputColor = sceneIsLinear ? scene.xyz : Color::SignedGamma22ToLinear(scene.xyz);
 			outputColor = DisplayMapping::PumboAutoHDR(outputColor, SharedData::HDRData.z, SharedData::HDRData.y, 2.75, 1.0);
-			scene.xyz = sceneIsLinear ? outputColor : Color::LinearToGammaSafe(outputColor);
+			scene.xyz = sceneIsLinear ? outputColor : Color::LinearToSignedGamma22(outputColor);
 		}
 
 		float3 compositedColorLinear;
@@ -57,7 +57,7 @@ cbuffer PerFrame : register(b0)
 			if (skipUI) {
 				compositedColorLinear = sceneLinear;
 			} else {
-				float3 uiLinear = Color::SrgbToLinear(max(0.0, ui.rgb));
+				float3 uiLinear = Color::Gamma22ToLinear(max(0.0, ui.rgb));
 				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
 					uiLinear *= uiBrightness;
@@ -69,17 +69,17 @@ cbuffer PerFrame : register(b0)
 				}
 			}
 		} else {
-			float3 sceneGamma = scene.rgb;
-			float3 compositedColorGamma;
+			float3 sceneGamma22 = scene.rgb;
+			float3 compositedColorGamma22;
 			if (skipUI) {
-				compositedColorGamma = sceneGamma;
+				compositedColorGamma22 = sceneGamma22;
 			} else {
-				float3 uiGamma = ui.rgb;
+				float3 uiGamma22 = ui.rgb;
 				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
-					float3 uiLinear = Color::SrgbToLinear(max(0, uiGamma));
+					float3 uiLinear = Color::Gamma22ToLinear(max(0, uiGamma22));
 					uiLinear *= uiBrightness;
-					uiGamma = Color::LinearToSrgb(uiLinear);
+					uiGamma22 = Color::LinearToGamma22(uiLinear);
 				}
 #if 0
             if (fgTweenMenuMidAlphaBoost > 0.5 && ui.a > 1e-3) {
@@ -89,16 +89,16 @@ cbuffer PerFrame : register(b0)
             }
 #endif
 
-				compositedColorGamma = uiGamma + sceneGamma * (1.0 - ui.a);
+				compositedColorGamma22 = uiGamma22 + sceneGamma22 * (1.0 - ui.a);
 			}
 
-			// Non-LL path: ISHDR output is gamma-encoded at this stage.
-			compositedColorLinear = Color::GammaToLinearSafe(compositedColorGamma);
+			// Non-LL path: ISHDR output is gamma 2.2-encoded at this stage.
+			compositedColorLinear = Color::SignedGamma22ToLinear(compositedColorGamma22);
 		}
 
 		if (previewSDR > 0.5) {
-			// Crop preview lives in the SDR menu buffer: emit sRGB instead of PQ.
-			finalColor = saturate(Color::LinearToSrgb(max(0.0, compositedColorLinear)));
+			// Crop preview lives in the SDR menu buffer: emit gamma 2.2 instead of PQ.
+			finalColor = saturate(Color::LinearToGamma22(max(0.0, compositedColorLinear)));
 		} else {
 			if (!postProcessOutput)
 				compositedColorLinear = Color::BT709ToBT2020(compositedColorLinear);
@@ -107,12 +107,12 @@ cbuffer PerFrame : register(b0)
 			finalColor = saturate(finalColor);
 		}
 	} else {
-		float3 sceneGamma = scene.rgb;
+		float3 sceneGamma22 = scene.rgb;
 
 		if (skipUI) {
-			finalColor = sceneGamma;
+			finalColor = sceneGamma22;
 		} else {
-			finalColor = ui.rgb + sceneGamma * (1.0 - ui.a);
+			finalColor = ui.rgb + sceneGamma22 * (1.0 - ui.a);
 		}
 
 		finalColor = saturate(finalColor);

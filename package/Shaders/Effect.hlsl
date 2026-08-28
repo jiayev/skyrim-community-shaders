@@ -1,4 +1,4 @@
-#include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/Math.hlsli"
@@ -534,9 +534,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	if (!SharedData::iblSettings.EnableIBL)
 #			endif
 	{
-		ambientColor = Color::IrradianceToLinear(ambientColor);
-		ambientColor *= skylightingDiffuse;
-		ambientColor = Color::IrradianceToGamma(ambientColor);
+		ambientColor = ColorManagement::WorkingColor::ScaleByLinear(ambientColor, skylightingDiffuse);
 	}
 #		endif
 
@@ -729,7 +727,8 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	{
 		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-		baseTexColor.xyz = Color::Effect(baseTexColor.xyz);
+		if (!(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor))
+			baseTexColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseTexColor.xyz);
 		baseColor *= baseTexColor;
 		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) {
 			baseColor.w = 1;
@@ -741,7 +740,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float4 baseColorMul = BaseColor;
 #		if defined(VC) && !defined(PROJECTED_UV)
-	baseColorMul *= float4(Color::Effect(input.Color.xyz), input.Color.w);
+	baseColorMul *= float4(ColorManagement::SRGBToWorking(input.Color.xyz), input.Color.w);
 #		endif
 #	endif
 
@@ -794,7 +793,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(MEMBRANE)
 		grayscaleToColorUv.y = PropertyColor.x;
 #	endif
-		baseColor.xyz = Color::Effect(baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
+		baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
 	}
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
@@ -940,7 +939,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if !defined(HDR_OUTPUT)
 	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && SharedData::linearLightingSettings.enableLinearLighting) {
-		psout.Diffuse.xyz = Color::LinearToSrgb(psout.Diffuse.xyz);
+		psout.Diffuse.xyz = Color::LinearToGamma22(psout.Diffuse.xyz);
 	}
 #	endif
 	return psout;

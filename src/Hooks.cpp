@@ -19,6 +19,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
+#include "Features/TextureColorManagement.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
@@ -543,7 +544,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
-	globals::state->Draw();
+	globals::state->Draw(isCompute);
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1089,6 +1090,8 @@ namespace Hooks
 	 */
 	void Install()
 	{
+		logger::info("Hooking texture color management");
+		TextureColorManagement::InstallHooks();
 		logger::info("Hooking BSImageSpace::Init::IBLF");
 		stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
 

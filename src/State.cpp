@@ -20,6 +20,7 @@
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
+#include "Features/TextureColorManagement.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
@@ -65,7 +66,7 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 	}
 }
 
-void State::Draw()
+void State::Draw(bool isCompute)
 {
 	ZoneScoped;
 
@@ -120,6 +121,9 @@ void State::Draw()
 			ZoneScopedN("TruePBR::SetShaderResources");
 			truePBR.SetShaderResources(context);
 		}
+
+		if (!isCompute)
+			TextureColorManagement::ApplyBindings(context);
 
 		if (permutationData != permutationDataPrevious) {
 			permutationCB->Update(permutationData);
