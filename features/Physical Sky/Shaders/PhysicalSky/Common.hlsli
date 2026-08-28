@@ -2,6 +2,7 @@
 #define COMMON_HLSLI
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/Game.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
@@ -297,7 +298,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		skyColor *= 1 - shadow;
 
 		if (data.tonemapper == 1)
-			skyColor = Color::LinearToSkyrimGamma(skyColor);
+			skyColor = Color::LinearToGameGamma(skyColor);
 		else if (data.tonemapper == 2)
 			skyColor = skyColor / (1 + skyColor);
 
@@ -401,12 +402,12 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 				float3 linIblAmbient = 0.0;
 				if (SharedData::iblSettings.DALCMode >= 2)
-					linIblAmbient += Color::IrradianceToLinear(vanillaAmbient * SharedData::iblSettings.DALCAmount);
+					linIblAmbient += ColorManagement::WorkingColor::ToLinear(vanillaAmbient * SharedData::iblSettings.DALCAmount);
 				else
 					linIblAmbient += ImageBasedLighting::GetEnvIBLColor(cloudAmbientDir);
 				linIblAmbient += ImageBasedLighting::GetSkyIBLColorOccluded(cloudAmbientDir, skyVisibility);
 
-				float3 iblAmbient = Color::IrradianceToGamma(linIblAmbient);
+				float3 iblAmbient = ColorManagement::WorkingColor::FromLinear(linIblAmbient);
 				float iblFill = baseColor.a * exp(-0.35 * cloudOpticalDepth) * lerp(0.25, 1.0, 1.0 - directVisibility);
 				cloudColor += baseColor.xyz * iblAmbient * iblFill * data.cloudRelightMix;
 			}
@@ -437,7 +438,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		apColor.rgb = max(0.0, apColor.rgb - apSun * saturate(shadow));
 
 		if (data.tonemapper == 1)
-			apColor.rgb = Color::LinearToSkyrimGamma(apColor.rgb);
+			apColor.rgb = Color::LinearToGameGamma(apColor.rgb);
 		else if (data.tonemapper == 2)
 			apColor.rgb = apColor.rgb / (1 + apColor.rgb);
 
@@ -470,14 +471,14 @@ Texture3D<float4> TexApSunLut : register(t113);
 	{
 		float3 volTr = TexVolTr[pxCoord];
 		float3 volLum = TexVolLum[pxCoord];
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		return ColorManagement::WorkingColor::ScaleAndAddLinear(color, volTr, volLum);
 	}
 
 	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
 	{
 		float3 volTr = TexVolTr.SampleLevel(samp, screenUvDr, 0);
 		float3 volLum = TexVolLum.SampleLevel(samp, screenUvDr, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		return ColorManagement::WorkingColor::ScaleAndAddLinear(color, volTr, volLum);
 	}
 
 	float3 CompositeVolumetricCloudsUv(float3 color, float2 screenUv, SamplerState samp)
@@ -488,7 +489,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 	float3 ApplyVolumetricCloudTransmittanceUv(float3 color, float2 screenUv, SamplerState samp)
 	{
 		const float3 volTr = TexVolTr.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr);
+		return ColorManagement::WorkingColor::ScaleByLinear(color, volTr);
 	}
 
 #		ifndef PS_DEFERRED_RSRCS
@@ -496,7 +497,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 	{
 		float3 volTr = TexVolCubeTr.SampleLevel(samp, viewDir, 0);
 		float3 volLum = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		return ColorManagement::WorkingColor::ScaleAndAddLinear(color, volTr, volLum);
 	}
 #		endif
 

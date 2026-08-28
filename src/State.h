@@ -82,7 +82,7 @@ public:
 	};
 
 	/** @brief Per-draw-call hook: updates feature state, constant buffers, and overlay. */
-	void Draw();
+	void Draw(bool isCompute);
 	/** @brief Accumulates per-shader-type draw call counts and frame timing for the performance overlay. */
 	void Debug();
 	/** @brief Per-frame reset: advances timer, caches menu state, resets descriptors and frame counters. */

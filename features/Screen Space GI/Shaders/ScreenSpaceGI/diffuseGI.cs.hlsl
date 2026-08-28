@@ -53,6 +53,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -227,12 +228,12 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 #		endif
 			envColor += skyColor;
 		}
-		envColor = Color::IrradianceToLinear(envColor);
+		envColor = ColorManagement::WorkingColor::ToLinear(envColor);
 	} else
 #	endif
 	{
 		float3 directionalAmbient = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
-		envColor = Color::IrradianceToLinear(directionalAmbient);
+		envColor = ColorManagement::WorkingColor::ToLinear(directionalAmbient);
 #	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior)
 			envColor *= skylightingDiffuse;

@@ -44,7 +44,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(LENS_FLARE)
 	float3 lensFlareColor = LFSourceTex.Sample(LFSourceSampler, input.TexCoord).xyz;
 	if (SharedData::linearLightingSettings.enableLinearLighting) {
-		color += Color::SkyrimGammaToLinear(lensFlareColor);
+		color += Color::GameGammaToLinear(lensFlareColor);
 	} else {
 		color += lensFlareColor;
 	}

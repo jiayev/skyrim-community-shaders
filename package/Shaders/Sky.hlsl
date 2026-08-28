@@ -1,4 +1,4 @@
-#include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/FastMath.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
@@ -235,15 +235,15 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
 #			endif
 #		else
 	float4 blendColor = TexBlendSampler.Sample(SampBlendSampler, input.TexCoord1.xy);
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	blendColor.xyz = Color::Sky(blendColor.xyz);
-	baseColor.xyz = Color::Sky(baseColor.xyz);
+	blendColor.xyz = ColorManagement::DecodedColorTextureToWorking(blendColor.xyz);
+	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 #		if defined(PHYSICAL_SKY)
@@ -396,7 +396,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float sunDiskSin = sqrt(1.0 - SharedData::physSkyData.sunDiskCos * SharedData::physSkyData.sunDiskCos);
 			float tanTheta = sqrt(1.0 - cosTheta * cosTheta) / cosTheta;
 			float normDist = tanTheta * SharedData::physSkyData.sunDiskCos * rcp(sunDiskSin);
-			float3 limbFactor = Color::GamutTransform(PhysSky::LimbDarkenHestroffer(normDist));
+			float3 limbFactor = Color::LinearSRGBToWorking(PhysSky::LimbDarkenHestroffer(normDist));
 
 			const float softEdge = saturate(8.0f * (cosTheta - SharedData::physSkyData.sunDiskCos) / (1.0f - SharedData::physSkyData.sunDiskCos));
 			const float sunSolidAngle = Math::TAU * (1.0f - SharedData::physSkyData.sunDiskCos);

@@ -2,6 +2,7 @@
 #define DYNAMICCUBEMAPS_HLSLI
 
 #include "Common/BRDF.hlsli"
+#include "Common/ColorManagement.hlsli"
 
 #if defined(SKYLIGHTING)
 #	include "Skylighting/Skylighting.hlsli"
@@ -63,13 +64,13 @@ namespace DynamicCubemaps
 				if (SharedData::iblSettings.DALCMode >= 2) {
 					// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
 					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
-					envSpecular = Color::IrradianceToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+					envSpecular = ColorManagement::WorkingColor::ToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
+					skySpecular = ColorManagement::WorkingColor::ToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				} else {
 					// Mode 0/1: IBL ratio-based
 					float3 ratio = ImageBasedLighting::GetIBLRatio();
-					envSpecular = Color::IrradianceToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-					skySpecular = Color::IrradianceToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+					envSpecular = ColorManagement::WorkingColor::ToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
+					skySpecular = ColorManagement::WorkingColor::ToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				}
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
@@ -88,22 +89,22 @@ namespace DynamicCubemaps
 					float3 specularIrradiance = EnvTexture.SampleLevel(SampColorSampler, R, level);
 					float specularIrradianceLuminance = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
 					specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-					finalIrradiance = Color::IrradianceToLinear(specularIrradiance);
+					finalIrradiance = ColorManagement::WorkingColor::ToLinear(specularIrradiance);
 				} else {
 					float3 specularIrradianceReflections = 0.0;
 					if (skylightingSpecular > 0.0) {
 						specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level);
 						float lum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, 15));
 						specularIrradianceReflections = (specularIrradianceReflections / max(lum, 0.001)) * directionalAmbientColorSpecular;
-						specularIrradianceReflections = Color::IrradianceToLinear(specularIrradianceReflections);
+						specularIrradianceReflections = ColorManagement::WorkingColor::ToLinear(specularIrradianceReflections);
 					}
 					float3 specularIrradiance = 0.0;
 					if (skylightingSpecular < 1.0) {
 						specularIrradiance = EnvTexture.SampleLevel(SampColorSampler, R, level);
 						float lum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
-						float dalcScaled = Color::IrradianceToGamma(Color::IrradianceToLinear(directionalAmbientColorSpecular) * skylightingSpecular);
+						float dalcScaled = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
 						specularIrradiance = (specularIrradiance / max(lum, 0.001)) * dalcScaled;
-						specularIrradiance = Color::IrradianceToLinear(specularIrradiance);
+						specularIrradiance = ColorManagement::WorkingColor::ToLinear(specularIrradiance);
 					}
 					finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 				}
@@ -111,7 +112,7 @@ namespace DynamicCubemaps
 				float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level);
 				float specularIrradianceLuminance = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, 15));
 				specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-				finalIrradiance = Color::IrradianceToLinear(specularIrradiance);
+				finalIrradiance = ColorManagement::WorkingColor::ToLinear(specularIrradiance);
 #		endif
 			}
 		} else {

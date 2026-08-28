@@ -23,6 +23,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	enableLinearLighting,
 	enableACEScg,
 	colorEncoding,
+	vanillaTextureEncoding,
 	vanillaDiffuseColorMult,
 	directionalLightMult,
 	pointLightMult,
@@ -208,6 +209,17 @@ void LinearLighting::DrawSettings()
 	int colorEncoding = static_cast<int>(settings.colorEncoding);
 	if (ImGui::Combo(T(TKEY("color_encoding"), "Color Encoding"), &colorEncoding, colorEncodings, IM_ARRAYSIZE(colorEncodings)))
 		settings.colorEncoding = static_cast<uint>(colorEncoding);
+	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
+	int textureEncoding = static_cast<int>(settings.vanillaTextureEncoding);
+	if (ImGui::Combo(T(TKEY("vanilla_texture_encoding"), "Vanilla Texture Encoding"), &textureEncoding, colorEncodings, IM_ARRAYSIZE(colorEncodings)))
+		settings.vanillaTextureEncoding = static_cast<uint>(textureEncoding);
+	if (GetTextureInputEncoding() != static_cast<ColorEncoding>(settings.vanillaTextureEncoding)) {
+		ImGui::SameLine();
+		ImGui::TextColored(
+			globals::menu->GetSettings().Theme.StatusPalette.RestartNeeded,
+			"%s",
+			T(TKEY("vanilla_texture_encoding_restart"), "Restart required"));
+	}
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
@@ -248,6 +260,7 @@ void LinearLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
+	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -260,14 +273,33 @@ void LinearLighting::RestoreDefaultSettings()
 	settings = {};
 }
 
+void LinearLighting::SetupResources()
+{
+	if (textureInputEncodingCaptured)
+		return;
+
+	startupTextureInputEncoding = static_cast<ColorEncoding>(
+		std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma)));
+	textureInputEncodingCaptured = true;
+}
+
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
+	auto data = PerFrameData{};
+	data.vanillaDiffuseColorMult = 1.0f;
+	data.directionalLightMult = 1.0f;
+	data.pointLightMult = 1.0f;
+	data.ambientMult = 1.0f;
+	data.glowmapMult = 1.0f;
+	data.effectLightingMult = 1.0f;
+	data.membraneEffectMult = 1.0f;
+	data.bloodEffectMult = 1.0f;
+	data.projectedEffectMult = 1.0f;
+	data.deferredEffectMult = 1.0f;
+	data.otherEffectMult = 1.0f;
 	if (!loaded) {
-		auto data = PerFrameData{};
-		data.enableLinearLighting = false;
 		return data;
 	}
-	auto data = PerFrameData{};
 	data.enableLinearLighting = IsColorManagementEnabled();
 	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting;
 
@@ -279,9 +311,12 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 		}
 	}
 
+	if (!data.enableLinearLighting)
+		return data;
+
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
-	data.directionalLightMult = settings.directionalLightMult;
-	data.pointLightMult = settings.pointLightMult;
+	data.directionalLightMult = RE::NI_PI * settings.directionalLightMult;
+	data.pointLightMult = RE::NI_PI * settings.pointLightMult;
 	data.ambientMult = settings.ambientMult;
 	data.glowmapMult = settings.glowmapMult;
 	data.effectLightingMult = settings.effectLightingMult;
@@ -290,24 +325,6 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
-
-	// Override multipliers to neutral values when ENB PP is active
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			data.vanillaDiffuseColorMult = 1.0f;
-			data.directionalLightMult = 1.0f;
-			data.pointLightMult = 1.0f;
-			data.ambientMult = 1.0f;
-			data.glowmapMult = 1.0f;
-			data.effectLightingMult = 1.0f;
-			data.membraneEffectMult = 1.0f;
-			data.bloodEffectMult = 1.0f;
-			data.projectedEffectMult = 1.0f;
-			data.deferredEffectMult = 1.0f;
-			data.otherEffectMult = 1.0f;
-		}
-	}
 	return data;
 }
 
@@ -328,6 +345,11 @@ LinearLighting::ColorEncoding LinearLighting::GetColorEncoding() const
 ColorManagement::ColorSpace LinearLighting::GetInputColorSpace() const
 {
 	return { GetColorEncoding(), ColorManagement::Gamut::SRGB };
+}
+
+LinearLighting::ColorEncoding LinearLighting::GetTextureInputEncoding() const
+{
+	return startupTextureInputEncoding;
 }
 
 ColorManagement::ColorSpace LinearLighting::GetLightColorSpace(const RE::NiLight* light) const
