@@ -339,6 +339,7 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 	float3 skyScattering = ComputeSkyLightScattering(positionWS, viewDirection) *
 	                       materialScatteringAndExtinction.rgb;
 
+#if !defined(VOLUMETRIC_FOG_FAR_GRID)
 	float3 localScattering = AccumulateLocalLightScattering(
 		coord,
 		cellOffset,
@@ -346,6 +347,9 @@ float4 ComputeLightScattering(uint3 coord, float3 cellOffset)
 		viewDepth,
 		viewDirection,
 		materialScatteringAndExtinction.rgb);
+#else
+	float3 localScattering = 0.0f.xxx;
+#endif
 
 	float3 emissive = SharedData::exponentialHeightFogSettings.volumetricFogEmissive.rgb *
 	                  SharedData::exponentialHeightFogSettings.volumetricFogEmissive.a *
