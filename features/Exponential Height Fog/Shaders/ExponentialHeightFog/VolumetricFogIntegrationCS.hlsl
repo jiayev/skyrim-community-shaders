@@ -10,6 +10,11 @@ RWTexture3D<float4> IntegratedLightScattering : register(u0);
 	float3 accumulatedLighting = 0.0f.xxx;
 	float accumulatedTransmittance = 1.0f;
 	float accumulatedDepth = 0.0f;
+#if defined(VOLUMETRIC_FOG_FAR_GRID)
+	// The far volume starts where the near volume ends; seed its near-fade baseline with
+	// that depth so the near-fades of the two volumes stitch continuously.
+	accumulatedDepth = VolumetricFogFarRange.x;
+#endif
 
 	float previousDepth;
 	float3 previousPositionWS = ExponentialHeightFog::ComputeCellWorldPosition(uint3(dispatchID.xy, 0), float3(0.5f, 0.5f, 0.0f), previousDepth);
