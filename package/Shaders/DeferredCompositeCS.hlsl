@@ -292,7 +292,7 @@ if (any(reflectance > 0.0)) {
 
 #endif
 
-color = Color::IrradianceToGamma(color);
+color = ColorManagement::WorkingColor::FromLinear(color);
 
 #if defined(DEBUG)
 

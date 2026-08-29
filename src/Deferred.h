@@ -4,6 +4,7 @@
 
 #include "Buffer.h"
 #include "RE/B/BSShadowDirectionalLight.h"
+#include "Utils/VersionedRelocation.h"
 
 #define ALBEDO RE::RENDER_TARGETS::kINDIRECT
 #define SPECULAR RE::RENDER_TARGETS::kINDIRECT_DOWNSCALED
@@ -151,13 +152,13 @@ public:
 		{
 			stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
 
-			stl::write_thunk_call<Main_RenderShadowMaps>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x2EC, 0x2EC));
+			stl::write_thunk_call<Main_RenderShadowMaps>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x2EC, 0x2EC, 0x30A));
 
-			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x831, 0x841));
+			stl::write_thunk_call<Main_RenderWorld>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x831, 0x841, 0x85E));
 			stl::write_thunk_call<Main_RenderWorld_Start>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x8E, 0x84));
 			stl::write_thunk_call<Main_RenderWorld_BlendedDecals>(REL::RelocationID(99938, 106583).address() + REL::Relocate(0x319, 0x308));
 
-			stl::write_thunk_call<Main_RenderFirstPersonView>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x944, 0x954));
+			stl::write_thunk_call<Main_RenderFirstPersonView>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x944, 0x954, 0x971));
 
 			stl::detour_thunk<Renderer_ResetState>(REL::RelocationID(75570, 77371));
 
