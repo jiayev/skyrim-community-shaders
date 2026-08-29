@@ -745,7 +745,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
-	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz);
+	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)

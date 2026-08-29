@@ -32,6 +32,7 @@ namespace
 	using ShaderBytecode = std::vector<std::uint8_t>;
 
 	std::unordered_map<void*, std::shared_ptr<const ShaderBytecode>> ShaderBytecodeMap;
+	std::unordered_map<void*, std::unordered_map<std::string, bool>> ShaderConstantMap;
 	std::mutex ShaderBytecodeMutex;
 	std::mutex ShaderDumpMutex;
 
@@ -45,8 +46,6 @@ namespace
 		a_pixelDescriptor = LegacyGraphicsCompatibility::NormalizeLegacyUtilityDescriptor(a_pixelDescriptor);
 	}
 }
-std::unordered_map<void*, std::unordered_map<std::string, bool>> ShaderConstantMap;
-std::mutex ShaderBytecodeMutex;
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
@@ -60,7 +59,6 @@ void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeL
 	memcpy(codeCopy->data(), Bytecode, BytecodeLength);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
 	std::scoped_lock lock(ShaderBytecodeMutex);
-	std::lock_guard lock(ShaderBytecodeMutex);
 	ShaderBytecodeMap.insert_or_assign(Shader, std::move(codeCopy));
 	ShaderConstantMap.erase(Shader);
 }
@@ -68,7 +66,6 @@ void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeL
 std::shared_ptr<const ShaderBytecode> GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
-	std::lock_guard lock(ShaderBytecodeMutex);
 	std::scoped_lock lock(ShaderBytecodeMutex);
 	const auto entry = ShaderBytecodeMap.find(Shader);
 	return entry == ShaderBytecodeMap.end() ? nullptr : entry->second;
@@ -80,7 +77,7 @@ bool Hooks::HasShaderConstant(void* shader, std::string_view bufferName, std::st
 		return false;
 
 	const std::string key = std::format("{}::{}", bufferName, variableName);
-	std::lock_guard lock(ShaderBytecodeMutex);
+	std::scoped_lock lock(ShaderBytecodeMutex);
 	auto& constants = ShaderConstantMap[shader];
 	if (const auto cached = constants.find(key); cached != constants.end())
 		return cached->second;
@@ -90,7 +87,7 @@ bool Hooks::HasShaderConstant(void* shader, std::string_view bufferName, std::st
 		return constants.emplace(key, false).first->second;
 
 	winrt::com_ptr<ID3D11ShaderReflection> reflector;
-	if (FAILED(D3DReflect(bytecode->second.first.get(), bytecode->second.second, IID_PPV_ARGS(&reflector))))
+	if (FAILED(D3DReflect(bytecode->second->data(), bytecode->second->size(), IID_PPV_ARGS(&reflector))))
 		return constants.emplace(key, false).first->second;
 
 	auto* constantBuffer = reflector->GetConstantBufferByName(std::string(bufferName).c_str());
