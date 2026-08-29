@@ -282,7 +282,8 @@ namespace SIE
 		{
 			const auto technique = descriptor & 0b1111;
 			size_t lastIndex = 0;
-			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
+			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepthStencil) ||
+				technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::GrassShaderFlags::AlphaTest)) {
@@ -510,6 +511,11 @@ namespace SIE
 			using enum ShaderCache::UtilityShaderFlags;
 
 			size_t lastIndex = 0;
+			const auto shadowMaskFlags = static_cast<uint32_t>(RenderShadowmask) |
+			                             static_cast<uint32_t>(RenderShadowmaskDpb) |
+			                             static_cast<uint32_t>(RenderShadowmaskPb) |
+			                             static_cast<uint32_t>(RenderShadowmaskSpot);
+			const bool hasShadowMask = (descriptor & shadowMaskFlags) != 0;
 
 			if (descriptor & static_cast<uint32_t>(Vc)) {
 				defines[lastIndex++] = { "VC", nullptr };
@@ -586,7 +592,8 @@ namespace SIE
 				}
 			}
 
-			if (descriptor & static_cast<uint32_t>(GrayscaleMask)) {
+			if ((descriptor & static_cast<uint32_t>(GrayscaleMask)) &&
+				!hasShadowMask) {
 				defines[lastIndex++] = { "GRAYSCALE_MASK", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(RenderShadowmask)) {
@@ -614,14 +621,25 @@ namespace SIE
 				defines[lastIndex++] = { "LOCALMAP_FOGOFWAR", nullptr };
 			}
 
-			if (descriptor & (static_cast<uint32_t>(RenderShadowmask) |
-								 static_cast<uint32_t>(RenderShadowmaskDpb) |
-								 static_cast<uint32_t>(RenderShadowmaskPb) |
-								 static_cast<uint32_t>(RenderShadowmaskSpot))) {
-				static constexpr std::array<const char*, 5> shadowFilters = { { "0", "1", "2",
-					"3", "4" } };
-				const size_t shadowFilterIndex = std::clamp((descriptor >> 17) & 0b111, 0u, 4u);
-				defines[lastIndex++] = { "SHADOWFILTER", shadowFilters[shadowFilterIndex] };
+			if (hasShadowMask) {
+				auto shaderFilter = (descriptor >> 17) & 0xFu;
+				switch (shaderFilter) {
+				case 0:
+				case 1:
+				case 2:
+				case 4:
+				case 8:
+					break;
+				default:
+					logger::error("Unsupported Utility shadow-filter selector {:#x} in descriptor {:#010x}", shaderFilter, descriptor);
+					shaderFilter = 0;
+					break;
+				}
+
+				static constexpr std::array<const char*, 9> shadowFilters = {
+					{ "0", "1", "2", nullptr, "4", nullptr, nullptr, nullptr, "8" }
+				};
+				defines[lastIndex++] = { "SHADOWFILTER", shadowFilters[shaderFilter] };
 			} else if ((!(descriptor & static_cast<uint32_t>(OpaqueEffect)) &&
 						   (descriptor &
 							   static_cast<uint32_t>(RenderShadowmap))) ||
@@ -881,13 +899,25 @@ namespace SIE
 				{ "ScaleMask", 13 },
 			};
 
-			grassVS.insert({ "ShadowClampValue", 14 });
-
 			const auto& grassPSConstants = ShaderConstants::GrassPS::Get();
 
 			auto& grassPS = result[static_cast<size_t>(RE::BSShader::Type::Grass)]
 								  [static_cast<size_t>(ShaderClass::Pixel)];
 			grassPS = {
+				{ "WorldViewProj", grassPSConstants.WorldViewProj },
+				{ "WorldView", grassPSConstants.WorldView },
+				{ "World", grassPSConstants.World },
+				{ "PreviousWorld", grassPSConstants.PreviousWorld },
+				{ "FogNearColor", grassPSConstants.FogNearColor },
+				{ "WindVector", grassPSConstants.WindVector },
+				{ "WindTimer", grassPSConstants.WindTimer },
+				{ "DirLightDirection", grassPSConstants.DirLightDirection },
+				{ "PreviousWindTimer", grassPSConstants.PreviousWindTimer },
+				{ "DirLightColor", grassPSConstants.DirLightColor },
+				{ "AlphaParam1", grassPSConstants.AlphaParam1 },
+				{ "AmbientColor", grassPSConstants.AmbientColor },
+				{ "AlphaParam2", grassPSConstants.AlphaParam2 },
+				{ "ScaleMask", grassPSConstants.ScaleMask },
 				{ "PBRFlags", grassPSConstants.PBRFlags },
 				{ "PBRParams1", grassPSConstants.PBRParams1 },
 				{ "PBRParams2", grassPSConstants.PBRParams2 },
@@ -1721,12 +1751,12 @@ namespace SIE
 					RE::ImageSpaceManager::GetCurrentIndex(ISDepthOfFieldFogged) },
 				{ "BSImagespaceShaderDepthOfFieldMaskedFogged",
 					RE::ImageSpaceManager::GetCurrentIndex(ISDepthOfFieldMaskedFogged) },
-				// { "BSImagespaceShaderDistantBlur", RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlur) },
-				// { "BSImagespaceShaderDistantBlurFogged",
-				// 	RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlurFogged) },
-				// { "BSImagespaceShaderDistantBlurMaskedFogged",
-				// 	RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlurMaskedFogged) },
-				// { "BSImagespaceShaderDoubleVision", RE::ImageSpaceManager::GetCurrentIndex(ISDoubleVision) },
+				{ "BSImagespaceShaderDistantBlur", RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlur) },
+				{ "BSImagespaceShaderDistantBlurFogged",
+					RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlurFogged) },
+				{ "BSImagespaceShaderDistantBlurMaskedFogged",
+					RE::ImageSpaceManager::GetCurrentIndex(ISDistantBlurMaskedFogged) },
+				{ "BSImagespaceShaderDoubleVision", RE::ImageSpaceManager::GetCurrentIndex(ISDoubleVision) },
 				{ "BSImagespaceShaderISDownsample", RE::ImageSpaceManager::GetCurrentIndex(ISDownsample) },
 				{ "BSImagespaceShaderISDownsampleIgnoreBrightest",
 					RE::ImageSpaceManager::GetCurrentIndex(ISDownsampleIgnoreBrightest) },
@@ -1781,15 +1811,14 @@ namespace SIE
 				// { "BSImagespaceShaderWorldMap", RE::ImageSpaceManager::GetCurrentIndex(ISWorldMap) },
 				// { "BSImagespaceShaderWorldMapNoSkyBlur",
 				// 	RE::ImageSpaceManager::GetCurrentIndex(ISWorldMapNoSkyBlur) },
-				// { "BSImagespaceShaderISMinify", RE::ImageSpaceManager::GetCurrentIndex(ISMinify) },
-				// { "BSImagespaceShaderISMinifyContrast", RE::ImageSpaceManager::GetCurrentIndex(ISMinifyContrast) },
+				{ "BSImagespaceShaderISMinify", RE::ImageSpaceManager::GetCurrentIndex(ISMinify) },
+				{ "BSImagespaceShaderISMinifyContrast", RE::ImageSpaceManager::GetCurrentIndex(ISMinifyContrast) },
 				// { "BSImagespaceShaderNoiseNormalmap", RE::ImageSpaceManager::GetCurrentIndex(ISNoiseNormalmap) },
 				// { "BSImagespaceShaderNoiseScrollAndBlend",
 				// 	RE::ImageSpaceManager::GetCurrentIndex(ISNoiseScrollAndBlend) },
-				// { "BSImagespaceShaderRadialBlur",
-				// 	RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlur) },
-				// { "BSImagespaceShaderRadialBlurHigh", RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlurHigh) },
-				// { "BSImagespaceShaderRadialBlurMedium", RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlurMedium) },
+				{ "BSImagespaceShaderRadialBlur", RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlur) },
+				{ "BSImagespaceShaderRadialBlurHigh", RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlurHigh) },
+				{ "BSImagespaceShaderRadialBlurMedium", RE::ImageSpaceManager::GetCurrentIndex(ISRadialBlurMedium) },
 				{ "BSImagespaceShaderRefraction", RE::ImageSpaceManager::GetCurrentIndex(ISRefraction) },
 				{ "BSImagespaceShaderISSAOCompositeSAO", RE::ImageSpaceManager::GetCurrentIndex(ISSAOCompositeSAO) },
 				{ "BSImagespaceShaderISSAOCompositeFog", RE::ImageSpaceManager::GetCurrentIndex(ISSAOCompositeFog) },
@@ -1809,7 +1838,6 @@ namespace SIE
 				{ "BSImagespaceShaderVolumetricLightingBlurHCS", RE::ImageSpaceManager::GetCurrentIndex(ISVolumetricLightingBlurHCS) },
 				{ "BSImagespaceShaderVolumetricLightingBlurVCS", RE::ImageSpaceManager::GetCurrentIndex(ISVolumetricLightingBlurVCS) },
 
-				{ "BSImagespaceShaderGraphicsTextureFilterMode", RE::ImageSpaceManager::GetCurrentIndex(ISGraphicsTextureFilterMode) },
 				{ "BSImagespaceShaderISDownsampleHierarchicalDepthBufferCS", RE::ImageSpaceManager::GetCurrentIndex(ISDownsampleHierarchicalDepthBufferCS) },
 				{ "BSImagespaceShaderISDiffScaleDownsampleDepthBufferCS", RE::ImageSpaceManager::GetCurrentIndex(ISDiffScaleDownsampleDepthBufferCS) },
 				{ "BSImagespaceShaderISTransformLvl7PreTest", RE::ImageSpaceManager::GetCurrentIndex(ISTransformLvl7PreTest) },
