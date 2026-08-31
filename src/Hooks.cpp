@@ -379,30 +379,57 @@ namespace WaterBlendHistory
 
 namespace ImageSpaceColorManagement
 {
-	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType>
-	struct ISSAOComposite_Render
+	constexpr std::size_t VOLUMETRIC_LIGHTING_COLOR = 0;
+	constexpr std::size_t FOG_NEAR_COLOR = 4;
+	constexpr std::size_t FOG_FAR_COLOR = 8;
+
+	template <std::size_t... ColorOffsets>
+	class ScopedInputColors
+	{
+	public:
+		explicit ScopedInputColors(RE::ImageSpaceEffectParam* param)
+		{
+			shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(param);
+			const auto imageSpaceClass = static_cast<std::size_t>(RE::BSShader::Type::ImageSpace) - 1;
+			if (!globals::features::linearLighting.IsColorManagementEnabled() ||
+				imageSpaceClass >= std::size(globals::state->enabledClasses) ||
+				!globals::state->enabledClasses[imageSpaceClass] || !shaderParam || !shaderParam->pixelConstantGroup ||
+				!((ColorOffsets + 3 <= shaderParam->pixelConstantGroupSize) && ...))
+				return;
+
+			constexpr std::array offsets{ ColorOffsets... };
+			for (std::size_t index = 0; index < offsets.size(); ++index) {
+				auto* color = shaderParam->pixelConstantGroup + offsets[index];
+				std::copy_n(color, 3, originalColors[index].data());
+				auto& linearLighting = globals::features::linearLighting;
+				linearLighting.ConvertColorToWorkingSpace(color, linearLighting.GetInputColorSpace());
+			}
+			active = true;
+		}
+
+		~ScopedInputColors()
+		{
+			if (!active)
+				return;
+
+			constexpr std::array offsets{ ColorOffsets... };
+			for (std::size_t index = 0; index < offsets.size(); ++index)
+				std::copy_n(originalColors[index].data(), 3, shaderParam->pixelConstantGroup + offsets[index]);
+		}
+
+	private:
+		RE::ImageSpaceShaderParam* shaderParam = nullptr;
+		std::array<std::array<float, 3>, sizeof...(ColorOffsets)> originalColors{};
+		bool active = false;
+	};
+
+	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType, std::size_t... ColorOffsets>
+	struct BSImagespaceShader_Render
 	{
 		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
 		{
-			auto* shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(param);
-			float originalFogColors[6]{};
-			const auto imageSpaceClass = static_cast<std::size_t>(RE::BSShader::Type::ImageSpace) - 1;
-			const bool convert = globals::features::linearLighting.IsColorManagementEnabled() && globals::state->enabledClasses[imageSpaceClass] && shaderParam && shaderParam->pixelConstantGroup;
-			if (convert) {
-				auto* fogNearColor = shaderParam->pixelConstantGroup + 4;
-				auto* fogFarColor = shaderParam->pixelConstantGroup + 8;
-				std::copy_n(fogNearColor, 3, originalFogColors);
-				std::copy_n(fogFarColor, 3, originalFogColors + 3);
-				globals::features::linearLighting.DecodeColor(fogNearColor);
-				globals::features::linearLighting.DecodeColor(fogFarColor);
-			}
-
+			const ScopedInputColors<ColorOffsets...> inputColors(param);
 			func(imageSpaceShader, shape, param);
-
-			if (convert) {
-				std::copy_n(originalFogColors, 3, shaderParam->pixelConstantGroup + 4);
-				std::copy_n(originalFogColors + 3, 3, shaderParam->pixelConstantGroup + 8);
-			}
 		}
 
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -1184,10 +1211,24 @@ namespace Hooks
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
-		stl::write_vfunc<0x1, ImageSpaceColorManagement::ISSAOComposite_Render<RE::ImageSpaceManager::ISSAOCompositeFog>>(
+		stl::write_vfunc<0x1,
+			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeFog,
+				ImageSpaceColorManagement::FOG_NEAR_COLOR,
+				ImageSpaceColorManagement::FOG_FAR_COLOR>>(
 			RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
-		stl::write_vfunc<0x1, ImageSpaceColorManagement::ISSAOComposite_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog>>(
+		stl::write_vfunc<0x1,
+			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog,
+				ImageSpaceColorManagement::FOG_NEAR_COLOR,
+				ImageSpaceColorManagement::FOG_FAR_COLOR>>(
 			RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
+		stl::write_vfunc<0x1,
+			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeVolumetricLighting,
+				ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
+			RE::VTABLE_BSImagespaceShaderISCompositeVolumetricLighting[3]);
+		stl::write_vfunc<0x1,
+			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeLensFlareVolumetricLighting,
+				ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
+			RE::VTABLE_BSImagespaceShaderISCompositeLensFlareVolumetricLighting[3]);
 
 		LegacyGraphicsCompatibility::Install();
 
