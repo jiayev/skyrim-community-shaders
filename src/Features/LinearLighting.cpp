@@ -52,6 +52,7 @@ namespace
 	enum class ColorTransform : std::uint8_t
 	{
 		Standard,
+		SRGBComposition,
 		Emissive,
 		PointLights
 	};
@@ -121,7 +122,7 @@ namespace
 		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "PointLightColor", 7, RGB_MASK, 0, 0, 0, ColorTransform::PointLights },
 
 		ColorField{ RE::BSShader::Type::DistantTree, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 1, "AmbientColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Sky, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 3, "BlendColor", 3, RGB_MASK, 0, 0 },
+		ColorField{ RE::BSShader::Type::Sky, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 3, "BlendColor", 3, RGB_MASK, 0, 0, 0, ColorTransform::SRGBComposition },
 		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "Color1", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
 		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 9, "Color2", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
 		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 10, "Color3", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
@@ -158,6 +159,55 @@ namespace
 		const auto lower = static_cast<std::size_t>(position);
 		const auto upper = std::min(lower + 1, GammaToLinearLUT::Size - 1);
 		return sign * std::lerp(lut[lower], lut[upper], position - static_cast<float>(lower));
+	}
+
+	void DecodeToLinearSRGB(float* color, ColorManagement::Encoding encoding)
+	{
+		static const GammaToLinearLUT lut;
+		switch (encoding) {
+		case ColorManagement::Encoding::SRGB:
+			for (std::size_t i = 0; i < 3; ++i) {
+				const float value = color[i];
+				if (std::abs(value) <= 1.0f) {
+					color[i] = DecodeLUT(value, lut.srgb);
+				} else {
+					const float magnitude = std::abs(value);
+					const float linear = magnitude <= 0.04045f ? magnitude / 12.92f : std::pow((magnitude + 0.055f) / 1.055f, 2.4f);
+					color[i] = std::copysign(linear, value);
+				}
+			}
+			break;
+		case ColorManagement::Encoding::GameGamma:
+			for (std::size_t i = 0; i < 3; ++i) {
+				const float value = color[i];
+				color[i] = std::abs(value) <= 1.0f ? DecodeLUT(value, lut.gameGamma) : std::copysign(std::pow(std::abs(value), GAME_GAMMA), value);
+			}
+			break;
+		case ColorManagement::Encoding::Linear:
+			break;
+		}
+	}
+
+	void EncodeLinearSRGB(float* color)
+	{
+		for (std::size_t i = 0; i < 3; ++i) {
+			const float value = color[i];
+			if (!std::isfinite(value) || value == 0.0f)
+				continue;
+
+			const float magnitude = std::abs(value);
+			const float encoded = magnitude <= 0.0031308f ? magnitude * 12.92f : 1.055f * std::pow(magnitude, 1.0f / 2.4f) - 0.055f;
+			color[i] = std::copysign(encoded, value);
+		}
+	}
+
+	void ConvertToSRGBComposition(float* color, ColorManagement::Encoding sourceEncoding)
+	{
+		if (sourceEncoding == ColorManagement::Encoding::SRGB)
+			return;
+
+		DecodeToLinearSRGB(color, sourceEncoding);
+		EncodeLinearSRGB(color);
 	}
 
 	std::uint32_t GetShaderTechnique(RE::BSShader::Type shaderType, std::uint32_t descriptor)
@@ -374,29 +424,7 @@ void LinearLighting::ConvertColorToWorkingSpace(float* color, ColorManagement::C
 	if (!IsColorManagementEnabled())
 		return;
 
-	static const GammaToLinearLUT lut;
-	switch (sourceSpace.encoding) {
-	case ColorEncoding::SRGB:
-		for (std::size_t i = 0; i < 3; ++i) {
-			const float value = color[i];
-			if (std::abs(value) <= 1.0f) {
-				color[i] = DecodeLUT(value, lut.srgb);
-			} else {
-				const float magnitude = std::abs(value);
-				const float linear = magnitude <= 0.04045f ? magnitude / 12.92f : std::pow((magnitude + 0.055f) / 1.055f, 2.4f);
-				color[i] = std::copysign(linear, value);
-			}
-		}
-		break;
-	case ColorEncoding::GameGamma:
-		for (std::size_t i = 0; i < 3; ++i) {
-			const float value = color[i];
-			color[i] = std::abs(value) <= 1.0f ? DecodeLUT(value, lut.gameGamma) : std::copysign(std::pow(std::abs(value), GAME_GAMMA), value);
-		}
-		break;
-	case ColorEncoding::Linear:
-		break;
-	}
+	DecodeToLinearSRGB(color, sourceSpace.encoding);
 
 	if (sourceSpace.gamut == ColorManagement::Gamut::SRGB && settings.enableACEScg)
 		ConvertSRGBToAP1(color);
@@ -567,7 +595,9 @@ void LinearLighting::ConvertMappedColorBuffer(ID3D11Resource* resource)
 				break;
 
 			auto* value = static_cast<float*>(buffer.data) + floatOffset;
-			if (field.transform == ColorTransform::Emissive) {
+			if (field.transform == ColorTransform::SRGBComposition) {
+				ConvertToSRGBComposition(value, GetColorEncoding());
+			} else if (field.transform == ColorTransform::Emissive) {
 				if (buffer.emissiveMult != 0.0f) {
 					for (std::size_t component = 0; component < 3; ++component)
 						value[component] /= buffer.emissiveMult;

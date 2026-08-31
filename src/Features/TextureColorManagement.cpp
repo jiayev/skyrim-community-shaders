@@ -288,8 +288,15 @@ namespace TextureColorManagement
 					return inferredColor(AlphaMode::Opacity);
 				break;
 			case RE::BSShader::Type::Sky:
-				if (slot <= 1)
-					return inferredColor(AlphaMode::Opacity);
+				{
+					using enum SIE::ShaderCache::SkyShaderTechniques;
+					const auto technique = static_cast<SIE::ShaderCache::SkyShaderTechniques>(descriptor & 0xFF);
+					if (technique == CloudsLerp && slot <= 1)
+						return inferredColor(AlphaMode::Opacity);
+					if (slot == 0 && (technique == SunGlare || technique == Stars || technique == Clouds ||
+										 technique == CloudsFade || technique == Texture))
+						return inferredColor(AlphaMode::Opacity);
+				}
 				break;
 			default:
 				break;

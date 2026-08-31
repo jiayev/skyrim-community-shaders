@@ -221,7 +221,7 @@ float ComputeProceduralSun(float2 uv)
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
-	float3 skyScale = PParams.yyy;
+	float3 skyScale = ColorManagement::SRGBToWorking(PParams.yyy);
 
 #	if defined(PS_CLOUDS)
 	float psCloudDist = 1e3f / 1.428e-2;
@@ -235,7 +235,9 @@ PS_OUTPUT main(PS_INPUT input)
 #	ifndef OCCLUSION
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+#			ifndef MOONMASK
 	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
+#			endif
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
 #			endif
@@ -297,7 +299,7 @@ PS_OUTPUT main(PS_INPUT input)
 	noiseGrad *= 10.0;
 
 #			ifdef TEX
-	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
+	psout.Color.xyz = ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale;
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
@@ -310,7 +312,7 @@ PS_OUTPUT main(PS_INPUT input)
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
 #				endif
-	psout.Color.xyz = skyGradientColor + skyScale;
+	psout.Color.xyz = ColorManagement::SRGBToWorking(skyGradientColor) + skyScale;
 
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = input.Color.w;
@@ -324,7 +326,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (input.Color.xyz * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
@@ -334,7 +336,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
+	psout.Color.xyz = ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
