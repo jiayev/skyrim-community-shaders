@@ -66,6 +66,8 @@ public:
 		uint EffectNormalization = 0;
 		float EffectNormalizationMult = 5.0f;
 		float MinEffectMult = 1.0f;
+		uint EnableReflectionFallback = 1;
+		float ReflectionFallbackDistance = 1024.0f;
 	} settings;
 
 	struct alignas(16) PerFrame
@@ -84,7 +86,8 @@ public:
 		float EffectNormalizationMult = 5.0f;
 		float MinEffectMult = 1.0f;
 		uint SkylightingAffectsEnv;
-		float pad0[2];
+		uint EnableReflectionFallback;
+		float ReflectionFallbackDistance;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

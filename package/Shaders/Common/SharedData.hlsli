@@ -213,7 +213,8 @@ namespace SharedData
 		float EffectNormalizationMult;
 		float MinEffectMult;
 		uint SkylightingAffectsEnv;
-		float2 pad0;
+		uint EnableReflectionFallback;
+		float ReflectionFallbackDistance;
 	};
 
 	struct ExtendedTranslucencySettings

@@ -487,7 +487,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	float3 color = DLightColor.xyz * Color::EffectLightingMult();
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	if (suppressExternalEmittance) {
-		color = ShadowSampling::GetAmbientLighting() + ShadowSampling::GetDirectionalLighting();
+		color = ShadowSampling::GetAmbientLighting(worldPosition) + ShadowSampling::GetDirectionalLighting();
 	}
 
 #		if defined(SKYLIGHTING)
@@ -502,12 +502,12 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 
 	float3 dirColor;
 	float3 ambientColor;
-	ShadowSampling::ExtractLighting(color, dirColor, ambientColor);
+	ShadowSampling::ExtractLighting(color, worldPosition, dirColor, ambientColor);
 
 #		if defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
 		dirColor = ShadowSampling::GetDirectionalLighting();
-		ambientColor = ShadowSampling::GetAmbientLighting();
+		ambientColor = ShadowSampling::GetAmbientLighting(worldPosition);
 		dirColor *= SharedData::enbSettings.ParticleLightingInfluence;
 		ambientColor *= SharedData::enbSettings.ParticleAmbientInfluence;
 	}
@@ -572,7 +572,7 @@ float3 GetLightingShadow(float3 color, float3 worldPosition, float2 screenPositi
 {
 	float3 dirColor;
 	float3 ambientColor;
-	ShadowSampling::ExtractLighting(color, dirColor, ambientColor);
+	ShadowSampling::ExtractLighting(color, worldPosition, dirColor, ambientColor);
 
 	static const uint sampleCount = 8;
 	static const float rcpSampleCount = 1.0 / float(sampleCount);
@@ -831,6 +831,7 @@ PS_OUTPUT main(PS_INPUT input)
 			ambientLevel = ImageBasedLighting::GetEnvIBLColor(float3(0, 0, 0));
 			ambientLevel += ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0));
 		}
+		ambientLevel = ImageBasedLighting::ApplyIBLReflectionFallback(ambientLevel, ImageBasedLighting::GetSkyIBLColor(float3(0, 0, 0)), input.WorldPosition.xyz);
 		effectNormalization = Color::RGBToLuminance(ambientLevel);
 		effectNormalization *= SharedData::iblSettings.EffectNormalizationMult;
 		effectNormalization = max(effectNormalization, SharedData::iblSettings.MinEffectMult);
@@ -848,7 +849,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha && lightingInfluence == 1.0) {
 #		if defined(PHYSICAL_SKY)
 		if (SharedData::physSkyData.enabled && SharedData::physSkyData.lightSkyStatics) {
-			float3 sceneLighting = ShadowSampling::GetSceneLightingColor();
+			float3 sceneLighting = ShadowSampling::GetSceneLightingColor(input.WorldPosition.xyz);
 			float3 skyStaticLighting = GetLightingShadow(sceneLighting, input.WorldPosition.xyz, input.Position.xy, depth, shadowVariance);
 			lightColor = baseColor.xyz * skyStaticLighting * SharedData::physSkyData.skyStaticsBrightness / Math::PI;
 		} else
@@ -881,7 +882,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 fogColor = input.FogParam.xyz;
 #		if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {
-		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
+		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WorldPosition.xyz);
 	}
 #		endif
 #		if defined(EXP_HEIGHT_FOG)
