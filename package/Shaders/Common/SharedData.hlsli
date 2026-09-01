@@ -201,7 +201,9 @@ namespace SharedData
 		float FogAmount;
 		uint DALCMode;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
 		uint SkylightingAffectsEnv;
-		float pad0;
+		uint EnableReflectionFallback;
+		float ReflectionFallbackDistance;
+		float3 pad0;
 	};
 
 	struct ExtendedTranslucencySettings

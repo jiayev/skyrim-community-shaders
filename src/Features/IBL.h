@@ -63,6 +63,8 @@ public:
 		bool DisableInInteriors = true;
 		bool DisableInWorldMap = true;
 		bool DisableInLoadingScreen = true;
+		uint EnableReflectionFallback = 1;
+		float ReflectionFallbackDistance = 1024.0f;
 	} settings;
 
 	struct alignas(16) PerFrame
@@ -78,7 +80,9 @@ public:
 		float FogAmount;
 		uint DALCMode;
 		uint SkylightingAffectsEnv;
-		float pad0;
+		uint EnableReflectionFallback;
+		float ReflectionFallbackDistance;
+		float pad0[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

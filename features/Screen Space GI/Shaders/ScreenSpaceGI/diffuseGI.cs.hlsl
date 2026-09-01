@@ -217,6 +217,7 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 			envColor = saturatedEnv * ratio * SharedData::iblSettings.EnvIBLScale;
 		}
 
+		float3 reflectionColor = 0;
 		if (!SharedData::InInterior) {
 			float3 skySample = ReflectionCubemap.SampleLevel(samplerLinearClamp, worldDir, SSGI_FALLBACK_MIP);
 			float3 skyColor = Color::Saturation(skySample, SharedData::iblSettings.SkyIBLSaturation) * SharedData::iblSettings.SkyIBLScale;
@@ -225,9 +226,11 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 			if (SharedData::iblSettings.SkylightingAffectsEnv != 0)
 				envColor *= skylightingDiffuse;
 #		endif
+			reflectionColor = skyColor;
 			envColor += skyColor;
 		}
 		envColor = Color::IrradianceToLinear(envColor);
+		envColor = ImageBasedLighting::ApplyIBLReflectionFallback(envColor, Color::IrradianceToLinear(reflectionColor), worldPos);
 	} else
 #	endif
 	{

@@ -160,9 +160,9 @@ void SampleSSRTracedSpecular(uint2 pixCoord, out float3 specularRadiance, out fl
 				float3 positionMS = positionWS.xyz;
 				sh2 skylightingSH = Skylighting::Sample(positionMS.xyz, normalWS);
 				float skylightingDiffuse = Skylighting::EvaluateDiffuse(skylightingSH, normalWS);
-				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse) * albedo;
+				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBLOccluded(vanillaDALC, -normalWS, skylightingDiffuse, positionWS.xyz) * albedo;
 #		else
-				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS) * albedo;
+				directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(vanillaDALC, -normalWS, positionWS.xyz) * albedo;
 #		endif
 
 				directionalAmbientColor = Color::RGBToYCoCg(directionalAmbientColor);
