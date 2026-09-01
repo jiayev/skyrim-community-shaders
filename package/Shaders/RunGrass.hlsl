@@ -344,15 +344,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #			include "WetnessEffects/WetnessEffects.hlsli"
 #		endif
 
-float GetSoftLightMultiplier(float angle, float rolloff)
-{
-	float softLight = saturate((rolloff + angle) / (1 + rolloff));
-	float arg1 = (softLight * softLight) * (3 - 2 * softLight);
-	float clampedAngle = saturate(angle);
-	float arg2 = (clampedAngle * clampedAngle) * (3 - 2 * clampedAngle);
-	return saturate(arg1 - arg2);
-}
-
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout = (PS_OUTPUT)0;
@@ -409,6 +400,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (!frontFace)
 			normal = -normal;
 
+	float3 transmissionNormal = normal;
 	float3x3 tbn = 0;
 
 	if (complex) {
@@ -512,13 +504,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
 
 	float3 albedo = baseColor.xyz * vertexColor;
+	float3 transmissionTint = sqrt(max(albedo, 0.0));
 
-	float dirSoftShadow = dirDetailedShadow;
-#			if defined(SKYLIGHTING_SHADOW_VIS)
-	dirSoftShadow = skylightingShadowVisibility;
-#			endif
-
-	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * ColorManagement::BRDFNormalization();
+	float dirTransmissionAngle = dot(transmissionNormal, SharedData::DirLightDirection.xyz);
+	float dirViewLightAngle = dot(viewDirection, SharedData::DirLightDirection.xyz);
+	float3 transmissionRadiance = dirLightColor * dirDetailedShadow *
+	                              GrassLighting::GetTransmissionFactor(dirTransmissionAngle, dirViewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+	                              Color::VanillaNormalization();
 
 	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * ColorManagement::BRDFNormalization();
 	float3 dirSpecularColor = 0;
@@ -574,11 +566,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				lightColor *= lightShadow;
 
 				float lightAngle = dot(normal, normalizedLightDirection);
-				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
 				float3 lightDiffuseColor = lightColor * saturate(lightAngle) * ColorManagement::BRDFNormalization();
 				float3 lightSpecularColor = 0;
 
-				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * ColorManagement::BRDFNormalization();
+				float transmissionLightAngle = dot(transmissionNormal, normalizedLightDirection);
+				float viewLightAngle = dot(viewDirection, normalizedLightDirection);
+				transmissionRadiance += lightColor *
+				                        GrassLighting::GetTransmissionFactor(transmissionLightAngle, viewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+				                        ColorManagement::BRDFNormalization();
 
 				if (complex)
 					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * ColorManagement::BRDFNormalization();
@@ -650,7 +645,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 
 	diffuseColor += directionalAmbientColor;
-	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;
 
 	directionalAmbientColor *= albedo;
@@ -658,6 +652,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(SKYLIGHTING)
 	Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, albedo, skylightingDiffuse);
 #			endif
+
+	diffuseColor += transmissionRadiance * transmissionTint;
 
 	specularColor += lightsSpecularColor;
 #			if defined(VANILLA_FRESNEL)

@@ -3,6 +3,17 @@
 
 namespace GrassLighting
 {
+	float GetTransmissionFactor(float NdotL, float VdotL, float amount)
+	{
+		float backLight = saturate(-NdotL);
+		backLight = backLight * backLight * (3.0 - 2.0 * backLight);
+
+		float forwardScatter = saturate(-VdotL);
+		forwardScatter *= forwardScatter;
+
+		return 0.5 * amount * backLight * lerp(0.25, 1.0, forwardScatter);
+	}
+
 	float3 GetLightSpecularInput(float3 L, float3 V, float3 N, float3 lightColor, float roughness, float3 F0)
 	{
 		float3 H = normalize(V + L);
