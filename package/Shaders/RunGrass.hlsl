@@ -400,7 +400,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (!frontFace)
 			normal = -normal;
 
-	float3 transmissionNormal = normal;
 	float3x3 tbn = 0;
 
 	if (complex) {
@@ -470,7 +469,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 
-	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
+	float dirNdotL = dot(normal, SharedData::DirLightDirection.xyz);
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
@@ -483,10 +482,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::InInterior)
 		dirDetailedShadow *= shadowColor.x;
 	dirDetailedShadow += ShadowClampValue * (1.0 - dirDetailedShadow);
+	float dirTransmissionShadow = dirDetailedShadow;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	if (!SharedData::InInterior && dirLightAngle >= 0.0)
-		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise);
+	if (!SharedData::InInterior) {
+		float2 screenSpaceShadows = ScreenSpaceShadows::GetScreenSpaceShadows(input.HPosition.xyz, screenUV, screenNoise);
+		if (dirNdotL >= 0.0)
+			dirDetailedShadow *= screenSpaceShadows.x;
+		dirTransmissionShadow *= dirNdotL >= 0.0 ? screenSpaceShadows.x : screenSpaceShadows.y;
+	}
 #			endif  // SCREEN_SPACE_SHADOWS
 
 	float3 diffuseColor = 0;
@@ -504,15 +508,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
 
 	float3 albedo = baseColor.xyz * vertexColor;
-	float3 transmissionTint = sqrt(max(albedo, 0.0));
+	float3 transmissionTint = GrassLighting::GetTransmissionTint(albedo);
 
-	float dirTransmissionAngle = dot(transmissionNormal, SharedData::DirLightDirection.xyz);
-	float dirViewLightAngle = dot(viewDirection, SharedData::DirLightDirection.xyz);
-	float3 transmissionRadiance = dirLightColor * dirDetailedShadow *
-	                              GrassLighting::GetTransmissionFactor(dirTransmissionAngle, dirViewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
-	                              Color::VanillaNormalization();
+	float dirVdotL = dot(viewDirection, SharedData::DirLightDirection.xyz);
+	float3 transmissionRadiance = dirLightColor * dirTransmissionShadow *
+	                              GrassLighting::GetTransmissionFactor(dirNdotL, dirVdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+	                              ColorManagement::BRDFNormalization();
 
-	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * ColorManagement::BRDFNormalization();
+	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirNdotL) * ColorManagement::BRDFNormalization();
 	float3 dirSpecularColor = 0;
 	if (complex)
 		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * ColorManagement::BRDFNormalization();
@@ -565,14 +568,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float3 pointLightColor = lightColor;
 				lightColor *= lightShadow;
 
-				float lightAngle = dot(normal, normalizedLightDirection);
-				float3 lightDiffuseColor = lightColor * saturate(lightAngle) * ColorManagement::BRDFNormalization();
+				float NdotL = dot(normal, normalizedLightDirection);
+				float3 lightDiffuseColor = lightColor * saturate(NdotL) * ColorManagement::BRDFNormalization();
 				float3 lightSpecularColor = 0;
 
-				float transmissionLightAngle = dot(transmissionNormal, normalizedLightDirection);
-				float viewLightAngle = dot(viewDirection, normalizedLightDirection);
+				float VdotL = dot(viewDirection, normalizedLightDirection);
 				transmissionRadiance += lightColor *
-				                        GrassLighting::GetTransmissionFactor(transmissionLightAngle, viewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+				                        GrassLighting::GetTransmissionFactor(NdotL, VdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
 				                        ColorManagement::BRDFNormalization();
 
 				if (complex)
