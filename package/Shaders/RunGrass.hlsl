@@ -389,7 +389,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (!frontFace)
 			normal = -normal;
 
-	float3 transmissionNormal = normal;
 	float3x3 tbn = 0;
 
 	if (complex) {
@@ -413,7 +412,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 
-	float dirLightAngle = dot(normal, SharedData::DirLightDirection.xyz);
+	float dirNdotL = dot(normal, SharedData::DirLightDirection.xyz);
 
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
@@ -426,10 +425,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	if (!SharedData::InInterior)
 		dirDetailedShadow *= shadowColor.x;
 	dirDetailedShadow += ShadowClampValue * (1.0 - dirDetailedShadow);
+	float dirTransmissionShadow = dirDetailedShadow;
 
 #			if defined(SCREEN_SPACE_SHADOWS)
-	if (!SharedData::InInterior && dirLightAngle >= 0.0)
-		dirDetailedShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.HPosition.xyz, screenUV, screenNoise);
+	if (!SharedData::InInterior) {
+		float2 screenSpaceShadows = ScreenSpaceShadows::GetScreenSpaceShadows(input.HPosition.xyz, screenUV, screenNoise);
+		if (dirNdotL >= 0.0)
+			dirDetailedShadow *= screenSpaceShadows.x;
+		dirTransmissionShadow *= dirNdotL >= 0.0 ? screenSpaceShadows.x : screenSpaceShadows.y;
+	}
 #			endif  // SCREEN_SPACE_SHADOWS
 
 	float3 diffuseColor = 0;
@@ -440,7 +444,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	dirLightColor *= dirLightColorMultiplier;
 
-	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
+	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirNdotL) * Color::VanillaNormalization();
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
@@ -458,12 +462,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
-	float3 transmissionTint = sqrt(max(albedo, 0.0));
+	float3 transmissionTint = GrassLighting::GetTransmissionTint(albedo);
 
-	float dirTransmissionAngle = dot(transmissionNormal, SharedData::DirLightDirection.xyz);
-	float dirViewLightAngle = dot(viewDirection, SharedData::DirLightDirection.xyz);
-	float3 transmissionRadiance = dirLightColor * dirDetailedShadow *
-	                              GrassLighting::GetTransmissionFactor(dirTransmissionAngle, dirViewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+	float dirVdotL = dot(viewDirection, SharedData::DirLightDirection.xyz);
+	float3 transmissionRadiance = dirLightColor * dirTransmissionShadow *
+	                              GrassLighting::GetTransmissionFactor(dirNdotL, dirVdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
 	                              Color::VanillaNormalization();
 
 	if (complex)
@@ -511,15 +514,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 				lightColor *= lightShadow;
 
-				float lightAngle = dot(normal, normalizedLightDirection);
+				float NdotL = dot(normal, normalizedLightDirection);
 				float3 lightDiffuseColor;
 
-				lightDiffuseColor = lightColor * saturate(lightAngle);
+				lightDiffuseColor = lightColor * saturate(NdotL);
 
-				float transmissionLightAngle = dot(transmissionNormal, normalizedLightDirection);
-				float viewLightAngle = dot(viewDirection, normalizedLightDirection);
+				float VdotL = dot(viewDirection, normalizedLightDirection);
 				transmissionRadiance += lightColor *
-				                        GrassLighting::GetTransmissionFactor(transmissionLightAngle, viewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+				                        GrassLighting::GetTransmissionFactor(NdotL, VdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
 				                        Color::VanillaNormalization();
 
 				lightsDiffuseColor += lightDiffuseColor * Color::VanillaNormalization();
