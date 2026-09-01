@@ -37,9 +37,9 @@ struct VS_OUTPUT
 	float Fade: TEXCOORD2;
 	float3 Color: COLOR0;
 	float3 ViewSpacePosition: TEXCOORD3;
-#	if defined(RENDER_DEPTH)
+#if defined(RENDER_DEPTH)
 	float2 Depth: TEXCOORD4;
-#	endif  // RENDER_DEPTH
+#endif  // RENDER_DEPTH
 	float3 WorldPosition: POSITION1;
 	float3 PreviousWorldPosition: POSITION2;
 #ifdef GRASS_LIGHTING
@@ -256,7 +256,7 @@ struct PS_OUTPUT
 	float4 Specular: SV_Target4;
 	float4 Masks: SV_Target6;
 	float4 Masks2: SV_Target7;
-#	endif      // RENDER_DEPTH
+#	endif  // RENDER_DEPTH
 };
 #else
 struct PS_OUTPUT
@@ -278,8 +278,6 @@ struct PS_OUTPUT
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampShadowMaskSampler : register(s1);
 
-
-
 Texture2D<float4> TexBaseSampler : register(t0);
 Texture2D<float4> TexShadowMaskSampler : register(t1);
 
@@ -289,8 +287,6 @@ cbuffer PerFrame : register(b0)
 	float4 VPOSOffset : packoffset(c2);
 	float4 cb0_2[7] : packoffset(c3);
 }
-
-
 
 cbuffer AlphaTestRefCB : register(b11)
 {
@@ -336,15 +332,6 @@ cbuffer AlphaTestRefCB : register(b11)
 #	include "Common/ShadowSampling.hlsli"
 #	ifdef GRASS_LIGHTING
 #		include "GrassLighting/GrassLighting.hlsli"
-
-float GetSoftLightMultiplier(float angle, float rolloff)
-{
-	float softLight = saturate((rolloff + angle) / (1 + rolloff));
-	float arg1 = (softLight * softLight) * (3 - 2 * softLight);
-	float clampedAngle = saturate(angle);
-	float arg2 = (clampedAngle * clampedAngle) * (3 - 2 * clampedAngle);
-	return saturate(arg1 - arg2);
-}
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
@@ -402,10 +389,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (!frontFace)
 			normal = -normal;
 
+	float3 transmissionNormal = normal;
 	float3x3 tbn = 0;
 
-	if (complex)
-	{
+	if (complex) {
 		float3 normalColor = GrassLighting::TransformNormal(specColor.xyz);
 		// world-space -> tangent-space -> world-space.
 		// This is because we don't have pre-computed tangents.
@@ -453,32 +440,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	dirLightColor *= dirLightColorMultiplier;
 
-	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
-
 	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
 
 	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
 	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
 	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
-#				if defined(SKYLIGHTING)
+#			if defined(SKYLIGHTING)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
-#					if defined(SKYLIGHTING_SHADOW_VIS)
-		, skylightingShadowVisibility
-#					endif
+#				if defined(SKYLIGHTING_SHADOW_VIS)
+		,
+		skylightingShadowVisibility
+#				endif
 	);
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
-#				endif  // SKYLIGHTING
+#			endif  // SKYLIGHTING
 
 	float3 albedo = baseColor.xyz * vertexColor;
+	float3 transmissionTint = sqrt(max(albedo, 0.0));
 
-	float dirSoftShadow = dirDetailedShadow;
-#				if defined(SKYLIGHTING_SHADOW_VIS)
-	dirSoftShadow = skylightingShadowVisibility;
-#				endif
-
-	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::VanillaNormalization();
+	float dirTransmissionAngle = dot(transmissionNormal, SharedData::DirLightDirection.xyz);
+	float dirViewLightAngle = dot(viewDirection, SharedData::DirLightDirection.xyz);
+	float3 transmissionRadiance = dirLightColor * dirDetailedShadow *
+	                              GrassLighting::GetTransmissionFactor(dirTransmissionAngle, dirViewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+	                              Color::VanillaNormalization();
 
 	if (complex)
 		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::VanillaNormalization();
@@ -526,12 +512,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				lightColor *= lightShadow;
 
 				float lightAngle = dot(normal, normalizedLightDirection);
-				float lightNoL = dot(normalizedLightDirection.xyz, viewDirection);
 				float3 lightDiffuseColor;
 
 				lightDiffuseColor = lightColor * saturate(lightAngle);
 
-				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::VanillaNormalization();
+				float transmissionLightAngle = dot(transmissionNormal, normalizedLightDirection);
+				float viewLightAngle = dot(viewDirection, normalizedLightDirection);
+				transmissionRadiance += lightColor *
+				                        GrassLighting::GetTransmissionFactor(transmissionLightAngle, viewLightAngle, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
+				                        Color::VanillaNormalization();
 
 				lightsDiffuseColor += lightDiffuseColor * Color::VanillaNormalization();
 
@@ -546,20 +535,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 directionalAmbientColor = Color::Ambient(max(0, SharedData::GetAmbient(normal)));
 
-#				if defined(IBL)
+#			if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL)
 		directionalAmbientColor = ImageBasedLighting::GetDiffuseIBL(directionalAmbientColor, -normal);
-#				endif
+#			endif
 
 	diffuseColor += directionalAmbientColor;
-	diffuseColor += subsurfaceColor * albedo;
 	diffuseColor *= albedo;
 
 	directionalAmbientColor *= albedo;
 
-#				if defined(SKYLIGHTING)
+#			if defined(SKYLIGHTING)
 	Skylighting::ApplySkylighting(diffuseColor, directionalAmbientColor, albedo, skylightingDiffuse);
-#				endif
+#			endif
+
+	diffuseColor += transmissionRadiance * transmissionTint;
 
 	specularColor += lightsSpecularColor;
 	specularColor *= specColor.w * SharedData::grassLightingSettings.SpecularStrength;
@@ -703,7 +693,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 positionMSSkylight = input.WorldPosition.xyz;
 	sh2 skylightingSH = Skylighting::Sample(positionMSSkylight, normal
 #				if defined(SKYLIGHTING_SHADOW_VIS)
-		, skylightingShadowVisibility
+		,
+		skylightingShadowVisibility
 #				endif
 	);
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, positionMSSkylight, normal, vertexAO);
