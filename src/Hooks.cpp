@@ -1,7 +1,9 @@
 #include "Hooks.h"
 
 #include "ShaderTools/BSShaderHooks.h"
+#include "ShaderTools/LegacyGraphicsCompatibility.h"
 #include "Utils/ExternalEmittance.h"
+#include "Utils/VersionedRelocation.h"
 
 #include "Feature.h"
 #include "Globals.h"
@@ -20,53 +22,76 @@
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
-std::unordered_map<void*, std::pair<std::unique_ptr<uint8_t[]>, size_t>> ShaderBytecodeMap;
+#include <unordered_map>
+
+namespace
+{
+	using ShaderBytecode = std::vector<std::uint8_t>;
+
+	std::unordered_map<void*, std::shared_ptr<const ShaderBytecode>> ShaderBytecodeMap;
+	std::mutex ShaderBytecodeMutex;
+	std::mutex ShaderDumpMutex;
+
+	void NormalizeLegacyUtilityDescriptors(const RE::BSShader& a_shader, uint& a_vertexDescriptor, uint& a_pixelDescriptor)
+	{
+		if (a_shader.shaderType.get() != RE::BSShader::Type::Utility ||
+			!LegacyGraphicsCompatibility::IsLegacyVersion()) {
+			return;
+		}
+		a_vertexDescriptor = LegacyGraphicsCompatibility::NormalizeLegacyUtilityDescriptor(a_vertexDescriptor);
+		a_pixelDescriptor = LegacyGraphicsCompatibility::NormalizeLegacyUtilityDescriptor(a_pixelDescriptor);
+	}
+}
 
 void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeLength)
 {
+	if (!Shader || !Bytecode || BytecodeLength == 0) {
+		logger::warn("Ignoring invalid shader bytecode capture (shader {}, bytecode {}, size {})", Shader, Bytecode, BytecodeLength);
+		return;
+	}
+
 	// Grab a copy since the pointer isn't going to be valid forever
-	auto codeCopy = std::make_unique<uint8_t[]>(BytecodeLength);
-	memcpy(codeCopy.get(), Bytecode, BytecodeLength);
+	auto codeCopy = std::make_shared<ShaderBytecode>(BytecodeLength);
+	memcpy(codeCopy->data(), Bytecode, BytecodeLength);
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
-	ShaderBytecodeMap.emplace(Shader, std::make_pair(std::move(codeCopy), BytecodeLength));
+	std::scoped_lock lock(ShaderBytecodeMutex);
+	ShaderBytecodeMap.insert_or_assign(Shader, std::move(codeCopy));
 }
 
-const std::pair<std::unique_ptr<uint8_t[]>, size_t>& GetShaderBytecode(void* Shader)
+std::shared_ptr<const ShaderBytecode> GetShaderBytecode(void* Shader)
 {
 	logger::debug(fmt::runtime("Loading shader at index {:x}"), (std::uintptr_t)Shader);
-	return ShaderBytecodeMap.at(Shader);
+	std::scoped_lock lock(ShaderBytecodeMutex);
+	const auto entry = ShaderBytecodeMap.find(Shader);
+	return entry == ShaderBytecodeMap.end() ? nullptr : entry->second;
 }
 
 template <class ShaderType>
-void DumpShader(const REX::BSShader* thisClass, const ShaderType* shader, const std::pair<std::unique_ptr<uint8_t[]>, size_t>& bytecode)
+void DumpShader(const RE::BSShader* thisClass, const ShaderType* shader, std::span<const std::uint8_t> bytecode)
 {
 	static_assert(std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> || std::is_same_v<ShaderType, RE::BSGraphics::PixelShader>);
 
-	uint8_t* dxbcData = new uint8_t[bytecode.second];
-	size_t dxbcLen = bytecode.second;
-	memcpy(dxbcData, bytecode.first.get(), bytecode.second);
-
 	constexpr auto shaderExtStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vs" : "ps";
 	constexpr auto shaderTypeStr = std::is_same_v<ShaderType, RE::BSGraphics::VertexShader> ? "vertex" : "pixel";
+	const std::string_view loaderType = thisClass->fxpFilename ? thisClass->fxpFilename : "Unknown";
+	const auto dumpPath = std::format("Data\\ShaderDump\\{}\\{:X}.{}.bin", loaderType, shader->id, shaderExtStr);
+	const auto directoryPath = std::format("Data\\ShaderDump\\{}", loaderType);
+	logger::debug("Dumping {} shader {} with id {:x} at {}", shaderTypeStr, loaderType, shader->id, dumpPath);
 
-	std::string dumpDir = std::format("Data\\ShaderDump\\{}\\{:X}.{}.bin", thisClass->m_LoaderType, shader->id, shaderExtStr);
-	auto directoryPath = std::format("Data\\ShaderDump\\{}", thisClass->m_LoaderType);
-	logger::debug(fmt::runtime("Dumping {} shader {} with id {:x} at {}"), shaderTypeStr, thisClass->m_LoaderType, shader->id, dumpDir);
-
+	std::scoped_lock lock(ShaderDumpMutex);
 	if (!std::filesystem::is_directory(directoryPath)) {
 		try {
 			std::filesystem::create_directories(directoryPath);
-		} catch (std::filesystem::filesystem_error const& ex) {
+		} catch (const std::filesystem::filesystem_error& ex) {
 			logger::error("Failed to create folder: {}", ex.what());
+			return;
 		}
 	}
 
-	if (FILE* file; fopen_s(&file, dumpDir.c_str(), "wb") == 0) {
-		fwrite(dxbcData, 1, dxbcLen, file);
+	if (FILE* file; fopen_s(&file, dumpPath.c_str(), "wb") == 0) {
+		fwrite(bytecode.data(), 1, bytecode.size(), file);
 		fclose(file);
 	}
-
-	delete[] dxbcData;
 }
 
 struct BSShader_LoadShaders
@@ -86,28 +111,46 @@ struct BSShader_LoadShaders
 
 			for (const auto& entry : shader->vertexShaders) {
 				if (entry->shader && shaderCache->IsDump()) {
-					const auto& bytecode = GetShaderBytecode(entry->shader);
-					DumpShader((REX::BSShader*)shader, entry, bytecode);
+					if (const auto bytecode = GetShaderBytecode(entry->shader)) {
+						DumpShader(shader, entry, std::span(*bytecode));
+					} else {
+						logger::warn("No captured bytecode for vertex shader {} descriptor {:X}", shader->fxpFilename, entry->id);
+					}
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
+				NormalizeLegacyUtilityDescriptors(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetVertexShader(*shader, vertexShaderDesriptor);
 			}
 			for (const auto& entry : shader->pixelShaders) {
 				if (entry->shader && shaderCache->IsDump()) {
-					const auto& bytecode = GetShaderBytecode(entry->shader);
-					DumpShader((REX::BSShader*)shader, entry, bytecode);
+					if (const auto bytecode = GetShaderBytecode(entry->shader)) {
+						DumpShader(shader, entry, std::span(*bytecode));
+					} else {
+						logger::warn("No captured bytecode for pixel shader {} descriptor {:X}", shader->fxpFilename, entry->id);
+					}
 				}
 				auto vertexShaderDesriptor = entry->id;
 				auto pixelShaderDescriptor = entry->id;
+				NormalizeLegacyUtilityDescriptors(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 				state->ModifyShaderLookup(*shader, vertexShaderDesriptor, pixelShaderDescriptor, true);
 				shaderCache->GetPixelShader(*shader, pixelShaderDescriptor);
 			}
+
+			if (shaderCache->IsDiskCache() && shader->shaderType.get() == RE::BSShader::Type::Effect) {
+				constexpr auto sharedRuntimeUnionDescriptor =
+					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MultBlend) |
+					static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::MotionVectorsNormals);
+				shaderCache->GetPixelShader(*shader, sharedRuntimeUnionDescriptor);
+				shaderCache->GetPixelShader(*shader,
+					sharedRuntimeUnionDescriptor |
+						static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::Deferred));
+			}
 		}
-		BSShaderHooks::hk_LoadShaders((REX::BSShader*)shader, stream);
+		BSShaderHooks::hk_LoadShaders(shader, stream);
 	};
 	static inline REL::Relocation<decltype(thunk)> func;
 };
@@ -129,6 +172,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->modifiedVertexDescriptor = vertexDescriptor;
 	state->modifiedPixelDescriptor = pixelDescriptor;
 
+	NormalizeLegacyUtilityDescriptors(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 	state->ModifyShaderLookup(*shader, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor);
 
 	// Only check against non-shader bits
@@ -231,6 +275,7 @@ namespace GrassExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			func(shader, pass, renderFlags);
+			LegacyGraphicsCompatibility::BindLegacyGrassPerGeometryToPixelShader();
 
 			auto state = globals::state;
 
@@ -425,7 +470,7 @@ struct ID3D11Device_CreateVertexShader
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppVertexShader);
 
 		if (SUCCEEDED(hr))
-			RegisterShaderBytecode(*ppVertexShader, pShaderBytecode, BytecodeLength);
+			RegisterShaderBytecode(ppVertexShader ? *ppVertexShader : nullptr, pShaderBytecode, BytecodeLength);
 
 		return hr;
 	}
@@ -439,7 +484,7 @@ struct ID3D11Device_CreatePixelShader
 		HRESULT hr = func(This, pShaderBytecode, BytecodeLength, pClassLinkage, ppPixelShader);
 
 		if (SUCCEEDED(hr))
-			RegisterShaderBytecode(*ppPixelShader, pShaderBytecode, BytecodeLength);
+			RegisterShaderBytecode(ppPixelShader ? *ppPixelShader : nullptr, pShaderBytecode, BytecodeLength);
 
 		return hr;
 	}
@@ -942,7 +987,7 @@ namespace Hooks
 			void* a6,
 			void* a7)
 		{
-			auto enableIBLF = (float*)(REL::RelocationID(513510, 391362).address());
+			auto* enableIBLF = reinterpret_cast<bool*>(REL::RelocationID(513510, 391362).address());
 			*enableIBLF = false;
 
 			func(a1, a2, a3, a4, a5, a6, a7);
@@ -1008,6 +1053,8 @@ namespace Hooks
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
 
+		LegacyGraphicsCompatibility::Install();
+
 		logger::info("Hooking BSComputeShader");
 		stl::write_vfunc<0x02, CSShadersSupport::BSComputeShader_Dispatch>(RE::VTABLE_BSComputeShader[0]);
 
@@ -1028,7 +1075,7 @@ namespace Hooks
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
-		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + REL::Relocate(0x45B, 0x4F5));
+		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + Util::VersionedRelocation::Select(0x45B, 0x4F5, 0x4FD));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 		stl::write_vfunc<0x6, PostProcessingExtensions::BSParticleShader_SetupGeometry>(RE::VTABLE_BSParticleShader[0]);
 
@@ -1048,7 +1095,7 @@ namespace Hooks
 				std::uint8_t patch[] = { 0x41, 0x83, 0xE7, 0x00 };  // and r15d, 0
 				REL::safe_write(setupGeometryUpdateRenderSpace + 0x71, patch, sizeof(patch));
 			} else {
-				std::uint8_t patch1[] = { 0xB8, 0x00, 0x00 };  // mov eax, 0
+				std::uint8_t patch1[] = { 0x83, 0xE0, 0x00 };  // and eax, 0
 				REL::safe_write(setupGeometryUpdateRenderSpace + 0x73, patch1, sizeof(patch1));
 
 				std::uint8_t patch2[] = { 0x45, 0x31, 0xC9 };  // xor r9d, r9d (zeros r9d)
@@ -1059,7 +1106,7 @@ namespace Hooks
 			}
 		}
 
-		stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + REL::Relocate(0x523, 0xB0E));
+		stl::write_thunk_call<BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights>(REL::RelocationID(100565, 107300).address() + Util::VersionedRelocation::Select(0x523, 0xB0E, 0xB30));
 	}
 
 	void InstallEarlyHooks()

@@ -1,6 +1,7 @@
 ﻿#include "InteriorSun.h"
 #include "I18n/I18n.h"
 #include "State.h"
+#include "Utils/VersionedRelocation.h"
 
 #define I18N_KEY_PREFIX "feature.interior_sun."
 
@@ -67,7 +68,7 @@ void InteriorSun::PostPostLoad()
 	gInteriorShadowDistance = reinterpret_cast<float*>(REL::RelocationID(513755, 391724).address());
 
 	// Patches BSShadowDirectionalLight::SetFrameCamera to read the correct shadow distance value in interior cells
-	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + REL::Relocate(0xD62, 0xE6C);
+	const std::uintptr_t address = REL::RelocationID(101499, 108496).address() + Util::VersionedRelocation::Select(0xD62, 0xE6C, 0xE9C);
 	const std::int32_t displacement = static_cast<std::int32_t>(reinterpret_cast<std::uintptr_t>(gShadowDistance) - (address + 8));
 	REL::safe_write(address + 4, &displacement, sizeof(displacement));
 

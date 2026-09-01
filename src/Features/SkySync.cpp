@@ -185,7 +185,7 @@ void SkySync::PostPostLoad()
 	gSunPosition = reinterpret_cast<RE::NiPoint3*>(REL::RelocationID(527924, 414871).address());
 
 	gVolumetricLighting = reinterpret_cast<RE::BSVolumetricLightingRenderData*>(
-		REL::RelocationID(527719, 414629).address() - offsetof(RE::BSVolumetricLightingRenderData, red));
+		REL::RelocationID(527719, 414629).address() - offsetof(RE::BSVolumetricLightingRenderData, color));
 
 	logger::info("[Sky Sync] Installed hooks");
 }
