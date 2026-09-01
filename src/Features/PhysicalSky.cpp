@@ -1296,6 +1296,23 @@ void PhysicalSky::RestoreSamplers()
 	context->PSSetSamplers(3, 2, originalPSSamplers);
 }
 
+void PhysicalSky::ModifyGrass()
+{
+	auto context = globals::d3d::context;
+	context->PSGetSamplers(2, 1, originalPSGrassSampler.put());
+
+	auto sampler = sampTileable.get();
+	context->PSSetSamplers(2, 1, &sampler);
+}
+
+void PhysicalSky::RestoreGrassSampler()
+{
+	auto context = globals::d3d::context;
+	auto sampler = originalPSGrassSampler.get();
+	context->PSSetSamplers(2, 1, &sampler);
+	originalPSGrassSampler = nullptr;
+}
+
 void PhysicalSky::Hooks::BSSkyShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	globals::features::physicalSky.ModifySky();
@@ -1306,4 +1323,16 @@ void PhysicalSky::Hooks::BSSkyShader_RestoreGeometry::thunk(RE::BSShader* This, 
 {
 	globals::features::physicalSky.RestoreSamplers();
 	func(This, Pass, RenderFlags);
+}
+
+void PhysicalSky::Hooks::BSGrassShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+	globals::features::physicalSky.ModifyGrass();
+}
+
+void PhysicalSky::Hooks::BSGrassShader_RestoreGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+	globals::features::physicalSky.RestoreGrassSampler();
 }
