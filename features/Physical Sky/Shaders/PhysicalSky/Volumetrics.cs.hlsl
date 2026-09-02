@@ -266,7 +266,7 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	const float3 apUv = float3(SkyViewLutUv(viewDir), depthSlice);
 	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, apUv, 0);
 	const float3 apSun = TexAerialPerspectiveSun.SampleLevel(SkyViewSampler, apUv, 0).rgb;
-	ap.rgb = max(0.0, ap.rgb - apSun * saturate(shadow));
+	ap.rgb += apSun * (1.0 - saturate(shadow));
 	ap.rgb *= data.apLumMix;
 	ap.a = lerp(1.0, ap.a, data.apTrMix);
 	return ap;

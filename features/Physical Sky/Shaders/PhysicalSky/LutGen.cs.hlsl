@@ -71,10 +71,16 @@ void rayMarch(
 
 #if LUTGEN != 0
 	float uSun = dot(rayDir, sunDir);
+#	if LUTGEN == 1
+	// The higher-order scattering approximation is isotropic.  Using the
+	// sharply peaked aerosol phase here makes the small spherical quadrature
+	// strongly dependent on whether a sample happens to land near the sun.
+	float phaseAerosolSun = 0.25 * RCP_PI;
+	float phaseRayleighSun = 0.25 * RCP_PI;
+#	else
 	float phaseAerosolSun = Phase::CornetteShanks(uSun, data.aerosolPhaseG);
 	float phaseRayleighSun = Phase::Rayleigh(uSun);
 
-#	if LUTGEN != 1
 	float uMasser = dot(rayDir, data.masserDir);
 	float phaseAerosolMasser = Phase::CornetteShanks(uMasser, data.aerosolPhaseG);
 	float phaseRayleighMasser = Phase::Rayleigh(uMasser);
@@ -130,6 +136,7 @@ void rayMarch(
 		inscatter *= data.sunlightColor;
 #		if LUTGEN == 3
 		const float3 inscatterSun = inscatter;
+		inscatter = 0.0;
 #		endif
 		inscatter += (muSRayleigh * phaseRayleighMasser + muSAerosol * phaseAerosolMasser) * trMasser * data.masserColor;
 		inscatter += (muSRayleigh * phaseRayleighSecunda + muSAerosol * phaseAerosolSecunda) * trSecunda * data.secundaColor;
@@ -207,7 +214,7 @@ void rayMarch(
 	float3 fMs = 0;
 	for (uint i = 0; i < sqrtSamples; ++i)
 		for (uint j = 0; j < sqrtSamples; ++j) {
-			const float theta = (i + 0.5) * Math::PI * rcpSqrtSamples;
+			const float theta = (i + 0.5) * (2.0 * Math::PI) * rcpSqrtSamples;
 			const float phi = acos(1.0 - 2.0 * (j + 0.5) * rcpSqrtSamples);
 			const float3 rayDir = SphericalDir(theta, phi);
 

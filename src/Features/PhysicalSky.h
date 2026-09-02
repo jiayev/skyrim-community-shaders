@@ -224,7 +224,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texTrLut = nullptr;     // transmittance
 	eastl::unique_ptr<Texture2D> texMsLut = nullptr;     // multiscattering
 	eastl::unique_ptr<Texture2D> texSvLut = nullptr;     // sky view
-	eastl::unique_ptr<Texture3D> texApLut = nullptr;     // aerial perspective
+	eastl::unique_ptr<Texture3D> texApLut = nullptr;     // unshadowed lunar and multiple-scattering aerial perspective
 	eastl::unique_ptr<Texture3D> texApSunLut = nullptr;  // direct solar single-scattering aerial perspective
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 

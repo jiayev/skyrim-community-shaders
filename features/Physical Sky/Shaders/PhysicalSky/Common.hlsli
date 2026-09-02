@@ -435,9 +435,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 		const float3 apSun = TexApSunLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0).rgb;
 
-		// AP shadows only occlude the direct solar single-scattering integral.
-		// Moonlight and the multi-scattering field are absent from apSun and remain unshadowed.
-		apColor.rgb = max(0.0, apColor.rgb - apSun * saturate(shadow));
+		apColor.rgb += apSun * (1.0 - saturate(shadow));
 
 		if (data.tonemapper == 1)
 			apColor.rgb = Color::LinearToGameGamma(apColor.rgb);
