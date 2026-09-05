@@ -61,13 +61,11 @@ void rayMarch(
 #endif
 
 	float tAtmos = RayIntersectSphere(pos, rayDir, 0, data.rAtmosphere);
-#if LUTGEN == 3
-	float tMax = AP_MAX_DIST;
-#else
+#if LUTGEN != 3
 	float tMax = tGround > 0 ? tGround : tAtmos;
-#endif
 	float dt = tMax / float(nsteps);
 	float3 stride = dt * rayDir;
+#endif
 
 #if LUTGEN != 0
 	float uSun = dot(rayDir, sunDir);
@@ -94,7 +92,15 @@ void rayMarch(
 	float3 curr_pos = pos;
 	[loop] for (uint i = 0; i < nsteps; ++i)
 	{
+#if LUTGEN == 3
+		const float tNear = ApSliceDistance(i, depth);
+		const float tFar = ApSliceDistance(i + 1, depth);
+		const float dt = tFar - tNear;
+		// Integrate each nonuniform interval at its midpoint; store at its far boundary.
+		curr_pos = pos + (0.5 * (tNear + tFar)) * rayDir;
+#else
 		curr_pos += stride;
+#endif
 
 		float rouRayleigh, rouAerosol, rouOzone;
 		SampleAtmosphere(
