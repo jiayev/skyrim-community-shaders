@@ -398,40 +398,15 @@ float CloudLightExitDistance(float3 pos, float3 dir, float topAltitude, Volumetr
 	return max(outer.y, 0.0);
 }
 
-float2 RayIntersectAABB(float3 rayOrigin, float3 rayDir, float3 boxMin, float3 boxMax)
-{
-	float3 raySign = float3(rayDir.x < 0 ? -1 : 1, rayDir.y < 0 ? -1 : 1, rayDir.z < 0 ? -1 : 1);
-	float3 safeRayDir = raySign * max(abs(rayDir), 1e-6);
-	float3 tMin = (boxMin - rayOrigin) / safeRayDir;
-	float3 tMax = (boxMax - rayOrigin) / safeRayDir;
-	float3 t1 = min(tMin, tMax);
-	float3 t2 = max(tMin, tMax);
-	float tNear = max(max(t1.x, t1.y), t1.z);
-	float tFar = min(min(t2.x, t2.y), t2.z);
-	return float2(tNear, tFar);
-}
-
 // Locate a light-column position inside the camera-centred shadow volume box.
 // Positions outside the box are marched along the light direction to their entry
 // point; the accumulated prefix sum there covers the remaining in-box column.
 float3 GetShadowVolumeSampleUvw(float3 pos, float3 rayDir, VolumetricCloudData info)
 {
-	const float shadow_thickness = max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0);
 	float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * info.shadowVolumeRange, info.shadowVolumeBottom);
 	float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * info.shadowVolumeRange, info.shadowVolumeTop);
 
-	float3 samplePos = pos;
-	if (any(pos < boundsMin) || any(pos > boundsMax)) {
-		float2 hitDists = RayIntersectAABB(pos, rayDir, boundsMin, boundsMax);
-		if (hitDists.x > hitDists.y)
-			return -1;
-		samplePos += (hitDists.x + 128) * rayDir;
-	}
-
-	float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, info.shadowVolumeBottom);
-	uvw /= float3(info.shadowVolumeRange.xx, shadow_thickness);
-	uvw.xy += 0.5;
-	return uvw;
+	return CloudShadowVolume::GetSampleUvw(pos, rayDir, boundsMin, boundsMax);
 }
 
 // Hash-white spatial noise with a stratified temporal sequence. IGN was briefly
@@ -760,10 +735,7 @@ void sampleCloudSelfShadow(
 		// The volume stores density * path length in game units.
 		const float3 tail_pos = pos + sun_dir * cum_dist;
 		const float3 tail_uvw = GetShadowVolumeSampleUvw(tail_pos, sun_dir, info);
-		[branch] if (all(tail_uvw >= 0))
-		{
-			light_extinction_od += TexShadowVolume.SampleLevel(TransmittanceSampler, tail_uvw, 0) * GAME_UNIT_TO_M;
-		}
+		light_extinction_od += CloudShadowVolume::SampleDensity(TexShadowVolume, tail_uvw) * GAME_UNIT_TO_M;
 	}
 }
 
@@ -1688,7 +1660,7 @@ groupshared float g_density[NTHREADS];
 
 // Accumulate the low-cloud extinction column along the light direction into the
 // camera-centred shadow volume. Each thread group walks one light ray through the
-// volume with a parallel prefix sum, blending the result into the previous frame.
+// volume with a parallel prefix sum.
 [numthreads(NTHREADS, 1, 1)] void renderShadowVolume(const uint gtid : SV_GroupThreadID, const uint2 gid : SV_GroupID) {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const CloudLayer cloud = GetCloudLayer(info);
@@ -1730,10 +1702,7 @@ groupshared float g_density[NTHREADS];
 	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
 	const uint3 thread_px_coord = thread_uv * dims;
 
-	float past_density = RWShadowVolume[thread_px_coord];
-	if (ISNAN(past_density))
-		past_density = 0;
-
+	g_density[gtid] = 0.0;
 	if (is_valid) {
 		const float3 pos = float3(FrameBuffer::CameraPosAdjust.xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * thread_uv.z);
 
@@ -1750,19 +1719,23 @@ groupshared float g_density[NTHREADS];
 	// parallel summation
 	[unroll] for (uint offset = 1; offset < NTHREADS; offset <<= 1)
 	{
+		float accumulated_density = g_density[gtid];
 		if (is_valid && gtid >= offset) {
 			if (all(floor(raw_thread_uv - ray_uv_increment * offset) == floor(raw_thread_uv)))  // no wraparound happened
 			{
-				float current_density = g_density[gtid];
-				float sample_density = g_density[gtid - offset];
-				g_density[gtid] = current_density + sample_density;
+				accumulated_density += g_density[gtid - offset];
 			}
 		}
+		// All lanes must finish reading the previous scan step before any writes.
+		GroupMemoryBarrierWithGroupSync();
+		g_density[gtid] = accumulated_density;
 		GroupMemoryBarrierWithGroupSync();
 	}
 
 	// save
 	if (is_valid) {
-		RWShadowVolume[thread_px_coord] = lerp(past_density, g_density[gtid], 0.1f);
+		// Every voxel is rebuilt deterministically. The camera-centred grid moves,
+		// so blending the same index from the previous frame would trail shadows.
+		RWShadowVolume[thread_px_coord] = g_density[gtid];
 	}
 }
