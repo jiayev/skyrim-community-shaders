@@ -61,6 +61,24 @@ Texture3D<float4> TexApSunLut : register(t113);
 	static const float3 CLOUD_RANGE = float3(4000.f, 4000.f, 500.f) / GAME_UNIT_TO_M;
 	static const float3 CLOUD_RANGE_M = float3(4.f, 4.f, .5f) * 1e3;
 
+	// Concentrate AP slices near the camera, where scattering changes fastest.
+	float ApSliceDistance(float slice, float sliceCount)
+	{
+		const float t = slice / (sliceCount - 1.0);
+		return AP_MAX_DIST * t * t;
+	}
+
+	float ApDepthUv(float dist, uint sliceCount)
+	{
+		const float clampedDist = clamp(dist, 0.0, AP_MAX_DIST);
+		const float slice = min(floor(sqrt(clampedDist / AP_MAX_DIST) * (sliceCount - 1.0)), sliceCount - 2.0);
+		const float nearDist = ApSliceDistance(slice, sliceCount);
+		const float farDist = ApSliceDistance(slice + 1.0, sliceCount);
+		// Interpolate in physical distance, not sqrt(distance), including the zero-distance slice.
+		const float weight = saturate((clampedDist - nearDist) / (farDist - nearDist));
+		return (slice + weight + 0.5) / sliceCount;
+	}
+
 #ifndef ISNAN
 #	define ISNAN(x) (!(x < 0.f || x > 0.f || x == 0.f))
 #endif
@@ -431,7 +449,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 		uint3 apDims;
 		TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
-		const float depth_slice = lerp(.5 / apDims.z, 1 - .5 / apDims.z, saturate(dist / AP_MAX_DIST));
+		const float depth_slice = ApDepthUv(dist, apDims.z);
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 		const float3 apSun = TexApSunLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0).rgb;
 

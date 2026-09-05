@@ -262,7 +262,7 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	TexAerialPerspective.GetDimensions(apDims.x, apDims.y, apDims.z);
 	if (any(apDims == 0u))
 		return float4(0.0, 0.0, 0.0, 1.0);
-	const float depthSlice = lerp(0.5 / apDims.z, 1.0 - 0.5 / apDims.z, saturate(distance / AP_MAX_DIST));
+	const float depthSlice = ApDepthUv(distance, apDims.z);
 	const float3 apUv = float3(SkyViewLutUv(viewDir), depthSlice);
 	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, apUv, 0);
 	const float3 apSun = TexAerialPerspectiveSun.SampleLevel(SkyViewSampler, apUv, 0).rgb;
