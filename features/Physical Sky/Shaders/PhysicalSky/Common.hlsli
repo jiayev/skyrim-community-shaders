@@ -7,6 +7,7 @@
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "PhysicalSky/ShadowVolume.hlsli"
 
 #if defined(CLOUD_SHADOWS)
 #	include "CloudShadows/CloudShadows.hlsli"
@@ -572,25 +573,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * data.shadowVolumeRange, data.volCloudLowBottom);
 		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * data.shadowVolumeRange, data.volCloudLowBottom + data.volCloudLowThickness);
 
-		float3 samplePos = posRelative;
-		if (any(posRelative < boundsMin) || any(posRelative > boundsMax)) {
-			float3 sunSign = float3(sunDir.x < 0 ? -1 : 1, sunDir.y < 0 ? -1 : 1, sunDir.z < 0 ? -1 : 1);
-			float3 safeSunDir = sunSign * max(abs(sunDir), 1e-6);
-			float3 tMin = (boundsMin - posRelative) / safeSunDir;
-			float3 tMax = (boundsMax - posRelative) / safeSunDir;
-			float3 t1 = min(tMin, tMax);
-			float3 t2 = max(tMin, tMax);
-			float tNear = max(max(t1.x, t1.y), t1.z);
-			float tFar = min(min(t2.x, t2.y), t2.z);
-			if (tNear > tFar || tFar < 0)
-				return -1;
-			samplePos += max(tFar - 128, max(tNear, 0)) * sunDir;
-		}
-
-		float3 uvw = samplePos - float3(FrameBuffer::CameraPosAdjust.xy, data.volCloudLowBottom);
-		uvw /= float3(data.shadowVolumeRange.xx, data.volCloudLowThickness);
-		uvw.xy += 0.5;
-		return uvw;
+		return CloudShadowVolume::GetSampleUvw(posRelative, sunDir, boundsMin, boundsMax);
 	}
 
 	float3 GetDirlightTransmittance(float3 worldPosAbs, SamplerState samp)
@@ -608,10 +591,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		// The shadow volume has finite support. A ray outside it has no known cloud
 		// occluder; treating the missing path as an average-density cloud shell
 		// creates false full extinction for long, low-angle light paths.
-		float cloudDensity = 0;
-		if (all(uvw > 0) && all(uvw < 1)) {
-			cloudDensity = TexShadowVolume.SampleLevel(samp, uvw, 0);
-		}
+		const float cloudDensity = CloudShadowVolume::SampleDensity(TexShadowVolume, uvw);
 
 		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
 	}
