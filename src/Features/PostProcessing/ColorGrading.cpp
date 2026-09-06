@@ -315,7 +315,11 @@ void ColorGrading::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("convert_linear_to_log_before_hdr_color_grading"), "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
 	if (settings.useLog) {
-		ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &settings.invertLog);
+		bool invertLog = settings.invertLog || settings.enableTonemap;
+		ImGui::BeginDisabled(settings.enableTonemap);
+		if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog))
+			settings.invertLog = invertLog;
+		ImGui::EndDisabled();
 		ImGui::Combo(T(TKEY("log_type"), "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
@@ -656,16 +660,20 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	constexpr int kHDRColorSpace = 2;                      // BT2020
 	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
+	// OpenDRT consumes XYZ D65 and outputs linear Rec.709 (SDR) or Rec.2020 (HDR).
+	// Bypassing tonemapping keeps both intermediate spaces in the working gamut.
 	const int tonemapInputSpace =
-		settings.useOpenDrt ? 4 :
-							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
-									  tonemappers[tonemapperType].nativeInputSpaceHDR :
-									  tonemappers[tonemapperType].nativeInputSpace);
+		!settings.enableTonemap ? settings.processColorSpace :
+		settings.useOpenDrt     ? 4 :
+								  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+										  tonemappers[tonemapperType].nativeInputSpaceHDR :
+										  tonemappers[tonemapperType].nativeInputSpace);
 	const int tonemapOutputSpace =
-		settings.useOpenDrt ? 2 :
-							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
-									  tonemappers[tonemapperType].nativeOutputSpaceHDR :
-									  tonemappers[tonemapperType].nativeOutputSpace);
+		!settings.enableTonemap ? settings.processColorSpace :
+		settings.useOpenDrt     ? outputColorSpace :
+								  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+										  tonemappers[tonemapperType].nativeOutputSpaceHDR :
+										  tonemappers[tonemapperType].nativeOutputSpace);
 
 	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 		out = {
@@ -675,9 +683,9 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 		};
 	};
 
-	storeMatrix(getRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]), inputToWorkingMatrix);
-	storeMatrix(getRGBMatrix(spaces[settings.processColorSpace], spaces[tonemapInputSpace]), workingToTonemapMatrix);
-	storeMatrix(getRGBMatrix(spaces[tonemapOutputSpace], spaces[outputColorSpace]), tonemapToOutputMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]), inputToWorkingMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[settings.processColorSpace], spaces[tonemapInputSpace]), workingToTonemapMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[tonemapOutputSpace], spaces[outputColorSpace]), tonemapToOutputMatrix);
 }
 
 void ColorGrading::SetupResources()
@@ -920,8 +928,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 				float3{ mat(2, 0), mat(2, 1), mat(2, 2) }
 			};
 		};
-		storeMatrix(getRGBMatrix(spaces[wsIdx], "XYZ"), workingToXYZMatrix);
-		storeMatrix(getRGBMatrix("XYZ", spaces[wsIdx]), xyzToWorkingMatrix);
+		storeMatrix(getWhiteAdaptedRGBMatrix(spaces[wsIdx], "XYZ"), workingToXYZMatrix);
+		storeMatrix(getWhiteAdaptedRGBMatrix("XYZ", spaces[wsIdx]), xyzToWorkingMatrix);
 	}
 
 	ColorCB colorCBData = {
@@ -943,18 +951,15 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.tonemapToOutput = { float4{ tonemapToOutputMatrix[0].x, tonemapToOutputMatrix[0].y, tonemapToOutputMatrix[0].z, 0.f }, float4{ tonemapToOutputMatrix[1].x, tonemapToOutputMatrix[1].y, tonemapToOutputMatrix[1].z, 0.f }, float4{ tonemapToOutputMatrix[2].x, tonemapToOutputMatrix[2].y, tonemapToOutputMatrix[2].z, 0.f } },
 		.workingToXYZ = { float4{ workingToXYZMatrix[0].x, workingToXYZMatrix[0].y, workingToXYZMatrix[0].z, 0.f }, float4{ workingToXYZMatrix[1].x, workingToXYZMatrix[1].y, workingToXYZMatrix[1].z, 0.f }, float4{ workingToXYZMatrix[2].x, workingToXYZMatrix[2].y, workingToXYZMatrix[2].z, 0.f } },
 		.xyzToWorking = { float4{ xyzToWorkingMatrix[0].x, xyzToWorkingMatrix[0].y, xyzToWorkingMatrix[0].z, 0.f }, float4{ xyzToWorkingMatrix[1].x, xyzToWorkingMatrix[1].y, xyzToWorkingMatrix[1].z, 0.f }, float4{ xyzToWorkingMatrix[2].x, xyzToWorkingMatrix[2].y, xyzToWorkingMatrix[2].z, 0.f } },
-		.workingWhitePoint = [&]() {
-			auto& spaces = getAvailableColorSpaces();
-			int wsIdx = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
-			auto wp = getWhitePoint(spaces[wsIdx]);
-			return float4{ wp.x, wp.y, 0.f, 0.f }; }(),
+		.workingWhitePoint = float4{ 0.3127f, 0.3290f, 0.f, 0.f },  // XYZ matrices are adapted to D65.
 		.shadowsOffset = settings.shadowsOffset,
 		.midtonesOffset = settings.midtonesOffset,
 		.highlightsOffset = settings.highlightsOffset,
 		.cinematic = float4{ std::lerp(1.f, imageSpaceData.baseData.cinematic.saturation, settings.gameCinematicBlend.x), std::lerp(1.f, imageSpaceData.baseData.cinematic.brightness, settings.gameCinematicBlend.y), std::lerp(1.f, imageSpaceData.baseData.cinematic.contrast, settings.gameCinematicBlend.z), imageSpaceData.baseAmount },
 		.fade = float4{ imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeR], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeG], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeB], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeAmount] * settings.gameFadeBlend },
 		.tint = float4{ imageSpaceData.baseData.tint.color.red, imageSpaceData.baseData.tint.color.green, imageSpaceData.baseData.tint.color.blue, imageSpaceData.baseData.tint.amount * settings.gameTintBlend },
-		.logType = settings.useLog ? ((1u << settings.logType) | (settings.invertLog ? (1u << 3u) : 0u)) : 0u,
+		// Tonemappers and their gamut matrices require scene-linear input.
+		.logType = settings.useLog ? ((1u << settings.logType) | ((settings.invertLog || settings.enableTonemap) ? (1u << 3u) : 0u)) : 0u,
 		.skipLDR = settings.skipLDR,
 		.skipLUT = settings.skipLUT,
 		.enableTonemap = settings.enableTonemap,

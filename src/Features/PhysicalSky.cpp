@@ -1021,7 +1021,7 @@ void PhysicalSky::Reset()
 	auto sRGBToWorkingGamut = [wideGamut](float3 v) -> float3 {
 		if (!wideGamut)
 			return v;
-		static auto mat = getRGBMatrix("sRGB", "ACEScg");
+		static auto mat = getWhiteAdaptedRGBMatrix("sRGB", "ACEScg");
 		return TransformColor(v, mat);
 	};
 
