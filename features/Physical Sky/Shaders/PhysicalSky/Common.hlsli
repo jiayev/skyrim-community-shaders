@@ -125,7 +125,8 @@ Texture3D<float4> TexApSunLut : register(t113);
 		return -sqrt(1 - sinZenith * sinZenith);
 	}
 
-	float2 TrLutUv(float r, float cosSunZenith)
+	// Multiple scattering retains its original affine (height, solar zenith) map.
+	float2 MsLutUv(float r, float cosSunZenith)
 	{
 		const SharedData::PhysSkyData data = SharedData::physSkyData;
 		// float cosHorZenith = HorizonZenithCos(r);
@@ -135,6 +136,53 @@ Texture3D<float4> TexApSunLut : register(t113);
 			saturate((r - data.rPlanet) / (data.rAtmosphere - data.rPlanet)));
 		uv = clamp(uv, float2(0.5 / 256.0, 0.5 / 64.0), float2(1.0 - 0.5 / 256.0, 1.0 - 0.5 / 64.0));
 		return uv;
+	}
+
+	// Bruneton's transmittance parameterization resolves low altitudes and long
+	// grazing light paths without increasing the 256x64 texture dimensions.
+	// https://ebruneton.github.io/precomputed_atmospheric_scattering/atmosphere/functions.glsl.html
+	float2 TrLutUv(float r, float cosSunZenith)
+	{
+		const SharedData::PhysSkyData data = SharedData::physSkyData;
+		r = clamp(r, data.rPlanet, data.rAtmosphere);
+		const float atmosphereHorizon = sqrt((data.rAtmosphere - data.rPlanet) * (data.rAtmosphere + data.rPlanet));
+		const float localHorizon = sqrt(max(0.0, (r - data.rPlanet) * (r + data.rPlanet)));
+		const float mu = max(cosSunZenith, -localHorizon / r);
+		const float rMu = r * mu;
+		const float distance = max(0.0, sqrt(max(0.0, rMu * rMu + (data.rAtmosphere - r) * (data.rAtmosphere + r))) - rMu);
+		const float nearest = data.rAtmosphere - r;
+		const float farthest = localHorizon + atmosphereHorizon;
+		const float2 unitUv = saturate(float2((distance - nearest) / max(farthest - nearest, 1.0), localHorizon / atmosphereHorizon));
+		const float2 texel = 1.0 / float2(256, 64);
+		return 0.5 * texel + unitUv * (1.0 - texel);
+	}
+
+	void TrLutParameters(float2 uv, out float r, out float mu)
+	{
+		const SharedData::PhysSkyData data = SharedData::physSkyData;
+		const float2 texel = 1.0 / float2(256, 64);
+		const float2 unitUv = saturate((uv - 0.5 * texel) / (1.0 - texel));
+		const float horizonSquared = (data.rAtmosphere - data.rPlanet) * (data.rAtmosphere + data.rPlanet);
+		const float localHorizon = sqrt(horizonSquared) * unitUv.y;
+		r = sqrt(data.rPlanet * data.rPlanet + localHorizon * localHorizon);
+		r = clamp(r, data.rPlanet, data.rAtmosphere);
+		const float distance = lerp(data.rAtmosphere - r, localHorizon + sqrt(horizonSquared), unitUv.x);
+		mu = distance > 0.0 ? (horizonSquared - localHorizon * localHorizon - distance * distance) / (2.0 * r * distance) : 1.0;
+		mu = clamp(mu, -localHorizon / r, 1.0);
+	}
+
+	float3 SampleAtmosphereLightTr(Texture2D<float4> transmittance, SamplerState samp, float3 planetPos, float3 lightDir)
+	{
+		const float radius = length(planetPos);
+		const float sinHorizon = saturate(SharedData::physSkyData.rPlanet / max(radius, 1.0));
+		const float cosHorizon = -sqrt(max(0.0, 1.0 - sinHorizon * sinHorizon));
+		const float mu = dot(planetPos, lightDir) / max(radius, 1.0);
+		// Approximate the visible fraction of a solar disc (0.266 degree radius).
+		// Keep planet visibility separate from the smooth, unoccluded LUT.
+		const float discWidth = max(0.00465 * sinHorizon, 1e-6);
+		const float visibility = smoothstep(-discWidth, discWidth, mu - cosHorizon);
+		[branch] if (visibility <= 0.0 || radius < SharedData::physSkyData.rPlanet) return 0.0;
+		return transmittance.SampleLevel(samp, TrLutUv(radius, mu), 0).rgb * visibility;
 	}
 
 	float2 TrLutUvPlanet(float3 pos, float3 sunDir)
@@ -336,10 +384,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		if (data.trMix < 1e-8)
 			return 1;
 
-		const float2 lutUv = TrLutUv(data.zCameraPlanet, sunDir.z);
-		float3 tr = TexTrLut.SampleLevel(sampSv, lutUv, 0).rgb;
-		if (sunDir.z <= -0.414)
-			tr = 0;
+		float3 tr = SampleAtmosphereLightTr(TexTrLut, sampSv, float3(0, 0, data.zCameraPlanet), sunDir);
 		tr = lerp(1, tr, data.trMix);
 
 		return tr;
@@ -359,8 +404,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 		// TODO: planet shadowing
 
-		float2 lutUv = TrLutUvPlanet(cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir);
-		float3 trAtmos = TexTrLut.SampleLevel(sampTr, lutUv, 0).rgb;
+		float3 trAtmos = SampleAtmosphereLightTr(TexTrLut, sampTr, cloudPosWS + float3(0, 0, data.zCameraPlanet), dirLightDir);
 		trAtmos = lerp(1, trAtmos, data.trMix);
 		dirLightColor *= trAtmos;
 
@@ -561,6 +605,8 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 	float3 GetCloudShadowLightDirection()
 	{
+		if (SharedData::physSkyData.volCloudUseSun != 0)
+			return SharedData::physSkyData.sunDir;
 		const float3 direction = SharedData::DirLightDirection.xyz;
 		const float lengthSq = dot(direction, direction);
 		return lengthSq > 1e-6 ? direction * rsqrt(lengthSq) : SharedData::physSkyData.sunDir;
@@ -591,7 +637,11 @@ Texture3D<float4> TexApSunLut : register(t113);
 		// The shadow volume has finite support. A ray outside it has no known cloud
 		// occluder; treating the missing path as an average-density cloud shell
 		// creates false full extinction for long, low-angle light paths.
+#	ifdef PS_LINEAR_SHADOW_SAMPLER
+		const float cloudDensity = CloudShadowVolume::SampleDensity(TexShadowVolume, samp, uvw);
+#	else
 		const float cloudDensity = CloudShadowVolume::SampleDensity(TexShadowVolume, uvw);
+#	endif
 
 		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
 	}

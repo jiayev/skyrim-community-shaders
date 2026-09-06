@@ -7,6 +7,9 @@ namespace CloudShadowVolume
 	// receivers must sample the ray's entry into the box, never its exit.
 	float3 GetSampleUvw(float3 pos, float3 lightDir, float3 boundsMin, float3 boundsMax)
 	{
+		if (all(pos > boundsMin) && all(pos < boundsMax))
+			return (pos - boundsMin) / (boundsMax - boundsMin);
+
 		float tNear = 0.0;
 		float tFar = 3.402823466e+38;
 		[unroll] for (uint axis = 0; axis < 3; ++axis)
@@ -24,6 +27,15 @@ namespace CloudShadowVolume
 		if (tFar <= tNear)
 			return -1.0;
 		return saturate((pos + tNear * lightDir - boundsMin) / (boundsMax - boundsMin));
+	}
+
+	// Only use this overload with a known linear-clamp sampler. Compute passes
+	// own their samplers, unlike the material/depth/shadow-mask pixel shaders.
+	float SampleDensity(Texture3D<float> volume, SamplerState linearClamp, float3 uvw)
+	{
+		if (any(uvw < 0.0) || any(uvw > 1.0))
+			return 0.0;
+		return volume.SampleLevel(linearClamp, uvw, 0);
 	}
 
 	float SampleDensity(Texture3D<float> volume, float3 uvw)

@@ -1068,7 +1068,7 @@ void PhysicalSky::Reset()
 		.lowestCloudAltitude = traceBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.highestCloudAltitude = traceTopKm / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * Util::Units::GAME_UNIT_TO_M,
-		._padVolCloudScatter = 0.f,
+		.volCloudUseSun = 0u,
 		.volCloudAbsorption = float3(0.f),
 		.volCloudLowBottom = lowCloudBaseKm / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudLowThickness = lowCloudThicknessKm / Util::Units::GAME_UNIT_TO_KM,
@@ -1094,6 +1094,19 @@ void PhysicalSky::Reset()
 		posCam = cam->cameraRoot->world.translate;
 		cbData.zCameraPlanet = posCam.z - cbData.zBottom + cbData.rPlanet;
 	}
+	// Keep the astronomical sun as the cloud source until it is below the
+	// horizon everywhere in the traced cloud region, not just at the camera.
+	// The remaining night path retains the scene's lunar directional light.
+	const float planetRadius = std::max(cbData.rPlanet, 1.0f);
+	const float cloudRadius = std::max(planetRadius + cbData.highestCloudAltitude, planetRadius);
+	const float horizonDip = std::acos(std::clamp(planetRadius / cloudRadius, 0.0f, 1.0f));
+	// March range now starts at each cloud shell, so it cannot bound the visible
+	// region's local-up tilt. Use the two planet-tangent horizon angles instead.
+	const float observerRadius = std::max(cbData.zCameraPlanet, planetRadius);
+	const float observerHorizonDip = std::acos(std::clamp(planetRadius / observerRadius, 0.0f, 1.0f));
+	const float localUpRange = observerHorizonDip + horizonDip;
+	const float solarLimit = std::min(horizonDip + localUpRange + 0.00465f, RE::NI_PI * 0.5f);
+	cbData.volCloudUseSun = sunDir.z > -std::sin(solarLimit) ? 1u : 0u;
 }
 
 void PhysicalSky::EarlyPrepass()
