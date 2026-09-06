@@ -5,7 +5,7 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
-RWTexture2DArray<unorm float> RWTexOutput : register(u0);
+RWTexture2DArray<unorm float4> RWTexOutput : register(u0);
 
 cbuffer CB : register(b1)
 {
@@ -105,9 +105,8 @@ float Worley(float2 uv, uint2 freq, float2x2 shape)
 	float max_h = saturate(base_min_h + layer_thickness);
 	float min_h = saturate(min(base_min_h, max_h - 0.08));
 
-	RWTexOutput[uint3(tid, 0)] = min_h;
-	RWTexOutput[uint3(tid, 1)] = max_h;
-	RWTexOutput[uint3(tid, 2)] = coverage;
-	RWTexOutput[uint3(tid, 3)] = noise;
-	RWTexOutput[uint3(tid, 4)] = wispiness;
+	// Same UNORM8 values and UV grid as the five scalar layers. Packing the
+	// attributes lets each view/light density sample fetch them in two reads.
+	RWTexOutput[uint3(tid, 0)] = float4(min_h, max_h, coverage, noise);
+	RWTexOutput[uint3(tid, 1)] = float4(wispiness, 0, 0, 0);
 }

@@ -368,6 +368,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			}
 		}
 	}
+	// Ground shadow directions may be elevation-clamped or switched to a moon
+	// while elevated clouds are still sunlit. Trace their actual solar column.
+	if (cbData.volCloudUseSun != 0)
+		cloudLightDir = cbData.sunDir;
 	const uint32_t textureW = (uint32_t)cbData.texDim.x;
 	const uint32_t textureH = (uint32_t)cbData.texDim.y;
 	const uint32_t renderW = (uint32_t)cbData.frameDim.x;
@@ -426,7 +430,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.frameDim = { cbData.texDim.x, cbData.texDim.y },
 		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
 		.dirlightDir = cloudLightDir,
-		._pad1 = 0,
+		.ndfPacked = settings.cloudMap.type == NdfType::Texture ? 0u : 1u,
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
 		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
@@ -600,7 +604,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			dispatch_size[0] = kShadowVolW;
 			dispatch_size[1] = kShadowVolD;
 		} else {
-			dispatch_size[0] = dispatch_size[1] = kShadowVolW;
+			// renderShadowVolume packs four full-depth columns into each group.
+			constexpr uint32_t columnsPerGroup = kShadowVolW / kShadowVolD;
+			static_assert(kShadowVolW % kShadowVolD == 0);
+			dispatch_size[0] = kShadowVolW / columnsPerGroup;
+			dispatch_size[1] = kShadowVolH;
 		}
 
 		globals::profiler->BeginPass("PhysicalSky::VolumetricShadowVolume");

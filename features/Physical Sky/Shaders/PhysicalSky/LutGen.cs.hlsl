@@ -17,6 +17,20 @@ RWTexture3D<float4> RWTexSunOutput : register(u1);
 RWTexture2D<float4> RWTexOutput : register(u0);
 #endif
 
+float TransmittanceRayDistance(float u, float distance, float closest)
+{
+	// Concentrate quadrature around the ray's lowest altitude, where density
+	// varies fastest. A grazing ray needs samples on both sides of that point.
+	if (closest <= 0.0)
+		return distance * u * u;
+	if (u < 0.5) {
+		const float v = 1.0 - 2.0 * u;
+		return closest * (1.0 - v * v);
+	}
+	const float v = 2.0 * u - 1.0;
+	return closest + (distance - closest) * v * v;
+}
+
 void rayMarch(
 	float3 pos, float3 rayDir,
 #if LUTGEN == 0
@@ -53,16 +67,20 @@ void rayMarch(
 #endif
 
 	float tGround = RayIntersectSphere(pos, rayDir, 0, data.rPlanet);
-#if LUTGEN == 0
-	if (tGround > 0.0) {
-		tr = 0;
-		return;
-	}
-#endif
 
 	float tAtmos = RayIntersectSphere(pos, rayDir, 0, data.rAtmosphere);
-#if LUTGEN != 3
+#if LUTGEN == 0
+	// All transmittance texels describe unoccluded paths to the outer boundary.
+	// Planet visibility is evaluated analytically when sampling the LUT.
+	const float originRadius = length(pos);
+	const float projectedOrigin = dot(pos, rayDir);
+	float tMax = max(0.0, -projectedOrigin + sqrt(max(0.0, projectedOrigin * projectedOrigin +
+															   (data.rAtmosphere - originRadius) * (data.rAtmosphere + originRadius))));
+	const float tClosest = clamp(-projectedOrigin, 0.0, tMax);
+#elif LUTGEN != 3
 	float tMax = tGround > 0 ? tGround : tAtmos;
+#endif
+#if LUTGEN != 3 && LUTGEN != 0
 	float dt = tMax / float(nsteps);
 	float3 stride = dt * rayDir;
 #endif
@@ -98,6 +116,11 @@ void rayMarch(
 		const float dt = tFar - tNear;
 		// Integrate each nonuniform interval at its midpoint; store at its far boundary.
 		curr_pos = pos + (0.5 * (tNear + tFar)) * rayDir;
+#elif LUTGEN == 0
+		const float tNear = TransmittanceRayDistance(float(i) / nsteps, tMax, tClosest);
+		const float tFar = TransmittanceRayDistance(float(i + 1) / nsteps, tMax, tClosest);
+		const float dt = tFar - tNear;
+		curr_pos = pos + (0.5 * (tNear + tFar)) * rayDir;
 #else
 		curr_pos += stride;
 #endif
@@ -123,14 +146,16 @@ void rayMarch(
 		lumFactor += tr * fScatter;
 #	endif
 
-		float2 lutUvSun = TrLutUvPlanet(curr_pos, sunDir);
-		float3 trSun = TexTrLut.SampleLevel(SampTr, lutUvSun, 0).rgb;
+		float3 trSun = SampleAtmosphereLightTr(TexTrLut, SampTr, curr_pos, sunDir);
 #	if LUTGEN != 1
-		float2 lutUvMasser = TrLutUvPlanet(curr_pos, data.masserDir);
-		float3 trMasser = TexTrLut.SampleLevel(SampTr, lutUvMasser, 0).rgb;
+		float3 trMasser = SampleAtmosphereLightTr(TexTrLut, SampTr, curr_pos, data.masserDir);
 
-		float2 lutUvSecunda = TrLutUvPlanet(curr_pos, data.secundaDir);
-		float3 trSecunda = TexTrLut.SampleLevel(SampTr, lutUvSecunda, 0).rgb;
+		float3 trSecunda = SampleAtmosphereLightTr(TexTrLut, SampTr, curr_pos, data.secundaDir);
+		const float rSample = length(curr_pos);
+		const float3 upSample = curr_pos / max(rSample, 1.0);
+		const float2 lutUvSun = MsLutUv(rSample, dot(upSample, sunDir));
+		const float2 lutUvMasser = MsLutUv(rSample, dot(upSample, data.masserDir));
+		const float2 lutUvSecunda = MsLutUv(rSample, dot(upSample, data.secundaDir));
 
 		float3 psiMs = TexMsLut.SampleLevel(SampTr, lutUvSun, 0).rgb * data.sunlightColor;
 		psiMs += TexMsLut.SampleLevel(SampTr, lutUvMasser, 0).rgb * data.masserColor;
@@ -169,8 +194,7 @@ void rayMarch(
 		float3 hit_pos = pos + tGround * rayDir;
 		if (dot(pos, sunDir) > 0) {
 			hit_pos = normalize(hit_pos) * data.rPlanet;
-			float2 lutUv = TrLutUvPlanet(hit_pos, sunDir);
-			lum += tr * data.groundAlbedo * TexTrLut.SampleLevel(SampTr, lutUv, 0).rgb;
+			lum += tr * data.groundAlbedo * SampleAtmosphereLightTr(TexTrLut, SampTr, hit_pos, sunDir);
 		}
 	}
 #endif
@@ -192,7 +216,12 @@ void rayMarch(
 #endif
 	float2 uv = (tid.xy + 0.5) / outDims.xy;
 
-#if LUTGEN < 2
+#if LUTGEN == 0
+	float altitude, zenithCos;
+	TrLutParameters(uv, altitude, zenithCos);
+	float3 pos = float3(0, 0, altitude);
+	float3 sunDir = float3(0, sqrt(max(0.0, 1.0 - zenithCos * zenithCos)), zenithCos);
+#elif LUTGEN == 1
 	float altitude = lerp(data.rPlanet, data.rAtmosphere, uv.y);
 	float3 pos = float3(0, 0, altitude);
 

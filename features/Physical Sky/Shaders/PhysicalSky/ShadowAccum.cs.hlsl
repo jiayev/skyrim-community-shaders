@@ -7,6 +7,7 @@
 #define PS_PREPASS_RSRCS
 #define PS_NO_RSRCS
 #define PS_ENABLE_DIRLIGHT_TRANSMITTANCE
+#define PS_LINEAR_SHADOW_SAMPLER
 #define CLOUD_SHADOW_REGISTER t4
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Random.hlsli"
@@ -44,35 +45,53 @@ float3 GetVolumetricCloudTransmittance(float3 posWorldRel)
 	return GetDirlightTransmittance(posWorldRel + FrameBuffer::CameraPosAdjust.xyz, SampTr);
 }
 
-float SampleShadow(float3 posWorldRel)
+struct ShadowRayData
+{
+	float2 endSplitDistances;
+	float2 startSplitDistances;
+	float2 viewOriginZW;
+	float2 viewDirectionZW;
+	float3 lightOrigin[2];
+	float3 lightDirection[2];
+};
+
+ShadowRayData BuildShadowRay(float3 dir)
+{
+	const DirectionalShadowLightData light = DirectionalShadowLights[0];
+	ShadowRayData ray;
+	ray.endSplitDistances = light.EndSplitDistances;
+	ray.startSplitDistances = light.StartSplitDistances;
+	ray.viewOriginZW = mul(FrameBuffer::CameraViewProj, float4(0, 0, 0, 1)).zw;
+	ray.viewDirectionZW = mul(FrameBuffer::CameraViewProj, float4(dir, 0)).zw;
+	[unroll] for (uint cascade = 0; cascade < 2; ++cascade)
+	{
+		ray.lightOrigin[cascade] = mul(light.ShadowProj[cascade], float4(FrameBuffer::CameraPosAdjust.xyz, 1)).xyz;
+		ray.lightDirection[cascade] = mul(light.ShadowProj[cascade], float4(dir, 0)).xyz;
+	}
+	return ray;
+}
+
+float SampleShadow(float3 posWorldRel, float distance, ShadowRayData ray)
 {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
 
 	float shadow = 1.0;
 
-	// cloud shadows
-	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
-	[branch] if (all(shadow < 1e-8)) return 0;
-
-	// physical sky volumetric cloud shadows
-	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
-	[branch] if (all(shadow < 1e-8)) return 0;
-
-	// dir shadow map
+	// Resolve scene and terrain occlusion first: a blocked sample needs neither
+	// spherical cloud projection nor a 3D cloud-shadow lookup.
 	{
-		DirectionalShadowLightData directionalShadowLightData = DirectionalShadowLights[0];
-		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(posWorldRel));
+		const float2 viewZW = ray.viewOriginZW + distance * ray.viewDirectionZW;
+		float shadowMapDepth = SharedData::GetScreenDepth(viewZW.x / viewZW.y);
 
-		[branch] if (directionalShadowLightData.EndSplitDistances.y > 0.0 &&
-					 shadowMapDepth < directionalShadowLightData.EndSplitDistances.y)
+		[branch] if (ray.endSplitDistances.y > 0.0 &&
+					 shadowMapDepth < ray.endSplitDistances.y)
 		{
 			float cascadeSelect = saturate(
-				(shadowMapDepth - directionalShadowLightData.StartSplitDistances.y) /
-				(directionalShadowLightData.EndSplitDistances.x - directionalShadowLightData.StartSplitDistances.y));
+				(shadowMapDepth - ray.startSplitDistances.y) /
+				(ray.endSplitDistances.x - ray.startSplitDistances.y));
 			uint cascadeIndex = uint(cascadeSelect);
 
-			float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust.xyz;
-			float3 positionLS = mul(directionalShadowLightData.ShadowProj[cascadeIndex], float4(posWorldAbs, 1)).xyz;
+			float3 positionLS = ray.lightOrigin[cascadeIndex] + distance * ray.lightDirection[cascadeIndex];
 			float4 depths = TexDirectShadows.GatherRed(SampTr, float3(saturate(positionLS.xy), cascadeIndex), 0);
 			shadow *= dot(float4(depths > positionLS.z), 0.25);
 		}
@@ -82,6 +101,12 @@ float SampleShadow(float3 posWorldRel)
 	// terrain shadow
 	float3 posWorldAbs = posWorldRel + FrameBuffer::CameraPosAdjust.xyz;
 	shadow *= TerrainShadows::GetTerrainShadow(posWorldAbs, SampTr);
+	[branch] if (all(shadow < 1e-8)) return 0;
+
+	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
+	[branch] if (all(shadow < 1e-8)) return 0;
+
+	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	return shadow;
@@ -108,6 +133,7 @@ float SampleShadow(float3 posWorldRel)
 	float dist = length(posWorld.xyz);
 	float distClamped = min(AP_MAX_DIST, dist);
 	float3 dir = posWorld.xyz / dist;
+	const ShadowRayData shadowRay = BuildShadowRay(dir);
 
 	const float extGr = dot(data.rayleighScatter + data.aerosolAbsorption + data.aerosolScatter, 1 / 3.f);
 	const float rcpExtGr = rcp(extGr);
@@ -117,7 +143,7 @@ float SampleShadow(float3 posWorldRel)
 	for (uint i = 1; i <= nStep; ++i) {
 		float tSample = -rcpExtGr * log(1 - (i - 1 + rnd.x) * rcpNStep * estContrib);  // map to truncated exponential distribution
 
-		float shadowSample = SampleShadow(dir * tSample);
+		float shadowSample = SampleShadow(dir * tSample, tSample, shadowRay);
 		shadow += (1 - shadowSample) * rcpNStep;
 	}
 

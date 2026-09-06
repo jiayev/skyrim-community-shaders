@@ -75,8 +75,8 @@ void NdfManager::SetupResources()
 			.Width = kNdfDim,
 			.Height = kNdfDim,
 			.MipLevels = 1,
-			.ArraySize = 5,
-			.Format = DXGI_FORMAT_R8_UNORM,
+			.ArraySize = 2,
+			.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
 			.SampleDesc = { .Count = 1, .Quality = 0 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET,
@@ -86,15 +86,15 @@ void NdfManager::SetupResources()
 		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {
 			.Format = tex_desc.Format,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY,
-			.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = 5 }
+			.Texture2DArray = { .MostDetailedMip = 0, .MipLevels = 1, .FirstArraySlice = 0, .ArraySize = 2 }
 		};
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {
 			.Format = tex_desc.Format,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY,
-			.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = 5 }
+			.Texture2DArray = { .MipSlice = 0, .FirstArraySlice = 0, .ArraySize = 2 }
 		};
 
-		texNdfOutput = eastl::make_unique<Texture2D>(tex_desc);
+		texNdfOutput = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::PackedCloudNdf");
 		texNdfOutput->CreateSRV(srv_desc);
 		texNdfOutput->CreateUAV(uav_desc);
 	}

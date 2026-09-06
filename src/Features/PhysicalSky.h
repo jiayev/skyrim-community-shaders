@@ -139,7 +139,7 @@ struct PhysicalSky final : public Feature
 
 		// VOLUMETRIC CLOUDS
 		bool enableVolumetricClouds = false;
-		float rayMarchRange = 32.f;     // km
+		float rayMarchRange = 32.f;     // km inside each cloud layer, excluding empty approach/gaps
 		float shadowVolumeRange = 8.f;  // km
 		uint32_t cloudMaxStep = 97;
 		float temporalAccumulationFactor = 0.95f;
@@ -208,7 +208,7 @@ struct PhysicalSky final : public Feature
 		float lowestCloudAltitude;  //
 		float highestCloudAltitude;
 		float3 volCloudScatter;  //
-		float _padVolCloudScatter;
+		uint volCloudUseSun;
 		float3 volCloudAbsorption;  //
 		float volCloudLowBottom;
 		float volCloudLowThickness;
@@ -269,7 +269,7 @@ struct PhysicalSky final : public Feature
 		float2 frameDim;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
-		float _pad1;
+		uint ndfPacked;
 		float bottomZ;
 		float planetRadius;
 		float2 activeFrameDim;

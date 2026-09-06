@@ -406,7 +406,7 @@ namespace SharedData
 		float lowestCloudAltitude;  //
 		float highestCloudAltitude;
 		float3 volCloudScatter;  //
-		float _padVolCloudScatter;
+		uint volCloudUseSun;
 		float3 volCloudAbsorption;  //
 		float volCloudLowBottom;
 		float volCloudLowThickness;
