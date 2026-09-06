@@ -231,7 +231,8 @@ float3 display_gamut_whitepoint(float3 rgb, float tsn, float creative_white_limi
 		rgb = mul(matrix_cat_d65_to_d50, rgb);
 
 	rgb = rgb * cwp_f + cwp_neutral * (1.0f - cwp_f);
-	rgb = mul(matrix_xyz_to_rec709, rgb);
+	// HDR processing stays in P3-D65 until the final P3 -> Rec.2020 conversion.
+	rgb = display_gamut == 0 ? mul(matrix_xyz_to_rec709, rgb) : mul(matrix_xyz_to_p3d65, rgb);
 
 	float cwp_norm = 1.0f;
 	if (display_gamut == 0) {

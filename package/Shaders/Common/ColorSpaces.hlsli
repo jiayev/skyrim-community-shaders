@@ -264,12 +264,14 @@ float3x3 ChromaticAdaptation(float2 src_xy, float2 dst_xy)
 float3 sRGBToAP1(float3 sRGB)
 {
 	float3 XYZ = mul(sRGB_2_XYZ_MAT, sRGB);
+	XYZ = mul(D65_2_D60_CAT, XYZ);
 	return mul(XYZ_2_AP1_MAT, XYZ);
 }
 
 float3 AP1TosRGB(float3 AP1)
 {
 	float3 XYZ = mul(AP1_2_XYZ_MAT, AP1);
+	XYZ = mul(D60_2_D65_CAT, XYZ);
 	return mul(XYZ_2_sRGB_MAT, XYZ);
 }
 
