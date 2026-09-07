@@ -83,3 +83,28 @@ inline DirectX::SimpleMath::Matrix getRGBMatrix(std::string_view in_space, std::
 		return c;
 	}
 }
+
+// Relative-colorimetric conversion for grading. XYZ denotes XYZ D65 here;
+// getRGBMatrix remains available for unadapted RGB/XYZ basis changes.
+inline DirectX::SimpleMath::Matrix getWhiteAdaptedRGBMatrix(std::string_view in_space, std::string_view out_space)
+{
+	using DirectX::SimpleMath::Matrix;
+	const auto src = getWhitePoint(in_space);
+	const auto dst = getWhitePoint(out_space);
+	if (src.x == dst.x && src.y == dst.y)
+		return getRGBMatrix(in_space, out_space);
+
+	// Bradford, matching the shared shader sRGB/AP1 conversions.
+	const Matrix cone{ DirectX::XMFLOAT3X3{
+		0.8951f, 0.2664f, -0.1614f,
+		-0.7502f, 1.7135f, 0.0367f,
+		0.0389f, -0.0685f, 1.0296f } };
+	auto response = [&](DirectX::XMFLOAT2 xy, int row) {
+		return cone(row, 0) * xy.x / xy.y + cone(row, 1) + cone(row, 2) * (1.0f - xy.x - xy.y) / xy.y;
+	};
+	Matrix scale = Matrix::Identity;
+	for (int i = 0; i < 3; ++i)
+		scale(i, i) = response(dst, i) / response(src, i);
+	const Matrix adaptation = cone.Invert() * scale * cone;
+	return getRGBMatrix("XYZ", out_space) * adaptation * getRGBMatrix(in_space, "XYZ");
+}
