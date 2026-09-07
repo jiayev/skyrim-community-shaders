@@ -826,8 +826,8 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 
 // ---------------------------------------------------------------------------
 // Cloud phase function models.
-//   0 = dual-lobe Henyey-Greenstein (original behaviour, forward + backward g)
-//   1 = approximate Mie: HG + Draine numerical fit for a 5 um droplet
+//   0 = equal-weight, normalized dual-lobe Henyey-Greenstein
+//   1 = approximate Mie: HG + Draine fit for a 10 um diameter water droplet
 //       (Jendersie & d'Eon 2023, constants as used by three-geospatial).
 //       This model is physically parameterised, so the forward/backward
 //       eccentricity sliders do not apply to it.
@@ -838,8 +838,8 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 #define PHYSKY_CLOUD_PHASE_APPROX_MIE 1u
 
 // Per-step in-scattering integral.
-//   0 = legacy scalar (1 - exp(-sigma_s * ds)) driven by luminance extinction
-//   1 = Frostbite 5.6.3 energy-conserving per-channel albedo * (1 - T)
+//   0 = legacy scalar integral with an artistic, step-dependent OD gate
+//   1 = analytical per-channel albedo * (1 - T), without the legacy gate
 #define PHYSKY_CLOUD_SCATTER_INTEGRAL_LEGACY 0u
 #define PHYSKY_CLOUD_SCATTER_INTEGRAL_ENERGY_CONSERVING 1u
 
@@ -859,7 +859,9 @@ float CloudPhaseSingle(float cos_theta, float fwd_g, float bwd_g, float anisotro
 		Phase::HG(cos_theta, kMieHgG * anisotropy),
 		Phase::Draine(cos_theta, kMieDraineG * anisotropy, kMieDraineAlpha),
 		kMieDraineWeight);
-	const float dual_lobe = Phase::HG(cos_theta, fwd_g * anisotropy) + Phase::HG(cos_theta, -bwd_g * anisotropy);
+	// Preserve the original relative lobe strengths while making the integral
+	// over solid angle one. Each HG lobe already includes 1 / (4 pi).
+	const float dual_lobe = Phase::HGDualLobe(cos_theta, fwd_g * anisotropy, -bwd_g * anisotropy, 0.5);
 	return model == PHYSKY_CLOUD_PHASE_APPROX_MIE ? mie : dual_lobe;
 }
 
@@ -1023,35 +1025,26 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 				{
 					directional_lum += exp(-info.scatterTint * light_extinction_od * ms_attenuation[octave]) * cloud_phase[octave] * ms_contribution[octave];
 				}
-				const float extinction_scalar = dot(extinction, float3(0.2126, 0.7152, 0.0722));
-				const float scatter_od = extinction_scalar * 0.999 * step_small;
-				float scatter_gate = 1.0 - exp(-scatter_od / max(info.scatterSourceODScale, 0.001));
-				scatter_gate = CloudPositivePow(saturate(scatter_gate), max(info.scatterSourceCurvePow, 0.01));
 				const float3 sample_transmittance = exp(-step_small * extinction);
 
-				// The remapped gate is an edge-validity control, not the Beer-Lambert
-				// integral itself. It multiplies whichever scattered fraction is chosen
-				// below, so both direct and ambient radiance stay bounded by this
-				// sample's optical depth.
 				float3 scatter_source;
 				[branch] if (info.scatterIntegration == PHYSKY_CLOUD_SCATTER_INTEGRAL_ENERGY_CONSERVING)
 				{
-					// Frostbite 5.6.3 analytical integration of in-scattered light over
-					// the step: integral(S * sigma_s * exp(-sigma_t * t), t = 0..ds)
-					//   = S * (sigma_s / sigma_t) * (1 - T).
-					// sigma_s / sigma_t is the single-scattering albedo; the density
-					// factor cancels, so it is a per-channel constant of the medium.
-					// Unlike the legacy form this is evaluated per channel, which keeps
-					// the scattered colour consistent with the coloured transmittance
-					// instead of driving it from a luminance-collapsed extinction.
+					// Exact step integral for a constant incident source and medium:
+					// S * (sigma_s / sigma_t) * (1 - T). The current low-cloud medium
+					// is achromatic and nonabsorbing, so its albedo is one.
+					// A second gate based on step OD would drive this source to zero
+					// as the same cloud is subdivided into progressively smaller steps.
 					const float3 albedo = cloud.scatter / max(cloud.scatter + cloud.absorption, 1e-7);
-					scatter_source = albedo * (1.0 - sample_transmittance) * scatter_gate;
+					scatter_source = albedo * (1.0 - sample_transmittance);
 				}
 				else
 				{
-					// Legacy: scalar (1 - exp(-sigma_s * ds)) with a hard-coded 0.999
-					// albedo. Agrees with the form above to first order and in the
-					// optically thick limit, and differs mainly by being achromatic.
+					// Retain the old step-dependent edge shaping only for Legacy.
+					const float extinction_scalar = dot(extinction, float3(0.2126, 0.7152, 0.0722));
+					const float scatter_od = extinction_scalar * 0.999 * step_small;
+					float scatter_gate = 1.0 - exp(-scatter_od / max(info.scatterSourceODScale, 0.001));
+					scatter_gate = CloudPositivePow(saturate(scatter_gate), max(info.scatterSourceCurvePow, 0.01));
 					scatter_source = (1.0 - exp(-scatter_od)) * scatter_gate;
 				}
 				float3 in_scatter = directional_lum * external_sun * dirlightColor * scatter_source;
@@ -1108,9 +1101,9 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 ray_dir, float3 eye_pos, f
 		float3 highTransmittance = 1.0;
 		const float hiCos = dot(ray.ray_dir, cloud_light_dir);
 		const float3 hiPhase = float3(
-			Phase::HG(hiCos, info.highForwardEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity),
-			Phase::HG(hiCos, info.highForwardEccentricity * info.highMSEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity * info.highMSEccentricity),
-			Phase::HG(hiCos, info.highForwardEccentricity * info.highMSEccentricity * info.highMSEccentricity) + Phase::HG(hiCos, -info.highBackwardEccentricity * info.highMSEccentricity * info.highMSEccentricity));
+			Phase::HGDualLobe(hiCos, info.highForwardEccentricity, -info.highBackwardEccentricity, 0.5),
+			Phase::HGDualLobe(hiCos, info.highForwardEccentricity * info.highMSEccentricity, -info.highBackwardEccentricity * info.highMSEccentricity, 0.5),
+			Phase::HGDualLobe(hiCos, info.highForwardEccentricity * info.highMSEccentricity * info.highMSEccentricity, -info.highBackwardEccentricity * info.highMSEccentricity * info.highMSEccentricity, 0.5));
 		const float3 hiMsAttenuation = float3(1.0, info.highMSAttenuation, info.highMSAttenuation * info.highMSAttenuation);
 		const float3 hiMsContribution = float3(1.0, info.highMSContribution, info.highMSContribution * info.highMSContribution);
 		const float3 hiSkyBlend = SampleCloudAmbientSkyView(ray.ray_dir);

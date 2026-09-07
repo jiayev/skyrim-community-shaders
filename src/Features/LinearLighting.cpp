@@ -11,7 +11,9 @@
 #include "Globals.h"
 #include "Hooks.h"
 #include "InverseSquareLighting/Common.h"
+#include "PhysicalSky.h"
 #include "ShaderCache.h"
+#include "SkySync.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
 
@@ -319,8 +321,15 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	if (!data.enableLinearLighting)
 		return data;
 
+	static bool physicalSkyEnabled = false;
+	if (globals::features::physicalSky.loaded && globals::features::skySync.loaded) {
+		auto& physicalSky = globals::features::physicalSky;
+		auto& skySync = globals::features::skySync;
+		physicalSkyEnabled = physicalSky.settings.enabled && physicalSky.settings.overrideDirLight && skySync.loaded && skySync.settings.Enabled;
+	}
+
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
-	data.directionalLightMult = RE::NI_PI * settings.directionalLightMult;
+	data.directionalLightMult = (physicalSkyEnabled ? 1.0f : RE::NI_PI) * settings.directionalLightMult;
 	data.pointLightMult = RE::NI_PI * settings.pointLightMult;
 	data.ambientMult = settings.ambientMult;
 	data.glowmapMult = settings.glowmapMult;
