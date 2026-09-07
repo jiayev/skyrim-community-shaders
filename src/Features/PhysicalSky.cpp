@@ -659,13 +659,13 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("high_wisp_strength"), "High Wisp Strength"), &high.wispStrength, 0.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("high_ambient_top"), "High Ambient Top"), &high.ambientTopMultiplier, 0.f, 5.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_ambient_top_desc"), "High-cloud top environment-radiance multiplier. 1.0 is physically neutral."));
+			ImGui::Text("%s", T(TKEY("high_ambient_top_desc"), "High-cloud top environment-radiance multiplier. 1.0 leaves the approximate sky-probe radiance unscaled."));
 		ImGui::SliderFloat(T(TKEY("high_ambient_bottom"), "High Ambient Bottom"), &high.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_ambient_bottom_desc"), "High-cloud base environment-radiance multiplier. 1.0 is physically neutral."));
+			ImGui::Text("%s", T(TKEY("high_ambient_bottom_desc"), "High-cloud base environment-radiance multiplier. 1.0 leaves the approximate sky-probe radiance unscaled."));
 		ImGui::SliderFloat(T(TKEY("high_environment_fidelity"), "High Environment Fidelity"), &high.skyBlendStrength, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_environment_fidelity_desc"), "1.0 preserves physically integrated cloud radiance. Lower values increasingly replace the high-cloud top with an artistic view-direction environment blend."));
+			ImGui::Text("%s", T(TKEY("high_environment_fidelity_desc"), "1.0 preserves the integrated high-cloud radiance. Lower values increasingly replace the high-cloud top with an artistic view-direction environment blend."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
@@ -673,34 +673,38 @@ void PhysicalSky::SettingsVolumetricClouds()
 		{
 			static const char* phaseModelNames[] = { "Dual-Lobe HG", "Approximate Mie" };
 			int phaseModel = static_cast<int>(std::min(lighting.phaseModel, 1u));
-			if (ImGui::Combo(T(TKEY("cloud_phase_model"), "Phase Model"), &phaseModel, phaseModelNames, IM_ARRAYSIZE(phaseModelNames)))
+			if (ImGui::Combo(T(TKEY("cloud_phase_model"), "Phase Model"), &phaseModel, phaseModelNames, IM_ARRAYSIZE(phaseModelNames))) {
 				lighting.phaseModel = static_cast<uint32_t>(phaseModel);
+				volMainHistoryValid = false;
+			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("cloud_phase_model_desc"), "Dual-Lobe HG: the original two Henyey-Greenstein lobes driven by the eccentricity sliders below.\nApproximate Mie: an HG + Draine numerical fit of Mie scattering for a water droplet, which reproduces the forward peak, fogbow and glory. It is physically parameterised, so the forward and backward eccentricity sliders do not affect it."));
+				ImGui::Text("%s", T(TKEY("cloud_phase_model_desc"), "Low clouds only.\nDual-Lobe HG: an equal-weight, normalized blend of the forward and backward lobes controlled below.\nApproximate Mie: an HG + Draine fit for water droplets with a mean diameter of 10 micrometres (5 micrometre radius). It approximates the forward peak but does not reproduce fogbow or glory peaks. The eccentricity sliders do not affect it. High clouds retain their own normalized dual-lobe HG phase."));
 		}
 		{
 			static const char* scatterIntegrationNames[] = { "Legacy", "Energy Conserving" };
 			int scatterIntegration = static_cast<int>(std::min(lighting.scatterIntegration, 1u));
-			if (ImGui::Combo(T(TKEY("cloud_scatter_integration"), "Scatter Integration"), &scatterIntegration, scatterIntegrationNames, IM_ARRAYSIZE(scatterIntegrationNames)))
+			if (ImGui::Combo(T(TKEY("cloud_scatter_integration"), "Scatter Integration"), &scatterIntegration, scatterIntegrationNames, IM_ARRAYSIZE(scatterIntegrationNames))) {
 				lighting.scatterIntegration = static_cast<uint32_t>(scatterIntegration);
+				volMainHistoryValid = false;
+			}
 			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("cloud_scatter_integration_desc"), "Legacy: scalar 1 - exp(-sigma_s * ds) with a fixed 0.999 albedo, driven by luminance extinction.\nEnergy Conserving: the analytical per-channel form albedo * (1 - transmittance). Matches the coloured transmittance instead of a luminance-collapsed approximation; may need Scatter Source OD Scale retuning."));
+				ImGui::Text("%s", T(TKEY("cloud_scatter_integration_desc"), "Low clouds only.\nLegacy: retains the old scalar integral and artistic edge gate. Brightness depends on march step size.\nEnergy Conserving (default): uses albedo * (1 - transmittance) for direct and ambient light, with no extra edge gate. The current low-cloud medium is grey and nonabsorbing (albedo 1). Scatter Source OD Scale and Curve Pow apply only to Legacy. This fixes the step integral; multiple scattering and environment lighting remain approximations."));
 		}
 		ImGui::ColorEdit3(T(TKEY("scatter_tint"), "Scatter Tint"), &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		ImGui::SliderFloat(T(TKEY("forward_eccentricity"), "Forward Eccentricity"), &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("backward_eccentricity"), "Backward Eccentricity"), &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("ambient_top"), "Ambient Top"), &lighting.ambientTopMultiplier, 0.f, 5.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ambient_top_desc"), "Multiplier for sky radiance reaching the cloud top. 1.0 preserves the physically reconstructed environment radiance."));
+			ImGui::Text("%s", T(TKEY("ambient_top_desc"), "Multiplier for sky radiance reaching the cloud top. 1.0 leaves the approximate sky-probe radiance unscaled."));
 		ImGui::SliderFloat(T(TKEY("ambient_bottom"), "Ambient Bottom"), &lighting.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ambient_bottom_desc"), "Multiplier for sky and atmospheric radiance reaching the cloud base. 1.0 preserves the physically reconstructed environment radiance."));
+			ImGui::Text("%s", T(TKEY("ambient_bottom_desc"), "Multiplier for environment radiance reaching the cloud base. 1.0 leaves the approximate sky-probe radiance unscaled."));
 		ImGui::SliderFloat(T(TKEY("ms_attenuation"), "MS Attenuation"), &lighting.msAttenuation, 0.01f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("ms_contribution"), "MS Contribution"), &lighting.msContribution, 0.01f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("ms_eccentricity"), "MS Eccentricity"), &lighting.msEccentricity, 0.01f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("upward_ao"), "Upward AO"), &lighting.aoUpwardScale, 0.f, 4.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("upward_ao_desc"), "Scales the vertical optical depth used to attenuate upper-hemisphere environment light. 1.0 is the physical optical-depth estimate."));
+			ImGui::Text("%s", T(TKEY("upward_ao_desc"), "Scales the approximate vertical optical depth inferred from the light-direction cloud column. 1.0 leaves this estimate unscaled; it is not a separate vertical visibility trace."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("phi_fwd"), "PhiFwd"));
