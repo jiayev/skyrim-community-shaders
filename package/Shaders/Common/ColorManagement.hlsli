@@ -6,13 +6,6 @@
 namespace ColorManagement
 {
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
-	float DecodeSRGBChannel(float encodedSRGB)
-	{
-		float magnitude = abs(encodedSRGB);
-		float linearSRGB = magnitude <= 0.04045f ? magnitude / 12.92f : pow((magnitude + 0.055f) / 1.055f, 2.4f);
-		return linearSRGB * sign(encodedSRGB);
-	}
-
 	float3 DecodedColorTextureToWorking(float3 decodedTextureColor)
 	{
 		return Color::LinearSRGBToWorking(decodedTextureColor);
@@ -20,16 +13,21 @@ namespace ColorManagement
 
 	float3 SRGBToWorking(float3 encodedSRGB)
 	{
-		float3 linearSRGB = float3(
-			DecodeSRGBChannel(encodedSRGB.r),
-			DecodeSRGBChannel(encodedSRGB.g),
-			DecodeSRGBChannel(encodedSRGB.b));
-		return ENABLE_LL ? Color::LinearSRGBToWorking(linearSRGB) : encodedSRGB;
+#	if defined(ENABLE_LL)
+		float3 linearSRGB = TransferFunctions::SRGBToLinear(encodedSRGB);
+		return Color::LinearSRGBToWorking(linearSRGB);
+#	else
+		return encodedSRGB;
+#	endif
 	}
 
 	float SRGBToWorking(float encodedSRGB)
 	{
-		return ENABLE_LL ? DecodeSRGBChannel(encodedSRGB) : encodedSRGB;
+#	if defined(ENABLE_LL)
+		return TransferFunctions::SRGBToLinear(encodedSRGB);
+#	else
+		return encodedSRGB;
+#	endif
 	}
 
 	float3 ApplyENBDiffuseCurve(float3 color)
@@ -53,10 +51,6 @@ namespace ColorManagement
 	float3 AlbedoTextureToWorking(float3 decodedTextureColor)
 	{
 		decodedTextureColor = ApplyENBDiffuseCurve(decodedTextureColor);
-#	if defined(TRUE_PBR) && defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return Color::LinearToGamma22(decodedTextureColor);
-#	endif
 		return DecodedColorTextureToWorking(decodedTextureColor) * MaterialAlbedoScale();
 	}
 
@@ -64,10 +58,6 @@ namespace ColorManagement
 	{
 		albedo = ApplyENBDiffuseCurve(albedo);
 #	if defined(TRUE_PBR)
-#		if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return Color::LinearToGamma22(albedo);
-#		endif
 		return Color::LinearSRGBToWorking(albedo);
 #	else
 		return SRGBToWorking(albedo) * MaterialAlbedoScale();
@@ -76,10 +66,6 @@ namespace ColorManagement
 
 	float3 EmissiveTextureToWorking(float3 decodedTextureColor)
 	{
-#	if defined(TRUE_PBR) && defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return Color::LinearToGamma22(decodedTextureColor);
-#	endif
 		return DecodedColorTextureToWorking(decodedTextureColor) * SharedData::linearLightingSettings.glowmapMult;
 	}
 
@@ -92,100 +78,161 @@ namespace ColorManagement
 		return SRGBToWorking(encodedVertexColor);
 	}
 
-	float3 PBRMaterialToLinear(float3 materialColor)
+	float3 WorkingToDelivery(float3 workingColor)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return Color::Gamma22ToLinear(materialColor);
+#	if defined(ENABLE_ACESCG)
+		float3 lin = AP1TosRGB(workingColor);
+#	else
+		float3 lin = workingColor;
 #	endif
-		return materialColor;
+		[branch] if (SharedData::linearLightingSettings.deliveryEncoding == 1) return TransferFunctions::LinearToGamma22(lin);
+		return lin;
 	}
 
-	float3 LinearToPBRMaterial(float3 linearColor)
+	float StorageToWorking(float storedValue)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return Color::LinearToGamma22(linearColor);
+#	if defined(ENABLE_LL)
+		return storedValue;
+#	else
+		return Color::GameGammaToLinear(storedValue);
 #	endif
-		return linearColor;
 	}
 
-	float3 ScalePBRMaterialByLinear(float3 materialColor, float3 linearScale)
+	float3 StorageToWorking(float3 storedValue)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return abs(materialColor) * Color::LinearToGamma22(linearScale);
+#	if defined(ENABLE_LL)
+		return storedValue;
+#	else
+		return Color::GameGammaToLinear(storedValue);
 #	endif
-		return materialColor * linearScale;
 	}
 
-	float3 ModulatePBRMaterialsByLinear(float3 lhsMaterialColor, float3 rhsMaterialColor, float3 linearScale)
+	float WorkingToStorage(float workingValue)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return abs(lhsMaterialColor * rhsMaterialColor) * Color::LinearToGamma22(linearScale);
+#	if defined(ENABLE_LL)
+		return workingValue;
+#	else
+		return Color::LinearToGameGamma(workingValue);
 #	endif
-		return lhsMaterialColor * rhsMaterialColor * linearScale;
+	}
+
+	float3 WorkingToStorage(float3 workingValue)
+	{
+#	if defined(ENABLE_LL)
+		return workingValue;
+#	else
+		return Color::LinearToGameGamma(workingValue);
+#	endif
 	}
 
 	namespace WorkingColor
 	{
-		float ToLinear(float workingColor)
-		{
-			return ENABLE_LL ? workingColor : Color::GameGammaToLinear(workingColor);
-		}
-
-		float3 ToLinear(float3 workingColor)
-		{
-			return ENABLE_LL ? workingColor : Color::GameGammaToLinear(workingColor);
-		}
-
-		float FromLinear(float linearValue)
-		{
-			return ENABLE_LL ? linearValue : Color::LinearToGameGamma(linearValue);
-		}
-
-		float3 FromLinear(float3 linearValue)
-		{
-			return ENABLE_LL ? linearValue : Color::LinearToGameGamma(linearValue);
-		}
-
 		float ScaleByLinear(float workingColor, float linearScale)
 		{
-			return ENABLE_LL ? workingColor * linearScale : abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	if defined(ENABLE_LL)
+			return workingColor * linearScale;
+#	else
+			return abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	endif
 		}
 
 		float3 ScaleByLinear(float3 workingColor, float linearScale)
 		{
-			return ENABLE_LL ? workingColor * linearScale : abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	if defined(ENABLE_LL)
+			return workingColor * linearScale;
+#	else
+			return abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	endif
 		}
 
 		float3 ScaleByLinear(float3 workingColor, float3 linearScale)
 		{
-			return ENABLE_LL ? workingColor * linearScale : abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	if defined(ENABLE_LL)
+			return workingColor * linearScale;
+#	else
+			return abs(workingColor) * Color::LinearToGameGamma(linearScale);
+#	endif
 		}
 
 		float3 ScaleAndAddLinear(float3 workingColor, float3 linearScale, float3 linearOffset)
 		{
-			return FromLinear(ToLinear(workingColor) * linearScale + linearOffset);
+			return WorkingToStorage(StorageToWorking(workingColor) * linearScale + linearOffset);
 		}
 
 		float3 Modulate(float3 workingColor, float workingMultiplier)
 		{
-			return ENABLE_LL ? workingColor * workingMultiplier : abs(workingColor * workingMultiplier);
+#	if defined(ENABLE_LL)
+			return workingColor * workingMultiplier;
+#	else
+			return abs(workingColor * workingMultiplier);
+#	endif
 		}
 
 		float3 LerpInLinear(float3 lhsWorkingColor, float3 rhsWorkingColor, float weight)
 		{
-			return FromLinear(lerp(ToLinear(lhsWorkingColor), ToLinear(rhsWorkingColor), weight));
+			return WorkingToStorage(lerp(StorageToWorking(lhsWorkingColor), StorageToWorking(rhsWorkingColor), weight));
 		}
 	}
 
 	float BRDFNormalization()
 	{
-		return ENABLE_LL ? Math::INV_PI : 1.0f;
+#	if defined(ENABLE_LL)
+		return Math::INV_PI;
+#	else
+		return 1.0f;
+#	endif
 	}
 #endif
 }
+
+#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
+namespace Color
+{
+	float3 Light(float3 color)
+	{
+#	if defined(TRUE_PBR)
+		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
+#	else
+		return color;
+#	endif
+	}
+
+	float3 DirectionalLight(float3 color)
+	{
+		return Light(color) * SharedData::linearLightingSettings.directionalLightMult;
+	}
+
+	float3 PointLight(float3 color)
+	{
+		return Light(color) * SharedData::linearLightingSettings.pointLightMult;
+	}
+
+	float3 Ambient(float3 color)
+	{
+		return color * SharedData::linearLightingSettings.ambientMult;
+	}
+
+	float3 EffectMult(float3 color)
+	{
+#	if defined(MEMBRANE)
+		color *= SharedData::linearLightingSettings.membraneEffectMult;
+#	elif defined(BLOOD)
+		color *= SharedData::linearLightingSettings.bloodEffectMult;
+#	elif defined(PROJECTED_UV)
+		color *= SharedData::linearLightingSettings.projectedEffectMult;
+#	elif defined(DEFERRED)
+		color *= SharedData::linearLightingSettings.deferredEffectMult;
+#	else
+		color *= SharedData::linearLightingSettings.otherEffectMult;
+#	endif
+		return color;
+	}
+
+	float EffectLightingMult()
+	{
+		return SharedData::linearLightingSettings.effectLightingMult;
+	}
+}
+#endif
 
 #endif

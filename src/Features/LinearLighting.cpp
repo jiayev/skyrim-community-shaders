@@ -10,6 +10,7 @@
 #include "Hooks.h"
 #include "InverseSquareLighting/Common.h"
 #include "ShaderCache.h"
+#include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
@@ -35,7 +36,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 namespace
 {
-	constexpr float GAME_GAMMA = 1.6f;
 	constexpr std::uint8_t RGB_MASK = 0b0111;
 	constexpr std::array CONSTANT_GROUP_NAMES{ std::string_view{ "PerTechnique" }, std::string_view{ "PerMaterial" }, std::string_view{ "PerGeometry" } };
 
@@ -51,23 +51,6 @@ namespace
 		SRGBComposition,
 		Emissive,
 		PointLights
-	};
-
-	struct GammaToLinearLUT
-	{
-		static constexpr std::size_t Size = 256;
-
-		std::array<float, Size> srgb{};
-		std::array<float, Size> gameGamma{};
-
-		GammaToLinearLUT()
-		{
-			for (std::size_t i = 0; i < Size; ++i) {
-				const float encoded = static_cast<float>(i) / static_cast<float>(Size - 1);
-				srgb[i] = encoded <= 0.04045f ? encoded / 12.92f : std::pow((encoded + 0.055f) / 1.055f, 2.4f);
-				gameGamma[i] = std::pow(encoded, GAME_GAMMA);
-			}
-		}
 	};
 
 	struct ColorField
@@ -141,43 +124,14 @@ namespace
 	thread_local std::vector<MappedColorBuffer> mappedColorBuffers;
 	thread_local std::vector<std::vector<LightColorBackup>> passLightColorBackups;
 
-	float DecodeLUT(float value, const std::array<float, GammaToLinearLUT::Size>& lut)
-	{
-		if (!std::isfinite(value) || value == 0.0f)
-			return value;
-
-		const float sign = std::signbit(value) ? -1.0f : 1.0f;
-		const float magnitude = std::abs(value);
-		if (magnitude > 1.0f)
-			return sign * magnitude;
-
-		const float position = magnitude * static_cast<float>(GammaToLinearLUT::Size - 1);
-		const auto lower = static_cast<std::size_t>(position);
-		const auto upper = std::min(lower + 1, GammaToLinearLUT::Size - 1);
-		return sign * std::lerp(lut[lower], lut[upper], position - static_cast<float>(lower));
-	}
-
 	void DecodeToLinearSRGB(float* color, ColorManagement::Encoding encoding)
 	{
-		static const GammaToLinearLUT lut;
 		switch (encoding) {
 		case ColorManagement::Encoding::SRGB:
-			for (std::size_t i = 0; i < 3; ++i) {
-				const float value = color[i];
-				if (std::abs(value) <= 1.0f) {
-					color[i] = DecodeLUT(value, lut.srgb);
-				} else {
-					const float magnitude = std::abs(value);
-					const float linear = magnitude <= 0.04045f ? magnitude / 12.92f : std::pow((magnitude + 0.055f) / 1.055f, 2.4f);
-					color[i] = std::copysign(linear, value);
-				}
-			}
+			Util::ColorSpace::SRGBToLinear(color);
 			break;
 		case ColorManagement::Encoding::GameGamma:
-			for (std::size_t i = 0; i < 3; ++i) {
-				const float value = color[i];
-				color[i] = std::abs(value) <= 1.0f ? DecodeLUT(value, lut.gameGamma) : std::copysign(std::pow(std::abs(value), GAME_GAMMA), value);
-			}
+			Util::ColorSpace::GameGammaToLinear(color);
 			break;
 		case ColorManagement::Encoding::Linear:
 			break;
@@ -186,15 +140,7 @@ namespace
 
 	void EncodeLinearSRGB(float* color)
 	{
-		for (std::size_t i = 0; i < 3; ++i) {
-			const float value = color[i];
-			if (!std::isfinite(value) || value == 0.0f)
-				continue;
-
-			const float magnitude = std::abs(value);
-			const float encoded = magnitude <= 0.0031308f ? magnitude * 12.92f : 1.055f * std::pow(magnitude, 1.0f / 2.4f) - 0.055f;
-			color[i] = std::copysign(encoded, value);
-		}
+		Util::ColorSpace::LinearToSRGB(color);
 	}
 
 	void ConvertToSRGBComposition(float* color, ColorManagement::Encoding sourceEncoding)
@@ -218,17 +164,6 @@ namespace
 		default:
 			return descriptor;
 		}
-	}
-
-	void ConvertSRGBToAP1(float* color)
-	{
-		const float x = 0.4123907993f * color[0] + 0.3575843394f * color[1] + 0.1804807884f * color[2];
-		const float y = 0.2126390059f * color[0] + 0.7151686788f * color[1] + 0.0721923154f * color[2];
-		const float z = 0.0193308187f * color[0] + 0.1191947798f * color[1] + 0.9505321522f * color[2];
-
-		color[0] = 1.6410233797f * x - 0.3248032942f * y - 0.2364246952f * z;
-		color[1] = -0.6636628587f * x + 1.6153315917f * y + 0.0167563477f * z;
-		color[2] = 0.0117218943f * x - 0.0082844420f * y + 0.9883948585f * z;
 	}
 }
 
@@ -305,6 +240,18 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
 	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
+
+	if (baseVersion.empty())
+		baseVersion = version;
+	version = settings.enableACEScg ? baseVersion + "+acescg" : baseVersion;
+}
+
+std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetShaderDefineOptions()
+{
+	std::vector<std::pair<std::string_view, std::string_view>> options;
+	if (settings.enableACEScg)
+		options.emplace_back("ENABLE_ACESCG", "");
+	return options;
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -341,6 +288,9 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = 1.0f;
 	data.deferredEffectMult = 1.0f;
 	data.otherEffectMult = 1.0f;
+
+	data.deliveryEncoding = (globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing) ? 0u : 1u;
+
 	if (!loaded) {
 		return data;
 	}
@@ -421,7 +371,7 @@ void LinearLighting::ConvertColorToWorkingSpace(float* color, ColorManagement::C
 	DecodeToLinearSRGB(color, sourceSpace.encoding);
 
 	if (sourceSpace.gamut == ColorManagement::Gamut::SRGB && settings.enableACEScg)
-		ConvertSRGBToAP1(color);
+		Util::ColorSpace::SRGBGamutToAP1(color);
 }
 
 RE::NiColor LinearLighting::ConvertColorToWorkingSpace(RE::NiColor color, ColorManagement::ColorSpace sourceSpace) const

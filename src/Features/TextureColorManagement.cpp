@@ -8,29 +8,15 @@
 #include "LinearLighting.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "Utils/ColorSpace.h"
 
 namespace TextureColorManagement
 {
 	namespace
 	{
-		constexpr float GAME_GAMMA = 1.6f;
 		constexpr std::size_t MAX_CACHE_ENTRIES = 512;
 		constexpr std::uint32_t DERIVED_CACHE_VERSION = 1;
 		constexpr GUID SOURCE_PATH_GUID{ 0xb8a9476a, 0xcab7, 0x4362, { 0x92, 0x4a, 0xda, 0x46, 0xa1, 0x37, 0xf0, 0x7c } };
-
-		struct GammaToLinearLUT
-		{
-			static constexpr std::size_t Size = 256;
-			std::array<float, Size> values{};
-
-			GammaToLinearLUT()
-			{
-				for (std::size_t i = 0; i < Size; ++i) {
-					const float encoded = static_cast<float>(i) / static_cast<float>(Size - 1);
-					values[i] = std::pow(encoded, GAME_GAMMA);
-				}
-			}
-		};
 
 		enum class ViewEncoding : std::uint8_t
 		{
@@ -83,15 +69,7 @@ namespace TextureColorManagement
 
 		float DecodeGameGamma(float value)
 		{
-			static const GammaToLinearLUT lut;
-			value = std::max(value, 0.0f);
-			if (value > 1.0f)
-				return std::pow(value, GAME_GAMMA);
-
-			const float position = value * static_cast<float>(GammaToLinearLUT::Size - 1);
-			const auto lower = static_cast<std::size_t>(position);
-			const auto upper = std::min(lower + 1, GammaToLinearLUT::Size - 1);
-			return std::lerp(lut.values[lower], lut.values[upper], position - static_cast<float>(lower));
+			return Util::ColorSpace::GameGammaToLinear(std::max(value, 0.0f));
 		}
 
 		std::string NormalizePath(std::string_view path)

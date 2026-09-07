@@ -30,6 +30,11 @@ struct LinearLighting : Feature
 
 	virtual bool IsCore() const override { return true; };
 
+	virtual inline std::string_view GetShaderDefineName() override { return "ENABLE_LL"; }
+	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
+	/** @brief ACEScg as optional define contribution; also participates in disk cache invalidation via version string. */
+	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
+
 	struct Settings
 	{
 		uint enableLinearLighting = false;
@@ -58,6 +63,7 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting;
 		uint enableACEScg;
+		uint deliveryEncoding;  // 0 = Linear (CS PostProcessing), 1 = Gamma22 (ENB / vanilla ISHDR)
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
@@ -69,7 +75,7 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad0[3];
+		float pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
@@ -114,6 +120,8 @@ private:
 		RE::NiColor value;
 		ColorManagement::ColorSpace space;
 	};
+
+	std::string baseVersion;
 
 	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
 	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;
