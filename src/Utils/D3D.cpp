@@ -1,5 +1,6 @@
 #include "D3D.h"
 
+#include "Feature.h"
 #include "Features/LinearLighting.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
@@ -135,15 +136,14 @@ namespace Util
 				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
 		}
 
-		// Color management defines are compile-time in the shaders, so shaders compiled
-		// outside of the BSShader cache path need them injected here as well.
-		auto& linearLighting = globals::features::linearLighting;
-		if (linearLighting.loaded) {
-			macros.push_back({ linearLighting.GetShaderDefineName().data(), nullptr });
-			for (auto& option : linearLighting.GetShaderDefineOptions())
-				macros.push_back({ option.first.data(), option.second.empty() ? nullptr : option.second.data() });
+		{
+			auto& ll = globals::features::linearLighting;
+			if (ll.loaded && ll.settings.enableLinearLighting) {
+				macros.push_back({ "ENABLE_LL", nullptr });
+				if (ll.settings.enableACEScg)
+					macros.push_back({ "ENABLE_ACESCG", nullptr });
+			}
 		}
-
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PSHADER", "" });
 		else if (!_stricmp(ProgramType, "vs_5_0"))

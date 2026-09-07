@@ -249,7 +249,17 @@ void LinearLighting::LoadSettings(json& o_json)
 
 	if (baseVersion.empty())
 		baseVersion = version;
-	version = settings.enableACEScg ? baseVersion + "+acescg" : baseVersion;
+	version = baseVersion + (settings.enableLinearLighting ? "+ll" : "") + (settings.enableACEScg ? "+acescg" : "");
+}
+
+void LinearLighting::SaveSettings(json& o_json)
+{
+	o_json = settings;
+
+	const uint fingerprint = (settings.enableLinearLighting ? 1u : 0u) | (settings.enableACEScg ? 2u : 0u);
+	if (lastShaderCacheFingerprint != 0xFFFFFFFF && lastShaderCacheFingerprint != fingerprint && globals::shaderCache)
+		globals::shaderCache->Clear();
+	lastShaderCacheFingerprint = fingerprint;
 }
 
 std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetShaderDefineOptions()
@@ -258,11 +268,6 @@ std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetSh
 	if (settings.enableACEScg)
 		options.emplace_back("ENABLE_ACESCG", "");
 	return options;
-}
-
-void LinearLighting::SaveSettings(json& o_json)
-{
-	o_json = settings;
 }
 
 void LinearLighting::RestoreDefaultSettings()
