@@ -2,6 +2,7 @@
 #define __IBL_HLSLI__
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"

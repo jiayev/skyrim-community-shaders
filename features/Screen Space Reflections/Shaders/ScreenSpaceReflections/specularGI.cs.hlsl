@@ -425,7 +425,7 @@ float SSRT_ValidateHit(float3 hit,
 	float screenConfidence = isBackfaceHit ? 1.0 : confidence;
 	float3 sampleColor = 0;
 	if (confidence > 0.0f) {
-		sampleColor = ColorManagement::WorkingColor::ToLinear(ScreenColorTexture.SampleLevel(LinearSampler, hit.xy * FrameBuffer::DynamicResolutionParams1.xy, 0).xyz);
+		sampleColor = ColorManagement::StorageToWorking(ScreenColorTexture.SampleLevel(LinearSampler, hit.xy * FrameBuffer::DynamicResolutionParams1.xy, 0).xyz);
 		sampleColor *= SharedData::ssrSettings.SpecularMult;
 	}
 
@@ -474,7 +474,7 @@ float SSRT_ValidateHit(float3 hit,
 #		endif
 				envColor += skyColor;
 			}
-			envColor = ColorManagement::WorkingColor::ToLinear(envColor);
+			envColor = ColorManagement::StorageToWorking(envColor);
 		} else
 #	endif
 		{
@@ -482,20 +482,20 @@ float SSRT_ValidateHit(float3 hit,
 #	if defined(SKYLIGHTING)
 			if (SharedData::InInterior) {
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-				envColor = ColorManagement::WorkingColor::ToLinear((envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular);
+				envColor = ColorManagement::StorageToWorking((envSampleRaw / max(envLum, 0.001)) * directionalAmbientColorSpecular);
 			} else {
 				float3 fullIrradiance = 0;
 				if (skylightingSpecular > 0.0) {
 					float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 					float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-					fullIrradiance = ColorManagement::WorkingColor::ToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
+					fullIrradiance = ColorManagement::StorageToWorking((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
 				}
 
 				float3 envIrradiance = 0;
 				if (skylightingSpecular < 1.0) {
 					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
 					float dalcScaled = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
-					envIrradiance = ColorManagement::WorkingColor::ToLinear((envSampleRaw / max(envLum, 0.001)) * dalcScaled);
+					envIrradiance = ColorManagement::StorageToWorking((envSampleRaw / max(envLum, 0.001)) * dalcScaled);
 				}
 
 				envColor = lerp(envIrradiance, fullIrradiance, skylightingSpecular);
@@ -503,7 +503,7 @@ float SSRT_ValidateHit(float3 hit,
 #	else
 			float3 fullSample = EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 0);
 			float fullLum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, world_space_reflected_direction, 15));
-			envColor = ColorManagement::WorkingColor::ToLinear((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
+			envColor = ColorManagement::StorageToWorking((fullSample / max(fullLum, 0.001)) * directionalAmbientColorSpecular);
 #	endif
 		}
 

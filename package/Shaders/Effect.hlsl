@@ -1004,9 +1004,9 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color2 = finalColor;
 #	endif
 
-#	if !defined(HDR_OUTPUT)
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) && SharedData::linearLightingSettings.enableLinearLighting) {
-		psout.Diffuse.xyz = Color::LinearToGamma22(psout.Diffuse.xyz);
+#	if !defined(HDR_OUTPUT) && defined(ENABLE_LL)
+	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
+		psout.Diffuse.xyz = ColorManagement::WorkingToDelivery(psout.Diffuse.xyz);
 	}
 #	endif
 	return psout;

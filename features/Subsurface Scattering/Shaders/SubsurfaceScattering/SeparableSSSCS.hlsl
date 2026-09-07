@@ -56,8 +56,8 @@ SamplerState PointSampler : register(s0);
 		float4 originalColor = SSSRW[DTid.xy];
 		float4 color = SSSSBlurCS(texCoord, float2(0.0, 1.0), sssAmount, humanProfile);
 		float3 albedo = SSSDecodeAlbedo(AlbedoTexture[DTid.xy].rgb);
-		color.rgb = SSSApplyAlbedo(color.rgb, ColorManagement::WorkingColor::ToLinear(originalColor.rgb), albedo, ScatterMode);
-		color.rgb = ColorManagement::WorkingColor::FromLinear(color.rgb);
+		color.rgb = SSSApplyAlbedo(color.rgb, ColorManagement::StorageToWorking(originalColor.rgb), albedo, ScatterMode);
+		color.rgb = ColorManagement::WorkingToStorage(color.rgb);
 		SSSRW[DTid.xy] = float4(color.rgb, originalColor.a);
 	}
 

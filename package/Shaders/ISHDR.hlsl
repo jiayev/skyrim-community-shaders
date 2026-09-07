@@ -143,9 +143,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(POSTPROCESS)
 	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-		if (SharedData::linearLightingSettings.enableLinearLighting && !isHDR) {
+#			if defined(ENABLE_LL)
+		if (!isHDR) {
 			inputColor = Color::LinearToGamma22(inputColor);
 		}
+#			endif
 
 		psout.Color = float4(inputColor, 1.0);
 
@@ -203,8 +205,9 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 
 	if (isHDR) {
-		if (!ENABLE_LL)
-			outputColor = Color::SignedGamma22ToLinear(outputColor);
+#		if !defined(ENABLE_LL)
+		outputColor = Color::SignedGamma22ToLinear(outputColor);
+#		endif
 		float paperWhiteNits = max(hdrShared.y, 1e-6);
 		float peakWhiteRatio = max(hdrShared.z / paperWhiteNits, 1.0);  // peakNits / paperWhite
 
@@ -224,12 +227,14 @@ PS_OUTPUT main(PS_INPUT input)
 		outputColor = Color::BT709ToBT2020(outputColor);
 		outputColor = exp2(DisplayMapping::RangeCompress(log2(max(0, outputColor)), log2(0.4 * peakWhiteRatio), log2(peakWhiteRatio), log2(100.f)));
 		outputColor = Color::BT2020ToBT709(outputColor);
-		if (!ENABLE_LL)
-			outputColor = Color::LinearToSignedGamma22(outputColor);
+#		if !defined(ENABLE_LL)
+		outputColor = Color::LinearToSignedGamma22(outputColor);
+#		endif
 	} else {
 		outputColor = max(0, outputColor);
-		if (ENABLE_LL)
-			outputColor = Color::LinearToSignedGamma22(outputColor);
+#		if defined(ENABLE_LL)
+		outputColor = Color::LinearToSignedGamma22(outputColor);
+#		endif
 		outputColor = FrameBuffer::ToSRGBColor(outputColor);
 	}
 

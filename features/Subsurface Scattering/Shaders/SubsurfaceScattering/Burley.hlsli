@@ -24,7 +24,7 @@ float GetBurleyPDF(float r, float l, float s)
 // Also check https://zero-radiance.github.io/post/sampling-diffusion/
 float RadiusApprox(float d, float rand)
 {
-	// g(Î¾) = d((2 âˆ’ c)Î¾ âˆ’ 2)log(1 âˆ’ Î¾)
+	// g(Î¾) = d((2 âˆ?c)Î¾ âˆ?2)log(1 âˆ?Î¾)
 	// minimal mean squared error when c = 2.5715
 	return d * ((2 - 2.5715f) * rand - 2) * log(1 - rand);
 }
@@ -41,9 +41,9 @@ float3 GetBurleyProfile(float3 l, float3 s, float radius)
 float3 GetScalingFactor(float3 albedo)
 {
 	// we have three methods for calculating the scaling factor
-	// d = l / (1.85 âˆ’ A + 7|A âˆ’ 0.8|^3)
-	// d = l / (1.9 âˆ’ A + 3.5(A âˆ’ 0.8)^2)
-	// d = l / (3.5 + 100(A âˆ’ 0.33)^4)
+	// d = l / (1.85 âˆ?A + 7|A âˆ?0.8|^3)
+	// d = l / (1.9 âˆ?A + 3.5(A âˆ?0.8)^2)
+	// d = l / (3.5 + 100(A âˆ?0.33)^4)
 	// here we choose the third to use diffuse mean free path as parameter.
 	float3 value = albedo - 0.33f;
 	return 3.5f + 100.f * pow(abs(value), 4);
@@ -135,8 +135,8 @@ float4 BurleyNormalizedSS(uint2 DTid, float2 texCoord, float sssAmount, bool hum
 	colorSum *= any(weightSum == 0.0f) ? 0.0f : (1.0f / weightSum);
 	colorSum = lerp(colorSum, originalIrradiance, saturate(centerWeight));
 
-	float3 color = SSSApplyAlbedo(colorSum, ColorManagement::WorkingColor::ToLinear(originalSceneColor.rgb), surfaceAlbedo, SSS_SCATTER_MODE_POST);
-	color = ColorManagement::WorkingColor::FromLinear(color);
+	float3 color = SSSApplyAlbedo(colorSum, ColorManagement::StorageToWorking(originalSceneColor.rgb), surfaceAlbedo, SSS_SCATTER_MODE_POST);
+	color = ColorManagement::WorkingToStorage(color);
 
 	float4 outColor = float4(color, originalSceneColor.w);
 	return outColor;

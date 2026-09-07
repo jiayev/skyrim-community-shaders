@@ -4,11 +4,7 @@
 #include "Common/ColorSpaces.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
-
-#ifndef VSHADER
-#	define ENABLE_LL SharedData::linearLightingSettings.enableLinearLighting
-#	define ENABLE_ACEScg SharedData::linearLightingSettings.enableACEScg
-#endif
+#include "Common/TransferFunctions.hlsli"
 
 // Float limits
 #define FLT_MIN asfloat(0x00800000)  // 1.175494351e-38f
@@ -40,40 +36,35 @@ namespace Color
 			dot(v4, kBlueVec4) + dot(v2, kBlueVec2));
 	}
 
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	float RGBToLuminance(float3 color)
 	{
+#if defined(ENABLE_ACESCG)
 		// AP1 (ACEScg) luminance coefficients from AP1_2_XYZ_MAT Y row
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, float3(0.2125, 0.7154, 0.0721));
-	}
-
-	float RGBToLuminanceAlternative(float3 color)
-	{
-		// For ACEScg, fall back to the accurate AP1 luminance
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, float3(0.3, 0.59, 0.11));
-	}
-
-	float RGBToLuminance2(float3 color)
-	{
-		// For ACEScg, fall back to the accurate AP1 luminance
-		return ENABLE_ACEScg ? dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174)) : dot(color, float3(0.299, 0.587, 0.114));
-	}
+		return dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174));
 #else
-	float RGBToLuminance(float3 color)
-	{
 		return dot(color, float3(0.2125, 0.7154, 0.0721));
+#endif
 	}
 
 	float RGBToLuminanceAlternative(float3 color)
 	{
+#if defined(ENABLE_ACESCG)
+		// For ACEScg, fall back to the accurate AP1 luminance
+		return dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174));
+#else
 		return dot(color, float3(0.3, 0.59, 0.11));
+#endif
 	}
 
 	float RGBToLuminance2(float3 color)
 	{
+#if defined(ENABLE_ACESCG)
+		// For ACEScg, fall back to the accurate AP1 luminance
+		return dot(color, float3(0.2722287168, 0.6740817658, 0.0536895174));
+#else
 		return dot(color, float3(0.299, 0.587, 0.114));
-	}
 #endif
+	}
 
 	float3 RGBToYCoCg(float3 color)
 	{
@@ -105,42 +96,42 @@ namespace Color
 
 	float GameGammaToLinear(float color)
 	{
-		return pow(abs(color), 1.6);
+		return TransferFunctions::GameGammaToLinear(color);
 	}
 
 	float LinearToGameGamma(float color)
 	{
-		return pow(abs(color), 1.0 / 1.6);
+		return TransferFunctions::LinearToGameGamma(color);
 	}
 
 	float3 GameGammaToLinear(float3 color)
 	{
-		return pow(abs(color), 1.6);
+		return TransferFunctions::GameGammaToLinear(color);
 	}
 
 	float3 LinearToGameGamma(float3 color)
 	{
-		return pow(abs(color), 1.0 / 1.6);
+		return TransferFunctions::LinearToGameGamma(color);
 	}
 
 	float3 Gamma22ToLinear(float3 color)
 	{
-		return pow(abs(color), 2.2);
+		return TransferFunctions::Gamma22ToLinear(color);
 	}
 
 	float3 LinearToGamma22(float3 color)
 	{
-		return pow(abs(color), 1.0 / 2.2);
+		return TransferFunctions::LinearToGamma22(color);
 	}
 
 	float3 SignedGamma22ToLinear(float3 color)
 	{
-		return sign(color) * pow(abs(color), 2.2);
+		return TransferFunctions::SignedGamma22ToLinear(color);
 	}
 
 	float3 LinearToSignedGamma22(float3 color)
 	{
-		return sign(color) * pow(abs(color), 1.0 / 2.2);
+		return TransferFunctions::LinearToSignedGamma22(color);
 	}
 
 	static const float3x3 BT709_2_BT2020 = {
@@ -189,81 +180,26 @@ namespace Color
 
 	}  // namespace pq
 
-#if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	// Attempt to match vanilla materials that are darker than PBR
-	const static float PBRLightingScale = ENABLE_LL ? 1.0 : 0.65;
+#if defined(ENABLE_LL)
+	const static float PBRLightingScale = 1.0;
+	const static float ReflectionNormalisationScale = 1.0;  // Attempt to normalise reflection brightness against DALC
+	const static float PBRLightingCompensation = 1.0;
+#else
+	const static float PBRLightingScale = 0.65;
+	const static float ReflectionNormalisationScale = 0.65;
+	const static float PBRLightingCompensation = Math::PI;
+#endif
 
-	// Attempt to normalise reflection brightness against DALC
-	const static float ReflectionNormalisationScale = ENABLE_LL ? 1.0 : 0.65;
-
-	const static float PBRLightingCompensation = ENABLE_LL ? 1.0 : Math::PI;
-
-	// Linear Lighting Functions
 	// Gamut transform: converts linear sRGB-gamut color to ACEScg when enabled
 	float3 LinearSRGBToWorking(float3 linearSRGB)
 	{
-		[branch] if (ENABLE_ACEScg) return sRGBToAP1(linearSRGB);
-		return linearSRGB;
-	}
-
-	float3 Light(float3 color)
-	{
-#	if defined(TRUE_PBR)
-		return color * PBRLightingCompensation;  // Compensate for traditional Lambertian diffuse
-#	else
-		return color;
-#	endif
-	}
-
-	float3 DirectionalLight(float3 color)
-	{
-		return Light(color) * SharedData::linearLightingSettings.directionalLightMult;
-	}
-
-	float3 PointLight(float3 color)
-	{
-		return Light(color) * SharedData::linearLightingSettings.pointLightMult;
-	}
-	float3 Ambient(float3 color)
-	{
-		return color * SharedData::linearLightingSettings.ambientMult;
-	}
-
-	float3 EffectMult(float3 color)
-	{
-#	if defined(MEMBRANE)
-		color *= SharedData::linearLightingSettings.membraneEffectMult;
-#	elif defined(BLOOD)
-		color *= SharedData::linearLightingSettings.bloodEffectMult;
-#	elif defined(PROJECTED_UV)
-		color *= SharedData::linearLightingSettings.projectedEffectMult;
-#	elif defined(DEFERRED)
-		color *= SharedData::linearLightingSettings.deferredEffectMult;
-#	else
-		color *= SharedData::linearLightingSettings.otherEffectMult;
-#	endif
-		return color;
-	}
-
-	float EffectLightingMult()
-	{
-		return SharedData::linearLightingSettings.effectLightingMult;
-	}
-
+#if defined(ENABLE_ACESCG)
+		return sRGBToAP1(linearSRGB);
 #else
-	const static float PBRLightingScale = 1.0;
-	const static float ReflectionNormalisationScale = 1.0;
-	const static float PBRLightingCompensation = Math::PI;
-
-	float3 Light(float3 color)
-	{
-#	if defined(TRUE_PBR)
-		return color * Math::PI;  // Compensate for traditional Lambertian diffuse
-#	else
-		return color;
-#	endif
-	}
+		return linearSRGB;
 #endif
+	}
 
 	namespace Correct
 	{

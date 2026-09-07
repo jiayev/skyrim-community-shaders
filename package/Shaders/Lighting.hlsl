@@ -1450,17 +1450,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
 #	if defined(FACEGEN)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
-	} else {
-		baseColor.xyz = Color::GameGammaToLinear(GetFacegenBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
-	}
+#		if defined(ENABLE_LL)
+	baseColor.xyz = Color::GameGammaToLinear(GetFacegenBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
+#		else
+	baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
+#		endif
 #	elif defined(FACEGEN_RGB_TINT)
-	if (!SharedData::linearLightingSettings.enableLinearLighting) {
-		baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
-	} else {
-		baseColor.xyz = Color::GameGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
-	}
+#		if defined(ENABLE_LL)
+	baseColor.xyz = Color::GameGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
+#		else
+	baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
+#		endif
 #	endif  // FACEGEN
 
 #	if defined(SKIN) && defined(CS_SKIN)
@@ -1753,9 +1753,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-	baseColor.xyz = ColorManagement::PBRMaterialToLinear(baseColor.xyz) * pbrVertexColor;
+	baseColor.xyz *= pbrVertexColor;
 	material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
-	baseColor.xyz = ColorManagement::LinearToPBRMaterial(baseColor.xyz);
 
 	material.GlintScreenSpaceScale = max(1, glintParameters.x);
 	material.GlintLogMicrofacetDensity = clamp(PBR::Constants::MaxGlintDensity - glintParameters.y, PBR::Constants::MinGlintDensity, PBR::Constants::MaxGlintDensity);
@@ -1783,7 +1782,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float4 sampledSubsurfaceProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 
 			material.SubsurfaceColor *= ColorManagement::AlbedoTextureToWorking(sampledSubsurfaceProperties.xyz);
-			material.SubsurfaceColor = ColorManagement::ScalePBRMaterialByLinear(material.SubsurfaceColor, pbrVertexColor);
+			material.SubsurfaceColor *= pbrVertexColor;
 
 			material.Thickness *= sampledSubsurfaceProperties.w;
 		}
@@ -2499,7 +2498,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 
-		emitColor = ColorManagement::ModulatePBRMaterialsByLinear(emitColor, glowColor, emitVertexColor);
+		emitColor = emitColor * glowColor * emitVertexColor;
 #		else
 		emitColor *= glowColor;
 #		endif  // TRUE_PBR
@@ -2731,7 +2730,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(VANILLA_FRESNEL)
 		if (!(enableVanillaFresnel && SharedData::vanillaFresnelSettings.EnableDynamicCubemapsConversion))
 #		endif
-			specularColor += envColor * ColorManagement::WorkingColor::ToLinear(diffuseColor);
+			specularColor += envColor * ColorManagement::StorageToWorking(diffuseColor);
 	indirectLobeWeights.diffuse += envColor;
 #	endif
 
@@ -2768,7 +2767,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if !defined(DEFERRED)
-	color.xyz = ColorManagement::WorkingColor::ToLinear(color.xyz);
+	color.xyz = ColorManagement::StorageToWorking(color.xyz);
 	color.xyz += specularColor;
 
 	if (any(indirectLobeWeights.specular > 0)
@@ -2803,7 +2802,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #		endif
 
-	color.xyz = ColorManagement::WorkingColor::FromLinear(color.xyz);
+	color.xyz = ColorManagement::WorkingToStorage(color.xyz);
 #		if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled && inWorld) {
 		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
@@ -3053,9 +3052,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
-#	if !defined(HDR_OUTPUT)  // Do not apply gamma correction before we pass to ISHDR.
-	if ((!inWorld && !inReflection) && SharedData::linearLightingSettings.enableLinearLighting && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
-		psout.Diffuse.xyz = Color::LinearToGamma22(psout.Diffuse.xyz);
+#	if !defined(HDR_OUTPUT) && defined(ENABLE_LL)  // Do not apply gamma correction before we pass to ISHDR.
+	if ((!inWorld && !inReflection) && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
+		psout.Diffuse.xyz = ColorManagement::WorkingToDelivery(psout.Diffuse.xyz);
 	}
 #	endif
 
