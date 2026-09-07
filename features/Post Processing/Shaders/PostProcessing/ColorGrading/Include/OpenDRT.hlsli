@@ -414,7 +414,8 @@ float3 OpenDRTTransform(float3 rgb)
 	ach_d = (1.25f) * compress_toe_quadratic(ach_d, 0.25f, 0);
 
 	// Hue angle, rotated so that red = 0.0
-	float hue = fmod(atan2(opp.x, opp.y) + Math::PI + 1.10714931f, 2.0f * Math::PI);
+	float2 hue_opp = any(opp != 0.0f) ? opp : float2(0.0f, 1.0f);
+	float hue = fmod(atan2(hue_opp.x, hue_opp.y) + Math::PI + 1.10714931f, 2.0f * Math::PI);
 
 	// RGB Hue Angles
 	// Wider than CMY by default. R towards M, G towards Y, B towards C
