@@ -124,6 +124,7 @@ private:
 
 	std::string baseVersion;
 	uint lastShaderCacheFingerprint = 0xFFFFFFFF;
+	void UpdateShaderCacheSettings();
 
 	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
 	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;

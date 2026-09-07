@@ -183,13 +183,15 @@ void LinearLighting::DrawSettings()
 		}
 	}
 
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
-	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
+	bool shaderSettingsChanged = ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	shaderSettingsChanged |= ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("enable_acescg_tooltip"),
 							  "Render in ACEScg color space for wider gamut and more accurate lighting.\n"
 							  "Requires Linear Lighting and Post Processing enabled.\n"
 							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
+	if (shaderSettingsChanged)
+		UpdateShaderCacheSettings();
 
 	const char* colorEncodings[] = { "sRGB", "Linear", "Game Gamma" };
 	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
@@ -248,20 +250,30 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
 	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
-
-	if (baseVersion.empty())
-		baseVersion = version;
-	version = baseVersion + (settings.enableLinearLighting ? "+ll" : "") + (settings.enableACEScg ? "+acescg" : "");
+	UpdateShaderCacheSettings();
 }
 
 void LinearLighting::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
+
+void LinearLighting::UpdateShaderCacheSettings()
+{
+	if (baseVersion.empty())
+		baseVersion = version;
+	version = baseVersion + (settings.enableLinearLighting ? "+ll" : "") + (settings.enableACEScg ? "+acescg" : "");
 
 	const uint fingerprint = (settings.enableLinearLighting ? 1u : 0u) | (settings.enableACEScg ? 2u : 0u);
-	if (lastShaderCacheFingerprint != 0xFFFFFFFF && lastShaderCacheFingerprint != fingerprint && globals::shaderCache)
-		globals::shaderCache->Clear();
+	const bool changed = lastShaderCacheFingerprint != 0xFFFFFFFF && lastShaderCacheFingerprint != fingerprint;
 	lastShaderCacheFingerprint = fingerprint;
+
+	// Startup settings are validated before resources are created. Only invalidate live shaders here.
+	if (changed && textureInputEncodingCaptured && globals::shaderCache) {
+		// Disk cache paths do not include the Linear Lighting / ACEScg defines.
+		globals::shaderCache->DeleteDiskCache();
+		globals::shaderCache->Clear();
+	}
 }
 
 std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetShaderDefineOptions()
@@ -275,6 +287,7 @@ std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetSh
 void LinearLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	UpdateShaderCacheSettings();
 }
 
 void LinearLighting::SetupResources()
@@ -282,6 +295,7 @@ void LinearLighting::SetupResources()
 	if (textureInputEncodingCaptured)
 		return;
 
+	UpdateShaderCacheSettings();
 	startupTextureInputEncoding = static_cast<ColorEncoding>(
 		std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma)));
 	textureInputEncodingCaptured = true;
