@@ -699,8 +699,7 @@ void PhysicalGlare::GeneratePSF()
 		DispatchFFT(fftColCS[fftVariant].get(), texFFT[0][1].get(), texFFT[0][0].get(), currentFFTResolution);
 		diffraction = texFFT[0][0].get();
 	} else {
-		context->CopyResource(texFFT[0][0]->resource.get(), texApertureBase->resource.get());
-		DispatchFFT(fftRowCS[fftVariant].get(), texFFT[0][0].get(), texFFT[0][1].get(), currentFFTResolution);
+		DispatchFFT(fftRowCS[fftVariant].get(), texApertureBase.get(), texFFT[0][1].get(), currentFFTResolution);
 		DispatchFFT(fftColCS[fftVariant].get(), texFFT[0][1].get(), texFFT[0][0].get(), currentFFTResolution);
 		diffraction = texFFT[0][0].get();
 	}
