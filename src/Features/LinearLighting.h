@@ -30,8 +30,9 @@ struct LinearLighting : Feature
 
 	virtual bool IsCore() const override { return true; };
 
+	/** @brief ENABLE_LL is a compile-time define; emit it only when the feature is enabled. */
 	virtual inline std::string_view GetShaderDefineName() override { return "ENABLE_LL"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
+	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return settings.enableLinearLighting != 0; }
 	/** @brief ACEScg as optional define contribution; also participates in disk cache invalidation via version string. */
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 
@@ -122,6 +123,7 @@ private:
 	};
 
 	std::string baseVersion;
+	uint lastShaderCacheFingerprint = 0xFFFFFFFF;
 
 	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
 	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;

@@ -1,5 +1,7 @@
 #include "D3D.h"
 
+#include "Feature.h"
+#include "Features/LinearLighting.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -132,6 +134,15 @@ namespace Util
 		if (!shaderDefines->empty()) {
 			for (unsigned int i = 0; i < shaderDefines->size(); i++)
 				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
+		}
+
+		{
+			auto& ll = globals::features::linearLighting;
+			if (ll.loaded && ll.settings.enableLinearLighting) {
+				macros.push_back({ "ENABLE_LL", nullptr });
+				if (ll.settings.enableACEScg)
+					macros.push_back({ "ENABLE_ACESCG", nullptr });
+			}
 		}
 		if (!_stricmp(ProgramType, "ps_5_0"))
 			macros.push_back({ "PSHADER", "" });
