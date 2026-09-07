@@ -231,6 +231,7 @@ namespace SharedData
 	{
 		uint enableLinearLighting;
 		uint enableACEScg;
+		uint deliveryEncoding;  // 0 = Linear (CS PostProcessing), 1 = Gamma22 (ENB / vanilla ISHDR)
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
@@ -242,7 +243,7 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float3 pad0;
+		float2 pad0;
 	};
 
 	struct ENBSettings

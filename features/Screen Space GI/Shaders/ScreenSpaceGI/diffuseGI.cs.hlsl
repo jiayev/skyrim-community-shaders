@@ -230,13 +230,13 @@ float3 SampleDiffuseFallbackCubemap(float3 worldPos, float3 worldNormal, float3 
 			reflectionColor = skyColor;
 			envColor += skyColor;
 		}
-		envColor = ColorManagement::WorkingColor::ToLinear(envColor);
-		envColor = ImageBasedLighting::ApplyIBLReflectionFallback(envColor, ColorManagement::WorkingColor::ToLinear(reflectionColor), worldPos);
+		envColor = ColorManagement::StorageToWorking(envColor);
+		envColor = ImageBasedLighting::ApplyIBLReflectionFallback(envColor, ColorManagement::StorageToWorking(reflectionColor), worldPos);
 	} else
 #	endif
 	{
 		float3 directionalAmbient = Color::Ambient(max(0, SharedData::GetAmbient(worldDir)));
-		envColor = ColorManagement::WorkingColor::ToLinear(directionalAmbient);
+		envColor = ColorManagement::StorageToWorking(directionalAmbient);
 #	if defined(SKYLIGHTING)
 		if (!SharedData::InInterior)
 			envColor *= skylightingDiffuse;

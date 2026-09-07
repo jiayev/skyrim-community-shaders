@@ -81,7 +81,7 @@ float3 LoadSsgiMultiBounce(uint2 pixCoord)
 	float3 illumination = _NRD_YCoCgToLinear(packed.xyz);
 
 	// History becomes a light source only after reflection by the source surface.
-	float3 sourceAlbedo = ColorManagement::WorkingColor::ToLinear(srcAlbedo[pixCoord] / Color::PBRLightingScale);
+	float3 sourceAlbedo = ColorManagement::StorageToWorking(srcAlbedo[pixCoord] / Color::PBRLightingScale);
 	return max(0, illumination) * saturate(sourceAlbedo);
 }
 #endif
@@ -99,10 +99,10 @@ groupshared float3 g_scratchRadiance[8][8];
 	float4 rad1 = srcRadiance.GatherGreen(samplerPointClamp, uv * frameScale);
 	float4 rad2 = srcRadiance.GatherBlue(samplerPointClamp, uv * frameScale);
 
-	float3 radiance0 = ColorManagement::WorkingColor::ToLinear(float3(rad0.w, rad1.w, rad2.w));
-	float3 radiance1 = ColorManagement::WorkingColor::ToLinear(float3(rad0.z, rad1.z, rad2.z));
-	float3 radiance2 = ColorManagement::WorkingColor::ToLinear(float3(rad0.x, rad1.x, rad2.x));
-	float3 radiance3 = ColorManagement::WorkingColor::ToLinear(float3(rad0.y, rad1.y, rad2.y));
+	float3 radiance0 = ColorManagement::StorageToWorking(float3(rad0.w, rad1.w, rad2.w));
+	float3 radiance1 = ColorManagement::StorageToWorking(float3(rad0.z, rad1.z, rad2.z));
+	float3 radiance2 = ColorManagement::StorageToWorking(float3(rad0.x, rad1.x, rad2.x));
+	float3 radiance3 = ColorManagement::StorageToWorking(float3(rad0.y, rad1.y, rad2.y));
 
 #ifdef GI
 	[branch] if (MultiBounceMode >= 2)

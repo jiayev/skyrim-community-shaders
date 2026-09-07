@@ -91,11 +91,11 @@ float3 GetSamplingVector(uint3 ThreadID, in RWTexture2DArray<float4> OutputTextu
 	}
 
 #if defined(REFLECTIONS)
-	color.rgb = lerp(color.rgb, ColorManagement::WorkingColor::ToLinear(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / 8.0));
+	color.rgb = lerp(color.rgb, ColorManagement::StorageToWorking(ReflectionsTexture.SampleLevel(LinearSampler, uv, 0.0).rgb), saturate(mipLevel / 8.0));
 #else
 	color.rgb = lerp(color.rgb, color.rgb * DefaultCubemap.SampleLevel(LinearSampler, uv, 0.0).xyz, saturate(mipLevel / 8.0));
 #endif
 
-	color.rgb = ColorManagement::WorkingColor::FromLinear(color.rgb);
+	color.rgb = ColorManagement::WorkingToStorage(color.rgb);
 	EnvInferredTexture[ThreadID] = max(0, color);
 }
