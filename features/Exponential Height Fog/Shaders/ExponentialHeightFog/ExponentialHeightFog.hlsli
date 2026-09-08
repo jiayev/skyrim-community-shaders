@@ -11,6 +11,10 @@
 #	include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #endif
 
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
+#endif
+
 #if defined(PHYSICAL_SKY)
 #	include "PhysicalSky/Common.hlsli"
 #endif
@@ -249,11 +253,25 @@ namespace ExponentialHeightFog
 		float3 fogInscatteringColor = fogColor * SharedData::exponentialHeightFogSettings.originalFogColorAmount;
 		fogInscatteringColor += SharedData::exponentialHeightFogSettings.fogInscatteringColor.rgb * SharedData::exponentialHeightFogSettings.fogInscatteringColor.a;
 
-#if defined(DYNAMIC_CUBEMAPS)
-		if (SharedData::exponentialHeightFogSettings.useDynamicCubemaps > 0) {
-			float3 cubemapColor = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampColorSampler, normalize(lerp(positionWS, float3(0, 0, 1), saturate((SharedData::exponentialHeightFogSettings.cubemapMipLevel + 1) / 9))), SharedData::exponentialHeightFogSettings.cubemapMipLevel).xyz;
-			fogInscatteringColor += cubemapColor * SharedData::exponentialHeightFogSettings.inscatteringTint.rgb * SharedData::exponentialHeightFogSettings.inscatteringTint.a;
+#if defined(IBL) || defined(DYNAMIC_CUBEMAPS)
+		float cubemapMipLevel = SharedData::exponentialHeightFogSettings.cubemapMipLevel;
+		float3 cubemapDirection = normalize(lerp(positionWS, float3(0, 0, 1), saturate((cubemapMipLevel + 1) / 9)));
+		float3 inscattering = 0.0;
+		[branch] if (SharedData::InInterior)
+		{
+#	if defined(DYNAMIC_CUBEMAPS)
+			if (SharedData::exponentialHeightFogSettings.useDynamicCubemaps > 0)
+				inscattering = DynamicCubemaps::EnvTexture.SampleLevel(SampColorSampler, cubemapDirection, cubemapMipLevel).xyz;
+#	endif
 		}
+		else
+		{
+#	if defined(IBL)
+			if (SharedData::exponentialHeightFogSettings.useSkyIBL > 0)
+				inscattering = ImageBasedLighting::GetSkyIBLColor(cubemapDirection);
+#	endif
+		}
+		fogInscatteringColor += inscattering * SharedData::exponentialHeightFogSettings.inscatteringTint.rgb * SharedData::exponentialHeightFogSettings.inscatteringTint.a;
 #endif
 
 		fogColor = fogInscatteringColor * (1.0f - expFogFactor);

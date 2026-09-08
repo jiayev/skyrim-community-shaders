@@ -321,7 +321,7 @@ namespace SharedData
 		float fogDensity2;
 		float directionalInscatteringMultiplier;
 		float directionalInscatteringAnisotropy;
-		float pad2;
+		uint useSkyIBL;
 		float4 inscatteringTint;
 		float cubemapMipLevel;
 		float sunlightAttenuationAmount;
