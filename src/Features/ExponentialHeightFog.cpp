@@ -31,6 +31,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	fogDensity2,
 	directionalInscatteringMultiplier,
 	directionalInscatteringAnisotropy,
+	useSkyIBL,
 	inscatteringTint,
 	cubemapMipLevel,
 	sunlightAttenuationAmount,
@@ -138,7 +139,7 @@ void ExponentialHeightFog::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("second_fog_layer_tooltip"),
 								  "Adds a second stacked exponential height fog layer with its own base height, density and height falloff.\n"
-								  "The two line integrals are summed, matching the reference implementation in REDengine.\n"
+								  "The two line integrals are summed.\n"
 								  "Use it for high-altitude haze above the ground layer or a distinct low-lying ground fog."));
 		}
 		ImGui::TreePop();
@@ -160,7 +161,14 @@ void ExponentialHeightFog::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("apply_vanilla_fade_tooltip"), "Applies vanilla fade brightness to exponential height fog."));
 	}
-	ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps"), "Use Dynamic Cubemaps for Inscattering"), (bool*)&settings.useDynamicCubemaps);
+	ImGui::Checkbox(T(TKEY("use_sky_ibl"), "Use Sky IBL for Exterior Inscattering"), (bool*)&settings.useSkyIBL);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("use_sky_ibl_tooltip"), "Adds the sky IBL color to the fog inscattering in exteriors. Requires the Image Based Lighting feature."));
+	}
+	ImGui::Checkbox(T(TKEY("use_dynamic_cubemaps"), "Use Dynamic Cubemaps for Interior Inscattering"), (bool*)&settings.useDynamicCubemaps);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("use_dynamic_cubemaps_tooltip"), "Adds the dynamic environment cubemap color to the fog inscattering in interiors."));
+	}
 	Util::WeatherUI::ColorEdit4(T(TKEY("inscattering_cubemap_tint"), "Inscattering Cubemap Tint"), this, "inscatteringTint", (float*)&settings.inscatteringTint);
 	ImGui::SliderFloat(T(TKEY("cubemap_mip_level"), "Cubemap Mip Level"), &settings.cubemapMipLevel, 1.0f, 8.0f, "%.1f");
 
@@ -183,7 +191,7 @@ void ExponentialHeightFog::DrawSettings()
 			ImGui::SliderFloat3(T(TKEY("volumetric_noise_velocity"), "Noise Velocity"), &settings.volumetricFogNoiseVelocity.x, -1.0f, 1.0f, "%.3f");
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("volumetric_noise_tooltip"),
-									  "Modulates the volumetric fog density with a 3D value noise field, matching the REDengine approach.\n"
+									  "Modulates the volumetric fog density with a 3D value noise field.\n"
 									  "Noise Scale: spatial frequency of the fog clumps (0 = disabled).\n"
 									  "Noise Threshold: soft cutoff that carves clumps out of the noise.\n"
 									  "Noise Velocity: animation drift of the noise field, scaled by time."));
@@ -215,16 +223,13 @@ void ExponentialHeightFog::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("sample_jitter_multiplier"), "Sample Jitter Multiplier"), &settings.volumetricSampleJitterMultiplier, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("sample_jitter_multiplier_tooltip"),
-									  "Matches UE's r.VolumetricFog.LightScatteringSampleJitterMultiplier.\n"
-									  "Adds per-voxel random offset on top of the Halton sequence.\n"
-									  "0 = UE default; nonzero values need stronger temporal filtering."));
+									  "Adds per-voxel random offset on top of the Halton sequence."));
 			}
 			ImGui::SliderFloat(T(TKEY("upsample_jitter_multiplier"), "Upsample Jitter Multiplier"), &settings.volumetricUpsampleJitterMultiplier, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
 			if (auto _tt = Util::HoverTooltipWrapper()) {
 				ImGui::Text("%s", T(TKEY("upsample_jitter_multiplier_tooltip"),
-									  "Matches UE's r.VolumetricFog.UpsampleJitterMultiplier.\n"
 									  "Jitters the final 3D fog lookup in screen space to hide\n"
-									  "low-resolution froxel pixelization. 0 = UE default."));
+									  "low-resolution froxel pixelization."));
 			}
 			ImGui::TreePop();
 		}

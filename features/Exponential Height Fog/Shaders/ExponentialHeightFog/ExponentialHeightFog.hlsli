@@ -10,6 +10,10 @@
 #	include "DynamicCubemaps/DynamicCubemaps.hlsli"
 #endif
 
+#if defined(IBL)
+#	include "IBL/IBL.hlsli"
+#endif
+
 Texture3D<float4> ExponentialHeightFogIntegratedLightScattering : register(t19);
 Texture3D<float4> ExponentialHeightFogIntegratedLightScatteringFar : register(t22);
 
@@ -201,8 +205,6 @@ namespace ExponentialHeightFog
 		float viewToPosLength = length(viewToPos);
 		float viewToPosLengthInv = rcp(max(viewToPosLength, 1e-4f));
 
-		// Two stacked exponential height fog layers. Their line integrals are summed,
-		// matching the reference REDengine implementation.
 		float rayOriginTerms = fogDensity * exp2(-fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0));
 		float rayOriginTerms2 = fogDensity2 * exp2(-fogHeightFalloff2 * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight2, 0));
 		float rayLength = viewToPosLength;
@@ -244,11 +246,25 @@ namespace ExponentialHeightFog
 		float3 fogInscatteringColor = fogColor * SharedData::exponentialHeightFogSettings.originalFogColorAmount;
 		fogInscatteringColor += SharedData::exponentialHeightFogSettings.fogInscatteringColor.rgb * SharedData::exponentialHeightFogSettings.fogInscatteringColor.a;
 
-#if defined(DYNAMIC_CUBEMAPS)
-		if (SharedData::exponentialHeightFogSettings.useDynamicCubemaps > 0) {
-			float3 cubemapColor = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampColorSampler, normalize(lerp(positionWS, float3(0, 0, 1), saturate((SharedData::exponentialHeightFogSettings.cubemapMipLevel + 1) / 9))), SharedData::exponentialHeightFogSettings.cubemapMipLevel).xyz;
-			fogInscatteringColor += cubemapColor * SharedData::exponentialHeightFogSettings.inscatteringTint.rgb * SharedData::exponentialHeightFogSettings.inscatteringTint.a;
+#if defined(IBL) || defined(DYNAMIC_CUBEMAPS)
+		float cubemapMipLevel = SharedData::exponentialHeightFogSettings.cubemapMipLevel;
+		float3 cubemapDirection = normalize(lerp(positionWS, float3(0, 0, 1), saturate((cubemapMipLevel + 1) / 9)));
+		float3 inscattering = 0.0;
+		[branch] if (SharedData::InInterior)
+		{
+#	if defined(DYNAMIC_CUBEMAPS)
+			if (SharedData::exponentialHeightFogSettings.useDynamicCubemaps > 0)
+				inscattering = DynamicCubemaps::EnvTexture.SampleLevel(SampColorSampler, cubemapDirection, cubemapMipLevel).xyz;
+#	endif
 		}
+		else
+		{
+#	if defined(IBL)
+			if (SharedData::exponentialHeightFogSettings.useSkyIBL > 0)
+				inscattering = ImageBasedLighting::GetSkyIBLColor(cubemapDirection);
+#	endif
+		}
+		fogInscatteringColor += inscattering * SharedData::exponentialHeightFogSettings.inscatteringTint.rgb * SharedData::exponentialHeightFogSettings.inscatteringTint.a;
 #endif
 
 		fogColor = fogInscatteringColor * (1.0f - expFogFactor);

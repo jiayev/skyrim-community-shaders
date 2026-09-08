@@ -59,7 +59,7 @@ public:
 		float fogDensity2 = 0.0f;
 		float directionalInscatteringMultiplier = 1.0f;
 		float directionalInscatteringAnisotropy = 0.2f;
-		float pad2 = 0.0f;
+		uint useSkyIBL = 1;
 		float4 inscatteringTint = { 1.0f, 1.0f, 1.0f, 1.0f };
 		float cubemapMipLevel = 8.0f;
 		float sunlightAttenuationAmount = 1.0f;
