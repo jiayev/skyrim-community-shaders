@@ -210,8 +210,6 @@ namespace ExponentialHeightFog
 		float viewToPosLength = length(viewToPos);
 		float viewToPosLengthInv = rcp(max(viewToPosLength, 1e-4f));
 
-		// Two stacked exponential height fog layers. Their line integrals are summed,
-		// matching the reference REDengine implementation.
 		float rayOriginTerms = fogDensity * exp2(-fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0));
 		float rayOriginTerms2 = fogDensity2 * exp2(-fogHeightFalloff2 * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight2, 0));
 		float rayLength = viewToPosLength;
