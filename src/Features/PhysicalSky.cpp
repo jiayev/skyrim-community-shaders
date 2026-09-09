@@ -57,6 +57,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	thickness,
 	ndfScale,
 	noiseCompositeScale,
+	noiseRoundness,
 	noiseOffset,
 	windDirection,
 	windSpeed,
@@ -644,6 +645,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 			volMainHistoryValid = false;
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("noise_feature_size_tooltip"), "Physical repeat length of nubis.dds, the authored 128^3 RGBA density-noise composite. It modulates density inside the NDF profile; it does not generate NDF coverage or height."));
+		if (ImGui::SliderFloat(T(TKEY("noise_roundness"), "Noise Roundness"), &low.noiseRoundness, 0.f, 1.f, "%.2f"))
+			volMainHistoryValid = false;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("noise_roundness_tooltip"), "Blends wispy and rounded noise shapes independently of the cloud top and bottom profiles."));
 		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
 		ImGui::SliderFloat(T(TKEY("cloud_shape_shear"), "Cloud Shape Shear"), &low.shapeShear, 0.f, 2.f, "%.2f km");
