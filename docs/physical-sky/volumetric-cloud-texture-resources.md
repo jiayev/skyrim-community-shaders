@@ -12,7 +12,7 @@ described Nubis techniques. Its threshold-noise reconstruction is documented
 in [noise reconstruction](noise-contract.md). Low-cloud density
 is the composition of two independent resources:
 
-1. a five-layer NDF supplies the dimensional profile: minimum height, maximum
+1. a five-attribute NDF supplies the dimensional profile: minimum height, maximum
    height, coverage, top type, and bottom type;
 2. `nubis.dds` supplies the tileable three-dimensional density-noise composite.
 
@@ -26,7 +26,7 @@ the internal and boundary variation of that mass.
 | ------------------------- | ------: | ------------------------- | ---------------- |
 | Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `nubis.dds`      |
 | Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated    |
-| Low-cloud NDF             |    `t7` | `Texture2DArray<float>`   | GPU-generated    |
+| Low-cloud NDF             |    `t7` | `Texture2DArray<float4>`  | GPU-generated    |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
 | High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
@@ -46,8 +46,8 @@ The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 ## Five-layer NDF
 
 The NDF is sampled with tileable linear filtering at mip 0. Texture mode
-accepts a `256 x 256 x 5`, `R8_UNORM` array. The Cumuliform generator packs the
-same five attributes into two RGBA8 array slices: minimum/maximum height, coverage
+accepts a five-slice linear array, typically `256 x 256 x 5`, `R8_UNORM`. The procedural generator packs the
+same five attributes into two RGBA16_FLOAT array slices: minimum/maximum height, coverage
 and top type in slice 0, and bottom type in slice 1 R.
 
 | Slice | Meaning                                               |
@@ -71,15 +71,16 @@ dimensional_profile = coverage * vertical_profile
 into physical altitude. `NDF Scale` independently controls the X/Y repeat
 length; it is not inherited from the high-cloud weather map or the 3D noise.
 
-The original Cumuliform generator multiplies three independently scaled,
-rotated, and animated three-octave Worley fields. Coverage is the clipped and
-powered product. The same fields derive per-column minimum and maximum height;
-the top-type slice receives the shaped noise and the bottom-type slice receives
-the configured wispiness.
+The procedural generator combines periodic weather organization with seeded,
+rotated elliptical cloud masses and secondary domes. A separate slow field
+supplies the condensation base. Cloud amount, vertical development and profile
+type have independent controls; no 3D noise is needed to generate this map.
+See [procedural NDF generation](ndf-generator.md).
 
-Texture mode accepts a linear, non-sRGB 256 x 256 DDS `Texture2DArray` with five
-slices in the order above. This is the route for arbitrary authored cloud
-distributions.
+Texture mode accepts a linear, non-sRGB DDS `Texture2DArray` with exactly five
+slices in the order above. Values are read from each slice's R channel and use
+the same normalized height and type axes. This route remains available for
+optional authored cloud distributions.
 
 ## `nubis.dds`
 
@@ -117,15 +118,17 @@ They do not sample the low-cloud NDF or `nubis.dds`. High Weather at `t11` uses:
 
 ## Generator lifecycle
 
-The procedural low NDF is regenerated each frame because its three Worley
-layers have independent velocities. There is no generator-version field,
-histogram pass, quantile solver, species preset, or settings migration in this
-pre-HP path. High-cloud map generation remains an independent implementation.
+The procedural low NDF and its occupancy/distance maps rebuild on parameter,
+seed or world-scale changes. Shader reload also invalidates the generated field.
+Wind is applied during sampling. Generated-map replacement invalidates temporal
+history before cloud rendering. Imported maps retain the five-slice contract and
+refresh their acceleration map before use. High-cloud map generation remains
+an independent implementation.
 
 ## Static validation checklist
 
 -   `nubis.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
--   Low NDF is a five-slice, linear `Texture2DArray` in the documented order.
+-   Low NDF is a linear array: two packed generated slices or five imported scalar slices.
 -   NDF coverage is generated independently from `nubis.dds`.
 -   Procedural minimum and maximum height form a valid interval.
 -   Noise is queried only inside positive NDF/profile support, with zero density outside it.
@@ -136,7 +139,7 @@ pre-HP path. High-cloud map generation remains an independent implementation.
 -   low NDF generation and texture selection: `src/Features/PhysicalSky/Ndf.cpp`
 -   low NDF settings: `src/Features/PhysicalSky/Ndf.h`
 -   DDS loading and bindings: `src/Features/PhysicalSky/VolumetricClouds.cpp`
--   low NDF generator shader: `features/Physical Sky/Shaders/PhysicalSky/NdfCumuliform.cs.hlsl`
+-   low NDF generator shader: `features/Physical Sky/Shaders/PhysicalSky/NdfGenerate.cs.hlsl`
 -   independent high-cloud generator shader: `features/Physical Sky/Shaders/PhysicalSky/HighCloudMapGen.cs.hlsl`
 -   density sampling: `features/Physical Sky/Shaders/PhysicalSky/Volumetrics.cs.hlsl`
 -   noise reconstruction: `features/Physical Sky/Shaders/PhysicalSky/CloudNoise.hlsli`

@@ -373,17 +373,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	if (elapsed < 0.0f || elapsed > 0.25f)
 		volMainHistoryValid = false;
 	const float2 windDelta = volMainHistoryValid ? noiseWindOffset - volHistoryWindOffset : float2{ 0.f, 0.f };
-	float lowHistoryConfidence = 1.f;
-	if (settings.cloudMap.type == NdfType::Cumuliform) {
-		const auto& ndf = settings.cloudMap.cumuliform;
-		float maxPixelMotion = 0.f;
-		for (const auto velocity : { ndf.offset0, ndf.offset1, ndf.offset2 }) {
-			const float dx = velocity.x * 0.001f / low.ndfScale.x;
-			const float dy = velocity.y * 0.001f / low.ndfScale.y;
-			maxPixelMotion = std::max(maxPixelMotion, std::sqrt(dx * dx + dy * dy) * NdfManager::kNdfDim * std::max(elapsed, 0.f));
-		}
-		lowHistoryConfidence = std::exp(-maxPixelMotion);
-	}
+	const float lowHistoryConfidence = 1.f;
 	const float windDeltaMeters = std::sqrt(windDelta.x * windDelta.x + windDelta.y * windDelta.y) * Util::Units::GAME_UNIT_TO_M;
 	const float highRelativeMotion = windDeltaMeters * std::abs(high.cellWindSpeed) /
 	                                 (high.weatherWorldSize * 1000.f) * high.weatherDim;
@@ -523,7 +513,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
 		baseShapeNoiseSrv.get(),                                                                                       // t5 authored Nubis RGBA noise composite
 		texApSunLut->srv.get(),                                                                                        // t6 direct solar single-scattering AP LUT
-		ndfSrv,                                                                                                        // t7 five-layer NDF
+		ndfSrv,                                                                                                        // t7 NDF
 		nullptr,                                                                                                       // t8
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10

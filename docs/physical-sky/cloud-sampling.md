@@ -30,7 +30,7 @@ subtracts two cell widths from centre distances. The ray converts that bound
 using the smaller world-space cell dimension and subtracts the maximum shape
 shear before skipping. Skips stop at the current spherical-shell segment.
 
-The distance map is regenerated after NDF animation and before cloud rendering.
+The procedural distance map is regenerated after NDF changes and before cloud rendering.
 Texture and generated NDF modes both participate. If acceleration resources or
 shaders are unavailable, the renderer uses the ordinary distance-based march.
 The auxiliary maps use R32_FLOAT to avoid losing small positive coverage to
@@ -47,14 +47,15 @@ iteration-limited march.
 -   `cloudLayer.high.viewSteps` defaults to 194 and divides only the high layer's
     occupied shell intervals; clear approach distance and the low layer are excluded.
 -   `cloudLayer.high.lightSteps` defaults to 6 independently of low-cloud lighting.
--   `cloudMap.cumuliform.thicknessScale` scales thickness.
--   `thicknessCoverage` controls how strongly coverage determines thickness.
--   `topType` and `topTypeVariation` control the mean type and its variation.
+-   `cloudMap.procedural.cloudSize` sets cloud-center spacing in kilometres.
+-   `development` controls vertical rise independently from cloud amount.
+-   `form` selects cumulus, stratocumulus or stratus; `seed` fixes the layout.
+-   `topType`, `topTypeVariation` and `bottomType` select the existing profiles.
 -   `cloudLayer.low.shapeShear` offsets the NDF with height, in kilometres along
     the wind. Zero preserves the unsheared profile.
 
-New shape controls default to the previous generator's shape equations. Existing
-JSON files receive defaults for missing fields.
+See [procedural NDF generation](ndf-generator.md) for all controls and migration.
+Old noise-product parameters have no equivalent in the cloud-mass generator.
 
 ## Motion and history
 
@@ -62,12 +63,10 @@ NDF sampling and low-cloud noise share the existing wind displacement.
 Reprojection subtracts the displacement since the last successfully written main
 history. This compensates for the common rigid wind translation.
 
-The three Cumuliform `offset0/1/2` controls now specify relative velocity in m/s.
-They previously advanced directly in noise-cell coordinates per second. Existing
-numbers still load, but their animation speed changes; re-tune presets that relied
-on the old frequency- and map-scale-dependent speed. Independent NDF evolution
-and high-cloud pattern drift reduce history confidence rather than being treated
-as a single rigid translation.
+The procedural NDF contains no time-dependent inputs. Its cloud centers, weather
+and profiles move together under the shared wind offset. Parameters, seed or
+world scale changes rebuild the control field and invalidate history. High-cloud
+pattern drift still reduces its separate history confidence.
 
 Auxiliary W stores `1 + visibleHighCloudFraction`; zero remains invalid. Spatial
 fallback uses its validity, not its magnitude, as a filter weight. Mixed layers

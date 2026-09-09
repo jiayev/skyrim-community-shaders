@@ -29,32 +29,49 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	texPath)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	CumuliformNdfSettings,
-	scale0,
-	offset0,
-	scale1,
-	offset1,
-	scale2,
-	offset2,
-	clipRange,
-	power,
-	wispiness,
-	rot0,
-	rot1,
-	rot2,
-	thicknessScale,
-	thicknessCoverage,
+	ProceduralNdfSettings,
+	seed,
+	form,
+	coverage,
+	weatherStrength,
+	cloudSize,
+	weatherScale,
+	elongation,
+	bearing,
+	sizeVariation,
+	clustering,
+	development,
+	heightVariation,
+	baseVariation,
+	edgeSoftness,
 	topType,
-	topTypeVariation)
+	topTypeVariation,
+	bottomType,
+	shoulders)
+
+void to_json(nlohmann::json& j, const NdfSettings& value)
+{
+	j = { { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural } };
+}
+
+void from_json(const nlohmann::json& j, NdfSettings& value)
+{
+	value = {};
+	value.type = j.value("type", NdfType::Procedural) == NdfType::Texture ? NdfType::Texture : NdfType::Procedural;
+	value.texture = j.value("texture", TexNdfSettings{});
+	if (j.contains("procedural")) {
+		value.procedural = j.at("procedural").get<ProceduralNdfSettings>();
+	} else if (j.contains("cumuliform")) {
+		// Profile selectors retain their meaning; the old noise products have no cloud-mass equivalent.
+		const auto& previous = j.at("cumuliform");
+		value.procedural.topType = previous.value("topType", value.procedural.topType);
+		value.procedural.topTypeVariation = previous.value("topTypeVariation", value.procedural.topTypeVariation);
+		value.procedural.bottomType = previous.value("wispiness", value.procedural.bottomType);
+	}
+}
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	NdfSettings,
-	type,
-	texture,
-	cumuliform)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HpLowCloudSettings,
+	LowCloudSettings,
 	baseAltitude,
 	thickness,
 	ndfScale,
@@ -67,7 +84,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	extinctionCoefficient)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HpHighCloudSettings,
+	HighCloudSettings,
 	enabled,
 	thinLayer,
 	thinLayerStart,
@@ -118,7 +135,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	coverAbsorptionStrength)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HpLightingSettings,
+	CloudLightingSettings,
 	useLightCache,
 	crossLayerShadows,
 	cacheSteps,
@@ -140,7 +157,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	lightStepDistanceLod)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HpPhiFwdSettings,
+	CloudForwardScatteringSettings,
 	intensity,
 	depthPow,
 	depthBias,
@@ -976,8 +993,8 @@ bool PhysicalSky::ShadersOK()
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
-	const bool ndfReady = settings.cloudMap.type != NdfType::Cumuliform ||
-	                      (ndfManager.texNdfOutput && ndfManager.cumuliformProgram);
+	const bool ndfReady = settings.cloudMap.type != NdfType::Procedural ||
+	                      (ndfManager.texNdfOutput && ndfManager.generatorProgram);
 	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
@@ -1181,7 +1198,8 @@ void PhysicalSky::Prepass()
 				volMainHistoryValid = false;
 				volCloudSettingsKey = cloudSettingsKey;
 			}
-			ndfManager.UpdateNdf(settings.cloudMap, settings.cloudLayer.low);
+			if (ndfManager.UpdateNdf(settings.cloudMap, settings.cloudLayer.low))
+				volMainHistoryValid = false;
 			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
