@@ -96,7 +96,10 @@ The texture keeps its physical repeat scale, offset and shared wind advection.
 Samples use the caller's explicit mip level. Coarse light-cache and ground-shadow
 queries retain their existing coarser mip and disable the near folded term;
 local light queries also omit the folded term, while view queries can include
-it. All use the same reconstruction
+it. Local light mip is `clamp(log2(max(intervalNoiseTexels, 1)), 0, 3)`, using
+the interval's world length, noise frequency and largest texture dimension.
+The upper bound limits smoothing because filtered noise is not filtered density
+after nonlinear threshold reconstruction. All use the same reconstruction
 helper. A logarithmic view-distance mip ramp requires separate footprint
 calibration and is not inferred from density or profile strength here.
 

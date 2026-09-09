@@ -149,7 +149,9 @@ void PhysicalSky::SetupVolumetricResources()
 	                                     D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
 	const bool packedRadiance = SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_R11G11B10_FLOAT, &radianceSupport)) &&
 	                            (radianceSupport & requiredRadianceSupport) == requiredRadianceSupport;
-	const DXGI_FORMAT radianceFormat = packedRadiance ? DXGI_FORMAT_R11G11B10_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
+	const DXGI_FORMAT outputRadianceFormat = packedRadiance ? DXGI_FORMAT_R11G11B10_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
+	// Feedback needs equal channel precision to preserve chromaticity across reprojections.
+	constexpr DXGI_FORMAT historyRadianceFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 	// Realtime layout: quarter-resolution trace, half-resolution temporal
 	// reprojection/history, then depth-aware full-resolution upscale.
@@ -160,16 +162,16 @@ void PhysicalSky::SetupVolumetricResources()
 		const uint32_t intermediateH = std::max(1u, (mainDesc.Height + 1u) / 2u);
 
 		texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowTr");
-		texVolLowLum = createCloudTexture(lowW, lowH, radianceFormat, "PhysicalSky::VolumetricLowLum");
+		texVolLowLum = createCloudTexture(lowW, lowH, historyRadianceFormat, "PhysicalSky::VolumetricLowLum");
 		texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowAux");
 		texVolUpscaleTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateTr");
-		texVolUpscaleLum = createCloudTexture(intermediateW, intermediateH, radianceFormat, "PhysicalSky::VolumetricIntermediateLum");
+		texVolUpscaleLum = createCloudTexture(intermediateW, intermediateH, historyRadianceFormat, "PhysicalSky::VolumetricIntermediateLum");
 		texVolUpscaleAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateAux");
 		texVolTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricTr");
-		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, radianceFormat, "PhysicalSky::VolumetricLum");
+		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, outputRadianceFormat, "PhysicalSky::VolumetricLum");
 		texVolAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricAux");
 		texVolHistoryTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryTr");
-		texVolHistoryLum = createCloudTexture(intermediateW, intermediateH, radianceFormat, "PhysicalSky::VolumetricHistoryLum");
+		texVolHistoryLum = createCloudTexture(intermediateW, intermediateH, historyRadianceFormat, "PhysicalSky::VolumetricHistoryLum");
 		texVolHistoryAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryAux");
 	}
 
@@ -202,9 +204,9 @@ void PhysicalSky::SetupVolumetricResources()
 		texVolCubeTr->CreateSRV(srv_desc);
 		texVolCubeTr->CreateUAV(uav_desc);
 
-		tex_desc.Format = radianceFormat;
-		srv_desc.Format = radianceFormat;
-		uav_desc.Format = radianceFormat;
+		tex_desc.Format = outputRadianceFormat;
+		srv_desc.Format = outputRadianceFormat;
+		uav_desc.Format = outputRadianceFormat;
 		texVolCubeLum = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCubeLum");
 		texVolCubeLum->CreateSRV(srv_desc);
 		texVolCubeLum->CreateUAV(uav_desc);
