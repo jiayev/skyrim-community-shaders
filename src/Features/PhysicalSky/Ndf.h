@@ -108,6 +108,7 @@ struct HpLowCloudSettings
 	float2 ndfScale = { 16.f, 16.f };
 	// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
 	float noiseCompositeScale = 0.2f;
+	float noiseRoundness = 0.5f;
 	float3 noiseOffset = { 0.f, 0.f, 0.f };
 	float2 windDirection = { 1.f, 0.2f };
 	float windSpeed = 12.f;

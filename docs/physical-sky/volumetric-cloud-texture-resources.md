@@ -8,8 +8,8 @@ thin high clouds and render-target formats.
 ## Low-cloud model
 
 Physical Sky uses a vertical-profile representation inspired by publicly
-described Nubis techniques. Its current noise reduction is a project-specific
-legacy implementation; see [noise contract audit](noise-contract.md). Low-cloud density
+described Nubis techniques. Its threshold-noise reconstruction is documented
+in [noise reconstruction](noise-contract.md). Low-cloud density
 is the composition of two independent resources:
 
 1. a five-layer NDF supplies the dimensional profile: minimum height, maximum
@@ -27,7 +27,6 @@ the internal and boundary variation of that mass.
 | Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `nubis.dds`      |
 | Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated    |
 | Low-cloud NDF             |    `t7` | `Texture2DArray<float>`   | GPU-generated    |
-| Nubis base warp           |    `t8` | `Texture2D<unorm float4>` | CPU-generated    |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
 | High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
@@ -85,29 +84,18 @@ distributions.
 ## `nubis.dds`
 
 The bundled asset is a 128 x 128 x 128, linear RGBA8 volume with eight mip
-levels. Its legacy DDS channel masks explicitly map bytes to R/G/B/A.
-It is sampled at t5 with wrapping and an explicit mip level.
+levels. Its legacy DDS channel masks map bytes to R/G/B/A. It is sampled once
+at t5 with wrapping and the caller's explicit mip level.
 
-The current reducer blends R/G and scaled B/A, subtracts a height-dependent
-relief term, and treats the result as erosion. A second sample of the same
-volume uses a different orientation, scale and exponent. The final density is:
+Coverage mixes G towards R. A and B produce another threshold using the
+coverage-dependent exponent 1/16. `Noise Roundness` selects between these
+thresholds. Coverage is then eroded and normalized by the remaining threshold
+range, before applying the independent vertical-profile response.
 
-```text
-saturate(min(dimensionalProfile, 0.7) - 1 + 0.975 * (1 - erosion))
-```
-
-This describes the implementation, not a verified authoring contract. The
-public Nubis Evolved presentation shows a four-channel noise composite and a
-scalar density formula, but does not establish that this particular file uses
-this reduction, channel mapping or inversion. Statistical and slice inspection
-alone cannot recover its intended semantics. The earlier claim that this asset
-was the exact illustrated composite was unsupported.
-
-`Noise Composite Scale` controls the physical repeat length of this texture.
-The second sample uses a lower spatial frequency (0.345x XY, 0.3x Z), so calling
-it a higher-frequency detail octave would be misleading. The current mip bias,
-profile cap and distance-dependent channel blend are also implementation
-choices requiring visual evaluation when the noise contract is corrected.
+This contract and its near-camera folded detail are specified in
+[noise reconstruction](noise-contract.md). It uses no auxiliary warp texture
+or rotated second sample. `Noise Composite Scale` controls the physical repeat
+length of the volume; it does not change NDF coverage, height or cloud species.
 
 ## Profile LUTs
 
@@ -137,11 +125,10 @@ pre-HP path. High-cloud map generation remains an independent implementation.
 ## Static validation checklist
 
 -   `nubis.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
--   The Nubis base warp texture is generated and bound at `t8`.
 -   Low NDF is a five-slice, linear `Texture2DArray` in the documented order.
 -   NDF coverage is generated independently from `nubis.dds`.
 -   Procedural minimum and maximum height form a valid interval.
--   The scalar noise composite is applied only after the dimensional profile is nonzero.
+-   Noise is queried only inside positive NDF/profile support, with zero density outside it.
 -   High Weather contains a valid mip 2 and keeps A zero outside coverage.
 
 ## Implementation references
@@ -152,3 +139,4 @@ pre-HP path. High-cloud map generation remains an independent implementation.
 -   low NDF generator shader: `features/Physical Sky/Shaders/PhysicalSky/NdfCumuliform.cs.hlsl`
 -   independent high-cloud generator shader: `features/Physical Sky/Shaders/PhysicalSky/HighCloudMapGen.cs.hlsl`
 -   density sampling: `features/Physical Sky/Shaders/PhysicalSky/Volumetrics.cs.hlsl`
+-   noise reconstruction: `features/Physical Sky/Shaders/PhysicalSky/CloudNoise.hlsli`

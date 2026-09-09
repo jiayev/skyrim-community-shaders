@@ -13,6 +13,7 @@
 #define PS_PREPASS_RSRCS
 #define PS_NO_RSRCS
 #define OMIT_PS_NAMESPACE
+#include "CloudNoise.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
 #include "PhysicalSky/Common.hlsli"
 
@@ -74,8 +75,7 @@ struct VolumetricCloudData
 	float noiseFrequency;
 	float3 noiseOffset;
 	float extinctionCoefficient;
-	float2 noiseHeightShear;
-	float warpFrequency;
+	float noiseRoundness;
 	float2 highCellScale;
 	float highCellWindSpeed;
 	float2 highCellWarpScale;
@@ -177,7 +177,6 @@ Texture2D<float> TexDepth : register(t4);
 Texture3D<unorm float4> TexNubisNoise : register(t5);
 Texture3D<float4> TexAerialPerspectiveSun : register(t6);
 Texture2DArray<float4> TexCloudNDF : register(t7);
-Texture2D<float4> TexNubisWarp : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
 Texture2D<float4> TexHpHighWeather : register(t11);
@@ -609,68 +608,22 @@ struct CloudDensityContext
 {
 	NDFInfo ndf;
 	float3 noise_coordinates;
-	float2 warp_coordinates;
 	float eye_distance;
 };
-
-float ReduceNubisErosion(float4 noise, NDFInfo ndf, float eye_distance)
-{
-	const float distFade = saturate((eye_distance - 1000.0) * 0.001);
-	const float smoothErosion = lerp(noise.r, noise.b * 0.3, saturate(ndf.bottom_value));
-	// The existing distance blend has already discarded all near-field terms.
-	[branch] if (distFade >= 1.0) return smoothErosion;
-	// Preserve the bundled texture's legacy reduction until its authoring contract is established.
-	const float wispyErosion = lerp(noise.r, noise.g, saturate(ndf.dimension_profile));
-	const float billowyGradient = pow(saturate(ndf.dimension_profile), 0.25);
-	const float billowyErosion = lerp(noise.b * 0.3, noise.a * 0.3, billowyGradient);
-	float erosion = lerp(wispyErosion, billowyErosion, saturate(ndf.bottom_value));
-
-	const float covRamp = saturate((ndf.coverage - 0.2) * 10.0);
-	const float relief = noise.a * 0.2 * (1.0 - pow(saturate(ndf.height_fraction * (5.0 + 5.0 * covRamp)), 3.0));
-	erosion = max(erosion - relief, 0.0);
-
-	return lerp(erosion, smoothErosion, distFade);
-}
 
 float sampleCloudDensityFromContext(
 	CloudDensityContext density_context, float mip_level, bool include_detail)
 {
 	const NDFInfo ndf = density_context.ndf;
-	// Erosion is nonnegative: even noise with zero erosion cannot produce
-	// density when the profile is below 1 - 0.975. Avoid both noise lookups.
-	if (!ndf.in_layer || min(ndf.dimension_profile, 0.7) - 1.0 + 0.975 <= 0.0)
+	const float verticalProfile = saturate(ndf.top_value * ndf.bottom_value);
+	if (!ndf.in_layer || ndf.coverage <= 0.0 || verticalProfile <= 0.0)
 		return 0.0;
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-
-	// Distorts the noise UVs with a 2D warp field that is
-	// strongest at the layer bottom (0.125 in noise-UV space below 2% height
-	// fraction) and fades to zero by 5%, breaking up the flat base without
-	// disturbing the cloud body.
-	const float bottomRamp = saturate((ndf.height_fraction - 0.02) * 33.3333);
-	float2 warp = 0.0;
-	[branch] if (bottomRamp < 1.0)
-	{
-		warp = (TexNubisWarp.SampleLevel(TileableSampler, density_context.warp_coordinates, 0).rg * 2.0 - 1.0) *
-		       (0.125 * (1.0 - bottomRamp));
-	}
-	const float3 noise_uv = density_context.noise_coordinates + float3(warp, 0.0);
-
-	const float baseMip = max(mip_level + saturate(ndf.dimension_profile) * 2.0, 0.0);
-	const float4 noise = saturate(TexNubisNoise.SampleLevel(TileableSampler, noise_uv, baseMip));
-	float erosionComposite = ReduceNubisErosion(noise, ndf, density_context.eye_distance);
-
-	if (include_detail) {
-		const float2 rotated = float2(0.920505 * noise_uv.x - 0.390731 * noise_uv.y, 0.390731 * noise_uv.x + 0.920505 * noise_uv.y);
-		const float3 detail_uv = float3(rotated * 0.345, noise_uv.z * 0.3);
-		const float4 detail = saturate(TexNubisNoise.SampleLevel(TileableSampler, detail_uv, baseMip + 1.0));
-		const float detailExp = 2.0 - 1.5 * saturate((ndf.height_fraction - 0.7) * 3.3333);
-		erosionComposite = lerp(erosionComposite, ReduceNubisErosion(pow(max(detail, 1e-5), detailExp), ndf, density_context.eye_distance), 0.35);
-	}
-
-	const float cloudNoiseComposite = 1.0 - erosionComposite;
-	const float normalizedDensity = saturate(min(ndf.dimension_profile, 0.7) - 1.0 + 0.975 * cloudNoiseComposite);
-	return normalizedDensity * info.extinctionCoefficient;
+	const float4 noise = TexNubisNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, max(mip_level, 0.0));
+	const float density = ReconstructCloudNoiseDensity(noise, ndf.coverage, info.noiseRoundness, verticalProfile,
+		density_context.eye_distance, include_detail);
+	return density * info.extinctionCoefficient;
 }
 
 float sampleCloudDensity(
@@ -680,7 +633,6 @@ float sampleCloudDensity(
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	initNDFInfo(density_context.ndf);
 	density_context.noise_coordinates = 0.0;
-	density_context.warp_coordinates = 0.0;
 	density_context.eye_distance = 0.0;
 
 	const float planetHeight = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
@@ -688,17 +640,15 @@ float sampleCloudDensity(
 		return 0.0;
 
 	const float layerFraction = saturate((planetHeight - cloud.lowestAltitude) / max(cloud.highestAltitude - cloud.lowestAltitude, 1e-5));
-	const float2 heightShift = info.noiseHeightShear * layerFraction;
 	const float2 ndfUV = LowNdfUV(pos.xy - info.cloudShapeShear * smoothstep(0.0, 1.0, layerFraction), info);
 	density_context.ndf = sampleNDF(cloud, ndfUV, planetHeight);
-	if (!density_context.ndf.in_layer || density_context.ndf.dimension_profile < 1e-8)
+	if (!density_context.ndf.in_layer || density_context.ndf.dimension_profile <= 0.0)
 		return 0;
 
-	const float3 shiftedPosition = pos + float3(heightShift, 0.0);
-	density_context.noise_coordinates = shiftedPosition * info.noiseFrequency + info.noiseOffset -
+	density_context.noise_coordinates = pos * info.noiseFrequency + info.noiseOffset -
 	                                    float3(info.noiseWindOffset, 0.0) * info.noiseFrequency;
-	density_context.warp_coordinates = (pos.xy - info.noiseWindOffset) * info.warpFrequency;
-	density_context.eye_distance = length(pos) * GAME_UNIT_TO_M;
+	const float3 eyePos = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
+	density_context.eye_distance = length(pos - eyePos) * GAME_UNIT_TO_M;
 	return sampleCloudDensityFromContext(density_context, mip_level, include_detail);
 }
 
@@ -813,7 +763,7 @@ void sampleCloudSelfShadow(
 			float3 vis_pos = pos + sun_dir * dist;
 			CloudDensityContext _;
 			const float mip_offset = (float)i / max((float)(visibility_step - 1u), 1.0) * 3.0;
-			const float density = sampleCloudDensity(vis_pos, cloud, mip_offset, true, _);
+			const float density = sampleCloudDensity(vis_pos, cloud, mip_offset, false, _);
 			[branch] if (density > 0.0)
 			{
 				const float width_m = width * GAME_UNIT_TO_M;
