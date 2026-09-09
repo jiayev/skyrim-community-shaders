@@ -13,8 +13,8 @@
 #define PS_PREPASS_RSRCS
 #define PS_NO_RSRCS
 #define OMIT_PS_NAMESPACE
-#include "CloudNoise.hlsli"
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "PhysicalSky/CloudNoise.hlsli"
 #include "PhysicalSky/Common.hlsli"
 
 static const float GAME_UNITS_PER_METER = 1.0 / GAME_UNIT_TO_M;
@@ -722,7 +722,7 @@ float EvaluateHighCloudDensity(float3 pos, out float normalizedHeight)
 	return EvaluateHighCloudDensity(pos, normalizedHeight, _);
 }
 
-#include "CloudLighting.hlsli"
+#include "PhysicalSky/CloudLighting.hlsli"
 
 // Evaluate only the cloud column here. Smooth atmospheric attenuation is sampled
 // independently at each scattering point in RenderVolumetricCloudRay.
