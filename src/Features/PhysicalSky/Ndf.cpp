@@ -99,6 +99,35 @@ void NdfManager::SetupResources()
 		texNdfOutput->CreateUAV(uav_desc);
 	}
 
+	accelerationCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc(16));
+	const D3D11_TEXTURE2D_DESC desc{
+		.Width = 64,
+		.Height = 64,
+		.MipLevels = 1,
+		.ArraySize = 1,
+		.Format = DXGI_FORMAT_R32_FLOAT,
+		.SampleDesc = { .Count = 1 },
+		.Usage = D3D11_USAGE_DEFAULT,
+		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+	};
+	const D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{
+		.Format = desc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+	};
+	const D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{
+		.Format = desc.Format,
+		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+	texOccupancy = eastl::make_unique<Texture2D>(desc, "PhysicalSky::CloudOccupancy");
+	texOccupancy->CreateSRV(srvDesc);
+	texOccupancy->CreateUAV(uavDesc);
+	texDistance = eastl::make_unique<Texture2D>(desc, "PhysicalSky::CloudDistance");
+	texDistance->CreateSRV(srvDesc);
+	texDistance->CreateUAV(uavDesc);
+	accelerationValid = false;
+
 	CompileShaders();
 }
 
@@ -108,6 +137,10 @@ void NdfManager::CompileShaders()
 
 	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfCumuliform.cs.hlsl", {}, "cs_5_0")))
 		cumuliformProgram.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfAcceleration.cs.hlsl", {}, "cs_5_0", "buildOccupancy")))
+		occupancyProgram.attach(rawPtr);
+	if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfAcceleration.cs.hlsl", {}, "cs_5_0", "buildDistance")))
+		distanceProgram.attach(rawPtr);
 }
 
 const char* NdfManager::GetSettingsTypeName(const NdfSettings& ndfSettings)
@@ -170,34 +203,40 @@ void NdfManager::DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texMa
 		constexpr uint32_t pmin = 2;
 		constexpr uint32_t pmax = 50;
 		ImGui::SliderScalarN(T(TKEY("layer_1_frequency"), "Layer 1 - Frequency"), ImGuiDataType_U32, s.scale0.data(), 2, &pmin, &pmax, "%u");
-		ImGui::SliderFloat2(T(TKEY("layer_1_velocity"), "Layer 1 - Velocity"), &s.offset0.x, -100.f, 100.f, "%.1f");
+		ImGui::SliderFloat2(T(TKEY("layer_1_velocity"), "Layer 1 - Velocity"), &s.offset0.x, -100.f, 100.f, "%.1f m/s");
 		ImGui::SliderAngle(T(TKEY("layer_1_rotation"), "Layer 1 - Rotation"), &s.rot0, 0.f, 360.f);
 
 		ImGui::SliderScalarN(T(TKEY("layer_2_frequency"), "Layer 2 - Frequency"), ImGuiDataType_U32, s.scale1.data(), 2, &pmin, &pmax, "%u");
-		ImGui::SliderFloat2(T(TKEY("layer_2_velocity"), "Layer 2 - Velocity"), &s.offset1.x, -100.f, 100.f, "%.1f");
+		ImGui::SliderFloat2(T(TKEY("layer_2_velocity"), "Layer 2 - Velocity"), &s.offset1.x, -100.f, 100.f, "%.1f m/s");
 		ImGui::SliderAngle(T(TKEY("layer_2_rotation"), "Layer 2 - Rotation"), &s.rot1, 0.f, 360.f);
 
 		ImGui::SliderScalarN(T(TKEY("layer_3_frequency"), "Layer 3 - Frequency"), ImGuiDataType_U32, s.scale2.data(), 2, &pmin, &pmax, "%u");
-		ImGui::SliderFloat2(T(TKEY("layer_3_velocity"), "Layer 3 - Velocity"), &s.offset2.x, -100.f, 100.f, "%.1f");
+		ImGui::SliderFloat2(T(TKEY("layer_3_velocity"), "Layer 3 - Velocity"), &s.offset2.x, -100.f, 100.f, "%.1f m/s");
 		ImGui::SliderAngle(T(TKEY("layer_3_rotation"), "Layer 3 - Rotation"), &s.rot2, 0.f, 360.f);
 
 		ImGui::SliderFloat2(T(TKEY("coverage_clamping"), "Coverage Clamping"), &s.clipRange.x, 0, 1, "%.2f");
 		ImGui::SliderFloat(T(TKEY("power"), "Power"), &s.power, 0.2f, 5, "%.2f");
 		ImGui::SliderFloat(T(TKEY("bottom_type"), "Bottom Type"), &s.wispiness, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ndf_thickness_scale"), "Thickness Scale"), &s.thicknessScale, 0.1f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ndf_thickness_coverage"), "Thickness Follows Coverage"), &s.thicknessCoverage, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ndf_top_type"), "Top Type"), &s.topType, 0.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ndf_top_type_variation"), "Top Type Variation"), &s.topTypeVariation, 0.f, 1.f, "%.2f");
 	}
 }
 
 #undef I18N_KEY_PREFIX
 
-void NdfManager::UpdateNdf(const NdfSettings& ndfSettings)
+void NdfManager::UpdateNdf(const NdfSettings& ndfSettings, const HpLowCloudSettings& low)
 {
 	if (ndfSettings.type == NdfType::Texture)
 		return;
 
 	CumuliformNdfSettings data = ndfSettings.cumuliform;
-	data.offset0 *= -globals::state->timer * 1e-3f;
-	data.offset1 *= -globals::state->timer * 1e-3f;
-	data.offset2 *= -globals::state->timer * 1e-3f;
+	const float seconds = globals::state->timer * 1e-3f;
+	const float2 metresToUv = { 0.001f / std::max(low.ndfScale.x, 1.0f), 0.001f / std::max(low.ndfScale.y, 1.0f) };
+	data.offset0 = { -seconds * data.offset0.x * metresToUv.x * data.scale0[0], -seconds * data.offset0.y * metresToUv.y * data.scale0[1] };
+	data.offset1 = { -seconds * data.offset1.x * metresToUv.x * data.scale1[0], -seconds * data.offset1.y * metresToUv.y * data.scale1[1] };
+	data.offset2 = { -seconds * data.offset2.x * metresToUv.x * data.scale2[0], -seconds * data.offset2.y * metresToUv.y * data.scale2[1] };
 	cumuliformCb->Update(data);
 
 	auto context = globals::d3d::context;
@@ -216,6 +255,42 @@ void NdfManager::UpdateNdf(const NdfSettings& ndfSettings)
 	context->CSSetConstantBuffers(1, 1, &cb);
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
+}
+
+void NdfManager::UpdateAcceleration(const NdfSettings& ndfSettings, TextureManager& texManager)
+{
+	accelerationValid = false;
+	auto* ndf = GetNdf(ndfSettings, texManager);
+	if (!ndf || !occupancyProgram || !distanceProgram || !texOccupancy || !texDistance || !accelerationCb)
+		return;
+	const std::array<uint32_t, 4> data = { ndfSettings.type == NdfType::Texture ? 0u : 1u, 0u, 0u, 0u };
+	accelerationCb->Update(data);
+	auto* context = globals::d3d::context;
+	auto* cb = accelerationCb->CB();
+	auto* uav = texOccupancy->uav.get();
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetShaderResources(0, 1, &ndf);
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(occupancyProgram.get(), nullptr, 0);
+	globals::profiler->BeginPass("PhysicalSky::CloudAcceleration");
+	context->Dispatch(8, 8, 1);
+	uav = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	auto* occupancy = texOccupancy->srv.get();
+	context->CSSetShaderResources(1, 1, &occupancy);
+	uav = texDistance->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(distanceProgram.get(), nullptr, 0);
+	context->Dispatch(8, 8, 1);
+	globals::profiler->EndPass();
+	ID3D11ShaderResourceView* nullSrvs[2] = {};
+	context->CSSetShaderResources(0, 2, nullSrvs);
+	uav = nullptr;
+	cb = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetShader(nullptr, nullptr, 0);
+	accelerationValid = true;
 }
 
 ID3D11ShaderResourceView* NdfManager::GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager)
