@@ -1,8 +1,15 @@
 # Volumetric Cloud Texture Resources
 
+See [cloud sampling and motion](cloud-sampling.md) for the view march,
+empty-space acceleration, motion units and history metadata. See
+[cloud lighting and reconstruction](cloud-lighting.md) for light caches, distant
+thin high clouds and render-target formats.
+
 ## Low-cloud model
 
-Physical Sky follows the Nubis Evolved Vertical Profile Model. Low-cloud density
+Physical Sky uses a vertical-profile representation inspired by publicly
+described Nubis techniques. Its current noise reduction is a project-specific
+legacy implementation; see [noise contract audit](noise-contract.md). Low-cloud density
 is the composition of two independent resources:
 
 1. a five-layer NDF supplies the dimensional profile: minimum height, maximum
@@ -24,23 +31,25 @@ the internal and boundary variation of that mass.
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
 | High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
-| Reserved                  |   `t12` | -                         | null             |
+| Low-cloud distance        |   `t12` | `Texture2D<float>`        | GPU-generated    |
 | High cell                 |   `t13` | `Texture2D<float4>`       | GPU-generated    |
 | High warp                 |   `t14` | `Texture2D<float4>`       | GPU-generated    |
 | High wisp                 |   `t15` | `Texture2D<float4>`       | GPU-generated    |
 | Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer         |
 | Nubis top profile         |   `t17` | `Texture2D<unorm float>`  | `top_lut.dds`    |
 | Nubis bottom profile      |   `t18` | `Texture2D<unorm float>`  | `bottom_lut.dds` |
+| Low-cloud light cache     |   `t24` | `Texture3D<float4>`       | GPU-generated    |
+| High-cloud light cache    |   `t25` | `Texture3D<float4>`       | GPU-generated    |
 
 The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 `features/Physical Sky/Textures/PhysicalSky/` in the source tree.
 
 ## Five-layer NDF
 
-The pre-HP NDF path is restored as a `256 x 256 x 5`, `R8_UNORM`
-`Texture2DArray`, sampled with tileable linear filtering at mip 0. It has two
-sources: a compatible DDS supplied through the Texture mode, or the original
-Cumuliform generator.
+The NDF is sampled with tileable linear filtering at mip 0. Texture mode
+accepts a `256 x 256 x 5`, `R8_UNORM` array. The Cumuliform generator packs the
+same five attributes into two RGBA8 array slices: minimum/maximum height, coverage
+and top type in slice 0, and bottom type in slice 1 R.
 
 | Slice | Meaning                                               |
 | ----: | ----------------------------------------------------- |
@@ -75,51 +84,30 @@ distributions.
 
 ## `nubis.dds`
 
-Nubis Evolved page 33 describes the density input as one four-channel `128^3`
-"Noise Composite". Page 34 applies the scalar composite to the dimensional
-profile:
+The bundled asset is a 128 x 128 x 128, linear RGBA8 volume with eight mip
+levels. Its legacy DDS channel masks explicitly map bytes to R/G/B/A.
+It is sampled at t5 with wrapping and an explicit mip level.
+
+The current reducer blends R/G and scaled B/A, subtracts a height-dependent
+relief term, and treats the result as erosion. A second sample of the same
+volume uses a different orientation, scale and exponent. The final density is:
 
 ```text
-cloud_density = saturate(cloud_noise_composite - (1 - dimensional_profile))
+saturate(min(dimensionalProfile, 0.7) - 1 + 0.975 * (1 - erosion))
 ```
 
-The bundled `nubis.dds` predates the later cloud-map port and has the channel
-contract used by the original Physical Sky implementation:
+This describes the implementation, not a verified authoring contract. The
+public Nubis Evolved presentation shows a four-channel noise composite and a
+scalar density formula, but does not establish that this particular file uses
+this reduction, channel mapping or inversion. Statistical and slice inspection
+alone cannot recover its intended semantics. The earlier claim that this asset
+was the exact illustrated composite was unsupported.
 
-| Channels | Meaning                      |
-| -------- | ---------------------------- |
-| R, G     | two wispy erosion variants   |
-| B, A     | two billowy erosion variants |
-
-The shader first blends R/G according to dimensional-profile strength, blends
-B/A for the billowy endpoint, and then blends wispy/billowy using the sampled
-bottom-profile value. The file stores erosion thresholds, so this scalar is
-inverted into the positive-density convention before the page-34 equation is
-applied. Algebraically this is exactly `saturate(dimensionalProfile - erosion)`.
-
-This is deliberately different from assets whose R channel is a Perlin-Worley
-carrier reconstructed against GBA Worley bands. Applying that unrelated channel
-contract to this DDS produces incorrect, repetitive structure.
-
-`Noise Composite Scale` controls only the physical repeat length of
-`nubis.dds`. It does not change NDF coverage, height, or cloud species.
-
-Sampling reuses the detail machinery captured from Horizon Forbidden West:
-
--   a tileable 2D warp field at `t8` distorts the noise UVs; its strength is
-    0.125 in noise-UV space below 2% height fraction and fades to zero by 5%,
-    breaking up the flat cloud base;
--   the mip trend is coarser-with-profile, the continuous analogue of HFW's
-    `floor(profile * 3)`, keeping a smooth body and crisp wispy edges;
--   when detail is enabled, a rotated second octave at 0.345x XY frequency and
-    0.3x Z frequency of the same volume is pow-shaped by height (exponent 2 at
-    the base to 0.5 at the top) and lerped in at 0.35, breaking up volume tiling;
--   coverage-driven erosion relief near the layer bottom (HFW `_1573`) softens
-    sparse clouds instead of carving them with the same detail;
--   the dimensional profile is capped at 0.7 with a 0.975 composite gain (HFW),
-    bounding peak optical density;
--   beyond ~1 km the higher-frequency channel variants fade out (HFW `_1603`),
-    reducing far-distance shimmer.
+`Noise Composite Scale` controls the physical repeat length of this texture.
+The second sample uses a lower spatial frequency (0.345x XY, 0.3x Z), so calling
+it a higher-frequency detail octave would be misleading. The current mip bias,
+profile cap and distance-dependent channel blend are also implementation
+choices requiring visual evaluation when the noise contract is corrected.
 
 ## Profile LUTs
 

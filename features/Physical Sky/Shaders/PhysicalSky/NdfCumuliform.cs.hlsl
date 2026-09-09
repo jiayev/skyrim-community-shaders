@@ -22,6 +22,10 @@ cbuffer CB : register(b1)
 	float rot1;
 	float rot2;
 	float _pad;
+	float thicknessScale;
+	float thicknessCoverage;
+	float topType;
+	float topTypeVariation;
 };
 
 float2x2 rotationMatrix(float angle)
@@ -101,12 +105,12 @@ float Worley(float2 uv, uint2 freq, float2x2 shape)
 
 	float height_noise = saturate(noise0 * 0.55 + noise1 * 0.30 + noise2 * 0.15);
 	float base_min_h = saturate(0.03 + (1.0 - height_noise) * 0.20 + (1.0 - coverage) * 0.10);
-	float layer_thickness = lerp(0.30, 0.94, coverage);
+	float layer_thickness = lerp(0.30, 0.94, lerp(0.5, coverage, saturate(thicknessCoverage))) * max(thicknessScale, 0.0);
 	float max_h = saturate(base_min_h + layer_thickness);
 	float min_h = saturate(min(base_min_h, max_h - 0.08));
 
 	// Same UNORM8 values and UV grid as the five scalar layers. Packing the
 	// attributes lets each view/light density sample fetch them in two reads.
-	RWTexOutput[uint3(tid, 0)] = float4(min_h, max_h, coverage, noise);
+	RWTexOutput[uint3(tid, 0)] = float4(min_h, max_h, coverage, lerp(saturate(topType), noise, saturate(topTypeVariation)));
 	RWTexOutput[uint3(tid, 1)] = float4(wispiness, 0, 0, 0);
 }

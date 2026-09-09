@@ -39,7 +39,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	wispiness,
 	rot0,
 	rot1,
-	rot2)
+	rot2,
+	thicknessScale,
+	thicknessCoverage,
+	topType,
+	topTypeVariation)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NdfSettings,
@@ -56,11 +60,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	noiseOffset,
 	windDirection,
 	windSpeed,
+	shapeShear,
 	extinctionCoefficient)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpHighCloudSettings,
 	enabled,
+	thinLayer,
+	thinLayerStart,
+	thinLayerEnd,
+	viewSteps,
+	lightSteps,
 	weatherDim,
 	weatherWorldSize,
 	weatherCenter,
@@ -106,6 +116,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HpLightingSettings,
+	useLightCache,
+	crossLayerShadows,
+	cacheSteps,
 	scatterTint,
 	forwardEccentricity,
 	backwardEccentricity,
@@ -603,9 +616,12 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		uint32_t minStep = 1, maxStep = 200;
-		ImGui::SliderScalar(T(TKEY("cloud_max_steps"), "Cloud Max Steps"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
+		ImGui::SliderScalar(T(TKEY("low_cloud_sampling_quality"), "Low Cloud Sampling Quality"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
+		uint32_t minHighStep = 4, maxHighStep = 512;
+		ImGui::SliderScalar(T(TKEY("high_cloud_view_steps"), "High Cloud View Steps"), ImGuiDataType_U32, &high.viewSteps, &minHighStep, &maxHighStep);
 		uint32_t minLightStep = 1, maxLightStep = 16;
-		ImGui::SliderScalar(T(TKEY("light_steps"), "Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
+		ImGui::SliderScalar(T(TKEY("high_cloud_light_steps"), "High Cloud Light Steps"), ImGuiDataType_U32, &high.lightSteps, &minLightStep, &maxLightStep);
+		ImGui::SliderScalar(T(TKEY("low_cloud_light_steps"), "Low Cloud Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
 		ImGui::SliderFloat(T(TKEY("light_step_distance_lod"), "Light Step Distance LOD"), &lighting.lightStepDistanceLod, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("light_step_distance_lod_desc"), "Fades the light-march step budget down to a single step with view distance (3 km to 100 km). 0 disables the LOD."));
@@ -626,10 +642,11 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &low.ndfScale.x, 1.f, 50.f, "%.2f km");
 		if (ImGui::SliderFloat(T(TKEY("noise_feature_size"), "Noise Composite Scale"), &low.noiseCompositeScale, 0.02f, 8.f, "%.3f km", ImGuiSliderFlags_Logarithmic))
 			volMainHistoryValid = false;
-		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("noise_feature_size_tooltip"), "Physical repeat length of nubis.dds, the authored 128^3 RGBA density-noise composite. It modulates density inside the NDF profile; it does not generate NDF coverage or height."));
+		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
+		ImGui::SliderFloat(T(TKEY("cloud_shape_shear"), "Cloud Shape Shear"), &low.shapeShear, 0.f, 2.f, "%.2f km");
 		ImGui::SliderFloat(T(TKEY("extinction_coefficient"), "Extinction Coefficient"), &low.extinctionCoefficient, 0.f, 0.5f, "%.3f 1/m");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("extinction_coefficient_tooltip"), "Scales normalized reconstructed density before optical integration. It changes opacity, not NDF support or silhouette."));
@@ -640,6 +657,11 @@ void PhysicalSky::SettingsVolumetricClouds()
 		high.bottomAltitude = std::clamp(high.bottomAltitude, 2.0f, 18.0f);
 		high.topAltitude = std::clamp(std::max(high.topAltitude, high.bottomAltitude + 0.1f), high.bottomAltitude + 0.1f, 24.0f);
 		ImGui::Checkbox(T(TKEY("enable_high_clouds"), "Enable High Clouds"), &high.enabled);
+		ImGui::Checkbox(T(TKEY("high_thin_layer"), "Distant Thin Layer"), &high.thinLayer);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("high_thin_layer_tooltip"), "Approximates distant high clouds thinner than 1 km. Blends back to volume marching near the horizon, inside the layer, or when geometry clips the cloud."));
+		ImGui::SliderFloat(T(TKEY("high_thin_start"), "Thin Layer Start"), &high.thinLayerStart, 1.f, 64.f, "%.1f km");
+		ImGui::SliderFloat(T(TKEY("high_thin_end"), "Thin Layer End"), &high.thinLayerEnd, high.thinLayerStart + 1.f, 128.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("high_coverage"), "High Coverage"), &high.coverage, 0.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("weather_world_size"), "Weather World Size"), &high.weatherWorldSize, 8.f, 256.f, "%.1f km", ImGuiSliderFlags_Logarithmic);
 		ImGui::SliderFloat2(T(TKEY("weather_center"), "Weather Center"), &high.weatherCenter.x, -256.f, 256.f, "%.1f km");
@@ -670,6 +692,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
 	{
+		ImGui::Checkbox(T(TKEY("cloud_light_cache"), "Cloud Light Cache"), &lighting.useLightCache);
+		ImGui::Checkbox(T(TKEY("cross_layer_shadows"), "Cross-Layer Shadows"), &lighting.crossLayerShadows);
+		uint32_t minCacheSteps = 4, maxCacheSteps = 32;
+		ImGui::SliderScalar(T(TKEY("cloud_cache_steps"), "Cloud Cache Steps"), ImGuiDataType_U32, &lighting.cacheSteps, &minCacheSteps, &maxCacheSteps);
 		{
 			static const char* phaseModelNames[] = { "Dual-Lobe HG", "Approximate Mie" };
 			int phaseModel = static_cast<int>(std::min(lighting.phaseModel, 1u));
@@ -1104,7 +1130,18 @@ void PhysicalSky::Prepass()
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
-			ndfManager.UpdateNdf(settings.cloudMap);
+			const auto cloudSettingsKey = nlohmann::json{
+				{ "map", settings.cloudMap },
+				{ "layer", settings.cloudLayer },
+				{ "range", settings.rayMarchRange },
+				{ "quality", settings.cloudMaxStep }
+			}.dump();
+			if (cloudSettingsKey != volCloudSettingsKey) {
+				volMainHistoryValid = false;
+				volCloudSettingsKey = cloudSettingsKey;
+			}
+			ndfManager.UpdateNdf(settings.cloudMap, settings.cloudLayer.low);
+			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
 

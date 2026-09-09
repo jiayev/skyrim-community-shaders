@@ -53,7 +53,12 @@ struct CumuliformNdfSettings
 	float rot1 = 2.f;
 	float rot2 = 3.f;
 	float _pad = 0.f;
+	float thicknessScale = 1.f;
+	float thicknessCoverage = 1.f;
+	float topType = 0.5f;
+	float topTypeVariation = 1.f;
 };
+STATIC_ASSERT_ALIGNAS_16(CumuliformNdfSettings);
 
 enum class NdfType : uint32_t
 {
@@ -68,6 +73,8 @@ struct NdfSettings
 	CumuliformNdfSettings cumuliform;
 };
 
+struct HpLowCloudSettings;
+
 struct NdfManager
 {
 	constexpr static uint16_t kNdfDim = 256;
@@ -75,6 +82,12 @@ struct NdfManager
 	eastl::unique_ptr<Texture2D> texNdfOutput = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> cumuliformProgram = nullptr;
 	eastl::unique_ptr<ConstantBuffer> cumuliformCb = {};
+	eastl::unique_ptr<Texture2D> texOccupancy = nullptr;
+	eastl::unique_ptr<Texture2D> texDistance = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> occupancyProgram = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> distanceProgram = nullptr;
+	eastl::unique_ptr<ConstantBuffer> accelerationCb = nullptr;
+	bool accelerationValid = false;
 
 	void SetupResources();
 	void CompileShaders();
@@ -82,7 +95,8 @@ struct NdfManager
 	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
 	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
 	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
-	void UpdateNdf(const NdfSettings& ndfSettings);
+	void UpdateNdf(const NdfSettings& ndfSettings, const HpLowCloudSettings& low);
+	void UpdateAcceleration(const NdfSettings& ndfSettings, TextureManager& texManager);
 	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
 };
 
@@ -97,6 +111,7 @@ struct HpLowCloudSettings
 	float3 noiseOffset = { 0.f, 0.f, 0.f };
 	float2 windDirection = { 1.f, 0.2f };
 	float windSpeed = 12.f;
+	float shapeShear = 0.f;
 	// Optical scale applied to normalized reconstructed density after NDF shaping.
 	float extinctionCoefficient = 0.09f;
 };
@@ -104,6 +119,11 @@ struct HpLowCloudSettings
 struct HpHighCloudSettings
 {
 	bool enabled = true;
+	bool thinLayer = false;
+	float thinLayerStart = 15.f;
+	float thinLayerEnd = 25.f;
+	uint32_t viewSteps = 194;
+	uint32_t lightSteps = 6;
 	uint32_t weatherDim = 512;
 	float weatherWorldSize = 64.f;
 	float2 weatherCenter = { 0.f, 0.f };
@@ -155,6 +175,9 @@ struct HpHighCloudSettings
 
 struct HpLightingSettings
 {
+	bool useLightCache = true;
+	bool crossLayerShadows = true;
+	uint32_t cacheSteps = 16;
 	float3 scatterTint = { 1.f, 1.f, 1.f };
 	float forwardEccentricity = 0.85f;
 	float backwardEccentricity = 0.3f;

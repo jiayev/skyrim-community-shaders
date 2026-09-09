@@ -245,8 +245,10 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
-	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;     // low-resolution cubemap transmittance result
-	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;    // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
+	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture3D> texLowCloudLightCache = nullptr;
+	eastl::unique_ptr<Texture3D> texHighCloudLightCache = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
@@ -353,6 +355,20 @@ struct PhysicalSky final : public Feature
 		float lightStepDistanceLod;
 		float shadowVolumeBottom;
 		float shadowVolumeTop;
+		float2 cloudWindDelta;
+		float2 cloudShapeShear;
+		float lowHistoryConfidence;
+		float highHistoryConfidence;
+		uint highViewSteps;
+		uint highLightSteps;
+		uint ndfAccelerationValid;
+		uint lightCacheEnabled;
+		uint crossLayerShadows;
+		uint lightCacheSteps;
+		uint highThinLayer;
+		float highThinStart;
+		float highThinEnd;
+		float highLightCacheRange;
 	};
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
@@ -361,11 +377,16 @@ struct PhysicalSky final : public Feature
 	uint32_t volHistoryWidth = 0;
 	uint32_t volHistoryHeight = 0;
 	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
+	float2 volHistoryWindOffset = { 0.f, 0.f };
+	float volHistoryTime = 0.f;
+	std::string volCloudSettingsKey;
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolUpscale = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolLowLightCache = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolHighLightCache = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 

@@ -60,9 +60,7 @@ void PhysicalSky::CreateNubisWarpTexture()
 	constexpr UINT kDim = 128;
 	constexpr UINT kChannels = 4;
 
-	// Two independent tileable value-noise fields packed in R/G; the shader
-	// reconstructs the warp vector as (rg * 2 - 1). Matches the role of the 2D
-	// distortion texture Horizon Forbidden West samples ahead of the 3D composite.
+	// Independent tileable R/G fields provide a continuous signed warp vector.
 	auto lattice = [](uint32_t seed, uint32_t x, uint32_t y) {
 		uint32_t hsh = x * 374761393u + y * 668265263u + seed * 1442695041u;
 		hsh = (hsh ^ (hsh >> 13)) * 1274126177u;
@@ -206,6 +204,14 @@ void PhysicalSky::SetupVolumetricResources()
 		return texture;
 	};
 
+	UINT radianceSupport = 0;
+	const UINT requiredRadianceSupport = D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_TEXTURECUBE |
+	                                     D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_SHADER_LOAD |
+	                                     D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW;
+	const bool packedRadiance = SUCCEEDED(device->CheckFormatSupport(DXGI_FORMAT_R11G11B10_FLOAT, &radianceSupport)) &&
+	                            (radianceSupport & requiredRadianceSupport) == requiredRadianceSupport;
+	const DXGI_FORMAT radianceFormat = packedRadiance ? DXGI_FORMAT_R11G11B10_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT;
+
 	// Realtime layout: quarter-resolution trace, half-resolution temporal
 	// reprojection/history, then depth-aware full-resolution upscale.
 	{
@@ -215,16 +221,16 @@ void PhysicalSky::SetupVolumetricResources()
 		const uint32_t intermediateH = std::max(1u, (mainDesc.Height + 1u) / 2u);
 
 		texVolLowTr = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowTr");
-		texVolLowLum = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowLum");
+		texVolLowLum = createCloudTexture(lowW, lowH, radianceFormat, "PhysicalSky::VolumetricLowLum");
 		texVolLowAux = createCloudTexture(lowW, lowH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLowAux");
 		texVolUpscaleTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateTr");
-		texVolUpscaleLum = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateLum");
+		texVolUpscaleLum = createCloudTexture(intermediateW, intermediateH, radianceFormat, "PhysicalSky::VolumetricIntermediateLum");
 		texVolUpscaleAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricIntermediateAux");
 		texVolTr = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricTr");
-		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricLum");
+		texVolLum = createCloudTexture(mainDesc.Width, mainDesc.Height, radianceFormat, "PhysicalSky::VolumetricLum");
 		texVolAux = createCloudTexture(mainDesc.Width, mainDesc.Height, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricAux");
 		texVolHistoryTr = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryTr");
-		texVolHistoryLum = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryLum");
+		texVolHistoryLum = createCloudTexture(intermediateW, intermediateH, radianceFormat, "PhysicalSky::VolumetricHistoryLum");
 		texVolHistoryAux = createCloudTexture(intermediateW, intermediateH, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::VolumetricHistoryAux");
 	}
 
@@ -257,6 +263,9 @@ void PhysicalSky::SetupVolumetricResources()
 		texVolCubeTr->CreateSRV(srv_desc);
 		texVolCubeTr->CreateUAV(uav_desc);
 
+		tex_desc.Format = radianceFormat;
+		srv_desc.Format = radianceFormat;
+		uav_desc.Format = radianceFormat;
 		texVolCubeLum = eastl::make_unique<Texture2D>(tex_desc, "PhysicalSky::VolumetricCubeLum");
 		texVolCubeLum->CreateSRV(srv_desc);
 		texVolCubeLum->CreateUAV(uav_desc);
@@ -297,6 +306,19 @@ void PhysicalSky::SetupVolumetricResources()
 
 		FLOAT shadowVolumeClr[4] = { 0.f, 0.f, 0.f, 0.f };
 		context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowVolumeClr);
+		tex3d_desc.Width = 32;
+		tex3d_desc.Height = 32;
+		tex3d_desc.Depth = 16;
+		tex3d_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		srv_desc.Format = tex3d_desc.Format;
+		uav_desc.Format = tex3d_desc.Format;
+		uav_desc.Texture3D.WSize = tex3d_desc.Depth;
+		texLowCloudLightCache = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::LowCloudLightCache");
+		texLowCloudLightCache->CreateSRV(srv_desc);
+		texLowCloudLightCache->CreateUAV(uav_desc);
+		texHighCloudLightCache = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::HighCloudLightCache");
+		texHighCloudLightCache->CreateSRV(srv_desc);
+		texHighCloudLightCache->CreateUAV(uav_desc);
 	}
 
 	// Load textures and NDF
@@ -325,6 +347,8 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csVolReproject, "Volumetrics.cs.hlsl", {}, "reproject" },
 		ShaderInfo{ &csVolUpscale, "Volumetrics.cs.hlsl", {}, "upscale" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
+		ShaderInfo{ &csVolLowLightCache, "Volumetrics.cs.hlsl", {}, "buildCloudLightCache" },
+		ShaderInfo{ &csVolHighLightCache, "Volumetrics.cs.hlsl", { { "HIGH_CLOUD_CACHE", "1" } }, "buildCloudLightCache" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" }
 	};
 
@@ -404,6 +428,25 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
 	const float2 windDir = windLen > 1e-4f ? low.windDirection / windLen : float2{ 1.f, 0.f };
 	const float2 noiseWindOffset = windDir * MetersToGameUnits(low.windSpeed * timeSeconds);
+	const float elapsed = timeSeconds - volHistoryTime;
+	if (elapsed < 0.0f || elapsed > 0.25f)
+		volMainHistoryValid = false;
+	const float2 windDelta = volMainHistoryValid ? noiseWindOffset - volHistoryWindOffset : float2{ 0.f, 0.f };
+	float lowHistoryConfidence = 1.f;
+	if (settings.cloudMap.type == NdfType::Cumuliform) {
+		const auto& ndf = settings.cloudMap.cumuliform;
+		float maxPixelMotion = 0.f;
+		for (const auto velocity : { ndf.offset0, ndf.offset1, ndf.offset2 }) {
+			const float dx = velocity.x * 0.001f / low.ndfScale.x;
+			const float dy = velocity.y * 0.001f / low.ndfScale.y;
+			maxPixelMotion = std::max(maxPixelMotion, std::sqrt(dx * dx + dy * dy) * NdfManager::kNdfDim * std::max(elapsed, 0.f));
+		}
+		lowHistoryConfidence = std::exp(-maxPixelMotion);
+	}
+	const float windDeltaMeters = std::sqrt(windDelta.x * windDelta.x + windDelta.y * windDelta.y) * Util::Units::GAME_UNIT_TO_M;
+	const float highRelativeMotion = windDeltaMeters * std::abs(high.cellWindSpeed) /
+	                                 (high.weatherWorldSize * 1000.f) * high.weatherDim;
+	const float highHistoryConfidence = std::exp(-highRelativeMotion);
 	const float2 crossWind = { -windDir.y, windDir.x };
 	const float2 shearDirection = (windDir * 0.78f + crossWind * 0.36f) / std::sqrt(0.78f * 0.78f + 0.36f * 0.36f);
 	const float2 noiseHeightShear = shearDirection * KilometersToGameUnits(low.noiseCompositeScale * 0.04f);
@@ -512,6 +555,20 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.lightStepDistanceLod = std::clamp(lighting.lightStepDistanceLod, 0.0f, 1.0f),
 		.shadowVolumeBottom = KilometersToGameUnits(lowCloudBaseKm),
 		.shadowVolumeTop = KilometersToGameUnits(lowCloudTopKm),
+		.cloudWindDelta = windDelta,
+		.cloudShapeShear = windDir * KilometersToGameUnits(std::clamp(low.shapeShear, 0.f, 2.f)),
+		.lowHistoryConfidence = lowHistoryConfidence,
+		.highHistoryConfidence = highHistoryConfidence,
+		.highViewSteps = std::clamp(high.viewSteps, 4u, 512u),
+		.highLightSteps = std::clamp(high.lightSteps, 1u, 16u),
+		.ndfAccelerationValid = ndfManager.accelerationValid ? 1u : 0u,
+		.lightCacheEnabled = lighting.useLightCache && csVolLowLightCache && csVolHighLightCache && texLowCloudLightCache && texHighCloudLightCache ? 1u : 0u,
+		.crossLayerShadows = lighting.crossLayerShadows ? 1u : 0u,
+		.lightCacheSteps = std::clamp(lighting.cacheSteps, 4u, 32u),
+		.highThinLayer = high.thinLayer ? 1u : 0u,
+		.highThinStart = KilometersToGameUnits(std::max(high.thinLayerStart, 1.f)),
+		.highThinEnd = KilometersToGameUnits(std::max(high.thinLayerEnd, std::max(high.thinLayerStart, 1.f) + 1.f)),
+		.highLightCacheRange = KilometersToGameUnits(std::max(settings.shadowVolumeRange, high.weatherWorldSize)),
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -534,7 +591,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
 		highTextures.highWeather,                                                                                      // t11
-		nullptr,                                                                                                       // t12 unused by Nubis low clouds
+		ndfManager.accelerationValid ? ndfManager.texDistance->srv.get() : nullptr,                                    // t12
 		highTextures.highCell,                                                                                         // t13
 		highTextures.highWarp,                                                                                         // t14
 		highTextures.highWisp,                                                                                         // t15
@@ -618,6 +675,31 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	}
 
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap) {
+		ID3D11UnorderedAccessView* nullCacheUav = nullptr;
+		ID3D11ShaderResourceView* nullCacheSrvs[2] = {};
+		context->CSSetUnorderedAccessViews(0, 1, &nullCacheUav, nullptr);
+		context->CSSetShaderResources(24, 2, nullCacheSrvs);
+		if (sbData.lightCacheEnabled != 0u) {
+			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+			globals::profiler->BeginPass("PhysicalSky::CloudLightCache");
+			auto* cacheUav = texLowCloudLightCache->uav.get();
+			context->CSSetUnorderedAccessViews(0, 1, &cacheUav, nullptr);
+			context->CSSetShader(csVolLowLightCache.get(), nullptr, 0);
+			context->Dispatch(8, 8, 4);
+			if (high.enabled) {
+				cacheUav = texHighCloudLightCache->uav.get();
+				context->CSSetUnorderedAccessViews(0, 1, &cacheUav, nullptr);
+				context->CSSetShader(csVolHighLightCache.get(), nullptr, 0);
+				context->Dispatch(8, 8, 4);
+			}
+			globals::profiler->EndPass();
+		}
+		context->CSSetUnorderedAccessViews(0, 1, &nullCacheUav, nullptr);
+		ID3D11ShaderResourceView* cacheSrvs[2] = {
+			sbData.lightCacheEnabled != 0u ? texLowCloudLightCache->srv.get() : nullptr,
+			sbData.lightCacheEnabled != 0u && high.enabled ? texHighCloudLightCache->srv.get() : nullptr
+		};
+		context->CSSetShaderResources(24, 2, cacheSrvs);
 		// Pass 1: quarter-resolution checkerboard ray trace.
 		state->BeginPerfEvent("Volumetric Clouds: Main View");
 		std::array<ID3D11UnorderedAccessView*, 3> uavs = fullResolutionMainView ?
@@ -674,17 +756,18 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			globals::profiler->EndPass();
 		}
 
-		// Ping-pong is unnecessary because the previous history is consumed before these copies.
 		{
 			ID3D11UnorderedAccessView* nullUavs[3] = {};
 			ID3D11ShaderResourceView* nullSrvs[9] = {};
 			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 			context->CSSetShaderResources(26, 9, nullSrvs);
-			context->CopyResource(texVolHistoryTr->resource.get(), texVolUpscaleTr->resource.get());
-			context->CopyResource(texVolHistoryLum->resource.get(), texVolUpscaleLum->resource.get());
-			context->CopyResource(texVolHistoryAux->resource.get(), texVolUpscaleAux->resource.get());
+			texVolHistoryTr.swap(texVolUpscaleTr);
+			texVolHistoryLum.swap(texVolUpscaleLum);
+			texVolHistoryAux.swap(texVolUpscaleAux);
 			volMainHistoryValid = true;
 			volHistorySunDir = cloudLightDir;
+			volHistoryWindOffset = noiseWindOffset;
+			volHistoryTime = timeSeconds;
 		}
 
 		// ===== Cubemap Ray March =====
