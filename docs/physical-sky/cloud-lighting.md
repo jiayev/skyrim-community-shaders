@@ -43,8 +43,16 @@ one midpoint sample per interval and the full interval length as its weight.
 Spherical segments exclude clear gaps, stop at the planet, and retain the
 configured in-layer march range limit.
 
-The low cloud's existing local cone march remains intact; its remainder begins
-at the cone's actual end. High clouds use three local samples over the first
+The low cloud's local light march covers up to 6 km, bounded by the layer exit.
+Its interval endpoints are `distance * (i / steps)^2`, with one jittered sample
+per interval weighted by its length. Increasing the budget refines the entire
+column, including the largest far interval; there is no minimum step that can
+exhaust the column before the requested sample count. The maximum interval is
+`distance * (2 * steps - 1) / steps^2`. Local noise mip follows interval length
+in noise texels, clamped to 0–3. This is bounded noise filtering, not an exact
+average of the nonlinear reconstructed density. The view-density formula and
+its mip remain unchanged. The remainder begins at the local march's actual end.
+High clouds use three local samples over the first
 250 m when a cached remainder is available. The cached remainder starts at the
 end of that interval, preventing the local and cached solar columns from being
 added twice. Direct high-cloud fallback uses `high.lightSteps` for its full
@@ -98,16 +106,18 @@ are unbound before the swap. The next frame reads the newly accumulated history
 and overwrites the old history as its destination. This removes three per-frame
 `CopyResource` operations while keeping the same history representation.
 
-Cloud luminance targets, including the cubemap, use R11G11B10_FLOAT when the
-D3D11 device reports texture, sampling/load and typed UAV support. Otherwise all
-luminance targets use RGBA16_FLOAT. Transmittance and auxiliary depth/history
-metadata remain RGBA16_FLOAT.
+Trace, intermediate and history luminance use RGBA16_FLOAT. Every color input
+and feedback destination in temporal reconstruction therefore has equal RGB
+precision. R11G11B10_FLOAT has fewer blue mantissa bits than red/green; repeated
+filtering and quantization in that format can introduce channel-dependent error.
 
-Packed luminance halves luminance texel storage and reduces the combined screen
-cloud targets from 37.5 to 31.25 bytes per full-resolution pixel before dimension
-rounding (about 16.7%). This excludes other sky resources and the new caches.
-The packed format has lower mantissa precision and no negative components;
-dark gradients and bright cloud edges require visual comparison.
+Only the full-resolution output and cubemap use R11G11B10_FLOAT when the D3D11
+device reports texture, sampling/load and typed UAV support. Neither feeds the
+cloud temporal history. Unsupported devices use RGBA16_FLOAT for those outputs
+as well. Transmittance and auxiliary depth/history metadata remain RGBA16_FLOAT.
+Combined screen cloud targets use 33.5 bytes per full-resolution pixel with
+packed output, or 37.5 without it, before dimension rounding. This excludes
+other sky resources and the lighting caches.
 
 ## Verification scope
 

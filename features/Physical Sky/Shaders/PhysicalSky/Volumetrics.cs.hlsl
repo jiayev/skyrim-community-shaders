@@ -730,14 +730,14 @@ void sampleCloudSelfShadow(
 	// cloud self-shadowing
 	{
 		visibility_step = max(visibility_step, 1u);
-		const static float cone_ratio = 2.0;
-		const static float cone_min_step = 5.0 * GAME_UNITS_PER_METER;
 		const static float cone_max_distance = 6000.0 * GAME_UNITS_PER_METER;
 		float kappa_od_sum = 0.0;
 		float diffuse_survival = 1.0;
 		float cover_dist = min(CloudLightExitDistance(pos, sun_dir, info.lowCloudTraceTopAltitude, info), cone_max_distance);
-		float step_width = max(cover_dist * (cone_ratio - 1.0) / max(exp2((float)visibility_step) - 1.0, 1e-4), cone_min_step);
 		float cum_dist = 0.0;
+		uint3 noise_dimensions;
+		TexNubisNoise.GetDimensions(noise_dimensions.x, noise_dimensions.y, noise_dimensions.z);
+		const float noise_texels_per_unit = abs(info.noiseFrequency) * max(noise_dimensions.x, max(noise_dimensions.y, noise_dimensions.z));
 		const bool evaluate_phi = info.phiFwdIntensity > 0.0;
 		float source_confidence = 0.0;
 		[branch] if (evaluate_phi)
@@ -751,18 +751,17 @@ void sampleCloudSelfShadow(
 		}
 
 		for (uint i = 0; i < visibility_step; i++) {
-			float width = min(step_width, cover_dist - cum_dist);
+			// Fixed quadratic spacing lets the budget refine both near and distant intervals.
+			const float b = (float)(i + 1u) / visibility_step;
+			const float end_dist = cover_dist * b * b;
+			const float width = end_dist - cum_dist;
 			if (width <= 0.0)
 				break;
-			// A single stratified offset shared by the whole cone replaces the fixed
-			// midpoint. Sampling always at the centre of a geometrically growing step
-			// produces fixed-position banding in the self-shadow term; offsetting it
-			// with stratified noise turns that bias into temporally resolvable noise. One
-			// offset per cone (rather than per step) keeps the added variance low.
 			float dist = cum_dist + width * cone_jitter;
 			float3 vis_pos = pos + sun_dir * dist;
 			CloudDensityContext _;
-			const float mip_offset = (float)i / max((float)(visibility_step - 1u), 1.0) * 3.0;
+			// Bound filtering to the local-light mip range; raw-noise mips do not average reconstructed density.
+			const float mip_offset = clamp(log2(max(width * noise_texels_per_unit, 1.0)), 0.0, 3.0);
 			const float density = sampleCloudDensity(vis_pos, cloud, mip_offset, false, _);
 			[branch] if (density > 0.0)
 			{
@@ -784,8 +783,7 @@ void sampleCloudSelfShadow(
 				}
 				light_extinction_od += local_od;
 			}
-			cum_dist += width;
-			step_width *= cone_ratio;
+			cum_dist = end_dist;
 		}
 
 		const float3 tail_pos = pos + sun_dir * cum_dist;
