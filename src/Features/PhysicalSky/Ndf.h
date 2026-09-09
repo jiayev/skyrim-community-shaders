@@ -38,50 +38,52 @@ struct TexNdfSettings
 	std::string texPath;
 };
 
-struct CumuliformNdfSettings
+struct ProceduralNdfSettings
 {
-	std::array<uint32_t, 2> scale0 = { 10, 10 };
-	float2 offset0 = { 3.f, 3.f };
-	std::array<uint32_t, 2> scale1 = { 20, 20 };
-	float2 offset1 = { 6.f, 6.f };
-	std::array<uint32_t, 2> scale2 = { 40, 40 };
-	float2 offset2 = { 24.f, 24.f };
-	float2 clipRange = { 0.4f, 1.f };
-	float power = 0.7f;
-	float wispiness = 0.1f;
-	float rot0 = 1.f;
-	float rot1 = 2.f;
-	float rot2 = 3.f;
-	float _pad = 0.f;
-	float thicknessScale = 1.f;
-	float thicknessCoverage = 1.f;
+	uint32_t seed = 1337;
+	uint32_t form = 0;
+	float coverage = 0.55f;
+	float weatherStrength = 0.65f;
+	float cloudSize = 1.6f;
+	float weatherScale = 8.f;
+	float elongation = 1.4f;
+	float bearing = 0.f;
+	float sizeVariation = 0.45f;
+	float clustering = 0.55f;
+	float development = 0.75f;
+	float heightVariation = 0.55f;
+	float baseVariation = 0.15f;
+	float edgeSoftness = 0.18f;
 	float topType = 0.5f;
-	float topTypeVariation = 1.f;
+	float topTypeVariation = 0.3f;
+	float bottomType = 0.1f;
+	float shoulders = 0.65f;
+	float2 _pad = {};
 };
-STATIC_ASSERT_ALIGNAS_16(CumuliformNdfSettings);
+static_assert(sizeof(ProceduralNdfSettings) == 80);
 
 enum class NdfType : uint32_t
 {
-	Texture,
-	Cumuliform
+	Texture = 0,
+	Procedural = 1
 };
 
 struct NdfSettings
 {
-	NdfType type = NdfType::Cumuliform;
+	NdfType type = NdfType::Procedural;
 	TexNdfSettings texture;
-	CumuliformNdfSettings cumuliform;
+	ProceduralNdfSettings procedural;
 };
 
-struct HpLowCloudSettings;
+struct LowCloudSettings;
 
 struct NdfManager
 {
 	constexpr static uint16_t kNdfDim = 256;
 
 	eastl::unique_ptr<Texture2D> texNdfOutput = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> cumuliformProgram = nullptr;
-	eastl::unique_ptr<ConstantBuffer> cumuliformCb = {};
+	winrt::com_ptr<ID3D11ComputeShader> generatorProgram = nullptr;
+	eastl::unique_ptr<ConstantBuffer> generatorCb = {};
 	eastl::unique_ptr<Texture2D> texOccupancy = nullptr;
 	eastl::unique_ptr<Texture2D> texDistance = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> occupancyProgram = nullptr;
@@ -95,12 +97,26 @@ struct NdfManager
 	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
 	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
 	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
-	void UpdateNdf(const NdfSettings& ndfSettings, const HpLowCloudSettings& low);
+	bool UpdateNdf(const NdfSettings& ndfSettings, const LowCloudSettings& low);
 	void UpdateAcceleration(const NdfSettings& ndfSettings, TextureManager& texManager);
 	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
+
+private:
+	static bool IsTextureNdf(ID3D11ShaderResourceView* srv);
+
+	struct GenCB
+	{
+		ProceduralNdfSettings shape;
+		float2 worldSize;
+		float2 padding = {};
+	};
+	static_assert(sizeof(GenCB) == 96);
+	GenCB generatedData = {};
+	bool generatedValid = false;
+	ID3D11ShaderResourceView* acceleratedNdf = nullptr;
 };
 
-struct HpLowCloudSettings
+struct LowCloudSettings
 {
 	// Absolute altitude of the shared low-cloud condensation base, in kilometres.
 	float baseAltitude = 1.0f;
@@ -117,7 +133,7 @@ struct HpLowCloudSettings
 	float extinctionCoefficient = 0.09f;
 };
 
-struct HpHighCloudSettings
+struct HighCloudSettings
 {
 	bool enabled = true;
 	bool thinLayer = false;
@@ -174,7 +190,7 @@ struct HpHighCloudSettings
 	float coverAbsorptionStrength = 0.6f;
 };
 
-struct HpLightingSettings
+struct CloudLightingSettings
 {
 	bool useLightCache = true;
 	bool crossLayerShadows = true;
@@ -206,7 +222,7 @@ struct HpLightingSettings
 	float lightStepDistanceLod = 1.f;
 };
 
-struct HpPhiFwdSettings
+struct CloudForwardScatteringSettings
 {
 	float intensity = 0.65f;
 	float depthPow = 1.f;
@@ -218,10 +234,10 @@ struct HpPhiFwdSettings
 
 struct CloudLayer
 {
-	HpLowCloudSettings low;
-	HpHighCloudSettings high;
-	HpLightingSettings lighting;
-	HpPhiFwdSettings phiFwd;
+	LowCloudSettings low;
+	HighCloudSettings high;
+	CloudLightingSettings lighting;
+	CloudForwardScatteringSettings phiFwd;
 };
 
 struct HighCloudTextureSet
@@ -242,7 +258,7 @@ struct HighCloudMapManager
 	void SetupResources();
 	void CompileShaders();
 	bool ShadersReady() const;
-	HighCloudTextureSet GetTextures(const HpHighCloudSettings& settings);
+	HighCloudTextureSet GetTextures(const HighCloudSettings& settings);
 
 private:
 	// Generation is GPU-side, so it is cheap enough to re-run whenever an input
@@ -279,6 +295,6 @@ private:
 	};
 	STATIC_ASSERT_ALIGNAS_16(GenCB);
 
-	bool EnsureResources(const HpHighCloudSettings& settings);
-	void GenerateTextures(const HpHighCloudSettings& settings);
+	bool EnsureResources(const HighCloudSettings& settings);
+	void GenerateTextures(const HighCloudSettings& settings);
 };

@@ -480,7 +480,7 @@ float2 CloudWeatherUV(float2 worldXY, VolumetricCloudData info)
 	return (worldXY - info.weatherCenter - info.noiseWindOffset) / max(info.weatherWorldSize, 1.0) + 0.5;
 }
 
-// The pre-HP NDF is its own tileable five-layer definition. Its physical scale
+// The NDF has five independent shape attributes. Its physical scale
 // is independent of both the high-cloud weather map and the 3D detail noise.
 float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 {
