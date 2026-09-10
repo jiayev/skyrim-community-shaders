@@ -1,90 +1,85 @@
 # Cloud sampling and motion
 
-## View integration
+## Ray integration
 
-The low-cloud view march uses `(distance * 0.003662109375 + 3) * marchStepScale`,
-with one jittered sample inside each interval. Distance is evaluated in metres;
-the existing `cloudMaxStep` setting maps to `97 / cloudMaxStep`. This is a
-project-specific quality calibration. `cloudMaxStep` is a sampling-quality
-control, not a hard iteration limit. Finite layer intervals and the existing
-opacity termination bound the march.
+The base step follows Nubis Evolved slide 39: `3 + 60 * distance / 16384`,
+with distances in metres. A geometric step increase fits the remaining occupied
+intervals into a finite view budget. `lowViewSteps` defaults to 192 (32–512);
+`cloudLayer.high.viewSteps` defaults to 64 (8–256). Layers intersected by a ray
+contribute their budgets to a shared march. The budget counts density probes,
+including empty probes and backtracking, rather than truncating the cloud range.
 
-Physical Sky retains its spherical-shell intersections, spatiotemporal jitter,
-local light march, atmospheric integration and 0.003 transmittance cutoff.
-High clouds remain volumetric by default, with an optional distant thin-layer
-approximation described in [cloud lighting and reconstruction](cloud-lighting.md).
-The bundled low-cloud noise uses the separate coverage, roundness and profile
-contract in [noise reconstruction](noise-contract.md).
+Sphere intersections retain both near and far pieces of each layer and clip
+against geometry and the planet. Their endpoints partition the ray into ordered
+intervals. Overlapping layers add extinction and extinction-weighted light
+sources at the same sample; separated layers integrate in front-to-back order.
+`rayMarchRange` limits occupied distance per layer, excluding clear approach
+and gaps. Each future occupied interval reserves at least one probe.
 
-## Empty-space acceleration
+NDF distance bounds skip empty horizontal support, limited to the current
+interval. Empty density doubles the next step. A hit following a coarse probe
+retries that interval at the fine step when budget permits. The 64 x 64 distance
+map retains conservative coverage footprints, tiling, and shape-shear margins.
+Noise mip follows step length in noise texels, bounded to levels 0–2. The
+bundled volume retains its [existing noise contract](noise-contract.md).
 
-`NdfAcceleration.cs.hlsl` builds a 64 x 64 occupancy map, then a bounded
-two-dimensional distance map using a bounded neighbourhood search. The map
-encodes horizontal distance to occupied support; it does not encode density,
-height or boundary slopes.
+Samples within 250 m use temporal ray-start jitter. Distant samples use stable
+spatial jitter. Lighting uses deterministic local midpoints, independently of
+the view-ray jitter. Integration uses `T_step = exp(-extinction * stepMetres)`
+and `weight = T * (1 - T_step)`. Marching stops at `T <= 0.1`. Final transmittance
+is remapped to `saturate((T - 0.1) / 0.9)`; premultiplied radiance is adjusted to
+the same opacity. This cutoff/remap is an artistic approximation; the individual
+Beer step integral is invariant to subdivision for a constant source.
 
-Occupancy uses maximum coverage across the source footprint, including the
-neighbouring texels needed by bilinear filtering. No filtered erosion mip is
-used to decide that a region is empty. Distance search wraps with the NDF and
-subtracts two cell widths from centre distances. The ray converts that bound
-using the smaller world-space cell dimension and subtracts the maximum shape
-shear before skipping. Skips stop at the current spherical-shell segment.
+## Full-resolution 16-phase reconstruction
 
-The procedural distance map is regenerated after NDF changes and before cloud rendering.
-Texture and generated NDF modes both participate. If acceleration resources or
-shaders are unavailable, the renderer uses the ordinary distance-based march.
-The auxiliary maps use R32_FLOAT to avoid losing small positive coverage to
-UNORM quantization. Two 64 x 64 maps require 32 KiB of texel storage.
+`CloudTemporal.hlsli` traces one actual full-resolution pixel from each 4 x 4
+block. A 16-entry permutation visits all offsets. The compact trace textures
+have dimensions `ceil(width / 4)` by `ceil(height / 4)` and store those rays;
+they do not define a lower-resolution camera or pixel footprint.
 
-This makes empty-space skips conservative for the threshold reconstruction,
-which does not create density outside positive coverage/profile support. It does not make finite-step quadrature exact, nor guarantee that every
-sub-step cloud detail is sampled. Dense, long rays can cost more than the former
-iteration-limited march.
+History and resolved output both have full framebuffer dimensions. Each frame
+reprojects history using opacity-weighted cloud depth, the previous successful
+capture's camera matrix/position, and wind displacement. The camera matrix
+includes the capture's projection jitter, matching current depth/ray coordinates.
+Active-size changes invalidate history. Traced pixels update from their actual
+sample. Other valid pixels retain reprojected history. Four trace neighbours
+supply only missing history, with scene-depth rejection; there is no spatial
+upscale pass applied to the accumulated result.
 
-## Independent controls
+Temporary hole fills have validity 0.5; actual samples have validity 1. Their
+first traced update replaces the fill. Colour, opacity and projected motion
+control later temporal blending. Clear sky does not contribute to cloud-depth
+moments. Configuration changes, shader/texture reload, time reversal and gaps
+over 0.25 seconds invalidate history. Snapshots and the phase index advance only
+after main and cubemap reconstruction complete.
 
--   Low-cloud quality uses the existing `cloudMaxStep` JSON field, clamped to 1–200.
--   `cloudLayer.high.viewSteps` defaults to 194 and divides only the high layer's
-    occupied shell intervals; clear approach distance and the low layer are excluded.
--   `cloudLayer.high.lightSteps` defaults to 6 independently of low-cloud lighting.
--   `cloudMap.procedural.parameters` controls coverage, shared type noise,
-    separate remaps/exponents, local blending and bottom height variation.
--   `cloudMap.procedural.noise` controls four generated inputs and DDS overrides.
--   `cloudLayer.low.shapeShear` offsets the NDF with height, in kilometres along
-    the wind. Zero preserves the unsheared profile.
+The 64 x 64 x 6 cubemap follows the same schedule: 16 x 16 actual rays on every
+face, then per-face full-resolution temporal reconstruction. Cube history is
+sampled as a cube to cross face boundaries. It compensates camera translation
+and wind, independently of screen rotation. Depth and high-layer fraction are
+stored as opacity-weighted moments for cube filtering. Steady-state ray count
+is 1,536 per frame, versus 8,192 for the former two-full-face schedule.
 
-See [procedural NDF generation](ndf-generator.md) for all controls and migration.
-Version 2 replaces previous array layouts with height RG and modeling RGB.
+Both layers share one representative depth. Mixed-layer motion, high-pattern
+relative drift, disocclusion and rapidly changing light still need runtime
+assessment; a single history cannot represent arbitrary multilayer motion.
 
-## Motion and history
+## Resources and validation
 
-NDF sampling and low-cloud noise share the existing wind displacement.
-Reprojection subtracts the displacement since the last successfully written main
-history. This compensates for the common rigid wind translation.
+Transmittance is scalar R16_FLOAT. Trace, output and history radiance all use
+RGBA16_FLOAT with equal RGB precision; metadata uses RGBA16_FLOAT. Full-resolution
+outputs and history swap ownership after unbinding their views. Screen storage
+is 37.125 bytes per framebuffer pixel before dimension rounding, excluding
+lighting caches, shadows and atmosphere resources.
 
-The procedural NDF contains no time-dependent inputs. Coverage, height and
-profiles move together under the shared wind offset. An editable static weather
-offset shifts generation inputs. Parameter or texture changes rebuild the field
-and invalidate history. World scale changes sampling and history without
-rebuilding the normalized map. High-cloud pattern drift still reduces its
-separate history confidence.
+Static/CPU checks cover the buffer contract, 16-phase coverage (including odd
+sizes), native pixel recovery, all cube texel orientations, ordered interval
+coverage under finite budgets, Beer integration and edge-depth moments.
+No C++ build, shader compilation, GPU render or timing is part of these checks.
 
-Auxiliary W stores `1 + visibleHighCloudFraction`; zero remains invalid. Spatial
-fallback uses its validity, not its magnitude, as a filter weight. Mixed layers
-and changes in layer contribution reduce history confidence. The representation
-still uses one depth/history for both layers; it is not exact multilayer motion.
-Representative cloud depth uses each step's visible opacity contribution so
-changing interval lengths does not change depth weights solely by sample count.
+## Reference
 
-Cloud configuration changes, backward time and gaps over 0.25 seconds invalidate
-history. Wind/time snapshots advance only when the main history is written.
-
-## Verification scope
-
-Static review covers CPU/HLSL field order, constant-buffer layout, new JSON/UI
-controls, resource dependencies, wrap/footprint bounds, segment termination and
-history metadata consumers. No C++ build, shader compilation or GPU validation
-is included. Runtime acceptance should compare moving clouds with a stationary
-camera, thin cloud edges, grazing rays, non-square NDF scales, shape shear, terrain
-occlusion, mixed layers and changing high-cloud settings. Profile acceleration,
-view/light marching and reconstruction separately.
+[Nubis Evolved, SIGGRAPH 2022](https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-NubisEvolved-NoVideos.pdf):
+slides 39, 48, 54, 59, 157 and 187. Budget fitting, spherical interval ordering,
+phase permutation, cube history and storage formats are adaptations for Physical Sky.

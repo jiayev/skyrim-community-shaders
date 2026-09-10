@@ -187,11 +187,7 @@ struct LowCloudSettings
 struct HighCloudSettings
 {
 	bool enabled = true;
-	bool thinLayer = false;
-	float thinLayerStart = 15.f;
-	float thinLayerEnd = 25.f;
-	uint32_t viewSteps = 194;
-	uint32_t lightSteps = 6;
+	uint32_t viewSteps = 64;
 	uint32_t weatherDim = 512;
 	float weatherWorldSize = 64.f;
 	float2 weatherCenter = { 0.f, 0.f };
@@ -243,44 +239,18 @@ struct HighCloudSettings
 
 struct CloudLightingSettings
 {
-	bool useLightCache = true;
 	bool crossLayerShadows = true;
 	uint32_t cacheSteps = 16;
 	float3 scatterTint = { 1.f, 1.f, 1.f };
 	float forwardEccentricity = 0.85f;
 	float backwardEccentricity = 0.3f;
-	// Unit multipliers preserve the radiance reconstructed from the sky probe.
 	float ambientTopMultiplier = 1.f;
 	float ambientBottomMultiplier = 1.f;
 	float aoUpwardScale = 1.f;
-	float msAttenuation = 0.5f;
-	float msContribution = 0.5f;
+	float msDepthPower = 0.1f;
+	float msContribution = 1.f;
 	float msEccentricity = 0.5f;
-	// Legacy integration only: artistic edge shaping tied to the march step OD.
-	float scatterSourceODScale = 0.08f;
-	float scatterSourceCurvePow = 1.f;
-	float powderIntensity = 0.35f;
-	uint32_t lightSteps = 6;
-	// 0 = normalized equal-weight dual-lobe HG (uses the eccentricity sliders)
-	// 1 = approximate Mie (HG + Draine fit, 10 um diameter water droplets); the
-	//     eccentricity sliders have no effect on it.
-	uint32_t phaseModel = 0;
-	// 0 = legacy scalar integral with step-dependent edge shaping
-	// 1 = analytical per-channel albedo * (1 - transmittance), without edge gating
-	uint32_t scatterIntegration = 1;
-	// Fades the secondary (light) march step budget down to one step with view
-	// distance. 0 disables the LOD, 1 applies it fully.
-	float lightStepDistanceLod = 1.f;
-};
-
-struct CloudForwardScatteringSettings
-{
-	float intensity = 0.65f;
-	float depthPow = 1.f;
-	float depthBias = 0.05f;
-	float boundaryConfidence = 0.55f;
-	float msBuildScale = 1.4f;
-	float compress = 0.35f;
+	float msHeightPower = 0.5f;
 };
 
 struct CloudLayer
@@ -288,7 +258,6 @@ struct CloudLayer
 	LowCloudSettings low;
 	HighCloudSettings high;
 	CloudLightingSettings lighting;
-	CloudForwardScatteringSettings phiFwd;
 };
 
 struct HighCloudTextureSet

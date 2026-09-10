@@ -519,14 +519,14 @@ Texture3D<float4> TexApSunLut : register(t113);
 #	ifndef PS_PREPASS_RSRCS
 	// Volumetric cloud main-view result and shadow volume. Pixel shaders use t110-t112 to avoid feature texture conflicts.
 #		if defined(PS_DEFERRED_RSRCS)
-	Texture2D<float3> TexVolTr : register(t16);
+	Texture2D<float> TexVolTr : register(t16);
 	Texture2D<float3> TexVolLum : register(t17);
 	Texture3D<float> TexShadowVolume : register(t18);
 #		else
-	Texture2D<float3> TexVolTr : register(t110);
+	Texture2D<float> TexVolTr : register(t110);
 	Texture2D<float3> TexVolLum : register(t111);
 	Texture3D<float> TexShadowVolume : register(t112);
-	TextureCube<float3> TexVolCubeTr : register(t114);
+	TextureCube<float> TexVolCubeTr : register(t114);
 	TextureCube<float3> TexVolCubeLum : register(t115);
 #		endif
 

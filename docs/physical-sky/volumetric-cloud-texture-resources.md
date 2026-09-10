@@ -38,8 +38,15 @@ the internal and boundary variation of that mass.
 | Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer         |
 | Nubis top profile         |   `t17` | `Texture2D<unorm float>`  | `top_lut.dds`    |
 | Nubis bottom profile      |   `t18` | `Texture2D<unorm float>`  | `bottom_lut.dds` |
-| Low-cloud light cache     |   `t24` | `Texture3D<float4>`       | GPU-generated    |
-| High-cloud light cache    |   `t25` | `Texture3D<float4>`       | GPU-generated    |
+| Low-cloud light cache     |   `t24` | `Texture3D<float2>`       | GPU-generated    |
+| High-cloud light cache    |   `t25` | `Texture3D<float2>`       | GPU-generated    |
+
+Temporal reconstruction reads screen history at t26–t28 and compact screen
+traces at t29–t31. Cube history occupies t32–t34 and compact cube traces t35–t37.
+Each group is transmittance, radiance, metadata, with R16_FLOAT, RGBA16_FLOAT,
+RGBA16_FLOAT storage respectively. Light caches are RG16_FLOAT solar/upward
+optical-depth pairs. See [cloud sampling](cloud-sampling.md) and
+[cloud lighting](cloud-lighting.md) for scheduling and history contracts.
 
 The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 `features/Physical Sky/Textures/PhysicalSky/` in the source tree.

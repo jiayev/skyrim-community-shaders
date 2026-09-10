@@ -1,130 +1,87 @@
-# Cloud lighting and reconstruction
+# Cloud lighting
 
-## Implementation scope
+## Local detail and distant visibility
 
-Physical Sky uses independent directional and upward optical-depth caches,
-local light integration and an optional distant thin-layer approximation.
-Cache resolution, interval quadrature and approximation thresholds are
-project-specific choices. No runtime performance or visual equivalence is
-claimed. The density contract and its adaptation are recorded in [noise reconstruction](noise-contract.md).
+The rendering split follows Nubis Cubed slides 123–124: two local density probes,
+then a cached distant solar column. Density remains procedural NDF/profile/noise
+sampling; the lighting cache contains optical depth, not a voxel cloud model.
+The main view and cubemap share the cache and lighting functions.
 
-## Independent light columns
+Local extent is `240 - saturate(height * 3.3333333) * 120` metres. Its two
+intervals use cubic spacing adjusted by view/light angle and deterministic
+midpoint samples. Each density is weighted by the physical interval length.
+Low-cloud local noise uses mip 1 without near-camera folded detail. The cached
+solar remainder starts at the end of the local extent, excluding that extent
+from the distant column.
 
-`CloudLighting.hlsli` integrates scalar optical depth separately towards the
-sun and world +Z. Ambient attenuation now uses upward optical depth instead of
-solar optical depth multiplied by the light's vertical component. Solar tint
-is applied when evaluating light transmittance, not when storing optical depth.
+Two 64 x 64 x 16 RG16_FLOAT volumes store low/high layer columns:
 
-Low and high layers each have a 32 x 32 x 16 RGBA16_FLOAT cache:
+| Channel | Integral                                        |
+| ------- | ----------------------------------------------- |
+| R       | Own layer towards the directional light         |
+| G       | Own layer towards the local radial up direction |
 
-| Channel | Column from the cached world position      |
-| ------- | ------------------------------------------ |
-| R       | Own layer, towards the directional light   |
-| G       | Own layer, upwards                         |
-| B       | Other layer, towards the directional light |
-| A       | Other layer, upwards                       |
+Together they use 512 KiB. The low/high XY spans are 256/1024 km. Signed-square
+coordinates concentrate cells near the captured camera origin; Z represents
+spherical altitude in the layer. Cached coordinates advect with shared wind.
+Columns use quadratic midpoint quadrature with `cacheSteps` (default 16, 4–32).
+They retain the configured in-layer range limit and stop at the planet.
 
-Both volumes together use 256 KiB of texel storage. XY bounds follow the camera.
-The low cache uses `shadowVolumeRange`; the high cache uses the larger of that
-range and the high weather map's world size. Z covers the respective altitude
-band. Density sampling still uses spherical altitude.
+Each successful capture updates one eighth of the cache slices; a complete
+refresh spans eight captures. Initial generation, density/texture changes,
+time discontinuities, a 1 km displacement from the advected origin or a large
+light-direction change rebuild all slices. Screen-resolution changes invalidate
+screen history independently. Updates compute only the two own-layer columns. Other-layer visibility samples that layer's cache at its
+entry point, instead of constructing duplicate columns in both volumes.
+Outside cache support, solar visibility has a fixed four-probe-per-segment
+fallback. Ambient visibility uses the local profile when its own cached column
+is unavailable. There are no full-quality upward/cross-layer fallback marches
+at every view sample. Finite quadrature and coarse distant cells can miss narrow
+occluders, particularly at grazing sun angles.
 
-Each enabled main-view pass regenerates the low cache and, when high clouds
-are enabled, the high cache. Generation reads density resources directly and
-never reads either lighting cache. Main-view and cubemap tracing then share the
-results. Output UAVs are unbound before the caches become SRVs at t24/t25.
+`crossLayerShadows` controls other-layer solar attenuation and upward high-cloud
+attenuation. Other-layer solar transmittance multiplies incident direct light.
+The separate low-cloud ground shadow volume retains its existing receiver path.
 
-Cached optical depth is filtered only inside its valid box. Within the outer
-2.5 voxel widths it blends towards direct integration; outside the box it uses
-direct integration entirely. Missing cache shaders or disabled caching also
-select direct integration. No missing column is assumed to be clear sky.
-Quadratic interval boundaries concentrate samples near each layer entry, with
-one midpoint sample per interval and the full interval length as its weight.
-Spherical segments exclude clear gaps, stop at the planet, and retain the
-configured in-layer march range limit.
+## Scattering model
 
-The low cloud's local light march covers up to 6 km, bounded by the layer exit.
-Its interval endpoints are `distance * (i / steps)^2`, with one jittered sample
-per interval weighted by its length. Increasing the budget refines the entire
-column, including the largest far interval; there is no minimum step that can
-exhaust the column before the requested sample count. The maximum interval is
-`distance * (2 * steps - 1) / steps^2`. Local noise mip follows interval length
-in noise texels, clamped to 0–3. This is bounded noise filtering, not an exact
-average of the nonlinear reconstructed density. The view-density formula and
-its mip remain unchanged. The remainder begins at the local march's actual end.
-High clouds use three local samples over the first
-250 m when a cached remainder is available. The cached remainder starts at the
-end of that interval, preventing the local and cached solar columns from being
-added twice. Direct high-cloud fallback uses `high.lightSteps` for its full
-column. This is a finite-sample approximation, not an exact integral.
+Primary light uses normalized dual-lobe Henyey–Greenstein. Low-cloud secondary
+light uses the Nubis Evolved dimensional-profile scattering volume:
 
-`cloudLayer.lighting.useLightCache` defaults to true. `cacheSteps` defaults to
-16, clamped to 4–32, and controls cache construction and upward/cross-layer
-fallback quadrature. Larger bounds make voxels coarser; boundary fallbacks and
-local low-cloud lighting can still be expensive. Cache generation is separately
-profiled as `PhysicalSky::CloudLightCache`; no speedup has been measured yet.
+```text
+volume = saturate((3 * dimensionalProfile - 0.1) / 0.9)
+       * (coverage * topType)^0.25 * height^msHeightPower
+light = exp(-tintedOpticalDepth) * primaryPhase
+      + volume * exp(-tintedOpticalDepth * msDepthPower)
+        * secondaryPhase * msContribution
+```
 
-## Cross-layer shadows
+The fixed 3 m reference length replaces a variable view step in the shaping
+term so changing the view budget does not change the scattering source.
+`msDepthPower` defaults to 0.1 and `msHeightPower` to 0.5; these are project
+controls, not universal weather values. High clouds use their own profile,
+phase and attenuation controls with the same two-component lighting structure.
+Atmospheric solar transmittance is evaluated at each scattering position.
 
-`cloudLayer.lighting.crossLayerShadows` defaults to true. Each scattering point
-receives the other layer's solar attenuation and upward ambient attenuation.
-The other layer's solar attenuation multiplies external illumination before the
-local multiple-scattering sum, so local scattering octaves do not weaken the
-occluding layer's shadow. Disabling this setting skips the two cross-layer
-columns during cache generation and direct fallback.
+Ambient visibility follows the profile factor from Nubis Evolved slide 59 and
+the additional column attenuation from Nubis Cubed slide 144:
+`sqrt(1 - dimensionalProfile) * exp(-upwardOpticalDepth * aoUpwardScale)`.
+It modulates the sky/ground environment radiance reconstructed from the ambient
+SH probe. Aerial perspective is applied once at the visible-opacity-weighted
+cloud depth after front-to-back integration.
 
-The existing ground-receiver shadow volume remains separate. This change adds
-cloud-to-cloud shadowing; it does not add high-cloud shadows to ground receivers.
+The previous PhiFwd diffusion integral, selectable legacy step-dependent
+scattering, three-octave directional sum, light-step LOD and optional high-cloud
+thin-layer branch have been removed. Their settings are ignored on loading
+older configurations and are omitted on save. Existing NDF generation,
+imported map support and the bundled noise contract remain independent.
 
-## Distant thin high clouds
+## Validation and references
 
-`cloudLayer.high.thinLayer` defaults to false. When enabled, `thinLayerStart`
-and `thinLayerEnd` blend from volume tracing to the thin approximation over
-15–25 km by default. The approximation requires a sky ray from below the layer,
-a complete unclipped layer crossing, and a sufficiently steep crossing angle.
-It fades out between 500 m and 1 km of layer thickness and near grazing angles.
-Inside/above the layer, thick layers, clipped rays and near distances retain
-volume tracing. The default thick high-cloud layer therefore remains volumetric.
+CPU/static checks do not establish GPU performance or final appearance. Runtime
+acceptance needs main/cubemap timings, sunset and night lighting, cloud edges,
+camera/wind motion, cache refreshes, layer overlap and geometry disocclusion.
 
-The ray intersects the middle-altitude sphere. Four radial profile samples
-estimate vertical optical depth using the current high-cloud density model.
-Path length includes the incidence correction; one extinction-weighted position
-supplies lighting and representative depth. This preserves the authored high
-weather/cell/wisp inputs without requiring a separate cloud-pattern asset.
-
-Transitions blend premultiplied radiance, transmittance and opacity-weighted
-depth moments. Full thin weight skips the high-cloud view loop. Partial weight
-computes both paths, so transition pixels can cost more. Fine vertical features
-or strong lighting variation within the layer can differ from volume tracing;
-this mode needs visual evaluation with the intended thin-cloud preset.
-
-## History and radiance storage
-
-After temporal reconstruction and full-resolution upscale finish, the three
-half-resolution intermediate/history texture owners swap. Their SRVs and UAVs
-are unbound before the swap. The next frame reads the newly accumulated history
-and overwrites the old history as its destination. This removes three per-frame
-`CopyResource` operations while keeping the same history representation.
-
-Trace, intermediate and history luminance use RGBA16_FLOAT. Every color input
-and feedback destination in temporal reconstruction therefore has equal RGB
-precision. R11G11B10_FLOAT has fewer blue mantissa bits than red/green; repeated
-filtering and quantization in that format can introduce channel-dependent error.
-
-Only the full-resolution output and cubemap use R11G11B10_FLOAT when the D3D11
-device reports texture, sampling/load and typed UAV support. Neither feeds the
-cloud temporal history. Unsupported devices use RGBA16_FLOAT for those outputs
-as well. Transmittance and auxiliary depth/history metadata remain RGBA16_FLOAT.
-Combined screen cloud targets use 33.5 bytes per full-resolution pixel with
-packed output, or 37.5 without it, before dimension rounding. This excludes
-other sky resources and the lighting caches.
-
-## Verification scope
-
-Changes have static review only: CPU/HLSL field order, settings serialization,
-entry-point registration, cache dispatch coverage, binding transitions, disjoint
-shadow intervals, thin/volume composition and history resource ownership.
-No C++ build, shader compilation, GPU capture or frame-time measurement was run.
-Runtime acceptance should cover low sun, camera movement across cache bounds,
-high-cloud toggles, thin-layer transitions, geometry occlusion, dark gradients
-and repeated history invalidation, with cache and direct paths compared.
+-   [Nubis Evolved, SIGGRAPH 2022](https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-NubisEvolved-NoVideos.pdf), slides 48, 54, 59 and 187.
+-   [Nubis Cubed, SIGGRAPH 2023 materials](https://advances.realtimerendering.com/s2023/), slides 123–124, 144 and 151.
+-   [Sampling, temporal reconstruction and storage](cloud-sampling.md).

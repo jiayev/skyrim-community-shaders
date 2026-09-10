@@ -143,9 +143,8 @@ struct PhysicalSky final : public Feature
 		bool enableVolumetricClouds = false;
 		float rayMarchRange = 32.f;     // km inside each cloud layer, excluding empty approach/gaps
 		float shadowVolumeRange = 8.f;  // km
-		uint32_t cloudMaxStep = 97;
+		uint32_t lowViewSteps = 192;
 		float temporalAccumulationFactor = 0.95f;
-		bool ghostingReduction = true;
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
@@ -233,22 +232,25 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolH = 256;
 	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
-	constexpr static uint16_t kVolCloudDownsample = 4;
 
-	eastl::unique_ptr<Texture2D> texVolTr = nullptr;      // blurred full-resolution volumetric transmittance result
-	eastl::unique_ptr<Texture2D> texVolLum = nullptr;     // blurred full-resolution volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;      // full-resolution volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;     // full-resolution volumetric luminance result
 	eastl::unique_ptr<Texture2D> texVolAux = nullptr;     // full-resolution cloud depth/metadata
 	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;   // quarter-resolution trace transmittance
 	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;  // quarter-resolution trace luminance
 	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;  // quarter-resolution trace depth/metadata
-	eastl::unique_ptr<Texture2D> texVolUpscaleTr = nullptr;
-	eastl::unique_ptr<Texture2D> texVolUpscaleLum = nullptr;
-	eastl::unique_ptr<Texture2D> texVolUpscaleAux = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
 	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture2D> texVolCubeAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
 	eastl::unique_ptr<Texture3D> texLowCloudLightCache = nullptr;
 	eastl::unique_ptr<Texture3D> texHighCloudLightCache = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
@@ -266,13 +268,10 @@ struct PhysicalSky final : public Feature
 	{
 		float rayMarchRange;
 		float shadowVolumeRange;
-		uint cloudMaxStep;
-		uint fullResolution;
-
-		float2 frameDim;
+		uint lowViewSteps;
+		uint cloudFrameIndex;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
-		uint ndfPadding;
 		float bottomZ;
 		float planetRadius;
 		float2 activeFrameDim;
@@ -309,7 +308,6 @@ struct PhysicalSky final : public Feature
 		float2 highWispScale;
 		float highWispStrength;
 		float highDensityMultiplier;
-		float highDensitySoftAIntensity;
 		float highDensitySoftAContrast;
 		float highDensityModAIntensity;
 		float highDensityModAContrast;
@@ -319,20 +317,9 @@ struct PhysicalSky final : public Feature
 		float ambientTopMultiplier;
 		float ambientBottomMultiplier;
 		float aoUpwardScale;
-		float msAttenuation;
+		float msDepthPower;
 		float msContribution;
 		float msEccentricity;
-		float scatterSourceODScale;
-		float scatterSourceCurvePow;
-		float powderIntensity;
-		uint lightSteps;
-		uint cloudPhaseModel;
-		float phiFwdIntensity;
-		float phiFwdDepthPow;
-		float phiFwdDepthBias;
-		float phiFwdBoundaryConfidence;
-		float phiFwdMSBuildScale;
-		float phiFwdCompress;
 		float highForwardEccentricity;
 		float highBackwardEccentricity;
 		float highAmbientTopMultiplier;
@@ -346,13 +333,9 @@ struct PhysicalSky final : public Feature
 		float highCoverAbsorptionStrength;
 
 		float2 lowFrameDim;
-		float2 rcpLowFrameDim;
 		uint historyValid;
 		float temporalAccumulationFactor;
 		float cloudHistoryInvalidation;
-		uint ghostingReduction;
-		uint scatterIntegration;
-		float lightStepDistanceLod;
 		float shadowVolumeBottom;
 		float shadowVolumeTop;
 		float2 cloudWindDelta;
@@ -360,30 +343,38 @@ struct PhysicalSky final : public Feature
 		float lowHistoryConfidence;
 		float highHistoryConfidence;
 		uint highViewSteps;
-		uint highLightSteps;
 		uint ndfAccelerationValid;
-		uint lightCacheEnabled;
 		uint crossLayerShadows;
 		uint lightCacheSteps;
-		uint highThinLayer;
-		float highThinStart;
-		float highThinEnd;
-		float highLightCacheRange;
+		float msHeightPower;
+		float2 lightCacheOrigin;
+		float2 lightCacheWindDelta;
+		float lightCacheRange;
+		uint lightCacheUpdatePhase;
+		float4x4 previousViewProj;
+		float3 previousCamera;
 	};
+	static_assert(sizeof(VolumetricCloudSB) == 480);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
+	uint32_t volFrameIndex = 0;
+	bool volLightCacheValid = false;
+	float2 volLightCacheOrigin = {};
+	float2 volLightCacheWind = {};
 	bool volMainHistoryValid = false;
 	uint32_t volHistoryWidth = 0;
 	uint32_t volHistoryHeight = 0;
 	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
 	float2 volHistoryWindOffset = { 0.f, 0.f };
 	float volHistoryTime = 0.f;
+	float4x4 volHistoryViewProj = {};
+	float3 volHistoryCamera = {};
 	std::string volCloudSettingsKey;
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolUpscale = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolLowLightCache = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolHighLightCache = nullptr;
