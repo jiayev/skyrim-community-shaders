@@ -1,112 +1,175 @@
 # Procedural NDF generation
 
-`NdfGenerate.cs.hlsl` creates the low-cloud control field locally, without
-offline content generation or a world-space density volume. The existing Nubis
-threshold reconstruction, view/light density consumers and profile LUTs remain
-the material contract. This generator constructs the larger cloud shapes that
-those resources refine.
+Four locally generated scalar noise inputs drive the low-cloud NDF. Every input
+can instead use DDS. Optional local NDF maps blend before bottom height variation.
+No offline preparation or world-space voxel volume is required.
 
-## Shape construction
+## Two-texture contract
 
-A periodic, two-octave value field organizes cloud occurrence into weather
-regions. Wrapped integer cell IDs and a seed determine cloud centers, size,
-orientation and vertical rise. Distances are evaluated in kilometres before
-rotation and anisotropic scaling, so rectangular maps do not stretch circular
-domes. Rotating an ellipse changes its outline without rotating the tile domain.
+| Texture  | Channels                                 | Generated storage             | Density binding |
+| -------- | ---------------------------------------- | ----------------------------- | --------------- |
+| Height   | R: bottom height, G: top height          | 512 x 512 RG16_FLOAT          | t7              |
+| Modeling | R: coverage, G: top type, B: bottom type | 512 x 512 RGBA16_FLOAT, A = 0 | t8              |
 
-Each mass contains a main elliptical dome and three smaller shoulder domes.
-Coverage follows their softened horizontal envelopes; height follows their
-merged cap functions. Vertical development scales rise independently of the
-coverage signal. A slower field supplies a shared, gently varying condensation
-base. Another independent field selects top-profile type; bottom type has its
-own control. No three-dimensional density-noise lookup is used in generation.
+Values are linear and normalized. Altitude is `low.baseAltitude + height *
+low.thickness`. Types select the existing Nubis profile LUTs. Both generated and
+imported maps use wrap filtering at mip 0. Empty/reversed height intervals produce
+no density. Height bounds the profile; continuous coverage and Nubis noise then
+reconstruct density inside it. No dome caps or height reordering are generated.
 
-| Form             | Construction                                                        |
-| ---------------- | ------------------------------------------------------------------- |
-| 0: Cumulus       | Separated or overlapping masses with pronounced domes and shoulders |
-| 1: Stratocumulus | Wider masses, lower rise, and weather-controlled sheet connections  |
-| 2: Stratus       | Continuous weather regions with slow thickness variation            |
+Texture mode selects `cloudMap.texture.heightPath` and `modelingPath`.
+Supported linear 2D DDS formats, with unused channels ignored:
 
-Cloud amount changes occurrence and horizontal expansion. It is not a solved
-area fraction or an opacity guarantee after noise erosion. Zero produces zero
-coverage in every form. Vertical development and height variation leave coverage
-unchanged; cloud height remains bounded by the low layer's configured thickness.
-Changing cloud amount can change the height envelope where masses appear or
-expand, but does not substitute for the independent development control.
+-   Noise/masks: R8/R16 UNORM, R16/R32 float, BC4 UNORM, or any format below.
+-   Height: RG8/RG16 UNORM, RG16/RG32 float, BC5 UNORM, or any format below.
+-   Modeling: RGB32 float, RGBA8/RGBA16 UNORM, RGBA16/RGBA32 float, BC1/2/3/7 UNORM.
 
-## Settings
+Arrays, volumes, integer and sRGB views are rejected. Inputs should contain
+normalized finite values and share spatial extent; resolution may differ.
+The old five-slice array is no longer accepted.
 
-Settings are saved under `cloudMap.procedural`.
+## Composition equations
 
-| Field                                       | Meaning / units                                                   |
-| ------------------------------------------- | ----------------------------------------------------------------- |
-| `seed`, `form`                              | Stable layout seed and form selection                             |
-| `coverage`                                  | Cloud amount, 0–1                                                 |
-| `weatherStrength`, `weatherScale`           | Weather modulation, 0–1; weather scale in km                      |
-| `cloudSize`                                 | Requested spacing between cloud centers, in km                    |
-| `sizeVariation`, `clustering`               | Size diversity and weather-grouped occurrence/alignment, 0–1      |
-| `elongation`, `bearing`                     | Major/minor axis ratio, 1–3; preferred direction in radians       |
-| `shoulders`, `edgeSoftness`                 | Secondary dome strength, 0–1; normalized outline transition width |
-| `development`, `heightVariation`            | Vertical development and variation between masses, 0–1            |
-| `baseVariation`                             | Slow variation above the common condensation altitude, 0–1        |
-| `topType`, `topTypeVariation`, `bottomType` | Existing normalized profile selectors                             |
+`cloudMap.procedural.parameters` contains six noise layers, each with a slot,
+frequency, offset, exponent and range (input min/max, output min/max).
 
-The 256 x 256 map uses integer cell counts for seamless wrapping. Cloud spacing
-is rounded to fit each world repeat length, with at least eight texels per cell
-and at most 32 cells per axis. Weather periods are also rounded and bounded.
-Scales larger than a tile or smaller than its supported resolution cannot be
-represented exactly. The cloud radius bound includes every rotated shoulder,
-so a fixed 5 x 5 cell search includes all contributors.
+```text
+R(x, r) = saturate((x - r.x) / (r.y - r.x)) * (r.w - r.z) + r.z
+S(layer) = 2 * noise[layer.slot](((layer.offset - wind) + uv) * layer.frequency) - 1
+P(x, e) = exp2(log2(x) * e)
+G(layer) = layer.range.w if range.z == range.w, otherwise R(S(layer), layer.range)
 
-## Output and lifetime
+first  = P(R(S(primary), primary.range), primary.exponent)
+second = P(R(S(secondary), secondary.range), secondary.exponent)
+coverage = G(coverageGain) * max(first, second)
+topType = G(modelingGain) * P(R(S(modeling), modeling.range), modeling.exponent)
+bottomType = G(modelingGain) * P(R(S(modeling), bottomTypeRange), bottomTypeExponent)
+```
 
-The generated `Texture2DArray` has two RGBA16_FLOAT slices:
+When the primary output range is constant, **both** coverage inputs become that
+constant and bypass power. Secondary settings then have no effect. Types share
+one sampled noise but use independent remaps/exponents. Slot 4 returns zero
+before signed conversion, hence S = -1.
 
-| Slice | Channels                                                |
-| ----- | ------------------------------------------------------- |
-| 0     | R: base height, G: top height, B: coverage, A: top type |
-| 1     | R: bottom type; GBA: reserved zero                      |
+Local maps are sampled at `uv - wind * localWindScale`:
 
-All attributes are linear and normalized. Physical altitude is
-`low.baseAltitude + normalizedHeight * low.thickness`. Sampling uses wrapping
-and mip 0. Optional DDS input retains five scalar slices in base, top, coverage,
-top-type and bottom-type order; malformed array layouts are rejected before use.
-Both representations feed the same NDF query and noise reducer.
-Imported formats support scalar R8/R16 UNORM, R16/R32 float, BC4 UNORM, and
-RGBA8/RGBA16 UNORM or RGBA16/RGBA32 float. Integer and sRGB views are rejected.
+```text
+mode 0: model = (mask * localModelingWeight) * (localRGB - model) + model
+mode 1: model = max(model, localRGB * localModelingWeight)
+height = baseHeight + saturate(mask) * localHeightWeight * (localRG - baseHeight)
+driver = heightFromCoverage ? model.coverage : S(heightVariation)
+variation = R(P(driver, heightVariation.exponent), heightVariation.range)
+height.r += variation
+```
 
-The CPU uploads a 96-byte constant buffer. Sanitized shape parameters and world
-repeat size determine regeneration; time and wind do not enter the generator.
-Wind offsets the map at density-query time, matching existing reprojection.
-Resource creation, shader reload and parameter changes invalidate the generated
-field. A successful generation dispatch invalidates temporal history and the
-occupancy/distance map. Source changes also refresh acceleration, including
-switches between imported and procedural maps. The occupancy pass reads actual
-stored coverage and includes the bilinear footprint; shape shear retains its
-existing conservative skip margin.
+Maximum blending deliberately ignores the mask. Optional `local.heightPath` and
+`local.modelingPath` independently enable their weights. `localMaskPath` supplies
+R influence for both blends; absent means one. Keeping influence separate avoids
+giving modeling A a second contract. Zero weights preserve procedural values.
 
-`cloudMap.type` keeps 0 for imported textures and 1 for procedural generation.
-Old `cumuliform` configurations preserve their top/bottom profile selectors.
-Their three noise frequencies, relative velocities, rotations, product clipping
-and thickness-coupling controls are retired; the new shape settings take their
-defaults. Existing presets therefore require visual retuning. Saving writes
-only the new procedural settings and the texture source.
+Height power occurs **before** remapping. Its coverage driver is post-blend,
+pre-saturation. A constant variation output range bypasses driver and power.
+Only height R changes; G stays at its base/local value. Final height RG and
+modeling RGB are saturated. Height auxiliary data and storms are omitted.
+
+The CPU sanitizes finite parameters and zero-width remaps. Power returns zero
+for nonpositive inputs; exponent is limited to 0.01–8. This defines otherwise
+invalid logarithmic inputs while retaining positive-input operation order.
+
+## Noise synthesis
+
+`cloudMap.procedural.noise` has four entries, each with `parameters` and optional
+`texturePath`. DDS R replaces the generated input. Slot choices are editable;
+defaults are project tuning, not recovered synthesis settings or descriptor order.
+
+| Slot | Algorithm                          | Frequency | Octaves | Persistence | Repetitions | Contrast | Response exponent |  Bias |
+| ---- | ---------------------------------- | --------: | ------: | ----------: | ----------: | -------: | ----------------: | ----: |
+| 0    | Alligator                          |        12 |       4 |         0.5 |           1 |        1 |                 1 |     0 |
+| 1    | Perlin fBm, coarse response preset |         4 |       6 |         0.6 |           2 |      1.6 |               1.8 | -0.02 |
+| 2    | Perlin fBm                         |        32 |       4 |         0.5 |           1 |        1 |                 1 |     0 |
+| 3    | Perlin-Worley                      |        12 |       4 |         0.5 |           1 |      1.1 |                 2 | -0.05 |
+
+Seed defaults to 1337 and integer lacunarity to 2. Coarse and ordinary Perlin
+use the same gradient family with different spectral and response settings.
+Repetitions tile the underlying field within the input texture. Noise presets
+are calibrated independently from any particular weather composition. Matching
+the family and distribution does not establish identical authored texels,
+spectra or original synthesis recipes.
+
+Perlin uses unit gradients and quintic interpolation in 2D. Alligator samples a
+3D random cell field: the two largest random-amplitude smooth radial contributions
+are subtracted. This follows the public
+[SideFX definition](https://www.sidefx.com/docs/hdk/alligator_2alligator_8_c-example.html),
+using project PCG hashes, a fixed Z slice and factor-two range adjustment. It is
+not a nearest-distance difference. Perlin-Worley uses `lerp(W, 1, P)` per octave,
+where W is inverted nearest distance and P is normalized Perlin. Octaves are
+normalized by persistence weights, followed by:
+
+```text
+value = (normalizedNoise - 0.5) * contrast + 0.5
+response = responseExponent == 1 ? value : pow(saturate(value), responseExponent)
+output = saturate(response + bias)
+```
+
+Exponent one bypasses the power input clamp to preserve the original linear
+contrast/bias operation for existing settings.
+
+Inputs use R16_FLOAT with full mips. Integer periods wrap XY. The base frequency
+is bounded and octaves are omitted above half the resolution, accounting for
+repetitions. Compute sampling derives mip from source dimensions,
+output dimensions and layer frequency, replacing implicit pixel derivatives.
+Imported inputs use available mips. Noninteger layer frequencies can introduce
+a seam across the NDF tile; integer frequencies are preferable for repeating skies.
+
+Default primary uses slot 3 with output [0, 0.65], exponent 1.4; secondary uses
+slot 1 with output [0, 0.4], exponent 1; types use slot 2. Default coverage stays
+below one, preserving Nubis threshold sensitivity. There is no hidden final cap;
+local maps or edited ranges can intentionally produce full coverage.
+
+Composition controls remain independent. A weather may deliberately use the same
+noise, frequency and offset for coverage and types, but that is not a universal
+rule. A single weather sample does not define default height, coverage, types or
+which layers must be disabled. Comparing two weather outputs without matching
+their inputs cannot establish an error in the composition equations.
+
+## Coordinates and lifecycle
+
+Generation evaluates one canonical UV tile, corresponding to a centered
+16384-unit weather domain before normalization. Static `windOffset` is multiplied
+by 0.00005 before each layer's frequency. Physical repeat length is `low.ndfScale`.
+Animated common wind and height shear remain in density queries/reprojection;
+time does not enter generation.
+
+UI exposes all composition parameters, noise inputs, DDS loading and local maps.
+Selected paths persist with settings and load on first use. Missing paths are
+not retried every frame; Load retries/reloads explicitly. Failed reloads preserve
+valid resources. Noise edits rebuild the affected input. Composition/source
+changes or shader/resource reload regenerate the NDF, invalidating main history
+and occupancy/distance maps. Imported acceleration uses actual bilinear coverage
+support. World scale changes history and sampling, not the normalized map.
+
+CPU/HLSL constant-buffer payloads are 352 bytes for composition and 48 for noise.
+Compute restores its sampler and clears SRV/UAV bindings. All view, light,
+shadow and cubemap consumers use the pair. High-cloud generation is unchanged.
+
+`cloudMap.version` is 2. Type 0 imports a pair; type 1 generates locally.
+Older settings and five-slice selections reset to procedural defaults, requiring
+visual retuning rather than silently reinterpreting incompatible parameters.
+Existing version 2 settings retain their saved noise tuning. Omitted repetitions
+and response exponent default to one, preserving the previous noise operation.
 
 ## Validation limits
 
-Static review covers constant-buffer layout, settings/UI paths, generation and
-acceleration invalidation, source switches, finite output bounds and periodic
-cell support. CPU reference evaluation can inspect control maps and envelopes;
-it does not compile or execute the shader and is not a rendered-cloud comparison.
-The CPU reference checked 512 positions for each of 15 form/world-size
-combinations, including 1 x 50 km and 50 x 1 km tiles. Periodic translations
-differed by less than 3.7e-13 in double precision; extending the cell search to
-7 x 7 did not change the result. Zero coverage, ordered heights, seed changes,
-directional elongation and coverage-independent development also passed.
-
+Static review and external CPU evaluation cover expression order, branches,
+local blends, buffer layout, density reconstruction and resource lifecycle.
+The 100,000-case algebra comparison differs by at most 8.9e-16 in double
+precision. Density slices use the bundled Nubis volume and both profile LUTs.
+A 2,048-point periodicity check and an expanded cellular-neighbor search agree.
+An independent weather sample also exercises shared coverage/type input, zero
+secondary coverage and zero bottom type; these are sample-specific controls.
+Its local-noise reconstruction has 43.90% zero coverage versus 44.25% using the
+comparison input with identical composition settings. This checks one input
+case, not general cloud quality or the identity of an external noise enum.
 No C++ build, shader compilation or GPU acceptance is included. Runtime review
-should first isolate macro outlines and vertical profiles, then inspect the
-existing erosion and lighting. Single base/top intervals cannot represent
-arbitrary overhangs, separated vertical layers or enclosed cavities. Custom
-three-dimensional noise generation and additional import layouts remain
-separate work.
+must inspect silhouettes, details, lighting, motion and imported replacement.
+CPU density slices are diagnostic, not a rendered-cloud quality claim.

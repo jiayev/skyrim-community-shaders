@@ -47,15 +47,14 @@ iteration-limited march.
 -   `cloudLayer.high.viewSteps` defaults to 194 and divides only the high layer's
     occupied shell intervals; clear approach distance and the low layer are excluded.
 -   `cloudLayer.high.lightSteps` defaults to 6 independently of low-cloud lighting.
--   `cloudMap.procedural.cloudSize` sets cloud-center spacing in kilometres.
--   `development` controls vertical rise independently from cloud amount.
--   `form` selects cumulus, stratocumulus or stratus; `seed` fixes the layout.
--   `topType`, `topTypeVariation` and `bottomType` select the existing profiles.
+-   `cloudMap.procedural.parameters` controls coverage, shared type noise,
+    separate remaps/exponents, local blending and bottom height variation.
+-   `cloudMap.procedural.noise` controls four generated inputs and DDS overrides.
 -   `cloudLayer.low.shapeShear` offsets the NDF with height, in kilometres along
     the wind. Zero preserves the unsheared profile.
 
 See [procedural NDF generation](ndf-generator.md) for all controls and migration.
-Old noise-product parameters have no equivalent in the cloud-mass generator.
+Version 2 replaces previous array layouts with height RG and modeling RGB.
 
 ## Motion and history
 
@@ -63,10 +62,12 @@ NDF sampling and low-cloud noise share the existing wind displacement.
 Reprojection subtracts the displacement since the last successfully written main
 history. This compensates for the common rigid wind translation.
 
-The procedural NDF contains no time-dependent inputs. Its cloud centers, weather
-and profiles move together under the shared wind offset. Parameters, seed or
-world scale changes rebuild the control field and invalidate history. High-cloud
-pattern drift still reduces its separate history confidence.
+The procedural NDF contains no time-dependent inputs. Coverage, height and
+profiles move together under the shared wind offset. An editable static weather
+offset shifts generation inputs. Parameter or texture changes rebuild the field
+and invalidate history. World scale changes sampling and history without
+rebuilding the normalized map. High-cloud pattern drift still reduces its
+separate history confidence.
 
 Auxiliary W stores `1 + visibleHighCloudFraction`; zero remains invalid. Spatial
 fallback uses its validity, not its magnitude, as a filter weight. Mixed layers

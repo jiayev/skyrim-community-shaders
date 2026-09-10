@@ -56,7 +56,7 @@ struct VolumetricCloudData
 	float2 frameDim;
 	float2 rcpFrameDim;
 	float3 dirlightDir;
-	uint ndfPacked;
+	uint ndfPadding;
 	float bottomZ;
 	float planetRadius;
 	float2 activeFrameDim;
@@ -176,7 +176,8 @@ Texture2D<float> TexDepth : register(t4);
 
 Texture3D<unorm float4> TexNubisNoise : register(t5);
 Texture3D<float4> TexAerialPerspectiveSun : register(t6);
-Texture2DArray<float4> TexCloudNDF : register(t7);
+Texture2D<float2> TexCloudHeight : register(t7);
+Texture2D<float3> TexCloudModeling : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
 Texture2D<float4> TexHpHighWeather : register(t11);
@@ -501,8 +502,7 @@ float EvaluateCloudTopHeightProxy(float2 worldXY)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	float2 uv = LowNdfUV(worldXY, info);
-	[branch] if (info.ndfPacked != 0) return TexCloudNDF.SampleLevel(TileableSampler, float3(uv, 0), 0).g;
-	return TexCloudNDF.SampleLevel(TileableSampler, float3(uv, 1), 0).r;
+	return TexCloudHeight.SampleLevel(TileableSampler, uv, 0).g;
 }
 
 float EvaluateCloudBoundaryLight(float3 pos, float3 sunDir)
@@ -557,27 +557,13 @@ NDFInfo sampleNDF(CloudLayer cloud, float2 ndfUV, float planet_z)
 	NDFInfo ndf;
 	initNDFInfo(ndf);
 
-	const bool packed = VolumetricCloudBuffer[0].ndfPacked != 0;
-	float4 attributes = 0.0;
-	[branch] if (packed)
-	{
-		attributes = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 0), 0);
-		ndf.coverage = attributes.b;
-	}
-	else
-	{
-		ndf.coverage = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 2), 0).r;
-	}
+	const float3 model = TexCloudModeling.SampleLevel(TileableSampler, ndfUV, 0);
+	ndf.coverage = model.r;
 	if (ndf.coverage < 1e-8)
 		return ndf;
-
-	float minHeight = attributes.r;
-	float maxHeight = attributes.g;
-	[branch] if (!packed)
-	{
-		minHeight = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 0), 0).r;
-		maxHeight = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 1), 0).r;
-	}
+	const float2 heights = TexCloudHeight.SampleLevel(TileableSampler, ndfUV, 0);
+	const float minHeight = heights.r;
+	const float maxHeight = heights.g;
 	const float minAltitude = lerp(cloud.lowestAltitude, cloud.highestAltitude, minHeight);
 	const float maxAltitude = lerp(cloud.lowestAltitude, cloud.highestAltitude, maxHeight);
 	if (maxAltitude <= minAltitude || planet_z < minAltitude || planet_z > maxAltitude)
@@ -586,16 +572,8 @@ NDFInfo sampleNDF(CloudLayer cloud, float2 ndfUV, float planet_z)
 
 	ndf.in_layer = true;
 	ndf.local_height = ndf.height_fraction;
-	[branch] if (packed)
-	{
-		ndf.top_type = attributes.a;
-		ndf.bottom_type = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 1), 0).r;
-	}
-	else
-	{
-		ndf.top_type = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 3), 0).r;
-		ndf.bottom_type = TexCloudNDF.SampleLevel(TileableSampler, float3(ndfUV, 4), 0).r;
-	}
+	ndf.top_type = model.g;
+	ndf.bottom_type = model.b;
 	ndf.top_value = TexCloudTopLUT.SampleLevel(TransmittanceSampler, float2(ndf.top_type, 1.0 - ndf.height_fraction), 0);
 	ndf.bottom_value = TexCloudBottomLUT.SampleLevel(TransmittanceSampler, float2(ndf.bottom_type, 1.0 - ndf.height_fraction), 0);
 	const float verticalProfile = ndf.top_value * ndf.bottom_value;

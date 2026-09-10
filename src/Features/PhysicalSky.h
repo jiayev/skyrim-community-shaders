@@ -272,7 +272,7 @@ struct PhysicalSky final : public Feature
 		float2 frameDim;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
-		uint ndfPacked;
+		uint ndfPadding;
 		float bottomZ;
 		float planetRadius;
 		float2 activeFrameDim;

@@ -401,7 +401,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.frameDim = { cbData.texDim.x, cbData.texDim.y },
 		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
 		.dirlightDir = cloudLightDir,
-		.ndfPacked = settings.cloudMap.type == NdfType::Texture ? 0u : 1u,
+		.ndfPadding = 0u,
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
 		.activeFrameDim = { static_cast<float>(renderW), static_cast<float>(renderH) },
@@ -500,9 +500,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
 	// Shared SRVs for both passes
-	auto* ndfSrv = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
+	auto ndfTextures = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
 	auto highTextures = highCloudMapManager.GetTextures(high);
-	if (!ndfSrv || (high.enabled && (!highTextures.highWeather || !highTextures.highCell || !highTextures.highWarp || !highTextures.highWisp)))
+	if (!ndfTextures || (high.enabled && (!highTextures.highWeather || !highTextures.highCell || !highTextures.highWarp || !highTextures.highWisp)))
 		return;
 
 	std::array<ID3D11ShaderResourceView*, 19> srvs = {
@@ -513,8 +513,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,  // t4
 		baseShapeNoiseSrv.get(),                                                                                       // t5 authored Nubis RGBA noise composite
 		texApSunLut->srv.get(),                                                                                        // t6 direct solar single-scattering AP LUT
-		ndfSrv,                                                                                                        // t7 NDF
-		nullptr,                                                                                                       // t8
+		ndfTextures.height,                                                                                            // t7 NDF height
+		ndfTextures.modeling,                                                                                          // t8 NDF modeling
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
 		highTextures.highWeather,                                                                                      // t11

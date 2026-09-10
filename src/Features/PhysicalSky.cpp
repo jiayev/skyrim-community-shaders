@@ -26,48 +26,44 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TexNdfSettings,
-	texPath)
+	heightPath,
+	modelingPath)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	NdfNoiseParameters,
+	type, seed, frequency, octaves, persistence, lacunarity, contrast, bias, repetitions, responseExponent)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	NdfNoiseInput,
+	parameters, texturePath)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	NdfNoiseLayer,
+	noise, frequency, exponent, offset, range)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	NdfGenerationParameters,
+	primary, secondary, coverageGain, modeling, modelingGain, heightVariation,
+	bottomTypeRange, baseHeight, bottomTypeExponent, heightFromCoverage,
+	localBlendMode, localModelingWeight, localHeightWeight, localWindScale, windOffset)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ProceduralNdfSettings,
-	seed,
-	form,
-	coverage,
-	weatherStrength,
-	cloudSize,
-	weatherScale,
-	elongation,
-	bearing,
-	sizeVariation,
-	clustering,
-	development,
-	heightVariation,
-	baseVariation,
-	edgeSoftness,
-	topType,
-	topTypeVariation,
-	bottomType,
-	shoulders)
+	parameters, noise, local, localMaskPath)
 
 void to_json(nlohmann::json& j, const NdfSettings& value)
 {
-	j = { { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural } };
+	j = { { "version", 2 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural } };
 }
 
 void from_json(const nlohmann::json& j, NdfSettings& value)
 {
 	value = {};
+	if (j.value("version", 0u) != 2u)
+		return;
 	value.type = j.value("type", NdfType::Procedural) == NdfType::Texture ? NdfType::Texture : NdfType::Procedural;
 	value.texture = j.value("texture", TexNdfSettings{});
-	if (j.contains("procedural")) {
-		value.procedural = j.at("procedural").get<ProceduralNdfSettings>();
-	} else if (j.contains("cumuliform")) {
-		// Profile selectors retain their meaning; the old noise products have no cloud-mass equivalent.
-		const auto& previous = j.at("cumuliform");
-		value.procedural.topType = previous.value("topType", value.procedural.topType);
-		value.procedural.topTypeVariation = previous.value("topTypeVariation", value.procedural.topTypeVariation);
-		value.procedural.bottomType = previous.value("wispiness", value.procedural.bottomType);
-	}
+	value.procedural = j.value("procedural", ProceduralNdfSettings{});
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -739,7 +735,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 		uint32_t minCacheSteps = 4, maxCacheSteps = 32;
 		ImGui::SliderScalar(T(TKEY("cloud_cache_steps"), "Cloud Cache Steps"), ImGuiDataType_U32, &lighting.cacheSteps, &minCacheSteps, &maxCacheSteps);
 		{
-			static const char* phaseModelNames[] = { "Dual-Lobe HG", "Approximate Mie" };
+			const char* phaseModelNames[] = {
+				T(TKEY("cloud_phase_model_dual_lobe_hg"), "Dual-Lobe HG"),
+				T(TKEY("cloud_phase_model_approximate_mie"), "Approximate Mie")
+			};
 			int phaseModel = static_cast<int>(std::min(lighting.phaseModel, 1u));
 			if (ImGui::Combo(T(TKEY("cloud_phase_model"), "Phase Model"), &phaseModel, phaseModelNames, IM_ARRAYSIZE(phaseModelNames))) {
 				lighting.phaseModel = static_cast<uint32_t>(phaseModel);
@@ -749,7 +748,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 				ImGui::Text("%s", T(TKEY("cloud_phase_model_desc"), "Low clouds only.\nDual-Lobe HG: an equal-weight, normalized blend of the forward and backward lobes controlled below.\nApproximate Mie: an HG + Draine fit for water droplets with a mean diameter of 10 micrometres (5 micrometre radius). It approximates the forward peak but does not reproduce fogbow or glory peaks. The eccentricity sliders do not affect it. High clouds retain their own normalized dual-lobe HG phase."));
 		}
 		{
-			static const char* scatterIntegrationNames[] = { "Legacy", "Energy Conserving" };
+			const char* scatterIntegrationNames[] = {
+				T(TKEY("cloud_scatter_integration_legacy"), "Legacy"),
+				T(TKEY("cloud_scatter_integration_energy_conserving"), "Energy Conserving")
+			};
 			int scatterIntegration = static_cast<int>(std::min(lighting.scatterIntegration, 1u));
 			if (ImGui::Combo(T(TKEY("cloud_scatter_integration"), "Scatter Integration"), &scatterIntegration, scatterIntegrationNames, IM_ARRAYSIZE(scatterIntegrationNames))) {
 				lighting.scatterIntegration = static_cast<uint32_t>(scatterIntegration);
@@ -994,7 +996,7 @@ bool PhysicalSky::ShadersOK()
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
 	const bool ndfReady = settings.cloudMap.type != NdfType::Procedural ||
-	                      (ndfManager.texNdfOutput && ndfManager.generatorProgram);
+	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
@@ -1198,7 +1200,7 @@ void PhysicalSky::Prepass()
 				volMainHistoryValid = false;
 				volCloudSettingsKey = cloudSettingsKey;
 			}
-			if (ndfManager.UpdateNdf(settings.cloudMap, settings.cloudLayer.low))
+			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager))
 				volMainHistoryValid = false;
 			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
