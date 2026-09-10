@@ -110,6 +110,18 @@ Texture3D<float4> TexApSunLut : register(t113);
 		return (discr > b * b) ? (-b + sqrt(discr)) : (-b - sqrt(discr));
 	}
 
+	// Near and far distance to a planet-centred sphere (planet centre at the origin).
+	// Returns (-1, -1) when the ray misses. Requires a normalized direction.
+	float2 IntersectSpherePair(float3 origin, float3 dir, float radius)
+	{
+		const float b = dot(origin, dir);
+		const float discriminant = b * b - dot(origin, origin) + radius * radius;
+		if (discriminant < 0.0)
+			return -1.0;
+		const float root = sqrt(discriminant);
+		return float2(-b - root, -b + root);
+	}
+
 	float3 SphericalDir(float azimuth, float zenith)
 	{
 		float cosZenith, sinZenith, cosAzimuth, sinAzimuth;
