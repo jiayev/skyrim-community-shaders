@@ -80,11 +80,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HighCloudSettings,
 	enabled,
-	thinLayer,
-	thinLayerStart,
-	thinLayerEnd,
 	viewSteps,
-	lightSteps,
 	weatherDim,
 	weatherWorldSize,
 	weatherCenter,
@@ -130,7 +126,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLightingSettings,
-	useLightCache,
 	crossLayerShadows,
 	cacheSteps,
 	scatterTint,
@@ -139,32 +134,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ambientTopMultiplier,
 	ambientBottomMultiplier,
 	aoUpwardScale,
-	msAttenuation,
+	msDepthPower,
 	msContribution,
 	msEccentricity,
-	scatterSourceODScale,
-	scatterSourceCurvePow,
-	powderIntensity,
-	lightSteps,
-	phaseModel,
-	scatterIntegration,
-	lightStepDistanceLod)
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	CloudForwardScatteringSettings,
-	intensity,
-	depthPow,
-	depthBias,
-	boundaryConfidence,
-	msBuildScale,
-	compress)
+	msHeightPower)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLayer,
 	low,
 	high,
-	lighting,
-	phiFwd)
+	lighting)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
@@ -209,9 +188,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	enableVolumetricClouds,
 	rayMarchRange,
 	shadowVolumeRange,
-	cloudMaxStep,
+	lowViewSteps,
 	temporalAccumulationFactor,
-	ghostingReduction,
 	cloudMap,
 	cloudLayer)
 
@@ -623,24 +601,16 @@ void PhysicalSky::SettingsVolumetricClouds()
 	auto& low = settings.cloudLayer.low;
 	auto& high = settings.cloudLayer.high;
 	auto& lighting = settings.cloudLayer.lighting;
-	auto& phi = settings.cloudLayer.phiFwd;
 
 	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
 	{
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
-		uint32_t minStep = 1, maxStep = 200;
-		ImGui::SliderScalar(T(TKEY("low_cloud_sampling_quality"), "Low Cloud Sampling Quality"), ImGuiDataType_U32, &settings.cloudMaxStep, &minStep, &maxStep);
-		uint32_t minHighStep = 4, maxHighStep = 512;
-		ImGui::SliderScalar(T(TKEY("high_cloud_view_steps"), "High Cloud View Steps"), ImGuiDataType_U32, &high.viewSteps, &minHighStep, &maxHighStep);
-		uint32_t minLightStep = 1, maxLightStep = 16;
-		ImGui::SliderScalar(T(TKEY("high_cloud_light_steps"), "High Cloud Light Steps"), ImGuiDataType_U32, &high.lightSteps, &minLightStep, &maxLightStep);
-		ImGui::SliderScalar(T(TKEY("low_cloud_light_steps"), "Low Cloud Light Steps"), ImGuiDataType_U32, &lighting.lightSteps, &minLightStep, &maxLightStep);
-		ImGui::SliderFloat(T(TKEY("light_step_distance_lod"), "Light Step Distance LOD"), &lighting.lightStepDistanceLod, 0.f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("light_step_distance_lod_desc"), "Fades the light-march step budget down to a single step with view distance (3 km to 100 km). 0 disables the LOD."));
-		ImGui::SliderFloat(T(TKEY("temporal_accumulation"), "Temporal Accumulation"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
-		ImGui::Checkbox(T(TKEY("ghosting_reduction"), "Ghosting Reduction"), &settings.ghostingReduction);
+		uint32_t minStep = 32, maxStep = 512;
+		ImGui::SliderScalar(T(TKEY("low_view_steps"), "Low Cloud View Budget"), ImGuiDataType_U32, &settings.lowViewSteps, &minStep, &maxStep);
+		uint32_t minHighStep = 8, maxHighStep = 256;
+		ImGui::SliderScalar(T(TKEY("high_cloud_view_steps"), "High Cloud View Budget"), ImGuiDataType_U32, &high.viewSteps, &minHighStep, &maxHighStep);
+		ImGui::SliderFloat(T(TKEY("cloud_history_stability"), "Cloud History Stability"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
@@ -675,11 +645,6 @@ void PhysicalSky::SettingsVolumetricClouds()
 		high.bottomAltitude = std::clamp(high.bottomAltitude, 2.0f, 18.0f);
 		high.topAltitude = std::clamp(std::max(high.topAltitude, high.bottomAltitude + 0.1f), high.bottomAltitude + 0.1f, 24.0f);
 		ImGui::Checkbox(T(TKEY("enable_high_clouds"), "Enable High Clouds"), &high.enabled);
-		ImGui::Checkbox(T(TKEY("high_thin_layer"), "Distant Thin Layer"), &high.thinLayer);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_thin_layer_tooltip"), "Approximates distant high clouds thinner than 1 km. Blends back to volume marching near the horizon, inside the layer, or when geometry clips the cloud."));
-		ImGui::SliderFloat(T(TKEY("high_thin_start"), "Thin Layer Start"), &high.thinLayerStart, 1.f, 64.f, "%.1f km");
-		ImGui::SliderFloat(T(TKEY("high_thin_end"), "Thin Layer End"), &high.thinLayerEnd, high.thinLayerStart + 1.f, 128.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("high_coverage"), "High Coverage"), &high.coverage, 0.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("weather_world_size"), "Weather World Size"), &high.weatherWorldSize, 8.f, 256.f, "%.1f km", ImGuiSliderFlags_Logarithmic);
 		ImGui::SliderFloat2(T(TKEY("weather_center"), "Weather Center"), &high.weatherCenter.x, -256.f, 256.f, "%.1f km");
@@ -710,36 +675,9 @@ void PhysicalSky::SettingsVolumetricClouds()
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
 	{
-		ImGui::Checkbox(T(TKEY("cloud_light_cache"), "Cloud Light Cache"), &lighting.useLightCache);
 		ImGui::Checkbox(T(TKEY("cross_layer_shadows"), "Cross-Layer Shadows"), &lighting.crossLayerShadows);
 		uint32_t minCacheSteps = 4, maxCacheSteps = 32;
 		ImGui::SliderScalar(T(TKEY("cloud_cache_steps"), "Cloud Cache Steps"), ImGuiDataType_U32, &lighting.cacheSteps, &minCacheSteps, &maxCacheSteps);
-		{
-			const char* phaseModelNames[] = {
-				T(TKEY("cloud_phase_model_dual_lobe_hg"), "Dual-Lobe HG"),
-				T(TKEY("cloud_phase_model_approximate_mie"), "Approximate Mie")
-			};
-			int phaseModel = static_cast<int>(std::min(lighting.phaseModel, 1u));
-			if (ImGui::Combo(T(TKEY("cloud_phase_model"), "Phase Model"), &phaseModel, phaseModelNames, IM_ARRAYSIZE(phaseModelNames))) {
-				lighting.phaseModel = static_cast<uint32_t>(phaseModel);
-				volMainHistoryValid = false;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("cloud_phase_model_desc"), "Low clouds only.\nDual-Lobe HG: an equal-weight, normalized blend of the forward and backward lobes controlled below.\nApproximate Mie: an HG + Draine fit for water droplets with a mean diameter of 10 micrometres (5 micrometre radius). It approximates the forward peak but does not reproduce fogbow or glory peaks. The eccentricity sliders do not affect it. High clouds retain their own normalized dual-lobe HG phase."));
-		}
-		{
-			const char* scatterIntegrationNames[] = {
-				T(TKEY("cloud_scatter_integration_legacy"), "Legacy"),
-				T(TKEY("cloud_scatter_integration_energy_conserving"), "Energy Conserving")
-			};
-			int scatterIntegration = static_cast<int>(std::min(lighting.scatterIntegration, 1u));
-			if (ImGui::Combo(T(TKEY("cloud_scatter_integration"), "Scatter Integration"), &scatterIntegration, scatterIntegrationNames, IM_ARRAYSIZE(scatterIntegrationNames))) {
-				lighting.scatterIntegration = static_cast<uint32_t>(scatterIntegration);
-				volMainHistoryValid = false;
-			}
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("cloud_scatter_integration_desc"), "Low clouds only.\nLegacy: retains the old scalar integral and artistic edge gate. Brightness depends on march step size.\nEnergy Conserving (default): uses albedo * (1 - transmittance) for direct and ambient light, with no extra edge gate. The current low-cloud medium is grey and nonabsorbing (albedo 1). Scatter Source OD Scale and Curve Pow apply only to Legacy. This fixes the step integral; multiple scattering and environment lighting remain approximations."));
-		}
 		ImGui::ColorEdit3(T(TKEY("scatter_tint"), "Scatter Tint"), &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 		ImGui::SliderFloat(T(TKEY("forward_eccentricity"), "Forward Eccentricity"), &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("backward_eccentricity"), "Backward Eccentricity"), &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
@@ -749,22 +687,13 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("ambient_bottom"), "Ambient Bottom"), &lighting.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("ambient_bottom_desc"), "Multiplier for environment radiance reaching the cloud base. 1.0 leaves the approximate sky-probe radiance unscaled."));
-		ImGui::SliderFloat(T(TKEY("ms_attenuation"), "MS Attenuation"), &lighting.msAttenuation, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_depth_power"), "MS Depth Power"), &lighting.msDepthPower, 0.01f, 1.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("ms_height_power"), "MS Height Power"), &lighting.msHeightPower, 0.f, 2.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("ms_contribution"), "MS Contribution"), &lighting.msContribution, 0.01f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("ms_eccentricity"), "MS Eccentricity"), &lighting.msEccentricity, 0.01f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("upward_ao"), "Upward AO"), &lighting.aoUpwardScale, 0.f, 4.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("upward_ao_desc"), "Scales the approximate vertical optical depth inferred from the light-direction cloud column. 1.0 leaves this estimate unscaled; it is not a separate vertical visibility trace."));
-	}
-
-	ImGui::SeparatorText(T(TKEY("phi_fwd"), "PhiFwd"));
-	{
-		ImGui::SliderFloat(T(TKEY("phi_fwd_intensity"), "PhiFwd Intensity"), &phi.intensity, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("phi_fwd_depth_pow"), "PhiFwd Depth Pow"), &phi.depthPow, 0.f, 4.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("phi_fwd_depth_bias"), "PhiFwd Depth Bias"), &phi.depthBias, -1.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("phi_fwd_boundary"), "PhiFwd Boundary"), &phi.boundaryConfidence, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("phi_fwd_ms_build"), "PhiFwd MS Build"), &phi.msBuildScale, 0.f, 8.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("phi_fwd_compress"), "PhiFwd Compress"), &phi.compress, 0.f, 4.f, "%.2f");
+			ImGui::Text("%s", T(TKEY("upward_ao_desc"), "Scales the cached upward optical depth used to attenuate cloud environment lighting."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
@@ -979,9 +908,11 @@ bool PhysicalSky::ShadersOK()
 	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
-								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux && texVolUpscaleTr && texVolUpscaleLum && texVolUpscaleAux &&
+	                           (csVolMainView && csVolReproject && csVolCubeReproject && csVolLowLightCache && csVolHighLightCache && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
+								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
+								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux && texLowCloudLightCache && texHighCloudLightCache &&
 								   texShadowVolume && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && highCloudMapsReady);
 	return baseShadersOk && volumetricShadersOk;
 }
@@ -1151,21 +1082,26 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolUpscale && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolCubeReproject && csVolLowLightCache && csVolHighLightCache && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
 			const auto cloudSettingsKey = nlohmann::json{
 				{ "map", settings.cloudMap },
 				{ "layer", settings.cloudLayer },
 				{ "range", settings.rayMarchRange },
-				{ "quality", settings.cloudMaxStep }
+				{ "planet", settings.planetRadius },
+				{ "bottom", cbData.zBottom },
+				{ "quality", settings.lowViewSteps }
 			}.dump();
 			if (cloudSettingsKey != volCloudSettingsKey) {
 				volMainHistoryValid = false;
 				volCloudSettingsKey = cloudSettingsKey;
+				volLightCacheValid = false;
 			}
-			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager))
+			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager)) {
 				volMainHistoryValid = false;
+				volLightCacheValid = false;
+			}
 			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
@@ -1190,12 +1126,6 @@ void PhysicalSky::Prepass()
 				context->ClearUnorderedAccessViewFloat(texVolLowLum->uav.get(), lumClr);
 			if (texVolLowAux)
 				context->ClearUnorderedAccessViewFloat(texVolLowAux->uav.get(), lumClr);
-			if (texVolUpscaleTr)
-				context->ClearUnorderedAccessViewFloat(texVolUpscaleTr->uav.get(), trClr);
-			if (texVolUpscaleLum)
-				context->ClearUnorderedAccessViewFloat(texVolUpscaleLum->uav.get(), lumClr);
-			if (texVolUpscaleAux)
-				context->ClearUnorderedAccessViewFloat(texVolUpscaleAux->uav.get(), lumClr);
 			if (texVolHistoryTr)
 				context->ClearUnorderedAccessViewFloat(texVolHistoryTr->uav.get(), trClr);
 			if (texVolHistoryLum)
