@@ -1139,8 +1139,7 @@ void PhysicalSky::Prepass()
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
 			volMainHistoryValid = false;
-			volHistoryWidth = 0;
-			volHistoryHeight = 0;
+			volHistoryFrameDim = {};
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };

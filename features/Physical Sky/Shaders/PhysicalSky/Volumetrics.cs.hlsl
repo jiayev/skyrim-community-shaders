@@ -130,6 +130,7 @@ struct VolumetricCloudData
 	uint lightCacheUpdatePhase;
 	row_major float4x4 previousViewProj;
 	float3 previousCamera;
+	float2 previousFrameDim;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)

@@ -8,21 +8,25 @@ uint2 CloudPhaseOffset()
 	return uint2(phase & 3u, phase >> 2u);
 }
 
-float3 CloudScreenRay(uint2 pixel)
+float2 CloudScreenUv(uint2 pixel)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition((pixel + 0.5) * info.rcpFrameDim);
+	return FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition((pixel + 0.5) * info.rcpFrameDim);
+}
+
+float3 CloudScreenRay(uint2 pixel)
+{
+	const float2 uv = CloudScreenUv(pixel);
 	float4 position = mul(FrameBuffer::CameraViewProjInverse, float4(uv * float2(2, -2) + float2(-1, 1), 1, 1));
 	return normalize(position.xyz / position.w);
 }
 
 float ReconstructSceneRayDistance(uint2 pixel)
 {
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float depth = TexDepth[pixel];
 	if (depth >= 1.0 - 1e-6)
 		return CLOUD_SKY_DISTANCE;
-	const float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition((pixel + 0.5) * info.rcpFrameDim);
+	const float2 uv = CloudScreenUv(pixel);
 	float4 position = mul(FrameBuffer::CameraViewProjInverse, float4(uv * float2(2, -2) + float2(-1, 1), depth, 1));
 	return min(length(position.xyz / position.w), CLOUD_SKY_DISTANCE * 0.99);
 }
@@ -105,9 +109,9 @@ bool CloudHistory(float2 uv, float sceneDepth, out float3 tr, out float3 lum, ou
 	tr = 0.0;
 	lum = 0.0;
 	aux = 0.0;
-	if (any(uv < 0.0) || any(uv >= 1.0))
+	if (any(uv < 0.0) || any(uv >= 1.0) || any(info.previousFrameDim < 1.0))
 		return false;
-	const float2 position = uv * info.activeFrameDim - 0.5;
+	const float2 position = uv * info.previousFrameDim - 0.5;
 	const int2 base = int2(floor(position));
 	const float2 fraction = frac(position);
 	float weightSum = 0.0;
@@ -116,7 +120,7 @@ bool CloudHistory(float2 uv, float sceneDepth, out float3 tr, out float3 lum, ou
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
 		const uint2 corner = uint2(i & 1u, i >> 1u);
-		const int2 tap = clamp(base + int2(corner), 0, int2(info.activeFrameDim) - 1);
+		const int2 tap = clamp(base + int2(corner), 0, int2(info.previousFrameDim) - 1);
 		const float4 sampleAux = TexVolHistoryAux[tap];
 		const float2 w = lerp(1.0 - fraction, fraction, float2(corner));
 		const float weight = w.x * w.y * (sampleAux.z > 0.0 && CloudDepthCompatible(sampleAux.y, sceneDepth) ? 1.0 : 0.0);
@@ -153,7 +157,7 @@ bool CloudHistory(float2 uv, float sceneDepth, out float3 tr, out float3 lum, ou
 		currentAux = TexVolLowAux[pixel / 4u];
 		currentValid = true;
 	}
-	const float2 uv = (pixel + 0.5) / info.activeFrameDim;
+	const float2 uv = CloudScreenUv(pixel);
 	const float3 ray = CloudScreenRay(pixel);
 	float3 previousPosition = ray * DecodeCloudDepth(currentAux.x);
 	previousPosition += FrameBuffer::CameraPosAdjust.xyz - info.previousCamera;

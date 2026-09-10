@@ -326,13 +326,15 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	// while elevated clouds are still sunlit. Trace their actual solar column.
 	if (cbData.volCloudUseSun != 0)
 		cloudLightDir = cbData.sunDir;
-	const uint32_t renderW = (uint32_t)cbData.frameDim.x;
-	const uint32_t renderH = (uint32_t)cbData.frameDim.y;
-	if (volHistoryWidth != renderW || volHistoryHeight != renderH) {
-		volMainHistoryValid = false;
-		volHistoryWidth = renderW;
-		volHistoryHeight = renderH;
-	}
+	const auto& frameBuffer = globals::game::frameBufferCached;
+	const auto& resolutionScale = frameBuffer.GetDynamicResolutionParams1();
+	const float2 textureDim = { static_cast<float>(texVolTr->desc.Width), static_cast<float>(texVolTr->desc.Height) };
+	const float2 frameDim = {
+		std::clamp(textureDim.x * resolutionScale.x, 1.0f, textureDim.x),
+		std::clamp(textureDim.y * resolutionScale.y, 1.0f, textureDim.y)
+	};
+	const uint32_t renderW = static_cast<uint32_t>(frameDim.x);
+	const uint32_t renderH = static_cast<uint32_t>(frameDim.y);
 	const float sunHistoryDot = std::clamp(
 		volHistorySunDir.x * cloudLightDir.x + volHistorySunDir.y * cloudLightDir.y + volHistorySunDir.z * cloudLightDir.z,
 		-1.0f,
@@ -376,8 +378,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float traceBottomKm = high.enabled ? std::min(lowCloudBaseKm, highCloudBottomKm) : lowCloudBaseKm;
 	const float traceTopKm = high.enabled ? std::max(lowCloudTraceTopKm, highCloudTopKm) : lowCloudTraceTopKm;
 
-	const uint32_t lowW = texVolLowTr->desc.Width;
-	const uint32_t lowH = texVolLowTr->desc.Height;
+	const uint32_t lowW = (renderW + 3u) / 4u;
+	const uint32_t lowH = (renderH + 3u) / 4u;
 
 	const auto cameraPosition = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float2 cameraXY = { cameraPosition.x, cameraPosition.y };
@@ -397,7 +399,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.shadowVolumeRange = KilometersToGameUnits(settings.shadowVolumeRange),
 		.lowViewSteps = std::clamp(settings.lowViewSteps, 32u, 512u),
 		.cloudFrameIndex = volFrameIndex,
-		.rcpFrameDim = { cbData.rcpTexDim.x, cbData.rcpTexDim.y },
+		.rcpFrameDim = float2(1.0f) / textureDim,
 		.dirlightDir = cloudLightDir,
 		.bottomZ = cbData.zBottom,
 		.planetRadius = cbData.rPlanet,
@@ -457,7 +459,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highLightAbsorption = high.lightAbsorption,
 		.highViewAbsorption = high.viewAbsorption,
 		.highCoverAbsorptionStrength = high.coverAbsorptionStrength,
-		.lowFrameDim = { static_cast<float>((renderW + 3u) / 4u), static_cast<float>((renderH + 3u) / 4u) },
+		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
 		.temporalAccumulationFactor = std::clamp(settings.temporalAccumulationFactor, 0.0f, 1.0f),
 		.cloudHistoryInvalidation = cloudHistoryInvalidation,
@@ -478,6 +480,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.lightCacheUpdatePhase = rebuildLightCache ? 8u : (volFrameIndex & 7u),
 		.previousViewProj = volHistoryViewProj,
 		.previousCamera = volHistoryCamera,
+		.previousFrameDim = volHistoryFrameDim,
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -673,6 +676,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryTime = timeSeconds;
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
+		volHistoryFrameDim = frameDim;
 		volLightCacheValid = true;
 		++volFrameIndex;
 	}
