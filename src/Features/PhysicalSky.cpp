@@ -68,8 +68,8 @@ void from_json(const nlohmann::json& j, NdfSettings& value)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LowCloudSettings,
-	baseAltitude,
-	thickness,
+	ndfAltitudeOffset,
+	ndfAltitudeScale,
 	ndfScale,
 	noiseCompositeScale,
 	noiseRoundness,
@@ -77,7 +77,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	windDirection,
 	windSpeed,
 	shapeShear,
-	extinctionCoefficient)
+	densityScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	HighCloudSettings,
@@ -109,37 +109,31 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	softness,
 	wispScale,
 	wispStrength,
-	densityMultiplier,
+	densityScale,
 	densitySoftAIntensity,
 	densitySoftAContrast,
 	densityModAIntensity,
-	densityModAContrast,
-	forwardEccentricity,
-	backwardEccentricity,
-	ambientTopMultiplier,
-	ambientBottomMultiplier,
-	skyBlendStrength,
-	msAttenuation,
-	msContribution,
-	msEccentricity,
-	lightAbsorption,
-	viewAbsorption,
-	coverAbsorptionStrength)
+	densityModAContrast)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLightingSettings,
 	crossLayerShadows,
 	cacheSteps,
-	scatterTint,
-	forwardEccentricity,
-	backwardEccentricity,
-	ambientTopMultiplier,
-	ambientBottomMultiplier,
-	aoUpwardScale,
-	msDepthPower,
-	msContribution,
-	msEccentricity,
-	msHeightPower)
+	lightingScale,
+	sunExtinction,
+	phaseForwardG,
+	phaseBackwardG,
+	phaseForwardWeight,
+	phaseBackwardWeight,
+	scatterVolumeStrength,
+	scatterVolumeDepth,
+	scatterVolumeHeight,
+	softScatteringStrength,
+	powderStrength,
+	ambientStrength,
+	ambientFloor,
+	ambientDensity,
+	ambientBase)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLayer,
@@ -633,16 +627,12 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("cloud_history_stability"), "Cloud History Stability"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 	}
 
-	ImGui::SeparatorText(T(TKEY("placement"), "Placement"));
-	{
-		ImGui::SliderFloat(T(TKEY("low_cloud_base_altitude"), "Low Cloud Base Altitude"), &low.baseAltitude, 0.f, 8.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("layer_thickness"), "Layer Thickness"), &low.thickness, 0.05f, 3.f, "%.2f km");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("low_cloud_base_altitude_tooltip"), "The five NDF layers map their normalized height values into this altitude interval."));
-	}
-
 	ImGui::SeparatorText(T(TKEY("composition"), "Low Clouds"));
 	{
+		ImGui::DragFloat(T(TKEY("ndf_altitude_offset"), "NDF Base Altitude"), &low.ndfAltitudeOffset, 1.f, 0.f, 20000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::DragFloat(T(TKEY("ndf_altitude_scale"), "NDF Height Span"), &low.ndfAltitudeScale, 1.f, 1.f, 20000.f, "%.0f m", ImGuiSliderFlags_AlwaysClamp);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("ndf_altitude_encoding"), "Altitude = base altitude + NDF height * height span. Applies to both generated and imported maps."));
 		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &low.ndfScale.x, 1.f, 50.f, "%.2f km");
 		if (ImGui::SliderFloat(T(TKEY("noise_feature_size"), "Noise Composite Scale"), &low.noiseCompositeScale, 0.02f, 8.f, "%.3f km", ImGuiSliderFlags_Logarithmic))
 			volMainHistoryValid = false;
@@ -655,9 +645,9 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
 		ImGui::SliderFloat(T(TKEY("cloud_shape_shear"), "Cloud Shape Shear"), &low.shapeShear, 0.f, 2.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("extinction_coefficient"), "Extinction Coefficient"), &low.extinctionCoefficient, 0.f, 0.5f, "%.3f 1/m");
+		ImGui::SliderFloat(T(TKEY("cloud_density_scale"), "Density Scale"), &low.densityScale, 0.f, 1.f, "%.3f 1/m");
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("extinction_coefficient_tooltip"), "Scales normalized reconstructed density before optical integration. It changes opacity, not NDF support or silhouette."));
+			ImGui::Text("%s", T(TKEY("cloud_density_scale_desc"), "Converts reconstructed density to extinction per metre. Shared by view opacity, light sampling and cloud shadows. NDF heights stay fixed."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("high_clouds"), "High Clouds"));
@@ -678,19 +668,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("altocumulus_weight"), "Altocumulus Weight"), &high.altocumulusWeight, 0.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("high_bottom_altitude"), "High Cloud Bottom Altitude"), &high.bottomAltitude, 2.f, high.topAltitude - 0.1f, "%.2f km");
 		ImGui::SliderFloat(T(TKEY("high_top_altitude"), "High Cloud Top Altitude"), &high.topAltitude, high.bottomAltitude + 0.1f, 24.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("high_density"), "High Density"), &high.densityMultiplier, 0.f, 2.f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("high_density_scale"), "High Density Scale"), &high.densityScale, 0.f, 1.f, "%.3f 1/m");
 		ImGui::SliderFloat(T(TKEY("high_softness"), "High Softness"), &high.softness, 0.001f, 0.25f, "%.3f");
 		ImGui::SliderFloat2(T(TKEY("high_cell_scale"), "High Cell Scale"), &high.cellScale.x, 0.1f, 32.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("high_wisp_strength"), "High Wisp Strength"), &high.wispStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("high_ambient_top"), "High Ambient Top"), &high.ambientTopMultiplier, 0.f, 5.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_ambient_top_desc"), "High-cloud top environment-radiance multiplier. 1.0 leaves the approximate sky-probe radiance unscaled."));
-		ImGui::SliderFloat(T(TKEY("high_ambient_bottom"), "High Ambient Bottom"), &high.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_ambient_bottom_desc"), "High-cloud base environment-radiance multiplier. 1.0 leaves the approximate sky-probe radiance unscaled."));
-		ImGui::SliderFloat(T(TKEY("high_environment_fidelity"), "High Environment Fidelity"), &high.skyBlendStrength, 0.f, 1.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("high_environment_fidelity_desc"), "1.0 preserves the integrated high-cloud radiance. Lower values increasingly replace the high-cloud top with an artistic view-direction environment blend."));
 	}
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
@@ -698,22 +679,21 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::Checkbox(T(TKEY("cross_layer_shadows"), "Cross-Layer Shadows"), &lighting.crossLayerShadows);
 		uint32_t minCacheSteps = 4, maxCacheSteps = 32;
 		ImGui::SliderScalar(T(TKEY("cloud_cache_steps"), "Cloud Cache Steps"), ImGuiDataType_U32, &lighting.cacheSteps, &minCacheSteps, &maxCacheSteps);
-		ImGui::ColorEdit3(T(TKEY("scatter_tint"), "Scatter Tint"), &lighting.scatterTint.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::SliderFloat(T(TKEY("forward_eccentricity"), "Forward Eccentricity"), &lighting.forwardEccentricity, 0.f, 0.95f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("backward_eccentricity"), "Backward Eccentricity"), &lighting.backwardEccentricity, 0.f, 0.8f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("ambient_top"), "Ambient Top"), &lighting.ambientTopMultiplier, 0.f, 5.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ambient_top_desc"), "Multiplier for sky radiance reaching the cloud top. 1.0 leaves the approximate sky-probe radiance unscaled."));
-		ImGui::SliderFloat(T(TKEY("ambient_bottom"), "Ambient Bottom"), &lighting.ambientBottomMultiplier, 0.f, 5.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("ambient_bottom_desc"), "Multiplier for environment radiance reaching the cloud base. 1.0 leaves the approximate sky-probe radiance unscaled."));
-		ImGui::SliderFloat(T(TKEY("ms_depth_power"), "MS Depth Power"), &lighting.msDepthPower, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("ms_height_power"), "MS Height Power"), &lighting.msHeightPower, 0.f, 2.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("ms_contribution"), "MS Contribution"), &lighting.msContribution, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("ms_eccentricity"), "MS Eccentricity"), &lighting.msEccentricity, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("upward_ao"), "Upward AO"), &lighting.aoUpwardScale, 0.f, 4.f, "%.2f");
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("upward_ao_desc"), "Scales the cached upward optical depth used to attenuate cloud environment lighting."));
+		ImGui::SliderFloat(T(TKEY("cloud_lighting_scale"), "Lighting Response Scale"), &lighting.lightingScale, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_sun_extinction"), "Sun Extinction Scale"), &lighting.sunExtinction, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_g"), "Forward Phase G"), &lighting.phaseForwardG, 0.0f, 0.95f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_g"), "Backward Phase G"), &lighting.phaseBackwardG, -0.95f, 0.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_weight"), "Forward Phase Weight"), &lighting.phaseForwardWeight, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_weight"), "Backward Phase Weight"), &lighting.phaseBackwardWeight, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_strength"), "Scattering Volume Strength"), &lighting.scatterVolumeStrength, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_depth"), "Scattering Volume Depth"), &lighting.scatterVolumeDepth, 0.001f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_height"), "Scattering Volume Height"), &lighting.scatterVolumeHeight, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_soft_scattering_strength"), "Soft Scattering Strength"), &lighting.softScatteringStrength, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_powder_strength"), "Powder Strength"), &lighting.powderStrength, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_strength"), "Ambient Response Strength"), &lighting.ambientStrength, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_floor"), "Ambient Response Floor"), &lighting.ambientFloor, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_density"), "Ambient Density Response"), &lighting.ambientDensity, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_base"), "Ambient Base Response"), &lighting.ambientBase, 0.0f, 1.0f, "%.3f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
@@ -937,12 +917,12 @@ bool PhysicalSky::ShadersOK()
 
 void PhysicalSky::Reset()
 {
-	const float lowTraceDepthKm = std::max(settings.cloudLayer.low.thickness, 0.05f);
-	const float lowCloudTopKm = settings.cloudLayer.low.baseAltitude + lowTraceDepthKm;
-	const float traceBottomKm = settings.cloudLayer.high.enabled ? std::min(settings.cloudLayer.low.baseAltitude, settings.cloudLayer.high.bottomAltitude) : settings.cloudLayer.low.baseAltitude;
+	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
+	const float lowCloudBaseKm = lowAltitudeRange.x;
+	const float lowCloudTopKm = lowAltitudeRange.y;
+	const float traceBottomKm = settings.cloudLayer.high.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.high.bottomAltitude) : lowCloudBaseKm;
 	const float traceTopKm = settings.cloudLayer.high.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.high.topAltitude) : lowCloudTopKm;
-	const float lowCloudBaseKm = std::max(settings.cloudLayer.low.baseAltitude, 0.f);
-	const float lowCloudThicknessKm = std::clamp(settings.cloudLayer.low.thickness, 0.05f, 3.0f);
+	const float lowCloudThicknessKm = lowCloudTopKm - lowCloudBaseKm;
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
 
@@ -1050,7 +1030,7 @@ void PhysicalSky::Reset()
 		.shadowVolumeRange = settings.shadowVolumeRange / Util::Units::GAME_UNIT_TO_KM,
 		.lowestCloudAltitude = traceBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.highestCloudAltitude = traceTopKm / Util::Units::GAME_UNIT_TO_KM,
-		.volCloudScatter = settings.cloudLayer.lighting.scatterTint * Util::Units::GAME_UNIT_TO_M,
+		.volCloudScatter = float3(std::max(settings.cloudLayer.lighting.sunExtinction, 0.f) * Util::Units::GAME_UNIT_TO_M),
 		.volCloudUseSun = 0u,
 		.volCloudAbsorption = float3(0.f),
 		.volCloudLowBottom = lowCloudBaseKm / Util::Units::GAME_UNIT_TO_KM,

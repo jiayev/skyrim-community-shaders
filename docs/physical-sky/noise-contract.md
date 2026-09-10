@@ -124,7 +124,7 @@ because its occupancy bounds positive coverage before any noise reduction;
 no new density is created outside the profile or coverage support.
 
 This changes cloud opacity and shape for existing presets. Noise repeat scale
-and extinction coefficient retain their units, but old visual tuning is not
+and density-to-extinction scale retain their units, but old visual tuning is not
 expected to give the same image. The mapping of NDF coverage, profile and the
 new roundness control is a deliberate project adaptation.
 

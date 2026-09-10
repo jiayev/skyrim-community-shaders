@@ -169,9 +169,8 @@ private:
 
 struct LowCloudSettings
 {
-	// Absolute altitude of the shared low-cloud condensation base, in kilometres.
-	float baseAltitude = 1.0f;
-	float thickness = 0.3f;
+	float ndfAltitudeOffset = 256.f;
+	float ndfAltitudeScale = 1792.f;
 	float2 ndfScale = { 16.f, 16.f };
 	// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
 	float noiseCompositeScale = 0.2f;
@@ -181,7 +180,9 @@ struct LowCloudSettings
 	float windSpeed = 12.f;
 	float shapeShear = 0.f;
 	// Optical scale applied to normalized reconstructed density after NDF shaping.
-	float extinctionCoefficient = 0.09f;
+	float densityScale = 0.09f;
+
+	float2 GetNdfAltitudeRangeKm() const;
 };
 
 struct HighCloudSettings
@@ -216,41 +217,32 @@ struct HighCloudSettings
 	float softness = 0.04f;
 	float2 wispScale = { 7.f, 7.f };
 	float wispStrength = 0.18f;
-	float densityMultiplier = 0.35f;
+	float densityScale = 0.175f;
 	float densitySoftAIntensity = 0.3f;
 	float densitySoftAContrast = 1.5f;
 	float densityModAIntensity = 0.25f;
 	float densityModAContrast = 1.5f;
-	float forwardEccentricity = 0.78f;
-	float backwardEccentricity = 0.22f;
-	// Unit multipliers preserve the radiance reconstructed from the sky probe.
-	float ambientTopMultiplier = 1.f;
-	float ambientBottomMultiplier = 1.f;
-	// 1 preserves integrated cloud radiance; lower values artistically blend the
-	// high-cloud top toward the view-direction environment probe.
-	float skyBlendStrength = 1.f;
-	float msAttenuation = 0.55f;
-	float msContribution = 0.5f;
-	float msEccentricity = 0.55f;
-	float lightAbsorption = 0.65f;
-	float viewAbsorption = 0.5f;
-	float coverAbsorptionStrength = 0.6f;
 };
 
 struct CloudLightingSettings
 {
 	bool crossLayerShadows = true;
 	uint32_t cacheSteps = 16;
-	float3 scatterTint = { 1.f, 1.f, 1.f };
-	float forwardEccentricity = 0.85f;
-	float backwardEccentricity = 0.3f;
-	float ambientTopMultiplier = 1.f;
-	float ambientBottomMultiplier = 1.f;
-	float aoUpwardScale = 1.f;
-	float msDepthPower = 0.1f;
-	float msContribution = 1.f;
-	float msEccentricity = 0.5f;
-	float msHeightPower = 0.5f;
+	float lightingScale = 1.f;
+	float sunExtinction = 1.f;
+	float phaseForwardG = 0.85f;
+	float phaseBackwardG = -0.3f;
+	float phaseForwardWeight = 0.5f;
+	float phaseBackwardWeight = 0.5f;
+	float scatterVolumeStrength = 0.125f;
+	float scatterVolumeDepth = 0.1f;
+	float scatterVolumeHeight = 0.5f;
+	float softScatteringStrength = 0.1f;
+	float powderStrength = 1.f;
+	float ambientStrength = 1.f;
+	float ambientFloor = 0.05f;
+	float ambientDensity = 0.1f;
+	float ambientBase = 0.2f;
 };
 
 struct CloudLayer

@@ -11,8 +11,10 @@ No offline preparation or world-space voxel volume is required.
 | Height   | R: bottom height, G: top height          | 512 x 512 RG16_FLOAT          | t7              |
 | Modeling | R: coverage, G: top type, B: bottom type | 512 x 512 RGBA16_FLOAT, A = 0 | t8              |
 
-Values are linear and normalized. Altitude is `low.baseAltitude + height *
-low.thickness`. Types select the existing Nubis profile LUTs. Both generated and
+Values are linear and normalized. Altitude is `ndfAltitudeOffset +
+ndfAltitudeScale * height` metres above the worldspace reference altitude.
+The Low Clouds controls default to a 256 m base and a 1792 m span. The resulting
+shell bounds traversal and storage; each NDF column supplies its own bottom/top. Types select the existing Nubis profile LUTs. Both generated and
 imported maps use wrap filtering at mip 0. Empty/reversed height intervals produce
 no density. Height bounds the profile; continuous coverage and Nubis noise then
 reconstruct density inside it. No dome caps or height reordering are generated.
