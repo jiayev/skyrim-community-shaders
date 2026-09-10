@@ -858,8 +858,6 @@ void PhysicalSky::SetupResources()
 		texDesc.Format = DXGI_FORMAT_R8_UNORM;
 		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		texDesc.MipLevels = 1;
-		// texDesc.Width /= 2;
-		// texDesc.Height /= 2;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = texDesc.Format,
@@ -1175,8 +1173,7 @@ void PhysicalSky::Prepass()
 			if (texShadowVolume)
 				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
 			volMainHistoryValid = false;
-			volHistoryWidth = 0;
-			volHistoryHeight = 0;
+			volHistoryFrameDim = {};
 		}
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
@@ -1274,12 +1271,10 @@ void PhysicalSky::AccumShadow()
 	auto& terrainShadows = globals::features::terrainShadows;
 	auto& cloudShadows = globals::features::cloudShadows;
 
-	float2 screenSize{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
-	float2 size = Util::ConvertToDynamic(screenSize);
-	uint resolution[2] = { (uint)size.x, (uint)size.y };
+	uint resolution[2] = { (uint)cbData.frameDim.x, (uint)cbData.frameDim.y };
 	if (settings.halfResApShadow) {
-		resolution[0] = std::max(1u, resolution[0] / 2u);
-		resolution[1] = std::max(1u, resolution[1] / 2u);
+		resolution[0] = (resolution[0] + 1u) / 2u;
+		resolution[1] = (resolution[1] + 1u) / 2u;
 	}
 
 	constexpr auto debugStr = "Physical Sky: Shadow Accumulation";

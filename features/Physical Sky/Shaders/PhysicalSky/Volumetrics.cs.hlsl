@@ -130,6 +130,7 @@ struct VolumetricCloudData
 	uint lightCacheUpdatePhase;
 	row_major float4x4 previousViewProj;
 	float3 previousCamera;
+	float2 previousFrameDim;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -234,12 +235,11 @@ float3 EvaluateCloudEnvironmentRadiance(
 
 float SampleCloudApShadow(uint2 fullPixelCoord)
 {
-	const SharedData::PhysSkyData data = SharedData::physSkyData;
 	uint2 apDims;
 	TexApShadow.GetDimensions(apDims.x, apDims.y);
 	if (any(apDims == 0u))
 		return 0.0;
-	const uint2 apCoord = min(data.halfResApShadow ? fullPixelCoord / 2u : fullPixelCoord, apDims - 1u);
+	const uint2 apCoord = min(fullPixelCoord, apDims - 1u);
 	return TexApShadow[apCoord];
 }
 

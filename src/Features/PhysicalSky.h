@@ -353,8 +353,9 @@ struct PhysicalSky final : public Feature
 		uint lightCacheUpdatePhase;
 		float4x4 previousViewProj;
 		float3 previousCamera;
+		float2 previousFrameDim;
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 480);
+	static_assert(sizeof(VolumetricCloudSB) == 488);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
@@ -363,8 +364,7 @@ struct PhysicalSky final : public Feature
 	float2 volLightCacheOrigin = {};
 	float2 volLightCacheWind = {};
 	bool volMainHistoryValid = false;
-	uint32_t volHistoryWidth = 0;
-	uint32_t volHistoryHeight = 0;
+	float2 volHistoryFrameDim = {};
 	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
 	float2 volHistoryWindOffset = { 0.f, 0.f };
 	float volHistoryTime = 0.f;

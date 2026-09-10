@@ -42,7 +42,12 @@ History and resolved output both have full framebuffer dimensions. Each frame
 reprojects history using opacity-weighted cloud depth, the previous successful
 capture's camera matrix/position, and wind displacement. The camera matrix
 includes the capture's projection jitter, matching current depth/ray coordinates.
-Active-size changes invalidate history. Traced pixels update from their actual
+The active viewport comes from the draw's per-frame DR parameters and the cloud
+texture allocation. Ray, depth and motion UVs use that same coordinate system.
+History stores the previous successful capture's viewport extent, including its
+fractional part, and clamps taps to that capture's integer active bounds. DR size
+changes retain history and do not reset cubemap accumulation. Trace dispatches
+cover only the current active region. Traced pixels update from their actual
 sample. Other valid pixels retain reprojected history. Four trace neighbours
 supply only missing history, with scene-depth rejection; there is no spatial
 upscale pass applied to the accumulated result.

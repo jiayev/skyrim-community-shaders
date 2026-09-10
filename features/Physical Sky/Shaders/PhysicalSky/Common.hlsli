@@ -360,10 +360,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 	float GetApShadow(uint2 pxCoord)
 	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
-
-		const uint2 apCoord = data.halfResApShadow ? pxCoord / 2 : pxCoord;
-		return TexApShadow[apCoord];
+		return TexApShadow[pxCoord];
 	}
 
 #	ifndef PS_DEFERRED_RSRCS
