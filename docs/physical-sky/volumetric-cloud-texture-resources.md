@@ -2,8 +2,8 @@
 
 See [cloud sampling and motion](cloud-sampling.md) for the view march,
 empty-space acceleration, motion units and history metadata. See
-[cloud lighting and reconstruction](cloud-lighting.md) for light caches, distant
-thin high clouds and render-target formats.
+[cloud lighting and reconstruction](cloud-lighting.md) for light caches, profile scattering
+and render-target formats.
 
 ## Low-cloud model
 
@@ -38,14 +38,13 @@ the internal and boundary variation of that mass.
 | Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer         |
 | Nubis top profile         |   `t17` | `Texture2D<unorm float>`  | `top_lut.dds`    |
 | Nubis bottom profile      |   `t18` | `Texture2D<unorm float>`  | `bottom_lut.dds` |
-| Low-cloud light cache     |   `t24` | `Texture3D<float2>`       | GPU-generated    |
-| High-cloud light cache    |   `t25` | `Texture3D<float2>`       | GPU-generated    |
+| Low-cloud light cache     |   `t24` | `Texture3D<float>`        | GPU-generated    |
+| High-cloud light cache    |   `t25` | `Texture3D<float>`        | GPU-generated    |
 
 Temporal reconstruction reads screen history at t26–t28 and compact screen
 traces at t29–t31. Cube history occupies t32–t34 and compact cube traces t35–t37.
 Each group is transmittance, radiance, metadata, with R16_FLOAT, RGBA16_FLOAT,
-RGBA16_FLOAT storage respectively. Light caches are RG16_FLOAT solar/upward
-optical-depth pairs. See [cloud sampling](cloud-sampling.md) and
+RGBA16_FLOAT storage respectively. Light caches are R16_FLOAT solar optical-depth volumes. See [cloud sampling](cloud-sampling.md) and
 [cloud lighting](cloud-lighting.md) for scheduling and history contracts.
 
 The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
@@ -112,12 +111,12 @@ Top and bottom type occupy modeling G and B.
 High clouds retain their separate implementation and absolute altitude band.
 They do not sample the low-cloud NDF or `nubis.dds`. High Weather at `t11` uses:
 
-| Channel | Meaning                                  |
-| ------- | ---------------------------------------- |
-| R       | high-cloud coverage                      |
-| G       | Altostratus/Altocumulus type             |
-| B       | reserved                                 |
-| A       | thickness and multiple-scattering weight |
+| Channel | Meaning                                    |
+| ------- | ------------------------------------------ |
+| R       | high-cloud coverage                        |
+| G       | Altostratus/Altocumulus type               |
+| B       | reserved                                   |
+| A       | density modulation and optical mass weight |
 
 ## Generator lifecycle
 

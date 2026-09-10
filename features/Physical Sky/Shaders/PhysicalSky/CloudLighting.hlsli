@@ -1,7 +1,27 @@
 #ifndef PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 #define PHYSICAL_SKY_CLOUD_LIGHTING_HLSLI
 
-float CloudColumnOpticalDepth(float3 pos, float3 direction, bool high, bool solar, uint steps, float maximumDistance)
+float CloudLightDensity(float extinction, float height)
+{
+	const float h2 = height * height;
+	return extinction * (1.0 + 3.0 * h2 * h2);
+}
+
+float SampleCloudLightDensity(float3 pos, bool high, float mip)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	if (high) {
+		float height;
+		float4 weather;
+		const float density = EvaluateHighCloudDensity(pos, height, weather);
+		return CloudLightDensity(density, height);
+	}
+	CloudDensityContext context;
+	const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), mip, false, context);
+	return CloudLightDensity(extinction, context.ndf.height_fraction);
+}
+
+float CloudColumnOpticalDepth(float3 pos, float3 direction, bool high, uint steps, float maximumDistance)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	if (high && info.highCloudEnabled <= 0.0)
@@ -26,17 +46,7 @@ float CloudColumnOpticalDepth(float3 pos, float3 direction, bool high, bool sola
 			const float start = lerp(interval.x, interval.y, a * a);
 			const float end = lerp(interval.x, interval.y, b * b);
 			const float3 samplePos = pos + direction * (0.5 * (start + end));
-			float extinction;
-			if (high) {
-				float height;
-				float4 weather;
-				const float density = EvaluateHighCloudDensity(samplePos, height, weather);
-				extinction = density * (solar ? info.highLightAbsorption * (1.0 + weather.r * info.highCoverAbsorptionStrength) : info.highViewAbsorption * weather.a);
-			} else {
-				CloudDensityContext context;
-				extinction = sampleCloudDensity(samplePos, GetCloudLayer(info), 2.0, false, context);
-			}
-			opticalDepth += max(extinction, 0.0) * ((end - start) * GAME_UNIT_TO_M);
+			opticalDepth += SampleCloudLightDensity(samplePos, high, 2.0) * ((end - start) * GAME_UNIT_TO_M);
 		}
 	}
 	return opticalDepth;
@@ -47,41 +57,65 @@ float CloudCacheRange(bool high)
 	return VolumetricCloudBuffer[0].lightCacheRange * (high ? 4.0 : 1.0);
 }
 
-float SampleCloudLightCache(float3 pos, bool high, out float2 opticalDepth)
+float2 CloudCachePosition(float2 coordinate)
+{
+	return coordinate * abs(coordinate);
+}
+
+float2 CloudCacheInterpolationUv(float2 relative, float2 dimensions)
+{
+	const float2 index = (sign(relative) * sqrt(abs(relative)) * 0.5 + 0.5) * dimensions - 0.5;
+	const float2 base = clamp(floor(index), 0.0, dimensions - 2.0);
+	const float2 left = CloudCachePosition((base + 0.5) / dimensions * 2.0 - 1.0);
+	const float2 right = CloudCachePosition((base + 1.5) / dimensions * 2.0 - 1.0);
+	// Interpolate physical distances, including the cell spanning each centre axis.
+	const float2 fraction = saturate((relative - left) / (right - left));
+	return (base + fraction + 0.5) / dimensions;
+}
+
+float SampleCloudLightCache(float3 pos, bool high, out float opticalDepth)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float altitude = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
 	const float bottom = high ? info.highCloudBottom : info.lowCloudBaseAltitude;
 	const float top = high ? info.highCloudTop : info.lowCloudTraceTopAltitude;
 	const float2 relative = (pos.xy - info.lightCacheWindDelta - info.lightCacheOrigin) * (2.0 / CloudCacheRange(high));
-	const float2 xy = sign(relative) * sqrt(abs(relative)) * 0.5 + 0.5;
-	const float3 uvw = float3(xy, (altitude - bottom) / max(top - bottom, 1.0));
 	opticalDepth = 0.0;
-	if (any(xy <= 0.0) || any(xy >= 1.0) || altitude < bottom || altitude > top)
+	if (any(abs(relative) >= 1.0) || altitude < bottom || altitude > top)
 		return 0.0;
+	uint3 dims;
 	if (high)
-		opticalDepth = TexHighLightCache.SampleLevel(TransmittanceSampler, uvw, 0).xy;
+		TexHighLightCache.GetDimensions(dims.x, dims.y, dims.z);
 	else
-		opticalDepth = TexLowLightCache.SampleLevel(TransmittanceSampler, uvw, 0).xy;
-	return saturate(min(min(xy.x, xy.y), min(1.0 - xy.x, 1.0 - xy.y)) * 64.0 - 0.5);
+		TexLowLightCache.GetDimensions(dims.x, dims.y, dims.z);
+	const float2 xy = CloudCacheInterpolationUv(relative, float2(dims.xy));
+	const float3 uvw = float3(xy, (altitude - bottom) / max(top - bottom, 1.0));
+	if (high)
+		opticalDepth = TexHighLightCache.SampleLevel(TransmittanceSampler, uvw, 0);
+	else
+		opticalDepth = TexLowLightCache.SampleLevel(TransmittanceSampler, uvw, 0);
+	const float edge = min(1.0 - abs(relative.x), 1.0 - abs(relative.y));
+	return smoothstep(0.0, 0.1, edge);
 }
 
 float CloudCachedSun(float3 pos, bool high)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	if (high && info.highCloudEnabled <= 0.0)
+		return 0.0;
 	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const CloudRaySegments segments = GetCloudRaySegments(planetPos, info.dirlightDir,
 		high ? info.highCloudBottom : info.lowCloudBaseAltitude,
 		high ? info.highCloudTop : info.lowCloudTraceTopAltitude, CLOUD_SKY_DISTANCE, info);
-	if (segments.length <= 0.0 || (high && info.highCloudEnabled <= 0.0))
+	if (segments.length <= 0.0)
 		return 0.0;
-	float2 cached;
+	float cached;
 	const float entryOffset = segments.nearSegment.x > 0.0 ? min(segments.nearLength * 0.5, 2.0 * GAME_UNITS_PER_METER) : 0.0;
 	const float3 entry = pos + info.dirlightDir * (segments.nearSegment.x + entryOffset);
 	const float weight = SampleCloudLightCache(entry, high, cached);
 	if (weight >= 1.0)
-		return cached.x;
-	return lerp(CloudColumnOpticalDepth(pos, info.dirlightDir, high, true, 4u, CLOUD_SKY_DISTANCE), cached.x, weight);
+		return cached;
+	return lerp(CloudColumnOpticalDepth(pos, info.dirlightDir, high, 4u, CLOUD_SKY_DISTANCE), cached, weight);
 }
 
 float CloudSunOpticalDepth(float3 pos, float3 viewDir, float height, bool high)
@@ -98,40 +132,10 @@ float CloudSunOpticalDepth(float3 pos, float3 viewDir, float height, bool high)
 		const float fraction = (i + 1.0) * 0.5;
 		const float distance = extent * fraction * (angularOffset + 0.5 + fraction * fraction * fraction * (0.5 - angularOffset));
 		const float3 samplePos = pos + info.dirlightDir * (0.5 * (previousDistance + distance));
-		float extinction;
-		if (high) {
-			float h;
-			float4 weather;
-			extinction = EvaluateHighCloudDensity(samplePos, h, weather) * info.highLightAbsorption * (1.0 + weather.r * info.highCoverAbsorptionStrength);
-		} else {
-			CloudDensityContext context;
-			extinction = sampleCloudDensity(samplePos, GetCloudLayer(info), 1.0, false, context);
-		}
-		opticalDepth += extinction * (distance - previousDistance) * GAME_UNIT_TO_M;
+		opticalDepth += SampleCloudLightDensity(samplePos, high, 1.0) * (distance - previousDistance) * GAME_UNIT_TO_M;
 		previousDistance = distance;
 	}
 	return opticalDepth + CloudCachedSun(pos + info.dirlightDir * extent, high);
-}
-
-float2 CloudEnvironmentOpticalDepth(float3 pos, bool high, float profile)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	float2 cached;
-	const float weight = SampleCloudLightCache(pos, high, cached);
-	float upward = lerp(profile, cached.y, weight);
-	float otherSun = 0.0;
-	if (info.crossLayerShadows != 0u && info.highCloudEnabled > 0.0) {
-		otherSun = CloudCachedSun(pos, !high);
-		if (!high) {
-			const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-			const float3 up = normalize(planetPos);
-			const float entry = max(IntersectSpherePair(planetPos, up, info.planetRadius + info.highCloudBottom).y, 0.0);
-			float2 other;
-			const float otherWeight = SampleCloudLightCache(pos + up * (entry + GAME_UNITS_PER_METER), true, other);
-			upward += other.y * otherWeight;
-		}
-	}
-	return float2(upward, otherSun);
 }
 
 [numthreads(4, 4, 4)] void buildCloudLightCache(uint3 tid : SV_DispatchThreadID) {
@@ -148,49 +152,64 @@ float2 CloudEnvironmentOpticalDepth(float3 pos, bool high, float profile)
 	const bool high = false;
 #endif
 	const float2 xy = (float2(tid.xy) + 0.5) / dims.xy * 2.0 - 1.0;
-	const float2 offset = sign(xy) * xy * xy * (0.5 * CloudCacheRange(high));
+	const float2 offset = CloudCachePosition(xy) * (0.5 * CloudCacheRange(high));
 	const float height = lerp(high ? info.highCloudBottom : info.lowCloudBaseAltitude,
 		high ? info.highCloudTop : info.lowCloudTraceTopAltitude, (tid.z + 0.5) / dims.z);
 	const float radius = info.planetRadius + height;
 	const float2 worldXY = info.lightCacheOrigin + offset + info.lightCacheWindDelta;
 	const float2 planetXY = worldXY - FrameBuffer::CameraPosAdjust.xy;
 	const float3 pos = float3(worldXY, sqrt(max(radius * radius - dot(planetXY, planetXY), 0.0)) - info.planetRadius);
-	const float3 up = normalize(float3(planetXY, pos.z + info.planetRadius));
-	const float sun = CloudColumnOpticalDepth(pos, info.dirlightDir, high, true, info.lightCacheSteps, CLOUD_SKY_DISTANCE);
-	const float ambient = CloudColumnOpticalDepth(pos, up, high, false, info.lightCacheSteps, CLOUD_SKY_DISTANCE);
-	RWCloudLightCache[tid] = min(float2(sun, ambient), 65504.0);
+	const float sun = CloudColumnOpticalDepth(pos, info.dirlightDir, high, info.lightCacheSteps, CLOUD_SKY_DISTANCE);
+	RWCloudLightCache[tid] = min(sun, 65504.0);
 }
 
-float3 LowCloudLighting(float3 pos, float3 viewDir, NDFInfo ndf, float2 phase, float3 ambientTop, float3 ambientBottom)
+float CloudScatteringPhase(float cosine)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float opticalDepth = CloudSunOpticalDepth(pos, viewDir, ndf.height_fraction, false);
-	const float2 environment = CloudEnvironmentOpticalDepth(pos, false, ndf.dimension_profile);
-	const float3 extinction = info.scatterTint * opticalDepth;
-	// A fixed reference length keeps the scattering volume independent of the view budget.
-	float volume = saturate((ndf.dimension_profile * 3.0 - 0.1) / 0.9);
-	volume *= pow(saturate(ndf.coverage * ndf.top_type), 0.25);
-	volume *= pow(max(ndf.height_fraction, 1e-4), info.msHeightPower);
-	const float3 direct = exp(-extinction) * phase.x + volume * exp(-extinction * info.msDepthPower) * phase.y * info.msContribution;
-	const float ambientVisibility = sqrt(saturate(1.0 - ndf.dimension_profile)) * exp(-environment.x * info.aoUpwardScale);
-	const float3 ambient = EvaluateCloudEnvironmentRadiance(ambientTop, ambientBottom, ndf.height_fraction,
-		info.ambientTopMultiplier, info.ambientBottomMultiplier, ambientVisibility);
-	return direct * sampleExternalSunTransmittance(pos, info.dirlightDir) * exp(-info.scatterTint * environment.y) * GetCloudDirectionalLightColor() + ambient;
+	return Phase::HG(cosine, info.phaseForwardG) * info.phaseForwardWeight +
+	       Phase::HG(cosine, info.phaseBackwardG) * info.phaseBackwardWeight;
 }
 
-float3 HighCloudLighting(float3 pos, float3 viewDir, float height, float4 weather, float density,
-	float2 phase, float3 ambientTop, float3 ambientBottom, float3 skyBlend)
+float2 CloudLightResponse(float cosine, float height, float profile, float lightDensity, float product, float occlusion)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float profile = saturate(density);
-	const float2 environment = CloudEnvironmentOpticalDepth(pos, true, profile);
-	const float3 extinction = info.scatterTint * CloudSunOpticalDepth(pos, viewDir, height, true);
-	const float3 direct = exp(-extinction) * phase.x + profile * exp(-extinction * info.highMSAttenuation) * phase.y * info.highMSContribution;
-	const float3 ambient = EvaluateCloudEnvironmentRadiance(ambientTop, ambientBottom, height,
-		info.highAmbientTopMultiplier, info.highAmbientBottomMultiplier,
-		sqrt(1.0 - profile) * exp(-environment.x * info.aoUpwardScale));
-	const float3 radiance = direct * sampleExternalSunTransmittance(pos, info.dirlightDir) * exp(-info.scatterTint * environment.y) * GetCloudDirectionalLightColor() + ambient;
-	return lerp(radiance, skyBlend, smoothstep(0.0, 1.0, height) * (1.0 - saturate(info.highSkyBlendStrength)));
+	const float opticalDepth = info.sunExtinction * occlusion;
+	const float threshold = (1.0 - saturate(cosine)) * 0.1;
+	const float erodedProfile = saturate((profile - 0.05) * 1.0526316);
+	const float potential = saturate((erodedProfile - threshold) / (1.0 - threshold));
+	const float potential6 = potential * 6.0;
+	const float density6 = saturate((lightDensity - 0.1) * 1.1111112) * 6.0;
+	const float productPower = pow(product, 0.8);
+	const float softTransmission = 1.0 - saturate(opticalDepth * 0.025);
+	const float bottomResponse = saturate(height * 10.0) * 0.5 + 0.5;
+	const float bottomSquared = bottomResponse * bottomResponse;
+	const float lowerFade = saturate((height - 0.1) * 10.0);
+	const float powderHeight = saturate((height - 0.1) * 3.3333333) * 2.0;
+	const float powderOffset = powderHeight - 2.0 + (-2.0 - powderHeight) * saturate(occlusion * 0.5);
+	const float powderBase = sqrt(saturate(1.0 - potential6)) * (density6 * density6 - potential6) + potential6;
+	const float powderDensity = pow(max(powderBase, 0.0), 3.0 - lowerFade);
+	const float broadTransmission = exp(-opticalDepth * 0.03);
+	const float ambientHeight = pow(lerp(info.ambientBase, 1.0, height), pow(product, 0.3) * 1.8 + 0.2);
+	float ambient = ambientHeight * 1.68 * (1.0 - sqrt(product));
+	ambient *= lerp(pow(height, 0.25), 1.0, broadTransmission);
+	ambient *= pow(saturate(1.0 - erodedProfile), info.ambientDensity * 7.8 + 0.2);
+	ambient = max(info.ambientFloor, ambient) * info.ambientStrength;
+	const float volume = info.scatterVolumeStrength * 8.0 * pow(max(height, 1e-8), info.scatterVolumeHeight) * (1.0 - saturate((cosine - 0.5) * 2.0408163) * 0.75) * saturate(potential * 6.666667 - 0.11111112) * pow(product, 0.25) * exp(-opticalDepth * info.scatterVolumeDepth);
+	const float soft = info.softScatteringStrength * 42.375 * (potential + lightDensity) * ((pow(softTransmission, 8.0 - productPower * 7.0) + pow(softTransmission, 16.0 - productPower * 14.0)) * 0.3 + pow(softTransmission, 32.0 - productPower * 28.0)) * lerp(bottomSquared, 1.0, saturate((cosine - 0.25) * 4.0));
+	const float powder = saturate((saturate((powderDensity - powderOffset + saturate((cosine - 0.3) * 1.4306152) * (1.0 - powderDensity)) / (1.0 - powderOffset)) + 0.333) * 0.7501876);
+	return float2((volume + soft) * 1.5 * lerp(1.0, powder, info.powderStrength), ambient);
+}
+
+float3 CloudLighting(float3 pos, float3 viewDir, float height, float profile, float product, float extinction,
+	bool high, float phase, float3 ambientColor)
+{
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float occlusion = CloudSunOpticalDepth(pos, viewDir, height, high);
+	const float2 response = CloudLightResponse(dot(viewDir, info.dirlightDir), saturate(height), saturate(profile),
+		CloudLightDensity(extinction, height), saturate(product), occlusion);
+	const float otherOcclusion = info.crossLayerShadows != 0u && info.highCloudEnabled > 0.0 ? CloudCachedSun(pos, !high) : 0.0;
+	const float3 sunlight = sampleExternalSunTransmittance(pos, info.dirlightDir) * GetCloudDirectionalLightColor();
+	return info.lightingScale * (response.x * phase * exp(-otherOcclusion * info.sunExtinction) * sunlight + response.y * ambientColor);
 }
 
 #endif

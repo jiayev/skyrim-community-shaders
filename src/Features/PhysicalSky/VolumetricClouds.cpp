@@ -29,6 +29,13 @@ namespace
 	}
 }
 
+float2 LowCloudSettings::GetNdfAltitudeRangeKm() const
+{
+	const float offset = std::isfinite(ndfAltitudeOffset) ? std::clamp(ndfAltitudeOffset, 0.f, 20000.f) : 256.f;
+	const float scale = std::isfinite(ndfAltitudeScale) ? std::clamp(ndfAltitudeScale, 1.f, 20000.f) : 1792.f;
+	return { offset * 0.001f, (offset + scale) * 0.001f };
+}
+
 void PhysicalSky::LoadCloudTextures()
 {
 	volMainHistoryValid = false;
@@ -236,7 +243,7 @@ void PhysicalSky::SetupVolumetricResources()
 		tex3d_desc.Width = 64;
 		tex3d_desc.Height = 64;
 		tex3d_desc.Depth = 16;
-		tex3d_desc.Format = DXGI_FORMAT_R16G16_FLOAT;
+		tex3d_desc.Format = DXGI_FORMAT_R16_FLOAT;
 		srv_desc.Format = tex3d_desc.Format;
 		uav_desc.Format = tex3d_desc.Format;
 		uav_desc.Texture3D.WSize = tex3d_desc.Depth;
@@ -346,7 +353,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	auto& high = settings.cloudLayer.high;
 	auto& lighting = settings.cloudLayer.lighting;
 
-	low.thickness = std::clamp(low.thickness, 0.05f, 3.0f);
 	low.ndfScale.x = std::clamp(low.ndfScale.x, 1.0f, 50.0f);
 	low.ndfScale.y = std::clamp(low.ndfScale.y, 1.0f, 50.0f);
 	low.noiseCompositeScale = std::clamp(low.noiseCompositeScale, 0.02f, 8.0f);
@@ -368,11 +374,10 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float highRelativeMotion = windDeltaMeters * std::abs(high.cellWindSpeed) /
 	                                 (high.weatherWorldSize * 1000.f) * high.weatherDim;
 	const float highHistoryConfidence = std::exp(-highRelativeMotion);
-	const float lowCloudBaseKm = std::max(low.baseAltitude, 0.0f);
-	const float lowCloudDepthKm = low.thickness;
-	const float lowCloudTopKm = lowCloudBaseKm + lowCloudDepthKm;
-	const float lowTraceDepthKm = lowCloudDepthKm;
-	const float lowCloudTraceTopKm = lowCloudBaseKm + lowTraceDepthKm;
+	const float2 lowAltitudeRange = low.GetNdfAltitudeRangeKm();
+	const float lowCloudBaseKm = lowAltitudeRange.x;
+	const float lowCloudTopKm = lowAltitudeRange.y;
+	const float lowCloudTraceTopKm = lowCloudTopKm;
 	const float highCloudBottomKm = std::max(high.bottomAltitude, 0.0f);
 	const float highCloudTopKm = std::max(high.topAltitude, highCloudBottomKm + 0.1f);
 	const float traceBottomKm = high.enabled ? std::min(lowCloudBaseKm, highCloudBottomKm) : lowCloudBaseKm;
@@ -417,7 +422,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
 		.noiseFrequency = 1.0f / KilometersToGameUnits(low.noiseCompositeScale),
 		.noiseOffset = low.noiseOffset,
-		.extinctionCoefficient = low.extinctionCoefficient,
+		.lowDensityScale = std::max(low.densityScale, 0.f),
 		.noiseRoundness = std::clamp(low.noiseRoundness, 0.0f, 1.0f),
 		.highCellScale = high.cellScale,
 		.highCellWindSpeed = high.cellWindSpeed,
@@ -435,30 +440,25 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.highCloudSoftness = high.softness,
 		.highWispScale = high.wispScale,
 		.highWispStrength = high.wispStrength,
-		.highDensityMultiplier = high.densityMultiplier,
+		.highDensityScale = std::max(high.densityScale, 0.f),
 		.highDensitySoftAContrast = high.densitySoftAContrast,
 		.highDensityModAIntensity = high.densityModAIntensity,
 		.highDensityModAContrast = high.densityModAContrast,
-		.scatterTint = lighting.scatterTint,
-		.forwardEccentricity = lighting.forwardEccentricity,
-		.backwardEccentricity = lighting.backwardEccentricity,
-		.ambientTopMultiplier = lighting.ambientTopMultiplier,
-		.ambientBottomMultiplier = lighting.ambientBottomMultiplier,
-		.aoUpwardScale = lighting.aoUpwardScale,
-		.msDepthPower = std::clamp(lighting.msDepthPower, 0.01f, 1.f),
-		.msContribution = lighting.msContribution,
-		.msEccentricity = lighting.msEccentricity,
-		.highForwardEccentricity = high.forwardEccentricity,
-		.highBackwardEccentricity = high.backwardEccentricity,
-		.highAmbientTopMultiplier = high.ambientTopMultiplier,
-		.highAmbientBottomMultiplier = high.ambientBottomMultiplier,
-		.highSkyBlendStrength = high.skyBlendStrength,
-		.highMSAttenuation = high.msAttenuation,
-		.highMSContribution = high.msContribution,
-		.highMSEccentricity = high.msEccentricity,
-		.highLightAbsorption = high.lightAbsorption,
-		.highViewAbsorption = high.viewAbsorption,
-		.highCoverAbsorptionStrength = high.coverAbsorptionStrength,
+		.lightingScale = std::max(lighting.lightingScale, 0.f),
+		.sunExtinction = std::max(lighting.sunExtinction, 0.f),
+		.phaseForwardG = std::clamp(lighting.phaseForwardG, 0.f, 0.95f),
+		.phaseBackwardG = std::clamp(lighting.phaseBackwardG, -0.95f, 0.f),
+		.phaseForwardWeight = std::max(lighting.phaseForwardWeight, 0.f),
+		.phaseBackwardWeight = std::max(lighting.phaseBackwardWeight, 0.f),
+		.scatterVolumeStrength = std::max(lighting.scatterVolumeStrength, 0.f),
+		.scatterVolumeDepth = std::clamp(lighting.scatterVolumeDepth, 0.001f, 1.f),
+		.scatterVolumeHeight = std::clamp(lighting.scatterVolumeHeight, 0.f, 4.f),
+		.softScatteringStrength = std::max(lighting.softScatteringStrength, 0.f),
+		.powderStrength = std::clamp(lighting.powderStrength, 0.f, 1.f),
+		.ambientStrength = std::max(lighting.ambientStrength, 0.f),
+		.ambientFloor = std::clamp(lighting.ambientFloor, 0.f, 1.f),
+		.ambientDensity = std::clamp(lighting.ambientDensity, 0.f, 1.f),
+		.ambientBase = std::clamp(lighting.ambientBase, 0.f, 1.f),
 		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
 		.temporalAccumulationFactor = std::clamp(settings.temporalAccumulationFactor, 0.0f, 1.0f),
@@ -473,7 +473,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.ndfAccelerationValid = ndfManager.accelerationValid ? 1u : 0u,
 		.crossLayerShadows = lighting.crossLayerShadows ? 1u : 0u,
 		.lightCacheSteps = std::clamp(lighting.cacheSteps, 4u, 32u),
-		.msHeightPower = std::clamp(lighting.msHeightPower, 0.f, 2.f),
 		.lightCacheOrigin = volLightCacheOrigin,
 		.lightCacheWindDelta = noiseWindOffset - volLightCacheWind,
 		.lightCacheRange = KilometersToGameUnits(256.f),

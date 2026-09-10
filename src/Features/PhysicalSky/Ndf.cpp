@@ -163,7 +163,7 @@ const char* NdfManager::GetSettingsHint(const NdfSettings& settings)
 {
 	return settings.type == NdfType::Texture ?
 	           T(TKEY("ndf_hint_texture"),
-				   "Two linear 2D textures: height RG = bottom/top, modeling RGB = coverage/top type/bottom type. Heights use the low layer's normalized altitude range.") :
+				   "Two linear 2D textures: height RG = bottom/top, modeling RGB = coverage/top type/bottom type. Heights use the NDF base altitude and height span in Low Clouds.") :
 	           T(TKEY("ndf_hint_procedural"),
 				   "Two coverage signals and a shared type signal drive the profiles. Height variation changes only the bottom bound. Noise slots can be generated locally or supplied as DDS textures.");
 }
