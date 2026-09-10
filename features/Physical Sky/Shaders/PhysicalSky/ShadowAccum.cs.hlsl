@@ -103,7 +103,10 @@ float SampleShadow(float3 posWorldRel, float distance, ShadowRayData ray)
 	shadow *= TerrainShadows::GetTerrainShadow(posWorldAbs, SampTr);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
-	shadow *= Remap(CloudShadows::GetCloudShadowMult(posWorldRel, SampTr), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
+	float cloudShadow = 1.0;
+	[branch] if (SharedData::cloudShadowsSettings.Opacity != 0.0)
+		cloudShadow = CloudShadows::GetCloudShadowMult(posWorldRel, SampTr);
+	shadow *= Remap(cloudShadow, data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
 	[branch] if (all(shadow < 1e-8)) return 0;
 
 	shadow *= Remap(dot(GetVolumetricCloudTransmittance(posWorldRel), float3(0.2126, 0.7152, 0.0722)), data.cloudShadowRemapRange.x, data.cloudShadowRemapRange.y, 0, 1);
@@ -112,40 +115,85 @@ float SampleShadow(float3 posWorldRel, float distance, ShadowRayData ray)
 	return shadow;
 }
 
-[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+float TraceShadow(float2 pixelCenter, float depth, float jitter)
+{
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
-	const uint2 pxCoords = tid;
-
-	const uint2 seed = Random::pcg2d(pxCoords.xy);
-	const float2 rnd = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f);
-
-	float2 uv = (pxCoords + 0.5) * data.rcpFrameDim;
-	if (uv.x >= 1.f || uv.y >= 1.f)
-		return;
-	uv *= RES_MULT;
-
-	const float depth = TexDepth.SampleLevel(SampTr, uv, 0);
-	uv *= FrameBuffer::DynamicResolutionParams2.xy;
+	const float2 uv = FrameBuffer::GetDynamicResolutionUnadjustedScreenPosition(pixelCenter * data.rcpTexDim);
 	float4 posWorld = float4(2 * float2(uv.x, -uv.y + 1) - 1, depth, 1);
 	posWorld = mul(FrameBuffer::CameraViewProjInverse, posWorld);
 	posWorld.xyz /= posWorld.w;
 
 	float dist = length(posWorld.xyz);
+	if (dist <= 0.0)
+		return 0.0;
 	float distClamped = min(AP_MAX_DIST, dist);
 	float3 dir = posWorld.xyz / dist;
 	const ShadowRayData shadowRay = BuildShadowRay(dir);
 
 	const float extGr = dot(data.rayleighScatter + data.aerosolAbsorption + data.aerosolScatter, 1 / 3.f);
-	const float rcpExtGr = rcp(extGr);
-	const float estContrib = 1 - exp(-extGr * distClamped);
+	const float opticalDepth = extGr * distClamped;
+	const float estContrib = 1 - exp(-opticalDepth);
+	const float rcpExtGr = rcp(max(extGr, 1e-20));
 
 	float shadow = 0;
 	for (uint i = 1; i <= nStep; ++i) {
-		float tSample = -rcpExtGr * log(1 - (i - 1 + rnd.x) * rcpNStep * estContrib);  // map to truncated exponential distribution
+		const float sampleFraction = (i - 1 + jitter) * rcpNStep;
+		float tSample;
+		[branch] if (opticalDepth < 1e-3)
+			tSample = sampleFraction * distClamped * (1.0 - 0.5 * (1.0 - sampleFraction) * opticalDepth);
+		else tSample = -rcpExtGr * log(1 - sampleFraction * estContrib);
 
 		float shadowSample = SampleShadow(dir * tSample, tSample, shadowRay);
-		shadow += (1 - shadowSample) * rcpNStep;
+		shadow += 1 - shadowSample;
 	}
 
-	RWTexOutput[pxCoords] = shadow;
+	return shadow * rcpNStep;
+}
+
+[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+	const uint2 frameDim = uint2(SharedData::physSkyData.frameDim);
+	const uint2 pxCoords = tid * RES_MULT;
+	if (any(pxCoords >= frameDim))
+		return;
+
+	const uint2 seed = Random::pcg2d(tid);
+	const float jitter = Random::R2Modified(SharedData::FrameCountAlwaysActive, seed / 4294967295.f).x;
+
+#if defined(HALF_RES)
+	const uint2 lastCoords = min(pxCoords + 1u, frameDim - 1u);
+	const float4 depths = float4(
+		TexDepth[pxCoords],
+		TexDepth[uint2(lastCoords.x, pxCoords.y)],
+		TexDepth[uint2(pxCoords.x, lastCoords.y)],
+		TexDepth[lastCoords]);
+	const float4 linearDepths = SharedData::GetScreenDepths(depths);
+	const float minDepth = min(min(linearDepths.x, linearDepths.y), min(linearDepths.z, linearDepths.w));
+	const float maxDepth = max(max(linearDepths.x, linearDepths.y), max(linearDepths.z, linearDepths.w));
+	const bool sharedRay = maxDepth - minDepth <= minDepth * 0.01;
+	const uint rayCount = sharedRay ? 1u : 4u;
+	[loop] for (uint i = 0; i < rayCount; ++i)
+	{
+		const uint2 pixel = pxCoords + uint2(i & 1u, i >> 1u);
+		if (any(pixel >= frameDim))
+			continue;
+		const float2 pixelCenter = sharedRay ? (float2(pxCoords) + float2(lastCoords) + 1.0) * 0.5 : pixel + 0.5;
+		const float depth = sharedRay ? dot(depths, 0.25) : depths[i];
+		const float shadow = TraceShadow(pixelCenter, depth, jitter);
+		[branch] if (sharedRay)
+		{
+			[unroll] for (uint j = 0; j < 4; ++j)
+			{
+				const uint2 outputPixel = pxCoords + uint2(j & 1u, j >> 1u);
+				if (all(outputPixel < frameDim))
+					RWTexOutput[outputPixel] = shadow;
+			}
+		}
+		else
+		{
+			RWTexOutput[pixel] = shadow;
+		}
+	}
+#else
+	RWTexOutput[pxCoords] = TraceShadow(pxCoords + 0.5, TexDepth[pxCoords], jitter);
+#endif
 }
