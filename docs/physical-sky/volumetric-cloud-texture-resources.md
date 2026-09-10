@@ -26,7 +26,8 @@ the internal and boundary variation of that mass.
 | ------------------------- | ------: | ------------------------- | ---------------- |
 | Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `nubis.dds`      |
 | Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated    |
-| Low-cloud NDF             |    `t7` | `Texture2DArray<float4>`  | GPU-generated    |
+| Low-cloud height          |    `t7` | `Texture2D<float2>`       | GPU-generated    |
+| Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated    |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
 | High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
@@ -43,20 +44,16 @@ the internal and boundary variation of that mass.
 The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 `features/Physical Sky/Textures/PhysicalSky/` in the source tree.
 
-## Five-layer NDF
+## Two-texture NDF
 
-The NDF is sampled with tileable linear filtering at mip 0. Texture mode
-accepts a five-slice linear array, typically `256 x 256 x 5`, `R8_UNORM`. The procedural generator packs the
-same five attributes into two RGBA16_FLOAT array slices: minimum/maximum height, coverage
-and top type in slice 0, and bottom type in slice 1 R.
+Both generated and imported NDFs use two linear 2D textures, sampled with wrap
+filtering at mip 0. Generated maps are 512 x 512: height RG16_FLOAT and modeling
+RGBA16_FLOAT with unused A zero.
 
-| Slice | Meaning                                               |
-| ----: | ----------------------------------------------------- |
-|     0 | minimum normalized height in the NDF coordinate frame |
-|     1 | maximum normalized height in the NDF coordinate frame |
-|     2 | coverage                                              |
-|     3 | top type used to sample `top_lut.dds`                 |
-|     4 | bottom type used to sample `bottom_lut.dds`           |
+| Texture  | R                         | G                         | B                   |
+| -------- | ------------------------- | ------------------------- | ------------------- |
+| Height   | minimum normalized height | maximum normalized height | unused              |
+| Modeling | coverage                  | top profile type          | bottom profile type |
 
 At a ray sample the shader computes:
 
@@ -71,16 +68,15 @@ dimensional_profile = coverage * vertical_profile
 into physical altitude. `NDF Scale` independently controls the X/Y repeat
 length; it is not inherited from the high-cloud weather map or the 3D noise.
 
-The procedural generator combines periodic weather organization with seeded,
-rotated elliptical cloud masses and secondary domes. A separate slow field
-supplies the condensation base. Cloud amount, vertical development and profile
-type have independent controls; no 3D noise is needed to generate this map.
-See [procedural NDF generation](ndf-generator.md).
+The generator remaps and powers two coverage signals, combines them with max
+and gain, and separately remaps shared noise into profile types. Optional local
+maps blend before bottom height variation. Four scalar noise inputs use local
+Alligator, Perlin fBm or Perlin-Worley, individually replaceable by DDS.
+See [procedural NDF generation](ndf-generator.md) for equations and noise presets.
 
-Texture mode accepts a linear, non-sRGB DDS `Texture2DArray` with exactly five
-slices in the order above. Values are read from each slice's R channel and use
-the same normalized height and type axes. This route remains available for
-optional authored cloud distributions.
+Texture mode selects `heightPath` and `modelingPath` with the same channel
+contract. Arrays, integer and sRGB views are rejected. Optional authored maps
+enter the same density query as generated maps.
 
 ## `nubis.dds`
 
@@ -102,7 +98,7 @@ length of the volume; it does not change NDF coverage, height or cloud species.
 
 `top_lut.dds` and `bottom_lut.dds` are required `128 x 128` R8 UNORM assets.
 U is profile type and V is `1 - localHeight`, matching their stored orientation.
-Top and bottom type are independent NDF layers.
+Top and bottom type occupy modeling G and B.
 
 ## Independent high clouds
 
@@ -118,19 +114,18 @@ They do not sample the low-cloud NDF or `nubis.dds`. High Weather at `t11` uses:
 
 ## Generator lifecycle
 
-The procedural low NDF and its occupancy/distance maps rebuild on parameter,
-seed or world-scale changes. Shader reload also invalidates the generated field.
-Wind is applied during sampling. Generated-map replacement invalidates temporal
-history before cloud rendering. Imported maps retain the five-slice contract and
-refresh their acceleration map before use. High-cloud map generation remains
-an independent implementation.
+The procedural low NDF and acceleration rebuild on composition, noise or source
+changes. Shader reload invalidates generation. Animated wind and world repeat
+scale apply during sampling. Map replacement invalidates temporal history.
+Imported pairs refresh acceleration before use. High-cloud generation remains
+independent.
 
 ## Static validation checklist
 
 -   `nubis.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
--   Low NDF is a linear array: two packed generated slices or five imported scalar slices.
+-   Low NDF uses linear height RG and modeling RGB textures at t7/t8.
 -   NDF coverage is generated independently from `nubis.dds`.
--   Procedural minimum and maximum height form a valid interval.
+-   Empty or reversed height intervals are rejected by the density query.
 -   Noise is queried only inside positive NDF/profile support, with zero density outside it.
 -   High Weather contains a valid mip 2 and keeps A zero outside coverage.
 

@@ -2,19 +2,13 @@
 #	define COMPUTESHADER
 #endif
 
-cbuffer CB : register(b1)
-{
-	uint packedNdf;
-	uint3 padding;
-};
-
-Texture2DArray<float4> Ndf : register(t0);
+Texture2D<float3> NdfModeling : register(t0);
 Texture2D<float> Occupancy : register(t1);
 RWTexture2D<float> Output : register(u0);
 
 [numthreads(8, 8, 1)] void buildOccupancy(uint2 tid : SV_DispatchThreadID) {
-	uint width, height, layers;
-	Ndf.GetDimensions(width, height, layers);
+	uint width, height;
+	NdfModeling.GetDimensions(width, height);
 	uint2 dims;
 	Output.GetDimensions(dims.x, dims.y);
 	if (any(tid >= dims))
@@ -27,8 +21,7 @@ RWTexture2D<float> Output : register(u0);
 	{
 		const int2 size = int2(width, height);
 		const int2 pixel = (int2(x, y) % size + size) % size;
-		const float4 value = Ndf.Load(int4(pixel, packedNdf != 0u ? 0 : 2, 0));
-		coverage = max(coverage, packedNdf != 0u ? value.b : value.r);
+		coverage = max(coverage, NdfModeling.Load(int3(pixel, 0)).r);
 	}
 	Output[tid] = coverage;
 }

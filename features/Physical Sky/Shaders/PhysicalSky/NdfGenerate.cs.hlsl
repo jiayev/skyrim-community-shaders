@@ -2,148 +2,148 @@
 #	define COMPUTESHADER
 #endif
 
-#include "Common/Random.hlsli"
-
-RWTexture2DArray<float4> RWTexOutput : register(u0);
+struct NoiseLayer
+{
+	uint noise;
+	float frequency;
+	float exponent;
+	float padding0;
+	float2 offset;
+	float2 padding1;
+	float4 range;
+};
 
 cbuffer CB : register(b1)
 {
-	uint seed;
-	uint form;
-	float coverage;
-	float weatherStrength;
-	float cloudSize;
-	float weatherScale;
-	float elongation;
-	float bearing;
-	float sizeVariation;
-	float clustering;
-	float development;
-	float heightVariation;
-	float baseVariation;
-	float edgeSoftness;
-	float topType;
-	float topTypeVariation;
-	float bottomType;
-	float shoulders;
-	float2 shapePadding;
-	float2 worldSize;
-	float2 padding;
+	NoiseLayer primary;
+	NoiseLayer secondary;
+	NoiseLayer coverageGain;
+	NoiseLayer modeling;
+	NoiseLayer modelingGain;
+	NoiseLayer heightVariation;
+	float4 bottomTypeRange;
+	float2 baseHeight;
+	float bottomTypeExponent;
+	uint heightFromCoverage;
+	uint localBlendMode;
+	float localModelingWeight;
+	float localHeightWeight;
+	float localWindScale;
+	float2 windOffset;
+	uint hasLocalMask;
+	float padding;
 };
 
-int2 WrapCell(int2 cell, uint2 period)
+Texture2D<float4> Noise0 : register(t0);
+Texture2D<float4> Noise1 : register(t1);
+Texture2D<float4> Noise2 : register(t2);
+Texture2D<float4> Noise3 : register(t3);
+Texture2D<float4> LocalModeling : register(t4);
+Texture2D<float2> LocalHeight : register(t5);
+Texture2D<float> LocalMask : register(t6);
+SamplerState NoiseSampler : register(s0);
+RWTexture2D<float2> OutputHeight : register(u0);
+RWTexture2D<float4> OutputModeling : register(u1);
+
+float NoiseMip(Texture2D<float4> source, float frequency, uint2 outputSize)
 {
-	const int2 size = int2(period);
-	return (cell % size + size) % size;
+	uint2 size;
+	source.GetDimensions(size.x, size.y);
+	const float2 footprint = float2(size) * abs(frequency) / outputSize;
+	return log2(max(max(footprint.x, footprint.y), 1.0));
 }
 
-float3 CellRandom(int2 cell, uint2 period, uint stream)
+float SampleNoise(uint index, float2 uv, float frequency, uint2 outputSize)
 {
-	const uint2 wrapped = uint2(WrapCell(cell, period));
-	return float3(Random::pcg3d(uint3(wrapped, seed ^ stream)) >> 8u) * (1.0 / 16777216.0);
+	switch (index) {
+	case 0u:
+		return Noise0.SampleLevel(NoiseSampler, uv, NoiseMip(Noise0, frequency, outputSize)).r;
+	case 1u:
+		return Noise1.SampleLevel(NoiseSampler, uv, NoiseMip(Noise1, frequency, outputSize)).r;
+	case 2u:
+		return Noise2.SampleLevel(NoiseSampler, uv, NoiseMip(Noise2, frequency, outputSize)).r;
+	case 3u:
+		return Noise3.SampleLevel(NoiseSampler, uv, NoiseMip(Noise3, frequency, outputSize)).r;
+	default:
+		return 0.0;
+	}
 }
 
-float ValueNoise(float2 uv, uint2 period, uint stream)
+float Remap(float value, float4 range)
 {
-	const float2 p = frac(uv) * period;
-	const int2 cell = int2(floor(p));
-	const float2 f = frac(p);
-	const float2 w = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-	return lerp(
-		lerp(CellRandom(cell, period, stream).x, CellRandom(cell + int2(1, 0), period, stream).x, w.x),
-		lerp(CellRandom(cell + int2(0, 1), period, stream).x, CellRandom(cell + int2(1, 1), period, stream).x, w.x), w.y);
+	return saturate((value - range.x) / (range.y - range.x)) * (range.w - range.z) + range.z;
 }
 
-float Weather(float2 uv, uint2 period)
+float NoisePower(float value, float exponent)
 {
-	return ValueNoise(uv, period, 11u) * 0.75 + ValueNoise(uv, period * 2u, 17u) * 0.25;
+	// Avoid invalid logarithms when signed noise drives height.
+	return value > 0.0 ? exp2(log2(value) * exponent) : 0.0;
 }
 
-float LocalAmount(float weather)
+float SignedNoise(NoiseLayer layer, float2 uv, float2 wind, uint2 size)
 {
-	return saturate(coverage + (weather - 0.5) * weatherStrength * 2.0 * min(coverage, 1.0 - coverage));
+	return SampleNoise(layer.noise, ((layer.offset - wind) + uv) * layer.frequency, layer.frequency, size) * 2.0 - 1.0;
 }
 
-float Dome(float2 p, float2 radii, out float envelope)
+float RangedNoise(NoiseLayer layer, float2 uv, float2 wind, uint2 size)
 {
-	const float r = length(p / radii);
-	envelope = smoothstep(0.0, edgeSoftness, 1.0 - r);
-	return sqrt(saturate(1.0 - r * r));
-}
-
-float MergeHeight(float a, float b)
-{
-	return max(a, b) + 0.08 * shoulders * min(a, b);
+	return layer.range.z == layer.range.w ? layer.range.w : Remap(SignedNoise(layer, uv, wind, size), layer.range);
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
-	uint3 dims;
-	RWTexOutput.GetDimensions(dims.x, dims.y, dims.z);
-	if (any(tid >= dims.xy))
+	uint2 size;
+	OutputHeight.GetDimensions(size.x, size.y);
+	if (any(tid >= size))
 		return;
-	const float2 uv = (float2(tid) + 0.5) / float2(dims.xy);
-	const uint2 weatherPeriod = uint2(clamp(round(worldSize / weatherScale), 1.0, 32.0));
-	const float base = 0.03 + 0.15 * baseVariation * ValueNoise(uv, weatherPeriod, 29u);
-	float amount = 0.0;
-	float height = 0.0;
-	const float localAmount = LocalAmount(Weather(uv, weatherPeriod));
-	if (coverage > 0.0 && form != 2u) {
-		// Integer cell counts preserve the tile; the world metric preserves circular domes on rectangular maps.
-		const uint2 period = uint2(clamp(round(worldSize / cloudSize), 1.0, float(min(dims.x, dims.y) / 8u)));
-		const float2 cellSize = worldSize / period;
-		const float cellWidth = min(cellSize.x, cellSize.y);
-		const int2 cell = int2(floor(uv * period));
-		const float2 position = uv * worldSize;
-		// All lobes fit within 1.6 cell widths of their center, including rotated major axes.
-		[loop] for (int y = -2; y <= 2; ++y)
-			[loop] for (int x = -2; x <= 2; ++x)
-		{
-			const int2 id = cell + int2(x, y);
-			const float3 random = CellRandom(id, period, 41u);
-			const float3 shape = CellRandom(id, period, 53u);
-			const float2 center = (float2(id) + 0.2 + random.xy * 0.6) * cellSize;
-			const float centerAmount = LocalAmount(Weather(center / worldSize, weatherPeriod));
-			const float occurrence = smoothstep(random.z - 0.12, random.z + 0.12,
-				centerAmount * lerp(1.6, 1.1, clustering));
-			if (occurrence <= 0.0)
-				continue;
-			const float radius = cellWidth * lerp(0.28, 0.65, centerAmount) *
-			                     lerp(1.0, 0.65 + shape.x * 0.7, sizeVariation) * (form == 1u ? 1.2 : 1.0);
-			const float major = min(radius * sqrt(elongation), cellWidth * 1.05);
-			const float2 radii = float2(major, major / elongation);
-			const float angle = bearing + (shape.y - 0.5) * 6.28318530718 * lerp(1.0, 0.12, clustering);
-			float sn, cs;
-			sincos(angle, sn, cs);
-			const float2 delta = position - center;
-			const float2 p = float2(dot(delta, float2(cs, sn)), dot(delta, float2(-sn, cs)));
-			float envelope;
-			float massHeight = Dome(p, radii, envelope);
-			[unroll] for (uint lobe = 0u; lobe < 3u; ++lobe)
-			{
-				const float3 detail = CellRandom(id, period, 67u + lobe * 13u);
-				const float theta = (float(lobe) + detail.x * 0.5) * 2.09439510239;
-				const float2 offset = float2(cos(theta), sin(theta)) * radii * 0.75;
-				const float2 lobeRadii = radii * lerp(0.35, 0.7, shoulders);
-				float lobeEnvelope;
-				const float lobeHeight = Dome(p - offset, lobeRadii, lobeEnvelope) * lerp(0.7, 1.1, detail.y);
-				massHeight = MergeHeight(massHeight, lobeHeight * sqrt(shoulders));
-				envelope = max(envelope, lobeEnvelope * shoulders);
-			}
-			const float rise = lerp(1.0, 0.35 + shape.z * 0.65, heightVariation);
-			amount = max(amount, envelope * occurrence);
-			height = MergeHeight(height, massHeight * rise * occurrence);
-		}
+	const float2 uv = (float2(tid) + 0.5) / size;
+	const float2 wind = windOffset * 0.00005;
+	float first;
+	float second;
+	if (primary.range.z == primary.range.w) {
+		first = primary.range.w;
+		second = primary.range.w;
+	} else {
+		first = NoisePower(Remap(SignedNoise(primary, uv, wind, size), primary.range), primary.exponent);
+		second = NoisePower(Remap(SignedNoise(secondary, uv, wind, size), secondary.range), secondary.exponent);
 	}
-	if (coverage > 0.0 && form != 0u) {
-		const float sheet = form == 2u ? smoothstep(0.3, 0.7, localAmount) : smoothstep(0.55, 0.85, localAmount) * clustering;
-		amount = max(amount, sheet);
-		const float sheetHeight = lerp(1.0, 0.65 + 0.35 * ValueNoise(uv, weatherPeriod * 2u, 83u), heightVariation);
-		height = max(height, sheet * sheetHeight);
+	const float gain = RangedNoise(coverageGain, uv, wind, size);
+	const float typeNoise = SignedNoise(modeling, uv, wind, size);
+	const float typeGain = RangedNoise(modelingGain, uv, wind, size);
+	float3 model = float3(gain * max(first, second),
+		typeGain * NoisePower(Remap(typeNoise, modeling.range), modeling.exponent),
+		typeGain * NoisePower(Remap(typeNoise, bottomTypeRange), bottomTypeExponent));
+
+	const float2 localUv = uv - wind * localWindScale;
+	float mask = 1.0;
+	if (hasLocalMask != 0u) {
+		uint2 maskSize;
+		LocalMask.GetDimensions(maskSize.x, maskSize.y);
+		const float2 footprint = float2(maskSize) / size;
+		mask = LocalMask.SampleLevel(NoiseSampler, localUv, log2(max(max(footprint.x, footprint.y), 1.0)));
 	}
-	const float riseScale = form == 0u ? lerp(0.2, 0.92, development) :
-	                                     (form == 1u ? lerp(0.12, 0.5, development) : lerp(0.08, 0.3, development));
-	const float top = min(0.99, base + max(0.01, saturate(height) * riseScale));
-	const float type = saturate(topType + (ValueNoise(uv, weatherPeriod * 2u, 97u) - 0.5) * topTypeVariation);
-	RWTexOutput[uint3(tid, 0)] = float4(base, top, saturate(amount), type);
-	RWTexOutput[uint3(tid, 1)] = float4(bottomType, 0, 0, 0);
+	if (localModelingWeight > 0.0) {
+		const float3 localModel = LocalModeling.SampleLevel(NoiseSampler, localUv, NoiseMip(LocalModeling, 1.0, size)).rgb;
+		if (localBlendMode == 0u)
+			model = (mask * localModelingWeight) * (localModel - model) + model;
+		else
+			model = max(model, localModel * localModelingWeight);
+	}
+	float2 height = baseHeight;
+	if (localHeightWeight > 0.0) {
+		uint2 heightSize;
+		LocalHeight.GetDimensions(heightSize.x, heightSize.y);
+		const float2 footprint = float2(heightSize) / size;
+		const float2 localHeight = LocalHeight.SampleLevel(NoiseSampler, localUv, log2(max(max(footprint.x, footprint.y), 1.0)));
+		height = (saturate(mask) * localHeightWeight) * (localHeight - baseHeight) + baseHeight;
+	}
+	float variation;
+	if (heightVariation.range.z == heightVariation.range.w)
+		variation = heightVariation.range.z;
+	else {
+		const float driver = heightFromCoverage != 0u ? model.r : SignedNoise(heightVariation, uv, wind, size);
+		variation = Remap(NoisePower(driver, heightVariation.exponent), heightVariation.range);
+	}
+	height.x += variation;
+	OutputHeight[tid] = saturate(height);
+	OutputModeling[tid] = float4(saturate(model), 0.0);
 }

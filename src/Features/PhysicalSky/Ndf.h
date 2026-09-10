@@ -5,6 +5,7 @@
 struct TextureManager
 {
 	std::string name;
+	uint64_t revision = 0;
 	ankerl::unordered_dense::map<std::string, winrt::com_ptr<ID3D11ShaderResourceView>> texList;
 
 	bool LoadTexture(std::filesystem::path path);
@@ -35,32 +36,76 @@ namespace nlohmann
 
 struct TexNdfSettings
 {
-	std::string texPath;
+	std::string heightPath;
+	std::string modelingPath;
 };
+
+struct NdfNoiseParameters
+{
+	uint32_t type = 1;
+	uint32_t seed = 1337;
+	uint32_t frequency = 16;
+	uint32_t octaves = 4;
+	float persistence = 0.5f;
+	uint32_t lacunarity = 2;
+	float contrast = 1.f;
+	float bias = 0.f;
+	uint32_t repetitions = 1;
+	float responseExponent = 1.f;
+	float2 padding = {};
+};
+static_assert(sizeof(NdfNoiseParameters) == 48);
+
+struct NdfNoiseInput
+{
+	NdfNoiseParameters parameters;
+	std::string texturePath;
+};
+
+struct NdfNoiseLayer
+{
+	uint32_t noise = 2;
+	float frequency = 1.f;
+	float exponent = 1.f;
+	float padding0 = 0.f;
+	float2 offset = {};
+	float2 padding1 = {};
+	float4 range = { -1.f, 1.f, 0.f, 1.f };
+};
+static_assert(sizeof(NdfNoiseLayer) == 48);
+
+struct NdfGenerationParameters
+{
+	NdfNoiseLayer primary = { .noise = 3, .exponent = 1.4f, .range = { -0.4f, 0.65f, 0.f, 0.65f } };
+	NdfNoiseLayer secondary = { .noise = 1, .range = { -0.2f, 0.8f, 0.f, 0.4f } };
+	NdfNoiseLayer coverageGain = { .range = { -1.f, 1.f, 1.f, 1.f } };
+	NdfNoiseLayer modeling = { .range = { -0.5f, 0.6f, 0.05f, 0.85f } };
+	NdfNoiseLayer modelingGain = { .range = { -1.f, 1.f, 1.f, 1.f } };
+	NdfNoiseLayer heightVariation = { .range = { 0.f, 1.f, 0.f, 0.02f } };
+	float4 bottomTypeRange = { -0.4f, 0.5f, 0.f, 0.25f };
+	float2 baseHeight = { 0.f, 0.95f };
+	float bottomTypeExponent = 1.f;
+	uint32_t heightFromCoverage = 1;
+	uint32_t localBlendMode = 0;
+	float localModelingWeight = 1.f;
+	float localHeightWeight = 1.f;
+	float localWindScale = 1.f;
+	float2 windOffset = {};
+	uint32_t hasLocalMask = 0;
+	float padding = 0.f;
+};
+static_assert(sizeof(NdfGenerationParameters) == 352);
 
 struct ProceduralNdfSettings
 {
-	uint32_t seed = 1337;
-	uint32_t form = 0;
-	float coverage = 0.55f;
-	float weatherStrength = 0.65f;
-	float cloudSize = 1.6f;
-	float weatherScale = 8.f;
-	float elongation = 1.4f;
-	float bearing = 0.f;
-	float sizeVariation = 0.45f;
-	float clustering = 0.55f;
-	float development = 0.75f;
-	float heightVariation = 0.55f;
-	float baseVariation = 0.15f;
-	float edgeSoftness = 0.18f;
-	float topType = 0.5f;
-	float topTypeVariation = 0.3f;
-	float bottomType = 0.1f;
-	float shoulders = 0.65f;
-	float2 _pad = {};
+	NdfGenerationParameters parameters;
+	std::array<NdfNoiseInput, 4> noise = { { { { .type = 0, .frequency = 12 } },
+		{ { .type = 1, .frequency = 4, .octaves = 6, .persistence = 0.6f, .contrast = 1.6f, .bias = -0.02f, .repetitions = 2, .responseExponent = 1.8f } },
+		{ { .type = 1, .frequency = 32 } },
+		{ { .type = 2, .frequency = 12, .contrast = 1.1f, .bias = -0.05f, .responseExponent = 2.f } } } };
+	TexNdfSettings local;
+	std::string localMaskPath;
 };
-static_assert(sizeof(ProceduralNdfSettings) == 80);
 
 enum class NdfType : uint32_t
 {
@@ -75,43 +120,49 @@ struct NdfSettings
 	ProceduralNdfSettings procedural;
 };
 
-struct LowCloudSettings;
+struct NdfTextureSet
+{
+	ID3D11ShaderResourceView* height = nullptr;
+	ID3D11ShaderResourceView* modeling = nullptr;
+	explicit operator bool() const { return height && modeling; }
+};
 
 struct NdfManager
 {
-	constexpr static uint16_t kNdfDim = 256;
-
-	eastl::unique_ptr<Texture2D> texNdfOutput = nullptr;
+	constexpr static uint16_t kNdfDim = 512;
+	eastl::unique_ptr<Texture2D> texHeight = nullptr;
+	eastl::unique_ptr<Texture2D> texModeling = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> generatorProgram = nullptr;
-	eastl::unique_ptr<ConstantBuffer> generatorCb = {};
+	winrt::com_ptr<ID3D11ComputeShader> noiseProgram = nullptr;
 	eastl::unique_ptr<Texture2D> texOccupancy = nullptr;
 	eastl::unique_ptr<Texture2D> texDistance = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> occupancyProgram = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> distanceProgram = nullptr;
-	eastl::unique_ptr<ConstantBuffer> accelerationCb = nullptr;
 	bool accelerationValid = false;
 
 	void SetupResources();
 	void CompileShaders();
-
-	static const char* GetSettingsTypeName(const NdfSettings& ndfSettings);
-	static const char* GetSettingsHint(const NdfSettings& ndfSettings);
-	static void DrawNdfSettings(NdfSettings& ndfSettings, TextureManager& texManager);
-	bool UpdateNdf(const NdfSettings& ndfSettings, const LowCloudSettings& low);
-	void UpdateAcceleration(const NdfSettings& ndfSettings, TextureManager& texManager);
-	ID3D11ShaderResourceView* GetNdf(const NdfSettings& ndfSettings, TextureManager& texManager);
+	static const char* GetSettingsTypeName(const NdfSettings& settings);
+	static const char* GetSettingsHint(const NdfSettings& settings);
+	static void DrawNdfSettings(NdfSettings& settings, TextureManager& textures);
+	bool UpdateNdf(const NdfSettings& settings, TextureManager& textures);
+	void UpdateAcceleration(const NdfSettings& settings, TextureManager& textures);
+	NdfTextureSet GetNdf(const NdfSettings& settings, TextureManager& textures);
 
 private:
-	static bool IsTextureNdf(ID3D11ShaderResourceView* srv);
-
-	struct GenCB
-	{
-		ProceduralNdfSettings shape;
-		float2 worldSize;
-		float2 padding = {};
-	};
-	static_assert(sizeof(GenCB) == 96);
-	GenCB generatedData = {};
+	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
+	static NdfTextureSet QueryTextures(const TexNdfSettings& settings, TextureManager& textures);
+	eastl::unique_ptr<ConstantBuffer> generatorCb;
+	eastl::unique_ptr<ConstantBuffer> noiseCb;
+	winrt::com_ptr<ID3D11SamplerState> sampler;
+	std::array<eastl::unique_ptr<Texture2D>, 4> noiseTextures;
+	std::array<NdfNoiseParameters, 4> generatedNoise = {};
+	std::array<bool, 4> noiseValid = {};
+	NdfGenerationParameters generatedData = {};
+	std::array<ID3D11ShaderResourceView*, 7> generatedSources = {};
+	std::array<std::string, 9> sourcePaths = {};
+	uint64_t generatedRevision = 0;
+	uint64_t importedRevision = 0;
 	bool generatedValid = false;
 	ID3D11ShaderResourceView* acceleratedNdf = nullptr;
 };

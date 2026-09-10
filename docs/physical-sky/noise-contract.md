@@ -115,7 +115,7 @@ The old profile-based R/G mixture, scaled B/A mixture and bottom-profile mixture
 were replaced together with their coverage-relief term and kilometre-distance
 channel fade. The extra lower-frequency rotated texture sample, hidden noise
 height shear and bottom warp were removed. The CPU-generated warp texture and
-its bindings were also removed; t8 is reserved.
+its bindings were also removed; t8 now carries the NDF modeling texture.
 
 The old 0.7 profile cap, 0.975 composite gain and derived 0.025 profile cutoff
 are absent. These do not belong to the threshold contract above. NDF shape
@@ -140,5 +140,8 @@ The zero guards intentionally define otherwise singular boundary cases.
 No C++ build, shader compilation or GPU comparison was performed. Runtime
 acceptance should cover roundness endpoints, low coverage, profile edges,
 near-detail transitions, moving cameras and cloud/ground shadow agreement.
-The local macro-shape generator remains separate work in
-[cloud shape generation](cloud-shape-redesign.md).
+The local control-field generator is described in
+[procedural NDF generation](ndf-generator.md). Modeling R supplies coverage
+independently of the vertical profile. At coverage one, normalized threshold
+reduction becomes one wherever the threshold is below one, removing that noise
+variation. Continuous coverage below one preserves sensitivity to this reducer.
