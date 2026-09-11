@@ -149,8 +149,9 @@ struct NdfManager
 	void UpdateAcceleration(const NdfSettings& settings, TextureManager& textures);
 	NdfTextureSet GetNdf(const NdfSettings& settings, TextureManager& textures);
 
-private:
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
+
+private:
 	static NdfTextureSet QueryTextures(const TexNdfSettings& settings, TextureManager& textures);
 	eastl::unique_ptr<ConstantBuffer> generatorCb;
 	eastl::unique_ptr<ConstantBuffer> noiseCb;
@@ -185,49 +186,26 @@ struct LowCloudSettings
 	float2 GetNdfAltitudeRangeKm() const;
 };
 
-struct HighCloudSettings
+struct CirrusSettings
 {
 	bool enabled = true;
-	uint32_t viewSteps = 64;
-	uint32_t weatherDim = 512;
-	float weatherWorldSize = 64.f;
-	float2 weatherCenter = { 0.f, 0.f };
-	uint32_t weatherSeed = 1337;
-	float coverage = 0.28f;
-	float coverageEdgeWidth = 0.5f;
-	float frontStrength = 0.35f;
-	float frontBearing = 45.f;
-	float altostratusWeight = 0.68f;
-	float altocumulusWeight = 0.32f;
-	float2 cellScale = { 4.f, 4.f };
-	float cellWindSpeed = 1.35f;
-	float2 cellWarpScale = { 1.5f, 1.5f };
-	float cellWarpStrength = 0.12f;
-	float cellThickStrength = 0.75f;
-	float asCellThickStrength = 0.25f;
-	float cellThickPow = 1.6f;
-	// Absolute altitude band in kilometres. High clouds do not share the low-cloud
-	// NDF coordinate frame.
-	float bottomAltitude = 6.0f;
-	float topAltitude = 12.0f;
-	float bottomCoverageScale = 0.35f;
-	float heightCurvePow = 0.85f;
-	float densityThreshold = 0.08f;
-	float densitySoftness = 0.22f;
-	float softness = 0.04f;
-	float2 wispScale = { 7.f, 7.f };
-	float wispStrength = 0.18f;
-	float densityScale = 0.175f;
-	float densitySoftAIntensity = 0.3f;
-	float densitySoftAContrast = 1.5f;
-	float densityModAIntensity = 0.25f;
-	float densityModAContrast = 1.5f;
+	float altitude = 2048.f;
+	float patternScale = 1.f / 0.0002331f;
+	float densityScale = 2.f;
+	float lightingScale = 1.f;
+	std::string weatherPath;
+	std::string patternsPath;
+	std::array<NdfNoiseInput, 2> noise = { { { { .type = 1, .frequency = 4 } }, { { .type = 1, .seed = 7331, .frequency = 8 } } } };
+	std::array<NdfNoiseLayer, 2> weather = { { { .noise = 0, .range = { -0.7f, 0.7f, 0.f, 0.6f } }, { .noise = 1 } } };
+	uint32_t patternSeed = 1337;
+	float patternWarp = 0.15f;
+	float patternDetail = 0.35f;
+
+	float GetAltitudeKm() const;
 };
 
 struct CloudLightingSettings
 {
-	bool crossLayerShadows = true;
-	uint32_t cacheSteps = 16;
 	float lightingScale = 1.f;
 	float sunExtinction = 1.f;
 	float phaseForwardG = 0.85f;
@@ -248,65 +226,52 @@ struct CloudLightingSettings
 struct CloudLayer
 {
 	LowCloudSettings low;
-	HighCloudSettings high;
+	CirrusSettings cirrus;
 	CloudLightingSettings lighting;
 };
 
-struct HighCloudTextureSet
+struct CirrusTextureSet
 {
-	ID3D11ShaderResourceView* highWeather = nullptr;
-	ID3D11ShaderResourceView* highCell = nullptr;
-	ID3D11ShaderResourceView* highWarp = nullptr;
-	ID3D11ShaderResourceView* highWisp = nullptr;
+	ID3D11ShaderResourceView* weather = nullptr;
+	ID3D11ShaderResourceView* patterns = nullptr;
+	explicit operator bool() const { return weather && patterns; }
 };
 
-struct HighCloudMapManager
+struct CirrusMapManager
 {
-	eastl::unique_ptr<Texture2D> texHighWeather = nullptr;
-	eastl::unique_ptr<Texture2D> texHighCell = nullptr;
-	eastl::unique_ptr<Texture2D> texHighWarp = nullptr;
-	eastl::unique_ptr<Texture2D> texHighWisp = nullptr;
-
 	void SetupResources();
 	void CompileShaders();
 	bool ShadersReady() const;
-	HighCloudTextureSet GetTextures(const HighCloudSettings& settings);
+	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
+	bool Update(const CirrusSettings& settings, TextureManager& textures);
+	CirrusTextureSet GetTextures() const;
 
 private:
-	// Generation is GPU-side, so it is cheap enough to re-run whenever an input
-	// changes without deferring or throttling. The hash exists only to skip
-	// redundant dispatches on unchanged frames.
-	size_t generatedHash = 0;
-	uint32_t generatedWeatherDim = 0;
-
-	// Intermediate morphology fields consumed by the histogram and compose passes.
-	eastl::unique_ptr<Texture2D> texFieldHigh = nullptr;
-	eastl::unique_ptr<Buffer> bufHistogram = nullptr;
-	eastl::unique_ptr<Buffer> bufThresholds = nullptr;
-	eastl::unique_ptr<ConstantBuffer> cbGen = nullptr;
-
-	winrt::com_ptr<ID3D11ComputeShader> csFields = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csHistogram = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csSolve = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csCompose = nullptr;
-
-	struct GenCB
+	static constexpr uint32_t kDimension = 512;
+	struct GenerationParameters
 	{
-		uint32_t weatherDim[2];
+		std::array<NdfNoiseLayer, 2> weather;
 		uint32_t seed;
-		uint32_t solveRound;
-
-		float coverage;
-		float highCoverageEdgeWidth;
-		float frontStrength;
-		float asShare;
-
-		float frontNormal[2];
-		float frontTangent[2];
-		float padding[4];
+		float warp;
+		float detail;
+		float padding = 0.f;
 	};
-	STATIC_ASSERT_ALIGNAS_16(GenCB);
-
-	bool EnsureResources(const HighCloudSettings& settings);
-	void GenerateTextures(const HighCloudSettings& settings);
+	static_assert(sizeof(GenerationParameters) == 112);
+	eastl::unique_ptr<Texture2D> texWeather;
+	eastl::unique_ptr<Texture2D> texPatterns;
+	std::array<eastl::unique_ptr<Texture2D>, 2> noiseTextures;
+	eastl::unique_ptr<ConstantBuffer> generationCb;
+	eastl::unique_ptr<ConstantBuffer> noiseCb;
+	winrt::com_ptr<ID3D11ComputeShader> weatherProgram;
+	winrt::com_ptr<ID3D11ComputeShader> patternsProgram;
+	winrt::com_ptr<ID3D11ComputeShader> noiseProgram;
+	winrt::com_ptr<ID3D11SamplerState> sampler;
+	std::array<NdfNoiseParameters, 2> generatedNoise = {};
+	std::array<bool, 2> noiseValid = {};
+	std::array<std::string, 4> sourcePaths = {};
+	GenerationParameters generatedData = {};
+	std::array<ID3D11ShaderResourceView*, 4> generatedSources = {};
+	uint64_t generatedRevision = 0;
+	bool generatedValid = false;
+	CirrusTextureSet outputs;
 };

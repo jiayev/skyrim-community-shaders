@@ -152,7 +152,7 @@ support. World scale changes history and sampling, not the normalized map.
 
 CPU/HLSL constant-buffer payloads are 352 bytes for composition and 48 for noise.
 Compute restores its sampler and clears SRV/UAV bindings. All view, light,
-shadow and cubemap consumers use the pair. High-cloud generation is unchanged.
+shadow and cubemap consumers use the pair. Cirrus uses a separate coverage/type map; ordinary stratus remains a main-NDF type.
 
 `cloudMap.version` is 2. Type 0 imports a pair; type 1 generates locally.
 Older settings and five-slice selections reset to procedural defaults, requiring

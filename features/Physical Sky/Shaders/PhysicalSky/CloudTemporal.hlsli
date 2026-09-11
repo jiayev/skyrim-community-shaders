@@ -59,7 +59,7 @@ float CloudHistoryBlend(float3 history, float3 current, float2 motion)
 		sceneDistance, sceneDistance >= CLOUD_SKY_DISTANCE, jitter, SampleCloudApShadow(pixel));
 	RWTexTr[tid] = result.transmittance.x;
 	RWTexLum[tid] = min(result.lum, 65504.0);
-	RWTexAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), EncodeCloudDepth(sceneDistance), 1.0, result.high_fraction);
+	RWTexAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), EncodeCloudDepth(sceneDistance), 1.0, 0.0);
 }
 
 bool CloudTraceFallback(uint2 pixel, float sceneDepth, out float3 tr, out float3 lum, out float4 aux)
@@ -169,7 +169,6 @@ bool CloudHistory(float2 uv, float sceneDepth, out float3 tr, out float3 lum, ou
 	bool historyValid = false;
 	if (info.historyValid != 0u && clip.w > 0.0 && info.cloudHistoryInvalidation > 0.5)
 		historyValid = CloudHistory(previousUv, sceneDepth, historyTr, historyLum, historyAux);
-	historyValid = historyValid && lerp(info.lowHistoryConfidence, info.highHistoryConfidence, historyAux.w) > 0.5;
 	float3 tr = currentTr;
 	float3 lum = currentLum;
 	float4 aux = currentAux;
@@ -228,7 +227,7 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 	RWTexCubeTr[tid] = result.transmittance.x;
 	RWTexCubeLum[tid] = min(result.lum, 65504.0);
 	const float opacity = 1.0 - result.transmittance.x;
-	RWTexCubeAux[tid] = float4(EncodeCloudDepth(result.cloud_depth) * opacity, opacity, 1.0, result.high_fraction * opacity);
+	RWTexCubeAux[tid] = float4(EncodeCloudDepth(result.cloud_depth) * opacity, opacity, 1.0, 0.0);
 }
 
 	[numthreads(8, 8, 1)] void reprojectCubemap(uint3 tid : SV_DispatchThreadID)
@@ -255,7 +254,7 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 	aux.z = traced ? 1.0 : 0.5;
 	if (info.historyValid != 0u && info.cloudHistoryInvalidation > 0.5) {
 		const float4 historyAux = TexCubeHistoryAux.SampleLevel(TransmittanceSampler, previousDirection, 0);
-		if (historyAux.z > 0.0 && lerp(info.lowHistoryConfidence, info.highHistoryConfidence, historyAux.w / max(historyAux.y, 1e-6)) > 0.5) {
+		if (historyAux.z > 0.0) {
 			const float3 historyTr = TexCubeHistoryTr.SampleLevel(TransmittanceSampler, previousDirection, 0);
 			const float3 historyLum = TexCubeHistoryLum.SampleLevel(TransmittanceSampler, previousDirection, 0);
 			const float weight = traced ? (historyAux.z < 0.99 ? 1.0 : max(CloudHistoryBlend(historyLum, currentLum, float2(length(direction - previousDirection), 0.0)), saturate(abs(historyTr.x - currentTr.x) * 4.0))) : 0.0;

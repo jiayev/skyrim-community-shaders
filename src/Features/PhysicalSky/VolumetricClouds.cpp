@@ -36,10 +36,14 @@ float2 LowCloudSettings::GetNdfAltitudeRangeKm() const
 	return { offset * 0.001f, (offset + scale) * 0.001f };
 }
 
+float CirrusSettings::GetAltitudeKm() const
+{
+	return (std::isfinite(altitude) ? std::clamp(altitude, 1.f, 24000.f) : 2048.f) * 0.001f;
+}
+
 void PhysicalSky::LoadCloudTextures()
 {
 	volMainHistoryValid = false;
-	volLightCacheValid = false;
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 
@@ -208,7 +212,6 @@ void PhysicalSky::SetupVolumetricResources()
 	context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), clearLum);
 	context->ClearUnorderedAccessViewFloat(texVolCubeAux->uav.get(), clearLum);
 	volMainHistoryValid = false;
-	volLightCacheValid = false;
 
 	// Shadow volume 3D texture
 	{
@@ -240,25 +243,12 @@ void PhysicalSky::SetupVolumetricResources()
 
 		FLOAT shadowVolumeClr[4] = { 0.f, 0.f, 0.f, 0.f };
 		context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), shadowVolumeClr);
-		tex3d_desc.Width = 64;
-		tex3d_desc.Height = 64;
-		tex3d_desc.Depth = 16;
-		tex3d_desc.Format = DXGI_FORMAT_R16_FLOAT;
-		srv_desc.Format = tex3d_desc.Format;
-		uav_desc.Format = tex3d_desc.Format;
-		uav_desc.Texture3D.WSize = tex3d_desc.Depth;
-		texLowCloudLightCache = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::LowCloudLightCache");
-		texLowCloudLightCache->CreateSRV(srv_desc);
-		texLowCloudLightCache->CreateUAV(uav_desc);
-		texHighCloudLightCache = eastl::make_unique<Texture3D>(tex3d_desc, "PhysicalSky::HighCloudLightCache");
-		texHighCloudLightCache->CreateSRV(srv_desc);
-		texHighCloudLightCache->CreateUAV(uav_desc);
 	}
 
 	// Load textures and NDF
 	LoadCloudTextures();
 	ndfManager.SetupResources();
-	highCloudMapManager.SetupResources();
+	cirrusMapManager.SetupResources();
 
 	CompileVolumetricShaders();
 }
@@ -266,7 +256,6 @@ void PhysicalSky::SetupVolumetricResources()
 void PhysicalSky::CompileVolumetricShaders()
 {
 	volMainHistoryValid = false;
-	volLightCacheValid = false;
 	logger::debug("Compiling volumetric cloud shaders...");
 
 	struct ShaderInfo
@@ -283,8 +272,6 @@ void PhysicalSky::CompileVolumetricShaders()
 		ShaderInfo{ &csVolReproject, "Volumetrics.cs.hlsl", {}, "reproject" },
 		ShaderInfo{ &csVolCubeReproject, "Volumetrics.cs.hlsl", {}, "reprojectCubemap" },
 		ShaderInfo{ &csVolShadowVolume, "Volumetrics.cs.hlsl", {}, "renderShadowVolume" },
-		ShaderInfo{ &csVolLowLightCache, "Volumetrics.cs.hlsl", {}, "buildCloudLightCache" },
-		ShaderInfo{ &csVolHighLightCache, "Volumetrics.cs.hlsl", { { "HIGH_CLOUD_CACHE", "1" } }, "buildCloudLightCache" },
 		ShaderInfo{ &csVolCubemap, "Volumetrics.cs.hlsl", {}, "renderCubemap" }
 	};
 
@@ -295,12 +282,12 @@ void PhysicalSky::CompileVolumetricShaders()
 			info.csPtr->attach(rawPtr);
 	}
 	ndfManager.CompileShaders();
-	highCloudMapManager.CompileShaders();
+	cirrusMapManager.CompileShaders();
 }
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 {
-	if (!csVolMainView || !csVolReproject || !csVolCubeReproject || !csVolLowLightCache || !csVolHighLightCache || !csVolShadowVolume || !csVolCubemap || !csVolAmbientSH)
+	if (!csVolMainView || !csVolReproject || !csVolCubeReproject || !csVolShadowVolume || !csVolCubemap || !csVolAmbientSH)
 		return;
 	if (!baseShapeNoiseSrv || !cloudTopLutSrv || !cloudBottomLutSrv)
 		return;
@@ -350,14 +337,12 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float cloudHistoryInvalidation = std::clamp(1.0f - sunAngleDifferenceDegrees / 10.0f, 0.0f, 1.0f);
 
 	auto& low = settings.cloudLayer.low;
-	auto& high = settings.cloudLayer.high;
+	auto& cirrus = settings.cloudLayer.cirrus;
 	auto& lighting = settings.cloudLayer.lighting;
 
 	low.ndfScale.x = std::clamp(low.ndfScale.x, 1.0f, 50.0f);
 	low.ndfScale.y = std::clamp(low.ndfScale.y, 1.0f, 50.0f);
 	low.noiseCompositeScale = std::clamp(low.noiseCompositeScale, 0.02f, 8.0f);
-	high.weatherDim = std::clamp(high.weatherDim, 128u, 1024u);
-	high.weatherWorldSize = std::clamp(high.weatherWorldSize, 8.0f, 256.0f);
 
 	const float timeSeconds = state->timer * 1e-3f;
 	const float windLen = std::sqrt(low.windDirection.x * low.windDirection.x + low.windDirection.y * low.windDirection.y);
@@ -366,37 +351,21 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float elapsed = timeSeconds - volHistoryTime;
 	if (elapsed < 0.0f || elapsed > 0.25f) {
 		volMainHistoryValid = false;
-		volLightCacheValid = false;
 	}
 	const float2 windDelta = volMainHistoryValid ? noiseWindOffset - volHistoryWindOffset : float2{ 0.f, 0.f };
-	const float lowHistoryConfidence = 1.f;
-	const float windDeltaMeters = std::sqrt(windDelta.x * windDelta.x + windDelta.y * windDelta.y) * Util::Units::GAME_UNIT_TO_M;
-	const float highRelativeMotion = windDeltaMeters * std::abs(high.cellWindSpeed) /
-	                                 (high.weatherWorldSize * 1000.f) * high.weatherDim;
-	const float highHistoryConfidence = std::exp(-highRelativeMotion);
 	const float2 lowAltitudeRange = low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
 	const float lowCloudTraceTopKm = lowCloudTopKm;
-	const float highCloudBottomKm = std::max(high.bottomAltitude, 0.0f);
-	const float highCloudTopKm = std::max(high.topAltitude, highCloudBottomKm + 0.1f);
-	const float traceBottomKm = high.enabled ? std::min(lowCloudBaseKm, highCloudBottomKm) : lowCloudBaseKm;
-	const float traceTopKm = high.enabled ? std::max(lowCloudTraceTopKm, highCloudTopKm) : lowCloudTraceTopKm;
+	const float traceBottomKm = cirrus.enabled ? std::min(lowCloudBaseKm, cirrus.GetAltitudeKm()) : lowCloudBaseKm;
+	const float traceTopKm = cirrus.enabled ? std::max(lowCloudTraceTopKm, cirrus.GetAltitudeKm()) : lowCloudTraceTopKm;
 
 	const uint32_t lowW = (renderW + 3u) / 4u;
 	const uint32_t lowH = (renderH + 3u) / 4u;
 
 	const auto cameraPosition = globals::game::frameBufferCached.GetCameraPosAdjust();
-	const float2 cameraXY = { cameraPosition.x, cameraPosition.y };
-	const float2 cacheMovement = cameraXY - volLightCacheOrigin - (noiseWindOffset - volLightCacheWind);
-	const bool rebuildLightCache = a_pass == VolumetricCloudPass::kMainViewAndCubemap &&
-	                               (!volLightCacheValid || sunAngleDifferenceDegrees > 0.25f ||
-									   cacheMovement.x * cacheMovement.x + cacheMovement.y * cacheMovement.y > MetersToGameUnits(1000.f) * MetersToGameUnits(1000.f));
-	if (rebuildLightCache) {
-		volLightCacheValid = false;
-		volLightCacheOrigin = cameraXY;
-		volLightCacheWind = noiseWindOffset;
-	}
+	const auto cirrusTextures = cirrusMapManager.GetTextures();
+	const bool renderCirrus = cirrus.enabled && bool(cirrusTextures);
 
 	// Update StructuredBuffer
 	VolumetricCloudSB sbData = {
@@ -414,9 +383,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.lowCloudBaseAltitude = KilometersToGameUnits(lowCloudBaseKm),
 		.lowCloudTopAltitude = KilometersToGameUnits(lowCloudTopKm),
 		.lowCloudTraceTopAltitude = KilometersToGameUnits(lowCloudTraceTopKm),
-		.weatherCenter = { KilometersToGameUnits(high.weatherCenter.x), KilometersToGameUnits(high.weatherCenter.y) },
-		.weatherWorldSize = KilometersToGameUnits(high.weatherWorldSize),
-		.highCloudEnabled = high.enabled ? 1.0f : 0.0f,
 		.lowNdfFrequency = { Util::Units::GAME_UNIT_TO_KM / low.ndfScale.x, Util::Units::GAME_UNIT_TO_KM / low.ndfScale.y },
 		.noiseWindOffset = noiseWindOffset,
 		// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
@@ -424,26 +390,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.noiseOffset = low.noiseOffset,
 		.lowDensityScale = std::max(low.densityScale, 0.f),
 		.noiseRoundness = std::clamp(low.noiseRoundness, 0.0f, 1.0f),
-		.highCellScale = high.cellScale,
-		.highCellWindSpeed = high.cellWindSpeed,
-		.highCellWarpScale = high.cellWarpScale,
-		.highCellWarpStrength = high.cellWarpStrength,
-		.highCellThickStrength = high.cellThickStrength,
-		.highAsCellThickStrength = high.asCellThickStrength,
-		.highCellThickPow = high.cellThickPow,
-		.highCloudBottom = KilometersToGameUnits(highCloudBottomKm),
-		.highCloudTop = KilometersToGameUnits(highCloudTopKm),
-		.highBottomCoverageScale = high.bottomCoverageScale,
-		.highHeightCurvePow = high.heightCurvePow,
-		.highDensityThreshold = high.densityThreshold,
-		.highDensitySoftness = high.densitySoftness,
-		.highCloudSoftness = high.softness,
-		.highWispScale = high.wispScale,
-		.highWispStrength = high.wispStrength,
-		.highDensityScale = std::max(high.densityScale, 0.f),
-		.highDensitySoftAContrast = high.densitySoftAContrast,
-		.highDensityModAIntensity = high.densityModAIntensity,
-		.highDensityModAContrast = high.densityModAContrast,
+		.cirrusEnabled = renderCirrus ? 1u : 0u,
+		.cirrusAltitude = KilometersToGameUnits(cirrus.GetAltitudeKm()),
+		.cirrusPatternFrequency = Util::Units::GAME_UNIT_TO_M / std::clamp(cirrus.patternScale, 100.f, 64000.f),
+		.cirrusDensityScale = std::max(cirrus.densityScale, 0.f),
+		.cirrusLightingScale = std::max(cirrus.lightingScale, 0.f),
 		.lightingScale = std::max(lighting.lightingScale, 0.f),
 		.sunExtinction = std::max(lighting.sunExtinction, 0.f),
 		.phaseForwardG = std::clamp(lighting.phaseForwardG, 0.f, 0.95f),
@@ -467,16 +418,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.shadowVolumeTop = KilometersToGameUnits(lowCloudTopKm),
 		.cloudWindDelta = windDelta,
 		.cloudShapeShear = windDir * KilometersToGameUnits(std::clamp(low.shapeShear, 0.f, 2.f)),
-		.lowHistoryConfidence = lowHistoryConfidence,
-		.highHistoryConfidence = highHistoryConfidence,
-		.highViewSteps = std::clamp(high.viewSteps, 8u, 256u),
 		.ndfAccelerationValid = ndfManager.accelerationValid ? 1u : 0u,
-		.crossLayerShadows = lighting.crossLayerShadows ? 1u : 0u,
-		.lightCacheSteps = std::clamp(lighting.cacheSteps, 4u, 32u),
-		.lightCacheOrigin = volLightCacheOrigin,
-		.lightCacheWindDelta = noiseWindOffset - volLightCacheWind,
-		.lightCacheRange = KilometersToGameUnits(256.f),
-		.lightCacheUpdatePhase = rebuildLightCache ? 8u : (volFrameIndex & 7u),
 		.previousViewProj = volHistoryViewProj,
 		.previousCamera = volHistoryCamera,
 		.previousFrameDim = volHistoryFrameDim,
@@ -485,8 +427,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Shared SRVs for both passes
 	auto ndfTextures = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
-	auto highTextures = highCloudMapManager.GetTextures(high);
-	if (!ndfTextures || (high.enabled && (!highTextures.highWeather || !highTextures.highCell || !highTextures.highWarp || !highTextures.highWisp)))
+	if (!ndfTextures)
 		return;
 
 	std::array<ID3D11ShaderResourceView*, 19> srvs = {
@@ -501,11 +442,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		ndfTextures.modeling,                                                                                          // t8 NDF modeling
 		texApShadow ? texApShadow->srv.get() : nullptr,                                                                // t9
 		texSvLut->srv.get(),                                                                                           // t10
-		highTextures.highWeather,                                                                                      // t11
+		renderCirrus ? cirrusTextures.weather : nullptr,                                                               // t11
 		ndfManager.accelerationValid ? ndfManager.texDistance->srv.get() : nullptr,                                    // t12
-		highTextures.highCell,                                                                                         // t13
-		highTextures.highWarp,                                                                                         // t14
-		highTextures.highWisp,                                                                                         // t15
+		renderCirrus ? cirrusTextures.patterns : nullptr,                                                              // t13
+		nullptr,                                                                                                       // t14
+		nullptr,                                                                                                       // t15
 		nullptr,                                                                                                       // t16 ambient SH (bound per pass)
 		cloudTopLutSrv.get(),                                                                                          // t17 Nubis top profile
 		cloudBottomLutSrv.get(),                                                                                       // t18 Nubis bottom profile
@@ -586,31 +527,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	}
 
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap) {
-		ID3D11UnorderedAccessView* nullCacheUav = nullptr;
-		ID3D11ShaderResourceView* nullCacheSrvs[2] = {};
-		context->CSSetUnorderedAccessViews(0, 1, &nullCacheUav, nullptr);
-		context->CSSetShaderResources(24, 2, nullCacheSrvs);
-		{
-			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-			globals::profiler->BeginPass("PhysicalSky::CloudLightCache");
-			auto* cacheUav = texLowCloudLightCache->uav.get();
-			context->CSSetUnorderedAccessViews(0, 1, &cacheUav, nullptr);
-			context->CSSetShader(csVolLowLightCache.get(), nullptr, 0);
-			context->Dispatch(16, 16, rebuildLightCache ? 4u : 1u);
-			if (high.enabled) {
-				cacheUav = texHighCloudLightCache->uav.get();
-				context->CSSetUnorderedAccessViews(0, 1, &cacheUav, nullptr);
-				context->CSSetShader(csVolHighLightCache.get(), nullptr, 0);
-				context->Dispatch(16, 16, rebuildLightCache ? 4u : 1u);
-			}
-			globals::profiler->EndPass();
-		}
-		context->CSSetUnorderedAccessViews(0, 1, &nullCacheUav, nullptr);
-		ID3D11ShaderResourceView* cacheSrvs[2] = {
-			texLowCloudLightCache->srv.get(),
-			high.enabled ? texHighCloudLightCache->srv.get() : nullptr
-		};
-		context->CSSetShaderResources(24, 2, cacheSrvs);
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11ShaderResourceView* nullTemporalSrvs[12] = {};
 		ID3D11ShaderResourceView* nullOutputs[2] = {};
@@ -676,7 +592,6 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 		volHistoryFrameDim = frameDim;
-		volLightCacheValid = true;
 		++volFrameIndex;
 	}
 
@@ -684,13 +599,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	{
 		ID3D11ShaderResourceView* nullSrvs[19] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[4] = {};
-		ID3D11ShaderResourceView* nullHistorySrvs[14] = {};
+		ID3D11ShaderResourceView* nullHistorySrvs[12] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};
 		context->CSSetShaderResources(0, 19, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
-		context->CSSetShaderResources(24, 14, nullHistorySrvs);
+		context->CSSetShaderResources(26, 12, nullHistorySrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetConstantBuffers(1, 1, nullCb);
 		context->CSSetSamplers(2, 3, nullSamplers);

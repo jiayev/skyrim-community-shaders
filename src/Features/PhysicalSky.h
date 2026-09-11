@@ -251,8 +251,6 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolCubeTraceTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTraceLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
-	eastl::unique_ptr<Texture3D> texLowCloudLightCache = nullptr;
-	eastl::unique_ptr<Texture3D> texHighCloudLightCache = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
@@ -261,7 +259,7 @@ struct PhysicalSky final : public Feature
 
 	TextureManager ndfTexManager{ "Cloud Map" };
 	NdfManager ndfManager;
-	HighCloudMapManager highCloudMapManager;
+	CirrusMapManager cirrusMapManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
 	struct VolumetricCloudSB
@@ -282,35 +280,17 @@ struct PhysicalSky final : public Feature
 		float lowCloudTopAltitude;
 		float lowCloudTraceTopAltitude;
 
-		float2 weatherCenter;
-		float weatherWorldSize;
-		float highCloudEnabled;
 		float2 lowNdfFrequency;
 		float2 noiseWindOffset;
 		float noiseFrequency;
 		float3 noiseOffset;
 		float lowDensityScale;
 		float noiseRoundness;
-		float2 highCellScale;
-		float highCellWindSpeed;
-		float2 highCellWarpScale;
-		float highCellWarpStrength;
-		float highCellThickStrength;
-		float highAsCellThickStrength;
-		float highCellThickPow;
-		float highCloudBottom;
-		float highCloudTop;
-		float highBottomCoverageScale;
-		float highHeightCurvePow;
-		float highDensityThreshold;
-		float highDensitySoftness;
-		float highCloudSoftness;
-		float2 highWispScale;
-		float highWispStrength;
-		float highDensityScale;
-		float highDensitySoftAContrast;
-		float highDensityModAIntensity;
-		float highDensityModAContrast;
+		uint cirrusEnabled;
+		float cirrusAltitude;
+		float cirrusPatternFrequency;
+		float cirrusDensityScale;
+		float cirrusLightingScale;
 		float lightingScale;
 		float sunExtinction;
 		float phaseForwardG;
@@ -335,28 +315,16 @@ struct PhysicalSky final : public Feature
 		float shadowVolumeTop;
 		float2 cloudWindDelta;
 		float2 cloudShapeShear;
-		float lowHistoryConfidence;
-		float highHistoryConfidence;
-		uint highViewSteps;
 		uint ndfAccelerationValid;
-		uint crossLayerShadows;
-		uint lightCacheSteps;
-		float2 lightCacheOrigin;
-		float2 lightCacheWindDelta;
-		float lightCacheRange;
-		uint lightCacheUpdatePhase;
 		float4x4 previousViewProj;
 		float3 previousCamera;
 		float2 previousFrameDim;
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 456);
+	static_assert(sizeof(VolumetricCloudSB) == 324);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
 	uint32_t volFrameIndex = 0;
-	bool volLightCacheValid = false;
-	float2 volLightCacheOrigin = {};
-	float2 volLightCacheWind = {};
 	bool volMainHistoryValid = false;
 	float2 volHistoryFrameDim = {};
 	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
@@ -370,8 +338,6 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolLowLightCache = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> csVolHighLightCache = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 

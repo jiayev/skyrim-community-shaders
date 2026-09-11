@@ -1,53 +1,29 @@
 # Cloud lighting
 
-## Solar visibility cache
+## Local solar occlusion
 
-The main view and cubemap share two local density probes followed by a cached
-solar column, following the sampling split described in Nubis Cubed. Density
-remains procedural NDF/profile/noise sampling.
+The main view and cubemap share local weighted sunlight probes. Their occlusion
+feeds the non-storm profile response below. Probe count is
+`int(10 - 6 * saturate((viewDistanceMetres - 512) * 0.00040192925))`.
+The nominal extent is `240 - saturate(height * 3.3333333) * 120` metres.
+Fractional sample indices start at 0.5; cubic spacing, a deterministic spatial
+jitter, and forward-angle density weights form the local estimate. All local
+noise probes use mip 2 without the near-camera folded detail.
 
-Local extent is `240 - saturate(height * 3.3333333) * 120` metres. The two
-intervals use cubic spacing adjusted by view/light angle and deterministic
-midpoint samples. The distant column starts after the local extent. Both paths
-integrate `extinction * (1 + 3 * localHeight^4)` in metres. The same density
+The response is calibrated to that local estimator, not an integral through the
+entire cloud shell. A long grazing column can drive the soft-transmission term
+to zero and over-attenuate the scattering volume. Distant same-layer occluders
+outside the local probe support and cross-layer occlusion are not represented
+by this lighting approximation.
+
+Local probes use `extinction * (1 + 3 * localHeight^4)` in metres. The same density
 feeds ground cloud shadows; `sunExtinction` scales solar attenuation separately
 from view opacity.
 
-Each layer has one `densityScale` in inverse metres. Low-cloud noise returns a
-normalized reconstruction and is multiplied by that scale once. High-cloud
-weather/cell density includes its alpha modulation and is likewise scaled once;
-its former density and view-absorption factors are consolidated. There is no
-separate coverage-dependent light absorption. Zero density scale removes the
-layer from view extinction, solar columns and its ground shadow density.
-The low default remains 0.09; the high default is 0.175, combining the former
-0.35 and 0.5 defaults. These are resource-specific optical scales. A CPU sample
-of the bundled low noise at coverage 0.25/0.5/0.75, profile 0.5/1 and roundness
-0.5 gives mean-density attenuation lengths of roughly 14–53 m at scale 0.09;
-this is not a spatial cloud transmission measurement or a weather calibration.
-
-Two 64 x 64 x 16 R16_FLOAT volumes store each layer's solar column, for 256 KiB
-total. Low/high XY spans are 256/1024 km. Signed-square placement concentrates
-cells near the captured camera origin; Z is spherical altitude. Coordinates
-advect with shared wind. Columns use quadratic midpoint quadrature with
-`cacheSteps` (default 16, 4–32) and stop at the planet.
-
-Cache lookup locates the neighbouring nonuniform grid points, then computes
-interpolation weights from their physical positions. Direct linear filtering
-of signed-square-root UVs introduces a square-root cusp on both centre axes,
-even for a perfectly linear optical-depth field. Physical-distance weights
-reproduce that field across the axes without the cusp. The outer 10% blends
-to a bounded four-probe-per-segment fallback.
-
-Each successful capture updates one eighth of the cache slices. Initial
-generation, density/texture changes, time discontinuities, a 1 km displacement
-from the advected origin or a large light-direction change rebuild all slices.
-DR changes retain temporal history with the previous capture's viewport.
-`crossLayerShadows` samples the other layer at its solar entry point. It does
-not add the other layer to both cache integrals.
-
-The ambient response below uses the local profile rather than an upward
-optical-depth cache. Finite solar quadrature and coarse distant cells can still
-miss narrow occluders, especially at grazing sun angles.
+The NDF layer has one `densityScale` in inverse metres. Its normalized noise
+reconstruction is multiplied by that scale once; zero removes its view
+extinction and shadow density. The default 0.09 is a resource-specific optical
+scale, not a universal weather calibration.
 
 ## Profile scattering response
 
@@ -84,15 +60,20 @@ Ambient response uses height, coverage/type product, broad solar transmission
 `ambientBase`, `ambientDensity`, `ambientFloor` and `ambientStrength`. It
 multiplies isotropic radiance reconstructed from the project's atmospheric SH
 probe. `lightingScale` scales both source terms. Atmospheric solar transmission
-and other-layer solar visibility multiply the solar source; aerial perspective
-is applied after view integration.
+multiplies the solar source; aerial perspective is applied after view integration.
 
-High clouds use the same response with their existing procedural weather/cell
-profile and extinction. This is an adaptation for the project's volumetric high
-layer, not a replacement with a thin cirrus texture or a voxel density model.
-The bundled low-cloud noise reducer is unchanged. Low and high cloud density
-therefore remain project resource adaptations. Default lighting values are
-project starting values, not a universal weather preset.
+Solar colour uses the top-of-atmosphere irradiance and per-position atmospheric
+transmittance. Planet visibility is evaluated against each position's local
+horizon and a finite solar disc, so elevated clouds can remain sunlit after
+lower clouds enter the planet shadow. Sun/moon source selection retains the
+astronomical sun while any part of the visible cloud region can receive it.
+Ground-level sunset fading is not applied to the solar source. Spatial RGB
+variation therefore comes from the atmosphere and geometry, not a uniform
+sunset colour multiplier.
+
+The bundled low-cloud noise reducer is unchanged. Its density and the default
+lighting values remain project resource adaptations, not a universal weather
+preset.
 
 Old top/bottom ambient multipliers, upward AO, separate high-cloud phase/MS
 controls, high sky blending, tinted extinction, and secondary-phase scaling are
@@ -106,24 +87,47 @@ Low-cloud NDF height decodes as `ndfAltitudeOffset + ndfAltitudeScale * value`
 metres above the worldspace reference altitude. The Low Clouds controls are
 NDF Base Altitude (default 256 m) and NDF Height Span (default 1792 m). The NDF
 RG pair controls each column's bottom and top within that interval. The same
-validated interval bounds ray traversal, light caches and ground cloud shadows.
+validated interval bounds ray traversal and ground cloud shadows.
 The base is limited to 0–20000 m and the span to 1–20000 m. Changing either
-control invalidates temporal history and rebuilds the lighting cache.
+control invalidates temporal history.
 
 Shear shifts modeling coverage/type using the local NDF height fraction and
 leaves height sampling at the original column. Generated and imported maps
 share this decoding. Missing settings use the defaults; obsolete low-cloud
-base/thickness keys are ignored. High clouds retain their independent
-procedural weather height band because that representation does not use the
-low NDF.
+base/thickness keys are ignored. Cirrus has one spherical altitude, default
+2048 m; it has no volumetric thickness or low-NDF height channel.
+
+## Cirrus sheet
+
+Cirrus uses a separate two-dimensional weather map: R is coverage and G is type.
+The RGB pattern channels are wispy, round and streaky; each is squared before
+interpolating B to R to G at type 0, 0.5 and 1. With coverage `c` and interpolated
+pattern `p`, the unscaled profile is `max(p, 1e-10)^(1.9 - 1.8*c) * saturate(2*c^3)`.
+`cirrus.densityScale` multiplies this profile (default 2). It absorbs the constant
+clear-weather density multiplier; storm modulation is not implemented.
+
+Four deterministic light probes use indices 0.5, 1.5, 2.5 and 3.5, angular cubic
+spacing over a nominal 120 m extent, and `13.5 * sqrt(density)` weights. Solar
+response is `cirrus.lightingScale * 64 * exp(-0.1 * sunExtinction * occlusion)`
+times the shared phase function and per-position atmospheric sunlight. Ambient
+response is `ambientStrength * cirrus.lightingScale * (viewDirection.z + 1)`
+times `(1 - 0.3*profile)^0.2` and sky radiance. Both clear-weather storm factors
+are one. The sheet integrates `T_step = exp(-10*density)` once; its opacity does
+not gain a grazing-angle path-length multiplier.
+
+The main volume and sheet compose in distance order, then use the existing
+representative-depth aerial perspective and full-resolution temporal history.
+The old weather/cell/warp/wisp volume and its view-step budget are absent.
+Old `cloudLayer.high` saved settings are ignored; `cloudLayer.cirrus` loads its
+own defaults. See [cirrus inputs](volumetric-cloud-texture-resources.md#cirrus-inputs).
 
 ## Validation
 
-Static/CPU checks cover host/shader fields and resources, nonuniform cache
-interpolation across both axes, the non-storm response equations, and parameterized NDF
-height decoding. These checks do not establish runtime appearance or performance.
-GPU acceptance still needs camera translation across both axes, cache refreshes,
-layer overlap, sunrise/sunset, and generated/imported NDF heights.
+Static/CPU checks cover host/shader fields and resources, the non-storm response
+equations, local probe positions/weights, and parameterized NDF height decoding. CPU atmosphere checks
+cover spatial RGB differences and altitude-dependent sunset visibility. These checks do not establish runtime appearance or performance.
+GPU acceptance still needs camera motion, layer overlap, sunrise/sunset, and
+generated/imported NDF heights.
 
 -   [Nubis Evolved, SIGGRAPH 2022](https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-NubisEvolved-NoVideos.pdf)
 -   [Nubis Cubed, SIGGRAPH 2023 materials](https://advances.realtimerendering.com/s2023/)

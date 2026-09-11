@@ -2,7 +2,7 @@
 
 See [cloud sampling and motion](cloud-sampling.md) for the view march,
 empty-space acceleration, motion units and history metadata. See
-[cloud lighting and reconstruction](cloud-lighting.md) for light caches, profile scattering
+[cloud lighting and reconstruction](cloud-lighting.md) for local solar occlusion, profile scattering
 and render-target formats.
 
 ## Low-cloud model
@@ -30,21 +30,17 @@ the internal and boundary variation of that mass.
 | Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated    |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
-| High weather              |   `t11` | `Texture2D<float4>`       | GPU-generated    |
+| Cirrus weather            |   `t11` | `Texture2D<float2>`       | generated / DDS  |
 | Low-cloud distance        |   `t12` | `Texture2D<float>`        | GPU-generated    |
-| High cell                 |   `t13` | `Texture2D<float4>`       | GPU-generated    |
-| High warp                 |   `t14` | `Texture2D<float4>`       | GPU-generated    |
-| High wisp                 |   `t15` | `Texture2D<float4>`       | GPU-generated    |
+| Cirrus patterns           |   `t13` | `Texture2D<float3>`       | generated / DDS  |
 | Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer         |
 | Nubis top profile         |   `t17` | `Texture2D<unorm float>`  | `top_lut.dds`    |
 | Nubis bottom profile      |   `t18` | `Texture2D<unorm float>`  | `bottom_lut.dds` |
-| Low-cloud light cache     |   `t24` | `Texture3D<float>`        | GPU-generated    |
-| High-cloud light cache    |   `t25` | `Texture3D<float>`        | GPU-generated    |
 
 Temporal reconstruction reads screen history at t26–t28 and compact screen
 traces at t29–t31. Cube history occupies t32–t34 and compact cube traces t35–t37.
 Each group is transmittance, radiance, metadata, with R16_FLOAT, RGBA16_FLOAT,
-RGBA16_FLOAT storage respectively. Light caches are R16_FLOAT solar optical-depth volumes. See [cloud sampling](cloud-sampling.md) and
+RGBA16_FLOAT storage respectively. See [cloud sampling](cloud-sampling.md) and
 [cloud lighting](cloud-lighting.md) for scheduling and history contracts.
 
 The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
@@ -72,7 +68,7 @@ dimensional_profile = coverage * vertical_profile
 
 `Low Cloud Base Altitude` and `Layer Thickness` map normalized NDF height 0-1
 into physical altitude. `NDF Scale` independently controls the X/Y repeat
-length; it is not inherited from the high-cloud weather map or the 3D noise.
+length; it is independent of the 3D noise repeat length.
 
 The generator remaps and powers two coverage signals, combines them with max
 and gain, and separately remaps shared noise into profile types. Optional local
@@ -106,25 +102,43 @@ length of the volume; it does not change NDF coverage, height or cloud species.
 U is profile type and V is `1 - localHeight`, matching their stored orientation.
 Top and bottom type occupy modeling G and B.
 
-## Independent high clouds
+## Cirrus inputs
 
-High clouds retain their separate implementation and absolute altitude band.
-They do not sample the low-cloud NDF or `nubis.dds`. High Weather at `t11` uses:
+Cirrus is a two-dimensional spherical sheet. It shares the main NDF world UV
+and wind displacement, with an independent pattern repeat length (default
+`1 / 0.0002331` metres). It does not sample `nubis.dds`.
 
-| Channel | Meaning                                    |
-| ------- | ------------------------------------------ |
-| R       | high-cloud coverage                        |
-| G       | Altostratus/Altocumulus type               |
-| B       | reserved                                   |
-| A       | density modulation and optical mass weight |
+| Texture       | Channels                                                  |
+| ------------- | --------------------------------------------------------- |
+| Weather, t11  | R coverage, G type, both 0–1                              |
+| Patterns, t13 | R wispy, G round, B streaky; squared by the density query |
+
+Both default to local GPU generation. Weather uses two independently selectable
+noise inputs (generated Alligator, Perlin or Perlin-Worley, or external scalar
+DDS), signed remapping, frequency and offset. Generated inputs default to Perlin.
+Output remap endpoints control coverage and type independently; they are project
+starting values, not a universal weather preset. No storm or local-influence
+pass participates.
+
+The RGB pattern generator is a project-authored substitute: warped anisotropic
+gradient noise forms wispy/streaky patterns, with cellular round patterns. Seed,
+warp and detail are configurable. This generator is not an implementation of an
+original pattern-authoring algorithm. It supplies the channel meanings required
+by the Nubis cirrus profile; visual equivalence to authored patterns is not claimed.
+
+An external linear 2D DDS can replace the weather map (at least RG) or patterns
+(at least RGB), independently. Inputs are selected in Cirrus texture inputs;
+incompatible or missing explicit inputs disable the sheet and show an input
+error instead of reusing stale textures. Generated weather is RG16_FLOAT and
+patterns are RGBA16_FLOAT, each 512 square with a mip chain.
 
 ## Generator lifecycle
 
 The procedural low NDF and acceleration rebuild on composition, noise or source
 changes. Shader reload invalidates generation. Animated wind and world repeat
 scale apply during sampling. Map replacement invalidates temporal history.
-Imported pairs refresh acceleration before use. High-cloud generation remains
-independent.
+Imported pairs refresh acceleration before use. Cirrus input changes rebuild
+its maps and invalidate cloud history. Disabled cirrus skips generation.
 
 ## Static validation checklist
 
@@ -133,7 +147,7 @@ independent.
 -   NDF coverage is generated independently from `nubis.dds`.
 -   Empty or reversed height intervals are rejected by the density query.
 -   Noise is queried only inside positive NDF/profile support, with zero density outside it.
--   High Weather contains a valid mip 2 and keeps A zero outside coverage.
+-   Cirrus weather/pattern inputs are linear 2D RG/RGB resources at t11/t13.
 
 ## Implementation references
 
@@ -141,6 +155,6 @@ independent.
 -   low NDF settings: `src/Features/PhysicalSky/Ndf.h`
 -   DDS loading and bindings: `src/Features/PhysicalSky/VolumetricClouds.cpp`
 -   low NDF generator shader: `features/Physical Sky/Shaders/PhysicalSky/NdfGenerate.cs.hlsl`
--   independent high-cloud generator shader: `features/Physical Sky/Shaders/PhysicalSky/HighCloudMapGen.cs.hlsl`
+-   cirrus weather/pattern generator: `features/Physical Sky/Shaders/PhysicalSky/CirrusGenerate.cs.hlsl`
 -   density sampling: `features/Physical Sky/Shaders/PhysicalSky/Volumetrics.cs.hlsl`
 -   noise reconstruction: `features/Physical Sky/Shaders/PhysicalSky/CloudNoise.hlsli`

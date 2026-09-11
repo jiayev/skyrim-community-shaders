@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstring>
 #include <imgui_stdlib.h>
-#include <numbers>
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
 
@@ -510,276 +509,243 @@ NdfTextureSet NdfManager::GetNdf(const NdfSettings& settings, TextureManager& te
 	return generatedValid && texHeight && texModeling ? NdfTextureSet{ texHeight->srv.get(), texModeling->srv.get() } : NdfTextureSet{};
 }
 
-namespace
+void CirrusMapManager::SetupResources()
 {
-	constexpr uint32_t kHistogramBins = 256u;
-	constexpr uint32_t kHistogramGroups = 2u;
-	constexpr uint32_t kThresholdCount = 2u;
-
-	void HashCombine(size_t& seed, size_t value)
-	{
-		seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-	}
-
-	template <class T>
-	void HashValue(size_t& seed, const T& value)
-	{
-		HashCombine(seed, std::hash<T>{}(value));
-	}
-
-	eastl::unique_ptr<Texture2D> CreateCloudMapTexture(uint32_t width, uint32_t height, const char* name)
-	{
-		D3D11_TEXTURE2D_DESC desc{
-			.Width = width,
-			.Height = height,
-			.MipLevels = 0,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
-			.SampleDesc = { 1, 0 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET,
-			.CPUAccessFlags = 0,
-			.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS
-		};
-		auto texture = eastl::make_unique<Texture2D>(desc, name);
-		texture->CreateSRV({
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = static_cast<UINT>(-1) },
-		});
-		texture->CreateUAV({
-			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 },
-		});
-		return texture;
-	}
-
-	eastl::unique_ptr<Texture2D> CreateFieldTexture(uint32_t width, uint32_t height, const char* name)
-	{
-		D3D11_TEXTURE2D_DESC desc{
-			.Width = width,
-			.Height = height,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-			.SampleDesc = { 1, 0 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-			.CPUAccessFlags = 0,
-			.MiscFlags = 0
-		};
-		auto texture = eastl::make_unique<Texture2D>(desc, name);
-		texture->CreateSRV({
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 },
-		});
-		texture->CreateUAV({
-			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 },
-		});
-		return texture;
-	}
-}
-
-void HighCloudMapManager::SetupResources()
-{
-	cbGen = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GenCB>(), "PhysicalSky::HighCloudMapGenCB");
-
-	D3D11_BUFFER_DESC histogramDesc{
-		.ByteWidth = kHistogramBins * kHistogramGroups * sizeof(uint32_t),
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_UNORDERED_ACCESS,
-		.CPUAccessFlags = 0,
-		.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS,
-		.StructureByteStride = 0
+	generationCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<GenerationParameters>());
+	noiseCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<NdfNoiseParameters>());
+	texWeather = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16_FLOAT, "PhysicalSky::CirrusWeather", true);
+	texPatterns = CreateNdfTexture(kDimension, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::CirrusPatterns", true);
+	for (auto& texture : noiseTextures)
+		texture = CreateNdfTexture(kDimension, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::CirrusWeatherNoise", true);
+	D3D11_SAMPLER_DESC desc{
+		.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+		.AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
+		.AddressV = D3D11_TEXTURE_ADDRESS_WRAP,
+		.AddressW = D3D11_TEXTURE_ADDRESS_WRAP,
+		.ComparisonFunc = D3D11_COMPARISON_NEVER,
+		.MinLOD = 0.f,
+		.MaxLOD = D3D11_FLOAT32_MAX
 	};
-	bufHistogram = eastl::make_unique<Buffer>(histogramDesc, nullptr, "PhysicalSky::HighCloudMapHistogram");
-	bufHistogram->CreateUAV({
-		.Format = DXGI_FORMAT_R32_TYPELESS,
-		.ViewDimension = D3D11_UAV_DIMENSION_BUFFER,
-		.Buffer = { .FirstElement = 0, .NumElements = kHistogramBins * kHistogramGroups, .Flags = D3D11_BUFFER_UAV_FLAG_RAW },
-	});
-
-	D3D11_BUFFER_DESC thresholdDesc{
-		.ByteWidth = kThresholdCount * sizeof(float),
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
-		.CPUAccessFlags = 0,
-		.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED,
-		.StructureByteStride = sizeof(float)
-	};
-	bufThresholds = eastl::make_unique<Buffer>(thresholdDesc, nullptr, "PhysicalSky::HighCloudMapThresholds");
-	bufThresholds->CreateSRV({
-		.Format = DXGI_FORMAT_UNKNOWN,
-		.ViewDimension = D3D11_SRV_DIMENSION_BUFFER,
-		.Buffer = { .FirstElement = 0, .NumElements = kThresholdCount },
-	});
-	bufThresholds->CreateUAV({
-		.Format = DXGI_FORMAT_UNKNOWN,
-		.ViewDimension = D3D11_UAV_DIMENSION_BUFFER,
-		.Buffer = { .FirstElement = 0, .NumElements = kThresholdCount, .Flags = 0 },
-	});
-
+	sampler = nullptr;
+	DX::ThrowIfFailed(globals::d3d::device->CreateSamplerState(&desc, sampler.put()));
 	CompileShaders();
 }
 
-void HighCloudMapManager::CompileShaders()
+void CirrusMapManager::CompileShaders()
 {
-	struct PassInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* target;
-		const char* mode;
+	generatedValid = false;
+	noiseValid.fill(false);
+	outputs = {};
+	weatherProgram = nullptr;
+	patternsProgram = nullptr;
+	noiseProgram = nullptr;
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "cs_5_0", "generateWeather")))
+		weatherProgram.attach(raw);
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\CirrusGenerate.cs.hlsl", {}, "cs_5_0", "generatePatterns")))
+		patternsProgram.attach(raw);
+	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfNoise.cs.hlsl", {}, "cs_5_0")))
+		noiseProgram.attach(raw);
+}
+
+bool CirrusMapManager::ShadersReady() const
+{
+	return weatherProgram && patternsProgram && noiseProgram && generationCb && noiseCb && sampler && texWeather && texPatterns;
+}
+
+CirrusTextureSet CirrusMapManager::GetTextures() const
+{
+	return outputs;
+}
+
+bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& textures)
+{
+	const bool hadOutputs = bool(outputs);
+	const auto fail = [&]() {
+		outputs = {};
+		generatedValid = false;
+		return hadOutputs;
 	};
-	const std::array passes = {
-		PassInfo{ &csFields, "0" },
-		PassInfo{ &csHistogram, "1" },
-		PassInfo{ &csSolve, "2" },
-		PassInfo{ &csCompose, "3" },
-	};
-	const auto path = std::filesystem::path("Data\\Shaders\\PhysicalSky\\HighCloudMapGen.cs.hlsl");
-	for (const auto& pass : passes) {
-		*pass.target = nullptr;
-		std::vector<std::pair<const char*, const char*>> defines{ { "HIGHCLOUDMAPGEN", pass.mode } };
-		if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), defines, "cs_5_0", "main")))
-			pass.target->attach(raw);
+	if (!ShadersReady())
+		return fail();
+	const std::array<std::string, 4> paths{ settings.noise[0].texturePath, settings.noise[1].texturePath, settings.weatherPath, settings.patternsPath };
+	for (size_t i = 0; i < paths.size(); ++i)
+		if (paths[i] != sourcePaths[i] && !paths[i].empty() && !textures.texList.contains(paths[i]))
+			if (!textures.LoadTexture(paths[i]))
+				logger::warn("Cirrus input could not be loaded: {}", paths[i]);
+	sourcePaths = paths;
+	std::array<ID3D11ShaderResourceView*, 4> sources = {};
+	for (uint32_t i = 2; i < 4; ++i) {
+		if (paths[i].empty())
+			continue;
+		sources[i] = textures.Query(paths[i]);
+		if (!NdfManager::IsTextureNdf(sources[i], i == 2 ? 2u : 3u))
+			return fail();
 	}
-	generatedHash = 0;
-}
-
-bool HighCloudMapManager::ShadersReady() const
-{
-	return csFields && csHistogram && csSolve && csCompose;
-}
-
-bool HighCloudMapManager::EnsureResources(const HighCloudSettings& settings)
-{
-	const uint32_t dimension = std::clamp(settings.weatherDim, 128u, 1024u);
-	if (generatedWeatherDim != dimension || !texHighWeather || !texHighCell || !texHighWarp || !texHighWisp || !texFieldHigh) {
-		texHighWeather = CreateCloudMapTexture(dimension, dimension, "PhysicalSky::HighWeather");
-		texHighCell = CreateCloudMapTexture(dimension, dimension, "PhysicalSky::HighCell");
-		texHighWarp = CreateCloudMapTexture(dimension, dimension, "PhysicalSky::HighWarp");
-		texHighWisp = CreateCloudMapTexture(dimension, dimension, "PhysicalSky::HighWisp");
-		texFieldHigh = CreateFieldTexture(dimension, dimension, "PhysicalSky::HighCloudField");
-		generatedWeatherDim = dimension;
-	}
-	return texHighWeather && texHighCell && texHighWarp && texHighWisp && texFieldHigh;
-}
-
-void HighCloudMapManager::GenerateTextures(const HighCloudSettings& settings)
-{
-	if (!ShadersReady() || !cbGen || !bufHistogram || !bufThresholds)
-		return;
-
-	size_t hash = 0;
-	HashValue(hash, settings.weatherDim);
-	HashValue(hash, settings.weatherSeed);
-	HashValue(hash, settings.coverage);
-	HashValue(hash, settings.coverageEdgeWidth);
-	HashValue(hash, settings.frontStrength);
-	HashValue(hash, settings.frontBearing);
-	HashValue(hash, settings.altostratusWeight);
-	HashValue(hash, settings.altocumulusWeight);
-	if (hash == 0)
-		hash = 1;
-	if (hash == generatedHash)
-		return;
-	if (!EnsureResources(settings))
-		return;
-
-	const float bearingRadians = settings.frontBearing * (std::numbers::pi_v<float> / 180.0f);
-	const float rawX = std::cos(bearingRadians);
-	const float rawY = std::sin(bearingRadians);
-	const float dominant = std::max(std::abs(rawX), std::abs(rawY));
-	const float normalX = std::round(rawX / std::max(dominant, 1e-3f) * 2.0f);
-	const float normalY = std::round(rawY / std::max(dominant, 1e-3f) * 2.0f);
-	const float asWeight = std::max(settings.altostratusWeight, 0.0f);
-	const float acWeight = std::max(settings.altocumulusWeight, 0.0f);
-	const float weightSum = asWeight + acWeight;
-
-	GenCB data{
-		.weatherDim = { generatedWeatherDim, generatedWeatherDim },
-		.seed = settings.weatherSeed,
-		.solveRound = 0u,
-		.coverage = std::clamp(settings.coverage, 0.0f, 1.0f),
-		.highCoverageEdgeWidth = std::max(settings.coverageEdgeWidth, 0.05f),
-		.frontStrength = std::clamp(settings.frontStrength, 0.0f, 1.0f),
-		.asShare = weightSum > 1e-5f ? asWeight / weightSum : 1.0f,
-		.frontNormal = { normalX, normalY },
-		.frontTangent = { -normalY, normalX },
-		.padding = { 0.0f, 0.0f, 0.0f, 0.0f },
-	};
-
 	auto* context = globals::d3d::context;
-	const uint32_t groups = (generatedWeatherDim + 7u) >> 3;
-	ID3D11UnorderedAccessView* nullUavs[4] = {};
-	ID3D11ShaderResourceView* nullSrvs[2] = {};
-	const auto upload = [&](uint32_t round) {
-		data.solveRound = round;
-		cbGen->Update(data);
-		ID3D11Buffer* cb = cbGen->CB();
-		context->CSSetConstantBuffers(1, 1, &cb);
+	if (!sources[2]) {
+		for (uint32_t i = 0; i < 2; ++i) {
+			if (!paths[i].empty()) {
+				sources[i] = textures.Query(paths[i]);
+				if (!NdfManager::IsTextureNdf(sources[i], 1))
+					return fail();
+				continue;
+			}
+			auto data = settings.noise[i].parameters;
+			data.type = std::min(data.type, 2u);
+			data.repetitions = std::clamp(data.repetitions, 1u, 8u);
+			data.frequency = std::clamp(data.frequency, 1u, std::min(128u, kDimension / (2u * data.repetitions)));
+			data.octaves = std::clamp(data.octaves, 1u, 8u);
+			data.lacunarity = std::clamp(data.lacunarity, 1u, 4u);
+			data.persistence = FiniteClamp(data.persistence, 0.f, 1.f, 0.5f);
+			data.contrast = FiniteClamp(data.contrast, 0.1f, 8.f, 1.f);
+			data.bias = FiniteClamp(data.bias, -1.f, 1.f, 0.f);
+			data.responseExponent = FiniteClamp(data.responseExponent, 0.1f, 8.f, 1.f);
+			data.padding = {};
+			if (!noiseValid[i] || std::memcmp(&generatedNoise[i], &data, sizeof(data)) != 0) {
+				noiseCb->Update(data);
+				auto* cb = noiseCb->CB();
+				auto* uav = noiseTextures[i]->uav.get();
+				context->CSSetConstantBuffers(1, 1, &cb);
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+				context->CSSetShader(noiseProgram.get(), nullptr, 0);
+				context->Dispatch((kDimension + 7u) >> 3, (kDimension + 7u) >> 3, 1);
+				uav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+				context->GenerateMips(noiseTextures[i]->srv.get());
+				cb = nullptr;
+				context->CSSetConstantBuffers(1, 1, &cb);
+				context->CSSetShader(nullptr, nullptr, 0);
+				generatedNoise[i] = data;
+				noiseValid[i] = true;
+				generatedValid = false;
+			}
+			sources[i] = noiseTextures[i]->srv.get();
+		}
+	}
+	GenerationParameters data{
+		.weather = settings.weather,
+		.seed = settings.patternSeed,
+		.warp = FiniteClamp(settings.patternWarp, 0.f, 0.5f, 0.15f),
+		.detail = FiniteClamp(settings.patternDetail, 0.f, 1.f, 0.35f)
 	};
-
-	upload(0u);
-	{
-		ID3D11UnorderedAccessView* uav = texFieldHigh->uav.get();
+	for (uint32_t i = 0; i < 2; ++i) {
+		auto& layer = data.weather[i];
+		layer.noise = i;
+		layer.frequency = FiniteClamp(layer.frequency, 0.f, 64.f, 1.f);
+		layer.exponent = 1.f;
+		layer.padding0 = 0.f;
+		layer.offset.x = FiniteClamp(layer.offset.x, -10000.f, 10000.f, 0.f);
+		layer.offset.y = FiniteClamp(layer.offset.y, -10000.f, 10000.f, 0.f);
+		layer.padding1 = {};
+		SanitizeRange(layer.range);
+	}
+	if (generatedValid && generatedSources == sources && generatedRevision == textures.revision && std::memcmp(&data, &generatedData, sizeof(data)) == 0)
+		return false;
+	generationCb->Update(data);
+	auto* cb = generationCb->CB();
+	auto* samp = sampler.get();
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetSamplers(0, 1, &samp);
+	if (!sources[2]) {
+		auto* uav = texWeather->uav.get();
+		context->CSSetShaderResources(0, 2, sources.data());
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-		context->CSSetShader(csFields.get(), nullptr, 0);
-		context->Dispatch(groups, groups, 1);
-		context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
+		context->CSSetShader(weatherProgram.get(), nullptr, 0);
+		context->Dispatch((kDimension + 7u) >> 3, (kDimension + 7u) >> 3, 1);
+		uav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->GenerateMips(texWeather->srv.get());
 	}
-
-	for (uint32_t round = 0u; round < 2u; ++round) {
-		upload(round);
-		const UINT clearValues[4] = {};
-		context->ClearUnorderedAccessViewUint(bufHistogram->uav.get(), clearValues);
-		std::array<ID3D11ShaderResourceView*, 2> srvs = { texFieldHigh->srv.get(), bufThresholds->srv.get() };
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		ID3D11UnorderedAccessView* histogram = bufHistogram->uav.get();
-		context->CSSetUnorderedAccessViews(0, 1, &histogram, nullptr);
-		context->CSSetShader(csHistogram.get(), nullptr, 0);
-		context->Dispatch(groups, groups, 1);
-		context->CSSetShaderResources(0, 2, nullSrvs);
-		context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
-
-		std::array<ID3D11UnorderedAccessView*, 2> solveUavs = { bufHistogram->uav.get(), bufThresholds->uav.get() };
-		context->CSSetUnorderedAccessViews(0, (uint)solveUavs.size(), solveUavs.data(), nullptr);
-		context->CSSetShader(csSolve.get(), nullptr, 0);
-		context->Dispatch(1, 1, 1);
-		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+	if (!sources[3]) {
+		auto* uav = texPatterns->uav.get();
+		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
+		context->CSSetShader(patternsProgram.get(), nullptr, 0);
+		context->Dispatch((kDimension + 7u) >> 3, (kDimension + 7u) >> 3, 1);
+		uav = nullptr;
+		context->CSSetUnorderedAccessViews(1, 1, &uav, nullptr);
+		context->GenerateMips(texPatterns->srv.get());
 	}
-
-	{
-		std::array<ID3D11ShaderResourceView*, 2> srvs = { texFieldHigh->srv.get(), bufThresholds->srv.get() };
-		std::array<ID3D11UnorderedAccessView*, 4> uavs = { texHighWeather->uav.get(), texHighCell->uav.get(), texHighWarp->uav.get(), texHighWisp->uav.get() };
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(csCompose.get(), nullptr, 0);
-		context->Dispatch(groups, groups, 1);
-		context->CSSetShaderResources(0, 2, nullSrvs);
-		context->CSSetUnorderedAccessViews(0, 4, nullUavs, nullptr);
-	}
-
+	ID3D11ShaderResourceView* nullSrvs[2] = {};
+	context->CSSetShaderResources(0, 2, nullSrvs);
+	cb = nullptr;
+	samp = nullptr;
+	context->CSSetConstantBuffers(1, 1, &cb);
+	context->CSSetSamplers(0, 1, &samp);
 	context->CSSetShader(nullptr, nullptr, 0);
-	ID3D11Buffer* nullCb = nullptr;
-	context->CSSetConstantBuffers(1, 1, &nullCb);
-	context->GenerateMips(texHighWeather->srv.get());
-	context->GenerateMips(texHighCell->srv.get());
-	context->GenerateMips(texHighWarp->srv.get());
-	context->GenerateMips(texHighWisp->srv.get());
-	generatedHash = hash;
+	outputs = { sources[2] ? sources[2] : texWeather->srv.get(), sources[3] ? sources[3] : texPatterns->srv.get() };
+	generatedSources = sources;
+	generatedData = data;
+	generatedRevision = textures.revision;
+	generatedValid = true;
+	return true;
 }
 
-HighCloudTextureSet HighCloudMapManager::GetTextures(const HighCloudSettings& settings)
+#define I18N_KEY_PREFIX "feature.physical_sky."
+
+void CirrusMapManager::DrawSettings(CirrusSettings& settings, TextureManager& textures)
 {
-	GenerateTextures(settings);
-	return {
-		.highWeather = texHighWeather ? texHighWeather->srv.get() : nullptr,
-		.highCell = texHighCell ? texHighCell->srv.get() : nullptr,
-		.highWarp = texHighWarp ? texHighWarp->srv.get() : nullptr,
-		.highWisp = texHighWisp ? texHighWisp->srv.get() : nullptr,
+	ImGui::SeparatorText(T(TKEY("cirrus"), "Cirrus"));
+	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &settings.enabled);
+	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &settings.altitude, 1.f, 24000.f, "%.0f m");
+	ImGui::SliderFloat(T(TKEY("cirrus_pattern_scale"), "Pattern Repeat Length"), &settings.patternScale, 100.f, 64000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
+	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &settings.densityScale, 0.f, 4.f, "%.3f");
+	ImGui::SliderFloat(T(TKEY("cirrus_lighting_scale"), "Cirrus Lighting Scale"), &settings.lightingScale, 0.f, 4.f, "%.3f");
+	const auto textureChoice = [&](const char* label, std::string& path, uint32_t channels) {
+		const char* generated = T(TKEY("ndf_type_procedural"), "Procedural");
+		if (ImGui::BeginCombo(label, path.empty() ? generated : path.c_str())) {
+			if (ImGui::Selectable(generated, path.empty()))
+				path.clear();
+			for (const auto& choice : textures.ListPaths())
+				if (ImGui::Selectable(choice.c_str(), path == choice))
+					path = choice;
+			ImGui::EndCombo();
+		}
+		if (!path.empty() && !NdfManager::IsTextureNdf(textures.Query(path), channels))
+			ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible linear 2D texture."));
 	};
+	if (ImGui::TreeNode(T(TKEY("cirrus_texture_inputs"), "Cirrus texture inputs"))) {
+		textures.DrawUI();
+		ImGui::TreePop();
+	}
+	textureChoice(T(TKEY("cirrus_weather_rg"), "Coverage / Type RG"), settings.weatherPath, 2);
+	textureChoice(T(TKEY("cirrus_patterns_rgb"), "Wispy / Round / Streaky RGB"), settings.patternsPath, 3);
+	if (settings.patternsPath.empty()) {
+		ImGui::InputScalar(T(TKEY("cirrus_pattern_seed"), "Pattern Seed"), ImGuiDataType_U32, &settings.patternSeed);
+		ImGui::SliderFloat(T(TKEY("cirrus_pattern_warp"), "Pattern Warp"), &settings.patternWarp, 0.f, 0.5f);
+		ImGui::SliderFloat(T(TKEY("cirrus_pattern_detail"), "Pattern Detail"), &settings.patternDetail, 0.f, 1.f);
+	}
+	if (!settings.weatherPath.empty())
+		return;
+	const char* labels[] = { T(TKEY("cirrus_coverage"), "Cirrus Coverage"), T(TKEY("cirrus_type"), "Cirrus Type") };
+	for (uint32_t i = 0; i < 2; ++i) {
+		if (!ImGui::TreeNode(labels[i]))
+			continue;
+		auto& layer = settings.weather[i];
+		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -1.f, 1.f);
+		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, 0.f, 1.f);
+		ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
+		ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
+		auto& input = settings.noise[i];
+		textureChoice(T(TKEY("cirrus_noise_source"), "Weather noise source"), input.texturePath, 1);
+		if (input.texturePath.empty()) {
+			auto& noise = input.parameters;
+			const char* types[] = { "Alligator", "Perlin", "Perlin-Worley" };
+			int type = static_cast<int>(std::min(noise.type, 2u));
+			if (ImGui::Combo(T(TKEY("ndf_noise_type"), "Noise type"), &type, types, IM_ARRAYSIZE(types)))
+				noise.type = static_cast<uint32_t>(type);
+			ImGui::InputScalar(T(TKEY("ndf_seed"), "Seed"), ImGuiDataType_U32, &noise.seed);
+			const uint32_t one = 1, maxFrequency = 128, maxOctaves = 8, maxLacunarity = 4, maxRepetitions = 8;
+			ImGui::SliderScalar(T(TKEY("ndf_base_frequency"), "Base frequency"), ImGuiDataType_U32, &noise.frequency, &one, &maxFrequency);
+			ImGui::SliderScalar(T(TKEY("ndf_octaves"), "Octaves"), ImGuiDataType_U32, &noise.octaves, &one, &maxOctaves);
+			ImGui::SliderScalar(T(TKEY("ndf_lacunarity"), "Lacunarity"), ImGuiDataType_U32, &noise.lacunarity, &one, &maxLacunarity);
+			ImGui::SliderScalar(T(TKEY("ndf_tile_repetitions"), "Tile repetitions"), ImGuiDataType_U32, &noise.repetitions, &one, &maxRepetitions);
+			ImGui::SliderFloat(T(TKEY("ndf_persistence"), "Persistence"), &noise.persistence, 0.f, 1.f);
+			ImGui::SliderFloat(T(TKEY("ndf_contrast"), "Contrast"), &noise.contrast, 0.1f, 8.f);
+			ImGui::SliderFloat(T(TKEY("ndf_response_exponent"), "Response exponent"), &noise.responseExponent, 0.1f, 8.f);
+			ImGui::SliderFloat(T(TKEY("ndf_bias"), "Bias"), &noise.bias, -1.f, 1.f);
+		}
+		ImGui::TreePop();
+	}
 }
+
+#undef I18N_KEY_PREFIX

@@ -7,160 +7,45 @@ float CloudLightDensity(float extinction, float height)
 	return extinction * (1.0 + 3.0 * h2 * h2);
 }
 
-float SampleCloudLightDensity(float3 pos, bool high, float mip)
+float SampleCloudLightDensity(float3 pos, float mip)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	if (high) {
-		float height;
-		float4 weather;
-		const float density = EvaluateHighCloudDensity(pos, height, weather);
-		return CloudLightDensity(density, height);
-	}
 	CloudDensityContext context;
 	const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), mip, false, context);
 	return CloudLightDensity(extinction, context.ndf.height_fraction);
 }
 
-float CloudColumnOpticalDepth(float3 pos, float3 direction, bool high, uint steps, float maximumDistance)
+float CloudLightProbeJitter(float2 positionMeters)
+{
+	const float2 seed = frac(positionMeters * 0.1031);
+	const float scramble = dot(seed.xyx, seed.yxx + 19.19);
+	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.x));
+}
+
+float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	if (high && info.highCloudEnabled <= 0.0)
-		return 0.0;
-	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	const float2 ground = IntersectSpherePair(planetPos, direction, info.planetRadius);
-	if (dot(planetPos, direction) < 0.0 && ground.y > 0.0)
-		maximumDistance = min(maximumDistance, max(ground.x, 0.0));
-	const CloudRaySegments segments = GetCloudRaySegments(planetPos, direction,
-		high ? info.highCloudBottom : info.lowCloudBaseAltitude,
-		high ? info.highCloudTop : info.lowCloudTraceTopAltitude, maximumDistance, info);
-	float opticalDepth = 0.0;
-	[unroll] for (uint segment = 0u; segment < 2u; ++segment)
-	{
-		const float2 interval = segment == 0u ? segments.nearSegment : segments.farSegment;
-		if (interval.y <= interval.x)
-			continue;
-		[loop] for (uint i = 0u; i < steps; ++i)
-		{
-			const float a = float(i) / steps;
-			const float b = float(i + 1u) / steps;
-			const float start = lerp(interval.x, interval.y, a * a);
-			const float end = lerp(interval.x, interval.y, b * b);
-			const float3 samplePos = pos + direction * (0.5 * (start + end));
-			opticalDepth += SampleCloudLightDensity(samplePos, high, 2.0) * ((end - start) * GAME_UNIT_TO_M);
-		}
-	}
-	return opticalDepth;
-}
-
-float CloudCacheRange(bool high)
-{
-	return VolumetricCloudBuffer[0].lightCacheRange * (high ? 4.0 : 1.0);
-}
-
-float2 CloudCachePosition(float2 coordinate)
-{
-	return coordinate * abs(coordinate);
-}
-
-float2 CloudCacheInterpolationUv(float2 relative, float2 dimensions)
-{
-	const float2 index = (sign(relative) * sqrt(abs(relative)) * 0.5 + 0.5) * dimensions - 0.5;
-	const float2 base = clamp(floor(index), 0.0, dimensions - 2.0);
-	const float2 left = CloudCachePosition((base + 0.5) / dimensions * 2.0 - 1.0);
-	const float2 right = CloudCachePosition((base + 1.5) / dimensions * 2.0 - 1.0);
-	// Interpolate physical distances, including the cell spanning each centre axis.
-	const float2 fraction = saturate((relative - left) / (right - left));
-	return (base + fraction + 0.5) / dimensions;
-}
-
-float SampleCloudLightCache(float3 pos, bool high, out float opticalDepth)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float altitude = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
-	const float bottom = high ? info.highCloudBottom : info.lowCloudBaseAltitude;
-	const float top = high ? info.highCloudTop : info.lowCloudTraceTopAltitude;
-	const float2 relative = (pos.xy - info.lightCacheWindDelta - info.lightCacheOrigin) * (2.0 / CloudCacheRange(high));
-	opticalDepth = 0.0;
-	if (any(abs(relative) >= 1.0) || altitude < bottom || altitude > top)
-		return 0.0;
-	uint3 dims;
-	if (high)
-		TexHighLightCache.GetDimensions(dims.x, dims.y, dims.z);
-	else
-		TexLowLightCache.GetDimensions(dims.x, dims.y, dims.z);
-	const float2 xy = CloudCacheInterpolationUv(relative, float2(dims.xy));
-	const float3 uvw = float3(xy, (altitude - bottom) / max(top - bottom, 1.0));
-	if (high)
-		opticalDepth = TexHighLightCache.SampleLevel(TransmittanceSampler, uvw, 0);
-	else
-		opticalDepth = TexLowLightCache.SampleLevel(TransmittanceSampler, uvw, 0);
-	const float edge = min(1.0 - abs(relative.x), 1.0 - abs(relative.y));
-	return smoothstep(0.0, 0.1, edge);
-}
-
-float CloudCachedSun(float3 pos, bool high)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	if (high && info.highCloudEnabled <= 0.0)
-		return 0.0;
-	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
-	const CloudRaySegments segments = GetCloudRaySegments(planetPos, info.dirlightDir,
-		high ? info.highCloudBottom : info.lowCloudBaseAltitude,
-		high ? info.highCloudTop : info.lowCloudTraceTopAltitude, CLOUD_SKY_DISTANCE, info);
-	if (segments.length <= 0.0)
-		return 0.0;
-	float cached;
-	const float entryOffset = segments.nearSegment.x > 0.0 ? min(segments.nearLength * 0.5, 2.0 * GAME_UNITS_PER_METER) : 0.0;
-	const float3 entry = pos + info.dirlightDir * (segments.nearSegment.x + entryOffset);
-	const float weight = SampleCloudLightCache(entry, high, cached);
-	if (weight >= 1.0)
-		return cached;
-	return lerp(CloudColumnOpticalDepth(pos, info.dirlightDir, high, 4u, CLOUD_SKY_DISTANCE), cached, weight);
-}
-
-float CloudSunOpticalDepth(float3 pos, float3 viewDir, float height, bool high)
-{
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
+	const float viewDistance = length(pos - eye) * GAME_UNIT_TO_M;
+	const uint count = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
+	const float extentMeters = 240.0 - saturate(height * 3.3333333) * 120.0;
+	const float spacingMeters = extentMeters / count;
 	const float cosine = dot(viewDir, info.dirlightDir);
-	const float extent = (240.0 - saturate(height * 3.3333333) * 120.0) * GAME_UNITS_PER_METER;
+	const float forward = saturate(cosine);
 	const float angularOffset = -0.25 * cosine;
-	float opticalDepth = 0.0;
-	float previousDistance = 0.0;
-	// The far column begins after the two local intervals to avoid counting them twice.
-	[unroll] for (uint i = 0u; i < 2u; ++i)
+	const float jitter = CloudLightProbeJitter(pos.xy * GAME_UNIT_TO_M);
+	float occlusion = 0.0;
+	[loop] for (uint i = 0u; i < count; ++i)
 	{
-		const float fraction = (i + 1.0) * 0.5;
-		const float distance = extent * fraction * (angularOffset + 0.5 + fraction * fraction * fraction * (0.5 - angularOffset));
-		const float3 samplePos = pos + info.dirlightDir * (0.5 * (previousDistance + distance));
-		opticalDepth += SampleCloudLightDensity(samplePos, high, 1.0) * (distance - previousDistance) * GAME_UNIT_TO_M;
-		previousDistance = distance;
+		const float index = i + 0.5;
+		const float fraction = index / count;
+		const float angularScale = angularOffset + 0.5 + fraction * fraction * fraction * (0.5 - angularOffset);
+		const float distanceMeters = (fraction * extentMeters + jitter * spacingMeters) * angularScale;
+		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
+		const float weightMeters = (forward + 1.0) * spacingMeters * 0.45 * (index * 0.4 * forward + 1.0);
+		occlusion += SampleCloudLightDensity(samplePos, 2.0) * weightMeters;
 	}
-	return opticalDepth + CloudCachedSun(pos + info.dirlightDir * extent, high);
-}
-
-[numthreads(4, 4, 4)] void buildCloudLightCache(uint3 tid : SV_DispatchThreadID) {
-	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	uint3 dims;
-	RWCloudLightCache.GetDimensions(dims.x, dims.y, dims.z);
-	if (info.lightCacheUpdatePhase < 8u)
-		tid.z = tid.z * 8u + info.lightCacheUpdatePhase;
-	if (any(tid >= dims))
-		return;
-#ifdef HIGH_CLOUD_CACHE
-	const bool high = true;
-#else
-	const bool high = false;
-#endif
-	const float2 xy = (float2(tid.xy) + 0.5) / dims.xy * 2.0 - 1.0;
-	const float2 offset = CloudCachePosition(xy) * (0.5 * CloudCacheRange(high));
-	const float height = lerp(high ? info.highCloudBottom : info.lowCloudBaseAltitude,
-		high ? info.highCloudTop : info.lowCloudTraceTopAltitude, (tid.z + 0.5) / dims.z);
-	const float radius = info.planetRadius + height;
-	const float2 worldXY = info.lightCacheOrigin + offset + info.lightCacheWindDelta;
-	const float2 planetXY = worldXY - FrameBuffer::CameraPosAdjust.xy;
-	const float3 pos = float3(worldXY, sqrt(max(radius * radius - dot(planetXY, planetXY), 0.0)) - info.planetRadius);
-	const float sun = CloudColumnOpticalDepth(pos, info.dirlightDir, high, info.lightCacheSteps, CLOUD_SKY_DISTANCE);
-	RWCloudLightCache[tid] = min(sun, 65504.0);
+	return occlusion;
 }
 
 float CloudScatteringPhase(float cosine)
@@ -201,15 +86,14 @@ float2 CloudLightResponse(float cosine, float height, float profile, float light
 }
 
 float3 CloudLighting(float3 pos, float3 viewDir, float height, float profile, float product, float extinction,
-	bool high, float phase, float3 ambientColor)
+	float phase, float3 ambientColor)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float occlusion = CloudSunOpticalDepth(pos, viewDir, height, high);
+	const float occlusion = CloudLocalSunOcclusion(pos, viewDir, height);
 	const float2 response = CloudLightResponse(dot(viewDir, info.dirlightDir), saturate(height), saturate(profile),
 		CloudLightDensity(extinction, height), saturate(product), occlusion);
-	const float otherOcclusion = info.crossLayerShadows != 0u && info.highCloudEnabled > 0.0 ? CloudCachedSun(pos, !high) : 0.0;
 	const float3 sunlight = sampleExternalSunTransmittance(pos, info.dirlightDir) * GetCloudDirectionalLightColor();
-	return info.lightingScale * (response.x * phase * exp(-otherOcclusion * info.sunExtinction) * sunlight + response.y * ambientColor);
+	return info.lightingScale * (response.x * phase * sunlight + response.y * ambientColor);
 }
 
 #endif
