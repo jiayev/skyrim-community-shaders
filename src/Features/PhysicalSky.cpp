@@ -78,45 +78,12 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	densityScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	HighCloudSettings,
-	enabled,
-	viewSteps,
-	weatherDim,
-	weatherWorldSize,
-	weatherCenter,
-	weatherSeed,
-	coverage,
-	coverageEdgeWidth,
-	frontStrength,
-	frontBearing,
-	altostratusWeight,
-	altocumulusWeight,
-	cellScale,
-	cellWindSpeed,
-	cellWarpScale,
-	cellWarpStrength,
-	cellThickStrength,
-	asCellThickStrength,
-	cellThickPow,
-	bottomAltitude,
-	topAltitude,
-	bottomCoverageScale,
-	heightCurvePow,
-	densityThreshold,
-	densitySoftness,
-	softness,
-	wispScale,
-	wispStrength,
-	densityScale,
-	densitySoftAIntensity,
-	densitySoftAContrast,
-	densityModAIntensity,
-	densityModAContrast)
+	CirrusSettings,
+	enabled, altitude, patternScale, densityScale, lightingScale, weatherPath, patternsPath,
+	noise, weather, patternSeed, patternWarp, patternDetail)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLightingSettings,
-	crossLayerShadows,
-	cacheSteps,
 	lightingScale,
 	sunExtinction,
 	phaseForwardG,
@@ -136,7 +103,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLayer,
 	low,
-	high,
+	cirrus,
 	lighting)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -593,7 +560,7 @@ void PhysicalSky::SettingsClouds()
 void PhysicalSky::SettingsVolumetricClouds()
 {
 	auto& low = settings.cloudLayer.low;
-	auto& high = settings.cloudLayer.high;
+	auto& cirrus = settings.cloudLayer.cirrus;
 	auto& lighting = settings.cloudLayer.lighting;
 
 	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
@@ -602,8 +569,6 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		uint32_t minStep = 32, maxStep = 512;
 		ImGui::SliderScalar(T(TKEY("low_view_steps"), "Low Cloud View Budget"), ImGuiDataType_U32, &settings.lowViewSteps, &minStep, &maxStep);
-		uint32_t minHighStep = 8, maxHighStep = 256;
-		ImGui::SliderScalar(T(TKEY("high_cloud_view_steps"), "High Cloud View Budget"), ImGuiDataType_U32, &high.viewSteps, &minHighStep, &maxHighStep);
 		ImGui::SliderFloat(T(TKEY("cloud_history_stability"), "Cloud History Stability"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 	}
 
@@ -630,35 +595,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 			ImGui::Text("%s", T(TKEY("cloud_density_scale_desc"), "Converts reconstructed density to extinction per metre. Shared by view opacity, light sampling and cloud shadows. NDF heights stay fixed."));
 	}
 
-	ImGui::SeparatorText(T(TKEY("high_clouds"), "High Clouds"));
-	{
-		high.bottomAltitude = std::clamp(high.bottomAltitude, 2.0f, 18.0f);
-		high.topAltitude = std::clamp(std::max(high.topAltitude, high.bottomAltitude + 0.1f), high.bottomAltitude + 0.1f, 24.0f);
-		ImGui::Checkbox(T(TKEY("enable_high_clouds"), "Enable High Clouds"), &high.enabled);
-		ImGui::SliderFloat(T(TKEY("high_coverage"), "High Coverage"), &high.coverage, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("weather_world_size"), "Weather World Size"), &high.weatherWorldSize, 8.f, 256.f, "%.1f km", ImGuiSliderFlags_Logarithmic);
-		ImGui::SliderFloat2(T(TKEY("weather_center"), "Weather Center"), &high.weatherCenter.x, -256.f, 256.f, "%.1f km");
-		uint32_t minWeatherDim = 128, maxWeatherDim = 1024;
-		ImGui::SliderScalar(T(TKEY("weather_dimension"), "Weather Dimension"), ImGuiDataType_U32, &high.weatherDim, &minWeatherDim, &maxWeatherDim);
-		ImGui::InputScalar(T(TKEY("weather_seed"), "Weather Seed"), ImGuiDataType_U32, &high.weatherSeed);
-		ImGui::SliderFloat(T(TKEY("high_coverage_edge_width"), "High Coverage Edge Width"), &high.coverageEdgeWidth, 0.01f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("front_strength"), "Front Strength"), &high.frontStrength, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("front_bearing"), "Front Bearing"), &high.frontBearing, -180.f, 180.f, "%.1f deg");
-		ImGui::SliderFloat(T(TKEY("altostratus_weight"), "Altostratus Weight"), &high.altostratusWeight, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("altocumulus_weight"), "Altocumulus Weight"), &high.altocumulusWeight, 0.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("high_bottom_altitude"), "High Cloud Bottom Altitude"), &high.bottomAltitude, 2.f, high.topAltitude - 0.1f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("high_top_altitude"), "High Cloud Top Altitude"), &high.topAltitude, high.bottomAltitude + 0.1f, 24.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("high_density_scale"), "High Density Scale"), &high.densityScale, 0.f, 1.f, "%.3f 1/m");
-		ImGui::SliderFloat(T(TKEY("high_softness"), "High Softness"), &high.softness, 0.001f, 0.25f, "%.3f");
-		ImGui::SliderFloat2(T(TKEY("high_cell_scale"), "High Cell Scale"), &high.cellScale.x, 0.1f, 32.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("high_wisp_strength"), "High Wisp Strength"), &high.wispStrength, 0.f, 1.f, "%.2f");
-	}
+	CirrusMapManager::DrawSettings(cirrus, ndfTexManager);
 
 	ImGui::SeparatorText(T(TKEY("lighting"), "Lighting"));
 	{
-		ImGui::Checkbox(T(TKEY("cross_layer_shadows"), "Cross-Layer Shadows"), &lighting.crossLayerShadows);
-		uint32_t minCacheSteps = 4, maxCacheSteps = 32;
-		ImGui::SliderScalar(T(TKEY("cloud_cache_steps"), "Cloud Cache Steps"), ImGuiDataType_U32, &lighting.cacheSteps, &minCacheSteps, &maxCacheSteps);
 		ImGui::SliderFloat(T(TKEY("cloud_lighting_scale"), "Lighting Response Scale"), &lighting.lightingScale, 0.0f, 4.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_sun_extinction"), "Sun Extinction Scale"), &lighting.sunExtinction, 0.0f, 4.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_g"), "Forward Phase G"), &lighting.phaseForwardG, 0.0f, 0.95f, "%.3f");
@@ -884,14 +824,14 @@ bool PhysicalSky::ShadersOK()
 	// path still verifies every texture before binding.
 	const bool ndfReady = settings.cloudMap.type != NdfType::Procedural ||
 	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
-	const bool highCloudMapsReady = !settings.cloudLayer.high.enabled || highCloudMapManager.ShadersReady();
+	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady();
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolReproject && csVolCubeReproject && csVolLowLightCache && csVolHighLightCache && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+	                           (csVolMainView && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
-								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux && texLowCloudLightCache && texHighCloudLightCache &&
-								   texShadowVolume && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && highCloudMapsReady);
+								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
+								   texShadowVolume && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && cirrusMapsReady);
 	return baseShadersOk && volumetricShadersOk;
 }
 
@@ -900,8 +840,8 @@ void PhysicalSky::Reset()
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
-	const float traceBottomKm = settings.cloudLayer.high.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.high.bottomAltitude) : lowCloudBaseKm;
-	const float traceTopKm = settings.cloudLayer.high.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.high.topAltitude) : lowCloudTopKm;
+	const float traceBottomKm = settings.cloudLayer.cirrus.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudBaseKm;
+	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
 	const float lowCloudThicknessKm = lowCloudTopKm - lowCloudBaseKm;
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
@@ -1060,7 +1000,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolCubeReproject && csVolLowLightCache && csVolHighLightCache && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
 
 		if (renderVolumetricClouds) {
 			const auto cloudSettingsKey = nlohmann::json{
@@ -1074,13 +1014,13 @@ void PhysicalSky::Prepass()
 			if (cloudSettingsKey != volCloudSettingsKey) {
 				volMainHistoryValid = false;
 				volCloudSettingsKey = cloudSettingsKey;
-				volLightCacheValid = false;
 			}
 			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager)) {
 				volMainHistoryValid = false;
-				volLightCacheValid = false;
 			}
 			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
+			if (settings.cloudLayer.cirrus.enabled && cirrusMapManager.Update(settings.cloudLayer.cirrus, ndfTexManager))
+				volMainHistoryValid = false;
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}
 

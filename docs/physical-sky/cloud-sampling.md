@@ -4,17 +4,17 @@
 
 The base step follows Nubis Evolved slide 39: `3 + 60 * distance / 16384`,
 with distances in metres. A geometric step increase fits the remaining occupied
-intervals into a finite view budget. `lowViewSteps` defaults to 192 (32–512);
-`cloudLayer.high.viewSteps` defaults to 64 (8–256). Layers intersected by a ray
-contribute their budgets to a shared march. The budget counts density probes,
-including empty probes and backtracking, rather than truncating the cloud range.
+intervals into a finite view budget. `lowViewSteps` defaults to 192 (32–512).
+The budget counts density probes, including empty probes and backtracking,
+rather than truncating the cloud range. Cirrus uses one sheet intersection and
+four light probes, without a volumetric view budget.
 
-Sphere intersections retain both near and far pieces of each layer and clip
-against geometry and the planet. Their endpoints partition the ray into ordered
-intervals. Overlapping layers add extinction and extinction-weighted light
-sources at the same sample; separated layers integrate in front-to-back order.
-`rayMarchRange` limits occupied distance per layer, excluding clear approach
-and gaps. Each future occupied interval reserves at least one probe.
+Sphere intersections retain both near and far pieces of the NDF layer and clip
+against geometry and the planet. The cirrus intersection splits these pieces
+when needed, preserving front-to-back compositing even above the sheet or when
+NDF heights extend across it. `rayMarchRange` limits occupied volume distance,
+excluding clear approach and gaps. Each future occupied interval reserves at
+least one probe.
 
 NDF distance bounds skip empty horizontal support, limited to the current
 interval. Empty density doubles the next step. A hit following a coarse probe
@@ -62,13 +62,13 @@ after main and cubemap reconstruction complete.
 The 64 x 64 x 6 cubemap follows the same schedule: 16 x 16 actual rays on every
 face, then per-face full-resolution temporal reconstruction. Cube history is
 sampled as a cube to cross face boundaries. It compensates camera translation
-and wind, independently of screen rotation. Depth and high-layer fraction are
-stored as opacity-weighted moments for cube filtering. Steady-state ray count
+and wind, independently of screen rotation. Depth is stored as an
+opacity-weighted moment for cube filtering; metadata W is reserved. Steady-state ray count
 is 1,536 per frame, versus 8,192 for the former two-full-face schedule.
 
-Both layers share one representative depth. Mixed-layer motion, high-pattern
-relative drift, disocclusion and rapidly changing light still need runtime
-assessment; a single history cannot represent arbitrary multilayer motion.
+The NDF volume and cirrus sheet share wind displacement and one representative
+depth. Parallax between layers, disocclusion and rapidly changing light still
+need runtime assessment; one depth cannot represent arbitrary multilayer motion.
 
 ## Resources and validation
 
@@ -76,7 +76,7 @@ Transmittance is scalar R16_FLOAT. Trace, output and history radiance all use
 RGBA16_FLOAT with equal RGB precision; metadata uses RGBA16_FLOAT. Full-resolution
 outputs and history swap ownership after unbinding their views. Screen storage
 is 37.125 bytes per framebuffer pixel before dimension rounding, excluding
-lighting caches, shadows and atmosphere resources.
+shadows and atmosphere resources.
 
 Static/CPU checks cover the buffer contract, 16-phase coverage (including odd
 sizes), native pixel recovery, all cube texel orientations, ordered interval
