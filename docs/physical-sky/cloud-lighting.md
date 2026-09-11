@@ -27,13 +27,17 @@ scale, not a universal weather calibration.
 
 ## Profile scattering response
 
-Lighting has one weighted forward/backward Henyey–Greenstein phase function.
-The non-storm source combines a scattering volume and a soft-transmission
-response, with a powder response applied to their sum. The phase is applied
-once to the result. There is no separate multiple-scattering phase lobe.
+The response combines a transmittance/soft term and the Nubis Evolved p54
+`ms_volume` multiple-scattering volume, and applies one blended dual-lobe phase to
+their sum, exactly as HFW's `MainLightResponse` does. Both Henyey-Greenstein
+eccentricities are positive: the broad lobe dominates and the sharp one only adds
+the forward rim. That split is what Nubis Evolved p43 describes as
+`Direct = Transmittance * Primary Phase + Multiple Scattering * Secondary Phase`;
+HFW encodes both in one blend, and its voxel path separates them explicitly
+(`direct` takes `CloudPhase`, `indirect` is added with no phase).
 
 With local height `h`, dimensional profile `d`, coverage/type product `p`,
-light density `rhoL`, view/light cosine `mu`, and occlusion integral `o`:
+light density `rhoL`, view/light cosine `mu`, and occlusion `o`:
 
 ```text
 e = saturate((d - 0.05) / 0.95)
@@ -48,12 +52,86 @@ softT = 1 - saturate(0.025 * q)
 soft = 42.375 * softScatteringStrength * (a + rhoL)
      * [0.3 * (softT^(8 - 7*p^0.8) + softT^(16 - 14*p^0.8))
         + softT^(32 - 28*p^0.8)] * bottomAngularResponse
-sunResponse = 1.5 * (volume + soft) * lerp(1, powder, powderStrength)
+phase = HG(mu, phaseForwardG) * phaseForwardWeight
+      + HG(mu, phaseBackwardG) * phaseBackwardWeight
+direct = 1.5 * (soft + volume) * phase * lerp(1, powder, powderStrength)
 ```
 
 `bottomAngularResponse` and `powder` depend on height, view/light cosine,
 profile potential, light density and occlusion. Their full expressions are in
 `CloudLightResponse`. They do not depend on the view integration step length.
+
+## Default anchoring
+
+The defaults come from HFW's volumetric cloud constant buffer (`b0, space8`,
+`RenderingComputeShaderPS5`). The dump is verified against two independent
+invariants: `c45.x = 74946` equals `CloudEarthRadius` in the game's own
+`ProceduralCloudModelingSettings`, and `c34.zw = (256, 2048)` equals the cloud
+base/top used by the `*1792 + 256` height encoding in the same shader. `c0`-`c35`
+and `c46`-`c54` are per-frame host data (camera, light direction, dispatch bounds,
+storm centre); `c36`-`c45` carry the cloud lighting and shaping constants.
+
+```text
+c37 = (0.9611693, 0.4378709, 0.5,       1        )
+c38 = (0.891274,  1,         1,         0.5      )
+c39 = (0.0408726, 0.2888307, 0.2267016, 0.5      )
+c40 = (0.3664921, 3.611693,  15.37871,  0.2      )
+c41 = (0.9,       1,         0.25,      0.5      )
+c42 = (1,         1,         8000,      250      )
+```
+
+This is a **runtime** buffer, not authored data. Some entries are round authored
+constants (`1`, `0.5`, `0.25`, `0.2`, `0.9`, `8000`); the rest carry seven
+significant digits (`0.9611693`, `0.0408726`, `0.2267016`, `3.611693`), which is
+what falls out of Decima's weather blending between presets. So the dump gives one
+weather state, not a neutral baseline, and no entry here is a physical constant:
+the whole response is an approximation whose absolute scale is carried by the
+literal `42.375`, `8` and `1.5` inside the shader.
+
+Defaults therefore use HFW's exact value where it is an authored constant of the
+model, and a two-digit nominal value where the dump only supplies a blended
+weather sample:
+
+| setting                  | HFW field                              | default | source                             |
+| ------------------------ | -------------------------------------- | ------- | ---------------------------------- |
+| `lightingScale`          | c37.w `mainLightingScale`              | 1       | authored                           |
+| `sunExtinction`          | c37.x `mainExtinction`                 | 1       | neutral; dump 0.9611693 is blended |
+| `phaseForwardG`          | c40.w                                  | 0.2     | authored                           |
+| `phaseBackwardG`         | c41.x                                  | 0.9     | authored                           |
+| `phaseForwardWeight`     | c41.y                                  | 1       | authored                           |
+| `phaseBackwardWeight`    | c41.z                                  | 0.25    | authored                           |
+| `scatterVolumeStrength`  | c38.w                                  | 0.5     | authored                           |
+| `scatterVolumeDepth`     | c39.x `cMultipleScatteringDepthPower`  | 0.04    | nominal, dump 0.0408726            |
+| `scatterVolumeHeight`    | c39.y `cMultipleScatteringHeightPower` | 0.29    | nominal, dump 0.2888307            |
+| `softScatteringStrength` | c38.y                                  | 1       | authored                           |
+| `powderStrength`         | c41.w                                  | 0.5     | authored                           |
+| `ambientStrength`        | c40.y                                  | 3.6     | nominal, dump 3.611693             |
+| `ambientFloor`           | c39.z                                  | 0.23    | nominal, dump 0.2267016            |
+| `ambientDensity`         | c39.w                                  | 0.5     | authored                           |
+| `ambientBase`            | c42.y                                  | 1       | authored                           |
+
+`CirrusSettings::lightingScale` is c37.z = 0.5.
+
+Two things are worth recording, without pretending either is physics:
+
+-   HFW's two phase weights sum to 1.25, so its phase integrates to 1.25 over the
+    sphere rather than 1. The excess is absorbed by `lightResponse`; it is not
+    corrected here, so that the phase shape matches the reference.
+-   `ambientFloor * ambientStrength` is what keeps a self-shadowed cloud body from
+    going black once `q` saturates the transmittance term. The previous project
+    values gave 0.05 against 0.82 here, which is why cloud bodies read as flat grey
+    while only the forward rim stayed lit.
+
+`LowCloudSettings::densityScale` is HFW's c45.y `curvatureAndDensity.y`, which the
+dump gives as 0.75 against our 0.09. It is deliberately not transferred: it scales
+the NDF density reconstruction, and the view opacity, ground cloud shadow and
+temporal history are all tuned against the current value. The response constants
+above are independent of it.
+
+HFW's density is also roughly an order of magnitude above ours, so its `q`
+saturates in a dense cloud body and the body there is carried entirely by the
+ambient pair. With our thinner density the direct term stays alive deeper into the
+cloud.
 
 Ambient response uses height, coverage/type product, broad solar transmission
 `exp(-0.03*q)`, and empty-profile fraction `(1-e)`. Its controls are
@@ -103,8 +181,9 @@ Cirrus uses a separate two-dimensional weather map: R is coverage and G is type.
 The RGB pattern channels are wispy, round and streaky; each is squared before
 interpolating B to R to G at type 0, 0.5 and 1. With coverage `c` and interpolated
 pattern `p`, the unscaled profile is `max(p, 1e-10)^(1.9 - 1.8*c) * saturate(2*c^3)`.
-`cirrus.densityScale` multiplies this profile (default 2). It absorbs the constant
-clear-weather density multiplier; storm modulation is not implemented.
+`cirrus.densityScale` is the clear-weather density multiplier (default 1).
+Density is `2 * profile * cirrus.densityScale`; the fixed factor 2 is part of
+the profile model. Storm modulation is not implemented.
 
 Four deterministic light probes use indices 0.5, 1.5, 2.5 and 3.5, angular cubic
 spacing over a nominal 120 m extent, and `13.5 * sqrt(density)` weights. Solar

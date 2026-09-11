@@ -547,9 +547,18 @@ void CirrusMapManager::CompileShaders()
 		noiseProgram.attach(raw);
 }
 
-bool CirrusMapManager::ShadersReady() const
+bool CirrusMapManager::ShadersReady(const CirrusSettings& settings) const
 {
-	return weatherProgram && patternsProgram && noiseProgram && generationCb && noiseCb && sampler && texWeather && texPatterns;
+	if (settings.weatherPath.empty()) {
+		if (!weatherProgram || !generationCb || !sampler || !texWeather)
+			return false;
+		for (uint32_t i = 0; i < 2; ++i)
+			if (settings.noise[i].texturePath.empty() && (!noiseProgram || !noiseCb || !noiseTextures[i]))
+				return false;
+	}
+	if (settings.patternsPath.empty() && (!patternsProgram || !generationCb || !texPatterns))
+		return false;
+	return true;
 }
 
 CirrusTextureSet CirrusMapManager::GetTextures() const
@@ -565,7 +574,7 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 		generatedValid = false;
 		return hadOutputs;
 	};
-	if (!ShadersReady())
+	if (!ShadersReady(settings))
 		return fail();
 	const std::array<std::string, 4> paths{ settings.noise[0].texturePath, settings.noise[1].texturePath, settings.weatherPath, settings.patternsPath };
 	for (size_t i = 0; i < paths.size(); ++i)
@@ -581,6 +590,15 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 		if (!NdfManager::IsTextureNdf(sources[i], i == 2 ? 2u : 3u))
 			return fail();
 	}
+	if (sources[2] && sources[3]) {
+		const bool changed = !generatedValid || generatedSources != sources || generatedRevision != textures.revision;
+		outputs = { sources[2], sources[3] };
+		generatedSources = sources;
+		generatedRevision = textures.revision;
+		generatedValid = true;
+		return changed;
+	}
+
 	auto* context = globals::d3d::context;
 	if (!sources[2]) {
 		for (uint32_t i = 0; i < 2; ++i) {
