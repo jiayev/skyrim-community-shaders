@@ -132,6 +132,18 @@ incompatible or missing explicit inputs disable the sheet and show an input
 error instead of reusing stale textures. Generated weather is RG16_FLOAT and
 patterns are RGBA16_FLOAT, each 512 square with a mip chain.
 
+Imported RGB patterns are sampled directly at mip 0 with linear wrapping:
+there is no resizing, channel repacking, sRGB conversion or procedural warp.
+Only the physical pattern repeat length and wind transform their UVs. Loading
+patterns bypasses the pattern generator; loading both maps bypasses all cirrus
+generation and does not require its compute programs. The density and lighting
+path is shared with local inputs, including the fixed factor 2 in density.
+A 1024-square BC7_UNORM pattern with one mip is accepted unchanged.
+
+Matching pattern data alone does not determine a weather state: coverage/type
+RG, world-to-field scale/offset, wind, density multiplier and lighting inputs
+also affect the result. Defaults do not infer these settings from image content.
+
 ## Generator lifecycle
 
 The procedural low NDF and acceleration rebuild on composition, noise or source

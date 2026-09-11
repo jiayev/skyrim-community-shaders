@@ -191,8 +191,8 @@ struct CirrusSettings
 	bool enabled = true;
 	float altitude = 2048.f;
 	float patternScale = 1.f / 0.0002331f;
-	float densityScale = 2.f;
-	float lightingScale = 1.f;
+	float densityScale = 1.f;
+	float lightingScale = 0.5f;
 	std::string weatherPath;
 	std::string patternsPath;
 	std::array<NdfNoiseInput, 2> noise = { { { { .type = 1, .frequency = 4 } }, { { .type = 1, .seed = 7331, .frequency = 8 } } } };
@@ -208,19 +208,19 @@ struct CloudLightingSettings
 {
 	float lightingScale = 1.f;
 	float sunExtinction = 1.f;
-	float phaseForwardG = 0.85f;
-	float phaseBackwardG = -0.3f;
-	float phaseForwardWeight = 0.5f;
-	float phaseBackwardWeight = 0.5f;
-	float scatterVolumeStrength = 0.125f;
-	float scatterVolumeDepth = 0.1f;
-	float scatterVolumeHeight = 0.5f;
-	float softScatteringStrength = 0.1f;
-	float powderStrength = 1.f;
-	float ambientStrength = 1.f;
-	float ambientFloor = 0.05f;
-	float ambientDensity = 0.1f;
-	float ambientBase = 0.2f;
+	float phaseForwardG = 0.2f;
+	float phaseBackwardG = 0.9f;
+	float phaseForwardWeight = 1.f;
+	float phaseBackwardWeight = 0.25f;
+	float scatterVolumeStrength = 0.5f;
+	float scatterVolumeDepth = 0.04f;
+	float scatterVolumeHeight = 0.29f;
+	float softScatteringStrength = 1.f;
+	float powderStrength = 0.5f;
+	float ambientStrength = 3.6f;
+	float ambientFloor = 0.23f;
+	float ambientDensity = 0.5f;
+	float ambientBase = 1.f;
 };
 
 struct CloudLayer
@@ -241,7 +241,7 @@ struct CirrusMapManager
 {
 	void SetupResources();
 	void CompileShaders();
-	bool ShadersReady() const;
+	bool ShadersReady(const CirrusSettings& settings) const;
 	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
 	bool Update(const CirrusSettings& settings, TextureManager& textures);
 	CirrusTextureSet GetTextures() const;

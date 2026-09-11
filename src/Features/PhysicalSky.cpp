@@ -602,15 +602,15 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("cloud_lighting_scale"), "Lighting Response Scale"), &lighting.lightingScale, 0.0f, 4.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_sun_extinction"), "Sun Extinction Scale"), &lighting.sunExtinction, 0.0f, 4.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_g"), "Forward Phase G"), &lighting.phaseForwardG, 0.0f, 0.95f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_g"), "Backward Phase G"), &lighting.phaseBackwardG, -0.95f, 0.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_g"), "Second Phase G"), &lighting.phaseBackwardG, -0.95f, 0.95f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_phase_forward_weight"), "Forward Phase Weight"), &lighting.phaseForwardWeight, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_weight"), "Backward Phase Weight"), &lighting.phaseBackwardWeight, 0.0f, 1.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_phase_backward_weight"), "Second Phase Weight"), &lighting.phaseBackwardWeight, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_strength"), "Scattering Volume Strength"), &lighting.scatterVolumeStrength, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_depth"), "Scattering Volume Depth"), &lighting.scatterVolumeDepth, 0.001f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_scatter_volume_height"), "Scattering Volume Height"), &lighting.scatterVolumeHeight, 0.0f, 4.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_soft_scattering_strength"), "Soft Scattering Strength"), &lighting.softScatteringStrength, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_powder_strength"), "Powder Strength"), &lighting.powderStrength, 0.0f, 1.0f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_ambient_strength"), "Ambient Response Strength"), &lighting.ambientStrength, 0.0f, 4.0f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_ambient_strength"), "Ambient Response Strength"), &lighting.ambientStrength, 0.0f, 8.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_floor"), "Ambient Response Floor"), &lighting.ambientFloor, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_density"), "Ambient Density Response"), &lighting.ambientDensity, 0.0f, 1.0f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_ambient_base"), "Ambient Base Response"), &lighting.ambientBase, 0.0f, 1.0f, "%.3f");
@@ -824,7 +824,7 @@ bool PhysicalSky::ShadersOK()
 	// path still verifies every texture before binding.
 	const bool ndfReady = settings.cloudMap.type != NdfType::Procedural ||
 	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
-	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady();
+	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (csVolMainView && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&

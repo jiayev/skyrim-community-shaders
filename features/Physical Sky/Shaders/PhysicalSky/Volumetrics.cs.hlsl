@@ -463,7 +463,7 @@ float CirrusDensity(float2 position, out float profile)
 	const float3 squared = patterns * patterns;
 	profile = lerp(lerp(squared.b, squared.r, saturate(weather.y * 2.0)), squared.g, saturate(weather.y * 2.0 - 1.0));
 	profile = pow(max(profile, 1e-10), 1.9 - weather.x * 1.8) * saturate(weather.x * weather.x * weather.x * 2.0);
-	return profile * info.cirrusDensityScale;
+	return (profile * 2.0) * info.cirrusDensityScale;
 }
 
 void IntegrateCirrus(float3 position, float3 direction, float distance, float phase, float3 ambientColor,
