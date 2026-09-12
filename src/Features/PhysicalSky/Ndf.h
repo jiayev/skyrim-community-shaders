@@ -173,15 +173,15 @@ struct LowCloudSettings
 	float ndfAltitudeOffset = 256.f;
 	float ndfAltitudeScale = 1792.f;
 	float2 ndfScale = { 16.f, 16.f };
-	// Physical repeat length of the authored 128^3 RGBA Nubis noise composite.
-	float noiseCompositeScale = 0.2f;
-	float noiseRoundness = 0.5f;
-	float3 noiseOffset = { 0.f, 0.f, 0.f };
-	float2 windDirection = { 1.f, 0.2f };
-	float windSpeed = 12.f;
+	float coverageBottomPower = 0.39f;
+	float coverageHeightRange = 0.30f;
+	float bottomDensityPower = 6.f;
+	float bottomDensityWidth = 6.8f;
+	float topExpansion = 1.f;
+	float2 windDirection = { 0.f, 0.f };
+	float windSpeed = 0.f;
 	float shapeShear = 0.f;
-	// Optical scale applied to normalized reconstructed density after NDF shaping.
-	float densityScale = 0.09f;
+	float densityScale = 0.125f;
 
 	float2 GetNdfAltitudeRangeKm() const;
 };
@@ -206,7 +206,7 @@ struct CirrusSettings
 
 struct CloudLightingSettings
 {
-	float lightingScale = 1.f;
+	float lightingScale = 0.36f;
 	float sunExtinction = 1.f;
 	float phaseForwardG = 0.2f;
 	float phaseBackwardG = 0.9f;
@@ -245,6 +245,8 @@ struct CirrusMapManager
 	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
 	bool Update(const CirrusSettings& settings, TextureManager& textures);
 	CirrusTextureSet GetTextures() const;
+	Texture2D* GetWeatherTexture() { return texWeather.get(); }
+	Texture2D* GetPatternsTexture() { return texPatterns.get(); }
 
 private:
 	static constexpr uint32_t kDimension = 512;

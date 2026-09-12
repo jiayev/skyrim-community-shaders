@@ -69,9 +69,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ndfAltitudeOffset,
 	ndfAltitudeScale,
 	ndfScale,
-	noiseCompositeScale,
-	noiseRoundness,
-	noiseOffset,
+	coverageBottomPower,
+	coverageHeightRange,
+	bottomDensityPower,
+	bottomDensityWidth,
+	topExpansion,
 	windDirection,
 	windSpeed,
 	shapeShear,
@@ -149,7 +151,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	enableVolumetricClouds,
 	rayMarchRange,
 	shadowVolumeRange,
-	lowViewSteps,
+	marchStepScale,
 	temporalAccumulationFactor,
 	cloudMap,
 	cloudLayer)
@@ -567,8 +569,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 	{
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
-		uint32_t minStep = 32, maxStep = 512;
-		ImGui::SliderScalar(T(TKEY("low_view_steps"), "Low Cloud View Budget"), ImGuiDataType_U32, &settings.lowViewSteps, &minStep, &maxStep);
+		ImGui::SliderFloat(T(TKEY("cloud_march_step_scale"), "Cloud March Step Scale"), &settings.marchStepScale, 0.125f, 2.f, "%.3f", ImGuiSliderFlags_Logarithmic);
 		ImGui::SliderFloat(T(TKEY("cloud_history_stability"), "Cloud History Stability"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 	}
 
@@ -579,14 +580,11 @@ void PhysicalSky::SettingsVolumetricClouds()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("ndf_altitude_encoding"), "Altitude = base altitude + NDF height * height span. Applies to both generated and imported maps."));
 		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &low.ndfScale.x, 1.f, 50.f, "%.2f km");
-		if (ImGui::SliderFloat(T(TKEY("noise_feature_size"), "Noise Composite Scale"), &low.noiseCompositeScale, 0.02f, 8.f, "%.3f km", ImGuiSliderFlags_Logarithmic))
-			volMainHistoryValid = false;
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("noise_feature_size_tooltip"), "Physical repeat length of nubis.dds, the authored 128^3 RGBA density-noise composite. It modulates density inside the NDF profile; it does not generate NDF coverage or height."));
-		if (ImGui::SliderFloat(T(TKEY("noise_roundness"), "Noise Roundness"), &low.noiseRoundness, 0.f, 1.f, "%.2f"))
-			volMainHistoryValid = false;
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("noise_roundness_tooltip"), "Blends wispy and rounded noise shapes independently of the cloud top and bottom profiles."));
+		ImGui::SliderFloat(T(TKEY("cloud_coverage_bottom_power"), "Coverage Bottom Power"), &low.coverageBottomPower, 0.01f, 4.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_coverage_height_range"), "Coverage Height Range"), &low.coverageHeightRange, 0.001f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_power"), "Bottom Density Power"), &low.bottomDensityPower, 0.f, 10.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_width"), "Bottom Density Width"), &low.bottomDensityWidth, 1.f, 10.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_top_expansion"), "Top Expansion"), &low.topExpansion, 0.f, 1.f, "%.3f");
 		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
 		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
 		ImGui::SliderFloat(T(TKEY("cloud_shape_shear"), "Cloud Shape Shear"), &low.shapeShear, 0.f, 2.f, "%.2f km");
@@ -621,7 +619,7 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();
-		if (baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv)
+		if (baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv)
 			ImGui::TextColored({ 0, 1, 0, 1 }, "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
 		else
 			ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("cloud_textures_missing"), "Cloud Textures: Missing"));
@@ -647,11 +645,85 @@ void PhysicalSky::SettingsDebug()
 		static float debugScale = 0.2f;
 		ImGui::SliderFloat(T(TKEY("view_scale"), "View Scale"), &debugScale, 0.1f, 1.f);
 
-		BUFFER_VIEWER_NODE_BULLET(texTrLut, 1.f);
-		BUFFER_VIEWER_NODE_BULLET(texMsLut, 1.f);
-		BUFFER_VIEWER_NODE_BULLET(texSvLut, 1.f);
-		BUFFER_VIEWER_NODE_BULLET(texApSunLut, 1.f);
-		BUFFER_VIEWER_NODE_BULLET(texApShadow, debugScale);
+		auto imageView = [&](const char* a_label, ID3D11ShaderResourceView* a_srv, float a_width, float a_height) {
+			if (!a_srv || !ImGui::TreeNode(a_label))
+				return;
+			ImGui::Image(a_srv, { a_width * debugScale, a_height * debugScale });
+			ImGui::TreePop();
+		};
+
+		static const char* cubeFaces[] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+		if (ImGui::SliderInt("Cubemap Face", &debugCubeFace, 0, 5, cubeFaces[debugCubeFace]))
+			debugCubeFaceSrvs.clear();
+
+		if (ImGui::TreeNode("Sky")) {
+			BUFFER_VIEWER_NODE(texTrLut, debugScale);
+			BUFFER_VIEWER_NODE(texMsLut, debugScale);
+			BUFFER_VIEWER_NODE(texSvLut, debugScale);
+			BUFFER_VIEWER_NODE(texApShadow, debugScale);
+			DrawDebugVolume(texApLut ? texApLut->srv.get() : nullptr, "texApLut", debugApSlice, debugScale);
+			DrawDebugVolume(texApSunLut ? texApSunLut->srv.get() : nullptr, "texApSunLut", debugApSunSlice, debugScale);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud Shape")) {
+			BUFFER_VIEWER_NODE(ndfManager.texHeight, debugScale);
+			BUFFER_VIEWER_NODE(ndfManager.texModeling, debugScale);
+			BUFFER_VIEWER_NODE(ndfManager.texOccupancy, debugScale);
+			BUFFER_VIEWER_NODE(ndfManager.texDistance, debugScale);
+			DrawDebugVolume(baseShapeNoiseSrv.get(), "baseShapeNoise", debugShapeNoiseSlice, debugScale);
+			{
+				Texture2D* weather = cirrusMapManager.GetWeatherTexture();
+				Texture2D* patterns = cirrusMapManager.GetPatternsTexture();
+				BUFFER_VIEWER_NODE_TITLE(weather, "cirrusWeather", debugScale);
+				BUFFER_VIEWER_NODE_TITLE(patterns, "cirrusPatterns", debugScale);
+			}
+			imageView("cloudProfileLut", cloudProfileLutSrv.get(), 256.f, 256.f);
+			imageView("cloudAdjustmentLut", cloudAdjustmentLutSrv.get(), 256.f, 256.f);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud Trace")) {
+			BUFFER_VIEWER_NODE(texVolLowTr, debugScale);
+			BUFFER_VIEWER_NODE(texVolLowLum, debugScale);
+			BUFFER_VIEWER_NODE(texVolLowAux, debugScale);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud Reproject")) {
+			BUFFER_VIEWER_NODE(texVolTr, debugScale);
+			BUFFER_VIEWER_NODE(texVolLum, debugScale);
+			BUFFER_VIEWER_NODE(texVolAux, debugScale);
+			BUFFER_VIEWER_NODE(texVolFilteredTr, debugScale);
+			BUFFER_VIEWER_NODE(texVolFilteredLum, debugScale);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud History")) {
+			BUFFER_VIEWER_NODE(texVolHistoryTr, debugScale);
+			BUFFER_VIEWER_NODE(texVolHistoryLum, debugScale);
+			BUFFER_VIEWER_NODE(texVolHistoryAux, debugScale);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud Cubemap")) {
+			DrawDebugCube(texVolCubeTraceTr.get(), "texVolCubeTraceTr", debugScale);
+			DrawDebugCube(texVolCubeTraceLum.get(), "texVolCubeTraceLum", debugScale);
+			DrawDebugCube(texVolCubeTraceAux.get(), "texVolCubeTraceAux", debugScale);
+			DrawDebugCube(texVolCubeTr.get(), "texVolCubeTr", debugScale);
+			DrawDebugCube(texVolCubeLum.get(), "texVolCubeLum", debugScale);
+			DrawDebugCube(texVolCubeAux.get(), "texVolCubeAux", debugScale);
+			DrawDebugCube(texVolCubeHistoryTr.get(), "texVolCubeHistoryTr", debugScale);
+			DrawDebugCube(texVolCubeHistoryLum.get(), "texVolCubeHistoryLum", debugScale);
+			DrawDebugCube(texVolCubeHistoryAux.get(), "texVolCubeHistoryAux", debugScale);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Cloud Lighting")) {
+			BUFFER_VIEWER_NODE(texVolCloudAmbientSH, 30.f);
+			DrawDebugVolume(texShadowVolume ? texShadowVolume->srv.get() : nullptr, "texShadowVolume", debugShadowVolumeSlice, debugScale);
+			ImGui::TreePop();
+		}
 	}
 }
 
@@ -826,17 +898,19 @@ bool PhysicalSky::ShadersOK()
 	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+	                           (csVolMainView && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
+								   texVolFilteredTr && texVolFilteredLum &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
 								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
-								   texShadowVolume && baseShapeNoiseSrv && cloudTopLutSrv && cloudBottomLutSrv && ndfReady && cirrusMapsReady);
+								   texShadowVolume && baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv && ndfReady && cirrusMapsReady);
 	return baseShadersOk && volumetricShadersOk;
 }
 
 void PhysicalSky::Reset()
 {
+	UpdateCloudWind();
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
@@ -1007,9 +1081,9 @@ void PhysicalSky::Prepass()
 				{ "map", settings.cloudMap },
 				{ "layer", settings.cloudLayer },
 				{ "range", settings.rayMarchRange },
+				{ "step", settings.marchStepScale },
 				{ "planet", settings.planetRadius },
-				{ "bottom", cbData.zBottom },
-				{ "quality", settings.lowViewSteps }
+				{ "bottom", cbData.zBottom }
 			}.dump();
 			if (cloudSettingsKey != volCloudSettingsKey) {
 				volMainHistoryValid = false;

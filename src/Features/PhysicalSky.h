@@ -141,8 +141,8 @@ struct PhysicalSky final : public Feature
 		bool enableVolumetricClouds = false;
 		float rayMarchRange = 32.f;     // km inside each cloud layer, excluding empty approach/gaps
 		float shadowVolumeRange = 8.f;  // km
-		uint32_t lowViewSteps = 192;
-		float temporalAccumulationFactor = 0.95f;
+		float marchStepScale = 0.5f;
+		float temporalAccumulationFactor = 1.f;
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
@@ -231,12 +231,14 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
 
-	eastl::unique_ptr<Texture2D> texVolTr = nullptr;      // full-resolution volumetric transmittance result
-	eastl::unique_ptr<Texture2D> texVolLum = nullptr;     // full-resolution volumetric luminance result
-	eastl::unique_ptr<Texture2D> texVolAux = nullptr;     // full-resolution cloud depth/metadata
-	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;   // quarter-resolution trace transmittance
-	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;  // quarter-resolution trace luminance
-	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;  // quarter-resolution trace depth/metadata
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;           // full-resolution volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;          // full-resolution volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolAux = nullptr;          // full-resolution cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;        // quarter-resolution trace transmittance
+	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;       // quarter-resolution trace luminance
+	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;       // quarter-resolution trace depth/metadata
+	eastl::unique_ptr<Texture2D> texVolFilteredTr = nullptr;   // blurred transmittance for compositing
+	eastl::unique_ptr<Texture2D> texVolFilteredLum = nullptr;  // blurred luminance for compositing
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
@@ -251,10 +253,22 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
 
-	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> cloudTopLutSrv = nullptr;
-	winrt::com_ptr<ID3D11ShaderResourceView> cloudBottomLutSrv = nullptr;
+	// ImGui::Image cannot sample a cubemap or a volume texture, so those are shown
+	// through a 2D view built from the resource itself.
+	ankerl::unordered_dense::map<ID3D11Resource*, winrt::com_ptr<ID3D11ShaderResourceView>> debugCubeFaceSrvs;
+	int32_t debugCubeFace = 0;
+	eastl::unique_ptr<Texture2D> debugApSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugApSunSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugShadowVolumeSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugShapeNoiseSlice = nullptr;
+	ID3D11ShaderResourceView* GetDebugCubeFaceSrv(Texture2D* a_texture);
+	ID3D11ShaderResourceView* GetDebugVolumeSliceSrv(ID3D11ShaderResourceView* a_srv, eastl::unique_ptr<Texture2D>& a_target);
+	void DrawDebugCube(Texture2D* a_texture, const char* a_label, float a_scale);
+	void DrawDebugVolume(ID3D11ShaderResourceView* a_srv, const char* a_label, eastl::unique_ptr<Texture2D>& a_target, float a_scale);
 
+	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudProfileLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudAdjustmentLutSrv = nullptr;
 	TextureManager ndfTexManager{ "Cloud Map" };
 	NdfManager ndfManager;
 	CirrusMapManager cirrusMapManager;
@@ -264,7 +278,7 @@ struct PhysicalSky final : public Feature
 	{
 		float rayMarchRange;
 		float shadowVolumeRange;
-		uint lowViewSteps;
+		float marchStepScale;
 		uint cloudFrameIndex;
 		float2 rcpFrameDim;
 		float3 dirlightDir;
@@ -280,10 +294,12 @@ struct PhysicalSky final : public Feature
 
 		float2 lowNdfFrequency;
 		float2 noiseWindOffset;
-		float noiseFrequency;
-		float3 noiseOffset;
 		float lowDensityScale;
-		float noiseRoundness;
+		float coverageBottomPower;
+		float coverageHeightRange;
+		float bottomDensityPower;
+		float bottomDensityWidth;
+		float topExpansion;
 		uint cirrusEnabled;
 		float cirrusAltitude;
 		float cirrusPatternFrequency;
@@ -326,13 +342,16 @@ struct PhysicalSky final : public Feature
 	bool volMainHistoryValid = false;
 	float2 volHistoryFrameDim = {};
 	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
-	float2 volHistoryWindOffset = { 0.f, 0.f };
-	float volHistoryTime = 0.f;
+	std::array<double, 2> volWindOffsetMeters = {};
+	std::array<double, 2> volHistoryWindOffsetMeters = {};
+	double volWindTime = 0.0;
+	double volHistoryTime = 0.0;
 	float4x4 volHistoryViewProj = {};
 	float3 volHistoryCamera = {};
 	std::string volCloudSettingsKey;
 
 	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolFilter = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
@@ -350,6 +369,7 @@ struct PhysicalSky final : public Feature
 	void SetupVolumetricResources();
 	void CompileVolumetricShaders();
 	void LoadCloudTextures();
+	void UpdateCloudWind();
 	void RenderVolumetricClouds(VolumetricCloudPass a_pass);
 
 	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
