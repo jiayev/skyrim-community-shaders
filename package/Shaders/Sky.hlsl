@@ -385,7 +385,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 skyColor = physSkyColor;
 		if (SharedData::physSkyData.enableVolumetricClouds)
 			skyColor = inReflection ? PhysSky::CompositeVolumetricCloudsCube(physSkyColor, skyViewDir, PhysSky::SampSv) : PhysSky::CompositeVolumetricCloudsUv(physSkyColor, physSkyScreenUV, PhysSky::SampSv);
-		psout.Color.xyz = lerp(skyColor, psout.Color.xyz, SharedData::physSkyData.vanillaMix);
+		psout.Color = lerp(float4(skyColor, 1.0f), psout.Color, SharedData::physSkyData.vanillaMix);
 
 #		elif defined(PS_CLOUDS)
 		float apShadow = GetPhysSkyCloudShadow(viewDir, input.Position.xy);
