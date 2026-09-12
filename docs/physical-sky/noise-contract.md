@@ -1,147 +1,120 @@
-# Bundled cloud noise reconstruction
+# Profile cloud noise reconstruction
 
-## Scope
+## Resources
 
-The bundled `nubis.dds` is used as a four-channel threshold-noise resource.
-`CloudNoise.hlsli` defines its reconstruction contract. This is independent of
-how cloud coverage, shape type and vertical profile are stored: the current
-implementation obtains them from two-dimensional control maps and profile LUTs.
-No world-space density volume or new texture asset is introduced.
+The regular NDF layer uses `NubisCloudShapeNoise.dds`, a linear 128³ RGBA8
+volume with eight mip levels. The channels supply rounded shape (R), distant
+wisps (G), nearby wisps (B), and erosion (A). `CloudNoise.hlsli` combines these
+signals using dimensional profile, top type, local height and view distance.
 
-The public [Nubis, Evolved presentation](https://www.guerrilla-games.com/read/nubis-evolved)
-is background for vertical-profile cloud modeling. This implementation is not
-claimed to reproduce the presentation's illustrated sky-noise asset or all its
-rendering behavior.
+`NubisOrographicDetailNoise.dds` is a linear 32³ RGBA8 volume with six mips,
+reserved for a future orographic cloud path. That path uses its R channel for
+nearby erosion. It is not sampled by the regular NDF layer.
 
-## Verified file properties
+`NubisVoxelNoise.dds` preserves the original 128³ RGBA8 voxel detail resource
+without modifying its bytes. It is not loaded or bound by this renderer. Its
+threshold/roundness reconstruction does not apply to regular profile clouds.
 
-| Property        | Value                                                            |
-| --------------- | ---------------------------------------------------------------- |
-| Dimensions      | 128 x 128 x 128                                                  |
-| Mip count       | 8                                                                |
-| Encoding        | Legacy DDS, uncompressed RGBA8                                   |
-| Channel masks   | 0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000                   |
-| Payload offset  | 128 bytes                                                        |
-| File length     | 9,587,108 bytes                                                  |
-| Payload SHA-256 | d3179e35ce38febce126f7d683de45ded3154b6bfcca9c625d8d12620b47afea |
+Two linear 64² lookup textures accompany the shape volume:
 
-Statistics below are over the complete mip-0 volume, decoded to linear [0, 1]
-and accumulated in float64. They describe numerical data, not channel meaning.
+-   `NubisVerticalProfile.dds`: BC5, one mip; R is the bottom profile and G is
+    the top profile. U is type and V is local height, increasing bottom to top.
+-   `NubisVerticalAdjustment.dds`: BC7, seven mips; R expands the top profile,
+    and GB supplies horizontal noise displacement near the base. Profile lookup
+    clamps UVs; displacement lookup wraps and always uses mip 0.
 
-| Channel |     Mean | Standard deviation |
-| ------- | -------: | -----------------: |
-| R       | 0.126204 |           0.181594 |
-| G       | 0.135350 |           0.180776 |
-| B       | 0.388657 |           0.209794 |
-| A       | 0.396538 |           0.217184 |
+## Dimensional profile
 
-## Controls and channel use
+NDF inputs remain height RG and coverage/top-type/bottom-type RGB. The spherical
+layer maps the height pair into physical altitude before noise evaluation.
 
-| Input                | Physical Sky mapping                                  |
-| -------------------- | ----------------------------------------------------- |
-| Coverage `c`         | NDF coverage, clamped to [0, 1]                       |
-| Roundness `r`        | `cloudLayer.low.noiseRoundness`, clamped to [0, 1]    |
-| Vertical profile `v` | Product of the evaluated top and bottom profile LUTs  |
-| Noise RGBA           | One wrapped linear sample of the bundled noise volume |
-
-Coverage and vertical profile remain separate until the final density response.
-Roundness is a dedicated shape control; it is not the evaluated bottom-profile
-density and is not implicitly inferred from the authored bottom-type selector.
-The default 0.5 is a project starting value, not a recovered art configuration.
-Missing configuration fields receive that default.
-
-The reconstruction is:
+Modeling UVs use height-dependent shear. An upstream modeling sample, displaced
+by `60 * cloudShapeShear`, blends types and increases coverage with height.
+The blend is `smoothstep(0, 1, saturate((height - 0.1) * 1.5384616))`.
+Top type is multiplied by `saturate(coverage * 10)`.
 
 ```text
-base      = lerp(G, R, c)
-cellular  = lerp(0.2 * A + 0.1, 0.3 * B, c^(1/16))
-threshold = lerp(base, cellular, r)
-eroded    = saturate((c - threshold) / (1 - threshold))
-h         = v^4
-density   = (h * eroded)^(0.3 + 0.3 * h)
+f = saturate(height / coverageHeightRange)
+coverageExponent = lerp(lerp(coverageBottomPower, 1, f), 1, f)
+top = lerp(topProfile, max(topProfile, expandedTop), topExpansion)
+dimensionalProfile = max(top * bottomProfile, 0) * coverage^coverageExponent
 ```
 
-R/G are alternative base-threshold signals, with R approached as coverage
-increases. B/A contribute a cellular threshold; they are not two arbitrarily
-interchangeable density channels. At low coverage A and its offset matter more;
-at higher coverage the B term becomes dominant. Roundness selects between the
-base and cellular thresholds. Extinction coefficient is applied after this
-normalized reconstruction.
+Lighting receives the dimensional profile before noise erosion. Its remap
+`saturate((profile - 0.05) / 0.95)` is applied once in the lighting response.
+The coverage/type product remains `coverage * topType`.
 
-An empty coverage/profile returns zero. If `coverage <= threshold`, the sample
-returns zero before division or powering. This also defines the fully saturated
-`coverage == threshold == 1` corner as empty instead of producing 0/0.
-The guards keep zero support from becoming a tiny positive density through a
-logarithm clamp. Density remains in [0, 1] before physical extinction scaling.
+## Noise coordinates and mip
 
-## Near detail and sampling
-
-For detail-enabled samples below 150 m, the same fetched G/A channels also
-supply folded signals:
+Positions are converted to metres relative to the existing worldspace altitude
+reference; XY follows the shared wind displacement.
 
 ```text
-foldA = abs(abs(2 * A - 1) * 2 - 1)
-foldG = abs(abs(2 * G - 1) * 2 - 1)
-nearThreshold = lerp(1 - foldG^4, foldA^2, roundness)
-threshold = lerp(nearThreshold, threshold,
-                 0.9 + 0.1 * saturate((distanceMeters - 50) / 100))
+bottomFade = saturate((height - 0.02) * 33.333332)
+xy = position.xy - windOffset
+displacement = adjustmentGB(xy * 0.004) * 2 - 1
+noiseXY = xy * 0.0043545123 + displacement * (0.125 - 0.125*bottomFade)
+noiseZ = (position.z - 20 + 10*bottomFade) * 0.0034834063
+mip = floor(dimensionalProfile * 3 + mipBias)
 ```
 
-This changes at most 10% of the threshold and fades to the ordinary threshold
-at 150 m. It uses no second noise texture fetch. Distance is measured from the
-actual camera position in the cloud coordinate frame and converted to metres.
-The 50–150 m interval is the project's physical-unit interpretation.
+View rays use mip bias 0; sunlight and ground-shadow queries use 2. The spatial
+frequency is fixed by the reconstruction, independently of NDF map repeat.
+Noise scale, roundness and voxel folded-detail controls are absent.
 
-The texture keeps its physical repeat scale, offset and shared wind advection.
-Samples use the caller's explicit mip level. Coarse light-cache and ground-shadow
-queries retain their existing coarser mip and disable the near folded term;
-local light queries also omit the folded term, while view queries can include
-it. Local light mip is `clamp(log2(max(intervalNoiseTexels, 1)), 0, 3)`, using
-the interval's world length, noise frequency and largest texture dimension.
-The upper bound limits smoothing because filtered noise is not filtered density
-after nonlinear threshold reconstruction. All use the same reconstruction
-helper. A logarithmic view-distance mip ramp requires separate footprint
-calibration and is not inferred from density or profile strength here.
+## Density
 
-Camera-dependent density fading and additional view-only exponent/intensity
-compensation are not part of this material contract. Omitting them avoids
-introducing a separate view-only cloud density response into the lighting and
-shadow integration. The near threshold remains an explicitly bounded detail
-approximation, not a claim of identical view and cache sampling.
+The R/A billow and B/G/A wisp branches are combined using top type and height.
+B transitions to G between view distances 1000 and 2000 metres. The combination
+is multiplied by 0.975, then eroded by subtracting `1-min(0.7, profile)`.
+The complete channel equations are in `ReconstructCloudNoiseDensity`.
 
-## Integration changes
+Positive eroded density `e` receives the base response:
 
-The old profile-based R/G mixture, scaled B/A mixture and bottom-profile mixture
-were replaced together with their coverage-relief term and kilometre-distance
-channel fade. The extra lower-frequency rotated texture sample, hidden noise
-height shear and bottom warp were removed. The CPU-generated warp texture and
-its bindings were also removed; t8 now carries the NDF modeling texture.
+```text
+boost = 8 * (1-e)^10
+width = 10 - 9 * saturate((bottomDensityWidth-1)/9)
+base = height^0.3 * saturate(height*width)^bottomDensityPower
+density = (lerp(boost, 1, saturate(height*5)) * e * base)
+          ^(0.35 + 0.3*saturate((height-0.25)*4))
+viewExtinction = density * densityScale
+lightDensity = viewExtinction * (1 + 3*height^4)
+```
 
-The old 0.7 profile cap, 0.975 composite gain and derived 0.025 profile cutoff
-are absent. These do not belong to the threshold contract above. NDF shape
-shear remains a separate control-map operation. Acceleration stays conservative
-because its occupancy bounds positive coverage before any noise reduction;
-no new density is created outside the profile or coverage support.
+Empty eroded samples return exactly zero before the power response. The RG
+height contract has no additional per-column base-raising channel; this path
+uses zero base raising. Storm modifications are not implemented.
 
-This changes cloud opacity and shape for existing presets. Noise repeat scale
-and density-to-extinction scale retain their units, but old visual tuning is not
-expected to give the same image. The mapping of NDF coverage, profile and the
-new roundness control is a deliberate project adaptation.
+Each local sunlight probe retains the originating view sample's distance for
+the B/G transition. Ground-shadow queries use distance from the camera. View
+opacity, sunlight occlusion and ground shadows share the same reconstruction.
 
-## Verification scope
+The current initial values below were copied from a single captured frame.
+They are provisional reproduction values, not calibrated project defaults.
+The capture alone cannot distinguish an authored preset from an interpolated
+weather state; decimal precision is not evidence of either. Rounding these
+values would not establish suitable defaults.
 
-Static review checks the original expression structure against the reconstructed
-helper and verifies the CPU/HLSL field layout, settings/UI, every density consumer
-and removed-resource references. An external CPU algebra check used 250,000
-sampled noise/control combinations; the maximum double-precision difference
-between the direct log/exp expression and the power form was below 4e-13.
-The zero guards intentionally define otherwise singular boundary cases.
+| Control               | Provisional initial value |
+| --------------------- | ------------------------: |
+| Coverage Bottom Power |               0.390888989 |
+| Coverage Height Range |               0.306688964 |
+| Bottom Density Power  |                         6 |
+| Bottom Density Width  |                6.74295807 |
+| Top Expansion         |                         1 |
+| Density Scale         |                   0.75 /m |
 
-No C++ build, shader compilation or GPU comparison was performed. Runtime
-acceptance should cover roundness endpoints, low coverage, profile edges,
-near-detail transitions, moving cameras and cloud/ground shadow agreement.
-The local control-field generator is described in
-[procedural NDF generation](ndf-generator.md). Modeling R supplies coverage
-independently of the vertical profile. At coverage one, normalized threshold
-reduction becomes one wherever the threshold is below one, removing that noise
-variation. Continuous coverage below one preserves sensitivity to this reducer.
+Project defaults need evaluation with the bundled noise and LUTs across low and
+high coverage, multiple top/bottom types, and thin and thick layers. Coverage
+response and base shaping should be assessed before optical density is tuned.
+The captured density scale is not a required setting for existing configurations.
+
+## Verification
+
+CPU comparisons cover 200,000 noise/base responses using actual shape-volume
+texels from six mip levels and 200,000 profile queries using the bundled LUTs.
+Static checks cover all density callers, host/shader field order and stride,
+settings serialization, and the absence of reserved detail volumes from runtime
+bindings. The empty-space margin includes both the local and upstream shear
+displacements. These checks do not calibrate defaults or replace game rendering
+and performance tests.

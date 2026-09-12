@@ -2,26 +2,26 @@
 
 ## Ray integration
 
-The base step follows Nubis Evolved slide 39: `3 + 60 * distance / 16384`,
-with distances in metres. A geometric step increase fits the remaining occupied
-intervals into a finite view budget. `lowViewSteps` defaults to 192 (32–512).
-The budget counts density probes, including empty probes and backtracking,
-rather than truncating the cloud range. Cirrus uses one sheet intersection and
-four light probes, without a volumetric view budget.
+The step follows Nubis Evolved slide 39: `3 + 60 * distance / 16384`, with
+distances in metres, scaled by `marchStepScale` (default 0.5, the value in the
+captured parameter set). The march ends at the occupied interval's far bound, at
+`T <= 0.1`, or when the ray leaves the layer; a long grazing interval therefore
+takes as many probes as the step function yields. Cirrus uses one sheet
+intersection and four light probes.
 
 Sphere intersections retain both near and far pieces of the NDF layer and clip
 against geometry and the planet. The cirrus intersection splits these pieces
 when needed, preserving front-to-back compositing even above the sheet or when
 NDF heights extend across it. `rayMarchRange` limits occupied volume distance,
-excluding clear approach and gaps. Each future occupied interval reserves at
-least one probe.
+excluding clear approach and gaps.
 
 NDF distance bounds skip empty horizontal support, limited to the current
 interval. Empty density doubles the next step. A hit following a coarse probe
-retries that interval at the fine step when budget permits. The 64 x 64 distance
-map retains conservative coverage footprints, tiling, and shape-shear margins.
-Noise mip follows step length in noise texels, bounded to levels 0–2. The
-bundled volume retains its [existing noise contract](noise-contract.md).
+retries that interval at the fine step. The 64 x 64 distance
+map retains conservative coverage footprints, tiling, and a `61 * shearLength`
+margin covering both local and upstream modeling samples. Noise mip is
+`floor(dimensionalProfile * 3 + mipBias)`, with bias 0 for view queries and 2
+for light queries. See the [profile noise contract](noise-contract.md).
 
 Samples within 250 m use temporal ray-start jitter. Distant samples use stable
 spatial jitter. Lighting uses deterministic local midpoints, independently of
@@ -30,6 +30,29 @@ and `weight = T * (1 - T_step)`. Marching stops at `T <= 0.1`. Final transmittan
 is remapped to `saturate((T - 0.1) / 0.9)`; premultiplied radiance is adjusted to
 the same opacity. This cutoff/remap is an artistic approximation; the individual
 Beer step integral is invariant to subdivision for a constant source.
+
+## Wind
+
+Wind speed is metres per unpaused second. `PhysicalSky::Reset` integrates the
+normalized horizontal direction and speed once per frame using
+`RE::GetSecondsSinceLastFrame()`. Displacement and elapsed time accumulate in
+double precision, independently of render passes and history validity. A zero
+direction retains the positive-X fallback; zero speed stops translation at its
+current position. Speed or direction changes affect subsequent displacement,
+without re-evaluating earlier motion. Paused frames do not advance either state.
+
+The GPU receives displacement in game units. Density queries subtract it before
+converting to noise coordinates. NDF height/modeling, the empty-distance map,
+shape noise, its XY warp, and cirrus weather/patterns share this translation.
+This shared transport of static weather maps is a project adaptation; the
+generator's weather offset remains a separate authoring input. It does not
+reproduce independently animated weather and detail wind fields.
+
+Main-view, cubemap and shadow passes read the same displacement. Reprojection
+subtracts the displacement since the previous successful history capture from
+the current cloud position. This delta is computed in double precision before
+conversion to game units. Clearing history does not reset wind. History gaps
+are measured in seconds, with a 0.25-second rejection threshold.
 
 ## Full-resolution 16-phase reconstruction
 
@@ -53,11 +76,15 @@ supply only missing history, with scene-depth rejection; there is no spatial
 upscale pass applied to the accumulated result.
 
 Temporary hole fills have validity 0.5; actual samples have validity 1. Their
-first traced update replaces the fill. Colour, opacity and projected motion
-control later temporal blending. Clear sky does not contribute to cloud-depth
-moments. Configuration changes, shader/texture reload, time reversal and gaps
-over 0.25 seconds invalidate history. Snapshots and the phase index advance only
-after main and cubemap reconstruction complete.
+first traced update replaces the fill. A traced pixel mixes its reprojected
+history with its own new sample by `(1 - 0.8 * sqrt(relativeColourDifference))`
+times the projected-motion weight; `temporalAccumulationFactor` scales how far
+that weight is applied, and is 1 by default. Untraced pixels keep the
+reprojected history unchanged. Colour and opacity come from the same weight;
+clear sky does not contribute to cloud-depth moments. Configuration changes,
+shader/texture reload, time reversal and gaps over 0.25 seconds invalidate
+history. Snapshots and the phase index advance only after main and cubemap
+reconstruction complete.
 
 The 64 x 64 x 6 cubemap follows the same schedule: 16 x 16 actual rays on every
 face, then per-face full-resolution temporal reconstruction. Cube history is
@@ -80,11 +107,11 @@ shadows and atmosphere resources.
 
 Static/CPU checks cover the buffer contract, 16-phase coverage (including odd
 sizes), native pixel recovery, all cube texel orientations, ordered interval
-coverage under finite budgets, Beer integration and edge-depth moments.
+coverage, Beer integration and edge-depth moments.
 No C++ build, shader compilation, GPU render or timing is part of these checks.
 
 ## Reference
 
 [Nubis Evolved, SIGGRAPH 2022](https://advances.realtimerendering.com/s2022/SIGGRAPH2022-Advances-NubisEvolved-NoVideos.pdf):
-slides 39, 48, 54, 59, 157 and 187. Budget fitting, spherical interval ordering,
+slides 39, 48, 54, 59, 157 and 187. Spherical interval ordering,
 phase permutation, cube history and storage formats are adaptations for Physical Sky.

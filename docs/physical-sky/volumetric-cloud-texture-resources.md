@@ -8,13 +8,13 @@ and render-target formats.
 ## Low-cloud model
 
 Physical Sky uses a vertical-profile representation inspired by publicly
-described Nubis techniques. Its threshold-noise reconstruction is documented
+described Nubis techniques. Its profile-noise reconstruction is documented
 in [noise reconstruction](noise-contract.md). Low-cloud density
-is the composition of two independent resources:
+combines a control field with lookup textures and shape noise:
 
 1. a five-attribute NDF supplies the dimensional profile: minimum height, maximum
    height, coverage, top type, and bottom type;
-2. `nubis.dds` supplies the tileable three-dimensional density-noise composite.
+2. `NubisCloudShapeNoise.dds` supplies the tileable three-dimensional density-noise composite.
 
 The noise volume does not generate the NDF, and the NDF is not a second erosion
 pass. The profile determines where cloud mass may exist; the composite describes
@@ -22,20 +22,20 @@ the internal and boundary variation of that mass.
 
 ## Runtime bindings
 
-| Resource                  | Binding | Type                      | Default source   |
-| ------------------------- | ------: | ------------------------- | ---------------- |
-| Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `nubis.dds`      |
-| Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated    |
-| Low-cloud height          |    `t7` | `Texture2D<float2>`       | GPU-generated    |
-| Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated    |
-| Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer         |
-| Sky view                  |   `t10` | `Texture2D<float4>`       | renderer         |
-| Cirrus weather            |   `t11` | `Texture2D<float2>`       | generated / DDS  |
-| Low-cloud distance        |   `t12` | `Texture2D<float>`        | GPU-generated    |
-| Cirrus patterns           |   `t13` | `Texture2D<float3>`       | generated / DDS  |
-| Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer         |
-| Nubis top profile         |   `t17` | `Texture2D<unorm float>`  | `top_lut.dds`    |
-| Nubis bottom profile      |   `t18` | `Texture2D<unorm float>`  | `bottom_lut.dds` |
+| Resource                  | Binding | Type                      | Default source                |
+| ------------------------- | ------: | ------------------------- | ----------------------------- |
+| Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `NubisCloudShapeNoise.dds`    |
+| Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated                 |
+| Low-cloud height          |    `t7` | `Texture2D<float2>`       | GPU-generated                 |
+| Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated                 |
+| Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer                      |
+| Sky view                  |   `t10` | `Texture2D<float4>`       | renderer                      |
+| Cirrus weather            |   `t11` | `Texture2D<float2>`       | generated / DDS               |
+| Low-cloud distance        |   `t12` | `Texture2D<float>`        | GPU-generated                 |
+| Cirrus patterns           |   `t13` | `Texture2D<float3>`       | generated / DDS               |
+| Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer                      |
+| Vertical profile          |   `t17` | `Texture2D<unorm float2>` | `NubisVerticalProfile.dds`    |
+| Profile adjustment        |   `t18` | `Texture2D<unorm float3>` | `NubisVerticalAdjustment.dds` |
 
 Temporal reconstruction reads screen history at t26–t28 and compact screen
 traces at t29–t31. Cube history occupies t32–t34 and compact cube traces t35–t37.
@@ -59,16 +59,13 @@ RGBA16_FLOAT with unused A zero.
 
 At a ray sample the shader computes:
 
-```text
-local_height = (altitude - minimum_height) / (maximum_height - minimum_height)
-vertical_profile = top_lut(top_type, local_height)
-                 * bottom_lut(bottom_type, local_height)
-dimensional_profile = coverage * vertical_profile
-```
+The local height selects the vertical LUT row. Modeling coverage receives a
+height-dependent power, while top and bottom types select their profile
+columns. The adjustment LUT can expand the top profile. Both generated and
+imported NDFs follow the same rules; see [noise reconstruction](noise-contract.md).
 
-`Low Cloud Base Altitude` and `Layer Thickness` map normalized NDF height 0-1
-into physical altitude. `NDF Scale` independently controls the X/Y repeat
-length; it is independent of the 3D noise repeat length.
+`NDF Base Altitude` and `NDF Height Span` map normalized NDF height 0–1 into
+physical altitude. `NDF Scale` independently controls the X/Y repeat length.
 
 The generator remaps and powers two coverage signals, combines them with max
 and gain, and separately remaps shared noise into profile types. Optional local
@@ -80,33 +77,33 @@ Texture mode selects `heightPath` and `modelingPath` with the same channel
 contract. Arrays, integer and sRGB views are rejected. Optional authored maps
 enter the same density query as generated maps.
 
-## `nubis.dds`
+## Shape and reserved noise volumes
 
-The bundled asset is a 128 x 128 x 128, linear RGBA8 volume with eight mip
-levels. Its legacy DDS channel masks map bytes to R/G/B/A. It is sampled once
-at t5 with wrapping and the caller's explicit mip level.
+`NubisCloudShapeNoise.dds` is a 128³ linear RGBA8 volume with eight mips,
+sampled at t5. Its R/A billow and B/G/A wisp signals are combined with NDF
+profile, top type and height. The result is eroded, then receives a separate
+base-density response. Noise coordinates, channel formulas, profile-dependent
+mip selection, and parameter defaults are specified in the
+[noise contract](noise-contract.md).
 
-Coverage mixes G towards R. A and B produce another threshold using the
-coverage-dependent exponent 1/16. `Noise Roundness` selects between these
-thresholds. Coverage is then eroded and normalized by the remaining threshold
-range, before applying the independent vertical-profile response.
-
-This contract and its near-camera folded detail are specified in
-[noise reconstruction](noise-contract.md). It uses no auxiliary warp texture
-or rotated second sample. `Noise Composite Scale` controls the physical repeat
-length of the volume; it does not change NDF coverage, height or cloud species.
+`NubisOrographicDetailNoise.dds` (32³, six mips) is reserved for nearby erosion
+in a future orographic layer. `NubisVoxelNoise.dds` (128³, eight mips) retains
+the voxel detail volume unchanged. Neither is loaded by the regular NDF path;
+replacing them does not change regular cloud rendering.
 
 ## Profile LUTs
 
-`top_lut.dds` and `bottom_lut.dds` are required `128 x 128` R8 UNORM assets.
-U is profile type and V is `1 - localHeight`, matching their stored orientation.
-Top and bottom type occupy modeling G and B.
+`NubisVerticalProfile.dds` is 64² BC5: R stores bottom profile and G top profile.
+`NubisVerticalAdjustment.dds` is 64² BC7: R stores top expansion, GB horizontal
+noise warp. All lookups use mip 0. Profile UVs are `(type, localHeight)` with
+clamping; the adjustment GB lookup wraps in horizontal world coordinates.
+The old separate R8 top/bottom assets are not used by this path.
 
 ## Cirrus inputs
 
 Cirrus is a two-dimensional spherical sheet. It shares the main NDF world UV
 and wind displacement, with an independent pattern repeat length (default
-`1 / 0.0002331` metres). It does not sample `nubis.dds`.
+`1 / 0.0002331` metres). It does not sample `NubisCloudShapeNoise.dds`.
 
 | Texture       | Channels                                                  |
 | ------------- | --------------------------------------------------------- |
@@ -154,9 +151,9 @@ its maps and invalidate cloud history. Disabled cirrus skips generation.
 
 ## Static validation checklist
 
--   `nubis.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
+-   `NubisCloudShapeNoise.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
 -   Low NDF uses linear height RG and modeling RGB textures at t7/t8.
--   NDF coverage is generated independently from `nubis.dds`.
+-   NDF coverage is generated independently from `NubisCloudShapeNoise.dds`.
 -   Empty or reversed height intervals are rejected by the density query.
 -   Noise is queried only inside positive NDF/profile support, with zero density outside it.
 -   Cirrus weather/pattern inputs are linear 2D RG/RGB resources at t11/t13.

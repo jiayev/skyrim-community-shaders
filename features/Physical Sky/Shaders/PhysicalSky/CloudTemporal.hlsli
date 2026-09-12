@@ -41,10 +41,10 @@ bool CloudDepthCompatible(float a, float b)
 float CloudHistoryBlend(float3 history, float3 current, float2 motion)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float difference = length(history - current) / max(max(length(history), length(current)), 0.1);
-	const float colorWeight = 1.0 - (1.0 - saturate(sqrt(difference))) * 0.8;
+	const float difference = saturate(sqrt(length(history - current) / max(max(length(history), length(current)), 0.1)));
+	const float colorWeight = 1.0 - difference * 0.8;
 	const float motionWeight = saturate((length(motion) - 0.0001) * 2500.0) * 0.5 + 0.5;
-	return lerp(1.0, max(colorWeight, motionWeight), info.temporalAccumulationFactor);
+	return lerp(1.0, colorWeight * motionWeight, info.temporalAccumulationFactor);
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
@@ -173,7 +173,7 @@ bool CloudHistory(float2 uv, float sceneDepth, out float3 tr, out float3 lum, ou
 	float3 lum = currentLum;
 	float4 aux = currentAux;
 	if (historyValid) {
-		const float weight = traced ? (historyAux.z < 0.99 ? 1.0 : max(CloudHistoryBlend(historyLum, currentLum, previousUv - uv), saturate(abs(historyTr.x - currentTr.x) * 4.0))) : 0.0;
+		const float weight = traced ? (historyAux.z < 0.99 ? 1.0 : CloudHistoryBlend(historyLum, currentLum, previousUv - uv)) : 0.0;
 		tr = lerp(historyTr, currentTr, weight);
 		lum = lerp(historyLum, currentLum, weight);
 		aux = lerp(historyAux, currentAux, weight);
@@ -257,7 +257,7 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 		if (historyAux.z > 0.0) {
 			const float3 historyTr = TexCubeHistoryTr.SampleLevel(TransmittanceSampler, previousDirection, 0);
 			const float3 historyLum = TexCubeHistoryLum.SampleLevel(TransmittanceSampler, previousDirection, 0);
-			const float weight = traced ? (historyAux.z < 0.99 ? 1.0 : max(CloudHistoryBlend(historyLum, currentLum, float2(length(direction - previousDirection), 0.0)), saturate(abs(historyTr.x - currentTr.x) * 4.0))) : 0.0;
+			const float weight = traced ? (historyAux.z < 0.99 ? 1.0 : CloudHistoryBlend(historyLum, currentLum, float2(length(direction - previousDirection), 0.0))) : 0.0;
 			tr = lerp(historyTr, currentTr, weight);
 			lum = lerp(historyLum, currentLum, weight);
 			aux = lerp(historyAux, currentAux, weight);
