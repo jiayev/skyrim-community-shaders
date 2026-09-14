@@ -37,6 +37,14 @@ public:
 			.Denoiser = CreationEngineRaytracing::Denoiser::None,
 			.Mode = CreationEngineRaytracing::Mode::PathTracing
 		};
+		bool StablePlanes = false;
+		CreationEngineRaytracing::NRDSettings NRDSettings;
+		CreationEngineRaytracing::NRDReblurSettings NRDReblurSettings;
+		CreationEngineRaytracing::NRDRelaxSettings NRDRelaxSettings;
+		CreationEngineRaytracing::SSSSettings SSSSettings;
+		CreationEngineRaytracing::MaterialSettings MaterialSettings;
+		CreationEngineRaytracing::LightingSettings LightingSettings;
+		CreationEngineRaytracing::WaterSettings WaterSettings;
 
 		bool operator==(const Settings&) const = default;
 	} settings;
@@ -46,6 +54,17 @@ public:
 	virtual void SaveSettings(json& o_json) override;
 	virtual void DrawSettings() override;
 
+	void DrawGeneralSettings();
+	void DrawAdvancedSettings();
+	void DrawNRDSettings();
+	void DrawReblurSettings();
+	void DrawRelaxSettings();
+	void DrawSSSSettings();
+	void DrawMaterialSettings();
+	void DrawLightingSettings();
+	void DrawWaterSettings();
+
 	void UpdateSettings();
 	bool Available() const;
 };
+
