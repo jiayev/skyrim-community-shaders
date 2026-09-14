@@ -3,7 +3,19 @@
 
 namespace CloudShadowVolume
 {
-	// The volume stores the remaining density column toward the light. Outside
+	float2 GridCenter(float2 camera, float range, uint2 dimensions)
+	{
+		const float2 cellSize = range / float2(dimensions);
+		return floor(camera / cellSize) * cellSize;
+	}
+
+	float EdgeWeight(float3 uvw, uint2 dimensions)
+	{
+		const float2 edge = min(uvw.xy, 1.0 - uvw.xy) * float2(dimensions);
+		return smoothstep(0.0, 2.0, min(edge.x, edge.y));
+	}
+
+	// The volume stores transmittance toward the light. Outside
 	// receivers must sample the ray's entry into the box, never its exit.
 	float3 GetSampleUvw(float3 pos, float3 lightDir, float3 boundsMin, float3 boundsMax)
 	{
@@ -31,21 +43,23 @@ namespace CloudShadowVolume
 
 	// Only use this overload with a known linear-clamp sampler. Compute passes
 	// own their samplers, unlike the material/depth/shadow-mask pixel shaders.
-	float SampleDensity(Texture3D<float> volume, SamplerState linearClamp, float3 uvw)
+	float SampleTransmittance(Texture3D<float> volume, SamplerState linearClamp, float3 uvw)
 	{
 		if (any(uvw < 0.0) || any(uvw > 1.0))
-			return 0.0;
-		return volume.SampleLevel(linearClamp, uvw, 0);
+			return 1.0;
+		uint3 dims;
+		volume.GetDimensions(dims.x, dims.y, dims.z);
+		return lerp(1.0, volume.SampleLevel(linearClamp, uvw, 0), EdgeWeight(uvw, dims.xy));
 	}
 
-	float SampleDensity(Texture3D<float> volume, float3 uvw)
+	float SampleTransmittance(Texture3D<float> volume, float3 uvw)
 	{
 		if (any(uvw < 0.0) || any(uvw > 1.0))
-			return 0.0;
+			return 1.0;
 		uint3 dims;
 		volume.GetDimensions(dims.x, dims.y, dims.z);
 		if (any(dims == 0))
-			return 0.0;
+			return 1.0;
 
 		// Callers include material, depth and shadow-mask paths with different
 		// sampler states. Explicit trilinear filtering keeps all of them clamped
@@ -61,7 +75,7 @@ namespace CloudShadowVolume
 		const float z1 = lerp(
 			lerp(volume.Load(int4(lo.x, lo.y, hi.z, 0)), volume.Load(int4(hi.x, lo.y, hi.z, 0)), w.x),
 			lerp(volume.Load(int4(lo.x, hi.y, hi.z, 0)), volume.Load(int4(hi.x, hi.y, hi.z, 0)), w.x), w.y);
-		return lerp(z0, z1, w.z);
+		return lerp(1.0, lerp(z0, z1, w.z), EdgeWeight(uvw, dims.xy));
 	}
 }
 #endif

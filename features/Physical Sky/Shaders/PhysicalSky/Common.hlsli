@@ -46,7 +46,7 @@ namespace PhysSky
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t16);
 Texture2D<unorm float> TexApShadow : register(t17);
-Texture3D<float4> TexApSunLut : register(t20);
+Texture3D<float4> TexApSunLut : register(t21);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
@@ -526,28 +526,26 @@ Texture3D<float4> TexApSunLut : register(t113);
 	// Volumetric cloud main-view result and shadow volume. Pixel shaders use t110-t112 to avoid feature texture conflicts.
 #		if defined(PS_DEFERRED_RSRCS)
 	Texture2D<float> TexVolTr : register(t18);
-	Texture2D<float3> TexVolLum : register(t19);
+	Texture2D<float4> TexVolLum : register(t19);
 	Texture3D<float> TexShadowVolume : register(t20);
 #		else
 	Texture2D<float> TexVolTr : register(t110);
-	Texture2D<float3> TexVolLum : register(t111);
+	Texture2D<float4> TexVolLum : register(t111);
 	Texture3D<float> TexShadowVolume : register(t112);
 	TextureCube<float> TexVolCubeTr : register(t114);
-	TextureCube<float3> TexVolCubeLum : register(t115);
+	TextureCube<float4> TexVolCubeLum : register(t115);
 #		endif
 
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
 	{
-		float3 volTr = TexVolTr[pxCoord];
-		float3 volLum = TexVolLum[pxCoord];
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		const float4 cloud = TexVolLum[pxCoord];
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
 	}
 
 	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
 	{
-		float3 volTr = TexVolTr.SampleLevel(samp, screenUvDr, 0);
-		float3 volLum = TexVolLum.SampleLevel(samp, screenUvDr, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		const float4 cloud = TexVolLum.SampleLevel(samp, screenUvDr, 0);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
 	}
 
 	float3 CompositeVolumetricCloudsUv(float3 color, float2 screenUv, SamplerState samp)
@@ -557,16 +555,15 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 	float3 ApplyVolumetricCloudTransmittanceUv(float3 color, float2 screenUv, SamplerState samp)
 	{
-		const float3 volTr = TexVolTr.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0);
+		const float3 volTr = 1.0 - TexVolLum.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0).a;
 		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr);
 	}
 
 #		ifndef PS_DEFERRED_RSRCS
 	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
 	{
-		float3 volTr = TexVolCubeTr.SampleLevel(samp, viewDir, 0);
-		float3 volLum = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr + volLum);
+		const float4 cloud = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
 	}
 #		endif
 
@@ -575,7 +572,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		const float4 apSample = SampleAp(viewDir, pxCoord, dist, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
-		if (SharedData::physSkyData.enableVolumetricClouds)
+		if (SharedData::physSkyData.enableVolumetricClouds && !SharedData::PostWaterComposite)
 			return CompositeVolumetricClouds(color, pxCoord);
 
 		return color;
@@ -586,7 +583,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		const float4 apSample = SampleAp(viewDir, uint2(screenPos), dist, sampSv);
 		color = color * apSample.w + apSample.xyz;
 
-		if (SharedData::physSkyData.enableVolumetricClouds)
+		if (SharedData::physSkyData.enableVolumetricClouds && !SharedData::PostWaterComposite)
 			return CompositeVolumetricCloudsUv(color, screenUv, sampSv);
 
 		return color;
@@ -622,8 +619,13 @@ Texture3D<float4> TexApSunLut : register(t113);
 	float3 GetShadowVolumeUvw(float3 posRelative, float3 sunDir)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
-		float3 boundsMin = float3(FrameBuffer::CameraPosAdjust.xy - 0.5 * data.shadowVolumeRange, data.volCloudLowBottom);
-		float3 boundsMax = float3(FrameBuffer::CameraPosAdjust.xy + 0.5 * data.shadowVolumeRange, data.volCloudLowBottom + data.volCloudLowThickness);
+		uint3 dimensions;
+		TexShadowVolume.GetDimensions(dimensions.x, dimensions.y, dimensions.z);
+		if (any(dimensions == 0u))
+			return -1.0;
+		const float2 center = CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, data.shadowVolumeRange, dimensions.xy);
+		float3 boundsMin = float3(center - 0.5 * data.shadowVolumeRange, data.volCloudLowBottom);
+		float3 boundsMax = float3(center + 0.5 * data.shadowVolumeRange, data.volCloudLowBottom + data.volCloudLowThickness);
 
 		return CloudShadowVolume::GetSampleUvw(posRelative, sunDir, boundsMin, boundsMax);
 	}
@@ -644,12 +646,12 @@ Texture3D<float4> TexApSunLut : register(t113);
 		// occluder; treating the missing path as an average-density cloud shell
 		// creates false full extinction for long, low-angle light paths.
 #	ifdef PS_LINEAR_SHADOW_SAMPLER
-		const float cloudDensity = CloudShadowVolume::SampleDensity(TexShadowVolume, samp, uvw);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, samp, uvw);
 #	else
-		const float cloudDensity = CloudShadowVolume::SampleDensity(TexShadowVolume, uvw);
+		const float cloudTransmittance = CloudShadowVolume::SampleTransmittance(TexShadowVolume, uvw);
 #	endif
 
-		return exp(-(data.volCloudScatter + data.volCloudAbsorption) * cloudDensity);
+		return cloudTransmittance.xxx;
 	}
 #endif
 

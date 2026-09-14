@@ -16,10 +16,6 @@
 #include "PhysicalSky/Common.hlsli"
 
 static const float GAME_UNITS_PER_METER = 1.0 / GAME_UNIT_TO_M;
-// Separate scene/sky classification from the distance spent marching cloud.
-// 10000 km is exactly representable in the R16F auxiliary buffer.
-static const float CLOUD_SKY_DEPTH_KM = 10000.0;
-static const float CLOUD_SKY_DISTANCE = CLOUD_SKY_DEPTH_KM * 1000.0 * GAME_UNITS_PER_METER;
 
 float EncodeCloudDepth(float gameUnitDepth)
 {
@@ -90,16 +86,14 @@ struct VolumetricCloudData
 
 	float2 lowFrameDim;
 	uint historyValid;
-	float temporalAccumulationFactor;
-	float cloudHistoryInvalidation;
 	float shadowVolumeBottom;
 	float shadowVolumeTop;
 	float2 cloudWindDelta;
 	float2 cloudShapeShear;
-	uint ndfAccelerationValid;
 	row_major float4x4 previousViewProj;
 	float3 previousCamera;
 	float2 previousFrameDim;
+	float4 ndfBoundaryRect;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -124,24 +118,24 @@ Texture2D<float3> TexCloudModeling : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
 Texture2D<float2> TexCirrusWeather : register(t11);
-Texture2D<float> TexCloudDistance : register(t12);
 Texture2D<float3> TexCirrusPatterns : register(t13);
 Texture2D<sh2> TexCloudAmbientSH : register(t16);
 Texture2D<unorm float2> TexCloudProfileLUT : register(t17);
 Texture2D<unorm float3> TexCloudAdjustmentLUT : register(t18);
 
 Texture3D<float> TexShadowVolume : register(t23);
+Texture2D<float4> TexCloudBoundary : register(t24);
 Texture2D<float> TexVolHistoryTr : register(t26);
-Texture2D<float3> TexVolHistoryLum : register(t27);
+Texture2D<float4> TexVolHistoryLum : register(t27);
 Texture2D<float4> TexVolHistoryAux : register(t28);
 Texture2D<float> TexVolLowTr : register(t29);
-Texture2D<float3> TexVolLowLum : register(t30);
+Texture2D<float4> TexVolLowLum : register(t30);
 Texture2D<float4> TexVolLowAux : register(t31);
 TextureCube<float> TexCubeHistoryTr : register(t32);
-TextureCube<float3> TexCubeHistoryLum : register(t33);
+TextureCube<float4> TexCubeHistoryLum : register(t33);
 TextureCube<float4> TexCubeHistoryAux : register(t34);
 TextureCube<float> TexCubeTraceTr : register(t35);
-TextureCube<float3> TexCubeTraceLum : register(t36);
+TextureCube<float4> TexCubeTraceLum : register(t36);
 TextureCube<float4> TexCubeTraceAux : register(t37);
 
 float3 GetCloudDirectionalLightColor()
@@ -162,13 +156,13 @@ float3 GetCloudDirectionalLightColor()
 }
 
 RWTexture2D<float> RWTexTr : register(u0);
-RWTexture2D<float3> RWTexLum : register(u1);
+RWTexture2D<float4> RWTexLum : register(u1);
 RWTexture2D<float4> RWTexAux : register(u2);
 
 RWTexture3D<float> RWShadowVolume : register(u0);
 
 RWTexture2DArray<float> RWTexCubeTr : register(u0);
-RWTexture2DArray<float3> RWTexCubeLum : register(u1);
+RWTexture2DArray<float4> RWTexCubeLum : register(u1);
 RWTexture2DArray<float4> RWTexCubeAux : register(u2);
 RWTexture2D<sh2> RWCloudAmbientSH : register(u0);
 
@@ -260,14 +254,14 @@ struct CloudRaySegments
 };
 
 CloudRaySegments GetCloudRaySegments(float3 origin, float3 dir, float bottomAltitude, float topAltitude,
-	float sceneDistance, VolumetricCloudData info)
+	VolumetricCloudData info)
 {
 	CloudRaySegments segments = (CloudRaySegments)0;
 	if (topAltitude <= bottomAltitude)
 		return segments;
 	const float2 outer = IntersectSpherePair(origin, dir, info.planetRadius + topAltitude);
-	const float entry = max(outer.x, 0.0);
-	const float exit = min(outer.y, sceneDistance);
+	const float entry = max(outer.x, 50.0 * GAME_UNITS_PER_METER);
+	const float exit = outer.y;
 	if (exit <= entry)
 		return segments;
 
@@ -283,7 +277,6 @@ CloudRaySegments GetCloudRaySegments(float3 origin, float3 dir, float bottomAlti
 			segments.farSegment = 0.0;
 		}
 	}
-	// The range limits distance inside this layer, not distance from the camera.
 	segments.nearLength = min(segments.nearSegment.y - segments.nearSegment.x, info.rayMarchRange);
 	segments.nearSegment.y = segments.nearSegment.x + segments.nearLength;
 	const float farLength = min(segments.farSegment.y - segments.farSegment.x, info.rayMarchRange - segments.nearLength);
@@ -292,41 +285,28 @@ CloudRaySegments GetCloudRaySegments(float3 origin, float3 dir, float bottomAlti
 	return segments;
 }
 
-float CloudSpatiotemporalNoise(uint2 pixelCoord, uint sampleIndex, uint dimension)
+float CloudTemporalMarchHash(float2 pixel, float frame)
 {
-	const uint pixelSeed = 0x9e3779b9u ^ (dimension * 0x85ebca6bu);
-	const uint sampleSeed = 0x68bc21ebu ^ (dimension * 0xc2b2ae35u);
-	const uint pixelHash = Random::pcg3d(uint3(pixelCoord, pixelSeed)).x;
-	// Advance by one stratum per traced update. The per-pixel phase distributes the
-	// single wrap in the sixteen-sample cycle spatially instead of making the whole
-	// image take a large ray-start jump on the same frame.
-	const uint stratum = (sampleIndex + (pixelHash & 15u)) & 15u;
-	const uint sampleHash = Random::pcg3d(uint3(pixelCoord, sampleIndex ^ sampleSeed)).y;
-	const float withinStratum = float(sampleHash >> 8u) * (1.0 / 16777216.0);
-	return (float(stratum) + withinStratum) * (1.0 / 16.0);
+	const float3 seed = frac(float3(pixel, frame) * 0.1031);
+	const float scramble = dot(seed, seed.zyx + 31.32);
+	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.z));
 }
 
-float CloudRayJitter(uint2 pixelCoord, uint sampleIndex)
+float CloudSpatialMarchHash(float2 position)
 {
-	return CloudSpatiotemporalNoise(pixelCoord, sampleIndex, 0u);
+	const float2 seed = frac(position * 0.1031);
+	const float scramble = dot(seed.xyx, seed.yxx + 19.19);
+	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.x));
+}
+
+float CloudDepthWeight(float transmittance, float density, float distance)
+{
+	return saturate((transmittance - 0.1) * 1.1111112) * density * (1.0 - exp2(distance * GAME_UNIT_TO_M * -0.36067376));
 }
 
 float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 {
 	return (worldXY - info.noiseWindOffset) * info.lowNdfFrequency + 0.5;
-}
-
-float CloudEmptyDistance(float3 pos, float3 direction, VolumetricCloudData info)
-{
-	if (info.ndfAccelerationValid == 0u)
-		return 0.0;
-	uint2 dims;
-	TexCloudDistance.GetDimensions(dims.x, dims.y);
-	const float2 uv = frac(LowNdfUV(pos.xy, info));
-	const uint2 pixel = min(uint2(uv * dims), dims - 1u);
-	const float2 cellSize = rcp(float2(dims) * info.lowNdfFrequency);
-	const float emptyRadius = max(TexCloudDistance[pixel] * min(cellSize.x, cellSize.y) - 61.0 * length(info.cloudShapeShear), 0.0);
-	return emptyRadius / max(length(direction.xy), 1e-6);
 }
 
 float CloudViewStep(float distance)
@@ -491,9 +471,10 @@ void IntegrateCirrus(float3 position, float3 direction, float distance, float ph
 	const float stepTransmittance = exp(-density * 10.0);
 	const float weight = transmittance * (1.0 - stepTransmittance);
 	radiance += weight * (sun * sunlight + ambient * ambientRadiance);
+	const float depthWeight = CloudDepthWeight(transmittance, density, distance);
+	depthSum += depthWeight * distance;
+	weightSum += depthWeight;
 	transmittance *= stepTransmittance;
-	depthSum += weight * distance;
-	weightSum += weight;
 }
 
 bool CloudIntervalContains(CloudRaySegments segments, float distance)
@@ -502,25 +483,59 @@ bool CloudIntervalContains(CloudRaySegments segments, float distance)
 	       (distance >= segments.farSegment.x && distance < segments.farSegment.y);
 }
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, bool sky, float2 jitter, float apShadow)
+float2 ClipCloudBoundary(float2 segment, float4 boundary)
+{
+	if (boundary.w <= 0.0 || segment.y <= segment.x)
+		return segment;
+	const bool inside = boundary.z > 0.0 && (boundary.x == 0.0 || boundary.z < boundary.x);
+	if (!inside && boundary.x > 0.0)
+		segment.x = max(segment.x, min(boundary.x, boundary.w));
+	// An open grid does not bound the part of the ray beyond its XY footprint.
+	if (boundary.y > 0.0 && segment.y <= boundary.w)
+		segment.y = min(segment.y, boundary.y);
+	segment.y = max(segment.x, segment.y);
+	return segment;
+}
+
+VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, float2 jitter, float apShadow, float4 boundary)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	VolumetricCloudResult result;
 	result.transmittance = 1.0;
 	result.lum = 0.0;
-	result.cloud_depth = sky ? CLOUD_SKY_DISTANCE : sceneDistance;
+	bool sceneLimited = sceneDistance > 0.0;
 	const float3 planetEye = eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float2 ground = IntersectSpherePair(planetEye, direction, info.planetRadius);
-	if (dot(planetEye, direction) < 0.0 && ground.y > 0.0)
-		sceneDistance = min(sceneDistance, max(ground.x, 0.0));
-	const CloudRaySegments low = GetCloudRaySegments(planetEye, direction,
-		info.lowCloudBaseAltitude, info.lowCloudTraceTopAltitude, sceneDistance, info);
+	if (dot(planetEye, direction) < 0.0 && ground.y > 0.0) {
+		sceneDistance = sceneLimited ? min(sceneDistance, max(ground.x, 0.0)) : max(ground.x, 0.0);
+		sceneLimited = true;
+	}
+	const CloudRaySegments bounds = GetCloudRaySegments(planetEye, direction,
+		info.lowCloudBaseAltitude, info.lowCloudTraceTopAltitude, info);
+	CloudRaySegments low = bounds;
+	low.nearSegment = ClipCloudBoundary(low.nearSegment, boundary);
+	low.farSegment = ClipCloudBoundary(low.farSegment, boundary);
+	if (sceneLimited) {
+		low.nearSegment.y = max(low.nearSegment.x, min(low.nearSegment.y, sceneDistance));
+		low.farSegment.y = max(low.farSegment.x, min(low.farSegment.y, sceneDistance));
+	}
+	low.nearLength = low.nearSegment.y - low.nearSegment.x;
+	low.length = low.nearLength + (low.farSegment.y - low.farSegment.x);
+	result.cloud_depth = info.rayMarchRange;
+	if (bounds.length > 0.0)
+		result.cloud_depth = bounds.nearSegment.x > 50.0 * GAME_UNITS_PER_METER ? bounds.nearSegment.x : bounds.nearSegment.y;
+	const float boundaryDepth = boundary.x > 0.0 && boundary.z > 0.0 ? min(boundary.x, boundary.z) : max(boundary.x, boundary.z);
+	const bool hasBoundaryDepth = boundary.w > 0.0 && boundaryDepth > 0.0;
+	if (hasBoundaryDepth)
+		result.cloud_depth = boundaryDepth;
 	float cirrusDistance = sceneDistance;
 	bool cirrusPending = false;
 	if (info.cirrusEnabled != 0u) {
 		const float2 shell = IntersectSpherePair(planetEye, direction, info.planetRadius + info.cirrusAltitude);
 		cirrusDistance = shell.x >= 0.0 ? shell.x : shell.y;
-		cirrusPending = cirrusDistance >= 0.0 && cirrusDistance < sceneDistance;
+		if (cirrusDistance >= 0.0)
+			result.cloud_depth = bounds.length > 0.0 || hasBoundaryDepth ? min(result.cloud_depth, cirrusDistance) : cirrusDistance;
+		cirrusPending = cirrusDistance >= 0.0 && (!sceneLimited || cirrusDistance < sceneDistance);
 	}
 	if (low.length <= 0.0 && !cirrusPending)
 		return result;
@@ -554,28 +569,16 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		if (end <= begin || !CloudIntervalContains(low, 0.5 * (begin + end)))
 			continue;
 		float distance = begin;
-		bool empty = false;
 		[loop] while (distance < end && transmittance > 0.1)
 		{
-			float step = min(CloudViewStep(distance), end - distance);
-			const float skip = min(CloudEmptyDistance(eye + direction * distance, direction, info), end - distance);
-			if (skip > step) {
-				distance += skip;
-				empty = true;
-				continue;
-			}
-			step = min(step * (empty ? 2.0 : 1.0), end - distance);
+			const float step = min(CloudViewStep(distance), end - distance);
 			const float sampleDistance = distance + (distance * GAME_UNIT_TO_M < 250.0 ? jitter.x : jitter.y) * step;
 			const float3 pos = eye + direction * sampleDistance;
 			CloudDensityContext densityContext = (CloudDensityContext)0;
 			const float viewDistance = distance * GAME_UNIT_TO_M;
 			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, densityContext);
-			if (empty && extinction > 0.0) {
-				empty = false;
-				continue;
-			}
-			distance += step;
-			empty = extinction <= 0.0;
+			const float depthDistance = distance;
+			distance += step * (densityContext.ndf.dimension_profile > 0.05 ? 1.0 : 2.0);
 			if (extinction <= 0.0)
 				continue;
 			const float3 source = CloudLighting(pos, direction, densityContext.ndf.height_fraction, densityContext.ndf.dimension_profile,
@@ -583,15 +586,15 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 			const float stepTransmittance = exp(-extinction * step * GAME_UNIT_TO_M);
 			const float weight = transmittance * (1.0 - stepTransmittance);
 			result.lum += weight * source;
+			const float depthWeight = CloudDepthWeight(transmittance, extinction, depthDistance);
+			depthSum += depthWeight * depthDistance;
+			weightSum += depthWeight;
 			transmittance *= stepTransmittance;
-			depthSum += weight * sampleDistance;
-			weightSum += weight;
 		}
 	}
 	if (cirrusPending)
 		IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, phase, ambient, result.lum, transmittance, depthSum, weightSum);
 	result.transmittance = saturate((transmittance - 0.1) / 0.9);
-	result.lum *= (1.0 - result.transmittance.x) / max(1.0 - transmittance, 1e-6);
 	if (weightSum > 0.0) {
 		result.cloud_depth = depthSum / weightSum;
 		const float4 ap = SampleCloudAerialPerspective(direction, result.cloud_depth, apShadow);
@@ -659,15 +662,16 @@ groupshared int4 g_density_segment[NTHREADS];
 	const float3 thread_uv = raw_thread_uv - floor(raw_thread_uv);  // wraparound
 	const uint3 thread_px_coord = thread_uv * dims;
 
+	float density = 0.0;
 	float accumulated_density = 0.0;
 	if (is_valid) {
-		const float3 pos = float3(FrameBuffer::CameraPosAdjust.xy + (thread_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * thread_uv.z);
+		const float2 center = CloudShadowVolume::GridCenter(FrameBuffer::CameraPosAdjust.xy, info.shadowVolumeRange, dims.xy);
+		const float3 pos = float3(center + (thread_uv.xy - 0.5) * info.shadowVolumeRange, info.shadowVolumeBottom + shadow_thickness * thread_uv.z);
 
 		// Fetch only density represented inside this finite shadow volume. Prefixes
 		// start with zero extinction at the boundary instead of assuming a uniform
 		// cloud shell outside the represented domain.
-		const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
-		float density = SampleCloudLightDensity(pos, length(pos - eye) * GAME_UNIT_TO_M) * length(ray_uv_increment * scale);
+		density = SampleCloudLightDensity(pos, 2000.0) * length(ray_uv_increment * scale);
 
 		accumulated_density = density;
 	}
@@ -697,6 +701,24 @@ groupshared int4 g_density_segment[NTHREADS];
 	if (is_valid) {
 		// Every voxel is rebuilt deterministically. The camera-centred grid moves,
 		// so blending the same index from the previous frame would trail shadows.
-		RWShadowVolume[thread_px_coord] = accumulated_density;
+		RWShadowVolume[thread_px_coord] = exp(-max(accumulated_density - 0.5 * density, 0.0) * info.sunExtinction * GAME_UNIT_TO_M);
 	}
+}
+
+	[numthreads(8, 8, 4)] void resampleShadowVolume(uint3 pixel : SV_DispatchThreadID)
+{
+	uint3 dims;
+	RWShadowVolume.GetDimensions(dims.x, dims.y, dims.z);
+	if (any(pixel >= dims))
+		return;
+	const VolumetricCloudData info = VolumetricCloudBuffer[0];
+	const float3 scale = float3(info.shadowVolumeRange.xx, max(info.shadowVolumeTop - info.shadowVolumeBottom, 1.0));
+	float3 increment = -info.dirlightDir * rcp(scale) * float3(dims);
+	const float maximum = max(max(abs(increment.x), abs(increment.y)), abs(increment.z));
+	const uint axis = abs(increment.x) == maximum ? 0u : (abs(increment.y) == maximum ? 1u : 2u);
+	increment /= maximum;
+	const float rayStep = increment[axis] > 0.0 ? float(pixel[axis]) : float(dims[axis] - 1u - pixel[axis]);
+	float3 offset = frac(0.5 + rayStep * increment) - 0.5;
+	offset = float3(axis == 0u ? 0.0 : offset.x, axis == 1u ? 0.0 : offset.y, axis == 2u ? 0.0 : offset.z);
+	RWShadowVolume[pixel] = TexShadowVolume.SampleLevel(TransmittanceSampler, (float3(pixel) + 0.5 - offset) / float3(dims), 0);
 }

@@ -116,8 +116,6 @@ void NdfManager::SetupResources()
 	texModeling = CreateNdfTexture(kNdfDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "PhysicalSky::NdfModeling");
 	for (auto& texture : noiseTextures)
 		texture = CreateNdfTexture(kNdfDim, DXGI_FORMAT_R16_FLOAT, "PhysicalSky::NdfNoise", true);
-	texOccupancy = CreateNdfTexture(64, DXGI_FORMAT_R32_FLOAT, "PhysicalSky::CloudOccupancy");
-	texDistance = CreateNdfTexture(64, DXGI_FORMAT_R32_FLOAT, "PhysicalSky::CloudDistance");
 	D3D11_SAMPLER_DESC desc{
 		.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR,
 		.AddressU = D3D11_TEXTURE_ADDRESS_WRAP,
@@ -135,20 +133,13 @@ void NdfManager::SetupResources()
 void NdfManager::CompileShaders()
 {
 	generatedValid = false;
-	accelerationValid = false;
 	noiseValid.fill(false);
 	generatorProgram = nullptr;
 	noiseProgram = nullptr;
-	occupancyProgram = nullptr;
-	distanceProgram = nullptr;
 	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfGenerate.cs.hlsl", {}, "cs_5_0")))
 		generatorProgram.attach(raw);
 	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfNoise.cs.hlsl", {}, "cs_5_0")))
 		noiseProgram.attach(raw);
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfAcceleration.cs.hlsl", {}, "cs_5_0", "buildOccupancy")))
-		occupancyProgram.attach(raw);
-	if (auto* raw = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\PhysicalSky\\NdfAcceleration.cs.hlsl", {}, "cs_5_0", "buildDistance")))
-		distanceProgram.attach(raw);
 }
 
 const char* NdfManager::GetSettingsTypeName(const NdfSettings& settings)
@@ -422,42 +413,7 @@ bool NdfManager::UpdateNdf(const NdfSettings& settings, TextureManager& textures
 	generatedSources = sources;
 	generatedRevision = textures.revision;
 	generatedValid = true;
-	accelerationValid = false;
 	return true;
-}
-
-void NdfManager::UpdateAcceleration(const NdfSettings& settings, TextureManager& textures)
-{
-	const auto maps = GetNdf(settings, textures);
-	auto* model = maps.modeling;
-	if (settings.type == NdfType::Procedural && accelerationValid && acceleratedNdf == model)
-		return;
-	accelerationValid = false;
-	if (!maps || !occupancyProgram || !distanceProgram || !texOccupancy || !texDistance)
-		return;
-	auto* context = globals::d3d::context;
-	auto* uav = texOccupancy->uav.get();
-	context->CSSetShaderResources(0, 1, &model);
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(occupancyProgram.get(), nullptr, 0);
-	globals::profiler->BeginPass("PhysicalSky::CloudAcceleration");
-	context->Dispatch(8, 8, 1);
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	auto* occupancy = texOccupancy->srv.get();
-	context->CSSetShaderResources(1, 1, &occupancy);
-	uav = texDistance->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(distanceProgram.get(), nullptr, 0);
-	context->Dispatch(8, 8, 1);
-	globals::profiler->EndPass();
-	ID3D11ShaderResourceView* nullSrvs[2] = {};
-	context->CSSetShaderResources(0, 2, nullSrvs);
-	uav = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShader(nullptr, nullptr, 0);
-	accelerationValid = true;
-	acceleratedNdf = model;
 }
 
 bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)

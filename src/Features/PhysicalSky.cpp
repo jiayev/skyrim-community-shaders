@@ -152,7 +152,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayMarchRange,
 	shadowVolumeRange,
 	marchStepScale,
-	temporalAccumulationFactor,
 	cloudMap,
 	cloudLayer)
 
@@ -570,7 +569,6 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("cloud_march_step_scale"), "Cloud March Step Scale"), &settings.marchStepScale, 0.125f, 2.f, "%.3f", ImGuiSliderFlags_Logarithmic);
-		ImGui::SliderFloat(T(TKEY("cloud_history_stability"), "Cloud History Stability"), &settings.temporalAccumulationFactor, 0.f, 1.f, "%.2f");
 	}
 
 	ImGui::SeparatorText(T(TKEY("composition"), "Low Clouds"));
@@ -669,8 +667,6 @@ void PhysicalSky::SettingsDebug()
 		if (ImGui::TreeNode("Cloud Shape")) {
 			BUFFER_VIEWER_NODE(ndfManager.texHeight, debugScale);
 			BUFFER_VIEWER_NODE(ndfManager.texModeling, debugScale);
-			BUFFER_VIEWER_NODE(ndfManager.texOccupancy, debugScale);
-			BUFFER_VIEWER_NODE(ndfManager.texDistance, debugScale);
 			DrawDebugVolume(baseShapeNoiseSrv.get(), "baseShapeNoise", debugShapeNoiseSlice, debugScale);
 			{
 				Texture2D* weather = cirrusMapManager.GetWeatherTexture();
@@ -898,9 +894,10 @@ bool PhysicalSky::ShadersOK()
 	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
-	                           (csVolMainView && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
+	                           (vsCloudBoundary && psCloudBoundary && texCloudBoundary && cloudBoundaryCB && cloudBoundaryIndices && cloudBoundaryBlend && cloudBoundaryRasterizer && cloudBoundaryDepth &&
+								   csVolMainView && csVolFilter && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolShadowResample && texShadowVolumeRaw && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH &&
 								   texVolTr && texVolLum && texVolAux && texVolLowTr && texVolLowLum && texVolLowAux &&
-								   texVolFilteredTr && texVolFilteredLum &&
+								   texVolFilteredTr && texVolFilteredLum && texVolFilteredAux &&
 								   texVolHistoryTr && texVolHistoryLum && texVolHistoryAux && texVolCubeTr && texVolCubeLum &&
 								   texVolCubeAux && texVolCubeHistoryTr && texVolCubeHistoryLum && texVolCubeHistoryAux &&
 								   texVolCubeTraceTr && texVolCubeTraceLum && texVolCubeTraceAux &&
@@ -1074,7 +1071,7 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (cbData.enabled) {
-		const bool renderVolumetricClouds = settings.enableVolumetricClouds && csVolMainView && csVolReproject && csVolCubeReproject && csVolShadowVolume && csVolCubemap && csVolAmbientSH && texVolCloudAmbientSH;
+		const bool renderVolumetricClouds = settings.enableVolumetricClouds && ShadersOK();
 
 		if (renderVolumetricClouds) {
 			const auto cloudSettingsKey = nlohmann::json{
@@ -1092,7 +1089,6 @@ void PhysicalSky::Prepass()
 			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager)) {
 				volMainHistoryValid = false;
 			}
-			ndfManager.UpdateAcceleration(settings.cloudMap, ndfTexManager);
 			if (settings.cloudLayer.cirrus.enabled && cirrusMapManager.Update(settings.cloudLayer.cirrus, ndfTexManager))
 				volMainHistoryValid = false;
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
@@ -1101,9 +1097,9 @@ void PhysicalSky::Prepass()
 		AccumShadow();
 
 		// Volumetric clouds
-		if (renderVolumetricClouds) {
+		if (renderVolumetricClouds && !globals::deferred->MediumCompositeEnabled()) {
 			RenderVolumetricClouds(VolumetricCloudPass::kMainViewAndCubemap);
-		} else if (texVolTr && texVolLum) {
+		} else if (!renderVolumetricClouds && texVolTr && texVolLum) {
 			// Clear to neutral when disabled (white transmittance, black luminance)
 			auto context = globals::d3d::context;
 			FLOAT trClr[4] = { 1.f, 1.f, 1.f, 1.f };
@@ -1129,7 +1125,7 @@ void PhysicalSky::Prepass()
 			if (texVolCubeLum)
 				context->ClearUnorderedAccessViewFloat(texVolCubeLum->uav.get(), lumClr);
 			if (texShadowVolume)
-				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), lumClr);
+				context->ClearUnorderedAccessViewFloat(texShadowVolume->uav.get(), trClr);
 			volMainHistoryValid = false;
 			volHistoryFrameDim = {};
 		}

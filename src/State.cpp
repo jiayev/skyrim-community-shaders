@@ -1053,6 +1053,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		data.WaterSystemHeight = -RE::NI_INFINITY;
+		data.PostWaterComposite = a_inWorld && globals::deferred->MediumCompositeEnabled() ? 1u : 0u;
 
 		data.InInterior = Util::IsInterior();
 		data.HasDirectionalShadows = HasDirectionalShadows();

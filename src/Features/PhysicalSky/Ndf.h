@@ -134,11 +134,6 @@ struct NdfManager
 	eastl::unique_ptr<Texture2D> texModeling = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> generatorProgram = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> noiseProgram = nullptr;
-	eastl::unique_ptr<Texture2D> texOccupancy = nullptr;
-	eastl::unique_ptr<Texture2D> texDistance = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> occupancyProgram = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> distanceProgram = nullptr;
-	bool accelerationValid = false;
 
 	void SetupResources();
 	void CompileShaders();
@@ -146,7 +141,6 @@ struct NdfManager
 	static const char* GetSettingsHint(const NdfSettings& settings);
 	static void DrawNdfSettings(NdfSettings& settings, TextureManager& textures);
 	bool UpdateNdf(const NdfSettings& settings, TextureManager& textures);
-	void UpdateAcceleration(const NdfSettings& settings, TextureManager& textures);
 	NdfTextureSet GetNdf(const NdfSettings& settings, TextureManager& textures);
 
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
@@ -165,7 +159,6 @@ private:
 	uint64_t generatedRevision = 0;
 	uint64_t importedRevision = 0;
 	bool generatedValid = false;
-	ID3D11ShaderResourceView* acceleratedNdf = nullptr;
 };
 
 struct LowCloudSettings
