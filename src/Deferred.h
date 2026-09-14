@@ -52,6 +52,8 @@ public:
 
 	/** @brief Dispatches the deferred composite compute shader and post-deferred feature passes. */
 	void DeferredPasses();
+	bool MediumCompositeEnabled();
+	void CompositeAfterWater();
 
 	/** @brief Debug view modes for the deferred composite (developer only). */
 	enum class DebugView : uint
@@ -109,6 +111,10 @@ public:
 
 	ID3D11ComputeShader* mainCompositeCS = nullptr;
 	ID3D11ComputeShader* mainCompositeInteriorCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> mediumCompositeCS;
+	bool postWaterHookInstalled = false;
+	uint32_t mediumCompositeFrame = UINT32_MAX;
+	bool mediumShaderRequested = false;
 
 	// Directional shadow structured buffer (t98): cascade splits and projections.
 	Buffer* directionalShadowLights = nullptr;
@@ -137,6 +143,12 @@ private:
 public:
 	struct Hooks
 	{
+		struct PostWater_SetCamera
+		{
+			static void thunk(void* graphicsState, RE::NiCamera* camera, uint32_t flags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		static void InstallPostWaterHook();
 		struct Main_RenderShadowMaps
 		{
 			static void thunk();
@@ -182,6 +194,7 @@ public:
 		/** @brief Installs all deferred rendering hooks into the game's vtables and call sites. */
 		static void Install()
 		{
+			InstallPostWaterHook();
 			stl::write_vfunc<0x35, BSCubeMapCamera_RenderCubemap>(RE::VTABLE_BSCubeMapCamera[0]);
 
 			stl::write_thunk_call<Main_RenderShadowMaps>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x2EC, 0x2EC, 0x30A));

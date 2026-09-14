@@ -479,6 +479,10 @@ cbuffer PerGeometry : register(b2)
 #		include "PhysicalSky/Common.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
+#		include "Common/ViewMedium.hlsli"
+#	endif
+
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(LIGHTING)
@@ -877,73 +881,100 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
+	float3 blendedColor = lightColor;
+	bool composeMedium = false;
+#	if !defined(DEFERRED) && (defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG))
+	composeMedium = SharedData::PostWaterComposite &&
+	                (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld) != 0 &&
+	                (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) == 0;
+	if (composeMedium) {
+		const float4 medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampBaseSampler);
+#		if defined(ADDBLEND)
+#			if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable) {
+			if (isFire)
+				blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
+			else
+				blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
+		}
+#			endif
+		blendedColor = ColorManagement::WorkingColor::ScaleByLinear(blendedColor, medium.a);
+#		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
+		blendedColor = lerp(1.0.xxx, lightColor, medium.a);
+#		else
+		blendedColor = ColorManagement::WorkingColor::ScaleAndAddLinear(lightColor, medium.a, medium.rgb);
+#		endif
+	} else
+#	endif
+	{
 #	if !defined(MOTIONVECTORS_NORMALS)
-	float fogFactor = input.FogParam.w;
-	float3 fogColor = input.FogParam.xyz;
+		float fogFactor = input.FogParam.w;
+		float3 fogColor = input.FogParam.xyz;
 #		if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WorldPosition.xyz);
-	}
+		if (SharedData::iblSettings.EnableIBL) {
+			fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WorldPosition.xyz);
+		}
 #		endif
 #		if defined(EXP_HEIGHT_FOG)
-	float vanillaFogFactor = fogFactor;
-	float3 vanillaFogColor = fogColor;
-	float expFogFactor = 0;
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-		expFogFactor = exponentialHeightFog.w;
+		float vanillaFogFactor = fogFactor;
+		float3 vanillaFogColor = fogColor;
+		float expFogFactor = 0;
+		if (SharedData::exponentialHeightFogSettings.enabled) {
+			float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
+			expFogFactor = exponentialHeightFog.w;
 #			if defined(ADDBLEND) || defined(MULTBLEND) || defined(MULTBLEND_DECAL)
-		fogColor = exponentialHeightFog.xyz;
-		fogFactor = exponentialHeightFog.w;
+			fogColor = exponentialHeightFog.xyz;
+			fogFactor = exponentialHeightFog.w;
 #			else
-		fogColor = exponentialHeightFog.xyz;
-		fogFactor = exponentialHeightFog.w;
-		alpha *= 1 - exponentialHeightFog.w;
+			fogColor = exponentialHeightFog.xyz;
+			fogFactor = exponentialHeightFog.w;
+			alpha *= 1 - exponentialHeightFog.w;
 #			endif
-		if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
-			vanillaFogColor = lightColor;
-			vanillaFogFactor = 0;
+			if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
+				vanillaFogColor = lightColor;
+				vanillaFogFactor = 0;
+			}
 		}
-	}
 #		endif
 #		if defined(ADDBLEND)
 #			if defined(EXP_HEIGHT_FOG)
-	float3 blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
+		blendedColor = lightColor * (1 - vanillaFogFactor) * (1 - expFogFactor);
 #			else
-	float3 blendedColor = lightColor * (1 - fogFactor);
+		blendedColor = lightColor * (1 - fogFactor);
 #			endif
 #			if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable) {
-		if (isFire)
-			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
-		else
-			blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
-	}
+		if (SharedData::enbSettings.Enable) {
+			if (isFire)
+				blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
+			else
+				blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
+		}
 #			endif
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 #			if defined(EXP_HEIGHT_FOG)
-	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * vanillaFogFactor).xxx);
-	blendedColor = lerp(blendedColor, 1.0.xxx, saturate(1.5 * expFogFactor).xxx);
+		blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * vanillaFogFactor).xxx);
+		blendedColor = lerp(blendedColor, 1.0.xxx, saturate(1.5 * expFogFactor).xxx);
 #			else
-	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * fogFactor).xxx);
+		blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * fogFactor).xxx);
 #			endif
 #		else
 #			if defined(EXP_HEIGHT_FOG)
-	float3 blendedColor = lerp(lightColor, vanillaFogColor, vanillaFogFactor.xxx);
-	blendedColor = lerp(blendedColor, fogColor, expFogFactor.xxx);
+		blendedColor = lerp(lightColor, vanillaFogColor, vanillaFogFactor.xxx);
+		blendedColor = lerp(blendedColor, fogColor, expFogFactor.xxx);
 #			else
-	float3 blendedColor = lerp(lightColor, fogColor, fogFactor.xxx);
+		blendedColor = lerp(lightColor, fogColor, fogFactor.xxx);
 #			endif
 #		endif
 #	else
-	float3 blendedColor = lightColor.xyz;
+		blendedColor = lightColor.xyz;
 #	endif
+	}
 
 	float4 finalColor = float4(blendedColor, alpha);
 #	if defined(MULTBLEND_DECAL)
 	finalColor.xyz *= alpha;
 #	else
-	finalColor *= fogMul;
+	finalColor *= composeMedium ? 1.0 : fogMul;
 #	endif
 	psout.Diffuse = finalColor;
 

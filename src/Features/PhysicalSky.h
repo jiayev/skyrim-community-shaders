@@ -141,10 +141,9 @@ struct PhysicalSky final : public Feature
 
 		// VOLUMETRIC CLOUDS
 		bool enableVolumetricClouds = false;
-		float rayMarchRange = 32.f;     // km inside each cloud layer, excluding empty approach/gaps
+		float rayMarchRange = 32.f;
 		float shadowVolumeRange = 8.f;  // km
 		float marchStepScale = 0.5f;
-		float temporalAccumulationFactor = 1.f;
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 	} settings;
@@ -232,6 +231,27 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kShadowVolH = 256;
 	constexpr static uint16_t kShadowVolD = 64;
 	constexpr static uint16_t kVolCubeSize = 64;
+	constexpr static uint32_t kCloudBoundaryCells = 256;
+	eastl::unique_ptr<Texture2D> texCloudBoundary = nullptr;
+	winrt::com_ptr<ID3D11Buffer> cloudBoundaryIndices = nullptr;
+	winrt::com_ptr<ID3D11BlendState> cloudBoundaryBlend = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> cloudBoundaryRasterizer = nullptr;
+	winrt::com_ptr<ID3D11DepthStencilState> cloudBoundaryDepth = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> vsCloudBoundary = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> psCloudBoundary = nullptr;
+	struct alignas(16) CloudBoundaryCB
+	{
+		float4 gridOriginSpacing;
+		float4 fieldFrequencyWind;
+		float4 shearAltitude;
+		float4 frameDimensions;
+		float planetRadius;
+		float bottomZ;
+		uint gridCellCount;
+		uint cloudFrameIndex;
+	};
+	static_assert(sizeof(CloudBoundaryCB) == 80);
+	eastl::unique_ptr<ConstantBuffer> cloudBoundaryCB = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolTr = nullptr;           // full-resolution volumetric transmittance result
 	eastl::unique_ptr<Texture2D> texVolLum = nullptr;          // full-resolution volumetric luminance result
@@ -241,6 +261,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;       // quarter-resolution trace depth/metadata
 	eastl::unique_ptr<Texture2D> texVolFilteredTr = nullptr;   // blurred transmittance for compositing
 	eastl::unique_ptr<Texture2D> texVolFilteredLum = nullptr;  // blurred luminance for compositing
+	eastl::unique_ptr<Texture2D> texVolFilteredAux = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
@@ -254,6 +275,7 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> texVolCubeTraceLum = nullptr;
 	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
 	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
+	eastl::unique_ptr<Texture3D> texShadowVolumeRaw = nullptr;
 
 	// ImGui::Image cannot sample a cubemap or a volume texture, so those are shown
 	// through a 2D view built from the resource itself.
@@ -325,29 +347,24 @@ struct PhysicalSky final : public Feature
 
 		float2 lowFrameDim;
 		uint historyValid;
-		float temporalAccumulationFactor;
-		float cloudHistoryInvalidation;
 		float shadowVolumeBottom;
 		float shadowVolumeTop;
 		float2 cloudWindDelta;
 		float2 cloudShapeShear;
-		uint ndfAccelerationValid;
 		float4x4 previousViewProj;
 		float3 previousCamera;
 		float2 previousFrameDim;
+		float4 ndfBoundaryRect;
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 324);
+	static_assert(sizeof(VolumetricCloudSB) == 328);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
 	uint32_t volFrameIndex = 0;
 	bool volMainHistoryValid = false;
 	float2 volHistoryFrameDim = {};
-	float3 volHistorySunDir = { 0.0f, 0.0f, 1.0f };
 	std::array<double, 2> volWindOffsetMeters = {};
 	std::array<double, 2> volHistoryWindOffsetMeters = {};
-	double volWindTime = 0.0;
-	double volHistoryTime = 0.0;
 	float4x4 volHistoryViewProj = {};
 	float3 volHistoryCamera = {};
 	std::string volCloudSettingsKey;
@@ -357,6 +374,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
 
@@ -370,6 +388,7 @@ struct PhysicalSky final : public Feature
 	};
 	void SetupVolumetricResources();
 	void CompileVolumetricShaders();
+	void RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureSet a_textures);
 	void LoadCloudTextures();
 	void UpdateCloudWind();
 	void RenderVolumetricClouds(VolumetricCloudPass a_pass);

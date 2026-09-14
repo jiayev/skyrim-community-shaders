@@ -1260,44 +1260,47 @@ PS_OUTPUT main(PS_INPUT input)
 		const float waterDist = length(input.WPosition.xyz);
 		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
 		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
-		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+		if (!SharedData::PostWaterComposite)
+			finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
 	}
 #						endif
 
+	if (!SharedData::PostWaterComposite) {
 #						if !defined(UNIFIED_WATER)
-	float fogDistanceFactor = input.FogParam.w;
-	float3 fogColor = input.FogParam.xyz;
+		float fogDistanceFactor = input.FogParam.w;
+		float3 fogColor = input.FogParam.xyz;
 #						else
-	float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
-	float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
+		float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
+		float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
 #						endif
 
 #						if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WPosition.xyz);
-	}
+		if (SharedData::iblSettings.EnableIBL) {
+			fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WPosition.xyz);
+		}
 #						endif
 #						if defined(EXP_HEIGHT_FOG)
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.HPosition.xy * FrameBuffer::DynamicResolutionParams2.xy, input.HPosition.z, 1));
-		if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
-			fogColor = exponentialHeightFog.xyz;
-			fogColor *= GetWaterFogFade();
-			finalColorPreFog = lerp(finalColorPreFog, fogColor, exponentialHeightFog.w);
+		if (SharedData::exponentialHeightFogSettings.enabled) {
+			float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.HPosition.xy * FrameBuffer::DynamicResolutionParams2.xy, input.HPosition.z, 1));
+			if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
+				fogColor = exponentialHeightFog.xyz;
+				fogColor *= GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, fogColor, exponentialHeightFog.w);
+			} else {
+				fogColor *= GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, fogColor, fogDistanceFactor);
+				float3 expFogColor = exponentialHeightFog.xyz * GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, expFogColor, exponentialHeightFog.w);
+			}
 		} else {
 			fogColor *= GetWaterFogFade();
 			finalColorPreFog = lerp(finalColorPreFog, fogColor, fogDistanceFactor);
-			float3 expFogColor = exponentialHeightFog.xyz * GetWaterFogFade();
-			finalColorPreFog = lerp(finalColorPreFog, expFogColor, exponentialHeightFog.w);
 		}
-	} else {
+#						else
 		fogColor *= GetWaterFogFade();
 		finalColorPreFog = lerp(finalColorPreFog, fogColor, fogDistanceFactor);
-	}
-#						else
-	fogColor *= GetWaterFogFade();
-	finalColorPreFog = lerp(finalColorPreFog, fogColor, fogDistanceFactor);
 #						endif
+	}
 
 	float3 finalColor = finalColorPreFog;
 
@@ -1319,61 +1322,66 @@ PS_OUTPUT main(PS_INPUT input)
 		const float waterDist = length(input.WPosition.xyz);
 		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
 		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
-		finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
+		if (!SharedData::PostWaterComposite)
+			finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
 	}
 #						endif
 
+	if (!SharedData::PostWaterComposite) {
 #						if !defined(UNIFIED_WATER)
-	float fogDistanceFactor = input.FogParam.w;
-	float3 preFogColor = input.FogParam.xyz;
+		float fogDistanceFactor = input.FogParam.w;
+		float3 preFogColor = input.FogParam.xyz;
 #						else
-	float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
-	float3 preFogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
+		float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
+		float3 preFogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
 #						endif
 
 #						if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		preFogColor = ImageBasedLighting::GetFogIBLColor(preFogColor, input.WPosition.xyz);
-	}
+		if (SharedData::iblSettings.EnableIBL) {
+			preFogColor = ImageBasedLighting::GetFogIBLColor(preFogColor, input.WPosition.xyz);
+		}
 #						endif
 #						if defined(EXP_HEIGHT_FOG)
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, preFogColor, float4(input.HPosition.xy * FrameBuffer::DynamicResolutionParams2.xy, input.HPosition.z, 1));
-		if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
-			preFogColor = exponentialHeightFog.xyz;
-			preFogColor *= GetWaterFogFade();
-			finalColorPreFog = lerp(finalColorPreFog, preFogColor, exponentialHeightFog.w);
+		if (SharedData::exponentialHeightFogSettings.enabled) {
+			float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, preFogColor, float4(input.HPosition.xy * FrameBuffer::DynamicResolutionParams2.xy, input.HPosition.z, 1));
+			if (ExponentialHeightFog::ShouldDisableVanillaFog()) {
+				preFogColor = exponentialHeightFog.xyz;
+				preFogColor *= GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, preFogColor, exponentialHeightFog.w);
+			} else {
+				preFogColor *= GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, preFogColor, fogDistanceFactor);
+				float3 expFogColor = exponentialHeightFog.xyz * GetWaterFogFade();
+				finalColorPreFog = lerp(finalColorPreFog, expFogColor, exponentialHeightFog.w);
+			}
 		} else {
 			preFogColor *= GetWaterFogFade();
 			finalColorPreFog = lerp(finalColorPreFog, preFogColor, fogDistanceFactor);
-			float3 expFogColor = exponentialHeightFog.xyz * GetWaterFogFade();
-			finalColorPreFog = lerp(finalColorPreFog, expFogColor, exponentialHeightFog.w);
 		}
-	} else {
-		preFogColor *= GetWaterFogFade();
-		finalColorPreFog = lerp(finalColorPreFog, preFogColor, fogDistanceFactor);
-	}
 #						else
-	preFogColor *= GetWaterFogFade();
+		preFogColor *= GetWaterFogFade();
 
-	finalColorPreFog = lerp(finalColorPreFog, preFogColor, fogDistanceFactor);
+		finalColorPreFog = lerp(finalColorPreFog, preFogColor, fogDistanceFactor);
 #						endif
+	}
 
 	float3 refractionColor = diffuseOutput.refractionColor;
 
-	float fogFactor = min(FogParam.w, pow(saturate(-diffuseOutput.depth * FogParam.y - FogParam.x), FogParam.z));
-	float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
+	if (!SharedData::PostWaterComposite) {
+		float fogFactor = min(FogParam.w, pow(saturate(-diffuseOutput.depth * FogParam.y - FogParam.x), FogParam.z));
+		float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
 #						if defined(EXP_HEIGHT_FOG)
-	if (SharedData::exponentialHeightFogSettings.enabled && ExponentialHeightFog::ShouldDisableVanillaFog()) {
-		fogFactor = 0;
-	}
+		if (SharedData::exponentialHeightFogSettings.enabled && ExponentialHeightFog::ShouldDisableVanillaFog()) {
+			fogFactor = 0;
+		}
 #						endif
 #						if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WPosition.xyz);
-	}
+		if (SharedData::iblSettings.EnableIBL) {
+			fogColor = ImageBasedLighting::GetFogIBLColor(fogColor, input.WPosition.xyz);
+		}
 #						endif
-	refractionColor = lerp(refractionColor, fogColor, fogFactor);
+		refractionColor = lerp(refractionColor, fogColor, fogFactor);
+	}
 
 	float3 finalColor = lerp(refractionColor, finalColorPreFog, diffuseOutput.refractionMul);
 #						if defined(WETNESS_EFFECTS) && defined(DEBUG_WETNESS_EFFECTS)
