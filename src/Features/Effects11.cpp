@@ -534,20 +534,32 @@ bool Effects11::ReplacedTonemapperThisFrame() const
 	return tonemapReplacedThisFrame;
 }
 
-bool Effects11::HandleTonemapRender(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+bool Effects11::WantsTonemapOwnership()
 {
 	CheckCommonData();
 
-	auto& settingManager = SettingManager::GetSingleton();
+	// The initialized check must be part of ownership, not just of rendering: if it were only
+	// checked at render time, the arbiter would still report Effects11 as the owner while the
+	// vanilla pass ran, having already stripped Post Processing's tonemap flag and skipped its
+	// pipeline for that frame.
 	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized() || !effectManager.IsPresetLoaded())
+		return false;
 
-	if (enableEffect && !settingManager.GetValue<bool>("UseOriginalPostProcessing", "EFFECT")) {
-		auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
-		// Only claim the tonemap pass if the effect chain actually wrote the output
-		if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
-			tonemapReplacedThisFrame = true;
-			return true;
-		}
+	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");
+}
+
+bool Effects11::RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
+{
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!effectManager.IsInitialized())
+		return false;
+
+	auto& renderTargets = globals::game::renderer->GetRuntimeData().renderTargets;
+	// Only report replacement after the effect chain actually wrote the output.
+	if (effectManager.ExecuteEffects(renderTargets[a_input], renderTargets[a_output])) {
+		tonemapReplacedThisFrame = true;
+		return true;
 	}
 	return false;
 }

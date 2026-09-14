@@ -24,6 +24,7 @@
 #include "Features/SkySync.h"
 #include "Features/Upscaling.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PostProcessing.h"
 #include "Features/Upscaling/DXVKInterop.h"
 #include "Features/Upscaling/Streamline.h"
 #include "Features/VolumetricLighting.h"
@@ -361,11 +362,17 @@ namespace PostProcessingExtensions
 	{
 		static void thunk(RE::ImageSpaceManager* a1, RE::ImageSpaceEffect* a2, uint32_t a3, uint32_t a4, RE::ImageSpaceShaderParam* a5)
 		{
+			auto input = static_cast<RE::RENDER_TARGET>(a3);
+			auto output = static_cast<RE::RENDER_TARGET>(a4);
+
 			if (!globals::state->IsMainOrLoadingMenuOpen() &&
-				globals::state->HandlePostProcessing(
-					static_cast<RE::RENDER_TARGET>(a3),
-					static_cast<RE::RENDER_TARGET>(a4)))
+				globals::state->HandlePostProcessing(input, output))
 				return;
+
+			auto& postProcessing = globals::features::postProcessing;
+			if (postProcessing.loaded)
+				postProcessing.PreProcess(input);
+
 			func(a1, a2, a3, a4, a5);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
