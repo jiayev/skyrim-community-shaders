@@ -16,6 +16,7 @@
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
 #include "Utils/D3D.h"
+#include <thread>
 
 #define I18N_KEY_PREFIX "feature.raytracing."
 
@@ -54,9 +55,18 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 	auto certSettings = settings.CreationEngineRaytracingSettings;
 
 	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled) {
+		const auto& pt = globals::features::pathTracing.settings;
 		certSettings.GeneralSettings.Mode = CreationEngineRaytracing::Mode::PathTracing;
-		certSettings.GeneralSettings.Denoiser = globals::features::pathTracing.settings.GeneralSettings.Denoiser;
-		certSettings.RaytracingSettings = globals::features::pathTracing.settings.RaytracingSettings;
+		certSettings.GeneralSettings.Denoiser = pt.GeneralSettings.Denoiser;
+		certSettings.RaytracingSettings = pt.RaytracingSettings;
+		certSettings.AdvancedSettings.StablePlanes = pt.StablePlanes;
+		certSettings.NRDSettings = pt.NRDSettings;
+		certSettings.NRDReblurSettings = pt.NRDReblurSettings;
+		certSettings.NRDRelaxSettings = pt.NRDRelaxSettings;
+		certSettings.AdvancedSettings.SSSSettings = pt.SSSSettings;
+		certSettings.MaterialSettings = pt.MaterialSettings;
+		certSettings.LightingSettings = pt.LightingSettings;
+		certSettings.WaterSettings = pt.WaterSettings;
 	} else {
 		certSettings.GeneralSettings.Mode = CreationEngineRaytracing::Mode::None;
 	}
@@ -740,6 +750,9 @@ void Raytracing::DrawSettings()
 	auto ceRTSettingsBefore = GetSettings();
 
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.CreationEngineRaytracingSettings.Enabled);
+
+	const auto maxThreads = std::max(1u, std::thread::hardware_concurrency() - 1u);
+	ImGui::SliderInt(T(TKEY("num_worker_threads"), "Number of Worker Threads"), reinterpret_cast<int*>(&settings.CreationEngineRaytracingSettings.AdvancedSettings.NumWorkerThreads), 1, maxThreads);
 
 	ImGui::Checkbox(T(TKEY("validation_layer"), "Validation Layer"), &settings.RendererSettings.ValidationLayer);
 
