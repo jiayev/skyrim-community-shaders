@@ -117,7 +117,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	lightSkyStatics,
 	skyStaticsBrightness,
 	halfResApShadow,
-	tonemapper,
 	vanillaMix,
 	trMix,
 	apLumMix,
@@ -382,24 +381,6 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText(T(TKEY("post_processing"), "Post Processing"));
 	{
-		const bool llEnabled = globals::features::linearLighting.settings.enableLinearLighting;
-		ImGui::BeginDisabled(llEnabled);
-		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
-			ImGui::TableNextColumn();
-			ImGui::Text("%s", T(TKEY("tonemapper"), "Tonemapper"));
-			ImGui::TableNextColumn();
-			ImGui::RadioButton(T(TKEY("linear"), "Linear"), &settings.tonemapper, 0);
-			ImGui::TableNextColumn();
-			ImGui::RadioButton(T(TKEY("gamma"), "Gamma"), &settings.tonemapper, 1);
-			ImGui::TableNextColumn();
-			ImGui::RadioButton(T(TKEY("reinherd"), "Reinherd"), &settings.tonemapper, 2);
-			ImGui::EndTable();
-		}
-		ImGui::EndDisabled();
-		if (llEnabled) {
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("tonemapper_is_forced_to_linear_when_linear_lighting"), "Tonemapper is forced to Linear when Linear Lighting is enabled."));
-		}
 		ImGui::SliderFloat(T(TKEY("vanilla_mix"), "Vanilla Mix"), &settings.vanillaMix, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blend_in_vanilla_sky_color"), "Blend in vanilla sky color."));
@@ -412,7 +393,7 @@ void PhysicalSky::SettingsCelestials()
 
 	ImGui::Checkbox(T(TKEY("override_directional_light"), "Override Directional Light"), &settings.overrideDirLight);
 	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("overrides_the_color_of_directional_light_linear_tonemapper"), "Overrides the color of directional light. Linear tonemapper and 1.0 transmittance mix are recommended."));
+		ImGui::Text("%s", T(TKEY("overrides_the_color_of_directional_light_linear_tonemapper"), "Overrides the color of directional light. A 1.0 transmittance mix is recommended."));
 	ImGui::SliderFloat(T(TKEY("transmittance_mix"), "Transmittance Mix"), &settings.trMix, 0.f, 1.f, "%.2f");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("apply_additional_atmospheric_tranmisttance_on_the_directional_light"),
@@ -980,7 +961,6 @@ void PhysicalSky::Reset()
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
 		.secundaColor = settings.secundaColor,
 		.enabled = allGood,
-		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,

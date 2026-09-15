@@ -88,7 +88,6 @@ struct PhysicalSky final : public Feature
 		bool lightSkyStatics = true;
 		float skyStaticsBrightness = 1.0f;
 		bool halfResApShadow = false;
-		int tonemapper = 2;
 		float vanillaMix = 0;
 		float trMix = 1;
 		float apLumMix = 1;
@@ -168,7 +167,7 @@ struct PhysicalSky final : public Feature
 
 		// GENERAL
 		uint enabled;  //
-		int tonemapper;
+		float pad;
 		float vanillaMix;
 
 		// WORLD
