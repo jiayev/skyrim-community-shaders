@@ -81,7 +81,7 @@ namespace Skylighting
 		diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
 
 		float3 multiBounceSkylighting = MultiBounceAO(albedo, skylightingDiffuse);
-		directionalAmbientColor = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColor, multiBounceSkylighting);
+		directionalAmbientColor = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColor, multiBounceSkylighting);
 
 		diffuseColor += directionalAmbientColor;
 	}

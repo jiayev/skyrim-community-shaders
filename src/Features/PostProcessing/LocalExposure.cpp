@@ -280,6 +280,7 @@ void LocalExposure::SetupResources()
 
 void LocalExposure::ClearShaderCache()
 {
+	outputReady = false;
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&setupCS, &downsampleCS, &blurHorizontalCS, &blurVerticalCS, &gridCS, &resolveCS
@@ -487,4 +488,5 @@ void LocalExposure::Draw(TextureInfo& inout_tex)
 
 	// NOTE: We do not modify inout_tex. Composite consumes the base luminance map.
 	state->EndPerfEvent();
+	outputReady = true;
 }

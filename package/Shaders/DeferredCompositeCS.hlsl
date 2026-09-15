@@ -111,7 +111,12 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 	float glossiness = normalGlossiness.z;
 
-	float3 linDiffuseColor = ColorManagement::StorageToWorking(diffuseColor);
+#if defined(DEBUG_VIEW)
+	float3 debugV = -normalize(positionWS.xyz);
+	float3 debugCubemapIrradiance = 0;
+#endif
+
+	float3 linDiffuseColor = ColorManagement::SceneToLinear(diffuseColor);
 	float3 normalWS = normalize(mul(FrameBuffer::CameraViewInverse, float4(normalVS, 0)).xyz);
 
 #if defined(SSGI)
@@ -125,7 +130,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 	float vertexAO = 1.0 - Masks2Texture[dispatchID.xy].x;
 	ssgiAo = saturate(ssgiAo / max(vertexAO, EPSILON_DIVISION));
 
-	float3 linAlbedo = ColorManagement::StorageToWorking(albedo / Color::PBRLightingScale);
+	float3 linAlbedo = ColorManagement::SceneToLinear(albedo / Color::PBRLightingScale);
 	float3 multiBounceSSGIAo = MultiBounceAO(linAlbedo, ssgiAo);
 
 	float3 directionalAmbientColor = 0;
@@ -170,11 +175,11 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 		directionalAmbientColor *= maxScale;
 
 		diffuseColor = max(0.0, diffuseColor - directionalAmbientColor);
-		diffuseColor = ColorManagement::WorkingColor::ScaleByLinear(diffuseColor, sqrt(multiBounceSSGIAo));
+		diffuseColor = ColorManagement::SceneColor::ScaleByLinear(diffuseColor, sqrt(multiBounceSSGIAo));
 
-		directionalAmbientColor = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColor, multiBounceSSGIAo);
+		directionalAmbientColor = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColor, multiBounceSSGIAo);
 		diffuseColor += directionalAmbientColor;
-		linDiffuseColor = ColorManagement::StorageToWorking(diffuseColor);
+		linDiffuseColor = ColorManagement::SceneToLinear(diffuseColor);
 	}
 
 	linDiffuseColor += ssgiIl * linAlbedo;
@@ -216,8 +221,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			if (SharedData::iblSettings.DALCMode >= 2) {
 				// Mode 2/3: DALC-normalized env scaled by DALCAmount + sky overlay
 				float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
-				envSpecular = ColorManagement::StorageToWorking((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-				skySpecular = ColorManagement::StorageToWorking(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				envSpecular = ColorManagement::SceneToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
+				skySpecular = ColorManagement::SceneToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				envSpecular *= (SharedData::iblSettings.DALCMode == 3) ? skylightingVisibility : 1.0;
 				skySpecular *= skylightingSpecular;
@@ -225,8 +230,8 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			} else {
 				// Mode 0/1: IBL ratio-based
 				float3 ratio = ImageBasedLighting::GetIBLRatio();
-				envSpecular = ColorManagement::StorageToWorking(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-				skySpecular = ColorManagement::StorageToWorking(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+				envSpecular = ColorManagement::SceneToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
+				skySpecular = ColorManagement::SceneToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 #		if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
 #		endif
@@ -244,29 +249,29 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 			float3 specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level);
 			float specularIrradianceLuminance = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
 			specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-			finalIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+			finalIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 #	elif defined(SKYLIGHTING)
 			float3 specularIrradianceReflections = 0.0;
 			if (skylightingSpecular > 0.0) {
 				specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
 				float lum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, 15));
 				specularIrradianceReflections = (specularIrradianceReflections / max(lum, 0.001)) * directionalAmbientColorSpecular;
-				specularIrradianceReflections = ColorManagement::StorageToWorking(specularIrradianceReflections);
+				specularIrradianceReflections = ColorManagement::SceneToLinear(specularIrradianceReflections);
 			}
 			float3 specularIrradiance = 0.0;
 			if (skylightingSpecular < 1.0) {
 				specularIrradiance = EnvTexture.SampleLevel(LinearSampler, R, level);
 				float lum = Color::RGBToLuminance(EnvTexture.SampleLevel(LinearSampler, R, 15));
-				float dalcScaled = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
+				float dalcScaled = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
 				specularIrradiance = (specularIrradiance / max(lum, 0.001)) * dalcScaled;
-				specularIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+				specularIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 			}
 			finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 #	else
 			float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(LinearSampler, R, level);
 			float specularIrradianceLuminance = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(LinearSampler, R, 15));
 			specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-			finalIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+			finalIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 #	endif
 		}
 
@@ -291,7 +296,7 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 
 #endif
 
-	color = ColorManagement::WorkingToStorage(color);
+	color = ColorManagement::LinearToScene(color);
 
 #if defined(DEBUG)
 

@@ -426,7 +426,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
 	}
 
-	baseColor.xyz = ColorManagement::AlbedoValueToWorking(baseColor.xyz);
+	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
 
 #			if defined(DO_ALPHA_TEST)
 	float diffuseAlpha = input.Color.w * baseColor.w;
@@ -524,10 +524,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float softLightRolloff = saturate(input.VertexNormal.w * 10.0) * SharedData::grassLightingSettings.SubsurfaceScatteringAmount * 2.0;
 
-	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::VanillaNormalization();
+	lightsDiffuseColor += dirLightColor * dirDetailedShadow * saturate(dirLightAngle) * Color::BRDFScale;
 
-	float3 vertexColor = Color::ColorToLinear(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
+	float vertexAO = ColorManagement::SRGBToWorking(max(max(input.Color.r, input.Color.g), input.Color.b));
 	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)
@@ -548,14 +548,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	dirSoftShadow = skylightingShadowVisibility;
 #			endif
 
-	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * ColorManagement::BRDFNormalization();
+	float3 subsurfaceColor = dirLightColor * dirSoftShadow * (GetSoftLightMultiplier(dirLightAngle, softLightRolloff)) * Color::BRDFScale;
 
 #			ifdef GRASS_OPTIMIZATIONS
 	if (complexDetail)
 #			else
 	if (complex)
 #			endif
-		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * ColorManagement::BRDFNormalization();
+		lightsSpecularColor += dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, SharedData::grassLightingSettings.Glossiness) * Color::BRDFScale;
 
 #			if defined(LIGHT_LIMIT_FIX)
 	uint clusterIndex = 0;
@@ -605,16 +605,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 				lightDiffuseColor = lightColor * saturate(lightAngle);
 
-				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * ColorManagement::BRDFNormalization();
+				subsurfaceColor += lightColor * GetSoftLightMultiplier(lightAngle, softLightRolloff) * Color::BRDFScale;
 
-				lightsDiffuseColor += lightDiffuseColor * ColorManagement::BRDFNormalization();
+				lightsDiffuseColor += lightDiffuseColor * Color::BRDFScale;
 
 #				ifdef GRASS_OPTIMIZATIONS
 				if (complexDetail)
 #				else
 				if (complex)
 #				endif
-					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * ColorManagement::BRDFNormalization();
+					lightsSpecularColor += GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, SharedData::grassLightingSettings.Glossiness) * Color::BRDFScale;
 			}
 		}
 	}
@@ -692,6 +692,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.PS.w = diffuseAlpha;
 #		else
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
+	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
 #			if defined(DO_ALPHA_TEST)
 	const float diffuseAlpha = input.Color.w * baseColor.w;
 	if ((diffuseAlpha - AlphaTestRefRS) < 0)
@@ -792,7 +793,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 normal = normalize(FrameBuffer::ViewToWorld(normalVS, false));
 
 	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float vertexAO = ColorManagement::SRGBToWorking(max(max(input.Color.r, input.Color.g), input.Color.b));
 	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)

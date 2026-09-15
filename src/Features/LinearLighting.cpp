@@ -5,10 +5,9 @@
 #include "Util.h"
 
 #include "Effects11.h"
-#include "Effects11/SettingManager.h"
 #include "Globals.h"
-#include "Hooks.h"
 #include "InverseSquareLighting/Common.h"
+#include "PostProcessing.h"
 #include "ShaderCache.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
@@ -19,8 +18,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
-	colorEncoding,
-	vanillaTextureEncoding,
 	vanillaDiffuseColorMult,
 	directionalLightMult,
 	pointLightMult,
@@ -34,173 +31,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	deferredEffectMult,
 	otherEffectMult)
 
-namespace
-{
-	constexpr std::uint8_t RGB_MASK = 0b0111;
-	constexpr std::array CONSTANT_GROUP_NAMES{ std::string_view{ "PerTechnique" }, std::string_view{ "PerMaterial" }, std::string_view{ "PerGeometry" } };
-
-	enum class ShaderStage : std::uint8_t
-	{
-		Vertex,
-		Pixel
-	};
-
-	enum class ColorTransform : std::uint8_t
-	{
-		Standard,
-		SRGBComposition,
-		Emissive,
-		PointLights
-	};
-
-	struct ColorField
-	{
-		RE::BSShader::Type shaderType;
-		ShaderStage stage;
-		RE::BSGraphics::ConstantGroupLevel group;
-		std::uint8_t variableIndex;
-		std::string_view variableName;
-		std::uint8_t elementCount;
-		std::uint8_t componentMask;
-		std::uint32_t requiredDescriptor;
-		std::uint32_t forbiddenDescriptor;
-		std::uint32_t excludedTechniques = 0;
-		ColorTransform transform = ColorTransform::Standard;
-		std::uint32_t includedTechniques = 0;
-	};
-
-	struct MappedColorBuffer
-	{
-		ID3D11Resource* resource;
-		void* data;
-		std::size_t byteWidth;
-		RE::BSShader::Type shaderType;
-		ShaderStage stage;
-		RE::BSGraphics::ConstantGroupLevel group;
-		std::uint32_t descriptor;
-		void* shaderObject;
-		const std::int8_t* constantTable;
-		std::size_t constantTableSize;
-		float emissiveMult;
-		std::array<ColorManagement::ColorSpace, 8> lightColorSpaces;
-	};
-
-	struct LightColorBackup
-	{
-		RE::NiLight* light;
-		RE::NiColor color;
-	};
-
-	constexpr std::array COLOR_FIELDS{
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 14, "FogNearColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 15, "FogFarColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 23, "TintColor", 1, RGB_MASK, 0, 0, 0, ColorTransform::Standard, 1u << static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::Hair) },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 25, "SpecularColor", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Specular), 0 },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 13, "ProjectedUVParams2", 1, RGB_MASK, static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV), static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr), 1u << static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderTechniques::MultiIndexSparkle) },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "EmitColor", 1, RGB_MASK, 0, 0, 0, ColorTransform::Emissive },
-		ColorField{ RE::BSShader::Type::Lighting, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "PointLightColor", 7, RGB_MASK, 0, 0, 0, ColorTransform::PointLights },
-
-		ColorField{ RE::BSShader::Type::DistantTree, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 1, "AmbientColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Sky, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 3, "BlendColor", 3, RGB_MASK, 0, 0, 0, ColorTransform::SRGBComposition },
-		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 8, "Color1", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
-		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 9, "Color2", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
-		ColorField{ RE::BSShader::Type::Particle, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 10, "Color3", 1, RGB_MASK, 0, 0, (1u << 1) | (1u << 3) },
-
-		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 5, "FogNearColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerTechnique, 6, "FogFarColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 15, "BaseColor", 1, RGB_MASK, 0, static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor) },
-		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 0, "PropertyColor", 1, RGB_MASK, 0, static_cast<std::uint32_t>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor) },
-		ColorField{ RE::BSShader::Type::Effect, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerGeometry, 2, "MembraneRimColor", 1, RGB_MASK, 0, 0 },
-
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 9, "VSFogNearColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Vertex, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 10, "VSFogFarColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 1, "ShallowColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 2, "DeepColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 3, "ReflectionColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 12, "FogNearColor", 1, RGB_MASK, 0, 0 },
-		ColorField{ RE::BSShader::Type::Water, ShaderStage::Pixel, RE::BSGraphics::ConstantGroupLevel::PerMaterial, 13, "FogFarColor", 1, RGB_MASK, 0, 0 },
-	};
-
-	thread_local std::vector<MappedColorBuffer> mappedColorBuffers;
-	thread_local std::vector<std::vector<LightColorBackup>> passLightColorBackups;
-
-	void DecodeToLinearSRGB(float* color, ColorManagement::Encoding encoding)
-	{
-		switch (encoding) {
-		case ColorManagement::Encoding::SRGB:
-			Util::ColorSpace::SRGBToLinear(color);
-			break;
-		case ColorManagement::Encoding::GameGamma:
-			Util::ColorSpace::GameGammaToLinear(color);
-			break;
-		case ColorManagement::Encoding::Linear:
-			break;
-		}
-	}
-
-	void EncodeLinearSRGB(float* color)
-	{
-		Util::ColorSpace::LinearToSRGB(color);
-	}
-
-	void ConvertToSRGBComposition(float* color, ColorManagement::Encoding sourceEncoding)
-	{
-		if (sourceEncoding == ColorManagement::Encoding::SRGB)
-			return;
-
-		DecodeToLinearSRGB(color, sourceEncoding);
-		EncodeLinearSRGB(color);
-	}
-
-	std::uint32_t GetShaderTechnique(RE::BSShader::Type shaderType, std::uint32_t descriptor)
-	{
-		switch (shaderType) {
-		case RE::BSShader::Type::Lighting:
-			return (descriptor >> 24) & 0x3F;
-		case RE::BSShader::Type::Water:
-			return (descriptor >> 11) & 0xF;
-		case RE::BSShader::Type::Sky:
-			return descriptor & 0xFF;
-		default:
-			return descriptor;
-		}
-	}
-}
-
 void LinearLighting::DrawSettings()
 {
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning, "%s", T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
-			return;
-		}
-	}
-
-	ImGui::Checkbox(T(TKEY("enable"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("enable_acescg_tooltip"),
-							  "Render in ACEScg color space for wider gamut and more accurate lighting.\n"
-							  "Requires Linear Lighting and Post Processing enabled.\n"
-							  "All sRGB-gamut textures and colors will be converted to ACEScg during shading."));
-
-	const char* colorEncodings[] = { "sRGB", "Linear", "Game Gamma" };
-	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
-	int colorEncoding = static_cast<int>(settings.colorEncoding);
-	if (ImGui::Combo(T(TKEY("color_encoding"), "Color Encoding"), &colorEncoding, colorEncodings, IM_ARRAYSIZE(colorEncodings)))
-		settings.colorEncoding = static_cast<uint>(colorEncoding);
-	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
-	int textureEncoding = static_cast<int>(settings.vanillaTextureEncoding);
-	if (ImGui::Combo(T(TKEY("vanilla_texture_encoding"), "Vanilla Texture Encoding"), &textureEncoding, colorEncodings, IM_ARRAYSIZE(colorEncodings)))
-		settings.vanillaTextureEncoding = static_cast<uint>(textureEncoding);
-	if (GetTextureInputEncoding() != static_cast<ColorEncoding>(settings.vanillaTextureEncoding)) {
-		ImGui::SameLine();
-		ImGui::TextColored(
-			globals::menu->GetSettings().Theme.StatusPalette.RestartNeeded,
-			"%s",
-			T(TKEY("vanilla_texture_encoding_restart"), "Restart required"));
-	}
+	ImGui::TextDisabled("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
+	if (globals::features::effects11.IsActive())
+		ImGui::TextDisabled("Effects 11 overrides Linear Lighting while UseEffect is enabled.");
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
@@ -238,28 +75,53 @@ void LinearLighting::DrawSettings()
 void LinearLighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	settings.colorEncoding = std::min(settings.colorEncoding, static_cast<uint>(ColorEncoding::GameGamma));
-	settings.vanillaTextureEncoding = std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma));
-
-	if (baseVersion.empty())
-		baseVersion = version;
-	version = baseVersion + (settings.enableLinearLighting ? "+ll" : "") + (settings.enableACEScg ? "+acescg" : "");
+	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
+		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
 }
 
 void LinearLighting::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
 
-	const uint fingerprint = (settings.enableLinearLighting ? 1u : 0u) | (settings.enableACEScg ? 2u : 0u);
-	if (lastShaderCacheFingerprint != 0xFFFFFFFF && lastShaderCacheFingerprint != fingerprint && globals::shaderCache)
-		globals::shaderCache->Clear();
-	lastShaderCacheFingerprint = fingerprint;
+bool LinearLighting::IsLinearLightingActive() const
+{
+	return configuredLinearLighting && !globals::features::effects11.IsActive();
+}
+
+void LinearLighting::PostSetupResources()
+{
+	if (configuredLinearLighting && !globals::features::effects11.IsPresetEnabled() && !globals::features::postProcessing.loaded)
+		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
+}
+
+void LinearLighting::ClearShaderCache()
+{
+	if (!globals::d3d::context || !globals::game::renderer)
+		return;
+	if (IsLinearLightingActive() && !globals::features::postProcessing.loaded)
+		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
+	globals::state->RequestHistoryReset();
+	workingSunlight = nullptr;
+	const float clear[4]{};
+	auto& reflections = globals::game::renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGETS_CUBEMAP::kREFLECTIONS];
+	for (auto* rtv : reflections.cubeSideRTV)
+		if (rtv)
+			globals::d3d::context->ClearRenderTargetView(rtv, clear);
+}
+
+std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetCommonShaderDefines()
+{
+	auto defines = GetShaderDefineOptions();
+	if (IsLinearLightingActive())
+		defines.emplace_back("ENABLE_LL", "");
+	return defines;
 }
 
 std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetShaderDefineOptions()
 {
 	std::vector<std::pair<std::string_view, std::string_view>> options;
-	if (settings.enableACEScg)
+	if (IsACEScgActive())
 		options.emplace_back("ENABLE_ACESCG", "");
 	return options;
 }
@@ -267,16 +129,6 @@ std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetSh
 void LinearLighting::RestoreDefaultSettings()
 {
 	settings = {};
-}
-
-void LinearLighting::SetupResources()
-{
-	if (textureInputEncodingCaptured)
-		return;
-
-	startupTextureInputEncoding = static_cast<ColorEncoding>(
-		std::min(settings.vanillaTextureEncoding, static_cast<uint>(ColorEncoding::GameGamma)));
-	textureInputEncodingCaptured = true;
 }
 
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
@@ -294,23 +146,9 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.deferredEffectMult = 1.0f;
 	data.otherEffectMult = 1.0f;
 
-	data.deliveryEncoding = (globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing) ? 0u : 1u;
+	data.isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 
-	if (!loaded) {
-		return data;
-	}
-	data.enableLinearLighting = IsColorManagementEnabled();
-	data.enableACEScg = settings.enableACEScg && data.enableLinearLighting;
-
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			data.enableLinearLighting = false;
-			data.enableACEScg = false;
-		}
-	}
-
-	if (!data.enableLinearLighting)
+	if (!loaded || !IsLinearLightingActive())
 		return data;
 
 	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
@@ -327,264 +165,457 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	return data;
 }
 
-bool LinearLighting::IsColorManagementEnabled() const
+void LinearLighting::ModifySharedLighting(SharedLighting& lighting)
 {
-	if (!loaded || !settings.enableLinearLighting || !globals::shaderCache || !globals::shaderCache->IsEnabled() || globals::state->IsMainOrLoadingMenuOpen())
-		return false;
-
-	return !globals::features::effects11.loaded || !globals::features::effects11.enableEffect;
-}
-
-LinearLighting::ColorEncoding LinearLighting::GetColorEncoding() const
-{
-	const auto encoding = static_cast<ColorEncoding>(settings.colorEncoding);
-	return encoding <= ColorEncoding::GameGamma ? encoding : ColorEncoding::SRGB;
-}
-
-ColorManagement::ColorSpace LinearLighting::GetInputColorSpace() const
-{
-	return { GetColorEncoding(), ColorManagement::Gamut::SRGB };
-}
-
-LinearLighting::ColorEncoding LinearLighting::GetTextureInputEncoding() const
-{
-	return startupTextureInputEncoding;
-}
-
-ColorManagement::ColorSpace LinearLighting::GetLightColorSpace(const RE::NiLight* light) const
-{
-	if (light) {
-		if (const auto it = lightColorSpaceOverrides.find(light); it != lightColorSpaceOverrides.end()) {
-			const auto& diffuse = light->GetLightRuntimeData().diffuse;
-			if (diffuse.red == it->second.value.red && diffuse.green == it->second.value.green && diffuse.blue == it->second.value.blue)
-				return it->second.space;
-		}
-
-		if (const auto pointLight = skyrim_cast<RE::NiPointLight*>(const_cast<RE::NiLight*>(light));
-			pointLight && ISLCommon::RuntimeLightDataExt::Get(pointLight)->flags.any(LightLimitFix::LightFlags::Linear))
-			return ColorManagement::LinearSRGB;
-	}
-
-	return GetInputColorSpace();
-}
-
-void LinearLighting::ConvertColorToWorkingSpace(float* color, ColorManagement::ColorSpace sourceSpace) const
-{
-	if (!IsColorManagementEnabled())
+	if (!IsLinearLightingActive())
 		return;
+	lighting.directional.color = LightColorToWorking(lighting.directionalLight);
+	lighting.sun.color = SRGBToWorking(lighting.sun.color);
+	for (auto* moon : { &lighting.masser, &lighting.secunda }) {
+		moon->color = SRGBToWorking(moon->color);
+		moon->tint = SRGBToWorking(moon->tint);
+	}
+}
 
-	DecodeToLinearSRGB(color, sourceSpace.encoding);
-
-	if (sourceSpace.gamut == ColorManagement::Gamut::SRGB && settings.enableACEScg)
+void LinearLighting::SRGBToWorking(float* color) const
+{
+	if (!IsLinearLightingActive())
+		return;
+	Util::ColorSpace::SRGBToLinear(color);
+	if (IsACEScgActive())
 		Util::ColorSpace::SRGBGamutToAP1(color);
 }
 
-RE::NiColor LinearLighting::ConvertColorToWorkingSpace(RE::NiColor color, ColorManagement::ColorSpace sourceSpace) const
+RE::NiColor LinearLighting::SRGBToWorking(RE::NiColor color) const
 {
-	ConvertColorToWorkingSpace(&color.red, sourceSpace);
+	SRGBToWorking(&color.red);
 	return color;
 }
 
-void LinearLighting::DecodeColor(float* color) const
+RE::NiColor LinearLighting::LightColorToWorking(const RE::NiLight* light, bool effect) const
 {
-	ConvertColorToWorkingSpace(color, GetInputColorSpace());
-}
+	if (!light)
+		return {};
+	const auto& diffuse = light->GetLightRuntimeData().diffuse;
+	if (light == workingSunlight && diffuse == workingSunlightColor)
+		return workingSunlightColor;
 
-RE::NiColor LinearLighting::DecodeColor(RE::NiColor color) const
-{
-	return ConvertColorToWorkingSpace(color, GetInputColorSpace());
-}
-
-void LinearLighting::ConvertLightColorToWorkingSpace(const RE::NiLight* light, float* color) const
-{
-	ConvertColorToWorkingSpace(color, GetLightColorSpace(light));
-}
-
-RE::NiColor LinearLighting::ConvertLightColorToWorkingSpace(const RE::NiLight* light, RE::NiColor color) const
-{
-	ConvertLightColorToWorkingSpace(light, &color.red);
+	auto color = effect ? static_cast<const RE::NiDirectionalLight*>(light)->GetDirectionalLightRuntimeData().effectColor : diffuse;
+	if (!IsLinearLightingActive())
+		return color;
+	auto* const point = skyrim_cast<RE::NiPointLight*>(const_cast<RE::NiLight*>(light));
+	const bool linear = point && ISLCommon::RuntimeLightDataExt::Get(point)->flags.any(LightLimitFix::LightFlags::Linear);
+	if (!linear)
+		Util::ColorSpace::SRGBToLinear(&color.red);
+	if (IsACEScgActive())
+		Util::ColorSpace::SRGBGamutToAP1(&color.red);
 	return color;
 }
 
-void LinearLighting::SetLightColor(RE::NiLight* light, ColorManagement::ColorValue color)
+void LinearLighting::SetSunlightColor(RE::NiLight* light, RE::NiColor color)
 {
 	if (!light)
 		return;
-
-	light->GetLightRuntimeData().diffuse = color.value;
-	lightColorSpaceOverrides.insert_or_assign(light, LightColorSpaceOverride{ color.value, color.space });
+	light->GetLightRuntimeData().diffuse = color;
+	workingSunlight = light;
+	workingSunlightColor = color;
 }
 
-void LinearLighting::ClearLightColorSpace(const RE::NiLight* light)
+void LinearLighting::ClearSunlightColor(const RE::NiLight* light)
 {
-	if (!light)
-		return;
-
-	lightColorSpaceOverrides.erase(light);
+	if (workingSunlight == light)
+		workingSunlight = nullptr;
 }
 
-void LinearLighting::BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShader::Type shaderType)
+namespace
 {
-	auto& backups = passLightColorBackups.emplace_back();
-	const auto shaderClass = static_cast<std::size_t>(shaderType) - 1;
-	if (!IsColorManagementEnabled() || shaderClass >= std::size(globals::state->enabledClasses) || !globals::state->enabledClasses[shaderClass] || !pass || !pass->sceneLights)
-		return;
+	using Group = RE::BSGraphics::ConstantGroupLevel;
+	// Native SetupGeometry reuses its argument spill slots before Unmap.
+	thread_local RE::BSRenderPass* geometryPass = nullptr;
 
-	const bool directionalOnly = shaderType == RE::BSShader::Type::Lighting;
-	const std::uint32_t lightCount = directionalOnly ? std::min<std::uint32_t>(pass->numLights, 1) : pass->numLights;
-	backups.reserve(lightCount);
-	for (std::uint32_t index = 0; index < lightCount; ++index) {
-		auto* light = pass->sceneLights[index] ? pass->sceneLights[index]->light.get() : nullptr;
-		if (!light || std::find_if(backups.begin(), backups.end(), [light](const auto& backup) { return backup.light == light; }) != backups.end())
-			continue;
-		const bool alreadyManaged = std::any_of(passLightColorBackups.begin(), std::prev(passLightColorBackups.end()), [light](const auto& outerBackups) {
-			return std::any_of(outerBackups.begin(), outerBackups.end(), [light](const auto& backup) { return backup.light == light; });
-		});
-		if (alreadyManaged)
-			continue;
-
-		auto& diffuse = light->GetLightRuntimeData().diffuse;
-		backups.push_back({ light, diffuse });
-		diffuse = ConvertLightColorToWorkingSpace(light, diffuse);
-	}
-}
-
-void LinearLighting::EndPassColorManagement()
-{
-	if (passLightColorBackups.empty())
-		return;
-
-	for (const auto& backup : passLightColorBackups.back())
-		backup.light->GetLightRuntimeData().diffuse = backup.color;
-	passLightColorBackups.pop_back();
-}
-
-void LinearLighting::TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPPED_SUBRESOURCE* mappedResource)
-{
-	if (!IsColorManagementEnabled() || !resource || !mappedResource || !mappedResource->pData || !globals::state->currentShader ||
-		(!globals::state->customVertexShader && !globals::state->customPixelShader))
-		return;
-
-	const auto shaderType = globals::state->currentShader->shaderType.get();
-
-	auto track = [&](auto* sourceShader, void* customShader, ShaderStage stage, std::uint32_t descriptor) {
-		if (!sourceShader || !customShader)
-			return false;
-
-		for (std::size_t groupIndex = 0; groupIndex < 3; ++groupIndex) {
-			if (sourceShader->constantBuffers[groupIndex].buffer != reinterpret_cast<REX::W32::ID3D11Buffer*>(resource))
-				continue;
-			D3D11_BUFFER_DESC desc{};
-			static_cast<ID3D11Buffer*>(resource)->GetDesc(&desc);
-
-			mappedColorBuffers.push_back({ resource,
-				mappedResource->pData,
-				desc.ByteWidth,
-				shaderType,
-				stage,
-				static_cast<RE::BSGraphics::ConstantGroupLevel>(groupIndex),
-				descriptor,
-				customShader,
-				sourceShader->constantTable.data(),
-				sourceShader->constantTable.size(),
-				currentEmissiveMult,
-				currentLightColorSpaces });
-			return true;
+	template <RE::BSShader::Type Type>
+	struct SetupGeometry
+	{
+		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
+		{
+			if constexpr (Type == RE::BSShader::Type::Lighting) {
+				globals::state->permutationData.BaseTextureIsWorking = 0;
+				if (pass && pass->shaderProperty && pass->shaderProperty->material) {
+					const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(pass->shaderProperty->material);
+					const auto target = material->diffuseRenderTargetSourceIndex;
+					globals::state->permutationData.BaseTextureIsWorking = target == RE::RENDER_TARGETS::kWATER_REFLECTIONS ||
+					                                                       (!globals::state->permutationData.RenderToUI && (target == RE::RENDER_TARGETS::kMAIN || target == RE::RENDER_TARGETS::kMAIN_COPY));
+				}
+			}
+			if constexpr (Type == RE::BSShader::Type::Effect || Type == RE::BSShader::Type::Particle) {
+				constexpr auto alphaBlend = static_cast<uint>(State::ExtraShaderDescriptors::SourceAlphaBlend);
+				auto& descriptor = globals::state->permutationData.ExtraShaderDescriptor;
+				descriptor &= ~alphaBlend;
+				if (pass && pass->geometry && pass->shaderProperty &&
+					!pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kPremultAlpha)) {
+					const auto* alpha = pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+					if (alpha && alpha->GetAlphaBlending() && alpha->GetSrcBlendMode() == RE::NiAlphaProperty::AlphaFunction::kSrcAlpha) {
+						if (alpha->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kInvSrcAlpha ||
+							alpha->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne)
+							descriptor |= alphaBlend;
+					}
+				}
+			}
+			auto* previous = std::exchange(geometryPass, pass);
+			const SKSE::stl::scope_exit restore([previous]() noexcept { geometryPass = previous; });
+			func(shader, pass, renderFlags);
 		}
-
-		return false;
+		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	if (globals::game::currentVertexShader &&
-		track(*globals::game::currentVertexShader,
-			globals::state->customVertexShader ? globals::state->customVertexShader->shader : nullptr,
-			ShaderStage::Vertex,
-			globals::state->currentVertexDescriptor))
-		return;
+	float* PixelConstant(Group group, uint index)
+	{
+		auto& ll = globals::features::linearLighting;
+		if (!ll.IsLinearLightingActive() || !globals::state->customPixelShader)
+			return nullptr;
+		auto* shader = *globals::game::currentPixelShader;
+		if (!shader)
+			return nullptr;
+		auto& buffer = shader->constantBuffers[static_cast<uint>(group)];
+		if (!buffer.buffer || !buffer.data)
+			return nullptr;
+		return reinterpret_cast<float*>(buffer.data) + static_cast<uint8_t>(shader->constantTable[index]);
+	}
 
-	if (globals::game::currentPixelShader && globals::state->customPixelShader)
-		track(*globals::game::currentPixelShader, globals::state->customPixelShader->shader, ShaderStage::Pixel, globals::state->currentPixelDescriptor);
-}
-
-void LinearLighting::ConvertMappedColorBuffer(ID3D11Resource* resource)
-{
-	const auto mapped = std::find_if(mappedColorBuffers.rbegin(), mappedColorBuffers.rend(), [resource](const auto& entry) {
-		return entry.resource == resource;
-	});
-	if (mapped == mappedColorBuffers.rend())
-		return;
-
-	const MappedColorBuffer buffer = *mapped;
-	mappedColorBuffers.erase(std::next(mapped).base());
-	if (!IsColorManagementEnabled())
-		return;
-
-	for (const auto& field : COLOR_FIELDS) {
-		const auto technique = GetShaderTechnique(buffer.shaderType, buffer.descriptor);
-		if (field.shaderType != buffer.shaderType || field.stage != buffer.stage || field.group != buffer.group ||
-			(field.requiredDescriptor && (buffer.descriptor & field.requiredDescriptor) != field.requiredDescriptor) ||
-			(field.forbiddenDescriptor && (buffer.descriptor & field.forbiddenDescriptor)) ||
-			(field.includedTechniques && (technique >= 32 || !(field.includedTechniques & (1u << technique)))) ||
-			(technique < 32 && (field.excludedTechniques & (1u << technique))))
-			continue;
-
-		if (field.variableIndex >= buffer.constantTableSize)
-			continue;
-		const auto groupIndex = static_cast<std::size_t>(field.group);
-		if (groupIndex >= CONSTANT_GROUP_NAMES.size() || !Hooks::HasShaderConstant(buffer.shaderObject, CONSTANT_GROUP_NAMES[groupIndex], field.variableName))
-			continue;
-
-		const auto offset = buffer.constantTable[field.variableIndex];
-		if (offset < 0)
-			continue;
-
-		for (std::size_t element = 0; element < field.elementCount; ++element) {
-			const std::size_t floatOffset = static_cast<std::size_t>(offset) + element * 4;
-			if ((floatOffset + 4) * sizeof(float) > buffer.byteWidth)
-				break;
-
-			auto* value = static_cast<float*>(buffer.data) + floatOffset;
-			if (field.transform == ColorTransform::SRGBComposition) {
-				ConvertToSRGBComposition(value, GetColorEncoding());
-			} else if (field.transform == ColorTransform::Emissive) {
-				if (buffer.emissiveMult != 0.0f) {
-					for (std::size_t component = 0; component < 3; ++component)
-						value[component] /= buffer.emissiveMult;
-				}
-				DecodeColor(value);
-				for (std::size_t component = 0; component < 3; ++component)
-					value[component] *= buffer.emissiveMult * settings.emitColorMult;
-			} else if (field.transform == ColorTransform::PointLights) {
-				ConvertColorToWorkingSpace(value, buffer.lightColorSpaces[element + 1]);
-			} else if (field.componentMask == RGB_MASK) {
-				DecodeColor(value);
-			}
+	void WriteRGB(Group group, uint index, const RE::NiColor& color, uint element = 0)
+	{
+		if (auto* value = PixelConstant(group, index)) {
+			value += element * 4;
+			value[0] = color.red;
+			value[1] = color.green;
+			value[2] = color.blue;
 		}
 	}
+
+	struct LightingMaterialUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer, UINT subresource, const RE::BSLightingShaderMaterialBase* material)
+		{
+			auto& ll = globals::features::linearLighting;
+			const auto descriptor = globals::state->currentPixelDescriptor;
+			if (material && ll.IsLinearLightingActive() &&
+				(descriptor & static_cast<uint>(SIE::ShaderCache::LightingShaderFlags::Specular)) &&
+				!(descriptor & static_cast<uint>(SIE::ShaderCache::LightingShaderFlags::TruePbr)))
+				WriteRGB(Group::PerMaterial, 25, ll.SRGBToWorking(material->specularColor) * material->specularColorScale);
+			context->Unmap(buffer, subresource);
+		}
+	};
+
+	struct EffectMaterialUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer, UINT subresource, const RE::BSEffectShaderMaterial* material)
+		{
+			auto& ll = globals::features::linearLighting;
+			if (material && ll.IsLinearLightingActive() &&
+				!(globals::state->currentPixelDescriptor & (static_cast<uint>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor) |
+															   static_cast<uint>(SIE::ShaderCache::EffectShaderFlags::Blood)))) {
+				const auto& c = material->baseColor;
+				WriteRGB(Group::PerMaterial, 15, ll.SRGBToWorking({ c.red, c.green, c.blue }) * material->baseColorScale);
+			}
+			context->Unmap(buffer, subresource);
+		}
+	};
+
+	struct LightingGeometryUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer)
+		{
+			auto* pass = geometryPass;
+			auto& ll = globals::features::linearLighting;
+			if (pass && ll.IsLinearLightingActive()) {
+				const auto* property = static_cast<const RE::BSLightingShaderProperty*>(pass->shaderProperty);
+				if (property && property->emissiveColor)
+					WriteRGB(Group::PerGeometry, 8, ll.SRGBToWorking(*property->emissiveColor) * (property->emissiveMult * ll.settings.emitColorMult));
+				if (pass->sceneLights && pass->numLights && pass->sceneLights[0] && pass->sceneLights[0]->light) {
+					const auto* light = pass->sceneLights[0]->light.get();
+					const auto& data = light->GetLightRuntimeData();
+					const float scale = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.hdr.sunlightScale;
+					WriteRGB(Group::PerGeometry, 4, ll.LightColorToWorking(light) * (data.fade * scale));
+				}
+				if (pass->sceneLights && !globals::features::lightLimitFix.loaded) {
+					for (uint i = 1; i < std::min<uint>(pass->numLights, 8); ++i) {
+						const auto* bsLight = pass->sceneLights[i];
+						if (!bsLight || !bsLight->light)
+							continue;
+						const auto* light = bsLight->light.get();
+						const auto& data = light->GetLightRuntimeData();
+						WriteRGB(Group::PerGeometry, 2, ll.LightColorToWorking(light) * (data.fade * bsLight->lodDimmer), i - 1);
+					}
+				}
+			}
+			context->Unmap(buffer, 0);
+		}
+	};
+
+	struct EffectGeometryUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer)
+		{
+			auto* pass = geometryPass;
+			auto& ll = globals::features::linearLighting;
+			if (pass && pass->shaderProperty && ll.IsLinearLightingActive()) {
+				auto* property = pass->shaderProperty;
+				const auto descriptor = globals::state->currentPixelDescriptor;
+				const bool membrane = descriptor & static_cast<uint>(SIE::ShaderCache::EffectShaderFlags::Membrane);
+				const bool grayscale = descriptor & static_cast<uint>(SIE::ShaderCache::EffectShaderFlags::GrayscaleToColor);
+				if (membrane && property->effectData && !grayscale) {
+					const auto& data = *property->effectData;
+					WriteRGB(Group::PerGeometry, 0, ll.SRGBToWorking({ data.fillColor.red, data.fillColor.green, data.fillColor.blue }) * data.baseFillScale);
+				} else if (!membrane && !grayscale && property->GetRTTI() == globals::rtti::BSEffectShaderPropertyRTTI.get()) {
+					const auto* effect = static_cast<const RE::BSEffectShaderProperty*>(property);
+					WriteRGB(Group::PerGeometry, 0, ll.SRGBToWorking(effect->emittanceColor ? *effect->emittanceColor : RE::NiColor{ 1.f, 1.f, 1.f }));
+				}
+				if (!membrane && (descriptor & (1u << 16)) && pass->numLights && pass->sceneLights && pass->sceneLights[0]) {
+					if (const auto* light = skyrim_cast<RE::NiDirectionalLight*>(pass->sceneLights[0]->light.get())) {
+						const float scale = RE::ImageSpaceManager::GetSingleton()->GetRuntimeData().data.baseData.hdr.sunlightScale;
+						WriteRGB(Group::PerGeometry, 11, ll.LightColorToWorking(light, true) * (light->GetLightRuntimeData().fade * scale));
+					}
+					for (uint i = 1; i < std::min<uint>(pass->numLights, 5); ++i) {
+						const auto* bsLight = pass->sceneLights[i];
+						if (!bsLight || !bsLight->light)
+							continue;
+						const auto* light = bsLight->light.get();
+						const auto& data = light->GetLightRuntimeData();
+						const auto color = ll.LightColorToWorking(light) * (data.fade * bsLight->lodDimmer);
+						if (auto* r = PixelConstant(Group::PerGeometry, 8))
+							r[i - 1] = color.red;
+						if (auto* g = PixelConstant(Group::PerGeometry, 9))
+							g[i - 1] = color.green;
+						if (auto* b = PixelConstant(Group::PerGeometry, 10))
+							b[i - 1] = color.blue;
+					}
+				}
+			}
+			context->Unmap(buffer, 0);
+		}
+	};
+
+	struct WaterMaterialUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer, UINT subresource, const RE::BSWaterShaderMaterial* material)
+		{
+			auto& ll = globals::features::linearLighting;
+			if (material && ll.IsLinearLightingActive()) {
+				static REL::Relocation<const RE::NiColor*> waterLighting{ REL::Offset(0x338C1D8) };
+				const auto lighting = ll.SRGBToWorking(*waterLighting);
+				const auto& deep = material->deepWaterColor;
+				const auto& reflection = material->reflectionColor;
+				WriteRGB(Group::PerMaterial, 1, ll.SRGBToWorking(material->shallowWaterColor) * lighting);
+				WriteRGB(Group::PerMaterial, 2, ll.SRGBToWorking({ deep.red, deep.green, deep.blue }) * lighting);
+				WriteRGB(Group::PerMaterial, 3, ll.SRGBToWorking({ reflection.red, reflection.green, reflection.blue }) * lighting);
+			}
+			context->Unmap(buffer, subresource);
+		}
+	};
+
+	struct WaterGeometryUpload
+	{
+		static void thunk(ID3D11DeviceContext* context, ID3D11Resource* buffer)
+		{
+			auto* pass = geometryPass;
+			auto& ll = globals::features::linearLighting;
+			const uint lightCount = (globals::state->currentPixelDescriptor >> 11) & 0xF;
+			if (pass && pass->shaderProperty && pass->sceneLights && ll.IsLinearLightingActive() && lightCount < 8) {
+				const auto* material = static_cast<const RE::BSWaterShaderMaterial*>(pass->shaderProperty->material);
+				for (uint i = 0; material && i < lightCount && i + 1 < pass->numLights; ++i) {
+					const auto* bsLight = pass->sceneLights[i + 1];
+					if (!bsLight || !bsLight->light || !bsLight->affectWater)
+						continue;
+					const auto* light = bsLight->light.get();
+					const auto& data = light->GetLightRuntimeData();
+					const float lightScale = *reinterpret_cast<const float*>(reinterpret_cast<const std::byte*>(material) + 0xAC);
+					WriteRGB(Group::PerGeometry, 18, ll.LightColorToWorking(light) * (data.fade * bsLight->lodDimmer * lightScale), i);
+				}
+			}
+			context->Unmap(buffer, 0);
+		}
+	};
+
+	struct SetDirectionalAmbientColors
+	{
+		static void thunk(Effects11::DirectionalAmbientColors& DirectionalAmbientColors, RE::NiColor* AmbientSpecularTint, float AmbientSpecularFresnel)
+		{
+			auto& linearLighting = globals::features::linearLighting;
+			if (linearLighting.IsLinearLightingActive()) {
+				Effects11::DirectionalAmbientColors converted = DirectionalAmbientColors;
+				for (auto& axis : converted.directionalAmbientColors) {
+					for (auto& color : axis)
+						color = linearLighting.SRGBToWorking(color);
+				}
+
+				RE::NiColor convertedSpecularTint{};
+				auto* specularTint = AmbientSpecularTint;
+				if (AmbientSpecularTint) {
+					convertedSpecularTint = linearLighting.SRGBToWorking(*AmbientSpecularTint);
+					specularTint = &convertedSpecularTint;
+				}
+
+				func(converted, specularTint, AmbientSpecularFresnel);
+				return;
+			}
+			func(DirectionalAmbientColors, AmbientSpecularTint, AmbientSpecularFresnel);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RenderMenuScene
+	{
+		static DWORD thunk(RE::UI3DSceneManager* manager, int scheme, RE::NiCamera* camera, bool arg4)
+		{
+			auto& renderToUI = globals::state->permutationData.RenderToUI;
+			const uint previous = renderToUI;
+			renderToUI = 1;
+			const auto result = func(manager, scheme, camera, arg4);
+			renderToUI = previous;
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 }
 
-void LinearLighting::PrepareLightColorManagement(RE::BSRenderPass* a_pass)
+namespace ImageSpaceColorManagement
 {
-	currentLightColorSpaces.fill(GetInputColorSpace());
-	if (!IsColorManagementEnabled() || !a_pass || !a_pass->sceneLights)
+	constexpr std::size_t VOLUMETRIC_LIGHTING_COLOR = 0;
+	constexpr std::size_t FOG_NEAR_COLOR = 4;
+	constexpr std::size_t FOG_FAR_COLOR = 8;
+
+	template <std::size_t... ColorOffsets>
+	class ScopedInputColors
+	{
+	public:
+		explicit ScopedInputColors(RE::ImageSpaceEffectParam* param)
+		{
+			shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(param);
+			if (!globals::features::linearLighting.IsLinearLightingActive() || !globals::shaderCache->IsEnabled() ||
+				!globals::state->enablePShaders || !globals::state->ShaderEnabled(RE::BSShader::Type::ImageSpace) ||
+				!shaderParam || !shaderParam->pixelConstantGroup ||
+				!((ColorOffsets + 3 <= shaderParam->pixelConstantGroupSize) && ...))
+				return;
+
+			constexpr std::array offsets{ ColorOffsets... };
+			for (std::size_t index = 0; index < offsets.size(); ++index) {
+				auto* color = shaderParam->pixelConstantGroup + offsets[index];
+				std::copy_n(color, 3, originalColors[index].data());
+				auto& linearLighting = globals::features::linearLighting;
+				linearLighting.SRGBToWorking(color);
+			}
+			active = true;
+		}
+
+		~ScopedInputColors()
+		{
+			if (!active)
+				return;
+
+			constexpr std::array offsets{ ColorOffsets... };
+			for (std::size_t index = 0; index < offsets.size(); ++index)
+				std::copy_n(originalColors[index].data(), 3, shaderParam->pixelConstantGroup + offsets[index]);
+		}
+
+	private:
+		RE::ImageSpaceShaderParam* shaderParam = nullptr;
+		std::array<std::array<float, 3>, sizeof...(ColorOffsets)> originalColors{};
+		bool active = false;
+	};
+
+	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType, std::size_t... ColorOffsets>
+	struct BSImagespaceShader_Render
+	{
+		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
+		{
+			const ScopedInputColors<ColorOffsets...> inputColors(param);
+			func(imageSpaceShader, shape, param);
+		}
+
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+}
+
+void LinearLighting::Load()
+{
+	configuredLinearLighting = loaded && settings.enableLinearLighting;
+	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
+	if (!configuredLinearLighting)
 		return;
 
-	const auto lightCount = std::min<std::uint32_t>(a_pass->numLights, static_cast<std::uint32_t>(currentLightColorSpaces.size()));
-	for (std::uint32_t index = 0; index < lightCount; ++index) {
-		auto* light = a_pass->sceneLights[index] ? a_pass->sceneLights[index]->light.get() : nullptr;
-		currentLightColorSpaces[index] = GetLightColorSpace(light);
+	struct UploadCall : Xbyak::CodeGenerator
+	{
+		UploadCall(uintptr_t target, bool waterMaterial = false)
+		{
+			if (waterMaterial)
+				mov(r9, r15);
+			else
+				mov(r9, rbx);
+			xor_(r8d, r8d);
+			mov(rax, target);
+			jmp(rax);
+		}
+	};
+	static UploadCall lightingMaterial(reinterpret_cast<uintptr_t>(LightingMaterialUpload::thunk));
+	static UploadCall effectMaterial(reinterpret_cast<uintptr_t>(EffectMaterialUpload::thunk));
+	static UploadCall waterMaterial(reinterpret_cast<uintptr_t>(WaterMaterialUpload::thunk), true);
+	const std::array calls{
+		std::pair{ REL::RelocationID(100563, 107298).address() + 0xC65, lightingMaterial.getCode() },
+		std::pair{ REL::RelocationID(100744, 107525).address() + 0x3E3, effectMaterial.getCode() },
+		std::pair{ REL::RelocationID(100565, 107300).address() + 0x12F0, reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
+		std::pair{ REL::RelocationID(100746, 107527).address() + 0xE6F, reinterpret_cast<const uint8_t*>(EffectGeometryUpload::thunk) },
+		std::pair{ REL::RelocationID(100602, 107363).address() + 0x626, waterMaterial.getCode() }
+	};
+	constexpr std::array<uint8_t, 6> unmapCall{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x78 };
+	for (const auto& [address, code] : calls) {
+		if (std::memcmp(reinterpret_cast<const void*>(address), unmapCall.data(), unmapCall.size()) != 0)
+			stl::report_and_fail("Linear Lighting: native constant upload does not match the verified layout."sv);
 	}
-}
-
-void LinearLighting::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
-{
-	PrepareLightColorManagement(a_pass);
-	currentEmissiveMult = 1.0f;
-	auto& property1 = a_pass->geometry->GetGeometryRuntimeData().shaderProperty;
-	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
-
-	if (lightProperty && IsColorManagementEnabled())
-		currentEmissiveMult = lightProperty->emissiveMult;
+	const auto waterGeometryAddress = REL::RelocationID(100604, 107365).address() + 0x61F;
+	constexpr std::array<uint8_t, 6> waterUnmapCall{ 0x45, 0x33, 0xC0, 0xFF, 0x50, 0x78 };
+	if (std::memcmp(reinterpret_cast<const void*>(waterGeometryAddress), waterUnmapCall.data(), waterUnmapCall.size()) != 0)
+		stl::report_and_fail("Linear Lighting: native water upload does not match the verified layout."sv);
+	const auto menuAddress = REL::Relocation<uintptr_t>{ REL::Offset(0x972590) }.address();
+	constexpr std::array<uint8_t, 16> menuEntry{ 0x48, 0x8B, 0xC4, 0x44, 0x88, 0x48, 0x20, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 };
+	if (std::memcmp(reinterpret_cast<const void*>(menuAddress), menuEntry.data(), menuEntry.size()) != 0)
+		stl::report_and_fail("Linear Lighting: native menu renderer does not match the verified layout."sv);
+	RenderMenuScene::func = menuAddress;
+	if (DetourTransactionBegin() != NO_ERROR)
+		stl::report_and_fail("Linear Lighting: could not begin menu hook installation."sv);
+	if (DetourUpdateThread(GetCurrentThread()) != NO_ERROR ||
+		DetourAttach(reinterpret_cast<PVOID*>(&RenderMenuScene::func), reinterpret_cast<PVOID>(RenderMenuScene::thunk)) != NO_ERROR) {
+		DetourTransactionAbort();
+		stl::report_and_fail("Linear Lighting: could not attach the menu hook."sv);
+	}
+	if (DetourTransactionCommit() != NO_ERROR)
+		stl::report_and_fail("Linear Lighting: could not commit the menu hook."sv);
+	stl::write_vfunc<0x1,
+		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeFog,
+			ImageSpaceColorManagement::FOG_NEAR_COLOR,
+			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
+		RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
+	stl::write_vfunc<0x1,
+		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog,
+			ImageSpaceColorManagement::FOG_NEAR_COLOR,
+			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
+		RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
+	stl::write_vfunc<0x1,
+		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeVolumetricLighting,
+			ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
+		RE::VTABLE_BSImagespaceShaderISCompositeVolumetricLighting[3]);
+	stl::write_vfunc<0x1,
+		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeLensFlareVolumetricLighting,
+			ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
+		RE::VTABLE_BSImagespaceShaderISCompositeLensFlareVolumetricLighting[3]);
+	stl::detour_thunk<SetDirectionalAmbientColors>(REL::RelocationID(98989, 105643));
+	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Lighting>>(RE::VTABLE_BSLightingShader[0]);
+	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Effect>>(RE::VTABLE_BSEffectShader[0]);
+	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Particle>>(RE::VTABLE_BSParticleShader[0]);
+	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Water>>(RE::VTABLE_BSWaterShader[0]);
+	SKSE::GetTrampoline().write_call<6>(waterGeometryAddress, reinterpret_cast<uintptr_t>(WaterGeometryUpload::thunk));
+	for (const auto& [address, code] : calls)
+		SKSE::GetTrampoline().write_call<6>(address, reinterpret_cast<uintptr_t>(code));
 }
 
 #undef I18N_KEY_PREFIX

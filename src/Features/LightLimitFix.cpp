@@ -265,7 +265,8 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 			// light.color *= runtimeData.fade;
 			light.fade = runtimeData.fade;
 		}
-		globals::features::linearLighting.ConvertLightColorToWorkingSpace(niLight, &light.color.x);
+		const auto workingColor = globals::features::linearLighting.LightColorToWorking(niLight);
+		light.color = { workingColor.red, workingColor.green, workingColor.blue };
 
 		light.fade *= bsLight->lodDimmer;
 
@@ -451,7 +452,8 @@ void LightLimitFix::UpdateLights()
 						// light.color *= runtimeData.fade;
 						light.fade = runtimeData.fade;
 					}
-					globals::features::linearLighting.ConvertLightColorToWorkingSpace(niLight, &light.color.x);
+					const auto workingColor = globals::features::linearLighting.LightColorToWorking(niLight);
+					light.color = { workingColor.red, workingColor.green, workingColor.blue };
 
 					light.fade *= bsLight->lodDimmer;
 
@@ -633,7 +635,7 @@ namespace
 			const auto* vertex = reinterpret_cast<const VertexColor*>(a_rawVertexData + byteOffset);
 			const float alpha = vertex->data[3];
 			float color[]{ vertex->data[0] / 255.0f, vertex->data[1] / 255.0f, vertex->data[2] / 255.0f };
-			globals::features::linearLighting.DecodeColor(color);
+			globals::features::linearLighting.SRGBToWorking(color);
 			weightedR += color[0] * alpha;
 			weightedG += color[1] * alpha;
 			weightedB += color[2] * alpha;
@@ -734,15 +736,14 @@ LightLimitFix::VertexColorCacheEntry LightLimitFix::GetParticleLightConfig(RE::B
 
 	auto* node = a_pass->geometry;
 	auto& linearLighting = globals::features::linearLighting;
-	const bool colorManagementEnabled = linearLighting.IsColorManagementEnabled();
-	const bool acesCgEnabled = colorManagementEnabled && linearLighting.settings.enableACEScg;
-	const uint colorEncoding = linearLighting.settings.colorEncoding;
+	const bool colorManagementEnabled = linearLighting.IsLinearLightingActive();
+	const bool acesCgEnabled = colorManagementEnabled && linearLighting.IsACEScgActive();
 
 	{
 		std::shared_lock lock{ particleLightsMutex };
 		auto it = vertexColorCache.find(node);
 		if (it != vertexColorCache.end() &&
-			(!it->second.valid || (it->second.colorManagementEnabled == colorManagementEnabled && it->second.acescgEnabled == acesCgEnabled && it->second.colorEncoding == colorEncoding))) {
+			(!it->second.valid || (it->second.colorManagementEnabled == colorManagementEnabled && it->second.acescgEnabled == acesCgEnabled))) {
 			return it->second;
 		}
 	}
@@ -773,7 +774,6 @@ LightLimitFix::VertexColorCacheEntry LightLimitFix::GetParticleLightConfig(RE::B
 	entry.valid = true;
 	entry.colorManagementEnabled = colorManagementEnabled;
 	entry.acescgEnabled = acesCgEnabled;
-	entry.colorEncoding = colorEncoding;
 	entry.config = config;
 	entry.baseColor = { 1, 1, 1, 1 };
 	if (auto rendererData = a_pass->geometry->GetGeometryRuntimeData().rendererData) {
@@ -818,13 +818,13 @@ bool LightLimitFix::QueueParticleLight(RE::BSRenderPass* a_pass, VertexColorCach
 		return false;
 
 	RE::NiColorA color = a_reference.baseColor;
-	auto materialColor = globals::features::linearLighting.DecodeColor({ material->baseColor.red, material->baseColor.green, material->baseColor.blue });
+	auto materialColor = globals::features::linearLighting.SRGBToWorking({ material->baseColor.red, material->baseColor.green, material->baseColor.blue });
 	color.red *= materialColor.red * material->baseColorScale;
 	color.green *= materialColor.green * material->baseColorScale;
 	color.blue *= materialColor.blue * material->baseColorScale;
 
 	if (auto emittance = shaderProperty->emittanceColor) {
-		auto emittanceColor = globals::features::linearLighting.DecodeColor(*emittance);
+		auto emittanceColor = globals::features::linearLighting.SRGBToWorking(*emittance);
 		color.red *= emittanceColor.red;
 		color.green *= emittanceColor.green;
 		color.blue *= emittanceColor.blue;

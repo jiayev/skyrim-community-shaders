@@ -199,6 +199,7 @@ void HistogramAutoExposure::SetupResources()
 
 void HistogramAutoExposure::ClearShaderCache()
 {
+	resetAdaptation = true;
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&histogramCS, &histogramAvgCS
@@ -241,7 +242,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	AutoExposureCB cbData = {
 		.AdaptArea = settings.AdaptArea,
 		.AdaptationRange = { exp2(adaptationRange.x - 3.0f), exp2(adaptationRange.y - 3.0f) },
-		.AdaptLerp = std::clamp(1.f - exp(-RE::BSTimer::GetSingleton()->realTimeDelta * settings.AdaptSpeed), 0.f, 1.f),
+		.AdaptLerp = resetAdaptation ? 1.f : std::clamp(1.f - exp(-RE::BSTimer::GetSingleton()->realTimeDelta * settings.AdaptSpeed), 0.f, 1.f),
 		.ExposureCompensation = exp2(exposureCompensation),
 		.PurkinjeStartEV = settings.PurkinjeStartEV,
 		.PurkinjeMaxEV = settings.PurkinjeMaxEV,
@@ -316,6 +317,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 		// Calculate average
 		context->CSSetShader(histogramAvgCS.get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
+		resetAdaptation = false;
 		state->EndPerfEvent();
 	}
 

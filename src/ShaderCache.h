@@ -444,6 +444,7 @@ namespace SIE
 		bool ShaderModifiedSince(const std::string& a_type, system_clock::time_point a_current);
 
 		void Clear();
+		void Reload(const std::function<void()>& activate);
 		void Clear(RE::BSShader::Type a_type);
 		/**
    		* @brief Clears and marks shaders for recompilation based on the given path.
@@ -876,6 +877,7 @@ namespace SIE
 		bool isDump = false;
 		bool hideError = false;
 		bool useFileWatcher = false;
+		bool preserveStandaloneCache = false;
 
 		std::stop_source ssource;
 		std::mutex vertexShadersMutex;

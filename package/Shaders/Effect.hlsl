@@ -232,7 +232,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float fogColorParam = min(FogParam.w,
 		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
 
-	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
+	vsout.FogParam.xyz = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogColorParam);
 	vsout.FogParam.w = fogColorParam;
 #	endif
 
@@ -480,7 +480,7 @@ cbuffer PerGeometry : register(b2)
 #	if defined(LIGHTING)
 float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPosition, inout float shadowVariance)
 {
-	float3 color = DLightColor.xyz * Color::EffectLightingMult();
+	float3 color = DLightColor.xyz * Color::EffectLightingScale;
 	bool suppressExternalEmittance = SharedData::InInterior && (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SuppressExternalEmittance);
 	if (suppressExternalEmittance) {
 		color = ShadowSampling::GetAmbientLighting() + ShadowSampling::GetDirectionalLighting();
@@ -534,7 +534,7 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	if (!SharedData::iblSettings.EnableIBL)
 #			endif
 	{
-		ambientColor = ColorManagement::WorkingColor::ScaleByLinear(ambientColor, skylightingDiffuse);
+		ambientColor = ColorManagement::SceneColor::ScaleByLinear(ambientColor, skylightingDiffuse);
 	}
 #		endif
 
@@ -551,9 +551,9 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 #		else
 		float pointScale = 1.0;
 #		endif
-		color.x += dot(Color::PointLight(PLightColorR.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx) * pointScale;
-		color.y += dot(Color::PointLight(PLightColorG.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx) * pointScale;
-		color.z += dot(Color::PointLight(PLightColorB.xxx).x * lightFadeMul * Color::EffectLightingMult(), 1.0.xxxx) * pointScale;
+		color.x += dot(Color::PointLight(PLightColorR.xxx).x * lightFadeMul * Color::EffectLightingScale, 1.0.xxxx) * pointScale;
+		color.y += dot(Color::PointLight(PLightColorG.xxx).x * lightFadeMul * Color::EffectLightingScale, 1.0.xxxx) * pointScale;
+		color.z += dot(Color::PointLight(PLightColorB.xxx).x * lightFadeMul * Color::EffectLightingScale, 1.0.xxxx) * pointScale;
 	}
 
 	return color;
@@ -641,7 +641,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 	float NdotV = dot(normal, input.ViewVector.xyz);
 	float membraneColorMul = pow(saturate(1 - NdotV), MembraneVars.x);
-	float4 membraneColor = MembraneRimColor * membraneColorMul;
+	float4 membraneColor = ColorManagement::SRGBToWorking(MembraneRimColor) * membraneColorMul;
 #	elif defined(PROJECTED_UV) && defined(NORMALS)
 	float2 noiseTexCoord = 0.00333333341 * input.TexCoord0.xy;
 	float noise = TexNoiseSampler.Sample(SampNoiseSampler, noiseTexCoord).x * 0.2 + 0.4;
@@ -709,7 +709,7 @@ PS_OUTPUT main(PS_INPUT input)
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
 #			endif
 
-			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingMult();
+			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingScale;
 			propertyColor += lightColor;
 		}
 	}
@@ -727,8 +727,10 @@ PS_OUTPUT main(PS_INPUT input)
 #	endif
 	{
 		baseTexColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
+#	if !defined(BLOOD)
 		if (!(Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor))
-			baseTexColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseTexColor.xyz);
+			baseTexColor.xyz = ColorManagement::TextureToWorking(baseTexColor.xyz);
+#	endif
 		baseColor *= baseTexColor;
 		if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::IgnoreTexAlpha || Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha) {
 			baseColor.w = 1;
@@ -740,7 +742,11 @@ PS_OUTPUT main(PS_INPUT input)
 #	else
 	float4 baseColorMul = BaseColor;
 #		if defined(VC) && !defined(PROJECTED_UV)
-	baseColorMul *= float4(ColorManagement::SRGBToWorking(input.Color.xyz), input.Color.w);
+#			if defined(BLOOD)
+	baseColorMul *= input.Color;
+#			else
+	baseColorMul *= (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor) ? input.Color : ColorManagement::SRGBToWorking(input.Color);
+#			endif
 #		endif
 #	endif
 
@@ -772,6 +778,7 @@ PS_OUTPUT main(PS_INPUT input)
 		bloodMul *= (deltaY / AlphaTestRef.y);
 	}
 	baseColor.xyz = saturate(float3(2, 1, 1) - bloodMul.xxx) * (-bloodMul * AlphaTestRef.z + 1);
+	baseColor.xyz = ColorManagement::TextureToWorking(baseColor.xyz);
 #	endif
 
 	alpha *= PropertyColor.w;
@@ -793,7 +800,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(MEMBRANE)
 		grayscaleToColorUv.y = PropertyColor.x;
 #	endif
-		baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColorScale * TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
+		baseColor.xyz = baseColorScale * ColorManagement::TextureToWorking(TexGrayscaleSampler.Sample(SampGrayscaleSampler, grayscaleToColorUv).xyz);
 	}
 
 	float3 lightColor = lerp(baseColor.xyz, propertyColor * baseColor.xyz, lightingInfluence);
@@ -801,6 +808,14 @@ PS_OUTPUT main(PS_INPUT input)
 #	if !defined(MOTIONVECTORS_NORMALS)
 	if (alpha * fogMul.w - AlphaTestRefRS < 0) {
 		discard;
+	}
+#	endif
+
+#	if defined(ENABLE_LL) && !defined(DEFERRED) && !defined(MEMBRANE) && !defined(BLOOD) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SourceAlphaBlend) &&
+		(!Permutation::RenderToUI || (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))) {
+		// Preserve legacy fades without remapping linear medium transmittance.
+		alpha = pow(saturate(alpha), TransferFunctions::GAME_GAMMA);
 	}
 #	endif
 
@@ -937,10 +952,9 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Color2 = finalColor;
 #	endif
 
-#	if !defined(HDR_OUTPUT) && defined(ENABLE_LL)
-	if (!(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)) {
-		psout.Diffuse.xyz = ColorManagement::WorkingToDelivery(psout.Diffuse.xyz);
-	}
+#	if defined(ENABLE_LL)
+	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
+		psout.Diffuse.xyz = ColorManagement::WorkingToUI(psout.Diffuse.xyz);
 #	endif
 	return psout;
 }

@@ -149,6 +149,7 @@ void CODBloom::SetupResources()
 
 void CODBloom::ClearShaderCache()
 {
+	outputReady = false;
 	BumpShaderGeneration();
 	auto const shaderPtrs = std::array{
 		&thresholdPS, &downsamplePS, &downsampleFirstMipPS, &upsamplePS, &compositePS
@@ -297,4 +298,5 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 	inout_tex = { texBloom->resource.get(), texBloomMipSRVs[0].get() };
 
 	state->EndPerfEvent();
+	outputReady = true;
 }

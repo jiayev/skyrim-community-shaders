@@ -2,6 +2,7 @@
 #include "Common/DummyVSTexCoord.hlsl"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
+#include "Common/Permutation.hlsli"
 #include "Common/SharedData.hlsli"
 
 typedef VS_OUTPUT PS_INPUT;
@@ -84,7 +85,7 @@ float3 GetTonemapFactorReinhard(float3 luminance, bool isHDR = false)
 float3 GetTonemapFactorHejlBurgessDawson(float3 luminance, bool isHDR = false)
 {
 	float3 tmp = max(0, luminance - 0.004);
-	float3 color = Color::Gamma22ToLinear(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06));
+	float3 color = TransferFunctions::Gamma22ToLinear(((tmp * 6.2 + 0.5) * tmp) / (tmp * (tmp * 6.2 + 1.7) + 0.06));
 
 	if (isHDR)  // branch before shoulder (f''(x) = 0)
 	{
@@ -134,6 +135,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 inputColor = BlendTex.Sample(BlendSampler, uv).xyz;
 
+#		if defined(ENABLE_LL)
+	if (Permutation::RenderToUI || SharedData::linearLightingSettings.isMainOrLoadingMenu) {
+		psout.Color = float4(inputColor, 1.0);
+		return psout;
+	}
+#		endif
+
 	float4 hdrShared = SharedData::HDRData;
 	bool isHDR = hdrShared.x > 0.5;
 	float menuSceneEncoding = hdrShared.w;
@@ -143,11 +151,9 @@ PS_OUTPUT main(PS_INPUT input)
 
 #		if defined(POSTPROCESS)
 	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
-#			if defined(ENABLE_LL)
 		if (!isHDR) {
-			inputColor = Color::LinearToGamma22(inputColor);
+			inputColor = TransferFunctions::LinearToGamma22(inputColor);
 		}
-#			endif
 
 		psout.Color = float4(inputColor, 1.0);
 
@@ -206,7 +212,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	if (isHDR) {
 #		if !defined(ENABLE_LL)
-		outputColor = Color::SignedGamma22ToLinear(outputColor);
+		outputColor = TransferFunctions::SignedGamma22ToLinear(outputColor);
 #		endif
 		float paperWhiteNits = max(hdrShared.y, 1e-6);
 		float peakWhiteRatio = max(hdrShared.z / paperWhiteNits, 1.0);  // peakNits / paperWhite
@@ -228,12 +234,12 @@ PS_OUTPUT main(PS_INPUT input)
 		outputColor = exp2(DisplayMapping::RangeCompress(log2(max(0, outputColor)), log2(0.4 * peakWhiteRatio), log2(peakWhiteRatio), log2(100.f)));
 		outputColor = Color::BT2020ToBT709(outputColor);
 #		if !defined(ENABLE_LL)
-		outputColor = Color::LinearToSignedGamma22(outputColor);
+		outputColor = TransferFunctions::LinearToSignedGamma22(outputColor);
 #		endif
 	} else {
 		outputColor = max(0, outputColor);
 #		if defined(ENABLE_LL)
-		outputColor = Color::LinearToSignedGamma22(outputColor);
+		outputColor = TransferFunctions::LinearToSignedGamma22(outputColor);
 #		endif
 		outputColor = FrameBuffer::ToSRGBColor(outputColor);
 	}

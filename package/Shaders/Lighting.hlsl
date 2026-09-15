@@ -271,7 +271,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float fogColorParam = min(FogParam.w,
 		exp2(FogParam.z * log2(saturate(length(viewPos.xyz) * FogParam.y - FogParam.x))));
 
-	vsout.FogParam.xyz = lerp(FogNearColor.xyz, FogFarColor.xyz, fogColorParam);
+	vsout.FogParam.xyz = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogColorParam);
 	vsout.FogParam.w = fogColorParam;
 
 	vsout.ModelPosition = input.Position.xyz;
@@ -308,6 +308,12 @@ struct PS_OUTPUT
 #endif
 
 #ifdef PSHADER
+
+#	if defined(TRUE_PBR) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+static const bool PBRTextures = true;
+#	else
+static const bool PBRTextures = false;
+#	endif
 
 SamplerState SampTerrainParallaxSampler : register(s1);
 
@@ -750,7 +756,11 @@ float3 GetWorldMapBaseColor(float3 sampledBaseColor, float3 workingBaseColor, fl
 #		if defined(LODOBJECTS)
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.269999981, 0.281000018, 0.441000015, 0.441000015) + float4(0.0780000091, 0.09799999, -0.0349999964, 0.465000004);
 	float4 lodColor = lodColorMul.xyzw * 2.0.xxxx;
-	lodColor.xyz = ColorManagement::AlbedoValueToWorking(lodColor.xyz);
+#			if defined(TRUE_PBR)
+	lodColor.xyz = Color::Albedo(Color::LinearSRGBToWorking(lodColor.xyz));
+#			else
+	lodColor.xyz = Color::Albedo(ColorManagement::SRGBToWorking(lodColor.xyz));
+#			endif
 	bool useLodColorZ = lodColorMul.w > 0.5;
 	lodColor.xyz = max(lodColor.xyz, workingBaseColor.xyz);
 	lodColor.w = useLodColorZ ? lodColor.z : min(lodColor.w, workingBaseColor.z);
@@ -758,7 +768,11 @@ float3 GetWorldMapBaseColor(float3 sampledBaseColor, float3 workingBaseColor, fl
 #		else
 	float4 lodColorMul = lodMultiplier.xxxx * float4(0.199999988, 0.441000015, 0.269999981, 0.281000018) + float4(0.300000012, 0.465000004, 0.0780000091, 0.09799999);
 	float3 lodColor = lodColorMul.zwy * 2.0.xxx;
-	lodColor.xyz = ColorManagement::AlbedoValueToWorking(lodColor.xyz);
+#			if defined(TRUE_PBR)
+	lodColor.xyz = Color::Albedo(Color::LinearSRGBToWorking(lodColor.xyz));
+#			else
+	lodColor.xyz = Color::Albedo(ColorManagement::SRGBToWorking(lodColor.xyz));
+#			endif
 	lodColor.xy = max(lodColor.xy, workingBaseColor.xy);
 	lodColor.z = lodColorMul.y > 0.5 ? max((lodMultiplier * 0.441 + -0.0349999964) * 2, workingBaseColor.z) : min(lodColor.z, workingBaseColor.z);
 	return lodColorMul.xxx * (lodColor - workingBaseColor.xyz) + workingBaseColor;
@@ -1115,7 +1129,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture0) != 0)
 	{
 		float4 sampledCoatProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
-		sampledCoatColor.rgb *= ColorManagement::AlbedoTextureToWorking(sampledCoatProperties.rgb);
+		sampledCoatColor.rgb *= Color::Albedo(Color::LinearSRGBToWorking(sampledCoatProperties.rgb));
 		sampledCoatColor.a *= sampledCoatProperties.a;
 	}
 #			if !defined(FACEGEN)
@@ -1292,8 +1306,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(TERRAIN_VARIATION)
 	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(uv);
 #			define SampleTerrain(TEX, SAMP, UV, OFFSET) StochasticEffect(TEX, SAMP, UV, OFFSET)
+#			define SampleTerrainColor(TEX, SAMP, UV, OFFSET, PBR) StochasticEffect(TEX, SAMP, UV, OFFSET, true, PBR)
 #		else
 #			define SampleTerrain(TEX, SAMP, UV, OFFSET) TEX.SampleBias(SAMP, UV, SharedData::MipBias)
+#			define SampleTerrainColor(TEX, SAMP, UV, OFFSET, PBR) ColorManagement::TextureToWorking(TEX.SampleBias(SAMP, UV, SharedData::MipBias), PBR)
 #		endif
 #		if defined(TRUE_PBR)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER_PBR(0, TexColorSampler, SampColorSampler, TexNormalSampler, SampNormalSampler, TexRMAOSSampler, SampRMAOSSampler, PBRParams1, LandscapeTexture1GlintParameters, input.LandBlendWeights1.x)
@@ -1311,16 +1327,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER(5, TexLandColor6Sampler, SampLandColor6Sampler, TexLandNormal6Sampler, SampLandNormal6Sampler, input.LandBlendWeights2.y, LandscapeTexture5to6IsSnow.y)
 #		endif
 #		undef SampleTerrain
+#		undef SampleTerrainColor
 
 	float4 sampledBaseColor = float4(blendedRGB, blendedAlpha);
-	baseColor = float4(ColorManagement::AlbedoTextureToWorking(blendedRGB), blendedAlpha);
+	baseColor = float4(Color::Albedo(blendedRGB), blendedAlpha);
 	normal = float4(blendedNormalRGB, blendedNormalAlpha);
 #		if defined(TRUE_PBR)
 	rawRMAOS = blendedRMAOS;
 #		endif
 #	else  // Non-landscape code
 	float4 sampledBaseColor = TexColorSampler.SampleBias(SampColorSampler, diffuseUv, SharedData::MipBias);
-	baseColor = float4(ColorManagement::AlbedoTextureToWorking(sampledBaseColor.rgb), sampledBaseColor.a);
+#		if defined(ENABLE_LL) && defined(FACEGEN)
+	sampledBaseColor.rgb = GetFacegenBaseColor(sampledBaseColor.rgb, uv);
+#		elif defined(ENABLE_LL) && defined(FACEGEN_RGB_TINT)
+	sampledBaseColor.rgb = GetFacegenRGBTintBaseColor(sampledBaseColor.rgb, uv);
+#		endif
+	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::TextureToWorking(sampledBaseColor, PBRTextures);
+	baseColor.rgb = Color::Albedo(baseColor.rgb);
 	float4 normalColor = TexNormalSampler.SampleBias(SampNormalSampler, uv, SharedData::MipBias);
 	normal = normalColor;
 #		if defined(TRUE_PBR)
@@ -1338,8 +1361,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(TERRAIN_VARIATION)
 	[branch] if (SharedData::terrainVariationSettings.enableLODTerrainTilingFix)
 	{
-		float4 lodStochasticColor = StochasticSampleLOD(screenNoise, TexColorSampler, SampColorSampler, uv);
-		baseColor.xyz = ColorManagement::AlbedoTextureToWorking(lodStochasticColor.rgb);
+		float4 sampledLodColor;
+		float4 lodStochasticColor = StochasticSampleLOD(screenNoise, TexColorSampler, SampColorSampler, uv, sampledLodColor);
+#				if defined(ENABLE_LL)
+		sampledBaseColor = sampledLodColor;
+#				endif
+		baseColor.xyz = Color::Albedo(lodStochasticColor.rgb);
 	}
 #			endif
 	baseColor.xyz = pow(abs(baseColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
@@ -1392,7 +1419,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(MODELSPACENORMALS)
 #		if defined(LODLANDNOISE)
 	normal.xyz = normal.xzy - 0.5.xxx;
+#			if defined(ENABLE_LL)
+	float lodLandNoiseParameter = GetLodLandBlendParameter(sampledBaseColor.xyz);
+#			else
 	float lodLandNoiseParameter = GetLodLandBlendParameter(baseColor.xyz);
+#			endif
 	float noise = TexLandLodNoiseSampler.Sample(SampLandLodNoiseSampler, uv * 3.0.xx).x;
 	float lodLandNoiseMultiplier = GetLodLandBlendMultiplier(lodLandNoiseParameter, noise);
 	baseColor.xyz *= lodLandNoiseMultiplier;
@@ -1435,18 +1466,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif  // defined (EMAT) && defined(ENVMAP)
 
-#	if defined(FACEGEN)
-#		if defined(ENABLE_LL)
-	baseColor.xyz = Color::GameGammaToLinear(GetFacegenBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
-#		else
+#	if defined(FACEGEN) && !defined(ENABLE_LL)
 	baseColor.xyz = GetFacegenBaseColor(baseColor.xyz, uv);
-#		endif
-#	elif defined(FACEGEN_RGB_TINT)
-#		if defined(ENABLE_LL)
-	baseColor.xyz = Color::GameGammaToLinear(GetFacegenRGBTintBaseColor(Color::LinearToGameGamma(baseColor.xyz), uv));
-#		else
+#	elif defined(FACEGEN_RGB_TINT) && !defined(ENABLE_LL)
 	baseColor.xyz = GetFacegenRGBTintBaseColor(baseColor.xyz, uv);
-#		endif
 #	endif  // FACEGEN
 
 #	if defined(SKIN) && defined(CS_SKIN)
@@ -1459,7 +1482,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 hairTint = 0;
 
 	if (SharedData::hairSpecularSettings.Enabled) {
-		hairTint = lerp(1, TintColor.xyz, ColorManagement::SRGBToWorking(input.Color.y));
+		hairTint = ColorManagement::SRGBToWorking(lerp(1, TintColor.xyz, input.Color.y));
 		baseColor.xyz *= hairTint;
 		baseColor.xyz = Hair::Saturation(baseColor.xyz, SharedData::hairSpecularSettings.HairSaturation);
 		baseColor.xyz *= SharedData::hairSpecularSettings.BaseColorMult;
@@ -1481,21 +1504,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(LOD_LAND_BLEND)
 	float4 lodLandColor;
+	float4 sampledLodLandColor;
 
 #		if defined(TERRAIN_VARIATION)
 	float2 blendColorUV = input.TexCoord0.zw;
 	[branch] if (SharedData::terrainVariationSettings.enableLODTerrainTilingFix)
-		lodLandColor = StochasticSampleLOD(screenNoise, TexLandLodBlend1Sampler, SampLandLodBlend1Sampler, blendColorUV);
-	else lodLandColor = TexLandLodBlend1Sampler.SampleBias(SampLandLodBlend1Sampler, blendColorUV, SharedData::MipBias);
+		lodLandColor = StochasticSampleLOD(screenNoise, TexLandLodBlend1Sampler, SampLandLodBlend1Sampler, blendColorUV, sampledLodLandColor);
+	else
+	{
+		sampledLodLandColor = TexLandLodBlend1Sampler.SampleBias(SampLandLodBlend1Sampler, blendColorUV, SharedData::MipBias);
+		lodLandColor = ColorManagement::TextureToWorking(sampledLodLandColor);
+	}
 #		else
-	lodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
+	sampledLodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
+	lodLandColor = ColorManagement::TextureToWorking(sampledLodLandColor);
 #		endif
 
-	lodLandColor.xyz = ColorManagement::DecodedColorTextureToWorking(lodLandColor.xyz) * ColorManagement::MaterialAlbedoScale();
+	lodLandColor.xyz *= Color::AlbedoScale;
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
+#		if defined(ENABLE_LL)
+	float lodBlendParameter = GetLodLandBlendParameter(sampledLodLandColor.xyz);
+#		else
 	float lodBlendParameter = GetLodLandBlendParameter(lodLandColor.xyz);
+#		endif
 	float lodBlendMask = TexLandLodBlend2Sampler.Sample(SampLandLodBlend2Sampler, 3.0.xx * input.TexCoord0.zw).x;
 	float lodLandFadeFactor = GetLodLandBlendMultiplier(lodBlendParameter, lodBlendMask);
 	float lodLandBlendFactor = LODTexParams.z * input.LandBlendWeights2.w;
@@ -1629,7 +1662,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		discard;
 
 	sampledBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, screenNoise);
-	baseColor = float4(ColorManagement::AlbedoTextureToWorking(sampledBaseColor.rgb), sampledBaseColor.a);
+	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::TextureToWorking(sampledBaseColor, PBRTextures);
+	baseColor.rgb = Color::Albedo(baseColor.rgb);
 	worldNormal.xyz = projectedNormal;
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
 	if (ProjectedUVParams3.w > 0.5) {
@@ -1638,11 +1672,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projBaseColor = ColorManagement::DecodedColorTextureToWorking(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz);
+		float3 projBaseColor = ColorManagement::TextureToWorking(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz, PBRTextures);
 #			if defined(TRUE_PBR)
 		projBaseColor *= Color::LinearSRGBToWorking(ProjectedUVParams2.xyz);
 #			else
-		projBaseColor *= ProjectedUVParams2.xyz;
+		projBaseColor *= ColorManagement::SRGBToWorking(ProjectedUVParams2.xyz);
 #			endif
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
@@ -1654,7 +1688,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
 #			else
-		projBaseColor *= ColorManagement::MaterialAlbedoScale();
+		projBaseColor *= Color::AlbedoScale;
 #			endif  // TRUE_PBR
 #			if defined(LOD_BLENDING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
 		projBaseColor.xyz = pow(abs(projBaseColor.xyz), SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
@@ -1668,10 +1702,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	} else {
 		if (projWeight > 0) {
 #			if defined(TRUE_PBR)
-			baseColor.xyz = ColorManagement::AlbedoValueToWorking(ProjectedUVParams2.xyz);
+			baseColor.xyz = Color::Albedo(Color::LinearSRGBToWorking(ProjectedUVParams2.xyz));
 #			else
-			baseColor.xyz = ProjectedUVParams2.xyz;
-			baseColor.xyz *= ColorManagement::MaterialAlbedoScale();
+			baseColor.xyz = ColorManagement::SRGBToWorking(ProjectedUVParams2.xyz);
+			baseColor.xyz *= Color::AlbedoScale;
 #			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
@@ -1738,6 +1772,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 pbrVertexColor = ColorManagement::PBRVertexColorToLinear(pbrVertexColorSrc);
 	float pbrVertexAO = max(max(pbrVertexColor.x, pbrVertexColor.y), pbrVertexColor.z);
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
+	pbrVertexColor = Color::LinearSRGBToWorking(pbrVertexColor);
 
 	baseColor.xyz *= pbrVertexColor;
 	material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
@@ -1767,7 +1802,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		{
 			float4 sampledSubsurfaceProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 
-			material.SubsurfaceColor *= ColorManagement::AlbedoTextureToWorking(sampledSubsurfaceProperties.xyz);
+			material.SubsurfaceColor *= Color::Albedo(Color::LinearSRGBToWorking(sampledSubsurfaceProperties.xyz));
 			material.SubsurfaceColor *= pbrVertexColor;
 
 			material.Thickness *= sampledSubsurfaceProperties.w;
@@ -1805,7 +1840,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		[branch] if ((PBRFlags & PBR::Flags::HasFeatureTexture1) != 0)
 		{
 			float4 sampledFuzzProperties = TexBackLightSampler.Sample(SampBackLightSampler, uv);
-			material.FuzzColor *= ColorManagement::AlbedoTextureToWorking(sampledFuzzProperties.xyz);
+			material.FuzzColor *= Color::Albedo(Color::LinearSRGBToWorking(sampledFuzzProperties.xyz));
 			material.FuzzWeight *= sampledFuzzProperties.w;
 		}
 		material.FuzzWeight = lerp(material.FuzzWeight, 0, projectedMaterialWeight);
@@ -1823,10 +1858,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	material.SpecularColor = 0;
 #		endif
 #		if (defined(RIM_LIGHTING) || defined(SOFT_LIGHTING))
-	material.rimSoftLightColor = rimSoftLightColor.xyz;
+	material.rimSoftLightColor = ColorManagement::TextureToWorking(rimSoftLightColor.xyz);
 #		endif
 #		if defined(BACK_LIGHTING)
-	material.backLightColor = backLightColor.xyz;
+	material.backLightColor = ColorManagement::TextureToWorking(backLightColor.xyz);
 #		endif
 #	endif  // TRUE_PBR
 
@@ -1924,7 +1959,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				float4 envColorBase = TexEnvSampler.SampleLevel(SampEnvSampler, float3(1.0, 0.0, 0.0), 15);
 
 				if (envColorBase.a < 1.0) {
-					material.F0 = Color::GameGammaToLinear(envColorBase.rgb);
+					material.F0 = TransferFunctions::GameGammaToLinear(envColorBase.rgb);
 					material.Roughness = envColorBase.a;
 				} else {
 					material.F0 = 1.0;
@@ -1948,7 +1983,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 		if (!dynamicCubemap) {
-			float3 envColorBase = Color::GameGammaToLinear(TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz);
+			float3 envColorBase = TexEnvSampler.Sample(SampEnvSampler, envSamplingPoint).xyz;
+#		if defined(ENABLE_LL)
+			envColorBase = ColorManagement::TextureToWorking(envColorBase);
+#		else
+			envColorBase = TransferFunctions::GameGammaToLinear(envColorBase);
+#		endif
 			envColor = envColorBase.xyz * envMask;
 		}
 	}
@@ -2433,12 +2473,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 	[branch] if (hasEmissive)
 	{
-		float3 glowColor = ColorManagement::EmissiveTextureToWorking(TexGlowSampler.Sample(SampGlowSampler, uv).xyz);
+		float3 glowColor = ColorManagement::TextureToWorking(TexGlowSampler.Sample(SampGlowSampler, uv).xyz, PBRTextures) * SharedData::linearLightingSettings.glowmapMult;
 
 #		if defined(TRUE_PBR)
 		float3 emitVertexColor = ColorManagement::PBRVertexColorToLinear(input.Color.xyz);
 		float emitVertexAO = max(max(emitVertexColor.r, emitVertexColor.g), emitVertexColor.b);
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
+		emitVertexColor = Color::LinearSRGBToWorking(emitVertexColor);
 
 		emitColor = emitColor * glowColor * emitVertexColor;
 #		else
@@ -2462,7 +2503,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 layerViewProjection = -layerNormal.xyz * layerViewAngle.xxx - tangentViewDirection.xyz;
 	float2 layerUv = uv * MultiLayerParallaxData.zw + (0.0009765625 * (layerValue / abs(layerViewProjection.z))).xx * layerViewProjection.xy;
 
-	float3 layerColor = TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz;
+	float3 layerColor = ColorManagement::TextureToWorking(TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz);
 
 	float mlpBlendFactor = saturate(viewNormalAngle) * (1.0 - baseColor.w);
 
@@ -2500,7 +2541,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(HAIR)
-	float3 vertexColor = lerp(1, TintColor.xyz, ColorManagement::SRGBToWorking(input.Color.y));
+	float3 vertexColor = ColorManagement::SRGBToWorking(lerp(1, TintColor.xyz, input.Color.y));
 	float vertexAO = 1;
 #		if defined(CS_HAIR)
 	if (SharedData::hairSpecularSettings.Enabled)
@@ -2509,18 +2550,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(SKYLIGHTING)
 	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal);
 #		endif
-#	elif defined(SKYLIGHTING)
-	float3 vertexColor = input.Color.xyz;
-#		if defined(FACEGEN) || defined(FACEGEN_RGB_TINT) || defined(EYE)
-	float vertexAO = 1;
-#		else
-	float vertexAO = ColorManagement::SRGBToWorking(max(max(vertexColor.r, vertexColor.g), vertexColor.b));
-#		endif
-#		if defined(TRUE_PBR)
-	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
-	vertexColor = 1;
-#		endif
-	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal, vertexAO);
 #	else
 	float encodedVertexAO = max(max(input.Color.r, input.Color.g), input.Color.b);
 #		if defined(TRUE_PBR)
@@ -2532,6 +2561,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float vertexAO = 1;
 #		else
 	float vertexAO = ColorManagement::SRGBToWorking(encodedVertexAO);
+#		endif
+#		if defined(SKYLIGHTING)
+#			if defined(TRUE_PBR)
+	vertexAO = lerp(1, vertexAO, SharedData::truePBRSettings.VertexAOStrength);
+#			endif
+	float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPosition.xyz, ambientNormal, vertexAO);
 #		endif
 #	endif  // defined (HAIR)
 
@@ -2629,7 +2664,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(DYNAMIC_CUBEMAPS)
 	if (!dynamicCubemap)
 #		endif
-		specularColor += envColor * ColorManagement::StorageToWorking(diffuseColor);
+		specularColor += envColor * ColorManagement::SceneToLinear(diffuseColor);
 	indirectLobeWeights.diffuse += envColor;
 #	endif
 
@@ -2663,7 +2698,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if !defined(DEFERRED)
-	color.xyz = ColorManagement::StorageToWorking(color.xyz);
+	color.xyz = ColorManagement::SceneToLinear(color.xyz);
 	color.xyz += specularColor;
 
 	if (any(indirectLobeWeights.specular > 0)
@@ -2689,7 +2724,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		color.xyz += indirectLobeWeights.specular * directionalAmbientColor;
 #		endif
 
-	color.xyz = ColorManagement::WorkingToStorage(color.xyz);
+	color.xyz = ColorManagement::LinearToScene(color.xyz);
 	float3 fogColor = input.FogParam.xyz;
 	float fogFactor = input.FogParam.w;
 #		if defined(IBL)
@@ -2923,10 +2958,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.NormalGlossiness.w = stochasticBlend;
 #	endif
 
-#	if !defined(HDR_OUTPUT) && defined(ENABLE_LL)  // Do not apply gamma correction before we pass to ISHDR.
-	if ((!inWorld && !inReflection) && !(Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)) {
-		psout.Diffuse.xyz = ColorManagement::WorkingToDelivery(psout.Diffuse.xyz);
-	}
+#	if defined(ENABLE_LL)
+	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
+		psout.Diffuse.xyz = ColorManagement::WorkingToUI(psout.Diffuse.xyz);
 #	endif
 
 #	if !defined(DEFERRED)

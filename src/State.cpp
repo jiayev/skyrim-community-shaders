@@ -12,7 +12,6 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
-#include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
@@ -20,7 +19,6 @@
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
 #include "Features/TerrainHelper.h"
-#include "Features/TextureColorManagement.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricShadows.h"
 #include "Menu.h"
@@ -66,7 +64,7 @@ void State::UpdateSkyShaderPermutation(RE::BSRenderPass* a_pass)
 	}
 }
 
-void State::Draw(bool isCompute)
+void State::Draw()
 {
 	ZoneScoped;
 
@@ -121,9 +119,6 @@ void State::Draw(bool isCompute)
 			ZoneScopedN("TruePBR::SetShaderResources");
 			truePBR.SetShaderResources(context);
 		}
-
-		if (!isCompute)
-			TextureColorManagement::ApplyBindings(context);
 
 		if (permutationData != permutationDataPrevious) {
 			permutationCB->Update(permutationData);
@@ -207,12 +202,8 @@ void State::Debug()
 
 State::TonemapOwner State::GetTonemapOwner()
 {
-	static Util::FrameChecker tonemapOwnerFrameChecker;
-	static TonemapOwner cachedOwner = TonemapOwner::kVanilla;
-
-	if (!tonemapOwnerFrameChecker.IsNewFrame())
-		return cachedOwner;
-
+	if (tonemapOwner)
+		return *tonemapOwner;
 	auto& effects11 = globals::features::effects11;
 	auto& postProcessing = globals::features::postProcessing;
 
@@ -226,13 +217,12 @@ State::TonemapOwner State::GetTonemapOwner()
 	// adaptation) that looks wrong when only partially applied, whereas Post Processing
 	// degrades gracefully to the vanilla tonemap.
 	if (effects11.loaded && effects11CanRender && effects11.WantsTonemapOwnership())
-		cachedOwner = TonemapOwner::kEffects11;
+		tonemapOwner = TonemapOwner::kEffects11;
 	else if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
-		cachedOwner = TonemapOwner::kPostProcessing;
+		tonemapOwner = TonemapOwner::kPostProcessing;
 	else
-		cachedOwner = TonemapOwner::kVanilla;
-
-	return cachedOwner;
+		tonemapOwner = TonemapOwner::kVanilla;
+	return *tonemapOwner;
 }
 
 bool State::HandlePostProcessing(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output)
@@ -297,6 +287,7 @@ void State::Reset()
 	lastVertexDescriptor = 0;
 	std::memset(&permutationDataPrevious, 0xFF, sizeof(PermutationCB));
 	frameCount++;
+	tonemapOwner.reset();
 	// Publish for off-thread readers (e.g. the MCP listener thread).
 	frameCountAtomic.store(frameCount, std::memory_order_relaxed);
 
@@ -331,12 +322,14 @@ void State::Setup()
 
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 	globals::deferred->SetupResources();
+	Feature::ForEachLoadedFeature("PostSetupResources", [](Feature* feature) { feature->PostSetupResources(); });
 
 	// Load per-weather settings after features are setup
 	globals::weatherManager->LoadPerWeatherSettingsFromDisk();
 
 	// Load scene-specific settings (Interior Only, etc.)
 	globals::sceneSettingsManager->LoadAll();
+	tonemapOwner.reset();
 }
 
 static std::string GetConfigPath(State::ConfigMode a_configMode)
@@ -788,11 +781,8 @@ std::vector<std::pair<std::string, std::string>>* State::GetDefines()
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
-	auto index = magic_enum::enum_integer(a_type) + 1;
-	if (index < sizeof(enabledClasses)) {
-		return enabledClasses[index];
-	}
-	return false;
+	return a_type > RE::BSShader::Type::None && a_type < RE::BSShader::Type::Total &&
+	       enabledClasses[static_cast<size_t>(a_type) - 1];
 }
 
 bool State::IsShaderEnabled(const RE::BSShader& a_shader)
@@ -1054,6 +1044,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 {
 	{
 		SharedDataCB data{};
+		SharedLighting lighting{};
 
 		const auto shaderManager = globals::game::smState;
 		const RE::NiTransform& dalcTransform = shaderManager->directionalAmbientTransform;
@@ -1062,12 +1053,12 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		auto dirLight = skyrim_cast<RE::NiDirectionalLight*>(shadowSceneNode->GetRuntimeData().sunLight->light.get());
 
 		auto& lightRuntimeData = dirLight->GetLightRuntimeData();
-		const auto dirLightColor = globals::features::linearLighting.ConvertLightColorToWorkingSpace(dirLight, lightRuntimeData.diffuse);
-		data.DirLightColor = { dirLightColor.red, dirLightColor.green, dirLightColor.blue, 1.0f };
-		data.DirLightColor *= lightRuntimeData.fade;
-
+		lighting.directionalLight = dirLight;
+		lighting.directional.color = lightRuntimeData.diffuse;
+		lighting.directional.intensity = lightRuntimeData.fade;
 		if (auto imageSpaceManager = globals::game::imageSpaceManager)
-			data.DirLightColor *= imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
+			lighting.directional.intensity *= imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
+		lighting.directional.alpha = lighting.directional.intensity;
 
 		const auto& direction = dirLight->GetWorldDirection();
 		data.DirLightDirection = { -direction.x, -direction.y, -direction.z, 0.0f };
@@ -1081,6 +1072,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		data.FrameCount = frameCount * temporal;
 		data.FrameCountAlwaysActive = frameCount;
+		data.ResetHistory = ShouldResetHistory();
 
 		if (a_inWorld) {
 			for (int i = -2; i <= 2; i++) {
@@ -1121,24 +1113,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		if (auto sky = globals::game::sky) {
-			auto getMoonColor = [&](const RE::Moon* moon, const float4& baseColor, float baseIntensity) {
-				if (!globals::features::linearLighting.IsColorManagementEnabled())
-					return Util::Moon::GetBlendColor(moon, baseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-				if (!moon || !moon->moonMesh)
-					return float4{};
-
-				const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(moon->moonMesh->GetGeometryRuntimeData().shaderProperty.get());
-				if (!prop)
-					return float4{};
-
-				float phase = 1.0f;
-				if (auto texture = prop->GetBaseTexture())
-					phase = Util::Moon::GetPhaseIntensityFactor(Util::Moon::GetPhaseFromTexture(texture->name.c_str()), globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
-
-				auto blendColor = globals::features::linearLighting.DecodeColor({ prop->kBlendColor.red, prop->kBlendColor.green, prop->kBlendColor.blue });
-				auto moonColor = globals::features::linearLighting.DecodeColor({ baseColor.x / baseIntensity, baseColor.y / baseIntensity, baseColor.z / baseIntensity });
-				const float intensity = baseIntensity * phase * prop->kBlendColor.alpha;
-				return float4{ blendColor.red * moonColor.red * intensity, blendColor.green * moonColor.green * intensity, blendColor.blue * moonColor.blue * intensity, prop->kBlendColor.alpha };
+			auto getMoonColor = [&](const RE::Moon* moon, const Util::ColorSpace::LightColor& baseColor) {
+				return Util::Moon::GetLightColor(moon, baseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
 			};
 
 			// Process sun
@@ -1151,8 +1127,8 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 				if (sun->sunBase) {
 					if (const auto prop = skyrim_cast<RE::BSSkyShaderProperty*>(sun->sunBase->GetGeometryRuntimeData().shaderProperty.get())) {
-						auto sunColor = globals::features::linearLighting.DecodeColor({ prop->kBlendColor.red, prop->kBlendColor.green, prop->kBlendColor.blue });
-						data.SunColor = { sunColor.red * prop->kBlendColor.alpha, sunColor.green * prop->kBlendColor.alpha, sunColor.blue * prop->kBlendColor.alpha, prop->kBlendColor.alpha };
+						const auto& sunColor = prop->kBlendColor;
+						lighting.sun = { .color = { sunColor.red, sunColor.green, sunColor.blue }, .intensity = sunColor.alpha, .alpha = sunColor.alpha };
 					}
 				}
 			}
@@ -1161,14 +1137,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
 				data.MasserDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
-					data.MasserColor = getMoonColor(masser, Util::Moon::MasserBaseColor, 0.5f);
+					lighting.masser = getMoonColor(masser, Util::Moon::MasserBaseColor);
 			}
 
 			if (auto secunda = sky->secunda) {
 				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
 				data.SecundaDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
-					data.SecundaColor = getMoonColor(secunda, Util::Moon::SecundaBaseColor, 0.25f);
+					lighting.secunda = getMoonColor(secunda, Util::Moon::SecundaBaseColor);
 			}
 		}
 
@@ -1190,6 +1166,13 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 
 		data.HDRData = globals::features::hdrDisplay.GetSharedDataHDR();
 
+		for (auto* feature : Feature::GetFeatureList())
+			if (feature->loaded)
+				feature->ModifySharedLighting(lighting);
+		data.DirLightColor = lighting.directional.GetColor();
+		data.SunColor = lighting.sun.GetColor();
+		data.MasserColor = lighting.masser.GetColor();
+		data.SecundaColor = lighting.secunda.GetColor();
 		sharedDataCB->Update(data);
 	}
 

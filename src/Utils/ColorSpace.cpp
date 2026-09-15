@@ -54,12 +54,12 @@ namespace Util::ColorSpace
 
 	void SRGBGamutToAP1(float* a_rgb3)
 	{
-		const float x = 0.4123907993f * a_rgb3[0] + 0.3575843394f * a_rgb3[1] + 0.1804807884f * a_rgb3[2];
-		const float y = 0.2126390059f * a_rgb3[0] + 0.7151686788f * a_rgb3[1] + 0.0721923154f * a_rgb3[2];
-		const float z = 0.0193308187f * a_rgb3[0] + 0.1191947798f * a_rgb3[1] + 0.9505321522f * a_rgb3[2];
+		const float r = 0.6130974024f * a_rgb3[0] + 0.3395231461f * a_rgb3[1] + 0.0473794514f * a_rgb3[2];
+		const float g = 0.0701937225f * a_rgb3[0] + 0.9163538791f * a_rgb3[1] + 0.0134523986f * a_rgb3[2];
+		const float b = 0.0206155929f * a_rgb3[0] + 0.1095697729f * a_rgb3[1] + 0.8698146341f * a_rgb3[2];
 
-		a_rgb3[0] = 1.6410233797f * x - 0.3248032942f * y - 0.2364246952f * z;
-		a_rgb3[1] = -0.6636628587f * x + 1.6153315917f * y + 0.0167563477f * z;
-		a_rgb3[2] = 0.0117218943f * x - 0.0082844420f * y + 0.9883948585f * z;
+		a_rgb3[0] = r;
+		a_rgb3[1] = g;
+		a_rgb3[2] = b;
 	}
 }

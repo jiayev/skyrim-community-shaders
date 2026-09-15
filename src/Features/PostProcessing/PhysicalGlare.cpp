@@ -459,6 +459,7 @@ void PhysicalGlare::SetupResources()
 
 void PhysicalGlare::ClearShaderCache()
 {
+	outputReady = false;
 	BumpShaderGeneration();
 	auto const shaderPtrs = std::array{
 		&thresholdCS, &apertureCS, &tearFilmCS, &psfCS, &multiplyCS, &packCS, &compositeCS
@@ -554,7 +555,7 @@ bool PhysicalGlare::NeedsPSFRegeneration() const
 	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchWidth != settings.ScratchWidth) ||
 	       cachedPSFParams.SphericalAberration != settings.SphericalAberration ||
 	       cachedPSFParams.KernelScale != settings.KernelScale ||
-	       cachedPSFParams.UseAP1 != (globals::features::linearLighting.settings.enableACEScg && globals::features::linearLighting.settings.enableLinearLighting) ||
+	       cachedPSFParams.UseAP1 != globals::features::linearLighting.IsACEScgActive() ||
 	       (pupilMode && settings.TearFilmStrength > 0.f);  // animated tear film changes the PSF every frame
 }
 
@@ -648,7 +649,7 @@ void PhysicalGlare::GeneratePSF()
 		.ScratchLength = settings.ScratchLength,
 		.ScratchWidth = settings.ScratchWidth,
 		.SphericalAberration = settings.SphericalAberration,
-		.UseAP1 = (globals::features::linearLighting.settings.enableACEScg && globals::features::linearLighting.settings.enableLinearLighting) ? 1u : 0u,
+		.UseAP1 = globals::features::linearLighting.IsACEScgActive() ? 1u : 0u,
 		.KernelScale = settings.KernelScale,
 	};
 
@@ -777,7 +778,7 @@ void PhysicalGlare::GeneratePSF()
 	cachedPSFParams.ScratchWidth = settings.ScratchWidth;
 	cachedPSFParams.SphericalAberration = settings.SphericalAberration;
 	cachedPSFParams.KernelScale = settings.KernelScale;
-	cachedPSFParams.UseAP1 = globals::features::linearLighting.settings.enableACEScg && globals::features::linearLighting.settings.enableLinearLighting;
+	cachedPSFParams.UseAP1 = globals::features::linearLighting.IsACEScgActive();
 	psfDirty = false;
 }
 
@@ -893,7 +894,7 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 		.ScratchLength = settings.ScratchLength,
 		.ScratchWidth = settings.ScratchWidth,
 		.SphericalAberration = settings.SphericalAberration,
-		.UseAP1 = (globals::features::linearLighting.settings.enableACEScg && globals::features::linearLighting.settings.enableLinearLighting) ? 1u : 0u,
+		.UseAP1 = globals::features::linearLighting.IsACEScgActive() ? 1u : 0u,
 		.KernelScale = settings.KernelScale,
 	};
 	glareCB->Update(cbData);
@@ -1035,4 +1036,5 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	globals::profiler->EndPass();
 
 	state->EndPerfEvent();
+	outputReady = true;
 }

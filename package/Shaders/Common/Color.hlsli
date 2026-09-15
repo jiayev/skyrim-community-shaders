@@ -94,46 +94,6 @@ namespace Color
 		return color;
 	}
 
-	float GameGammaToLinear(float color)
-	{
-		return TransferFunctions::GameGammaToLinear(color);
-	}
-
-	float LinearToGameGamma(float color)
-	{
-		return TransferFunctions::LinearToGameGamma(color);
-	}
-
-	float3 GameGammaToLinear(float3 color)
-	{
-		return TransferFunctions::GameGammaToLinear(color);
-	}
-
-	float3 LinearToGameGamma(float3 color)
-	{
-		return TransferFunctions::LinearToGameGamma(color);
-	}
-
-	float3 Gamma22ToLinear(float3 color)
-	{
-		return TransferFunctions::Gamma22ToLinear(color);
-	}
-
-	float3 LinearToGamma22(float3 color)
-	{
-		return TransferFunctions::LinearToGamma22(color);
-	}
-
-	float3 SignedGamma22ToLinear(float3 color)
-	{
-		return TransferFunctions::SignedGamma22ToLinear(color);
-	}
-
-	float3 LinearToSignedGamma22(float3 color)
-	{
-		return TransferFunctions::LinearToSignedGamma22(color);
-	}
-
 	static const float3x3 BT709_2_BT2020 = {
 		0.627403914928436279296875f, 0.3292830288410186767578125f, 0.0433130674064159393310546875f,
 		0.069097287952899932861328125f, 0.9195404052734375f, 0.011362315155565738677978515625f,

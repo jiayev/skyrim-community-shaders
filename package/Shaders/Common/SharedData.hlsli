@@ -28,7 +28,9 @@ namespace SharedData
 		bool HideSky;             // HideSky flag in WorldSpace, e.g. Blackreach
 		float MipBias;            // Offset to mip level for TAA sharpness
 		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
-		float3 pad0;
+		uint PostWaterComposite;
+		uint ResetHistory;
+		float pad0;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -216,9 +218,7 @@ namespace SharedData
 
 	struct LinearLightingSettings
 	{
-		uint enableLinearLighting;
-		uint enableACEScg;
-		uint deliveryEncoding;  // 0 = Linear (CS PostProcessing), 1 = Gamma22 (ENB / vanilla ISHDR)
+		uint isMainOrLoadingMenu;
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
@@ -230,7 +230,6 @@ namespace SharedData
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float2 pad0;
 	};
 
 	struct ENBSettings

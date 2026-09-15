@@ -47,11 +47,11 @@ cbuffer PerGeometry : register(b2)
 // collapse that caused halos with the linear BT2020 working space.
 float3 ConvertRenderInput(float3 gammaColor)
 {
-	return DisplayMapping::LinearToPQ(Color::BT709ToBT2020(Color::SignedGamma22ToLinear(gammaColor)), 10000.0);
+	return DisplayMapping::LinearToPQ(Color::BT709ToBT2020(TransferFunctions::SignedGamma22ToLinear(gammaColor)), 10000.0);
 }
 float3 ConvertRenderOutput(float3 pqColor)
 {
-	return Color::LinearToSignedGamma22(Color::BT2020ToBT709(DisplayMapping::PQtoLinear(pqColor, 10000.0)));
+	return TransferFunctions::LinearToSignedGamma22(Color::BT2020ToBT709(DisplayMapping::PQtoLinear(pqColor, 10000.0)));
 }
 // Feedback luma round-trip: feedbackOut.x is read back as history.x next frame.
 // Storing raw PQ luma [0,1] in a low-precision RT causes quantization banding in highlights
@@ -62,11 +62,11 @@ float EncodeFeedbackLuma(float pqLuma)
 {
 	// PQ → linear (single channel: luma only, no colour transform needed)
 	float linearLuma = DisplayMapping::PQtoLinear(pqLuma.xxx, 10000.0).x;
-	return Color::LinearToSignedGamma22(linearLuma);
+	return TransferFunctions::LinearToSignedGamma22(linearLuma);
 }
 float DecodeFeedbackLuma(float gammaLuma)
 {
-	float linearLuma = Color::SignedGamma22ToLinear(gammaLuma);
+	float linearLuma = TransferFunctions::SignedGamma22ToLinear(gammaLuma);
 	return DisplayMapping::LinearToPQ(linearLuma.xxx, 10000.0).x;
 }
 #	endif
@@ -241,6 +241,16 @@ PS_OUTPUT main(PS_INPUT input)
 	PS_OUTPUT psout;
 	float2 texCoord = input.TexCoord;
 	float4 colorOut, feedbackOut;
+	if (SharedData::ResetHistory) {
+		float2 uv = ClampScreenUV(texCoord, GetDynamicResolutionMax());
+		float luma = dot(SampleCenterRGB(uv).yzx, kLumaWeights);
+#	ifdef HDR_OUTPUT
+		luma = EncodeFeedbackLuma(luma);
+#	endif
+		psout.Color = float4(currentFrameTex.Sample(currentFrameSampler, uv).rgb, 1.0);
+		psout.Feedback = float4(luma, 0.0, 0.0, 1.0);
+		return psout;
+	}
 
 	// float4 packs — component reuse matches vanilla decompile (see header comment).
 	float4 motionReject, sampleUV, history, corner, tapMin;                             // was r0–r4

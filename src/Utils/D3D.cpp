@@ -1,7 +1,6 @@
 #include "D3D.h"
 
 #include "Feature.h"
-#include "Features/LinearLighting.h"
 #include "Features/TerrainBlending.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -136,12 +135,12 @@ namespace Util
 				macros.push_back({ shaderDefines->at(i).first.c_str(), shaderDefines->at(i).second.c_str() });
 		}
 
-		{
-			auto& ll = globals::features::linearLighting;
-			if (ll.loaded && ll.settings.enableLinearLighting) {
-				macros.push_back({ "ENABLE_LL", nullptr });
-				if (ll.settings.enableACEScg)
-					macros.push_back({ "ENABLE_ACESCG", nullptr });
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature->loaded)
+				continue;
+			for (const auto& [name, value] : feature->GetCommonShaderDefines()) {
+				if (std::ranges::none_of(macros, [&](const auto& macro) { return name == macro.Name; }))
+					macros.push_back({ name.data(), value.empty() ? nullptr : value.data() });
 			}
 		}
 		if (!_stricmp(ProgramType, "ps_5_0"))

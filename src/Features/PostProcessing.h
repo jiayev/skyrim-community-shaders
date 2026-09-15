@@ -135,11 +135,25 @@ struct PostProcessing : Feature
 	void ClearBorderMotionVectorsForFrameGen();
 	void DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor);
 
+	enum class Gamut : uint
+	{
+		Rec709,
+		ACEScg,
+		Rec2020
+	};
+	struct alignas(16) CopyCB
+	{
+		Gamut inputGamut = Gamut::Rec709;
+		Gamut outputGamut = Gamut::Rec709;
+		float gamma = 1.f;
+		float pad = 0.f;
+	};
+
 	/**
 	 * @brief Copies the pipeline output into a game render target, converting the
 	 *        format via the copyPS fullscreen pass when the formats differ.
 	 *
-	 * Same-format copies go through CopySubresourceRegion directly; otherwise the
+	 * Same-format, same-space copies use CopySubresourceRegion; otherwise the
 	 * source is rendered into convertTex first and then copied.
 	 *
 	 * @param targetRT  Game render target receiving the image.
@@ -151,7 +165,8 @@ struct PostProcessing : Feature
 		RE::BSGraphics::RenderTargetData& targetRT,
 		Texture2D* convertTex,
 		ID3D11Texture2D* srcTex,
-		ID3D11ShaderResourceView* srcSRV);
+		ID3D11ShaderResourceView* srcSRV, const CopyCB& conversion);
+	void BeginLinearProcessing(PostProcessFeature::TextureInfo& texture);
 
 	/////////////////////////////////////////////////////////////////////////////////
 
@@ -170,6 +185,8 @@ struct PostProcessing : Feature
 
 	/// Format-conversion copy pass (fullscreen triangle PS draw).
 	winrt::com_ptr<ID3D11PixelShader> copyPS = nullptr;
+	std::unique_ptr<ConstantBuffer> copyCB;
+	std::unique_ptr<Texture2D> texInput;
 
 	/// Shared fullscreen-triangle vertex shader for every raster pass in the
 	/// pipeline (compiled from PostProcessing/fullscreen.hlsli).
