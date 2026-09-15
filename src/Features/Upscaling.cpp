@@ -1335,42 +1335,54 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 	auto screenWidth = static_cast<int>(screenSize.x);
 	auto screenHeight = static_cast<int>(screenSize.y);
 
-	if (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kDLSS_RR) {
-		auto getUpscaleRatio = [](uint qualityMode) -> float {
-			switch (qualityMode) {
-			case 0:
-				return 1.0f;  // Native (Quality)
-			case 1:
-				return 1.5f;  // Quality
-			case 2:
-				return 1.7f;  // Balanced
-			case 3:
-				return 2.0f;  // Performance
-			case 4:
-				return 3.0f;  // Ultra Performance
-			default:
-				return 1.5f;
-			}
-		};
-		float resolutionScaleBase = 1.0f / getUpscaleRatio(settings.qualityMode);
+	const bool pathTracing = globals::features::raytracing.IsPathTracing();
 
-		auto renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
-		auto renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+	const bool useUpscaleResolution = (upscaleMethod == UpscaleMethod::kFSR || upscaleMethod == UpscaleMethod::kXeSS || upscaleMethod == UpscaleMethod::kDLSS || upscaleMethod == UpscaleMethod::kDLSS_RR);
+	const bool useUpscaleJitter = useUpscaleResolution || pathTracing;
 
-		// Report the internal resolution whenever the quality preset actually changes it, so a
-		// preset that silently fails to apply is visible without guessing from frame rate.
-		{
-			static int s_lastW = 0, s_lastH = 0;
-			static uint s_lastQuality = UINT_MAX;
-			if (s_lastW != renderWidth || s_lastH != renderHeight || s_lastQuality != settings.qualityMode) {
-				s_lastW = renderWidth; s_lastH = renderHeight; s_lastQuality = settings.qualityMode;
-				logger::info("[Upscaling] internal resolution {}x{} from {}x{} (quality {}, ratio {:.2f}x, method {})",
-					renderWidth, renderHeight, screenWidth, screenHeight, settings.qualityMode,
-					getUpscaleRatio(settings.qualityMode), static_cast<uint>(upscaleMethod));
+	if (useUpscaleJitter) {
+		int renderWidth = screenWidth;
+		int renderHeight = screenHeight;
+
+		if (useUpscaleResolution) {
+			auto getUpscaleRatio = [](uint qualityMode) -> float {
+				switch (qualityMode) {
+				case 0:
+					return 1.0f;  // Native (Quality)
+				case 1:
+					return 1.5f;  // Quality
+				case 2:
+					return 1.7f;  // Balanced
+				case 3:
+					return 2.0f;  // Performance
+				case 4:
+					return 3.0f;  // Ultra Performance
+				default:
+					return 1.5f;
+				}
+			};
+			float resolutionScaleBase = 1.0f / getUpscaleRatio(settings.qualityMode);
+
+			renderWidth = static_cast<int>(screenWidth * resolutionScaleBase);
+			renderHeight = static_cast<int>(screenHeight * resolutionScaleBase);
+
+			// Report the internal resolution whenever the quality preset actually changes it, so a
+			// preset that silently fails to apply is visible without guessing from frame rate.
+			{
+				static int s_lastW = 0, s_lastH = 0;
+				static uint s_lastQuality = UINT_MAX;
+				if (s_lastW != renderWidth || s_lastH != renderHeight || s_lastQuality != settings.qualityMode) {
+					s_lastW = renderWidth; s_lastH = renderHeight; s_lastQuality = settings.qualityMode;
+					logger::info("[Upscaling] internal resolution {}x{} from {}x{} (quality {}, ratio {:.2f}x, method {})",
+						renderWidth, renderHeight, screenWidth, screenHeight, settings.qualityMode,
+						getUpscaleRatio(settings.qualityMode), static_cast<uint>(upscaleMethod));
+				}
 			}
+			resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
+			resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
+		} else {
+			resolutionScale = { 1.0f, 1.0f };
 		}
-		resolutionScale.x = static_cast<float>(renderWidth) / static_cast<float>(screenWidth);
-		resolutionScale.y = static_cast<float>(renderHeight) / static_cast<float>(screenHeight);
 
 		auto phaseCount = GetJitterPhaseCount(renderWidth, screenWidth);
 
@@ -1386,6 +1398,10 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 
 		jitter.y = a_viewport->projectionPosScaleY * screenHeight / 2.0f;
 	}
+
+	auto& rt = globals::features::raytracing;
+	if (rt.Mode() != CreationEngineRaytracing::Mode::None)
+		rt.UpdateJitter(jitter);
 
 	auto& runtimeData = a_viewport->GetRuntimeData();
 
