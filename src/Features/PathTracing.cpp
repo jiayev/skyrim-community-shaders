@@ -241,11 +241,6 @@ void PathTracing::DrawReblurSettings()
 	if (ImGui::SliderFloat(T(RT_TKEY("plane_distance_sensitivity"), "Plane Distance Sensitivity"), &reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f, "%.3f"))
 		ClampSetting(reblurSettings.planeDistanceSensitivity, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat2(T(RT_TKEY("specular_probability_thresholds_for_mv_modification"), "Specular Probability Thresholds For MV Modification"), reblurSettings.specularProbabilityThresholdsForMvModification.data(), 0.0f, 1.0f, "%.2f")) {
-		ClampSetting(reblurSettings.specularProbabilityThresholdsForMvModification[0], 0.0f, 1.0f);
-		ClampSetting(reblurSettings.specularProbabilityThresholdsForMvModification[1], reblurSettings.specularProbabilityThresholdsForMvModification[0], 1.0f);
-	}
-
 	if (ImGui::SliderFloat(T(RT_TKEY("firefly_suppressor_min_relative_scale"), "Firefly Suppressor Min Relative Scale"), &reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f, "%.2f"))
 		ClampSetting(reblurSettings.fireflySuppressorMinRelativeScale, 1.0f, 3.0f);
 
