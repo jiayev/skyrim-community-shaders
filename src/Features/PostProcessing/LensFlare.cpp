@@ -362,6 +362,7 @@ void LensFlare::CreateFFTTextures(uint resolution)
 
 void LensFlare::ClearShaderCache()
 {
+	outputReady = false;
 	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&thresholdCS, &ghostHaloCS, &blurDownCS, &blurUpCS, &mixCS,
@@ -754,6 +755,9 @@ void LensFlare::DrawQuality(TextureInfo& inout_tex, LensFlareCB& data)
 
 void LensFlare::Draw(TextureInfo& inout_tex)
 {
+	if (!AllShadersReady({ &thresholdCS, &ghostHaloCS, &blurDownCS, &blurUpCS, &mixCS }))
+		return;
+
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
@@ -882,4 +886,5 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	inout_tex = { texFlare->resource.get(), texFlare->srv.get() };
 	state->EndPerfEvent();
 	globals::profiler->EndPass();
+	outputReady = true;
 }

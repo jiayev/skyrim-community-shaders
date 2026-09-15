@@ -19,7 +19,7 @@ namespace ViewMedium
 #ifdef EXP_HEIGHT_FOG
 		if (SharedData::exponentialHeightFogSettings.enabled && dot(position, position) > 1e-8) {
 			const float4 fog = ExponentialHeightFog::GetExponentialHeightFog(position, FrameBuffer::CameraPosAdjust.xyz, 0.0.xxx);
-			result = float4(ColorManagement::StorageToWorking(fog.rgb) * fog.a, 1.0 - fog.a);
+			result = float4(ColorManagement::SceneToLinear(fog.rgb) * fog.a, 1.0 - fog.a);
 		}
 #endif
 		return result;
@@ -62,7 +62,7 @@ namespace ViewMedium
 	float3 CompositeViewMedium(float3 color, float3 position, float2 screenUV, SamplerState samplerState, bool fullCloudRay)
 	{
 		const float4 medium = SampleViewMedium(position, screenUV, samplerState, fullCloudRay);
-		return ColorManagement::WorkingColor::ScaleAndAddLinear(color, medium.a, medium.rgb);
+		return ColorManagement::SceneColor::ScaleAndAddLinear(color, medium.a, medium.rgb);
 	}
 }
 

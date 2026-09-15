@@ -396,7 +396,7 @@ void PhysicalSky::SettingsGeneral()
 
 	ImGui::SeparatorText(T(TKEY("post_processing"), "Post Processing"));
 	{
-		const bool llEnabled = globals::features::linearLighting.settings.enableLinearLighting;
+		const bool llEnabled = globals::features::linearLighting.IsLinearLightingActive();
 		ImGui::BeginDisabled(llEnabled);
 		if (ImGui::BeginTable("tonemap", 4, ImGuiTableFlags_SizingStretchSame, { -1, 0 })) {
 			ImGui::TableNextColumn();
@@ -897,6 +897,7 @@ void PhysicalSky::CompileShaders()
 	};
 
 	for (auto& info : shaderInfos) {
+		*info.csPtr = nullptr;
 		auto path = std::filesystem::path("Data\\Shaders\\PhysicalSky") / info.filename;
 		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.data())))
 			info.csPtr->attach(rawPtr);
@@ -935,7 +936,7 @@ void PhysicalSky::Reset()
 	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
 	const float lowCloudThicknessKm = lowCloudTopKm - lowCloudBaseKm;
 	auto& skySync = globals::features::skySync;
-	skySync.lightColors = std::nullopt;
+	skySync.workingLightColors = std::nullopt;
 
 	auto& linearLighting = globals::features::linearLighting;
 
@@ -970,7 +971,7 @@ void PhysicalSky::Reset()
 
 	if (!allGood) {
 		if (skySync.loaded && skySync.settings.Enabled)
-			skySync.lightColors = std::nullopt;
+			skySync.workingLightColors = std::nullopt;
 		cbData.enabled = allGood;
 		volMainHistoryValid = false;
 		return;
@@ -991,7 +992,7 @@ void PhysicalSky::Reset()
 	// values (from CIE 1931 spectral integration) rather than color-space matrix
 	// transforms, since they represent wavelength-dependent physical quantities,
 	// not tristimulus colors.
-	bool wideGamut = linearLighting.settings.enableACEScg && linearLighting.settings.enableLinearLighting;
+	bool wideGamut = linearLighting.IsACEScgActive();
 	auto sRGBToWorkingGamut = [wideGamut](float3 v) -> float3 {
 		if (!wideGamut)
 			return v;
@@ -1015,7 +1016,7 @@ void PhysicalSky::Reset()
 		.sunDiskCos = cos(settings.sunDiskRad) * (settings.proceduralSun ? 1.f : 0.f),
 		.secundaColor = sRGBToWorkingGamut(settings.secundaColor),
 		.enabled = allGood,
-		.tonemapper = linearLighting.settings.enableLinearLighting ? 0 : settings.tonemapper,
+		.tonemapper = linearLighting.IsLinearLightingActive() ? 0 : settings.tonemapper,
 		.vanillaMix = settings.vanillaMix,
 		.zBottom = zBottom,
 		.rPlanet = settings.planetRadius / Util::Units::GAME_UNIT_TO_KM,
@@ -1051,15 +1052,15 @@ void PhysicalSky::Reset()
 	};
 
 	if (settings.overrideDirLight) {
-		const float pbrCompensationMult = linearLighting.settings.enableLinearLighting ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
+		const float pbrCompensationMult = linearLighting.IsLinearLightingActive() ? 1.0f : RE::NI_PI;  // Colors should match PBR values when not using linear lighting
 		auto LightConvFn = [pbrCompensationMult](float3 color) {
 			color /= pbrCompensationMult;
 			return RE::NiColor(color.x, color.y, color.z);
 		};
-		skySync.lightColors = std::array{
-			ColorManagement::ColorValue{ LightConvFn(cbData.sunlightColor), ColorManagement::LinearWorking },
-			ColorManagement::ColorValue{ LightConvFn(cbData.masserColor), ColorManagement::LinearWorking },
-			ColorManagement::ColorValue{ LightConvFn(cbData.secundaColor), ColorManagement::LinearWorking }
+		skySync.workingLightColors = std::array{
+			LightConvFn(cbData.sunlightColor),
+			LightConvFn(cbData.masserColor),
+			LightConvFn(cbData.secundaColor)
 		};
 	}
 

@@ -532,6 +532,7 @@ void ScreenSpaceGI::SetupNRDResources()
 
 void ScreenSpaceGI::ClearShaderCache()
 {
+	queuedResetHistory = true;
 	outputReady = false;
 	static const std::vector<winrt::com_ptr<ID3D11ComputeShader>*> shaderPtrs = {
 		&prefilterDepthsCompute, &prefilterRadianceCompute, &prefilterNormalCompute, &giCompute, &compositeCompute

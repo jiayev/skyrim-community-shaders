@@ -114,11 +114,11 @@ void Composite::Draw(TextureInfo& inout_tex)
 	auto* exposure = owner->GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure);
 	auto* localExposure = owner->GetPipelineFeature<LocalExposure>(PostProcessing::FeaturePipelineIndex::LocalExposure);
 
-	bool hasBloom = bloom && bloom->enabled;
-	bool hasFlare = flare && flare->enabled;
-	bool hasGlare = glare && glare->enabled;
-	bool hasExposure = exposure && exposure->enabled;
-	bool hasLocalExposure = localExposure && localExposure->enabled;
+	bool hasBloom = bloom && bloom->enabled && bloom->GetBloomOutput().srv;
+	bool hasFlare = flare && flare->enabled && flare->GetFlareOutput().srv;
+	bool hasGlare = glare && glare->enabled && glare->GetGlareOutput().srv;
+	bool hasExposure = exposure && exposure->enabled && exposure->GetAdaptationSRV();
+	bool hasLocalExposure = localExposure && localExposure->enabled && localExposure->GetBaseLuminanceSRV();
 
 	uint flags = (hasBloom ? BLOOM : 0) | (hasFlare ? FLARE : 0) | (hasGlare ? GLARE : 0) | (hasExposure ? EXPOSURE : 0) | (hasLocalExposure ? LOCAL_EXPOSURE : 0);
 	if (flags == NONE)

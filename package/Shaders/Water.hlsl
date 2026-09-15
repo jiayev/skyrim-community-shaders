@@ -191,7 +191,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 #			if !defined(UNIFIED_WATER)
 	float fogDistanceFactor = min(VSFogFarColor.w, pow(saturate(length(worldViewPos.xyz) * VSFogParam.y - VSFogParam.x), NormalsScale.w));
-	vsout.FogParam.xyz = lerp(VSFogNearColor.xyz, VSFogFarColor.xyz, fogDistanceFactor);
+	vsout.FogParam.xyz = lerp(ColorManagement::SRGBToWorking(VSFogNearColor.xyz), ColorManagement::SRGBToWorking(VSFogFarColor.xyz), fogDistanceFactor);
 	vsout.FogParam.w = fogDistanceFactor;
 #			endif
 
@@ -866,7 +866,7 @@ float3 GetWaterSpecularColor(PS_INPUT input, float3 normal, float3 viewDirection
 		if (skylightingSpecular > 0.0)
 			workingSpecularIrradianceReflections = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(CubeMapSampler, R, 0).xyz;
 
-		dynamicCubemap = ColorManagement::WorkingColor::LerpInLinear(workingSpecularIrradiance, workingSpecularIrradianceReflections, skylightingSpecular);
+		dynamicCubemap = ColorManagement::SceneColor::LerpInLinear(workingSpecularIrradiance, workingSpecularIrradianceReflections, skylightingSpecular);
 	}
 
 	float reflectionAmount = saturate(length(input.WPosition.xyz) / 1024.0);
@@ -1003,7 +1003,7 @@ float3 GetSunColor(float3 normal, float3 viewDirection, float3 worldPosition)
 
 	float lightDistribution = GetWaterDeltaLightDistributionFromCos(normal, viewDirection, SunDir.xyz, GetWaterSunDiskCos());
 
-	float3 sunColor = Color::DirectionalLight(SunColor.xyz) * SunDir.w * (1.0 - exp(-DeepColor.w));
+	float3 sunColor = Color::DirectionalLight(ColorManagement::SRGBToWorking(SunColor.xyz)) * SunDir.w * (1.0 - exp(-DeepColor.w));
 #				if defined(PHYSICAL_SKY)
 	if (SharedData::physSkyData.enabled)
 		sunColor *= PhysSky::SampleTr(normalize(reflect(viewDirection, normal)), DepthSampler);
@@ -1170,7 +1170,7 @@ PS_OUTPUT main(PS_INPUT input)
 	dirColor *= dirShadow;
 
 #				if defined(SKYLIGHTING)
-	ambientColor = ColorManagement::WorkingColor::ScaleByLinear(ambientColor, skylightingDiffuse);
+	ambientColor = ColorManagement::SceneColor::ScaleByLinear(ambientColor, skylightingDiffuse);
 #				endif
 
 	diffuseOutput.refractionDiffuseColor = dirColor + ambientColor;
@@ -1271,7 +1271,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 fogColor = input.FogParam.xyz;
 #						else
 		float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
-		float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
+		float3 fogColor = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogDistanceFactor);
 #						endif
 
 #						if defined(IBL)
@@ -1333,7 +1333,7 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 preFogColor = input.FogParam.xyz;
 #						else
 		float fogDistanceFactor = min(FogFarColor.w, pow(saturate(length(input.WPosition.xyz) * FogParam.y - FogParam.x), FresnelRI.y));
-		float3 preFogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogDistanceFactor);
+		float3 preFogColor = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogDistanceFactor);
 #						endif
 
 #						if defined(IBL)
@@ -1369,7 +1369,7 @@ PS_OUTPUT main(PS_INPUT input)
 
 	if (!SharedData::PostWaterComposite) {
 		float fogFactor = min(FogParam.w, pow(saturate(-diffuseOutput.depth * FogParam.y - FogParam.x), FogParam.z));
-		float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
+		float3 fogColor = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogFactor);
 #						if defined(EXP_HEIGHT_FOG)
 		if (SharedData::exponentialHeightFogSettings.enabled && ExponentialHeightFog::ShouldDisableVanillaFog()) {
 			fogFactor = 0;

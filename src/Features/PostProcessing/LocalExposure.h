@@ -11,6 +11,7 @@
 /// adjustment.
 struct LocalExposure : public PostProcessFeature
 {
+	bool outputReady = false;
 	virtual inline std::string GetType() const override { return "Local Exposure"; }
 	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.local_exposure.name", "Local Exposure"); }
 	virtual inline std::string GetDesc() const override
@@ -108,6 +109,6 @@ struct LocalExposure : public PostProcessFeature
 	virtual void Draw(TextureInfo&) override;
 
 	/// Get the full-resolution base log-luminance texture consumed by Composite.
-	ID3D11ShaderResourceView* GetBaseLuminanceSRV() const { return texBaseLuminance ? texBaseLuminance->srv.get() : nullptr; }
+	ID3D11ShaderResourceView* GetBaseLuminanceSRV() const { return outputReady && texBaseLuminance ? texBaseLuminance->srv.get() : nullptr; }
 	ID3D11Buffer* GetConstantBuffer() const { return localExposureCB ? localExposureCB->CB() : nullptr; }
 };

@@ -64,13 +64,13 @@ namespace DynamicCubemaps
 				if (SharedData::iblSettings.DALCMode >= 2) {
 					// Mode 2: DALC-normalized env scaled by DALCAmount + sky overlay
 					float envLum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
-					envSpecular = ColorManagement::StorageToWorking((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
-					skySpecular = ColorManagement::StorageToWorking(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+					envSpecular = ColorManagement::SceneToLinear((envSample / max(envLum, 0.001)) * directionalAmbientColorSpecular) * SharedData::iblSettings.DALCAmount;
+					skySpecular = ColorManagement::SceneToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				} else {
 					// Mode 0/1: IBL ratio-based
 					float3 ratio = ImageBasedLighting::GetIBLRatio();
-					envSpecular = ColorManagement::StorageToWorking(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
-					skySpecular = ColorManagement::StorageToWorking(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
+					envSpecular = ColorManagement::SceneToLinear(envSample * ratio) * SharedData::iblSettings.EnvIBLScale;
+					skySpecular = ColorManagement::SceneToLinear(max(0, fullSample - envSample)) * SharedData::iblSettings.SkyIBLScale;
 				}
 #			if defined(SKYLIGHTING)
 				skySpecular *= skylightingSpecular;
@@ -89,22 +89,22 @@ namespace DynamicCubemaps
 					float3 specularIrradiance = EnvTexture.SampleLevel(SampColorSampler, R, level);
 					float specularIrradianceLuminance = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
 					specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-					finalIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+					finalIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 				} else {
 					float3 specularIrradianceReflections = 0.0;
 					if (skylightingSpecular > 0.0) {
 						specularIrradianceReflections = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level);
 						float lum = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, 15));
 						specularIrradianceReflections = (specularIrradianceReflections / max(lum, 0.001)) * directionalAmbientColorSpecular;
-						specularIrradianceReflections = ColorManagement::StorageToWorking(specularIrradianceReflections);
+						specularIrradianceReflections = ColorManagement::SceneToLinear(specularIrradianceReflections);
 					}
 					float3 specularIrradiance = 0.0;
 					if (skylightingSpecular < 1.0) {
 						specularIrradiance = EnvTexture.SampleLevel(SampColorSampler, R, level);
 						float lum = Color::RGBToLuminance(EnvTexture.SampleLevel(SampColorSampler, R, 15));
-						float dalcScaled = ColorManagement::WorkingColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
+						float dalcScaled = ColorManagement::SceneColor::ScaleByLinear(directionalAmbientColorSpecular, skylightingSpecular);
 						specularIrradiance = (specularIrradiance / max(lum, 0.001)) * dalcScaled;
-						specularIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+						specularIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 					}
 					finalIrradiance = lerp(specularIrradiance, specularIrradianceReflections, skylightingSpecular);
 				}
@@ -112,7 +112,7 @@ namespace DynamicCubemaps
 				float3 specularIrradiance = EnvReflectionsTexture.SampleLevel(SampColorSampler, R, level);
 				float specularIrradianceLuminance = Color::RGBToLuminance(EnvReflectionsTexture.SampleLevel(SampColorSampler, R, 15));
 				specularIrradiance = (specularIrradiance / max(specularIrradianceLuminance, 0.001)) * directionalAmbientColorSpecular;
-				finalIrradiance = ColorManagement::StorageToWorking(specularIrradiance);
+				finalIrradiance = ColorManagement::SceneToLinear(specularIrradiance);
 #		endif
 			}
 		} else {

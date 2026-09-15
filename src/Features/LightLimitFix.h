@@ -31,7 +31,6 @@ struct LightLimitFix : OverlayFeature
 		bool valid = false;
 		bool colorManagementEnabled = false;
 		bool acescgEnabled = false;
-		uint colorEncoding = 0;
 		ParticleLightConfig config{};
 		RE::NiColorA baseColor{ 1.0f, 1.0f, 1.0f, 1.0f };
 	};

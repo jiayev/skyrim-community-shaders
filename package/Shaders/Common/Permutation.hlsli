@@ -78,6 +78,7 @@ namespace Permutation
 		static const uint SuppressExternalEmittance = (1 << 5);
 		static const uint AdditiveLighting = (1 << 6);
 		static const uint IsEye = (1 << 7);
+		static const uint SourceAlphaBlend = (1 << 8);
 	}
 
 	namespace ExtraFeatureFlags
@@ -99,6 +100,9 @@ namespace Permutation
 		uint ExtraFeatureDescriptor;
 
 		float EffectRadius;
+		uint BaseTextureIsWorking;
+		uint RenderToUI;
+		uint pad;
 	};
 
 }

@@ -167,7 +167,10 @@ PS_OUTPUT main(PS_INPUT input)
 	if (EyePosition.w != 0 && 1e-5 < snowMask) {
 		ao = min(1, SparklesParameters3.x + ao);
 	}
-	composedColor.xyz = ColorManagement::WorkingColor::Modulate(composedColor.xyz, ao);
+	composedColor.xyz *= ao;
+#		if !defined(ENABLE_LL)
+	composedColor.xyz = abs(composedColor.xyz);
+#		endif
 #	endif
 
 	float depth = depthTex.SampleLevel(depthSampler, screenPosition, 0).x;

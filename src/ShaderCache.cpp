@@ -1184,7 +1184,8 @@ namespace SIE
 			std::string result;
 			if (a_sort)
 				std::sort(std::begin(defines), std::end(defines), [](const D3D_SHADER_MACRO& a, const D3D_SHADER_MACRO& b) {
-					return a.Name > b.Name;
+					return std::pair{ std::string_view(a.Name ? a.Name : ""), std::string_view(a.Definition ? a.Definition : "") } <
+					       std::pair{ std::string_view(b.Name ? b.Name : ""), std::string_view(b.Definition ? b.Definition : "") };
 				});
 			for (const auto& def : defines) {
 				if (def.Name != nullptr) {
@@ -1195,7 +1196,7 @@ namespace SIE
 					}
 					result += ' ';
 				} else {
-					if (a_sort)  // sometimes the sort messes up so null entries get interspersed
+					if (a_sort)
 						continue;
 					break;
 				}
@@ -1370,12 +1371,15 @@ namespace SIE
 			mapBufferConsts("PerGeometry", bufferSizes[2]);
 		}
 
-		std::wstring GetDiskPath(const std::string_view& name, uint32_t descriptor, ShaderClass shaderClass)
+		std::wstring GetDiskPath(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass)
 		{
-			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
+			std::array<D3D_SHADER_MACRO, 64> defines{};
+			GetShaderDefines(shader, descriptor, std::span{ defines });
+			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString + ";" + MergeDefinesString(defines, true));
 			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
 
-			const auto wname = std::wstring(name.begin(), name.end());
+			const std::string_view name = shader.fxpFilename;
+			const std::wstring wname(name.begin(), name.end());
 			switch (shaderClass) {
 			case ShaderClass::Pixel:
 				return std::format(L"Data/ShaderCache/{}/{:X}{}.pso", wname, descriptor, suffix);
@@ -1446,7 +1450,7 @@ namespace SIE
 			const auto type = shader.shaderType.get();
 
 			// check diskcache
-			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
+			auto diskPath = GetDiskPath(shader, descriptor, shaderClass);
 			ID3DBlob* shaderBlob = nullptr;
 
 			if (useDiskCache && std::filesystem::exists(diskPath)) {
@@ -2076,8 +2080,37 @@ namespace SIE
 		}
 	}
 
+	void ShaderCache::Reload(const std::function<void()>& activate)
+	{
+		const bool watch = UseFileWatcher();
+		if (watch)
+			StopFileWatcher();
+		managementJthread.request_stop();
+		if (managementJthread.joinable())
+			managementJthread.join();
+		compilationPool.wait();
+		activate();
+		{
+			preserveStandaloneCache = true;
+			const SKSE::stl::scope_exit restore([this]() noexcept { preserveStandaloneCache = false; });
+			Clear();
+		}
+		managementJthread = std::jthread([this](std::stop_token token) { ManageCompilationSet(token); });
+		if (watch) {
+			useFileWatcher = true;
+			StartFileWatcher();
+		}
+	}
+
 	void ShaderCache::Clear()
 	{
+		auto* state = globals::state;
+		if (globals::game::currentVertexShader && *globals::game::currentVertexShader == state->customVertexShader)
+			*globals::game::currentVertexShader = nullptr;
+		if (globals::game::currentPixelShader && *globals::game::currentPixelShader == state->customPixelShader)
+			*globals::game::currentPixelShader = nullptr;
+		state->customVertexShader = nullptr;
+		state->customPixelShader = nullptr;
 		{
 			std::lock_guard lockGuardV(vertexShadersMutex);
 			for (auto& shaders : vertexShaders) {
@@ -2257,7 +2290,7 @@ namespace SIE
 		{
 			std::unique_lock lockH{ hlslMapMutex };
 			auto it = hlslToShaderMap.find(lowerFilePath);
-			hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, SIE::SShaderCache::GetDiskPath(shader.fxpFilename, descriptor, shaderClass) };
+			hlslRecord newRecord{ key, shader.shaderType.get(), descriptor, shaderClass, SIE::SShaderCache::GetDiskPath(shader, descriptor, shaderClass) };
 
 			if (it != hlslToShaderMap.end()) {
 				auto& entries = it->second;
@@ -2476,6 +2509,14 @@ namespace SIE
 		StandaloneShaderClass shaderClass,
 		StandaloneShaderReadyCallback onReady)
 	{
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!feature->loaded)
+				continue;
+			for (const auto& [name, value] : feature->GetCommonShaderDefines()) {
+				if (std::ranges::none_of(defines, [&](const auto& macro) { return macro.first && name == macro.first; }))
+					defines.emplace_back(name.data(), value.empty() ? nullptr : value.data());
+			}
+		}
 		compilationSet.EnqueueAux(
 			[this, sourcePath = std::move(sourcePath), entryPoint = std::move(entryPoint),
 				defines = std::move(defines), shaderClass, onReady = std::move(onReady)]() mutable {
@@ -2696,6 +2737,8 @@ namespace SIE
 
 	void ShaderCache::ClearStandaloneComputeCache(std::wstring_view relativeDir)
 	{
+		if (preserveStandaloneCache)
+			return;
 		// Same bar as DeleteDiskCache(): never delete outside Data/ShaderCache.
 		if (relativeDir.empty() || relativeDir.find(L"..") != std::wstring_view::npos ||
 			std::filesystem::path(relativeDir).is_absolute()) {
@@ -3238,11 +3281,7 @@ namespace SIE
 			info.descriptor = descriptor;
 
 			// Construct disk path
-			info.diskPath = SIE::SShaderCache::GetDiskPath(
-				shader.shaderType == RE::BSShader::Type::ImageSpace ?
-					static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
-					shader.fxpFilename,
-				descriptor, shaderClass);
+			info.diskPath = SIE::SShaderCache::GetDiskPath(shader, descriptor, shaderClass);
 		}
 
 		info.isActive = true;

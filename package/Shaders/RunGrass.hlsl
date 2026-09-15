@@ -438,7 +438,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #			endif
 
-	baseColor.xyz = ColorManagement::AlbedoValueToWorking(baseColor.xyz);
+	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
 
 	if (SharedData::lodBlendingSettings.DisableTerrainVertexColors)
 		input.Color.xyz = 1;
@@ -497,7 +497,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float roughness = saturate(1.0 - SharedData::grassLightingSettings.Glossiness * 0.01);
 
 	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float vertexAO = ColorManagement::SRGBToWorking(max(max(input.Color.r, input.Color.g), input.Color.b));
 	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)
@@ -592,16 +592,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirVdotL = dot(viewDirection, SharedData::DirLightDirection.xyz);
 	float3 transmissionRadiance = dirLightColor * dirTransmissionShadow *
 	                              GrassLighting::GetTransmissionFactor(dirNdotL, dirVdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
-	                              ColorManagement::BRDFNormalization();
+	                              Color::BRDFScale;
 
-	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirNdotL) * ColorManagement::BRDFNormalization();
+	float3 dirDiffuseColor = dirLightColor * dirDetailedShadow * saturate(dirNdotL) * Color::BRDFScale;
 	float3 dirSpecularColor = 0;
 #			ifdef GRASS_OPTIMIZATIONS
 	if (complexDetail)
 #			else
 	if (complex)
 #			endif
-		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * ColorManagement::BRDFNormalization();
+		dirSpecularColor = dirDetailedShadow * GrassLighting::GetLightSpecularInput(SharedData::DirLightDirection.xyz, viewDirection, normal, dirLightColor, roughness, F0) * Color::BRDFScale;
 #			if defined(WETNESS_EFFECTS)
 	WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, SharedData::DirLightDirection.xyz, dirLightColor, dirDetailedShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, dirDiffuseColor, dirSpecularColor, wetnessDirectSpecularColor);
 #			endif
@@ -652,20 +652,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 				lightColor *= lightShadow;
 
 				float NdotL = dot(normal, normalizedLightDirection);
-				float3 lightDiffuseColor = lightColor * saturate(NdotL) * ColorManagement::BRDFNormalization();
+				float3 lightDiffuseColor = lightColor * saturate(NdotL) * Color::BRDFScale;
 				float3 lightSpecularColor = 0;
 
 				float VdotL = dot(viewDirection, normalizedLightDirection);
 				transmissionRadiance += lightColor *
 				                        GrassLighting::GetTransmissionFactor(NdotL, VdotL, SharedData::grassLightingSettings.SubsurfaceScatteringAmount) *
-				                        ColorManagement::BRDFNormalization();
+				                        Color::BRDFScale;
 
 #				ifdef GRASS_OPTIMIZATIONS
 				if (complexDetail)
 #				else
 				if (complex)
 #				endif
-					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * ColorManagement::BRDFNormalization();
+					lightSpecularColor = GrassLighting::GetLightSpecularInput(normalizedLightDirection, viewDirection, normal, lightColor, roughness, F0) * Color::BRDFScale;
 #				if defined(WETNESS_EFFECTS)
 				WetnessEffects::ApplySurfaceWetnessDirectLighting(wetnessState, viewDirection, normalizedLightDirection, pointLightColor, lightShadow * Color::PBRLightingCompensation * Color::PBRLightingScale, lightDiffuseColor, lightSpecularColor, wetnessDirectSpecularColor);
 #				endif
@@ -822,6 +822,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.PS.w = diffuseAlpha;
 #		else
 	float4 baseColor = TexBaseSampler.SampleBias(SampBaseSampler, input.TexCoord.xy, SharedData::MipBias);
+	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
 #			if defined(DO_ALPHA_TEST)
 	const float diffuseAlpha = input.Color.w * baseColor.w;
 	if ((diffuseAlpha - AlphaTestRefRS) < 0)
@@ -922,7 +923,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 normal = normalize(FrameBuffer::ViewToWorld(normalVS, false));
 
 	float3 vertexColor = ColorManagement::SRGBToWorking(input.Color.xyz);
-	float vertexAO = max(max(vertexColor.r, vertexColor.g), vertexColor.b);
+	float vertexAO = ColorManagement::SRGBToWorking(max(max(input.Color.r, input.Color.g), input.Color.b));
 	vertexColor /= max(vertexAO, EPSILON_DIVISION);
 
 #			if defined(SKYLIGHTING)

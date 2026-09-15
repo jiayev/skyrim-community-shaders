@@ -101,10 +101,10 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 {
 	Settings data = settings;
 	auto& linearLighting = globals::features::linearLighting;
-	linearLighting.DecodeColor(&data.inscatteringTint.x);
-	linearLighting.DecodeColor(&data.fogInscatteringColor.x);
-	linearLighting.DecodeColor(&data.volumetricFogAlbedo.x);
-	linearLighting.DecodeColor(&data.volumetricFogEmissive.x);
+	linearLighting.SRGBToWorking(&data.inscatteringTint.x);
+	linearLighting.SRGBToWorking(&data.fogInscatteringColor.x);
+	linearLighting.SRGBToWorking(&data.volumetricFogAlbedo.x);
+	linearLighting.SRGBToWorking(&data.volumetricFogEmissive.x);
 
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;

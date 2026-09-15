@@ -84,7 +84,7 @@ VS_OUTPUT main(VS_INPUT input)
 
 	vsout.TexCoord0.xy = input.TexCoord;
 	vsout.TexCoord2.x = saturate((1.0 / 17.0) * eyeHeightDelta);
-	vsout.Color.xyz = BlendColor[0].xyz * VParams;
+	vsout.Color.xyz = ColorManagement::SRGBToWorking(BlendColor[0].xyz) * VParams;
 	vsout.Color.w = BlendColor[0].w;
 
 #	else  // MOONMASK HORIZFADE
@@ -114,7 +114,7 @@ VS_OUTPUT main(VS_INPUT input)
 	float3 skyColor = BlendColor[0].xyz * input.Color.xxx + BlendColor[1].xyz * input.Color.yyy +
 	                  BlendColor[2].xyz * input.Color.zzz;
 
-	vsout.Color.xyz = VParams * skyColor;
+	vsout.Color.xyz = VParams * ColorManagement::SRGBToWorking(skyColor);
 	vsout.Color.w = BlendColor[0].w * input.Color.w;
 	vsout.SkyBlendColor0 = float4(BlendColor[0].xyz * VParams, 0);
 	vsout.SkyBlendColor2 = float4(BlendColor[2].xyz * VParams, 0);
@@ -222,6 +222,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 	float3 skyScale = ColorManagement::SRGBToWorking(PParams.yyy);
+	float alphaTransmittance = 1.0;
 
 #	if defined(PS_CLOUDS)
 	float psCloudDist = 1e3f / 1.428e-2;
@@ -236,7 +237,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		ifndef TEXLERP
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
 #			ifndef MOONMASK
-	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
+	baseColor.xyz = ColorManagement::TextureToWorking(baseColor.xyz);
 #			endif
 #			ifdef TEXFADE
 	baseColor.w *= PParams.x;
@@ -244,8 +245,8 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 	float4 blendColor = TexBlendSampler.Sample(SampBlendSampler, input.TexCoord1.xy);
 	float4 baseColor = TexBaseSampler.Sample(SampBaseSampler, input.TexCoord0.xy);
-	blendColor.xyz = ColorManagement::DecodedColorTextureToWorking(blendColor.xyz);
-	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(baseColor.xyz);
+	blendColor.xyz = ColorManagement::TextureToWorking(blendColor.xyz);
+	baseColor.xyz = ColorManagement::TextureToWorking(baseColor.xyz);
 	baseColor = PParams.xxxx * (-baseColor + blendColor) + baseColor;
 #		endif
 #		if defined(PHYSICAL_SKY)
@@ -270,7 +271,11 @@ PS_OUTPUT main(PS_INPUT input)
 	if (HDRSun::IsHdrSunActive() && !enableProceduralSun) {
 		float cloudMult = CloudShadows::GetCloudShadowMult(input.WorldPosition.xyz, SampBaseSampler);
 		baseColor.xyz *= cloudMult;
+#				if defined(ENABLE_LL)
+		alphaTransmittance = cloudMult;
+#				else
 		baseColor.w *= cloudMult;
+#				endif
 	}
 #			endif
 #		endif
@@ -299,7 +304,7 @@ PS_OUTPUT main(PS_INPUT input)
 	noiseGrad *= 10.0;
 
 #			ifdef TEX
-	psout.Color.xyz = ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = baseColor.w * input.Color.w;
 #			else
@@ -312,7 +317,7 @@ PS_OUTPUT main(PS_INPUT input)
 		skyGradientColor = lerp(input.SkyBlendColor2.xyz, input.SkyBlendColor0.xyz, gradientPosition);
 	}
 #				endif
-	psout.Color.xyz = ColorManagement::SRGBToWorking(skyGradientColor) + skyScale;
+	psout.Color.xyz = skyGradientColor + skyScale;
 
 	psout.Color.xyz *= 1.0 + noiseGrad;
 	psout.Color.w = input.Color.w;
@@ -326,7 +331,7 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 
 #		elif defined(HORIZFADE)
-	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale);
+	psout.Color.xyz = float3(1.5, 1.5, 1.5) * (input.Color.xyz * baseColor.xyz + skyScale);
 	psout.Color.w = input.TexCoord2.x * (baseColor.w * input.Color.w);
 #		else
 
@@ -336,7 +341,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 	psout.Color.w = input.Color.w * baseColor.w;
-	psout.Color.xyz = ColorManagement::SRGBToWorking(input.Color.xyz) * baseColor.xyz + skyScale;
+	psout.Color.xyz = input.Color.xyz * baseColor.xyz + skyScale;
 
 #			if defined(CLOUDS) && defined(EFFECTS11)
 	if (SharedData::enbSettings.Enable) {
@@ -440,11 +445,11 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float2 screenMotionVector = MotionBlur::GetSSMotionVector(input.WorldPosition, input.PreviousWorldPosition);
 
-	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w);
-	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w);
+	psout.MotionVectors = float4(screenMotionVector, 0, psout.Color.w * alphaTransmittance);
+	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w * alphaTransmittance);
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	psout.CloudShadows = psout.Color.w;
+	psout.CloudShadows = psout.Color.w * alphaTransmittance;
 
 	// Keep sun behind scene depth to prevent halo leaks through geometry.
 	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
@@ -460,6 +465,16 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #	endif
 
+#	if defined(ENABLE_LL)
+#		if (defined(TEX) || defined(HORIZFADE)) && !defined(MOONMASK) && !defined(CLOUDS)
+	if ((!Permutation::RenderToUI || inReflection) && !SharedData::physSkyData.enabled) {
+		psout.Color.w = pow(saturate(psout.Color.w), TransferFunctions::GAME_GAMMA);
+	}
+#		endif
+	if (Permutation::RenderToUI && !inReflection)
+		psout.Color.rgb = ColorManagement::WorkingToUI(psout.Color.rgb);
+#	endif
+	psout.Color.w *= alphaTransmittance;
 	return psout;
 }
 #endif

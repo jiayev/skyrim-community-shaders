@@ -158,7 +158,7 @@ const static float DepthOffsets[16] = {
 #	if defined(EXP_HEIGHT_FOG)
 void ApplyReflectionExponentialHeightFog(inout float3 color, float3 positionWS, float4 screenPosition)
 {
-	float3 fogColor = AmbientColor.xyz;
+	float3 fogColor = ColorManagement::SRGBToWorking(AmbientColor.xyz);
 	float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(positionWS, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(screenPosition.xy * FrameBuffer::DynamicResolutionParams2.xy, screenPosition.z, 1));
 	color = lerp(color, exponentialHeightFog.xyz, exponentialHeightFog.w);
 }
@@ -193,7 +193,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.w = 0;
 #	else
 	float4 baseColor = TexDiffuse.SampleBias(SampDiffuse, input.TexCoord.xy, SharedData::MipBias);
-	baseColor.xyz = ColorManagement::AlbedoTextureToWorking(baseColor.xyz);
+	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
 
 	if ((baseColor.w - AlphaTestRefRS) < 0) {
 		discard;
@@ -213,7 +213,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (dirShadow != 0.0)
 		dirShadow *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * ColorManagement::BRDFNormalization();
+	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
 
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
@@ -270,7 +270,7 @@ PS_OUTPUT main(PS_INPUT input)
 #		else
 	float dirShadow = ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
 
-	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * ColorManagement::BRDFNormalization();
+	float3 diffuseColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * dirShadow * 0.5 * Color::BRDFScale;
 
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {

@@ -1,14 +1,7 @@
 #pragma once
 
-#include "ColorManagement.h"
-
-#include <array>
-#include <unordered_map>
-
 struct LinearLighting : Feature
 {
-	using ColorEncoding = ColorManagement::Encoding;
-
 	static LinearLighting* GetSingleton()
 	{
 		static LinearLighting singleton;
@@ -32,16 +25,15 @@ struct LinearLighting : Feature
 
 	/** @brief ENABLE_LL is a compile-time define; emit it only when the feature is enabled. */
 	virtual inline std::string_view GetShaderDefineName() override { return "ENABLE_LL"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return settings.enableLinearLighting != 0; }
-	/** @brief ACEScg as optional define contribution; also participates in disk cache invalidation via version string. */
+	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return IsLinearLightingActive(); }
+	/** @brief ACEScg contributes the working-gamut shader define. */
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
+	virtual std::vector<std::pair<std::string_view, std::string_view>> GetCommonShaderDefines() override;
 
 	struct Settings
 	{
 		uint enableLinearLighting = false;
 		uint enableACEScg = false;
-		uint colorEncoding = static_cast<uint>(ColorEncoding::SRGB);
-		uint vanillaTextureEncoding = static_cast<uint>(ColorEncoding::SRGB);
 
 		// Lighting multipliers
 		float vanillaDiffuseColorMult = 1.0f;
@@ -62,9 +54,7 @@ struct LinearLighting : Feature
 
 	struct alignas(16) PerFrameData
 	{
-		uint enableLinearLighting;
-		uint enableACEScg;
-		uint deliveryEncoding;  // 0 = Linear (CS PostProcessing), 1 = Gamma22 (ENB / vanilla ISHDR)
+		uint isMainOrLoadingMenu;
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
@@ -76,15 +66,15 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
-	float currentEmissiveMult = 1.0f;
-
 	/** @brief Draws the ImGui settings UI for color management and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
-	virtual void SetupResources() override;
+	virtual void PostSetupResources() override;
+	virtual void ClearShaderCache() override;
+	virtual void ModifySharedLighting(SharedLighting& lighting) override;
+	virtual void Load() override;
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
@@ -94,40 +84,18 @@ struct LinearLighting : Feature
 	/** @brief Populates and returns the per-frame constant buffer data with color-management and multiplier settings. */
 	PerFrameData GetCommonBufferData();
 
-	bool IsColorManagementEnabled() const;
-	ColorEncoding GetColorEncoding() const;
-	ColorManagement::ColorSpace GetInputColorSpace() const;
-	ColorEncoding GetTextureInputEncoding() const;
-	ColorManagement::ColorSpace GetLightColorSpace(const RE::NiLight* light) const;
-	RE::NiColor DecodeColor(RE::NiColor color) const;
-	void DecodeColor(float* color) const;
-	RE::NiColor ConvertColorToWorkingSpace(RE::NiColor color, ColorManagement::ColorSpace sourceSpace) const;
-	void ConvertColorToWorkingSpace(float* color, ColorManagement::ColorSpace sourceSpace) const;
-	RE::NiColor ConvertLightColorToWorkingSpace(const RE::NiLight* light, RE::NiColor color) const;
-	void ConvertLightColorToWorkingSpace(const RE::NiLight* light, float* color) const;
-	void SetLightColor(RE::NiLight* light, ColorManagement::ColorValue color);
-	void ClearLightColorSpace(const RE::NiLight* light);
-	void TrackMappedColorBuffer(ID3D11Resource* resource, D3D11_MAPPED_SUBRESOURCE* mappedResource);
-	void ConvertMappedColorBuffer(ID3D11Resource* resource);
-	void BeginPassColorManagement(RE::BSRenderPass* pass, RE::BSShader::Type shaderType);
-	void EndPassColorManagement();
-
-	void PrepareLightColorManagement(RE::BSRenderPass* a_pass);
-	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	bool IsLinearLightingActive() const;
+	bool IsACEScgActive() const { return IsLinearLightingActive() && configuredACEScg; }
+	RE::NiColor SRGBToWorking(RE::NiColor color) const;
+	void SRGBToWorking(float* color) const;
+	RE::NiColor LightColorToWorking(const RE::NiLight* light, bool effect = false) const;
+	void SetSunlightColor(RE::NiLight* light, RE::NiColor color);
+	void ClearSunlightColor(const RE::NiLight* light);
 
 private:
-	struct LightColorSpaceOverride
-	{
-		RE::NiColor value;
-		ColorManagement::ColorSpace space;
-	};
+	const RE::NiLight* workingSunlight = nullptr;
+	RE::NiColor workingSunlightColor{};
 
-	std::string baseVersion;
-	uint lastShaderCacheFingerprint = 0xFFFFFFFF;
-	void UpdateShaderCacheSettings();
-
-	std::array<ColorManagement::ColorSpace, 8> currentLightColorSpaces{};
-	std::unordered_map<const RE::NiLight*, LightColorSpaceOverride> lightColorSpaceOverrides;
-	ColorEncoding startupTextureInputEncoding = ColorEncoding::SRGB;
-	bool textureInputEncodingCaptured = false;
+	bool configuredLinearLighting = false;
+	bool configuredACEScg = false;
 };

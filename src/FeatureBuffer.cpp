@@ -45,13 +45,10 @@ std::pair<unsigned char*, size_t> _GetFeatureBufferData(Ts... feat_datas)
 
 std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 {
-	auto dynamicCubemapSettings = globals::features::dynamicCubemaps.settings;
-	globals::features::linearLighting.DecodeColor(&dynamicCubemapSettings.CubemapColor.x);
-
 	return _GetFeatureBufferData(
 		globals::features::grassLighting.settings,
 		globals::features::extendedMaterials.settings,
-		dynamicCubemapSettings,
+		globals::features::dynamicCubemaps.GetCommonBufferData(),
 		globals::features::terrainShadows.GetCommonBufferData(),
 		globals::features::lightLimitFix.GetCommonBufferData(),
 		globals::features::wetnessEffects.GetCommonBufferData(),
@@ -69,7 +66,7 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::truePBR.settings,
 		globals::features::screenSpaceGI.GetCommonBufferData(),
 		globals::features::screenSpaceReflections.GetCommonBufferData(),
-		globals::features::postProcessing.settings,
+		globals::features::postProcessing.GetCommonBufferData(),
 		globals::features::skin.GetCommonBufferData(),
 		globals::features::screenSpacePointLightShadows.GetCommonBufferData(),
 		globals::features::vanillaFresnel.settings,

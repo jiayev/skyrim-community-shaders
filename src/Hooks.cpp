@@ -16,12 +16,10 @@
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
 #include "Features/LightLimitFix.h"
-#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
-#include "Features/TextureColorManagement.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
@@ -32,7 +30,6 @@ namespace
 	using ShaderBytecode = std::vector<std::uint8_t>;
 
 	std::unordered_map<void*, std::shared_ptr<const ShaderBytecode>> ShaderBytecodeMap;
-	std::unordered_map<void*, std::unordered_map<std::string, bool>> ShaderConstantMap;
 	std::mutex ShaderBytecodeMutex;
 	std::mutex ShaderDumpMutex;
 
@@ -60,7 +57,6 @@ void RegisterShaderBytecode(void* Shader, const void* Bytecode, size_t BytecodeL
 	logger::debug(fmt::runtime("Saving shader at index {:x} with {} bytes:\t{:x}"), (std::uintptr_t)Shader, BytecodeLength, (std::uintptr_t)Bytecode);
 	std::scoped_lock lock(ShaderBytecodeMutex);
 	ShaderBytecodeMap.insert_or_assign(Shader, std::move(codeCopy));
-	ShaderConstantMap.erase(Shader);
 }
 
 std::shared_ptr<const ShaderBytecode> GetShaderBytecode(void* Shader)
@@ -69,39 +65,6 @@ std::shared_ptr<const ShaderBytecode> GetShaderBytecode(void* Shader)
 	std::scoped_lock lock(ShaderBytecodeMutex);
 	const auto entry = ShaderBytecodeMap.find(Shader);
 	return entry == ShaderBytecodeMap.end() ? nullptr : entry->second;
-}
-
-bool Hooks::HasShaderConstant(void* shader, std::string_view bufferName, std::string_view variableName)
-{
-	if (!shader)
-		return false;
-
-	const std::string key = std::format("{}::{}", bufferName, variableName);
-	std::scoped_lock lock(ShaderBytecodeMutex);
-	auto& constants = ShaderConstantMap[shader];
-	if (const auto cached = constants.find(key); cached != constants.end())
-		return cached->second;
-
-	const auto bytecode = ShaderBytecodeMap.find(shader);
-	if (bytecode == ShaderBytecodeMap.end())
-		return constants.emplace(key, false).first->second;
-
-	winrt::com_ptr<ID3D11ShaderReflection> reflector;
-	if (FAILED(D3DReflect(bytecode->second->data(), bytecode->second->size(), IID_PPV_ARGS(&reflector))))
-		return constants.emplace(key, false).first->second;
-
-	auto* constantBuffer = reflector->GetConstantBufferByName(std::string(bufferName).c_str());
-	D3D11_SHADER_BUFFER_DESC bufferDesc{};
-	if (!constantBuffer || FAILED(constantBuffer->GetDesc(&bufferDesc)))
-		return constants.emplace(key, false).first->second;
-
-	for (std::uint32_t index = 0; index < bufferDesc.Variables; ++index) {
-		D3D11_SHADER_VARIABLE_DESC variableDesc{};
-		if (auto* variable = constantBuffer->GetVariableByIndex(index); variable && SUCCEEDED(variable->GetDesc(&variableDesc)) && std::string_view(variableDesc.Name) == variableName)
-			return constants.emplace(key, true).first->second;
-	}
-
-	return constants.emplace(key, false).first->second;
 }
 
 template <class ShaderType>
@@ -220,7 +183,9 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 	state->customPixelShader = nullptr;
 	bool shaderFound = func(shader, vertexDescriptor, pixelDescriptor, skipPixelShader);
 
-	if (!shaderFound && shader->shaderType.get() != RE::BSShader::Type::Effect) {
+	const auto type = shader->shaderType.get();
+	if (!shaderFound && shaderCache->IsEnabled() && type > 0 && type < RE::BSShader::Type::Total &&
+		state->enabledClasses[type - 1] && type != RE::BSShader::Type::Effect) {
 		RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*shader, state->modifiedVertexDescriptor);
 		RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*shader, state->modifiedPixelDescriptor);
 		if (vertexShader == nullptr || (!skipPixelShader && pixelShader == nullptr)) {
@@ -256,11 +221,7 @@ namespace LightingExtensions
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
 			globals::state->UpdateLightingShaderPermutation(pass);
-			auto& linearLighting = globals::features::linearLighting;
-			linearLighting.BSLightingShader_SetupGeometry(pass);
-			linearLighting.BeginPassColorManagement(pass, RE::BSShader::Type::Lighting);
 			func(shader, pass, renderFlags);
-			linearLighting.EndPassColorManagement();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -272,27 +233,9 @@ namespace EffectExtensions
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
-			auto& linearLighting = globals::features::linearLighting;
-			linearLighting.BeginPassColorManagement(pass, RE::BSShader::Type::Effect);
 			func(shader, pass, renderFlags);
-			linearLighting.EndPassColorManagement();
 			ExternalEmittance::UpdatePermutation(pass);
 			globals::state->permutationData.EffectRadius = pass->geometry->worldBound.radius;
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-}
-
-namespace WaterExtensions
-{
-	struct BSWaterShader_SetupGeometry
-	{
-		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
-		{
-			auto& linearLighting = globals::features::linearLighting;
-			linearLighting.BeginPassColorManagement(pass, RE::BSShader::Type::Water);
-			func(shader, pass, renderFlags);
-			linearLighting.EndPassColorManagement();
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -377,65 +320,6 @@ namespace WaterBlendHistory
 	};
 }
 
-namespace ImageSpaceColorManagement
-{
-	constexpr std::size_t VOLUMETRIC_LIGHTING_COLOR = 0;
-	constexpr std::size_t FOG_NEAR_COLOR = 4;
-	constexpr std::size_t FOG_FAR_COLOR = 8;
-
-	template <std::size_t... ColorOffsets>
-	class ScopedInputColors
-	{
-	public:
-		explicit ScopedInputColors(RE::ImageSpaceEffectParam* param)
-		{
-			shaderParam = skyrim_cast<RE::ImageSpaceShaderParam*>(param);
-			const auto imageSpaceClass = static_cast<std::size_t>(RE::BSShader::Type::ImageSpace) - 1;
-			if (!globals::features::linearLighting.IsColorManagementEnabled() ||
-				imageSpaceClass >= std::size(globals::state->enabledClasses) ||
-				!globals::state->enabledClasses[imageSpaceClass] || !shaderParam || !shaderParam->pixelConstantGroup ||
-				!((ColorOffsets + 3 <= shaderParam->pixelConstantGroupSize) && ...))
-				return;
-
-			constexpr std::array offsets{ ColorOffsets... };
-			for (std::size_t index = 0; index < offsets.size(); ++index) {
-				auto* color = shaderParam->pixelConstantGroup + offsets[index];
-				std::copy_n(color, 3, originalColors[index].data());
-				auto& linearLighting = globals::features::linearLighting;
-				linearLighting.ConvertColorToWorkingSpace(color, linearLighting.GetInputColorSpace());
-			}
-			active = true;
-		}
-
-		~ScopedInputColors()
-		{
-			if (!active)
-				return;
-
-			constexpr std::array offsets{ ColorOffsets... };
-			for (std::size_t index = 0; index < offsets.size(); ++index)
-				std::copy_n(originalColors[index].data(), 3, shaderParam->pixelConstantGroup + offsets[index]);
-		}
-
-	private:
-		RE::ImageSpaceShaderParam* shaderParam = nullptr;
-		std::array<std::array<float, 3>, sizeof...(ColorOffsets)> originalColors{};
-		bool active = false;
-	};
-
-	template <RE::ImageSpaceManager::ImageSpaceEffectEnum EffectType, std::size_t... ColorOffsets>
-	struct BSImagespaceShader_Render
-	{
-		static void thunk(void* imageSpaceShader, RE::BSTriShape* shape, RE::ImageSpaceEffectParam* param)
-		{
-			const ScopedInputColors<ColorOffsets...> inputColors(param);
-			func(imageSpaceShader, shape, param);
-		}
-
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-}
-
 namespace WeatherExtensions
 {
 	struct Sky_UpdateColors
@@ -466,24 +350,6 @@ namespace WeatherExtensions
 				}
 			}
 
-			auto& linearLighting = globals::features::linearLighting;
-			if (linearLighting.IsColorManagementEnabled()) {
-				Effects11::DirectionalAmbientColors converted = DirectionalAmbientColors;
-				for (auto& axis : converted.directionalAmbientColors) {
-					for (auto& color : axis)
-						color = linearLighting.DecodeColor(color);
-				}
-
-				RE::NiColor convertedSpecularTint{};
-				auto* specularTint = AmbientSpecularTint;
-				if (AmbientSpecularTint) {
-					convertedSpecularTint = linearLighting.DecodeColor(*AmbientSpecularTint);
-					specularTint = &convertedSpecularTint;
-				}
-
-				func(converted, specularTint, AmbientSpecularFresnel);
-				return;
-			}
 			func(DirectionalAmbientColors, AmbientSpecularTint, AmbientSpecularFresnel);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -533,8 +399,6 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
-		globals::state->Reset();
-
 		HRESULT retval = globals::features::hdrDisplay.HandleSwapChainPresent(
 			This,
 			SyncInterval,
@@ -544,6 +408,7 @@ struct IDXGISwapChain_Present
 			});
 
 		globals::features::screenshotFeature.ProcessCaptureRequest();
+		globals::state->Reset();
 
 		TracyD3D11Collect(globals::state->tracyCtx);
 
@@ -613,7 +478,7 @@ HRESULT WINAPI hk_D3D11CreateDeviceAndSwapChain(
 void Hooks::BSGraphics_SetDirtyStates::thunk(bool isCompute)
 {
 	func(isCompute);
-	globals::state->Draw(isCompute);
+	globals::state->Draw();
 }
 
 struct ID3D11Device_CreateVertexShader
@@ -1069,7 +934,7 @@ namespace Hooks
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
 
-				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+				if (shaderCache->IsEnabled() && state->enabledClasses[static_cast<size_t>(RE::BSShader::Type::ImageSpace) - 1]) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
 					if (vl.loaded) {
@@ -1159,8 +1024,6 @@ namespace Hooks
 	 */
 	void Install()
 	{
-		logger::info("Hooking texture color management");
-		TextureColorManagement::InstallHooks();
 		logger::info("Hooking BSImageSpace::Init::IBLF");
 		stl::detour_thunk<BSImageSpace_Init_IBLF>(REL::RelocationID(100480, 107198));
 
@@ -1211,24 +1074,6 @@ namespace Hooks
 		logger::info("Hooking BSImagespaceShader");
 		stl::detour_thunk<CSShadersSupport::BSImagespaceShader_DispatchComputeShader>(REL::RelocationID(100952, 107734));
 		stl::write_vfunc<0x1, WaterBlendHistory::BSImagespaceShader_Render>(RE::VTABLE_BSImagespaceShaderISWaterBlend[3]);
-		stl::write_vfunc<0x1,
-			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeFog,
-				ImageSpaceColorManagement::FOG_NEAR_COLOR,
-				ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-			RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
-		stl::write_vfunc<0x1,
-			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog,
-				ImageSpaceColorManagement::FOG_NEAR_COLOR,
-				ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-			RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
-		stl::write_vfunc<0x1,
-			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeVolumetricLighting,
-				ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
-			RE::VTABLE_BSImagespaceShaderISCompositeVolumetricLighting[3]);
-		stl::write_vfunc<0x1,
-			ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeLensFlareVolumetricLighting,
-				ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
-			RE::VTABLE_BSImagespaceShaderISCompositeLensFlareVolumetricLighting[3]);
 
 		LegacyGraphicsCompatibility::Install();
 
@@ -1251,7 +1096,6 @@ namespace Hooks
 		logger::info("Installing SetupGeometry hooks");
 		stl::write_vfunc<0x6, LightingExtensions::BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 		stl::write_vfunc<0x6, EffectExtensions::BSEffectShader_SetupGeometry>(RE::VTABLE_BSEffectShader[0]);
-		stl::write_vfunc<0x6, WaterExtensions::BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 		stl::write_vfunc<0x6, SkyExtensions::BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 		stl::write_thunk_call<GrassExtensions::BSGrassShaderProperty_ctor>(REL::RelocationID(15214, 15383).address() + Util::VersionedRelocation::Select(0x45B, 0x4F5, 0x4FD));
 		stl::write_vfunc<0x6, GrassExtensions::BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);

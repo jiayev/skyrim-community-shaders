@@ -44,7 +44,7 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(LENS_FLARE)
 	float3 lensFlareColor = LFSourceTex.Sample(LFSourceSampler, input.TexCoord).xyz;
 #		if defined(ENABLE_LL)
-	color += Color::GameGammaToLinear(lensFlareColor);
+	color += TransferFunctions::GameGammaToLinear(lensFlareColor);
 #		else
 	color += lensFlareColor;
 #		endif

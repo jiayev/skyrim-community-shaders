@@ -5,7 +5,7 @@
 
 namespace TransferFunctions
 {
-	static const float GAME_GAMMA = 1.6;
+	static const float GAME_GAMMA = 1.8;
 	static const float GAME_GAMMA_INV = 1.0 / GAME_GAMMA;
 	static const float GAMMA_22 = 2.2;
 	static const float GAMMA_22_INV = 1.0 / GAMMA_22;

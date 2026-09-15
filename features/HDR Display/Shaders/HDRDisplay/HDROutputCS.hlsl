@@ -45,9 +45,9 @@ cbuffer PerFrame : register(b0)
 		bool sceneIsLinear = isSceneLinear > 0.5 || postProcessOutput;
 
 		if (applyAutoHDR > 0.5) {
-			float3 outputColor = sceneIsLinear ? scene.xyz : Color::SignedGamma22ToLinear(scene.xyz);
+			float3 outputColor = sceneIsLinear ? scene.xyz : TransferFunctions::SignedGamma22ToLinear(scene.xyz);
 			outputColor = DisplayMapping::PumboAutoHDR(outputColor, SharedData::HDRData.z, SharedData::HDRData.y, 2.75, 1.0);
-			scene.xyz = sceneIsLinear ? outputColor : Color::LinearToSignedGamma22(outputColor);
+			scene.xyz = sceneIsLinear ? outputColor : TransferFunctions::LinearToSignedGamma22(outputColor);
 		}
 
 		float3 compositedColorLinear;
@@ -57,7 +57,7 @@ cbuffer PerFrame : register(b0)
 			if (skipUI) {
 				compositedColorLinear = sceneLinear;
 			} else {
-				float3 uiLinear = Color::Gamma22ToLinear(max(0.0, ui.rgb));
+				float3 uiLinear = TransferFunctions::Gamma22ToLinear(max(0.0, ui.rgb));
 				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
 					uiLinear *= uiBrightness;
@@ -77,9 +77,9 @@ cbuffer PerFrame : register(b0)
 				float3 uiGamma22 = ui.rgb;
 				if (!isMainLoading) {  // UI and scene can't be separated in main menu or loading screen
 					// scale UI brightness (multiplier based on paperWhite)
-					float3 uiLinear = Color::Gamma22ToLinear(max(0, uiGamma22));
+					float3 uiLinear = TransferFunctions::Gamma22ToLinear(max(0, uiGamma22));
 					uiLinear *= uiBrightness;
-					uiGamma22 = Color::LinearToGamma22(uiLinear);
+					uiGamma22 = TransferFunctions::LinearToGamma22(uiLinear);
 				}
 #if 0
             if (fgTweenMenuMidAlphaBoost > 0.5 && ui.a > 1e-3) {
@@ -93,12 +93,12 @@ cbuffer PerFrame : register(b0)
 			}
 
 			// Non-LL path: ISHDR output is gamma 2.2-encoded at this stage.
-			compositedColorLinear = Color::SignedGamma22ToLinear(compositedColorGamma22);
+			compositedColorLinear = TransferFunctions::SignedGamma22ToLinear(compositedColorGamma22);
 		}
 
 		if (previewSDR > 0.5) {
 			// Crop preview lives in the SDR menu buffer: emit gamma 2.2 instead of PQ.
-			finalColor = saturate(Color::LinearToGamma22(max(0.0, compositedColorLinear)));
+			finalColor = saturate(TransferFunctions::LinearToGamma22(max(0.0, compositedColorLinear)));
 		} else {
 			if (!postProcessOutput)
 				compositedColorLinear = Color::BT709ToBT2020(compositedColorLinear);

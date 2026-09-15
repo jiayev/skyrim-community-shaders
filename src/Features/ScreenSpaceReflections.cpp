@@ -300,6 +300,7 @@ void ScreenSpaceReflections::SetupResources()
 
 void ScreenSpaceReflections::ClearShaderCache()
 {
+	resetReblurHistory = true;
 	outputReady = false;
 	prefilterHiZDepthCompute = nullptr;
 	prefilterHiZMipsCompute = nullptr;

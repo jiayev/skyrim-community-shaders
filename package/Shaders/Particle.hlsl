@@ -184,6 +184,10 @@ VS_OUTPUT main(VS_INPUT input)
 		colorTmp1 = 0;
 		colorTmp2 = fVars1.x;
 	}
+#		if !defined(GRAYSCALE_TO_COLOR)
+	color1.rgb = ColorManagement::SRGBToWorking(color1.rgb);
+	color2.rgb = ColorManagement::SRGBToWorking(color2.rgb);
+#		endif
 	float colorParam = (tmp1 - colorTmp1) / (colorTmp2 - colorTmp1);
 	float4 color = lerp(color1, color2, colorParam);
 
@@ -308,7 +312,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 workingReflection = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, reflectDir, 0).xyz;
 		float3 workingRefraction = DynamicCubemaps::EnvReflectionsTexture.SampleLevel(SampSourceTexture, refractDir, 0).xyz;
 
-		psout.Color.xyz = ColorManagement::WorkingColor::LerpInLinear(workingRefraction, workingReflection, fresnel);
+		psout.Color.xyz = ColorManagement::SceneColor::LerpInLinear(workingRefraction, workingReflection, fresnel);
 		psout.Color.w = alpha;
 		psout.Normal = float4(0, 1, 0, alpha);
 		return psout;
@@ -320,13 +324,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(GRAYSCALE_TO_COLOR)
 	baseColor = input.Color * sourceColor;
 #	else
-	baseColor.xyz = input.Color.xyz * ColorManagement::AlbedoTextureToWorking(sourceColor.xyz);
+	baseColor.xyz = input.Color.xyz * Color::Albedo(ColorManagement::TextureToWorking(sourceColor.xyz));
 	baseColor.w = input.Color.w * sourceColor.w;
 #	endif
 #	if defined(GRAYSCALE_TO_COLOR)
 	float3 grayScaleColor =
 		TexGrayscaleTexture.Sample(SampGrayscaleTexture, float2(sourceColor.y, input.Color.x)).xyz;
-	baseColor.xyz = ColorManagement::DecodedColorTextureToWorking(grayScaleColor);
+	baseColor.xyz = ColorManagement::TextureToWorking(grayScaleColor);
 #	endif
 #	if defined(GRAYSCALE_TO_ALPHA)
 	float grayScaleAlpha =
@@ -393,6 +397,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Normal.w = baseColor.w;
 	psout.Normal.xyz = float3(0, 1, 0);
 
+#	if defined(ENABLE_LL)
+	if (!Permutation::RenderToUI || (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection)) {
+#		if !defined(ENVCUBE)
+		if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::SourceAlphaBlend)
+#		endif
+			psout.Color.w = pow(saturate(psout.Color.w), TransferFunctions::GAME_GAMMA);
+	}
+	if (Permutation::RenderToUI && !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection))
+		psout.Color.rgb = ColorManagement::WorkingToUI(psout.Color.rgb);
+#	endif
 	return psout;
 }
 #endif

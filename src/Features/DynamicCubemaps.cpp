@@ -6,10 +6,18 @@
 
 #include "Deferred.h"
 #include "I18n/I18n.h"
+#include "LinearLighting.h"
 #include "PhysicalSky.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+
+DynamicCubemaps::Settings DynamicCubemaps::GetCommonBufferData() const
+{
+	auto data = settings;
+	globals::features::linearLighting.SRGBToWorking(&data.CubemapColor.x);
+	return data;
+}
 
 #define I18N_KEY_PREFIX "feature.dynamic_cubemaps."
 
@@ -178,6 +186,9 @@ bool MenuOpenCloseEventHandler::Register()
 
 void DynamicCubemaps::ClearShaderCache()
 {
+	resetCapture[0] = resetCapture[1] = true;
+	cubemapValid[0] = cubemapValid[1] = false;
+	nextTask = NextTask::kCaptureInferAndIrradianceA;
 	if (updateCubemapCS) {
 		updateCubemapCS->Release();
 		updateCubemapCS = nullptr;
@@ -533,6 +544,7 @@ void DynamicCubemaps::CompressToBC6H(bool a_reflections)
 
 	auto dst = a_reflections ? envReflectionsTextureBC6H : envTextureBC6H;
 	context->CopyResource(dst->resource.get(), bc6hScratchTexture->resource.get());
+	cubemapValid[a_reflections ? 1 : 0] = true;
 }
 
 /**
@@ -571,6 +583,13 @@ void DynamicCubemaps::UpdateCubemap()
 			shaderCache->Clear(RE::BSShader::Types::ImageSpace);
 		recompileFlag = false;
 	}
+
+	if (!GetComputeShaderUpdate() || !GetComputeShaderInferrence() || !GetComputeShaderSpecularIrradiance() || !GetComputeShaderBC6HEncode())
+		return;
+	if (activeReflections && !(fakeReflections ?
+									 (GetComputeShaderUpdateFakeReflections() && GetComputeShaderInferrenceFakeReflections()) :
+									 (GetComputeShaderUpdateReflections() && GetComputeShaderInferrenceReflections())))
+		return;
 
 	static constexpr uint32_t kIrradianceSplit = 2;
 	static constexpr uint32_t kIrradianceSplitB = MIPLEVELS - 1;
@@ -619,8 +638,8 @@ void DynamicCubemaps::PostDeferred()
 	auto context = globals::d3d::context;
 
 	ID3D11ShaderResourceView* views[2] = {
-		(activeReflections ? envReflectionsTextureBC6H : envTextureBC6H)->srv.get(),
-		envTextureBC6H->srv.get()
+		cubemapValid[activeReflections ? 1 : 0] ? (activeReflections ? envReflectionsTextureBC6H : envTextureBC6H)->srv.get() : nullptr,
+		cubemapValid[0] ? envTextureBC6H->srv.get() : nullptr
 	};
 	context->PSSetShaderResources(30, 2, views);
 }

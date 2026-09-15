@@ -4,7 +4,6 @@
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"
 
 #include "Features/InteriorSun.h"
-#include "Features/TextureColorManagement.h"
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -805,10 +804,6 @@ struct BSLightingShaderProperty_GetRenderPasses
 
 bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material)
 {
-	TextureColorManagement::ResetBindingContracts();
-	const auto standardColor = [](TextureColorManagement::AlphaMode alphaMode = TextureColorManagement::AlphaMode::Data) {
-		return TextureColorManagement::TextureContract::Color(TextureColorManagement::EncodingRule::SRGB, alphaMode);
-	};
 	using enum SIE::ShaderCache::LightingShaderTechniques;
 
 	const auto& lightingPSConstants = ShaderConstants::LightingPS::Get();
@@ -832,7 +827,6 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureIndex) {
 				if (pbrMaterial->landscapeBaseColorTextures[textureIndex] != nullptr) {
 					shadowState->SetPSTexture(textureIndex, pbrMaterial->landscapeBaseColorTextures[textureIndex]->rendererTexture);
-					TextureColorManagement::SetBindingContract(textureIndex, pbrMaterial->landscapeBaseColorTextures[textureIndex]->rendererTexture->resourceView, standardColor(TextureColorManagement::AlphaMode::Opacity));
 					shadowState->SetPSTextureAddressMode(textureIndex, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
 					shadowState->SetPSTextureFilterMode(textureIndex, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 				}
@@ -852,14 +846,12 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 
 			if (pbrMaterial->terrainOverlayTexture != nullptr) {
 				shadowState->SetPSTexture(13, pbrMaterial->terrainOverlayTexture->rendererTexture);
-				TextureColorManagement::SetBindingContract(13, pbrMaterial->terrainOverlayTexture->rendererTexture->resourceView, standardColor(TextureColorManagement::AlphaMode::Opacity));
 				shadowState->SetPSTextureAddressMode(13, RE::BSGraphics::TextureAddressMode::kClampSClampT);
 				shadowState->SetPSTextureFilterMode(13, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 			}
 
 			if (pbrMaterial->terrainNoiseTexture != nullptr) {
 				shadowState->SetPSTexture(15, pbrMaterial->terrainNoiseTexture->rendererTexture);
-				TextureColorManagement::SetBindingContract(15, pbrMaterial->terrainNoiseTexture->rendererTexture->resourceView, TextureColorManagement::TextureContract::Data());
 				shadowState->SetPSTextureAddressMode(15, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
 				shadowState->SetPSTextureFilterMode(15, RE::BSGraphics::TextureFilterMode::kBilinear);
 			}
@@ -910,21 +902,13 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			}
 		} else if (lightingType == None || lightingType == TreeAnim) {
 			auto* pbrMaterial = static_cast<const BSLightingShaderMaterialPBR*>(material);
-			const auto baseColorContract = standardColor(
-				(lightingFlags & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::DoAlphaTest)) ?
-					TextureColorManagement::AlphaMode::Coverage :
-					TextureColorManagement::AlphaMode::Opacity);
 			CHECK_PBR_TEXTURE(diffuseTexture);
 			CHECK_PBR_TEXTURE(normalTexture);
 			CHECK_PBR_TEXTURE(rmaosTexture);
 			if (pbrMaterial->diffuseRenderTargetSourceIndex != -1) {
 				shadowState->SetPSTexture(0, renderer->GetRuntimeData().renderTargets[pbrMaterial->diffuseRenderTargetSourceIndex]);
-				TextureColorManagement::SetBindingContract(
-					0, renderer->GetRuntimeData().renderTargets[pbrMaterial->diffuseRenderTargetSourceIndex].SRV,
-					TextureColorManagement::TextureContract::Color(TextureColorManagement::EncodingRule::Linear, TextureColorManagement::AlphaMode::Opacity));
 			} else {
 				shadowState->SetPSTexture(0, pbrMaterial->diffuseTexture->rendererTexture);
-				TextureColorManagement::SetBindingContract(0, pbrMaterial->diffuseTexture->rendererTexture->resourceView, baseColorContract);
 			}
 			shadowState->SetPSTextureAddressMode(0, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 			shadowState->SetPSTextureFilterMode(0, RE::BSGraphics::TextureFilterMode::kAnisotropic);
@@ -1023,7 +1007,6 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			const bool hasEmissive = pbrMaterial->emissiveTexture != nullptr && pbrMaterial->emissiveTexture != graphicsState->GetRuntimeData().defaultTextureBlack;
 			if (hasEmissive) {
 				shadowState->SetPSTexture(6, pbrMaterial->emissiveTexture->rendererTexture);
-				TextureColorManagement::SetBindingContract(6, pbrMaterial->emissiveTexture->rendererTexture->resourceView, standardColor());
 				shadowState->SetPSTextureAddressMode(6, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 				shadowState->SetPSTextureFilterMode(6, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
@@ -1042,7 +1025,6 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			const bool hasFeaturesTexture0 = pbrMaterial->featuresTexture0 != nullptr && pbrMaterial->featuresTexture0 != graphicsState->GetRuntimeData().defaultTextureWhite;
 			if (hasFeaturesTexture0) {
 				shadowState->SetPSTexture(12, pbrMaterial->featuresTexture0->rendererTexture);
-				TextureColorManagement::SetBindingContract(12, pbrMaterial->featuresTexture0->rendererTexture->resourceView, standardColor());
 				shadowState->SetPSTextureAddressMode(12, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 				shadowState->SetPSTextureFilterMode(12, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 
@@ -1052,8 +1034,6 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 			const bool hasFeaturesTexture1 = pbrMaterial->featuresTexture1 != nullptr && pbrMaterial->featuresTexture1 != graphicsState->GetRuntimeData().defaultTextureWhite;
 			if (hasFeaturesTexture1) {
 				shadowState->SetPSTexture(9, pbrMaterial->featuresTexture1->rendererTexture);
-				if (pbrMaterial->pbrFlags.any(PBRFlags::Fuzz))
-					TextureColorManagement::SetBindingContract(9, pbrMaterial->featuresTexture1->rendererTexture->resourceView, standardColor());
 				shadowState->SetPSTextureAddressMode(9, static_cast<RE::BSGraphics::TextureAddressMode>(pbrMaterial->textureClampMode));
 				shadowState->SetPSTextureFilterMode(9, RE::BSGraphics::TextureFilterMode::kAnisotropic);
 

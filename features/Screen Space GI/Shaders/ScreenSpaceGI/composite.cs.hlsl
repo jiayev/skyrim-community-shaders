@@ -42,10 +42,10 @@ float3 SampleSSGIIL(uint2 pixCoord)
 	if (depth >= 1.0 - 1e-6)
 		return;
 
-	float3 linAlbedo = ColorManagement::StorageToWorking(AlbedoTexture[dispatchID.xy] / Color::PBRLightingScale);
+	float3 linAlbedo = ColorManagement::SceneToLinear(AlbedoTexture[dispatchID.xy] / Color::PBRLightingScale);
 	float3 ssgiIl = SampleSSGIIL(dispatchID.xy);
 
 	float4 mainColor = MainRW[dispatchID.xy];
-	mainColor.xyz = ColorManagement::WorkingColor::ScaleAndAddLinear(mainColor.xyz, 1.0, ssgiIl * linAlbedo);
+	mainColor.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(mainColor.xyz, 1.0, ssgiIl * linAlbedo);
 	MainRW[dispatchID.xy] = mainColor;
 }
