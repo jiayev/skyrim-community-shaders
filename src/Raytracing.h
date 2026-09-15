@@ -67,6 +67,7 @@ public:
 	CreationEngineRaytracing::Mode Mode() const;
 	bool IsPathTracing() const;
 	bool IsPathTracingCull() const;
+	void UpdateJitter(float2 a_jitter);
 
 	void GetRayReconstructionInputs(ID3D11Resource*& diffuseAlbedo, ID3D11Resource*& specularAlbedo,
 		ID3D11Resource*& normalRoughness, ID3D11Resource*& specHitDist);

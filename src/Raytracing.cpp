@@ -94,6 +94,16 @@ bool Raytracing::IsPathTracingCull() const
 		&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 }
 
+void Raytracing::UpdateJitter(float2 a_jitter)
+{
+	if (!initialized)
+		return;
+
+	creationEngineRaytracing->UpdateJitter(a_jitter);
+	
+	logger::info("Jitter: [{}, {}]", a_jitter.x, a_jitter.y);
+}
+
 void Raytracing::GetRayReconstructionInputs(ID3D11Resource*& diffuseAlbedo, ID3D11Resource*& specularAlbedo,
 	ID3D11Resource*& normalRoughness, ID3D11Resource*& specHitDist)
 {
