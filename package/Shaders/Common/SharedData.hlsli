@@ -430,7 +430,7 @@ namespace SharedData
 
 		// GENERAL
 		uint enabled;  //
-		int tonemapper;
+		float pad;
 		float vanillaMix;
 
 		// WORLD

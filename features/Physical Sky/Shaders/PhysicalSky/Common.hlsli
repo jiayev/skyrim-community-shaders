@@ -366,17 +366,10 @@ Texture3D<float4> TexApSunLut : register(t113);
 #	ifndef PS_DEFERRED_RSRCS
 	float3 SampleSky(float3 viewDir, float shadow, SamplerState sampSv)
 	{
-		SharedData::PhysSkyData data = SharedData::physSkyData;
-
 		const float2 skyLutUv = SkyViewLutUv(viewDir);
 		float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
 		skyColor *= 1 - shadow;
-
-		if (data.tonemapper == 1)
-			skyColor = TransferFunctions::LinearToGameGamma(skyColor);
-		else if (data.tonemapper == 2)
-			skyColor = skyColor / (1 + skyColor);
 
 		return skyColor;
 	}
@@ -386,14 +379,14 @@ Texture3D<float4> TexApSunLut : register(t113);
 		return SampleSky(viewDir, GetApShadow(pxCoord), sampSv);
 	}
 
-	float3 SampleTr(float3 sunDir, SamplerState sampSv)
+	float3 SampleTr(float3 lightDir, SamplerState sampSv)
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
 		if (data.trMix < 1e-8)
 			return 1;
 
-		float3 tr = SampleAtmosphereLightTr(TexTrLut, sampSv, float3(0, 0, data.zCameraPlanet), sunDir);
+		float3 tr = SampleAtmosphereLightTr(TexTrLut, sampSv, float3(0, 0, data.zCameraPlanet), lightDir);
 		tr = lerp(1, tr, data.trMix);
 
 		return tr;
@@ -508,11 +501,6 @@ Texture3D<float4> TexApSunLut : register(t113);
 		const float3 apSun = TexApSunLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0).rgb;
 
 		apColor.rgb += apSun * (1.0 - saturate(shadow));
-
-		if (data.tonemapper == 1)
-			apColor.rgb = TransferFunctions::LinearToGameGamma(apColor.rgb);
-		else if (data.tonemapper == 2)
-			apColor.rgb = apColor.rgb / (1 + apColor.rgb);
 
 		apColor.rgb = lerp(0, apColor.rgb, data.apLumMix);
 		apColor.a = lerp(1, apColor.a, data.apTrMix);

@@ -415,12 +415,17 @@ PS_OUTPUT main(PS_INPUT input)
 			psout.Color.w = 1.0;
 		} else if (enableProceduralSun) {
 			psout.Color = 0.0f;
+		} else {
+			psout.Color.xyz *= PhysSky::SampleTr(normalize(input.WorldPosition.xyz), PhysSky::SampSv);
 		}
 		if (SharedData::physSkyData.enableVolumetricClouds && (inReflection || !SharedData::PostWaterComposite)) {
 			float2 physSkyScreenUV = input.Position.xy * SharedData::BufferDim.zw * FrameBuffer::DynamicResolutionParams2.xy;  // adjust for dynamic res
 			psout.Color.xyz = PhysSky::ApplyVolumetricCloudTransmittanceUv(psout.Color.xyz, physSkyScreenUV, PhysSky::SampSv);
 		}
 #		else
+#			if defined(HORIZFADE) || (defined(TEX) && !defined(MOONMASK))
+		psout.Color.xyz *= PhysSky::SampleTr(normalize(input.WorldPosition.xyz), PhysSky::SampSv);
+#			endif
 #			ifndef OCCLUSION
 		if (enableProceduralSun) {
 			psout.Color = 0.0f;
