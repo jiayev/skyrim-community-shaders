@@ -85,6 +85,48 @@ bool CloudFootprintHasCloud(Texture2D<float4> color, float2 position, int2 maxim
 	return opacity > 0.0;
 }
 
+bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTemporalSample result, out float opacity)
+{
+	const int2 base = int2(floor(position));
+	const float2 fraction = saturate(position - floor(position));
+	const int2 maximum = int2(VolumetricCloudBuffer[0].lowFrameDim) - 1;
+	result = (CloudTemporalSample)0;
+	opacity = 0.0;
+	CloudTemporalSample nearest = (CloudTemporalSample)0;
+	float nearestDistance = 4.0;
+	float weightSum = 0.0;
+	bool found = false;
+	[unroll] for (uint i = 0u; i < 4u; ++i)
+	{
+		const int2 pixel = clamp(base + int2(i & 1u, i >> 1u), 0, maximum);
+		const float4 metadata = TexVolLowAux[pixel];
+		if (abs(metadata.y - sceneDepth) > 0.064)
+			continue;
+		const float4 color = TexVolLowLum[pixel];
+		const float weight = color.a == 0.0 ? 0.01 :
+		                                      ((i & 1u) != 0u ? fraction.x : 1.0 - fraction.x) * (i >= 2u ? fraction.y : 1.0 - fraction.y);
+		result.color += color * weight;
+		result.metadata += metadata * weight;
+		weightSum += weight;
+		opacity = max(opacity, color.a);
+		const float2 offset = float2(pixel) - position;
+		const float distance = dot(offset, offset);
+		if (!found || distance < nearestDistance) {
+			nearest.color = color;
+			nearest.metadata = metadata;
+			nearestDistance = distance;
+		}
+		found = true;
+	}
+	if (weightSum > 0.0) {
+		result.color /= weightSum;
+		result.metadata /= weightSum;
+	} else {
+		result = nearest;
+	}
+	return found;
+}
+
 float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 {
 	const float4 rect = VolumetricCloudBuffer[0].ndfBoundaryRect;
@@ -124,6 +166,11 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	if (any(pixel >= uint2(info.activeFrameDim)))
 		return;
 	const float2 uv = CloudScreenUv(pixel);
+	const float sceneDepth = EncodeCloudDepth(SharedData::GetScreenDepth(CloudSceneDeviceDepth(pixel, 1u)));
+	const float2 currentPosition = (float2(pixel) - CloudPhaseOffset()) * 0.25;
+	CloudTemporalSample current;
+	float currentOpacity;
+	const bool currentValid = ReconstructCloudSurface(currentPosition, sceneDepth, current, currentOpacity);
 	uint2 traceDimensions;
 	TexVolLowAux.GetDimensions(traceDimensions.x, traceDimensions.y);
 	const float2 tracePixel = clamp((float2(pixel) - CloudPhaseOffset()) * 0.25 + 0.5, 0.5, info.lowFrameDim - 0.5);
@@ -138,22 +185,29 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	if (useHistory) {
 		result = ReconstructCloud(TexVolHistoryLum, TexVolHistoryAux,
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
+		useHistory = abs(sceneDepth - result.metadata.y) <= 0.064;
 		const bool traced = all((pixel & 3u) == CloudPhaseOffset());
-		if (traced) {
-			const float4 color = TexVolLowLum[pixel / 4u];
-			const float weight = CloudHistoryBlend(previousUv - uv);
-			result.color = lerp(result.color, color, weight);
-			result.metadata = lerp(result.metadata, TexVolLowAux[pixel / 4u], weight);
-		} else {
-			useHistory = abs(EncodeCloudDepth(SharedData::GetScreenDepth(CloudSceneDeviceDepth(pixel, 2u))) - result.metadata.y) <= 0.064;
+		if (useHistory && traced) {
+			const float4 metadata = TexVolLowAux[pixel / 4u];
+			const bool sampleValid = abs(metadata.y - sceneDepth) <= 0.064;
+			if (sampleValid || currentValid) {
+				const float weight = CloudHistoryBlend(previousUv - uv);
+				result.color = lerp(result.color, sampleValid ? TexVolLowLum[pixel / 4u] : current.color, weight);
+				result.metadata = lerp(result.metadata, sampleValid ? metadata : current.metadata, weight);
+			}
 		}
 		if (useHistory && result.color.a > 0.0)
-			useHistory = CloudFootprintHasCloud(TexVolLowLum,
-				(float2(pixel) - CloudPhaseOffset()) * 0.25, int2(info.lowFrameDim) - 1);
+			useHistory = currentValid ? currentOpacity > 0.0 :
+			                            CloudFootprintHasCloud(TexVolLowLum, currentPosition, int2(info.lowFrameDim) - 1);
 	}
-	if (!useHistory)
-		result = ReconstructCloud(TexVolLowLum, TexVolLowAux,
-			(float2(pixel) - CloudPhaseOffset()) * 0.25, int2(info.lowFrameDim) - 1, true);
+	if (!useHistory) {
+		if (currentValid)
+			result = current;
+		else
+			result = ReconstructCloud(TexVolLowLum, TexVolLowAux, currentPosition, int2(info.lowFrameDim) - 1, true);
+	}
+	if (useHistory || currentValid)
+		result.metadata.y = sceneDepth;
 	RWTexTr[pixel] = saturate(1.0 - result.color.a);
 	RWTexLum[pixel] = float4(clamp(result.color.rgb, 0.0, 65504.0), saturate(result.color.a));
 	RWTexAux[pixel] = result.metadata;
