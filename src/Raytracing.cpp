@@ -120,8 +120,6 @@ void Raytracing::UpdateJitter(float2 a_jitter)
 		return;
 
 	creationEngineRaytracing->UpdateJitter(a_jitter);
-	
-	logger::info("Jitter: [{}, {}]", a_jitter.x, a_jitter.y);
 }
 
 void Raytracing::GetRayReconstructionInputs(ID3D11Resource*& diffuseAlbedo, ID3D11Resource*& specularAlbedo,

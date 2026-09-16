@@ -857,19 +857,28 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 	a_consts.cameraPos = *reinterpret_cast<const sl::float3*>(&cameraPosAdjust);
 	a_consts.cameraViewToClip = *reinterpret_cast<const sl::float4x4*>(&cameraViewToClip);
 	a_consts.depthInverted = sl::Boolean::eFalse;
-
-	sl::recalculateCameraMatrices(a_consts);
-
-	// Translate between the current and previous camera-relative origins before reprojection.
-	// Streamline applies jitter separately, so both matrices remain unjittered.
-	Matrix curVP = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
-	Matrix prevVP = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
-	const auto& posAdj = globals::game::frameBufferCached.GetCameraPosAdjust();
-	const auto& prevPosAdj = globals::game::frameBufferCached.GetCameraPreviousPosAdjust();
-	Matrix camDelta = Matrix::CreateTranslation(posAdj.x - prevPosAdj.x, posAdj.y - prevPosAdj.y, posAdj.z - prevPosAdj.z);
 	a_consts.reset = sl::Boolean::eFalse;
-	Matrix clipToPrevClip = curVP.Invert() * camDelta * prevVP;
-	Matrix prevClipToClip = clipToPrevClip.Invert();
+
+	// Streamline requires row-major, unjittered matrices.
+	// The Transpose() converts the engine's matrix layout to Streamline's row-major layout.
+	const auto currentViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+	const auto previousViewProj = globals::game::frameBufferCached.GetCameraPreviousViewProjUnjittered().Transpose();
+
+	const sl::float4x4 currentViewProjSL = *reinterpret_cast<const sl::float4x4*>(&currentViewProj);
+	const sl::float4x4 previousViewProjSL = *reinterpret_cast<const sl::float4x4*>(&previousViewProj);
+
+	// clip(current) -> clip(previous), matching MotionBlur::GetSSMotionVector.
+	sl::float4x4 inverseCurrentViewProj;
+	sl::matrixFullInvert(inverseCurrentViewProj, currentViewProjSL);
+	sl::matrixMul(a_consts.clipToPrevClip, inverseCurrentViewProj, previousViewProjSL);
+
+	sl::matrixFullInvert(a_consts.prevClipToClip, a_consts.clipToPrevClip);
+
+	// This remains the inverse of the unjittered projection, not view-projection.
+	sl::matrixFullInvert(a_consts.clipToCameraView, a_consts.cameraViewToClip);
+
+	Matrix clipToPrevClip = *reinterpret_cast<const Matrix*>(&a_consts.clipToPrevClip);
+	Matrix prevClipToClip = *reinterpret_cast<const Matrix*>(&a_consts.prevClipToClip);
 
 	// Matrix::Invert() yields NaN/inf when the source is singular, which the cached view-projection
 	// is on transient frames -- a camera cut, a menu, the frame after a load. Feeding Streamline
@@ -883,6 +892,8 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 		// high-frequency detail) than one frame of slightly wrong reprojection.
 		clipToPrevClip = Matrix::Identity;
 		prevClipToClip = Matrix::Identity;
+		a_consts.clipToPrevClip = *reinterpret_cast<const sl::float4x4*>(&clipToPrevClip);
+		a_consts.prevClipToClip = *reinterpret_cast<const sl::float4x4*>(&prevClipToClip);
 		{
 			static uint32_t s_singularCount = 0u;
 			static uint32_t s_nextReport = 1u;
@@ -892,8 +903,6 @@ static bool cs_BuildConstants(sl::Constants& a_consts, uint32_t a_outputWidth, u
 			}
 		}
 	}
-	a_consts.clipToPrevClip = *reinterpret_cast<const sl::float4x4*>(&clipToPrevClip);
-	a_consts.prevClipToClip = *reinterpret_cast<const sl::float4x4*>(&prevClipToClip);
 
 	a_consts.jitterOffset = { -a_jitterX, -a_jitterY };
 	a_consts.mvecScale = { 1.0f, 1.0f };
@@ -1592,15 +1601,6 @@ Streamline::EvaluationResult Streamline::EvaluateDLSSD(ID3D11Resource* a_colorIn
 	options.sharpness = 0.0f;
 	options.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	options.alphaUpscalingEnabled = sl::Boolean::eFalse;
-
-	Matrix worldToView = globals::game::frameBufferCached.GetCameraView().Transpose();
-	Matrix viewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
-	if (!cs_IsFiniteMatrix(worldToView) || !cs_IsFiniteMatrix(viewToWorld)) {
-		worldToView = Matrix::Identity;
-		viewToWorld = Matrix::Identity;
-	}
-	options.worldToCameraView = *reinterpret_cast<const sl::float4x4*>(&worldToView);
-	options.cameraViewToWorld = *reinterpret_cast<const sl::float4x4*>(&viewToWorld);
 
 	std::optional<sl::DLSSDPreset> customPreset;
 	switch (a_preset) {
