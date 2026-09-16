@@ -1076,6 +1076,9 @@ PS_OUTPUT main(PS_INPUT input)
 		float3 lightDirection = normalize(normalize(lightVector) - viewDirection);
 		float lightFade = saturate(length(lightVector) / LightPos[lightIndex].w);
 		float lightColorMul = (1 - lightFade * lightFade);
+#					if defined(ENABLE_LL)
+		lightColorMul = pow(lightColorMul, TransferFunctions::GAME_GAMMA);
+#					endif
 		float LdotN = saturate(dot(lightDirection, normal));
 		float3 lightColor = (Color::PointLight(LightColor[lightIndex].xyz) * pow(LdotN, FresnelRI.z)) * lightColorMul;
 		finalColor += lightColor;
@@ -1146,6 +1149,9 @@ PS_OUTPUT main(PS_INPUT input)
 #					else
 			float intensityFactor = saturate(lightDist / light.radius);
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#						if defined(ENABLE_LL)
+			intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#						endif
 #					endif
 
 			float3 normalizedLightDirection = normalize(lightDirection);

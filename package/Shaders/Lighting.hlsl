@@ -2285,6 +2285,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			continue;
 
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#			if defined(ENABLE_LL)
+		intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#			endif
 		float3 lightColor = Color::PointLight(PointLightColor[lightIndex].xyz) * intensityMultiplier;
 		float lightShadow = 1.f;
 		if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) {
@@ -2368,6 +2371,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		if (intensityFactor == 1)
 			continue;
 		float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#				if defined(ENABLE_LL)
+		intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#				endif
 #			endif
 
 		float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
