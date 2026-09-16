@@ -42,11 +42,10 @@ namespace ViewMedium
 		const float distance = length(position);
 		const float visibility = fullCloudRay ? 1.0 : saturate((distance - cloudDistance) * GAME_UNIT_TO_M * 0.025);
 		const float4 cloud = PhysSky::TexVolLum.SampleLevel(samplerState, sampleUv, 0);
-		const float opacity = cloud.a * visibility;
-		if (opacity <= 0.0)
+		precise float cloudT = (1.0 - visibility) + visibility * PhysSky::TexVolTr.SampleLevel(samplerState, sampleUv, 0);
+		if (cloudT >= 1.0)
 			return medium;
-		const float cloudT = 1.0 - opacity;
-		const float3 cloudL = cloud.rgb;
+		const float3 cloudL = cloud.rgb * visibility;
 		const float4 front = SampleHeightMedium(position * (min(cloudDistance, distance) / max(distance, 1e-6)));
 		medium.rgb = lerp(front.rgb, medium.rgb, cloudT) + front.a * cloudL;
 		medium.a *= cloudT;

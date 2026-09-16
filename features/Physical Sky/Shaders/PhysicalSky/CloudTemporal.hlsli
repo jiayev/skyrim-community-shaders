@@ -73,43 +73,59 @@ float CloudEvolutionBlend(float uncertainty, float depth, float pixelsPerRadian)
 	return saturate(cycleError - 0.5) * 0.5;
 }
 
+float BlendCloudTransmittance(float previous, float current, float weight)
+{
+	precise float value = previous + (current - previous) * weight;
+	return clamp(value, min(previous, current), max(previous, current));
+}
+
 struct CloudTemporalSample
 {
+	// Half-float opacity cannot retain vanishing transmission.
+	float transmittance;
 	float4 color;
 	float4 metadata;
 };
 
-CloudTemporalSample ReconstructCloudSamples(float4 colors[4], float4 metadata[4], float2 fraction, bool reweightEmpty)
+CloudTemporalSample ReconstructCloudSamples(float transmittances[4], float4 colors[4], float4 metadata[4], float2 fraction, bool reweightEmpty)
 {
 	float4 weights = float4((1.0 - fraction.x) * (1.0 - fraction.y), fraction.x * (1.0 - fraction.y),
 		(1.0 - fraction.x) * fraction.y, fraction.x * fraction.y);
 	if (reweightEmpty) {
 		[unroll] for (uint i = 0u; i < 4u; ++i)
-			weights[i] = colors[i].a == 0.0 ? 0.01 : weights[i];
+			weights[i] = transmittances[i] == 1.0 ? 0.01 : weights[i];
 		weights /= dot(weights, float4(1, 1, 1, 1));
 	}
 	CloudTemporalSample result = (CloudTemporalSample)0;
+	float weightSum = 0.0;
+	float2 transmittanceRange = float2(1, 0);
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
+		transmittanceRange = float2(min(transmittanceRange.x, transmittances[i]), max(transmittanceRange.y, transmittances[i]));
+		result.transmittance += transmittances[i] * weights[i];
+		weightSum += weights[i];
 		result.color += colors[i] * weights[i];
 		result.metadata += metadata[i] * weights[i];
 	}
+	result.transmittance = clamp(result.transmittance / weightSum, transmittanceRange.x, transmittanceRange.y);
 	return result;
 }
 
-CloudTemporalSample ReconstructCloud(Texture2D<float4> color, Texture2D<float4> depth,
+CloudTemporalSample ReconstructCloud(Texture2D<float> transmittance, Texture2D<float4> color, Texture2D<float4> depth,
 	float2 position, int2 maximum, bool reweightEmpty)
 {
 	const int2 base = int2(floor(position));
+	float transmittances[4];
 	float4 colors[4];
 	float4 metadata[4];
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
 		const int2 pixel = clamp(base + int2(i & 1u, i >> 1u), 0, maximum);
+		transmittances[i] = transmittance[pixel];
 		colors[i] = color[pixel];
 		metadata[i] = depth[pixel];
 	}
-	return ReconstructCloudSamples(colors, metadata, saturate(position - floor(position)), reweightEmpty);
+	return ReconstructCloudSamples(transmittances, colors, metadata, saturate(position - floor(position)), reweightEmpty);
 }
 
 bool CloudFootprintHasCloud(Texture2D<float4> color, float2 position, int2 maximum)
@@ -131,6 +147,7 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 	CloudTemporalSample nearest = (CloudTemporalSample)0;
 	float nearestDistance = 4.0;
 	float weightSum = 0.0;
+	float2 transmittanceRange = float2(1, 0);
 	bool found = false;
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
@@ -139,8 +156,11 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 		if (abs(metadata.y - sceneDepth) > 0.064)
 			continue;
 		const float4 color = TexVolLowLum[pixel];
-		const float weight = color.a == 0.0 ? 0.01 :
-		                                      ((i & 1u) != 0u ? fraction.x : 1.0 - fraction.x) * (i >= 2u ? fraction.y : 1.0 - fraction.y);
+		const float transmittance = TexVolLowTr[pixel];
+		transmittanceRange = float2(min(transmittanceRange.x, transmittance), max(transmittanceRange.y, transmittance));
+		const float weight = transmittance == 1.0 ? 0.01 :
+		                                            ((i & 1u) != 0u ? fraction.x : 1.0 - fraction.x) * (i >= 2u ? fraction.y : 1.0 - fraction.y);
+		result.transmittance += transmittance * weight;
 		result.color += color * weight;
 		result.metadata += metadata * weight;
 		weightSum += weight;
@@ -148,6 +168,7 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 		const float2 offset = float2(pixel) - position;
 		const float distance = dot(offset, offset);
 		if (!found || distance < nearestDistance) {
+			nearest.transmittance = transmittance;
 			nearest.color = color;
 			nearest.metadata = metadata;
 			nearestDistance = distance;
@@ -155,6 +176,7 @@ bool ReconstructCloudSurface(float2 position, float sceneDepth, out CloudTempora
 		found = true;
 	}
 	if (weightSum > 0.0) {
+		result.transmittance = clamp(result.transmittance / weightSum, transmittanceRange.x, transmittanceRange.y);
 		result.color /= weightSum;
 		result.metadata /= weightSum;
 	} else {
@@ -232,7 +254,7 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	CloudTemporalSample result;
 	bool useHistory = info.historyValid != 0u && clip.w > 0.0 && all(previousUv == saturate(previousUv));
 	if (useHistory) {
-		result = ReconstructCloud(TexVolHistoryLum, TexVolHistoryAux,
+		result = ReconstructCloud(TexVolHistoryTr, TexVolHistoryLum, TexVolHistoryAux,
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);
 		useHistory = abs(sceneDepth - result.metadata.y) <= 0.064;
 		const bool traced = all((pixel & 3u) == CloudPhaseOffset());
@@ -241,11 +263,13 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 			const bool sampleValid = abs(metadata.y - sceneDepth) <= 0.064;
 			if (sampleValid || currentValid) {
 				const float weight = max(CloudHistoryBlend(previousUv - uv), evolutionBlend * 2.0);
+				result.transmittance = BlendCloudTransmittance(result.transmittance, sampleValid ? TexVolLowTr[pixel / 4u] : current.transmittance, weight);
 				result.color = lerp(result.color, sampleValid ? TexVolLowLum[pixel / 4u] : current.color, weight);
 				result.metadata = lerp(result.metadata, sampleValid ? metadata : current.metadata, weight);
 			}
 		}
 		if (useHistory && currentValid && evolutionBlend > 0.0 && !traced) {
+			result.transmittance = BlendCloudTransmittance(result.transmittance, current.transmittance, evolutionBlend);
 			result.color = lerp(result.color, current.color, evolutionBlend);
 			result.metadata = lerp(result.metadata, current.metadata, evolutionBlend);
 		}
@@ -257,11 +281,11 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 		if (currentValid)
 			result = current;
 		else
-			result = ReconstructCloud(TexVolLowLum, TexVolLowAux, currentPosition, int2(info.lowFrameDim) - 1, true);
+			result = ReconstructCloud(TexVolLowTr, TexVolLowLum, TexVolLowAux, currentPosition, int2(info.lowFrameDim) - 1, true);
 	}
 	if (useHistory || currentValid)
 		result.metadata.y = sceneDepth;
-	RWTexTr[pixel] = saturate(1.0 - result.color.a);
+	RWTexTr[pixel] = saturate(result.transmittance);
 	RWTexLum[pixel] = float4(clamp(result.color.rgb, 0.0, 65504.0), saturate(result.color.a));
 	RWTexAux[pixel] = result.metadata;
 }
@@ -293,20 +317,22 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 	return normalize(direction);
 }
 
-CloudTemporalSample ReconstructCloudCube(TextureCube<float4> color, TextureCube<float4> depth,
+CloudTemporalSample ReconstructCloudCube(TextureCube<float> transmittance, TextureCube<float4> color, TextureCube<float4> depth,
 	float2 position, uint face, uint size, bool reweightEmpty)
 {
 	const float2 base = floor(position);
+	float transmittances[4];
 	float4 colors[4];
 	float4 metadata[4];
 	[unroll] for (uint i = 0u; i < 4u; ++i)
 	{
 		const float2 pixel = clamp(base + float2(i & 1u, i >> 1u), 0.0, float(size - 1u));
 		const float3 direction = CloudCubeDirection(pixel, face, size);
+		transmittances[i] = transmittance.SampleLevel(TransmittanceSampler, direction, 0);
 		colors[i] = color.SampleLevel(TransmittanceSampler, direction, 0);
 		metadata[i] = depth.SampleLevel(TransmittanceSampler, direction, 0);
 	}
-	return ReconstructCloudSamples(colors, metadata, saturate(position - base), reweightEmpty);
+	return ReconstructCloudSamples(transmittances, colors, metadata, saturate(position - base), reweightEmpty);
 }
 
 bool CloudFootprintHasCloud(TextureCube<float4> color, float2 position, uint face, uint size)
@@ -398,7 +424,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 	CloudTemporalSample result;
 	bool useHistory = info.historyValid != 0u && all(isfinite(previousDirection));
 	if (useHistory) {
-		result = ReconstructCloudCube(TexCubeHistoryLum, TexCubeHistoryAux,
+		result = ReconstructCloudCube(TexCubeHistoryTr, TexCubeHistoryLum, TexCubeHistoryAux,
 			historyUv * dims.x - 0.5, face, dims.x, false);
 		const bool traced = all((tid.xy & 3u) == CloudPhaseOffset());
 		if (traced) {
@@ -406,12 +432,14 @@ float2 CloudCubePosition(float3 direction, uint face)
 			const float4 color = TexCubeTraceLum.SampleLevel(TransmittanceSampler, traceDirection, 0);
 			const float2 motion = CloudCubePosition(previousDirection, tid.z) - (float2(tid.xy) + 0.5) / dims.x;
 			const float weight = max(CloudHistoryBlend(motion), evolutionBlend * 2.0);
+			result.transmittance = BlendCloudTransmittance(result.transmittance, TexCubeTraceTr.SampleLevel(TransmittanceSampler, traceDirection, 0), weight);
 			result.color = lerp(result.color, color, weight);
 			result.metadata = lerp(result.metadata, TexCubeTraceAux.SampleLevel(TransmittanceSampler, traceDirection, 0), weight);
 		}
 		if (!traced && evolutionBlend > 0.0) {
-			const CloudTemporalSample current = ReconstructCloudCube(TexCubeTraceLum, TexCubeTraceAux,
+			const CloudTemporalSample current = ReconstructCloudCube(TexCubeTraceTr, TexCubeTraceLum, TexCubeTraceAux,
 				(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u, true);
+			result.transmittance = BlendCloudTransmittance(result.transmittance, current.transmittance, evolutionBlend);
 			result.color = lerp(result.color, current.color, evolutionBlend);
 			result.metadata = lerp(result.metadata, current.metadata, evolutionBlend);
 		}
@@ -420,10 +448,10 @@ float2 CloudCubePosition(float3 direction, uint face)
 				(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u);
 	}
 	if (!useHistory) {
-		result = ReconstructCloudCube(TexCubeTraceLum, TexCubeTraceAux,
+		result = ReconstructCloudCube(TexCubeTraceTr, TexCubeTraceLum, TexCubeTraceAux,
 			(float2(tid.xy) - CloudPhaseOffset()) * 0.25, tid.z, dims.x / 4u, true);
 	}
-	RWTexCubeTr[tid] = saturate(1.0 - result.color.a);
+	RWTexCubeTr[tid] = saturate(result.transmittance);
 	RWTexCubeLum[tid] = float4(clamp(result.color.rgb, 0.0, 65504.0), saturate(result.color.a));
 	RWTexCubeAux[tid] = result.metadata;
 }
