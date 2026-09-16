@@ -684,10 +684,10 @@ void PhysicalSky::SettingsDebug()
 		};
 
 		static const char* cubeFaces[] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
-		if (ImGui::SliderInt("Cubemap Face", &debugCubeFace, 0, 5, cubeFaces[debugCubeFace]))
+		if (ImGui::SliderInt(T(TKEY("cubemap_face"), "Cubemap Face"), &debugCubeFace, 0, 5, cubeFaces[debugCubeFace]))
 			debugCubeFaceSrvs.clear();
 
-		if (ImGui::TreeNode("Sky")) {
+		if (ImGui::TreeNode(T(TKEY("sky"), "Sky"))) {
 			BUFFER_VIEWER_NODE(texTrLut, debugScale);
 			BUFFER_VIEWER_NODE(texMsLut, debugScale);
 			BUFFER_VIEWER_NODE(texSvLut, debugScale);
@@ -697,7 +697,7 @@ void PhysicalSky::SettingsDebug()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud Shape")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_shape"), "Cloud Shape"))) {
 			BUFFER_VIEWER_NODE(ndfManager.texHeight, debugScale);
 			BUFFER_VIEWER_NODE(ndfManager.texModeling, debugScale);
 			DrawDebugVolume(baseShapeNoiseSrv.get(), "baseShapeNoise", debugShapeNoiseSlice, debugScale);
@@ -712,14 +712,14 @@ void PhysicalSky::SettingsDebug()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud Trace")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_trace"), "Cloud Trace"))) {
 			BUFFER_VIEWER_NODE(texVolLowTr, debugScale);
 			BUFFER_VIEWER_NODE(texVolLowLum, debugScale);
 			BUFFER_VIEWER_NODE(texVolLowAux, debugScale);
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud Reproject")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_reproject"), "Cloud Reproject"))) {
 			BUFFER_VIEWER_NODE(texVolTr, debugScale);
 			BUFFER_VIEWER_NODE(texVolLum, debugScale);
 			BUFFER_VIEWER_NODE(texVolAux, debugScale);
@@ -728,14 +728,14 @@ void PhysicalSky::SettingsDebug()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud History")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_history"), "Cloud History"))) {
 			BUFFER_VIEWER_NODE(texVolHistoryTr, debugScale);
 			BUFFER_VIEWER_NODE(texVolHistoryLum, debugScale);
 			BUFFER_VIEWER_NODE(texVolHistoryAux, debugScale);
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud Cubemap")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_cubemap"), "Cloud Cubemap"))) {
 			DrawDebugCube(texVolCubeTraceTr.get(), "texVolCubeTraceTr", debugScale);
 			DrawDebugCube(texVolCubeTraceLum.get(), "texVolCubeTraceLum", debugScale);
 			DrawDebugCube(texVolCubeTraceAux.get(), "texVolCubeTraceAux", debugScale);
@@ -748,7 +748,7 @@ void PhysicalSky::SettingsDebug()
 			ImGui::TreePop();
 		}
 
-		if (ImGui::TreeNode("Cloud Lighting")) {
+		if (ImGui::TreeNode(T(TKEY("cloud_lighting"), "Cloud Lighting"))) {
 			BUFFER_VIEWER_NODE(texVolCloudAmbientSH, 30.f);
 			DrawDebugVolume(texShadowVolume ? texShadowVolume->srv.get() : nullptr, "texShadowVolume", debugShadowVolumeSlice, debugScale);
 			ImGui::TreePop();

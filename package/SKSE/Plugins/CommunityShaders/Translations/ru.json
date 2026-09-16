@@ -848,7 +848,6 @@
     "feature.linear_lighting.effect_lighting_multiplier": "Множитель освещения эффектов",
     "feature.linear_lighting.effects": "Эффекты",
     "feature.linear_lighting.emissive_color_multiplier": "Множитель излучаемого цвета",
-    "feature.linear_lighting.enable": "Включить линейное освещение",
     "feature.linear_lighting.glowmap_multiplier": "Множитель карты свечения",
     "feature.linear_lighting.key_feature_1": "Настраиваемая гамма-коррекция",
     "feature.linear_lighting.key_feature_2": "Исправляет расчёты освещения",

@@ -41,7 +41,7 @@ void LinearLighting::DrawSettings()
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
 	ImGui::TextDisabled("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
 	if (globals::features::effects11.IsActive())
-		ImGui::TextDisabled("Effects 11 overrides Linear Lighting while UseEffect is enabled.");
+		ImGui::TextDisabled("%s", T(TKEY("effects11_override"), "Effects 11 overrides Linear Lighting while UseEffect is enabled."));
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
