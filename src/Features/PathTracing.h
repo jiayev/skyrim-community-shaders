@@ -17,6 +17,7 @@ public:
 	virtual std::string_view GetCategory() const override { return FeatureCategories::kLighting; }
 	virtual bool IsCore() const override { return false; }
 	virtual bool IsInMenu() const override { return true; }
+	virtual ReleaseStage GetReleaseStage() const override { return ReleaseStage::Alpha; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{

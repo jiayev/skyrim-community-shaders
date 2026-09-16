@@ -20,8 +20,15 @@
 
 #define I18N_KEY_PREFIX "feature.raytracing."
 
+static std::string StableLabel(const char* label, std::string_view id)
+{
+	return std::format("{}###{}", label, id);
+}
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Raytracing::Settings,
+	PerfOverlay,
+	DisplaySceneGraphCounters,
 	CreationEngineRaytracingSettings,
 	RendererSettings)
 
@@ -53,6 +60,19 @@ bool Raytracing::Available(bool a_initialized) const
 CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 {
 	auto certSettings = settings.CreationEngineRaytracingSettings;
+
+	switch (settings.PerfOverlay) {
+	case OverlayMode::Simple:
+	case OverlayMode::Complete:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Standard;
+		break;
+	case OverlayMode::Extended:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Extended;
+		break;
+	default:
+		certSettings.DebugSettings.Timings = CreationEngineRaytracing::TimingMode::Disabled;
+		break;
+	}
 
 	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled) {
 		const auto& pt = globals::features::pathTracing.settings;
@@ -152,6 +172,10 @@ void Raytracing::Execute()
 
 	creationEngineRaytracing->Execute();
 	const uint32_t completedSlot = creationEngineRaytracing->PostExecution();
+
+	if (settings.PerfOverlay != OverlayMode::None && creationEngineRaytracing->GetPassTimings) {
+		creationEngineRaytracing->GetPassTimings(passTimings);
+	}
 
 	if (completedSlot >= CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT)
 		return;
@@ -772,6 +796,19 @@ void Raytracing::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("render_tree_lod"), "Render Tree LOD"), &settings.CreationEngineRaytracingSettings.ExperimentalSettings.RenderTreeLOD);
 
+	const char* overlayNames[] = {
+		T(TKEY("performance_overlay_none"), "None"),
+		T(TKEY("performance_overlay_simple"), "Simple"),
+		T(TKEY("performance_overlay_complete"), "Complete"),
+		T(TKEY("performance_overlay_extended"), "Extended")
+	};
+	int currentOverlay = static_cast<int>(settings.PerfOverlay);
+	if (ImGui::Combo(T(TKEY("performance_overlay"), "Performance Overlay"), &currentOverlay, overlayNames, IM_ARRAYSIZE(overlayNames))) {
+		settings.PerfOverlay = static_cast<OverlayMode>(currentOverlay);
+	}
+
+	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
+
 	const char* modeStr = "None";
 	switch (Mode()) {
 	case CreationEngineRaytracing::Mode::GlobalIllumination:
@@ -791,6 +828,91 @@ void Raytracing::DrawSettings()
 	if (ceRTSettingsBefore != GetSettings()) {
 		UpdateSettings();
 	}
+}
+
+void Raytracing::DrawOverlay()
+{
+	if (!IsOverlayVisible())
+		return;
+
+	auto* menu = Menu::GetSingleton();
+
+	if (!globals::state || !menu)
+		return;
+
+	// Set window flags - no decoration and only movable when menu is enabled
+	ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize;
+
+	// Only allow mouse interaction when the main menu is open
+	if (!menu->IsEnabled) {
+		windowFlags |= ImGuiWindowFlags_NoInputs;
+	}
+
+	windowFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse;
+
+	if (!PositionSet) {
+		Position = ImVec2(10, 10);
+		ImGui::SetNextWindowPos(Position);
+		PositionSet = true;
+	} else {
+		ImGui::SetNextWindowPos(Position, ImGuiCond_FirstUseEver);
+	}
+
+	const auto overlayTitle = StableLabel(T(TKEY("overlay_title"), "Raytracing Overlay"), "RaytracingOverlay");
+	ImGui::Begin(overlayTitle.c_str(), nullptr, windowFlags);
+
+	auto DrawRow = [](const char* label, float cpuMS, float gpuMS) {
+		ImGui::TableNextRow();
+
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(label);
+
+		ImGui::TableNextColumn();
+		ImGui::Text(T(TKEY("overlay_cpu_ms"), "%g ms"), cpuMS);
+
+		ImGui::TableNextColumn();
+		ImGui::Text(T(TKEY("overlay_gpu_ms"), "%g ms"), gpuMS);
+	};
+
+	if (ImGui::BeginTable("Passes", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+		ImGui::TableSetupColumn(T(TKEY("overlay_pass"), "Pass"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_cpu"), "CPU"));
+		ImGui::TableSetupColumn(T(TKEY("overlay_gpu"), "GPU"));
+		ImGui::TableHeadersRow();
+
+		if (settings.PerfOverlay == OverlayMode::Simple) {
+			if (!passTimings.empty()) {
+				const auto& passTiming = passTimings.back();
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+			}
+		} else if (settings.PerfOverlay == OverlayMode::Complete || settings.PerfOverlay == OverlayMode::Extended) {
+			for (const auto& passTiming : passTimings)
+				DrawRow(passTiming.name.c_str(), passTiming.cpuTiming, passTiming.gpuTiming);
+		}
+
+		ImGui::EndTable();
+	}
+
+	// Display accumulated frame count when using Accumulation denoiser
+	if (GetSettings().GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::Accumulation &&
+		creationEngineRaytracing && creationEngineRaytracing->GetAccumulatedFrameCount) {
+		uint32_t accumulatedFrames = creationEngineRaytracing->GetAccumulatedFrameCount();
+		ImGui::Text(T(TKEY("overlay_accumulated_frames"), "Accumulated Frames: %u"), accumulatedFrames);
+	}
+
+	if (settings.DisplaySceneGraphCounters && creationEngineRaytracing && creationEngineRaytracing->GetSceneGraphCounters) {
+		uint32_t textures = 0;
+		uint32_t models = 0;
+		uint32_t instances = 0;
+
+		creationEngineRaytracing->GetSceneGraphCounters(textures, models, instances);
+
+		ImGui::Text(T(TKEY("overlay_textures"), "Textures %u"), textures);
+		ImGui::Text(T(TKEY("overlay_models"), "Models %u"), models);
+		ImGui::Text(T(TKEY("overlay_instances"), "Instances %u"), instances);
+	}
+
+	ImGui::End();
 }
 
 void Raytracing::UpdateFeatureData()
