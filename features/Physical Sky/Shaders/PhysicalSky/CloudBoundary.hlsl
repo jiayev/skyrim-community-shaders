@@ -1,5 +1,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Game.hlsli"
+#include "PhysicalSky/CloudMotion.hlsli"
 #include "PhysicalSky/CloudPhase.hlsli"
 
 cbuffer CloudBoundaryParameters : register(b0)
@@ -7,6 +8,7 @@ cbuffer CloudBoundaryParameters : register(b0)
 	float4 gridOriginSpacing;
 	float4 fieldFrequencyWind;
 	float4 shearAltitude;
+	float4 evolution;
 	float4 frameDimensions;
 	float planetRadius;
 	float bottomZ;
@@ -27,7 +29,7 @@ struct BoundaryVertex
 
 float2 FieldUv(float2 worldXY)
 {
-	return (worldXY - fieldFrequencyWind.zw) * fieldFrequencyWind.xy + 0.5;
+	return CloudFieldPosition((worldXY - fieldFrequencyWind.zw) * GAME_UNIT_TO_M, evolution.xy) * (fieldFrequencyWind.xy / GAME_UNIT_TO_M) + 0.5;
 }
 
 BoundaryVertex vertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -41,7 +43,7 @@ BoundaryVertex vertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_Inst
 	[branch] if (instanceId == 0u)
 	{
 		const float coverage = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY), 0).r;
-		const float upstream = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY - shearAltitude.xy * 60.0), 0).r;
+		const float upstream = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY) - shearAltitude.xy * 60.0 * fieldFrequencyWind.xy, 0).r;
 		const float thicknessScale = max(0.2, pow(saturate(max(coverage, upstream)), 0.1));
 		altitude += heightRange * thicknessScale * (heights.y - lower);
 	}
