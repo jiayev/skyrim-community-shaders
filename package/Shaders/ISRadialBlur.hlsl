@@ -41,8 +41,8 @@ PS_OUTPUT main(PS_INPUT input)
 	float2 offset = Center.xy - input.TexCoord;
 	float centerDistance = length(offset);
 	float2 sampleDelta =
-		0.5 * (normalize(offset) * max(0, GetCircleParam(centerDistance, Params.z, Params.y) -
-											  GetCircleParam(centerDistance, Center.z, Params.w)));
+		(1. / NUM_STEPS) * (normalize(offset) * max(0, GetCircleParam(centerDistance, Params.z, Params.y) -
+												 GetCircleParam(centerDistance, Center.z, Params.w)));
 
 	float4 color = 0;
 	for (float sampleIndex = -NUM_STEPS; sampleIndex <= NUM_STEPS; ++sampleIndex) {
