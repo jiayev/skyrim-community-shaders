@@ -635,6 +635,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 					continue;
 
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#					if defined(ENABLE_LL)
+				intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#					endif
 #				endif
 
 				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;
@@ -892,6 +895,9 @@ PS_OUTPUT main(PS_INPUT input)
 					continue;
 
 				float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#					if defined(ENABLE_LL)
+				intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#					endif
 #				endif
 
 				float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * light.fade;

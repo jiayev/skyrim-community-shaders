@@ -559,6 +559,9 @@ float3 GetLightingColor(float3 msPosition, float3 worldPosition, float2 screenPo
 	{
 		float4 lightDistanceSquared = (PLightPositionX[0] - msPosition.xxxx) * (PLightPositionX[0] - msPosition.xxxx) + (PLightPositionY[0] - msPosition.yyyy) * (PLightPositionY[0] - msPosition.yyyy) + (PLightPositionZ[0] - msPosition.zzzz) * (PLightPositionZ[0] - msPosition.zzzz);
 		float4 lightFadeMul = 1.0.xxxx - saturate(PLightingRadiusInverseSquared * lightDistanceSquared);
+#		if defined(ENABLE_LL)
+		lightFadeMul = pow(lightFadeMul, TransferFunctions::GAME_GAMMA);
+#		endif
 #		if defined(EFFECTS11)
 		float pointScale = SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
 #		else
@@ -731,6 +734,9 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 			float intensityFactor = saturate(lightDist / light.radius);
 			float intensityMultiplier = 1 - intensityFactor * intensityFactor;
+#				if defined(ENABLE_LL)
+			intensityMultiplier = pow(intensityMultiplier, TransferFunctions::GAME_GAMMA);
+#				endif
 #			endif
 
 			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingScale;
