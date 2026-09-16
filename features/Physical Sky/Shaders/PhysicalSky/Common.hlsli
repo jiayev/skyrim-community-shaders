@@ -527,13 +527,13 @@ Texture3D<float4> TexApSunLut : register(t113);
 	float3 CompositeVolumetricClouds(float3 color, uint2 pxCoord)
 	{
 		const float4 cloud = TexVolLum[pxCoord];
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (TexVolTr[pxCoord]) + cloud.rgb);
 	}
 
 	float3 CompositeVolumetricCloudsUvDr(float3 color, float2 screenUvDr, SamplerState samp)
 	{
 		const float4 cloud = TexVolLum.SampleLevel(samp, screenUvDr, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (TexVolTr.SampleLevel(samp, screenUvDr, 0)) + cloud.rgb);
 	}
 
 	float3 CompositeVolumetricCloudsUv(float3 color, float2 screenUv, SamplerState samp)
@@ -543,7 +543,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 
 	float3 ApplyVolumetricCloudTransmittanceUv(float3 color, float2 screenUv, SamplerState samp)
 	{
-		const float3 volTr = 1.0 - TexVolLum.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0).a;
+		const float3 volTr = TexVolTr.SampleLevel(samp, FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(screenUv), 0);
 		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * volTr);
 	}
 
@@ -551,7 +551,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 	float3 CompositeVolumetricCloudsCube(float3 color, float3 viewDir, SamplerState samp)
 	{
 		const float4 cloud = TexVolCubeLum.SampleLevel(samp, viewDir, 0);
-		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (1.0 - cloud.a) + cloud.rgb);
+		return Color::IrradianceToGamma(Color::IrradianceToLinear(color) * (TexVolCubeTr.SampleLevel(samp, viewDir, 0)) + cloud.rgb);
 	}
 #		endif
 

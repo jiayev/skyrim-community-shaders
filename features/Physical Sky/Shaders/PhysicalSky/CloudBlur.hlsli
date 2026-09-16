@@ -17,6 +17,8 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 	const float radius = pow(falloff, 4.0) * 0.67 + 0.33;
 	const int2 maximum = int2(info.activeFrameDim) - 1;
 	float4 color = 0.0;
+	float transmittance = 0.0;
+	float2 transmittanceRange = float2(1, 0);
 	float weightSum = 0.0;
 	[unroll] for (int y = -1; y <= 1; ++y)
 	{
@@ -27,12 +29,15 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 			if (abs(sceneDepth - metadata.y) > 0.064)
 				continue;
 			const float weight = (x == 0 ? 1.0 - radius : radius * 0.5) * (y == 0 ? 1.0 - radius : radius * 0.5);
+			const float sampleTr = TexCloudResultTr[samplePixel];
+			transmittanceRange = float2(min(transmittanceRange.x, sampleTr), max(transmittanceRange.y, sampleTr));
+			transmittance += sampleTr * weight;
 			color += TexCloudResultLum[samplePixel] * weight;
 			weightSum += weight;
 		}
 	}
 	color = weightSum > 0.0 ? color / weightSum : TexCloudResultLum[pixel];
-	RWTexFilteredTr[pixel] = 1.0 - color.a;
+	RWTexFilteredTr[pixel] = weightSum > 0.0 ? clamp(transmittance / weightSum, transmittanceRange.x, transmittanceRange.y) : TexCloudResultTr[pixel];
 	RWTexFilteredLum[pixel] = color;
 	RWTexFilteredAux[pixel] = metadata;
 }
