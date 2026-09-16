@@ -46,7 +46,7 @@ namespace ViewMedium
 		if (opacity <= 0.0)
 			return medium;
 		const float cloudT = 1.0 - opacity;
-		const float3 cloudL = cloud.rgb * visibility;
+		const float3 cloudL = cloud.rgb;
 		const float4 front = SampleHeightMedium(position * (min(cloudDistance, distance) / max(distance, 1e-6)));
 		medium.rgb = lerp(front.rgb, medium.rgb, cloudT) + front.a * cloudL;
 		medium.a *= cloudT;

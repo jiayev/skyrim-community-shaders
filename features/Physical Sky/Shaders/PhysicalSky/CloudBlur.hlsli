@@ -15,16 +15,23 @@ RWTexture2D<float4> RWTexFilteredAux : register(u5);
 	const float4 metadata = TexCloudResultAux[pixel];
 	const float falloff = 1.0 - saturate(abs(metadata.x - 1.0) / 6.0);
 	const float radius = pow(falloff, 4.0) * 0.67 + 0.33;
-	const float2 center = float2(pixel) + 0.5;
-	const float2 lower = max(center - radius, 0.5) * info.rcpFrameDim;
-	const float2 upper = min(center + radius, info.activeFrameDim - 0.5) * info.rcpFrameDim;
-	const float2 corners[4] = { float2(lower.x, upper.y), upper, lower, float2(upper.x, lower.y) };
+	const int2 maximum = int2(info.activeFrameDim) - 1;
 	float4 color = 0.0;
-	[unroll] for (uint i = 0u; i < 4u; ++i)
+	float weightSum = 0.0;
+	[unroll] for (int y = -1; y <= 1; ++y)
 	{
-		color += TexCloudResultLum.SampleLevel(TransmittanceSampler, corners[i], 0);
+		[unroll] for (int x = -1; x <= 1; ++x)
+		{
+			const int2 samplePixel = clamp(int2(pixel) + int2(x, y), 0, maximum);
+			const float sceneDepth = TexCloudResultAux[samplePixel].y;
+			if (abs(sceneDepth - metadata.y) > 0.064)
+				continue;
+			const float weight = (x == 0 ? 1.0 - radius : radius * 0.5) * (y == 0 ? 1.0 - radius : radius * 0.5);
+			color += TexCloudResultLum[samplePixel] * weight;
+			weightSum += weight;
+		}
 	}
-	color *= 0.25;
+	color = weightSum > 0.0 ? color / weightSum : TexCloudResultLum[pixel];
 	RWTexFilteredTr[pixel] = 1.0 - color.a;
 	RWTexFilteredLum[pixel] = color;
 	RWTexFilteredAux[pixel] = metadata;
