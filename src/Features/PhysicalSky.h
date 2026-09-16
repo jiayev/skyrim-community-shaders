@@ -241,13 +241,14 @@ struct PhysicalSky final : public Feature
 		float4 gridOriginSpacing;
 		float4 fieldFrequencyWind;
 		float4 shearAltitude;
+		float4 evolution;
 		float4 frameDimensions;
 		float planetRadius;
 		float bottomZ;
 		uint gridCellCount;
 		uint cloudFrameIndex;
 	};
-	static_assert(sizeof(CloudBoundaryCB) == 80);
+	static_assert(sizeof(CloudBoundaryCB) == 96);
 	eastl::unique_ptr<ConstantBuffer> cloudBoundaryCB = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolTr = nullptr;           // full-resolution volumetric transmittance result
@@ -352,16 +353,29 @@ struct PhysicalSky final : public Feature
 		float3 previousCamera;
 		float2 previousFrameDim;
 		float4 ndfBoundaryRect;
+		float2 cirrusWindOffset;
+		float2 cirrusWindDelta;
+		float2 previousShapeShear;
+		float4 cloudEvolution;
+		float cloudEvolutionDelta;
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 328);
+	static_assert(sizeof(VolumetricCloudSB) == 372);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
 	uint32_t volFrameIndex = 0;
 	bool volMainHistoryValid = false;
 	float2 volHistoryFrameDim = {};
-	std::array<double, 2> volWindOffsetMeters = {};
-	std::array<double, 2> volHistoryWindOffsetMeters = {};
+	struct CloudWindState
+	{
+		std::array<double, 2> lowOffset = {};
+		std::array<double, 2> highOffset = {};
+		double phase = 0.0;
+		float2 shear = {};
+		float disturbance = 0.f;
+	};
+	CloudWindState volWind;
+	CloudWindState volHistoryWind;
 	float4x4 volHistoryViewProj = {};
 	float3 volHistoryCamera = {};
 	std::string volCloudSettingsKey;

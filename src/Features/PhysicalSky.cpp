@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <imgui_stdlib.h>
 
 #include "CloudShadows.h"
@@ -74,9 +75,6 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	bottomDensityPower,
 	bottomDensityWidth,
 	topExpansion,
-	windDirection,
-	windSpeed,
-	shapeShear,
 	densityScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -103,10 +101,15 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ambientBase)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CloudWindSettings,
+	lowVelocity, highVelocity, development, disturbance)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLayer,
 	low,
 	cirrus,
-	lighting)
+	lighting,
+	wind)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PhysicalSky::Settings,
@@ -564,12 +567,41 @@ void PhysicalSky::SettingsVolumetricClouds()
 		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_power"), "Bottom Density Power"), &low.bottomDensityPower, 0.f, 10.f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_width"), "Bottom Density Width"), &low.bottomDensityWidth, 1.f, 10.f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_top_expansion"), "Top Expansion"), &low.topExpansion, 0.f, 1.f, "%.3f");
-		ImGui::SliderFloat2(T(TKEY("wind_direction"), "Wind Direction"), &low.windDirection.x, -1.f, 1.f, "%.2f");
-		ImGui::SliderFloat(T(TKEY("wind_speed"), "Wind Speed"), &low.windSpeed, 0.f, 80.f, "%.1f m/s");
-		ImGui::SliderFloat(T(TKEY("cloud_shape_shear"), "Cloud Shape Shear"), &low.shapeShear, 0.f, 2.f, "%.2f km");
 		ImGui::SliderFloat(T(TKEY("cloud_density_scale"), "Density Scale"), &low.densityScale, 0.f, 1.f, "%.3f 1/m");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cloud_density_scale_desc"), "Converts reconstructed density to extinction per metre. Shared by view opacity, light sampling and cloud shadows. NDF heights stay fixed."));
+	}
+
+	ImGui::SeparatorText(T(TKEY("cloud_motion"), "Cloud Motion"));
+	{
+		auto& wind = settings.cloudLayer.wind;
+		static float lowAngle = 0.f;
+		static float highAngle = 0.f;
+		auto drawWind = [](const char* speedLabel, const char* directionLabel, float2& velocity, float& angle) {
+			float speed = std::hypot(velocity.x, velocity.y);
+			if (!std::isfinite(speed)) {
+				velocity = {};
+				speed = 0.f;
+			}
+			if (speed > 1e-4f)
+				angle = std::fmod(std::atan2(velocity.y, velocity.x) * (180.f / 3.14159265f) + 360.f, 360.f);
+			bool changed = ImGui::SliderFloat(speedLabel, &speed, 0.f, 80.f, "%.1f m/s");
+			changed |= ImGui::SliderFloat(directionLabel, &angle, 0.f, 360.f, "%.0f deg");
+			if (changed) {
+				const float radians = angle * (3.14159265f / 180.f);
+				velocity = { std::cos(radians) * speed, std::sin(radians) * speed };
+			}
+		};
+		drawWind(T(TKEY("cloud_low_wind_speed"), "Low Cloud Speed"), T(TKEY("cloud_low_wind_direction"), "Low Cloud Travel Direction"), wind.lowVelocity, lowAngle);
+		drawWind(T(TKEY("cloud_high_wind_speed"), "High Cloud Speed"), T(TKEY("cloud_high_wind_direction"), "High Cloud Travel Direction"), wind.highVelocity, highAngle);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_wind_direction_desc"), "Travel direction: 0 degrees = +X, 90 degrees = +Y. Weather transitions blend velocity vectors."));
+		ImGui::SliderFloat(T(TKEY("cloud_development"), "Development Speed"), &wind.development, 0.f, 1.f, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_development_desc"), "Controls internal low-cloud evolution. Zero freezes development while wind continues to carry the clouds."));
+		ImGui::SliderFloat(T(TKEY("cloud_disturbance"), "Disturbance Strength"), &wind.disturbance, 0.f, 1.f, "%.2f");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_disturbance_desc"), "Controls local low-cloud deformation. High and low wind differences also produce a gradual cloud lean."));
 	}
 
 	CirrusMapManager::DrawSettings(cirrus, ndfTexManager);
@@ -1056,7 +1088,9 @@ void PhysicalSky::Prepass()
 		if (renderVolumetricClouds) {
 			const auto cloudSettingsKey = nlohmann::json{
 				{ "map", settings.cloudMap },
-				{ "layer", settings.cloudLayer },
+				{ "low", settings.cloudLayer.low },
+				{ "cirrus", settings.cloudLayer.cirrus },
+				{ "lighting", settings.cloudLayer.lighting },
 				{ "range", settings.rayMarchRange },
 				{ "step", settings.marchStepScale },
 				{ "planet", settings.planetRadius },

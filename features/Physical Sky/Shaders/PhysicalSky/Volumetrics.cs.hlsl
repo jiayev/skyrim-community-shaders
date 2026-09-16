@@ -12,6 +12,7 @@
 #define PS_NO_RSRCS
 #define OMIT_PS_NAMESPACE
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "PhysicalSky/CloudMotion.hlsli"
 #include "PhysicalSky/CloudNoise.hlsli"
 #include "PhysicalSky/Common.hlsli"
 
@@ -94,6 +95,11 @@ struct VolumetricCloudData
 	float3 previousCamera;
 	float2 previousFrameDim;
 	float4 ndfBoundaryRect;
+	float2 cirrusWindOffset;
+	float2 cirrusWindDelta;
+	float2 previousShapeShear;
+	float4 cloudEvolution;
+	float cloudEvolutionDelta;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
@@ -306,7 +312,7 @@ float CloudDepthWeight(float transmittance, float density, float distance)
 
 float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 {
-	return (worldXY - info.noiseWindOffset) * info.lowNdfFrequency + 0.5;
+	return worldXY * info.lowNdfFrequency + 0.5;
 }
 
 float CloudViewStep(float distance)
@@ -402,15 +408,16 @@ float sampleCloudDensity(
 	if (planetHeight < cloud.lowestAltitude || planetHeight > cloud.highestAltitude)
 		return 0.0;
 
-	density_context.ndf = sampleNDF(cloud, pos.xy, planetHeight);
+	const float2 fieldMeters = CloudFieldPosition((pos.xy - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy);
+	density_context.ndf = sampleNDF(cloud, fieldMeters * GAME_UNITS_PER_METER, planetHeight);
 	if (!density_context.ndf.in_layer || density_context.ndf.dimension_profile <= 0.0)
 		return 0;
 
 	const float bottomFade = saturate((density_context.ndf.height_fraction - 0.02) * 33.333332);
-	const float2 xy = (pos.xy - info.noiseWindOffset) * GAME_UNIT_TO_M;
+	const float2 xy = fieldMeters;
 	const float2 displacement = TexCloudAdjustmentLUT.SampleLevel(TileableSampler, xy * 0.004, 0).gb;
 	density_context.noise_coordinates = float3(xy * 0.0043545123 + (displacement * 2.0 - 1.0) * (0.125 - bottomFade * 0.125),
-		(pos.z * GAME_UNIT_TO_M - 20.0 + bottomFade * 10.0) * 0.0034834063);
+		(pos.z * GAME_UNIT_TO_M - 20.0 + bottomFade * 10.0) * 0.0034834063 - info.cloudEvolution.x * (1.0 / 6.283185307179586));
 	density_context.eye_distance = viewDistance;
 	return sampleCloudDensityFromContext(density_context, mipBias);
 }
@@ -431,13 +438,14 @@ struct VolumetricCloudResult
 	float3 transmittance;
 	float3 lum;
 	float cloud_depth;
+	float2 motionMetadata;
 };
 
 float CirrusDensity(float2 position, out float profile)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float2 weather = saturate(TexCirrusWeather.SampleLevel(TileableSampler, LowNdfUV(position, info), 0));
-	const float3 patterns = TexCirrusPatterns.SampleLevel(TileableSampler, (position - info.noiseWindOffset) * info.cirrusPatternFrequency, 0);
+	const float2 weather = saturate(TexCirrusWeather.SampleLevel(TileableSampler, LowNdfUV(position - info.cirrusWindOffset, info), 0));
+	const float3 patterns = TexCirrusPatterns.SampleLevel(TileableSampler, (position - info.cirrusWindOffset) * info.cirrusPatternFrequency, 0);
 	const float3 squared = patterns * patterns;
 	profile = lerp(lerp(squared.b, squared.r, saturate(weather.y * 2.0)), squared.g, saturate(weather.y * 2.0 - 1.0));
 	profile = pow(max(profile, 1e-10), 1.9 - weather.x * 1.8) * saturate(weather.x * weather.x * weather.x * 2.0);
@@ -445,7 +453,7 @@ float CirrusDensity(float2 position, out float profile)
 }
 
 void IntegrateCirrus(float3 position, float3 direction, float distance, float phase, CloudAmbient cloudAmbient,
-	inout float3 radiance, inout float transmittance, inout float depthSum, inout float weightSum)
+	inout float3 radiance, inout float transmittance, inout float depthSum, inout float weightSum, inout float cirrusWeight)
 {
 	if (transmittance <= 0.1)
 		return;
@@ -474,6 +482,7 @@ void IntegrateCirrus(float3 position, float3 direction, float distance, float ph
 	const float depthWeight = CloudDepthWeight(transmittance, density, distance);
 	depthSum += depthWeight * distance;
 	weightSum += depthWeight;
+	cirrusWeight += depthWeight;
 	transmittance *= stepTransmittance;
 }
 
@@ -503,6 +512,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	VolumetricCloudResult result;
 	result.transmittance = 1.0;
 	result.lum = 0.0;
+	result.motionMetadata = 0.0;
 	bool sceneLimited = sceneDistance > 0.0;
 	const float3 planetEye = eye + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);
 	const float2 ground = IntersectSpherePair(planetEye, direction, info.planetRadius);
@@ -557,13 +567,15 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const CloudLayer layer = GetCloudLayer(info);
 	float depthSum = 0.0;
 	float weightSum = 0.0;
+	float cirrusWeight = 0.0;
+	float heightSum = 0.0;
 	float transmittance = 1.0;
 	[loop] for (uint interval = 0u; interval < 4u && transmittance > 0.1; ++interval)
 	{
 		const float begin = boundaries[interval];
 		const float end = boundaries[interval + 1u];
 		if (cirrusPending && cirrusDistance <= begin) {
-			IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, phase, ambient, result.lum, transmittance, depthSum, weightSum);
+			IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, phase, ambient, result.lum, transmittance, depthSum, weightSum, cirrusWeight);
 			cirrusPending = false;
 		}
 		if (end <= begin || !CloudIntervalContains(low, 0.5 * (begin + end)))
@@ -589,14 +601,16 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 			const float depthWeight = CloudDepthWeight(transmittance, extinction, depthDistance);
 			depthSum += depthWeight * depthDistance;
 			weightSum += depthWeight;
+			heightSum += depthWeight * densityContext.ndf.height_fraction;
 			transmittance *= stepTransmittance;
 		}
 	}
 	if (cirrusPending)
-		IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, phase, ambient, result.lum, transmittance, depthSum, weightSum);
+		IntegrateCirrus(eye + direction * cirrusDistance, direction, cirrusDistance, phase, ambient, result.lum, transmittance, depthSum, weightSum, cirrusWeight);
 	result.transmittance = saturate((transmittance - 0.1) / 0.9);
 	if (weightSum > 0.0) {
 		result.cloud_depth = depthSum / weightSum;
+		result.motionMetadata = float2(saturate(cirrusWeight / weightSum), saturate(heightSum / weightSum));
 		const float4 ap = SampleCloudAerialPerspective(direction, result.cloud_depth, apShadow);
 		result.lum = result.lum * ap.a + ap.rgb * (1.0 - result.transmittance);
 	}

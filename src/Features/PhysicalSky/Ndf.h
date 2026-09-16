@@ -171,9 +171,6 @@ struct LowCloudSettings
 	float bottomDensityPower = 6.f;
 	float bottomDensityWidth = 6.8f;
 	float topExpansion = 1.f;
-	float2 windDirection = { 0.f, 0.f };
-	float windSpeed = 0.f;
-	float shapeShear = 0.f;
 	float densityScale = 0.125f;
 
 	float2 GetNdfAltitudeRangeKm() const;
@@ -216,11 +213,22 @@ struct CloudLightingSettings
 	float ambientBase = 1.f;
 };
 
+struct CloudWindSettings
+{
+	float2 lowVelocity = { 5.f, 0.f };
+	float2 highVelocity = { 10.f, 0.f };
+	float development = 0.25f;
+	float disturbance = 0.2f;
+
+	static CloudWindSettings Interpolate(const CloudWindSettings& from, const CloudWindSettings& to, float weight);
+};
+
 struct CloudLayer
 {
 	LowCloudSettings low;
 	CirrusSettings cirrus;
 	CloudLightingSettings lighting;
+	CloudWindSettings wind;
 };
 
 struct CirrusTextureSet

@@ -21,10 +21,17 @@ namespace
 {
 	constexpr float KilometersToGameUnits(float value) { return value / Util::Units::GAME_UNIT_TO_KM; }
 
-	float2 CloudWindDirection(const LowCloudSettings& settings)
+	float2 CloudVelocity(float2 velocity)
 	{
-		const float length = std::hypot(settings.windDirection.x, settings.windDirection.y);
-		return std::isfinite(length) && length > 1e-4f ? settings.windDirection / length : float2{ 1.f, 0.f };
+		const float speed = std::hypot(velocity.x, velocity.y);
+		if (!std::isfinite(speed))
+			return {};
+		return velocity * (speed > 80.f ? 80.f / speed : 1.f);
+	}
+
+	float CloudUnitParameter(float value)
+	{
+		return std::isfinite(value) ? std::clamp(value, 0.f, 1.f) : 0.f;
 	}
 
 	bool IsVolumeTexture(ID3D11ShaderResourceView* srv)
@@ -35,6 +42,19 @@ namespace
 		srv->GetDesc(&desc);
 		return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D;
 	}
+}
+
+CloudWindSettings CloudWindSettings::Interpolate(const CloudWindSettings& from, const CloudWindSettings& to, float weight)
+{
+	const float blend = CloudUnitParameter(weight);
+	const float2 lowFrom = CloudVelocity(from.lowVelocity);
+	const float2 highFrom = CloudVelocity(from.highVelocity);
+	return {
+		.lowVelocity = lowFrom + (CloudVelocity(to.lowVelocity) - lowFrom) * blend,
+		.highVelocity = highFrom + (CloudVelocity(to.highVelocity) - highFrom) * blend,
+		.development = std::lerp(CloudUnitParameter(from.development), CloudUnitParameter(to.development), blend),
+		.disturbance = std::lerp(CloudUnitParameter(from.disturbance), CloudUnitParameter(to.disturbance), blend)
+	};
 }
 
 float2 LowCloudSettings::GetNdfAltitudeRangeKm() const
@@ -449,11 +469,23 @@ void PhysicalSky::UpdateCloudWind()
 	if (!std::isfinite(elapsed) || elapsed <= 0.0)
 		return;
 
-	const auto& low = settings.cloudLayer.low;
-	const float2 direction = CloudWindDirection(low);
-	const double speed = std::isfinite(low.windSpeed) ? std::clamp(low.windSpeed, 0.f, 80.f) : 0.0;
-	volWindOffsetMeters[0] += direction.x * speed * elapsed;
-	volWindOffsetMeters[1] += direction.y * speed * elapsed;
+	const auto& layer = settings.cloudLayer;
+	const float2 lowVelocity = CloudVelocity(layer.wind.lowVelocity);
+	const float2 highVelocity = CloudVelocity(layer.wind.highVelocity);
+	volWind.lowOffset[0] += lowVelocity.x * elapsed;
+	volWind.lowOffset[1] += lowVelocity.y * elapsed;
+	volWind.highOffset[0] += highVelocity.x * elapsed;
+	volWind.highOffset[1] += highVelocity.y * elapsed;
+	volWind.phase += CloudUnitParameter(layer.wind.development) * 0.03 * elapsed;
+	const float2 altitude = layer.low.GetNdfAltitudeRangeKm();
+	const float span = altitude.y - altitude.x;
+	const float heightFraction = span / std::max(layer.cirrus.GetAltitudeKm() - (altitude.x + altitude.y) * 0.5f, span);
+	float2 targetShear = (highVelocity - lowVelocity) * (3.f * heightFraction);
+	const float shearLength = std::hypot(targetShear.x, targetShear.y);
+	if (shearLength > 150.f)
+		targetShear *= 150.f / shearLength;
+	volWind.shear += (targetShear - volWind.shear) * static_cast<float>(-std::expm1(-elapsed / 30.0));
+	volWind.disturbance = std::lerp(volWind.disturbance, CloudUnitParameter(layer.wind.disturbance), static_cast<float>(-std::expm1(-elapsed / 2.0)));
 }
 
 void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
@@ -508,16 +540,16 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	low.ndfScale.x = std::clamp(low.ndfScale.x, 1.0f, 50.0f);
 	low.ndfScale.y = std::clamp(low.ndfScale.y, 1.0f, 50.0f);
 
-	const float2 windDir = CloudWindDirection(low);
-	const float2 noiseWindOffset = {
-		static_cast<float>(volWindOffsetMeters[0] / Util::Units::GAME_UNIT_TO_M),
-		static_cast<float>(volWindOffsetMeters[1] / Util::Units::GAME_UNIT_TO_M)
+	const auto& previousWind = volMainHistoryValid ? volHistoryWind : volWind;
+	auto offset = [](const std::array<double, 2>& value) -> float2 {
+		return { static_cast<float>(value[0] / Util::Units::GAME_UNIT_TO_M), static_cast<float>(value[1] / Util::Units::GAME_UNIT_TO_M) };
 	};
-	const float2 windDelta = volMainHistoryValid ? float2{
-		static_cast<float>((volWindOffsetMeters[0] - volHistoryWindOffsetMeters[0]) / Util::Units::GAME_UNIT_TO_M),
-		static_cast<float>((volWindOffsetMeters[1] - volHistoryWindOffsetMeters[1]) / Util::Units::GAME_UNIT_TO_M)
-	} :
-	                                               float2{ 0.f, 0.f };
+	auto delta = [](const std::array<double, 2>& current, const std::array<double, 2>& previous) -> float2 {
+		return { static_cast<float>((current[0] - previous[0]) / Util::Units::GAME_UNIT_TO_M), static_cast<float>((current[1] - previous[1]) / Util::Units::GAME_UNIT_TO_M) };
+	};
+	const float2 noiseWindOffset = offset(volWind.lowOffset);
+	const float2 windDelta = delta(volWind.lowOffset, previousWind.lowOffset);
+	constexpr double phasePeriod = 6.283185307179586;
 	const float2 lowAltitudeRange = low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
@@ -587,11 +619,17 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.shadowVolumeBottom = KilometersToGameUnits(lowCloudBaseKm),
 		.shadowVolumeTop = KilometersToGameUnits(lowCloudTopKm),
 		.cloudWindDelta = windDelta,
-		.cloudShapeShear = windDir * KilometersToGameUnits(std::clamp(low.shapeShear, 0.f, 2.f)),
+		.cloudShapeShear = volWind.shear / Util::Units::GAME_UNIT_TO_M,
 		.previousViewProj = volHistoryViewProj,
 		.previousCamera = volHistoryCamera,
 		.previousFrameDim = volHistoryFrameDim,
 		.ndfBoundaryRect = { boundaryOrigin.x, boundaryOrigin.y, boundaryOrigin.x + boundaryExtent.x, boundaryOrigin.y + boundaryExtent.y },
+		.cirrusWindOffset = offset(volWind.highOffset),
+		.cirrusWindDelta = delta(volWind.highOffset, previousWind.highOffset),
+		.previousShapeShear = previousWind.shear / Util::Units::GAME_UNIT_TO_M,
+		.cloudEvolution = { static_cast<float>(std::fmod(volWind.phase, phasePeriod)), volWind.disturbance,
+			static_cast<float>(std::fmod(previousWind.phase, phasePeriod)), previousWind.disturbance },
+		.cloudEvolutionDelta = static_cast<float>((volWind.phase - previousWind.phase) / (phasePeriod * 0.0034834063 * Util::Units::GAME_UNIT_TO_M)),
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -715,6 +753,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 			.gridOriginSpacing = { boundaryOrigin.x, boundaryOrigin.y, boundarySpacing.x, boundarySpacing.y },
 			.fieldFrequencyWind = { sbData.lowNdfFrequency.x, sbData.lowNdfFrequency.y, noiseWindOffset.x, noiseWindOffset.y },
 			.shearAltitude = { sbData.cloudShapeShear.x, sbData.cloudShapeShear.y, sbData.lowCloudBaseAltitude, sbData.lowCloudTopAltitude },
+			.evolution = sbData.cloudEvolution,
 			.frameDimensions = { textureDim.x, textureDim.y, static_cast<float>(lowW), static_cast<float>(lowH) },
 			.planetRadius = sbData.planetRadius,
 			.bottomZ = sbData.bottomZ,
@@ -805,7 +844,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		context->CSSetShaderResources(26, 12, nullTemporalSrvs);
 		volMainHistoryValid = true;
-		volHistoryWindOffsetMeters = volWindOffsetMeters;
+		volHistoryWind = volWind;
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
 		volHistoryFrameDim = frameDim;
