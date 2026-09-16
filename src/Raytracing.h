@@ -2,9 +2,10 @@
 
 #include "Buffer.h"
 #include "CreationEngineRaytracing.h"
-#include "Feature.h"
 #include "FeatureCategories.h"
+#include "Features/OverlayFeature.h"
 #include "Globals.h"
+#include <EASTL/vector.h>
 #include <d3d11.h>
 #include <memory>
 #include <winrt/base.h>
@@ -21,7 +22,7 @@ struct uint2
 /**
  * @brief Core feature integrating CreationEngineRaytracing hardware-accelerated ray tracing.
  */
-struct Raytracing : Feature
+struct Raytracing : OverlayFeature
 {
 public:
 	// Metadata
@@ -32,6 +33,7 @@ public:
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return true; }
 	virtual bool DrawFailLoadMessage() const override { return false; }
+	virtual ReleaseStage GetReleaseStage() const override { return ReleaseStage::Alpha; }
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -48,6 +50,8 @@ public:
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
 	virtual void DrawSettings() override;
+	virtual bool IsOverlayVisible() const override { return Available() && settings.PerfOverlay != OverlayMode::None; }
+	virtual void DrawOverlay() override;
 
 	// Lifecycle
 	virtual void Load() override;
@@ -83,6 +87,14 @@ public:
 	void CopyWaterFlowMap() const;
 	void CompileShaders();
 
+	enum struct OverlayMode
+	{
+		None,
+		Simple,
+		Complete,
+		Extended
+	};
+
 	enum struct DisableReason
 	{
 		None,
@@ -94,11 +106,17 @@ public:
 
 	struct Settings
 	{
+		OverlayMode PerfOverlay = OverlayMode::None;
+		bool DisplaySceneGraphCounters = false;
 		CreationEngineRaytracing::Settings CreationEngineRaytracingSettings;
 		CreationEngineRaytracing::RendererSettings RendererSettings;
 
 		bool operator==(const Settings&) const = default;
 	} settings;
+
+	ImVec2 Position = ImVec2(10.f, 10.f);
+	bool PositionSet = false;
+	eastl::vector<CreationEngineRaytracing::PassTiming> passTimings;
 
 	bool initialized = false;
 	bool forcedDisabled = false;
