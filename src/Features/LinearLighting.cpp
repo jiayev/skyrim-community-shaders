@@ -401,7 +401,7 @@ namespace
 		{
 			auto& ll = globals::features::linearLighting;
 			if (material && ll.IsLinearLightingActive()) {
-				static REL::Relocation<const RE::NiColor*> waterLighting{ REL::Offset(0x338C1D8) };
+				static REL::Relocation<const RE::NiColor*> waterLighting{ REL::RelocationID(527901, 414848) };
 				const auto lighting = ll.SRGBToWorking(*waterLighting);
 				const auto& deep = material->deepWaterColor;
 				const auto& reflection = material->reflectionColor;
@@ -548,7 +548,7 @@ void LinearLighting::Load()
 	{
 		UploadCall(uintptr_t target, bool waterMaterial = false)
 		{
-			if (waterMaterial)
+			if (waterMaterial && REL::Module::IsAE())
 				mov(r9, r15);
 			else
 				mov(r9, rbx);
@@ -561,25 +561,34 @@ void LinearLighting::Load()
 	static UploadCall effectMaterial(reinterpret_cast<uintptr_t>(EffectMaterialUpload::thunk));
 	static UploadCall waterMaterial(reinterpret_cast<uintptr_t>(WaterMaterialUpload::thunk), true);
 	const std::array calls{
-		std::pair{ REL::RelocationID(100563, 107298).address() + 0xC65, lightingMaterial.getCode() },
-		std::pair{ REL::RelocationID(100744, 107525).address() + 0x3E3, effectMaterial.getCode() },
-		std::pair{ REL::RelocationID(100565, 107300).address() + 0x12F0, reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
-		std::pair{ REL::RelocationID(100746, 107527).address() + 0xE6F, reinterpret_cast<const uint8_t*>(EffectGeometryUpload::thunk) },
-		std::pair{ REL::RelocationID(100602, 107363).address() + 0x626, waterMaterial.getCode() }
+		std::tuple{ "Lighting material"sv, REL::RelocationID(100563, 107298).address() + REL::Relocate(0xACD, 0xC65), lightingMaterial.getCode() },
+		std::tuple{ "Effect material"sv, REL::RelocationID(100744, 107525).address() + REL::Relocate(0x3E2, 0x3E3), effectMaterial.getCode() },
+		std::tuple{ "Lighting geometry"sv, REL::RelocationID(100565, 107300).address() + REL::Relocate(0xC1E, 0x12F0), reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
+		std::tuple{ "Effect geometry"sv, REL::RelocationID(100746, 107527).address() + REL::Relocate(0xF16, 0xE6F), reinterpret_cast<const uint8_t*>(EffectGeometryUpload::thunk) },
+		std::tuple{ "Water material"sv, REL::RelocationID(100602, 107363).address() + REL::Relocate(0x5FA, 0x626), waterMaterial.getCode() }
+	};
+	const auto verify = [](std::string_view name, uintptr_t address, const auto& expected) {
+		const auto* actual = reinterpret_cast<const uint8_t*>(address);
+		if (std::memcmp(actual, expected.data(), expected.size()) == 0)
+			return;
+		auto message = fmt::format("Linear Lighting: {} does not match the verified layout.\nSkyrim {}, RVA 0x{:X}\nExpected:",
+			name, Util::GetFormattedVersion(REL::Module::get().version()), address - REL::Module::get().base());
+		for (const auto byte : expected)
+			message += fmt::format(" {:02X}", byte);
+		message += "\nActual:";
+		for (std::size_t i = 0; i < expected.size(); ++i)
+			message += fmt::format(" {:02X}", actual[i]);
+		stl::report_and_fail(message);
 	};
 	constexpr std::array<uint8_t, 6> unmapCall{ 0x48, 0x8B, 0x01, 0xFF, 0x50, 0x78 };
-	for (const auto& [address, code] : calls) {
-		if (std::memcmp(reinterpret_cast<const void*>(address), unmapCall.data(), unmapCall.size()) != 0)
-			stl::report_and_fail("Linear Lighting: native constant upload does not match the verified layout."sv);
-	}
-	const auto waterGeometryAddress = REL::RelocationID(100604, 107365).address() + 0x61F;
+	for (const auto& [name, address, code] : calls)
+		verify(name, address, unmapCall);
+	const auto waterGeometryAddress = REL::RelocationID(100604, 107365).address() + REL::Relocate(0x52F, 0x61F);
 	constexpr std::array<uint8_t, 6> waterUnmapCall{ 0x45, 0x33, 0xC0, 0xFF, 0x50, 0x78 };
-	if (std::memcmp(reinterpret_cast<const void*>(waterGeometryAddress), waterUnmapCall.data(), waterUnmapCall.size()) != 0)
-		stl::report_and_fail("Linear Lighting: native water upload does not match the verified layout."sv);
-	const auto menuAddress = REL::Relocation<uintptr_t>{ REL::Offset(0x972590) }.address();
+	verify("Water geometry", waterGeometryAddress, waterUnmapCall);
+	const auto menuAddress = REL::RelocationID(51855, 52727).address();
 	constexpr std::array<uint8_t, 16> menuEntry{ 0x48, 0x8B, 0xC4, 0x44, 0x88, 0x48, 0x20, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 };
-	if (std::memcmp(reinterpret_cast<const void*>(menuAddress), menuEntry.data(), menuEntry.size()) != 0)
-		stl::report_and_fail("Linear Lighting: native menu renderer does not match the verified layout."sv);
+	verify("Menu renderer", menuAddress, menuEntry);
 	RenderMenuScene::func = menuAddress;
 	if (DetourTransactionBegin() != NO_ERROR)
 		stl::report_and_fail("Linear Lighting: could not begin menu hook installation."sv);
@@ -614,7 +623,7 @@ void LinearLighting::Load()
 	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Particle>>(RE::VTABLE_BSParticleShader[0]);
 	stl::write_vfunc<0x6, SetupGeometry<RE::BSShader::Type::Water>>(RE::VTABLE_BSWaterShader[0]);
 	SKSE::GetTrampoline().write_call<6>(waterGeometryAddress, reinterpret_cast<uintptr_t>(WaterGeometryUpload::thunk));
-	for (const auto& [address, code] : calls)
+	for (const auto& [name, address, code] : calls)
 		SKSE::GetTrampoline().write_call<6>(address, reinterpret_cast<uintptr_t>(code));
 }
 
