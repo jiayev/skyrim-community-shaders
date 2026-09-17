@@ -32,7 +32,7 @@ struct LinearLighting : Feature
 
 	struct Settings
 	{
-		uint enableLinearLighting = false;
+		uint enableLinearLighting = true;
 		uint enableACEScg = false;
 
 		// Lighting multipliers
