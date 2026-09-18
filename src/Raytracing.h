@@ -58,7 +58,7 @@ public:
 	virtual void PostPostLoad() override;
 	virtual void DataLoaded() override;
 
-	void SetupResources();
+	void SetupResourcesPostDeferred();
 
 	bool Available(bool a_initialized = true) const;
 	bool InitializeCERaytracing();

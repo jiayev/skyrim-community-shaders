@@ -185,7 +185,7 @@ void Deferred::SetupResources()
 		directionalShadowLights->CreateSRV(srvDesc);
 	}
 
-	globals::features::raytracing.SetupResources();
+	globals::features::raytracing.SetupResourcesPostDeferred();
 }
 
 void Deferred::ReflectionsPrepasses()

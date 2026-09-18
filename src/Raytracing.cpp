@@ -87,6 +87,7 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 		certSettings.MaterialSettings = pt.MaterialSettings;
 		certSettings.LightingSettings = pt.LightingSettings;
 		certSettings.WaterSettings = pt.WaterSettings;
+		certSettings.ExperimentalSettings.PathTracingCull = pt.ExperimentalSettings.PathTracingCull;
 	} else {
 		certSettings.GeneralSettings.Mode = CreationEngineRaytracing::Mode::None;
 	}
@@ -110,6 +111,9 @@ bool Raytracing::IsPathTracing() const
 
 bool Raytracing::IsPathTracingCull() const
 {
+	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled) {
+		return globals::features::pathTracing.settings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
+	}
 	return Mode() == CreationEngineRaytracing::Mode::PathTracing 
 		&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 }
@@ -418,7 +422,7 @@ bool Raytracing::UpdateResolution()
 	return true;
 }
 
-void Raytracing::SetupResources()
+void Raytracing::SetupResourcesPostDeferred()
 {
 	if (forcedDisabled)
 		return;

@@ -23,7 +23,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SSSSettings,
 	MaterialSettings,
 	LightingSettings,
-	WaterSettings)
+	WaterSettings,
+	ExperimentalSettings)
 
 static std::string StableLabel(const char* label, std::string_view id)
 {
@@ -85,26 +86,10 @@ void PathTracing::DrawSettings()
 	ImGui::Checkbox(T(TKEY("enabled"), "Enabled"), &settings.Enabled);
 
 	if (ImGui::BeginTabBar("##PathTracingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
-			DrawGeneralSettings();
-			ImGui::EndTabItem();
-		}
-
-		const auto& denoiser = settings.GeneralSettings.Denoiser;
-		const bool reblur = (denoiser == CreationEngineRaytracing::Denoiser::NRD_Reblur);
-		const bool relax = (denoiser == CreationEngineRaytracing::Denoiser::NRD_Relax);
-
-		if (reblur || relax) {
-			if (ImGui::BeginTabItem(T(RT_TKEY("tab_nrd"), "NRD"))) {
-				DrawNRDSettings();
-				ImGui::EndTabItem();
-			}
-		}
-
-		if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
-			DrawAdvancedSettings();
-			ImGui::EndTabItem();
-		}
+		DrawGeneralSettings();
+		DrawNRDSettings();
+		DrawAdvancedSettings();
+		DrawExperimentalSettings();
 
 		ImGui::EndTabBar();
 	}
@@ -116,53 +101,59 @@ void PathTracing::DrawSettings()
 
 void PathTracing::DrawGeneralSettings()
 {
-	ImGui::PushID("GeneralSettings");
+	if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
+		ImGui::PushID("GeneralSettings");
 
-	ImGui::SliderInt(T(TKEY("bounces"), "Bounces"), &settings.RaytracingSettings.Bounces, 1, 8);
+		ImGui::SliderInt(T(TKEY("bounces"), "Bounces"), &settings.RaytracingSettings.Bounces, 1, 8);
 
-	ImGui::SliderInt(T(TKEY("samples_per_pixel"), "Samples Per Pixel"), &settings.RaytracingSettings.SamplesPerPixel, 1, 16);
+		ImGui::SliderInt(T(TKEY("samples_per_pixel"), "Samples Per Pixel"), &settings.RaytracingSettings.SamplesPerPixel, 1, 16);
 
-	const char* rrNames[] = { "Disabled", "Standard", "Enhanced" };
-	int currentRR = static_cast<int>(settings.RaytracingSettings.RussianRoulette);
-	if (ImGui::Combo(T(TKEY("russian_roulette"), "Russian Roulette"), &currentRR, rrNames, IM_ARRAYSIZE(rrNames))) {
-		settings.RaytracingSettings.RussianRoulette = static_cast<CreationEngineRaytracing::RussianRoulette>(currentRR);
-	}
-
-	const char* denoiserNames[] = { "None", "NRD Reblur", "NRD Relax", "DLSS RR", "Accumulation" };
-	int currentDenoiser = static_cast<int>(settings.GeneralSettings.Denoiser);
-	if (ImGui::Combo(T(TKEY("denoiser"), "Denoiser"), &currentDenoiser, denoiserNames, IM_ARRAYSIZE(denoiserNames))) {
-		settings.GeneralSettings.Denoiser = static_cast<CreationEngineRaytracing::Denoiser>(currentDenoiser);
-	}
-
-	if (settings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR) {
-		auto* streamline = Streamline::GetSingleton();
-		if (!streamline->IsDLSSRRSupported()) {
-			ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s",
-				T(RT_TKEY("dlss_rr_not_available"), "DLSS Ray Reconstruction is not available on this system."));
-		} else if (globals::features::upscaling.GetUpscaleMethod() != Upscaling::UpscaleMethod::kDLSS_RR) {
-			ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Warning, "%s",
-				T(RT_TKEY("set_upscaling_to_dlss"), "Set Upscaling method to DLSS to enable Ray Reconstruction."));
+		const char* rrNames[] = { "Disabled", "Standard", "Enhanced" };
+		int currentRR = static_cast<int>(settings.RaytracingSettings.RussianRoulette);
+		if (ImGui::Combo(T(TKEY("russian_roulette"), "Russian Roulette"), &currentRR, rrNames, IM_ARRAYSIZE(rrNames))) {
+			settings.RaytracingSettings.RussianRoulette = static_cast<CreationEngineRaytracing::RussianRoulette>(currentRR);
 		}
+
+		const char* denoiserNames[] = { "None", "NRD Reblur", "NRD Relax", "DLSS RR", "Accumulation" };
+		int currentDenoiser = static_cast<int>(settings.GeneralSettings.Denoiser);
+		if (ImGui::Combo(T(TKEY("denoiser"), "Denoiser"), &currentDenoiser, denoiserNames, IM_ARRAYSIZE(denoiserNames))) {
+			settings.GeneralSettings.Denoiser = static_cast<CreationEngineRaytracing::Denoiser>(currentDenoiser);
+		}
+
+		if (settings.GeneralSettings.Denoiser == CreationEngineRaytracing::Denoiser::DLSS_RR) {
+			auto* streamline = Streamline::GetSingleton();
+			if (!streamline->IsDLSSRRSupported()) {
+				ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s",
+					T(RT_TKEY("dlss_rr_not_available"), "DLSS Ray Reconstruction is not available on this system."));
+			} else if (globals::features::upscaling.GetUpscaleMethod() != Upscaling::UpscaleMethod::kDLSS_RR) {
+				ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Warning, "%s",
+					T(RT_TKEY("set_upscaling_to_dlss"), "Set Upscaling method to DLSS to enable Ray Reconstruction."));
+			}
+		}
+
+		DrawMaterialSettings();
+
+		DrawLightingSettings();
+
+		ImGui::PopID();
+		ImGui::EndTabItem();
 	}
-
-	DrawMaterialSettings();
-
-	DrawLightingSettings();
-
-	ImGui::PopID();
 }
 
 void PathTracing::DrawAdvancedSettings()
 {
-	ImGui::PushID("AdvancedSettings");
+	if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
+		ImGui::PushID("AdvancedSettings");
 
-	ImGui::Checkbox(T(RT_TKEY("stable_planes"), "Stable Planes"), &settings.StablePlanes);
+		ImGui::Checkbox(T(RT_TKEY("stable_planes"), "Stable Planes"), &settings.StablePlanes);
 
-	DrawSSSSettings();
+		DrawSSSSettings();
 
-	DrawWaterSettings();
+		DrawWaterSettings();
 
-	ImGui::PopID();
+		ImGui::PopID();
+		ImGui::EndTabItem();
+	}
 }
 
 void PathTracing::DrawNRDSettings()
@@ -174,45 +165,48 @@ void PathTracing::DrawNRDSettings()
 	if (!reblur && !relax)
 		return;
 
-	ImGui::PushID("NRDSettings");
+	if (ImGui::BeginTabItem(T(RT_TKEY("tab_nrd"), "NRD"))) {
+		ImGui::PushID("NRDSettings");
 
-	auto& nrdSettings = settings.NRDSettings;
+		auto& nrdSettings = settings.NRDSettings;
 
-	if (ImGui::InputScalar(T(RT_TKEY("history_fix_frames"), "History Fix Frames"), ImGuiDataType_U32, &nrdSettings.historyFixFrameNum))
-		ClampSetting(nrdSettings.historyFixFrameNum, 0u, 3u);
+		if (ImGui::InputScalar(T(RT_TKEY("history_fix_frames"), "History Fix Frames"), ImGuiDataType_U32, &nrdSettings.historyFixFrameNum))
+			ClampSetting(nrdSettings.historyFixFrameNum, 0u, 3u);
 
-	if (ImGui::InputScalar(T(RT_TKEY("history_fix_base_pixel_stride"), "History Fix Base Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixBasePixelStride))
-		ClampSetting(nrdSettings.historyFixBasePixelStride, 1u, 64u);
+		if (ImGui::InputScalar(T(RT_TKEY("history_fix_base_pixel_stride"), "History Fix Base Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixBasePixelStride))
+			ClampSetting(nrdSettings.historyFixBasePixelStride, 1u, 64u);
 
-	if (ImGui::InputScalar(T(RT_TKEY("history_fix_alternate_pixel_stride"), "History Fix Alternate Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixAlternatePixelStride))
-		ClampSetting(nrdSettings.historyFixAlternatePixelStride, 1u, 64u);
+		if (ImGui::InputScalar(T(RT_TKEY("history_fix_alternate_pixel_stride"), "History Fix Alternate Pixel Stride"), ImGuiDataType_U32, &nrdSettings.historyFixAlternatePixelStride))
+			ClampSetting(nrdSettings.historyFixAlternatePixelStride, 1u, 64u);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("fast_history_clamping_sigma_scale"), "Fast History Clamping Sigma Scale"), &nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
-		ClampSetting(nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f);
+		if (ImGui::SliderFloat(T(RT_TKEY("fast_history_clamping_sigma_scale"), "Fast History Clamping Sigma Scale"), &nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f, "%.2f"))
+			ClampSetting(nrdSettings.fastHistoryClampingSigmaScale, 1.0f, 3.0f);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("diffuse_prepass_blur_radius"), "Diffuse Prepass Blur Radius"), &nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
-		ClampSetting(nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f);
+		if (ImGui::SliderFloat(T(RT_TKEY("diffuse_prepass_blur_radius"), "Diffuse Prepass Blur Radius"), &nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+			ClampSetting(nrdSettings.diffusePrepassBlurRadius, 0.0f, 100.0f);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("specular_prepass_blur_radius"), "Specular Prepass Blur Radius"), &nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
-		ClampSetting(nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f);
+		if (ImGui::SliderFloat(T(RT_TKEY("specular_prepass_blur_radius"), "Specular Prepass Blur Radius"), &nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f, "%.1f"))
+			ClampSetting(nrdSettings.specularPrepassBlurRadius, 0.0f, 100.0f);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("min_hit_distance_weight"), "Min Hit Distance Weight"), &nrdSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
-		ClampSetting(nrdSettings.minHitDistanceWeight, 0.001f, 0.2f);
+		if (ImGui::SliderFloat(T(RT_TKEY("min_hit_distance_weight"), "Min Hit Distance Weight"), &nrdSettings.minHitDistanceWeight, 0.001f, 0.2f, "%.3f"))
+			ClampSetting(nrdSettings.minHitDistanceWeight, 0.001f, 0.2f);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("lobe_angle_fraction"), "Lobe Angle Fraction"), &nrdSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
-		ClampSetting(nrdSettings.lobeAngleFraction, 0.0f, 1.0f);
+		if (ImGui::SliderFloat(T(RT_TKEY("lobe_angle_fraction"), "Lobe Angle Fraction"), &nrdSettings.lobeAngleFraction, 0.0f, 1.0f, "%.3f"))
+			ClampSetting(nrdSettings.lobeAngleFraction, 0.0f, 1.0f);
 
-	if (ImGui::SliderFloat(T(RT_TKEY("roughness_fraction"), "Roughness Fraction"), &nrdSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
-		ClampSetting(nrdSettings.roughnessFraction, 0.0f, 1.0f);
+		if (ImGui::SliderFloat(T(RT_TKEY("roughness_fraction"), "Roughness Fraction"), &nrdSettings.roughnessFraction, 0.0f, 1.0f, "%.3f"))
+			ClampSetting(nrdSettings.roughnessFraction, 0.0f, 1.0f);
 
-	ImGui::Checkbox(T(RT_TKEY("enable_anti_firefly"), "Enable Anti Firefly"), &nrdSettings.enableAntiFirefly);
+		ImGui::Checkbox(T(RT_TKEY("enable_anti_firefly"), "Enable Anti Firefly"), &nrdSettings.enableAntiFirefly);
 
-	if (reblur)
-		DrawReblurSettings();
-	else if (relax)
-		DrawRelaxSettings();
+		if (reblur)
+			DrawReblurSettings();
+		else if (relax)
+			DrawRelaxSettings();
 
-	ImGui::PopID();
+		ImGui::PopID();
+		ImGui::EndTabItem();
+	}
 }
 
 void PathTracing::DrawReblurSettings()
@@ -366,5 +360,22 @@ void PathTracing::DrawWaterSettings()
 			waterSettings.AbsorptionScale = std::clamp(waterSettings.AbsorptionScale, 0.01f, 10.0f);
 	}
 }
+
+void PathTracing::DrawExperimentalSettings()
+{
+	if (ImGui::BeginTabItem(T(TKEY("tab_experimental"), "Experimental"))) {
+		ImGui::PushID("ExperimentalSettings");
+
+		const char* cullNames[] = { "Disabled", "Enabled", "Full" };
+		int currentCull = static_cast<int>(settings.ExperimentalSettings.PathTracingCull);
+		if (ImGui::Combo(T(TKEY("pathtracing_cull"), "Path Tracing Cull"), &currentCull, cullNames, IM_ARRAYSIZE(cullNames))) {
+			settings.ExperimentalSettings.PathTracingCull = static_cast<CreationEngineRaytracing::PTCullMode>(currentCull);
+		}
+
+		ImGui::PopID();
+		ImGui::EndTabItem();
+	}
+}
+
 
 
