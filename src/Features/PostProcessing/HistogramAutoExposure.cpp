@@ -1,5 +1,6 @@
 #include "HistogramAutoExposure.h"
 
+#include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "ShaderCache.h"
@@ -18,9 +19,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void HistogramAutoExposure::DrawSettings()
 {
-	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &settings.ExposureCompensation, -5.f, 5.f, "%+.2f EV");
+	float exposureCompensation = settings.ExposureCompensation;
+	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.exposure_compensation", "Exposure Compensation"), &exposureCompensation, -5.f, 5.f, "%+.2f EV");
+	settings.ExposureCompensation = exposureCompensation;
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T("feature.post_processing.histogram_auto_exposure.applying_additional_exposure_adjustment_to_the_image", "Applying additional exposure adjustment to the image."));
+
+	if (const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr) {
+		ImGui::TextDisabled(T("feature.post_processing.histogram_auto_exposure.cinematic_offset", "Cinematic Camera: EV100 %.2f, offset %+.2f EV, effective %+.2f EV"),
+			cam->EV100, cam->ExposureDeltaEV, exposureCompensation + cam->ExposureDeltaEV);
+	}
 
 	ImGui::SliderFloat(T("feature.post_processing.histogram_auto_exposure.adaptation_speed", "Adaptation Speed"), &settings.AdaptSpeed, 0.1f, 5.f, "%.2f");
 	ImGui::SliderFloat2(T("feature.post_processing.histogram_auto_exposure.focus_area", "Focus Area"), &settings.AdaptArea.x, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
@@ -64,7 +72,11 @@ void HistogramAutoExposure::DrawSettings()
 
 		const float adaptedLum = std::max(adaptationValue, 1e-5f);
 		const float adaptedEV100 = log2(adaptedLum) + 3.0f;
-		const float compensationEV = settings.ExposureCompensation;
+		const float compensationEV = settings.ExposureCompensation +
+		                             [&]() {
+										 const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+										 return cam ? cam->ExposureDeltaEV : 0.0f;
+									 }();
 		const float compensationScale = exp2(compensationEV);
 		const float clampedAdaptedLum = std::clamp(adaptedLum, exp2(settings.AdaptationRange.x - 3.0f), exp2(settings.AdaptationRange.y - 3.0f));
 		const float compensatedTargetLum = clampedAdaptedLum / std::max(compensationScale, 1e-5f);
@@ -236,7 +248,8 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	if (!AllShadersReady({ &histogramCS, &histogramAvgCS }))
 		return;
 
-	float exposureCompensation = settings.ExposureCompensation;
+	const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+	const float exposureCompensation = settings.ExposureCompensation + (cam ? cam->ExposureDeltaEV : 0.0f);
 	float2 adaptationRange = settings.AdaptationRange;
 
 	AutoExposureCB cbData = {

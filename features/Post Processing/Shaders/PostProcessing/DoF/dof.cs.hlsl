@@ -180,11 +180,8 @@ cbuffer DoFCB : register(b1)
 	uint BokehBladeCount;
 	float BokehBladeRoundness;
 	float ProceduralBokehAreaScale;
-	uint Padding;
+	float SensorWidthMM;
 };
-
-// Sensor width the FocalLength control is expressed for (35mm full frame).
-#define SENSOR_WIDTH_MM 36.0f
 
 // One CoC tile covers exactly one gather thread group: 8x8 half res pixels == 16x16 full res pixels.
 // Because of that a gather group can take a *group uniform* (scalar) early out branch from a single
@@ -268,7 +265,7 @@ float CalculateBlurDiscSize(FocusInfo focusInfo)
 	                        (abs(pixelDepthInM - focusInfo.focusDepthInM) / max(pixelDepthInM, 1e-6f));
 
 	// sensor-space diameter (mm) -> screen-space radius (fraction of the screen width)
-	float cocRadius = (0.5f * cocDiameterInMM) * (1.0f / SENSOR_WIDTH_MM);
+	float cocRadius = (0.5f * cocDiameterInMM) / max(SensorWidthMM, 1.0f);
 
 	// Clamp the kernel so an extreme focus setup can never blow up the gather.
 	// Apply separate foreground/background safety limits.
