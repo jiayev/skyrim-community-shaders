@@ -6,6 +6,7 @@
 #include "PostProcessing/Border.h"
 #include "PostProcessing/CODBloom.h"
 #include "PostProcessing/Camera.h"
+#include "PostProcessing/CinematicCamera.h"
 #include "PostProcessing/ColorGrading.h"
 #include "PostProcessing/Composite.h"
 #include "PostProcessing/DoF.h"
@@ -115,6 +116,15 @@ struct PostProcessing : Feature
 	std::array<std::shared_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
 
 	BokehResources bokehResources;
+
+	CinematicCamera::Controller cinematicCamera;
+
+	[[nodiscard]] const CinematicCamera::PhysicalCameraState* GetActivePhysicalCameraState() const
+	{
+		return cinematicCamera.GetState();
+	}
+
+	[[nodiscard]] CinematicCamera::Controller& GetCinematicCamera() { return cinematicCamera; }
 
 	template <typename T>
 	T* GetPipelineFeature(FeaturePipelineIndex idx)

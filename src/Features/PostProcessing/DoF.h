@@ -1,8 +1,5 @@
 #pragma once
 
-#define TDM_API_COMMONLIB
-#include "TDM/TrueDirectionalMovementAPI.h"
-
 #include "Buffer.h"
 #include "PostProcessFeature.h"
 
@@ -23,6 +20,7 @@ struct DoF : public PostProcessFeature
 		float ManualFocusPlane = 0.4f;
 		float FocalLength = 50.0f;
 		float FNumber = 2.8f;
+		float SensorWidthMM = 36.0f;
 		float FarPlaneMaxBlur = 1.0f;
 		float NearPlaneMaxBlur = 1.0f;
 		bool UseAdaptiveGather = true;
@@ -79,7 +77,7 @@ struct DoF : public PostProcessFeature
 		uint BokehBladeCount;
 		float BokehBladeRoundness;
 		float ProceduralBokehAreaScale;
-		uint pad;
+		float SensorWidthMM;
 	};
 	static_assert(sizeof(DoFCB) == 128, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
 
@@ -141,17 +139,9 @@ struct DoF : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
-	void UpdateProceduralBokehSamples(bool force = false);
+	void UpdateProceduralBokehSamples(int bladeCount, float bladeRoundness, bool force = false);
 
-	RE::NiPoint3 GetCameraPos();
-	RE::NiPoint3 GetReferenceFocusPosition(RE::TESObjectREFR* a_ref);
-	bool GetReferenceFocusCoord(RE::TESObjectREFR* a_ref, float2& a_focusCoord);
-	bool GetInDialogue();
-	bool GetTargetLockEnabled();
-	float GetDistanceToReference(RE::TESObjectREFR* a_ref);
 	float debugDistance = 0.0f;
 	float debugFocusPlane = 0.0f;
 	uint currentRef = 0;
-
-	TDM_API::IVTDM2* g_TDM = nullptr;
 };

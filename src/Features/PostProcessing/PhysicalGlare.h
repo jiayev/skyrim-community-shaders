@@ -281,7 +281,12 @@ struct PhysicalGlare : public PostProcessFeature
 
 private:
 	void DispatchFFT(ID3D11ComputeShader* shader, Texture2D* input, Texture2D* output, uint resolution);
-	void GeneratePSF();
-	bool NeedsPSFRegeneration() const;
-	bool NeedsApertureRegeneration() const;
+	void GeneratePSF(const Settings& a_effective);
+	bool NeedsPSFRegeneration(const Settings& a_effective) const;
+	bool NeedsApertureRegeneration(const Settings& a_effective) const;
+
+	/// Saved settings with the lens aperture (F-stop, blades, rotation) replaced
+	/// by the Cinematic Camera values while it is active and Lens mode is
+	/// selected. Pupil/Eye mode keeps its own aperture model.
+	[[nodiscard]] Settings GetEffectiveSettings() const;
 };
