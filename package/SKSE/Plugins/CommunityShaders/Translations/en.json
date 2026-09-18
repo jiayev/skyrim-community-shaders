@@ -2271,6 +2271,8 @@
     "feature.path_tracing.tab_general": "General",
     "feature.path_tracing.tab_advanced": "Advanced",
     "feature.path_tracing.tab_nrd": "NRD",
+    "feature.path_tracing.tab_experimental": "Experimental",
+    "feature.path_tracing.pathtracing_cull": "Path Tracing Cull",
     "feature.raytracing.absorption_scale": "Absorption Scale",
     "feature.raytracing.atrous_iteration_num": "A-Trous Iteration Num",
     "feature.raytracing.depth_threshold": "Depth Threshold",

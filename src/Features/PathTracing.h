@@ -46,6 +46,7 @@ public:
 		CreationEngineRaytracing::MaterialSettings MaterialSettings;
 		CreationEngineRaytracing::LightingSettings LightingSettings;
 		CreationEngineRaytracing::WaterSettings WaterSettings;
+		CreationEngineRaytracing::ExperimentalSettings ExperimentalSettings;
 
 		bool operator==(const Settings&) const = default;
 	} settings;
@@ -64,6 +65,7 @@ public:
 	void DrawMaterialSettings();
 	void DrawLightingSettings();
 	void DrawWaterSettings();
+	void DrawExperimentalSettings();
 
 	void UpdateSettings();
 	bool Available() const;
