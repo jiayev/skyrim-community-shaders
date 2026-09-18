@@ -74,7 +74,7 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 		break;
 	}
 
-	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled) {
+	if (IsPathTracing()) {
 		const auto& pt = globals::features::pathTracing.settings;
 		certSettings.GeneralSettings.Mode = CreationEngineRaytracing::Mode::PathTracing;
 		certSettings.GeneralSettings.Denoiser = pt.GeneralSettings.Denoiser;
@@ -99,9 +99,11 @@ CreationEngineRaytracing::Mode Raytracing::Mode() const
 {
 	if (!Available())
 		return CreationEngineRaytracing::Mode::None;
+
 	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled)
 		return CreationEngineRaytracing::Mode::PathTracing;
-	return settings.CreationEngineRaytracingSettings.GeneralSettings.Mode;
+
+	return CreationEngineRaytracing::Mode::None;
 }
 
 bool Raytracing::IsPathTracing() const
@@ -111,9 +113,6 @@ bool Raytracing::IsPathTracing() const
 
 bool Raytracing::IsPathTracingCull() const
 {
-	if (globals::features::pathTracing.loaded && globals::features::pathTracing.settings.Enabled) {
-		return globals::features::pathTracing.settings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
-	}
 	return Mode() == CreationEngineRaytracing::Mode::PathTracing 
 		&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 }
@@ -193,12 +192,7 @@ void Raytracing::Execute()
 	const auto& renderTargets = renderer->GetRuntimeData().renderTargets;
 	auto& main = renderTargets[RE::RENDER_TARGETS::kMAIN];
 
-	const bool pathtracing = (Mode() == CreationEngineRaytracing::Mode::PathTracing);
-	const bool debug = (Mode() == CreationEngineRaytracing::Mode::Debug);
-
-	if (pathtracing || debug) {
-
-
+	if (IsPathTracing()) {
 		float2 screenSize{ static_cast<float>(globals::game::graphicsState->screenWidth), static_cast<float>(globals::game::graphicsState->screenHeight) };
 		auto dynamicScreenSize = Util::ConvertToDynamic(screenSize);
 
@@ -335,7 +329,7 @@ void Raytracing::Load()
 
 void Raytracing::PostPostLoad()
 {
-	creationEngineRaytracing = std::make_unique<CreationEngineRaytracing>();
+	creationEngineRaytracing = eastl::make_unique<CreationEngineRaytracing>();
 
 	if (!creationEngineRaytracing->handle) {
 		settings.CreationEngineRaytracingSettings.Enabled = false;
@@ -424,6 +418,9 @@ bool Raytracing::UpdateResolution()
 
 void Raytracing::SetupResourcesPostDeferred()
 {
+	if (!loaded)
+		return;
+
 	if (forcedDisabled)
 		return;
 
@@ -810,22 +807,6 @@ void Raytracing::DrawSettings()
 	}
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
-
-	const char* modeStr = "None";
-	switch (Mode()) {
-	case CreationEngineRaytracing::Mode::GlobalIllumination:
-		modeStr = "Global Illumination";
-		break;
-	case CreationEngineRaytracing::Mode::PathTracing:
-		modeStr = "Path Tracing";
-		break;
-	case CreationEngineRaytracing::Mode::Debug:
-		modeStr = "Debug";
-		break;
-	default:
-		break;
-	}
-	ImGui::Text("%s: %s", T(TKEY("active_mode"), "Active Mode"), modeStr);
 
 	if (ceRTSettingsBefore != GetSettings()) {
 		UpdateSettings();
