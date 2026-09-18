@@ -124,7 +124,7 @@ public:
 
 	uint2 m_Resolution{ 0, 0 };
 
-	std::unique_ptr<CreationEngineRaytracing> creationEngineRaytracing = nullptr;
+	eastl::unique_ptr<CreationEngineRaytracing> creationEngineRaytracing = nullptr;
 
 	// Sky Hemisphere
 	winrt::com_ptr<ID3D11Texture2D> skyHemisphere = nullptr;
@@ -188,7 +188,7 @@ public:
 					rt.creationEngineRaytracing->UpdateCamera();
 
 					// Clear render targets 
-					if (rt.Mode() == CreationEngineRaytracing::Mode::PathTracing || rt.Mode() == CreationEngineRaytracing::Mode::Debug) {
+					if (rt.IsPathTracing()) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;
 							auto context = globals::d3d::context;
