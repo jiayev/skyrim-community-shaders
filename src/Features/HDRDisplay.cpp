@@ -1175,6 +1175,7 @@ void HDRDisplay::ApplyHDR()
 				}
 			}
 
+			RestoreCleanScene();
 			state->EndPerfEvent();
 			return;
 		}
@@ -1197,6 +1198,7 @@ void HDRDisplay::ApplyHDR()
 		}
 	}
 
+	RestoreCleanScene();
 	state->EndPerfEvent();
 }
 
@@ -1276,6 +1278,15 @@ void HDRDisplay::SnapshotCleanScene()
 
 	globals::d3d::context->CopyResource(cleanSceneCapture->resource.get(), hdrTexture->resource.get());
 	cleanSceneCaptureFrame = globals::state->frameCount;
+}
+
+void HDRDisplay::RestoreCleanScene()
+{
+	if (!IsCleanSceneCaptureFresh() || !hdrTexture || !hdrTexture->resource ||
+		!cleanSceneCapture || !cleanSceneCapture->resource)
+		return;
+
+	globals::d3d::context->CopyResource(hdrTexture->resource.get(), cleanSceneCapture->resource.get());
 }
 
 bool HDRDisplay::IsCleanSceneCaptureFresh() const
