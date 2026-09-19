@@ -559,6 +559,9 @@ void Streamline::SetDLSSDOptions(sl::ViewportHandle p_viewport, uint32_t width)
 	case 2:
 		customPreset = sl::DLSSDPreset::ePresetE;
 		break;
+	case 3:
+		customPreset = sl::DLSSDPreset::ePresetF;
+		break;
 	}
 
 	if (customPreset.has_value()) {

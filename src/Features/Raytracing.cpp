@@ -20,7 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PerfOverlay,
 	DisplaySceneGraphCounters,
 	DisableVanillaFogPT,
-	CreationEngineRaytracingSettings)
+	CreationEngineRaytracingSettings,
+	RendererSettings)
 
 ////////////////////////////////////////////////////////////////////////////////////
 
@@ -569,6 +570,8 @@ void Raytracing::DrawAdvancedSettings()
 
 	ImGui::Checkbox(T(TKEY("ggx_energy_conservation"), "GGX Energy Conservation"), &advSettings.GGXEnergyConservation);
 
+	ImGui::Checkbox(T(TKEY("shader_execution_reordering"), "Shader Execution Reordering"), &advSettings.ShaderExecutionReordering);
+	
 	ImGui::Checkbox(T(TKEY("ris_enabled"), "Resampled Importance Sampling"), &advSettings.RIS.Enabled);
 
 	ImGui::SliderInt(T(TKEY("ris_max_candidates"), "RIS Max Candidates"), &advSettings.RIS.MaxCandidates, 2, 16);
@@ -746,25 +749,7 @@ void Raytracing::DrawExperimentalSettings()
 
 	ImGui::Checkbox(T(TKEY("global_lights"), "Global Lights"), &experimentalSettings.GlobalLights);
 
-	DrawEnumRadio(
-		T(TKEY("texture_mode"), "Texture Mode"),
-		"TextureMode",
-		experimentalSettings.TextureMode,
-		std::array{
-			T(TKEY("texture_mode_share"), "Share"),
-			T(TKEY("texture_mode_exclusive"), "Exclusive"),
-		});
-
-	if (experimentalSettings.TextureMode == CreationEngineRaytracing::TextureMode::Exclusive) {
-		auto neverShare = std::string(T(TKEY("never_share"), "Never Share"));
-		auto shareSmaller = std::string_view(T(TKEY("share_smaller_than"), "Share smaller than {}"));
-		auto condition = std::to_string(1 << (experimentalSettings.TextureCutOff + 7));
-
-		auto shareConditionLabel = std::vformat(shareSmaller, std::make_format_args(condition));
-
-		auto label = (experimentalSettings.TextureCutOff == 0) ? neverShare : shareConditionLabel;
-		ImGui::SliderInt(T(TKEY("exclusive_mode_cutoff"), "Exclusive Mode Cutoff"), reinterpret_cast<int*>(&experimentalSettings.TextureCutOff), 0, 6, label.c_str());
-	}
+	ImGui::Checkbox(T(TKEY("use_ray_query"), "Use RayQuery"), &settings.RendererSettings.UseRayQuery);
 
 	ImGui::PopID();
 
@@ -791,6 +776,8 @@ void Raytracing::DrawDebugSettings()
 
 	ImGui::Checkbox(T(TKEY("display_scenegraph_counters"), "Display SceneGraph Counters"), &settings.DisplaySceneGraphCounters);
 
+	ImGui::Checkbox(T(TKEY("nvrh_validation_layer"), "NVRHI Validation Layer"), &settings.RendererSettings.ValidationLayer);
+	
 	const auto bufferViewerLabel = StableLabel(T(TKEY("buffer_viewer"), "Buffer Viewer"), "BufferViewer");
 	if (ImGui::TreeNode(bufferViewerLabel.c_str())) {
 		static float debugRescale = .3f;
@@ -1066,7 +1053,7 @@ void Raytracing::InitializeCERaytracing(ID3D11Device5* d3d11Device, ID3D12Device
 	if (initialized)
 		return;
 
-	bool result = creationEngineRaytracing->InitializeRenderer(d3d11Device, d3d12Device, commandQueue, computeCommandQueue, copyCommandQueue);
+	bool result = creationEngineRaytracing->InitializeRenderer(&settings.RendererSettings, d3d11Device, d3d12Device, commandQueue, computeCommandQueue, copyCommandQueue);
 
 	if (!result) {
 		settings.CreationEngineRaytracingSettings.Enabled = false;

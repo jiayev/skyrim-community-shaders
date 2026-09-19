@@ -308,7 +308,8 @@ void Upscaling::DrawSettings()
 			const char* dlssRRModelPresets[] = {
 				T(TKEY("dlss_rr_model_preset_default"), "Default"),
 				T(TKEY("dlss_rr_model_preset_d"), "Preset D"),
-				T(TKEY("dlss_rr_model_preset_e"), "Preset E")
+				T(TKEY("dlss_rr_model_preset_e"), "Preset E"),
+				T(TKEY("dlss_rr_model_preset_f"), "Preset F")
 			};
 
 			auto effectiveMethod = GetUpscaleMethod();

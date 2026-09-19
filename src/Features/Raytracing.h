@@ -176,6 +176,7 @@ struct Raytracing : public OverlayFeature
 		bool DisplaySceneGraphCounters = false;
 		bool DisableVanillaFogPT = false;
 		CreationEngineRaytracing::Settings CreationEngineRaytracingSettings;
+		CreationEngineRaytracing::RendererSettings RendererSettings;
 	} settings;
 
 	ImVec2 Position = ImVec2(10.f, 10.f);
