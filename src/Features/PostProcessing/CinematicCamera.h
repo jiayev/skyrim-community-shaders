@@ -44,6 +44,12 @@ namespace CinematicCamera
 		Target = 2,
 	};
 
+	enum class ExposureMode : int
+	{
+		AutoISO = 0,
+		Manual = 1,
+	};
+
 	struct FilmbackSettings
 	{
 		int Preset = (int)FilmbackPreset::FullFrame;
@@ -71,7 +77,10 @@ namespace CinematicCamera
 
 	struct ExposureSettings
 	{
+		int Mode = (int)ExposureMode::AutoISO;
 		float ISO = 100.0f;
+		float MinISO = 25.0f;
+		float MaxISO = 12800.0f;
 		float FrameRate = 24.0f;
 		float ShutterAngleDeg = 180.0f;
 		float ExposureCompensationEV = 0.0f;
@@ -114,11 +123,15 @@ namespace CinematicCamera
 		float TransitionSpeed = 0.5f;
 
 		// Exposure.
+		ExposureMode Exposure = ExposureMode::AutoISO;
 		float ISO = 100.0f;
+		float MinISO = 25.0f;
+		float MaxISO = 12800.0f;
+		float ExposureCompensationEV = 0.0f;
 		float ShutterAngleDeg = 180.0f;
 		float ShutterTimeS = 1.0f / 48.0f;
 		float EV100 = 8.5573427f;
-		// Exposure offset in EV applied on top of a feature's saved value.
+		// Manual exposure relative to the reference camera, before metering compensation.
 		float ExposureDeltaEV = 0.0f;
 
 		// Projection (degrees).

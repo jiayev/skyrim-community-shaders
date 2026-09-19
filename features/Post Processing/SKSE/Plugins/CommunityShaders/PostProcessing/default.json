@@ -299,7 +299,10 @@
             "TransitionSpeed": 0.5
         },
         "Exposure": {
+            "Mode": 0,
             "ISO": 100.0,
+            "MinISO": 25.0,
+            "MaxISO": 12800.0,
             "FrameRate": 24.0,
             "ShutterAngleDeg": 180.0,
             "ExposureCompensationEV": 0.0
