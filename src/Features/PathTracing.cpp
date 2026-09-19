@@ -75,9 +75,16 @@ void PathTracing::UpdateSettings()
 void PathTracing::DrawSettings()
 {
 	auto& rt = globals::features::raytracing;
+
+	if (!rt.loaded) {
+		ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s",
+			T(TKEY("requires_raytracing_feature"), "Raytracing feature is not loaded."));
+		return;
+	}
+
 	if (!rt.Available(false)) {
 		ImGui::TextColored(globals::menu->GetTheme().StatusPalette.Error, "%s",
-			T(TKEY("requires_raytracing"), "Creation Engine Raytracing runtime is not available. Ensure CreationEngineRaytracing.dll is installed."));
+			T(TKEY("requires_raytracing"), "Creation Engine Raytracing runtime is not available, check the Raytracing feature."));
 		return;
 	}
 
