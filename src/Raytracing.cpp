@@ -52,8 +52,10 @@ bool Raytracing::Available(bool a_initialized) const
 {
 	if (forcedDisabled || !loaded)
 		return false;
+
 	if (a_initialized && !initialized)
 		return false;
+
 	return settings.CreationEngineRaytracingSettings.Enabled;
 }
 
