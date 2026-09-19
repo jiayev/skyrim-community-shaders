@@ -485,6 +485,23 @@ public:
 
 	uint clusterSize[3] = { 16 };
 
+	/** @brief Whether this frame's clusters came from the render graph (its outputs are bound at t36/t37). */
+	bool orgCulledThisFrame = false;
+
+	/** @brief Updates near/far and the dynamic-resolution cluster grid for this frame. */
+	void UpdateClusterParameters();
+
+	/** @brief Culls the frame's lights on the render graph; false means the D3D11 dispatches must run. */
+	bool CullOnRenderGraph(const eastl::vector<LightData>& a_lightsData);
+
+	/**
+	 * @brief Debug (CS_ORG_LLF_PARITY=1): reruns this frame's culling on D3D11 and compares
+	 * each cluster's light set against the render graph's output. Logs the result.
+	 */
+	void CompareRenderGraphCulling();
+
+	uint32_t orgParityFrame = 0;
+
 	Settings settings;
 
 	/** @brief Pre-geometry setup: initializes strict light data and determines the room index for the pass. */

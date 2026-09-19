@@ -9,3 +9,19 @@
 	path = extern/dxvk
 	url = https://github.com/community-shaders/dxvk.git
 	branch = interop
+[submodule "extern/OpenRenderGraph"]
+	path = extern/OpenRenderGraph
+	url = https://github.com/panthuncia/OpenRenderGraph.git
+	branch = backend_interop
+[submodule "extern/BasicRHI"]
+	path = extern/BasicRHI
+	url = https://github.com/panthuncia/BasicRHI.git
+	branch = main
+[submodule "extern/BasicTelemetry"]
+	path = extern/BasicTelemetry
+	url = https://github.com/panthuncia/BasicTelemetry.git
+	branch = main
+[submodule "extern/volk"]
+	path = extern/volk
+	url = https://github.com/zeux/volk.git
+	branch = master

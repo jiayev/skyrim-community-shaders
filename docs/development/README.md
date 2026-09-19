@@ -5,6 +5,7 @@
 - **[VSCode Setup](./vscode-setup.md)** - IDE configuration, extensions, and auto-deploy
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 - **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass (Developer Tools, `NVPERF_SUPPORT`)
+- **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
 
 ## Subsystems
 
