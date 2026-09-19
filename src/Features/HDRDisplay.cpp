@@ -8,12 +8,12 @@
 #include "I18n/I18n.h"
 #include "LinearLighting.h"
 #include "Menu.h"
-#include "Utils/VersionedRelocation.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Upscaling.h"
 #include "Upscaling/DXVKInterop.h"
 #include "Util.h"
+#include "Utils/VersionedRelocation.h"
 #include <algorithm>
 #include <dxgi1_4.h>
 #include <dxgi1_6.h>
@@ -414,11 +414,9 @@ void HDRDisplay::DrawSettings()
 		};
 		const char* forceEnableLabel = T(TKEY("force_enable_hdr"), "Force Enable HDR");
 		const char* cancelLabel = T(TKEY("cancel"), "Cancel");
-		const float buttonWidth = std::max({
-			ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
+		const float buttonWidth = std::max({ ThemeManager::Constants::POPUP_BUTTON_WIDTH * Util::GetUIScale(),
 			buttonWidthForLabel(forceEnableLabel),
-			buttonWidthForLabel(cancelLabel)
-		});
+			buttonWidthForLabel(cancelLabel) });
 
 		if (ImGui::Button(forceEnableLabel, ImVec2(buttonWidth, 0))) {
 			{
@@ -575,7 +573,6 @@ void HDRDisplay::LoadSettings(json& o_json)
 		pendingAutoDetect = true;
 		logger::info("[HDR] Auto-detection not yet run - deferring to SetupResources");
 	}
-
 }
 
 void HDRDisplay::RestoreDefaultSettings()
@@ -789,7 +786,6 @@ void HDRDisplay::RestoreFramebuffer()
 	savedFramebufferRTV = nullptr;
 	framebufferRedirected = false;
 }
-
 
 void HDRDisplay::SetUIBuffer()
 {
@@ -1080,7 +1076,7 @@ void HDRDisplay::ApplyHDR()
 		// - SDR: kFRAMEBUFFER has the tonemapped 0-1 ISHDR output.
 		ID3D11ShaderResourceView* sceneSRV =
 			(IsHDREnabledForFrame() && hdrTexture && hdrTexture->srv) ? hdrTexture->srv.get() :
-																	framebufferRT.SRV;
+																		framebufferRT.SRV;
 
 		ID3D11ShaderResourceView* uiSRV = nullptr;
 		if (uiTexture && uiTexture->srv) {
@@ -1466,7 +1462,7 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	bool isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 	// Linear Lighting keeps the pipeline linear throughout.
 	// Without it, ISHDR gamma-encodes its output even in HDR mode.
-	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting;
+	bool isSceneLinear = globals::features::linearLighting.IsLinearLightingActive() && !isMainOrLoadingMenu;
 
 	// Use user-specified peak brightness for highlights compression
 	float effectivePeakNits = static_cast<float>(settings.hdrPeakNits);

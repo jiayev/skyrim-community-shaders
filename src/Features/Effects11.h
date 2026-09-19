@@ -13,7 +13,7 @@ public:
 	virtual inline std::string GetDisplayName() override { return "Effects 11"; }
 	virtual std::string_view GetCategory() const override { return "Post-Processing"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "EFFECTS11"; }
-	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return true; }
+	bool HasShaderDefine(RE::BSShader::Type) override;
 
 	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -91,11 +91,15 @@ public:
 
 	virtual void DrawSettings() override;
 	virtual void SetupResources() override;
+	virtual void PostSetupResources() override;
+	virtual void Reset() override;
 	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;
 
 	/** @brief Flips the "UseEffect" GLOBAL setting; bound to the Effects 11 toggle hotkey. */
 	void ToggleEnabled();
+	bool IsPresetEnabled() const;
+	bool IsActive() const { return presetActive; }
 
 	void DrawVolumetricRays();
 
@@ -138,4 +142,6 @@ public:
 
 private:
 	bool tonemapReplacedThisFrame = false;  ///< Set when the effect chain writes the tonemap output during this render frame
+	bool presetActive = false;
+	bool resourcesReady = false;
 };

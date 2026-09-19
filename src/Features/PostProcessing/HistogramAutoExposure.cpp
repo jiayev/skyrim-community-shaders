@@ -2,6 +2,7 @@
 
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -198,40 +199,33 @@ void HistogramAutoExposure::SetupResources()
 
 void HistogramAutoExposure::ClearShaderCache()
 {
+	resetAdaptation = true;
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&histogramCS, &histogramAvgCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/HistogramAutoExposure");
 	CompileComputeShaders();
 }
 
 void HistogramAutoExposure::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines;
-		std::string entry = "main";
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &histogramCS, "histogram.cs.hlsl", {}, "CS_Histogram" },
+		{ &histogramAvgCS, "histogram.cs.hlsl", {}, "CS_Average" },
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &histogramCS, "histogram.cs.hlsl", {}, "CS_Histogram" },
-			{ &histogramAvgCS, "histogram.cs.hlsl", {}, "CS_Average" },
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\HistogramAutoExposure") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\HistogramAutoExposure", shaderInfos);
 }
 
 void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
@@ -239,13 +233,16 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 	auto context = globals::d3d::context;
 	auto state = globals::state;
 
+	if (!AllShadersReady({ &histogramCS, &histogramAvgCS }))
+		return;
+
 	float exposureCompensation = settings.ExposureCompensation;
 	float2 adaptationRange = settings.AdaptationRange;
 
 	AutoExposureCB cbData = {
 		.AdaptArea = settings.AdaptArea,
 		.AdaptationRange = { exp2(adaptationRange.x - 3.0f), exp2(adaptationRange.y - 3.0f) },
-		.AdaptLerp = std::clamp(1.f - exp(-RE::BSTimer::GetSingleton()->realTimeDelta * settings.AdaptSpeed), 0.f, 1.f),
+		.AdaptLerp = resetAdaptation ? 1.f : std::clamp(1.f - exp(-RE::BSTimer::GetSingleton()->realTimeDelta * settings.AdaptSpeed), 0.f, 1.f),
 		.ExposureCompensation = exp2(exposureCompensation),
 		.PurkinjeStartEV = settings.PurkinjeStartEV,
 		.PurkinjeMaxEV = settings.PurkinjeMaxEV,
@@ -320,6 +317,7 @@ void HistogramAutoExposure::Draw(TextureInfo& inout_tex)
 		// Calculate average
 		context->CSSetShader(histogramAvgCS.get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
+		resetAdaptation = false;
 		state->EndPerfEvent();
 	}
 

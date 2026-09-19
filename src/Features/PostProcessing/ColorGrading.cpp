@@ -1,5 +1,7 @@
 #include "ColorGrading.h"
 
+#include "RasterPass.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -313,7 +315,11 @@ void ColorGrading::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("convert_linear_to_log_before_hdr_color_grading"), "Convert Linear to Log Before HDR Color Grading"), &settings.useLog);
 	if (settings.useLog) {
-		ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &settings.invertLog);
+		bool invertLog = settings.invertLog || settings.enableTonemap;
+		ImGui::BeginDisabled(settings.enableTonemap);
+		if (ImGui::Checkbox(T(TKEY("convert_log_to_linear_after_hdr_color_grading"), "Convert Log to Linear After HDR Color Grading"), &invertLog))
+			settings.invertLog = invertLog;
+		ImGui::EndDisabled();
 		ImGui::Combo(T(TKEY("log_type"), "Log Type"), (int*)&settings.logType, "ACEScct\0ARRILogC4\0SonySLog3\0");
 	}
 
@@ -563,8 +569,7 @@ void ColorGrading::DrawSettings()
 		constexpr int kSDRColorSpace = 0;  // sRGB / BT709 gamut
 		const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
 
-		auto& llSettings = globals::features::linearLighting.settings;
-		const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
+		const bool wideGamutActive = globals::features::linearLighting.IsACEScgActive();
 		const char* inputSpaceName = wideGamutActive ? spaces[5] : spaces[0];
 		ImGui::TextDisabled(T(TKEY("input_color_space"), "Input Color Space: %s (%s)"), inputSpaceName, wideGamutActive ? T(TKEY("input_color_space_auto_detected"), "auto-detected from Linear Lighting ACEScg") : T(TKEY("input_color_space_fixed"), "fixed"));
 		ImGui::Combo(T(TKEY("working_color_space"), "Working Color Space"), &settings.processColorSpace, spaces.data(), (int)spaces.size());
@@ -648,22 +653,25 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 	auto& tonemappers = TonemapperInfo::GetTonemappers();
 
 	// Auto-detect input color space: ACEScg when wide gamut mode is active, otherwise sRGB
-	auto& llSettings = globals::features::linearLighting.settings;
-	const bool wideGamutActive = llSettings.enableACEScg && llSettings.enableLinearLighting;
+	const bool wideGamutActive = globals::features::linearLighting.IsACEScgActive();
 	const int kInputColorSpace = wideGamutActive ? 5 : 0;  // 5 = ACEScg, 0 = sRGB
 	constexpr int kHDRColorSpace = 2;                      // BT2020
 	constexpr int kSDRColorSpace = 0;                      // sRGB / BT709 gamut
 	const int outputColorSpace = hdrEnabled ? kHDRColorSpace : kSDRColorSpace;
+	// OpenDRT consumes XYZ D65 and outputs linear Rec.709 (SDR) or Rec.2020 (HDR).
+	// Bypassing tonemapping keeps both intermediate spaces in the working gamut.
 	const int tonemapInputSpace =
-		settings.useOpenDrt ? 4 :
-							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
-									  tonemappers[tonemapperType].nativeInputSpaceHDR :
-									  tonemappers[tonemapperType].nativeInputSpace);
+		!settings.enableTonemap ? settings.processColorSpace :
+		settings.useOpenDrt     ? 4 :
+								  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+										  tonemappers[tonemapperType].nativeInputSpaceHDR :
+										  tonemappers[tonemapperType].nativeInputSpace);
 	const int tonemapOutputSpace =
-		settings.useOpenDrt ? 2 :
-							  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
-									  tonemappers[tonemapperType].nativeOutputSpaceHDR :
-									  tonemappers[tonemapperType].nativeOutputSpace);
+		!settings.enableTonemap ? settings.processColorSpace :
+		settings.useOpenDrt     ? outputColorSpace :
+								  ((hdrEnabled && tonemappers[tonemapperType].supportsHDR) ?
+										  tonemappers[tonemapperType].nativeOutputSpaceHDR :
+										  tonemappers[tonemapperType].nativeOutputSpace);
 
 	auto storeMatrix = [](const DirectX::SimpleMath::Matrix& mat, std::array<float3, 3>& out) {
 		out = {
@@ -673,9 +681,9 @@ void ColorGrading::UpdateColorSpaceTransforms(bool hdrEnabled)
 		};
 	};
 
-	storeMatrix(getRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]), inputToWorkingMatrix);
-	storeMatrix(getRGBMatrix(spaces[settings.processColorSpace], spaces[tonemapInputSpace]), workingToTonemapMatrix);
-	storeMatrix(getRGBMatrix(spaces[tonemapOutputSpace], spaces[outputColorSpace]), tonemapToOutputMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[kInputColorSpace], spaces[settings.processColorSpace]), inputToWorkingMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[settings.processColorSpace], spaces[tonemapInputSpace]), workingToTonemapMatrix);
+	storeMatrix(getWhiteAdaptedRGBMatrix(spaces[tonemapOutputSpace], spaces[outputColorSpace]), tonemapToOutputMatrix);
 }
 
 void ColorGrading::SetupResources()
@@ -704,19 +712,19 @@ void ColorGrading::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texColor = std::make_unique<Texture2D>(texDesc);
 		texColor->CreateSRV(srvDesc);
-		texColor->CreateUAV(uavDesc);
+		texColor->CreateRTV(rtvDesc);
 
 		D3D11_TEXTURE3D_DESC lutTexDesc = {
 			.Width = LUTDim,
@@ -771,7 +779,7 @@ void ColorGrading::SetupResources()
 			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
 		};
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC curveSrvDesc = {
@@ -780,9 +788,9 @@ void ColorGrading::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC curveUavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC curveRtvDesc = {
 			.Format = curveTexDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
@@ -791,7 +799,7 @@ void ColorGrading::SetupResources()
 
 		texCurveOutput = eastl::make_unique<Texture2D>(curveTexDesc);
 		texCurveOutput->CreateSRV(curveSrvDesc);
-		texCurveOutput->CreateUAV(curveUavDesc);
+		texCurveOutput->CreateRTV(curveRtvDesc);
 
 		// Fill input with linear ramp [0, CurveMaxInput] in R=G=B
 		std::array<DirectX::PackedVector::XMHALF4, CurveSamples> rampData;
@@ -814,50 +822,50 @@ void ColorGrading::SetupResources()
 		device->CreateTexture2D(&stagingDesc, nullptr, curveStaging.put());
 	}
 
-	CompileComputeShaders();
+	CompileShaders();
 }
 
 void ColorGrading::ClearShaderCache()
 {
-	const auto shaderPtrs = std::array{
-		&colorgradingCS,
-		&lutgenCS
-	};
+	BumpShaderGeneration();
+	const auto shaderPtrs = std::array{ &colorgradingPS };
+	const auto computeShaderPtrs = std::array{ &lutgenCS };
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+		for (auto shader : computeShaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
-	CompileComputeShaders();
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/ColorGrading");
+	CompileShaders();
 }
 
-void ColorGrading::CompileComputeShaders()
+void ColorGrading::CompileShaders()
 {
 	const auto& tonemappers = TonemapperInfo::GetTonemappers();
 
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines;
-		std::string entry = "main";
-	};
-
 	auto tonemapFuncName = settings.useOpenDrt ? "OpenDRTTransform" : tonemappers[tonemapperType].func_name.data();
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &colorgradingCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSColorGrading" },
-			{ &lutgenCS, "colorgrading.cs.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSLUTGen" }
-		};
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &lutgenCS, "colorgrading.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "CSLUTGen" },
+	};
 
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\ColorGrading") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\ColorGrading", shaderInfos);
+
+	const std::vector<PixelShaderCompileInfo> rasterInfos = {
+		{ &colorgradingPS, "colorgrading.hlsl", { { "TONEMAP_FUNC", tonemapFuncName } }, "PSColorGrading" },
+	};
+
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\ColorGrading", {}, rasterInfos);
 
 	recompileFlag = false;
 	curveNeedsUpdate = true;  // shader changed, curve must update
@@ -892,6 +900,11 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	if (recompileFlag)
 		ClearShaderCache();
 
+	if (!AllShadersReady({ &colorgradingPS }) || !AllShadersReady({ &lutgenCS }))
+		return;
+	if (!owner || !owner->GetFullscreenVS())
+		return;
+
 	globals::profiler->BeginPass("PostProcessing::ColorGrading");
 	state->BeginPerfEvent("Color Grading and Tonemapping");
 
@@ -913,8 +926,8 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 				float3{ mat(2, 0), mat(2, 1), mat(2, 2) }
 			};
 		};
-		storeMatrix(getRGBMatrix(spaces[wsIdx], "XYZ"), workingToXYZMatrix);
-		storeMatrix(getRGBMatrix("XYZ", spaces[wsIdx]), xyzToWorkingMatrix);
+		storeMatrix(getWhiteAdaptedRGBMatrix(spaces[wsIdx], "XYZ"), workingToXYZMatrix);
+		storeMatrix(getWhiteAdaptedRGBMatrix("XYZ", spaces[wsIdx]), xyzToWorkingMatrix);
 	}
 
 	ColorCB colorCBData = {
@@ -936,18 +949,15 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		.tonemapToOutput = { float4{ tonemapToOutputMatrix[0].x, tonemapToOutputMatrix[0].y, tonemapToOutputMatrix[0].z, 0.f }, float4{ tonemapToOutputMatrix[1].x, tonemapToOutputMatrix[1].y, tonemapToOutputMatrix[1].z, 0.f }, float4{ tonemapToOutputMatrix[2].x, tonemapToOutputMatrix[2].y, tonemapToOutputMatrix[2].z, 0.f } },
 		.workingToXYZ = { float4{ workingToXYZMatrix[0].x, workingToXYZMatrix[0].y, workingToXYZMatrix[0].z, 0.f }, float4{ workingToXYZMatrix[1].x, workingToXYZMatrix[1].y, workingToXYZMatrix[1].z, 0.f }, float4{ workingToXYZMatrix[2].x, workingToXYZMatrix[2].y, workingToXYZMatrix[2].z, 0.f } },
 		.xyzToWorking = { float4{ xyzToWorkingMatrix[0].x, xyzToWorkingMatrix[0].y, xyzToWorkingMatrix[0].z, 0.f }, float4{ xyzToWorkingMatrix[1].x, xyzToWorkingMatrix[1].y, xyzToWorkingMatrix[1].z, 0.f }, float4{ xyzToWorkingMatrix[2].x, xyzToWorkingMatrix[2].y, xyzToWorkingMatrix[2].z, 0.f } },
-		.workingWhitePoint = [&]() {
-			auto& spaces = getAvailableColorSpaces();
-			int wsIdx = std::clamp(settings.processColorSpace, 0, static_cast<int>(spaces.size()) - 1);
-			auto wp = getWhitePoint(spaces[wsIdx]);
-			return float4{ wp.x, wp.y, 0.f, 0.f }; }(),
+		.workingWhitePoint = float4{ 0.3127f, 0.3290f, 0.f, 0.f },  // XYZ matrices are adapted to D65.
 		.shadowsOffset = settings.shadowsOffset,
 		.midtonesOffset = settings.midtonesOffset,
 		.highlightsOffset = settings.highlightsOffset,
 		.cinematic = float4{ std::lerp(1.f, imageSpaceData.baseData.cinematic.saturation, settings.gameCinematicBlend.x), std::lerp(1.f, imageSpaceData.baseData.cinematic.brightness, settings.gameCinematicBlend.y), std::lerp(1.f, imageSpaceData.baseData.cinematic.contrast, settings.gameCinematicBlend.z), imageSpaceData.baseAmount },
 		.fade = float4{ imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeR], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeG], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeB], imageSpaceData.modData.data[RE::ImageSpaceModData::kFadeAmount] * settings.gameFadeBlend },
 		.tint = float4{ imageSpaceData.baseData.tint.color.red, imageSpaceData.baseData.tint.color.green, imageSpaceData.baseData.tint.color.blue, imageSpaceData.baseData.tint.amount * settings.gameTintBlend },
-		.logType = settings.useLog ? ((1u << settings.logType) | (settings.invertLog ? (1u << 3u) : 0u)) : 0u,
+		// Tonemappers and their gamut matrices require scene-linear input.
+		.logType = settings.useLog ? ((1u << settings.logType) | ((settings.invertLog || settings.enableTonemap) ? (1u << 3u) : 0u)) : 0u,
 		.skipLDR = settings.skipLDR,
 		.skipLUT = settings.skipLUT,
 		.enableTonemap = settings.enableTonemap,
@@ -992,22 +1002,34 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	}
 
 	// Apply Color Grading (via LUT or direct)
-	std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texLUT->srv.get() };
-	uav = texColor->uav.get();
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), srvs.data());
-	context->CSSetShader(colorgradingCS.get(), nullptr, 0);
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	context->Dispatch((texColor->desc.Width + 7) >> 3, (texColor->desc.Height + 7) >> 3, 1);
+		std::array<ID3D11ShaderResourceView*, 2> srvs = { inout_tex.srv, texLUT->srv.get() };
 
-	// clean up
-	srvs.fill(nullptr);
-	uav = nullptr;
+		ID3D11Buffer* psCB = cb;
+		std::array<ID3D11SamplerState*, 1> psSamplers = { linearSampler.get() };
+		context->PSSetConstantBuffers(1, 1, &psCB);
+		context->PSSetSamplers(0, 1, psSamplers.data());
+		context->PSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), srvs.data());
+		pass.SetTargets({ texColor->rtv.get() }, (float)texColor->desc.Width, (float)texColor->desc.Height);
+		pass.SetShaders(owner->GetFullscreenVS(), colorgradingPS.get());
+		pass.Draw();
+
+		// clean up
+		srvs.fill(nullptr);
+		psCB = nullptr;
+		psSamplers.fill(nullptr);
+		context->PSSetShaderResources(0, 2, srvs.data());
+		context->PSSetConstantBuffers(1, 1, &psCB);
+		context->PSSetSamplers(0, 1, psSamplers.data());
+	}
+
+	// clean up CS stage (CB/sampler stayed bound for LUT generation)
 	cb = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 2, srvs.data());
+	samplers.fill(nullptr);
 	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
+	context->CSSetSamplers(0, 1, samplers.data());
 
 	if (saveImagesFlag) {
 		saveImagesFlag = false;
@@ -1026,32 +1048,29 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 		curveReadbackRequested = false;
 
 	// Debug: evaluate color grading pipeline on a neutral ramp for curve preview
-	if (curveReadbackActive && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingCS) {
+	if (curveReadbackActive && curveNeedsUpdate && texCurveInput && texCurveOutput && colorgradingPS) {
 		curveNeedsUpdate = false;
-		// Re-bind CB and samplers for the curve dispatch
+		// Render the curve with the same PS on the 256x1 ramp input (same CB, same LUT)
+		PostProcessingRaster::RasterPass pass(context);
+
 		ID3D11Buffer* curveCB = colorCB->CB();
 		std::array<ID3D11SamplerState*, 1> curveSamplers = { linearSampler.get() };
-		context->CSSetConstantBuffers(1, 1, &curveCB);
-		context->CSSetSamplers(0, 1, curveSamplers.data());
-
-		// Dispatch colorgradingCS on the 256x1 ramp input (same CB, same LUT)
 		std::array<ID3D11ShaderResourceView*, 2> curveSRVs = { texCurveInput->srv.get(), texLUT ? texLUT->srv.get() : nullptr };
-		ID3D11UnorderedAccessView* curveUAV = texCurveOutput->uav.get();
 
-		context->CSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), curveSRVs.data());
-		context->CSSetUnorderedAccessViews(0, 1, &curveUAV, nullptr);
-		context->CSSetShader(colorgradingCS.get(), nullptr, 0);
-
-		context->Dispatch((CurveSamples + 7) >> 3, 1, 1);
+		context->PSSetConstantBuffers(1, 1, &curveCB);
+		context->PSSetSamplers(0, 1, curveSamplers.data());
+		context->PSSetShaderResources(0, (UINT)(settings.skipLUT ? 1 : 2), curveSRVs.data());
+		pass.SetTargets({ texCurveOutput->rtv.get() }, (float)CurveSamples, 1.f);
+		pass.SetShaders(owner->GetFullscreenVS(), colorgradingPS.get());
+		pass.Draw();
 
 		// Clean up
-		curveUAV = nullptr;
 		curveSRVs.fill(nullptr);
 		curveCB = nullptr;
-		context->CSSetUnorderedAccessViews(0, 1, &curveUAV, nullptr);
-		context->CSSetShaderResources(0, 2, curveSRVs.data());
-		context->CSSetConstantBuffers(1, 1, &curveCB);
-		context->CSSetShader(nullptr, nullptr, 0);
+		curveSamplers.fill(nullptr);
+		context->PSSetShaderResources(0, 2, curveSRVs.data());
+		context->PSSetConstantBuffers(1, 1, &curveCB);
+		context->PSSetSamplers(0, 1, curveSamplers.data());
 
 		// Readback
 		if (curveStaging) {

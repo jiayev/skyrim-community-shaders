@@ -1,8 +1,6 @@
 #include "MenuManager.h"
 
 #include "EffectManager.h"
-#include "SettingManager.h"
-#include "TextureManager.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/ShaderPatches.h"
 #include "Features/PostProcessing.h"

@@ -155,16 +155,16 @@ public:
 	XM_ALIGNED_STRUCT(16)
 	HDRDataCB
 	{
-		float enableHDR;                 ///< 1.0 = HDR output with PQ, 0.0 = SDR output with gamma
-		float paperWhite;                ///< Reference white brightness in nits for HDR
-		float peakNits;                  ///< Maximum display brightness in nits for HDR
+		float enableHDR;   ///< 1.0 = HDR output with PQ, 0.0 = SDR output with gamma
+		float paperWhite;  ///< Reference white brightness in nits for HDR
+		float peakNits;    ///< Maximum display brightness in nits for HDR
 		float pad0;
-		float uiBrightness;              ///< HDR UI brightness multiplier
-		float isSceneLinear;             ///< 1.0 = Linear Lighting active, scene already linear
-		float isMainOrLoadingMenu;        ///< 1.0 = main menu/loading screen active
+		float uiBrightness;         ///< HDR UI brightness multiplier
+		float isSceneLinear;        ///< 1.0 = Linear Lighting active, scene already linear
+		float isMainOrLoadingMenu;  ///< 1.0 = main menu/loading screen active
 		float pad1;
-		float previewSDR;                ///< 1.0 = emit sRGB SDR (crop preview) instead of PQ HDR10
-		float applyAutoHDR;              ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
+		float previewSDR;    ///< 1.0 = emit sRGB SDR (crop preview) instead of PQ HDR10
+		float applyAutoHDR;  ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
 		float pad2;
 		float pad3;
 	};
@@ -178,8 +178,8 @@ public:
 
 	Texture2D* hdrTexture = nullptr;
 	Texture2D* outputTexture = nullptr;
-	Texture2D* uiTexture = nullptr;          // Separate UI render target for proper compositing
-	Texture2D* cleanSceneCapture = nullptr;  // Pre-blur copy of hdrTexture for clean captures
+	Texture2D* uiTexture = nullptr;            // Separate UI render target for proper compositing
+	Texture2D* cleanSceneCapture = nullptr;    // Pre-blur copy of hdrTexture for clean captures
 	uint cleanSceneCaptureFrame = UINT32_MAX;  // frameCount when cleanSceneCapture was last refreshed
 
 	ID3D11ComputeShader* hdrOutputCS = nullptr;
@@ -245,5 +245,4 @@ private:
 
 	// Bind scene (t0), UI (t1, may be null), UAV (u0), CB (b0); dispatch the output CS; unbind.
 	void DispatchHDROutput(ID3D11ShaderResourceView* sceneSRV, ID3D11ShaderResourceView* uiSRV, ID3D11UnorderedAccessView* uav);
-
 };

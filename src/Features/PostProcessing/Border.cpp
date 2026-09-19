@@ -2,6 +2,7 @@
 
 #include "Deferred.h"
 #include "I18n/I18n.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -83,46 +84,38 @@ void Border::SetupResources()
 
 void Border::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
 		&borderCS,
 		&borderClearMVCS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Border");
 	CompileComputeShaders();
 }
 
 void Border::CompileComputeShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
-		std::string entry = "main";
+	const std::vector<ComputeShaderCompileInfo> shaderInfos = {
+		{ &borderCS, "border.cs.hlsl" },
+		{ &borderClearMVCS, "border_clear_mv.cs.hlsl" },
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &borderCS, "border.cs.hlsl" },
-			{ &borderClearMVCS, "border_clear_mv.cs.hlsl" },
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\Border") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\Border", shaderInfos);
 }
 
 void Border::ClearMotionVectorsForFrameGen()
 {
-	if (!borderClearMVCS || !borderCB)
+	if (!borderCB || !AllShadersReady({ &borderClearMVCS }))
 		return;
 
 	// Only run when there's an actual border to clear
@@ -176,6 +169,9 @@ void Border::ClearMotionVectorsForFrameGen()
 
 void Border::Draw(TextureInfo& inout_tex)
 {
+	if (!AllShadersReady({ &borderCS }))
+		return;
+
 	globals::profiler->BeginPass("PostProcessing::Border");
 	auto renderer = globals::game::renderer;
 	auto context = globals::d3d::context;

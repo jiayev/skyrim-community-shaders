@@ -672,6 +672,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		io.Fonts->Clear();
 		MenuFonts::InvalidatePreviewFonts();
 		ImFont* fallbackFont = io.Fonts->AddFontDefault();
+		MergeFontAwesome5(io.Fonts, fallbackFont, fontSize);
 
 		bool recoverySucceeded = false;
 		if (fallbackFont && io.Fonts->Build()) {

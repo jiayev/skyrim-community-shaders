@@ -33,12 +33,13 @@
 
 struct PhysicalGlare : public PostProcessFeature
 {
+	bool outputReady = false;
 	virtual inline std::string GetType() const override { return "Physical Glare"; }
 	virtual inline std::string GetDisplayName() const override { return T("feature.post_processing.physical_glare.name", "Physical Glare"); }
 	virtual inline std::string GetDesc() const override { return T("feature.post_processing.physical_glare.description", "Physically based glare from aperture diffraction and ocular scattering. FFT convolution with a wavelength-dependent PSF, dual eye/lens modes, wavefront aberrations, and wide-gamut chromatic dispersion."); }
 	virtual bool WritesToMainTexture() const override { return false; }
 
-	TextureInfo GetGlareOutput() const { return { texOutput->resource.get(), texOutput->srv.get() }; }
+	TextureInfo GetGlareOutput() const { return outputReady ? TextureInfo{ texOutput->resource.get(), texOutput->srv.get() } : TextureInfo{}; }
 
 	static constexpr uint FFT_MIN = 128;
 	static constexpr uint FFT_MAX = 1024;
@@ -179,10 +180,12 @@ struct PhysicalGlare : public PostProcessFeature
 
 	// PSF FFT cache (regenerated only when parameters change)
 	eastl::unique_ptr<Texture2D> texPSF_FFT[3] = {};  // [R/G/B]
+	// Static aperture response before the animated tear-film phase.
+	eastl::unique_ptr<Texture2D> texApertureBase = nullptr;
 
-	// Glare result (FFT resolution)
-	eastl::unique_ptr<Texture2D> texGlareResult = nullptr;
-	eastl::unique_ptr<Texture2D> texGlarePrev = nullptr;
+	// Packed RGB IFFT real components. RGBA32F preserves the source R32F
+	// precision while allowing one filtered sample to fetch all channels.
+	eastl::unique_ptr<Texture2D> texGlarePacked = nullptr;
 
 	// Full-resolution output
 	eastl::unique_ptr<Texture2D> texOutput = nullptr;
@@ -196,12 +199,15 @@ struct PhysicalGlare : public PostProcessFeature
 	// Compute shaders
 	winrt::com_ptr<ID3D11ComputeShader> thresholdCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> apertureCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> tearFilmCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> psfCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> fftRowCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> fftColCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> fftRowInvCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> fftColInvCS = nullptr;
+	static constexpr uint FFT_VARIANT_COUNT = 4;
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftRowCS = {};
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftColCS = {};
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftRowInvCS = {};
+	std::array<winrt::com_ptr<ID3D11ComputeShader>, FFT_VARIANT_COUNT> fftColInvCS = {};
 	winrt::com_ptr<ID3D11ComputeShader> multiplyCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> packCS = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> compositeCS = nullptr;
 
 	// PSF parameter cache - regenerate only when changed
@@ -249,6 +255,7 @@ struct PhysicalGlare : public PostProcessFeature
 		float KernelScale = 0.f;
 	} cachedPSFParams;
 	bool psfDirty = true;
+	bool apertureDirty = true;
 	float tearFilmTimeAccum = 0.f;
 
 	uint currentFFTResolution = 256;
@@ -266,10 +273,15 @@ struct PhysicalGlare : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 
-	virtual inline void Reset() override { psfDirty = true; }
+	virtual inline void Reset() override
+	{
+		psfDirty = true;
+		apertureDirty = true;
+	}
 
 private:
 	void DispatchFFT(ID3D11ComputeShader* shader, Texture2D* input, Texture2D* output, uint resolution);
 	void GeneratePSF();
 	bool NeedsPSFRegeneration() const;
+	bool NeedsApertureRegeneration() const;
 };

@@ -1,6 +1,9 @@
 #include "Vignette.h"
 
+#include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
+#include "RasterPass.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -64,63 +67,60 @@ void Vignette::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
 
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = 1;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texOutput = eastl::make_unique<Texture2D>(texDesc);
 		texOutput->CreateSRV(srvDesc);
-		texOutput->CreateUAV(uavDesc);
+		texOutput->CreateRTV(rtvDesc);
 	}
 
-	CompileComputeShaders();
+	CompileRasterShaders();
 }
 
 void Vignette::ClearShaderCache()
 {
+	BumpShaderGeneration();
 	const auto shaderPtrs = std::array{
-		&vignetteCS
+		&vignettePS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
-	CompileComputeShaders();
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/Vignette");
+	CompileRasterShaders();
 }
 
-void Vignette::CompileComputeShaders()
+void Vignette::CompileRasterShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines = {};
-		std::string entry = "main";
+	const std::vector<PixelShaderCompileInfo> shaderInfos = {
+		{ &vignettePS, "vignette.ps.hlsl" },
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &vignetteCS, "vignette.cs.hlsl" },
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\Vignette") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\Vignette", {}, shaderInfos);
 }
 
 void Vignette::Draw(TextureInfo& inout_tex)
 {
+	if (!owner || !owner->GetFullscreenVS())
+		return;
+	if (!AllShadersReady({ &vignettePS }))
+		return;
+
 	globals::profiler->BeginPass("PostProcessing::Vignette");
 	auto context = globals::d3d::context;
 
@@ -133,25 +133,24 @@ void Vignette::Draw(TextureInfo& inout_tex)
 	};
 	vignetteCB->Update(data);
 
-	ID3D11ShaderResourceView* srv = inout_tex.srv;
-	ID3D11UnorderedAccessView* uav = texOutput->uav.get();
-	ID3D11Buffer* cb = vignetteCB->CB();
+	{
+		PostProcessingRaster::RasterPass pass(context);
 
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetShader(vignetteCS.get(), nullptr, 0);
+		ID3D11ShaderResourceView* srv = inout_tex.srv;
+		ID3D11Buffer* cb = vignetteCB->CB();
 
-	context->Dispatch(((uint)res.x + 7) >> 3, ((uint)res.y + 7) >> 3, 1);
+		context->PSSetConstantBuffers(1, 1, &cb);
+		context->PSSetShaderResources(0, 1, &srv);
+		pass.SetTargets({ texOutput->rtv.get() }, res.x, res.y);
+		pass.SetShaders(owner->GetFullscreenVS(), vignettePS.get());
+		pass.Draw();
 
-	// clean up
-	srv = nullptr;
-	uav = nullptr;
-	cb = nullptr;
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
-	context->CSSetShaderResources(0, 1, &srv);
-	context->CSSetConstantBuffers(0, 1, &cb);
-	context->CSSetShader(nullptr, nullptr, 0);
+		// clean up
+		srv = nullptr;
+		cb = nullptr;
+		context->PSSetShaderResources(0, 1, &srv);
+		context->PSSetConstantBuffers(1, 1, &cb);
+	}
 
 	inout_tex = { texOutput->resource.get(), texOutput->srv.get() };
 	globals::profiler->EndPass();

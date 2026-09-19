@@ -148,12 +148,14 @@ float2 GetVelocityTexCoord(float2 targetTexCoord)
 
 	// Initialize for sampling
 	float4 sum = float4(0.0f, 0.0f, 0.0f, 0.0f);
+	uint sampleCount = uint(g_SampleCount);
+	uint halfSampleCount = sampleCount / 2u;
 	float pixelToSampleUnitsScale = float(g_SampleCount) / blurLength;
 
 	// Sample in pairs (mirrored)
-	for (int i = 0; i < g_SampleCount / 2; i++) {
+	for (uint i = 0; i < halfSampleCount; i++) {
 		// Calculate offset
-		float offset = (float(i) + 0.5f) / float(g_SampleCount / 2) * blurLength;
+		float offset = (float(i) + 0.5f) / float(halfSampleCount) * blurLength;
 		offset += GetDitheredOffset(pixelPos, i);
 
 		// Sample pairs in opposite directions
@@ -196,8 +198,8 @@ float2 GetVelocityTexCoord(float2 targetTexCoord)
 	}
 
 	// Normalize
-	sum.rgb *= 1.0f / float(g_SampleCount);
-	sum.w *= 1.0f / float(g_SampleCount);
+	sum.rgb *= 1.0f / float(sampleCount);
+	sum.w *= 1.0f / float(sampleCount);
 
 	// Final blend with background
 	float4 outputColor = float4(

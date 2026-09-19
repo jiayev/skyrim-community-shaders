@@ -36,11 +36,11 @@ struct Composite : public PostProcessFeature
 	};
 
 	// Shader permutations indexed by composite flags (index 0 unused)
-	std::array<winrt::com_ptr<ID3D11ComputeShader>, CompositeFlags::FLAG_COUNT> compositeShaders = {};
+	std::array<winrt::com_ptr<ID3D11PixelShader>, CompositeFlags::FLAG_COUNT> compositeShaders = {};
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
-	void CompileComputeShaders();
+	void CompileRasterShaders();
 
 	virtual void RestoreDefaultSettings() override {}
 	virtual void LoadSettings(json&) override {}

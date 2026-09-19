@@ -106,7 +106,7 @@ float3 Gamma(float3 col, float3 gamma, float3 black_pivot, float3 white_pivot)
 	float3 sgn = sign(col);
 	float3 range = white_pivot - black_pivot;
 	col = col / range;
-	col = pow(max(0, col), gamma);
+	col = pow(abs(col), gamma);
 	col = col * sgn * range + black_pivot;
 	return col;
 }

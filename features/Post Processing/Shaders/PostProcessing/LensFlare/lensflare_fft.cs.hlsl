@@ -5,7 +5,7 @@
 // Uses LensFlareConstants CB layout (shared with lensflare.cs.hlsl).
 //
 // Shaders:
-//   CS_FFT           — Stockham radix-2 FFT (row/col, forward/inverse via defines)
+//   CS_FFT           — Cooley-Tukey radix-2 FFT (row/col, forward/inverse via defines)
 //   CS_Multiply      — Frequency-domain complex multiply (scene × bokeh kernel)
 //   CSBokehPrepare   — Sample bokeh texture → zero-padded N×N RG32F with FFT-shift
 //   CSFFTThreshold   — Convert half-res threshold to N×N RG32F for FFT input
@@ -100,15 +100,17 @@ float2 ScreenToFFT(float2 screenUV)
 }
 
 // ============================================================
-// CS_FFT — Stockham radix-2 FFT (row/column pass)
+// CS_FFT — Cooley-Tukey radix-2 FFT (row/column pass)
 // Compiled with defines: ROW_PASS/COL_PASS + FORWARD/INVERSE
 // Dispatch: (N, 1, 1) where N = FFTResolution
 // ============================================================
 
-#define MAX_FFT_SIZE 1024
+#ifndef FFT_SIZE
+#	define FFT_SIZE 1024
+#endif
 
-groupshared float2 gs_buffer0[MAX_FFT_SIZE];
-groupshared float2 gs_buffer1[MAX_FFT_SIZE];
+groupshared float2 gs_buffer[FFT_SIZE];
+groupshared float2 gs_twiddle[FFT_SIZE / 2];
 
 float2 ComplexMul(float2 a, float2 b)
 {
@@ -127,73 +129,50 @@ float2 Twiddle(uint k, uint N)
 	return float2(c, s);
 }
 
-[numthreads(1024, 1, 1)] void CS_FFT(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupThreadID) {
-	uint lineIdx = groupId.x;
-	uint N = FFTResolution;
-	bool active = (threadIdx < N);
+[numthreads(FFT_SIZE / 2, 1, 1)] void CS_FFT(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupThreadID) {
+	const uint N = FFT_SIZE;
+	uint bits = firstbithigh(N);
 
-	// Load
-	if (active) {
-		uint2 readPos;
+	[unroll] for (uint i = 0; i < 2; ++i)
+	{
+		uint index = threadIdx + i * (FFT_SIZE / 2);
 #ifdef ROW_PASS
-		readPos = uint2(threadIdx, lineIdx);
+		uint2 pos = uint2(index, groupId.x);
 #else
-		readPos = uint2(lineIdx, threadIdx);
+		uint2 pos = uint2(groupId.x, index);
 #endif
-		gs_buffer0[threadIdx] = TexComplexA[readPos];
+		uint rev = reversebits(index) >> (32 - bits);
+		gs_buffer[rev] = TexComplexA[pos];
 	}
+	gs_twiddle[threadIdx] = Twiddle(threadIdx, N);
 	GroupMemoryBarrierWithGroupSync();
 
-	// Bit-reversal permutation
-	if (active) {
-		uint bits = firstbithigh(N) - firstbithigh(1);
-		uint rev = 0;
-		uint tmp = threadIdx;
-		for (uint b = 0; b < bits; b++) {
-			rev = (rev << 1) | (tmp & 1);
-			tmp >>= 1;
-		}
-		gs_buffer1[rev] = gs_buffer0[threadIdx];
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-	if (active)
-		gs_buffer0[threadIdx] = gs_buffer1[threadIdx];
-	GroupMemoryBarrierWithGroupSync();
-
-	// Cooley-Tukey butterfly
-	for (uint stage = 1; stage < N; stage <<= 1) {
-		if (active) {
-			uint halfStage = stage;
-			uint blockIdx = threadIdx / (halfStage * 2);
-			uint blockOffset = threadIdx % (halfStage * 2);
-
-			if (blockOffset < halfStage) {
-				uint topIdx = blockIdx * halfStage * 2 + blockOffset;
-				uint botIdx = topIdx + halfStage;
-				float2 tw = Twiddle(blockOffset * (N / (halfStage * 2)), N);
-				float2 top = gs_buffer0[topIdx];
-				float2 bot = ComplexMul(tw, gs_buffer0[botIdx]);
-				gs_buffer0[topIdx] = top + bot;
-				gs_buffer0[botIdx] = top - bot;
-			}
-		}
+	[unroll] for (uint stage = 1; stage < N; stage <<= 1)
+	{
+		uint butterflyIdx = threadIdx % stage;
+		uint topIdx = (threadIdx / stage) * (stage << 1) + butterflyIdx;
+		uint botIdx = topIdx + stage;
+		float2 tw = gs_twiddle[butterflyIdx * (N / (stage << 1))];
+		float2 top = gs_buffer[topIdx];
+		float2 bot = ComplexMul(tw, gs_buffer[botIdx]);
+		gs_buffer[topIdx] = top + bot;
+		gs_buffer[botIdx] = top - bot;
 		GroupMemoryBarrierWithGroupSync();
 	}
 
-	// Write output
-	if (active) {
-		float2 result = gs_buffer0[threadIdx];
+	[unroll] for (uint i = 0; i < 2; ++i)
+	{
+		uint index = threadIdx + i * (FFT_SIZE / 2);
+		float2 result = gs_buffer[index];
 #ifdef INVERSE
 		result /= float(N);
 #endif
-		uint2 writePos;
 #ifdef ROW_PASS
-		writePos = uint2(threadIdx, lineIdx);
+		uint2 pos = uint2(index, groupId.x);
 #else
-		writePos = uint2(lineIdx, threadIdx);
+		uint2 pos = uint2(groupId.x, index);
 #endif
-		RWTexComplex[writePos] = result;
+		RWTexComplex[pos] = result;
 	}
 }
 

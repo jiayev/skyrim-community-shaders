@@ -1,5 +1,10 @@
 // Camera effects for Community Shaders
 // Film grain based on https://www.shadertoy.com/view/3sGSWV (MIT License)
+//
+// Purely per-pixel (fisheye + chromatic aberration + grain). SV_Position at
+// pixel centers is DTid + 0.5.
+
+#include "PostProcessing/fullscreen.hlsli"
 
 #include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
@@ -25,8 +30,6 @@ cbuffer CameraCB : register(b1)
 Texture2D<float4> InputTexture : register(t0);
 
 SamplerState ColorSampler : register(s0);
-
-RWTexture2D<float4> OutputTexture : register(u0);
 
 #define BUFFER_ASPECT_RATIO ScreenSize.x / ScreenSize.y
 #define ASPECT_RATIO float2(BUFFER_ASPECT_RATIO, 1.0)
@@ -96,7 +99,9 @@ float2 FishEye(float2 texcoord, float FEFoV, float FECrop)
 	return texcoord;
 }
 
-[numthreads(8, 8, 1)] void CS_Camera(uint3 DTid : SV_DispatchThreadID) {
+float4 main(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 DTid = uint2(input.Position.xy);
 	static const float2 TEXEL_SIZE = float2(1.0f / ScreenSize.x, 1.0f / ScreenSize.y);
 	float2 texcoord = (DTid.xy + 0.5f) * TEXEL_SIZE;
 	float2 texcoord_clean = texcoord.xy;
@@ -143,5 +148,5 @@ float2 FishEye(float2 texcoord, float FEFoV, float FECrop)
 		color = max(lerp(color * grain, color + (grain - 1.0), GRAIN_LIFT_RATIO), 0.0);
 	}
 
-	OutputTexture[DTid.xy] = float4(color, 1.0f);
+	return float4(color, 1.0f);
 }

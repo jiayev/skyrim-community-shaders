@@ -111,7 +111,8 @@ struct PostProcessing : Feature
 		COUNT
 	};
 
-	std::array<std::unique_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
+	/// shared_ptr, not unique_ptr: see PostProcessFeature's weak_ptr callback contract.
+	std::array<std::shared_ptr<PostProcessFeature>, static_cast<size_t>(FeaturePipelineIndex::COUNT)> pipeline;
 
 	BokehResources bokehResources;
 
@@ -134,12 +135,38 @@ struct PostProcessing : Feature
 	void ClearBorderMotionVectorsForFrameGen();
 	void DrawFeature(PostProcessFeature& feature, PostProcessFeature::TextureInfo& lastTexColor);
 
-	/// Copy lastTexColor to a render target, performing format conversion via copyCS if needed.
+	enum class Gamut : uint
+	{
+		Rec709,
+		ACEScg,
+		Rec2020
+	};
+	struct alignas(16) CopyCB
+	{
+		Gamut inputGamut = Gamut::Rec709;
+		Gamut outputGamut = Gamut::Rec709;
+		float gamma = 1.f;
+		float pad = 0.f;
+	};
+
+	/**
+	 * @brief Copies the pipeline output into a game render target, converting the
+	 *        format via the copyPS fullscreen pass when the formats differ.
+	 *
+	 * Same-format, same-space copies use CopySubresourceRegion; otherwise the
+	 * source is rendered into convertTex first and then copied.
+	 *
+	 * @param targetRT  Game render target receiving the image.
+	 * @param convertTex  Intermediate texture for format conversion (needs an RTV).
+	 * @param srcTex  Texture holding the pipeline output.
+	 * @param srcSRV  SRV of srcTex, sampled by the conversion pass.
+	 */
 	void CopyToRenderTarget(
 		RE::BSGraphics::RenderTargetData& targetRT,
 		Texture2D* convertTex,
 		ID3D11Texture2D* srcTex,
-		ID3D11ShaderResourceView* srcSRV);
+		ID3D11ShaderResourceView* srcSRV, const CopyCB& conversion);
+	void BeginLinearProcessing(PostProcessFeature::TextureInfo& texture);
 
 	/////////////////////////////////////////////////////////////////////////////////
 
@@ -155,8 +182,22 @@ struct PostProcessing : Feature
 
 	eastl::unique_ptr<Texture2D> texCopyMain = nullptr;
 	eastl::unique_ptr<Texture2D> texCopyMainCopy = nullptr;
-	eastl::unique_ptr<Texture2D> texAfterTAA = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> copyCS = nullptr;
+
+	/// Format-conversion copy pass (fullscreen triangle PS draw).
+	winrt::com_ptr<ID3D11PixelShader> copyPS = nullptr;
+	std::unique_ptr<ConstantBuffer> copyCB;
+	std::unique_ptr<Texture2D> texInput;
+
+	/// Shared fullscreen-triangle vertex shader for every raster pass in the
+	/// pipeline (compiled from PostProcessing/fullscreen.hlsli).
+	winrt::com_ptr<ID3D11VertexShader> fullscreenVS = nullptr;
+
+	/**
+	 * @brief Vertex shader every rasterized sub-feature draws with.
+	 * @return The shared fullscreen-triangle VS, or null until SetupResources
+	 *         succeeds; raster passes must skip when null.
+	 */
+	ID3D11VertexShader* GetFullscreenVS() const { return fullscreenVS.get(); }
 
 	/////////////////////////////////////////////////////////////////////////////////
 

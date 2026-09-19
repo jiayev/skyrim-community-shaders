@@ -1,6 +1,9 @@
 #include "CODBloom.h"
 
+#include "Features/PostProcessing.h"
 #include "I18n/I18n.h"
+#include "RasterPass.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Util.h"
 
@@ -80,14 +83,8 @@ void CODBloom::SetupResources()
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
 
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = texDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
 		texDesc.MipLevels = srvDesc.Texture2D.MipLevels = s_BloomMips;
-		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		texDesc.MiscFlags = 0;
 
 		texBloom = std::make_unique<Texture2D>(texDesc);
@@ -103,14 +100,14 @@ void CODBloom::SetupResources()
 			DX::ThrowIfFailed(device->CreateShaderResourceView(texBloom->resource.get(), &mipSrvDesc, texBloomMipSRVs[i].put()));
 		}
 
-		// UAV for each mip
+		// RTV for each mip
 		for (uint i = 0; i < s_BloomMips; i++) {
-			D3D11_UNORDERED_ACCESS_VIEW_DESC mipUavDesc = {
+			D3D11_RENDER_TARGET_VIEW_DESC mipRtvDesc = {
 				.Format = texDesc.Format,
-				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MipSlice = i }
 			};
-			DX::ThrowIfFailed(device->CreateUnorderedAccessView(texBloom->resource.get(), &mipUavDesc, texBloomMipUAVs[i].put()));
+			DX::ThrowIfFailed(device->CreateRenderTargetView(texBloom->resource.get(), &mipRtvDesc, texBloomMipRTVs[i].put()));
 		}
 	}
 
@@ -129,54 +126,70 @@ void CODBloom::SetupResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, colorSampler.put()));
 	}
 
-	CompileComputeShaders();
+	logger::debug("Creating blend states...");
+	{
+		// Upsample accumulate: out = PS_Out * 1 + dst * CurrentMipMult, with the
+		// PS already scaling its output by UpsampleMult. Blend factor carries
+		// CurrentMipMult (alpha factor 0 keeps the written alpha at 1).
+		D3D11_BLEND_DESC blendDesc = {};
+		blendDesc.RenderTarget[0].BlendEnable = TRUE;
+		blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+		blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
+		blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+		blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_BLEND_FACTOR;
+		blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+		DX::ThrowIfFailed(device->CreateBlendState(&blendDesc, upsampleBlendState.put()));
+	}
+
+	CompileRasterShaders();
 }
 
 void CODBloom::ClearShaderCache()
 {
+	outputReady = false;
+	BumpShaderGeneration();
 	auto const shaderPtrs = std::array{
-		&thresholdCS, &downsampleCS, &downsampleFirstMipCS, &upsampleCS, &compositeCS
+		&thresholdPS, &downsamplePS, &downsampleFirstMipPS, &upsamplePS, &compositePS
 	};
 
-	for (auto shader : shaderPtrs)
-		if ((*shader)) {
-			(*shader)->Release();
-			shader->detach();
-		}
+	{
+		std::lock_guard lock(shaderMutex);
+		for (auto shader : shaderPtrs)
+			if ((*shader)) {
+				(*shader)->Release();
+				shader->detach();
+			}
+	}
 
-	CompileComputeShaders();
+	globals::shaderCache->ClearStandaloneComputeCache(L"PostProcessing/CODBloom");
+	CompileRasterShaders();
 }
 
-void CODBloom::CompileComputeShaders()
+void CODBloom::CompileRasterShaders()
 {
-	struct ShaderCompileInfo
-	{
-		winrt::com_ptr<ID3D11ComputeShader>* programPtr;
-		std::string_view filename;
-		std::vector<std::pair<const char*, const char*>> defines;
-		std::string entry = "main";
+	const std::vector<PixelShaderCompileInfo> shaderInfos = {
+		{ &thresholdPS, "bloom.ps.hlsl", {}, "PS_Threshold" },
+		{ &downsamplePS, "bloom.ps.hlsl", {}, "PS_Downsample" },
+		{ &downsampleFirstMipPS, "bloom.ps.hlsl", { { "FIRST_MIP", "" } }, "PS_Downsample" },
+		{ &upsamplePS, "bloom.ps.hlsl", {}, "PS_Upsample" },
+		{ &compositePS, "bloom.ps.hlsl", {}, "PS_Composite" }
 	};
 
-	std::vector<ShaderCompileInfo>
-		shaderInfos = {
-			{ &thresholdCS, "bloom.cs.hlsl", {}, "CS_Threshold" },
-			{ &downsampleCS, "bloom.cs.hlsl", {}, "CS_Downsample" },
-			{ &downsampleFirstMipCS, "bloom.cs.hlsl", { { "FIRST_MIP", "" } }, "CS_Downsample" },
-			{ &upsampleCS, "bloom.cs.hlsl", {}, "CS_Upsample" },
-			{ &compositeCS, "bloom.cs.hlsl", {}, "CS_Composite" }
-		};
-
-	for (auto& info : shaderInfos) {
-		auto path = std::filesystem::path("Data\\Shaders\\PostProcessing\\CODBloom") / info.filename;
-		if (auto rawPtr = reinterpret_cast<ID3D11ComputeShader*>(Util::CompileShader(path.c_str(), info.defines, "cs_5_0", info.entry.c_str())))
-			info.programPtr->attach(rawPtr);
-	}
+	CompileRasterShadersAsync(L"Data\\Shaders\\PostProcessing\\CODBloom", {}, shaderInfos);
 }
 
 void CODBloom::Draw(TextureInfo& inout_tex)
 {
 	auto state = globals::state;
 	auto context = globals::d3d::context;
+
+	if (!AllShadersReady({ &thresholdPS, &downsampleFirstMipPS, &downsamplePS, &upsamplePS }))
+		return;
+	if (!owner || !owner->GetFullscreenVS())
+		return;
 
 	state->BeginPerfEvent("COD Bloom");
 
@@ -192,108 +205,98 @@ void CODBloom::Draw(TextureInfo& inout_tex)
 	//////////////////////////////////////////////////////////////////////////////
 
 	std::array<ID3D11ShaderResourceView*, 2> srvs = { nullptr };
-	std::array<ID3D11UnorderedAccessView*, 1> uavs = { nullptr };
-	std::array<ID3D11SamplerState*, 1> samplers = { colorSampler.get() };
 	auto cb = bloomCB->CB();
+	ID3D11SamplerState* sampler = colorSampler.get();
+	auto* vs = owner->GetFullscreenVS();
 
-	auto resetViews = [&]() {
-		srvs.fill(nullptr);
-		uavs.fill(nullptr);
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-	};
-
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
+	// One raster scope for the whole mip chain: state save/restore once, then
+	// per-pass target/viewport/shader/blend switches. Targets are set before
+	// binding the input SRV so a mip never sits bound as SRV and RTV at once.
+	PostProcessingRaster::RasterPass pass(context);
+	context->PSSetConstantBuffers(1, 1, &cb);
+	context->PSSetSamplers(0, 1, &sampler);
 
 	// Threshold
 	{
 		globals::profiler->BeginPass("PostProcessing::CODBloom::Threshold");
+		pass.SetTargets({ texBloomMipRTVs[0].get() }, (float)texBloom->desc.Width, (float)texBloom->desc.Height);
 		srvs.at(0) = inout_tex.srv;
-		uavs.at(0) = texBloomMipUAVs[0].get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(thresholdCS.get(), nullptr, 0);
-		context->Dispatch(((texBloom->desc.Width - 1) >> 5) + 1, ((texBloom->desc.Height - 1) >> 5) + 1, 1);
+		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		pass.SetShaders(vs, thresholdPS.get());
+		pass.Draw();
 		globals::profiler->EndPass();
 	}
 
 	// Downsample
 	globals::profiler->BeginPass("PostProcessing::CODBloom::Downsample");
-	context->CSSetShader(downsampleFirstMipCS.get(), nullptr, 0);
+	pass.SetShaders(vs, downsampleFirstMipPS.get());
 	for (int i = 0; i < s_BloomMips - 1; i++) {
-		resetViews();
-
-		srvs.at(1) = texBloomMipSRVs[i].get();
-		uavs.at(0) = texBloomMipUAVs[i + 1].get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
 		if (i == 1)
-			context->CSSetShader(downsampleCS.get(), nullptr, 0);
+			pass.SetShaders(vs, downsamplePS.get());
 
 		uint mipWidth = texBloom->desc.Width >> (i + 1);
 		uint mipHeight = texBloom->desc.Height >> (i + 1);
-		context->Dispatch(((mipWidth - 1) >> 5) + 1, ((mipHeight - 1) >> 5) + 1, 1);
+		pass.SetTargets({ texBloomMipRTVs[i + 1].get() }, (float)mipWidth, (float)mipHeight);
+
+		srvs.fill(nullptr);
+		srvs.at(1) = texBloomMipSRVs[i].get();
+		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		pass.Draw();
 	}
 	globals::profiler->EndPass();
 
-	// upsample
+	// upsample (ROP blend accumulates into the destination mip)
 	globals::profiler->BeginPass("PostProcessing::CODBloom::Upsample");
-	context->CSSetShader(upsampleCS.get(), nullptr, 0);
+	pass.SetShaders(vs, upsamplePS.get());
 	for (int i = s_BloomMips - 2; i >= 1; i--) {
-		resetViews();
-
 		cbData.UpsampleMult = 1.f;
 		if (i == s_BloomMips - 2)
 			cbData.UpsampleMult = settings.MipBlendFactor[i];
 		cbData.CurrentMipMult = settings.MipBlendFactor[i - 1];
 		bloomCB->Update(cbData);
 
-		srvs.at(1) = texBloomMipSRVs[i + 1].get();
-		uavs.at(0) = texBloomMipUAVs[i].get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+		float blendFactor[4] = { cbData.CurrentMipMult, cbData.CurrentMipMult, cbData.CurrentMipMult, 0.f };
+		pass.SetBlendState(upsampleBlendState.get(), blendFactor);
 
 		uint mipWidth = texBloom->desc.Width >> i;
 		uint mipHeight = texBloom->desc.Height >> i;
-		context->Dispatch(((mipWidth - 1) >> 5) + 1, ((mipHeight - 1) >> 5) + 1, 1);
+		pass.SetTargets({ texBloomMipRTVs[i].get() }, (float)mipWidth, (float)mipHeight);
+
+		srvs.fill(nullptr);
+		srvs.at(1) = texBloomMipSRVs[i + 1].get();
+		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		pass.Draw();
 	}
 
 	// upsample final mip to mip 0 with blend factor applied (CurrentMipMult=0 to discard threshold data in mip 0)
 	{
-		resetViews();
-
 		cbData.UpsampleMult = settings.BlendFactor;
 		cbData.CurrentMipMult = 0.f;
 		bloomCB->Update(cbData);
 
+		float blendFactor[4] = { 0.f, 0.f, 0.f, 0.f };
+		pass.SetBlendState(upsampleBlendState.get(), blendFactor);
+
+		pass.SetTargets({ texBloomMipRTVs[0].get() }, (float)texBloom->desc.Width, (float)texBloom->desc.Height);
+
+		srvs.fill(nullptr);
 		srvs.at(1) = texBloomMipSRVs[1].get();
-		uavs.at(0) = texBloomMipUAVs[0].get();
-
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-
-		context->Dispatch(((texBloom->desc.Width - 1) >> 5) + 1, ((texBloom->desc.Height - 1) >> 5) + 1, 1);
+		context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		pass.Draw();
 	}
 	globals::profiler->EndPass();
 
-	// cleanup
-	resetViews();
-
-	samplers.fill(nullptr);
+	// cleanup (RasterPass destructor restores the pipeline state)
+	srvs.fill(nullptr);
+	context->PSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 	cb = nullptr;
-
-	context->CSSetConstantBuffers(1, 1, &cb);
-	context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
-	context->CSSetShader(nullptr, nullptr, 0);
+	context->PSSetConstantBuffers(1, 1, &cb);
+	sampler = nullptr;
+	context->PSSetSamplers(0, 1, &sampler);
 
 	// return
 	inout_tex = { texBloom->resource.get(), texBloomMipSRVs[0].get() };
 
 	state->EndPerfEvent();
+	outputReady = true;
 }

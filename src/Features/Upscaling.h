@@ -205,7 +205,6 @@ public:
 private:
 	static constexpr size_t kUpscaleMethodCount = static_cast<size_t>(UpscaleMethod::kXeSS) + 1;
 
-
 	void BeginRenderFrame();
 	void CreateUpscaledTexture();
 	void DestroyUpscaledTexture();
@@ -230,12 +229,6 @@ private:
 	struct Main_PostProcessing
 	{
 		static void thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5);
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-
-	struct SetScissorRect
-	{
-		static void thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom);
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 

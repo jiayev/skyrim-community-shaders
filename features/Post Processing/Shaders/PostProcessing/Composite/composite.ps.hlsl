@@ -5,6 +5,8 @@
 /// Purkinje effect is applied after compositing on the final perceived image.
 /// Uses #ifdef HAS_BLOOM / HAS_LENS_FLARE / HAS_GLARE / HAS_EXPOSURE / HAS_LOCAL_EXPOSURE to control behavior.
 
+#include "PostProcessing/fullscreen.hlsli"
+
 #include "Common/Color.hlsli"
 
 Texture2D<float4> TexColor : register(t0);
@@ -41,6 +43,7 @@ cbuffer LocalExposureCB : register(b2)
 	float HighlightThresholdStrength : packoffset(c2.z);
 	float ShadowThresholdStrength : packoffset(c2.w);
 	float LogLuminanceMin : packoffset(c4.x);
+	float LogLuminanceMax : packoffset(c4.y);
 };
 
 float RemapBaseContrast(float centeredBase)
@@ -57,13 +60,17 @@ float RemapBaseContrast(float centeredBase)
 	float release = smoothstep(threshold, threshold + transitionWidth, magnitude);
 	float protectedOffset = min(magnitude, threshold) * (1.0 - release);
 	float remappedMagnitude = magnitude * contrast + protectedOffset * (1.0 - contrast);
-	return centeredBase < 0.0 ? -remappedMagnitude : remappedMagnitude;
+
+	if (isHighlight && magnitude > threshold)
+		remappedMagnitude = max(remappedMagnitude, threshold);
+
+	return isHighlight ? remappedMagnitude : -remappedMagnitude;
 }
 
 float ComputeLocalExposure(float3 sceneColor, float baseLogLuminance, float globalExposure, float middleGreyCompensation)
 {
 	float sceneLuminance = Color::RGBToLuminance(max(sceneColor, 0.0));
-	float sceneLogLuminance = log2(max(sceneLuminance, exp2(LogLuminanceMin)));
+	float sceneLogLuminance = clamp(log2(max(sceneLuminance, exp2(LogLuminanceMin))), LogLuminanceMin, LogLuminanceMax);
 	float logGlobalExposure = log2(max(globalExposure, 1e-5));
 	float exposedLogLuminance = sceneLogLuminance + logGlobalExposure;
 	float exposedBase = baseLogLuminance + logGlobalExposure;
@@ -156,14 +163,9 @@ float3 PurkinjeShift(float3 c, float nightAdaptation)
 }
 #endif  // HAS_EXPOSURE
 
-RWTexture2D<float4> RWTexOutput : register(u0);
-
-[numthreads(8, 8, 1)] void CSComposite(uint2 tid : SV_DispatchThreadID) {
-	uint2 dims;
-	RWTexOutput.GetDimensions(dims.x, dims.y);
-
-	if (any(tid >= dims))
-		return;
+float4 PSComposite(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 tid = uint2(input.Position.xy);
 
 	float3 sceneColor = TexColor[tid].rgb;
 
@@ -219,5 +221,5 @@ RWTexture2D<float4> RWTexOutput : register(u0);
 #	endif
 #endif
 
-	RWTexOutput[tid] = float4(result, 1);
+	return float4(result, 1);
 }

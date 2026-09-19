@@ -1,7 +1,9 @@
+// LUT application: purely per-pixel lookup. SV_Position at pixel centers is
+// tid + 0.5.
+
+#include "PostProcessing/fullscreen.hlsli"
 
 #include "Common/Color.hlsli"
-
-RWTexture2D<float4> RWTexOut : register(u0);
 
 Texture2D<float3> TexColor : register(t0);
 Texture2D<float3> TexLut : register(t1);
@@ -28,7 +30,10 @@ float3 biLerp(in float3 values[8], in float3 lerpFactors)
 	return z;
 }
 
-[numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
+float4 main(FullscreenTriangleVSOutput input) : SV_Target
+{
+	uint2 tid = uint2(input.Position.xy);
+
 	uint3 dims;
 	[branch] if (LutType == 3)
 		TexLut3D.GetDimensions(dims.x, dims.y, dims.z);
@@ -92,5 +97,5 @@ float3 biLerp(in float3 values[8], in float3 lerpFactors)
 		color = biLerp(lutSamples, lerpFactors);
 	}
 
-	RWTexOut[tid] = float4(color, 1);
+	return float4(color, 1);
 }

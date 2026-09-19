@@ -1,7 +1,7 @@
-// Physical Glare — Stockham radix-2 FFT (row/column pass)
+// Physical Glare — Cooley-Tukey radix-2 FFT (row/column pass)
 // Community Shaders / Post Processing — Author: Jiaye, 2026
 //
-// One-dimensional DFT via the Stockham auto-sort algorithm using
+// One-dimensional DFT via the Cooley-Tukey algorithm using
 // groupshared memory.  Compiled with defines:
 //   ROW_PASS / COL_PASS — selects transform axis.
 //   FORWARD / INVERSE   — selects twiddle factor sign.
@@ -46,21 +46,18 @@ cbuffer GlareCB : register(b1)
 
 static const float PI = 3.14159265358979323846;
 
-// Max FFT size supported (must match FFT_MAX in C++ code)
-#define MAX_FFT_SIZE 1024
+#ifndef FFT_SIZE
+#	define FFT_SIZE 1024
+#endif
 
-// Shared memory for the FFT butterfly operations
-// Two buffers for ping-pong  (2 × 1024 × 8B = 16 KB, within 32 KB CS 5.0 limit)
-groupshared float2 gs_buffer0[MAX_FFT_SIZE];
-groupshared float2 gs_buffer1[MAX_FFT_SIZE];
+groupshared float2 gs_buffer[FFT_SIZE];
+groupshared float2 gs_twiddle[FFT_SIZE / 2];
 
-// Complex multiplication
 float2 ComplexMul(float2 a, float2 b)
 {
 	return float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
-// Compute twiddle factor W_N^k = exp(-2*pi*i*k/N) for forward, exp(+2*pi*i*k/N) for inverse
 float2 Twiddle(uint k, uint N)
 {
 #ifdef INVERSE
@@ -73,92 +70,49 @@ float2 Twiddle(uint k, uint N)
 	return float2(c, s);
 }
 
-// Each group processes one row or column.
-// 1024 threads = CS 5.0 max; handles up to 1024-point FFT.
-// Smaller FFTs guard with `active = (threadIdx < N)`.
-[numthreads(1024, 1, 1)] void CS_FFT(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupThreadID) {
-	uint lineIdx = groupId.x;  // which row or column
-	uint N = FFTResolution;
+[numthreads(FFT_SIZE / 2, 1, 1)] void CS_FFT(uint3 groupId : SV_GroupID, uint threadIdx : SV_GroupThreadID) {
+	const uint N = FFT_SIZE;
+	uint bits = firstbithigh(N);
 
-	bool active = (threadIdx < N);
-
-	// Load input data into shared memory
-	if (active) {
-		uint2 readPos;
+	[unroll] for (uint i = 0; i < 2; ++i)
+	{
+		uint index = threadIdx + i * (FFT_SIZE / 2);
 #ifdef ROW_PASS
-		readPos = uint2(threadIdx, lineIdx);
+		uint2 pos = uint2(index, groupId.x);
 #else
-		readPos = uint2(lineIdx, threadIdx);
+		uint2 pos = uint2(groupId.x, index);
 #endif
-		gs_buffer0[threadIdx] = TexInput[readPos];
+		uint rev = reversebits(index) >> (32 - bits);
+		gs_buffer[rev] = TexInput[pos];
 	}
-
+	gs_twiddle[threadIdx] = Twiddle(threadIdx, N);
 	GroupMemoryBarrierWithGroupSync();
 
-	// Bit-reversal permutation
-	if (active) {
-		uint bits = firstbithigh(N) - firstbithigh(1);  // log2(N)
-		uint rev = 0;
-		uint tmp = threadIdx;
-		for (uint b = 0; b < bits; b++) {
-			rev = (rev << 1) | (tmp & 1);
-			tmp >>= 1;
-		}
-		gs_buffer1[rev] = gs_buffer0[threadIdx];
-	}
-
-	GroupMemoryBarrierWithGroupSync();
-
-	// Copy back to buffer0 for butterfly stages
-	if (active)
-		gs_buffer0[threadIdx] = gs_buffer1[threadIdx];
-
-	GroupMemoryBarrierWithGroupSync();
-
-	// Iterative Cooley-Tukey butterfly
-	for (uint stage = 1; stage < N; stage <<= 1) {
-		if (active) {
-			uint halfStage = stage;
-			uint fullStage = stage << 1;
-
-			uint butterflyGroup = threadIdx / fullStage;
-			uint butterflyIdx = threadIdx % fullStage;
-
-			if (butterflyIdx < halfStage) {
-				uint topIdx = butterflyGroup * fullStage + butterflyIdx;
-				uint botIdx = topIdx + halfStage;
-
-				float2 tw = Twiddle(butterflyIdx, fullStage);
-				float2 top = gs_buffer0[topIdx];
-				float2 bot = ComplexMul(tw, gs_buffer0[botIdx]);
-
-				gs_buffer1[topIdx] = top + bot;
-				gs_buffer1[botIdx] = top - bot;
-			}
-		}
-
-		GroupMemoryBarrierWithGroupSync();
-
-		if (active)
-			gs_buffer0[threadIdx] = gs_buffer1[threadIdx];
-
+	[unroll] for (uint stage = 1; stage < N; stage <<= 1)
+	{
+		uint butterflyIdx = threadIdx % stage;
+		uint topIdx = (threadIdx / stage) * (stage << 1) + butterflyIdx;
+		uint botIdx = topIdx + stage;
+		float2 tw = gs_twiddle[butterflyIdx * (N / (stage << 1))];
+		float2 top = gs_buffer[topIdx];
+		float2 bot = ComplexMul(tw, gs_buffer[botIdx]);
+		gs_buffer[topIdx] = top + bot;
+		gs_buffer[botIdx] = top - bot;
 		GroupMemoryBarrierWithGroupSync();
 	}
 
-	// Write output
-	if (active) {
-		float2 result = gs_buffer0[threadIdx];
+	[unroll] for (uint i = 0; i < 2; ++i)
+	{
+		uint index = threadIdx + i * (FFT_SIZE / 2);
+		float2 result = gs_buffer[index];
 #ifdef INVERSE
 		result /= float(N);
 #endif
-
-		uint2 writePos;
 #ifdef ROW_PASS
-		writePos = uint2(threadIdx, lineIdx);
+		uint2 pos = uint2(index, groupId.x);
 #else
-		writePos = uint2(lineIdx, threadIdx);
+		uint2 pos = uint2(groupId.x, index);
 #endif
-
-		RWTexOutput[writePos] = result;
+		RWTexOutput[pos] = result;
 	}
 }

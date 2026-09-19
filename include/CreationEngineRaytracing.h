@@ -501,7 +501,7 @@ struct CreationEngineRaytracing
 		ID3D12Resource* native = nullptr;
 		ID3D11Texture2D* shared = nullptr;
 	};
-	
+
 	struct CPMSettings
 	{
 		BOOL EnableComplexMaterial;
@@ -605,25 +605,13 @@ struct CreationEngineRaytracing
 	struct LinearLightingSettings
 	{
 		uint enableLinearLighting;
-		uint isDirLightLinear;
-		float dirLightMult;
-		float lightGamma;
-		float colorGamma;
-		float emitColorGamma;
-		float glowmapGamma;
-		float ambientGamma;
-		float fogGamma;
-		float fogAlphaGamma;
-		float effectGamma;
-		float effectAlphaGamma;
-		float skyGamma;
-		float waterGamma;
-		float vlGamma;
+		uint enableACEScg;
+		uint isMainOrLoadingMenu;
+		uint pad0;
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
 		float ambientMult;
-		float emitColorMult;
 		float glowmapMult;
 		float effectLightingMult;
 		float membraneEffectMult;
@@ -631,9 +619,9 @@ struct CreationEngineRaytracing
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		uint pad0;
+		float pad1;
 	};
-	static_assert(sizeof(LinearLightingSettings) % 16 == 0);
+	static_assert(sizeof(LinearLightingSettings) == 64);
 
 	struct ExponentialHeightFogSettings
 	{
@@ -742,7 +730,7 @@ struct CreationEngineRaytracing
 	using ReloadShadersFn = void (*)();
 
 	InitializeRendererFn InitializeRenderer = nullptr;
-	InitializeVulkanRendererFn InitializeVulkanRenderer = nullptr;	
+	InitializeVulkanRendererFn InitializeVulkanRenderer = nullptr;
 	InitializeFn Initialize = nullptr;
 	UpdateCameraFn UpdateCamera = nullptr;
 	ExecuteFn Execute = nullptr;
@@ -776,7 +764,7 @@ struct CreationEngineRaytracing
 		}
 
 		LOAD_FN(InitializeRenderer);
-		LOAD_FN(InitializeVulkanRenderer);		
+		LOAD_FN(InitializeVulkanRenderer);
 		LOAD_FN(Initialize);
 		LOAD_FN(UpdateCamera);
 		LOAD_FN(Execute);
@@ -795,6 +783,6 @@ struct CreationEngineRaytracing
 		LOAD_FN(SetSkinDetailNormal);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
-		LOAD_FN(ReloadShaders);	
+		LOAD_FN(ReloadShaders);
 	}
 };

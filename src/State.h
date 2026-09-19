@@ -8,9 +8,11 @@
 #include <atomic>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 
 using json = nlohmann::json;
 
+#include "SharedData.h"
 #include <FeatureBuffer.h>
 
 #include <Hooks.h>
@@ -48,6 +50,8 @@ public:
 
 	bool updateShader = true;
 	bool settingCustomShader = false;
+	RE::BSGraphics::VertexShader* customVertexShader = nullptr;
+	RE::BSGraphics::PixelShader* customPixelShader = nullptr;
 	RE::BSShader* currentShader = nullptr;
 	std::string adapterDescription = "";
 
@@ -276,7 +280,9 @@ public:
 		GrassSphereNormal = 1 << 3,
 		IsSun = 1 << 4,
 		SuppressExternalEmittance = 1 << 5,
-		AdditiveLighting = 1 << 6
+		AdditiveLighting = 1 << 6,
+		IsEye = 1 << 7,
+		SourceAlphaBlend = 1 << 8
 	};
 
 	/** @brief Bitflags describing extra feature-specific properties related to terrain displacement and material models. */
@@ -349,48 +355,24 @@ public:
 		uint ExtraFeatureDescriptor;
 
 		float EffectRadius;
-		float3 pad0;
+		uint BaseTextureIsWorking;
+		uint RenderToUI;
+		uint pad;
 
 		bool operator==(const PermutationCB& other) const
 		{
-			return PixelShaderDescriptor == other.PixelShaderDescriptor &&
+			return VertexShaderDescriptor == other.VertexShaderDescriptor &&
+			       PixelShaderDescriptor == other.PixelShaderDescriptor &&
 			       ExtraShaderDescriptor == other.ExtraShaderDescriptor &&
-			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor && EffectRadius == other.EffectRadius;
+			       ExtraFeatureDescriptor == other.ExtraFeatureDescriptor &&
+			       EffectRadius == other.EffectRadius && BaseTextureIsWorking == other.BaseTextureIsWorking && RenderToUI == other.RenderToUI;
 		}
 	};
 	STATIC_ASSERT_ALIGNAS_16(PermutationCB);
 
 	ConstantBuffer* permutationCB = nullptr;
 
-	struct alignas(16) SharedDataCB
-	{
-		float4 WaterData[25];
-		float4 DirLightDirection;
-		float4 DirLightColor;
-		float4 SunDirection;
-		float4 SunColor;
-		float4 MasserDirection;
-		float4 MasserColor;
-		float4 SecundaDirection;
-		float4 SecundaColor;
-		float4 CameraData;
-		float4 BufferDim;
-		float Timer;
-		uint FrameCount;
-		uint FrameCountAlwaysActive;
-		uint InInterior;
-		uint HasDirectionalShadows;
-		uint InMapMenu;
-		uint HideSky;
-		float MipBias;
-		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -NI_INFINITY when no water body found
-		float3 pad0;
-		float4 AmbientSHR;
-		float4 AmbientSHG;
-		float4 AmbientSHB;
-		float4 HDRData;  // xyz + menu scene encoding in w — see HDRDisplay::GetSharedDataHDR
-	};
-	STATIC_ASSERT_ALIGNAS_16(SharedDataCB);
+	using SharedDataCB = ::SharedDataCB;
 
 	ConstantBuffer* sharedDataCB = nullptr;
 	ConstantBuffer* featureDataCB = nullptr;
@@ -399,6 +381,9 @@ public:
 	PermutationCB permutationDataPrevious{};
 
 	Util::FrameChecker frameChecker;
+	void RequestHistoryReset() { historyResetFrame = frameCount + 1u; }
+	bool ShouldResetHistory() const { return frameCount == historyResetFrame; }
+
 	uint frameCount = 0;
 	// Thread-safe mirror of frameCount maintained by the render thread.
 	// Off-thread readers (MCP listener, future telemetry) must read this
@@ -485,6 +470,8 @@ public:
 	}
 
 private:
+	std::optional<TonemapOwner> tonemapOwner;
+	uint historyResetFrame = UINT_MAX;
 	std::shared_ptr<REX::W32::ID3DUserDefinedAnnotation> pPerf;
 	std::mutex statsMutex;
 };

@@ -4,9 +4,9 @@
 #include "Deferred.h"
 #include "DxvkLoader.h"
 #include "Features/Effects11/D3D11StateBackup.h"
+#include "Features/PostProcessing.h"
 #include "HDRDisplay.h"
 #include "Hooks.h"
-#include "Features/PostProcessing.h"
 #include "Raytracing.h"
 #include "State.h"
 #include "Upscaling/DXVKInterop.h"
@@ -167,8 +167,8 @@ void Upscaling::DrawSettings()
 		std::vector<std::string> fpsStrings;
 		for (int d : divisorOptions)
 			fpsStrings.push_back(d == 0 ?
-			                         std::string(T(TKEY("frame_rate_unlocked"), "Unlocked (variable)")) :
-			                         std::format("{} FPS", refresh / d));
+									 std::string(T(TKEY("frame_rate_unlocked"), "Unlocked (variable)")) :
+									 std::format("{} FPS", refresh / d));
 		std::vector<const char*> fpsLabels;
 		for (auto& s : fpsStrings)
 			fpsLabels.push_back(s.c_str());
@@ -186,7 +186,7 @@ void Upscaling::DrawSettings()
 
 	ImGui::SeparatorText(T(TKEY("upscaling_header"), "Upscaling"));
 	{
-		std::vector<const char*>   techLabels = { "Off", T(TKEY("method_taa"), "TAA"), "FSR" };
+		std::vector<const char*> techLabels = { "Off", T(TKEY("method_taa"), "TAA"), "FSR" };
 		std::vector<UpscaleMethod> techMethods = { UpscaleMethod::kNONE, UpscaleMethod::kTAA, UpscaleMethod::kFSR };
 		if (xessAvailable) {
 			techLabels.push_back("XeSS");
@@ -229,8 +229,8 @@ void Upscaling::DrawSettings()
 			// than FSR at the same preset. Users reasonably read that as the upscaler being broken.
 			if (cur == UpscaleMethod::kXeSS && !streamline->IsXeSSHardwareAccelerated()) {
 				ImGui::TextWrapped("%s", T(TKEY("xess_dp4a_note"),
-					"XeSS is running its DP4a fallback: hardware acceleration needs an Intel Arc GPU. "
-					"Expect a softer image than FSR at the same preset."));
+											 "XeSS is running its DP4a fallback: hardware acceleration needs an Intel Arc GPU. "
+											 "Expect a softer image than FSR at the same preset."));
 			}
 
 			// DLSS RR shares the DLSS upscaler slot: the method stays DLSS on disk and the
@@ -252,7 +252,7 @@ void Upscaling::DrawSettings()
 
 	ImGui::SeparatorText(T(TKEY("fg_header"), "Frame Generation"));
 	{
-		std::vector<const char*>    fgLabels = { T(TKEY("fg_method_none"), "None") };
+		std::vector<const char*> fgLabels = { T(TKEY("fg_method_none"), "None") };
 		std::vector<FrameGenMethod> fgMethods = { FrameGenMethod::kFSR };
 		if (fsrfgAvailable) {
 			fgLabels.push_back(T(TKEY("fg_method_fsr"), "FSR FG"));
@@ -278,11 +278,10 @@ void Upscaling::DrawSettings()
 
 		if (settings.frameGeneration && GetFrameGenMethod() == FrameGenMethod::kDLSSG && dlssgAvailable) {
 			const uint32_t maxFrames = streamline->GetDLSSGMaxFramesToGenerate();
-			const uint     maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
+			const uint maxMultiplier = std::clamp<uint>(maxFrames > 0u ? maxFrames + 1u : 2u, 2u, 6u);
 			std::vector<std::string> multStrings = {
-				streamline->IsDLSSGDynamicSupported()
-					? std::string(T(TKEY("fg_dynamic"), "Dynamic"))
-					: std::string(T(TKEY("fg_auto"), "Auto")) };
+				streamline->IsDLSSGDynamicSupported() ? std::string(T(TKEY("fg_dynamic"), "Dynamic")) : std::string(T(TKEY("fg_auto"), "Auto"))
+			};
 			for (uint m = 2; m <= maxMultiplier; ++m)
 				multStrings.push_back(std::format("{}x", m));
 			std::vector<const char*> multStates;
@@ -290,7 +289,7 @@ void Upscaling::DrawSettings()
 				multStates.push_back(s.c_str());
 
 			int multIdx = settings.dlssgDynamic ? 0 :
-			              std::clamp((int)settings.frameGenMultiplier - 1, 1, (int)maxMultiplier - 1);
+			                                      std::clamp((int)settings.frameGenMultiplier - 1, 1, (int)maxMultiplier - 1);
 			if (DrawStepper(T(TKEY("fg_multiplier"), "Frame Generation Multiplier"), &multIdx, multStates)) {
 				settings.dlssgDynamic = (multIdx == 0);
 				if (multIdx >= 1)
@@ -309,8 +308,8 @@ void Upscaling::DrawSettings()
 			DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates, /*disabled=*/true);
 			ImGui::SameLine();
 			ImGui::TextDisabled("%s", GetFrameGenMethod() == FrameGenMethod::kDLSSG ?
-			                              T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
-			                              T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
+										  T(TKEY("reflex_forced_dlssg"), "(forced on by DLSS-G)") :
+										  T(TKEY("reflex_forced_fsrfg"), "(forced off by FSR frame gen)"));
 		} else {
 			int idx = settings.reflexEnabled ? (settings.reflexBoost ? 2 : 1) : 0;
 			if (DrawStepper(T(TKEY("nv_reflex"), "NVIDIA Reflex Low Latency"), &idx, reflexStates)) {
@@ -483,9 +482,6 @@ void Upscaling::PostPostLoad()
 
 	// Performs upscaling between volumetric lighting and post-processing.
 	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7));
-
-	// Scales scissor rectangles with the dynamic render resolution.
-	stl::detour_thunk<SetScissorRect>(REL::RelocationID(75564, 77365));
 
 	// Prevents dynamic resolution from affecting face-generation textures.
 	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(REL::RelocationID(26455, 27041));
@@ -870,22 +866,23 @@ double Upscaling::GetRenderedFrameRateLimit() const
 		return static_cast<double>(targetFps);
 
 	switch (GetFrameGenMethod()) {
-	case FrameGenMethod::kFSR: {
-		// Handing FFX the output target undivided, the way the DLSS-G branch below does, was
-		// measured and rejected. It does not pace better and it breaks the cap: against a 30 fps
-		// target it delivered 59.8 fps, because Reflex then holds the render loop at 30 and FFX
-		// still doubles it. Normalised for rate the jitter is unchanged -- 7.9% of the frame
-		// interval divided against 8.4% undivided -- so this only moved the rate, not the cadence.
-		//
-		// Divide by what FFX is actually presenting per rendered frame, not by an assumed 2.
-		// Frame generation being switched on does not mean it is generating: wherever the render
-		// pass supplies no interpolation inputs -- the main menu, load screens -- FFX reports
-		// numFramesActuallyPresented = 1 and passes frames through. Halving the cap there starved
-		// the menu to half the target for generation that never happened: measured 15 fps rendered
-		// against a 30 fps target, and 10 fps before the divisor clamp above.
-		const uint32_t presented = Streamline::GetSingleton()->GetFrameGenerationMultiplier();
-		return static_cast<double>(targetFps) / static_cast<double>(std::max(1u, presented));
-	}
+	case FrameGenMethod::kFSR:
+		{
+			// Handing FFX the output target undivided, the way the DLSS-G branch below does, was
+			// measured and rejected. It does not pace better and it breaks the cap: against a 30 fps
+			// target it delivered 59.8 fps, because Reflex then holds the render loop at 30 and FFX
+			// still doubles it. Normalised for rate the jitter is unchanged -- 7.9% of the frame
+			// interval divided against 8.4% undivided -- so this only moved the rate, not the cadence.
+			//
+			// Divide by what FFX is actually presenting per rendered frame, not by an assumed 2.
+			// Frame generation being switched on does not mean it is generating: wherever the render
+			// pass supplies no interpolation inputs -- the main menu, load screens -- FFX reports
+			// numFramesActuallyPresented = 1 and passes frames through. Halving the cap there starved
+			// the menu to half the target for generation that never happened: measured 15 fps rendered
+			// against a 30 fps target, and 10 fps before the divisor clamp above.
+			const uint32_t presented = Streamline::GetSingleton()->GetFrameGenerationMultiplier();
+			return static_cast<double>(targetFps) / static_cast<double>(std::max(1u, presented));
+		}
 	case FrameGenMethod::kDLSSG:
 		// Unlike FFX -- whose replacement swapchain owns the present loop, so the limiter only
 		// ever sees rendered frames -- sl.dlss_g emits its generated frame from inside the same
@@ -1217,9 +1214,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 		bool hadUpscale = (previousUpscaleMode == UpscaleMethod::kFSR ||
-		                   previousUpscaleMode == UpscaleMethod::kDLSS ||
-		                   previousUpscaleMode == UpscaleMethod::kDLSS_RR ||
-		                   previousUpscaleMode == UpscaleMethod::kXeSS) &&
+							  previousUpscaleMode == UpscaleMethod::kDLSS ||
+							  previousUpscaleMode == UpscaleMethod::kDLSS_RR ||
+							  previousUpscaleMode == UpscaleMethod::kXeSS) &&
 		                  previousUpscalingWasActive;
 		if (hadUpscale) {
 			// DXVK does not track resources referenced by foreign Vulkan submissions.
@@ -1231,9 +1228,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 			DestroyHudlessTexture(true);
 		}
 		if (a_upscalemethod == UpscaleMethod::kFSR ||
-		    a_upscalemethod == UpscaleMethod::kDLSS ||
-		    a_upscalemethod == UpscaleMethod::kDLSS_RR ||
-		    a_upscalemethod == UpscaleMethod::kXeSS) {
+			a_upscalemethod == UpscaleMethod::kDLSS ||
+			a_upscalemethod == UpscaleMethod::kDLSS_RR ||
+			a_upscalemethod == UpscaleMethod::kXeSS) {
 			CreateUpscaledTexture();
 			CreateHudlessTexture();
 		}
@@ -1373,7 +1370,9 @@ void Upscaling::ConfigureUpscaling(RE::BSGraphics::State* a_viewport)
 				static int s_lastW = 0, s_lastH = 0;
 				static uint s_lastQuality = UINT_MAX;
 				if (s_lastW != renderWidth || s_lastH != renderHeight || s_lastQuality != settings.qualityMode) {
-					s_lastW = renderWidth; s_lastH = renderHeight; s_lastQuality = settings.qualityMode;
+					s_lastW = renderWidth;
+					s_lastH = renderHeight;
+					s_lastQuality = settings.qualityMode;
 					logger::info("[Upscaling] internal resolution {}x{} from {}x{} (quality {}, ratio {:.2f}x, method {})",
 						renderWidth, renderHeight, screenWidth, screenHeight, settings.qualityMode,
 						getUpscaleRatio(settings.qualityMode), static_cast<uint>(upscaleMethod));
@@ -1637,7 +1636,6 @@ bool Upscaling::IsWindowUnusable()
 	       s_windowModifying.load(std::memory_order_relaxed);
 }
 
-
 void Upscaling::Upscale()
 {
 	ZoneScoped;
@@ -1681,23 +1679,24 @@ void Upscaling::Upscale()
 					(uint32_t)displaySize.x, (uint32_t)displaySize.y,
 					settings.qualityMode, jitter.x, jitter.y);
 				break;
-			case UpscaleMethod::kDLSS_RR: {
-				ID3D11Resource* diffuseAlbedo = nullptr;
-				ID3D11Resource* specularAlbedo = nullptr;
-				ID3D11Resource* normalRoughness = nullptr;
-				ID3D11Resource* specularHitDistance = nullptr;
-				globals::features::raytracing.GetRayReconstructionInputs(
-					diffuseAlbedo, specularAlbedo, normalRoughness, specularHitDistance);
-				if (diffuseAlbedo && specularAlbedo && normalRoughness && specularHitDistance) {
-					result = Streamline::GetSingleton()->EvaluateDLSSD(
-						main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
-						diffuseAlbedo, specularAlbedo, normalRoughness, specularHitDistance,
-						(uint32_t)renderSize.x, (uint32_t)renderSize.y,
-						(uint32_t)displaySize.x, (uint32_t)displaySize.y,
-						settings.qualityMode, settings.presetDLSSRR, jitter.x, jitter.y);
+			case UpscaleMethod::kDLSS_RR:
+				{
+					ID3D11Resource* diffuseAlbedo = nullptr;
+					ID3D11Resource* specularAlbedo = nullptr;
+					ID3D11Resource* normalRoughness = nullptr;
+					ID3D11Resource* specularHitDistance = nullptr;
+					globals::features::raytracing.GetRayReconstructionInputs(
+						diffuseAlbedo, specularAlbedo, normalRoughness, specularHitDistance);
+					if (diffuseAlbedo && specularAlbedo && normalRoughness && specularHitDistance) {
+						result = Streamline::GetSingleton()->EvaluateDLSSD(
+							main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
+							diffuseAlbedo, specularAlbedo, normalRoughness, specularHitDistance,
+							(uint32_t)renderSize.x, (uint32_t)renderSize.y,
+							(uint32_t)displaySize.x, (uint32_t)displaySize.y,
+							settings.qualityMode, settings.presetDLSSRR, jitter.x, jitter.y);
+					}
+					break;
 				}
-				break;
-			}
 			case UpscaleMethod::kXeSS:
 				result = Streamline::GetSingleton()->EvaluateXeSS(
 					main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
@@ -1888,7 +1887,7 @@ void Upscaling::PrepareFrameGeneration(ID3D11Resource* a_hudlessColor)
 	const bool hdrActive = hdr.loaded && hdr.IsHDREnabledForFrame();
 	if (!DXVKInterop::GetSingleton()->IsPresenterStateReadyForFrame(hdrActive) ||
 		(fgMethod == FrameGenMethod::kFSR &&
-		 !FrameGen::Controller::GetSingleton()->IsFSRPresenterReady()))
+			!FrameGen::Controller::GetSingleton()->IsFSRPresenterReady()))
 		return;
 
 	auto* renderer = globals::game::renderer;
@@ -2015,22 +2014,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	}
 
 	Util::SetTemporal(false);
-}
-
-void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)
-{
-	auto viewport = globals::game::graphicsState;
-	auto& runtimeData = viewport->GetRuntimeData();
-
-	if (!runtimeData.dynamicResolutionLock) {
-		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
-		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
-
-		a_top = static_cast<int>(a_top * runtimeData.dynamicResolutionHeightRatio);
-		a_bottom = static_cast<int>(a_bottom * runtimeData.dynamicResolutionHeightRatio);
-	}
-
-	func(This, a_left, a_top, a_right, a_bottom);
 }
 
 void Upscaling::Main_RenderPrecipitation::thunk()

@@ -6,8 +6,8 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
-#include "Features/LinearLighting.h"
 #include "Features/LODBlending.h"
+#include "Features/LinearLighting.h"
 #include "Features/PathTracing.h"
 #include "Features/Skin.h"
 #include "Features/Upscaling/DXVKInterop.h"
@@ -115,8 +115,7 @@ bool Raytracing::IsPathTracing() const
 
 bool Raytracing::IsPathTracingCull() const
 {
-	return Mode() == CreationEngineRaytracing::Mode::PathTracing 
-		&& settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
+	return Mode() == CreationEngineRaytracing::Mode::PathTracing && settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 }
 
 void Raytracing::UpdateJitter(float2 a_jitter)
@@ -644,27 +643,27 @@ void Raytracing::SetupSharedTextures()
 	creationEngineRaytracing->GetSharedTextures(depth, motionVector, main);
 
 	auto setupSharedWrapper = [device](SharedTextureWrapper& wrapper, const CreationEngineRaytracing::SharedTexture& st) {
-			wrapper.texture = st;
-			wrapper.srv = nullptr;
-			if (st.shared) {
-				D3D11_TEXTURE2D_DESC desc{};
-				st.shared->GetDesc(&desc);
-				if (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
-					D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-					srvDesc.Format = desc.Format;
-					srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-					srvDesc.Texture2D.MostDetailedMip = 0;
-					srvDesc.Texture2D.MipLevels = 1;
-					DX::ThrowIfFailed(device->CreateShaderResourceView(st.shared, &srvDesc, wrapper.srv.put()));
-				}
+		wrapper.texture = st;
+		wrapper.srv = nullptr;
+		if (st.shared) {
+			D3D11_TEXTURE2D_DESC desc{};
+			st.shared->GetDesc(&desc);
+			if (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) {
+				D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+				srvDesc.Format = desc.Format;
+				srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+				srvDesc.Texture2D.MostDetailedMip = 0;
+				srvDesc.Texture2D.MipLevels = 1;
+				DX::ThrowIfFailed(device->CreateShaderResourceView(st.shared, &srvDesc, wrapper.srv.put()));
 			}
-		};
-
-		for (uint32_t i = 0; i < CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT; i++) {
-			setupSharedWrapper(sharedDepthTextures[i], depth[i]);
-			setupSharedWrapper(sharedMotionVectorTextures[i], motionVector[i]);
-			setupSharedWrapper(sharedMainTextures[i], main[i]);
 		}
+	};
+
+	for (uint32_t i = 0; i < CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT; i++) {
+		setupSharedWrapper(sharedDepthTextures[i], depth[i]);
+		setupSharedWrapper(sharedMotionVectorTextures[i], motionVector[i]);
+		setupSharedWrapper(sharedMainTextures[i], main[i]);
+	}
 }
 
 void Raytracing::CompileShaders()
@@ -1008,26 +1007,13 @@ void Raytracing::UpdateFeatureData()
 
 	// Linear Lighting
 	{
-		featureData->LinearLighting.enableLinearLighting = linearLighting.enableLinearLighting;
-		featureData->LinearLighting.isDirLightLinear = linearLighting.isDirLightLinear;
-		featureData->LinearLighting.dirLightMult = linearLighting.dirLightMult;
-		featureData->LinearLighting.lightGamma = linearLighting.lightGamma;
-		featureData->LinearLighting.colorGamma = linearLighting.colorGamma;
-		featureData->LinearLighting.emitColorGamma = linearLighting.emitColorGamma;
-		featureData->LinearLighting.glowmapGamma = linearLighting.glowmapGamma;
-		featureData->LinearLighting.ambientGamma = linearLighting.ambientGamma;
-		featureData->LinearLighting.fogGamma = linearLighting.fogGamma;
-		featureData->LinearLighting.fogAlphaGamma = linearLighting.fogAlphaGamma;
-		featureData->LinearLighting.effectGamma = linearLighting.effectGamma;
-		featureData->LinearLighting.effectAlphaGamma = linearLighting.effectAlphaGamma;
-		featureData->LinearLighting.skyGamma = linearLighting.skyGamma;
-		featureData->LinearLighting.waterGamma = linearLighting.waterGamma;
-		featureData->LinearLighting.vlGamma = linearLighting.vlGamma;
+		featureData->LinearLighting.enableLinearLighting = globals::features::linearLighting.IsLinearLightingActive();
+		featureData->LinearLighting.enableACEScg = globals::features::linearLighting.IsACEScgActive();
+		featureData->LinearLighting.isMainOrLoadingMenu = linearLighting.isMainOrLoadingMenu;
 		featureData->LinearLighting.vanillaDiffuseColorMult = linearLighting.vanillaDiffuseColorMult;
 		featureData->LinearLighting.directionalLightMult = linearLighting.directionalLightMult;
 		featureData->LinearLighting.pointLightMult = linearLighting.pointLightMult;
 		featureData->LinearLighting.ambientMult = linearLighting.ambientMult;
-		featureData->LinearLighting.emitColorMult = linearLighting.emitColorMult;
 		featureData->LinearLighting.glowmapMult = linearLighting.glowmapMult;
 		featureData->LinearLighting.effectLightingMult = linearLighting.effectLightingMult;
 		featureData->LinearLighting.membraneEffectMult = linearLighting.membraneEffectMult;
@@ -1036,11 +1022,12 @@ void Raytracing::UpdateFeatureData()
 		featureData->LinearLighting.deferredEffectMult = linearLighting.deferredEffectMult;
 		featureData->LinearLighting.otherEffectMult = linearLighting.otherEffectMult;
 		featureData->LinearLighting.pad0 = 0;
+		featureData->LinearLighting.pad1 = 0.0f;
 	}
 
 	// Exponential Height Fog
 	{
-		const auto& ehf = globals::features::exponentialHeightFog.settings;
+		const auto ehf = globals::features::exponentialHeightFog.GetCommonBufferData();
 		featureData->ExponentialHeightFog.enabled = ehf.enabled;
 		featureData->ExponentialHeightFog.useDynamicCubemaps = ehf.useDynamicCubemaps;
 		featureData->ExponentialHeightFog.startDistance = ehf.startDistance;

@@ -231,7 +231,8 @@ float3 display_gamut_whitepoint(float3 rgb, float tsn, float creative_white_limi
 		rgb = mul(matrix_cat_d65_to_d50, rgb);
 
 	rgb = rgb * cwp_f + cwp_neutral * (1.0f - cwp_f);
-	rgb = mul(matrix_xyz_to_rec709, rgb);
+	// HDR processing stays in P3-D65 until the final P3 -> Rec.2020 conversion.
+	rgb = display_gamut == 0 ? mul(matrix_xyz_to_rec709, rgb) : mul(matrix_xyz_to_p3d65, rgb);
 
 	float cwp_norm = 1.0f;
 	if (display_gamut == 0) {
@@ -413,7 +414,8 @@ float3 OpenDRTTransform(float3 rgb)
 	ach_d = (1.25f) * compress_toe_quadratic(ach_d, 0.25f, 0);
 
 	// Hue angle, rotated so that red = 0.0
-	float hue = fmod(atan2(opp.x, opp.y) + Math::PI + 1.10714931f, 2.0f * Math::PI);
+	float2 hue_opp = any(opp != 0.0f) ? opp : float2(0.0f, 1.0f);
+	float hue = fmod(atan2(hue_opp.x, hue_opp.y) + Math::PI + 1.10714931f, 2.0f * Math::PI);
 
 	// RGB Hue Angles
 	// Wider than CMY by default. R towards M, G towards Y, B towards C
