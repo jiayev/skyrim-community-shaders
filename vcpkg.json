@@ -14,6 +14,7 @@
     },
     "default-features": ["commonlibsse-ng"],
     "dependencies": [
+        "boost-container-hash",
         "bshoshany-thread-pool",
         "clib-util",
         "cppwinrt",
@@ -21,6 +22,7 @@
         "effects11",
         "eastl",
         "efsw",
+        "flecs",
         {
             "name": "imgui",
             "features": ["dx11-binding", "win32-binding", "docking-experimental"]

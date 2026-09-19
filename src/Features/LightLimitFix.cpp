@@ -3,6 +3,7 @@
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
 #include "LightLimitFix/LightAttach.h"
+#include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 
 #include "I18n/I18n.h"
@@ -100,6 +101,41 @@ void LightLimitFix::DrawLightAttachSettings()
 			T(TKEY("skip_redundant_light_attach_tooltip"),
 				"The game re-checks every dynamic light's nearby geometry each frame, which costs milliseconds in scenes with hundreds of lights. "
 				"With this on, a light that has not moved or changed is only re-checked every 60 frames."));
+namespace
+{
+	bool OrgParityEnabled()
+	{
+		static const bool enabled = [] {
+			char buf[4] = {};
+			return GetEnvironmentVariableA("CS_ORG_LLF_PARITY", buf, sizeof(buf)) && buf[0] == '1';
+		}();
+		return enabled;
+	}
+
+	// Blocking copy of a buffer's first a_bytes into CPU memory (debug use only).
+	std::vector<uint32_t> ReadBackBuffer(ID3D11Resource* a_resource, uint32_t a_bytes)
+	{
+		auto device = globals::d3d::device;
+		auto context = globals::d3d::context;
+
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = a_bytes;
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		winrt::com_ptr<ID3D11Buffer> staging;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, staging.put())))
+			return {};
+
+		const D3D11_BOX box{ 0, 0, 0, a_bytes, 1, 1 };
+		context->CopySubresourceRegion(staging.get(), 0, 0, 0, 0, a_resource, 0, &box);
+
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(staging.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+			return {};
+		std::vector<uint32_t> words(a_bytes / sizeof(uint32_t));
+		std::memcpy(words.data(), mapped.pData, a_bytes);
+		context->Unmap(staging.get(), 0);
+		return words;
 	}
 }
 
@@ -274,6 +310,10 @@ void LightLimitFix::SetupResources()
 		uavDesc.Buffer.NumElements = numElements;
 		lightGrid->CreateUAV(uavDesc);
 	}
+
+	// Culling runs on the render graph when DXVK's device could be adopted; the D3D11
+	// buffers above stay as the fallback for native D3D11 and for graph failures.
+	ORGLightCulling::Get().Setup(clusterCount, MAX_LIGHTS, sizeof(LightData), CLUSTER_MAX_LIGHTS);
 
 	{
 		D3D11_BUFFER_DESC sbDesc{};
@@ -464,8 +504,14 @@ void LightLimitFix::Prepass()
 
 	ID3D11ShaderResourceView* views[3]{};
 	views[0] = lights->srv.get();
-	views[1] = lightIndexList->srv.get();
-	views[2] = lightGrid->srv.get();
+	if (orgCulledThisFrame) {
+		auto& orgCulling = ORGLightCulling::Get();
+		views[1] = orgCulling.GetLightIndexListSRV();
+		views[2] = orgCulling.GetLightGridSRV();
+	} else {
+		views[1] = lightIndexList->srv.get();
+		views[2] = lightGrid->srv.get();
+	}
 	context->PSSetShaderResources(35, ARRAYSIZE(views), views);
 
 	state->EndPerfEvent();
@@ -739,13 +785,80 @@ void LightLimitFix::UpdateLights()
 	memcpy_s(mapped.pData, bytes, lightsData.data(), bytes);
 	context->Unmap(lights->resource.get(), 0);
 
-	UpdateStructure();
+	UpdateClusterParameters();
+	orgCulledThisFrame = CullOnRenderGraph(lightsData);
+	if (!orgCulledThisFrame) {
+		UpdateStructure();
+	} else if (OrgParityEnabled() && (orgParityFrame++ % 300) == 0) {
+		// The D3D11 buffers are not bound this frame, so filling them is free of side effects.
+		UpdateStructure();
+		CompareRenderGraphCulling();
+	}
 }
 
-void LightLimitFix::UpdateStructure()
+void LightLimitFix::CompareRenderGraphCulling()
 {
-	auto context = globals::d3d::context;
+	auto& orgCulling = ORGLightCulling::Get();
+	auto* orgGridSRV = orgCulling.GetLightGridSRV();
+	auto* orgListSRV = orgCulling.GetLightIndexListSRV();
+	if (!orgGridSRV || !orgListSRV)
+		return;
 
+	winrt::com_ptr<ID3D11Resource> orgGrid;
+	winrt::com_ptr<ID3D11Resource> orgList;
+	orgGridSRV->GetResource(orgGrid.put());
+	orgListSRV->GetResource(orgList.put());
+
+	const uint32_t clusterTotal = clusterSize[0] * clusterSize[1] * clusterSize[2];
+	const uint32_t gridBytes = clusterTotal * static_cast<uint32_t>(sizeof(LightGrid));
+	const uint32_t listBytes = clusterTotal * CLUSTER_MAX_LIGHTS * static_cast<uint32_t>(sizeof(uint32_t));
+
+	const auto d3dGridData = ReadBackBuffer(lightGrid->resource.get(), gridBytes);
+	const auto d3dListData = ReadBackBuffer(lightIndexList->resource.get(), listBytes);
+	const auto orgGridData = ReadBackBuffer(orgGrid.get(), gridBytes);
+	const auto orgListData = ReadBackBuffer(orgList.get(), listBytes);
+	if (d3dGridData.empty() || d3dListData.empty() || orgGridData.empty() || orgListData.empty()) {
+		logger::warn("[ORG] LLF parity: readback failed");
+		return;
+	}
+
+	constexpr uint32_t kGridWords = sizeof(LightGrid) / sizeof(uint32_t);
+	auto lightSet = [&](const std::vector<uint32_t>& a_grid, const std::vector<uint32_t>& a_list, uint32_t a_cluster) {
+		const uint32_t offset = a_grid[a_cluster * kGridWords + 0];
+		const uint32_t count = a_grid[a_cluster * kGridWords + 1];
+		std::vector<uint32_t> set;
+		for (uint32_t i = 0; i < count && offset + i < a_list.size(); ++i)
+			set.push_back(a_list[offset + i]);
+		std::sort(set.begin(), set.end());
+		return set;
+	};
+
+	uint32_t mismatched = 0;
+	uint64_t references = 0;
+	uint32_t firstMismatch = UINT32_MAX;
+	for (uint32_t cluster = 0; cluster < clusterTotal; ++cluster) {
+		const auto d3dSet = lightSet(d3dGridData, d3dListData, cluster);
+		const auto orgSet = lightSet(orgGridData, orgListData, cluster);
+		references += d3dSet.size();
+		if (d3dSet != orgSet) {
+			if (firstMismatch == UINT32_MAX)
+				firstMismatch = cluster;
+			++mismatched;
+		}
+	}
+
+	if (mismatched == 0) {
+		logger::info("[ORG] LLF parity OK: {} clusters, {} lights, {} light references match", clusterTotal, lightCount, references);
+	} else {
+		const auto d3dSet = lightSet(d3dGridData, d3dListData, firstMismatch);
+		const auto orgSet = lightSet(orgGridData, orgListData, firstMismatch);
+		logger::warn("[ORG] LLF parity MISMATCH: {}/{} clusters differ ({} lights); first cluster {}: D3D11 {} lights, graph {} lights",
+			mismatched, clusterTotal, lightCount, firstMismatch, d3dSet.size(), orgSet.size());
+	}
+}
+
+void LightLimitFix::UpdateClusterParameters()
+{
 	lightsNear = *globals::game::cameraNear;
 	lightsFar = *globals::game::cameraFar;
 
@@ -753,6 +866,33 @@ void LightLimitFix::UpdateStructure()
 	clusterSize[0] = ((uint)renderSize.x + 63) / 64;
 	clusterSize[1] = ((uint)renderSize.y + 63) / 64;
 	clusterSize[2] = 32;
+}
+
+bool LightLimitFix::CullOnRenderGraph(const eastl::vector<LightData>& a_lightsData)
+{
+	auto& orgCulling = ORGLightCulling::Get();
+	if (!orgCulling.IsActive())
+		return false;
+
+	ORGLightCulling::FrameInputs inputs{};
+	inputs.lights = a_lightsData.data();
+	inputs.lightCount = lightCount;
+	std::copy(clusterSize, clusterSize + 3, inputs.clusterSize);
+	inputs.lightsNear = lightsNear;
+	inputs.lightsFar = lightsFar;
+	// The same matrices the D3D11 shaders read from the FrameBuffer cbuffer (row-major).
+	std::memcpy(inputs.cameraProjInverse.data(), &globals::game::frameBufferCached.GetCameraProjInverse(), sizeof(float) * 16);
+	std::memcpy(inputs.cameraView.data(), &globals::game::frameBufferCached.GetCameraView(), sizeof(float) * 16);
+
+	globals::profiler->BeginPass("LightLimitFix::RenderGraphCull");
+	const bool culled = orgCulling.Execute(inputs);
+	globals::profiler->EndPass();
+	return culled;
+}
+
+void LightLimitFix::UpdateStructure()
+{
+	auto context = globals::d3d::context;
 
 	{
 		LightBuildingCB updateData{};

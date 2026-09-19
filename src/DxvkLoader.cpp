@@ -1,6 +1,7 @@
 #include "DxvkLoader.h"
 
 #include "Aftermath.h"
+#include "RenderGraph/RenderGraphRuntime.h"
 
 #include <filesystem>
 
@@ -124,6 +125,10 @@ namespace DxvkLoader
 				g_d3d11Create != nullptr, g_createFactory != nullptr);
 			return false;
 		}
+
+		// The render graph adopts DXVK's device; the features it needs must be requested
+		// before the game creates that device.
+		RenderGraphRuntime::RequestDeviceFeatures(d3d11Mod);
 
 		// Frame generation enables synchronous present when it takes ownership.
 		if (auto setSync = reinterpret_cast<void (*)(uint32_t)>(::GetProcAddress(d3d11Mod, "dxvkSetSyncPresent")))
