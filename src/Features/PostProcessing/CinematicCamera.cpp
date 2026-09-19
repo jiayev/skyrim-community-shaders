@@ -32,7 +32,10 @@ namespace CinematicCamera
 
 	NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 		ExposureSettings,
+		Mode,
 		ISO,
+		MinISO,
+		MaxISO,
 		FrameRate,
 		ShutterAngleDeg,
 		ExposureCompensationEV)
@@ -257,7 +260,10 @@ namespace CinematicCamera
 		focus.TransitionSpeed = std::clamp(focus.TransitionSpeed, 0.1f, 1.0f);
 
 		auto& exp = settings.Exposure;
+		exp.Mode = std::clamp(exp.Mode, (int)ExposureMode::AutoISO, (int)ExposureMode::Manual);
 		exp.ISO = std::clamp(exp.ISO, 25.0f, 12800.0f);
+		exp.MinISO = std::clamp(exp.MinISO, 25.0f, 12800.0f);
+		exp.MaxISO = std::clamp(exp.MaxISO, exp.MinISO, 12800.0f);
 		exp.FrameRate = std::clamp(exp.FrameRate, 1.0f, 240.0f);
 		exp.ShutterAngleDeg = std::clamp(exp.ShutterAngleDeg, 1.0f, 360.0f);
 		exp.ExposureCompensationEV = std::clamp(exp.ExposureCompensationEV, -5.0f, 5.0f);
@@ -304,11 +310,15 @@ namespace CinematicCamera
 		s.ScreenPointUV = focus.ScreenPointUV;
 		s.TransitionSpeed = focus.TransitionSpeed;
 
+		s.Exposure = (ExposureMode)exp.Mode;
 		s.ISO = exp.ISO;
+		s.MinISO = exp.MinISO;
+		s.MaxISO = exp.MaxISO;
+		s.ExposureCompensationEV = exp.ExposureCompensationEV;
 		s.ShutterAngleDeg = exp.ShutterAngleDeg;
 		s.ShutterTimeS = exp.ShutterAngleDeg / (360.0f * exp.FrameRate);
 		s.EV100 = std::log2(lens.FNumber * lens.FNumber / s.ShutterTimeS) - std::log2(exp.ISO / 100.0f);
-		s.ExposureDeltaEV = kReferenceEV100 - s.EV100 + exp.ExposureCompensationEV;
+		s.ExposureDeltaEV = kReferenceEV100 - s.EV100;
 
 		s.Valid = std::isfinite(s.HorizontalFOVDeg) && std::isfinite(s.EV100) &&
 		          std::isfinite(s.EffectiveSensorWidthMM) && s.EffectiveSensorWidthMM > 0.0f &&
@@ -435,7 +445,12 @@ namespace CinematicCamera
 		auto& focus = settings.Focus;
 		auto& exp = settings.Exposure;
 
-		if (ImGui::CollapsingHeader(T("feature.post_processing.cinematic_camera.filmback", "Filmback"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		constexpr auto logSliderFlags = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic;
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.slider_input_hint", "Ctrl+click a slider to enter an exact value."));
+		ImGui::PopTextWrapPos();
+
+		if (ImGui::CollapsingHeader(T("feature.post_processing.cinematic_camera.filmback", "Filmback"))) {
 			const char* presetNames[] = {
 				T("feature.post_processing.cinematic_camera.preset_full_frame", "Full Frame"),
 				T("feature.post_processing.cinematic_camera.preset_super_35", "Super 35"),
@@ -461,21 +476,25 @@ namespace CinematicCamera
 			if (auto _tt = Util::HoverTooltipWrapper())
 				ImGui::Text(T("feature.post_processing.cinematic_camera.gate_fit_desc",
 					"Which sensor dimension maps to the game FOV. Horizontal keeps the horizontal angle of view; Vertical keeps the vertical angle and derives the horizontal FOV from the viewport aspect."));
+		}
+
+		if (ImGui::CollapsingHeader(T("feature.post_processing.cinematic_camera.lens", "Lens"), ImGuiTreeNodeFlags_DefaultOpen)) {
+			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focal_length", "Focal Length"), &lens.FocalLengthMM, 1.0f, 300.0f, "%.1f mm", logSliderFlags);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focal_length_desc", "Shorter focal lengths give a wider view; longer focal lengths zoom in. Uses a logarithmic scale for finer control at short focal lengths."));
+			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.f_number", "F-Number"), &lens.FNumber, 0.7f, 32.0f, "f/%.2f", logSliderFlags);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.f_number_desc", "Lower f-numbers give a shallower depth of field and let in more light. Auto ISO compensates for aperture changes within its ISO limits."));
+			if (ImGui::TreeNode(T("feature.post_processing.cinematic_camera.aperture_shape", "Aperture Shape"))) {
+				ImGui::SliderInt(T("feature.post_processing.cinematic_camera.aperture_blades", "Aperture Blades"), &lens.ApertureBladeCount, 4, 10, "%d", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.aperture_rotation", "Aperture Rotation"), &lens.ApertureBladeRotationDeg, 0.0f, 360.0f, "%.1f°", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.aperture_roundness", "Aperture Roundness"), &lens.ApertureRoundness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+				ImGui::TreePop();
+			}
 
 			if (const auto* state = GetState()) {
 				ImGui::Text(T("feature.post_processing.cinematic_camera.fov_readout", "FOV: %.2f° H / %.2f° V"),
 					state->HorizontalFOVDeg, state->VerticalFOVDeg);
-			}
-		}
-
-		if (ImGui::CollapsingHeader(T("feature.post_processing.cinematic_camera.lens", "Lens"), ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focal_length", "Focal Length"), &lens.FocalLengthMM, 1.0f, 300.0f, "%.1f mm", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.f_number", "F-Number"), &lens.FNumber, 0.7f, 32.0f, "f/%.1f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderInt(T("feature.post_processing.cinematic_camera.aperture_blades", "Aperture Blades"), &lens.ApertureBladeCount, 4, 10, "%d", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.aperture_rotation", "Aperture Rotation"), &lens.ApertureBladeRotationDeg, 0.0f, 360.0f, "%.1f°");
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.aperture_roundness", "Aperture Roundness"), &lens.ApertureRoundness, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
-
-			if (const auto* state = GetState()) {
 				ImGui::Text(T("feature.post_processing.cinematic_camera.entrance_pupil_readout", "Entrance Pupil: %.2f mm"),
 					state->EntrancePupilMM);
 			}
@@ -489,38 +508,80 @@ namespace CinematicCamera
 			};
 			ImGui::Combo(T("feature.post_processing.cinematic_camera.focus_mode", "Focus Mode"), &focus.Mode, modeNames, (int)std::size(modeNames));
 
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focus_distance", "Focus Distance"), &focus.ManualDistanceM, 0.01f, 10000.0f, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
-			if ((FocusMode)focus.Mode == FocusMode::ScreenPoint) {
-				ImGui::SliderFloat2(T("feature.post_processing.cinematic_camera.focus_point", "Focus Point"), &focus.ScreenPointUV.x, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if ((FocusMode)focus.Mode != FocusMode::ScreenPoint) {
+				const char* distanceLabel = (FocusMode)focus.Mode == FocusMode::Target ?
+				                                T("feature.post_processing.cinematic_camera.fallback_distance", "Fallback Distance") :
+				                                T("feature.post_processing.cinematic_camera.focus_distance", "Focus Distance");
+				ImGui::SliderFloat(distanceLabel, &focus.ManualDistanceM, 0.01f, 10000.0f, "%.3f m", logSliderFlags | ImGuiSliderFlags_NoRoundToFormat);
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_distance_desc", "Logarithmic scale for precise close-range focus while retaining the full distance range. In Target mode, this is used until a target is found; losing the target holds the last focus input."));
 			}
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.transition_speed", "Transition Speed"), &focus.TransitionSpeed, 0.1f, 1.0f, "%.2f");
+			if ((FocusMode)focus.Mode == FocusMode::ScreenPoint) {
+				float focusX = focus.ScreenPointUV.x * 100.0f;
+				float focusY = focus.ScreenPointUV.y * 100.0f;
+				if (ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focus_point_x", "Horizontal Focus Position"), &focusX, 0.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
+					focus.ScreenPointUV.x = focusX / 100.0f;
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_point_x_desc", "0% is the left edge; 100% is the right edge."));
+				if (ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.focus_point_y", "Vertical Focus Position"), &focusY, 0.0f, 100.0f, "%.1f%%", ImGuiSliderFlags_AlwaysClamp))
+					focus.ScreenPointUV.y = focusY / 100.0f;
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.focus_point_y_desc", "0% is the top edge; 100% is the bottom edge."));
+				if (ImGui::Button(T("feature.post_processing.cinematic_camera.center_focus_point", "Center Focus Point")))
+					focus.ScreenPointUV = float2(0.5f, 0.5f);
+			}
+			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.transition_speed", "Transition Speed"), &focus.TransitionSpeed, 0.1f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.transition_speed_desc", "Lower values make focus changes smoother; 1 snaps to the new focus distance immediately. Applies to all focus modes."));
 
 			if ((FocusMode)focus.Mode == FocusMode::Target) {
+				ImGui::PushTextWrapPos(0.0f);
 				ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.target_source_note",
-											  "Target priority: console selection (if enabled in Depth of Field), True Directional Movement lock, dialogue speaker."));
+											  "Target priority (highest first): dialogue speaker, True Directional Movement lock, console selection (if enabled in Depth of Field)."));
+				ImGui::PopTextWrapPos();
 			}
 		}
 
 		if (ImGui::CollapsingHeader(T("feature.post_processing.cinematic_camera.exposure", "Exposure"), ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.iso", "ISO"), &exp.ISO, 25.0f, 12800.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.frame_rate", "Frame Rate"), &exp.FrameRate, 1.0f, 240.0f, "%.0f fps", ImGuiSliderFlags_AlwaysClamp);
+			const char* exposureModes[] = {
+				T("feature.post_processing.cinematic_camera.exposure_auto_iso", "Auto ISO"),
+				T("feature.post_processing.cinematic_camera.exposure_manual", "Manual"),
+			};
+			ImGui::Combo(T("feature.post_processing.cinematic_camera.exposure_mode", "Exposure Mode"), &exp.Mode, exposureModes, (int)std::size(exposureModes));
+			const bool autoISO = (ExposureMode)exp.Mode == ExposureMode::AutoISO;
+			if (autoISO) {
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.iso_min", "Minimum ISO"), &exp.MinISO, 25.0f, exp.MaxISO, "%.0f", logSliderFlags);
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.iso_max", "Maximum ISO"), &exp.MaxISO, exp.MinISO, 12800.0f, "%.0f", logSliderFlags);
+			} else {
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.iso", "ISO"), &exp.ISO, 25.0f, 12800.0f, "%.0f", logSliderFlags);
+			}
+			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.frame_rate", "Frame Rate"), &exp.FrameRate, 1.0f, 240.0f, "%.2f fps", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.frame_rate_desc", "Virtual camera frame rate used with the shutter angle to calculate exposure time. Does not change or limit the game's frame rate."));
 			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.shutter_angle", "Shutter Angle"), &exp.ShutterAngleDeg, 1.0f, 360.0f, "%.0f°", ImGuiSliderFlags_AlwaysClamp);
-			ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.exposure_compensation", "Exposure Compensation"), &exp.ExposureCompensationEV, -5.0f, 5.0f, "%+.2f EV");
+			if (autoISO)
+				ImGui::SliderFloat(T("feature.post_processing.cinematic_camera.exposure_compensation", "Exposure Compensation"), &exp.ExposureCompensationEV, -5.0f, 5.0f, "%+.2f EV", ImGuiSliderFlags_AlwaysClamp);
 
 			if (const auto* state = GetState()) {
-				ImGui::Text(T("feature.post_processing.cinematic_camera.exposure_readout", "Shutter: 1/%.0f s · EV100 %.2f · Δ %+.2f EV"),
-					1.0f / std::max(state->ShutterTimeS, 1e-6f), state->EV100, state->ExposureDeltaEV);
+				ImGui::Text(T("feature.post_processing.cinematic_camera.shutter_readout", "Shutter: 1/%.2f s"), 1.0f / std::max(state->ShutterTimeS, 1e-6f));
 			}
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextDisabled("%s", autoISO ?
+										  T("feature.post_processing.cinematic_camera.auto_iso_desc", "Aperture and shutter stay fixed. Metering adjusts ISO within the selected limits; exposure compensation shifts the metering target. At the limits, the image may remain too dark or too bright.") :
+										  T("feature.post_processing.cinematic_camera.manual_exposure_desc", "Aperture, shutter and ISO determine exposure. Scene brightness does not change it automatically; exposure compensation is only used in Auto ISO mode."));
 			ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.exposure_note",
-										  "The exposure offset is applied through the enabled Auto Exposure's compensation. Motion Blur follows the shutter angle."));
+										  "Exposure processing is active while Cinematic Camera is active. Metering area and adaptation speed are configured in Histogram Auto Exposure. Motion Blur follows the shutter angle."));
+			ImGui::PopTextWrapPos();
 		}
 
 		// FOV ownership status.
 		ImGui::Separator();
 		ImGui::Text(T("feature.post_processing.cinematic_camera.fov_status", "Camera FOV: %s"), GetFovStateText());
 		if (fovState == FovState::ExternallyModified) {
+			ImGui::PushTextWrapPos(0.0f);
 			ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.fov_external_note",
 										  "Another mod changed the FOV after the last write. Cinematic Camera keeps the external value; changing focal length or filmback starts a new write."));
+			ImGui::PopTextWrapPos();
 		}
 	}
 }
