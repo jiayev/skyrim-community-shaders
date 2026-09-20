@@ -26,15 +26,7 @@ namespace Aftermath
 	/** @brief Whether Enable() succeeded and dumps are being collected. */
 	[[nodiscard]] bool IsEnabled();
 
-	/**
-	 * @brief Whether the Vulkan device should be created with GPU crash analysis support.
-	 *
-	 * True whenever crash analysis is compiled in, on any vendor. Aftermath itself is Nvidia-only,
-	 * but the debug-utils labels this turns on are what give AMD's Radeon GPU Detective the [APP]
-	 * half of its execution marker tree, and on Nvidia they name the pass in the Aftermath dump.
-	 * Which vendor-specific extensions to enable is DXVK's decision, not ours.
-	 */
-	[[nodiscard]] bool WantsCrashAnalysis();
+	void WaitForCrashDump();
 
 	/** @brief Disarms collection. Safe to call when never enabled. */
 	void Disable();

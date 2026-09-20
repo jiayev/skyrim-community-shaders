@@ -26,8 +26,7 @@ public:
 			std::vector<std::string>{
 				"Full path-traced lighting and reflections",
 				"Configurable bounces and samples per pixel",
-				"Russian Roulette path termination"
-			});
+				"Russian Roulette path termination" });
 	}
 
 	struct Settings
@@ -39,6 +38,7 @@ public:
 			.Mode = CreationEngineRaytracing::Mode::PathTracing
 		};
 		bool StablePlanes = false;
+		CreationEngineRaytracing::SHaRCSettings SHaRCSettings;
 		CreationEngineRaytracing::NRDSettings NRDSettings;
 		CreationEngineRaytracing::NRDReblurSettings NRDReblurSettings;
 		CreationEngineRaytracing::NRDRelaxSettings NRDRelaxSettings;
@@ -58,6 +58,7 @@ public:
 
 	void DrawGeneralSettings();
 	void DrawAdvancedSettings();
+	void DrawSHaRCSettings();
 	void DrawNRDSettings();
 	void DrawReblurSettings();
 	void DrawRelaxSettings();
@@ -70,4 +71,3 @@ public:
 	void UpdateSettings();
 	bool Available() const;
 };
-

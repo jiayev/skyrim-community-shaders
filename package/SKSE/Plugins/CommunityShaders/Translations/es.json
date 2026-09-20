@@ -4,8 +4,6 @@
         "locale": "sp",
         "auto_generated": true
     },
-    "common.active": "Activo",
-    "common.inactive": "Inactivo",
     "cs_editor.actions": "Acciones",
     "cs_editor.active": "Activo:",
     "cs_editor.active_click_pause": "Activo - cliquear para pausar",

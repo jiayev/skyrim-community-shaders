@@ -5,8 +5,6 @@
         "auto_generated": true,
         "note": "NIE EDYTUJ RĘCZNIE. Uruchom: python tools/extract-i18n.py --write"
     },
-    "common.active": "Aktywny",
-    "common.inactive": "Nieaktywny",
     "cs_editor.actions": "Akcje",
     "cs_editor.active": "Aktywny:",
     "cs_editor.active_click_pause": "Aktywny - kliknij, żeby zatrzymać",

@@ -1,5 +1,6 @@
 #include "Raytracing.h"
 
+#include "Aftermath.h"
 #include "Deferred.h"
 #include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
@@ -18,6 +19,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 #include <thread>
+#include <vulkan/vulkan.hpp>
 
 #define I18N_KEY_PREFIX "feature.raytracing."
 
@@ -83,6 +85,7 @@ CreationEngineRaytracing::Settings Raytracing::GetSettings() const
 		certSettings.GeneralSettings.Denoiser = pt.GeneralSettings.Denoiser;
 		certSettings.RaytracingSettings = pt.RaytracingSettings;
 		certSettings.AdvancedSettings.StablePlanes = pt.StablePlanes;
+		certSettings.SHaRCSettings = pt.SHaRCSettings;
 		certSettings.NRDSettings = pt.NRDSettings;
 		certSettings.NRDReblurSettings = pt.NRDReblurSettings;
 		certSettings.NRDRelaxSettings = pt.NRDRelaxSettings;
@@ -173,11 +176,18 @@ void Raytracing::Execute()
 		}
 	}
 
-	creationEngineRaytracing->Execute();
-	const uint32_t completedSlot = creationEngineRaytracing->PostExecution();
+	uint32_t completedSlot;
+	try {
+		creationEngineRaytracing->Execute();
+		completedSlot = creationEngineRaytracing->PostExecution();
 
-	if (settings.PerfOverlay != OverlayMode::None && creationEngineRaytracing->GetPassTimings) {
-		creationEngineRaytracing->GetPassTimings(passTimings);
+		if (settings.PerfOverlay != OverlayMode::None && creationEngineRaytracing->GetPassTimings) {
+			creationEngineRaytracing->GetPassTimings(passTimings);
+		}
+	} catch (const vk::DeviceLostError& e) {
+		logger::critical("[Raytracing] Vulkan device lost: {}", e.what());
+		Aftermath::WaitForCrashDump();
+		throw;
 	}
 
 	if (completedSlot >= CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT)

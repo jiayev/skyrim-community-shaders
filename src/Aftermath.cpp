@@ -15,6 +15,7 @@
 #	include <fstream>
 #	include <mutex>
 #	include <string>
+#	include <thread>
 
 namespace
 {
@@ -26,6 +27,24 @@ namespace
 	// One timestamp per incident, shared by the dump and by every shader debug file belonging to
 	// it, so an incident's files group together in a directory that also holds the game's logs.
 	std::string g_incidentStamp;
+
+	const char* CrashDumpStatusName(GFSDK_Aftermath_CrashDump_Status a_status)
+	{
+		switch (a_status) {
+		case GFSDK_Aftermath_CrashDump_Status_NotStarted:
+			return "NotStarted";
+		case GFSDK_Aftermath_CrashDump_Status_CollectingData:
+			return "CollectingData";
+		case GFSDK_Aftermath_CrashDump_Status_CollectingDataFailed:
+			return "CollectingDataFailed";
+		case GFSDK_Aftermath_CrashDump_Status_InvokingCallback:
+			return "InvokingCallback";
+		case GFSDK_Aftermath_CrashDump_Status_Finished:
+			return "Finished";
+		default:
+			return "Unknown";
+		}
+	}
 
 	// Callers hold g_mutex.
 	const std::string& IncidentStamp()
@@ -189,12 +208,41 @@ bool Aftermath::IsEnabled()
 	return g_enabled.load(std::memory_order_acquire);
 }
 
-bool Aftermath::WantsCrashAnalysis()
+void Aftermath::WaitForCrashDump()
 {
-	// Deliberately not gated on g_enabled: on AMD the SDK never arms, and that is exactly the
-	// case where the markers matter most, because Radeon GPU Detective is the tool that will read
-	// them.
-	return true;
+	if (!IsEnabled())
+		return;
+
+	logger::critical("[Aftermath] Device lost; waiting up to 10 s for GPU crash dump collection");
+	spdlog::default_logger()->flush();
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+	auto previousStatus = GFSDK_Aftermath_CrashDump_Status_Unknown;
+	bool firstPoll = true;
+	for (;;) {
+		auto status = GFSDK_Aftermath_CrashDump_Status_Unknown;
+		const auto result = GFSDK_Aftermath_GetCrashDumpStatus(&status);
+		if (!GFSDK_Aftermath_SUCCEED(result)) {
+			logger::error("[Aftermath] Failed to query GPU crash dump status (result {:#x})", static_cast<uint32_t>(result));
+			break;
+		}
+		if (firstPoll || status != previousStatus) {
+			logger::info("[Aftermath] GPU crash dump status: {}", CrashDumpStatusName(status));
+			previousStatus = status;
+			firstPoll = false;
+		}
+		if (status == GFSDK_Aftermath_CrashDump_Status_Finished)
+			break;
+		if (status == GFSDK_Aftermath_CrashDump_Status_CollectingDataFailed) {
+			logger::error("[Aftermath] GPU crash dump collection failed; no dump callback will follow");
+			break;
+		}
+		if (std::chrono::steady_clock::now() >= deadline) {
+			logger::error("[Aftermath] Timed out waiting for GPU crash dump collection (status {})", CrashDumpStatusName(status));
+			break;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	}
+	spdlog::default_logger()->flush();
 }
 
 void Aftermath::Disable()
@@ -208,7 +256,7 @@ void Aftermath::Disable()
 
 bool Aftermath::Enable() { return false; }
 bool Aftermath::IsEnabled() { return false; }
-bool Aftermath::WantsCrashAnalysis() { return false; }
+void Aftermath::WaitForCrashDump() {}
 void Aftermath::Disable() {}
 
 #endif

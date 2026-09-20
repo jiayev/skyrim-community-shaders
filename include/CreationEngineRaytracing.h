@@ -249,7 +249,7 @@ struct CreationEngineRaytracing
 
 		bool operator==(const SHaRCSettings&) const = default;
 
-		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SHaRCSettings, Enabled, SceneScale, AccumFrameNum, StaleFrameNum)
+		NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(SHaRCSettings, Enabled, SceneScale, AccumFrameNum, StaleFrameNum, RadianceScale)
 	};
 
 	// Resampled Importance Sampling

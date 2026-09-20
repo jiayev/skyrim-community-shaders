@@ -4,8 +4,6 @@
         "language": "日本語",
         "locale": "ja"
     },
-    "common.active": "有効化",
-    "common.inactive": "無効化",
     "cs_editor.add": "追加",
     "cs_editor.add_new_marker": "新しいマーカーを追加する",
     "cs_editor.ambient_color": "アンビエントカラー",

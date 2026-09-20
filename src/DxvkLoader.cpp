@@ -1,7 +1,5 @@
 #include "DxvkLoader.h"
 
-#include "Aftermath.h"
-
 #include <filesystem>
 
 namespace DxvkLoader
@@ -58,14 +56,6 @@ namespace DxvkLoader
 			logger::warn("[DXVK] Failed to enable HDR color-space support (error {})", ::GetLastError());
 		}
 
-		// DXVK reads DXVK_DEBUG once at instance creation, so the request has to be in place before
-		// the game creates its device.
-		//
-		// Not conditional on Aftermath having armed. Aftermath is Nvidia-only, but AMD's Radeon GPU
-		// Detective reads the same debug-utils labels as the [APP] half of its execution marker
-		// tree, and on both vendors those labels are what turn "the GPU faulted" into "the GPU
-		// faulted during this pass". The vendor-specific parts are DXVK's business: it knows which
-		// GPU it is talking to and enables only what that GPU supports.
 		// Put DXVK's own output where the rest of a bug report already is. DXVK defaults to the
 		// directory holding the exe, so SkyrimSE_d3d11.log, SkyrimSE_dxgi.log and -- on a device
 		// loss with VK_EXT_device_fault -- SkyrimSE_device_fault.bin all land in the game folder,
@@ -76,21 +66,6 @@ namespace DxvkLoader
 			const auto path = logDir->wstring();
 			if (!::SetEnvironmentVariableW(L"DXVK_LOG_PATH", path.c_str()))
 				logger::warn("[DXVK] Failed to redirect DXVK logs to the SKSE log folder (error {})", ::GetLastError());
-		}
-
-		// Never clobber a DXVK_DEBUG the developer set. DXVK reads a single mode from this variable,
-		// so overwriting it silently disables whatever they were trying to use -- DXVK_DEBUG=pipestats
-		// looked like a broken extension for a while because crash analysis had already taken the slot.
-		wchar_t existingDebug[64]{};
-		const DWORD existingDebugLen = ::GetEnvironmentVariableW(L"DXVK_DEBUG", existingDebug, ARRAYSIZE(existingDebug));
-
-		if (existingDebugLen != 0 && existingDebugLen < ARRAYSIZE(existingDebug)) {
-			logger::info("[DXVK] DXVK_DEBUG already set externally; leaving it alone");
-		} else if (Aftermath::WantsCrashAnalysis()) {
-			if (::SetEnvironmentVariableW(L"DXVK_DEBUG", L"crashanalysis"))
-				logger::info("[DXVK] DXVK_DEBUG=crashanalysis -- requesting GPU crash analysis support");
-			else
-				logger::warn("[DXVK] Failed to request GPU crash analysis (error {})", ::GetLastError());
 		}
 
 		const auto dir = GetRuntimeDir();
