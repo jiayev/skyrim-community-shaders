@@ -15,6 +15,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Menu/ThemeManager.h"
+#include "State.h"
 #include "Utils/D3D.h"
 #include <thread>
 
@@ -1021,8 +1022,17 @@ void Raytracing::UpdateFeatureData()
 		featureData->LinearLighting.projectedEffectMult = linearLighting.projectedEffectMult;
 		featureData->LinearLighting.deferredEffectMult = linearLighting.deferredEffectMult;
 		featureData->LinearLighting.otherEffectMult = linearLighting.otherEffectMult;
-		featureData->LinearLighting.pad0 = 0;
-		featureData->LinearLighting.pad1 = 0.0f;
+		featureData->LinearLighting.resetHistory = globals::state->ShouldResetHistory();
+		featureData->LinearLighting.emitColorMult = globals::features::linearLighting.IsLinearLightingActive() ? globals::features::linearLighting.settings.emitColorMult : 1.0f;
+		const auto* scene = globals::game::smState->shadowSceneNode[0];
+		if (scene && scene->GetRuntimeData().sunLight && scene->GetRuntimeData().sunLight->light) {
+			const auto* light = scene->GetRuntimeData().sunLight->light.get();
+			const auto color = globals::features::linearLighting.LightColorToWorking(light);
+			float intensity = light->GetLightRuntimeData().fade;
+			if (globals::game::imageSpaceManager)
+				intensity *= globals::game::imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
+			featureData->LinearLighting.directionalLightColor = { color.red, color.green, color.blue, intensity };
+		}
 	}
 
 	// Exponential Height Fog

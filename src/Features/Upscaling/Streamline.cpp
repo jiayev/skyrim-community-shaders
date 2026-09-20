@@ -47,6 +47,7 @@ namespace
 		PFun_slSetTagForFrame* slSetTagForFrame = nullptr;
 		PFun_slSetConstants* slSetConstants = nullptr;
 		PFun_slEvaluateFeature* slEvaluateFeature = nullptr;
+		PFun_slFreeResources* slFreeResources = nullptr;
 		PFun_slGetFeatureFunction* slGetFeatureFunction = nullptr;
 		PFun_slSetFeatureLoaded* slSetFeatureLoaded = nullptr;
 
@@ -428,6 +429,7 @@ bool Streamline::Initialize()
 		Resolve(g_sl.slGetFeatureFunction, "slGetFeatureFunction");
 
 	Resolve(g_sl.slSetFeatureLoaded, "slSetFeatureLoaded");
+	Resolve(g_sl.slFreeResources, "slFreeResources");
 	if (!resolved) {
 		FreeLibrary(g_sl.interposer);
 		g_sl.interposer = nullptr;
@@ -513,8 +515,10 @@ void Streamline::SetVulkanDevice()
 		featureDLSS = g_sl.slDLSSSetOptions != nullptr;
 	}
 	if (featureDLSSRR) {
-		g_sl.slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSDSetOptions));
-		featureDLSSRR = g_sl.slDLSSDSetOptions != nullptr;
+		const auto result = g_sl.slGetFeatureFunction(sl::kFeatureDLSS_RR, "slDLSSDSetOptions", reinterpret_cast<void*&>(g_sl.slDLSSDSetOptions));
+		featureDLSSRR = result == sl::Result::eOk && g_sl.slDLSSDSetOptions != nullptr;
+		if (!featureDLSSRR)
+			logger::warn("[Streamline] DLSS RR options entry point unavailable (result {})", static_cast<int>(result));
 	}
 	if (featureReflex) {
 		g_sl.slGetFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions", reinterpret_cast<void*&>(g_sl.slReflexSetOptions));
@@ -563,8 +567,8 @@ void Streamline::SetVulkanDevice()
 		g_fsrfgCurrentlyLoaded.store(true, std::memory_order_release);
 	}
 
-	logger::info("[Streamline] feature support: DLSS={} Reflex={} DLSS-G={} FSR={} FSR-G={} XeSS={} (FSR-FG fns {})",
-		featureDLSS, featureReflex, featureDLSSG, featureFSR, featureFSRFG, featureXeSS,
+	logger::info("[Streamline] feature support: DLSS={} DLSS-RR={} Reflex={} DLSS-G={} FSR={} FSR-G={} XeSS={} (FSR-FG fns {})",
+		featureDLSS, featureDLSSRR, featureReflex, featureDLSSG, featureFSR, featureFSRFG, featureXeSS,
 		g_sl.slFSRFrameGenerationSetOptions && g_sl.slFSRFrameGenerationDiscardPreparedFrame &&
 				g_sl.slFSRFrameGenerationOwnsSwapchain &&
 				g_sl.slFSRFrameGenerationCompleteSwapchainTeardown ?
@@ -1458,6 +1462,21 @@ static Streamline::EvaluationResult cs_ClassifyEvaluation(
 	return a_skipped ? Streamline::EvaluationResult::kSkipped : Streamline::EvaluationResult::kFailed;
 }
 
+void Streamline::FreeDLSSResources(bool a_rayReconstruction)
+{
+	if (!initialized || !vulkanDeviceSet || !g_sl.slFreeResources)
+		return;
+	if (a_rayReconstruction ? !featureDLSSRR : !featureDLSS)
+		return;
+
+	const auto feature = a_rayReconstruction ? sl::kFeatureDLSS_RR : sl::kFeatureDLSS;
+	const auto result = g_sl.slFreeResources(feature, g_sl.viewport);
+	if (result == sl::Result::eOk)
+		logger::info("[Streamline] released {} resources", a_rayReconstruction ? "DLSS RR" : "DLSS");
+	else if (result != sl::Result::eErrorInvalidParameter)
+		logger::warn("[Streamline] failed to release {} resources (result {})", a_rayReconstruction ? "DLSS RR" : "DLSS", static_cast<int>(result));
+}
+
 Streamline::EvaluationResult Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
 	ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
 	uint32_t a_renderWidth, uint32_t a_renderHeight,
@@ -1607,6 +1626,13 @@ Streamline::EvaluationResult Streamline::EvaluateDLSSD(ID3D11Resource* a_colorIn
 	options.normalRoughnessMode = sl::DLSSDNormalRoughnessMode::ePacked;
 	options.alphaUpscalingEnabled = sl::Boolean::eFalse;
 
+	const auto worldToCameraView = globals::game::frameBufferCached.GetCameraView().Transpose();
+	const auto cameraViewToWorld = globals::game::frameBufferCached.GetCameraViewInverse().Transpose();
+	if (!cs_IsFiniteMatrix(worldToCameraView) || !cs_IsFiniteMatrix(cameraViewToWorld))
+		return EvaluationResult::kSkipped;
+	options.worldToCameraView = *reinterpret_cast<const sl::float4x4*>(&worldToCameraView);
+	options.cameraViewToWorld = *reinterpret_cast<const sl::float4x4*>(&cameraViewToWorld);
+
 	std::optional<sl::DLSSDPreset> customPreset;
 	switch (a_preset) {
 	case 1:
@@ -1645,13 +1671,15 @@ Streamline::EvaluationResult Streamline::EvaluateDLSSD(ID3D11Resource* a_colorIn
 	result = cs_ClassifyEvaluation(evalRes, outputReady, evaluationSkipped);
 
 	static sl::Result s_loggedRes = sl::Result::eErrorNotInitialized;
+	static EvaluationResult s_loggedEvaluation = EvaluationResult::kFailed;
 	static uint32_t s_loggedDims = 0;
 	const uint32_t dims = (a_renderWidth << 16) | (a_outputWidth & 0xFFFF);
-	if (evalRes != s_loggedRes || dims != s_loggedDims) {
+	if (evalRes != s_loggedRes || result != s_loggedEvaluation || dims != s_loggedDims) {
 		s_loggedRes = evalRes;
+		s_loggedEvaluation = result;
 		s_loggedDims = dims;
-		logger::info("[Streamline] DLSS RR evaluate result={} render={}x{} output={}x{}",
-			static_cast<int>(evalRes), a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight);
+		logger::info("[Streamline] DLSS RR evaluate result={} ready={} skipped={} render={}x{} output={}x{}",
+			static_cast<int>(evalRes), outputReady, evaluationSkipped, a_renderWidth, a_renderHeight, a_outputWidth, a_outputHeight);
 	}
 	return result;
 }

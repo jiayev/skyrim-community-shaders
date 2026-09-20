@@ -1209,21 +1209,22 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 	static auto previousUpscaleMode = UpscaleMethod::kTAA;
 
 	if (previousUpscaleMode != a_upscalemethod) {
-		logger::debug("[Upscaling] Upscale method changed: {} ({}) -> {} ({})",
+		logger::info("[Upscaling] Upscale method changed: {} ({}) -> {} ({})",
 			static_cast<int>(previousUpscaleMode), magic_enum::enum_name(previousUpscaleMode),
 			static_cast<int>(a_upscalemethod), magic_enum::enum_name(a_upscalemethod));
 
 		bool hadUpscale = (previousUpscaleMode == UpscaleMethod::kFSR ||
-							  previousUpscaleMode == UpscaleMethod::kDLSS ||
-							  previousUpscaleMode == UpscaleMethod::kDLSS_RR ||
-							  previousUpscaleMode == UpscaleMethod::kXeSS) &&
-		                  previousUpscalingWasActive;
+						   previousUpscaleMode == UpscaleMethod::kDLSS ||
+						   previousUpscaleMode == UpscaleMethod::kDLSS_RR ||
+						   previousUpscaleMode == UpscaleMethod::kXeSS);
 		if (hadUpscale) {
 			// DXVK does not track resources referenced by foreign Vulkan submissions.
 			if (!DXVKInterop::GetSingleton()->DrainCommandRing()) {
 				logger::error("[Upscaling] method change deferred because command completion could not be proven");
 				return;
 			}
+			if (previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kDLSS_RR)
+				Streamline::GetSingleton()->FreeDLSSResources(previousUpscaleMode == UpscaleMethod::kDLSS_RR);
 			DestroyUpscaledTexture();
 			DestroyHudlessTexture(true);
 		}
@@ -1236,7 +1237,6 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 		}
 
 		previousUpscaleMode = a_upscalemethod;
-		previousUpscalingWasActive = IsUpscalingActive();
 	}
 
 	FrameGen::Controller::GetSingleton()->Reconcile();
@@ -1687,6 +1687,12 @@ void Upscaling::Upscale()
 					ID3D11Resource* specularHitDistance = nullptr;
 					globals::features::raytracing.GetRayReconstructionInputs(
 						diffuseAlbedo, specularAlbedo, normalRoughness, specularHitDistance);
+					static bool inputsMissing = false;
+					const bool missing = !diffuseAlbedo || !specularAlbedo || !normalRoughness || !specularHitDistance;
+					if (missing && !inputsMissing)
+						logger::warn("[Upscaling] DLSS RR inputs missing: diffuse={} specular={} normals={} hitDistance={}",
+							diffuseAlbedo != nullptr, specularAlbedo != nullptr, normalRoughness != nullptr, specularHitDistance != nullptr);
+					inputsMissing = missing;
 					if (diffuseAlbedo && specularAlbedo && normalRoughness && specularHitDistance) {
 						result = Streamline::GetSingleton()->EvaluateDLSSD(
 							main.texture, upscaledTexture->resource.get(), depthTex.texture, motionVector.texture,
@@ -1707,6 +1713,17 @@ void Upscaling::Upscale()
 			default:
 				result = Streamline::EvaluationResult::kSkipped;
 				break;
+			}
+		}
+
+		if (method == UpscaleMethod::kDLSS_RR) {
+			static auto lastResult = Streamline::EvaluationResult::kReady;
+			if (result != lastResult) {
+				if (result == Streamline::EvaluationResult::kReady)
+					logger::info("[Upscaling] DLSS RR output resumed");
+				else
+					logger::warn("[Upscaling] DLSS RR produced no output ({}); retaining input color", magic_enum::enum_name(result));
+				lastResult = result;
 			}
 		}
 

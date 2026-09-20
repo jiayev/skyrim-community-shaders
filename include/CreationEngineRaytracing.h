@@ -607,7 +607,7 @@ struct CreationEngineRaytracing
 		uint enableLinearLighting;
 		uint enableACEScg;
 		uint isMainOrLoadingMenu;
-		uint pad0;
+		uint resetHistory;
 		float vanillaDiffuseColorMult;
 		float directionalLightMult;
 		float pointLightMult;
@@ -619,9 +619,10 @@ struct CreationEngineRaytracing
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
-		float pad1;
+		float emitColorMult;
+		float4 directionalLightColor;
 	};
-	static_assert(sizeof(LinearLightingSettings) == 64);
+	static_assert(sizeof(LinearLightingSettings) == 80);
 
 	struct ExponentialHeightFogSettings
 	{

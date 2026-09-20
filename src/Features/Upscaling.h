@@ -192,8 +192,6 @@ public:
 	float dynamicResolutionWidthRatio = 1.0f;
 	float dynamicResolutionHeightRatio = 1.0f;
 
-	bool previousUpscalingWasActive = false;
-
 	bool depthUpscaleUseWideKernel = false;
 
 	void PostDisplay();

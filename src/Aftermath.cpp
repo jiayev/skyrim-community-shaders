@@ -126,15 +126,6 @@ namespace
 		a_add(GFSDK_Aftermath_GpuCrashDumpDescriptionKey_ApplicationVersion, Plugin::VERSION.string().c_str());
 	}
 
-	void OnResolveMarker(const void* a_marker, uint32_t a_markerSize)
-	{
-		// CS sets no application markers of its own; DXVK's checkpoints carry the payload the
-		// decoder needs. Nothing to resolve, and declining to call the resolver leaves the raw
-		// marker in the dump, which is what we want.
-		(void)a_marker;
-		(void)a_markerSize;
-	}
-
 	void GpuCrashDumpCallback(const void* a_dump, uint32_t a_size, void*)
 	{
 		OnCrashDump(a_dump, a_size);
@@ -148,11 +139,6 @@ namespace
 	void CrashDumpDescriptionCallback(PFN_GFSDK_Aftermath_AddGpuCrashDumpDescription a_add, void*)
 	{
 		OnDescription(a_add);
-	}
-
-	void ResolveMarkerCallback(const void* a_marker, uint32_t a_markerSize, void*, PFN_GFSDK_Aftermath_ResolveMarker)
-	{
-		OnResolveMarker(a_marker, a_markerSize);
 	}
 }
 
@@ -180,7 +166,7 @@ bool Aftermath::Enable()
 		GpuCrashDumpCallback,
 		ShaderDebugInfoCallback,
 		CrashDumpDescriptionCallback,
-		ResolveMarkerCallback,
+		nullptr,
 		nullptr);
 
 	if (!GFSDK_Aftermath_SUCCEED(result)) {
