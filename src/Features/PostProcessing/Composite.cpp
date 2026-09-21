@@ -24,7 +24,7 @@ void Composite::UpdateAutoEnabled()
 	auto* exposure = owner->GetPipelineFeature<HistogramAutoExposure>(PostProcessing::FeaturePipelineIndex::AutoExposure);
 	auto* localExposure = owner->GetPipelineFeature<LocalExposure>(PostProcessing::FeaturePipelineIndex::LocalExposure);
 
-	enabled = (bloom && bloom->enabled) || (flare && flare->enabled) || (glare && glare->enabled) || (exposure && exposure->enabled) || (localExposure && localExposure->enabled);
+	enabled = (bloom && bloom->enabled) || (flare && flare->enabled) || (glare && glare->enabled) || (exposure && exposure->IsActive()) || (localExposure && localExposure->enabled);
 }
 
 void Composite::SetupResources()
@@ -117,7 +117,7 @@ void Composite::Draw(TextureInfo& inout_tex)
 	bool hasBloom = bloom && bloom->enabled && bloom->GetBloomOutput().srv;
 	bool hasFlare = flare && flare->enabled && flare->GetFlareOutput().srv;
 	bool hasGlare = glare && glare->enabled && glare->GetGlareOutput().srv;
-	bool hasExposure = exposure && exposure->enabled && exposure->GetAdaptationSRV();
+	bool hasExposure = exposure && exposure->IsActive() && exposure->GetAdaptationSRV();
 	bool hasLocalExposure = localExposure && localExposure->enabled && localExposure->GetBaseLuminanceSRV();
 
 	uint flags = (hasBloom ? BLOOM : 0) | (hasFlare ? FLARE : 0) | (hasGlare ? GLARE : 0) | (hasExposure ? EXPOSURE : 0) | (hasLocalExposure ? LOCAL_EXPOSURE : 0);

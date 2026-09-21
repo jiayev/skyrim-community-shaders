@@ -24,14 +24,24 @@ void Camera::DrawSettings()
 	}
 
 	if (settings.UseFE) {
-		ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &settings.FEFoV, 20.0f, 180.0f, "%1.0f °");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("%s", T("feature.post_processing.camera.fov_in_degrees_set_to_in_game_fov", "FOV in degrees.\n\nSet to in-game FOV."));
+		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+
+		float feFov = cam ? cam->HorizontalFOVDeg : settings.FEFoV;
+		ImGui::BeginDisabled(cam != nullptr);
+		ImGui::SliderFloat(T("feature.post_processing.camera.fov", "FOV"), &feFov, 20.0f, 180.0f, "%1.0f °");
+		ImGui::EndDisabled();
+		if (!cam)
+			settings.FEFoV = feFov;
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			if (cam)
+				ImGui::Text("%s", T("feature.post_processing.camera.fov_follows_cinematic_camera", "FOV in degrees.\n\nFollows the game FOV driven by Cinematic Camera."));
+			else
+				ImGui::Text("%s", T("feature.post_processing.camera.fov_in_degrees_set_to_in_game_fov", "FOV in degrees.\n\nSet to in-game FOV."));
 		}
 
 		ImGui::SliderFloat(T("feature.post_processing.camera.crop", "Crop"), &settings.FECrop, 0.0f, 1.0f, "%.3f");
-		if (ImGui::IsItemHovered()) {
-			ImGui::SetTooltip("%s", T("feature.post_processing.camera.how_much_to_crop_into_the_image", "How much to crop into the image.\n\n0 = circular, 1 = full-frame."));
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text("%s", T("feature.post_processing.camera.how_much_to_crop_into_the_image", "How much to crop into the image.\n\n0 = circular, 1 = full-frame."));
 		}
 	}
 
@@ -168,7 +178,10 @@ void Camera::Draw(TextureInfo& inout_tex)
 	res = Util::ConvertToDynamic(res);
 
 	CameraCB data = {
-		.FEFoV = settings.FEFoV,
+		.FEFoV = [this]() {
+			const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+			return cam ? cam->HorizontalFOVDeg : settings.FEFoV;
+		}(),
 		.FECrop = settings.FECrop,
 		.CAStrength = settings.CAStrength,
 		.NoiseStrength = settings.NoiseStrength,

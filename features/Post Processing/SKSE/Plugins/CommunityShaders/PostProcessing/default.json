@@ -99,6 +99,7 @@
             "NearPlaneMaxBlur": 0.20000000298023224,
             "PetzvalStrength": 0.0,
             "PostBlurSmoothing": 0.0,
+            "SensorWidthMM": 36.0,
             "TransitionSpeed": 0.5,
             "consoleSelection": true,
             "targetFocus": false,
@@ -274,6 +275,37 @@
         "settings": {
             "FocalLength": 1.0,
             "Power": 3.0
+        }
+    },
+    "cinematic_camera": {
+        "Enabled": false,
+        "Filmback": {
+            "Preset": 0,
+            "SensorWidthMM": 36.0,
+            "SensorHeightMM": 24.0,
+            "GateFit": 0
+        },
+        "Lens": {
+            "FocalLengthMM": 50.0,
+            "FNumber": 2.799999952316584,
+            "ApertureBladeCount": 6,
+            "ApertureBladeRotationDeg": 0.0,
+            "ApertureRoundness": 0.5
+        },
+        "Focus": {
+            "Mode": 1,
+            "ManualDistanceM": 10.0,
+            "ScreenPointUV": [0.5, 0.5],
+            "TransitionSpeed": 0.5
+        },
+        "Exposure": {
+            "Mode": 0,
+            "ISO": 100.0,
+            "MinISO": 25.0,
+            "MaxISO": 12800.0,
+            "FrameRate": 24.0,
+            "ShutterAngleDeg": 180.0,
+            "ExposureCompensationEV": 0.0
         }
     },
     "ppsettings": {

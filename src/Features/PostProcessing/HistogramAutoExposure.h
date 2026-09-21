@@ -14,6 +14,7 @@ struct HistogramAutoExposure : public PostProcessFeature
 			"Auto exposure and eye adaptation method that uses a histogram to calculate average screen brightness. Expects HDR linear RGB inputs.");
 	}
 	virtual inline bool DisableInMainLoadingMenu() const override { return true; }
+	virtual bool IsActive() const override;
 
 	/// This feature no longer writes to the main texture.
 	/// It only computes the adaptation value which is consumed by the Composite pass.
@@ -64,6 +65,7 @@ struct HistogramAutoExposure : public PostProcessFeature
 	virtual void SaveSettings(json&) override;
 
 	virtual void DrawSettings() override;
+	void DrawCameraExposureReadout();
 
 	virtual void Draw(TextureInfo&) override;
 
@@ -82,4 +84,14 @@ struct HistogramAutoExposure : public PostProcessFeature
 	bool resetAdaptation = true;
 	bool histogramReadbackRequested = false;
 	int histogramReadbackRequestFrame = -1;
+	int exposureReadbackRequestFrame = -1;
+	int adaptationReadbackFrame = -1;
+
+	struct ExposureParameters
+	{
+		float2 LuminanceRange;
+		float CompensationEV = 0.0f;
+		float ExposureAtISO100 = 1.0f;
+	};
+	ExposureParameters GetExposureParameters() const;
 };

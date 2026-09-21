@@ -87,15 +87,30 @@ void LensFlare::DrawSettings()
 	}
 
 	if (settings.GhostModeInt == static_cast<int>(GhostMode::Quality) || settings.GhostModeInt == static_cast<int>(GhostMode::Ultra)) {
-		// Procedural aperture settings
-		ImGui::SliderInt(T("feature.post_processing.lens_flare.aperture_blades", "Aperture Blades"), &settings.ApertureBlades, 3, 10);
+		// Procedural aperture settings. The Cinematic Camera owns the physical
+		// aperture while active; show the effective values read-only.
+		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+
+		int apertureBlades = cam ? cam->ApertureBladeCount : settings.ApertureBlades;
+		float fStop = cam ? cam->FNumber : settings.FStop;
+		float apertureRotation = cam ? cam->ApertureBladeRotationDeg : settings.ApertureRotation;
+
+		ImGui::BeginDisabled(cam != nullptr);
+		ImGui::SliderInt(T("feature.post_processing.lens_flare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
 		tooltip("Number of aperture blades for the procedural bokeh shape.");
 
-		ImGui::SliderFloat(T("feature.post_processing.lens_flare.f_stop", "F-Stop"), &settings.FStop, 1.0f, 22.0f, "F%.1f");
+		ImGui::SliderFloat(T("feature.post_processing.lens_flare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
 		tooltip("Aperture f-number (e.g. F2.8). Smaller = larger aperture.\nControls the bokeh shape characteristics.");
 
-		ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &settings.ApertureRotation, -180.0f, 180.0f, "%.1f deg");
+		ImGui::SliderFloat(T("feature.post_processing.lens_flare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.0f, 180.0f, "%.1f deg");
 		tooltip("Rotation of the procedural aperture.");
+		ImGui::EndDisabled();
+
+		if (!cam) {
+			settings.ApertureBlades = apertureBlades;
+			settings.FStop = fStop;
+			settings.ApertureRotation = apertureRotation;
+		}
 
 		// FFT Resolution
 		{
@@ -785,6 +800,11 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	std::memcpy(data.Tint, settings.Tint.data(), sizeof(float) * 3);
 	data.GLocalMask = settings.GLocalMask ? 1 : 0;
 
+	const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+	const float fStop = cam ? cam->FNumber : settings.FStop;
+	const int apertureBlades = cam ? cam->ApertureBladeCount : settings.ApertureBlades;
+	const float apertureRotationDeg = cam ? cam->ApertureBladeRotationDeg : settings.ApertureRotation;
+
 	uint enabledMask = 0;
 	for (int i = 0; i < NUM_GHOSTS; i++) {
 		std::memcpy(&data.GhostColors[i * 4], settings.Ghosts[i].Color.data(), sizeof(float) * 4);
@@ -797,9 +817,9 @@ void LensFlare::Draw(TextureInfo& inout_tex)
 	data.ActiveGhostMask = enabledMask;
 	data.KernelScale = settings.KernelScale;
 	data.AspectRatio = (float)fullW / (float)fullH;
-	data.ApertureBlades = settings.ApertureBlades;
-	data.ApertureRotation = settings.ApertureRotation * 3.14159265358979323846f / 180.0f;  // degrees → radians
-	data.ApertureSize = 1.0f / std::max(settings.FStop, 1.0f);
+	data.ApertureBlades = apertureBlades;
+	data.ApertureRotation = apertureRotationDeg * 3.14159265358979323846f / 180.0f;  // degrees → radians
+	data.ApertureSize = 1.0f / std::max(fStop, 1.0f);
 
 	// Compute PadScale based on mode
 	GhostMode mode = static_cast<GhostMode>(settings.GhostModeInt);

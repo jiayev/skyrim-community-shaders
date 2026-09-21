@@ -91,6 +91,51 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
+	{
+		auto& cam = cinematicCamera;
+		ImGui::Checkbox(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"), &cam.settings.Enabled);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
+								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
+		ImGui::SameLine();
+		auto ccLabel = std::format("{} {}", ICON_FA_BARS, T("feature.post_processing.cinematic_camera.settings", "Settings"));
+		if (ImGui::Button(ccLabel.c_str()))
+			pipelinePageNum = 2;
+
+		if (const auto* state = cam.GetState()) {
+			const auto isoText = state->Exposure == CinematicCamera::ExposureMode::AutoISO ?
+			                         std::format("{} {:.0f}-{:.0f}", T("feature.post_processing.cinematic_camera.exposure_auto_iso", "Auto ISO"), state->MinISO, state->MaxISO) :
+			                         std::format("ISO {:.0f}", state->ISO);
+			ImGui::TextDisabled(T("feature.post_processing.cinematic_camera.summary_exposure",
+									"%s - %.1f mm - f/%.1f - %.0f deg - %s - FOV %.1f deg - %s"),
+				cam.GetFilmbackPresetName(),
+				state->FocalLengthMM,
+				state->FNumber,
+				cam.settings.Exposure.ShutterAngleDeg,
+				isoText.c_str(),
+				state->HorizontalFOVDeg,
+				cam.GetFovStateText());
+		} else if (cam.settings.Enabled) {
+			ImGui::TextDisabled("%s - %s", cam.GetFilmbackPresetName(), cam.GetFovStateText());
+		}
+	}
+
+	ImGui::Separator();
+
+	auto drawEnabled = [this](const char* label, PostProcessFeature& feature) {
+		const bool automatic = feature.IsAutoEnabled() ||
+		                       (&feature == GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure) && GetActivePhysicalCameraState());
+		bool active = feature.IsActive();
+		ImGui::BeginDisabled(automatic);
+		if (ImGui::Checkbox(label, &active))
+			feature.enabled = active;
+		ImGui::EndDisabled();
+		if (automatic) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
+		}
+	};
+
 	if (pipelinePageNum == 0) {
 		for (int i = 0; i < pipeline.size(); ++i) {
 			auto& feat = pipeline[i];
@@ -98,7 +143,7 @@ void PostProcessing::DrawSettings()
 				auto displayName = feat->GetDisplayName();
 				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
-				ImGui::Checkbox("##Enabled", &feat->enabled);
+				drawEnabled("##Enabled", *feat);
 				ImGui::SameLine();
 				if (ImGui::Button(ICON_FA_BARS)) {
 					pipelineFeatIdx = i;
@@ -138,8 +183,8 @@ void PostProcessing::DrawSettings()
 					ImGui::Text("%s", T("feature.post_processing.recompile_shaders_for_this_sub_feature_only", "Recompile shaders for this sub-feature only."));
 				ImGui::Separator();
 				ImGui::Spacing();
-				ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
-				if (feat->enabled) {
+				drawEnabled(T("feature.post_processing.enabled", "Enabled"), *feat);
+				if (feat->IsActive()) {
 					ImGui::Indent();
 					feat->DrawSettings();
 					ImGui::Unindent();
@@ -155,6 +200,51 @@ void PostProcessing::DrawSettings()
 		} else {
 			ImGui::TextDisabled("%s", T("feature.post_processing.invalid_feature_selected_returning_to_list", "Invalid feature selected. Returning to list."));
 			pipelinePageNum = 0;
+		}
+	} else if (pipelinePageNum == 2) {
+		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
+		if (ImGui::Button(backLabel.c_str())) {
+			pipelinePageNum = 0;
+		}
+		ImGui::Separator();
+		ImGui::SeparatorText(T("feature.post_processing.cinematic_camera.name", "Cinematic Camera"));
+
+		ImGui::TextWrapped("%s", T("feature.post_processing.cinematic_camera.description",
+									 "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
+		ImGui::Spacing();
+
+		ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &cinematicCamera.settings.Enabled);
+		if (cinematicCamera.settings.Enabled) {
+			ImGui::Indent();
+			cinematicCamera.DrawSettings();
+			if (auto* exposure = GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure)) {
+				ImGui::SeparatorText(T("feature.post_processing.cinematic_camera.exposure_meter", "Exposure Meter"));
+				exposure->DrawCameraExposureReadout();
+			}
+
+			// Linked-effect status: which adapters are currently consuming overrides.
+			ImGui::Separator();
+			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.linked_effects", "Linked Effects"));
+			auto drawLinked = [&](FeaturePipelineIndex idx, const char* fallbackName) {
+				auto& pipe = pipeline[static_cast<size_t>(idx)];
+				if (!pipe)
+					return;
+				ImGui::Bullet();
+				ImGui::Text("%s: ", pipe->GetDisplayName().empty() ? fallbackName : pipe->GetDisplayName().c_str());
+				ImGui::SameLine();
+				if (pipe->IsActive())
+					ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "%s", T("feature.post_processing.cinematic_camera.linked_active", "Active"));
+				else
+					ImGui::TextDisabled("%s", T("feature.post_processing.cinematic_camera.linked_disabled", "Disabled - no override"));
+			};
+			drawLinked(FeaturePipelineIndex::DoF, "Depth of Field");
+			drawLinked(FeaturePipelineIndex::LensFlare, "Lens Flare");
+			drawLinked(FeaturePipelineIndex::PhysicalGlare, "Physical Glare");
+			drawLinked(FeaturePipelineIndex::Vignette, "Vignette");
+			drawLinked(FeaturePipelineIndex::MotionBlur, "Motion Blur");
+			drawLinked(FeaturePipelineIndex::AutoExposure, "Histogram Auto Exposure");
+			drawLinked(FeaturePipelineIndex::Camera, "Camera");
+			ImGui::Unindent();
 		}
 	}
 
@@ -248,6 +338,13 @@ void PostProcessing::ProcessSettings(json& o_json)
 
 	if (o_json.contains("ppsettings"))
 		settings = o_json["ppsettings"];
+
+	if (o_json.contains("cinematic_camera")) {
+		json camJson = o_json["cinematic_camera"];
+		cinematicCamera.LoadSettings(camJson);
+	} else {
+		cinematicCamera.RestoreDefaultSettings();
+	}
 }
 
 void PostProcessing::SaveSettings(json& o_json)
@@ -269,6 +366,10 @@ void PostProcessing::SaveSettings(json& o_json)
 	}
 
 	o_json["ppsettings"] = settings;
+
+	json camJson{};
+	cinematicCamera.SaveSettings(camJson);
+	o_json["cinematic_camera"] = camJson;
 }
 
 std::vector<std::string> PostProcessing::LoadPresets()
@@ -370,6 +471,7 @@ void PostProcessing::RestoreDefaultSettings()
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load default preset. Error: {}", e.what());
 		settings = {};
+		cinematicCamera.RestoreDefaultSettings();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
@@ -491,6 +593,8 @@ void PostProcessing::SetupResources()
 	}
 
 	bokehResources.Setup();
+
+	cinematicCamera.focusResolver.RequestTDM();
 
 	ProcessSettings(pendingSettings);
 	pendingSettings = {};
@@ -616,7 +720,7 @@ void PostProcessing::DrawBeforeUpscaling()
 
 	// go through each fx
 	for (auto& pipe : pipeline) {
-		if (pipe && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && pipe->DrawBeforeUpscaling()) {
+		if (pipe && pipe->IsActive() && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && pipe->DrawBeforeUpscaling()) {
 			if (!processing) {
 				globals::d3d::context->OMSetRenderTargets(0, nullptr, nullptr);
 				globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
@@ -677,7 +781,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 	// go through each fx
 	bool colorGraded = false;
 	for (auto& pipe : pipeline) {
-		if (pipe && !bypass && pipe->enabled && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
+		if (pipe && !bypass && pipe->IsActive() && !pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
 			auto* input = lastTexColor.tex;
 			DrawFeature(*pipe, lastTexColor);
 			if (pipe == pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)])
@@ -686,7 +790,7 @@ void PostProcessing::PreProcess(RE::RENDER_TARGET a_input)
 	}
 
 	for (auto& pipe : pipeline) {
-		if (!bypass && pipe && pipe->enabled && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
+		if (!bypass && pipe && pipe->IsActive() && pipe->DrawAfterColorGrading() && !(inMainLoadingMenu && pipe->DisableInMainLoadingMenu()) && (!pipe->DrawBeforeUpscaling() || !upscaling.loaded)) {
 			DrawFeature(*pipe, lastTexColor);
 		}
 	}
@@ -753,6 +857,15 @@ void PostProcessing::Prepass()
 		logger::info("Processing pending post processing settings...");
 		ProcessSettings(pendingSettings);
 		pendingSettings = {};
+	}
+
+	{
+		auto graphicsState = globals::game::graphicsState;
+		const float aspect = graphicsState && graphicsState->screenHeight > 0 ?
+		                         (float)graphicsState->screenWidth / (float)graphicsState->screenHeight :
+		                         16.0f / 9.0f;
+		const bool runnable = !bypass && !IsTonemapOwnedByEffects11() && !globals::state->IsMainOrLoadingMenuOpen();
+		cinematicCamera.Update(runnable, aspect);
 	}
 
 	// Update gameISData

@@ -99,6 +99,7 @@ struct PostProcessFeature : public std::enable_shared_from_this<PostProcessFeatu
 	virtual bool DrawBeforeUpscaling() const { return false; }
 	virtual bool DrawAfterColorGrading() const { return false; }
 	virtual bool DisableInMainLoadingMenu() const { return false; }
+	virtual bool IsActive() const { return enabled; }
 
 	/// Whether this feature is visible in the menu. Hidden features (e.g. composite passes) return false.
 	virtual bool IsVisible() const { return true; }

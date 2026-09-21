@@ -1,6 +1,7 @@
 #include "PhysicalGlare.h"
 
 #include "Features/LinearLighting.h"
+#include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
@@ -84,13 +85,25 @@ void PhysicalGlare::DrawSettings()
 	}
 
 	if (settings.ApertureMode == 0) {
-		ImGui::SliderInt(T("feature.post_processing.physical_glare.aperture_blades", "Aperture Blades"), &settings.ApertureBlades, 3, 10);
+		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+
+		int apertureBlades = cam ? cam->ApertureBladeCount : settings.ApertureBlades;
+		float fStop = cam ? cam->FNumber : settings.FStop;
+
+		ImGui::BeginDisabled(cam != nullptr);
+		ImGui::SliderInt(T("feature.post_processing.physical_glare.aperture_blades", "Aperture Blades"), &apertureBlades, 3, 10);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.number_of_aperture_blades_controls_starburst_pattern", "Number of aperture blades. Controls starburst pattern."));
 
-		ImGui::SliderFloat(T("feature.post_processing.physical_glare.f_stop", "F-Stop"), &settings.FStop, 1.0f, 22.0f, "F%.1f");
+		ImGui::SliderFloat(T("feature.post_processing.physical_glare.f_stop", "F-Stop"), &fStop, 1.0f, 22.0f, "F%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text(T("feature.post_processing.physical_glare.aperture_f_number_e_g_f2_8_smaller", "Aperture f-number (e.g. F2.8). Smaller = larger aperture = wider diffraction spikes.\nPhysically: aperture radius = 1 / f-number."));
+		ImGui::EndDisabled();
+
+		if (!cam) {
+			settings.ApertureBlades = apertureBlades;
+			settings.FStop = fStop;
+		}
 
 		ImGui::SliderFloat(T("feature.post_processing.physical_glare.spherical_aberration", "Spherical Aberration"), &settings.SphericalAberration, 0.f, 100.f, "%.1f");
 		if (auto _tt = Util::HoverTooltipWrapper())
@@ -140,9 +153,19 @@ void PhysicalGlare::DrawSettings()
 		}
 	}
 
-	ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &settings.ApertureRotation, -180.f, 180.f, "%.1f deg");
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T("feature.post_processing.physical_glare.rotation_angle_of_the_aperture", "Rotation angle of the aperture."));
+	{
+		const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr;
+		const bool camLens = cam && settings.ApertureMode == 0;
+		float apertureRotation = camLens ? cam->ApertureBladeRotationDeg : settings.ApertureRotation;
+
+		ImGui::BeginDisabled(camLens);
+		ImGui::SliderFloat(T("feature.post_processing.physical_glare.aperture_rotation", "Aperture Rotation"), &apertureRotation, -180.f, 180.f, "%.1f deg");
+		ImGui::EndDisabled();
+		if (!camLens)
+			settings.ApertureRotation = apertureRotation;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text(T("feature.post_processing.physical_glare.rotation_angle_of_the_aperture", "Rotation angle of the aperture."));
+	}
 
 	if (settings.ApertureMode == 1) {
 		ImGui::SliderFloat(T("feature.post_processing.physical_glare.scatter_strength", "Scatter Strength"), &settings.ScatterStrength, 0.f, 1.f, "%.2f");
@@ -512,145 +535,159 @@ void PhysicalGlare::CompileComputeShaders()
 	CompileComputeShadersAsync(L"Data\\Shaders\\PostProcessing\\PhysicalGlare", shaderInfos);
 }
 
-bool PhysicalGlare::NeedsPSFRegeneration() const
+PhysicalGlare::Settings PhysicalGlare::GetEffectiveSettings() const
 {
-	const bool pupilMode = settings.ApertureMode == 1;
+	Settings effective = settings;
+	// Lens mode only: a human pupil is not a camera aperture.
+	if (const auto* cam = owner ? owner->GetActivePhysicalCameraState() : nullptr) {
+		if (effective.ApertureMode == 0) {
+			effective.FStop = cam->FNumber;
+			effective.ApertureBlades = cam->ApertureBladeCount;
+			effective.ApertureRotation = cam->ApertureBladeRotationDeg;
+		}
+	}
+	return effective;
+}
+
+bool PhysicalGlare::NeedsPSFRegeneration(const Settings& a_effective) const
+{
+	const bool pupilMode = a_effective.ApertureMode == 1;
 	const bool lensMode = !pupilMode;
 
 	return psfDirty ||
-	       cachedPSFParams.ApertureMode != settings.ApertureMode ||
-	       (lensMode && cachedPSFParams.ApertureBlades != settings.ApertureBlades) ||
-	       (lensMode && cachedPSFParams.ApertureRotation != settings.ApertureRotation) ||
-	       (pupilMode && cachedPSFParams.ScatterStrength != settings.ScatterStrength) ||
+	       cachedPSFParams.ApertureMode != a_effective.ApertureMode ||
+	       (lensMode && cachedPSFParams.ApertureBlades != a_effective.ApertureBlades) ||
+	       (lensMode && cachedPSFParams.ApertureRotation != a_effective.ApertureRotation) ||
+	       (pupilMode && cachedPSFParams.ScatterStrength != a_effective.ScatterStrength) ||
 	       cachedPSFParams.FFTResolution != static_cast<int>(currentFFTResolution) ||
-	       (pupilMode && cachedPSFParams.EnableEyelashes != settings.EnableEyelashes) ||
-	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCount != settings.EyelashCount) ||
-	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashLength != settings.EyelashLength) ||
-	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCurvature != settings.EyelashCurvature) ||
-	       cachedPSFParams.FresnelExponent != settings.FresnelExponent ||
-	       cachedPSFParams.ChromaticSpread != settings.ChromaticSpread ||
-	       cachedPSFParams.FStop != settings.FStop ||
-	       cachedPSFParams.PSFSharpness != settings.PSFSharpness ||
-	       cachedPSFParams.PSFNoiseFloor != settings.PSFNoiseFloor ||
-	       (pupilMode && cachedPSFParams.ParticleCount != settings.ParticleCount) ||
-	       (pupilMode && cachedPSFParams.ParticleSize != settings.ParticleSize) ||
-	       (pupilMode && cachedPSFParams.GratingCount != settings.GratingCount) ||
-	       (pupilMode && cachedPSFParams.GratingStrength != settings.GratingStrength) ||
-	       (pupilMode && cachedPSFParams.TearFilmStrength != settings.TearFilmStrength) ||
-	       (pupilMode && settings.TearFilmStrength > 0.f && cachedPSFParams.TearFilmSpeed != settings.TearFilmSpeed) ||
-	       (pupilMode && settings.TearFilmStrength > 0.f && cachedPSFParams.TearFilmComplexity != settings.TearFilmComplexity) ||
-	       (pupilMode && cachedPSFParams.SutureBranches != settings.SutureBranches) ||
-	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureStrength != settings.SutureStrength) ||
-	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureWidth != settings.SutureWidth) ||
-	       (pupilMode && cachedPSFParams.StarburstCount != settings.StarburstCount) ||
-	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstStrength != settings.StarburstStrength) ||
-	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != settings.StarburstIrregularity) ||
-	       (lensMode && cachedPSFParams.DustCount != settings.DustCount) ||
-	       (lensMode && settings.DustCount > 0 && cachedPSFParams.DustSize != settings.DustSize) ||
-	       (lensMode && cachedPSFParams.BladeRoughnessAmp != settings.BladeRoughnessAmp) ||
-	       (lensMode && settings.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != settings.BladeRoughnessFreq) ||
-	       (lensMode && cachedPSFParams.ScratchCount != settings.ScratchCount) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != settings.ScratchOpacity) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchLength != settings.ScratchLength) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchWidth != settings.ScratchWidth) ||
-	       cachedPSFParams.SphericalAberration != settings.SphericalAberration ||
-	       cachedPSFParams.KernelScale != settings.KernelScale ||
+	       (pupilMode && cachedPSFParams.EnableEyelashes != a_effective.EnableEyelashes) ||
+	       (pupilMode && a_effective.EnableEyelashes && cachedPSFParams.EyelashCount != a_effective.EyelashCount) ||
+	       (pupilMode && a_effective.EnableEyelashes && cachedPSFParams.EyelashLength != a_effective.EyelashLength) ||
+	       (pupilMode && a_effective.EnableEyelashes && cachedPSFParams.EyelashCurvature != a_effective.EyelashCurvature) ||
+	       cachedPSFParams.FresnelExponent != a_effective.FresnelExponent ||
+	       cachedPSFParams.ChromaticSpread != a_effective.ChromaticSpread ||
+	       cachedPSFParams.FStop != a_effective.FStop ||
+	       cachedPSFParams.PSFSharpness != a_effective.PSFSharpness ||
+	       cachedPSFParams.PSFNoiseFloor != a_effective.PSFNoiseFloor ||
+	       (pupilMode && cachedPSFParams.ParticleCount != a_effective.ParticleCount) ||
+	       (pupilMode && cachedPSFParams.ParticleSize != a_effective.ParticleSize) ||
+	       (pupilMode && cachedPSFParams.GratingCount != a_effective.GratingCount) ||
+	       (pupilMode && cachedPSFParams.GratingStrength != a_effective.GratingStrength) ||
+	       (pupilMode && cachedPSFParams.TearFilmStrength != a_effective.TearFilmStrength) ||
+	       (pupilMode && a_effective.TearFilmStrength > 0.f && cachedPSFParams.TearFilmSpeed != a_effective.TearFilmSpeed) ||
+	       (pupilMode && a_effective.TearFilmStrength > 0.f && cachedPSFParams.TearFilmComplexity != a_effective.TearFilmComplexity) ||
+	       (pupilMode && cachedPSFParams.SutureBranches != a_effective.SutureBranches) ||
+	       (pupilMode && a_effective.SutureBranches > 0 && cachedPSFParams.SutureStrength != a_effective.SutureStrength) ||
+	       (pupilMode && a_effective.SutureBranches > 0 && cachedPSFParams.SutureWidth != a_effective.SutureWidth) ||
+	       (pupilMode && cachedPSFParams.StarburstCount != a_effective.StarburstCount) ||
+	       (pupilMode && a_effective.StarburstCount > 0 && cachedPSFParams.StarburstStrength != a_effective.StarburstStrength) ||
+	       (pupilMode && a_effective.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != a_effective.StarburstIrregularity) ||
+	       (lensMode && cachedPSFParams.DustCount != a_effective.DustCount) ||
+	       (lensMode && a_effective.DustCount > 0 && cachedPSFParams.DustSize != a_effective.DustSize) ||
+	       (lensMode && cachedPSFParams.BladeRoughnessAmp != a_effective.BladeRoughnessAmp) ||
+	       (lensMode && a_effective.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != a_effective.BladeRoughnessFreq) ||
+	       (lensMode && cachedPSFParams.ScratchCount != a_effective.ScratchCount) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != a_effective.ScratchOpacity) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchLength != a_effective.ScratchLength) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchWidth != a_effective.ScratchWidth) ||
+	       cachedPSFParams.SphericalAberration != a_effective.SphericalAberration ||
+	       cachedPSFParams.KernelScale != a_effective.KernelScale ||
 	       cachedPSFParams.UseAP1 != globals::features::linearLighting.IsACEScgActive() ||
-	       (pupilMode && settings.TearFilmStrength > 0.f);  // animated tear film changes the PSF every frame
+	       (pupilMode && a_effective.TearFilmStrength > 0.f);  // animated tear film changes the PSF every frame
 }
 
-bool PhysicalGlare::NeedsApertureRegeneration() const
+bool PhysicalGlare::NeedsApertureRegeneration(const Settings& a_effective) const
 {
-	const bool pupilMode = settings.ApertureMode == 1;
+	const bool pupilMode = a_effective.ApertureMode == 1;
 	const bool lensMode = !pupilMode;
 
 	return apertureDirty ||
-	       cachedPSFParams.ApertureMode != settings.ApertureMode ||
-	       (lensMode && cachedPSFParams.ApertureBlades != settings.ApertureBlades) ||
-	       (lensMode && cachedPSFParams.ApertureRotation != settings.ApertureRotation) ||
-	       (pupilMode && cachedPSFParams.ScatterStrength != settings.ScatterStrength) ||
+	       cachedPSFParams.ApertureMode != a_effective.ApertureMode ||
+	       (lensMode && cachedPSFParams.ApertureBlades != a_effective.ApertureBlades) ||
+	       (lensMode && cachedPSFParams.ApertureRotation != a_effective.ApertureRotation) ||
+	       (pupilMode && cachedPSFParams.ScatterStrength != a_effective.ScatterStrength) ||
 	       cachedPSFParams.FFTResolution != static_cast<int>(currentFFTResolution) ||
-	       cachedPSFParams.FresnelExponent != settings.FresnelExponent ||
-	       cachedPSFParams.FStop != settings.FStop ||
-	       (pupilMode && cachedPSFParams.EnableEyelashes != settings.EnableEyelashes) ||
-	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashCount != settings.EyelashCount) ||
-	       (pupilMode && settings.EnableEyelashes && cachedPSFParams.EyelashLength != settings.EyelashLength) ||
-	       (pupilMode && cachedPSFParams.ParticleCount != settings.ParticleCount) ||
-	       (pupilMode && cachedPSFParams.ParticleSize != settings.ParticleSize) ||
-	       (pupilMode && cachedPSFParams.GratingCount != settings.GratingCount) ||
-	       (pupilMode && cachedPSFParams.GratingStrength != settings.GratingStrength) ||
-	       (pupilMode && cachedPSFParams.SutureBranches != settings.SutureBranches) ||
-	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureStrength != settings.SutureStrength) ||
-	       (pupilMode && settings.SutureBranches > 0 && cachedPSFParams.SutureWidth != settings.SutureWidth) ||
-	       (pupilMode && cachedPSFParams.StarburstCount != settings.StarburstCount) ||
-	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstStrength != settings.StarburstStrength) ||
-	       (pupilMode && settings.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != settings.StarburstIrregularity) ||
-	       (lensMode && cachedPSFParams.DustCount != settings.DustCount) ||
-	       (lensMode && settings.DustCount > 0 && cachedPSFParams.DustSize != settings.DustSize) ||
-	       (lensMode && cachedPSFParams.BladeRoughnessAmp != settings.BladeRoughnessAmp) ||
-	       (lensMode && settings.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != settings.BladeRoughnessFreq) ||
-	       (lensMode && cachedPSFParams.ScratchCount != settings.ScratchCount) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != settings.ScratchOpacity) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchLength != settings.ScratchLength) ||
-	       (lensMode && settings.ScratchCount > 0 && cachedPSFParams.ScratchWidth != settings.ScratchWidth) ||
-	       cachedPSFParams.SphericalAberration != settings.SphericalAberration;
+	       cachedPSFParams.FresnelExponent != a_effective.FresnelExponent ||
+	       cachedPSFParams.FStop != a_effective.FStop ||
+	       (pupilMode && cachedPSFParams.EnableEyelashes != a_effective.EnableEyelashes) ||
+	       (pupilMode && a_effective.EnableEyelashes && cachedPSFParams.EyelashCount != a_effective.EyelashCount) ||
+	       (pupilMode && a_effective.EnableEyelashes && cachedPSFParams.EyelashLength != a_effective.EyelashLength) ||
+	       (pupilMode && cachedPSFParams.ParticleCount != a_effective.ParticleCount) ||
+	       (pupilMode && cachedPSFParams.ParticleSize != a_effective.ParticleSize) ||
+	       (pupilMode && cachedPSFParams.GratingCount != a_effective.GratingCount) ||
+	       (pupilMode && cachedPSFParams.GratingStrength != a_effective.GratingStrength) ||
+	       (pupilMode && cachedPSFParams.SutureBranches != a_effective.SutureBranches) ||
+	       (pupilMode && a_effective.SutureBranches > 0 && cachedPSFParams.SutureStrength != a_effective.SutureStrength) ||
+	       (pupilMode && a_effective.SutureBranches > 0 && cachedPSFParams.SutureWidth != a_effective.SutureWidth) ||
+	       (pupilMode && cachedPSFParams.StarburstCount != a_effective.StarburstCount) ||
+	       (pupilMode && a_effective.StarburstCount > 0 && cachedPSFParams.StarburstStrength != a_effective.StarburstStrength) ||
+	       (pupilMode && a_effective.StarburstCount > 0 && cachedPSFParams.StarburstIrregularity != a_effective.StarburstIrregularity) ||
+	       (lensMode && cachedPSFParams.DustCount != a_effective.DustCount) ||
+	       (lensMode && a_effective.DustCount > 0 && cachedPSFParams.DustSize != a_effective.DustSize) ||
+	       (lensMode && cachedPSFParams.BladeRoughnessAmp != a_effective.BladeRoughnessAmp) ||
+	       (lensMode && a_effective.BladeRoughnessAmp > 0.f && cachedPSFParams.BladeRoughnessFreq != a_effective.BladeRoughnessFreq) ||
+	       (lensMode && cachedPSFParams.ScratchCount != a_effective.ScratchCount) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchOpacity != a_effective.ScratchOpacity) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchLength != a_effective.ScratchLength) ||
+	       (lensMode && a_effective.ScratchCount > 0 && cachedPSFParams.ScratchWidth != a_effective.ScratchWidth) ||
+	       cachedPSFParams.SphericalAberration != a_effective.SphericalAberration;
 }
 
-void PhysicalGlare::GeneratePSF()
+void PhysicalGlare::GeneratePSF(const Settings& a_effective)
 {
 	auto context = globals::d3d::context;
 
 	// Build the CB data for PSF generation
 	GlareCB cbData = {
-		.Threshold = exp2(settings.ThresholdEV - 3.0f),
-		.Intensity = settings.Intensity,
-		.ScatterStrength = settings.ScatterStrength,
-		.ApertureMode = (uint)settings.ApertureMode,
-		.ApertureBlades = settings.ApertureBlades,
-		.ApertureRotation = settings.ApertureRotation * 3.14159265f / 180.f,
-		.AdaptSpeed = settings.AdaptSpeed,
+		.Threshold = exp2(a_effective.ThresholdEV - 3.0f),
+		.Intensity = a_effective.Intensity,
+		.ScatterStrength = a_effective.ScatterStrength,
+		.ApertureMode = (uint)a_effective.ApertureMode,
+		.ApertureBlades = a_effective.ApertureBlades,
+		.ApertureRotation = a_effective.ApertureRotation * 3.14159265f / 180.f,
+		.AdaptSpeed = a_effective.AdaptSpeed,
 		.DeltaTime = 0.f,
 		.FFTResolution = currentFFTResolution,
-		.PaddingRatio = settings.PaddingRatio,
+		.PaddingRatio = a_effective.PaddingRatio,
 		.ScreenWidth = texOutput ? (float)texOutput->desc.Width : 1920.f,
 		.ScreenHeight = texOutput ? (float)texOutput->desc.Height : 1080.f,
 		.ChannelIndex = 0,
-		.FresnelExponent = settings.FresnelExponent,
-		.ChromaticSpread = settings.ChromaticSpread,
-		.ApertureSize = 1.0f / std::max(settings.FStop, 1.0f),
-		.PSFSharpness = settings.PSFSharpness,
-		.PSFNoiseFloor = settings.PSFNoiseFloor,
-		.EnableEyelashes = settings.EnableEyelashes ? 1u : 0u,
-		.EyelashCurvature = settings.EyelashCurvature,
+		.FresnelExponent = a_effective.FresnelExponent,
+		.ChromaticSpread = a_effective.ChromaticSpread,
+		.ApertureSize = 1.0f / std::max(a_effective.FStop, 1.0f),
+		.PSFSharpness = a_effective.PSFSharpness,
+		.PSFNoiseFloor = a_effective.PSFNoiseFloor,
+		.EnableEyelashes = a_effective.EnableEyelashes ? 1u : 0u,
+		.EyelashCurvature = a_effective.EyelashCurvature,
 		// Eye mode
-		.EyelashCount = (uint)settings.EyelashCount,
-		.EyelashLength = settings.EyelashLength,
-		.ParticleCount = (uint)settings.ParticleCount,
-		.ParticleSize = settings.ParticleSize,
-		.GratingCount = (uint)settings.GratingCount,
-		.GratingStrength = settings.GratingStrength,
-		.TearFilmStrength = settings.TearFilmStrength,
-		.TearFilmSpeed = settings.TearFilmSpeed,
-		.TearFilmComplexity = (uint)settings.TearFilmComplexity,
+		.EyelashCount = (uint)a_effective.EyelashCount,
+		.EyelashLength = a_effective.EyelashLength,
+		.ParticleCount = (uint)a_effective.ParticleCount,
+		.ParticleSize = a_effective.ParticleSize,
+		.GratingCount = (uint)a_effective.GratingCount,
+		.GratingStrength = a_effective.GratingStrength,
+		.TearFilmStrength = a_effective.TearFilmStrength,
+		.TearFilmSpeed = a_effective.TearFilmSpeed,
+		.TearFilmComplexity = (uint)a_effective.TearFilmComplexity,
 		.TearFilmTime = tearFilmTimeAccum,
-		.SutureBranches = (uint)settings.SutureBranches,
-		.SutureStrength = settings.SutureStrength,
-		.SutureWidth = settings.SutureWidth,
-		.StarburstCount = (uint)settings.StarburstCount,
-		.StarburstStrength = settings.StarburstStrength,
-		.StarburstIrregularity = settings.StarburstIrregularity,
+		.SutureBranches = (uint)a_effective.SutureBranches,
+		.SutureStrength = a_effective.SutureStrength,
+		.SutureWidth = a_effective.SutureWidth,
+		.StarburstCount = (uint)a_effective.StarburstCount,
+		.StarburstStrength = a_effective.StarburstStrength,
+		.StarburstIrregularity = a_effective.StarburstIrregularity,
 		// Lens mode
-		.DustCount = (uint)settings.DustCount,
-		.DustSize = settings.DustSize,
-		.BladeRoughnessFreq = (uint)settings.BladeRoughnessFreq,
-		.BladeRoughnessAmp = settings.BladeRoughnessAmp,
-		.ScratchCount = (uint)settings.ScratchCount,
-		.ScratchOpacity = settings.ScratchOpacity,
-		.ScratchLength = settings.ScratchLength,
-		.ScratchWidth = settings.ScratchWidth,
-		.SphericalAberration = settings.SphericalAberration,
+		.DustCount = (uint)a_effective.DustCount,
+		.DustSize = a_effective.DustSize,
+		.BladeRoughnessFreq = (uint)a_effective.BladeRoughnessFreq,
+		.BladeRoughnessAmp = a_effective.BladeRoughnessAmp,
+		.ScratchCount = (uint)a_effective.ScratchCount,
+		.ScratchOpacity = a_effective.ScratchOpacity,
+		.ScratchLength = a_effective.ScratchLength,
+		.ScratchWidth = a_effective.ScratchWidth,
+		.SphericalAberration = a_effective.SphericalAberration,
 		.UseAP1 = globals::features::linearLighting.IsACEScgActive() ? 1u : 0u,
-		.KernelScale = settings.KernelScale,
+		.KernelScale = a_effective.KernelScale,
 	};
 
 	glareCB->Update(cbData);
@@ -658,7 +695,7 @@ void PhysicalGlare::GeneratePSF()
 	context->CSSetConstantBuffers(1, 1, &cb);
 
 	// ===== Step 1: Cache the static aperture response =====
-	if (NeedsApertureRegeneration()) {
+	if (NeedsApertureRegeneration(a_effective)) {
 		// Tear film is applied separately below; all expensive static geometry
 		// and scatter masks remain cached across animated frames.
 		GlareCB apertureCBData = cbData;
@@ -683,7 +720,7 @@ void PhysicalGlare::GeneratePSF()
 
 	const uint fftVariant = GetFFTVariant(currentFFTResolution);
 	Texture2D* diffraction = nullptr;
-	if (settings.ApertureMode == 1 && settings.TearFilmStrength > 0.f) {
+	if (a_effective.ApertureMode == 1 && a_effective.TearFilmStrength > 0.f) {
 		ID3D11ShaderResourceView* srv = texApertureBase->srv.get();
 		ID3D11UnorderedAccessView* uav = texFFT[0][0]->uav.get();
 		context->CSSetShaderResources(0, 1, &srv);
@@ -741,43 +778,43 @@ void PhysicalGlare::GeneratePSF()
 	}
 
 	// Cache parameters
-	cachedPSFParams.ApertureMode = settings.ApertureMode;
-	cachedPSFParams.ApertureBlades = settings.ApertureBlades;
-	cachedPSFParams.ApertureRotation = settings.ApertureRotation;
-	cachedPSFParams.ScatterStrength = settings.ScatterStrength;
+	cachedPSFParams.ApertureMode = a_effective.ApertureMode;
+	cachedPSFParams.ApertureBlades = a_effective.ApertureBlades;
+	cachedPSFParams.ApertureRotation = a_effective.ApertureRotation;
+	cachedPSFParams.ScatterStrength = a_effective.ScatterStrength;
 	cachedPSFParams.FFTResolution = static_cast<int>(currentFFTResolution);
-	cachedPSFParams.EnableEyelashes = settings.EnableEyelashes;
-	cachedPSFParams.EyelashCount = settings.EyelashCount;
-	cachedPSFParams.EyelashLength = settings.EyelashLength;
-	cachedPSFParams.EyelashCurvature = settings.EyelashCurvature;
-	cachedPSFParams.FresnelExponent = settings.FresnelExponent;
-	cachedPSFParams.ChromaticSpread = settings.ChromaticSpread;
-	cachedPSFParams.FStop = settings.FStop;
-	cachedPSFParams.ParticleCount = settings.ParticleCount;
-	cachedPSFParams.ParticleSize = settings.ParticleSize;
-	cachedPSFParams.GratingCount = settings.GratingCount;
-	cachedPSFParams.GratingStrength = settings.GratingStrength;
-	cachedPSFParams.TearFilmStrength = settings.TearFilmStrength;
-	cachedPSFParams.TearFilmSpeed = settings.TearFilmSpeed;
-	cachedPSFParams.TearFilmComplexity = settings.TearFilmComplexity;
-	cachedPSFParams.SutureBranches = settings.SutureBranches;
-	cachedPSFParams.SutureStrength = settings.SutureStrength;
-	cachedPSFParams.SutureWidth = settings.SutureWidth;
-	cachedPSFParams.StarburstCount = settings.StarburstCount;
-	cachedPSFParams.StarburstStrength = settings.StarburstStrength;
-	cachedPSFParams.StarburstIrregularity = settings.StarburstIrregularity;
-	cachedPSFParams.DustCount = settings.DustCount;
-	cachedPSFParams.DustSize = settings.DustSize;
-	cachedPSFParams.PSFSharpness = settings.PSFSharpness;
-	cachedPSFParams.PSFNoiseFloor = settings.PSFNoiseFloor;
-	cachedPSFParams.BladeRoughnessAmp = settings.BladeRoughnessAmp;
-	cachedPSFParams.BladeRoughnessFreq = settings.BladeRoughnessFreq;
-	cachedPSFParams.ScratchCount = settings.ScratchCount;
-	cachedPSFParams.ScratchOpacity = settings.ScratchOpacity;
-	cachedPSFParams.ScratchLength = settings.ScratchLength;
-	cachedPSFParams.ScratchWidth = settings.ScratchWidth;
-	cachedPSFParams.SphericalAberration = settings.SphericalAberration;
-	cachedPSFParams.KernelScale = settings.KernelScale;
+	cachedPSFParams.EnableEyelashes = a_effective.EnableEyelashes;
+	cachedPSFParams.EyelashCount = a_effective.EyelashCount;
+	cachedPSFParams.EyelashLength = a_effective.EyelashLength;
+	cachedPSFParams.EyelashCurvature = a_effective.EyelashCurvature;
+	cachedPSFParams.FresnelExponent = a_effective.FresnelExponent;
+	cachedPSFParams.ChromaticSpread = a_effective.ChromaticSpread;
+	cachedPSFParams.FStop = a_effective.FStop;
+	cachedPSFParams.ParticleCount = a_effective.ParticleCount;
+	cachedPSFParams.ParticleSize = a_effective.ParticleSize;
+	cachedPSFParams.GratingCount = a_effective.GratingCount;
+	cachedPSFParams.GratingStrength = a_effective.GratingStrength;
+	cachedPSFParams.TearFilmStrength = a_effective.TearFilmStrength;
+	cachedPSFParams.TearFilmSpeed = a_effective.TearFilmSpeed;
+	cachedPSFParams.TearFilmComplexity = a_effective.TearFilmComplexity;
+	cachedPSFParams.SutureBranches = a_effective.SutureBranches;
+	cachedPSFParams.SutureStrength = a_effective.SutureStrength;
+	cachedPSFParams.SutureWidth = a_effective.SutureWidth;
+	cachedPSFParams.StarburstCount = a_effective.StarburstCount;
+	cachedPSFParams.StarburstStrength = a_effective.StarburstStrength;
+	cachedPSFParams.StarburstIrregularity = a_effective.StarburstIrregularity;
+	cachedPSFParams.DustCount = a_effective.DustCount;
+	cachedPSFParams.DustSize = a_effective.DustSize;
+	cachedPSFParams.PSFSharpness = a_effective.PSFSharpness;
+	cachedPSFParams.PSFNoiseFloor = a_effective.PSFNoiseFloor;
+	cachedPSFParams.BladeRoughnessAmp = a_effective.BladeRoughnessAmp;
+	cachedPSFParams.BladeRoughnessFreq = a_effective.BladeRoughnessFreq;
+	cachedPSFParams.ScratchCount = a_effective.ScratchCount;
+	cachedPSFParams.ScratchOpacity = a_effective.ScratchOpacity;
+	cachedPSFParams.ScratchLength = a_effective.ScratchLength;
+	cachedPSFParams.ScratchWidth = a_effective.ScratchWidth;
+	cachedPSFParams.SphericalAberration = a_effective.SphericalAberration;
+	cachedPSFParams.KernelScale = a_effective.KernelScale;
 	cachedPSFParams.UseAP1 = globals::features::linearLighting.IsACEScgActive();
 	psfDirty = false;
 }
@@ -840,62 +877,66 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 		CreateFFTTextures(targetRes);
 	}
 
+	// Cinematic Camera adapter: effective settings carry the unified aperture
+	// while Lens mode is active; saved settings stay untouched.
+	const Settings effective = GetEffectiveSettings();
+
 	// Accumulate tear film time
-	if (settings.ApertureMode == 1 && settings.TearFilmStrength > 0.f) {
+	if (effective.ApertureMode == 1 && effective.TearFilmStrength > 0.f) {
 		tearFilmTimeAccum += *globals::game::deltaTime;
 	}
 
 	// Update constant buffer
 	GlareCB cbData = {
-		.Threshold = exp2(settings.ThresholdEV - 3.0f),
-		.Intensity = settings.Intensity,
-		.ScatterStrength = settings.ScatterStrength,
-		.ApertureMode = (uint)settings.ApertureMode,
-		.ApertureBlades = settings.ApertureBlades,
-		.ApertureRotation = settings.ApertureRotation * 3.14159265f / 180.f,
-		.AdaptSpeed = settings.AdaptSpeed,
+		.Threshold = exp2(effective.ThresholdEV - 3.0f),
+		.Intensity = effective.Intensity,
+		.ScatterStrength = effective.ScatterStrength,
+		.ApertureMode = (uint)effective.ApertureMode,
+		.ApertureBlades = effective.ApertureBlades,
+		.ApertureRotation = effective.ApertureRotation * 3.14159265f / 180.f,
+		.AdaptSpeed = effective.AdaptSpeed,
 		.DeltaTime = *globals::game::deltaTime,
 		.FFTResolution = currentFFTResolution,
-		.PaddingRatio = settings.PaddingRatio,
+		.PaddingRatio = effective.PaddingRatio,
 		.ScreenWidth = (float)texOutput->desc.Width,
 		.ScreenHeight = (float)texOutput->desc.Height,
 		.ChannelIndex = 0,
-		.FresnelExponent = settings.FresnelExponent,
-		.ChromaticSpread = settings.ChromaticSpread,
-		.ApertureSize = 1.0f / std::max(settings.FStop, 1.0f),
-		.PSFSharpness = settings.PSFSharpness,
-		.PSFNoiseFloor = settings.PSFNoiseFloor,
-		.EnableEyelashes = settings.EnableEyelashes ? 1u : 0u,
-		.EyelashCurvature = settings.EyelashCurvature,
+		.FresnelExponent = effective.FresnelExponent,
+		.ChromaticSpread = effective.ChromaticSpread,
+		.ApertureSize = 1.0f / std::max(effective.FStop, 1.0f),
+		.PSFSharpness = effective.PSFSharpness,
+		.PSFNoiseFloor = effective.PSFNoiseFloor,
+		.EnableEyelashes = effective.EnableEyelashes ? 1u : 0u,
+		.EyelashCurvature = effective.EyelashCurvature,
 		// Eye mode
-		.EyelashCount = (uint)settings.EyelashCount,
-		.EyelashLength = settings.EyelashLength,
-		.ParticleCount = (uint)settings.ParticleCount,
-		.ParticleSize = settings.ParticleSize,
-		.GratingCount = (uint)settings.GratingCount,
-		.GratingStrength = settings.GratingStrength,
-		.TearFilmStrength = settings.TearFilmStrength,
-		.TearFilmSpeed = settings.TearFilmSpeed,
-		.TearFilmComplexity = (uint)settings.TearFilmComplexity,
+		.EyelashCount = (uint)effective.EyelashCount,
+		.EyelashLength = effective.EyelashLength,
+		.ParticleCount = (uint)effective.ParticleCount,
+		.ParticleSize = effective.ParticleSize,
+		.GratingCount = (uint)effective.GratingCount,
+		.GratingStrength = effective.GratingStrength,
+		.TearFilmStrength = effective.TearFilmStrength,
+		.TearFilmSpeed = effective.TearFilmSpeed,
+		.TearFilmComplexity = (uint)effective.TearFilmComplexity,
 		.TearFilmTime = tearFilmTimeAccum,
-		.SutureBranches = (uint)settings.SutureBranches,
-		.SutureStrength = settings.SutureStrength,
-		.SutureWidth = settings.SutureWidth,
-		.StarburstCount = (uint)settings.StarburstCount,
-		.StarburstStrength = settings.StarburstStrength,
-		.StarburstIrregularity = settings.StarburstIrregularity,
+		.SutureBranches = (uint)effective.SutureBranches,
+		.SutureStrength = effective.SutureStrength,
+		.SutureWidth = effective.SutureWidth,
+		.StarburstCount = (uint)effective.StarburstCount,
+		.StarburstStrength = effective.StarburstStrength,
+		.StarburstIrregularity = effective.StarburstIrregularity,
 		// Lens mode
-		.DustCount = (uint)settings.DustCount,
-		.DustSize = settings.DustSize,
-		.BladeRoughnessFreq = (uint)settings.BladeRoughnessFreq,
-		.BladeRoughnessAmp = settings.BladeRoughnessAmp,
-		.ScratchCount = (uint)settings.ScratchCount,
-		.ScratchOpacity = settings.ScratchOpacity,
-		.ScratchLength = settings.ScratchLength,
-		.ScratchWidth = settings.ScratchWidth,
-		.SphericalAberration = settings.SphericalAberration,
+		.DustCount = (uint)effective.DustCount,
+		.DustSize = effective.DustSize,
+		.BladeRoughnessFreq = (uint)effective.BladeRoughnessFreq,
+		.BladeRoughnessAmp = effective.BladeRoughnessAmp,
+		.ScratchCount = (uint)effective.ScratchCount,
+		.ScratchOpacity = effective.ScratchOpacity,
+		.ScratchLength = effective.ScratchLength,
+		.ScratchWidth = effective.ScratchWidth,
+		.SphericalAberration = effective.SphericalAberration,
 		.UseAP1 = globals::features::linearLighting.IsACEScgActive() ? 1u : 0u,
-		.KernelScale = settings.KernelScale,
+		.KernelScale = effective.KernelScale,
 	};
 	glareCB->Update(cbData);
 
@@ -903,9 +944,9 @@ void PhysicalGlare::Draw(TextureInfo& inout_tex)
 	context->CSSetConstantBuffers(1, 1, &cb);
 
 	// ========== Step 1: Regenerate PSF if parameters changed ==========
-	if (NeedsPSFRegeneration()) {
+	if (NeedsPSFRegeneration(effective)) {
 		globals::profiler->BeginPass("PostProcessing::PhysicalGlare::PSF");
-		GeneratePSF();
+		GeneratePSF(effective);
 
 		// Re-update CB because GeneratePSF() overwrites it with DeltaTime=0
 		glareCB->Update(cbData);
