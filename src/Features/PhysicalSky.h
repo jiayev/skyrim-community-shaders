@@ -1,0 +1,465 @@
+#pragma once
+
+#include "PhysicalSky/Ndf.h"
+
+struct PhysicalSky final : public Feature
+{
+	////////////////////////////////////////////////// Boilerplate
+	static PhysicalSky* GetSingleton()
+	{
+		static PhysicalSky singleton;
+		return &singleton;
+	}
+
+	// Metadata
+	inline std::string GetName() override { return "Physical Sky"; }
+	std::string GetDisplayName() override { return T("feature.physical_sky.name", "Physical Sky"); }
+	inline std::string GetShortName() override { return "PhysicalSky"; }
+	inline std::string_view GetCategory() const override { return FeatureCategories::kSky; }
+	inline std::string GetFeatureModLink() override { return MakeNexusModURL("999999"); }
+	inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	{
+		return {
+			T("feature.physical_sky.description", "Physically-based sky model for realistic sky gradients and other astronomical effects."),
+			{
+				T("feature.physical_sky.key_feature_1", "Physically-based atmosphere and aerial perspective."),
+				T("feature.physical_sky.key_feature_2", "Procedural sun disk and celestial lighting controls."),
+				T("feature.physical_sky.key_feature_3", "Worldspace whitelist and interior override support."),
+				T("feature.physical_sky.key_feature_4", "Cloud relighting and silver lining controls."),
+			}
+		};
+	}
+
+	// Functionality
+	inline std::string_view GetShaderDefineName() override { return "PHYSICAL_SKY"; }
+	inline bool HasShaderDefine(RE::BSShader::Type) override { return true; };
+
+	// Settings & UI
+	void DataLoaded() override;
+	void RestoreDefaultSettings() override;
+	void LoadSettings(json& o_json) override;
+	void SaveSettings(json& o_json) override;
+
+	void DrawSettings() override;
+	void SettingsGeneral();
+	void SettingsCelestials();
+	void SettingsAtmosphere();
+	void SettingsClouds();
+	void SettingsVolumetricClouds();
+	void SettingsDebug();
+
+	// Resources
+	void SetupResources() override;
+	void ClearShaderCache() override;
+	void CompileShaders();
+	bool ShadersOK();
+
+	// Draw
+	void Reset() override;
+	void EarlyPrepass() override;
+	void ReflectionsPrepass() override;
+	void Prepass() override;
+	void RenderView(ID3D11ShaderResourceView* depth);
+	void GenerateLuts();
+	void BindCompositeResources();
+	void AccumShadow(ID3D11ShaderResourceView* depth = nullptr);
+	inline void PostPostLoad() override { Hooks::Install(); }
+
+	////////////////////////////////////////////////// Feature Specific Data
+	constexpr static uint16_t kTrLutW = 256;
+	constexpr static uint16_t kTrLutH = 64;
+	constexpr static uint16_t kMsLutW = 32;
+	constexpr static uint16_t kMsLutH = 32;
+	constexpr static uint16_t kSvLutW = 200;
+	constexpr static uint16_t kSvLutH = 150;
+	constexpr static uint16_t kApLutW = 32;
+	constexpr static uint16_t kApLutH = 32;
+	constexpr static uint16_t kApLutD = 32;
+
+	struct WorldspaceInfo
+	{
+		float zBottom = -14500.f;
+	};
+
+	struct Settings
+	{
+		bool enabled = true;
+		bool enableAllExteriorCells = false;
+		bool forceEnableAllInteriorCells = false;
+		bool overrideDirLight = true;
+		bool lightSkyStatics = true;
+		float skyStaticsBrightness = 1.0f;
+		bool halfResApShadow = false;
+		float vanillaMix = 0;
+		float trMix = 1;
+		float apLumMix = 1;
+		float apTrMix = 1;
+
+		float2 cloudShadowRemapRange = float2{ 0, 1.f };
+
+		float3 sunlightColor = float3{ 1.0f, 0.97f, 0.95f } * 10.f;
+		float3 masserColor = float3{ 1.0f, 0.6f, 0.6f } * 0.1f;
+		float3 secundaColor = float3{ 0.8f, 1.0f, 1.0f } * 0.05f;
+
+		bool proceduralSun = true;
+		float sunDiskRad = DirectX::XMConvertToRadians(0.53f);
+
+		std::map<std::string, WorldspaceInfo> worldspaceWhitelist = {
+			{ "Tamriel", { -14500.f } },
+			{ "WindhelmWorld", { -14500.f } },
+			{ "RiftenWorld", { -14500.f } },
+			{ "MarkarthWorld", { -14500.f } },
+			{ "WhiterunWorld", { -14500.f } },
+			{ "SolitudeWorld", { -14500.f } },
+			{ "WhiterunDragonsreachWorld", { -14500.f } },
+			{ "DLC01FalmerValley", { 3000.f } },
+			{ "DLC2SolstheimWorld", { 256.f } }
+		};
+		float fallbackZBottom = 0.f;
+		float3 groundAlbedo = { .2f, .2f, .2f };
+
+		float planetRadius = 6.36e3f;      // in km
+		float atmosphereRadius = 6.42e3f;  // in km
+
+		float rayleighFalloff = 1 / 8.69645f;                         // in km^-1
+		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };       // in megameter^-1 (sRGB band-averaged)
+		float3 rayleighScatterAP1 = { 6.9344f, 12.0203f, 28.9100f };  // in megameter^-1 (AP1 band-averaged via CIE 1931 spectral integration)
+		float aerosolFalloff = 1 / 1.2f;
+		float aerosolPhaseG = 0.8f;
+		float3 aerosolScatter = { 39.96f, 39.96f, 39.96f };
+		float3 aerosolAbsorption = { 4.44f, 4.44f, 4.44f };
+		float ozoneAltitude = 22.3499f + 35.66071f * .5f;  // in km
+		float ozoneThickness = 35.66071f;
+		float3 ozoneAbsorption = { 2.2911f, 1.5404f, 0 };        // sRGB band-averaged
+		float3 ozoneAbsorptionAP1 = { 2.2499f, 1.6602f, 0.0f };  // AP1 band-averaged via CIE 1931 spectral integration
+
+		// VANILLA CLOUDS
+		bool enableVanillaClouds = true;
+		float cloudRelightMix = 1.f;
+		float cloudOriginalMix = 0.5f;
+		float silverLiningMix = 1.f;
+		float silverLiningSpread = 0.f;
+
+		// VOLUMETRIC CLOUDS
+		bool enableVolumetricClouds = false;
+		float rayMarchRange = 32.f;
+		float shadowVolumeRange = 8.f;  // km
+		float marchStepScale = 0.5f;
+		NdfSettings cloudMap = {};
+		CloudLayer cloudLayer = {};
+	} settings;
+
+	struct CbData
+	{
+		// DYNAMIC
+		float2 texDim;
+		float2 rcpTexDim;  //
+		float2 frameDim;
+		float2 rcpFrameDim;  //
+
+		float zCameraPlanet;
+		float3 sunDir;  //
+		float3 sunlightColor;
+		float trMix;  //
+		float3 masserDir;
+		float apLumMix;  //
+		float3 masserColor;
+		float apTrMix;  //
+		float3 secundaDir;
+		float sunDiskCos;  //
+		float3 secundaColor;
+
+		// GENERAL
+		uint enabled;  //
+		float pad;
+		float vanillaMix;
+
+		// WORLD
+		float zBottom;
+		float rPlanet;  //
+		float rAtmosphere;
+		float3 groundAlbedo;  //
+
+		// ATMOSPHERE
+		float2 cloudShadowRemapRange;
+
+		float aerosolFalloff;
+		float aerosolPhaseG;  //
+		float3 aerosolScatter;
+		uint halfResApShadow;  //
+		float3 aerosolAbsorption;
+
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
+
+		float ozoneAltitude;  //
+		float ozoneThickness;
+		float3 ozoneAbsorption;  //
+
+		// CLOUDS (VANILLA)
+		uint enableVanillaClouds;
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;  //
+		float silverLiningSpread;
+
+		// VOLUMETRIC CLOUDS (toggle + shadow-volume parameters for GetDirlightTransmittance)
+		uint enableVolumetricClouds;
+		float shadowVolumeRange;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
+		float3 volCloudScatter;  //
+		uint volCloudUseSun;
+		float3 volCloudAbsorption;  //
+		float volCloudLowBottom;
+		float volCloudLowThickness;
+
+		// SETTINGS
+		uint lightSkyStatics;
+		float skyStaticsBrightness;  //
+	} cbData;
+	STATIC_ASSERT_ALIGNAS_16(CbData);
+
+	eastl::unique_ptr<Texture2D> texTrLut = nullptr;     // transmittance
+	eastl::unique_ptr<Texture2D> texMsLut = nullptr;     // multiscattering
+	eastl::unique_ptr<Texture2D> texSvLut = nullptr;     // sky view
+	eastl::unique_ptr<Texture3D> texApLut = nullptr;     // unshadowed lunar and multiple-scattering aerial perspective
+	eastl::unique_ptr<Texture3D> texApSunLut = nullptr;  // direct solar single-scattering aerial perspective
+	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
+
+	// Volumetric cloud resources
+	constexpr static uint16_t kShadowVolW = 256;
+	constexpr static uint16_t kShadowVolH = 256;
+	constexpr static uint16_t kShadowVolD = 64;
+	constexpr static uint16_t kVolCubeSize = 64;
+	constexpr static uint32_t kCloudBoundaryCells = 256;
+	eastl::unique_ptr<Texture2D> texCloudBoundary = nullptr;
+	winrt::com_ptr<ID3D11Buffer> cloudBoundaryIndices = nullptr;
+	winrt::com_ptr<ID3D11BlendState> cloudBoundaryBlend = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> cloudBoundaryRasterizer = nullptr;
+	winrt::com_ptr<ID3D11DepthStencilState> cloudBoundaryDepth = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> vsCloudBoundary = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> psCloudBoundary = nullptr;
+	struct alignas(16) CloudBoundaryCB
+	{
+		float4 gridOriginSpacing;
+		float4 fieldFrequencyWind;
+		float4 shearAltitude;
+		float4 evolution;
+		float4 frameDimensions;
+		float planetRadius;
+		float bottomZ;
+		uint gridCellCount;
+		uint cloudFrameIndex;
+	};
+	static_assert(sizeof(CloudBoundaryCB) == 96);
+	eastl::unique_ptr<ConstantBuffer> cloudBoundaryCB = nullptr;
+
+	eastl::unique_ptr<Texture2D> texVolTr = nullptr;           // full-resolution volumetric transmittance result
+	eastl::unique_ptr<Texture2D> texVolLum = nullptr;          // full-resolution volumetric luminance result
+	eastl::unique_ptr<Texture2D> texVolAux = nullptr;          // full-resolution cloud depth/metadata
+	eastl::unique_ptr<Texture2D> texVolLowTr = nullptr;        // quarter-resolution trace transmittance
+	eastl::unique_ptr<Texture2D> texVolLowLum = nullptr;       // quarter-resolution trace luminance
+	eastl::unique_ptr<Texture2D> texVolLowAux = nullptr;       // quarter-resolution trace depth/metadata
+	eastl::unique_ptr<Texture2D> texVolFilteredTr = nullptr;   // blurred transmittance for compositing
+	eastl::unique_ptr<Texture2D> texVolFilteredLum = nullptr;  // blurred luminance for compositing
+	eastl::unique_ptr<Texture2D> texVolFilteredAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolHistoryAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTr = nullptr;   // low-resolution cubemap transmittance result
+	eastl::unique_ptr<Texture2D> texVolCubeLum = nullptr;  // low-resolution cubemap luminance result
+	eastl::unique_ptr<Texture2D> texVolCubeAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeHistoryAux = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceTr = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceLum = nullptr;
+	eastl::unique_ptr<Texture2D> texVolCubeTraceAux = nullptr;
+	eastl::unique_ptr<Texture3D> texShadowVolume = nullptr;  // cloud shadow volume 3D
+	eastl::unique_ptr<Texture3D> texShadowVolumeRaw = nullptr;
+
+	// ImGui::Image cannot sample a cubemap or a volume texture, so those are shown
+	// through a 2D view built from the resource itself.
+	ankerl::unordered_dense::map<ID3D11Resource*, winrt::com_ptr<ID3D11ShaderResourceView>> debugCubeFaceSrvs;
+	int32_t debugCubeFace = 0;
+	eastl::unique_ptr<Texture2D> debugApSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugApSunSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugShadowVolumeSlice = nullptr;
+	eastl::unique_ptr<Texture2D> debugShapeNoiseSlice = nullptr;
+	ID3D11ShaderResourceView* GetDebugCubeFaceSrv(Texture2D* a_texture);
+	ID3D11ShaderResourceView* GetDebugVolumeSliceSrv(ID3D11ShaderResourceView* a_srv, eastl::unique_ptr<Texture2D>& a_target);
+	void DrawDebugCube(Texture2D* a_texture, const char* a_label, float a_scale);
+	void DrawDebugVolume(ID3D11ShaderResourceView* a_srv, const char* a_label, eastl::unique_ptr<Texture2D>& a_target, float a_scale);
+
+	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudProfileLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> cloudAdjustmentLutSrv = nullptr;
+	TextureManager ndfTexManager{ "Cloud Map" };
+	NdfManager ndfManager;
+	CirrusMapManager cirrusMapManager;
+
+	// Volumetric cloud StructuredBuffer (compute-only)
+	struct VolumetricCloudSB
+	{
+		float rayMarchRange;
+		float shadowVolumeRange;
+		float marchStepScale;
+		uint cloudFrameIndex;
+		float2 rcpFrameDim;
+		float3 dirlightDir;
+		float bottomZ;
+		float planetRadius;
+		float2 activeFrameDim;
+
+		float lowestCloudAltitude;
+		float highestCloudAltitude;
+		float lowCloudBaseAltitude;
+		float lowCloudTopAltitude;
+		float lowCloudTraceTopAltitude;
+
+		float2 lowNdfFrequency;
+		float2 noiseWindOffset;
+		float lowDensityScale;
+		float coverageBottomPower;
+		float coverageHeightRange;
+		float bottomDensityPower;
+		float bottomDensityWidth;
+		float topExpansion;
+		uint cirrusEnabled;
+		float cirrusAltitude;
+		float cirrusPatternFrequency;
+		float cirrusDensityScale;
+		float cirrusLightingScale;
+		float lightingScale;
+		float sunExtinction;
+		float phaseForwardG;
+		float phaseBackwardG;
+		float phaseForwardWeight;
+		float phaseBackwardWeight;
+		float scatterVolumeStrength;
+		float scatterVolumeDepth;
+		float scatterVolumeHeight;
+		float softScatteringStrength;
+		float powderStrength;
+		float ambientStrength;
+		float ambientFloor;
+		float ambientDensity;
+		float ambientBase;
+
+		float2 lowFrameDim;
+		uint historyValid;
+		float shadowVolumeBottom;
+		float shadowVolumeTop;
+		float2 cloudWindDelta;
+		float2 cloudShapeShear;
+		float4x4 previousViewProj;
+		float3 previousCamera;
+		float2 previousFrameDim;
+		float4 ndfBoundaryRect;
+		float2 cirrusWindOffset;
+		float2 cirrusWindDelta;
+		float2 previousShapeShear;
+		float4 cloudEvolution;
+		float cloudEvolutionDelta;
+	};
+	static_assert(sizeof(VolumetricCloudSB) == 372);
+	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
+
+	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
+	uint32_t volFrameIndex = 0;
+	bool volMainHistoryValid = false;
+	float2 volHistoryFrameDim = {};
+	uint32_t volHistoryFrame = UINT32_MAX;
+	bool volHistoryPathTracing = false;
+	struct CloudWindState
+	{
+		std::array<double, 2> lowOffset = {};
+		std::array<double, 2> highOffset = {};
+		double phase = 0.0;
+		float2 shear = {};
+		float disturbance = 0.f;
+	};
+	CloudWindState volWind;
+	CloudWindState volHistoryWind;
+	float4x4 volHistoryViewProj = {};
+	float3 volHistoryCamera = {};
+	std::string volCloudSettingsKey;
+
+	winrt::com_ptr<ID3D11ComputeShader> csVolMainView = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolFilter = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolReproject = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolCubeReproject = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolShadowVolume = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
+
+	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;
+
+	// Volumetric cloud methods
+	enum class VolumetricCloudPass
+	{
+		kShadowVolume,
+		kMainViewAndCubemap
+	};
+	void SetupVolumetricResources();
+	void CompileVolumetricShaders();
+	void RenderCloudBoundary(const CloudBoundaryCB& a_data, NdfTextureSet a_textures);
+	void LoadCloudTextures();
+	void UpdateCloudWind();
+	void RenderVolumetricClouds(VolumetricCloudPass a_pass, ID3D11ShaderResourceView* depth = nullptr);
+
+	winrt::com_ptr<ID3D11SamplerState> sampTr = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> sampSv = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> sampNoise = nullptr;
+
+	winrt::com_ptr<ID3D11ComputeShader> csTrLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csMsLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csSvLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csApLutGen = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csShadowAccum = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csShadowAccumHalfRes = nullptr;
+
+	ID3D11SamplerState* originalPSSamplers[2] = { nullptr, nullptr };
+	winrt::com_ptr<ID3D11SamplerState> originalPSGrassSampler = nullptr;
+
+	void ModifySky();
+	void RestoreSamplers();
+	void ModifyGrass();
+	void RestoreGrassSampler();
+	struct Hooks
+	{
+		struct BSSkyShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSSkyShader_RestoreGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSGrassShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSGrassShader_RestoreGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		static void Install()
+		{
+			stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
+			stl::write_vfunc<0x7, BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
+			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
+			stl::write_vfunc<0x7, BSGrassShader_RestoreGeometry>(RE::VTABLE_BSGrassShader[0]);
+		}
+	};
+};

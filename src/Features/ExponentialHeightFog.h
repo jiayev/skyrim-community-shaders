@@ -36,6 +36,7 @@ public:
 	 * light scattering, and front-to-back integration.
 	 */
 	virtual void Prepass() override;
+	void RenderVolumetrics(ID3D11ShaderResourceView* depthSrv);
 
 	virtual void RestoreDefaultSettings() override;
 	virtual void LoadSettings(json& o_json) override;
@@ -160,4 +161,5 @@ private:
 	bool hasLightScatteringFarHistory = false;
 	bool hasConservativeDepthFarHistory = false;
 	uint32_t lastPrepassFrame = UINT32_MAX;
+	bool lastDepthWasPathTracing = false;
 };

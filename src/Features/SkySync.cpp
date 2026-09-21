@@ -7,6 +7,8 @@
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
 
+#include "PhysicalSky.h"
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SkySync::Settings,
 	Enabled,
@@ -295,10 +297,13 @@ bool SkySync::Update(const RE::Sky* sky)
 			currentCell = nullptr;  // keep the cache in sync so a cell-less frame doesn't reset every frame
 		if (resetFaderForCellChange)
 			shadowFader.Reset();
+		lastGameHour = -1.0f;
 	}
 
+	auto& physicalSky = globals::features::physicalSky;
+	bool physicalSkyInteriorOverride = physicalSky.loaded && physicalSky.settings.enabled && physicalSky.settings.forceEnableAllInteriorCells;
 	// Exterior worldspaces always run; interior cells require the sunlight-shadows flag.
-	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows))) {
+	if (cell && cell->IsInteriorCell() && !cell->cellFlags.all(static_cast<RE::TESObjectCELL::Flag>(CellFlagExt::kSunlightShadows)) && !physicalSkyInteriorOverride) {
 		currentDim = 1.0f;
 		return false;
 	}
@@ -356,6 +361,7 @@ bool SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Masser, directions, intensities);
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 
+	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
 	float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;

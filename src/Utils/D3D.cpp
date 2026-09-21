@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Features/TerrainBlending.h"
+#include "Raytracing.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
@@ -16,7 +17,7 @@ namespace Util
 	ID3D11ShaderResourceView* GetCurrentSceneDepthSRV(bool prefer16bit)
 	{
 		auto& tb = globals::features::terrainBlending;
-		if (tb.loaded && tb.settings.Enabled) {
+		if (!globals::features::raytracing.HasPathTracingDepth() && tb.loaded && tb.settings.Enabled) {
 			auto* srv = prefer16bit ? (tb.blendedDepthTexture16 ? tb.blendedDepthTexture16->srv.get() : nullptr) : (tb.blendedDepthTexture ? tb.blendedDepthTexture->srv.get() : nullptr);
 			if (srv)
 				return srv;

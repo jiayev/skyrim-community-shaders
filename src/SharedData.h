@@ -26,7 +26,7 @@ struct alignas(16) SharedDataCB
 	float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -NI_INFINITY when no water body found
 	uint PostWaterComposite;
 	uint ResetHistory;
-	float pad0;
+	uint DeferredSkyShadow;
 	float4 AmbientSHR;
 	float4 AmbientSHG;
 	float4 AmbientSHB;

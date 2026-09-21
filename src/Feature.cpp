@@ -22,6 +22,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
@@ -49,10 +50,10 @@
 #include "WeatherManager.h"
 #include "WeatherVariableRegistry.h"
 
+#include "Features/PathTracing.h"
+#include "Raytracing.h"
 #include "State.h"
 #include "TruePBR.h"
-#include "Raytracing.h"
-#include "Features/PathTracing.h"
 
 void Feature::Load(json& o_json)
 {
@@ -262,6 +263,7 @@ const std::vector<Feature*>& Feature::GetFeatureList()
 		&globals::features::effects11,
 		&globals::features::unifiedWater,
 		&globals::features::horizonFix,
+		&globals::features::physicalSky,
 		&globals::features::exponentialHeightFog,
 		&globals::features::hdrDisplay,
 		&globals::features::skin,

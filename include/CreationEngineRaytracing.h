@@ -689,6 +689,77 @@ struct CreationEngineRaytracing
 	};
 	static_assert(sizeof(SkinData) % 16 == 0);
 
+	struct PhysSkyData
+	{
+		// DYNAMIC
+		float2 texDim;
+		float2 rcpTexDim;  //
+		float2 frameDim;
+		float2 rcpFrameDim;  //
+
+		float zCameraPlanet;
+		float3 sunDir;  //
+		float3 sunlightColor;
+		float trMix;  //
+		float3 masserDir;
+		float apLumMix;  //
+		float3 masserColor;
+		float apTrMix;  //
+		float3 secundaDir;
+		float sunDiskCos;  //
+		float3 secundaColor;
+
+		// GENERAL
+		uint enabled;  //
+		float pad;
+		float vanillaMix;
+
+		// WORLD
+		float zBottom;
+		float rPlanet;  //
+		float rAtmosphere;
+		float3 groundAlbedo;  //
+
+		// ATMOSPHERE
+		float2 cloudShadowRemapRange;
+
+		float aerosolFalloff;
+		float aerosolPhaseG;  //
+		float3 aerosolScatter;
+		uint halfResApShadow;  //
+		float3 aerosolAbsorption;
+
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
+
+		float ozoneAltitude;  //
+		float ozoneThickness;
+		float3 ozoneAbsorption;  //
+
+		// CLOUDS (VANILLA)
+		uint enableVanillaClouds;
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;  //
+		float silverLiningSpread;
+
+		// VOLUMETRIC CLOUDS
+		uint enableVolumetricClouds;
+		float shadowVolumeRange;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
+		float3 volCloudScatter;  //
+		uint volCloudUseSun;
+		float3 volCloudAbsorption;  //
+		float volCloudLowBottom;
+		float volCloudLowThickness;
+
+		// SETTINGS
+		uint lightSkyStatics;
+		float skyStaticsBrightness;  //
+	};
+	static_assert(sizeof(PhysSkyData) == 320);
+
 	struct FeatureData
 	{
 		CPMSettings ExtendedMaterial;
@@ -700,6 +771,7 @@ struct CreationEngineRaytracing
 		ExponentialHeightFogSettings ExponentialHeightFog;
 		LODBlendingSettings LODBlending;
 		SkinData Skin;
+		PhysSkyData PhysicalSky;
 	};
 	static_assert(sizeof(FeatureData) % 16 == 0);
 
@@ -717,6 +789,7 @@ struct CreationEngineRaytracing
 	using SetResolutionFn = void (*)(uint32_t, uint32_t);
 	using UpdateFeatureDataFn = void (*)(FeatureData*, uint32_t);
 	using SetSkyHemisphereFn = void (*)(void*);
+	using SetPhysicalSkyResourcesFn = bool (*)(void*, void*);
 	using SetWaterFlowMapFn = void (*)(void*);
 	using GetPassTimingsFn = void (*)(eastl::vector<PassTiming>&);
 	using UpdateSettingsFn = void (*)(Settings);
@@ -739,6 +812,7 @@ struct CreationEngineRaytracing
 	SetResolutionFn SetResolution = nullptr;
 	UpdateFeatureDataFn UpdateFeatureData = nullptr;
 	SetSkyHemisphereFn SetSkyHemisphere = nullptr;
+	SetPhysicalSkyResourcesFn SetPhysicalSkyResources = nullptr;
 	SetWaterFlowMapFn SetWaterFlowMap = nullptr;
 	GetPassTimingsFn GetPassTimings = nullptr;
 	GetSceneGraphCountersFn GetSceneGraphCounters = nullptr;
@@ -773,6 +847,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(SetResolution);
 		LOAD_FN(UpdateFeatureData);
 		LOAD_FN(SetSkyHemisphere);
+		LOAD_FN(SetPhysicalSkyResources);
 		LOAD_FN(SetWaterFlowMap);
 		LOAD_FN(GetPassTimings);
 		LOAD_FN(GetSceneGraphCounters);

@@ -6,6 +6,8 @@
 
 #include "Utils/Moon.h"
 
+struct PhysicalSky;
+
 /** @brief Synchronizes volumetric lighting and shadow direction with actual sun and moon positions. */
 struct SkySync : Feature
 {
@@ -13,6 +15,8 @@ private:
 	static constexpr std::string_view MOD_ID = "153543";
 
 public:
+	friend struct PhysicalSky;
+
 	virtual inline std::string GetName() override { return "Sky Sync"; }
 	virtual std::string GetDisplayName() override { return T("feature.sky_sync.name", "Sky Sync"); }
 	virtual inline std::string GetShortName() override { return "SkySync"; }
@@ -159,6 +163,7 @@ private:
 	float lastGameHour = -1.0f;
 	bool immediateTransitionReady = false;
 
+	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
 	float currentDim = 1.0f;
 	std::optional<std::array<RE::NiColor, 3>> workingLightColors = {};

@@ -318,6 +318,9 @@ struct PS_OUTPUT
 #ifdef PSHADER
 SamplerState SampBaseSampler : register(s0);
 SamplerState SampShadowMaskSampler : register(s1);
+#	if defined(PHYSICAL_SKY)
+SamplerState SampPhysicalSkyWrapSampler : register(s2);
+#	endif
 
 Texture2D<float4> TexBaseSampler : register(t0);
 Texture2D<float4> TexShadowMaskSampler : register(t1);
@@ -366,6 +369,10 @@ cbuffer AlphaTestRefCB : register(b11)
 
 #	if defined(EXP_HEIGHT_FOG)
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
 #	endif
 
 #	define LinearSampler SampBaseSampler
@@ -489,6 +496,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(EXP_HEIGHT_FOG)
 	if (SharedData::exponentialHeightFogSettings.enabled) {
 		dirLightColor *= ExponentialHeightFog::GetSunlightFogAttenuation(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
+	}
+#			endif
+
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		dirLightColorMultiplier *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColorMultiplier *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampPhysicalSkyWrapSampler);
 	}
 #			endif
 
@@ -718,6 +732,13 @@ PS_OUTPUT main(PS_INPUT input)
 
 	float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		dirLightColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampPhysicalSkyWrapSampler);
+	}
+#			endif
+
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
 		dirLightColor *= ShadowSampling::GetWorldShadow(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz);
@@ -834,6 +855,17 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.xyz = FogNearColor.w * diffuseColor;
 
 	psout.Diffuse.w = 1;
+
+#			if !defined(DEFERRED) && defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspectiveReflection(psout.Diffuse.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			psout.Diffuse.xyz = PhysSky::CompositeAerialPerspective(psout.Diffuse.xyz, physSkyViewDir, input.HPosition.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
+	}
+#			endif
 
 	psout.MotionVectors = MotionBlur::GetSSMotionVector(float4(input.WorldPosition, 1), float4(input.PreviousWorldPosition, 1));
 	psout.Normal.xy = GBuffer::EncodeNormal(normalVS);

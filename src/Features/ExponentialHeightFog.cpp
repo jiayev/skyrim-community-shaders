@@ -7,10 +7,12 @@
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "Raytracing.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -100,10 +102,10 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 {
 	Settings data = settings;
 	auto& linearLighting = globals::features::linearLighting;
-	linearLighting.DecodeColor(&data.inscatteringTint.x);
-	linearLighting.DecodeColor(&data.fogInscatteringColor.x);
-	linearLighting.DecodeColor(&data.volumetricFogAlbedo.x);
-	linearLighting.DecodeColor(&data.volumetricFogEmissive.x);
+	linearLighting.SRGBToWorking(&data.inscatteringTint.x);
+	linearLighting.SRGBToWorking(&data.fogInscatteringColor.x);
+	linearLighting.SRGBToWorking(&data.volumetricFogAlbedo.x);
+	linearLighting.SRGBToWorking(&data.volumetricFogEmissive.x);
 
 	if (globals::features::effects11.loaded) {
 		auto& enb = globals::features::effects11;
@@ -513,6 +515,9 @@ ID3D11ComputeShader* ExponentialHeightFog::GetLightScatteringCS()
 		if (globals::features::cloudShadows.loaded) {
 			defines.emplace_back("CLOUD_SHADOWS", "");
 		}
+		if (globals::features::physicalSky.loaded) {
+			defines.emplace_back("PHYSICAL_SKY", "");
+		}
 		lightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
 	return lightScatteringCS;
@@ -531,6 +536,9 @@ ID3D11ComputeShader* ExponentialHeightFog::GetFarLightScatteringCS()
 		}
 		if (globals::features::cloudShadows.loaded) {
 			defines.emplace_back("CLOUD_SHADOWS", "");
+		}
+		if (globals::features::physicalSky.loaded) {
+			defines.emplace_back("PHYSICAL_SKY", "");
 		}
 		farLightScatteringCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ExponentialHeightFog\\VolumetricFogLightScatteringCS.hlsl", defines, "cs_5_0"));
 	}
@@ -567,6 +575,12 @@ ID3D11ComputeShader* ExponentialHeightFog::GetFarIntegrationCS()
 
 void ExponentialHeightFog::Prepass()
 {
+	if (!globals::features::raytracing.IsPathTracing())
+		RenderVolumetrics(Util::GetCurrentSceneDepthSRV(true));
+}
+
+void ExponentialHeightFog::RenderVolumetrics(ID3D11ShaderResourceView* depthSrv)
+{
 	if (!settings.enabled || !settings.volumetricFogEnabled || settings.volumetricFogExtinctionScale <= 0.0f) {
 		ReleaseVolumetricResources();
 		return;
@@ -591,24 +605,27 @@ void ExponentialHeightFog::Prepass()
 		lightLimitFix.lights &&
 		lightLimitFix.lightIndexList &&
 		lightLimitFix.lightGrid;
-	auto* depthSrv = Util::GetCurrentSceneDepthSRV(true);
 	auto& ibl = globals::features::ibl;
+	auto& physicalSky = globals::features::physicalSky;
 	auto& skylighting = globals::features::skylighting;
 	const bool hasIBL = ibl.loaded &&
 	                    ibl.settings.EnableIBL != 0 &&
 	                    !ibl.IsDisabledForCurrentScene() &&
 	                    ibl.envIBLTexture &&
 	                    ibl.skyIBLTexture;
+	const bool hasPhysicalSky = physicalSky.loaded && physicalSky.texTrLut;
 	const bool hasSkylighting = skylighting.loaded && skylighting.texProbeArray;
 
+	const bool pathTracing = globals::features::raytracing.IsPathTracing();
 	const bool temporalReprojection = Util::GetTemporal();
+	const bool depthHistoryValid = !globals::state->ShouldResetHistory() && pathTracing == lastDepthWasPathTracing;
 	const bool temporalHistoryValid =
-		temporalReprojection &&
+		temporalReprojection && depthHistoryValid &&
 		hasLightScatteringHistory &&
 		lastPrepassFrame != UINT32_MAX &&
 		globals::state->frameCount == lastPrepassFrame + 1u;
 	const bool temporalHistoryValidFar =
-		temporalReprojection &&
+		temporalReprojection && depthHistoryValid &&
 		hasLightScatteringFarHistory &&
 		lastPrepassFrame != UINT32_MAX &&
 		globals::state->frameCount == lastPrepassFrame + 1u;
@@ -704,6 +721,11 @@ void ExponentialHeightFog::Prepass()
 	volumetricFogCB->Update(cb);
 
 	auto context = globals::d3d::context;
+	ID3D11ShaderResourceView* nullIntegrated = nullptr;
+	context->PSSetShaderResources(19, 1, &nullIntegrated);
+	context->PSSetShaderResources(22, 1, &nullIntegrated);
+	context->CSSetShaderResources(19, 1, &nullIntegrated);
+	context->CSSetShaderResources(22, 1, &nullIntegrated);
 	ID3D11Buffer* cbuffers[1]{ volumetricFogCB->CB() };
 	context->CSSetConstantBuffers(0, 1, cbuffers);
 
@@ -723,7 +745,16 @@ void ExponentialHeightFog::Prepass()
 		hasIBL ? ibl.skyIBLTexture->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(50, 1, &skylightingSrv);
+	ID3D11ShaderResourceView* physicalSkySrvs[4]{
+		hasPhysicalSky ? physicalSky.texTrLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texSvLut ? physicalSky.texSvLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApLut ? physicalSky.texApLut->srv.get() : nullptr,
+		physicalSky.loaded && physicalSky.texApShadow ? physicalSky.texApShadow->srv.get() : nullptr
+	};
+	ID3D11ShaderResourceView* physicalSkyShadowVolumeSrv = physicalSky.loaded && physicalSky.texShadowVolume ? physicalSky.texShadowVolume->srv.get() : nullptr;
+	context->CSSetShaderResources(61, 4, physicalSkySrvs);
 	context->CSSetShaderResources(76, 2, iblSrvs);
+	context->CSSetShaderResources(112, 1, &physicalSkyShadowVolumeSrv);
 
 	struct VolumetricPassDesc
 	{
@@ -849,8 +880,10 @@ void ExponentialHeightFog::Prepass()
 	context->CSSetShaderResources(17, 1, nullDepthSrv);
 	context->CSSetShaderResources(35, 3, nullSrvs);
 	context->CSSetShaderResources(50, 1, nullDepthSrv);
+	context->CSSetShaderResources(61, 4, nullSrvs);
 	context->CSSetShaderResources(76, 2, nullSrvs);
 	context->CSSetShaderResources(98, 1, nullSrvs);
+	context->CSSetShaderResources(112, 1, nullSrvs);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 	context->CSSetSamplers(0, 2, nullSamplers);
 	context->CSSetConstantBuffers(0, 1, nullCb);
@@ -886,6 +919,7 @@ void ExponentialHeightFog::Prepass()
 	}
 
 	lastPrepassFrame = globals::state->frameCount;
+	lastDepthWasPathTracing = pathTracing;
 	BindIntegratedLightScattering();
 }
 

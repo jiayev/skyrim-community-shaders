@@ -145,6 +145,10 @@ const static float DepthOffsets[16] = {
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	define LinearSampler SampDiffuse
 
 #	include "Common/ShadowSampling.hlsli"
@@ -162,7 +166,7 @@ PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
 
-#	if defined(EXP_HEIGHT_FOG)
+#	if defined(EXP_HEIGHT_FOG) || defined(PHYSICAL_SKY)
 	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
 #	endif
 
@@ -215,6 +219,12 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDiffuse);
+	diffuseColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampDiffuse);
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = -normalize(cross(ddx, ddy));
@@ -254,6 +264,12 @@ PS_OUTPUT main(PS_INPUT input)
 	}
 #			endif
 
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled)
+		diffuseColor *= PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampDiffuse);
+	diffuseColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampDiffuse);
+#			endif
+
 	float3 ddx = ddx_coarse(input.WorldPosition.xyz);
 	float3 ddy = ddy_coarse(input.WorldPosition.xyz);
 	float3 normal = normalize(cross(ddx, ddy));
@@ -267,6 +283,18 @@ PS_OUTPUT main(PS_INPUT input)
 	diffuseColor += directionalAmbientColor;
 
 	float3 color = diffuseColor * baseColor.xyz;
+#			if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		float3 physSkyViewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
+		float2 physSkyScreenUV = FrameBuffer::ViewToUV(physSkyViewPosition, true);
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			color = PhysSky::CompositeAerialPerspectiveReflection(color, physSkyViewDir, length(input.WorldPosition.xyz), SampDiffuse);
+		else
+			color = PhysSky::CompositeAerialPerspective(color, physSkyViewDir, input.Position.xy, physSkyScreenUV, length(input.WorldPosition.xyz), SampDiffuse);
+	}
+#			endif
+
 #			if defined(EXP_HEIGHT_FOG)
 	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
 		ApplyReflectionExponentialHeightFog(color, input.WorldPosition.xyz, input.Position);

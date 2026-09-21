@@ -41,8 +41,7 @@ public:
 			"Raytracing integrates hardware-accelerated ray tracing via Creation Engine Raytracing (CERT).",
 			std::vector<std::string>{
 				"Hardware ray tracing pipeline integration",
-				"Support for Global Illumination and Path Tracing modes"
-			});
+				"Support for Global Illumination and Path Tracing modes" });
 	}
 
 	// Settings & UI
@@ -71,6 +70,7 @@ public:
 	CreationEngineRaytracing::Mode Mode() const;
 	bool IsPathTracing() const;
 	bool IsPathTracingCull() const;
+	bool HasPathTracingDepth() const;
 	void UpdateJitter(float2 a_jitter);
 
 	void GetRayReconstructionInputs(ID3D11Resource*& diffuseAlbedo, ID3D11Resource*& specularAlbedo,
@@ -150,6 +150,7 @@ public:
 		winrt::com_ptr<ID3D11ShaderResourceView> srv = nullptr;
 	};
 
+	uint32_t pathTracingDepthFrame = UINT32_MAX;
 	SharedTextureWrapper sharedDepthTextures[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT]{};
 	SharedTextureWrapper sharedMotionVectorTextures[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT]{};
 	SharedTextureWrapper sharedMainTextures[CreationEngineRaytracing::MAX_FRAMES_IN_FLIGHT]{};
@@ -171,7 +172,7 @@ public:
 	winrt::com_ptr<ID3D11RasterizerState> copyRasterizerState = nullptr;
 	winrt::com_ptr<ID3D11DepthStencilState> depthStencilState = nullptr;
 
-	void UpdateFeatureData();
+	bool UpdateFeatureData();
 
 	std::unique_ptr<CreationEngineRaytracing::FeatureData> featureData = nullptr;
 
@@ -182,12 +183,11 @@ public:
 			static void thunk(bool a1)
 			{
 				auto& rt = globals::features::raytracing;
+				rt.pathTracingDepthFrame = UINT32_MAX;
 				if (rt.Available() && rt.Mode() != CreationEngineRaytracing::Mode::None) {
-					rt.UpdateFeatureData();
-					rt.SkyCubeToHemi();
 					rt.creationEngineRaytracing->UpdateCamera();
 
-					// Clear render targets 
+					// Clear render targets
 					if (rt.IsPathTracing()) {
 						if (rt.IsPathTracingCull()) {
 							auto renderer = globals::game::renderer;

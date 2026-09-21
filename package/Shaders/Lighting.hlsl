@@ -894,6 +894,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Skin/Skin.hlsli"
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+#		include "PhysicalSky/Common.hlsli"
+#	endif
+
 #	define LinearSampler SampColorSampler
 
 #	include "Common/ShadowSampling.hlsli"
@@ -904,6 +908,10 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	if defined(EXP_HEIGHT_FOG)
 #		include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	endif
+
+#	if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
+#		include "Common/ViewMedium.hlsli"
 #	endif
 
 #	include "Common/LightingEval.hlsli"
@@ -2142,6 +2150,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	}
 #	endif
 
+#	if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled) {
+		dirLightColor *= PhysSky::SampleTr(normalize(DirLightDirection.xyz), SampShadowMaskSampler);
+		dirLightColor *= PhysSky::GetDirlightTransmittance(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz, SampColorSampler);
+	}
+#	endif
+
 #	if defined(WATER_EFFECTS)
 	dirLightColor *= WaterEffects::ComputeCaustics(waterData, input.WorldPosition.xyz);
 #	endif
@@ -2731,46 +2746,65 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 	color.xyz = ColorManagement::LinearToScene(color.xyz);
-	float3 fogColor = input.FogParam.xyz;
-	float fogFactor = input.FogParam.w;
+#		if defined(PHYSICAL_SKY)
+	if (SharedData::physSkyData.enabled && inWorld) {
+		const float3 physSkyViewDir = normalize(input.WorldPosition.xyz);
+		if (inReflection)
+			color.xyz = PhysSky::CompositeAerialPerspectiveReflection(color.xyz, physSkyViewDir, length(input.WorldPosition.xyz), SampColorSampler);
+		else
+			color.xyz = PhysSky::CompositeAerialPerspective(color.xyz, physSkyViewDir, input.Position.xy, screenUV, length(input.WorldPosition.xyz), SampColorSampler);
+	}
+#		endif
+
+#		if defined(PHYSICAL_SKY) || defined(EXP_HEIGHT_FOG)
+	if (SharedData::PostWaterComposite && inWorld && !inReflection) {
+		const float4 medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampColorSampler);
+		const bool additive = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0;
+		color.xyz = ColorManagement::SceneColor::ScaleAndAddLinear(color.xyz, medium.a, additive ? 0.0.xxx : medium.rgb);
+	} else
+#		endif
+	{
+		float3 fogColor = input.FogParam.xyz;
+		float fogFactor = input.FogParam.w;
 #		if defined(IBL)
-	if (SharedData::iblSettings.EnableIBL) {
-		fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
-	}
-#		endif
-#		if defined(EXP_HEIGHT_FOG)
-	float3 vanillaFogColor = fogColor;
-	float vanillaFogFactor = fogFactor;
-	if (SharedData::exponentialHeightFogSettings.enabled) {
-		float4 exponentialHeightFog;
-		if (inReflection) {
-			exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
-		} else {
-			exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
+		if (SharedData::iblSettings.EnableIBL) {
+			fogColor = ImageBasedLighting::GetFogIBLColor(fogColor);
 		}
-		fogColor = exponentialHeightFog.xyz;
-		fogFactor = exponentialHeightFog.w;
-	}
 #		endif
-	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0) {
 #		if defined(EXP_HEIGHT_FOG)
-		vanillaFogColor = 0.0;
-#		endif
-		fogColor = 0.0;
-	}
-	if ((FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) || inReflection) {
-#		if defined(EXP_HEIGHT_FOG)
+		float3 vanillaFogColor = fogColor;
+		float vanillaFogFactor = fogFactor;
 		if (SharedData::exponentialHeightFogSettings.enabled) {
-			if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
-				color.xyz = lerp(color.xyz, vanillaFogColor, vanillaFogFactor);
+			float4 exponentialHeightFog;
+			if (inReflection) {
+				exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
+			} else {
+				exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(input.WorldPosition.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
 			}
-			color.xyz = lerp(color.xyz, fogColor, fogFactor);
-		} else {
-			color.xyz = lerp(color.xyz, fogColor, fogFactor);
+			fogColor = exponentialHeightFog.xyz;
+			fogFactor = exponentialHeightFog.w;
 		}
-#		else
-		color.xyz = lerp(color.xyz, fogColor, fogFactor);
 #		endif
+		if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::AdditiveLighting) != 0) {
+#		if defined(EXP_HEIGHT_FOG)
+			vanillaFogColor = 0.0;
+#		endif
+			fogColor = 0.0;
+		}
+		if ((FrameBuffer::FrameParams.y && FrameBuffer::FrameParams.z) || inReflection) {
+#		if defined(EXP_HEIGHT_FOG)
+			if (SharedData::exponentialHeightFogSettings.enabled) {
+				if (!ExponentialHeightFog::ShouldDisableVanillaFog()) {
+					color.xyz = lerp(color.xyz, vanillaFogColor, vanillaFogFactor);
+				}
+				color.xyz = lerp(color.xyz, fogColor, fogFactor);
+			} else {
+				color.xyz = lerp(color.xyz, fogColor, fogFactor);
+			}
+#		else
+			color.xyz = lerp(color.xyz, fogColor, fogFactor);
+#		endif
+		}
 	}
 #	endif
 

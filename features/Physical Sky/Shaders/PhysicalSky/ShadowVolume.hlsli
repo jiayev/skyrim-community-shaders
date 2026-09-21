@@ -1,0 +1,81 @@
+#ifndef PHYSICAL_SKY_SHADOW_VOLUME_HLSLI
+#define PHYSICAL_SKY_SHADOW_VOLUME_HLSLI
+
+namespace CloudShadowVolume
+{
+	float2 GridCenter(float2 camera, float range, uint2 dimensions)
+	{
+		const float2 cellSize = range / float2(dimensions);
+		return floor(camera / cellSize) * cellSize;
+	}
+
+	float EdgeWeight(float3 uvw, uint2 dimensions)
+	{
+		const float2 edge = min(uvw.xy, 1.0 - uvw.xy) * float2(dimensions);
+		return smoothstep(0.0, 2.0, min(edge.x, edge.y));
+	}
+
+	// The volume stores transmittance toward the light. Outside
+	// receivers must sample the ray's entry into the box, never its exit.
+	float3 GetSampleUvw(float3 pos, float3 lightDir, float3 boundsMin, float3 boundsMax)
+	{
+		if (all(pos > boundsMin) && all(pos < boundsMax))
+			return (pos - boundsMin) / (boundsMax - boundsMin);
+
+		float tNear = 0.0;
+		float tFar = 3.402823466e+38;
+		[unroll] for (uint axis = 0; axis < 3; ++axis)
+		{
+			if (abs(lightDir[axis]) < 1e-8) {
+				if (pos[axis] < boundsMin[axis] || pos[axis] > boundsMax[axis])
+					return -1.0;
+			} else {
+				const float t0 = (boundsMin[axis] - pos[axis]) / lightDir[axis];
+				const float t1 = (boundsMax[axis] - pos[axis]) / lightDir[axis];
+				tNear = max(tNear, min(t0, t1));
+				tFar = min(tFar, max(t0, t1));
+			}
+		}
+		if (tFar <= tNear)
+			return -1.0;
+		return saturate((pos + tNear * lightDir - boundsMin) / (boundsMax - boundsMin));
+	}
+
+	// Only use this overload with a known linear-clamp sampler. Compute passes
+	// own their samplers, unlike the material/depth/shadow-mask pixel shaders.
+	float SampleTransmittance(Texture3D<float> volume, SamplerState linearClamp, float3 uvw)
+	{
+		if (any(uvw < 0.0) || any(uvw > 1.0))
+			return 1.0;
+		uint3 dims;
+		volume.GetDimensions(dims.x, dims.y, dims.z);
+		return lerp(1.0, volume.SampleLevel(linearClamp, uvw, 0), EdgeWeight(uvw, dims.xy));
+	}
+
+	float SampleTransmittance(Texture3D<float> volume, float3 uvw)
+	{
+		if (any(uvw < 0.0) || any(uvw > 1.0))
+			return 1.0;
+		uint3 dims;
+		volume.GetDimensions(dims.x, dims.y, dims.z);
+		if (any(dims == 0))
+			return 1.0;
+
+		// Callers include material, depth and shadow-mask paths with different
+		// sampler states. Explicit trilinear filtering keeps all of them clamped
+		// and continuous, including receivers projected exactly onto a box face.
+		const float3 coord = uvw * dims - 0.5;
+		const int3 base = int3(floor(coord));
+		const int3 lo = clamp(base, 0, int3(dims) - 1);
+		const int3 hi = clamp(base + 1, 0, int3(dims) - 1);
+		const float3 w = frac(coord);
+		const float z0 = lerp(
+			lerp(volume.Load(int4(lo.x, lo.y, lo.z, 0)), volume.Load(int4(hi.x, lo.y, lo.z, 0)), w.x),
+			lerp(volume.Load(int4(lo.x, hi.y, lo.z, 0)), volume.Load(int4(hi.x, hi.y, lo.z, 0)), w.x), w.y);
+		const float z1 = lerp(
+			lerp(volume.Load(int4(lo.x, lo.y, hi.z, 0)), volume.Load(int4(hi.x, lo.y, hi.z, 0)), w.x),
+			lerp(volume.Load(int4(lo.x, hi.y, hi.z, 0)), volume.Load(int4(hi.x, hi.y, hi.z, 0)), w.x), w.y);
+		return lerp(1.0, lerp(z0, z1, w.z), EdgeWeight(uvw, dims.xy));
+	}
+}
+#endif

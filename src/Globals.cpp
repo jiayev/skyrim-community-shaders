@@ -22,6 +22,7 @@
 #include "Features/LinearLighting.h"
 #include "Features/PathTracing.h"
 #include "Features/PerformanceOverlay.h"
+#include "Features/PhysicalSky.h"
 #include "Features/PostProcessing.h"
 #include "Features/RemoteControl.h"
 #include "Features/RenderDoc.h"
@@ -82,6 +83,7 @@ namespace globals
 		Skylighting skylighting{};
 		TerrainVariation terrainVariation{};
 		SkySync skySync{};
+		PhysicalSky physicalSky{};
 		SubsurfaceScattering subsurfaceScattering{};
 		TerrainBlending terrainBlending{};
 		TerrainHelper terrainHelper{};

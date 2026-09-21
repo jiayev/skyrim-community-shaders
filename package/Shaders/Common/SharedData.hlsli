@@ -30,7 +30,7 @@ namespace SharedData
 		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
 		uint PostWaterComposite;
 		uint ResetHistory;
-		float pad0;
+		uint DeferredSkyShadow;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -351,6 +351,76 @@ namespace SharedData
 		uint3 pad0;
 	};
 
+	struct PhysSkyData
+	{
+		// DYNAMIC
+		float2 texDim;
+		float2 rcpTexDim;  //
+		float2 frameDim;
+		float2 rcpFrameDim;  //
+
+		float zCameraPlanet;
+		float3 sunDir;  //
+		float3 sunlightColor;
+		float trMix;  //
+		float3 masserDir;
+		float apLumMix;  //
+		float3 masserColor;
+		float apTrMix;  //
+		float3 secundaDir;
+		float sunDiskCos;  //
+		float3 secundaColor;
+
+		// GENERAL
+		uint enabled;  //
+		float pad;
+		float vanillaMix;
+
+		// WORLD
+		float zBottom;
+		float rPlanet;  //
+		float rAtmosphere;
+		float3 groundAlbedo;  //
+
+		// ATMOSPHERE
+		float2 cloudShadowRemapRange;
+
+		float aerosolFalloff;
+		float aerosolPhaseG;  //
+		float3 aerosolScatter;
+		uint halfResApShadow;  //
+		float3 aerosolAbsorption;
+
+		float rayleighFalloff;
+		float3 rayleighScatter;  //
+
+		float ozoneAltitude;  //
+		float ozoneThickness;
+		float3 ozoneAbsorption;  //
+
+		// CLOUDS (VANILLA)
+		uint enableVanillaClouds;
+		float cloudRelightMix;
+		float cloudOriginalMix;
+		float silverLiningMix;  //
+		float silverLiningSpread;
+
+		// VOLUMETRIC CLOUDS
+		uint enableVolumetricClouds;
+		float shadowVolumeRange;
+		float lowestCloudAltitude;  //
+		float highestCloudAltitude;
+		float3 volCloudScatter;  //
+		uint volCloudUseSun;
+		float3 volCloudAbsorption;  //
+		float volCloudLowBottom;
+		float volCloudLowThickness;
+
+		// SETTINGS
+		uint lightSkyStatics;
+		float skyStaticsBrightness;  //
+	};
+
 	cbuffer FeatureData : register(b6)
 	{
 		GrassLightingSettings grassLightingSettings;
@@ -373,6 +443,7 @@ namespace SharedData
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
 		PostProcessingSettings postProcessingSettings;
+		PhysSkyData physSkyData;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

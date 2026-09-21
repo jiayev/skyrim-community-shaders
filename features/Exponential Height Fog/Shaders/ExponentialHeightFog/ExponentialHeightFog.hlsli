@@ -2,6 +2,7 @@
 #define __EXPONENTIAL_HEIGHT_FOG_HLSLI__
 
 #include "Common/Color.hlsli"
+#include "Common/ColorManagement.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "ExponentialHeightFog/VolumetricFogCommon.hlsli"
@@ -12,6 +13,10 @@
 
 #if defined(IBL)
 #	include "IBL/IBL.hlsli"
+#endif
+
+#if defined(PHYSICAL_SKY)
+#	include "PhysicalSky/Common.hlsli"
 #endif
 
 Texture3D<float4> ExponentialHeightFogIntegratedLightScattering : register(t19);
@@ -184,6 +189,17 @@ namespace ExponentialHeightFog
 		return float4(combinedOpacity > 1e-4f ? combinedPremultiplied / combinedOpacity : float3(0.0f, 0.0f, 0.0f), combinedOpacity);
 	}
 
+	float HeightDensityIntegral(float startHeight, float endHeight, float heightFalloff)
+	{
+		const float lower = min(startHeight, endHeight);
+		const float upper = max(startHeight, endHeight);
+		const float belowFraction = upper <= 0.0 ? 1.0 : saturate(-lower / max(upper - lower, 1e-6));
+		const float falloff = heightFalloff * (max(upper, 0.0) - max(lower, 0.0));
+		const float integral = falloff > 0.01 ? (1.0 - exp2(-falloff)) / max(falloff, 1e-6) :
+		                                        0.69314718056 - 0.24022650695 * falloff;
+		return lerp(exp2(-heightFalloff * max(lower, 0.0)) * integral, 0.69314718056, belowFraction);
+	}
+
 	float4 GetExponentialHeightFogInternal(float3 positionWS, float3 cameraWS, float3 fogColor, bool useScreenPosition, float4 screenPosition, bool applyVolumetricFog)
 	{
 		float fogHeightFalloff = SharedData::exponentialHeightFogSettings.fogHeightFalloff * 0.001f;
@@ -205,10 +221,8 @@ namespace ExponentialHeightFog
 		float viewToPosLength = length(viewToPos);
 		float viewToPosLengthInv = rcp(max(viewToPosLength, 1e-4f));
 
-		float rayOriginTerms = fogDensity * exp2(-fogHeightFalloff * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight, 0));
-		float rayOriginTerms2 = fogDensity2 * exp2(-fogHeightFalloff2 * max(cameraWS.z - SharedData::exponentialHeightFogSettings.fogHeight2, 0));
+		float rayStartHeight = cameraWS.z;
 		float rayLength = viewToPosLength;
-		float rayDirectionZ = viewToPos.z;
 
 		float excludeDistance = SharedData::exponentialHeightFogSettings.startDistance;
 		if (applyVolumetricFog && ShouldApplyVolumetricFog()) {
@@ -223,22 +237,15 @@ namespace ExponentialHeightFog
 			float cameraToExclusionIntersectionZ = excludeIntersectionTime * viewToPos.z;
 			float exclusionIntersectionZ = cameraWS.z + cameraToExclusionIntersectionZ;
 			rayLength = (1.0f - excludeIntersectionTime) * viewToPosLength;
-			rayDirectionZ = viewToPos.z - cameraToExclusionIntersectionZ;
-			float exponent = fogHeightFalloff * max(exclusionIntersectionZ - SharedData::exponentialHeightFogSettings.fogHeight, 0);
-			rayOriginTerms = fogDensity * exp2(-exponent);
-			float exponent2 = fogHeightFalloff2 * max(exclusionIntersectionZ - SharedData::exponentialHeightFogSettings.fogHeight2, 0);
-			rayOriginTerms2 = fogDensity2 * exp2(-exponent2);
+			rayStartHeight = exclusionIntersectionZ;
 		}
 
-		float falloff = fogHeightFalloff * rayDirectionZ;
-		float lineIntegral = (1.0f - exp2(-falloff)) / falloff;
-		float lineIntegralTaylor = 0.69314718056f - 0.24022650695f * falloff;  // log(2) - (0.5 * (log(2)^2)) * falloff
-		float falloff2 = fogHeightFalloff2 * rayDirectionZ;
-		float lineIntegral2 = (1.0f - exp2(-falloff2)) / falloff2;
-		float lineIntegralTaylor2 = 0.69314718056f - 0.24022650695f * falloff2;
+		const float rayEndHeight = cameraWS.z + viewToPos.z;
 		float exponentialHeightLineIntegralCalc =
-			rayOriginTerms * (abs(falloff) > 0.01f ? lineIntegral : lineIntegralTaylor) +
-			rayOriginTerms2 * (abs(falloff2) > 0.01f ? lineIntegral2 : lineIntegralTaylor2);
+			fogDensity * HeightDensityIntegral(rayStartHeight - SharedData::exponentialHeightFogSettings.fogHeight,
+							 rayEndHeight - SharedData::exponentialHeightFogSettings.fogHeight, fogHeightFalloff) +
+			fogDensity2 * HeightDensityIntegral(rayStartHeight - SharedData::exponentialHeightFogSettings.fogHeight2,
+							  rayEndHeight - SharedData::exponentialHeightFogSettings.fogHeight2, fogHeightFalloff2);
 		float exponentialHeightLineIntegral = exponentialHeightLineIntegralCalc * rayLength;
 
 		float expFogFactor = saturate(exp2(-exponentialHeightLineIntegral));
@@ -276,6 +283,12 @@ namespace ExponentialHeightFog
 		// Calculate directional light inscattering using Henyey-Greenstein phase function
 		if (SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier > 0) {
 			float3 dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz);
+#if defined(PHYSICAL_SKY) && defined(COMMON_HLSLI)
+			if (SharedData::physSkyData.enabled) {
+				float3 physSkyTransmittance = PhysSky::SampleTr(normalize(SharedData::DirLightDirection.xyz), SampColorSampler);
+				dirLightColor *= saturate(physSkyTransmittance);
+			}
+#endif
 			float3 lightDirection = normalize(SharedData::DirLightDirection.xyz);
 			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
@@ -284,7 +297,8 @@ namespace ExponentialHeightFog
 		}
 
 		fogColor += directionalInscattering;
-		float4 analyticalFog = float4(fogColor, 1.0f - expFogFactor);
+		const float opacity = 1.0f - expFogFactor;
+		float4 analyticalFog = float4(opacity > 1e-6f ? fogColor / opacity : 0.0f.xxx, opacity);
 		if (!applyVolumetricFog) {
 			return analyticalFog;
 		}

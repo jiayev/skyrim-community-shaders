@@ -11,7 +11,9 @@
 #include "Features/LODBlending.h"
 #include "Features/LinearLighting.h"
 #include "Features/PathTracing.h"
+#include "Features/PhysicalSky.h"
 #include "Features/Skin.h"
+#include "Features/TerrainBlending.h"
 #include "Features/Upscaling/DXVKInterop.h"
 #include "Features/WetnessEffects.h"
 #include "Globals.h"
@@ -123,6 +125,11 @@ bool Raytracing::IsPathTracingCull() const
 	return Mode() == CreationEngineRaytracing::Mode::PathTracing && settings.CreationEngineRaytracingSettings.ExperimentalSettings.PathTracingCull != CreationEngineRaytracing::PTCullMode::Disabled;
 }
 
+bool Raytracing::HasPathTracingDepth() const
+{
+	return IsPathTracing() && pathTracingDepthFrame == globals::state->frameCount;
+}
+
 void Raytracing::UpdateJitter(float2 a_jitter)
 {
 	if (!initialized)
@@ -194,6 +201,10 @@ void Raytracing::Execute()
 		}
 	}
 
+	if (!UpdateFeatureData())
+		return;
+	SkyCubeToHemi();
+
 	uint32_t completedSlot;
 	try {
 		creationEngineRaytracing->Execute();
@@ -224,7 +235,7 @@ void Raytracing::Execute()
 
 	if (IsPathTracing()) {
 		float2 screenSize{ static_cast<float>(globals::game::graphicsState->screenWidth), static_cast<float>(globals::game::graphicsState->screenHeight) };
-		auto dynamicScreenSize = Util::ConvertToDynamic(screenSize);
+		auto dynamicScreenSize = Util::ConvertToDynamic(screenSize, true);
 
 		if (screenCB && screenData) {
 			screenData->Resolution = { static_cast<uint32_t>(screenSize.x), static_cast<uint32_t>(screenSize.y) };
@@ -232,39 +243,8 @@ void Raytracing::Execute()
 			screenCB->Update(screenData.get(), sizeof(ScreenData));
 		}
 
-		// Blend pathtracing and sky (colors and motion vectors)
-		if (ptCompositeCS && screenCB && sharedMainTextures[completedSlot].srv && sharedMotionVectorTextures[completedSlot].srv) {
-			auto& mv = renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
-
-			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);
-
-			ID3D11Buffer* cb = screenCB->CB();
-			context->CSSetConstantBuffers(0, 1, &cb);
-
-			ID3D11ShaderResourceView* srvs[] = {
-				sharedMainTextures[completedSlot].srv.get(),
-				sharedMotionVectorTextures[completedSlot].srv.get()
-			};
-			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-
-			ID3D11UnorderedAccessView* uavs[] = {
-				main.UAV,
-				mv.UAV
-			};
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-
-			auto dispatchCount = Util::GetScreenDispatchCount(true);
-			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
-
-			uavs[0] = nullptr;
-			uavs[1] = nullptr;
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-		} else if (sharedMainTextures[completedSlot].texture.shared && main.texture) {
-			context->CopyResource(main.texture, sharedMainTextures[completedSlot].texture.shared);
-		}
-
 		// Copy Depth buffer
-		if (copyDepthVS && copyDepthPS && sharedDepthTextures[completedSlot].srv) {
+		if (copyDepthVS && copyDepthPS && depthStencilState && copyRasterizerState && copyBlendState && sharedDepthTextures[completedSlot].srv) {
 			auto depthStencils = renderer->GetDepthStencilData().depthStencils;
 
 			auto& mainDepth = depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -290,8 +270,8 @@ void Raytracing::Execute()
 			D3D11_VIEWPORT viewport = {};
 			viewport.TopLeftX = 0.0f;
 			viewport.TopLeftY = 0.0f;
-			viewport.Width = screenSize.x;
-			viewport.Height = screenSize.y;
+			viewport.Width = static_cast<float>(static_cast<uint32_t>(dynamicScreenSize.x));
+			viewport.Height = static_cast<float>(static_cast<uint32_t>(dynamicScreenSize.y));
 			viewport.MinDepth = 0.0f;
 			viewport.MaxDepth = 1.0f;
 			context->RSSetViewports(1, &viewport);
@@ -314,15 +294,19 @@ void Raytracing::Execute()
 			context->PSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 			context->Draw(3, 0);
+			ID3D11ShaderResourceView* nullDepth = nullptr;
+			context->PSSetShaderResources(0, 1, &nullDepth);
+			context->OMSetRenderTargets(0, nullptr, nullptr);
 
 			context->OMSetDepthStencilState(oldDSS, oldRef);
-			context->OMSetRenderTargets(1, &oldRTV, oldDSV);
 			context->RSSetViewports(1, &oldViewport);
 
 			if (oldDSS) {
 				oldDSS->Release();
 				oldDSS = nullptr;
 			}
+			context->OMSetRenderTargets(1, &oldRTV, oldDSV);
+
 			if (oldRTV) {
 				oldRTV->Release();
 				oldRTV = nullptr;
@@ -337,6 +321,71 @@ void Raytracing::Execute()
 
 			context->CopyResource(mainDepthCopy.texture, mainDepth.texture);
 			context->CopyResource(zPrePassCopy.texture, mainDepth.texture);
+
+			auto& terrainBlending = globals::features::terrainBlending;
+			if (terrainBlending.loaded) {
+				if (terrainBlending.depthSRVBackup)
+					mainDepth.depthSRV = terrainBlending.depthSRVBackup;
+				if (terrainBlending.prepassSRVBackup)
+					zPrePassCopy.depthSRV = terrainBlending.prepassSRVBackup;
+			}
+			pathTracingDepthFrame = globals::state->frameCount;
+			context->PSSetShaderResources(17, 1, &zPrePassCopy.depthSRV);
+		}
+
+		if (HasPathTracingDepth()) {
+			ID3D11Buffer* sharedBuffers[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
+			context->CSSetConstantBuffers(5, ARRAYSIZE(sharedBuffers), sharedBuffers);
+			ID3D11Buffer* perFrame = *globals::game::perFrame;
+			context->CSSetConstantBuffers(12, 1, &perFrame);
+			auto* depth = Util::GetCurrentSceneDepthSRV();
+			auto& physicalSky = globals::features::physicalSky;
+			if (physicalSky.loaded)
+				physicalSky.RenderView(depth);
+			auto& fog = globals::features::exponentialHeightFog;
+			if (fog.loaded)
+				fog.RenderVolumetrics(depth);
+		}
+
+		// Blend pathtracing and sky (colors and motion vectors)
+		if (HasPathTracingDepth() && ptCompositeCS && screenCB && sharedMainTextures[completedSlot].srv && sharedMotionVectorTextures[completedSlot].srv) {
+			auto& mv = renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
+
+			ID3D11Buffer* sharedBuffers[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
+			context->CSSetConstantBuffers(5, ARRAYSIZE(sharedBuffers), sharedBuffers);
+			ID3D11Buffer* perFrame = *globals::game::perFrame;
+			context->CSSetConstantBuffers(12, 1, &perFrame);
+			auto& physicalSky = globals::features::physicalSky;
+			physicalSky.BindCompositeResources();
+			context->CSSetShader(ptCompositeCS.get(), nullptr, 0);
+
+			ID3D11Buffer* cb = screenCB->CB();
+			context->CSSetConstantBuffers(0, 1, &cb);
+
+			ID3D11ShaderResourceView* srvs[] = {
+				sharedMainTextures[completedSlot].srv.get(),
+				sharedMotionVectorTextures[completedSlot].srv.get(),
+				sharedDepthTextures[completedSlot].srv.get(),
+				renderTargets[SPECULAR].SRV
+			};
+			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+
+			ID3D11UnorderedAccessView* uavs[] = {
+				main.UAV,
+				mv.UAV
+			};
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+
+			auto dispatchCount = Util::GetScreenDispatchCount(true);
+			context->Dispatch(dispatchCount.x, dispatchCount.y, 1);
+
+			uavs[0] = nullptr;
+			uavs[1] = nullptr;
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+			std::array<ID3D11ShaderResourceView*, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> nullSrvs{};
+			context->CSSetShaderResources(0, static_cast<UINT>(nullSrvs.size()), nullSrvs.data());
+		} else if (sharedMainTextures[completedSlot].texture.shared && main.texture) {
+			context->CopyResource(main.texture, sharedMainTextures[completedSlot].texture.shared);
 		}
 
 		// Clear Specular render target
@@ -366,6 +415,14 @@ void Raytracing::PostPostLoad()
 		forcedDisabled = true;
 		disableReason = DisableReason::MissingPlugin;
 		logger::warn("[Raytracing] 'CreationEngineRaytracing.dll' not found, feature disabled.");
+		return;
+	}
+
+	if (!creationEngineRaytracing->SetPhysicalSkyResources) {
+		settings.CreationEngineRaytracingSettings.Enabled = false;
+		forcedDisabled = true;
+		disableReason = DisableReason::InitFailed;
+		logger::error("[Raytracing] CreationEngineRaytracing.dll does not support the current Physical Sky feature-data layout.");
 		return;
 	}
 
@@ -604,6 +661,7 @@ void Raytracing::SetupWaterFlowMap()
 
 void Raytracing::SetupSharedTextures()
 {
+	pathTracingDepthFrame = UINT32_MAX;
 	auto* renderer = globals::game::renderer;
 	if (!renderer)
 		return;
@@ -698,16 +756,21 @@ void Raytracing::SetupSharedTextures()
 void Raytracing::CompileShaders()
 {
 	std::string skyHemiSize = std::to_string(SKY_HEMI_SIZE);
+	std::vector<std::pair<const char*, const char*>> skyDefines;
+	if (globals::features::physicalSky.loaded)
+		skyDefines.emplace_back("PHYSICAL_SKY", "");
+	auto hemisphereDefines = skyDefines;
+	hemisphereDefines.emplace_back("RESOLUTION", skyHemiSize.c_str());
 	if (auto* rawPtr = static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 			L"Data\\Shaders\\Raytracing\\CubeToHemiCS.hlsl",
-			{ { "RESOLUTION", skyHemiSize.c_str() } },
+			hemisphereDefines,
 			"cs_5_0"))) {
 		cubeToHemiCS.attach(rawPtr);
 	}
 
 	if (auto* rawPtr = static_cast<ID3D11ComputeShader*>(Util::CompileShader(
 			L"Data\\Shaders\\Raytracing\\PTCompositeCS.hlsl",
-			{},
+			skyDefines,
 			"cs_5_0"))) {
 		ptCompositeCS.attach(rawPtr);
 	}
@@ -734,6 +797,8 @@ void Raytracing::SkyCubeToHemi() const
 	auto* context = globals::d3d::context;
 
 	context->CSSetShader(cubeToHemiCS.get(), nullptr, 0);
+	ID3D11Buffer* sharedBuffers[] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
+	context->CSSetConstantBuffers(5, ARRAYSIZE(sharedBuffers), sharedBuffers);
 
 	auto reflections = globals::game::renderer->GetRendererData().cubemapRenderTargets[RE::RENDER_TARGET_CUBEMAP::kREFLECTIONS];
 	auto* reflectionOcc = globals::features::cloudShadows.loaded && globals::features::cloudShadows.texCubemapCloudOccCopy ?
@@ -928,10 +993,10 @@ void Raytracing::DrawOverlay()
 	ImGui::End();
 }
 
-void Raytracing::UpdateFeatureData()
+bool Raytracing::UpdateFeatureData()
 {
 	if (!initialized)
-		return;
+		return false;
 
 	if (!featureData)
 		featureData = std::make_unique<CreationEngineRaytracing::FeatureData>();
@@ -1100,7 +1165,6 @@ void Raytracing::UpdateFeatureData()
 		featureData->ExponentialHeightFog.volumetricSampleJitterMultiplier = ehf.volumetricSampleJitterMultiplier;
 		featureData->ExponentialHeightFog.volumetricUpsampleJitterMultiplier = ehf.volumetricUpsampleJitterMultiplier;
 		featureData->ExponentialHeightFog.volumetricLocalLightScatteringIntensity = ehf.volumetricLocalLightScatteringIntensity;
-		featureData->ExponentialHeightFog.pad0 = ehf.pad0;
 	}
 
 	// LOD Blending
@@ -1127,7 +1191,23 @@ void Raytracing::UpdateFeatureData()
 		featureData->Skin.wetParams = skinData.wetParams;
 	}
 
+	auto& physicalSky = globals::features::physicalSky;
+	static_assert(sizeof(CreationEngineRaytracing::PhysSkyData) == sizeof(PhysicalSky::CbData));
+	static_assert(offsetof(CreationEngineRaytracing::PhysSkyData, enableVolumetricClouds) == offsetof(PhysicalSky::CbData, enableVolumetricClouds));
+	static_assert(offsetof(CreationEngineRaytracing::PhysSkyData, skyStaticsBrightness) == offsetof(PhysicalSky::CbData, skyStaticsBrightness));
+	if (!creationEngineRaytracing->SetPhysicalSkyResources(
+			physicalSky.loaded && physicalSky.texTrLut ? physicalSky.texTrLut->resource.get() : nullptr,
+			physicalSky.loaded && physicalSky.texShadowVolume ? physicalSky.texShadowVolume->resource.get() : nullptr)) {
+		forcedDisabled = true;
+		disableReason = DisableReason::InitFailed;
+		logger::error("[Raytracing] Failed to import Physical Sky resources.");
+		return false;
+	}
+	if (physicalSky.loaded)
+		std::memcpy(&featureData->PhysicalSky, &physicalSky.cbData, sizeof(physicalSky.cbData));
+
 	creationEngineRaytracing->UpdateFeatureData(featureData.get(), sizeof(CreationEngineRaytracing::FeatureData));
+	return true;
 }
 
 RE::BSEventNotifyControl Raytracing::BGSActorCellEventHandler::ProcessEvent(const RE::BGSActorCellEvent* a_event, RE::BSTEventSource<RE::BGSActorCellEvent>*)
