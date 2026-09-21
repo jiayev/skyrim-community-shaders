@@ -1,7 +1,7 @@
 #include "InverseSquareLighting.h"
+#include "CSEditor/EditorWindow.h"
 #include "Features/InverseSquareLighting/Common.h"
 #include "LightLimitFix.h"
-#include "CSEditor/EditorWindow.h"
 #include <numbers>
 
 void InverseSquareLighting::PostPostLoad()
@@ -49,11 +49,16 @@ void InverseSquareLighting::ProcessLight(LightLimitFix::LightData& light, RE::BS
 	const auto& editorRef = EditorWindow::GetSingleton()->lightEditor;
 	editorRef.ApplyOverrides(niLight, runtimeData);
 
+	const bool isInvSq = runtimeData->flags.any(LightLimitFix::LightFlags::InverseSquare);
+	if (bsLight->pointLight && ((isInvSq && editorRef.disableInvSqLights) || (!isInvSq && editorRef.disableRegularLights)))
+		runtimeData->flags.set(LightLimitFix::LightFlags::EditorDisabled);
+	else
+		runtimeData->flags.reset(LightLimitFix::LightFlags::EditorDisabled);
+
 	light.lightFlags = runtimeData->flags;
 	light.color = { runtimeData->diffuse.red, runtimeData->diffuse.green, runtimeData->diffuse.blue };
 
-	const bool isInvSq = light.lightFlags.any(LightLimitFix::LightFlags::InverseSquare);
-	if (bsLight->pointLight && ((isInvSq && editorRef.disableInvSqLights) || (!isInvSq && editorRef.disableRegularLights)))
+	if (light.lightFlags.any(LightLimitFix::LightFlags::EditorDisabled))
 		light.lightFlags.set(LightLimitFix::LightFlags::Disabled);
 
 	if (bsLight->pointLight && isInvSq) {
@@ -100,7 +105,7 @@ float InverseSquareLighting::BSLight_GetLuminance::thunk(RE::BSLight* bsLight, R
 	auto* niLight = bsLight->light.get();
 	const auto runtimeData = ISLCommon::RuntimeLightDataExt::Get(niLight);
 
-	if (refLight == niLight || runtimeData->flags.any(LightLimitFix::LightFlags::Disabled))
+	if (refLight == niLight || runtimeData->flags.any(LightLimitFix::LightFlags::Disabled, LightLimitFix::LightFlags::EditorDisabled))
 		return 0.0f;
 
 	if (!bsLight->pointLight || runtimeData->flags.none(LightLimitFix::LightFlags::InverseSquare))

@@ -1223,8 +1223,9 @@ void Upscaling::CheckResources(UpscaleMethod a_upscalemethod)
 				logger::error("[Upscaling] method change deferred because command completion could not be proven");
 				return;
 			}
-			if (previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kDLSS_RR)
-				Streamline::GetSingleton()->FreeDLSSResources(previousUpscaleMode == UpscaleMethod::kDLSS_RR);
+			if ((previousUpscaleMode == UpscaleMethod::kDLSS || previousUpscaleMode == UpscaleMethod::kDLSS_RR) &&
+				!Streamline::GetSingleton()->FreeDLSSResources(previousUpscaleMode == UpscaleMethod::kDLSS_RR))
+				return;
 			DestroyUpscaledTexture();
 			DestroyHudlessTexture(true);
 		}

@@ -74,6 +74,7 @@ public:
 		Disabled = (1 << 9),
 		InverseSquare = (1 << 10),
 		Linear = (1 << 11),
+		EditorDisabled = (1 << 12),
 	};
 
 	struct PositionOpt

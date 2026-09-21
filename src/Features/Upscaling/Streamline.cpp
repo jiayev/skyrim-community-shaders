@@ -37,6 +37,16 @@
 
 namespace
 {
+	struct DLSSDConfiguration
+	{
+		uint32_t outputWidth;
+		uint32_t outputHeight;
+		uint32_t qualityMode;
+		uint32_t preset;
+
+		bool operator==(const DLSSDConfiguration&) const = default;
+	};
+
 	struct SLState
 	{
 		HMODULE interposer = nullptr;
@@ -68,6 +78,7 @@ namespace
 		PFun_slXeSSSetOptions* slXeSSSetOptions = nullptr;
 
 		sl::ViewportHandle viewport{ 0 };
+		std::optional<DLSSDConfiguration> dlssdConfiguration;
 
 		std::atomic<uint32_t> renderFrameId = { 0 };
 		// Frame index SimulationStart used, latched so tags, constants and the render-thread PCL
@@ -1462,19 +1473,24 @@ static Streamline::EvaluationResult cs_ClassifyEvaluation(
 	return a_skipped ? Streamline::EvaluationResult::kSkipped : Streamline::EvaluationResult::kFailed;
 }
 
-void Streamline::FreeDLSSResources(bool a_rayReconstruction)
+bool Streamline::FreeDLSSResources(bool a_rayReconstruction)
 {
 	if (!initialized || !vulkanDeviceSet || !g_sl.slFreeResources)
-		return;
+		return false;
 	if (a_rayReconstruction ? !featureDLSSRR : !featureDLSS)
-		return;
+		return false;
 
 	const auto feature = a_rayReconstruction ? sl::kFeatureDLSS_RR : sl::kFeatureDLSS;
 	const auto result = g_sl.slFreeResources(feature, g_sl.viewport);
+	if (result != sl::Result::eOk && result != sl::Result::eErrorInvalidParameter) {
+		logger::warn("[Streamline] failed to release {} resources (result {})", a_rayReconstruction ? "DLSS RR" : "DLSS", static_cast<int>(result));
+		return false;
+	}
+	if (a_rayReconstruction)
+		g_sl.dlssdConfiguration.reset();
 	if (result == sl::Result::eOk)
 		logger::info("[Streamline] released {} resources", a_rayReconstruction ? "DLSS RR" : "DLSS");
-	else if (result != sl::Result::eErrorInvalidParameter)
-		logger::warn("[Streamline] failed to release {} resources (result {})", a_rayReconstruction ? "DLSS RR" : "DLSS", static_cast<int>(result));
+	return true;
 }
 
 Streamline::EvaluationResult Streamline::EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
@@ -1657,11 +1673,23 @@ Streamline::EvaluationResult Streamline::EvaluateDLSSD(ID3D11Resource* a_colorIn
 		options.ultraPerformancePreset = *customPreset;
 	}
 
+	const DLSSDConfiguration configuration{ a_outputWidth, a_outputHeight, a_qualityMode, a_preset };
+	if (g_sl.dlssdConfiguration && *g_sl.dlssdConfiguration != configuration) {
+		const auto previous = *g_sl.dlssdConfiguration;
+		if (!dxvk->DrainCommandRing() || !FreeDLSSResources(true))
+			return EvaluationResult::kSkipped;
+		logger::info("[Streamline] DLSS RR reconfigured: quality {} -> {}, preset {} -> {}, output {}x{} -> {}x{}",
+			previous.qualityMode, configuration.qualityMode, previous.preset, configuration.preset,
+			previous.outputWidth, previous.outputHeight, configuration.outputWidth, configuration.outputHeight);
+	}
+
 	const sl::Result optionsResult = g_sl.slDLSSDSetOptions(g_sl.viewport, options);
 	if (optionsResult != sl::Result::eOk) {
 		logger::error("[Streamline] DLSS RR options failed (result {})", static_cast<int>(optionsResult));
 		return result;
 	}
+
+	g_sl.dlssdConfiguration = configuration;
 
 	DLSSDResources rrInputs{ a_diffuseAlbedo, a_specularAlbedo, a_normalRoughness, a_specularHitDistance };
 	const sl::Result evalRes = cs_EvaluateFeatureCore(sl::kFeatureDLSS_RR, g_sl.viewport,

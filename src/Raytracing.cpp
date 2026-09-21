@@ -7,6 +7,7 @@
 #include "Features/ExtendedMaterials.h"
 #include "Features/ExtendedTranslucency.h"
 #include "Features/HairSpecular.h"
+#include "Features/InverseSquareLighting.h"
 #include "Features/LODBlending.h"
 #include "Features/LinearLighting.h"
 #include "Features/PathTracing.h"
@@ -170,9 +171,26 @@ void Raytracing::Execute()
 	if (!Available() || Mode() == CreationEngineRaytracing::Mode::None)
 		return;
 
-	if (auto* dxvk = DXVKInterop::GetSingleton()) {
-		if (auto* interopDevice = dxvk->GetInteropDevice()) {
-			interopDevice->FlushRenderingCommands();
+	auto& skin = globals::features::skin;
+	if (creationEngineRaytracing->SetSkinDetailNormal)
+		creationEngineRaytracing->SetSkinDetailNormal(skin.loaded && skin.texSkinDetail ? skin.texSkinDetail->resource.get() : nullptr);
+
+	auto& isl = globals::features::inverseSquareLighting;
+	if (isl.loaded) {
+		const auto updateLights = [&](const auto& lights) {
+			for (const auto& entry : lights) {
+				auto* bsLight = entry.get();
+				if (bsLight && bsLight->light) {
+					LightLimitFix::LightData light{};
+					light.lightFlags = std::bit_cast<LightLimitFix::LightFlags>(bsLight->light->GetLightRuntimeData().ambient.red);
+					isl.ProcessLight(light, bsLight, bsLight->light.get());
+				}
+			}
+		};
+		if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
+			auto& runtimeData = shadowSceneNode->GetRuntimeData();
+			updateLights(runtimeData.activeLights);
+			updateLights(runtimeData.activeShadowLights);
 		}
 	}
 

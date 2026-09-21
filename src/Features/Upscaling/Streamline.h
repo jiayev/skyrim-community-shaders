@@ -44,7 +44,7 @@ public:
 		kFailed,
 	};
 
-	void FreeDLSSResources(bool a_rayReconstruction);
+	bool FreeDLSSResources(bool a_rayReconstruction);
 
 	[[nodiscard]] EvaluationResult EvaluateDLSS(ID3D11Resource* a_colorIn, ID3D11Resource* a_colorOut,
 		ID3D11Resource* a_depth, ID3D11Resource* a_motionVectors,
