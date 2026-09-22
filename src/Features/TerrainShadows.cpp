@@ -517,34 +517,36 @@ bool TerrainShadows::UpdateShadow(bool a_refreshImmediately)
 		// in UV
 		float3 invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;
 		invScale.z = cachedHeightmap->zRange.y - cachedHeightmap->zRange.x;
-		float3 dirLightPxDir = dirLightDir / invScale;
-		dirLightPxDir.x *= width;
-		dirLightPxDir.y *= height;
+		float2 dirLightPxDir = { dirLightDir.x / invScale.x * width, dirLightDir.y / invScale.y * height };
+		if (dirLightPxDir.x == 0.f && dirLightPxDir.y == 0.f)
+			dirLightPxDir = { 1.f, 0.f };
 
-		float stepMult;
 		if (abs(dirLightPxDir.x) >= abs(dirLightPxDir.y)) {
-			stepMult = 1.f / abs(dirLightPxDir.x);
 			edgePxCoord = dirLightPxDir.x > 0 ? 0 : (width - 1);
 			signDir = dirLightPxDir.x > 0 ? 1 : -1;
+			dirLightPxDir.y /= abs(dirLightPxDir.x);
+			dirLightPxDir.x = static_cast<float>(signDir);
 			maxUpdates = (width + updateLength - 1) >> logUpdateLength;
 		} else {
-			stepMult = 1.f / abs(dirLightPxDir.y);
 			edgePxCoord = dirLightPxDir.y > 0 ? 0 : height - 1;
 			signDir = dirLightPxDir.y > 0 ? 1 : -1;
+			dirLightPxDir.x /= abs(dirLightPxDir.y);
+			dirLightPxDir.y = static_cast<float>(signDir);
 			maxUpdates = (height + updateLength - 1) >> logUpdateLength;
 		}
-		dirLightPxDir *= stepMult;
 
-		shadowUpdateCBData.LightPxDir = { dirLightPxDir.x, dirLightPxDir.y };
+		shadowUpdateCBData.LightPxDir = dirLightPxDir;
 
 		// soft shadow angles
 		float lenUV = float2{ dirLightDir.x, dirLightDir.y }.Length();
 		float dirLightAngle = atan2(-dirLightDir.z, lenUV);
 		float shadowSofteningRadiusAngle = RE::NI_PI / 180.f;
-		float upperAngle = std::max(0.f, dirLightAngle - shadowSofteningRadiusAngle);
-		float lowerAngle = std::min(RE::NI_HALF_PI - 1e-2f, dirLightAngle + shadowSofteningRadiusAngle);
+		float maxAngle = RE::NI_HALF_PI - 1e-2f;
+		float upperAngle = std::clamp(dirLightAngle - shadowSofteningRadiusAngle, 0.f, maxAngle);
+		float lowerAngle = std::clamp(dirLightAngle + shadowSofteningRadiusAngle, 0.f, maxAngle);
+		float stepLength = float2{ dirLightPxDir.x * invScale.x / width, dirLightPxDir.y * invScale.y / height }.Length();
 
-		shadowUpdateCBData.LightDeltaZ = -(lenUV / invScale.z * stepMult) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
+		shadowUpdateCBData.LightDeltaZ = -(stepLength / invScale.z) * float2{ std::tan(upperAngle), std::tan(lowerAngle) };
 	}
 
 	shadowUpdateCBData.PxSize = { 1.f / texHeightMap->desc.Width, 1.f / texHeightMap->desc.Height };

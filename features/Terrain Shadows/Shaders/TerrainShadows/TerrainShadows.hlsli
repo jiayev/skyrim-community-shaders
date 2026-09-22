@@ -21,8 +21,13 @@ namespace TerrainShadows
 	{
 		if (!SharedData::terraOccSettings.EnableTerrainShadow)
 			return 1.0;
-		float2 shadowHeight = GetTerrainZ(ShadowHeightTexture.SampleLevel(samp, GetTerrainShadowUV(worldPos.xy), 0));
-		return saturate((worldPos.z - shadowHeight.y) / (shadowHeight.x - shadowHeight.y));
-		;
+		float2 uv = GetTerrainShadowUV(worldPos.xy);
+		if (any(uv < 0.0) || any(uv > 1.0))
+			return 1.0;
+		float2 shadowHeight = GetTerrainZ(ShadowHeightTexture.SampleLevel(samp, uv, 0));
+		float penumbraHeight = shadowHeight.x - shadowHeight.y;
+		if (penumbraHeight <= 0.0)
+			return worldPos.z >= shadowHeight.x ? 1.0 : 0.0;
+		return saturate((worldPos.z - shadowHeight.y) / penumbraHeight);
 	}
 }
