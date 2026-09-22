@@ -346,10 +346,16 @@ TerrainShadows::PerFrame TerrainShadows::GetCommonBufferData()
 	};
 
 	if (isHeightmapReady) {
+		// One heightmap step of light descent, so the z blur spans about two texels in xy.
+		constexpr float zBlurSteps = 1.0f;
 		auto invScale = cachedHeightmap->pos1 - cachedHeightmap->pos0;
 		data.Scale = float3(1.f, 1.f, 1.f) / invScale;
-		data.Offset = -cachedHeightmap->pos0 * float2{ data.Scale.x, data.Scale.y };
+		// Texel centres lie on terrain vertices anchored at the south-west corner.
+		const float2 halfTexel = { 0.5f / texHeightMap->desc.Width, -0.5f / texHeightMap->desc.Height };
+		data.Offset = float2(-cachedHeightmap->pos0 * float2{ data.Scale.x, data.Scale.y }) + halfTexel;
 		data.ZRange = cachedHeightmap->zRange;
+		const float stepDescent = -0.5f * (shadowUpdateCBData.LightDeltaZ.x + shadowUpdateCBData.LightDeltaZ.y) * (data.ZRange.y - data.ZRange.x);
+		data.ZBlur = stepDescent * zBlurSteps;
 	}
 
 	return data;
