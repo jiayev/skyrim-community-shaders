@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "Menu.h"
 #include "Raytracing.h"
+#include "State.h"
 #include "Upscaling.h"
 #include "Upscaling/Streamline.h"
 #include "Util.h"
@@ -73,6 +74,7 @@ bool PathTracing::Available() const
 void PathTracing::UpdateSettings()
 {
 	globals::features::raytracing.UpdateSettings();
+	globals::state->RequestHistoryReset();
 }
 
 void PathTracing::DrawSettings()

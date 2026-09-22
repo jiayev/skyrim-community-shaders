@@ -474,7 +474,6 @@ void PerformanceOverlay::DrawFPS()
 
 	if (this->settings.ShowPostFGFrameTimeGraph && this->state.isFrameGenerationActive)
 		this->DrawPostFGFrameTimeGraph();
-
 }
 
 void PerformanceOverlay::DrawVRAM()
@@ -2025,15 +2024,13 @@ void PerformanceOverlay::UpdateMetrics()
 			// delta time is the presented interval, on the same footing as the render interval.
 			if (deltaTime > 0.0f) {
 				const uint64_t deltaPresented =
-					(state.lastPresentedFrames != 0 && presented > state.lastPresentedFrames)
-						? presented - state.lastPresentedFrames
-						: 0u;
+					(state.lastPresentedFrames != 0 && presented > state.lastPresentedFrames) ? presented - state.lastPresentedFrames : 0u;
 				if (deltaPresented > 0u) {
 					state.postFGFrameTimeMs = (deltaTime * 1000.0f) / static_cast<float>(deltaPresented);
 					state.postFGFps = state.postFGFrameTimeMs > 0.0f ? 1000.0f / state.postFGFrameTimeMs : 0.0f;
 					state.presentedStalledSeconds = 0.0f;
 				} else if (state.postFGFrameTimeMs <= 0.0f ||
-					(state.presentedStalledSeconds += deltaTime) > 0.5f) {
+						   (state.presentedStalledSeconds += deltaTime) > 0.5f) {
 					// Either nothing has been published yet, or the counter has stopped advancing --
 					// a swapchain recreate (a vsync toggle, an FG method switch) leaves it frozen, and
 					// holding the last derived rate then reports a stale figure indefinitely. Observed
@@ -2048,7 +2045,7 @@ void PerformanceOverlay::UpdateMetrics()
 		} else {
 			// DLSS-G publishes no such counter: fall back to the reported multiplier.
 			const uint32_t rawMultiplier = streamline->GetFrameGenerationMultiplier();
-			const float multiplier = static_cast<float>(std::max(rawMultiplier, 2u));
+			const float multiplier = static_cast<float>(std::max(rawMultiplier, 1u));
 			state.postFGFrameTimeMs = state.frameTimeMs / multiplier;
 			state.postFGFps = state.fps * multiplier;
 			// Drop any partial window left by FSR-FG so a switch back starts clean.
@@ -2131,7 +2128,10 @@ void PerformanceOverlay::UpdateMetrics()
 			for (float s : a_hist)
 				if (s > 0.0f)
 					v.push_back(s);
-			if (v.empty()) { a_avgFps = a_lowFps = 0.0f; return; }
+			if (v.empty()) {
+				a_avgFps = a_lowFps = 0.0f;
+				return;
+			}
 			const double mean = std::accumulate(v.begin(), v.end(), 0.0) / double(v.size());
 			a_avgFps = mean > 0.001 ? static_cast<float>(1000.0 / mean) : 0.0f;
 			std::sort(v.begin(), v.end());

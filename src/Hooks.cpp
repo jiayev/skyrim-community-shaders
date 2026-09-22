@@ -406,6 +406,10 @@ struct IDXGISwapChain_Present
 {
 	static HRESULT WINAPI thunk(IDXGISwapChain* This, UINT SyncInterval, UINT Flags)
 	{
+		// Only a real game present may advance the frame or consume interpolation inputs.
+		if (This != globals::d3d::swapChain || (Flags & DXGI_PRESENT_TEST))
+			return func(This, SyncInterval, Flags);
+
 		globals::state->Reset();
 
 		// DLSS-G on Vulkan requires SyncInterval 0.
@@ -441,6 +445,8 @@ struct IDXGISwapChain_Present
 			});
 
 		streamline->SetPCLMarker(Streamline::PclMarker::PresentEnd);
+		if (retval == S_OK)
+			streamline->RetireDLSSGPresentResources();
 
 		auto* dxvk = DXVKInterop::GetSingleton();
 		const bool presentSucceeded = SUCCEEDED(retval);

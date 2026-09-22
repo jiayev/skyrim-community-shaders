@@ -148,6 +148,8 @@ public:
 		uint32_t a_displayWidth, uint32_t a_displayHeight);
 
 	void ClearDLSSGTags();
+	void RetireDLSSGPresentResources();
+	void NoteDLSSGInputStage(const char* a_stage);
 	[[nodiscard]] bool EnsureDLSSGPresentTag();
 	/** @brief FSR-FG counterpart: passes frames through when the render pass prepared none. */
 	bool EnsureFSRFGPresentState();

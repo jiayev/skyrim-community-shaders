@@ -7,6 +7,7 @@
 #include "../../State.h"
 #include "../../Utils/Game.h"
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -15,6 +16,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #define NV_WINDOWS
 #pragma warning(push)
@@ -115,13 +117,17 @@ namespace
 		// any present that had no prepared frame, so sampling it reports an un-doubled value.
 		std::atomic<uint64_t> fsrTotalPresentedFrames = 0;
 
-		// Present requires either a valid or passthrough tag every frame.
-		bool dlssgTaggedThisFrame = false;
-		std::atomic<bool> dlssgCloneTagsPrimed{ false };
+		// Only successfully submitted interpolation inputs authorize an enabled present.
+		std::atomic<bool> dlssgTaggedThisFrame{ false };
+		std::atomic<const char*> dlssgInputStage{ "no render hook" };
+		std::atomic<uint32_t> dlssgRenderBegins{ 0 };
+		std::atomic<uint32_t> dlssgLastTaggedFrame{ UINT32_MAX };
+		std::mutex dlssgResourceMutex;
+		std::vector<VkImageView> dlssgPresentViews;
+		std::vector<winrt::com_ptr<ID3D11Resource>> dlssgPresentResources;
 
 		// Whether the render pass prepared an interpolation frame for FSR-FG this present.
-		// Written from the render thread in EvaluateFSRFrameGen and read at present, so it is
-		// atomic rather than a plain bool like the DLSS-G flag above.
+		// Written from the render thread in EvaluateFSRFrameGen and read at present.
 		std::atomic<bool> fsrfgPreparedThisFrame{ false };
 
 	} g_sl;
@@ -222,7 +228,7 @@ namespace
 		g_sl.dlssgModeCached = false;
 		g_sl.dlssgModeOn = false;
 
-		g_sl.dlssgCloneTagsPrimed.store(false, std::memory_order_release);
+		g_sl.dlssgTaggedThisFrame.store(false, std::memory_order_release);
 
 		if (g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire)) {
 			if (g_sl.slFSRFrameGenerationCompleteSwapchainTeardown) {
@@ -672,6 +678,8 @@ static uint32_t SimFrameId()
 
 void Streamline::BeginRenderFrame()
 {
+	g_sl.dlssgRenderBegins.fetch_add(1u, std::memory_order_relaxed);
+	NoteDLSSGInputStage("render begun; post-processing not reached");
 	if (g_fsrfgCurrentlyLoaded.load(std::memory_order_acquire))
 		(void)DiscardFSRFrameGenerationPreparedFrame();
 	// Adopt the index SimulationStart already used. It is SimFrameId(), i.e. renderFrameId + 1, so
@@ -688,7 +696,7 @@ void Streamline::BeginRenderFrame()
 	const uint32_t latched = g_sl.simMarkerFrameId.load(std::memory_order_acquire);
 	const uint32_t next = g_sl.renderFrameId.load(std::memory_order_acquire) + 1u;
 	g_sl.renderFrameId.store(latched == next ? latched : next, std::memory_order_release);
-	g_sl.dlssgTaggedThisFrame = false;
+	g_sl.dlssgTaggedThisFrame.store(false, std::memory_order_release);
 	g_sl.fsrfgPreparedThisFrame.store(false, std::memory_order_release);
 }
 
@@ -760,7 +768,6 @@ void Streamline::CaptureDLSSGPresentState()
 		}
 		g_sl.frameGenerationMultiplier.store(
 			std::max(state.numFramesActuallyPresented, 1u), std::memory_order_release);
-		g_sl.dlssgCloneTagsPrimed.store(true, std::memory_order_release);
 	}
 }
 
@@ -1077,7 +1084,7 @@ static cs_VulkanVoidAttempt cs_PipelineBarrierSEH(VkCommandBuffer a_commandBuffe
 
 // Streamline's Vulkan backend requires a matching VkImageView for every resource.
 static bool cs_WrapInteropImage(DXVKInterop* a_dxvk, VkDevice a_device, PFN_vkCreateImageView a_createView,
-	ID3D11Resource* a_res, sl::Resource& a_out, sl::SubresourceRange& a_subresource,
+	ID3D11Resource* a_res, sl::Resource& a_out,
 	VkImageView& a_outView, bool& a_terminalFault)
 {
 	a_outView = VK_NULL_HANDLE;
@@ -1125,12 +1132,19 @@ static bool cs_WrapInteropImage(DXVKInterop* a_dxvk, VkDevice a_device, PFN_vkCr
 	a_out.arrayLayers = info.arrayLayers;
 	a_out.usage = static_cast<uint32_t>(info.usage);
 	a_out.flags = static_cast<uint32_t>(info.flags);
-	a_subresource.aspectMask = ci.subresourceRange.aspectMask;
-	a_subresource.baseMipLevel = 0;
-	a_subresource.levelCount = 1;
-	a_subresource.baseArrayLayer = 0;
-	a_subresource.layerCount = 1;
-	a_out.next = &a_subresource;
+	// Streamline shallow-copies the extension chain and can read it during Present.
+	static auto ranges = [] {
+		std::array<sl::SubresourceRange, 2> result{};
+		for (uint32_t i = 0; i < result.size(); ++i) {
+			result[i].aspectMask = i == 0 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT;
+			result[i].baseMipLevel = 0;
+			result[i].levelCount = 1;
+			result[i].baseArrayLayer = 0;
+			result[i].layerCount = 1;
+		}
+		return result;
+	}();
+	a_out.next = &ranges[ci.subresourceRange.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT ? 1 : 0];
 	return true;
 }
 
@@ -1181,11 +1195,25 @@ static bool cs_SubmitPresentTags(DXVKInterop* a_dxvk, sl::FrameToken& a_token,
 	bool& a_lifetimesRetained)
 {
 	a_lifetimesRetained = false;
+	std::lock_guard lock(g_sl.dlssgResourceMutex);
 	auto transaction = a_dxvk->BeginFrameCommandBuffer();
 	if (!transaction) {
 		logger::error("[Streamline] present tags: could not acquire an interop command buffer");
 		return false;
 	}
+
+	// The tag submission fence precedes DLSS-G's reads during Present.
+	for (uint32_t i = 0; i < a_viewCount; ++i)
+		if (a_views[i] != VK_NULL_HANDLE)
+			g_sl.dlssgPresentViews.push_back(a_views[i]);
+	for (uint32_t i = 0; i < a_resourceCount; ++i) {
+		if (!a_resources[i])
+			continue;
+		winrt::com_ptr<ID3D11Resource> resource;
+		resource.copy_from(a_resources[i]);
+		g_sl.dlssgPresentResources.push_back(std::move(resource));
+	}
+	a_lifetimesRetained = true;
 
 	a_tagResult = cs_SetTagForFrame(
 		a_token, a_viewport, a_tags, a_tagCount, transaction.GetCommandBuffer());
@@ -1196,17 +1224,33 @@ static bool cs_SubmitPresentTags(DXVKInterop* a_dxvk, sl::FrameToken& a_token,
 	}
 	if (!a_dxvk->SubmitFrameCommandBuffer(transaction)) {
 		logger::error("[Streamline] present tags: interop submit failed");
-		if (transaction.SubmissionMayBeInFlight()) {
-			a_dxvk->QueueViewsForDeferredDelete(transaction, a_views, a_viewCount);
-			a_dxvk->QueueResourcesForDeferredRelease(transaction, a_resources, a_resourceCount);
-			a_lifetimesRetained = true;
-		}
 		return false;
 	}
 
-	a_dxvk->QueueViewsForDeferredDelete(transaction, a_views, a_viewCount);
-	a_dxvk->QueueResourcesForDeferredRelease(transaction, a_resources, a_resourceCount);
 	return true;
+}
+
+void Streamline::RetireDLSSGPresentResources()
+{
+	std::lock_guard lock(g_sl.dlssgResourceMutex);
+	if (g_sl.dlssgPresentViews.empty() && g_sl.dlssgPresentResources.empty())
+		return;
+
+	// Synchronous DXVK Present has returned; DLSS-G blocks this same graphics queue
+	// until its input reads finish. A later fence can therefore retire these views.
+	auto* dxvk = DXVKInterop::GetSingleton();
+	auto transaction = dxvk->BeginFrameCommandBuffer();
+	if (!transaction || !dxvk->SubmitFrameCommandBuffer(transaction))
+		return;
+
+	dxvk->QueueViewsForDeferredDelete(transaction, g_sl.dlssgPresentViews.data(),
+		static_cast<uint32_t>(g_sl.dlssgPresentViews.size()));
+	for (const auto& resource : g_sl.dlssgPresentResources) {
+		ID3D11Resource* raw = resource.get();
+		dxvk->QueueResourcesForDeferredRelease(transaction, &raw, 1);
+	}
+	g_sl.dlssgPresentViews.clear();
+	g_sl.dlssgPresentResources.clear();
 }
 
 static bool cs_CanReleaseFailedFSRFrame(DXVKInterop* a_dxvk,
@@ -1319,22 +1363,19 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		haveRR ? a_rrInputs->specularHitDistance : nullptr
 	};
 	VkImageView views[9] = {};
-	sl::SubresourceRange subresources[9]{};
 	int nv = 0;
-	int nr = 0;
 	bool viewCreationTerminalFault = false;
 	const auto wrap = [&](ID3D11Resource* a_res, sl::Resource& a_out) -> bool {
 		VkImageView v = VK_NULL_HANDLE;
-		if (nr >= static_cast<int>(std::size(subresources)))
+		if (nv >= static_cast<int>(std::size(views)))
 			return false;
 		const bool wrapped = cs_WrapInteropImage(
-			dxvk, vkDevice, vkCreateImageView, a_res, a_out, subresources[nr], v,
+			dxvk, vkDevice, vkCreateImageView, a_res, a_out, v,
 			viewCreationTerminalFault);
 		if (v != VK_NULL_HANDLE && nv < static_cast<int>(std::size(views)))
 			views[nv++] = v;
 		if (!wrapped)
 			return false;
-		++nr;
 		return true;
 	};
 
@@ -1951,7 +1992,6 @@ bool Streamline::SetDLSSGMode(bool a_enable, uint32_t a_displayWidth, uint32_t a
 						   g_sl.dlssgCachedNumFrames == numFrames && g_sl.dlssgCachedAuto == a_autoMode &&
 						   g_sl.dlssgCachedDynamic == a_dynamic && g_sl.dlssgCachedDynamicFps == a_dynamicTargetFps &&
 						   g_sl.dlssgCachedDisplayW == a_displayWidth && g_sl.dlssgCachedDisplayH == a_displayHeight);
-	const bool wasModeOn = g_sl.dlssgModeOn;
 
 	bool succeeded = false;
 	sl::DLSSGOptions options{};
@@ -1968,7 +2008,7 @@ bool Streamline::SetDLSSGMode(bool a_enable, uint32_t a_displayWidth, uint32_t a
 	options.mvecDepthHeight = a_displayHeight;
 	options.colorWidth = a_displayWidth;
 	options.colorHeight = a_displayHeight;
-	// Volatile inputs are copied into Streamline-owned resources before present.
+	// Input resources remain valid through present.
 	//
 	// eBlockNoClientQueues is the faster-sounding option and was what this used, but Streamline
 	// only permits it if the client waits on DLSSGState::inputsProcessingCompletionFence before
@@ -2003,8 +2043,8 @@ bool Streamline::SetDLSSGMode(bool a_enable, uint32_t a_displayWidth, uint32_t a
 		g_sl.dlssgCachedDynamicFps = a_dynamicTargetFps;
 		g_sl.dlssgCachedDisplayW = a_displayWidth;
 		g_sl.dlssgCachedDisplayH = a_displayHeight;
-		if (!a_enable || !wasModeOn)
-			g_sl.dlssgCloneTagsPrimed.store(false, std::memory_order_release);
+		if (!a_enable)
+			g_sl.frameGenerationMultiplier.store(1u, std::memory_order_release);
 		if (changed)
 			logger::info("[Streamline] DLSS-G mode={} ({}) numFrames={} targetFps={} (max {}) display={}x{}", a_enable,
 				!a_enable ? "off" : a_dynamic ? "dynamic" :
@@ -2142,6 +2182,7 @@ bool Streamline::IsDLSSGDynamicSupported() const
 // identical to a dozen unrelated causes. Logs only when the reason changes, so it cannot spam.
 static void cs_NoteDlssgTagSkip(const char* a_reason)
 {
+	g_sl.dlssgInputStage.store(a_reason ? a_reason : "tags submitted", std::memory_order_release);
 	static const char* s_last = nullptr;
 	if (s_last == a_reason)
 		return;
@@ -2158,6 +2199,7 @@ void Streamline::TagDLSSGResources(
 	ID3D11Resource* a_hudlessColor, uint32_t a_renderWidth, uint32_t a_renderHeight,
 	uint32_t a_displayWidth, uint32_t a_displayHeight)
 {
+	NoteDLSSGInputStage("tagging inputs");
 	if (!initialized || !featureDLSSG) {
 		cs_NoteDlssgTagSkip("DLSS-G unavailable");
 		return;
@@ -2172,11 +2214,12 @@ void Streamline::TagDLSSGResources(
 		cs_NoteDlssgTagSkip("interop command resources not ready");
 		return;
 	}
-	if (!g_sl.dlssgCloneTagsPrimed.load(std::memory_order_acquire)) {
-		cs_NoteDlssgTagSkip("clone tags not primed yet");
-		ClearDLSSGTags();
+	if (!g_sl.dlssgModeOn) {
+		cs_NoteDlssgTagSkip("interpolation mode not enabled");
 		return;
 	}
+	if (g_sl.dlssgTaggedThisFrame.load(std::memory_order_acquire))
+		return;
 
 	sl::FrameToken* token = RenderFrameToken();
 	if (!token) {
@@ -2214,21 +2257,19 @@ void Streamline::TagDLSSGResources(
 		std::fill(std::begin(views), std::end(views), VK_NULL_HANDLE);
 	};
 
-	const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out,
-								  sl::SubresourceRange& a_subresource) {
+	const auto makeResource = [&](ID3D11Resource* a_res, sl::Resource& a_out) {
 		if (viewCount >= std::size(views))
 			return false;
 		VkImageView& view = views[viewCount];
-		if (!cs_WrapInteropImage(dxvk, vkDevice, vkCreateImageView, a_res, a_out, a_subresource, view, viewCreationTerminalFault))
+		if (!cs_WrapInteropImage(dxvk, vkDevice, vkCreateImageView, a_res, a_out, view, viewCreationTerminalFault))
 			return false;
 		++viewCount;
 		return true;
 	};
 
 	sl::Resource depthRes{}, mvecRes{};
-	sl::SubresourceRange depthRange{}, mvecRange{}, hudlessRange{};
-	if (!makeResource(a_depth, depthRes, depthRange) ||
-		!makeResource(a_motionVectors, mvecRes, mvecRange)) {
+	if (!makeResource(a_depth, depthRes) ||
+		!makeResource(a_motionVectors, mvecRes)) {
 		cs_NoteDlssgTagSkip("could not wrap depth/motion-vector resources for Vulkan");
 		abandonViewsAfterCreationFailure();
 		return;
@@ -2250,7 +2291,7 @@ void Streamline::TagDLSSGResources(
 	sl::Resource hudlessRes{};
 	const uint32_t viewsBeforeHudless = viewCount;
 	if (a_hudlessColor) {
-		if (makeResource(a_hudlessColor, hudlessRes, hudlessRange)) {
+		if (makeResource(a_hudlessColor, hudlessRes)) {
 			tags[tagCount++] = { &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eValidUntilPresent, &displayExtent };
 		} else if (viewCount != viewsBeforeHudless) {
 			abandonViewsAfterCreationFailure();
@@ -2268,7 +2309,8 @@ void Streamline::TagDLSSGResources(
 	if (cs_SubmitPresentTags(dxvk, *token, g_sl.viewport, tags, tagCount,
 			views, viewCount, resources, static_cast<uint32_t>(std::size(resources)), tagResult,
 			lifetimesRetained)) {
-		g_sl.dlssgTaggedThisFrame = true;
+		g_sl.dlssgLastTaggedFrame.store(g_sl.renderFrameId.load(std::memory_order_acquire), std::memory_order_release);
+		g_sl.dlssgTaggedThisFrame.store(true, std::memory_order_release);
 		cs_NoteDlssgTagSkip(nullptr);
 	} else {
 		cs_NoteDlssgTagSkip("tag submission rejected");
@@ -2281,6 +2323,7 @@ void Streamline::TagDLSSGResources(
 
 void Streamline::ClearDLSSGTags()
 {
+	g_sl.dlssgTaggedThisFrame.store(false, std::memory_order_release);
 	if (!initialized || !featureDLSSG)
 		return;
 
@@ -2288,7 +2331,7 @@ void Streamline::ClearDLSSGTags()
 	if (!token)
 		return;
 
-	// Null tags force passthrough when interpolation inputs are unavailable.
+	// Invalidate inputs after interpolation has been disabled.
 	sl::ResourceTag tags[] = {
 		sl::ResourceTag{ nullptr, sl::kBufferTypeDepth, sl::ResourceLifecycle::eOnlyValidNow, nullptr },
 		sl::ResourceTag{ nullptr, sl::kBufferTypeMotionVectors, sl::ResourceLifecycle::eOnlyValidNow, nullptr },
@@ -2299,40 +2342,53 @@ void Streamline::ClearDLSSGTags()
 		return;
 	sl::Result tagResult = sl::Result::eErrorNotInitialized;
 	bool lifetimesRetained = false;
-	if (cs_SubmitPresentTags(dxvk, *token, g_sl.viewport, tags,
+	if (!cs_SubmitPresentTags(dxvk, *token, g_sl.viewport, tags,
 			static_cast<uint32_t>(std::size(tags)), nullptr, 0, nullptr, 0, tagResult,
 			lifetimesRetained)) {
-		g_sl.dlssgTaggedThisFrame = true;
-	} else {
 		logger::error("[Streamline] DLSS-G passthrough tag submission failed (result {})",
 			static_cast<int>(tagResult));
 	}
 }
 
+void Streamline::NoteDLSSGInputStage(const char* a_stage)
+{
+	g_sl.dlssgInputStage.store(a_stage, std::memory_order_release);
+}
+
 bool Streamline::EnsureDLSSGPresentTag()
 {
-	// Supply passthrough tags when the render pass did not provide interpolation inputs.
 	if (!initialized || !featureDLSSG ||
 		!g_dlssgCurrentlyLoaded.load(std::memory_order_acquire))
 		return false;
-	// Track the passthrough fallback separately from the reasons above: this also catches the
-	// cases where TagDLSSGResources was never called at all (paused, a menu is open, or the
-	// presenter was not ready), which otherwise leave no trace and read in the log exactly like
-	// healthy frame generation while generating nothing.
-	const bool hadRealTags = g_sl.dlssgTaggedThisFrame;
-	if (!hadRealTags)
+	// Present can run without BeginRenderFrame, so consume each set of inputs once.
+	const bool hadRealTags = g_sl.dlssgTaggedThisFrame.exchange(false, std::memory_order_acq_rel);
+	const auto* stage = g_sl.dlssgInputStage.exchange("no render hook since previous present", std::memory_order_acq_rel);
+	const auto renderBegins = g_sl.dlssgRenderBegins.exchange(0u, std::memory_order_acq_rel);
+	if (!hadRealTags && g_sl.dlssgModeOn) {
+		if (!SetDLSSGMode(false, g_sl.dlssgCachedDisplayW, g_sl.dlssgCachedDisplayH,
+				g_sl.dlssgCachedNumFrames, g_sl.dlssgCachedAuto,
+				g_sl.dlssgCachedDynamic, g_sl.dlssgCachedDynamicFps))
+			return false;
 		ClearDLSSGTags();
+	}
 	{
 		static bool s_lastHadRealTags = true;
-		if (s_lastHadRealTags != hadRealTags) {
-			s_lastHadRealTags = hadRealTags;
-			if (hadRealTags)
-				logger::info("[Streamline] DLSS-G interpolation inputs restored");
-			else
-				logger::warn("[Streamline] DLSS-G falling back to passthrough tags - render pass submitted no interpolation inputs this frame");
+		static const char* s_lastStage = nullptr;
+		static uint32_t s_missingPresents = 0;
+		if (!hadRealTags) {
+			++s_missingPresents;
+			if (s_lastHadRealTags || s_lastStage != stage)
+				logger::warn("[Streamline] DLSS-G missing inputs: frame={} lastTagged={} renderBegins={} stage={}",
+					g_sl.renderFrameId.load(std::memory_order_acquire),
+					g_sl.dlssgLastTaggedFrame.load(std::memory_order_acquire), renderBegins, stage);
+		} else if (!s_lastHadRealTags) {
+			logger::info("[Streamline] DLSS-G interpolation inputs restored after {} present(s)", s_missingPresents);
+			s_missingPresents = 0;
 		}
+		s_lastHadRealTags = hadRealTags;
+		s_lastStage = stage;
 	}
-	return g_sl.dlssgTaggedThisFrame;
+	return true;
 }
 
 void Streamline::RegisterDxvkSwapchainCallbacks()

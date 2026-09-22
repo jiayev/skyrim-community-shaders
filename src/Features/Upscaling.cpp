@@ -942,6 +942,9 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 	}
 
+	if (streamline->IsDLSSGLoaded() && !streamline->EnsureDLSSGPresentTag())
+		return requestFaultTeardown("DLSS-G could not suspend interpolation without inputs");
+
 	if (!IsFrameGenerationActive())
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 
@@ -955,7 +958,7 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 
 	auto fgMethod = GetFrameGenMethod();
 	if (fgMethod != FrameGenMethod::kDLSSG) {
-		// FSR-FG needs the same every-present guarantee DLSS-G gets below: on frames where the
+		// FSR-FG needs the same every-present guarantee DLSS-G gets above: on frames where the
 		// render pass prepared no interpolation frame -- the main menu, load screens, anywhere
 		// Main_UpdateJitter does not run -- discard whatever FFX still holds so it passes the real
 		// frame through instead of interpolating stale contents onto a black screen.
@@ -963,14 +966,6 @@ HRESULT Upscaling::PresentWithFrameGeneration(IDXGISwapChain* a_swapChain, UINT 
 		return a_present(a_swapChain, a_syncInterval, a_flags);
 	}
 
-	// DLSS-G requires a valid or passthrough tag for every present -- but only once it actually owns
-	// the present. Between selecting it and sl.dlss_g being loaded (a swapchain recreate apart), the
-	// tag path legitimately has nothing to do, and treating that as a fault tore frame generation
-	// down on every enable.
-	if (!streamline->IsDLSSGLoaded())
-		return a_present(a_swapChain, a_syncInterval, a_flags);
-
-	(void)streamline->EnsureDLSSGPresentTag();
 	return a_present(a_swapChain, a_syncInterval, a_flags);
 }
 
@@ -1905,16 +1900,17 @@ void Upscaling::PrepareFrameGeneration(ID3D11Resource* a_hudlessColor)
 	const bool hdrActive = hdr.loaded && hdr.IsHDREnabledForFrame();
 	if (!DXVKInterop::GetSingleton()->IsPresenterStateReadyForFrame(hdrActive) ||
 		(fgMethod == FrameGenMethod::kFSR &&
-			!FrameGen::Controller::GetSingleton()->IsFSRPresenterReady()))
+			!FrameGen::Controller::GetSingleton()->IsFSRPresenterReady())) {
+		Streamline::GetSingleton()->NoteDLSSGInputStage("presenter not ready during input preparation");
 		return;
+	}
 
 	auto* renderer = globals::game::renderer;
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
 	if (fgMethod == FrameGenMethod::kDLSSG) {
-		FrameGen::Controller::GetSingleton()->EngageDLSSG();
-
 		if (gameplay) {
+			FrameGen::Controller::GetSingleton()->EngageDLSSG();
 			const auto displaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
 			const auto renderSize = Util::ConvertToDynamic(displaySize, true);
 			auto& depth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
@@ -1931,15 +1927,14 @@ void Upscaling::PrepareFrameGeneration(ID3D11Resource* a_hudlessColor)
 						0, 0.0f, jitter.x, jitter.y);
 			}
 
-			static uint32_t s_lastTagFrame = UINT32_MAX;
-			const uint32_t tagFrame = globals::state->frameCount;
-			if (s_lastTagFrame != tagFrame) {
-				s_lastTagFrame = tagFrame;
-				Streamline::GetSingleton()->TagDLSSGResources(
-					fgDepth, motionVector.texture, a_hudlessColor,
-					(uint32_t)renderSize.x, (uint32_t)renderSize.y,
-					(uint32_t)displaySize.x, (uint32_t)displaySize.y);
-			}
+			Streamline::GetSingleton()->TagDLSSGResources(
+				fgDepth, motionVector.texture, a_hudlessColor,
+				(uint32_t)renderSize.x, (uint32_t)renderSize.y,
+				(uint32_t)displaySize.x, (uint32_t)displaySize.y);
+		} else {
+			Streamline::GetSingleton()->NoteDLSSGInputStage(!ui                                         ? "UI unavailable" :
+															globals::state->IsMainOrLoadingMenuOpen(ui) ? "main/loading menu" :
+																										  "game paused");
 		}
 	} else if (fgMethod == FrameGenMethod::kFSR && gameplay) {
 		const auto displaySize = float2{ (float)globals::game::graphicsState->screenWidth, (float)globals::game::graphicsState->screenHeight };
@@ -1981,6 +1976,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
+	Streamline::GetSingleton()->NoteDLSSGInputStage("post-processing entered");
 	auto& postProcessing = globals::features::postProcessing;
 	if (postProcessing.loaded) {
 		postProcessing.DrawBeforeUpscaling();
@@ -2029,6 +2025,13 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		                      FrameGen::Controller::GetSingleton()->IsFSRPresenterReady();
 		if (presenterReady && fsrReady)
 			upscaling.PrepareFrameGeneration(upscaling.CaptureHudlessColor());
+		else
+			streamline->NoteDLSSGInputStage("presenter not ready after post-processing");
+	} else {
+		streamline->NoteDLSSGInputStage(!windowUsable                                      ? "window unusable" :
+										!upscaling.settings.frameGeneration                ? "frame generation disabled" :
+										DXVKInterop::GetSingleton()->HasCommandRingFault() ? "interop command ring fault" :
+																							 "frame generation inactive after post-processing");
 	}
 
 	Util::SetTemporal(false);
