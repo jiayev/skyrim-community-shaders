@@ -3,6 +3,7 @@
 #include "../I18n/I18n.h"
 #include "Features/CSEditor.h"
 #include "Features/HDRDisplay.h"
+#include "Features/Skin.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "InteriorOnlyPanel.h"
@@ -262,7 +263,8 @@ void EditorWindow::ShowObjectsWindow()
 				{ "Lens Flare", T(TKEY("category_lens_flare"), "Lens Flare") },
 				{ "Visual Effect", T(TKEY("category_visual_effect"), "Visual Effect") },
 				{ "Interior Only", T(TKEY("category_interior_only"), "Interior Only") },
-				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") }
+				{ "Light Editor", T(TKEY("category_lighting_editor"), "Light Editor") },
+				{ "Skin Editor", T(TKEY("category_skin_editor"), "Skin Editor") }
 			};
 			for (int i = 0; i < IM_ARRAYSIZE(categories); ++i) {
 				// Highlight the selected category
@@ -291,6 +293,16 @@ void EditorWindow::ShowObjectsWindow()
 			if (m_selectedCategory == "Light Editor") {
 				BeginScrollableContent("##LightEditorScroll");
 				lightEditor.DrawSettings();
+				EndScrollableContent();
+				ImGui::EndChild();
+				ImGui::EndTable();
+				ImGui::End();
+				return;
+			}
+
+			if (m_selectedCategory == "Skin Editor") {
+				BeginScrollableContent("##SkinEditorScroll");
+				globals::features::skin.DrawMaterialEditor();
 				EndScrollableContent();
 				ImGui::EndChild();
 				ImGui::EndTable();
