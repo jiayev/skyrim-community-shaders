@@ -10,6 +10,7 @@
 #include "Menu.h"
 #include "ShaderCache.h"
 #include "State.h"
+#include "TruePBR.h"
 #include "Util.h"
 
 #include "Features/Effects11.h"
@@ -260,6 +261,7 @@ namespace GrassExtensions
 			auto* lightingProperty = *reinterpret_cast<RE::BSLightingShaderProperty**>(lightingPropertyAddress);
 
 			RE::BSLightingShaderProperty* grassProperty = func(property);
+			globals::features::truePBR.SetupGrassMaterial(lightingProperty, grassProperty);
 
 			if (lightingProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kEffectLighting)) {
 				grassProperty->SetFlags(RE::BSShaderProperty::EShaderPropertyFlag8::kEffectLighting, true);
@@ -758,15 +760,13 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
-							RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
-							if (vertexShader) {
-								globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
-								*globals::game::currentVertexShader = a_vertexShader;
-								globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
-								return;
-							}
+					if (state->ShaderEnabled(type)) {
+						RE::BSGraphics::VertexShader* vertexShader = shaderCache->GetVertexShader(*currentShader, state->modifiedVertexDescriptor);
+						if (vertexShader) {
+							globals::d3d::context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(vertexShader->shader), NULL, NULL);
+							*globals::game::currentVertexShader = a_vertexShader;
+							globals::game::stateUpdateFlags->set(RE::BSGraphics::DIRTY_VERTEX_DESC);
+							return;
 						}
 					}
 				}
@@ -791,14 +791,12 @@ namespace Hooks
 				if (shaderCache->IsEnabled()) {
 					auto currentShader = state->currentShader;
 					auto type = currentShader->shaderType.get();
-					if (type > 0 && type < RE::BSShader::Type::Total) {
-						if (state->enabledClasses[type - 1]) {
-							RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
-							if (pixelShader) {
-								globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
-								*globals::game::currentPixelShader = a_pixelShader;
-								return;
-							}
+					if (state->ShaderEnabled(type)) {
+						RE::BSGraphics::PixelShader* pixelShader = shaderCache->GetPixelShader(*currentShader, state->modifiedPixelDescriptor);
+						if (pixelShader) {
+							globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(pixelShader->shader), NULL, NULL);
+							*globals::game::currentPixelShader = a_pixelShader;
+							return;
 						}
 					}
 				}
@@ -912,7 +910,7 @@ namespace Hooks
 				auto shaderCache = globals::shaderCache;
 				auto& vl = globals::features::volumetricLighting;
 
-				if (state->enabledClasses[RE::BSShader::Type::ImageSpace]) {
+				if (state->ShaderEnabled(RE::BSShader::Type::ImageSpace)) {
 					RE::BSImagespaceShader* isShader = CurrentlyDispatchedShader;
 					uint32_t techniqueId = CurrentComputeShaderTechniqueId;
 					if (vl.loaded) {
@@ -927,12 +925,12 @@ namespace Hooks
 							techniqueId = 0;
 							isShader = vl.GetOrCreateBlurHCS(CurrentlyDispatchedComputeShader);
 							vl.SetDimensionsCB();
-							vl.SetGroupCountsHCS(threadGroupCountX);
+							vl.SetGroupCountsHCS(threadGroupCountX, threadGroupCountY);
 						} else if (CurrentlyDispatchedComputeShader->name == "ISVolumetricLightingBlurVCS"sv) {
 							techniqueId = 0;
 							isShader = vl.GetOrCreateBlurVCS(CurrentlyDispatchedComputeShader);
 							vl.SetDimensionsCB();
-							vl.SetGroupCountsVCS(threadGroupCountY);
+							vl.SetGroupCountsVCS(threadGroupCountX, threadGroupCountY);
 						}
 					}
 					if (isShader != nullptr) {
