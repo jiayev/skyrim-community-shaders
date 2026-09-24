@@ -7,7 +7,7 @@ namespace GrassLighting
 		float grey = dot(albedo, 0.333333.xxx);
 		float3 transmissionTint = max(lerp(grey.xxx, albedo, 1.15), 0.0);
 
-		float greenDominance = saturate((albedo.g - max(albedo.r, albedo.b)) / max(albedo.g, 1e-4));
+		float greenDominance = saturate((albedo.g - max(albedo.r, albedo.b)) / max(albedo.g, EPSILON_DIVISION));
 		transmissionTint.r = lerp(transmissionTint.r, transmissionTint.g, 0.17 * greenDominance);
 		return transmissionTint;
 	}
