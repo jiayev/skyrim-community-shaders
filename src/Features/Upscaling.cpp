@@ -10,6 +10,7 @@
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
+#include "Utils/VersionedRelocation.h"
 #include <Windows.h>
 #include <algorithm>
 #include <cfloat>
@@ -493,6 +494,10 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
 		settings.presetDLSS = 0;
 	}
+	if (settings.qualityMode > 4) {
+		logger::warn("[Upscaling] Loaded qualityMode {} out of range, clamping to 4 (Ultra Performance)", settings.qualityMode);
+		settings.qualityMode = 4;
+	}
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
 		settings.reflexFPSLimit = 60.0f;
@@ -556,7 +561,7 @@ void Upscaling::PostPostLoad()
 	stl::detour_thunk<MenuManagerDrawInterfaceStartHook>(REL::RelocationID(79947, 82084));
 
 	// Calculates resolution and jitter
-	stl::write_thunk_call<Main_UpdateJitter>(REL::RelocationID(75460, 77245).address() + REL::Relocate(0xE5, isGOG ? 0x133 : 0xE2));
+	stl::write_thunk_call<Main_UpdateJitter>(REL::RelocationID(75460, 77245).address() + Util::VersionedRelocation::Select(0xE5, isGOG ? 0x133 : 0xE2, 0x133));
 
 	// Disables the original dynamic resolution system
 	REL::safe_write(REL::RelocationID(35556, 36555).address() + REL::Relocate(0x2D, 0x2D), REL::NOP5, sizeof(REL::NOP5));
@@ -564,14 +569,11 @@ void Upscaling::PostPostLoad()
 	// Performs upscaling in between volumetric lighting and post processing
 	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7));
 
-	// Patches RSSetScissorRect calls to use dynamic resolution
-	stl::detour_thunk<SetScissorRect>(REL::RelocationID(75564, 77365));
-
 	// Patches facegen texture generation to not use dynamic resolution
 	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(REL::RelocationID(26455, 27041));
 
 	// Patches precipitation camera to not use dynamic resolution
-	stl::write_thunk_call<Main_RenderPrecipitation>(REL::RelocationID(35560, 36559).address() + REL::Relocate(0x3A1, 0x3A1));
+	stl::write_thunk_call<Main_RenderPrecipitation>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF));
 
 	// Forces FXAA off
 	stl::detour_thunk<BSImageSpace_Init_FXAA>(REL::RelocationID(98974, 105626));
@@ -1009,7 +1011,6 @@ void Upscaling::SetupResources()
 		dx12SwapChain.CreateSharedResources();
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
-
 }
 
 void Upscaling::ClearShaderCache()
@@ -1697,22 +1698,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::features::hdrDisplay.RestoreFramebuffer();
 
 	Util::SetTemporal(false);
-}
-
-void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)
-{
-	auto viewport = globals::game::graphicsState;
-	auto& runtimeData = viewport->GetRuntimeData();
-
-	if (!runtimeData.dynamicResolutionLock) {
-		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
-		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
-
-		a_top = static_cast<int>(a_top * runtimeData.dynamicResolutionHeightRatio);
-		a_bottom = static_cast<int>(a_bottom * runtimeData.dynamicResolutionHeightRatio);
-	}
-
-	func(This, a_left, a_top, a_right, a_bottom);
 }
 
 void Upscaling::Main_RenderPrecipitation::thunk()

@@ -67,6 +67,8 @@ public:
 		float3 Scale;
 		float2 ZRange;
 		float2 Offset;
+		float ZBlur;  // world-space half-width of the shadow transition
+		float3 pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

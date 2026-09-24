@@ -1,6 +1,7 @@
 #pragma once
 
-#include "BSShader.h"
+#include <RE/B/BSShader.h>
+
 #include "ShaderCompiler.h"
 
 namespace BSShaderHooks
@@ -10,5 +11,5 @@ namespace BSShaderHooks
 	 * @param bsShader The shader object whose pixel shader table will be patched.
 	 * @param stream Original stream parameter (unused by the hook).
 	 */
-	void hk_LoadShaders(REX::BSShader* bsShader, std::uintptr_t stream);
+	void hk_LoadShaders(RE::BSShader* bsShader, std::uintptr_t stream);
 }
