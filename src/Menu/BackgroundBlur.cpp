@@ -341,7 +341,7 @@ namespace BackgroundBlur
 		textureFormat = format;
 	}
 
-	void PerformBlur(ID3D11Texture2D* sourceTexture, ID3D11ShaderResourceView* sourceSRV, ID3D11RenderTargetView* targetRTV, ImVec2 menuMin, ImVec2 menuMax, float cornerRadius, ID3D11ShaderResourceView* uiBufferSRV = nullptr, ID3D11RenderTargetView* uiBufferRTV = nullptr)
+	void PerformBlur(ID3D11Texture2D* sourceTexture, ID3D11ShaderResourceView* sourceSRV, ID3D11RenderTargetView* targetRTV, ImVec2 menuMin, ImVec2 menuMax, float cornerRadius, ID3D11ShaderResourceView* uiBufferSRV = nullptr, ID3D11RenderTargetView* uiBufferRTV = nullptr, bool allowUIBufferClear = true)
 	{
 		std::lock_guard<std::mutex> lock(resourceMutex);
 
@@ -486,7 +486,7 @@ namespace BackgroundBlur
 		context->PSSetShaderResources(0, 1, &nullSRV);
 
 		// Clear UI buffer where blur was drawn (prevents HUD showing through)
-		if (uiBufferRTV) {
+		if (uiBufferRTV && allowUIBufferClear) {
 			context->OMSetRenderTargets(1, &uiBufferRTV, nullptr);
 			context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
 
@@ -653,11 +653,13 @@ namespace BackgroundBlur
 			hdr->SnapshotCleanScene();
 		}
 
+		const bool allowUIBufferClear =
+			!globals::state || !globals::state->IsPausedOrMenuOpen(globals::game::ui);
 		// CS editor mode: single fullscreen blur pass (better perf than per-window)
 		if (csEditorActive) {
 			ImVec2 screenMin = { 0, 0 };
 			ImVec2 screenMax = { static_cast<float>(texDesc.Width), static_cast<float>(texDesc.Height) };
-			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), screenMin, screenMax, 0.0f, uiBuffer.srv, uiBuffer.rtv);
+			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), screenMin, screenMax, 0.0f, uiBuffer.srv, uiBuffer.rtv, allowUIBufferClear);
 			return;
 		}
 
@@ -708,7 +710,7 @@ namespace BackgroundBlur
 
 			// Perform blur for this window area with rounded corners
 			// Pass UI buffer SRV/RTV for compositing and clearing during upscaling gameplay
-			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), windowMin, windowMax, cornerRadius, uiBuffer.srv, uiBuffer.rtv);
+			PerformBlur(currentTexture.get(), sourceSRV, currentRTV.get(), windowMin, windowMax, cornerRadius, uiBuffer.srv, uiBuffer.rtv, allowUIBufferClear);
 		}
 	}
 

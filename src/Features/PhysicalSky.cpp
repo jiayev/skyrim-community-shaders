@@ -1344,17 +1344,17 @@ void PhysicalSky::RestoreSamplers()
 void PhysicalSky::ModifyGrass()
 {
 	auto context = globals::d3d::context;
-	context->PSGetSamplers(2, 1, originalPSGrassSampler.put());
+	context->PSGetSamplers(5, 1, originalPSGrassSampler.put());
 
 	auto sampler = sampTileable.get();
-	context->PSSetSamplers(2, 1, &sampler);
+	context->PSSetSamplers(5, 1, &sampler);
 }
 
 void PhysicalSky::RestoreGrassSampler()
 {
 	auto context = globals::d3d::context;
 	auto sampler = originalPSGrassSampler.get();
-	context->PSSetSamplers(2, 1, &sampler);
+	context->PSSetSamplers(5, 1, &sampler);
 	originalPSGrassSampler = nullptr;
 }
 
