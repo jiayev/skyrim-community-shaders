@@ -674,7 +674,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 #		endif
 
-#		if !defined(IS_VOLUMETRIC_FOG)
+#		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
 	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
 		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #		endif
