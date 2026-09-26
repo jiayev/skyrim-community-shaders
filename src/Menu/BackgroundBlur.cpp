@@ -81,10 +81,6 @@ namespace BackgroundBlur
 		winrt::com_ptr<ID3D11ShaderResourceView> cachedSourceSRV;
 		ID3D11Texture2D* cachedSourceTexture = nullptr;  // raw pointer for cache invalidation check
 
-		// Frozen copy of the HDR world buffer, captured once when a persistent vanilla menu is open
-		winrt::com_ptr<ID3D11Texture2D> frozenSceneTexture;
-		bool wasPersistentMenuOpen = false;
-
 		UINT textureWidth = 0;
 		UINT textureHeight = 0;
 		UINT downsampledWidth = 0;
@@ -139,36 +135,6 @@ namespace BackgroundBlur
 		{
 			auto* state = globals::state;
 			return state && state->IsMainOrLoadingMenuOpen(globals::game::ui);
-		}
-
-		bool IsPersistentVanillaMenuOpen()
-		{
-			auto* ui = globals::game::ui;
-			return ui && ui->GameIsPaused();
-		}
-
-		// (Re)captures frozenSceneTexture from source; caller must hold resourceMutex
-		void CaptureFrozenScene(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source)
-		{
-			frozenSceneTexture = nullptr;
-
-			D3D11_TEXTURE2D_DESC desc;
-			source->GetDesc(&desc);
-			desc.BindFlags = 0;
-			desc.Usage = D3D11_USAGE_DEFAULT;
-			desc.CPUAccessFlags = 0;
-			desc.MiscFlags = 0;
-
-			if (FAILED(device->CreateTexture2D(&desc, nullptr, frozenSceneTexture.put())))
-				return;
-			Util::SetResourceName(frozenSceneTexture.get(), "BackgroundBlur::FrozenScene");
-
-			context->CopyResource(frozenSceneTexture.get(), source);
-		}
-
-		void ReleaseFrozenScene()
-		{
-			frozenSceneTexture = nullptr;
 		}
 
 		bool IsStartupMenuBlurSourceReady(SIE::ShaderCache* shaderCache)
@@ -566,9 +532,6 @@ namespace BackgroundBlur
 		cachedSourceSRV = nullptr;
 		cachedSourceTexture = nullptr;
 
-		ReleaseFrozenScene();
-		wasPersistentMenuOpen = false;
-
 		enabled = false;
 		initialized = false;
 		initializationFailed = false;
@@ -632,18 +595,6 @@ namespace BackgroundBlur
 			currentRTV = hdr->hdrTexture->rtv;
 
 			uiBuffer = GetHDRUIBufferViews(*hdr, upscaling);
-
-			bool persistentMenuOpen = IsPersistentVanillaMenuOpen();
-			if (persistentMenuOpen && !wasPersistentMenuOpen) {
-				CaptureFrozenScene(device, context, currentTexture.get());
-			} else if (!persistentMenuOpen) {
-				ReleaseFrozenScene();
-			}
-			wasPersistentMenuOpen = persistentMenuOpen;
-
-			if (persistentMenuOpen && frozenSceneTexture) {
-				context->CopyResource(currentTexture.get(), frozenSceneTexture.get());
-			}
 		} else if (useUpscalingBackbuffer) {
 			// When D3D12 swap chain is active, get all resources in one call
 			auto res = upscaling.GetBlurResources();
@@ -702,7 +653,8 @@ namespace BackgroundBlur
 			hdr->SnapshotCleanScene();
 		}
 
-		const bool allowUIBufferClear = !IsPersistentVanillaMenuOpen();
+		const bool allowUIBufferClear =
+			!globals::state || !globals::state->IsPausedOrMenuOpen(globals::game::ui);
 		// CS editor mode: single fullscreen blur pass (better perf than per-window)
 		if (csEditorActive) {
 			ImVec2 screenMin = { 0, 0 };

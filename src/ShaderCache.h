@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <atomic>
 #include <efsw/efsw.hpp>
 #include <vector>
 
@@ -225,6 +226,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		LARGE_INTEGER lastCalculation;
@@ -537,7 +540,9 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		bool backgroundCompilation = false;
+		/** @brief Updates compilation mode and wakes the dispatcher to recheck its capacity. */
+		void SetBackgroundCompilation(bool value);
+		std::atomic_bool backgroundCompilation{ false };
 		bool menuLoaded = false;
 
 		enum class LightingShaderTechniques

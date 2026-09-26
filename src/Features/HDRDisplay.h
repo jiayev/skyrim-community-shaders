@@ -236,6 +236,9 @@ public:
 	std::vector<std::pair<RE::RENDER_TARGETS::RENDER_TARGET, SavedRenderTarget>> savedLDRTargets;
 
 private:
+	/** @brief Restores hdrTexture after the blurred scene has been composed for presentation. */
+	void RestoreCleanScene();
+
 	bool showHDRWarningPopup = false;
 	bool pendingHDREnable = false;
 	bool presentSuppressed = false;
