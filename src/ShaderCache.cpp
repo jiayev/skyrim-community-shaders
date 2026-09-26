@@ -3569,7 +3569,8 @@ namespace SIE
 		if (!conditionVariable.wait(
 				lock, stoken,
 				[this, &shaderCache]() { return (!availableTasks.empty() || !pendingAuxTasks.empty()) &&
-			                                    // Use < (not <=) so push_task() never exceeds the limit.
+			                                    // Count matrix and auxiliary tasks; ReleaseDispatchSlot()
+			                                    // decrements under this mutex before notifying the waiter.
 			                                    static_cast<int32_t>(dispatchedTasksInFlight.load(std::memory_order_relaxed)) <
 			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
