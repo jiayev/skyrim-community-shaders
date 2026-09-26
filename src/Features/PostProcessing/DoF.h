@@ -14,6 +14,7 @@ struct DoF : public PostProcessFeature
 
 	struct Settings
 	{
+		bool VanillaCompatibility = false;
 		bool AutoFocus = true;
 		float TransitionSpeed = 0.5f;
 		float2 FocusCoord = float2(0.5f, 0.5f);
@@ -78,8 +79,21 @@ struct DoF : public PostProcessFeature
 		float BokehBladeRoundness;
 		float ProceduralBokehAreaScale;
 		float SensorWidthMM;
+		uint VanillaCompatibility;
+		uint VanillaMode;
+		uint VanillaUseFocusTexture;
+		float VanillaRange;
+		// Dynamic focus endpoints: near/far distance and near/far range, in km.
+		float4 VanillaDynamic;
+		float2 VanillaBlur;
+		uint VanillaDynamicFocus;
+		float pad;
+		// Main near/far planes, then first-person near/far planes, in game units.
+		float4 VanillaDepthPlanes;
 	};
-	static_assert(sizeof(DoFCB) == 128, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
+	static_assert(sizeof(DoFCB) == 192, "DoFCB must match the cbuffer layout in dof.cs.hlsl");
+	static_assert(offsetof(DoFCB, VanillaCompatibility) == 128);
+	static_assert(offsetof(DoFCB, VanillaDepthPlanes) == 176);
 
 	eastl::unique_ptr<ConstantBuffer> dofCB = nullptr;
 	eastl::unique_ptr<StructuredBuffer> proceduralBokehSamples = nullptr;
@@ -139,6 +153,10 @@ struct DoF : public PostProcessFeature
 	virtual void DrawSettings() override;
 
 	virtual void Draw(TextureInfo&) override;
+	static void InstallHooks();
+	bool CanUseVanillaCompatibility() const;
+	std::array<float, 16> vanillaConstants{};
+	uint vanillaConstantsFrame = UINT32_MAX;
 	void UpdateProceduralBokehSamples(int bladeCount, float bladeRoundness, bool force = false);
 
 	float debugDistance = 0.0f;

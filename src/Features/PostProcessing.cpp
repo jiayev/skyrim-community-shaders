@@ -882,5 +882,6 @@ void PostProcessing::Prepass()
 void PostProcessing::PostPostLoad()
 {
 	logger::info("Hooking preprocess passes");
+	DoF::InstallHooks();
 	stl::write_vfunc<0x2, BSImagespaceShaderRefraction_SetupTechnique>(RE::VTABLE_BSImagespaceShaderRefraction[0]);
 }

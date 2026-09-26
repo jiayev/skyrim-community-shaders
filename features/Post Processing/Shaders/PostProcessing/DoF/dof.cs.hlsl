@@ -149,6 +149,7 @@ Texture2D<float> TexReduceCoCInput : register(t18);
 // Keeping w separate is essential for polygon corners: shaped xy may extend beyond unit radius,
 // but its intersection distance still belongs to the same canonical gather ring.
 StructuredBuffer<float4> BokehSamples : register(t19);
+Texture2D<float> VanillaFocusTexture : register(t20);
 
 cbuffer DoFCB : register(b1)
 {
@@ -181,6 +182,15 @@ cbuffer DoFCB : register(b1)
 	float BokehBladeRoundness;
 	float ProceduralBokehAreaScale;
 	float SensorWidthMM;
+	uint VanillaCompatibility;
+	uint VanillaMode;
+	uint VanillaUseFocusTexture;
+	float VanillaRange;
+	float4 VanillaDynamic;
+	float2 VanillaBlur;
+	uint VanillaDynamicFocus;
+	float VanillaPadding;
+	float4 VanillaDepthPlanes;
 };
 
 // One CoC tile covers exactly one gather thread group: 8x8 half res pixels == 16x16 full res pixels.
@@ -221,6 +231,16 @@ float GetDepth(float2 uv)
 	return max(depth, 1e-6);
 }
 
+float GetVanillaDepth(float rawDepth)
+{
+	// Skyrim reserves [0, 0.01] for the first-person camera and remaps world depth.
+	float2 planes = rawDepth <= 0.01f ? VanillaDepthPlanes.zw : VanillaDepthPlanes.xy;
+	float depth = rawDepth <= 0.01f ? 100.0f * rawDepth : 1.01f * rawDepth - 0.01f;
+	if (!all(isfinite(planes)) || planes.x <= 0.0f || planes.y <= planes.x)
+		return SharedData::GetScreenDepth(rawDepth) * GAME_UNIT_TO_M * 0.001f;
+	return (planes.x * planes.y / max(planes.y - depth * (planes.y - planes.x), 1e-6f)) * GAME_UNIT_TO_M * 0.001f;
+}
+
 float PreviousFocus()
 {
 	return TexPreviousFocus[uint2(0, 0)].x;
@@ -252,6 +272,46 @@ float4 GetShapeTap(float angle, float shapeRingDistance)
 
 float CalculateBlurDiscSize(FocusInfo focusInfo)
 {
+	if (VanillaCompatibility != 0) {
+		float rawDepth = DepthTexture.SampleLevel(LinearSampler, focusInfo.texcoord, 0);
+		// Bit 2 excludes the sky. Dynamic DoF uses its far-focus strength in
+		// params2.w instead, as in ISDepthOfField.hlsl.
+		bool excludeSky = VanillaDynamicFocus != 0 ? VanillaBlur.y != 0.0f : (VanillaMode & 4u) != 0u;
+		float skyCoverage = 0.0f;
+		if (excludeSky && rawDepth > 0.999998987f) {
+			float totalDepth = 0.0f;
+			[unroll] for (int y = -1; y <= 1; ++y)
+			{
+				[unroll] for (int x = -1; x <= 1; ++x)
+				{
+					float sampleDepth = DepthTexture.SampleLevel(LinearSampler, focusInfo.texcoord + float2(x, y) * 3.0f * SharedData::BufferDim.zw, 0);
+					totalDepth += sampleDepth;
+					skyCoverage += sampleDepth > 0.999998987f ? 1.0f / 9.0f : 0.0f;
+				}
+			}
+			rawDepth = totalDepth / 9.0f;
+			if (rawDepth > 0.999998987f)
+				return 0.0f;
+		}
+		if (rawDepth <= 1e-5f)
+			return 0.0f;
+		float depth = GetVanillaDepth(rawDepth);
+		float range = VanillaRange;
+		float strength = VanillaBlur.x;
+		if (VanillaDynamicFocus != 0) {
+			float factor = saturate((focusInfo.focusDepth - VanillaDynamic.x) / max(VanillaDynamic.y - VanillaDynamic.x, 1e-7f));
+			range = lerp(VanillaDynamic.z, VanillaDynamic.w, factor);
+			strength = lerp(VanillaBlur.x, VanillaBlur.y, factor);
+		}
+		bool nearField = depth < focusInfo.focusDepth;
+		if (nearField ? NearPlaneMaxBlur == 0.0f : FarPlaneMaxBlur == 0.0f)
+			return 0.0f;
+		// Native DoF blends a fixed Gaussian blur with this linear depth ramp.
+		// Map that amount to the existing signed gather radius; the bokeh kernel
+		// remains Community Shaders' rather than introducing a second blur pipeline.
+		float amount = saturate(abs(depth - focusInfo.focusDepth) / max(range, 1e-7f)) * saturate(strength) * (1.0f - 0.5f * skyCoverage);
+		return nearField ? -amount * MaxNearCoCRadius : amount * MaxFarCoCRadius;
+	}
 	float pixelDepth = GetDepth(focusInfo.texcoord);
 	float pixelDepthInM = pixelDepth * 1000.0;  // in meter
 
@@ -368,6 +428,17 @@ float4 PerformFullFragmentGaussianBlur(Texture2D source, float2 texcoord, uint2 
 
 [numthreads(1, 1, 1)] void CS_UpdateFocus(uint2 DTid : SV_DispatchThreadID) {
 	float depth = AutoFocus ? GetDepth(FocusCoord) : ManualFocusPlane;
+	if (VanillaCompatibility != 0) {
+		if (AutoFocus != 0)
+			depth = GetVanillaDepth(DepthTexture.SampleLevel(LinearSampler, FocusCoord, 0));
+		if (VanillaUseFocusTexture != 0) {
+			float nativeDepth = VanillaFocusTexture.Load(int3(0, 0, 0)) * GAME_UNIT_TO_M * 0.001f;
+			if (isfinite(nativeDepth) && nativeDepth > 0.0f)
+				depth = nativeDepth;
+		}
+		RWFocus[DTid] = max(depth, 1e-6f);
+		return;
+	}
 	float previousFocus = TexPreviousFocus[uint2(0, 0)];
 	RWFocus[DTid] = lerp(previousFocus, depth, TransitionSpeed);
 }
