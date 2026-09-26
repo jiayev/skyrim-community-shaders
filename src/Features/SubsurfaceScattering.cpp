@@ -487,7 +487,11 @@ ID3D11ComputeShader* SubsurfaceScattering::GetComputeShaderBurley()
 
 void SubsurfaceScattering::DataLoaded()
 {
-	isBeastRaceKeyword = RE::TESForm::LookupByEditorID("IsBeastRace")->As<RE::BGSKeyword>();
+	auto form = RE::TESForm::LookupByEditorID("IsBeastRace");
+	isBeastRaceKeyword = form ? form->As<RE::BGSKeyword>() : nullptr;
+	if (!isBeastRaceKeyword) {
+		logger::warn("IsBeastRace keyword is unavailable; using the default SSS skin classification");
+	}
 }
 
 void SubsurfaceScattering::PostPostLoad()
@@ -505,10 +509,11 @@ void SubsurfaceScattering::BSLightingShader_SetupSkin(RE::BSRenderPass* a_pass)
 			bool isBeastRace = true;
 
 			auto geometry = a_pass->geometry;
-			if (auto userData = geometry->GetUserData())
-				if (auto actor = userData->As<RE::Actor>())
-					if (auto race = actor->GetRace())
-						isBeastRace = race->HasKeyword(isBeastRaceKeyword);
+			if (isBeastRaceKeyword)
+				if (auto userData = geometry->GetUserData())
+					if (auto actor = userData->As<RE::Actor>())
+						if (auto race = actor->GetRace())
+							isBeastRace = race->HasKeyword(isBeastRaceKeyword);
 
 			validMaterials = true;
 
