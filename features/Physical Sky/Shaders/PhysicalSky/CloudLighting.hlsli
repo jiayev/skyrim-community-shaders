@@ -7,11 +7,11 @@ float CloudLightDensity(float extinction, float height)
 	return extinction * (1.0 + 3.0 * h2 * h2);
 }
 
-float SampleCloudLightDensity(float3 pos, float viewDistance)
+float SampleCloudLightDensity(float3 pos, float viewDistance, float minimumMip)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	CloudDensityContext context;
-	const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), 2.0, viewDistance, context);
+	const float extinction = sampleCloudDensity(pos, GetCloudLayer(info), 2.0, viewDistance, minimumMip, context);
 	return CloudLightDensity(extinction, context.ndf.height_fraction);
 }
 
@@ -22,7 +22,7 @@ float CloudLightProbeJitter(float2 positionMeters)
 	return frac((seed.y + seed.x + scramble * 2.0) * (scramble + seed.x));
 }
 
-float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height, float viewDistance)
+float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height, float viewDistance, float minimumMip)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const uint count = uint(10.0 - saturate((viewDistance - 512.0) * 0.00040192925) * 6.0);
@@ -41,7 +41,7 @@ float CloudLocalSunOcclusion(float3 pos, float3 viewDir, float height, float vie
 		const float distanceMeters = (fraction * extentMeters + jitter * spacingMeters) * angularScale;
 		const float3 samplePos = pos + info.dirlightDir * (distanceMeters * GAME_UNITS_PER_METER);
 		const float weightMeters = (forward + 1.0) * spacingMeters * 0.45 * (index * 0.4 * forward + 1.0);
-		occlusion += SampleCloudLightDensity(samplePos, viewDistance) * weightMeters;
+		occlusion += SampleCloudLightDensity(samplePos, viewDistance, minimumMip) * weightMeters;
 	}
 	return occlusion;
 }
@@ -120,10 +120,10 @@ float2 CloudLightResponse(float cosine, float height, float profile, float light
 }
 
 float3 CloudLighting(float3 pos, float3 viewDir, float height, float profile, float product, float extinction,
-	float viewDistance, float phase, CloudAmbient ambient)
+	float viewDistance, float minimumMip, float phase, CloudAmbient ambient)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float occlusion = CloudLocalSunOcclusion(pos, viewDir, height, viewDistance);
+	const float occlusion = CloudLocalSunOcclusion(pos, viewDir, height, viewDistance, minimumMip);
 	const float2 response = CloudLightResponse(dot(viewDir, info.dirlightDir), saturate(height), saturate(profile),
 		CloudLightDensity(extinction, height), saturate(product), occlusion);
 	const float3 planetPos = pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius);

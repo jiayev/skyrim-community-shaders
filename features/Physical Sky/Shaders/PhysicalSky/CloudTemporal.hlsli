@@ -212,7 +212,7 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	                                                        linearDepth / max(abs(mul(FrameBuffer::CameraView, float4(ray, 0)).z), 1e-6);
 	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const float2 jitter = float2(CloudTemporalMarchHash(pixel, info.cloudFrameIndex), CloudSpatialMarchHash(pixel));
-	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, SampleCloudApShadow(pixel), LoadCloudBoundary(tid, ray));
+	const VolumetricCloudResult result = RenderVolumetricCloudRay(ray, eye, sceneDistance, jitter, SampleCloudApShadow(pixel), LoadCloudBoundary(tid, ray), 0.0);
 	RWTexTr[tid] = result.transmittance.x;
 	RWTexLum[tid] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
 	RWTexAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), EncodeCloudDepth(linearDepth), result.motionMetadata * (1.0 - result.transmittance.x));
@@ -320,6 +320,14 @@ float3 CloudCubeDirection(float2 pixel, uint face, uint size)
 CloudTemporalSample ReconstructCloudCube(TextureCube<float> transmittance, TextureCube<float4> color, TextureCube<float4> depth,
 	float2 position, uint face, uint size, bool reweightEmpty)
 {
+	if (!reweightEmpty) {
+		const float3 direction = CloudCubeDirection(clamp(position, 0.0, float(size - 1u)), face, size);
+		CloudTemporalSample result;
+		result.transmittance = transmittance.SampleLevel(TransmittanceSampler, direction, 0);
+		result.color = color.SampleLevel(TransmittanceSampler, direction, 0);
+		result.metadata = depth.SampleLevel(TransmittanceSampler, direction, 0);
+		return result;
+	}
 	const float2 base = floor(position);
 	float transmittances[4];
 	float4 colors[4];
@@ -381,7 +389,7 @@ float2 CloudCubePosition(float3 direction, uint face)
 	return position * float2(0.5, -0.5) + 0.5;
 }
 
-[numthreads(4, 4, 1)] void renderCubemap(uint3 tid : SV_DispatchThreadID) {
+[numthreads(8, 4, 1)] void renderCubemap(uint3 tid : SV_DispatchThreadID) {
 	uint3 dims;
 	RWTexCubeTr.GetDimensions(dims.x, dims.y, dims.z);
 	if (any(tid >= dims))
@@ -391,8 +399,11 @@ float2 CloudCubePosition(float3 direction, uint face)
 	const float3 eye = FrameBuffer::CameraPosAdjust.xyz - float3(0, 0, info.bottomZ);
 	const uint2 seed = pixel + uint2(tid.z * dims.x * 4u, 0);
 	const float2 jitter = float2(CloudTemporalMarchHash(seed, info.cloudFrameIndex), CloudSpatialMarchHash(seed));
-	const VolumetricCloudResult result = RenderVolumetricCloudRay(CloudCubeDirection(pixel, tid.z, dims.x * 4u),
-		eye, 0.0, jitter, 0.0, 0.0);
+	const float3 direction = CloudCubeDirection(pixel, tid.z, dims.x * 4u);
+	const float cubeCosine = max(max(abs(direction.x), abs(direction.y)), abs(direction.z));
+	const float angularFootprint = 2.0 * cubeCosine / (dims.x * 4u);
+	const VolumetricCloudResult result = RenderVolumetricCloudRay(direction,
+		eye, 0.0, jitter, 0.0, 0.0, angularFootprint);
 	RWTexCubeTr[tid] = result.transmittance.x;
 	RWTexCubeLum[tid] = float4(min(result.lum, 65504.0), 1.0 - result.transmittance.x);
 	RWTexCubeAux[tid] = float4(EncodeCloudDepth(result.cloud_depth), 0.0, result.motionMetadata * (1.0 - result.transmittance.x));
