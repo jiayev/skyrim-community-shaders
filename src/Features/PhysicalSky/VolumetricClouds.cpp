@@ -100,6 +100,30 @@ void PhysicalSky::SetupVolumetricResources()
 	logger::debug("Setting up volumetric cloud resources...");
 
 	debugCubeFaceSrvs.clear();
+	{
+		auto createBounds = [](uint32_t size, const char* name) {
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = desc.Height = size;
+			desc.MipLevels = desc.ArraySize = 1;
+			desc.Format = DXGI_FORMAT_R32G32_FLOAT;
+			desc.SampleDesc.Count = 1;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			auto texture = eastl::make_unique<Texture2D>(desc, name);
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{};
+			srv.Format = desc.Format;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			srv.Texture2D.MipLevels = 1;
+			texture->CreateSRV(srv);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uav{};
+			uav.Format = desc.Format;
+			uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+			texture->CreateUAV(uav);
+			return texture;
+		};
+		texCloudHeightBounds = createBounds(1, "PhysicalSky::CloudHeightBounds");
+		texCloudHeightBoundsTiles = createBounds(16, "PhysicalSky::CloudHeightBoundsTiles");
+	}
 
 	// Tileable sampler (wrap all axes)
 	{
@@ -359,6 +383,8 @@ void PhysicalSky::CompileVolumetricShaders()
 	};
 
 	std::array shaderInfos = {
+		ShaderInfo{ &csCloudHeightBounds, "Volumetrics.cs.hlsl", {}, "buildCloudHeightBounds" },
+		ShaderInfo{ &csCloudHeightBoundsReduce, "Volumetrics.cs.hlsl", {}, "reduceCloudHeightBounds" },
 		ShaderInfo{ &csVolAmbientSH, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientSH" },
 		ShaderInfo{ &csVolMainView, "Volumetrics.cs.hlsl" },
 		ShaderInfo{ &csVolFilter, "Volumetrics.cs.hlsl", {}, "filterCloud" },
@@ -823,11 +849,31 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		outputSrvs[0] = texVolFilteredTr->srv.get();
 		outputSrvs[1] = texVolFilteredLum->srv.get();
 
+		if (!volMainHistoryValid) {
+			state->BeginPerfEvent("Volumetric Clouds: Height Bounds");
+			globals::profiler->BeginPass("PhysicalSky::CloudHeightBounds");
+			auto* boundsOutput = texCloudHeightBoundsTiles->uav.get();
+			context->CSSetUnorderedAccessViews(6, 1, &boundsOutput, nullptr);
+			context->CSSetShader(csCloudHeightBounds.get(), nullptr, 0);
+			context->Dispatch(16, 16, 1);
+			context->CSSetUnorderedAccessViews(6, 1, nullUavs, nullptr);
+			auto* boundsInput = texCloudHeightBoundsTiles->srv.get();
+			context->CSSetShaderResources(25, 1, &boundsInput);
+			boundsOutput = texCloudHeightBounds->uav.get();
+			context->CSSetUnorderedAccessViews(6, 1, &boundsOutput, nullptr);
+			context->CSSetShader(csCloudHeightBoundsReduce.get(), nullptr, 0);
+			context->Dispatch(1, 1, 1);
+			context->CSSetUnorderedAccessViews(6, 1, nullUavs, nullptr);
+			globals::profiler->EndPass();
+			state->EndPerfEvent();
+		}
+		auto* heightBounds = texCloudHeightBounds->srv.get();
+		context->CSSetShaderResources(25, 1, &heightBounds);
 		uavs = { texVolCubeTraceTr->uav.get(), texVolCubeTraceLum->uav.get(), texVolCubeTraceAux->uav.get() };
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolCubemap.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCubemap");
-		context->Dispatch((kVolCubeSize / 4u + 3u) >> 2, (kVolCubeSize / 4u + 3u) >> 2, 6);
+		context->Dispatch((kVolCubeSize / 4u + 7u) >> 3, (kVolCubeSize / 4u + 3u) >> 2, 6);
 		globals::profiler->EndPass();
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 		std::array<ID3D11ShaderResourceView*, 6> cubeSrvs = {
@@ -862,7 +908,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		ID3D11SamplerState* nullSamplers[3] = {};
 		context->CSSetShaderResources(0, 19, nullSrvs);
 		context->CSSetShaderResources(20, 4, nullShadowSrvs);
-		context->CSSetShaderResources(24, 1, nullShadowSrvs);
+		context->CSSetShaderResources(24, 2, nullShadowSrvs);
 		context->CSSetShaderResources(26, 12, nullHistorySrvs);
 		context->CSSetShaderResources(38, 3, nullFilteredSrvs);
 		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);

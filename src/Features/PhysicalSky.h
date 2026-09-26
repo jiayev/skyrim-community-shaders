@@ -230,6 +230,8 @@ struct PhysicalSky final : public Feature
 	constexpr static uint16_t kVolCubeSize = 64;
 	constexpr static uint32_t kCloudBoundaryCells = 256;
 	eastl::unique_ptr<Texture2D> texCloudBoundary = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudHeightBounds = nullptr;
+	eastl::unique_ptr<Texture2D> texCloudHeightBoundsTiles = nullptr;
 	winrt::com_ptr<ID3D11Buffer> cloudBoundaryIndices = nullptr;
 	winrt::com_ptr<ID3D11BlendState> cloudBoundaryBlend = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> cloudBoundaryRasterizer = nullptr;
@@ -388,6 +390,8 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csVolShadowResample = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolCubemap = nullptr;
 	winrt::com_ptr<ID3D11ComputeShader> csVolAmbientSH = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudHeightBounds = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudHeightBoundsReduce = nullptr;
 
 	winrt::com_ptr<ID3D11SamplerState> sampTileable = nullptr;
 

@@ -131,6 +131,7 @@ Texture2D<unorm float3> TexCloudAdjustmentLUT : register(t18);
 
 Texture3D<float> TexShadowVolume : register(t23);
 Texture2D<float4> TexCloudBoundary : register(t24);
+Texture2D<float2> TexCloudHeightBounds : register(t25);
 Texture2D<float> TexVolHistoryTr : register(t26);
 Texture2D<float4> TexVolHistoryLum : register(t27);
 Texture2D<float4> TexVolHistoryAux : register(t28);
@@ -315,10 +316,14 @@ float2 LowNdfUV(float2 worldXY, VolumetricCloudData info)
 	return worldXY * info.lowNdfFrequency + 0.5;
 }
 
-float CloudViewStep(float distance)
+float CloudViewStep(float distance, float angularFootprint)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	return (3.0 + distance * GAME_UNIT_TO_M * (60.0 / 16384.0)) * info.marchStepScale * GAME_UNITS_PER_METER;
+	const float viewStep = (3.0 + distance * GAME_UNIT_TO_M * (60.0 / 16384.0)) * info.marchStepScale * GAME_UNITS_PER_METER;
+	if (angularFootprint <= 0.0)
+		return viewStep;
+	// Resolve the final reflection texel, independently of the checkerboard spacing.
+	return max(viewStep, max(3.0 * GAME_UNITS_PER_METER, distance * angularFootprint * 0.25));
 }
 
 struct NDFInfo
@@ -382,21 +387,23 @@ struct CloudDensityContext
 };
 
 float sampleCloudDensityFromContext(
-	CloudDensityContext density_context, float mipBias)
+	CloudDensityContext density_context, float mipBias, float minimumMip)
 {
 	const NDFInfo ndf = density_context.ndf;
 	if (!ndf.in_layer || ndf.dimension_profile <= 1e-10)
 		return 0.0;
 
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float mip = floor(ndf.dimension_profile * 3.0 + mipBias);
+	const float profileMip = floor(ndf.dimension_profile * 3.0 + mipBias);
+	// Density is nonlinear in noise; coarse averages must not erase the cloud shape.
+	const float mip = max(profileMip, min(minimumMip, profileMip + 1.0));
 	const float4 noise = TexCloudShapeNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, mip);
 	const float eroded = ReconstructCloudNoiseDensity(noise, ndf.dimension_profile, ndf.top_type, ndf.height_fraction, density_context.eye_distance);
 	return ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower) * info.lowDensityScale;
 }
 
 float sampleCloudDensity(
-	float3 pos, CloudLayer cloud, float mipBias, float viewDistance,
+	float3 pos, CloudLayer cloud, float mipBias, float viewDistance, float minimumMip,
 	out CloudDensityContext density_context)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
@@ -419,7 +426,7 @@ float sampleCloudDensity(
 	density_context.noise_coordinates = float3(xy * 0.0043545123 + (displacement * 2.0 - 1.0) * (0.125 - bottomFade * 0.125),
 		(pos.z * GAME_UNIT_TO_M - 20.0 + bottomFade * 10.0) * 0.0034834063 - info.cloudEvolution.x * (1.0 / 6.283185307179586));
 	density_context.eye_distance = viewDistance;
-	return sampleCloudDensityFromContext(density_context, mipBias);
+	return sampleCloudDensityFromContext(density_context, mipBias, minimumMip);
 }
 
 float3 sampleExternalSunTransmittance(float3 pos, float3 sun_dir)
@@ -506,7 +513,7 @@ float2 ClipCloudBoundary(float2 segment, float4 boundary)
 	return segment;
 }
 
-VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, float2 jitter, float apShadow, float4 boundary)
+VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, float sceneDistance, float2 jitter, float apShadow, float4 boundary, float angularFootprint)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	VolumetricCloudResult result;
@@ -523,6 +530,17 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const CloudRaySegments bounds = GetCloudRaySegments(planetEye, direction,
 		info.lowCloudBaseAltitude, info.lowCloudTraceTopAltitude, info);
 	CloudRaySegments low = bounds;
+	if (angularFootprint > 0.0) {
+		const float2 heights = TexCloudHeightBounds[uint2(0, 0)];
+		const float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, heights);
+		// Enclose bilinear NDF samples, including roundoff at planetary coordinates.
+		const float padding = max(GAME_UNITS_PER_METER, info.planetRadius * 4.7683716e-7);
+		low = GetCloudRaySegments(planetEye, direction, max(info.lowCloudBaseAltitude, altitude.x - padding),
+			min(info.lowCloudTraceTopAltitude, altitude.y + padding), info);
+		const float end = bounds.farSegment.y > bounds.farSegment.x ? bounds.farSegment.y : bounds.nearSegment.y;
+		low.nearSegment.y = max(low.nearSegment.x, min(low.nearSegment.y, end));
+		low.farSegment.y = max(low.farSegment.x, min(low.farSegment.y, end));
+	}
 	low.nearSegment = ClipCloudBoundary(low.nearSegment, boundary);
 	low.farSegment = ClipCloudBoundary(low.farSegment, boundary);
 	if (sceneLimited) {
@@ -565,6 +583,14 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 	const float phase = CloudScatteringPhase(dot(direction, info.dirlightDir));
 	const CloudAmbient ambient = MakeCloudAmbient();
 	const CloudLayer layer = GetCloudLayer(info);
+	float noiseTexelsPerMeter = 0.0;
+	float maximumNoiseMip = 0.0;
+	if (angularFootprint > 0.0) {
+		uint width, height, depth, levels;
+		TexCloudShapeNoise.GetDimensions(0, width, height, depth, levels);
+		noiseTexelsPerMeter = max(max(width, height) * 0.0043545123, depth * 0.0034834063);
+		maximumNoiseMip = float(levels - 1u);
+	}
 	float depthSum = 0.0;
 	float weightSum = 0.0;
 	float cirrusWeight = 0.0;
@@ -583,18 +609,19 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		float distance = begin;
 		[loop] while (distance < end && transmittance > 0.1)
 		{
-			const float step = min(CloudViewStep(distance), end - distance);
+			const float step = min(CloudViewStep(distance, angularFootprint), end - distance);
 			const float sampleDistance = distance + (distance * GAME_UNIT_TO_M < 250.0 ? jitter.x : jitter.y) * step;
 			const float3 pos = eye + direction * sampleDistance;
 			CloudDensityContext densityContext = (CloudDensityContext)0;
 			const float viewDistance = distance * GAME_UNIT_TO_M;
-			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, densityContext);
+			const float minimumMip = min(log2(max(viewDistance * angularFootprint * noiseTexelsPerMeter, 1.0)), maximumNoiseMip);
+			const float extinction = sampleCloudDensity(pos, layer, 0.0, viewDistance, minimumMip, densityContext);
 			const float depthDistance = distance;
 			distance += step * (densityContext.ndf.dimension_profile > 0.05 ? 1.0 : 2.0);
 			if (extinction <= 0.0)
 				continue;
 			const float3 source = CloudLighting(pos, direction, densityContext.ndf.height_fraction, densityContext.ndf.dimension_profile,
-				densityContext.ndf.coverage * densityContext.ndf.top_type, extinction, viewDistance, phase, ambient);
+				densityContext.ndf.coverage * densityContext.ndf.top_type, extinction, viewDistance, minimumMip, phase, ambient);
 			const float stepTransmittance = exp(-extinction * step * GAME_UNIT_TO_M);
 			const float weight = transmittance * (1.0 - stepTransmittance);
 			result.lum += weight * source;
@@ -618,6 +645,7 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 }
 
 #include "PhysicalSky/CloudBlur.hlsli"
+#include "PhysicalSky/CloudBounds.hlsli"
 #include "PhysicalSky/CloudTemporal.hlsli"
 
 // Match the largest shadow-volume dimension (kShadowVolW/H in PhysicalSky.h).
@@ -685,7 +713,7 @@ groupshared int4 g_density_segment[NTHREADS];
 		// Fetch only density represented inside this finite shadow volume. Prefixes
 		// start with zero extinction at the boundary instead of assuming a uniform
 		// cloud shell outside the represented domain.
-		density = SampleCloudLightDensity(pos, 2000.0) * length(ray_uv_increment * scale);
+		density = SampleCloudLightDensity(pos, 2000.0, 0.0) * length(ray_uv_increment * scale);
 
 		accumulated_density = density;
 	}
