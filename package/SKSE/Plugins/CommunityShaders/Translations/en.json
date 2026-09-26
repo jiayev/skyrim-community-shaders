@@ -1614,6 +1614,8 @@
     "feature.post_processing.do_f.adaptive_gather": "Adaptive Gather",
     "feature.post_processing.do_f.adaptive_gather_desc": "Uses a fixed low-sample kernel and a CoC-aware image pyramid.",
     "feature.post_processing.do_f.auto_focus": "Auto Focus",
+    "feature.post_processing.do_f.vanilla_compatibility": "Vanilla Compatibility Mode",
+    "feature.post_processing.do_f.vanilla_compatibility_desc": "Matches the game's focus, range, strength and blur modes using Community Shaders DoF. Follows the game's DoF toggle and dynamic DoF settings. Underwater effects remain handled by the game. Overrides lens and bokeh controls without changing their saved values.",
     "feature.post_processing.do_f.blur_quality": "Compatibility Blur Quality",
     "feature.post_processing.do_f.bokeh_blade_count": "Aperture Blades",
     "feature.post_processing.do_f.bokeh_blade_roundness": "Blade Roundness",

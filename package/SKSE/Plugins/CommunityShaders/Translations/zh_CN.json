@@ -1560,6 +1560,8 @@
     "feature.post_processing.description": "提供高级后处理图像效果，用于提升游戏画面质量。",
     "feature.post_processing.disable_vanilla_tonemapping": "禁用原版色调映射",
     "feature.post_processing.do_f.auto_focus": "自动对焦",
+    "feature.post_processing.do_f.vanilla_compatibility": "原版兼容模式",
+    "feature.post_processing.do_f.vanilla_compatibility_desc": "使用 Community Shaders 景深匹配游戏的焦点、范围、强度和模糊模式，遵循游戏的景深开关及动态景深设置。水下效果仍由游戏处理。启用时接管镜头与散景控制，但不修改已保存的参数。",
     "feature.post_processing.do_f.blur_quality": "模糊质量",
     "feature.post_processing.do_f.bokeh_busy_factor": "焦外繁杂度",
     "feature.post_processing.do_f.console_selection": "控制台选中目标",
