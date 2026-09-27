@@ -69,6 +69,7 @@ private:
 		float avgMs;
 		float p95Ms;
 		float p99Ms;
+		bool split = false;
 	};
 	struct GroupEntry
 	{
@@ -77,7 +78,13 @@ private:
 		float totalP95Ms = 0.0f;
 		float totalP99Ms = 0.0f;
 		std::vector<PassEntry> passes;
+		bool split = false;
 	};
+	static inline bool cachedAnySplit = false;
+	/// Share of recent samples that must straddle a DXVK submission before a timer is marked.
+	static constexpr float kSplitMarkFraction = 0.5f;
+	/** @brief Draws the "*" after a timer label whose GPU span straddles DXVK submissions, with its tooltip. */
+	static void SplitMarker(bool a_split);
 	static inline float cachedTotalAvgMs = 0.0f;
 	static inline float cachedTotalP95Ms = 0.0f;
 	static inline float cachedTotalP99Ms = 0.0f;

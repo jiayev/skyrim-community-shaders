@@ -1,15 +1,20 @@
 #include "DXVKInterop.h"
 
 #include "Globals.h"
+#include "GpuIdleTrace.h"
+#include "Profiler.h"
+#include "Features/DrawcallLimitFix/Switches.h"
 
 #include <algorithm>
 
 namespace
 {
+	/// Times a buffer that has no profiler label while GpuIdleTrace runs; never published to the profiler.
+	constexpr const char kTraceOnlyLabel[] = "Streamline interop (unlabelled)";
+
 	struct QueueSubmitAttempt
 	{
 		VkResult endResult = VK_ERROR_DEVICE_LOST;
-		VkResult resetResult = VK_ERROR_DEVICE_LOST;
 		VkResult submitResult = VK_ERROR_DEVICE_LOST;
 		DWORD exceptionCode = 0;
 		bool queueLockAcquired = false;
@@ -37,17 +42,27 @@ namespace
 		return attempt;
 	}
 
-	VulkanResultAttempt GetFenceStatusSEH(VkDevice a_device, VkFence a_fence) noexcept
+	struct CounterAttempt
 	{
-		VulkanResultAttempt attempt{};
-		attempt.result = vkGetFenceStatus(a_device, a_fence);
+		VkResult result = VK_ERROR_DEVICE_LOST;
+		uint64_t value = 0;
+	};
+
+	CounterAttempt GetTimelineValueSEH(VkDevice a_device, VkSemaphore a_semaphore) noexcept
+	{
+		CounterAttempt attempt{};
+		attempt.result = vkGetSemaphoreCounterValue(a_device, a_semaphore, &attempt.value);
 		return attempt;
 	}
 
-	VulkanResultAttempt WaitForFenceSEH(VkDevice a_device, VkFence a_fence) noexcept
+	VulkanResultAttempt WaitForTimelineSEH(VkDevice a_device, VkSemaphore a_semaphore, uint64_t a_value) noexcept
 	{
 		VulkanResultAttempt attempt{};
-		attempt.result = vkWaitForFences(a_device, 1, &a_fence, VK_TRUE, UINT64_MAX);
+		VkSemaphoreWaitInfo waitInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+		waitInfo.semaphoreCount = 1;
+		waitInfo.pSemaphores = &a_semaphore;
+		waitInfo.pValues = &a_value;
+		attempt.result = vkWaitSemaphores(a_device, &waitInfo, UINT64_MAX);
 		return attempt;
 	}
 
@@ -91,35 +106,43 @@ namespace
 		a_interopDevice->ReleaseSubmissionQueue();
 	}
 
-	/// Submits a recorded command buffer directly on DXVK's queue through the COM
-	/// interop device. Flushes D3D11 rendering first so our command buffer is ordered
-	/// after it, then takes the submission-queue lock for the submit.
-	///
-	/// FlushRenderingCommands orders this behind the D3D11 work already recorded, which is
-	/// what frame generation needs: it reads the results of this buffer. Validated in game
-	/// with both FSR-FG and DLSS-G presenting at an exact 2x.
-	QueueSubmitAttempt DirectQueueSubmitSEH(IDXGIVkInteropDevice* a_interopDevice,
-		VkDevice a_device, VkQueue a_queue,
-		VkCommandBuffer a_commandBuffer, VkFence a_fence) noexcept
+	/// Waits until DXVK has handed every enqueued ring submission to the queue (DXVKInterop::streamPending).
+	void WaitForStreamPending(std::atomic<uint32_t>& a_pending) noexcept
+	{
+		for (uint32_t pending = a_pending.load(std::memory_order_acquire); pending; pending = a_pending.load(std::memory_order_acquire))
+			a_pending.wait(pending, std::memory_order_acquire);
+	}
+
+	/// Submits a recorded command buffer directly on DXVK's queue through the COM interop device, for a thread other than
+	/// the stream thread. FlushRenderingCommands (DXVK's Flush and SynchronizeCsThread(SynchronizeAll)) waits until DXVK has
+	/// submitted every D3D11 command recorded so far, which is what orders this buffer after them; then the submission
+	/// queue's lock is taken for the submit.
+	QueueSubmitAttempt DirectQueueSubmitSEH(IDXGIVkInteropDevice* a_interopDevice, VkQueue a_queue,
+		VkCommandBuffer a_commandBuffer, VkSemaphore a_timeline, uint64_t a_value, std::atomic<uint32_t>& a_streamPending) noexcept
 	{
 		QueueSubmitAttempt attempt{};
 		__try {
 			attempt.endResult = vkEndCommandBuffer(a_commandBuffer);
 			if (attempt.endResult == VK_SUCCESS) {
-				attempt.resetResult = vkResetFences(a_device, 1, &a_fence);
-				if (attempt.resetResult == VK_SUCCESS) {
-					a_interopDevice->FlushRenderingCommands();
-					__try {
-						a_interopDevice->LockSubmissionQueue();
-						attempt.queueLockAcquired = true;
-						VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-						submitInfo.commandBufferCount = 1;
-						submitInfo.pCommandBuffers = &a_commandBuffer;
-						attempt.submitResult = vkQueueSubmit(a_queue, 1, &submitInfo, a_fence);
-					} __finally {
-						if (attempt.queueLockAcquired)
-							ReleaseSubmissionQueue(a_interopDevice);
-					}
+				a_interopDevice->FlushRenderingCommands();
+				// FlushRenderingCommands has DXVK's worker process the enqueued ones; its submission thread submits them.
+				WaitForStreamPending(a_streamPending);
+				__try {
+					a_interopDevice->LockSubmissionQueue();
+					attempt.queueLockAcquired = true;
+					VkTimelineSemaphoreSubmitInfo timelineInfo{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
+					timelineInfo.signalSemaphoreValueCount = 1;
+					timelineInfo.pSignalSemaphoreValues = &a_value;
+					VkSubmitInfo submitInfo{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
+					submitInfo.pNext = &timelineInfo;
+					submitInfo.commandBufferCount = 1;
+					submitInfo.pCommandBuffers = &a_commandBuffer;
+					submitInfo.signalSemaphoreCount = 1;
+					submitInfo.pSignalSemaphores = &a_timeline;
+					attempt.submitResult = vkQueueSubmit(a_queue, 1, &submitInfo, VK_NULL_HANDLE);
+				} __finally {
+					if (attempt.queueLockAcquired)
+						ReleaseSubmissionQueue(a_interopDevice);
 				}
 			}
 		} __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -127,6 +150,43 @@ namespace
 			attempt.exceptionCode = GetExceptionCode();
 		}
 		return attempt;
+	}
+
+	struct StreamSubmitAttempt
+	{
+		VkResult endResult = VK_ERROR_DEVICE_LOST;
+		HRESULT enqueueResult = E_FAIL;
+		DWORD exceptionCode = 0;
+		bool faulted = false;
+	};
+
+	/// Puts a recorded command buffer into DXVK's command stream (dxvkEnqueueInteropSubmission) on the stream thread:
+	/// DXVK closes its command list and submits the buffer after it, on its submission thread, before whatever D3D11
+	/// records next. Nothing is waited for.
+	StreamSubmitAttempt StreamSubmitSEH(PFN_dxvkEnqueueInteropSubmission a_enqueue, const DxvkOrgInteropSubmission& a_submission,
+		VkCommandBuffer a_commandBuffer) noexcept
+	{
+		StreamSubmitAttempt attempt{};
+		__try {
+			attempt.endResult = vkEndCommandBuffer(a_commandBuffer);
+			if (attempt.endResult == VK_SUCCESS)
+				attempt.enqueueResult = a_enqueue(globals::d3d::device, &a_submission);
+		} __except (EXCEPTION_EXECUTE_HANDLER) {
+			attempt.faulted = true;
+			attempt.exceptionCode = GetExceptionCode();
+		}
+		return attempt;
+	}
+
+	/// Everything written on the queue before this point is visible to everything after it: the ring buffers open and close
+	/// with one, which is what makes submission order enough between them and D3D11's work (SubmitFrameCommandBuffer).
+	void FullMemoryBarrier(VkCommandBuffer a_commandBuffer) noexcept
+	{
+		VkMemoryBarrier barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+		barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+		vkCmdPipelineBarrier(a_commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0,
+			nullptr, 0, nullptr);
 	}
 
 	struct DeviceIdleAttempt
@@ -163,18 +223,15 @@ namespace
 		return attempt;
 	}
 
-	VkResult CreateSignaledFence(VkDevice a_device, VkFence* a_fence) noexcept
+	VkResult CreateTimelineSemaphore(VkDevice a_device, VkSemaphore* a_semaphore) noexcept
 	{
-		*a_fence = VK_NULL_HANDLE;
-		VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-		fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-		return vkCreateFence(a_device, &fenceInfo, nullptr, a_fence);
-	}
-
-	void DestroyFence(VkDevice a_device, VkFence a_fence) noexcept
-	{
-		if (a_fence != VK_NULL_HANDLE)
-			vkDestroyFence(a_device, a_fence, nullptr);
+		*a_semaphore = VK_NULL_HANDLE;
+		VkSemaphoreTypeCreateInfo typeInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+		typeInfo.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+		typeInfo.initialValue = 0;
+		VkSemaphoreCreateInfo info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+		info.pNext = &typeInfo;
+		return vkCreateSemaphore(a_device, &info, nullptr, a_semaphore);
 	}
 }
 
@@ -394,7 +451,12 @@ bool DXVKInterop::Initialize()
 		synchronousPresentControlAvailable = GetProcAddress(module, "dxvkSetSyncPresent") != nullptr;
 		getPresenterSurfaceState = reinterpret_cast<GetPresenterSurfaceStateFn>(
 			GetProcAddress(module, "dxvkGetPresenterSurfaceState"));
+		// CS_UPSCALE_SUBMIT=direct: every ring submission waits for DXVK's command stream (the previous behaviour).
+		if (DCLF::SwitchValue("CS_UPSCALE_SUBMIT") != "direct")
+			enqueueSubmission = reinterpret_cast<PFN_dxvkEnqueueInteropSubmission>(GetProcAddress(module, "dxvkEnqueueInteropSubmission"));
 	}
+	logger::info("[DXVKInterop] Ring submissions from the render thread {}", enqueueSubmission ?
+		"go through DXVK's command stream (no wait)" : "flush and wait for DXVK's command stream");
 	if (!synchronousPresentControlAvailable)
 		logger::warn("[DXVKInterop] dxvkSetSyncPresent is unavailable - DLSS-G disabled");
 	if (!getPresenterSurfaceState)
@@ -436,6 +498,48 @@ bool DXVKInterop::GetVkImage(ID3D11Resource* a_resource, VkImage* a_outImage,
 	info->pQueueFamilyIndices = nullptr;
 
 	return SUCCEEDED(surface->GetVulkanImageInfo(a_outImage, a_outLayout, info));
+}
+
+void DXVKInterop::OnStreamSubmitted(void* a_user, VkResult a_result)
+{
+	auto* self = static_cast<DXVKInterop*>(a_user);
+	if (a_result != VK_SUCCESS) {
+		self->streamSubmitFailed.store(true, std::memory_order_release);
+		logger::error("[DXVKInterop] an enqueued ring submission failed on DXVK's submission thread ({})", static_cast<int>(a_result));
+	}
+	self->streamPending.fetch_sub(1, std::memory_order_acq_rel);
+	self->streamPending.notify_all();
+}
+
+bool DXVKInterop::SlotComplete(uint32_t a_slot, VkResult& a_error) const
+{
+	a_error = VK_SUCCESS;
+	if (a_slot >= slotTimelineValues.size() || slotTimelineValues[a_slot] == 0)
+		return true;
+	const CounterAttempt counter = GetTimelineValueSEH(device, completionTimeline);
+	if (counter.result != VK_SUCCESS) {
+		a_error = counter.result;
+		return false;
+	}
+	return counter.value >= slotTimelineValues[a_slot];
+}
+
+bool DXVKInterop::WaitForSubmissions()
+{
+	if (completionTimeline == VK_NULL_HANDLE || lastTimelineValue == 0)
+		return true;
+	// Enqueued submissions reach the queue only once DXVK's worker has processed them.
+	if (streamPending.load(std::memory_order_acquire)) {
+		interopDevice->FlushRenderingCommands();
+		WaitForStreamPending(streamPending);
+	}
+	const VulkanResultAttempt waitAttempt = WaitForTimelineSEH(device, completionTimeline, lastTimelineValue);
+	if (waitAttempt.result != VK_SUCCESS) {
+		commandRingFaulted = true;
+		logger::error("[DXVKInterop] waiting for the command ring's submissions failed ({})", static_cast<int>(waitAttempt.result));
+		return false;
+	}
+	return true;
 }
 
 bool DXVKInterop::WaitDeviceIdle()
@@ -513,23 +617,24 @@ bool DXVKInterop::CreateCommandResources(uint32_t a_framesInFlight)
 	}
 	commandBuffers = std::move(allocatedCommandBuffers);
 
-	commandFences.resize(framesInFlight, VK_NULL_HANDLE);
-	for (uint32_t i = 0; i < framesInFlight; ++i) {
-		VkFence createdFence = VK_NULL_HANDLE;
-		const VkResult result = CreateSignaledFence(device, &createdFence);
-		if (result != VK_SUCCESS) {
-			createdFence = VK_NULL_HANDLE;
-			logger::error("[DXVKInterop] vkCreateFence failed ({})", static_cast<int>(result));
-			commandRingFaulted = true;
-			DestroyCommandResources();
-			return false;
-		}
-		commandFences[i] = createdFence;
+	VkSemaphore createdTimeline = VK_NULL_HANDLE;
+	if (const VkResult result = CreateTimelineSemaphore(device, &createdTimeline); result != VK_SUCCESS) {
+		logger::error("[DXVKInterop] creating the command ring's timeline semaphore failed ({})", static_cast<int>(result));
+		commandRingFaulted = true;
+		DestroyCommandResources();
+		return false;
 	}
+	completionTimeline = createdTimeline;
+	lastTimelineValue = 0;
+	slotTimelineValues.assign(framesInFlight, 0);
+	streamSubmitFailed.store(false, std::memory_order_relaxed);
 
 	commandFrameIndex = 0;
 	pendingViewDeletes.assign(framesInFlight, {});
 	pendingResourceReleases.assign(framesInFlight, {});
+	slotTimingLabels.assign(framesInFlight, nullptr);
+	slotSubmitQpc.assign(framesInFlight, 0);
+	CreateTimingPool();
 	logger::info("[DXVKInterop] Command ring created ({} frames in flight, queueFamily {})", framesInFlight, queueFamilyIndex);
 	return true;
 }
@@ -544,19 +649,8 @@ void DXVKInterop::DestroyCommandResources()
 		return;
 	}
 
-	if (!commandRingFaulted) {
-		for (auto f : commandFences) {
-			if (f == VK_NULL_HANDLE)
-				continue;
-			const VulkanResultAttempt waitAttempt = WaitForFenceSEH(device, f);
-			if (waitAttempt.result != VK_SUCCESS) {
-				commandRingFaulted = true;
-				logger::error("[DXVKInterop] command-resource fence wait failed ({})",
-					static_cast<int>(waitAttempt.result));
-				return;
-			}
-		}
-	}
+	if (!commandRingFaulted && !WaitForSubmissions())
+		return;
 	if (!vkDestroyImageView) {
 		for (const auto& slot : pendingViewDeletes) {
 			if (std::find_if(slot.begin(), slot.end(),
@@ -582,13 +676,20 @@ void DXVKInterop::DestroyCommandResources()
 	}
 	pendingViewDeletes.clear();
 	pendingResourceReleases.clear();
-	for (VkFence& f : commandFences) {
-		if (f == VK_NULL_HANDLE)
-			continue;
-		DestroyFence(device, f);
-		f = VK_NULL_HANDLE;
+	if (completionTimeline != VK_NULL_HANDLE) {
+		vkDestroySemaphore(device, completionTimeline, nullptr);
+		completionTimeline = VK_NULL_HANDLE;
 	}
-	commandFences.clear();
+	lastTimelineValue = 0;
+	slotTimelineValues.clear();
+
+	if (timingPool != VK_NULL_HANDLE) {
+		vkDestroyQueryPool(device, timingPool, nullptr);
+		timingPool = VK_NULL_HANDLE;
+	}
+	slotTimingLabels.clear();
+	slotSubmitQpc.clear();
+	harvestedTimings.clear();
 
 	if (commandPool != VK_NULL_HANDLE) {
 		DestroyCommandPool(device, commandPool);
@@ -612,19 +713,8 @@ bool DXVKInterop::DrainCommandRing()
 		return false;
 	}
 
-	if (!commandRingFaulted) {
-		for (VkFence fence : commandFences) {
-			if (fence == VK_NULL_HANDLE)
-				continue;
-			const VulkanResultAttempt waitAttempt = WaitForFenceSEH(device, fence);
-			if (waitAttempt.result != VK_SUCCESS) {
-				commandRingFaulted = true;
-				logger::error("[DXVKInterop] failed to drain a command-ring fence ({})",
-					static_cast<int>(waitAttempt.result));
-				return false;
-			}
-		}
-	}
+	if (!commandRingFaulted && !WaitForSubmissions())
+		return false;
 
 	if (!vkDestroyImageView) {
 		for (const auto& slot : pendingViewDeletes) {
@@ -691,35 +781,106 @@ bool DXVKInterop::FrameGenerationQueueInteropReady() const
 	return available;
 }
 
-DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer()
+void DXVKInterop::CreateTimingPool()
+{
+	if (timingPool != VK_NULL_HANDLE || physicalDevice == VK_NULL_HANDLE)
+		return;
+
+	VkPhysicalDeviceProperties props{};
+	vkGetPhysicalDeviceProperties(physicalDevice, &props);
+	uint32_t familyCount = 0;
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
+	std::vector<VkQueueFamilyProperties> families(familyCount);
+	vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, families.data());
+	if (queueFamilyIndex >= familyCount || families[queueFamilyIndex].timestampValidBits == 0 ||
+		props.limits.timestampPeriod <= 0.0f) {
+		logger::info("[DXVKInterop] Queue family {} has no timestamps; interop GPU timings are off", queueFamilyIndex);
+		return;
+	}
+
+	VkQueryPoolCreateInfo info{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+	info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+	info.queryCount = kMaxTimedSlots * 2;
+	if (vkCreateQueryPool(device, &info, nullptr, &timingPool) != VK_SUCCESS) {
+		timingPool = VK_NULL_HANDLE;
+		logger::warn("[DXVKInterop] vkCreateQueryPool failed; interop GPU timings are off");
+		return;
+	}
+	timestampPeriodNs = props.limits.timestampPeriod;
+}
+
+void DXVKInterop::HarvestSlotTiming(uint32_t a_slot)
+{
+	if (a_slot >= slotTimingLabels.size() || !slotTimingLabels[a_slot])
+		return;
+	const char* label = std::exchange(slotTimingLabels[a_slot], nullptr);
+	if (timingPool == VK_NULL_HANDLE)
+		return;
+
+	uint64_t ticks[2] = {};
+	if (vkGetQueryPoolResults(device, timingPool, a_slot * 2, 2, sizeof(ticks), ticks, sizeof(uint64_t),
+			VK_QUERY_RESULT_64_BIT) != VK_SUCCESS || ticks[1] < ticks[0])
+		return;
+	if (a_slot < slotSubmitQpc.size())
+		GpuIdleTrace::AddInteropSpan(label, ticks[0], ticks[1], slotSubmitQpc[a_slot]);
+	if (label == kTraceOnlyLabel)
+		return;
+	const double ms = static_cast<double>(ticks[1] - ticks[0]) * timestampPeriodNs * 1e-6;
+	if (harvestedTimings.size() < 256)
+		harvestedTimings.emplace_back(label, static_cast<float>(ms));
+}
+
+void DXVKInterop::PublishCommandTimings()
+{
+	std::vector<std::pair<const char*, float>> timings;
+	{
+		std::lock_guard lock(commandRingMutex);
+		if (device == VK_NULL_HANDLE || commandRingFaulted)
+			return;
+		for (uint32_t slot = 0; slot < slotTimingLabels.size(); ++slot) {
+			VkResult error = VK_SUCCESS;
+			if (slotTimingLabels[slot] && SlotComplete(slot, error))
+				HarvestSlotTiming(slot);
+		}
+		timings.swap(harvestedTimings);
+	}
+	if (!globals::profiler)
+		return;
+	for (const auto& [label, ms] : timings)
+		globals::profiler->AddExternalSample(label, ms);
+}
+
+DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer(const char* a_timingLabel)
 {
 	std::unique_lock ringLock(commandRingMutex);
 	if (commandPool == VK_NULL_HANDLE || commandRingFaulted)
 		return {};
 
-	constexpr uint32_t kMaxRingDepth = 64;
-	uint32_t next = (commandFrameIndex + 1) % framesInFlight;
-	VulkanResultAttempt nextFenceAttempt = GetFenceStatusSEH(device, commandFences[next]);
-	if ((nextFenceAttempt.result != VK_SUCCESS && nextFenceAttempt.result != VK_NOT_READY)) {
+	if (streamSubmitFailed.exchange(false, std::memory_order_acq_rel)) {
 		commandRingFaulted = true;
-		logger::error("[DXVKInterop] vkGetFenceStatus failed ({})",
-			static_cast<int>(nextFenceAttempt.result));
 		return {};
 	}
-	if (nextFenceAttempt.result == VK_NOT_READY) {
+
+	constexpr uint32_t kMaxRingDepth = 64;
+	uint32_t next = (commandFrameIndex + 1) % framesInFlight;
+	VkResult slotError = VK_SUCCESS;
+	if (!SlotComplete(next, slotError)) {
+		if (slotError != VK_SUCCESS) {
+			commandRingFaulted = true;
+			logger::error("[DXVKInterop] vkGetSemaphoreCounterValue failed ({})", static_cast<int>(slotError));
+			return {};
+		}
 		uint32_t freeSlot = UINT32_MAX;
 		for (uint32_t i = 0; i < framesInFlight; ++i) {
 			const uint32_t cand = (next + i) % framesInFlight;
-			const VulkanResultAttempt candidateAttempt = GetFenceStatusSEH(device, commandFences[cand]);
-			if ((candidateAttempt.result != VK_SUCCESS && candidateAttempt.result != VK_NOT_READY)) {
-				commandRingFaulted = true;
-				logger::error("[DXVKInterop] vkGetFenceStatus failed ({})",
-					static_cast<int>(candidateAttempt.result));
-				return {};
-			}
-			if (candidateAttempt.result == VK_SUCCESS) {
+			if (SlotComplete(cand, slotError)) {
 				freeSlot = cand;
 				break;
+			}
+			if (slotError != VK_SUCCESS) {
+				commandRingFaulted = true;
+				logger::error("[DXVKInterop] vkGetSemaphoreCounterValue failed ({})", static_cast<int>(slotError));
+				return {};
 			}
 		}
 		if (freeSlot != UINT32_MAX) {
@@ -730,37 +891,21 @@ DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer()
 			allocInfo.commandPool = commandPool;
 			allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 			allocInfo.commandBufferCount = 1;
-			VkFence newFence = VK_NULL_HANDLE;
 			const VulkanResultAttempt allocateAttempt = AllocateCommandBuffersSEH(device, &allocInfo, &newCb);
-			const bool commandBufferAllocated =
-				allocateAttempt.result == VK_SUCCESS;
-			if (!commandBufferAllocated)
-				newCb = VK_NULL_HANDLE;
-			const VkResult fenceResult = commandBufferAllocated ?
-				CreateSignaledFence(device, &newFence) : allocateAttempt.result;
-			const bool fenceCreated = commandBufferAllocated && fenceResult == VK_SUCCESS;
-			if (!fenceCreated)
-				newFence = VK_NULL_HANDLE;
-			if (commandBufferAllocated && fenceCreated) {
-				commandBuffers.push_back(newCb);
-				commandFences.push_back(newFence);
-				pendingViewDeletes.emplace_back();
-				pendingResourceReleases.emplace_back();
-				next = framesInFlight;
-				++framesInFlight;
-				logger::info("[DXVKInterop] Command ring grown to {} (all slots in flight)", framesInFlight);
-			} else {
+			if (allocateAttempt.result != VK_SUCCESS) {
 				commandRingFaulted = true;
-				if (fenceCreated)
-					DestroyFence(device, newFence);
-				if (commandBufferAllocated)
-					FreeCommandBuffers(device, commandPool, 1u, &newCb);
-				newFence = VK_NULL_HANDLE;
-				newCb = VK_NULL_HANDLE;
-				logger::error("[DXVKInterop] command ring growth failed (allocate={}, fence={})",
-					static_cast<int>(allocateAttempt.result), static_cast<int>(fenceResult));
+				logger::error("[DXVKInterop] command ring growth failed (allocate={})", static_cast<int>(allocateAttempt.result));
 				return {};
 			}
+			commandBuffers.push_back(newCb);
+			slotTimelineValues.push_back(0);
+			pendingViewDeletes.emplace_back();
+			slotTimingLabels.push_back(nullptr);
+			slotSubmitQpc.push_back(0);
+			pendingResourceReleases.emplace_back();
+			next = framesInFlight;
+			++framesInFlight;
+			logger::info("[DXVKInterop] Command ring grown to {} (all slots in flight)", framesInFlight);
 		} else {
 			static bool s_warned = false;
 			if (!s_warned) {
@@ -772,6 +917,8 @@ DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer()
 	}
 	commandFrameIndex = next;
 	VkCommandBuffer cb = commandBuffers[commandFrameIndex];
+	// The slot's submission has completed, so its previous timestamps are final; take them before reuse.
+	HarvestSlotTiming(commandFrameIndex);
 
 	if (commandFrameIndex < pendingViewDeletes.size()) {
 		auto& dead = pendingViewDeletes[commandFrameIndex];
@@ -810,7 +957,19 @@ DXVKInterop::CommandTransaction DXVKInterop::BeginFrameCommandBuffer()
 			static_cast<int>(beginAttempt.result));
 		return {};
 	}
-	return CommandTransaction(this, commandFrameIndex, cb, std::move(ringLock));
+	CommandTransaction transaction(this, commandFrameIndex, cb, std::move(ringLock));
+	// Whatever D3D11 wrote before this buffer is visible to it (SubmitFrameCommandBuffer).
+	FullMemoryBarrier(cb);
+	if (!a_timingLabel && GpuIdleTrace::Requested())
+		a_timingLabel = kTraceOnlyLabel;
+	if (a_timingLabel && timingPool != VK_NULL_HANDLE && commandFrameIndex < kMaxTimedSlots) {
+		// ALL_COMMANDS: written once every earlier command on the queue has finished, so the pair
+		// measures this buffer's work and not the tail of the D3D11 frame flushed ahead of it.
+		vkCmdResetQueryPool(cb, timingPool, commandFrameIndex * 2, 2);
+		vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, timingPool, commandFrameIndex * 2);
+		transaction.timingLabel = a_timingLabel;
+	}
+	return transaction;
 }
 
 bool DXVKInterop::SubmitFrameCommandBuffer(CommandTransaction& a_transaction)
@@ -823,31 +982,74 @@ bool DXVKInterop::SubmitFrameCommandBuffer(CommandTransaction& a_transaction)
 		return false;
 	const uint32_t slot = a_transaction.slot;
 	const VkCommandBuffer commandBuffer = a_transaction.commandBuffer;
+	const uint64_t value = lastTimelineValue + 1;
 
-	VkFence& fence = commandFences[slot];
+	// What this buffer wrote is visible to the D3D11 work after it.
+	FullMemoryBarrier(commandBuffer);
+	if (a_transaction.timingLabel)
+		vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, timingPool, slot * 2 + 1);
+	LARGE_INTEGER submitQpc{};
+	QueryPerformanceCounter(&submitQpc);
 
-	const QueueSubmitAttempt attempt = DirectQueueSubmitSEH(
-		interopDevice.get(), device, queue, commandBuffer, fence);
-	if (attempt.faulted || attempt.endResult != VK_SUCCESS ||
-		attempt.resetResult != VK_SUCCESS || attempt.submitResult != VK_SUCCESS) {
-		commandRingFaulted = true;
-		if (attempt.faulted) {
-			logger::error("[DXVKInterop] vkQueueSubmit faulted (SEH {:#x})", attempt.exceptionCode);
-			a_transaction.submissionMayBeInFlight = attempt.queueLockAcquired;
-			return false;
-		} else if (attempt.endResult != VK_SUCCESS) {
-			logger::error("[DXVKInterop] vkEndCommandBuffer failed ({})",
-				static_cast<int>(attempt.endResult));
-		} else if (attempt.resetResult != VK_SUCCESS) {
-			logger::error("[DXVKInterop] vkResetFences failed ({})",
-				static_cast<int>(attempt.resetResult));
-		} else {
-			logger::error("[DXVKInterop] vkQueueSubmit failed ({})",
-				static_cast<int>(attempt.submitResult));
+	if (enqueueSubmission && ::GetCurrentThreadId() == streamThread.load(std::memory_order_relaxed)) {
+		VkCommandBufferSubmitInfo bufferInfo{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO };
+		bufferInfo.commandBuffer = commandBuffer;
+		VkSemaphoreSubmitInfo signalInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO };
+		signalInfo.semaphore = completionTimeline;
+		signalInfo.value = value;
+		signalInfo.stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+		DxvkOrgInteropSubmission submission{};
+		submission.version = DXVK_ORG_INTEROP_VERSION;
+		submission.commandBufferCount = 1;
+		submission.commandBuffers = &bufferInfo;
+		submission.signalCount = 1;
+		submission.signals = &signalInfo;
+		submission.onSubmitted = &DXVKInterop::OnStreamSubmitted;
+		submission.user = this;
+		submission.label = a_transaction.timingLabel;
+		streamPending.fetch_add(1, std::memory_order_acq_rel);
+		const StreamSubmitAttempt attempt = StreamSubmitSEH(enqueueSubmission, submission, commandBuffer);
+		if (!attempt.faulted && (attempt.endResult != VK_SUCCESS || FAILED(attempt.enqueueResult))) {
+			streamPending.fetch_sub(1, std::memory_order_acq_rel);  // not enqueued: no callback will come
+			streamPending.notify_all();
 		}
-		return false;
+		if (attempt.faulted || attempt.endResult != VK_SUCCESS || FAILED(attempt.enqueueResult)) {
+			commandRingFaulted = true;
+			if (attempt.faulted)
+				logger::error("[DXVKInterop] enqueueing a ring submission faulted (SEH {:#x})", attempt.exceptionCode);
+			else if (attempt.endResult != VK_SUCCESS)
+				logger::error("[DXVKInterop] vkEndCommandBuffer failed ({})", static_cast<int>(attempt.endResult));
+			else
+				logger::error("[DXVKInterop] dxvkEnqueueInteropSubmission failed ({:#x})", static_cast<uint32_t>(attempt.enqueueResult));
+			// A fault inside DXVK may have left it queued.
+			a_transaction.submissionMayBeInFlight = attempt.faulted;
+			return false;
+		}
+	} else {
+		const QueueSubmitAttempt attempt = DirectQueueSubmitSEH(interopDevice.get(), queue, commandBuffer, completionTimeline, value, streamPending);
+		if (attempt.faulted || attempt.endResult != VK_SUCCESS || attempt.submitResult != VK_SUCCESS) {
+			commandRingFaulted = true;
+			if (attempt.faulted) {
+				logger::error("[DXVKInterop] vkQueueSubmit faulted (SEH {:#x})", attempt.exceptionCode);
+				a_transaction.submissionMayBeInFlight = attempt.queueLockAcquired;
+				return false;
+			} else if (attempt.endResult != VK_SUCCESS) {
+				logger::error("[DXVKInterop] vkEndCommandBuffer failed ({})",
+					static_cast<int>(attempt.endResult));
+			} else {
+				logger::error("[DXVKInterop] vkQueueSubmit failed ({})",
+					static_cast<int>(attempt.submitResult));
+			}
+			return false;
+		}
 	}
+	lastTimelineValue = value;
+	slotTimelineValues[slot] = value;
 	a_transaction.submitted = true;
+	if (a_transaction.timingLabel && slot < slotTimingLabels.size()) {
+		slotTimingLabels[slot] = a_transaction.timingLabel;
+		slotSubmitQpc[slot] = submitQpc.QuadPart;
+	}
 	return true;
 }
 

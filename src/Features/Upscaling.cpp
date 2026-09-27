@@ -12,6 +12,7 @@
 #include "Upscaling/Streamline.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
+#include "Utils/ImportCallSites.h"
 #include "Utils/VersionedRelocation.h"
 #include <Windows.h>
 #include <algorithm>
@@ -438,6 +439,9 @@ void Upscaling::Load()
 	*(uintptr_t*)&ptrD3D11CreateDeviceAndSwapChainUpscaling = DxvkLoader::IsLoaded() ?
 	                                                              reinterpret_cast<uintptr_t>(DxvkLoader::GetD3D11CreateDeviceAndSwapChain()) :
 	                                                              iatOriginal;
+	// The IAT patch alone does not survive RenderDoc; see RedirectImportCallSites.
+	Util::RedirectImportCallSites(::GetModuleHandleW(nullptr), "d3d11.dll", "D3D11CreateDeviceAndSwapChain",
+		reinterpret_cast<void*>(&hk_D3D11CreateDeviceAndSwapChainUpscaling));
 }
 
 struct BSImageSpace_Init_FXAA
@@ -571,12 +575,7 @@ void Upscaling::ApplyHardwareDefaults()
 		}
 	}
 
-	if (!settings.reflexEnabled) {
-		if (sl->IsReflexSupported()) {
-			settings.reflexEnabled = true;
-			logger::info("[Upscaling] Hardware default: Reflex low-latency enabled");
-		}
-	}
+	// Reflex is no longer switched on by default (see Streamline::Initialize: it loads only with CS_STREAMLINE_REFLEX=1).
 }
 
 Upscaling::FrameGenMethod Upscaling::GetFrameGenMethod() const
@@ -1648,8 +1647,15 @@ void Upscaling::Upscale()
 
 	auto& motionVector = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMOTION_VECTOR];
 
+	if (auto* dxvk = DXVKInterop::GetSingleton(); dxvk && dxvk->IsAvailable()) {
+		// This is the thread issuing D3D11's commands: its ring submissions go through DXVK's command stream.
+		dxvk->BindStreamThread();
+		dxvk->PublishCommandTimings();
+	}
+
 	{
-		globals::profiler->BeginPass("Upscaling::Upscale");
+		// GPU time comes from the interop buffer's own timestamps (PublishCommandTimings above); a D3D11 timer
+		// around the evaluation would straddle that buffer's submission and count the queue's idle time.
 		state->BeginPerfEvent("Upscaling");
 		TracyD3D11Zone(globals::state->tracyCtx, "Upscaling Dispatch");
 
@@ -1688,11 +1694,12 @@ void Upscaling::Upscale()
 			}
 		}
 
+		// Not timed: this is the first use of either image in DXVK's next command list, so DXVK moves the copy
+		// into that list's init buffer, ahead of any timestamp a D3D11 timer here would write.
 		if (result == Streamline::EvaluationResult::kReady)
 			context->CopyResource(main.texture, upscaledTexture->resource.get());
 
 		state->EndPerfEvent();
-		globals::profiler->EndPass();
 	}
 }
 

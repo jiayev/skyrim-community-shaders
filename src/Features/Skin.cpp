@@ -418,15 +418,10 @@ struct SkinExtendedRendererState
 	uint32_t PSResourceModifiedBits = 0;
 	std::array<ID3D11ShaderResourceView*, 2> PSTexture;
 
-	void SetExtraSkinPSTexture(RE::BSGraphics::Texture* newTexture, RE::BSGraphics::Texture* newTexture2)
+	void SetExtraSkinPSTexture(const Skin::MaterialTextures& textures)
 	{
-		{
-			PSTexture = {
-				newTexture ? newTexture->resourceView : nullptr,
-				newTexture2 ? newTexture2->resourceView : nullptr
-			};
-			PSResourceModifiedBits = 1;
-		}
+		PSTexture = textures;
+		PSResourceModifiedBits = 1;
 	}
 
 	SkinExtendedRendererState()
@@ -536,36 +531,56 @@ void Skin::SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, R
 	}
 }
 
-void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
+std::optional<Skin::MaterialTextures> Skin::MaterialTexturesOf(RE::BSLightingShaderMaterialBase const* material)
 {
+	if (!material)
+		return std::nullopt;
 	auto materialFeature = material->GetFeature();
 	if (materialFeature != RE::BSShaderMaterial::Feature::kFaceGen &&
 		materialFeature != RE::BSShaderMaterial::Feature::kFaceGenRGBTint) {
-		return;
+		return std::nullopt;
 	}
 
-	auto materialTextureSet = material->textureSet.get();
+	auto view = [](const RE::NiSourceTexturePtr& a_texture) -> ID3D11ShaderResourceView* {
+		auto* texture = a_texture ? a_texture->rendererTexture : nullptr;
+		return texture ? texture->resourceView : nullptr;
+	};
+	const auto& black = globals::game::graphicsState->GetRuntimeData().defaultTextureBlack;
 
 	uint32_t hashKey = 0;
 	hashKey = material->hashKey;
 	if (hashKey == 0) {
+		// No entry to key the textures by: the same as a material without extra textures.
 		logger::error("[Advanced Skin] BSLightingShader_SetupMaterial : Invalid hash key for material: {}", static_cast<int>(materialFeature));
-		return;
+		return MaterialTextures{ view(black), view(black) };
 	}
 
 	if (!skinExtraTextures.contains(hashKey)) {
 		// logger::debug("[Advanced Skin] BSLightingShader_SetupMaterial : Setting up extra texture for material: {}", static_cast<int>(materialFeature));
-		globals::features::skin.SetupExtraTexture(material, materialTextureSet, hashKey);
+		SetupExtraTexture(material, material->textureSet.get(), hashKey);
 	}
 
-	auto graphicsState = globals::game::graphicsState;
 	const auto& workingExtraPtr = skinExtraTextures[hashKey];
+	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture)
+		return MaterialTextures{ view(workingExtraPtr.rfaosTexture), view(workingExtraPtr.wetnessTexture) };
+	return MaterialTextures{ view(black), view(black) };
+}
 
-	if (workingExtraPtr.hasExtraTexture || workingExtraPtr.hasWetnessTexture) {
-		skinExtendedRendererState.SetExtraSkinPSTexture(workingExtraPtr.rfaosTexture->rendererTexture, workingExtraPtr.wetnessTexture->rendererTexture);
-	} else {
-		skinExtendedRendererState.SetExtraSkinPSTexture(graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture, graphicsState->GetRuntimeData().defaultTextureBlack->rendererTexture);
-	}
+void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material)
+{
+	if (const auto textures = MaterialTexturesOf(material))
+		skinExtendedRendererState.SetExtraSkinPSTexture(*textures);
+}
+
+Skin::PendingTextures Skin::GetPendingTextures() const
+{
+	return { skinExtendedRendererState.PSTexture, skinExtendedRendererState.PSResourceModifiedBits != 0 };
+}
+
+void Skin::SetPendingTextures(const PendingTextures& a_pending)
+{
+	skinExtendedRendererState.PSTexture = a_pending.textures;
+	skinExtendedRendererState.PSResourceModifiedBits = a_pending.pending ? 1 : 0;
 }
 
 void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)

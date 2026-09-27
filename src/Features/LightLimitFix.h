@@ -515,6 +515,12 @@ public:
 
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
 
+	/** @brief StrictLightData::RoomIndex for a geometry: its room's index this frame, or -1 outside rooms. */
+	int GetRoomIndex(RE::NiAVObject* a_object) const;
+
+	/** @brief StrictLightData::ShadowBitMask for a lighting pass: the shadow mask channels of its shadow lights. */
+	static uint GetShadowBitMask(const RE::BSRenderPass* a_pass);
+
 	/** @brief Contains vtable hooks for BSLightingShader, BSEffectShader, and BSWaterShader geometry setup. */
 	struct Hooks
 	{

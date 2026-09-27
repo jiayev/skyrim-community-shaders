@@ -1,5 +1,7 @@
 #include "Profiler.h"
 
+#include "RenderGraph/DxvkOrgInterop.h"
+
 #include <algorithm>
 #include <unordered_map>
 
@@ -60,10 +62,23 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 		frame.activeCount = 0;
 	}
 
+	// DXVK's timestamp queries are written at ALL_COMMANDS, so a pair inside one submission measures just
+	// the work between them. A pair across a submission boundary (an implicit flush, the flush ahead of an
+	// interop or render-graph submission) also counts the time the queue waited for the later submission,
+	// so those samples are flagged.
+	submissionCounter = nullptr;
+	if (HMODULE dxvk = GetModuleHandleW(L"dxvk_d3d11.dll")) {
+		if (auto getCounter = reinterpret_cast<PFN_dxvkGetSubmissionCounter>(
+				reinterpret_cast<void*>(GetProcAddress(dxvk, "dxvkGetSubmissionCounter")));
+			getCounter && FAILED(getCounter(device, &submissionCounter)))
+			submissionCounter = nullptr;
+	}
+	logger::info("[Profiler] DXVK submission counter {}", submissionCounter ? "found: split timers are flagged" : "unavailable");
+
 	writeFrame = 0;
 	readFrame = 0;
-	pendingFrames = 0;
 	frameSkipped = false;
+	lastLoggedFrame = 0;
 	initialized = true;
 }
 
@@ -92,16 +107,17 @@ void Profiler::BeginFrame()
 
 	CollectResults();
 
-	// Reusing a pending slot would discard its results when the GPU lags.
-	if (pendingFrames >= kFrameLatency) {
-		frameSkipped = true;
-		return;
-	}
-
-	auto& frame = frames[writeFrame];
-	frame.activeCount = 0;
 	frameActive = true;
 	passOpen = false;
+	++framesSinceExternalMerge;
+	auto& frame = frames[writeFrame];
+	// Every slot still holds a frame the GPU has not finished: leave this one untimed rather than restart a
+	// pending disjoint query, which would never let that slot complete.
+	frameSkipped = frame.inFlight;
+	if (frameSkipped)
+		return;
+	frame.activeCount = 0;
+	frame.inFlight = true;
 	context->Begin(frame.disjoint.get());
 }
 
@@ -113,13 +129,14 @@ void Profiler::BeginPass(std::string_view name)
 	if (!frameActive)
 		BeginFrame();
 
-	if (frameActive) {
+	if (frameActive && !frameSkipped) {
 		auto& frame = frames[writeFrame];
 		if (frame.activeCount < kMaxTimers) {
 			auto& timer = frame.timers[frame.activeCount];
 			timer.name.assign(name);
 			context->End(timer.begin.get());
 			QueryPerformanceCounter(&timer.cpuBegin);
+			timer.submissionAtBegin = submissionCounter ? *submissionCounter : 0;
 			passOpen = true;
 		}
 	}
@@ -133,7 +150,7 @@ void Profiler::EndPass()
 	if (!initialized || !context)
 		return;
 
-	if (frameActive) {
+	if (frameActive && !frameSkipped) {
 		auto& frame = frames[writeFrame];
 		if (frame.activeCount < kMaxTimers && std::exchange(passOpen, false)) {
 			auto& timer = frame.timers[frame.activeCount];
@@ -143,12 +160,21 @@ void Profiler::EndPass()
 			timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
 
 			context->End(timer.end.get());
+			timer.split = submissionCounter && *submissionCounter != timer.submissionAtBegin;
 			frame.activeCount++;
 		}
 	}
 
 	if (endPerfEvent)
 		endPerfEvent({});
+}
+
+void Profiler::AddExternalSample(std::string_view a_name, float a_gpuMs)
+{
+	// Nothing averages or clears the samples while timing is off.
+	if (!initialized || !IsActive())
+		return;
+	pendingExternal[std::string(a_name)] += a_gpuMs;
 }
 
 void Profiler::EndFrame()
@@ -165,22 +191,75 @@ void Profiler::EndFrame()
 
 	frameCounter.fetch_add(1, std::memory_order_relaxed);
 
-	if (frameSkipped) {
-		frameSkipped = false;
-		return;
-	}
 	if (!frameActive)
 		return;
 
 	frameActive = false;
 	passOpen = false;
+	if (std::exchange(frameSkipped, false))
+		return;
 	context->End(frames[writeFrame].disjoint.get());
-	writeFrame = (writeFrame + 1) % kFrameLatency;
-	pendingFrames++;
+	writeFrame = (writeFrame + 1) % kFrameRing;
+}
+
+bool Profiler::CollectFrame(FrameQueries& frame, std::unordered_map<std::string, std::pair<float, float>>& activeTimers)
+{
+	D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData{};
+	if (context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+		return false;
+
+	frame.inFlight = false;
+	collectedFrames++;
+	activeTimers.clear();
+	if (disjointData.Disjoint)
+		return true;
+
+	const double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
+	for (uint32_t i = 0; i < frame.activeCount; i++) {
+		auto& timer = frame.timers[i];
+		UINT64 tsBegin = 0, tsEnd = 0;
+
+		if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			continue;
+		if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			continue;
+
+		float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
+		auto& entry = activeTimers[timer.name];
+		entry.first += ms;
+		entry.second += timer.cpuMs;
+
+		auto [it, inserted] = knownTimerIndex.try_emplace(timer.name, knownTimers.size());
+		if (inserted) {
+			KnownTimer kt;
+			kt.name = timer.name;
+			knownTimers.push_back(std::move(kt));
+		}
+		knownTimers[it->second].split.PushSample(timer.split ? 1.0f : 0.0f);
+	}
+
+	// A name timed several times in one frame is one sample: its frame total.
+	for (const auto& [name, times] : activeTimers) {
+		auto& known = knownTimers[knownTimerIndex.at(name)];
+		known.gpu.PushSample(times.first);
+		known.cpu.PushSample(times.second);
+		known.lastSampleFrame = collectedFrames;
+	}
+	return true;
 }
 
 void Profiler::CollectResults()
 {
+	// The last collected frame's timers (GPU, CPU), for the results' current values.
+	std::unordered_map<std::string, std::pair<float, float>> frameTimers;
+	bool collected = false;
+	while (frames[readFrame].inFlight && CollectFrame(frames[readFrame], frameTimers)) {
+		collected = true;
+		readFrame = (readFrame + 1) % kFrameRing;
+	}
+	if (!collected)
+		return;
+
 	struct ActiveTimerData
 	{
 		float gpuMs = 0.0f;
@@ -189,65 +268,32 @@ void Profiler::CollectResults()
 	std::unordered_map<std::string, ActiveTimerData> activeTimers;
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
-	bool collected = false;
-
-	// Oldest first; only the newest resolved frame is published.
-	while (pendingFrames > 0) {
-		auto& frame = frames[readFrame];
-
-		D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjointData{};
-		HRESULT hr = context->GetData(frame.disjoint.get(), &disjointData, sizeof(disjointData), D3D11_ASYNC_GETDATA_DONOTFLUSH);
-		if (hr != S_OK)
-			break;
-
-		readFrame = (readFrame + 1) % kFrameLatency;
-		pendingFrames--;
-		collected = true;
-		collectedFrames++;
-
-		activeTimers.clear();
-		activeTotalMs = 0.0f;
-		activeCpuTotalMs = 0.0f;
-
-		if (disjointData.Disjoint)
-			continue;
-
-		double ticksToMs = 1000.0 / static_cast<double>(disjointData.Frequency);
-
-		for (uint32_t i = 0; i < frame.activeCount; i++) {
-			auto& timer = frame.timers[i];
-			UINT64 tsBegin = 0, tsEnd = 0;
-
-			if (context->GetData(timer.begin.get(), &tsBegin, sizeof(tsBegin), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
-				continue;
-			if (context->GetData(timer.end.get(), &tsEnd, sizeof(tsEnd), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
-				continue;
-
-			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
-			auto& entry = activeTimers[timer.name];
-			entry.gpuMs += ms;
-			entry.cpuMs += timer.cpuMs;
-			activeTotalMs += ms;
-			activeCpuTotalMs += timer.cpuMs;
-
-			if (knownTimerIndex.try_emplace(timer.name, knownTimers.size()).second) {
-				KnownTimer kt;
-				kt.name = timer.name;
-				knownTimers.push_back(std::move(kt));
-			}
-		}
-
-		// A name timed several times in one frame is one sample: its frame total.
-		for (const auto& [name, data] : activeTimers) {
-			auto& known = knownTimers[knownTimerIndex.at(name)];
-			known.gpu.PushSample(data.gpuMs);
-			known.cpu.PushSample(data.cpuMs);
-			known.lastSampleFrame = collectedFrames;
-		}
+	for (const auto& [name, times] : frameTimers) {
+		activeTimers[name] = { times.first, times.second };
+		activeTotalMs += times.first;
+		activeCpuTotalMs += times.second;
 	}
 
-	if (!collected)
-		return;
+	// The render graph's passes: GPU time from its own timestamps, per frame over the frames since the last
+	// merge. Independent of the D3D11 disjoint flag, which says nothing about the graph's queries.
+	const float externalFrames = static_cast<float>(std::max(1u, framesSinceExternalMerge));
+	for (const auto& [name, gpuMs] : pendingExternal) {
+		const float ms = gpuMs / externalFrames;
+		activeTimers[name].gpuMs += ms;
+		activeTotalMs += ms;
+		auto [it, inserted] = knownTimerIndex.try_emplace(name, knownTimers.size());
+		if (inserted) {
+			KnownTimer kt;
+			kt.name = name;
+			knownTimers.push_back(std::move(kt));
+		}
+		auto& known = knownTimers[it->second];
+		known.gpu.PushSample(ms);
+		known.cpu.PushSample(0.0f);
+		known.lastSampleFrame = collectedFrames;
+	}
+	pendingExternal.clear();
+	framesSinceExternalMerge = 0;
 
 	RetireStaleTimers();
 
@@ -268,11 +314,42 @@ void Profiler::CollectResults()
 			result.cpuTimeMs = known.cpu.lastMs;
 		}
 		result.valid = true;
+		result.splitFraction = known.split.count ? known.split.GetAverage() : 0.0f;
 		result.historyBuffer = known.gpu.history;
 		result.historyHead = known.gpu.head;
 		result.historyCount = known.gpu.count;
 		results.push_back(std::move(result));
 	}
+
+	LogResultsIfRequested();
+}
+
+void Profiler::LogResultsIfRequested()
+{
+	// CS_PROFILER_LOG=<frames>: log the rolling averages every that many collected frames, for runs where
+	// the menu cannot be read (automated validation, comparing two configurations from their logs).
+	static const uint64_t interval = [] {
+		char value[32] = {};
+		const DWORD length = GetEnvironmentVariableA("CS_PROFILER_LOG", value, sizeof(value));
+		return length && length < sizeof(value) ? std::strtoull(value, nullptr, 10) : 0ull;
+	}();
+	if (interval == 0 || collectedFrames - lastLoggedFrame < interval)
+		return;
+	lastLoggedFrame = collectedFrames;
+
+	std::vector<const TimerResult*> sorted;
+	for (const auto& r : results)
+		sorted.push_back(&r);
+	std::sort(sorted.begin(), sorted.end(), [](const auto* a, const auto* b) { return a->avgMs > b->avgMs; });
+	std::string line;
+	for (const auto* r : sorted) {
+		if (r->avgMs < 0.01f)
+			continue;
+		line += fmt::format(" | {} {:.2f}/p95 {:.2f}", r->name, r->avgMs, r->p95Ms);
+		if (r->splitFraction > 0.0f)
+			line += fmt::format(" [split {:.0f}%]", r->splitFraction * 100.0f);
+	}
+	logger::info("[Profiler] frame {} total {:.2f} ms{}", collectedFrames, totalTimeMs, line);
 }
 
 double Profiler::QpcTicksToMs()

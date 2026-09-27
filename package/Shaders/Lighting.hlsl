@@ -4,12 +4,26 @@
 #define LIGHTING
 
 #include "Common/ColorManagement.hlsli"
+#include "Common/DCLFObjects.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/GBuffer.hlsli"
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
+
+// The pixel stage's pass descriptor. Under DCLF a synthetic pass carries the sun's bits (DefShadow, ShadowDir)
+// for any object that can take the sun's shadow, and BuildDrawsCS marks the draws whose bound meets no cascade this
+// frame (DCLFSunMiss): those draw as GetRenderPasses' pass without the two bits would.
+uint PixelDescriptor()
+{
+#if defined(DCLF_BINDLESS)
+	if (DCLFSunMiss)
+		return Permutation::PixelShaderDescriptor & ~(Permutation::LightingFlags::DefShadow | Permutation::LightingFlags::ShadowDir);
+#endif
+	return Permutation::PixelShaderDescriptor;
+}
+
 #include "Common/Random.hlsli"
 #include "Common/Shading.hlsli"
 #include "Common/SharedData.hlsli"
@@ -113,13 +127,17 @@ cbuffer PerMaterial : register(b1)
 
 cbuffer PerGeometry : register(b2)
 {
+#if !defined(DCLF_BINDLESS)
 	row_major float3x4 World : packoffset(c0);
 	row_major float3x4 PreviousWorld : packoffset(c3);
+#endif  // !DCLF_BINDLESS
 	float4 EyePosition : packoffset(c6);
+#if !defined(DCLF_BINDLESS)
 	float4 LandBlendParams : packoffset(c7);  // offset in xy, gridPosition in yw
 	float4 TreeParams : packoffset(c8);       // wind magnitude in y, amplitude in z, leaf frequency in w
 	float2 WindTimers : packoffset(c9);
 	row_major float3x4 TextureProj : packoffset(c10);
+#endif  // !DCLF_BINDLESS
 	float IndexScale : packoffset(c13);
 	float4 WorldMapOverlayParameters : packoffset(c14);
 };
@@ -128,11 +146,38 @@ cbuffer VS_PerFrame : register(b12)
 {
 	row_major float3x3 ScreenProj : packoffset(c0);
 	row_major float4x4 ViewProj : packoffset(c8);
-#	if defined(SKINNED)
+#	if defined(SKINNED) || defined(DCLF_BINDLESS)
+	// posAdjust and its previous value (FrameBuffer's CameraPosAdjust and CameraPreviousPosAdjust): the
+	// skinning pivot, and under DCLF_BINDLESS also the eye the absolute object records are made relative to.
 	float3 BonesPivot : packoffset(c40);
 	float3 PreviousBonesPivot : packoffset(c41);
-#	endif  // SKINNED
+#	endif  // SKINNED || DCLF_BINDLESS
 };
+
+#if defined(DCLF_BINDLESS)
+// The record holds World and PreviousWorld absolute, so one record serves every epoch and every camera;
+// the vertex stage makes them relative to this epoch's eye and previous eye, the subtraction the engine
+// does on the CPU for its own draws. `precise` keeps it the same single float subtraction (so the depth
+// and colour epochs, and the native draws, agree to the bit) rather than something folded into the
+// transform that follows.
+static precise float3x4 World = float3x4(
+	DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x),
+	DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y),
+	DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z));
+static precise float3x4 PreviousWorld = float3x4(
+	DCLFObjects[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x),
+	DCLFObjects[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y),
+	DCLFObjects[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z));
+// Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
+// buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
+static float4 TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
+static float2 WindTimers = DCLFObjects[DCLFObjectIndex].DCLFWindTimers.xy;
+// Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix, from the object's
+// extras rows in the row buffer. An object without extras points at row 0, which nothing reads for it.
+static float4 LandBlendParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 0];
+static row_major float3x4 TextureProj = float3x4(DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 1],
+	DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 2], DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 3]);
+#endif  // DCLF_BINDLESS
 
 #	if defined(TREE_ANIM)
 float2 GetTreeShiftVector(float4 position, float4 color)
@@ -168,12 +213,21 @@ VS_OUTPUT main(VS_INPUT input)
 #	if defined(SKINNED)
 	precise int4 actualIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
+#		if defined(DCLF_BINDLESS)
+	float3x4 previousWorldMatrix =
+		Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFPreviousBoneOffset, actualIndices, PreviousBonesPivot, input.BoneWeights);
+#		else
 	float3x4 previousWorldMatrix =
 		Skinned::GetBoneTransformMatrix(PreviousBones, actualIndices, PreviousBonesPivot, input.BoneWeights);
+#		endif
 	precise float4 previousWorldPosition =
 		float4(mul(inputPosition, transpose(previousWorldMatrix)), 1);
 
+#		if defined(DCLF_BINDLESS)
+	float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, actualIndices, BonesPivot, input.BoneWeights);
+#		else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, actualIndices, BonesPivot, input.BoneWeights);
+#		endif
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
 	float4 viewPos = mul(ViewProj, worldPosition);
@@ -205,7 +259,11 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #	if defined(SKINNED)
+#		if defined(DCLF_BINDLESS)
+	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, actualIndices, input.BoneWeights);
+#		else
 	float3x3 boneRSMatrix = Skinned::GetBoneRSMatrix(Bones, actualIndices, input.BoneWeights);
+#		endif
 #	endif
 
 #	if !defined(MODELSPACENORMALS)
@@ -572,28 +630,73 @@ cbuffer PerMaterial : register(b1)
 
 cbuffer PerGeometry : register(b2)
 {
+#if !defined(DCLF_BINDLESS)
 	float3 DirLightDirection : packoffset(c0);
 	float3 DirLightColor : packoffset(c1);
+#endif  // !DCLF_BINDLESS
 	float4 ShadowLightMaskSelect : packoffset(c2);
+#if !defined(DCLF_BINDLESS)
 	float4 MaterialData : packoffset(c3);  // envmapLODFade in x, specularLODFade in y, alpha in z
+#endif  // !DCLF_BINDLESS
 	float AlphaTestRef : packoffset(c4);
+#if !defined(DCLF_BINDLESS)
 	float3 EmitColor : packoffset(c4.y);
+#endif  // !DCLF_BINDLESS
+#if !defined(DCLF_BINDLESS)
 	float4 ProjectedUVParams : packoffset(c6);
+#endif  // !DCLF_BINDLESS
 	float4 SSRParams : packoffset(c7);
 	float4 WorldMapOverlayParametersPS : packoffset(c8);
+#if !defined(DCLF_BINDLESS)
 	float4 ProjectedUVParams2 : packoffset(c9);
 	float4 ProjectedUVParams3 : packoffset(c10);  // fProjectedUVDiffuseNormalTilingScale in x, fProjectedUVNormalDetailTilingScale in y, EnableProjectedNormals in w
+#endif  // !DCLF_BINDLESS
+#if !defined(DCLF_BINDLESS)
 	row_major float3x4 DirectionalAmbient : packoffset(c11);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c14);  // Fresnel power in z, color in xyz
-	float4 PointLightPosition[7] : packoffset(c15);               // point light radius in w
+#endif  // !DCLF_BINDLESS
+	float4 PointLightPosition[7] : packoffset(c15);  // point light radius in w
 	float4 PointLightColor[7] : packoffset(c22);
 	float2 NumLightNumShadowLight : packoffset(c29);
 };
 
+#if defined(DCLF_BINDLESS)
+// The frame's lighting: the same in every pipeline's PerGeometry block, so Drawcall Limit Fix keeps it in one block
+// of its own for the whole frame (SceneStore::Tables::frameLighting), and a pipeline's block does not change with the
+// sun. No other shader uses b13.
+cbuffer DCLFFrameLighting : register(b13)
+{
+	float3 DirLightDirection : packoffset(c0);
+	float3 DirLightColor : packoffset(c1);
+	row_major float3x4 DirectionalAmbient : packoffset(c2);
+	float4 AmbientSpecularTintAndFresnelPower : packoffset(c5);  // Fresnel power in z, color in xyz
+};
+#endif  // DCLF_BINDLESS
+
+#if defined(DCLF_BINDLESS)
+static float4 MaterialData = DCLFObjects[DCLFObjectIndex].MaterialData;
+static float3 EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+// Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
+static float DCLFSSRSpecular = DCLFObjects[DCLFObjectIndex].EmitColor.w;
+// ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
+static float4 ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+static float4 ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+static float4 ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 6];
+#	define DCLF_SSR_SPECULAR DCLFSSRSpecular
+#else
+#	define DCLF_SSR_SPECULAR SSRParams.w
+#endif  // DCLF_BINDLESS
+
+#if defined(DCLF_BINDLESS_DRAW)
+// The reference comes from the per-object record instead of a constant buffer of its own, so that b11
+// stops being part of what makes a draw's binding record unique. Same value, same single read below.
+static const float AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#else
 cbuffer AlphaTestRefBuffer : register(b11)
 {
 	float AlphaTestRefRS : packoffset(c0);
 }
+#endif  // DCLF_BINDLESS_DRAW
 
 float GetSoftLightMultiplier(float angle)
 {
@@ -1882,7 +1985,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float2 baseShadowUV = 1.0.xx;
 	float4 shadowColor = 1.0;
-	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir) || inWorld) || numShadowLights > 0) {
+	if ((PixelDescriptor() & Permutation::LightingFlags::DefShadow) && ((PixelDescriptor() & Permutation::LightingFlags::ShadowDir) || inWorld) || numShadowLights > 0) {
 		baseShadowUV = input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy;
 		float2 adjustedShadowUV = baseShadowUV * VPOSOffset.xy + VPOSOffset.zw;
 		float2 shadowUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(adjustedShadowUV);
@@ -1985,6 +2088,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor.xyz = GetWorldMapBaseColor(sampledBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
 
+#	if !defined(DCLF_DEPTH_ONLY)
+	// Drawcall Limit Fix's Z-prepass (DCLF_DEPTH_ONLY) needs only the alpha test, and nothing between here
+	// and it changes baseColor.w or discards. Compiling the lighting out here, rather than leaving it to the
+	// optimizer behind the depth-only return, keeps its reads of the per-frame pixel bindings out of the module
+	// even in debug builds (CS_DCLF_SHADER_DEBUG), where DXC keeps them alive for their debug values.
 	float3 localShadowPosition = input.WorldPosition.xyz;
 #	if defined(DEFERRED) && !defined(LANDSCAPE) && defined(TERRAIN_BLENDING_OBJECTS)
 	// Terrain Blending fades terrain over the part of an object below the terrain surface, where the scene
@@ -2479,7 +2587,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float dirDetailedShadow = 1.0;
 	float dirTransmissionContactShadow = 1.0;
 
-	if ((Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) && (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::ShadowDir)) {
+	if ((PixelDescriptor() & Permutation::LightingFlags::DefShadow) && (PixelDescriptor() & Permutation::LightingFlags::ShadowDir)) {
 		dirDetailedShadow *= shadowColor.x;
 
 #	if !defined(VOLUMETRIC_SHADOWS)
@@ -2622,7 +2730,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 		float3 lightColor = Color::PointLight(PointLightColor[lightIndex].xyz) * intensityMultiplier;
 		float lightShadow = 1.f;
-		if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow) {
+		if (PixelDescriptor() & Permutation::LightingFlags::DefShadow) {
 			if (lightIndex < numShadowLights) {
 				lightShadow *= shadowColor[ShadowLightMaskSelect[lightIndex]];
 			}
@@ -2717,7 +2825,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			shadowComponent = LightLimitFix::GetLocalShadow(LinearSampler, light.localShadowIndex, localShadowPosition, localShadowEye, normalizedLightDirection, localShadowSkinned, screenNoise);
 			lightShadow *= shadowComponent;
 		}
-		else if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::DefShadow)
+		else if (PixelDescriptor() & Permutation::LightingFlags::DefShadow)
 		{
 			if (light.lightFlags & LightLimitFix::LightFlags::Shadow) {
 				shadowComponent = shadowColor[light.shadowLightIndex];
@@ -3069,6 +3177,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	directionalAmbientColor *= outputAlbedo;
 
+#	if defined(DCLF_SHADOW_DEBUG)
+	float dbgBeforeSky = dot(color.xyz, float3(0.2126, 0.7152, 0.0722));
+#	endif
 #	if defined(SKYLIGHTING)
 	float3 skylightingAlbedo = outputAlbedo;
 #		if defined(TRUE_PBR)
@@ -3162,6 +3273,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz = 0;
 #	endif
 
+#	endif  // !DCLF_DEPTH_ONLY
+
 #	if defined(LANDSCAPE) && !defined(LOD_LAND_BLEND)
 	psout.Diffuse.w = 0;
 #	else
@@ -3228,7 +3341,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif      // DO_ALPHA_TEST
 #		endif
 
-#		if defined(ANISOTROPIC_ALPHA)
+#		if !defined(DCLF_DEPTH_ONLY)
+#			if defined(ANISOTROPIC_ALPHA)
 	// Uniform alpha material settings
 	uint AlphaMaterialModel = ExtendedTranslucency::GetMaterialModelFromDescriptor(Permutation::ExtraFeatureDescriptor);
 	float AlphaMaterialReduction = 0.f;
@@ -3267,10 +3381,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			alpha = lerp(alpha, originalAlpha, AlphaMaterialStrength);
 		}
 	}
-#		endif  // ANISOTROPIC_ALPHA
+#			endif  // ANISOTROPIC_ALPHA
 
 	psout.Diffuse.w = alpha;
+#		endif  // !DCLF_DEPTH_ONLY
 #	endif
+
+#	if !defined(DCLF_DEPTH_ONLY)
 
 #	if defined(LIGHT_LIMIT_FIX) && defined(LLFDEBUG)
 	if (SharedData::lightLimitFixSettings.EnableLightsVisualisation) {
@@ -3363,12 +3480,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 normalAndSSR;
 	normalAndSSR.xy = ssrNormal.xy + 0.5.xx;
 	normalAndSSR.z = 0.0;
-	normalAndSSR.w = SSRParams.w * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
+	normalAndSSR.w = DCLF_SSR_SPECULAR * smoothstep(SSRParams.x - 1e-5, SSRParams.y, normal.w);
 
 	const bool outputColorToAuxiliaryTarget = SSRParams.z > 1e-5;
 	psout.NormalGlossiness = outputColorToAuxiliaryTarget ? psout.Diffuse : normalAndSSR;
 	psout.MotionVectors = outputColorToAuxiliaryTarget ? float4(1, 0, 0, 1) : float4(screenMotionVector, 0, 1);
 #	endif
+
+#		if defined(DCLF_SHADOW_DEBUG) && defined(DEFERRED)
+	// [TEMP] DCLF only: the sun's shadow terms in place of the colour, read back with CS_DCLF_GBUFFER_PROBE.
+	// The base colour texture at mip 0, three ways (luminance): x through the sampler (SampleLevel), y without
+	// one (Load), z the shader's own biased sample.
+#			if defined(TRUE_PBR) && !defined(LANDSCAPE)
+	{
+		uint width, height, levels;
+		TexColorSampler.GetDimensions(0, width, height, levels);
+		const int2 texel = int2(frac(diffuseUv) * float2(width, height));
+		const float3 luma = float3(0.2126, 0.7152, 0.0722);
+		psout.Diffuse = float4(dot(TexColorSampler.SampleLevel(SampColorSampler, (float2(texel) + 0.5) / float2(width, height), 0).rgb, luma),
+			dot(TexColorSampler.Load(int3(texel, 0)).rgb, luma), dot(rawBaseColor.rgb, luma), 0);
+	}
+#			else
+	psout.Diffuse = -1.0.xxxx;
+#			endif
+#		endif
+#	endif  // !DCLF_DEPTH_ONLY
 
 #	if defined(EMAT)
 #		undef COMPUTE_TERRAIN_SHADOW_BASE
@@ -3376,6 +3512,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		undef LANDSCAPE_PARALLAX_ENABLED
 #	endif
 
+#	if defined(DCLF_DEPTH_ONLY)
+	// Drawcall Limit Fix's Z-prepass builds this permutation with DCLF_DEPTH_ONLY: the pass has no render
+	// targets and only needs the depth, so it keeps the alpha test and nothing else - the lighting before it
+	// and the outputs after it are compiled out (see above). That makes the prepass cheap and, more
+	// importantly, keeps the shader from reading the per-frame pixel-stage bindings: they are not bound
+	// while the native depth pass runs.
+	return (PS_OUTPUT)0;
+#	else
 	return psout;
+#	endif
 }
 #endif  // PSHADER

@@ -6,6 +6,12 @@
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 - **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass (Developer Tools, `NVPERF_SUPPORT`)
 - **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
+- **[Drawcall Limit Fix](./drawcall-limit-fix.md)** - GPU-driven indirect drawing of the opaque scene (in progress)
+- **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
+- **[Crash catalog](./crash-catalog.md)** - Crashes met during development, their stacks and what is known about each
+- **[DCLF: a GPU-driven frame](./dclf-gpu-driven-frame.md)** - Investigation: what taking DCLF's objects out of every engine per-view walk would require
+- **[DCLF: object tables built from events](./dclf-event-driven-tables.md)** - Investigation: replacing the per-frame scene walk with persistent tables changed by engine events, the walk kept as a synchronous validation
+- **[Bugs found by parity](./bugs-found-by-parity.md)** - Bugs in other features (each a separate PR) and in the engine (with DCLF's rule for each) that DCLF's parity checks found
 
 ## Subsystems
 

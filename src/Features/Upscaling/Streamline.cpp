@@ -3,6 +3,7 @@
 #include "DXVKInterop.h"
 
 #include "../../DxvkLoader.h"
+#include "../DrawcallLimitFix/Switches.h"
 #include "../../Globals.h"
 #include "../../State.h"
 #include "../../Utils/Game.h"
@@ -315,11 +316,24 @@ Streamline* Streamline::GetSingleton()
 	return &singleton;
 }
 
+// RenderDoc's Vulkan layer does not expose VK_NVX_binary_import or VK_NVX_image_view_handle, and the
+// interposer's vkCreateDevice fails with VK_ERROR_EXTENSION_NOT_PRESENT without them, which takes DXVK's
+// device (normal and safe mode alike) and the game down with it. DLSS cannot run under RenderDoc anyway,
+// so Streamline stands down and DXVK talks to the real loader.
+static bool RenderDocLoaded()
+{
+	return GetModuleHandleW(L"renderdoc.dll") != nullptr;
+}
+
 void Streamline::PreloadInterposer()
 {
 	// Preload before DXVK creates VkInstance so its Vulkan loader aliases the interposer.
 	if (g_sl.interposer)
 		return;
+	if (RenderDocLoaded()) {
+		logger::info("[Streamline] renderdoc.dll is loaded: interposer not preloaded, DXVK uses the real Vulkan loader");
+		return;
+	}
 	const auto slDir = GetStreamlineDir();
 	if (slDir.empty())
 		return;
@@ -399,6 +413,12 @@ bool Streamline::Initialize()
 		return initialized;
 	triedInit = true;
 
+	if (RenderDocLoaded()) {
+		logger::info("[Streamline] renderdoc.dll is loaded: Streamline features disabled for this session");
+		MarkUnavailable();
+		return false;
+	}
+
 	const auto slDir = GetStreamlineDir();
 	if (slDir.empty()) {
 		logger::warn("[Streamline] could not resolve plugin directory");
@@ -437,10 +457,17 @@ bool Streamline::Initialize()
 	// The controller keeps at most one frame-generation feature loaded at runtime.
 	dlssgHardware = ProbeDLSSGHardware();
 
-	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureReflex, sl::kFeaturePCL,
-		sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
-	if (dlssgHardware)
+	// Reflex and PCL make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture. For
+	// now they load only on request, CS_STREAMLINE_REFLEX=1, and DLSS-G (which needs Reflex) with them.
+	const bool reflexRequested = DCLF::SwitchEnabled("CS_STREAMLINE_REFLEX");
+	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
+	if (reflexRequested) {
+		featuresToLoad.push_back(sl::kFeatureReflex);
+		featuresToLoad.push_back(sl::kFeaturePCL);
+	}
+	if (dlssgHardware && reflexRequested)
 		featuresToLoad.push_back(sl::kFeatureDLSS_G);
+	logger::info("[Streamline] Reflex {} (CS_STREAMLINE_REFLEX=1 loads Reflex, PCL and DLSS-G)", reflexRequested ? "requested" : "not loaded");
 
 	sl::Preferences pref{};
 	pref.renderAPI = sl::RenderAPI::eVulkan;
@@ -1324,7 +1351,9 @@ static sl::Result cs_EvaluateFeatureCore(sl::Feature a_feature, const sl::Viewpo
 		tags[nt++] = sl::ResourceTag{ &hudlessRes, sl::kBufferTypeHUDLessColor, sl::ResourceLifecycle::eOnlyValidNow, &outputExtent };
 
 	sl::Result evalRes = sl::Result::eErrorNotInitialized;
-	auto transaction = dxvk->BeginFrameCommandBuffer();
+	// Timed inside the buffer: a D3D11 timer around it would straddle the submission (DXVKInterop.h).
+	auto transaction = dxvk->BeginFrameCommandBuffer(
+		a_feature == sl::kFeatureFSR_G ? nullptr : "Upscaling::Upscale");
 	if (transaction) {
 		const VkCommandBuffer cmd = transaction.GetCommandBuffer();
 		const sl::Result tagRes = cs_SetTagForFrame(*token, a_viewport, tags, nt, cmd);

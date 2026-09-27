@@ -1,0 +1,326 @@
+#include "AsyncWorker.h"
+#include <Tracy/Tracy.hpp>
+
+#include "Switches.h"
+#include "RenderGraph/RenderGraphRuntime.h"
+
+#include <Windows.h>
+
+#include <condition_variable>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <thread>
+
+namespace DCLF
+{
+	AsyncMode AsyncModeSetting()
+	{
+		static const AsyncMode mode = [] {
+			// On unless turned off: the full featureset is what testers and every validation run exercise.
+			const auto value = SwitchValue("CS_DCLF_ASYNC");
+			if (value == "off" || value == "0")
+				return AsyncMode::Off;
+			if (value == "probe")
+				return AsyncMode::Probe;
+			return AsyncMode::On;
+		}();
+		return mode;
+	}
+
+	bool AsyncJobEnabled(const char* a_job)
+	{
+		if (AsyncModeSetting() == AsyncMode::Off)
+			return false;
+		static const std::string jobs = SwitchValue("CS_DCLF_ASYNC_JOBS");
+		if (jobs.empty())
+			return true;
+		// A comma-separated list; a match is a whole item, so "shadow" does not enable "shadowview".
+		std::size_t begin = 0;
+		while (begin <= jobs.size()) {
+			std::size_t end = jobs.find(',', begin);
+			if (end == std::string::npos)
+				end = jobs.size();
+			std::size_t first = begin, last = end;
+			while (first < last && (jobs[first] == ' ' || jobs[first] == '\t'))
+				++first;
+			while (last > first && (jobs[last - 1] == ' ' || jobs[last - 1] == '\t'))
+				--last;
+			if (jobs.compare(first, last - first, a_job) == 0)
+				return true;
+			begin = end + 1;
+		}
+		return false;
+	}
+
+	std::chrono::microseconds AsyncWaitBudget()
+	{
+		static const std::chrono::microseconds budget = [] {
+			const auto value = SwitchValue("CS_DCLF_ASYNC_WAIT_MS");
+			const double ms = value.empty() ? 3.0 : std::strtod(value.c_str(), nullptr);
+			return std::chrono::microseconds(static_cast<long long>(ms * 1000.0));
+		}();
+		return budget;
+	}
+
+	struct AsyncWorker::Job
+	{
+		enum class State : std::uint8_t
+		{
+			Queued,
+			Running,
+			Done,
+			Failed,
+			Cancelled
+		};
+
+		const char* name = "";
+		std::function<void(std::stop_token)> run;
+		std::stop_source stop;
+		std::mutex mutex;
+		std::condition_variable finished;
+		State state = State::Queued;
+		std::chrono::steady_clock::time_point submitted;
+		std::chrono::steady_clock::time_point started;
+		std::chrono::steady_clock::time_point ended;
+		bool waited = false;  // the join happened (stats are recorded once)
+	};
+
+	struct AsyncWorker::Impl
+	{
+		std::mutex queueMutex;
+		std::condition_variable queued;
+		std::deque<std::shared_ptr<Job>> queue;
+		std::shared_ptr<Job> running;  // under queueMutex
+		std::condition_variable idle;  // notified whenever a job ends; WaitIdle checks the queue under queueMutex
+		bool stopping = false;
+		std::map<const char*, JobStats> stats;  // render thread
+		std::jthread thread;
+
+		void Loop(std::stop_token a_stop)
+		{
+			SetThreadDescription(GetCurrentThread(), L"CS DCLF worker");
+			// The engine's job threads run at normal priority; a starved worker costs one inline fallback, never
+			// correctness, so the worker only goes above them when asked not to.
+			if (SwitchValue("CS_DCLF_ASYNC_PRIORITY") != "normal")
+				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+			for (;;) {
+				std::shared_ptr<Job> job;
+				{
+					std::unique_lock lock(queueMutex);
+					queued.wait(lock, [&] { return stopping || a_stop.stop_requested() || !queue.empty(); });
+					if (queue.empty())
+						return;
+					job = std::move(queue.front());
+					queue.pop_front();
+					running = job;
+				}
+				{
+					std::lock_guard lock(job->mutex);
+					job->state = Job::State::Running;
+					job->started = std::chrono::steady_clock::now();
+				}
+				Job::State result = Job::State::Done;
+				try {
+					ZoneScopedN("CS.DCLF.Worker.Run");
+					ZoneText(job->name, std::char_traits<char>::length(job->name));
+					job->run(job->stop.get_token());
+				} catch (...) {
+					result = Job::State::Failed;
+				}
+				if (job->stop.stop_requested())
+					result = Job::State::Cancelled;
+				{
+					std::lock_guard lock(job->mutex);
+					job->state = result;
+					job->ended = std::chrono::steady_clock::now();
+				}
+				job->finished.notify_all();
+				{
+					std::lock_guard lock(queueMutex);
+					running.reset();
+				}
+				idle.notify_all();
+			}
+		}
+	};
+
+	AsyncWorker& AsyncWorker::Get()
+	{
+		static AsyncWorker worker;
+		return worker;
+	}
+
+	AsyncWorker::AsyncWorker() :
+		impl(std::make_unique<Impl>())
+	{
+		impl->thread = std::jthread([this](std::stop_token a_stop) { impl->Loop(a_stop); });
+	}
+
+	AsyncWorker::~AsyncWorker()
+	{
+		Drain();
+		{
+			std::lock_guard lock(impl->queueMutex);
+			impl->stopping = true;
+		}
+		impl->thread.request_stop();
+		impl->queued.notify_all();
+	}
+
+	AsyncWorker::JobHandle AsyncWorker::Submit(const char* a_name, std::function<void(std::stop_token)> a_job)
+	{
+		auto job = std::make_shared<Job>();
+		job->name = a_name;
+		job->run = std::move(a_job);
+		job->submitted = std::chrono::steady_clock::now();
+		{
+			std::lock_guard lock(impl->queueMutex);
+			impl->queue.push_back(job);
+		}
+		impl->queued.notify_one();
+		++impl->stats[a_name].kicked;
+		JobHandle handle;
+		handle.job = std::move(job);
+		return handle;
+	}
+
+	AsyncWorker::WaitResult AsyncWorker::Wait(const JobHandle& a_handle, std::chrono::microseconds a_budget)
+	{
+		ZoneScopedN("CS.DCLF.Worker.Wait");
+		auto& job = a_handle.job;
+		if (!job)
+			return WaitResult::None;
+		const auto waitStart = std::chrono::steady_clock::now();
+		std::unique_lock lock(job->mutex);
+		const bool finished = job->finished.wait_for(lock, a_budget, [&] {
+			return job->state != Job::State::Queued && job->state != Job::State::Running;
+		});
+		const auto waited = std::chrono::steady_clock::now() - waitStart;
+		RenderGraphRuntime::AddEpochJoinWait(waited);
+		const double waitedMs = std::chrono::duration<double, std::milli>(waited).count();
+		auto& stats = impl->stats[job->name];
+		if (!std::exchange(job->waited, true)) {
+			stats.waitTotalMs += waitedMs;
+			stats.waitMaxMs = (std::max)(stats.waitMaxMs, waitedMs);
+			stats.windowTotalMs += std::chrono::duration<double, std::milli>(waitStart - job->submitted).count();
+		}
+		if (!finished) {
+			++stats.late;
+			return WaitResult::Late;
+		}
+		const double builtMs = std::chrono::duration<double, std::milli>(job->ended - job->started).count();
+		stats.buildTotalMs += builtMs;
+		stats.queuedTotalMs += std::chrono::duration<double, std::milli>(job->started - job->submitted).count();
+		stats.buildMaxMs = (std::max)(stats.buildMaxMs, builtMs);
+		switch (job->state) {
+		case Job::State::Done:
+			++stats.onTime;
+			return WaitResult::Done;
+		case Job::State::Failed:
+			++stats.failed;
+			return WaitResult::Failed;
+		default:
+			++stats.cancelled;
+			return WaitResult::Cancelled;
+		}
+	}
+
+	void AsyncWorker::CancelPending()
+	{
+		std::deque<std::shared_ptr<Job>> dropped;
+		{
+			std::lock_guard lock(impl->queueMutex);
+			dropped.swap(impl->queue);
+		}
+		for (auto& job : dropped) {
+			{
+				std::lock_guard lock(job->mutex);
+				job->state = Job::State::Cancelled;
+				job->started = job->ended = std::chrono::steady_clock::now();
+			}
+			job->finished.notify_all();
+			++impl->stats[job->name].cancelled;
+		}
+	}
+
+	void AsyncWorker::Cancel(const JobHandle& a_handle)
+	{
+		ZoneScopedN("CS.DCLF.Worker.CancelAndJoin");
+		const auto& job = a_handle.job;
+		if (!job)
+			return;
+		bool dequeued = false;
+		{
+			std::lock_guard lock(impl->queueMutex);
+			if (const auto it = std::find(impl->queue.begin(), impl->queue.end(), job); it != impl->queue.end()) {
+				impl->queue.erase(it);
+				dequeued = true;
+			}
+		}
+		if (dequeued) {
+			{
+				std::lock_guard lock(job->mutex);
+				job->state = Job::State::Cancelled;
+				job->started = job->ended = std::chrono::steady_clock::now();
+			}
+			job->finished.notify_all();
+			++impl->stats[job->name].cancelled;
+			return;
+		}
+		job->stop.request_stop();
+		std::unique_lock lock(job->mutex);
+		job->finished.wait(lock, [&] { return job->state != Job::State::Queued && job->state != Job::State::Running; });
+	}
+
+	void AsyncWorker::Drain()
+	{
+		ZoneScopedN("CS.DCLF.Worker.Drain");
+		CancelPending();
+		std::shared_ptr<Job> running;
+		{
+			std::lock_guard lock(impl->queueMutex);
+			running = impl->running;
+		}
+		if (!running)
+			return;
+		running->stop.request_stop();
+		std::unique_lock lock(running->mutex);
+		running->finished.wait(lock, [&] { return running->state != Job::State::Queued && running->state != Job::State::Running; });
+	}
+
+	void AsyncWorker::WaitIdle()
+	{
+		ZoneScopedN("CS.DCLF.Worker.WaitIdle");
+		std::unique_lock lock(impl->queueMutex);
+		impl->idle.wait(lock, [&] { return impl->queue.empty() && !impl->running; });
+	}
+
+	bool AsyncWorker::Idle() const
+	{
+		std::lock_guard lock(impl->queueMutex);
+		return impl->queue.empty() && !impl->running;
+	}
+
+	std::string AsyncWorker::Report()
+	{
+		std::string text;
+		for (const auto& [name, s] : impl->stats) {
+			if (!s.kicked)
+				continue;
+			const std::uint32_t joined = s.onTime + s.failed + s.cancelled;
+			text += fmt::format("[DCLF] async {}: {} kicked, {} joined (waited {:.3f}/{:.3f} ms, built {:.3f}/{:.3f} ms, queued {:.3f} ms, window {:.3f} ms), {} late -> inline, {} failed, {} cancelled\n",
+				name, s.kicked, joined,
+				s.kicked ? s.waitTotalMs / s.kicked : 0.0, s.waitMaxMs,
+				joined ? s.buildTotalMs / joined : 0.0, s.buildMaxMs,
+				joined ? s.queuedTotalMs / joined : 0.0, s.kicked ? s.windowTotalMs / s.kicked : 0.0,
+				s.late, s.failed, s.cancelled);
+		}
+		return text;
+	}
+
+	void AsyncWorker::ResetStats()
+	{
+		impl->stats.clear();
+	}
+}

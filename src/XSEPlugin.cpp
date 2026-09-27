@@ -92,6 +92,44 @@ void InitializeLog([[maybe_unused]] spdlog::level::level_enum a_level = spdlog::
 	spdlog::set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] [%t] [%s:%#] %v");
 }
 
+/// Development switches (the CS_* environment variables) from `CommunityShaders.env` beside the log, one
+/// NAME=value per line, '#' for comments. A launcher such as an already-running MO2 does not pass a new
+/// environment to the game, so a test run sets its switches here instead. The real environment wins.
+void ApplyDevEnvironmentFile()
+{
+	auto path = logger::log_directory();
+	if (!path)
+		return;
+	*path /= std::format("{}.env"sv, Plugin::NAME);
+	std::ifstream file(*path);
+	if (!file)
+		return;
+
+	std::string line;
+	while (std::getline(file, line)) {
+		const auto first = line.find_first_not_of(" \t");
+		if (first == std::string::npos || line[first] == '#')
+			continue;
+		const auto equals = line.find('=', first);
+		if (equals == std::string::npos)
+			continue;
+		std::string name = line.substr(first, equals - first);
+		std::string value = line.substr(equals + 1);
+		while (!name.empty() && (name.back() == ' ' || name.back() == '\t'))
+			name.pop_back();
+		while (!value.empty() && (value.back() == '\r' || value.back() == ' ' || value.back() == '\t'))
+			value.pop_back();
+		if (name.empty())
+			continue;
+		if (GetEnvironmentVariableA(name.c_str(), nullptr, 0) != 0) {
+			logger::info("[DevEnv] {} is already set by the environment; ignoring the file's value", name);
+			continue;
+		}
+		SetEnvironmentVariableA(name.c_str(), value.c_str());
+		logger::info("[DevEnv] {}={} (from {})", name, value, path->filename().string());
+	}
+}
+
 extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_skse)
 {
 #ifndef NDEBUG
@@ -100,6 +138,7 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 	InitializeLog();
 	AddVectoredExceptionHandler(1, &CommunityShadersCrashDump);
 	logger::info("Loaded {} {}", Plugin::NAME, Plugin::VERSION.string());
+	ApplyDevEnvironmentFile();
 	SKSE::Init(a_skse);
 	logger::info("Community Shaders {} | branch: {} | describe: {} | hash: {}{}",
 		Util::GetFormattedVersion(Plugin::VERSION),
@@ -107,7 +146,9 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Load(const SKSE::LoadInterface* a_s
 		Plugin::BUILD_DESCRIBE,
 		Plugin::BUILD_HASH.empty() ? "unknown" : Plugin::BUILD_HASH,
 		Plugin::BUILD_DIRTY ? " (dirty)" : "");
-	SKSE::AllocTrampoline(1 << 10);
+	// Every write_call/write_branch stub (14 bytes) comes from this block; 1 KiB ran out at about 73 hooks. DCLF's
+	// switch events take about 400 bytes of it for their patched stores' stubs.
+	SKSE::AllocTrampoline(1 << 12);
 	return Load();
 }
 

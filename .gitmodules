@@ -8,7 +8,7 @@
 [submodule "extern/dxvk"]
 	path = extern/dxvk
 	url = https://github.com/community-shaders/dxvk.git
-	branch = interop
+	branch = org_integration
 [submodule "extern/OpenRenderGraph"]
 	path = extern/OpenRenderGraph
 	url = https://github.com/panthuncia/OpenRenderGraph.git
@@ -25,3 +25,6 @@
 	path = extern/volk
 	url = https://github.com/zeux/volk.git
 	branch = master
+[submodule "extern/ORGModuleServices"]
+	path = extern/ORGModuleServices
+	url = https://github.com/panthuncia/ORGModuleServices.git

@@ -13,6 +13,61 @@ namespace DxvkLoader
 		bool g_loaded = false;
 		decltype(&D3D11CreateDeviceAndSwapChain) g_d3d11Create = nullptr;
 		decltype(&CreateDXGIFactory) g_createFactory = nullptr;
+
+		std::string ModuleNameAt(const void* a_address)
+		{
+			HMODULE owner = nullptr;
+			if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+					reinterpret_cast<LPCWSTR>(a_address), &owner))
+				return "<no module>";
+			wchar_t buf[MAX_PATH]{};
+			const DWORD n = ::GetModuleFileNameW(owner, buf, MAX_PATH);
+			return n ? std::filesystem::path(std::wstring(buf, n)).filename().string() : "<unknown module>";
+		}
+
+		/**
+		 * @brief An export's address read from the module's own export table, not through GetProcAddress.
+		 *
+		 * Capture tools that hook D3D11 (RenderDoc, loaded in-process by the RenderDoc feature) hook
+		 * GetProcAddress too, and match the libraries they hook by name substring: `dxvk_d3d11.dll` counts
+		 * as `d3d11.dll` and `dxvk_dxgi.dll` as `dxgi.dll`. GetProcAddress on the DXVK DLLs then returns the
+		 * tool's D3D11 entry point, which forwards to the *system* runtime: the game silently runs on the
+		 * native driver, with DXVK loaded but unused, and fails later on whatever only DXVK supports. The
+		 * export table is data in the mapped image and cannot be redirected. A mismatch with GetProcAddress
+		 * is logged with the module that answered, so an interposer is named in the log instead of guessed.
+		 */
+		FARPROC ResolveExport(HMODULE a_module, const char* a_name)
+		{
+			const auto base = reinterpret_cast<const std::byte*>(a_module);
+			const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+			const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+			const auto& dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
+			FARPROC direct = nullptr;
+			if (dir.VirtualAddress && dir.Size) {
+				const auto exports = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + dir.VirtualAddress);
+				const auto names = reinterpret_cast<const DWORD*>(base + exports->AddressOfNames);
+				const auto ordinals = reinterpret_cast<const WORD*>(base + exports->AddressOfNameOrdinals);
+				const auto functions = reinterpret_cast<const DWORD*>(base + exports->AddressOfFunctions);
+				for (DWORD i = 0; i < exports->NumberOfNames; ++i) {
+					if (std::strcmp(reinterpret_cast<const char*>(base + names[i]), a_name) != 0)
+						continue;
+					const DWORD rva = functions[ordinals[i]];
+					// A forwarder's RVA points at a "dll.function" string inside the export directory.
+					if (rva < dir.VirtualAddress || rva >= dir.VirtualAddress + dir.Size)
+						direct = reinterpret_cast<FARPROC>(const_cast<std::byte*>(base + rva));
+					break;
+				}
+			}
+
+			const FARPROC viaLoader = ::GetProcAddress(a_module, a_name);
+			if (!direct)
+				return viaLoader;
+			if (viaLoader != direct)
+				logger::warn("[DXVK] GetProcAddress({}) is interposed: it returns {} in {} instead of DXVK's {}; calling DXVK directly",
+					a_name, fmt::ptr(viaLoader), viaLoader ? ModuleNameAt(viaLoader) : "<null>", fmt::ptr(direct));
+			return direct;
+		}
 	}
 
 	// Resolve relative to the plugin for mod-manager VFS compatibility.
@@ -117,8 +172,8 @@ namespace DxvkLoader
 			return false;
 		}
 
-		g_d3d11Create = reinterpret_cast<decltype(g_d3d11Create)>(::GetProcAddress(d3d11Mod, "D3D11CreateDeviceAndSwapChain"));
-		g_createFactory = reinterpret_cast<decltype(g_createFactory)>(::GetProcAddress(dxgiMod, "CreateDXGIFactory"));
+		g_d3d11Create = reinterpret_cast<decltype(g_d3d11Create)>(ResolveExport(d3d11Mod, "D3D11CreateDeviceAndSwapChain"));
+		g_createFactory = reinterpret_cast<decltype(g_createFactory)>(ResolveExport(dxgiMod, "CreateDXGIFactory"));
 
 		if (!g_d3d11Create || !g_createFactory) {
 			logger::error("[DXVK] Resolved DXVK DLLs but missing exports (d3d11create={}, createfactory={})",

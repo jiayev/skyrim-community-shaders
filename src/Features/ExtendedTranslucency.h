@@ -38,6 +38,15 @@ struct ExtendedTranslucency final : Feature
 	 */
 	static void BSLightingShader_SetupGeometry(RE::BSRenderPass* pass);
 
+	/**
+	 * @brief The material model the ExtraFeatureDescriptor holds for a geometry's draw (a MaterialModel
+	 * descriptor value): DescriptorDisabled unless the geometry is blended (an alpha property that blends, or
+	 * the lighting property's alpha below one); then its AnisotropicAlphaMaterial extra data, or the default
+	 * (DescriptorUseDefault) when SkinnedOnly allows it. What BSLightingShader_SetupGeometry sets, and what
+	 * Drawcall Limit Fix puts in its pipelines' permutation.
+	 */
+	static uint32_t MaterialModelOf(const RE::BSGeometry* geometry);
+
 	struct Hooks;
 
 	// TODO: Support more material model like glasses or arcylic
