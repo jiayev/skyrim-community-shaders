@@ -70,7 +70,7 @@ void LinearLighting::DrawSettings()
 				ImGui::SliderFloat(T(TKEY("particle_effects_multiplier"), "Particle Effects Multiplier"), &settings.particleEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("light_sprite_effects_multiplier"), "Light Sprite Effects Multiplier"), &settings.lightSpriteEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("fire_effects_multiplier"), "Fire Effects Multiplier"), &settings.fireEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, 0.1f, 8.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax, "%.2f");
 				ImGui::TreePop();
 			}
 
@@ -86,6 +86,7 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
 		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
+	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax);
 }
 
 void LinearLighting::SaveSettings(json& o_json)

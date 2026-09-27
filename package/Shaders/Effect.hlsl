@@ -674,11 +674,6 @@ PS_OUTPUT main(PS_INPUT input)
 #		endif
 #	endif
 
-#	if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (!(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
-		propertyColor *= Color::ParticleEffectMult();
-#	endif
-
 #	if defined(LIGHTING)
 	propertyColor = GetLightingColor(input.MSPosition.xyz, input.WorldPosition.xyz, input.Position.xy, shadowVariance);
 
@@ -722,6 +717,12 @@ PS_OUTPUT main(PS_INPUT input)
 #	elif defined(MEMBRANE)
 	propertyColor *= 0;
 	lightingInfluence = 0;
+#	endif
+
+	// Effects 11 PARTICLE Intensity never reached lit particles, keep that behavior.
+#	if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL) && !(defined(EFFECTS11) && defined(LIGHTING))
+	if (!(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+		propertyColor *= Color::ParticleEffectMult();
 #	endif
 
 	float4 baseTexColor = float4(1, 1, 1, 1);

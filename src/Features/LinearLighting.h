@@ -56,6 +56,9 @@ struct LinearLighting : Feature
 		float lightSpriteEffectMult = 1.0f;
 		float fireEffectMult = 1.0f;
 		float fireEffectCurve = 1.0f;
+
+		static constexpr float FireEffectCurveMin = 0.1f;
+		static constexpr float FireEffectCurveMax = 8.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
