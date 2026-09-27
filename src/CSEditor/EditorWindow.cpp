@@ -1675,18 +1675,22 @@ void EditorWindow::UpdateOpenState()
 		DisableVanityCamera();
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
-		LockWeatherForOverlay();
+		overlayWeatherLockPending = true;
 
 	} else if (!open && wasOpen) {
 		lightEditor.ResetOverrides();
 		RestoreVanityCamera();
 		ShowGameMenus();
 		BackgroundBlur::SetCSEditorActive(false);
+		overlayWeatherLockPending = false;
 		if (weatherLockedByOverlay) {
 			UnlockWeather();
 			weatherLockedByOverlay = false;
 		}
 	}
+
+	if (overlayWeatherLockPending)
+		LockWeatherForOverlay();
 
 	wasOpen = open;
 }
@@ -2231,11 +2235,18 @@ void EditorWindow::LockWeatherForOverlay()
 {
 	// Weather drifting mid-session changes the scene under whatever is being edited.
 	auto* sky = globals::game::sky;
-	if (!sky || IsWeatherLocked())
+	if (IsWeatherLocked()) {
+		overlayWeatherLockPending = false;
+		return;
+	}
+
+	// ForceWeather ends a transition instantly, snapping the sky to the incoming weather.
+	if (!sky || (sky->lastWeather && sky->currentWeatherPct < 1.0f))
 		return;
 
 	LockWeather(sky->currentWeather);
 	weatherLockedByOverlay = IsWeatherLocked();
+	overlayWeatherLockPending = !weatherLockedByOverlay;
 }
 
 void EditorWindow::UnlockWeather()
