@@ -436,15 +436,18 @@ rather than an authoring panel.
     location pages carry a **Time of Day** toggle that switches the page's saved set. It uses only
     `GetCurrentGameHour` / `SetGameHour`, `GetCurrentPeriod`, `Get*RelevantFeatureNames`,
     `GetFeatureDisplayName`, and the `LocationTarget` accessors.
--   `FeatureListRenderer` shows a scene-controlled indicator and a **Scene Specific Settings** pause toggle
-    per feature (`IsFeaturePaused` / `SetFeaturePaused`). The row is keyed on
-    `HasAnySceneEntriesForFeature`, which answers whether the feature is authored *anywhere*, so it stays
-    visible and pausable while the player is somewhere the overrides do not reach; it is marked *not active
-    here* in that state. `HasActiveSettingsForFeature` answers the narrower "is it applying right now" and
-    is what still gates disabling the feature's own controls and its **Apply Override** button. Its
-    "Restore Defaults" button is the one path that rewrites a feature's base values while the scene layer
-    is live, so it follows the restore with `CaptureExternalFeatureChanges` to re-baseline; without that the
-    next resolve puts the old values back.
+-   `FeatureListRenderer` draws a feature's `DrawSettings()` inside a baseline `SceneWidgetInterceptor::Scope`
+    (`Context::baseline`), so every catalogued control stays editable and edits the feature's base. The
+    guard tints each control by the layer winning it: blue for a Scene Manager value, yellow for a feature
+    override, green for a sketch. Editing a blue control records a **sketch** (`RecordBaselineEdit`): the
+    edited value becomes the base and the resolver holds it in place (`HoldSketchedValues`) until the menu
+    stops calling `RetainSketches` for that feature, when the scene value returns. A blue control's gutter
+    jumps to the winning page (`FindWinningContext`, `SceneSettingsUI::OpenSceneContext`); a sketched one
+    commits into it (`CommitSketches`). The feature list shows a blue dot for a feature authored anywhere
+    (`HasAnySceneEntriesForFeature`), filled while it applies here, and a green dot while it has sketches.
+    **Apply Override** and **Restore Defaults** rewrite the base behind a live scene layer, so the first
+    holds a `SceneLayerGuard` and the second follows with `CaptureExternalFeatureChanges`; without either
+    the next resolve puts the old values back.
 -   `CSEditor` flags a weather that has scene settings via `HasWeatherConfig`.
 -   `SceneFeatureReplica::Draw()` replays a feature's real `DrawSettings()` inside a
     `SceneWidgetInterceptor::Scope`, whose ImGui detours bind every control to the scene context, so entry

@@ -113,6 +113,9 @@ public:
 	/** @brief Renders the full weather editor UI with tabs for properties, DALC, atmosphere, clouds, fog, and records. */
 	void DrawWidget() override;
 
+	/** @brief Opens and focuses the window on its Scene Manager tab. */
+	void OpenSceneManagerTab();
+
 	/** @brief Returns the human-readable widget type name for window sizing. */
 	const char* GetWidgetTypeName() const override { return "Weather"; }
 

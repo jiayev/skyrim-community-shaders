@@ -1,6 +1,7 @@
 #pragma once
 
 #include "RE/B/BSCoreTypes.h"  // RE::FormID
+#include "SceneSettingsManager.h"
 
 /// Scene Manager authoring UI. The panels are wired into the CS Editor; the entry
 /// authoring controls are built on top of them.
@@ -31,6 +32,9 @@ namespace SceneSettingsUI
 	 * Call once per frame from the editor's window pass, alongside the other floating windows.
 	 */
 	void DrawLocationWindows();
+
+	/** @brief Opens the CS Editor on the page authoring a scene context, with a feature selected. */
+	void OpenSceneContext(const SceneSettingsManager::SceneContextId& context, const std::string& featureShortName);
 
 	/**
 	 * @brief Pauses game time while a panel is on screen and restores it once none are.

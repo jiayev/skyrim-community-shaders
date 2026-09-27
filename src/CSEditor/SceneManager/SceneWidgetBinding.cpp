@@ -13,8 +13,11 @@
 #include "../../I18n/I18n.h"
 #include "Menu.h"
 #include "SceneSettingsContextRules.h"
+#include "SceneSettingsInternal.h"
+#include "SceneSettingsUI.h"
 #include "SceneTransitionField.h"
 #include "SceneWidgetInterceptor.h"
+#include "SettingsOverrideManager.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -266,9 +269,7 @@ namespace
 		auto* manager = SceneSettingsManager::GetSingleton();
 		return cache[{ a_context, a_feature }].Get(manager->GetEntryPresentationRevision(), [&] {
 			LayerIndex layers;
-			// Nothing a paused feature holds applies, so its every context reads as empty.
-			if (!manager->IsFeaturePaused(a_feature))
-				CollectContextLayers(a_context, a_feature, layers);
+			CollectContextLayers(a_context, a_feature, layers);
 			return layers;
 		});
 	}
@@ -427,6 +428,25 @@ namespace
 		return supplier;
 	}
 
+	/** @brief The value the last enabled feature override applying to a setting gives it, or null.
+	 *  Later overrides merge over earlier ones, so the last to hold the key is the one in effect. */
+	const json* FindFeatureOverrideValue(const SettingMetadata& a_setting)
+	{
+		auto* overrides = SettingsOverrideManager::GetSingleton();
+		const std::string featureShortName{ a_setting.featureShortName };
+		if (!overrides->IsEnabled() || !overrides->HasFeatureOverrides(featureShortName))
+			return nullptr;
+
+		const auto featureOverrides = overrides->GetFeatureOverrides(featureShortName);
+		for (auto info = featureOverrides.rbegin(); info != featureOverrides.rend(); ++info) {
+			// An override naming keys the feature lacks is never applied.
+			if (!(*info)->enabled || !(*info)->unknownKeys.empty())
+				continue;
+			if (const auto* value = SceneSettingsInternal::GetCatalogSerializedValue((*info)->overrideData, a_setting))
+				return value;
+		}
+		return nullptr;
+	}
 }
 
 void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
@@ -464,6 +484,10 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 		// interceptor has nothing to bind. Left live rather than greyed: it never promised an
 		// override in the first place.
 		state = State::Unsupported;
+		return;
+	}
+	if (context->baseline) {
+		BindBaseline();
 		return;
 	}
 	if (!SceneSettingsManager::IsSceneSettingAllowed(
@@ -565,14 +589,16 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 	// to walk out to its siblings: each one is a separate entry keyed by its own settingKey.
 	const auto start = std::max<int>(metadata->aggregateStart, 0);
 	// The rules AddContextSetting judges by, so a control never shows as allowed and then fails to
-	// gain an entry on the gutter tick.
-	const auto rules = SceneSettingsContextRules::GetSceneContextRules(contextId);
+	// gain an entry on the gutter tick. The main menu edits the base, which has no scene rules.
+	const auto rules = state == State::Baseline ?
+	                       std::nullopt :
+	                       std::optional{ SceneSettingsContextRules::GetSceneContextRules(contextId) };
 
 	for (const auto* setting : GetControlComponents(*metadata)) {
 		// Siblings share featureShortName/settingPath (see MakeAggregateKey), so the guard's own
 		// resolved values apply to every component here; only settingKey varies.
-		if (!SceneSettingsManager::IsSettingAllowedForType(rules.sceneType, identity.featureShortName,
-				identity.settingPath, std::string{ setting->settingKey }, rules.requireNumeric))
+		if (rules && !SceneSettingsManager::IsSettingAllowedForType(rules->sceneType, identity.featureShortName,
+				identity.settingPath, std::string{ setting->settingKey }, rules->requireNumeric))
 			continue;
 
 		const auto slot = setting->aggregateCount <= 1 ?
@@ -588,6 +614,128 @@ void SceneWidgetBinding::Guard::ResolveComponents()
 	// The layer queries speak for the whole aggregate through its first component's address.
 	if (!components.empty())
 		identity.settingKey = components.front().settingKey;
+}
+
+SceneSettingsManager::SettingIdentity SceneWidgetBinding::Guard::ComponentIdentity(const Component& a_component) const
+{
+	return { identity.featureShortName, identity.settingPath, a_component.settingKey };
+}
+
+void SceneWidgetBinding::Guard::BindBaseline()
+{
+	state = State::Baseline;
+	identity.featureShortName = std::string{ metadata->featureShortName };
+	identity.settingPath = SceneSettingsManager::SplitSettingPath(metadata->settingPath);
+	ResolveComponents();
+	if (components.empty()) {
+		state = State::Unsupported;
+		return;
+	}
+
+	baselineLayer = ResolveBaselineLayer();
+	if ((baselineLayer == BaselineLayer::Scene || baselineLayer == BaselineLayer::Sketch) &&
+		(policy == GutterPolicy::Owner || ClaimGutter(value.data))) {
+		CaptureNextItemWidth();
+		DrawBaselineGutter();
+	}
+	PushCompensatedItemWidth();
+
+	if (const auto tint = ResolveBaselineColor()) {
+		Util::PushTintedFrameStyle(*tint);
+		tintPushed = true;
+	}
+}
+
+SceneWidgetBinding::BaselineLayer SceneWidgetBinding::Guard::ResolveBaselineLayer() const
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	const auto anyComponent = [&](auto&& a_predicate) { return std::ranges::any_of(components, a_predicate); };
+
+	if (anyComponent([&](const Component& component) { return manager->IsSketched(ComponentIdentity(component)); }))
+		return BaselineLayer::Sketch;
+	if (anyComponent([&](const Component& component) {
+			return manager->IsActiveSceneSetting(identity.featureShortName, identity.settingPath, component.settingKey);
+		}))
+		return BaselineLayer::Scene;
+
+	bool overridden = false;
+	for (const auto& component : components) {
+		const auto* overrideValue = FindFeatureOverrideValue(*component.setting);
+		if (!overrideValue)
+			continue;
+		if (!SceneSettingsManager::AppliedValuesEqual(*overrideValue, ReadEditedValue(component)))
+			return BaselineLayer::OverrideEdited;
+		overridden = true;
+	}
+	return overridden ? BaselineLayer::Override : BaselineLayer::Base;
+}
+
+std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveBaselineColor() const
+{
+	switch (baselineLayer) {
+	case BaselineLayer::Override:
+		return Util::Colors::GetWarning();
+	case BaselineLayer::OverrideEdited:
+	case BaselineLayer::Sketch:
+		return Util::Colors::GetSuccess();
+	case BaselineLayer::Scene:
+		return Util::Colors::GetInfo();
+	default:
+		return std::nullopt;
+	}
+}
+
+const char* SceneWidgetBinding::Guard::ResolveBaselineTooltip() const
+{
+	switch (baselineLayer) {
+	case BaselineLayer::Override:
+		return T(TKEY("baseline_from_override"), "A feature override supplies this value.");
+	case BaselineLayer::OverrideEdited:
+		return T(TKEY("baseline_override_edited"),
+			"Edited away from the feature override's value. Save or export an override to keep it.");
+	case BaselineLayer::Scene:
+		return T(TKEY("baseline_from_scene"),
+			"A Scene Manager preset supplies this value here. Editing sketches over it until you leave "
+			"this feature or close the menu.");
+	case BaselineLayer::Sketch:
+		return T(TKEY("baseline_sketch"),
+			"Sketched over the Scene Manager's value. It is kept as your base setting, but the scene's "
+			"value returns once you leave this feature or close the menu.");
+	default:
+		return nullptr;
+	}
+}
+
+void SceneWidgetBinding::Guard::DrawBaselineGutter()
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	ImGui::PushID(label);
+
+	if (baselineLayer == BaselineLayer::Scene) {
+		if (ImGui::ArrowButton("##SceneJump", ImGuiDir_Right))
+			if (const auto context = manager->FindWinningContext(identity))
+				SceneSettingsUI::OpenSceneContext(*context, identity.featureShortName);
+		Util::AddTooltip(T(TKEY("baseline_jump_tooltip"), "Open the Scene Manager page supplying this value."));
+	} else {
+		auto* menu = Menu::GetSingleton();
+		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
+		const bool committed = menu && menu->uiIcons.saveSettings.texture ?
+		                           ImGui::ImageButton("##SketchCommit", menu->uiIcons.saveSettings.texture,
+									   ImVec2(iconSize, iconSize)) :
+		                           ImGui::Button(T(TKEY("baseline_commit"), "Commit"));
+		if (committed) {
+			std::vector<SceneSettingsManager::SettingIdentity> sketched;
+			for (const auto& component : components)
+				sketched.push_back(ComponentIdentity(component));
+			manager->CommitSketches(sketched);
+		}
+		Util::AddTooltip(T(TKEY("baseline_commit_tooltip"),
+			"Write this value into the Scene Manager preset supplying it, and restore your base setting."));
+	}
+	gutterConsumedWidth = ImGui::GetItemRectSize().x;
+
+	ImGui::PopID();
+	ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
 }
 
 void SceneWidgetBinding::Guard::ResolveState()
@@ -851,20 +999,17 @@ void SceneWidgetBinding::Guard::StoreHoldingValue()
 const json* SceneWidgetBinding::Guard::ResolveFallbackValue(const Component& a_component) const
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
-	const SceneSettingsManager::SettingIdentity setting{ identity.featureShortName, identity.settingPath,
-		a_component.settingKey };
+	const auto setting = ComponentIdentity(a_component);
 
-	if (!manager->IsFeaturePaused(identity.featureShortName)) {
-		const auto periods = CoveredPeriodMask();
-		for (const auto& lower : GetLowerContexts(contextId)) {
-			const auto* supplier = FindSupplyingEntry(lower, setting, periods);
-			if (!supplier)
-				continue;
-			// A tombstone below suppresses everything under it, leaving the feature's base.
-			if (!supplier->deleted)
-				return &supplier->value;
-			break;
-		}
+	const auto periods = CoveredPeriodMask();
+	for (const auto& lower : GetLowerContexts(contextId)) {
+		const auto* supplier = FindSupplyingEntry(lower, setting, periods);
+		if (!supplier)
+			continue;
+		// A tombstone below suppresses everything under it, leaving the feature's base.
+		if (!supplier->deleted)
+			return &supplier->value;
+		break;
 	}
 	return manager->FindAppliedBaseline(setting);
 }
@@ -1316,6 +1461,16 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 
 	if (state == State::Unsupported)
 		return a_changed;
+	if (state == State::Baseline) {
+		if (a_changed) {
+			auto* manager = SceneSettingsManager::GetSingleton();
+			for (const auto& component : components)
+				manager->RecordBaselineEdit(ComponentIdentity(component), ReadEditedValue(component));
+		}
+		if (const char* tooltip = ResolveBaselineTooltip())
+			Util::AddTooltip(tooltip, Util::kTooltipWhenDisabled);
+		return a_changed;
+	}
 	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a
 	// greyed control has left, and without them it reads as broken rather than barred.
 	if (state == State::Unbound || state == State::Unavailable) {

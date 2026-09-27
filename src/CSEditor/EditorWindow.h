@@ -230,6 +230,9 @@ public:
 	/** @brief Returns true if the editor can be opened (game is loaded and not in main menu). */
 	static bool CanBeOpen();
 
+	/** @brief Shows a category in the objects window, by its stable English ID. */
+	void SelectCategory(std::string category) { m_selectedCategory = std::move(category); }
+
 	/** @brief Disable Skyrim's vanity camera to prevent auto-rotation while editing. */
 	void DisableVanityCamera();
 

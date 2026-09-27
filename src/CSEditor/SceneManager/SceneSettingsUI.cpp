@@ -6,6 +6,8 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "../Weather/WeatherWidget.h"
+#include "Features/CSEditor.h"
 #include "Menu.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
@@ -368,7 +370,7 @@ namespace
 	}
 
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.
-	void OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
+	LocationWindow& OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
 	{
 		auto existing = std::ranges::find_if(locationWindows, [&](const auto& window) {
 			return window.target.type == target.type && window.target.formKey == target.formKey;
@@ -376,9 +378,9 @@ namespace
 		if (existing != locationWindows.end()) {
 			existing->open = true;
 			existing->pendingFocus = true;
-			return;
+			return *existing;
 		}
-		locationWindows.push_back({ .target = target });
+		return locationWindows.emplace_back(LocationWindow{ .target = target });
 	}
 
 	/// Both location tables identify a target the same way; only the trailing action differs.
@@ -716,6 +718,44 @@ void SceneSettingsUI::DrawLocationWindows()
 	}
 
 	std::erase_if(locationWindows, [](const auto& window) { return !window.open; });
+}
+
+void SceneSettingsUI::OpenSceneContext(const SceneSettingsManager::SceneContextId& context,
+	const std::string& featureShortName)
+{
+	CSEditor::OpenEditorWindow();
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (!editorWindow->open)
+		return;
+
+	// Pinned without moving the clock, so a mid-blend jump lands on the incoming period as it is now.
+	if (context.period != TimeOfDayPeriod::Count)
+		periodBar = { static_cast<int>(context.period), SceneSettingsManager::GetCurrentGameHour() };
+
+	switch (context.type) {
+	case SceneSettingsManager::SceneContextType::Location:
+		{
+			const auto& targets = SceneSettingsManager::GetSingleton()->GetCurrentLocationTargets();
+			const auto target = std::ranges::find_if(targets, [&](const auto& candidate) {
+				return candidate.type == context.locationType && candidate.formKey == context.locationFormKey;
+			});
+			if (target != targets.end())
+				OpenLocationWindow(*target).selectedFeature = featureShortName;
+			break;
+		}
+	case SceneSettingsManager::SceneContextType::Weather:
+		for (const auto& widget : editorWindow->weatherWidgets)
+			if (widget->form && widget->form->GetFormID() == context.weatherId) {
+				static_cast<WeatherWidget*>(widget.get())->OpenSceneManagerTab();
+				weatherSelectedFeature = featureShortName;
+				break;
+			}
+		break;
+	default:
+		editorWindow->SelectCategory("Scene Manager");
+		panelSelectedFeature = featureShortName;
+		break;
+	}
 }
 
 void SceneSettingsUI::SyncTimePause()

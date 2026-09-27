@@ -104,6 +104,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	}
 	for (const auto& [address, transition] : activeLocationTransitions)
 		resolved[address] = EaseLocationTransition(transition, transitionTime);
+	HoldSketchedValues(resolved);
 	ApplyResolvedSettings(resolved, force);
 	RetireFinishedLocationTransitions(transitionTime);
 
@@ -357,6 +358,9 @@ void SceneSettingsManager::RebuildLocationTransitionBatches()
 {
 	locationTransitionBatches.clear();
 	for (auto& [address, transition] : activeLocationTransitions) {
+		// A sketch holds its address until dropped; the transition resumes from there once it is.
+		if (sketchOriginals.contains(address))
+			continue;
 		auto& batch = locationTransitionBatches[address.featureShortName];
 		if (batch.addresses.empty())
 			batch.signature = std::hash<std::string_view>{}(address.featureShortName);

@@ -79,7 +79,18 @@ namespace SceneWidgetBinding
 		Overwritten,  // no user entry: a mod's overwrite supplies the value
 		Active,       // entry exists and applies
 		Paused,       // entry exists and is held back
-		Deleted       // a tombstone suppresses every lower layer at this address
+		Deleted,      // a tombstone suppresses every lower layer at this address
+		Baseline      // the main menu's control: edits the feature's base and shows which layer wins
+	};
+
+	/// Which layer a main-menu control's value comes from, highest precedence last.
+	enum class BaselineLayer : std::uint8_t
+	{
+		Base,            // the user's own base setting
+		Override,        // a feature override file supplies it
+		OverrideEdited,  // edited away from the feature override's value
+		Scene,           // a Scene Manager preset supplies it
+		Sketch           // edited over the Scene Manager's value, until the menu moves on
 	};
 
 	/// Wraps one intercepted widget call for the duration of that call.
@@ -123,6 +134,17 @@ namespace SceneWidgetBinding
 
 		/// Collects the catalog components the control covers, each with the entries behind it.
 		void ResolveComponents();
+
+		/// The main menu's path: binds the live member and colours the control by the layer winning it.
+		void BindBaseline();
+		BaselineLayer ResolveBaselineLayer() const;
+		std::optional<ImVec4> ResolveBaselineColor() const;
+		const char* ResolveBaselineTooltip() const;
+		/// Jumps to the Scene Manager page supplying the value, or commits a sketch into it.
+		void DrawBaselineGutter();
+
+		/// A component's own address; `identity` answers for the first component only.
+		SceneSettingsManager::SettingIdentity ComponentIdentity(const Component& a_component) const;
 		/// Derives the state and the mixed flag from the resolved entries.
 		void ResolveState();
 		/// Provenance across every period this control covers, combined "any user wins" like
@@ -242,6 +264,7 @@ namespace SceneWidgetBinding
 		Value value;
 		GutterPolicy policy;
 		State state = State::Unsupported;
+		BaselineLayer baselineLayer = BaselineLayer::Base;
 		/// Layer winning at this address, which drives the colour independently of `state`. A paused
 		/// user entry stays Paused so the checkbox has something to resume, but reads as the mod's.
 		SceneSettingsManager::SettingLayer winningLayer = SceneSettingsManager::SettingLayer::None;

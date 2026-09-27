@@ -178,9 +178,6 @@ SceneSettingsManager::DebugSnapshot SceneSettingsManager::GetDebugSnapshot() con
 	for (const auto& [featureShortName, _] : applyFailures)
 		snapshot.applyFailures.push_back(featureShortName);
 	snapshot.restoreFailures.assign(restoreFailureWarnings.begin(), restoreFailureWarnings.end());
-	for (const auto& [featureShortName, paused] : featurePauseStates)
-		if (paused)
-			snapshot.pausedFeatures.push_back(featureShortName);
 
 	return snapshot;
 }

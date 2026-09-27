@@ -414,6 +414,13 @@ void WeatherWidget::DrawWidget()
 	ImGui::End();
 }
 
+void WeatherWidget::OpenSceneManagerTab()
+{
+	SetOpen(true);
+	RequestFocus();
+	activeTabOverride = WeatherTab::kSceneManager;
+}
+
 void WeatherWidget::LoadSettings()
 {
 	bool hadErrors = false;

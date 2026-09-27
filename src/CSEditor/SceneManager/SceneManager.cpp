@@ -262,10 +262,6 @@ namespace
 		}
 
 		ImGui::Spacing();
-		ImGui::TextUnformatted("Features paused by the user");
-		DrawNameList(snapshot.pausedFeatures);
-
-		ImGui::Spacing();
 		ImGui::TextUnformatted("Features failing to apply");
 		DrawNameList(snapshot.applyFailures);
 
@@ -322,6 +318,29 @@ namespace
 		DrawNameList(snapshot.transitionApplyFailures);
 	}
 
+	void DrawPresets(const std::vector<SceneSettingsManager::PresetMetadata>& presets)
+	{
+		if (presets.empty()) {
+			Util::Text::Disabled("No preset metadata files found.");
+			return;
+		}
+		if (!ImGui::BeginTable("Presets", 3, kDebugTableFlags))
+			return;
+		for (const auto* header : { "Name", "Version", "File" })
+			ImGui::TableSetupColumn(header);
+		ImGui::TableHeadersRow();
+		for (const auto& preset : presets) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.name.c_str());
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.version.c_str());
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(preset.path.filename().string().c_str());
+		}
+		ImGui::EndTable();
+	}
+
 	void DrawResolvedSettings(const DebugSnapshot& snapshot)
 	{
 		if (snapshot.resolvedSettings.empty()) {
@@ -367,6 +386,26 @@ std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary
 
 void SceneManager::DrawSettings()
 {
+	auto transitionHours = GetTimeOfDayTransitionHours();
+	if (ImGui::SliderFloat(T("feature.scene_manager.time_of_day_transition", "Time of Day Transition"), &transitionHours,
+			0.0f, kMaxTimeOfDayTransitionHours, "%.2f h", ImGuiSliderFlags_AlwaysClamp))
+		SetTimeOfDayTransitionHours(transitionHours, true);
+	// A drag held still would otherwise outlive the debounce and write the file mid-gesture.
+	if (ImGui::IsItemActive())
+		HoldDeferredSceneChanges();
+	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
+		"Hours at the end of each time of day period spent blending into the next.\n"
+		"0 switches between periods instantly.\n"
+		"Installed presets supply this until you set your own."));
+	if (HasUserTimeOfDayTransitionHours()) {
+		ImGui::SameLine();
+		if (Util::WarningButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition")))
+			SetTimeOfDayTransitionHours(std::nullopt);
+		Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_reset_tooltip",
+			"Drop your value and use the last installed preset's, or the default when none sets one."));
+	}
+	ImGui::Separator();
+
 	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
 		FeatureOverwritesPanel::Draw();
 	ImGui::Separator();
@@ -388,6 +427,8 @@ void SceneManager::DrawSettings()
 		DrawLocationTransitions(snapshot);
 	if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
 		DrawResolvedSettings(snapshot);
+	if (ImGui::CollapsingHeader("Presets"))
+		DrawPresets(GetPresetMetadata());
 	if (ImGui::CollapsingHeader("Scene Type Entries"))
 		DrawLayers(snapshot.sceneLayers);
 	if (ImGui::CollapsingHeader("Weather Entries"))

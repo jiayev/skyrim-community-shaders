@@ -13,4 +13,7 @@ namespace FeatureOverwritesPanel
 
 	/** @brief Draws the export popup while open; must run under the same ImGui ID stack as BeginExport. */
 	void DrawExport();
+
+	/** @brief Whether the feature saves any main settings that an overwrite could carry; cached per feature. */
+	bool HasExportableSettings(Feature* feature);
 }

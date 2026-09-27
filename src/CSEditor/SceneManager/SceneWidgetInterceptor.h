@@ -15,6 +15,8 @@ namespace SceneWidgetInterceptor
 	{
 		Feature* feature = nullptr;
 		SceneSettingsManager::SceneContextId contextId;
+		/// The main menu's own DrawSettings: controls edit the baseline and show which layer wins.
+		bool baseline = false;
 	};
 
 	/** @brief Installs the detours. Idempotent; call from the render thread before the first frame. */
@@ -22,9 +24,9 @@ namespace SceneWidgetInterceptor
 
 	bool IsInstalled();
 
-	/// True while a Scope is active, i.e. a feature's DrawSettings is being replicated for scene
-	/// authoring. Features can use this to hide non-setting UI (debug views, buffer viewers) that
-	/// has no scene-context meaning.
+	/// True while a non-baseline Scope is active, i.e. a feature's DrawSettings is being replicated
+	/// for scene authoring. Features can use this to hide non-setting UI (debug views, buffer
+	/// viewers) that has no scene-context meaning.
 	bool IsArmed();
 
 	/// Empty while healthy; otherwise names the entry point whose attach failed.

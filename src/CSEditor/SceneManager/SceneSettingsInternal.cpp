@@ -60,6 +60,19 @@ namespace SceneSettingsInternal
 		return Util::FileHelpers::WriteJsonAtomically(path, data, indent, context);
 	}
 
+	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context)
+	{
+		const auto transitionIt = object.find(kTimeOfDayTransitionHoursKey);
+		if (transitionIt == object.end())
+			return std::nullopt;
+		if (const auto hours = transitionIt->is_number() ? transitionIt->get<float>() : -1.0f;
+			std::isfinite(hours) && hours >= 0.0f && hours <= SceneSettingsManager::kMaxTimeOfDayTransitionHours)
+			return hours;
+		logger::warn("[SceneSettings] {} in {} must be a number in 0..{}; ignoring it",
+			kTimeOfDayTransitionHoursKey, context, SceneSettingsManager::kMaxTimeOfDayTransitionHours);
+		return std::nullopt;
+	}
+
 	std::vector<std::filesystem::path> GetSortedDirectoryPaths(
 		const std::filesystem::path& directory, bool directories, std::string_view context)
 	{

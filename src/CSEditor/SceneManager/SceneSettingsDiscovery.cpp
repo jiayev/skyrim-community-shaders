@@ -126,11 +126,20 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 		sweepSetDirs(weatherDir);
 	for (const auto& locationDir : childDirectories(GetLocationOverwritesDir(), "location overwrite directories"))
 		sweepSetDirs(locationDir);
+
+	std::error_code ec;
+	if (const auto metadataPath = GetPresetMetadataPath(modName);
+		!IsReservedPresetName(modName) && std::filesystem::exists(metadataPath, ec))
+		found.push_back(metadataPath);
 	return found;
 }
 
-bool SceneSettingsManager::ExportPreset(const std::string& modName)
+bool SceneSettingsManager::ExportPreset(const std::string& modName, const std::string& version)
 {
+	if (!IsValidPresetVersion(version)) {
+		logger::error("[SceneSettings] Preset '{}' not exported: version '{}' is not MAJOR.MINOR.PATCH", modName, version);
+		return false;
+	}
 	// Weather and location configs load lazily; baking before they exist would sweep their files and
 	// write nothing back.
 	if (!TryEnsureWeatherDataLoaded() || !TryEnsureLocationDataLoaded()) {
@@ -139,7 +148,7 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 	}
 
 	const auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
-	if (safeModName.empty())
+	if (safeModName.empty() || IsReservedPresetName(safeModName))
 		return false;
 
 	/// One output file: the root it must stay inside, the type description its metadata carries, and the
@@ -225,8 +234,59 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName)
 			wroteAll = false;
 		}
 	}
+
+	const json metadata{ { kPresetMetadataKey,
+		{ { kPresetMetadataNameKey, safeModName }, { kPresetMetadataVersionKey, version },
+			{ kTimeOfDayTransitionHoursKey, timeOfDayTransitionHours } } } };
+	if (!WriteJsonAtomically(GetPresetMetadataPath(safeModName), metadata, kOverwriteJsonIndent, "preset metadata")) {
+		logger::error("[SceneSettings] Preset '{}' failed to write its metadata file", safeModName);
+		wroteAll = false;
+	}
+	DiscoverPresetMetadata();
+
 	logger::info("[SceneSettings] Exported preset '{}' as {} file(s)", safeModName, files.size());
 	return wroteAll;
+}
+
+void SceneSettingsManager::DiscoverPresetMetadata()
+{
+	presetMetadata.clear();
+	const auto root = Util::PathHelpers::GetSceneSettingsPath();
+	std::error_code ec;
+	if (!std::filesystem::exists(root, ec)) {
+		RefreshTimeOfDayTransitionHours();
+		return;
+	}
+
+	for (const auto& path : GetSortedJsonFiles(root, "preset metadata files")) {
+		if (IsReservedPresetName(path.stem().string()))
+			continue;
+		json data;
+		if (!ReadBoundedSceneJson(path, data))
+			continue;
+		// Only a marked file is a preset; any other json dropped at the root is left alone.
+		const auto metadataIt = data.find(kPresetMetadataKey);
+		if (metadataIt == data.end())
+			continue;
+
+		// find() yields end() on a non-object, so a malformed block fails the same checks.
+		const auto nameIt = metadataIt->find(kPresetMetadataNameKey);
+		const auto versionIt = metadataIt->find(kPresetMetadataVersionKey);
+		if (nameIt == metadataIt->end() || !nameIt->is_string() || nameIt->get_ref<const std::string&>().empty() ||
+			versionIt == metadataIt->end() || !versionIt->is_string() ||
+			!IsValidPresetVersion(versionIt->get_ref<const std::string&>())) {
+			logger::warn("[SceneSettings] Preset metadata '{}' needs a name and a MAJOR.MINOR.PATCH version", path.string());
+			continue;
+		}
+		presetMetadata.push_back({ .name = nameIt->get<std::string>(),
+			.version = versionIt->get<std::string>(),
+			.path = path,
+			.transitionHours = ReadTimeOfDayTransitionHours(*metadataIt, path.string()) });
+	}
+
+	if (!presetMetadata.empty())
+		logger::info("[SceneSettings] Found {} preset metadata file(s)", presetMetadata.size());
+	RefreshTimeOfDayTransitionHours();
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()

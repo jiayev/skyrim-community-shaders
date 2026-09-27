@@ -71,14 +71,9 @@ namespace
 	{
 		auto features = Feature::GetFeatureList();
 		std::ranges::sort(features, [](Feature* a, Feature* b) { return a->GetDisplayName() < b->GetDisplayName(); });
-		for (auto* feature : features) {
-			if (!feature->loaded || !feature->UsesMainSettings())
-				continue;
-			json settings;
-			feature->SaveSettings(settings);
-			if (settings.is_object() && !settings.empty())
+		for (auto* feature : features)
+			if (feature->loaded && FeatureOverwritesPanel::HasExportableSettings(feature))
 				AddExportFeature(feature);
-		}
 	}
 
 	/** @brief Draws the feature picker; returns true once a feature is selected. */
@@ -189,6 +184,20 @@ namespace
 
 		ImGui::PopID();
 	}
+}
+
+bool FeatureOverwritesPanel::HasExportableSettings(Feature* feature)
+{
+	assert(feature);
+	// The settings schema is fixed per feature, so one SaveSettings probe is enough.
+	static std::unordered_map<Feature*, bool> cache;
+	auto [it, inserted] = cache.try_emplace(feature, false);
+	if (inserted && feature->UsesMainSettings()) {
+		json settings;
+		feature->SaveSettings(settings);
+		it->second = settings.is_object() && !settings.empty();
+	}
+	return it->second;
 }
 
 void FeatureOverwritesPanel::BeginExport(Feature* feature)

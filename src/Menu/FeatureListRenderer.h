@@ -85,8 +85,8 @@ private:
 		std::string& pendingFeatureSelection;
 
 		// Helper methods for Feature rendering
-		void RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled);
-		void RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled);
+		void RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded);
+		void RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage);
 		static void RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded);
 		void RenderReactiveConstraintWarningDialog();
 	};

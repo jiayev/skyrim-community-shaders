@@ -40,6 +40,7 @@ namespace
 	}
 
 	std::string presetName;
+	std::string presetVersion;
 	std::vector<std::filesystem::path> collidingFiles;
 
 	/// The page a pending export belongs to, so only that page's toolbar draws it. Export itself is
@@ -98,6 +99,7 @@ void ScenePresetExport::Open(const SceneContextId& context)
 	pendingOpen = true;
 	// A name left over from a cancelled session would arm the destructive path without being retyped.
 	presetName.clear();
+	presetVersion = SceneSettingsManager::kDefaultPresetVersion;
 	collidingFiles.clear();
 }
 
@@ -141,10 +143,15 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportName", &presetName);
+		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputText("##ScenePresetExportVersion", &presetVersion);
 
 		// Non-const: std::make_format_args below needs a non-const lvalue to bind.
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
-		ImGui::BeginDisabled(sanitizedName.empty());
+		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);
+		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(presetVersion);
+		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = manager->FindPresetFiles(sanitizedName);
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
@@ -162,6 +169,12 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 			ImGui::CloseCurrentPopup();
 		}
 		ImGui::EndDisabled();
+		if (reservedName)
+			Util::AddTooltip(T(TKEY("scene_export_reserved_name"), "This name is reserved by the Scene Manager."),
+				Util::kTooltipWhenDisabled);
+		else if (!validVersion)
+			Util::AddTooltip(T(TKEY("scene_export_invalid_version"), "Use a MAJOR.MINOR.PATCH version, such as 1.0.0."),
+				Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("cancel"), "Cancel")))
@@ -172,7 +185,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 
 	if (exportConfirmation.Draw()) {
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
-		ReportExportResult(sanitizedName, manager->ExportPreset(sanitizedName));
+		ReportExportResult(sanitizedName, manager->ExportPreset(sanitizedName, presetVersion));
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
 		exportRequested = false;

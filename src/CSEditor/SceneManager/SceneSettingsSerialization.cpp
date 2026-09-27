@@ -120,6 +120,10 @@ void SceneSettingsManager::SaveAllUserSettings()
 
 	auto path = GetUserSettingsFilePath();
 	json data = preservedUserSettingsRoot;
+	if (userTimeOfDayTransitionHours)
+		data[kTimeOfDayTransitionHoursKey] = *userTimeOfDayTransitionHours;
+	else
+		data.erase(kTimeOfDayTransitionHoursKey);
 	if (ShouldSerializeUserSection(data, "interiorOnly", false, interiorUserSettingsModified)) {
 		data["interiorOnly"] = UserEntriesToArray(GetEntries(SceneType::InteriorOnly));
 		AppendRawEntries(data["interiorOnly"], unresolvedUserEntries[SceneType::InteriorOnly]);
@@ -352,6 +356,8 @@ void SceneSettingsManager::LoadAllUserSettings()
 	BumpEntryPresentationRevision();
 	interiorUserSettingsModified = false;
 	timeOfDayUserSettingsModified = false;
+	userTimeOfDayTransitionHours.reset();
+	RefreshTimeOfDayTransitionHours();
 	std::error_code ec;
 	if (!std::filesystem::exists(path, ec)) {
 		userSettingsDocumentLoaded = true;
@@ -383,6 +389,9 @@ void SceneSettingsManager::LoadAllUserSettings()
 		}
 		userSettingsDocumentWritable = true;
 		FeatureSettingsCache featureSettingsCache;
+
+		userTimeOfDayTransitionHours = ReadTimeOfDayTransitionHours(data, "SceneManager.json");
+		RefreshTimeOfDayTransitionHours();
 
 		struct EntryListSection
 		{
