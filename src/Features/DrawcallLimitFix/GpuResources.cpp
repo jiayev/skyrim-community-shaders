@@ -1,6 +1,7 @@
 #include "GpuResources.h"
 
 #include <chrono>
+#include <exception>
 
 #include "RenderGraph/DxvkOrgInterop.h"
 #include "RenderGraph/RenderGraphRuntime.h"
@@ -39,6 +40,10 @@ namespace DCLF
 			entry.buffer.offset = info.buffer.offset;
 			entry.buffer.size = info.buffer.size;
 			entry.buffer.address = info.buffer.address;
+			entry.generation = nextGeneration++;
+			if (!entry.generation)
+				std::terminate();
+			entry.owner = std::make_shared<const winrt::com_ptr<ID3D11Buffer>>(std::move(entry.reference));
 			++stats.cached;
 		} else {
 			++stats.rejected;
@@ -59,6 +64,15 @@ namespace DCLF
 			return false;
 		it->second.lastUsed = frame;
 		return true;
+	}
+
+	std::optional<GpuResources::LeasedBuffer> GpuResources::Lease(ID3D11Buffer* a_buffer)
+	{
+		const auto it = entries.find(a_buffer);
+		if (it == entries.end() || !it->second.stable || !it->second.owner)
+			return std::nullopt;
+		it->second.lastUsed = frame;
+		return LeasedBuffer{ it->second.buffer, it->second.generation, it->second.owner };
 	}
 
 	void GpuResources::BeginFrame(std::uint32_t a_frame)

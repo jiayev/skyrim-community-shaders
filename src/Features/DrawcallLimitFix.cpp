@@ -461,6 +461,7 @@ void DrawcallLimitFix::SetActive(bool a_active)
 	// Off: every pass reaches the batch renderers again, and no claim outlives the switch. Back on, the claims
 	// are empty until the first frame republishes them, so nothing is withheld that DCLF has not drawn.
 	capture.SetBypassed(!a_active);
+	capture.ClearFrameClaims();
 	capture.PublishClaims(nullptr);
 	for (std::uint32_t mode = 0; mode < DCLF::PassCapture::kShadowModes; ++mode)
 		capture.PublishShadowClaims(mode, nullptr);
@@ -526,6 +527,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	const auto eventsStart = std::chrono::steady_clock::now();
 	store.ProcessEvents();
 	timing.eventsMs += MillisecondsSince(eventsStart);
+	// Registration hooks may run on cull workers. They must all read one
+	// ownership selection even when an epoch publishes next frame's claims.
+	DCLF::PassCapture::Get().SelectLegacyFrameClaims();
 	const auto start = std::chrono::steady_clock::now();
 	store.BuildFrame(DCLF::SceneStore::Phase::Scene);
 	const double sceneMs = MillisecondsSince(start);
@@ -1184,6 +1188,8 @@ void DrawcallLimitFix::Prepass()
 		if (DCLF::SceneStore::ProfileEnabled()) {
 			for (std::size_t i = 0; i < stats.partMs.size(); ++i)
 				parts += fmt::format("{}{} {:.3f}", parts.empty() ? "; by part: " : ", ", DCLF::kBuildPartNames[i], stats.partMs[i] / frames);
+			for (std::size_t i = 0; i < stats.accumulatePartMs.size(); ++i)
+				parts += fmt::format("{}{} {:.3f}", i ? ", " : "; accumulate by part: ", DCLF::kBuildPartNames[i], stats.accumulatePartMs[i] / frames);
 		}
 		const auto& shaders = DCLF::ShaderPrograms::Get().GetStats();
 		logger::info("[DCLF] SPIR-V programs: {} requested, {} ready ({} stages from cache), {} failed; shadow (Utility): {} requested, {} ready, {} failed",

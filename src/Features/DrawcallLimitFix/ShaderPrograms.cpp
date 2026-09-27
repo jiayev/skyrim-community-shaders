@@ -6,6 +6,8 @@
 #include <iterator>
 #include <mutex>
 
+#include <Tracy/Tracy.hpp>
+
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "Switches.h"

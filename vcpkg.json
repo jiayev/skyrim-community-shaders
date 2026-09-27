@@ -38,6 +38,7 @@
         "pystring",
         "renderdoc",
         "stb",
+        "tbb",
         {
             "name": "tracy",
             "features": ["on-demand"]

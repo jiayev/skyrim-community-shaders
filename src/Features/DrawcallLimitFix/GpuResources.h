@@ -3,6 +3,7 @@
 #include <optional>
 
 #include <cstdint>
+#include <memory>
 
 #include <winrt/base.h>
 
@@ -27,6 +28,12 @@ namespace DCLF
 			std::uint64_t offset = 0;    // of the D3D11 buffer within vkBuffer
 			std::uint64_t size = 0;
 			std::uint64_t address = 0;   // device address of the first byte
+		};
+		struct LeasedBuffer
+		{
+			Buffer buffer;
+			std::uint64_t generation = 0;  // unique on successful import, including pointer reuse
+			std::shared_ptr<const void> owner;  // pins the D3D11 buffer beyond cache eviction
 		};
 
 		struct Stats
@@ -60,6 +67,8 @@ namespace DCLF
 		 * buffer is not held (the slot must resolve again).
 		 */
 		bool Touch(ID3D11Buffer* a_buffer);
+		/** @brief Retains an already imported buffer for an immutable publication; never imports inline. */
+		std::optional<LeasedBuffer> Lease(ID3D11Buffer* a_buffer);
 
 		/** @brief Once per frame, before the tables are built: releases entries unused for kEvictFrames. */
 		void BeginFrame(std::uint32_t a_frame);
@@ -75,12 +84,15 @@ namespace DCLF
 		struct Entry
 		{
 			winrt::com_ptr<ID3D11Buffer> reference;
+			std::shared_ptr<const void> owner;
 			Buffer buffer;
+			std::uint64_t generation = 0;
 			std::uint32_t lastUsed = 0;
 			bool stable = false;
 		};
 
 		ankerl::unordered_dense::map<ID3D11Buffer*, Entry> entries;
+		std::uint64_t nextGeneration = 1;
 		std::uint32_t frame = 0;
 		Stats stats;
 	};

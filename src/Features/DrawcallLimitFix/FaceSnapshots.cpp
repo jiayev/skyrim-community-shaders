@@ -2,6 +2,7 @@
 
 #include "Switches.h"
 #include "VolumetricProbe.h"
+#include <ORGModuleServices/Async/LeasedArraySlots.h>
 
 #include <array>
 #include <cstring>
@@ -55,9 +56,10 @@ namespace DCLF
 			};
 
 			RE::NiPointer<RE::BSFaceGenNiNode> head;
+			std::uint64_t recordId = 0;
 			std::vector<Shape> shapes;  // immutable once the record is in the table
 			std::uint32_t floats = 0;   // a slot's size: four per vertex of every shape
-			std::unique_ptr<float[]> storage;
+			org::async::LeasedArraySlots<float, 3> storage;
 			// Written by the writer for its slot before it publishes the slot, read by the reader after it takes it.
 			std::array<std::uint64_t, 3> slotGeneration{};
 			std::atomic<std::uint32_t> latest{ 1 };
@@ -71,7 +73,6 @@ namespace DCLF
 			std::uint32_t seenWalk = 0;
 			std::uint64_t retiredAtStage = 0;
 
-			float* Slot(std::uint32_t a_slot) { return storage.get() + std::size_t(a_slot) * floats; }
 		};
 
 		struct Entry
@@ -82,6 +83,7 @@ namespace DCLF
 
 		std::array<Entry, kCapacity> table;
 		std::atomic<std::uint64_t> generation{ 0 };
+		std::uint64_t nextRecordId = 1; // scene-walk thread only
 		std::atomic<std::uint64_t> stagesCompleted{ 0 };
 		std::atomic<std::uint32_t> jobCaptures{ 0 }, stageCaptures{ 0 }, mismatches{ 0 }, stages{ 0 };
 
@@ -146,7 +148,7 @@ namespace DCLF
 		// ever called by the thread that has just morphed the head, or after the stage's join.
 		bool Capture(Record& a_record)
 		{
-			float* out = a_record.Slot(a_record.writeSlot);
+			float* out = a_record.storage.PrepareWrite(a_record.writeSlot, a_record.floats).data();
 			for (const auto& shape : a_record.shapes) {
 				auto* geometry = shape.shape.get();
 				const auto& dynamic = geometry->GetDynamicTrishapeRuntimeData();
@@ -318,11 +320,15 @@ namespace DCLF
 					return {};
 				}
 				auto* rebuilt = new Impl::Record();
+				rebuilt->recordId = d.nextRecordId++;
 				rebuilt->head.reset(&a_head);
 				rebuilt->shapes = d.scratch;
 				for (const auto& shape : rebuilt->shapes)
 					rebuilt->floats += shape.vertexCount * 4;
-				rebuilt->storage = std::make_unique<float[]>(std::size_t(rebuilt->floats) * 3);
+				// Allocate the normal triple-buffer working set here, not in the engine's
+				// morph job. A writer allocates again only if an older payload pins its slot.
+				for (std::size_t slot = 0; slot < 3; ++slot)
+					(void)rebuilt->storage.PrepareWrite(slot, rebuilt->floats);
 				if (record) {
 					std::erase(d.live, record);
 					d.Retire(record);
@@ -346,16 +352,41 @@ namespace DCLF
 		for (const auto& shape : record->shapes) {
 			if (shape.shape.get() != &a_shape)
 				continue;
-			const float* positions = record->Slot(record->readSlot) + shape.offset;
+			auto owner = record->storage.Acquire(record->readSlot);
+			const float* positions = owner->data() + shape.offset;
 			// [TEMP] The snapshot against the engine's positions now. A probe's read, outside the writer's phase: under
 			// the engine's schedule nothing writes them during the walk, which is what this measures.
 			if (VolumetricProbe::Enabled()) {
 				const auto* live = a_shape.GetDynamicTrishapeRuntimeData().dynamicData;
 				++(live && std::memcmp(live, positions, std::size_t(shape.vertexCount) * 16) == 0 ? d.stats.parityEqual : d.stats.parityDiffer);
 			}
-			return { positions, shape.vertexCount, generation };
+			return { positions, shape.vertexCount, generation, std::move(owner) };
 		}
 		return {};
+	}
+
+	FaceSnapshots::HeadView FaceSnapshots::HeadSnapshot(RE::BSFaceGenNiNode& a_head)
+	{
+		auto& d = *impl;
+		const auto* record = d.Lookup(&a_head);
+		if (!record || record->seenWalk != d.walk || !record->recordId)
+			return {};
+		const auto generation = record->slotGeneration[record->readSlot];
+		if (!generation)
+			return {};
+		auto owner = record->storage.Acquire(record->readSlot);
+		if (!owner || owner->size() != record->floats)
+			return {};
+		HeadView captured;
+		captured.recordId = record->recordId;
+		captured.generation = generation;
+		captured.owner = std::move(owner);
+		captured.shapes.reserve(record->shapes.size());
+		for (std::uint32_t i = 0; i < record->shapes.size(); ++i) {
+			const auto& shape = record->shapes[i];
+			captured.shapes.push_back({ i, shape.offset, shape.vertexCount });
+		}
+		return captured;
 	}
 
 	void FaceSnapshots::EndWalk()

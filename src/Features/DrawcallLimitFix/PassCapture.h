@@ -82,6 +82,13 @@ namespace DCLF
 
 		/** @brief The set of geometries DCLF owns; registration is withheld for these. */
 		using ClaimSet = ankerl::unordered_dense::set<const RE::BSGeometry*>;
+		static constexpr std::uint32_t kShadowModes = 3;
+		struct FrameClaims
+		{
+			std::uint64_t publicationGeneration = 0;
+			std::shared_ptr<const ClaimSet> main;
+			std::array<std::shared_ptr<const ClaimSet>, kShadowModes> shadow;
+		};
 
 		static PassCapture& Get();
 
@@ -101,8 +108,12 @@ namespace DCLF
 		 * not be trusted.
 		 */
 		void PublishClaims(std::shared_ptr<const ClaimSet> a_claims);
+		/** @brief Freeze legacy claims before registration, or install a selected publication's claims. */
+		void SelectLegacyFrameClaims();
+		void InstallFrameClaims(std::shared_ptr<const FrameClaims> a_claims);
+		void ClearFrameClaims() { InstallFrameClaims(nullptr); }
 
-		/** @brief The claim set the registration hook is currently using, for the hole detector. */
+		/** @brief Latest producer result (the selected frame bundle may still hold the preceding one). */
 		std::shared_ptr<const ClaimSet> CurrentClaims() const { return std::atomic_load(&claims); }
 
 		/** @brief Which batch renderers belong to the main camera; withholding applies only to these. */
@@ -112,14 +123,13 @@ namespace DCLF
 		static bool WithholdingEnabled();
 
 		/** @brief The shadow views' render modes with claims of their own: 0xD plain, 0xE clamped, 0xF paraboloid. */
-		static constexpr std::uint32_t kShadowModes = 3;
 		static constexpr std::uint32_t kFirstShadowMode = 0xD;
 		/** @brief Which batch renderers belong to shadow views, each with its view's render mode index. */
 		using ShadowRendererMap = ankerl::unordered_dense::map<const RE::BSBatchRenderer*, std::uint8_t>;
 		void SetShadowBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers);
 		/**
 		 * @brief CS_DCLF_SHADOW_OWNERSHIP=static: the casters DCLF's shadow epochs draw under a render mode,
-		 * withheld from every shadow view of that mode from the next registration on. Published by the
+		 * withheld from every shadow view of that mode from the next frame's selection on. Published by the
 		 * epoch that submitted them, as the main claims are published by the colour epoch.
 		 */
 		void PublishShadowClaims(std::uint32_t a_modeIndex, std::shared_ptr<const ClaimSet> a_claims);
@@ -223,6 +233,9 @@ namespace DCLF
 		// Published whole by the render thread, read by the registering thread. shared_ptr's atomic
 		// load/store keeps the readers safe while the next one is being built.
 		std::shared_ptr<const ClaimSet> claims;
+		// One main+shadow selection for every registration in a frame. A later
+		// PublishClaims only affects the next frame, not this selected state.
+		std::shared_ptr<const FrameClaims> frameClaims;
 		// The last drain (valid until the next frame's registrations), and what HandBackUndrawable returned.
 		std::span<const Entry> lastDrain;
 		ankerl::unordered_dense::set<const RE::BSGeometry*> handedBack;

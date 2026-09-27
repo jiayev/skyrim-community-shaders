@@ -156,7 +156,7 @@ namespace DCLF
 	}
 
 	bool CaptureParity::CompareBlock(const RE::BSGeometry* a_geometry, const char* a_what, const ConstantBlock& a_expected, const StageLayout& a_layout,
-		const std::uint8_t* a_nativeTable, std::size_t a_nativeTableSize, const ConstantSnapshot& a_native, ID3D11Resource* a_boundBuffer,
+		const void* a_nativeTable, std::size_t a_nativeTableSize, const ConstantSnapshot& a_native, ID3D11Resource* a_boundBuffer,
 		std::uint32_t a_firstVariable, std::uint64_t a_variables, std::uint64_t a_tolerant)
 	{
 		// A block is only compared when the buffer the draw binds is the one the Map/Unmap detours
@@ -175,7 +175,7 @@ namespace DCLF
 				continue;
 			// Offset 0 is also what reflection leaves for variables a permutation lacks, so it only
 			// counts for the group's first variable.
-			const std::uint32_t nativeOffset = a_nativeTable[i];
+			const std::uint32_t nativeOffset = static_cast<const std::uint8_t*>(a_nativeTable)[i];
 			if (nativeOffset == 0 && i != a_firstVariable)
 				continue;
 			const std::uint32_t ourOffset = a_layout.offset[i];

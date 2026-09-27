@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace RE
 {
@@ -31,6 +32,8 @@ namespace DCLF
 	 * every shape of a head is read from one slot, so from one run of its job: a head is never drawn from two
 	 * different updates. With the engine's schedule the walk reads what the post-render stage of the previous
 	 * frame wrote, which is what the engine's own draws read.
+	 * Shape views retain immutable backing storage for the entire head. Returning a read slot no longer
+	 * invalidates older payloads: a writer replaces the backing when that version still has a lease.
 	 *
 	 * Records are created, rebuilt and retired by the scene walk alone (one thread at a time). The writers
 	 * find them through a fixed open-addressed table keyed by the head, and a retired record is freed only
@@ -53,6 +56,24 @@ namespace DCLF
 			const float* positions = nullptr;
 			std::uint32_t vertexCount = 0;
 			std::uint64_t generation = 0;  // unique across heads: a new snapshot of any head has a new one
+			// Pins the complete head update, including every sibling shape. The writer
+			// replaces a recycled slot's backing while any view still owns this version.
+			std::shared_ptr<const std::vector<float>> owner;
+		};
+		struct HeadView
+		{
+			struct ShapeRange
+			{
+				std::uint32_t ordinal = 0;
+				std::uint32_t offsetFloats = 0;
+				std::uint32_t vertexCount = 0;
+			};
+			// A new registration/rebuild gets a fresh ID; an engine head pointer is
+			// only a lookup key and cannot be used as a durable group identity.
+			std::uint64_t recordId = 0;
+			std::uint64_t generation = 0;
+			std::vector<ShapeRange> shapes;
+			std::shared_ptr<const std::vector<float>> owner;
 		};
 
 		// ---- The scene walk (one thread at a time).
@@ -65,6 +86,8 @@ namespace DCLF
 		 * the engine then draws every shape of it.
 		 */
 		ShapeView Shape(RE::BSDynamicTriShape& a_shape, RE::BSFaceGenNiNode& a_head);
+		/** @brief Complete immutable head capture after Shape registered it in this walk. */
+		HeadView HeadSnapshot(RE::BSFaceGenNiNode& a_head);
 		/** @brief Retires the records of heads the walk did not see. */
 		void EndWalk();
 		/** @brief Retires every record (the live toggle, teardown). */

@@ -159,6 +159,20 @@ namespace DCLF
 		std::atomic_store(&claims, std::move(a_claims));
 	}
 
+	void PassCapture::SelectLegacyFrameClaims()
+	{
+		auto selected = std::make_shared<FrameClaims>();
+		selected->main = std::atomic_load(&claims);
+		for (std::uint32_t mode = 0; mode < kShadowModes; ++mode)
+			selected->shadow[mode] = std::atomic_load(&shadowClaims[mode]);
+		InstallFrameClaims(std::move(selected));
+	}
+
+	void PassCapture::InstallFrameClaims(std::shared_ptr<const FrameClaims> a_claims)
+	{
+		std::atomic_store(&frameClaims, std::move(a_claims));
+	}
+
 	void PassCapture::SetMainBatchRenderers(std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> a_renderers)
 	{
 		std::atomic_store(&mainRenderers, std::move(a_renderers));
@@ -203,7 +217,8 @@ namespace DCLF
 		const auto it = renderers->find(a_batch);
 		if (it == renderers->end() || it->second >= kShadowModes)
 			return nullptr;
-		return std::atomic_load(&shadowClaims[it->second]);
+		const auto selected = std::atomic_load(&frameClaims);
+		return selected ? selected->shadow[it->second] : std::atomic_load(&shadowClaims[it->second]);
 	}
 
 	bool PassCapture::Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading)
@@ -217,7 +232,8 @@ namespace DCLF
 		if (toggles.ownership) {
 			const auto renderers = std::atomic_load(&mainRenderers);
 			if (renderers && renderers->contains(a_batch)) {
-				const auto owned = std::atomic_load(&claims);
+				const auto selected = std::atomic_load(&frameClaims);
+				const auto owned = selected ? selected->main : std::atomic_load(&claims);
 				// A fading object is not DCLF's this frame (the accumulate phase gives it no bindings, from this
 				// same value): withholding it would leave it drawn by nobody.
 				if (owned && owned->contains(a_pass->geometry) && !a_fading) {
@@ -234,7 +250,8 @@ namespace DCLF
 			const auto it = renderers->find(a_batch);
 			if (it == renderers->end() || it->second >= kShadowModes)
 				return false;
-			const auto owned = std::atomic_load(&shadowClaims[it->second]);
+			const auto selected = std::atomic_load(&frameClaims);
+			const auto owned = selected ? selected->shadow[it->second] : std::atomic_load(&shadowClaims[it->second]);
 			const bool claimed = owned && owned->contains(a_pass->geometry);
 			if (CascadeProbeEnabled()) {
 				std::lock_guard lock(shadowRegistrationsLock);
@@ -351,7 +368,8 @@ namespace DCLF
 		const auto it = renderers->find(a_batch);
 		if (it == renderers->end() || it->second >= kShadowModes)
 			return false;
-		const auto owned = std::atomic_load(&shadowClaims[it->second]);
+		const auto selected = std::atomic_load(&frameClaims);
+		const auto owned = selected ? selected->shadow[it->second] : std::atomic_load(&shadowClaims[it->second]);
 		const bool claimed = owned && owned->contains(a_pass->geometry);
 		// [TEMP] CS_DCLF_CASCADE_PROBE: these registrations belong to the view's caster set too, so the probe can
 		// compare them with DCLF's.
