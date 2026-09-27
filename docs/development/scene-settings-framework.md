@@ -442,7 +442,8 @@ rather than an authoring panel.
     override, green for a sketch. Editing a blue control records a **sketch** (`RecordBaselineEdit`): the
     edited value becomes the base and the resolver holds it in place (`HoldSketchedValues`) until the menu
     stops calling `RetainSketches` for that feature, when the scene value returns. A blue control's gutter
-    jumps to the winning page (`FindWinningContext`, `SceneSettingsUI::OpenSceneContext`); a sketched one
+    jumps to the winning page (`FindWinningContext`, `SceneSettingsUI::OpenSceneContext`), which mid-blend
+    is the incoming context, or the outgoing one when the incoming context supplies nothing; a sketched one
     commits into it (`CommitSketches`). The feature list shows a blue dot for a feature authored anywhere
     (`HasAnySceneEntriesForFeature`), filled while it applies here, and a green dot while it has sketches.
     **Apply Override** and **Restore Defaults** rewrite the base behind a live scene layer, so the first

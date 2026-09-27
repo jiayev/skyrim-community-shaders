@@ -696,7 +696,8 @@ public:
 	void RetainSketches(const std::string& featureShortName);
 
 	/** @brief The context supplying an address's winning scene value: the narrowest location link,
-	 *  else the incoming weather, else the running period or interior. Null when no scene supplies it. */
+	 *  else the weather, else the period or interior. Mid-blend the incoming side wins, falling back to
+	 *  the outgoing side when the incoming one supplies nothing. Null when no scene supplies it. */
 	std::optional<SceneContextId> FindWinningContext(const SettingIdentity& setting) const;
 
 	/** @brief Writes sketched values into the context winning each address and restores the base
@@ -1042,6 +1043,10 @@ private:
 		float hour = 0.0f;
 	};
 	static PeriodLookup FindPeriodForHour(float hour);
+
+	/// FindWinningContext's search against one period and weather (0 for none).
+	std::optional<SceneContextId> FindSupplyingContext(const SettingIdentity& setting, TimeOfDayPeriod period,
+		RE::FormID weatherId) const;
 
 	// --- Per-Weather helpers ---
 	/// Load weather overwrites/user settings once game data is available for SPID resolution.

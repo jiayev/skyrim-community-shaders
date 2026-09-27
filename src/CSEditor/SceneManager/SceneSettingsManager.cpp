@@ -806,11 +806,24 @@ void SceneSettingsManager::HoldSketchedValues(ResolvedSettingMap& resolved)
 std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindWinningContext(
 	const SettingIdentity& setting) const
 {
-	// Mid-blend the incoming period is the one the scene is heading into, and so the one to author.
-	auto period = GetCurrentPeriod();
-	if (const auto next = static_cast<TimeOfDayPeriod>((static_cast<int>(period) + 1) % kPeriodCount);
-		GetTimeOfDayFactors()[static_cast<size_t>(next)] > 0.0f)
-		period = next;
+	const auto period = GetCurrentPeriod();
+	const auto nextPeriod = static_cast<TimeOfDayPeriod>((static_cast<int>(period) + 1) % kPeriodCount);
+	const auto& weather = blendSnapshot.weather;
+	const bool periodBlending = blendSnapshot.timeOfDayFactors[static_cast<size_t>(nextPeriod)] > 0.0f;
+	const bool weatherBlending = weather.previousWeatherId != 0;
+
+	// Mid-blend the incoming context is the one to author, unless it supplies nothing and the value
+	// is fading out of the outgoing one.
+	if (const auto incoming = FindSupplyingContext(setting, periodBlending ? nextPeriod : period, weather.currentWeatherId))
+		return incoming;
+	if (!periodBlending && !weatherBlending)
+		return std::nullopt;
+	return FindSupplyingContext(setting, period, weatherBlending ? weather.previousWeatherId : weather.currentWeatherId);
+}
+
+std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindSupplyingContext(
+	const SettingIdentity& setting, TimeOfDayPeriod period, RE::FormID weatherId) const
+{
 	const auto withActiveSet = [&](SceneContextId context) {
 		context.period = IsSceneTimeOfDayEnabled(context) ? period : TimeOfDayPeriod::Count;
 		return context;
@@ -825,10 +838,8 @@ std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindWi
 	if (Util::IsInterior()) {
 		candidates.push_back({ .type = SceneContextType::Interior });
 	} else {
-		// The current weather is the incoming one; the previous is only fading out.
-		if (const auto* sky = globals::game::sky; sky && sky->currentWeather)
-			candidates.push_back(withActiveSet(
-				{ .type = SceneContextType::Weather, .weatherId = sky->currentWeather->GetFormID() }));
+		if (weatherId != 0)
+			candidates.push_back(withActiveSet({ .type = SceneContextType::Weather, .weatherId = weatherId }));
 		candidates.push_back({ .type = SceneContextType::TimeOfDay, .period = period });
 	}
 
