@@ -413,7 +413,6 @@ void SceneManager::DrawSettings()
 	const auto snapshot = GetDebugSnapshot();
 
 	ImGui::TextWrapped("Live debug view of the scene resolver. Sampled every frame while this panel is open.");
-	ImGui::Spacing();
 
 	if (ImGui::CollapsingHeader("Scene Context", ImGuiTreeNodeFlags_DefaultOpen))
 		DrawSceneContext(snapshot);

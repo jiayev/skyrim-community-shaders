@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <format>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 #include <vector>
 
@@ -54,19 +55,13 @@ namespace
 		needGap = true;
 	}
 
-	ID3D11ShaderResourceView* ResolvePosterSRV(const UnifiedPresetCatalog::PackInfo& pack, int featuredShot)
+	void DrawRoundedImage(ImDrawList* dl, ImTextureID texture, const ImVec2& p0, const ImVec2& p1, float rounding)
 	{
-		if (featuredShot >= 0 && featuredShot < static_cast<int>(pack.screenshotSRVs.size()) &&
-			pack.screenshotSRVs[static_cast<size_t>(featuredShot)])
-			return pack.screenshotSRVs[static_cast<size_t>(featuredShot)].get();
-		if (pack.coverSRV)
-			return pack.coverSRV.get();
-		return nullptr;
+		dl->AddImageRounded(texture, p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE, rounding);
 	}
 
 	bool DrawCarouselArrow(const char* id, const char* icon, const ImVec2& center, float diameter)
 	{
-		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::SetCursorScreenPos(ImVec2(center.x - diameter * 0.5f, center.y - diameter * 0.5f));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, diameter * 0.5f);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
@@ -75,9 +70,8 @@ namespace
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.7f));
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
 
-		// Thinner glyph + slight optical lift — FA icons sit low on the baseline inside round buttons.
-		const float prevScale = ImGui::GetWindowFontScale();
-		ImGui::SetWindowFontScale(prevScale * 0.85f);
+		ImGui::PushFont(nullptr, ImGui::GetCurrentContext()->FontSizeBase * 0.85f);
+		const float fontSize = ImGui::GetFontSize();
 		const ImVec2 labelSize = ImGui::CalcTextSize(icon);
 		const bool clicked = ImGui::InvisibleButton(id, ImVec2(diameter, diameter));
 		const ImVec2 p0 = ImGui::GetItemRectMin();
@@ -87,9 +81,13 @@ namespace
 				ImGui::IsItemHovered()                                                     ? ImGuiCol_ButtonHovered :
 																							   ImGuiCol_Button);
 		dl->AddCircleFilled(ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f), diameter * 0.5f, bg);
-		const float opticalY = (p0.y + p1.y - labelSize.y) * 0.5f - style.ItemInnerSpacing.y * 0.25f;
-		dl->AddText(ImVec2((p0.x + p1.x - labelSize.x) * 0.5f, opticalY), ImGui::GetColorU32(ImGuiCol_Text), icon);
-		ImGui::SetWindowFontScale(prevScale);
+		// Center the font's em-box on the circle, then shift by the unused space below the
+		// ascent so the glyph ink (not the extra leading) lands on the circle's midpoint.
+		const float unusedBelow = fontSize - ImGui::GetFontBaked()->Ascent;
+		const float textX = (p0.x + p1.x - labelSize.x) * 0.5f;
+		const float textY = (p0.y + p1.y - fontSize) * 0.5f + unusedBelow * 0.5f;
+		dl->AddText(ImVec2(textX, textY), ImGui::GetColorU32(ImGuiCol_Text), icon);
+		ImGui::PopFont();
 
 		ImGui::PopStyleColor(3);
 		ImGui::PopStyleVar(3);
@@ -206,19 +204,24 @@ void PresetsPageRenderer::RenderToolbar()
 	if (FilterChip(T("menu.presets.filter_sm", "SM"), filterSM))
 		filterSM = !filterSM;
 
-	ImGui::SameLine();
-	if (ImGui::Button(T("menu.presets.refresh", "Refresh"))) {
-		catalog.Discover();
-		discovered = true;
-	}
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs, Effects 11 library presets, Post Processing JSON files, and Scene Manager exports."));
+	// A small divider keeps these maintenance actions from reading as more filter chips.
+	Util::ToolbarDivider();
 
-	ImGui::SameLine();
-	if (ImGui::Button(T("menu.presets.open_folder", "Open Folder")))
-		catalog.OpenPresetsFolder();
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
+	{
+		auto _style = Util::TransparentIconButtonStyle();
+		if (ImGui::Button(ICON_FA_SYNC_ALT "##PresetsRefresh")) {
+			catalog.Discover();
+			discovered = true;
+		}
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs, Effects 11 library presets, Post Processing JSON files, and Scene Manager exports."));
+
+		ImGui::SameLine();
+		if (ImGui::Button(ICON_FA_FOLDER_OPEN "##PresetsOpenFolder"))
+			catalog.OpenPresetsFolder();
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
+	}
 }
 
 void PresetsPageRenderer::RenderList(float width)
@@ -269,14 +272,16 @@ void PresetsPageRenderer::RenderList(float width)
 		ImGui::SetCursorScreenPos(ImVec2(rowOrigin.x + 8.0f * scale, rowOrigin.y + rowPad));
 
 		catalog.EnsureArtwork(pack);
-		if (pack.logoSRV) {
-			ImGui::Image(reinterpret_cast<ImTextureID>(pack.logoSRV.get()), ImVec2(logoSize, logoSize));
-		} else {
+		{
 			ImGui::Dummy(ImVec2(logoSize, logoSize));
 			ImDrawList* dl = ImGui::GetWindowDrawList();
 			const ImVec2 p0 = ImGui::GetItemRectMin();
 			const ImVec2 p1 = ImGui::GetItemRectMax();
-			dl->AddRectFilled(p0, p1, ImGui::ColorConvertFloat4ToU32(ImVec4(0.15f, 0.15f, 0.18f, 1.0f)), 4.0f * scale);
+			const float rounding = ImGui::GetStyle().FrameRounding;
+			if (pack.logoSRV)
+				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(pack.logoSRV.get()), p0, p1, rounding);
+			else
+				dl->AddRectFilled(p0, p1, ImGui::ColorConvertFloat4ToU32(ImVec4(0.15f, 0.15f, 0.18f, 1.0f)), rounding);
 		}
 
 		ImGui::SameLine(0.0f, 8.0f * scale);
@@ -359,7 +364,7 @@ void PresetsPageRenderer::RenderDetail()
 		heroImageIndex = -1;
 
 	const float badgesWidth = MeasureBackendBadgesWidth(pack->hasEffects11, pack->hasCSPP, pack->hasSceneManager, false);
-	const float posterH = ImGui::GetFrameHeight() * 5.5f;
+	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
 	// Poster | title+author | badges — one table so pills share a baseline and spacing is style-driven.
@@ -377,19 +382,23 @@ void PresetsPageRenderer::RenderDetail()
 			ImDrawList* dl = ImGui::GetWindowDrawList();
 			const ImVec2 p1(origin.x + posterW, origin.y + posterH);
 			const float rounding = style.FrameRounding;
-			if (ID3D11ShaderResourceView* poster = ResolvePosterSRV(*pack, heroImageIndex)) {
-				dl->AddImage(reinterpret_cast<ImTextureID>(poster), origin, p1);
+			// Deliberately the pack's own cover art only - never a screenshot, so this stays a
+			// stable "poster" instead of jumping to whatever the filmstrip/hero viewer is showing.
+			if (ID3D11ShaderResourceView* poster = pack->coverSRV.get()) {
+				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(poster), origin, p1, rounding);
 			} else {
 				dl->AddRectFilled(origin, p1,
 					ImGui::ColorConvertFloat4ToU32(ImVec4(0.12f, 0.12f, 0.14f, 1.0f)), rounding);
 			}
 		}
 
+		// Top-aligned rather than centred in the poster's full height: the actions below now live
+		// here too, so this column fills most of the row instead of floating in its middle.
+		const float titleTopPad = 2.0f * Util::GetUIScale();
+
 		ImGui::TableSetColumnIndex(1);
 		{
-			const float titleBlockH = ImGui::GetTextLineHeight() * 2.4f + style.ItemSpacing.y;
-			const float titlePadY = std::max(0.0f, (posterH - titleBlockH) * 0.5f);
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titlePadY);
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad);
 			ImGui::BeginGroup();
 			{
 				MenuFonts::FontRoleGuard title(Menu::FontRole::Heading);
@@ -408,15 +417,69 @@ void PresetsPageRenderer::RenderDetail()
 					metaLine += "v" + pack->version;
 				}
 				if (!metaLine.empty())
-					ImGui::TextDisabled("%s", metaLine.c_str());
+					Util::Text::Secondary("%s", metaLine.c_str());
+				if (!pack->nexusUrl.empty()) {
+					ImGui::SameLine(0.0f, style.ItemSpacing.x);
+					if (ImGui::SmallButton(ICON_FA_EXTERNAL_LINK_ALT "##NexusLink"))
+						ShellExecuteA(NULL, "open", pack->nexusUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+					Util::AddTooltip(T("menu.presets.nexus_link_tooltip", "Open this preset's Nexus Mods page."));
+				}
 			}
+
+			ImGui::Spacing();
+
+			// Apply fills whatever is left of this column; the folder icon takes one frame
+			// square so the pair never overflows when the CS window is narrowed.
+			const float folderSize = ImGui::GetFrameHeight();
+			const float applyWidth = std::max(0.0f, ImGui::GetContentRegionAvail().x - folderSize - style.ItemSpacing.x);
+			const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPP || pack->hasSceneManager);
+			ImGui::BeginDisabled(!canApply);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
+				std::min(1.0f, theme.StatusPalette.InfoColor.x + 0.1f),
+				std::min(1.0f, theme.StatusPalette.InfoColor.y + 0.1f),
+				std::min(1.0f, theme.StatusPalette.InfoColor.z + 0.1f),
+				1.0f));
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
+			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
+			const char* applyLabel = (pack->hasSceneManager && !pack->hasEffects11 && !pack->hasCSPP) ?
+				T("menu.presets.reload_sm", "Reload Overwrites") :
+				T("menu.presets.apply", "Apply Preset");
+			if (Util::ButtonWithFlash(applyLabel, ImVec2(applyWidth, 0))) {
+				if (catalog.ApplyPack(pack->id, true)) {
+					logger::info("[Presets] Applied pack '{}'", pack->id);
+				}
+			}
+			ImGui::PopStyleColor(4);
+			ImGui::PopStyleVar();
+			ImGui::EndDisabled();
+
+			ImGui::SameLine(0.0f, style.ItemSpacing.x);
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+			if (ImGui::Button(ICON_FA_FOLDER_OPEN "##OpenPack", ImVec2(folderSize, folderSize)))
+				catalog.OpenPackFolder(pack->id);
+			ImGui::PopStyleVar();
+			const char* openLabel = (pack->source == UnifiedPresetCatalog::SourceKind::SceneManager) ?
+				T("menu.presets.open_scenesettings", "Open SceneSettings") :
+				T("menu.presets.open_pack", "Open Pack Folder");
+			Util::AddTooltip(openLabel);
+
+			if (catalog.GetActivePackId() == pack->id) {
+				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
+				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
+			}
+
 			ImGui::EndGroup();
 		}
 
 		ImGui::TableSetColumnIndex(2);
 		if (badgesWidth > 0.0f) {
+			// Aligned to the title line rather than centred in the whole poster height, now that
+			// the title column reads top-down (title, author, actions) instead of floating in the middle.
+			const float titleLineH = ImGui::GetTextLineHeight() * 1.35f;
 			const float badgeH = ImGui::GetFrameHeight();
-			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + std::max(0.0f, (posterH - badgeH) * 0.5f));
+			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad + std::max(0.0f, (titleLineH - badgeH) * 0.5f));
 			DrawBackendBadges(pack->hasEffects11, pack->hasCSPP, pack->hasSceneManager, false);
 		}
 
@@ -438,10 +501,11 @@ void PresetsPageRenderer::RenderDetail()
 		const ImVec2 heroOrigin = ImGui::GetCursorScreenPos();
 		ImGui::Dummy(ImVec2(viewerW, viewerH));
 		ImDrawList* dl = ImGui::GetWindowDrawList();
-		dl->AddImage(
+		DrawRoundedImage(dl,
 			reinterpret_cast<ImTextureID>(pack->screenshotSRVs[static_cast<size_t>(heroImageIndex)].get()),
 			heroOrigin,
-			ImVec2(heroOrigin.x + viewerW, heroOrigin.y + viewerH));
+			ImVec2(heroOrigin.x + viewerW, heroOrigin.y + viewerH),
+			style.FrameRounding);
 
 		const int shotCount = static_cast<int>(pack->screenshotSRVs.size());
 		if (shotCount > 1) {
@@ -490,59 +554,22 @@ void PresetsPageRenderer::RenderDetail()
 				ImGui::SameLine(0.0f, style.ItemSpacing.x);
 			ImGui::PushID(static_cast<int>(i));
 			const bool isFeatured = static_cast<int>(i) == heroImageIndex;
-			if (isFeatured) {
-				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, style.FrameBorderSize + 1.0f);
-				ImGui::PushStyleColor(ImGuiCol_Border, theme.StatusPalette.InfoColor);
+			const bool clicked = ImGui::InvisibleButton("##shot", ImVec2(thumb, thumbH));
+			const ImVec2 p0 = ImGui::GetItemRectMin();
+			const ImVec2 p1 = ImGui::GetItemRectMax();
+			ImDrawList* dl = ImGui::GetWindowDrawList();
+			if (pack->screenshotSRVs[i])
+				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(pack->screenshotSRVs[i].get()), p0, p1, style.FrameRounding);
+			if (isFeatured || ImGui::IsItemHovered()) {
+				const ImU32 border = ImGui::ColorConvertFloat4ToU32(isFeatured ?
+						theme.StatusPalette.InfoColor :
+						ImGui::GetStyleColorVec4(ImGuiCol_Border));
+				dl->AddRect(p0, p1, border, style.FrameRounding, 0, style.FrameBorderSize + (isFeatured ? 1.0f : 0.0f));
 			}
-			if (ImGui::ImageButton("##shot", reinterpret_cast<ImTextureID>(pack->screenshotSRVs[i].get()), ImVec2(thumb, thumbH))) {
+			if (clicked)
 				heroImageIndex = static_cast<int>(i);
-			}
-			if (isFeatured) {
-				ImGui::PopStyleColor();
-				ImGui::PopStyleVar();
-			}
 			ImGui::PopID();
 		}
-	}
-
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPP || pack->hasSceneManager);
-	ImGui::BeginDisabled(!canApply);
-	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-	ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
-		std::min(1.0f, theme.StatusPalette.InfoColor.x + 0.1f),
-		std::min(1.0f, theme.StatusPalette.InfoColor.y + 0.1f),
-		std::min(1.0f, theme.StatusPalette.InfoColor.z + 0.1f),
-		1.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
-	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
-	const char* applyLabel = (pack->hasSceneManager && !pack->hasEffects11 && !pack->hasCSPP) ?
-		T("menu.presets.reload_sm", "Reload Overwrites") :
-		T("menu.presets.apply", "Apply Preset");
-	if (Util::ButtonWithFlash(applyLabel, ImVec2(ImGui::GetFrameHeight() * 7.5f, 0))) {
-		if (catalog.ApplyPack(pack->id, true)) {
-			logger::info("[Presets] Applied pack '{}'", pack->id);
-		}
-	}
-	ImGui::PopStyleColor(4);
-	ImGui::PopStyleVar();
-	ImGui::EndDisabled();
-
-	ImGui::SameLine(0.0f, style.ItemSpacing.x);
-	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-	const char* openLabel = (pack->source == UnifiedPresetCatalog::SourceKind::SceneManager) ?
-		T("menu.presets.open_scenesettings", "Open SceneSettings") :
-		T("menu.presets.open_pack", "Open Pack Folder");
-	if (ImGui::Button(openLabel, ImVec2(ImGui::GetFrameHeight() * 7.5f, 0)))
-		catalog.OpenPackFolder(pack->id);
-	ImGui::PopStyleVar();
-
-	if (catalog.GetActivePackId() == pack->id) {
-		ImGui::Spacing();
-		ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
 	}
 
 	ImGui::EndChild();

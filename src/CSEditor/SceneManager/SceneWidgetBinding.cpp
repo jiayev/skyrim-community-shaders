@@ -11,6 +11,8 @@
 #include <imgui_internal.h>
 
 #include "../../I18n/I18n.h"
+#include "../EditorWindow.h"
+#include "Globals.h"
 #include "Menu.h"
 #include "SceneSettingsContextRules.h"
 #include "SceneSettingsInternal.h"
@@ -495,6 +497,7 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 		// Barred by policy, so no scene will ever hold it. Greyed rather than left live, because an
 		// edit here would rewrite the feature's base value from a panel that only promises overrides.
 		state = State::Unbound;
+		identity.featureShortName = std::string{ metadata->featureShortName };
 		metadata = nullptr;
 		OpenDisabled();
 		return;
@@ -1135,7 +1138,7 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
 	                                                                       Util::Colors::GetSuccess();
 }
 
-const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
+std::string SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 {
 	if (mixedAcrossPeriods)
 		return T(TKEY("scene_override_mixed"),
@@ -1158,12 +1161,23 @@ const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 			"Your override on a scene layer below this one supplies this value. Tick to pin one here too.");
 	switch (state) {
 	case State::Unbound:
-		return T(TKEY("scene_override_unbound"),
-			"This setting cannot be part of a scene. Change it on the feature's own page.");
+		{
+			const auto feature = SceneSettingsManager::GetFeatureDisplayName(identity.featureShortName);
+			auto text = I18n::GetSingleton()->Format("cs_editor.scene_override_unbound",
+				{ { "feature", feature.empty() ? identity.featureShortName : feature } },
+				"This setting cannot be part of a scene. Change it on the {feature} settings page.");
+			text += "\n";
+			text += T(TKEY("scene_override_nav_hint"), "Ctrl+click or right-click to open it there.");
+			return text;
+		}
 	case State::Unavailable:
-		return T(TKEY("scene_override_unavailable"),
-			"This kind of scene cannot hold this setting. Weather and time of day only take settings "
-			"that can blend between values.");
+		{
+			std::string text = T(TKEY("scene_override_unavailable"),
+				"This kind of scene cannot hold this setting. Edit it on a Location scene instead.");
+			text += "\n";
+			text += T(TKEY("scene_override_nav_hint"), "Ctrl+click or right-click to open it there.");
+			return text;
+		}
 	case State::Overwritten:
 		return T(TKEY("scene_override_from_mod"),
 			"A mod supplies this value. Tick to pin your own, or remove it to suppress the mod's.");
@@ -1178,6 +1192,23 @@ const char* SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 	default:
 		return T(TKEY("scene_override_active"),
 			"Override applies here. Untick to hold it back without losing the value.");
+	}
+}
+
+void SceneWidgetBinding::Guard::NavigateGreyedSetting() const
+{
+	if (state == State::Unbound) {
+		if (auto* menu = globals::menu) {
+			menu->IsEnabled = true;
+			if (!identity.featureShortName.empty())
+				menu->SelectFeatureMenu(identity.featureShortName);
+		}
+		return;
+	}
+	if (state == State::Unavailable) {
+		if (auto* editor = EditorWindow::GetSingleton())
+			editor->SelectCategory("Locations");
+		ImGui::SetWindowFocus(T(TKEY("weather_lighting_browser"), "CS Editor Browser"));
 	}
 }
 
@@ -1250,7 +1281,7 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 		}
 	}
 
-	Util::AddTooltip(ResolveStatusTooltip());
+	Util::AddTooltip(ResolveStatusTooltip().c_str());
 
 	ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 	ImGui::BeginDisabled(!hasOverride);
@@ -1474,7 +1505,14 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 	// Both were greyed, so neither took input: no gutter to own and nothing to commit. Words are all a
 	// greyed control has left, and without them it reads as broken rather than barred.
 	if (state == State::Unbound || state == State::Unavailable) {
-		Util::AddTooltip(ResolveStatusTooltip(), Util::kTooltipWhenDisabled);
+		Util::AddTooltip(ResolveStatusTooltip().c_str(), Util::kTooltipWhenDisabled);
+		if (ImGui::IsItemHovered(Util::kTooltipWhenDisabled)) {
+			const bool ctrlClick = ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+			                       (ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl));
+			const bool rightClick = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+			if (ctrlClick || rightClick)
+				NavigateGreyedSetting();
+		}
 		return false;
 	}
 
@@ -1503,7 +1541,7 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 	// The tint says only that something else holds this value; the gutter's words say what. Drawn
 	// before the feature's own tooltip, which appends to the same window once the call returns.
 	if (ResolveProvenanceColor())
-		Util::AddTooltip(ResolveStatusTooltip(), Util::kTooltipWhenDisabled);
+		Util::AddTooltip(ResolveStatusTooltip().c_str(), Util::kTooltipWhenDisabled);
 
 	// A paused control must never report a change: nothing behind it moved.
 	return state == State::Paused ? false : a_changed;

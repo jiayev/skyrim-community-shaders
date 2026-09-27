@@ -112,9 +112,7 @@ void LightingTemplateWidget::DrawBasicSettings()
 		if (ShouldOpenSearchSection())
 			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 		if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
-			ImGui::Spacing();
 			draw();
-			ImGui::Spacing();
 		}
 	};
 
@@ -152,32 +150,26 @@ void LightingTemplateWidget::DrawFogSettings()
 	bool changed = false;
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogColorNear, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kFogColorNear, settings.fogColorNear);
 	});
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogColorFar, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kFogColorFar, settings.fogColorFar);
 	});
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogNear, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogNear, settings.fogNear, 0.0f, 163840.0f);
 	});
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogFar, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogFar, settings.fogFar, 0.0f, 163840.0f);
 	});
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogPower, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogPower, settings.fogPower, 0.0f, 10.0f);
 	});
 
 	DrawSearchSectionIfMatches(LightingTemplateSetting::kFogClamp, [&](const char*) {
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kFogClamp, settings.fogClamp, 0.0f, 1.0f);
 	});
 

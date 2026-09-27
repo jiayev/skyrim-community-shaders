@@ -25,10 +25,6 @@ namespace WidgetUI
 	constexpr ImVec4 kHighlightFrameBg = ImVec4(0.3f, 0.6f, 1.0f, 1.0f);
 	constexpr ImVec4 kHighlightFrameBgHovered = ImVec4(0.4f, 0.7f, 1.0f, 1.0f);
 
-	// "Force Weather" lock button colors
-	constexpr ImVec4 kLockButtonColor = ImVec4(0.2f, 0.8f, 0.2f, 1.0f);
-	constexpr ImVec4 kLockButtonHoverColor = ImVec4(0.3f, 0.9f, 0.3f, 1.0f);
-
 	// Inherit checkbox styling (dark frame, grey mark)
 	constexpr ImVec4 kInheritCheckboxFrameBg = ImVec4(0.2f, 0.2f, 0.2f, 1.0f);
 	constexpr ImVec4 kInheritCheckboxMark = ImVec4(0.6f, 0.6f, 0.6f, 1.0f);

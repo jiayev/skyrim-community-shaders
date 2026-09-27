@@ -176,7 +176,9 @@ namespace SceneWidgetBinding
 		std::optional<ImVec4> ResolveProvenanceColor() const;
 
 		/// Sentence describing what holds this value, shared by the gutter's toggle and the control.
-		const char* ResolveStatusTooltip() const;
+		std::string ResolveStatusTooltip() const;
+		/// Opens the page that can actually edit a greyed Unbound/Unavailable setting.
+		void NavigateGreyedSetting() const;
 
 		void Commit();
 		/** @brief Draws the leading marker column.

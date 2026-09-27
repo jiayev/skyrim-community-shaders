@@ -1,6 +1,8 @@
 #include "SceneSettingsUI.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cstring>
 #include <format>
 
@@ -8,6 +10,7 @@
 #include "../EditorWindow.h"
 #include "../Weather/WeatherWidget.h"
 #include "Features/CSEditor.h"
+#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
@@ -27,12 +30,6 @@ namespace
 	/// reset the baseline, so time running at any timescale still re-couples the bar.
 	constexpr float kScrubEpsilon = 1e-3f;
 
-	/// Period labels are centered so the row reads as one segmented control.
-	constexpr ImVec2 kSegmentTextAlign{ 0.5f, 0.5f };
-
-	constexpr ImGuiTableFlags kPeriodBarFlags =
-		ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV;
-
 	/// Starting width of the weather tab's feature column at the baseline font size; the user can drag it.
 	constexpr float kFeatureListWidth = 180.0f;
 
@@ -45,8 +42,12 @@ namespace
 
 	/// Name and editor ID share the slack; the type and the trailing action are fixed and narrow.
 	constexpr float kLocationTypeColumnWidth = 90.0f;
-	constexpr float kLocationAddColumnWidth = 60.0f;
+	constexpr float kLocationAddColumnWidth = 32.0f;
 	constexpr float kLocationRemoveColumnWidth = 40.0f;
+	/// Glyphs differ in advance, so each sits centred in a box this many font sizes wide to keep names aligned.
+	constexpr float kLocationIconBoxScale = 1.4f;
+	/// Floor for the alternating row tint, so long lists stay scannable under themes that leave it clear.
+	constexpr float kMinRowShadeAlpha = 0.04f;
 	/// Rows the picker shows before it scrolls.
 	constexpr float kLocationPickerVisibleRows = 10.0f;
 	/// Matches the weather list's JSON delete icon, which sits a little inside the row height.
@@ -168,13 +169,11 @@ namespace
 		return SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(baseContext);
 	}
 
-	/// Draws the period bar and the page toolbar, and returns the period the panel below it should
-	/// edit. The Scene Manager panel is the only place both layers meet, so it is the only one that
-	/// shows the interior indicator, and it takes the toggle's place there.
-	int DrawPeriodBar(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
-		bool sceneManagerPanel)
+	/// Resolves which period is currently active, updating the follow/pin state as a side effect.
+	/// Call exactly once per panel per frame - the title row's toolbar and the period bar itself
+	/// both need this value, and running the scrub/pin logic twice would double-apply it.
+	int ResolveActivePeriod(bool editing)
 	{
-		const bool interior = sceneManagerPanel && interiorEnabled;
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
 
 		if (editing) {
@@ -188,33 +187,48 @@ namespace
 			periodBar.selected = live;
 		}
 
-		const int active = periodBar.selected < 0 ? live : periodBar.selected;
+		return periodBar.selected < 0 ? live : periodBar.selected;
+	}
+
+	/// Draws the period segmented control and its companion checkbox (the interior indicator, or
+	/// the Time of Day toggle), and returns the period the panel below it should edit. `active` is
+	/// the value ResolveActivePeriod already computed for this panel this frame; a click here may
+	/// advance it further. The page toolbar used to share this row, but now sits on the title row
+	/// above so navigation (this bar) and actions stay visually distinct.
+	int DrawPeriodBarRow(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
+		bool sceneManagerPanel, int active)
+	{
+		const bool interior = sceneManagerPanel && interiorEnabled;
+		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
+
+		std::array<const char*, kPeriodCount> labels{};
+		for (int period = 0; period < kPeriodCount; ++period)
+			labels[period] = GetPeriodLabel(period);
 
 		ImGui::BeginDisabled(!editing);
-		ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, kSegmentTextAlign);
-		if (ImGui::BeginTable("PeriodBar", kPeriodCount, kPeriodBarFlags)) {
-			for (int period = 0; period < kPeriodCount; ++period) {
-				ImGui::TableNextColumn();
-				// Colour the live period only when the selection has left it, so the bar always
-				// shows where time actually is.
-				const bool marksLive = editing && period == live && period != active;
-				if (marksLive)
-					ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.CurrentHotkey);
-				if (ImGui::Selectable(GetPeriodLabel(period), period == active)) {
-					periodBar.selected = period;
-					// Jump time into the middle of the period so the scene shows what is being edited.
-					// The baseline moves with it, or the scrub check would drop straight back to following.
-					periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(period));
-					SceneSettingsManager::SetGameHour(periodBar.lastHour);
-				}
-				if (marksLive)
-					ImGui::PopStyleColor();
-			}
-			ImGui::EndTable();
+		// Dot the live period only when the selection has left it, so the bar always shows where time actually is.
+		if (Util::SegmentedControl("PeriodBar", labels.data(), kPeriodCount, active, editing ? live : -1)) {
+			periodBar.selected = active;
+			// Jump time into the middle of the period so the scene shows what is being edited.
+			// The baseline moves with it, or the scrub check would drop straight back to following.
+			periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(active));
+			SceneSettingsManager::SetGameHour(periodBar.lastHour);
 		}
-		ImGui::PopStyleVar();
 		ImGui::EndDisabled();
 
+		// The state line explains the bar rather than changing what it does, so it lives on hover.
+		char periodStatus[256];
+		if (interior)
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
+		else if (!editing)
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_off"), "Time of day is off, so one set of settings applies all day. The bar does not follow game time."));
+		else if (periodBar.selected < 0)
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
+		else
+			std::snprintf(periodStatus, sizeof(periodStatus), T(TKEY("period_bar_manual"), "Editing %s. Scrub the time of day to follow it again."), labels[active]);
+		Util::AddTooltip(periodStatus, Util::kTooltipWhenDisabled);
+
+		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
 		if (sceneManagerPanel) {
 			// Indicator only: interior always follows the cell the player is actually in, so
 			// toggling it by hand would silently do nothing when the layer can't resolve.
@@ -240,18 +254,6 @@ namespace
 				ImGuiHoveredFlags_DelayNormal);
 		}
 
-		ImGui::SameLine();
-		ScenePageToolbar::Draw(ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), editing));
-
-		if (interior)
-			Util::Text::Disabled("%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
-		else if (!editing)
-			Util::Text::Disabled("%s", T(TKEY("period_bar_off"), "Time of day is off, so one set of settings applies all day. The bar does not follow game time."));
-		else if (periodBar.selected < 0)
-			Util::Text::Disabled("%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
-		else
-			Util::Text::Disabled(T(TKEY("period_bar_manual"), "Editing %s. Scrub the time of day to follow it again."), GetPeriodLabel(active));
-
 		return active;
 	}
 
@@ -276,7 +278,7 @@ namespace
 	{
 		if (entries.empty()) {
 			selected.clear();
-			Util::Text::WrappedDisabled("%s",
+			Util::Text::WrappedSecondary("%s",
 				T(TKEY("scene_feature_list_empty"), "No loaded feature exposes scene settings."));
 			return selected;
 		}
@@ -301,21 +303,26 @@ namespace
 		if (withPeriodBar) {
 			periodEditing = ResolvePeriodEditing(baseContext, sceneManagerPanel);
 			periodEditingThisFrame |= periodEditing;
-			const auto period = static_cast<TimeOfDayPeriod>(
-				DrawPeriodBar(baseContext, periodEditing, sceneManagerPanel));
-			context = ResolvePageContext(baseContext, period, periodEditing);
-			ImGui::Spacing();
+			int active = ResolveActivePeriod(periodEditing);
+
+			// Title row: the panel's identity (Scene Manager panel only) shares a row with its
+			// actions, like a window header with its buttons beside the title, rather than the
+			// actions crowding the period bar's navigation row below.
+			if (sceneManagerPanel) {
+				EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
+				ImGui::SameLine();
+			}
+			ScenePageToolbar::Draw(ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing));
 			ImGui::Separator();
-			ImGui::Spacing();
+
+			active = DrawPeriodBarRow(baseContext, periodEditing, sceneManagerPanel, active);
+			context = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing);
+			ImGui::Separator();
 		} else {
 			// A page without the bar has no toggle row to share, so the actions get a row of their own.
 			ScenePageToolbar::Draw(context);
 		}
-		ImGui::TextWrapped("%s", intro);
-		// Greying covers both what no scene can hold and what only another scene type can.
-		Util::Text::WrappedDisabled("%s", T(TKEY("scene_settings_greyed_note"),
-			"Greyed settings cannot be overridden here. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
-		ImGui::Spacing();
+		Util::Text::WrappedSecondary("%s", intro);
 
 		if (selectedFeature.empty())
 			return;
@@ -337,10 +344,7 @@ namespace
 		// Each column scrolls on its own, so a long feature list never drags the panel with it.
 		ImGui::TableSetColumnIndex(0);
 		if (ImGui::BeginChild("##SceneFeatureList")) {
-			ImGui::Text("%s", T(TKEY("scene_feature_list_title"), "Features"));
-			ImGui::Spacing();
-			ImGui::Separator();
-			ImGui::Spacing();
+			Util::Text::Secondary("%s", T(TKEY("scene_feature_list_title"), "Features"));
 			DrawFeatureList(selectedFeature, GetFeatureEntries(transitionableOnly));
 		}
 		ImGui::EndChild();
@@ -367,6 +371,44 @@ namespace
 		default:
 			return T(TKEY("location_type_location"), "Location");
 		}
+	}
+
+	const char* GetLocationTypeIcon(SceneSettingsManager::LocationTargetType type)
+	{
+		switch (type) {
+		case SceneSettingsManager::LocationTargetType::Worldspace:
+			return ICON_FA_GLOBE_EUROPE;
+		case SceneSettingsManager::LocationTargetType::LocationType:
+			return ICON_FA_TAG;
+		case SceneSettingsManager::LocationTargetType::Region:
+			return ICON_FA_MAP;
+		case SceneSettingsManager::LocationTargetType::Cell:
+			return ICON_FA_BORDER_ALL;
+		default:
+			return ICON_FA_MAP_MARKER_ALT;
+		}
+	}
+
+	/// The type glyph leading a row's name, muted so the name stays the thing read first.
+	void DrawLocationTypeIcon(SceneSettingsManager::LocationTargetType type)
+	{
+		const char* icon = GetLocationTypeIcon(type);
+		const float box = ImGui::GetFontSize() * kLocationIconBoxScale;
+		const float offset = std::max(0.0f, (box - ImGui::CalcTextSize(icon).x) * 0.5f);
+		const float start = ImGui::GetCursorPosX();
+		ImGui::SetCursorPosX(start + offset);
+		Util::Text::Secondary("%s", icon);
+		ImGui::SameLine(start + box);
+	}
+
+	void PushLocationRowShade()
+	{
+		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
+		if (shade.w < kMinRowShadeAlpha) {
+			shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			shade.w = kMinRowShadeAlpha;
+		}
+		ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
 	}
 
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.
@@ -404,14 +446,32 @@ namespace
 	void DrawLocationDetailColumns(const SceneSettingsManager::LocationTarget& target)
 	{
 		ImGui::TableNextColumn();
-		const auto& identity = GetLocationIdentityText(target);
+		Util::Text::Secondary("%s", GetLocationIdentityText(target).c_str());
 		if (target.editorId.empty())
-			Util::Text::Disabled("%s", identity.c_str());
-		else
-			ImGui::TextUnformatted(identity.c_str());
+			Util::AddTooltip(T(TKEY("location_form_key_tooltip"), "The game exposes no editor ID for this place, so its form key is shown."));
 
 		ImGui::TableNextColumn();
-		ImGui::TextUnformatted(GetLocationTypeLabel(target.type));
+		Util::Text::Secondary("%s", GetLocationTypeLabel(target.type));
+	}
+
+	/// Trailing icon action for an addable row: quiet until hovered, a check once the place is listed.
+	bool DrawLocationAddButton(bool authored)
+	{
+		const char* label = authored ? ICON_FA_CHECK "##add" : ICON_FA_PLUS "##add";
+		const float padding = ImGui::GetStyle().FramePadding.x * 0.5f;
+		const float width = ImGui::CalcTextSize(label, nullptr, true).x + padding * 2.0f;
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - width));
+
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { padding, 0.0f });
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+		auto _style = Util::TransparentIconButtonStyle();
+		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetSecondary());
+		ImGui::BeginDisabled(authored);
+		const bool clicked = ImGui::Button(label);
+		ImGui::EndDisabled();
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(2);
+		return clicked;
 	}
 
 	/// Orders the user's list by the clicked header; ImGui owns the direction cycling and the arrow.
@@ -451,18 +511,17 @@ namespace
 		ImGui::PushID(target.formKey.c_str());
 
 		ImGui::TableNextColumn();
+		DrawLocationTypeIcon(target.type);
 		ImGui::TextUnformatted(target.name.c_str());
 		DrawLocationDetailColumns(target);
 
 		ImGui::TableNextColumn();
 		const bool authored = manager.IsLocationTargetAuthored(target.type, target.formKey);
-		ImGui::BeginDisabled(authored);
-		if (ImGui::SmallButton(T(TKEY("location_add"), "Add")))
+		if (DrawLocationAddButton(authored))
 			manager.AddLocationTarget(target);
-		ImGui::EndDisabled();
-		if (authored)
-			Util::AddTooltip(T(TKEY("location_already_added"), "Already on your list."),
-				Util::kTooltipWhenDisabled);
+		Util::AddTooltip(authored ? T(TKEY("location_already_added"), "Already on your list.") :
+									T(TKEY("location_add_tooltip"), "Add to your locations"),
+			Util::kTooltipWhenDisabled);
 
 		ImGui::PopID();
 	}
@@ -475,18 +534,19 @@ namespace
 			return;
 		const auto& targets = manager->GetCurrentLocationTargets();
 		if (targets.empty()) {
-			Util::Text::WrappedDisabled("%s",
+			Util::Text::WrappedSecondary("%s",
 				T(TKEY("location_chain_unavailable"), "Waiting for the player's location."));
 			return;
 		}
 
-		if (!ImGui::BeginTable("LocationChain", 4, kLocationTableFlags))
-			return;
-
-		SetupLocationColumns(kLocationAddColumnWidth);
-		for (const auto& target : targets)
-			DrawLocationAddRow(*manager, target);
-		ImGui::EndTable();
+		PushLocationRowShade();
+		if (ImGui::BeginTable("LocationChain", 4, kLocationTableFlags)) {
+			SetupLocationColumns(kLocationAddColumnWidth);
+			for (const auto& target : targets)
+				DrawLocationAddRow(*manager, target);
+			ImGui::EndTable();
+		}
+		ImGui::PopStyleColor();
 	}
 
 	bool LocationTargetMatchesSearch(const SceneSettingsManager::LocationTarget& target, const std::string& query)
@@ -519,22 +579,23 @@ namespace
 		}
 
 		if (locationPicker.matches.empty()) {
-			Util::Text::WrappedDisabled("%s", T(TKEY("location_search_empty"), "No places match the search."));
+			Util::Text::WrappedSecondary("%s", T(TKEY("location_search_empty"), "No places match the search."));
 			return;
 		}
 
 		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * kLocationPickerVisibleRows };
-		if (!ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize))
-			return;
-
-		ImGui::TableSetupScrollFreeze(0, 1);
-		SetupLocationColumns(kLocationAddColumnWidth);
-		ImGuiListClipper clipper;
-		clipper.Begin(static_cast<int>(locationPicker.matches.size()));
-		while (clipper.Step())
-			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
-				DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
-		ImGui::EndTable();
+		PushLocationRowShade();
+		if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
+			ImGui::TableSetupScrollFreeze(0, 1);
+			SetupLocationColumns(kLocationAddColumnWidth);
+			ImGuiListClipper clipper;
+			clipper.Begin(static_cast<int>(locationPicker.matches.size()));
+			while (clipper.Step())
+				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row)
+					DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
+			ImGui::EndTable();
+		}
+		ImGui::PopStyleColor();
 	}
 
 	/// The editor's delete icon, matching the weather list's JSON removal action.
@@ -559,13 +620,16 @@ namespace
 			return;
 		auto targets = manager->GetAuthoredLocationTargets();
 		if (targets.empty()) {
-			Util::Text::WrappedDisabled("%s", T(TKEY("location_list_empty"),
+			Util::Text::WrappedSecondary("%s", T(TKEY("location_list_empty"),
 				"No locations yet. Add one from where you are standing, or search for any place."));
 			return;
 		}
 
-		if (!ImGui::BeginTable("AuthoredLocations", 4, kAuthoredLocationTableFlags))
+		PushLocationRowShade();
+		if (!ImGui::BeginTable("AuthoredLocations", 4, kAuthoredLocationTableFlags)) {
+			ImGui::PopStyleColor();
 			return;
+		}
 
 		SetupLocationColumns(kLocationRemoveColumnWidth);
 		// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
@@ -581,6 +645,7 @@ namespace
 			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
 				return window.open && window.target.type == target.type && window.target.formKey == target.formKey;
 			});
+			DrawLocationTypeIcon(target.type);
 			if (Util::TableRowSelectable(target.name.c_str(), opened,
 					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
 				ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -596,6 +661,7 @@ namespace
 			ImGui::PopID();
 		}
 		ImGui::EndTable();
+		ImGui::PopStyleColor();
 
 		if (pendingRemoval) {
 			std::erase_if(locationWindows, [&](const auto& window) {
@@ -624,7 +690,8 @@ void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 
 void SceneSettingsUI::DrawSceneManagerPanel()
 {
-	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
+	// DrawPanel below draws the active-weather indicator itself, on the same row as the page
+	// toolbar, since this is the only caller that passes sceneManagerPanel = true.
 
 	// The interior layer takes the panel over indoors, and it has no periods.
 	SyncSceneToggles();
@@ -641,9 +708,7 @@ void SceneSettingsUI::DrawSceneManagerPanel()
 
 void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 {
-	ImGui::Spacing();
 	ImGui::Separator();
-	ImGui::Spacing();
 
 	ImGui::Indent();
 	ImGui::SetWindowFontScale(kNestedFeatureFontScale);
@@ -656,32 +721,19 @@ void SceneSettingsUI::DrawLocationBrowser()
 {
 	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
 
-	ImGui::TextWrapped("%s", T(TKEY("location_browser_intro"),
-		"Locations resolve last, so they win over interior, time of day, and weather. Narrower places win over broader ones: "
-		"a cell over its location, a location over its region, location types, and worldspace."));
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
+	Util::Explainer(T(TKEY("location_browser_intro_label"), "How locations resolve"),
+		T(TKEY("location_browser_intro"),
+			"Locations resolve last, so they win over interior, time of day, and weather. Narrower places win over broader ones: "
+			"a cell over its location, a location over its region, location types, and worldspace."));
 
-	ImGui::Text("%s", T(TKEY("location_add_from_here"), "Add from where you are"));
-	ImGui::Spacing();
+	ImGui::SeparatorText(T(TKEY("location_add_from_here"), "Add from where you are"));
 	DrawLocationChain();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	ImGui::Text("%s", T(TKEY("location_add_any"), "Add any place"));
-	ImGui::Spacing();
+	ImGui::SeparatorText(T(TKEY("location_add_any"), "Add any place"));
 	DrawLocationPicker();
 
-	ImGui::Spacing();
-	ImGui::Separator();
-	ImGui::Spacing();
-
-	ImGui::Text("%s", T(TKEY("location_list_title"), "Your locations"));
+	ImGui::SeparatorText(T(TKEY("location_list_title"), "Your locations"));
 	Util::AddTooltip(T(TKEY("location_list_tooltip"), "Double-click a location to edit its settings."));
-	ImGui::Spacing();
 	DrawAuthoredLocations();
 }
 
@@ -700,7 +752,7 @@ void SceneSettingsUI::DrawLocationWindows()
 		// The form key keeps the id stable while the visible name stays readable.
 		const auto title = std::format("{} ({})###SceneLocation_{}", window.target.name,
 			GetLocationTypeLabel(window.target.type), window.target.formKey);
-		const bool visible = Util::BeginWithRoundedClose(title.c_str(), &window.open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
+		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &window.open, nullptr, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
 		UpdateWidgetTypeSize(kLocationWidgetType);
 		if (visible) {
 			const SceneSettingsManager::SceneContextId context{

@@ -96,9 +96,7 @@ void CellLightingWidget::DrawWidget()
 					if (ShouldOpenSearchSection())
 						ImGui::SetNextItemOpen(true, ImGuiCond_Always);
 					if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
-						ImGui::Spacing();
 						draw();
-						ImGui::Spacing();
 					}
 				};
 
@@ -166,42 +164,36 @@ void CellLightingWidget::DrawWidget()
 				BeginScrollableContent("##FogScroll");
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNearColor, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kFogNearColor, settings.fogColorNear);
 					});
 				});
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogFarColor, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kFogFarColor, settings.fogColorFar);
 					});
 				});
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNear, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogNear, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kFogNear, settings.fogNear, 0.0f, 163840.0f);
 					});
 				});
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogFar, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogFar, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kFogFar, settings.fogFar, 0.0f, 163840.0f);
 					});
 				});
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogPower, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogPower, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kFogPower, settings.fogPower, 0.0f, 10.0f);
 					});
 				});
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogClampMax, [&](const char*) {
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritFogMax, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kFogClampMax, settings.fogClamp, 0.0f, 1.0f);
 					});

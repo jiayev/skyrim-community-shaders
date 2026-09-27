@@ -97,9 +97,14 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 	                                      ImGui::CalcTextSize(transitionLabel).x + style.ItemInnerSpacing.x +
 	                                      SceneTransitionField::GetWidth() + style.ItemSpacing.x :
 	                                  0.0f;
+	// Pause, the page's copy/preset/export actions, and the destructive clear are three groups.
 	const float width = ButtonWidth(toggleLabel) + ButtonWidth(copyLabel) + ButtonWidth(loadPresetLabel) +
-	                    ButtonWidth(exportLabel) + clearWidth + transitionWidth + style.ItemSpacing.x * 4.0f;
+	                    ButtonWidth(exportLabel) + clearWidth + transitionWidth + style.ItemSpacing.x * 2.0f +
+	                    Util::GetToolbarDividerWidth() * 2.0f;
 	const float margin = kRightMargin * Util::GetUIScale();
+	// Sharing a row it cannot fit on would push the actions past the panel edge.
+	if (ImGui::GetCurrentWindowRead()->DC.IsSameLine && ImGui::GetContentRegionAvail().x < width + margin)
+		ImGui::NewLine();
 	if (const auto avail = ImGui::GetContentRegionAvail().x; avail > width + margin)
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - width - margin);
 
@@ -139,7 +144,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 						 T(TKEY("scene_page_resume_all_tooltip"), "Applies every override on this page again."),
 		Util::kTooltipWhenDisabled);
 
-	ImGui::SameLine();
+	Util::ToolbarDivider();
 	// A page holding entries always has somewhere to offer them, so destinations are never walked just to grey the button.
 	ImGui::BeginDisabled(!hasEntries && !SceneCopyModal::HasSources(context));
 	if (ImGui::Button(copyLabel))
@@ -174,7 +179,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 						  "Writes every setting from every context out as an overwrite preset."),
 		Util::kTooltipWhenDisabled);
 
-	ImGui::SameLine();
+	Util::ToolbarDivider();
 	ImGui::BeginDisabled(!hasEntries);
 	const bool clearClicked = hasClearIcon ?
 	                              Util::ErrorImageButton("##ScenePageClear", menu->uiIcons.deleteSettings.texture,

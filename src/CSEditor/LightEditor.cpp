@@ -2627,9 +2627,7 @@ void LightEditor::DrawDeleteConfirmation()
 
 	if (auto popup = Util::CenteredPopupModal(T(TKEY("delete_entry"), "Delete"))) {
 		ImGui::Text("%s", T(TKEY("confirm_delete_entry"), "Delete this light entry from the Light Placer JSON?"));
-		ImGui::Spacing();
 		ImGui::Separator();
-		ImGui::Spacing();
 
 		if (Util::ErrorButton(T(TKEY("yes_delete"), "Yes, Delete"))) {
 			const bool ok = DeleteFromLightPlacer();

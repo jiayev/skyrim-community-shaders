@@ -288,6 +288,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 				pack.author = meta.value("author", "");
 				pack.version = meta.value("version", "");
 				pack.description = meta.value("description", "");
+				pack.nexusUrl = meta.value("nexusUrl", "");
 				if (meta.contains("tags") && meta["tags"].is_array()) {
 					for (const auto& tag : meta["tags"]) {
 						if (tag.is_string())

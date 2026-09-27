@@ -6,6 +6,7 @@
 
 #include "Effects11.h"
 #include "Globals.h"
+#include "IconsFontAwesome5.h"
 #include "InverseSquareLighting/Common.h"
 #include "PostProcessing.h"
 #include "ShaderCache.h"
@@ -34,11 +35,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
+	// Effects 11 overrides the result, not the controls, so they stay editable under the banner.
+	if (globals::features::effects11.IsActive()) {
+		Util::StatusBanner(ICON_FA_LOCK, "Effects 11 overrides Linear Lighting while UseEffect is enabled.", Util::Colors::GetWarning());
+		ImGui::Spacing();
+	}
 	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
-	ImGui::TextDisabled("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
-	if (globals::features::effects11.IsActive())
-		ImGui::TextDisabled("Effects 11 overrides Linear Lighting while UseEffect is enabled.");
+	Util::Text::Secondary("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {

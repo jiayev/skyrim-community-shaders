@@ -265,11 +265,8 @@ void WeatherWidget::DrawWidget()
 
 		if (ImGui::BeginTabItem(T(TKEY("records"), WeatherTab::kRecords), nullptr, recordsFlags)) {
 			BeginScrollableContent("##RecordsScroll");
-			ImGui::Spacing();
 			ImGui::TextWrapped("%s", T(TKEY("form_record_references"), "Form record references used by this weather."));
-			ImGui::Spacing();
 			ImGui::Separator();
-			ImGui::Spacing();
 			auto* editorWindow = EditorWindow::GetSingleton();
 
 			bool hasParent = editorWindow->settings.enableInheritFromParent && HasParent();
@@ -1106,7 +1103,6 @@ void WeatherWidget::DrawCloudSettings()
 		if (layerOpen) {
 			const float scale = Util::GetUIScale();
 			ImGui::Indent(10.0f * scale);
-			ImGui::Spacing();
 
 			// Begin horizontal layout for enable checkbox and sliders on left, texture on right
 			ImGui::BeginGroup();
@@ -1116,9 +1112,6 @@ void WeatherWidget::DrawCloudSettings()
 				enableChanged = true;
 				changed = true;
 			}
-
-			ImGui::Spacing();
-			ImGui::Spacing();
 
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.3f);
 			if (WeatherUtils::DrawSliderInt8(std::format("Cloud Layer Speed Y##{}", layer), settings.clouds[i].cloudLayerSpeedY))
@@ -1150,8 +1143,6 @@ void WeatherWidget::DrawCloudSettings()
 				}
 			}
 
-			ImGui::Spacing();
-			ImGui::Spacing();
 			if (TOD::BeginTODTable((layer + "_TOD_Table").c_str(), 120.0f)) {
 				TOD::RenderTODHeader();
 				TOD::DrawTODSeparator();
@@ -1395,9 +1386,7 @@ void WeatherWidget::DrawProperties(std::string category, std::map<std::string, i
 		ApplyChanges();
 	}
 
-	ImGui::Spacing();
 	ImGui::Separator();
-	ImGui::Spacing();
 }
 
 void WeatherWidget::SyncInheritedValuesFromParent()

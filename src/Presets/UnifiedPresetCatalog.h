@@ -37,6 +37,7 @@ public:
 		std::string author;
 		std::string version;
 		std::string description;
+		std::string nexusUrl;  ///< Optional "nexusUrl" manifest field; shown as a link when non-empty.
 		std::vector<std::string> tags;
 
 		bool hasEffects11 = false;
