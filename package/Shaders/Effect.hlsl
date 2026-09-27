@@ -664,21 +664,19 @@ PS_OUTPUT main(PS_INPUT input)
 	float3 propertyColor = PropertyColor.xyz;
 	float shadowVariance = 1.0;
 
-#	if defined(EFFECTS11)
 	bool isFire = false;
-#		if defined(ADDBLEND)
-#			if defined(SOFT)
+#	if defined(ADDBLEND)
+#		if defined(SOFT)
 	if (Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToColor && Permutation::PixelShaderDescriptor & Permutation::EffectFlags::GrayscaleToAlpha)
 		isFire = true;
-#			elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
+#		elif defined(PARTICLES) && defined(TEXCOORD_INDEX) && defined(INDEXED_TEXTURE)
 	isFire = true;
-#			endif
 #		endif
+#	endif
 
-#		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
-		propertyColor *= SharedData::enbSettings.ParticleIntensity;
-#		endif
+#	if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	if (!(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+		propertyColor *= Color::ParticleEffectMult();
 #	endif
 
 #	if defined(LIGHTING)
@@ -867,14 +865,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			else
 	float3 blendedColor = lightColor * (1 - fogFactor);
 #			endif
-#			if defined(EFFECTS11)
-	if (SharedData::enbSettings.Enable) {
-		if (isFire)
-			blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
-		else
-			blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
-	}
-#			endif
+	blendedColor = Color::AdditiveEffect(blendedColor, isFire);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 #			if defined(EXP_HEIGHT_FOG)
 	float3 blendedColor = lerp(lightColor, 1.0.xxx, saturate(1.5 * vanillaFogFactor).xxx);
