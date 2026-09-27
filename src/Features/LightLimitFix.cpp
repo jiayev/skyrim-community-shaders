@@ -3,6 +3,7 @@
 #include "Effects11.h"
 #include "LightLimitFix/Common.h"
 #include "LightLimitFix/LightAttach.h"
+#include "DrawcallLimitFix/ConstantEvaluator.h"
 #include "LightLimitFix/ORGLightCulling.h"
 #include "LinearLighting.h"
 
@@ -100,6 +101,9 @@ void LightLimitFix::DrawLightAttachSettings()
 			T(TKEY("skip_redundant_light_attach_tooltip"),
 				"The game re-checks every dynamic light's nearby geometry each frame, which costs milliseconds in scenes with hundreds of lights. "
 				"With this on, a light that has not moved or changed is only re-checked every 60 frames."));
+	}
+}
+
 namespace
 {
 	bool OrgParityEnabled()
@@ -380,14 +384,34 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 	strictLightDataTemp.ShadowBitMask = 0;
 	strictLightDataTemp.FirstPerson = localShadowFirstPersonPass ? 1u : 0u;
 
-	strictLightDataTemp.RoomIndex = -1;
+	strictLightDataTemp.RoomIndex = GetRoomIndex(a_pass->geometry);
+}
+
+int LightLimitFix::GetRoomIndex(RE::NiAVObject* a_object) const
+{
 	if (!roomNodes.empty()) {
-		if (RE::NiNode* roomNode = GetParentRoomNode(a_pass->geometry)) {
+		if (RE::NiNode* roomNode = GetParentRoomNode(a_object)) {
 			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
-				strictLightDataTemp.RoomIndex = it->second;
+				return it->second;
 			}
 		}
 	}
+	return -1;
+}
+
+uint LightLimitFix::GetShadowBitMask(const RE::BSRenderPass* a_pass)
+{
+	uint mask = 0;
+	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
+		auto bsLight = a_pass->sceneLights[i + 1];
+		if (!bsLight)
+			continue;
+		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
+		const auto maskIndex = GetShadowMaskIndex(shadowLight);
+		if (maskIndex < SHADOW_MASK_CHANNEL_COUNT)
+			mask |= (1u << maskIndex);
+	}
+	return mask;
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLights(RE::BSRenderPass* a_pass)
@@ -426,16 +450,7 @@ void LightLimitFix::BSLightingShader_SetupGeometry_GeometrySetupConstantPointLig
 		strictLightDataTemp.StrictLights[writeIdx++] = light;
 	}
 	strictLightDataTemp.NumStrictLights = writeIdx;
-
-	for (uint32_t i = 0; i < a_pass->numShadowLights; i++) {
-		auto bsLight = a_pass->sceneLights[i + 1];
-		if (!bsLight)
-			continue;
-		auto* shadowLight = static_cast<RE::BSShadowLight*>(bsLight);
-		const auto maskIndex = GetShadowMaskIndex(shadowLight);
-		if (maskIndex < SHADOW_MASK_CHANNEL_COUNT)
-			strictLightDataTemp.ShadowBitMask |= (1u << maskIndex);
-	}
+	strictLightDataTemp.ShadowBitMask |= GetShadowBitMask(a_pass);
 }
 
 void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
@@ -445,6 +460,23 @@ void LightLimitFix::BSLightingShader_SetupGeometry_After(RE::BSRenderPass*)
 	auto smState = globals::game::smState;
 
 	if (!shaderCache->IsEnabled())
+		return;
+
+	// Drawcall Limit Fix calls SetupGeometry on a stand-in to read back the constants the engine would
+	// produce; that call must leave nothing behind (DCLF::ConstantEvaluator::Evaluating). Everything below
+	// outlives the call and so has to be skipped:
+	//
+	//   - strictLightDataCB is the buffer the *real* draws read, and the update below is conditional on
+	//     the four cache variables. Publishing a stand-in's lights and then recording them as "what the
+	//     buffer holds" makes the next real draw whose lights match the cache skip its own upload and
+	//     shade with the stand-in's lights instead. That is the blown-out additive lighting seen at night,
+	//     and it got worse exactly when DCLF's tables widened and ran this far more often.
+	//   - frameChecker.IsNewFrame() is a once-per-frame latch; consuming it here means the real draws
+	//     never rebind b3 for that frame.
+	//
+	// strictLightDataTemp itself is scratch that _Before resets on every call, so leaving it dirty is
+	// harmless and the light maths above still runs normally for the evaluation.
+	if (DCLF::ConstantEvaluator::Evaluating())
 		return;
 
 	auto accumulator = *globals::game::currentAccumulator.get();
@@ -883,10 +915,9 @@ bool LightLimitFix::CullOnRenderGraph(const eastl::vector<LightData>& a_lightsDa
 	std::memcpy(inputs.cameraProjInverse.data(), &globals::game::frameBufferCached.GetCameraProjInverse(), sizeof(float) * 16);
 	std::memcpy(inputs.cameraView.data(), &globals::game::frameBufferCached.GetCameraView(), sizeof(float) * 16);
 
-	globals::profiler->BeginPass("LightLimitFix::RenderGraphCull");
-	const bool culled = orgCulling.Execute(inputs);
-	globals::profiler->EndPass();
-	return culled;
+	// No D3D11 timer here: the epoch is submitted between two DXVK command lists, so one would also count the
+	// queue's idle time. Its passes report their own GPU time (RenderGraphRuntime::ProfilerName).
+	return orgCulling.Execute(inputs);
 }
 
 void LightLimitFix::UpdateStructure()

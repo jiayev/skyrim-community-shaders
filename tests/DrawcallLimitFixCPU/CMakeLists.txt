@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.21)
+project(DclfCpuTests LANGUAGES CXX)
+enable_testing()
+add_executable(DclfKeptStateTests KeptStateTests.cpp ../../src/Features/DrawcallLimitFix/KeptState.h)
+target_compile_features(DclfKeptStateTests PRIVATE cxx_std_20)
+target_include_directories(DclfKeptStateTests PRIVATE ../../src)
+target_compile_options(DclfKeptStateTests PRIVATE $<IF:$<CXX_COMPILER_ID:MSVC>,/UNDEBUG,-UNDEBUG>)
+add_test(NAME DclfKeptStateTests COMMAND DclfKeptStateTests)

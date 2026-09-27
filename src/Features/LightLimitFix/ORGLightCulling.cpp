@@ -6,86 +6,76 @@
 #include "ORGLightCulling.h"
 
 #include "Globals.h"
+#include "RenderGraph/ComputeProgram.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 
 #include <OpenRenderGraph/PersistentGraphHost.h>
+#include <Render/LatchBlock.h>
 #include <Render/RenderGraph/RenderGraph.h>
 #include <Render/Runtime/UploadServiceAccess.h>
 #include <RenderPasses/Base/TypedRenderGraphPass.h>
 #include <Resources/Buffers/Buffer.h>
 
 #include <atomic>
+#include <bit>
+#include <cstddef>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <vector>
 
 namespace
 {
 	constexpr const char* kExtensionId = "cs.llf.light-culling";
-	constexpr const wchar_t* kBuildShader = L"Data\\Shaders\\LightLimitFix\\ORG\\ClusterBuildingCS.spv";
-	constexpr const wchar_t* kCullShader = L"Data\\Shaders\\LightLimitFix\\ORG\\ClusterCullingCS.spv";
+	constexpr const char* kBuildShader = "LightLimitFix/ClusterBuildingCS.hlsl";
+	constexpr const char* kCullShader = "LightLimitFix/ClusterCullingCS.hlsl";
 
-	// Push-constant block of both shaders; must match LLFOrgConstants in OrgBindless.hlsli.
+	// Push-constant block of both shaders: only what is fixed across executions. Must match LLFOrgConstants
+	// in OrgBindless.hlsli.
 	struct alignas(16) OrgClusterConstants
 	{
-		float cameraMatrix[16];
-		float lightsNear;
-		float lightsFar;
-		uint32_t lightCount;
-		uint32_t pad0;
 		uint32_t clusterSize[4];
 		uint32_t clustersIndex;
 		uint32_t lightsIndex;
 		uint32_t lightIndexCounterIndex;
 		uint32_t lightIndexListIndex;
 		uint32_t lightGridIndex;
-		uint32_t pad1[3];
+		uint32_t latchIndex;
+		uint32_t latchOffset;   // set at record time from the frame slot
+		uint32_t matrixOffset;  // offsetof(LLFLatch, cameraProjInverse) or offsetof(LLFLatch, cameraView)
 	};
-	static_assert(sizeof(OrgClusterConstants) == 128);
+	static_assert(sizeof(OrgClusterConstants) == 48);
 	constexpr uint32_t kConstantWords = sizeof(OrgClusterConstants) / sizeof(uint32_t);
+
+	// One execution's values, in its slot of the latch block (the host writes them in the epoch, after the
+	// slot's previous use completed): what used to be pushed, and the lights, which a copy recorded once
+	// moves into the lights buffer D3D11 also reads.
+	struct LLFLatch
+	{
+		float cameraProjInverse[16];
+		float cameraView[16];
+		float lightsNear;
+		float lightsFar;
+		uint32_t lightCount;
+		uint32_t padding;
+	};
+	static_assert(sizeof(LLFLatch) == 144);
+	constexpr uint32_t kLatchLightsOffset = 256;
 
 	// Thread-group sizes of the two shaders (LightLimitFix/Common.hlsli).
 	constexpr uint32_t kCullGroupX = 16, kCullGroupY = 16, kCullGroupZ = 4;
 
-	struct Program
+	// What the recorded dispatches depend on: the cluster grid, which follows the resolution, and how many
+	// light bytes the latch copy moves (grow-only, in powers of two, so it settles). Published by the render
+	// thread before the epoch, and replaced only when it changes: its identity is the passes' revision.
+	// Immutable once published, so no lock guards it.
+	struct Shape
 	{
-		rhi::PipelineLayoutPtr layout;
-		rhi::PipelinePtr pipeline;
-	};
+		uint32_t clusterSize[3]{};
+		uint32_t lightBytes = 0;
 
-	std::shared_ptr<const Program> LoadProgram(rhi::Device a_device, const wchar_t* a_path)
-	{
-		std::ifstream file(a_path, std::ios::binary);
-		std::vector<char> spirv((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-		if (spirv.empty()) {
-			logger::error("[ORG] Missing SPIR-V {}", std::filesystem::path(a_path).string());
-			return {};
+		bool operator==(const Shape& a_other) const
+		{
+			return std::memcmp(clusterSize, a_other.clusterSize, sizeof(clusterSize)) == 0 && lightBytes == a_other.lightBytes;
 		}
-		auto program = std::make_shared<Program>();
-		rhi::PushConstantRangeDesc constants{};
-		constants.visibility = rhi::ShaderStage::Compute;
-		constants.num32BitValues = kConstantWords;
-		constants.set = 0;
-		constants.binding = 0;
-		if (a_device.CreatePipelineLayout(rhi::PipelineLayoutDesc{ .pushConstants = { &constants, 1 }, .flags = rhi::PipelineLayoutFlags::PF_None },
-				program->layout) != rhi::Result::Ok)
-			return {};
-		rhi::SubobjLayout layout{ program->layout->GetHandle() };
-		rhi::SubobjShader shader{ rhi::ShaderStage::Compute, { spirv.data(), static_cast<uint32_t>(spirv.size()) }, "main" };
-		const rhi::PipelineStreamItem items[] = { rhi::Make(layout), rhi::Make(shader) };
-		if (a_device.CreatePipeline(items, 2, program->pipeline) != rhi::Result::Ok)
-			return {};
-		return program;
-	}
-
-	// Camera and cluster parameters of the frame being prepared. Published by the
-	// render thread before the epoch; passes read it in Prepare. Immutable once
-	// published, so no lock guards it.
-	struct Snapshot
-	{
-		ORGLightCulling::FrameInputs inputs;
 	};
 
 	struct Resources
@@ -96,16 +86,28 @@ namespace
 		std::shared_ptr<org::Buffer> lightIndexCounter;
 		std::shared_ptr<org::Buffer> lightIndexList;
 		std::shared_ptr<org::Buffer> lightGrid;
-		std::shared_ptr<const Program> build;
-		std::shared_ptr<const Program> cull;
-		std::atomic<std::shared_ptr<const Snapshot>> snapshot;
+		std::shared_ptr<const ComputeProgram> build;
+		std::shared_ptr<const ComputeProgram> cull;
+		std::shared_ptr<org::LatchBlock> latch;
+		std::atomic<std::shared_ptr<const Shape>> shape;
 	};
+
+	// The shape the passes record against. With epochs, these passes run only in the light culling epoch;
+	// without, every epoch runs them and they are empty outside it.
+	std::shared_ptr<const Shape> CurrentShape(const Resources& a_resources)
+	{
+		if (!RenderGraphRuntime::EpochsEnabled() && RenderGraphRuntime::Get().CurrentSegment() != RenderGraphRuntime::Segment::LightCulling)
+			return nullptr;
+		return a_resources.shape.load(std::memory_order_acquire);
+	}
 
 	struct DispatchFrame
 	{
-		std::shared_ptr<const Program> program;
+		std::shared_ptr<const ComputeProgram> program;
 		OrgClusterConstants constants{};
 		uint32_t groups[3]{};
+		uint32_t latchStride = 0;  // LatchBlock::Offset(slot) = slot * stride
+		uint32_t latchSlots = 0;
 	};
 
 	void RecordDispatch(const DispatchFrame& a_frame, org::PassRecordContext& a_recording)
@@ -115,31 +117,78 @@ namespace
 		auto& commands = a_recording.Commands();
 		commands.BindLayout(a_frame.program->layout->GetHandle());
 		commands.BindPipeline(a_frame.program->pipeline->GetHandle());
-		commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const uint32_t*>(&a_frame.constants));
+		auto constants = a_frame.constants;
+		constants.latchOffset = (a_recording.FrameSlot() % a_frame.latchSlots) * a_frame.latchStride;
+		commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kConstantWords, reinterpret_cast<const uint32_t*>(&constants));
 		commands.Dispatch(a_frame.groups[0], a_frame.groups[1], a_frame.groups[2]);
 	}
 
-	void AppendConstantsRevision(const OrgClusterConstants& a_constants, const Program* a_program, std::vector<uint64_t>& a_out)
+	void AppendShapeRevision(const Shape* a_shape, const ComputeProgram* a_program, std::vector<uint64_t>& a_out)
 	{
+		a_out.push_back(reinterpret_cast<uintptr_t>(a_shape));
 		a_out.push_back(reinterpret_cast<uintptr_t>(a_program));
-		uint32_t words[kConstantWords];
-		std::memcpy(words, &a_constants, sizeof(words));
-		for (uint32_t i = 0; i < kConstantWords; i += 2)
-			a_out.push_back((uint64_t(words[i]) << 32) | words[i + 1]);
 	}
 
-	OrgClusterConstants BaseConstants(const ORGLightCulling::FrameInputs& a_inputs, const std::array<float, 16>& a_matrix)
+	OrgClusterConstants BaseConstants(const Resources& a_resources, const Shape& a_shape, uint32_t a_matrixOffset)
 	{
 		OrgClusterConstants constants{};
-		std::memcpy(constants.cameraMatrix, a_matrix.data(), sizeof(constants.cameraMatrix));
-		constants.lightsNear = a_inputs.lightsNear;
-		constants.lightsFar = a_inputs.lightsFar;
-		constants.lightCount = a_inputs.lightCount;
-		constants.clusterSize[0] = a_inputs.clusterSize[0];
-		constants.clusterSize[1] = a_inputs.clusterSize[1];
-		constants.clusterSize[2] = a_inputs.clusterSize[2];
+		constants.clusterSize[0] = a_shape.clusterSize[0];
+		constants.clusterSize[1] = a_shape.clusterSize[1];
+		constants.clusterSize[2] = a_shape.clusterSize[2];
+		constants.latchIndex = a_resources.latch->SrvIndex();
+		constants.matrixOffset = a_matrixOffset;
 		return constants;
 	}
+
+	// Moves the lights from the execution's latch region into the lights buffer (read by the culling, by
+	// DCLF's draws and by D3D11)
+	struct LatchCopyBindings
+	{
+		org::ResourceBindingToken lights;
+	};
+
+	struct LatchCopyFrame
+	{
+		std::shared_ptr<const org::LatchBlock> latch;
+		uint32_t bytes = 0;
+	};
+
+	class LatchLightsPass final : public org::TypedRenderGraphPass<LatchLightsPass, LatchCopyFrame, LatchCopyBindings>
+	{
+	public:
+		explicit LatchLightsPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		LatchCopyBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			return { a_builder.BindCopyDestination(resources->lights) };
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
+		{
+			a_out.push_back(reinterpret_cast<uintptr_t>(CurrentShape(*resources).get()));
+		}
+
+		LatchCopyFrame Prepare(const LatchCopyBindings&, const org::PassPrepareContext&) const
+		{
+			const auto shape = CurrentShape(*resources);
+			if (!shape || !shape->lightBytes)
+				return {};
+			return { resources->latch, shape->lightBytes };
+		}
+
+		static void Record(const LatchCopyBindings& a_bindings, const LatchCopyFrame& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.latch || !a_frame.bytes)
+				return;
+			a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.lights).GetHandle(), 0,
+				a_frame.latch->Resource()->GetAPIResource().GetHandle(), a_frame.latch->Offset(a_recording.FrameSlot()) + kLatchLightsOffset, a_frame.bytes);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
 
 	// ClusterBuildingCS: one group per cluster; also resets the culling counter.
 	struct BuildBindings
@@ -159,34 +208,27 @@ namespace
 			return { a_builder.BindUnorderedAccess(resources->clusters), a_builder.BindUnorderedAccess(resources->lightIndexCounter) };
 		}
 
-		// The cluster grid depends only on projection and cluster layout, so the packet
-		// is reused while they are unchanged.
+		// The recorded dispatch depends only on the cluster grid; the projection is latched.
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
 		{
-			const auto snapshot = resources->snapshot.load(std::memory_order_acquire);
-			if (!snapshot) {
-				a_out.push_back(0);
-				return;
-			}
-			auto constants = BaseConstants(snapshot->inputs, snapshot->inputs.cameraProjInverse);
-			constants.lightCount = 0;  // not read by this shader
-			AppendConstantsRevision(constants, resources->build.get(), a_out);
+			AppendShapeRevision(CurrentShape(*resources).get(), resources->build.get(), a_out);
 		}
 
 		DispatchFrame Prepare(const BuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
 			DispatchFrame frame{};
-			const auto snapshot = resources->snapshot.load(std::memory_order_acquire);
-			if (!snapshot)
+			const auto shape = CurrentShape(*resources);
+			if (!shape)
 				return frame;
 			frame.program = resources->build;
-			frame.constants = BaseConstants(snapshot->inputs, snapshot->inputs.cameraProjInverse);
-			frame.constants.lightCount = 0;
+			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraProjInverse));
 			frame.constants.clustersIndex = a_preparation.ResolveView(a_bindings.clusters, { org::BindlessViewKind::UnorderedAccess }).index;
 			frame.constants.lightIndexCounterIndex = a_preparation.ResolveView(a_bindings.counter, { org::BindlessViewKind::UnorderedAccess }).index;
-			frame.groups[0] = snapshot->inputs.clusterSize[0];
-			frame.groups[1] = snapshot->inputs.clusterSize[1];
-			frame.groups[2] = snapshot->inputs.clusterSize[2];
+			frame.groups[0] = shape->clusterSize[0];
+			frame.groups[1] = shape->clusterSize[1];
+			frame.groups[2] = shape->clusterSize[2];
+			frame.latchStride = resources->latch->Stride();
+			frame.latchSlots = resources->latch->Slots();
 			return frame;
 		}
 
@@ -225,31 +267,27 @@ namespace
 
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
 		{
-			const auto snapshot = resources->snapshot.load(std::memory_order_acquire);
-			if (!snapshot) {
-				a_out.push_back(0);
-				return;
-			}
-			AppendConstantsRevision(BaseConstants(snapshot->inputs, snapshot->inputs.cameraView), resources->cull.get(), a_out);
+			AppendShapeRevision(CurrentShape(*resources).get(), resources->cull.get(), a_out);
 		}
 
 		DispatchFrame Prepare(const CullBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
 			DispatchFrame frame{};
-			const auto snapshot = resources->snapshot.load(std::memory_order_acquire);
-			if (!snapshot)
+			const auto shape = CurrentShape(*resources);
+			if (!shape)
 				return frame;
-			const auto& inputs = snapshot->inputs;
 			frame.program = resources->cull;
-			frame.constants = BaseConstants(inputs, inputs.cameraView);
+			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraView));
+			frame.latchStride = resources->latch->Stride();
+			frame.latchSlots = resources->latch->Slots();
 			frame.constants.clustersIndex = a_preparation.ResolveView(a_bindings.clusters, { org::BindlessViewKind::ShaderResource }).index;
 			frame.constants.lightsIndex = a_preparation.ResolveView(a_bindings.lights, { org::BindlessViewKind::ShaderResource }).index;
 			frame.constants.lightIndexCounterIndex = a_preparation.ResolveView(a_bindings.counter, { org::BindlessViewKind::UnorderedAccess }).index;
 			frame.constants.lightIndexListIndex = a_preparation.ResolveView(a_bindings.lightIndexList, { org::BindlessViewKind::UnorderedAccess }).index;
 			frame.constants.lightGridIndex = a_preparation.ResolveView(a_bindings.lightGrid, { org::BindlessViewKind::UnorderedAccess }).index;
-			frame.groups[0] = (inputs.clusterSize[0] + kCullGroupX - 1) / kCullGroupX;
-			frame.groups[1] = (inputs.clusterSize[1] + kCullGroupY - 1) / kCullGroupY;
-			frame.groups[2] = (inputs.clusterSize[2] + kCullGroupZ - 1) / kCullGroupZ;
+			frame.groups[0] = (shape->clusterSize[0] + kCullGroupX - 1) / kCullGroupX;
+			frame.groups[1] = (shape->clusterSize[1] + kCullGroupY - 1) / kCullGroupY;
+			frame.groups[2] = (shape->clusterSize[2] + kCullGroupZ - 1) / kCullGroupZ;
 			return frame;
 		}
 
@@ -279,12 +317,18 @@ namespace
 
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
+			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::LightCulling);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.llf.latch-lights",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<LatchLightsPass>(resources)))
+					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.llf.build-clusters",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildClustersPass>(resources)))
-					.PreferQueue(org::QueueKind::Graphics));
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.llf.cull-lights",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<CullLightsPass>(resources)))
-					.PreferQueue(org::QueueKind::Graphics));
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
 		}
 
 	private:
@@ -358,8 +402,12 @@ bool ORGLightCulling::Setup(uint32_t a_clusterCount, uint32_t a_maxLights, uint3
 		state->lightStride = a_lightStride;
 		auto resources = std::make_shared<Resources>();
 		auto device = host->GetDesc().device;
-		resources->build = LoadProgram(device, kBuildShader);
-		resources->cull = LoadProgram(device, kCullShader);
+		// The descriptor-heap build of the D3D11 shaders (LLF_ORG_BINDLESS).
+		const auto load = [&](const char* a_source) {
+			return ComputeProgram::Load(device, { .source = a_source, .constantWords = kConstantWords, .defines = { { L"LLF_ORG_BINDLESS", L"1" } } });
+		};
+		resources->build = load(kBuildShader);
+		resources->cull = load(kCullShader);
 		if (!resources->build || !resources->cull) {
 			logger::warn("[ORG] Light culling stays on D3D11: the SPIR-V programs could not be created");
 			impl.reset();
@@ -368,6 +416,7 @@ bool ORGLightCulling::Setup(uint32_t a_clusterCount, uint32_t a_maxLights, uint3
 		const uint32_t indexCount = a_clusterCount * a_maxLightsPerCluster;
 		resources->clusterCount = a_clusterCount;
 		resources->lights = CreateStructured(a_maxLights, a_lightStride, false, "cs.llf.lights");
+		resources->latch = std::make_shared<org::LatchBlock>("cs.llf.latch", kLatchLightsOffset + a_maxLights * a_lightStride, host->FrameSlots());
 		resources->clusters = CreateStructured(a_clusterCount, sizeof(float) * 8, true, "cs.llf.clusters");
 		resources->lightIndexCounter = CreateStructured(1, sizeof(uint32_t), true, "cs.llf.light-index-counter");
 		resources->lightIndexList = CreateStructured(indexCount, sizeof(uint32_t), true, "cs.llf.light-index-list");
@@ -398,17 +447,34 @@ bool ORGLightCulling::Execute(const FrameInputs& a_inputs)
 {
 	if (!IsActive())
 		return false;
-	auto snapshot = std::make_shared<Snapshot>();
-	snapshot->inputs = a_inputs;
-	snapshot->inputs.lightCount = (std::min)(a_inputs.lightCount, impl->maxLights);
-	snapshot->inputs.lights = nullptr;  // uploaded below, never read from the snapshot
-	impl->resources->snapshot.store(std::move(snapshot), std::memory_order_release);
-
+	RenderGraphRuntime::EpochBodyScope body(RenderGraphRuntime::Segment::LightCulling);
 	const auto resources = impl->resources;
-	const size_t bytes = size_t((std::min)(a_inputs.lightCount, impl->maxLights)) * impl->lightStride;
-	const bool ok = RenderGraphRuntime::Get().ExecuteEpoch([&](org::RenderGraph&) {
-		if (bytes && a_inputs.lights)
-			BUFFER_UPLOAD(a_inputs.lights, bytes, org::runtime::UploadTarget::FromShared(resources->lights), 0);
+	const uint32_t lightCount = a_inputs.lights ? (std::min)(a_inputs.lightCount, impl->maxLights) : 0u;
+	const uint32_t bytes = lightCount * impl->lightStride;
+	{
+		// A new shape only when the grid changes or the lights outgrow the copy (grow-only, powers of two).
+		const auto current = resources->shape.load(std::memory_order_acquire);
+		Shape shape{};
+		std::copy(a_inputs.clusterSize, a_inputs.clusterSize + 3, shape.clusterSize);
+		const uint32_t capacity = impl->maxLights * impl->lightStride;
+		shape.lightBytes = current ? current->lightBytes : 0u;
+		if (bytes > shape.lightBytes)
+			shape.lightBytes = (std::min)(capacity, (std::max)(4096u, std::bit_ceil(bytes)));
+		if (!current || !(*current == shape))
+			resources->shape.store(std::make_shared<const Shape>(shape), std::memory_order_release);
+	}
+	const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::LightCulling, [&](org::RenderGraph&) {
+		// The slot this execution records against is free from here (the host waited for it).
+		const uint32_t slot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
+		LLFLatch latch{};
+		std::memcpy(latch.cameraProjInverse, a_inputs.cameraProjInverse.data(), sizeof(latch.cameraProjInverse));
+		std::memcpy(latch.cameraView, a_inputs.cameraView.data(), sizeof(latch.cameraView));
+		latch.lightsNear = a_inputs.lightsNear;
+		latch.lightsFar = a_inputs.lightsFar;
+		latch.lightCount = lightCount;
+		resources->latch->WriteValue(slot, 0, latch);
+		if (bytes)
+			resources->latch->Write(slot, kLatchLightsOffset, { reinterpret_cast<const std::byte*>(a_inputs.lights), bytes });
 	});
 	if (!ok)
 		impl.reset();  // graph faulted: LLF returns to its D3D11 dispatches
@@ -428,6 +494,17 @@ ID3D11ShaderResourceView* ORGLightCulling::GetLightIndexListSRV() const
 ID3D11ShaderResourceView* ORGLightCulling::GetLightGridSRV() const
 {
 	return impl ? impl->lightGridSRV.get() : nullptr;
+}
+
+bool ORGLightCulling::GetShaderResourceIndices(uint32_t& a_lights, uint32_t& a_lightIndexList, uint32_t& a_lightGrid) const
+{
+	if (!IsActive())
+		return false;
+	const auto& resources = *impl->resources;
+	a_lights = resources.lights->GetSRVInfo(0).slot.index;
+	a_lightIndexList = resources.lightIndexList->GetSRVInfo(0).slot.index;
+	a_lightGrid = resources.lightGrid->GetSRVInfo(0).slot.index;
+	return true;
 }
 
 #else  // !CS_HAS_RENDER_GRAPH
@@ -450,4 +527,5 @@ bool ORGLightCulling::Execute(const FrameInputs&) { return false; }
 bool ORGLightCulling::IsActive() const { return false; }
 ID3D11ShaderResourceView* ORGLightCulling::GetLightIndexListSRV() const { return nullptr; }
 ID3D11ShaderResourceView* ORGLightCulling::GetLightGridSRV() const { return nullptr; }
+bool ORGLightCulling::GetShaderResourceIndices(uint32_t&, uint32_t&, uint32_t&) const { return false; }
 #endif

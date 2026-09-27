@@ -3,6 +3,7 @@
 #include "Common/LodLandscape.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
+#include "Common/DCLFObjects.hlsli"
 #include "Common/SharedData.hlsli"
 #include "Common/Skinned.hlsli"
 #if defined(RENDER_SHADOWMASK) || defined(RENDER_SHADOWMASKSPOT) || defined(RENDER_SHADOWMASKPB) || defined(RENDER_SHADOWMASKDPB)
@@ -78,6 +79,11 @@ cbuffer PerTechnique : register(b0)
 {
 	float4 HighDetailRange : packoffset(c0);  // loaded cells center in xy, size in zw
 	float2 ParabolaParam : packoffset(c1);    // inverse radius in x, y is 1 for forward hemisphere or -1 for backward hemisphere
+#	if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix, per shadow view: the main camera's eye minus this view's, which turns the
+	// records' eye-relative transforms into this camera's (engine notes: shadow maps).
+	float4 DCLFEyeDelta : packoffset(c2);
+#	endif
 };
 
 cbuffer PerMaterial : register(b1)
@@ -88,11 +94,29 @@ cbuffer PerMaterial : register(b1)
 cbuffer PerGeometry : register(b2)
 {
 	float4 ShadowFadeParam : packoffset(c0);
+#	if !defined(DCLF_BINDLESS)
 	row_major float4x4 World : packoffset(c1);
+#	endif
 	float4 EyePos : packoffset(c5);
 	float4 WaterParams : packoffset(c6);
+#	if !defined(DCLF_BINDLESS)
 	float4 TreeParams : packoffset(c7);
+#	endif
 };
+
+#if defined(DCLF_BINDLESS)
+// Drawcall Limit Fix draws the shadow views indirectly: every object of a view shares one pipeline and
+// one PerGeometry block, so the values that differ between them come from the per-object record instead
+// (Common/DCLFObjects.hlsli). World is absolute in the record and made relative here to the drawing
+// view's own eye, the view's VS_PerFrame CameraPosAdjust - the engine's own Utility World is relative to
+// whichever camera is drawing (engine notes: shadow maps).
+static precise row_major float4x4 World = float4x4(
+	DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+	DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+	DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+	float4(0, 0, 0, 1));
+static float4 TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
+#endif
 
 float2 SmoothSaturate(float2 value)
 {
@@ -137,7 +161,12 @@ VS_OUTPUT main(VS_INPUT input)
 #		if defined(SKINNED)
 	precise int4 boneIndices = 765.01.xxxx * input.BoneIndices.xyzw;
 
+#			if defined(DCLF_BINDLESS)
+	// The rows are absolute: the pivot is this view's eye.
+	float3x4 worldMatrix = Skinned::GetBoneTransformMatrixBindless(DCLFObjects[DCLFObjectIndex].DCLFBoneOffset, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
+#			else
 	float3x4 worldMatrix = Skinned::GetBoneTransformMatrix(Bones, boneIndices, FrameBuffer::CameraPosAdjust.xyz, input.BoneWeights);
+#			endif
 	precise float4 positionWS = float4(mul(positionMS, transpose(worldMatrix)), 1);
 
 	positionCS = mul(FrameBuffer::CameraViewProj, positionWS);
@@ -326,6 +355,12 @@ float2 GetShadowPCFOffset(uint index)
 	return Random::SpiralSampleOffsets8[index];
 #	endif
 }
+
+#	if defined(DCLF_BINDLESS)
+// One pipeline draws every threshold, so the reference is the object's own.
+static float DCLFAlphaTestRef = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#		define AlphaTestRefRS DCLFAlphaTestRef
+#	endif
 
 float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius)
 {

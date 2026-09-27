@@ -278,6 +278,7 @@ namespace SIE
 		 *  to share the same dispatchedTasksInFlight budget as the main permutation matrix,
 		 *  instead of being submitted to compilationPool independently of it. Wakes TryTakeNext(). */
 		void EnqueueAux(std::function<void()> work);
+		void NotifyPoolProgress() { conditionVariable.notify_one(); }
 		/** @brief Resets all task queues and counters for a fresh compilation pass. */
 		void Clear();
 		/** @brief Formats a millisecond duration into a human-readable time string. */
@@ -418,6 +419,7 @@ namespace SIE
 
 		/** @brief Returns true if any shader compilation tasks are in progress. */
 		bool IsCompiling();
+		void NotifyPoolProgress() { compilationSet.NotifyPoolProgress(); }
 		/** Gets whether the shader cache is enabled. */
 		bool IsEnabled() const;
 		/** Sets whether the shader cache is enabled. */
@@ -606,6 +608,13 @@ namespace SIE
 			uint32_t descriptor);
 
 		static std::string GetDefinesString(const RE::BSShader& shader, uint32_t descriptor);
+
+		/**
+		 * @brief The preprocessor defines a permutation is compiled with (without the developer-mode
+		 * debug defines): the shader-class define, the global feature defines and the permutation's own.
+		 * For compilers other than D3DCompile, e.g. Drawcall Limit Fix's SPIR-V builds.
+		 */
+		static std::vector<std::pair<std::string, std::string>> GetCompileDefines(const RE::BSShader& shader, ShaderClass shaderClass, uint32_t descriptor);
 
 		uint64_t GetCachedHitTasks();
 		uint64_t GetCompletedTasks();

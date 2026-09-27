@@ -17,48 +17,44 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 const RE::BSFixedString ExtendedTranslucency::NiExtraDataName_AnisotropicAlphaMaterial = "AnisotropicAlphaMaterial";
 
-void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass)
+uint32_t ExtendedTranslucency::MaterialModelOf(const RE::BSGeometry* geometry)
 {
-	auto SetFeatureDescriptor = [](int material) {
-		auto& descriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-		static constexpr int mask = ExtraFeatureDescriptorMask << ExtraFeatureDescriptorShift;
-		static constexpr int shift = ExtraFeatureDescriptorShift;
-		descriptor = (descriptor & ~mask) | (material << shift);
-	};
-
-	// Clear the ExtraFeatureDescriptor to disable this effect on default
-	SetFeatureDescriptor(MaterialModel::DescriptorDisabled);
-
-	auto& property0 = pass->geometry->GetGeometryRuntimeData().alphaProperty;
-	auto& property1 = pass->geometry->GetGeometryRuntimeData().shaderProperty;
+	if (!geometry)
+		return MaterialModel::DescriptorDisabled;
+	auto& property0 = geometry->GetGeometryRuntimeData().alphaProperty;
+	auto& property1 = geometry->GetGeometryRuntimeData().shaderProperty;
 	auto alphaProperty = property0 && property0->GetRTTI() == globals::rtti::NiAlphaPropertyRTTI.get() ? static_cast<RE::NiAlphaProperty*>(property0.get()) : nullptr;
 	auto lightProperty = property1 && property1->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get() ? static_cast<RE::BSLightingShaderProperty*>(property1.get()) : nullptr;
 
 	// This effect only matters when alpha property exists and blending is enabled
 	// Geometries with alpha < 1 have an implicit alpha blend property
-	if (!(lightProperty && lightProperty->alpha < 0.999f) && (!alphaProperty || !alphaProperty->GetAlphaBlending())) {
-		return;
-	}
+	if (!(lightProperty && lightProperty->alpha < 0.999f) && (!alphaProperty || !alphaProperty->GetAlphaBlending()))
+		return MaterialModel::DescriptorDisabled;
 
-	const auto* data = pass->geometry->GetExtraData(NiExtraDataName_AnisotropicAlphaMaterial);
+	const auto* data = geometry->GetExtraData(NiExtraDataName_AnisotropicAlphaMaterial);
 	if (!data) {
 		// If there is no extra data for explicit settings, use the default material model from global user settings
 		// And respect the SkinnedOnly setting
 		const auto& feature = globals::features::extendedTranslucency;
-		if (!feature.settings.SkinnedOnly || pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
-			SetFeatureDescriptor(MaterialModel::DescriptorUseDefault);
-		}
-	} else {
-		// Read explicit material model from extra data
-		if (data->GetRTTI() == globals::rtti::NiIntegerExtraDataRTTI.get()) {
-			uint32_t material = static_cast<uint32_t>(static_cast<const RE::NiIntegerExtraData*>(data)->value) & ExtraFeatureDescriptorMask;
-			// Promote `Disabled` in settings to `DescriptorDisabled` in shader
-			material = material == MaterialModel::Disabled ? MaterialModel::DescriptorDisabled : material;
-			SetFeatureDescriptor(material);
-		} else {
-			// logging is too expensive here, treat type error as disable, should only happen for modders
-		}
+		if (!feature.settings.SkinnedOnly || geometry->GetGeometryRuntimeData().skinInstance != nullptr)
+			return MaterialModel::DescriptorUseDefault;
+		return MaterialModel::DescriptorDisabled;
 	}
+	// Read explicit material model from extra data
+	if (data->GetRTTI() == globals::rtti::NiIntegerExtraDataRTTI.get()) {
+		uint32_t material = static_cast<uint32_t>(static_cast<const RE::NiIntegerExtraData*>(data)->value) & ExtraFeatureDescriptorMask;
+		// Promote `Disabled` in settings to `DescriptorDisabled` in shader
+		return material == MaterialModel::Disabled ? MaterialModel::DescriptorDisabled : material;
+	}
+	// logging is too expensive here, treat type error as disable, should only happen for modders
+	return MaterialModel::DescriptorDisabled;
+}
+
+void ExtendedTranslucency::BSLightingShader_SetupGeometry(RE::BSRenderPass* pass)
+{
+	auto& descriptor = globals::state->permutationData.ExtraFeatureDescriptor;
+	static constexpr uint32_t mask = ExtraFeatureDescriptorMask << ExtraFeatureDescriptorShift;
+	descriptor = (descriptor & ~mask) | (MaterialModelOf(pass->geometry) << ExtraFeatureDescriptorShift);
 }
 
 struct ExtendedTranslucency::Hooks

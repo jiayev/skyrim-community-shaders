@@ -1,18 +1,26 @@
+#include "Common/NamespacedCBuffer.hlsli"
+
 namespace GrassCollision
 {
 	Texture2D<float4> Collision : register(t100);
 
 	cbuffer GrassCollisionPerFrame : register(b5)
 	{
-		float2 PosOffset;   // cell origin in camera space
-		uint2 ArrayOrigin;  // xy: array origin (clipmap wrapping)
+		float2 NSCB(GrassCollision, PosOffset);   // cell origin in camera space
+		uint2 NSCB(GrassCollision, ArrayOrigin);  // xy: array origin (clipmap wrapping)
 
-		int2 ValidMargin;
-		float TimeDelta;
-		uint BoundingBoxCount;
+		int2 NSCB(GrassCollision, ValidMargin);
+		float NSCB(GrassCollision, TimeDelta);
+		uint NSCB(GrassCollision, BoundingBoxCount);
 
-		float CameraHeightDelta;
+		float NSCB(GrassCollision, CameraHeightDelta);
 	}
+	NSCB_ALIAS(GrassCollision, float2, PosOffset)
+	NSCB_ALIAS(GrassCollision, uint2, ArrayOrigin)
+	NSCB_ALIAS(GrassCollision, int2, ValidMargin)
+	NSCB_ALIAS(GrassCollision, float, TimeDelta)
+	NSCB_ALIAS(GrassCollision, uint, BoundingBoxCount)
+	NSCB_ALIAS(GrassCollision, float, CameraHeightDelta)
 
 	const static uint TEXTURE_SIZE = 512;
 	const static float WORLD_SIZE = 4096;

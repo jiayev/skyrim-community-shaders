@@ -114,6 +114,14 @@ public:
 
 	//////////////////////////////////////////////////////////////////////////////////
 
+	/**
+	 * @brief The Utility technique (without UtilityGeneralStart) the occlusion map draws a geometry with, or 0 when it
+	 * draws none: the rule GetPrecipitationOcclusionMapRenderPassesImpl applies. a_skylighting selects this feature's
+	 * own map (inOcclusion) rather than the precipitation mask. Reads only the property, the geometry and its fade
+	 * node's BSX flags, so Drawcall Limit Fix's native variant of the map classifies its objects with it too.
+	 */
+	static std::uint32_t OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting);
+
 	// Hooks
 	struct BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl
 	{

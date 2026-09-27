@@ -6,6 +6,7 @@
 #	include "LightLimitFix/OrgBindless.hlsli"
 #	define GetPositionVS LLFGetPositionVS
 #	define LLF_DECLARE_RESOURCES \
+		LLFLoadLatch(); \
 		RWStructuredBuffer<ClusterAABB> clusters = ResourceDescriptorHeap[ClustersIndex]; \
 		RWStructuredBuffer<uint> lightIndexCounter = ResourceDescriptorHeap[LightIndexCounterIndex];
 #else

@@ -264,6 +264,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 		cachedMaxAvgMs = 0.0f;
 		cachedMaxP95Ms = 0.0f;
 		cachedMaxP99Ms = 0.0f;
+		cachedAnySplit = false;
 		std::unordered_map<std::string, size_t> groupIndex;
 
 		for (const auto& result : profiler.GetStatistics()) {
@@ -277,6 +278,9 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			cachedTotalAvgMs += avg;
 			cachedTotalP95Ms += p95;
 			cachedTotalP99Ms += p99;
+			// GPU times only: a CPU span is unaffected by where DXVK splits its submissions.
+			const bool split = !cpuMode && result.splitFraction >= kSplitMarkFraction;
+			cachedAnySplit |= split;
 
 			auto pos = result.name.find("::");
 			if (pos != std::string::npos) {
@@ -293,10 +297,11 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 				group.totalAvgMs += avg;
 				group.totalP95Ms += p95;
 				group.totalP99Ms += p99;
-				group.passes.push_back({ passLabel, avg, p95, p99 });
+				group.split |= split;
+				group.passes.push_back({ passLabel, avg, p95, p99, split });
 			} else {
 				groupIndex[result.name] = cachedGroups.size();
-				cachedGroups.push_back({ result.name, avg, p95, p99 });
+				cachedGroups.push_back({ result.name, avg, p95, p99, {}, split });
 			}
 		}
 
@@ -306,6 +311,11 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			cachedMaxP99Ms = std::max(cachedMaxP99Ms, group.totalP99Ms);
 		}
 	}
+
+	// The frame rate the timings above add up to: ImGui's rolling average over the last 60 Presents, kept
+	// every frame whether or not this window is open.
+	if (const float fps = ImGui::GetIO().Framerate; fps > 0.0f)
+		ImGui::Text(T("menu.profiling.average_fps", "Average FPS: %.1f (%.2f ms)"), fps, 1000.0f / fps);
 
 	if (cachedGroups.empty()) {
 		ImGui::TextDisabled("%s", T("menu.profiling.no_timing_data_world", "No timing data available (enter game world)"));
@@ -358,11 +368,13 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 
 				if (group.passes.empty()) {
 					ImGui::TreeNodeEx(group.name.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+					SplitMarker(group.split);
 					metricCells(group.totalAvgMs, group.totalP95Ms, group.totalP99Ms);
 					continue;
 				}
 
 				const bool open = ImGui::TreeNodeEx(group.name.c_str(), 0);
+				SplitMarker(group.split);
 				metricCells(group.totalAvgMs, group.totalP95Ms, group.totalP99Ms);
 				if (!open)
 					continue;
@@ -377,6 +389,7 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 					ImGui::TableNextRow();
 					ImGui::TableNextColumn();
 					ImGui::TreeNodeEx(pass.label.c_str(), ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen);
+					SplitMarker(pass.split);
 					metricCells(pass.avgMs, pass.p95Ms, pass.p99Ms);
 				}
 				ImGui::TreePop();
@@ -384,6 +397,23 @@ void ProfilingRenderer::RenderStatistics(bool showTable, bool showModeToggle)
 			ImGui::EndTable();
 		}
 	}
+
+	if (cachedAnySplit && !cpuMode)
+		ImGui::TextDisabled("%s", T("menu.profiling.split_footnote",
+									  "* Spans a DXVK queue submission: includes time the GPU waited for the next batch, so it reads high."));
+}
+
+void ProfilingRenderer::SplitMarker(bool a_split)
+{
+	if (!a_split)
+		return;
+	ImGui::SameLine(0.0f, 2.0f);
+	ImGui::TextDisabled("*");
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("menu.profiling.split_tooltip",
+									"This timer's begin and end landed in different DXVK submissions in most recent frames. "
+									"The GPU may have sat idle between them (waiting for the CPU to submit), and that wait is "
+									"counted here, so the real cost of the pass is lower."));
 }
 
 void ProfilingRenderer::RenderFeatureTimers(const std::string& featurePrefix)

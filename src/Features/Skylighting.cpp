@@ -1,6 +1,7 @@
 #include "Skylighting.h"
 
 #include "Deferred.h"
+#include "DrawcallLimitFix.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -398,47 +399,38 @@ enum class ShaderTechnique
 
 //////////////////////////////////////////////////////////////
 
-RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl::thunk(
-	RE::BSLightingShaderProperty* property,
-	RE::BSGeometry* geometry,
-	[[maybe_unused]] uint32_t renderMode,
-	[[maybe_unused]] RE::BSGraphics::BSShaderAccumulator* accumulator)
+std::uint32_t Skylighting::OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting)
 {
-	auto& skylighting = globals::features::skylighting;
-
-	auto batch = accumulator->GetRuntimeData().batchRenderer;
-	batch->geometryGroups[14]->flags &= ~1;
-
 	using enum RE::BSShaderProperty::EShaderPropertyFlag;
 	using enum RE::BSUtilityShader::Flags;
 
-	auto* precipitationOcclusionMapRenderPassList = &property->occlusionPasses;
-
-	precipitationOcclusionMapRenderPassList->Clear();
-	if (skylighting.inOcclusion) {
-		if (property->flags.any(kSkinned) && property->flags.none(kTreeAnim))
-			return precipitationOcclusionMapRenderPassList;
+	if (!a_property || !a_geometry)
+		return 0;
+	if (a_skylighting) {
+		if (a_property->flags.any(kSkinned) && a_property->flags.none(kTreeAnim))
+			return 0;
 	} else {
-		if (property->flags.any(kSkinned))
-			return precipitationOcclusionMapRenderPassList;
+		if (a_property->flags.any(kSkinned))
+			return 0;
 	}
 
 	constexpr float minOccluderRadius = 32.0f;
-	const bool validOccluder = property->flags.any(kZBufferWrite) &&
-	                           property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
-	                           (skylighting.inOcclusion || property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
-	if (!validOccluder || !(geometry->worldBound.radius > minOccluderRadius))
-		return precipitationOcclusionMapRenderPassList;
+	const bool validOccluder = a_property->flags.any(kZBufferWrite) &&
+		a_property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
+		(a_skylighting || a_property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
+	if (!validOccluder || !(a_geometry->worldBound.radius > minOccluderRadius))
+		return 0;
 
-	if (skylighting.inOcclusion) {
+	if (a_skylighting) {
 		// Only occluders above a probe lie on its ray to the sky
-		if (geometry->worldBound.center.z + geometry->worldBound.radius < skylighting.probeGridBottomZ - OCCLUSION_BELOW_GRID_MARGIN)
-			return precipitationOcclusionMapRenderPassList;
+		const auto& skylighting = globals::features::skylighting;
+		if (a_geometry->worldBound.center.z + a_geometry->worldBound.radius < skylighting.probeGridBottomZ - OCCLUSION_BELOW_GRID_MARGIN)
+			return 0;
 
-		if (auto userData = geometry->GetUserData()) {
+		if (auto userData = a_geometry->GetUserData()) {
 			RE::BSFadeNode* fadeNode = nullptr;
 
-			RE::NiNode* parent = geometry->parent;
+			RE::NiNode* parent = a_geometry->parent;
 			while (parent && !fadeNode) {
 				fadeNode = parent->AsFadeNode();
 				parent = parent->parent;
@@ -458,7 +450,7 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 									static_cast<int32_t>(RE::BSXFlags::Flag::kLights) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kBreakable) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kSearchedBreakable))) {
-						return precipitationOcclusionMapRenderPassList;
+						return 0;
 					}
 				}
 			}
@@ -468,29 +460,47 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 	stl::enumeration<RE::BSUtilityShader::Flags> technique;
 	technique.set(RenderDepth);
 
-	if (property->flags.any(kVertexColors)) {
+	if (a_property->flags.any(kVertexColors)) {
 		technique.set(Vc);
 	}
 
-	const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get());
+	const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(a_geometry->GetGeometryRuntimeData().alphaProperty.get());
 	if (alphaProperty && alphaProperty->GetAlphaTesting()) {
 		technique.set(Texture);
 		technique.set(AlphaTest);
 	}
 
-	if (property->flags.any(kLODObjects, kHDLODObjects)) {
+	if (a_property->flags.any(kLODObjects, kHDLODObjects)) {
 		technique.set(LodObject);
 	}
 
-	if (property->flags.any(kTreeAnim)) {
+	if (a_property->flags.any(kTreeAnim)) {
 		technique.set(TreeAnim);
 	}
+	return technique.underlying();
+}
 
-	precipitationOcclusionMapRenderPassList->EmplacePass(
-		globals::game::utilityShader,
-		property,
-		geometry,
-		technique.underlying() + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
+RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl::thunk(
+	RE::BSLightingShaderProperty* property,
+	RE::BSGeometry* geometry,
+	[[maybe_unused]] uint32_t renderMode,
+	[[maybe_unused]] RE::BSGraphics::BSShaderAccumulator* accumulator)
+{
+	auto& skylighting = globals::features::skylighting;
+
+	auto batch = accumulator->GetRuntimeData().batchRenderer;
+	batch->geometryGroups[14]->flags &= ~1;
+
+	auto* precipitationOcclusionMapRenderPassList = &property->occlusionPasses;
+
+	precipitationOcclusionMapRenderPassList->Clear();
+	if (const auto technique = OcclusionTechnique(property, geometry, skylighting.inOcclusion)) {
+		precipitationOcclusionMapRenderPassList->EmplacePass(
+			globals::game::utilityShader,
+			property,
+			geometry,
+			technique + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
+	}
 	return precipitationOcclusionMapRenderPassList;
 }
 
@@ -617,10 +627,19 @@ void Skylighting::RenderOcclusion()
 				PrecipitationShaderDirection = { PrecipitationShaderDirectionF.x, PrecipitationShaderDirectionF.y, PrecipitationShaderDirectionF.z };
 
 				static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> _computeProjection{ REL::RelocationID(25643, 26185) };
+				// With Drawcall Limit Fix running, its native variant of this map: DCLF draws every occluder from its own
+				// tables, GPU-culled, so the engine's cull and registration (SetupMask) are skipped and RenderMask only
+				// sets the camera and clears the map. Otherwise, or on a frame DCLF cannot draw it, the engine does.
+				auto& dclf = globals::features::drawcallLimitFix;
+				const bool dclfDraws = dclf.SkyOcclusionReady();
+				const bool parity = dclfDraws && dclf.SkyOcclusionParityFrame();
 				{
 					ZoneScopedN("Skylighting - Setup Projection");
 					_computeProjection(precip, precip->occlusionData.camera);
-					precip->SetupMask();
+					if (!dclfDraws || parity)
+						precip->SetupMask();
+					else if (auto* accumulator = precip->occlusionData.accumulator.get())
+						accumulator->camera = precip->occlusionData.camera.get();  // what SetupMask sets
 				}
 
 				BSParticleShaderRainEmitter* rain = new BSParticleShaderRainEmitter;
@@ -628,6 +647,15 @@ void Skylighting::RenderOcclusion()
 					TracyD3D11Zone(state->tracyCtx, "Skylighting - Render Height Map");
 					globals::profiler->BeginPass("Skylighting::OcclusionMask");
 					precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
+					if (parity) {
+						// The engine's map, kept; then the same view again, cleared, for DCLF's.
+						dclf.CopySkyOcclusion(0);
+						precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
+					}
+					if (dclfDraws)
+						dclf.DrawSkyOcclusion();
+					if (parity)
+						dclf.CopySkyOcclusion(1);
 					globals::profiler->EndPass();
 				}
 				inOcclusion = false;

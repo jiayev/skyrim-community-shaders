@@ -47,6 +47,12 @@ public:
 	ID3D11ShaderResourceView* GetLightIndexListSRV() const;
 	ID3D11ShaderResourceView* GetLightGridSRV() const;
 
+	/**
+	 * @brief Shader-visible descriptor heap indices of the graph's lights, light index list and light grid
+	 * (Lighting's t35, t36, t37), for passes on the graph that read them directly. False when inactive.
+	 */
+	bool GetShaderResourceIndices(uint32_t& a_lights, uint32_t& a_lightIndexList, uint32_t& a_lightGrid) const;
+
 	~ORGLightCulling();
 
 private:

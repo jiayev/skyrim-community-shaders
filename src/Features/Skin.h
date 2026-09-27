@@ -152,6 +152,30 @@ struct Skin : Feature
 	/** @brief Handles material setup for face/face-gen materials, loading extra skin textures as needed. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 
+	/** @brief The views bound at t71 (RFAOS) and t74 (wetness) for a material's draws. */
+	using MaterialTextures = std::array<ID3D11ShaderResourceView*, 2>;
+
+	/**
+	 * @brief What a material's draws bind at t71 and t74, or nullopt for a material this feature leaves alone
+	 * (anything but FaceGen and FaceGenRGBTint): its extra textures, or the default black texture for both when it
+	 * has none (or no hash key). What BSLightingShader_SetupMaterial binds, and what Drawcall Limit Fix puts in its
+	 * material records. Sets the material's textures up the first time (SetupExtraTexture). Render thread.
+	 */
+	std::optional<MaterialTextures> MaterialTexturesOf(RE::BSLightingShaderMaterialBase const* material);
+
+	/**
+	 * @brief The t71/t74 binding BSLightingShader_SetupMaterial left for the next draw, not yet bound. Drawcall Limit
+	 * Fix's stand-in SetupMaterial runs this feature's hook, and restores the binding afterwards so that the next
+	 * native draw does not bind the evaluated material's textures.
+	 */
+	struct PendingTextures
+	{
+		MaterialTextures textures{};
+		bool pending = false;
+	};
+	PendingTextures GetPendingTextures() const;
+	void SetPendingTextures(const PendingTextures& a_pending);
+
 	/** @brief Updates per-geometry wetness constant buffer during geometry setup. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 

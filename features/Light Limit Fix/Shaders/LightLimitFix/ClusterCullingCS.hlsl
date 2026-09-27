@@ -5,6 +5,7 @@
 #	include "LightLimitFix/OrgBindless.hlsli"
 #	define LLF_WORLD_TO_VIEW(p) LLFWorldToView(p)
 #	define LLF_DECLARE_RESOURCES \
+		LLFLoadLatch(); \
 		StructuredBuffer<ClusterAABB> clusters = ResourceDescriptorHeap[ClustersIndex]; \
 		StructuredBuffer<Light> lights = ResourceDescriptorHeap[LightsIndex]; \
 		RWStructuredBuffer<uint> lightIndexCounter = ResourceDescriptorHeap[LightIndexCounterIndex]; \
