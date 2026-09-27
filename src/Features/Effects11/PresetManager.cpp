@@ -135,16 +135,20 @@ void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePa
 	for (const auto& folder : Util::PathHelpers::ListCommunityShaderEntries(relativePath, true)) {
 		const auto packName = folder.filename().string();
 		auto libraryRoot = folder;
+		auto displayName = packName;
 
 		if (unifiedPacks) {
-			libraryRoot = UnifiedPresetCatalog::ResolveEffects11Root(folder, UnifiedPresetCatalog::ReadPackManifest(folder));
+			const auto manifest = UnifiedPresetCatalog::ReadPackManifest(folder);
+			libraryRoot = UnifiedPresetCatalog::ResolveEffects11Root(folder, manifest);
 			if (libraryRoot.empty())
 				continue;
+			if (const auto name = manifest.find("name"); name != manifest.end() && name->is_string())
+				displayName = name->get<std::string>();
 		}
 
 		PresetInfo info;
 		info.id = unifiedPacks ? MakeUnifiedPackPresetId(packName) : packName;
-		info.displayName = packName;
+		info.displayName = std::move(displayName);
 		info.rootPath = libraryRoot;
 		info.isLegacy = false;
 		info.isUnifiedPack = unifiedPacks;
