@@ -119,7 +119,7 @@ Texture2D<float> TexDepth : register(t4);
 
 Texture3D<unorm float4> TexCloudShapeNoise : register(t5);
 Texture3D<float4> TexAerialPerspectiveSun : register(t6);
-Texture2D<float2> TexCloudHeight : register(t7);
+Texture2D<float4> TexCloudHeight : register(t7);
 Texture2D<float3> TexCloudModeling : register(t8);
 Texture2D<unorm float> TexApShadow : register(t9);
 Texture2D<float4> TexSkyView : register(t10);
@@ -332,6 +332,7 @@ struct NDFInfo
 	float dimension_profile;
 	float coverage;
 	float height_fraction;
+	float shaping_start;
 	float top_type;
 	float bottom_type;
 };
@@ -342,6 +343,7 @@ void initNDFInfo(out NDFInfo ndf)
 	ndf.dimension_profile = 0.0;
 	ndf.coverage = 0.0;
 	ndf.height_fraction = 0.0;
+	ndf.shaping_start = 0.0;
 	ndf.top_type = 0.0;
 	ndf.bottom_type = 0.0;
 }
@@ -351,7 +353,8 @@ NDFInfo sampleNDF(CloudLayer cloud, float2 worldXY, float planetHeight)
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	NDFInfo ndf;
 	initNDFInfo(ndf);
-	const float2 heights = saturate(TexCloudHeight.SampleLevel(TileableSampler, LowNdfUV(worldXY, info), 0));
+	const float3 heights = saturate(TexCloudHeight.SampleLevel(TileableSampler, LowNdfUV(worldXY, info), 0).rgb);
+	ndf.shaping_start = heights.b;
 	const float minAltitude = lerp(cloud.lowestAltitude, cloud.highestAltitude, heights.r);
 	const float maxAltitude = lerp(cloud.lowestAltitude, cloud.highestAltitude, heights.g);
 	if (maxAltitude <= minAltitude || planetHeight <= minAltitude || planetHeight >= maxAltitude)
@@ -399,7 +402,7 @@ float sampleCloudDensityFromContext(
 	const float mip = max(profileMip, min(minimumMip, profileMip + 1.0));
 	const float4 noise = TexCloudShapeNoise.SampleLevel(TileableSampler, density_context.noise_coordinates, mip);
 	const float eroded = ReconstructCloudNoiseDensity(noise, ndf.dimension_profile, ndf.top_type, ndf.height_fraction, density_context.eye_distance);
-	return ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower) * info.lowDensityScale;
+	return ShapeCloudBaseDensity(eroded, ndf.height_fraction, info.bottomDensityWidth, info.bottomDensityPower, ndf.shaping_start) * info.lowDensityScale;
 }
 
 float sampleCloudDensity(

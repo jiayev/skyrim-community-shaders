@@ -22,20 +22,44 @@ cbuffer CB : register(b1)
 	float warp;
 	float detail;
 	float padding;
+	float2 windOffset;
+	float2 padding1;
 };
-Texture2D<float> CoverageNoise : register(t0);
-Texture2D<float> TypeNoise : register(t1);
+Texture2D<float> Noise0 : register(t0);
+Texture2D<float> Noise1 : register(t1);
+Texture2D<float> Noise2 : register(t2);
+Texture2D<float> Noise3 : register(t3);
 SamplerState NoiseSampler : register(s0);
 RWTexture2D<float2> OutputWeather : register(u0);
 RWTexture2D<float4> OutputPatterns : register(u1);
 
-float WeatherValue(Texture2D<float> source, NoiseLayer layer, float2 uv, uint2 size)
+float SampleNoise(Texture2D<float> source, NoiseLayer layer, float2 uv, uint2 size)
 {
 	uint2 sourceSize;
 	source.GetDimensions(sourceSize.x, sourceSize.y);
 	const float2 footprint = float2(sourceSize) * layer.frequency / size;
 	const float mip = log2(max(max(footprint.x, footprint.y), 1.0));
-	const float value = source.SampleLevel(NoiseSampler, (uv + layer.offset) * layer.frequency, mip) * 2.0 - 1.0;
+	return source.SampleLevel(NoiseSampler, (uv + layer.offset - windOffset * 0.0001) * layer.frequency, mip);
+}
+
+float WeatherValue(NoiseLayer layer, float2 uv, uint2 size)
+{
+	float value = 0.0;
+	switch (layer.noise) {
+	case 0u:
+		value = SampleNoise(Noise0, layer, uv, size);
+		break;
+	case 1u:
+		value = SampleNoise(Noise1, layer, uv, size);
+		break;
+	case 2u:
+		value = SampleNoise(Noise2, layer, uv, size);
+		break;
+	case 3u:
+		value = SampleNoise(Noise3, layer, uv, size);
+		break;
+	}
+	value = value * 2.0 - 1.0;
 	return saturate((value - layer.range.x) / (layer.range.y - layer.range.x)) * (layer.range.w - layer.range.z) + layer.range.z;
 }
 
@@ -45,7 +69,7 @@ float WeatherValue(Texture2D<float> source, NoiseLayer layer, float2 uv, uint2 s
 	if (any(tid >= size))
 		return;
 	const float2 uv = (float2(tid) + 0.5) / size;
-	OutputWeather[tid] = saturate(float2(WeatherValue(CoverageNoise, weather[0], uv, size), WeatherValue(TypeNoise, weather[1], uv, size)));
+	OutputWeather[tid] = float2(WeatherValue(weather[0], uv, size), WeatherValue(weather[1], uv, size));
 }
 
 float2 PatternHash(int2 cell, int2 period, uint salt)

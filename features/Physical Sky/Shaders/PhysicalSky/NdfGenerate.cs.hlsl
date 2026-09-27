@@ -21,6 +21,7 @@ cbuffer CB : register(b1)
 	NoiseLayer modeling;
 	NoiseLayer modelingGain;
 	NoiseLayer heightVariation;
+	float4 heightAuxiliaryRange;
 	float4 bottomTypeRange;
 	float2 baseHeight;
 	float bottomTypeExponent;
@@ -31,7 +32,9 @@ cbuffer CB : register(b1)
 	float localWindScale;
 	float2 windOffset;
 	uint hasLocalMask;
-	float padding;
+	uint imported;
+	uint preview;
+	float3 padding;
 };
 
 Texture2D<float4> Noise0 : register(t0);
@@ -42,8 +45,9 @@ Texture2D<float4> LocalModeling : register(t4);
 Texture2D<float2> LocalHeight : register(t5);
 Texture2D<float> LocalMask : register(t6);
 SamplerState NoiseSampler : register(s0);
-RWTexture2D<float2> OutputHeight : register(u0);
+RWTexture2D<float4> OutputHeight : register(u0);
 RWTexture2D<float4> OutputModeling : register(u1);
+RWTexture2D<float4> OutputPreview : register(u2);
 
 float NoiseMip(Texture2D<float4> source, float frequency, uint2 outputSize)
 {
@@ -90,12 +94,64 @@ float RangedNoise(NoiseLayer layer, float2 uv, float2 wind, uint2 size)
 	return layer.range.z == layer.range.w ? layer.range.w : Remap(SignedNoise(layer, uv, wind, size), layer.range);
 }
 
+void StoreMaps(uint2 tid, float2 height, float3 model, float first, float second, float gain, float typeGain, float variation)
+{
+	const float auxiliary = saturate(Remap(model.g, heightAuxiliaryRange));
+	OutputHeight[tid] = float4(saturate(height), auxiliary, 0.0);
+	OutputModeling[tid] = float4(saturate(model), 0.0);
+	if (preview != 0u) {
+		float value = 0.0;
+		switch (preview) {
+		case 1u:
+			value = first;
+			break;
+		case 2u:
+			value = second;
+			break;
+		case 3u:
+			value = gain;
+			break;
+		case 4u:
+			value = typeGain;
+			break;
+		case 5u:
+			value = model.r;
+			break;
+		case 6u:
+			value = model.g;
+			break;
+		case 7u:
+			value = model.b;
+			break;
+		case 8u:
+			value = height.x;
+			break;
+		case 9u:
+			value = height.y;
+			break;
+		case 10u:
+			value = auxiliary;
+			break;
+		case 11u:
+			value = variation;
+			break;
+		}
+		OutputPreview[tid] = float4(value.xxx, 1.0);
+	}
+}
+
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
 	uint2 size;
 	OutputHeight.GetDimensions(size.x, size.y);
 	if (any(tid >= size))
 		return;
 	const float2 uv = (float2(tid) + 0.5) / size;
+	if (imported != 0u) {
+		const float2 height = LocalHeight.SampleLevel(NoiseSampler, uv, 0);
+		const float3 model = LocalModeling.SampleLevel(NoiseSampler, uv, NoiseMip(LocalModeling, 1.0, size)).rgb;
+		StoreMaps(tid, height, model, 0.0, 0.0, 1.0, 1.0, 0.0);
+		return;
+	}
 	const float2 wind = windOffset * 0.00005;
 	float first;
 	float second;
@@ -144,6 +200,5 @@ float RangedNoise(NoiseLayer layer, float2 uv, float2 wind, uint2 size)
 		variation = Remap(NoisePower(driver, heightVariation.exponent), heightVariation.range);
 	}
 	height.x += variation;
-	OutputHeight[tid] = saturate(height);
-	OutputModeling[tid] = float4(saturate(model), 0.0);
+	StoreMaps(tid, height, model, first, second, gain, typeGain, variation);
 }

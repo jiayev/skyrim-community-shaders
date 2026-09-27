@@ -2,7 +2,8 @@
 
 ## Resources
 
-The regular NDF layer uses `NubisCloudShapeNoise.dds`, a linear 128³ RGBA8
+The regular NDF layer uses a locally generated volume or the optional
+`NubisCloudShapeNoise.dds`, a linear 128³ RGBA8
 volume with eight mip levels. The channels supply rounded shape (R), distant
 wisps (G), nearby wisps (B), and erosion (A). `CloudNoise.hlsli` combines these
 signals using dimensional profile, top type, local height and view distance.
@@ -15,7 +16,7 @@ nearby erosion. It is not sampled by the regular NDF layer.
 without modifying its bytes. It is not loaded or bound by this renderer. Its
 threshold/roundness reconstruction does not apply to regular profile clouds.
 
-Two linear 64² lookup textures accompany the shape volume:
+Two linear lookup textures accompany the shape volume. Optional packed inputs are:
 
 -   `NubisVerticalProfile.dds`: BC5, one mip; R is the bottom profile and G is
     the top profile. U is type and V is local height, increasing bottom to top.
@@ -23,10 +24,15 @@ Two linear 64² lookup textures accompany the shape volume:
     and GB supplies horizontal noise displacement near the base. Profile lookup
     clamps UVs; displacement lookup wraps and always uses mip 0.
 
+See [resource fallback](volumetric-cloud-texture-resources.md#optional-resource-fallback)
+for runtime LUT packing and operation without DDS files.
+
 ## Dimensional profile
 
 NDF inputs remain height RG and coverage/top-type/bottom-type RGB. The spherical
-layer maps the height pair into physical altitude before noise evaluation.
+layer maps the height pair into physical altitude before noise evaluation. The
+internal height B channel stores the start fraction for bottom density shaping;
+it is generated from top type, including for imported pairs.
 
 Modeling UVs use height-dependent shear. An upstream modeling sample, displaced
 by `60 * cloudShapeShear`, blends types and increases coverage with height.
@@ -118,3 +124,13 @@ settings serialization, and the absence of reserved detail volumes from runtime
 bindings. The empty-space margin includes both the local and upstream shear
 displacements. These checks do not calibrate defaults or replace game rendering
 and performance tests.
+
+## Bottom shaping start
+
+The internal NDF height B channel is sampled before height-dependent XY shear.
+For shaping start `q`, bottom density uses
+`profileHeight = saturate((height - q) / max(1 - q, 1e-6))` only in
+`pow(profileHeight, 0.3) * pow(saturate(profileHeight * baseWidth), bottomPower)`.
+Bottom boost blending and the final density exponent retain the original height.
+At the default q = 0 this preserves the previous formula; q = 1 gives no density
+inside the column. This value does not move the geometric height bounds.

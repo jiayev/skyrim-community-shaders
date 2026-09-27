@@ -12,9 +12,9 @@ described Nubis techniques. Its profile-noise reconstruction is documented
 in [noise reconstruction](noise-contract.md). Low-cloud density
 combines a control field with lookup textures and shape noise:
 
-1. a five-attribute NDF supplies the dimensional profile: minimum height, maximum
-   height, coverage, top type, and bottom type;
-2. `NubisCloudShapeNoise.dds` supplies the tileable three-dimensional density-noise composite.
+1. a two-texture NDF supplies minimum height, maximum height, coverage, top type,
+   bottom type, and an internal bottom-shaping start fraction;
+2. a locally generated volume or `NubisCloudShapeNoise.dds` supplies the tileable three-dimensional density-noise composite.
 
 The noise volume does not generate the NDF, and the NDF is not a second erosion
 pass. The profile determines where cloud mass may exist; the composite describes
@@ -26,7 +26,7 @@ the internal and boundary variation of that mass.
 | ------------------------- | ------: | ------------------------- | ----------------------------- |
 | Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `NubisCloudShapeNoise.dds`    |
 | Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated                 |
-| Low-cloud height          |    `t7` | `Texture2D<float2>`       | GPU-generated                 |
+| Low-cloud height          |    `t7` | `Texture2D<float4>`       | GPU-generated                 |
 | Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated                 |
 | Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer                      |
 | Sky view                  |   `t10` | `Texture2D<float4>`       | renderer                      |
@@ -43,19 +43,20 @@ Each group is transmittance, radiance, metadata, with R16_FLOAT, RGBA16_FLOAT,
 RGBA16_FLOAT storage respectively. See [cloud sampling](cloud-sampling.md) and
 [cloud lighting](cloud-lighting.md) for scheduling and history contracts.
 
-The three fixed assets are loaded from `Data/Textures/PhysicalSky/` and live in
+The three optional packed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 `features/Physical Sky/Textures/PhysicalSky/` in the source tree.
 
 ## Two-texture NDF
 
 Both generated and imported NDFs use two linear 2D textures, sampled with wrap
-filtering at mip 0. Generated maps are 512 x 512: height RG16_FLOAT and modeling
-RGBA16_FLOAT with unused A zero.
+filtering at mip 0. Generated maps are 512 x 512: height and modeling use
+RGBA16_FLOAT with unused A zero. The external height input remains RG; runtime
+conversion adds the shaping-start value in B.
 
-| Texture  | R                         | G                         | B                   |
-| -------- | ------------------------- | ------------------------- | ------------------- |
-| Height   | minimum normalized height | maximum normalized height | unused              |
-| Modeling | coverage                  | top profile type          | bottom profile type |
+| Texture  | R                         | G                         | B                      |
+| -------- | ------------------------- | ------------------------- | ---------------------- |
+| Height   | minimum normalized height | maximum normalized height | internal shaping start |
+| Modeling | coverage                  | top profile type          | bottom profile type    |
 
 At a ray sample the shader computes:
 
@@ -97,7 +98,7 @@ replacing them does not change regular cloud rendering.
 `NubisVerticalAdjustment.dds` is 64² BC7: R stores top expansion, GB horizontal
 noise warp. All lookups use mip 0. Profile UVs are `(type, localHeight)` with
 clamping; the adjustment GB lookup wraps in horizontal world coordinates.
-The old separate R8 top/bottom assets are not used by this path.
+The separate R8 top/bottom assets feed runtime packing when packed LUTs are absent.
 
 ## Cirrus inputs
 
@@ -107,12 +108,12 @@ and wind displacement, with an independent pattern repeat length (default
 
 | Texture       | Channels                                                  |
 | ------------- | --------------------------------------------------------- |
-| Weather, t11  | R coverage, G type, both 0–1                              |
+| Weather, t11  | R coverage, G type; remap outputs                         |
 | Patterns, t13 | R wispy, G round, B streaky; squared by the density query |
 
 Both default to local GPU generation. Weather uses two independently selectable
-noise inputs (generated Alligator, Perlin or Perlin-Worley, or external scalar
-DDS), signed remapping, frequency and offset. Generated inputs default to Perlin.
+slots from the four shared main-weather inputs, with signed remapping, frequency
+and offset. Defaults select the two Perlin slots.
 Output remap endpoints control coverage and type independently; they are project
 starting values, not a universal weather preset. No storm or local-influence
 pass participates.
@@ -125,8 +126,7 @@ by the Nubis cirrus profile; visual equivalence to authored patterns is not clai
 
 An external linear 2D DDS can replace the weather map (at least RG) or patterns
 (at least RGB), independently. Inputs are selected in Cirrus texture inputs;
-incompatible or missing explicit inputs disable the sheet and show an input
-error instead of reusing stale textures. Generated weather is RG16_FLOAT and
+incompatible or missing inputs display a warning and use generated replacements. Generated weather is RG16_FLOAT and
 patterns are RGBA16_FLOAT, each 512 square with a mip chain.
 
 Imported RGB patterns are sampled directly at mip 0 with linear wrapping:
@@ -167,3 +167,60 @@ its maps and invalidate cloud history. Disabled cirrus skips generation.
 -   cirrus weather/pattern generator: `features/Physical Sky/Shaders/PhysicalSky/CirrusGenerate.cs.hlsl`
 -   density sampling: `features/Physical Sky/Shaders/PhysicalSky/Volumetrics.cs.hlsl`
 -   noise reconstruction: `features/Physical Sky/Shaders/PhysicalSky/CloudNoise.hlsli`
+
+## Optional resource fallback
+
+Cloud rendering can initialize without bundled cloud DDS files. Resolution order:
+
+| Resource                | Optional input                                       | Fallback                                      |
+| ----------------------- | ---------------------------------------------------- | --------------------------------------------- |
+| Shape noise             | `NubisCloudShapeNoise.dds` when DDS mode is selected | Local RGBA volume generator                   |
+| Vertical profile        | `NubisVerticalProfile.dds`                           | Runtime packed bottom/top profile             |
+| Vertical adjustment     | `NubisVerticalAdjustment.dds`                        | Runtime top expansion plus procedural GB warp |
+| Main weather            | Imported Height RG + Modeling RGB pair               | Procedural NDF                                |
+| Weather noise slots     | Per-slot DDS override                                | Local scalar noise generator                  |
+| Cirrus weather/patterns | Per-input DDS override                               | Shared weather noise / procedural patterns    |
+
+When packed LUTs are absent, `bottom_lut.dds` supplies bottom profile R and
+`top_lut.dds` supplies top expansion R. These scalar images use the presentation
+orientation (height decreases down the image); packing flips their V axis.
+An optional G channel in `top_lut.dds` stores the separate ordinary top profile,
+with the same orientation as R. This permits all three profile functions in just
+two files: Top RG = expansion/ordinary top, Bottom R = bottom. Single-channel Top
+uses an analytic smooth envelope for the missing ordinary top profile. If either
+scalar file is absent, its profile also uses an analytic smooth envelope.
+These envelopes are fallback approximations, not reconstructions of missing LUT
+texels. In particular, retaining only the two original scalar images does not preserve the
+independent top-profile channel of a packed vertical-profile texture. Supplying
+Top G or complete LUT overrides preserves that independently authored profile.
+
+Packing produces 64-square linear RGBA float textures with mip chains; the
+adjustment's neutral GB channels are replaced by the noise generator. No new DDS
+files are written, and neither scalar source is modified. Thus a release may
+retain just `top_lut.dds` and `bottom_lut.dds`, or remove all cloud DDS files.
+
+Noise preparation runs before the final cloud-resource readiness gate. On first
+startup without shape noise, the 128-slice volume takes 32 prepasses at four
+slices per pass; only complete volumes and mip chains are published. Reload Cloud
+Textures resolves the same fallback order again. DDS mode also generates missing
+shape/adjustment resources instead of disabling the feature.
+
+This path has been statically reviewed; texture-free startup and visual agreement
+still require an in-game run. Analytic fallback quality is distinct from resource
+availability.
+
+## Debug resource inspection
+
+`Debug > Cloud Shape` displays the active NDF height/modeling maps, all four shared
+weather noise inputs, active shape noise, packed profile/adjustment LUTs, and
+active cirrus weather/pattern textures. The generated/source group also exposes
+the completed procedural shape/adjustment outputs and imported/fallback inputs,
+including when a different source is selected for rendering. Incomplete noise
+back buffers are not published; generation progress remains in Cloud Noise Inputs.
+
+Every cloud resource preview supports RGB or R/G/B/A isolation, mip selection,
+a display range, and Z-slice selection for volumes. Alpha is displayed as data,
+not transparency. Scalar weather inputs start in R mode. Conversion dispatches
+only for expanded, visible images, and preserves the compute bindings it uses.
+NDF component previews retain their separate selector. All new controls and
+messages have English and Simplified Chinese translations (`en`, `zh_CN`).

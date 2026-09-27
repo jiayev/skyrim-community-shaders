@@ -42,6 +42,108 @@ namespace
 		srv->GetDesc(&desc);
 		return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D;
 	}
+
+	bool LoadProfileImage(const wchar_t* path, DirectX::ScratchImage& image, bool* hasGreen = nullptr)
+	{
+		DirectX::ScratchImage source;
+		if (FAILED(DirectX::LoadFromDDSFile(path, DirectX::DDS_FLAGS_NONE, nullptr, source)))
+			return false;
+		const auto* base = source.GetImage(0, 0, 0);
+		if (!base || source.GetMetadata().dimension != DirectX::TEX_DIMENSION_TEXTURE2D || source.GetMetadata().arraySize != 1)
+			return false;
+		if (hasGreen) {
+			switch (base->format) {
+			case DXGI_FORMAT_R8G8_UNORM:
+			case DXGI_FORMAT_R16G16_UNORM:
+			case DXGI_FORMAT_R16G16_FLOAT:
+			case DXGI_FORMAT_R32G32_FLOAT:
+			case DXGI_FORMAT_R8G8B8A8_UNORM:
+			case DXGI_FORMAT_R16G16B16A16_UNORM:
+			case DXGI_FORMAT_R16G16B16A16_FLOAT:
+			case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			case DXGI_FORMAT_BC5_UNORM:
+			case DXGI_FORMAT_BC7_UNORM:
+				*hasGreen = true;
+				break;
+			default:
+				*hasGreen = false;
+				break;
+			}
+		}
+		if (base->format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
+			image = std::move(source);
+			return true;
+		}
+		if (DirectX::IsCompressed(base->format))
+			return SUCCEEDED(DirectX::Decompress(*base, DXGI_FORMAT_R32G32B32A32_FLOAT, image));
+		return SUCCEEDED(DirectX::Convert(*base, DXGI_FORMAT_R32G32B32A32_FLOAT, DirectX::TEX_FILTER_DEFAULT, 0.f, image));
+	}
+
+	float ProfileSample(const DirectX::Image& image, float u, float v, uint32_t channel = 0)
+	{
+		const float x = u * static_cast<float>(image.width) - 0.5f;
+		const float y = v * static_cast<float>(image.height) - 0.5f;
+		const int ix = static_cast<int>(std::floor(x));
+		const int iy = static_cast<int>(std::floor(y));
+		const auto sample = [&](int px, int py) {
+			px = std::clamp(px, 0, static_cast<int>(image.width) - 1);
+			py = std::clamp(py, 0, static_cast<int>(image.height) - 1);
+			return reinterpret_cast<const float*>(image.pixels + py * image.rowPitch)[px * 4 + channel];
+		};
+		return std::lerp(std::lerp(sample(ix, iy), sample(ix + 1, iy), x - ix),
+			std::lerp(sample(ix, iy + 1), sample(ix + 1, iy + 1), x - ix), y - iy);
+	}
+
+	void CreateProfileFallbacks(winrt::com_ptr<ID3D11ShaderResourceView>& profile, winrt::com_ptr<ID3D11ShaderResourceView>& adjustment)
+	{
+		if (profile && adjustment)
+			return;
+		DirectX::ScratchImage topImage, bottomImage;
+		bool hasTopProfile = false;
+		const bool hasTop = LoadProfileImage(L"Data\\Textures\\PhysicalSky\\top_lut.dds", topImage, &hasTopProfile);
+		const bool hasBottom = LoadProfileImage(L"Data\\Textures\\PhysicalSky\\bottom_lut.dds", bottomImage);
+		constexpr uint32_t size = 64;
+		std::array<float4, size * size> profiles, adjustments;
+		const auto smooth = [](float a, float b, float value) {
+			const float t = std::clamp((value - a) / (b - a), 0.f, 1.f);
+			return t * t * (3.f - 2.f * t);
+		};
+		for (uint32_t y = 0; y < size; ++y) {
+			const float height = (y + 0.5f) / size;
+			for (uint32_t x = 0; x < size; ++x) {
+				const float type = (x + 0.5f) / size;
+				const float top = hasTop && hasTopProfile ? ProfileSample(*topImage.GetImage(0, 0, 0), type, 1.f - height, 1) :
+				                                            1.f - smooth(0.04f + type * 0.45f, 0.12f + type * 0.9f, height);
+				const float bottom = hasBottom ? ProfileSample(*bottomImage.GetImage(0, 0, 0), type, 1.f - height) :
+				                                 smooth(0.f, 0.08f + type * 0.22f, height);
+				const float expansion = hasTop ? ProfileSample(*topImage.GetImage(0, 0, 0), type, 1.f - height) :
+				                                 1.f - smooth(0.1f + type * 0.35f, 0.25f + type * 0.75f, height);
+				profiles[y * size + x] = { bottom, top, 0.f, 1.f };
+				adjustments[y * size + x] = { expansion, 0.5f, 0.5f, 1.f };
+			}
+		}
+		const auto upload = [&](const auto& pixels, winrt::com_ptr<ID3D11ShaderResourceView>& srv, const char* name) {
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = desc.Height = size;
+			desc.MipLevels = 7;
+			desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			DX::ThrowIfFailed(globals::d3d::device->CreateTexture2D(&desc, nullptr, texture.put()));
+			globals::d3d::context->UpdateSubresource(texture.get(), 0, nullptr, pixels.data(), size * sizeof(float4), 0);
+			DX::ThrowIfFailed(globals::d3d::device->CreateShaderResourceView(texture.get(), nullptr, srv.put()));
+			globals::d3d::context->GenerateMips(srv.get());
+			Util::SetResourceName(texture.get(), "%s", name);
+		};
+		if (!profile)
+			upload(profiles, profile, "PhysicalSky::FallbackCloudProfile");
+		if (!adjustment)
+			upload(adjustments, adjustment, "PhysicalSky::FallbackCloudAdjustment");
+		logger::info("Cloud profile fallback: top {}, bottom {}", hasTop ? "texture" : "analytic", hasBottom ? "texture" : "analytic");
+	}
 }
 
 CloudWindSettings CloudWindSettings::Interpolate(const CloudWindSettings& from, const CloudWindSettings& to, float weight)
@@ -75,21 +177,29 @@ void PhysicalSky::LoadCloudTextures()
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 
-	auto loadDDS = [&](const wchar_t* path, winrt::com_ptr<ID3D11ShaderResourceView>& srv) {
+	auto loadDDS = [&](const wchar_t* path, winrt::com_ptr<ID3D11ShaderResourceView>& srv, bool required = false) {
 		srv = nullptr;
 		HRESULT hr = DirectX::CreateDDSTextureFromFile(device, context, path, nullptr, srv.put());
-		if (FAILED(hr))
+		if (FAILED(hr) && required)
 			logger::warn("Failed to load DDS texture: {}", std::filesystem::path(path).string());
 	};
 
-	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisCloudShapeNoise.dds", baseShapeNoiseSrv);
-	if (baseShapeNoiseSrv && !IsVolumeTexture(baseShapeNoiseSrv.get())) {
+	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisCloudShapeNoise.dds", importedShapeNoiseSrv, !settings.cloudNoise.procedural);
+	if (importedShapeNoiseSrv && !IsVolumeTexture(importedShapeNoiseSrv.get())) {
 		logger::warn("Ignoring Nubis noise composite because it is not a 3D texture.");
-		baseShapeNoiseSrv = nullptr;
+		importedShapeNoiseSrv = nullptr;
 	}
 
 	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisVerticalProfile.dds", cloudProfileLutSrv);
-	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisVerticalAdjustment.dds", cloudAdjustmentLutSrv);
+	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisVerticalAdjustment.dds", importedAdjustmentLutSrv);
+	if (!NdfManager::IsTextureNdf(cloudProfileLutSrv.get(), 2))
+		cloudProfileLutSrv = nullptr;
+	if (!NdfManager::IsTextureNdf(importedAdjustmentLutSrv.get(), 3))
+		importedAdjustmentLutSrv = nullptr;
+	cloudAdjustmentGenerated = !importedAdjustmentLutSrv;
+	CreateProfileFallbacks(cloudProfileLutSrv, importedAdjustmentLutSrv);
+	baseShapeNoiseSrv = importedShapeNoiseSrv;
+	cloudAdjustmentLutSrv = importedAdjustmentLutSrv;
 }
 
 void PhysicalSky::SetupVolumetricResources()
@@ -100,6 +210,8 @@ void PhysicalSky::SetupVolumetricResources()
 	logger::debug("Setting up volumetric cloud resources...");
 
 	debugCubeFaceSrvs.clear();
+	cloudDebugViews.clear();
+	cloudDebugCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<CloudDebugParameters>());
 	{
 		auto createBounds = [](uint32_t size, const char* name) {
 			D3D11_TEXTURE2D_DESC desc{};
@@ -365,6 +477,7 @@ void PhysicalSky::SetupVolumetricResources()
 	LoadCloudTextures();
 	ndfManager.SetupResources();
 	cirrusMapManager.SetupResources();
+	cloudNoiseGenerator.SetupResources();
 
 	CompileVolumetricShaders();
 }
@@ -383,6 +496,7 @@ void PhysicalSky::CompileVolumetricShaders()
 	};
 
 	std::array shaderInfos = {
+		ShaderInfo{ &csCloudDebug, "CloudDebug.cs.hlsl" },
 		ShaderInfo{ &csCloudHeightBounds, "Volumetrics.cs.hlsl", {}, "buildCloudHeightBounds" },
 		ShaderInfo{ &csCloudHeightBoundsReduce, "Volumetrics.cs.hlsl", {}, "reduceCloudHeightBounds" },
 		ShaderInfo{ &csVolAmbientSH, "Volumetrics.cs.hlsl", {}, "buildCloudAmbientSH" },
@@ -403,6 +517,7 @@ void PhysicalSky::CompileVolumetricShaders()
 	}
 	ndfManager.CompileShaders();
 	cirrusMapManager.CompileShaders();
+	cloudNoiseGenerator.CompileShaders();
 	vsCloudBoundary = nullptr;
 	psCloudBoundary = nullptr;
 	const auto boundaryPath = std::filesystem::path("Data\\Shaders\\PhysicalSky\\CloudBoundary.hlsl");
@@ -1010,3 +1125,125 @@ void PhysicalSky::DrawDebugVolume(ID3D11ShaderResourceView* a_srv, const char* a
 		ImGui::Image(srv, { a_target->desc.Width * a_scale, a_target->desc.Height * a_scale });
 	}
 }
+
+#define I18N_KEY_PREFIX "feature.physical_sky."
+
+void PhysicalSky::DrawDebugCloudTexture(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar)
+{
+	ImGui::PushID(id);
+	if (!ImGui::TreeNode("texture", "%s", label)) {
+		ImGui::PopID();
+		return;
+	}
+	const auto draw = [&]() {
+		if (!srv) {
+			ImGui::TextUnformatted(T(TKEY("debug_texture_unavailable"), "Not loaded or not generated yet."));
+			return;
+		}
+		if (!csCloudDebug || !cloudDebugCb) {
+			ImGui::TextUnformatted(T(TKEY("debug_texture_shader_missing"), "Texture preview shader is unavailable."));
+			return;
+		}
+		D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc;
+		srv->GetDesc(&viewDesc);
+		winrt::com_ptr<ID3D11Resource> resource;
+		srv->GetResource(resource.put());
+		uint32_t width, height, depth = 1, levels, firstMip;
+		const bool volume = viewDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D;
+		if (volume) {
+			D3D11_TEXTURE3D_DESC desc;
+			resource.as<ID3D11Texture3D>()->GetDesc(&desc);
+			firstMip = viewDesc.Texture3D.MostDetailedMip;
+			levels = std::min(viewDesc.Texture3D.MipLevels, desc.MipLevels - firstMip);
+			width = std::max(desc.Width >> firstMip, 1u);
+			height = std::max(desc.Height >> firstMip, 1u);
+			depth = std::max(desc.Depth >> firstMip, 1u);
+		} else if (viewDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D) {
+			D3D11_TEXTURE2D_DESC desc;
+			resource.as<ID3D11Texture2D>()->GetDesc(&desc);
+			firstMip = viewDesc.Texture2D.MostDetailedMip;
+			levels = std::min(viewDesc.Texture2D.MipLevels, desc.MipLevels - firstMip);
+			width = std::max(desc.Width >> firstMip, 1u);
+			height = std::max(desc.Height >> firstMip, 1u);
+		} else {
+			ImGui::TextUnformatted(T(TKEY("debug_texture_unsupported"), "This preview requires a 2D or 3D texture."));
+			return;
+		}
+		auto [it, inserted] = cloudDebugViews.try_emplace(id);
+		auto& view = it->second;
+		if (inserted && scalar)
+			view.channel = 1;
+		view.mip = std::clamp(view.mip, 0, static_cast<int>(levels) - 1);
+		ImGui::SliderInt(T(TKEY("debug_texture_mip"), "Mip level"), &view.mip, 0, static_cast<int>(levels) - 1);
+		width = std::max(width >> view.mip, 1u);
+		height = std::max(height >> view.mip, 1u);
+		depth = std::max(depth >> view.mip, 1u);
+		view.slice = std::clamp(view.slice, 0, static_cast<int>(depth) - 1);
+		if (volume)
+			ImGui::SliderInt(T(TKEY("debug_texture_slice"), "Z slice"), &view.slice, 0, static_cast<int>(depth) - 1);
+		const char* channels[] = { "RGB", "R", "G", "B", "A" };
+		ImGui::Combo(T(TKEY("debug_texture_channel"), "Channel"), &view.channel, channels, IM_ARRAYSIZE(channels));
+		ImGui::DragFloat2(T(TKEY("debug_texture_range"), "Display range"), &view.range.x, 0.01f);
+		if (ImGui::Button(T(TKEY("debug_texture_reset_range"), "Reset display range")))
+			view.range = { 0.f, 1.f };
+		ImGui::Text(T(TKEY("debug_texture_dimensions"), "%u x %u x %u"), width, height, depth);
+		const ImVec2 displaySize{ width * scale, height * scale };
+		if (!ImGui::IsRectVisible(displaySize)) {
+			ImGui::Dummy(displaySize);
+			return;
+		}
+		if (!view.texture || view.texture->desc.Width != width || view.texture->desc.Height != height) {
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = width;
+			desc.Height = height;
+			desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+			desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			view.texture = eastl::make_unique<Texture2D>(desc, "PhysicalSky::CloudDebug");
+			view.texture->CreateSRV({ .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+			view.texture->CreateUAV({ .Format = desc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+		}
+		const float minimum = std::isfinite(view.range.x) ? view.range.x : 0.f;
+		const float maximum = std::isfinite(view.range.y) ? std::max(view.range.y, minimum + 1e-6f) : minimum + 1.f;
+		const CloudDebugParameters data{ static_cast<uint32_t>(view.mip), static_cast<uint32_t>(view.slice),
+			static_cast<uint32_t>(view.channel), volume ? 1u : 0u, { minimum, maximum } };
+		cloudDebugCb->Update(data);
+		auto* context = globals::d3d::context;
+		winrt::com_ptr<ID3D11ComputeShader> oldShader;
+		winrt::com_ptr<ID3D11Buffer> oldCb;
+		winrt::com_ptr<ID3D11UnorderedAccessView> oldUav;
+		ID3D11ShaderResourceView* oldSrvs[2] = {};
+		context->CSGetShader(oldShader.put(), nullptr, nullptr);
+		context->CSGetConstantBuffers(1, 1, oldCb.put());
+		context->CSGetShaderResources(0, 2, oldSrvs);
+		context->CSGetUnorderedAccessViews(0, 1, oldUav.put());
+		ID3D11ShaderResourceView* inputs[2] = { volume ? nullptr : srv, volume ? srv : nullptr };
+		auto* cb = cloudDebugCb->CB();
+		auto* output = view.texture->uav.get();
+		ID3D11UnorderedAccessView* nullUav = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+		context->CSSetConstantBuffers(1, 1, &cb);
+		context->CSSetShaderResources(0, 2, inputs);
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		context->CSSetShader(csCloudDebug.get(), nullptr, 0);
+		context->Dispatch((width + 7u) >> 3, (height + 7u) >> 3, 1);
+		output = nullptr;
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		context->CSSetShaderResources(0, 2, oldSrvs);
+		output = oldUav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &output, nullptr);
+		cb = oldCb.get();
+		context->CSSetConstantBuffers(1, 1, &cb);
+		context->CSSetShader(oldShader.get(), nullptr, 0);
+		for (auto* input : oldSrvs)
+			if (input)
+				input->Release();
+		ImGui::Image(view.texture->srv.get(), displaySize);
+	};
+	draw();
+	ImGui::TreePop();
+	ImGui::PopID();
+}
+
+#undef I18N_KEY_PREFIX
