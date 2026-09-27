@@ -25,41 +25,23 @@ void PostProcessing::DrawSettings()
 {
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
-	static int presetIdx = -1;
 
-	ImGui::BeginGroup();
-	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : T("feature.post_processing.select_a_preset", "Select a preset");
+	ImGui::TextWrapped("%s", T("feature.post_processing.use_presets_tab",
+		"Load Post Processing presets from the Presets page in the left navigation."));
 
-	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
-		presets = LoadPresets();
-
-		for (int i = 0; i < presets.size(); ++i) {
-			bool isSelected = presetIdx == i;
-			if (ImGui::Selectable(presets[i].c_str(), isSelected))
-				presetIdx = i;
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
-		}
-		ImGui::EndCombo();
-	}
-
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
-		if (presetIdx >= 0 && presetIdx < presets.size()) {
-			LoadPresetFrom(presets[presetIdx]);
-		}
-	}
-
-	ImGui::EndGroup();
 	ImGui::BeginGroup();
 	static std::string newPresetName = "";
-	ImGui::InputText("##NewPresetName", &newPresetName);
+	ImGui::SetNextItemWidth(220.0f);
+	ImGui::InputTextWithHint("##NewPresetName", T("feature.post_processing.save_name_hint", "Save as name..."), &newPresetName);
 
 	ImGui::SameLine();
 	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
 		if (!newPresetName.empty())
 			SavePresetTo(newPresetName);
 	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.post_processing.save_tooltip",
+			"Writes a JSON under PostProcessing/. Move it into a unified Presets pack (as cspp.json) to ship it."));
 
 	ImGui::EndGroup();
 
@@ -406,6 +388,21 @@ void PostProcessing::LoadPresetFrom(std::string a_name)
 		i >> a_presets;
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
+		return;
+	}
+
+	ProcessSettings(a_presets);
+}
+
+void PostProcessing::LoadPresetFromFile(const std::filesystem::path& path)
+{
+	json a_presets = {};
+	try {
+		logger::info("Loading preset file: {}", path.string());
+		std::ifstream i{ path };
+		i >> a_presets;
+	} catch (const std::exception& e) {
+		logger::warn("Failed to load preset file: {}. Error: {}", path.string(), e.what());
 		return;
 	}
 

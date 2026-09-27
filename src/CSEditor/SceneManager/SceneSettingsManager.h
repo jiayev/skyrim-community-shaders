@@ -191,29 +191,55 @@ public:
 	/// Every file a preset of this name currently owns, across every scene directory.
 	std::vector<std::filesystem::path> FindPresetFiles(const std::string& modName) const;
 
-	/** @brief Bakes the winning values of every context into a preset, replacing its file set.
-	 *  Tombstoned addresses are omitted; a paused user entry lets the mod's value through.
-	 *  @param version The preset's own MAJOR.MINOR.PATCH release, recorded in its metadata file
-	 *         alongside the time-of-day transition.
+	static constexpr const char* kDefaultPresetVersion = "1.0.0";
+
+	/** @brief Display + artwork inputs for ExportPreset. Artwork sources are absolute paths to copy
+	 *  into SceneSettings/<Name>/; empty source with clear* = drop that field on re-export. */
+	struct PresetExportInfo
+	{
+		std::string name;
+		std::string version = kDefaultPresetVersion;
+		std::string author;
+		std::string description;
+		std::vector<std::string> tags;
+		std::filesystem::path logoSource;
+		std::filesystem::path coverSource;
+		std::vector<std::filesystem::path> screenshotSources;
+		bool clearLogo = false;
+		bool clearCover = false;
+		bool clearScreenshots = false;
+	};
+
+	/** @brief Bakes the winning values of every context into SceneSettings/, replacing that preset's file set.
+	 *  Writes SceneSettings/<Name>.json with a presetMetadata block the Presets browser reads as-is.
+	 *  Optionally copies logo/cover/gallery images into SceneSettings/<Name>/.
 	 *  @return Whether every file was written. */
-	bool ExportPreset(const std::string& modName, const std::string& version);
+	bool ExportPreset(const PresetExportInfo& info);
 
 	/// A preset's identity file at the SceneSettings root, written alongside its overwrites on export.
+	/// Optional display fields use the same keys as unified Presets packs; artwork paths are relative to SceneSettings/.
 	struct PresetMetadata
 	{
 		std::string name;
 		std::string version;
+		std::string author;
+		std::string description;
+		std::vector<std::string> tags;
+		std::string logo;
+		std::string cover;
+		std::vector<std::string> screenshots;
 		std::filesystem::path path;
 		std::optional<float> transitionHours;  // Period transition the preset ships, if any
 	};
-
-	static constexpr const char* kDefaultPresetVersion = "1.0.0";
 
 	/// Whether a preset version is a semantic MAJOR.MINOR.PATCH triple.
 	static bool IsValidPresetVersion(std::string_view version);
 
 	/// Preset identity files found at the SceneSettings root, in filename order.
 	const std::vector<PresetMetadata>& GetPresetMetadata() const { return presetMetadata; }
+
+	/// Re-scan SceneSettings/*.json for presetMetadata blocks without reloading overwrite entries.
+	void RefreshPresetMetadata() { DiscoverPresetMetadata(); }
 
 	static std::filesystem::path GetPresetMetadataPath(const std::string& presetName);
 

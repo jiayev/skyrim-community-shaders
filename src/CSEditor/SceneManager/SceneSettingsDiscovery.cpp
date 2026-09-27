@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <format>
 #include <map>
 #include <numeric>
+#include <optional>
 
 using namespace SceneSettingsInternal;
 using namespace SceneSettingsOverwrites;
@@ -134,22 +136,59 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 	return found;
 }
 
-bool SceneSettingsManager::ExportPreset(const std::string& modName, const std::string& version)
+bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 {
-	if (!IsValidPresetVersion(version)) {
-		logger::error("[SceneSettings] Preset '{}' not exported: version '{}' is not MAJOR.MINOR.PATCH", modName, version);
+	if (!IsValidPresetVersion(info.version)) {
+		logger::error("[SceneSettings] Preset '{}' not exported: version '{}' is not MAJOR.MINOR.PATCH", info.name, info.version);
 		return false;
 	}
 	// Weather and location configs load lazily; baking before they exist would sweep their files and
 	// write nothing back.
 	if (!TryEnsureWeatherDataLoaded() || !TryEnsureLocationDataLoaded()) {
-		logger::error("[SceneSettings] Preset '{}' not exported: weather or location data is not loaded", modName);
+		logger::error("[SceneSettings] Preset '{}' not exported: weather or location data is not loaded", info.name);
 		return false;
 	}
 
-	const auto safeModName = Util::FileHelpers::SanitizeFileName(modName);
+	const auto safeModName = Util::FileHelpers::SanitizeFileName(info.name);
 	if (safeModName.empty() || IsReservedPresetName(safeModName))
 		return false;
+
+	const auto sceneRoot = Util::PathHelpers::GetSceneSettingsPath();
+	const auto assetsDir = sceneRoot / safeModName;
+
+	const auto copyArtwork = [&](const std::filesystem::path& source, const std::filesystem::path& relativeDest)
+		-> std::optional<std::string> {
+		std::error_code ec;
+		if (source.empty() || !std::filesystem::is_regular_file(source, ec))
+			return std::nullopt;
+		const auto dest = sceneRoot / relativeDest;
+		std::filesystem::create_directories(dest.parent_path(), ec);
+		std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing, ec);
+		if (ec) {
+			logger::error("[SceneSettings] Preset '{}' failed to copy artwork '{}' -> '{}': {}",
+				safeModName, source.string(), dest.string(), ec.message());
+			return std::nullopt;
+		}
+		return relativeDest.generic_string();
+	};
+
+	// Capture Presets-browser artwork paths before the file sweep deletes the old metadata.
+	json preservedArtwork = json::object();
+	{
+		std::error_code existsEc;
+		const auto previousPath = GetPresetMetadataPath(safeModName);
+		if (std::filesystem::exists(previousPath, existsEc)) {
+			json previous;
+			if (ReadBoundedSceneJson(previousPath, previous)) {
+				if (const auto it = previous.find(kPresetMetadataKey); it != previous.end() && it->is_object()) {
+					for (const char* key : { kPresetMetadataLogoKey, kPresetMetadataCoverKey, kPresetMetadataScreenshotsKey }) {
+						if (it->contains(key))
+							preservedArtwork[key] = (*it)[key];
+					}
+				}
+			}
+		}
+	}
 
 	/// One output file: the root it must stay inside, the type description its metadata carries, and the
 	/// entries baked into it.
@@ -235,9 +274,57 @@ bool SceneSettingsManager::ExportPreset(const std::string& modName, const std::s
 		}
 	}
 
-	const json metadata{ { kPresetMetadataKey,
-		{ { kPresetMetadataNameKey, safeModName }, { kPresetMetadataVersionKey, version },
-			{ kTimeOfDayTransitionHoursKey, timeOfDayTransitionHours } } } };
+	json presetMeta{
+		{ kPresetMetadataNameKey, safeModName },
+		{ kPresetMetadataVersionKey, info.version },
+		{ kTimeOfDayTransitionHoursKey, timeOfDayTransitionHours }
+	};
+	if (!info.author.empty())
+		presetMeta[kPresetMetadataAuthorKey] = info.author;
+	if (!info.description.empty())
+		presetMeta[kPresetMetadataDescriptionKey] = info.description;
+	if (!info.tags.empty())
+		presetMeta[kPresetMetadataTagsKey] = info.tags;
+
+	// Artwork: newly picked files win; otherwise keep previous paths unless the user cleared them.
+	if (!info.logoSource.empty()) {
+		const auto ext = info.logoSource.extension().string();
+		if (auto rel = copyArtwork(info.logoSource, std::filesystem::path(safeModName) / ("logo" + ext)))
+			presetMeta[kPresetMetadataLogoKey] = *rel;
+	} else if (!info.clearLogo && preservedArtwork.contains(kPresetMetadataLogoKey)) {
+		presetMeta[kPresetMetadataLogoKey] = preservedArtwork[kPresetMetadataLogoKey];
+	}
+
+	if (!info.coverSource.empty()) {
+		const auto ext = info.coverSource.extension().string();
+		if (auto rel = copyArtwork(info.coverSource, std::filesystem::path(safeModName) / ("cover" + ext)))
+			presetMeta[kPresetMetadataCoverKey] = *rel;
+	} else if (!info.clearCover && preservedArtwork.contains(kPresetMetadataCoverKey)) {
+		presetMeta[kPresetMetadataCoverKey] = preservedArtwork[kPresetMetadataCoverKey];
+	}
+
+	if (!info.screenshotSources.empty()) {
+		std::error_code galleryEc;
+		const auto galleryDir = assetsDir / "gallery";
+		std::filesystem::remove_all(galleryDir, galleryEc);
+		json shots = json::array();
+		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
+			const auto& source = info.screenshotSources[i];
+			const auto ext = source.extension().string();
+			const auto rel = std::filesystem::path(safeModName) / "gallery" / std::format("{:02}{}", i + 1, ext);
+			if (auto written = copyArtwork(source, rel))
+				shots.push_back(*written);
+		}
+		if (!shots.empty())
+			presetMeta[kPresetMetadataScreenshotsKey] = std::move(shots);
+	} else if (!info.clearScreenshots && preservedArtwork.contains(kPresetMetadataScreenshotsKey)) {
+		presetMeta[kPresetMetadataScreenshotsKey] = preservedArtwork[kPresetMetadataScreenshotsKey];
+	} else if (info.clearScreenshots) {
+		std::error_code galleryEc;
+		std::filesystem::remove_all(assetsDir / "gallery", galleryEc);
+	}
+
+	const json metadata{ { kPresetMetadataKey, std::move(presetMeta) } };
 	if (!WriteJsonAtomically(GetPresetMetadataPath(safeModName), metadata, kOverwriteJsonIndent, "preset metadata")) {
 		logger::error("[SceneSettings] Preset '{}' failed to write its metadata file", safeModName);
 		wroteAll = false;
@@ -282,6 +369,33 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 			.version = versionIt->get<std::string>(),
 			.path = path,
 			.transitionHours = ReadTimeOfDayTransitionHours(*metadataIt, path.string()) });
+		auto& entry = presetMetadata.back();
+		if (const auto authorIt = metadataIt->find(kPresetMetadataAuthorKey);
+			authorIt != metadataIt->end() && authorIt->is_string())
+			entry.author = authorIt->get<std::string>();
+		if (const auto descIt = metadataIt->find(kPresetMetadataDescriptionKey);
+			descIt != metadataIt->end() && descIt->is_string())
+			entry.description = descIt->get<std::string>();
+		if (const auto tagsIt = metadataIt->find(kPresetMetadataTagsKey);
+			tagsIt != metadataIt->end() && tagsIt->is_array()) {
+			for (const auto& tag : *tagsIt) {
+				if (tag.is_string())
+					entry.tags.push_back(tag.get<std::string>());
+			}
+		}
+		if (const auto logoIt = metadataIt->find(kPresetMetadataLogoKey);
+			logoIt != metadataIt->end() && logoIt->is_string())
+			entry.logo = logoIt->get<std::string>();
+		if (const auto coverIt = metadataIt->find(kPresetMetadataCoverKey);
+			coverIt != metadataIt->end() && coverIt->is_string())
+			entry.cover = coverIt->get<std::string>();
+		if (const auto shotsIt = metadataIt->find(kPresetMetadataScreenshotsKey);
+			shotsIt != metadataIt->end() && shotsIt->is_array()) {
+			for (const auto& shot : *shotsIt) {
+				if (shot.is_string())
+					entry.screenshots.push_back(shot.get<std::string>());
+			}
+		}
 	}
 
 	if (!presetMetadata.empty())

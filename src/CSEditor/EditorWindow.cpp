@@ -1331,17 +1331,20 @@ void EditorWindow::RenderUI()
 		const float scale = Util::GetUIScale();
 		const float clipRight = ImGui::GetWindowDrawList()->GetClipRectMax().x;
 		const float cursorY = ImGui::GetCursorScreenPos().y;
-		const float closeButtonSize = ImGui::GetFrameHeight();
+		const float menuBarContentH = ImGui::GetFrameHeight();
+		// Match other menu-bar icon buttons so the X stays inside the action bar height.
+		const float closeButtonSize = iconButtonDim;
 		const float& itemSpacing = ImGui::GetStyle().ItemSpacing.x;
 		const float sliderWidth = kMenuBarSliderWidth * scale;
 
 		// Measure right-side elements to compute positions right-to-left
-		constexpr float kCloseButtonInset = 3.0f;
-		float rightCursor = clipRight - kCloseButtonInset * scale;
+		const float closeButtonInset = ImGui::GetStyle().FramePadding.x;
+		float rightCursor = clipRight - closeButtonInset;
 
 		// X button
 		rightCursor -= closeButtonSize;
 		const float xButtonX = rightCursor;
+		const float xButtonY = cursorY + (menuBarContentH - closeButtonSize) * 0.5f;
 
 		// Time slider
 		rightCursor -= itemSpacing + sliderWidth;
@@ -1490,10 +1493,12 @@ void EditorWindow::RenderUI()
 			DrawGameHourSlider("##MenuBarSlider", "Time: %.2f");
 		}
 
-		// Close button
-		ImGui::SetCursorScreenPos(ImVec2(xButtonX, cursorY));
+		// Close button — sized/centered like the other action-bar icons so it cannot spill past the bar.
+		ImGui::SetCursorScreenPos(ImVec2(xButtonX, xButtonY));
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kIconButtonPadding, kIconButtonPadding));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))
 			open = false;
+		ImGui::PopStyleVar();
 		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
 
 		ImGui::PopClipRect();  // End bottom-border clip rect

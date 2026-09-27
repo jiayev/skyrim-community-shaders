@@ -16,6 +16,7 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "CSEditor/SceneManager/FeatureOverwritesPanel.h"
@@ -30,14 +31,16 @@ namespace
 {
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
-	constexpr std::array<const char*, 5> CORE_MENU_NAMES = {
-		"Home", "General", "Advanced", "Profiling", "Display"
+	constexpr std::array<const char*, 6> CORE_MENU_NAMES = {
+		"Home", "Presets", "General", "Advanced", "Profiling", "Display"
 	};
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
 	{
 		if (std::strcmp(canonicalName, "Home") == 0)
 			return T("menu.features.home", "Home");
+		if (std::strcmp(canonicalName, "Presets") == 0)
+			return T("menu.features.presets", "Presets");
 		if (std::strcmp(canonicalName, "General") == 0)
 			return T("menu.features.general", "General");
 		if (std::strcmp(canonicalName, "Advanced") == 0)
@@ -361,6 +364,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ T("menu.features.home", "Home"), []() { HomePageRenderer::RenderHomePage(); } },
+		BuiltInMenu{ T("menu.features.presets", "Presets"), []() { PresetsPageRenderer::Render(); } },
 		BuiltInMenu{ T("menu.features.general", "General"), drawGeneralSettings },
 		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings },
 		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } }

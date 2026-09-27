@@ -35,6 +35,13 @@ namespace SceneSettingsInternal
 	constexpr const char* kPresetMetadataKey = "presetMetadata";
 	constexpr const char* kPresetMetadataNameKey = "name";
 	constexpr const char* kPresetMetadataVersionKey = "version";
+	/// Optional Presets-browser fields (same keys unified packs use; paths relative to SceneSettings/).
+	constexpr const char* kPresetMetadataAuthorKey = "author";
+	constexpr const char* kPresetMetadataDescriptionKey = "description";
+	constexpr const char* kPresetMetadataTagsKey = "tags";
+	constexpr const char* kPresetMetadataLogoKey = "logo";
+	constexpr const char* kPresetMetadataCoverKey = "cover";
+	constexpr const char* kPresetMetadataScreenshotsKey = "screenshots";
 	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;

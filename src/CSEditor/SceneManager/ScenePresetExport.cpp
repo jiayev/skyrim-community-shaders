@@ -1,10 +1,17 @@
 #include "ScenePresetExport.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <filesystem>
 #include <format>
 #include <string>
 #include <vector>
+
+#include <Windows.h>
+#include <commdlg.h>
+
+#pragma comment(lib, "comdlg32.lib")
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -19,18 +26,18 @@
 namespace
 {
 	using SceneContextId = SceneSettingsManager::SceneContextId;
+	using PresetExportInfo = SceneSettingsManager::PresetExportInfo;
 
 	constexpr const char* kExportPopupId = "##ScenePresetExport";
 
 	/// The list scrolls rather than growing past the screen, like the copy preview does.
-	constexpr float kModListHeight = 160.0f;
-	constexpr float kModalWidth = 480.0f;
+	constexpr float kModListHeight = 120.0f;
+	constexpr float kModalWidth = 560.0f;
+	constexpr float kDescriptionLines = 3.0f;
 
 	/// Files a destructive confirmation names before it stops listing and counts the rest.
 	constexpr size_t kMaxListedFiles = 8;
 
-	/// GetOverwriteModNames() walks every entry in every scene context, so the list is cached like the
-	/// copy source/destination lists next door until the entries it counts change.
 	SceneSettingsManager::RevisionCache<std::vector<std::string>> modListCache;
 
 	const std::vector<std::string>& GetCachedModNames(SceneSettingsManager* manager)
@@ -41,17 +48,27 @@ namespace
 
 	std::string presetName;
 	std::string presetVersion;
+	std::string presetAuthor;
+	std::string presetDescription;
+	std::string presetTags;
+	std::filesystem::path logoSource;
+	std::filesystem::path coverSource;
+	std::vector<std::filesystem::path> screenshotSources;
+	bool clearLogo = false;
+	bool clearCover = false;
+	bool clearScreenshots = false;
+	/// Existing relative paths from a prior export of this name (shown when no new pick).
+	std::string existingLogo;
+	std::string existingCover;
+	std::vector<std::string> existingScreenshots;
 	std::vector<std::filesystem::path> collidingFiles;
 
-	/// The page a pending export belongs to, so only that page's toolbar draws it. Export itself is
-	/// global; this only decides which toolbar is responsible for the draw.
 	SceneContextId exportContext;
 	bool dialogActive = false;
 	bool pendingOpen = false;
 	bool exportRequested = false;
 	Util::ConfirmationPopup exportConfirmation;
 
-	/// Builds the confirmation text for a name that already owns files.
 	std::string DescribeCollision(std::string name, const std::vector<std::filesystem::path>& files)
 	{
 		std::string listed;
@@ -71,8 +88,6 @@ namespace
 			std::make_format_args(name, count, listed));
 	}
 
-	/// Reports the outcome the same way the copy flow does, through the editor's overlay toast.
-	/// Takes the name by value: std::make_format_args needs a non-const lvalue to bind.
 	void ReportExportResult(std::string name, bool exported)
 	{
 		auto message = exported ?
@@ -83,6 +98,179 @@ namespace
 						   std::make_format_args(name));
 		EditorWindow::GetSingleton()->ShowNotification(
 			message, exported ? Util::Colors::GetSuccess() : Util::Colors::GetError());
+	}
+
+	void ResetFormFields()
+	{
+		presetName.clear();
+		presetVersion = SceneSettingsManager::kDefaultPresetVersion;
+		presetAuthor.clear();
+		presetDescription.clear();
+		presetTags.clear();
+		logoSource.clear();
+		coverSource.clear();
+		screenshotSources.clear();
+		clearLogo = false;
+		clearCover = false;
+		clearScreenshots = false;
+		existingLogo.clear();
+		existingCover.clear();
+		existingScreenshots.clear();
+		collidingFiles.clear();
+	}
+
+	void PrefillFromExisting(const SceneSettingsManager::PresetMetadata& meta)
+	{
+		if (presetAuthor.empty())
+			presetAuthor = meta.author;
+		if (presetDescription.empty())
+			presetDescription = meta.description;
+		if (presetTags.empty() && !meta.tags.empty()) {
+			presetTags.clear();
+			for (size_t i = 0; i < meta.tags.size(); ++i) {
+				if (i > 0)
+					presetTags += ", ";
+				presetTags += meta.tags[i];
+			}
+		}
+		if (!meta.version.empty())
+			presetVersion = meta.version;
+		existingLogo = meta.logo;
+		existingCover = meta.cover;
+		existingScreenshots = meta.screenshots;
+		clearLogo = false;
+		clearCover = false;
+		clearScreenshots = false;
+		logoSource.clear();
+		coverSource.clear();
+		screenshotSources.clear();
+	}
+
+	std::vector<std::string> ParseTags(const std::string& text)
+	{
+		std::vector<std::string> tags;
+		std::string current;
+		const auto flush = [&] {
+			while (!current.empty() && std::isspace(static_cast<unsigned char>(current.front())))
+				current.erase(current.begin());
+			while (!current.empty() && std::isspace(static_cast<unsigned char>(current.back())))
+				current.pop_back();
+			if (!current.empty())
+				tags.push_back(current);
+			current.clear();
+		};
+		for (char ch : text) {
+			if (ch == ',' || ch == ';')
+				flush();
+			else
+				current.push_back(ch);
+		}
+		flush();
+		return tags;
+	}
+
+	std::string DisplayPath(const std::filesystem::path& path)
+	{
+		if (path.empty())
+			return {};
+		return path.filename().string();
+	}
+
+	bool BrowseImageFiles(bool allowMultiple, std::vector<std::filesystem::path>& outPaths)
+	{
+		outPaths.clear();
+		constexpr DWORD kBufferChars = 32768;
+		std::wstring buffer(kBufferChars, L'\0');
+
+		OPENFILENAMEW ofn{};
+		ofn.lStructSize = sizeof(ofn);
+		ofn.hwndOwner = GetActiveWindow();
+		ofn.lpstrFilter = L"Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds\0"
+						  L"All Files (*.*)\0*.*\0";
+		ofn.lpstrFile = buffer.data();
+		ofn.nMaxFile = kBufferChars;
+		ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
+		if (allowMultiple)
+			ofn.Flags |= OFN_ALLOWMULTISELECT;
+
+		if (!GetOpenFileNameW(&ofn))
+			return false;
+
+		const wchar_t* ptr = buffer.c_str();
+		std::filesystem::path directory = ptr;
+		ptr += directory.native().size() + 1;
+		if (!*ptr) {
+			// Single selection: buffer is the full path.
+			outPaths.push_back(directory);
+			return true;
+		}
+		while (*ptr) {
+			outPaths.push_back(directory / ptr);
+			ptr += std::wcslen(ptr) + 1;
+		}
+		return !outPaths.empty();
+	}
+
+	void DrawArtworkRow(const char* label, bool multi, std::filesystem::path* singleSource, bool& cleared,
+		const std::string& existingRel)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		ImGui::TextUnformatted(label);
+
+		std::string status;
+		if (multi) {
+			if (!screenshotSources.empty())
+				status = std::format("{} file(s) selected", screenshotSources.size());
+			else if (!cleared && !existingScreenshots.empty())
+				status = std::format("{} existing", existingScreenshots.size());
+			else
+				status = T(TKEY("scene_export_artwork_none"), "None");
+		} else if (singleSource && !singleSource->empty()) {
+			status = DisplayPath(*singleSource);
+		} else if (!cleared && !existingRel.empty()) {
+			status = existingRel;
+		} else {
+			status = T(TKEY("scene_export_artwork_none"), "None");
+		}
+
+		ImGui::TextDisabled("%s", status.c_str());
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		if (ImGui::SmallButton(std::format("{}##Browse{}", T(TKEY("scene_export_browse"), "Browse"), label).c_str())) {
+			std::vector<std::filesystem::path> picked;
+			if (BrowseImageFiles(multi, picked)) {
+				cleared = false;
+				if (multi) {
+					screenshotSources = std::move(picked);
+				} else if (singleSource && !picked.empty()) {
+					*singleSource = std::move(picked.front());
+				}
+			}
+		}
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		if (ImGui::SmallButton(std::format("{}##Clear{}", T(TKEY("scene_export_clear"), "Clear"), label).c_str())) {
+			if (multi)
+				screenshotSources.clear();
+			else if (singleSource)
+				singleSource->clear();
+			cleared = true;
+		}
+	}
+
+	PresetExportInfo BuildExportInfo(const std::string& sanitizedName)
+	{
+		PresetExportInfo info;
+		info.name = sanitizedName;
+		info.version = presetVersion;
+		info.author = presetAuthor;
+		info.description = presetDescription;
+		info.tags = ParseTags(presetTags);
+		info.logoSource = logoSource;
+		info.coverSource = coverSource;
+		info.screenshotSources = screenshotSources;
+		info.clearLogo = clearLogo;
+		info.clearCover = clearCover;
+		info.clearScreenshots = clearScreenshots;
+		return info;
 	}
 }
 
@@ -97,10 +285,7 @@ void ScenePresetExport::Open(const SceneContextId& context)
 	exportContext = context;
 	dialogActive = true;
 	pendingOpen = true;
-	// A name left over from a cancelled session would arm the destructive path without being retyped.
-	presetName.clear();
-	presetVersion = SceneSettingsManager::kDefaultPresetVersion;
-	collidingFiles.clear();
+	ResetFormFields();
 }
 
 void ScenePresetExport::Draw(const SceneContextId& context)
@@ -119,8 +304,9 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		pendingOpen = false;
 	}
 
-	// Pinned every frame: the wrapped text and -1 name field size off the window, so auto-fit would shrink it.
-	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Always);
+	const float scale = Util::GetUIScale();
+	const ImGuiStyle& style = ImGui::GetStyle();
+	ImGui::SetNextWindowSize(ImVec2(kModalWidth * scale, 0.0f), ImGuiCond_Always);
 	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
 		ImGui::TextWrapped(
 			"%s", T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
@@ -132,7 +318,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		} else {
 			ImGui::TextUnformatted(T(TKEY("scene_export_mod_list"), "Mods supplying values, last one wins:"));
 			if (ImGui::BeginChild("##ScenePresetExportMods",
-					ImVec2(0.0f, kModListHeight * Util::GetUIScale()), ImGuiChildFlags_Borders)) {
+					ImVec2(0.0f, kModListHeight * scale), ImGuiChildFlags_Borders)) {
 				for (size_t index = 0; index < modNames.size(); ++index)
 					ImGui::Text("%zu. %s", index + 1, modNames[index].c_str());
 			}
@@ -143,11 +329,41 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportName", &presetName);
+		if (ImGui::IsItemDeactivatedAfterEdit()) {
+			const auto stem = Util::FileHelpers::SanitizeFileName(presetName);
+			for (const auto& meta : manager->GetPresetMetadata()) {
+				if (meta.name != stem)
+					continue;
+				PrefillFromExisting(meta);
+				break;
+			}
+		}
+
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportVersion", &presetVersion);
 
-		// Non-const: std::make_format_args below needs a non-const lvalue to bind.
+		ImGui::TextUnformatted(T(TKEY("scene_export_author"), "Author"));
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputText("##ScenePresetExportAuthor", &presetAuthor);
+
+		ImGui::TextUnformatted(T(TKEY("scene_export_description"), "Description"));
+		ImGui::InputTextMultiline("##ScenePresetExportDescription", &presetDescription,
+			ImVec2(-1.0f, ImGui::GetTextLineHeight() * kDescriptionLines + style.FramePadding.y * 2.0f));
+
+		ImGui::TextUnformatted(T(TKEY("scene_export_tags"), "Tags (comma-separated)"));
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputText("##ScenePresetExportTags", &presetTags);
+		Util::AddTooltip(T(TKEY("scene_export_tags_tooltip"), "Example: interior, weather, cinematic"));
+
+		ImGui::Separator();
+		ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
+		ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
+			"Images are copied into SceneSettings/<Name>/ for the Presets browser."));
+		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &logoSource, clearLogo, existingLogo);
+		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &coverSource, clearCover, existingCover);
+		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, clearScreenshots, {});
+
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
 		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);
 		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(presetVersion);
@@ -176,7 +392,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 			Util::AddTooltip(T(TKEY("scene_export_invalid_version"), "Use a MAJOR.MINOR.PATCH version, such as 1.0.0."),
 				Util::kTooltipWhenDisabled);
 
-		ImGui::SameLine();
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		if (ImGui::Button(T(TKEY("cancel"), "Cancel")))
 			ImGui::CloseCurrentPopup();
 
@@ -185,7 +401,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 
 	if (exportConfirmation.Draw()) {
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
-		ReportExportResult(sanitizedName, manager->ExportPreset(sanitizedName, presetVersion));
+		ReportExportResult(sanitizedName, manager->ExportPreset(BuildExportInfo(sanitizedName)));
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
 		exportRequested = false;
