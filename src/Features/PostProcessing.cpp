@@ -25,10 +25,32 @@ void PostProcessing::DrawSettings()
 {
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
+	static int presetIdx = -1;
 
-	ImGui::TextWrapped("%s", T("feature.post_processing.use_presets_tab",
-		"Load Post Processing presets from the Presets page in the left navigation."));
+	ImGui::BeginGroup();
+	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : T("feature.post_processing.select_a_preset", "Select a preset");
 
+	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
+		presets = LoadPresets();
+
+		for (int i = 0; i < presets.size(); ++i) {
+			bool isSelected = presetIdx == i;
+			if (ImGui::Selectable(presets[i].c_str(), isSelected))
+				presetIdx = i;
+			if (isSelected)
+				ImGui::SetItemDefaultFocus();
+		}
+		ImGui::EndCombo();
+	}
+
+	ImGui::SameLine();
+	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
+		if (presetIdx >= 0 && presetIdx < presets.size()) {
+			LoadPresetFrom(presets[presetIdx]);
+		}
+	}
+
+	ImGui::EndGroup();
 	ImGui::BeginGroup();
 	static std::string newPresetName = "";
 	ImGui::SetNextItemWidth(220.0f);
