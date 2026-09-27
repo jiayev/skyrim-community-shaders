@@ -56,7 +56,7 @@ namespace DCLF
 		void NoteMismatch(std::string a_message);
 		static void Snapshot(ConstantSnapshot& a_snapshot, ID3D11Resource* a_resource);
 		bool CompareBlock(const RE::BSGeometry* a_geometry, const char* a_what, const ConstantBlock& a_expected, const StageLayout& a_layout,
-			const std::uint8_t* a_nativeTable, std::size_t a_nativeTableSize, const ConstantSnapshot& a_native, ID3D11Resource* a_boundBuffer,
+			const void* a_nativeTable, std::size_t a_nativeTableSize, const ConstantSnapshot& a_native, ID3D11Resource* a_boundBuffer,
 			std::uint32_t a_firstVariable, std::uint64_t a_variables, std::uint64_t a_tolerant);
 		bool CompareMaterial(const RE::BSGeometry* a_geometry, std::uint32_t a_materialIndex);
 		bool CompareGeometry(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags);

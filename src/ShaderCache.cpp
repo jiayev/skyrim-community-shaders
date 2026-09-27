@@ -1277,13 +1277,14 @@ namespace SIE
 			return static_cast<uint8_t>(offset);
 		}
 
-		template <size_t MaxOffsetsSize>
+		template <typename TableByte, size_t MaxOffsetsSize>
 		static void ReflectConstantBuffers(ID3D11ShaderReflection& reflector,
 			std::array<size_t, 3>& bufferSizes,
-			std::array<uint8_t, MaxOffsetsSize>& constantOffsets,
+			std::array<TableByte, MaxOffsetsSize>& constantOffsets,
 			uint64_t& vertexDesc,
 			ShaderClass shaderClass, uint32_t descriptor, const RE::BSShader& shader)
 		{
+			static_assert(std::is_same_v<TableByte, std::int8_t> || std::is_same_v<TableByte, std::uint8_t>);
 			D3D11_SHADER_DESC desc;
 			if (FAILED(reflector.GetDesc(&desc))) {
 				logger::error("Failed to get shader descriptor for {} shader {}::{:X}",

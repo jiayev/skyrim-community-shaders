@@ -257,9 +257,9 @@ namespace DCLF
 	template <class T>
 	struct KeptView
 	{
-		// Shared with the array: it copies before it writes while a view holds them. The main commit patches its records'
-		// frame textures here, which the array then keeps (PersistentBindings).
-		std::shared_ptr<std::vector<T>> elements;
+		// Shared with the array: it copies before it writes while a view holds them. Consumers must not
+		// mutate the view; current-frame bindings belong in separate patch storage.
+		std::shared_ptr<const std::vector<T>> elements;
 		ChangeJournal::Snapshot changes;
 
 		std::size_t Count() const { return elements ? elements->size() : 0; }
@@ -306,7 +306,7 @@ namespace DCLF
 						return *elements;
 					}
 					// Reuse storage only after every snapshot has released it. Copy the whole current
-					// array: some commit-time patches are deliberately outside the change journal.
+					// array so a new build cannot mutate an outstanding immutable view.
 					std::shared_ptr<std::vector<T>> next;
 					for (auto it = spare.begin(); it != spare.end(); ++it) {
 						if (it->use_count() == 1) {
@@ -348,7 +348,7 @@ namespace DCLF
 		bool Changed() const { return journal.Changed(); }
 		KeptView<T> View() const { return { elements, journal.Take() }; }
 		/** @brief The elements themselves, for a view that is not journalled (version 0: sent whole). */
-		std::shared_ptr<std::vector<T>> Shared() const { return elements; }
+		std::shared_ptr<const std::vector<T>> Shared() const { return elements; }
 
 	private:
 		std::shared_ptr<std::vector<T>> elements = std::make_shared<std::vector<T>>();

@@ -579,6 +579,7 @@ namespace DCLF
 				return false;
 			};
 			return !(differs("objects", a.objects, b.objects) || differs("object geometry", a.objectGeometry, b.objectGeometry) ||
+				     differs("object identity", a.objectIdentity, b.objectIdentity) || differs("object group", a.objectGroup, b.objectGroup) ||
 					 differs("draws", a.draws, b.draws) || differs("skin partitions", a.skinPartitions, b.skinPartitions) || differs("bones", a.bones, b.bones) || differs("previous bones", a.previousBones, b.previousBones) ||
 					 differs("bone offsets", a.boneOffset, b.boneOffset) || differs("bone rows", a.boneRows, b.boneRows) ||
 					 differs("shadow techniques", a.shadowTechnique, b.shadowTechnique) || differs("shadow rejects", a.shadowReject, b.shadowReject) ||
@@ -606,6 +607,8 @@ namespace DCLF
 			return;
 		objects.resize(a_count, FreeObjectRecord());
 		objectGeometry.resize(a_count, nullptr);
+		objectIdentity.resize(a_count, 0);
+		objectGroup.resize(a_count, 0);
 		shading.resize(a_count, ObjectShading{});
 		emissiveMult.resize(a_count, 1.0f);
 		lights.resize(a_count, ObjectLights{});
@@ -645,6 +648,8 @@ namespace DCLF
 		if (columns.extraOffset != kNoExtraRows && (std::size_t(columns.extraOffset) + kExtraRows) * 4 <= extraRows.size())
 			std::memcpy(columns.extras.data(), &extraRows[std::size_t(columns.extraOffset) * 4], sizeof(columns.extras));
 		columns.geometry = objectGeometry[a_slot];
+		columns.identity = objectIdentity[a_slot];
+		columns.groupIdentity = objectGroup[a_slot];
 		columns.shadowDiffuse = shadowDiffuse[a_slot];
 		columns.shadowMaterial = shadowMaterial[a_slot];
 		columns.emissiveMult = emissiveMult[a_slot];
@@ -694,8 +699,12 @@ namespace DCLF
 			a_draw.pipelineIndex = 0;
 			return a_draw;
 		};
-		if (x.geometryIndex != y.geometryIndex || !same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.faceStream != b.faceStream || a.geometry != b.geometry)
+		if (x.geometryIndex != y.geometryIndex || !same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.faceStream != b.faceStream || a.geometry != b.geometry ||
+			a.identity != b.identity)
 			causes |= kChangeGeometry;
+		// A recycled slot is a new object even if its numeric columns happen to match.
+		if (a.identity != b.identity || a.groupIdentity != b.groupIdentity)
+			causes |= kChangeAll;
 		if (a.resident != b.resident)
 			causes |= kChangeMembership;
 		return causes;
@@ -745,6 +754,8 @@ namespace DCLF
 		FreeBones(a_slot);
 		objects[a_slot] = FreeObjectRecord();
 		objectGeometry[a_slot] = nullptr;
+		objectIdentity[a_slot] = 0;
+		objectGroup[a_slot] = 0;
 		shading[a_slot] = ObjectShading{};
 		emissiveMult[a_slot] = 1.0f;
 		lights[a_slot] = ObjectLights{};
@@ -771,6 +782,8 @@ namespace DCLF
 		if (!a_keepObjects) {
 			objects.clear();
 			objectGeometry.clear();
+			objectIdentity.clear();
+			objectGroup.clear();
 			shading.clear();
 			emissiveMult.clear();
 			lights.clear();
@@ -832,6 +845,8 @@ namespace DCLF
 		transformWatchFrame.clear();
 		objects.clear();
 		objectGeometry.clear();
+		objectIdentity.clear();
+		objectGroup.clear();
 		geometries.clear();
 		geometryLog.Invalidate();
 		pipelines.clear();
@@ -899,6 +914,7 @@ namespace DCLF
 	{
 		AbandonSceneJob();
 		tracked.clear();
+		sceneIdentity.Reset();
 		categoryNodes.clear();
 		ResetSlotTables();
 		InvalidateObjectIndices();
@@ -1191,10 +1207,21 @@ namespace DCLF
 	{
 		const auto [it, inserted] = tracked.try_emplace(a_geometry);
 		auto& entry = it->second;
+		const auto* owner = a_geometry->GetUserData();
+		const auto* actorOwner = owner && owner->GetFormType() == RE::FormType::ActorCharacter ? owner : nullptr;
+		const auto identity = sceneIdentity.Attach(a_geometry, actorOwner);
+		if (identity.replaced) {
+			ReleaseObjectSlot(entry);
+			entry.actorOwnedResolved = false;
+			entry.faceShapeResolved = false;
+		}
 		if (inserted) {
 			entry.trackedFrame = frame;
 			entry.trackedBy = addSource;
 		}
+		entry.identity = identity.member;
+		entry.groupIdentity = identity.group;
+		entry.actorOwner = actorOwner;
 		entry.geometry.reset(a_geometry);
 		entry.categoryNode = a_categoryNode;
 		entry.parentReason = a_parentReason;
@@ -1315,7 +1342,11 @@ namespace DCLF
 			// the new cell. The hole detector caught exactly this at a `coc`: six claimed objects went
 			// undrawn on the first frame after the transition. Publishing an empty set hands everything
 			// back to the native loop until DCLF has drawn it again and re-earned the claim.
-			PassCapture::Get().PublishClaims(std::make_shared<const PassCapture::ClaimSet>());
+			auto& capture = PassCapture::Get();
+			capture.ClearFrameClaims();
+			capture.PublishClaims(std::make_shared<const PassCapture::ClaimSet>());
+			for (std::uint32_t mode = 0; mode < PassCapture::kShadowModes; ++mode)
+				capture.PublishShadowClaims(mode, nullptr);
 			SceneTracker::FreeEvents(tracker.Drain());
 			DrainFadeEvents(fadeChanged);
 			fadeChanged.clear();
@@ -1340,6 +1371,7 @@ namespace DCLF
 			for (auto& [geometry, entry] : tracked)
 				ReleaseObjectSlot(entry);
 			tracked.clear();
+			sceneIdentity.Reset();
 			categoryNodes.clear();
 			validationCursor = 0;
 			fullEvaluation = true;
@@ -2571,12 +2603,15 @@ namespace DCLF
 		struct PartTimer
 		{
 			std::array<double, static_cast<std::size_t>(BuildPart::Count)>* parts = nullptr;
+			std::array<double, static_cast<std::size_t>(BuildPart::Count)>* phaseParts = nullptr;
 			std::chrono::steady_clock::time_point last;
 
-			explicit PartTimer(std::array<double, static_cast<std::size_t>(BuildPart::Count)>& a_parts)
+			explicit PartTimer(std::array<double, static_cast<std::size_t>(BuildPart::Count)>& a_parts,
+				std::array<double, static_cast<std::size_t>(BuildPart::Count)>* a_phaseParts = nullptr)
 			{
 				if (SceneStore::ProfileEnabled()) {
 					parts = &a_parts;
+					phaseParts = a_phaseParts;
 					last = std::chrono::steady_clock::now();
 				}
 			}
@@ -2586,7 +2621,10 @@ namespace DCLF
 				if (!parts)
 					return;
 				const auto now = std::chrono::steady_clock::now();
-				(*parts)[static_cast<std::size_t>(a_part)] += std::chrono::duration<double, std::milli>(now - last).count();
+				const double elapsed = std::chrono::duration<double, std::milli>(now - last).count();
+				(*parts)[static_cast<std::size_t>(a_part)] += elapsed;
+				if (phaseParts)
+					(*phaseParts)[static_cast<std::size_t>(a_part)] += elapsed;
 				last = now;
 			}
 	};
@@ -3000,6 +3038,7 @@ namespace DCLF
 
 	void SceneStore::BeginWalk(bool a_keepIndices)
 	{
+		capturedFaceHeads.clear();
 		const bool keepObjects = ObjectSlotsEnabled() && !denseWalk;
 		tables.ClearFrame(keepObjects);
 		if (!a_keepIndices)
@@ -3443,12 +3482,27 @@ namespace DCLF
 		}
 		tables.sunEntry[objectId] = SunEntryOf(*trackedEntry, *geometry);
 		tables.faceStream[objectId] = face.positions ? static_cast<std::uint32_t>(tables.faceStreams.size()) : kNoFaceStream;
-		if (face.positions)
-			tables.faceStreams.push_back({ objectId, faceRegion, face.vertexCount, face.generation, face.positions });
+		if (face.positions) {
+			std::shared_ptr<const FaceSnapshots::HeadView> headView;
+			if (auto* head = geometry->parent ? netimmerse_cast<RE::BSFaceGenNiNode*>(geometry->parent) : nullptr) {
+				auto [headEntry, inserted] = capturedFaceHeads.try_emplace(head);
+				if (inserted) {
+					auto snapshot = FaceSnapshots::Get().HeadSnapshot(*head);
+					if (snapshot.recordId && snapshot.generation && snapshot.owner)
+						headEntry->second = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
+				}
+				headView = headEntry->second;
+			}
+			if (headView && (headView->generation != face.generation || headView->owner != face.owner))
+				headView.reset();
+			tables.faceStreams.push_back({ objectId, faceRegion, face.vertexCount, face.generation, face.positions, face.owner, std::move(headView) });
+		}
 		tables.shadowDiffuse[objectId] = shadowDiffuse;
 		tables.shadowMaterial[objectId] = shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
 		tables.objectGeometry[objectId] = geometry;
+		tables.objectIdentity[objectId] = trackedEntry->identity;
+		tables.objectGroup[objectId] = trackedEntry->groupIdentity;
 		const std::uint32_t keptPipeline = tables.draws[objectId].pipelineIndex;
 		if (keepHalf) {
 			// The scene bits the accumulate phase keeps are this write's; everything else is the patch's.
@@ -3711,7 +3765,8 @@ namespace DCLF
 		if (!a_renderThread) {
 			// The worker may neither resolve nor touch: anything that would need either is a miss.
 			const auto& known = newGeometry ? GeometryRecord{} : tables.geometries[geometryIt->second];
-			const bool changed = !newGeometry && ((resolveBuffers && known.vertexAddress == 0) ||
+			const bool changed = !newGeometry && ((resolveBuffers && (known.vertexAddress == 0 ||
+				!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
 													 known.vertexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer) ||
 													 known.indexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
 			if (newGeometry || changed || needsTouch) {
@@ -3724,6 +3779,7 @@ namespace DCLF
 		// evicted (nothing touched them for kEvictFrames) is resolved again the same way.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
+		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
 		                               tables.geometries[geometryIt->second].vertexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer) ||
 		                               tables.geometries[geometryIt->second].indexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer) ||
 		                               (needsTouch &&
@@ -3740,11 +3796,16 @@ namespace DCLF
 			// out from under the tables.
 			std::optional<GpuResources::Buffer> vertexBuffer;
 			std::optional<GpuResources::Buffer> indexBuffer;
+			std::optional<GpuResources::LeasedBuffer> vertexLease, indexLease;
 			if (resolveBuffers) {
 				// The render graph reads the game's buffers in place; they must never move (GpuResources).
 				vertexBuffer = gpu.Resolve(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
 				indexBuffer = gpu.Resolve(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
-				if (!vertexBuffer || !indexBuffer) {
+				if (vertexBuffer && indexBuffer) {
+					vertexLease = gpu.Lease(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
+					indexLease = gpu.Lease(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
+				}
+				if (!vertexLease || !indexLease) {
 					// Nothing was inserted, so the next object sharing this TriShape retries, exactly
 					// as it did when every object resolved for itself. A stale slot is freed: its
 					// record no longer describes anything.
@@ -3779,6 +3840,8 @@ namespace DCLF
 			if (staleGeometry)
 				refreshedGeometry.push_back(slot);
 			tables.geometries[slot] = record;
+			tables.geometryImports[slot] = vertexLease && indexLease ? Tables::GeometryImport{ vertexLease->generation, indexLease->generation,
+				vertexLease->owner, indexLease->owner } : Tables::GeometryImport{};
 			tables.NoteGeometry(slot);
 			tables.geometrySlotKey[slot] = a_triShape;
 			if (!staleGeometry)
@@ -3797,7 +3860,7 @@ namespace DCLF
 		// Only columns the accumulator patch below can change. It never writes placement, geometry,
 		// bones, wetness or shadow inputs. Extras contents are unchanged unless their offset changes
 		// (allocate/free), which already invalidates them. Skin-mask changes are noted before the patch.
-		struct AccumulateSnapshot
+	struct AccumulateSnapshot
 		{
 			std::uint32_t flags, material, pipeline, drawPipeline, extras;
 			ObjectShading shading;
@@ -3834,7 +3897,51 @@ namespace DCLF
 					causes |= kChangeMembership;
 				a_tables.NoteChange(a_slot, causes);
 			}
-		};
+	};
+	}
+
+	void SceneStore::ApplyAccumulatePatch(const AccumulatePatch& a_patch)
+	{
+		const std::uint32_t objectId = a_patch.object;
+		const AccumulateSnapshot before(tables, objectId);
+		auto& object = tables.objects[objectId];
+		if (!a_patch.resident) {
+			accumulatePatched.push_back(objectId);
+			if (patchedFrame.size() < tables.objects.size())
+				patchedFrame.resize(tables.objects.size(), 0);
+			patchedFrame[objectId] = frame;
+		}
+		object.materialIndex = a_patch.material;
+		object.pipelineIndex = a_patch.pipeline;
+		object.flags = a_patch.flags;
+		tables.fadeDistance[objectId] = a_patch.fadeDistance;
+		tables.SetWatch(objectId, Tables::kWatchExtras, a_patch.projectedUV || a_patch.landBlend);
+		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
+		tables.shading[objectId] = a_patch.shading;
+		tables.emissiveMult[objectId] = a_patch.emissiveMult;
+		tables.lights[objectId] = a_patch.lights;
+		tables.treeAnim[objectId] = a_patch.tree;
+		if (a_patch.projectedUV || a_patch.landBlend) {
+			stats.projectedUV += a_patch.projectedUV ? 1 : 0;
+			stats.landBlend += a_patch.landBlend ? 1 : 0;
+			if (tables.extraOffset[objectId] == kNoExtraRows)
+				tables.extraOffset[objectId] = tables.AllocateExtras();
+		} else {
+			tables.FreeExtras(objectId);
+		}
+		// This object reached the patch only after the IsResidentSlot fast path
+		// rejected it, so resident means a new membership. Include that column
+		// in the same before/after journal as the other value-only writes.
+		if (a_patch.resident)
+			tables.residentSlot[objectId] = 1;
+		before.NoteWrite(tables, objectId);
+		stats.nativeVisible += a_patch.nativeVisible ? 1 : 0;
+		stats.nativeShadowMasked += a_patch.nativeShadowMasked ? 1 : 0;
+		stats.derivedDescriptors += a_patch.derivedDescriptor ? 1 : 0;
+		if (a_patch.decalKey) {
+			++stats.decals[(static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1) & 1];
+			decalOrder.push_back({ a_patch.decalKey, objectId });
+		}
 	}
 
 	/**
@@ -3853,7 +3960,7 @@ namespace DCLF
 			CompareCapturedPasses(false);
 			return;
 		}
-		PartTimer timer(stats.partMs);
+		PartTimer timer(stats.partMs, &stats.accumulatePartMs);
 		std::uint32_t fadingThisFrame = 0;
 		TracyCZoneN(captureZone, "CS.DCLF.Accumulate.Capture", true);
 		// The pass table is filled from the capture, which is the source that keeps working once passes
@@ -4279,70 +4386,49 @@ namespace DCLF
 			// A resident pass is patched once and kept, unless the record needs this frame's extras rows.
 			const bool landBlendRecord = descriptors.technique == 8 || descriptors.technique == 19;
 			const bool resident = accumulated && accumulated->resident && !descriptors.projectedUV && !landBlendRecord && residentJoining.contains(geometry);
-			// The patch is kept until a phase does not renew it (LapseAccumulated): written, and noted, where it differs.
-			const AccumulateSnapshot columnsBefore(tables, objectId);
-			if (!resident) {
-				accumulatePatched.push_back(objectId);
-				if (patchedFrame.size() < tables.objects.size())
-					patchedFrame.resize(tables.objects.size(), 0);
-				patchedFrame[objectId] = frame;
-			}
-			object.materialIndex = materialSlot;
-			object.pipelineIndex = pipelineSlot;
-			object.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated ? kObjectNativeVisible : 0u) |
-			               (accumulated && accumulated->sunTest ? kObjectSunTest : 0u) | (resident && accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) |
-			               (resident && accumulated->heightTest ? kObjectHeightTest : 0u);
-			tables.fadeDistance[objectId] = resident ? accumulated->fadeDistance : 0.0f;
-			tables.SetWatch(objectId, Tables::kWatchExtras, (object.flags & (kObjectProjectedUV | kObjectLandBlend)) != 0);
-			tables.draws[objectId].pipelineIndex = pipelineSlot;
+			AccumulatePatch patch;
+			patch.object = objectId;
+			patch.material = materialSlot;
+			patch.pipeline = pipelineSlot;
+			patch.resident = resident;
+			patch.nativeVisible = accumulated && !resident;
+			patch.nativeShadowMasked = accumulated && (descriptors.pass & 0x6000u) == 0x6000u;
+			patch.derivedDescriptor = !accumulated;
+			patch.projectedUV = descriptors.projectedUV;
+			patch.landBlend = landBlendRecord;
+			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated ? kObjectNativeVisible : 0u) |
+			              (accumulated && accumulated->sunTest ? kObjectSunTest : 0u) | (resident && accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) |
+			              (resident && accumulated->heightTest ? kObjectHeightTest : 0u) |
+			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u);
+			patch.fadeDistance = resident ? accumulated->fadeDistance : 0.0f;
+			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
-			tables.shading[objectId] = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, mainPassRenderFlags, emissiveMult);
-			tables.emissiveMult[objectId] = emissiveMult;
+			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, mainPassRenderFlags, emissiveMult);
+			patch.emissiveMult = emissiveMult;
+			if (lightLimitFixLoaded) {
+				patch.lights.roomIndex = globals::features::lightLimitFix.GetRoomIndex(geometry);
+				if (accumulated)
+					patch.lights.shadowBitMask = accumulated->pass ? LightLimitFix::GetShadowBitMask(accumulated->pass) : 0u;
+			}
+			if (patch.flags & kObjectTreeAnim)
+				DeriveTreeAnim(*property, patch.tree);
+			timer.Add(BuildPart::CapturePatch);
 			if (descriptors.pass & kPassAdditionalAlphaMask) {
 				if (fadingThisFrame++ == 0)
 					++stats.fadingFrames;
 				++stats.fadingDrawn;
 			}
-			ObjectLights lights;
-			if (lightLimitFixLoaded) {
-				lights.roomIndex = globals::features::lightLimitFix.GetRoomIndex(geometry);
-				if (accumulated)
-					lights.shadowBitMask = accumulated->pass ? LightLimitFix::GetShadowBitMask(accumulated->pass) : 0u;  // a synthetic pass has no point-light shadow (PrimaryCull)
+			if (descriptors.decalGroup && accumulated) {
+				patch.decalKey = (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(accumulated->technique & 0x3FFFFFFF) << 28) |
+				                 (std::uint64_t(accumulated->subPass & 7) << 24) | (accumulated->chainIndex & 0xFFFFFF);
 			}
-			tables.lights[objectId] = lights;
-			// Per object, and only for trees: everything else keeps the pipeline template's values.
-			ObjectTreeAnim tree{};
-			if (object.flags & kObjectTreeAnim)
-				DeriveTreeAnim(*property, tree);
-			tables.treeAnim[objectId] = tree;
-			// Extras rows for the objects that need them; filled at Prepass (RefreshObjectExtras), where
-			// the main camera's state is current for the projection matrix.
-			const bool landBlend = descriptors.technique == 8 || descriptors.technique == 19;
-			if (descriptors.projectedUV || landBlend) {
-				object.flags |= (descriptors.projectedUV ? kObjectProjectedUV : 0u) | (landBlend ? kObjectLandBlend : 0u);
-				stats.projectedUV += descriptors.projectedUV ? 1 : 0;
-				stats.landBlend += landBlend ? 1 : 0;
-				if (tables.extraOffset[objectId] == kNoExtraRows)
-					tables.extraOffset[objectId] = tables.AllocateExtras();
-			} else {
-				tables.FreeExtras(objectId);
-			}
+			timer.Add(BuildPart::Record);
+			ApplyAccumulatePatch(patch);
+			timer.Add(BuildPart::ApplyPatch);
 			if (resident) {
 				MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
 				residentJoining.erase(geometry);
 				++residentStats.joined;
-			}
-			columnsBefore.NoteWrite(tables, objectId);
-			stats.nativeVisible += accumulated && !resident ? 1 : 0;
-			stats.nativeShadowMasked += accumulated && (descriptors.pass & 0x6000u) == 0x6000u ? 1 : 0;
-			stats.derivedDescriptors += accumulated ? 0 : 1;
-			if (descriptors.decalGroup && accumulated) {
-				// The engine's draw order for decals: the opaque group first, then within a group the
-				// technique buckets in ascending order, each bucket's lists 0-4, each list's chain.
-				++stats.decals[(descriptors.decalGroup - 1) & 1];
-				decalOrder.push_back({ (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(accumulated->technique & 0x3FFFFFFF) << 28) |
-										   (std::uint64_t(accumulated->subPass & 7) << 24) | (accumulated->chainIndex & 0xFFFFFF),
-					objectId });
 			}
 			timer.Add(BuildPart::Record);
 			(void)classifyProbe;
@@ -4598,6 +4684,7 @@ namespace DCLF
 		}
 		geometryIndex.erase(tables.geometrySlotKey[a_slot]);
 		tables.geometrySlotKey[a_slot] = nullptr;
+		tables.geometryImports[a_slot] = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
 		tables.geometrySlots.Free(a_slot);
 	}
@@ -4732,9 +4819,12 @@ namespace DCLF
 			const auto slot = static_cast<std::uint32_t>(tables.objects.size());
 			tables.GrowObjects(std::size_t(slot) + 1);
 			tables.objectGeometry[slot] = a_geometry;
+			tables.objectIdentity[slot] = a_tracked.identity;
+			tables.objectGroup[slot] = a_tracked.groupIdentity;
 			return slot;
 		}
-		if (a_tracked.slot != kNoObjectSlot && a_tracked.slot < tables.objectGeometry.size() && tables.objectGeometry[a_tracked.slot] == a_geometry)
+		if (a_tracked.slot != kNoObjectSlot && a_tracked.slot < tables.objectGeometry.size() && tables.objectGeometry[a_tracked.slot] == a_geometry &&
+			tables.objectIdentity[a_tracked.slot] == a_tracked.identity && tables.objectGroup[a_tracked.slot] == a_tracked.groupIdentity)
 			return a_tracked.slot;
 		std::uint32_t slot;
 		if (!tables.objectFree.empty()) {
@@ -4745,6 +4835,8 @@ namespace DCLF
 			tables.GrowObjects(std::size_t(slot) + 1);
 		}
 		tables.objectGeometry[slot] = a_geometry;
+		tables.objectIdentity[slot] = a_tracked.identity;
+		tables.objectGroup[slot] = a_tracked.groupIdentity;
 		a_tracked.slot = slot;
 		return slot;
 	}
@@ -4774,6 +4866,7 @@ namespace DCLF
 			MoveBucket(it->second, Ineligible::Count);
 			UnlistFadeDependent(it->first, it->second);
 			UnlistDependents(it->first, it->second, true);
+			sceneIdentity.Detach(a_geometry);
 			tracked.erase(it);
 		}
 	}

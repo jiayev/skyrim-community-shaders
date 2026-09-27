@@ -12,6 +12,7 @@
 #	include "DrawPipelinesRhi.h"
 #	include "EngineStates.h"
 #	include "FaceSnapshots.h"
+#	include "FrameRecordPatches.h"
 #	include "GpuResources.h"
 #	include "GpuTextures.h"
 #	include "LightingConstants.h"
@@ -747,13 +748,12 @@ namespace DCLF
 			std::uint32_t frameLightingUploaded = 0;
 			// The Z-prepass segment's constant blocks and binding records (Step 4 of "Persistent draw state"): each segment
 			// keeps its blocks and records across frames in buffers of its own. Per segment (0 Z-prepass, 1 colour): the
-			// versions the buffers hold, and the frame textures (t16 and up) as the last commit resolved them, which the
-			// next build writes into the records it assembles.
+			// versions the buffers hold, and the frame textures (t16 and up) as the last commit resolved them.
+			// Frame textures are patched into upload copies, never into kept record templates.
 			std::shared_ptr<org::Buffer> constantsDepth, recordsDepth;
 			std::uint64_t constantsDepthAddress = 0, recordsDepthAddress = 0;
 			std::array<std::uint64_t, 2> constantsUploaded{}, recordsUploaded{};
 			std::array<std::array<std::uint32_t, kTextureRegisters>, 2> committedFrameTextures{};
-			std::array<std::uint32_t, 2> committedFrameTexturesVersion{};  // new whenever a commit resolves one to another index
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
 			winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
@@ -3035,7 +3035,6 @@ namespace DCLF
 			// commit resolved (Resources::constantsUploaded, recordsUploaded, committedFrameTextures).
 			std::uint64_t constantsUploaded = 0, recordsUploaded = 0;
 			std::array<std::uint32_t, kTextureRegisters> frameTextures{};
-			std::uint32_t frameTexturesVersion = 0;  // Resources::committedFrameTexturesVersion
 		};
 
 		struct MainPayload
@@ -3053,7 +3052,7 @@ namespace DCLF
 			// `records` stay empty; these are uploaded as the ranges changed since the version the buffers hold.
 			bool persistent = false;
 			KeptView<std::byte> keptConstants;
-			KeptView<DrawBindings> keptRecords;  // the commit patches frame textures into them
+			KeptView<DrawBindings> keptRecords;  // immutable templates; the commit patches separate upload copies
 			std::vector<std::array<std::uint64_t, 2>> patchMasks;  // per record: the frame registers (t64 * i + bit) it reads
 			std::uint32_t recordsHeld = 0;
 			std::uint64_t blocksWritten = 0, recordsWritten = 0;
@@ -3845,7 +3844,7 @@ namespace DCLF
 				// written from (PairKeyOf): while they are the same, the build takes the slot and does nothing else.
 				PersistentBlock materialVS, materialPS;
 				std::uint32_t recordSlot = kNoRecord;
-				std::array<std::uint32_t, 13> cleanKey{};
+				std::array<std::uint32_t, 12> cleanKey{};
 				bool clean = false;
 			};
 			struct Pipeline
@@ -4036,11 +4035,18 @@ namespace DCLF
 					continue;
 				}
 				const auto& a = (*a_kept.keptRecords.elements)[it->second];
+				DrawBindings patched = a;
+				if (it->second < a_kept.patchMasks.size())
+					for (std::uint32_t word = 0; word < 2; ++word)
+						for (std::uint64_t bits = a_kept.patchMasks[it->second][word]; bits; bits &= bits - 1) {
+							const auto t = word * 64 + std::countr_zero(bits);
+							patched.textures[t] = a_frameTextures[t];
+						}
 				DrawBindings b = a_reference.records[referenceRecord];
 				for (const auto& [record, t] : a_reference.framePatches)
 					if (record == referenceRecord)
 						b.textures[t] = a_frameTextures[t];
-				if (std::memcmp(a.textures, b.textures, sizeof(a.textures)) != 0 || std::memcmp(a.samplers, b.samplers, sizeof(a.samplers)) != 0) {
+				if (std::memcmp(patched.textures, b.textures, sizeof(a.textures)) != 0 || std::memcmp(a.samplers, b.samplers, sizeof(a.samplers)) != 0) {
 					fail(object, "its textures or samplers");
 					continue;
 				}
@@ -4366,14 +4372,14 @@ namespace DCLF
 					auto& resolved = resolvedIt->second;
 					// Kept: the versions of everything the pair's record and blocks are written from. The same as when they were
 					// written, and the pair is its slot: nothing else about it is looked at.
-					std::array<std::uint32_t, 13> pairVersions{};
+					std::array<std::uint32_t, 12> pairVersions{};
 					if (kept) {
 						const std::uint32_t m = object.materialIndex, p = object.pipelineIndex;
 						const auto& pipelineEntry = a_cache->pipelines[p];
 						pairVersions = { m < a_tables.materialVersion.size() ? a_tables.materialVersion[m] : 0u,
 							m < a_tables.materialFrameVersion.size() ? a_tables.materialFrameVersion[m] : 0u, m < a_lookups.materials.size() ? a_lookups.materials[m].version : 0u,
 							p < a_lookups.pipelines.size() ? a_lookups.pipelines[p].version : 0u, p < a_tables.pipelineBindingVersion.size() ? a_tables.pipelineBindingVersion[p] : 0u,
-							a_lookups.sharedVersion, pipelineEntry.addressVersion, a_in.frameTexturesVersion, a_in.vsFrameMask, a_in.psFrameMask, a_in.resolveTextures ? 1u : 0u,
+							a_lookups.sharedVersion, pipelineEntry.addressVersion, a_in.vsFrameMask, a_in.psFrameMask, a_in.resolveTextures ? 1u : 0u,
 							pipelineEntry.clean ? 1u : 0u, a_tables.TechniqueRowOf(p).bindingVersion };
 						if (newResolved && !dedupParity) {
 							if (const auto found = a_cache->pairs.find((std::uint64_t(m) << 32) | p);
@@ -4844,11 +4850,12 @@ namespace DCLF
 							return kNoRecord;
 						}
 
-						// Kept records carry the frame textures the last commit resolved (it patches them again when one changes).
+						// Kept records are immutable templates. Current-frame descriptor indices live only in
+						// commit-owned upload copies, so a frame texture change cannot dirty the scene cache.
 						std::array<std::uint64_t, 2> patchMask{};
 						if (kept) {
 							for (const auto t : resolved.patchRegisters) {
-								bindings.textures[t] = a_in.frameTextures[t];
+								bindings.textures[t] = 0;
 								patchMask[t / 64] |= 1ull << (t % 64);
 							}
 						}
@@ -9800,7 +9807,6 @@ namespace DCLF
 		in.constantsUploaded = a_resources.constantsUploaded[a_depthOnly ? 0 : 1];
 		in.recordsUploaded = a_resources.recordsUploaded[a_depthOnly ? 0 : 1];
 		in.frameTextures = a_resources.committedFrameTextures[a_depthOnly ? 0 : 1];
-		in.frameTexturesVersion = a_resources.committedFrameTexturesVersion[a_depthOnly ? 0 : 1];
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
 		in.addresses.objectsIndex = a_resources.objectsIndex;
 		in.addresses.bonesIndex = a_resources.bonesIndex;
@@ -10198,8 +10204,9 @@ namespace DCLF
 		}
 		if (!staged)
 			UploadMainPayload(a_payload, *a_resources, uploads);
-		// The kept records carry the frame textures the last commit resolved (PersistentBindings): where one resolves to another
-		// index now, the records reading it are patched and uploaded again (after the payload's own uploads, which they follow).
+		// The kept records are immutable templates. Patch only commit-owned copies, after the worker's
+		// base uploads. A rewritten base record also needs a patch even when the frame texture did not
+		// change: its upload replaced the GPU's previously resolved descriptor with the template's zero.
 		if (a_payload.persistent && !depthOnly && a_payload.keptRecords.elements) {
 			auto& committed = a_resources->committedFrameTextures[1];
 			std::array<std::uint64_t, 2> used{}, changed{}, missing{};
@@ -10207,39 +10214,31 @@ namespace DCLF
 				used[0] |= mask[0];
 				used[1] |= mask[1];
 			}
-			bool committedChanged = false;
 			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
 				const std::uint32_t index = frameTextures[t];
 				const std::uint32_t value = index == kInvalidIndex ? (in.resolveTextures && textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
-				committedChanged |= committed[t] != value;
+				const bool indexChanged = committed[t] != value;
 				committed[t] = value;
 				const std::uint64_t bit = 1ull << (t % 64);
 				if (!(used[t / 64] & bit))
 					continue;
 				if (index == kInvalidIndex)
 					missing[t / 64] |= bit;
-				if (value != in.frameTextures[t])
+				if (indexChanged)
 					changed[t / 64] |= bit;
 			}
-			std::uint32_t keptMissing = 0, patched = 0;
-			auto& keptRecords = *a_payload.keptRecords.elements;
+			std::uint32_t keptMissing = 0;
 			const auto& recordsTarget = a_resources->records;
-			for (std::uint32_t slot = 0; slot < a_payload.patchMasks.size() && slot < keptRecords.size(); ++slot) {
+			for (std::uint32_t slot = 0; slot < a_payload.patchMasks.size() && slot < a_payload.keptRecords.Count(); ++slot) {
 				const auto& mask = a_payload.patchMasks[slot];
 				keptMissing += static_cast<std::uint32_t>(std::popcount(mask[0] & missing[0]) + std::popcount(mask[1] & missing[1]));
-				if (!((mask[0] & changed[0]) | (mask[1] & changed[1])))
-					continue;
-				for (std::uint32_t word = 0; word < 2; ++word)
-					for (std::uint64_t bits = mask[word] & changed[word]; bits; bits &= bits - 1)
-						keptRecords[slot].textures[word * 64 + std::countr_zero(bits)] = committed[word * 64 + std::countr_zero(bits)];
-				uploads(recordsTarget, &keptRecords[slot], sizeof(DrawBindings), std::size_t(slot) * sizeof(DrawBindings));
-				++patched;
 			}
+			const std::uint32_t patched = EmitFrameRecordPatches(a_payload.keptRecords, a_resources->recordsUploaded[1],
+				std::span<const std::array<std::uint64_t, 2>>(a_payload.patchMasks), changed, committed,
+				[&](std::size_t slot, const DrawBindings& record) { uploads(recordsTarget, &record, sizeof(record), slot * sizeof(DrawBindings)); });
 			a_stats.frameTexturesMissing = keptMissing;
 			a_stats.frameTexturesMissingRegisters = missing;
 			a_stats.framePatchedRecords += patched;
-			if (committedChanged)
-				++a_resources->committedFrameTexturesVersion[1];
 		}
 		if (a_payload.persistent) {
 			a_resources->constantsUploaded[depthOnly ? 0 : 1] = a_payload.keptConstants.Version();

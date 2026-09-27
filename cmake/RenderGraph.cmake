@@ -16,6 +16,18 @@ set(CS_ORG_ROOT "${CMAKE_SOURCE_DIR}/extern" CACHE PATH
 set(CS_HAS_RENDER_GRAPH OFF)
 set(CS_DXC_RUNTIME_DLLS)
 
+# Face snapshots retain CPU-only immutable leases even in a D3D11-only build.
+# This target does not configure or link any RHI/ORG runtime services.
+include("${CS_ORG_ROOT}/ORGModuleServices/cmake/AsyncPrimitives.cmake")
+target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::AsyncPrimitives)
+include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneExecutor.cmake)
+target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneExecutor)
+# The plugin's existing source glob also discovers this file. Compile it only
+# in the independently testable library, without the game's PCH.
+get_target_property(_cs_dclf_plugin_sources ${PROJECT_NAME} SOURCES)
+list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(PublishedSceneExecutor|CapturedScene|CaptureAdmission|CapturePreparation|CaptureService|CaptureGraph|FaceCapture)\\.cpp$")
+set_property(TARGET ${PROJECT_NAME} PROPERTY SOURCES ${_cs_dclf_plugin_sources})
+
 if(CS_RENDER_GRAPH)
     set(_cs_org_missing)
     foreach(_lib IN ITEMS OpenRenderGraph BasicRHI BasicTelemetry volk)
@@ -72,6 +84,10 @@ if(CS_RENDER_GRAPH)
             add_subdirectory("${CS_ORG_ROOT}/ORGModuleServices" "${CMAKE_BINARY_DIR}/extern/ORGModuleServices" EXCLUDE_FROM_ALL)
             target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::ORGModuleServices)
             target_compile_definitions(${PROJECT_NAME} PRIVATE CS_HAS_ORG_MODULE_SERVICES=1)
+            # DCLF's CPU publication graph shares this module's scheduler/runtime;
+            # it is linked explicitly and can be exercised without a live frame switch.
+            include(${CMAKE_CURRENT_LIST_DIR}/DclfCaptureGraph.cmake)
+            target_link_libraries(${PROJECT_NAME} PRIVATE DclfCaptureGraph)
             # The Vulkan SDK's DXC: it has SPIR-V code generation (the Windows SDK's does not).
             foreach(_dll IN ITEMS dxcompiler.dll dxil.dll)
                 if(EXISTS "$ENV{VULKAN_SDK}/Bin/${_dll}")

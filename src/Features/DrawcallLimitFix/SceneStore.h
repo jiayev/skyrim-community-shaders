@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "AsyncWorker.h"
+#include "FaceSnapshots.h"
 #include "KeptState.h"
+#include "SceneIdentity.h"
 #include "SlotTable.h"
 #include "LightingDescriptors.h"
 #include "ConstantEvaluator.h"
@@ -105,7 +107,9 @@ namespace DCLF
 		Dedup,           // the geometry, pipeline and material map probes
 		PipelineEval,    // the new-pipeline body: EvaluateGeometry and EvaluateTechnique
 		MaterialEval,    // the new-material body: EvaluateMaterial (the stand-in)
-		Record,          // transforms, emittance, room index, shading, the draw
+		Record,          // scene writes and accumulator patch bookkeeping
+		CapturePatch,    // accumulator's remaining engine-affine shading/light/tree sampling
+		ApplyPatch,      // accumulator's value-only table propagation
 		// The two that "record" used to absorb, which is why it read as the largest part.
 		DedupHit,   // the three map probes on the HIT path; Dedup above only ever measured the misses
 		LoopTail,   // per TRACKED object: the continue path of a rejected one, and the iteration itself
@@ -115,7 +119,7 @@ namespace DCLF
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(BuildPart::Count)> kBuildPartNames{
 		"walk", "pass-lookup", "classify-static", "classify-frame", "diagnostics",
-		"resolve", "dedup", "pipeline-eval", "material-eval", "record",
+		"resolve", "dedup", "pipeline-eval", "material-eval", "record", "capture-patch", "apply-patch",
 		"dedup-hit", "loop-tail", "skinning"
 	};
 
@@ -152,6 +156,13 @@ namespace DCLF
 			std::vector<ObjectRecord> objects;
 			std::vector<RE::BSGeometry*> objectGeometry;  // parallel to objects
 			std::vector<GeometryRecord> geometries;
+			struct GeometryImport
+			{
+				std::uint64_t vertexGeneration = 0, indexGeneration = 0;
+				std::shared_ptr<const void> vertexOwner, indexOwner;
+			};
+			// Import leases are independent of GpuResources' age-based cache.
+			std::vector<GeometryImport> geometryImports;  // parallel to geometries
 			std::vector<PipelineKey> pipelines;
 			std::vector<MaterialRecord> materials;
 			// Parallel to materials: a session-unique number, new whenever the slot's record is (re)written - a
@@ -381,6 +392,8 @@ namespace DCLF
 				std::array<float, 4> sunEntry{};
 				std::array<float, kExtraRows * 4> extras{};
 				const RE::BSGeometry* geometry = nullptr;
+				std::uint64_t identity = 0;
+				std::uint64_t groupIdentity = 0;
 				ID3D11ShaderResourceView* shadowDiffuse = nullptr;
 				const RE::BSShaderMaterial* shadowMaterial = nullptr;
 				float emissiveMult = 1.0f, fadeDistance = 0.0f;
@@ -395,7 +408,7 @@ namespace DCLF
 			/** @brief Notes what a write changed, against the snapshot taken before it. */
 			void NoteWrite(std::uint32_t a_slot, const Columns& a_before) { NoteChange(a_slot, CausesBetween(a_before, ColumnsOf(a_slot))); }
 			// NPC face shapes (Tracked::faceShape): per face object its positions in the snapshot the walk took
-			// (FaceSnapshots::Shape), valid until the next walk, and the region of the positions buffer they go to.
+			// (FaceSnapshots::Shape), retained by the lease, and the region of the positions buffer they go to.
 			// The shadow epoch uploads a region when its generation changed, and binds it as the second stream.
 			struct FaceStream
 			{
@@ -404,6 +417,9 @@ namespace DCLF
 				std::uint32_t vertexCount = 0;
 				std::uint64_t generation = 0;
 				const float* positions = nullptr;
+				std::shared_ptr<const std::vector<float>> owner;
+				// Complete sibling set for a future consistency-group publication.
+				std::shared_ptr<const FaceSnapshots::HeadView> headView;
 			};
 			std::vector<FaceStream> faceStreams;
 			std::vector<std::uint32_t> faceStream;  // parallel to objects: index in faceStreams, or kNoFaceStream
@@ -453,6 +469,7 @@ namespace DCLF
 			void GeometryColumns(F&& a_column)
 			{
 				a_column(geometries);
+				a_column(geometryImports);
 				a_column(geometryLastUsed, kSlotFree);
 				a_column(geometrySlotKey);
 			}
@@ -485,6 +502,9 @@ namespace DCLF
 			// holds FreeObjectRecord(), and a walk sweeps the slots it did not write. Off, they are rebuilt densely
 			// by every walk, as before.
 			std::vector<std::uint32_t> objectSeen;  // parallel to objects: the walk (walkSerial) that last wrote the slot
+			// New on every tracked insertion, including detach/reattach and pointer reuse.
+			std::vector<std::uint64_t> objectIdentity;  // parallel to objects; zero for a free slot
+			std::vector<std::uint64_t> objectGroup;  // actor siblings share this ID
 			// Parallel to objects: the flags as the scene phase wrote them. The accumulate phase patches the record in
 			// place; the delta walk (CS_DCLF_SCENE_DELTA) restores the scene half of every slot it patched from here.
 			std::vector<std::uint32_t> sceneFlags;
@@ -581,6 +601,9 @@ namespace DCLF
 			// resolves, the three dedup probes, the transforms, the room index, the shading and the draw
 			// build. Nine things under one label, which is no basis for optimising any of them.
 			std::array<double, static_cast<std::size_t>(BuildPart::Count)> partMs{};
+			// The accumulator subset of partMs. It is measured at EarlyPrepass on
+			// the render thread, distinct from the preceding scene walk's parts.
+			std::array<double, static_cast<std::size_t>(BuildPart::Count)> accumulatePartMs{};
 			// The property-derived descriptor against the accumulated one (Phase 5 readiness): objects
 			// compared, and objects the derivation would have left native.
 			//
@@ -637,7 +660,7 @@ namespace DCLF
 			std::uint32_t templateUpgrades = 0;     // templates a later native-visible object took over
 		};
 
-		void ResetTimes() { stats.partMs = {}; }
+		void ResetTimes() { stats.partMs = stats.accumulatePartMs = {}; }
 
 		/** @brief Whether CS_DCLF_PROFILE=1 - the per-part timing in BuildFrame. Read once. */
 		static bool ProfileEnabled();
@@ -926,6 +949,9 @@ namespace DCLF
 		struct Tracked
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;
+			std::uint64_t identity = 0;
+			std::uint64_t groupIdentity = 0;
+			const RE::TESObjectREFR* actorOwner = nullptr;  // lookup only, never published
 			RE::NiNode* categoryNode = nullptr;
 			// Ineligible::UnsupportedParent or Billboard for what lies between the leaf and its category node
 			// (ParentReason in SceneStore.cpp); Switch when a switch node lies there, which ClassifyFrame
@@ -1169,6 +1195,7 @@ namespace DCLF
 		std::vector<std::pair<const RE::NiAVObject*, bool>> cullHiddenBits;
 
 		ankerl::unordered_dense::map<RE::BSGeometry*, Tracked> tracked;
+		SceneIdentity sceneIdentity;
 		/**
 		 * @brief BuildFrame's iteration order: the objects the engine kept, then the rest.
 		 *
@@ -1182,6 +1209,8 @@ namespace DCLF
 			const AccumulatedPass* accumulated;
 		};
 		std::vector<OrderEntry> order;
+		// Lookup keys are valid only for this walk; the captured recordId is durable.
+		ankerl::unordered_dense::map<const RE::BSFaceGenNiNode*, std::shared_ptr<const FaceSnapshots::HeadView>> capturedFaceHeads;
 		// The accumulate phase's iteration: the objects it has anything to do, which off the =tracked
 		// culling input is the engine's accumulated passes rather than the whole tracked set. A member
 		// for its capacity, like `order`.
@@ -1348,6 +1377,20 @@ namespace DCLF
 		void RefreshObjectExtras(std::size_t a_object, const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry);
 		void BuildScenePhase();
 		void BuildAccumulatePhase();
+		// Engine-affine sampling ends before this packet is applied. Its values
+		// can be propagated by a publication coordinator without dereferencing a
+		// geometry, material, shader property or render pass.
+		struct AccumulatePatch
+		{
+			std::uint32_t object = 0, material = 0, pipeline = 0, flags = 0;
+			float fadeDistance = 0.0f, emissiveMult = 1.0f;
+			ObjectShading shading{};
+			ObjectLights lights{};
+			ObjectTreeAnim tree{};
+			bool resident = false, projectedUV = false, landBlend = false, nativeVisible = false, nativeShadowMasked = false, derivedDescriptor = false;
+			std::uint64_t decalKey = 0;
+		};
+		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
 		/**
 		 * @brief The scene phase's loop over the tracked set. On the render thread it resolves what it meets; on
 		 * the worker (a_renderThread false) it may not call GpuResources or the engine's palette update, and
