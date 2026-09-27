@@ -3,6 +3,7 @@
 #endif
 
 #include "Common/Random.hlsli"
+#include "PhysicalSky/AlligatorNoise.hlsli"
 
 cbuffer CB : register(b1)
 {
@@ -42,14 +43,12 @@ float Perlin(float2 uv, uint period)
 		lerp(Gradient(cell + int2(0, 1), f - float2(0, 1), period), Gradient(cell + 1, f - 1.0, period), w.x), w.y);
 }
 
-float Cellular(float2 uv, uint period, bool alligator)
+float Worley(float2 uv, uint period)
 {
 	const float3 p = float3(frac(uv) * period, 0.5);
 	const int3 cell = int3(floor(p));
 	const float3 f = frac(p);
 	float nearest = 2.0;
-	float largest = 0.0;
-	float second = 0.0;
 	[unroll] for (int z = -1; z <= 1; ++z)
 		[unroll] for (int y = -1; y <= 1; ++y)
 			[unroll] for (int x = -1; x <= 1; ++x)
@@ -57,12 +56,8 @@ float Cellular(float2 uv, uint period, bool alligator)
 		const int3 offset = int3(x, y, z);
 		const float distance = length(float3(offset) + CellHash(cell + offset, period, 31u) - f);
 		nearest = min(nearest, distance);
-		const float t = saturate(1.0 - distance);
-		const float contribution = CellHash(cell + offset, period, 43u).x * t * t * (3.0 - 2.0 * t);
-		second = max(second, min(largest, contribution));
-		largest = max(largest, contribution);
 	}
-	return alligator ? saturate((largest - second) * 2.0) : 1.0 - saturate(nearest);
+	return 1.0 - saturate(nearest);
 }
 
 [numthreads(8, 8, 1)] void main(uint2 tid : SV_DispatchThreadID) {
@@ -81,11 +76,11 @@ float Cellular(float2 uv, uint period, bool alligator)
 			break;
 		float value;
 		if (noiseType == 0u)
-			value = Cellular(uv, period, true);
+			value = saturate(AlligatorNoise::Sample(float3(frac(uv) * period, 0.5), uint3(period, period, 0u), seed, 31u) * 2.0);
 		else {
 			const float perlin = saturate(0.5 + Perlin(uv, period));
 			if (noiseType == 2u) {
-				const float cellular = Cellular(uv, period, false);
+				const float cellular = Worley(uv, period);
 				value = lerp(cellular, 1.0, perlin);
 			} else
 				value = perlin;

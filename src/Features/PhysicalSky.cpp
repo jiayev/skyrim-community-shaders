@@ -35,6 +35,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	type, seed, frequency, octaves, persistence, lacunarity, contrast, bias, repetitions, responseExponent)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CloudNoiseBand,
+	frequency, octaves, persistence, exponent, contrast, bias, perlinMix)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	CloudNoiseSettings,
+	procedural, seed, shape, warp, warpCorrelation)
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NdfNoiseInput,
 	parameters, texturePath)
 
@@ -45,7 +53,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	NdfGenerationParameters,
 	primary, secondary, coverageGain, modeling, modelingGain, heightVariation,
-	bottomTypeRange, baseHeight, bottomTypeExponent, heightFromCoverage,
+	heightAuxiliaryRange, bottomTypeRange, baseHeight, bottomTypeExponent, heightFromCoverage,
 	localBlendMode, localModelingWeight, localHeightWeight, localWindScale, windOffset)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -82,7 +90,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CirrusSettings,
 	enabled, altitude, patternScale, densityScale, lightingScale, weatherPath, patternsPath,
-	noise, weather, patternSeed, patternWarp, patternDetail)
+	weather, patternSeed, patternWarp, patternDetail)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CloudLightingSettings,
@@ -159,7 +167,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	shadowVolumeRange,
 	marchStepScale,
 	cloudMap,
-	cloudLayer)
+	cloudLayer,
+	cloudNoise)
 
 namespace
 {
@@ -648,12 +657,13 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
 	{
 		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
+		cloudNoiseGenerator.DrawSettings(settings.cloudNoise);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();
 		if (baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv)
 			ImGui::TextColored({ 0, 1, 0, 1 }, "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
 		else
-			ImGui::TextColored({ 1, 0, 0, 1 }, "%s", T(TKEY("cloud_textures_missing"), "Cloud Textures: Missing"));
+			ImGui::TextColored({ 1, 0.7f, 0.2f, 1 }, "%s", T(TKEY("cloud_textures_preparing"), "Cloud Textures: Preparing"));
 	}
 }
 
@@ -676,13 +686,6 @@ void PhysicalSky::SettingsDebug()
 		static float debugScale = 0.2f;
 		ImGui::SliderFloat(T(TKEY("view_scale"), "View Scale"), &debugScale, 0.1f, 1.f);
 
-		auto imageView = [&](const char* a_label, ID3D11ShaderResourceView* a_srv, float a_width, float a_height) {
-			if (!a_srv || !ImGui::TreeNode(a_label))
-				return;
-			ImGui::Image(a_srv, { a_width * debugScale, a_height * debugScale });
-			ImGui::TreePop();
-		};
-
 		static const char* cubeFaces[] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
 		if (ImGui::SliderInt(T(TKEY("cubemap_face"), "Cubemap Face"), &debugCubeFace, 0, 5, cubeFaces[debugCubeFace]))
 			debugCubeFaceSrvs.clear();
@@ -698,17 +701,36 @@ void PhysicalSky::SettingsDebug()
 		}
 
 		if (ImGui::TreeNode(T(TKEY("cloud_shape"), "Cloud Shape"))) {
-			BUFFER_VIEWER_NODE(ndfManager.texHeight, debugScale);
-			BUFFER_VIEWER_NODE(ndfManager.texModeling, debugScale);
-			DrawDebugVolume(baseShapeNoiseSrv.get(), "baseShapeNoise", debugShapeNoiseSlice, debugScale);
-			{
-				Texture2D* weather = cirrusMapManager.GetWeatherTexture();
-				Texture2D* patterns = cirrusMapManager.GetPatternsTexture();
-				BUFFER_VIEWER_NODE_TITLE(weather, "cirrusWeather", debugScale);
-				BUFFER_VIEWER_NODE_TITLE(patterns, "cirrusPatterns", debugScale);
+			ndfManager.DrawPreview();
+			const auto ndf = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
+			DrawDebugCloudTexture(ndf.height, "ndfHeight", T(TKEY("debug_ndf_height"), "NDF height / shaping start"), debugScale);
+			DrawDebugCloudTexture(ndf.modeling, "ndfModeling", T(TKEY("debug_ndf_modeling"), "NDF coverage / types"), debugScale);
+			if (ImGui::TreeNode(T(TKEY("debug_weather_noise"), "Shared weather noise inputs"))) {
+				const char* labels[] = {
+					T(TKEY("debug_weather_noise_0"), "Noise input 0"),
+					T(TKEY("debug_weather_noise_1"), "Noise input 1"),
+					T(TKEY("debug_weather_noise_2"), "Noise input 2"),
+					T(TKEY("debug_weather_noise_3"), "Noise input 3")
+				};
+				for (uint32_t i = 0; i < 4; ++i) {
+					const auto id = std::format("weatherNoise{}", i);
+					DrawDebugCloudTexture(ndfManager.GetNoiseInputs()[i], id.c_str(), labels[i], debugScale, true);
+				}
+				ImGui::TreePop();
 			}
-			imageView("cloudProfileLut", cloudProfileLutSrv.get(), 256.f, 256.f);
-			imageView("cloudAdjustmentLut", cloudAdjustmentLutSrv.get(), 256.f, 256.f);
+			DrawDebugCloudTexture(baseShapeNoiseSrv.get(), "activeShape", T(TKEY("debug_active_shape"), "Active cloud shape noise"), debugScale);
+			DrawDebugCloudTexture(cloudProfileLutSrv.get(), "activeProfile", T(TKEY("debug_active_profile"), "Active vertical profile LUT"), debugScale);
+			DrawDebugCloudTexture(cloudAdjustmentLutSrv.get(), "activeAdjustment", T(TKEY("debug_active_adjustment"), "Active top expansion / warp LUT"), debugScale);
+			const auto cirrus = cirrusMapManager.GetTextures();
+			DrawDebugCloudTexture(cirrus.weather, "cirrusWeather", T(TKEY("debug_cirrus_weather"), "Active cirrus coverage / type"), debugScale);
+			DrawDebugCloudTexture(cirrus.patterns, "cirrusPatterns", T(TKEY("debug_cirrus_patterns"), "Active cirrus patterns"), debugScale);
+			if (ImGui::TreeNode(T(TKEY("debug_noise_sources"), "Generated and source textures"))) {
+				DrawDebugCloudTexture(cloudNoiseGenerator.Shape(), "generatedShape", T(TKEY("debug_generated_shape"), "Generated cloud shape noise"), debugScale);
+				DrawDebugCloudTexture(cloudNoiseGenerator.Adjustment(), "generatedAdjustment", T(TKEY("debug_generated_adjustment"), "Generated top expansion / warp LUT"), debugScale);
+				DrawDebugCloudTexture(importedShapeNoiseSrv.get(), "importedShape", T(TKEY("debug_imported_shape"), "Cloud shape DDS input"), debugScale);
+				DrawDebugCloudTexture(importedAdjustmentLutSrv.get(), "sourceAdjustment", T(TKEY("debug_source_adjustment"), "Adjustment source (DDS or fallback)"), debugScale);
+				ImGui::TreePop();
+			}
 			ImGui::TreePop();
 		}
 
@@ -924,8 +946,7 @@ bool PhysicalSky::ShadersOK()
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
-	const bool ndfReady = settings.cloudMap.type != NdfType::Procedural ||
-	                      (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
+	const bool ndfReady = (ndfManager.texHeight && ndfManager.texModeling && ndfManager.generatorProgram && ndfManager.noiseProgram);
 	const bool cirrusMapsReady = !settings.cloudLayer.cirrus.enabled || cirrusMapManager.ShadersReady(settings.cloudLayer.cirrus);
 	bool volumetricShadersOk = !settings.enableVolumetricClouds ||
 	                           (vsCloudBoundary && psCloudBoundary && texCloudBoundary && cloudBoundaryCB && cloudBoundaryIndices && cloudBoundaryBlend && cloudBoundaryRasterizer && cloudBoundaryDepth &&
@@ -1120,6 +1141,18 @@ void PhysicalSky::ReflectionsPrepass()
 
 void PhysicalSky::Prepass()
 {
+	if (settings.enabled && settings.enableVolumetricClouds) {
+		const bool generatedNoise = settings.cloudNoise.procedural || !importedShapeNoiseSrv || cloudAdjustmentGenerated;
+		if (generatedNoise)
+			cloudNoiseGenerator.Update(settings.cloudNoise, importedAdjustmentLutSrv.get());
+		auto* shape = generatedNoise && cloudNoiseGenerator.Shape() ? cloudNoiseGenerator.Shape() : importedShapeNoiseSrv.get();
+		auto* adjustment = generatedNoise && cloudNoiseGenerator.Adjustment() ? cloudNoiseGenerator.Adjustment() : importedAdjustmentLutSrv.get();
+		if (baseShapeNoiseSrv.get() != shape || cloudAdjustmentLutSrv.get() != adjustment) {
+			baseShapeNoiseSrv.copy_from(shape);
+			cloudAdjustmentLutSrv.copy_from(adjustment);
+			volMainHistoryValid = false;
+		}
+	}
 	if (cbData.enabled) {
 		const bool renderVolumetricClouds = settings.enableVolumetricClouds && ShadersOK();
 
@@ -1141,7 +1174,7 @@ void PhysicalSky::Prepass()
 			if (ndfManager.UpdateNdf(settings.cloudMap, ndfTexManager)) {
 				volMainHistoryValid = false;
 			}
-			if (settings.cloudLayer.cirrus.enabled && cirrusMapManager.Update(settings.cloudLayer.cirrus, ndfTexManager))
+			if (settings.cloudLayer.cirrus.enabled && cirrusMapManager.Update(settings.cloudLayer.cirrus, ndfTexManager, ndfManager))
 				volMainHistoryValid = false;
 			RenderVolumetricClouds(VolumetricCloudPass::kShadowVolume);
 		}

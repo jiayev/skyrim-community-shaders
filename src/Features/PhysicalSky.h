@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PhysicalSky/CloudNoiseGenerator.h"
 #include "PhysicalSky/Ndf.h"
 
 struct PhysicalSky final : public Feature
@@ -145,6 +146,7 @@ struct PhysicalSky final : public Feature
 		float marchStepScale = 0.5f;
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
+		CloudNoiseSettings cloudNoise = {};
 	} settings;
 
 	struct CbData
@@ -286,7 +288,25 @@ struct PhysicalSky final : public Feature
 	eastl::unique_ptr<Texture2D> debugApSlice = nullptr;
 	eastl::unique_ptr<Texture2D> debugApSunSlice = nullptr;
 	eastl::unique_ptr<Texture2D> debugShadowVolumeSlice = nullptr;
-	eastl::unique_ptr<Texture2D> debugShapeNoiseSlice = nullptr;
+	struct CloudDebugView
+	{
+		eastl::unique_ptr<Texture2D> texture;
+		int mip = 0;
+		int slice = 0;
+		int channel = 0;
+		float2 range = { 0.f, 1.f };
+	};
+	struct CloudDebugParameters
+	{
+		uint32_t mip, slice, channel, volume;
+		float2 range;
+		float2 padding = {};
+	};
+	static_assert(sizeof(CloudDebugParameters) == 32);
+	ankerl::unordered_dense::map<std::string, CloudDebugView> cloudDebugViews;
+	eastl::unique_ptr<ConstantBuffer> cloudDebugCb;
+	winrt::com_ptr<ID3D11ComputeShader> csCloudDebug;
+	void DrawDebugCloudTexture(ID3D11ShaderResourceView* srv, const char* id, const char* label, float scale, bool scalar = false);
 	ID3D11ShaderResourceView* GetDebugCubeFaceSrv(Texture2D* a_texture);
 	ID3D11ShaderResourceView* GetDebugVolumeSliceSrv(ID3D11ShaderResourceView* a_srv, eastl::unique_ptr<Texture2D>& a_target);
 	void DrawDebugCube(Texture2D* a_texture, const char* a_label, float a_scale);
@@ -295,6 +315,10 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> baseShapeNoiseSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudProfileLutSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> cloudAdjustmentLutSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> importedShapeNoiseSrv = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> importedAdjustmentLutSrv = nullptr;
+	CloudNoiseGenerator cloudNoiseGenerator;
+	bool cloudAdjustmentGenerated = false;
 	TextureManager ndfTexManager{ "Cloud Map" };
 	NdfManager ndfManager;
 	CirrusMapManager cirrusMapManager;

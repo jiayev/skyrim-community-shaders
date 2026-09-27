@@ -6,10 +6,10 @@ No offline preparation or world-space voxel volume is required.
 
 ## Two-texture contract
 
-| Texture  | Channels                                 | Generated storage             | Density binding |
-| -------- | ---------------------------------------- | ----------------------------- | --------------- |
-| Height   | R: bottom height, G: top height          | 512 x 512 RG16_FLOAT          | t7              |
-| Modeling | R: coverage, G: top type, B: bottom type | 512 x 512 RGBA16_FLOAT, A = 0 | t8              |
+| Texture  | Channels                                                   | Generated storage             | Density binding |
+| -------- | ---------------------------------------------------------- | ----------------------------- | --------------- |
+| Height   | R: bottom height, G: top height; internal B: shaping start | RGBA16_FLOAT                  | t7              |
+| Modeling | R: coverage, G: top type, B: bottom type                   | 512 x 512 RGBA16_FLOAT, A = 0 | t8              |
 
 Values are linear and normalized. Altitude is `ndfAltitudeOffset +
 ndfAltitudeScale * height` metres above the worldspace reference altitude.
@@ -72,7 +72,17 @@ giving modeling A a second contract. Zero weights preserve procedural values.
 Height power occurs **before** remapping. Its coverage driver is post-blend,
 pre-saturation. A constant variation output range bypasses driver and power.
 Only height R changes; G stays at its base/local value. Final height RG and
-modeling RGB are saturated. Height auxiliary data and storms are omitted.
+modeling RGB are saturated. Before saturation, top type drives
+`heightAuxiliary = saturate(R(topType, heightAuxiliaryRange))`. Internal height B
+stores this value; A stays zero. The default output interval is [0, 0], so it
+preserves the previous density until intentionally enabled. Storms are omitted.
+
+The density sampler reads auxiliary height at the unsheared height-map UV.
+Only bottom shaping uses `saturate((h - auxiliary) / max(1 - auxiliary, 1e-6))`;
+boost, density exponent, profile lookup and lighting continue to use `h`.
+Imported RG/RGB pairs are also converted to this internal height representation;
+extra channels in an imported height texture are ignored. Height conversion keeps
+the imported height resolution, and rendering retains the original modeling SRV.
 
 The CPU sanitizes finite parameters and zero-width remaps. Power returns zero
 for nonpositive inputs; exponent is limited to 0.01–8. This defines otherwise
@@ -86,7 +96,7 @@ defaults are project tuning, not recovered synthesis settings or descriptor orde
 
 | Slot | Algorithm                          | Frequency | Octaves | Persistence | Repetitions | Contrast | Response exponent |  Bias |
 | ---- | ---------------------------------- | --------: | ------: | ----------: | ----------: | -------: | ----------------: | ----: |
-| 0    | Alligator                          |        12 |       4 |         0.5 |           1 |        1 |                 1 |     0 |
+| 0    | Alligator                          |         4 |       4 |         0.5 |           1 |        1 |                 1 |     0 |
 | 1    | Perlin fBm, coarse response preset |         4 |       6 |         0.6 |           2 |      1.6 |               1.8 | -0.02 |
 | 2    | Perlin fBm                         |        32 |       4 |         0.5 |           1 |        1 |                 1 |     0 |
 | 3    | Perlin-Worley                      |        12 |       4 |         0.5 |           1 |      1.1 |                 2 | -0.05 |
@@ -115,6 +125,11 @@ output = saturate(response + bias)
 
 Exponent one bypasses the power input clamp to preserve the original linear
 contrast/bias operation for existing settings.
+
+The default Alligator response keeps input bounds [0, 1]. Its four octave
+frequencies are 4, 8, 16 and 32, with weights 1, 0.5, 0.25 and 0.125.
+The seed is 1337 and the fixed Z slice is 0.5. Saved settings keep their explicit
+noise tuning; a valid DDS override takes precedence over generated noise.
 
 Inputs use R16_FLOAT with full mips. Integer periods wrap XY. The base frequency
 is bounded and octaves are omitted above half the resolution, accounting for
@@ -150,7 +165,7 @@ changes or shader/resource reload regenerate the NDF, invalidating main history
 and occupancy/distance maps. Imported acceleration uses actual bilinear coverage
 support. World scale changes history and sampling, not the normalized map.
 
-CPU/HLSL constant-buffer payloads are 352 bytes for composition and 48 for noise.
+CPU/HLSL constant-buffer payloads are 384 bytes for composition and 48 for noise.
 Compute restores its sampler and clears SRV/UAV bindings. All view, light,
 shadow and cubemap consumers use the pair. Cirrus uses a separate coverage/type map; ordinary stratus remains a main-NDF type.
 
@@ -159,6 +174,33 @@ Older settings and five-slice selections reset to procedural defaults, requiring
 visual retuning rather than silently reinterpreting incompatible parameters.
 Existing version 2 settings retain their saved noise tuning. Omitted repetitions
 and response exponent default to one, preserving the previous noise operation.
+
+## Shared cirrus inputs
+
+Cirrus coverage and type select independently from the same four noise slots.
+They have their own frequency, offset and remap, without a power operation or a
+final output clamp. Defaults select slots 1 and 2. Weather offset uses 0.0001
+for cirrus and 0.00005 for the main map. Runtime wind still acts through density
+queries; generation does not advance time. Cirrus parameters occupy 128 bytes.
+Changes to a shared input regenerate both dependent maps. Pattern textures remain
+an independent optional input with a local procedural fallback.
+
+## Optional resources and previews
+
+A missing/incompatible noise override uses that slot's procedural settings.
+An incomplete imported NDF pair falls back to procedural composition. Missing
+local influence inputs disable their corresponding weights; a missing mask acts
+as one. Missing cirrus weather/pattern inputs independently use generated maps.
+Failed paths are cached rather than retried every frame; Load explicitly retries.
+
+Cloud Shape debugging provides scalar previews for both coverage branches,
+coverage/type gains, final coverage/types, height bounds, shaping start and
+height variation. Preview allocation and generation happen only when requested.
+Changing only the preview does not invalidate cloud temporal history. Branch
+previews have no meaning for imported pairs and are zero (gains are one).
+
+See [resource fallback](volumetric-cloud-texture-resources.md#optional-resource-fallback)
+for the zero-DDS and Top/Bottom-only distribution paths.
 
 ## Validation limits
 

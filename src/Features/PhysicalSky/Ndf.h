@@ -82,6 +82,7 @@ struct NdfGenerationParameters
 	NdfNoiseLayer modeling = { .range = { -0.5f, 0.6f, 0.05f, 0.85f } };
 	NdfNoiseLayer modelingGain = { .range = { -1.f, 1.f, 1.f, 1.f } };
 	NdfNoiseLayer heightVariation = { .range = { 0.f, 1.f, 0.f, 0.02f } };
+	float4 heightAuxiliaryRange = { 0.f, 1.f, 0.f, 0.f };
 	float4 bottomTypeRange = { -0.4f, 0.5f, 0.f, 0.25f };
 	float2 baseHeight = { 0.f, 0.95f };
 	float bottomTypeExponent = 1.f;
@@ -92,14 +93,16 @@ struct NdfGenerationParameters
 	float localWindScale = 1.f;
 	float2 windOffset = {};
 	uint32_t hasLocalMask = 0;
-	float padding = 0.f;
+	uint32_t imported = 0;
+	uint32_t preview = 0;
+	float3 padding = {};
 };
-static_assert(sizeof(NdfGenerationParameters) == 352);
+static_assert(sizeof(NdfGenerationParameters) == 384);
 
 struct ProceduralNdfSettings
 {
 	NdfGenerationParameters parameters;
-	std::array<NdfNoiseInput, 4> noise = { { { { .type = 0, .frequency = 12 } },
+	std::array<NdfNoiseInput, 4> noise = { { { { .type = 0, .frequency = 4, .octaves = 4, .persistence = 0.5f, .lacunarity = 2, .contrast = 1.f, .bias = 0.f } },
 		{ { .type = 1, .frequency = 4, .octaves = 6, .persistence = 0.6f, .contrast = 1.6f, .bias = -0.02f, .repetitions = 2, .responseExponent = 1.8f } },
 		{ { .type = 1, .frequency = 32 } },
 		{ { .type = 2, .frequency = 12, .contrast = 1.1f, .bias = -0.05f, .responseExponent = 2.f } } } };
@@ -143,6 +146,11 @@ struct NdfManager
 	bool UpdateNdf(const NdfSettings& settings, TextureManager& textures);
 	NdfTextureSet GetNdf(const NdfSettings& settings, TextureManager& textures);
 
+	const std::array<ID3D11ShaderResourceView*, 4>& GetNoiseInputs() const { return noiseInputs; }
+	uint64_t GetRevision() const { return generatedRevision; }
+	float2 GetWeatherOffset() const { return generatedData.windOffset; }
+	void DrawPreview();
+
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
 
 private:
@@ -157,7 +165,11 @@ private:
 	std::array<ID3D11ShaderResourceView*, 7> generatedSources = {};
 	std::array<std::string, 9> sourcePaths = {};
 	uint64_t generatedRevision = 0;
-	uint64_t importedRevision = 0;
+	uint64_t textureRevision = 0;
+	std::array<ID3D11ShaderResourceView*, 4> noiseInputs = {};
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 4> noiseInputResources;
+	eastl::unique_ptr<Texture2D> texPreview;
+	int preview = 0;
 	bool generatedValid = false;
 };
 
@@ -185,8 +197,7 @@ struct CirrusSettings
 	float lightingScale = 0.5f;
 	std::string weatherPath;
 	std::string patternsPath;
-	std::array<NdfNoiseInput, 2> noise = { { { { .type = 1, .frequency = 4 } }, { { .type = 1, .seed = 7331, .frequency = 8 } } } };
-	std::array<NdfNoiseLayer, 2> weather = { { { .noise = 0, .range = { -0.7f, 0.7f, 0.f, 0.6f } }, { .noise = 1 } } };
+	std::array<NdfNoiseLayer, 2> weather = { { { .noise = 1, .range = { -0.7f, 0.7f, 0.f, 0.6f } }, { .noise = 2 } } };
 	uint32_t patternSeed = 1337;
 	float patternWarp = 0.15f;
 	float patternDetail = 0.35f;
@@ -244,7 +255,7 @@ struct CirrusMapManager
 	void CompileShaders();
 	bool ShadersReady(const CirrusSettings& settings) const;
 	static void DrawSettings(CirrusSettings& settings, TextureManager& textures);
-	bool Update(const CirrusSettings& settings, TextureManager& textures);
+	bool Update(const CirrusSettings& settings, TextureManager& textures, const NdfManager& ndf);
 	CirrusTextureSet GetTextures() const;
 	Texture2D* GetWeatherTexture() { return texWeather.get(); }
 	Texture2D* GetPatternsTexture() { return texPatterns.get(); }
@@ -258,23 +269,22 @@ private:
 		float warp;
 		float detail;
 		float padding = 0.f;
+		float2 windOffset = {};
+		float2 padding1 = {};
 	};
-	static_assert(sizeof(GenerationParameters) == 112);
+	static_assert(sizeof(GenerationParameters) == 128);
 	eastl::unique_ptr<Texture2D> texWeather;
 	eastl::unique_ptr<Texture2D> texPatterns;
-	std::array<eastl::unique_ptr<Texture2D>, 2> noiseTextures;
 	eastl::unique_ptr<ConstantBuffer> generationCb;
-	eastl::unique_ptr<ConstantBuffer> noiseCb;
 	winrt::com_ptr<ID3D11ComputeShader> weatherProgram;
 	winrt::com_ptr<ID3D11ComputeShader> patternsProgram;
-	winrt::com_ptr<ID3D11ComputeShader> noiseProgram;
 	winrt::com_ptr<ID3D11SamplerState> sampler;
-	std::array<NdfNoiseParameters, 2> generatedNoise = {};
-	std::array<bool, 2> noiseValid = {};
-	std::array<std::string, 4> sourcePaths = {};
+	std::array<std::string, 2> sourcePaths = {};
 	GenerationParameters generatedData = {};
-	std::array<ID3D11ShaderResourceView*, 4> generatedSources = {};
+	std::array<ID3D11ShaderResourceView*, 6> generatedSources = {};
 	uint64_t generatedRevision = 0;
+	uint64_t noiseRevision = 0;
 	bool generatedValid = false;
 	CirrusTextureSet outputs;
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 2> outputResources;
 };
