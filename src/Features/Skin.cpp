@@ -567,6 +567,27 @@ void Skin::BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const
 	}
 }
 
+RE::NiSourceTexture* Skin::GetRFAOSTexture(RE::BSLightingShaderMaterialBase const* material)
+{
+	if (!loaded || !settings.EnableSkin || !material || material->hashKey == 0)
+		return nullptr;
+
+	const auto feature = material->GetFeature();
+	if (feature != RE::BSShaderMaterial::Feature::kFaceGen && feature != RE::BSShaderMaterial::Feature::kFaceGenRGBTint)
+		return nullptr;
+
+	const auto hashKey = material->hashKey;
+	auto it = skinExtraTextures.find(hashKey);
+	if (it == skinExtraTextures.end()) {
+		if (!material->textureSet || !material->normalTexture)
+			return nullptr;
+		SetupExtraTexture(material, material->textureSet.get(), hashKey);
+		it = skinExtraTextures.find(hashKey);
+	}
+
+	return it != skinExtraTextures.end() && it->second.hasExtraTexture ? it->second.rfaosTexture.get() : nullptr;
+}
+
 void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	auto context = globals::d3d::context;

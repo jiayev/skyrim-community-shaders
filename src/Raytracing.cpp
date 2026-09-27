@@ -426,6 +426,12 @@ void Raytracing::PostPostLoad()
 		return;
 	}
 
+	if (creationEngineRaytracing->SetSkinTextureResolver) {
+		creationEngineRaytracing->SetSkinTextureResolver([](const void* material) -> void* {
+			return globals::features::skin.GetRFAOSTexture(static_cast<const RE::BSLightingShaderMaterialBase*>(material));
+		});
+	}
+
 	RE::GetINISetting("bReflectLODLand:Water")->data.b = false;
 	RE::GetINISetting("bReflectLODObjects:Water")->data.b = false;
 	RE::GetINISetting("bReflectLODTrees:Water")->data.b = false;
@@ -1183,6 +1189,7 @@ bool Raytracing::UpdateFeatureData()
 	// Skin
 	{
 		featureData->Skin.skinParams = skinData.skinParams;
+		featureData->Skin.skinParams.w = globals::features::skin.loaded ? skinData.skinParams.w : 0.0f;
 		featureData->Skin.skinParams2 = skinData.skinParams2;
 		featureData->Skin.skinDetailParams = skinData.skinDetailParams;
 		featureData->Skin.sssParams = skinData.sssParams;

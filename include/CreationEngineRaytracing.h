@@ -798,6 +798,7 @@ struct CreationEngineRaytracing
 	using GetSharedTexturesFn = void (*)(SharedTexture*, SharedTexture*, SharedTexture*);
 	using UpdateJitterFn = void (*)(float2);
 	using SetSkinDetailNormalFn = void (*)(void*);
+	using SetSkinTextureResolverFn = void (*)(void* (*)(const void*));
 	using GetAccumulatedFrameCountFn = uint32_t (*)();
 	using GetFakeDoubledVRAMUsageFn = uint64_t (*)();
 	using GetSceneGraphCountersFn = void (*)(uint32_t& textures, uint32_t& models, uint32_t& instances);
@@ -822,6 +823,7 @@ struct CreationEngineRaytracing
 	GetSharedTexturesFn GetSharedTextures = nullptr;
 	UpdateJitterFn UpdateJitter = nullptr;
 	SetSkinDetailNormalFn SetSkinDetailNormal = nullptr;
+	SetSkinTextureResolverFn SetSkinTextureResolver = nullptr;
 	GetAccumulatedFrameCountFn GetAccumulatedFrameCount = nullptr;
 	GetFakeDoubledVRAMUsageFn GetFakeDoubledVRAMUsage = nullptr;
 	ReloadShadersFn ReloadShaders = nullptr;
@@ -857,6 +859,7 @@ struct CreationEngineRaytracing
 		LOAD_FN(GetSharedTextures);
 		LOAD_FN(UpdateJitter);
 		LOAD_FN(SetSkinDetailNormal);
+		LOAD_FN(SetSkinTextureResolver);
 		LOAD_FN(GetAccumulatedFrameCount);
 		LOAD_FN(GetFakeDoubledVRAMUsage);
 		LOAD_FN(ReloadShaders);

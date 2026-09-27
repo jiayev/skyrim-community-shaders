@@ -148,6 +148,7 @@ struct Skin : Feature
 	 * @param i_hashKey The material hash key used for caching extra textures.
 	 */
 	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
+	RE::NiSourceTexture* GetRFAOSTexture(RE::BSLightingShaderMaterialBase const* material);
 
 	/** @brief Handles material setup for face/face-gen materials, loading extra skin textures as needed. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
