@@ -19,13 +19,14 @@ float ReconstructCloudNoiseDensity(float4 noise, float profile, float topType, f
 	return saturate(composite - (1.0 - min(0.7, profile)));
 }
 
-float ShapeCloudBaseDensity(float eroded, float height, float bottomWidth, float bottomPower)
+float ShapeCloudBaseDensity(float eroded, float height, float bottomWidth, float bottomPower, float shapingStart)
 {
 	if (eroded <= 0.0)
 		return 0.0;
 	const float bottomBoost = pow(1.0 - eroded, 10.0) * 8.0;
 	const float baseWidth = 10.0 - saturate((bottomWidth - 1.0) * 0.11111111) * 9.0;
-	const float baseProfile = pow(height, 0.3) * pow(saturate(height * baseWidth), bottomPower);
+	const float profileHeight = saturate((height - shapingStart) / max(1.0 - shapingStart, 1e-6));
+	const float baseProfile = pow(profileHeight, 0.3) * pow(saturate(profileHeight * baseWidth), bottomPower);
 	const float density = lerp(bottomBoost, 1.0, saturate(height * 5.0)) * eroded * baseProfile;
 	return pow(density, saturate((height - 0.25) * 4.0) * 0.29999998 + 0.35);
 }
