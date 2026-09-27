@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Globals.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsCatalog.generated.h"
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsOverwrites.h"
@@ -26,6 +27,12 @@ namespace
 {
 
 	SceneSettingsManager* sceneSettingsManagerSingleton = nullptr;
+
+	/** @brief A scene directory inside a pack; empty without a pack so discovery finds nothing. */
+	std::filesystem::path GetPackSceneDir(const std::filesystem::path& packRoot, std::string_view directoryName)
+	{
+		return packRoot.empty() ? std::filesystem::path{} : packRoot / directoryName;
+	}
 
 	/// RAII CPU pass for the in-game Profiling UI; ends the pass on every early-return path.
 	struct ProfilerPassScope
@@ -212,32 +219,39 @@ std::filesystem::path SceneSettingsManager::GetUserSettingsFilePath()
 	return Util::PathHelpers::GetSceneSettingsPath() / "SceneManager.json";
 }
 
-std::filesystem::path SceneSettingsManager::GetOverwritesPath(SceneType type)
+std::filesystem::path SceneSettingsManager::GetActiveScenePackRoot()
+{
+	return UnifiedPresetCatalog::GetSingleton().GetActivePackRoot();
+}
+
+bool SceneSettingsManager::HasScenePayload(const std::filesystem::path& packRoot)
+{
+	std::error_code ec;
+	const std::array sceneDirectories{ GetOverwritesPath(SceneType::InteriorOnly, packRoot),
+		GetOverwritesPath(SceneType::TimeOfDay, packRoot), GetWeatherOverwritesDir(packRoot), GetLocationOverwritesDir(packRoot) };
+	return std::ranges::any_of(sceneDirectories, [&](const auto& directory) { return std::filesystem::is_directory(directory, ec); });
+}
+
+std::filesystem::path SceneSettingsManager::GetOverwritesPath(SceneType type, const std::filesystem::path& packRoot)
 {
 	// Location overwrites are keyed by form under GetLocationOverwritesDir(), not by scene type name.
 	assert(IsEntryListSceneType(type));
-	return Util::PathHelpers::GetSceneSettingsPath() / GetSceneTypeName(type);
+	return GetPackSceneDir(packRoot, GetSceneTypeName(type));
 }
 
-std::filesystem::path SceneSettingsManager::GetWeatherOverwritesDir()
+std::filesystem::path SceneSettingsManager::GetWeatherOverwritesDir(const std::filesystem::path& packRoot)
 {
-	return Util::PathHelpers::GetSceneSettingsPath() / "Weather";
+	return GetPackSceneDir(packRoot, "Weather");
 }
 
-std::filesystem::path SceneSettingsManager::GetLocationOverwritesDir()
+std::filesystem::path SceneSettingsManager::GetLocationOverwritesDir(const std::filesystem::path& packRoot)
 {
-	return Util::PathHelpers::GetSceneSettingsPath() / "Locations";
-}
-
-std::filesystem::path SceneSettingsManager::GetPresetMetadataPath(const std::string& presetName)
-{
-	return Util::PathHelpers::GetSceneSettingsPath() / (presetName + ".json");
+	return GetPackSceneDir(packRoot, "Locations");
 }
 
 bool SceneSettingsManager::IsReservedPresetName(std::string_view presetName)
 {
-	// Windows paths are case-insensitive, so "scenemanager" would still replace the user document.
-	return _stricmp(std::string(presetName).c_str(), GetUserSettingsFilePath().stem().string().c_str()) == 0;
+	return Util::PathHelpers::IsHiddenLibraryEntry(presetName);
 }
 
 bool SceneSettingsManager::IsValidPresetVersion(std::string_view version)
@@ -373,10 +387,8 @@ void SceneSettingsManager::SetTimeOfDayTransitionHours(std::optional<float> hour
 
 void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
 {
-	timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
-	for (const auto& preset : presetMetadata)
-		timeOfDayTransitionHours = preset.transitionHours.value_or(timeOfDayTransitionHours);
-	timeOfDayTransitionHours = userTimeOfDayTransitionHours.value_or(timeOfDayTransitionHours);
+	const auto presetHours = activePresetMetadata ? activePresetMetadata->transitionHours : std::nullopt;
+	timeOfDayTransitionHours = userTimeOfDayTransitionHours.value_or(presetHours.value_or(kDefaultTimeOfDayTransitionHours));
 }
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetCurrentPeriod()

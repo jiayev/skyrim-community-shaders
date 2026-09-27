@@ -25,6 +25,10 @@ namespace Util
 	 */
 	namespace PathHelpers
 	{
+		/** Preset library folders, relative to the CommunityShaders plugin directory. */
+		constexpr const char* kUnifiedPresetsSubdir = "Presets";
+		constexpr const char* kEffects11PresetsSubdir = "Effects11/Presets";
+
 		/**
 		 * Gets the base Data directory path
 		 * @return Current working directory / "Data"
@@ -214,6 +218,27 @@ namespace Util
 		 */
 		std::filesystem::path GetUnifiedPresetsRealPath();
 
+		/**
+		 * @brief Directories to scan for a CommunityShaders subfolder: the Data (VFS) path, then the mod's
+		 * real folder when distinct, since MO2 hides folders created there mid-session from the VFS.
+		 * @param relativePath Path under CommunityShaders, e.g. "Presets".
+		 */
+		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath);
+
+		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
+		bool IsHiddenLibraryEntry(std::string_view name);
+
+		/**
+		 * @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root,
+		 * the first root winning when a name appears in more than one.
+		 */
+		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories);
+
+		/**
+		 * @brief Folder of a unified preset pack: the first scan root holding it, else the Data (VFS) path, which
+		 * MO2 routes to its overwrite folder.
+		 */
+		std::filesystem::path GetUnifiedPackPath(const std::string& packId);
 
 		/**
 		 * Returns the real path to the Features directory containing feature INI files.

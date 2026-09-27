@@ -2,13 +2,14 @@
 
 #include <d3d11.h>
 #include <filesystem>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <winrt/base.h>
 
 /**
- * @brief Discovers unified preset packs, orphan Effects 11 / CS Post Processing presets,
- * and Scene Manager exports under SceneSettings/ (presetMetadata + overwrite files).
+ * @brief Discovers unified preset packs (Effects 11, CS Post Processing and Scene Manager payloads)
+ * plus orphan Effects 11 / CS Post Processing presets.
  */
 class UnifiedPresetCatalog
 {
@@ -26,8 +27,7 @@ public:
 	{
 		UnifiedPack,
 		Effects11Orphan,
-		CSPPOrphan,
-		SceneManager
+		CSPPOrphan
 	};
 
 	struct PackInfo
@@ -47,10 +47,9 @@ public:
 		std::string invalidReason;
 
 		SourceKind source = SourceKind::UnifiedPack;
-		std::filesystem::path rootPath;           ///< Pack folder, library root, PP parent, or SceneSettings root
-		std::filesystem::path effects11Root;      ///< Folder with enbseries.ini + enbseries/
-		std::filesystem::path csppFile;           ///< Absolute path to CSPP json
-		std::filesystem::path sceneMetadataPath;  ///< SceneSettings/<Name>.json when SourceKind::SceneManager
+		std::filesystem::path rootPath;       ///< Pack folder, library root, or PP parent
+		std::filesystem::path effects11Root;  ///< Folder with enbseries.ini + enbseries/
+		std::filesystem::path csppFile;       ///< Absolute path to CSPP json
 
 		std::filesystem::path logoPath;
 		std::filesystem::path coverPath;
@@ -70,6 +69,9 @@ public:
 	const std::string& GetActivePackId() const { return activePackId; }
 	void SetActivePackId(const std::string& id);
 
+	/** @brief Folder of the active unified pack; empty when none is active or the active preset is an orphan. */
+	std::filesystem::path GetActivePackRoot() const;
+
 	PackInfo* FindPack(const std::string& id);
 	const PackInfo* FindPack(const std::string& id) const;
 
@@ -85,7 +87,7 @@ public:
 	bool EnsureArtwork(PackInfo& pack);
 	void ReleaseAllArtwork();
 
-	/** Apply Effects11 and/or CSPP; Scene Manager packs reload live overwrites. */
+	/** Apply Effects11 and/or CSPP, then swap the Scene Manager overwrite layer to this pack's scene files. */
 	bool ApplyPack(const std::string& id, bool saveEffects11Current = true);
 
 	bool OpenPresetsFolder() const;
@@ -94,14 +96,31 @@ public:
 	std::filesystem::path GetPresetsRoot() const;
 	std::filesystem::path GetPresetsRealPath() const;
 
+	/** @brief A pack's manifest file: `<PackId>.json`, else the legacy `preset.json` when only that exists. */
+	static std::filesystem::path GetPackManifestPath(const std::filesystem::path& packRoot);
+
+	/**
+	 * @brief Parses a pack's manifest.
+	 * @param outError Receives the parse error when the manifest exists but is invalid.
+	 * @return The manifest object, or an empty object when absent or invalid.
+	 */
+	static nlohmann::json ReadPackManifest(const std::filesystem::path& packRoot, std::string* outError = nullptr);
+
+	/**
+	 * @brief Folder holding a pack's enbseries.ini + enbseries/: the manifest's `effects11.path`, then `effects11/`,
+	 * then the pack root. Empty when none validates or the manifest sets `backends.effects11` to false.
+	 */
+	static std::filesystem::path ResolveEffects11Root(const std::filesystem::path& packRoot, const nlohmann::json& manifest);
+
 private:
+	UnifiedPresetCatalog() { LoadActiveState(); }
+
 	void LoadActiveState();
 	void SaveActiveState() const;
 
 	void DiscoverUnifiedPacks();
 	void DiscoverEffects11Orphans();
 	void DiscoverCSPPOrphans();
-	void DiscoverSceneManagerPresets();
 
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);
 

@@ -188,13 +188,13 @@ public:
 	/// location data first if not already loaded; returns whatever it has if either fails to load.
 	std::vector<std::string> GetOverwriteModNames();
 
-	/// Every file a preset of this name currently owns, across every scene directory.
-	std::vector<std::filesystem::path> FindPresetFiles(const std::string& modName) const;
+	/// Every scene file the pack of this name currently owns, across every scene directory in Presets/<Name>/.
+	static std::vector<std::filesystem::path> FindPresetFiles(const std::string& packId);
 
 	static constexpr const char* kDefaultPresetVersion = "1.0.0";
 
 	/** @brief Display + artwork inputs for ExportPreset. Artwork sources are absolute paths to copy
-	 *  into SceneSettings/<Name>/; empty source with clear* = drop that field on re-export. */
+	 *  into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
 	struct PresetExportInfo
 	{
 		std::string name;
@@ -210,14 +210,12 @@ public:
 		bool clearScreenshots = false;
 	};
 
-	/** @brief Bakes the winning values of every context into SceneSettings/, replacing that preset's file set.
-	 *  Writes SceneSettings/<Name>.json with a presetMetadata block the Presets browser reads as-is.
-	 *  Optionally copies logo/cover/gallery images into SceneSettings/<Name>/.
+	/** @brief Bakes the winning values of every context into the unified pack Presets/<Name>/, replacing its scene files.
+	 *  Merges the display fields into the pack manifest <Name>.json and copies logo/cover/gallery images beside it.
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const PresetExportInfo& info);
 
-	/// A preset's identity file at the SceneSettings root, written alongside its overwrites on export.
-	/// Optional display fields use the same keys as unified Presets packs; artwork paths are relative to SceneSettings/.
+	/// Scene-relevant fields of a unified pack manifest. Artwork paths are relative to the pack folder.
 	struct PresetMetadata
 	{
 		std::string name;
@@ -235,15 +233,13 @@ public:
 	/// Whether a preset version is a semantic MAJOR.MINOR.PATCH triple.
 	static bool IsValidPresetVersion(std::string_view version);
 
-	/// Preset identity files found at the SceneSettings root, in filename order.
-	const std::vector<PresetMetadata>& GetPresetMetadata() const { return presetMetadata; }
+	/// Manifest of the pack supplying the overwrite layer, if one is active.
+	const std::optional<PresetMetadata>& GetActivePresetMetadata() const { return activePresetMetadata; }
 
-	/// Re-scan SceneSettings/*.json for presetMetadata blocks without reloading overwrite entries.
-	void RefreshPresetMetadata() { DiscoverPresetMetadata(); }
+	/** @brief Reads a pack manifest; the name falls back to the folder name. Nullopt when the pack has no manifest. */
+	static std::optional<PresetMetadata> ReadPresetMetadata(const std::filesystem::path& packRoot);
 
-	static std::filesystem::path GetPresetMetadataPath(const std::string& presetName);
-
-	/// Whether a preset of this name would collide with a file the Scene Manager owns at the root.
+	/// Whether a pack of this name would be hidden from preset scans.
 	static bool IsReservedPresetName(std::string_view presetName);
 
 	// --- Scene Application ---
@@ -304,7 +300,14 @@ public:
 
 	static std::string GetSceneTypeName(SceneType type);
 	static std::filesystem::path GetUserSettingsFilePath();
-	static std::filesystem::path GetOverwritesPath(SceneType type);
+
+	/** @brief Folder of the unified pack whose scene files form the overwrite layer; empty when no pack is active. */
+	static std::filesystem::path GetActiveScenePackRoot();
+
+	/** @brief Whether a pack folder holds any scene directory. */
+	static bool HasScenePayload(const std::filesystem::path& packRoot);
+
+	static std::filesystem::path GetOverwritesPath(SceneType type, const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
 	// --- Time of Day Helpers (public for UI) ---
 
@@ -418,7 +421,7 @@ public:
 
 	bool HasWeatherConfig(RE::FormID weatherId);
 
-	static std::filesystem::path GetWeatherOverwritesDir();
+	static std::filesystem::path GetWeatherOverwritesDir(const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
 	// --- Per-Location Scene Settings ---
 
@@ -482,7 +485,7 @@ public:
 	void RemoveLocationTarget(LocationTargetType type, const std::string& formKey);
 
 	/// Every target kind shares one directory; each target's type comes from its form, not its path.
-	static std::filesystem::path GetLocationOverwritesDir();
+	static std::filesystem::path GetLocationOverwritesDir(const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
 	/// Default duration used by location float transitions.
 	static constexpr float kDefaultLocationTransitionSeconds = 5.0f;
@@ -877,7 +880,7 @@ private:
 	bool weatherUserSettingsModified = false;
 	bool locationUserSettingsModified = false;
 	bool locationTransitionModified = false;
-	std::vector<PresetMetadata> presetMetadata;
+	std::optional<PresetMetadata> activePresetMetadata;
 	float timeOfDayTransitionHours = kDefaultTimeOfDayTransitionHours;
 	std::optional<float> userTimeOfDayTransitionHours;
 	bool dataLoaded = false;
@@ -1263,11 +1266,10 @@ private:
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count);
 
-	/// Re-reads every preset identity file at the SceneSettings root.
+	/// Re-reads the active pack's manifest.
 	void DiscoverPresetMetadata();
 
-	/** @brief Re-derives the period transition: the user's value, else the last preset in filename
-	 *  order that sets one, as feature overrides layer, else the default. */
+	/** @brief Re-derives the period transition: the user's value, else the active pack's, else the default. */
 	void RefreshTimeOfDayTransitionHours();
 
 	/// Discover overwrite files for a single weather SPID folder.

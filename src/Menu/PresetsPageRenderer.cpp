@@ -214,7 +214,7 @@ void PresetsPageRenderer::RenderToolbar()
 			discovered = true;
 		}
 		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs, Effects 11 library presets, Post Processing JSON files, and Scene Manager exports."));
+			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs, Effects 11 library presets, and Post Processing JSON files."));
 
 		ImGui::SameLine();
 		if (ImGui::Button(ICON_FA_FOLDER_OPEN "##PresetsOpenFolder"))
@@ -309,8 +309,6 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = pack.author;
 			else if (!pack.version.empty())
 				meta = std::format("v{}", pack.version);
-			else if (pack.source == UnifiedPresetCatalog::SourceKind::SceneManager)
-				meta = T("menu.presets.source_sm", "Scene Manager export");
 			else if (pack.source == UnifiedPresetCatalog::SourceKind::Effects11Orphan)
 				meta = T("menu.presets.source_e11", "Effects 11 library");
 			else if (pack.source == UnifiedPresetCatalog::SourceKind::CSPPOrphan)
@@ -443,10 +441,7 @@ void PresetsPageRenderer::RenderDetail()
 				1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
-			const char* applyLabel = (pack->hasSceneManager && !pack->hasEffects11 && !pack->hasCSPP) ?
-				T("menu.presets.reload_sm", "Reload Overwrites") :
-				T("menu.presets.apply", "Apply Preset");
-			if (Util::ButtonWithFlash(applyLabel, ImVec2(applyWidth, 0))) {
+			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset"), ImVec2(applyWidth, 0))) {
 				if (catalog.ApplyPack(pack->id, true)) {
 					logger::info("[Presets] Applied pack '{}'", pack->id);
 				}
@@ -460,10 +455,7 @@ void PresetsPageRenderer::RenderDetail()
 			if (ImGui::Button(ICON_FA_FOLDER_OPEN "##OpenPack", ImVec2(folderSize, folderSize)))
 				catalog.OpenPackFolder(pack->id);
 			ImGui::PopStyleVar();
-			const char* openLabel = (pack->source == UnifiedPresetCatalog::SourceKind::SceneManager) ?
-				T("menu.presets.open_scenesettings", "Open SceneSettings") :
-				T("menu.presets.open_pack", "Open Pack Folder");
-			Util::AddTooltip(openLabel);
+			Util::AddTooltip(T("menu.presets.open_pack", "Open Pack Folder"));
 
 			if (catalog.GetActivePackId() == pack->id) {
 				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
@@ -535,8 +527,8 @@ void PresetsPageRenderer::RenderDetail()
 
 	if (pack->hasSceneManager) {
 		ImGui::Spacing();
-		ImGui::TextDisabled("%s", T("menu.presets.sm_apply_note",
-			"Scene Manager Apply reloads live SceneSettings overwrites; it does not exclusively switch away from other SM presets."));
+		ImGui::TextDisabled("%s", T("menu.presets.sm_layer_note",
+			"Applying makes this pack's Scene Manager files the active scene layer, replacing the previous pack's."));
 	}
 
 	if (!pack->valid && !pack->invalidReason.empty()) {

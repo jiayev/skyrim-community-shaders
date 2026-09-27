@@ -109,7 +109,8 @@ private:
 
 	const PresetInfo* FindPreset(const std::string& id) const;
 	void EnsureDefaultSelection();
-	void ScanLibraryDirectory(const std::filesystem::path& root, bool unifiedPacks);
+	/** @brief Adds each preset folder under a CommunityShaders subfolder, across the VFS and real mod roots. */
+	void ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks);
 
 	std::vector<PresetInfo> presets;
 	std::string activePresetId = kLegacyPresetId;

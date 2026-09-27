@@ -89,12 +89,12 @@ namespace Util
 
 		std::filesystem::path GetEffects11PresetsPath()
 		{
-			return GetCommunityShaderPath() / "Effects11" / "Presets";
+			return GetCommunityShaderPath() / kEffects11PresetsSubdir;
 		}
 
 		std::filesystem::path GetUnifiedPresetsPath()
 		{
-			return GetCommunityShaderPath() / "Presets";
+			return GetCommunityShaderPath() / kUnifiedPresetsSubdir;
 		}
 
 
@@ -183,12 +183,61 @@ namespace Util
 
 		std::filesystem::path GetEffects11PresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets";
+			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kEffects11PresetsSubdir;
 		}
 
 		std::filesystem::path GetUnifiedPresetsRealPath()
 		{
-			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "Presets";
+			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kUnifiedPresetsSubdir;
+		}
+
+		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath)
+		{
+			std::vector<std::filesystem::path> roots{ GetCommunityShaderPath() / relativePath };
+			if (const auto realRoot = GetRootRealPath(); !realRoot.empty()) {
+				auto realPath = realRoot / "SKSE" / "Plugins" / "CommunityShaders" / relativePath;
+				std::error_code ec;
+				if (!std::filesystem::equivalent(roots.front(), realPath, ec))
+					roots.push_back(std::move(realPath));
+			}
+			return roots;
+		}
+
+		bool IsHiddenLibraryEntry(std::string_view name)
+		{
+			return name.starts_with('_') || name.starts_with('.');
+		}
+
+		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories)
+		{
+			std::vector<std::filesystem::path> found;
+			const auto isListed = [&](const std::filesystem::path& name) {
+				return std::ranges::any_of(found, [&](const auto& path) {
+					return _wcsicmp(path.filename().c_str(), name.c_str()) == 0;
+				});
+			};
+			for (const auto& root : GetCommunityShaderScanRoots(relativePath)) {
+				std::error_code ec;
+				for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+					std::error_code typeEc;
+					const bool wantedType = directories ? entry.is_directory(typeEc) : entry.is_regular_file(typeEc);
+					const auto name = entry.path().filename();
+					if (wantedType && !name.empty() && !IsHiddenLibraryEntry(name.string()) && !isListed(name))
+						found.push_back(entry.path());
+				}
+			}
+			return found;
+		}
+
+		std::filesystem::path GetUnifiedPackPath(const std::string& packId)
+		{
+			const auto roots = GetCommunityShaderScanRoots(kUnifiedPresetsSubdir);
+			for (const auto& root : roots) {
+				std::error_code ec;
+				if (std::filesystem::is_directory(root / packId, ec))
+					return root / packId;
+			}
+			return roots.front() / packId;
 		}
 
 

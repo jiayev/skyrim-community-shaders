@@ -1,6 +1,7 @@
 #include "PresetManager.h"
 
 #include "EffectManager.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "SettingManager.h"
 #include "Utils/FileSystem.h"
 
@@ -129,50 +130,24 @@ void PresetManager::EnsureDefaultSelection()
 	activePresetId = kLegacyPresetId;
 }
 
-void PresetManager::ScanLibraryDirectory(const std::filesystem::path& root, bool unifiedPacks)
+void PresetManager::ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks)
 {
-	std::error_code ec;
-	if (!std::filesystem::is_directory(root, ec))
-		return;
-
-	for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-		if (ec)
-			break;
-		if (!entry.is_directory())
-			continue;
-
-		const auto packName = entry.path().filename().string();
-		if (packName.empty() || packName.starts_with('_') || packName.starts_with('.'))
-			continue;
-
-		std::filesystem::path libraryRoot = entry.path();
-		std::string id = packName;
-		std::string displayName = packName;
-		bool isUnified = false;
+	for (const auto& folder : Util::PathHelpers::ListCommunityShaderEntries(relativePath, true)) {
+		const auto packName = folder.filename().string();
+		auto libraryRoot = folder;
 
 		if (unifiedPacks) {
-			// Prefer nested effects11/; fall back to classic ENB layout at pack root (NAT.ENB-style).
-			const auto nested = entry.path() / "effects11";
-			std::string nestedReason;
-			std::string rootReason;
-			if (ValidateLibraryPreset(nested, nestedReason)) {
-				libraryRoot = nested;
-			} else if (ValidateLibraryPreset(entry.path(), rootReason)) {
-				libraryRoot = entry.path();
-			} else {
+			libraryRoot = UnifiedPresetCatalog::ResolveEffects11Root(folder, UnifiedPresetCatalog::ReadPackManifest(folder));
+			if (libraryRoot.empty())
 				continue;
-			}
-			id = MakeUnifiedPackPresetId(packName);
-			displayName = packName;
-			isUnified = true;
 		}
 
 		PresetInfo info;
-		info.id = std::move(id);
-		info.displayName = std::move(displayName);
+		info.id = unifiedPacks ? MakeUnifiedPackPresetId(packName) : packName;
+		info.displayName = packName;
 		info.rootPath = libraryRoot;
 		info.isLegacy = false;
-		info.isUnifiedPack = isUnified;
+		info.isUnifiedPack = unifiedPacks;
 		info.valid = ValidateLibraryPreset(libraryRoot, info.invalidReason);
 		presets.push_back(std::move(info));
 	}
@@ -195,10 +170,8 @@ void PresetManager::DiscoverPresets()
 		legacy.rootPath = GetLegacyENBSeriesIniPath().parent_path();
 	presets.push_back(std::move(legacy));
 
-	// Scan the real on-disk library (same path Open Folder uses). Under MO2, newly
-	// added folders may not appear via the Data VFS path until a full refresh.
-	ScanLibraryDirectory(GetPresetsRealPath(), false);
-	ScanLibraryDirectory(Util::PathHelpers::GetUnifiedPresetsRealPath(), true);
+	ScanLibraryDirectory(Util::PathHelpers::kEffects11PresetsSubdir, false);
+	ScanLibraryDirectory(Util::PathHelpers::kUnifiedPresetsSubdir, true);
 
 	// Keep Legacy first; sort library entries by display name.
 	if (presets.size() > 1) {

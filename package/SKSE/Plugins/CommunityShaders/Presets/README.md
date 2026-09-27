@@ -28,48 +28,28 @@ Presets/MyPack/
   logo.png / cover.png / gallery/
 ```
 
-## Scene Manager exports (canonical)
+### Scene Manager pack
 
-Scene Manager **Export preset** is the source of truth for Scene Settings packs. It writes into the live tree:
+Scene Manager **Export preset** writes a pack in this layout; it can sit beside `effects11/` and `cspp.json` in the same pack:
 
 ```
-SceneSettings/
-  <Name>.json                 # presetMetadata — identity + optional Presets fields
-  <Name>/                     # optional artwork (same filenames as unified packs)
-    logo.png
-    cover.png
-    gallery/
-  InteriorOnly/<Name>_*.json
-  TimeOfDay/.../<Name>_*.json
-  Weather/<spid>/.../<Name>_*.json
-  Locations/<formKey>/.../<Name>_*.json
+Presets/MyPack/
+  MyPack.json                        (metadata, merged on re-export)
+  InteriorOnly/MyPack_<Feature>.json
+  TimeOfDay/<Period>/MyPack_<Feature>.json
+  Weather/<spid>/[<Period>/]MyPack_<Feature>.json
+  Locations/<formKey>/[<Period>/]MyPack_<Feature>.json
+  logo.png / cover.png / gallery/
 ```
 
-### `presetMetadata` (SceneSettings/`<Name>`.json)
+Only the **active** pack's scene files load. Applying another pack swaps the Scene Manager layer to it; a pack without scene files clears it. Your own Scene Manager edits stay in `SceneSettings/SceneManager.json` and always apply on top.
 
-Required:
+Export writes `version` (`MAJOR.MINOR.PATCH`) and `periodTransitionHours` into the metadata alongside the display fields below.
 
-| Key | Meaning |
-|-----|---------|
-| `name` | Preset identity (must match filename stem / overwrite prefix) |
-| `version` | `MAJOR.MINOR.PATCH` |
-| `periodTransitionHours` | Written by export from the current Scene Manager value |
+## Discovery
 
-Optional (same keys as unified Presets packs; artwork paths relative to `SceneSettings/`):
-
-| Key | Meaning |
-|-----|---------|
-| `author` | Display author |
-| `description` | Display blurb |
-| `tags` | String array |
-| `logo` / `cover` / `screenshots` | e.g. `"MyPreset/logo.png"` |
-
-The Scene Manager export dialog can fill these and **Browse** images; chosen files are copied into `SceneSettings/<Name>/` (cover as poster art, screenshots under `gallery/`).
-
-If artwork paths are omitted, the Presets browser still picks up `SceneSettings/<Name>/logo.png`, `cover.png`, and `gallery/` automatically.
-
-The Presets tab lists these exports with an **SM** badge. Apply / Reload Overwrites rescans SceneSettings; it does **not** exclusively switch away from other Scene Manager overwrite files.
+Packs are found under both the Data (VFS) path and the Community Shaders mod's own folder, so packs from other MO2 mods and packs created mid-session both show up. Folders starting with `_` or `.` are ignored.
 
 ## Metadata (optional, Presets packs)
 
-When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths, and backend paths. Without it the UI uses the folder name, ReadMe text, and inferred E11/CSPP/artwork.
+When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths (`logo` / `cover` / `screenshots`, relative to the pack folder), and backend paths (`effects11.path`, `cspp.file`, `backends`). Without it the UI uses the folder name, ReadMe text, and inferred E11/CSPP/Scene Manager content and artwork.

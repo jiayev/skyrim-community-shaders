@@ -318,10 +318,10 @@ namespace
 		DrawNameList(snapshot.transitionApplyFailures);
 	}
 
-	void DrawPresets(const std::vector<SceneSettingsManager::PresetMetadata>& presets)
+	void DrawPresets(const std::optional<SceneSettingsManager::PresetMetadata>& preset)
 	{
-		if (presets.empty()) {
-			Util::Text::Disabled("No preset metadata files found.");
+		if (!preset) {
+			Util::Text::Disabled("No active preset pack.");
 			return;
 		}
 		if (!ImGui::BeginTable("Presets", 3, kDebugTableFlags))
@@ -329,15 +329,13 @@ namespace
 		for (const auto* header : { "Name", "Version", "File" })
 			ImGui::TableSetupColumn(header);
 		ImGui::TableHeadersRow();
-		for (const auto& preset : presets) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(preset.name.c_str());
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(preset.version.c_str());
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(preset.path.filename().string().c_str());
-		}
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(preset->name.c_str());
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(preset->version.c_str());
+		ImGui::TableNextColumn();
+		ImGui::TextUnformatted(preset->path.string().c_str());
 		ImGui::EndTable();
 	}
 
@@ -396,13 +394,13 @@ void SceneManager::DrawSettings()
 	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
 		"Hours at the end of each time of day period spent blending into the next.\n"
 		"0 switches between periods instantly.\n"
-		"Installed presets supply this until you set your own."));
+		"The active preset supplies this until you set your own."));
 	if (HasUserTimeOfDayTransitionHours()) {
 		ImGui::SameLine();
 		if (Util::WarningButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition")))
 			SetTimeOfDayTransitionHours(std::nullopt);
 		Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_reset_tooltip",
-			"Drop your value and use the last installed preset's, or the default when none sets one."));
+			"Drop your value and use the active preset's, or the default when it sets none."));
 	}
 	ImGui::Separator();
 
@@ -427,7 +425,7 @@ void SceneManager::DrawSettings()
 	if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
 		DrawResolvedSettings(snapshot);
 	if (ImGui::CollapsingHeader("Presets"))
-		DrawPresets(GetPresetMetadata());
+		DrawPresets(GetActivePresetMetadata());
 	if (ImGui::CollapsingHeader("Scene Type Entries"))
 		DrawLayers(snapshot.sceneLayers);
 	if (ImGui::CollapsingHeader("Weather Entries"))

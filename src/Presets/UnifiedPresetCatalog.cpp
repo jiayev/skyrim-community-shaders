@@ -25,6 +25,8 @@ namespace
 	constexpr intptr_t kShellExecuteSuccessThreshold = 32;
 	constexpr const char* kActiveStateFileName = "_active.json";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
+	constexpr const char* kEffects11PackSubdir = "effects11";
+	constexpr const char* kDefaultCSPPFileName = "cspp.json";
 
 	std::string ToLower(std::string s)
 	{
@@ -53,29 +55,6 @@ namespace
 	{
 		const auto ext = ToLower(path.extension().string());
 		return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" || ext == ".bmp" || ext == ".dds";
-	}
-
-	/** effects11/ nested pack, or classic ENB drop with enbseries at the pack root (NAT.ENB-style). */
-	bool TryResolveEffects11Root(const std::filesystem::path& packRoot, const std::string& preferredRel,
-		std::filesystem::path& outRoot)
-	{
-		std::string reason;
-		const auto tryCandidate = [&](const std::filesystem::path& candidate) {
-			if (candidate.empty())
-				return false;
-			if (!PresetManager::ValidateLibraryPreset(candidate, reason))
-				return false;
-			outRoot = candidate;
-			return true;
-		};
-
-		if (!preferredRel.empty() && tryCandidate(packRoot / preferredRel))
-			return true;
-		if (preferredRel != "effects11" && tryCandidate(packRoot / "effects11"))
-			return true;
-		if (tryCandidate(packRoot))
-			return true;
-		return false;
 	}
 
 	std::string InferDescriptionFromReadme(const std::filesystem::path& packRoot)
@@ -194,6 +173,69 @@ std::filesystem::path UnifiedPresetCatalog::GetPresetsRealPath() const
 	return GetPresetsRoot();
 }
 
+std::filesystem::path UnifiedPresetCatalog::GetPackManifestPath(const std::filesystem::path& packRoot)
+{
+	auto manifestPath = packRoot / packRoot.filename();
+	manifestPath += ".json";
+	std::error_code ec;
+	if (!std::filesystem::exists(manifestPath, ec) && std::filesystem::exists(packRoot / kLegacyMetaFileName, ec))
+		return packRoot / kLegacyMetaFileName;
+	return manifestPath;
+}
+
+json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoot, std::string* outError)
+{
+	const auto manifestPath = GetPackManifestPath(packRoot);
+	std::ifstream in(manifestPath);
+	if (!in)
+		return json::object();
+
+	std::string error;
+	try {
+		auto manifest = json::parse(in);
+		if (manifest.is_object())
+			return manifest;
+		error = "not a JSON object";
+	} catch (const json::exception& e) {
+		error = e.what();
+	}
+	if (outError)
+		*outError = std::format("Invalid {}: {}", manifestPath.filename().string(), error);
+	return json::object();
+}
+
+std::filesystem::path UnifiedPresetCatalog::ResolveEffects11Root(const std::filesystem::path& packRoot, const json& manifest)
+{
+	assert(manifest.is_object());
+	if (const auto backends = manifest.find("backends"); backends != manifest.end() && backends->is_object()) {
+		if (const auto enabled = backends->find("effects11");
+			enabled != backends->end() && enabled->is_boolean() && !enabled->get<bool>())
+			return {};
+	}
+
+	std::filesystem::path preferredRoot;
+	if (const auto effects11 = manifest.find("effects11"); effects11 != manifest.end() && effects11->is_object()) {
+		if (const auto path = effects11->find("path"); path != effects11->end() && path->is_string())
+			preferredRoot = packRoot / path->get<std::string>();
+	}
+
+	// Classic ENB drops (NAT.ENB-style) put enbseries at the pack root instead of effects11/.
+	for (const auto& candidate : { preferredRoot, packRoot / kEffects11PackSubdir, packRoot }) {
+		std::string reason;
+		if (!candidate.empty() && PresetManager::ValidateLibraryPreset(candidate, reason))
+			return candidate;
+	}
+	return {};
+}
+
+std::filesystem::path UnifiedPresetCatalog::GetActivePackRoot() const
+{
+	// Orphan ids carry a "source:" prefix, which no pack folder name can contain.
+	if (activePackId.empty() || activePackId.contains(':'))
+		return {};
+	return Util::PathHelpers::GetUnifiedPackPath(activePackId);
+}
+
 void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
@@ -250,102 +292,65 @@ const UnifiedPresetCatalog::PackInfo* UnifiedPresetCatalog::FindPack(const std::
 
 void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 {
-	std::error_code ec;
-	const auto root = GetPresetsRealPath();
-	if (!std::filesystem::is_directory(root, ec))
-		return;
-
-	for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-		if (ec || !entry.is_directory())
-			continue;
-
-		const auto packId = entry.path().filename().string();
-		if (packId.empty() || packId.starts_with('_') || packId.starts_with('.'))
-			continue;
+	for (const auto& packRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kUnifiedPresetsSubdir, true)) {
+		const auto packId = packRoot.filename().string();
 
 		PackInfo pack;
 		pack.id = packId;
 		pack.name = packId;
 		pack.source = SourceKind::UnifiedPack;
-		pack.rootPath = entry.path();
+		pack.rootPath = packRoot;
 
-		std::string effects11Rel = "effects11";
-		std::string csppRel = "cspp.json";
-		json backendsOverride = json::object();
-		bool haveBackendsOverride = false;
-
-		// Prefer <PackId>.json, fall back to legacy preset.json.
-		std::filesystem::path metaPath = entry.path() / (packId + ".json");
-		if (!std::filesystem::exists(metaPath))
-			metaPath = entry.path() / kLegacyMetaFileName;
-
-		if (std::filesystem::exists(metaPath)) {
-			try {
-				std::ifstream in(metaPath);
-				json meta;
-				in >> meta;
-				pack.name = meta.value("name", packId);
-				pack.author = meta.value("author", "");
-				pack.version = meta.value("version", "");
-				pack.description = meta.value("description", "");
-				pack.nexusUrl = meta.value("nexusUrl", "");
-				if (meta.contains("tags") && meta["tags"].is_array()) {
-					for (const auto& tag : meta["tags"]) {
-						if (tag.is_string())
-							pack.tags.push_back(tag.get<std::string>());
-					}
+		std::string csppRel = kDefaultCSPPFileName;
+		const auto meta = ReadPackManifest(packRoot, &pack.invalidReason);
+		pack.valid = pack.invalidReason.empty();
+		try {
+			pack.name = meta.value("name", packId);
+			pack.author = meta.value("author", "");
+			pack.version = meta.value("version", "");
+			pack.description = meta.value("description", "");
+			pack.nexusUrl = meta.value("nexusUrl", "");
+			if (meta.contains("tags") && meta["tags"].is_array()) {
+				for (const auto& tag : meta["tags"]) {
+					if (tag.is_string())
+						pack.tags.push_back(tag.get<std::string>());
 				}
-
-				if (meta.contains("effects11") && meta["effects11"].is_object())
-					effects11Rel = meta["effects11"].value("path", effects11Rel);
-				if (meta.contains("cspp") && meta["cspp"].is_object())
-					csppRel = meta["cspp"].value("file", csppRel);
-
-				if (meta.contains("logo") && meta["logo"].is_string())
-					pack.logoPath = ResolveRelative(entry.path(), meta["logo"].get<std::string>());
-				if (meta.contains("cover") && meta["cover"].is_string())
-					pack.coverPath = ResolveRelative(entry.path(), meta["cover"].get<std::string>());
-				if (meta.contains("screenshots") && meta["screenshots"].is_array()) {
-					for (const auto& shot : meta["screenshots"]) {
-						if (!shot.is_string())
-							continue;
-						auto path = ResolveRelative(entry.path(), shot.get<std::string>());
-						if (!path.empty())
-							pack.screenshotPaths.push_back(std::move(path));
-					}
-				}
-
-				if (meta.contains("backends") && meta["backends"].is_object()) {
-					backendsOverride = meta["backends"];
-					haveBackendsOverride = true;
-				}
-			} catch (const std::exception& e) {
-				pack.valid = false;
-				pack.invalidReason = std::format("Invalid {}: {}", metaPath.filename().string(), e.what());
 			}
+
+			if (meta.contains("cspp") && meta["cspp"].is_object())
+				csppRel = meta["cspp"].value("file", csppRel);
+
+			if (meta.contains("logo") && meta["logo"].is_string())
+				pack.logoPath = ResolveRelative(packRoot, meta["logo"].get<std::string>());
+			if (meta.contains("cover") && meta["cover"].is_string())
+				pack.coverPath = ResolveRelative(packRoot, meta["cover"].get<std::string>());
+			if (meta.contains("screenshots") && meta["screenshots"].is_array()) {
+				for (const auto& shot : meta["screenshots"]) {
+					if (!shot.is_string())
+						continue;
+					auto path = ResolveRelative(packRoot, shot.get<std::string>());
+					if (!path.empty())
+						pack.screenshotPaths.push_back(std::move(path));
+				}
+			}
+		} catch (const std::exception& e) {
+			pack.valid = false;
+			pack.invalidReason = std::format("Invalid {}: {}", GetPackManifestPath(packRoot).filename().string(), e.what());
 		}
 
-		// Filesystem inference — classic ENB drops (NAT.ENB) put enbseries at the pack root.
-		std::filesystem::path e11Root;
-		if (TryResolveEffects11Root(entry.path(), effects11Rel, e11Root)) {
-			pack.hasEffects11 = true;
-			pack.effects11Root = std::move(e11Root);
-		}
+		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
+		pack.hasEffects11 = !pack.effects11Root.empty();
 
-		auto csppPath = entry.path() / csppRel;
-		if (!std::filesystem::exists(csppPath) && csppRel != "cspp.json")
-			csppPath = entry.path() / "cspp.json";
+		auto csppPath = packRoot / csppRel;
+		if (!std::filesystem::exists(csppPath) && csppRel != kDefaultCSPPFileName)
+			csppPath = packRoot / kDefaultCSPPFileName;
 		if (std::filesystem::exists(csppPath)) {
 			pack.hasCSPP = true;
 			pack.csppFile = csppPath;
 		}
 
-		if (haveBackendsOverride) {
-			if (backendsOverride.contains("effects11") && backendsOverride["effects11"].is_boolean() &&
-				!backendsOverride["effects11"].get<bool>()) {
-				pack.hasEffects11 = false;
-				pack.effects11Root.clear();
-			}
+		if (meta.contains("backends") && meta["backends"].is_object()) {
+			const auto& backendsOverride = meta["backends"];
 			if (backendsOverride.contains("cspp") && backendsOverride["cspp"].is_boolean() &&
 				!backendsOverride["cspp"].get<bool>()) {
 				pack.hasCSPP = false;
@@ -353,16 +358,16 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			}
 		}
 
+		pack.hasSceneManager = SceneSettingsManager::HasScenePayload(packRoot);
+
 		if (pack.description.empty())
-			pack.description = InferDescriptionFromReadme(entry.path());
+			pack.description = InferDescriptionFromReadme(packRoot);
 		InferMissingArtwork(pack);
 
-		// Scene Manager exports live under SceneSettings/ (see DiscoverSceneManagerPresets), not
-		// as InteriorOnly/ folders inside a Presets pack.
-		if (!pack.hasEffects11 && !pack.hasCSPP) {
+		if (!pack.hasEffects11 && !pack.hasCSPP && !pack.hasSceneManager) {
 			pack.valid = false;
 			if (pack.invalidReason.empty())
-				pack.invalidReason = "No Effects11 or CSPP payload found";
+				pack.invalidReason = "No Effects11, CSPP or Scene Manager payload found";
 		}
 
 		packs.push_back(std::move(pack));
@@ -371,18 +376,8 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 
 void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 {
-	std::error_code ec;
-	const auto root = Util::PathHelpers::GetEffects11PresetsRealPath();
-	if (!std::filesystem::is_directory(root, ec))
-		return;
-
-	for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-		if (ec || !entry.is_directory())
-			continue;
-
-		const auto name = entry.path().filename().string();
-		if (name.empty() || name.starts_with('_') || name.starts_with('.'))
-			continue;
+	for (const auto& presetRoot : Util::PathHelpers::ListCommunityShaderEntries(Util::PathHelpers::kEffects11PresetsSubdir, true)) {
+		const auto name = presetRoot.filename().string();
 
 		// Skip if already covered by a unified pack with the same folder name
 		if (FindPack(name))
@@ -392,10 +387,10 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 		pack.id = std::string("e11:") + name;
 		pack.name = name;
 		pack.source = SourceKind::Effects11Orphan;
-		pack.rootPath = entry.path();
-		pack.effects11Root = entry.path();
-		pack.hasEffects11 = std::filesystem::exists(entry.path() / PresetManager::kEnbSeriesIniName) &&
-							std::filesystem::is_directory(entry.path() / PresetManager::kEnbSeriesDirName);
+		pack.rootPath = presetRoot;
+		pack.effects11Root = presetRoot;
+		pack.hasEffects11 = std::filesystem::exists(presetRoot / PresetManager::kEnbSeriesIniName) &&
+							std::filesystem::is_directory(presetRoot / PresetManager::kEnbSeriesDirName);
 		if (!pack.hasEffects11) {
 			pack.valid = false;
 			pack.invalidReason = "Missing enbseries.ini / enbseries";
@@ -407,112 +402,19 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 
 void UnifiedPresetCatalog::DiscoverCSPPOrphans()
 {
-	std::error_code ec;
-	const auto root = std::filesystem::path("Data") / "SKSE" / "Plugins" / "CommunityShaders" / "PostProcessing";
-	std::filesystem::path scanRoot = root;
-	const auto realRoot = Util::PathHelpers::GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "PostProcessing";
-	if (std::filesystem::is_directory(realRoot, ec))
-		scanRoot = realRoot;
-	else if (!std::filesystem::is_directory(scanRoot, ec))
-		return;
-
-	for (const auto& entry : std::filesystem::directory_iterator(scanRoot, ec)) {
-		if (ec || !entry.is_regular_file() || entry.path().extension() != ".json")
+	for (const auto& file : Util::PathHelpers::ListCommunityShaderEntries("PostProcessing", false)) {
+		if (file.extension() != ".json")
 			continue;
 
-		const auto stem = entry.path().stem().string();
-		if (stem.empty() || stem.starts_with('_'))
-			continue;
-
+		const auto stem = file.stem().string();
 		PackInfo pack;
 		pack.id = std::string("cspp:") + stem;
 		pack.name = stem;
 		pack.source = SourceKind::CSPPOrphan;
-		pack.rootPath = entry.path().parent_path();
-		pack.csppFile = entry.path();
+		pack.rootPath = file.parent_path();
+		pack.csppFile = file;
 		pack.hasCSPP = true;
 		pack.description = "Post Processing preset";
-		packs.push_back(std::move(pack));
-	}
-}
-
-void UnifiedPresetCatalog::DiscoverSceneManagerPresets()
-{
-	// Canonical Scene Manager export layout (source of truth for SM packs):
-	//   SceneSettings/<Name>.json          — presetMetadata { name, version, author?, description?, tags?, logo?, cover?, screenshots? }
-	//   SceneSettings/<Name>/              — optional artwork (logo.png, cover.png, gallery/)
-	//   SceneSettings/InteriorOnly/<Name>_*.json
-	//   SceneSettings/TimeOfDay/...        — same naming prefix
-	//   SceneSettings/Weather/... / Locations/...
-	auto& sceneManager = globals::features::sceneManager;
-	sceneManager.RefreshPresetMetadata();
-
-	const auto sceneRoot = Util::PathHelpers::GetSceneSettingsPath();
-
-	for (const auto& meta : sceneManager.GetPresetMetadata()) {
-		if (meta.name.empty())
-			continue;
-
-		const auto files = sceneManager.FindPresetFiles(meta.name);
-		const auto overwriteCount = files.empty() ? 0 : files.size() - (std::filesystem::exists(meta.path) ? 1 : 0);
-		const auto fallbackDescription = std::format(
-			"Scene Manager export — {} overwrite file(s) under SceneSettings. Apply reloads the live overwrite layer.",
-			overwriteCount);
-
-		const auto applyMetaToPack = [&](PackInfo& pack) {
-			pack.hasSceneManager = true;
-			pack.sceneMetadataPath = meta.path;
-			if (pack.version.empty())
-				pack.version = meta.version;
-			if (pack.author.empty())
-				pack.author = meta.author;
-			if (pack.description.empty())
-				pack.description = !meta.description.empty() ? meta.description : fallbackDescription;
-			if (pack.tags.empty())
-				pack.tags = meta.tags;
-			if (pack.tags.empty())
-				pack.tags = { "scene-manager", "exported" };
-
-			const auto assetsRoot = sceneRoot / meta.name;
-			if (pack.logoPath.empty() && !meta.logo.empty())
-				pack.logoPath = ResolveRelative(sceneRoot, meta.logo);
-			if (pack.coverPath.empty() && !meta.cover.empty())
-				pack.coverPath = ResolveRelative(sceneRoot, meta.cover);
-			if (pack.screenshotPaths.empty()) {
-				for (const auto& shot : meta.screenshots) {
-					auto path = ResolveRelative(sceneRoot, shot);
-					if (!path.empty())
-						pack.screenshotPaths.push_back(std::move(path));
-				}
-			}
-
-			// Convention: SceneSettings/<Name>/{logo,cover,gallery} without listing paths in JSON.
-			PackInfo artProbe;
-			artProbe.rootPath = assetsRoot;
-			InferMissingArtwork(artProbe);
-			if (pack.logoPath.empty())
-				pack.logoPath = std::move(artProbe.logoPath);
-			if (pack.coverPath.empty())
-				pack.coverPath = std::move(artProbe.coverPath);
-			if (pack.screenshotPaths.empty())
-				pack.screenshotPaths = std::move(artProbe.screenshotPaths);
-		};
-
-		// Same display name as a unified / orphan pack: attach SM badge rather than duplicating.
-		if (auto* existing = FindPack(meta.name)) {
-			applyMetaToPack(*existing);
-			continue;
-		}
-		if (FindPack(std::string("sm:") + meta.name))
-			continue;
-
-		PackInfo pack;
-		pack.id = std::string("sm:") + meta.name;
-		pack.name = meta.name;
-		pack.version = meta.version;
-		pack.source = SourceKind::SceneManager;
-		pack.rootPath = sceneRoot / meta.name;
-		applyMetaToPack(pack);
 		packs.push_back(std::move(pack));
 	}
 }
@@ -527,7 +429,6 @@ void UnifiedPresetCatalog::Discover()
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
 	DiscoverCSPPOrphans();
-	DiscoverSceneManagerPresets();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -736,19 +637,14 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		}
 	}
 
-	if (pack->hasSceneManager) {
-		// Scene Manager exports install overwrite files into SceneSettings immediately; refresh
-		// so newly exported/replaced files are the live mod layer. This is not an exclusive
-		// switch — every SceneSettings overwrite file remains active after reload.
-		auto& sceneManager = globals::features::sceneManager;
-		const auto fileCount = sceneManager.FindPresetFiles(pack->name).size();
-		sceneManager.ReloadOverwrites();
+	if (pack->hasSceneManager)
 		appliedAny = true;
-		logger::info("[Presets] Reloaded Scene Manager overwrites for preset '{}' ({} file(s))", pack->name, fileCount);
-	}
 
-	if (appliedAny)
+	if (appliedAny) {
 		SetActivePackId(id);
+		// The scene layer always follows the active pack, so a pack without scene files clears it.
+		globals::features::sceneManager.ReloadOverwrites();
+	}
 
 	return appliedAny;
 }
@@ -766,11 +662,13 @@ bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
 	if (!pack)
 		return false;
 
-	std::filesystem::path path = pack->rootPath;
-	if (pack->source == SourceKind::CSPPOrphan)
-		path = pack->csppFile.parent_path();
-	else if (pack->source == SourceKind::SceneManager && !pack->sceneMetadataPath.empty())
-		path = pack->sceneMetadataPath.parent_path();
+	std::filesystem::path path = pack->source == SourceKind::CSPPOrphan ? pack->csppFile.parent_path() : pack->rootPath;
+	// Explorer runs outside MO2's VFS, so open the physical copy when this mod folder has one.
+	if (const auto dataRelative = path.lexically_relative(Util::PathHelpers::GetDataPath()); !dataRelative.empty() && *dataRelative.begin() != "..") {
+		std::error_code ec;
+		if (auto realPath = Util::PathHelpers::GetRealPathFromDataRelative(dataRelative); !realPath.empty() && std::filesystem::exists(realPath, ec))
+			path = std::move(realPath);
+	}
 
 	const auto result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;

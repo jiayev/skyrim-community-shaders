@@ -31,11 +31,9 @@ namespace SceneSettingsInternal
 	/// Earlier open-shaders name for the locationTypes section and its "Category" type; read and migrated.
 	constexpr const char* kLegacyLocationTypeSectionName = "categories";
 	constexpr const char* kLegacyLocationTypeName = "Category";
-	/// Marks a SceneSettings root json as a preset's identity file rather than any other document.
-	constexpr const char* kPresetMetadataKey = "presetMetadata";
+	/// Unified pack manifest keys the Scene Manager reads and writes; artwork paths are relative to the pack folder.
 	constexpr const char* kPresetMetadataNameKey = "name";
 	constexpr const char* kPresetMetadataVersionKey = "version";
-	/// Optional Presets-browser fields (same keys unified packs use; paths relative to SceneSettings/).
 	constexpr const char* kPresetMetadataAuthorKey = "author";
 	constexpr const char* kPresetMetadataDescriptionKey = "description";
 	constexpr const char* kPresetMetadataTagsKey = "tags";

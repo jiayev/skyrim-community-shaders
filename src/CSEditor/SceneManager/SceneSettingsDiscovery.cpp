@@ -2,6 +2,7 @@
 
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsOverwrites.h"
 #include "Utils/FileSystem.h"
 
@@ -18,10 +19,11 @@ using namespace SceneSettingsLocationTargets;
 
 void SceneSettingsManager::DiscoverOverwrites(SceneType type)
 {
-	if (!IsEntryListSceneType(type))
+	const auto packRoot = GetActiveScenePackRoot();
+	if (!IsEntryListSceneType(type) || packRoot.empty())
 		return;
 	const auto previousEntryCount = GetEntries(type).size();
-	const auto basePath = GetOverwritesPath(type);
+	const auto basePath = GetOverwritesPath(type, packRoot);
 	if (type == SceneType::TimeOfDay) {
 		for (auto period : kPeriods)
 			DiscoverOverwritesInDir(type, GetOverwriteDir(basePath, period), period);
@@ -95,12 +97,13 @@ std::vector<std::string> SceneSettingsManager::GetOverwriteModNames()
 	return names;
 }
 
-std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const std::string& modName) const
+std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const std::string& packId)
 {
 	std::vector<std::filesystem::path> found;
-	if (modName.empty())
+	if (packId.empty())
 		return found;
-	const auto prefix = modName + "_";
+	const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(packId);
+	const auto prefix = packId + "_";
 
 	const auto sweepDir = [&](const std::filesystem::path& directory) {
 		std::error_code ec;
@@ -117,22 +120,17 @@ std::vector<std::filesystem::path> SceneSettingsManager::FindPresetFiles(const s
 		           std::vector<std::filesystem::path>{};
 	};
 
-	sweepDir(GetOverwritesPath(SceneType::InteriorOnly));
+	sweepDir(GetOverwritesPath(SceneType::InteriorOnly, packRoot));
 	for (auto period : kPeriods)
-		sweepDir(GetOverwriteDir(GetOverwritesPath(SceneType::TimeOfDay), period));
+		sweepDir(GetOverwriteDir(GetOverwritesPath(SceneType::TimeOfDay, packRoot), period));
 	// A weather or location keeps both saved sets on disk, so the preset claims its flat and per-period files.
 	const auto sweepSetDirs = [&](const std::filesystem::path& sceneDir) {
 		ForEachOverwriteSetDir(sceneDir, [&](const std::filesystem::path& directory, TimeOfDayPeriod) { sweepDir(directory); });
 	};
-	for (const auto& weatherDir : childDirectories(GetWeatherOverwritesDir(), "weather overwrite directories"))
+	for (const auto& weatherDir : childDirectories(GetWeatherOverwritesDir(packRoot), "weather overwrite directories"))
 		sweepSetDirs(weatherDir);
-	for (const auto& locationDir : childDirectories(GetLocationOverwritesDir(), "location overwrite directories"))
+	for (const auto& locationDir : childDirectories(GetLocationOverwritesDir(packRoot), "location overwrite directories"))
 		sweepSetDirs(locationDir);
-
-	std::error_code ec;
-	if (const auto metadataPath = GetPresetMetadataPath(modName);
-		!IsReservedPresetName(modName) && std::filesystem::exists(metadataPath, ec))
-		found.push_back(metadataPath);
 	return found;
 }
 
@@ -153,15 +151,21 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	if (safeModName.empty() || IsReservedPresetName(safeModName))
 		return false;
 
-	const auto sceneRoot = Util::PathHelpers::GetSceneSettingsPath();
-	const auto assetsDir = sceneRoot / safeModName;
+	const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(safeModName);
+	// Merged into rather than replaced, so fields other backends own (effects11, cspp, backends) survive.
+	std::string manifestError;
+	auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot, &manifestError);
+	if (!manifestError.empty()) {
+		logger::error("[SceneSettings] Preset '{}' not exported: {}", safeModName, manifestError);
+		return false;
+	}
 
 	const auto copyArtwork = [&](const std::filesystem::path& source, const std::filesystem::path& relativeDest)
 		-> std::optional<std::string> {
 		std::error_code ec;
 		if (source.empty() || !std::filesystem::is_regular_file(source, ec))
 			return std::nullopt;
-		const auto dest = sceneRoot / relativeDest;
+		const auto dest = packRoot / relativeDest;
 		std::filesystem::create_directories(dest.parent_path(), ec);
 		std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing, ec);
 		if (ec) {
@@ -171,24 +175,6 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		}
 		return relativeDest.generic_string();
 	};
-
-	// Capture Presets-browser artwork paths before the file sweep deletes the old metadata.
-	json preservedArtwork = json::object();
-	{
-		std::error_code existsEc;
-		const auto previousPath = GetPresetMetadataPath(safeModName);
-		if (std::filesystem::exists(previousPath, existsEc)) {
-			json previous;
-			if (ReadBoundedSceneJson(previousPath, previous)) {
-				if (const auto it = previous.find(kPresetMetadataKey); it != previous.end() && it->is_object()) {
-					for (const char* key : { kPresetMetadataLogoKey, kPresetMetadataCoverKey, kPresetMetadataScreenshotsKey }) {
-						if (it->contains(key))
-							preservedArtwork[key] = (*it)[key];
-					}
-				}
-			}
-		}
-	}
 
 	/// One output file: the root it must stay inside, the type description its metadata carries, and the
 	/// entries baked into it.
@@ -214,11 +200,11 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		}
 	};
 
-	const auto interiorRoot = GetOverwritesPath(SceneType::InteriorOnly);
+	const auto interiorRoot = GetOverwritesPath(SceneType::InteriorOnly, packRoot);
 	bakeContext({ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count },
 		GetEntries(SceneType::InteriorOnly), interiorRoot, interiorRoot, "Interior Only");
 
-	const auto timeOfDayRoot = GetOverwritesPath(SceneType::TimeOfDay);
+	const auto timeOfDayRoot = GetOverwritesPath(SceneType::TimeOfDay, packRoot);
 	for (auto period : kPeriods)
 		bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
 			GetEntries(SceneType::TimeOfDay), timeOfDayRoot, timeOfDayRoot, "Time of Day");
@@ -235,12 +221,12 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		}
 	};
 
-	const auto weatherRoot = GetWeatherOverwritesDir();
+	const auto weatherRoot = GetWeatherOverwritesDir(packRoot);
 	for (const auto& [weatherId, config] : weatherSceneConfigs)
 		bakeSceneSets({ .type = SceneContextType::Weather, .weatherId = weatherId }, config,
 			weatherRoot, weatherRoot / Util::FormIdToSpid(weatherId), "Weather");
 
-	const auto locationRoot = GetLocationOverwritesDir();
+	const auto locationRoot = GetLocationOverwritesDir(packRoot);
 	for (const auto& [configKey, config] : locationSceneConfigs) {
 		const auto* targetDescription = GetLocationTargetTypeName(config.type);
 		bakeSceneSets({ .type = SceneContextType::Location,
@@ -274,132 +260,103 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		}
 	}
 
-	json presetMeta{
-		{ kPresetMetadataNameKey, safeModName },
-		{ kPresetMetadataVersionKey, info.version },
-		{ kTimeOfDayTransitionHoursKey, timeOfDayTransitionHours }
+	if (!manifest.contains(kPresetMetadataNameKey))
+		manifest[kPresetMetadataNameKey] = safeModName;
+	manifest[kPresetMetadataVersionKey] = info.version;
+	manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
+	const auto setOrErase = [&](const char* key, const auto& value) {
+		if (value.empty())
+			manifest.erase(key);
+		else
+			manifest[key] = value;
 	};
-	if (!info.author.empty())
-		presetMeta[kPresetMetadataAuthorKey] = info.author;
-	if (!info.description.empty())
-		presetMeta[kPresetMetadataDescriptionKey] = info.description;
-	if (!info.tags.empty())
-		presetMeta[kPresetMetadataTagsKey] = info.tags;
+	setOrErase(kPresetMetadataAuthorKey, info.author);
+	setOrErase(kPresetMetadataDescriptionKey, info.description);
+	setOrErase(kPresetMetadataTagsKey, info.tags);
 
-	// Artwork: newly picked files win; otherwise keep previous paths unless the user cleared them.
-	if (!info.logoSource.empty()) {
-		const auto ext = info.logoSource.extension().string();
-		if (auto rel = copyArtwork(info.logoSource, std::filesystem::path(safeModName) / ("logo" + ext)))
-			presetMeta[kPresetMetadataLogoKey] = *rel;
-	} else if (!info.clearLogo && preservedArtwork.contains(kPresetMetadataLogoKey)) {
-		presetMeta[kPresetMetadataLogoKey] = preservedArtwork[kPresetMetadataLogoKey];
-	}
+	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
+	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
+		if (!source.empty()) {
+			if (auto rel = copyArtwork(source, std::format("{}{}", stem, source.extension().string())))
+				manifest[key] = *rel;
+		} else if (clear) {
+			manifest.erase(key);
+		}
+	};
+	exportArtwork(kPresetMetadataLogoKey, info.logoSource, info.clearLogo, "logo");
+	exportArtwork(kPresetMetadataCoverKey, info.coverSource, info.clearCover, "cover");
 
-	if (!info.coverSource.empty()) {
-		const auto ext = info.coverSource.extension().string();
-		if (auto rel = copyArtwork(info.coverSource, std::filesystem::path(safeModName) / ("cover" + ext)))
-			presetMeta[kPresetMetadataCoverKey] = *rel;
-	} else if (!info.clearCover && preservedArtwork.contains(kPresetMetadataCoverKey)) {
-		presetMeta[kPresetMetadataCoverKey] = preservedArtwork[kPresetMetadataCoverKey];
-	}
-
-	if (!info.screenshotSources.empty()) {
+	if (!info.screenshotSources.empty() || info.clearScreenshots) {
+		const std::filesystem::path galleryDir = "gallery";
 		std::error_code galleryEc;
-		const auto galleryDir = assetsDir / "gallery";
-		std::filesystem::remove_all(galleryDir, galleryEc);
+		std::filesystem::remove_all(packRoot / galleryDir, galleryEc);
+		manifest.erase(kPresetMetadataScreenshotsKey);
 		json shots = json::array();
 		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
 			const auto& source = info.screenshotSources[i];
-			const auto ext = source.extension().string();
-			const auto rel = std::filesystem::path(safeModName) / "gallery" / std::format("{:02}{}", i + 1, ext);
-			if (auto written = copyArtwork(source, rel))
+			if (auto written = copyArtwork(source, galleryDir / std::format("{:02}{}", i + 1, source.extension().string())))
 				shots.push_back(*written);
 		}
 		if (!shots.empty())
-			presetMeta[kPresetMetadataScreenshotsKey] = std::move(shots);
-	} else if (!info.clearScreenshots && preservedArtwork.contains(kPresetMetadataScreenshotsKey)) {
-		presetMeta[kPresetMetadataScreenshotsKey] = preservedArtwork[kPresetMetadataScreenshotsKey];
-	} else if (info.clearScreenshots) {
-		std::error_code galleryEc;
-		std::filesystem::remove_all(assetsDir / "gallery", galleryEc);
+			manifest[kPresetMetadataScreenshotsKey] = std::move(shots);
 	}
 
-	const json metadata{ { kPresetMetadataKey, std::move(presetMeta) } };
-	if (!WriteJsonAtomically(GetPresetMetadataPath(safeModName), metadata, kOverwriteJsonIndent, "preset metadata")) {
-		logger::error("[SceneSettings] Preset '{}' failed to write its metadata file", safeModName);
+	if (!WriteJsonAtomically(UnifiedPresetCatalog::GetPackManifestPath(packRoot), manifest, kOverwriteJsonIndent, "preset manifest")) {
+		logger::error("[SceneSettings] Preset '{}' failed to write its manifest", safeModName);
 		wroteAll = false;
 	}
-	DiscoverPresetMetadata();
 
-	logger::info("[SceneSettings] Exported preset '{}' as {} file(s)", safeModName, files.size());
+	std::error_code activeEc;
+	if (std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc))
+		ReloadOverwrites();
+
+	logger::info("[SceneSettings] Exported preset '{}' as {} file(s) to '{}'", safeModName, files.size(), packRoot.string());
 	return wroteAll;
+}
+
+std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPresetMetadata(const std::filesystem::path& packRoot)
+{
+	const auto manifestPath = UnifiedPresetCatalog::GetPackManifestPath(packRoot);
+	std::error_code ec;
+	if (packRoot.empty() || !std::filesystem::exists(manifestPath, ec))
+		return std::nullopt;
+
+	const auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot);
+	const auto readString = [&](const char* key) {
+		const auto it = manifest.find(key);
+		return it != manifest.end() && it->is_string() ? it->get<std::string>() : std::string{};
+	};
+	const auto readStrings = [&](const char* key) {
+		std::vector<std::string> values;
+		if (const auto it = manifest.find(key); it != manifest.end() && it->is_array()) {
+			for (const auto& value : *it) {
+				if (value.is_string())
+					values.push_back(value.get<std::string>());
+			}
+		}
+		return values;
+	};
+
+	PresetMetadata metadata{ .name = readString(kPresetMetadataNameKey),
+		.version = readString(kPresetMetadataVersionKey),
+		.author = readString(kPresetMetadataAuthorKey),
+		.description = readString(kPresetMetadataDescriptionKey),
+		.tags = readStrings(kPresetMetadataTagsKey),
+		.logo = readString(kPresetMetadataLogoKey),
+		.cover = readString(kPresetMetadataCoverKey),
+		.screenshots = readStrings(kPresetMetadataScreenshotsKey),
+		.path = manifestPath,
+		.transitionHours = ReadTimeOfDayTransitionHours(manifest, manifestPath.string()) };
+	if (metadata.name.empty())
+		metadata.name = packRoot.filename().string();
+	return metadata;
 }
 
 void SceneSettingsManager::DiscoverPresetMetadata()
 {
-	presetMetadata.clear();
-	const auto root = Util::PathHelpers::GetSceneSettingsPath();
-	std::error_code ec;
-	if (!std::filesystem::exists(root, ec)) {
-		RefreshTimeOfDayTransitionHours();
-		return;
-	}
-
-	for (const auto& path : GetSortedJsonFiles(root, "preset metadata files")) {
-		if (IsReservedPresetName(path.stem().string()))
-			continue;
-		json data;
-		if (!ReadBoundedSceneJson(path, data))
-			continue;
-		// Only a marked file is a preset; any other json dropped at the root is left alone.
-		const auto metadataIt = data.find(kPresetMetadataKey);
-		if (metadataIt == data.end())
-			continue;
-
-		// find() yields end() on a non-object, so a malformed block fails the same checks.
-		const auto nameIt = metadataIt->find(kPresetMetadataNameKey);
-		const auto versionIt = metadataIt->find(kPresetMetadataVersionKey);
-		if (nameIt == metadataIt->end() || !nameIt->is_string() || nameIt->get_ref<const std::string&>().empty() ||
-			versionIt == metadataIt->end() || !versionIt->is_string() ||
-			!IsValidPresetVersion(versionIt->get_ref<const std::string&>())) {
-			logger::warn("[SceneSettings] Preset metadata '{}' needs a name and a MAJOR.MINOR.PATCH version", path.string());
-			continue;
-		}
-		presetMetadata.push_back({ .name = nameIt->get<std::string>(),
-			.version = versionIt->get<std::string>(),
-			.path = path,
-			.transitionHours = ReadTimeOfDayTransitionHours(*metadataIt, path.string()) });
-		auto& entry = presetMetadata.back();
-		if (const auto authorIt = metadataIt->find(kPresetMetadataAuthorKey);
-			authorIt != metadataIt->end() && authorIt->is_string())
-			entry.author = authorIt->get<std::string>();
-		if (const auto descIt = metadataIt->find(kPresetMetadataDescriptionKey);
-			descIt != metadataIt->end() && descIt->is_string())
-			entry.description = descIt->get<std::string>();
-		if (const auto tagsIt = metadataIt->find(kPresetMetadataTagsKey);
-			tagsIt != metadataIt->end() && tagsIt->is_array()) {
-			for (const auto& tag : *tagsIt) {
-				if (tag.is_string())
-					entry.tags.push_back(tag.get<std::string>());
-			}
-		}
-		if (const auto logoIt = metadataIt->find(kPresetMetadataLogoKey);
-			logoIt != metadataIt->end() && logoIt->is_string())
-			entry.logo = logoIt->get<std::string>();
-		if (const auto coverIt = metadataIt->find(kPresetMetadataCoverKey);
-			coverIt != metadataIt->end() && coverIt->is_string())
-			entry.cover = coverIt->get<std::string>();
-		if (const auto shotsIt = metadataIt->find(kPresetMetadataScreenshotsKey);
-			shotsIt != metadataIt->end() && shotsIt->is_array()) {
-			for (const auto& shot : *shotsIt) {
-				if (shot.is_string())
-					entry.screenshots.push_back(shot.get<std::string>());
-			}
-		}
-	}
-
-	if (!presetMetadata.empty())
-		logger::info("[SceneSettings] Found {} preset metadata file(s)", presetMetadata.size());
+	activePresetMetadata = ReadPresetMetadata(GetActiveScenePackRoot());
+	if (activePresetMetadata)
+		logger::info("[SceneSettings] Active scene preset: '{}'", activePresetMetadata->name);
 	RefreshTimeOfDayTransitionHours();
 }
 

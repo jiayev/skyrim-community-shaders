@@ -330,13 +330,9 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportName", &presetName);
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
-			const auto stem = Util::FileHelpers::SanitizeFileName(presetName);
-			for (const auto& meta : manager->GetPresetMetadata()) {
-				if (meta.name != stem)
-					continue;
-				PrefillFromExisting(meta);
-				break;
-			}
+			const auto packId = Util::FileHelpers::SanitizeFileName(presetName);
+			if (const auto meta = SceneSettingsManager::ReadPresetMetadata(Util::PathHelpers::GetUnifiedPackPath(packId)))
+				PrefillFromExisting(*meta);
 		}
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
@@ -359,7 +355,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::Separator();
 		ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
 		ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
-			"Images are copied into SceneSettings/<Name>/ for the Presets browser."));
+			"Images are copied into Presets/<Name>/ for the Presets browser."));
 		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &logoSource, clearLogo, existingLogo);
 		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &coverSource, clearCover, existingCover);
 		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, clearScreenshots, {});
@@ -369,7 +365,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(presetVersion);
 		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
-			collidingFiles = manager->FindPresetFiles(sanitizedName);
+			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
 			exportConfirmation.message = collidingFiles.empty() ?
 			                                 std::vformat(T(TKEY("scene_export_create_message"),
@@ -386,7 +382,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		}
 		ImGui::EndDisabled();
 		if (reservedName)
-			Util::AddTooltip(T(TKEY("scene_export_reserved_name"), "This name is reserved by the Scene Manager."),
+			Util::AddTooltip(T(TKEY("scene_export_hidden_name"), "Names starting with '_' or '.' are hidden from the Presets browser."),
 				Util::kTooltipWhenDisabled);
 		else if (!validVersion)
 			Util::AddTooltip(T(TKEY("scene_export_invalid_version"), "Use a MAJOR.MINOR.PATCH version, such as 1.0.0."),
