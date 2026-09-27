@@ -11,6 +11,7 @@
 #include "ShaderCache.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
+#include "Utils/VersionedRelocation.h"
 
 #define I18N_KEY_PREFIX "feature.linear_lighting."
 
@@ -563,7 +564,7 @@ void LinearLighting::Load()
 	const std::array calls{
 		std::tuple{ "Lighting material"sv, REL::RelocationID(100563, 107298).address() + REL::Relocate(0xACD, 0xC65), lightingMaterial.getCode() },
 		std::tuple{ "Effect material"sv, REL::RelocationID(100744, 107525).address() + REL::Relocate(0x3E2, 0x3E3), effectMaterial.getCode() },
-		std::tuple{ "Lighting geometry"sv, REL::RelocationID(100565, 107300).address() + REL::Relocate(0xC1E, 0x12F0), reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
+		std::tuple{ "Lighting geometry"sv, REL::RelocationID(100565, 107300).address() + Util::VersionedRelocation::Select(0xC1E, 0x12F0, 0x1312), reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
 		std::tuple{ "Effect geometry"sv, REL::RelocationID(100746, 107527).address() + REL::Relocate(0xF16, 0xE6F), reinterpret_cast<const uint8_t*>(EffectGeometryUpload::thunk) },
 		std::tuple{ "Water material"sv, REL::RelocationID(100602, 107363).address() + REL::Relocate(0x5FA, 0x626), waterMaterial.getCode() }
 	};
