@@ -5,6 +5,7 @@
 
 #include "RenderGraphRuntime.h"
 
+#include "Aftermath.h"
 #include "DxvkLoader.h"
 #include "Features/Upscaling/DXVKInteropInterfaces.h"
 #include "Globals.h"
@@ -94,7 +95,7 @@ struct RenderGraphRuntime::Impl
 	std::unique_ptr<org::services::ShaderCompiler> shaderCompiler;
 #endif
 	PFN_vkQueueSubmit2 queueSubmit2 = nullptr;
-	rhi::DevicePtr device;
+	std::shared_ptr<rhi::DevicePtr> device = std::make_shared<rhi::DevicePtr>();
 	std::unique_ptr<org::PersistentGraphHost> host;
 	std::atomic<bool> faulted = false;
 
@@ -634,6 +635,8 @@ bool RenderGraphRuntime::Initialize()
 	adopt.device = info.device;
 	adopt.enabledDeviceExtensions = info.enabledExtensions;
 	adopt.enabledDeviceExtensionCount = info.enabledExtensionCount;
+	adopt.diagnostics.registerMarker = &Aftermath::RegisterOrgCheckpoint;
+	adopt.diagnostics.detailedCommands = EnvEquals("CS_ORG_DETAILED_CHECKPOINTS", "1");
 	// Whether VK_EXT_debug_utils is on, so that BasicRHI names objects and labels passes only then.
 	adopt.enabledInstanceExtensions = info.enabledInstanceExtensions;
 	adopt.enabledInstanceExtensionCount = info.enabledInstanceExtensionCount;
@@ -650,12 +653,12 @@ bool RenderGraphRuntime::Initialize()
 			state->enqueueSubmission = nullptr;
 		}
 	}
-	if (rhi::vulkan::AdoptVulkanDevice(adopt, state->device) != rhi::Result::Ok || !state->device)
+	if (rhi::vulkan::AdoptVulkanDevice(adopt, *state->device) != rhi::Result::Ok || !*state->device)
 		return disable("BasicRHI could not adopt DXVK's Vulkan device");
 
 	try {
 		org::PersistentGraphHost::Desc desc{};
-		desc.device = state->device.Get();
+		desc.device = state->device->Get();
 		desc.backend = rhi::Backend::Vulkan;
 		// Everything DXVK submitted before an epoch and everything it submits after
 		// is ordered against the graph by these barriers (same queue, submission order).
@@ -727,7 +730,7 @@ bool RenderGraphRuntime::Initialize()
 	}
 #endif
 	IndirectCommandsFeatureInfo indirect{};
-	if (impl->device->QueryFeatureInfo(&indirect.header) == rhi::Result::Ok) {
+	if ((*impl->device)->QueryFeatureInfo(&indirect.header) == rhi::Result::Ok) {
 		logger::info("[ORG] Indirect commands: generated commands {}, index buffer arguments {}, pipeline sets {} (up to {} pipelines); game resource export {}",
 			indirect.constantArguments, indirect.indexBufferArguments, indirect.pipelineSets, indirect.maxPipelineSetCount,
 			impl->getResourceInfo ? "available" : "missing");
@@ -747,8 +750,8 @@ void RenderGraphRuntime::Shutdown()
 	// leak the graph instead, as at process exit.
 	if (state->enqueueSubmission && !state->WaitForStreamSubmissions(std::chrono::seconds(5))) {
 		logger::warn("[ORG] Queued render graph submissions never reached the queue; leaking the graph");
-		if (state->device)
-			rhi::vulkan::abandon_device(state->device.Get());
+		if (state->device && *state->device)
+			rhi::vulkan::abandon_device(state->device->Get());
 		(void)state->host.release();
 		(void)state.release();
 		disabledReason = "shut down";
@@ -761,7 +764,7 @@ void RenderGraphRuntime::Shutdown()
 		logger::error("[ORG] Render graph shutdown failed: {}", e.what());
 	}
 	// Non-owning: BasicRHI never destroys the adopted VkDevice.
-	state->device.Reset();
+	state->device.reset();
 	disabledReason = "shut down";
 }
 
@@ -770,8 +773,8 @@ RenderGraphRuntime::~RenderGraphRuntime()
 	// Static destruction at process exit: DXVK may already be gone, so no Vulkan
 	// call is safe. Leak the graph state instead of tearing it down.
 	if (impl) {
-		if (impl->device)
-			rhi::vulkan::abandon_device(impl->device.Get());
+		if (impl->device && *impl->device)
+			rhi::vulkan::abandon_device(impl->device->Get());
 		(void)impl->host.release();
 		(void)impl.release();
 	}
@@ -790,6 +793,11 @@ const std::string& RenderGraphRuntime::GetDisabledReason() const
 org::PersistentGraphHost* RenderGraphRuntime::Host()
 {
 	return IsActive() ? impl->host.get() : nullptr;
+}
+
+std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const
+{
+	return IsActive() ? impl->device : std::shared_ptr<const void>{};
 }
 
 RenderGraphRuntime::EpochBodyScope::EpochBodyScope(Segment a_segment) :
@@ -839,7 +847,8 @@ std::uint32_t RenderGraphRuntime::EpochOf(Segment a_segment)
 	return EpochsEnabled() ? static_cast<std::uint32_t>(a_segment) : UINT32_MAX;
 }
 
-bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare)
+bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare,
+	std::shared_ptr<const void> a_resourceOwner)
 {
 	ZoneScopedN("CS.ORG.ExecuteEpoch");
 	if (!IsActive())
@@ -886,10 +895,10 @@ bool RenderGraphRuntime::ExecuteEpoch(Segment a_segment, const std::function<voi
 			};
 		}
 		if (async) {
-			impl->host->SubmitEpoch(EpochOf(a_segment), beforePrepare);
+			impl->host->SubmitEpoch(EpochOf(a_segment), beforePrepare, a_resourceOwner);
 			impl->frameSegments[impl->host->LastHostFrame() % Impl::kSegmentRing].store(a_segment, std::memory_order_release);
 		} else {
-			impl->host->ExecuteFrame(nullptr, beforePrepare, EpochOf(a_segment));
+			impl->host->ExecuteFrame(nullptr, beforePrepare, EpochOf(a_segment), a_resourceOwner);
 		}
 		if (impl->batching && !impl->FlushPendingSubmits(Impl::SegmentLabel(a_segment)))
 			throw std::runtime_error("DXVK rejected the epoch's submissions");
@@ -1029,7 +1038,9 @@ RenderGraphRuntime::~RenderGraphRuntime() = default;
 bool RenderGraphRuntime::IsActive() const { return false; }
 const std::string& RenderGraphRuntime::GetDisabledReason() const { return disabledReason; }
 org::PersistentGraphHost* RenderGraphRuntime::Host() { return nullptr; }
-bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::RenderGraph&)>&) { return false; }
+std::shared_ptr<const void> RenderGraphRuntime::DeviceOwner() const { return {}; }
+bool RenderGraphRuntime::ExecuteEpoch(Segment, const std::function<void(org::RenderGraph&)>&,
+	std::shared_ptr<const void>) { return false; }
 bool RenderGraphRuntime::DescribeResource(IUnknown*, DxvkOrgInteropResourceInfo&) { return false; }
 org::services::ShaderCompiler* RenderGraphRuntime::ShaderCompiler() { return nullptr; }
 const std::vector<std::filesystem::path>& RenderGraphRuntime::ShaderSourceFiles()

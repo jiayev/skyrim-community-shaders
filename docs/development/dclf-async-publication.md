@@ -853,10 +853,188 @@ these evolving-scene runs are not a workload-identical A/B. Median wetness cost
 is effectively flat; the structural result is removal of the unconditional
 per-mesh wetness pass, not a demonstrated overall frame-time win.
 
-The final deployed candidate hash is
-`DA90226E3AE172F9C1D1E5BCC21A881DA5EAA541F0BBA441EC47B66A1C2A3707`.
+### Aftermath and texture-lease audit (2026-09-27)
+
+The previous `DXVK_DEBUG=crashanalysis` default was not a mode recognized by
+this DXVK build. `hang` is the mode that enables device faults and NVIDIA
+checkpoints. A second precedence bug meant that the modlist's
+`dxvk.enableDebugUtils=True` selected capture-only before `hang`; the explicit
+hang mode now wins. DCLF imported textures receive distinct image/SRV
+names. The Aftermath marker callback resolves DXVK's integer checkpoint IDs
+to their saved command labels, without waiting for the checkpoint mutex if a
+fault has stalled another thread.
+
+The first corrected, 55.57-second-capped run
+(`20260927-204751-aftermath-diagnostics-v2`) logged checkpoint support and
+resource tracking enabled. It hit a GPU fault during loading, before the
+first colour epoch. Its dump identifies a fragment shader instruction error
+at GPU PC `0xB410`; the DXVK hang log brackets a native `DrawIndexed(8991,1)`
+between completed checkpoint 22037 and started checkpoint 22040. That is a
+much narrower lead, but not yet a proven root cause or proof that it is the
+same fault as earlier DMA page faults. The checkpoint-string bridge was built
+after this dump. A second capped run (`20260927-205429-aftermath-marker-bridge`,
+55.65 seconds) reproduced the same fragment instruction fault during loading.
+Its decoded dump contains readable `DrawIndexed (8991, 1)`, `EndRendering`,
+and barrier checkpoints, with the bound native `vs.4cddedc` / `fs.e17aede`
+IDs. Shader source mapping is still absent; the dump identifies the offending
+GPU work, not the source expression or invalid resource. Neither run reached
+DCLF's first colour epoch, so the evidence does not implicate a DCLF draw.
+
+A control run with `DXVK_AFTERMATH_DIAGNOSTICS=0`
+(`20260927-205750-aftermath-config-off-control`, 44.28 seconds) reached the
+demanding save and then reproduced an `Error_DMA_PageFault` at GPU VA
+`0x25068EB000`; the dump had no usable checkpoint for that submission. The
+two diagnostics-enabled runs instead faulted during loading. This small
+sample does not establish causality, but enabling the heavier driver features
+by default would be unsafe without isolating their effect. The checked-in
+default therefore keeps `DXVK_DEBUG=hang` (device fault details and native
+checkpoints) and leaves `VK_NV_device_diagnostics_config` resource tracking,
+shader debug info and shader error reporting behind
+`DXVK_AFTERMATH_DIAGNOSTICS=1`. Those features are probed before use.
+
+The combined toggle has since been removed. The three independent opt-ins
+are `DXVK_AFTERMATH_RESOURCE_TRACKING=1`,
+`DXVK_AFTERMATH_SHADER_DEBUG_INFO=1`, and
+`DXVK_AFTERMATH_SHADER_ERROR_REPORTING=1`; the last is off by default.
+The diagnostic build must have `AFTERMATH=ON` (the `Dev-Fast` preset has it
+off). ORG pass labels now also emit producer-qualified NVIDIA checkpoints
+when the adopted device enabled the checkpoint extension. The CS resolver
+keeps their immutable text in a bounded, non-reused array, and DXVK's hang
+decoder recognizes those external IDs rather than indexing its own ring.
+`CS_DCLF_DRAW_TRACE=1` and `DXVK_DRAW_INDEXED_TRACE=1` opt into a filter for
+8,991-index native draws. It correlates the original CS-hook caller and up
+to 16 stack addresses with DXVK's draw arguments, shader names, index/vertex
+buffer bindings, targets, and a checkpoint carrying the batch ID. The
+command-stream log maps each contributing draw ID to its index in that batch;
+normal DrawIndexed batching remains enabled. The opt-in logging is still for
+diagnosis, not performance measurements.
+
+With `AFTERMATH=ON`, isolated 45-second resource-tracking and shader-debug-info
+runs (`20260927-213116-aftermath-resource-only` and
+`20260927-213354-aftermath-shader-debug-only`) both reached the demanding
+save. Shader-error-reporting alone (`20260927-213220-aftermath-shader-error-only`)
+reproduced the loading-time instruction fault before the first DCLF colour
+epoch. Its DXVK checkpoint sequence has candidate ID 1 immediately before
+the failing `DrawIndexed(8991, 1)` with `vs.4cddedc` / `fs.e17aede`;
+the original caller is SkyrimSE.exe RVA `0xE465AD`, which Ghidra maps to
+`FUN_140e464d0`. That function binds an R16 index buffer and vertex stream
+then draws `triangleCount * 3` indices. The captured R16 buffer is 17,982
+bytes, exactly the 8,991 indices requested, so a simple index-buffer bounds
+overrun is not supported by this evidence. Candidate ID 1 is the exact CPU
+API call associated with the checkpoint, but the fragment shader's source
+fault remains to be found. These single runs do not establish that either
+safe flag can be defaulted yet, nor connect this loading fault to the later
+DMA page fault.
+
+Texture-import expiry was *not* removed by this audit. `GpuTextures` retains
+SRV/import references and releases them after 600 inactive frames when no
+material lookup owner pins the entry. Main/shadow payloads, frame-texture
+patches and ORG prepared tickets still store raw descriptor indices; no shared lease follows all of those
+indices through ticket submission and GPU completion. Replacing the expiry
+queue with immediate last-lookup retirement would permit slot reuse while an
+older payload or ticket still names it. Keeping every import forever would
+avoid that race but be unbounded. The required change is to attach exact
+descriptor/backing leases to each immutable publication, its frame patches
+and executable ticket, and return them through the completion-driven host
+retirement lane. The current same-frame joins and mutable lookup table mean
+that publication-wide owner does not yet exist. This remains a blocking
+dependency of removing the old texture-expiry path; this entry does not claim
+the full async migration or sampler removal.
+
+The ORG host now has a completion-owned handoff for a reserved ticket's
+immutable resource owner. After submission, its async worker observes the
+accepted queue timelines and releases that owner and upload staging even when
+no later frame reuses the slot. An uncertain completion retains them through
+device teardown. The Vulkan host test covers release after GPU completion with
+no following frame. DCLF does not yet attach texture binding blocks to that
+handoff. Legacy async `SubmitEpoch` now accepts the same explicit resource owner
+and retires it on GPU completion without subsequent frames; the Vulkan host
+test exercises both paths. DCLF does not yet supply that owner, and synchronous
+execution still needs the same contract. The 600-frame expiry therefore remains
+in use. Material lookup slots now hold imported binding owners until replacement
+or slot-retirement events, so their former 32-frame restamping rule was removed.
+Projected textures and per-pipeline shadow masks also retain owned bindings;
+pipeline slot expiry releases its mask owner. Lookup versions advance on owner
+replacement even if the numeric descriptor index is reused. Unchanged,
+already-owned shadow masks skip descriptor resolution on subsequent epochs.
+Shadow diffuse lookup bindings now follow shadow-contribution membership
+events. Removed textures release their lookup owners; new or unresolved
+textures enter a bounded-to-actual-pending retry set. This replaces the
+unconditional per-shadow-epoch scan of the full texture set. Frame patches,
+payloads, and submitted executions still need exact ownership before the
+expiry queue can be deleted.
+
+The `20260927-222450-material-binding-versioned` game run crashed in the
+NVIDIA Vulkan driver while `ORG.Upload.RecordStagedUploads` recorded a
+`vkCmdCopyBuffer` for sky occlusion. There is no new `.nv-gpudmp` for this
+CPU access violation; `CommunityShaders.dmp` captured it. The debugger
+found source offset `0x300`, destination offset `0x5dc000`, and length
+`0x64000`; both ranges are within their RHI buffer sizes, and the command
+buffer was recording. The same build completed the next capped run through
+frame 963, so the cause is not yet attributed to the material-lookup change.
+BasicRHI now checks copy ranges and recording state before calling Vulkan;
+these crash arguments pass the new guard, which is hardening rather than a
+fix for this incident.
+
+The MO2 `Default` profile enables `Community Shaders DXVK ORG` and disables
+`Community Shaders`. Captures from `20260927-223308-copy-bounds-guard` through
+`20260927-231747-shadow-binding-deployed` used the older DLL in the enabled
+mod, despite successful local builds; they must not be used to validate or
+time the newer ownership changes. The enabled mod now contains the matching
+RelWithDebInfo DLL/PDB (DLL SHA-256
+`0DC5E1FD2C5E43F7380AC59D1FBBB0F9079D5BC5293EE59B02B47DAEB5CA2B31`);
+its previous DLL/PDB are backed up under
+`build/dclf-profiles/active-mod-before-shadow-binding-20260927`.
+
+The first verified active-mod capture,
+`20260927-232053-shadow-binding-active-mod`, completed in 47.05 seconds.
+`CS.DCLF.RefreshShadow.Textures` measured p50/p95/p99
+0.63/0.98/1.16 microseconds over 670 zones. During the captured steady-state
+window the event and pending-import plots were both zero and 263 shadow
+texture owners remained live. The older enabled DLL had measured roughly
+23 microseconds median in this zone. The matching parity run
+`20260927-232450-shadow-binding-active-parity` reported no incremental
+shadow-dependency reconstruction disagreement and zero missing shadow
+textures. Its 80/96 persistent-shadow-input differences are the previously
+tracked shadow-membership discrepancy, not a new texture-lookup parity result.
+
 All four CPU tests pass. No equipment/water/cell-transition scenario or GPU
 debug-layer run is claimed by these demanding-save captures. Remaining next
 steps are actor-value notification coverage and lifecycle-owned shared Skin
 state, resource leases for every descriptor consumer, static-classification
 writers, and migration of captured derivation to the publication coordinator.
+
+## Follow-up: camera-driven material-slot churn (open investigation, 2026-09-28)
+
+Later binding-ownership work removed the 600-frame texture expiry queue. A
+camera-moving demanding-save capture then showed 20,106 `t0`/`t1` lookup
+"changes" in 12 seconds. Every old view was null, and all 1,440 observed
+material/pass/register groups used one unchanged SRV each. The high-frequency
+paths were ordinary static textures such as Whiterun windows, pine foliage,
+landscape dirt/cliffs, bread, and cabbage. This is slot churn, not evidence
+that those texture files or SRVs are changing. The same run reported 8,100
+material slots retired on last reference over 300 frames while roughly 620
+were alive at the reporting point.
+
+`SceneStore::SweepSlots` calls `materialSlots.DrainUnreferenced` immediately;
+the next appearance of a material/pass allocates a new slot and rebuilds its
+lookup owners. The churn is seen when moving the camera. Investigate whether
+frustum/cull-driven loss of object bindings is being interpreted as the
+material leaving the *scene*. A zero current-frame reference count must not
+by itself mean that a still-attached object's material or its immutable
+binding block should be retired. Trace object binding transitions, material
+slot references, and attach/detach events for the same object and material
+under camera rotation before changing retirement policy. Preserve native
+handback and bounded ownership; do not restore a frame-age expiry queue as a
+shortcut. `CS_DCLF_TRACE_TEXTURE_PATHS=1` enables the detailed Tracy identity
+and path probe for this investigation; it is off in normal runs.
+
+The source-level path makes this hypothesis concrete: `LapseAccumulated`
+resets a still-tracked object's material and pipeline indices when native
+registration did not renew its patch; `UpdateSlotReferences` then counts only
+objects without `kObjectNoBindings`; `SweepSlots` retires the material on its
+last such reference. Native registration is visibility-dependent, whereas
+material membership should follow persistent object/property identity. The
+next probe should confirm that this chain accounts for the measured churn,
+including whether the same material key is reacquired when the camera turns
+back; it has not yet been established as the sole cause.

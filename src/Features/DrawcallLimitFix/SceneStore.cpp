@@ -849,6 +849,9 @@ namespace DCLF
 		materialTextureDirty.clear();
 		materialTextureQueued.clear();
 		materialTextureChanges.clear();
+		retiredMaterialSlots.clear();
+		retiredPipelineSlots.clear();
+		shadowTextureChanges.clear();
 		frameSignatures.clear();
 		materialSignatureListed.clear();
 		materialFramePending.clear();
@@ -2071,6 +2074,7 @@ namespace DCLF
 			materialOwners[slot].reset();
 			tables.materialSlotKey[slot] = { nullptr, 0u };
 			tables.materialLastUsed[slot] = Tables::kSlotFree;
+			tables.retiredMaterialSlots.push_back(slot);
 			tables.materialSlots.Free(slot);
 			++stats.materialsDropped;
 			slotsFreedThisFrame = true;
@@ -4678,6 +4682,13 @@ namespace DCLF
 		residentPos.clear();
 		residentMaintenanceDirty = true;
 		tables.Clear();
+		// Drop material binding owners on world/device reset without permitting
+		// an old worker snapshot to match a newly empty lookup generation.
+		const auto lookupGeneration = lookups.generation;
+		const auto lookupVersion = lookups.versionCounter;
+		lookups = Lookups{};
+		lookups.generation = lookupGeneration + 1;
+		lookups.versionCounter = lookupVersion;
 		for (auto& [geometry, entry] : tracked)
 			entry.slot = kNoObjectSlot;
 		geometryTouched.clear();
@@ -4686,6 +4697,11 @@ namespace DCLF
 		materialIndex.clear();
 		materialDependents.clear();
 		materialOwners.clear();
+		// The lookup import owners were reset above. The next shadow-index
+		// reconstruction must publish additions even if an SRV address recurs.
+		shadowTextureMembers.clear();
+		shadowKeyMembers.clear();
+		skyKeyMembers.clear();
 		shadowIndexNeedsRebuild = true;
 		shadowDirtySlots.clear();
 		++tablesGeneration;
@@ -4877,6 +4893,7 @@ namespace DCLF
 			tables.geometryTemplate[a_slot] = nullptr;
 			tables.geometryConstantsValid[a_slot] = 0;
 			tables.pipelineLastUsed[a_slot] = Tables::kSlotFree;
+			tables.retiredPipelineSlots.push_back(a_slot);
 		});
 		// Material records have explicit object users. Consume their last-reference
 		// transitions after the whole journal batch, without a frame-age grace period.
@@ -4887,6 +4904,7 @@ namespace DCLF
 			++stats.materialCacheEvicted;
 			tables.materialSlotKey[a_slot] = { nullptr, 0u };
 			tables.materialLastUsed[a_slot] = Tables::kSlotFree;
+			tables.retiredMaterialSlots.push_back(a_slot);
 		});
 		stats.slotsSwept += freed;
 		if (freed)
@@ -6494,6 +6512,12 @@ namespace DCLF
 	void SceneStore::RefreshShadowSets(bool a_forceRebuild)
 	{
 		ZoneScopedN("CS.DCLF.Capture.ShadowSets");
+		// ClearFrame reconstructs the public list every walk; the dependency
+		// index, not that list, holds previous membership across frames.
+		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> previousTextures;
+		previousTextures.reserve(shadowTextureMembers.size());
+		for (const auto& entry : shadowTextureMembers)
+			previousTextures.insert(entry.first);
 		bool rebuild = a_forceRebuild || shadowIndexNeedsRebuild;
 		std::vector<std::uint32_t> changed = std::move(shadowDirtySlots);
 		shadowDirtySlots.clear();
@@ -6577,6 +6601,12 @@ namespace DCLF
 		emit(shadowTextureMembers, tables.shadowTextureSet);
 		for (auto* texture : tables.shadowTextureSet)
 			tables.shadowTextureSeen.insert(texture);
+		for (auto* texture : previousTextures)
+			if (!shadowTextureMembers.contains(texture))
+				tables.shadowTextureChanges.emplace_back(texture, false);
+		for (const auto& entry : shadowTextureMembers)
+			if (!previousTextures.contains(entry.first))
+				tables.shadowTextureChanges.emplace_back(entry.first, true);
 		emit(shadowKeyMembers, tables.shadowKeysUsed);
 		emit(skyKeyMembers, tables.skyKeysUsed);
 	}

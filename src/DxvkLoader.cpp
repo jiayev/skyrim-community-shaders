@@ -143,8 +143,10 @@ namespace DxvkLoader
 		if (existingDebugLen != 0 && existingDebugLen < ARRAYSIZE(existingDebug)) {
 			logger::info("[DXVK] DXVK_DEBUG already set externally; leaving it alone");
 		} else if (Aftermath::WantsCrashAnalysis()) {
-			if (::SetEnvironmentVariableW(L"DXVK_DEBUG", L"crashanalysis"))
-				logger::info("[DXVK] DXVK_DEBUG=crashanalysis -- requesting GPU crash analysis support");
+			// This DXVK version recognizes "hang", not "crashanalysis". The
+			// latter silently disabled debug utils and NVIDIA checkpoints.
+			if (::SetEnvironmentVariableW(L"DXVK_DEBUG", L"hang"))
+				logger::info("[DXVK] DXVK_DEBUG=hang -- requesting device faults and GPU checkpoints");
 			else
 				logger::warn("[DXVK] Failed to request GPU crash analysis (error {})", ::GetLastError());
 		}

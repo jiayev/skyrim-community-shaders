@@ -3,6 +3,7 @@
 #ifdef CS_ENABLE_AFTERMATH
 
 #	include "DxvkLoader.h"
+#	include "Globals.h"
 
 #	include <GFSDK_Aftermath.h>
 #	include <GFSDK_Aftermath_Defines.h>
@@ -10,7 +11,10 @@
 #	include <GFSDK_Aftermath_GpuCrashDumpDecoding.h>
 
 #	include <atomic>
+#	include <algorithm>
+#	include <array>
 #	include <chrono>
+#	include <cstring>
 #	include <filesystem>
 #	include <fstream>
 #	include <mutex>
@@ -22,6 +26,16 @@ namespace
 	std::atomic<bool> g_enabled{ false };
 	std::filesystem::path g_dumpDir;
 	uint32_t g_dumpCount = 0u;
+	constexpr std::uintptr_t kOrgMarkerTag = std::uintptr_t{ 1 } << 62;
+	constexpr std::size_t kOrgMarkerCapacity = 65536;
+	struct OrgMarker
+	{
+		std::array<char, 160> text{};
+		std::atomic<bool> published{ false };
+	};
+	std::array<OrgMarker, kOrgMarkerCapacity> g_orgMarkers{};
+	std::atomic<std::uint32_t> g_nextOrgMarker{ 0 };
+	std::atomic<std::uint32_t> g_lostOrgMarkers{ 0 };
 
 	// One timestamp per incident, shared by the dump and by every shader debug file belonging to
 	// it, so an incident's files group together in a directory that also holds the game's logs.
@@ -94,6 +108,8 @@ namespace
 			logger::critical("[Aftermath] GPU crash dump written to {}", path.string());
 		else
 			logger::error("[Aftermath] failed to write GPU crash dump to {}", path.string());
+		if (const auto lost = g_lostOrgMarkers.load(std::memory_order_relaxed))
+			logger::warn("[Aftermath] {} ORG checkpoints were omitted after the bounded marker history filled", lost);
 		spdlog::default_logger()->flush();
 	}
 
@@ -126,13 +142,31 @@ namespace
 		a_add(GFSDK_Aftermath_GpuCrashDumpDescriptionKey_ApplicationVersion, Plugin::VERSION.string().c_str());
 	}
 
-	void OnResolveMarker(const void* a_marker, uint32_t a_markerSize)
+	void OnResolveMarker(const void* a_marker, uint32_t a_markerSize, PFN_GFSDK_Aftermath_ResolveMarker a_resolve)
 	{
-		// CS sets no application markers of its own; DXVK's checkpoints carry the payload the
-		// decoder needs. Nothing to resolve, and declining to call the resolver leaves the raw
-		// marker in the dump, which is what we want.
-		(void)a_marker;
-		(void)a_markerSize;
+		// DXVK's Vulkan checkpoints are compact integer IDs, not string pointers.
+		// Resolve them while the device's checkpoint ring still exists so the dump
+		// records draw/dispatch labels instead of opaque "Library Pointer" values.
+		if (a_markerSize || !a_resolve)
+			return;
+		const auto id = reinterpret_cast<std::uintptr_t>(a_marker);
+		if (id & kOrgMarkerTag) {
+			const auto index = id & ~kOrgMarkerTag;
+			if (index && index <= kOrgMarkerCapacity) {
+				const auto& marker = g_orgMarkers[index - 1];
+				if (marker.published.load(std::memory_order_acquire))
+					a_resolve(marker.text.data(), static_cast<uint32_t>(std::strlen(marker.text.data()) + 1));
+			}
+			return;
+		}
+		if (!globals::d3d::device)
+			return;
+		using ResolveCheckpoint = BOOL(__stdcall*)(ID3D11Device*, const void*, char*, UINT);
+		const auto module = ::GetModuleHandleW(L"dxvk_d3d11.dll");
+		const auto resolve = module ? reinterpret_cast<ResolveCheckpoint>(::GetProcAddress(module, "dxvkResolveCheckpointMarker")) : nullptr;
+		char text[120]{};
+		if (resolve && resolve(globals::d3d::device, a_marker, text, sizeof(text)))
+			a_resolve(text, static_cast<uint32_t>(std::strlen(text) + 1));
 	}
 
 	void GpuCrashDumpCallback(const void* a_dump, uint32_t a_size, void*)
@@ -150,9 +184,9 @@ namespace
 		OnDescription(a_add);
 	}
 
-	void ResolveMarkerCallback(const void* a_marker, uint32_t a_markerSize, void*, PFN_GFSDK_Aftermath_ResolveMarker)
+	void ResolveMarkerCallback(const void* a_marker, uint32_t a_markerSize, void*, PFN_GFSDK_Aftermath_ResolveMarker a_resolve)
 	{
-		OnResolveMarker(a_marker, a_markerSize);
+		OnResolveMarker(a_marker, a_markerSize, a_resolve);
 	}
 }
 
@@ -211,10 +245,30 @@ bool Aftermath::WantsCrashAnalysis()
 	return true;
 }
 
+const void* Aftermath::RegisterOrgCheckpoint(void*, const char* a_name) noexcept
+{
+	if (!g_enabled.load(std::memory_order_acquire))
+		return nullptr;
+	const auto index = g_nextOrgMarker.fetch_add(1, std::memory_order_relaxed);
+	if (index >= kOrgMarkerCapacity) {
+		g_lostOrgMarkers.fetch_add(1, std::memory_order_relaxed);
+		return nullptr;
+	}
+	auto& marker = g_orgMarkers[index];
+	const char* source = a_name ? a_name : "ORG unnamed";
+	const auto length = std::min(std::strlen(source), marker.text.size() - 1);
+	std::memcpy(marker.text.data(), source, length);
+	marker.text[length] = '\0';
+	marker.published.store(true, std::memory_order_release);
+	return reinterpret_cast<const void*>(kOrgMarkerTag | (std::uintptr_t{ index } + 1));
+}
+
 void Aftermath::Disable()
 {
 	if (!g_enabled.exchange(false, std::memory_order_acq_rel))
 		return;
+	if (const auto lost = g_lostOrgMarkers.load(std::memory_order_relaxed))
+		logger::warn("[Aftermath] {} ORG checkpoints omitted after marker history filled", lost);
 	GFSDK_Aftermath_DisableGpuCrashDumps();
 }
 
@@ -223,6 +277,7 @@ void Aftermath::Disable()
 bool Aftermath::Enable() { return false; }
 bool Aftermath::IsEnabled() { return false; }
 bool Aftermath::WantsCrashAnalysis() { return false; }
+const void* Aftermath::RegisterOrgCheckpoint(void*, const char*) noexcept { return nullptr; }
 void Aftermath::Disable() {}
 
 #endif

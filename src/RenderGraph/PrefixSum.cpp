@@ -34,7 +34,7 @@ namespace PrefixSum
 
 		struct Bindings
 		{
-			org::ResourceBindingToken counts, offsets, blockSums, total;
+			org::DeclaredViewToken counts, offsets, blockSums, total;
 		};
 
 		struct Frame
@@ -53,11 +53,11 @@ namespace PrefixSum
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				Bindings bindings{};
-				bindings.counts = desc.clearCounts ? a_builder.BindUnorderedAccess(desc.counts) : a_builder.BindShaderResource(desc.counts);
-				bindings.offsets = a_builder.BindUnorderedAccess(desc.offsets);
-				bindings.blockSums = a_builder.BindUnorderedAccess(desc.blockSums);
+				bindings.counts = desc.clearCounts ? a_builder.UnorderedAccess(desc.counts).View() : a_builder.ShaderResource(desc.counts).View();
+				bindings.offsets = a_builder.UnorderedAccess(desc.offsets).View();
+				bindings.blockSums = a_builder.UnorderedAccess(desc.blockSums).View();
 				if (desc.total)
-					bindings.total = a_builder.BindUnorderedAccess(desc.total);
+					bindings.total = a_builder.UnorderedAccess(desc.total).View();
 				return bindings;
 			}
 
@@ -75,11 +75,14 @@ namespace PrefixSum
 					return prepared;
 				prepared.programs = desc.programs;
 				auto& constants = prepared.constants;
-				const auto countsView = desc.clearCounts ? org::BindlessViewKind::UnorderedAccess : org::BindlessViewKind::ShaderResource;
-				constants.countsIndex = a_preparation.ResolveView(a_bindings.counts, { countsView }).index;
-				constants.offsetsIndex = a_preparation.ResolveView(a_bindings.offsets, { org::BindlessViewKind::UnorderedAccess }).index;
-				constants.blockSumsIndex = a_preparation.ResolveView(a_bindings.blockSums, { org::BindlessViewKind::UnorderedAccess }).index;
-				constants.totalIndex = desc.total ? a_preparation.ResolveView(a_bindings.total, { org::BindlessViewKind::UnorderedAccess }).index : kNoBuffer;
+				const auto index = [&](const org::DeclaredViewToken& token) {
+					(void)a_preparation.Capture(token);
+					return a_preparation.Resolve(token).index;
+				};
+				constants.countsIndex = index(a_bindings.counts);
+				constants.offsetsIndex = index(a_bindings.offsets);
+				constants.blockSumsIndex = index(a_bindings.blockSums);
+				constants.totalIndex = desc.total ? index(a_bindings.total) : kNoBuffer;
 				constants.elements = desc.elements;
 				constants.blocks = Blocks(desc.elements);
 				constants.flags = desc.clearCounts ? kClearCounts : 0u;

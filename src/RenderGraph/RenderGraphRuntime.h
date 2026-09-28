@@ -91,6 +91,8 @@ public:
 
 	/** @brief The persistent graph host; null when inactive. */
 	org::PersistentGraphHost* Host();
+	/** @brief Retains the adopted BasicRHI wrapper for owned external bindings. */
+	std::shared_ptr<const void> DeviceOwner() const;
 
 	/**
 	 * @brief Runs one graph epoch at the current point of the D3D11 stream.
@@ -98,7 +100,8 @@ public:
 	 *        prepare: queue this frame's uploads (BUFFER_UPLOAD) here.
 	 * @return false when inactive or the graph failed; callers fall back to their D3D11 path.
 	 */
-	bool ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare = {});
+	bool ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare = {},
+		std::shared_ptr<const void> a_resourceOwner = {});
 
 	/** @brief The segment of the epoch being executed (valid while passes prepare and record). */
 	Segment CurrentSegment() const { return segment; }
