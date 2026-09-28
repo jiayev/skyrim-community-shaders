@@ -1,5 +1,5 @@
-#include "Features/DrawcallLimitFix/CaptureService.h"
-#include "Features/DrawcallLimitFix/CaptureGraph.h"
+#include "Features/DrawcallLimitFix/Published/CaptureService.h"
+#include "Features/DrawcallLimitFix/Published/CaptureGraph.h"
 
 #include <atomic>
 #include <cassert>

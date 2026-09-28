@@ -1,6 +1,6 @@
 #include "BSLightingShaderMaterialPBRLandscape.h"
 
-#include "Features/DrawcallLimitFix/MaterialSources.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 
 BSLightingShaderMaterialPBRLandscape::BSLightingShaderMaterialPBRLandscape()
 {

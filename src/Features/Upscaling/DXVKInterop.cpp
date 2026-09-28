@@ -3,7 +3,7 @@
 #include "Globals.h"
 #include "GpuIdleTrace.h"
 #include "Profiler.h"
-#include "Features/DrawcallLimitFix/Switches.h"
+#include "Features/DrawcallLimitFix/Common/Switches.h"
 
 #include <algorithm>
 

@@ -1,9 +1,9 @@
-#include "Features/DrawcallLimitFix/CapturedScene.h"
-#include "Features/DrawcallLimitFix/CaptureAdmission.h"
-#include "Features/DrawcallLimitFix/CapturePreparation.h"
-#include "Features/DrawcallLimitFix/FaceCapture.h"
-#include "Features/DrawcallLimitFix/PublishedSceneExecutor.h"
-#include "Features/DrawcallLimitFix/SceneIdentity.h"
+#include "Features/DrawcallLimitFix/Published/CapturedScene.h"
+#include "Features/DrawcallLimitFix/Published/CaptureAdmission.h"
+#include "Features/DrawcallLimitFix/Published/CapturePreparation.h"
+#include "Features/DrawcallLimitFix/Published/FaceCapture.h"
+#include "Features/DrawcallLimitFix/Published/PublishedSceneExecutor.h"
+#include "Features/DrawcallLimitFix/Published/SceneIdentity.h"
 
 #include <algorithm>
 #include <cassert>

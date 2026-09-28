@@ -1,7 +1,7 @@
-#include "Features/DrawcallLimitFix/KeptState.h"
-#include "Features/DrawcallLimitFix/FrameRecordPatches.h"
-#include "Features/DrawcallLimitFix/SlotTable.h"
-#include "Features/DrawcallLimitFix/ActorValueIndex.h"
+#include "Features/DrawcallLimitFix/Common/KeptState.h"
+#include "Features/DrawcallLimitFix/Common/FrameRecordPatches.h"
+#include "Features/DrawcallLimitFix/Common/SlotTable.h"
+#include "Features/DrawcallLimitFix/Scene/ActorValueIndex.h"
 #include <cassert>
 #include <random>
 #include <set>

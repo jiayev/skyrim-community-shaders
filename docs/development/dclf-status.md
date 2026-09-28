@@ -3,7 +3,8 @@
 A snapshot of Drawcall Limit Fix after the primary view's cull cut ([drawcall-limit-fix.md](./drawcall-limit-fix.md),
 "The primary's cull without DCLF's objects"): what it draws, what the engine still does on the render thread, and
 what a frame without the engine's culling jobs would take. Measurements are Riverwood, full featureset, unless they
-say otherwise. The plan that follows from it is [dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md).
+say otherwise. The plan that follows from it is [dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md). How the
+code is organised, and the parity checks that validate it, is [dclf-architecture.md](./dclf-architecture.md).
 
 ## What DCLF draws
 
@@ -45,8 +46,8 @@ The scene walk (about 0.5 ms) and the table builds run on DCLF's worker.
 
 ## Decals and the primary's stand-in
 
-Decals are still DCLF's. They are table objects, drawn by its decal pass as before. What changed is where their pass
-comes from:
+Decals are DCLF's: table objects, drawn by its decal pass. Under the primary's stand-in, their pass comes from the
+engine's registration:
 
 -   Under a stood-in entry, a decal is handed to the engine's registration (`AppendVirtual`).
 -   DCLF captures and withholds the resulting pass as usual.

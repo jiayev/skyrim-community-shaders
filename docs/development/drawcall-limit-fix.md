@@ -1,5 +1,9 @@
 # Drawcall Limit Fix
 
+> **The historical record.** This document is the log of how DCLF was built, phase by phase, with the measurements
+> behind each decision. Parts of it describe code, switches and paths that have since been removed. The current design
+> is [dclf-architecture.md](./dclf-architecture.md); what DCLF covers is [dclf-status.md](./dclf-status.md).
+
 Drawcall Limit Fix (DCLF) replaces the game's per-object opaque draw loop with GPU-driven indirect draws
 that the render graph executes on DXVK's Vulkan device (see [OpenRenderGraph on DXVK](./render-graph.md)).
 It is built in phases:
@@ -1474,76 +1478,24 @@ they are not part of the witness.
 
 ## Switches
 
-**Every feature defaults to on, and test runs should leave it that way.** With no switch set, a run exercises
-DCLF's full featureset: the asynchronous builds, the delta scene walk, async epochs, every ownership stage. The startup
-log says so on one line, `[DCLF] featureset: full`. A run that sets any feature switch to a reducing value logs
-`[DCLF] featureset: REDUCED by NAME=value, ...` as a warning instead (`DCLF::ReducedFeatures`). Turn a feature off
-only to bisect or to compare, and say so. Diagnostics (probes, parity checks, stats) are not features and don't
-count. The async paths were off by default until 2026-09-24, and validating only the synchronous path let two bugs
-through: the shadow pipeline map ("Epochs that only submit") and the NPC head drops ("The scene walk starts at
-`Main::Draw`").
+The switches are defined, each with its kind and a one-line description, in the registry in
+`src/Features/DrawcallLimitFix/Common/Switches.cpp`. [dclf-architecture.md](./dclf-architecture.md) ("Switches",
+"Parity gates") says how they are read and which ones validate a change. Switches this document names that are not in
+the registry were removed with the paths they chose between: DCLF is AE only and hybrid only, and a default-on feature
+has no startup fallback.
 
-| Variable | Effect |
+Every feature is on by default, and test runs leave it that way: the startup log says `[DCLF] featureset: full`, or
+names the switches that reduce it. The ones most runs use:
+
+| Switch | Effect |
 | --- | --- |
-| `CS_DCLF_STATS=1` | Every 300 frames, log how many objects are tracked, why the rest stay native, and the CPU time scene capture takes, plus the GPU time of each render-graph segment and of the passes in it (`[ORG] GPU time from ORG's pass timestamps`; the menu shows the per-segment totals whatever the switch). |
-| `CS_DCLF_CAPTURE_PARITY=1` | Compare the tables with the native draws (see above). Costs CPU on every draw. |
-| `CS_DCLF_DEBUG_VIEW=1` | Before the deferred composite, copy DCLF's off-screen targets over the native ones: the frame shows only what the indirect draws produced. |
-| `CS_DCLF_HYBRID=1` | DCLF draws into the main pass's own targets and depth, and the native loop skips the objects it drew. |
-| `CS_DCLF_HYBRID_NOSKIP=1` | With the hybrid path, keep drawing everything natively, so what DCLF fails to draw is still visible. |
-| `CS_DCLF_ONLY_ELIGIBLE=1` | The reverse skip: the native frame draws only the objects DCLF draws, so the two can be compared pixel for pixel. |
-| `CS_DCLF_CULL=off\|frustum\|occlusion` | How BuildDrawsCS filters the candidates before writing their sequences: nothing, the frustum, or the frustum and then the HZB. |
-| `CS_DCLF_CULL_INPUT=native\|tracked` | Which candidates may be drawn: only what the engine's culling kept (the default), or whatever the GPU culling keeps. `tracked` still shades incorrectly (see Phase 4). |
-| `CS_DCLF_SORT_DRAWS=0` | Execute the phase-1 and colour sequences in append order instead of grouped by pipeline ("An epoch"). |
-| `CS_DCLF_BUILD_PARITY=1` | Every 300 epochs, read BuildDraws' output back and compare it with the CPU templates (`BuildDraws parity OK/MISMATCH`). |
-| `CS_DCLF=0` | Turns the feature off entirely: no hooks, no tables, no draws. Anything else, including unset, leaves it on. The feature list's on/off toggle, by contrast, applies live: off keeps the hooks and the scene tracking but does no frame work (nothing built, drawn, skipped or withheld, claims dropped), and back on resumes at the next frame without a rescan. Unloading the feature (`Feature::loaded`, the remote toggle) does the same. |
-| `CS_DCLF_TABLES=tracked\|accumulated` | Whether the tables hold the whole tracked set or only what the engine's accumulator kept. `accumulated` was the fallback while the per-pipeline template defect was open; `tracked` is now correct. |
-| `CS_DCLF_EVAL=off\|material\|geometry` | Diagnostic: suppresses parts of the stand-in evaluation. Note that a suppressed evaluation also stops its objects being drawn, so a clean frame under it proves nothing on its own. |
-| `CS_DCLF_OWNERSHIP=static` | Withhold claimed passes from the main camera's batch renderer, so DCLF owns those objects outright. Default off. |
-| `CS_DCLF_SHADOWS=1` | The shadow views: DCLF culls and draws the frame's casters into the engine's shadow map slices in one epoch per frame (below, "Shadow views, step two"). Default off. Live toggle in the menu. |
-| `CS_DCLF_SHADOW_OWNERSHIP=static` | Withhold the casters DCLF's shadow epoch draws from the shadow views' batch renderers, per render mode. Needs `CS_DCLF_SHADOWS=1`. Default off. Live toggle. |
-| `CS_DCLF_SUN_SKIP=1` | M1: the sun's registration of a claimed caster writes only its mask ("The sun without the engine's registration"). Needs static shadow ownership. Default on. Live toggle. |
-| `CS_DCLF_SUN_EXCLUDE=1\|0\|probe` | The entries whose content DCLF draws entirely leave the sun's cascade culls, and DCLF writes their sun bits ("The sun's cascades without DCLF's objects"). Needs `CS_DCLF_SUN_SKIP`. Default on. Live toggle. `probe`: a dry run that compares DCLF's bits with the engine's and counts the casters the exclusion would lose. |
-| `CS_DCLF_SUN_TIMING=1` | Diagnostic: times the render thread in the full-frustum cull, `Accumulate` and the sun's registrations. |
-| `CS_DCLF_FEEDBACK=1\|0` | The stood-in roots' fade, LOD and tree-clock state comes from the GPU's visibility feedback on the worker, not the list jobs ("Visibility feedback"). Default on. |
-| `CS_DCLF_SUN_GPU=1\|0` | Synthetic passes carry the sun's static bits and the GPU tests the cascades per draw ("The sun's bits on the GPU"). Default on. |
-| `CS_DCLF_PRIMARY_EXCLUDE=1\|0\|probe` | DCLF's references leave the main camera's cull and registration; DCLF builds their main passes and runs their fade updates ("The primary's cull without DCLF's objects"). Needs `CS_DCLF_SUN_EXCLUDE` and static ownership. Default on. Live toggle. `probe`: nothing is removed; the census of the lists and the synthetic pass against the registered one. |
-| `CS_DCLF_SKYLIGHT=1\|0` | With Skylighting loaded, DCLF draws its occlusion map and the engine's `SetupMask` is skipped ("Skylighting's occlusion map, drawn by DCLF"). Needs `CS_DCLF_SHADOWS`. Default on. Live toggle. |
-| `CS_DCLF_SKYLIGHT_PARITY=1` | Diagnostic: every 120th map is rendered by the engine and by DCLF in the same frame and compared texel by texel, with the occluders only DCLF drew; `CS_DCLF_SKYLIGHT_DUMP_DIR=<dir>` writes maps that differ over 5 % of their texels as 16-bit PGM. |
-| `CS_DCLF_RESIDENT=1\|0` | Resident entries: an admitted entry that needs nothing per frame keeps its records patched across frames, drawn whenever the GPU's cull finds them, and its list job returns at once ("Resident entries"). Default on with the visibility feedback and the switch events; read at startup. |
-| `CS_DCLF_RESIDENT_PARITY=1` | Every 60 frames, each resident record's synthetic pass is built from scratch and compared with its patch, and the record with the patch. |
-| `CS_DCLF_RESIDENT_DRAWS=1\|0` | The resident records' draw inputs persist across frames at the head of each main segment's input buffer, changed only by SceneStore's change log ("Persistent resident draws"). Default on; read at startup. |
-| `CS_DCLF_PERSISTENT_OBJECTS=1\|0` | The per-object records persist in a store per objects buffer, changed from the change log and uploaded as dirty ranges ("Persistent draw state", Step 3). Default on. |
-| `CS_DCLF_PERSISTENT_BINDINGS=1\|0` | Each main segment's constant blocks and binding records persist, written only when they differ and skipped when clean ("Persistent draw state", Step 4). Default on. |
-| `CS_DCLF_WHOLE_SCENE_REGION=1\|0` | Each main segment's region holds the whole scene's inputs, not only the residents; the per-frame loop visits only what the region leaves it ("Persistent draw state", Step 5). Default on; needs the kept bindings. |
-| `CS_DCLF_PERSISTENT_SHADOW=1\|0` | The shadow epoch's inputs per mode, its records and its claims persist, changed from the change log ("Persistent draw state", Step 6). Default on; needs the persistent object records. |
-| `CS_DCLF_PERSISTENT_PARITY=1` | Every 60 frames: every kept object record against one built from the tables, and every kept binding record against the same build made the per-frame way. |
-| `CS_DCLF_CHANGE_LOG_PARITY=1` | Every 60 frames, each slot's columns are kept, and a frame later every slot whose columns changed must be in the change log with the causes that changed ("Persistent draw state"). |
-| `CS_DCLF_RESIDENT_DRAW_PARITY=1` | Every 60 frames, each resident region entry is written again from the tables and compared, and every resident the region should hold is looked for. |
-| `CS_DCLF_RESIDENT_PROBATION=1\|0` | Entries not yet admitted join residency out of view, and the build's draws admit them ("Resident entries", step 2). Default on with `CS_DCLF_RESIDENT`; read at startup. |
-| `CS_DCLF_SWITCH_EVENTS=1\|0` | An `NiSwitchNode`'s selection follows events: the index's writers are patched, a newly selected child is brought up to date when the event is applied, and neither the scene walk nor the primary's list jobs test switches every frame ("Switch selection by event"). Default on with `CS_DCLF_SCENE_DELTA`; read at startup. |
-| `CS_DCLF_SWITCH_NODES=1` | Leaves under an `NiSwitchNode` (trees, harvestables) are eligible in the frames every switch on their path selects them ("Trees and actors"). Default on. Live toggle. |
-| `CS_DCLF_SKIN_PARTITIONS=1` | Skins of several partitions and dismember skins (LOD trees, actor bodies) are eligible, one draw per partition the engine draws. Needs `CS_DCLF_SKINNED`. Default on. Live toggle. |
-| `CS_DCLF_ACTORS=1` | Geometry under an actor is eligible, as is the FacegenRGBTint technique. Default on. Live toggle. |
-| `CS_DCLF_FADING=1` | Objects fading with the screen-door mask in an opaque group are eligible ("Fading objects"). Default on. Live toggle. |
-| `CS_DCLF_LOD_CROSSFADE=1` | An object in a LOD cross-fade stays DCLF's (its own pass, the new level); only the engine's hint-10 copy of the old level is native ("LOD cross-fades"). Off: the whole object is native until the crossing ends. Default on. Live toggle. |
-| `CS_DCLF_TREE_TRACE=1` | Diagnostic: every geometry of a TREE reference followed frame by frame (registered, withheld, accumulated, bindings, native and DCLF draws, and the switch, LOD and transforms before the walk and after the cull), with who drew it, gaps and double draws, every 300 frames. |
-| `CS_DCLF_TEST_MOVE=start:end:units` | Test harness: moves the player along their heading by `units` a frame between two frames (several ranges separated by `;`), and runs `tgm` first so the flight is survivable. |
-| `CS_DCLF_NATIVE_PROBE=1` | Diagnostic: every 300 frames, the Lighting draws the main pass still issues natively, by form type, DCLF verdict, technique, skin shape and LODMode, with sampled ancestor chains. |
-| `CS_DCLF_SHADOW_PROBE=1` | Diagnostic: the shadow probe (step one): per-view engine state, registrations, derivation and rule cross-checks, and the engine's shadow CPU. |
-| `CS_DCLF_PASS_SOURCE=accumulator` | Build the tables from the accumulator walk instead of the captured registrations. |
-| `CS_DCLF_MATERIAL_CACHE=probe` | Diagnostic: measures how many material records are unchanged from the previous frame, i.e. whether a cross-frame cache could work. |
-| `CS_DCLF_EVAL=audit` | Diagnostic: snapshots pipeline state around every stand-in call and reports anything not restored. Very slow; the frame rate collapses. |
-| `CS_DCLF_SHADER_DEBUG=1` | Build the Lighting and Utility SPIR-V with source-level debug info (`-Zi`: `OpSource` with every file's text embedded, and `OpLine`), so Nsight and RenderDoc show source for DCLF's draws. Still optimized. Not `-fspv-debug=vulkan`: its `DebugValue`s keep dead loads alive, so stages read resources their passes do not bind and every candidate is skipped; `vulkan-with-source` also fails DXC 1.9's own validator. There is deliberately no `-Od` form either: unoptimized code reads per-frame constant buffers the epochs do not supply (VS b6, PS b7). The Z-prepass stage (`DCLF_DEPTH_ONLY`) compiles the lighting out of `Lighting.hlsl` rather than relying on the optimizer. The debug builds have their own cache keys. The shader files the game sees through MO2's VFS are also copied, keeping their `Data/Shaders/...` layout, to `CS_DCLF_SHADER_SOURCE_DIR` (default `<Documents>\My Games\Skyrim Special Edition\SKSE\CommunityShaders-ShaderSource`). Shaders DXVK translates from DXBC get no source info this way. The render-graph compute shaders (BuildDrawsCS, HzbCS, SortSequencesCS, the prefix sum, LLF's cluster shaders) always have `-Zi`: they compile at runtime from `Data/Shaders` through `ComputeProgram` (`src/RenderGraph/ComputeProgram.cpp`), into the same cache. |
-| `CS_DCLF_TEST_TOGGLE=<off>:<on>` | Test runs: flips the feature's menu toggle off and back on at those frames (loading screens not counted), to exercise the live on/off. |
-| `CS_DCLF_TEST_COMMANDS=<frame>:<command>;…` | Test runs: run each console command on the main thread once that many frames have been presented (loading screens do not count), for coverage runs from the auto-loaded save. The counter is independent of the feature, so a `CS_DCLF=0` control reaches the same place at the same hour. |
-| `CS_DCLF_ASYNC=off\|on\|probe` | Where the epochs' payloads are built (see "Payloads built off the render thread"). `on` (default since 2026-09-24): the enabled jobs build on the `CS DCLF worker` thread and the epoch commits the result. `off`: inline. `probe`: build on the worker *and* inline, and byte-compare the two payloads (`probe: N compared, N differ`). Bindless path only; the non-bindless path always builds inline. |
-| `CS_DCLF_ASYNC_JOBS=colour,zprepass,shadow,scene` | Which jobs `on`/`probe` move to the worker (default: all four). For bisecting. |
-| `CS_DCLF_OBJECT_SLOTS=0` | Rebuild the object tables densely every walk instead of keeping each object at a persistent slot ([dclf-event-driven-tables.md](./dclf-event-driven-tables.md), "Phase 1"). Also turns the delta walk off. For A/B. |
-| `CS_DCLF_SCENE_DELTA=0` | Walk the whole tracked set every frame (on the worker, with `CS_DCLF_ASYNC`) instead of the delta walk, which evaluates on the render thread only what can have changed ([dclf-event-driven-tables.md](./dclf-event-driven-tables.md), "Phase 2"). For A/B. |
-| `CS_DCLF_WALK_PARITY=1` | Every 60 frames, rebuild the tables densely on the render thread, classifying every object from scratch, and compare them with the frame's object by object, along with every entry's classification and per-frame traits (`walk parity ... <- OK` every 5 checks; [dclf-event-driven-tables.md](./dclf-event-driven-tables.md), "Phase 3"). |
-| `CS_DCLF_ASYNC_WAIT_MS=<ms>` | How long an epoch waits for its job before building inline instead (default 3). |
-| `CS_DCLF_ASYNC_PRIORITY=normal` | Run the worker at normal priority instead of above normal. |
-| `CS_GPU_IDLE_TRACE=<frames>` / `CS_PROFILER_LOG=<frames>` | Not DCLF's, but the gates below read them: the GPU idle trace and its `[GpuIdle] summary` lines, and the profiler's averages in the log. See [render-graph.md](render-graph.md). |
+| `CS_DCLF=0` | DCLF does not install. The menu's toggle, by contrast, applies live. |
+| `CS_DCLF_ASYNC=off\|probe` | The builds run inline on the render thread; `probe` also runs the worker's and compares the two. |
+| `CS_DCLF_OWNERSHIP=off`, `CS_DCLF_SHADOW_OWNERSHIP=off` | Nothing is withheld from the engine: the capture parity configuration. |
+| `CS_DCLF_CULL=off\|frustum` | Less GPU culling than the default (frustum and HZB occlusion). |
+| `CS_DCLF_STATS=1` | The periodic report, with the GPU time of each render-graph segment and pass. |
+| `CS_DCLF_*_PARITY` | The parity checks ([dclf-architecture.md](./dclf-architecture.md), "Parity gates"). |
+| `CS_DCLF_TEST_MOVE`, `CS_DCLF_TEST_TURN`, `CS_DCLF_TEST_TOGGLE`, `CS_DCLF_TEST_COMMANDS` | The unattended test harness: a flight, turns, the live toggle, console commands at given frames. |
 
 ### Capture tools and GPU timing
 
@@ -1583,32 +1535,6 @@ through: the shadow pipeline map ("Epochs that only submit") and the NPC head dr
   `nvidia-smi pmon`'s encoder column. Turn it off before timing.
 - RenderDoc (1.46) does not support `VK_EXT_descriptor_heap`. With RenderDoc capture on, the render graph
   cannot start and DCLF is forced off for the session; the log and the feature's menu page say why.
-
-### Defaults
-
-Unset switches now take the configuration every gate run of this work used: `CS_DCLF_HYBRID=1`,
-`CS_DCLF_OWNERSHIP=static`, `CS_DCLF_CULL=occlusion`, `CS_DCLF_SKINNED=1`, `CS_DCLF_TREES=1`,
-`CS_DCLF_DECALS=1`, `CS_DCLF_PROJECTED_UV=1`, `CS_DCLF_MTLAND=1`, `CS_DCLF_SWITCH_NODES=1`,
-`CS_DCLF_SKIN_PARTITIONS=1`, `CS_DCLF_ACTORS=1`, `CS_DCLF_FADING=1`, `CS_DCLF_LOD_CROSSFADE=1`,
-`CS_DCLF_SHADOWS=1` and
-`CS_DCLF_SHADOW_OWNERSHIP=static` (the tables already default to the tracked set). An explicit value
-overrides a default: `0` for the class and path switches, `off` for the two ownership switches and the
-culling. Rows above that say "Default off" describe the switches before this change. All of them are live
-toggles in the menu.
-
-Two GPU-side choices are on by default too; `=0` turns each off (start-up only, not menu toggles):
-
--   `CS_DCLF_COLOUR_EQUAL`: the colour pass tests depth EQUAL against DCLF's Z-prepass, as the engine's opaque pass does.
-    LESS_EQUAL let the fragments behind alpha-tested texels through to the full lighting shader. Decals keep LESS_EQUAL
-    (they draw with a depth bias). Colour pass about 4.3 to 3 ms at Riverwood.
--   `CS_DCLF_DECAL_DEPTH`: the opaque decals' depth before the colour pass ("Decal depth: the opaque group's depth
-    before the colour pass").
--   `CS_DCLF_FRAME_PUSH` (was `CS_DCLF_TEST_FRAME_PUSH`): the pass-wide constant buffers (the frame slots, PS b3 and b13)
-    are read from push addresses set once per pass instead of through each draw's binding record. The shadow views keep
-    every register in the record, in a layout of their own. Colour pass 3.3 to 2.1 ms at Riverwood (nvperf).
--   `CS_DCLF_DGC_PREPROCESS`: DCLF's generated commands are preprocessed explicitly, before the passes that execute them
-    ("Explicit DGC preprocessing"), except the depth pass's. Colour pass 2.1 to 1.55 ms, shadow views 1.24 to 1.08 ms at
-    Riverwood.
 
 ## Known upstream issues
 
