@@ -710,7 +710,7 @@ reproduces the signed shift.
 
 ## Shadow maps: views, descriptors and the Utility passes
 
-Measured with `CS_DCLF_SHADOW_PROBE=1` (`DrawcallLimitFix/ShadowProbe.cpp`) on AE 1.6.1170, Whiterun
+Measured with a shadow probe DCLF has since removed (`CS_DCLF_SHADOW_PROBE`) on AE 1.6.1170, Whiterun
 exterior by day and the Bannered Mare at hour 22, on top of the Ghidra reading of the functions below.
 
 **Frame order.** `Main::Draw` (`0x1406444b0`) builds the main scene lists and finishes them; then

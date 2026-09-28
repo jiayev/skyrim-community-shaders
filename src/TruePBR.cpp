@@ -1,6 +1,6 @@
 #include "TruePBR.h"
 
-#include "Features/DrawcallLimitFix/MaterialSources.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "TruePBR/BSLightingShaderMaterialPBRLandscape.h"

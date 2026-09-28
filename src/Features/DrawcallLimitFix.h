@@ -33,14 +33,14 @@ struct DrawcallLimitFix : Feature
 	virtual void EarlyPrepass() override;
 	virtual void DrawSettings() override;
 
+	/** @brief Where the main pass's opaque batches start: what it binds, for the colour epoch (IndirectDraws::CaptureMainPass). */
+	void BeforeOpaquePass();
 	/**
 	 * @brief The end of the main pass's opaque batches (Deferred's Main_RenderWorld_BlendedDecals hook): DCLF's
 	 * colour epoch. What the engine draws after this point blends onto the G-buffer or tests against the opaque
 	 * depth, so the objects DCLF drew in place of native ones have to be in it: Terrain Blending's deferred
 	 * terrain, then the blended decals.
 	 */
-	/** @brief Where the main pass's opaque batches start: what it binds, for the colour epoch (IndirectDraws::CaptureMainPass). */
-	void BeforeOpaquePass();
 	void AfterOpaquePass();
 	/**
 	 * @brief CS_DCLF_TARGET_PROBE=x,y (dclf-open-defects.md): every bound G-buffer target, averaged over a 64 x 64 block

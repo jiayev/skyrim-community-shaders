@@ -6,7 +6,10 @@
 - **[Shader Workflow](./shader-workflow.md)** - Fast shader iteration and deployment
 - **[Nsight Perf](./nsight-perf.md)** - GPU hardware counters per render pass (Developer Tools, `NVPERF_SUPPORT`)
 - **[OpenRenderGraph on DXVK](./render-graph.md)** - How features run render-graph work on DXVK's Vulkan device
-- **[Drawcall Limit Fix](./drawcall-limit-fix.md)** - GPU-driven indirect drawing of the opaque scene (in progress)
+- **[DCLF architecture](./dclf-architecture.md)** - Drawcall Limit Fix as it is: the frame by thread, the data from engine events to GPU draws, ownership, the code's layout, switches and parity gates
+- **[DCLF status](./dclf-status.md)** - What DCLF draws, and what the engine still does on the render thread
+- **[DCLF open defects](./dclf-open-defects.md)** - Defects and failing parity checks under investigation, with their evidence
+- **[Drawcall Limit Fix](./drawcall-limit-fix.md)** - The historical record of how DCLF was built, with the measurements behind each decision
 - **[Skyrim engine notes](./skyrim-engine-notes.md)** - What the decompiled game binary does, where features depend on it
 - **[Crash catalog](./crash-catalog.md)** - Crashes met during development, their stacks and what is known about each
 - **[DCLF: a GPU-driven frame](./dclf-gpu-driven-frame.md)** - Investigation: what taking DCLF's objects out of every engine per-view walk would require
@@ -66,6 +69,11 @@ The alias is installed into local Git config by default, so it does not affect o
 | `COPY_SHADERS`    | ❌         | ✅             | Fast shader iteration  |
 | `DEPLOY_ALL`      | ✅         | ✅             | Full deployment (auto) |
 | `prepare_shaders` | ❌         | ✅ (AIO only)  | CI shader validation   |
+
+With `AUTO_PLUGIN_DEPLOYMENT`, the plugin's own build copies its DLL and PDB to every deploy target, so building just
+the `CommunityShaders` target deploys it too; `DEPLOY_ALL` adds the rest of the package. The deploy targets are taken
+from `CommunityShadersOutputDir` when CMake configures and cached (`CS_DEPLOY_DIRS`), so a later reconfigure from a
+shell without the variable keeps them.
 
 ## Contributing
 

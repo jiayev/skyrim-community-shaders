@@ -46,6 +46,13 @@ option(
     "Copy the build output and addons to env:CommunityShadersOutputDir."
     OFF
 )
+# The deploy targets, cached from env:CommunityShadersOutputDir when it is set, so that a reconfigure from a shell
+# without the variable keeps deploying to them instead of dropping the deploy rules without a word.
+if(DEFINED ENV{CommunityShadersOutputDir})
+    set(CS_DEPLOY_DIRS "$ENV{CommunityShadersOutputDir}" CACHE STRING "Deploy targets (from env:CommunityShadersOutputDir)" FORCE)
+else()
+    set(CS_DEPLOY_DIRS "" CACHE STRING "Deploy targets (from env:CommunityShadersOutputDir)")
+endif()
 option(
     ZIP_TO_DIST
     "Zip the base mod and addons to their own zip file in dist."
@@ -484,7 +491,7 @@ configure_file(
 target_sources(
     "${PROJECT_NAME}"
     PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/cmake/FeatureVersions.h
-        src/Features/DrawcallLimitFix/ActorValueIndex.h
+        src/Features/DrawcallLimitFix/Scene/ActorValueIndex.h
 )
 
 # #######################################################################################################################
@@ -1296,7 +1303,7 @@ if(AUTO_PLUGIN_DEPLOYMENT)
 
     set(DEPLOY_TARGET_HASHES)
     if(WIN32)
-        foreach(DEPLOY_TARGET $ENV{CommunityShadersOutputDir})
+        foreach(DEPLOY_TARGET ${CS_DEPLOY_DIRS})
             message("Deploying AIO to ${DEPLOY_TARGET} (incremental)")
 
             # Ensure destination root exists
@@ -1332,10 +1339,13 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "Incremental deploy (excluding Shaders) to ${DEPLOY_TARGET} (robocopy-wrapper)"
             )
 
-            # Ensure plugin DLL/PDB are copied directly to the target SKSE/Plugins
-            # folder in case robocopy rules do not copy them as expected.
+            # The plugin DLL/PDB go to the target on every link, as a POST_BUILD step of the plugin itself:
+            # a stamp rule in DEPLOY_ALL left the deployed DLL stale whenever the plugin was built on its own
+            # (--target CommunityShaders) or DEPLOY_ALL's copy of the rule judged itself up to date. The copy
+            # fails the build if the game holds the DLL, instead of leaving an old one in place silently.
             add_custom_command(
-                OUTPUT ${DEPLOY_TARGET_HASH}_plugin.stamp
+                TARGET ${PROJECT_NAME}
+                POST_BUILD
                 COMMAND
                     ${CMAKE_COMMAND} -E make_directory
                     "${DEPLOY_TARGET}/SKSE/Plugins"
@@ -1347,15 +1357,9 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_PDB_FILE:${PROJECT_NAME}>
                     "${DEPLOY_TARGET}/SKSE/Plugins/$<TARGET_PDB_FILE_NAME:${PROJECT_NAME}>"
-                COMMAND
-                    ${CMAKE_COMMAND} -E touch ${DEPLOY_TARGET_HASH}_plugin.stamp
-                DEPENDS
-                    ${CMAKE_CURRENT_BINARY_DIR}/prepare_aio.stamp
-                    ${PROJECT_NAME}
                 COMMENT "Copy plugin DLL/PDB to ${DEPLOY_TARGET}/SKSE/Plugins"
+                VERBATIM
             )
-
-            list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_plugin.stamp)
 
             # Incremental shader-only copy for fast dev iteration
             # Depends ONLY on copy_shaders.stamp (no DLL, no PREPARE_AIO)
@@ -1436,10 +1440,15 @@ if(AUTO_PLUGIN_DEPLOYMENT)
         DEPENDS copy_shaders.stamp ${DEPLOY_TARGET_HASHES}
         COMMENT "Full deployment: DLL + shaders + all files to game directory"
     )
+    # The Visual Studio generator gives every target whose rules depend on prepare_aio.stamp its own copy of the
+    # PREPARE_AIO rule; built in parallel, the two copies wrote the same AIO files at once ("Permission denied").
+    # Ordering DEPLOY_ALL after PREPARE_AIO leaves its copy of the rule up to date.
+    add_dependencies(DEPLOY_ALL PREPARE_AIO)
 endif()
 
-if(NOT DEFINED ENV{CommunityShadersOutputDir})
+if(AUTO_PLUGIN_DEPLOYMENT AND NOT CS_DEPLOY_DIRS)
     message(
+        WARNING
         "When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'"
     )
 endif()
@@ -1581,12 +1590,6 @@ if(AIO_ZIP_TO_DIST)
     endif()
 
     add_custom_target(AIO_ZIP_PACKAGE ALL DEPENDS ${AIO_ZIP_STAMP})
-endif()
-
-if(NOT DEFINED ENV{CommunityShadersOutputDir})
-    message(
-        "When using AUTO_PLUGIN_DEPLOYMENT option, you need to set environment variable 'CommunityShadersOutputDir'"
-    )
 endif()
 
 # #######################################################################################################################

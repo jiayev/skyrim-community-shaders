@@ -1,30 +1,31 @@
 #include "DrawcallLimitFix.h"
 
 #include "Deferred.h"
-#include "DrawcallLimitFix/AsyncWorker.h"
-#include "DrawcallLimitFix/CaptureParity.h"
-#include "DrawcallLimitFix/ConstantEvaluator.h"
-#include "DrawcallLimitFix/MaterialSources.h"
-#include "DrawcallLimitFix/OpenDefectProbes.h"
-#include "DrawcallLimitFix/TestHarness.h"
-#include "DrawcallLimitFix/DrawPipelines.h"
-#include "DrawcallLimitFix/FaceSnapshots.h"
-#include "DrawcallLimitFix/SunAccumulation.h"
-#include "DrawcallLimitFix/PrimaryCull.h"
+#include "DrawcallLimitFix/Common/AsyncWorker.h"
+#include "DrawcallLimitFix/Diagnostics/CaptureParity.h"
+#include "DrawcallLimitFix/Scene/ConstantEvaluator.h"
+#include "DrawcallLimitFix/Scene/MaterialSources.h"
+#include "DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
+#include "DrawcallLimitFix/Diagnostics/TestHarness.h"
+#include "DrawcallLimitFix/Draws/DrawPipelines.h"
+#include "DrawcallLimitFix/Engine/EngineAccess.h"
+#include "DrawcallLimitFix/Engine/FaceSnapshots.h"
+#include "DrawcallLimitFix/Engine/SunAccumulation.h"
+#include "DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/Skylighting.h"
 
 #include <filesystem>
 #include <fstream>
-#include "DrawcallLimitFix/GpuResources.h"
-#include "DrawcallLimitFix/GpuTextures.h"
-#include "DrawcallLimitFix/IndirectDraws.h"
-#include "DrawcallLimitFix/ShaderPrograms.h"
-#include "DrawcallLimitFix/ShadowViews.h"
-#include "DrawcallLimitFix/Toggles.h"
-#include "DrawcallLimitFix/PassCapture.h"
-#include "DrawcallLimitFix/SceneStore.h"
-#include "DrawcallLimitFix/SceneTracker.h"
-#include "DrawcallLimitFix/Switches.h"
+#include "DrawcallLimitFix/Draws/GpuResources.h"
+#include "DrawcallLimitFix/Draws/GpuTextures.h"
+#include "DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "DrawcallLimitFix/Draws/ShaderPrograms.h"
+#include "DrawcallLimitFix/Engine/ShadowViews.h"
+#include "DrawcallLimitFix/Common/Toggles.h"
+#include "DrawcallLimitFix/Engine/PassCapture.h"
+#include "DrawcallLimitFix/Scene/SceneStore.h"
+#include "DrawcallLimitFix/Engine/SceneTracker.h"
+#include "DrawcallLimitFix/Common/Switches.h"
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "State.h"
@@ -247,9 +248,8 @@ void DrawcallLimitFix::EarlyPrepass()
 		return;
 
 	// The tables are built here, from Main_RenderShadowMaps, rather than in Prepass from StartDeferred.
-	// Both DCLF epochs then read the same generation: the Z-prepass runs inside Main_RenderDepth,
-	// which is after this and before Prepass, so it used to see the *previous* frame's tables and the
-	// per-object visibility verdicts it wrote could not be applied by index in the colour epoch.
+	// Both DCLF epochs then read the same generation: the Z-prepass runs inside Main_RenderDepth, after this and
+	// before Prepass, and the per-object visibility verdicts it writes are applied by index in the colour epoch.
 	//
 	// This is only possible because the accumulator is already complete here - the cull job finishes
 	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
@@ -262,10 +262,7 @@ void DrawcallLimitFix::EarlyPrepass()
 	timing.buildMs += buildMs;
 	timing.buildMaxMs = std::max(timing.buildMaxMs, buildMs);
 	++timing.frames;
-	// The shadow probe reads this frame's tables (the main pass's kept objects) and the Utility
-	// registrations, which are complete now that the thunk has returned.
-
-	// Phase 2: SPIR-V programs and indirect pipelines for the pipelines drawn this frame (built once, asynchronously).
+	// SPIR-V programs and indirect pipelines for the pipelines drawn this frame (built once, asynchronously).
 	auto& programs = DCLF::ShaderPrograms::Get();
 	auto& pipelines = DCLF::DrawPipelines::Get();
 	if (auto* lighting = DCLF::ConstantEvaluator::Get().GetLightingShader(); lighting && programs.Enabled()) {
@@ -546,8 +543,8 @@ void DrawcallLimitFix::Prepass()
 		return;
 
 	auto& store = DCLF::SceneStore::Get();
-	// The one point in the frame where the main camera's accumulator is identifiable: EarlyPrepass, where
-	// the tables are now built, is too early for `currentAccumulator` to be set.
+	// The one point in the frame where `currentAccumulator` is the main camera's accumulator. The accumulate phase
+	// (EarlyPrepass) runs before it is set, and reads this latch.
 	store.LatchAccumulator();
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
@@ -675,7 +672,7 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 		return;  // shadow-map modes only: plain, clamped, paraboloid (engine notes: shadow maps)
 	const auto view = DCLF::ShadowViews::Get().ViewOfAccumulator(a_accumulator);
 	if (view != ~0u)
-		DCLF::IndirectDraws::Get().ExecuteShadowView(view, mode);
+		DCLF::IndirectDraws::Get().CaptureShadowView(view, mode);
 }
 
 void DrawcallLimitFix::Hooks::Install()
@@ -728,8 +725,7 @@ void DrawcallLimitFix::BeforeOpaquePass()
 	// and the objects it withheld from the engine went undrawn. The end of the pass is no substitute: by then the sky's
 	// clouds have rebound Cloud Shadows' t26. CS_DCLF_CAPTURE_POINT_PARITY checks this capture against the first
 	// lighting draw's.
-	static REL::Relocation<void (*)(bool)> SetDirtyStates{ REL::RelocationID(75580, 77386) };
-	SetDirtyStates(false);
+	DCLF::Engine::ApplyPendingState();
 	globals::EndDCLFDepthTrace();
 	if (!CaptureMainPass() && !loggedCaptureFailure) {
 		loggedCaptureFailure = true;
@@ -745,7 +741,7 @@ bool DrawcallLimitFix::CaptureMainPass()
 	auto& store = DCLF::SceneStore::Get();
 	captureFrame = store.GetFrame();
 	DCLF::DrawPipelines::Get().SetTargetFormats(formats);
-	// Phase 2: what the main pass binds, for this frame's indirect draws (run before the composite).
+	// What the main pass binds, for this frame's indirect draws (run before the composite).
 	DCLF::IndirectDraws::Get().CaptureMainPass();
 	// The engine's state objects behind any key that carries state bits (decals), read here
 	// because this is inside the deferred pass, where the blend table holds the deferred variants.

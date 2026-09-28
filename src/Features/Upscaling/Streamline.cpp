@@ -3,7 +3,7 @@
 #include "DXVKInterop.h"
 
 #include "../../DxvkLoader.h"
-#include "../DrawcallLimitFix/Switches.h"
+#include "../DrawcallLimitFix/Common/Switches.h"
 #include "../../Globals.h"
 #include "../../State.h"
 #include "../../Utils/Game.h"

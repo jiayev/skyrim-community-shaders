@@ -131,11 +131,18 @@ object would cull it wrongly.
 **Evidence.** `CS_DCLF_CAPTURE_PARITY` with ownership off: 600-900 of about 9,600 checked draws mismatch per
 interval, all in VS PerGeometry variable 2 (`EyePosition`, written only by the Envmap, Eye and 0x10
 techniques). Materials, techniques, bones, lights, permutations and draw arguments all match. The main pass's
-render flags are only 0x41 and 0x45.
+render flags are only 0x41 and 0x45. The report's samples give the two values: the tables hold the eye (for
+example `DCLF -25480.893, native 0` on `HumanBeard28`, `HairLineMaleNord07` and a candle lantern) where the native
+draw's constant buffer holds 0. So this is not a timing difference between two eye samples: on these draws the
+native `SetupGeometry` leaves the component at zero, and the tables write it.
 
-**Next step.** Log a mismatching draw's two values. The tables take `EyePosition` from one sample per frame
-(`RefreshFrameConstants`' eye sample), while the native draw writes the eye at the moment it draws; a camera or
-`posAdjust` change between the two would explain it.
+The first interval after a load also has a few `PS PerGeometry 8` mismatches (3-7, a candle lantern's emissive
+multiplier, `DCLF 1.0403805, native 1.0114646`): an animated emissive sampled once per frame, like the flicker
+that `RefreshFrameConstants`' shading resample exists for. It does not recur after the first interval.
+
+**Next step.** Find the branch of `BSLightingShader::SetupGeometry` (AE `0x1414dd040`) that writes `EyePosition`
+and the condition under which it writes zero, and apply the same condition in the tables (`SceneStore`'s
+PerGeometry evaluation), not a per-frame sample.
 
 ### Primary exclusion never applies at this save
 

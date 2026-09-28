@@ -18,7 +18,7 @@
 
 #include "Features/DynamicCubemaps.h"
 #include "Features/RenderDoc.h"
-#include "Features/DrawcallLimitFix/ShaderPrograms.h"
+#include "Features/DrawcallLimitFix/Draws/ShaderPrograms.h"
 
 #include "Plugin.h"
 
