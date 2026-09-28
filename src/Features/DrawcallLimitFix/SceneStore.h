@@ -760,9 +760,12 @@ namespace DCLF
 		void NoteProjectedTextures();
 		const ProjectedTextures& GetProjectedTextures() const { return projectedTextures; }
 
-		/** @brief Render flags the native main pass passes to SetupGeometry (learned from native draws). */
-		void SetMainPassRenderFlags(std::uint32_t a_flags) { mainPassRenderFlags = a_flags; }
-		std::uint32_t GetMainPassRenderFlags() const { return mainPassRenderFlags; }
+		/**
+		 * @brief The render flags the native main pass passes to SetupGeometry: 0x41, or 0x45 for blended decals (engine
+		 * notes). SetupGeometry reads only bits 0x2 (SSRParams.w zeroed), 0x8 (with a shadow-mask global) and 0x10
+		 * (PreviousWorld from the current world), none of which the main pass sets, so 0x41 stands for both.
+		 */
+		static constexpr std::uint32_t kMainPassRenderFlags = 0x41;
 
 		/** @brief Drops everything (feature disabled or game unloaded). */
 		void Clear();
@@ -1301,7 +1304,6 @@ namespace DCLF
 		bool frameInterior = false;
 		std::array<std::uint32_t, 3> frameDecalBias{};
 		bool graphWasActive = false;  // resolveBuffers of the previous BuildFrame, to log the flip
-		std::uint32_t mainPassRenderFlags = 0;
 		ProjectedTextures projectedTextures;
 		/** @brief Fills one object's extras rows (Prepass: the main camera's state is current). */
 		void RefreshObjectExtras(std::size_t a_object, const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry);
@@ -1466,13 +1468,14 @@ namespace DCLF
 		} geometryStats;
 		/** @brief The technique row of a pass descriptor's TechniqueKey (Tables::techniques), made and evaluated when new. */
 		std::uint32_t TechniqueRowFor(std::uint32_t a_passDescriptor);
-		// The render flags the blocks were evaluated with: a change evaluates every pipeline in full.
-		std::uint32_t geometryEvaluatedFlags = ~0u;
 		void CheckFrameGeometry(std::uint32_t a_pipeline, const GeometryConstants& a_reference, const GeometryConstants& a_held);
+		// The first RefreshFrameConstants evaluates every pipeline in full and resamples every slot's shading. The full
+		// evaluations are what seed the frame lighting (Tables::frameLighting) with the variables the per-frame sample's
+		// pipeline does not write, such as AmbientSpecularTintAndFresnelPower: pipelines made later are evaluated where
+		// they are written (WriteObject), which does not publish lighting.
+		bool constantsRefreshed = false;
 		/** @brief The slot's shading from its property now; true when it differs from the tables' (written only when a_write). */
 		bool ResampleShading(std::uint32_t a_slot, bool a_write);
-		// The render flags the shading was last sampled with: a change resamples every slot.
-		std::uint32_t resampledRenderFlags = ~0u;
 		// CS_DCLF_PERSISTENT_PARITY: every 60 frames every slot is sampled against the tables after the watched resample.
 		struct ShadingParity
 		{

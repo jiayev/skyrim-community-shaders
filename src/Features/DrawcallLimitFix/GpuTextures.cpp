@@ -335,7 +335,7 @@ namespace DCLF
 			entry->index = entry->binding.Index();
 			registry->liveCount.fetch_add(1, std::memory_order_relaxed);
 			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
-			static const bool traceIdentities = !SwitchValue("CS_DCLF_TRACE_TEXTURE_PATHS").empty();
+			const bool traceIdentities = !SwitchValue(Switch::TraceTexturePaths).empty();
 			if (traceIdentities) {
 				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(a_view)));
 				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(image.image)));

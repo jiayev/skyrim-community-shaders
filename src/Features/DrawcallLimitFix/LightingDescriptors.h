@@ -233,48 +233,8 @@ namespace DCLF
 	 */
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
 
-	/** @brief CS_DCLF_DECALS=1: decals (accumulation hints 2 and 3) are eligible, drawn by the second pass. */
-	bool DecalsEnabled();
-
-	/** @brief CS_DCLF_SKINNED=1: single-partition NiSkinInstance shapes are eligible, palettes from the engine. */
-	bool SkinnedEnabled();
-
 	/**
-	 * @brief CS_DCLF_SWITCH_NODES=1: a leaf under an NiSwitchNode is eligible in the frames every switch on its
-	 * path selects it (SceneStore::SwitchSelects). Trees and harvestables hang under one.
-	 */
-	bool SwitchNodesEnabled();
-
-	/**
-	 * @brief CS_DCLF_SKIN_PARTITIONS=1 (with skinned): skins of several partitions are eligible - the LOD
-	 * partitions of trees and the dismember partitions of actor bodies - drawn one draw per partition the
-	 * engine would draw (SkinPartitionMask).
-	 */
-	bool SkinPartitionsEnabled();
-
-	/** @brief CS_DCLF_ACTORS=1: geometry under an actor's 3D is eligible, and the FacegenRGBTint technique (skin). */
-	bool ActorsEnabled();
-
-	/**
-	 * @brief CS_DCLF_FADING=1: an object fading in or out is eligible while the engine fades it with the
-	 * screen-door mask (pass descriptor AdditionalAlphaMask, the fade in MaterialData.z) in an opaque group.
-	 * Blended fades (accumulation hint 9) and the LOD cross-fade copies (hint 10) stay native
-	 * (PassCapture::FadingAtRegistration).
-	 */
-	bool FadingEnabled();
-
-	/**
-	 * @brief CS_DCLF_LOD_CROSSFADE=1: an object in a LOD cross-fade stays DCLF's - its own pass draws the new
-	 * level as a settled object's does - and only the engine's hint-10 copy of the old level is left to the
-	 * native loop. Off, the whole object is the native loop's until the crossing ends.
-	 */
-	bool LodCrossfadeEnabled();
-
-	/** @brief CS_DCLF_PROJECTED_UV=1: kProjectedUV objects (snow and moss projection) are eligible. */
-	bool ProjectedUvEnabled();
-
-	/**
-	 * @brief CS_DCLF_MTLAND=1: the MTLand and MTLandLODBlend techniques (terrain) are eligible - unless
+	 * @brief The MTLand and MTLandLODBlend techniques (terrain) are eligible when the mtLand toggle is on - unless
 	 * Terrain Blending is on and DCLF is drawing into the frame, because that feature intercepts every
 	 * terrain pass and redraws it blended with its own depth state, which an opaque owned draw would break.
 	 */

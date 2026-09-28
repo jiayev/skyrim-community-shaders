@@ -165,7 +165,7 @@ namespace DCLF
 
 	bool PrimaryCull::Probe()
 	{
-		static const bool probe = SwitchValue("CS_DCLF_PRIMARY_EXCLUDE") == "probe";
+		const bool probe = SwitchValue(Switch::PrimaryExclude) == "probe";
 		return probe;
 	}
 
@@ -927,7 +927,7 @@ namespace DCLF
 		// The feedback frames whose copies have completed, decoded on the worker every frame (whether or not the cut
 		// applies this one). Kicked after the registration jobs (their CPU is not shared with it), joined at Present
 		// (EndFrame), before the next frame's update reads the tree bits and its list jobs read the fade state.
-		if (!Toggles::Get().Active().excludePrimaryEntries || feedbackJob)
+		if (!ActiveToggles().excludePrimaryEntries || feedbackJob)
 			return;
 		auto drain = [this] {
 			IndirectDraws::Get().DrainVisibilityFeedback([this](const IndirectDraws::VisibilityFeedbackFrame& a_frame) {
@@ -1126,7 +1126,7 @@ namespace DCLF
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
 		JoinFeedback();
-		if (Toggles::Get().Active().excludePrimaryEntries)
+		if (ActiveToggles().excludePrimaryEntries)
 			PrepareFrame();
 		else if (!residents.empty())
 			EndAllResidents();

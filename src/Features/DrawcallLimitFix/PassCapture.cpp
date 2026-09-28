@@ -57,14 +57,14 @@ namespace DCLF
 		// 3). That one is a precaution, not a measurement: the decal probe's state mismatches turned out not to
 		// depend on the fade.
 		const auto hint = a_pass->accumulationHint;
-		if (fade.currentFade < 1.0f && (!FadingEnabled() || hint == 9 || hint == 2 || hint == 3))
+		if (fade.currentFade < 1.0f && (!ActiveToggles().fading || hint == 9 || hint == 2 || hint == 3))
 			return true;
 		// A LOD cross-fade (kMeshLOD, fade node LOD state +0x153 & 0x70 not 0x20) is not a fade of the object:
 		// GetRenderPasses (AE 1414adfb0) keeps its pass as it is - the new level, drawn as any settled object
 		// is - and adds the old level as a hint-10 copy, which is the native loop's (above). DCLF keeps the
 		// object through the crossing and the native loop draws only the copy (CS_DCLF_LOD_CROSSFADE); off,
 		// the whole object is the native loop's until the crossing ends.
-		return !LodCrossfadeEnabled() && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) && (fade.unk153 & 0x70) != 0x20;
+		return !ActiveToggles().lodCrossfade && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) && (fade.unk153 & 0x70) != 0x20;
 	}
 
 	void PassCapture::Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld)
@@ -110,11 +110,6 @@ namespace DCLF
 		return lastDrain;
 	}
 
-	bool PassCapture::WithholdingEnabled()
-	{
-		return Toggles::Get().Active().ownership;
-	}
-
 	void PassCapture::PublishClaims(std::shared_ptr<const ClaimSet> a_claims)
 	{
 		std::atomic_store(&claims, std::move(a_claims));
@@ -141,7 +136,7 @@ namespace DCLF
 
 	bool PassCapture::ShadowWithholdingEnabled()
 	{
-		const auto toggles = Toggles::Get().Active();
+		const auto toggles = ActiveToggles();
 		return toggles.shadows && toggles.shadowOwnership;
 	}
 
@@ -174,7 +169,7 @@ namespace DCLF
 	{
 		if (!a_pass || !a_pass->geometry)
 			return false;
-		const auto toggles = Toggles::Get().Active();
+		const auto toggles = ActiveToggles();
 		// The main camera's renderers: the colour epoch's claims. A shadow camera's renderers are a
 		// separate set with claims of their own, below; a pass into any other renderer (reflections,
 		// cubemaps, the focus shadows until S4) is never withheld.

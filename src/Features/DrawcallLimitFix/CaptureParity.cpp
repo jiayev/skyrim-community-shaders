@@ -88,10 +88,7 @@ namespace DCLF
 
 	bool CaptureParity::Enabled()
 	{
-		static const bool enabled = [] {
-			return SwitchEnabled("CS_DCLF_CAPTURE_PARITY");
-		}();
-		return enabled;
+		return SwitchEnabled(Switch::CaptureParity);
 	}
 
 	CaptureParity& CaptureParity::Get()

@@ -269,9 +269,6 @@ namespace DCLF
 		 */
 		void ProbeTargets(const char* a_label);
 
-		/** @brief CS_DCLF_SHADOWS=1: the shadow views are drawn by the render graph as well. */
-		static bool ShadowsEnabled();
-
 		/** @brief BeforeShadowMaps: the shadow frame begins; the views are captured from here (ExecuteShadowView). */
 		void BeginShadowFrame();
 

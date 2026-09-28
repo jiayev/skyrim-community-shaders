@@ -518,7 +518,7 @@ namespace globals
 
 	void BeginDCLFDepthTrace(ID3D11Texture2D* a_depth)
 	{
-		if (!a_depth || !DCLF::SwitchEnabled("CS_DCLF_DEPTH_TRACE") || depthTracedFrames >= 5 || ++depthCandidateFrames < 40)
+		if (!a_depth || !DCLF::SwitchEnabled(DCLF::Switch::DepthTrace) || depthTracedFrames >= 5 || ++depthCandidateFrames < 40)
 			return;
 		std::scoped_lock lock(depthTraceMutex);
 		depthTraceTarget = a_depth;
@@ -555,9 +555,9 @@ namespace globals
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
-		if (DCLF::SwitchEnabled("CS_DCLF_DRAW_TRACE") && !DCLF::SwitchEnabled("CS_DCLF_DEPTH_TRACE"))
+		if (DCLF::SwitchEnabled(DCLF::Switch::DrawTrace) && !DCLF::SwitchEnabled(DCLF::Switch::DepthTrace))
 			stl::detour_vfunc<12, ID3D11DeviceContext_DrawCallerTrace>(a_context);
-		if (DCLF::SwitchEnabled("CS_DCLF_DEPTH_TRACE")) {
+		if (DCLF::SwitchEnabled(DCLF::Switch::DepthTrace)) {
 			stl::detour_vfunc<53, ID3D11DeviceContext_DepthClearTrace>(a_context);
 			stl::detour_vfunc<47, ID3D11DeviceContext_DepthCopyTrace>(a_context);
 			stl::detour_vfunc<33, ID3D11DeviceContext_DepthBindTrace>(a_context);

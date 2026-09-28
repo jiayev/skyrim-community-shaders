@@ -452,7 +452,7 @@ bool DXVKInterop::Initialize()
 		getPresenterSurfaceState = reinterpret_cast<GetPresenterSurfaceStateFn>(
 			GetProcAddress(module, "dxvkGetPresenterSurfaceState"));
 		// CS_UPSCALE_SUBMIT=direct: every ring submission waits for DXVK's command stream (the previous behaviour).
-		if (DCLF::SwitchValue("CS_UPSCALE_SUBMIT") != "direct")
+		if (DCLF::SwitchValue(DCLF::Switch::UpscaleSubmit) != "direct")
 			enqueueSubmission = reinterpret_cast<PFN_dxvkEnqueueInteropSubmission>(GetProcAddress(module, "dxvkEnqueueInteropSubmission"));
 	}
 	logger::info("[DXVKInterop] Ring submissions from the render thread {}", enqueueSubmission ?
