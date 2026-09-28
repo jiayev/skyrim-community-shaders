@@ -200,22 +200,6 @@ namespace DCLF
 		if (!lightingShader)
 			return false;
 
-		// CS_DCLF_EVAL is a diagnostic, not a mode. Suppressing an evaluation leaves the tables with
-		// unwritten constants, so DCLF's own objects render wrong; what it answers is whether the
-		// *natively* drawn content (actors, anything outside DCLF's coverage) is still corrupted, which
-		// separates state the stand-in leaks into the engine from anything DCLF's own draws do.
-		//
-		//   off       neither SetupMaterial nor SetupGeometry is ever called
-		//   material  only SetupMaterial runs (the per-material evaluation, ~636 calls a frame)
-		//   geometry  only SetupGeometry runs (the per-pipeline evaluation, ~37 calls a frame)
-		static const std::string eval = SwitchValue("CS_DCLF_EVAL");
-		if (eval == "off")
-			return false;
-		if (eval == "material" && a_level != kPerMaterial)
-			return false;
-		if (eval == "geometry" && a_level != kPerGeometry)
-			return false;
-
 		auto& state = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData();
 		auto* context = globals::d3d::context;
 		auto* shader = static_cast<RE::BSLightingShader*>(lightingShader);
@@ -265,7 +249,9 @@ namespace DCLF
 		// which is acceptable for a diagnostic. It covers *every* evaluation rather than a sample: the
 		// first version audited only the first 8 of roughly 640 material evaluations a frame and reported
 		// nothing, which says nothing at all when the leaking call might be any one of the other 630.
-		const bool audit = eval == "audit" && auditsThisFrame < 4096;
+		// CS_DCLF_EVAL=audit.
+		static const bool auditOn = SwitchValue("CS_DCLF_EVAL") == "audit";
+		const bool audit = auditOn && auditsThisFrame < 4096;
 		PipelineSnapshot before;
 		if (audit) {
 			++auditsThisFrame;

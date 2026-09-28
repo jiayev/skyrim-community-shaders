@@ -21,30 +21,14 @@ namespace DCLF
 	inline constexpr std::uint32_t kBindingShiftS = 400;
 	inline constexpr std::uint32_t kBindingShiftU = 500;
 
-	/**
-	 * @brief Whether the permutations are built with DCLF_BINDLESS.
-	 *
-	 * The five PerGeometry variables that differ between the objects of one pipeline (World,
-	 * PreviousWorld, MaterialData, EmitColor and the w of SSRParams) are then read from the per-object
-	 * record table at t127, indexed by the object index the draw carries in its push data, instead of
-	 * from the draw's own constant buffer.
-	 *
-	 * `CS_DCLF_BINDLESS=0` builds the constant buffer form, which is the control. Read once: the
-	 * permutations are compiled against whichever answer this gives, so it cannot change per frame.
+	/*
+	 * DCLF's permutations are built with DCLF_BINDLESS and DCLF_BINDLESS_DRAW. The five PerGeometry variables that
+	 * differ between the objects of one pipeline (World, PreviousWorld, MaterialData, EmitColor and the w of SSRParams),
+	 * the alpha test reference, the emissive multiplier and Light Limit Fix's room index and shadow bit mask are read
+	 * from the per-object record table at t127, indexed by the object index the draw carries in its push data, instead
+	 * of from the draw's own constant buffers (PS b11, b8 and b3). That makes the binding record identical for every
+	 * draw of a (material, pipeline) pair, so it is deduplicated.
 	 */
-	bool BindlessObjects();
-
-	/**
-	 * @brief Whether the permutations also read the alpha test reference, the emissive multiplier and Light
-	 * Limit Fix's room index and shadow bit mask from that record instead of from PS b11, b8 and b3.
-	 *
-	 * Those three are the last entries of the binding record that vary per object, so this is what makes
-	 * the record identical for every draw of a (material, pipeline) pair and lets it deduplicate. Implies
-	 * BindlessObjects: the record it reads from only exists there.
-	 *
-	 * `CS_DCLF_BINDLESS_DRAW=1`, default off. Read once, like the switch above.
-	 */
-	bool BindlessDraws();
 
 	/**
 	 * @brief SPIR-V builds of the Lighting shader permutations DCLF draws (Phase 2).

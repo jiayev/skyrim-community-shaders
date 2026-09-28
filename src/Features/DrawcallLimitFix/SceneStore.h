@@ -27,61 +27,6 @@ namespace DCLF
 	struct PartTimer;
 	struct SunCandidates;
 
-	// [TEMP] Step 7: the per-frame scans over every object, timed (SceneStore::SceneAsyncReport prints them).
-	enum class Scan : std::uint32_t
-	{
-		FrameMaterials,
-		PipelineConstants,
-		ShadingResample,
-		Wetness,
-		CheckSlots,
-		AccumulateStats,
-		MaterialTail,
-		DeltaStale,
-		ShadowSets,
-		Claims,
-		PackGeometry,
-		SunExclusion,
-		MaterialLive,
-		MaterialApply,
-		MaterialWrites,
-		TextureTransforms,
-		MaterialValidate,
-		Technique,
-		Geometry,
-		HoleClaims,
-		HoleSynthetic,
-		Admit,
-		SceneJobTouch,
-		Count
-	};
-	inline constexpr const char* kScanNames[] = { "frame materials", "pipeline constants", "shading resample", "wetness", "slot check",
-		"accumulate stats", "material tail", "delta stale scan", "shadow sets", "claims and holes", "pack geometry (worker)", "sun exclusion (worker)",
-		"- material live", "- material apply", "- material writes", "- texture transforms", "- material validate", "- technique", "- geometry",
-		"- hole claims", "- hole synthetic", "- admit", "scene job touches" };
-	struct ScanTimes
-	{
-		std::array<std::atomic<std::uint64_t>, static_cast<std::size_t>(Scan::Count)> ns{}, calls{};
-		static ScanTimes& Get()
-		{
-			static ScanTimes times;
-			return times;
-		}
-	};
-	struct ScopedScan
-	{
-		Scan scan;
-		std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-		explicit ScopedScan(Scan a_scan) :
-			scan(a_scan) {}
-		~ScopedScan()
-		{
-			auto& t = ScanTimes::Get();
-			t.ns[static_cast<std::size_t>(scan)] += static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
-			++t.calls[static_cast<std::size_t>(scan)];
-		}
-	};
-
 	/**
 	 * @brief The render thread's view of the static scene content Drawcall Limit Fix can draw.
 	 *
@@ -596,8 +541,6 @@ namespace DCLF
 			std::uint32_t geometriesRefreshed = 0;
 			std::uint32_t slotViolations = 0;  // objects whose slots failed CheckObjectSlots (the gate: 0)
 			std::uint32_t shadowCasters = 0;  // records the engine would draw into a shadow map
-			std::uint32_t sunCandidateChanges = 0;    // walks that judged sun entries again (UpdateSunCandidates), since the report
-			std::uint32_t sunCandidateSnapshots = 0;  // ... and snapshots built
 			std::array<std::uint32_t, 16> shadowRejects{};  // by ShadowReject, over the frame's records
 			// Objects the engine accumulated that the scene phase had left out of the tables, so the frame
 			// cannot draw them. One frame of staleness at most (the verdict is cleared for them); the gate
@@ -653,14 +596,8 @@ namespace DCLF
 			// be told apart from a smear across several.
 			std::array<std::uint32_t, 32> derivationBitCounts{};
 			std::uint32_t derivationNative = 0;
-			// Material evaluations this frame, and how many were skipped because the object cannot be
-			// drawn. CS_DCLF_MATERIAL_CACHE=probe additionally reports how many evaluated records came out
-			// byte-identical to the previous frame's, which is what decides whether a cross-frame cache is
-			// possible at all: SetupMaterial reads per-frame engine state, so it may well not be.
+			// Material evaluations this frame.
 			std::uint32_t materialsEvaluated = 0;
-			std::uint32_t materialsSkipped = 0;
-			std::uint32_t materialsUnchanged = 0;
-			std::uint32_t materialsChanged = 0;
 			// Which component of a changed record moved: bit 0 VS floats, 1 PS floats, 2 textures,
 			// 3 address modes, 4 filter modes, 5 the written-texture mask.
 			std::uint32_t materialDiffMask = 0;
@@ -674,7 +611,6 @@ namespace DCLF
 			std::uint32_t materialsRewritten = 0;
 			std::uint32_t materialsDropped = 0;
 			std::uint32_t frameMaterialSamples = 0;
-			bool materialDiffLogged = false;
 			//
 			//   if any native-visible object draws on pipeline p, then geometryTemplate[p] came from a
 			//   native-visible object.
@@ -699,19 +635,17 @@ namespace DCLF
 		/** @brief Present-time: follow loaded cells and apply queued scene graph events. */
 		void ProcessEvents();
 		/**
-		 * @brief Hooks the engine's writers CS_DCLF_SCENE_DELTA takes events from (AE): BSFadeNode::currentFade's, the
-		 * shader properties' flags and materials, Havok's node transforms and the controllers' targets.
+		 * @brief Hooks the engine's writers the delta walk takes events from: BSFadeNode::currentFade's, the shader
+		 * properties' flags and materials, Havok's node transforms and the controllers' targets.
 		 */
 		static void InstallSceneEvents();
 		/**
-		 * @brief The switch-selection events are installed (dclf-cull-job-elimination.md, "Phase 3"; CS_DCLF_SWITCH_EVENTS,
-		 * default on, with CS_DCLF_SCENE_DELTA): every writer of an NiSwitchNode's selected index and of its children
+		 * @brief The switch-selection events are installed (dclf-cull-job-elimination.md, "Phase 3"; false only when the
+		 * engine's writers are not the expected code): every writer of an NiSwitchNode's selected index and of its children
 		 * is hooked, the newly selected child is brought up to date when the event is applied (CatchUpSwitch), and an
 		 * entry under a switch is no longer evaluated every frame for its selection.
 		 */
 		static bool SwitchEventsLive();
-		/** @brief [TEMP] CS_DCLF_TEST_HARVEST: a store through the patched stores' handler (the index, and its event). */
-		static void TestSwitchStore(RE::NiSwitchNode* a_switch, std::int32_t a_index);
 		/**
 		 * @brief NiSwitchNode::OnVisible's catch-up (AE 0x140d29700), outside the cull: when the selected child has not
 		 * been updated since the switch's last update pass (childRevID[index] != revID), its revision is marked current
@@ -735,8 +669,6 @@ namespace DCLF
 		 */
 		/** @brief Render thread: the record is written only by events (no face, actor, skin or animated shading, not per frame in full). */
 		bool ResidentCapable(const RE::BSGeometry* a_geometry) const;
-		/** @brief [TEMP] Why ResidentCapable is false, as text. */
-		std::string ResidentIncapableReason(const RE::BSGeometry* a_geometry) const;
 		/** @brief Render thread, before the accumulate phase: ends the geometry's residency now (its accumulated half restored). */
 		void EndResidency(const RE::BSGeometry* a_geometry);
 		/** @brief Render thread: ends every residency now. */
@@ -747,7 +679,6 @@ namespace DCLF
 		 * detached from (their entries' members changed).
 		 */
 		void TakeResidentEvictions(std::vector<const RE::BSGeometry*>& a_geometries, std::vector<const RE::NiAVObject*>& a_roots);
-		std::uint32_t ResidentCount() const { return static_cast<std::uint32_t>(residents.size()); }
 		/** @brief CS_DCLF_RESIDENT_PARITY=1: every 60 frames, each resident's pass built again and its record, against its patch. */
 		static bool ResidentParityEnabled();
 		struct ResidentStats
@@ -785,21 +716,8 @@ namespace DCLF
 		/** @brief Rebuilds one half of the CPU tables from the tracked set. */
 		void BuildFrame(Phase a_phase);
 
-		/**
-		 * @brief CS_DCLF_ASYNC: the scene phase's walk runs on the worker from BeforeShadowMaps; this waits for it
-		 * and completes the phase on the render thread (a rebuild inline when the walk met anything only the
-		 * render thread may resolve). A no-op when nothing is pending. Every consumer of the scene tables after
-		 * BeforeShadowMaps calls it first: AfterShadowMaps, EarlyPrepass, Present.
-		 */
-		void JoinScenePhase();
-		/** @brief Drops a pending walk without completing the phase (teardown, the live toggle): no tables this frame. */
-		void AbandonSceneJob();
-		/** @brief Whether the scene walk is on the worker: nothing may read the per-object tables until the join. */
-		bool ScenePending() const { return static_cast<bool>(sceneJob); }
-		/** @brief Bumped when the join replaces the worker's walk with an inline one: anything built from the worker's is stale. */
-		std::uint32_t GetSceneRebuilds() const { return sceneRebuilds; }
-		/** @brief The `[DCLF] async scene` and `[DCLF] scene delta` report lines since the last call, or empty. */
-		std::string SceneAsyncReport();
+		/** @brief The `[DCLF] scene delta`, change log and scene parity report lines since the last call, or empty. */
+		std::string SceneReport();
 
 		/**
 		 * @brief Latches the main camera's accumulator, from a point in the frame where it is identifiable.
@@ -881,16 +799,6 @@ namespace DCLF
 		 * the Skylighting feature loaded. The objects' sky techniques are classified only then.
 		 */
 		static bool SkyOcclusionEnabled();
-		/** @brief [TEMP] CS_DCLF_SKYLIGHT_PROBE, render thread: 0 untracked, 1 tracked without a record (a_reason), 2 a table object. */
-		int ProbeTableState(const RE::BSGeometry* a_geometry, Ineligible& a_reason) const
-		{
-			const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
-			if (it == tracked.end())
-				return 0;
-			a_reason = it->second.candidateReason;
-			return it->second.slot != kNoObjectSlot ? 2 : 1;
-		}
-
 		/**
 		 * @brief The pre-resolved service results an epoch's build reads (Lookups.h). Filled by the render
 		 * thread: the pipeline entries at EarlyPrepass, the descriptor entries inside an epoch's preparation.
@@ -962,8 +870,6 @@ namespace DCLF
 		 */
 		bool GetCategoryInfo(const RE::NiNode* a_node, std::uint32_t& a_frame, std::uint8_t& a_cause) const;
 
-		/** @brief True when the object hangs under a drawn category node of an attached cell. */
-		bool IsUnderDrawnCategory(RE::NiAVObject* a_object) const { return FindCategoryNode(a_object, nullptr) != nullptr; }
 
 		/** @brief Full eligibility (static and per-frame) of a tracked geometry; NotTriShape if untracked. */
 		Ineligible Classify(RE::BSGeometry* a_geometry) const;
@@ -1077,11 +983,9 @@ namespace DCLF
 			Derived derived;
 
 			/**
-			 * @brief The cull-only verdict (CS_DCLF_CULL_INPUT=native): whether the object is a culling
-			 * candidate when the engine did not keep it, as the full classification last found it, with
-			 * the frame it was found on. Refreshed every kCandidateRefreshFrames by the full walk, and by the
-			 * events CS_DCLF_SCENE_DELTA takes (dclf-event-driven-tables.md, "Phase 3"); a candidate is tested by
-			 * the culling and drawn by nothing, so a verdict a few frames old costs at most a diagnostic.
+			 * @brief The cull-only verdict: whether the object is a culling candidate when the engine did not keep
+			 * it, as the full classification last found it, with the frame it was found on. It stands until one of
+			 * the delta walk's events takes it again (dclf-event-driven-tables.md, "Phase 3").
 			 */
 			std::uint32_t candidateFrame = 0;  // 0: never classified
 			Ineligible candidateReason = Ineligible::None;
@@ -1093,7 +997,6 @@ namespace DCLF
 			// wetness (Tables::skinWetness). Resolved once, by the walk.
 			bool actorOwned = false;
 			bool actorOwnedResolved = false;
-			static constexpr std::uint32_t kCandidateRefreshFrames = 64;
 			// The accumulate phase's verdict when it left the object without bindings, and the frame it did so
 			// (ReasonThisFrame).
 			Ineligible accumulateReason = Ineligible::None;
@@ -1275,8 +1178,6 @@ namespace DCLF
 		// takes a new value, which invalidates every entry's index at once.
 		std::uint32_t objectStamp = 1;
 		void InvalidateObjectIndices() { ++objectStamp; }
-		/** @brief CS_DCLF_OBJECT_SLOTS (default on, =0 dense): whether object indices persist across walks. */
-		static bool ObjectSlotsEnabled();
 		// Set only for the dense rebuild CS_DCLF_WALK_PARITY compares against: the walk then lays the objects out
 		// densely and leaves the Tracked entries' slots and indices alone.
 		bool denseWalk = false;
@@ -1420,23 +1321,13 @@ namespace DCLF
 			std::uint64_t decalKey = 0;
 		};
 		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
-		/**
-		 * @brief The scene phase's loop over the tracked set. On the render thread it resolves what it meets; on
-		 * the worker (a_renderThread false) it may not call GpuResources or the engine's palette update, and
-		 * counts a geometry slot or a skin that would need one as a miss instead - the join rebuilds inline.
-		 */
-		struct WalkResult
-		{
-			std::uint32_t geometryMisses = 0;
-			std::uint32_t skinMisses = 0;
-		};
-		WalkResult SceneWalk(bool a_renderThread);
+		/** @brief Walk parity's reference: every entry of `order` written from scratch into dense tables (denseWalk). */
+		void DenseWalk();
 		/** @brief Clears the per-frame tables and the walk's per-frame counters; a_keepIndices: a delta walk's, which keeps the objects' indices. */
 		void BeginWalk(bool a_keepIndices = false);
 
 		/**
-		 * @brief CS_DCLF_SCENE_DELTA (default on; needs the object slots and AE): the scene phase evaluates only the
-		 * objects whose inputs can have changed, on the render thread at Main::Draw's early hook, and every other
+		 * @brief The scene phase evaluates only the objects whose inputs can have changed, on the render thread at Main::Draw's early hook, and every other
 		 * slot keeps its record. What it evaluates:
 		 *
 		 * - the per-frame objects (Tracked::perFrame), every frame;
@@ -1452,12 +1343,11 @@ namespace DCLF
 		 * A classification stands until one of these events (dclf-event-driven-tables.md, "Phase 3"), and
 		 * CS_DCLF_WALK_PARITY checks it against a full walk that classifies from scratch.
 		 */
-		static bool SceneDeltaEnabled();
 		void DeltaWalk();
-		/** @brief Lays out the whole tracked set in `order` (the full walk, the parity's dense walk). */
+		/** @brief Lays out the whole tracked set in `order` (a full evaluation, the parity's dense walk). */
 		void BuildFullOrder();
 		/** @brief One entry of the scene walk: writes its record at its slot; false when it gets none this frame. */
-		bool WriteObject(RE::BSGeometry* a_geometry, Tracked& a_tracked, PartTimer& a_timer, WalkResult& a_result, bool a_renderThread, Ineligible& a_bucket);
+		bool WriteObject(RE::BSGeometry* a_geometry, Tracked& a_tracked, PartTimer& a_timer, Ineligible& a_bucket);
 		/** @brief Why an entry's inputs change from frame to frame (Tracked::perFrame): PerFrameTrait bits, 0 when they do not. */
 		enum PerFrameTrait : std::uint32_t
 		{
@@ -1599,8 +1489,8 @@ namespace DCLF
 		} changeParity;
 		std::array<std::uint64_t, kChangeCauseCount> reportedChangeCounts{};
 		/** @brief After the delta walk's evaluations: the geometry slots of the slots it kept, and the shadow sets. */
-		void FinishDeltaWalk(PartTimer& a_timer, WalkResult& a_result);
-		void EvaluateRound(PartTimer& a_timer, WalkResult& a_result, std::size_t a_first);
+		void FinishDeltaWalk(PartTimer& a_timer);
+		void EvaluateRound(PartTimer& a_timer, std::size_t a_first);
 		/** @brief A slot's inputs to the frame's shadow sets (the casters' textures and pipelines). */
 		struct ShadowInputs
 		{
@@ -1656,7 +1546,9 @@ namespace DCLF
 		} slotReferences;
 		/** @brief The slot tables' reference counts, from the change and geometry logs since the last call. */
 		void UpdateSlotReferences();
-		/** @brief Frees a geometry slot (and the reference it holds on the next partition) and its map entry. */
+		/** @brief Drops a geometry slot's contents: the reference it holds on the next partition, its map entry and its buffer leases. */
+		void ClearGeometrySlot(std::uint32_t a_slot);
+		/** @brief ClearGeometrySlot, then returns the slot to the free list. */
 		void FreeGeometrySlot(std::uint32_t a_slot);
 		std::vector<std::uint32_t> freedGeometry;
 		std::vector<std::uint32_t> staleGeometrySlots;
@@ -1725,21 +1617,7 @@ namespace DCLF
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> faceRegionFree;  // (first, count), sorted, coalesced
 		std::uint32_t faceRegionTop = 0;
 		std::uint32_t faceWalk = 0;
-		/** @brief Before the worker's walk: the render-thread calls it would make - Touch last frame's slots, update last frame's skins. */
-		void PrepareSceneJob();
-		AsyncWorker::JobHandle sceneJob;
-		WalkResult sceneJobResult;
-		std::vector<RE::BSGeometry*> skinnedObjects;    // this walk's skinned objects, in object order
-		std::vector<RE::BSGeometry*> skinnedLastFrame;  // what PrepareSceneJob updates ahead
-		std::vector<std::uint32_t> geometryTouched;     // per geometry slot: the frame PrepareSceneJob touched it
-		std::uint32_t sceneRebuilds = 0;
-		struct SceneAsync
-		{
-			std::uint32_t kicked = 0, used = 0, rebuilt = 0, failed = 0;
-			std::uint32_t geometryMisses = 0, skinMisses = 0, touchFailures = 0;
-			std::uint32_t probeCompared = 0, probeDiffer = 0;
-			double waitMs = 0.0, waitMaxMs = 0.0;
-		} sceneAsync;
+		std::vector<RE::BSGeometry*> skinnedObjects;  // this walk's skinned objects, in object order
 		std::uint32_t AllocateGeometrySlot();
 		std::uint32_t AllocatePipelineSlot();
 		std::uint32_t AllocateMaterialSlot();
@@ -1748,7 +1626,7 @@ namespace DCLF
 		 * @return the slot, or Tables::kSlotFree when the buffers cannot be made stable for the graph.
 		 */
 		std::uint32_t ResolveGeometrySlot(RE::BSGeometry& a_geometry, const RE::BSGraphics::TriShape* a_triShape,
-			const RE::NiSkinPartition::Partition* a_skinPartition, PartTimer& a_timer, bool a_renderThread, bool& a_miss);
+			const RE::NiSkinPartition::Partition* a_skinPartition, PartTimer& a_timer);
 		/** @brief Capture a new material slot; false when nothing can be evaluated. */
 		bool EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_record);
 

@@ -71,9 +71,6 @@ namespace DCLF
 	 * activeLightMask, DCLF writes when the main camera registers the geometry: the cascades its bound meets, tested
 	 * against the planes the engine's own cascade cull used (the Geometric rule; CS_DCLF_SUN_EXCLUDE=probe compares
 	 * them with the engine's bits, and the casters the exclusion would lose, on a dry run).
-	 *
-	 * The timing probe (TEMP, CS_DCLF_SUN_TIMING=1) measures the render thread in the full-frustum cull
-	 * (FUN_141511f30), in Accumulate, and in the sun's registrations.
 	 */
 	class SunAccumulation
 	{
@@ -113,12 +110,6 @@ namespace DCLF
 		/** @brief CS_DCLF_SUN_EXCLUDE=probe: the exclusion runs dry, and DCLF's sun bits are compared with the engine's. */
 		static bool ExclusionProbe();
 
-		/**
-		 * @brief [TEMP] CS_DCLF_SKYLIGHT_PARITY: the geometries the engine registered with a pass into Skylighting's
-		 * occlusion map since the last call (render thread).
-		 */
-		std::vector<const RE::BSGeometry*> TakeSkyRegistrations() { return std::exchange(skyRegistrations, {}); }
-		std::vector<const RE::BSGeometry*> skyRegistrations;
 
 		struct Stats
 		{
@@ -129,7 +120,6 @@ namespace DCLF
 			std::uint64_t offThread = 0;      // sun registrations outside the Accumulate call (passed to the engine)
 			std::int64_t fullFrustumTicks = 0, fullFrustumMax = 0;
 			std::int64_t accumulateTicks = 0, accumulateMax = 0;
-			std::int64_t registrationTicks = 0;  // inside Accumulate, the registrations (timing probe only)
 			// The entry exclusion (CS_DCLF_SUN_EXCLUDE).
 			std::uint32_t exclusionFrames = 0;        // full-frustum culls that applied one
 			std::uint32_t exclusionStale = 0;         // ... that had one built for other candidates (the scene changed)

@@ -112,14 +112,11 @@ namespace DCLF
 		constexpr auto offWord = [](const std::string& a_value) { return a_value == "off"; };
 		static constexpr Feature features[] = {
 			{ "CS_DCLF_ASYNC", [](const std::string& a_value) { return a_value == "off" || a_value == "0" || a_value == "probe"; } },
-			{ "CS_DCLF_ASYNC_JOBS", [](const std::string& a_value) { return !a_value.empty(); } },
 			{ "CS_ORG_EPOCHS", zero },
 			{ "CS_ORG_ASYNC_EPOCHS", zero },
 			{ "CS_ORG_CLOSED", zero },
 			{ "CS_ORG_BATCH_SUBMIT", zero },
 			{ "CS_ORG_EARLY_FLUSH", zero },
-			{ "CS_DCLF_EARLY_SCENE", zero },
-			{ "CS_DCLF_HYBRID", offUnlessOne },
 			{ "CS_DCLF_SHADOWS", offUnlessOne },
 			{ "CS_DCLF_SUN_SKIP", offUnlessOne },
 			{ "CS_DCLF_SUN_EXCLUDE", offUnlessOne },  // `probe` runs it dry
@@ -135,22 +132,10 @@ namespace DCLF
 			{ "CS_DCLF_MTLAND", offUnlessOne },
 			{ "CS_DCLF_PROJECTED_UV", offUnlessOne },
 			{ "CS_DCLF_SWITCH_NODES", offUnlessOne },
-			{ "CS_DCLF_FACEGEN", zero },
-			{ "CS_DCLF_SHADOW_ONLY", zero },
-			{ "CS_DCLF_BINDLESS", zero },
-			{ "CS_DCLF_BINDLESS_DRAW", zero },
-			{ "CS_DCLF_BUILD_CACHE", zero },
 			{ "CS_DCLF_CLASSIFY_CACHE", offWord },
 			{ "CS_DCLF_DERIVED_CACHE", offWord },
 			{ "CS_DCLF_MATERIAL_CACHE", offWord },
 			{ "CS_DCLF_CULL", [](const std::string& a_value) { return a_value == "off" || a_value == "frustum"; } },
-			{ "CS_DCLF_EVAL", [](const std::string& a_value) { return a_value == "off" || a_value == "material"; } },
-			{ "CS_DCLF_OBJECT_SLOTS", zero },
-			{ "CS_DCLF_SCENE_DELTA", zero },
-			{ "CS_DCLF_FRAME_PUSH", zero },
-			{ "CS_DCLF_COLOUR_EQUAL", zero },
-			{ "CS_DCLF_DECAL_DEPTH", zero },
-			{ "CS_DCLF_DGC_PREPROCESS", zero },
 		};
 		std::string text;
 		for (const auto& feature : features) {
@@ -178,9 +163,9 @@ namespace DCLF
 		};
 		for (const auto& [name, value] : FileValues())
 			add(name);
-		for (const char* name : { "CS_DCLF", "CS_DCLF_HYBRID", "CS_DCLF_CULL", "CS_DCLF_STATS", "CS_DCLF_DEBUG_VIEW",
-				 "CS_DCLF_BUILD_PARITY", "CS_DCLF_CAPTURE_PARITY", "CS_DCLF_HYBRID_NOSKIP", "CS_DCLF_ONLY_ELIGIBLE",
-				 "CS_DCLF_SHADER_DEBUG", "CS_DCLF_SHADER_SOURCE_DIR", "CS_DCLF_ASYNC", "CS_DCLF_ASYNC_JOBS",
+		for (const char* name : { "CS_DCLF", "CS_DCLF_CULL", "CS_DCLF_STATS",
+				 "CS_DCLF_BUILD_PARITY", "CS_DCLF_CAPTURE_PARITY",
+				 "CS_DCLF_SHADER_DEBUG", "CS_DCLF_SHADER_SOURCE_DIR", "CS_DCLF_ASYNC",
 				 "CS_DCLF_ASYNC_WAIT_MS", "CS_DCLF_ASYNC_PRIORITY" }) {
 			if (!FileValues().contains(name))
 				add(name);

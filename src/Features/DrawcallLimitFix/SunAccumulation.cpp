@@ -3,10 +3,8 @@
 #include "PassCapture.h"
 #include "PrimaryCull.h"
 #include "SceneStore.h"
-#include "ShadowProbe.h"
 #include "Switches.h"
 #include "Toggles.h"
-#include "VolumetricProbe.h"
 
 #include <array>
 #include <cstring>
@@ -63,24 +61,11 @@ namespace DCLF
 			return *reinterpret_cast<T*>(static_cast<std::byte*>(a_base) + a_offset);
 		}
 
-		bool TimingEnabled()
-		{
-			static const bool enabled = SwitchEnabled("CS_DCLF_SUN_TIMING");
-			return enabled;
-		}
-
-		/** @brief Diagnostics that need the engine's sun registrations: M1 stays off for the whole run. */
-		bool RegistrationsNeeded()
-		{
-			static const bool needed = PassCapture::CascadeProbeEnabled() || VolumetricProbe::Enabled() || ShadowProbe::Enabled();
-			return needed;
-		}
-
 		/** @brief Whether M1 applies this frame: the claims it skips registrations by exist and are in force. */
 		bool M1Active(const ToggleSet& a_toggles)
 		{
-			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() && PassCapture::VolumetricClaimsAvailable() &&
-			       !PassCapture::Get().Bypassed() && !RegistrationsNeeded();
+			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() &&
+			       !PassCapture::Get().Bypassed();
 		}
 
 		/** @brief Whether a bound lies outside any of the active planes (the engine's sphere test: n.c - d < -r). */
@@ -122,7 +107,6 @@ namespace DCLF
 			std::array<std::shared_ptr<const PassCapture::ClaimSet>, kMaxCascades> claims{};
 			std::uint32_t count = 0;
 			int cascade = -1;  // the cascade FUN_1414f0920 is culling (index into accumulators), -1 between them
-			std::int64_t registrationTicks = 0;
 			std::uint64_t skipped = 0;
 			std::uint64_t registered = 0;
 
@@ -136,54 +120,6 @@ namespace DCLF
 		};
 		thread_local SunCall* currentCall = nullptr;
 
-		/**
-		 * @brief [TEMP] CS_DCLF_SKYLIGHT_PROBE: what the engine draws into Skylighting's occlusion map (render mode 0x1C
-		 * while Skylighting::inOcclusion), by what DCLF's tables hold of it. Render thread (SetupMask registers there).
-		 */
-		struct SkylightProbe
-		{
-			std::uint64_t calls = 0, withPass = 0;
-			std::array<std::uint64_t, 3> byState{};  // untracked, tracked without a record, table object
-			std::array<std::uint64_t, static_cast<std::size_t>(Ineligible::Count)> byReason{};
-			std::map<std::string, std::uint64_t> untracked;  // "type / property / parent chain" -> count
-			std::uint64_t frames = 0;
-		};
-		SkylightProbe skylightProbe;
-
-		bool SkylightProbeEnabled()
-		{
-			static const bool enabled = SwitchEnabled("CS_DCLF_SKYLIGHT_PROBE") || SwitchEnabled("CS_DCLF_SKYLIGHT_PARITY");
-			return enabled;
-		}
-
-		void NoteSkylightRegistration(RE::BSGeometry* a_geometry)
-		{
-			auto& probe = skylightProbe;
-			++probe.calls;
-			auto* property = a_geometry->GetGeometryRuntimeData().shaderProperty.get();
-			auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property);
-			if (!lighting || !lighting->occlusionPasses.head)
-				return;
-			++probe.withPass;
-			if (SunAccumulation::Get().skyRegistrations.size() < 65536)
-				SunAccumulation::Get().skyRegistrations.push_back(a_geometry);
-			Ineligible reason = Ineligible::None;
-			const int state = SceneStore::Get().ProbeTableState(a_geometry, reason);
-			++probe.byState[state];
-			if (state == 1)
-				++probe.byReason[static_cast<std::size_t>(reason)];
-			if (state == 0 && probe.untracked.size() < 400) {
-				std::string chain;
-				int depth = 0;
-				for (auto* node = a_geometry->parent; node && depth < 4; node = node->parent, ++depth)
-					chain += fmt::format("/{}", node->name.c_str() && *node->name.c_str() ? node->name.c_str() : (node->GetRTTI() ? node->GetRTTI()->name : "?"));
-				const auto* reference = a_geometry->GetUserData();
-				++probe.untracked[fmt::format("{} {} ref {:X} {}", a_geometry->GetRTTI() ? a_geometry->GetRTTI()->name : "?", a_geometry->name.c_str() ? a_geometry->name.c_str() : "?",
-					reference ? reference->GetFormID() : 0, chain)];
-			} else if (state == 0) {
-				++probe.untracked["(more)"];
-			}
-		}
 		// The sun's accumulators as the last Accumulate saw them, for spotting a sun registration made elsewhere.
 		std::array<std::atomic<const void*>, kMaxCascades> knownAccumulators{};
 
@@ -483,7 +419,6 @@ namespace DCLF
 				stats.registered += call.registered;
 				stats.accumulateTicks += ticks;
 				stats.accumulateMax = std::max(stats.accumulateMax, ticks);
-				stats.registrationTicks += call.registrationTicks;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -508,11 +443,6 @@ namespace DCLF
 					}
 					if (PrimaryCull::Probe() && PrimaryCull::Get().Counting())
 						PrimaryCull::Get().NoteRegistration(a_accumulator, geometry);
-					if (SkylightProbeEnabled() && globals::features::skylighting.inOcclusion && At<std::uint32_t>(a_accumulator, 0x150) == 0x1C) {
-						const auto result = func(a_accumulator, a_geometry, a_arg);
-						NoteSkylightRegistration(geometry);
-						return result;
-					}
 					// The main camera's registrations read the mask, then clear it (+0x160 = 0xFFFF) for the next frame.
 					if (self.bitsReady.load(std::memory_order_acquire))
 						self.ApplySunBits(geometry, At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex) == 0xFFFF);
@@ -520,8 +450,6 @@ namespace DCLF
 						self.bitStats.notReady.fetch_add(1, std::memory_order_relaxed);
 					return func(a_accumulator, a_geometry, a_arg);
 				}
-				const bool timing = TimingEnabled();
-				const std::int64_t start = timing ? Now() : 0;
 				std::uint64_t result = 1;
 				const auto& claims = call->claims[cascade];
 				const bool claimed = claims && claims->contains(geometry);
@@ -541,8 +469,6 @@ namespace DCLF
 					if (underRemoved && self.frameState.probe)
 						self.NoteProbeUnclaimed(geometry, PassCapture::PassesOnThisThread() - passesBefore);
 				}
-				if (timing)
-					call->registrationTicks += Now() - start;
 				return result;
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -631,7 +557,7 @@ namespace DCLF
 
 	void SunAccumulation::Install()
 	{
-		if (installed || !REL::Module::IsAE())
+		if (installed)
 			return;
 		const auto base = REL::Module::get().base();
 		const auto fullFrustum = base + kFullFrustumCallSite;
@@ -660,34 +586,14 @@ namespace DCLF
 	{
 		if (!installed || (a_frame % a_interval) != 0)
 			return;
-		if (SkylightProbeEnabled() && skylightProbe.calls) {
-			auto& probe = skylightProbe;
-			const double f = a_interval;
-			std::string reasons;
-			for (std::size_t r = 0; r < probe.byReason.size(); ++r)
-				if (probe.byReason[r])
-					reasons += fmt::format(" {}={:.0f}", kIneligibleNames[r], probe.byReason[r] / f);
-			logger::info("[DCLF][TEMP] skylight probe, per frame: {:.0f} registrations, {:.0f} with a pass: {:.0f} table objects, {:.0f} tracked without a record ({}), {:.0f} untracked",
-				probe.calls / f, probe.withPass / f, probe.byState[2] / f, probe.byState[1] / f, reasons, probe.byState[0] / f);
-			std::vector<std::pair<std::uint64_t, std::string>> top;
-			for (const auto& [key, count] : probe.untracked)
-				top.emplace_back(count, key);
-			std::sort(top.rbegin(), top.rend());
-			for (std::size_t i = 0; i < top.size() && i < 25; ++i)
-				logger::info("[DCLF][TEMP] skylight probe untracked: {:.1f}/frame {}", top[i].first / f, top[i].second);
-			probe = {};
-		}
 		stats.offThread = offThread.exchange(0, std::memory_order_relaxed);
 		if (stats.frames) {
 			LARGE_INTEGER frequency{};
 			QueryPerformanceFrequency(&frequency);
 			const double toMs = 1000.0 / static_cast<double>(frequency.QuadPart);
 			const double frames = stats.frames;
-			std::string timing;
-			if (TimingEnabled())
-				timing = fmt::format("; per frame, render thread: full-frustum cull {:.3f} ms (max {:.3f}), Accumulate {:.3f} ms (max {:.3f}), of which registration {:.3f} ms",
-					stats.fullFrustumTicks * toMs / frames, stats.fullFrustumMax * toMs, stats.accumulateTicks * toMs / frames, stats.accumulateMax * toMs,
-					stats.registrationTicks * toMs / frames);
+			const auto timing = fmt::format("; per frame, render thread: full-frustum cull {:.3f} ms (max {:.3f}), Accumulate {:.3f} ms (max {:.3f})",
+				stats.fullFrustumTicks * toMs / frames, stats.fullFrustumMax * toMs, stats.accumulateTicks * toMs / frames, stats.accumulateMax * toMs);
 			logger::info("[DCLF] sun accumulation: skipping registration on {} of {} frames; {:.0f} claimed geometries a frame not registered, {:.0f} registered by the engine, {} sun registrations outside Accumulate{}",
 				stats.activeFrames, stats.frames, stats.skipped / frames, stats.registered / frames, stats.offThread, timing);
 			if (stats.exclusionFrames || stats.exclusionStale || stats.exclusionMissing) {

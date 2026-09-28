@@ -66,29 +66,6 @@ namespace DCLF
 		}
 	}
 
-	bool BindlessObjects()
-	{
-		// Default ON, disabled with =0. The permutations are compiled against this answer, so the two
-		// forms cannot be compared within one run; =0 is the control, and it is the form every
-		// pre-Step-D measurement in the docs was taken with.
-		static const bool enabled = SwitchValue("CS_DCLF_BINDLESS") != "0";
-		return enabled;
-	}
-
-	bool BindlessDraws()
-	{
-		// Default ON. This is what switches on Step D's binding-record deduplication: without it every
-		// candidate assembles its own record, which measured ~1538 records for 1538 draws against 105
-		// with it, and ~1.6 ms a frame across the two epochs.
-		//
-		// Validated over the live test matrix: interiors with rooms and portals, exteriors, six cell
-		// transitions, a worldspace change, night lighting, a dungeon with alpha-tested foliage, and
-		// save and load - 0 parity mismatches, 0 rejected buffers, correct images - plus the map menu
-		// and the first-person camera checked by hand.
-		static const bool enabled = BindlessObjects() && SwitchValue("CS_DCLF_BINDLESS_DRAW") != "0";
-		return enabled;
-	}
-
 	struct ShaderPrograms::ShadowEntry
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -178,13 +155,11 @@ namespace DCLF
 			if (a_depthOnly)
 				request.defines.push_back({ L"DCLF_DEPTH_ONLY", L"1" });
 			// The five per-object PerGeometry variables come from a GPU-resident table indexed by the draw's
-			// own object index instead of from its constant buffer. CS_DCLF_BINDLESS=0 builds the constant
-			// buffer form instead, which is the control the two are compared against.
-			if (BindlessObjects())
-				request.defines.push_back({ L"DCLF_BINDLESS", L"1" });
-			// The three registers that still made the binding record per-object read from the record too.
-			if (BindlessDraws())
-				request.defines.push_back({ L"DCLF_BINDLESS_DRAW", L"1" });
+			// own object index instead of from its constant buffer (DCLF_BINDLESS), and so do the three registers
+			// that would otherwise make the binding record per-object (DCLF_BINDLESS_DRAW): the alpha test
+			// reference, the emissive multiplier, and Light Limit Fix's room index and shadow bit mask.
+			request.defines.push_back({ L"DCLF_BINDLESS", L"1" });
+			request.defines.push_back({ L"DCLF_BINDLESS_DRAW", L"1" });
 			// The first few define sets, to reproduce builds with the DXC command line.
 			static std::atomic<std::uint32_t> logged = 0;
 			if (logged.fetch_add(1) < 4) {

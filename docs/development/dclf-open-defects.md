@@ -79,9 +79,6 @@ read, native against DCLF.
 ## Probes added for this investigation
 
 -   `CS_DCLF_SHADOWMAP_PROBE=1`: the sun's cascade texture and the VSM copy, summarised per slice and mip.
--   `CS_DCLF_CASCADE_PROBE=1`: per shadow view, DCLF's culled caster set against the engine's registrations
-    (recorded at `PassCapture::Withhold`), the difference by cull reason, radius and depth, and the engine's
-    cull volumes, camera, ancestry and caster-rule inputs for both sets.
 -   `CS_DCLF_SHADOWMASK_PROBE=x,y`: the engine's shadow mask at a pixel.
 -   `CS_DCLF_TARGET_PROBE=x,y`: every bound G-buffer target, averaged over a 64 x 64 block, where the opaque
     pass ends, DCLF on or off.

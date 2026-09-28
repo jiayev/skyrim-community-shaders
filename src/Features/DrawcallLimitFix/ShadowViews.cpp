@@ -191,12 +191,6 @@ namespace DCLF
 		PassCapture::Get().SetShadowBatchRenderers(std::move(renderers));
 	}
 
-	std::uint32_t ShadowViews::ViewOfBatch(const RE::BSBatchRenderer* a_batch) const
-	{
-		const auto it = batchToView.find(a_batch);
-		return it == batchToView.end() ? ~0u : it->second;
-	}
-
 	std::uint32_t ShadowViews::ViewOfAccumulator(const void* a_accumulator) const
 	{
 		const auto it = accumulatorToView.find(a_accumulator);

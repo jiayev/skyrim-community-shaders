@@ -42,11 +42,17 @@ struct DrawcallLimitFix : Feature
 	/** @brief Where the main pass's opaque batches start: what it binds, for the colour epoch (IndirectDraws::CaptureMainPass). */
 	void BeforeOpaquePass();
 	void AfterOpaquePass();
-	/** @brief [TEMP] CS_DCLF_TARGET_PROBE=x,y: render target 0 at a pixel where the opaque pass ends, DCLF on or off. */
+	/**
+	 * @brief CS_DCLF_TARGET_PROBE=x,y (dclf-open-defects.md): every bound G-buffer target, averaged over a 64 x 64 block
+	 * at the pixel, where the opaque pass ends, DCLF on or off.
+	 */
 	void ProbeOpaqueTarget(bool a_afterDCLF);
 
-	/** @brief Deferred::EndDeferred, before the deferred composite (Phase 2 debug view). */
-	void BeforeDeferredComposite();
+	/**
+	 * @brief Deferred::EndDeferred, before the deferred composite: publishes the claims the colour epoch's draws
+	 * earned, for the next frame's registrations (IndirectDraws::PublishClaims).
+	 */
+	void PublishOwnership();
 
 	/**
 	 * @brief Main_RenderShadowMaps, before the engine draws the shadow maps: the scene graph and the main
@@ -62,7 +68,7 @@ struct DrawcallLimitFix : Feature
 	void OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 	/**
-	 * @brief Hybrid path (CS_DCLF_HYBRID=1): whether the native loop leaves this pass to DCLF.
+	 * @brief Whether the native loop leaves this pass to DCLF.
 	 *
 	 * True only inside the main camera's depth and opaque ranges, and only for geometry the indirect draws
 	 * drew in the frame before. Shadow, reflection and cubemap passes go through the same batch renderer and
@@ -73,15 +79,6 @@ struct DrawcallLimitFix : Feature
 	// EarlyPrepass (the accumulate phase and the pipeline lookups) to the end of the frame.
 	static bool DrawableThisFrame(const RE::BSGeometry* a_geometry);
 
-	/**
-	 * @brief After the hybrid Z-prepass: rebuild what was derived from the depth buffer before it ran.
-	 *
-	 * The engine's prepass depth copy and Terrain Blending's blended depth are both built at the end of the
-	 * native depth pass, so they hold a scene without DCLF's objects, and every effect that reads depth
-	 * afterwards paints the background over them.
-	 */
-	void RefreshDepthConsumers();
-
 	/** @brief How many native passes were skipped in the last frame, and how many were offered. */
 	struct SkipStats
 	{
@@ -91,7 +88,6 @@ struct DrawcallLimitFix : Feature
 		std::uint32_t skippedInOpaque = 0;
 		std::uint32_t notInTables = 0;
 		std::uint32_t undrawable = 0;  // drawn last frame, in the tables, but not drawable this frame: kept native
-		std::uint32_t kept = 0;
 	};
 	const SkipStats& GetSkipStats() const { return skipStats; }
 
@@ -122,7 +118,7 @@ private:
 
 		/**
 		 * @brief Inside the depth pass (AE `Main::RenderDepth` +0x1AA), the call that follows the world's depth
-		 * draws: where the Z-prepass runs (RunZPrepass).
+		 * draws: where the Z-prepass runs (IndirectDraws::CaptureDepthPass).
 		 *
 		 * It is the last point where the world camera is current. In first person the depth pass then draws the
 		 * first-person model with the first-person camera, whose eye is the player's head (posAdjust) and whose
@@ -140,8 +136,7 @@ private:
 		/**
 		 * @brief Main::Draw's first call (AE +0xD3, after its NiUpdateData update and before the main camera's
 		 * cull jobs are queued): where the frame's scene phase starts (BeginSceneFrame), ~1 ms ahead of
-		 * Main_RenderShadowMaps. AE only: the SE and VR offsets are unverified, and there the phase starts at
-		 * BeforeShadowMaps as before.
+		 * Main_RenderShadowMaps.
 		 */
 		struct Main_Draw_Early
 		{
@@ -177,21 +172,16 @@ private:
 	bool switchedOn = true;
 	bool Running() const { return installed && switchedOn; }
 
-	// The frame's scene phase (toggles, then SceneStore's scene half, whose walk goes to the worker), from
-	// Main::Draw's early hook or else from BeforeShadowMaps. Returns Running().
+	// The frame's scene phase (toggles, scene events, then SceneStore's scene half), from Main::Draw's early
+	// hook. Returns Running().
 	bool BeginSceneFrame();
-	bool sceneFrameBegun = false;  // BeginSceneFrame ran for the frame BeforeShadowMaps is about to continue
 	// Off when the menu's toggle is off or the feature is unloaded (Feature::loaded, which the remote toggle
 	// flips): either way nothing may keep drawing, skipping or withholding.
 	void UpdateActive();
 	void SetActive(bool a_active);
-	// Why DCLF was forced off after install (the render graph could not come up); shown in the menu.
+	// Why DCLF is off for the session (not AE, or the render graph could not come up); shown in the menu.
 	std::string unavailableReason;
 	bool inDepthPass = false;
-	// The Z-prepass ran inside this depth pass (Main_RenderDepth_WorldDrawn); the end of the pass then skips it.
-	bool zPrepassInDepthPass = false;
-	/** @brief The Z-prepass epoch, then what was derived from the depth before it (RefreshDepthConsumers). */
-	void RunZPrepass(bool a_refreshConsumers);
 	std::uint32_t captureFrame = ~0u;  // the frame whose main-pass bindings have been captured
 	std::uint32_t parityFrame = ~0u;   // the frame CS_DCLF_CAPTURE_POINT_PARITY last checked
 	bool loggedCaptureFailure = false;

@@ -20,11 +20,8 @@ namespace DCLF
 	/** @brief The `CS_DCLF_ASYNC` setting, read once. */
 	AsyncMode AsyncModeSetting();
 
-	/**
-	 * @brief Whether a job takes the asynchronous path: the mode is on or probe, and the job is in
-	 * `CS_DCLF_ASYNC_JOBS` (unset: every job). Job names: `colour`, `zprepass`, `shadow`, `scene`.
-	 */
-	bool AsyncJobEnabled(const char* a_job);
+	/** @brief Whether the jobs (colour, zprepass, shadow, primary) take the asynchronous path: the mode is on or probe. */
+	inline bool AsyncEnabled() { return AsyncModeSetting() != AsyncMode::Off; }
 
 	/** @brief `CS_DCLF_ASYNC_WAIT_MS` (default 3): how long a join waits before the render thread builds inline. */
 	std::chrono::microseconds AsyncWaitBudget();
@@ -105,9 +102,6 @@ namespace DCLF
 
 		/** @brief CancelPending, then waits (unbounded) for the running job. Teardown, the live toggle, a load screen. */
 		void Drain();
-
-		/** @brief Whether nothing is queued or running. Checked once per frame at Present (a leaked job is a defect). */
-		bool Idle() const;
 
 		/**
 		 * @brief Waits (unbounded) until nothing is queued or running, cancelling nothing: every queued job runs.

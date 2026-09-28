@@ -70,7 +70,7 @@ namespace DCLF
 		// A volumetric-only caster (ShadowReject::VolumetricOnly): the engine draws it into the sun's volumetric
 		// lighting copy and nowhere else (batch group 15, accumulation hint 8). A shadow view of the copy draws
 		// only these inputs, and every other shadow view skips them (BuildDrawsLatch::cullFlags). Set by the
-		// scene phase, and only when PassCapture can withhold the copy's passes (VolumetricClaimsAvailable).
+		// scene phase.
 		kObjectVolumetricOnly = 1u << 23,
 		// A shadow-only object: the main pass cannot take it (its Ineligible reason is one the shadow views do
 		// not care about, SceneStore::ShadowOnlyReason), but it is a shadow caster, so it has a record for the
