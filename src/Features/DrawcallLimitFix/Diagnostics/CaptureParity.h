@@ -187,6 +187,8 @@ namespace DCLF
 		std::map<std::string, std::uint32_t> untrackedResolved;  // "<source> after <n> frames" -> geometries
 		std::vector<std::string> untrackedStuck;                 // chains of those still untracked after kStuckFrames
 		std::uint64_t notInTables = 0;         // tracked geometry drawn natively but excluded this frame
+		std::map<std::uint8_t, std::uint64_t> notInTablesBy;  // by its verdict now (Ineligible), and the first of each named
+		std::map<std::uint8_t, std::string> notInTablesFirst;
 		std::uint64_t nativeOnlyPasses = 0;    // native passes of objects DCLF draws that DCLF does not model (hint 10)
 		ankerl::unordered_dense::set<std::uint32_t> renderFlagsSeen;
 		std::vector<std::string> samples;  // first few mismatch descriptions per report

@@ -42,7 +42,9 @@ The render thread drives everything; one worker thread (`Common/AsyncWorker`) ru
 | `Present` (`Reset`) | Joins what is left (`EndFrame`), applies the scene events, handles the menu toggle, writes the report | **primary feedback** decode | |
 
 The scene placement job takes the kept records' placements and bone palettes (the engine's palette update is
-thread-safe: it locks the skin instance and runs once a frame). From its kick to its join the render thread writes none
+thread-safe: it locks the skin instance and runs once a frame), and the moving reference roots' bounds into their
+dependents' sun entries. A mover is queued only when the engine's move events named its reference or its category node
+this frame or the last (`MoveEvents`, `SceneStore::MoveReasonOf`, `CS_DCLF_MOVE_EVENTS=0` places every mover). From its kick to its join the render thread writes none
 of those columns and no table grows, and the engine's work in that window (the main cull, the water reflections)
 moves no transform. A late join waits for it, or takes its items inline when it had not started; a walk-parity frame
 takes them inline before the parity reads the tables. Under `probe` the join takes every item again and counts those

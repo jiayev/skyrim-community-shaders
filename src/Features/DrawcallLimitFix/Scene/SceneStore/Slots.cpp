@@ -338,6 +338,7 @@ namespace DCLF
 			UnlistDependents(it->first, it->second, true);
 			sceneIdentity.Detach(a_geometry);
 			tracked.erase(it);
+			++trackedLayout;
 		}
 	}
 

@@ -4,11 +4,65 @@
 
 namespace DCLF
 {
-	void SceneStore::QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take)
+	void SceneStore::DrainMoveEvents(bool a_full)
+	{
+		// A reference's animation pushes several in a row.
+		const void* last = nullptr;
+		stats.moveEvents += moveEvents.Drain([&](const void* a_key) {
+			if (a_key != std::exchange(last, a_key))
+				movedFrame[a_key] = frame;
+		});
+		// A node event names a node: the reference above it, or its category node when no node up to it has one.
+		for (const auto& node : nodeChanged) {
+			const void* key = nullptr;
+			for (const RE::NiAVObject* object = node.get(); object && !key; object = object->parent)
+				key = object->GetUserData();
+			if (!key)
+				key = FindCategoryNode(node.get(), nullptr);
+			if (key)
+				movedFrame[key] = frame;
+		}
+		if (a_full)
+			moveUngatedThrough = frame + 1;
+		if ((frame & 0xFF) == 0)
+			std::erase_if(movedFrame, [&](const auto& a_entry) { return frame - a_entry.second > 1; });
+		static const bool enabled = SwitchValue(Switch::MoveEvents) != "0";
+		moveGating = enabled && MoveEventsLive() && frame > moveUngatedThrough;
+		moveWitness = moveGating && (SwitchEnabled(Switch::WalkParity) || SwitchEnabled(Switch::PersistentParity)) && ParityDue(frame);
+	}
+
+	const void* SceneStore::MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode)
+	{
+		const void* key = nullptr;
+		for (const RE::NiAVObject* object = &a_geometry; object && object != a_categoryNode; object = object->parent) {
+			const void* reference = object->GetUserData();
+			if (!reference)
+				continue;
+			if (key && key != reference)
+				return nullptr;
+			key = reference;
+		}
+		return key;
+	}
+
+	SceneStore::MoveReason SceneStore::MoveReasonOf(const Tracked& a_tracked) const
+	{
+		if (!moveGating)
+			return kMoveUngated;
+		// A tree's wind moves its bones with no event (BSTreeManager).
+		if (!a_tracked.moveKey || (!a_tracked.actorOwned && (a_tracked.lightTraits & kTraitSkin)))
+			return kMoveAlways;
+		if (MovedRecently(a_tracked.moveKey))
+			return a_tracked.actorOwned ? kMoveActor : kMoveReference;
+		return MovedRecently(a_tracked.categoryNode) ? kMoveCategory : kMoveGated;
+	}
+
+	void SceneStore::QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take, MoveReason a_reason)
 	{
 		// The sun entry node is resolved here, once per entry, so the job only reads its bound.
 		ResolveSunEntry(a_tracked, *a_geometry);
-		placements.push_back({ a_geometry, &a_tracked, a_tracked.sunEntryNode, a_tracked.slot, a_take });
+		placements.push_back({ a_geometry, &a_tracked, a_tracked.sunEntryNode, a_tracked.slot, a_take, a_reason });
+		++stats.lightPlacedBy[a_reason];
 		a_tracked.movedWalk = walkSerial;
 		++delta.moved;
 	}
@@ -67,12 +121,51 @@ namespace DCLF
 		return changed;
 	}
 
+	std::uint8_t SceneStore::TakeRoot(const RootPlacement& a_item, bool a_noteAll)
+	{
+		// SunEntryOf for every dependent that has a record: they all read this root's bound.
+		const auto dependents = rootDependents.find(a_item.root);
+		if (dependents == rootDependents.end())
+			return 0;
+		const auto& bound = a_item.root->worldBound;
+		const std::array<float, 4> entry{ bound.center.x, bound.center.y, bound.center.z, bound.radius };
+		std::uint8_t changed = 0;
+		for (auto* geometry : dependents->second) {
+			const auto it = tracked.find(geometry);
+			if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.slot >= tables.sunEntry.size())
+				continue;
+			const std::uint32_t slot = it->second.slot;
+			if (tables.sunEntry[slot] != entry || a_noteAll) {
+				tables.sunEntry[slot] = entry;
+				rootChangedSlots.push_back(slot);
+				changed = kTakePlacement;
+			}
+		}
+		return changed;
+	}
+
 	void SceneStore::RunPlacements()
 	{
-		const auto count = static_cast<std::uint32_t>(placements.size());
+		// The items, then the roots, in one sequence the join resumes.
+		const auto items = static_cast<std::uint32_t>(placements.size());
+		const auto count = items + static_cast<std::uint32_t>(rootPlacements.size());
 		for (std::uint32_t i = placementsDone.load(std::memory_order_acquire); i < count; ++i) {
-			placementChanges[i] = TakePlacement(placements[i]);
+			placementChanges[i] = i < items ? TakePlacement(placements[i]) : TakeRoot(rootPlacements[i - items], false);
 			placementsDone.store(i + 1, std::memory_order_release);
+		}
+	}
+
+	void SceneStore::QueueRoots()
+	{
+		rootPlacements.clear();
+		rootChangedSlots.clear();
+		for (const auto& [root, moving] : movingRoots) {
+			const bool moved = !moveGating || !moving.key || MovedRecently(moving.key) || MovedRecently(moving.categoryNode);
+			if (!moved && !moveWitness) {
+				++placementStats.rootsGated;
+				continue;
+			}
+			rootPlacements.push_back({ root, !moved });
 		}
 	}
 
@@ -81,9 +174,10 @@ namespace DCLF
 		DCLF_SCENE_PART(Placements, "CS.DCLF.Scene.Placements");
 		// An entry a later round wrote in full (or released) took its placement and palette there.
 		std::erase_if(placements, [&](const Placement& a_item) { return a_item.tracked->movedWalk != walkSerial || a_item.tracked->slot != a_item.slot; });
-		placementChanges.assign(placements.size(), 0);
+		QueueRoots();
+		placementChanges.assign(placements.size() + rootPlacements.size(), 0);
 		placementsDone.store(0, std::memory_order_relaxed);
-		if (placements.empty())
+		if (placements.empty() && rootPlacements.empty())
 			return;
 		// The walk parity reads every record right after the walk, so its frames take them here.
 		const bool inline_ = !AsyncEnabled() || (SwitchEnabled(Switch::WalkParity) && ParityDue(frame));
@@ -98,7 +192,7 @@ namespace DCLF
 
 	void SceneStore::JoinPlacements()
 	{
-		if (!placementJob && placements.empty())
+		if (!placementJob && placements.empty() && rootPlacements.empty())
 			return;
 		DCLF_SCENE_PART(PlacementJoin, "CS.DCLF.Scene.PlacementJoin");
 		bool failed = false;
@@ -112,12 +206,15 @@ namespace DCLF
 			placementStats.late += result == AsyncWorker::WaitResult::Late ? 1 : 0;
 		}
 		const std::uint32_t resumeAt = placementsDone.load(std::memory_order_acquire);
-		placementStats.inlineItems += placements.size() - resumeAt;
+		placementStats.inlineItems += placementChanges.size() - resumeAt;
 		RunPlacements();
 		// An item the job threw in may be half taken, so it and the rest are noted in full.
-		if (failed)
-			for (std::size_t i = resumeAt; i < placementChanges.size(); ++i)
+		if (failed) {
+			for (std::size_t i = resumeAt; i < placements.size(); ++i)
 				placementChanges[i] |= kTakePlacement | kTakePalette;
+			for (std::size_t i = std::max<std::size_t>(resumeAt, placements.size()); i < placementChanges.size(); ++i)
+				placementChanges[i] = TakeRoot(rootPlacements[i - placements.size()], true);
+		}
 		ApplyPlacements(AsyncModeSetting() == AsyncMode::Probe);
 	}
 
@@ -127,6 +224,17 @@ namespace DCLF
 		if (!p.items)
 			return {};
 		auto line = fmt::format("[DCLF] scene placement: {} items, {} taken inline ({} joins late), {} palette size defects", p.items, p.inlineItems, p.late, p.defects);
+		std::string writers;
+		for (std::size_t i = 0; i < moveWriterCalls.size(); ++i)
+			if (const auto calls = moveWriterCalls[i].exchange(0, std::memory_order_relaxed))
+				writers += fmt::format("{}{} {}", writers.empty() ? "" : ", ", kMoveWriterNames[i], calls);
+		if (!writers.empty())
+			line += fmt::format("; move writers' calls: {}", writers);
+		if (p.roots || p.rootsGated)
+			line += fmt::format("; roots: {} bounds taken ({} sun entries changed), {} left for want of a move event", p.roots, p.rootSlotsChanged, p.rootsGated);
+		if (p.witnessed)
+			line += fmt::format("; move events: {} movers they skip taken on parity frames, {} changed{}{}", p.witnessed, p.missed,
+				p.missed ? " <- MISSED; first: " : " <- OK", p.firstMissed);
 		if (p.probes)
 			line += fmt::format("; probe: {} joins, {} items moved between the job and the join{}{}", p.probes, p.probeMoved,
 				p.probeMoved ? " <- MOVED; first: " : " <- OK", p.firstMoved);
@@ -139,6 +247,19 @@ namespace DCLF
 		for (std::size_t i = 0; i < placements.size(); ++i) {
 			const std::uint8_t changed = placementChanges[i];
 			const std::uint32_t slot = placements[i].slot;
+			// A mover no event named: anything taking it changed is an engine writer the move events miss.
+			if (placements[i].take & kTakeWitness) {
+				++placementStats.witnessed;
+				const std::uint8_t moved = changed & (kTakePlacement | kTakePalette);
+				if (moved && !placementStats.missed++) {
+					const auto* reference = placements[i].geometry->GetUserData();
+					const auto* name = placements[i].geometry->name.c_str();
+					placementStats.firstMissed = fmt::format("'{}' ({}{}{}, reference {:08X})", name ? name : "?", moved & kTakePlacement ? "placement" : "",
+						moved == (kTakePlacement | kTakePalette) ? " and " : "", moved & kTakePalette ? "palette" : "", reference ? reference->GetFormID() : 0u);
+				}
+			}
+			if (changed & (kTakePlacement | kTakePalette))
+				++stats.lightChangedBy[placements[i].reason];
 			if (changed & kTakePlacement) {
 				tables.NoteChange(slot, kChangePlacement);
 				++stats.lightPlacedChanged;
@@ -155,6 +276,21 @@ namespace DCLF
 					logger::warn("[DCLF] scene placement: the palette of '{}' changed size under its kept record", placements[i].geometry->name.c_str() ? placements[i].geometry->name.c_str() : "?");
 			}
 		}
+		for (std::size_t i = 0; i < rootPlacements.size(); ++i) {
+			const bool changed = placementChanges[placements.size() + i] != 0;
+			if (rootPlacements[i].witness) {
+				++placementStats.witnessed;
+				if (changed && !placementStats.missed++) {
+					const auto* reference = rootPlacements[i].root->GetUserData();
+					const auto* name = rootPlacements[i].root->name.c_str();
+					placementStats.firstMissed = fmt::format("the root '{}' (its bound, reference {:08X})", name ? name : "?", reference ? reference->GetFormID() : 0u);
+				}
+			}
+		}
+		for (const std::uint32_t slot : rootChangedSlots)
+			tables.NoteChange(slot, kChangePlacement);
+		placementStats.roots += rootPlacements.size();
+		placementStats.rootSlotsChanged += rootChangedSlots.size();
 		// CS_DCLF_ASYNC=probe: every item taken again now. Taking is idempotent, so anything it changes moved between the
 		// job's read and this join: an engine writer inside the window the job assumes is quiet.
 		if (a_probe) {
@@ -167,9 +303,21 @@ namespace DCLF
 				if (!placementStats.probeMoved++)
 					placementStats.firstMoved = item.geometry->name.c_str() ? item.geometry->name.c_str() : "?";
 			}
+			rootChangedSlots.clear();
+			for (const auto& root : rootPlacements) {
+				if (!TakeRoot(root, false))
+					continue;
+				for (const std::uint32_t slot : rootChangedSlots)
+					tables.NoteChange(slot, kChangePlacement);
+				rootChangedSlots.clear();
+				if (!placementStats.probeMoved++)
+					placementStats.firstMoved = root.root->name.c_str() ? root.root->name.c_str() : "?";
+			}
 		}
 		placementStats.items += placements.size();
 		placements.clear();
+		rootPlacements.clear();
+		rootChangedSlots.clear();
 		placementChanges.clear();
 		placementsDone.store(0, std::memory_order_relaxed);
 	}

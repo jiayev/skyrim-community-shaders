@@ -894,8 +894,12 @@ namespace DCLF
 			return false;
 		// Kept until an event under the root forgets it (ScheduleRoot) or its last dependent leaves (UnlistDependents).
 		const auto [motion, inserted] = rootMotion.try_emplace(a_root, false);
-		if (inserted)
+		if (inserted) {
 			motion->second = RootMovesNow(a_root);
+			// Its bound is taken by the root pass (QueueRoots), keyed by its reference's move events.
+			if (motion->second)
+				movingRoots.try_emplace(a_root, MovingRoot{ a_root->GetUserData(), FindCategoryNode(const_cast<RE::NiAVObject*>(a_root), nullptr) });
+		}
 		return motion->second;
 	}
 
@@ -974,13 +978,17 @@ namespace DCLF
 			Unlist(propertyDependents, a_tracked.listedAlpha, a_geometry);
 		a_tracked.listedProperty = nullptr;
 		a_tracked.listedAlpha = nullptr;
+		if (a_root)
+			UnlistHiddenChain(a_geometry, a_tracked);
 		if (a_root && a_tracked.listedRoot) {
 			MarkSunEntryDirty(a_tracked.listedRoot);
 			// The others under it: its bound takes this one in no more. The node is a key here; it may be gone.
-			if (Unlist(rootDependents, a_tracked.listedRoot, a_geometry))
+			if (Unlist(rootDependents, a_tracked.listedRoot, a_geometry)) {
 				dirtyRoots.push_back(a_tracked.listedRoot);
-			else
+			} else {
 				rootMotion.erase(a_tracked.listedRoot);
+				movingRoots.erase(a_tracked.listedRoot);
+			}
 			a_tracked.listedRoot = nullptr;
 		}
 	}
@@ -1001,6 +1009,7 @@ namespace DCLF
 	void SceneStore::ScheduleRoot(const RE::NiAVObject* a_root)
 	{
 		rootMotion.erase(a_root);
+		movingRoots.erase(a_root);
 		const auto it = rootDependents.find(a_root);
 		if (it == rootDependents.end())
 			return;
@@ -1098,8 +1107,11 @@ namespace DCLF
 		// inputs change every frame. A movable slot's chain is re-read every frame whatever its verdict, as the design has
 		// it: an actor's equipment is shown, hidden and swapped with no event of its own (walk parity caught a shield and a
 		// chopping axe left hidden), and a visibility controller hides and shows its node.
+		// A record whose only motion is its root's bound is not: the root pass takes the bound into its sun entry
+		// (QueueRoots), since nothing on its own chain moves.
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
-		const bool perFrame = a_tracked.faceShape || (mayRecord && traits) || (traits & kTraitActor) || (frameVerdict && (traits & kTraitMoves));
+		const bool perFrame = a_tracked.faceShape || (mayRecord && traits && traits != kTraitRootMoves) || (traits & kTraitActor) ||
+		                      (frameVerdict && (traits & kTraitMoves));
 		// The light path takes only a record's placement, palette, switch selection or shading, for an actor's the exact
 		// recheck of its verdict inputs (ActorRecordKept), and for a face shape's its head's snapshot (KeepFaceStream);
 		// an entry it cannot have a record for is written in full, which re-reads its verdict.
@@ -1121,7 +1133,22 @@ namespace DCLF
 		}
 		const Ineligible cached = a_tracked.candidateReason;
 		const bool frameVerdict = cached == Ineligible::None || cached == Ineligible::Switch || cached == Ineligible::Hidden || cached == Ineligible::Actor;
-		return !frameVerdict || ClassifyFrame(a_tracked) == cached;
+		if (!frameVerdict)
+			return true;
+		// The verdict's inputs are the hidden bits on its chain, which have events (hiddenDependents), a switch's
+		// selection, taken every frame here, and the toggles and fades, which classify it again. Without an event it
+		// stands; a parity frame takes it again anyway and counts a change no event announced.
+		const bool announced = a_tracked.hiddenEventFrame == frame || a_tracked.parentReason == Ineligible::Switch || !hiddenGating || a_tracked.hiddenChain.empty();
+		if (!announced && !hiddenWitness) {
+			++stats.verdictsSkipped;
+			return true;
+		}
+		++stats.verdictsChecked;
+		const Ineligible now = ClassifyFrame(a_tracked);
+		if (now != cached && !announced && !stats.verdictsMissed++)
+			stats.firstVerdictMissed = fmt::format("'{}' {} now {}", a_tracked.geometry->name.c_str() ? a_tracked.geometry->name.c_str() : "?",
+				kIneligibleNames[static_cast<std::size_t>(cached)], kIneligibleNames[static_cast<std::size_t>(now)]);
+		return now == cached;
 	}
 
 	void SceneStore::EvaluateRound(PartTimer& a_timer, std::size_t a_first)
@@ -1184,10 +1211,22 @@ namespace DCLF
 					// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
 					if (recorded && entry.actorOwned)
 						tables.actorObjects.push_back(entry.slot);
-					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph).
+					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph). A mover
+					// nothing moved this frame or the last keeps its placement and palette (MoveGated).
 					if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
+						std::uint8_t take = kTakePlacement | (keptSkin ? kTakePalette : 0);
+						const MoveReason reason = MoveReasonOf(entry);
+						if (reason == kMoveGated) {
+							if (!moveWitness) {
+								++stats.lightGated;
+								entry.movedWalk = walkSerial;
+								++delta.kept;
+								continue;
+							}
+							take |= kTakeWitness;
+						}
 						++stats.lightPlaced;
-						QueuePlacement(geometry, entry, kTakePlacement | (keptSkin ? kTakePalette : 0));
+						QueuePlacement(geometry, entry, take, reason);
 					} else {
 						entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
 						++delta.kept;
@@ -1232,6 +1271,11 @@ namespace DCLF
 				// entry left out by its verdict is taken again when the verdict is due, like any other.
 				std::uint32_t traits = 0;
 				std::tie(entry.perFrame, entry.lightTraits) = PerFrameOf(entry, *geometry, entry.candidateReason, traits);
+				entry.moveKey = MoveKeyOf(*geometry, entry.categoryNode);
+				if (entry.lightTraits & kTraitActor)
+					ListHiddenChain(geometry, entry);
+				else if (!entry.hiddenChain.empty())
+					UnlistHiddenChain(geometry, entry);
 				entry.switchNode = nullptr;
 				entry.switchChild = nullptr;
 				if (entry.lightTraits & kTraitSwitch) {
@@ -1251,7 +1295,7 @@ namespace DCLF
 			}
 			if (entry.perFrame && !entry.perFrameListed) {
 				entry.perFrameListed = true;
-				perFrameSet.push_back(geometry);
+				perFrameSet.push_back({ geometry, &entry });
 			}
 			if (written) {
 				if (entry.lightTraits & (kTraitAnimatedShading | kTraitActor))
@@ -1276,6 +1320,9 @@ namespace DCLF
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::Schedule)]);
 		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
+		// Before a full evaluation drops the node events: they name movers too.
+		DrainMoveEvents(full);
+		DrainHiddenEvents();
 		if (full) {
 			shadowIndexNeedsRebuild = true;
 			shadowDirtySlots.clear();
@@ -1303,6 +1350,8 @@ namespace DCLF
 			accumulatePatched.clear();
 			lastPatched.clear();
 			rootMotion.clear();
+			movingRoots.clear();
+			hiddenDependents.clear();
 			tables.InvalidateChangeLog();
 			buckets = {};
 			for (auto& [geometry, entry] : tracked) {
@@ -1320,20 +1369,29 @@ namespace DCLF
 				a_into += order.size() - counted;
 				counted = order.size();
 			};
+			// The addresses hold while no entry was added or erased since they were taken.
+			const bool addressesHold = perFrameLayout == trackedLayout;
+			stats.perFrameRelookups += addressesHold ? 0 : 1;
 			for (std::size_t i = 0; i < perFrameSet.size();) {
-				const auto it = tracked.find(perFrameSet[i]);
-				if (it == tracked.end() || !it->second.perFrameListed || !it->second.perFrame || it->second.scheduledWalk == walkSerial) {
+				auto& item = perFrameSet[i];
+				if (!addressesHold) {
+					const auto it = tracked.find(item.geometry);
+					item.tracked = it != tracked.end() ? &it->second : nullptr;
+				}
+				Tracked* entry = item.tracked;
+				if (!entry || !entry->perFrameListed || !entry->perFrame || entry->scheduledWalk == walkSerial) {
 					// Erased (or erased and added again, which listed the new entry anew), or no longer per frame
 					// (queued for its next classification).
-					if (it != tracked.end() && !it->second.perFrame && it->second.scheduledWalk != walkSerial)
-						it->second.perFrameListed = false;
-					perFrameSet[i] = perFrameSet.back();
+					if (entry && !entry->perFrame && entry->scheduledWalk != walkSerial)
+						entry->perFrameListed = false;
+					item = perFrameSet.back();
 					perFrameSet.pop_back();
 					continue;
 				}
-				Schedule(it->first, it->second, false);
+				Schedule(item.geometry, *entry, false);
 				++i;
 			}
+			perFrameLayout = trackedLayout;
 			count(delta.perFrame);
 			for (auto* geometry : pendingEvaluation)
 				if (const auto it = tracked.find(geometry); it != tracked.end())

@@ -71,6 +71,8 @@ namespace DCLF
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls; probe: the exclusion runs dry (live toggle's seed)" },
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull; probe: a census that removes nothing (live toggle's seed)" },
+			{ MoveEvents, "CS_DCLF_MOVE_EVENTS", F, Reduced::Zero, false, "0: the light path places every mover every frame instead of those the engine's move events name" },
+			{ HiddenEvents, "CS_DCLF_HIDDEN_EVENTS", F, Reduced::Zero, false, "0: an actor's frame verdict is taken again every frame instead of on its chain's hidden-bit events" },
 			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },
 			{ OrgEpochs, "CS_ORG_EPOCHS", F, Reduced::Zero, true, "0: the render graph runs without epochs, and DCLF does not install" },
 			{ OrgAsyncEpochs, "CS_ORG_ASYNC_EPOCHS", F, Reduced::Zero, true, "0: epochs are recorded on the render thread" },

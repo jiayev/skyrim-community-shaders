@@ -629,6 +629,16 @@ namespace DCLF
 			// skins and how many changed their palette rows.
 			std::array<std::uint64_t, 8> lightByTrait{};
 			std::uint64_t lightPlaced = 0, lightPlacedChanged = 0, lightSkins = 0, lightSkinsChanged = 0;
+			// Movers the light path did not place because nothing moved their key (MoveGated), and the move events drained.
+			std::uint64_t lightGated = 0, moveEvents = 0;
+			// Walks whose schedule had to look the per-frame set up again (an entry was added or erased).
+			std::uint64_t perFrameRelookups = 0;
+			// Hidden events drained; actor frame verdicts taken again and left alone; on parity frames, verdicts that
+			// changed with no event (the first named).
+			std::uint64_t hiddenEvents = 0, verdictsChecked = 0, verdictsSkipped = 0, verdictsMissed = 0;
+			std::string firstVerdictMissed;
+			// The placed movers by why they were placed (MoveReason), and how many of those changed.
+			std::array<std::uint64_t, 6> lightPlacedBy{}, lightChangedBy{};
 			// The first evaluation round by EvaluateKind: time (ms) and entries, under CS_DCLF_PROFILE.
 			std::array<double, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindMs{};
 			std::array<std::uint64_t, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindCount{};
@@ -687,6 +697,10 @@ namespace DCLF
 			stats.scenePartMaxMs = {};
 			stats.lightByTrait = {};
 			stats.lightPlaced = stats.lightPlacedChanged = stats.lightSkins = stats.lightSkinsChanged = 0;
+			stats.lightGated = stats.moveEvents = stats.perFrameRelookups = 0;
+			stats.hiddenEvents = stats.verdictsChecked = stats.verdictsSkipped = stats.verdictsMissed = 0;
+			stats.firstVerdictMissed.clear();
+			stats.lightPlacedBy = stats.lightChangedBy = {};
 			stats.evaluateKindMs = {};
 			stats.evaluateKindCount = {};
 		}
@@ -695,6 +709,22 @@ namespace DCLF
 		void JoinPlacements();
 		/** @brief The scene placement job's line for the report, or empty; resets its counters. */
 		std::string PlacementReport();
+		/**
+		 * @brief Why the light path places a mover: gating off (the switch, a frame after a full evaluation, or not
+		 * installed); no key or a tree's skin; its actor's, its reference's or its category node's event; or none, and
+		 * then it is skipped (kGated), or taken as a witness on a parity frame.
+		 */
+		enum MoveReason : std::uint8_t
+		{
+			kMoveUngated,
+			kMoveAlways,
+			kMoveActor,
+			kMoveReference,
+			kMoveCategory,
+			kMoveGated,
+		};
+		static constexpr std::array<const char*, 6> kMoveReasonNames{ "ungated", "no key or a tree's skin", "actor event", "reference event",
+			"category node event", "witness" };
 		/** @brief The end of the scene tables zone: folds this frame's part times into the maximums. */
 		void EndSceneFrame()
 		{
@@ -715,6 +745,15 @@ namespace DCLF
 		 * properties' flags and materials, Havok's node transforms and the controllers' targets.
 		 */
 		static void InstallSceneEvents();
+		/**
+		 * @brief Hooks the engine's move writers (MoveEvents in SceneStore/Internal.h): the animation and 3D-position
+		 * updates of actors and references, ragdolls, and the cells' update passes. The light path then places a mover
+		 * only when its reference (or its category node) had one this frame or the last.
+		 */
+		static void InstallMoveEvents();
+		static bool MoveEventsLive();
+		/** @brief The hidden-bit stores are patched (HiddenStores.cpp). */
+		static bool HiddenEventsLive();
 		/**
 		 * @brief The switch-selection events are installed (dclf-cull-job-elimination.md, "Phase 3"; false only when the
 		 * engine's writers are not the expected code): every writer of an NiSwitchNode's selected index and of its children
@@ -1118,6 +1157,13 @@ namespace DCLF
 			// gets its placement (QueuePlacement). 0 for every other entry. movedWalk: the walk that took this path.
 			std::uint32_t lightTraits = 0;
 			std::uint32_t movedWalk = 0;
+			// The key its move events carry (MoveKeyOf): the one reference on its chain up to the category node, set at
+			// classification. Null when there is none or more than one, and the light path places it every frame.
+			const void* moveKey = nullptr;
+			// An actor's light-path entry: the nodes from it up to its category node, listed in hiddenDependents, and the
+			// frame one of them last had a hidden-bit event (DrainHiddenEvents).
+			std::vector<const RE::NiAVObject*> hiddenChain;
+			std::uint32_t hiddenEventFrame = 0;
 			// kTraitAnimatedShading: what the record read from the animated shader and alpha properties when it was
 			// last written in full (ShadingInputsOf); the light path writes it in full again when they differ.
 			std::uint64_t shadingInputs = 0;
@@ -1484,6 +1530,7 @@ namespace DCLF
 		void PushFaceStream(RE::BSGeometry& a_geometry, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region);
 		/** @brief A kept face shape's record: its stream for this walk (ResolveFace, PushFaceStream); false to write it in full. */
 		bool KeepFaceStream(RE::BSGeometry& a_geometry, Tracked& a_tracked);
+		MoveReason MoveReasonOf(const Tracked& a_tracked) const;
 		/**
 		 * @brief The light path's placements and palettes, taken off the render thread (Placements.cpp).
 		 *
@@ -1502,22 +1549,74 @@ namespace DCLF
 			const RE::NiAVObject* sunEntryNode = nullptr;
 			std::uint32_t slot = kNoObjectSlot;
 			std::uint8_t take = 0;
+			std::uint8_t reason = 0;  // MoveReason
 		};
-		static constexpr std::uint8_t kTakePlacement = 1, kTakePalette = 2, kTakeDefect = 4;
+		// kTakeWitness: a mover MoveGated would have skipped, taken on a parity frame to count what the events missed.
+		static constexpr std::uint8_t kTakePlacement = 1, kTakePalette = 2, kTakeDefect = 4, kTakeWitness = 8;
 		std::vector<Placement> placements;
+		/**
+		 * @brief A moving reference root whose bound the job takes into its dependents' sun entries (TakeRoot). An
+		 * entry whose only motion is its root's bound (traits kTraitRootMoves alone) is not per frame: the root is
+		 * queued instead, when its reference or its category node had a move event this frame or the last
+		 * (movingRoots, QueueRoots), so the render thread handles roots rather than their entries.
+		 */
+		struct RootPlacement
+		{
+			const RE::NiAVObject* root = nullptr;
+			bool witness = false;
+		};
+		struct MovingRoot
+		{
+			const void* key = nullptr;  // its reference
+			const RE::NiNode* categoryNode = nullptr;
+		};
+		// Every root RootMoves found moving, until ScheduleRoot or its last dependent forgets it.
+		ankerl::unordered_dense::map<const RE::NiAVObject*, MovingRoot> movingRoots;
+		std::vector<RootPlacement> rootPlacements;
+		std::vector<std::uint32_t> rootChangedSlots;  // the job's: the slots whose sun entry a root changed
+		void QueueRoots();
+		std::uint8_t TakeRoot(const RootPlacement& a_item, bool a_noteAll);
 		std::vector<std::uint8_t> placementChanges;  // per item: what taking it changed (kTake*)
 		std::atomic<std::uint32_t> placementsDone{ 0 };
 		std::shared_ptr<void> placementJob;  // AsyncWorker::JobHandle
 		struct PlacementStats
 		{
-			std::uint64_t items = 0, inlineItems = 0, late = 0, defects = 0, probes = 0, probeMoved = 0;
-			std::string firstMoved;
+			std::uint64_t items = 0, inlineItems = 0, late = 0, defects = 0, probes = 0, probeMoved = 0, witnessed = 0, missed = 0, roots = 0, rootsGated = 0,
+				rootSlotsChanged = 0;
+			std::string firstMoved, firstMissed;
 		} placementStats;
-		void QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take);
+		void QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take, MoveReason a_reason);
 		std::uint8_t TakePlacement(const Placement& a_item);
 		void RunPlacements();
 		void KickPlacements();
 		void ApplyPlacements(bool a_probe);
+		/**
+		 * @brief The movers by event (MoveEvents): the frame each key last had one, drained at the delta walk. A mover is
+		 * placed when its key or its category node had one this frame or the last: the engine's palette update copies
+		 * the current palette to the previous one, so a skin takes one more update after its last move, and a write that
+		 * lands after the walk's read is taken the next frame. A skin that is not an actor's is placed every frame (a
+		 * tree's wind moves its bones with no event), and every mover is placed on the frame after a full evaluation (it
+		 * drops the node events). On a parity frame the movers it would skip are taken as witnesses, and any that
+		 * changed is a missed event (PlacementReport).
+		 */
+		ankerl::unordered_dense::map<const void*, std::uint32_t> movedFrame;
+		bool moveGating = false;
+		bool moveWitness = false;
+		std::uint32_t moveUngatedThrough = 0;
+		void DrainMoveEvents(bool a_full);
+		// The actor entries by the nodes on their chain (ListHiddenChain), for the hidden events.
+		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> hiddenDependents;
+		bool hiddenGating = false;
+		bool hiddenWitness = false;
+		void ListHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void UnlistHiddenChain(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		void DrainHiddenEvents();
+		bool MovedRecently(const void* a_key) const
+		{
+			const auto it = movedFrame.find(a_key);
+			return it != movedFrame.end() && frame - it->second <= 1;
+		}
+		static const void* MoveKeyOf(const RE::BSGeometry& a_geometry, const RE::NiNode* a_categoryNode);
 		/**
 		 * @brief Whether a reference root's subtree holds anything that moves (a controller, a non-fixed rigid body, a
 		 * skin): the root's bound is then not fixed, and it is the sun entry of every geometry under it. Walked once per
@@ -1652,7 +1751,20 @@ namespace DCLF
 		std::array<std::uint32_t, 16> keptShadowRejects{};
 		bool fullEvaluation = true;  // the next delta walk evaluates every entry (a reset, a load, a live toggle)
 		std::uint32_t walkSerial = 0;
-		std::vector<RE::BSGeometry*> perFrameSet;
+		/**
+		 * @brief The entries evaluated every frame, with their entry's address. `tracked` keeps its values in one array,
+		 * so an insert or an erase may move them: trackedLayout counts those, and the schedule trusts the addresses only
+		 * while it equals perFrameLayout, the count they were taken at, and looks every entry up again otherwise.
+		 */
+		struct PerFrameItem
+		{
+			RE::BSGeometry* geometry = nullptr;
+			Tracked* tracked = nullptr;
+		};
+		std::vector<PerFrameItem> perFrameSet;
+		std::uint64_t trackedLayout = 0;
+		std::uint64_t perFrameLayout = ~0ull;
+		std::uint32_t validatedFrame = ~0u;
 		std::vector<RE::BSGeometry*> pendingEvaluation;
 		// The slots this accumulate phase patched, and the last one's; patchedFrame (per slot) is the frame of its last patch.
 		std::vector<std::uint32_t> accumulatePatched;
