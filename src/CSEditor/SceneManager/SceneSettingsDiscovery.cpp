@@ -155,7 +155,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		return false;
 
 	const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(safeModName);
-	// Merged into rather than replaced, so fields other backends own (effects11, cspp, backends) survive.
+	// Merged into rather than replaced, so fields other backends own (effects11, backends) survive.
 	std::string manifestError;
 	auto manifest = UnifiedPresetCatalog::ReadPackManifest(packRoot, &manifestError);
 	if (!manifestError.empty()) {

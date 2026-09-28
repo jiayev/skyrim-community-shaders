@@ -3,7 +3,6 @@
 
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
-#include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "Utils/FileSystem.h"
@@ -27,7 +26,6 @@ namespace
 	constexpr const char* kActiveStateFileName = "_active.json";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
 	constexpr const char* kEffects11PackSubdir = "effects11";
-	constexpr const char* kDefaultCSPPFileName = "cspp.json";
 
 	using Util::ToLower;
 
@@ -311,7 +309,6 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.source = SourceKind::UnifiedPack;
 		pack.rootPath = packRoot;
 
-		std::string csppRel = kDefaultCSPPFileName;
 		const auto meta = ReadPackManifest(packRoot, &pack.invalidReason);
 		pack.valid = pack.invalidReason.empty();
 		try {
@@ -326,9 +323,6 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 						pack.tags.push_back(tag.get<std::string>());
 				}
 			}
-
-			if (meta.contains("cspp") && meta["cspp"].is_object())
-				csppRel = meta["cspp"].value("file", csppRel);
 
 			if (meta.contains("logo") && meta["logo"].is_string())
 				pack.logoPath = ResolveRelative(packRoot, meta["logo"].get<std::string>());
@@ -350,34 +344,16 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 
 		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
 		pack.hasEffects11 = !pack.effects11Root.empty();
-
-		auto csppPath = packRoot / csppRel;
-		if (!std::filesystem::exists(csppPath) && csppRel != kDefaultCSPPFileName)
-			csppPath = packRoot / kDefaultCSPPFileName;
-		if (std::filesystem::exists(csppPath)) {
-			pack.hasCSPP = true;
-			pack.csppFile = csppPath;
-		}
-
-		if (meta.contains("backends") && meta["backends"].is_object()) {
-			const auto& backendsOverride = meta["backends"];
-			if (backendsOverride.contains("cspp") && backendsOverride["cspp"].is_boolean() &&
-				!backendsOverride["cspp"].get<bool>()) {
-				pack.hasCSPP = false;
-				pack.csppFile.clear();
-			}
-		}
-
-		pack.hasSceneManager = SceneSettingsManager::HasScenePayload(packRoot);
+		pack.hasCSPresets = SceneSettingsManager::HasScenePayload(packRoot);
 
 		if (pack.description.empty())
 			pack.description = InferDescriptionFromReadme(packRoot);
 		InferMissingArtwork(pack);
 
-		if (!pack.hasEffects11 && !pack.hasCSPP && !pack.hasSceneManager) {
+		if (!pack.hasEffects11 && !pack.hasCSPresets) {
 			pack.valid = false;
 			if (pack.invalidReason.empty())
-				pack.invalidReason = "No Effects11, CSPP or Scene Manager payload found";
+				pack.invalidReason = "No Effects11 or CS Presets payload found";
 		}
 
 		packs.push_back(std::move(pack));
@@ -410,25 +386,6 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 	}
 }
 
-void UnifiedPresetCatalog::DiscoverCSPPOrphans()
-{
-	for (const auto& file : Util::PathHelpers::ListCommunityShaderEntries("PostProcessing", false)) {
-		if (file.extension() != ".json")
-			continue;
-
-		const auto stem = file.stem().string();
-		PackInfo pack;
-		pack.id = std::string("cspp:") + stem;
-		pack.name = stem;
-		pack.source = SourceKind::CSPPOrphan;
-		pack.rootPath = file.parent_path();
-		pack.csppFile = file;
-		pack.hasCSPP = true;
-		pack.description = "Post Processing preset";
-		packs.push_back(std::move(pack));
-	}
-}
-
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
@@ -438,7 +395,6 @@ void UnifiedPresetCatalog::Discover()
 
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
-	DiscoverCSPPOrphans();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -447,24 +403,7 @@ void UnifiedPresetCatalog::Discover()
 	logger::info("[Presets] Discovered {} pack(s); active='{}'", packs.size(), activePackId.empty() ? "(none)" : activePackId);
 }
 
-std::vector<size_t> UnifiedPresetCatalog::Query(BackendFilter filter, const std::string& search) const
-{
-	switch (filter) {
-	case BackendFilter::Effects11:
-		return Query(true, false, false, search);
-	case BackendFilter::CSPP:
-		return Query(false, true, false, search);
-	case BackendFilter::Both:
-		return Query(true, true, false, search);
-	case BackendFilter::SceneManager:
-		return Query(false, false, true, search);
-	case BackendFilter::All:
-	default:
-		return Query(false, false, false, search);
-	}
-}
-
-std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPP, bool wantSM, const std::string& search) const
+std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPresets, const std::string& search) const
 {
 	const auto needle = ToLower(search);
 	std::vector<size_t> indices;
@@ -474,9 +413,7 @@ std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPP, boo
 		const auto& pack = packs[i];
 		if (wantE11 && !pack.hasEffects11)
 			continue;
-		if (wantCSPP && !pack.hasCSPP)
-			continue;
-		if (wantSM && !pack.hasSceneManager)
+		if (wantCSPresets && !pack.hasCSPresets)
 			continue;
 
 		if (!needle.empty()) {
@@ -637,19 +574,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		}
 	}
 
-	if (pack->hasCSPP && !pack->csppFile.empty()) {
-		auto& pp = globals::features::postProcessing;
-		if (pp.loaded) {
-			// Pack-relative LUT paths in the preset resolve against the active pack.
-			SetActivePackId(id);
-			pp.LoadPresetFromFile(pack->csppFile);
-			appliedAny = true;
-		} else {
-			logger::warn("[Presets] Post Processing feature is not loaded; skipping CSPP apply");
-		}
-	}
-
-	if (pack->hasSceneManager)
+	if (pack->hasCSPresets)
 		appliedAny = true;
 
 	if (appliedAny) {
@@ -674,7 +599,7 @@ bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
 	if (!pack)
 		return false;
 
-	std::filesystem::path path = pack->source == SourceKind::CSPPOrphan ? pack->csppFile.parent_path() : pack->rootPath;
+	std::filesystem::path path = pack->rootPath;
 	// Explorer runs outside MO2's VFS, so open the physical copy when this mod folder has one.
 	if (const auto dataRelative = path.lexically_relative(Util::PathHelpers::GetDataPath()); !dataRelative.empty() && *dataRelative.begin() != "..") {
 		std::error_code ec;

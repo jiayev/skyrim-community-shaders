@@ -18,8 +18,7 @@
 #include <vector>
 
 bool PresetsPageRenderer::filterE11 = false;
-bool PresetsPageRenderer::filterCSPP = false;
-bool PresetsPageRenderer::filterSM = false;
+bool PresetsPageRenderer::filterCSPresets = false;
 char PresetsPageRenderer::searchBuffer[128] = {};
 std::string PresetsPageRenderer::selectedPackId;
 bool PresetsPageRenderer::discovered = false;
@@ -35,12 +34,7 @@ namespace
 
 	const char* BackendLabelCS(bool compact)
 	{
-		return compact ? "CS" : "CS Post Processing";
-	}
-
-	const char* BackendLabelSM(bool compact)
-	{
-		return compact ? "SM" : "Scene Manager";
+		return compact ? "CS" : "CS Presets";
 	}
 
 	float BadgeGap()
@@ -115,7 +109,7 @@ bool PresetsPageRenderer::FilterChip(const char* label, bool selected)
 	return clicked;
 }
 
-float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPP, bool hasSM, bool compact)
+float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool compact)
 {
 	const ImGuiStyle& style = ImGui::GetStyle();
 	float width = 0.0f;
@@ -124,21 +118,16 @@ float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPP, 
 		AppendBadgeGap(width, needGap);
 		width += ImGui::CalcTextSize(BackendLabelE11(compact)).x + style.FramePadding.x * 2.0f;
 	}
-	if (hasCSPP) {
+	if (hasCSPresets) {
 		AppendBadgeGap(width, needGap);
 		width += ImGui::CalcTextSize(BackendLabelCS(compact)).x + style.FramePadding.x * 2.0f;
-	}
-	if (hasSM) {
-		AppendBadgeGap(width, needGap);
-		width += ImGui::CalcTextSize(BackendLabelSM(compact)).x + style.FramePadding.x * 2.0f;
 	}
 	return width;
 }
 
-void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPP, bool hasSM, bool compact)
+void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPresets, bool compact)
 {
 	const auto& info = globals::menu->GetTheme().StatusPalette.InfoColor;
-	const auto& success = globals::menu->GetTheme().StatusPalette.SuccessColor;
 	const auto& warning = globals::menu->GetTheme().StatusPalette.Warning;
 	const float gap = BadgeGap();
 
@@ -156,25 +145,14 @@ void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPP, bool hasS
 		ImGui::SmallButton(BackendLabelE11(compact));
 		ImGui::PopStyleColor(4);
 	}
-	if (hasCSPP) {
-		if (needGap)
-			ImGui::SameLine(0.0f, gap);
-		needGap = true;
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(success.x, success.y, success.z, 0.8f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, success);
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, success);
-		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.08f, 0.05f, 1.0f));
-		ImGui::SmallButton(BackendLabelCS(compact));
-		ImGui::PopStyleColor(4);
-	}
-	if (hasSM) {
+	if (hasCSPresets) {
 		if (needGap)
 			ImGui::SameLine(0.0f, gap);
 		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(warning.x, warning.y, warning.z, 0.85f));
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warning);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, warning);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.06f, 0.02f, 1.0f));
-		ImGui::SmallButton(BackendLabelSM(compact));
+		ImGui::SmallButton(BackendLabelCS(compact));
 		ImGui::PopStyleColor(4);
 	}
 	ImGui::EndGroup();
@@ -190,21 +168,17 @@ void PresetsPageRenderer::RenderToolbar()
 	ImGui::InputTextWithHint("##PresetSearch", T("menu.presets.search", "Search presets..."), searchBuffer, IM_ARRAYSIZE(searchBuffer));
 
 	ImGui::SameLine();
-	const bool showAll = !filterE11 && !filterCSPP && !filterSM;
+	const bool showAll = !filterE11 && !filterCSPresets;
 	if (FilterChip(T("menu.presets.filter_all", "All"), showAll)) {
 		filterE11 = false;
-		filterCSPP = false;
-		filterSM = false;
+		filterCSPresets = false;
 	}
 	ImGui::SameLine();
 	if (FilterChip(T("menu.presets.filter_e11", "E11"), filterE11))
 		filterE11 = !filterE11;
 	ImGui::SameLine();
-	if (FilterChip(T("menu.presets.filter_cspp", "CS"), filterCSPP))
-		filterCSPP = !filterCSPP;
-	ImGui::SameLine();
-	if (FilterChip(T("menu.presets.filter_sm", "SM"), filterSM))
-		filterSM = !filterSM;
+	if (FilterChip(T("menu.presets.filter_cs", "CS"), filterCSPresets))
+		filterCSPresets = !filterCSPresets;
 
 	// A small divider keeps these maintenance actions from reading as more filter chips.
 	Util::ToolbarDivider();
@@ -216,7 +190,7 @@ void PresetsPageRenderer::RenderToolbar()
 			discovered = true;
 		}
 		if (ImGui::IsItemHovered())
-			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs, Effects 11 library presets, and Post Processing JSON files."));
+			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs and Effects 11 library presets."));
 
 		ImGui::SameLine();
 		if (ImGui::Button(ICON_FA_FOLDER_OPEN "##PresetsOpenFolder"))
@@ -232,7 +206,7 @@ void PresetsPageRenderer::RenderList(float width)
 	const auto& theme = globals::menu->GetTheme();
 	const float scale = Util::GetUIScale();
 
-	const auto indices = catalog.Query(filterE11, filterCSPP, filterSM, searchBuffer);
+	const auto indices = catalog.Query(filterE11, filterCSPresets, searchBuffer);
 
 	ImGui::BeginChild("##PresetList", ImVec2(width, 0), true);
 	{
@@ -242,7 +216,7 @@ void PresetsPageRenderer::RenderList(float width)
 	ImGui::Separator();
 
 	if (indices.empty()) {
-		ImGui::TextDisabled("%s", T("menu.presets.empty", "No presets found. Drop packs into the Presets folder, install Effects 11 / CS Post Processing presets, or export from Scene Manager."));
+		ImGui::TextDisabled("%s", T("menu.presets.empty", "No presets found. Drop packs into the Presets folder, install Effects 11 presets, or export from Scene Manager."));
 	}
 
 	const float rowPad = 6.0f * scale;
@@ -292,7 +266,7 @@ void PresetsPageRenderer::RenderList(float width)
 			MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
 			ImGui::TextUnformatted(pack.name.c_str());
 			ImGui::SameLine(0.0f, 8.0f * scale);
-			DrawBackendBadges(pack.hasEffects11, pack.hasCSPP, pack.hasSceneManager, true);
+			DrawBackendBadges(pack.hasEffects11, pack.hasCSPresets, true);
 			if (isActive) {
 				ImGui::SameLine(0.0f, 6.0f * scale);
 				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active", "Active"));
@@ -313,18 +287,10 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = std::format("v{}", pack.version);
 			else if (pack.source == UnifiedPresetCatalog::SourceKind::Effects11Orphan)
 				meta = T("menu.presets.source_e11", "Effects 11 library");
-			else if (pack.source == UnifiedPresetCatalog::SourceKind::CSPPOrphan)
-				meta = T("menu.presets.source_cspp", "CS Post Processing");
-			else if (pack.hasEffects11 && pack.hasCSPP && pack.hasSceneManager)
-				meta = T("menu.presets.source_triple", "Effects 11 + CS + Scene Manager");
-			else if (pack.hasEffects11 && pack.hasCSPP)
-				meta = T("menu.presets.source_dual", "Effects 11 + CS Post Processing");
-			else if (pack.hasEffects11 && !pack.hasCSPP)
+			else if (pack.hasEffects11)
 				meta = T("menu.presets.source_enb", "ENB / Effects 11");
-			else if (pack.hasCSPP && !pack.hasEffects11)
-				meta = T("menu.presets.source_cspp_pack", "CS Post Processing");
-			else if (pack.hasSceneManager)
-				meta = T("menu.presets.source_sm", "Scene Manager export");
+			else if (pack.hasCSPresets)
+				meta = T("menu.presets.source_cs", "CS Presets");
 			if (!meta.empty())
 				ImGui::TextDisabled("%s", meta.c_str());
 		}
@@ -363,7 +329,7 @@ void PresetsPageRenderer::RenderDetail()
 	if (heroImageIndex >= static_cast<int>(pack->screenshotSRVs.size()))
 		heroImageIndex = -1;
 
-	const float badgesWidth = MeasureBackendBadgesWidth(pack->hasEffects11, pack->hasCSPP, pack->hasSceneManager, false);
+	const float badgesWidth = MeasureBackendBadgesWidth(pack->hasEffects11, pack->hasCSPresets, false);
 	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
@@ -432,7 +398,7 @@ void PresetsPageRenderer::RenderDetail()
 			// square so the pair never overflows when the CS window is narrowed.
 			const float folderSize = ImGui::GetFrameHeight();
 			const float applyWidth = std::max(0.0f, ImGui::GetContentRegionAvail().x - folderSize - style.ItemSpacing.x);
-			const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPP || pack->hasSceneManager);
+			const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPresets);
 			ImGui::BeginDisabled(!canApply);
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
@@ -474,7 +440,7 @@ void PresetsPageRenderer::RenderDetail()
 			const float titleLineH = ImGui::GetTextLineHeight() * 1.35f;
 			const float badgeH = ImGui::GetFrameHeight();
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad + std::max(0.0f, (titleLineH - badgeH) * 0.5f));
-			DrawBackendBadges(pack->hasEffects11, pack->hasCSPP, pack->hasSceneManager, false);
+			DrawBackendBadges(pack->hasEffects11, pack->hasCSPresets, false);
 		}
 
 		ImGui::EndTable();
@@ -527,10 +493,10 @@ void PresetsPageRenderer::RenderDetail()
 		ImGui::TextDisabled("%s", T("menu.presets.no_description", "No description provided."));
 	}
 
-	if (pack->hasSceneManager) {
+	if (pack->hasCSPresets) {
 		ImGui::Spacing();
-		ImGui::TextDisabled("%s", T("menu.presets.sm_layer_note",
-			"Applying makes this pack's Scene Manager files the active scene layer, replacing the previous pack's."));
+		ImGui::TextDisabled("%s", T("menu.presets.cs_layer_note",
+			"Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
 	}
 
 	if (!pack->valid && !pack->invalidReason.empty()) {

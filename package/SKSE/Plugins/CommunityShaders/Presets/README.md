@@ -19,18 +19,17 @@ Presets/NAT.ENB - .../
   01_LOW .../           (optional quality variants)
 ```
 
-### Nested Effects11 + CSPP (with or without metadata)
+### Nested Effects11 (with or without metadata)
 ```
 Presets/MyPack/
   MyPack.json           (optional metadata)
   effects11/            (enbseries.ini + enbseries/)
-  cspp.json
   logo.png / cover.png / gallery/
 ```
 
-### Scene Manager pack
+### CS Presets pack
 
-Scene Manager **Export preset** writes a pack in this layout; it can sit beside `effects11/` and `cspp.json` in the same pack:
+Scene Manager **Export preset** writes a pack in this layout; it can sit beside `effects11/` in the same pack:
 
 ```
 Presets/MyPack/
@@ -52,4 +51,4 @@ Packs are found under both the Data (VFS) path and the Community Shaders mod's o
 
 ## Metadata (optional, Presets packs)
 
-When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths (`logo` / `cover` / `screenshots`, relative to the pack folder), and backend paths (`effects11.path`, `cspp.file`, `backends`). Without it the UI uses the folder name, ReadMe text, and inferred E11/CSPP/Scene Manager content and artwork.
+When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths (`logo` / `cover` / `screenshots`, relative to the pack folder), and backend paths (`effects11.path`, `backends`). Without it the UI uses the folder name, ReadMe text, and inferred E11/CS Presets content and artwork.

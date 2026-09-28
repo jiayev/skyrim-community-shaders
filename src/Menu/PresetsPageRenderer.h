@@ -2,7 +2,7 @@
 
 #include <string>
 
-/** @brief Renders the unified Presets browser for Effects 11, CS Post Processing, and Scene Manager exports. */
+/** @brief Renders the unified Presets browser for Effects 11 and CS Presets packs. */
 class PresetsPageRenderer
 {
 public:
@@ -17,16 +17,15 @@ private:
 	/** @brief The selected pack's artwork, metadata and actions. */
 	static void RenderDetail();
 	/** @brief One colored pill per backend the pack carries. */
-	static void DrawBackendBadges(bool hasE11, bool hasCSPP, bool hasSM, bool compact);
+	static void DrawBackendBadges(bool hasE11, bool hasCSPresets, bool compact);
 	/** @brief Width DrawBackendBadges will take, for right-aligning it. */
-	static float MeasureBackendBadgesWidth(bool hasE11, bool hasCSPP, bool hasSM, bool compact);
+	static float MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool compact);
 	/** @brief Rounded toggle button, filled when selected. @return Whether it was clicked. */
 	static bool FilterChip(const char* label, bool selected);
 
 	/** @brief Backend chips are independent toggles. All off = show all; each on = must have that backend. */
 	static bool filterE11;
-	static bool filterCSPP;
-	static bool filterSM;
+	static bool filterCSPresets;
 	static char searchBuffer[128];
 	static std::string selectedPackId;
 	static bool discovered;

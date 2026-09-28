@@ -63,7 +63,7 @@ void PostProcessing::DrawSettings()
 	}
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("%s", T("feature.post_processing.save_tooltip",
-			"Writes a JSON under PostProcessing/. Move it into a unified Presets pack (as cspp.json) to ship it."));
+			"Writes a JSON under PostProcessing/."));
 
 	ImGui::EndGroup();
 
@@ -410,21 +410,6 @@ void PostProcessing::LoadPresetFrom(std::string a_name)
 		i >> a_presets;
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
-		return;
-	}
-
-	ProcessSettings(a_presets);
-}
-
-void PostProcessing::LoadPresetFromFile(const std::filesystem::path& path)
-{
-	json a_presets = {};
-	try {
-		logger::info("Loading preset file: {}", path.string());
-		std::ifstream i{ path };
-		i >> a_presets;
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load preset file: {}. Error: {}", path.string(), e.what());
 		return;
 	}
 

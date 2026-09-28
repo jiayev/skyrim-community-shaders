@@ -7,27 +7,15 @@
 #include <vector>
 #include <winrt/base.h>
 
-/** @brief Discovers unified preset packs (Effects 11, CS Post Processing and Scene Manager payloads)
- *  plus orphan Effects 11 / CS Post Processing presets. */
+/** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
 class UnifiedPresetCatalog
 {
 public:
-	/** @brief Single-choice backend filter for Query; Both requires Effects 11 and CS Post Processing. */
-	enum class BackendFilter
-	{
-		All,
-		Effects11,
-		CSPP,
-		Both,
-		SceneManager
-	};
-
-	/** @brief Where a pack was found: a Presets pack folder, or a standalone Effects 11 / CSPP preset. */
+	/** @brief Where a pack was found: a Presets pack folder, or a standalone Effects 11 preset. */
 	enum class SourceKind
 	{
 		UnifiedPack,
-		Effects11Orphan,
-		CSPPOrphan
+		Effects11Orphan
 	};
 
 	/** @brief A discovered pack's manifest data, backend payloads and lazily loaded artwork. */
@@ -42,15 +30,13 @@ public:
 		std::vector<std::string> tags;
 
 		bool hasEffects11 = false;
-		bool hasCSPP = false;
-		bool hasSceneManager = false;
+		bool hasCSPresets = false;
 		bool valid = true;
 		std::string invalidReason;
 
 		SourceKind source = SourceKind::UnifiedPack;
-		std::filesystem::path rootPath;       ///< Pack folder, library root, or PP parent
+		std::filesystem::path rootPath;       ///< Pack folder or library root
 		std::filesystem::path effects11Root;  ///< Folder with enbseries.ini + enbseries/
-		std::filesystem::path csppFile;       ///< Absolute path to CSPP json
 
 		std::filesystem::path logoPath;
 		std::filesystem::path coverPath;
@@ -85,18 +71,16 @@ public:
 	PackInfo* FindPack(const std::string& id);
 	const PackInfo* FindPack(const std::string& id) const;
 
-	/** @brief Indices of packs passing a backend filter and a case-insensitive name/author/description/tag search. */
-	std::vector<size_t> Query(BackendFilter filter, const std::string& search) const;
-
-	/** @brief Multi-select form: each enabled flag requires that backend; all false shows everything. */
-	std::vector<size_t> Query(bool wantE11, bool wantCSPP, bool wantSM, const std::string& search) const;
+	/** @brief Indices of packs passing the backend flags and a case-insensitive name/author/description/tag search.
+	 *  Each enabled flag requires that backend; all false shows everything. */
+	std::vector<size_t> Query(bool wantE11, bool wantCSPresets, const std::string& search) const;
 
 	/** @brief Loads a pack's logo, cover and screenshots once; the cover stands in for a missing logo. */
 	bool EnsureArtwork(PackInfo& pack);
 	/** @brief Drops every pack's artwork textures. */
 	void ReleaseAllArtwork();
 
-	/** @brief Applies Effects11 and/or CSPP, then swaps the Scene Manager overwrite layer to this pack's scene files. */
+	/** @brief Applies Effects11, then swaps the Scene Manager overwrite layer to this pack's CS Presets files. */
 	bool ApplyPack(const std::string& id, bool saveEffects11Current = true);
 
 	/** @brief Creates the presets root if needed and opens its real path in Explorer. */
@@ -133,8 +117,6 @@ private:
 	void DiscoverUnifiedPacks();
 	/** @brief Adds Effects 11 library presets that no unified pack of the same name already covers. */
 	void DiscoverEffects11Orphans();
-	/** @brief Adds each PostProcessing .json as a CSPP-only pack. */
-	void DiscoverCSPPOrphans();
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);

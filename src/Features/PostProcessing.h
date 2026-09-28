@@ -93,8 +93,6 @@ struct PostProcessing : Feature
 	std::vector<std::string> LoadPresets();
 	void SavePresetTo(std::string a_name);
 	void LoadPresetFrom(std::string a_name);
-	/** Load CSPP settings from an arbitrary json path (unified packs). */
-	void LoadPresetFromFile(const std::filesystem::path& path);
 
 	enum class FeaturePipelineIndex : size_t
 	{
