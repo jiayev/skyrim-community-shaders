@@ -58,6 +58,12 @@ namespace DCLF
 
 		void Reset();
 		bool Written(std::uint32_t a_float) const { return std::bit_cast<std::uint32_t>(floats[a_float]) != kUnwrittenBits; }
+		/** @brief Bit equality: kUnwrittenBits is a NaN, which a float comparison never finds equal to itself. */
+		bool SameBits(const ConstantBlock& a_other) const { return std::memcmp(floats.data(), a_other.floats.data(), sizeof(floats)) == 0; }
+		bool SameBits(const ConstantBlock& a_other, std::uint32_t a_float) const
+		{
+			return std::bit_cast<std::uint32_t>(floats[a_float]) == std::bit_cast<std::uint32_t>(a_other.floats[a_float]);
+		}
 	};
 
 	/** @brief What BSLightingShader::SetupMaterial binds for one (material, pass descriptor) pair. */
@@ -85,7 +91,7 @@ namespace DCLF
 		 */
 		bool operator==(const MaterialRecord& a_other) const
 		{
-			return vs.floats == a_other.vs.floats && ps.floats == a_other.ps.floats &&
+			return vs.SameBits(a_other.vs) && ps.SameBits(a_other.ps) &&
 			       textures == a_other.textures && addressModes == a_other.addressModes &&
 			       filterModes == a_other.filterModes && textureWritten == a_other.textureWritten && featureTextures == a_other.featureTextures;
 		}

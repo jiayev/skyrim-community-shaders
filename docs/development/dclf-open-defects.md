@@ -76,6 +76,83 @@ terms, so it is not the brightness, and it is not explained yet.
 **Next step:** the VSM lookup inputs per pixel: the light-space position, the cascade picked and the moments
 read, native against DCLF.
 
+## Parity checks that already fail on the baseline
+
+Found while validating the code cleanup (Stages 0-4 of the cleanup plan), by running every parity check on
+commit `908a0529`, before the cleanup, and on each stage after it, at the Whiterun road save with the full
+featureset. Each count below is the same before and after the cleanup, so the cleanup did not cause any of them. A
+later stage's parity runs are compared against these numbers, not against zero.
+
+Runs: `CS_DCLF_PERSISTENT_PARITY`, `WALK_PARITY`, `CHANGE_LOG_PARITY`, `RESIDENT_PARITY`,
+`RESIDENT_DRAW_PARITY`, `BUILD_PARITY`, `SKYLIGHT_PARITY` and `CS_DCLF_ASYNC=probe` together; and
+`CS_DCLF_CAPTURE_PARITY=1` with `CS_DCLF_OWNERSHIP=off` on its own. 60 seconds each; counts are per report
+interval (300 frames). Every check not listed reports 0.
+
+### The async probes compare two different builds
+
+**Evidence.** `CS_DCLF_ASYNC=probe` reports every shadow build as different (`constants: 227840 vs 154128
+bytes`, 230-282 of 230-282), and 6-70 of 300 colour builds (with an empty difference, which `SamePayload`
+leaves for a bone-row or drawn-change count).
+
+**Cause.** The probe rebuilds on the render thread with `BuildShadowPayload(job.inputs, tables, lookups,
+probePayload)` and `BuildMainPayload(job.inputs, tables, lookups, probePayload)`, without the kept stores
+(object records, bones, geometries, the kept shadow state and the build cache). The worker's build uses them.
+Since the kept stores became the only path, the probe compares a kept build against a from-scratch one, which
+is `CS_DCLF_PERSISTENT_PARITY`'s job, and it says nothing about whether the worker and the render thread agree.
+
+**Fix.** Compare like with like: either build the reference from the same kept stores (as a snapshot, since
+the build advances them), or compare only the parts that do not depend on them.
+
+### The kept shadow state misses some clamped-cascade inputs
+
+**Evidence.** `CS_DCLF_PERSISTENT_PARITY`'s shadow state check: 100-260 of about 556,000 inputs differ per
+interval, and the first is always `object N: mode 1: an input of the per-frame build only`. The kept shadow
+state holds fewer inputs for render mode 1 (clamped) than a per-frame build of the same frame.
+
+**Why it matters.** Those are casters that the kept build leaves out of a clamped shadow view, so they may be
+missing shadows, unless the per-frame build is the one that is wrong.
+
+**Next step.** Log the missing objects' names and which kept-state event should have added them.
+
+### Walk parity: the cooking spit's sun entry moves without an event
+
+**Evidence.** `CS_DCLF_WALK_PARITY`: 5 of about 113,900 objects differ per interval, every one the sun entry
+on `FireSptiCookingBase:17` (entry node `FireSpitCooking`), with bounds that drift by about 0.06 units:
+`kept (16225.32 -5390.81 -4241.06 r 167.36) now (16225.31 -5390.87 -4241.05 r 167.36)`.
+
+**Cause (inferred).** Something animates the spit's node, and no event DCLF watches reports it, so the delta
+walk keeps the old bound. The effect is negligible at this size, but the same gap on a larger animated
+object would cull it wrongly.
+
+**Next step.** Find which writer moves the node (a controller, or Havok) and add it to the events.
+
+### Capture parity: `EyePosition` differs on 600-900 draws
+
+**Evidence.** `CS_DCLF_CAPTURE_PARITY` with ownership off: 600-900 of about 9,600 checked draws mismatch per
+interval, all in VS PerGeometry variable 2 (`EyePosition`, written only by the Envmap, Eye and 0x10
+techniques). Materials, techniques, bones, lights, permutations and draw arguments all match. The main pass's
+render flags are only 0x41 and 0x45.
+
+**Next step.** Log a mismatching draw's two values. The tables take `EyePosition` from one sample per frame
+(`RefreshFrameConstants`' eye sample), while the native draw writes the eye at the moment it draws; a camera or
+`posAdjust` change between the two would explain it.
+
+### Primary exclusion never applies at this save
+
+**Evidence.** `primary exclusion: applied on 0 of 300 frames (0 stale, 300 preconditions)` in every
+interval. `PrimaryCull` skips the frame when any of these hold: there are no list processes, there are more
+than the cut holds, `SunAccumulation::ExclusionLive()` is false, or a local light cast shadows last frame.
+The save has a cooking fire, so the last is the likely one.
+
+**Next step.** Count each precondition separately in the report.
+
+### Fixed: every validated material record was reported stale
+
+`ValidateMaterialSlice` reported every record it checked as stale (`validated 8, stale 8 <- STALE MATERIAL`,
+with every float printed as `nan->nan`). The live and the served records were identical: unwritten components
+hold `kUnwrittenBits`, a NaN, and `MaterialRecord::operator==` compared floats with `==`, which is never true
+for a NaN. The constant blocks are now compared bit for bit (`ConstantBlock::SameBits`).
+
 ## Probes added for this investigation
 
 -   `CS_DCLF_SHADOWMAP_PROBE=1`: the sun's cascade texture and the VSM copy, summarised per slice and mip.
