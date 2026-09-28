@@ -30,6 +30,9 @@ struct LinearLighting : Feature
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetCommonShaderDefines() override;
 
+	static constexpr float FireEffectCurveMin = 0.1f;
+	static constexpr float FireEffectCurveMax = 8.0f;
+
 	struct Settings
 	{
 		uint enableLinearLighting = true;
@@ -56,9 +59,6 @@ struct LinearLighting : Feature
 		float lightSpriteEffectMult = 1.0f;
 		float fireEffectMult = 1.0f;
 		float fireEffectCurve = 1.0f;
-
-		static constexpr float FireEffectCurveMin = 0.1f;
-		static constexpr float FireEffectCurveMax = 8.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
