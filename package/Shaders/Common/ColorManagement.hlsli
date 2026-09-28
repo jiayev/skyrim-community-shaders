@@ -21,11 +21,34 @@ namespace Color
 	static const float BRDFScale = 1.0;
 #	endif
 
+	/** @brief Decodes a PBR material color for linear math; Effects 11 keeps them gamma-encoded for its gamma pipeline. */
+	float3 PBRMaterialToLinear(float3 materialColor)
+	{
+#	if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable)
+			return TransferFunctions::Gamma22ToLinear(materialColor);
+#	endif
+		return materialColor;
+	}
+
+	/** @brief Inverse of PBRMaterialToLinear. */
+	float3 LinearToPBRMaterial(float3 linearColor)
+	{
+#	if defined(EFFECTS11)
+		if (SharedData::enbSettings.Enable)
+			return TransferFunctions::LinearToGamma22(linearColor);
+#	endif
+		return linearColor;
+	}
+
 	float3 Albedo(float3 color)
 	{
 #	if defined(EFFECTS11)
 		if (SharedData::enbSettings.Enable)
 			color = pow(abs(color), SharedData::enbSettings.ColorPow);
+#	endif
+#	if defined(TRUE_PBR)
+		color = LinearToPBRMaterial(color);
 #	endif
 		return color * AlbedoScale;
 	}
