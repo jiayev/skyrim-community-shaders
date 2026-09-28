@@ -218,11 +218,10 @@ struct PhysicalSky final : public Feature
 	} cbData;
 	STATIC_ASSERT_ALIGNAS_16(CbData);
 
-	eastl::unique_ptr<Texture2D> texTrLut = nullptr;     // transmittance
-	eastl::unique_ptr<Texture2D> texMsLut = nullptr;     // multiscattering
-	eastl::unique_ptr<Texture2D> texSvLut = nullptr;     // sky view
-	eastl::unique_ptr<Texture3D> texApLut = nullptr;     // unshadowed lunar and multiple-scattering aerial perspective
-	eastl::unique_ptr<Texture3D> texApSunLut = nullptr;  // direct solar single-scattering aerial perspective
+	eastl::unique_ptr<Texture2D> texTrLut = nullptr;  // transmittance
+	eastl::unique_ptr<Texture2D> texMsLut = nullptr;  // multiscattering
+	eastl::unique_ptr<Texture2D> texSvLut = nullptr;  // sky view
+	eastl::unique_ptr<Texture3D> texApLut = nullptr;
 	eastl::unique_ptr<Texture2D> texApShadow = nullptr;
 
 	// Volumetric cloud resources
@@ -284,7 +283,6 @@ struct PhysicalSky final : public Feature
 	ankerl::unordered_dense::map<ID3D11Resource*, winrt::com_ptr<ID3D11ShaderResourceView>> debugCubeFaceSrvs;
 	int32_t debugCubeFace = 0;
 	eastl::unique_ptr<Texture2D> debugApSlice = nullptr;
-	eastl::unique_ptr<Texture2D> debugApSunSlice = nullptr;
 	eastl::unique_ptr<Texture2D> debugShadowVolumeSlice = nullptr;
 	struct CloudDebugView
 	{

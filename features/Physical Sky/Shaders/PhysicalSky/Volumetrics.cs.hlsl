@@ -112,38 +112,36 @@ CloudLayer GetCloudLayer(VolumetricCloudData info)
 
 StructuredBuffer<VolumetricCloudData> VolumetricCloudBuffer : register(t0);
 Texture2D<float4> TexTransmittance : register(t1);
-Texture2D<float4> TexMultiScatter : register(t2);
-Texture3D<float4> TexAerialPerspective : register(t3);
+Texture3D<float4> TexAerialPerspective : register(t2);
 
-Texture2D<float> TexDepth : register(t4);
+Texture2D<float> TexDepth : register(t3);
 
-Texture3D<unorm float4> TexCloudShapeNoise : register(t5);
-Texture3D<float4> TexAerialPerspectiveSun : register(t6);
-Texture2D<float4> TexCloudHeight : register(t7);
-Texture2D<float3> TexCloudModeling : register(t8);
-Texture2D<unorm float> TexApShadow : register(t9);
-Texture2D<float4> TexSkyView : register(t10);
-Texture2D<float2> TexCirrusWeather : register(t11);
-Texture2D<float3> TexCirrusPatterns : register(t13);
-Texture2D<sh2> TexCloudAmbientSH : register(t16);
-Texture2D<unorm float2> TexCloudProfileLUT : register(t17);
-Texture2D<unorm float3> TexCloudAdjustmentLUT : register(t18);
+Texture3D<unorm float4> TexCloudShapeNoise : register(t4);
+Texture2D<float4> TexCloudHeight : register(t5);
+Texture2D<float3> TexCloudModeling : register(t6);
+Texture2D<unorm float> TexApShadow : register(t7);
+Texture2D<float4> TexSkyView : register(t8);
+Texture2D<float2> TexCirrusWeather : register(t9);
+Texture2D<float3> TexCirrusPatterns : register(t10);
+Texture2D<unorm float2> TexCloudProfileLUT : register(t11);
+Texture2D<unorm float3> TexCloudAdjustmentLUT : register(t12);
+Texture2D<sh2> TexCloudAmbientSH : register(t13);
 
-Texture3D<float> TexShadowVolume : register(t23);
-Texture2D<float4> TexCloudBoundary : register(t24);
-Texture2D<float2> TexCloudHeightBounds : register(t25);
-Texture2D<float> TexVolHistoryTr : register(t26);
-Texture2D<float4> TexVolHistoryLum : register(t27);
-Texture2D<float4> TexVolHistoryAux : register(t28);
-Texture2D<float> TexVolLowTr : register(t29);
-Texture2D<float4> TexVolLowLum : register(t30);
-Texture2D<float4> TexVolLowAux : register(t31);
-TextureCube<float> TexCubeHistoryTr : register(t32);
-TextureCube<float4> TexCubeHistoryLum : register(t33);
-TextureCube<float4> TexCubeHistoryAux : register(t34);
-TextureCube<float> TexCubeTraceTr : register(t35);
-TextureCube<float4> TexCubeTraceLum : register(t36);
-TextureCube<float4> TexCubeTraceAux : register(t37);
+Texture3D<float> TexShadowVolume : register(t14);
+Texture2D<float4> TexCloudBoundary : register(t15);
+Texture2D<float2> TexCloudHeightBounds : register(t16);
+Texture2D<float> TexVolHistoryTr : register(t17);
+Texture2D<float4> TexVolHistoryLum : register(t18);
+Texture2D<float4> TexVolHistoryAux : register(t19);
+Texture2D<float> TexVolLowTr : register(t20);
+Texture2D<float4> TexVolLowLum : register(t21);
+Texture2D<float4> TexVolLowAux : register(t22);
+TextureCube<float> TexCubeHistoryTr : register(t23);
+TextureCube<float4> TexCubeHistoryLum : register(t24);
+TextureCube<float4> TexCubeHistoryAux : register(t25);
+TextureCube<float> TexCubeTraceTr : register(t26);
+TextureCube<float4> TexCubeTraceLum : register(t27);
+TextureCube<float4> TexCubeTraceAux : register(t28);
 
 float3 GetCloudDirectionalLightColor()
 {
@@ -207,8 +205,7 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	const float depthSlice = ApDepthUv(distance, apDims.z);
 	const float3 apUv = float3(SkyViewLutUv(viewDir), depthSlice);
 	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, apUv, 0);
-	const float3 apSun = TexAerialPerspectiveSun.SampleLevel(SkyViewSampler, apUv, 0).rgb;
-	ap.rgb += apSun * (1.0 - saturate(shadow));
+	ap.rgb *= 1.0 - saturate(shadow);
 	ap.rgb *= data.apLumMix;
 	ap.a = lerp(1.0, ap.a, data.apTrMix);
 	return ap;

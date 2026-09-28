@@ -676,7 +676,6 @@ void PhysicalSky::SettingsDebug()
 			BUFFER_VIEWER_NODE(texSvLut, debugScale);
 			BUFFER_VIEWER_NODE(texApShadow, debugScale);
 			DrawDebugVolume(texApLut ? texApLut->srv.get() : nullptr, "texApLut", debugApSlice, debugScale);
-			DrawDebugVolume(texApSunLut ? texApSunLut->srv.get() : nullptr, "texApSunLut", debugApSunSlice, debugScale);
 			ImGui::TreePop();
 		}
 
@@ -849,10 +848,6 @@ void PhysicalSky::SetupResources()
 		texApLut = eastl::make_unique<Texture3D>(tex3dDesc);
 		texApLut->CreateSRV(srvDesc);
 		texApLut->CreateUAV(uavDesc);
-
-		texApSunLut = eastl::make_unique<Texture3D>(tex3dDesc);
-		texApSunLut->CreateSRV(srvDesc);
-		texApSunLut->CreateUAV(uavDesc);
 	}
 	{
 		D3D11_TEXTURE2D_DESC texDesc;
@@ -921,7 +916,7 @@ void PhysicalSky::CompileShaders()
 bool PhysicalSky::ShadersOK()
 {
 	bool baseShadersOk = csTrLutGen && csMsLutGen && csSvLutGen && csApLutGen && csShadowAccum && csShadowAccumHalfRes &&
-	                     texTrLut && texSvLut && texApLut && texApSunLut && texApShadow;
+	                     texTrLut && texSvLut && texApLut && texApShadow;
 	// The cloud maps themselves are created lazily by the first generation
 	// dispatch, so readiness is a property of the generation shaders. The render
 	// path still verifies every texture before binding.
@@ -1093,8 +1088,6 @@ void PhysicalSky::ReflectionsPrepass()
 	if (cbData.enabled) {
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
-		ID3D11ShaderResourceView* apSunSrv = texApSunLut ? texApSunLut->srv.get() : nullptr;
-		globals::d3d::context->PSSetShaderResources(113, 1, &apSunSrv);
 		if (texVolCubeTr && texVolCubeLum) {
 			std::array<ID3D11ShaderResourceView*, 2> volCubeSrvs = { texVolCubeTr->srv.get(), texVolCubeLum->srv.get() };
 			globals::d3d::context->PSSetShaderResources(114, (uint)volCubeSrvs.size(), volCubeSrvs.data());
@@ -1180,8 +1173,6 @@ void PhysicalSky::Prepass()
 
 		std::array srvs = { texTrLut->srv.get(), texSvLut->srv.get(), texApLut->srv.get(), texApShadow->srv.get() };
 		globals::d3d::context->PSSetShaderResources(61, (uint)srvs.size(), srvs.data());
-		ID3D11ShaderResourceView* apSunSrv = texApSunLut ? texApSunLut->srv.get() : nullptr;
-		globals::d3d::context->PSSetShaderResources(113, 1, &apSunSrv);
 
 		// Bind volumetric cloud results and shadow volume for pixel shaders. Use t110-t112 to avoid feature texture conflicts.
 		if (texVolTr && texVolLum) {
@@ -1241,8 +1232,8 @@ void PhysicalSky::GenerateLuts()
 		globals::profiler->EndPass();
 
 		// -> aerial perspective
-		std::array<ID3D11UnorderedAccessView*, 2> apUavs = { texApLut->uav.get(), texApSunLut->uav.get() };
-		context->CSSetUnorderedAccessViews(0, (int)apUavs.size(), apUavs.data(), nullptr);
+		uav = texApLut->uav.get();
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShader(csApLutGen.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::AerialPerspectiveLut");
 		context->Dispatch((kApLutW + 7) >> 3, (kApLutH + 7) >> 3, 1);
@@ -1252,10 +1243,9 @@ void PhysicalSky::GenerateLuts()
 		samplers.fill(nullptr);
 		srvs.fill(nullptr);
 		uav = nullptr;
-		std::array<ID3D11UnorderedAccessView*, 2> nullUavs = {};
 
 		context->CSSetSamplers(0, (int)samplers.size(), samplers.data());
-		context->CSSetUnorderedAccessViews(0, (int)nullUavs.size(), nullUavs.data(), nullptr);
+		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 		context->CSSetShaderResources(0, (int)srvs.size(), srvs.data());
 		context->CSSetShader(nullptr, nullptr, 0);
 	}
