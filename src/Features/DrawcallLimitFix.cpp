@@ -34,7 +34,7 @@ namespace
 	bool StatsEnabled()
 	{
 		static const bool enabled = [] {
-			return DCLF::SwitchEnabled("CS_DCLF_STATS");
+			return DCLF::SwitchEnabled(DCLF::Switch::Stats);
 		}();
 		return enabled;
 	}
@@ -54,9 +54,9 @@ namespace
 		{
 			// CS_DCLF_TEST_MOVE carries the player faster than it can survive (falls, collisions): god mode
 			// first, once, before anything else runs.
-			if (!DCLF::SwitchValue("CS_DCLF_TEST_MOVE").empty())
+			if (!DCLF::SwitchValue(DCLF::Switch::TestMove).empty())
 				commands.push_back({ 1, "tgm" });
-			const std::string commandList = DCLF::SwitchValue("CS_DCLF_TEST_COMMANDS");
+			const std::string commandList = DCLF::SwitchValue(DCLF::Switch::TestCommands);
 			std::string_view text = commandList;
 			if (text.empty())
 				return;
@@ -122,7 +122,7 @@ namespace
 	public:
 		TestToggle()
 		{
-			const std::string value = DCLF::SwitchValue("CS_DCLF_TEST_TOGGLE");
+			const std::string value = DCLF::SwitchValue(DCLF::Switch::TestToggle);
 			std::size_t start = 0;
 			while (start < value.size()) {
 				const auto colon = value.find(':', start);
@@ -164,8 +164,8 @@ namespace
 	public:
 		TestTurn()
 		{
-			Parse(DCLF::SwitchValue("CS_DCLF_TEST_TURN"), ranges);
-			Parse(DCLF::SwitchValue("CS_DCLF_TEST_MOVE"), moves);
+			Parse(DCLF::SwitchValue(DCLF::Switch::TestTurn), ranges);
+			Parse(DCLF::SwitchValue(DCLF::Switch::TestMove), moves);
 		}
 
 		void OnFrame()
@@ -279,7 +279,7 @@ void DrawcallLimitFix::PostPostLoad()
 	// the switch appeared in the summary line below and nowhere else, so runs labelled "CS_DCLF=0 baseline"
 	// had the feature fully installed and were not baselines at all. Unset still means on, which is the
 	// behaviour everything else here was built against.
-	if (DCLF::SwitchValue("CS_DCLF") == "0") {
+	if (DCLF::SwitchValue(DCLF::Switch::Dclf) == "0") {
 		logger::info("[DCLF] CS_DCLF=0; the feature stays off and the game renders natively");
 		return;
 	}
@@ -431,7 +431,7 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the claims, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().Rebuild();
-	if (DCLF::IndirectDraws::ShadowsEnabled()) {
+	if (DCLF::ActiveToggles().shadows) {
 		DCLF::IndirectDraws::Get().BeginShadowFrame();
 		// The shadow epoch's build, on the worker, while the engine draws the shadow maps (CS_DCLF_ASYNC).
 		DCLF::IndirectDraws::Get().KickShadowBuild();
@@ -558,7 +558,7 @@ void DrawcallLimitFix::EarlyPrepass()
 
 	// What the native loop was told to leave to DCLF but DCLF cannot draw this frame goes back to it now,
 	// before the depth and main passes: an object DCLF has no bindings for, or whose pipeline is not built.
-	if (DCLF::PassCapture::WithholdingEnabled())
+	if (DCLF::ActiveToggles().ownership)
 		DCLF::PassCapture::Get().HandBackUndrawable(DrawableThisFrame);
 
 	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode
@@ -618,7 +618,7 @@ namespace
 	 */
 	void ProbeShadowMask(bool a_running)
 	{
-		static const std::string pixel = DCLF::SwitchValue("CS_DCLF_SHADOWMASK_PROBE");
+		const std::string& pixel = DCLF::SwitchValue(DCLF::Switch::ShadowMaskProbe);
 		if (pixel.empty())
 			return;
 		static winrt::com_ptr<ID3D11Texture2D> staging;
@@ -693,7 +693,7 @@ namespace
 	 */
 	void ProbeShadowMaps(bool a_running)
 	{
-		static const bool enabled = DCLF::SwitchEnabled("CS_DCLF_SHADOWMAP_PROBE");
+		const bool enabled = DCLF::SwitchEnabled(DCLF::Switch::ShadowMapProbe);
 		if (!enabled)
 			return;
 		struct Pending
@@ -804,7 +804,7 @@ namespace
 
 	bool SkyParityEnabled()
 	{
-		static const bool enabled = DCLF::SwitchEnabled("CS_DCLF_SKYLIGHT_PARITY");
+		const bool enabled = DCLF::SwitchEnabled(DCLF::Switch::SkylightParity);
 		return enabled;
 	}
 
@@ -857,7 +857,7 @@ namespace
 		if (bigDiff * 20 > texels) {
 			static std::uint32_t dumps = 0;
 			if (dumps < 4) {
-				const auto directory = std::filesystem::path(DCLF::SwitchValue("CS_DCLF_SKYLIGHT_DUMP_DIR").empty() ? "." : DCLF::SwitchValue("CS_DCLF_SKYLIGHT_DUMP_DIR"));
+				const auto directory = std::filesystem::path(DCLF::SwitchValue(DCLF::Switch::SkylightDumpDir).empty() ? "." : DCLF::SwitchValue(DCLF::Switch::SkylightDumpDir));
 				for (std::uint32_t image = 0; image < 2; ++image) {
 					std::ofstream out(directory / fmt::format("sky-parity-{}-{}.pgm", dumps, image ? "dclf" : "engine"), std::ios::binary);
 					out << "P5\n" << parity.desc.Width << " " << parity.desc.Height << "\n65535\n";
@@ -1071,7 +1071,7 @@ void DrawcallLimitFix::Prepass()
 									   DCLF::SceneStore::Get().SceneReport());
 		for (std::string line; std::getline(reportLines, line);)
 			logger::info("{}", line);
-		if (DCLF::IndirectDraws::ShadowsEnabled()) {
+		if (DCLF::ActiveToggles().shadows) {
 			const auto& shadow = DCLF::IndirectDraws::Get().GetShadowStats();
 			std::string notReadyReasons;
 			for (std::size_t r = 0; r < shadow.notReadyReasons.size(); ++r) {
@@ -1148,7 +1148,7 @@ void DrawcallLimitFix::Prepass()
 		// Only when CS_DCLF_DERIVE_PROBE measured it. Printed unconditionally this line read
 		// "0 objects compared, 0 differ" with the probe off, which scans as a passing check rather
 		// than as one that never ran.
-		if (DCLF::SwitchEnabled("CS_DCLF_DERIVE_PROBE")) {
+		if (DCLF::SwitchEnabled(DCLF::Switch::DeriveProbe)) {
 			for (std::uint32_t bit = 0; bit < 32; ++bit) {
 				if (!stats.derivationBitCounts[bit])
 					continue;
@@ -1164,10 +1164,10 @@ void DrawcallLimitFix::Prepass()
 			capture.captured, capture.threads, capture.overflowed, capture.compared, capture.missing, capture.extra,
 			capture.techniqueDiffers, capture.subPassDiffers,
 			(capture.missing || capture.techniqueDiffers || capture.subPassDiffers) ? "" : " <- OK");
-		if (DCLF::PassCapture::WithholdingEnabled())
+		if (DCLF::ActiveToggles().ownership)
 			logger::info("[DCLF] static ownership: {} passes withheld from the batch renderer, {} objects claimed, {} claimed but not drawn{}",
 				capture.withheld, capture.claimed, capture.holes, capture.holes ? " <- HOLES" : "");
-		if (DCLF::PassCapture::WithholdingEnabled())
+		if (DCLF::ActiveToggles().ownership)
 			logger::info("[DCLF] claim churn: +{} -{} ({} of the drops still had an engine pass, so the native loop takes them back)",
 				capture.claimsAdded, capture.claimsDropped, capture.droppedAfterCull);
 		logger::info("[DCLF] derived cache (last frame): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
@@ -1379,7 +1379,7 @@ void DrawcallLimitFix::OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint3
 			store.NoteProjectedTextures();
 		// CS_DCLF_CAPTURE_POINT_PARITY: the bindings at the frame's first lighting draw the engine makes, against what
 		// BeforeOpaquePass captured for the colour epoch.
-		static const bool captureParity = DCLF::SwitchEnabled("CS_DCLF_CAPTURE_POINT_PARITY");
+		const bool captureParity = DCLF::SwitchEnabled(DCLF::Switch::CapturePointParity);
 		if (captureParity && captureFrame == store.GetFrame() && parityFrame != store.GetFrame()) {
 			parityFrame = store.GetFrame();
 			DCLF::IndirectDraws::Get().CheckCapturePoint();
@@ -1447,7 +1447,7 @@ void DrawcallLimitFix::AfterOpaquePass()
 
 void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 {
-	static const std::string pixel = DCLF::SwitchValue("CS_DCLF_TARGET_PROBE");
+	const std::string& pixel = DCLF::SwitchValue(DCLF::Switch::TargetProbe);
 	if (pixel.empty())
 		return;
 	constexpr std::uint32_t kTargets = 8;
@@ -1623,57 +1623,31 @@ void DrawcallLimitFix::DrawSettings()
 	}
 	// The live toggles, for A/B comparisons without a restart. They are the REQUESTED set; the render thread applies them at the start of the next frame (Toggles.h).
 	auto& toggles = DCLF::Toggles::Get().Requested();
-	const auto active = DCLF::Toggles::Get().Active();
+	const auto active = DCLF::ActiveToggles();
 	if (ImGui::TreeNodeEx("Live toggles (A/B)", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Each is seeded from its CS_DCLF_* switch and applied at the next frame. A change to an object class drops the classification caches, so the frame after it re-classifies everything.");
-		ImGui::SeparatorText("Main pass");
-		ImGui::Checkbox("Static ownership: withhold claimed passes (CS_DCLF_OWNERSHIP=static)", &toggles.ownership);
-		int cull = toggles.cullMode;
-		if (ImGui::Combo("GPU culling (CS_DCLF_CULL)", &cull, "off\0frustum\0frustum + occlusion\0"))
-			toggles.cullMode = static_cast<std::uint8_t>(cull);
-		ImGui::SeparatorText("Object classes");
-		ImGui::Checkbox("Skinned (CS_DCLF_SKINNED)", &toggles.skinned);
-		ImGui::Checkbox("Trees (CS_DCLF_TREES)", &toggles.trees);
-		ImGui::Checkbox("Decals (CS_DCLF_DECALS)", &toggles.decals);
-		ImGui::Checkbox("Projected UV (CS_DCLF_PROJECTED_UV)", &toggles.projectedUv);
-		ImGui::Checkbox("Terrain (CS_DCLF_MTLAND)", &toggles.mtLand);
-		ImGui::Checkbox("Under switch nodes: trees, harvestables (CS_DCLF_SWITCH_NODES)", &toggles.switchNodes);
-		ImGui::BeginDisabled(!toggles.skinned);
-		ImGui::Checkbox("Skins of several partitions: LOD trees, actor bodies (CS_DCLF_SKIN_PARTITIONS)", &toggles.skinPartitions);
-		ImGui::EndDisabled();
-		ImGui::Checkbox("Actors (CS_DCLF_ACTORS)", &toggles.actors);
-		ImGui::Checkbox("Fading objects: the screen-door fade (CS_DCLF_FADING)", &toggles.fading);
-		ImGui::Checkbox("LOD cross-fades: keep the object, leave the copy native (CS_DCLF_LOD_CROSSFADE)", &toggles.lodCrossfade);
-		ImGui::SeparatorText("Shadow views");
-		ImGui::Checkbox("Draw the shadow views (CS_DCLF_SHADOWS)", &toggles.shadows);
-		ImGui::BeginDisabled(!toggles.shadows);
-		ImGui::Checkbox("Static shadow ownership: withhold claimed casters (CS_DCLF_SHADOW_OWNERSHIP=static)", &toggles.shadowOwnership);
-		ImGui::BeginDisabled(!toggles.shadowOwnership);
-		ImGui::Checkbox("Skip the engine's sun shadow culling and registration (CS_DCLF_SUN_SKIP)", &toggles.skipSunAccumulation);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.");
-		ImGui::BeginDisabled(!toggles.skipSunAccumulation);
-		ImGui::Checkbox("Take DCLF's objects out of the engine's sun culls (CS_DCLF_SUN_EXCLUDE)", &toggles.excludeSunEntries);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.");
-		ImGui::BeginDisabled(!toggles.excludeSunEntries || !toggles.ownership);
-		ImGui::Checkbox("Take DCLF's objects out of the engine's main camera cull (CS_DCLF_PRIMARY_EXCLUDE)", &toggles.excludePrimaryEntries);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.");
-		ImGui::EndDisabled();
-		ImGui::EndDisabled();
-		ImGui::EndDisabled();
-		ImGui::Checkbox("Draw Skylighting's occlusion map (CS_DCLF_SKYLIGHT)", &toggles.skyOcclusion);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("With Skylighting loaded, DCLF draws its sky occlusion height map from its own tables on the GPU, and the engine no longer culls or registers the scene for it.");
-		ImGui::EndDisabled();
+		for (const auto& toggle : DCLF::ToggleTable()) {
+			if (!toggle.section.empty())
+				ImGui::SeparatorText(toggle.section.data());
+			ImGui::BeginDisabled(!DCLF::Toggles::Get().Editable(toggle));
+			ImGui::Checkbox(toggle.label, &(toggles.*toggle.member));
+			if (toggle.tooltip)
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::TextUnformatted(toggle.tooltip);
+			ImGui::EndDisabled();
+			if (toggle.member == &DCLF::ToggleSet::ownership) {
+				int cull = toggles.cullMode;
+				if (ImGui::Combo("GPU culling (CS_DCLF_CULL)", &cull, "off\0frustum\0frustum + occlusion\0"))
+					toggles.cullMode = static_cast<std::uint8_t>(cull);
+			}
+		}
 		ImGui::TreePop();
 	}
 	if (ImGui::TreeNodeEx("This frame", ImGuiTreeNodeFlags_DefaultOpen)) {
-		ImGui::Text("Active: ownership %d, cull %u, skinned %d, trees %d, decals %d, projected %d, terrain %d, switch nodes %d, skin partitions %d, actors %d, fading %d, LOD cross-fade %d, shadows %d, shadow ownership %d, skip sun accumulation %d, exclude sun entries %d",
-			active.ownership, active.cullMode, active.skinned, active.trees, active.decals,
-			active.projectedUv, active.mtLand, active.switchNodes, active.skinPartitions, active.actors, active.fading, active.lodCrossfade, active.shadows,
-			active.shadowOwnership, active.skipSunAccumulation, active.excludeSunEntries);
+		std::string flags = fmt::format("Active: cull {}", active.cullMode);
+		for (const auto& toggle : DCLF::ToggleTable())
+			flags += fmt::format(", {} {}", toggle.name, active.*toggle.member ? 1 : 0);
+		ImGui::TextWrapped("%s", flags.c_str());
 		ImGui::Text("Tracked geometry: %u (under %u category nodes)", stats.tracked, stats.categoryNodes);
 		ImGui::Text("Objects this frame: %u (%u the engine's culling also kept), geometries: %u, pipelines: %u", stats.objects, stats.nativeVisible, stats.geometries, stats.pipelines);
 		for (std::size_t i = 1; i < stats.ineligible.size(); ++i) {

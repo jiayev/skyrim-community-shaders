@@ -18,7 +18,7 @@ namespace DCLF
 	{
 		static const AsyncMode mode = [] {
 			// On unless turned off: the full featureset is what testers and every validation run exercise.
-			const auto value = SwitchValue("CS_DCLF_ASYNC");
+			const auto value = SwitchValue(Switch::Async);
 			if (value == "off" || value == "0")
 				return AsyncMode::Off;
 			if (value == "probe")
@@ -31,7 +31,7 @@ namespace DCLF
 	std::chrono::microseconds AsyncWaitBudget()
 	{
 		static const std::chrono::microseconds budget = [] {
-			const auto value = SwitchValue("CS_DCLF_ASYNC_WAIT_MS");
+			const auto value = SwitchValue(Switch::AsyncWaitMs);
 			const double ms = value.empty() ? 3.0 : std::strtod(value.c_str(), nullptr);
 			return std::chrono::microseconds(static_cast<long long>(ms * 1000.0));
 		}();
@@ -77,7 +77,7 @@ namespace DCLF
 			SetThreadDescription(GetCurrentThread(), L"CS DCLF worker");
 			// The engine's job threads run at normal priority; a starved worker costs one inline fallback, never
 			// correctness, so the worker only goes above them when asked not to.
-			if (SwitchValue("CS_DCLF_ASYNC_PRIORITY") != "normal")
+			if (SwitchValue(Switch::AsyncPriority) != "normal")
 				SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 			for (;;) {
 				std::shared_ptr<Job> job;

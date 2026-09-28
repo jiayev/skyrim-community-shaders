@@ -855,8 +855,7 @@ namespace DCLF
 
 			static bool Enabled()
 			{
-				static const bool enabled = SwitchEnabled("CS_DCLF_PASS_STATS");
-				return enabled;
+				return SwitchEnabled(Switch::PassStats);
 			}
 
 			/** @brief The slot's results from its last use, then its query reset; before the pass begins. */
@@ -1773,17 +1772,6 @@ namespace DCLF
 			bool after = false;
 		};
 
-		// CS_DCLF_CULL=off|frustum: how BuildDrawsCS filters this frame's draws before it writes their
-		// sequences. The draw inputs are the whole tracked set, including what the engine's own culling
-		// rejected, so frustum mode has real work to do and its rejection count is meaningful. What it must
-		// never reject is an object the engine kept (kObjectNativeVisible): those are counted separately as
-		// false negatives, and any non-zero count is a defect in the projection here.
-		std::uint32_t CullingMode()
-		{
-			// 0 off, 1 frustum, 2 frustum then the HZB (Toggles: live from the menu).
-			return Toggles::Get().Active().cullMode;
-		}
-
 		// MainPayload::objectState values besides the Skip reasons.
 		constexpr std::uint8_t kObjectStateDrawable = 0xF0;
 		constexpr std::uint8_t kObjectStateDecal = 0xF1;
@@ -1796,19 +1784,13 @@ namespace DCLF
 		 */
 		bool SetParityEnabled()
 		{
-			static const bool enabled = [] {
-				return SwitchEnabled("CS_DCLF_SET_PARITY");
-			}();
-			return enabled;
+			return SwitchEnabled(Switch::SetParity);
 		}
 
 		// CS_DCLF_BUILD_PARITY=1: compare BuildDraws' output with the CPU templates every 300 epochs.
 		bool BuildParityEnabled()
 		{
-			static const bool enabled = [] {
-				return SwitchEnabled("CS_DCLF_BUILD_PARITY");
-			}();
-			return enabled;
+			return SwitchEnabled(Switch::BuildParity);
 		}
 
 		// A DXVK image the graph uses in place: imported without ownership, with simultaneous access (DXVK
@@ -2599,7 +2581,6 @@ namespace DCLF
 		{
 			LogCursor cursor;
 			MarkedList changedObjects;
-			std::uint32_t renderFlags = 0;
 			KeptArray<BindlessObject> records;
 			std::atomic<std::uint32_t> busy{ 0 };
 			// Since the last report.
@@ -2761,8 +2742,7 @@ namespace DCLF
 
 		bool PersistentParityEnabled()
 		{
-			static const bool enabled = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
-			return enabled;
+			return SwitchEnabled(Switch::PersistentParity);
 		}
 
 		// What a record is built from (BuildObjectRecord): the placement, the alpha test (bindings), the shading, the lights,
@@ -2774,14 +2754,14 @@ namespace DCLF
 		 * the buffer holds, as the inputs saw it), or built whole without one.
 		 */
 		void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
-			std::uint32_t a_renderFlags, std::uint32_t a_frame, ObjectRecordsOut& a_out)
+			std::uint32_t a_frame, ObjectRecordsOut& a_out)
 		{
 			ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
 			const std::size_t count = std::min<std::size_t>(a_tables.objects.size(), kMaxObjects);
 			if (!a_store) {
 				auto records = std::make_shared<std::vector<BindlessObject>>(count);
 				for (std::size_t r = 0; r < count; ++r)
-					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), a_renderFlags, (*records)[r]);
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, (*records)[r]);
 				a_out = {};
 				a_out.elements = std::move(records);
 				return;
@@ -2792,15 +2772,14 @@ namespace DCLF
 			++s.updates;
 			s.records.BeginBuild(a_uploaded);
 			TracyCZoneN(updateRecordsZone, "CS.DCLF.Build.Objects.ApplyChanges", true);
-			if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.renderFlags != a_renderFlags || s.records.Size() > count) {
+			if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count) {
 				// Every record again: the first build, new tables, or a log this store fell behind.
 				auto& records = s.records.Mutable();
 				records.resize(count);
 				for (std::size_t r = 0; r < count; ++r)
-					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), a_renderFlags, records[r]);
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
 				s.records.Resync();
 				s.cursor.Restart(a_generation);
-				s.renderFlags = a_renderFlags;
 				++s.resyncs;
 			} else {
 				// Slots the tables grew by since: records of their own (the log names them too).
@@ -2809,7 +2788,7 @@ namespace DCLF
 					const auto first = records.size();
 					records.resize(count);
 					for (std::size_t r = first; r < count; ++r) {
-						BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), a_renderFlags, records[r]);
+						BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
 						s.records.Mark(r);
 					}
 				}
@@ -2819,7 +2798,7 @@ namespace DCLF
 					// Every event reads the final immutable table row, not an intermediate value.
 					if (!(change.causes & kObjectRecordCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))
 						continue;
-					BuildObjectRecord(a_tables, change.slot, a_renderFlags, fresh);
+					BuildObjectRecord(a_tables, change.slot, SceneStore::kMainPassRenderFlags, fresh);
 					s.rewritten += s.records.Set(change.slot, fresh) ? 1u : 0u;
 				}
 			}
@@ -2830,7 +2809,7 @@ namespace DCLF
 				BindlessObject fresh;
 				const auto& records = s.records.Get();
 				for (std::size_t r = 0; r < count; ++r) {
-					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), a_renderFlags, fresh);
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, fresh);
 					s.parity.Check(std::memcmp(&fresh, &records[r], sizeof(fresh)) == 0, [&] {
 						const auto* geometry = r < a_tables.objectGeometry.size() ? a_tables.objectGeometry[r] : nullptr;
 						return fmt::format("record {} '{}'", r, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?");
@@ -2859,7 +2838,6 @@ namespace DCLF
 			bool depthOnly = false;
 			bool dedupParity = false, bindlessParity = false;
 			bool withholding = false;
-			std::uint32_t renderFlags = 0;
 			RE::NiPoint3 eye, previousEye;
 			std::uint32_t vsFrameMask = 0, psFrameMask = 0;  // the frame slots the commit supplies
 			std::array<std::uint32_t, kDecalGroups> decalCount{};
@@ -2998,7 +2976,6 @@ namespace DCLF
 		struct ShadowInputs
 		{
 			std::uint32_t frameNumber = 0;
-			std::uint32_t renderFlags = 0;
 			std::array<bool, kShadowModeCount> modeUsed{};
 			// Per mode, the rasterizer states of its views (bit DrawPipelines::ShadowRasterStateId): a caster is
 			// an input only when its pipeline is ready under every state of the views that draw its class. Bits
@@ -3410,8 +3387,7 @@ namespace DCLF
 		/** @brief CS_DCLF_RESIDENT_DRAW_PARITY=1: every 60 frames, each region entry written again from the tables and compared. */
 		bool ResidentDrawParityEnabled()
 		{
-			static const bool enabled = SwitchEnabled("CS_DCLF_RESIDENT_DRAW_PARITY");
-			return enabled;
+			return SwitchEnabled(Switch::ResidentDrawParity);
 		}
 
 		/**
@@ -4078,7 +4054,7 @@ namespace DCLF
 			ankerl::unordered_dense::map<std::uint64_t, ResolvedBindings> resolvedBindings;  // (material, pipeline)
 			ankerl::unordered_dense::map<std::uint32_t, GeometryTemplate> geometryTemplates;  // pipeline
 			ankerl::unordered_dense::map<std::uint64_t, std::uint64_t> permutationBlocks;  // (pipeline, extra bits)
-			const auto renderFlags = a_in.renderFlags;
+			constexpr auto renderFlags = SceneStore::kMainPassRenderFlags;
 
 			// The per-object states are set parity's alone (CS_DCLF_SET_PARITY).
 			if (SetParityEnabled())
@@ -4141,7 +4117,7 @@ namespace DCLF
 			// candidate rather than only the drawn ones - a candidate skipped here still reaches the
 			// culling, and an index that addressed nothing would be worse than one that addresses a record
 			// no draw reads. Kept across frames in the store (the records the change log names are written again).
-			UpdateObjectRecords(a_objects, a_in.tablesHeld.objects, a_tables, a_in.tablesGeneration, renderFlags, frameNumber, a_out.objectRecords);
+			UpdateObjectRecords(a_objects, a_in.tablesHeld.objects, a_tables, a_in.tablesGeneration, frameNumber, a_out.objectRecords);
 			const auto& objectRecords = a_out.objectRecords;
 
 			// Everything before the loop: the per-epoch maps and the object records.
@@ -5897,7 +5873,7 @@ namespace DCLF
 			};
 
 			// ---- What every view shares: the object records, bone rows, geometry table, binding records.
-			UpdateObjectRecords(a_objects, a_in.tablesHeld.objects, a_tables, a_in.tablesGeneration, a_in.renderFlags, a_in.frameNumber, a_out.objects);
+			UpdateObjectRecords(a_objects, a_in.tablesHeld.objects, a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.objects);
 			UpdateBones(a_bones, a_in.tablesHeld.bones, a_tables, a_in.tablesGeneration, a_out.bones);
 			UpdateGeometryDraws(a_geometries, a_in.tablesHeld.geometries, a_tables, a_in.tablesGeneration, a_in.frameNumber, a_out.geometries);
 			AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
@@ -6188,7 +6164,7 @@ namespace DCLF
 						const auto* view = material.textures[t];
 						const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner ?
 							GpuTextures::Binding{ alternate.index, alternate.owner } : textures.ResolveBinding(material.textures[t], t);
-						static const bool tracePaths = !SwitchValue("CS_DCLF_TRACE_TEXTURE_PATHS").empty();
+						const bool tracePaths = !SwitchValue(Switch::TraceTexturePaths).empty();
 						if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
 							TracyPlot("CS.DCLF.Texture.ChangedMaterialSlot", static_cast<std::int64_t>(slot));
 							TracyPlot("CS.DCLF.Texture.ChangedMaterialKey", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(key.first)));
@@ -6471,7 +6447,7 @@ namespace DCLF
 			auto sameEye = [](const RE::NiPoint3& a, const RE::NiPoint3& b) { return std::memcmp(&a, &b, sizeof(RE::NiPoint3)) == 0; };
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly &&
 			       a_job.dedupParity == a_epoch.dedupParity && a_job.bindlessParity == a_epoch.bindlessParity && a_job.withholding == a_epoch.withholding &&
-			       a_job.renderFlags == a_epoch.renderFlags && sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
+			       sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
 			       a_job.vsFrameMask == a_epoch.vsFrameMask && a_job.psFrameMask == a_epoch.psFrameMask && a_job.decalCount == a_epoch.decalCount &&
 			       a_job.drawnCommitted == a_epoch.drawnCommitted && a_job.drawnResync == a_epoch.drawnResync &&
 			       a_job.materialPatchedFloats == a_epoch.materialPatchedFloats &&
@@ -6482,8 +6458,7 @@ namespace DCLF
 
 		bool SameShadowInputs(const ShadowInputs& a_job, const ShadowInputs& a_epoch)
 		{
-			return a_job.frameNumber == a_epoch.frameNumber && a_job.renderFlags == a_epoch.renderFlags &&
-			       a_job.modeUsed == a_epoch.modeUsed &&
+			return a_job.frameNumber == a_epoch.frameNumber && a_job.modeUsed == a_epoch.modeUsed &&
 			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunEntryPlanes == a_epoch.sunEntryPlanes &&
 			       a_job.sunEntryPlaneMasks == a_epoch.sunEntryPlaneMasks && a_job.sunCandidates == a_epoch.sunCandidates &&
 			       a_job.addresses == a_epoch.addresses && a_job.sharedData == a_epoch.sharedData && a_job.featureData == a_epoch.featureData &&
@@ -7112,7 +7087,7 @@ namespace DCLF
 				state->sequencesD3D11 = wrap(*state->sequences, std::uint64_t(kSequenceSlots) * sizeof(DrawSequence));
 
 			}
-			if (!SwitchValue("CS_DCLF_GBUFFER_PROBE").empty()) {
+			if (!SwitchValue(Switch::GBufferProbe).empty()) {
 				state->probe = org::Buffer::CreateShared(rhi::HeapType::DeviceLocal, std::uint64_t(kProbeSlots) * kProbeSlotBytes, false);
 				state->probe->SetName("cs.dclf.gbuffer-probe");
 				D3D11_BUFFER_DESC desc{};
@@ -7355,11 +7330,6 @@ namespace DCLF
 		return true;
 	}
 
-	bool IndirectDraws::ShadowsEnabled()
-	{
-		return Toggles::Get().Active().shadows;
-	}
-
 	void IndirectDraws::BeginShadowFrame()
 	{
 		impl->pendingViews.clear();
@@ -7369,7 +7339,7 @@ namespace DCLF
 	{
 		// The hook's half: capture the view - where the engine has just drawn, and the constants it drew
 		// with - for the frame's single epoch (ExecuteShadowFrame). Nothing is drawn here.
-		if (!ShadowsEnabled() || failed)
+		if (!ActiveToggles().shadows || failed)
 			return;
 		ScopedPerfEvent event("CS DCLF: shadow view capture");
 		const auto start = std::chrono::steady_clock::now();
@@ -7515,7 +7485,7 @@ namespace DCLF
 		// The hook's half, as ExecuteShadowView: where the engine's RenderMask has just drawn Skylighting's map (the
 		// clear, and whatever SetupMask registered), with which camera and state. Taken whether or not DCLF draws the
 		// map this frame: the state and format are what next frame's build prepares the pipelines for.
-		if (!ShadowsEnabled() || failed || !SceneStore::SkyOcclusionEnabled() || !impl->SetupShadow())
+		if (!ActiveToggles().shadows || failed || !SceneStore::SkyOcclusionEnabled() || !impl->SetupShadow())
 			return;
 		auto& shadowState = globals::game::shadowState->GetRuntimeData();
 		const std::uint32_t target = shadowState.depthStencil;
@@ -7582,7 +7552,7 @@ namespace DCLF
 	{
 		// This frame's shadow commit uploaded every occluder (none left out for a pipeline or a texture not yet
 		// resolved), and the map's target is imported.
-		return !failed && ShadowsEnabled() && SceneStore::SkyOcclusionEnabled() && impl->shadow && impl->skyRasterState &&
+		return !failed && ActiveToggles().shadows && SceneStore::SkyOcclusionEnabled() && impl->shadow && impl->skyRasterState &&
 		       impl->skyCommittedFrame == SceneStore::Get().GetFrame() && impl->skySkipped == 0 && impl->shadow->depth[kSkyDepthTarget];
 	}
 
@@ -7685,7 +7655,7 @@ namespace DCLF
 	{
 		ZoneScopedN("CS.DCLF.ExecuteShadowFrame");
 		auto& pending = impl->pendingViews;
-		if (!ShadowsEnabled() || failed || pending.empty()) {
+		if (!ActiveToggles().shadows || failed || pending.empty()) {
 			pending.clear();
 			impl->DropShadowJob(stats);
 			return;
@@ -7779,8 +7749,8 @@ namespace DCLF
 						++async.stale;
 						if (job.loggedStale++ < 4) {
 							const auto& k = job.inputs;
-							logger::info("[DCLF] async shadow: the job's inputs are stale (frame {} vs {}, render flags {:#x} vs {:#x}, modes {}{}{} vs {}{}{}, shared data {}, feature data {}, tables {} vs {}, lookups {} vs {}, resources {})",
-								k.frameNumber, in.frameNumber, k.renderFlags, in.renderFlags, int(k.modeUsed[0]), int(k.modeUsed[1]), int(k.modeUsed[2]),
+							logger::info("[DCLF] async shadow: the job's inputs are stale (frame {} vs {}, modes {}{}{} vs {}{}{}, shared data {}, feature data {}, tables {} vs {}, lookups {} vs {}, resources {})",
+								k.frameNumber, in.frameNumber, int(k.modeUsed[0]), int(k.modeUsed[1]), int(k.modeUsed[2]),
 								int(in.modeUsed[0]), int(in.modeUsed[1]), int(in.modeUsed[2]), k.sharedData == in.sharedData ? "same" : "differs",
 								k.featureData == in.featureData ? "same" : "differs", k.tablesGeneration, in.tablesGeneration, k.lookupGeneration,
 								in.lookupGeneration, k.addresses == in.addresses ? "same" : "changed");
@@ -8056,7 +8026,6 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.PrepareShadowInputs");
 		ShadowInputs in;
 		in.frameNumber = a_store.GetFrame();
-		in.renderFlags = a_store.GetMainPassRenderFlags();
 		in.modeUsed = a_modeUsed;
 		in.modeRasterStates = a_modeRasterStates;
 		// The sun's full-frustum planes, read on the render thread after the full-frustum cull has run
@@ -8104,7 +8073,7 @@ namespace DCLF
 		// tables and the frame's reference eye is set. The build runs on the worker while the engine draws
 		// the shadow maps, for last frame's render modes (a change is stale, and built inline).
 		impl->DropShadowJob(stats);
-		if (!ShadowsEnabled() || failed || !AsyncEnabled())
+		if (!ActiveToggles().shadows || failed || !AsyncEnabled())
 			return;
 		auto& async = stats.async[kAsyncShadow];
 		auto& store = SceneStore::Get();
@@ -8225,7 +8194,7 @@ namespace DCLF
 
 	void IndirectDraws::PublishClaims()
 	{
-		if (!PassCapture::WithholdingEnabled())
+		if (!ActiveToggles().ownership)
 			return;
 		const auto frame = SceneStore::Get().GetFrame();
 		auto& capture = PassCapture::Get();
@@ -8802,12 +8771,12 @@ namespace DCLF
 		if (job.loggedStale++ >= 4)
 			return;
 		const auto& k = job.inputs;
-		logger::info("[DCLF] async {}: the job's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), render flags {:#x} vs {:#x}, drew last frame {}, tables {} vs {}, lookups {} vs {}, resources {})",
+		logger::info("[DCLF] async {}: the job's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), drew last frame {}, tables {} vs {}, lookups {} vs {}, resources {})",
 			a_job == kAsyncZPrepass ? "zprepass" : "colour",
 			k.frameNumber, a_actual.frameNumber, k.vsFrameMask, a_actual.vsFrameMask, k.psFrameMask, a_actual.psFrameMask,
 			k.eye.x, k.eye.y, k.eye.z, a_actual.eye.x, a_actual.eye.y, a_actual.eye.z,
 			k.previousEye.x, k.previousEye.y, k.previousEye.z, a_actual.previousEye.x, a_actual.previousEye.y, a_actual.previousEye.z,
-			k.renderFlags, a_actual.renderFlags, k.drawnCommitted == a_actual.drawnCommitted ? "same" : "differs",
+			k.drawnCommitted == a_actual.drawnCommitted ? "same" : "differs",
 			k.tablesGeneration, a_actual.tablesGeneration, k.lookupGeneration, a_actual.lookupGeneration,
 			k.addresses == a_actual.addresses ? "same" : "changed");
 	}
@@ -8902,8 +8871,8 @@ namespace DCLF
 
 	MainInputs IndirectDraws::Impl::PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask, const SceneStore& a_store)
 	{
-		static const bool dedupParity = SwitchEnabled("CS_DCLF_DEDUP_PARITY");
-		static const bool bindlessParity = SwitchEnabled("CS_DCLF_BINDLESS_PARITY");
+		const bool dedupParity = SwitchEnabled(Switch::DedupParity);
+		const bool bindlessParity = SwitchEnabled(Switch::BindlessParity);
 		MainInputs in;
 		in.frameNumber = a_store.GetFrame();
 		in.depthOnly = a_depthOnly;
@@ -8911,8 +8880,7 @@ namespace DCLF
 		in.tablesHeld = a_resources.tablesHeld;
 		in.dedupParity = dedupParity;
 		in.bindlessParity = bindlessParity;
-		in.withholding = PassCapture::WithholdingEnabled();
-		in.renderFlags = a_store.GetMainPassRenderFlags();
+		in.withholding = ActiveToggles().ownership;
 		// Camera-relative world matrices: the colour epoch must use the eye the Z-prepass used, or the
 		// same vertex lands somewhere else and the EQUAL test rejects it. Without a capture (the job kicked
 		// ahead of the epoch) the replay is the only source, which KickColourBuild requires.
@@ -9499,7 +9467,7 @@ namespace DCLF
 		frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 		frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 		frame->indirect = GetIndirectState();
-		frame->cullMode = CullingMode();
+		frame->cullMode = ActiveToggles().cullMode;
 		// The main pass's ViewProj (VS_PerFrame c8), which the draws project with: the culling has to
 		// use the same matrix or it would reject what the draws would have put on screen.
 		std::array<float, 16> viewProj{};
@@ -9517,7 +9485,7 @@ namespace DCLF
 			logger::info("[DCLF] culling setup: mode {}, ViewProj {}, VS_PerFrame b{} {}", frame->cullMode, hasViewProj ? "yes" : "no",
 				kPerFrameVertexRegister, a_capture.vsBuffers[kPerFrameVertexRegister] ? "bound" : "not bound");
 		}
-		if (const auto pixel = SwitchValue("CS_DCLF_GBUFFER_PROBE"); !pixel.empty()) {
+		if (const auto pixel = SwitchValue(Switch::GBufferProbe); !pixel.empty()) {
 			if (const auto sep = pixel.find_first_of(",x"); sep != std::string::npos) {
 				frame->probeX = static_cast<std::uint32_t>(std::strtoul(pixel.substr(0, sep).c_str(), nullptr, 10));
 				frame->probeY = static_cast<std::uint32_t>(std::strtoul(pixel.substr(sep + 1).c_str(), nullptr, 10));
@@ -9666,7 +9634,7 @@ namespace DCLF
 				probeTargets[i]->GetDesc(&textureDesc);
 			gbufferBytes[i] = FormatBytes(textureDesc.Format);
 		}
-		if (const auto pixel = SwitchValue("CS_DCLF_GBUFFER_PROBE"); !pixel.empty()) {
+		if (const auto pixel = SwitchValue(Switch::GBufferProbe); !pixel.empty()) {
 			if (const auto sep = pixel.find_first_of(",x"); sep != std::string::npos) {
 				gbufferX = static_cast<std::uint32_t>(std::strtoul(pixel.substr(0, sep).c_str(), nullptr, 10));
 				gbufferY = static_cast<std::uint32_t>(std::strtoul(pixel.substr(sep + 1).c_str(), nullptr, 10));
@@ -10097,7 +10065,7 @@ namespace DCLF
 	void IndirectDraws::ExecuteColour() {}
 	void IndirectDraws::ProbeTargets(const char*) {}
 	void IndirectDraws::RunEpoch(RenderGraphRuntime::Segment) {}
-	bool IndirectDraws::ShadowsEnabled() { return false; }
+	bool ActiveToggles().shadows { return false; }
 	void IndirectDraws::BeginShadowFrame() {}
 	void IndirectDraws::ExecuteShadowView(std::uint32_t, std::uint32_t) {}
 	void IndirectDraws::ExecuteShadowFrame() {}

@@ -38,8 +38,7 @@ namespace DCLF
 		// not supply, so every candidate is skipped and DCLF draws nothing.
 		bool ShaderDebug()
 		{
-			static const bool enabled = SwitchEnabled("CS_DCLF_SHADER_DEBUG");
-			return enabled;
+			return SwitchEnabled(Switch::ShaderDebug);
 		}
 
 		// The shader tree as the game sees it through MO2's virtual file system, copied to a real
@@ -47,7 +46,7 @@ namespace DCLF
 		// files relative to the game directory (Data/Shaders/...), so the copy keeps that layout.
 		void SnapshotSources(const std::vector<std::filesystem::path>& a_files)
 		{
-			auto root = std::filesystem::path(SwitchValue("CS_DCLF_SHADER_SOURCE_DIR"));
+			auto root = std::filesystem::path(SwitchValue(Switch::ShaderSourceDir));
 			if (root.empty()) {
 				root = SwitchesDirectory();
 				if (root.empty())
@@ -228,7 +227,7 @@ namespace DCLF
 	void ShaderPrograms::Precompile(const RE::BSShader& a_shader, bool a_pixel, std::uint32_t a_descriptor)
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
-		static const bool enabled = SwitchValue("CS_DCLF_PRECOMPILE") != "0";
+		const bool enabled = SwitchValue(Switch::Precompile) != "0";
 		if (!enabled)
 			return;
 		const auto type = a_shader.shaderType.get();

@@ -19,24 +19,6 @@ namespace DCLF
 		constexpr std::uint64_t Bit(Flag a_flag) { return static_cast<std::uint64_t>(a_flag); }
 		constexpr std::uint32_t Bit(LightingFlag a_flag) { return static_cast<std::uint32_t>(a_flag); }
 
-		/**
-		 * @brief CS_DCLF_TREES=1: bring the tree-animation technique into coverage.
-		 *
-		 * Trees are the whole of the `technique` rejection class outdoors. The histogram of what
-		 * Ineligible::Technique actually rejects reads, in the Whiterun exterior, treeAnim(12)=1237
-		 * against MTLandLODBlend(19)=96 and MTLand(8)=4 - so one technique is 92% of it.
-		 *
-		 * It is behind a switch because TreeAnim animates vertices in the vertex shader from
-		 * TreeParams (PerGeometry c8) and WindTimers (c9), and DCLF's PerGeometry constants are
-		 * per PIPELINE, taken from one template object. If TreeParams varies per tree, the template is
-		 * wrong for every other tree on that pipeline - the same shape of defect as the culled
-		 * lighting template. Capture parity is what answers that, per variable.
-		 */
-		bool TreesEnabled()
-		{
-			return Toggles::Get().Active().trees;
-		}
-
 		// Techniques DCLF supports. The rest stay native.
 		bool IsSupportedTechnique(std::uint32_t a_technique)
 		{
@@ -47,7 +29,7 @@ namespace DCLF
 			case Technique::Parallax:
 				return true;
 			case Technique::TreeAnim:
-				return TreesEnabled();
+				return ActiveToggles().trees;
 			// Actor skin (bodies, hands): the Lighting shader's SKIN path with TintColor, a PerMaterial constant.
 			// NPC faces (Facegen: the tint and detail maps at t3/t4), hair (Hair: TintColor) and eyes (Eye: the eye
 			// centres, material VS constants): everything they add is written by SetupMaterial, which the material
@@ -56,7 +38,7 @@ namespace DCLF
 			case Technique::Facegen:
 			case Technique::Hair:
 			case Technique::Eye:
-				return ActorsEnabled();
+				return ActiveToggles().actors;
 			case Technique::MTLand:
 			case Technique::MTLandLODBlend:
 				return MtLandEnabled();
@@ -282,46 +264,6 @@ namespace DCLF
 		a_out.windTimers[3] = node ? TreeNodeFloat(node, 0x15c) : -1.0f;
 	}
 
-	bool DecalsEnabled()
-	{
-		return Toggles::Get().Active().decals;
-	}
-
-	bool SkinnedEnabled()
-	{
-		return Toggles::Get().Active().skinned;
-	}
-
-	bool SwitchNodesEnabled()
-	{
-		return Toggles::Get().Active().switchNodes;
-	}
-
-	bool SkinPartitionsEnabled()
-	{
-		return Toggles::Get().Active().skinPartitions;
-	}
-
-	bool ActorsEnabled()
-	{
-		return Toggles::Get().Active().actors;
-	}
-
-	bool FadingEnabled()
-	{
-		return Toggles::Get().Active().fading;
-	}
-
-	bool LodCrossfadeEnabled()
-	{
-		return Toggles::Get().Active().lodCrossfade;
-	}
-
-	bool ProjectedUvEnabled()
-	{
-		return Toggles::Get().Active().projectedUv;
-	}
-
 	bool TerrainBlendingDefersTerrain()
 	{
 		const auto& terrainBlending = globals::features::terrainBlending;
@@ -330,7 +272,7 @@ namespace DCLF
 
 	bool MtLandEnabled()
 	{
-		return Toggles::Get().Active().mtLand && !TerrainBlendingDefersTerrain();
+		return ActiveToggles().mtLand && !TerrainBlendingDefersTerrain();
 	}
 
 	namespace
@@ -382,7 +324,7 @@ namespace DCLF
 			// which is why DCLF draws them in a second pass without writing depth (IndirectDraws). Without
 			// an accumulated pass there is no hint, and a decal the engine culled is not worth a cull-only
 			// candidate: single-phase culling has nothing to rescue.
-			if (!DecalsEnabled() || !a_accumulated || !(f & Bit(Flag::kZBufferTest)))
+			if (!ActiveToggles().decals || !a_accumulated || !(f & Bit(Flag::kZBufferTest)))
 				return Ineligible::Decal;
 			if (a_accumulated->hint == 2) {
 				if (alpha && alpha->GetAlphaBlending())
@@ -408,9 +350,9 @@ namespace DCLF
 		// kSkinned selects the SKINNED permutation, whose vertex shader wants a palette; with the switch on
 		// the palette comes from the geometry's skin instance (SceneStore), so a skinned property without
 		// one would draw from nothing and stays native.
-		if ((f & Bit(Flag::kSkinned)) && !(SkinnedEnabled() && a_geometry.GetGeometryRuntimeData().skinInstance))
+		if ((f & Bit(Flag::kSkinned)) && !(ActiveToggles().skinned && a_geometry.GetGeometryRuntimeData().skinInstance))
 			return Ineligible::Skinned;
-		if ((f & Bit(Flag::kProjectedUV)) && !ProjectedUvEnabled())
+		if ((f & Bit(Flag::kProjectedUV)) && !ActiveToggles().projectedUv)
 			return Ineligible::ProjectedUV;
 		// Terrain Blending holds these passes (a mesh opts out of the blend with this otherwise unused flag) and
 		// redraws them after its terrain, testing EQUAL, so the terrain does not blend over them. DCLF draws
@@ -522,7 +464,7 @@ namespace DCLF
 			}
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
-			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !FadingEnabled())
+			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)
 				return Ineligible::Fading;
 			a_out.derivedSpecularLODFade = specularFade;
 			a_out.derivedEnvmapLODFade = envmapFade;

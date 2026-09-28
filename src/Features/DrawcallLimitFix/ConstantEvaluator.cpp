@@ -250,7 +250,7 @@ namespace DCLF
 		// first version audited only the first 8 of roughly 640 material evaluations a frame and reported
 		// nothing, which says nothing at all when the leaking call might be any one of the other 630.
 		// CS_DCLF_EVAL=audit.
-		static const bool auditOn = SwitchValue("CS_DCLF_EVAL") == "audit";
+		const bool auditOn = SwitchValue(Switch::Eval) == "audit";
 		const bool audit = auditOn && auditsThisFrame < 4096;
 		PipelineSnapshot before;
 		if (audit) {

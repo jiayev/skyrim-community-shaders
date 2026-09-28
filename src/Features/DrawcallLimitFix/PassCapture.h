@@ -118,9 +118,6 @@ namespace DCLF
 		/** @brief Which batch renderers belong to the main camera; withholding applies only to these. */
 		void SetMainBatchRenderers(std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> a_renderers);
 
-		/** @brief CS_DCLF_OWNERSHIP=static: withhold claimed passes from the main camera's batch renderer. */
-		static bool WithholdingEnabled();
-
 		/** @brief The shadow views' render modes with claims of their own: 0xD plain, 0xE clamped, 0xF paraboloid. */
 		static constexpr std::uint32_t kFirstShadowMode = 0xD;
 		/** @brief Which batch renderers belong to shadow views, each with its view's render mode index. */

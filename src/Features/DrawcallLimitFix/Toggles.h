@@ -1,55 +1,97 @@
 #pragma once
 
+#include "Switches.h"
+
 #include <atomic>
 #include <cstdint>
+#include <span>
+#include <string_view>
 
 namespace DCLF
 {
 	/**
 	 * @brief The feature switches that can change while the game runs, for live A/B comparisons.
 	 *
-	 * DCLF's features that can be switched live - static ownership, the culling modes, the object classes
-	 * (skinned, trees, decals, projected UV, terrain, switch nodes, skin partitions, actors, fading), the
-	 * shadow views and their ownership, the sun's and the primary's exclusions and Skylighting's map - are
-	 * seeded from their `CS_DCLF_*` switches (Switches.h) and then edited from the feature's menu. Unset, they
-	 * default to the tested configuration: everything on, both ownerships static, occlusion culling.
+	 * Each is seeded from its `CS_DCLF_*` switch (Switches.h) and then edited from the feature's menu. Unset,
+	 * they default to the tested configuration: everything on, both ownerships static, occlusion culling.
+	 * kToggles describes every flag; cullMode, the one that is not a flag, is handled beside it.
 	 */
 	struct ToggleSet
 	{
-		bool ownership = false;       // CS_DCLF_OWNERSHIP=static
-		std::uint8_t cullMode = 0;    // CS_DCLF_CULL: 0 off, 1 frustum, 2 occlusion
-		bool skinned = false;         // CS_DCLF_SKINNED=1
-		bool trees = false;           // CS_DCLF_TREES=1
-		bool decals = false;          // CS_DCLF_DECALS=1
-		bool projectedUv = false;     // CS_DCLF_PROJECTED_UV=1
-		bool mtLand = false;          // CS_DCLF_MTLAND=1
-		bool switchNodes = false;     // CS_DCLF_SWITCH_NODES=1
-		bool skinPartitions = false;  // CS_DCLF_SKIN_PARTITIONS=1 (needs skinned)
-		bool actors = false;          // CS_DCLF_ACTORS=1
-		bool fading = false;          // CS_DCLF_FADING=1
-		bool lodCrossfade = false;    // CS_DCLF_LOD_CROSSFADE=1
-		bool shadows = false;         // CS_DCLF_SHADOWS=1
-		bool shadowOwnership = false; // CS_DCLF_SHADOW_OWNERSHIP=static (needs shadows)
-		bool skipSunAccumulation = false;  // CS_DCLF_SUN_SKIP=1 (needs shadowOwnership): SunAccumulation
-		bool excludeSunEntries = false;    // CS_DCLF_SUN_EXCLUDE=1 (needs skipSunAccumulation): SunAccumulation's entry exclusion
-		bool skyOcclusion = false;         // CS_DCLF_SKYLIGHT=1 (needs shadows): DCLF draws Skylighting's occlusion map
-		bool excludePrimaryEntries = false;  // CS_DCLF_PRIMARY_EXCLUDE=1 (needs excludeSunEntries and ownership): PrimaryCull's list filter
+		// Claimed passes are withheld from the main camera's batch renderer (PassCapture).
+		bool ownership = false;
+		// How BuildDrawsCS filters the frame's draws before it writes their sequences: 0 off, 1 frustum, 2 frustum then
+		// the HZB. The inputs are the whole tracked set, including what the engine's own culling rejected, so the
+		// culling has real work to do. It must never reject an object the engine kept (kObjectNativeVisible): those are
+		// counted as false negatives, and any is a defect in the projection.
+		std::uint8_t cullMode = 0;
+
+		// The object classes (LightingDescriptors):
+		// single-partition NiSkinInstance shapes, palettes from the engine;
+		bool skinned = false;
+		// the TreeAnim technique, whose vertex animation reads TreeParams and WindTimers per object (extras rows);
+		bool trees = false;
+		// decals (accumulation hints 2 and 3), drawn by the second pass;
+		bool decals = false;
+		// kProjectedUV objects (snow and moss projection);
+		bool projectedUv = false;
+		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);
+		bool mtLand = false;
+		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
+		bool switchNodes = false;
+		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
+		bool skinPartitions = false;
+		// geometry under an actor's 3D, and the FacegenRGBTint technique;
+		bool actors = false;
+		// an object the engine fades with the screen-door mask in an opaque group (blended fades, hint 9, stay native);
+		bool fading = false;
+		// an object in a LOD cross-fade stays DCLF's, and only the engine's hint-10 copy of the old level is native.
+		bool lodCrossfade = false;
+
+		// The shadow views are drawn by the render graph.
+		bool shadows = false;
+		// Claimed casters are withheld from the shadow views of their render mode.
+		bool shadowOwnership = false;
+		// The engine does not build sun shadow passes for DCLF's casters (SunAccumulation).
+		bool skipSunAccumulation = false;
+		// The sun's cascade culls skip the references whose shadows DCLF draws entirely (SunAccumulation).
+		bool excludeSunEntries = false;
+		// DCLF draws Skylighting's occlusion map.
+		bool skyOcclusion = false;
+		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
+		bool excludePrimaryEntries = false;
 
 		bool operator==(const ToggleSet&) const = default;
 	};
+
+	/** @brief One flag of ToggleSet: its seed, its menu entry, and what it needs. */
+	struct ToggleInfo
+	{
+		bool ToggleSet::*member;
+		Switch seed;
+		std::string_view onValue;  // the seed's value besides unset that turns it on ("1", or "static" for the ownerships)
+		std::string_view name;     // for the "This frame" line
+		std::string_view section;  // the menu heading this flag opens, or empty
+		const char* label;
+		const char* tooltip;       // or nullptr
+		bool entersClassification;  // a change drops the classification caches (SceneStore::InvalidateVerdicts)
+		bool ToggleSet::*needs[2];  // the flags it needs on, earlier in kToggles (nullptr when unused)
+	};
+
+	/** @brief Every flag of ToggleSet, in menu order; a flag comes after the flags it needs. */
+	std::span<const ToggleInfo> ToggleTable();
 
 	/**
 	 * @brief The requested and the active toggle sets.
 	 *
 	 * The menu edits the REQUESTED set. The render thread copies it into the ACTIVE set once per frame, at
-	 * the frame's first DCLF point (BeforeShadowMaps), so a toggle never changes under a running frame -
-	 * the invariant the once-read switches used to give. The active set is one packed word behind a
-	 * relaxed atomic, because the registration hook reads it from whatever thread the engine registers
-	 * on: a toggle is a standing statement, not a synchronisation point, and one word makes every read a
-	 * single load with no lock.
+	 * the frame's first DCLF point (BeforeShadowMaps), so a toggle never changes under a running frame. The
+	 * active set is one packed word behind a relaxed atomic, because the registration hook reads it from
+	 * whatever thread the engine registers on: a toggle is a standing statement, not a synchronisation
+	 * point, and one word makes every read a single load with no lock.
 	 *
-	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and derivation (SceneStore::InvalidateVerdicts), because those
-	 * caches witness the object, not the switches.
+	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and
+	 * derivation (SceneStore::InvalidateVerdicts), because those caches witness the object, not the switches.
 	 */
 	class Toggles
 	{
@@ -71,14 +113,20 @@ namespace DCLF
 		/** @brief How many times the active set has changed; a cheap witness for anything caching a toggle. */
 		std::uint32_t Generation() const { return generation.load(std::memory_order_relaxed); }
 
-		static std::uint32_t Pack(const ToggleSet& a_set);
-		static ToggleSet Unpack(std::uint32_t a_bits);
+		/** @brief Whether a flag of the requested set would take effect: every flag it needs, directly or not, is on. */
+		bool Editable(const ToggleInfo& a_info) const;
 
 	private:
 		Toggles();
+
+		static std::uint32_t Pack(const ToggleSet& a_set);
+		static ToggleSet Unpack(std::uint32_t a_bits);
 
 		ToggleSet requested;
 		std::atomic<std::uint32_t> active{ 0 };
 		std::atomic<std::uint32_t> generation{ 0 };
 	};
+
+	/** @brief The toggles in force for the current frame (Toggles::Active); any thread. */
+	inline ToggleSet ActiveToggles() { return Toggles::Get().Active(); }
 }

@@ -1,94 +1,89 @@
 #include "Toggles.h"
 
-#include "Switches.h"
-
 namespace DCLF
 {
 	namespace
 	{
-		// Bit positions of the packed active word.
-		enum : std::uint32_t
-		{
-			kOwnership = 0,
-			kCullMode,  // two bits
-			kSkinned = 3,
-			kTrees,
-			kDecals,
-			kProjectedUv,
-			kMtLand,
-			kShadows,
-			kShadowOwnership,
-			kSwitchNodes,
-			kSkinPartitions,
-			kActors,
-			kFading,
-			kLodCrossfade,
-			kSkipSunAccumulation,
-			kExcludeSunEntries,
-			kSkyOcclusion,
-			kExcludePrimaryEntries,
+		using S = ToggleSet;
+		constexpr std::string_view kOn = "1", kStatic = "static";
+
+		constexpr ToggleInfo kToggles[] = {
+			{ &S::ownership, Switch::Ownership, kStatic, "ownership", "Main pass", "Static ownership: withhold claimed passes (CS_DCLF_OWNERSHIP=static)", nullptr, false, {} },
+			{ &S::skinned, Switch::Skinned, kOn, "skinned", "Object classes", "Skinned (CS_DCLF_SKINNED)", nullptr, true, {} },
+			{ &S::trees, Switch::Trees, kOn, "trees", {}, "Trees (CS_DCLF_TREES)", nullptr, true, {} },
+			{ &S::decals, Switch::Decals, kOn, "decals", {}, "Decals (CS_DCLF_DECALS)", nullptr, true, {} },
+			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
+			{ &S::mtLand, Switch::MtLand, kOn, "terrain", {}, "Terrain (CS_DCLF_MTLAND)", nullptr, true, {} },
+			{ &S::switchNodes, Switch::SwitchNodes, kOn, "switch nodes", {}, "Under switch nodes: trees, harvestables (CS_DCLF_SWITCH_NODES)", nullptr, true, {} },
+			{ &S::skinPartitions, Switch::SkinPartitions, kOn, "skin partitions", {}, "Skins of several partitions: LOD trees, actor bodies (CS_DCLF_SKIN_PARTITIONS)", nullptr, true, { &S::skinned } },
+			{ &S::actors, Switch::Actors, kOn, "actors", {}, "Actors (CS_DCLF_ACTORS)", nullptr, true, {} },
+			{ &S::fading, Switch::Fading, kOn, "fading", {}, "Fading objects: the screen-door fade (CS_DCLF_FADING)", nullptr, true, {} },
+			{ &S::lodCrossfade, Switch::LodCrossfade, kOn, "LOD cross-fade", {}, "LOD cross-fades: keep the object, leave the copy native (CS_DCLF_LOD_CROSSFADE)", nullptr, true, {} },
+			{ &S::shadows, Switch::Shadows, kOn, "shadows", "Shadow views", "Draw the shadow views (CS_DCLF_SHADOWS)", nullptr, false, {} },
+			{ &S::shadowOwnership, Switch::ShadowOwnership, kStatic, "shadow ownership", {}, "Static shadow ownership: withhold claimed casters (CS_DCLF_SHADOW_OWNERSHIP=static)", nullptr, false, { &S::shadows } },
+			{ &S::skipSunAccumulation, Switch::SunSkip, kOn, "skip sun accumulation", {}, "Skip the engine's sun shadow culling and registration (CS_DCLF_SUN_SKIP)",
+				"The engine stops building sun shadow passes for the casters DCLF draws; it still sets their shadow bits for the main pass.", false, { &S::shadowOwnership } },
+			// `probe` runs the exclusion dry (SunAccumulation), which needs the toggle on.
+			{ &S::excludeSunEntries, Switch::SunExclude, kOn, "exclude sun entries", {}, "Take DCLF's objects out of the engine's sun culls (CS_DCLF_SUN_EXCLUDE)",
+				"The sun's cascade culls skip every reference whose shadows DCLF draws entirely; DCLF sets those objects' sun shadow bits for the main pass.", false, { &S::skipSunAccumulation } },
+			// `probe` is PrimaryCull's census, which removes nothing (and so leaves the cut off).
+			{ &S::excludePrimaryEntries, Switch::PrimaryExclude, kOn, "exclude primary entries", {}, "Take DCLF's objects out of the engine's main camera cull (CS_DCLF_PRIMARY_EXCLUDE)",
+				"The main camera's cull and registration skip every reference DCLF draws entirely; DCLF builds their main passes itself and runs their fade updates.", false,
+				{ &S::excludeSunEntries, &S::ownership } },
+			{ &S::skyOcclusion, Switch::Skylight, kOn, "sky occlusion", {}, "Draw Skylighting's occlusion map (CS_DCLF_SKYLIGHT)",
+				"With Skylighting loaded, DCLF draws its sky occlusion height map from its own tables on the GPU, and the engine no longer culls or registers the scene for it.", true,
+				{ &S::shadows } },
 		};
 
-		// Defaults: the configuration every gate run of this work used. An unset switch takes the default;
-		// an explicit value overrides it ("0" / "off" turns an on-by-default feature off).
-		bool OnUnlessOff(const char* a_name)
-		{
-			const auto value = SwitchValue(a_name);
-			return value.empty() || value == "1";
-		}
+		// The packed word: cullMode in the low two bits, then each flag in kToggles order.
+		constexpr std::uint32_t kFirstFlagBit = 2;
+		static_assert(kFirstFlagBit + std::size(kToggles) <= 32);
 
-		bool StaticUnlessOff(const char* a_name)
+		bool NeedsMet(const ToggleInfo& a_info, const ToggleSet& a_set)
 		{
-			const auto value = SwitchValue(a_name);
-			return value.empty() || value == "static";
+			for (const auto need : a_info.needs)
+				if (need && !(a_set.*need))
+					return false;
+			return true;
 		}
 
 		ToggleSet FromSwitches()
 		{
 			ToggleSet set;
-			set.ownership = StaticUnlessOff("CS_DCLF_OWNERSHIP");
-			const auto cull = SwitchValue("CS_DCLF_CULL");
+			const auto& cull = SwitchValue(Switch::Cull);
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
-			set.skinned = OnUnlessOff("CS_DCLF_SKINNED");
-			set.trees = OnUnlessOff("CS_DCLF_TREES");
-			set.decals = OnUnlessOff("CS_DCLF_DECALS");
-			set.projectedUv = OnUnlessOff("CS_DCLF_PROJECTED_UV");
-			set.mtLand = OnUnlessOff("CS_DCLF_MTLAND");
-			set.switchNodes = OnUnlessOff("CS_DCLF_SWITCH_NODES");
-			set.skinPartitions = OnUnlessOff("CS_DCLF_SKIN_PARTITIONS");
-			set.actors = OnUnlessOff("CS_DCLF_ACTORS");
-			set.fading = OnUnlessOff("CS_DCLF_FADING");
-			set.lodCrossfade = OnUnlessOff("CS_DCLF_LOD_CROSSFADE");
-			set.shadows = OnUnlessOff("CS_DCLF_SHADOWS");
-			set.shadowOwnership = StaticUnlessOff("CS_DCLF_SHADOW_OWNERSHIP");
-			set.skipSunAccumulation = OnUnlessOff("CS_DCLF_SUN_SKIP");
-			// `probe` runs the exclusion dry (SunAccumulation), which needs the toggle on.
-			set.excludeSunEntries = OnUnlessOff("CS_DCLF_SUN_EXCLUDE") || SwitchValue("CS_DCLF_SUN_EXCLUDE") == "probe";
-			set.skyOcclusion = OnUnlessOff("CS_DCLF_SKYLIGHT");
-			// `probe` is PrimaryCull's census, which removes nothing (and so leaves the cut off).
-			set.excludePrimaryEntries = OnUnlessOff("CS_DCLF_PRIMARY_EXCLUDE");
+			for (const auto& toggle : kToggles) {
+				const auto& value = SwitchValue(toggle.seed);
+				set.*toggle.member = value.empty() || value == toggle.onValue || (toggle.seed == Switch::SunExclude && value == "probe");
+			}
 			return set;
 		}
 
-		/** @brief The combinations that cannot hold: each toggle off while one it needs is off. */
+		/** @brief The combinations that cannot hold: each flag off while one it needs is off (kToggles order resolves chains). */
 		ToggleSet Normalised(ToggleSet a_set)
 		{
-			a_set.shadowOwnership = a_set.shadowOwnership && a_set.shadows;
-			a_set.skipSunAccumulation = a_set.skipSunAccumulation && a_set.shadowOwnership;
-			a_set.excludeSunEntries = a_set.excludeSunEntries && a_set.skipSunAccumulation;
-			a_set.skyOcclusion = a_set.skyOcclusion && a_set.shadows;
-			a_set.excludePrimaryEntries = a_set.excludePrimaryEntries && a_set.excludeSunEntries && a_set.ownership;
-			a_set.skinPartitions = a_set.skinPartitions && a_set.skinned;
+			for (const auto& toggle : kToggles)
+				a_set.*toggle.member = a_set.*toggle.member && NeedsMet(toggle, a_set);
 			return a_set;
 		}
 
 		bool EntersClassification(const ToggleSet& a, const ToggleSet& b)
 		{
-			return a.skinned != b.skinned || a.trees != b.trees ||
-			       a.decals != b.decals || a.projectedUv != b.projectedUv || a.mtLand != b.mtLand || a.switchNodes != b.switchNodes ||
-			       a.skinPartitions != b.skinPartitions || a.actors != b.actors || a.fading != b.fading ||
-			       a.lodCrossfade != b.lodCrossfade || a.skyOcclusion != b.skyOcclusion;
+			for (const auto& toggle : kToggles)
+				if (toggle.entersClassification && a.*toggle.member != b.*toggle.member)
+					return true;
+			return false;
 		}
+	}
+
+	std::span<const ToggleInfo> ToggleTable()
+	{
+		return kToggles;
+	}
+
+	bool Toggles::Editable(const ToggleInfo& a_info) const
+	{
+		return NeedsMet(a_info, Normalised(requested));
 	}
 
 	Toggles& Toggles::Get()
@@ -103,54 +98,21 @@ namespace DCLF
 		active.store(Pack(Normalised(requested)), std::memory_order_relaxed);
 	}
 
-	std::uint32_t Toggles::Pack(const ToggleSet& s)
+	std::uint32_t Toggles::Pack(const ToggleSet& a_set)
 	{
-		std::uint32_t bits = 0;
-		auto put = [&](std::uint32_t a_bit, bool a_on) { bits |= (a_on ? 1u : 0u) << a_bit; };
-		put(kOwnership, s.ownership);
-		bits |= (s.cullMode & 3u) << kCullMode;
-		put(kSkinned, s.skinned);
-		put(kTrees, s.trees);
-		put(kDecals, s.decals);
-		put(kProjectedUv, s.projectedUv);
-		put(kMtLand, s.mtLand);
-		put(kShadows, s.shadows);
-		put(kShadowOwnership, s.shadowOwnership);
-		put(kSwitchNodes, s.switchNodes);
-		put(kSkinPartitions, s.skinPartitions);
-		put(kActors, s.actors);
-		put(kFading, s.fading);
-		put(kLodCrossfade, s.lodCrossfade);
-		put(kSkipSunAccumulation, s.skipSunAccumulation);
-		put(kExcludeSunEntries, s.excludeSunEntries);
-		put(kSkyOcclusion, s.skyOcclusion);
-		put(kExcludePrimaryEntries, s.excludePrimaryEntries);
+		std::uint32_t bits = a_set.cullMode & 3u;
+		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
+			bits |= (a_set.*kToggles[i].member ? 1u : 0u) << (kFirstFlagBit + i);
 		return bits;
 	}
 
 	ToggleSet Toggles::Unpack(std::uint32_t a_bits)
 	{
-		ToggleSet s;
-		auto get = [&](std::uint32_t a_bit) { return ((a_bits >> a_bit) & 1u) != 0; };
-		s.ownership = get(kOwnership);
-		s.cullMode = static_cast<std::uint8_t>((a_bits >> kCullMode) & 3u);
-		s.skinned = get(kSkinned);
-		s.trees = get(kTrees);
-		s.decals = get(kDecals);
-		s.projectedUv = get(kProjectedUv);
-		s.mtLand = get(kMtLand);
-		s.shadows = get(kShadows);
-		s.shadowOwnership = get(kShadowOwnership);
-		s.switchNodes = get(kSwitchNodes);
-		s.skinPartitions = get(kSkinPartitions);
-		s.actors = get(kActors);
-		s.fading = get(kFading);
-		s.lodCrossfade = get(kLodCrossfade);
-		s.skipSunAccumulation = get(kSkipSunAccumulation);
-		s.excludeSunEntries = get(kExcludeSunEntries);
-		s.skyOcclusion = get(kSkyOcclusion);
-		s.excludePrimaryEntries = get(kExcludePrimaryEntries);
-		return s;
+		ToggleSet set;
+		set.cullMode = static_cast<std::uint8_t>(a_bits & 3u);
+		for (std::uint32_t i = 0; i < std::size(kToggles); ++i)
+			set.*kToggles[i].member = ((a_bits >> (kFirstFlagBit + i)) & 1u) != 0;
+		return set;
 	}
 
 	bool Toggles::BeginFrame()

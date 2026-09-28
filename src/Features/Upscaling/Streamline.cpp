@@ -459,7 +459,7 @@ bool Streamline::Initialize()
 
 	// Reflex and PCL make the interposer enable VK_NV_low_latency on DXVK's device, which Nsight Graphics refuses to capture. For
 	// now they load only on request, CS_STREAMLINE_REFLEX=1, and DLSS-G (which needs Reflex) with them.
-	const bool reflexRequested = DCLF::SwitchEnabled("CS_STREAMLINE_REFLEX");
+	const bool reflexRequested = DCLF::SwitchEnabled(DCLF::Switch::StreamlineReflex);
 	std::vector<sl::Feature> featuresToLoad = { sl::kFeatureDLSS, sl::kFeatureFSR, sl::kFeatureFSR_G, sl::kFeatureXeSS };
 	if (reflexRequested) {
 		featuresToLoad.push_back(sl::kFeatureReflex);

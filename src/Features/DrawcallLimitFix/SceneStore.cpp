@@ -1531,7 +1531,7 @@ namespace DCLF
 
 		auto& data = a_geometry.GetGeometryRuntimeData();
 		if (auto* skin = data.skinInstance.get()) {
-			if (!SkinnedEnabled())
+			if (!ActiveToggles().skinned)
 				return Ineligible::Skinned;
 			// The skinned path (engine notes: skinning): a NiSkinInstance, or with CS_DCLF_SKIN_PARTITIONS a
 			// BSDismemberSkinInstance or several partitions, and a palette the native shader could index (240
@@ -1547,7 +1547,7 @@ namespace DCLF
 			auto* skinData = skin->skinData.get();
 			if (!partition || !skinData || partition->numPartitions == 0 || skinData->GetBoneCount() == 0 || skinData->GetBoneCount() * 3 > 240)
 				return Ineligible::SkinShape;
-			if ((partition->numPartitions > 1 || dismember) && !SkinPartitionsEnabled())
+			if ((partition->numPartitions > 1 || dismember) && !ActiveToggles().skinPartitions)
 				return Ineligible::SkinShape;
 			if (partition->numPartitions > kMaxSkinPartitions)
 				return Ineligible::SkinShape;
@@ -1671,14 +1671,14 @@ namespace DCLF
 	Ineligible SceneStore::ClassifyFrame(const Tracked& a_tracked, const AccumulatedPass* a_accumulated) const
 	{
 		const bool underSwitch = a_tracked.parentReason == Ineligible::Switch;
-		if (underSwitch && !SwitchNodesEnabled())
+		if (underSwitch && !ActiveToggles().switchNodes)
 			return Ineligible::Switch;
 		if (a_tracked.parentReason != Ineligible::None && !underSwitch)
 			return a_tracked.parentReason;
 
 		// App-culled or hidden anywhere between the leaf and its category node; part of an actor; under a
 		// switch node that does not draw this branch.
-		const bool actors = ActorsEnabled();
+		const bool actors = ActiveToggles().actors;
 		const RE::NiAVObject* child = nullptr;
 		for (const RE::NiAVObject* object = a_tracked.geometry.get(); object; child = object, object = object->parent) {
 			if (HiddenForWalk(object))
@@ -1700,7 +1700,7 @@ namespace DCLF
 		// Without the pass (the scene phase, for the shadow views) a fade is only the native loop's when fades
 		// are not DCLF's at all; the shadow views skip faded casters themselves (ShadowReject::Faded).
 		const bool fading = a_accumulated ? a_accumulated->fading :
-		                                    !FadingEnabled() && property && property->fadeNode && property->fadeNode->GetRuntimeData().currentFade < 1.0f;
+		                                    !ActiveToggles().fading && property && property->fadeNode && property->fadeNode->GetRuntimeData().currentFade < 1.0f;
 		if (fading)
 			return Ineligible::Fading;
 
@@ -1894,7 +1894,7 @@ namespace DCLF
 	{
 		// CS_DCLF_PERSISTENT_PARITY: every slot drawn this frame against its signature's sample and its material's transform,
 		// as the per-frame loops applied them.
-		static const bool enabled = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
+		const bool enabled = SwitchEnabled(Switch::PersistentParity);
 		if (!enabled || frame % 60 != 45)
 			return;
 		// The normal path consumes writer-produced use lists. On a parity frame compare them against the
@@ -2040,7 +2040,7 @@ namespace DCLF
 		std::uint32_t lightingWritten = 0;
 		auto publishLighting = [&](const GeometryConstants& a_constants) { MergeFrameLighting(a_constants.ps, frameLighting, lightingWritten); };
 		std::vector<std::pair<std::uint32_t, GeometryConstants>> lightingReferences;
-		static const bool geometryParityEnabled = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
+		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		const bool geometryParityFrame = geometryParityEnabled && frame % 60 == 30;
 		geometryStats.checks += geometryParityFrame ? 1u : 0u;
 		for (const std::uint32_t i : tables.usedPipelines) {
@@ -2092,7 +2092,7 @@ namespace DCLF
 			auto templatePassOf = [&]() { return property ? FindLightingPass(property) : nullptr; };
 			const std::uint32_t geometryTechnique = (tables.pipelines[i].passDescriptor >> 24) & 0x3f;
 			const bool writesEye = geometryTechnique == 1 || geometryTechnique == 0xb || geometryTechnique == 0x10;
-			const bool full = !tables.geometryConstantsValid[i] || geometryEvaluatedFlags != mainPassRenderFlags || (writesEye && !eyeSample.valid);
+			const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
 			auto& held = tables.geometryConstants[i];
 			bool ownChanged = false;
 			if (!full && writesEye) {
@@ -2103,7 +2103,7 @@ namespace DCLF
 				if (!templatePass)
 					continue;  // keep what BuildFrame evaluated rather than blanking it
 				GeometryConstants constants;
-				if (!evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, mainPassRenderFlags, constants))
+				if (!evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, constants))
 					continue;
 				++geometryStats.full;
 				publishLighting(constants);
@@ -2117,7 +2117,7 @@ namespace DCLF
 			} else {
 				if (!frameSample.valid) {
 					if (const auto* templatePass = templatePassOf()) {
-						frameSample.valid = evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, mainPassRenderFlags, frameSample.constants);
+						frameSample.valid = evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, frameSample.constants);
 						++geometryStats.samples;
 						if (frameSample.valid)
 							publishLighting(frameSample.constants);
@@ -2137,7 +2137,7 @@ namespace DCLF
 			if (geometryParityFrame) {
 				GeometryConstants reference;
 				const auto* templatePass = templatePassOf();
-				if (templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, mainPassRenderFlags, reference)) {
+				if (templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
 					CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
 					lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
 				}
@@ -2157,7 +2157,6 @@ namespace DCLF
 			if (!first.empty())
 				geometryStats.lightingFirst = fmt::format("pipeline {} (pass {:X}) {}", pipeline, tables.pipelines[pipeline].passDescriptor, first);
 		}
-		geometryEvaluatedFlags = mainPassRenderFlags;
 		++geometryStats.frames;
 
 		// Per-object shading is resampled here too, for the slots whose inputs change with no event (Tables::watchList).
@@ -2176,8 +2175,8 @@ namespace DCLF
 			}
 		};
 		std::uint64_t resampled = 0;
-		if (resampledRenderFlags != mainPassRenderFlags || !lodFadeEventsInstalled) {
-			resampledRenderFlags = mainPassRenderFlags;
+		if (!constantsRefreshed || !lodFadeEventsInstalled) {
+			constantsRefreshed = true;
 			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
 				ResampleShading(o, true);
 				refreshExtras(o);
@@ -2225,7 +2224,7 @@ namespace DCLF
 			}
 		}
 		// The watch's completeness: every slot sampled against what the tables hold now.
-		static const bool shadingParityEnabled = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
+		const bool shadingParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		auto& sp = shadingParity;
 		++sp.frames;
 		sp.watched += tables.watchList.size();
@@ -2246,7 +2245,7 @@ namespace DCLF
 					const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get());
 					descriptors.specularLODFade = lighting.specularLODFade;
 					descriptors.envmapLODFade = lighting.envmapLODFade;
-					const auto now = MakeShading(lighting, descriptors, mainPassRenderFlags, emissiveMult);
+					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult);
 					sp.first = fmt::format("slot {} '{}' (watch {:#x}, flags {:#x}, patched {} frames ago): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
 						o, geometry->name.c_str() ? geometry->name.c_str() : "", o < tables.shadingWatch.size() ? tables.shadingWatch[o] : 0, tables.objects[o].flags,
 						o < patchedFrame.size() ? frame - patchedFrame[o] : ~0u, now.materialData[0], now.materialData[1], now.materialData[2], held.materialData[0],
@@ -2332,7 +2331,7 @@ namespace DCLF
 		descriptors.specularLODFade = lighting.specularLODFade;
 		descriptors.envmapLODFade = lighting.envmapLODFade;
 		float emissiveMult = tables.emissiveMult[a_slot];
-		const auto shading = MakeShading(lighting, descriptors, mainPassRenderFlags, emissiveMult);
+		const auto shading = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult);
 		if (std::memcmp(&shading, &tables.shading[a_slot], sizeof(shading)) == 0 && std::bit_cast<std::uint32_t>(emissiveMult) == std::bit_cast<std::uint32_t>(tables.emissiveMult[a_slot]))
 			return false;
 		if (a_write) {
@@ -2722,8 +2721,7 @@ namespace DCLF
 
 	bool SceneStore::ProfileEnabled()
 	{
-		static const bool enabled = SwitchEnabled("CS_DCLF_PROFILE");
-		return enabled;
+		return SwitchEnabled(Switch::Profile);
 	}
 
 	bool SceneStore::EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_record)
@@ -2950,7 +2948,7 @@ namespace DCLF
 		// Only what can have changed (DeltaWalk). CS_DCLF_WALK_PARITY=1: every 60 frames a dense rebuild, classifying
 		// every object from scratch, is compared with the slot tables object by object.
 		DeltaWalk();
-		static const bool walkParityOn = SwitchEnabled("CS_DCLF_WALK_PARITY");
+		const bool walkParityOn = SwitchEnabled(Switch::WalkParity);
 		if (walkParityOn && frame % 60 == 0)
 			CheckWalkParity();
 		stats.objects = tables.liveObjects;
@@ -3091,13 +3089,10 @@ namespace DCLF
 
 	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
 	{
-		// CS_DCLF_CLASSIFY_CACHE=off|on|probe. `probe` uses the cached verdict and *also* recomputes it,
-		// comparing the two; it is the gate, and it costs more than either path alone.
-		static const std::string classifyCacheMode = SwitchValue("CS_DCLF_CLASSIFY_CACHE");
-		static const bool classifyCache = classifyCacheMode != "off";
-		static const bool classifyProbe = classifyCacheMode == "probe";
+		// CS_DCLF_CLASSIFY_CACHE=probe: the cached verdict is used and *also* recomputed, and the two compared.
+		const bool classifyProbe = SwitchValue(Switch::ClassifyCache) == "probe";
 		// CS_DCLF_COVERAGE_PROBE=1: which shader the uncovered objects actually use.
-		static const bool coverageProbe = SwitchEnabled("CS_DCLF_COVERAGE_PROBE");
+		const bool coverageProbe = SwitchEnabled(Switch::CoverageProbe);
 		auto* trackedEntry = &a_tracked;
 		const auto& entry = a_tracked;
 		// A resident's record written again: an event changed it, and its patch is gone with the write.
@@ -3172,7 +3167,7 @@ namespace DCLF
 				++stats.castResolved;
 			}
 			RE::BSLightingShaderProperty* castCache = trackedEntry->castResult;
-			const bool hit = classifyCache && !denseWalk && verdict.cached && verdict.rendererData == runtime.rendererData &&
+			const bool hit = !denseWalk && verdict.cached && verdict.rendererData == runtime.rendererData &&
 			                 verdict.property == witnessProperty && verdict.material == witnessMaterial &&
 			                 verdict.fadeState == fadeState;
 			if (hit && !classifyProbe) {
@@ -3191,11 +3186,11 @@ namespace DCLF
 								kIneligibleNames[static_cast<std::size_t>(verdict.reason)], kIneligibleNames[static_cast<std::size_t>(reason)]);
 					}
 					reason = verdict.reason;  // the cache is what the frame would have used
-				} else if (denseWalk) {
-				} else if (classifyCache && CacheableVerdict(reason)) {
-					verdict = { true, reason, runtime.rendererData, witnessProperty, witnessMaterial, fadeState };
-				} else if (classifyCache) {
-					verdict.cached = false;
+				} else if (!denseWalk) {
+					if (CacheableVerdict(reason))
+						verdict = { true, reason, runtime.rendererData, witnessProperty, witnessMaterial, fadeState };
+					else
+						verdict.cached = false;
 				}
 			}
 			timer.Add(BuildPart::ClassifyStatic);
@@ -3331,7 +3326,7 @@ namespace DCLF
 		std::uint32_t objectBoneRows = 0;
 		const float* boneCurrent = nullptr;
 		const float* bonePrevious = nullptr;
-		if (auto* skin = data.skinInstance.get(); skin && SkinnedEnabled()) {
+		if (auto* skin = data.skinInstance.get(); skin && ActiveToggles().skinned) {
 			timer.Add(BuildPart::Record);
 			if (trackedEntry->skinUpdatedFrame != frame) {
 				UpdateSkin(skin, geometry->world);
@@ -3791,7 +3786,7 @@ namespace DCLF
 		// The pass table is filled from the capture, which is the source that keeps working once passes
 		// are withheld from the batch renderer. The accumulator walk is the cross-check.
 		// CS_DCLF_PASS_PARITY=1: the accumulator walk every frame, and the capture compared with it.
-		static const bool passParity = SwitchEnabled("CS_DCLF_PASS_PARITY");
+		const bool passParity = SwitchEnabled(Switch::PassParity);
 		const bool haveAccumulator = RefreshMainBatchRenderers();
 		if (passParity)
 			CollectAccumulatedPasses();
@@ -3832,11 +3827,9 @@ namespace DCLF
 		const auto& decalBiasMode = frameDecalBias;
 		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8);
 		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
-		// CS_DCLF_DERIVED_CACHE=off|on|probe: `probe` serves the cache and recomputes, comparing the two.
-		static const std::string derivedCacheMode = SwitchValue("CS_DCLF_DERIVED_CACHE");
-		static const bool derivedCache = derivedCacheMode != "off";
-		static const bool derivedProbe = derivedCacheMode == "probe";
-		static const bool derivationStats = SwitchEnabled("CS_DCLF_DERIVE_PROBE");
+		// CS_DCLF_DERIVED_CACHE=probe: the cached derivation is served and also recomputed, and the two compared.
+		const bool derivedProbe = SwitchValue(Switch::DerivedCache) == "probe";
+		const bool derivationStats = SwitchEnabled(Switch::DeriveProbe);
 		// CS_DCLF_PRIMARY_EXCLUDE=probe: what the objects under the primary's candidate entries take from their
 		// registration, against what DCLF derives (PrimaryCull::NoteDerived).
 		const bool primaryProbe = PrimaryCull::Probe() && PrimaryCull::Get().Installed();
@@ -3908,7 +3901,7 @@ namespace DCLF
 			// witnesses all match and whose slots still carry the keys they were derived for, the
 			// classification and the whole derived section are skipped.
 			auto& derived = trackedEntry->derived;
-			bool derivedHit = derivedCache && accumulated && derived.valid && derived.generation == tablesGeneration &&
+			bool derivedHit = accumulated && derived.valid && derived.generation == tablesGeneration &&
 			                  derived.geometrySlot == geometrySlot && derived.property == witnessProperty &&
 			                  derived.material == witnessMaterial && derived.fadeState == fadeState && derived.technique == accumulated->technique &&
 			                  derived.subPass == accumulated->subPass && derived.hint == accumulated->hint && derived.interior == interior &&
@@ -4056,7 +4049,7 @@ namespace DCLF
 					// (it supplies the scene light list the engine reads the sun from).
 					GeometryConstants constants{};
 					const auto* templatePass = FindLightingPass(property);
-					const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, mainPassRenderFlags, constants);
+					const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, kMainPassRenderFlags, constants);
 					tables.geometryConstants[slot] = constants;
 					tables.geometryConstantsValid[slot] = valid ? 1 : 0;
 					tables.geometryTemplate[slot] = property;
@@ -4089,7 +4082,7 @@ namespace DCLF
 					const auto slot = pipelineIt->second;
 					GeometryConstants constants;
 					const auto* templatePass = FindLightingPass(property);
-					if (templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, mainPassRenderFlags, constants)) {
+					if (templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, kMainPassRenderFlags, constants)) {
 						tables.geometryConstants[slot] = constants;
 						tables.geometryConstantsValid[slot] = 1;
 						tables.pipelineConstantsVersion[slot] = tables.NextVersion();
@@ -4134,7 +4127,7 @@ namespace DCLF
 				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
 				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
 				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u);
-				if (derivedCache && accumulated) {
+				if (accumulated) {
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;
 						const bool same = derived.pipelineSlot == pipelineSlot && derived.materialSlot == materialSlot &&
@@ -4190,7 +4183,7 @@ namespace DCLF
 			patch.fadeDistance = resident ? accumulated->fadeDistance : 0.0f;
 			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
-			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, mainPassRenderFlags, emissiveMult);
+			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult);
 			patch.emissiveMult = emissiveMult;
 			if (lightLimitFixLoaded) {
 				auto& lightFix = globals::features::lightLimitFix;
@@ -4250,14 +4243,14 @@ namespace DCLF
 		{
 			// A bound object can reference a slot that is not live only after a slot was freed (the sweep, a material
 			// drop, a geometry slot that could not be resolved again).
-			static const bool slotParity = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
+			const bool slotParity = SwitchEnabled(Switch::PersistentParity);
 			if (slotsFreedThisFrame || slotParity)
 				CheckObjectSlots(frameResolveBuffers);
 			slotsFreedThisFrame = false;
 		}
 		TracyCZoneEnd(residentsZone);
 		TracyCZoneN(statsZone, "CS.DCLF.Accumulate.StatsAndDecals", true);
-		static const bool slotProbe = SwitchValue("CS_DCLF_SLOT_PROBE") == "1";
+		const bool slotProbe = SwitchValue(Switch::SlotProbe) == "1";
 		if (slotProbe)
 			ProbeSlots(frameResolveBuffers);
 		// The slot counts, for the reports: the frame's users every 16th frame, held in between; the live and referenced
@@ -4568,7 +4561,7 @@ namespace DCLF
 		// The standing alarm: a few records drawn this frame, re-evaluated live and compared outside their
 		// frame-sourced components. A difference is a material writer the events do not cover; it is
 		// reported, not repaired, because repairing it here is what hid the missing events before.
-		static const auto mode = SwitchValue("CS_DCLF_MATERIAL_CACHE");
+		const std::string& mode = SwitchValue(Switch::MaterialCache);
 		if (mode == "off" || tables.materials.empty())
 			return;
 		auto& evaluator = ConstantEvaluator::Get();
@@ -5058,7 +5051,7 @@ namespace DCLF
 		auto& data = a_geometry->GetGeometryRuntimeData();
 		auto* skin = data.skinInstance.get();
 		const std::uint32_t slot = a_tracked.slot;
-		if (!skin || !SkinnedEnabled() || !(tables.objects[slot].flags & kObjectSkinned))
+		if (!skin || !ActiveToggles().skinned || !(tables.objects[slot].flags & kObjectSkinned))
 			return false;
 		const auto* partitions = skin->skinPartition.get();
 		std::uint32_t mask = 0;
@@ -5222,7 +5215,7 @@ namespace DCLF
 
 	bool SceneStore::SkyOcclusionEnabled()
 	{
-		return Toggles::Get().Active().skyOcclusion && globals::features::skylighting.loaded;
+		return ActiveToggles().skyOcclusion && globals::features::skylighting.loaded;
 	}
 
 	void SceneStore::DropSunCandidates()
@@ -5278,7 +5271,7 @@ namespace DCLF
 		if (!sunEntriesDirty.empty()) {
 			std::sort(sunEntriesDirty.begin(), sunEntriesDirty.end());
 			sunEntriesDirty.erase(std::unique(sunEntriesDirty.begin(), sunEntriesDirty.end()), sunEntriesDirty.end());
-			const bool switchNodes = SwitchNodesEnabled();
+			const bool switchNodes = ActiveToggles().switchNodes;
 			for (const auto* root : sunEntriesDirty) {
 				bool candidate = false;
 				std::uint64_t signature = 1469598103934665603ull;
@@ -5511,7 +5504,7 @@ namespace DCLF
 
 	void SceneStore::CheckChangeLog()
 	{
-		static const bool enabled = SwitchEnabled("CS_DCLF_CHANGE_LOG_PARITY");
+		const bool enabled = SwitchEnabled(Switch::ChangeLogParity);
 		if (!enabled)
 			return;
 		auto& c = changeParity;
@@ -5600,8 +5593,7 @@ namespace DCLF
 
 	bool SceneStore::ResidentParityEnabled()
 	{
-		static const bool enabled = SwitchEnabled("CS_DCLF_RESIDENT_PARITY");
-		return enabled;
+		return SwitchEnabled(Switch::ResidentParity);
 	}
 
 	bool SceneStore::ResidentCapable(const RE::BSGeometry* a_geometry) const
@@ -5788,7 +5780,7 @@ namespace DCLF
 					// fixed like any kept record's (dclf-event-driven-tables.md).
 					const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
 					                         (entry.candidateReason == Ineligible::None) == recorded;
-					if (verdictKept && entry.switchNode && SwitchNodesEnabled())
+					if (verdictKept && entry.switchNode && ActiveToggles().switchNodes)
 						kept = SwitchSelects(*entry.switchNode, entry.switchChild) == (entry.candidateReason == Ineligible::None);
 					else
 						kept = verdictKept && ClassifyFrame(entry) == entry.candidateReason;
@@ -6086,7 +6078,7 @@ namespace DCLF
 			return;
 		}
 		RefreshShadowSets(false);
-		static const bool shadowIndexParity = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
+		const bool shadowIndexParity = SwitchEnabled(Switch::PersistentParity);
 		if (shadowIndexParity && frame % 60 == 15) {
 			const auto textures = tables.shadowTextureSet;
 			const auto shadowKeys = tables.shadowKeysUsed;

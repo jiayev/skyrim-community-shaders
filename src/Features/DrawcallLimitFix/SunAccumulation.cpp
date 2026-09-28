@@ -161,7 +161,7 @@ namespace DCLF
 
 	bool SunAccumulation::ExclusionProbe()
 	{
-		static const bool probe = SwitchValue("CS_DCLF_SUN_EXCLUDE") == "probe";
+		const bool probe = SwitchValue(Switch::SunExclude) == "probe";
 		return probe;
 	}
 
@@ -170,7 +170,7 @@ namespace DCLF
 		auto exclusion = std::move(pendingExclusion);
 		previousExclusion = std::move(frameState.exclusion);
 		frameState.exclusion.reset();
-		const auto toggles = Toggles::Get().Active();
+		const auto toggles = ActiveToggles();
 		if (!toggles.excludeSunEntries || !M1Active(toggles) || !a_light)
 			return;
 		auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
@@ -382,7 +382,7 @@ namespace DCLF
 				auto& self = SunAccumulation::Get();
 				SunCall call;
 				auto& descriptors = a_light->GetRuntimeData().shadowmapDescriptors;
-				const bool active = M1Active(Toggles::Get().Active());
+				const bool active = M1Active(ActiveToggles());
 				for (std::uint32_t i = 0; i < descriptors.size() && call.count < kMaxCascades; ++i) {
 					auto* accumulator = descriptors[i].shaderAccumulator.get();
 					if (!accumulator)
