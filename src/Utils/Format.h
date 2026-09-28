@@ -121,6 +121,9 @@ namespace Util
 	/** Case-insensitive equality for two strings. */
 	bool IEquals(std::string_view a, std::string_view b);
 
+	/** @brief ASCII-lowercased copy of the string. */
+	std::string ToLower(std::string text);
+
 	/**
 	 * Returns the defines-based shader cache filename suffix for the given shader
 	 * defines string, or an empty string when definesStr is empty.  The suffix

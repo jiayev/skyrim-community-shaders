@@ -29,21 +29,29 @@ namespace
 		return ImGui::BeginTable(id, 2, kDebugTableFlags);
 	}
 
-	void DrawField(const char* label, const std::string& value)
+	/// Starts a field row with its label, leaving the value column current.
+	void BeginFieldRow(const char* label)
 	{
 		ImGui::TableNextRow();
 		ImGui::TableNextColumn();
 		ImGui::TextUnformatted(label);
 		ImGui::TableNextColumn();
+	}
+
+	void DrawField(const char* label, const std::string& value)
+	{
+		BeginFieldRow(label);
 		ImGui::TextUnformatted(value.empty() ? kMissingValue : value.c_str());
+	}
+
+	void DrawFormIdField(const char* label, RE::FormID formId)
+	{
+		DrawField(label, std::format("{:08X}", formId));
 	}
 
 	void DrawFlag(const char* label, bool value)
 	{
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		ImGui::TextUnformatted(label);
-		ImGui::TableNextColumn();
+		BeginFieldRow(label);
 		if (value)
 			Util::Text::Success("yes");
 		else
@@ -175,9 +183,9 @@ namespace
 			DrawFlag("Main or loading menu open", snapshot.menuOpen);
 			DrawField("Cell", snapshot.cellName);
 			DrawField("Cell editor ID", snapshot.cellEditorId);
-			DrawField("Cell form ID", std::format("{:08X}", snapshot.cellId));
+			DrawFormIdField("Cell form ID", snapshot.cellId);
 			DrawField("Location", snapshot.locationName);
-			DrawField("Location form ID", std::format("{:08X}", snapshot.locationId));
+			DrawFormIdField("Location form ID", snapshot.locationId);
 			ImGui::EndTable();
 		}
 
@@ -227,14 +235,12 @@ namespace
 	{
 		if (BeginFieldTable("Weather")) {
 			DrawField("Current weather", snapshot.currentWeatherName);
-			DrawField("Current weather form ID", std::format("{:08X}", snapshot.weather.currentWeatherId));
+			DrawFormIdField("Current weather form ID", snapshot.weather.currentWeatherId);
 			DrawField("Previous weather", snapshot.previousWeatherName);
-			DrawField("Previous weather form ID", std::format("{:08X}", snapshot.weather.previousWeatherId));
+			DrawFormIdField("Previous weather form ID", snapshot.weather.previousWeatherId);
 			DrawField("Transition lerp", std::format("{:.4f}", snapshot.weather.lerp));
-			DrawField("Current at last resolve",
-				std::format("{:08X}", snapshot.lastWeather.currentWeatherId));
-			DrawField("Previous at last resolve",
-				std::format("{:08X}", snapshot.lastWeather.previousWeatherId));
+			DrawFormIdField("Current at last resolve", snapshot.lastWeather.currentWeatherId);
+			DrawFormIdField("Previous at last resolve", snapshot.lastWeather.previousWeatherId);
 			DrawField("Lerp at last resolve", std::format("{:.4f}", snapshot.lastWeather.lerp));
 			ImGui::EndTable();
 		}
@@ -256,8 +262,8 @@ namespace
 			DrawFlag("Deferred save pending", snapshot.deferredSceneChangesPending);
 			DrawField("Scene layer suspend depth", std::format("{}", snapshot.sceneLayerSuspendDepth));
 			DrawFlag("Interior at last resolve", snapshot.lastInterior);
-			DrawField("Cell at last resolve", std::format("{:08X}", snapshot.lastCellId));
-			DrawField("Location at last resolve", std::format("{:08X}", snapshot.lastLocationId));
+			DrawFormIdField("Cell at last resolve", snapshot.lastCellId);
+			DrawFormIdField("Location at last resolve", snapshot.lastLocationId);
 			ImGui::EndTable();
 		}
 

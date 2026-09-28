@@ -46,17 +46,9 @@ namespace
 			[manager] { return manager->GetOverwriteModNames(); });
 	}
 
-	std::string presetName;
-	std::string presetVersion;
-	std::string presetAuthor;
-	std::string presetDescription;
+	/// The name is kept as typed and tags stay unparsed until export.
+	PresetExportInfo form;
 	std::string presetTags;
-	std::filesystem::path logoSource;
-	std::filesystem::path coverSource;
-	std::vector<std::filesystem::path> screenshotSources;
-	bool clearLogo = false;
-	bool clearCover = false;
-	bool clearScreenshots = false;
 	/// Existing relative paths from a prior export of this name (shown when no new pick).
 	std::string existingLogo;
 	std::string existingCover;
@@ -102,17 +94,8 @@ namespace
 
 	void ResetFormFields()
 	{
-		presetName.clear();
-		presetVersion = SceneSettingsManager::kDefaultPresetVersion;
-		presetAuthor.clear();
-		presetDescription.clear();
+		form = {};
 		presetTags.clear();
-		logoSource.clear();
-		coverSource.clear();
-		screenshotSources.clear();
-		clearLogo = false;
-		clearCover = false;
-		clearScreenshots = false;
 		existingLogo.clear();
 		existingCover.clear();
 		existingScreenshots.clear();
@@ -121,10 +104,10 @@ namespace
 
 	void PrefillFromExisting(const SceneSettingsManager::PresetMetadata& meta)
 	{
-		if (presetAuthor.empty())
-			presetAuthor = meta.author;
-		if (presetDescription.empty())
-			presetDescription = meta.description;
+		if (form.author.empty())
+			form.author = meta.author;
+		if (form.description.empty())
+			form.description = meta.description;
 		if (presetTags.empty() && !meta.tags.empty()) {
 			presetTags.clear();
 			for (size_t i = 0; i < meta.tags.size(); ++i) {
@@ -134,16 +117,16 @@ namespace
 			}
 		}
 		if (!meta.version.empty())
-			presetVersion = meta.version;
+			form.version = meta.version;
 		existingLogo = meta.logo;
 		existingCover = meta.cover;
 		existingScreenshots = meta.screenshots;
-		clearLogo = false;
-		clearCover = false;
-		clearScreenshots = false;
-		logoSource.clear();
-		coverSource.clear();
-		screenshotSources.clear();
+		form.clearLogo = false;
+		form.clearCover = false;
+		form.clearScreenshots = false;
+		form.logoSource.clear();
+		form.coverSource.clear();
+		form.screenshotSources.clear();
 	}
 
 	std::vector<std::string> ParseTags(const std::string& text)
@@ -219,8 +202,8 @@ namespace
 
 		std::string status;
 		if (multi) {
-			if (!screenshotSources.empty())
-				status = std::format("{} file(s) selected", screenshotSources.size());
+			if (!form.screenshotSources.empty())
+				status = std::format("{} file(s) selected", form.screenshotSources.size());
 			else if (!cleared && !existingScreenshots.empty())
 				status = std::format("{} existing", existingScreenshots.size());
 			else
@@ -240,7 +223,7 @@ namespace
 			if (BrowseImageFiles(multi, picked)) {
 				cleared = false;
 				if (multi) {
-					screenshotSources = std::move(picked);
+					form.screenshotSources = std::move(picked);
 				} else if (singleSource && !picked.empty()) {
 					*singleSource = std::move(picked.front());
 				}
@@ -249,7 +232,7 @@ namespace
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		if (ImGui::SmallButton(std::format("{}##Clear{}", T(TKEY("scene_export_clear"), "Clear"), label).c_str())) {
 			if (multi)
-				screenshotSources.clear();
+				form.screenshotSources.clear();
 			else if (singleSource)
 				singleSource->clear();
 			cleared = true;
@@ -258,18 +241,9 @@ namespace
 
 	PresetExportInfo BuildExportInfo(const std::string& sanitizedName)
 	{
-		PresetExportInfo info;
+		auto info = form;
 		info.name = sanitizedName;
-		info.version = presetVersion;
-		info.author = presetAuthor;
-		info.description = presetDescription;
 		info.tags = ParseTags(presetTags);
-		info.logoSource = logoSource;
-		info.coverSource = coverSource;
-		info.screenshotSources = screenshotSources;
-		info.clearLogo = clearLogo;
-		info.clearCover = clearCover;
-		info.clearScreenshots = clearScreenshots;
 		return info;
 	}
 }
@@ -328,23 +302,23 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::Separator();
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
 		ImGui::SetNextItemWidth(-1);
-		ImGui::InputText("##ScenePresetExportName", &presetName);
+		ImGui::InputText("##ScenePresetExportName", &form.name);
 		if (ImGui::IsItemDeactivatedAfterEdit()) {
-			const auto packId = Util::FileHelpers::SanitizeFileName(presetName);
+			const auto packId = Util::FileHelpers::SanitizeFileName(form.name);
 			if (const auto meta = SceneSettingsManager::ReadPresetMetadata(Util::PathHelpers::GetUnifiedPackPath(packId)))
 				PrefillFromExisting(*meta);
 		}
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
 		ImGui::SetNextItemWidth(-1);
-		ImGui::InputText("##ScenePresetExportVersion", &presetVersion);
+		ImGui::InputText("##ScenePresetExportVersion", &form.version);
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_author"), "Author"));
 		ImGui::SetNextItemWidth(-1);
-		ImGui::InputText("##ScenePresetExportAuthor", &presetAuthor);
+		ImGui::InputText("##ScenePresetExportAuthor", &form.author);
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_description"), "Description"));
-		ImGui::InputTextMultiline("##ScenePresetExportDescription", &presetDescription,
+		ImGui::InputTextMultiline("##ScenePresetExportDescription", &form.description,
 			ImVec2(-1.0f, ImGui::GetTextLineHeight() * kDescriptionLines + style.FramePadding.y * 2.0f));
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_tags"), "Tags (comma-separated)"));
@@ -356,13 +330,14 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
 		ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
 			"Images are copied into Presets/<Name>/ for the Presets browser."));
-		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &logoSource, clearLogo, existingLogo);
-		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &coverSource, clearCover, existingCover);
-		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, clearScreenshots, {});
+		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
+		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
+			existingCover);
+		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
 
-		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
+		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
 		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);
-		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(presetVersion);
+		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(form.version);
 		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
@@ -396,7 +371,7 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 	}
 
 	if (exportConfirmation.Draw()) {
-		auto sanitizedName = Util::FileHelpers::SanitizeFileName(presetName);
+		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
 		ReportExportResult(sanitizedName, manager->ExportPreset(BuildExportInfo(sanitizedName)));
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {

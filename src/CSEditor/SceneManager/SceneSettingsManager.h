@@ -922,14 +922,7 @@ private:
 	bool gameDataReady = false;
 	float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
 
-	struct SettingAddress
-	{
-		std::string featureShortName;
-		std::vector<std::string> settingPath;
-		std::string settingKey;
-
-		auto operator<=>(const SettingAddress&) const = default;
-	};
+	using SettingAddress = SettingIdentity;
 	struct CatalogSceneSettingUpdate
 	{
 		std::vector<std::string> settingPath;
@@ -1216,6 +1209,9 @@ private:
 
 	// --- Per-Location helpers ---
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
+	/** @brief The target's config, or null when it has none. */
+	const LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey) const;
+	LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey);
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
@@ -1242,13 +1238,9 @@ private:
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
 	void RemoveSetting(SceneType type, size_t index);
 	void CommitSceneSettingChanges();
-	bool HasEntryFromSource(SceneType type, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const;
-	/// Check if an entry already exists for a specific period (TimeOfDay)
-	bool HasEntryForPeriod(const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey,
-		TimeOfDayPeriod period, EntrySource source) const;
 	void BumpEntryPresentationRevision();
+	/** @brief A layer's entries were (re)loaded: rebuild the active-entry cache and re-resolve. */
+	void MarkEntriesLoaded();
 	/// Entry values changed: drop the per-period caches and re-resolve the location layer.
 	void MarkSceneValuesDirty();
 	bool IsEntryActive(const SettingEntry& entry) const;

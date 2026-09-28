@@ -54,12 +54,6 @@ namespace SceneSettingsInternal
 		       type == SceneSettingsManager::SceneType::TimeOfDay;
 	}
 
-	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
-		std::string_view context)
-	{
-		return Util::FileHelpers::WriteJsonAtomically(path, data, indent, context);
-	}
-
 	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context)
 	{
 		const auto transitionIt = object.find(kTimeOfDayTransitionHoursKey);
@@ -125,10 +119,7 @@ namespace SceneSettingsInternal
 		if (components.pluginName.empty())
 			return std::format("0x{:X}", components.localFormId);
 
-		auto pluginName = components.pluginName;
-		std::transform(pluginName.begin(), pluginName.end(), pluginName.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return std::format("0x{:X}~{}", components.localFormId, pluginName);
+		return std::format("0x{:X}~{}", components.localFormId, Util::ToLower(components.pluginName));
 	}
 
 	std::string CanonicalizeResolvedLocationFormKey(std::string_view formKey)
@@ -207,9 +198,7 @@ namespace SceneSettingsInternal
 		                      Util::PrettifyIdentifier(token) :
 		                      std::string(token);
 		std::erase_if(normalized, [](unsigned char c) { return std::isspace(c); });
-		std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return normalized;
+		return Util::ToLower(std::move(normalized));
 	}
 
 	bool SceneSettingAddressTokensEqual(std::string_view lhs, std::string_view rhs)
@@ -324,14 +313,6 @@ namespace SceneSettingsInternal
 		return parts;
 	}
 
-	bool EqualDisplayText(std::string_view lhs, std::string_view rhs)
-	{
-		return std::ranges::equal(lhs, rhs, [](const char a, const char b) {
-			return std::tolower(static_cast<unsigned char>(a)) ==
-			       std::tolower(static_cast<unsigned char>(b));
-		});
-	}
-
 	std::vector<std::string> GetCatalogContextPath(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
 		auto parts = GetCatalogDisplayPath(setting);
@@ -344,7 +325,7 @@ namespace SceneSettingsInternal
 		for (auto& part : selectorDefaults)
 			part = NormalizeDisplayPart(std::move(part));
 		while (!parts.empty() && !selectorDefaults.empty() &&
-		       EqualDisplayText(parts.front(), selectorDefaults.front())) {
+		       Util::IEquals(parts.front(), selectorDefaults.front())) {
 			parts.erase(parts.begin());
 			selectorDefaults.erase(selectorDefaults.begin());
 			++rawOffset;
@@ -356,8 +337,8 @@ namespace SceneSettingsInternal
 				const bool translated = rawOffset < rawKeys.size() && rawKeys[rawOffset] != "-";
 				auto rawPart = NormalizeDisplayPart(rawParts[rawOffset]);
 				auto settingPart = NormalizeDisplayPart(settingParts[rawOffset]);
-				if (!translated && EqualDisplayText(parts.front(), rawPart) &&
-					EqualDisplayText(rawPart, settingPart))
+				if (!translated && Util::IEquals(parts.front(), rawPart) &&
+					Util::IEquals(rawPart, settingPart))
 					parts.erase(parts.begin());
 			}
 		}
@@ -471,10 +452,18 @@ namespace SceneSettingsInternal
 			featureShortName, setting.settingKey, authored.dump(), clamped.dump());
 	}
 
+	/** @brief Position of a catalog entry, which keys the per-setting tables built from GetSettings(). */
+	static size_t GetCatalogIndex(const SceneSettingsCatalog::SettingMetadata& setting)
+	{
+		const auto settings = SceneSettingsCatalog::GetSettings();
+		const auto index = static_cast<size_t>(&setting - settings.data());
+		assert(index < settings.size());
+		return index;
+	}
+
 	const SceneSettingsCatalog::SettingMetadata* FindStoredAllComponent(
 		const SceneSettingsCatalog::SettingMetadata& setting)
 	{
-		const auto settings = SceneSettingsCatalog::GetSettings();
 		static const auto storedAllComponents = [] {
 			using AggregateKey = std::tuple<std::string_view, std::string_view, std::string_view,
 				SceneSettingsCatalog::AggregateSemantic, std::int8_t, std::uint8_t>;
@@ -496,8 +485,7 @@ namespace SceneSettingsInternal
 			}
 			return components;
 		}();
-		const auto index = static_cast<size_t>(&setting - settings.data());
-		assert(index < storedAllComponents.size());
+		const auto index = GetCatalogIndex(setting);
 		return index < storedAllComponents.size() ? storedAllComponents[index] : nullptr;
 	}
 
@@ -620,21 +608,13 @@ namespace SceneSettingsInternal
 		return JoinDisplayParts(settingPath, std::format("{}.{}", featureShortName, settingKey));
 	}
 
-	json* GetObjectAtPath(json& data, const std::vector<std::string>& path, bool create)
+	json* GetOrCreateObjectAtPath(json& data, const std::vector<std::string>& path)
 	{
 		json* node = &data;
 		for (const auto& segment : path) {
-			if (!node->is_object()) {
+			if (!node->is_object())
 				return nullptr;
-			}
-
-			auto it = node->find(segment);
-			if (it == node->end()) {
-				if (!create)
-					return nullptr;
-				it = node->emplace(segment, json::object()).first;
-			}
-			node = &*it;
+			node = &*node->emplace(segment, json::object()).first;
 		}
 		return node->is_object() ? node : nullptr;
 	}
@@ -668,11 +648,6 @@ namespace SceneSettingsInternal
 			node = &*it;
 		}
 		return node->is_object() ? node : nullptr;
-	}
-
-	json* GetObjectAtPath(json& data, const std::vector<std::string>& path)
-	{
-		return const_cast<json*>(GetObjectAtPath(std::as_const(data), path));
 	}
 
 	bool ParseCatalogArrayIndex(std::string_view value, size_t& index)
@@ -751,7 +726,6 @@ namespace SceneSettingsInternal
 
 	bool IsCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
 	{
-		const auto settings = SceneSettingsCatalog::GetSettings();
 		static const auto allowedSettings = [] {
 			std::vector<uint8_t> allowed;
 			allowed.reserve(SceneSettingsCatalog::GetSettings().size());
@@ -759,8 +733,7 @@ namespace SceneSettingsInternal
 				allowed.push_back(ComputeCatalogSettingAllowedByPolicy(candidate) ? 1 : 0);
 			return allowed;
 		}();
-		const auto index = static_cast<size_t>(&setting - settings.data());
-		assert(index < allowedSettings.size());
+		const auto index = GetCatalogIndex(setting);
 		return index < allowedSettings.size() && allowedSettings[index] != 0;
 	}
 
@@ -772,7 +745,6 @@ namespace SceneSettingsInternal
 		if (typeIndex >= sceneTypeCount)
 			return false;
 
-		const auto settings = SceneSettingsCatalog::GetSettings();
 		static const auto allowedSettings = [] {
 			std::array<std::vector<uint8_t>, sceneTypeCount> allowedByType;
 			for (size_t index = 0; index < sceneTypeCount; ++index) {
@@ -796,8 +768,7 @@ namespace SceneSettingsInternal
 			return allowedByType;
 		}();
 
-		const auto index = static_cast<size_t>(&setting - settings.data());
-		assert(index < allowedSettings[typeIndex].size());
+		const auto index = GetCatalogIndex(setting);
 		return index < allowedSettings[typeIndex].size() && allowedSettings[typeIndex][index] != 0;
 	}
 
@@ -831,17 +802,23 @@ namespace SceneSettingsInternal
 		return false;
 	}
 
-	bool GetCatalogSettingValue(
-		Feature& feature, const SceneSettingsCatalog::SettingMetadata& setting, json& value)
+	/** @brief Copies the setting's serialized value out of a feature snapshot when it is a scene primitive. */
+	static bool ReadCatalogPrimitive(const json& featureSettings,
+		const SceneSettingsCatalog::SettingMetadata& setting, json& value)
 	{
-		json featureSettings;
-		if (!TrySaveFeatureSettings(feature, "read settings", featureSettings))
-			return false;
 		const auto* serializedValue = GetCatalogSerializedValue(featureSettings, setting);
 		if (!serializedValue || !IsSceneSettingPrimitive(*serializedValue))
 			return false;
 		value = *serializedValue;
 		return true;
+	}
+
+	bool GetCatalogSettingValue(
+		Feature& feature, const SceneSettingsCatalog::SettingMetadata& setting, json& value)
+	{
+		json featureSettings;
+		return TrySaveFeatureSettings(feature, "read settings", featureSettings) &&
+		       ReadCatalogPrimitive(featureSettings, setting, value);
 	}
 
 	std::span<const SceneSettingsCatalog::SettingMetadata> GetCatalogFeatureSettings(
@@ -914,14 +891,7 @@ namespace SceneSettingsInternal
 		auto [snapshotIt, inserted] = featureSettingsCache->try_emplace(featureShortName);
 		if (inserted && !TrySaveFeatureSettings(feature, "snapshot settings", snapshotIt->second))
 			snapshotIt->second = nullptr;
-		if (!snapshotIt->second.is_object())
-			return false;
-
-		const auto* value = GetCatalogSerializedValue(snapshotIt->second, setting);
-		if (!value || !IsSceneSettingPrimitive(*value))
-			return false;
-		featureValue = *value;
-		return true;
+		return snapshotIt->second.is_object() && ReadCatalogPrimitive(snapshotIt->second, setting, featureValue);
 	}
 
 	bool IsSceneSettingValueAllowed(const json& featureValue,
@@ -970,28 +940,27 @@ namespace SceneSettingsInternal
 		const std::string& settingKey, const json& value, bool requireNumeric,
 		FeatureSettingsCache* featureSettingsCache)
 	{
+		const auto logName = [&] { return GetSettingLogName(featureShortName, settingPath, settingKey); };
 		if (!IsSettingAllowedBySceneTypePolicy(type, featureShortName, settingPath, settingKey)) {
-			logger::warn("[SceneSettings] {} entry {} is not whitelisted for this scene type",
-				context, GetSettingLogName(featureShortName, settingPath, settingKey));
+			logger::warn("[SceneSettings] {} entry {} is not whitelisted for this scene type", context, logName());
 			return false;
 		}
 		if (IsBlacklistedSceneSetting(featureShortName, settingPath, settingKey)) {
-			logger::warn("[SceneSettings] {} entry {} is blacklisted",
-				context, GetSettingLogName(featureShortName, settingPath, settingKey));
+			logger::warn("[SceneSettings] {} entry {} is blacklisted", context, logName());
 			return false;
 		}
 
 		auto* setting = FindAllowedCatalogSetting(featureShortName, settingPath, settingKey, requireNumeric);
 		if (!setting) {
 			logger::warn("[SceneSettings] {} entry {} is not permitted by the compiled scene settings catalog",
-				context, GetSettingLogName(featureShortName, settingPath, settingKey));
+				context, logName());
 			return false;
 		}
 
 		auto* feature = Feature::FindFeatureByShortName(featureShortName);
 		if (!feature) {
 			logger::warn("[SceneSettings] {} entry {} - feature '{}' not found/loaded",
-				context, GetSettingLogName(featureShortName, settingPath, settingKey), featureShortName);
+				context, logName(), featureShortName);
 			return false;
 		}
 
@@ -999,8 +968,7 @@ namespace SceneSettingsInternal
 		if (!GetFeatureSettingValueForValidation(*feature, featureShortName, *setting,
 				featureSettingsCache, featureValue) ||
 			!IsSceneSettingValueAllowed(featureValue, *setting, value, requireNumeric)) {
-			logger::warn("[SceneSettings] {} entry {} is not a supported scene-manager setting",
-				context, GetSettingLogName(featureShortName, settingPath, settingKey));
+			logger::warn("[SceneSettings] {} entry {} is not a supported scene-manager setting", context, logName());
 			return false;
 		}
 		return true;

@@ -13,6 +13,24 @@ using namespace SceneSettingsInternal;
 using namespace SceneSettingsLocationTargets;
 using namespace SceneSettingsContextRules;
 
+/** @brief A user entry whose revert baseline is the value it starts with. */
+static SceneSettingsManager::SettingEntry MakeUserEntry(const std::string& featureShortName,
+	const std::vector<std::string>& settingPath, const std::string& settingKey, json value,
+	SceneSettingsManager::TimeOfDayPeriod period, bool deleted = false)
+{
+	return {
+		.featureShortName = featureShortName,
+		.settingPath = settingPath,
+		.settingKey = settingKey,
+		.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey),
+		.value = value,
+		.originalValue = std::move(value),
+		.deleted = deleted,
+		.source = SceneSettingsManager::EntrySource::User,
+		.period = period,
+	};
+}
+
 bool SceneSettingsManager::IsPeriodicContext(SceneContextType type)
 {
 	return type != SceneContextType::Interior;
@@ -121,10 +139,8 @@ const std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::Get
 			return &configIt->second.entries;
 		return nullptr;
 	case SceneContextType::Location:
-		if (auto configIt = locationSceneConfigs.find(
-				GetLocationConfigKey(context.locationType, context.locationFormKey));
-			configIt != locationSceneConfigs.end())
-			return &configIt->second.entries;
+		if (const auto* config = FindLocationConfig(context.locationType, context.locationFormKey))
+			return &config->entries;
 		return nullptr;
 	default:
 		return nullptr;
@@ -161,10 +177,8 @@ std::vector<SceneSettingsManager::SettingEntry>* SceneSettingsManager::GetContex
 	case SceneContextType::Location:
 		if (!TryEnsureLocationDataLoaded())
 			return nullptr;
-		if (auto configIt = locationSceneConfigs.find(
-				GetLocationConfigKey(context.locationType, context.locationFormKey));
-			configIt != locationSceneConfigs.end())
-			return &configIt->second.entries;
+		if (auto* config = FindLocationConfig(context.locationType, context.locationFormKey))
+			return &config->entries;
 		return nullptr;
 	default:
 		return nullptr;
@@ -401,16 +415,8 @@ std::optional<size_t> SceneSettingsManager::AddContextSetting(const SceneContext
 	if (!contextEntries)
 		return std::nullopt;
 
-	SettingEntry entry;
-	entry.featureShortName = featureShortName;
-	entry.settingPath = settingPath;
-	entry.settingKey = settingKey;
-	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
-	entry.originalValue = *value;
-	entry.value = std::move(*value);
-	entry.source = EntrySource::User;
-	entry.period = context.period;
-	contextEntries->push_back(std::move(entry));
+	contextEntries->push_back(
+		MakeUserEntry(featureShortName, settingPath, settingKey, std::move(*value), context.period));
 
 	CommitContextUserEntryMutation(context, deferSave);
 	return FindContextUserEntry(context, featureShortName, settingPath, settingKey);
@@ -508,17 +514,8 @@ bool SceneSettingsManager::TombstoneContextSetting(const SceneContextId& context
 	if (value.is_null())
 		return false;
 
-	SettingEntry entry;
-	entry.featureShortName = featureShortName;
-	entry.settingPath = settingPath;
-	entry.settingKey = settingKey;
-	entry.displayName = GetSceneSettingDisplayName(featureShortName, settingPath, settingKey);
-	entry.originalValue = value;
-	entry.value = std::move(value);
-	entry.source = EntrySource::User;
-	entry.deleted = true;
-	entry.period = context.period;
-	contextEntries->push_back(std::move(entry));
+	contextEntries->push_back(
+		MakeUserEntry(featureShortName, settingPath, settingKey, std::move(value), context.period, true));
 	CommitContextUserEntryMutation(context);
 	return true;
 }

@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Menu/Fonts.h"
+#include "Utils/FileSystem.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -32,6 +33,18 @@ namespace SceneSettingsOverwrites
 
 		entries.push_back(std::move(entry));
 		return true;
+	}
+
+	void MergeOverwriteFileEntries(SceneSettingsManager::PeriodicSceneConfig& config,
+		std::vector<SceneSettingsManager::SettingEntry>&& entries, std::optional<bool> timeOfDayEnabled,
+		SceneSettingsManager::TimeOfDayPeriod period, std::string_view context)
+	{
+		if (!config.overwriteTimeOfDayEnabled)
+			config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
+		for (auto& entry : entries) {
+			entry.period = period;
+			AddOverwriteEntryIfUnique(config.entries, std::move(entry), context);
+		}
 	}
 
 	std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
@@ -125,7 +138,7 @@ namespace SceneSettingsOverwrites
 		if (entryTransitions.is_null())
 			entryTransitions = json::object();
 		for (const auto* entry : entries) {
-			auto* node = GetObjectAtPath(data, entry->settingPath, true);
+			auto* node = GetOrCreateObjectAtPath(data, entry->settingPath);
 			if (!node) {
 				logger::error("[SceneSettings] Refusing to replace a non-object path in overwrite file '{}'",
 					path.string());
@@ -136,7 +149,7 @@ namespace SceneSettingsOverwrites
 				RemoveObjectValueAtPath(entryTransitions, entry->settingPath, 0, entry->settingKey);
 				continue;
 			}
-			auto* transitionNode = GetObjectAtPath(entryTransitions, entry->settingPath, true);
+			auto* transitionNode = GetOrCreateObjectAtPath(entryTransitions, entry->settingPath);
 			if (!transitionNode) {
 				logger::error("[SceneSettings] Refusing to replace a non-object transition path in overwrite file '{}'",
 					path.string());
@@ -147,7 +160,7 @@ namespace SceneSettingsOverwrites
 		if (entryTransitions.empty())
 			metadata.erase(kMetadataEntryTransitionsKey);
 
-		return WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
+		return Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 	}
 
 	bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
@@ -189,7 +202,7 @@ namespace SceneSettingsOverwrites
 			return false;
 		}
 
-		return WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
+		return Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "overwrite file");
 	}
 
 	bool ParseOverwriteFileEntries(const std::filesystem::path& filePath,

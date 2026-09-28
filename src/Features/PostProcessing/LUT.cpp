@@ -27,9 +27,7 @@ namespace
 {
 	std::string GetLowercaseExtension(const std::filesystem::path& path)
 	{
-		auto extension = path.extension().string();
-		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return extension;
+		return Util::ToLower(path.extension().string());
 	}
 
 	/** @brief Load/Clear acting on the feature's own LUT, as the main menu shows it. */

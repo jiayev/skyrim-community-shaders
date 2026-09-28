@@ -7,6 +7,7 @@
 #include "Globals.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Format.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
@@ -28,11 +29,7 @@ namespace
 	constexpr const char* kEffects11PackSubdir = "effects11";
 	constexpr const char* kDefaultCSPPFileName = "cspp.json";
 
-	std::string ToLower(std::string s)
-	{
-		std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return s;
-	}
+	using Util::ToLower;
 
 	bool ContainsCI(const std::string& haystack, const std::string& needleLower)
 	{

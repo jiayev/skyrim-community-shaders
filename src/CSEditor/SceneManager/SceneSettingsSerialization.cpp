@@ -1,6 +1,7 @@
 #include "SceneSettingsManager.h"
 
 #include "SceneSettingsInternal.h"
+#include "Utils/FileSystem.h"
 
 #include <cmath>
 #include <filesystem>
@@ -191,7 +192,7 @@ void SceneSettingsManager::SaveAllUserSettings()
 		data["location"] = std::move(locationObj);
 	}
 
-	const bool saved = WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
+	const bool saved = Util::FileHelpers::WriteJsonAtomically(path, data, kOverwriteJsonIndent, "SceneManager.json");
 	if (saved) {
 		preservedUserSettingsRoot = data;
 		if (locationLoaded && locationTransitionModified) {

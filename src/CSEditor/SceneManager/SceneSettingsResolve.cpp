@@ -495,11 +495,11 @@ SceneSettingsManager::ResolvedSettingMap& SceneSettingsManager::BuildResolvedSet
 	const bool rebuildLocationOverrides = collectLocationTransitionDurations || !cachedLocationOverridesValid;
 	if (rebuildLocationOverrides) {
 		for (const auto& target : locationTargets) {
-			auto it = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
-			if (it == locationSceneConfigs.end())
+			const auto* config = FindLocationConfig(target.type, target.formKey);
+			if (!config)
 				continue;
-			for (const auto& entry : it->second.entries)
-				if (it->second.IsPeriodActive(entry.period) &&
+			for (const auto& entry : config->entries)
+				if (config->IsPeriodActive(entry.period) &&
 					IsResolvableEntry(entry, SceneType::Location))
 					if (auto address = GetEntryAddress(entry); !baselineSettings.contains(address))
 						requiredBaselines.push_back(std::move(address));
@@ -840,9 +840,8 @@ void SceneSettingsManager::ResolveLocationSettings(ResolvedSettingMap& resolved,
 {
 	auto* transitionDurations = collectTransitionDurations ? &pendingLocationTransitionDurations : nullptr;
 	for (const auto& target : locationTargets) {
-		auto it = locationSceneConfigs.find(GetLocationConfigKey(target.type, target.formKey));
-		if (it != locationSceneConfigs.end())
-			ResolveLocationLink(it->second.entries, it->second.timeOfDayEnabled, resolved, periodValues,
+		if (const auto* config = FindLocationConfig(target.type, target.formKey))
+			ResolveLocationLink(config->entries, config->timeOfDayEnabled, resolved, periodValues,
 				transitionDurations);
 	}
 }
@@ -1032,10 +1031,9 @@ json SceneSettingsManager::GetBaselineValue(const SettingAddress& address)
 
 const json* SceneSettingsManager::FindAppliedBaseline(const SettingIdentity& setting) const
 {
-	const SettingAddress address{ setting.featureShortName, setting.settingPath, setting.settingKey };
-	if (!appliedSettings.contains(address))
+	if (!appliedSettings.contains(setting))
 		return nullptr;
-	const auto found = baselineSettings.find(address);
+	const auto found = baselineSettings.find(setting);
 	return found != baselineSettings.end() ? &found->second : nullptr;
 }
 

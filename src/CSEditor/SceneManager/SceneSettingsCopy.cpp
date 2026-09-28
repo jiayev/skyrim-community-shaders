@@ -292,12 +292,11 @@ std::string SceneSettingsManager::GetSceneContextDisplayName(const SceneContextI
 	case SceneContextType::Weather:
 		return AppendPeriodName(Util::GetFormDisplayName(context.weatherId), context.period);
 	case SceneContextType::Location: {
-		auto configIt = locationSceneConfigs.find(
-			GetLocationConfigKey(context.locationType, context.locationFormKey));
+		const auto* config = FindLocationConfig(context.locationType, context.locationFormKey);
 		// The form key is the fallback identity for targets the game never named.
 		const std::string* name = &context.locationFormKey;
-		if (configIt != locationSceneConfigs.end())
-			name = configIt->second.name.empty() ? &configIt->second.formKey : &configIt->second.name;
+		if (config)
+			name = config->name.empty() ? &config->formKey : &config->name;
 		return AppendPeriodName(
 			std::format("{} / {}", GetCopyLocationTypeName(context.locationType), *name), context.period);
 	}
@@ -372,10 +371,9 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 		break;
 	}
 	case SceneContextType::Location: {
-		auto configIt = locationSceneConfigs.find(
-			GetLocationConfigKey(destination.locationType, destination.locationFormKey));
-		destinationNeedsMaterialization = configIt == locationSceneConfigs.end();
-		destinationEntries = destinationNeedsMaterialization ? &emptyDestinationEntries : &configIt->second.entries;
+		auto* config = FindLocationConfig(destination.locationType, destination.locationFormKey);
+		destinationNeedsMaterialization = !config;
+		destinationEntries = config ? &config->entries : &emptyDestinationEntries;
 		break;
 	}
 	default:
@@ -473,8 +471,7 @@ SceneSettingsManager::CopyResult SceneSettingsManager::CopySettingsToContext(con
 				indexIt != destinationUserIndices.end())
 				destinationIndex = indexIt->second;
 
-			const SettingAddress address{ candidate.setting.featureShortName,
-				candidate.setting.settingPath, candidate.setting.settingKey };
+			const auto& address = candidate.setting;
 			auto baselineIt = baselineSettings.find(address);
 			json originalValue;
 			if (destinationIndex) {

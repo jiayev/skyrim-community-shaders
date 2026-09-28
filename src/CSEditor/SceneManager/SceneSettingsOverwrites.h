@@ -15,6 +15,11 @@ namespace SceneSettingsOverwrites
 	bool AddOverwriteEntryIfUnique(std::vector<SceneSettingsManager::SettingEntry>& entries,
 		SceneSettingsManager::SettingEntry&& entry, std::string_view context);
 
+	/** @brief Adds one overwrite file's entries to a config under its folder's period; the first file's mode wins. */
+	void MergeOverwriteFileEntries(SceneSettingsManager::PeriodicSceneConfig& config,
+		std::vector<SceneSettingsManager::SettingEntry>&& entries, std::optional<bool> timeOfDayEnabled,
+		SceneSettingsManager::TimeOfDayPeriod period, std::string_view context);
+
 	/// Per-period overwrites live in a period subfolder of their scene's directory.
 	std::filesystem::path GetOverwriteDir(const std::filesystem::path& baseDir,
 		SceneSettingsManager::TimeOfDayPeriod period);

@@ -404,20 +404,19 @@ bool SceneSettingsManager::IsFeatureAllowedForType(SceneType type, const std::st
 	if (!Feature::FindFeatureByShortName(featureShortName))
 		return false;
 
-	switch (type) {
-	case SceneType::InteriorOnly:
-		return IsInteriorOnlyFeatureAllowed(featureShortName) &&
-		       CatalogHasSceneSettings(featureShortName, type);
-	case SceneType::TimeOfDay:
-		return IsTimeOfDayFeatureAllowed(featureShortName) &&
-		       CatalogHasSceneSettings(featureShortName, type);
-	case SceneType::Location:
-		return (IsInteriorOnlyFeatureAllowed(featureShortName) ||
-		           IsTimeOfDayFeatureAllowed(featureShortName)) &&
-		       CatalogHasSceneSettings(featureShortName, type);
-	default:
-		return false;
-	}
+	const auto allowedByPolicy = [&] {
+		switch (type) {
+		case SceneType::InteriorOnly:
+			return IsInteriorOnlyFeatureAllowed(featureShortName);
+		case SceneType::TimeOfDay:
+			return IsTimeOfDayFeatureAllowed(featureShortName);
+		case SceneType::Location:
+			return IsInteriorOnlyFeatureAllowed(featureShortName) || IsTimeOfDayFeatureAllowed(featureShortName);
+		default:
+			return false;
+		}
+	};
+	return allowedByPolicy() && CatalogHasSceneSettings(featureShortName, type);
 }
 
 bool SceneSettingsManager::IsSettingAllowedForType(SceneType type,
@@ -498,6 +497,13 @@ void SceneSettingsManager::BumpEntryPresentationRevision()
 	MarkSceneValuesDirty();
 }
 
+void SceneSettingsManager::MarkEntriesLoaded()
+{
+	BumpEntryPresentationRevision();
+	activeEntryCacheDirty = true;
+	resolverDirty = true;
+}
+
 void SceneSettingsManager::MarkSceneValuesDirty()
 {
 	++sceneValueRevision;
@@ -527,36 +533,15 @@ bool SceneSettingsManager::IsEntryActive(const SettingEntry& entry) const
 	return !entry.paused;
 }
 
-bool SceneSettingsManager::HasEntryFromSource(SceneType type, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source) const
-{
-	for (const auto& entry : GetEntries(type)) {
-		if (entry.source == source && IsSameSetting(entry, featureShortName, settingPath, settingKey))
-			return true;
-	}
-	return false;
-}
-
-bool SceneSettingsManager::HasEntryForPeriod(const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey,
-	TimeOfDayPeriod period, EntrySource source) const
-{
-	for (const auto& entry : GetEntries(SceneType::TimeOfDay)) {
-		if (entry.source == source && entry.period == period &&
-			IsSameSetting(entry, featureShortName, settingPath, settingKey))
-			return true;
-	}
-	return false;
-}
-
 bool SceneSettingsManager::HasDuplicateEntry(SceneType type, const std::string& featureShortName,
 	const std::vector<std::string>& settingPath, const std::string& settingKey, EntrySource source, TimeOfDayPeriod period) const
 {
-	if (!IsEntryListSceneType(type))
-		return false;
-	if (type == SceneType::TimeOfDay)
-		return HasEntryForPeriod(featureShortName, settingPath, settingKey, period, source);
-	return HasEntryFromSource(type, featureShortName, settingPath, settingKey, source);
+	const bool matchPeriod = type == SceneType::TimeOfDay;
+	const auto& typeEntries = GetEntries(type);
+	return std::any_of(typeEntries.begin(), typeEntries.end(), [&](const auto& entry) {
+		return entry.source == source && (!matchPeriod || entry.period == period) &&
+		       IsSameSetting(entry, featureShortName, settingPath, settingKey);
+	});
 }
 
 void SceneSettingsManager::RemoveSetting(SceneType type, size_t index)
@@ -754,22 +739,21 @@ void SceneSettingsManager::RecordBaselineEdit(const SettingIdentity& setting, co
 {
 	// The feature's base snapshot and apply document predate the edit, so replaying either would revert it.
 	InvalidateFeatureSnapshot(setting.featureShortName);
-	const SettingAddress address{ setting.featureShortName, setting.settingPath, setting.settingKey };
-	auto baselineIt = baselineSettings.find(address);
-	if (!appliedSettings.contains(address) || baselineIt == baselineSettings.end())
+	auto baselineIt = baselineSettings.find(setting);
+	if (!appliedSettings.contains(setting) || baselineIt == baselineSettings.end())
 		return;
 
 	assert((sketchOriginals.empty() || sketchOriginals.begin()->first.featureShortName == setting.featureShortName) &&
 		   "sketches belong to the one feature the menu shows");
-	sketchOriginals.try_emplace(address, baselineIt->second);
+	sketchOriginals.try_emplace(setting, baselineIt->second);
 	baselineIt->second = value;
-	appliedSettings[address] = value;
+	appliedSettings[setting] = value;
 	locationTransitionBatchesDirty = true;
 }
 
 bool SceneSettingsManager::IsSketched(const SettingIdentity& setting) const
 {
-	return sketchOriginals.contains({ setting.featureShortName, setting.settingPath, setting.settingKey });
+	return sketchOriginals.contains(setting);
 }
 
 bool SceneSettingsManager::HasSketches(const std::string& featureShortName) const
@@ -877,10 +861,9 @@ void SceneSettingsManager::CommitSketches(std::span<const SettingIdentity> setti
 
 	std::map<SceneContextId, std::vector<EntryValueUpdate>> updatesByContext;
 	for (const auto& [context, setting] : targets) {
-		const SettingAddress address{ setting->featureShortName, setting->settingPath, setting->settingKey };
 		const auto index = FindContextUserEntry(context, setting->featureShortName, setting->settingPath, setting->settingKey);
-		auto originalIt = sketchOriginals.find(address);
-		auto baselineIt = baselineSettings.find(address);
+		auto originalIt = sketchOriginals.find(*setting);
+		auto baselineIt = baselineSettings.find(*setting);
 		if (!index || originalIt == sketchOriginals.end() || baselineIt == baselineSettings.end())
 			continue;
 		updatesByContext[context].push_back({ *index, baselineIt->second });
@@ -953,9 +936,7 @@ void SceneSettingsManager::LoadAll()
 		DiscoverOverwrites(SceneType::TimeOfDay);
 		DiscoverPresetMetadata();
 		LoadAllUserSettings();
-		BumpEntryPresentationRevision();
-		activeEntryCacheDirty = true;
-		resolverDirty = true;
+		MarkEntriesLoaded();
 	}
 	TryEnsureLocationDataLoaded();
 }
@@ -1018,9 +999,7 @@ bool SceneSettingsManager::TryEnsureLocationDataLoaded()
 		RefreshTimeOfDayModes();
 		locationDataLoaded = true;
 		locationTargetsCached = false;
-		BumpEntryPresentationRevision();
-		activeEntryCacheDirty = true;
-		resolverDirty = true;
+		MarkEntriesLoaded();
 		return true;
 	} catch (const std::exception& e) {
 		logger::error("[SceneSettings] Failed to load location settings: {}", e.what());
@@ -1039,9 +1018,7 @@ bool SceneSettingsManager::TryEnsureWeatherDataLoaded()
 
 	weatherDataLoaded = true;
 	LoadWeatherData();
-	BumpEntryPresentationRevision();
-	activeEntryCacheDirty = true;
-	resolverDirty = true;
+	MarkEntriesLoaded();
 	return true;
 }
 

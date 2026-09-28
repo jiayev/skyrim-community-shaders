@@ -55,9 +55,6 @@ namespace SceneSettingsInternal
 
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type);
 
-	bool WriteJsonAtomically(const std::filesystem::path& path, const json& data, int indent,
-		std::string_view context);
-
 	/** @brief The period transition an object carries, or nullopt when absent or out of range. */
 	std::optional<float> ReadTimeOfDayTransitionHours(const json& object, std::string_view context);
 
@@ -118,8 +115,6 @@ namespace SceneSettingsInternal
 
 	std::vector<std::string> GetCatalogSelectorPath(const SceneSettingsCatalog::SettingMetadata& setting);
 
-	bool EqualDisplayText(std::string_view lhs, std::string_view rhs);
-
 	std::vector<std::string> GetCatalogContextPath(const SceneSettingsCatalog::SettingMetadata& setting);
 
 	double GetCatalogNumericDisplayScale(const SceneSettingsCatalog::SettingMetadata& setting);
@@ -160,14 +155,13 @@ namespace SceneSettingsInternal
 	std::string GetSettingLogName(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 
-	json* GetObjectAtPath(json& data, const std::vector<std::string>& path, bool create);
+	/** @brief The object at path, creating missing levels, or null when an existing level is not an object. */
+	json* GetOrCreateObjectAtPath(json& data, const std::vector<std::string>& path);
 
 	bool RemoveObjectValueAtPath(json& data, const std::vector<std::string>& path,
 		size_t pathIndex, const std::string& settingKey);
 
 	const json* GetObjectAtPath(const json& data, const std::vector<std::string>& path);
-
-	json* GetObjectAtPath(json& data, const std::vector<std::string>& path);
 
 	bool ParseCatalogArrayIndex(std::string_view value, size_t& index);
 

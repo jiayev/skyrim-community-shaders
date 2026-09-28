@@ -363,7 +363,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 			manifest[kPresetMetadataScreenshotsKey] = std::move(shots);
 	}
 
-	if (!WriteJsonAtomically(UnifiedPresetCatalog::GetPackManifestPath(packRoot), manifest, kOverwriteJsonIndent, "preset manifest")) {
+	if (!Util::FileHelpers::WriteJsonAtomically(UnifiedPresetCatalog::GetPackManifestPath(packRoot), manifest, kOverwriteJsonIndent, "preset manifest")) {
 		logger::error("[SceneSettings] Preset '{}' failed to write its manifest", safeModName);
 		wroteAll = false;
 	}
@@ -527,12 +527,7 @@ void SceneSettingsManager::DiscoverLocationOverwritesForTarget(const std::filesy
 					config.cocCode = metadataCocCode;
 				else if (!resolvedCocCode.empty())
 					config.cocCode = resolvedCocCode;
-				if (!config.overwriteTimeOfDayEnabled)
-					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
-				for (auto& entry : parsedEntries) {
-					entry.period = period;
-					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "location");
-				}
+				MergeOverwriteFileEntries(config, std::move(parsedEntries), timeOfDayEnabled, period, "location");
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load location overwrite '{}': {}",
 					filePath.filename().string(), e.what());
@@ -584,13 +579,8 @@ void SceneSettingsManager::DiscoverWeatherOverwritesForSpid(RE::FormID weatherId
 						&timeOfDayEnabled))
 					continue;
 				// Created only once a file yields entries, so a rejected file leaves no empty weather behind.
-				auto& config = GetWeatherConfigMut(weatherId);
-				if (!config.overwriteTimeOfDayEnabled)
-					config.overwriteTimeOfDayEnabled = timeOfDayEnabled;
-				for (auto& entry : parsedEntries) {
-					entry.period = period;
-					AddOverwriteEntryIfUnique(config.entries, std::move(entry), "weather");
-				}
+				MergeOverwriteFileEntries(GetWeatherConfigMut(weatherId), std::move(parsedEntries), timeOfDayEnabled,
+					period, "weather");
 			} catch (const std::exception& e) {
 				logger::error("[SceneSettings] Failed to load weather overwrite '{}': {}", filePath.filename().string(), e.what());
 			}

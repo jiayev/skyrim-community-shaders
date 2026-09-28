@@ -132,8 +132,7 @@ bool SceneSettingsManager::AddLocationTarget(const LocationTarget& target)
 
 bool SceneSettingsManager::IsLocationTargetAuthored(LocationTargetType type, std::string_view formKey) const
 {
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	return it != locationSceneConfigs.end() && it->second.userAuthored;
+	return GetLocationConfig(type, formKey).userAuthored;
 }
 
 void SceneSettingsManager::RemoveLocationTarget(LocationTargetType type, const std::string& formKey)
@@ -200,8 +199,21 @@ SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::EnsureAuthoredL
 const SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::GetLocationConfig(
 	LocationTargetType type, std::string_view formKey) const
 {
+	const auto* config = FindLocationConfig(type, formKey);
+	return config ? *config : kEmptyLocationConfig;
+}
+
+const SceneSettingsManager::LocationSceneConfig* SceneSettingsManager::FindLocationConfig(
+	LocationTargetType type, std::string_view formKey) const
+{
 	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	return it != locationSceneConfigs.end() ? it->second : kEmptyLocationConfig;
+	return it != locationSceneConfigs.end() ? &it->second : nullptr;
+}
+
+SceneSettingsManager::LocationSceneConfig* SceneSettingsManager::FindLocationConfig(
+	LocationTargetType type, std::string_view formKey)
+{
+	return const_cast<LocationSceneConfig*>(std::as_const(*this).FindLocationConfig(type, formKey));
 }
 
 std::optional<json> SceneSettingsManager::ResolveLocationLowerValue(LocationTargetType type,
@@ -277,8 +289,8 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 	const auto canonicalFormKey = CanonicalizeResolvedLocationFormKey(formKey);
 	const auto targetKey = GetLocationConfigKey(type, canonicalFormKey);
 	// Pinning the mode keeps a later preset from flipping which set the user's edits land in.
-	if (auto configIt = locationSceneConfigs.find(targetKey); configIt != locationSceneConfigs.end())
-		configIt->second.userTimeOfDayEnabled = configIt->second.timeOfDayEnabled;
+	if (auto* config = FindLocationConfig(type, canonicalFormKey))
+		config->userTimeOfDayEnabled = config->timeOfDayEnabled;
 	if (replaceMalformedEntries) {
 		for (auto& [rawFormKey, rawConfig] : section.items()) {
 			if (!rawConfig.is_object() ||
@@ -308,16 +320,16 @@ void SceneSettingsManager::PrepareLocationUserSettingsMutation(LocationTargetTyp
 
 void SceneSettingsManager::RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index)
 {
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end() || index >= it->second.entries.size())
+	auto* config = FindLocationConfig(type, formKey);
+	if (!config || index >= config->entries.size())
 		return;
 
-	const auto entry = it->second.entries[index];
+	const auto entry = config->entries[index];
 	const bool userEntry = entry.source == EntrySource::User;
 	if (entry.source == EntrySource::Overwrite && !entry.sourceFilename.empty() &&
 		!RemoveSettingFromOverwriteFile(GetLocationOverwritePath(formKey, entry), entry.settingPath, entry.settingKey))
 		return;
-	it->second.entries.erase(it->second.entries.begin() + static_cast<ptrdiff_t>(index));
+	config->entries.erase(config->entries.begin() + static_cast<ptrdiff_t>(index));
 	BumpEntryPresentationRevision();
 	if (userEntry) {
 		PrepareLocationUserSettingsMutation(type, formKey, false);
@@ -368,8 +380,8 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 	const std::string& formKey, std::span<const size_t> indices, std::optional<float> seconds,
 	bool deferSave)
 {
-	auto it = locationSceneConfigs.find(GetLocationConfigKey(type, formKey));
-	if (it == locationSceneConfigs.end() || indices.empty())
+	auto* config = FindLocationConfig(type, formKey);
+	if (!config || indices.empty())
 		return;
 	if (seconds) {
 		if (!std::isfinite(*seconds))
@@ -378,7 +390,7 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 	}
 
 	// A component of an aggregate control cannot transition on its own, so the edit takes its siblings.
-	auto& locationEntries = it->second.entries;
+	auto& locationEntries = config->entries;
 	std::set<size_t> expandedIndices;
 	for (const auto index : indices) {
 		if (index >= locationEntries.size())
