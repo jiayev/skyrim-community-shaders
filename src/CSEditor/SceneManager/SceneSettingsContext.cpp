@@ -31,6 +31,16 @@ static SceneSettingsManager::SettingEntry MakeUserEntry(const std::string& featu
 	};
 }
 
+/** @brief The entry at index when it is the user's, else null: a mod's entry is never edited in place. */
+static SceneSettingsManager::SettingEntry* FindUserEntry(std::vector<SceneSettingsManager::SettingEntry>* entries,
+	size_t index)
+{
+	if (!entries || index >= entries->size())
+		return nullptr;
+	auto& entry = (*entries)[index];
+	return entry.source == SceneSettingsManager::EntrySource::User ? &entry : nullptr;
+}
+
 bool SceneSettingsManager::IsPeriodicContext(SceneContextType type)
 {
 	return type != SceneContextType::Interior;
@@ -373,8 +383,7 @@ void SceneSettingsManager::ClearAllUserEntries()
 	if (!changed)
 		return;
 	BumpEntryPresentationRevision();
-	SaveAllUserSettings();
-	ReapplyIfActive();
+	CommitSceneSettingChanges();
 }
 
 std::optional<size_t> SceneSettingsManager::FindContextUserEntry(const SceneContextId& context,
@@ -536,31 +545,24 @@ void SceneSettingsManager::ClearContextTombstone(const SceneContextId& context,
 
 void SceneSettingsManager::TogglePauseContextEntry(const SceneContextId& context, size_t index)
 {
-	auto* contextEntries = GetContextEntriesMut(context);
-	if (!contextEntries || index >= contextEntries->size())
+	// Pausing a mod's entry would hold it back for this session and come back on the next discovery,
+	// so it is refused here as it already is in bulk.
+	auto* entry = FindUserEntry(GetContextEntriesMut(context), index);
+	if (!entry)
 		return;
 
-	// Only the user layer is ours to change. Pausing a mod's entry would hold it back for this session
-	// and come back on the next discovery, so it is refused here as it already is in bulk.
-	auto& entry = (*contextEntries)[index];
-	if (entry.source != EntrySource::User)
-		return;
-
-	entry.paused = !entry.paused;
+	entry->paused = !entry->paused;
 	CommitContextUserEntryMutation(context);
 }
 
 void SceneSettingsManager::RevertContextEntryToDefault(const SceneContextId& context, size_t index)
 {
-	auto* contextEntries = GetContextEntriesMut(context);
-	if (!contextEntries || index >= contextEntries->size())
+	// Rewriting a mod's entry would diverge it from its backing file and lose the edit on the next
+	// discovery, so it is refused here as it already is in bulk.
+	auto* userEntry = FindUserEntry(GetContextEntriesMut(context), index);
+	if (!userEntry)
 		return;
-
-	// Only the user layer is ours to change. Rewriting a mod's entry would diverge it from its backing
-	// file and lose the edit on the next discovery, so it is refused here as it already is in bulk.
-	auto& entry = (*contextEntries)[index];
-	if (entry.source != EntrySource::User)
-		return;
+	auto& entry = *userEntry;
 
 	const auto rules = GetSceneContextRules(context);
 	const auto defaultValue = ResolveContextEntryDefault(context, entry);

@@ -235,13 +235,8 @@ void FeatureOverwritesPanel::DrawExport()
 	if (!popup)
 		return;
 
-	if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-		// The editor ignores Escape only while a popup is open, which this close is about to end.
-		if (auto* editor = EditorWindow::GetSingleton(); editor->open)
-			editor->suppressNextEditorEscape = true;
-		ImGui::CloseCurrentPopup();
+	if (EditorWindow::ClosePopupOnEscape())
 		return;
-	}
 
 	ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
 	const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);

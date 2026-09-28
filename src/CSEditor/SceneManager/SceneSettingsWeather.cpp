@@ -195,8 +195,7 @@ void SceneSettingsManager::SetSceneTimeOfDayEnabled(const SceneContextId& contex
 	// The mode picks which saved set resolves, so it changes live values like an entry edit would.
 	activeEntryCacheDirty = true;
 	BumpEntryPresentationRevision();
-	SaveAllUserSettings();
-	ReapplyIfActive();
+	CommitSceneSettingChanges();
 }
 
 void SceneSettingsManager::RefreshTimeOfDayModes()

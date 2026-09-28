@@ -805,13 +805,8 @@ namespace
 	/** @brief The modal's body for one frame, from the direction switch down to the buttons. */
 	void DrawContents()
 	{
-		if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-			// The editor ignores Escape only while a popup is open, which this close is about to end.
-			if (auto* editor = EditorWindow::GetSingleton(); editor->open)
-				editor->suppressNextEditorEscape = true;
-			ImGui::CloseCurrentPopup();
+		if (EditorWindow::ClosePopupOnEscape())
 			return;
-		}
 
 		DrawDirectionChips();
 		DrawFilterRow();

@@ -275,13 +275,8 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 
 		// Warn once per distinct batch, then back off, so a stuck feature cannot spam the log.
 		const auto recordFailure = [&](std::string_view message) {
-			auto& failure = transitionApplyFailures[featureShortName];
-			failure.signature = batch.signature;
-			if (!failure.warningLogged) {
+			if (transitionApplyFailures[featureShortName].Record(batch.signature, retryNow))
 				logger::warn("[SceneSettings] {}", message);
-				failure.warningLogged = true;
-			}
-			failure.retryAfter = retryNow + kApplyRetryDelay;
 		};
 
 		auto* feature = Feature::FindFeatureByShortName(featureShortName);
@@ -576,13 +571,8 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 		};
 		// Warn once per distinct failure signature, then back off, so a stuck feature cannot spam the log.
 		const auto recordApplyFailure = [&](std::chrono::steady_clock::time_point now, std::string_view message) {
-			auto& failure = applyFailures[featureShortName];
-			failure.signature = getSignature();
-			if (!failure.warningLogged) {
+			if (applyFailures[featureShortName].Record(getSignature(), now))
 				logger::warn("[SceneSettings] {}", message);
-				failure.warningLogged = true;
-			}
-			failure.retryAfter = now + kApplyRetryDelay;
 		};
 
 		auto failureIt = applyFailures.find(featureShortName);
@@ -651,11 +641,15 @@ void SceneSettingsManager::RestoreAppliedSettings()
 		if (auto retryIt = restoreRetryAfter.find(featureShortName);
 			retryIt != restoreRetryAfter.end() && now < retryIt->second)
 			continue;
+		const auto recordRestoreFailure = [&](std::string_view message) {
+			if (restoreFailureWarnings.insert(featureShortName).second)
+				logger::warn("[SceneSettings] {}", message);
+			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
+		};
+
 		auto* feature = Feature::FindFeatureByShortName(featureShortName);
 		if (!feature) {
-			if (restoreFailureWarnings.insert(featureShortName).second)
-				logger::warn("[SceneSettings] Cannot restore {}, feature is not loaded", featureShortName);
-			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
+			recordRestoreFailure(std::format("Cannot restore {}, feature is not loaded", featureShortName));
 			continue;
 		}
 
@@ -664,18 +658,14 @@ void SceneSettingsManager::RestoreAppliedSettings()
 		for (const auto& item : pending)
 			updates.push_back(item.update);
 		if (!ApplyCatalogSceneSettings(*feature, updates)) {
-			if (restoreFailureWarnings.insert(featureShortName).second)
-				logger::warn("[SceneSettings] Failed to restore base settings for {}", featureShortName);
-			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
+			recordRestoreFailure(std::format("Failed to restore base settings for {}", featureShortName));
 			continue;
 		}
 		// Verify before dropping the baseline: erasing it on an unverified restore strands the
 		// user's original value with nothing left to retry from.
 		if (!FeatureRetainedUpdates(*feature, featureShortName, updates)) {
-			if (restoreFailureWarnings.insert(featureShortName).second)
-				logger::warn("[SceneSettings] {} did not retain restored base settings", featureShortName);
+			recordRestoreFailure(std::format("{} did not retain restored base settings", featureShortName));
 			featureApplyDocuments.erase(featureShortName);
-			restoreRetryAfter[featureShortName] = now + kApplyRetryDelay;
 			continue;
 		}
 		restoreFailureWarnings.erase(featureShortName);

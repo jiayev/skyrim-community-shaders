@@ -951,6 +951,14 @@ private:
 		size_t signature = 0;
 		std::chrono::steady_clock::time_point retryAfter{};
 		bool warningLogged = false;
+
+		/** @brief Backs off retries for this signature; true only on the first failure, when the caller should warn. */
+		bool Record(size_t failedSignature, std::chrono::steady_clock::time_point now)
+		{
+			signature = failedSignature;
+			retryAfter = now + kApplyRetryDelay;
+			return !std::exchange(warningLogged, true);
+		}
 	};
 	std::map<std::string, ApplyFailureState> applyFailures;
 	std::map<std::string, ApplyFailureState> transitionApplyFailures;
@@ -1238,6 +1246,8 @@ private:
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
 	void RemoveSetting(SceneType type, size_t index);
 	void CommitSceneSettingChanges();
+	/** @brief Re-resolves now; with deferSave the save waits for the deferred-change window. */
+	void ReapplyAndSaveOrDefer(bool deferSave);
 	void BumpEntryPresentationRevision();
 	/** @brief A layer's entries were (re)loaded: rebuild the active-entry cache and re-resolve. */
 	void MarkEntriesLoaded();

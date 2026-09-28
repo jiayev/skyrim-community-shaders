@@ -231,6 +231,9 @@ public:
 	/** @brief Set by popup close-on-ESC to suppress the same key-up from also closing the editor. */
 	bool suppressNextEditorEscape = false;
 
+	/** @brief Closes the current popup on ESC without letting the same press close the editor. @return True if it closed. */
+	static bool ClosePopupOnEscape();
+
 	/** @brief Returns true if the editor can be opened (game is loaded and not in main menu). */
 	static bool CanBeOpen();
 

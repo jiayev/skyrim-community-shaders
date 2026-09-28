@@ -188,10 +188,8 @@ void SceneSettingsManager::VerifyPendingApplies()
 					appliedSettings.erase(address);
 			}
 			PruneAppliedFeatureName(featureShortName);
-			auto& failure = (verification.transition ? transitionApplyFailures : applyFailures)[featureShortName];
-			failure.signature = verification.signature;
-			failure.retryAfter = std::chrono::steady_clock::now() + kApplyRetryDelay;
-			failure.warningLogged = true;
+			(verification.transition ? transitionApplyFailures : applyFailures)[featureShortName].Record(
+				verification.signature, std::chrono::steady_clock::now());
 			resolverDirty = true;
 		}
 		verificationIt = pendingApplyVerifications.erase(verificationIt);
@@ -378,11 +376,7 @@ void SceneSettingsManager::SetTimeOfDayTransitionHours(std::optional<float> hour
 		return;
 	userTimeOfDayTransitionHours = hours;
 	RefreshTimeOfDayTransitionHours();
-	if (deferSave)
-		MarkDeferredSceneChanges();
-	else
-		SaveAllUserSettings();
-	ReapplyIfActive();
+	ReapplyAndSaveOrDefer(deferSave);
 }
 
 void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
@@ -576,6 +570,15 @@ void SceneSettingsManager::CommitSceneSettingChanges()
 	ReapplyIfActive();
 }
 
+void SceneSettingsManager::ReapplyAndSaveOrDefer(bool deferSave)
+{
+	if (deferSave)
+		MarkDeferredSceneChanges();
+	else
+		SaveAllUserSettings();
+	ReapplyIfActive();
+}
+
 void SceneSettingsManager::MarkDeferredSceneChanges()
 {
 	deferredSceneChangesPending = true;
@@ -595,8 +598,7 @@ void SceneSettingsManager::FlushDeferredSceneChanges()
 	if (!deferredSceneChangesPending || std::chrono::steady_clock::now() < deferredSceneChangesDeadline)
 		return;
 
-	SaveAllUserSettings();
-	ReapplyIfActive();
+	CommitSceneSettingChanges();
 }
 
 // --- Event Handler ---
@@ -873,8 +875,7 @@ void SceneSettingsManager::CommitSketches(std::span<const SettingIdentity> setti
 	InvalidateFeatureSnapshot(targets.front().second->featureShortName);
 	for (const auto& [context, updates] : updatesByContext)
 		UpdateContextEntryValues(context, updates, true);
-	SaveAllUserSettings();
-	ReapplyIfActive();
+	CommitSceneSettingChanges();
 }
 
 SceneSettingsManager::SceneLayerGuard::SceneLayerGuard() :

@@ -167,8 +167,7 @@ void SceneSettingsManager::RemoveLocationTarget(LocationTargetType type, const s
 
 	if (removedEntries != 0)
 		BumpEntryPresentationRevision();
-	SaveAllUserSettings();
-	ReapplyIfActive();
+	CommitSceneSettingChanges();
 }
 
 SceneSettingsManager::LocationSceneConfig& SceneSettingsManager::GetLocationConfigMut(
@@ -362,11 +361,7 @@ void SceneSettingsManager::SetLocationTransitionSeconds(float seconds, bool defe
 	locationTransitionSeconds = seconds;
 	locationTransitionModified = true;
 	locationUserSettingsModified = true;
-	if (deferSave)
-		MarkDeferredSceneChanges();
-	else
-		SaveAllUserSettings();
-	ReapplyIfActive();
+	ReapplyAndSaveOrDefer(deferSave);
 }
 
 std::optional<float> SceneSettingsManager::GetLocationEntryTransitionSeconds(
@@ -431,11 +426,7 @@ void SceneSettingsManager::SetLocationEntryTransitionSeconds(LocationTargetType 
 		return;
 
 	PrepareLocationUserSettingsMutation(type, formKey, false);
-	if (deferSave)
-		MarkDeferredSceneChanges();
-	else
-		SaveAllUserSettings();
-	ReapplyIfActive();
+	ReapplyAndSaveOrDefer(deferSave);
 }
 
 bool SceneSettingsManager::HasLocationEntry(LocationTargetType type, std::string_view formKey,
