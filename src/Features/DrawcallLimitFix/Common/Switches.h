@@ -35,6 +35,8 @@ namespace DCLF
 		SunSkip,
 		SunExclude,
 		PrimaryExclude,
+		MoveEvents,
+		HiddenEvents,
 		Skylight,
 		OrgEpochs,
 		OrgAsyncEpochs,

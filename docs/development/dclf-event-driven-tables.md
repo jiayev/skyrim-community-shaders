@@ -507,6 +507,85 @@ None of them writes a world or bone transform. The probe found one exception, wh
 | Actors and faces on the light path (profiled) | 2.10 ms (from 3.0 profiled) | 1.77 ms |
 | With the scene placement job | 1.03-1.06 ms | the job: 0.81-0.83 ms on the worker, joined with 0.000 ms waited |
 
+**Movers by event.** The engine's move writers push a key into an event queue (`MoveEvents` in
+`Scene/SceneStore/Internal.h`), from whichever job thread runs them, after the write:
+
+| Writer | Key | Calls a frame, Whiterun |
+| --- | --- | --- |
+| `FUN_14066afa0`, the first step of every actor animation path | the actor | 208 |
+| `TESObjectREFR::Update3DPosition` (`0x1402d9800`, which `Actor::Update3DPosition` calls) | the reference | 0 standing |
+| `Actor::UpdateActor3DPosition` (`0x14069eb80`) | the actor | 207 |
+| the sky cell's skin job (`FUN_140663430`) | the actor | 0 |
+| the ragdoll job (`FUN_140770dc0`), every actor on its list | each actor | 208 |
+| graph-animated references (`FUN_1402f75a0`, from `UpdateAnimationJob`) | the reference | 1,248 |
+| a cell's animated references' `UpdateSelectedDownwardPass`, patched at `0x1402b42ba` in `FUN_1402b41a0`, which runs it only for a reference in a visible room or fading | the reference | 1,274 with the next row |
+| a cell's dynamic node's (category 4) `UpdateSelectedDownwardPass`, patched at `0x1402b3bd5` in `FUN_1402b3ae0` | the category node | |
+| the node events (Havok's node writes, controllers added) | the reference above the node | 70 |
+
+An entry's key is the one reference on its chain up to its category node (`MoveKeyOf`); an entry with none, or with
+two, is placed every frame, and so is a skin that is not an actor's (a tree's wind moves its bones with no event). A
+light-path mover is queued when its key or its category node had an event this frame or the last: the palette update
+copies the current palette to the previous one, so a skin takes one more update after its last move, and a write that
+lands after the walk's read is taken the next frame. Every mover is placed on the frame after a full evaluation. On a
+parity frame (`WALK_PARITY` or `PERSISTENT_PARITY`) the movers it would skip are taken as witnesses, and one that
+changed is a missed event.
+
+An entry whose only motion is its reference root's bound (`kTraitRootMoves` alone) is no longer per frame. `RootMoves`
+registers the root (`movingRoots`), the render thread queues the roots whose reference or category node had an event
+(`QueueRoots`), and the placement job writes the root's bound into every dependent's sun entry (`TakeRoot`).
+
+Whiterun, standing (the work, not the time):
+
+| Per frame | Before | Movers by event |
+| --- | --- | --- |
+| entries evaluated | 4,079 | 3,918-3,946 |
+| placements queued | 3,653 | about 2,940 (actor events 1,640, reference events 1,030, no key or tree skin 265) |
+| movers left unplaced | 0 | about 600, and about 480 roots |
+| missed events (witnesses on parity frames) | | 0 of about 5,300 an interval, standing and through the flight |
+
+**Every loaded actor has an event every frame.** In Whiterun all 208 actors run `FUN_14066afa0`,
+`UpdateActor3DPosition` and the ragdoll job's list each frame, while only half of their entries change. The engine
+skips the pose below `IAnimationGraphManagerHolder::UpdateAnimationGraphManager` (from `FUN_1402f78b0`), and a finer
+actor event would have to come from there. It would only save the worker's time: an actor's render-thread cost is its
+verdict recheck (Step 5 of the plan).
+
+**The per-frame set carries its entries' addresses.** `tracked` keeps its values in one array, so an insert or erase
+may move them. The set holds each entry's address beside its geometry, and the schedule trusts the addresses while no
+entry was added or erased since they were taken (`trackedLayout`); otherwise it looks the set up again (47-72 of 300
+frames standing, 19-59 in the flight). `ValidateSlice` runs once a frame instead of in both `ProcessEvents` calls.
+
+**Hidden bits by event.** Every store that can change `kHidden` (bit 0 of `NiAVObject::flags`, `+0xF4`) is patched
+with a call to a stub (`Scene/SceneStore/HiddenStores.cpp`, 464 sites, `CS_DCLF_HIDDEN_EVENTS=0` turns them off):
+
+- every `or` whose operand may set bit 0 (111);
+- every `and` whose operand may clear it (100);
+- every `mov` of any width to `[reg + 0xf4]` (253).
+
+The program-wide scans find no other instruction that writes there, apart from one `add` and one `inc` (counters).
+Two sites are based on RSP and left out. The stub:
+
+1. reads the dword before the store;
+2. runs the original instruction;
+3. when bit 0 changed, pushes the base register as a key;
+4. restores the flags, and runs an `or` or `and` once more (both are idempotent), so the code after it sees its flags.
+
+A `mov` is not run again, so it never stores over a concurrent writer. `+0xF4` is a common offset: a false positive
+is a key no entry lists, and nothing dereferences a key. The stubs live in a block allocated just past the module's
+image, since a `call rel32` must reach them (CommonLib's trampoline placed them more than 2 GB from some sites).
+
+An actor's light-path entry lists every node from it up to its category node (`ListHiddenChain`,
+`hiddenDependents`). `ActorRecordKept` takes the frame verdict again only on a frame when one of those nodes had an
+event, for an entry under a switch, and for every entry on a parity frame, where a verdict that changed with no event
+is counted as missed. The other frame-verdict inputs already classify the entry again: fades through their events, the
+toggles through a full evaluation. The classification inputs (`ClassifyInputsOf`) are still compared every frame,
+because property pointer swaps have no choke point.
+
+| Whiterun, per frame | Before | Hidden events |
+| --- | --- | --- |
+| actor frame verdicts taken again | about 1,260 | 21-32 (about 220 hidden events) |
+| flight | about 274 | 5 |
+| verdicts that changed with no event (parity frames) | | 0: standing, the flight, equip and unequip, `killall`, capture |
+
 **Starting points for the rest (Ghidra, AE).**
 
 - **Which actors animated this frame.** `Job_Actor_animation` (`0x1406d2670`) queues `RunOneActorAnimationUpdateJob`

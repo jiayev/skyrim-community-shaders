@@ -144,9 +144,25 @@ what the delta walk reads.
 follow either state. This is the race `dclf-event-driven-tables.md` describes for the worker walk, still present
 for a writer that runs during `Main::Draw`.
 
-**Next step.** Find the thread and the writer: which function sets `SHIELD`'s bit at that point in the frame (the
-weapon draw and animation object handlers first). Then make it an event (the hooks of the scene tables plan's
-step 5), and read the shield's chain from the event, not live.
+**Status (hidden events).** Every store that can change `kHidden` is now an event (`HiddenStores.cpp`), and an actor's
+frame verdict is taken again only when a node on its chain had one. A write inside `Main::Draw` after the walk is an
+event the next walk takes, so the record follows the new state one frame later instead of racing it. The first build
+patched only the `mov` stores that had a load of the same flags nearby. On one parity frame its witness reported
+`'Shield:0' eligible now hidden` with no event. With every `mov` store to `+0xF4` patched, no witness has missed one:
+standing, the flight, an equip and `killall` scenario, and a capture run. The writer itself is still unnamed.
+
+**Next step.** Name the writer: log the stub's return address for the first event on a `SHIELD` node.
+
+### Capture parity: two tracked draws excluded while NPCs crowded the view
+
+**Evidence.** One `CAPTURE_PARITY` run with `OWNERSHIP=off` reported "2 tracked but excluded" in its third interval,
+while NPCs filled the view (native draws fell from 29,100 to 3,500). Every other capture run reports 10 in the first
+interval only (one NPC's face parts at startup) and 0 after. The check counts a draw DCLF left out and logs it only
+when it is hidden now, so a missed hidden-to-shown change would pass silently. It did not recur in the next run, and
+the hidden witness reported 0 misses in both.
+
+**Next step.** The report now breaks these draws down by their verdict now, naming the first of each ("tracked but
+excluded, by the verdict now"). If it recurs, an `eligible` entry there is a verdict DCLF kept stale.
 
 ### The scene placement probe: one item moves inside its window
 

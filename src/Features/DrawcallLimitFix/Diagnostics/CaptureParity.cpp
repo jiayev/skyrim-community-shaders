@@ -643,6 +643,8 @@ namespace DCLF
 					NoteMismatch(fmt::format("{} drawn natively but excluded as {}", Describe(geometry), kIneligibleNames[static_cast<std::size_t>(reason)]));
 				}
 				++notInTables;
+				if (!notInTablesBy[static_cast<std::uint8_t>(reason)]++)
+					notInTablesFirst[static_cast<std::uint8_t>(reason)] = Describe(geometry);
 			} else if (SceneStore::ClassifyStatic(*geometry, nullptr) == Ineligible::None) {
 				if (auto* category = store.CategoryNodeOf(geometry)) {
 					++untrackedEligible;  // followed below and reported with its parents and what tracked it (ResolveUntracked)
@@ -870,6 +872,14 @@ namespace DCLF
 		logger::info("[DCLF] capture parity {}: {} native main-pass lighting draws, {} checked against the tables, {} mismatched ({} material, {} per-geometry, {} technique), {} untracked eligible, {} tracked but excluded, {} native-only passes of DCLF objects; tables hold {} objects / {} geometries / {} pipelines ({} with shadow mask) / {} materials from {} tracked; render flags seen:{}",
 			ok ? "OK" : "MISMATCH", nativeDraws, checkedDraws, mismatchedDraws, materialMismatches, geometryMismatches, techniqueMismatches, untrackedEligible,
 			notInTables, nativeOnlyPasses, stats.objects, stats.geometries, stats.pipelines, stats.shadowMaskPipelines, stats.materials, stats.tracked, flags);
+		if (notInTables) {
+			std::string byReason;
+			for (const auto& [reason, count] : notInTablesBy)
+				byReason += fmt::format("{}{} {} (first {})", byReason.empty() ? "" : ", ", kIneligibleNames[reason], count, notInTablesFirst[reason]);
+			logger::info("[DCLF] capture parity: tracked but excluded, by the verdict now: {}", byReason);
+		}
+		notInTablesBy.clear();
+		notInTablesFirst.clear();
 		if (boneChecks)
 			logger::info("[DCLF] bone palette parity {}: {} palettes checked, {} differ", boneMismatches == 0 ? "OK" : "MISMATCH", boneChecks, boneMismatches);
 		boneChecks = boneMismatches = 0;

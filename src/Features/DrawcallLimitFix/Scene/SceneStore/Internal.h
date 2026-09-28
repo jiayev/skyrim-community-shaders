@@ -212,6 +212,43 @@ namespace DCLF
 		}
 
 		/**
+		 * @brief MoveEvents: what the engine moved, as keys (never dereferenced): a reference whose 3D an update pass
+		 * took, or a category node whose subtree one did (dclf-event-driven-tables.md, "Movers by event"). The light path
+		 * places a mover only when its key had an event this frame or the last (SceneStore::MoveGated). Pushed after the
+		 * engine's write, from the animation and cell jobs' threads; drained by the render thread at the delta walk.
+		 * - Actors: FUN_14066afa0, which every animation path starts with (RunOneActorAnimationUpdateJob,
+		 *   Actor::UpdateAnimation, PlayerCharacter::UpdateAnimation, Actor::FinishLoadGame); TESObjectREFR::Update3DPosition
+		 *   (0x1402d9800, which Actor::Update3DPosition calls); Actor::UpdateActor3DPosition (0x14069eb80); the sky cell's
+		 *   skin job (FUN_140663430); the ragdoll job (FUN_140770dc0), for every actor on its list.
+		 * - Other references: a cell's animated references' update pass (UpdateSelectedDownwardPass on the reference's 3D,
+		 *   called from FUN_1402b41a0 only for those in a visible room or fading), the cell's dynamic node's (FUN_1402b3ae0,
+		 *   keyed by the node), and the graph-animated references' (FUN_1402f75a0, from UpdateAnimationJob).
+		 * - The node events (Havok's node writes and controller additions) name the reference above the node.
+		 */
+		inline EventQueue<const void*> moveEvents;
+		// Calls per writer (the order of kMoveWriterNames), for the report.
+		inline std::array<std::atomic<std::uint64_t>, 8> moveWriterCalls{};
+		constexpr std::array<const char*, 8> kMoveWriterNames{ "animation", "reference 3D position", "actor 3D position", "sky cell skin", "ragdoll",
+			"graph animation", "update pass", "" };
+		inline void CountMove(std::size_t a_writer) { moveWriterCalls[a_writer].fetch_add(1, std::memory_order_relaxed); }
+
+		/**
+		 * @brief HiddenEvents: a node whose kHidden bit (NiAVObject::flags bit 0) a store changed, as a key (never
+		 * dereferenced), from the patched stores (HiddenStores.cpp) on whichever thread runs them; drained by the render
+		 * thread at the delta walk. An actor entry's frame verdict is taken again only on the frame a node on its chain
+		 * had one (SceneStore::hiddenDependents), and on parity frames for all of them (the witness).
+		 */
+		inline EventQueue<const void*> hiddenEvents;
+		inline bool hiddenEventsInstalled = false;
+		bool InstallHiddenStores();
+
+		inline void PushMove(const void* a_key)
+		{
+			if (a_key)
+				moveEvents.Push(a_key);
+		}
+
+		/**
 		 * @brief SwitchEvents: an NiSwitchNode's selection may have changed (dclf-cull-job-elimination.md, "Phase 3"),
 		 * pushed from the writer's thread, drained at ProcessEvents and applied by the next walk (ApplySwitchEvents).
 		 *
@@ -274,6 +311,7 @@ namespace DCLF
 		}
 
 		inline bool switchEventsInstalled = false;
+		inline bool moveEventsInstalled = false;
 
 		/** @brief Patches the stores (after checking every site's bytes; none is patched when one differs). */
 		bool InstallSwitchStores();

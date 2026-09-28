@@ -92,6 +92,97 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// MoveEvents' writers (Internal.h).
+	struct AnimationGraphPlace
+	{
+		static bool thunk(RE::TESObjectREFR* a_reference)
+		{
+			const bool result = func(a_reference);
+			PushMove(a_reference);
+			CountMove(0);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ReferenceUpdate3DPosition
+	{
+		static void thunk(RE::TESObjectREFR* a_reference, bool a_warp)
+		{
+			func(a_reference, a_warp);
+			PushMove(a_reference);
+			CountMove(1);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct ActorUpdate3DPosition
+	{
+		static void thunk(RE::Actor* a_actor)
+		{
+			func(a_actor);
+			PushMove(a_actor);
+			CountMove(2);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct SkyCellSkin
+	{
+		static std::uint64_t thunk(RE::Actor* a_actor)
+		{
+			const auto result = func(a_actor);
+			PushMove(a_actor);
+			CountMove(3);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct RagdollJob
+	{
+		// FUN_140770dc0's list: the actors' handles at +0x30, their count at +0x40.
+		static void thunk(std::byte* a_list)
+		{
+			func(a_list);
+			const auto* handles = *reinterpret_cast<const RE::RefHandle* const*>(a_list + 0x30);
+			const auto count = *reinterpret_cast<const std::uint32_t*>(a_list + 0x40);
+			for (std::uint32_t i = 0; handles && i < count; ++i) {
+				RE::NiPointer<RE::TESObjectREFR> reference;
+				if (RE::LookupReferenceByHandle(handles[i], reference))
+					PushMove(reference.get());
+				CountMove(4);
+			}
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	struct GraphAnimation
+	{
+		static void thunk(RE::TESObjectREFR* a_reference)
+		{
+			func(a_reference);
+			PushMove(a_reference);
+			CountMove(5);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief A patched `call [rax + 0x168]`: the node's UpdateSelectedDownwardPass, then its reference or itself as the key. */
+	struct SelectiveUpdateCall
+	{
+		static void thunk(RE::NiAVObject* a_node, void* a_data, std::uint32_t a_arg)
+		{
+			using UpdateSelectedDownwardPass = void (*)(RE::NiAVObject*, void*, std::uint32_t);
+			(*reinterpret_cast<UpdateSelectedDownwardPass* const*>(a_node))[0x2D](a_node, a_data, a_arg);
+			if (const auto* reference = a_node->GetUserData())
+				PushMove(reference);
+			else
+				PushMove(a_node);
+			CountMove(6);
+		}
+	};
+
 	struct SwitchAttachChild
 	{
 		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
@@ -324,6 +415,9 @@ namespace DCLF
 			propertyChanged.clear();
 			DrainNodeEvents(nodeChanged);
 			nodeChanged.clear();
+			moveEvents.Discard();
+			movedFrame.clear();
+			hiddenEvents.Discard();
 			// The switches are brought up to date by the rescan's walk (AddSubtree); PrimaryCull reads them all again.
 			switchEvents.Discard();
 			switchPending.clear();
@@ -339,6 +433,7 @@ namespace DCLF
 			for (auto& [geometry, entry] : tracked)
 				ReleaseObjectSlot(entry);
 			tracked.clear();
+			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
 			validationCursor = 0;
@@ -348,6 +443,8 @@ namespace DCLF
 			rootDependents.clear();
 			dirtyRoots.clear();
 			rootMotion.clear();
+			movingRoots.clear();
+			hiddenDependents.clear();
 			DropSunCandidates();
 			buckets = {};
 		}
@@ -383,8 +480,10 @@ namespace DCLF
 		}
 
 		{
+			// Once a frame: ProcessEvents runs at the present and again at the scene's start.
 			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
-			ValidateSlice();
+			if (std::exchange(validatedFrame, frame) != frame)
+				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
 		// The fade nodes whose currentFade changed since the last drain (the delta walk re-evaluates their dependents).
@@ -451,6 +550,46 @@ namespace DCLF
 		}
 		logger::info("[DCLF] scene events installed (fades, property flags and materials, LOD fades, Havok node transforms, controllers): OnVisible at {:#x}",
 			onVisible - REL::Module::get().base() + 0x140000000);
+		InstallMoveEvents();
+		hiddenEventsInstalled = InstallHiddenStores();
+	}
+
+	void SceneStore::InstallMoveEvents()
+	{
+		// The two update passes are patched at their call: `call qword ptr [rax + 0x168]` (FF 90 68 01 00 00), checked
+		// first. Either missing leaves every mover placed every frame.
+		constexpr std::uintptr_t kAnimatedRefCall = 0x2b42ba;  // FUN_1402b41a0: a cell's animated reference
+		constexpr std::uintptr_t kDynamicNodeCall = 0x2b3bd5;  // FUN_1402b3ae0: the cell's dynamic node
+		constexpr std::array<std::uint8_t, 6> kCall{ 0xFF, 0x90, 0x68, 0x01, 0x00, 0x00 };
+		const auto animatedRefCall = REL::Offset(kAnimatedRefCall).address();
+		const auto dynamicNodeCall = REL::Offset(kDynamicNodeCall).address();
+		if (std::memcmp(reinterpret_cast<const void*>(animatedRefCall), kCall.data(), kCall.size()) != 0 ||
+			std::memcmp(reinterpret_cast<const void*>(dynamicNodeCall), kCall.data(), kCall.size()) != 0) {
+			logger::warn("[DCLF] move events: the cells' update passes are not where expected; every mover is placed every frame");
+			return;
+		}
+		auto& trampoline = SKSE::GetTrampoline();
+		trampoline.write_call<6>(animatedRefCall, SelectiveUpdateCall::thunk);
+		trampoline.write_call<6>(dynamicNodeCall, SelectiveUpdateCall::thunk);
+		constexpr std::uintptr_t kAnimationGraphPlace = 0x66afa0;     // FUN_14066afa0
+		constexpr std::uintptr_t kReferenceUpdate3DPosition = 0x2d9800;  // TESObjectREFR::Update3DPosition
+		constexpr std::uintptr_t kActorUpdate3DPosition = 0x69eb80;   // Actor::UpdateActor3DPosition
+		constexpr std::uintptr_t kSkyCellSkin = 0x663430;             // FUN_140663430
+		constexpr std::uintptr_t kRagdollJob = 0x770dc0;              // FUN_140770dc0
+		constexpr std::uintptr_t kGraphAnimation = 0x2f75a0;          // FUN_1402f75a0
+		stl::detour_thunk<AnimationGraphPlace>(REL::Offset(kAnimationGraphPlace).address());
+		stl::detour_thunk<ReferenceUpdate3DPosition>(REL::Offset(kReferenceUpdate3DPosition).address());
+		stl::detour_thunk<ActorUpdate3DPosition>(REL::Offset(kActorUpdate3DPosition).address());
+		stl::detour_thunk<SkyCellSkin>(REL::Offset(kSkyCellSkin).address());
+		stl::detour_thunk<RagdollJob>(REL::Offset(kRagdollJob).address());
+		stl::detour_thunk<GraphAnimation>(REL::Offset(kGraphAnimation).address());
+		moveEventsInstalled = true;
+		logger::info("[DCLF] move events installed (animation, 3D positions, ragdolls, the cells' update passes)");
+	}
+
+	bool SceneStore::MoveEventsLive()
+	{
+		return moveEventsInstalled;
 	}
 
 	bool SceneStore::SwitchEventsLive()
@@ -537,19 +676,13 @@ namespace DCLF
 			return a_tracked.perFrame && (!a_tracked.lightTraits || (a_tracked.lightTraits & (kTraitMoves | kTraitRootMoves)));
 		};
 		// Every sun entry node above it: its bound takes this node in, and its motion may have changed. A root already
-		// known to move has its dependents on the light path's placement.
+		// known to move has its bound taken by the root pass (QueueRoots) whenever its reference has a move event, which
+		// this one is (DrainMoveEvents).
 		for (const RE::NiAVObject* object = a_node; object; object = object->parent) {
-			const auto dependents = rootDependents.find(object);
-			if (dependents == rootDependents.end())
+			if (!rootDependents.contains(object))
 				continue;
-			if (const auto motion = rootMotion.find(object); motion != rootMotion.end() && motion->second) {
-				bool placed = true;
-				for (auto* geometry : dependents->second)
-					if (const auto entry = tracked.find(geometry); entry != tracked.end() && !placedEveryFrame(entry->second) && entry->second.slot != kNoObjectSlot)
-						placed = false;
-				if (placed)
-					continue;
-			}
+			if (const auto motion = rootMotion.find(object); motion != rootMotion.end() && motion->second)
+				continue;
 			ScheduleRoot(object);
 		}
 		// Every entry below it: its placement, and its traits (a body or controller it did not have when classified).

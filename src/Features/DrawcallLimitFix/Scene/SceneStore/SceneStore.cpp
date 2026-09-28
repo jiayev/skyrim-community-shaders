@@ -12,6 +12,7 @@ namespace DCLF
 	{
 		JoinPlacements();
 		tracked.clear();
+		++trackedLayout;
 		sceneIdentity.Reset();
 		categoryNodes.clear();
 		ResetSlotTables();
@@ -35,6 +36,8 @@ namespace DCLF
 		propertyDependents.clear();
 		rootDependents.clear();
 		rootMotion.clear();
+		movingRoots.clear();
+		hiddenDependents.clear();
 		DropSunCandidates();
 		buckets = {};
 	}

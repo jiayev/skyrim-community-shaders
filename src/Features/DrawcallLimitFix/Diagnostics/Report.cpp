@@ -309,9 +309,24 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				for (std::size_t i = 0; i < stats.lightByTrait.size(); ++i)
 					if (stats.lightByTrait[i])
 						traits += fmt::format("{}{} {:.0f}", traits.empty() ? "" : ", ", kTraitNames[i], stats.lightByTrait[i] / tablesFrames);
-				logger::info("[DCLF] scene tables' light path per frame: kept by trait: {}; placed {:.0f} ({:.0f} changed), kept skins {:.0f} ({:.0f} changed their palette)",
-					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.lightPlacedChanged / tablesFrames, stats.lightSkins / tablesFrames,
+				logger::info("[DCLF] scene tables' light path per frame: kept by trait: {}; placed {:.0f} ({:.0f} changed), not placed for want of a move event {:.0f} "
+							 "({:.0f} move events{}), kept skins {:.0f} ({:.0f} changed their palette)",
+					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.lightPlacedChanged / tablesFrames, stats.lightGated / tablesFrames,
+					stats.moveEvents / tablesFrames, DCLF::SceneStore::MoveEventsLive() ? "" : ", not installed", stats.lightSkins / tablesFrames,
 					stats.lightSkinsChanged / tablesFrames);
+				std::string placedBy;
+				for (std::size_t i = 0; i < stats.lightPlacedBy.size(); ++i)
+					if (stats.lightPlacedBy[i])
+						placedBy += fmt::format("{}{} {:.0f} ({:.0f} changed)", placedBy.empty() ? "" : ", ", DCLF::SceneStore::kMoveReasonNames[i],
+							stats.lightPlacedBy[i] / tablesFrames, stats.lightChangedBy[i] / tablesFrames);
+				if (!placedBy.empty())
+					logger::info("[DCLF] scene tables' light path placed per frame, by why: {}; the per-frame set looked up again on {} of {} frames", placedBy,
+						stats.perFrameRelookups, timing.sceneTablesFrames);
+				if (stats.verdictsChecked || stats.verdictsSkipped)
+					logger::info("[DCLF] actor frame verdicts per frame: {:.0f} taken again, {:.0f} left for want of a hidden event ({:.0f} hidden events{}); {} changed with no event{}{}",
+						stats.verdictsChecked / tablesFrames, stats.verdictsSkipped / tablesFrames, stats.hiddenEvents / tablesFrames,
+						DCLF::SceneStore::HiddenEventsLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK",
+						stats.firstVerdictMissed);
 				if (const auto line = store.PlacementReport(); !line.empty())
 					logger::info("{}", line);
 			}

@@ -240,7 +240,7 @@ namespace DCLF
 					if (object == entry.categoryNode)
 						break;
 				}
-				const auto copies = std::count(perFrameSet.begin(), perFrameSet.end(), geometry);
+				const auto copies = std::count_if(perFrameSet.begin(), perFrameSet.end(), [&](const PerFrameItem& a_item) { return a_item.geometry == geometry; });
 				walkParity.firstStale = fmt::format("'{}' kept {} ({} frames old, per-frame {} (listed {}, {} copies in the set), traits {:X}, light {:X}, evaluated this walk {}) now {}; chain:{}",
 					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], frame - entry.candidateFrame,
 					entry.perFrame, entry.perFrameListed, copies, PerFrameTraits(entry, *geometry), entry.lightTraits, evaluated.contains(geometry),

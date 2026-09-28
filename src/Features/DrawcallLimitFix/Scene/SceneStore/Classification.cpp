@@ -225,6 +225,7 @@ namespace DCLF
 	void SceneStore::AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason)
 	{
 		const auto [it, inserted] = tracked.try_emplace(a_geometry);
+		trackedLayout += inserted ? 1 : 0;
 		auto& entry = it->second;
 		const auto* owner = a_geometry->GetUserData();
 		const auto* actorOwner = owner && owner->GetFormType() == RE::FormType::ActorCharacter ? owner : nullptr;
