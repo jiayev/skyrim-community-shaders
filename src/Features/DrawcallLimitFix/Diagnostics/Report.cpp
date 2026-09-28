@@ -288,6 +288,42 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
 		{
+			// The "scene tables" zone by sub-zone (ScenePart). The four event parts also count Present's ProcessEvents,
+			// which is outside the zone, so "other" (the zone less its parts: the rescan after a load, the claims'
+			// selection) goes negative by about that call's cost.
+			const double tablesFrames = std::max(1u, timing.sceneTablesFrames);
+			std::string sceneParts;
+			double covered = 0.0;
+			for (std::size_t i = 0; i < stats.scenePartMs.size(); ++i) {
+				if (i != static_cast<std::size_t>(DCLF::ScenePart::PlacementJoin))
+					covered += stats.scenePartMs[i];
+				if (stats.scenePartMs[i] > 0.0)
+					sceneParts += fmt::format("{}{} {:.3f} (max {:.2f})", sceneParts.empty() ? "" : ", ", DCLF::kScenePartNames[i], stats.scenePartMs[i] / tablesFrames,
+						stats.scenePartMaxMs[i]);
+			}
+			logger::info("[DCLF] scene tables CPU per frame: {:.3f} ms (max {:.3f}) over {} frames; by part: {}; other {:.3f}",
+				timing.sceneTablesMs / tablesFrames, timing.sceneTablesMaxMs, timing.sceneTablesFrames, sceneParts, (timing.sceneTablesMs - covered) / tablesFrames);
+			{
+				static constexpr std::array<const char*, 8> kTraitNames{ "face", "actor", "switch", "skin", "animated shading", "moves", "root moves", "?" };
+				std::string traits;
+				for (std::size_t i = 0; i < stats.lightByTrait.size(); ++i)
+					if (stats.lightByTrait[i])
+						traits += fmt::format("{}{} {:.0f}", traits.empty() ? "" : ", ", kTraitNames[i], stats.lightByTrait[i] / tablesFrames);
+				logger::info("[DCLF] scene tables' light path per frame: kept by trait: {}; placed {:.0f} ({:.0f} changed), kept skins {:.0f} ({:.0f} changed their palette)",
+					traits.empty() ? "-" : traits, stats.lightPlaced / tablesFrames, stats.lightPlacedChanged / tablesFrames, stats.lightSkins / tablesFrames,
+					stats.lightSkinsChanged / tablesFrames);
+				if (const auto line = store.PlacementReport(); !line.empty())
+					logger::info("{}", line);
+			}
+			if (DCLF::SceneStore::ProfileEnabled()) {
+				std::string kinds;
+				for (std::size_t i = 0; i < stats.evaluateKindMs.size(); ++i)
+					kinds += fmt::format("{}{} {:.0f} entries {:.3f} ms", kinds.empty() ? "" : ", ", DCLF::kEvaluateKindNames[i],
+						stats.evaluateKindCount[i] / tablesFrames, stats.evaluateKindMs[i] / tablesFrames);
+				logger::info("[DCLF] scene tables' first evaluation round per frame, by entry: {}", kinds);
+			}
+		}
+		{
 			std::string rejects;
 			for (std::size_t r = 1; r < stats.shadowRejects.size(); ++r) {
 				if (stats.shadowRejects[r])

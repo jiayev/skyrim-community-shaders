@@ -195,6 +195,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	if (DCLF::Toggles::Get().BeginFrame())
 		store.InvalidateVerdicts();
 	ScopedPerfEvent event("CS DCLF: scene tables");
+	const auto tablesStart = std::chrono::steady_clock::now();
 	// The scene events of this frame's world update, before the walk reads the tracked set. Present's Reset
 	// applies them too, but a cell attached during the update would otherwise be drawn natively for its first
 	// frame and join the tables only on the next one (capture parity's "untracked eligible": every such
@@ -211,6 +212,11 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	const double sceneMs = MillisecondsSince(start);
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
+	store.EndSceneFrame();
+	const double tablesMs = MillisecondsSince(tablesStart);
+	timing.sceneTablesMs += tablesMs;
+	timing.sceneTablesMaxMs = std::max(timing.sceneTablesMaxMs, tablesMs);
+	++timing.sceneTablesFrames;
 	return true;
 }
 
@@ -220,6 +226,8 @@ void DrawcallLimitFix::BeforeShadowMaps()
 		return;
 	ScopedPerfEvent event("CS DCLF: shadow views");
 	const auto start = std::chrono::steady_clock::now();
+	// The kept records' placements and palettes (the scene placement job), before the shadow views read them.
+	DCLF::SceneStore::Get().JoinPlacements();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the claims, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().Rebuild();
@@ -255,6 +263,7 @@ void DrawcallLimitFix::EarlyPrepass()
 	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
 	// than `currentAccumulator`, which is not set this early.
 	auto& store = DCLF::SceneStore::Get();
+	store.JoinPlacements();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
 	store.BuildFrame(DCLF::SceneStore::Phase::Accumulate);

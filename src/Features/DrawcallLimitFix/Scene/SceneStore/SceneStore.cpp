@@ -10,6 +10,7 @@ namespace DCLF
 
 	void SceneStore::Clear()
 	{
+		JoinPlacements();
 		tracked.clear();
 		sceneIdentity.Reset();
 		categoryNodes.clear();

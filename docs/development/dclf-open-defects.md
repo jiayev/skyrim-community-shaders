@@ -126,6 +126,38 @@ object would cull it wrongly.
 
 **Next step.** Find which writer moves the node (a controller, or Havok) and add it to the events.
 
+### Walk parity: an NPC's shield changes its hidden bit during the scene phase
+
+**Evidence.** On the `CS_DCLF_TEST_MOVE` flight (`200:1100:15`), 0-5 of the 8 walk-parity intervals report 2-4
+stale verdicts on the parts of one NPC's shield (`Shield:0`, `Symbol`). The delta walk evaluated them that frame and
+read the chain one way; the reference walk, run right after it in the same `BuildScenePhase`, reads it the other
+way. The report's chain shows the node that flips: `SHIELD` under `NPC L Hand`. Nothing DCLF runs between the
+two walks writes node flags: the scene placement job's palette update (`FUN_140e4ff90`) only locks, allocates,
+copies and multiplies, and a probe that re-read every actor verdict before and after the placements found none
+changed. The bit is written by another thread while `Main::Draw` runs. The actor-side `kHidden` writers include the
+weapon draw handlers and `AnimationObjectDrawHandler` (`dclf-event-driven-tables.md`, "Reverse-engineering
+results"). Since the scene placement job, a parity frame runs the placements inline before the reference walk,
+so the two reads are about 1 ms further apart, and the parity catches the flip more often. It is not a change in
+what the delta walk reads.
+
+**Why it matters.** The scene phase reads a bit the engine is writing, so for that frame the shield's record can
+follow either state. This is the race `dclf-event-driven-tables.md` describes for the worker walk, still present
+for a writer that runs during `Main::Draw`.
+
+**Next step.** Find the thread and the writer: which function sets `SHIELD`'s bit at that point in the frame (the
+weapon draw and animation object handlers first). Then make it an event (the hooks of the scene tables plan's
+step 5), and read the shield's chain from the event, not live.
+
+### The scene placement probe: one item moves inside its window
+
+**Evidence.** Under `CS_DCLF_ASYNC=probe` the scene placement join takes every item again and counts those that
+moved since the job read them: one item a frame (about 300 an interval), always `ImperialSwordBloodAdd`. An engine
+writer moves that geometry between the end of the scene tables and `BeforeShadowMaps`. The records take it at the
+end of the scene tables, as the light path always has, so this is not a change the job made.
+
+**Next step.** Identify the writer (the candidates in that window are `FUN_140742470`, which `Main::Draw` calls with
+the player's position, and the first-person culling), and decide whether the record should take the later value.
+
 ### Capture parity: `EyePosition` differs on 600-900 draws
 
 **Evidence.** `CS_DCLF_CAPTURE_PARITY` with ownership off: 600-900 of about 9,600 checked draws mismatch per

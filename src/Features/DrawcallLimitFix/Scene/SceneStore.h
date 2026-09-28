@@ -58,6 +58,58 @@ namespace DCLF
 		"dedup-hit", "loop-tail", "skinning"
 	};
 
+	/**
+	 * @brief The sub-zones of the scene tables (DrawcallLimitFix::BeginSceneFrame): ProcessEvents and the scene phase,
+	 * block by block. Each is a Tracy zone and a sum in Stats::scenePartMs, reported under CS_DCLF_STATS. The first
+	 * evaluation round's split by entry (EvaluateKind) is measured only under CS_DCLF_PROFILE.
+	 */
+	enum class ScenePart : std::uint32_t
+	{
+		CategoryNodes,     // the attach queue's drain and RefreshCategoryNodes
+		AttachDetach,      // AddSubtree per attach, EraseTracked per detach
+		Validate,          // ValidateSlice
+		StructuralEvents,  // the fade, property, node and switch queues' drains
+		Prologue,          // the used sets, the change log trim and check, LOD fade settings, GpuResources::BeginFrame
+		SweepSlots,        // UpdateSlotReferences and the slot expiry
+		CullHiddenBits,    // CaptureCullHiddenBits
+		Schedule,          // BeginWalk and the order: the per-frame set and the events' dependents
+		SwitchEvents,      // ApplySwitchEvents
+		Evaluate,          // the first round: per-frame entries and those the events scheduled
+		GeometryScan,      // FinishDeltaWalk's geometry slot touches and the stale-slot object scan
+		LaterRounds,       // the rounds for stale and refreshed geometry slots
+		ShadowSets,        // RefreshShadowSets and its parity
+		ObjectSweep,       // SweepObjectSlots (a full walk only)
+		SunCandidates,     // UpdateSunCandidates
+		FaceWalk,          // EndFaceWalk
+		WalkParity,        // CheckWalkParity (CS_DCLF_WALK_PARITY only)
+		Placements,        // KickPlacements: the scene placement job's kick, or its items inline
+		PlacementJoin,     // JoinPlacements at BeforeShadowMaps: outside the zone
+		Count
+	};
+
+	inline constexpr std::array<const char*, static_cast<std::size_t>(ScenePart::Count)> kScenePartNames{
+		"category nodes", "attach/detach", "validate", "structural events", "prologue", "sweep slots", "cull hidden bits",
+		"schedule", "switch events", "evaluate", "geometry scan", "later rounds", "shadow sets",
+		"object sweep", "sun candidates", "face walk", "walk parity", "placements", "placement join"
+	};
+
+	/** @brief What the first evaluation round did with an entry, for its per-entry timing (CS_DCLF_PROFILE). */
+	enum class EvaluateKind : std::uint32_t
+	{
+		Light,        // the light path kept or moved it
+		LightMissed,  // the light path tried and fell through to the full write
+		Actor,        // written in full: an actor's (kTraitActor) whose verdict lets it have a record
+		ActorNoRecord,  // written in full: an actor's whose verdict gives it none (hidden, fading, ...)
+		Face,         // written in full: a face shape
+		PerFrame,     // written in full: any other per-frame entry
+		Event,        // written in full: scheduled by an event, a pending evaluation or a full walk
+		Count
+	};
+
+	inline constexpr std::array<const char*, static_cast<std::size_t>(EvaluateKind::Count)> kEvaluateKindNames{
+		"light path", "light path missed", "actor", "actor without a record", "face", "other per-frame", "event"
+	};
+
 	inline constexpr std::uint32_t kNoObjectSlot = ~0u;
 
 	/** @brief What a change-log entry changed (SceneStore::Tables::changeLog), by the columns its consumers read. */
@@ -567,6 +619,19 @@ namespace DCLF
 			// The accumulator subset of partMs. It is measured at EarlyPrepass on
 			// the render thread, distinct from the preceding scene walk's parts.
 			std::array<double, static_cast<std::size_t>(BuildPart::Count)> accumulatePartMs{};
+			// The scene tables by sub-zone (ScenePart), summed since the last ResetTimes (ms).
+			std::array<double, static_cast<std::size_t>(ScenePart::Count)> scenePartMs{};
+			// The current frame's time by part, and the largest frame's since the last ResetTimes (EndSceneFrame).
+			std::array<double, static_cast<std::size_t>(ScenePart::Count)> scenePartFrameMs{};
+			std::array<double, static_cast<std::size_t>(ScenePart::Count)> scenePartMaxMs{};
+			// The light path since the last ResetTimes: entries it kept, by trait (an entry counts under each of its
+			// lightTraits bits, SceneStore::kTrait*); the placements it took and how many changed the record; the kept
+			// skins and how many changed their palette rows.
+			std::array<std::uint64_t, 8> lightByTrait{};
+			std::uint64_t lightPlaced = 0, lightPlacedChanged = 0, lightSkins = 0, lightSkinsChanged = 0;
+			// The first evaluation round by EvaluateKind: time (ms) and entries, under CS_DCLF_PROFILE.
+			std::array<double, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindMs{};
+			std::array<std::uint64_t, static_cast<std::size_t>(EvaluateKind::Count)> evaluateKindCount{};
 			// The property-derived descriptor against the accumulated one (Phase 5 readiness): objects
 			// compared, and objects the derivation would have left native.
 			//
@@ -615,7 +680,28 @@ namespace DCLF
 			std::uint32_t templateUpgrades = 0;     // templates a later native-visible object took over
 		};
 
-		void ResetTimes() { stats.partMs = stats.accumulatePartMs = {}; }
+		void ResetTimes()
+		{
+			stats.partMs = stats.accumulatePartMs = {};
+			stats.scenePartMs = {};
+			stats.scenePartMaxMs = {};
+			stats.lightByTrait = {};
+			stats.lightPlaced = stats.lightPlacedChanged = stats.lightSkins = stats.lightSkinsChanged = 0;
+			stats.evaluateKindMs = {};
+			stats.evaluateKindCount = {};
+		}
+
+		/** @brief Waits for the scene placement job and notes what it changed; before anything reads the records. */
+		void JoinPlacements();
+		/** @brief The scene placement job's line for the report, or empty; resets its counters. */
+		std::string PlacementReport();
+		/** @brief The end of the scene tables zone: folds this frame's part times into the maximums. */
+		void EndSceneFrame()
+		{
+			for (std::size_t i = 0; i < stats.scenePartFrameMs.size(); ++i)
+				stats.scenePartMaxMs[i] = std::max(stats.scenePartMaxMs[i], stats.scenePartFrameMs[i]);
+			stats.scenePartFrameMs = {};
+		}
 
 		/** @brief Whether CS_DCLF_PROFILE is on: the per-part timing in BuildFrame. Read once. */
 		static bool ProfileEnabled();
@@ -1028,8 +1114,8 @@ namespace DCLF
 			// (kTraitSwitch), has animated shading (kTraitAnimatedShading) or is skinned (kTraitSkin; a tree's wind moves
 			// its bones). While its classification stands, the full walk would take nothing else again: a switch's
 			// verdict is taken again and the shading's inputs compared (the record is written in full when either
-			// changes), a skin gets its palette (AppendKeptSkin), and a record that moves gets its placement
-			// (MoveObject). 0 for every other entry. movedWalk: the walk that took this path.
+			// changes), a skin gets its palette (KeepSkin, then the scene placement job), and a record that moves
+			// gets its placement (QueuePlacement). 0 for every other entry. movedWalk: the walk that took this path.
 			std::uint32_t lightTraits = 0;
 			std::uint32_t movedWalk = 0;
 			// kTraitAnimatedShading: what the record read from the animated shader and alpha properties when it was
@@ -1381,9 +1467,57 @@ namespace DCLF
 		 * partitions its fade node's LOD level draws, as WriteObject would. False when WriteObject must (no partition
 		 * drawn, or no rows).
 		 */
-		bool AppendKeptSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/**
+		 * @brief Whether a kept record's skin stays as written: skinning on, its partitions drawn, its palette the
+		 * record's size. Notes a partition mask that changed; the palette itself is the scene placement job's.
+		 */
+		bool KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		/** @brief A kept record of a moving static: its transforms, its bound and its sun entry, nothing else. */
-		void MoveObject(RE::BSGeometry* a_geometry, Tracked& a_tracked);
+		/**
+		 * @brief Whether an actor's record, written in an earlier frame, is what WriteObject would write again but for
+		 * its placement and palette: its classification inputs (ClassifyInputsOf) and its verdict are unchanged.
+		 */
+		bool ActorRecordKept(RE::BSGeometry& a_geometry, Tracked& a_tracked);
+		/** @brief A face shape's snapshot and region this walk (FaceSnapshots); false without one. */
+		bool ResolveFace(RE::BSGeometry& a_geometry, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region);
+		/** @brief Appends a face shape's entry to this walk's faceStreams and points its slot at it. */
+		void PushFaceStream(RE::BSGeometry& a_geometry, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region);
+		/** @brief A kept face shape's record: its stream for this walk (ResolveFace, PushFaceStream); false to write it in full. */
+		bool KeepFaceStream(RE::BSGeometry& a_geometry, Tracked& a_tracked);
+		/**
+		 * @brief The light path's placements and palettes, taken off the render thread (Placements.cpp).
+		 *
+		 * EvaluateRound queues a kept record's placement and, for a kept skin, its palette (QueuePlacement); after
+		 * the walk KickPlacements hands them to the worker's "scene placement" job, which runs the engine's palette
+		 * update (thread-safe: a critical section and the frame counter) and writes the record's placement fields and
+		 * palette rows only. JoinPlacements, at BeforeShadowMaps, before anything reads them, takes what the job did
+		 * not and notes the changes. From the kick to the join the render thread writes none of those columns and no
+		 * table grows: the kick follows the whole walk, and the engine's work in that window (the main cull, the
+		 * water reflections) moves no transform (dclf-event-driven-tables.md).
+		 */
+		struct Placement
+		{
+			RE::BSGeometry* geometry = nullptr;
+			Tracked* tracked = nullptr;
+			const RE::NiAVObject* sunEntryNode = nullptr;
+			std::uint32_t slot = kNoObjectSlot;
+			std::uint8_t take = 0;
+		};
+		static constexpr std::uint8_t kTakePlacement = 1, kTakePalette = 2, kTakeDefect = 4;
+		std::vector<Placement> placements;
+		std::vector<std::uint8_t> placementChanges;  // per item: what taking it changed (kTake*)
+		std::atomic<std::uint32_t> placementsDone{ 0 };
+		std::shared_ptr<void> placementJob;  // AsyncWorker::JobHandle
+		struct PlacementStats
+		{
+			std::uint64_t items = 0, inlineItems = 0, late = 0, defects = 0, probes = 0, probeMoved = 0;
+			std::string firstMoved;
+		} placementStats;
+		void QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take);
+		std::uint8_t TakePlacement(const Placement& a_item);
+		void RunPlacements();
+		void KickPlacements();
+		void ApplyPlacements(bool a_probe);
 		/**
 		 * @brief Whether a reference root's subtree holds anything that moves (a controller, a non-fixed rigid body, a
 		 * skin): the root's bound is then not fixed, and it is the sun entry of every geometry under it. Walked once per

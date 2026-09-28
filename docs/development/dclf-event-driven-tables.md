@@ -467,6 +467,75 @@ the engine never updates them again. So they are written every frame (`settling 
 | Bleak Falls Barrow | 0.27-0.28 ms (813) | 0.34-0.35 ms |
 | Whiterun's exterior | 0.38 ms in the window after the load | 0.43 ms |
 
+## The scene tables off the render thread's critical path
+
+Status, 2026-09-28. The zone "CS DCLF: scene tables" (`BeginSceneFrame`: `ProcessEvents` and the scene phase) cost
+2.7 ms a frame standing in Whiterun. It is split into sub-zones (Tracy `CS.DCLF.Scene.*`, and the `CS_DCLF_STATS`
+line "scene tables CPU per frame", with each part's maximum). Under `CS_DCLF_PROFILE` a second line splits the first
+evaluation round by entry kind. At the start, 2.0 ms of it was 2,021 actor entries written in full every frame, at
+about 1 µs each. The change log showed those rewrites were nearly all no-ops: bindings, geometry and membership
+changed on 2-4 slots a frame, while placement changed on about 1,100 and the palette on about 790.
+
+**Actors and faces on the light path.** An actor's record is kept when its classification inputs
+(`ClassifyInputsOf`, which now also covers the skin partition and the sky map's radius test) and its frame verdict
+(`ClassifyFrame`, taken again exactly as `WriteObject`'s re-read would take it) are unchanged
+(`ActorRecordKept`). Then only its placement and palette are taken. A face shape also takes its head's snapshot and
+region for the walk (`KeepFaceStream`, sharing `ResolveFace` and `PushFaceStream` with `WriteObject`). A verdict the
+frame changes counts as a classification, so the entry's traits are taken again. Walk parity counts motion an
+actor gains after its classification as served, since the light path places an actor every frame. A full evaluation
+now marks every entry `fullWalk` (`BuildFullOrder`), which closes a hole: the light path could keep a record that the
+full evaluation's sweep then freed.
+
+**The scene placement job.** The light path queues placements and palettes (`QueuePlacement`), and the worker takes
+them after the walk (`Placements.cpp`), joined at `BeforeShadowMaps`. The engine's palette update `FUN_140e4ff90`
+locks the skin instance's critical section (`+0x60`) and runs only when `frameID` (`+0x38`) differs from
+`gFrameCounter`. Its only engine caller is the bone setter `NiBoneMatrixSetterI::Func1` (`0x14150be30`), so it is
+safe beside the engine's own draws. Between DCLF's `Main::Draw` hook (the call at +0xD3) and the shadow maps the
+engine runs:
+
+- the main cull (`DrawWorld_BuildSceneLists` on `gJobList_SceneListAccumCulling`);
+- `FUN_140644f60`, the water system's reflections and image-space readbacks;
+- `FUN_1414a2170`;
+- the first-person hides.
+
+None of them writes a world or bone transform. The probe found one exception, which is in
+`dclf-open-defects.md`.
+
+| Whiterun, standing, full featureset | Zone | Evaluate |
+| --- | --- | --- |
+| Before | 2.68-2.81 ms | 2.33-2.44 ms |
+| Actors and faces on the light path (profiled) | 2.10 ms (from 3.0 profiled) | 1.77 ms |
+| With the scene placement job | 1.03-1.06 ms | the job: 0.81-0.83 ms on the worker, joined with 0.000 ms waited |
+
+**Starting points for the rest (Ghidra, AE).**
+
+- **Which actors animated this frame.** `Job_Actor_animation` (`0x1406d2670`) queues `RunOneActorAnimationUpdateJob`
+  (`0x140776a90`) for each high-process actor (`FUN_140777480` walks `ProcessLists+0x30`). Every animation path,
+  including `Actor::UpdateAnimation` (`0x14066aad0`) and `PlayerCharacter::UpdateAnimation` (`0x1407393a0`), first
+  calls `FUN_14066afa0(ref)`, which sets the graph's world transform.
+- **Other ways an actor moves.** `Actor::Update3DPosition` (`0x140664ee0`, virtual; through the reference's
+  `0x1402d9800`), `Actor::UpdateActor3DPosition` (`0x14069eb80`), the sky-cell skin job
+  (`RunOneActorUpdateSkyCellSkinJob` `0x140776b60` → `FUN_140663430`), and ragdolls (`Job_Ragdoll_animation` →
+  `FUN_140770dc0`).
+- **Non-actor movers.** A loaded cell's animated references (`cell+0x130`, the array at `+0x40` and its count at
+  `+0x50`), one `UpdateAnimatedRefsJob` each, queued by `FUN_1402b3f20` or `FUN_1402b40f0` from `Job_Cell_animations`.
+  The cell's animated-object node is updated by `FUN_1402b3ae0`, and graph-animated references by
+  `UpdateAnimationJob` (`0x1402c7360`) → `FUN_1402f75a0`. Of about 2,020 light-path movers a frame, about 340 change.
+- **Actor `kHidden` writers.** From a direct `or` or `and` on `+0xF4` in the actor code, to be confirmed one by one:
+  - equipment: `FUN_14070f110` (the `AddWornItem` path), `FUN_14067f640`, `FUN_1402df9a0` (`BipedAnim`) and
+    `FUN_1402df8a0`;
+  - weapon draw: `FUN_14072ec90` (`RightHandWeaponDrawHandler`), and the virtual functions `FUN_14072f1e0`,
+    `FUN_14072f250` and `FUN_14072f550`;
+  - inventory menus: `FUN_14072eb30`;
+  - AI procedures: `FUN_140666230`;
+  - arrows and items: `Actor::AttachArrow`, `Actor::DetachArrow` and `FUN_1406b5c10`;
+  - death, resurrection and revert: `Actor::ClearDeathState` and `FUN_140685d60`;
+  - 3D loads: `FUN_140684d60`, `FUN_140685200` and `FUN_140686180`;
+  - process changes: `FUN_1407114b0`;
+  - animation objects: `FUN_1407c3570` and `FUN_1407c3a90`;
+  - candidates that run every frame: `FUN_1407e1060`, `FUN_14069f780` and `FUN_140736150`;
+  - `PlayerCharacter::Load3D` and `PlayerCharacter::Update`.
+
 ## Relation to the GPU-driven plan
 
 This is the CPU side of the GPU-driven plan's Phase 3, stated precisely enough to build. It doesn't remove the

@@ -36,6 +36,8 @@ namespace DCLF
 	 * startup and at every new cell, exactly when a late join would bring the bubble back).
 	 *
 	 * The jobs, in frame order, each with where it is kicked and joined:
+	 * - "scene placement": the kept records' placements and palettes (SceneStore::KickPlacements at the end of the
+	 *   scene tables; BeforeShadowMaps);
 	 * - "shadow": the shadow views' build (IndirectDraws::KickShadowBuild at BeforeShadowMaps; the shadow epoch);
 	 * - "primary synthetic passes": PrimaryCull's stand-in passes (the cut; the accumulate phase at EarlyPrepass);
 	 * - "primary feedback": the visibility feedback's decode (after the registration jobs; Present);
