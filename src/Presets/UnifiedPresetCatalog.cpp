@@ -29,8 +29,22 @@ namespace
 	constexpr const char* kEffects11PackSubdir = "effects11";
 	// The colon keeps it out of the pack folder namespace, like orphan "e11:" ids.
 	constexpr const char* kEffects11LegacyPackId = "legacy:effects11";
+	constexpr std::string_view kEffects11OrphanPrefix = "e11:";
 
 	using Util::ToLower;
+
+	/** @brief The Effects 11 preset id a pack switches to. */
+	std::string GetEffects11PresetId(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		using SourceKind = UnifiedPresetCatalog::SourceKind;
+		if (pack.source == SourceKind::UnifiedPack)
+			return PresetManager::MakeUnifiedPackPresetId(pack.id);
+		if (pack.source == SourceKind::Effects11Orphan && pack.id.starts_with(kEffects11OrphanPrefix))
+			return pack.id.substr(kEffects11OrphanPrefix.size());
+		if (pack.source == SourceKind::Effects11Legacy)
+			return PresetManager::kLegacyPresetId;
+		return pack.id;
+	}
 
 	/** @brief Case-insensitive substring match; the needle must already be lowercase. */
 	bool ContainsCI(const std::string& haystack, const std::string& needleLower)
@@ -395,7 +409,7 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 			continue;
 
 		PackInfo pack;
-		pack.id = std::string("e11:") + name;
+		pack.id = std::string(kEffects11OrphanPrefix) + name;
 		pack.name = name;
 		pack.source = SourceKind::Effects11Orphan;
 		pack.rootPath = presetRoot;
@@ -428,6 +442,18 @@ void UnifiedPresetCatalog::DiscoverEffects11Legacy()
 	packs.push_back(std::move(pack));
 }
 
+void UnifiedPresetCatalog::AdoptEffects11ActivePack()
+{
+	if (!activePackId.empty() || !globals::features::effects11.loaded)
+		return;
+	const auto& e11Id = PresetManager::GetSingleton().GetActivePresetId();
+	const auto match = std::ranges::find_if(packs, [&](const PackInfo& pack) {
+		return pack.source != SourceKind::UnifiedPack && pack.valid && GetEffects11PresetId(pack) == e11Id;
+	});
+	if (match != packs.end())
+		activePackId = match->id;
+}
+
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
@@ -438,6 +464,7 @@ void UnifiedPresetCatalog::Discover()
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
 	DiscoverEffects11Legacy();
+	AdoptEffects11ActivePack();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -446,7 +473,7 @@ void UnifiedPresetCatalog::Discover()
 	logger::info("[Presets] Discovered {} pack(s); active='{}'", packs.size(), activePackId.empty() ? "(none)" : activePackId);
 }
 
-std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPresets, const std::string& search) const
+std::vector<size_t> UnifiedPresetCatalog::Query(std::optional<PresetType> typeFilter, const std::string& search) const
 {
 	const auto needle = ToLower(search);
 	std::vector<size_t> indices;
@@ -454,9 +481,7 @@ std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPresets
 
 	for (size_t i = 0; i < packs.size(); ++i) {
 		const auto& pack = packs[i];
-		if (wantE11 && !pack.IsE11())
-			continue;
-		if (wantCSPresets && !pack.IsCS())
+		if (typeFilter && !pack.IsType(*typeFilter))
 			continue;
 
 		if (!needle.empty()) {
@@ -601,16 +626,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		auto& presetManager = PresetManager::GetSingleton();
 		presetManager.DiscoverPresets();
 
-		std::string e11Id;
-		if (pack->source == SourceKind::UnifiedPack)
-			e11Id = PresetManager::MakeUnifiedPackPresetId(pack->id);
-		else if (pack->source == SourceKind::Effects11Orphan && pack->id.starts_with("e11:"))
-			e11Id = pack->id.substr(4);
-		else if (pack->source == SourceKind::Effects11Legacy)
-			e11Id = PresetManager::kLegacyPresetId;
-		else
-			e11Id = pack->id;
-
+		const auto e11Id = GetEffects11PresetId(*pack);
 		if (presetManager.SwitchPreset(e11Id, saveEffects11Current)) {
 			globals::features::effects11.PersistActivePreset();
 			appliedAny = true;

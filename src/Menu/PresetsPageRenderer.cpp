@@ -17,8 +17,7 @@
 #include <string>
 #include <vector>
 
-bool PresetsPageRenderer::filterE11 = false;
-bool PresetsPageRenderer::filterCSPresets = false;
+std::optional<UnifiedPresetCatalog::PresetType> PresetsPageRenderer::typeFilter;
 char PresetsPageRenderer::searchBuffer[128] = {};
 std::string PresetsPageRenderer::selectedPackId;
 bool PresetsPageRenderer::discovered = false;
@@ -168,17 +167,16 @@ void PresetsPageRenderer::RenderToolbar()
 	ImGui::InputTextWithHint("##PresetSearch", T("menu.presets.search", "Search presets..."), searchBuffer, IM_ARRAYSIZE(searchBuffer));
 
 	ImGui::SameLine();
-	const bool showAll = !filterE11 && !filterCSPresets;
-	if (FilterChip(T("menu.presets.filter_all", "All"), showAll)) {
-		filterE11 = false;
-		filterCSPresets = false;
-	}
+	using PresetType = UnifiedPresetCatalog::PresetType;
+	const auto typeChip = [](const char* label, std::optional<PresetType> type) {
+		if (FilterChip(label, typeFilter == type))
+			typeFilter = type;
+	};
+	typeChip(T("menu.presets.filter_all", "All"), std::nullopt);
 	ImGui::SameLine();
-	if (FilterChip(T("menu.presets.filter_e11", "E11"), filterE11))
-		filterE11 = !filterE11;
+	typeChip(T("menu.presets.filter_e11", "E11"), PresetType::E11);
 	ImGui::SameLine();
-	if (FilterChip(T("menu.presets.filter_cs", "CS"), filterCSPresets))
-		filterCSPresets = !filterCSPresets;
+	typeChip(T("menu.presets.filter_cs", "CS"), PresetType::CS);
 
 	// A small divider keeps these maintenance actions from reading as more filter chips.
 	Util::ToolbarDivider();
@@ -206,7 +204,7 @@ void PresetsPageRenderer::RenderList(float width)
 	const auto& theme = globals::menu->GetTheme();
 	const float scale = Util::GetUIScale();
 
-	const auto indices = catalog.Query(filterE11, filterCSPresets, searchBuffer);
+	const auto indices = catalog.Query(typeFilter, searchBuffer);
 
 	ImGui::BeginChild("##PresetList", ImVec2(width, 0), true);
 	{

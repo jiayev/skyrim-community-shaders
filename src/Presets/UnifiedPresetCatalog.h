@@ -67,6 +67,8 @@ public:
 		bool IsE11() const { return type ? *type == PresetType::E11 : hasEffects11; }
 		/** @brief Grouped as CS: the declared type, else whether scene files were found. */
 		bool IsCS() const { return type ? *type == PresetType::CS : hasCSPresets; }
+		/** @brief Grouped under the given type. */
+		bool IsType(PresetType presetType) const { return presetType == PresetType::E11 ? IsE11() : IsCS(); }
 	};
 
 	static UnifiedPresetCatalog& GetSingleton();
@@ -92,9 +94,8 @@ public:
 	PackInfo* FindPack(const std::string& id);
 	const PackInfo* FindPack(const std::string& id) const;
 
-	/** @brief Indices of packs passing the type flags and a case-insensitive name/author/description/tag search.
-	 *  Each enabled flag requires that type; all false shows everything. */
-	std::vector<size_t> Query(bool wantE11, bool wantCSPresets, const std::string& search) const;
+	/** @brief Indices of packs of the given type (any when null) matching a case-insensitive name/author/description/tag search. */
+	std::vector<size_t> Query(std::optional<PresetType> typeFilter, const std::string& search) const;
 
 	/** @brief Loads a pack's logo, cover and screenshots once; the cover stands in for a missing logo. */
 	bool EnsureArtwork(PackInfo& pack);
@@ -140,6 +141,8 @@ private:
 	void DiscoverEffects11Orphans();
 	/** @brief Adds the Effects 11 install at the game root or Data folder, when present. */
 	void DiscoverEffects11Legacy();
+	/** @brief With no pack applied, marks the Legacy or orphan pack Effects 11 is already running as active. */
+	void AdoptEffects11ActivePack();
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);

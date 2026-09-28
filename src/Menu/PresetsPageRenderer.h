@@ -1,5 +1,8 @@
 #pragma once
 
+#include "Presets/UnifiedPresetCatalog.h"
+
+#include <optional>
 #include <string>
 
 /** @brief Renders the unified Presets browser for Effects 11 and CS Presets packs. */
@@ -23,9 +26,8 @@ private:
 	/** @brief Rounded toggle button, filled when selected. @return Whether it was clicked. */
 	static bool FilterChip(const char* label, bool selected);
 
-	/** @brief Backend chips are independent toggles. All off = show all; each on = must have that backend. */
-	static bool filterE11;
-	static bool filterCSPresets;
+	/** @brief The one type shown; null shows all. */
+	static std::optional<UnifiedPresetCatalog::PresetType> typeFilter;
 	static char searchBuffer[128];
 	static std::string selectedPackId;
 	static bool discovered;
