@@ -21,6 +21,7 @@ namespace Util::Settings
 	/** @brief Returns the translated setting label shared by settings selectors. */
 	std::string GetCatalogLeafDisplayName(const SceneSettingsCatalog::SettingMetadata& setting);
 
+	/** @brief One exportable setting: its JSON pointer path and display label. */
 	struct ExportSetting
 	{
 		std::string path;

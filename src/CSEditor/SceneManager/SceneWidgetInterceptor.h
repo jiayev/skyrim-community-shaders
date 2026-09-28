@@ -22,11 +22,11 @@ namespace SceneWidgetInterceptor
 	/** @brief Installs the detours. Idempotent; call from the render thread before the first frame. */
 	bool Install();
 
+	/** @brief Whether Install attached every detour. */
 	bool IsInstalled();
 
-	/// True while a non-baseline Scope is active, i.e. a feature's DrawSettings is being replicated
-	/// for scene authoring. Features can use this to hide non-setting UI (debug views, buffer
-	/// viewers) that has no scene-context meaning.
+	/// True while a non-baseline Scope replicates a feature's DrawSettings for scene authoring, so
+	/// features can hide UI with no scene meaning (debug views, buffer viewers).
 	bool IsArmed();
 
 	/// Empty while healthy; otherwise names the entry point whose attach failed.

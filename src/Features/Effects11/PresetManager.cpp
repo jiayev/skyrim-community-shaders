@@ -249,7 +249,7 @@ bool PresetManager::SetActivePreset(const std::string& id)
 void PresetManager::ReloadActive()
 {
 	// SettingManager::Load() reinitializes WeatherManager via ReloadAllWeatherSettings().
-	// EffectManager::Apply() unloads/recompiles ENB FX only — not CS shader cache.
+	// EffectManager::Apply() unloads/recompiles ENB FX only, not the CS shader cache.
 	SettingManager::GetSingleton().Load();
 	EffectManager::GetSingleton().Apply();
 }

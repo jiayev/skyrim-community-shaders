@@ -174,9 +174,8 @@ void SceneSettingsManager::VerifyPendingApplies()
 			logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
 				featureShortName);
 			featureApplyDocuments.erase(featureShortName);
-			// Record what the feature actually reports rather than dropping the address: the scene
-			// layer did touch it, so it still owes the baseline back, and the mismatch against the
-			// resolved value is what drives the retry. A restore keeps dropping it, as it always did.
+			// Record what the feature reports instead of dropping the address: the scene layer still owes it
+			// the baseline, and the mismatch against the resolved value drives the retry.
 			for (size_t index = 0; index < verification.updates.size(); ++index) {
 				const auto& update = verification.updates[index];
 				const SettingAddress address{ featureShortName, update.settingPath, update.key };
@@ -600,8 +599,6 @@ void SceneSettingsManager::FlushDeferredSceneChanges()
 
 	CommitSceneSettingChanges();
 }
-
-// --- Event Handler ---
 
 RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::ProcessEvent(
 	const RE::MenuOpenCloseEvent* a_event,

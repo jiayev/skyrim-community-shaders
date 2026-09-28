@@ -4,31 +4,25 @@
 #include <string>
 #include <vector>
 
-/**
- * @brief Resolves the active ENBSeries preset root for Effects11.
- *
- * Supports a classic Legacy install (game-root or Data\\enbseries), a multi-preset
- * library under Data\\SKSE\\Plugins\\CommunityShaders\\Effects11\\Presets\\<Name>\\,
- * and unified packs under CommunityShaders\\Presets\\<PackId>\\effects11\\.
- * Hotswap redirects GetENBSeriesPath() / GetENBSeriesIniPath() without copying
- * or modifying the Legacy install.
- */
+/** @brief Resolves the active ENBSeries root: the Legacy install, a library preset, or a unified pack's effects11/.
+ *  Hotswap only redirects the paths it returns, so the Legacy install is never copied or modified. */
 class PresetManager
 {
 public:
-	/** Empty string identifies the Legacy (root / Data) install. */
+	/** @brief Empty string identifies the Legacy (root / Data) install. */
 	static constexpr const char* kLegacyPresetId = "";
 
-	/** Prefix for unified-pack effects11 folders registered in the library. */
+	/** @brief Prefix for unified-pack effects11 folders registered in the library. */
 	static constexpr const char* kUnifiedPackIdPrefix = "pack:";
 
-	/** Display / docs path (under Data via MO2 VFS). */
+	/** @brief Display / docs path (under Data via MO2 VFS). */
 	static constexpr const char* kPresetsRootRelative = "Data\\SKSE\\Plugins\\CommunityShaders\\Effects11\\Presets";
 	static constexpr const char* kEnbSeriesDirName = "enbseries";
 	static constexpr const char* kEnbSeriesIniName = "enbseries.ini";
-	/** Required FX file for a valid library preset (matches ENBEffect::GetName()). */
+	/** @brief Required FX file for a valid library preset (matches ENBEffect::GetName()). */
 	static constexpr const char* kRequiredEffectFile = "enbeffect.fx";
 
+	/** @brief One discovered preset, valid or not. */
 	struct PresetInfo
 	{
 		std::string id;                  ///< Empty for Legacy; folder name or pack:id for library
@@ -48,66 +42,72 @@ public:
 	/** @return On-disk path under the CS mod root (for Explorer and create_directories). */
 	std::filesystem::path GetPresetsRealPath() const;
 
-	/** Ensure the on-disk presets library folder exists (no-op if already present). */
+	/** @brief Creates the on-disk presets library folder if missing. */
 	void EnsurePresetsFolderExists() const;
 
-	/** @return Active preset's enbseries directory (library or Legacy). */
+	/** @brief Active preset's enbseries directory (library or Legacy). */
 	std::filesystem::path GetENBSeriesPath() const;
-	/** @return Active preset's enbseries.ini path (library or Legacy). */
+	/** @brief Active preset's enbseries.ini path (library or Legacy). */
 	std::filesystem::path GetENBSeriesIniPath() const;
 
-	/** Rescan Legacy + library + unified pack folders and repair an invalid active selection. */
+	/** @brief Rescans Legacy, library and unified pack folders and repairs an invalid active selection. */
 	void DiscoverPresets();
+	/** @brief Every preset found by the last DiscoverPresets. */
 	const std::vector<PresetInfo>& GetPresets() const { return presets; }
 
-	/** @return Count of valid non-Legacy library presets. */
+	/** @brief Count of valid non-Legacy library presets. */
 	size_t GetValidLibraryPresetCount() const;
 
+	/** @brief The selected preset's id; kLegacyPresetId for Legacy. */
 	const std::string& GetActivePresetId() const { return activePresetId; }
 
-	/**
-	 * @brief Selects a discovered preset without reloading FX.
-	 * @param id Legacy id or library folder name
-	 * @return false if unknown or invalid
-	 */
+	/** @brief Selects a discovered preset without reloading FX.
+	 *  @return False if the id is unknown or invalid. */
 	bool SetActivePreset(const std::string& id);
 
+	/** @brief Whether an enbseries.ini and enbseries/ exist under Data or the game root. */
 	bool HasLegacyInstall() const;
+	/** @brief Whether the Legacy install is the active preset. */
 	bool IsLegacyActive() const { return activePresetId == kLegacyPresetId; }
 
-	/**
-	 * @brief Hotswap: optionally save current, set active id, reload settings/weather, recompile ENB FX.
-	 * Does not clear Community Shaders shader cache.
-	 */
+	/** @brief Hotswap: optionally saves the current preset, then reloads settings and weather and recompiles
+	 *         ENB FX for id. Does not clear the Community Shaders shader cache. */
 	bool SwitchPreset(const std::string& id, bool saveCurrent = true);
 
-	/** Reload settings/weather and recompile ENB FX for the current active preset. */
+	/** @brief Reloads settings and weather and recompiles ENB FX for the active preset. */
 	void ReloadActive();
 
-	/** Ensure the presets root exists and open it in Explorer (real path under MO2). */
+	/** @brief Creates the presets root if needed and opens its real path in Explorer. */
 	bool OpenPresetsFolder() const;
 
-	/** Human-readable "DisplayName - enbseries path" for the status line. */
+	/** @brief "DisplayName - enbseries path" for the status line. */
 	std::string GetActivePresetStatusSummary() const;
 
-	/** Build the library id used for a unified pack's effects11 folder. */
+	/** @brief Library id for a unified pack's effects11 folder. */
 	static std::string MakeUnifiedPackPresetId(const std::string& packId);
 
-	/** True when presetRoot has enbseries.ini + enbseries/enbeffect.fx. */
+	/** @brief Whether presetRoot has enbseries.ini and enbseries/enbeffect.fx; outReason says what is missing. */
 	static bool ValidateLibraryPreset(const std::filesystem::path& presetRoot, std::string& outReason);
 
 private:
+	/** @brief Whether the Legacy install lives under Data rather than the game root. */
 	bool UseDataFolder() const;
+	/** @brief Absolute Legacy enbseries directory. */
 	std::filesystem::path GetLegacyENBSeriesPath() const;
+	/** @brief Absolute Legacy enbseries.ini path. */
 	std::filesystem::path GetLegacyENBSeriesIniPath() const;
 
-	/** @return Library preset root when a valid non-Legacy preset is active; empty otherwise. */
+	/** @brief Library preset root when a valid non-Legacy preset is active; empty otherwise. */
 	std::filesystem::path GetActiveLibraryRoot() const;
 
+	/** @brief Whether the ini exists and the series folder is a directory. */
 	static bool IsValidEnbSeriesLayout(const std::filesystem::path& iniPath, const std::filesystem::path& seriesDir);
+	/** @brief The id, or "Legacy" for the empty Legacy id. */
 	static std::string FormatPresetIdForLog(const std::string& id);
 
+	/** @brief The discovered preset with this id, or null. */
 	const PresetInfo* FindPreset(const std::string& id) const;
+	/** @brief Keeps a valid selection, else picks Legacy when installed, then the first valid library preset. */
 	void EnsureDefaultSelection();
 	/** @brief Adds each preset folder under a CommunityShaders subfolder, across the VFS and real mod roots. */
 	void ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks);

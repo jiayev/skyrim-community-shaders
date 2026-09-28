@@ -59,6 +59,7 @@ namespace
 			[](void* destination, double number) { *static_cast<T*>(destination) = static_cast<T>(number); } };
 	}
 
+	/** @brief Size and read/write thunks for an ImGui scalar type; empty when unsupported. */
 	ScalarTraits GetScalarTraits(ImGuiDataType type)
 	{
 		switch (type) {
@@ -204,9 +205,8 @@ namespace
 		return found != cache.end() ? found->second : cache.emplace(a_page, Collect(a_page)).first->second;
 	}
 
-	/// The layers a page sits on top of, highest first: weather resolves over time of day, and a
-	/// location over whichever stack is running. Interior and the exterior stack never resolve at the
-	/// same time, so the live cell picks the one a location sits on, exactly as the resolver does.
+	/// The layers a page sits on top of, highest first; the live cell picks interior or exterior
+	/// under a location, exactly as the resolver does.
 	std::vector<SceneContextId> CollectLowerContexts(const SceneContextId& a_page)
 	{
 		std::vector<SceneContextId> lower;
@@ -281,6 +281,7 @@ namespace
 	using PeriodEntries = std::array<std::optional<size_t>, kPeriodCount>;
 	using UserEntryIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodEntries>;
 
+	/** @brief A feature's user entry index in a context, rebuilt when entry presentation changes. */
 	const UserEntryIndex& GetContextUserEntryIndex(const SceneContextId& a_context, const std::string& a_feature)
 	{
 		static std::map<std::pair<SceneContextId, std::string>,
@@ -325,9 +326,8 @@ namespace
 				.locationFormKey = target->formKey }));
 	}
 
-	/// The layers a page is resolved under, lowest first: weather resolves over time of day, and the
-	/// location chain over whichever stack is running. Mirror image of CollectLowerContexts, so a page
-	/// belonging to the stack the live scene is not running has nothing above it.
+	/// The layers resolved above a page, lowest first; mirrors CollectLowerContexts, so a page on the
+	/// stack the live scene is not running has nothing above it.
 	std::vector<SceneContextId> CollectUpperContexts(const SceneContextId& a_page)
 	{
 		std::vector<SceneContextId> upper;
@@ -409,9 +409,8 @@ namespace
 		return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
 	}
 
-	/** @brief The entry one context applies at an address for the periods asked for, or null when it
-	 *  supplies nothing. A user entry outranks an overwrite, and the last of a source wins, as the
-	 *  resolver overlays them. */
+	/** @brief The entry a context applies at an address for the given periods, or null; user beats
+	 *  overwrite and the last of a source wins, as in the resolver. */
 	const SceneSettingsManager::SettingEntry* FindSupplyingEntry(const SceneContextId& a_context,
 		const SceneSettingsManager::SettingIdentity& a_setting, PeriodMask a_periods)
 	{
@@ -482,9 +481,8 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	metadata = SceneSettingsCatalog::FindSettingForControl(
 		context->feature, proxy ? proxy->member : value.data);
 	if (!metadata) {
-		// Not a catalogued setting at all (e.g. a plain UI toggle like "Show Advanced"), so the
-		// interceptor has nothing to bind. Left live rather than greyed: it never promised an
-		// override in the first place.
+		// Not catalogued (e.g. "Show Advanced"): left live rather than greyed, since it never
+		// promised an override.
 		state = State::Unsupported;
 		return;
 	}
@@ -1121,9 +1119,8 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
 	if (mixedAcrossPeriods)
 		return Util::Colors::GetWarning();
 
-	// Something resolving after this page wins here, so nothing this page says reaches the scene. Red
-	// is kept for the user's own edit shadowing a preset: the one losing pair that is a decision
-	// rather than the layering doing its job.
+	// A later layer wins, so this page's value never reaches the scene. Red is reserved for a user
+	// edit shadowing a preset, the only losing pair that is a decision rather than layering.
 	if (upperLayer != SceneSettingsManager::SettingLayer::None) {
 		const bool userShadowsPreset = winningLayer == SceneSettingsManager::SettingLayer::Overwrite &&
 		                               upperLayer != SceneSettingsManager::SettingLayer::Overwrite;

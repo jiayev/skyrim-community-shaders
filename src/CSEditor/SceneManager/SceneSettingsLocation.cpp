@@ -14,8 +14,6 @@ using namespace SceneSettingsOverwrites;
 using namespace SceneSettingsLocationTargets;
 using namespace SceneSettingsContextRules;
 
-// --- Per-Location Scene Settings ---
-
 const SceneSettingsManager::LocationSceneConfig SceneSettingsManager::kEmptyLocationConfig{};
 
 std::string SceneSettingsManager::GetLocationConfigKey(LocationTargetType type, std::string_view formKey)

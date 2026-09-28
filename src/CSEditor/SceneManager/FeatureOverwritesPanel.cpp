@@ -43,6 +43,7 @@ namespace
 		return std::string(T(TKEY("export.title"), "Export Feature Settings")) + "##FeatureOverwritesExport";
 	}
 
+	/** @brief Selects a feature and lists its exportable settings, all initially selected. */
 	void SelectFeature(int index)
 	{
 		exportState.featureIndex = index;
@@ -67,6 +68,7 @@ namespace
 		exportState.labels.push_back(feature->GetDisplayName());
 	}
 
+	/** @brief Fills the picker with loaded features that have exportable settings, sorted by display name. */
 	void AddExportableFeatures()
 	{
 		auto features = Feature::GetFeatureList();
@@ -111,6 +113,7 @@ namespace
 			std::ranges::fill(exportState.selected, uint8_t{ 0 });
 	}
 
+	/** @brief Search box and filtered list of the selected feature's exportable settings. */
 	void DrawSettingList()
 	{
 		ImGui::SetNextItemWidth(-FLT_MIN);

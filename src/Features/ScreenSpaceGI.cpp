@@ -356,9 +356,8 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 	settings = o_json;
 	settings.ResolutionMode = std::clamp(settings.ResolutionMode, 0, 2);
 
-	// A scene override reloads the whole settings block on every value change, so recompiling
-	// unconditionally rebuilds all seven compute shaders per slider frame. Only the settings
-	// CompileComputeShaders turns into defines can actually invalidate them.
+	// Scene overrides reload settings on every value change, so recompile only when a setting
+	// CompileComputeShaders turns into a define changed.
 	recompileFlag = recompileFlag ||
 	                settings.ResolutionMode != previous.ResolutionMode ||
 	                settings.EnableTemporalDenoiser != previous.EnableTemporalDenoiser ||

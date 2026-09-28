@@ -159,9 +159,8 @@ namespace
 		return context;
 	}
 
-	/// Whether a page edits one period at a time. The Scene Manager panel has no flat mode, so it
-	/// always does, except indoors where the aperiodic interior layer takes the panel over. Weather
-	/// and location pages follow the saved set their scene has active.
+	/// Whether a page edits one period at a time: the Scene Manager panel always does except indoors,
+	/// weather and location pages follow their scene's active saved set.
 	bool ResolvePeriodEditing(const SceneSettingsManager::SceneContextId& baseContext, bool sceneManagerPanel)
 	{
 		if (sceneManagerPanel)
@@ -169,9 +168,8 @@ namespace
 		return SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(baseContext);
 	}
 
-	/// Resolves which period is currently active, updating the follow/pin state as a side effect.
-	/// Call exactly once per panel per frame - the title row's toolbar and the period bar itself
-	/// both need this value, and running the scrub/pin logic twice would double-apply it.
+	/// Resolves the active period, updating the follow/pin state as a side effect.
+	/// Call exactly once per panel per frame so the scrub/pin logic is not applied twice.
 	int ResolveActivePeriod(bool editing)
 	{
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
@@ -190,11 +188,8 @@ namespace
 		return periodBar.selected < 0 ? live : periodBar.selected;
 	}
 
-	/// Draws the period segmented control and its companion checkbox (the interior indicator, or
-	/// the Time of Day toggle), and returns the period the panel below it should edit. `active` is
-	/// the value ResolveActivePeriod already computed for this panel this frame; a click here may
-	/// advance it further. The page toolbar used to share this row, but now sits on the title row
-	/// above so navigation (this bar) and actions stay visually distinct.
+	/// Draws the period control and its interior / Time of Day checkbox, returning the period to edit.
+	/// `active` is this frame's ResolveActivePeriod result; a click here may advance it.
 	int DrawPeriodBarRow(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
 		bool sceneManagerPanel, int active)
 	{
@@ -305,9 +300,7 @@ namespace
 			periodEditingThisFrame |= periodEditing;
 			int active = ResolveActivePeriod(periodEditing);
 
-			// Title row: the panel's identity (Scene Manager panel only) shares a row with its
-			// actions, like a window header with its buttons beside the title, rather than the
-			// actions crowding the period bar's navigation row below.
+			// Actions share the title row so they don't crowd the period bar's navigation below.
 			if (sceneManagerPanel) {
 				EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
 				ImGui::SameLine();
@@ -401,6 +394,7 @@ namespace
 		ImGui::SameLine(start + box);
 	}
 
+	/** @brief Push an alternate-row color, raised to a visible minimum when the theme's is too faint. */
 	void PushLocationRowShade()
 	{
 		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);

@@ -21,6 +21,7 @@ namespace SceneWidgetBinding
 		/// Widest control the interceptor covers: ColorEdit4 and float4 aggregates.
 		static constexpr std::uint8_t kMaxComponents = 4;
 
+		/** @brief Storage shape; Scalar carries any other ImGuiDataType through scalarType. */
 		enum class Kind : std::uint8_t
 		{
 			Bool,
@@ -35,6 +36,7 @@ namespace SceneWidgetBinding
 		std::uint8_t componentCount = 1;
 		ImGuiDataType scalarType = ImGuiDataType_COUNT;
 
+		/** @brief Typed constructors, one per Kind. */
 		static Value Bool(bool* a_data) { return { Kind::Bool, a_data, 1, ImGuiDataType_COUNT }; }
 		static Value Int(int* a_data) { return { Kind::Int, a_data, 1, ImGuiDataType_COUNT }; }
 		static Value Float(float* a_data) { return { Kind::Float, a_data, 1, ImGuiDataType_COUNT }; }
@@ -58,10 +60,8 @@ namespace SceneWidgetBinding
 		alignas(std::uint64_t) std::byte bytes[sizeof(float) * Value::kMaxComponents]{};
 	};
 
-	/// Whether this call owns the gutter. A radio group is several calls against one address, so
-	/// its members defer ownership rather than drawing one toggle per button. GroupMember has no
-	/// intercepted feature drawing a radio group yet; dropping it would leave a double-gutter bug
-	/// waiting for the first one.
+	/// Whether this call owns the gutter: a radio group's buttons share one address, so members defer to
+	/// one toggle. GroupMember has no caller yet, but keeps the first radio group from drawing two gutters.
 	enum class GutterPolicy : std::uint8_t
 	{
 		Owner,
@@ -105,6 +105,7 @@ namespace SceneWidgetBinding
 
 		/// Pointer the real ImGui call must bind: the caller's storage, or the paused holding value.
 		void* Raw();
+		/** @brief Raw(), typed for the matching ImGui call. */
 		bool* Bool();
 		int* Int();
 		float* Float();
@@ -113,8 +114,10 @@ namespace SceneWidgetBinding
 		 *  @return What the intercepted function should return: never true while paused. */
 		bool Finish(bool a_changed);
 
+		/** @brief How the control resolved this frame. */
 		State GetState() const { return state; }
 
+		/** @brief The catalog setting the control binds; null when it is not bindable. */
 		const SceneSettingsCatalog::SettingMetadata* GetMetadata() const { return metadata; }
 
 	private:
@@ -137,8 +140,11 @@ namespace SceneWidgetBinding
 
 		/// The main menu's path: binds the live member and colours the control by the layer winning it.
 		void BindBaseline();
+		/** @brief Highest layer behind a main-menu control: sketch, scene, feature override, else base. */
 		BaselineLayer ResolveBaselineLayer() const;
+		/** @brief Tint for baselineLayer, nothing for Base. */
 		std::optional<ImVec4> ResolveBaselineColor() const;
+		/** @brief Tooltip for baselineLayer, null for Base. */
 		const char* ResolveBaselineTooltip() const;
 		/// Jumps to the Scene Manager page supplying the value, or commits a sketch into it.
 		void DrawBaselineGutter();
@@ -147,9 +153,8 @@ namespace SceneWidgetBinding
 		SceneSettingsManager::SettingIdentity ComponentIdentity(const Component& a_component) const;
 		/// Derives the state and the mixed flag from the resolved entries.
 		void ResolveState();
-		/// Provenance across every period this control covers, combined "any user wins" like
-		/// ResolveState's anyActive/anyPaused. An aggregate shares one address family, so `identity`
-		/// answering for its first component answers for all of them.
+		/// Provenance across every covered period, any user entry winning as in ResolveState.
+		/// `identity` speaks for the whole aggregate through its first component.
 		SceneSettingsManager::SettingLayer ResolveWinningLayer() const;
 
 		/// Highest layer beneath this page supplying the address, once this page supplies nothing
@@ -180,6 +185,7 @@ namespace SceneWidgetBinding
 		/// Opens the page that can actually edit a greyed Unbound/Unavailable setting.
 		void NavigateGreyedSetting() const;
 
+		/** @brief Writes an edit into this control's entries, reviving a tombstone and creating missing entries first. */
 		void Commit();
 		/** @brief Draws the leading marker column.
 		 *  @return Whether it changed which entries exist or whether they apply, so the caller can
@@ -195,7 +201,9 @@ namespace SceneWidgetBinding
 		void CaptureNextItemWidth();
 		/// Shrinks the control by the space the leading gutter took, so it still fits the panel.
 		void PushCompensatedItemWidth();
+		/** @brief Undoes PushCompensatedItemWidth, if it pushed. */
 		void PopCompensatedItemWidth();
+		/** @brief Right-click menu: the stored value, revert, delete or restore the mod's value. */
 		void DrawContextMenu();
 
 		/// Drops every entry this control owns, shared by the gutter's remove button and the
@@ -208,6 +216,7 @@ namespace SceneWidgetBinding
 
 		/// Whether a period slot is one this control reads and writes.
 		bool IsCoveredSlot(int a_slot) const;
+		/** @brief Whether every component has an entry in every covered slot. */
 		bool HasAllCoveredEntries() const;
 
 		/** @brief Runs a_visit over every component and covered period slot, with the context that
@@ -252,6 +261,7 @@ namespace SceneWidgetBinding
 		 *  highest lower layer supplying it, else the feature's base.
 		 *  @return Null when the live member already holds that base. */
 		const json* ResolveFallbackValue(const Component& a_component) const;
+		/** @brief Writes a stored value into the component's slot of the holding storage, in widget scale. */
 		void WriteHoldingComponent(const Component& a_component, const json& a_stored);
 
 		/// The caller's post-call storage, as the primitive one component persists.
@@ -260,6 +270,7 @@ namespace SceneWidgetBinding
 		/// The stored override on one line; an aggregate lists every component.
 		std::string DescribeStoredValue() const;
 
+		/** @brief The edited value of each component, for every entry that component owns. */
 		std::vector<SceneSettingsManager::EntryValueUpdate> BuildEntryValueUpdates() const;
 
 		const char* label;

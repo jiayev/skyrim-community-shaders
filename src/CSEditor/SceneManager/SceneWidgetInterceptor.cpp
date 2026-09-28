@@ -25,7 +25,7 @@ namespace
 	Context armedContext;
 	Proxy armedProxy;
 
-	// --- Originals ---
+	// DetourAttach repoints each at a trampoline into the real ImGui function.
 	auto* RealSliderFloat = &ImGui::SliderFloat;
 	auto* RealSliderFloat2 = &ImGui::SliderFloat2;
 	auto* RealSliderFloat3 = &ImGui::SliderFloat3;
@@ -51,6 +51,7 @@ namespace
 	// ColorEdit3 -> ColorEdit4), and the gutter toggle is itself a Checkbox: only the outermost binds.
 	bool insideInterceptedCall = false;
 
+	/** @brief RAII scope that sets insideInterceptedCall. */
 	struct InterceptedCall
 	{
 		InterceptedCall() { insideInterceptedCall = true; }
@@ -60,6 +61,7 @@ namespace
 		InterceptedCall& operator=(const InterceptedCall&) = delete;
 	};
 
+	/** @brief True when armed and not nested inside another intercepted call. */
 	bool ShouldIntercept()
 	{
 		return armed && !insideInterceptedCall;
@@ -68,9 +70,8 @@ namespace
 
 namespace
 {
-	// Unbound/Unavailable controls are greyed via BeginDisabled precisely so an edit here cannot
-	// rewrite the feature's base value; BeginDragDropTarget ignores that flag, so drop acceptance has
-	// to check the resolved state itself or it would bypass the same protection.
+	/** @brief Whether a palette drop may land; BeginDragDropTarget ignores BeginDisabled, so greyed
+	 *  controls must refuse it here or a drop would rewrite the base value. */
 	bool CanAcceptPaletteDrop(const SceneWidgetBinding::Guard& a_guard)
 	{
 		const auto state = a_guard.GetState();
@@ -230,9 +231,8 @@ namespace
 		return guard.Finish(RealCheckbox(label, guard.Bool()));
 	}
 
-	// The palette drags a custom "COLOR_DND" payload rather than ImGui's native _COL3F/_COL4F, so
-	// forwarding straight to the real widget (which only recognises its own payload) drops palette
-	// support entirely; every intercepted color control needs this wired in by hand.
+	/** @brief Accepts the palette's custom "COLOR_DND" payload, which the real color widgets ignore,
+	 *  so every intercepted color control must call this. */
 	bool AcceptPaletteColorDrop(float* col, int componentCount)
 	{
 		bool accepted = false;

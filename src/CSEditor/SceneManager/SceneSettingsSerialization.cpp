@@ -9,8 +9,7 @@
 
 using namespace SceneSettingsInternal;
 
-// --- Unified Persistence ---
-
+/** @brief Serializes an entry over its loaded template, so unknown fields survive a round trip. */
 static json EntryToJson(const SceneSettingsManager::SettingEntry& entry)
 {
 	json item = entry.serializedTemplate.is_object() ? entry.serializedTemplate : json::object();
@@ -40,6 +39,7 @@ static json EntryToJson(const SceneSettingsManager::SettingEntry& entry)
 	return item;
 }
 
+/** @brief Serializes the user entries; transitionOnly keeps just numeric values. */
 static json UserEntriesToArray(const std::vector<SceneSettingsManager::SettingEntry>& entries, bool transitionOnly = false)
 {
 	json arr = json::array();
@@ -50,6 +50,7 @@ static json UserEntriesToArray(const std::vector<SceneSettingsManager::SettingEn
 	return arr;
 }
 
+/** @brief Appends entries this build could not resolve, verbatim. */
 static void AppendRawEntries(json& arr, const std::vector<json>& rawEntries)
 {
 	if (!arr.is_array())
@@ -97,6 +98,7 @@ static void ReadTimeOfDayMode(const json& section, json& preserved, SceneSetting
 	}
 }
 
+/** @brief Whether to write a section: when modified, absent, or well-formed; an untouched malformed one is kept as is. */
 static bool ShouldSerializeUserSection(const json& data, std::string_view key, bool expectObject, bool modified)
 {
 	auto it = data.find(std::string(key));
@@ -230,6 +232,7 @@ enum class PeriodField
 	Optional,  ///< Absent means the flat set.
 };
 
+/** @brief Parses and validates one serialized entry, logging why a rejected one was dropped. */
 static bool LoadEntryFromJson(const nlohmann::json& item, SceneSettingsManager::SettingEntry& entry,
 	PeriodField periodField, const char* typeName,
 	std::optional<SceneSettingsManager::SceneType> allowedSceneType = std::nullopt,
@@ -549,9 +552,8 @@ void SceneSettingsManager::LoadLocationUserSettings(const json& data)
 				}
 				config.entries.push_back(std::move(entry));
 			}
-			// The canonical key carries the metadata and every loaded entry, so the author's spelling
-			// only has to survive when it still holds entries this build rejected. Emitting it
-			// unconditionally would leave an empty duplicate target beside the canonical one.
+			// Keep the author's spelling only for entries this build rejected; otherwise it would
+			// be an empty duplicate of the canonical key, which carries everything loaded.
 			if ((hasValidEntry || legacySection) && (formKey != canonicalFormKey || legacySection)) {
 				if (preservedConfig["entries"].empty())
 					continue;

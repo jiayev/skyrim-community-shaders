@@ -80,6 +80,7 @@ namespace
 			std::make_format_args(name, count, listed));
 	}
 
+	/** @brief Shows a success or failure notification for an export. */
 	void ReportExportResult(std::string name, bool exported)
 	{
 		auto message = exported ?
@@ -92,6 +93,7 @@ namespace
 			message, exported ? Util::Colors::GetSuccess() : Util::Colors::GetError());
 	}
 
+	/** @brief Clears the form and everything loaded from an existing preset. */
 	void ResetFormFields()
 	{
 		form = {};
@@ -102,6 +104,7 @@ namespace
 		collidingFiles.clear();
 	}
 
+	/** @brief Fills empty fields from an existing preset and adopts its artwork, dropping any pending picks. */
 	void PrefillFromExisting(const SceneSettingsManager::PresetMetadata& meta)
 	{
 		if (form.author.empty())
@@ -129,6 +132,7 @@ namespace
 		form.screenshotSources.clear();
 	}
 
+	/** @brief Splits on ',' or ';', trimming whitespace and dropping empty tags. */
 	std::vector<std::string> ParseTags(const std::string& text)
 	{
 		std::vector<std::string> tags;
@@ -159,6 +163,7 @@ namespace
 		return path.filename().string();
 	}
 
+	/** @brief Opens the Windows image picker. @return Whether any file was chosen. */
 	bool BrowseImageFiles(bool allowMultiple, std::vector<std::filesystem::path>& outPaths)
 	{
 		outPaths.clear();
@@ -194,6 +199,7 @@ namespace
 		return !outPaths.empty();
 	}
 
+	/** @brief Draws an artwork slot's status with Browse and Clear buttons; `multi` edits the screenshot list. */
 	void DrawArtworkRow(const char* label, bool multi, std::filesystem::path* singleSource, bool& cleared,
 		const std::string& existingRel)
 	{
@@ -239,6 +245,7 @@ namespace
 		}
 	}
 
+	/** @brief The form as export info, with the sanitized name and parsed tags. */
 	PresetExportInfo BuildExportInfo(const std::string& sanitizedName)
 	{
 		auto info = form;

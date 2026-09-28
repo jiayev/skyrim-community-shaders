@@ -48,6 +48,7 @@ namespace
 		return ImGui::GetStyle().ItemInnerSpacing.x;
 	}
 
+	/** @brief Add a badge gap to width unless this is the first badge. */
 	void AppendBadgeGap(float& width, bool& needGap)
 	{
 		if (needGap)
@@ -60,6 +61,7 @@ namespace
 		dl->AddImageRounded(texture, p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE, rounding);
 	}
 
+	/** @brief Circular translucent arrow button centered on center; returns true when clicked. */
 	bool DrawCarouselArrow(const char* id, const char* icon, const ImVec2& center, float diameter)
 	{
 		ImGui::SetCursorScreenPos(ImVec2(center.x - diameter * 0.5f, center.y - diameter * 0.5f));
@@ -365,7 +367,7 @@ void PresetsPageRenderer::RenderDetail()
 	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
-	// Poster | title+author | badges — one table so pills share a baseline and spacing is style-driven.
+	// Poster | title+author | badges in one table so pills share a baseline and spacing is style-driven.
 	if (ImGui::BeginTable("##PresetDetailHeader", 3,
 			ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoPadOuterX)) {
 		ImGui::TableSetupColumn("poster", ImGuiTableColumnFlags_WidthFixed, posterW);
@@ -480,7 +482,7 @@ void PresetsPageRenderer::RenderDetail()
 
 	ImGui::Spacing();
 
-	// Screenshot viewer only after a thumbnail click — not auto-filled with cover.
+	// Screenshot viewer only after a thumbnail click, not auto-filled with cover.
 	const bool showViewer = heroImageIndex >= 0 && heroImageIndex < static_cast<int>(pack->screenshotSRVs.size()) &&
 							pack->screenshotSRVs[static_cast<size_t>(heroImageIndex)];
 	if (showViewer) {

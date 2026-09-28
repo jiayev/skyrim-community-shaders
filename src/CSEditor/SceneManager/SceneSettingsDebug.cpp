@@ -10,8 +10,6 @@
 
 using namespace SceneSettingsInternal;
 
-// --- Debug Inspection ---
-
 /** @brief Renders a stored setting value as a short debug string. */
 static std::string FormatDebugValue(const json& value)
 {

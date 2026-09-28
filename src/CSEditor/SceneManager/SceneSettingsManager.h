@@ -28,10 +28,10 @@ using json = nlohmann::json;
 class SceneSettingsManager
 {
 public:
+	/** @brief The process-wide instance. */
 	static SceneSettingsManager* GetSingleton();
 
-	// --- Scene Types ---
-
+	/** @brief Scene layer an entry list or catalog whitelist belongs to. */
 	enum class SceneType
 	{
 		InteriorOnly,
@@ -39,8 +39,7 @@ public:
 		Location
 	};
 
-	// --- Time of Day Periods ---
-
+	/** @brief Time-of-day period; Count doubles as the flat (non-periodic) marker. */
 	enum class TimeOfDayPeriod
 	{
 		Dawn = 0,
@@ -66,7 +65,7 @@ public:
 		TimeOfDayPeriod::Sunset, TimeOfDayPeriod::Dusk, TimeOfDayPeriod::Night
 	};
 
-	/// Hour boundaries for each period [start, end).  Night wraps around midnight (21-28 i.e. 21-4).
+	/// Hour range [start, end) of each period; Night runs past midnight as 21-28.
 	static constexpr float kPeriodHours[kPeriodCount][2] = {
 		{ 4.0f, 6.0f },    // Dawn
 		{ 6.0f, 8.0f },    // Sunrise
@@ -81,15 +80,13 @@ public:
 	/// Shortest period's length: a longer blend would already be under way when a period begins.
 	static constexpr float kMaxTimeOfDayTransitionHours = 2.0f;
 
-	// --- Event Handler ---
-
-	/// Listens for LoadingMenu close to detect cell transitions.
-	/// Defers reset work until the menu closes.
+	/// Listens for LoadingMenu close to detect cell transitions, deferring reset work until then.
 	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
 	{
 	public:
 		virtual RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
 
+		/** @brief Subscribes once; false when the UI event source is unavailable. */
 		static bool Register()
 		{
 			static bool registered = false;
@@ -114,19 +111,18 @@ public:
 		}
 	};
 
-	// --- Setting Entry ---
-
+	/** @brief Who authored an entry. */
 	enum class EntrySource
 	{
 		User,      // User-added via UI
 		Overwrite  // Loaded from overwrite file
 	};
 
-	/// Layer a fresh capture is taken from. Passing Overwrite here means "resolve the layers beneath
-	/// the overwrites", so ticking the gutter over a mod-supplied value pins the value that would
-	/// apply without the mod rather than the mod's own. Lower user layers still stack.
+	/// Layer fresh captures resolve beneath: pinning over a mod value keeps what would apply without
+	/// the mod. Lower user layers still stack.
 	static constexpr EntrySource kCaptureSourceLayer = EntrySource::Overwrite;
 
+	/** @brief One scene override of a single feature setting, user-authored or from a mod's file. */
 	struct SettingEntry
 	{
 		std::string featureShortName;  // Feature's GetShortName()
@@ -210,8 +206,7 @@ public:
 		bool clearScreenshots = false;
 	};
 
-	/** @brief Bakes the winning values of every context into the unified pack Presets/<Name>/, replacing its scene files.
-	 *  Merges the display fields into the pack manifest <Name>.json and copies logo/cover/gallery images beside it.
+	/** @brief Bakes every context's winning values into Presets/<Name>/, replacing its scene files and merging its manifest and artwork.
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const PresetExportInfo& info);
 
@@ -254,10 +249,12 @@ public:
 	bool HasActiveSettingsForFeature(const std::string& featureShortName) const;
 	/// Whether a feature has any entry authored anywhere, in effect here or not.
 	bool HasAnySceneEntriesForFeature(const std::string& featureShortName) const;
+	/** @brief Whether the scene layer currently applies a value at this address. */
 	bool IsActiveSceneSetting(std::string_view featureShortName,
 		std::string_view settingPath, std::string_view settingKey) const;
 	bool IsActiveSceneSetting(const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey) const;
+	/** @brief Folds a feature's external edits at applied addresses into its baselines, then re-resolves. */
 	void CaptureExternalFeatureChanges(Feature* feature);
 
 	/// Whether the scene layer is currently driving this feature, so a settings UI without sketch
@@ -284,6 +281,7 @@ public:
 	/// Save all user data (interior, TOD, weather) to unified SceneManager.json.
 	void SaveAllUserSettings();
 
+	/** @brief Replaces one scene type's overwrite entries with those found in the active pack. */
 	void DiscoverOverwrites(SceneType type);
 
 	/// Re-reads every overwrite file from disk, replacing the mod layer. User entries are untouched.
@@ -298,7 +296,9 @@ public:
 
 	// --- Path Resolution ---
 
+	/** @brief Persisted name of a scene type, also its overwrite directory name. */
 	static std::string GetSceneTypeName(SceneType type);
+	/** @brief Path of the unified SceneManager.json user document. */
 	static std::filesystem::path GetUserSettingsFilePath();
 
 	/** @brief Folder of the unified pack whose scene files form the overwrite layer; empty when no pack is active. */
@@ -307,12 +307,16 @@ public:
 	/** @brief Whether a pack folder holds any scene directory. */
 	static bool HasScenePayload(const std::filesystem::path& packRoot);
 
+	/** @brief A pack's overwrite directory for an interior or time-of-day scene type. */
 	static std::filesystem::path GetOverwritesPath(SceneType type, const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
 	// --- Time of Day Helpers (public for UI) ---
 
+	/** @brief Persisted name of a period, also its overwrite subdirectory. */
 	static const char* GetPeriodName(TimeOfDayPeriod period);
+	/** @brief Inverse of GetPeriodName; Count when the name matches no period. */
 	static TimeOfDayPeriod GetPeriodFromName(const std::string& name);
+	/** @brief Game hour in [0, 24), read from the calendar first since the sky lags while time is paused. */
 	static float GetCurrentGameHour();
 
 	/// Writes the game hour every reader, including GetCurrentGameHour, resolves against.
@@ -419,8 +423,10 @@ public:
 
 	using WeatherSceneConfig = PeriodicSceneConfig;
 
+	/** @brief Whether a weather holds any numeric entry. */
 	bool HasWeatherConfig(RE::FormID weatherId);
 
+	/** @brief A pack's weather directory, holding one folder per weather SPID. */
 	static std::filesystem::path GetWeatherOverwritesDir(const std::filesystem::path& packRoot = GetActiveScenePackRoot());
 
 	// --- Per-Location Scene Settings ---
@@ -442,6 +448,7 @@ public:
 	/// Persisted "type" discriminator, also used as the overwrite metadata targetType.
 	static const char* GetLocationTargetTypeName(LocationTargetType type);
 
+	/** @brief One link of a location chain, identified by type and form key. */
 	struct LocationTarget
 	{
 		LocationTargetType type = LocationTargetType::Location;
@@ -454,6 +461,7 @@ public:
 		RE::FormID formId = 0;
 	};
 
+	/** @brief A location target's entries plus the identity needed to persist and display it. */
 	struct LocationSceneConfig : PeriodicSceneConfig
 	{
 		LocationTargetType type = LocationTargetType::Location;
@@ -479,6 +487,7 @@ public:
 
 	/// Put a target on the user's list so it can be authored before it has any settings.
 	bool AddLocationTarget(const LocationTarget& target);
+	/** @brief Whether the target is on the user's list. */
 	bool IsLocationTargetAuthored(LocationTargetType type, std::string_view formKey) const;
 
 	/// Drop a target from the user's list, discarding the settings they authored for it.
@@ -674,13 +683,13 @@ public:
 		Deleted,    // a user tombstone suppresses every lower layer
 	};
 
+	/** @brief Where the winning value at an address comes from. */
 	struct SettingProvenance
 	{
 		SettingLayer layer = SettingLayer::None;
 	};
 
-	/** @brief Names the layer driving one address, for the gutter's colour and the export modal.
-	 *  @return The winning layer. */
+	/** @brief Names the layer driving one address, for the gutter's colour and the export modal. */
 	SettingProvenance GetSettingProvenance(const SceneContextId& context,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey) const;
@@ -690,14 +699,15 @@ public:
 	/** @brief Records a main-menu edit of a feature's base value. Where a scene applies, the edit
 	 *  becomes a sketch the resolver holds in place until the sketches are dropped. */
 	void RecordBaselineEdit(const SettingIdentity& setting, const json& value);
+	/** @brief Whether a main-menu edit is currently held as a sketch at this address. */
 	bool IsSketched(const SettingIdentity& setting) const;
+	/** @brief Whether the held sketches belong to this feature. */
 	bool HasSketches(const std::string& featureShortName) const;
 	/// Keeps one feature's sketches alive through the next Update; any other feature's are dropped.
 	void RetainSketches(const std::string& featureShortName);
 
-	/** @brief The context supplying an address's winning scene value: the narrowest location link,
-	 *  else the weather, else the period or interior. Mid-blend the incoming side wins, falling back to
-	 *  the outgoing side when the incoming one supplies nothing. Null when no scene supplies it. */
+	/** @brief The context supplying an address's winning value: narrowest location link, else weather, else
+	 *  period or interior. Mid-blend the incoming side wins when it supplies one; null when no scene does. */
 	std::optional<SceneContextId> FindWinningContext(const SettingIdentity& setting) const;
 
 	/** @brief Writes sketched values into the context winning each address and restores the base
@@ -716,6 +726,7 @@ public:
 		size_t total = 0;
 		size_t paused = 0;
 
+		/** @brief Whether every entry is paused; false for an empty context. */
 		bool AllPaused() const { return total != 0 && paused == total; }
 	};
 
@@ -736,8 +747,6 @@ public:
 
 	/// Enables location discovery once Skyrim form data is guaranteed to be available.
 	void OnDataLoaded();
-
-	// --- Runtime State ---
 
 	/// Current and outgoing weather with the sky's blend factor. Ids are 0 when no weather is active.
 	struct WeatherBlend
@@ -902,9 +911,8 @@ private:
 	/// timescale (20x), this equals about 0.18 real seconds.
 	static constexpr float kHourUpdateThreshold = 1e-3f;
 
-	/// Location transitions are the one per-frame path, and each tick costs a full
-	/// SaveSettings/LoadSettings round trip per feature. A smoothstep blend is indistinguishable
-	/// at 30 Hz, so the tick is decoupled from the frame rate.
+	/// Each transition tick costs a LoadSettings per feature, and a smoothstep is indistinguishable at
+	/// 30 Hz, so the tick is decoupled from the frame rate.
 	static constexpr float kLocationTransitionTickInterval = 1.0f / 30.0f;
 
 	int sceneLayerSuspendDepth = 0;
@@ -923,6 +931,7 @@ private:
 	float locationTransitionSeconds = kDefaultLocationTransitionSeconds;
 
 	using SettingAddress = SettingIdentity;
+	/** @brief One value pushed into a feature through its catalog-backed settings document. */
 	struct CatalogSceneSettingUpdate
 	{
 		std::vector<std::string> settingPath;
@@ -946,6 +955,7 @@ private:
 	ResolvedSettingMap resolvedSettingsScratch;
 	std::set<std::string> restoreFailureWarnings;
 	std::map<std::string, std::chrono::steady_clock::time_point> restoreRetryAfter;
+	/** @brief Retry backoff for a feature whose last apply of a given update set failed. */
 	struct ApplyFailureState
 	{
 		size_t signature = 0;
@@ -1043,6 +1053,7 @@ private:
 		int index = -1;
 		float hour = 0.0f;
 	};
+	/** @brief Period containing an hour; index -1 when none does. */
 	static PeriodLookup FindPeriodForHour(float hour);
 
 	/// FindWinningContext's search against one period and weather (0 for none).
@@ -1052,15 +1063,23 @@ private:
 	// --- Per-Weather helpers ---
 	/// Load weather overwrites/user settings once game data is available for SPID resolution.
 	bool TryEnsureWeatherDataLoaded();
+	/** @brief Loads location overwrites and user settings once game data is ready; false until then. */
 	bool TryEnsureLocationDataLoaded();
+	/** @brief Discovers weather overwrites and loads the weather user settings. */
 	void LoadWeatherData();
+	/** @brief The weather's config, created empty when it has none. */
 	WeatherSceneConfig& GetWeatherConfigMut(RE::FormID weatherId);
+	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
 	void RemoveWeatherSetting(RE::FormID weatherId, size_t index);
+	/** @brief Whether the weather holds an entry for this setting and period, optionally of one source. */
 	bool HasWeatherEntryForPeriod(RE::FormID weatherId, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, TimeOfDayPeriod period,
 		std::optional<EntrySource> source = std::nullopt);
+	/** @brief The outgoing weather while blending, cached because the sky can drop it; 0 once the blend completes. */
 	RE::FormID GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const;
+	/** @brief Samples the sky's current and outgoing weather and their blend factor. */
 	WeatherBlend GetWeatherBlend() const;
+	/** @brief The time-of-day layer's value for one period, user over overwrite, else the base value. */
 	float GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const;
 
@@ -1077,6 +1096,7 @@ private:
 	/// Active per-period values for one address, indexed by period.
 	using PeriodValues = std::array<std::optional<float>, kPeriodCount>;
 	using PeriodSettingMap = std::map<SettingAddress, PeriodValues>;
+	/** @brief Period values valid while revision matches sceneValueRevision. */
 	struct CachedPeriodSettingMap
 	{
 		std::uint64_t revision = std::numeric_limits<std::uint64_t>::max();
@@ -1093,21 +1113,29 @@ private:
 	 *  @param type The scene type whose whitelist the entries are judged by. */
 	void CollectPeriodValueGroups(const std::vector<SettingEntry>& sourceEntries, bool timeOfDayEnabled,
 		SceneType type, PeriodSettingMap& values) const;
+	/** @brief Time-of-day values grouped by address, cached per scene value revision. */
 	const PeriodSettingMap& BuildTimeOfDayValueGroups() const;
+	/** @brief One weather's values grouped by address, cached per scene value revision. */
 	const PeriodSettingMap& BuildWeatherValueGroups(RE::FormID weatherId) const;
 
 	// --- Central runtime resolver ---
 	/** @brief Resolves the current scene and pushes it to the features.
-	 *  @param allowLocationTransitions Cleared across a loading screen so the new location's values
-	 *         are already in place when the player arrives instead of easing in afterwards. */
+	 *  @param allowLocationTransitions Cleared across a loading screen so the new values land before the player arrives. */
 	void ResolveAndApply(bool force = false, bool allowLocationTransitions = true);
+	/** @brief Whether any active set holds a resolvable entry, recomputed only after the entry lists change. */
 	bool HasActiveSceneEntriesCached();
-	/// @param interior Passed down from the caller's resolve, which already sampled it.
+	/** @brief Layers every scene into the reused scratch map.
+	 *  @param interior Passed down from the caller's resolve, which already sampled it. */
 	ResolvedSettingMap& BuildResolvedSettings(bool collectLocationTransitionDurations, bool interior);
+	/** @brief Pushes changed values to their features and restores addresses the scene no longer drives. */
 	void ApplyResolvedSettings(const ResolvedSettingMap& resolved, bool forceRetry);
+	/** @brief Returns every applied address to its baseline and drops in-flight transitions. */
 	void RestoreAppliedSettings();
+	/** @brief Overlays the interior layer. */
 	void ResolveInteriorSettings(ResolvedSettingMap& resolved) const;
+	/** @brief Blends the per-period time-of-day values at the snapshot's factors. */
 	void ResolveTimeOfDaySettings(ResolvedSettingMap& resolved, const PeriodSettingMap& values) const;
+	/** @brief Blends current and outgoing weather over the time-of-day values. */
 	void ResolveWeatherSettings(ResolvedSettingMap& resolved, const PeriodSettingMap& timeOfDayValues) const;
 	/** @brief Walks the chain into flat overrides and per-period values, narrowest link winning. */
 	void ResolveLocationSettings(ResolvedSettingMap& resolved, PeriodSettingMap& periodValues,
@@ -1118,23 +1146,30 @@ private:
 		std::map<SettingAddress, float>* transitionDurations) const;
 	/** @brief Blends per-period location values against whatever the lower layers resolved. */
 	void BlendLocationPeriodValues(ResolvedSettingMap& resolved, const PeriodSettingMap& periodValues) const;
+	/** @brief Records the entry's transition duration, or the global one, for its address. */
 	void RecordLocationTransitionDuration(const SettingEntry& entry, const SettingAddress& address,
 		std::map<SettingAddress, float>& transitionDurations) const;
+	/** @brief Writes one source's resolvable entries over resolved; a tombstone erases its address instead. */
 	void OverlayEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, EntrySource source,
 		std::map<SettingAddress, float>* transitionDurations = nullptr) const;
 	/// Overlay both sources, shipped overwrites first so user entries win.
 	void OverlayAllEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, std::map<SettingAddress, float>* transitionDurations = nullptr) const;
+	/** @brief The time-of-day value a weather entry stacks on; a flat entry uses the current period. */
 	std::optional<float> ResolveWeatherLowerValue(RE::FormID weatherId, const SettingAddress& address,
 		TimeOfDayPeriod period, EntrySource selectedSource);
+	/** @brief The feature's own value at an address, null when the catalog does not allow it. */
 	json GetBaselineValue(const SettingAddress& address);
 	/// Feature settings with the live scene layer folded back out, cached until invalidated.
 	const json* GetFeatureBaseSnapshot(const std::string& featureShortName);
+	/** @brief Captures a baseline for each address that has none yet. */
 	void EnsureBaselines(std::span<const SettingAddress> addresses);
+	/** @brief Drops a feature's cached base snapshot; an empty name drops every feature's. */
 	void InvalidateFeatureSnapshot(std::string_view featureShortName = {});
 	/// Forget a feature once its last applied setting is gone, so it stops counting as scene-driven.
 	void PruneAppliedFeatureName(const std::string& featureShortName);
+	/** @brief The value a location entry stacks on: its chain's lower layers, else the baseline. */
 	std::optional<json> ResolveLocationLowerValue(LocationTargetType type, std::string_view formKey,
 		const SettingAddress& address, EntrySource selectedSource);
 	/// Resolve everything a location target sits on top of, or null when the target is unreachable.
@@ -1144,11 +1179,16 @@ private:
 	// --- Generic Scene Copy ---
 	/// The entry that wins for each setting in a context, user over overwrite.
 	using EffectiveContextEntries = std::map<SettingIdentity, const SettingEntry*>;
+	/** @brief Whether the context's fields are consistent with its type. */
 	static bool IsValidSceneContext(const SceneContextId& context);
+	/** @brief Context equality with location form keys normalized. */
 	static bool IsSameSceneContext(const SceneContextId& lhs, const SceneContextId& rhs);
+	/** @brief The winning entry per setting in one context, tombstoned settings dropped. */
 	static EffectiveContextEntries BuildEffectiveContextEntries(
 		const std::vector<SettingEntry>& contextEntries, const SceneContextId& context);
+	/** @brief The entry list backing a context, null when it has none. */
 	const std::vector<SettingEntry>* GetCopyContextEntries(const SceneContextId& context) const;
+	/** @brief Mutable GetCopyContextEntries, loading weather or location data first. */
 	std::vector<SettingEntry>* GetContextEntriesMut(const SceneContextId& context);
 	/// As GetContextEntriesMut, but a weather or location context that has no config yet gets one.
 	std::vector<SettingEntry>* EnsureContextEntriesMut(const SceneContextId& context);
@@ -1166,6 +1206,7 @@ private:
 	/// The value an entry reverts to: what it was created with, or, where the entry stacks on lower
 	/// layers, whatever those supply now.
 	std::optional<json> ResolveContextEntryDefault(const SceneContextId& context, const SettingEntry& entry);
+	/** @brief The source's winning entries, each checked for compatibility and conflict with the destination. */
 	std::vector<CopyCandidate> BuildCopyCandidates(const SceneContextId& source,
 		const SceneContextId& destination) const;
 	/// Deferring the commit lets a fan-out over the periods land as one save.
@@ -1178,18 +1219,15 @@ private:
 	/// Exact: an eased value moves by far less than any tolerance would forgive, and a skipped apply
 	/// would accumulate that difference into a visible staircase.
 	static bool ResolvedValuesEqual(const json& lhs, const json& rhs);
-	/**
-	 * Reads a feature back to confirm it kept every value it was handed: a clean LoadSettings only
-	 * means nothing threw, not that the value survived a clamp, a quantise or a mode gate.
-	 *
-	 * @param observed When given, receives the value the feature reports per update, in the order of
-	 * `updates` and null where it reports none. Left empty when the feature cannot be read at all.
-	 * @return true when every update survived the round trip
-	 */
+	/** @brief Reads a feature back to confirm it kept every value, which a clean LoadSettings does not prove.
+	 *  @param observed Receives the reported value per update, null where none; empty when unreadable.
+	 *  @return Whether every update survived the round trip. */
 	static bool FeatureRetainedUpdates(Feature& feature, std::string_view featureShortName,
 		const std::vector<CatalogSceneSettingUpdate>& updates, std::vector<json>* observed = nullptr);
+	/** @brief Hash of the feature and the addresses an update set touches, not their values. */
 	static size_t GetCatalogUpdateSignature(std::string_view featureShortName,
 		std::span<const CatalogSceneSettingUpdate> updates);
+	/** @brief Writes the updates into the feature's cached settings document and reloads it, rolling back on a throw. */
 	bool ApplyCatalogSceneSettings(
 		Feature& feature, const std::vector<CatalogSceneSettingUpdate>& updates);
 	/** @brief Queues a read-back of an accepted apply.
@@ -1204,29 +1242,39 @@ private:
 	float GetPauseAwareTime() const;
 	/// Smoothstep position of a transition at the given time.
 	static float EaseLocationTransition(const LocationTransition& transition, float now);
+	/** @brief Whether the transition has run its full duration. */
 	static bool IsLocationTransitionFinished(const LocationTransition& transition, float now);
+	/** @brief Starts a transition for each location-driven address whose value or membership changed. */
 	void StartLocationTransitions(const ResolvedSettingMap& resolved, float now, bool animateChanges);
 	/// Re-reads each in-flight transition's endpoint so one crossing a time-of-day or weather
 	/// boundary eases toward where the scene is now rather than where it was when the transition began.
 	void RefreshLocationTransitionEndpoints(const ResolvedSettingMap& resolved);
+	/** @brief Applies one throttled tick of eased values. @return Whether any feature was applied. */
 	bool AdvanceLocationTransitions(float now);
 	/// Drop transitions the main apply already landed on, restoring the ones that eased back out.
 	void RetireFinishedLocationTransitions(float now);
+	/** @brief Regroups in-flight transitions into per-feature apply batches, skipping sketched addresses. */
 	void RebuildLocationTransitionBatches();
+	/** @brief Drops every transition and location cache so the next resolve starts fresh. */
 	void ClearLocationTransitions();
 
 	// --- Per-Location helpers ---
+	/** @brief The target's config, or a shared empty one when it has none. */
 	const LocationSceneConfig& GetLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	/** @brief The target's config, or null when it has none. */
 	const LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey) const;
 	LocationSceneConfig* FindLocationConfig(LocationTargetType type, std::string_view formKey);
+	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
 	void RemoveLocationSetting(LocationTargetType type, const std::string& formKey, size_t index);
+	/** @brief Whether the target holds an entry for this setting and period, optionally of one source. */
 	bool HasLocationEntry(LocationTargetType type, std::string_view formKey,
 		const std::string& featureShortName, const std::vector<std::string>& settingPath,
 		const std::string& settingKey, TimeOfDayPeriod period, std::optional<EntrySource> source = std::nullopt) const;
+	/** @brief Map key of a target's config, as "Type:normalizedFormKey". */
 	static std::string GetLocationConfigKey(LocationTargetType type, std::string_view formKey);
 	/// User-document section holding the targets of this type.
 	static const char* GetLocationSectionName(LocationTargetType type);
+	/** @brief The target's config under its canonical form key, created when missing. */
 	LocationSceneConfig& GetLocationConfigMut(LocationTargetType type, const std::string& formKey,
 		const std::string& name = {});
 	/// Upserts a target's identity and claims it for the user, shared by adding a target and its first setting.
@@ -1235,41 +1283,59 @@ private:
 	/// Raw user-document keys that resolve to one target: a form can be spelled several ways in the file.
 	static std::vector<std::string> MatchingRawLocationKeys(const json& section, LocationTargetType type,
 		std::string_view formKey);
+	/** @brief Loads the active pack's location overwrites, one folder per target. */
 	void DiscoverLocationOverwrites();
+	/** @brief Loads one target folder, taking the target type from the form its name resolves to. */
 	void DiscoverLocationOverwritesForTarget(const std::filesystem::path& targetDir);
+	/** @brief Drops every user location entry and reloads them from the document's "location" section. */
 	void LoadLocationUserSettings(const json& data);
+	/** @brief Marks a target's user section modified and pins its time-of-day mode before an edit. */
 	void PrepareLocationUserSettingsMutation(LocationTargetType type, std::string_view formKey,
 		bool replaceMalformedEntries);
 
 	// --- Helpers ---
+	/** @brief The entry list of an interior or time-of-day scene type, empty for any other. */
 	const std::vector<SettingEntry>& GetEntries(SceneType type) const;
 	std::vector<SettingEntry>& GetEntriesMut(SceneType type);
+	/** @brief Removes one entry; an overwrite is also stripped from its backing file. */
 	void RemoveSetting(SceneType type, size_t index);
+	/** @brief Saves the user document and re-resolves. */
 	void CommitSceneSettingChanges();
 	/** @brief Re-resolves now; with deferSave the save waits for the deferred-change window. */
 	void ReapplyAndSaveOrDefer(bool deferSave);
+	/** @brief Invalidates the UI's entry views; also dirties the scene value caches. */
 	void BumpEntryPresentationRevision();
 	/** @brief A layer's entries were (re)loaded: rebuild the active-entry cache and re-resolve. */
 	void MarkEntriesLoaded();
 	/// Entry values changed: drop the per-period caches and re-resolve the location layer.
 	void MarkSceneValuesDirty();
+	/** @brief Whether the entry is not paused. */
 	bool IsEntryActive(const SettingEntry& entry) const;
 	/// Active, catalog-permitted and, for TimeOfDay or a per-period entry, transitionable float entry.
 	bool IsResolvableEntry(const SettingEntry& entry, SceneType type) const;
 	static SettingAddress GetEntryAddress(const SettingEntry& entry);
+	/** @brief Whether a same-source entry exists for this setting; the period only counts for TimeOfDay. */
 	bool HasDuplicateEntry(SceneType type, const std::string& featureShortName,
 		const std::vector<std::string>& settingPath, const std::string& settingKey,
 		EntrySource source, TimeOfDayPeriod period = TimeOfDayPeriod::Count) const;
 
+	/** @brief Dirties every resolve cache and re-resolves now unless the layer is suspended. */
 	void ReapplyIfActive();
+	/** @brief Marks the interior or time-of-day user section as needing a rewrite. */
 	void MarkEntryListUserSettingsModified(SceneType type);
+	/** @brief Marks a weather's user section modified and pins its time-of-day mode before an edit. */
 	void PrepareWeatherUserSettingsMutation(RE::FormID weatherId, bool replaceMalformedEntries);
+	/** @brief Schedules a commit once edits have been quiet for kDeferredSaveDelay. */
 	void MarkDeferredSceneChanges();
+	/** @brief Commits the deferred changes once their deadline has passed. */
 	void FlushDeferredSceneChanges();
+	/** @brief Restores every applied setting and halts resolving; nests, so pair each with a resume. */
 	void SuspendSceneLayer();
+	/** @brief Ends one suspend; the outermost drops the cached feature snapshots and re-resolves. */
 	void ResumeSceneLayer();
 
 	// --- Overwrite discovery helper ---
+	/** @brief Loads every overwrite file in a directory into one scene type, tagged with a period. */
 	void DiscoverOverwritesInDir(SceneType type, const std::filesystem::path& dir,
 		TimeOfDayPeriod period = TimeOfDayPeriod::Count);
 

@@ -88,6 +88,7 @@ namespace
 		return NativeMenu::IsFeatureEditable(globals::features::screenSpaceGI.GetShortName());
 	}
 
+	/** @brief Quality rows are only editable while SSGI itself is enabled. */
 	bool __stdcall IsSSGIQualityEditable()
 	{
 		return IsSSGIEditable() && NativeMenu::Bind<SSGIRoot, &Settings::Enabled>::IsFlagOn();

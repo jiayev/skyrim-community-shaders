@@ -9,9 +9,11 @@
 /// Layout of the overwrite directory tree and the grouped JSON files inside it.
 namespace SceneSettingsOverwrites
 {
+	/** @brief Whether an overwrite entry already holds the candidate's address and period. */
 	bool HasOverwriteEntryForPeriod(const std::vector<SceneSettingsManager::SettingEntry>& entries,
 		const SceneSettingsManager::SettingEntry& candidate);
 
+	/** @brief Appends the entry unless its address and period are taken; files scan in order, so the first wins. */
 	bool AddOverwriteEntryIfUnique(std::vector<SceneSettingsManager::SettingEntry>& entries,
 		SceneSettingsManager::SettingEntry&& entry, std::string_view context);
 
@@ -41,14 +43,18 @@ namespace SceneSettingsOverwrites
 	std::filesystem::path GetOverwriteFilePath(const std::filesystem::path& baseDir,
 		const SceneSettingsManager::SettingEntry& entry);
 
+	/** @brief "Label - Period" for a per-period overwrite, else just the label. */
 	std::string GetOverwriteTypeDescription(std::string_view sceneLabel,
 		SceneSettingsManager::TimeOfDayPeriod period);
 
+	/** @brief Overwrite file an interior or time-of-day entry belongs in. */
 	std::filesystem::path GetSceneOverwritePath(SceneSettingsManager::SceneType type,
 		const SceneSettingsManager::SettingEntry& entry);
 
+	/** @brief Overwrite file a weather entry belongs in, under the weather's SPID folder. */
 	std::filesystem::path GetWeatherOverwritePath(RE::FormID weatherId, const SceneSettingsManager::SettingEntry& entry);
 
+	/** @brief Overwrite file a location entry belongs in, under its form key folder. */
 	std::filesystem::path GetLocationOverwritePath(std::string_view formKey,
 		const SceneSettingsManager::SettingEntry& entry);
 
@@ -59,6 +65,8 @@ namespace SceneSettingsOverwrites
 		const std::vector<const SceneSettingsManager::SettingEntry*>& entries,
 		const json& extraMetadata = json::object());
 
+	/** @brief Removes a setting and its transition from an overwrite file, deleting the file once empty.
+	 *  @return True when nothing is left to remove, including a missing file. */
 	bool RemoveSettingFromOverwriteFile(const std::filesystem::path& path,
 		const std::vector<std::string>& settingPath, const std::string& settingKey);
 

@@ -2,10 +2,8 @@
 
 #include "SceneSettingsManager.h"
 
-/// The preset export dialog: metadata (name, version, author, description, tags), optional artwork
-/// browse/copy into Presets/<Name>/, a mod list with load order, and a confirmation that turns
-/// destructive when the name already owns files on disk. Export is global, so the page whose toolbar
-/// opened it only decides which toolbar is responsible for drawing it.
+/// Preset export dialog: metadata, artwork copied into Presets/<Name>/, and a load-ordered mod list.
+/// Export is global; the page that opened it only decides which toolbar draws it.
 namespace ScenePresetExport
 {
 	/// Whether there is anything to export: a user layer, or any installed overwrite.

@@ -1540,7 +1540,7 @@ void EditorWindow::RenderUI()
 			DrawGameHourSlider("##MenuBarSlider", "Time: %.2f");
 		}
 
-		// Close button — sized/centered like the other action-bar icons so it cannot spill past the bar.
+		// Sized/centered like the other action-bar icons so it cannot spill past the bar.
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, xButtonY));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kIconButtonPadding, kIconButtonPadding));
 		if (Util::ErrorButton("X", ImVec2(closeButtonSize, closeButtonSize)))

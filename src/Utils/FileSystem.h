@@ -25,7 +25,7 @@ namespace Util
 	 */
 	namespace PathHelpers
 	{
-		/** Preset library folders, relative to the CommunityShaders plugin directory. */
+		/** @brief Preset library folders, relative to the CommunityShaders plugin directory. */
 		constexpr const char* kUnifiedPresetsSubdir = "Presets";
 		constexpr const char* kEffects11PresetsSubdir = "Effects11/Presets";
 
@@ -112,7 +112,6 @@ namespace Util
 		 * @return CommunityShaderPath / "Presets"
 		 */
 		std::filesystem::path GetUnifiedPresetsPath();
-
 
 		/**
 		 * Gets the Translations directory path for i18n locale files
@@ -228,16 +227,11 @@ namespace Util
 		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
 		bool IsHiddenLibraryEntry(std::string_view name);
 
-		/**
-		 * @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root,
-		 * the first root winning when a name appears in more than one.
-		 */
+		/** @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root; first root wins. */
 		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories);
 
-		/**
-		 * @brief Folder of a unified preset pack: the first scan root holding it, else the Data (VFS) path, which
-		 * MO2 routes to its overwrite folder.
-		 */
+		/** @brief Folder of a unified preset pack: the first scan root holding it, else the Data (VFS) path,
+		 *  which MO2 routes to its overwrite folder. */
 		std::filesystem::path GetUnifiedPackPath(const std::string& packId);
 
 		/**
@@ -304,22 +298,13 @@ namespace Util
 		std::string SanitizeFileName(std::string name);
 
 		/**
-		 * Writes a file atomically: serializes to a sibling temporary, then replaces the target.
-		 *
-		 * A partial write can never be observed at the target path, so a crash, a full disk, or a
-		 * throwing serializer leaves the previous contents intact instead of a truncated file.
-		 *
-		 * @param path Destination file path
-		 * @param content Bytes to write
+		 * @brief Writes to a sibling temporary, then replaces the target, so a failure never leaves a truncated file.
 		 * @param context Human-readable description used in log messages
 		 * @return true when the target now holds the new contents
 		 */
 		bool WriteFileAtomically(const std::filesystem::path& path, std::string_view content, std::string_view context);
 
-		/**
-		 * Serializes JSON and writes it through WriteFileAtomically.
-		 * A serialization failure leaves the target untouched.
-		 */
+		/** @brief Serializes JSON and writes it through WriteFileAtomically; a serialization failure leaves the target untouched. */
 		bool WriteJsonAtomically(const std::filesystem::path& path, const nlohmann::json& data, int indent, std::string_view context);
 	}
 

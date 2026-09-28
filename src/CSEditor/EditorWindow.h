@@ -135,11 +135,8 @@ public:
 	/** @brief Draw the Objects browser window listing all editable form widgets. */
 	void ShowObjectsWindow();
 
-	/**
-	 * @brief Draw a compact "Active: <weather>" line matching the indicator shown atop other object categories.
-	 * @param drawTrailer If true, follow the line with a spacing/separator/spacing block. Pass false when the
-	 *        caller places more content on the same row (e.g. a toolbar) and adds its own trailer afterward.
-	 */
+	/** @brief Draw a compact "Active: <weather>" line matching the indicator atop other object categories.
+	 *  @param drawTrailer Follow with a separator; pass false to keep adding to the same row. */
 	void DrawActiveWeatherIndicator(bool drawTrailer = true);
 
 	/** @brief Draw the game viewport preview window with render target display. */

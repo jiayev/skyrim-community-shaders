@@ -27,6 +27,7 @@ public:
 		};
 	}
 
+	/** @brief Persisted Effects11 settings. */
 	struct Settings
 	{
 		std::string ActivePreset;  ///< Empty = Legacy (PresetManager::kLegacyPresetId)
@@ -34,10 +35,10 @@ public:
 
 	Settings settings;
 
-	/** Discover presets and apply settings.ActivePreset, repairing the id if needed. */
+	/** @brief Discovers presets and applies settings.ActivePreset, repairing the id if needed. */
 	void SyncActivePresetFromSettings();
 
-	/** Sync ActivePreset from the manager and write SettingsUser.json via State::Save(). */
+	/** @brief Copies the manager's active id into ActivePreset and saves it through State::Save(). */
 	void PersistActivePreset();
 
 	virtual void LoadSettings(json& o_json) override;

@@ -12,6 +12,7 @@ namespace
 	/// The failure is a session-wide fact, so it is logged once rather than every frame it is shown.
 	bool loggedInstallFailure = false;
 
+	/** @brief Explain that authoring is unavailable because ImGui interception failed to install. */
 	void DrawInstallFailure()
 	{
 		const auto failed = SceneWidgetInterceptor::GetInstallError();

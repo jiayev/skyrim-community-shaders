@@ -965,15 +965,11 @@ namespace Util
 		return visible;
 	}
 
-	// Whether each custom-header window was docked last frame, keyed by its full "Label###id"
-	// title. NoTitleBar has to be decided before Begin(), but IsWindowDocked() only reports the
-	// true state after it - so, like the main window's own header, this frame draws whatever last
-	// frame was and re-checks are one frame behind a dock/undock transition.
+	/** @brief Last frame's dock state per window title: NoTitleBar is decided before Begin(), but
+	 *  IsWindowDocked() only knows after, so the header lags a dock transition by one frame. */
 	static std::unordered_map<std::string, bool> s_customHeaderWasDocked;
 
-	// Draws the close button's crossed lines, matching DrawRoundedCloseHighlight's native geometry.
-	// Unlike the native button, nothing else renders the X, so it has to be drawn unconditionally
-	// rather than only while highlighted.
+	/** @brief Draws the close button's X, matching DrawRoundedCloseHighlight's geometry; nothing else renders it. */
 	static void DrawCustomHeaderCloseCross(const ImVec2& min, const ImVec2& max)
 	{
 		const ImVec2 c((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
@@ -985,11 +981,7 @@ namespace Util
 		drawList->AddLine({ c.x + d, c.y - d }, { c.x - d, c.y + d }, col);
 	}
 
-	// Draws the custom floating header: the title (also the drag handle), an optional
-	// caller-supplied control cluster, and a close button pinned to the right edge. Runs
-	// unconditionally (not gated on Begin()'s return value), same as a native title bar always
-	// drawing regardless of what the body does - collapsing is disabled for these windows (see
-	// BeginWithCustomHeader), so there is no risk of a hidden body stranding the header.
+	/** @brief Draws the floating header: draggable title, optional extras, and a right-pinned close button. */
 	static void DrawCustomHeaderRow(ImGuiWindow* window, const char* name, bool* p_open,
 		const std::function<void()>& drawExtras)
 	{
@@ -997,9 +989,7 @@ namespace Util
 		const float avail = ImGui::GetContentRegionAvail().x;
 		const ImVec2 rowStart = ImGui::GetCursorScreenPos();
 
-		// One click-catcher spans the whole row so dragging anywhere empty moves the window, same
-		// as a native title bar; AllowOverlap lets the title text and the buttons drawn afterward
-		// still receive their own hover/click on top of it.
+		// A row-wide drag catcher; AllowOverlap lets the title and buttons drawn after it still get input.
 		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight), ImGuiButtonFlags_AllowOverlap);
 		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			ImGui::StartMouseMovingWindow(window);
@@ -1036,10 +1026,7 @@ namespace Util
 		const std::function<void()>& drawExtras, ImGuiWindowFlags flags)
 	{
 		bool& wasDocked = s_customHeaderWasDocked[name];
-		// Collapsing relies on the native title bar staying interactive while the body is skipped,
-		// which the floating custom header can't reproduce safely - a window collapsed through it
-		// would have nothing left on screen able to expand it again. Disabled unconditionally,
-		// same as the main Community Shaders window's own custom header.
+		// A window collapsed through the custom header would have nothing left on screen to expand it.
 		ImGuiWindowFlags windowFlags = flags | ImGuiWindowFlags_NoCollapse;
 		if (!wasDocked)
 			windowFlags |= ImGuiWindowFlags_NoTitleBar;
@@ -1055,12 +1042,10 @@ namespace Util
 		wasDocked = isDocked;
 
 		if (isDocked) {
-			// A shared dock tab bar already supplies the title and close x; only the rounded
-			// highlight polish applies here, same as every other BeginWithRoundedClose window.
+			// The dock tab bar already supplies the title and close x.
 			DrawRoundedTitleBarButtonHighlights(window, p_open != nullptr, false);
 		} else {
-			// Drawn unconditionally (not gated on `visible`) so the drag handle and close button
-			// are always reachable, matching a native title bar's always-on behavior.
+			// Not gated on `visible`, so the drag handle and close button stay reachable.
 			DrawCustomHeaderRow(window, name, p_open, drawExtras);
 		}
 		return visible;

@@ -31,6 +31,7 @@ namespace
 
 	using Util::ToLower;
 
+	/** @brief Case-insensitive substring match; the needle must already be lowercase. */
 	bool ContainsCI(const std::string& haystack, const std::string& needleLower)
 	{
 		if (needleLower.empty())
@@ -90,6 +91,7 @@ namespace
 		return {};
 	}
 
+	/** @brief Fill unset logo, cover and screenshots from conventional file and folder names in the pack root. */
 	void InferMissingArtwork(UnifiedPresetCatalog::PackInfo& pack)
 	{
 		static constexpr const char* kLogoCandidates[] = {
@@ -582,7 +584,7 @@ bool UnifiedPresetCatalog::EnsureArtwork(PackInfo& pack)
 
 	LoadTextureSRV(pack.logoPath, pack.logoSRV);
 	LoadTextureSRV(pack.coverPath, pack.coverSRV);
-	// List thumbs need something — fall back to cover when logo is missing/unloadable.
+	// List thumbs need something: fall back to cover when logo is missing/unloadable.
 	if (!pack.logoSRV && pack.coverSRV)
 		pack.logoSRV = pack.coverSRV;
 

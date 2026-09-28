@@ -11,12 +11,16 @@ namespace SceneSettingsContextRules
 	using CopyGroupKey = std::tuple<std::string, std::vector<std::string>, std::string,
 		std::int8_t, std::uint8_t, SceneSettingsManager::SettingControlType>;
 
+	/** @brief Group key of a setting: its aggregate control when it has one, else the setting itself. */
 	CopyGroupKey GetCopyGroupKey(const SceneSettingsManager::SettingIdentity& identity);
 
+	/** @brief Whether a policy is one of the defined enumerators. */
 	bool IsValidCopyConflictPolicy(SceneSettingsManager::CopyConflictPolicy policy);
 
+	/** @brief Localized period name for copy UI; empty for Count. */
 	const char* GetCopyPeriodName(SceneSettingsManager::TimeOfDayPeriod period);
 
+	/** @brief Localized location target type name for copy UI; empty when unknown. */
 	const char* GetCopyLocationTypeName(SceneSettingsManager::LocationTargetType type);
 
 	/** @brief A context addresses one saved set: its period, or Count for the flat set. */

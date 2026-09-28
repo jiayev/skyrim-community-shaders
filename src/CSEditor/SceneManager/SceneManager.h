@@ -3,6 +3,7 @@
 #include "Feature.h"
 #include "SceneSettingsManager.h"
 
+/** @brief Core feature that hosts the SceneSettingsManager in the feature list. */
 struct SceneManager : Feature, SceneSettingsManager
 {
 	std::string GetName() override { return "Scene Manager"; }
@@ -18,5 +19,6 @@ struct SceneManager : Feature, SceneSettingsManager
 	void DrawSettings() override;
 	void SetupResources() override;
 	void DataLoaded() override;
+	/** @brief Per-frame scene resolution; forwards to SceneSettingsManager::Update. */
 	void Update();
 };

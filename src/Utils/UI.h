@@ -173,7 +173,7 @@ namespace Util
 	 */
 	void SetTooltipPositionNearMouse(float estimatedHeight, float estimatedWidth = 0.0f);
 
-	/// Hover flags for a greyed control, which is exactly the one that has to explain why it is greyed.
+	/** @brief Hover flags that still show tooltips on greyed controls, which must explain why they are greyed. */
 	inline constexpr ImGuiHoveredFlags kTooltipWhenDisabled =
 		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
 
@@ -192,24 +192,17 @@ namespace Util
 	void HelpMarker(const char* a_desc);
 
 	/**
-	 * Compact segmented control for switching between a few modes: one rounded track, segments
-	 * sized to their labels, the selected one in the accent colour.
+	 * @brief Compact segmented control: one rounded track, label-sized segments, the selection in the accent colour.
 	 * @param a_selected In/out selected index
 	 * @param a_marked Index to flag with a dot when it is not the selection, or -1
 	 * @return True on the frame a segment is clicked
 	 */
 	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected, int a_marked = -1);
 
-	/**
-	 * Full-width tinted bar for a state that changes what the user can touch.
-	 * @param a_icon Icon-font glyph drawn before the message
-	 */
+	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch. */
 	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
 
-	/**
-	 * Lock banner over a section whose settings something else owns, greying every control drawn
-	 * until the scope ends. Nothing is drawn or disabled when a_locked is false.
-	 */
+	/** @brief When locked, draws a lock banner and greys every control until the scope ends. */
 	class LockedSection
 	{
 	public:
@@ -223,16 +216,12 @@ namespace Util
 		bool m_locked;
 	};
 
-	/**
-	 * Explainer copy behind a disclosure row that starts collapsed, so it is there when wanted and
-	 * out of the way of the controls otherwise.
-	 */
+	/** @brief Explainer text behind a collapsed-by-default disclosure row. */
 	void Explainer(const char* a_label, const char* a_text);
 
 	/**
 	 * @brief Thin vertical rule separating groups of related toolbar buttons, used in place of SameLine().
-	 * @param a_continueLine False when the next item calls SameLine() itself; the rule then takes the
-	 *        plain item spacing on both sides.
+	 * @param a_continueLine False when the next item calls SameLine() itself.
 	 */
 	void ToolbarDivider(bool a_continueLine = true);
 
@@ -396,24 +385,11 @@ namespace Util
 	bool BeginPopupModalWithRoundedClose(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = 0);
 
 	/**
-	 * @brief Like BeginWithRoundedClose, but replaces the native title bar with a flat, custom-drawn
-	 * header while the window is floating - matching the redesigned card-style headers - and leaves
-	 * docked windows on their native tab/title bar untouched (a shared dock tab bar has no room for
-	 * a second header, and re-docking depends on dragging that native tab).
-	 *
-	 * The header's title area doubles as the window's drag handle: dragging it moves (and can
-	 * re-dock) the window exactly like dragging a native title bar would. Collapsing is disabled
-	 * unconditionally (the floating header can't stay interactive while the body is skipped, so a
-	 * collapsed window would have no way left to expand it again) - same as the main Community
-	 * Shaders window's own custom header.
-	 *
-	 * @param name       Window title, with the usual "Label###id" suffix for a stable ID.
-	 * @param p_open     Close flag; the header draws a close button that clears it when floating.
-	 *                   Pass nullptr to omit the close button.
-	 * @param drawExtras Optional callback drawing compact controls between the title and the close
-	 *                   button while floating (skipped while docked). Keep this to one or two icon
-	 *                   buttons - it competes with the close button for the header's width.
-	 * @param flags      Extra window flags. NoTitleBar is managed internally per dock state.
+	 * @brief Like BeginWithRoundedClose, but floating windows get a flat custom header that doubles as the
+	 * drag handle; docked windows keep their native tab. Collapsing is always disabled.
+	 * @param p_open     Close flag cleared by the header's close button; nullptr omits the button.
+	 * @param drawExtras Optional compact controls between the title and close button, floating only.
+	 * @param flags      Extra window flags; NoTitleBar is managed per dock state.
 	 */
 	bool BeginWithCustomHeader(const char* name, bool* p_open,
 		const std::function<void()>& drawExtras = nullptr, ImGuiWindowFlags flags = 0);
@@ -1008,10 +984,7 @@ namespace Util
 	 */
 	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed = 4.0f, float minBrightness = 0.7f, float maxBrightness = 1.0f);
 
-	/**
-	 * @brief Tints the next control's frame and border to mark where its value comes from.
-	 * @param color Fully opaque marker color; the frame states get it at reduced alpha.
-	 */
+	/** @brief Tints the next control's frame and border with an opaque marker color to show where its value comes from. */
 	void PushTintedFrameStyle(const ImVec4& color);
 
 	/** @brief Pops the style pushed by PushTintedFrameStyle. Always call after the corresponding push. */
@@ -1049,10 +1022,9 @@ namespace Util
 		ImVec4 GetError();     // Red - error/negative (from theme Error)
 		ImVec4 GetInfo();      // Blue - informational (from theme InfoColor)
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
-		// Muted but legible - supplementary text on live controls. Never use it for inactive controls:
-		// GetDisabled() is the only tier that reads as "won't respond".
+		/** @brief Muted but legible text for live controls; inactive controls use GetDisabled() instead. */
 		ImVec4 GetSecondary();
-		// The one "active/selected" colour: selected rows, segments, and tabs all share it.
+		/** @brief The shared "active/selected" colour for rows, segments, and tabs. */
 		ImVec4 GetAccent();
 
 	}
