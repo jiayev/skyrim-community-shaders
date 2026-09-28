@@ -50,6 +50,15 @@ struct LinearLighting : Feature
 		float projectedEffectMult = 1.0f;
 		float deferredEffectMult = 1.0f;
 		float otherEffectMult = 1.0f;
+
+		// Effect classes Effects 11 derives from shader flags
+		float particleEffectMult = 1.0f;
+		float lightSpriteEffectMult = 1.0f;
+		float fireEffectMult = 1.0f;
+		float fireEffectCurve = 1.0f;
+
+		static constexpr float FireEffectCurveMin = 0.1f;
+		static constexpr float FireEffectCurveMax = 8.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -66,6 +75,10 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float particleEffectMult;
+		float lightSpriteEffectMult;
+		float fireEffectMult;
+		float fireEffectCurve;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 

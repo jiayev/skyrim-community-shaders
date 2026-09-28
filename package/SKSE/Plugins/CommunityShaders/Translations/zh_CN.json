@@ -1241,6 +1241,7 @@
     "feature.post_processing.lens_flare.threshold_range": "阈值范围",
     "feature.post_processing.lens_flare.tint": "色调",
     "feature.post_processing.lens_flare.view_resize": "视图缩放",
+    "feature.post_processing.load": "加载",
     "feature.post_processing.local_exposure.advanced": "高级",
     "feature.post_processing.local_exposure.base_blend": "柔和基底混合",
     "feature.post_processing.local_exposure.base_blend_tooltip": "混合边缘感知基底与大范围平滑基底。较高的值可减少光晕，并使大面积高光更自然。",
@@ -1538,6 +1539,7 @@
     "feature.post_processing.recompile_shaders_for_this_sub_feature_only": "仅重新编译此子功能的着色器。",
     "feature.post_processing.saturation_brightness_contrast_values": "饱和度：%.3f\n亮度：%.3f\n对比度：%.3f",
     "feature.post_processing.save": "保存",
+    "feature.post_processing.select_a_preset": "选择预设",
     "feature.post_processing.selected_feature_is_not_valid": "选中的功能无效。",
     "feature.post_processing.tint_values": "染色数值：",
     "feature.post_processing.tint_values_detail": "染色量：%.3f\n染色颜色：(%.3f, %.3f, %.3f)",
@@ -2689,7 +2691,5 @@
     "feature.post_processing.cinematic_camera.exposure_readout": "快门：1/%.0f s · EV100 %.2f · Δ %+.2f EV",
     "feature.post_processing.cinematic_camera.focus_point": "对焦点",
     "feature.post_processing.cinematic_camera.summary": "%s - %.1f mm - f/%.1f - %.0f 度 - ISO %.0f - FOV %.1f 度 - %s",
-    "feature.post_processing.histogram_auto_exposure.cinematic_offset": "Cinematic Camera：EV100 %.2f，偏移 %+.2f EV，有效 %+.2f EV",
-    "feature.post_processing.load": "加载",
-    "feature.post_processing.select_a_preset": "选择预设"
+    "feature.post_processing.histogram_auto_exposure.cinematic_offset": "Cinematic Camera：EV100 %.2f，偏移 %+.2f EV，有效 %+.2f EV"
 }
