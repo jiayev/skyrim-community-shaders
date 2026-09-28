@@ -391,7 +391,6 @@ void Deferred::DeferredPasses()
 			physSky.loaded && physSky.texShadowVolume ? physSky.texShadowVolume->srv.get() : nullptr,       // t18 PhysicalSky Shadow Volume
 			masks2.SRV,                                                                                     // t19 Masks2Texture
 		};
-		ID3D11ShaderResourceView* physSkyApSunLut = physSky.loaded && physSky.texApSunLut ? physSky.texApSunLut->srv.get() : nullptr;  // t20 PhysicalSky direct solar AP LUT
 
 		ID3D11SamplerState* samplers[]{
 			dynamicCubemaps.loaded ? linearSampler : nullptr,
@@ -400,7 +399,6 @@ void Deferred::DeferredPasses()
 		context->CSSetSamplers(0, ARRAYSIZE(samplers), samplers);
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-		context->CSSetShaderResources(20, 1, &physSkyApSunLut);
 
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
@@ -430,7 +428,7 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[21]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[20]{};
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
@@ -695,13 +693,12 @@ void Deferred::CompositeAfterWater()
 		sky.texTrLut ? sky.texTrLut->srv.get() : nullptr, sky.texSvLut ? sky.texSvLut->srv.get() : nullptr, sky.texApLut ? sky.texApLut->srv.get() : nullptr, sky.texApShadow ? sky.texApShadow->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(61, 4, atmosphere.data());
-	std::array<ID3D11ShaderResourceView*, 4> clouds = {
+	std::array<ID3D11ShaderResourceView*, 3> clouds = {
 		sky.texVolFilteredTr ? sky.texVolFilteredTr->srv.get() : nullptr,
 		sky.texVolFilteredLum ? sky.texVolFilteredLum->srv.get() : nullptr,
-		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr,
-		sky.texApSunLut ? sky.texApSunLut->srv.get() : nullptr
+		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr
 	};
-	context->CSSetShaderResources(110, 4, clouds.data());
+	context->CSSetShaderResources(110, 3, clouds.data());
 	std::array<ID3D11ShaderResourceView*, 2> depths = {
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV,
 		sky.texVolFilteredAux ? sky.texVolFilteredAux->srv.get() : nullptr

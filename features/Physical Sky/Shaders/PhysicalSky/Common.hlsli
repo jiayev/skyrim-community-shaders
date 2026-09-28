@@ -47,13 +47,11 @@ namespace PhysSky
 #elif defined(PS_DEFERRED_RSRCS)
 Texture3D<float4> TexApLut : register(t14);
 Texture2D<unorm float> TexApShadow : register(t15);
-Texture3D<float4> TexApSunLut : register(t20);
 #else
 Texture2D<float4> TexTrLut : register(t61);
 Texture2D<float4> TexSvLut : register(t62);
 Texture3D<float4> TexApLut : register(t63);
 Texture2D<unorm float> TexApShadow : register(t64);
-Texture3D<float4> TexApSunLut : register(t113);
 #endif
 
 	static const float RCP_PI = 1 / Math::PI;  // PI
@@ -498,9 +496,7 @@ Texture3D<float4> TexApSunLut : register(t113);
 		TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
 		const float depth_slice = ApDepthUv(dist, apDims.z);
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
-		const float3 apSun = TexApSunLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0).rgb;
-
-		apColor.rgb += apSun * (1.0 - saturate(shadow));
+		apColor.rgb *= 1.0 - saturate(shadow);
 
 		apColor.rgb = lerp(0, apColor.rgb, data.apLumMix);
 		apColor.a = lerp(1, apColor.a, data.apTrMix);

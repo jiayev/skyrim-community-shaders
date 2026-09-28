@@ -1,9 +1,9 @@
 #ifndef PHYSICAL_SKY_CLOUD_BLUR_HLSLI
 #define PHYSICAL_SKY_CLOUD_BLUR_HLSLI
 
-Texture2D<float> TexCloudResultTr : register(t38);
-Texture2D<float4> TexCloudResultLum : register(t39);
-Texture2D<float4> TexCloudResultAux : register(t40);
+Texture2D<float> TexCloudResultTr : register(t29);
+Texture2D<float4> TexCloudResultLum : register(t30);
+Texture2D<float4> TexCloudResultAux : register(t31);
 RWTexture2D<float> RWTexFilteredTr : register(u3);
 RWTexture2D<float4> RWTexFilteredLum : register(u4);
 RWTexture2D<float4> RWTexFilteredAux : register(u5);
