@@ -3,6 +3,7 @@
 #include <d3d11.h>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 #include <winrt/base.h>
@@ -19,6 +20,18 @@ public:
 		Effects11Legacy
 	};
 
+	/** @brief Pipeline a pack targets, declared by the manifest's "type" field. */
+	enum class PresetType
+	{
+		CS,
+		E11
+	};
+
+	static constexpr const char* kPresetTypeKey = "type";
+
+	/** @brief The manifest spelling of a preset type. */
+	static const char* GetPresetTypeName(PresetType type);
+
 	/** @brief A discovered pack's manifest data, backend payloads and lazily loaded artwork. */
 	struct PackInfo
 	{
@@ -32,6 +45,8 @@ public:
 
 		bool hasEffects11 = false;
 		bool hasCSPresets = false;
+		/// Declared type; groups the pack, while the has* payload flags still decide what Apply loads.
+		std::optional<PresetType> type;
 		bool valid = true;
 		std::string invalidReason;
 
@@ -47,6 +62,11 @@ public:
 		winrt::com_ptr<ID3D11ShaderResourceView> coverSRV;
 		std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> screenshotSRVs;
 		bool artworkLoaded = false;
+
+		/** @brief Grouped as E11: the declared type, else whether an Effects 11 payload was found. */
+		bool IsE11() const { return type ? *type == PresetType::E11 : hasEffects11; }
+		/** @brief Grouped as CS: the declared type, else whether scene files were found. */
+		bool IsCS() const { return type ? *type == PresetType::CS : hasCSPresets; }
 	};
 
 	static UnifiedPresetCatalog& GetSingleton();
@@ -72,8 +92,8 @@ public:
 	PackInfo* FindPack(const std::string& id);
 	const PackInfo* FindPack(const std::string& id) const;
 
-	/** @brief Indices of packs passing the backend flags and a case-insensitive name/author/description/tag search.
-	 *  Each enabled flag requires that backend; all false shows everything. */
+	/** @brief Indices of packs passing the type flags and a case-insensitive name/author/description/tag search.
+	 *  Each enabled flag requires that type; all false shows everything. */
 	std::vector<size_t> Query(bool wantE11, bool wantCSPresets, const std::string& search) const;
 
 	/** @brief Loads a pack's logo, cover and screenshots once; the cover stands in for a missing logo. */

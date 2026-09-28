@@ -18,6 +18,7 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
@@ -27,6 +28,7 @@ namespace
 {
 	using SceneContextId = SceneSettingsManager::SceneContextId;
 	using PresetExportInfo = SceneSettingsManager::PresetExportInfo;
+	using PresetType = SceneSettingsManager::PresetType;
 
 	constexpr const char* kExportPopupId = "##ScenePresetExport";
 
@@ -93,10 +95,18 @@ namespace
 			message, exported ? Util::Colors::GetSuccess() : Util::Colors::GetError());
 	}
 
-	/** @brief Clears the form and everything loaded from an existing preset. */
+	/** @brief Draws one preset type choice, selecting it on click. */
+	void DrawPresetTypeOption(const char* label, PresetType type)
+	{
+		if (ImGui::RadioButton(label, form.type == type))
+			form.type = type;
+	}
+
+	/** @brief Clears the form and everything loaded from an existing preset; the type follows the live pipeline. */
 	void ResetFormFields()
 	{
 		form = {};
+		form.type = globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11 ? PresetType::E11 : PresetType::CS;
 		presetTags.clear();
 		existingLogo.clear();
 		existingCover.clear();
@@ -289,6 +299,12 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 	const ImGuiStyle& style = ImGui::GetStyle();
 	ImGui::SetNextWindowSize(ImVec2(kModalWidth * scale, 0.0f), ImGuiCond_Always);
 	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		ImGui::TextUnformatted(T(TKEY("scene_export_type"), "Preset type"));
+		DrawPresetTypeOption(T(TKEY("scene_export_type_cs"), "CS Preset"), PresetType::CS);
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		DrawPresetTypeOption(T(TKEY("scene_export_type_e11"), "E11 Preset"), PresetType::E11);
+		ImGui::Separator();
+
 		ImGui::TextWrapped(
 			"%s", T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
 		ImGui::Separator();

@@ -50,6 +50,22 @@ namespace
 		return {};
 	}
 
+	/** @brief The manifest's declared preset type, matched case-insensitively; null when absent or unrecognized. */
+	std::optional<UnifiedPresetCatalog::PresetType> ReadPresetType(const json& manifest, const std::string& packId)
+	{
+		using PresetType = UnifiedPresetCatalog::PresetType;
+		const auto it = manifest.find(UnifiedPresetCatalog::kPresetTypeKey);
+		if (it == manifest.end())
+			return std::nullopt;
+		if (it->is_string()) {
+			for (auto type : { PresetType::CS, PresetType::E11 })
+				if (Util::IEquals(it->get_ref<const std::string&>(), UnifiedPresetCatalog::GetPresetTypeName(type)))
+					return type;
+		}
+		logger::warn("[Presets] Pack '{}' has unknown type '{}'; grouping by detected payloads", packId, it->dump());
+		return std::nullopt;
+	}
+
 	bool IsImageExtension(const std::filesystem::path& path)
 	{
 		const auto ext = ToLower(path.extension().string());
@@ -181,6 +197,11 @@ std::filesystem::path UnifiedPresetCatalog::GetPackManifestPath(const std::files
 	if (!std::filesystem::exists(manifestPath, ec) && std::filesystem::exists(packRoot / kLegacyMetaFileName, ec))
 		return packRoot / kLegacyMetaFileName;
 	return manifestPath;
+}
+
+const char* UnifiedPresetCatalog::GetPresetTypeName(PresetType type)
+{
+	return type == PresetType::E11 ? "E11" : "CS";
 }
 
 json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoot, std::string* outError)
@@ -320,6 +341,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.version = meta.value("version", "");
 			pack.description = meta.value("description", "");
 			pack.nexusUrl = meta.value("nexusUrl", "");
+			pack.type = ReadPresetType(meta, packId);
 			if (meta.contains("tags") && meta["tags"].is_array()) {
 				for (const auto& tag : meta["tags"]) {
 					if (tag.is_string())
@@ -432,9 +454,9 @@ std::vector<size_t> UnifiedPresetCatalog::Query(bool wantE11, bool wantCSPresets
 
 	for (size_t i = 0; i < packs.size(); ++i) {
 		const auto& pack = packs[i];
-		if (wantE11 && !pack.hasEffects11)
+		if (wantE11 && !pack.IsE11())
 			continue;
-		if (wantCSPresets && !pack.hasCSPresets)
+		if (wantCSPresets && !pack.IsCS())
 			continue;
 
 		if (!needle.empty()) {

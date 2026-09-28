@@ -21,6 +21,7 @@ using json = nlohmann::json;
 
 #include "Feature.h"
 #include "Globals.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "Utils/Form.h"
 
 /// Manages interior, time-of-day, weather, and location-specific setting overrides.
@@ -189,10 +190,13 @@ public:
 
 	static constexpr const char* kDefaultPresetVersion = "1.0.0";
 
+	using PresetType = UnifiedPresetCatalog::PresetType;
+
 	/** @brief Display + artwork inputs for ExportPreset. Artwork sources are absolute paths to copy
 	 *  into Presets/<Name>/; empty source with clear* = drop that field on re-export. */
 	struct PresetExportInfo
 	{
+		PresetType type = PresetType::CS;
 		std::string name;
 		std::string version = kDefaultPresetVersion;
 		std::string author;

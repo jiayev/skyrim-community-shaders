@@ -325,6 +325,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	if (!manifest.contains(kPresetMetadataNameKey))
 		manifest[kPresetMetadataNameKey] = safeModName;
 	manifest[kPresetMetadataVersionKey] = info.version;
+	manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
 	manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
 	const auto setOrErase = [&](const char* key, const auto& value) {
 		if (value.empty())

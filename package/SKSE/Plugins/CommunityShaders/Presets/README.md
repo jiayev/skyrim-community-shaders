@@ -43,7 +43,7 @@ Presets/MyPack/
 
 Only the **active** pack's scene files load. Applying another pack swaps the Scene Manager layer to it; a pack without scene files clears it. Your own Scene Manager edits stay in `SceneSettings/SceneManager.json` and always apply on top.
 
-Export writes `version` (`MAJOR.MINOR.PATCH`) and `periodTransitionHours` into the metadata alongside the display fields below.
+Export writes `version` (`MAJOR.MINOR.PATCH`), `type` (`CS` or `E11`, the pipeline the preset targets) and `periodTransitionHours` into the metadata alongside the display fields below.
 
 ## Discovery
 
@@ -51,4 +51,4 @@ Packs are found under both the Data (VFS) path and the Community Shaders mod's o
 
 ## Metadata (optional, Presets packs)
 
-When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths (`logo` / `cover` / `screenshots`, relative to the pack folder), and backend paths (`effects11.path`, `backends`). Without it the UI uses the folder name, ReadMe text, and inferred E11/CS Presets content and artwork.
+When present, `<PackId>.json` can set name, author, version, description, tags, artwork paths (`logo` / `cover` / `screenshots`, relative to the pack folder), and backend paths (`effects11.path`, `backends`). `type` (`CS` or `E11`) sets which group the pack is listed under; without it the group is inferred from the payloads found. Applying always loads every payload present. Without metadata the UI uses the folder name, ReadMe text, and inferred E11/CS Presets content and artwork.

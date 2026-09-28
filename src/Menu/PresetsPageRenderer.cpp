@@ -266,7 +266,7 @@ void PresetsPageRenderer::RenderList(float width)
 			MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
 			ImGui::TextUnformatted(pack.name.c_str());
 			ImGui::SameLine(0.0f, 8.0f * scale);
-			DrawBackendBadges(pack.hasEffects11, pack.hasCSPresets, true);
+			DrawBackendBadges(pack.IsE11(), pack.IsCS(), true);
 			if (isActive) {
 				ImGui::SameLine(0.0f, 6.0f * scale);
 				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active", "Active"));
@@ -287,9 +287,9 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = std::format("v{}", pack.version);
 			else if (pack.source == UnifiedPresetCatalog::SourceKind::Effects11Orphan)
 				meta = T("menu.presets.source_e11", "Effects 11 library");
-			else if (pack.hasEffects11)
+			else if (pack.IsE11())
 				meta = T("menu.presets.source_enb", "ENB / Effects 11");
-			else if (pack.hasCSPresets)
+			else if (pack.IsCS())
 				meta = T("menu.presets.source_cs", "CS Presets");
 			if (!meta.empty())
 				ImGui::TextDisabled("%s", meta.c_str());
@@ -329,7 +329,7 @@ void PresetsPageRenderer::RenderDetail()
 	if (heroImageIndex >= static_cast<int>(pack->screenshotSRVs.size()))
 		heroImageIndex = -1;
 
-	const float badgesWidth = MeasureBackendBadgesWidth(pack->hasEffects11, pack->hasCSPresets, false);
+	const float badgesWidth = MeasureBackendBadgesWidth(pack->IsE11(), pack->IsCS(), false);
 	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
@@ -440,7 +440,7 @@ void PresetsPageRenderer::RenderDetail()
 			const float titleLineH = ImGui::GetTextLineHeight() * 1.35f;
 			const float badgeH = ImGui::GetFrameHeight();
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad + std::max(0.0f, (titleLineH - badgeH) * 0.5f));
-			DrawBackendBadges(pack->hasEffects11, pack->hasCSPresets, false);
+			DrawBackendBadges(pack->IsE11(), pack->IsCS(), false);
 		}
 
 		ImGui::EndTable();
