@@ -36,6 +36,9 @@ namespace Aftermath
 	 */
 	[[nodiscard]] bool WantsCrashAnalysis();
 
+	/** @brief Register a stable, producer-qualified ORG Vulkan checkpoint ID. Never blocks a crash callback. */
+	const void* RegisterOrgCheckpoint(void*, const char* a_name) noexcept;
+
 	/** @brief Disarms collection. Safe to call when never enabled. */
 	void Disable();
 }

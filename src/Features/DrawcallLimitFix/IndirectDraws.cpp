@@ -23,6 +23,7 @@
 #	include "ShadowViews.h"
 #	include "SunAccumulation.h"
 #	include "RE/B/BSShadowLight.h"
+#	include "RE/B/BSLightingShaderMaterialBase.h"
 #	include "RE/B/BSShadowDirectionalLight.h"
 #	include "RE/B/BSCullingProcess.h"
 #	include "RE/N/NiCamera.h"
@@ -43,6 +44,7 @@
 #	include "State.h"
 
 #	include <OpenRenderGraph/PersistentGraphHost.h>
+#	include <Render/BindingTable.h>
 #	include <Render/LatchBlock.h>
 #	include <Render/Runtime/ExternalSignalReservation.h>
 #	include <Render/Runtime/StagedUploadBatch.h>
@@ -58,6 +60,7 @@
 
 #	include <bit>
 #	include <chrono>
+#	include <cstdlib>
 #	include <cstddef>
 #	include <filesystem>
 #	include <fstream>
@@ -70,6 +73,12 @@ namespace DCLF
 {
 	namespace
 	{
+		std::uint32_t CaptureViewIndex(const org::PassPrepareContext& a_preparation, const org::DeclaredViewToken& a_token)
+		{
+			(void)a_preparation.Capture(a_token);
+			return a_preparation.Resolve(a_token).index;
+		}
+
 		constexpr const char* kExtensionId = "cs.dclf.main-opaque";
 		constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
 		// The shadow views' binding records: one for every draw without alpha testing, and one per material
@@ -532,6 +541,7 @@ namespace DCLF
 		constexpr std::uint32_t kSkinRegister = 7;             // SkinPerGeometry: Advanced Skin's per-object wetness
 		constexpr std::uint32_t kStrictLightDataBytes = 1216;  // LightLimitFix.hlsli StrictLightData (15 lights)
 		constexpr std::uint32_t kLightsRegister = 35;          // t35-t37: Light Limit Fix's lights, list and grid
+		constexpr std::uint32_t kAlternatingMaterialTextureRegister = 11;  // character-light ping-pong render target
 		constexpr std::uint32_t kInvalidIndex = GpuTextures::kInvalid;
 
 		/**
@@ -842,8 +852,9 @@ namespace DCLF
 
 		struct PassBindings
 		{
-			std::array<org::ResourceBindingToken, kColorTargets> targets{};
-			org::ResourceBindingToken depth, sequences, count, records, constants, objects, bones;
+			std::array<org::DeclaredViewToken, kColorTargets> targets{};
+			org::DeclaredViewToken depth;
+			org::ResourceBindingToken sequences, count, records, constants, objects, bones;
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
 		};
@@ -988,32 +999,33 @@ namespace DCLF
 			PassBindings Declare(org::PassBuilder& a_builder)
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
+				const std::span<const org::SrvView> noViews{};  // Device-address reads need ordering, not a descriptor.
 				PassBindings bindings{};
 				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-					bindings.targets[i] = a_builder.BindRenderTarget(resources->drawTargets[i]);
-				bindings.depth = a_builder.BindDepthReadWrite(resources->drawDepth);
-				bindings.sequences = a_builder.BindIndirectArguments(resources->sequences);
-				bindings.count = a_builder.BindIndirectArguments(resources->count);
+					bindings.targets[i] = a_builder.RenderTarget(resources->drawTargets[i]).View();
+				bindings.depth = a_builder.DepthReadWrite(resources->drawDepth).View();
+				bindings.sequences = a_builder.IndirectArguments(resources->sequences);
+				bindings.count = a_builder.IndirectArguments(resources->count);
 				// Read through device addresses; declared so the graph orders them after their uploads.
-				bindings.records = a_builder.BindShaderResource(resources->records);
-				bindings.constants = a_builder.BindShaderResource(resources->constants);
+				bindings.records = a_builder.ShaderResource(resources->records, noViews).Resource();
+				bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
 				if (resources->recordsDepth) {
-					a_builder.BindShaderResource(resources->recordsDepth);
-					a_builder.BindShaderResource(resources->constantsDepth);
+					a_builder.ShaderResource(resources->recordsDepth, noViews);
+					a_builder.ShaderResource(resources->constantsDepth, noViews);
 				}
 				if (resources->objects)
-					bindings.objects = a_builder.BindShaderResource(resources->objects);
+					bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
 				if (resources->bones)
-					bindings.bones = a_builder.BindShaderResource(resources->bones);
+					bindings.bones = a_builder.ShaderResource(resources->bones, noViews).Resource();
 				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
 				if (resources->facePositions)
-					a_builder.BindVertexBuffer(resources->facePositions);
+					a_builder.VertexBuffer(resources->facePositions);
 				for (const auto& frameBuffer : resources->frameBuffers)
-					bindings.frameBuffers.push_back(a_builder.BindShaderResource(frameBuffer.copy));
+					bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
 				if (resources->lightLimitFix) {
-					bindings.lights = a_builder.BindShaderResource(org::ResourceIdentifier("cs.llf.lights"));
-					bindings.lightIndexList = a_builder.BindShaderResource(org::ResourceIdentifier("cs.llf.light-index-list"));
-					bindings.lightGrid = a_builder.BindShaderResource(org::ResourceIdentifier("cs.llf.light-grid"));
+					bindings.lights = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.lights"), noViews).Resource();
+					bindings.lightIndexList = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-index-list"), noViews).Resource();
+					bindings.lightGrid = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-grid"), noViews).Resource();
 				}
 				return bindings;
 			}
@@ -1048,8 +1060,8 @@ namespace DCLF
 				prepared.frame = std::move(frame);
 				prepared.targetCount = resources->targetCount;
 				for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
-					prepared.targetViews[i] = a_preparation.CaptureView(a_bindings.targets[i], { org::BindlessViewKind::RenderTarget });
-				prepared.depthView = a_preparation.CaptureView(a_bindings.depth, { org::BindlessViewKind::DepthStencil });
+					prepared.targetViews[i] = a_preparation.Capture(a_bindings.targets[i]);
+				prepared.depthView = a_preparation.Capture(a_bindings.depth);
 				return prepared;
 			}
 
@@ -1065,7 +1077,7 @@ namespace DCLF
 					colors[i].rtv = a_recording.Resolve(a_prepared.targetViews[i]);
 					colors[i].loadOp = (frame.hybrid && !frame.offscreen) ? rhi::LoadOp::Load : rhi::LoadOp::Clear;
 					colors[i].storeOp = rhi::StoreOp::Store;
-					colors[i].resource = a_recording.Resolve(a_bindings.targets[i]).GetHandle();
+					colors[i].resource = a_recording.Resolve(a_bindings.targets[i].Resource()).GetHandle();
 				}
 				const bool zPrepass = a_prepared.zPrepass;
 				if (zPrepass && !frame.hybrid)
@@ -1277,8 +1289,8 @@ namespace DCLF
 
 		struct BuildDrawsBindings
 		{
-			org::ResourceBindingToken inputs, inputsDepth, geometries, sequences, count, hzb, visibility, frustum;
-			org::ResourceBindingToken sortCounts, sortStaging, sortRanks;
+			org::DeclaredViewToken inputs, inputsDepth, geometries, sequences, count, hzb, visibility, frustum;
+			org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		};
 
 		struct BuildDrawsFrame
@@ -1311,24 +1323,24 @@ namespace DCLF
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				BuildDrawsBindings bindings{};
-				bindings.inputs = a_builder.BindShaderResource(resources->inputs);
+				bindings.inputs = a_builder.ShaderResource(resources->inputs).View();
 				if (resources->inputsDepth)
-					bindings.inputsDepth = a_builder.BindShaderResource(resources->inputsDepth);
-				bindings.geometries = a_builder.BindShaderResource(resources->geometries);
-				bindings.sequences = a_builder.BindUnorderedAccess(resources->sequences);
-				bindings.count = a_builder.BindUnorderedAccess(resources->count);
-				bindings.visibility = a_builder.BindUnorderedAccess(resources->visibility);
+					bindings.inputsDepth = a_builder.ShaderResource(resources->inputsDepth).View();
+				bindings.geometries = a_builder.ShaderResource(resources->geometries).View();
+				bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
+				bindings.count = a_builder.UnorderedAccess(resources->count).View();
+				bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 				if (resources->frustum)
-					bindings.frustum = a_builder.BindUnorderedAccess(resources->frustum);
+					bindings.frustum = a_builder.UnorderedAccess(resources->frustum).View();
 				// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
 				// frame's depth. Both read the same resource; what differs is where they sit relative to
 				// the build, which is why the ordering below is the whole design.
 				if (resources->hzb)
-					bindings.hzb = a_builder.BindShaderResource(resources->hzb);
+					bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
 				if (Sorts()) {
-					bindings.sortCounts = a_builder.BindUnorderedAccess(resources->sort->counts);
-					bindings.sortStaging = a_builder.BindUnorderedAccess(resources->sort->staging);
-					bindings.sortRanks = a_builder.BindUnorderedAccess(resources->sort->ranks);
+					bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
+					bindings.sortStaging = a_builder.UnorderedAccess(resources->sort->staging).View();
+					bindings.sortRanks = a_builder.UnorderedAccess(resources->sort->ranks).View();
 				}
 				return bindings;
 			}
@@ -1361,29 +1373,29 @@ namespace DCLF
 				constants.latchIndex = resources->latch->SrvIndex();
 				// The depth segment's phases read its own inputs (Resources::inputsDepth), the colour segment the colour inputs.
 				const bool depthInputs = (phase == 1 || phase == 2) && resources->inputsDepth;
-				constants.inputsIndex = a_preparation.ResolveView(depthInputs ? a_bindings.inputsDepth : a_bindings.inputs, { org::BindlessViewKind::ShaderResource }).index;
-				constants.geometriesIndex = a_preparation.ResolveView(a_bindings.geometries, { org::BindlessViewKind::ShaderResource }).index;
-				constants.sequencesIndex = a_preparation.ResolveView(a_bindings.sequences, { org::BindlessViewKind::UnorderedAccess }).index;
-				constants.countIndex = a_preparation.ResolveView(a_bindings.count, { org::BindlessViewKind::UnorderedAccess }).index;
+				constants.inputsIndex = CaptureViewIndex(a_preparation, depthInputs ? a_bindings.inputsDepth : a_bindings.inputs);
+				constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
+				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
+				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 				// The depth segment's phases name its own records (Resources::recordsDepth).
 				const std::uint64_t recordsAddress = (phase == 1 || phase == 2) && resources->recordsDepth ? resources->recordsDepthAddress : resources->recordsAddress;
 				constants.recordsAddressLo = static_cast<std::uint32_t>(recordsAddress);
 				constants.recordsAddressHi = static_cast<std::uint32_t>(recordsAddress >> 32);
 				constants.recordStride = sizeof(DrawBindings);
 				constants.phaseBits = (phase & 0xFu) << 4;
-				constants.visibilityIndex = a_preparation.ResolveView(a_bindings.visibility, { org::BindlessViewKind::UnorderedAccess }).index;
+				constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 				// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
 				if (resources->frustum && phase == 1)
-					constants.frustumIndex = a_preparation.ResolveView(a_bindings.frustum, { org::BindlessViewKind::UnorderedAccess }).index;
+					constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
 				if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
-					constants.hzbIndex = a_preparation.ResolveView(a_bindings.hzb, { org::BindlessViewKind::ShaderResource }).index;
+					constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
 					constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 					constants.hzbMips = resources->hzbMips;
 				}
 				if (Sorts()) {
-					constants.sortCountsIndex = a_preparation.ResolveView(a_bindings.sortCounts, { org::BindlessViewKind::UnorderedAccess }).index;
-					constants.sortStagingIndex = a_preparation.ResolveView(a_bindings.sortStaging, { org::BindlessViewKind::UnorderedAccess }).index;
-					constants.sortRanksIndex = a_preparation.ResolveView(a_bindings.sortRanks, { org::BindlessViewKind::UnorderedAccess }).index;
+					constants.sortCountsIndex = CaptureViewIndex(a_preparation, a_bindings.sortCounts);
+					constants.sortStagingIndex = CaptureViewIndex(a_preparation, a_bindings.sortStaging);
+					constants.sortRanksIndex = CaptureViewIndex(a_preparation, a_bindings.sortRanks);
 				}
 				return prepared;
 			}
@@ -1420,7 +1432,7 @@ namespace DCLF
 
 		struct SortSequencesBindings
 		{
-			org::ResourceBindingToken staging, ranks, offsets, count, sequences;
+			org::DeclaredViewToken staging, ranks, offsets, count, sequences;
 		};
 
 		struct SortSequencesFrame
@@ -1443,11 +1455,11 @@ namespace DCLF
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				SortSequencesBindings bindings{};
-				bindings.staging = a_builder.BindShaderResource(resources->sort->staging);
-				bindings.ranks = a_builder.BindShaderResource(resources->sort->ranks);
-				bindings.offsets = a_builder.BindShaderResource(resources->sort->offsets);
-				bindings.count = a_builder.BindShaderResource(resources->count);
-				bindings.sequences = a_builder.BindUnorderedAccess(resources->sequences);
+				bindings.staging = a_builder.ShaderResource(resources->sort->staging).View();
+				bindings.ranks = a_builder.ShaderResource(resources->sort->ranks).View();
+				bindings.offsets = a_builder.ShaderResource(resources->sort->offsets).View();
+				bindings.count = a_builder.ShaderResource(resources->count).View();
+				bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
 				return bindings;
 			}
 
@@ -1466,11 +1478,11 @@ namespace DCLF
 					return prepared;
 				prepared.program = resources->sort->scatter;
 				auto& constants = prepared.constants;
-				constants.stagingIndex = a_preparation.ResolveView(a_bindings.staging, { org::BindlessViewKind::ShaderResource }).index;
-				constants.ranksIndex = a_preparation.ResolveView(a_bindings.ranks, { org::BindlessViewKind::ShaderResource }).index;
-				constants.offsetsIndex = a_preparation.ResolveView(a_bindings.offsets, { org::BindlessViewKind::ShaderResource }).index;
-				constants.countIndex = a_preparation.ResolveView(a_bindings.count, { org::BindlessViewKind::ShaderResource }).index;
-				constants.sequencesIndex = a_preparation.ResolveView(a_bindings.sequences, { org::BindlessViewKind::UnorderedAccess }).index;
+				constants.stagingIndex = CaptureViewIndex(a_preparation, a_bindings.staging);
+				constants.ranksIndex = CaptureViewIndex(a_preparation, a_bindings.ranks);
+				constants.offsetsIndex = CaptureViewIndex(a_preparation, a_bindings.offsets);
+				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
+				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 				constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
 				return prepared;
 			}
@@ -1519,9 +1531,9 @@ namespace DCLF
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				FeedbackBindings bindings{};
-				bindings.source = a_builder.BindCopySource(resources->frustum);
+				bindings.source = a_builder.CopySource(resources->frustum);
 				for (const auto& slot : resources->feedback->slots)
-					bindings.slots.push_back(a_builder.BindCopyDestination(slot->staging));
+					bindings.slots.push_back(a_builder.CopyDestination(slot->staging));
 				return bindings;
 			}
 
@@ -1578,7 +1590,8 @@ namespace DCLF
 
 		struct HzbBindings
 		{
-			org::ResourceBindingToken depth, hzb;
+			org::DeclaredViewToken depth;
+			std::vector<org::DeclaredViewToken> hzbMips;
 		};
 
 		struct HzbFrame
@@ -1616,8 +1629,10 @@ namespace DCLF
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				HzbBindings bindings{};
-				bindings.depth = a_builder.BindShaderResource(resources->nativeDepth);
-				bindings.hzb = a_builder.BindUnorderedAccess(resources->hzb);
+				bindings.depth = a_builder.ShaderResource(resources->nativeDepth).View();
+				bindings.hzbMips.reserve(resources->hzbMips);
+				for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip)
+					bindings.hzbMips.push_back(a_builder.UnorderedAccess(resources->hzb, org::UavView{ UINT32_MAX, mip }).View());
 				return bindings;
 			}
 
@@ -1642,10 +1657,10 @@ namespace DCLF
 				const std::uint32_t renderWidth = frame && frame->width ? frame->width : resources->width;
 				const std::uint32_t renderHeight = frame && frame->height ? frame->height : resources->height;
 				prepared.program = resources->hzbProgram;
-				const std::uint32_t depthIndex = a_preparation.ResolveView(a_bindings.depth, { org::BindlessViewKind::ShaderResource }).index;
+				const std::uint32_t depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
 				for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip) {
 					HzbFrame::Level level{};
-					level.constants.targetIndex = a_preparation.ResolveView(a_bindings.hzb, { org::BindlessViewKind::UnorderedAccess, UINT32_MAX, mip }).index;
+					level.constants.targetIndex = CaptureViewIndex(a_preparation, a_bindings.hzbMips[mip]);
 					level.constants.targetSize[0] = std::max(1u, resources->hzbWidth >> mip);
 					level.constants.targetSize[1] = std::max(1u, resources->hzbHeight >> mip);
 					if (mip == 0) {
@@ -1734,9 +1749,9 @@ namespace DCLF
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				ProbeBindings bindings{};
 				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-					bindings.sources[i] = a_builder.BindCopySource(resources->drawTargets[i]);
-				bindings.depth = a_builder.BindCopySource(resources->drawDepth);
-				bindings.destination = a_builder.BindCopyDestination(resources->probe);
+					bindings.sources[i] = a_builder.CopySource(resources->drawTargets[i]);
+				bindings.depth = a_builder.CopySource(resources->drawDepth);
+				bindings.destination = a_builder.CopyDestination(resources->probe);
 				return bindings;
 			}
 
@@ -1906,8 +1921,8 @@ namespace DCLF
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				DebugViewBindings bindings{};
 				for (std::uint32_t i = 0; i < resources->targetCount; ++i) {
-					bindings.sources[i] = a_builder.BindCopySource(resources->targets[i]);
-					bindings.destinations[i] = a_builder.BindCopyDestination(resources->native[i]);
+					bindings.sources[i] = a_builder.CopySource(resources->targets[i]);
+					bindings.destinations[i] = a_builder.CopyDestination(resources->native[i]);
 				}
 				return bindings;
 			}
@@ -2081,9 +2096,9 @@ namespace DCLF
 
 		struct ShadowBuildBindings
 		{
-			std::array<org::ResourceBindingToken, kShadowModeCount> inputs;
-			std::array<org::ResourceBindingToken, kMaxShadowViews> sequences, count;
-			org::ResourceBindingToken geometries, visibility;
+			std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
+			std::array<org::DeclaredViewToken, kMaxShadowViews> sequences, count;
+			org::DeclaredViewToken geometries, visibility;
 		};
 
 		struct ShadowBuildPrepared
@@ -2111,13 +2126,13 @@ namespace DCLF
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				ShadowBuildBindings bindings{};
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-					bindings.inputs[m] = a_builder.BindShaderResource(resources->inputs[m]);
+					bindings.inputs[m] = a_builder.ShaderResource(resources->inputs[m]).View();
 				for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-					bindings.sequences[s] = a_builder.BindUnorderedAccess(resources->sequences[s]);
-					bindings.count[s] = a_builder.BindUnorderedAccess(resources->count[s]);
+					bindings.sequences[s] = a_builder.UnorderedAccess(resources->sequences[s]).View();
+					bindings.count[s] = a_builder.UnorderedAccess(resources->count[s]).View();
 				}
-				bindings.geometries = a_builder.BindShaderResource(resources->geometries);
-				bindings.visibility = a_builder.BindUnorderedAccess(resources->visibility);
+				bindings.geometries = a_builder.ShaderResource(resources->geometries).View();
+				bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 				return bindings;
 			}
 
@@ -2136,8 +2151,8 @@ namespace DCLF
 				prepared.program = resources->buildDraws;
 				prepared.latch = resources->latch;
 				prepared.signature = resources->dispatchSignature->GetHandle();
-				const auto geometriesIndex = a_preparation.ResolveView(a_bindings.geometries, { org::BindlessViewKind::ShaderResource }).index;
-				const auto visibilityIndex = a_preparation.ResolveView(a_bindings.visibility, { org::BindlessViewKind::UnorderedAccess }).index;
+				const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
+				const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 				for (const auto& view : frame->views) {
 					if (view.slot >= kMaxShadowViews || view.modeIndex >= kShadowModeCount)
 						continue;
@@ -2145,10 +2160,10 @@ namespace DCLF
 					dispatch.latchOffset = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
 					auto& constants = dispatch.constants;
 					constants.latchIndex = resources->latch->SrvIndex();
-					constants.inputsIndex = a_preparation.ResolveView(a_bindings.inputs[view.modeIndex], { org::BindlessViewKind::ShaderResource }).index;
+					constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs[view.modeIndex]);
 					constants.geometriesIndex = geometriesIndex;
-					constants.sequencesIndex = a_preparation.ResolveView(a_bindings.sequences[view.slot], { org::BindlessViewKind::UnorderedAccess }).index;
-					constants.countIndex = a_preparation.ResolveView(a_bindings.count[view.slot], { org::BindlessViewKind::UnorderedAccess }).index;
+					constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
+					constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
 					constants.recordsAddressLo = static_cast<std::uint32_t>(view.recordsAddress);
 					constants.recordsAddressHi = static_cast<std::uint32_t>(view.recordsAddress >> 32);
 					constants.recordStride = sizeof(DrawBindings);
@@ -2179,7 +2194,7 @@ namespace DCLF
 
 		struct ShadowPassBindings
 		{
-			std::array<org::ResourceBindingToken, kShadowDepthTargets> depth{};
+			std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
 			std::array<org::ResourceBindingToken, kMaxShadowViews> sequences, count;
 			org::ResourceBindingToken records, constants, objects, bones;
 		};
@@ -2207,23 +2222,27 @@ namespace DCLF
 			ShadowPassBindings Declare(org::PassBuilder& a_builder)
 			{
 				a_builder.PreferQueue(org::QueueKind::Graphics);
+				const std::span<const org::SrvView> noViews{};
 				ShadowPassBindings bindings{};
 				// The shadow views draw into the shadow maps, Skylighting's epoch into its occlusion map alone.
 				for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
-					if (resources->depth[i] && (i == kSkyDepthTarget) == sky)
-						bindings.depth[i] = a_builder.BindDepthReadWrite(resources->depth[i]);
+					if (resources->depth[i] && (i == kSkyDepthTarget) == sky) {
+						bindings.depthViews[i].reserve(resources->depthLayers[i]);
+						for (std::uint32_t slice = 0; slice < resources->depthLayers[i]; ++slice)
+							bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
+					}
 				}
 				for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-					bindings.sequences[s] = a_builder.BindIndirectArguments(resources->sequences[s]);
-					bindings.count[s] = a_builder.BindIndirectArguments(resources->count[s]);
+					bindings.sequences[s] = a_builder.IndirectArguments(resources->sequences[s]);
+					bindings.count[s] = a_builder.IndirectArguments(resources->count[s]);
 				}
-				bindings.records = a_builder.BindShaderResource(resources->records);
-				bindings.constants = a_builder.BindShaderResource(resources->constants);
-				bindings.objects = a_builder.BindShaderResource(resources->objects);
-				bindings.bones = a_builder.BindShaderResource(resources->bones);
+				bindings.records = a_builder.ShaderResource(resources->records, noViews).Resource();
+				bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
+				bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
+				bindings.bones = a_builder.ShaderResource(resources->bones, noViews).Resource();
 				// The face positions are read by the input assembler (the draws' second stream), after the commit's
 				// uploads into them.
-				a_builder.BindVertexBuffer(resources->facePositions);
+				a_builder.VertexBuffer(resources->facePositions);
 				return bindings;
 			}
 
@@ -2246,10 +2265,7 @@ namespace DCLF
 						continue;
 					if (view.slice >= resources->depthLayers[view.target])
 						continue;
-					org::BindlessViewRequest request{};
-					request.kind = org::BindlessViewKind::DepthStencil;
-					request.slice = view.slice;
-					prepared.views.push_back({ i, a_preparation.CaptureView(a_bindings.depth[view.target], request) });
+					prepared.views.push_back({ i, a_preparation.Capture(a_bindings.depthViews[view.target][view.slice]) });
 				}
 				if (!prepared.views.empty())
 					prepared.frame = std::move(frame);
@@ -3042,6 +3058,7 @@ namespace DCLF
 			MainInputs inputs;
 			ConstantArena arena;
 			std::vector<DrawBindings> records;
+			std::vector<std::shared_ptr<const void>> bindingOwners;  // exact roots used by this payload, including clean kept records
 			std::vector<DrawSequence> sequences;  // CPU templates of BuildDraws' output
 			std::array<std::vector<DrawSequence>, kDecalGroups> decalTemplates;  // by group and slot
 			std::vector<DrawInput> inputList;
@@ -3115,6 +3132,7 @@ namespace DCLF
 				stagedFor = nullptr;
 				arena.Reset();
 				records.clear();
+				bindingOwners.clear();
 				sequences.clear();
 				inputList.clear();
 				geometryDraws.Reset();
@@ -3182,6 +3200,7 @@ namespace DCLF
 		struct ShadowPayload
 		{
 			ShadowInputs inputs;
+			std::vector<std::shared_ptr<const void>> bindingOwners;
 			ConstantArena arena;  // the view slots' head is reserved; the commit writes the views into it
 			std::vector<DrawBindings> records;  // per-view registers (b0, b12) unset
 			std::vector<std::uint32_t> objectRecord;  // per object: its binding record, or ~0u when it cannot draw
@@ -3240,6 +3259,7 @@ namespace DCLF
 				sunExclusion.reset();
 				arena.Reset();
 				records.clear();
+				bindingOwners.clear();
 				objectRecord.clear();
 				for (auto& modeInputs : inputList)
 					modeInputs.clear();
@@ -4096,6 +4116,8 @@ namespace DCLF
 			using Skip = IndirectDraws::Skip;
 			a_out.Reset();
 			a_out.inputs = a_in;
+			if (a_in.resolveTextures && a_lookups.sharedBindingBlock)
+				a_out.bindingOwners.push_back(a_lookups.sharedBindingBlock);
 			auto& arena = a_out.arena;
 			auto& records = a_out.records;
 			auto& sequences = a_out.sequences;
@@ -4370,6 +4392,12 @@ namespace DCLF
 
 					auto [resolvedIt, newResolved] = resolvedBindings.try_emplace((std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex);
 					auto& resolved = resolvedIt->second;
+					if (newResolved && a_in.resolveTextures) {
+						if (object.materialIndex < a_lookups.materials.size() && a_lookups.materials[object.materialIndex].bindingBlock)
+							a_out.bindingOwners.push_back(a_lookups.materials[object.materialIndex].bindingBlock);
+						if (object.pipelineIndex < a_lookups.pipelines.size() && a_lookups.pipelines[object.pipelineIndex].shadowMaskOwner)
+							a_out.bindingOwners.push_back(a_lookups.pipelines[object.pipelineIndex].shadowMaskOwner);
+					}
 					// Kept: the versions of everything the pair's record and blocks are written from. The same as when they were
 					// written, and the pair is its slot: nothing else about it is looked at.
 					std::array<std::uint32_t, 12> pairVersions{};
@@ -5783,6 +5811,8 @@ namespace DCLF
 				bindings.vertexConstants[1] = block;
 				bindings.textures[0] = textureIt->second;
 				writeRecord(a_slot, bindings);
+				if (const auto owner = a_lookups.shadowTextureOwners.find(k.slotDiffuse[a_slot]); owner != a_lookups.shadowTextureOwners.end())
+					a_out.bindingOwners.push_back(owner->second);
 			};
 			// An object's record: the plain one, its material's (acquired), or none.
 			auto recordOf = [&](std::uint32_t o) -> std::uint32_t {
@@ -6155,6 +6185,8 @@ namespace DCLF
 			ZoneScopedN("CS.DCLF.BuildShadowPayload");
 			a_out.Reset();
 			a_out.inputs = a_in;
+			if (a_lookups.sharedBindingBlock)
+				a_out.bindingOwners.push_back(a_lookups.sharedBindingBlock);
 			const std::uint64_t base = a_in.addresses.constants;
 			auto& arena = a_out.arena;
 			auto& records = a_out.records;
@@ -6260,6 +6292,8 @@ namespace DCLF
 					material->texCoordScale[transformBuffer].x, material->texCoordScale[transformBuffer].y };
 				bindings.vertexConstants[1] = block(texcoord.data(), sizeof(texcoord));
 				bindings.textures[0] = textureIt->second;
+				if (const auto owner = a_lookups.shadowTextureOwners.find(srv); owner != a_lookups.shadowTextureOwners.end())
+					a_out.bindingOwners.push_back(owner->second);
 				const auto index = static_cast<std::uint32_t>(records.size());
 				records.push_back(bindings);
 				recordByMaterial.emplace(material, index);
@@ -6342,13 +6376,41 @@ namespace DCLF
 		/**
 		 * @brief Resolves the descriptor entries an epoch's build reads (render thread, descriptor service
 		 * active): the null texture, the sampler table, the projected textures, and every material slot used
-		 * this frame. Also the keep-alive: GpuTextures evicts an entry unused for kEvictFrames, and only the
-		 * render thread's Resolve counts as a use, so every used slot is touched here each epoch.
+		 * this frame. Material slots retain their exact imported bindings until a
+		 * replacement or slot-retirement event releases them.
 		 */
-		void RefreshMaterialLookups(const SceneStore::Tables& a_tables, std::uint32_t a_frame, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups)
+		void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, std::uint32_t a_frame, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups)
 		{
 			ZoneScopedN("CS.DCLF.RefreshMaterialLookups");
 			auto& textures = GpuTextures::Get();
+			const auto cleanup = org::runtime::GetActiveDescriptorService()->GetResourceCleanupQueue();
+			auto sealOwners = [&](std::vector<std::shared_ptr<const void>> owners) -> std::shared_ptr<const void> {
+				ZoneScopedN("CS.DCLF.RefreshMaterial.SealOwners");
+				return org::ExecutionResourceLease::Create(cleanup, std::move(owners)).Owner();
+			};
+			const auto oldSharedVersion = a_lookups.sharedVersion;
+			std::vector<std::uint32_t> retired;
+			a_store.TakeRetiredMaterialSlots(retired);
+			for (const auto slot : retired) {
+				if (slot < a_lookups.materials.size()) {
+					a_lookups.materials[slot] = {};
+					++a_lookups.generation;
+				}
+			}
+			a_store.TakeRetiredPipelineSlots(retired);
+			for (const auto slot : retired) {
+				if (slot < a_lookups.pipelines.size()) {
+					// EarlyPrepass may already have resolved a successor in this
+					// recycled slot. Retire only the old texture binding here.
+					auto& pipeline = a_lookups.pipelines[slot];
+					pipeline.shadowMaskOwner.reset();
+					pipeline.shadowMaskIndex = Lookups::kNone;
+					pipeline.shadowMaskView = nullptr;
+					pipeline.shadowMaskTextureGeneration = 0;
+					pipeline.version = a_lookups.NextVersion();
+					++a_lookups.generation;
+				}
+			}
 			// Any change a build can observe bumps the generation, including an entry resolved for the first
 			// time: a job built before it deferred those draws, and must not stand in for a build made after.
 			// Every change is also a new version of what it belongs to (Lookups::NextVersion), which the kept bindings key on.
@@ -6369,10 +6431,25 @@ namespace DCLF
 				a_lookups.sharedVersion = a_lookups.NextVersion();
 			}
 			for (std::size_t i = 0; i < a_lookups.projectedTextures.size(); ++i) {
-				const std::uint32_t index = a_projected.valid ? textures.Resolve(a_projected.views[i]) : Lookups::kNone;
-				if (note(a_lookups.projectedTextures[i], index))
+				const auto binding = a_projected.valid ? textures.ResolveBinding(a_projected.views[i], static_cast<std::uint32_t>(32 + i)) : GpuTextures::Binding{ Lookups::kNone, {} };
+				const bool ownerChanged = a_lookups.projectedOwners[i].get() != binding.owner.get();
+				if (ownerChanged) ++a_lookups.generation;
+				if (note(a_lookups.projectedTextures[i], binding.index) || ownerChanged)
 					a_lookups.sharedVersion = a_lookups.NextVersion();
+				a_lookups.projectedOwners[i] = binding.owner;
 			}
+			if (oldSharedVersion != a_lookups.sharedVersion || !a_lookups.sharedBindingBlock) {
+				std::vector<std::shared_ptr<const void>> owners;
+				owners.reserve(1 + a_lookups.samplers.size() + a_lookups.projectedOwners.size());
+				owners.push_back(textures.NullBinding().owner);
+				for (std::uint32_t address = 0; address < 4; ++address)
+					for (std::uint32_t filter = 0; filter < 5; ++filter)
+						owners.push_back(textures.SamplerBinding(address, filter).owner);
+				for (const auto& owner : a_lookups.projectedOwners)
+					owners.push_back(owner);
+				a_lookups.sharedBindingBlock = sealOwners(std::move(owners));
+			}
+			TracyCZoneN(materialBindingZone, "CS.DCLF.RefreshMaterial.Materials", true);
 			a_lookups.materials.resize(a_tables.materials.size());
 			for (std::size_t word = 0; word < a_tables.usedMaterialBits.size(); ++word) {
 				for (std::uint64_t remaining = a_tables.usedMaterialBits[word]; remaining; remaining &= remaining - 1) {
@@ -6381,30 +6458,83 @@ namespace DCLF
 						continue;
 					auto& entry = a_lookups.materials[slot];
 					const auto& key = a_tables.materialSlotKey[slot];
+					bool bindingDirty = !entry.resolved || entry.key != key;
 					if (entry.key != key) {
+						entry = {};  // predecessor incarnation cannot contribute an alternate binding
 						entry.key = key;
-						entry.resolved = false;
+						entry.textureIndex.fill(Lookups::kNone);
+						entry.featureIndex.fill(Lookups::kNone);
 						entry.version = a_lookups.NextVersion();
 					}
 					const auto& material = a_tables.materials[slot];
-					// Resolved from these same views, with none evicted since, recently enough that they are still
-					// marked used: the indices stand (the shadow, Z-prepass and colour epochs each refresh).
-					if (entry.resolved && entry.recordVersion == a_tables.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation() &&
-						a_frame - entry.resolvedFrame < GpuTextures::kRestampFrames) {
+					// An unchanged material owns its bindings directly; there is no
+					// periodic lifetime restamp of its descriptor indices.
+					if (entry.resolved && entry.recordVersion == a_tables.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation()) {
 						continue;
 					}
+					if (entry.texturesGeneration != textures.Generation())
+						entry.alternateCharacterLight = {};
 					for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-						if (!((material.textureWritten >> t) & 1))
+						if (!((material.textureWritten >> t) & 1)) {
+							if (t == kAlternatingMaterialTextureRegister)
+								entry.alternateCharacterLight = {};  // a cleared register releases both incarnations
+							if (note(entry.textureIndex[t], Lookups::kNone)) {
+								entry.version = a_lookups.NextVersion();
+								bindingDirty = true;
+							}
+							bindingDirty |= static_cast<bool>(entry.textureOwners[t]);
+							entry.textureOwners[t].reset();
+							entry.views[t] = nullptr;
 							continue;
-						const std::uint32_t index = textures.Resolve(material.textures[t]);
-						if (note(entry.textureIndex[t], index))
+						}
+						auto& alternate = entry.alternateCharacterLight;
+						const auto* view = material.textures[t];
+						const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner ?
+							GpuTextures::Binding{ alternate.index, alternate.owner } : textures.ResolveBinding(material.textures[t], t);
+						static const bool tracePaths = std::getenv("CS_DCLF_TRACE_TEXTURE_PATHS") != nullptr;
+						if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
+							TracyPlot("CS.DCLF.Texture.ChangedMaterialSlot", static_cast<std::int64_t>(slot));
+							TracyPlot("CS.DCLF.Texture.ChangedMaterialKey", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(key.first)));
+							TracyPlot("CS.DCLF.Texture.ChangedMaterialPass", static_cast<std::int64_t>(key.second));
+							TracyPlot("CS.DCLF.Texture.ChangedMaterialRegister", static_cast<std::int64_t>(t));
+							TracyPlot("CS.DCLF.Texture.ChangedOldView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(entry.views[t])));
+							TracyPlot("CS.DCLF.Texture.ChangedNewView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(view)));
+							if (key.first) {
+								static std::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, std::uint32_t> reports;
+								auto& count = reports[key];
+								if (reports.size() < 65536 && (++count & 15u) == 1u) {
+									const auto type = key.first->GetType();
+									const auto textureSet = type == RE::BSShaderMaterial::Type::kLighting ?
+										static_cast<const RE::BSLightingShaderMaterialBase*>(key.first)->GetTextureSet() : nullptr;
+									const char* diffuse = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+									const char* normal = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kNormal) : nullptr;
+									const auto message = fmt::format("DCLF.TexturePath material={:#x} pass={:#x} slot={} type={} diffuse={} normal={}",
+										reinterpret_cast<std::uintptr_t>(key.first), key.second, slot, static_cast<int>(type), diffuse ? diffuse : "", normal ? normal : "");
+									TracyMessage(message.data(), message.size());
+								}
+							}
+						}
+						if (entry.views[t] != view && t == kAlternatingMaterialTextureRegister)
+							alternate = { entry.views[t], entry.textureIndex[t], entry.textureOwners[t] };
+						const bool ownerChanged = entry.textureOwners[t].get() != binding.owner.get();
+						const bool indexChanged = note(entry.textureIndex[t], binding.index);
+						bindingDirty |= ownerChanged || indexChanged;
+						if (ownerChanged) ++a_lookups.generation;
+						if (indexChanged || ownerChanged)
 							entry.version = a_lookups.NextVersion();
+						entry.textureOwners[t] = binding.owner;
 						entry.views[t] = material.textures[t];
 					}
 					for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
-						const std::uint32_t index = material.featureTextures[f] ? textures.Resolve(material.featureTextures[f]) : Lookups::kNone;
-						if (note(entry.featureIndex[f], index))
+						const auto binding = material.featureTextures[f] ? textures.ResolveBinding(material.featureTextures[f], 16 + f) : GpuTextures::Binding{ Lookups::kNone, {} };
+						const std::uint32_t index = binding.index;
+						const bool ownerChanged = entry.featureOwners[f].get() != binding.owner.get();
+						const bool indexChanged = note(entry.featureIndex[f], index);
+						bindingDirty |= ownerChanged || indexChanged;
+						if (ownerChanged) ++a_lookups.generation;
+						if (indexChanged || ownerChanged)
 							entry.version = a_lookups.NextVersion();
+						entry.featureOwners[f] = binding.owner;
 						entry.featureViews[f] = material.featureTextures[f];
 					}
 					if (!entry.resolved) {
@@ -6415,9 +6545,18 @@ namespace DCLF
 					entry.written = material.textureWritten;
 					entry.texturesGeneration = textures.Generation();
 					entry.recordVersion = a_tables.materialVersion[slot];
-					entry.resolvedFrame = a_frame;
+					if (bindingDirty) {
+						std::vector<std::shared_ptr<const void>> owners;
+						owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
+						for (const auto& owner : entry.textureOwners)
+							owners.push_back(owner);
+						for (const auto& owner : entry.featureOwners)
+							owners.push_back(owner);
+						entry.bindingBlock = sealOwners(std::move(owners));
+					}
 				}
 			}
+			TracyCZoneEnd(materialBindingZone);
 			// The technique's shadow mask, per used pipeline: the frame's view, so it is refreshed every epoch.
 			a_lookups.pipelines.resize(std::max(a_lookups.pipelines.size(), a_tables.pipelines.size()));
 			for (std::size_t word = 0; word < a_tables.usedPipelineBits.size(); ++word) {
@@ -6429,9 +6568,18 @@ namespace DCLF
 						continue;
 					const auto& technique = a_tables.TechniqueOf(p);
 					auto& entry = a_lookups.pipelines[p];
-					const std::uint32_t index = technique.shadowMask ? textures.Resolve(technique.shadowMaskTexture) : Lookups::kNone;
-					if (note(entry.shadowMaskIndex, index))
+					auto* view = technique.shadowMask ? technique.shadowMaskTexture : nullptr;
+					if (entry.shadowMaskView == view && entry.shadowMaskTextureGeneration == textures.Generation() &&
+						(view ? static_cast<bool>(entry.shadowMaskOwner) : entry.shadowMaskIndex == Lookups::kNone))
+						continue;
+					const auto binding = technique.shadowMask ? textures.ResolveBinding(technique.shadowMaskTexture, 48) : GpuTextures::Binding{ Lookups::kNone, {} };
+					const bool ownerChanged = entry.shadowMaskOwner.get() != binding.owner.get();
+					if (ownerChanged) ++a_lookups.generation;
+					if (note(entry.shadowMaskIndex, binding.index) || ownerChanged)
 						entry.version = a_lookups.NextVersion();
+					entry.shadowMaskOwner = binding.owner;
+					entry.shadowMaskView = view;
+					entry.shadowMaskTextureGeneration = textures.Generation();
 				}
 			}
 		}
@@ -6449,6 +6597,12 @@ namespace DCLF
 			const auto& a_tables = a_store.GetTables();
 			const std::uint32_t a_frame = a_store.GetFrame();
 			auto& textures = GpuTextures::Get();
+			auto* host = RenderGraphRuntime::Get().Host();
+			if (!host)
+				return;
+			const auto cleanup = host->ResourceCleanup();
+			if (!cleanup)
+				return;
 			auto refreshSlot = [&](std::size_t slot) {
 				if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
 					return;
@@ -6457,26 +6611,40 @@ namespace DCLF
 				if (!entry.resolved || entry.key != a_tables.materialSlotKey[slot] || entry.written != material.textureWritten ||
 					entry.recordVersion == a_tables.materialVersion[slot])
 					return;
-				std::array<std::uint32_t, kPixelTextureSlots> indices{};
+				std::array<GpuTextures::Binding, kPixelTextureSlots> bindings{};
 				bool changed = false, known = true;
 				for (std::uint32_t t = 0; t < kPixelTextureSlots && known; ++t) {
 					if (!((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t])
 						continue;
 					changed = true;
-					known = textures.Known(material.textures[t], indices[t]);
+					const auto& alternate = entry.alternateCharacterLight;
+					if (t == kAlternatingMaterialTextureRegister && alternate.view == material.textures[t] && alternate.owner)
+						bindings[t] = { alternate.index, alternate.owner };
+					else
+						known = textures.KnownBinding(material.textures[t], bindings[t]);
 				}
 				if (!changed || !known)
 					return;
 				for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 					if (!((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t])
 						continue;
-					if (entry.textureIndex[t] != indices[t]) {
+					if (entry.textureIndex[t] != bindings[t].index || entry.textureOwners[t].get() != bindings[t].owner.get()) {
 						++a_lookups.generation;
 						entry.version = a_lookups.NextVersion();
 					}
-					entry.textureIndex[t] = indices[t];
+					if (t == kAlternatingMaterialTextureRegister)
+						entry.alternateCharacterLight = { entry.views[t], entry.textureIndex[t], entry.textureOwners[t] };
+					entry.textureIndex[t] = bindings[t].index;
+					entry.textureOwners[t] = std::move(bindings[t].owner);
 					entry.views[t] = material.textures[t];
 				}
+				std::vector<std::shared_ptr<const void>> owners;
+				owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
+				for (const auto& owner : entry.textureOwners)
+					owners.push_back(owner);
+				for (const auto& owner : entry.featureOwners)
+					owners.push_back(owner);
+				entry.bindingBlock = org::ExecutionResourceLease::Create(cleanup, std::move(owners)).Owner();
 				if (entry.featureViews == material.featureTextures)
 					entry.recordVersion = a_tables.materialVersion[slot];
 			};
@@ -6488,7 +6656,7 @@ namespace DCLF
 		}
 
 		/** @brief The shadow epoch's entries: the alpha-tested casters' diffuse textures, and the pipelines of the modes in use. */
-		void RefreshShadowLookups(const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
+		void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups)
 		{
 			ZoneScopedN("CS.DCLF.RefreshShadowLookups");
@@ -6497,17 +6665,41 @@ namespace DCLF
 			auto& programs = ShaderPrograms::Get();
 			auto* utility = globals::game::utilityShader;
 			TracyCZoneN(shadowTexturesZone, "CS.DCLF.RefreshShadow.Textures", true);
-			for (auto* srv : a_tables.shadowTextureSet) {
-				const std::uint32_t index = textures.Resolve(srv);
-				auto [it, inserted] = a_lookups.shadowTextures.try_emplace(srv, index);
-				if (inserted) {
-					++a_lookups.generation;
-				} else if (it->second != index) {
-					it->second = index;
-					++a_lookups.generation;
+			std::vector<std::pair<ID3D11ShaderResourceView*, bool>> textureChanges;
+			a_store.TakeShadowTextureChanges(textureChanges);
+			{
+				ZoneScopedN("CS.DCLF.RefreshShadow.ApplyTextureChanges");
+				for (const auto& [srv, present] : textureChanges) {
+					if (present) {
+						a_lookups.pendingShadowTextures.insert(srv);
+					} else {
+						a_lookups.pendingShadowTextures.erase(srv);
+						if (a_lookups.shadowTextures.erase(srv)) ++a_lookups.generation;
+						a_lookups.shadowTextureOwners.erase(srv);
+					}
 				}
 			}
+			{
+				ZoneScopedN("CS.DCLF.RefreshShadow.RetryTextures");
+				const std::vector<ID3D11ShaderResourceView*> pending(a_lookups.pendingShadowTextures.begin(), a_lookups.pendingShadowTextures.end());
+				for (auto* srv : pending) {
+					const auto binding = textures.ResolveBinding(srv, 192);
+					auto [slot, inserted] = a_lookups.shadowTextures.try_emplace(srv, binding.index);
+					const auto owner = a_lookups.shadowTextureOwners.find(srv);
+					if (inserted || slot->second != binding.index || owner == a_lookups.shadowTextureOwners.end() || owner->second.get() != binding.owner.get())
+						++a_lookups.generation;
+					slot->second = binding.index;
+					if (binding.owner) {
+						a_lookups.shadowTextureOwners[srv] = binding.owner;
+						a_lookups.pendingShadowTextures.erase(srv);
+					}
+				}
+			}
+			TracyCZoneValue(shadowTexturesZone, (static_cast<std::uint64_t>(textureChanges.size()) << 32) | a_lookups.pendingShadowTextures.size());
 			TracyCZoneEnd(shadowTexturesZone);
+			TracyPlot("CS.DCLF.ShadowTextureChanges", static_cast<std::int64_t>(textureChanges.size()));
+			TracyPlot("CS.DCLF.ShadowTexturePending", static_cast<std::int64_t>(a_lookups.pendingShadowTextures.size()));
+			TracyPlot("CS.DCLF.ShadowTextureOwners", static_cast<std::int64_t>(a_lookups.shadowTextureOwners.size()));
 			if (!utility)
 				return;
 			// Request setup hashes the shader dependency tree and may take 10+ ms. Missing pipelines leave their
@@ -6801,6 +6993,7 @@ namespace DCLF
 		RE::NiPoint3 shadowRefEye;
 		std::uint64_t shadowSerial = 0;
 		ShadowPayload shadowPayload;
+		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		// The shadow job (CS_DCLF_ASYNC): kicked at BeforeShadowMaps, joined by ExecuteShadowFrame. The render
 		// modes are known only once the views are captured, so the job builds last frame's set; the epoch's
 		// own set is checked like every other input.
@@ -6834,6 +7027,15 @@ namespace DCLF
 		// The two main epochs' payloads (colour, then the Z-prepass): what their builds produce and their
 		// commits upload. Kept past the commit, because the upload pass reads them when the epoch executes.
 		std::array<MainPayload, 2> mainPayload;
+		// The volatile t16+ inputs retain a live import only while their register
+		// keeps naming that SRV. This bounds reuse without an age-based import cache.
+		struct FrameTextureBinding
+		{
+			ID3D11ShaderResourceView* view = nullptr;
+			GpuTextures::Binding binding;
+		};
+		std::array<FrameTextureBinding, kTextureRegisters> frameTextureBindings{};
+		std::uint32_t frameTextureGeneration = ~0u;
 		// Per main job: the staged upload batches its builds write (StageMainPayload), reused once released.
 		std::array<std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>, 2> stagedPools;
 		// The commits' own uploads on the render thread (CommitUploads).
@@ -6886,7 +7088,8 @@ namespace DCLF
 		void LogStaleMainJob(std::size_t a_job, const MainInputs& a_actual);
 		/** @brief Inside the epoch's preparation: the frame textures and blocks, the uploads, the PassFrame. */
 		bool CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, MainPayload& a_payload,
-			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats);
+			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
+			std::vector<std::shared_ptr<const void>>& a_bindingOwners);
 
 		// What the colour epoch draws (drawcall-limit-fix.md, "Persistent draw state", Step 5): the native loop skips a pass
 		// whose geometry the epoch drew, and the claims are what it draws. Only the colour epoch records it, so the native
@@ -7909,7 +8112,7 @@ namespace DCLF
 				resources->skyPublished = frame;
 				resources->skyFrame.store(std::move(frame), std::memory_order_release);
 			}
-		});
+		}, impl->shadowExecutionOwner);
 		shadowStats.skyMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		if (!ok) {
 			++shadowStats.skyNotReady;
@@ -7952,7 +8155,6 @@ namespace DCLF
 			return notReady(ShadowNotReady::Tables);
 		const std::uint32_t frameNumber = store.GetFrame();
 		auto resources = impl->shadow;
-		auto& textures = GpuTextures::Get();
 		std::array<bool, kShadowModeCount> modeUsed{};
 		std::array<std::uint32_t, kShadowModeCount> modeRasterStates{};
 		for (const auto& view : pending) {
@@ -7978,6 +8180,10 @@ namespace DCLF
 		auto& payload = impl->shadowPayload;
 		auto& async = stats.async[kAsyncShadow];
 		bool usedWorkerBuild = false;
+		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
+		if (!cleanup)
+			return;
+		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
@@ -7994,7 +8200,6 @@ namespace DCLF
 			bool useAsync = false;
 			TracyCZoneN(shadowPrepareZone, "CS.DCLF.ShadowInputs.Prepare", true);
 			const auto prepareStart = std::chrono::steady_clock::now();
-			textures.BeginFrame(frameNumber);
 			auto& job = impl->shadowJob;
 			auto& worker = AsyncWorker::Get();
 			AsyncWorker::WaitResult joined = AsyncWorker::WaitResult::None;
@@ -8004,8 +8209,8 @@ namespace DCLF
 					worker.Cancel(job.handle);
 			}
 			auto& lookups = store.MutableLookups();
-			RefreshMaterialLookups(tables, frameNumber, store.GetProjectedTextures(), lookups);
-			RefreshShadowLookups(tables, modeUsed, modeRasterStates, dsvFormat, impl->skyDsvFormat, lookups);
+			RefreshMaterialLookups(store, tables, frameNumber, store.GetProjectedTextures(), lookups);
+			RefreshShadowLookups(store, tables, modeUsed, modeRasterStates, dsvFormat, impl->skyDsvFormat, lookups);
 			in.lookupGeneration = lookups.generation;
 			if (job.handle) {
 				switch (joined) {
@@ -8050,6 +8255,8 @@ namespace DCLF
 				++async.builtInline;
 				BuildShadowPayload(in, tables, lookups, payload, impl->ShadowObjects(), impl->ShadowBones(), impl->ShadowKeptState(), impl->ShadowGeometries());
 			}
+			*frameOwners = std::move(payload.bindingOwners);
+			impl->shadowExecutionOwner = frameOwners;
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
 
@@ -8837,7 +9044,7 @@ namespace DCLF
 				resources->frame.store(std::move(frame), std::memory_order_release);
 			}
 			TracyCZoneEnd(shadowViewsZone);
-		});
+		}, frameOwners);
 		const double totalMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 		shadowStats.prepareMs += prepareMs;
 		shadowStats.inputsMs += inputsMs;
@@ -9432,10 +9639,16 @@ namespace DCLF
 		auto& async = stats.async[jobIndex];
 		bool builtOnWorker = false;
 
+		const auto cleanup = RenderGraphRuntime::Get().Host()->ResourceCleanup();
+		if (!cleanup) {
+			capture.Release();
+			++stats.notReady;
+			impl->DropMainJob(jobIndex, stats);
+			return;
+		}
+		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(a_segment, [&](org::RenderGraph&) {
 			// The descriptor entries the build reads, resolved now that the descriptor service is active.
-			if (in.resolveTextures)
-				GpuTextures::Get().BeginFrame(in.frameNumber);
 
 			// The worker's build, if one was kicked for this epoch and it was built for exactly these inputs;
 			// otherwise the build runs here. A late or stale job is dropped (its payload is the one this
@@ -9452,7 +9665,7 @@ namespace DCLF
 			const auto lookupsStart = std::chrono::steady_clock::now();
 			stats.commitUs[0] += std::chrono::duration<double, std::micro>(lookupsStart - joinStart).count();
 			auto& lookups = store.MutableLookups();
-			RefreshMaterialLookups(tables, in.frameNumber, store.GetProjectedTextures(), lookups);
+			RefreshMaterialLookups(store, tables, in.frameNumber, store.GetProjectedTextures(), lookups);
 			in.lookupGeneration = lookups.generation;
 			stats.commitUs[1] += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - lookupsStart).count();
 
@@ -9506,8 +9719,9 @@ namespace DCLF
 				++async.builtInline;
 				BuildMainPayload(in, tables, lookups, payload, impl->CacheFor(jobIndex), impl->MainObjects(), impl->MainBones(), impl->MainGeometries());
 			}
-			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats);
-		});
+			*frameOwners = std::move(payload.bindingOwners);
+			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
+		}, frameOwners);
 		capture.Release();
 		++stats.epochs;
 		if (ok && BuildParityEnabled())
@@ -10083,7 +10297,8 @@ namespace DCLF
 	}
 
 	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, MainPayload& a_payload,
-		const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats)
+		const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
+		std::vector<std::shared_ptr<const void>>& a_bindingOwners)
 	{
 		ZoneScopedN("CS.DCLF.CommitMainPayload");
 		const auto& in = a_payload.inputs;
@@ -10106,8 +10321,27 @@ namespace DCLF
 		// The frame's textures (t16 and up), resolved now and patched into the records that read them.
 		std::array<std::uint32_t, kTextureRegisters> frameTextures;
 		frameTextures.fill(kInvalidIndex);
-		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t)
-			frameTextures[t] = textures.Resolve(a_capture.psViews[t]);
+		if (frameTextureGeneration != textures.Generation()) {
+			frameTextureBindings = {};
+			frameTextureGeneration = textures.Generation();
+		}
+		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
+			auto& held = frameTextureBindings[t];
+			const auto* view = a_capture.psViews[t];
+			if (!view) {
+				if (held.view)
+					held = {};
+				frameTextures[t] = textures.NullIndex();
+				continue;  // the shared lookup root already owns the null descriptor
+			}
+			if (held.view != view || !held.binding.owner || held.binding.index == GpuTextures::kInvalid) {
+				held.view = a_capture.psViews[t];
+				held.binding = textures.ResolveBinding(held.view, 64 + t);
+			}
+			frameTextures[t] = held.binding.index;
+			if (held.binding.owner)
+				a_bindingOwners.push_back(held.binding.owner);
+		}
 		if (a_resources->lightLimitFix && !depthOnly)
 			ORGLightCulling::Get().GetShaderResourceIndices(frameTextures[kLightsRegister], frameTextures[kLightsRegister + 1], frameTextures[kLightsRegister + 2]);
 		for (const auto& frameBuffer : depthOnly ? decltype(a_resources->frameBuffers){} : a_resources->frameBuffers) {

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -35,8 +36,8 @@ namespace DCLF
 	 * class of delay as a pipeline still compiling, and never a hole: the native loop is only told to
 	 * withhold what DCLF has drawn).
 	 *
-	 * `generation` changes whenever an entry a build may have read changes its value (a descriptor evicted
-	 * and re-imported, the pipeline set recreated, the tables reset); a payload built against an older
+		 * `generation` changes whenever an entry a build may have read changes its value (a descriptor evicted
+		 * and re-imported, the pipeline set recreated, the tables reset); a payload built against an older
 	 * generation is not committed.
 	 */
 	struct Lookups
@@ -65,6 +66,9 @@ namespace DCLF
 			std::vector<std::uint8_t> vsTable, psTable;
 			std::array<RegisterUsageBits, 2> usage{};  // by variant (kColorVariant, kDepthVariant)
 			std::uint32_t shadowMaskIndex = kNone;     // the technique's shadow mask (t14) this frame, if it binds one
+			std::shared_ptr<const void> shadowMaskOwner;
+			ID3D11ShaderResourceView* shadowMaskView = nullptr;
+			std::uint32_t shadowMaskTextureGeneration = 0;
 			std::uint32_t version = 0;                 // new whenever any of the above changes (NextVersion)
 		};
 
@@ -73,17 +77,27 @@ namespace DCLF
 		{
 			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
 			std::array<std::uint32_t, kTextureSlots> textureIndex{};  // descriptor heap indices; kNone where unresolvable
+			std::array<std::shared_ptr<const void>, kTextureSlots> textureOwners{};  // pins exact imports through this slot incarnation
+			struct AlternateTexture
+			{
+				ID3D11ShaderResourceView* view = nullptr;
+				std::uint32_t index = kNone;
+				std::shared_ptr<const void> owner;
+			};
+			// The character-light render target alternates in t11. Keep exactly its
+			// other live view; this is a semantic owner, not an age-based cache.
+			AlternateTexture alternateCharacterLight;
+			std::shared_ptr<const void> bindingBlock;  // immutable ORG ownership root for this record version
 			bool resolved = false;
-			// What textureIndex was resolved from, so an unchanged material is not resolved again (every epoch
-			// refreshes the lookups): its views, which of them were written, GpuTextures' generation, and when.
+			// What textureIndex was resolved from, so an unchanged material is not resolved again.
 			std::array<ID3D11ShaderResourceView*, kTextureSlots> views{};
 			// The feature textures (MaterialRecord::featureTextures, kFeatureMaterialRegisters): indices and views.
 			std::array<std::uint32_t, kFeatureMaterialTextures> featureIndex{};
+			std::array<std::shared_ptr<const void>, kFeatureMaterialTextures> featureOwners{};
 			std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureViews{};
 			std::uint32_t written = 0;
 			std::uint32_t texturesGeneration = 0;
 			std::uint64_t recordVersion = 0;  // last material record inspected for texture bindings
-			std::uint32_t resolvedFrame = 0;
 			std::uint32_t version = 0;  // new whenever key, resolved, textureIndex or featureIndex changes (NextVersion)
 		};
 
@@ -92,9 +106,11 @@ namespace DCLF
 		// The sampler heap index per (address mode, filter mode) of the engine's sampler table: all of them,
 		// resolved once (GpuTextures::Sampler), kNone where the engine has no state.
 		std::array<std::uint32_t, 4 * 5> samplers;
+		std::shared_ptr<const void> sharedBindingBlock;  // null, fixed samplers and projected textures
 		bool samplersResolved = false;
 		std::uint32_t nullTexture = kNone;
 		std::array<std::uint32_t, 4> projectedTextures{ kNone, kNone, kNone, kNone };
+		std::array<std::shared_ptr<const void>, 4> projectedOwners{};
 		// Shadow pipelines per (technique with mode bits, raster flags, vertex layout), and the alpha-tested
 		// casters' diffuse textures.
 		ankerl::unordered_dense::map<ShadowPipelineKey, std::uint32_t, ShadowPipelineKeyHash> shadowPipelines;
@@ -107,6 +123,8 @@ namespace DCLF
 		std::vector<ShadowPipelineKey> shadowSlotKeys;
 		std::array<std::vector<std::uint32_t>, 16> shadowMapRows;
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::uint32_t> shadowTextures;
+		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::shared_ptr<const void>> shadowTextureOwners;
+		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> pendingShadowTextures;
 		std::uint32_t pipelineSetGeneration = ~0u;
 		// The builds' kept bindings (IndirectDraws' PersistentBindings) key on versions rather than on the entries: a
 		// pipeline's and a material's own (Pipeline::version, Material::version), and this one for the entries every

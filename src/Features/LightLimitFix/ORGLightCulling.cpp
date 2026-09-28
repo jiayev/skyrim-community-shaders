@@ -162,7 +162,7 @@ namespace
 		LatchCopyBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
-			return { a_builder.BindCopyDestination(resources->lights) };
+			return { a_builder.CopyDestination(resources->lights) };
 		}
 
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<uint64_t>& a_out) const
@@ -193,7 +193,7 @@ namespace
 	// ClusterBuildingCS: one group per cluster; also resets the culling counter.
 	struct BuildBindings
 	{
-		org::ResourceBindingToken clusters, counter;
+		org::DeclaredViewToken clusters, counter;
 	};
 
 	class BuildClustersPass final : public org::TypedRenderGraphPass<BuildClustersPass, DispatchFrame, BuildBindings>
@@ -205,7 +205,7 @@ namespace
 		BuildBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
-			return { a_builder.BindUnorderedAccess(resources->clusters), a_builder.BindUnorderedAccess(resources->lightIndexCounter) };
+			return { a_builder.UnorderedAccess(resources->clusters).View(), a_builder.UnorderedAccess(resources->lightIndexCounter).View() };
 		}
 
 		// The recorded dispatch depends only on the cluster grid; the projection is latched.
@@ -222,8 +222,10 @@ namespace
 				return frame;
 			frame.program = resources->build;
 			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraProjInverse));
-			frame.constants.clustersIndex = a_preparation.ResolveView(a_bindings.clusters, { org::BindlessViewKind::UnorderedAccess }).index;
-			frame.constants.lightIndexCounterIndex = a_preparation.ResolveView(a_bindings.counter, { org::BindlessViewKind::UnorderedAccess }).index;
+			(void)a_preparation.Capture(a_bindings.clusters);
+			(void)a_preparation.Capture(a_bindings.counter);
+			frame.constants.clustersIndex = a_preparation.Resolve(a_bindings.clusters).index;
+			frame.constants.lightIndexCounterIndex = a_preparation.Resolve(a_bindings.counter).index;
 			frame.groups[0] = shape->clusterSize[0];
 			frame.groups[1] = shape->clusterSize[1];
 			frame.groups[2] = shape->clusterSize[2];
@@ -244,7 +246,7 @@ namespace
 	// ClusterCullingCS: per-cluster light lists into lightIndexList / lightGrid.
 	struct CullBindings
 	{
-		org::ResourceBindingToken clusters, lights, counter, lightIndexList, lightGrid;
+		org::DeclaredViewToken clusters, lights, counter, lightIndexList, lightGrid;
 	};
 
 	class CullLightsPass final : public org::TypedRenderGraphPass<CullLightsPass, DispatchFrame, CullBindings>
@@ -257,11 +259,11 @@ namespace
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			return {
-				a_builder.BindShaderResource(resources->clusters),
-				a_builder.BindShaderResource(resources->lights),
-				a_builder.BindUnorderedAccess(resources->lightIndexCounter),
-				a_builder.BindUnorderedAccess(resources->lightIndexList),
-				a_builder.BindUnorderedAccess(resources->lightGrid),
+				a_builder.ShaderResource(resources->clusters).View(),
+				a_builder.ShaderResource(resources->lights).View(),
+				a_builder.UnorderedAccess(resources->lightIndexCounter).View(),
+				a_builder.UnorderedAccess(resources->lightIndexList).View(),
+				a_builder.UnorderedAccess(resources->lightGrid).View(),
 			};
 		}
 
@@ -280,11 +282,15 @@ namespace
 			frame.constants = BaseConstants(*resources, *shape, offsetof(LLFLatch, cameraView));
 			frame.latchStride = resources->latch->Stride();
 			frame.latchSlots = resources->latch->Slots();
-			frame.constants.clustersIndex = a_preparation.ResolveView(a_bindings.clusters, { org::BindlessViewKind::ShaderResource }).index;
-			frame.constants.lightsIndex = a_preparation.ResolveView(a_bindings.lights, { org::BindlessViewKind::ShaderResource }).index;
-			frame.constants.lightIndexCounterIndex = a_preparation.ResolveView(a_bindings.counter, { org::BindlessViewKind::UnorderedAccess }).index;
-			frame.constants.lightIndexListIndex = a_preparation.ResolveView(a_bindings.lightIndexList, { org::BindlessViewKind::UnorderedAccess }).index;
-			frame.constants.lightGridIndex = a_preparation.ResolveView(a_bindings.lightGrid, { org::BindlessViewKind::UnorderedAccess }).index;
+			const auto index = [&](const org::DeclaredViewToken& token) {
+				(void)a_preparation.Capture(token);
+				return a_preparation.Resolve(token).index;
+			};
+			frame.constants.clustersIndex = index(a_bindings.clusters);
+			frame.constants.lightsIndex = index(a_bindings.lights);
+			frame.constants.lightIndexCounterIndex = index(a_bindings.counter);
+			frame.constants.lightIndexListIndex = index(a_bindings.lightIndexList);
+			frame.constants.lightGridIndex = index(a_bindings.lightGrid);
 			frame.groups[0] = (shape->clusterSize[0] + kCullGroupX - 1) / kCullGroupX;
 			frame.groups[1] = (shape->clusterSize[1] + kCullGroupY - 1) / kCullGroupY;
 			frame.groups[2] = (shape->clusterSize[2] + kCullGroupZ - 1) / kCullGroupZ;

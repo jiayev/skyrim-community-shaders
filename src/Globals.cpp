@@ -462,6 +462,30 @@ namespace globals
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct ID3D11DeviceContext_DrawCallerTrace
+	{
+		static void thunk(ID3D11DeviceContext* a_context, UINT a_count, UINT a_start, INT a_base)
+		{
+			if (a_count == 8991) {
+				using SetDrawCaller = void(__stdcall*)(const void*, const void* const*, std::uint32_t);
+				static const auto setCaller = []() -> SetDrawCaller {
+					const auto module = ::GetModuleHandleW(L"dxvk_d3d11.dll");
+					return module ? reinterpret_cast<SetDrawCaller>(::GetProcAddress(module, "dxvkSetDrawCaller")) : nullptr;
+				}();
+				if (setCaller) {
+					void* stack[16]{};
+					const void* addresses[16]{};
+					const auto count = ::RtlCaptureStackBackTrace(1, static_cast<DWORD>(std::size(stack)), stack, nullptr);
+					for (std::uint32_t i = 0; i < count; ++i)
+						addresses[i] = stack[i];
+					setCaller(_ReturnAddress(), addresses, count);
+				}
+			}
+			func(a_context, a_count, a_start, a_base);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct ID3D11DeviceContext_DepthDrawTrace
 	{
 		static void thunk(ID3D11DeviceContext* a_context, UINT a_count, UINT a_start)
@@ -531,6 +555,8 @@ namespace globals
 		stl::detour_vfunc<14, ID3D11DeviceContext_Map>(a_context);
 		stl::detour_vfunc<15, ID3D11DeviceContext_Unmap>(a_context);
 		stl::detour_vfunc<48, ID3D11DeviceContext_UpdateSubresource>(a_context);
+		if (DCLF::SwitchEnabled("CS_DCLF_DRAW_TRACE") && !DCLF::SwitchEnabled("CS_DCLF_DEPTH_TRACE"))
+			stl::detour_vfunc<12, ID3D11DeviceContext_DrawCallerTrace>(a_context);
 		if (DCLF::SwitchEnabled("CS_DCLF_DEPTH_TRACE")) {
 			stl::detour_vfunc<53, ID3D11DeviceContext_DepthClearTrace>(a_context);
 			stl::detour_vfunc<47, ID3D11DeviceContext_DepthCopyTrace>(a_context);

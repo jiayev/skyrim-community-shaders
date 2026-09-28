@@ -14,8 +14,8 @@ namespace DCLF
 	 * A texture is resolved once per shader resource view: the image is marked stable in DXVK and imported
 	 * into BasicRHI without ownership (dxvkGetInteropResourceInfo), and a view with the SRV's format,
 	 * range and swizzle is written into a slot of ORG's shader-visible heap, read in the layout DXVK keeps
-	 * the image in. The SRV stays referenced while cached; entries unused for kEvictFrames retire
-	 * their slot, imported image and D3D view together against ORG's queue fences.
+	 * the image in. The registry weakly deduplicates live imports; every numeric index handed to a draw
+	 * is accompanied by ownership of its exact descriptor and SRV through GPU completion.
 	 *
 	 * Samplers copy the renderer's own D3D11 sampler states (the table the engine selects from by the
 	 * shadow state's address and filter modes) into ORG's sampler heap.
@@ -39,47 +39,44 @@ namespace DCLF
 		struct Stats
 		{
 			std::uint32_t cached = 0;
+			std::uint32_t registrySlots = 0;
+			std::uint64_t cleanupPending = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Reject::Count)> rejected{};
 			std::uint32_t samplers = 0;
 			std::uint32_t unsupportedLayouts = 0;  // images DXVK does not keep in GENERAL
 		};
+		struct Binding
+		{
+			std::uint32_t index = kInvalid;
+			std::shared_ptr<const void> owner;
+		};
 
 		static GpuTextures& Get();
 
-		/**
-		 * @brief The texture's descriptor heap index, resolving it on first use; kInvalid if unsupported. A null
-		 * view (nothing bound) resolves to a null descriptor, which reads zero as D3D11's null SRV does.
-		 */
-		std::uint32_t Resolve(ID3D11ShaderResourceView* a_view);
+		/** @brief Resolve with CPU ownership of this exact import and descriptor slot. */
+		// sourceTag is diagnostic only: material t0-t15, feature 16+, projected 32+,
+		// pipeline mask 48, frame tN as 64+N, shadow diffuse 192.
+		Binding ResolveBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag = ~0u);
 
-		/**
-		 * @brief A view Resolve has already seen: its index (a null view: the null descriptor, once created),
-		 * counted as a use. False for anything that would have to be imported, which only works inside an
-		 * epoch - outside one Resolve rejects the view, and the rejection sticks.
-		 */
-		bool Known(ID3D11ShaderResourceView* a_view, std::uint32_t& a_index);
+		/** @brief A live import already known without an interop call. */
+		bool KnownBinding(ID3D11ShaderResourceView* a_view, Binding& a_binding);
 
 		/** @brief A null view's descriptor heap index (reads zero); kInvalid when unsupported. */
 		std::uint32_t NullIndex();
+		/** @brief The null descriptor and its exact device-generation owner. */
+		Binding NullBinding();
 
 		/** @brief The sampler heap index for the engine's (address mode, filter mode); kInvalid if unknown. */
 		std::uint32_t Sampler(std::uint32_t a_addressMode, std::uint32_t a_filterMode);
-
-		/** @brief Once per epoch: processes only due expiry entries, never the whole cache. */
-		void BeginFrame(std::uint32_t a_frame);
+		/** @brief The sampler index with ownership of the fixed descriptor. */
+		Binding SamplerBinding(std::uint32_t a_addressMode, std::uint32_t a_filterMode);
 
 		/**
-		 * @brief Changes whenever an entry is released (eviction, Clear): a view pointer may then be reused by
-		 * a different view. While it is unchanged, an index Resolve returned for a view is still that view's.
+		 * @brief Changes on device/reset invalidation. Individual binding identities, not a global restamp,
+		 * distinguish a successor import at a reused SRV address.
 		 */
 		std::uint32_t Generation() const { return generation; }
-		/**
-		 * @brief How often a caller that keeps Resolve's results must resolve its views again, so that what it
-		 * uses is never evicted (Resolve is what marks an entry used).
-		 */
-		static constexpr std::uint32_t kRestampFrames = 32;
-
-		const Stats& GetStats() const { return stats; }
+		Stats GetStats() const;
 
 		void Clear();
 
@@ -88,8 +85,6 @@ namespace DCLF
 	private:
 		GpuTextures();
 
-		static constexpr std::uint32_t kEvictFrames = 600;
-		static_assert(kRestampFrames + 64 < kEvictFrames, "an entry restamped every kRestampFrames must outlive the eviction sweep");
 		std::uint32_t generation = 0;
 
 		struct Impl;

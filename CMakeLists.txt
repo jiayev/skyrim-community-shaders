@@ -227,6 +227,15 @@ target_compile_definitions(
     PRIVATE "$<$<BOOL:${ENABLE_ENB_EXTENDER}>:ENABLE_ENB_EXTENDER>"
 )
 
+# DCLF's large IndirectDraws translation unit exceeds COFF's section limit in
+# optimized MSVC builds (notably the Aftermath-enabled RelWithDebInfo preset).
+if(MSVC)
+    set_source_files_properties(src/Features/DrawcallLimitFix/IndirectDraws.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
+    # ORGModuleServices uses /GL in this configuration. Select LTCG up front so
+    # MSVC does not emit LNK4075 (the plugin treats linker warnings as errors).
+    target_link_options(${PROJECT_NAME} PRIVATE "$<$<CONFIG:RelWithDebInfo>:/LTCG>" "$<$<CONFIG:RelWithDebInfo>:/INCREMENTAL:NO>")
+endif()
+
 file(
     GLOB FEATURE_SHADER_DIRS
     RELATIVE "${CMAKE_SOURCE_DIR}"

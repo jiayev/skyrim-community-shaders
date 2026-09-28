@@ -7,6 +7,7 @@
 #include <deque>
 #include <map>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "AsyncWorker.h"
@@ -437,6 +438,14 @@ namespace DCLF
 			// rather than per caster.
 			std::vector<ID3D11ShaderResourceView*> shadowTextureSet;
 			ankerl::unordered_dense::set<ID3D11ShaderResourceView*> shadowTextureSeen;
+			// Membership transitions produced only when the shadow dependency index changes.
+			// False removes the old import owner; true requests the successor.
+			std::vector<std::pair<ID3D11ShaderResourceView*, bool>> shadowTextureChanges;
+			void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out)
+			{
+				a_out.clear();
+				a_out.swap(shadowTextureChanges);
+			}
 			// The distinct shadow pipelines the frame's casters need, without a view's mode bits: a
 			// handful in practice (twelve techniques in the Whiterun exterior). What the shadow programs
 			// are compiled for, and what the shadow pipelines are built from once a view's mode is known.
@@ -475,10 +484,14 @@ namespace DCLF
 			// publishes the slot to the pre-epoch lookup refresh.
 			std::vector<std::uint8_t> materialTextureDirty, materialTextureQueued;
 			std::vector<std::uint32_t> materialTextureChanges;
+			std::vector<std::uint32_t> retiredMaterialSlots;
+			std::vector<std::uint32_t> retiredPipelineSlots;
 			void MarkMaterialUsed(std::uint32_t a_slot, std::uint32_t a_frame);
 			void MarkPipelineUsed(std::uint32_t a_slot, std::uint32_t a_frame);
 			void MarkMaterialTextureChanged(std::uint32_t a_slot, std::uint32_t a_frame);
 			void TakeMaterialTextureChanges(std::vector<std::uint32_t>& a_out);
+			void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(retiredMaterialSlots); }
+			void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { a_out.clear(); a_out.swap(retiredPipelineSlots); }
 			bool PipelineUsed(std::size_t a_slot, std::uint32_t a_frame) const { return a_slot < pipelineLastUsed.size() && pipelineLastUsed[a_slot] == a_frame; }
 			bool PipelineAlive(std::size_t a_slot) const { return pipelineSlots.Alive(a_slot); }
 			// Each table's columns: a_column(vector, initial value...) for every vector parallel to it.
@@ -839,6 +852,9 @@ namespace DCLF
 		const Tables& GetTables() const { return tables; }
 		/** @brief Consume only material slots whose captured texture record changed and became used. */
 		void TakeMaterialTextureChanges(std::vector<std::uint32_t>& a_out) { tables.TakeMaterialTextureChanges(a_out); }
+		void TakeRetiredMaterialSlots(std::vector<std::uint32_t>& a_out) { tables.TakeRetiredMaterialSlots(a_out); }
+		void TakeRetiredPipelineSlots(std::vector<std::uint32_t>& a_out) { tables.TakeRetiredPipelineSlots(a_out); }
+		void TakeShadowTextureChanges(std::vector<std::pair<ID3D11ShaderResourceView*, bool>>& a_out) { tables.TakeShadowTextureChanges(a_out); }
 		const Stats& GetStats() const { return stats; }
 		/** @brief The screen-door fading objects given bindings since the last call, and in how many frames. */
 		std::pair<std::uint32_t, std::uint32_t> TakeFadingDrawn()
