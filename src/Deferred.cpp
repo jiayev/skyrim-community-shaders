@@ -664,13 +664,12 @@ void Deferred::CompositeAfterWater()
 		sky.texTrLut ? sky.texTrLut->srv.get() : nullptr, sky.texSvLut ? sky.texSvLut->srv.get() : nullptr, sky.texApLut ? sky.texApLut->srv.get() : nullptr, sky.texApShadow ? sky.texApShadow->srv.get() : nullptr
 	};
 	context->CSSetShaderResources(61, 4, atmosphere.data());
-	std::array<ID3D11ShaderResourceView*, 4> clouds = {
+	std::array<ID3D11ShaderResourceView*, 3> clouds = {
 		sky.texVolFilteredTr ? sky.texVolFilteredTr->srv.get() : nullptr,
 		sky.texVolFilteredLum ? sky.texVolFilteredLum->srv.get() : nullptr,
-		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr,
-		sky.texApSunLut ? sky.texApSunLut->srv.get() : nullptr
+		sky.texShadowVolume ? sky.texShadowVolume->srv.get() : nullptr
 	};
-	context->CSSetShaderResources(110, 4, clouds.data());
+	context->CSSetShaderResources(110, 3, clouds.data());
 	std::array<ID3D11ShaderResourceView*, 2> depths = {
 		renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV,
 		sky.texVolFilteredAux ? sky.texVolFilteredAux->srv.get() : nullptr

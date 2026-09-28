@@ -12,7 +12,6 @@
 
 #if LUTGEN == 3
 RWTexture3D<float4> RWTexOutput : register(u0);
-RWTexture3D<float4> RWTexSunOutput : register(u1);
 #else
 RWTexture2D<float4> RWTexOutput : register(u0);
 #endif
@@ -46,7 +45,7 @@ void rayMarch(
 #elif LUTGEN == 3
 	uint2 tid, uint depth,
 	inout float3 tr,
-	inout float3 lum, inout float3 lumSun
+	inout float3 lum
 #endif
 )
 {
@@ -165,10 +164,6 @@ void rayMarch(
 		float3 inscatter = (muSRayleigh * phaseRayleighSun + muSAerosol * phaseAerosolSun) * trSun;
 #	if LUTGEN != 1
 		inscatter *= data.sunlightColor;
-#		if LUTGEN == 3
-		const float3 inscatterSun = inscatter;
-		inscatter = 0.0;
-#		endif
 		inscatter += (muSRayleigh * phaseRayleighMasser + muSAerosol * phaseAerosolMasser) * trMasser * data.masserColor;
 		inscatter += (muSRayleigh * phaseRayleighSecunda + muSAerosol * phaseAerosolSecunda) * trSecunda * data.secundaColor;
 		inscatter += scatterNoPhase * psiMs;
@@ -177,15 +172,11 @@ void rayMarch(
 		float3 scatterIntegeral = inscatter * scatterFactor;
 
 		lum += scatterIntegeral * tr;
-#	if LUTGEN == 3
-		lumSun += inscatterSun * scatterFactor * tr;
-#	endif
 #endif
 		tr *= trSample;
 
 #if LUTGEN == 3
 		RWTexOutput[uint3(tid.xy, i + 1)] = float4(lum, dot(tr, float3(0.2126, 0.7152, 0.0722)));
-		RWTexSunOutput[uint3(tid.xy, i + 1)] = float4(lumSun, 1.0);
 #endif
 	}
 
@@ -205,7 +196,6 @@ void rayMarch(
 
 #if LUTGEN == 3
 	RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
-	RWTexSunOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
 #endif
 
 	uint3 outDims;
@@ -270,7 +260,6 @@ void rayMarch(
 
 #elif LUTGEN == 3
 	float3 lum = 0;
-	float3 lumSun = 0;
-	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum, lumSun);
+	rayMarch(pos, rayDir, tid.xy, outDims.z, tr, lum);
 #endif
 }
