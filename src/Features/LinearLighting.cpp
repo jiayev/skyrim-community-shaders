@@ -30,7 +30,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	bloodEffectMult,
 	projectedEffectMult,
 	deferredEffectMult,
-	otherEffectMult)
+	otherEffectMult,
+	particleEffectMult,
+	lightSpriteEffectMult,
+	fireEffectMult,
+	fireEffectCurve)
 
 void LinearLighting::DrawSettings()
 {
@@ -63,6 +67,10 @@ void LinearLighting::DrawSettings()
 				ImGui::SliderFloat(T(TKEY("projected_effects_multiplier"), "Projected Effects Multiplier"), &settings.projectedEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("deferred_effects_multiplier"), "Deferred Effects Multiplier"), &settings.deferredEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("other_effects_multiplier"), "Other Effects Multiplier"), &settings.otherEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("particle_effects_multiplier"), "Particle Effects Multiplier"), &settings.particleEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("light_sprite_effects_multiplier"), "Light Sprite Effects Multiplier"), &settings.lightSpriteEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_multiplier"), "Fire Effects Multiplier"), &settings.fireEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax, "%.2f");
 				ImGui::TreePop();
 			}
 
@@ -78,6 +86,7 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
 		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
+	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax);
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -146,6 +155,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = 1.0f;
 	data.deferredEffectMult = 1.0f;
 	data.otherEffectMult = 1.0f;
+	data.particleEffectMult = 1.0f;
+	data.lightSpriteEffectMult = 1.0f;
+	data.fireEffectMult = 1.0f;
+	data.fireEffectCurve = 1.0f;
 
 	data.isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 
@@ -163,6 +176,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
+	data.particleEffectMult = settings.particleEffectMult;
+	data.lightSpriteEffectMult = settings.lightSpriteEffectMult;
+	data.fireEffectMult = settings.fireEffectMult;
+	data.fireEffectCurve = settings.fireEffectCurve;
 	return data;
 }
 

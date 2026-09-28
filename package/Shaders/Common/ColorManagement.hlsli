@@ -54,6 +54,7 @@ namespace Color
 		return color * SharedData::linearLightingSettings.ambientMult;
 	}
 
+	/** @brief Per-type effect scale. Additive effects (fire and light sprites) skip the "other" multiplier for their own. */
 	float3 EffectMult(float3 color)
 	{
 #	if defined(MEMBRANE)
@@ -64,8 +65,38 @@ namespace Color
 		color *= SharedData::linearLightingSettings.projectedEffectMult;
 #	elif defined(DEFERRED)
 		color *= SharedData::linearLightingSettings.deferredEffectMult;
-#	else
+#	elif !defined(ADDBLEND)
 		color *= SharedData::linearLightingSettings.otherEffectMult;
+#	endif
+		return color;
+	}
+
+	/** @brief Property color scale for non-fire, non-sky effects: Effects 11 PARTICLE Intensity when its preset is on, else Linear Lighting. */
+	float ParticleEffectMult()
+	{
+#	if defined(EFFECTS11)
+		return SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticleIntensity : 1.0;
+#	else
+		return SharedData::linearLightingSettings.particleEffectMult;
+#	endif
+	}
+
+	/** @brief Scales additive effects: fire gets a curve and intensity, all other additive effects are light sprites. */
+	float3 AdditiveEffect(float3 color, bool isFire)
+	{
+#	if defined(EFFECTS11)
+		if (!SharedData::enbSettings.Enable)
+			return color;
+		const float fireCurve = SharedData::enbSettings.FireCurve;
+		const float fireIntensity = SharedData::enbSettings.FireIntensity;
+		const float lightSpriteIntensity = SharedData::enbSettings.LightSpriteIntensity;
+#	elif defined(ENABLE_LL)
+		const float fireCurve = SharedData::linearLightingSettings.fireEffectCurve;
+		const float fireIntensity = SharedData::linearLightingSettings.fireEffectMult;
+		const float lightSpriteIntensity = SharedData::linearLightingSettings.lightSpriteEffectMult;
+#	endif
+#	if defined(EFFECTS11) || defined(ENABLE_LL)
+		color = isFire ? pow(abs(color), fireCurve) * fireIntensity : color * lightSpriteIntensity;
 #	endif
 		return color;
 	}
