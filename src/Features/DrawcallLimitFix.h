@@ -187,6 +187,20 @@ private:
 	bool loggedCaptureFailure = false;
 	/** @brief The main pass's bindings and target formats for this frame's colour epoch, when its targets are bound. */
 	bool CaptureMainPass();
+	// Render-thread CPU spent on scene capture, averaged over a report interval.
+	struct CaptureTiming
+	{
+		double eventsMs = 0.0;
+		double buildMs = 0.0;  // the accumulate phase, at EarlyPrepass
+		double buildMaxMs = 0.0;
+		double sceneMs = 0.0;  // the scene phase, before the shadow maps
+		double sceneMaxMs = 0.0;
+		std::uint32_t frames = 0;
+	} timing;
+	std::uint32_t skyNativeFrames = 0;  // Skylighting maps left to the engine (DCLF not ready), per report interval
+	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
+	void ReportStats(std::uint32_t a_frame);
+	static constexpr std::uint32_t kReportInterval = 300;
 	SkipStats skipStats;
 	SkipStats skipCounters;  // accumulating; published into skipStats every frame
 	std::vector<std::string> skipSamples;  // names of a few skipped passes, for the report
