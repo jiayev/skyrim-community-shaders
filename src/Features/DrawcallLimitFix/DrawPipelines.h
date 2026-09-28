@@ -18,8 +18,7 @@ namespace DCLF
 	/** @brief Constant buffer registers b0-b13 (each stage has its own, as in D3D11). */
 	inline constexpr std::uint32_t kConstantBufferRegisters = 14;
 	/**
-	 * @brief Frame push (CS_DCLF_FRAME_PUSH, default on, =0 off): the registers whose block is the same for every draw of a pass under bindless
-	 * draws (the frame slots, the shared light block at PS b3, the frame lighting at PS b13) read their buffers' addresses from
+	 * @brief Frame push: the registers whose block is the same for every draw of a pass under bindless draws (the frame slots, the shared light block at PS b3, the frame lighting at PS b13) read their buffers' addresses from
 	 * push data (LayoutRangeSource::PushAddress), set once per pass, instead of from each draw's binding record
 	 * (IndirectAddress), which saves the shaders the record's indirection (colour pass 3.3 -> 2.1 ms at Riverwood). Push data: the record address
 	 * range (4 words, for alignment), then these addresses, the vertex stage's registers ascending and then the pixel stage's.
@@ -30,12 +29,10 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushPS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 9) | (1u << 10) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushBinding = 191;
 	inline constexpr std::uint32_t kFramePushWords = 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
-	bool FramePushEnabled();
-	/**
-	 * @brief CS_DCLF_DGC_PREPROCESS (default on, =0 off): every DCLF draw signature (colour, depth, shadow) is preprocessed
-	 * explicitly, before the passes that execute it (CommandList::PreprocessIndirect), instead of by the driver inside each call.
+	/*
+	 * Every DCLF draw signature (colour, depth, shadow) is preprocessed explicitly, before the passes that execute it
+	 * (CommandList::PreprocessIndirect), instead of by the driver inside each call.
 	 */
-	bool DgcPreprocessEnabled();
 	/** @brief Pixel shader resource registers t0-t127 (textures and structured buffers). */
 	inline constexpr std::uint32_t kTextureRegisters = 128;
 	/** @brief Pixel shader sampler registers s0-s15. */

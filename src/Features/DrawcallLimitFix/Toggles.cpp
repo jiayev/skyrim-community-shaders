@@ -9,21 +9,15 @@ namespace DCLF
 		// Bit positions of the packed active word.
 		enum : std::uint32_t
 		{
-			kHybrid = 0,
-			kOwnership,
+			kOwnership = 0,
 			kCullMode,  // two bits
-			kCullTracked = 4,
-			kSkinned,
+			kSkinned = 3,
 			kTrees,
 			kDecals,
 			kProjectedUv,
 			kMtLand,
 			kShadows,
 			kShadowOwnership,
-			kDebugView,
-			kHybridNoSkip,
-			kOnlyEligible,
-			kNoZPrepass,
 			kSwitchNodes,
 			kSkinPartitions,
 			kActors,
@@ -52,11 +46,9 @@ namespace DCLF
 		ToggleSet FromSwitches()
 		{
 			ToggleSet set;
-			set.hybrid = OnUnlessOff("CS_DCLF_HYBRID");
 			set.ownership = StaticUnlessOff("CS_DCLF_OWNERSHIP");
 			const auto cull = SwitchValue("CS_DCLF_CULL");
 			set.cullMode = (cull.empty() || cull == "occlusion") ? 2 : cull == "frustum" ? 1 : 0;
-			set.cullTracked = SwitchValue("CS_DCLF_CULL_INPUT") == "tracked";
 			set.skinned = OnUnlessOff("CS_DCLF_SKINNED");
 			set.trees = OnUnlessOff("CS_DCLF_TREES");
 			set.decals = OnUnlessOff("CS_DCLF_DECALS");
@@ -75,29 +67,24 @@ namespace DCLF
 			set.skyOcclusion = OnUnlessOff("CS_DCLF_SKYLIGHT");
 			// `probe` is PrimaryCull's census, which removes nothing (and so leaves the cut off).
 			set.excludePrimaryEntries = OnUnlessOff("CS_DCLF_PRIMARY_EXCLUDE");
-			set.debugView = SwitchEnabled("CS_DCLF_DEBUG_VIEW");
-			set.hybridNoSkip = SwitchEnabled("CS_DCLF_HYBRID_NOSKIP");
-			set.onlyEligible = SwitchEnabled("CS_DCLF_ONLY_ELIGIBLE");
-			set.noZPrepass = SwitchEnabled("CS_DCLF_NO_ZPREPASS");
 			return set;
 		}
 
-		/** @brief The combinations that cannot hold: ownership without the path that draws into the frame. */
+		/** @brief The combinations that cannot hold: each toggle off while one it needs is off. */
 		ToggleSet Normalised(ToggleSet a_set)
 		{
-			a_set.ownership = a_set.ownership && a_set.hybrid;
 			a_set.shadowOwnership = a_set.shadowOwnership && a_set.shadows;
 			a_set.skipSunAccumulation = a_set.skipSunAccumulation && a_set.shadowOwnership;
 			a_set.excludeSunEntries = a_set.excludeSunEntries && a_set.skipSunAccumulation;
 			a_set.skyOcclusion = a_set.skyOcclusion && a_set.shadows;
-			a_set.excludePrimaryEntries = a_set.excludePrimaryEntries && a_set.excludeSunEntries && a_set.ownership && !a_set.cullTracked;
+			a_set.excludePrimaryEntries = a_set.excludePrimaryEntries && a_set.excludeSunEntries && a_set.ownership;
 			a_set.skinPartitions = a_set.skinPartitions && a_set.skinned;
 			return a_set;
 		}
 
 		bool EntersClassification(const ToggleSet& a, const ToggleSet& b)
 		{
-			return a.hybrid != b.hybrid || a.cullTracked != b.cullTracked || a.skinned != b.skinned || a.trees != b.trees ||
+			return a.skinned != b.skinned || a.trees != b.trees ||
 			       a.decals != b.decals || a.projectedUv != b.projectedUv || a.mtLand != b.mtLand || a.switchNodes != b.switchNodes ||
 			       a.skinPartitions != b.skinPartitions || a.actors != b.actors || a.fading != b.fading ||
 			       a.lodCrossfade != b.lodCrossfade || a.skyOcclusion != b.skyOcclusion;
@@ -120,10 +107,8 @@ namespace DCLF
 	{
 		std::uint32_t bits = 0;
 		auto put = [&](std::uint32_t a_bit, bool a_on) { bits |= (a_on ? 1u : 0u) << a_bit; };
-		put(kHybrid, s.hybrid);
 		put(kOwnership, s.ownership);
 		bits |= (s.cullMode & 3u) << kCullMode;
-		put(kCullTracked, s.cullTracked);
 		put(kSkinned, s.skinned);
 		put(kTrees, s.trees);
 		put(kDecals, s.decals);
@@ -131,10 +116,6 @@ namespace DCLF
 		put(kMtLand, s.mtLand);
 		put(kShadows, s.shadows);
 		put(kShadowOwnership, s.shadowOwnership);
-		put(kDebugView, s.debugView);
-		put(kHybridNoSkip, s.hybridNoSkip);
-		put(kOnlyEligible, s.onlyEligible);
-		put(kNoZPrepass, s.noZPrepass);
 		put(kSwitchNodes, s.switchNodes);
 		put(kSkinPartitions, s.skinPartitions);
 		put(kActors, s.actors);
@@ -151,10 +132,8 @@ namespace DCLF
 	{
 		ToggleSet s;
 		auto get = [&](std::uint32_t a_bit) { return ((a_bits >> a_bit) & 1u) != 0; };
-		s.hybrid = get(kHybrid);
 		s.ownership = get(kOwnership);
 		s.cullMode = static_cast<std::uint8_t>((a_bits >> kCullMode) & 3u);
-		s.cullTracked = get(kCullTracked);
 		s.skinned = get(kSkinned);
 		s.trees = get(kTrees);
 		s.decals = get(kDecals);
@@ -162,10 +141,6 @@ namespace DCLF
 		s.mtLand = get(kMtLand);
 		s.shadows = get(kShadows);
 		s.shadowOwnership = get(kShadowOwnership);
-		s.debugView = get(kDebugView);
-		s.hybridNoSkip = get(kHybridNoSkip);
-		s.onlyEligible = get(kOnlyEligible);
-		s.noZPrepass = get(kNoZPrepass);
 		s.switchNodes = get(kSwitchNodes);
 		s.skinPartitions = get(kSkinPartitions);
 		s.actors = get(kActors);

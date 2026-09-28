@@ -15,7 +15,7 @@ namespace DCLF
 		rhi::PipelineLayoutHandle layout{};
 		std::array<rhi::IndirectPipelineSetHandle, kVariantCount> sets{};  // by variant (DrawPipelines.h)
 		std::array<rhi::CommandSignatureHandle, kVariantCount> signatures{};
-		// The depth pass's: the depth variant's signature, preprocessed implicitly even with CS_DCLF_DGC_PREPROCESS. It is one
+		// The depth pass's: the depth variant's signature, preprocessed implicitly. It is one
 		// call over sequences written just before it, which an explicit preprocess only serialises (+17 us at Riverwood).
 		rhi::CommandSignatureHandle depthPassSignature{};
 		// The set version these handles belong to (DrawPipelines.cpp, SetVersion): while any copy of this state lives, the

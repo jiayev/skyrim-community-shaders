@@ -28,31 +28,6 @@ namespace DCLF
 		return mode;
 	}
 
-	bool AsyncJobEnabled(const char* a_job)
-	{
-		if (AsyncModeSetting() == AsyncMode::Off)
-			return false;
-		static const std::string jobs = SwitchValue("CS_DCLF_ASYNC_JOBS");
-		if (jobs.empty())
-			return true;
-		// A comma-separated list; a match is a whole item, so "shadow" does not enable "shadowview".
-		std::size_t begin = 0;
-		while (begin <= jobs.size()) {
-			std::size_t end = jobs.find(',', begin);
-			if (end == std::string::npos)
-				end = jobs.size();
-			std::size_t first = begin, last = end;
-			while (first < last && (jobs[first] == ' ' || jobs[first] == '\t'))
-				++first;
-			while (last > first && (jobs[last - 1] == ' ' || jobs[last - 1] == '\t'))
-				--last;
-			if (jobs.compare(first, last - first, a_job) == 0)
-				return true;
-			begin = end + 1;
-		}
-		return false;
-	}
-
 	std::chrono::microseconds AsyncWaitBudget()
 	{
 		static const std::chrono::microseconds budget = [] {
@@ -294,12 +269,6 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Worker.WaitIdle");
 		std::unique_lock lock(impl->queueMutex);
 		impl->idle.wait(lock, [&] { return impl->queue.empty() && !impl->running; });
-	}
-
-	bool AsyncWorker::Idle() const
-	{
-		std::lock_guard lock(impl->queueMutex);
-		return impl->queue.empty() && !impl->running;
 	}
 
 	std::string AsyncWorker::Report()

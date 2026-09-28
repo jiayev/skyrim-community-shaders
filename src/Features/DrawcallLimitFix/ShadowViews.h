@@ -47,8 +47,7 @@ namespace DCLF
 		 * has the volumetric flag (+0x12E, which BSShadowDirectionalLight::Accumulate always sets) gives it a pass
 		 * only in the property's volumetricShadowUtilityPasses, drawn into the volumetric lighting copy and never
 		 * into the sun's cascades (batch group 15, accumulation hint 8). DCLF draws it in the copy's views alone
-		 * (kObjectVolumetricOnly) where PassCapture can withhold that pass (VolumetricClaimsAvailable: AE), and
-		 * leaves it to the engine otherwise.
+		 * (kObjectVolumetricOnly), and PassCapture withholds the engine's pass.
 		 */
 		VolumetricOnly,
 		Count
@@ -136,8 +135,6 @@ namespace DCLF
 		std::span<const View> All() const { return views; }
 		bool Valid() const { return valid; }
 
-		/** @brief The view a batch renderer belongs to, or ~0u. Includes the geometry groups' renderers. */
-		std::uint32_t ViewOfBatch(const RE::BSBatchRenderer* a_batch) const;
 		/** @brief The view an accumulator belongs to, or ~0u. */
 		std::uint32_t ViewOfAccumulator(const void* a_accumulator) const;
 

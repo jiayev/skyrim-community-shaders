@@ -16,20 +16,22 @@ namespace RE
 namespace DCLF
 {
 	/**
-	 * @brief Phase 2: DCLF's objects drawn by the render graph with one indirect command stream, into
-	 * off-screen copies of the main pass's targets (the frame itself is unchanged).
+	 * @brief DCLF's objects drawn by the render graph with indirect command streams, into the main pass's own
+	 * targets and depth; the native loop skips what DCLF drew.
 	 *
-	 * Where the main (deferred) pass's opaque batches start, CaptureMainPass records what the pass binds;
-	 * before the deferred composite, Execute runs the graph's MainOpaque epoch. Inside it the draw data is assembled on the CPU and uploaded:
+	 * Inside the native depth pass, CaptureDepthPass runs the ZPrepass epoch (DCLF's depth, then the HZB and the
+	 * two-phase occlusion cull). Where the main (deferred) pass's opaque batches start, CaptureMainPass records
+	 * what the pass binds, and where they end ExecuteColour runs the MainOpaque epoch. The draw data is
+	 * assembled on the CPU (on the worker where it can be, AsyncWorker.h) and uploaded:
 	 *   - constant blocks packed with the native shaders' constant tables: PerTechnique per pipeline,
 	 *     PerMaterial per (material, pipeline), PerGeometry per object, Light Limit Fix's StrictLightData
 	 *     per (room, shadow mask), the permutation per (pipeline, object flags), the alpha-test reference
 	 *     per threshold, and every other bound constant buffer from its CPU mirror (ConstantMirror);
 	 *   - one DrawBindings record per object (constant buffer addresses, texture and sampler heap indices);
 	 *   - one DrawSequence per object.
-	 * A graph pass then executes the sequences against the main depth buffer (imported from DXVK, read
-	 * only, depth test EQUAL) into eight graph-owned targets with the main pass's formats. An object is
-	 * drawn only when everything its pipeline's shaders read can be supplied.
+	 * The colour pass executes the sequences against the Z-prepass's depth (depth test EQUAL) into the main
+	 * pass's targets, imported from DXVK. An object is drawn only when everything its pipeline's shaders read
+	 * can be supplied.
 	 *
 	 * Render thread only.
 	 */
@@ -160,11 +162,6 @@ namespace DCLF
 
 		static IndirectDraws& Get();
 
-		bool Enabled() const;
-
-		/** @brief CS_DCLF_HYBRID=1: DCLF draws into the main pass's targets and the native loop skips its objects. */
-		static bool Hybrid();
-
 		/**
 		 * @brief Whether the epoch drew this geometry in the frame before, which is what the native loop
 		 * skips: the epoch runs after the native passes, so its decision is one frame old. An object that
@@ -220,17 +217,9 @@ namespace DCLF
 		 */
 		void CheckCapturePoint();
 
-
 		/**
-		 * @brief Before the deferred composite: assemble this frame's draws and execute them. Constant buffer
-		 * contents are read here, once the main pass has drawn with them (the engine updates its per-frame
-		 * buffers while it applies a draw's state, after the first draw's SetupGeometry).
-		 */
-		void Execute();
-
-		/**
-		 * @brief Hybrid path, inside the native depth pass once the world's depth is drawn (AE; at its end
-		 * elsewhere): assemble this frame's draws and write their depth into the engine's main depth.
+		 * @brief Inside the native depth pass, once the world's depth is drawn: assemble this frame's draws and
+		 * write their depth into the engine's main depth.
 		 *
 		 * It runs here, and not with the colour pass, because everything the rest of the frame does with
 		 * depth - the native draws' own depth test, the sky, Terrain Blending's blended depth and every
@@ -240,7 +229,7 @@ namespace DCLF
 		 */
 		void CaptureDepthPass();
 
-		/** @brief Hybrid path, before the deferred composite: the colour pass, against the depth above. */
+		/** @brief Where the main pass's opaque batches end: the colour pass, against the depth above. */
 		void ExecuteColour();
 
 		/**
@@ -280,17 +269,11 @@ namespace DCLF
 		 */
 		void ProbeTargets(const char* a_label);
 
-		/** @brief Before the deferred composite: with CS_DCLF_DEBUG_VIEW=1, replace the main pass's targets with DCLF's. */
-		void ShowDebugView();
-
 		/** @brief CS_DCLF_SHADOWS=1: the shadow views are drawn by the render graph as well. */
 		static bool ShadowsEnabled();
 
-		/**
-		 * @brief BeforeShadowMaps: the shadow frame begins. The eye is the reference every record of the
-		 * frame is packed relative to; each view's epoch adds its own eye delta (Utility.hlsl, DCLFEyeDelta).
-		 */
-		void BeginShadowFrame(const RE::NiPoint3& a_eye);
+		/** @brief BeforeShadowMaps: the shadow frame begins; the views are captured from here (ExecuteShadowView). */
+		void BeginShadowFrame();
 
 		/**
 		 * @brief Inside a shadow view's FinishAccumulatingPreResolveDepth, after the native draws: captures
@@ -319,14 +302,7 @@ namespace DCLF
 		 */
 		void CaptureSkyOcclusion();
 		bool SkyOcclusionReady() const;
-		bool ExecuteSkyOcclusion(bool a_diagnose = false);
-		/** @brief [TEMP] CS_DCLF_SKYLIGHT_PARITY: each diagnosed occluder's footprint in the map (texels), for the comparison. */
-		struct SkyFootprint
-		{
-			std::int32_t x0 = 0, x1 = 0, y0 = 0, y1 = 0;
-			std::string label;
-		};
-		std::vector<SkyFootprint> skyFootprints;
+		bool ExecuteSkyOcclusion();
 
 		/** @brief Why a shadow view was offered to the epoch and not drawn (ShadowStats::notReadyReasons). */
 		enum class ShadowNotReady : std::uint32_t
@@ -349,7 +325,6 @@ namespace DCLF
 			std::uint32_t notReady = 0;        // views skipped: resources, pipelines or the depth import not ready
 			std::array<std::uint32_t, static_cast<std::size_t>(ShadowNotReady::Count)> notReadyReasons{};
 			std::uint32_t focusSkipped = 0;    // focus views, native until S4
-			std::uint32_t volumetricSkipped = 0;  // volumetric lighting copies: only volumetric-only casters, native
 			std::uint32_t faceUploads = 0;        // face position regions uploaded (a head's snapshot changed), per report interval
 			// The culling's GPU counters of one sampled view (the count buffer read back a few frames after
 			// its epoch): what says the frustum test is doing something, and against which view.

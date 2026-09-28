@@ -8,18 +8,16 @@ namespace DCLF
 	/**
 	 * @brief The feature switches that can change while the game runs, for live A/B comparisons.
 	 *
-	 * Every non-default feature of DCLF - the hybrid path, static ownership, the culling modes, the object
-	 * classes (skinned, trees, decals, projected UV, terrain, switch nodes, skin partitions, actors), the shadow views and their ownership, and
-	 * the diagnostic modes - is seeded from its `CS_DCLF_*` switch (Switches.h) and then edited from the
-	 * feature's menu. Unset, the features default to the tested configuration (everything on, both
-	 * ownerships static, occlusion culling); the diagnostics default off.
+	 * DCLF's features that can be switched live - static ownership, the culling modes, the object classes
+	 * (skinned, trees, decals, projected UV, terrain, switch nodes, skin partitions, actors, fading), the
+	 * shadow views and their ownership, the sun's and the primary's exclusions and Skylighting's map - are
+	 * seeded from their `CS_DCLF_*` switches (Switches.h) and then edited from the feature's menu. Unset, they
+	 * default to the tested configuration: everything on, both ownerships static, occlusion culling.
 	 */
 	struct ToggleSet
 	{
-		bool hybrid = false;          // CS_DCLF_HYBRID=1
-		bool ownership = false;       // CS_DCLF_OWNERSHIP=static (needs hybrid)
+		bool ownership = false;       // CS_DCLF_OWNERSHIP=static
 		std::uint8_t cullMode = 0;    // CS_DCLF_CULL: 0 off, 1 frustum, 2 occlusion
-		bool cullTracked = false;     // CS_DCLF_CULL_INPUT=tracked
 		bool skinned = false;         // CS_DCLF_SKINNED=1
 		bool trees = false;           // CS_DCLF_TREES=1
 		bool decals = false;          // CS_DCLF_DECALS=1
@@ -36,10 +34,6 @@ namespace DCLF
 		bool excludeSunEntries = false;    // CS_DCLF_SUN_EXCLUDE=1 (needs skipSunAccumulation): SunAccumulation's entry exclusion
 		bool skyOcclusion = false;         // CS_DCLF_SKYLIGHT=1 (needs shadows): DCLF draws Skylighting's occlusion map
 		bool excludePrimaryEntries = false;  // CS_DCLF_PRIMARY_EXCLUDE=1 (needs excludeSunEntries and ownership): PrimaryCull's list filter
-		bool debugView = false;       // CS_DCLF_DEBUG_VIEW=1
-		bool hybridNoSkip = false;    // CS_DCLF_HYBRID_NOSKIP=1
-		bool onlyEligible = false;    // CS_DCLF_ONLY_ELIGIBLE=1
-		bool noZPrepass = false;      // CS_DCLF_NO_ZPREPASS=1
 
 		bool operator==(const ToggleSet&) const = default;
 	};
@@ -54,8 +48,7 @@ namespace DCLF
 	 * on: a toggle is a standing statement, not a synchronisation point, and one word makes every read a
 	 * single load with no lock.
 	 *
-	 * A change to a toggle that enters the classification (the object classes, the hybrid path, the culling
-	 * input) invalidates every cached verdict and derivation (SceneStore::InvalidateVerdicts), because those
+	 * A change to a toggle that enters the classification (the object classes) invalidates every cached verdict and derivation (SceneStore::InvalidateVerdicts), because those
 	 * caches witness the object, not the switches.
 	 */
 	class Toggles

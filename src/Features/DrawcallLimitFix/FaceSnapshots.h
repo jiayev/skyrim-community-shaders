@@ -44,7 +44,7 @@ namespace DCLF
 	public:
 		static FaceSnapshots& Get();
 
-		/** @brief CS_DCLF_FACEGEN (default on), and the writer's thunks are installed (AE). */
+		/** @brief Whether the writer's thunks are installed (Install checked the engine's code first). */
 		static bool Enabled();
 
 		/** @brief Installs the two thunks in the engine's face morphing (AE only). */
@@ -90,8 +90,6 @@ namespace DCLF
 		HeadView HeadSnapshot(RE::BSFaceGenNiNode& a_head);
 		/** @brief Retires the records of heads the walk did not see. */
 		void EndWalk();
-		/** @brief Retires every record (the live toggle, teardown). */
-		void RetireAll();
 
 		struct Stats
 		{
@@ -100,8 +98,6 @@ namespace DCLF
 			std::uint32_t withoutSnapshot = 0; // heads the walk saw with none yet
 			std::uint32_t rebuilt = 0;         // records rebuilt this walk (a head's shapes changed)
 			std::uint32_t retired = 0, freed = 0;
-			// [TEMP] CS_DCLF_VOLUMETRIC_PROBE: shapes whose snapshot equals dynamicData at the walk, and ones that do not.
-			std::uint32_t parityEqual = 0, parityDiffer = 0;
 		};
 		Stats TakeStats();
 

@@ -33,8 +33,8 @@ namespace DCLF
 	 * The cut (toggle `excludePrimaryEntries`, CS_DCLF_PRIMARY_EXCLUDE): the list processes' Process1 (vtable slot 0x16,
 	 * shared with every other list process, so filtered by process) stands in for the cull of every eligible entry, on
 	 * the list job's own thread. For an admitted, settled entry in view (the job's own planes) it:
-	 *   - runs the root's OnVisible update: the fade (ServiceFade), a leaf node's LOD step, a tree's height test and
-	 *     LOD fix-up (ServiceTree), and the visibility bit (kAccumulated) the tree clock reads;
+	 *   - leaves the root's OnVisible update to the visibility feedback (ConsumeFeedback: the fade, a leaf node's LOD
+	 *     step, a tree's LOD fix-up and the visibility bit the tree clock reads), and tests a tree's height;
 	 *   - collects its geometries that DCLF draws (the snapshot's per-geometry verdict, SunCandidates::primaryGeometry)
 	 *     for synthetic main passes (SyntheticPass, built on the worker and taken by the accumulate phase);
 	 *   - hands every other geometry in view to the engine's registration as the cull would (the process's
@@ -59,8 +59,6 @@ namespace DCLF
 
 		/** @brief CS_DCLF_PRIMARY_EXCLUDE=probe. */
 		static bool Probe();
-		/** @brief [TEMP] CS_DCLF_PRIMARY_REASONS=1: what keeps entries in view in the engine's cull, by cause. */
-		static bool ReasonsProbe();
 
 		/**
 		 * @brief A registration through FUN_140e28af0 outside the sun's Accumulate, any thread: counted by accumulator
@@ -91,27 +89,13 @@ namespace DCLF
 		 * the frame's globals alone. The GPU makes the cascade test (kObjectSunTest).
 		 */
 		static std::uint32_t SunShadowStatic(const RE::BSGeometry& a_geometry);
-		/** @brief CS_DCLF_SUN_GPU (default on): synthetic passes take the static bits and the GPU's cascade test. */
-		static bool SunOnGpu();
 		/**
-		 * @brief CS_DCLF_FEEDBACK (default on): the stood-in roots' fade, LOD and tree-clock state is updated from the
-		 * GPU's visibility feedback on DCLF's worker, not in the list jobs (dclf-cull-job-elimination.md, "Phase 2").
-		 */
-		static bool FeedbackOn();
-		/** @brief [TEMP] CS_DCLF_FEEDBACK_PROBE=1: the tree clock under the feedback. */
-		static bool FeedbackProbe();
-		/**
-		 * @brief CS_DCLF_RESIDENT (default on, with the feedback and the switch events, which need the scene delta): resident entries
+		 * @brief Resident entries, whenever the switch events are live
 		 * (dclf-cull-job-elimination.md, "Phase 4 in detail"). An admitted entry that needs nothing per frame has its
 		 * objects' records patched once (SceneStore's resident records), drawn whenever the GPU's cull finds them; its list
 		 * job returns at once, and the visibility feedback services its root.
 		 */
 		static bool ResidentOn();
-		/**
-		 * @brief CS_DCLF_RESIDENT_PROBATION (default on, with ResidentOn): entries not yet admitted join out of view, and the
-		 * build's draws admit them (dclf-cull-job-elimination.md, "Phase 4 in detail", step 2).
-		 */
-		static bool ProbationOn();
 		/** @brief The accumulate phase: the passes of this frame's joining entries' objects (patched once, then kept). */
 		const std::vector<std::pair<const RE::BSGeometry*, AccumulatedPass>>& ResidentPasses() const { return residentPasses; }
 		/** @brief The accumulate phase: whether this frame's PrepareFrame kept the residents (read once a frame). */
@@ -128,11 +112,6 @@ namespace DCLF
 		std::array<float, 4> FadeEye() const { return fadeEye; }
 		/** @brief BSTreeNode::OnVisible's height test this frame, for BuildDraws (kObjectHeightTest): the base and the limit (+infinity: off). */
 		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
-		/**
-		 * @brief [TEMP] CS_DCLF_SWITCH_PROBE=1: in the list jobs, the event-driven selection (memberLive) against the
-		 * switches' indices, and selected children found out of date, both counted.
-		 */
-		static bool SwitchProbe();
 		/**
 		 * @brief The colour commit, render thread (IndirectDraws::ArmFeedback): this frame's stood-in entries, carried
 		 * with the frame's feedback copy to its decode. Null when the cut did not apply this frame.
@@ -369,21 +348,18 @@ namespace DCLF
 			Plain,     // no node under it needs OnVisible, the root included
 			FadeRoot,  // the root is a BSFadeNode (exactly): DCLF runs its OnVisible fade update (ServiceFade); the rest plain
 			LeafRoot,  // ... a BSLeafAnimNode: its LOD step, then the fade update
-			TreeRoot,  // ... a BSTreeNode: its height test, the leaf node's update, its LOD fix-up (ServiceTree)
+			TreeRoot,  // ... a BSTreeNode: its height test, the leaf node's update, its LOD fix-up (ServiceTreeState)
 			Rejected,
 		};
 		/** @brief The entry's plan; its members are appended to cut.members (not for a rejected entry). */
 		EntryPlan PlanOf(std::uint32_t a_entry, const RE::NiAVObject* a_root);
 		std::uintptr_t geometryOnVisible = 0;  // BSGeometry's OnVisible (vtable slot 0x34): a member's must be it
-		std::string lastCause;  // [TEMP] PlanOf's reason for its last rejection
 		/**
 		 * @brief BSFadeNode::OnVisible (AE 0x141479f50) and BSLeafAnimNode::OnVisible (0x14147c9c0) for the main camera,
 		 * without the recursion: the fade and LOD state the engine's cull would have updated. Returns whether OnVisible
 		 * would have gone on into the children (false once the node has faded out).
 		 */
 		static bool ServiceFade(RE::NiAVObject* a_node, bool a_leaf, const RE::NiCamera& a_camera);
-		/** @brief BSTreeNode::OnVisible (AE 0x14147d3c0) without the recursion: false when the tree is not drawn. */
-		static bool ServiceTree(RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process);
 		/** @brief BSTreeNode::OnVisible's height test: true when the tree is above the limit (not drawn, not updated). */
 		static bool TreeAboveLimit(const RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process);
 		/** @brief BSTreeNode::OnVisible past its height test: the leaf update and the LOD fix-up. */
@@ -443,10 +419,6 @@ namespace DCLF
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
 			ankerl::unordered_dense::set<const RE::NiAVObject*> admittedRoots;  // the same by node, kept across snapshots
 			std::vector<std::uint32_t> pendingAdmission;       // this frame: eligible, reached, visible, not yet admitted
-			// [TEMP] CS_DCLF_PRIMARY_REASONS=1: the rejected entries by root, with their cause (an index into causes).
-			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> rejected;
-			std::vector<std::uint16_t> causeOf;  // per entry index
-			std::vector<std::string> causes;
 			std::array<const RE::NiCullingProcess*, 16> processes{};  // the list processes this frame
 			std::uint32_t processCount = 0;
 		};
@@ -461,12 +433,10 @@ namespace DCLF
 			std::vector<std::uint32_t> pending;
 			std::vector<std::uint32_t> stoodIn;  // entries the job left to DCLF this frame, in view or not
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0;
-			std::uint64_t fadeServiced = 0, fadedOut = 0, handedBack = 0, hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
-			std::uint64_t switchMismatch = 0, switchStaleSeen = 0, switchMidUpdate = 0;  // [TEMP] CS_DCLF_SWITCH_PROBE
+			std::uint64_t hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
 			std::uint64_t resident = 0;                     // resident entries the job returned at once
 			std::vector<std::uint32_t> joinCandidates;      // entries stood in for (admitted and settled): may join
 			std::vector<std::uint32_t> probeCandidates;     // entries not admitted and out of view: may join on probation
-			std::array<std::uint64_t, 64> causeGeometries{};  // [TEMP] geometries under rejected entries in view, by cause
 		};
 		std::array<JobOut, 16> jobOut;
 
@@ -479,7 +449,6 @@ namespace DCLF
 			std::uint64_t notSettled = 0, notAdmitted = 0, admittedNow = 0;
 			std::uint64_t synthetic = 0, unmodelled = 0, hiddenSkipped = 0, localShadowed = 0;
 			std::uint64_t holes = 0;
-			std::uint64_t fadeServiced = 0, fadedOut = 0, handedBack = 0;  // ServiceFade calls; roots faded out; fading roots' geometries given to the engine
 			std::uint64_t engineMembers = 0;  // the engine's members in view, handed to its registration
 			std::uint64_t switchStale = 0;    // entries the engine culled this frame because a switch's selected child was out of date
 			std::uint64_t unselected = 0;     // members under an unselected switch child
@@ -491,12 +460,8 @@ namespace DCLF
 			std::uint64_t residentsInView = 0, residentsServiced = 0;  // from the feedback (GPU frustum), per decoded frame
 			std::uint64_t liveAll = 0;        // frames memberLive was read from every switch (a new snapshot, a resync)
 			std::uint64_t liveEntries = 0;    // entries whose memberLive a switch event refreshed
-			std::uint64_t switchMismatch = 0, switchStaleSeen = 0, switchMidUpdate = 0;  // [TEMP] CS_DCLF_SWITCH_PROBE: memberLive wrong; a selected child out of date; one seen mid-update
 			std::uint64_t synthInline = 0, synthLate = 0;                   // synthetic passes built on the render thread; the worker was late
 			std::int64_t prepareTicks = 0, afterTicks = 0, synthWaitTicks = 0;
-			// [TEMP] why entries stay in: plan rejections by cause (per snapshot).
-			std::map<std::string, std::uint64_t> planReasons;
-			std::array<std::uint64_t, 64> causeGeometries{};
 		};
 		CutStats cutStats;
 		std::vector<const RE::BSGeometry*> frameVisible;  // this frame's visible geometries under left-out entries
@@ -557,15 +522,8 @@ namespace DCLF
 			std::atomic<std::uint64_t> frames{ 0 }, stale{ 0 }, entries{ 0 }, visible{ 0 }, serviced{ 0 }, unresolved{ 0 };
 			std::atomic<std::uint64_t> residents{ 0 }, residentsVisible{ 0 };
 			std::atomic<std::uint64_t> residentsFadeHidden{ 0 };  // residents in view the GPU's fade test dropped (kFrustumFadeHidden)
-			std::atomic<std::uint64_t> residentRecordsInView{ 0 };  // [TEMP] resident members inside the frustum, for the object-count comparison
 			std::atomic<std::uint64_t> residentsWitness{ 0 };     // residents whose level or LOD metric state changed
-			// [TEMP] the fade distance against the engine: residents in view past it (CPU), and whether the servicing then
-			// found them fading.
-			std::atomic<std::uint64_t> fadeBeyondFading{ 0 }, fadeBeyondSettled{ 0 }, fadeWithinFading{ 0 };
-			// [TEMP] CS_DCLF_FEEDBACK_PROBE: stood-in trees in view, and those whose clock (+0x164) moved since the last decode.
-			std::atomic<std::uint64_t> trees{ 0 }, treesAdvanced{ 0 };
 		};
-		ankerl::unordered_dense::map<const RE::NiAVObject*, float> treeClocks;  // [TEMP] worker only
 		FeedbackCounters feedbackCounters;
 		std::uint64_t synthJobUnmodelled = 0;
 		std::atomic<bool> synthJobDone{ false };

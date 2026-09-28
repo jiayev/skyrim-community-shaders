@@ -405,24 +405,6 @@ namespace DCLF
 			return signature;
 		}
 
-		/**
-		 * @brief The segment a pass instance serves. With epochs every instance belongs to one epoch and its
-		 * segment is fixed when it is registered, so nothing it prepares or records reads the runtime's
-		 * current segment (a pass prepared ahead of its epoch would see another one). Without epochs one
-		 * instance serves every segment and takes it from the runtime, as before.
-		 */
-		struct SegmentBinding
-		{
-			bool fixed = false;
-			RenderGraphRuntime::Segment segment = RenderGraphRuntime::Segment::MainOpaque;
-
-			static SegmentBinding Of(RenderGraphRuntime::Segment a_segment)
-			{
-				return { RenderGraphRuntime::EpochsEnabled(), a_segment };
-			}
-			RenderGraphRuntime::Segment Now() const { return fixed ? segment : RenderGraphRuntime::Get().CurrentSegment(); }
-		};
-
 		// CS_DCLF_BINDLESS_PARITY: the per-object record against the packed constant group, variable by
 		// variable. Both are produced from tables.objects and tables.shading by the same rules, so the
 		// comparison is exact rather than tolerant - a tolerance here would only hide a layout mistake.
@@ -533,7 +515,6 @@ namespace DCLF
 
 		// The probe's sample points, in the order they happen within a frame.
 		constexpr const char* kProbeFirstLabel = "before z-prepass";
-		constexpr const char* kProbeLastLabel = "after colour";
 
 		constexpr std::uint32_t kSharedDataRegister = 5;   // SharedData (SharedData.hlsli), bound by Community Shaders
 		constexpr std::uint32_t kFeatureDataRegister = 6;  // FeatureData, likewise
@@ -558,21 +539,19 @@ namespace DCLF
 			std::uint32_t drawCapacity = 0;
 			std::array<std::uint32_t, kDecalGroups> decalCapacity{};
 			std::uint32_t cullMode = 0;
-			bool offscreen = false;  // colour drawn into DCLF's own targets even on the hybrid path
 			bool probePixel = false;
 			std::uint32_t probeX = 0, probeY = 0;
 			std::uint32_t width = 0, height = 0;  // render area: the main pass viewport
 			float minDepth = 0.0f, maxDepth = 1.0f;  // its depth range (the engine uses [0, 0.999998])
-			bool hybrid = false;
 			rhi::DescriptorHeapHandle resourceHeap{};
 			rhi::DescriptorHeapHandle samplerHeap{};
 			IndirectState indirect{};
 
 			bool SameShape(const PassFrame& o) const
 			{
-				return drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && cullMode == o.cullMode && offscreen == o.offscreen &&
+				return drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
-				       minDepth == o.minDepth && maxDepth == o.maxDepth && hybrid == o.hybrid && SameHandle(resourceHeap, o.resourceHeap) &&
+				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
 				       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect);
 			}
 		};
@@ -688,7 +667,7 @@ namespace DCLF
 		struct PassStats;
 
 		/**
-		 * @brief The state lists of one recording site's explicit DGC preprocesses (DgcPreprocessEnabled), one per frame slot:
+		 * @brief The state lists of one recording site's explicit DGC preprocesses (DrawPipelines.h), one per frame slot:
 		 * graphics lists that are never submitted. vkCmdPreprocessGeneratedCommandsEXT is recorded outside any pass but
 		 * generates for the state of another list, render pass included, which the execution must then match exactly; so
 		 * a site begins each of its passes on its slot's list and sets it up as the execution will (heaps, layout, topology,
@@ -773,16 +752,11 @@ namespace DCLF
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
 			std::uint64_t frameConstantsAddress = 0;
-			std::array<std::shared_ptr<org::PixelBuffer>, kColorTargets> targets;
+			// The main pass's own targets and depth, imported: DCLF draws into them, and the native loop skips the
+			// objects it drew (DrawcallLimitFix's RenderPassImmediately hooks).
 			std::uint32_t targetCount = 0;
-			std::shared_ptr<org::Resource> depth;  // DCLF's own Z-prepass (the objects it draws)
-			// The native main-pass targets: overwritten with DCLF's before the composite (CS_DCLF_DEBUG_VIEW),
-			// or drawn into directly (CS_DCLF_HYBRID, where the native loop skips DCLF's objects instead).
 			std::array<std::shared_ptr<org::ExternalTextureResource>, kColorTargets> native;
 			std::shared_ptr<org::ExternalTextureResource> nativeDepth;
-			// What the passes bind: the native targets on the hybrid path, DCLF's own copies otherwise.
-			std::array<std::shared_ptr<org::Resource>, kColorTargets> drawTargets;
-			std::shared_ptr<org::Resource> drawDepth;
 			// CS_DCLF_GBUFFER_PROBE: one texel of every target, copied inside the epoch both before and
 			// after the colour draws. The copies are graph passes so the graph orders them against the
 			// draws; a D3D11 readback issued around the epoch is not ordered against ORG's submissions at
@@ -828,14 +802,12 @@ namespace DCLF
 			};
 			std::shared_ptr<Feedback> feedback;
 			std::shared_ptr<PassStats> passStats;  // CS_DCLF_PASS_STATS
-			// The explicit DGC preprocesses' state list (DgcPreprocessEnabled) of the colour segment's passes. The depth pass
+			// The explicit DGC preprocesses' state list of the colour segment's passes. The depth pass
 			// has none: IndirectState::depthPassSignature.
 			std::shared_ptr<PreprocessStates> preprocessMain;
 			std::shared_ptr<org::PixelBuffer> hzb;
 			std::shared_ptr<const ComputeProgram> hzbProgram;
 			std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
-			bool hybrid = false;
-			bool offscreen = false;
 			std::uint32_t width = 0, height = 0;
 			bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
 			// Per drawing segment (kDepthShape, kColourShape): the shape its passes record against, null while
@@ -949,8 +921,7 @@ namespace DCLF
 		struct PreparedDraws
 		{
 			PassStats* stats = nullptr;  // CS_DCLF_PASS_STATS
-			PreprocessStates* preprocess = nullptr;  // null: the calls preprocess implicitly (CS_DCLF_DGC_PREPROCESS=0)
-			bool framePush = false;
+			PreprocessStates* preprocess = nullptr;  // the frame slot's explicit DGC preprocess state list
 			std::array<std::uint32_t, kFramePushWords> framePushWords{};
 			std::shared_ptr<const PassFrame> frame;
 			std::array<org::PreparedDescriptorReference, kColorTargets> targetViews{};
@@ -971,15 +942,6 @@ namespace DCLF
 			return nullptr;
 		}
 
-		/**
-		 * @brief CS_DCLF_SORT_DRAWS (default on; =0 off): the phase-1 and colour draws executed grouped by pipeline. BuildDraws
-		 * appends in whatever order its threads finish, which made nearly every sequence of the indirect draw switch pipeline.
-		 */
-		bool SortDraws()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_SORT_DRAWS") != "0";
-			return enabled;
-		}
 		static_assert(DrawPipelines::kMaxPipelines == 4096, "BuildDrawsCS.hlsl's kSortKeys");
 
 		/** @brief Whether BuildDraws runs in the segment (BuildDrawsPass::Prepare's conditions), which is when a sort follows it. */
@@ -993,7 +955,7 @@ namespace DCLF
 		public:
 			// phaseTwo: the second depth draw of the two-phase culling, which draws only what the rebuilt HZB
 			// brought back, from the reserved part of the sequence buffer.
-			MainOpaquePass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment, bool a_phaseTwo = false) :
+			MainOpaquePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_phaseTwo = false) :
 				resources(std::move(a_resources)), segment(a_segment), phaseTwo(a_phaseTwo) {}
 
 			PassBindings Declare(org::PassBuilder& a_builder)
@@ -1002,8 +964,8 @@ namespace DCLF
 				const std::span<const org::SrvView> noViews{};  // Device-address reads need ordering, not a descriptor.
 				PassBindings bindings{};
 				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-					bindings.targets[i] = a_builder.RenderTarget(resources->drawTargets[i]).View();
-				bindings.depth = a_builder.DepthReadWrite(resources->drawDepth).View();
+					bindings.targets[i] = a_builder.RenderTarget(resources->native[i]).View();
+				bindings.depth = a_builder.DepthReadWrite(resources->nativeDepth).View();
 				bindings.sequences = a_builder.IndirectArguments(resources->sequences);
 				bindings.count = a_builder.IndirectArguments(resources->count);
 				// Read through device addresses; declared so the graph orders them after their uploads.
@@ -1032,7 +994,7 @@ namespace DCLF
 
 			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 			{
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources, now);
 				a_out.push_back(frame ? frame->generation : 0);
 				a_out.push_back(static_cast<std::uint64_t>(now));
@@ -1042,7 +1004,7 @@ namespace DCLF
 			PreparedDraws Prepare(const PassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				PreparedDraws prepared{};
-				const auto now = segment.Now();
+				const auto now = segment;
 				auto frame = CurrentFrame(*resources, now);
 				if (!frame || (!frame->drawCapacity && !frame->decalCapacity[0] && !frame->decalCapacity[1]) || !frame->indirect.valid)
 					return prepared;
@@ -1054,9 +1016,7 @@ namespace DCLF
 				prepared.stats = resources->passStats.get();
 				if (!prepared.zPrepass)
 					prepared.preprocess = resources->preprocessMain.get();
-				prepared.framePush = FramePushEnabled();
-				if (prepared.framePush)
-					prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
+				prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
 				prepared.frame = std::move(frame);
 				prepared.targetCount = resources->targetCount;
 				for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
@@ -1075,14 +1035,12 @@ namespace DCLF
 				std::array<rhi::ColorAttachment, kColorTargets> colors{};
 				for (std::uint32_t i = 0; i < a_prepared.targetCount; ++i) {
 					colors[i].rtv = a_recording.Resolve(a_prepared.targetViews[i]);
-					colors[i].loadOp = (frame.hybrid && !frame.offscreen) ? rhi::LoadOp::Load : rhi::LoadOp::Clear;
+					colors[i].loadOp = rhi::LoadOp::Load;
 					colors[i].storeOp = rhi::StoreOp::Store;
 					colors[i].resource = a_recording.Resolve(a_bindings.targets[i].Resource()).GetHandle();
 				}
 				const bool zPrepass = a_prepared.zPrepass;
-				if (zPrepass && !frame.hybrid)
-					return;  // off the hybrid path both passes run together in the main segment
-				if (a_prepared.phaseTwo && !(zPrepass && frame.hybrid))
+				if (a_prepared.phaseTwo && !zPrepass)
 					return;
 				const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
 				const auto count = a_recording.Resolve(a_bindings.count).GetHandle();
@@ -1092,20 +1050,18 @@ namespace DCLF
 				begin.minDepth = frame.minDepth;
 				begin.maxDepth = frame.maxDepth;
 
-				// DCLF's Z-prepass: depth only, like the native one. On the hybrid path it adds DCLF's objects
-				// to the depth the native passes already wrote, so they occlude and are occluded correctly.
+				// DCLF's Z-prepass: depth only, like the native one. It adds DCLF's objects to the depth the native
+				// passes already wrote, so they occlude and are occluded correctly. It runs in its own segment,
+				// inside the native depth pass, so that the rest of the frame - the native draws that test depth,
+				// the sky and everything that reads the depth buffer afterwards - sees DCLF's objects.
 				rhi::DepthAttachment depth{};
 				depth.dsv = a_recording.Resolve(a_prepared.depthView);
-				depth.depthLoad = frame.hybrid ? rhi::LoadOp::Load : rhi::LoadOp::Clear;
+				depth.depthLoad = rhi::LoadOp::Load;
 				depth.depthStore = rhi::StoreOp::Store;
-				depth.stencilLoad = frame.hybrid ? rhi::LoadOp::Load : rhi::LoadOp::Clear;
-				depth.stencilStore = frame.hybrid ? rhi::StoreOp::Store : rhi::StoreOp::DontCare;
-				depth.clear.depthStencil.depth = 1.0f;
+				depth.stencilLoad = rhi::LoadOp::Load;
+				depth.stencilStore = rhi::StoreOp::Store;
 				begin.depth = &depth;
 				begin.debugName = "DCLF depth";
-				// DCLF's Z-prepass. On the hybrid path it runs in its own segment, at the first draw of the
-				// native main pass, so that the rest of the frame - the native draws that test depth, the sky
-				// and everything that reads the depth buffer afterwards - sees DCLF's objects.
 				auto* stats = a_prepared.stats;
 				const std::uint32_t statsSlot = a_recording.FrameSlot();
 				const auto depthKind = a_prepared.phaseTwo ? PassStats::kDepthPhaseTwo : PassStats::kDepth;
@@ -1115,8 +1071,7 @@ namespace DCLF
 					a_list.BeginPass(a_begin);
 					a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 					a_list.BindLayout(frame.indirect.layout);
-					if (a_prepared.framePush)
-						a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+					a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
 				};
 				// The frame slot's preprocess state list, with this pass's heaps; null without explicit preprocessing.
 				auto preprocessState = [&]() -> rhi::CommandList* {
@@ -1126,12 +1081,7 @@ namespace DCLF
 					state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
 					return &state;
 				};
-				if (!frame.hybrid || zPrepass) {
-					// CS_DCLF_ZPREPASS_EMPTY=1: begin and end the pass but draw nothing, to tell apart damage
-					// done by the depth writes from damage done by the epoch merely running here (its
-					// submission, and the layout the attachment is left in).
-					static const bool empty = SwitchEnabled("CS_DCLF_ZPREPASS_EMPTY");
-					const bool draws = !(zPrepass && empty);
+				if (zPrepass) {
 					// Phase 2 draws only the rescues, from the reserved half of the sequence buffer and
 					// its own counter word. Its argument offset has to be a constant the CPU knows, which
 					// is why the two phases have fixed ranges instead of sharing one.
@@ -1140,34 +1090,26 @@ namespace DCLF
 					if (stats)
 						stats->Start(commands, statsSlot, depthKind);
 					beginDrawPass(commands, begin);
-					if (draws) {
-						if (stats)
-							stats->Begin(commands, statsSlot, depthKind);
-						commands.ExecuteIndirect(frame.indirect.depthPassSignature, sequences, argumentOffset, count, countOffset, frame.drawCapacity);
-						if (stats)
-							stats->End(commands, statsSlot, depthKind);
-					}
+					if (stats)
+						stats->Begin(commands, statsSlot, depthKind);
+					commands.ExecuteIndirect(frame.indirect.depthPassSignature, sequences, argumentOffset, count, countOffset, frame.drawCapacity);
+					if (stats)
+						stats->End(commands, statsSlot, depthKind);
 					commands.EndPass();
 					if (stats)
 						stats->Resolve(commands, statsSlot, depthKind);
-				}
-				if (a_prepared.phaseTwo)
 					return;
+				}
 
-				// The main pass: depth test EQUAL against it (its pipelines do not write depth; the attachment
-				// stays in the layout the pass declared).
-				depth.depthLoad = rhi::LoadOp::Load;
-				depth.stencilLoad = rhi::LoadOp::Load;
-				if (zPrepass)
-					return;  // the colour pass belongs to the main segment
+				// The main pass: depth test EQUAL against the Z-prepass's (its pipelines do not write depth; the
+				// attachment stays in the layout the pass declared).
 
-				// The opaque decals' depth (CS_DCLF_DECAL_DEPTH, default on, =0 off), before any colour: the engine's main pass
+				// The opaque decals' depth, before any colour: the engine's main pass
 				// draws its opaque decal group with depth writes and its bias, so this is where the frame's depth has them, and
 				// with it every host fragment under an opaque decal texel fails the colour pass's EQUAL test and is not shaded -
 				// the decal overwrites every target there (blending off, full masks). The group's depth variants test LESS_EQUAL
 				// with the decal's bias and run the alpha test, so a transparent texel leaves the host's depth. The blended
 				// group has none: it writes no depth natively, and it blends over its host, which must still be shaded.
-				static const bool decalDepth = SwitchValue("CS_DCLF_DECAL_DEPTH") != "0";
 				// nvperf ranges around the colour pass's parts (NvPerfBridge::PushPassRange), when a capture selects them.
 				void* const nvCommands = NvPerfBridge::Active() ? rhi::vulkan::get_cmd_list(commands) : nullptr;
 				auto subRange = [&](const char* a_name) { return nvCommands && NvPerfBridge::PushPassRange(nvCommands, a_name); };
@@ -1189,14 +1131,14 @@ namespace DCLF
 				auto decalArguments = [](std::uint32_t a_group) { return std::uint64_t(kDecalSequenceBase + a_group * kMaxDecalDraws) * sizeof(DrawSequence); };
 				auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(kCountDecalGroupWord + a_group) * sizeof(std::uint32_t); };
 
-				// Every call below is preprocessed here, before the first pass (CS_DCLF_DGC_PREPROCESS): generated inside the pass
+				// Every call below is preprocessed here, before the first pass: generated inside the pass
 				// instead, by NVIDIA's driver, each colour call cost a fixed ~170 us of idle GPU in these eight-target passes. The
 				// preprocess is generated for the state list's state - each call's pass begun and set up exactly as it is below,
 				// with the same heaps - which the execution must match; the sequences and counts are final before this pass (the
 				// culling wrote them).
 				if (auto* preprocessList = preprocessState()) {
 					auto& state = *preprocessList;
-					if (decalDepth && frame.decalCapacity[0]) {
+					if (frame.decalCapacity[0]) {
 						beginDrawPass(state, decalDepthBegin);
 						commands.PreprocessIndirect(state, frame.indirect.signatures[kDepthVariant], sequences, decalArguments(0), count, decalCount(0), frame.decalCapacity[0]);
 						state.EndPass();
@@ -1215,7 +1157,7 @@ namespace DCLF
 					state.End();
 				}
 
-				if (decalDepth && frame.decalCapacity[0]) {
+				if (frame.decalCapacity[0]) {
 					const bool part = subRange("cs.dclf.colour.decal-depth");
 					beginDrawPass(commands, decalDepthBegin);
 					commands.ExecuteIndirect(frame.indirect.signatures[kDepthVariant], sequences, decalArguments(0), count, decalCount(0), frame.decalCapacity[0]);
@@ -1261,7 +1203,7 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 			bool phaseTwo = false;
 		};
 
@@ -1316,7 +1258,7 @@ namespace DCLF
 		class BuildDrawsPass final : public org::TypedRenderGraphPass<BuildDrawsPass, BuildDrawsFrame, BuildDrawsBindings>
 		{
 		public:
-			BuildDrawsPass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment, std::uint32_t a_phase = 0) :
+			BuildDrawsPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, std::uint32_t a_phase = 0) :
 				resources(std::move(a_resources)), segment(a_segment), fixedPhase(a_phase) {}
 
 			BuildDrawsBindings Declare(org::PassBuilder& a_builder)
@@ -1347,7 +1289,7 @@ namespace DCLF
 
 			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 			{
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources, now);
 				a_out.push_back(frame ? frame->generation : 0);
 				a_out.push_back(static_cast<std::uint64_t>(now));
@@ -1357,7 +1299,7 @@ namespace DCLF
 			BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				BuildDrawsFrame prepared{};
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources, now);
 				if (!frame || !resources->buildDraws || !resources->latch || !resources->dispatchSignature)
 					return prepared;
@@ -1414,10 +1356,6 @@ namespace DCLF
 			{
 				if (fixedPhase)
 					return fixedPhase;
-				// Off the hybrid path there is no depth segment to decide anything, so the colour segment
-				// has to do its own culling exactly as it did before the phases existed.
-				if (!resources->hybrid)
-					return 0;
 				return a_segment == RenderGraphRuntime::Segment::ZPrepass ? 1u : 3u;
 			}
 
@@ -1426,7 +1364,7 @@ namespace DCLF
 			bool Sorts() const { return resources->sort && fixedPhase != 2; }
 
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 			std::uint32_t fixedPhase = 0;
 		};
 
@@ -1448,7 +1386,7 @@ namespace DCLF
 		class SortSequencesPass final : public org::TypedRenderGraphPass<SortSequencesPass, SortSequencesFrame, SortSequencesBindings>
 		{
 		public:
-			SortSequencesPass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment) :
+			SortSequencesPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
 				resources(std::move(a_resources)), segment(a_segment) {}
 
 			SortSequencesBindings Declare(org::PassBuilder& a_builder)
@@ -1465,7 +1403,7 @@ namespace DCLF
 
 			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 			{
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources, now);
 				a_out.push_back(frame ? frame->generation : 0);
 				a_out.push_back(static_cast<std::uint64_t>(now));
@@ -1474,7 +1412,7 @@ namespace DCLF
 			SortSequencesFrame Prepare(const SortSequencesBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 			{
 				SortSequencesFrame prepared{};
-				if (!BuildsDraws(*resources, segment.Now()))
+				if (!BuildsDraws(*resources, segment))
 					return prepared;
 				prepared.program = resources->sort->scatter;
 				auto& constants = prepared.constants;
@@ -1500,7 +1438,7 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 		};
 
 		struct FeedbackBindings
@@ -1524,7 +1462,7 @@ namespace DCLF
 		class FeedbackPass final : public org::TypedRenderGraphPass<FeedbackPass, FeedbackFrame, FeedbackBindings>
 		{
 		public:
-			FeedbackPass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment) :
+			FeedbackPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
 				resources(std::move(a_resources)), segment(a_segment) {}
 
 			FeedbackBindings Declare(org::PassBuilder& a_builder)
@@ -1540,7 +1478,7 @@ namespace DCLF
 			FeedbackFrame Prepare(const FeedbackBindings&, const org::PassPrepareContext& a_preparation) const
 			{
 				FeedbackFrame prepared{};
-				if (segment.Now() != RenderGraphRuntime::Segment::MainOpaque)
+				if (segment != RenderGraphRuntime::Segment::MainOpaque)
 					return prepared;
 				auto feedback = resources->feedback;
 				const int index = feedback->armed.exchange(-1, std::memory_order_acq_rel);
@@ -1574,7 +1512,7 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 		};
 
 		struct HzbConstants
@@ -1622,7 +1560,7 @@ namespace DCLF
 		class HzbPass final : public org::TypedRenderGraphPass<HzbPass, HzbFrame, HzbBindings>
 		{
 		public:
-			HzbPass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment) :
+			HzbPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
 				resources(std::move(a_resources)), segment(a_segment) {}
 
 			HzbBindings Declare(org::PassBuilder& a_builder)
@@ -1638,7 +1576,7 @@ namespace DCLF
 
 			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 			{
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources, now);
 				a_out.push_back(frame ? frame->generation : 0);
 				a_out.push_back(static_cast<std::uint64_t>(now));
@@ -1648,7 +1586,7 @@ namespace DCLF
 			{
 				HzbFrame prepared{};
 				// Only in the Z-prepass segment: anywhere else the depth is not the world's final depth.
-				const auto now = segment.Now();
+				const auto now = segment;
 				if (now != RenderGraphRuntime::Segment::ZPrepass)
 					return prepared;
 				if (!resources->hzb || !resources->hzbProgram)
@@ -1706,7 +1644,7 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 		};
 
 		// Bytes reserved per sampled texel; a copy footprint's row pitch wants generous alignment.
@@ -1741,7 +1679,7 @@ namespace DCLF
 		class ProbePass final : public org::TypedRenderGraphPass<ProbePass, ProbeFrame, ProbeBindings>
 		{
 		public:
-			ProbePass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment, bool a_after) :
+			ProbePass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment, bool a_after) :
 				resources(std::move(a_resources)), segment(a_segment), after(a_after) {}
 
 			ProbeBindings Declare(org::PassBuilder& a_builder)
@@ -1749,15 +1687,15 @@ namespace DCLF
 				a_builder.PreferQueue(org::QueueKind::Graphics);
 				ProbeBindings bindings{};
 				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-					bindings.sources[i] = a_builder.CopySource(resources->drawTargets[i]);
-				bindings.depth = a_builder.CopySource(resources->drawDepth);
+					bindings.sources[i] = a_builder.CopySource(resources->native[i]);
+				bindings.depth = a_builder.CopySource(resources->nativeDepth);
 				bindings.destination = a_builder.CopyDestination(resources->probe);
 				return bindings;
 			}
 
 			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 			{
-				const auto now = segment.Now();
+				const auto now = segment;
 				const auto frame = CurrentFrame(*resources,
 					now == RenderGraphRuntime::Segment::SkyOcclusion || now == RenderGraphRuntime::Segment::LightCulling ? RenderGraphRuntime::Segment::ZPrepass : now);
 				a_out.push_back(frame ? frame->generation : 0);
@@ -1767,7 +1705,7 @@ namespace DCLF
 			ProbeFrame Prepare(const ProbeBindings&, const org::PassPrepareContext&) const
 			{
 				ProbeFrame prepared{};
-				const auto now = segment.Now();
+				const auto now = segment;
 				const bool zPrepass = now == RenderGraphRuntime::Segment::ZPrepass;
 				const bool gapProbe = now == RenderGraphRuntime::Segment::SkyOcclusion || now == RenderGraphRuntime::Segment::LightCulling;
 				if (now != RenderGraphRuntime::Segment::MainOpaque && !(zPrepass && after) && !gapProbe)
@@ -1787,8 +1725,7 @@ namespace DCLF
 				}
 				prepared.count = resources->targetCount;
 				prepared.base = after ? kColorTargets : 0;
-				// What the colour pass tests against, and - with CS_DCLF_COLOUR_DEPTH_WRITE - what it
-				// computes, so the two can be compared directly instead of inferred from whether it drew.
+				// What the colour pass tests against.
 				prepared.depthSlot = after ? kProbeDepthAfterColour : kProbeDepthBeforeColour;
 				return prepared;
 			}
@@ -1832,14 +1769,9 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
+			RenderGraphRuntime::Segment segment;
 			bool after = false;
 		};
-
-		bool DebugViewEnabled()
-		{
-			return Toggles::Get().Active().debugView;
-		}
 
 		// CS_DCLF_CULL=off|frustum: how BuildDrawsCS filters this frame's draws before it writes their
 		// sequences. The draw inputs are the whole tracked set, including what the engine's own culling
@@ -1852,26 +1784,6 @@ namespace DCLF
 			return Toggles::Get().Active().cullMode;
 		}
 
-		// CS_DCLF_CULL_INPUT=native|tracked: which of the candidates may actually be drawn.
-		//
-		// native (the default) draws only what the engine's culling kept, so the frame contains exactly what
-		// it does today while the culling counters still measure the whole tracked set. tracked hands the
-		// decision to the GPU culling alone, which is what Phase 4 is building towards and what Phase 5
-		// needs; until the HZB lands it draws everything the engine occluded, so it costs frames and the
-		// objects outside the accumulator carry derived per-frame bits rather than measured ones.
-		bool RequireNativeVisible()
-		{
-			return !Toggles::Get().Active().cullTracked;
-		}
-
-		// CS_DCLF_HYBRID=1: DCLF draws into the main pass's own targets and depth, and the native loop skips
-		// the objects it drew (DrawcallLimitFix's RenderPassImmediately hooks).
-		bool HybridEnabled()
-		{
-			return Toggles::Get().Active().hybrid;
-		}
-
-		// CS_DCLF_BUILD_PARITY=1: compare BuildDraws' output with the CPU templates every 300 epochs.
 		// MainPayload::objectState values besides the Skip reasons.
 		constexpr std::uint8_t kObjectStateDrawable = 0xF0;
 		constexpr std::uint8_t kObjectStateDecal = 0xF1;
@@ -1890,6 +1802,7 @@ namespace DCLF
 			return enabled;
 		}
 
+		// CS_DCLF_BUILD_PARITY=1: compare BuildDraws' output with the CPU templates every 300 epochs.
 		bool BuildParityEnabled()
 		{
 			static const bool enabled = [] {
@@ -1897,66 +1810,6 @@ namespace DCLF
 			}();
 			return enabled;
 		}
-
-		struct DebugViewBindings
-		{
-			std::array<org::ResourceBindingToken, kColorTargets> sources{}, destinations{};
-		};
-
-		struct DebugViewFrame
-		{
-			std::uint32_t count = 0, width = 0, height = 0;
-		};
-
-		// CS_DCLF_DEBUG_VIEW=1: copies DCLF's targets over the native ones, so the composited frame shows
-		// only what the indirect draws produced.
-		class DebugViewPass final : public org::TypedRenderGraphPass<DebugViewPass, DebugViewFrame, DebugViewBindings>
-		{
-		public:
-			DebugViewPass(std::shared_ptr<Resources> a_resources, SegmentBinding a_segment) :
-				resources(std::move(a_resources)), segment(a_segment) {}
-
-			DebugViewBindings Declare(org::PassBuilder& a_builder)
-			{
-				a_builder.PreferQueue(org::QueueKind::Graphics);
-				DebugViewBindings bindings{};
-				for (std::uint32_t i = 0; i < resources->targetCount; ++i) {
-					bindings.sources[i] = a_builder.CopySource(resources->targets[i]);
-					bindings.destinations[i] = a_builder.CopyDestination(resources->native[i]);
-				}
-				return bindings;
-			}
-
-			void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
-			{
-				a_out.push_back(segment.Now() == RenderGraphRuntime::Segment::DebugView);
-			}
-
-			DebugViewFrame Prepare(const DebugViewBindings&, const org::PassPrepareContext&) const
-			{
-				if (segment.Now() != RenderGraphRuntime::Segment::DebugView)
-					return {};
-				return { resources->targetCount, resources->width, resources->height };
-			}
-
-			static void Record(const DebugViewBindings& a_bindings, const DebugViewFrame& a_frame, org::PassRecordContext& a_recording)
-			{
-				auto& commands = a_recording.Commands();
-				for (std::uint32_t i = 0; i < a_frame.count; ++i) {
-					rhi::TextureCopyRegion destination{};
-					destination.texture = a_recording.Resolve(a_bindings.destinations[i]).GetHandle();
-					destination.width = a_frame.width;
-					destination.height = a_frame.height;
-					auto source = destination;
-					source.texture = a_recording.Resolve(a_bindings.sources[i]).GetHandle();
-					commands.CopyTextureRegion(destination, source);
-				}
-			}
-
-		private:
-			std::shared_ptr<Resources> resources;
-			SegmentBinding segment;
-		};
 
 		// A DXVK image the graph uses in place: imported without ownership, with simultaneous access (DXVK
 		// keeps the images it hands out in GENERAL and uses them between the graph's commands).
@@ -2044,7 +1897,7 @@ namespace DCLF
 		/** @brief The shadow views' graph resources: the main path's set, without targets or an HZB, per view slot. */
 		struct ShadowResources
 		{
-			// The explicit DGC preprocesses' state lists (DgcPreprocessEnabled): the shadow views' pass, Skylighting's.
+			// The explicit DGC preprocesses' state lists: the shadow views' pass, Skylighting's.
 			std::shared_ptr<PreprocessStates> preprocessShadow, preprocessSky;
 			std::shared_ptr<org::Buffer> constants, records, objects, bones, geometries, visibility;
 			// NPC face shapes' positions (SceneStore::Tables::faceStreams), a region per shape, read by the draws as
@@ -2084,13 +1937,9 @@ namespace DCLF
 			std::vector<ViewLabel> labels;
 		};
 
-		// With epochs these passes run only in the shadow epoch; without, every epoch runs them and they are
-		// empty outside it.
+		// These passes run only in their own epoch (the shadow views' or Skylighting's).
 		std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const ShadowResources& a_resources, bool a_sky)
 		{
-			const auto segment = a_sky ? RenderGraphRuntime::Segment::SkyOcclusion : RenderGraphRuntime::Segment::ShadowView;
-			if (!RenderGraphRuntime::EpochsEnabled() && RenderGraphRuntime::Get().CurrentSegment() != segment)
-				return nullptr;
 			return (a_sky ? a_resources.skyFrame : a_resources.frame).load(std::memory_order_acquire);
 		}
 
@@ -2203,7 +2052,7 @@ namespace DCLF
 		{
 			std::shared_ptr<const ShadowFrame> frame;
 			bool sky = false;
-			PreprocessStates* preprocess = nullptr;  // null: the calls preprocess implicitly (CS_DCLF_DGC_PREPROCESS=0)
+			PreprocessStates* preprocess = nullptr;  // the frame slot's explicit DGC preprocess state list
 			struct View
 			{
 				std::uint32_t index = 0;  // into frame->views
@@ -2312,7 +2161,7 @@ namespace DCLF
 				auto sequences = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.sequences[frame.views[a_view.index].slot]).GetHandle(); };
 				auto counts = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.count[frame.views[a_view.index].slot]).GetHandle(); };
 				// Every view's call is preprocessed first, against the frame slot's state list with the view's pass set up as below
-				// (CS_DCLF_DGC_PREPROCESS; PreprocessStates), and becomes visible at the first view's pass.
+				// (PreprocessStates), and becomes visible at the first view's pass.
 				if (a_prepared.preprocess) {
 					auto& state = a_prepared.preprocess->Begin(a_recording.FrameSlot());
 					state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
@@ -2419,12 +2268,9 @@ namespace DCLF
 					a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), resources->bones);
 				if (resources->facePositions)
 					a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), resources->facePositions);
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.depth"), resources->depth);
-				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.target{}", i)), resources->targets[i]);
 				for (const auto& frameBuffer : resources->frameBuffers)
 					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
-				for (std::uint32_t i = 0; i < resources->targetCount && resources->native[0]; ++i)
+				for (std::uint32_t i = 0; i < resources->targetCount; ++i)
 					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.native-target{}", i)), resources->native[i]);
 				if (resources->nativeDepth)
 					a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
@@ -2439,14 +2285,13 @@ namespace DCLF
 				using Segment = RenderGraphRuntime::Segment;
 				const auto colour = RenderGraphRuntime::EpochOf(Segment::MainOpaque);
 				const auto depth = RenderGraphRuntime::EpochOf(Segment::ZPrepass);
-				const auto colourSegment = SegmentBinding::Of(Segment::MainOpaque);
-				const auto depthSegment = SegmentBinding::Of(Segment::ZPrepass);
-				// With epochs, a pass instance runs only in its own epoch and its segment is fixed here, so the
-				// Z-prepass has its own build-draws and draw pass. Without, one instance of each serves both
-				// segments and takes its segment from the runtime, as it always has.
+				const auto colourSegment = Segment::MainOpaque;
+				const auto depthSegment = Segment::ZPrepass;
+				// A pass instance runs only in its own epoch and its segment is fixed here, so the Z-prepass has its own
+				// build-draws and draw pass.
 				// The sort by pipeline after a build (SortDraws): the counts' prefix sum, then the scatter. The scan runs in every
 				// execution, so the counts it clears are zero whether or not a build ran; the scatter only after a build.
-				const auto addSort = [&](const char* a_scan, const char* a_scatter, SegmentBinding a_segment, auto a_epoch) {
+				const auto addSort = [&](const char* a_scan, const char* a_scatter, RenderGraphRuntime::Segment a_segment, auto a_epoch) {
 					if (!resources->sort)
 						return;
 					a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute(a_scan, resources->sort->ScanPass())
@@ -2457,16 +2302,14 @@ namespace DCLF
 							.PreferQueue(org::QueueKind::Graphics)
 							.Epoch(a_epoch));
 				};
-				if (RenderGraphRuntime::EpochsEnabled() && resources->hybrid) {
-					a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.build-draws",
-						std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))
-							.PreferQueue(org::QueueKind::Graphics)
-							.Epoch(depth));
-					addSort("cs.dclf.z.sort-scan", "cs.dclf.z.sort-scatter", depthSegment, depth);
-					a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
-						std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
-							.Epoch(depth));
-				}
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.build-draws",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(depth));
+				addSort("cs.dclf.z.sort-scan", "cs.dclf.z.sort-scatter", depthSegment, depth);
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
+						.Epoch(depth));
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.build-draws",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, colourSegment)))
 						.PreferQueue(org::QueueKind::Graphics)
@@ -2479,7 +2322,7 @@ namespace DCLF
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.main-opaque",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, colourSegment)))
 						.Epoch(colour));
-				if (resources->feedback && resources->frustum && resources->hybrid)
+				if (resources->feedback && resources->frustum)
 					a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.feedback",
 						std::static_pointer_cast<org::RenderPass>(std::make_shared<FeedbackPass>(resources, colourSegment)))
 							.Epoch(colour));
@@ -2512,20 +2355,16 @@ namespace DCLF
 						std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment, true)))
 							.Epoch(depth));
 				}
-				if (resources->probe && resources->hybrid && RenderGraphRuntime::EpochsEnabled())
+				if (resources->probe)
 					a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.probe-after",
 						std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, depthSegment, true)))
 							.Epoch(depth));
-				if (resources->probe && resources->hybrid && RenderGraphRuntime::EpochsEnabled()) {
+				if (resources->probe) {
 					for (const auto segment : { Segment::SkyOcclusion, Segment::LightCulling })
 						a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy(segment == Segment::SkyOcclusion ? "cs.dclf.sky.probe-depth" : "cs.dclf.light.probe-depth",
-							std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, SegmentBinding::Of(segment), false)))
+							std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, segment, false)))
 								.Epoch(RenderGraphRuntime::EpochOf(segment)));
 				}
-				if (resources->native[0] && !resources->hybrid)
-					a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.debug-view",
-						std::static_pointer_cast<org::RenderPass>(std::make_shared<DebugViewPass>(resources, SegmentBinding::Of(Segment::DebugView))))
-							.Epoch(RenderGraphRuntime::EpochOf(Segment::DebugView)));
 			}
 
 		private:
@@ -2588,8 +2427,8 @@ namespace DCLF
 			}
 			// Community Shaders binds its own per-frame pixel buffers - b5 SharedData and b6 FeatureData -
 			// from Renderer_ResetState, so whether they happen to be bound when this capture is taken
-			// depends on where the engine last reset its state. The hybrid path changes that, by skipping
-			// the native draws in between, and the objects whose shaders read b5 were then dropped for
+			// depends on where the engine last reset its state. Skipping DCLF's objects' native draws changes
+			// that, and the objects whose shaders read b5 were then dropped for
 			// missing constants and rendered untextured. They are CS's own buffers with known identities,
 			// so take them from CS instead of from whatever is bound.
 			if (auto* state = globals::state) {
@@ -2920,12 +2759,6 @@ namespace DCLF
 			ParityCounter parity;
 		};
 
-		bool PersistentObjectsEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_PERSISTENT_OBJECTS") != "0";
-			return enabled;
-		}
-
 		bool PersistentParityEnabled()
 		{
 			static const bool enabled = SwitchEnabled("CS_DCLF_PERSISTENT_PARITY");
@@ -3023,14 +2856,14 @@ namespace DCLF
 		struct MainInputs
 		{
 			std::uint32_t frameNumber = 0;
-			bool depthOnly = false, hybrid = false, resolveTextures = true;
-			bool bindless = false, bindlessDraws = false, dedupParity = false, bindlessParity = false;
-			bool withholding = false, requireNativeVisible = true, linearLighting = false;
+			bool depthOnly = false;
+			bool dedupParity = false, bindlessParity = false;
+			bool withholding = false;
 			std::uint32_t renderFlags = 0;
 			RE::NiPoint3 eye, previousEye;
 			std::uint32_t vsFrameMask = 0, psFrameMask = 0;  // the frame slots the commit supplies
 			std::array<std::uint32_t, kDecalGroups> decalCount{};
-			// The colour epoch's drawn state (render thread's, read while no colour commit can run): the Z-prepass's hybrid gate
+			// The colour epoch's drawn state (render thread's, read while no colour commit can run): the Z-prepass's gate
 			// without withholding. The colour build's DrawnMarks are sent relative to drawnCommitted, all of them on drawnResync.
 			const std::vector<SlotDrawn>* drawnSlots = nullptr;
 			std::uint64_t drawnCommitted = 0;
@@ -3073,12 +2906,10 @@ namespace DCLF
 			std::vector<std::array<std::uint64_t, 2>> patchMasks;  // per record: the frame registers (t64 * i + bit) it reads
 			std::uint32_t recordsHeld = 0;
 			std::uint64_t blocksWritten = 0, recordsWritten = 0;
-			std::vector<float> boneRows;                // unused (the rows are uploaded from the tables: bones, below)
 			BonesOut bones;                             // the rows: current then previous, then the extras
 			// The frame's textures (t16 and up) are the epoch's own descriptor indices, which only the commit
 			// can resolve: the build leaves these (record, register) pairs for it.
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> framePatches;
-			std::vector<std::uint32_t> drawn;  // unused (the drawn state is sent as changes, below)
 			// The colour build's drawn changes (DrawnMarks): each slot whose drawn state changed since version drawnBase, with its
 			// state now; all of them when drawnFull. The commit applies them when drawnBase is what it applied last.
 			struct DrawnChange
@@ -3138,7 +2969,6 @@ namespace DCLF
 				geometryDraws.Reset();
 				faceStreams.clear();
 				framePatches.clear();
-				drawn.clear();
 				drawnChanges.clear();
 				drawnVersion = drawnBase = 0;
 				drawnFull = drawnValid = false;
@@ -3169,7 +2999,6 @@ namespace DCLF
 		{
 			std::uint32_t frameNumber = 0;
 			std::uint32_t renderFlags = 0;
-			RE::NiPoint3 refEye;
 			std::array<bool, kShadowModeCount> modeUsed{};
 			// Per mode, the rasterizer states of its views (bit DrawPipelines::ShadowRasterStateId): a caster is
 			// an input only when its pipeline is ready under every state of the views that draw its class. Bits
@@ -3189,7 +3018,6 @@ namespace DCLF
 			// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 			std::vector<std::byte> sharedData, featureData;
 			std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
-			std::uint32_t sceneRebuilds = 0;  // SceneStore::GetSceneRebuilds: the walk the build read was replaced
 			TablesHeld tablesHeld;  // ShadowResources::tablesHeld
 			// The versions of the kept shadow state the buffers hold (ShadowResources::inputsUploaded), and the oldest of the view
 			// slots' copies of the records (recordsUploaded, of the slots holding any): what the journals keep changes for.
@@ -3233,7 +3061,6 @@ namespace DCLF
 				return out;
 			}
 			ObjectRecordsOut objects;
-			std::vector<float> boneRows;  // unused (bones, below)
 			BonesOut bones;
 			GeometryDrawsOut geometries;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
@@ -3269,7 +3096,6 @@ namespace DCLF
 				regionInputs = {};
 				membership = {};
 				recordChanges.Reset();
-				boneRows.clear();
 				geometries.Reset();
 				faceStreams.clear();
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
@@ -3372,7 +3198,6 @@ namespace DCLF
 			std::uint32_t a_frame, GeometryDrawsOut& a_out)
 		{
 			ZoneScopedN("CS.DCLF.Build.UpdateGeometryDraws");
-			ScopedScan scan(Scan::PackGeometry);
 			a_out = {};
 			const std::size_t count = std::min<std::size_t>(a_tables.geometries.size(), kMaxGeometries);
 			auto pack = [&](std::size_t a_slot) { return PackGeometryDraw(a_tables, static_cast<std::uint32_t>(a_slot), count); };
@@ -3582,22 +3407,6 @@ namespace DCLF
 		// What the region leaves the per-frame loop of the input and draw capacity (decals have their own ranges).
 		constexpr std::uint32_t kLoopReserve = 2048;
 
-		bool WholeSceneRegionEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_WHOLE_SCENE_REGION") != "0";
-			return enabled;
-		}
-
-		/**
-		 * @brief CS_DCLF_RESIDENT_DRAWS (default on): the resident records' draw inputs persist across frames in each main
-		 * segment's input buffer (drawcall-limit-fix.md, "Persistent resident draws").
-		 */
-		bool ResidentDrawsEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_RESIDENT_DRAWS") != "0";
-			return enabled;
-		}
-
 		/** @brief CS_DCLF_RESIDENT_DRAW_PARITY=1: every 60 frames, each region entry written again from the tables and compared. */
 		bool ResidentDrawParityEnabled()
 		{
@@ -3700,12 +3509,6 @@ namespace DCLF
 				inputs.Clear();
 			}
 		};
-
-		bool PersistentBindingsEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_PERSISTENT_BINDINGS") != "0";
-			return enabled;
-		}
 
 		/** @brief A constant block kept across frames in a segment's constants buffer (PersistentBindings). */
 		struct PersistentBlock
@@ -3818,7 +3621,6 @@ namespace DCLF
 		{
 			bool active = false;
 			std::uint32_t generation = 0;
-			bool requireNativeVisible = true;
 			std::vector<std::uint8_t> drawn;
 			std::vector<const RE::BSGeometry*> geometry;
 			ChangeJournal changes;
@@ -3968,12 +3770,6 @@ namespace DCLF
 			a_out.valid = true;
 		}
 
-		bool BuildCacheEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_BUILD_CACHE") != "0";
-			return enabled;
-		}
-
 		// The cache's source signatures: plain bytes of trivially copyable values, appended member by member.
 		template <class T>
 		void AppendSource(std::vector<std::byte>& a_out, const T& a_value)
@@ -4116,7 +3912,7 @@ namespace DCLF
 			using Skip = IndirectDraws::Skip;
 			a_out.Reset();
 			a_out.inputs = a_in;
-			if (a_in.resolveTextures && a_lookups.sharedBindingBlock)
+			if (a_lookups.sharedBindingBlock)
 				a_out.bindingOwners.push_back(a_lookups.sharedBindingBlock);
 			auto& arena = a_out.arena;
 			auto& records = a_out.records;
@@ -4125,9 +3921,9 @@ namespace DCLF
 			const bool depthOnly = a_in.depthOnly;
 			const std::uint64_t base = a_in.addresses.constants;
 			const std::uint32_t frameNumber = a_in.frameNumber;
-			// The segment's constant blocks and binding records kept across frames (PersistentBindings): only where every record
-			// is a pair's (bindless draws), and not under the build parity, which reads the per-build layout.
-			const bool persistent = a_cache && a_in.bindless && a_in.bindlessDraws && PersistentBindingsEnabled() && !BuildParityEnabled();
+			// The segment's constant blocks and binding records kept across frames (PersistentBindings), except under the build
+			// parity, which reads the per-build layout.
+			const bool persistent = a_cache && !BuildParityEnabled();
 			PersistentBindings* kept = persistent ? &a_cache->persistent : nullptr;
 			arena.Reset(depthOnly ? kDepthConstantBytes : kConstantBytes);
 			if (kept)
@@ -4208,7 +4004,6 @@ namespace DCLF
 					AppendSource(sources, a_tables.geometryConstants[p].ps.floats);
 					AppendSource(sources, blocks.vsTable);
 					AppendSource(sources, blocks.psTable);
-					AppendSource(sources, a_in.bindless);  // PackGeometryTemplate's mask
 					cached = &a_cache->pipelines[static_cast<std::uint32_t>(p)];
 					cached->lastUsed = frameNumber;
 					if (SameSources(cached->sources, sources)) {
@@ -4282,12 +4077,7 @@ namespace DCLF
 			// Resolved descriptor heap indices per (material, pipeline) pair (ResolvedBindings, above).
 			ankerl::unordered_dense::map<std::uint64_t, ResolvedBindings> resolvedBindings;  // (material, pipeline)
 			ankerl::unordered_dense::map<std::uint32_t, GeometryTemplate> geometryTemplates;  // pipeline
-			ankerl::unordered_dense::map<std::uint64_t, std::uint64_t> lightBlocks;        // (room, shadow mask)
 			ankerl::unordered_dense::map<std::uint64_t, std::uint64_t> permutationBlocks;  // (pipeline, extra bits)
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> alphaBlocks;        // threshold
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> emissiveBlocks;     // Linear Lighting multiplier bits
-			std::map<std::array<float, 4>, std::uint64_t> skinBlocks;                      // Advanced Skin wetness
-			const bool linearLighting = a_in.linearLighting;
 			const auto renderFlags = a_in.renderFlags;
 
 			// The per-object states are set parity's alone (CS_DCLF_SET_PARITY).
@@ -4299,7 +4089,7 @@ namespace DCLF
 				auto& m = *marks;
 				// What the render thread applied is the version it holds: what changes from here on is sent alone.
 				m.changes.BeginBuild(a_in.drawnCommitted);
-				if (!m.active || m.generation != a_in.tablesGeneration || m.requireNativeVisible != a_in.requireNativeVisible || a_in.drawnResync) {
+				if (!m.active || m.generation != a_in.tablesGeneration || a_in.drawnResync) {
 					// Every slot again: the first build, new tables, or the render thread asked for it. Whatever the old marks
 					// held is withdrawn by the full send, which covers every slot either knows. The journal counts on.
 					const auto known = std::max(m.drawn.size(), a_tables.objects.size());
@@ -4309,7 +4099,6 @@ namespace DCLF
 					m.changes.Resync();
 					m.active = true;
 					m.generation = a_in.tablesGeneration;
-					m.requireNativeVisible = a_in.requireNativeVisible;
 					m.drawn.assign(known, 0);
 					m.geometry.assign(known, nullptr);
 					if (a_cache->region.cursor.active)
@@ -4317,11 +4106,12 @@ namespace DCLF
 				}
 				++m.serial;
 			}
-			// Drawn, for the marks: what BuildDraws writes a sequence for, and (under the gate) what the engine kept.
-			auto nativeDrawn = [&](std::uint32_t o) { return o < a_tables.objects.size() && (!a_in.requireNativeVisible || (a_tables.objects[o].flags & kObjectNativeVisible)); };
+			// Drawn, for the marks: what BuildDraws writes a sequence for, and the engine kept (only what the engine's culling
+			// kept may be drawn; the culling counters still measure the whole tracked set).
+			auto nativeDrawn = [&](std::uint32_t o) { return o < a_tables.objects.size() && (a_tables.objects[o].flags & kObjectNativeVisible); };
 			// The Z-prepass's gate without withholding: what the colour epoch drew last frame.
 			auto drewLastFrame = [&](std::uint32_t o) {
-				return !a_in.hybrid || a_in.withholding ||
+				return a_in.withholding ||
 				       (a_in.drawnSlots && o < a_in.drawnSlots->size() && o < a_tables.objectGeometry.size() &&
 						   (*a_in.drawnSlots)[o].DrewLast(a_tables.objectGeometry[o], a_in.frameNumber));
 			};
@@ -4337,13 +4127,8 @@ namespace DCLF
 				a_out.partMs[a_part] += std::chrono::duration<double, std::milli>(now - partStart).count();
 				partStart = now;
 			};
-			const bool frameHybrid = a_in.hybrid;
-			const bool bindless = a_in.bindless;
-			const bool bindlessDraws = a_in.bindlessDraws;
-			// Only with bindless draws is the record identical for every draw of a (material, pipeline) pair:
-			// without it the light, alpha and emissive blocks still differ per object, and so would the
-			// record the cache handed back.
-			const bool dedup = bindlessDraws;
+			// The record is identical for every draw of a (material, pipeline) pair: everything per object is in the object
+			// record the shaders read by the draw's index (DCLF_BINDLESS, DCLF_BINDLESS_DRAW).
 			const bool dedupParity = a_in.dedupParity;
 			const bool bindlessParity = a_in.bindlessParity;
 			// Scratch for that check only, reused across objects so it costs no allocation per draw.
@@ -4369,7 +4154,7 @@ namespace DCLF
 					decalTemplates[group].resize(decalCount[group]);
 				}
 			}
-			// The (material, pipeline) pair's bindings record, assembled once per build (deduplicated under bindless draws):
+			// The (material, pipeline) pair's bindings record, assembled once per build:
 			// its index, or kNoRecord after skip() recorded why. At a_slot when the pair has a stable slot in the resident
 			// region (below), appended otherwise.
 			auto assembleRecord = [&](std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks, std::uint32_t a_slot) -> std::uint32_t {
@@ -4392,7 +4177,7 @@ namespace DCLF
 
 					auto [resolvedIt, newResolved] = resolvedBindings.try_emplace((std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex);
 					auto& resolved = resolvedIt->second;
-					if (newResolved && a_in.resolveTextures) {
+					if (newResolved) {
 						if (object.materialIndex < a_lookups.materials.size() && a_lookups.materials[object.materialIndex].bindingBlock)
 							a_out.bindingOwners.push_back(a_lookups.materials[object.materialIndex].bindingBlock);
 						if (object.pipelineIndex < a_lookups.pipelines.size() && a_lookups.pipelines[object.pipelineIndex].shadowMaskOwner)
@@ -4407,7 +4192,7 @@ namespace DCLF
 						pairVersions = { m < a_tables.materialVersion.size() ? a_tables.materialVersion[m] : 0u,
 							m < a_tables.materialFrameVersion.size() ? a_tables.materialFrameVersion[m] : 0u, m < a_lookups.materials.size() ? a_lookups.materials[m].version : 0u,
 							p < a_lookups.pipelines.size() ? a_lookups.pipelines[p].version : 0u, p < a_tables.pipelineBindingVersion.size() ? a_tables.pipelineBindingVersion[p] : 0u,
-							a_lookups.sharedVersion, pipelineEntry.addressVersion, a_in.vsFrameMask, a_in.psFrameMask, a_in.resolveTextures ? 1u : 0u,
+							a_lookups.sharedVersion, pipelineEntry.addressVersion, a_in.vsFrameMask, a_in.psFrameMask, 1u,
 							pipelineEntry.clean ? 1u : 0u, a_tables.TechniqueRowOf(p).bindingVersion };
 						if (newResolved && !dedupParity) {
 							if (const auto found = a_cache->pairs.find((std::uint64_t(m) << 32) | p);
@@ -4426,14 +4211,13 @@ namespace DCLF
 					// - is then a property of the pair or of the epoch, so a second draw of the same pair needs
 					// nothing but its index.
 					auto fail = [&](Skip a_reason) {
-						if (dedup)
-							resolved.skipReason = static_cast<std::uint32_t>(a_reason);
+						resolved.skipReason = static_cast<std::uint32_t>(a_reason);
 						if (kept)
 							if (const auto found = a_cache->pairs.find((std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex); found != a_cache->pairs.end())
 								found->second.clean = false;
 						skip(a_reason);
 					};
-					if (dedup && resolved.skipReason != kNoSkip) {
+					if (resolved.skipReason != kNoSkip) {
 						skip(static_cast<Skip>(resolved.skipReason));  // per draw, not once per pair
 						if (resolved.deferred)
 							++a_out.deferredTextures;
@@ -4443,7 +4227,7 @@ namespace DCLF
 					// Per DRAW: the loop entry and the resolvedBindings probe above, which every candidate pays
 					// whether or not it assembles a record.
 					mark(4);
-					if (!dedup || recordIndex == kNoRecord || dedupParity) {
+					if (recordIndex == kNoRecord || dedupParity) {
 						const std::uint64_t pairKey = (std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex;
 						bool pairFromCache = false;
 						if (newResolved && a_cache) {
@@ -4481,7 +4265,6 @@ namespace DCLF
 							AppendSource(sources, a_lookups.projectedTextures);
 							AppendSource(sources, a_in.addresses.objectsIndex);
 							AppendSource(sources, a_in.addresses.bonesIndex);
-							AppendSource(sources, a_in.resolveTextures);
 							AppendSource(sources, depthOnly);
 							auto& entry = a_cache->pairs[pairKey];
 							entry.lastUsed = frameNumber;
@@ -4519,8 +4302,6 @@ namespace DCLF
 									index = a_in.addresses.objectsIndex;
 								else if (t == kBonesBufferRegister)
 									index = a_in.addresses.bonesIndex;
-								else if (!a_in.resolveTextures)
-									index = 0;
 								else if (t < kPixelTextureSlots && ((material.textureWritten >> t) & 1)) {
 									if (!materialResolved) {
 										resolved.deferred = true;
@@ -4547,8 +4328,6 @@ namespace DCLF
 									index = 0;
 									patch = usage.UsesTexture(t);
 								}
-								if (!a_in.resolveTextures && t != kObjectBufferRegister)
-									index = 0;
 								if (index == kInvalidIndex && usage.UsesTexture(t)) {
 									resolved.texturesOk = false;
 									resolved.missingTexture = t;
@@ -4574,7 +4353,7 @@ namespace DCLF
 								}
 								if (filter == kUnwrittenFilterMode)
 									filter = 0;
-								const auto index = a_in.resolveTextures ? a_lookups.Sampler(address, filter) : 0u;
+								const auto index = a_lookups.Sampler(address, filter);
 								if (index == kInvalidIndex && ((usage.samplers >> s) & 1)) {
 									resolved.samplersOk = false;
 									break;
@@ -4708,7 +4487,7 @@ namespace DCLF
 							}
 						}
 						std::uint64_t geometryVS = 0, geometryPS = 0;
-						// A pipeline's PerGeometry template under bindless: one block per stage (kept, or the build's).
+						// A pipeline's PerGeometry template: one block per stage (kept, or the build's).
 						auto uploadTemplate = [&](const std::vector<std::byte>& a_group, BuildCache::Pipeline* a_pipeline, bool a_pixel) -> std::uint64_t {
 							if (a_group.empty())
 								return 0;  // the stage does not declare the buffer
@@ -4731,45 +4510,27 @@ namespace DCLF
 								geometryTemplate.vs = cachedPipeline->geometry.vs;
 								geometryTemplate.ps = cachedPipeline->geometry.ps;
 								geometryTemplate.offsets = cachedPipeline->geometry.offsets;
-								if (bindless) {
-									geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
-									geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
-								}
+								geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
+								geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
 							} else if (newTemplate) {
 								// The pipeline's own values, which is everything the objects do not override.
-								PackGeometryTemplate(a_tables.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, bindless, geometryTemplate);
+								PackGeometryTemplate(a_tables.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, true, geometryTemplate);
 								if (cachedPipeline) {
 									cachedPipeline->geometry.vs = geometryTemplate.vs;
 									cachedPipeline->geometry.ps = geometryTemplate.ps;
 									cachedPipeline->geometry.offsets = geometryTemplate.offsets;
 									cachedPipeline->hasGeometry = true;
 								}
-								if (bindless) {
-									geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
-									geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
-								}
+								geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
+								geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
 							}
-							if (bindless) {
-								// One pair of blocks for the whole pipeline, written when the template was built.
-								geometryVS = geometryTemplate.vsAddress;
-								geometryPS = geometryTemplate.psAddress;
-							} else {
-								geometryVS = block(nullptr, geometryTemplate.vs.size());
-								geometryPS = block(nullptr, geometryTemplate.ps.size());
-								if (geometryVS && geometryPS) {
-									auto vsOut = arena.At(geometryVS - base, std::max<std::size_t>(geometryTemplate.vs.size(), 16));
-									auto psOut = arena.At(geometryPS - base, std::max<std::size_t>(geometryTemplate.ps.size(), 16));
-									std::memcpy(vsOut.data(), geometryTemplate.vs.data(), geometryTemplate.vs.size());
-									std::memcpy(psOut.data(), geometryTemplate.ps.data(), geometryTemplate.ps.size());
-									PatchObjectGeometry(a_tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets,
-										vsOut.subspan(0, geometryTemplate.vs.size()), psOut.subspan(0, geometryTemplate.ps.size()));
-								}
-							}
-							// CS_DCLF_BINDLESS_PARITY=1: the record the shaders read against the group the constant
-							// buffer path packs for the same object. The two derive from the same inputs through the
-							// same unwritten-component rule, so anything but bit equality is a defect in the record's
-							// layout or in the way it is filled, caught on the CPU with no readback and without
-							// needing both forms in one run.
+							// One pair of blocks for the whole pipeline, written when the template was built.
+							geometryVS = geometryTemplate.vsAddress;
+							geometryPS = geometryTemplate.psAddress;
+							// CS_DCLF_BINDLESS_PARITY=1: the record the shaders read against the PerGeometry group the engine's
+							// constant buffer holds for the same object (PatchObjectGeometry). The two derive from the same inputs
+							// through the same unwritten-component rule, so anything but bit equality is a defect in the
+							// record's layout or in the way it is filled, caught on the CPU with no readback.
 							if (bindlessParity && o < objectRecords.Count()) {
 								parityVS.assign(geometryTemplate.vs.begin(), geometryTemplate.vs.end());
 								parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
@@ -4780,50 +4541,23 @@ namespace DCLF
 								a_out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
 							}
 						}
-						std::uint64_t lightBlock = 0;
-						if (bindlessDraws) {
-							// NumStrictLights 0, and nothing else is read: the zeroed frame slot, for every draw.
-							lightBlock = sharedLightBlock;
-						} else {
-							const auto& lights = a_tables.lights[o];
-							auto& cached = lightBlocks[(std::uint64_t(static_cast<std::uint32_t>(lights.roomIndex)) << 32) | lights.shadowBitMask];
-							if (!cached) {
-								const std::uint32_t header[4] = { 0, static_cast<std::uint32_t>(lights.roomIndex), lights.shadowBitMask, 0 };
-								cached = block(nullptr, kStrictLightDataBytes);
-								if (cached)
-									std::memcpy(arena.At(cached - base, sizeof(header)).data(), header, sizeof(header));
-							}
-							lightBlock = cached;
-						}
+						// NumStrictLights 0, and nothing else is read: the zeroed frame slot, for every draw.
+						const std::uint64_t lightBlock = sharedLightBlock;
 						const auto& permutation = a_tables.permutations[object.pipelineIndex];
 						// SuppressExternalEmittance is the only per-object bit DCLF puts in this block, and it is
 						// read at exactly one place in the whole shader tree - Effect.hlsl's GetLightingColor -
-						// never by Lighting.hlsl or anything it includes. So for these pipelines it is dead, and
-						// under bindless the block keys on the pipeline alone, which is what makes the binding
-						// record identical for a (material, pipeline) pair. The non-bindless control keeps the bit,
-						// so CaptureParity::ComparePermutation goes on measuring the real thing against the engine.
-						const std::uint32_t extra = permutation.extraShaderDescriptor |
-						                            ((!bindless && (object.flags & kObjectSuppressExternalEmittance)) ?
-													        static_cast<std::uint32_t>(State::ExtraShaderDescriptors::SuppressExternalEmittance) :
-													        0u);
+						// never by Lighting.hlsl or anything it includes. So for these pipelines it is dead, and the
+						// block keys on the pipeline alone, which is what makes the binding record identical for a
+						// (material, pipeline) pair.
+						const std::uint32_t extra = permutation.extraShaderDescriptor;
 						auto& permutationBlock = permutationBlocks[(std::uint64_t(object.pipelineIndex) << 32) | extra];
 						if (!permutationBlock) {
 							const std::uint32_t data[8] = { permutation.vertexShaderDescriptor, permutation.pixelShaderDescriptor, extra, permutation.extraFeatureDescriptor, 0, 0, 0, 0 };
-							// Kept per pipeline: under bindless nothing in it is per object.
+							// Kept per pipeline: nothing in it is per object.
 							if (kept)
 								permutationBlock = kept->Place(a_cache->pipelines[object.pipelineIndex].permutationBlock, reinterpret_cast<const std::byte*>(data), sizeof(data), sizeof(data));
 							else
 								permutationBlock = block(data, sizeof(data));
-						}
-						std::uint64_t alphaBlock = 0;
-						if (!bindlessDraws) {
-							const std::uint32_t threshold = (object.flags & kObjectAlphaTest) ? (object.flags >> kObjectAlphaThresholdShift) & 0xFF : 0;
-							auto& cached = alphaBlocks[threshold];
-							if (!cached) {
-								const float data[4] = { threshold / 255.0f, 0, 0, 0 };
-								cached = block(data, sizeof(data));
-							}
-							alphaBlock = cached;
 						}
 
 						mark(1);
@@ -4838,30 +4572,9 @@ namespace DCLF
 						bindings.pixelConstants[kPerGeometry] = geometryPS;
 						bindings.pixelConstants[3] = lightBlock;
 						bindings.pixelConstants[4] = permutationBlock;
-						bindings.pixelConstants[11] = alphaBlock;
-						if (bindless)
-							bindings.pixelConstants[kFrameLightingRegister] = frameLightingBlock;
-						// Linear Lighting binds its multiplier per draw only while enabled; otherwise the shader
-						// does not read it. It comes from the tables rather than off the property: the value is
-						// animated and belongs to the same sample as the emissive colour.
-						if (!bindlessDraws) {
-							const float multiplier = (linearLighting && o < a_tables.emissiveMult.size()) ? a_tables.emissiveMult[o] : 1.0f;
-							auto& emissiveBlock = emissiveBlocks[std::bit_cast<std::uint32_t>(multiplier)];
-							if (!emissiveBlock) {
-								const float data[4] = { multiplier, 0, 0, 0 };
-								emissiveBlock = block(data, sizeof(data));
-							}
-							bindings.pixelConstants[kLinearLightingRegister] = emissiveBlock;
-							// Advanced Skin binds its wetness per draw (the owning actor's, zero otherwise), which the
-							// DCLF_BINDLESS_DRAW builds read from the object record instead.
-							if (globals::features::skin.loaded) {
-								const auto wetness = o < a_tables.skinWetness.size() ? a_tables.skinWetness[o] : std::array<float, 4>{};
-								auto& wetnessBlock = skinBlocks[wetness];
-								if (!wetnessBlock)
-									wetnessBlock = block(wetness.data(), sizeof(wetness));
-								bindings.pixelConstants[kSkinRegister] = wetnessBlock;
-							}
-						}
+						bindings.pixelConstants[kFrameLightingRegister] = frameLightingBlock;
+						// The alpha test reference (PS b11), Linear Lighting's emissive multiplier and Advanced Skin's wetness
+						// come from the object record (DCLF_BINDLESS_DRAW), not from blocks of their own.
 						bool constantsOk = true;
 						for (std::uint32_t b = 0; b < kConstantBufferRegisters; ++b) {
 							if (((usage.vertexConstants >> b) & 1) && !bindings.vertexConstants[b]) {
@@ -4887,7 +4600,7 @@ namespace DCLF
 								patchMask[t / 64] |= 1ull << (t % 64);
 							}
 						}
-						if (dedup && recordIndex != kNoRecord) {
+						if (recordIndex != kNoRecord) {
 							// CS_DCLF_DEDUP_PARITY=1: the pair already has a record and this draw just rebuilt
 							// one from scratch, so they must be byte-identical. This is the direct answer to
 							// "is the record really the same for every draw of a pair", and the only check that
@@ -4910,8 +4623,7 @@ namespace DCLF
 							cachedPair.cleanKey = pairVersions;
 							cachedPair.clean = true;
 							recordIndex = cachedPair.recordSlot;
-							if (dedup)
-								resolved.recordIndex = recordIndex;
+							resolved.recordIndex = recordIndex;
 						} else {
 							if (a_slot != kNoRecord) {
 								// A resident region's pair: its stable slot (the records up to the region's slot count are its).
@@ -4927,8 +4639,7 @@ namespace DCLF
 							}
 							for (const auto t : resolved.patchRegisters)
 								a_out.framePatches.emplace_back(recordIndex, t);
-							if (dedup)
-								resolved.recordIndex = recordIndex;
+							resolved.recordIndex = recordIndex;
 						}
 					}
 
@@ -4939,13 +4650,13 @@ namespace DCLF
 			// objects' draw inputs, kept across frames and changed only by the tables' change log (Tables::changeLog), a
 			// pipeline's set index or a pair's record failing. Its pairs' records sit at stable slots, assembled here once per
 			// pair; the loop below skips its objects, and the commit uploads the inputs only when their version is new.
-			ResidentRegion* region = a_cache && ResidentDrawsEnabled() && dedup && bindless && !BuildParityEnabled() ? &a_cache->region : nullptr;
+			ResidentRegion* region = a_cache && !BuildParityEnabled() ? &a_cache->region : nullptr;
 			if (!region && a_cache && a_cache->region.cursor.active)
 				a_cache->region.Reset();
 			std::size_t regionInputs = 0, regionDraws = 0;
 			// The whole scene with kept bindings (its pairs' records are theirs); the Z-prepass's only where its gate is not the
-			// colour epoch's last frame (withholding, or no hybrid): with that gate, what is not resident stays the loop's.
-			const bool wholeScene = kept && WholeSceneRegionEnabled() && (!depthOnly || !frameHybrid || a_in.withholding);
+			// colour epoch's last frame (withholding): with that gate, what is not resident stays the loop's.
+			const bool wholeScene = kept && (!depthOnly || a_in.withholding);
 			TracyCZoneN(residentRegionZone, "CS.DCLF.BuildMain.ResidentRegion", true);
 			if (region) {
 				auto& r = *region;
@@ -4964,7 +4675,7 @@ namespace DCLF
 					if (object.flags & (kObjectFree | kObjectShadowOnly))
 						return false;
 					if (object.flags & kObjectNoBindings)
-						return wholeScene && depthOnly && frameHybrid && object.geometryIndex < a_tables.geometries.size();
+						return wholeScene && depthOnly && object.geometryIndex < a_tables.geometries.size();
 					if ((resident && !(object.flags & kObjectNativeVisible)) || ObjectDecalGroup(object.flags))
 						return false;
 					if (object.pipelineIndex >= pipelineBlocks.size() || object.pipelineIndex >= a_tables.pipelines.size() || object.geometryIndex >= a_tables.geometries.size())
@@ -5194,20 +4905,13 @@ namespace DCLF
 						const auto draws = known ? entryOf(o, expected) : std::uint8_t{ 0 };
 						++a_out.residentParityChecks;
 						if (!known || draws != r.drawsOf[i] || std::memcmp(&expected, &inputs[i], sizeof(DrawInput)) != 0 || r.indexOf[o] != i) {
-							// [TEMP] the first few, with why.
+							// The first few, with why.
 							if (a_out.residentParityMismatches++ < 6)
-								logger::info("[DCLF][TEMP] {} region parity: entry {} object {}: {} (resident {}, flags {:#x} vs {:#x}, pipeline {} vs {}, record {} vs {}, draws {} vs {}, indexOf {})",
+								logger::info("[DCLF] {} region parity: entry {} object {}: {} (resident {}, flags {:#x} vs {:#x}, pipeline {} vs {}, record {} vs {}, draws {} vs {}, indexOf {})",
 									depthOnly ? "depth" : "colour", i, o, !known ? "not eligible" : "differs", o < a_tables.residentSlot.size() ? a_tables.residentSlot[o] : 9,
 									inputs[i].flags, expected.flags, inputs[i].pipelineIndex, expected.pipelineIndex, inputs[i].recordIndex, expected.recordIndex, r.drawsOf[i], draws,
 									o < r.indexOf.size() ? r.indexOf[o] : ~0u);
 						}
-					}
-					{
-						std::size_t residentCount = 0;
-						for (const auto flag : a_tables.residentSlot)
-							residentCount += flag;
-						logger::info("[DCLF][TEMP] {} region: {} entries, {} pending, {} resident slots, log at {} of {}", depthOnly ? "depth" : "colour", inputs.size(),
-							r.pending.Size(), residentCount, r.cursor.position, a_tables.changeLog.End());
 					}
 					for (std::uint32_t o = 0; o < a_tables.objects.size(); ++o)
 						if (eligible(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion) && !r.pending.Contains(o))
@@ -5227,7 +4931,7 @@ namespace DCLF
 					bool loop = false;
 					if (!inRegion && !(flags & (kObjectFree | kObjectShadowOnly))) {
 						if (flags & kObjectNoBindings)
-							loop = depthOnly && frameHybrid;  // the depth segment's cull-only input, where the region has no room
+							loop = depthOnly;  // the depth segment's cull-only input, where the region has no room
 						else
 							loop = !(depthOnly && ObjectDecalGroup(flags));  // decals are the colour segment's alone
 					}
@@ -5305,7 +5009,7 @@ namespace DCLF
 					// The depth segment still submits it cull-only, with its bounds: that is what the tables
 					// carry the whole tracked set for, and what the culling is measured against the engine
 					// with.
-					if (depthOnly && frameHybrid && o < kMaxObjects && drawInputs.size() + regionInputs < kMaxInputs) {
+					if (depthOnly && o < kMaxObjects && drawInputs.size() + regionInputs < kMaxInputs) {
 						drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
 							{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
 							static_cast<std::uint32_t>(o), 0 });
@@ -5571,7 +5275,6 @@ namespace DCLF
 			const SceneStore::Tables& a_tables, SunExclusionCache* a_cache = nullptr)
 		{
 			ZoneScopedN("CS.DCLF.BuildSunExclusion");
-			ScopedScan scan(Scan::SunExclusion);
 			if (!a_candidates || a_candidates->entries.empty())
 				return nullptr;
 			auto exclusion = std::make_shared<SunExclusion>();
@@ -5655,12 +5358,6 @@ namespace DCLF
 					return false;
 			}
 			return true;
-		}
-
-		bool PersistentShadowEnabled()
-		{
-			static const bool enabled = SwitchValue("CS_DCLF_PERSISTENT_SHADOW") != "0";
-			return enabled;
 		}
 
 		/**
@@ -6491,7 +6188,7 @@ namespace DCLF
 						const auto* view = material.textures[t];
 						const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner ?
 							GpuTextures::Binding{ alternate.index, alternate.owner } : textures.ResolveBinding(material.textures[t], t);
-						static const bool tracePaths = std::getenv("CS_DCLF_TRACE_TEXTURE_PATHS") != nullptr;
+						static const bool tracePaths = !SwitchValue("CS_DCLF_TRACE_TEXTURE_PATHS").empty();
 						if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
 							TracyPlot("CS.DCLF.Texture.ChangedMaterialSlot", static_cast<std::int64_t>(slot));
 							TracyPlot("CS.DCLF.Texture.ChangedMaterialKey", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(key.first)));
@@ -6762,20 +6459,18 @@ namespace DCLF
 
 		// Whether a build made for `a_job` serves an epoch whose inputs are `a_epoch`: every scalar the build
 		// read has to agree, the lookup generation is checked separately after the commit's refresh.
-		// Whether BuildMainPayload reads MainInputs::eye/previousEye: the non-bindless path writes eye-relative
-		// PerGeometry groups; a bindless build only for CS_DCLF_BINDLESS_PARITY.
+		// Whether BuildMainPayload reads MainInputs::eye/previousEye: only CS_DCLF_BINDLESS_PARITY's reference, the engine's
+		// eye-relative PerGeometry groups, does.
 		bool BuildReadsEye(const MainInputs& a_in)
 		{
-			return !a_in.bindless || a_in.bindlessParity;
+			return a_in.bindlessParity;
 		}
 
 		bool SameInputs(const MainInputs& a_job, const MainInputs& a_epoch)
 		{
 			auto sameEye = [](const RE::NiPoint3& a, const RE::NiPoint3& b) { return std::memcmp(&a, &b, sizeof(RE::NiPoint3)) == 0; };
-			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly && a_job.hybrid == a_epoch.hybrid &&
-			       a_job.resolveTextures == a_epoch.resolveTextures && a_job.bindless == a_epoch.bindless && a_job.bindlessDraws == a_epoch.bindlessDraws &&
+			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly &&
 			       a_job.dedupParity == a_epoch.dedupParity && a_job.bindlessParity == a_epoch.bindlessParity && a_job.withholding == a_epoch.withholding &&
-			       a_job.requireNativeVisible == a_epoch.requireNativeVisible && a_job.linearLighting == a_epoch.linearLighting &&
 			       a_job.renderFlags == a_epoch.renderFlags && sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
 			       a_job.vsFrameMask == a_epoch.vsFrameMask && a_job.psFrameMask == a_epoch.psFrameMask && a_job.decalCount == a_epoch.decalCount &&
 			       a_job.drawnCommitted == a_epoch.drawnCommitted && a_job.drawnResync == a_epoch.drawnResync &&
@@ -6788,12 +6483,11 @@ namespace DCLF
 		bool SameShadowInputs(const ShadowInputs& a_job, const ShadowInputs& a_epoch)
 		{
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.renderFlags == a_epoch.renderFlags &&
-			       std::memcmp(&a_job.refEye, &a_epoch.refEye, sizeof(RE::NiPoint3)) == 0 && a_job.modeUsed == a_epoch.modeUsed &&
+			       a_job.modeUsed == a_epoch.modeUsed &&
 			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunEntryPlanes == a_epoch.sunEntryPlanes &&
 			       a_job.sunEntryPlaneMasks == a_epoch.sunEntryPlaneMasks && a_job.sunCandidates == a_epoch.sunCandidates &&
 			       a_job.addresses == a_epoch.addresses && a_job.sharedData == a_epoch.sharedData && a_job.featureData == a_epoch.featureData &&
-			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration &&
-			       a_job.sceneRebuilds == a_epoch.sceneRebuilds;
+			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;
 		}
 
 		// CS_DCLF_ASYNC=probe: two builds of the same inputs, compared byte for byte. The first difference is
@@ -6934,8 +6628,6 @@ namespace DCLF
 		// What the resources were created for; a change rebuilds them (and the graph).
 		TargetFormats formats{};
 		std::uint32_t width = 0, height = 0;
-		std::uint32_t pipelineGeneration = ~0u;
-		std::uint64_t serial = 0;
 		std::optional<Capture> pending;  // this frame's main-pass bindings, until the epoch runs
 
 		// The shadow views (CS_DCLF_SHADOWS). Their own resources and CPU staging, so the main path's are
@@ -6990,8 +6682,6 @@ namespace DCLF
 		// input rebuild (the views of one frame that share a mode share the inputs and the claims).
 		void PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,
 			IndirectDraws::ShadowStats& a_stats);
-		RE::NiPoint3 shadowRefEye;
-		std::uint64_t shadowSerial = 0;
 		ShadowPayload shadowPayload;
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		// The shadow job (CS_DCLF_ASYNC): kicked at BeforeShadowMaps, joined by ExecuteShadowFrame. The render
@@ -7041,24 +6731,24 @@ namespace DCLF
 		// The commits' own uploads on the render thread (CommitUploads).
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> commitStagedPool;
 		std::array<BuildCache, 2> buildCaches;  // indexed like mainPayload
-		BuildCache* CacheFor(std::size_t a_job) { return BuildCacheEnabled() ? &buildCaches[a_job] : nullptr; }
+		BuildCache* CacheFor(std::size_t a_job) { return &buildCaches[a_job]; }
 		// The persistent object records: the main epochs' buffer's (both segments'), and the shadow epoch's.
 		ObjectRecordStore mainObjects, shadowObjects;
 		BonesStore mainBones, shadowBones;  // likewise the bone rows
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records (Step 6)
-		ShadowKept* ShadowKeptState() { return PersistentShadowEnabled() && PersistentObjectsEnabled() ? &shadowKept : nullptr; }
-		BonesStore* MainBones() { return PersistentObjectsEnabled() ? &mainBones : nullptr; }
-		BonesStore* ShadowBones() { return PersistentObjectsEnabled() ? &shadowBones : nullptr; }
-		ObjectRecordStore* MainObjects() { return PersistentObjectsEnabled() ? &mainObjects : nullptr; }
-		ObjectRecordStore* ShadowObjects() { return PersistentObjectsEnabled() ? &shadowObjects : nullptr; }
+		ShadowKept* ShadowKeptState() { return &shadowKept; }
+		BonesStore* MainBones() { return &mainBones; }
+		BonesStore* ShadowBones() { return &shadowBones; }
+		ObjectRecordStore* MainObjects() { return &mainObjects; }
+		ObjectRecordStore* ShadowObjects() { return &shadowObjects; }
 		GeometryStore mainGeometries, shadowGeometries;  // likewise the geometry slots' draws
 		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
-		GeometryStore* MainGeometries() { return PersistentObjectsEnabled() ? &mainGeometries : nullptr; }
-		GeometryStore* ShadowGeometries() { return PersistentObjectsEnabled() ? &shadowGeometries : nullptr; }
+		GeometryStore* MainGeometries() { return &mainGeometries; }
+		GeometryStore* ShadowGeometries() { return &shadowGeometries; }
 		std::array<std::uint32_t, 4> decalWords{};  // the count buffer's decal words, uploaded per colour epoch
 
 		/** @brief The per-frame constant blocks of an epoch from the capture's mirrors (render thread; records the Z-prepass's bytes for the replay). */
-		void PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, const Resources& a_resources, FrameBlocks& a_out);
+		void PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out);
 		/** @brief The build's inputs, snapshotted on the render thread. Without a capture (a job kicked ahead of the epoch) the eye is the replayed one. */
 		MainInputs PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask, const SceneStore& a_store);
 
@@ -7158,11 +6848,6 @@ namespace DCLF
 		// pass and the composite, and the camera moves on. Reusing the bytes makes the two epochs agree.
 		std::array<std::vector<std::byte>, kConstantBufferRegisters> prepassVS;
 		RE::NiPoint3 prepassEye, prepassPreviousEye;
-		// The viewport transform the depth was written with. Skyrim's depth pass and its main pass do not
-		// use the same depth range - 0.999968 against 0.999998 - and the range scales the value that lands
-		// in the buffer, so the same vertex is written about 500 D24 units apart in the two passes. The
-		// colour pass tests EQUAL against that depth, so it has to rasterise with the prepass's range.
-		float prepassMinDepth = 0.0f, prepassMaxDepth = 1.0f;
 		// The main pass's viewport depth range, kept from its capture. The Z-prepass writes its depth with
 		// this rather than with the depth pass's own range, so that the depth in the buffer is what the
 		// main pass - DCLF's colour draws and the native draws alike - tests EQUAL against. It is stable
@@ -7338,7 +7023,7 @@ namespace DCLF
 				return created;
 			};
 			state->constants = buffer(kConstantBytes, "cs.dclf.constants");
-			state->recordCapacity = BindlessDraws() ? kMaxRecordsDeduplicated : kMaxDraws;
+			state->recordCapacity = kMaxRecordsDeduplicated;
 			state->records = buffer(std::uint64_t(state->recordCapacity) * sizeof(DrawBindings), "cs.dclf.records");
 			state->constantsDepth = buffer(kDepthConstantBytes, "cs.dclf.constants-depth");
 			state->recordsDepth = buffer(std::uint64_t(state->recordCapacity) * sizeof(DrawBindings), "cs.dclf.records-depth");
@@ -7400,9 +7085,7 @@ namespace DCLF
 					logger::info("[DCLF] pass statistics on: {} frame slots", slots);
 				}
 			}
-			if (DgcPreprocessEnabled()) {
-				state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
-			}
+			state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
 			state->inputs = CreateWords(std::uint64_t(kMaxInputs) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs");
 			state->inputsDepth = CreateWords(std::uint64_t(kMaxInputs) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth");
 			state->geometries = CreateWords(std::uint64_t(kMaxGeometries) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
@@ -7413,8 +7096,9 @@ namespace DCLF
 			if (!state->dispatchSignature)
 				return NotReady(7, "the BuildDraws dispatch signature could not be created");
 			state->latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), host->FrameSlots());
-			if (SortDraws())
-				state->sort = DrawSort::Create(device);
+			// The phase-1 and colour draws executed grouped by pipeline: BuildDraws appends in whatever order its threads
+			// finish, which made nearly every sequence of the indirect draw switch pipeline.
+			state->sort = DrawSort::Create(device);
 			if (BuildParityEnabled()) {
 				auto wrap = [](org::Buffer& a_buffer, std::uint64_t a_bytes) {
 					D3D11_BUFFER_DESC desc{};
@@ -7472,115 +7156,80 @@ namespace DCLF
 				return false;
 			}
 
-			// Off-screen copies of the main pass's targets.
+			state->width = target.Width;
+			state->height = target.Height;
+
+			// The main pass's targets and depth, imported.
 			state->targetCount = targets.colorCount;
 			for (std::uint32_t i = 0; i < targets.colorCount; ++i) {
+				DxvkOrgInteropResourceInfo info{};
+				if (!a_capture.targets[i] || !RenderGraphRuntime::Get().DescribeResource(a_capture.targets[i].get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+					return NotReady(5, "a main-pass target cannot be described");
 				org::TextureDescription desc{};
-				desc.imageDimensions.push_back({ target.Width, target.Height, 0, 0 });
 				desc.format = rhi::helpers::ToRHI(targets.colors[i]);
 				desc.channels = 4;
 				desc.hasRTV = true;
 				desc.rtvFormat = desc.format;
-				desc.hasSRV = true;
-				desc.srvFormat = desc.format;
-				desc.clearColor[3] = 0.0f;
-				state->targets[i] = org::PixelBuffer::CreateSharedUnmaterialized(desc);  // the graph materializes them
-				state->targets[i]->SetName(fmt::format("cs.dclf.target{}", i));
+				state->native[i] = ImportImage(device, info.image, desc, "DCLF native target");
+				if (!state->native[i])
+					return NotReady(6, "a main-pass target could not be imported");
 			}
-
-			// DCLF's own depth, with the main depth's format.
-			org::TextureDescription depthDesc{};
-			depthDesc.imageDimensions.push_back({ target.Width, target.Height, 0, 0 });
-			depthDesc.format = rhi::helpers::ToRHI(targets.depth);
-			depthDesc.channels = 1;
-			depthDesc.hasDSV = true;
-			depthDesc.dsvFormat = depthDesc.format;
 			{
-				auto depth = org::PixelBuffer::CreateSharedUnmaterialized(depthDesc);
-				depth->SetName("cs.dclf.depth");
-				state->depth = std::move(depth);
-			}
-			state->width = target.Width;
-			state->height = target.Height;
-
-			state->hybrid = HybridEnabled();
-			if (DebugViewEnabled() || state->hybrid) {
-				for (std::uint32_t i = 0; i < targets.colorCount; ++i) {
-					DxvkOrgInteropResourceInfo info{};
-					if (!a_capture.targets[i] || !RenderGraphRuntime::Get().DescribeResource(a_capture.targets[i].get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-						return NotReady(5, "a main-pass target cannot be described");
-					org::TextureDescription desc{};
-					desc.format = rhi::helpers::ToRHI(targets.colors[i]);
-					desc.channels = 4;
-					desc.hasRTV = true;
-					desc.rtvFormat = desc.format;
-					state->native[i] = ImportImage(device, info.image, desc, "DCLF native target");
-					if (!state->native[i])
-						return NotReady(6, "a main-pass target could not be imported");
-				}
-			}
-			if (state->hybrid) {
 				DxvkOrgInteropResourceInfo info{};
 				if (!a_capture.depth || !RenderGraphRuntime::Get().DescribeResource(a_capture.depth.get(), info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-					return NotReady(10, "the main-pass depth cannot be described (hybrid)");
+					return NotReady(10, "the main-pass depth cannot be described");
 				// Attachable and readable, from one import. The HZB build reads the same image the draws
 				// write, and importing it twice would give the graph two resources it believes are unrelated:
 				// it would order nothing between the depth draws and the read, and insert no barrier, so the
 				// build would reduce whatever happened to be there - in practice the cleared far plane.
-				org::TextureDescription nativeDepthDesc = depthDesc;
-				nativeDepthDesc.hasSRV = true;
-				nativeDepthDesc.srvFormat = DepthReadFormat(nativeDepthDesc.format);
-				state->nativeDepth = ImportImage(device, info.image, nativeDepthDesc, "DCLF native depth");
+				org::TextureDescription depthDesc{};
+				depthDesc.imageDimensions.push_back({ target.Width, target.Height, 0, 0 });
+				depthDesc.format = rhi::helpers::ToRHI(targets.depth);
+				depthDesc.channels = 1;
+				depthDesc.hasDSV = true;
+				depthDesc.dsvFormat = depthDesc.format;
+				depthDesc.hasSRV = true;
+				depthDesc.srvFormat = DepthReadFormat(depthDesc.format);
+				state->nativeDepth = ImportImage(device, info.image, depthDesc, "DCLF native depth");
 				if (!state->nativeDepth)
-					return NotReady(11, "the main-pass depth could not be imported (hybrid)");
+					return NotReady(11, "the main-pass depth could not be imported");
 			}
-			// Bisect: with the debug view on as well, the hybrid path keeps its native depth and its skipping
-			// but draws colour into DCLF's own targets, which are then copied over the native ones. If that
-			// is correct while drawing straight into the native targets is not, the difference is the
-			// destination rather than anything DCLF assembles or draws.
-			const bool offscreenColour = !state->hybrid || DebugViewEnabled();
-			state->offscreen = offscreenColour;
-			for (std::uint32_t i = 0; i < targets.colorCount; ++i)
-				state->drawTargets[i] = offscreenColour ? std::static_pointer_cast<org::Resource>(state->targets[i]) : std::static_pointer_cast<org::Resource>(state->native[i]);
-			state->drawDepth = state->hybrid ? std::static_pointer_cast<org::Resource>(state->nativeDepth) : state->depth;
 
-			// Phase 4: the hierarchical depth buffer.
+			// The hierarchical depth buffer.
 			//
 			// Mip 0 is half the next power of two of the depth, so the chain is a clean sequence of halvings
 			// and a mip level can be chosen from a screen-space extent by log2 alone. Padding to a power of
 			// two is what makes that true; the padded texels are outside the real depth and the build fills
 			// them with the far plane, which suppresses culling rather than causing it.
-			if (state->hybrid) {
-				auto nextPowerOfTwo = [](std::uint32_t a_value) {
-					std::uint32_t result = 1;
-					while (result < a_value)
-						result <<= 1;
-					return result;
-				};
-				state->hzbWidth = std::max(1u, nextPowerOfTwo(state->width) / 2);
-				state->hzbHeight = std::max(1u, nextPowerOfTwo(state->height) / 2);
-				state->hzbMips = 1;
-				for (std::uint32_t size = std::max(state->hzbWidth, state->hzbHeight); size > 1; size >>= 1)
-					++state->hzbMips;
+			auto nextPowerOfTwo = [](std::uint32_t a_value) {
+				std::uint32_t result = 1;
+				while (result < a_value)
+					result <<= 1;
+				return result;
+			};
+			state->hzbWidth = std::max(1u, nextPowerOfTwo(state->width) / 2);
+			state->hzbHeight = std::max(1u, nextPowerOfTwo(state->height) / 2);
+			state->hzbMips = 1;
+			for (std::uint32_t size = std::max(state->hzbWidth, state->hzbHeight); size > 1; size >>= 1)
+				++state->hzbMips;
 
-				org::TextureDescription hzbDesc{};
-				for (std::uint32_t mip = 0; mip < state->hzbMips; ++mip)
-					hzbDesc.imageDimensions.push_back({ std::max(1u, state->hzbWidth >> mip), std::max(1u, state->hzbHeight >> mip), 0, 0 });
-				hzbDesc.format = rhi::Format::R32_Float;
-				hzbDesc.channels = 1;
-				hzbDesc.hasUAV = true;
-				hzbDesc.uavFormat = hzbDesc.format;
-				hzbDesc.hasSRV = true;
-				hzbDesc.srvFormat = hzbDesc.format;
-				state->hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
-				state->hzb->SetName("cs.dclf.hzb");
+			org::TextureDescription hzbDesc{};
+			for (std::uint32_t mip = 0; mip < state->hzbMips; ++mip)
+				hzbDesc.imageDimensions.push_back({ std::max(1u, state->hzbWidth >> mip), std::max(1u, state->hzbHeight >> mip), 0, 0 });
+			hzbDesc.format = rhi::Format::R32_Float;
+			hzbDesc.channels = 1;
+			hzbDesc.hasUAV = true;
+			hzbDesc.uavFormat = hzbDesc.format;
+			hzbDesc.hasSRV = true;
+			hzbDesc.srvFormat = hzbDesc.format;
+			state->hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
+			state->hzb->SetName("cs.dclf.hzb");
 
-				state->hzbProgram = ComputeProgram::Load(device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
-				if (!state->hzbProgram) {
-					// The culling falls back to frustum only; the frame is unaffected.
-					logger::warn("[DCLF] The HZB compute program could not be created; occlusion culling stays off");
-					state->hzb.reset();
-				}
+			state->hzbProgram = ComputeProgram::Load(device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
+			if (!state->hzbProgram) {
+				// The culling falls back to frustum only; the frame is unaffected.
+				logger::warn("[DCLF] The HZB compute program could not be created; occlusion culling stays off");
+				state->hzb.reset();
 			}
 
 			state->lightLimitFix = lightLimitFix;
@@ -7655,10 +7304,8 @@ namespace DCLF
 			return ShadowNotReady(1, "the BuildDraws dispatch signature could not be created");
 		}
 		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", kShadowLatchBytes, host->FrameSlots());
-		if (DgcPreprocessEnabled()) {
-			state->preprocessShadow = PreprocessStates::Create(device, host->FrameSlots(), "the shadow views");
-			state->preprocessSky = PreprocessStates::Create(device, host->FrameSlots(), "Skylighting's occlusion map");
-		}
+		state->preprocessShadow = PreprocessStates::Create(device, host->FrameSlots(), "the shadow views");
+		state->preprocessSky = PreprocessStates::Create(device, host->FrameSlots(), "Skylighting's occlusion map");
 		state->facePositionsAddress = device.GetBufferDeviceAddress({ state->facePositions->GetAPIResource().GetHandle(), 0 });
 		state->constantsAddress = device.GetBufferDeviceAddress({ state->constants->GetAPIResource().GetHandle(), 0 });
 		state->recordsAddress = device.GetBufferDeviceAddress({ state->records->GetAPIResource().GetHandle(), 0 });
@@ -7713,9 +7360,8 @@ namespace DCLF
 		return Toggles::Get().Active().shadows;
 	}
 
-	void IndirectDraws::BeginShadowFrame(const RE::NiPoint3& a_eye)
+	void IndirectDraws::BeginShadowFrame()
 	{
-		impl->shadowRefEye = a_eye;
 		impl->pendingViews.clear();
 	}
 
@@ -7758,13 +7404,8 @@ namespace DCLF
 		                                  target == RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM ? 2u :
 		                                                                                                                     ~0u;
 		// The volumetric lighting copy holds only the volumetric-only casters (batch group 15, which is all the
-		// engine's flag-0x100 draw of the view renders): the view draws those alone (casterClass 1). Without the
-		// hook that withholds their passes (PassCapture::VolumetricClaimsAvailable) it is left to the engine whole.
+		// engine's flag-0x100 draw of the view renders): the view draws those alone (casterClass 1).
 		const bool volumetricCopy = target == RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM;
-		if (volumetricCopy && !PassCapture::VolumetricClaimsAvailable()) {
-			++shadowStats.volumetricSkipped;
-			return;
-		}
 		if (targetIndex == ~0u || !impl->ImportShadowDepth(targetIndex, target)) {
 			// Which target, once per target: anything here is a view the design has not met.
 			if (target < 32 && !((impl->shadowLoggedTargets >> target) & 1)) {
@@ -7945,7 +7586,7 @@ namespace DCLF
 		       impl->skyCommittedFrame == SceneStore::Get().GetFrame() && impl->skySkipped == 0 && impl->shadow->depth[kSkyDepthTarget];
 	}
 
-	bool IndirectDraws::ExecuteSkyOcclusion(bool a_diagnose)
+	bool IndirectDraws::ExecuteSkyOcclusion()
 	{
 		ZoneScopedN("CS.DCLF.ExecuteSkyOcclusion");
 		const auto start = std::chrono::steady_clock::now();
@@ -7965,89 +7606,6 @@ namespace DCLF
 		auto& payload = impl->shadowPayload;
 		const auto& view = impl->skyView;
 		const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(kSkyMode));
-		// [TEMP] CS_DCLF_SKYLIGHT_PARITY: the occluders DCLF's frustum test keeps that the engine did not register this map.
-		if (a_diagnose) {
-			const auto engineList = SunAccumulation::Get().TakeSkyRegistrations();
-			const ankerl::unordered_dense::set<const RE::BSGeometry*> engine(engineList.begin(), engineList.end());
-			float m[16];
-			FoldEyeIntoViewProj(view.viewProj, view.eye, m);
-			const auto& tables = store.GetTables();
-			std::vector<std::pair<float, std::string>> extra;
-			std::uint32_t kept = 0, both = 0;
-			skyFootprints.clear();
-			for (const auto& input : payload.Flat(kSkyMode)) {
-				const float* c = input.boundCentre;
-				const float r = input.boundRadius;
-				bool outside = false;
-				// Rows of the (row-major) view-projection: the clip-space planes x, y and z against w.
-				for (int p = 0; p < 6 && !outside; ++p) {
-					const int axis = p / 2;
-					const float sign = (p & 1) ? -1.0f : 1.0f;
-					float plane[4];
-					for (int k = 0; k < 4; ++k)
-						plane[k] = m[12 + k] + sign * m[axis * 4 + k];
-					if (axis == 2 && !(p & 1))
-						for (int k = 0; k < 4; ++k)
-							plane[k] = m[8 + k];  // z >= 0
-					const float length = std::sqrt(plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]);
-					outside = length > 0 && (plane[0] * c[0] + plane[1] * c[1] + plane[2] * c[2] + plane[3]) / length < -r;
-				}
-				if (outside)
-					continue;
-				++kept;
-				const auto* geometry = input.objectIndex < tables.objectGeometry.size() ? tables.objectGeometry[input.objectIndex] : nullptr;
-				// Its bound's footprint in the map's texels (the corners of its box, projected; y down).
-				{
-					float x0 = 1e30f, x1 = -1e30f, y0 = 1e30f, y1 = -1e30f;
-					for (std::uint32_t corner = 0; corner < 8; ++corner) {
-						const float p[3] = { c[0] + ((corner & 1) ? r : -r), c[1] + ((corner & 2) ? r : -r), c[2] + ((corner & 4) ? r : -r) };
-						const float x = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3];
-						const float y = m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7];
-						const float w = m[12] * p[0] + m[13] * p[1] + m[14] * p[2] + m[15];
-						const float nx = w != 0 ? x / w : x, ny = w != 0 ? y / w : y;
-						x0 = std::min(x0, nx), x1 = std::max(x1, nx), y0 = std::min(y0, ny), y1 = std::max(y1, ny);
-					}
-					auto texel = [&](float a_ndc, float a_size, bool a_flip) {
-						const float t = a_flip ? (1.0f - a_ndc) * 0.5f : (a_ndc + 1.0f) * 0.5f;
-						return static_cast<std::int32_t>(std::clamp(t * a_size, -1.0f, a_size + 1.0f));
-					};
-					SkyFootprint footprint;
-					footprint.x0 = texel(x0, float(view.width), false) + std::int32_t(view.x);
-					footprint.x1 = texel(x1, float(view.width), false) + std::int32_t(view.x);
-					footprint.y0 = texel(y1, float(view.height), true) + std::int32_t(view.y);
-					footprint.y1 = texel(y0, float(view.height), true) + std::int32_t(view.y);
-					if (geometry) {
-						auto* g = const_cast<RE::BSGeometry*>(geometry);
-						footprint.label = fmt::format("'{}' ({}) r {:.0f} technique {:#x} layout {:#x} flags {:#x} skin {}", g->name.c_str() ? g->name.c_str() : "?",
-							g->GetRTTI() ? g->GetRTTI()->name : "?", r, tables.skyTechnique[input.objectIndex],
-							VertexLayoutOf(tables.geometries[tables.objects[input.objectIndex].geometryIndex].vertexDesc), tables.objects[input.objectIndex].flags,
-							tables.skinPartitions[input.objectIndex]);
-					}
-					skyFootprints.push_back(std::move(footprint));
-				}
-				if (engine.contains(geometry)) {
-					++both;
-					continue;
-				}
-				if (!geometry)
-					continue;
-				auto* g = const_cast<RE::BSGeometry*>(geometry);
-				std::string chain;
-				int depth = 0;
-				for (auto* node = g->parent; node && depth < 5; node = node->parent, ++depth)
-					chain += fmt::format("/{}{}", node->name.c_str() && *node->name.c_str() ? node->name.c_str() : (node->GetRTTI() ? node->GetRTTI()->name : "?"),
-						(node->GetFlags().underlying() & 1) ? "(culled)" : "");
-				const auto* reference = g->GetUserData();
-				extra.emplace_back(r, fmt::format("'{}' r {:.0f} at ({:.0f} {:.0f} {:.0f}) technique {:#x} ref {:X} {} flags {:#x}{}", g->name.c_str() ? g->name.c_str() : "?", r, c[0], c[1], c[2],
-					tables.skyTechnique[input.objectIndex], reference ? reference->GetFormID() : 0, reference ? static_cast<int>(reference->GetFormType()) : -1,
-					g->GetFlags().underlying(), chain));
-			}
-			std::sort(extra.begin(), extra.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
-			logger::info("[DCLF][TEMP] Skylighting occlusion diagnosis: {} inputs, {} in DCLF's frustum, {} of them registered by the engine, {} not; engine registered {}",
-				inputCount, kept, both, extra.size(), engine.size());
-			for (std::size_t i = 0; i < extra.size() && i < 20; ++i)
-				logger::info("[DCLF][TEMP]   DCLF only: {}", extra[i].second);
-		}
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
 			resources->skyFrame.store(nullptr, std::memory_order_release);
 			CommitUploads uploads(impl->commitStagedPool);
@@ -8259,595 +7817,6 @@ namespace DCLF
 			impl->shadowExecutionOwner = frameOwners;
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);
-
-			// [TEMP] CS_DCLF_CASCADE_PROBE: per view, the casters DCLF's frustum test keeps (a CPU replica of
-			// BuildDrawsCS Culled against the view's latch matrix) against the ones the engine registered into
-			// that view's batch renderers this frame, and what the difference is made of.
-			if (PassCapture::CascadeProbeEnabled()) {
-				auto registrations = PassCapture::Get().TakeShadowRegistrations();
-				static std::uint32_t probeFrames = 0;
-				if ((probeFrames++ % 300) == 150) {
-					const auto& shadowViews = ShadowViews::Get();
-					ankerl::unordered_dense::map<std::uint32_t, ankerl::unordered_dense::set<const RE::BSGeometry*>> engineByView;
-					ankerl::unordered_dense::set<const RE::BSGeometry*> withheldSet;
-					std::uint32_t unattributed = 0;
-					for (const auto& r : registrations) {
-						const auto id = shadowViews.ViewOfBatch(r.batch);
-						if (id == ~0u) {
-							++unattributed;
-							continue;
-						}
-						engineByView[id].insert(r.geometry);
-						if (r.withheld)
-							withheldSet.insert(r.geometry);
-					}
-					logger::info("[DCLF] cascade probe: {} shadow registrations this frame ({} not attributed to a view)", registrations.size(), unattributed);
-					ankerl::unordered_dense::set<std::uint32_t> seenViews;
-					for (const auto& view : pending) {
-						if (!seenViews.insert(view.viewId).second)
-							continue;
-						float m[16];
-						FoldEyeIntoViewProj(view.viewProj, view.eye, m);
-						struct Clip { float x, y, z, w; };
-						auto project = [&](float px, float py, float pz) {
-							return Clip{ m[0] * px + m[1] * py + m[2] * pz + m[3], m[4] * px + m[5] * py + m[6] * pz + m[7],
-								m[8] * px + m[9] * py + m[10] * pz + m[11], m[12] * px + m[13] * py + m[14] * pz + m[15] };
-						};
-						// 0 kept, 1 rejected by x/y, 2 in front of near, 3 beyond far, 4 kept because a corner has w <= 0,
-						// 5 outside the engine's caster volume (the latch's planes), as BuildDrawsCS Culled now does
-						const bool noNear = view.renderMode == 0xE;
-						auto cull = [&](const DrawInput& a_in) -> int {
-							for (std::uint32_t p = 0; p < 6; ++p) {
-								if ((view.cullPlaneMask & (1u << p)) &&
-									view.cullPlanes[p][0] * a_in.boundCentre[0] + view.cullPlanes[p][1] * a_in.boundCentre[1] + view.cullPlanes[p][2] * a_in.boundCentre[2] - view.cullPlanes[p][3] < -a_in.boundRadius)
-									return 5;
-							}
-							bool nx = true, px = true, ny = true, py = true, zn = !noNear, zf = true;
-							for (std::uint32_t c = 0; c < 8; ++c) {
-								const float r = a_in.boundRadius;
-								const Clip clip = project(a_in.boundCentre[0] + ((c & 1) ? r : -r), a_in.boundCentre[1] + ((c & 2) ? r : -r), a_in.boundCentre[2] + ((c & 4) ? r : -r));
-								if (clip.w <= 1e-4f)
-									return 4;
-								nx &= clip.x < -clip.w;
-								px &= clip.x > clip.w;
-								ny &= clip.y < -clip.w;
-								py &= clip.y > clip.w;
-								zn &= clip.z < 0.0f;
-								zf &= clip.z > clip.w;
-							}
-							return (nx || px || ny || py) ? 1 : zn ? 2 : zf ? 3 : 0;
-						};
-						const auto& engine = engineByView[view.viewId];
-						// The engine's cull volumes for this descriptor: its clipPlanes (the cascade's split slab) and
-						// the culling process's custom planes (+0xAC, 6 NiPlanes, active mask at +0x10C, used when
-						// +0x11F is set; UpdateCamera builds them from the main camera frustum's corners).
-						const RE::NiPlane* clipPlanes = nullptr;
-						const RE::NiCamera* camera = nullptr;
-						std::uint32_t clipMask = 0;
-						const RE::NiPlane* customPlanes = nullptr;
-						std::uint32_t customMask = 0, customFlag = 0;
-						if (const auto* sv = shadowViews.At(view.viewId); sv && sv->light && !sv->focus) {
-							auto& lightData = const_cast<RE::BSShadowLight*>(sv->light)->GetRuntimeData();
-							if (sv->descriptor < lightData.shadowmapDescriptors.size()) {
-								const auto& descriptor = lightData.shadowmapDescriptors[sv->descriptor];
-								clipPlanes = descriptor.clipPlanes.cullingPlanes;
-								camera = descriptor.camera.get();
-								clipMask = descriptor.clipPlanes.activePlanes.underlying();
-								if (const auto* process = reinterpret_cast<const std::byte*>(descriptor.cullingProcess)) {
-									customPlanes = reinterpret_cast<const RE::NiPlane*>(process + 0xAC);
-									customMask = *reinterpret_cast<const std::uint32_t*>(process + 0x10C);
-									customFlag = *reinterpret_cast<const std::uint8_t*>(process + 0x11F);
-								}
-							}
-						}
-						// The engine camera's orthographic frustum: per set (0 both, 1 DCLF only), per bound (0 DCLF's,
-						// 1 the geometry's worldBound), rejections by near, far, left/right, bottom/top.
-						std::uint32_t cameraRejects[2][2][4] = {};
-						auto testCamera = [&](const float* a_c, float a_r, std::uint32_t (&a_out)[4]) {
-							if (!camera)
-								return;
-							const auto& world = camera->world;
-							const auto& f = camera->GetRuntimeData2().viewFrustum;
-							const float d[3] = { a_c[0] - world.translate.x, a_c[1] - world.translate.y, a_c[2] - world.translate.z };
-							auto axis = [&](int k) { return world.rotate.entry[0][k] * d[0] + world.rotate.entry[1][k] * d[1] + world.rotate.entry[2][k] * d[2]; };
-							const float depth = axis(0), up = axis(1), right = axis(2);
-							a_out[0] += depth < f.fNear - a_r;
-							a_out[1] += depth > f.fFar + a_r;
-							a_out[2] += right < f.fLeft - a_r || right > f.fRight + a_r;
-							a_out[3] += up < f.fBottom - a_r || up > f.fTop + a_r;
-						};
-						// The ancestors: per set, how many have an ancestor whose worldBound the custom planes reject,
-						// one flagged hidden (NiAVObject flag bit 0), and the OR of the ancestors' and the geometry's flags.
-						std::uint32_t ancestorOutside[2] = {}, ancestorHidden[2] = {}, ancestorDepthSum[2] = {};
-						std::uint64_t flagsOr[2] = {}, flagsAnd[2] = { ~0ull, ~0ull };
-						std::string ancestry[2];
-						std::uint32_t ancestryLogged[2] = {};
-						auto testAncestors = [&](const RE::BSGeometry* a_geometry, std::uint32_t a_set) {
-							if (!a_geometry)
-								return;
-							std::uint32_t depth = 0;
-							bool outside = false, hidden = false;
-							std::uint64_t flags = a_geometry->GetFlags().underlying();
-							std::string chain;
-							for (const RE::NiAVObject* node = a_geometry->parent; node; node = node->parent, ++depth) {
-								const auto& wb = node->worldBound;
-								bool out = false;
-								for (std::uint32_t p = 0; p < 6 && customPlanes; ++p) {
-									if (!(customMask & (1u << p)))
-										continue;
-									const auto& plane = customPlanes[p];
-									if (plane.normal.x * wb.center.x + plane.normal.y * wb.center.y + plane.normal.z * wb.center.z - plane.constant < -wb.radius)
-										out = true;
-								}
-								outside |= out;
-								const std::uint64_t nodeFlags = node->GetFlags().underlying();
-								hidden |= (nodeFlags & 1) != 0;
-								flags |= nodeFlags;
-								if (ancestryLogged[a_set] < 3 && depth < 6)
-									chain += fmt::format(" > '{}' {} flags {:#x} r {:.0f}{}", node->name.c_str() ? node->name.c_str() : "", node->GetRTTI() ? node->GetRTTI()->name : "?", nodeFlags, wb.radius, out ? " OUT" : "");
-							}
-							ancestorOutside[a_set] += outside;
-							ancestorHidden[a_set] += hidden;
-							ancestorDepthSum[a_set] += depth;
-							flagsOr[a_set] |= flags;
-							flagsAnd[a_set] &= flags;
-							if (ancestryLogged[a_set] < 3) {
-								++ancestryLogged[a_set];
-								ancestry[a_set] += fmt::format(" | '{}' flags {:#x}:{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", a_geometry->GetFlags().underlying(), chain);
-							}
-						};
-						// The caster rule's inputs per set: kCastShadows (bit 9), the fade, the material alpha, and
-						// property flag bits that differ between the sets (OR and AND).
-						std::uint32_t noCast[2] = {}, faded[2] = {}, sharedProperty[2] = {};
-						std::uint64_t propOr[2] = {}, propAnd[2] = { ~0ull, ~0ull };
-						std::string ruleSamples[2];
-						std::uint32_t ruleLogged[2] = {};
-						ankerl::unordered_dense::map<const RE::BSShaderProperty*, std::uint32_t> propertyUses;
-						for (const auto& input : payload.Flat(view.modeIndex))
-							if (input.objectIndex < tables.objectGeometry.size())
-								if (const auto* g = tables.objectGeometry[input.objectIndex])
-									if (const auto* prop = g->GetGeometryRuntimeData().shaderProperty.get())
-										++propertyUses[static_cast<const RE::BSShaderProperty*>(prop)];
-						auto testRule = [&](const RE::BSGeometry* a_geometry, std::uint32_t a_set) {
-							if (!a_geometry)
-								return;
-							const auto* prop = static_cast<const RE::BSShaderProperty*>(a_geometry->GetGeometryRuntimeData().shaderProperty.get());
-							const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(prop);
-							if (!lighting)
-								return;
-							const std::uint64_t flags = lighting->flags.underlying();
-							noCast[a_set] += !(flags & (1ull << 9));
-							const float fade = lighting->fadeNode ? const_cast<RE::BSFadeNode*>(lighting->fadeNode)->GetRuntimeData().currentFade : 1.0f;
-							const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-							const float alpha = material ? material->materialAlpha : 1.0f;
-							faded[a_set] += fade * alpha < 1.0f;
-							propOr[a_set] |= flags;
-							propAnd[a_set] &= flags;
-							const auto uses = propertyUses[prop];
-							sharedProperty[a_set] += uses > 1;
-							if (ruleLogged[a_set] < 6) {
-								++ruleLogged[a_set];
-								ruleSamples[a_set] += fmt::format(" | '{}' flags {:#x} fade {:.2f} alpha {:.2f} reject {} property uses {} material {}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", flags,
-									fade, alpha, ShadowRejectName(ShadowCasterReject(prop, a_geometry)), uses, static_cast<const void*>(lighting->material));
-							}
-						};
-						// [set: 0 both, 1 DCLF only][volume: 0 clip, 1 custom][sign: 0 n.c-d < -r, 1 n.c-d > r]
-						std::uint32_t planeRejects[2][2][2] = {};
-						auto testPlanes = [&](const RE::NiPlane* a_planes, std::uint32_t a_mask, const float* a_c, float a_r, std::uint32_t (&a_out)[2][2], std::uint32_t a_volume) {
-							if (!a_planes)
-								return;
-							bool outA = false, outB = false;
-							for (std::uint32_t p = 0; p < 6; ++p) {
-								if (!(a_mask & (1u << p)))
-									continue;
-								const auto& plane = a_planes[p];
-								const float d = plane.normal.x * a_c[0] + plane.normal.y * a_c[1] + plane.normal.z * a_c[2] - plane.constant;
-								outA |= d < -a_r;
-								outB |= d > a_r;
-							}
-							a_out[a_volume][0] += outA;
-							a_out[a_volume][1] += outB;
-						};
-						const auto inputs = payload.Flat(view.modeIndex);
-						std::uint32_t kept = 0, both = 0, dclfOnly = 0, byReason[6] = {};
-						std::uint32_t onlyByRadius[5] = {};  // <64, <256, <1024, <4096, more
-						std::uint32_t onlyZ[3] = {};         // centre depth: in front of near, inside, beyond far
-						std::uint32_t onlyInOtherView = 0;
-						double onlyDistance = 0.0, bothDistance = 0.0;
-						std::string onlyNames;
-						std::uint32_t named = 0;
-						// The engine's candidates: the cascade cull (FUN_140e305c0) walks each full-frustum culling
-						// process's objectArray, skipping hidden entries, and culls every entry recursively. A geometry
-						// not under an entry is never a candidate. Mapped to the entry that covers it.
-						ankerl::unordered_dense::map<const RE::BSGeometry*, const RE::NiAVObject*> candidateEntry;
-						std::uint32_t candidateEntries = 0, candidateProcesses = 0, candidateEntryGeometries = 0;
-						std::vector<const RE::BSCullingProcess*> fullFrustumProcesses;
-						std::string processInfo;
-						ankerl::unordered_dense::map<std::string, std::uint32_t> entryTypes;
-						if (const auto* sv = shadowViews.At(view.viewId); sv && sv->light && !sv->focus &&
-																		  const_cast<RE::BSShadowLight*>(sv->light)->GetIsDirectionalLight()) {
-							auto& directional = static_cast<RE::BSShadowDirectionalLight*>(const_cast<RE::BSShadowLight*>(sv->light))->GetShadowDirectionalLightRuntimeData();
-							std::function<void(const RE::NiAVObject*, const RE::NiAVObject*)> collect = [&](const RE::NiAVObject* a_object, const RE::NiAVObject* a_entry) {
-								if (!a_object || (a_object->GetFlags().underlying() & 1))
-									return;
-								if (const auto* g = const_cast<RE::NiAVObject*>(a_object)->AsGeometry()) {
-									candidateEntry.emplace(g, a_entry);
-									return;
-								}
-								if (auto* node = const_cast<RE::NiAVObject*>(a_object)->AsNode())
-									for (const auto& child : node->GetChildren())
-										collect(child.get(), a_entry);
-							};
-							for (const auto& process : directional.fullFrustumCullingProcessArray) {
-								if (!process)
-									continue;
-								++candidateProcesses;
-								fullFrustumProcesses.push_back(process.get());
-								processInfo += fmt::format(" [{} entries, cullMode {}, compound {}, portal {}, planes {:#x}, custom {} {:#x}, ignorePreprocess {}, camera {}]", process->objectArray.size(),
-									static_cast<int>(process->cullMode.get()), static_cast<const void*>(process->compoundFrustum), static_cast<const void*>(process->portalGraphEntry),
-									process->planes.activePlanes.underlying(), process->doCustomCullPlanes, process->customCullPlanes.activePlanes.underlying(), process->ignorePreprocess,
-									static_cast<const void*>(process->camera));
-								for (const auto& entry : process->objectArray) {
-									++candidateEntries;
-									if (entry && candidateEntries < 20000) {
-										const auto* parent = entry->parent;
-										const auto* grand = parent ? parent->parent : nullptr;
-										++entryTypes[fmt::format("{} {:#x} user {} < {} {:#x} user {} r {:.0f} < {}", entry->GetRTTI() ? entry->GetRTTI()->name : "?", entry->GetFlags().underlying(),
-											const_cast<RE::NiAVObject*>(entry.get())->GetUserData() != nullptr, parent && parent->GetRTTI() ? parent->GetRTTI()->name : "-",
-											parent ? parent->GetFlags().underlying() : 0u, parent && const_cast<RE::NiNode*>(parent)->GetUserData() != nullptr, parent ? parent->worldBound.radius : 0.0f,
-											grand && grand->GetRTTI() ? grand->GetRTTI()->name : "-")];
-										// The entry's siblings that are not entries: what the list left out at the same level.
-										if (parent)
-											for (const auto& sibling : const_cast<RE::NiNode*>(parent)->GetChildren())
-												if (sibling && sibling.get() != entry.get())
-													++entryTypes[fmt::format("  sibling {} {:#x} user {}", sibling->GetRTTI() ? sibling->GetRTTI()->name : "?", sibling->GetFlags().underlying(),
-														sibling->GetUserData() != nullptr)];
-									}
-									candidateEntryGeometries += entry && const_cast<RE::NiAVObject*>(entry.get())->AsGeometry() != nullptr;
-									collect(entry.get(), entry.get());
-								}
-							}
-						}
-						// Per set (0 both, 1 DCLF only): not a candidate; a candidate whose path from its entry has a node
-						// the custom planes reject; one the camera's far/left/right/bottom/top reject; neither.
-						std::uint32_t candidateResult[2][4] = {};
-						std::string candidateSamples;
-						std::uint32_t candidateLogged = 0;
-						auto testCandidate = [&](const RE::BSGeometry* a_geometry, std::uint32_t a_set) {
-							const auto it = candidateEntry.find(a_geometry);
-							if (it == candidateEntry.end()) {
-								++candidateResult[a_set][0];
-								if (a_set == 1 && candidateLogged < 6) {
-									++candidateLogged;
-									const RE::NiAVObject* top = a_geometry;
-									std::string chain;
-									for (const RE::NiAVObject* n = a_geometry; n && chain.size() < 900; n = n->parent) {
-										// Per full-frustum process: the plane indices of its own frustum planes (what
-										// TestBaseVisibility3 tests) that reject this node's worldBound.
-										std::string outs;
-										for (std::size_t k = 0; k < fullFrustumProcesses.size(); ++k) {
-											const auto& fp = fullFrustumProcesses[k]->planes;
-											const auto& wb = n->worldBound;
-											std::string planesOut;
-											for (std::uint32_t q = 0; q < 6; ++q)
-												if ((fp.activePlanes.underlying() & (1u << q)) &&
-													fp.cullingPlanes[q].normal.x * wb.center.x + fp.cullingPlanes[q].normal.y * wb.center.y + fp.cullingPlanes[q].normal.z * wb.center.z - fp.cullingPlanes[q].constant < -wb.radius)
-													planesOut += std::to_string(q);
-											if (!planesOut.empty())
-												outs += fmt::format(" p{}:{}", k, planesOut);
-										}
-										chain += fmt::format(" > '{}' {} flags {:#x} r {:.0f}{}", n->name.c_str() ? n->name.c_str() : "", n->GetRTTI() ? n->GetRTTI()->name : "?", n->GetFlags().underlying(), n->worldBound.radius,
-											outs.empty() ? "" : " OUT" + outs);
-									}
-									(void)top;
-									candidateSamples += fmt::format(" | '{}' not a candidate:{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", chain);
-								}
-								return;
-							}
-							const char* planeFail = nullptr;
-							const char* cameraFail = nullptr;
-							std::string failName;
-							for (const RE::NiAVObject* n = a_geometry; n; n = n->parent) {
-								const auto& wb = n->worldBound;
-								if (!planeFail && customPlanes)
-									for (std::uint32_t p = 0; p < 6; ++p)
-										if ((customMask & (1u << p)) && customPlanes[p].normal.x * wb.center.x + customPlanes[p].normal.y * wb.center.y + customPlanes[p].normal.z * wb.center.z - customPlanes[p].constant < -wb.radius) {
-											planeFail = n->GetRTTI() ? n->GetRTTI()->name : "?";
-											failName = n->name.c_str() ? n->name.c_str() : "";
-											break;
-										}
-								if (!cameraFail && camera) {
-									std::uint32_t r[4] = {};
-									const float c[3] = { wb.center.x, wb.center.y, wb.center.z };
-									testCamera(c, wb.radius, r);
-									if (r[1] || r[2] || r[3]) {
-										cameraFail = n->GetRTTI() ? n->GetRTTI()->name : "?";
-										if (failName.empty())
-											failName = n->name.c_str() ? n->name.c_str() : "";
-									}
-								}
-								if (n == it->second)
-									break;
-							}
-							++candidateResult[a_set][planeFail ? 1 : cameraFail ? 2 : 3];
-							if (a_set == 1 && candidateLogged < 6) {
-								++candidateLogged;
-								candidateSamples += fmt::format(" | '{}' candidate under '{}' {}: planes fail at {}, camera fails at {} ('{}')", a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
-									it->second->name.c_str() ? it->second->name.c_str() : "", it->second->GetRTTI() ? it->second->GetRTTI()->name : "?", planeFail ? planeFail : "-", cameraFail ? cameraFail : "-", failName);
-							}
-						};
-						// The full-frustum volume on the geometry's own bound: per set (0 both, 1 DCLF only), outside
-						// the first process's planes / customCullPlanes; and how far planes and customCullPlanes differ.
-						std::uint32_t fullOut[2][2] = {};
-						// On the property's fade node's bound instead: per set, outside; and, for candidates, whether the
-						// entry covering the geometry is that fade node, an ancestor above it, or neither / no fade node.
-						std::uint32_t fadeOut[2] = {}, entryIsFade[2] = {}, entryAboveFade[2] = {}, entryOther[2] = {}, noFade[2] = {};
-						std::string fadeOutBoth, entryOtherSamples;
-						// The reference root (the nearest ancestor, or the geometry, with userData): outside the
-						// full-frustum planes per set, and whether it is the candidate's entry.
-						std::uint32_t rootOut[2] = {}, noRoot[2] = {}, entryIsRoot[2] = {}, entryNotRoot[2] = {};
-						std::string rootOutBoth, entryNotRootSamples;
-						float planesDiff = 0.0f;
-						std::string fullOutBoth;
-						if (!fullFrustumProcesses.empty()) {
-							const auto& a = fullFrustumProcesses[0]->planes;
-							const auto& b = fullFrustumProcesses[0]->customCullPlanes;
-							for (std::uint32_t q = 0; q < 6; ++q) {
-								planesDiff = (std::max)(planesDiff, std::abs(a.cullingPlanes[q].normal.x - b.cullingPlanes[q].normal.x) + std::abs(a.cullingPlanes[q].normal.y - b.cullingPlanes[q].normal.y) +
-																		 std::abs(a.cullingPlanes[q].normal.z - b.cullingPlanes[q].normal.z));
-								planesDiff = (std::max)(planesDiff, std::abs(a.cullingPlanes[q].constant - b.cullingPlanes[q].constant));
-							}
-						}
-						auto testFull = [&](const DrawInput& a_in, const RE::BSGeometry* a_geometry, std::uint32_t a_set) {
-							if (fullFrustumProcesses.empty())
-								return;
-							const RE::NiAVObject* fade = nullptr;
-							if (a_geometry)
-								if (const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(const_cast<RE::BSGeometry*>(a_geometry)->GetGeometryRuntimeData().shaderProperty.get()))
-									fade = lighting->fadeNode;
-							if (!fade) {
-								++noFade[a_set];
-							} else {
-								const auto& fp = fullFrustumProcesses[0]->planes;
-								const auto& wb = fade->worldBound;
-								for (std::uint32_t q = 0; q < 6; ++q)
-									if ((fp.activePlanes.underlying() & (1u << q)) &&
-										fp.cullingPlanes[q].normal.x * wb.center.x + fp.cullingPlanes[q].normal.y * wb.center.y + fp.cullingPlanes[q].normal.z * wb.center.z - fp.cullingPlanes[q].constant < -wb.radius) {
-										++fadeOut[a_set];
-										if (a_set == 0 && fadeOutBoth.size() < 400)
-											fadeOutBoth += fmt::format(" '{}'", fade->name.c_str() ? fade->name.c_str() : "");
-										break;
-									}
-							}
-							const RE::NiAVObject* root = nullptr;
-							{
-								// The topmost ancestor carrying the same reference as the nearest one that carries any.
-								const void* reference = nullptr;
-								for (const RE::NiAVObject* n = a_geometry; n; n = n->parent) {
-									const void* user = const_cast<RE::NiAVObject*>(n)->GetUserData();
-									if (!reference && user)
-										reference = user;
-									if (reference && user == reference)
-										root = n;
-									else if (reference && user && user != reference)
-										break;
-								}
-							}
-							if (!root) {
-								++noRoot[a_set];
-							} else {
-								const auto& fp = fullFrustumProcesses[0]->planes;
-								const auto& wb = root->worldBound;
-								for (std::uint32_t q = 0; q < 6; ++q)
-									if ((fp.activePlanes.underlying() & (1u << q)) &&
-										fp.cullingPlanes[q].normal.x * wb.center.x + fp.cullingPlanes[q].normal.y * wb.center.y + fp.cullingPlanes[q].normal.z * wb.center.z - fp.cullingPlanes[q].constant < -wb.radius) {
-										++rootOut[a_set];
-										if (a_set == 0 && rootOutBoth.size() < 400)
-											rootOutBoth += fmt::format(" '{}' root '{}' {}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", root->name.c_str() ? root->name.c_str() : "", root->GetRTTI() ? root->GetRTTI()->name : "?");
-										break;
-									}
-							}
-							if (const auto it = candidateEntry.find(a_geometry); it != candidateEntry.end()) {
-								if (it->second == root)
-									++entryIsRoot[a_set];
-								else {
-									++entryNotRoot[a_set];
-									if (entryNotRootSamples.size() < 600)
-										entryNotRootSamples += fmt::format(" '{}' entry '{}' {} r {:.0f} children {} user {} parent '{}' {} r {:.0f}, is the root's parent {}; root '{}' {} r {:.0f}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", it->second->name.c_str() ? it->second->name.c_str() : "",
-											it->second->GetRTTI() ? it->second->GetRTTI()->name : "?", it->second->worldBound.radius,
-											const_cast<RE::NiAVObject*>(it->second)->AsNode() ? const_cast<RE::NiAVObject*>(it->second)->AsNode()->GetChildren().size() : 0,
-											static_cast<const void*>(const_cast<RE::NiAVObject*>(it->second)->GetUserData()),
-											it->second->parent && it->second->parent->name.c_str() ? it->second->parent->name.c_str() : "-", it->second->parent && it->second->parent->GetRTTI() ? it->second->parent->GetRTTI()->name : "-",
-											it->second->parent ? it->second->parent->worldBound.radius : 0.0f, root && root->parent == it->second,
-											root && root->name.c_str() ? root->name.c_str() : "-", root && root->GetRTTI() ? root->GetRTTI()->name : "-", root ? root->worldBound.radius : 0.0f);
-								}
-							}
-							if (const auto it = candidateEntry.find(a_geometry); it != candidateEntry.end()) {
-								if (it->second == fade)
-									++entryIsFade[a_set];
-								else {
-									bool above = false;
-									for (const RE::NiAVObject* n = fade ? fade->parent : nullptr; n; n = n->parent)
-										if (n == it->second)
-											above = true;
-									++(above ? entryAboveFade : entryOther)[a_set];
-									if (entryOtherSamples.size() < 600)
-										entryOtherSamples += fmt::format(" '{}' entry '{}' {} fade '{}'", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", it->second->name.c_str() ? it->second->name.c_str() : "",
-											it->second->GetRTTI() ? it->second->GetRTTI()->name : "?", fade && fade->name.c_str() ? fade->name.c_str() : "-");
-								}
-							}
-							for (std::uint32_t k = 0; k < 2; ++k) {
-								const auto& fp = k == 0 ? fullFrustumProcesses[0]->planes : fullFrustumProcesses[0]->customCullPlanes;
-								for (std::uint32_t q = 0; q < 6; ++q)
-									if ((fp.activePlanes.underlying() & (1u << q)) &&
-										fp.cullingPlanes[q].normal.x * a_in.boundCentre[0] + fp.cullingPlanes[q].normal.y * a_in.boundCentre[1] + fp.cullingPlanes[q].normal.z * a_in.boundCentre[2] - fp.cullingPlanes[q].constant < -a_in.boundRadius) {
-										++fullOut[a_set][k];
-										if (k == 0 && a_set == 0 && fullOutBoth.size() < 600 && a_geometry)
-											fullOutBoth += fmt::format(" '{}' r {:.0f} plane {} by {:.0f}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", a_in.boundRadius, q,
-												-(fp.cullingPlanes[q].normal.x * a_in.boundCentre[0] + fp.cullingPlanes[q].normal.y * a_in.boundCentre[1] + fp.cullingPlanes[q].normal.z * a_in.boundCentre[2] - fp.cullingPlanes[q].constant) - a_in.boundRadius);
-										break;
-									}
-							}
-						};
-						ankerl::unordered_dense::set<const RE::BSGeometry*> dclfSet;
-						ankerl::unordered_dense::map<const RE::BSGeometry*, int> reasonOf;
-						std::uint32_t sunEntryRejected = 0;
-						for (const auto& input : inputs) {
-							// The sun's entry rule, as BuildDrawsCS applies it for the view (kCullSunEntry).
-							if (view.sunView && ((input.flags & kInputOutsideSunEntry) || OutsideSunEntry(payload.inputs, tables, input.objectIndex))) {
-								++sunEntryRejected;
-								continue;
-							}
-							const int reason = cull(input);
-							++byReason[reason];
-							if (input.objectIndex < tables.objectGeometry.size())
-								reasonOf[tables.objectGeometry[input.objectIndex]] = reason;
-							if (reason == 1 || reason == 2 || reason == 3 || reason == 5)
-								continue;
-							++kept;
-							const auto* geometry = input.objectIndex < tables.objectGeometry.size() ? tables.objectGeometry[input.objectIndex] : nullptr;
-							dclfSet.insert(geometry);
-							const float dx = input.boundCentre[0] - view.eye.x, dy = input.boundCentre[1] - view.eye.y;
-							const double distance = std::sqrt(double(dx) * dx + double(dy) * dy);
-							const std::uint32_t set = engine.contains(geometry) ? 0u : 1u;
-							testPlanes(clipPlanes, clipMask, input.boundCentre, input.boundRadius, planeRejects[set], 0);
-							testPlanes(customPlanes, customMask, input.boundCentre, input.boundRadius, planeRejects[set], 1);
-							testCamera(input.boundCentre, input.boundRadius, cameraRejects[set][0]);
-							testAncestors(geometry, set);
-							testRule(geometry, set);
-							if (geometry)
-								testCandidate(geometry, set);
-							testFull(input, geometry, set);
-							if (geometry) {
-								const auto& wb = geometry->worldBound;
-								const float wc[3] = { wb.center.x, wb.center.y, wb.center.z };
-								testCamera(wc, wb.radius, cameraRejects[set][1]);
-							}
-							if (engine.contains(geometry)) {
-								++both;
-								bothDistance += distance;
-								continue;
-							}
-							++dclfOnly;
-							onlyDistance += distance;
-							const float r = input.boundRadius;
-							++onlyByRadius[r < 64 ? 0 : r < 256 ? 1 : r < 1024 ? 2 : r < 4096 ? 3 : 4];
-							const Clip centre = project(input.boundCentre[0], input.boundCentre[1], input.boundCentre[2]);
-							++onlyZ[centre.z < 0 ? 0 : centre.z > centre.w ? 2 : 1];
-							for (const auto& [otherId, otherSet] : engineByView)
-								if (otherId != view.viewId && otherSet.contains(geometry)) {
-									++onlyInOtherView;
-									break;
-								}
-							if (geometry && named < 12) {
-								++named;
-								onlyNames += fmt::format("{}'{}' r {:.0f} d {:.0f} z {:.2f}", onlyNames.empty() ? "" : ", ", geometry->name.c_str() ? geometry->name.c_str() : "", r, distance,
-									centre.w != 0 ? centre.z / centre.w : 0.0f);
-							}
-						}
-						std::uint32_t engineOnly = 0, engineOnlyWithheld = 0, engineOnlyReason[7] = {};  // reasons 1-5 as cull(), 6 not an input
-						std::string engineOnlyNames;
-						for (const auto* geometry : engine) {
-							if (dclfSet.contains(geometry))
-								continue;
-							++engineOnly;
-							if (!withheldSet.contains(geometry))
-								continue;
-							++engineOnlyWithheld;
-							const auto it = reasonOf.find(geometry);
-							const int reason = it == reasonOf.end() ? 6 : it->second;
-							++engineOnlyReason[reason];
-							if (geometry && engineOnlyWithheld <= 8) {
-								// Where the geometry is against the box: the worldBound's NDC x/y range, and for a skinned
-								// part the NDC x/y range of its bones' translations (the palette is absolute world).
-								const auto& wb = geometry->worldBound;
-								float bx[2] = { 1e30f, -1e30f }, by[2] = { 1e30f, -1e30f };
-								for (std::uint32_t c = 0; c < 8; ++c) {
-									const float r = wb.radius;
-									const Clip clip = project(wb.center.x + ((c & 1) ? r : -r), wb.center.y + ((c & 2) ? r : -r), wb.center.z + ((c & 4) ? r : -r));
-									const float w = clip.w != 0 ? clip.w : 1.0f;
-									bx[0] = (std::min)(bx[0], clip.x / w), bx[1] = (std::max)(bx[1], clip.x / w);
-									by[0] = (std::min)(by[0], clip.y / w), by[1] = (std::max)(by[1], clip.y / w);
-								}
-								std::string bones = "unskinned";
-								if (const auto* skin = const_cast<RE::BSGeometry*>(geometry)->GetGeometryRuntimeData().skinInstance.get(); skin && skin->boneMatrices && skin->numMatrices) {
-									float kx[2] = { 1e30f, -1e30f }, ky[2] = { 1e30f, -1e30f };
-									const auto* rows = static_cast<const float*>(skin->boneMatrices);
-									for (std::uint32_t b = 0; b < skin->numMatrices; ++b) {
-										const float* m3 = rows + b * 12;
-										const Clip clip = project(m3[3], m3[7], m3[11]);
-										const float w = clip.w != 0 ? clip.w : 1.0f;
-										kx[0] = (std::min)(kx[0], clip.x / w), kx[1] = (std::max)(kx[1], clip.x / w);
-										ky[0] = (std::min)(ky[0], clip.y / w), ky[1] = (std::max)(ky[1], clip.y / w);
-									}
-									const float* m0 = rows;
-									bones = fmt::format("{} bones x {:.2f}..{:.2f} y {:.2f}..{:.2f}, bone0 ({:.0f} {:.0f} {:.0f})", skin->numMatrices, kx[0], kx[1], ky[0], ky[1], m0[3], m0[7], m0[11]);
-								}
-								engineOnlyNames += fmt::format("{}'{}' ({}; centre ({:.0f} {:.0f} {:.0f}) r {:.0f} x {:.2f}..{:.2f} y {:.2f}..{:.2f}; {}; world ({:.0f} {:.0f} {:.0f}))", engineOnlyNames.empty() ? "" : ", ",
-									geometry->name.c_str() ? geometry->name.c_str() : "",
-									reason == 1 ? "x/y" : reason == 2 ? "before near" : reason == 3 ? "beyond far" : reason == 5 ? "engine volume" : reason == 6 ? "not an input" : "?",
-									wb.center.x, wb.center.y, wb.center.z, wb.radius, bx[0], bx[1], by[0], by[1], bones, geometry->world.translate.x, geometry->world.translate.y, geometry->world.translate.z);
-							}
-						}
-						logger::info("[DCLF] cascade probe view {}: engine only {}, of them withheld (drawn by nobody) {}: rejected by DCLF x/y {}, before near {}, beyond far {}, engine volume {}, not an input {}",
-							view.viewId, engineOnly, engineOnlyWithheld, engineOnlyReason[1], engineOnlyReason[2], engineOnlyReason[3], engineOnlyReason[5], engineOnlyReason[6]);
-						logger::info("[DCLF] cascade probe view {} (slice {}, mode {:#x}): {} inputs; DCLF keeps {} (sun entry rejected {}, engine volume rejected {}, x/y rejected {}, before near {}, beyond far {}, w<=0 kept {}); engine registered {}; both {}, DCLF only {}, engine only {}",
-							view.viewId, view.slice, view.renderMode, inputs.size(), kept, sunEntryRejected, byReason[5], byReason[1], byReason[2], byReason[3], byReason[4], engine.size(), both, dclfOnly, engineOnly);
-						logger::info("[DCLF] cascade probe view {}: DCLF-only by radius <64 {} <256 {} <1024 {} <4096 {} more {}; centre depth before near {} inside {} beyond far {}; {} of them in another view's engine set; mean horizontal distance DCLF-only {:.0f}, both {:.0f}",
-							view.viewId, onlyByRadius[0], onlyByRadius[1], onlyByRadius[2], onlyByRadius[3], onlyByRadius[4], onlyZ[0], onlyZ[1], onlyZ[2], onlyInOtherView,
-							dclfOnly ? onlyDistance / dclfOnly : 0.0, both ? bothDistance / both : 0.0);
-						logger::info("[DCLF] cascade probe view {}: engine volumes: clip mask {:#x}, custom flag {} mask {:#x}; rejected (sign A / sign B) - both: clip {}/{}, custom {}/{}; DCLF only: clip {}/{}, custom {}/{}",
-							view.viewId, clipMask, customFlag, customMask, planeRejects[0][0][0], planeRejects[0][0][1], planeRejects[0][1][0], planeRejects[0][1][1],
-							planeRejects[1][0][0], planeRejects[1][0][1], planeRejects[1][1][0], planeRejects[1][1][1]);
-						if (camera) {
-							const auto& f = camera->GetRuntimeData2().viewFrustum;
-							logger::info("[DCLF] cascade probe view {}: engine camera at ({:.0f} {:.0f} {:.0f}) frustum l {:.0f} r {:.0f} t {:.0f} b {:.0f} n {:.0f} f {:.0f} ortho {}; rejected by near/far/lr/bt - both, DCLF bound: {}/{}/{}/{}, worldBound: {}/{}/{}/{}; DCLF only, DCLF bound: {}/{}/{}/{}, worldBound: {}/{}/{}/{}",
-								view.viewId, camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, f.fLeft, f.fRight, f.fTop, f.fBottom, f.fNear, f.fFar, f.bOrtho,
-								cameraRejects[0][0][0], cameraRejects[0][0][1], cameraRejects[0][0][2], cameraRejects[0][0][3], cameraRejects[0][1][0], cameraRejects[0][1][1], cameraRejects[0][1][2], cameraRejects[0][1][3],
-								cameraRejects[1][0][0], cameraRejects[1][0][1], cameraRejects[1][0][2], cameraRejects[1][0][3], cameraRejects[1][1][0], cameraRejects[1][1][1], cameraRejects[1][1][2], cameraRejects[1][1][3]);
-						}
-						logger::info("[DCLF] cascade probe view {}: ancestors - both: {} with an ancestor outside the custom planes, {} hidden, mean depth {:.1f}, flags or {:#x} and {:#x}; DCLF only: {} outside, {} hidden, mean depth {:.1f}, flags or {:#x} and {:#x}",
-							view.viewId, ancestorOutside[0], ancestorHidden[0], both ? double(ancestorDepthSum[0]) / both : 0.0, flagsOr[0], flagsAnd[0], ancestorOutside[1], ancestorHidden[1],
-							dclfOnly ? double(ancestorDepthSum[1]) / dclfOnly : 0.0, flagsOr[1], flagsAnd[1]);
-						logger::info("[DCLF] cascade probe view {}: rule - both: {} without kCastShadows, {} faded, {} on a shared property, property flags or {:#x} and {:#x}; DCLF only: {} without kCastShadows, {} faded, {} shared, or {:#x} and {:#x}",
-							view.viewId, noCast[0], faded[0], sharedProperty[0], propOr[0], propAnd[0], noCast[1], faded[1], sharedProperty[1], propOr[1], propAnd[1]);
-						logger::info("[DCLF] cascade probe view {}: candidates - {} processes, {} entries ({} of them geometry), {} geometries; both: {} not a candidate, {} a node outside the planes, {} outside the camera, {} inside; DCLF only: {}/{}/{}/{};{}",
-							view.viewId, candidateProcesses, candidateEntries, candidateEntryGeometries, candidateEntry.size(), candidateResult[0][0], candidateResult[0][1], candidateResult[0][2], candidateResult[0][3],
-							candidateResult[1][0], candidateResult[1][1], candidateResult[1][2], candidateResult[1][3], candidateSamples);
-						{
-							std::string types;
-							for (const auto& [name, count] : entryTypes)
-								types += fmt::format(" | {} x{}", name, count);
-							logger::info("[DCLF] cascade probe view {}: full-frustum processes:{}; entry types:{}", view.viewId, processInfo, types);
-							std::string planes;
-							for (std::size_t k = 0; k < fullFrustumProcesses.size() && k < 2; ++k)
-								for (std::uint32_t q = 0; q < 6; ++q) {
-									const auto& pl = fullFrustumProcesses[k]->planes.cullingPlanes[q];
-									planes += fmt::format(" p{}.{} ({:.3f} {:.3f} {:.3f} {:.0f})", k, q, pl.normal.x, pl.normal.y, pl.normal.z, pl.constant);
-								}
-							logger::info("[DCLF] cascade probe view {}: full-frustum planes:{}", view.viewId, planes);
-							logger::info("[DCLF] cascade probe view {}: full-frustum volume on the geometry bound - planes vs customCullPlanes differ by {:.4f}; both: {} outside planes, {} outside custom; DCLF only: {} / {};{}",
-								view.viewId, planesDiff, fullOut[0][0], fullOut[0][1], fullOut[1][0], fullOut[1][1], fullOutBoth);
-							logger::info("[DCLF] cascade probe view {}: full-frustum volume on the fade node's bound - both: {} outside, DCLF only: {} outside; no fade node: {} / {}; entry is the fade node {} / {}, above it {} / {}, other {} / {};{} | entries not the fade node:{}",
-								view.viewId, fadeOut[0], fadeOut[1], noFade[0], noFade[1], entryIsFade[0], entryIsFade[1], entryAboveFade[0], entryAboveFade[1], entryOther[0], entryOther[1], fadeOutBoth, entryOtherSamples);
-							logger::info("[DCLF] cascade probe view {}: full-frustum volume on the reference root's bound - both: {} outside, DCLF only: {} outside; no root {} / {}; entry is the root {} / {}, not {} / {};{} | entries not the root:{}",
-								view.viewId, rootOut[0], rootOut[1], noRoot[0], noRoot[1], entryIsRoot[0], entryIsRoot[1], entryNotRoot[0], entryNotRoot[1], rootOutBoth, entryNotRootSamples);
-						}
-						logger::info("[DCLF] cascade probe view {}: rule samples both:{}", view.viewId, ruleSamples[0]);
-						logger::info("[DCLF] cascade probe view {}: rule samples DCLF only:{}", view.viewId, ruleSamples[1]);
-						logger::info("[DCLF] cascade probe view {}: ancestry both:{}", view.viewId, ancestry[0]);
-						logger::info("[DCLF] cascade probe view {}: ancestry DCLF only:{}", view.viewId, ancestry[1]);
-						if (clipPlanes && customPlanes) {
-							std::string planes;
-							for (std::uint32_t p = 0; p < 6; ++p)
-								planes += fmt::format(" clip{} ({:.3f} {:.3f} {:.3f} {:.0f}) custom{} ({:.3f} {:.3f} {:.3f} {:.0f})", p, clipPlanes[p].normal.x, clipPlanes[p].normal.y,
-									clipPlanes[p].normal.z, clipPlanes[p].constant, p, customPlanes[p].normal.x, customPlanes[p].normal.y, customPlanes[p].normal.z, customPlanes[p].constant);
-							logger::info("[DCLF] cascade probe view {} planes (eye {:.0f} {:.0f} {:.0f}):{}", view.viewId, view.eye.x, view.eye.y, view.eye.z, planes);
-						}
-						logger::info("[DCLF] cascade probe view {}: DCLF only e.g. {}; withheld engine only e.g. {}", view.viewId, onlyNames, engineOnlyNames);
-					}
-				}
-			}
 
 			// Nothing to draw until this commit publishes the shape again (so a failed one draws nothing, rather
 			// than a reused recording reading latch values this execution never wrote).
@@ -9088,7 +8057,6 @@ namespace DCLF
 		ShadowInputs in;
 		in.frameNumber = a_store.GetFrame();
 		in.renderFlags = a_store.GetMainPassRenderFlags();
-		in.refEye = shadowRefEye;
 		in.modeUsed = a_modeUsed;
 		in.modeRasterStates = a_modeRasterStates;
 		// The sun's full-frustum planes, read on the render thread after the full-frustum cull has run
@@ -9114,7 +8082,6 @@ namespace DCLF
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;
-		in.sceneRebuilds = a_store.GetSceneRebuilds();
 		in.tablesHeld = a_resources.tablesHeld;
 		in.inputsHeld = a_resources.inputsUploaded;
 		for (const auto held : a_resources.recordsUploaded)
@@ -9137,15 +8104,13 @@ namespace DCLF
 		// tables and the frame's reference eye is set. The build runs on the worker while the engine draws
 		// the shadow maps, for last frame's render modes (a change is stale, and built inline).
 		impl->DropShadowJob(stats);
-		if (!ShadowsEnabled() || failed || !AsyncJobEnabled("shadow"))
+		if (!ShadowsEnabled() || failed || !AsyncEnabled())
 			return;
 		auto& async = stats.async[kAsyncShadow];
 		auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
 		auto& job = impl->shadowJob;
-		// With the scene walk on the worker the tables are its until the join, and this build is queued behind
-		// it: they are checked by the epoch instead.
-		const bool tablesReady = store.ScenePending() || (!tables.objects.empty() && tables.shadowTechnique.size() == tables.objects.size());
+		const bool tablesReady = !tables.objects.empty() && tables.shadowTechnique.size() == tables.objects.size();
 		if (!impl->shadow || !job.modesKnown || !DrawPipelines::Get().Enabled() || !globals::game::utilityShader || !tablesReady) {
 			++async.notKicked;
 			return;
@@ -9258,21 +8223,10 @@ namespace DCLF
 		return draws;
 	}
 
-	bool IndirectDraws::Enabled() const
-	{
-		return DrawPipelines::Get().Enabled();
-	}
-
-	bool IndirectDraws::Hybrid()
-	{
-		return HybridEnabled();
-	}
-
 	void IndirectDraws::PublishClaims()
 	{
 		if (!PassCapture::WithholdingEnabled())
 			return;
-		ScopedScan scan(Scan::Claims);
 		const auto frame = SceneStore::Get().GetFrame();
 		auto& capture = PassCapture::Get();
 
@@ -9295,7 +8249,6 @@ namespace DCLF
 		};
 		static HoleReport report;
 		std::uint32_t frameHoles = 0;
-		std::optional<ScopedScan> scanClaims(std::in_place, Scan::HoleClaims);
 		// A hole was withheld, and withholding is a registration's (claimed when it registered): walked from this frame's
 		// withheld registrations, which are far fewer than the claims.
 		static std::vector<const RE::BSGeometry*> holeGeometries;
@@ -9332,8 +8285,6 @@ namespace DCLF
 		}
 		// The primary's left-out objects (PrimaryCull): nothing registered them, so a synthetic pass the colour epoch did
 		// not draw is a hole whatever the claims say.
-		scanClaims.reset();
-		std::optional<ScopedScan> scanSynthetic(std::in_place, Scan::HoleSynthetic);
 		for (const auto& [geometry, pass] : PrimaryCull::Get().SyntheticPasses()) {
 			if (impl->DrawnThisFrame(geometry, frame))
 				continue;
@@ -9348,9 +8299,7 @@ namespace DCLF
 					pass.technique, pass.subPass);
 		}
 		// The entries the primary's cull reached in view and DCLF drew in full are left out from the next frame on.
-		scanSynthetic.reset();
 		{
-			ScopedScan scanAdmit(Scan::Admit);
 			PrimaryCull::Get().Admit([&](const RE::BSGeometry* a_geometry) { return impl->DrawnThisFrame(a_geometry, frame); });
 		}
 		++report.frames;
@@ -9519,12 +8468,6 @@ namespace DCLF
 
 	void IndirectDraws::CaptureDepthPass()
 	{
-		// CS_DCLF_NO_ZPREPASS=1: leave the depth to the native pass, so the hybrid path runs a single epoch
-		// per frame again. Its objects are then missing from the depth the rest of the frame reads, which is
-		// only useful for telling a one-epoch frame apart from a two-epoch one.
-		const bool skip = Toggles::Get().Active().noZPrepass;
-		if (!Hybrid() || skip)
-			return;
 		// Main::RenderDepth sets the world depth target and viewport in the engine's shadow state,
 		// but only a native draw flushes that state to D3D11. When ownership withheld all such draws,
 		// RSGetViewports can still return the last shadow map's 4096x4096 viewport. Pairing that with
@@ -9562,13 +8505,6 @@ namespace DCLF
 		ProbeTargets("after z-prepass");
 	}
 
-	void IndirectDraws::Execute()
-	{
-		if (Hybrid())
-			return;  // the hybrid path runs the two segments separately
-		RunEpoch(RenderGraphRuntime::Segment::MainOpaque);
-	}
-
 	void IndirectDraws::ProbeTargets(const char* a_label)
 	{
 		impl->ProbeGBuffer(a_label);
@@ -9579,8 +8515,7 @@ namespace DCLF
 		// The colour epoch assembles from the main pass's own capture: the Z-prepass ran off the depth
 		// pass's, where the pixel-stage bindings were not available. Both draw the same tables with the
 		// same camera, so the depths agree and the colour pass can test EQUAL.
-		if (Hybrid())
-			RunEpoch(RenderGraphRuntime::Segment::MainOpaque);
+		RunEpoch(RenderGraphRuntime::Segment::MainOpaque);
 	}
 
 	void IndirectDraws::RunEpoch(RenderGraphRuntime::Segment a_segment)
@@ -9629,7 +8564,7 @@ namespace DCLF
 		// The per-frame constant blocks, from the capture's mirrors: render thread, before the epoch. Their
 		// slot mask is an input of the build; their bytes are uploaded by the commit.
 		FrameBlocks blocks;
-		impl->PackFrameBlocks(capture, depthOnly, *resources, blocks);
+		impl->PackFrameBlocks(capture, depthOnly, blocks);
 		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask, store);
 		auto& job = impl->mainJobs[jobIndex];
 		job.vsMask = blocks.vsMask;
@@ -9749,13 +8684,12 @@ namespace DCLF
 	{
 		// The colour epoch's inputs are final from here (RefreshFrameConstants was the frame's last writer of
 		// the tables), and the epoch itself is ~1.5-2 ms of native rendering away: the build runs on the
-		// worker in between, so the render thread only commits when the epoch comes. Only the hybrid path
-		// replays the Z-prepass's eye and constants; without the replay the eye comes from a capture that
-		// does not exist yet.
+		// worker in between, so the render thread only commits when the epoch comes. It replays the Z-prepass's
+		// eye and constants; without them the eye would come from a capture that does not exist yet.
 		impl->DropMainJob(kAsyncColour, stats);
-		if (!AsyncJobEnabled("colour"))
+		if (!AsyncEnabled())
 			return;
-		if (!impl->resources || !impl->resources->hybrid || !impl->prepassInputs) {
+		if (!impl->resources || !impl->prepassInputs) {
 			++stats.async[kAsyncColour].notKicked;
 			return;
 		}
@@ -9774,10 +8708,10 @@ namespace DCLF
 		// is predicted: the main camera's world position, and last frame's captured eye as the previous one.
 		// The epoch compares both exactly with its capture.
 		impl->DropMainJob(kAsyncZPrepass, stats);
-		if (!AsyncJobEnabled("zprepass"))
+		if (!AsyncEnabled())
 			return;
 		auto* camera = RE::Main::WorldRootCamera();
-		if (!impl->resources || !impl->resources->hybrid || !impl->prepassInputs || !camera) {
+		if (!impl->resources || !impl->prepassInputs || !camera) {
 			++stats.async[kAsyncZPrepass].notKicked;
 			return;
 		}
@@ -9795,19 +8729,18 @@ namespace DCLF
 	void IndirectDraws::Impl::KickMainJob(bool a_depthOnly, const RE::NiPoint3* a_eye, const RE::NiPoint3* a_previousEye, IndirectDraws::Stats& a_stats)
 	{
 		ZoneScopedN("CS.DCLF.KickMainJob");
-		// Only the bindless records are per pair, which is what keeps the build a function of the tables.
 		const std::size_t index = a_depthOnly ? kAsyncZPrepass : kAsyncColour;
 		auto& job = mainJobs[index];
 		auto& async = a_stats.async[index];
 		auto* lighting = ConstantEvaluator::Get().GetLightingShader();
-		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || !job.masksKnown || !BindlessObjects() || !BindlessDraws()) {
+		if (!lighting || !DrawPipelines::Get().Enabled() || !GetIndirectState().valid || !job.masksKnown) {
 			++async.notKicked;
 			return;
 		}
 		auto& store = SceneStore::Get();
 		job.inputs = PrepareMainInputs(nullptr, a_depthOnly, *resources, job.vsMask, job.psMask, store);
-		// A bindless build without parity checks does not read the eye (PrepareMainInputs leaves it zero), so
-		// the prediction only matters where it does.
+		// A build without the bindless parity does not read the eye (PrepareMainInputs leaves it zero), so the
+		// prediction only matters where it does.
 		if (a_eye && BuildReadsEye(job.inputs))
 			job.inputs.eye = *a_eye;
 		if (a_previousEye && BuildReadsEye(job.inputs))
@@ -9879,16 +8812,16 @@ namespace DCLF
 			k.addresses == a_actual.addresses ? "same" : "changed");
 	}
 
-	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, const Resources& a_resources, FrameBlocks& a_out)
+	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out)
 	{
 		// Per-frame constant buffers: whatever the main pass binds outside the per-draw slots.
 		// On the Z-prepass the pixel-stage per-frame bindings are skipped entirely: the native depth pass
 		// has not bound the main pass's yet, and the DCLF_DEPTH_ONLY build of the pixel stage compiles
 		// away everything that would read them.
 		auto& mirror = ConstantMirror::Get();
-		// On the hybrid path the colour epoch replays the vertex-stage bytes the Z-prepass used, so the
+		// The colour epoch replays the vertex-stage bytes the Z-prepass used, so the
 		// two agree to the bit and the colour pass's EQUAL test passes.
-		const bool replayVertexInputs = !a_depthOnly && a_resources.hybrid && prepassInputs;
+		const bool replayVertexInputs = !a_depthOnly && prepassInputs;
 		if (a_depthOnly)
 			for (auto& bytes : prepassVS)
 				bytes.clear();
@@ -9924,30 +8857,8 @@ namespace DCLF
 			const auto* bytes = reinterpret_cast<const std::byte*>(&cached);
 			if (a_out.vs[kPerFrameVertexRegister].empty())
 				a_out.vs[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
-			const bool psFromMirror = !a_out.ps[kPerFrameVertexRegister].empty();
 			if (a_out.ps[kPerFrameVertexRegister].empty())
 				a_out.ps[kPerFrameVertexRegister].assign(bytes, bytes + sizeof(cached));
-			// [TEMP] The colour epoch's PerFrame blocks against the engine's current one (CS's cache).
-			static std::uint32_t tempEpochs = 0;
-			if (!a_depthOnly && (tempEpochs++ % 240) == 0) {
-				auto describe = [&](const std::vector<std::byte>& a_block) {
-					if (a_block.size() < 164 * sizeof(float))
-						return fmt::format("{} bytes", a_block.size());
-					const auto* f = reinterpret_cast<const float*>(a_block.data());
-					const auto* c = reinterpret_cast<const float*>(bytes);
-					std::uint32_t differ = 0, first = ~0u;
-					for (std::uint32_t i = 0; i < std::min<std::size_t>(a_block.size() / 4, sizeof(cached) / 4); ++i)
-						if (std::memcmp(&f[i], &c[i], 4) != 0) {
-							++differ;
-							first = std::min(first, i);
-						}
-					return fmt::format("posAdjust ({:.2f} {:.2f} {:.2f}), {} floats differ from the cache (first c{}.{})", f[160], f[161], f[162], differ, first / 4, first % 4);
-				};
-				const auto* c = reinterpret_cast<const float*>(bytes);
-				logger::info("[TEMP] colour PerFrame: cache posAdjust ({:.2f} {:.2f} {:.2f}); VS {} [{}]; PS {} [{}]", c[160], c[161], c[162],
-					describe(a_out.vs[kPerFrameVertexRegister]), replayVertexInputs ? "replayed" : "mirror",
-					describe(a_out.ps[kPerFrameVertexRegister]), psFromMirror ? "mirror" : "cache");
-			}
 		}
 
 		// b5 is Community Shaders' own SharedData, written through its ConstantBuffer helper rather than
@@ -9991,31 +8902,21 @@ namespace DCLF
 
 	MainInputs IndirectDraws::Impl::PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask, const SceneStore& a_store)
 	{
-		// CS_DCLF_NO_PREPASS_TEXTURES=1: the Z-prepass epoch does not touch the texture system at all, to
-		// tell apart a colour epoch whose descriptors are its own from one that inherits slots the depth
-		// epoch allocated earlier in the same frame.
-		static const bool bareDepthTextures = SwitchEnabled("CS_DCLF_NO_PREPASS_TEXTURES");
 		static const bool dedupParity = SwitchEnabled("CS_DCLF_DEDUP_PARITY");
 		static const bool bindlessParity = SwitchEnabled("CS_DCLF_BINDLESS_PARITY");
 		MainInputs in;
 		in.frameNumber = a_store.GetFrame();
 		in.depthOnly = a_depthOnly;
-		in.hybrid = a_resources.hybrid;
 		in.residentUploaded = a_resources.residentUploaded[a_depthOnly && a_resources.inputsDepth ? 0 : 1];
 		in.tablesHeld = a_resources.tablesHeld;
-		in.resolveTextures = !a_depthOnly || !bareDepthTextures;
-		in.bindless = BindlessObjects();
-		in.bindlessDraws = BindlessDraws();
 		in.dedupParity = dedupParity;
 		in.bindlessParity = bindlessParity;
 		in.withholding = PassCapture::WithholdingEnabled();
-		in.requireNativeVisible = RequireNativeVisible();
-		in.linearLighting = globals::features::linearLighting.loaded && globals::features::linearLighting.settings.enableLinearLighting;
 		in.renderFlags = a_store.GetMainPassRenderFlags();
 		// Camera-relative world matrices: the colour epoch must use the eye the Z-prepass used, or the
 		// same vertex lands somewhere else and the EQUAL test rejects it. Without a capture (the job kicked
 		// ahead of the epoch) the replay is the only source, which KickColourBuild requires.
-		const bool replayVertexInputs = !a_depthOnly && a_resources.hybrid && prepassInputs;
+		const bool replayVertexInputs = !a_depthOnly && prepassInputs;
 		if (replayVertexInputs || !a_capture) {
 			in.eye = prepassEye;
 			in.previousEye = prepassPreviousEye;
@@ -10023,8 +8924,8 @@ namespace DCLF
 			in.eye = a_capture->eye;
 			in.previousEye = a_capture->previousEye;
 		}
-		// The records are absolute and the shaders subtract the eye, so a bindless build reads it only for its
-		// parity checks against the constant-group form, which is relative. Where it is not read it is not an
+		// The records are absolute and the shaders subtract the eye, so a build reads it only for its parity checks
+		// against the constant-group form, which is relative. Where it is not read it is not an
 		// input: the Z-prepass job needs no eye prediction, and nothing goes stale on it.
 		if (!BuildReadsEye(in))
 			in.eye = in.previousEye = {};
@@ -10307,7 +9208,7 @@ namespace DCLF
 		const std::uint32_t frameNumber = in.frameNumber;
 		auto& textures = GpuTextures::Get();
 		auto& mirror = ConstantMirror::Get();
-		const bool replayVertexInputs = !depthOnly && a_resources->hybrid && prepassInputs;
+		const bool replayVertexInputs = !depthOnly && prepassInputs;
 		CommitUploads uploads(commitStagedPool);
 		auto lap = [&, last = std::chrono::steady_clock::now()](std::size_t a_part) mutable {
 			const auto now = std::chrono::steady_clock::now();
@@ -10351,10 +9252,10 @@ namespace DCLF
 			const std::size_t offset = std::size_t(frameBuffer.firstElement) * frameBuffer.stride;
 			const std::size_t bytes = std::size_t(frameBuffer.elements) * frameBuffer.stride;
 			if (contents.size() < offset + bytes) {
-				// [TEMP] Which structured buffers the commit leaves unfilled (their copy then reads zero).
+				// A structured buffer the commit cannot fill: its copy reads zero.
 				static std::array<std::uint32_t, kTextureRegisters> unfilled{};
 				if ((unfilled[frameBuffer.textureRegister]++ % 600) == 0)
-					logger::warn("[TEMP] frame buffer t{} ({} elements of {} bytes) not filled: the mirror holds {} bytes of it ({} times)", frameBuffer.textureRegister,
+					logger::warn("[DCLF] frame buffer t{} ({} elements of {} bytes) not filled: the mirror holds {} bytes of it ({} times)", frameBuffer.textureRegister,
 						frameBuffer.elements, frameBuffer.stride, contents.size(), unfilled[frameBuffer.textureRegister]);
 				continue;  // not written since it is watched
 			}
@@ -10396,7 +9297,7 @@ namespace DCLF
 					}
 				}
 			}
-			const std::uint32_t value = index == kInvalidIndex ? (in.resolveTextures && textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
+			const std::uint32_t value = index == kInvalidIndex ? (textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
 			a_payload.records[record].textures[t] = value;
 			if (a_payload.stagedRecords)
 				a_payload.stagedRecords[record].textures[t] = value;  // write-combined: written, never read
@@ -10405,19 +9306,19 @@ namespace DCLF
 		a_stats.frameTexturesMissingRegisters = missingRegisters;
 		lap(2);
 
-		// The frame slots: each block into its slot, and the zeroed light block every bindless draw's b3 reads.
+		// The frame slots: each block into its slot, and the zeroed light block every draw's b3 reads.
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_blocks.vs[slot].empty())
 				uploads(a_resources->frameConstants, a_blocks.vs[slot].data(), a_blocks.vs[slot].size(), FrameSlotOffset(false, slot));
 			if (!a_blocks.ps[slot].empty())
 				uploads(a_resources->frameConstants, a_blocks.ps[slot].data(), a_blocks.ps[slot].size(), FrameSlotOffset(true, slot));
 		}
-		if (in.bindlessDraws) {
+		{
 			static const std::array<std::uint32_t, kStrictLightDataBytes / 4> zeroLight{};
 			uploads(a_resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
 		}
 		// The frame lighting, only when it changed (RefreshFrameConstants versions it).
-		if (const auto& lightingTables = a_store.GetTables(); in.bindless && a_resources->frameLightingUploaded != lightingTables.frameLightingVersion) {
+		if (const auto& lightingTables = a_store.GetTables(); a_resources->frameLightingUploaded != lightingTables.frameLightingVersion) {
 			uploads(a_resources->frameConstants, lightingTables.frameLighting.data(), sizeof(lightingTables.frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 			a_resources->frameLightingUploaded = lightingTables.frameLightingVersion;
 		}
@@ -10437,11 +9338,11 @@ namespace DCLF
 		if (a_resources->facePositions)
 			UploadFaceStreams(a_payload.faceStreams, a_resources->facePositions, a_resources->faceUploaded, uploads);
 		// The depth segment clears every counter; the colour segment clears only the word its own draws
-		// append through. On the hybrid path the culling happens in the depth segment, so clearing the
+		// append through. The culling happens in the depth segment, so clearing the
 		// whole buffer again here would erase the phase 1 and phase 2 numbers before anything read them
 		// - they are written earlier in the same frame.
 		static const std::uint32_t zero[kCountWords] = {};
-		const std::size_t zeroBytes = (depthOnly || !a_resources->hybrid) ? sizeof(zero) : sizeof(std::uint32_t);
+		const std::size_t zeroBytes = depthOnly ? sizeof(zero) : sizeof(std::uint32_t);
 		uploads(a_resources->count, zero, zeroBytes, 0);
 		// The sort's counts start at zero; from then on the scan that reads them clears them.
 		if (a_resources->sort)
@@ -10466,7 +9367,7 @@ namespace DCLF
 			}
 			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
 				const std::uint32_t index = frameTextures[t];
-				const std::uint32_t value = index == kInvalidIndex ? (in.resolveTextures && textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
+				const std::uint32_t value = index == kInvalidIndex ? (textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
 				const bool indexChanged = committed[t] != value;
 				committed[t] = value;
 				const std::uint64_t bit = 1ull << (t % 64);
@@ -10592,7 +9493,7 @@ namespace DCLF
 		frame->width = a_capture.viewportWidth;
 		frame->height = a_capture.viewportHeight;
 		// Both epochs rasterise with the main pass's depth range; see Impl::mainMinDepth.
-		const bool useMainRange = a_resources->hybrid && mainMaxDepth > 0.0f;
+		const bool useMainRange = mainMaxDepth > 0.0f;
 		frame->minDepth = useMainRange ? mainMinDepth : a_capture.minDepth;
 		frame->maxDepth = useMainRange ? mainMaxDepth : a_capture.maxDepth;
 		frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
@@ -10616,8 +9517,6 @@ namespace DCLF
 			logger::info("[DCLF] culling setup: mode {}, ViewProj {}, VS_PerFrame b{} {}", frame->cullMode, hasViewProj ? "yes" : "no",
 				kPerFrameVertexRegister, a_capture.vsBuffers[kPerFrameVertexRegister] ? "bound" : "not bound");
 		}
-		frame->hybrid = a_resources->hybrid;
-		frame->offscreen = a_resources->offscreen;
 		if (const auto pixel = SwitchValue("CS_DCLF_GBUFFER_PROBE"); !pixel.empty()) {
 			if (const auto sep = pixel.find_first_of(",x"); sep != std::string::npos) {
 				frame->probeX = static_cast<std::uint32_t>(std::strtoul(pixel.substr(0, sep).c_str(), nullptr, 10));
@@ -10650,8 +9549,6 @@ namespace DCLF
 		if (depthOnly) {
 			prepassEye = a_capture.eye;
 			prepassPreviousEye = a_capture.previousEye;
-			prepassMinDepth = a_capture.minDepth;
-			prepassMaxDepth = a_capture.maxDepth;
 			prepassInputs = true;
 		}
 		a_stats.drawn = drawCount;
@@ -10664,7 +9561,7 @@ namespace DCLF
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;
 		latch.drawCount = inputCount;
-		latch.cullFlags = (hasViewProj ? frame->cullMode : 0u) | (in.requireNativeVisible ? 0x100u : 0u);
+		latch.cullFlags = (hasViewProj ? frame->cullMode : 0u) | 0x100u;  // RequireNativeVisible
 		// The frame number, not the epoch: the depth segment publishes and the colour segment reads within one
 		// frame, so the stamp has to be the thing they share.
 		latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it
@@ -11164,7 +10061,7 @@ namespace DCLF
 					break;
 				const std::size_t first = sequence;
 				sequence += templates;
-				if (RequireNativeVisible() && !(input.flags & kObjectNativeVisible))
+				if (!(input.flags & kObjectNativeVisible))
 					continue;
 				readback.expected.insert(readback.expected.end(), sequences.begin() + first, sequences.begin() + sequence);
 			}
@@ -11172,16 +10069,6 @@ namespace DCLF
 		readback.framesLeft = 3;
 		if (readback.sequences && readback.count)
 			parity = std::move(readback);
-	}
-
-	void IndirectDraws::ShowDebugView()
-	{
-		// The hybrid path imports the native targets too, so their presence does not mean the view is on: an
-		// epoch here cost ~0.3 ms of render thread and three queue submissions a frame for nothing.
-		if (failed || !DebugViewEnabled() || !impl->resources || !impl->resources->native[0])
-			return;
-		if (!RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::DebugView))
-			logger::error("[DCLF] The debug view epoch failed; the render graph is disabled");
 	}
 }
 
@@ -11200,27 +10087,23 @@ namespace DCLF
 		static IndirectDraws draws;
 		return draws;
 	}
-	bool IndirectDraws::Enabled() const { return false; }
-	bool IndirectDraws::Hybrid() { return false; }
 	void IndirectDraws::PublishClaims() {}
 	bool IndirectDraws::DrewLastFrame(const RE::BSGeometry*, std::uint32_t) const { return false; }
 	std::uint32_t IndirectDraws::DrainVisibilityFeedback(const std::function<void(const VisibilityFeedbackFrame&)>&) { return 0; }
 	IndirectDraws::FeedbackStats IndirectDraws::TakeFeedbackStats() { return {}; }
 	void IndirectDraws::CaptureMainPass() {}
 	void IndirectDraws::CheckCapturePoint() {}
-	void IndirectDraws::Execute() {}
 	void IndirectDraws::CaptureDepthPass() {}
 	void IndirectDraws::ExecuteColour() {}
 	void IndirectDraws::ProbeTargets(const char*) {}
 	void IndirectDraws::RunEpoch(RenderGraphRuntime::Segment) {}
-	void IndirectDraws::ShowDebugView() {}
 	bool IndirectDraws::ShadowsEnabled() { return false; }
-	void IndirectDraws::BeginShadowFrame(const RE::NiPoint3&) {}
+	void IndirectDraws::BeginShadowFrame() {}
 	void IndirectDraws::ExecuteShadowView(std::uint32_t, std::uint32_t) {}
 	void IndirectDraws::ExecuteShadowFrame() {}
 	void IndirectDraws::CaptureSkyOcclusion() {}
 	bool IndirectDraws::SkyOcclusionReady() const { return false; }
-	bool IndirectDraws::ExecuteSkyOcclusion(bool) { return false; }
+	bool IndirectDraws::ExecuteSkyOcclusion() { return false; }
 	void IndirectDraws::KickColourBuild() {}
 	void IndirectDraws::KickZPrepassBuild() {}
 	void IndirectDraws::KickShadowBuild() {}

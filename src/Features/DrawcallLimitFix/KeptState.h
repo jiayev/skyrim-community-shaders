@@ -14,7 +14,8 @@
 // one of these rather than its own copy of the protocol.
 namespace DCLF
 {
-	// Startup-only control for A/B validation. Set before any scene/payload workers run.
+	// Whether the kept arrays reuse their storage across builds. Only the CPU tests turn it off, to compare against fresh
+	// storage.
 	inline bool reuseKeptStorage = true;
 	/**
 	 * @brief An append-only log with absolute positions: entry k is at base + k. Readers keep their own position

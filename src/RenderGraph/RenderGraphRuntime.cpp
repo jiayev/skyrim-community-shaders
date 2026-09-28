@@ -196,11 +196,11 @@ struct RenderGraphRuntime::Impl
 	bool bodyRanEpoch = false;
 	double bodyEpochUs = 0.0;
 	double bodyJoinUs = 0.0;
-	std::array<EpochSegmentStats, 6> epochSegmentStats{};
+	std::array<EpochSegmentStats, static_cast<std::size_t>(Segment::Count)> epochSegmentStats{};
 
 	// ORG's pass timestamps, per segment. An epoch is one host frame; the segment it ran is remembered by
 	// frame number until its timestamps come back, framesInFlight frames later.
-	static constexpr std::size_t kSegments = 5;
+	static constexpr std::size_t kSegments = static_cast<std::size_t>(Segment::Count);
 	static constexpr std::size_t kSegmentRing = 64;  // > kHostFramesInFlight: a frame's segment outlives its slot's reuse
 	struct PassTime
 	{
@@ -350,8 +350,6 @@ struct RenderGraphRuntime::Impl
 			return "DrawcallLimitFix::Z-prepass / " + a_pass;
 		case Segment::MainOpaque:
 			return "DrawcallLimitFix::Main opaque / " + a_pass;
-		case Segment::DebugView:
-			return "DrawcallLimitFix::Debug view / " + a_pass;
 		case Segment::ShadowView:
 			return "DrawcallLimitFix::Shadow views / " + a_pass;
 		case Segment::SkyOcclusion:
@@ -459,8 +457,6 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: Z-prepass";
 		case Segment::MainOpaque:
 			return "CS DCLF: main opaque";
-		case Segment::DebugView:
-			return "CS DCLF: debug view";
 		case Segment::ShadowView:
 			return "CS DCLF: shadow view";
 		case Segment::SkyOcclusion:
@@ -480,8 +476,6 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: Z-prepass inputs";
 		case Segment::MainOpaque:
 			return "CS DCLF: main opaque inputs";
-		case Segment::DebugView:
-			return "CS DCLF: debug view inputs";
 		case Segment::ShadowView:
 			return "CS DCLF: shadow view inputs";
 		case Segment::SkyOcclusion:
@@ -671,17 +665,16 @@ bool RenderGraphRuntime::Initialize()
 		// and starts with a full barrier, so its admission is independent of the epochs before it and cached.
 		desc.closedExecutions = EpochsEnabled() && !EnvEquals("CS_ORG_CLOSED", "0");
 		// The segments in the order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at
-		// the end of Main_RenderDepth, Light Limit Fix's culling at Prepass, the colour pass and the debug
-		// view before the deferred composite.
+		// the depth pass, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main
+		// pass's opaque batches end.
 		if (EpochsEnabled())
 			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
-				EpochOf(Segment::MainOpaque), EpochOf(Segment::DebugView) };
+				EpochOf(Segment::MainOpaque) };
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
 		// CS_ORG_ASYNC_EPOCHS (default on, =0 off): each epoch's work is prepared, admitted and recorded ahead of
 		// its epoch point on the host's own thread; at the point the render thread only writes the epoch's
-		// latches, records the queued uploads and submits. Needs epochs and closed executions. The debug view's
-		// epoch is prepared only when the debug view is on.
+		// latches, records the queued uploads and submits. Needs epochs and closed executions.
 		state->asyncEpochs = !EnvEquals("CS_ORG_ASYNC_EPOCHS", "0") && EpochsEnabled() && closed;
 	} catch (const std::exception& e) {
 		return disable(std::string("graph host creation failed: ") + e.what());
@@ -695,8 +688,6 @@ bool RenderGraphRuntime::Initialize()
 		try {
 			std::vector<std::uint32_t> epochs{ EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
 				EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque) };
-			if (EnvEquals("CS_DCLF_DEBUG_VIEW", "1"))
-				epochs.push_back(EpochOf(Segment::DebugView));
 			state->host->SetAsyncEpochs(std::move(epochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits");
 		} catch (const std::exception& e) {

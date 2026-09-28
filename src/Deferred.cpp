@@ -453,7 +453,7 @@ void Deferred::EndDeferred()
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
 	if (globals::features::drawcallLimitFix.loaded)
-		globals::features::drawcallLimitFix.BeforeDeferredComposite();
+		globals::features::drawcallLimitFix.PublishOwnership();
 
 	DeferredPasses();  // Perform deferred passes and composite forward buffers
 

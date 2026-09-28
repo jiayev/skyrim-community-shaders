@@ -55,10 +55,10 @@ public:
 	{
 		LightCulling,  // Light Limit Fix, before the main pass
 		ZPrepass,      // Drawcall Limit Fix's depth, at the first draw of the main (deferred) pass
-		MainOpaque,    // Drawcall Limit Fix's colour, before the deferred composite
-		DebugView,     // Drawcall Limit Fix debug view, before the deferred composite
+		MainOpaque,    // Drawcall Limit Fix's colour, where the main pass's opaque batches end
 		ShadowView,    // Drawcall Limit Fix's shadow casters, inside one shadow view's draw
 		SkyOcclusion,  // Drawcall Limit Fix's variant of Skylighting's occlusion map, after the engine's RenderMask
+		Count
 	};
 
 	static RenderGraphRuntime& Get();

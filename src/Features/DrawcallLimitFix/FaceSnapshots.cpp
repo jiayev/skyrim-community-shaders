@@ -1,7 +1,6 @@
 #include "FaceSnapshots.h"
 
 #include "Switches.h"
-#include "VolumetricProbe.h"
 #include <ORGModuleServices/Async/LeasedArraySlots.h>
 
 #include <array>
@@ -233,8 +232,7 @@ namespace DCLF
 
 	bool FaceSnapshots::Enabled()
 	{
-		static const bool enabled = SwitchValue("CS_DCLF_FACEGEN") != "0";
-		return enabled && hooksInstalled;
+		return hooksInstalled;
 	}
 
 	/** @brief After a head's morph job has reset and morphed its shapes (FUN_140432550), on that job's thread. */
@@ -272,7 +270,7 @@ namespace DCLF
 
 	void FaceSnapshots::Install()
 	{
-		if (hooksInstalled || !REL::Module::IsAE())
+		if (hooksInstalled)
 			return;
 		// AE 1.6.1170: the per-head job FUN_1404334e0 calls FUN_140432550 at +0x13; Job_Face_morphing
 		// (RELOCATION_ID 38139, 39096) calls JobList::Finish (FUN_140cf6810) at +0x4D. Checked before patching:
@@ -354,12 +352,6 @@ namespace DCLF
 				continue;
 			auto owner = record->storage.Acquire(record->readSlot);
 			const float* positions = owner->data() + shape.offset;
-			// [TEMP] The snapshot against the engine's positions now. A probe's read, outside the writer's phase: under
-			// the engine's schedule nothing writes them during the walk, which is what this measures.
-			if (VolumetricProbe::Enabled()) {
-				const auto* live = a_shape.GetDynamicTrishapeRuntimeData().dynamicData;
-				++(live && std::memcmp(live, positions, std::size_t(shape.vertexCount) * 16) == 0 ? d.stats.parityEqual : d.stats.parityDiffer);
-			}
 			return { positions, shape.vertexCount, generation, std::move(owner) };
 		}
 		return {};
@@ -402,19 +394,10 @@ namespace DCLF
 			const auto stats = TakeStats();
 			const auto writer = TakeWriterStats();
 			logger::info("[DCLF] face snapshots: {} heads, {} taken fresh, {} seen without one, {} rebuilt, {} retired, {} freed; "
-			             "captured by jobs {}, at the join {}, {} mismatches, over {} stages; parity with dynamicData {} equal, {} differ",
+			             "captured by jobs {}, at the join {}, {} mismatches, over {} stages",
 				stats.heads, stats.acquired, stats.withoutSnapshot, stats.rebuilt, stats.retired, stats.freed, writer.jobCaptures, writer.stageCaptures,
-				writer.mismatches, writer.stages, stats.parityEqual, stats.parityDiffer);
+				writer.mismatches, writer.stages);
 		}
-	}
-
-	void FaceSnapshots::RetireAll()
-	{
-		auto& d = *impl;
-		for (auto* record : d.live)
-			d.Retire(record);
-		d.live.clear();
-		d.FreeRetired();
 	}
 
 	FaceSnapshots::Stats FaceSnapshots::TakeStats()

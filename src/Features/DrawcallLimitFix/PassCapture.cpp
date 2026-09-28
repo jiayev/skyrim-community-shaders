@@ -2,7 +2,6 @@
 
 #include "Switches.h"
 #include "Toggles.h"
-#include "VolumetricProbe.h"
 
 #include <span>
 
@@ -22,11 +21,7 @@ namespace DCLF
 		return capture;
 	}
 
-	PassCapture::PassCapture()
-	{
-		if (SwitchEnabled("CS_DCLF_SHADOW_PROBE"))
-			utilityEntries.resize(kCapacity);
-	}
+	PassCapture::PassCapture() = default;
 
 	std::uint32_t PassCapture::SubPassOf(const RE::BSGeometry* a_geometry, std::uint64_t a_propertyFlags)
 	{
@@ -74,34 +69,8 @@ namespace DCLF
 
 	void PassCapture::Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld)
 	{
-		// CS_DCLF_REGISTER_PROBE=1: what else comes through RegisterPass, so that owning the depth pass
-		// can be planned against evidence rather than against the shape of GetRenderDepthPass. Reports the
-		// shader type and whether the batch renderer is one of the main camera's.
-		static const bool probe = SwitchEnabled("CS_DCLF_REGISTER_PROBE");
-		if (probe && a_pass && a_pass->shader) {
-			const auto type = static_cast<std::uint32_t>(a_pass->shader->shaderType.get());
-			if (type < probeCounts.size()) {
-				probeCounts[type].fetch_add(1, std::memory_order_relaxed);
-				const auto renderers = std::atomic_load(&mainRenderers);
-				if (renderers && renderers->contains(a_batch))
-					probeMain[type].fetch_add(1, std::memory_order_relaxed);
-			}
-		}
 		if (!a_pass || !a_pass->geometry || !a_pass->shader)
 			return;
-		if (a_pass->shader->shaderType.get() == RE::BSShader::Type::Utility) {
-			// The shadow probe's ring: allocated on first use under the switch, never otherwise.
-			static const bool shadowProbe = SwitchEnabled("CS_DCLF_SHADOW_PROBE");
-			if (!shadowProbe)
-				return;
-			const auto slot = utilityCursor.fetch_add(1, std::memory_order_relaxed);
-			if (slot >= kCapacity) {
-				utilityOverflow.fetch_add(1, std::memory_order_relaxed);
-				return;
-			}
-			utilityEntries[slot] = Entry{ a_pass->geometry, a_pass, a_batch, a_technique, 0, a_pass->passEnum };
-			return;
-		}
 		if (a_pass->shader->shaderType.get() != RE::BSShader::Type::Lighting)
 			return;
 
@@ -141,14 +110,6 @@ namespace DCLF
 		return lastDrain;
 	}
 
-	std::span<const PassCapture::Entry> PassCapture::DrainUtility()
-	{
-		const auto count = std::min(utilityCursor.exchange(0, std::memory_order_relaxed), kCapacity);
-		if (const auto overflowed = utilityOverflow.exchange(0, std::memory_order_relaxed))
-			logger::warn("[DCLF] shadow probe: {} Utility registrations overflowed the capture ring", overflowed);
-		return { utilityEntries.data(), count };
-	}
-
 	bool PassCapture::WithholdingEnabled()
 	{
 		return Toggles::Get().Active().ownership;
@@ -182,18 +143,6 @@ namespace DCLF
 	{
 		const auto toggles = Toggles::Get().Active();
 		return toggles.shadows && toggles.shadowOwnership;
-	}
-
-	bool PassCapture::CascadeProbeEnabled()
-	{
-		static const bool enabled = SwitchEnabled("CS_DCLF_CASCADE_PROBE");
-		return enabled;
-	}
-
-	std::vector<PassCapture::ShadowRegistration> PassCapture::TakeShadowRegistrations()
-	{
-		std::lock_guard lock(shadowRegistrationsLock);
-		return std::exchange(shadowRegistrations, {});
 	}
 
 	void PassCapture::SetShadowBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers)
@@ -253,11 +202,6 @@ namespace DCLF
 			const auto selected = std::atomic_load(&frameClaims);
 			const auto owned = selected ? selected->shadow[it->second] : std::atomic_load(&shadowClaims[it->second]);
 			const bool claimed = owned && owned->contains(a_pass->geometry);
-			if (CascadeProbeEnabled()) {
-				std::lock_guard lock(shadowRegistrationsLock);
-				if (shadowRegistrations.size() < 65536)
-					shadowRegistrations.push_back({ a_batch, a_pass->geometry, claimed });
-			}
 			if (claimed) {
 				shadowWithheld[it->second].fetch_add(1, std::memory_order_relaxed);
 				return true;
@@ -282,21 +226,8 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			// [TEMP] CS_DCLF_VOLUMETRIC_PROBE: every Utility registration, and what the engine's took.
-			const bool probe = VolumetricProbe::Enabled() && a_pass && a_pass->shader && a_pass->shader->shaderType.get() == RE::BSShader::Type::Utility;
-			auto engine = [&] {
-				if (!probe) {
-					func(a_this, a_pass, a_techniqueID);
-					return;
-				}
-				LARGE_INTEGER start{}, end{};
-				QueryPerformanceCounter(&start);
-				func(a_this, a_pass, a_techniqueID);
-				QueryPerformanceCounter(&end);
-				VolumetricProbe::Get().OnRegister(a_this, a_pass, end.QuadPart - start.QuadPart);
-			};
 			if (capture.bypassed.load(std::memory_order_acquire)) {
-				engine();
+				func(a_this, a_pass, a_techniqueID);
 				return;
 			}
 			// Per-frame state is read once, here, and both decisions below use it.
@@ -306,12 +237,8 @@ namespace DCLF
 			// and DCLF owns the object outright. Everything the tables need is taken by Record.
 			const bool withheld = capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
-			if (withheld) {
-				if (probe)
-					VolumetricProbe::Get().OnRegister(a_this, a_pass, 0);
-				return;
-			}
-			engine();
+			if (!withheld)
+				func(a_this, a_pass, a_techniqueID);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
@@ -341,16 +268,6 @@ namespace DCLF
 		return withheldThisFrame.contains(a_geometry) && !handedBack.contains(a_geometry);
 	}
 
-	namespace
-	{
-		bool volumetricHookInstalled = false;
-	}
-
-	bool PassCapture::VolumetricClaimsAvailable()
-	{
-		return volumetricHookInstalled;
-	}
-
 	/**
 	 * @brief The shadow modes' registration inserting an accumulation hint 8 pass (a volumetric-only caster)
 	 * into batch group 15: AE FUN_1414b2a60's direct call to FUN_1414f5090(batch, pass, 15, 0) at +0xFF. The
@@ -371,13 +288,6 @@ namespace DCLF
 		const auto selected = std::atomic_load(&frameClaims);
 		const auto owned = selected ? selected->shadow[it->second] : std::atomic_load(&shadowClaims[it->second]);
 		const bool claimed = owned && owned->contains(a_pass->geometry);
-		// [TEMP] CS_DCLF_CASCADE_PROBE: these registrations belong to the view's caster set too, so the probe can
-		// compare them with DCLF's.
-		if (CascadeProbeEnabled()) {
-			std::lock_guard lock(shadowRegistrationsLock);
-			if (shadowRegistrations.size() < 65536)
-				shadowRegistrations.push_back({ a_batch, a_pass->geometry, claimed });
-		}
 		if (claimed)
 			a_counter.fetch_add(1, std::memory_order_relaxed);
 		return claimed;
@@ -421,14 +331,10 @@ namespace DCLF
 		if (installed)
 			return;
 		stl::write_vfunc<0x2, Hook>(RE::VTABLE_BSBatchRenderer[0]);
-		// AE only: the SE and VR offsets of the call are unverified (no database for them).
-		if (REL::Module::IsAE()) {
-			stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(0x14b2b5f).address());
-			stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(0x14b2b29).address());
-			stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(0x14b2b3b).address());
-			stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(0x14b2b4d).address());
-			volumetricHookInstalled = true;
-		}
+		stl::write_thunk_call<VolumetricGroupHook>(REL::Offset(0x14b2b5f).address());
+		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(0x14b2b29).address());
+		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(0x14b2b3b).address());
+		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(0x14b2b4d).address());
 		installed = true;
 		logger::info("[DCLF] pass capture installed on BSBatchRenderer::RegisterPass");
 	}

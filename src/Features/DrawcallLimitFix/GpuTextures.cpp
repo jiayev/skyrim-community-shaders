@@ -4,6 +4,7 @@
 #	include <rhi_interop_vulkan.h>
 
 #	include "GpuTextures.h"
+#	include "Switches.h"
 
 #	include "RenderGraph/DxvkOrgInterop.h"
 #	include "RenderGraph/RenderGraphRuntime.h"
@@ -334,7 +335,7 @@ namespace DCLF
 			entry->index = entry->binding.Index();
 			registry->liveCount.fetch_add(1, std::memory_order_relaxed);
 			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
-			static const bool traceIdentities = std::getenv("CS_DCLF_TRACE_TEXTURE_PATHS") != nullptr;
+			static const bool traceIdentities = !SwitchValue("CS_DCLF_TRACE_TEXTURE_PATHS").empty();
 			if (traceIdentities) {
 				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(a_view)));
 				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(image.image)));
@@ -395,7 +396,7 @@ namespace DCLF
 
 	std::uint32_t GpuTextures::Sampler(std::uint32_t a_addressMode, std::uint32_t a_filterMode)
 	{
-		if (a_addressMode >= kAddressModes || a_filterMode >= kFilterModes || !REL::Module::IsAE())
+		if (a_addressMode >= kAddressModes || a_filterMode >= kFilterModes)
 			return kInvalid;
 		auto& index = impl->samplers[a_addressMode * kFilterModes + a_filterMode];
 		if (index != kInvalid)

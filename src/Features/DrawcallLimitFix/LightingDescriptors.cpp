@@ -325,7 +325,7 @@ namespace DCLF
 	bool TerrainBlendingDefersTerrain()
 	{
 		const auto& terrainBlending = globals::features::terrainBlending;
-		return terrainBlending.loaded && terrainBlending.settings.Enabled && IndirectDraws::Hybrid();
+		return terrainBlending.loaded && terrainBlending.settings.Enabled;
 	}
 
 	bool MtLandEnabled()

@@ -277,7 +277,6 @@ namespace DCLF
 	 * @brief CS_DCLF_MTLAND=1: the MTLand and MTLandLODBlend techniques (terrain) are eligible - unless
 	 * Terrain Blending is on and DCLF is drawing into the frame, because that feature intercepts every
 	 * terrain pass and redraws it blended with its own depth state, which an opaque owned draw would break.
-	 * Off the hybrid path the tables and their parity still exercise the derivation.
 	 */
 	bool MtLandEnabled();
 	/** @brief Whether Terrain Blending draws its terrain after the opaque pass, into a frame DCLF draws in. */

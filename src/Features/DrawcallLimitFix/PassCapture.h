@@ -85,7 +85,6 @@ namespace DCLF
 		static constexpr std::uint32_t kShadowModes = 3;
 		struct FrameClaims
 		{
-			std::uint64_t publicationGeneration = 0;
 			std::shared_ptr<const ClaimSet> main;
 			std::array<std::shared_ptr<const ClaimSet>, kShadowModes> shadow;
 		};
@@ -139,19 +138,8 @@ namespace DCLF
 		 * ownership is off. SunAccumulation skips a claimed geometry's registration by the same test.
 		 */
 		std::shared_ptr<const ClaimSet> ShadowClaimsForBatch(const RE::BSBatchRenderer* a_batch) const;
-		std::shared_ptr<const ClaimSet> CurrentShadowClaims(std::uint32_t a_modeIndex) const
-		{
-			return a_modeIndex < kShadowModes ? std::atomic_load(&shadowClaims[a_modeIndex]) : nullptr;
-		}
 		/** @brief CS_DCLF_SHADOW_OWNERSHIP=static (live: Toggles.h): withhold claimed casters from the shadow views. */
 		static bool ShadowWithholdingEnabled();
-		/**
-		 * @brief Whether the volumetric lighting copy's passes can be withheld: its registration (accumulation
-		 * hint 8) bypasses RegisterPass - the shadow modes' registration (AE FUN_1414b2a60) inserts it into batch
-		 * group 15 with a direct call - so it needs a hook of its own on that call, which exists for AE only.
-		 * Until it is installed the volumetric-only casters stay the engine's.
-		 */
-		static bool VolumetricClaimsAvailable();
 		/**
 		 * @brief How many passes this thread has handed to a batch renderer so far (RegisterPass, and the shadow
 		 * modes' direct group insertions), withheld or not: the difference across a registration call is how many
@@ -193,14 +181,6 @@ namespace DCLF
 		/** @brief What the last Drain took (diagnostics); render thread only. */
 		std::span<const Entry> LastDrain() const { return lastDrain; }
 
-		/**
-		 * @brief CS_DCLF_SHADOW_PROBE: the BSUtilityShader registrations since the last call (the shadow
-		 * views' passes, and the main camera's RenderDepth ones), kept in a ring of their own so that the
-		 * Lighting capture the tables are built from is untouched; render thread only, after the
-		 * registration jobs have finished.
-		 */
-		std::span<const Entry> DrainUtility();
-
 		const Stats& GetStats() const { return stats; }
 		Stats& MutableStats() { return stats; }
 
@@ -227,9 +207,6 @@ namespace DCLF
 		std::atomic<std::uint32_t> threadCount{ 0 };
 		Stats stats;
 		std::atomic<std::uint32_t> withheld{ 0 };
-		std::vector<Entry> utilityEntries;
-		std::atomic<std::size_t> utilityCursor{ 0 };
-		std::atomic<std::uint32_t> utilityOverflow{ 0 };
 		// Published whole by the render thread, read by the registering thread. shared_ptr's atomic
 		// load/store keeps the readers safe while the next one is being built.
 		std::shared_ptr<const ClaimSet> claims;
@@ -260,26 +237,5 @@ namespace DCLF
 		friend struct Hook;
 		void Record(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_fading, bool a_withheld);
 		bool Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading);
-
-	public:
-		/** @brief CS_DCLF_REGISTER_PROBE: registrations by shader type, and how many into a main renderer. */
-		static constexpr std::size_t kShaderTypes = 16;
-		std::array<std::atomic<std::uint32_t>, kShaderTypes> probeCounts{};
-		std::array<std::atomic<std::uint32_t>, kShaderTypes> probeMain{};
-
-		// [TEMP] CS_DCLF_CASCADE_PROBE: every Utility registration into a shadow view's renderer this frame,
-		// withheld or not, so the far-cascade probe can compare the engine's per-view caster set with DCLF's.
-		struct ShadowRegistration
-		{
-			const RE::BSBatchRenderer* batch;
-			const RE::BSGeometry* geometry;
-			bool withheld;
-		};
-		static bool CascadeProbeEnabled();
-		std::vector<ShadowRegistration> TakeShadowRegistrations();
-
-	private:
-		std::mutex shadowRegistrationsLock;  // [TEMP] diagnostics only
-		std::vector<ShadowRegistration> shadowRegistrations;
 	};
 }

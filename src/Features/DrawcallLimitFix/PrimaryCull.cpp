@@ -163,12 +163,6 @@ namespace DCLF
 		return instance;
 	}
 
-	bool PrimaryCull::ReasonsProbe()
-	{
-		static const bool probe = SwitchEnabled("CS_DCLF_PRIMARY_REASONS");
-		return probe;
-	}
-
 	bool PrimaryCull::Probe()
 	{
 		static const bool probe = SwitchValue("CS_DCLF_PRIMARY_EXCLUDE") == "probe";
@@ -235,13 +229,7 @@ namespace DCLF
 
 	bool PrimaryCull::ResidentOn()
 	{
-		static const bool on = SwitchValue("CS_DCLF_RESIDENT") != "0" && FeedbackOn() && SceneStore::SwitchEventsLive();
-		return on;
-	}
-
-	bool PrimaryCull::ProbationOn()
-	{
-		static const bool on = ResidentOn() && SwitchValue("CS_DCLF_RESIDENT_PROBATION") != "0";
+		static const bool on = SceneStore::SwitchEventsLive();
 		return on;
 	}
 
@@ -253,7 +241,7 @@ namespace DCLF
 		LightingDescriptors descriptors;
 		if (DeriveLightingDescriptors(*lighting, a_geometry, nullptr, descriptors, true) != Ineligible::None)
 			return false;
-		if (!SyntheticPass(a_geometry, descriptors.derivedPass, a_out, SunOnGpu()))
+		if (!SyntheticPass(a_geometry, descriptors.derivedPass, a_out, true))
 			return false;
 		a_out.resident = true;
 		return true;
@@ -279,18 +267,8 @@ namespace DCLF
 			// Nothing app-culled up to the root: a resident record is drawn whenever the GPU finds it.
 			if (!MemberShown(m, root))
 				return Refusal::HiddenMember;
-			if (!store.ResidentCapable(member.geometry)) {
-				// [TEMP] why, by plan and cause.
-				if (a_probation || true) {
-					static std::atomic<std::uint32_t> logged{ 0 };
-					static std::map<std::string, std::uint32_t> seen;
-					const auto key = fmt::format("{} plan, {}", static_cast<int>(cut.plans[a_e]), store.ResidentIncapableReason(member.geometry));
-					if (seen[key]++ == 0 && logged.fetch_add(1) < 24)
-						logger::info("[DCLF][TEMP] resident refusal: '{}' under '{}' ({}): {}", member.geometry->name.c_str() ? member.geometry->name.c_str() : "?",
-							root->name.c_str() ? root->name.c_str() : "?", root->GetRTTI() ? root->GetRTTI()->name : "?", key);
-				}
+			if (!store.ResidentCapable(member.geometry))
 				return Refusal::MemberNotCapable;
-			}
 			any = true;
 		}
 		return any ? Refusal::None : Refusal::Plan;
@@ -384,7 +362,7 @@ namespace DCLF
 			cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived,
 					descriptors.projectedUV || descriptors.technique == 8 || descriptors.technique == 19 };
 		}
-		if (cached.extras || !SyntheticPass(*a_geometry, cached.derivedPass, a_out, SunOnGpu()))
+		if (cached.extras || !SyntheticPass(*a_geometry, cached.derivedPass, a_out, true))
 			return false;
 		a_out.resident = true;
 		return true;
@@ -449,18 +427,6 @@ namespace DCLF
 		// A fade root's objects carry its fade-out distance for BuildDraws' test. Decals are never in the depth segment,
 		// whose first phase tests it, so an entry that needs the test and has one stays in the stand-in.
 		const float fadeDistance = cut.plans[a_e] == EntryPlan::Plain ? 0.0f : FadeDistanceOf(root);
-		// [TEMP] the fade distance's inputs, for the first joins that have one.
-		static std::uint32_t loggedFade = 0;
-		if (fadeDistance != 0.0f && loggedFade < 12) {
-			++loggedFade;
-			const std::uint32_t type = At<std::uint8_t>(root, 0x153) & 0xF;
-			const float dx = root->worldBound.center.x - fadeEye[0], dy = root->worldBound.center.y - fadeEye[1], dz = root->worldBound.center.z - fadeEye[2];
-			const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
-			logger::info("[DCLF][TEMP] fade distance: '{}' type {} near {} far {} mult {} threshold {} divisor {} -> {}; now at {} (x LOD factor {} = {}), metric {}",
-				root->name.c_str() ? root->name.c_str() : "?", type, At<float>(root, kFadeNear), At<float>(root, kFadeFar), Global<float>(kFadeDistanceMult),
-				Global<float>(kFadeOutThreshold), Global<float>(kFadeTypeDivisors + type * 4), fadeDistance, distance, fadeEye[3], distance * fadeEye[3],
-				std::bit_cast<float>(At<std::uint32_t>(root, 0x144)));
-		}
 		// Every member's pass first: an entry with a member the synthetic pass cannot model stays in the stand-in.
 		const std::size_t firstPass = residentPasses.size();
 		const bool tree = cut.plans[a_e] == EntryPlan::TreeRoot;
@@ -497,28 +463,10 @@ namespace DCLF
 		return true;
 	}
 
-	bool PrimaryCull::SwitchProbe()
-	{
-		static const bool probe = SwitchEnabled("CS_DCLF_SWITCH_PROBE");
-		return probe;
-	}
-
 	void PrimaryCull::RefreshLive(std::uint32_t a_e)
 	{
 		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1]; ++m)
 			cut.memberLive[m] = PathSelected(cut.members[m]) ? 1 : 0;
-	}
-
-	bool PrimaryCull::FeedbackProbe()
-	{
-		static const bool probe = SwitchEnabled("CS_DCLF_FEEDBACK_PROBE");
-		return probe;
-	}
-
-	bool PrimaryCull::FeedbackOn()
-	{
-		static const bool on = SwitchValue("CS_DCLF_FEEDBACK") != "0";
-		return on;
 	}
 
 	bool PrimaryCull::TreeAboveLimit(const RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process)
@@ -526,13 +474,6 @@ namespace DCLF
 		// Above the height limit (worldBound.center.z against a base), with the test on: nothing, and no recursion.
 		return At<std::uint8_t>(&a_process, kProcessTreeHeightTest) && Global<std::uint8_t>(kTreeHeightTestOn) &&
 		       a_node->worldBound.center.z - Global<float>(kTreeHeightBase) > Global<float>(kTreeHeightLimit);
-	}
-
-	bool PrimaryCull::ServiceTree(RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process)
-	{
-		if (TreeAboveLimit(a_node, a_process))
-			return false;
-		return a_process.camera ? ServiceTreeState(a_node, *a_process.camera) : true;
 	}
 
 	bool PrimaryCull::ServiceTreeState(RE::NiAVObject* a_node, const RE::NiCamera& a_camera)
@@ -549,7 +490,6 @@ namespace DCLF
 	PrimaryCull::EntryPlan PrimaryCull::PlanOf([[maybe_unused]] std::uint32_t a_entry, const RE::NiAVObject* a_root)
 	{
 		const auto& candidates = *cut.candidates;
-		lastCause.clear();
 		// Only nodes whose OnVisible is the plain recursion (NiNode, and a multibound's frustum cache), under a root that
 		// may also be a fade node; only geometries whose OnVisible is BSGeometry's (the append to the process). A tracked
 		// geometry PrimaryEntryAllows is DCLF's; every other is the engine's, handed to its registration in the cull's order.
@@ -565,7 +505,6 @@ namespace DCLF
 			if (const auto* geometry = const_cast<RE::NiAVObject*>(a_object)->AsGeometry()) {
 				if ((*reinterpret_cast<const std::uintptr_t* const*>(geometry))[0x34] != geometryOnVisible) {
 					rejected = true;
-					lastCause = fmt::format("geometry {} with its own OnVisible", a_object->GetRTTI() ? a_object->GetRTTI()->name : "?");
 					return;
 				}
 				const auto it = candidates.geometries.find(geometry);
@@ -591,22 +530,16 @@ namespace DCLF
 			if (!node || !(RttiIs(a_object, "NiNode") || RttiIs(a_object, "BSMultiBoundNode") ||
 							  (a_isRoot && (RttiIs(a_object, "BSFadeNode") || RttiIs(a_object, "BSLeafAnimNode") || RttiIs(a_object, "BSTreeNode"))))) {
 				rejected = true;
-				lastCause = fmt::format("{} node {}", a_isRoot ? "root" : "inner", a_object->GetRTTI() ? a_object->GetRTTI()->name : "?");
 				return;
 			}
 			for (const auto& child : node->GetChildren())
 				a_self(a_self, child.get(), false);
 		};
 		visit(visit, a_root, true);
-		if (!rejected && !ours) {
-			rejected = true;
-			lastCause = "nothing DCLF draws";
-		}
-		if (rejected) {
+		if (rejected || !ours) {
 			cut.members.resize(first);
 			cut.switchPaths.resize(firstPath);
 			cut.switches.resize(firstSwitch);
-			++cutStats.planReasons[lastCause];
 			return EntryPlan::Rejected;
 		}
 		return RttiIs(a_root, "BSFadeNode") ? EntryPlan::FadeRoot :
@@ -645,18 +578,6 @@ namespace DCLF
 			for (const auto& light : node->GetRuntimeData().activeShadowLights)
 				localShadows = localShadows || (light && light.get() != node->GetRuntimeData().sunShadowDirLight);
 		++frameCounter;
-		// [TEMP] CS_DCLF_TEST_FADE_DIVISOR="<frame>:<value>": the LOD type 1 (objects) fade divisor written at that frame, so
-		// resident objects fall past their fade-out distance within the loaded cells (the GPU's fade test).
-		static const auto testDivisor = [] {
-			const auto value = SwitchValue("CS_DCLF_TEST_FADE_DIVISOR");
-			const auto colon = value.find(':');
-			return colon == std::string::npos ? std::pair{ 0ull, 0.0f } :
-			                                    std::pair{ std::strtoull(value.c_str(), nullptr, 10), std::strtof(value.c_str() + colon + 1, nullptr) };
-		}();
-		if (testDivisor.first && frameCounter == testDivisor.first) {
-			logger::info("[DCLF][TEMP] test: the type 1 fade divisor {} -> {}", Global<float>(kFadeTypeDivisors + 4), testDivisor.second);
-			Global<float>(kFadeTypeDivisors + 4) = testDivisor.second;
-		}
 		standInLive = false;
 		residentsLive = false;
 		// The camera the fade roots' distances are measured from (BuildDraws' fade test).
@@ -730,9 +651,6 @@ namespace DCLF
 			cut.switches.clear();
 			cut.admitted.assign(entries, 0);
 			cut.eligible.clear();
-			cut.rejected.clear();
-			cut.causes.clear();
-			cut.causeOf.assign(entries, 0);
 			ankerl::unordered_dense::set<const RE::NiAVObject*> admittedRoots;
 			for (std::uint32_t e = 0; e < entries; ++e) {
 				cut.memberOffsets[e] = static_cast<std::uint32_t>(cut.members.size());
@@ -740,16 +658,8 @@ namespace DCLF
 				cut.plans[e] = PlanOf(e, cut.roots[e]);
 				cut.memberOffsets[e + 1] = static_cast<std::uint32_t>(cut.members.size());
 				cut.switchOffsets[e + 1] = static_cast<std::uint32_t>(cut.switches.size());
-				if (cut.plans[e] == EntryPlan::Rejected) {
-					if (ReasonsProbe()) {
-						auto found = std::find(cut.causes.begin(), cut.causes.end(), lastCause);
-						if (found == cut.causes.end() && cut.causes.size() < 63)
-							found = cut.causes.insert(cut.causes.end(), lastCause);
-						cut.causeOf[e] = static_cast<std::uint16_t>(found == cut.causes.end() ? 63 : found - cut.causes.begin());
-						cut.rejected.emplace(cut.roots[e], e);
-					}
+				if (cut.plans[e] == EntryPlan::Rejected)
 					continue;
-				}
 				cut.eligible.emplace(cut.roots[e], e);
 				if (cut.admittedRoots.contains(cut.roots[e])) {
 					cut.admitted[e] = 1;
@@ -827,7 +737,7 @@ namespace DCLF
 		cutStats.prepareTicks += Now() - start;
 		// The list jobs are queued after this returns: their queueing orders everything above before their reads.
 		frameLive.store(true, std::memory_order_release);
-		gpuSunFrame = SunOnGpu();
+		gpuSunFrame = true;
 	}
 
 	int PrimaryCull::SlotOf(const RE::NiCullingProcess* a_process) const
@@ -848,18 +758,8 @@ namespace DCLF
 		if (!standInLive)
 			return false;
 		const auto it = cut.eligible.find(a_object);
-		if (it == cut.eligible.end()) {
-			if (ReasonsProbe())
-				if (const auto rejected = cut.rejected.find(a_object); rejected != cut.rejected.end()) {
-					EngineProcess1(a_process, a_object, a_arg);
-					if (a_object->GetFlags().any(RE::NiAVObject::Flag::kAccumulated)) {
-						const std::uint32_t e = rejected->second;
-						jobOut[a_slot].causeGeometries[cut.causeOf[e]] += cut.geometryOffsets[e + 1] - cut.geometryOffsets[e];  // tracked ones
-					}
-					return true;
-				}
+		if (it == cut.eligible.end())
 			return false;
-		}
 		const std::uint32_t e = it->second;
 		const auto plan = cut.plans[e];
 		auto& out = jobOut[a_slot];
@@ -876,15 +776,15 @@ namespace DCLF
 			EngineProcess1(a_process, a_object, a_arg);
 			if (a_object->GetFlags().any(RE::NiAVObject::Flag::kAccumulated))
 				out.pending.push_back(e);
-			else if (ProbationOn() && e < joinBlocked.size() && joinBlocked[e] <= frameCounter)
+			else if (ResidentOn() && e < joinBlocked.size() && joinBlocked[e] <= frameCounter)
 				out.probeCandidates.push_back(e);
 			++out.notAdmitted;
 			return true;
 		}
 		// A switch whose selected child is out of date: NiSwitchNode::OnVisible brings it up to date before culling it
 		// (UpdateDownwardPass). With the switch events that is done when the selection changes (SceneStore::CatchUpSwitch),
-		// so none is found here (CS_DCLF_SWITCH_PROBE counts them); without them, the engine culls this entry this frame.
-		if (!cut.liveEvents || SwitchProbe()) {
+		// so none is found here; without them, the engine culls this entry this frame.
+		if (!cut.liveEvents) {
 			for (std::uint32_t w = cut.switchOffsets[e]; w < cut.switchOffsets[e + 1]; ++w) {
 				const auto* switchNode = cut.switches[w];
 				SceneStore::SwitchState state;
@@ -893,25 +793,6 @@ namespace DCLF
 				const auto index = static_cast<std::uint16_t>(state.index);
 				if (index < switchNode->GetChildren().capacity() && switchNode->GetChildren()[index] && state.childRevID && index < state.childRevCapacity &&
 					state.childRevID[index] != state.revID) {
-					if (cut.liveEvents) {
-						// A switch updated every frame (an animated one) has revID one ahead of its selected child while
-						// its own update pass runs alongside the list jobs, which then updates the child: not stale.
-						if (state.childRevID[index] + 1 == state.revID) {
-							++out.switchMidUpdate;
-							continue;
-						}
-						if (++out.switchStaleSeen == 1) {
-							static std::atomic<std::uint32_t> logged{ 0 };
-							if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
-								const auto* child = switchNode->GetChildren()[index].get();
-								logger::info("[DCLF][TEMP] switch probe: stale selected child under '{}' ({}): switch '{}' {:#x} index {} of {}, revID {}, childRevID {}, flags {:#x}; child '{}' {}",
-									a_object->name.c_str(), a_object->GetRTTI() ? a_object->GetRTTI()->name : "?", switchNode->name.c_str(), reinterpret_cast<std::uintptr_t>(switchNode),
-									state.index, switchNode->GetChildren().size(), state.revID, state.childRevID[index], state.flags, child->name.c_str(),
-									child->GetRTTI() ? child->GetRTTI()->name : "?");
-							}
-						}
-						continue;
-					}
 					++out.switchStale;
 					EngineProcess1(a_process, a_object, a_arg);
 					return true;
@@ -921,45 +802,19 @@ namespace DCLF
 		++out.skipped;
 		if (ResidentOn() && e < joinBlocked.size() && joinBlocked[e] <= frameCounter)
 			out.joinCandidates.push_back(e);
-		const bool feedback = FeedbackOn();
-		if (feedback) {
-			// The root's state (fade, LOD, the tree clock's bit) is the visibility feedback's (ConsumeFeedback); what is
-			// left here is what the frame draws. A tree above the height limit draws nothing.
-			out.stoodIn.push_back(e);
-			if (plan == EntryPlan::TreeRoot && TreeAboveLimit(a_object, *a_process))
-				return true;
-			if (Outside(a_process->planes, a_object->worldBound))
-				return true;
-		}
-		// The cull's test, against the job's own planes (its Process2 set them up from the list's first entry), and the
-		// visibility bit Process1 keeps on what it tests (flags bit 26, which the tree clock reads).
-		auto& flags = At<std::uint32_t>(a_object, kObjectFlags);
-		if (!feedback && Outside(a_process->planes, a_object->worldBound)) {
-			flags &= ~kFlagAccumulated;
+		// The root's state (fade, LOD, the tree clock's bit) is the visibility feedback's (ConsumeFeedback); what is left
+		// here is what the frame draws, by the cull's test against the job's own planes (its Process2 set them up from the
+		// list's first entry). A tree above the height limit draws nothing.
+		out.stoodIn.push_back(e);
+		if (plan == EntryPlan::TreeRoot && TreeAboveLimit(a_object, *a_process))
 			return true;
-		}
-		if (!feedback)
-			flags |= kFlagAccumulated;
+		if (Outside(a_process->planes, a_object->worldBound))
+			return true;
 		++out.visibleEntries;
-		// What OnVisible would have done to the root: its fade and LOD state. A root that faded out is not drawn. One that
-		// has started to fade is the engine's this frame: its geometries go into this process's output, which the
-		// registration jobs walk as they walk what the cull found (and the next frame's cull keeps it in).
-		bool engineDraws = false;
-		if (fadeRoot && a_process->camera && !feedback) {
-			++out.fadeServiced;
-			const bool recurse = plan == EntryPlan::TreeRoot ? ServiceTree(a_object, *a_process) : ServiceFade(a_object, plan == EntryPlan::LeafRoot, *a_process->camera);
-			if (!recurse) {
-				++out.fadedOut;
-				return true;
-			}
-			engineDraws = !Settled(a_object);
-		}
 		for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m) {
 			const auto& member = cut.members[m];
 			const auto* geometry = member.geometry;
 			const bool selected = cut.liveEvents ? cut.memberLive[m] != 0 : PathSelected(member);
-			if (cut.liveEvents && SwitchProbe() && selected != PathSelected(member))
-				++out.switchMismatch;
 			if (!selected) {
 				++out.unselected;
 				continue;
@@ -974,10 +829,10 @@ namespace DCLF
 			}
 			// The engine's: what its cull does for a visible geometry, the test of its bound, then the append to this
 			// process (BSGeometry::OnVisible), in the traversal's order, for the registration jobs to register.
-			if (member.engine || engineDraws) {
+			if (member.engine) {
 				if (!Outside(a_process->planes, geometry->worldBound)) {
 					a_process->AppendVirtual(*const_cast<RE::BSGeometry*>(geometry), a_arg);
-					++(member.engine ? out.engineMembers : out.handedBack);
+					++out.engineMembers;
 				}
 				continue;
 			}
@@ -999,18 +854,13 @@ namespace DCLF
 			cut.pendingAdmission.insert(cut.pendingAdmission.end(), out.pending.begin(), out.pending.end());
 			auto& s = cutStats;
 			s.seen += out.seen, s.skipped += out.skipped, s.visibleEntries += out.visibleEntries, s.notSettled += out.notSettled;
-			s.notAdmitted += out.notAdmitted, s.fadeServiced += out.fadeServiced, s.fadedOut += out.fadedOut, s.handedBack += out.handedBack;
+			s.notAdmitted += out.notAdmitted;
 			s.hiddenSkipped += out.hidden;
 			s.engineMembers += out.engineMembers;
-			if (FeedbackOn()) {
-				stoodInScratch.insert(stoodInScratch.end(), out.stoodIn.begin(), out.stoodIn.end());
-				out.stoodIn.clear();
-			}
+			stoodInScratch.insert(stoodInScratch.end(), out.stoodIn.begin(), out.stoodIn.end());
+			out.stoodIn.clear();
 			s.switchStale += out.switchStale;
 			s.unselected += out.unselected;
-			s.switchMismatch += out.switchMismatch;
-			s.switchStaleSeen += out.switchStaleSeen;
-			s.switchMidUpdate += out.switchMidUpdate;
 			s.residentSkips += out.resident;
 			for (const std::uint32_t e : out.joinCandidates)
 				if (e < joinQueued.size() && !joinQueued[e]) {
@@ -1020,8 +870,6 @@ namespace DCLF
 			out.joinCandidates.clear();
 			probeScratch.insert(probeScratch.end(), out.probeCandidates.begin(), out.probeCandidates.end());
 			out.probeCandidates.clear();
-			for (std::size_t c = 0; c < s.causeGeometries.size(); ++c)
-				s.causeGeometries[c] += out.causeGeometries[c];
 		}
 		// The main registration reads the mask and clears it (+0x160 = 0xFFFF), so every later registration in the frame
 		// reads 0. Here, after Finish, because the sun's Accumulate writes masks while the list jobs run.
@@ -1043,27 +891,25 @@ namespace DCLF
 		probeScratch.clear();
 		// This frame's stood-in entries ride with its feedback copy (IndirectDraws::ArmFeedback), and the frames whose
 		// copies have completed are decoded on the worker: after this frame's list jobs, joined before the next's.
-		if (FeedbackOn()) {
-			auto tag = std::make_shared<FeedbackTag>();
-			tag->candidates = cut.candidates;
-			tag->stoodIn = std::move(stoodInScratch);
-			stoodInScratch.clear();
-			// The residents: the decode services them as it does the stood-in entries (their fade, LOD and kAccumulated),
-			// and reports a root it finds fading (unsettledRoots).
-			tag->residentFrom = static_cast<std::uint32_t>(tag->stoodIn.size());
-			tag->fadeWitness.reserve(residents.size());
-			for (const auto& [root, resident] : residents) {
-				tag->stoodIn.push_back(resident.entry);
-				tag->fadeWitness.push_back(resident.fadeWitness | (resident.fadeSensitive ? 0x10000u : 0u) |
-										   (cut.plans[resident.entry] != EntryPlan::Plain ? 0x20000u : 0u));
-			}
-			tag->roots.reserve(tag->stoodIn.size());
-			for (const std::uint32_t e : tag->stoodIn)
-				tag->roots.emplace_back(const_cast<RE::NiAVObject*>(cut.roots[e]));
-			pendingTag = std::move(tag);
+		auto tag = std::make_shared<FeedbackTag>();
+		tag->candidates = cut.candidates;
+		tag->stoodIn = std::move(stoodInScratch);
+		stoodInScratch.clear();
+		// The residents: the decode services them as it does the stood-in entries (their fade, LOD and kAccumulated),
+		// and reports a root it finds fading (unsettledRoots).
+		tag->residentFrom = static_cast<std::uint32_t>(tag->stoodIn.size());
+		tag->fadeWitness.reserve(residents.size());
+		for (const auto& [root, resident] : residents) {
+			tag->stoodIn.push_back(resident.entry);
+			tag->fadeWitness.push_back(resident.fadeWitness | (resident.fadeSensitive ? 0x10000u : 0u) |
+									   (cut.plans[resident.entry] != EntryPlan::Plain ? 0x20000u : 0u));
 		}
+		tag->roots.reserve(tag->stoodIn.size());
+		for (const std::uint32_t e : tag->stoodIn)
+			tag->roots.emplace_back(const_cast<RE::NiAVObject*>(cut.roots[e]));
+		pendingTag = std::move(tag);
 		// The synthetic passes on the worker, joined at the accumulate phase (BuildSyntheticPasses).
-		if (!frameVisible.empty() && AsyncModeSetting() != AsyncMode::Off && AsyncJobEnabled("primary")) {
+		if (!frameVisible.empty() && AsyncEnabled()) {
 			synthJobDone.store(false, std::memory_order_relaxed);
 			auto handle = std::make_shared<AsyncWorker::JobHandle>(AsyncWorker::Get().Submit("primary synthetic passes", [this](std::stop_token) {
 				synthetic.clear();
@@ -1081,14 +927,14 @@ namespace DCLF
 		// The feedback frames whose copies have completed, decoded on the worker every frame (whether or not the cut
 		// applies this one). Kicked after the registration jobs (their CPU is not shared with it), joined at Present
 		// (EndFrame), before the next frame's update reads the tree bits and its list jobs read the fade state.
-		if (!FeedbackOn() || !Toggles::Get().Active().excludePrimaryEntries || feedbackJob)
+		if (!Toggles::Get().Active().excludePrimaryEntries || feedbackJob)
 			return;
 		auto drain = [this] {
 			IndirectDraws::Get().DrainVisibilityFeedback([this](const IndirectDraws::VisibilityFeedbackFrame& a_frame) {
 				ConsumeFeedback(a_frame.stamp, a_frame.objects, a_frame.words, a_frame.tag);
 			});
 		};
-		if (AsyncModeSetting() != AsyncMode::Off && AsyncJobEnabled("primary"))
+		if (AsyncEnabled())
 			feedbackJob = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
 				AsyncWorker::Get().Submit("primary feedback", [drain](std::stop_token) { drain(); })));
 		else
@@ -1138,7 +984,7 @@ namespace DCLF
 		auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
 		const auto* camera = processes && processes[0] ? processes[0]->camera : nullptr;
 		std::uint64_t visible = 0, serviced = 0, unresolved = 0;
-		std::uint64_t residentsVisible = 0, residentsFadeHidden = 0, residentRecordsInView = 0;
+		std::uint64_t residentsVisible = 0, residentsFadeHidden = 0;
 		for (std::size_t i = 0; i < tag->stoodIn.size(); ++i) {
 			const std::uint32_t e = tag->stoodIn[i];
 			if (e >= cut.roots.size() || i >= tag->roots.size())
@@ -1158,12 +1004,6 @@ namespace DCLF
 				inView = (a_words[object] & 0x0FFFFFFFu) == a_stamp;
 				fadeHidden = inView && (a_words[object] & 0x80000000u) != 0;
 			}
-			// [TEMP] every member in view, not only the first.
-			if (i >= tag->residentFrom)
-				for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m)
-					if (const std::int32_t object = cut.memberObject[m]; !cut.members[m].engine && object >= 0 && static_cast<std::uint32_t>(object) < a_objects &&
-																	  (a_words[object] & 0x8FFFFFFFu) == a_stamp)
-						++residentRecordsInView;
 			auto* root = tag->roots[i].get();
 			std::atomic_ref<std::uint32_t> flags(At<std::uint32_t>(root, kObjectFlags));
 			const auto checkThis = [&] {
@@ -1183,26 +1023,11 @@ namespace DCLF
 				checkThis();
 				continue;
 			}
-			// [TEMP] the fade distance against the engine's servicing.
-			bool beyond = false;
-			if (resident && (cut.plans[e] == EntryPlan::FadeRoot || cut.plans[e] == EntryPlan::LeafRoot))
-				if (const float distance = FadeDistanceOf(root); distance != 0.0f) {
-					const auto& eye = camera->world.translate;
-					const float dx = root->worldBound.center.x - eye.x, dy = root->worldBound.center.y - eye.y, dz = root->worldBound.center.z - eye.z;
-					beyond = std::sqrt(dx * dx + dy * dy + dz * dz) * (distance > 0.0f ? At<float>(camera, kCameraLodAdjust) : 1.0f) > std::abs(distance);
-				}
 			const auto plan = cut.plans[e];
 			switch (plan) {
 			case EntryPlan::FadeRoot:
 			case EntryPlan::LeafRoot:
 				ServiceFade(root, plan == EntryPlan::LeafRoot, *camera);
-				if (resident) {
-					const bool fading = At<float>(root, kCurrentFade) < 1.0f || !(At<std::uint32_t>(root, kObjectFlags) & kFlagFadeTargetReached);
-					if (beyond)
-						(fading ? counters.fadeBeyondFading : counters.fadeBeyondSettled).fetch_add(1, std::memory_order_relaxed);
-					else if (fading)
-						counters.fadeWithinFading.fetch_add(1, std::memory_order_relaxed);
-				}
 				++serviced;
 				break;
 			case EntryPlan::TreeRoot:
@@ -1213,14 +1038,6 @@ namespace DCLF
 				}
 				ServiceTreeState(root, *camera);
 				++serviced;
-				if (FeedbackProbe()) {
-					const float clock = At<float>(root, 0x164);
-					const auto [it, inserted] = treeClocks.try_emplace(root, clock);
-					counters.trees.fetch_add(1, std::memory_order_relaxed);
-					if (!inserted && it->second != clock)
-						counters.treesAdvanced.fetch_add(1, std::memory_order_relaxed);
-					it->second = clock;
-				}
 				break;
 			default:
 				break;
@@ -1234,7 +1051,6 @@ namespace DCLF
 		counters.residents.fetch_add(tag->residentFrom < tag->stoodIn.size() ? tag->stoodIn.size() - tag->residentFrom : 0, std::memory_order_relaxed);
 		counters.residentsVisible.fetch_add(residentsVisible, std::memory_order_relaxed);
 		counters.residentsFadeHidden.fetch_add(residentsFadeHidden, std::memory_order_relaxed);
-		counters.residentRecordsInView.fetch_add(residentRecordsInView, std::memory_order_relaxed);
 	}
 
 	void PrimaryCull::BuildSyntheticInto(std::vector<std::pair<const RE::BSGeometry*, AccumulatedPass>>& a_out, std::uint64_t& a_unmodelled)
@@ -1256,7 +1072,7 @@ namespace DCLF
 					descriptors.projectedUV || descriptors.technique == 8 || descriptors.technique == 19 };
 			}
 			AccumulatedPass pass;
-			if (!SyntheticPass(*geometry, cached.derivedPass, pass, SunOnGpu())) {
+			if (!SyntheticPass(*geometry, cached.derivedPass, pass, true)) {
 				++a_unmodelled;
 				continue;
 			}
@@ -1386,12 +1202,6 @@ namespace DCLF
 		(main ? registrations.main : registrations.depth).fetch_add(1, std::memory_order_relaxed);
 		if (under)
 			(main ? registrations.mainUnder : registrations.depthUnder).fetch_add(1, std::memory_order_relaxed);
-	}
-
-	bool PrimaryCull::SunOnGpu()
-	{
-		static const bool onGpu = SwitchValue("CS_DCLF_SUN_GPU") != "0";
-		return onGpu;
 	}
 
 	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry)
@@ -1622,7 +1432,7 @@ namespace DCLF
 
 	void PrimaryCull::Install()
 	{
-		if (installed || !REL::Module::IsAE())
+		if (installed)
 			return;
 		const auto base = REL::Module::get().base();
 		const auto afterFullFrustum = base + kAfterFullFrustumCallSite;
@@ -1657,18 +1467,12 @@ namespace DCLF
 			const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
 			logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} stale, {} preconditions); per frame {:.0f} eligible entries reached, "
 						 "{:.0f} stood in for ({:.0f} in view), {:.1f} fading, {:.1f} not yet admitted ({:.1f} admitted); {:.0f} synthetic passes, {:.1f} not modelled "
-						 "({:.1f} built inline, {:.1f} late), {:.1f} hidden, {:.1f} with a local light's shadow bit; {} holes; fades serviced {:.0f}, faded out {:.1f}, "
-						 "handed back {:.1f}; {:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms, synthetic join {:.3f} ms",
+						 "({:.1f} built inline, {:.1f} late), {:.1f} hidden, {:.1f} with a local light's shadow bit; {} holes; "
+						 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms, synthetic join {:.3f} ms",
 				s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, s.seen / applied, s.skipped / applied, s.visibleEntries / applied,
 				s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.synthetic / applied, s.unmodelled / applied,
-				s.synthInline / applied, s.synthLate / applied, s.hiddenSkipped / applied, s.localShadowed / applied, s.holes, s.fadeServiced / applied,
-				s.fadedOut / applied, s.handedBack / applied, s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied, s.synthWaitTicks * toMs / applied);
-			for (std::size_t c = 0; c < s.causeGeometries.size(); ++c)
-				if (s.causeGeometries[c])
-					logger::info("[DCLF][TEMP] primary exclusion kept in view: {:.1f} geometries/frame under entries rejected for {}", s.causeGeometries[c] / applied,
-						c < cut.causes.size() ? cut.causes[c] : std::string("(more)"));
-			for (const auto& [cause, count] : s.planReasons)
-				logger::info("[DCLF][TEMP] primary exclusion plan rejects: {} x {}", count, cause);
+				s.synthInline / applied, s.synthLate / applied, s.hiddenSkipped / applied, s.localShadowed / applied, s.holes,
+				s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied, s.synthWaitTicks * toMs / applied);
 			if (ResidentOn()) {
 				const auto r = SceneStore::Get().TakeResidentStats();
 				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
@@ -1686,41 +1490,20 @@ namespace DCLF
 					s.probationJoins, s.probationConfirmed, s.evicted[4], s.probationRefused, s.refusedBy[1], s.refusedBy[2], s.refusedBy[3], s.refusedBy[4], s.refusedBy[5],
 					s.refusedBy[6], s.refusedBy[7],
 					feedbackCounters.residentsFadeHidden.exchange(0, std::memory_order_relaxed), feedbackCounters.residentsWitness.exchange(0, std::memory_order_relaxed));
-				{
-					std::array<std::uint32_t, 5> byPlan{};
-					for (const auto& [root, resident] : residents)
-						if (resident.entry < cut.plans.size())
-							++byPlan[static_cast<std::size_t>(cut.plans[resident.entry])];
-					logger::info("[DCLF][TEMP] residents by plan: {} plain, {} fade, {} leaf, {} tree; {:.0f} resident records in view (GPU frustum, not fade-dropped) per decoded frame",
-						byPlan[0], byPlan[1], byPlan[2], byPlan[3],
-						feedbackCounters.residentRecordsInView.exchange(0, std::memory_order_relaxed) / std::max<double>(static_cast<double>(feedbackCounters.frames.load(std::memory_order_relaxed)), 1.0));
-				}
-				logger::info("[DCLF][TEMP] fade distance probe: residents in view past it {} fading, {} not; within it {} fading",
-					feedbackCounters.fadeBeyondFading.exchange(0, std::memory_order_relaxed), feedbackCounters.fadeBeyondSettled.exchange(0, std::memory_order_relaxed),
-					feedbackCounters.fadeWithinFading.exchange(0, std::memory_order_relaxed));
 				if (r.parityChecks)
 					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",
 						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");
 			}
-			if (SwitchProbe())
-				logger::info("[DCLF][TEMP] switch probe: {} members whose event-driven selection differs from their switches, {} selected children out of date, {} seen mid-update (every applied frame since the last report)",
-					s.switchMismatch, s.switchStaleSeen, s.switchMidUpdate);
 			cutStats = {};
-			if (FeedbackOn()) {
-				const auto io = IndirectDraws::Get().TakeFeedbackStats();
-				auto& c = feedbackCounters;
-				const auto frames = c.frames.exchange(0), stale = c.stale.exchange(0), entries = c.entries.exchange(0);
-				const auto visibleEntries = c.visible.exchange(0), serviced = c.serviced.exchange(0), unresolved = c.unresolved.exchange(0);
-				const double decodedFrames = std::max<double>(static_cast<double>(frames - stale), 1.0);
-				if (FeedbackProbe()) {
-					const auto trees = c.trees.exchange(0), advanced = c.treesAdvanced.exchange(0);
-					logger::info("[DCLF][TEMP] primary feedback probe: {} stood-in tree services in view, {} of them with the tree clock moved since the last decode", trees, advanced);
-				}
-				logger::info("[DCLF] primary feedback: {} frames armed, {} dropped (no free slot), {} abandoned, {} decoded ({} stale); per decoded frame {:.0f} stood-in entries, "
-							 "{:.0f} of them in view, {:.0f} serviced, {:.1f} member objects unresolved",
-					io.armed, io.dropped, io.abandoned, io.decoded, stale, entries / decodedFrames, visibleEntries / decodedFrames, serviced / decodedFrames,
-					unresolved / decodedFrames);
-			}
+			const auto io = IndirectDraws::Get().TakeFeedbackStats();
+			auto& c = feedbackCounters;
+			const auto frames = c.frames.exchange(0), stale = c.stale.exchange(0), entries = c.entries.exchange(0);
+			const auto visibleEntries = c.visible.exchange(0), serviced = c.serviced.exchange(0), unresolved = c.unresolved.exchange(0);
+			const double decodedFrames = std::max<double>(static_cast<double>(frames - stale), 1.0);
+			logger::info("[DCLF] primary feedback: {} frames armed, {} dropped (no free slot), {} abandoned, {} decoded ({} stale); per decoded frame {:.0f} stood-in entries, "
+						 "{:.0f} of them in view, {:.0f} serviced, {:.1f} member objects unresolved",
+				io.armed, io.dropped, io.abandoned, io.decoded, stale, entries / decodedFrames, visibleEntries / decodedFrames, serviced / decodedFrames,
+				unresolved / decodedFrames);
 		}
 		if (!Probe() || !census.frames)
 			return;
