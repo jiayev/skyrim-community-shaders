@@ -25,17 +25,22 @@ namespace DCLF
 	 */
 	void SceneStore::BuildScenePhase()
 	{
-		++frame;
-		tables.usedMaterials.clear();
-		tables.usedPipelines.clear();
-		std::fill(tables.usedMaterialBits.begin(), tables.usedMaterialBits.end(), 0);
-		std::fill(tables.usedPipelineBits.begin(), tables.usedPipelineBits.end(), 0);
-		tables.usedMaterialsFrame = tables.usedPipelinesFrame = frame;
-		// The change log keeps its tail (Tables::changeLog): a reader that has not read past the trimmed half reads every
-		// slot again.
-		tables.changeLog.Trim(1u << 17);
-		tables.geometryLog.Trim(1u << 16);
-		CheckChangeLog();
+		// Normally joined at BeforeShadowMaps already; a frame that did not get there joins before the walk.
+		JoinPlacements();
+		{
+			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
+			++frame;
+			tables.usedMaterials.clear();
+			tables.usedPipelines.clear();
+			std::fill(tables.usedMaterialBits.begin(), tables.usedMaterialBits.end(), 0);
+			std::fill(tables.usedPipelineBits.begin(), tables.usedPipelineBits.end(), 0);
+			tables.usedMaterialsFrame = tables.usedPipelinesFrame = frame;
+			// The change log keeps its tail (Tables::changeLog): a reader that has not read past the trimmed half reads every
+			// slot again.
+			tables.changeLog.Trim(1u << 17);
+			tables.geometryLog.Trim(1u << 16);
+			CheckChangeLog();
+		}
 		// Nothing is drawn while a load screen is up, and nothing here may touch the tracked geometry
 		// either. The load frees the renderer data and the vertex and index buffers of the cell being
 		// unloaded, while the NiPointers in `tracked` keep only the NiAVObjects alive; classifying those
@@ -59,43 +64,100 @@ namespace DCLF
 			return;
 		}
 		PartTimer timer(stats.partMs);
-		RefreshLodFadeSettings();
-		auto& gpu = GpuResources::Get();
-		gpu.BeginFrame(frame);
-		const bool resolveBuffers = gpu.Enabled();
-		frameResolveBuffers = resolveBuffers;
-		if (resolveBuffers != graphWasActive) {
-			logger::info("[DCLF] tables frame {}: the render graph is {} (slots alive {} geometries / {} pipelines / {} materials)", frame,
-				resolveBuffers ? "active from this frame" : "inactive from this frame", stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive);
-			graphWasActive = resolveBuffers;
+		{
+			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
+			RefreshLodFadeSettings();
+			auto& gpu = GpuResources::Get();
+			gpu.BeginFrame(frame);
+			const bool resolveBuffers = gpu.Enabled();
+			frameResolveBuffers = resolveBuffers;
+			if (resolveBuffers != graphWasActive) {
+				logger::info("[DCLF] tables frame {}: the render graph is {} (slots alive {} geometries / {} pipelines / {} materials)", frame,
+					resolveBuffers ? "active from this frame" : "inactive from this frame", stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive);
+				graphWasActive = resolveBuffers;
+			}
+			// Frame-globals that were being read per object. ShouldSuppress in particular is three terms, and
+			// only one of them is per object - the interior test is the same answer for every object in the
+			// frame. The depth-bias mode of each decal group is frame state (a console toggle and whether sun
+			// shadows are off), read once here rather than per decal.
+			frameInterior = Util::IsInterior();
+			frameDecalBias = { 0u, DecalDepthBiasMode(1), DecalDepthBiasMode(2) };
+			auto& evaluator = ConstantEvaluator::Get();
+			ConstantEvaluator::ResetFrameAudits();
+			if (!evaluator.HasLightingShader())
+				FindLightingShader();
+			geometryIndex.reserve(tracked.size());
 		}
-		// Frame-globals that were being read per object. ShouldSuppress in particular is three terms, and
-		// only one of them is per object - the interior test is the same answer for every object in the
-		// frame. The depth-bias mode of each decal group is frame state (a console toggle and whether sun
-		// shadows are off), read once here rather than per decal.
-		frameInterior = Util::IsInterior();
-		frameDecalBias = { 0u, DecalDepthBiasMode(1), DecalDepthBiasMode(2) };
 		timer.Add(BuildPart::Walk);
-		// Consume object-reference changes from the completed frame. Materials retire
-		// on their last-reference event; geometry and pipeline slots retain their grace period.
-		SweepSlots();
-		auto& evaluator = ConstantEvaluator::Get();
-		ConstantEvaluator::ResetFrameAudits();
-		if (!evaluator.HasLightingShader())
-			FindLightingShader();
-
-		geometryIndex.reserve(tracked.size());
-
-		CaptureCullHiddenBits();
+		{
+			// Consume object-reference changes from the completed frame. Materials retire
+			// on their last-reference event; geometry and pipeline slots retain their grace period.
+			DCLF_SCENE_PART(SweepSlots, "CS.DCLF.Scene.SweepSlots");
+			SweepSlots();
+		}
+		{
+			DCLF_SCENE_PART(CullHiddenBits, "CS.DCLF.Scene.CullHiddenBits");
+			CaptureCullHiddenBits();
+		}
 
 		// Only what can have changed (DeltaWalk). CS_DCLF_WALK_PARITY=1: every 60 frames a dense rebuild, classifying
 		// every object from scratch, is compared with the slot tables object by object.
 		DeltaWalk();
+		// The kept records' placements and palettes, on the worker until BeforeShadowMaps (inline on a parity frame).
+		KickPlacements();
 		const bool walkParityOn = SwitchEnabled(Switch::WalkParity);
-		if (walkParityOn && ParityDue(frame))
+		if (walkParityOn && ParityDue(frame)) {
+			DCLF_SCENE_PART(WalkParity, "CS.DCLF.Scene.WalkParity");
 			CheckWalkParity();
+		}
 		stats.objects = tables.liveObjects;
 		sceneBuilt = true;
+	}
+
+	bool SceneStore::ResolveFace(RE::BSGeometry& a_geometry, FaceSnapshots::ShapeView& a_face, std::uint32_t& a_region)
+	{
+		a_face = {};
+		a_region = kNoFaceRegion;
+		if (auto* head = a_geometry.parent ? netimmerse_cast<RE::BSFaceGenNiNode*>(a_geometry.parent) : nullptr)
+			a_face = FaceSnapshots::Get().Shape(static_cast<RE::BSDynamicTriShape&>(a_geometry), *head);
+		if (a_face.positions)
+			a_region = FaceRegionOf(&a_geometry, a_face.vertexCount);
+		return a_region != kNoFaceRegion;
+	}
+
+	void SceneStore::PushFaceStream(RE::BSGeometry& a_geometry, std::uint32_t a_slot, const FaceSnapshots::ShapeView& a_face, std::uint32_t a_region)
+	{
+		std::shared_ptr<const FaceSnapshots::HeadView> headView;
+		if (auto* head = a_geometry.parent ? netimmerse_cast<RE::BSFaceGenNiNode*>(a_geometry.parent) : nullptr) {
+			auto [headEntry, inserted] = capturedFaceHeads.try_emplace(head);
+			if (inserted) {
+				auto snapshot = FaceSnapshots::Get().HeadSnapshot(*head);
+				if (snapshot.recordId && snapshot.generation && snapshot.owner)
+					headEntry->second = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
+			}
+			headView = headEntry->second;
+		}
+		if (headView && (headView->generation != a_face.generation || headView->owner != a_face.owner))
+			headView.reset();
+		tables.faceStream[a_slot] = static_cast<std::uint32_t>(tables.faceStreams.size());
+		tables.faceStreams.push_back({ a_slot, a_region, a_face.vertexCount, a_face.generation, a_face.positions, a_face.owner, std::move(headView) });
+	}
+
+	bool SceneStore::KeepFaceStream(RE::BSGeometry& a_geometry, Tracked& a_tracked)
+	{
+		// What WriteObject takes for a face shape beyond an actor's record: this walk's snapshot and region, and the
+		// slot's entry in this walk's faceStreams. Without a snapshot the record goes, which the full write does.
+		if (!FaceSnapshots::Enabled())
+			return false;
+		FaceSnapshots::ShapeView face{};
+		std::uint32_t region = kNoFaceRegion;
+		if (!ResolveFace(a_geometry, face, region))
+			return false;
+		const std::uint32_t before = tables.faceStream[a_tracked.slot];
+		PushFaceStream(a_geometry, a_tracked.slot, face, region);
+		if (tables.faceStream[a_tracked.slot] != before)
+			tables.NoteChange(a_tracked.slot, kChangeGeometry);
+		return true;
 	}
 
 	std::uint32_t SceneStore::FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount)
@@ -270,9 +332,9 @@ namespace DCLF
 		// A face shape is classified every frame: its record also depends on its head's snapshot, and the
 		// verdicts it can take (hidden, fading, a decal group) change as the actor does.
 		// The dense rebuild (walk parity's reference) classifies from scratch and leaves the caches alone. With
-		// A classification stands until an event takes it again, except a per-frame entry's written in
-		// full (an actor's): its inputs are re-read every frame (Tracked::classifyInputs), as its record is.
-		const bool rereads = trackedEntry->perFrame && !trackedEntry->lightTraits;
+		// A classification stands until an event takes it again, except an actor's and any other per-frame entry
+		// written in full: its inputs are re-read every frame (Tracked::classifyInputs), as its record is.
+		const bool rereads = trackedEntry->perFrame && (!trackedEntry->lightTraits || (trackedEntry->lightTraits & kTraitActor));
 		bool cached = !denseWalk && !faceShape && trackedEntry->candidateFrame != 0;
 		if (cached && rereads && ClassifyInputsOf(*geometry) != trackedEntry->classifyInputs) {
 			cached = false;
@@ -288,6 +350,9 @@ namespace DCLF
 			                          (rereads && (reason == Ineligible::Hidden || reason == Ineligible::Actor));
 			if ((entry.parentReason == Ineligible::Switch || rereads) && frameVerdict) {
 				reason = ClassifyFrame(entry);
+				// A verdict the frame changed is a classification: EvaluateRound takes the entry's traits again.
+				if (reason != trackedEntry->candidateReason)
+					trackedEntry->candidateFrame = frame;
 				trackedEntry->candidateReason = reason;
 			}
 			++stats.ineligible[static_cast<std::size_t>(reason)];
@@ -374,15 +439,8 @@ namespace DCLF
 		// being the head's, every other shape of its head too.
 		FaceSnapshots::ShapeView face{};
 		std::uint32_t faceRegion = kNoFaceRegion;
-		if (faceShape) {
-			auto* head = geometry->parent ? netimmerse_cast<RE::BSFaceGenNiNode*>(geometry->parent) : nullptr;
-			if (head)
-				face = FaceSnapshots::Get().Shape(static_cast<RE::BSDynamicTriShape&>(*geometry), *head);
-			if (face.positions)
-				faceRegion = FaceRegionOf(geometry, face.vertexCount);
-			if (faceRegion == kNoFaceRegion)
-				return false;
-		}
+		if (faceShape && !ResolveFace(*geometry, face, faceRegion))
+			return false;
 		// Geometry, shared between every object drawing the same TriShape. A skinned shape draws its
 		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
 		const auto* skinPartitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
@@ -566,22 +624,10 @@ namespace DCLF
 			useKey(tables.skyKeysUsed, skyTechnique);
 		}
 		tables.sunEntry[objectId] = SunEntryOf(*trackedEntry, *geometry);
-		tables.faceStream[objectId] = face.positions ? static_cast<std::uint32_t>(tables.faceStreams.size()) : kNoFaceStream;
-		if (face.positions) {
-			std::shared_ptr<const FaceSnapshots::HeadView> headView;
-			if (auto* head = geometry->parent ? netimmerse_cast<RE::BSFaceGenNiNode*>(geometry->parent) : nullptr) {
-				auto [headEntry, inserted] = capturedFaceHeads.try_emplace(head);
-				if (inserted) {
-					auto snapshot = FaceSnapshots::Get().HeadSnapshot(*head);
-					if (snapshot.recordId && snapshot.generation && snapshot.owner)
-						headEntry->second = std::make_shared<const FaceSnapshots::HeadView>(std::move(snapshot));
-				}
-				headView = headEntry->second;
-			}
-			if (headView && (headView->generation != face.generation || headView->owner != face.owner))
-				headView.reset();
-			tables.faceStreams.push_back({ objectId, faceRegion, face.vertexCount, face.generation, face.positions, face.owner, std::move(headView) });
-		}
+		if (face.positions)
+			PushFaceStream(*geometry, objectId, face, faceRegion);
+		else
+			tables.faceStream[objectId] = kNoFaceStream;
 		tables.shadowDiffuse[objectId] = shadowDiffuse;
 		tables.shadowMaterial[objectId] = shadowMaterial;
 		tables.sceneFlags[objectId] = object.flags;
@@ -755,7 +801,10 @@ namespace DCLF
 		order.clear();
 		order.reserve(tracked.size());
 		for (auto& [geometry, entry] : tracked) {
+			// In full: the light path keeps a record without writing it, and the full evaluation's sweep
+			// (SweepObjectSlots) frees every slot this walk did not write.
 			entry.scheduledWalk = walkSerial;
+			entry.fullWalk = walkSerial;
 			order.push_back({ geometry, &entry, nullptr });
 		}
 	}
@@ -809,7 +858,7 @@ namespace DCLF
 			tables.shadowTechnique[a_slot], object.flags & (kObjectNoShadow | kObjectTwoSided | kObjectFree), tables.shadowReject[a_slot], tables.skyTechnique[a_slot] };
 	}
 
-	bool SceneStore::AppendKeptSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked)
+	bool SceneStore::KeepSkin(RE::BSGeometry* a_geometry, Tracked& a_tracked)
 	{
 		auto& data = a_geometry->GetGeometryRuntimeData();
 		auto* skin = data.skinInstance.get();
@@ -823,24 +872,12 @@ namespace DCLF
 			if (!mask)
 				return false;
 		}
+		// The size the engine's last palette update gave it; the job checks it again after this frame's.
 		const std::uint32_t rows = skin->numMatrices * 3;
 		if (!rows || !skin->boneMatrices || !skin->prevBoneMatrices || rows > 240 || rows != tables.boneRows[slot])
 			return false;
-		if (a_tracked.skinUpdatedFrame != frame) {
-			UpdateSkin(skin, a_geometry->world);
-			a_tracked.skinUpdatedFrame = frame;
-		}
 		skinnedObjects.push_back(a_geometry);
-		const auto* current = static_cast<const float*>(skin->boneMatrices);
-		const auto* previous = static_cast<const float*>(skin->prevBoneMatrices);
-		// The rows into the skin's own block (the size is the same, checked above), noted only when they differ.
-		const std::size_t at = std::size_t(tables.boneOffset[slot]) * 4;
-		const std::size_t bytes = std::size_t(rows) * 4 * sizeof(float);
-		if (std::memcmp(&tables.bones[at], current, bytes) != 0 || std::memcmp(&tables.previousBones[at], previous, bytes) != 0) {
-			std::memcpy(&tables.bones[at], current, bytes);
-			std::memcpy(&tables.previousBones[at], previous, bytes);
-			tables.NoteChange(slot, kChangePalette);
-		}
+		++stats.lightSkins;
 		const auto partitionMask = static_cast<std::uint8_t>(partitions && partitions->numPartitions > 1 ? mask : 0);
 		if (tables.skinPartitions[slot] != partitionMask)
 			tables.NoteChange(slot, kChangeSkin);
@@ -848,29 +885,6 @@ namespace DCLF
 		++stats.skinned;
 		stats.boneRows += rows;
 		return true;
-	}
-
-	void SceneStore::MoveObject(RE::BSGeometry* a_geometry, Tracked& a_tracked)
-	{
-		// What WriteObject writes from the geometry's placement, the same way; the geometry slot is kept by
-		// FinishDeltaWalk like any kept slot's.
-		auto& object = tables.objects[a_tracked.slot];
-		const ObjectRecord before = object;
-		const auto entry = tables.sunEntry[a_tracked.slot];
-		StoreTransform(a_geometry->world, object.world);
-		StoreTransform(a_geometry->previousWorld, object.previousWorld);
-		object.boundCenter[0] = a_geometry->worldBound.center.x;
-		object.boundCenter[1] = a_geometry->worldBound.center.y;
-		object.boundCenter[2] = a_geometry->worldBound.center.z;
-		object.boundRadius = a_geometry->worldBound.radius;
-		tables.sunEntry[a_tracked.slot] = SunEntryOf(a_tracked, *a_geometry);
-		// Only a real change is one: a mover that stood still this frame changes nothing.
-		if (std::memcmp(before.world, object.world, sizeof(before.world)) != 0 || std::memcmp(before.previousWorld, object.previousWorld, sizeof(before.previousWorld)) != 0 ||
-			std::memcmp(before.boundCenter, object.boundCenter, sizeof(before.boundCenter)) != 0 || before.boundRadius != object.boundRadius ||
-			entry != tables.sunEntry[a_tracked.slot])
-			tables.NoteChange(a_tracked.slot, kChangePlacement);
-		a_tracked.movedWalk = walkSerial;
-		++delta.moved;
 	}
 
 	bool SceneStore::RootMoves(const RE::NiAVObject* a_root)
@@ -910,6 +924,9 @@ namespace DCLF
 		const auto& data = a_geometry.GetGeometryRuntimeData();
 		mix(reinterpret_cast<std::uintptr_t>(data.rendererData));
 		mix(reinterpret_cast<std::uintptr_t>(data.skinInstance.get()));
+		mix(reinterpret_cast<std::uintptr_t>(data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr));
+		// Skylighting::OcclusionTechnique's size test, which a record's sky technique follows.
+		mix(a_geometry.worldBound.radius <= 32.0f ? 1u : 0u);
 		const auto* property = data.shaderProperty.get();
 		mix(reinterpret_cast<std::uintptr_t>(property));
 		if (property) {
@@ -1083,24 +1100,67 @@ namespace DCLF
 		// chopping axe left hidden), and a visibility controller hides and shows its node.
 		const bool frameVerdict = a_reason == Ineligible::Hidden || a_reason == Ineligible::Switch || a_reason == Ineligible::Actor;
 		const bool perFrame = a_tracked.faceShape || (mayRecord && traits) || (traits & kTraitActor) || (frameVerdict && (traits & kTraitMoves));
-		// The light path takes only a record's placement, palette, switch selection or shading; an entry it cannot have a
-		// record for is written in full, which re-reads its verdict.
-		const std::uint32_t light = perFrame && mayRecord && !(traits & ~(kTraitSwitch | kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin)) ? traits : 0u;
+		// The light path takes only a record's placement, palette, switch selection or shading, for an actor's the exact
+		// recheck of its verdict inputs (ActorRecordKept), and for a face shape's its head's snapshot (KeepFaceStream);
+		// an entry it cannot have a record for is written in full, which re-reads its verdict.
+		const std::uint32_t light = perFrame && mayRecord &&
+		                                    !(traits & ~(kTraitSwitch | kTraitMoves | kTraitRootMoves | kTraitAnimatedShading | kTraitSkin | kTraitActor | kTraitFace)) ?
+		                                traits :
+		                                0u;
 		return { perFrame, light };
+	}
+
+	bool SceneStore::ActorRecordKept(RE::BSGeometry& a_geometry, Tracked& a_tracked)
+	{
+		// What WriteObject's cached branch reads for an entry it re-reads (`rereads`): the static verdict's inputs, and
+		// the frame's verdict when the cached one is a frame verdict. Equal inputs and the same verdict write the same
+		// record but for its placement and palette, which the light path takes (walk parity is the check).
+		if (ClassifyInputsOf(a_geometry) != a_tracked.classifyInputs) {
+			++delta.reread;
+			return false;
+		}
+		const Ineligible cached = a_tracked.candidateReason;
+		const bool frameVerdict = cached == Ineligible::None || cached == Ineligible::Switch || cached == Ineligible::Hidden || cached == Ineligible::Actor;
+		return !frameVerdict || ClassifyFrame(a_tracked) == cached;
 	}
 
 	void SceneStore::EvaluateRound(PartTimer& a_timer, std::size_t a_first)
 	{
+		const bool profileKinds = a_first == 0 && ProfileEnabled();
 		for (std::size_t i = a_first; i < order.size(); ++i) {
 			RE::BSGeometry* geometry = order[i].geometry;
 			Tracked& entry = *order[i].tracked;
 			a_timer.Add(BuildPart::LoopTail);
+			// The entry's time by what the round does with it (EvaluateKind), from here to the end of the iteration.
+			EvaluateKind kind = entry.lightTraits && entry.perFrame ? EvaluateKind::Light :
+			                    !entry.perFrame                     ? EvaluateKind::Event :
+			                    entry.faceShape                     ? EvaluateKind::Face :
+			                    entry.actorOwned                    ? (entry.candidateReason == Ineligible::None ? EvaluateKind::Actor : EvaluateKind::ActorNoRecord) :
+			                                                          EvaluateKind::PerFrame;
+			const auto kindStart = profileKinds ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			struct KindSample
+			{
+				SceneStore::Stats* stats;
+				const EvaluateKind& kind;
+				std::chrono::steady_clock::time_point start;
+				~KindSample()
+				{
+					if (!stats)
+						return;
+					stats->evaluateKindMs[static_cast<std::size_t>(kind)] += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+					++stats->evaluateKindCount[static_cast<std::size_t>(kind)];
+				}
+			} kindSample{ profileKinds ? &stats : nullptr, kind, kindStart };
 			// A static that only moves or follows a switch, whose classification stands: what the full walk would take
 			// again is the switch's verdict (WriteObject's cached branch) and the placement.
 			if (a_first == 0 && entry.lightTraits && entry.perFrame && entry.fullWalk != walkSerial && entry.candidateFrame != 0) {
 				const bool recorded = entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp;
 				bool kept = true;
-				if (entry.lightTraits & kTraitSwitch) {
+				if (entry.lightTraits & kTraitActor) {
+					kept = recorded && ActorRecordKept(*geometry, entry);
+					if (kept && (entry.lightTraits & kTraitFace))
+						kept = KeepFaceStream(*geometry, entry);
+				} else if (entry.lightTraits & kTraitSwitch) {
 					// The selection is what changes (a harvested plant, a tree's LOD); the rest of the chain is a static's,
 					// fixed like any kept record's (dclf-event-driven-tables.md).
 					const bool verdictKept = (entry.candidateReason == Ineligible::None || entry.candidateReason == Ineligible::Switch) &&
@@ -1112,14 +1172,22 @@ namespace DCLF
 				} else {
 					kept = recorded;
 				}
-				if (kept && (entry.lightTraits & kTraitAnimatedShading))
+				if (kept && (entry.lightTraits & (kTraitAnimatedShading | kTraitActor)))
 					kept = ShadingInputsOf(entry, *geometry) == entry.shadingInputs;
-				// Last: it writes the rows only when the record is kept (an unselected switch child has none).
-				if (kept && recorded && (entry.lightTraits & kTraitSkin))
-					kept = AppendKeptSkin(geometry, entry);
+				// Last: it lists the skin only when the record is kept (an unselected switch child has none).
+				const bool keptSkin = kept && recorded && (entry.lightTraits & kTraitSkin);
+				if (keptSkin)
+					kept = KeepSkin(geometry, entry);
 				if (kept) {
-					if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin))) {
-						MoveObject(geometry, entry);
+					for (std::uint32_t bit = 0; bit < stats.lightByTrait.size(); ++bit)
+						stats.lightByTrait[bit] += (entry.lightTraits >> bit) & 1u;
+					// Every walk lists the actors' records anew (Tables::actorObjects: wetness and capture parity read it).
+					if (recorded && entry.actorOwned)
+						tables.actorObjects.push_back(entry.slot);
+					// An actor's skeleton moves without a controller or a body on its chain (Havok's behaviour graph).
+					if (recorded && (entry.lightTraits & (kTraitMoves | kTraitRootMoves | kTraitSkin | kTraitActor))) {
+						++stats.lightPlaced;
+						QueuePlacement(geometry, entry, kTakePlacement | (keptSkin ? kTakePalette : 0));
 					} else {
 						entry.movedWalk = walkSerial;  // not written in full: a later round may still write it
 						++delta.kept;
@@ -1127,6 +1195,8 @@ namespace DCLF
 					continue;
 				}
 			}
+			if (kind == EvaluateKind::Light)
+				kind = EvaluateKind::LightMissed;
 			const ShadowInputs shadowBefore = ShadowInputsOf(entry.slot);
 			const bool hadSlot = entry.slot != kNoObjectSlot;
 			const std::uint32_t slotBefore = entry.slot;
@@ -1184,7 +1254,7 @@ namespace DCLF
 				perFrameSet.push_back(geometry);
 			}
 			if (written) {
-				if (entry.lightTraits & kTraitAnimatedShading)
+				if (entry.lightTraits & (kTraitAnimatedShading | kTraitActor))
 					entry.shadingInputs = ShadingInputsOf(entry, *geometry);
 				ListFadeDependent(geometry, entry);
 				// A static's previous transform is its current one from its second update on; until then it is
@@ -1202,6 +1272,9 @@ namespace DCLF
 	void SceneStore::DeltaWalk()
 	{
 		++delta.walks;
+		std::optional<ScenePartScope> scheduleScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::Schedule)],
+			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::Schedule)]);
+		TracyCZoneN(scheduleZone, "CS.DCLF.Scene.Schedule", true);
 		const bool full = fullEvaluation;
 		if (full) {
 			shadowIndexNeedsRebuild = true;
@@ -1304,8 +1377,16 @@ namespace DCLF
 			dirtyRoots.clear();
 			count(delta.roots);
 		}
-		ApplySwitchEvents(full);
-		EvaluateRound(timer, 0);
+		TracyCZoneEnd(scheduleZone);
+		scheduleScope.reset();
+		{
+			DCLF_SCENE_PART(SwitchEvents, "CS.DCLF.Scene.SwitchEvents");
+			ApplySwitchEvents(full);
+		}
+		{
+			DCLF_SCENE_PART(Evaluate, "CS.DCLF.Scene.Evaluate");
+			EvaluateRound(timer, 0);
+		}
 		if (!shadowSetsDirty) {
 			tables.shadowTextureSet = std::move(keptTextureSet);
 			tables.shadowTextureSeen = std::move(keptTextureSeen);
@@ -1313,10 +1394,18 @@ namespace DCLF
 			tables.skyKeysUsed = std::move(keptSkyKeys);
 		}
 		FinishDeltaWalk(timer);
-		if (full)
+		if (full) {
+			DCLF_SCENE_PART(ObjectSweep, "CS.DCLF.Scene.ObjectSweep");
 			SweepObjectSlots();
-		UpdateSunCandidates(full);
-		EndFaceWalk();
+		}
+		{
+			DCLF_SCENE_PART(SunCandidates, "CS.DCLF.Scene.SunCandidates");
+			UpdateSunCandidates(full);
+		}
+		{
+			DCLF_SCENE_PART(FaceWalk, "CS.DCLF.Scene.FaceWalk");
+			EndFaceWalk();
+		}
 		stats.ineligible = buckets;
 		delta.evaluated += order.size();
 		delta.evaluatedMax = std::max(delta.evaluatedMax, static_cast<std::uint32_t>(order.size()));
@@ -1329,6 +1418,9 @@ namespace DCLF
 		// references are touched every 64 frames, staggered by slot, against GpuResources' kEvictFrames. A slot whose touch
 		// fails, every unresolved slot once buffers start resolving (the render graph came back), and a slot
 		// ResolveGeometrySlot freed are stale: the objects drawing them are written again, which resolves them.
+		std::optional<ScenePartScope> scanScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::GeometryScan)],
+			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::GeometryScan)]);
+		TracyCZoneN(scanZone, "CS.DCLF.Scene.GeometryScan", true);
 		auto& gpu = GpuResources::Get();
 		const bool resolveBuffers = frameResolveBuffers;
 		const std::size_t second = order.size();
@@ -1376,6 +1468,11 @@ namespace DCLF
 				}
 			}
 		}
+		TracyCZoneEnd(scanZone);
+		scanScope.reset();
+		std::optional<ScenePartScope> roundsScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::LaterRounds)],
+			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::LaterRounds)]);
+		TracyCZoneN(roundsZone, "CS.DCLF.Scene.LaterRounds", true);
 		EvaluateRound(a_timer, second);
 		// A geometry slot re-resolved in place for one object: every kept object drawing it copied the old record.
 		if (!refreshedGeometry.empty()) {
@@ -1393,6 +1490,9 @@ namespace DCLF
 			EvaluateRound(a_timer, third);
 			refreshedGeometry.clear();
 		}
+		TracyCZoneEnd(roundsZone);
+		roundsScope.reset();
+		DCLF_SCENE_PART(ShadowSets, "CS.DCLF.Scene.ShadowSets");
 		// The shadow dependency index reads changed object slots from the same journal as the other kept tables.
 		std::sort(tables.actorObjects.begin(), tables.actorObjects.end());
 		tables.liveObjects = static_cast<std::uint32_t>(tables.objects.size() - tables.objectFree.size());

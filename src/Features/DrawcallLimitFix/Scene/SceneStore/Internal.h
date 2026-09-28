@@ -482,6 +482,31 @@ namespace DCLF
 	 * Timing a loop from inside it perturbs what it measures, so the profiled and unprofiled totals
 	 * are both reported and the difference is the instrument's own cost.
 	 */
+	/** @brief Adds the time from construction to destruction to a scene part's sum and its frame's time (ms). */
+	struct ScenePartScope
+	{
+		double& sum;
+		double& frame;
+		std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+
+		ScenePartScope(double& a_sum, double& a_frame) :
+			sum(a_sum), frame(a_frame) {}
+		~ScenePartScope()
+		{
+			const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			sum += elapsed;
+			frame += elapsed;
+		}
+		ScenePartScope(const ScenePartScope&) = delete;
+		ScenePartScope& operator=(const ScenePartScope&) = delete;
+	};
+
+	// One scene sub-zone (ScenePart) for the rest of the enclosing block: a Tracy zone and the part's sum. One per block.
+#define DCLF_SCENE_PART(a_part, a_zone) \
+	ZoneScopedN(a_zone);                \
+	ScenePartScope scenePartScope(stats.scenePartMs[static_cast<std::size_t>(ScenePart::a_part)], \
+		stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::a_part)])
+
 	struct PartTimer
 	{
 		std::array<double, static_cast<std::size_t>(BuildPart::Count)>* parts = nullptr;

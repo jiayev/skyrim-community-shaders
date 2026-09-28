@@ -282,6 +282,9 @@ namespace DCLF
 
 	void SceneStore::ProcessEvents()
 	{
+		// A scene placement job no BeforeShadowMaps joined (a frame without shadow maps): its items name tracked
+		// entries, which the events below may erase.
+		JoinPlacements();
 		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		// Nothing here may walk the scene graph while a load screen is up. A load tears down and rebuilds
 		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
@@ -351,28 +354,39 @@ namespace DCLF
 
 		// Drained before the category refresh, so a detach this frame can force it: a detach can take a
 		// category node with it, and the signature cannot see that until the cell itself goes.
-		SceneTracker::Event* events = tracker.Drain();
-		bool sawDetach = false;
-		for (const auto* event = events; event && !sawDetach; event = event->next)
-			sawDetach = event->type == SceneTracker::EventType::Detached;
-		addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
-		RefreshCategoryNodes(sawDetach || rescanned);
-		addSource = TrackSource::AttachEvent;
-
-		for (auto* event = events; event; event = event->next) {
-			if (event->type == SceneTracker::EventType::Attached) {
-				++stats.attachedEvents;
-				if (!categoryNodes.empty())
-					AddSubtree(event->node.get());
-			} else {
-				++stats.detachedEvents;
-				for (auto* geometry : event->removed)
-					EraseTracked(geometry);
-			}
+		SceneTracker::Event* events = nullptr;
+		{
+			DCLF_SCENE_PART(CategoryNodes, "CS.DCLF.Scene.CategoryNodes");
+			events = tracker.Drain();
+			bool sawDetach = false;
+			for (const auto* event = events; event && !sawDetach; event = event->next)
+				sawDetach = event->type == SceneTracker::EventType::Detached;
+			addSource = rescanned ? TrackSource::Rescan : TrackSource::AttachEvent;
+			RefreshCategoryNodes(sawDetach || rescanned);
+			addSource = TrackSource::AttachEvent;
 		}
-		SceneTracker::FreeEvents(events);
 
-		ValidateSlice();
+		{
+			DCLF_SCENE_PART(AttachDetach, "CS.DCLF.Scene.AttachDetach");
+			for (auto* event = events; event; event = event->next) {
+				if (event->type == SceneTracker::EventType::Attached) {
+					++stats.attachedEvents;
+					if (!categoryNodes.empty())
+						AddSubtree(event->node.get());
+				} else {
+					++stats.detachedEvents;
+					for (auto* geometry : event->removed)
+						EraseTracked(geometry);
+				}
+			}
+			SceneTracker::FreeEvents(events);
+		}
+
+		{
+			DCLF_SCENE_PART(Validate, "CS.DCLF.Scene.Validate");
+			ValidateSlice();
+		}
+		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
 		// The fade nodes whose currentFade changed since the last drain (the delta walk re-evaluates their dependents).
 		DrainFadeEvents(fadeChanged);
 		if (fadeChanged.size() > kMaxFadeChanges) {

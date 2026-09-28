@@ -28,9 +28,9 @@ The render thread drives everything; one worker thread (`Common/AsyncWorker`) ru
 
 | Point in the frame | Render thread | Worker | GPU |
 | --- | --- | --- | --- |
-| `Main::Draw`, before the main cull (`BeginSceneFrame`) | Applies the scene events, then the **scene phase** (`SceneStore::BuildFrame(Scene)`): every tracked object's record, from the events since the last frame | | |
+| `Main::Draw`, before the main cull (`BeginSceneFrame`) | Applies the scene events, then the **scene phase** (`SceneStore::BuildFrame(Scene)`): every tracked object's record, from the events since the last frame. A kept record's placement and palette are queued, and kicked to the worker at the end | **scene placement** | |
 | The engine's cull jobs | The engine registers the passes it keeps. `PassCapture` records every registration and **withholds** DCLF's objects. `PrimaryCull` stands in for DCLF's references inside the list jobs. | | |
-| `BeforeShadowMaps` | Rebuilds the frame's shadow view list (`ShadowViews`) and kicks the shadow build | **shadow** build | |
+| `BeforeShadowMaps` | Joins the scene placement job (`SceneStore::JoinPlacements`), rebuilds the frame's shadow view list (`ShadowViews`) and kicks the shadow build | **shadow** build | |
 | Each shadow view's `FinishAccumulating` | `CaptureShadowView`: where the engine drew, and with which constants | | The engine's own shadow draws |
 | `AfterShadowMaps` | Joins the shadow build and runs the **shadow epoch** | | Every captured view's casters, culled per view |
 | Skylighting's `RenderOcclusion` | `CaptureSkyOcclusion`, then the **sky epoch** | | The occlusion map |
@@ -40,6 +40,13 @@ The render thread drives everything; one worker thread (`Common/AsyncWorker`) ru
 | The main pass's opaque batches start (`BeforeOpaquePass`) | `CaptureMainPass`: what the pass binds | | |
 | The opaque batches end (`AfterOpaquePass`) | `ExecuteColour`: the **colour epoch**, then the claims for the next frame | | The drawn set into the G-buffer, depth-tested EQUAL, then decals |
 | `Present` (`Reset`) | Joins what is left (`EndFrame`), applies the scene events, handles the menu toggle, writes the report | **primary feedback** decode | |
+
+The scene placement job takes the kept records' placements and bone palettes (the engine's palette update is
+thread-safe: it locks the skin instance and runs once a frame). From its kick to its join the render thread writes none
+of those columns and no table grows, and the engine's work in that window (the main cull, the water reflections)
+moves no transform. A late join waits for it, or takes its items inline when it had not started; a walk-parity frame
+takes them inline before the parity reads the tables. Under `probe` the join takes every item again and counts those
+that moved inside the window.
 
 A build runs on the worker between its kick and its join. At the join the epoch checks that the job was built for
 exactly its own inputs (`SameInputs`, `SameShadowInputs`). If it was not, or the job is late, the render thread builds

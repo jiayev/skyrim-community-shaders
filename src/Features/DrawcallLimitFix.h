@@ -195,6 +195,9 @@ private:
 		double buildMaxMs = 0.0;
 		double sceneMs = 0.0;  // the scene phase, before the shadow maps
 		double sceneMaxMs = 0.0;
+		double sceneTablesMs = 0.0;  // the "scene tables" zone at Main::Draw: ProcessEvents and the scene phase
+		double sceneTablesMaxMs = 0.0;
+		std::uint32_t sceneTablesFrames = 0;
 		std::uint32_t frames = 0;
 	} timing;
 	std::uint32_t skyNativeFrames = 0;  // Skylighting maps left to the engine (DCLF not ready), per report interval

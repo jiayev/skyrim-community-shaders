@@ -108,6 +108,11 @@ namespace DCLF
 		// difference): the index map is not part of the tables, so it is kept too.
 		const auto savedGeometryIndex = geometryIndex;
 		const auto savedRefreshed = refreshedGeometry;
+		// What the delta walk evaluated (BuildFullOrder below overwrites scheduledWalk), for the stale verdicts' report.
+		ankerl::unordered_dense::set<const RE::BSGeometry*> evaluated;
+		for (const auto& [geometry, entry] : tracked)
+			if (entry.scheduledWalk == walkSerial)
+				evaluated.insert(geometry);
 		// The delta walk's `order` holds only what it evaluated; the reference is the whole tracked set.
 		BuildFullOrder();
 		referenceReasons.clear();
@@ -226,10 +231,21 @@ namespace DCLF
 			if (it == referenceReasons.end() || it->second == entry.candidateReason)
 				continue;
 			++walkParity.staleVerdicts;
-			if (walkParity.firstStale.empty())
-				walkParity.firstStale = fmt::format("'{}' kept {} ({} frames old, per-frame {}, traits {:X}) now {}", geometry->name.c_str() ? geometry->name.c_str() : "?",
-					kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], frame - entry.candidateFrame, entry.perFrame, PerFrameTraits(entry, *geometry),
-					kIneligibleNames[static_cast<std::size_t>(it->second)]);
+			if (walkParity.firstStale.empty()) {
+				// The chain as the two walks read it: each node's live hidden bit and the walk's (HiddenForWalk).
+				std::string chain;
+				for (const RE::NiAVObject* object = geometry; object && chain.size() < 600; object = object->parent) {
+					chain += fmt::format(" > {}{}{}", object->name.c_str() ? object->name.c_str() : "?", IsHidden(object) ? "[H]" : "",
+						HiddenForWalk(object) != IsHidden(object) ? "[walk differs]" : "");
+					if (object == entry.categoryNode)
+						break;
+				}
+				const auto copies = std::count(perFrameSet.begin(), perFrameSet.end(), geometry);
+				walkParity.firstStale = fmt::format("'{}' kept {} ({} frames old, per-frame {} (listed {}, {} copies in the set), traits {:X}, light {:X}, evaluated this walk {}) now {}; chain:{}",
+					geometry->name.c_str() ? geometry->name.c_str() : "?", kIneligibleNames[static_cast<std::size_t>(entry.candidateReason)], frame - entry.candidateFrame,
+					entry.perFrame, entry.perFrameListed, copies, PerFrameTraits(entry, *geometry), entry.lightTraits, evaluated.contains(geometry),
+					kIneligibleNames[static_cast<std::size_t>(it->second)], chain);
+			}
 		}
 		// The traits: an entry a fresh classification would evaluate every frame, or on a heavier path, is one whose event
 		// was missed, even while its record still matches.
@@ -243,6 +259,9 @@ namespace DCLF
 					continue;
 				std::uint32_t traits = 0;
 				const auto [perFrame, light] = PerFrameOf(entry, *geometry, it->second, traits, &freshMotion);
+				// An actor's light path places its record every frame: motion it gained since is served already.
+				if (entry.lightTraits & kTraitActor)
+					traits &= ~(kTraitMoves | kTraitRootMoves);
 				if (!perFrame || (entry.perFrame && (!entry.lightTraits || (light && !(traits & ~entry.lightTraits)))))
 					continue;
 				++walkParity.staleTraits;

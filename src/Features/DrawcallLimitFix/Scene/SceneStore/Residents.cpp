@@ -13,8 +13,8 @@ namespace DCLF
 		if (it == tracked.end())
 			return false;
 		const auto& entry = it->second;
-		// A record, eligible, written by events only: the light path's placement is fine (MoveObject keeps the
-		// accumulated half), and so is a kept skin's (AppendKeptSkin: the palette rows and the partition mask, from the
+		// A record, eligible, written by events only: the light path's placement is fine (TakePlacement keeps the
+		// accumulated half), and so is a kept skin's (KeepSkin and TakePlacement: the partition mask and the palette rows, from the
 		// same LOD row the synthetic pass reads; a skin it cannot keep is written in full, which ends the residency). A
 		// full write every frame is not, and neither are the per-frame inputs of a face, an actor or animated shading.
 		return entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp && entry.candidateReason == Ineligible::None && !entry.faceShape &&
