@@ -98,6 +98,7 @@ public:
 
 	// Directional shadow structured buffer (t98): cascade splits and projections.
 	Buffer* directionalShadowLights = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> directionalShadowMap;
 
 	bool deferredPass = false;
 

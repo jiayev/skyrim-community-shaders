@@ -131,8 +131,6 @@ void State::Draw()
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
 					if (volumetricShadows.loaded)
 						volumetricShadows.CopyShadowLightData();
-					if (globals::features::exponentialHeightFog.loaded)
-						globals::features::exponentialHeightFog.CaptureDirectionalShadowMap();
 					if (skylighting.loaded)
 						skylighting.CaptureShadowCascadeSRV();
 				}

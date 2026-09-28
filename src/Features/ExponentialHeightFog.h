@@ -44,8 +44,6 @@ public:
 
 	/** @brief Registers all fog parameters as weather-interpolatable variables. */
 	void RegisterWeatherVariables() override;
-	/** @brief Captures the current directional shadow map SRV for use in volumetric fog light scattering. */
-	void CaptureDirectionalShadowMap();
 
 	struct alignas(16) Settings
 	{
@@ -145,7 +143,6 @@ private:
 	std::unique_ptr<ConstantBuffer> volumetricFogCB;
 	winrt::com_ptr<ID3D11SamplerState> linearSampler;
 	winrt::com_ptr<ID3D11SamplerState> shadowSampler;
-	winrt::com_ptr<ID3D11ShaderResourceView> directionalShadowMap;
 	ID3D11ComputeShader* materialSetupCS = nullptr;
 	ID3D11ComputeShader* farMaterialSetupCS = nullptr;
 	ID3D11ComputeShader* conservativeDepthCS = nullptr;

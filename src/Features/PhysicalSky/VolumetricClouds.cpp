@@ -3,7 +3,6 @@
 #include "Deferred.h"
 #include "Features/PostProcessing/RasterPass.h"
 #include "Features/TerrainShadows.h"
-#include "Features/VolumetricShadows.h"
 #include "Raytracing.h"
 #include "State.h"
 #include "Util.h"
@@ -667,13 +666,12 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass, ID3D11Shade
 	}
 
 	// Shadow-related SRVs (t20-t23)
-	auto& volumetricShadows = globals::features::volumetricShadows;
 	auto& terrainShadows = globals::features::terrainShadows;
 	ID3D11ShaderResourceView* directionalShadowLights = nullptr;
 	if (auto* directionalShadowBuffer = Deferred::GetSingleton()->directionalShadowLights)
 		directionalShadowLights = directionalShadowBuffer->srv.get();
 	std::array<ID3D11ShaderResourceView*, 4> shadowSrvs = {
-		volumetricShadows.shadowView,                                                             // t20
+		Deferred::GetSingleton()->directionalShadowMap.get(),                                     // t20
 		directionalShadowLights,                                                                  // t21
 		terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,  // t22
 		nullptr,                                                                                  // t23 - shadow volume (set per pass)

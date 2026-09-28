@@ -1314,7 +1314,7 @@ void PhysicalSky::AccumShadow(ID3D11ShaderResourceView* depth)
 			directionalShadowLights = directionalShadowBuffer->srv.get();
 		auto srvs = std::array{
 			depth ? depth : globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPOST_ZPREPASS_COPY].depthSRV,
-			volumetricShadows.shadowView,
+			Deferred::GetSingleton()->directionalShadowMap.get(),
 			static_cast<ID3D11ShaderResourceView*>(nullptr),
 			terrainShadows.IsHeightMapReady() ? terrainShadows.texShadowHeight->srv.get() : nullptr,
 			cloudShadows.loaded ? cloudShadows.texCloudShadowLayers[CloudShadows::kMaxCloudLayers - 1]->srv.get() : nullptr,

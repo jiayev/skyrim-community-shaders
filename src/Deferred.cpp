@@ -11,6 +11,7 @@
 #include "Features/Effects11.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/IBL.h"
+#include "Features/PathTracing.h"
 #include "Features/PhysicalSky.h"
 #include "Features/ScreenSpaceGI.h"
 #include "Features/Skylighting.h"
@@ -558,22 +559,27 @@ void Deferred::CopyShadowLightData()
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "CopyShadowLightData");
 
-	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
-	if (!shadowSceneNode)
-		return;
-
-	auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight;
-	if (!sunShadowLight)
-		return;
-
+	directionalShadowMap = nullptr;
 	DirectionalShadowLightData dd{};
 	auto context = globals::d3d::context;
-
-	auto& dirData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
-	dd.EndSplitDistances = { dirData.endSplitDistances[0], dirData.endSplitDistances[1] };
-	dd.StartSplitDistances = { dirData.startSplitDistances[0], dirData.startSplitDistances[1] };
-
-	SetShadowCascadeParameters(sunShadowLight->GetRuntimeData(), dd);
+	auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0];
+	auto* sunShadowLight = shadowSceneNode ? shadowSceneNode->GetRuntimeData().sunShadowDirLight : nullptr;
+	const bool fullPathTracingCull = globals::features::raytracing.IsPathTracing() &&
+	                                 globals::features::pathTracing.settings.ExperimentalSettings.PathTracingCull == CreationEngineRaytracing::PTCullMode::Full;
+	if (!fullPathTracingCull && globals::state->HasDirectionalShadows() && sunShadowLight && sunShadowLight->shadowMapCount >= 2) {
+		auto& lightData = sunShadowLight->GetRuntimeData();
+		if (lightData.shadowmapDescriptors.size() >= 2) {
+			const auto target = static_cast<uint32_t>(lightData.shadowmapDescriptors[0].renderTarget);
+			if (target < RE::RENDER_TARGETS_DEPTHSTENCIL::kTOTAL)
+				directionalShadowMap.copy_from(globals::game::renderer->GetDepthStencilData().depthStencils[target].depthSRV);
+		}
+		if (directionalShadowMap) {
+			auto& dirData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
+			dd.EndSplitDistances = { dirData.endSplitDistances[0], dirData.endSplitDistances[1] };
+			dd.StartSplitDistances = { dirData.startSplitDistances[0], dirData.startSplitDistances[1] };
+			SetShadowCascadeParameters(lightData, dd);
+		}
+	}
 
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	DX::ThrowIfFailed(context->Map(directionalShadowLights->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped));

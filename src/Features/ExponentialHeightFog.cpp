@@ -295,15 +295,6 @@ void ExponentialHeightFog::ClearShaderCache()
 	}
 }
 
-void ExponentialHeightFog::CaptureDirectionalShadowMap()
-{
-	ID3D11ShaderResourceView* shadowMap = nullptr;
-	globals::d3d::context->PSGetShaderResources(4, 1, &shadowMap);
-	directionalShadowMap.copy_from(shadowMap);
-	if (shadowMap)
-		shadowMap->Release();
-}
-
 void ExponentialHeightFog::EnsureVolumetricResources()
 {
 	uint32_t pixelSize = std::clamp(settings.volumetricGridPixelSize, 4u, 64u);
@@ -599,6 +590,7 @@ void ExponentialHeightFog::RenderVolumetrics(ID3D11ShaderResourceView* depthSrv)
 	}
 
 	ID3D11ShaderResourceView* directionalShadowLightData = globals::deferred && globals::deferred->directionalShadowLights ? globals::deferred->directionalShadowLights->srv.get() : nullptr;
+	ID3D11ShaderResourceView* directionalShadowMap = globals::deferred ? globals::deferred->directionalShadowMap.get() : nullptr;
 	auto& lightLimitFix = globals::features::lightLimitFix;
 	const bool hasLocalLightData =
 		lightLimitFix.loaded &&
@@ -803,7 +795,7 @@ void ExponentialHeightFog::RenderVolumetrics(ID3D11ShaderResourceView* depthSrv)
 		{
 			ID3D11ShaderResourceView* srvs[5]{
 				p.vBuffer->srv.get(),
-				directionalShadowMap.get(),
+				directionalShadowMap,
 				p.scatteringHistory ? p.scatteringHistory->srv.get() : nullptr,
 				p.conservativeDepth->srv.get(),
 				p.hasPrevConservativeDepth && p.conservativeDepthHistory ? p.conservativeDepthHistory->srv.get() : nullptr
