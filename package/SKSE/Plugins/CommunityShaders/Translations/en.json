@@ -2855,6 +2855,8 @@
     "menu.presets.filter_e11": "E11",
     "menu.presets.installed": "Installed",
     "menu.presets.invalid": "Invalid",
+    "menu.presets.legacy_description": "Effects 11 preset installed in the game root or Data folder.",
+    "menu.presets.legacy_name": "Effects 11 Preset (Legacy)",
     "menu.presets.nexus_link_tooltip": "Open this preset's Nexus Mods page.",
     "menu.presets.no_description": "No description provided.",
     "menu.presets.open_folder_tooltip": "Open the unified Presets library folder in Explorer.",

@@ -11,11 +11,12 @@
 class UnifiedPresetCatalog
 {
 public:
-	/** @brief Where a pack was found: a Presets pack folder, or a standalone Effects 11 preset. */
+	/** @brief Where a pack was found: a Presets pack folder, a standalone Effects 11 preset, or the game root / Data install. */
 	enum class SourceKind
 	{
 		UnifiedPack,
-		Effects11Orphan
+		Effects11Orphan,
+		Effects11Legacy
 	};
 
 	/** @brief A discovered pack's manifest data, backend payloads and lazily loaded artwork. */
@@ -117,6 +118,8 @@ private:
 	void DiscoverUnifiedPacks();
 	/** @brief Adds Effects 11 library presets that no unified pack of the same name already covers. */
 	void DiscoverEffects11Orphans();
+	/** @brief Adds the Effects 11 install at the game root or Data folder, when present. */
+	void DiscoverEffects11Legacy();
 
 	/** @brief Decodes an image file into an SRV; false when missing or undecodable. */
 	static bool LoadTextureSRV(const std::filesystem::path& path, winrt::com_ptr<ID3D11ShaderResourceView>& outSRV);

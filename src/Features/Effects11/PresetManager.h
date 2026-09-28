@@ -61,6 +61,9 @@ public:
 	/** @brief The selected preset's id; kLegacyPresetId for Legacy. */
 	const std::string& GetActivePresetId() const { return activePresetId; }
 
+	/** @brief Selects the first valid library or unified pack preset, falling back to Legacy when none exists. */
+	void SelectDefaultPreset();
+
 	/** @brief Selects a discovered preset without reloading FX.
 	 *  @return False if the id is unknown or invalid. */
 	bool SetActivePreset(const std::string& id);
@@ -69,6 +72,8 @@ public:
 	bool HasLegacyInstall() const;
 	/** @brief Whether the Legacy install is the active preset. */
 	bool IsLegacyActive() const { return activePresetId == kLegacyPresetId; }
+	/** @brief Absolute Legacy enbseries.ini path. */
+	std::filesystem::path GetLegacyENBSeriesIniPath() const;
 
 	/** @brief Hotswap: optionally saves the current preset, then reloads settings and weather and recompiles
 	 *         ENB FX for id. Does not clear the Community Shaders shader cache. */
@@ -94,8 +99,6 @@ private:
 	bool UseDataFolder() const;
 	/** @brief Absolute Legacy enbseries directory. */
 	std::filesystem::path GetLegacyENBSeriesPath() const;
-	/** @brief Absolute Legacy enbseries.ini path. */
-	std::filesystem::path GetLegacyENBSeriesIniPath() const;
 
 	/** @brief Library preset root when a valid non-Legacy preset is active; empty otherwise. */
 	std::filesystem::path GetActiveLibraryRoot() const;
@@ -107,7 +110,7 @@ private:
 
 	/** @brief The discovered preset with this id, or null. */
 	const PresetInfo* FindPreset(const std::string& id) const;
-	/** @brief Keeps a valid selection, else picks Legacy when installed, then the first valid library preset. */
+	/** @brief Keeps a valid selection, else applies SelectDefaultPreset. */
 	void EnsureDefaultSelection();
 	/** @brief Adds each preset folder under a CommunityShaders subfolder, across the VFS and real mod roots. */
 	void ScanLibraryDirectory(const std::filesystem::path& relativePath, bool unifiedPacks);

@@ -146,10 +146,7 @@ void Effects11::RestoreDefaultSettings()
 	settings = {};
 	auto& presetManager = PresetManager::GetSingleton();
 	presetManager.DiscoverPresets();
-	if (!presetManager.SetActivePreset(PresetManager::kLegacyPresetId))
-		settings.ActivePreset = presetManager.GetActivePresetId();
-	else
-		settings.ActivePreset = PresetManager::kLegacyPresetId;
+	presetManager.SelectDefaultPreset();
 	PersistActivePreset();
 }
 

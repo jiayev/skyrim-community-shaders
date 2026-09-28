@@ -114,12 +114,11 @@ void PresetManager::EnsureDefaultSelection()
 {
 	if (const auto* current = FindPreset(activePresetId); current && current->valid)
 		return;
+	SelectDefaultPreset();
+}
 
-	if (HasLegacyInstall()) {
-		activePresetId = kLegacyPresetId;
-		return;
-	}
-
+void PresetManager::SelectDefaultPreset()
+{
 	for (const auto& preset : presets) {
 		if (!preset.isLegacy && preset.valid) {
 			activePresetId = preset.id;

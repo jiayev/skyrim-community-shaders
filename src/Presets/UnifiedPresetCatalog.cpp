@@ -5,6 +5,7 @@
 #include "Features/Effects11/PresetManager.h"
 #include "Globals.h"
 #include "CSEditor/SceneManager/SceneManager.h"
+#include "I18n/I18n.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
@@ -26,6 +27,8 @@ namespace
 	constexpr const char* kActiveStateFileName = "_active.json";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
 	constexpr const char* kEffects11PackSubdir = "effects11";
+	// The colon keeps it out of the pack folder namespace, like orphan "e11:" ids.
+	constexpr const char* kEffects11LegacyPackId = "legacy:effects11";
 
 	using Util::ToLower;
 
@@ -386,6 +389,23 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 	}
 }
 
+void UnifiedPresetCatalog::DiscoverEffects11Legacy()
+{
+	const auto& presetManager = PresetManager::GetSingleton();
+	if (!presetManager.HasLegacyInstall())
+		return;
+
+	PackInfo pack;
+	pack.id = kEffects11LegacyPackId;
+	pack.name = T("menu.presets.legacy_name", "Effects 11 Preset (Legacy)");
+	pack.source = SourceKind::Effects11Legacy;
+	pack.rootPath = presetManager.GetLegacyENBSeriesIniPath().parent_path();
+	pack.effects11Root = pack.rootPath;
+	pack.hasEffects11 = true;
+	pack.description = T("menu.presets.legacy_description", "Effects 11 preset installed in the game root or Data folder.");
+	packs.push_back(std::move(pack));
+}
+
 void UnifiedPresetCatalog::Discover()
 {
 	ReleaseAllArtwork();
@@ -395,6 +415,7 @@ void UnifiedPresetCatalog::Discover()
 
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
+	DiscoverEffects11Legacy();
 
 	std::sort(packs.begin(), packs.end(), [](const PackInfo& a, const PackInfo& b) {
 		return ToLower(a.name) < ToLower(b.name);
@@ -563,6 +584,8 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 			e11Id = PresetManager::MakeUnifiedPackPresetId(pack->id);
 		else if (pack->source == SourceKind::Effects11Orphan && pack->id.starts_with("e11:"))
 			e11Id = pack->id.substr(4);
+		else if (pack->source == SourceKind::Effects11Legacy)
+			e11Id = PresetManager::kLegacyPresetId;
 		else
 			e11Id = pack->id;
 
@@ -601,7 +624,9 @@ bool UnifiedPresetCatalog::OpenPackFolder(const std::string& id) const
 
 	std::filesystem::path path = pack->rootPath;
 	// Explorer runs outside MO2's VFS, so open the physical copy when this mod folder has one.
-	if (const auto dataRelative = path.lexically_relative(Util::PathHelpers::GetDataPath()); !dataRelative.empty() && *dataRelative.begin() != "..") {
+	// A Legacy install belongs to another mod (or the game root), never the CS mod folder.
+	if (const auto dataRelative = path.lexically_relative(Util::PathHelpers::GetDataPath());
+		pack->source != SourceKind::Effects11Legacy && !dataRelative.empty() && *dataRelative.begin() != "..") {
 		std::error_code ec;
 		if (auto realPath = Util::PathHelpers::GetRealPathFromDataRelative(dataRelative); !realPath.empty() && std::filesystem::exists(realPath, ec))
 			path = std::move(realPath);
