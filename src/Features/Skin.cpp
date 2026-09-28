@@ -1,6 +1,8 @@
 #include "Skin.h"
 #include <DirectXTex.h>
 
+#include <algorithm>
+
 #include "Deferred.h"
 #include "Globals.h"
 #include "Hooks.h"
@@ -339,12 +341,16 @@ float4 Skin::GetWetness(RE::BSGeometry* geometry)
 		const uint32_t actorFormID = userData->formID;
 		const uint currentFrame = globals::state->frameCount;
 
-		if (actorWetnessMap.size() > 1024) {
-			actorWetnessMap.clear();
-		}
+		if (actorWetnessMap.size() > 1024 && currentFrame % 60 == 0)
+			std::erase_if(actorWetnessMap, [currentFrame](const auto& a_entry) { return currentFrame - a_entry.second.frameCount > 600; });
 
 		auto [it, inserted] = actorWetnessMap.try_emplace(actorFormID);
 		auto& cached = it->second;
+		if (!inserted && cached.actor != actor) {
+			cached = {};
+			inserted = true;
+		}
+		cached.actor = actor;
 		if (!inserted && cached.frameCount == currentFrame) {
 			return cached.wetness;
 		}

@@ -6374,60 +6374,65 @@ namespace DCLF
 					a_lookups.sharedVersion = a_lookups.NextVersion();
 			}
 			a_lookups.materials.resize(a_tables.materials.size());
-			for (std::size_t slot = 0; slot < a_tables.materials.size(); ++slot) {
-				if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
-					continue;
-				auto& entry = a_lookups.materials[slot];
-				const auto& key = a_tables.materialSlotKey[slot];
-				if (entry.key != key) {
-					entry.key = key;
-					entry.resolved = false;
-					entry.version = a_lookups.NextVersion();
-				}
-				const auto& material = a_tables.materials[slot];
-				// Resolved from these same views, with none evicted since, recently enough that they are still
-				// marked used: the indices stand (the shadow, Z-prepass and colour epochs each refresh).
-				if (entry.resolved && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation() &&
-					a_frame - entry.resolvedFrame < GpuTextures::kRestampFrames) {
-					bool same = entry.featureViews == material.featureTextures;
-					for (std::uint32_t t = 0; t < kPixelTextureSlots && same; ++t)
-						same = !((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t];
-					if (same)
+			for (std::size_t word = 0; word < a_tables.usedMaterialBits.size(); ++word) {
+				for (std::uint64_t remaining = a_tables.usedMaterialBits[word]; remaining; remaining &= remaining - 1) {
+					const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
+					if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
 						continue;
-				}
-				for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-					if (!((material.textureWritten >> t) & 1))
+					auto& entry = a_lookups.materials[slot];
+					const auto& key = a_tables.materialSlotKey[slot];
+					if (entry.key != key) {
+						entry.key = key;
+						entry.resolved = false;
+						entry.version = a_lookups.NextVersion();
+					}
+					const auto& material = a_tables.materials[slot];
+					// Resolved from these same views, with none evicted since, recently enough that they are still
+					// marked used: the indices stand (the shadow, Z-prepass and colour epochs each refresh).
+					if (entry.resolved && entry.recordVersion == a_tables.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation() &&
+						a_frame - entry.resolvedFrame < GpuTextures::kRestampFrames) {
 						continue;
-					const std::uint32_t index = textures.Resolve(material.textures[t]);
-					if (note(entry.textureIndex[t], index))
+					}
+					for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
+						if (!((material.textureWritten >> t) & 1))
+							continue;
+						const std::uint32_t index = textures.Resolve(material.textures[t]);
+						if (note(entry.textureIndex[t], index))
+							entry.version = a_lookups.NextVersion();
+						entry.views[t] = material.textures[t];
+					}
+					for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
+						const std::uint32_t index = material.featureTextures[f] ? textures.Resolve(material.featureTextures[f]) : Lookups::kNone;
+						if (note(entry.featureIndex[f], index))
+							entry.version = a_lookups.NextVersion();
+						entry.featureViews[f] = material.featureTextures[f];
+					}
+					if (!entry.resolved) {
+						++a_lookups.generation;
 						entry.version = a_lookups.NextVersion();
-					entry.views[t] = material.textures[t];
+					}
+					entry.resolved = true;
+					entry.written = material.textureWritten;
+					entry.texturesGeneration = textures.Generation();
+					entry.recordVersion = a_tables.materialVersion[slot];
+					entry.resolvedFrame = a_frame;
 				}
-				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
-					const std::uint32_t index = material.featureTextures[f] ? textures.Resolve(material.featureTextures[f]) : Lookups::kNone;
-					if (note(entry.featureIndex[f], index))
-						entry.version = a_lookups.NextVersion();
-					entry.featureViews[f] = material.featureTextures[f];
-				}
-				if (!entry.resolved) {
-					++a_lookups.generation;
-					entry.version = a_lookups.NextVersion();
-				}
-				entry.resolved = true;
-				entry.written = material.textureWritten;
-				entry.texturesGeneration = textures.Generation();
-				entry.resolvedFrame = a_frame;
 			}
 			// The technique's shadow mask, per used pipeline: the frame's view, so it is refreshed every epoch.
 			a_lookups.pipelines.resize(std::max(a_lookups.pipelines.size(), a_tables.pipelines.size()));
-			for (std::size_t p = 0; p < a_tables.pipelines.size(); ++p) {
-				if (!a_tables.PipelineUsed(p, a_frame))
-					continue;
-				const auto& technique = a_tables.TechniqueOf(p);
-				auto& entry = a_lookups.pipelines[p];
-				const std::uint32_t index = technique.shadowMask ? textures.Resolve(technique.shadowMaskTexture) : Lookups::kNone;
-				if (note(entry.shadowMaskIndex, index))
-					entry.version = a_lookups.NextVersion();
+			for (std::size_t word = 0; word < a_tables.usedPipelineBits.size(); ++word) {
+				for (std::uint64_t remaining = a_tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+					const std::uint32_t p = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
+					if (p >= a_tables.pipelines.size())
+						continue;
+					if (!a_tables.PipelineUsed(p, a_frame))
+						continue;
+					const auto& technique = a_tables.TechniqueOf(p);
+					auto& entry = a_lookups.pipelines[p];
+					const std::uint32_t index = technique.shadowMask ? textures.Resolve(technique.shadowMaskTexture) : Lookups::kNone;
+					if (note(entry.shadowMaskIndex, index))
+						entry.version = a_lookups.NextVersion();
+				}
 			}
 		}
 
@@ -6438,16 +6443,20 @@ namespace DCLF
 		 * epoch's own refresh would otherwise be built against the old indices and go stale. Anything that
 		 * needs an import is left to the epoch (RefreshMaterialLookups), where the descriptor service is active.
 		 */
-		void RefreshKnownMaterialTextures(const SceneStore::Tables& a_tables, std::uint32_t a_frame, Lookups& a_lookups)
+		void RefreshKnownMaterialTextures(SceneStore& a_store, Lookups& a_lookups)
 		{
+			ZoneScopedN("CS.DCLF.RefreshKnownMaterialTextures");
+			const auto& a_tables = a_store.GetTables();
+			const std::uint32_t a_frame = a_store.GetFrame();
 			auto& textures = GpuTextures::Get();
-			for (std::size_t slot = 0; slot < a_tables.materials.size() && slot < a_lookups.materials.size(); ++slot) {
+			auto refreshSlot = [&](std::size_t slot) {
 				if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
-					continue;
+					return;
 				auto& entry = a_lookups.materials[slot];
 				const auto& material = a_tables.materials[slot];
-				if (!entry.resolved || entry.key != a_tables.materialSlotKey[slot] || entry.written != material.textureWritten)
-					continue;
+				if (!entry.resolved || entry.key != a_tables.materialSlotKey[slot] || entry.written != material.textureWritten ||
+					entry.recordVersion == a_tables.materialVersion[slot])
+					return;
 				std::array<std::uint32_t, kPixelTextureSlots> indices{};
 				bool changed = false, known = true;
 				for (std::uint32_t t = 0; t < kPixelTextureSlots && known; ++t) {
@@ -6457,7 +6466,7 @@ namespace DCLF
 					known = textures.Known(material.textures[t], indices[t]);
 				}
 				if (!changed || !known)
-					continue;
+					return;
 				for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 					if (!((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t])
 						continue;
@@ -6468,7 +6477,14 @@ namespace DCLF
 					entry.textureIndex[t] = indices[t];
 					entry.views[t] = material.textures[t];
 				}
-			}
+				if (entry.featureViews == material.featureTextures)
+					entry.recordVersion = a_tables.materialVersion[slot];
+			};
+			std::vector<std::uint32_t> changed;
+			a_store.TakeMaterialTextureChanges(changed);
+			for (const std::uint32_t slot : changed)
+				if (slot < a_tables.materials.size() && slot < a_lookups.materials.size())
+					refreshSlot(slot);
 		}
 
 		/** @brief The shadow epoch's entries: the alpha-tested casters' diffuse textures, and the pipelines of the modes in use. */
@@ -9532,7 +9548,7 @@ namespace DCLF
 		// RefreshFrameMaterials has just written this frame's t11 into the character-lit records: the lookups
 		// follow before the kick, or the epoch's own refresh would leave the job built against last frame's.
 		auto& store = SceneStore::Get();
-		RefreshKnownMaterialTextures(store.GetTables(), store.GetFrame(), store.MutableLookups());
+		RefreshKnownMaterialTextures(store, store.MutableLookups());
 		impl->KickMainJob(false, nullptr, nullptr, stats);
 	}
 
@@ -9558,7 +9574,7 @@ namespace DCLF
 		// resolving them only in the epoch's own preparation bumped the lookups' generation under a job already
 		// built against them - it went stale in 290 frames of 300.
 		auto& store = SceneStore::Get();
-		RefreshKnownMaterialTextures(store.GetTables(), store.GetFrame(), store.MutableLookups());
+		RefreshKnownMaterialTextures(store, store.MutableLookups());
 		impl->KickMainJob(true, &eye, &previousEye, stats);
 	}
 

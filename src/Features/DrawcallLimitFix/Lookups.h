@@ -82,6 +82,7 @@ namespace DCLF
 			std::array<ID3D11ShaderResourceView*, kFeatureMaterialTextures> featureViews{};
 			std::uint32_t written = 0;
 			std::uint32_t texturesGeneration = 0;
+			std::uint64_t recordVersion = 0;  // last material record inspected for texture bindings
 			std::uint32_t resolvedFrame = 0;
 			std::uint32_t version = 0;  // new whenever key, resolved, textureIndex or featureIndex changes (NextVersion)
 		};

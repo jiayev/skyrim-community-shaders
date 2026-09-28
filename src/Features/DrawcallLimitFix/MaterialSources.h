@@ -27,8 +27,8 @@ namespace DCLF
 	 *   PBR materials report theirs through NoteWritten). Each write is an event; the accumulate phase
 	 *   re-evaluates exactly the written materials.
 	 * - TexcoordOffset (VS 11): the material's two texture-transform buffers, read at the index the engine
-	 *   flips every frame (Main::Update). A controller writes the buffer the next frame reads. It is computed
-	 *   from the material's fields for every used material every frame (ApplyTextureTransform).
+	 *   flips every frame (Main::Update). Controller writes wake affected material slots; the short watch
+	 *   spans the buffer flip and samples both buffers until they agree (ApplyTextureTransform).
 	 * - The shader object and engine globals: IBLParams, PS 6, SnowRimLightParameters, CharacterLightParams,
 	 *   LODTexParams.z, LandscapeTexture5to6IsSnow.zw. The same for every material that writes them, so they
 	 *   are taken each frame from one live evaluation per signature (Signature, ApplyFrameComponents).
@@ -54,6 +54,8 @@ namespace DCLF
 		 * in which case every material has to be treated as written.
 		 */
 		bool Drain(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out);
+		void DrainShadingChanges(std::vector<const void*>& a_out);
+		void DrainTransformChanges(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out);
 
 		/**
 		 * @brief Which frame-sourced groups a pass descriptor's SetupMaterial writes. Records with the same

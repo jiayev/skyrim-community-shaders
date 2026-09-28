@@ -13,6 +13,8 @@
 #	include <Render/Runtime/IDescriptorService.h>
 #	include <rhi_helpers.h>
 
+#	include <map>
+
 namespace DCLF
 {
 	namespace
@@ -22,7 +24,6 @@ namespace DCLF
 		constexpr std::uint32_t kAddressModes = 4;
 		constexpr std::uint32_t kFilterModes = 5;
 		constexpr std::uintptr_t kSamplerTableAE = 0x3288210;
-		constexpr std::uint32_t kGraveyardFrames = 16;  // an evicted import outlives every epoch that may still read it
 
 		// VkComponentMapping as D3D12's shader 4-component mapping (0: identity).
 		rhi::ComponentMapping MappingOf(const VkComponentMapping& a_components)
@@ -156,12 +157,14 @@ namespace DCLF
 
 		struct Retired
 		{
+			winrt::com_ptr<ID3D11ShaderResourceView> view;
 			rhi::ResourcePtr image;
-			std::uint32_t frame = 0;
 		};
 
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, Entry> entries;
-		std::vector<Retired> graveyard;
+		// One deadline per cached view. A hot view is rescheduled only when its
+		// deadline arrives, rather than scanning all imports periodically.
+		std::multimap<std::uint64_t, ID3D11ShaderResourceView*> expiry;
 		std::array<std::uint32_t, kAddressModes * kFilterModes> samplers{};
 		std::array<bool, kAddressModes * kFilterModes> samplerFailed{};
 		rhi::DescriptorSlot nullSlot{};
@@ -193,6 +196,7 @@ namespace DCLF
 		entry.lastUsed = impl->frame;
 		if (!inserted)
 			return entry.index;
+		impl->expiry.emplace(static_cast<std::uint64_t>(impl->frame) + kEvictFrames + 1, a_view);
 
 		entry.view.copy_from(a_view);
 		auto reject = [&](Reject a_reason) {
@@ -330,26 +334,30 @@ namespace DCLF
 	void GpuTextures::BeginFrame(std::uint32_t a_frame)
 	{
 		impl->frame = a_frame;
-		std::erase_if(impl->graveyard, [&](const Impl::Retired& a_retired) { return a_frame - a_retired.frame > kGraveyardFrames; });
-		if ((a_frame % 64) != 0)
-			return;
 		auto* service = org::runtime::GetActiveDescriptorService();
-		for (auto it = impl->entries.begin(); it != impl->entries.end();) {
+		// Without a live descriptor service there is no safe retirement point.
+		if (!service)
+			return;
+		while (!impl->expiry.empty() && impl->expiry.begin()->first <= a_frame) {
+			auto* view = impl->expiry.begin()->second;
+			impl->expiry.erase(impl->expiry.begin());
+			auto it = impl->entries.find(view);
+			if (it == impl->entries.end())
+				continue;
 			auto& entry = it->second;
 			if (a_frame - entry.lastUsed <= kEvictFrames) {
-				++it;
+				impl->expiry.emplace(static_cast<std::uint64_t>(entry.lastUsed) + kEvictFrames + 1, it->first);
 				continue;
 			}
 			++generation;
 			if (entry.index != kInvalid) {
 				--stats.cached;
-				if (service)
-					service->RetireDescriptorSlot(entry.slot);
-				impl->graveyard.push_back({ std::move(entry.image), a_frame });
+				auto owner = std::make_shared<Impl::Retired>(std::move(entry.view), std::move(entry.image));
+				service->RetireDescriptorSlotWithOwner(entry.slot, std::move(owner));
 			} else {
 				--stats.rejected[static_cast<std::size_t>(entry.reject)];
 			}
-			it = impl->entries.erase(it);
+			impl->entries.erase(it);
 		}
 	}
 
@@ -357,7 +365,7 @@ namespace DCLF
 	{
 		++generation;
 		impl->entries.clear();
-		impl->graveyard.clear();
+		impl->expiry.clear();
 		impl->samplers.fill(kInvalid);
 		impl->samplerFailed.fill(false);
 		impl->nullIndex = kInvalid;

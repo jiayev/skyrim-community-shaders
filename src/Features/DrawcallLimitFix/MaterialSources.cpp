@@ -9,6 +9,8 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstring>
 #include <memory>
 
 #include "Globals.h"
@@ -48,6 +50,16 @@ namespace DCLF::MaterialSources
 			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
 		}
+		EventQueue<const void*, 8192>& ShadingQueue()
+		{
+			static EventQueue<const void*, 8192> queue;
+			return queue;
+		}
+		EventQueue<const RE::BSShaderMaterial*, 8192>& TransformQueue()
+		{
+			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
+			return queue;
+		}
 
 		// ---- Hooks.
 		// A controller's own type field (+0x50): which member of the property or material it writes.
@@ -65,6 +77,23 @@ namespace DCLF::MaterialSources
 				NoteWritten(property->material);
 		}
 
+		// AE 1.6.1170 controller destination tables (Ghidra: float Update 0x14150DDE0,
+		// colour Update 0x14150EA50). The float table contains float indices; the colour
+		// table contains byte offsets. Other runtimes retain the conservative notification.
+		const std::uint32_t* FloatDestinations()
+		{
+			return reinterpret_cast<const std::uint32_t*>(REL::Offset(0x35ef210).address());
+		}
+		bool ControllerDestinationTablesKnown()
+		{
+			static const bool known = REL::Module::get().version() == REL::Version{ 1, 6, 1170, 0 };
+			return known;
+		}
+		const std::uint32_t* ColourDestinations()
+		{
+			return reinterpret_cast<const std::uint32_t*>(REL::Offset(0x35ef298).address());
+		}
+
 		// BSLightingShaderPropertyFloatController::Update (AE 14150dde0, vtable slot 0x27). Type 0xb writes the
 		// property's emissive multiplier (per-object shading, resampled every frame at Prepass) and types above
 		// 0x13 the texture-transform buffers (ApplyTextureTransform, every frame); every other type a material field.
@@ -72,10 +101,35 @@ namespace DCLF::MaterialSources
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
 			{
-				func(a_this, a_data);
 				const auto type = ControllerType(a_this);
-				if (type != 0xb && type <= 0x13)
-					NoteTarget(a_this);
+				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
+				if (type == 0xb && property) {
+					const auto before = property->emissiveMult;
+					func(a_this, a_data);
+					if (std::memcmp(&before, &property->emissiveMult, sizeof(before)) != 0)
+						ShadingQueue().Push(property);
+				} else if (type > 0x13 && property && property->material) {
+					auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(property->material);
+					const auto offset0 = material->texCoordOffset[0], offset1 = material->texCoordOffset[1];
+					const auto scale0 = material->texCoordScale[0], scale1 = material->texCoordScale[1];
+					func(a_this, a_data);
+					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
+						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1])
+						TransformQueue().Push(material);
+				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
+					auto* material = property->material;
+					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
+					std::uint32_t before = 0;
+					std::memcpy(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before));
+					func(a_this, a_data);
+					if (property->material != material ||
+						std::memcmp(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before)) != 0)
+						NoteWritten(material);
+				} else {
+					func(a_this, a_data);
+					if (type != 0xb && type <= 0x13)
+						NoteTarget(a_this);
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -86,9 +140,27 @@ namespace DCLF::MaterialSources
 		{
 			static void thunk(RE::NiTimeController* a_this, void* a_data)
 			{
-				func(a_this, a_data);
-				if (ControllerType(a_this) != 1)
-					NoteTarget(a_this);
+				const auto type = ControllerType(a_this);
+				auto* property = static_cast<RE::BSLightingShaderProperty*>(a_this->target);
+				if (type == 1 && property && property->emissiveColor) {
+					const auto before = *property->emissiveColor;
+					func(a_this, a_data);
+					if (!property->emissiveColor || std::memcmp(&before, property->emissiveColor, sizeof(before)) != 0)
+						ShadingQueue().Push(property);
+				} else if (type != 1 && property && property->material && ControllerDestinationTablesKnown()) {
+					auto* material = property->material;
+					const auto offset = std::size_t(ColourDestinations()[type]);
+					std::array<std::byte, 12> before{};
+					std::memcpy(before.data(), reinterpret_cast<const std::byte*>(material) + offset, before.size());
+					func(a_this, a_data);
+					if (property->material != material ||
+						std::memcmp(before.data(), reinterpret_cast<const std::byte*>(material) + offset, before.size()) != 0)
+						NoteWritten(material);
+				} else {
+					func(a_this, a_data);
+					if (type != 1)
+						NoteTarget(a_this);
+				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -197,6 +269,16 @@ namespace DCLF::MaterialSources
 		// The queue loses nothing (it spills when full), so a drain is always complete.
 		GetQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.insert(a_material); });
 		return true;
+	}
+
+	void DrainShadingChanges(std::vector<const void*>& a_out)
+	{
+		ShadingQueue().Drain([&](const void* a_property) { a_out.push_back(a_property); });
+	}
+
+	void DrainTransformChanges(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
+	{
+		TransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.insert(a_material); });
 	}
 
 	std::uint32_t Signature(std::uint32_t a_passDescriptor)

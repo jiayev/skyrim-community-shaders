@@ -390,13 +390,19 @@ void LightLimitFix::BSLightingShader_SetupGeometry_Before(RE::BSRenderPass* a_pa
 
 int LightLimitFix::GetRoomIndex(RE::NiAVObject* a_object) const
 {
-	if (!roomNodes.empty()) {
-		if (RE::NiNode* roomNode = GetParentRoomNode(a_object)) {
-			if (auto it = roomNodes.find(roomNode); it != roomNodes.cend()) {
-				return it->second;
-			}
-		}
-	}
+	return GetRoomIndexForRoom(GetRoomNode(a_object));
+}
+
+RE::NiNode* LightLimitFix::GetRoomNode(RE::NiAVObject* a_object) const
+{
+	return GetParentRoomNode(a_object);
+}
+
+int LightLimitFix::GetRoomIndexForRoom(const RE::NiNode* a_room) const
+{
+	if (a_room && !roomNodes.empty())
+		if (auto it = roomNodes.find(const_cast<RE::NiNode*>(a_room)); it != roomNodes.cend())
+			return it->second;
 	return -1;
 }
 
@@ -724,13 +730,13 @@ void LightLimitFix::UpdateLights()
 
 	// Process point lights
 
-	roomNodes.clear();
+	nextRoomNodes.clear();
 
 	auto addRoom = [&](RE::NiNode* node, LightData& light) {
 		uint8_t roomIndex = 0;
-		if (auto it = roomNodes.find(node); it == roomNodes.cend()) {
-			roomIndex = static_cast<uint8_t>(roomNodes.size());
-			roomNodes.insert_or_assign(node, roomIndex);
+		if (auto it = nextRoomNodes.find(node); it == nextRoomNodes.cend()) {
+			roomIndex = static_cast<uint8_t>(nextRoomNodes.size());
+			nextRoomNodes.insert_or_assign(node, roomIndex);
 		} else {
 			roomIndex = it->second;
 		}
@@ -803,6 +809,19 @@ void LightLimitFix::UpdateLights()
 	}
 	for (auto& e : shadowSceneNode->GetRuntimeData().activeShadowLights) {
 		addLight(e);
+	}
+	// The numeric room IDs are transient, but their mapping often stands across thousands of frames.
+	// Only an actual mapping change invalidates DCLF's identity-to-index bindings.
+	bool roomMapChanged = nextRoomNodes.size() != roomNodes.size();
+	if (!roomMapChanged)
+		for (const auto& [node, index] : nextRoomNodes)
+			if (const auto it = roomNodes.find(node); it == roomNodes.end() || it->second != index) {
+				roomMapChanged = true;
+				break;
+			}
+	if (roomMapChanged) {
+		roomNodes.swap(nextRoomNodes);
+		++roomMapGeneration;
 	}
 
 	AddParticleLightsToBuffer(lightsData);
