@@ -15,6 +15,9 @@ struct LUT : PostProcessFeature
 
 	std::string errMsg = "";
 	std::string tempPath = "";
+	/// Source of the last disk read, so scene applies reload only when the path or active pack changes.
+	std::string attemptedPath;
+	std::string attemptedPackId;
 
 	struct Settings
 	{
@@ -52,12 +55,16 @@ struct LUT : PostProcessFeature
 		LutType = -1;
 		settings.LutPath = "";
 		errMsg = "";
+		attemptedPath.clear();
 		if (texLUT2D)
 			texLUT2D.reset();
 		if (texLUT3D)
 			texLUT3D.reset();
 	}
-	void ReadTexture(std::filesystem::path path);
+	/** @brief Loads a LUT from a game-relative, absolute or active-pack-relative path. A failed load keeps the path. */
+	void ReadTexture(const std::string& requestedPath);
+	/** @brief Error text for a LUT file that cannot be loaded, or empty when its extension and existence check out. */
+	static std::string ValidateLutFile(const std::filesystem::path& resolvedPath);
 
 	virtual void Draw(TextureInfo&) override;
 };

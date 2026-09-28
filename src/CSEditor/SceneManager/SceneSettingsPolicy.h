@@ -25,7 +25,6 @@ namespace SceneSettingsPolicy
 		{ "ImageBasedLighting", "DisableInLoadingScreen" },
 		{ "PostProcessing", "Border" },
 		{ "PostProcessing", "Depth of Field", "HighlightShape" },
-		{ "PostProcessing", "LUT" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "enableTonemap" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "useOpenDrt" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "currentTonemapper" },

@@ -1190,6 +1190,14 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual([choice[0] for choice in resolution_mode["choices"]], [0, 1, 2])
         self.assertEqual((fog_density["minimum"], fog_density["maximum"]), (0.0, 1.0))
 
+    def test_custom_ui_setting_is_scene_controllable_text(self):
+        lut_path = self.entries_by_id[("PostProcessing", "LUT/settings", "LutPath")]
+        self.assertEqual(lut_path["type"], "String")
+        self.assertEqual(lut_path["editorSemantic"], "Text")
+        self.assertIn("SceneControllable", lut_path["flags"])
+        self.assertNotIn("Hidden", lut_path["flags"])
+        self.assertNotIn("Transitionable", lut_path["flags"])
+
     def test_numeric_metadata_uses_raw_bounds_and_display_scale(self):
         percentage = self.entries_by_id[("ScreenSpaceGI", "", "GISaturation")]
         angle = self.entries_by_id[("Skylighting", "", "MaxZenith")]

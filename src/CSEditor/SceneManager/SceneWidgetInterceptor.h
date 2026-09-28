@@ -71,7 +71,7 @@ namespace SceneWidgetInterceptor
 		Proxy previous;
 	};
 
-	/// The armed context, or nullptr when unarmed. For SceneWidgetBinding only.
+	/// The armed context, or nullptr when unarmed. For SceneWidgetBinding and CustomSceneControls.
 	const Context* GetArmedContext();
 
 	/// The proxy declared around the control being drawn, or nullptr. For SceneWidgetBinding only.

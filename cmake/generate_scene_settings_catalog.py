@@ -1633,6 +1633,13 @@ def control_group_semantic(control_kind: str) -> str:
     return "Numeric" if control_component_count(control_kind) > 1 else "None"
 
 
+# Settings whose scene UI the feature draws itself instead of binding an ImGui widget,
+# keyed like control bindings: owning class, then setting address.
+CUSTOM_UI_EDITOR_SEMANTICS = {
+    ("LUT", ("LutPath",)): "Text",
+}
+
+
 def resolve_editor_semantic(
         binding: ControlBinding | None,
         value_type: str,
@@ -4261,7 +4268,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
         maximum = binding.maximum if binding else None
         display_scale = binding.display_scale if binding else 1.0
         numeric_transform = binding.numeric_transform if binding else "Identity"
-        editor_semantic = resolve_editor_semantic(
+        editor_semantic = CUSTOM_UI_EDITOR_SEMANTICS.get(
+            (context.field_class, setting_address)) or resolve_editor_semantic(
             binding, value_type, force_hidden)
 
         flags = ["SceneSettingsCatalog::SettingFlag::Persisted"]
@@ -5027,7 +5035,7 @@ def validate_entries(
         semantic = entry["editorSemantic"]
         if allowed == (semantic == "None"):
             errors.append(f"invalid editor for {identity}")
-        if allowed:
+        if allowed and semantic != "Text":  # Text settings draw their own UI, no interceptor entry point
             widget = entry.get("sourceWidget", "")
             if widget not in SOURCE_WIDGET_ENTRY_POINTS:
                 errors.append(

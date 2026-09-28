@@ -72,6 +72,10 @@ public:
 	/** @brief Folder of the active unified pack; empty when none is active or the active preset is an orphan. */
 	std::filesystem::path GetActivePackRoot() const;
 
+	/** @brief Resolves a relative path against the game directory first, then the active pack root.
+	 *  @return The first existing candidate, or the path unchanged when neither exists. */
+	std::filesystem::path ResolveActivePackPath(const std::filesystem::path& path) const;
+
 	PackInfo* FindPack(const std::string& id);
 	const PackInfo* FindPack(const std::string& id) const;
 

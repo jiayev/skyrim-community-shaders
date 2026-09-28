@@ -5,13 +5,16 @@
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsOverwrites.h"
 #include "Utils/FileSystem.h"
+#include "Utils/Format.h"
 
 #include <algorithm>
+#include <deque>
 #include <filesystem>
 #include <format>
 #include <map>
 #include <numeric>
 #include <optional>
+#include <set>
 
 using namespace SceneSettingsInternal;
 using namespace SceneSettingsOverwrites;
@@ -160,20 +163,73 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		return false;
 	}
 
-	const auto copyArtwork = [&](const std::filesystem::path& source, const std::filesystem::path& relativeDest)
+	const auto copyPackFile = [&](const std::filesystem::path& source, const std::filesystem::path& relativeDest)
 		-> std::optional<std::string> {
 		std::error_code ec;
 		if (source.empty() || !std::filesystem::is_regular_file(source, ec))
 			return std::nullopt;
 		const auto dest = packRoot / relativeDest;
+		// Re-exporting the active pack finds its own files as sources.
+		if (std::filesystem::equivalent(source, dest, ec))
+			return relativeDest.generic_string();
 		std::filesystem::create_directories(dest.parent_path(), ec);
 		std::filesystem::copy_file(source, dest, std::filesystem::copy_options::overwrite_existing, ec);
 		if (ec) {
-			logger::error("[SceneSettings] Preset '{}' failed to copy artwork '{}' -> '{}': {}",
+			logger::error("[SceneSettings] Preset '{}' failed to copy '{}' -> '{}': {}",
 				safeModName, source.string(), dest.string(), ec.message());
 			return std::nullopt;
 		}
 		return relativeDest.generic_string();
+	};
+
+	// Scene values naming a file ship that file inside the pack; baked entries point at the copy.
+	constexpr std::string_view kPackFileDir = "files";
+	std::deque<SettingEntry> packedFileEntries;
+	std::map<std::filesystem::path, std::optional<std::string>> packedFileBySource;
+	std::set<std::string> usedFileDests;
+	bool fileCopyFailed = false;
+	const auto resolveEntryFileSource = [](const SettingEntry* entry) -> std::optional<std::filesystem::path> {
+		if (entry->deleted || !entry->value.is_string() || entry->value.get_ref<const std::string&>().empty())
+			return std::nullopt;
+		auto source = UnifiedPresetCatalog::GetSingleton().ResolveActivePackPath(entry->value.get<std::string>());
+		std::error_code ec;
+		if (!std::filesystem::is_regular_file(source, ec))
+			return std::nullopt;
+		return source;
+	};
+	const auto packFile = [&](const SettingEntry* entry) -> const SettingEntry* {
+		const auto source = resolveEntryFileSource(entry);
+		if (!source)
+			return entry;
+		auto [it, inserted] = packedFileBySource.try_emplace(*source);
+		if (inserted) {
+			auto dest = std::filesystem::path(kPackFileDir) / source->filename();
+			for (int suffix = 2; usedFileDests.contains(Util::FixFilePath(dest.generic_string())); ++suffix)
+				dest = std::filesystem::path(kPackFileDir) /
+				       std::format("{}_{}{}", source->stem().string(), suffix, source->extension().string());
+			usedFileDests.insert(Util::FixFilePath(dest.generic_string()));
+			it->second = copyPackFile(*source, dest);
+			fileCopyFailed |= !it->second;
+		}
+		if (!it->second)
+			return entry;
+		auto& packed = packedFileEntries.emplace_back(*entry);
+		packed.value = *it->second;
+		return &packed;
+	};
+
+	// A file the pack already ships keeps its path, so no other source may be copied over it.
+	const auto reserveInPackSource = [&](const SettingEntry* entry) {
+		const auto source = resolveEntryFileSource(entry);
+		if (!source)
+			return;
+		std::error_code sourceError, rootError;
+		const auto relative = std::filesystem::absolute(*source, sourceError).lexically_relative(std::filesystem::absolute(packRoot, rootError));
+		if (sourceError || rootError || relative.empty() || relative.generic_string().starts_with(".."))
+			return;
+		const auto relativeString = relative.generic_string();
+		usedFileDests.insert(Util::FixFilePath(relativeString));
+		packedFileBySource.try_emplace(*source, relativeString);
 	};
 
 	/// One output file: the root it must stay inside, the type description its metadata carries, and the
@@ -238,7 +294,13 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 				{ "coc", config.cocCode } });
 	}
 
-	bool wroteAll = true;
+	// In-pack files are claimed across every output before any other source is named.
+	for (const auto& [fileKey, file] : files)
+		std::ranges::for_each(file.entries, reserveInPackSource);
+	for (auto& [fileKey, file] : files)
+		std::ranges::transform(file.entries, file.entries.begin(), packFile);
+
+	bool wroteAll = !fileCopyFailed;
 	// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
 	// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
 	for (const auto& path : FindPresetFiles(safeModName)) {
@@ -277,7 +339,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
 		if (!source.empty()) {
-			if (auto rel = copyArtwork(source, std::format("{}{}", stem, source.extension().string())))
+			if (auto rel = copyPackFile(source, std::format("{}{}", stem, source.extension().string())))
 				manifest[key] = *rel;
 		} else if (clear) {
 			manifest.erase(key);
@@ -294,7 +356,7 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		json shots = json::array();
 		for (size_t i = 0; i < info.screenshotSources.size(); ++i) {
 			const auto& source = info.screenshotSources[i];
-			if (auto written = copyArtwork(source, galleryDir / std::format("{:02}{}", i + 1, source.extension().string())))
+			if (auto written = copyPackFile(source, galleryDir / std::format("{:02}{}", i + 1, source.extension().string())))
 				shots.push_back(*written);
 		}
 		if (!shots.empty())

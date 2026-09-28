@@ -236,6 +236,17 @@ std::filesystem::path UnifiedPresetCatalog::GetActivePackRoot() const
 	return Util::PathHelpers::GetUnifiedPackPath(activePackId);
 }
 
+std::filesystem::path UnifiedPresetCatalog::ResolveActivePackPath(const std::filesystem::path& path) const
+{
+	std::error_code ec;
+	if (path.empty() || path.is_absolute() || std::filesystem::exists(path, ec))
+		return path;
+	const auto packRoot = GetActivePackRoot();
+	if (auto packPath = packRoot / path; !packRoot.empty() && std::filesystem::exists(packPath, ec))
+		return packPath;
+	return path;
+}
+
 void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
@@ -630,6 +641,8 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 	if (pack->hasCSPP && !pack->csppFile.empty()) {
 		auto& pp = globals::features::postProcessing;
 		if (pp.loaded) {
+			// Pack-relative LUT paths in the preset resolve against the active pack.
+			SetActivePackId(id);
 			pp.LoadPresetFromFile(pack->csppFile);
 			appliedAny = true;
 		} else {
