@@ -14,8 +14,8 @@ namespace DCLF
 	 * A texture is resolved once per shader resource view: the image is marked stable in DXVK and imported
 	 * into BasicRHI without ownership (dxvkGetInteropResourceInfo), and a view with the SRV's format,
 	 * range and swizzle is written into a slot of ORG's shader-visible heap, read in the layout DXVK keeps
-	 * the image in. The SRV stays referenced while cached; entries unused for kEvictFrames are released
-	 * and their slots retire against ORG's queue fences.
+	 * the image in. The SRV stays referenced while cached; entries unused for kEvictFrames retire
+	 * their slot, imported image and D3D view together against ORG's queue fences.
 	 *
 	 * Samplers copy the renderer's own D3D11 sampler states (the table the engine selects from by the
 	 * shadow state's address and filter modes) into ORG's sampler heap.
@@ -65,7 +65,7 @@ namespace DCLF
 		/** @brief The sampler heap index for the engine's (address mode, filter mode); kInvalid if unknown. */
 		std::uint32_t Sampler(std::uint32_t a_addressMode, std::uint32_t a_filterMode);
 
-		/** @brief Once per epoch: releases entries unused for kEvictFrames. */
+		/** @brief Once per epoch: processes only due expiry entries, never the whole cache. */
 		void BeginFrame(std::uint32_t a_frame);
 
 		/**

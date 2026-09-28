@@ -6,9 +6,11 @@
 #include <chrono>
 #include <deque>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "AsyncWorker.h"
+#include "ActorValueIndex.h"
 #include "FaceSnapshots.h"
 #include "KeptState.h"
 #include "SceneIdentity.h"
@@ -217,6 +219,7 @@ namespace DCLF
 			// by an actor (actorObjects lists those that are); refreshed every frame by RefreshFrameConstants.
 			std::vector<std::array<float, 4>> skinWetness;        // parallel to objects
 			std::vector<std::uint32_t> actorObjects;  // sorted by object index (the walk sorts it)
+			ActorValueIndex actorWetness;
 			// The slots whose shading or extras rows have per-frame inputs no event reports, which RefreshFrameConstants
 			// resamples every frame: a controller on the shader or alpha property animates the emissive colour and
 			// multiplier or the alpha (kWatchShading, set by WriteObject), and ProjectedUV and land blend follow the eye
@@ -462,6 +465,20 @@ namespace DCLF
 			std::vector<std::uint32_t> pipelineLastUsed;  // parallel to pipelines
 			std::vector<std::uint32_t> materialLastUsed;  // parallel to materials
 			std::vector<std::pair<const RE::BSShaderMaterial*, std::uint32_t>> materialSlotKey;
+			// Exact users of this frame, emitted by the derivation/residency writers. Lookup preparation must not
+			// rediscover them by walking the allocated slot tables.
+			std::vector<std::uint32_t> usedMaterials, usedPipelines;
+			// Same membership in slot order for cache-local epoch lookup resolution; 64 slots per word.
+			std::vector<std::uint64_t> usedMaterialBits, usedPipelineBits;
+			std::uint32_t usedMaterialsFrame = 0, usedPipelinesFrame = 0;
+			// A record can change before its slot is first used. Keep that fact until MarkMaterialUsed
+			// publishes the slot to the pre-epoch lookup refresh.
+			std::vector<std::uint8_t> materialTextureDirty, materialTextureQueued;
+			std::vector<std::uint32_t> materialTextureChanges;
+			void MarkMaterialUsed(std::uint32_t a_slot, std::uint32_t a_frame);
+			void MarkPipelineUsed(std::uint32_t a_slot, std::uint32_t a_frame);
+			void MarkMaterialTextureChanged(std::uint32_t a_slot, std::uint32_t a_frame);
+			void TakeMaterialTextureChanges(std::vector<std::uint32_t>& a_out);
 			bool PipelineUsed(std::size_t a_slot, std::uint32_t a_frame) const { return a_slot < pipelineLastUsed.size() && pipelineLastUsed[a_slot] == a_frame; }
 			bool PipelineAlive(std::size_t a_slot) const { return pipelineSlots.Alive(a_slot); }
 			// Each table's columns: a_column(vector, initial value...) for every vector parallel to it.
@@ -634,7 +651,6 @@ namespace DCLF
 			// Which component of a changed record moved: bit 0 VS floats, 1 PS floats, 2 textures,
 			// 3 address modes, 4 filter modes, 5 the written-texture mask.
 			std::uint32_t materialDiffMask = 0;
-			std::uint32_t materialsFromCache = 0;     // records served without calling SetupMaterial
 			std::uint32_t materialsValidated = 0;     // cache entries re-evaluated and compared this frame
 			std::uint32_t materialCacheStale = 0;     // of those, ones that disagreed: must be 0
 			std::uint32_t materialCacheEntries = 0;
@@ -821,6 +837,8 @@ namespace DCLF
 		void Clear();
 
 		const Tables& GetTables() const { return tables; }
+		/** @brief Consume only material slots whose captured texture record changed and became used. */
+		void TakeMaterialTextureChanges(std::vector<std::uint32_t>& a_out) { tables.TakeMaterialTextureChanges(a_out); }
 		const Stats& GetStats() const { return stats; }
 		/** @brief The screen-door fading objects given bindings since the last call, and in how many frames. */
 		std::pair<std::uint32_t, std::uint32_t> TakeFadingDrawn()
@@ -952,6 +970,9 @@ namespace DCLF
 			std::uint64_t identity = 0;
 			std::uint64_t groupIdentity = 0;
 			const RE::TESObjectREFR* actorOwner = nullptr;  // lookup only, never published
+			const RE::NiNode* roomNode = nullptr;  // lookup key, refreshed on structural attachment
+			std::uint64_t roomMapGeneration = 0;
+			int roomIndex = -1;
 			RE::NiNode* categoryNode = nullptr;
 			// Ineligible::UnsupportedParent or Billboard for what lies between the leaf and its category node
 			// (ParentReason in SceneStore.cpp); Switch when a switch node lies there, which ClassifyFrame
@@ -1275,6 +1296,9 @@ namespace DCLF
 		ankerl::unordered_dense::map<const RE::BSGraphics::TriShape*, std::uint32_t> geometryIndex;
 		ankerl::unordered_dense::map<PipelineKey, std::uint32_t, PipelineKeyHash> pipelineIndex;
 		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, std::uint32_t> materialIndex;
+		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::vector<std::uint32_t>> materialDependents;
+		void ListMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
+		void UnlistMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
 		// Lighting passes of the main-camera accumulator's batches this frame, by geometry.
 		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedPasses;
 		// The accumulator CollectAccumulatedPasses last saw non-null (Step A probe).
@@ -1316,20 +1340,10 @@ namespace DCLF
 		private:
 			RE::BSShaderMaterial* material = nullptr;
 		};
-		// CS_DCLF_MATERIAL_CACHE=probe only: the previous frame's record per (material, pass descriptor).
-		// It holds a reference on the material so a freed one cannot be mistaken for a new allocation at
-		// the same address (BSShaderMaterial is BSIntrusiveRefCounted).
-		struct MaterialProbe
-		{
-			MaterialReference material;
-			MaterialRecord record;
-			std::uint32_t lastUsed = 0;
-		};
-		// The cross-frame material cache, keyed by (material, pass descriptor). It holds a reference on
-		// the material, so a freed one cannot be mistaken for a new allocation at the same address.
-		ankerl::unordered_dense::map<std::pair<const RE::BSShaderMaterial*, std::uint32_t>, MaterialProbe> materialCache;
-		/** @brief Whether the cross-frame material cache is serving (CS_DCLF_MATERIAL_CACHE). */
-		static bool MaterialCacheEnabled();
+		// Parallel to Tables::materials: the slot itself is the only record cache.
+		// Its engine reference prevents pointer reuse while the slot is live. Last-object-
+		// reference events and table resets release it at the safe capture boundary.
+		std::vector<MaterialReference> materialOwners;
 		/**
 		 * @brief The frame-sourced components of every record drawn this frame (MaterialSources): one live
 		 * evaluation per signature at Prepass - the shader object's IBLParams, the engine globals, the
@@ -1359,7 +1373,6 @@ namespace DCLF
 		std::uint32_t materialValidationCursor = 0;
 		static constexpr std::uint32_t kMaterialValidationsPerFrame = 8;
 		static constexpr std::uint32_t kMaterialValidationStride = 4;
-		static constexpr std::uint32_t kMaterialCacheIdleFrames = 64;
 		std::uint32_t frame = 0;
 		std::uint32_t tablesGeneration = 0;
 		std::uint32_t materialVersions = 0;  // the last Tables::materialVersion handed out
@@ -1584,8 +1597,15 @@ namespace DCLF
 			bool operator==(const ShadowInputs&) const = default;
 		};
 		ShadowInputs ShadowInputsOf(std::uint32_t a_slot) const;
-		// Whether a slot's shadow inputs changed this walk: the sets are rebuilt only then (FinishDeltaWalk).
+		void RefreshShadowSets(bool a_forceRebuild);
+		// Whether a slot's shadow inputs changed this walk: only the changed contributions are updated.
 		bool shadowSetsDirty = true;
+		bool shadowIndexNeedsRebuild = true;
+		std::vector<std::uint32_t> shadowDirtySlots;
+		std::vector<ShadowInputs> shadowIndexedInputs;
+		std::vector<std::uint8_t> shadowIndexedLive;
+		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::set<std::uint32_t>> shadowTextureMembers;
+		ankerl::unordered_dense::map<ShadowPipelineKey, std::set<std::uint32_t>, ShadowPipelineKeyHash> shadowKeyMembers, skyKeyMembers;
 		std::uint32_t keptShadowCasters = 0;
 		std::array<std::uint32_t, 16> keptShadowRejects{};
 		bool fullEvaluation = true;  // the next delta walk evaluates every entry (a reset, a load, a live toggle)
@@ -1713,11 +1733,10 @@ namespace DCLF
 		 */
 		std::uint32_t ResolveGeometrySlot(RE::BSGeometry& a_geometry, const RE::BSGraphics::TriShape* a_triShape,
 			const RE::NiSkinPartition::Partition* a_skinPartition, PartTimer& a_timer, bool a_renderThread, bool& a_miss);
-		/** @brief The cross-frame material cache and its validator; false when nothing can be evaluated. */
-		bool EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, bool a_cacheOn,
-			bool a_probeAll, MaterialRecord& a_record);
+		/** @brief Capture a new material slot; false when nothing can be evaluated. */
+		bool EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_record);
 
-		/** @brief Counts the slots' references and frees the ones idle past SlotTable::kIdleFrames with their map entries; before the loop. */
+		/** @brief Consume reference changes; retire unused materials and expire idle geometry/pipeline slots before capture. */
 		void SweepSlots();
 		/**
 		 * @brief Drops the slot tables, their maps and every cached derivation (by generation): the

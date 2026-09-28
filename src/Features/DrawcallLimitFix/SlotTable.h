@@ -108,6 +108,26 @@ namespace DCLF
 			}
 			return freed;
 		}
+		/**
+		 * @brief Consume last-reference events after a complete batch of reference changes.
+		 * No age test or live-slot traversal. References reacquired in the batch cancel
+		 * retirement; generation checks discard events for a reused slot.
+		 */
+		template <class F>
+		std::uint32_t DrainUnreferenced(F&& a_onFree)
+		{
+			std::uint32_t freed = 0;
+			while (!idle.empty()) {
+				const auto entry = idle.front();
+				idle.pop_front();
+				if (!Alive(entry.slot) || generation[entry.slot] != entry.generation || refs[entry.slot])
+					continue;
+				a_onFree(entry.slot);
+				Free(entry.slot);
+				++freed;
+			}
+			return freed;
+		}
 		std::size_t Size() const { return alive.size(); }
 		std::size_t AliveCount() const { return aliveCount; }
 		std::size_t ReferencedCount() const { return referencedCount; }

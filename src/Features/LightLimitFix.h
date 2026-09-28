@@ -514,9 +514,14 @@ public:
 	void BSLightingShader_SetupGeometry_After(RE::BSRenderPass* a_pass);
 
 	eastl::hash_map<RE::NiNode*, uint8_t> roomNodes;
+	eastl::hash_map<RE::NiNode*, uint8_t> nextRoomNodes;  // reused scratch; never invalidates the published mapping
+	std::uint64_t roomMapGeneration = 0;
 
 	/** @brief StrictLightData::RoomIndex for a geometry: its room's index this frame, or -1 outside rooms. */
 	int GetRoomIndex(RE::NiAVObject* a_object) const;
+	RE::NiNode* GetRoomNode(RE::NiAVObject* a_object) const;
+	int GetRoomIndexForRoom(const RE::NiNode* a_room) const;
+	std::uint64_t GetRoomMapGeneration() const { return roomMapGeneration; }
 
 	/** @brief StrictLightData::ShadowBitMask for a lighting pass: the shadow mask channels of its shadow lights. */
 	static uint GetShadowBitMask(const RE::BSRenderPass* a_pass);

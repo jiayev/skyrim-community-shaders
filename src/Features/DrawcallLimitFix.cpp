@@ -1391,8 +1391,8 @@ void DrawcallLimitFix::Prepass()
 			stats.templateDefects ? " <- CULLED TEMPLATE" : "");
 		// The material cache and its standing alarm. materialCacheStale must be 0: it is the count of
 		// entries that were re-evaluated live and disagreed with what the cache would have served.
-		logger::info("[DCLF] materials (last frame): {} evaluated, {} served from the cache, {} skipped as undrawable; {} written ({} re-evaluated, {} dropped), {} frame samples; cache {} entries (+{} evicted); validated {}, stale {}{}",
-			stats.materialsEvaluated, stats.materialsFromCache, stats.materialsSkipped, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped,
+		logger::info("[DCLF] materials (last frame): {} evaluated, {} skipped as undrawable; {} written ({} re-evaluated, {} dropped), {} frame samples; slots {} alive (+{} retired on last reference); validated {}, stale {}{}",
+			stats.materialsEvaluated, stats.materialsSkipped, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped,
 			stats.frameMaterialSamples,
 			stats.materialCacheEntries, stats.materialCacheEvicted, stats.materialsValidated, stats.materialCacheStale,
 			stats.materialCacheStale ? " <- STALE MATERIAL" : "");

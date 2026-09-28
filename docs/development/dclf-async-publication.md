@@ -562,6 +562,154 @@ pipeline/material slot mutation still read live engine data and must move to
 coordinator-owned, versioned scene state before the value-only patch can run
 off-thread.
 
+Event-driven capture work (September 27): the live scene store now keeps a
+material-to-slot reverse index. Material write events visit dependent slots
+instead of scanning the entire material table. Existing controller hooks now
+detect actual changes to emissive multiplier/colour and texture-transform
+buffers; the former wake property dependents at Prepass, and the latter wake
+the short transform watch across the engine's two buffer phases. Actor wetness
+is sampled once per stable actor group and fanned out to its mesh slots. The
+shared Skin cache now resets a reused form ID when its actor instance changes
+and prunes only idle entries instead of clearing every actor's fade together
+at 1,024 entries.
+LightLimitFix exposes the nearest room identity separately from its transient
+room number; tracked objects cache the identity on attachment and refresh the
+number when the light room map is rebuilt. The room map is still rebuilt by
+the engine feature each frame.
+
+Shadow texture and pipeline membership is maintained from per-slot dirty
+contributions, with reference-count-equivalent slot sets and a full rebuild
+when the index is invalidated. The same-table incremental/rebuild parity check
+(`CS_DCLF_PERSISTENT_PARITY`) reported no mismatches in the final capped run;
+the final three 300-frame windows also reported zero ownership holes. The
+normal demanding-save run reported shadow-set maintenance at 7.5 us/frame
+versus 50.9 us/frame in the preceding same-save build. Wetness was 63.2 versus
+121.9 us/frame and material writes 8.3 versus 14.5 us/frame. These telemetry
+intervals are similar but the save evolves during each capture, so they are
+directional, not a controlled per-frame A/B. Texture lookup now skips the
+per-register comparison when the material record version is unchanged;
+volatile targets and import completion remain on the existing epoch path.
+The final Tracy capture and game log are under
+`build/dclf-profiles/20260927-183410-shadow-dirty-normal/`; parity capture is
+`build/dclf-profiles/20260927-183312-shadow-dirty-parity/`.
+
+After adding per-zone Tracy measurements and the material-record version
+shortcut, another normal run (`20260927-183853-event-zones-final`) measured
+p50/p95/p99 in microseconds: material writes 8.5/11.0/13.5, wetness
+65.7/89.8/108.0, texture transforms 10.1/14.3/17.3, and shadow-set
+maintenance 26.8/44.2/58.5 per invocation. The final 300-frame interval
+reported 20.9 us/frame of shadow maintenance at 0.7 calls/frame; more scene
+changes than the prior run explain why this is above its 7.5 us/frame. The
+accumulator scope measured 816/1,182/1,437 us versus 847/1,436/1,796 us
+in the earlier same-save normal run; scene motion and runtime variation mean
+this is not an isolated effect size. The final parity run
+(`20260927-184006-event-final-parity`) reported zero shadow-index mismatches,
+zero material-frame or shading mismatches in five checks each, and zero
+ownership holes. All game runs stayed below 48 seconds.
+
+Remaining work for this event-driven plan: actor input/event coverage and
+incarnation-keyed wetness retirement on lifecycle events; completion-driven texture/import leases;
+static-classification writer coverage; and typed immutable capture records on
+the publication coordinator. Actor shading, alpha and visibility still use
+conservative current-frame sampling where writer coverage is incomplete.
+The live pipeline remains legacy and still joins preparation in normal frames.
+
+Event-owned lookup use (September 27 follow-up): pipeline and material use is
+now emitted by the derivation and residency writers as exact per-frame slot
+lists. The pre-epoch known-texture refresh consumes a material-record change
+journal rather than scanning allocated slots. A change is retained until that
+slot is first used, so writes before later admission are not lost. Epoch
+material and pipeline lookup preparation and frame pipeline-constant sampling
+also consume the use lists. The material-write path no longer scans the entire
+material cache for orphan entries: a successful cache insertion is immediately
+followed by slot allocation, and each slot-removal path erases its cache key.
+On parity frames, the use lists are compared with the previous full-table
+discovery. LightLimitFix now changes its room-map generation only when the
+room-to-index mapping actually changes, avoiding unconditional DCLF room
+rebinding. The comparison map is reused across frames.
+
+The 45-second demanding-save parity run at
+`build/dclf-profiles/20260927-191943-iteration-free-parity/` logged no use-list
+disagreements, no material-frame or shading parity differences, and zero
+ownership holes and claimed-but-undrawn objects in its reported 300-frame
+windows. A 12-second Tracy capture (907 frames) measured
+`CS.DCLF.RefreshKnownMaterialTextures` p50/p95/p99 at 1.33/2.54/3.42 us over
+1,807 calls; the preceding same-save parity capture
+(`20260927-190426-event-revert-final-parity`) measured 3.99/6.64/9.96 us over
+1,816 calls. This removes discovery over unchanged material slots, not the
+required epoch import work. The persistent-shadow input parity discrepancy
+already tracked separately remains present; this run recorded no new
+shadow-set index disagreement. Shader/material/actor writer coverage and
+completion-driven descriptor leases are still required before all persistent
+state discovery and age-based maintenance can be removed. Camera-dependent
+inputs, active wetness fading and live pose/visibility capture still require
+bounded current-frame work; they cannot be inferred from yesterday's events.
+
+Descriptor retirement follow-up: ORG's descriptor service now exposes an
+atomic slot-plus-owner retirement operation. DCLF places the imported image
+and retained D3D11 SRV in that owner; both are released only after the same
+submitted queue fences that permit slot reuse. This removes the 16-frame
+image graveyard, whose fixed duration was not a GPU-completion guarantee.
+The inactivity-triggered cache eviction is still age-based. It cannot become
+reference-count-only until every publication and prepared execution ticket
+retains its exact descriptor owners, and device/graph rebuild invalidates
+cached indices. The new lease covers retirement of an evicted entry, not
+all future publication/ticket ownership. The first capped demanding-save run
+(`20260927-193949-descriptor-completion-parity`) reached a GPU device loss at
+frame 581, before any >600-frame texture eviction could exercise the new
+operation. Parity was clean up to that point except for the pre-existing
+persistent-shadow membership discrepancy; the run is inconclusive for the
+retirement change. Its Aftermath dump is
+`gpu-crash-2026-09-27-19-40-29.nv-gpudmp` in the Skyrim SKSE log directory.
+The periodic all-import sweep has also been replaced by one deadline per
+cached view. `BeginFrame` processes only expired deadlines, and an entry still
+in use is rescheduled when its deadline arrives. This removes the steady
+whole-cache eviction scan without changing the conservative 600-frame
+inactivity policy.
+The second 45-second parity run
+(`20260927-194439-descriptor-expiry-parity`) completed without device loss,
+past 1,190 main epochs. Both reported 300-frame intervals had zero claimed
+but undrawn main objects and zero validation drops; the final shadow interval
+had zero not-ready views under ownership. The first interval had 24 such
+shadow views during cold pipeline readiness, the same count seen in the
+preceding `20260927-193208-iteration-free-bitmap-parity` baseline. Material
+frame and shading parity checks found no difference; the pre-existing
+persistent-shadow membership discrepancy remained. The four DCLF CPU tests
+passed. A focused ORG fence-retirement test was added, but its D3D12 test
+target is disabled in this Vulkan-only build. A separate test configuration
+stopped before compilation because DirectX-Headers is not installed in that
+configuration, so that test is not yet executed.
+
+The 1.6.1170 float and colour material-controller hooks now compare the exact
+destination field around the engine update and emit a material event only for
+an actual write. Ghidra's controller updates at `0x14150DDE0` and
+`0x14150EA50` establish the destination-index tables and their early exits;
+other runtimes retain the conservative event. A second 44.5-second parity run
+(`20260927-192504-iteration-free-controller-parity`) logged no material-frame
+or shading mismatches, no use-journal disagreements, and zero ownership holes
+in its reported 300-frame windows. It does not prove coverage of other
+material writers or actor inputs.
+
+A material-change journal was tested for the pre-epoch known-texture refresh.
+It needed to retain changes to slots that became used later in the frame;
+same-table parity exposed this and passed after a pending-slot fix. Its measured
+refresh cost was about 4.1 us/call in one parity run; the version-aware scan
+measured 4.5 us/call in the final parity run, with substantial run-to-run
+variation. The journal added state and had no demonstrated net benefit, so it
+was removed from the live path.
+
+The final Release DLL (SHA-256
+`7A58E9A6A565690507729CFD76FD1E9EFD8E1DC0CE6EB24244F6DDD26E2CC545`)
+was deployed to the active `Community Shaders DXVK ORG` MO2 mod, with the
+pre-change DLL backed up under `build/dclf-profiles/20260927-event-capture/`.
+The final 44.5-second parity run is
+`build/dclf-profiles/20260927-190426-event-revert-final-parity/`. It logged zero
+shadow-index disagreements, zero material-frame or shading mismatches across
+five checks each, zero claimed-but-undrawn objects, and zero ownership holes
+in the final 300-frame interval. The four DCLF CPU tests passed. Neither these
+tests nor the demanding-save run cover interior portal rotation, equipment
+changes, water transitions, or GPU debug-layer validation.
+
 After the residency journal correction, the final Release DLL passed another
 44.5-second capped run: the last three 300-frame windows logged zero ownership
 holes, zero claimed-but-undrawn objects and zero validation drops. One window
@@ -570,3 +718,145 @@ this capture (about 2,500 to 3,560 claimed objects), so its final 400-frame
 accumulator p50/p95/p99 of 855/1,298/1,455 microseconds must not be compared
 as a stationary performance A/B. Trace and log:
 `build/dclf-profiles/20260927-174240-accumulator-resident-journal/`.
+
+### Reference-driven material and descriptor retirement (2026-09-27)
+
+The duplicate `SceneStore::materialCache` has been removed. Persistent material
+slots already contain the evaluated records; `materialIndex` supplies reuse.
+Each live slot now owns its engine material reference directly. Last-object
+reference transitions are consumed after the complete reference-journal batch,
+without the material slot's previous age grace period. Reacquisition within
+the batch cancels retirement, and incarnation checks reject stale events.
+Table reset releases these owners too; previously the duplicate map survived
+`ResetSlotTables` without slots through which its references could retire.
+
+A game-material destructor hook cannot replace this ownership rule: DCLF's
+own retained reference can prevent that destructor from running. Ghidra's
+SetMaterial (`0x14147BFF0`) and material-manager release (`0x1414F7A40`) paths
+confirm replacement releases the old material through the engine reference
+count. No new executable-address hook is installed for retirement.
+
+ORG descriptor heaps no longer poll a retained-index list during allocation.
+The final CPU lease callback returns a GPU-retired slot to the free list.
+Lease generations prevent an older callback from reclaiming a newer lease.
+`RetireDescriptorSlotWithOwner` now transfers backing ownership into the slot
+when GPU completion precedes CPU lease release, closing the previous gap
+where only the descriptor index, but not its imported backing, stayed alive.
+Backing destruction happens outside the heap lock.
+
+Four DCLF CPU tests pass, including same-batch reacquisition and slot reuse.
+The fence/backing lifetime tests now run in both persistent Vulkan host test
+modes (two passing tests); they are no longer limited to the unavailable
+D3D12 test configuration. They cover multiple CPU consumers, GPU completion
+before final lease release, immediate backing destruction on final release,
+and descriptor-slot reuse without polling.
+
+The legacy `CS_DCLF_MATERIAL_CACHE` switch now controls validation only:
+`off` disables the diagnostic, `probe` compares every used material slot,
+and default retains the bounded eight-record sampler. There is no second
+material cache to disable. Geometry/pipeline age retirement and GpuTextures'
+600-frame inactivity deadlines remain. Removing texture expiry safely still
+requires explicit ownership for every publication, shadow packet, frame patch,
+and executable ticket that retains descriptor indices. This change does not
+claim that coverage or remove the remaining engine-affine samplers/joins.
+
+The deployed Release DLL SHA-256 is
+`4B7C92D8BB8C8A9FCE1EE65C890C38F7713BD66DEA5077E705FDB8E625AAFFD6`.
+The final normal-sampler parity run (`20260927-200844-material-ownership-final-parity`)
+lasted 44.99 seconds. It reported zero stale sampled materials, no material-frame
+or shading mismatches, no main claimed-but-undrawn objects, and no device loss.
+The pre-existing shadow-membership discrepancy and first-window 24 not-ready
+shadow views remain; the later window had zero not-ready views. Material slot
+retirement reached 1,325 while live slots fell from 587 to 438; the two logged
+last-frame evaluation counts were 0 and 2, not an aggregate churn measurement.
+Accumulator p50/p95/p99 were 824/1,225/1,623 us (845 samples), versus
+899/1,308/1,590 us (808 samples) in `20260927-194439-descriptor-expiry-parity`.
+These same-save rotating runs are not stationary A/B measurements; p99 did
+not improve and no performance win is asserted. The intermediate
+`20260927-200333-material-ownership-parity` run used an earlier build and is
+not validation of the final duplicate-cache removal.
+The separate all-used-material probe
+(`20260927-200936-material-ownership-full-probe`, 44.56 seconds) reported
+486/487 validated records in its logged frames, zero stale materials, zero
+material-frame/transform/shading differences, and zero main claimed-but-undrawn
+objects. The same existing shadow issues remained. Neither run constitutes
+interior/equipment/cell-transition coverage or GPU debug-layer validation.
+
+### Writer-maintained actor output membership (2026-09-27)
+
+Wetness propagation now uses `ActorValueIndex`, owned by the scene tables.
+Object writes attach/update incarnation-qualified member/group IDs; object
+reset removes membership and the last member immediately retires the group.
+Dense table resets clear the index, while retained-table frames keep it.
+No per-frame actor-to-mesh hash map is reconstructed. Capture samples one
+representative per actor at the existing safe boundary. Only a changed output
+fans out over all members; unchanged actors visit only newly joined or
+explicitly reinitialized mesh rows. Updates consume a complete scene-writer
+batch and publish the same output to every affected part before payload build.
+
+The index contains no engine pointers and copies independently for table parity.
+Skin still owns shared native/DCLF once-per-frame fade advancement. Position,
+water, death and stamina sampling, Skin's legacy cache retirement, and actor
+shading sampling remain; this is not complete actor writer coverage. No new
+engine-address hook is needed for membership because the existing scene writers
+already observe the necessary object lifecycle transitions.
+
+CPU tests cover unchanged-output elision, multipart fan-out, equipment join,
+reinitialized rows, representative detach, actor/slot incarnation replacement,
+last-member retirement, reset and independent snapshots. Runtime parity checks
+membership and output against the original actor list using the same frame's
+cached Skin outputs. Tracy plots expose sampled actors, changed actors and
+visited mesh rows under `CS.DCLF.Wetness.*`.
+
+Scene-record rewrites now retain the wetness row when both member and group
+incarnations match. Previously every rewrite zeroed it, defeating changed-only
+propagation. New/replaced identities still initialize their rows and are admitted
+as pending members. Group/member arrays are dense; writer-only reverse lookup
+and swap removal avoid node-based traversal in the capture loop. The tests also
+compare 1,000 randomized event batches against full same-input derivation.
+
+Intermediate validation: `20260927-201621-actor-index-parity` (45.14 s) passed
+membership/value checks but still propagated almost every rewritten row.
+After retaining those rows, `20260927-201935-actor-index-retained-parity`
+(44.99 s) propagated 245–288 of about 1,450 mesh rows in later checks with zero
+differences, but ended in a GPU device loss. Decoded Aftermath evidence in
+that directory reports `Error_DMA_PageFault`, without a fault address or shader
+attribution. The earlier 19:40 dump has the same error class, not proof of the
+same root cause. The retained pre-change control
+`20260927-202143-actor-index-control` (44.54 s) and candidate repeat
+`20260927-202245-actor-index-retained-repeat` (44.50 s) both completed without
+device loss. The repeat's wetness checks and main ownership checks passed.
+The node-based candidate was slower (wetness 78/137/329 us p50/p95/p99 versus
+57/82/124 us in that control), motivating dense storage before promotion.
+The intermittent GPU fault remains unresolved; a clean repeat is not a fix.
+
+The dense candidate (`20260927-202552-actor-index-dense-parity`, 44.54 s)
+completed without device loss, membership/value mismatches or main ownership
+holes. Later checks visited 225–320 of 1,448–1,462 mesh rows, sampling
+177–179 actors. Wetness p50/p95/p99 were 51/89/312 us; this scope includes
+the new periodic full wetness parity check, so its tail is not comparable to
+the prior build without that check. Accumulator timings were 805/1,170/1,416 us.
+Existing shadow-membership disagreement remains tracked separately.
+
+Final normal-mode comparison (parity disabled for both, same demanding save):
+
+| Zone (us p50/p95/p99) | Retained control | Dense actor index |
+|---|---:|---:|
+| Wetness | 50.5 / 70.4 / 106.8 | 49.7 / 72.6 / 85.2 |
+| Accumulator | 645.6 / 948.3 / 1,132.4 | 712.6 / 1,028.1 / 1,186.5 |
+
+Control: `20260927-202807-actor-index-control-normal` (44.28 s, 955 wetness
+samples). Candidate: `20260927-202703-actor-index-dense-normal` (44.56 s,
+934 samples). Both completed without device loss or main claimed-but-undrawn
+objects. The candidate claimed about 2,622 objects versus 2,512 in the control;
+these evolving-scene runs are not a workload-identical A/B. Median wetness cost
+is effectively flat; the structural result is removal of the unconditional
+per-mesh wetness pass, not a demonstrated overall frame-time win.
+
+The final deployed candidate hash is
+`DA90226E3AE172F9C1D1E5BCC21A881DA5EAA541F0BBA441EC47B66A1C2A3707`.
+All four CPU tests pass. No equipment/water/cell-transition scenario or GPU
+debug-layer run is claimed by these demanding-save captures. Remaining next
+steps are actor-value notification coverage and lifecycle-owned shared Skin
+state, resource leases for every descriptor consumer, static-classification
+writers, and migration of captured derivation to the publication coordinator.

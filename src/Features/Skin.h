@@ -115,6 +115,7 @@ struct Skin : Feature
 
 	struct ActorWetnessCacheEntry
 	{
+		const RE::TESObjectREFR* actor = nullptr;  // identity check only; never dereferenced from the cache
 		float4 wetness = { 0.0f, 0.0f, 0.0f, 0.0f };
 		uint frameCount = 0;
 	};
