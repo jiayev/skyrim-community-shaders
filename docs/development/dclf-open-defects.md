@@ -96,26 +96,36 @@ over several calls. At the new save the bound is past 16,384: the buffers grew t
 `BuildDraws` parity 18 of 18 and decal parity 158 slots, 0 differ; set parity no damage, nothing withheld and drawn by
 nobody; persistent parity 0 differ; `SKYLIGHT_PARITY` in range.
 
-## The render graph's upload submission failed once (intermittent)
+## Resolved: the render graph's upload submission failed (intermittent), and the scene vanished after it
 
-**Evidence.** One `CS_DCLF_TABLE_START=small` run (`draws-small`, 2026-09-28) disabled the graph 18 seconds in:
-`Async epochs could not submit their uploads` (`PersistentGraphHost.cpp`, the upload list's `Submit` returned an error).
-No Aftermath dump was written, so the device was not lost. The same message ended `step24-still-off` (an earlier build,
-before the growable tables), and the rerun with the same switches (`draws-small2`) ran clean.
+**Evidence.** Four runs between 2026-09-28 and 2026-09-29 disabled the graph with `Async epochs could not submit their
+uploads (rhi::Result InvalidArgument)`, seconds to minutes in, with no device loss. In `p6-cb2` (2026-09-29, the camera
+being turned by hand) the new BasicRHI message named the rejected command: `Vulkan buffer copy rejected: 1024 bytes ...
+(+12288 of 2097152), the list not recording`. The copy was in range: the command list was not recording. After the
+failure every object DCLF had claimed stayed withheld from the engine's batch renderer and was drawn by nobody (80,000 to
+190,000 holes per 300 frames, `static ownership: ... 1205 claimed but not drawn`), and the frame rate fell.
 
-A second occurrence (`fixclean-parity`, 2026-09-29, the full featureset with the parity switches on) named the result:
-`rhi::Result 17`, **`InvalidArgument`**, 10 seconds after the first epoch. So it is not a transient queue error: the
-upload list's `Submit` rejected something in what the epoch handed it.
+**Cause 1: ORG's stale-ticket reprepare raced the host thread** (`PersistentGraphHost::SubmitTicket`). The render thread
+fixed its frame slot from the ticket, and on a stale ticket posted `Discard` and then `PrepareNow(slot)`, two messages.
+`Discard` marked the epoch as needing a ticket, so the host thread's proactive pass could prepare one between the two
+messages, into a slot of its own choosing. The render thread took that ticket from `WaitTicket` but recorded its uploads
+into the list of its original slot, which nobody had begun again; the late `PrepareNow` then recycled a list that was in
+use. It needed a stale ticket (DCLF's shadow and Z-prepass epochs go stale on a few percent of frames, more while the
+camera turns) and the host thread winning that window, hence the rarity.
 
-**Where.** The one place BasicRHI's Vulkan backend records `InvalidArgument` on a command list is
-`cl_copyBufferRegion`: a copy past its source's or destination's size marks the list, and its `Submit` fails. The async
-host records the staged uploads (`UploadInstance::RecordStagedUploads`) against each target's backing at record time,
-so the likeliest cause is a copy staged against another size of its target than the one current when it is recorded.
-Both now say so: BasicRHI logs the rejected copy (`Vulkan buffer copy rejected: ...`, the handles, offsets and sizes)
-and ORG logs the target by name (`staged upload of ... into '<name>' is past its ... bytes`); the host's message names
-the result (`rhi::Result InvalidArgument`).
+**Fix (2026-09-29, both ORG copies).** A discard now carries the slot to reprepare into, and the host thread prepares the
+replacement in the same step, so no other ticket for the epoch can appear in between; `PrepareNow` is gone. The render
+thread fails hard (`std::logic_error`) if the ticket it gets back is not for the slot it records.
 
-**Next step.** On the next occurrence, the named buffer says which producer staged against the wrong size.
+**Cause 2: claims outlived a dead graph** (`IndirectDraws::PublishClaims`). A claim is dropped a frame after its last
+draw, and "not drawn any more" was only learnt from a colour build's changes. With no colour epoch nothing reported the
+undraws, so the claims stood forever; the shadow claims likewise, republished only by a successful shadow epoch.
+
+**Fix.** A frame with no colour commit undraws every drawn slot (so the claims lapse on the usual one-frame path) and asks
+the next colour build for every slot; while the graph is not running the shadow claims are cleared every frame.
+
+**Validated.** `p6-fix-parity` (camera turning, build, persistent and resident parity): every check OK, 0 holes, 0 claimed
+but not drawn, no errors.
 
 ## Resolved: device loss in every DCLF draw pass after the split records (Phase 3)
 
