@@ -1051,7 +1051,6 @@
     "feature.linear_lighting.particle_effects_multiplier": "Particle Effects Multiplier",
     "feature.linear_lighting.point_light_multiplier": "Point Light Multiplier",
     "feature.linear_lighting.projected_effects_multiplier": "Projected Effects Multiplier",
-    "feature.linear_lighting.startup_settings": "Linear Lighting and working color space settings require a restart.",
     "feature.linear_lighting.tab_advanced": "Advanced",
     "feature.linear_lighting.tab_general": "General",
     "feature.linear_lighting.vanilla_diffuse_color_multiplier": "Vanilla Diffuse Color Multiplier",
