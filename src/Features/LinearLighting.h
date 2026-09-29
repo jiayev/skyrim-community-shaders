@@ -50,6 +50,15 @@ struct LinearLighting : Feature
 		float projectedEffectMult = 1.0f;
 		float deferredEffectMult = 1.0f;
 		float otherEffectMult = 1.0f;
+
+		// Effect classes Effects 11 derives from shader flags
+		float particleEffectMult = 1.0f;
+		float lightSpriteEffectMult = 1.0f;
+		float fireEffectMult = 1.0f;
+		float fireEffectCurve = 1.0f;
+
+		static constexpr float FireEffectCurveMin = 0.1f;
+		static constexpr float FireEffectCurveMax = 8.0f;
 	} settings;
 
 	struct alignas(16) PerFrameData
@@ -66,12 +75,18 @@ struct LinearLighting : Feature
 		float projectedEffectMult;
 		float deferredEffectMult;
 		float otherEffectMult;
+		float particleEffectMult;
+		float lightSpriteEffectMult;
+		float fireEffectMult;
+		float fireEffectCurve;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
 	/** @brief Draws the ImGui settings UI for color management and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
 	virtual void PostSetupResources() override;
+	/** @brief Recompiles shaders when the Linear Lighting or ACEScg toggles no longer match the active permutation. */
+	virtual void Reset() override;
 	virtual void ClearShaderCache() override;
 	virtual void ModifySharedLighting(SharedLighting& lighting) override;
 	virtual void Load() override;
@@ -98,4 +113,5 @@ private:
 
 	bool configuredLinearLighting = false;
 	bool configuredACEScg = false;
+	bool resourcesReady = false;
 };

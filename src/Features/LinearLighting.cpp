@@ -13,6 +13,7 @@
 #include "SkySync.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
+#include "Utils/VersionedRelocation.h"
 
 #include "JiayeStatement.h"
 
@@ -33,13 +34,16 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	bloodEffectMult,
 	projectedEffectMult,
 	deferredEffectMult,
-	otherEffectMult)
+	otherEffectMult,
+	particleEffectMult,
+	lightSpriteEffectMult,
+	fireEffectMult,
+	fireEffectCurve)
 
 void LinearLighting::DrawSettings()
 {
 	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
-	ImGui::TextDisabled("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
 	if (globals::features::effects11.IsActive())
 		ImGui::TextDisabled("%s", T(TKEY("effects11_override"), "Effects 11 overrides Linear Lighting while UseEffect is enabled."));
 
@@ -66,6 +70,10 @@ void LinearLighting::DrawSettings()
 				ImGui::SliderFloat(T(TKEY("projected_effects_multiplier"), "Projected Effects Multiplier"), &settings.projectedEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("deferred_effects_multiplier"), "Deferred Effects Multiplier"), &settings.deferredEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("other_effects_multiplier"), "Other Effects Multiplier"), &settings.otherEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("particle_effects_multiplier"), "Particle Effects Multiplier"), &settings.particleEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("light_sprite_effects_multiplier"), "Light Sprite Effects Multiplier"), &settings.lightSpriteEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_multiplier"), "Fire Effects Multiplier"), &settings.fireEffectMult, 0.0f, 10.0f, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax, "%.2f");
 				ImGui::TreePop();
 			}
 
@@ -83,6 +91,7 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
 		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
+	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax);
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -99,6 +108,21 @@ void LinearLighting::PostSetupResources()
 {
 	if (configuredLinearLighting && !globals::features::effects11.IsPresetEnabled() && !globals::features::postProcessing.loaded)
 		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
+	resourcesReady = true;
+}
+
+void LinearLighting::Reset()
+{
+	if (!resourcesReady)
+		return;
+	// Without Post Processing's display transform the toggle stays inert instead of failing at runtime.
+	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	const bool acescg = linearLighting && settings.enableACEScg;
+	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg)
+		globals::shaderCache->Reload([this, linearLighting, acescg] {
+			configuredLinearLighting = linearLighting;
+			configuredACEScg = acescg;
+		});
 }
 
 void LinearLighting::ClearShaderCache()
@@ -151,6 +175,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = 1.0f;
 	data.deferredEffectMult = 1.0f;
 	data.otherEffectMult = 1.0f;
+	data.particleEffectMult = 1.0f;
+	data.lightSpriteEffectMult = 1.0f;
+	data.fireEffectMult = 1.0f;
+	data.fireEffectCurve = 1.0f;
 
 	data.isMainOrLoadingMenu = globals::state->IsMainOrLoadingMenuOpen();
 
@@ -175,6 +203,10 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	data.projectedEffectMult = settings.projectedEffectMult;
 	data.deferredEffectMult = settings.deferredEffectMult;
 	data.otherEffectMult = settings.otherEffectMult;
+	data.particleEffectMult = settings.particleEffectMult;
+	data.lightSpriteEffectMult = settings.lightSpriteEffectMult;
+	data.fireEffectMult = settings.fireEffectMult;
+	data.fireEffectCurve = settings.fireEffectCurve;
 	return data;
 }
 
@@ -251,6 +283,8 @@ namespace
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			if (!globals::features::linearLighting.IsLinearLightingActive())
+				return func(shader, pass, renderFlags);
 			if constexpr (Type == RE::BSShader::Type::Lighting) {
 				globals::state->permutationData.BaseTextureIsWorking = 0;
 				if (pass && pass->shaderProperty && pass->shaderProperty->material) {
@@ -480,6 +514,8 @@ namespace
 	{
 		static DWORD thunk(RE::UI3DSceneManager* manager, int scheme, RE::NiCamera* camera, bool arg4)
 		{
+			if (!globals::features::linearLighting.IsLinearLightingActive())
+				return func(manager, scheme, camera, arg4);
 			auto& renderToUI = globals::state->permutationData.RenderToUI;
 			const uint previous = renderToUI;
 			renderToUI = 1;
@@ -554,9 +590,8 @@ void LinearLighting::Load()
 {
 	configuredLinearLighting = loaded && settings.enableLinearLighting;
 	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
-	if (!configuredLinearLighting)
-		return;
 
+	// Installed regardless of the toggle so Reset() can enable Linear Lighting without a restart.
 	struct UploadCall : Xbyak::CodeGenerator
 	{
 		UploadCall(uintptr_t target, bool waterMaterial = false)
@@ -576,7 +611,7 @@ void LinearLighting::Load()
 	const std::array calls{
 		std::tuple{ "Lighting material"sv, REL::RelocationID(100563, 107298).address() + REL::Relocate(0xACD, 0xC65), lightingMaterial.getCode() },
 		std::tuple{ "Effect material"sv, REL::RelocationID(100744, 107525).address() + REL::Relocate(0x3E2, 0x3E3), effectMaterial.getCode() },
-		std::tuple{ "Lighting geometry"sv, REL::RelocationID(100565, 107300).address() + REL::Relocate(0xC1E, 0x12F0), reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
+		std::tuple{ "Lighting geometry"sv, REL::RelocationID(100565, 107300).address() + Util::VersionedRelocation::Select(0xC1E, 0x12F0, 0x1312), reinterpret_cast<const uint8_t*>(LightingGeometryUpload::thunk) },
 		std::tuple{ "Effect geometry"sv, REL::RelocationID(100746, 107527).address() + REL::Relocate(0xF16, 0xE6F), reinterpret_cast<const uint8_t*>(EffectGeometryUpload::thunk) },
 		std::tuple{ "Water material"sv, REL::RelocationID(100602, 107363).address() + REL::Relocate(0x5FA, 0x626), waterMaterial.getCode() }
 	};

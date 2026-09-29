@@ -1861,8 +1861,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	pbrVertexColor = pbrVertexAO == 0.0f ? 1.0f : pbrVertexColor * lerp(1 / max(pbrVertexAO, 0.001), 1, SharedData::truePBRSettings.VertexAOStrength);
 	pbrVertexColor = Color::LinearSRGBToWorking(pbrVertexColor);
 
-	baseColor.xyz *= pbrVertexColor;
+	baseColor.xyz = Color::PBRMaterialToLinear(baseColor.xyz) * pbrVertexColor;
 	material.F0 = lerp(rawRMAOS.w, baseColor.xyz, material.Metallic);
+	baseColor.xyz = Color::LinearToPBRMaterial(baseColor.xyz);
 
 	material.GlintScreenSpaceScale = max(1, glintParameters.x);
 	material.GlintLogMicrofacetDensity = clamp(PBR::Constants::MaxGlintDensity - glintParameters.y, PBR::Constants::MinGlintDensity, PBR::Constants::MaxGlintDensity);
@@ -1890,7 +1891,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			float4 sampledSubsurfaceProperties = TexRimSoftLightWorldMapOverlaySampler.Sample(SampRimSoftLightWorldMapOverlaySampler, uv);
 
 			material.SubsurfaceColor *= Color::Albedo(Color::LinearSRGBToWorking(sampledSubsurfaceProperties.xyz));
-			material.SubsurfaceColor *= pbrVertexColor;
+			material.SubsurfaceColor *= Color::LinearToPBRMaterial(pbrVertexColor);
 
 			material.Thickness *= sampledSubsurfaceProperties.w;
 		}
@@ -2618,7 +2619,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		emitVertexColor = emitVertexAO == 0.0f ? 1.0f : emitVertexColor * lerp(1 / max(emitVertexAO, 1e-4), 1, SharedData::truePBRSettings.VertexAOStrength);
 		emitVertexColor = Color::LinearSRGBToWorking(emitVertexColor);
 
-		emitColor = emitColor * glowColor * emitVertexColor;
+		emitColor = emitColor * Color::LinearToPBRMaterial(glowColor) * Color::LinearToPBRMaterial(emitVertexColor);
 #		else
 		emitColor *= glowColor;
 #		endif  // TRUE_PBR
