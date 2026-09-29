@@ -618,13 +618,13 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 
 void SceneSettingsManager::Update()
 {
-	ProfilerPassScope profilerPass("SceneSettingsManager::Update");
 	if (globals::state) {
 		const auto frame = globals::state->frameCount;
 		if (lastUpdateFrame == frame)
 			return;
 		lastUpdateFrame = frame;
 	}
+	ProfilerPassScope profilerPass("SceneSettingsManager::Update");
 	// Nothing retained them since the last Update: the menu closed or left the feature.
 	if (!std::exchange(sketchesRetained, false))
 		DropSketches();
