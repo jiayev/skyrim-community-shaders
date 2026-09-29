@@ -362,8 +362,6 @@ bool SkySync::Update(const RE::Sky* sky)
 	ProcessMoon(sky, Caster::Masser, directions, intensities);
 	ProcessMoon(sky, Caster::Secunda, directions, intensities);
 	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
-
-	std::copy(std::begin(directions), std::end(directions), std::begin(rawDirections));
 	const auto calendar = globals::game::calendar;
 	const auto deltaTime = globals::game::deltaTime;
 	float fadeAdvance = calendar && deltaTime ? std::max(*deltaTime * calendar->GetTimescale(), 0.0f) : 0.0f;

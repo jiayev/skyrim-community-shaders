@@ -166,7 +166,6 @@ private:
 	float lastGameHour = -1.0f;
 	bool immediateTransitionReady = false;
 
-	RE::NiPoint3 rawDirections[3] = {};
 	float4 colors[3] = {};
 	RE::NiPoint3 rawDirections[3] = {};  // sky-local, before shadow elevation locking; zero when not computed this frame
 	float currentDim = 1.0f;
