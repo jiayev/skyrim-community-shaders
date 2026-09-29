@@ -374,8 +374,7 @@ namespace PostProcessingExtensions
 				return;
 
 			// Post Processing runs its pipeline into kMAIN/kMAIN_COPY, then lets the vanilla
-			// pass run so ISHDR can take its POSTPROCESS passthrough branch. It also runs when
-			// the vanilla tonemap owns the frame, since most of its effects are pre-tonemap.
+			// pass run so ISHDR can take its POSTPROCESS passthrough branch.
 			auto& postProcessing = globals::features::postProcessing;
 			if (postProcessing.loaded)
 				postProcessing.PreProcess(input);

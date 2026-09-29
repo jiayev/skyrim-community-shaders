@@ -99,11 +99,11 @@ public:
 	 * coexist: Effects11 skips the whole pass, while Post Processing relies on it running
 	 * so ISHDR can take its passthrough branch. Exactly one owner is resolved per frame.
 	 */
-	enum class TonemapOwner
+	enum class TonemapOwner : uint
 	{
-		kVanilla,         ///< Vanilla ISHDR tonemap runs unmodified.
-		kPostProcessing,  ///< Post Processing pipeline drives tonemapping.
-		kEffects11        ///< Effects11 (ENB-compatible) replaces the pass entirely.
+		kVanilla = 0,         ///< Vanilla ISHDR tonemap runs unmodified.
+		kPostProcessing = 1,  ///< Post Processing pipeline drives tonemapping.
+		kEffects11 = 2        ///< Effects11 (ENB-compatible) replaces the pass entirely.
 	};
 
 	/**

@@ -350,8 +350,5 @@
             "Power": 3.0
         }
     },
-    "ppsettings": {
-        "DisableVanillaTonemapping": 1
-    },
     "preset_name": "default ll psky"
 }
