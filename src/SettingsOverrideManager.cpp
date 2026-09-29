@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "FeatureIssues.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "Util.h"
 #include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
@@ -32,6 +33,29 @@ namespace
 	constexpr size_t MAX_OVERRIDE_FILE_SIZE = 1024 * 1024;
 	constexpr int kOverrideJsonIndent = 2;
 
+	/**
+	 * @brief Whether every value the overlay defines is unchanged in current, at any depth.
+	 * @details Keys missing from either side are skipped, so an override covering part of a nested group
+	 *          still compares equal. Numbers use a tolerance because JSON stores float64 while features hold float32.
+	 */
+	bool OverlayUnchanged(const json& current, const json& overlay)
+	{
+		if (current.is_object() && overlay.is_object()) {
+			for (const auto& [key, value] : overlay.items()) {
+				const auto found = current.find(key);
+				if (found != current.end() && !OverlayUnchanged(*found, value))
+					return false;
+			}
+			return true;
+		}
+		if (current.is_number() && overlay.is_number()) {
+			const double currentValue = current.get<double>();
+			const double overlayValue = overlay.get<double>();
+			return std::abs(currentValue - overlayValue) <= std::max(1e-6, std::abs(overlayValue) * 1e-5);
+		}
+		return current == overlay;
+	}
+
 	/** @brief Parses an override file without the discovery-time filename and sanitization passes. */
 	bool ReadOverrideDocument(const std::filesystem::path& path, json& document)
 	{
@@ -61,15 +85,45 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 	overrides.clear();
 	featureOverrideMap.clear();
 
-	auto overridesDir = GetOverridesDirectory();
+	// Overrides/ first, then each enabled pack in layering order: later files win merge conflicts.
+	DiscoverDirectory(GetOverridesDirectory(), {});
+	for (const auto& packId : UnifiedPresetCatalog::GetSingleton().GetBaselinePackIds()) {
+		DiscoverDirectory(Util::PathHelpers::GetUnifiedPackPath(packId) / UnifiedPresetCatalog::kBaselineSubdir, packId);
+	}
 
+	discovered = true;
+	logger::info("Discovered {} override files", overrides.size());
+	return overrides.size();
+}
+
+std::string SettingsOverrideManager::ParseBaselineFeatureName(const std::filesystem::path& filePath)
+{
+	const auto filename = filePath.filename().string();
+	if (filePath.extension() != ".json" || filename.empty() || filename[0] == '.' || filename[0] == '~') {
+		return {};
+	}
+
+	auto name = filePath.stem().string();
+	if (const auto underscore = name.find_last_of('_'); underscore != std::string::npos) {
+		name.erase(0, underscore + 1);
+	}
+	return name;
+}
+
+size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& overridesDir, const std::string& packId)
+{
 	if (!std::filesystem::exists(overridesDir)) {
-		logger::info("Overrides directory does not exist: {}", overridesDir.string());
-		discovered = true;
+		logger::info("Override directory does not exist: {}", overridesDir.string());
 		return 0;
 	}
 
 	logger::info("Discovering override files in: {}", overridesDir.string());
+
+	const auto identify = [&](const std::filesystem::path& path) -> std::pair<std::string, std::string> {
+		if (packId.empty())
+			return ParseOverrideFilename(path.filename().string());
+		return { packId, ParseBaselineFeatureName(path) };
+	};
 
 	size_t filesProcessed = 0;
 	size_t filesLoaded = 0;
@@ -121,7 +175,7 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 			}
 
 			try {
-				auto overrideInfo = LoadOverrideFile(entry.path());
+				auto overrideInfo = LoadOverrideFile(entry.path(), packId);
 				if (overrideInfo) {
 					size_t index = overrides.size();
 					overrides.push_back(std::move(*overrideInfo));
@@ -143,7 +197,7 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 						override.isGlobal ? "Global" : override.featureName);
 				} else {
 					// LoadOverrideFile returned nullptr, parse filename to report error
-					auto [modName, featureName] = ParseOverrideFilename(entry.path().filename().string());
+					auto [modName, featureName] = identify(entry.path());
 					if (!modName.empty()) {
 						ReportOverrideFailure(modName, featureName, "File could not be loaded or parsed");
 					}
@@ -152,7 +206,7 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 				logger::info("Error loading override file {}: {}", entry.path().string(), e.what());
 
 				// Report to Feature Issues
-				auto [modName, featureName] = ParseOverrideFilename(entry.path().filename().string());
+				auto [modName, featureName] = identify(entry.path());
 				if (!modName.empty()) {
 					ReportOverrideFailure(modName, featureName, e.what());
 				}
@@ -165,9 +219,8 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 		logger::info("Unexpected error during override discovery: {}", e.what());
 	}
 
-	discovered = true;
-	logger::info("Discovered {} override files ({} processed)", filesLoaded, filesProcessed);
-	return overrides.size();
+	logger::info("Loaded {} override files from {} ({} processed)", filesLoaded, overridesDir.string(), filesProcessed);
+	return filesProcessed;
 }
 
 size_t SettingsOverrideManager::ApplyOverrides(const std::string& featureName, json& featureJson)
@@ -392,7 +445,7 @@ std::filesystem::path SettingsOverrideManager::GetAppliedOverridesTrackingPath()
 	return Util::PathHelpers::GetAppliedOverridesPath();
 }
 
-std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::LoadOverrideFile(const std::filesystem::path& filePath)
+std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::LoadOverrideFile(const std::filesystem::path& filePath, const std::string& packId)
 {
 	try {
 		// Check file size to prevent loading extremely large files
@@ -453,11 +506,19 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 
 		auto overrideInfo = std::make_unique<OverrideInfo>();
 
-		auto [modName, featureName] = ParseOverrideFilename(filePath.filename().string());
+		auto [modName, featureName] = packId.empty() ?
+		                                  ParseOverrideFilename(filePath.filename().string()) :
+		                                  std::pair<std::string, std::string>{ packId, ParseBaselineFeatureName(filePath) };
 
 		// Validate mod name and feature name
 		if (modName.empty() || modName.length() > MAX_STRING_LENGTH) {
 			logger::info("Invalid mod name in override file: {}", filePath.string());
+			return nullptr;
+		}
+
+		// Pack files are per-feature only; this is what keeps Advanced/General/Menu keys (e.g. compiler threads) unshippable.
+		if (!packId.empty() && !Feature::FindFeatureByShortName(featureName)) {
+			logger::warn("Baseline file {} targets '{}', which is not a feature; skipping", filePath.string(), featureName);
 			return nullptr;
 		}
 
@@ -470,6 +531,7 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		overrideInfo->featureName = featureName;
 		overrideInfo->filePath = filePath.string();
 		overrideInfo->isGlobal = featureName.empty();
+		overrideInfo->packId = packId;
 		overrideInfo->fileHash = ComputeContentHash(fileContent);
 
 		// Extract and validate metadata if present
@@ -1023,35 +1085,11 @@ bool SettingsOverrideManager::SaveUserOverride(const std::string& featureName, c
 		return false;
 	}
 
-	// Compare only the keys that BOTH exist in overrides AND in current settings
+	// Compare only the keys that BOTH exist in overrides AND in current settings, at every depth.
 	// Keys that the override defines but the feature doesn't save should be ignored
-	// (they might be for nested settings or deprecated options)
-	bool hasDifferences = false;
-	for (const auto& [key, overrideValue] : overrideSettings.items()) {
-		// Skip keys that the feature doesn't save - can't track user changes to them
-		if (!currentSettings.contains(key)) {
-			continue;
-		}
-
-		const auto& currentValue = currentSettings[key];
-
-		// For numeric values, compare with tolerance to handle float32/float64 precision differences
-		// JSON stores floats as float64, but C++ features often use float32, causing precision loss
-		if (currentValue.is_number() && overrideValue.is_number()) {
-			double current = currentValue.get<double>();
-			double override = overrideValue.get<double>();
-			double diff = std::abs(current - override);
-			// Use relative tolerance for larger values, absolute for small values
-			double tolerance = std::max(1e-6, std::abs(override) * 1e-5);
-			if (diff > tolerance) {
-				hasDifferences = true;
-				break;
-			}
-		} else if (currentValue != overrideValue) {
-			hasDifferences = true;
-			break;
-		}
-	}
+	// (they might be for nested settings or deprecated options).
+	const bool hasDifferences = currentSettings.is_object() && overrideSettings.is_object() &&
+	                            !OverlayUnchanged(currentSettings, overrideSettings);
 
 	if (!hasDifferences) {
 		// User hasn't changed any overridden settings, delete user file if it exists
@@ -1238,7 +1276,8 @@ bool SettingsOverrideManager::DeleteFile(const std::string& filePath)
 {
 	// Only files this manager discovered are eligible, which keeps deletion inside the overrides directory.
 	const auto found = std::ranges::find(overrides, filePath, &OverrideInfo::filePath);
-	if (found == overrides.end() || !IsApplicable(*found)) {
+	// Pack files belong to the preset pack, which is managed from the Presets page.
+	if (found == overrides.end() || !found->packId.empty() || !IsApplicable(*found)) {
 		return false;
 	}
 
@@ -1256,7 +1295,7 @@ bool SettingsOverrideManager::DeleteFile(const std::string& filePath)
 }
 
 bool SettingsOverrideManager::ExportSettings(const std::string& modName, const std::string& featureName,
-	std::span<const std::string> settingPaths, const json& featureSettings)
+	std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack)
 {
 	const auto safeName = Util::FileHelpers::SanitizeFileName(modName);
 	auto* feature = Feature::FindFeatureByShortName(featureName);
@@ -1277,7 +1316,18 @@ bool SettingsOverrideManager::ExportSettings(const std::string& modName, const s
 		return false;
 	}
 
-	const auto destination = GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
+	std::filesystem::path destination;
+	if (toPresetPack) {
+		// The real path, not the VFS one, so the export lands in a folder the user can actually write to.
+		const auto packRoot = UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath() / safeName;
+		Util::FileHelpers::EnsureDirectoryExists(packRoot / UnifiedPresetCatalog::kBaselineSubdir);
+		if (!UnifiedPresetCatalog::EnsureBaselineManifest(packRoot, modName)) {
+			return false;
+		}
+		destination = packRoot / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName);
+	} else {
+		destination = GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
+	}
 
 	// Merge into an existing file of the same name so repeated exports accumulate rather than truncate,
 	// reading it raw so any _metadata the author wrote survives.

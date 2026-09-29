@@ -150,6 +150,9 @@ void OverlayRenderer::RenderOverlay(
 	float& cachedFontSize,
 	float currentFontSize)
 {
+	// Always sync — including frames that skip drawing — so closing the last CS UI restores vanity.
+	menu.SyncVanityCamera();
+
 	processInputEventQueue();
 
 	if (ShouldSkipRendering()) {

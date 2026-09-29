@@ -18,6 +18,10 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "Feature.h"
+#include "Features/Effects11.h"
+#include "Features/Effects11/PresetManager.h"
+#include "Presets/PresetCompatibility.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
@@ -106,7 +110,13 @@ namespace
 	void ResetFormFields()
 	{
 		form = {};
-		form.type = globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11 ? PresetType::E11 : PresetType::CS;
+		const bool e11Ready = globals::features::effects11.loaded &&
+		                      PresetManager::GetSingleton().CanExportActivePreset();
+		form.type = (e11Ready && globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11) ?
+		                PresetType::E11 :
+		                PresetType::CS;
+		form.csVersion = PresetCompatibility::CurrentCsVersionString();
+		form.requiredFeatures.clear();
 		presetTags.clear();
 		existingLogo.clear();
 		existingCover.clear();
@@ -131,6 +141,10 @@ namespace
 		}
 		if (!meta.version.empty())
 			form.version = meta.version;
+		if (!meta.csVersion.empty())
+			form.csVersion = meta.csVersion;
+		if (form.requiredFeatures.empty())
+			form.requiredFeatures = meta.requiredFeatures;
 		existingLogo = meta.logo;
 		existingCover = meta.cover;
 		existingScreenshots = meta.screenshots;
@@ -140,6 +154,64 @@ namespace
 		form.logoSource.clear();
 		form.coverSource.clear();
 		form.screenshotSources.clear();
+	}
+
+	bool IsFeatureRequired(const std::string& shortName)
+	{
+		return std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName) !=
+		       form.requiredFeatures.end();
+	}
+
+	void SetFeatureRequired(const std::string& shortName, bool required)
+	{
+		const auto it = std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName);
+		if (required && it == form.requiredFeatures.end())
+			form.requiredFeatures.push_back(shortName);
+		else if (!required && it != form.requiredFeatures.end())
+			form.requiredFeatures.erase(it);
+	}
+
+	/// Compact CS version + feature checklist, sized like the artwork column beside it.
+	void DrawCompatibilityBox()
+	{
+		ImGui::BeginChild("##SceneExportCompat", ImVec2(0.0f, 0.0f),
+			ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+		ImGui::TextUnformatted(T(TKEY("scene_export_compat"), "Compatibility"));
+		Util::AddTooltip(T(TKEY("scene_export_compat_tooltip"),
+			"Records which Community Shaders build and features this pack expects. The Presets browser warns when they do not match."));
+
+		ImGui::TextUnformatted(T(TKEY("scene_export_cs_version"), "CS version"));
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputTextWithHint("##ScenePresetExportCsVersion",
+			T(TKEY("scene_export_cs_version_hint"), "e.g. 0.8.0"), &form.csVersion);
+		Util::AddTooltip(T(TKEY("scene_export_cs_version_tooltip"),
+			"Community Shaders version this pack was made with. Defaults to your current build."));
+
+		ImGui::TextUnformatted(T(TKEY("scene_export_features"), "Required features"));
+		const float listHeight = ImGui::GetTextLineHeightWithSpacing() * 5.5f + ImGui::GetStyle().FramePadding.y * 2.0f;
+		if (ImGui::BeginChild("##SceneExportFeatures", ImVec2(0.0f, listHeight), ImGuiChildFlags_Borders)) {
+			auto features = Feature::GetFeatureList();
+			std::sort(features.begin(), features.end(), [](Feature* a, Feature* b) {
+				return a->GetDisplayName() < b->GetDisplayName();
+			});
+			for (auto* feature : features) {
+				if (!feature || !feature->loaded || !feature->IsInMenu())
+					continue;
+				const auto shortName = feature->GetShortName();
+				bool required = IsFeatureRequired(shortName);
+				ImGui::PushID(shortName.c_str());
+				if (ImGui::Checkbox(feature->GetDisplayName().c_str(), &required))
+					SetFeatureRequired(shortName, required);
+				ImGui::PopID();
+			}
+		}
+		ImGui::EndChild();
+		ImGui::TextDisabled("%s",
+			I18n::GetSingleton()->Format("cs_editor.scene_export_features_count",
+				{ { "count", std::to_string(form.requiredFeatures.size()) } },
+				"{count} selected")
+				.c_str());
+		ImGui::EndChild();
 	}
 
 	/** @brief Splits on ',' or ';', trimming whitespace and dropping empty tags. */
@@ -268,7 +340,12 @@ namespace
 bool ScenePresetExport::CanExport()
 {
 	auto* manager = SceneSettingsManager::GetSingleton();
-	return manager && (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty());
+	if (!manager)
+		return false;
+	if (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty())
+		return true;
+	// E11-only export: no scene layer yet, but the live Effects 11 preset can still be written out.
+	return globals::features::effects11.loaded && PresetManager::GetSingleton().CanExportActivePreset();
 }
 
 void ScenePresetExport::Open(const SceneContextId& context)
@@ -302,11 +379,30 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		ImGui::TextUnformatted(T(TKEY("scene_export_type"), "Preset type"));
 		DrawPresetTypeOption(T(TKEY("scene_export_type_cs"), "CS Preset"), PresetType::CS);
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
-		DrawPresetTypeOption(T(TKEY("scene_export_type_e11"), "E11 Preset"), PresetType::E11);
+		const bool e11Ready = globals::features::effects11.loaded &&
+		                      PresetManager::GetSingleton().CanExportActivePreset();
+		{
+			ImGui::BeginDisabled(!e11Ready);
+			DrawPresetTypeOption(T(TKEY("scene_export_type_e11"), "E11 Preset"), PresetType::E11);
+			ImGui::EndDisabled();
+			if (!e11Ready)
+				Util::AddTooltip(T(TKEY("scene_export_type_e11_unavailable"),
+									 "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11."),
+					Util::kTooltipWhenDisabled);
+		}
+		if (!e11Ready && form.type == PresetType::E11)
+			form.type = PresetType::CS;
+		if (form.type == PresetType::E11) {
+			ImGui::TextDisabled("%s", T(TKEY("scene_export_type_e11_hint"),
+				"Copies the active ENB files into Presets/<Name>/effects11/."));
+		}
 		ImGui::Separator();
 
 		ImGui::TextWrapped(
-			"%s", T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
+			"%s", form.type == PresetType::E11 ?
+			          T(TKEY("scene_export_scope_e11"),
+				  "Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.") :
+			          T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
 		ImGui::Separator();
 
 		const auto& modNames = GetCachedModNames(manager);
@@ -350,13 +446,21 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		Util::AddTooltip(T(TKEY("scene_export_tags_tooltip"), "Example: interior, weather, cinematic"));
 
 		ImGui::Separator();
-		ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
-		ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
-			"Images are copied into Presets/<Name>/ for the Presets browser."));
-		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
-		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
-			existingCover);
-		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
+		if (ImGui::BeginTable("##SceneExportArtCompat", 2, ImGuiTableFlags_SizingStretchSame)) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
+			ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
+				"Images are copied into Presets/<Name>/ for the Presets browser."));
+			DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
+			DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
+				existingCover);
+			DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
+
+			ImGui::TableNextColumn();
+			DrawCompatibilityBox();
+			ImGui::EndTable();
+		}
 
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
 		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);

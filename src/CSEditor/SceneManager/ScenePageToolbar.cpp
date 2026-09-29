@@ -87,7 +87,6 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 	const auto& style = ImGui::GetStyle();
 	auto* menu = Menu::GetSingleton();
 	const bool hasClearIcon = menu && menu->uiIcons.deleteSettings.texture;
-	// An image button is the image plus the same frame padding, so a font-sized icon matches the row.
 	const float clearIconSize = ImGui::GetFontSize();
 	const float clearWidth = hasClearIcon ? clearIconSize + style.FramePadding.x * 2.0f : ButtonWidth(clearLabel);
 	// The global duration only governs the location layer, so it is absent everywhere else.
@@ -176,7 +175,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 		ScenePresetExport::Open(context);
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
-						  "Writes every setting from every context out as an overwrite preset."),
+						  "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
 		Util::kTooltipWhenDisabled);
 
 	Util::ToolbarDivider();

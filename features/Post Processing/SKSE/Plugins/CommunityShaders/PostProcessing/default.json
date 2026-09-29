@@ -72,7 +72,7 @@
                 [0.0, 0.0, 0.0, 0.0]
             ],
             "useLog": true,
-            "useOpenDrts": false
+            "useOpenDrt": false
         }
     },
     "Composite": {

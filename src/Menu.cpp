@@ -34,6 +34,7 @@
 #include "Menu/IconLoader.h"
 #include "Menu/MenuHeaderRenderer.h"
 #include "Menu/OverlayRenderer.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "Menu/SettingsTabRenderer.h"
 #include "Menu/ThemeManager.h"
 #include "ShaderCache.h"
@@ -1058,7 +1059,11 @@ void Menu::ProcessInputEventQueue()
 				if (ew && ew->previewMode == EditorWindow::PreviewMode::FreeCamera) {
 					ew->AdjustFlySpeed(event.keyCode == 8 ? 1.0f : -1.0f);
 				}
-			} else if (!flying) {
+			} else if (flying) {
+				// Right-click exits free-cam / play mode (alongside the CSEditorToggleKey combo).
+				if (event.keyCode == 1 && event.IsPressed())
+					ew->ExitPreviewMode();
+			} else {
 				if (event.keyCode > 5)
 					event.keyCode = 5;
 				io.AddMouseButtonEvent(event.keyCode, event.IsPressed());
@@ -1227,7 +1232,9 @@ void Menu::ProcessInputEventQueue()
 				// Handle ESC key for menu and editor window
 				auto* editorWindow = EditorWindow::GetSingleton();
 				if (key == VK_ESCAPE) {
-					if (editorWindow && editorWindow->IsInPreviewMode()) {
+					if (PresetsPageRenderer::CloseLightboxIfOpen()) {
+						// Screenshot lightbox takes priority over closing the menu.
+					} else if (editorWindow && editorWindow->IsInPreviewMode()) {
 						editorWindow->ExitPreviewMode();
 					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
 						editorWindow->open = false;
@@ -1339,6 +1346,25 @@ bool Menu::ShouldSwallowInput()
 {
 	auto editorWindow = EditorWindow::GetSingleton();
 	return IsEnabled || HomePageRenderer::ShouldShowFirstTimeSetup() || (editorWindow && editorWindow->open);
+}
+
+void Menu::SyncVanityCamera()
+{
+	const bool wantDisabled = ShouldSwallowInput();
+	auto setting = RE::GetINISetting("fAutoVanityModeDelay:Camera");
+	if (!setting)
+		return;
+
+	if (wantDisabled && !vanityCameraDisabled) {
+		savedVanityCameraDelay = setting->GetFloat();
+		setting->data.f = 10000.0f;
+		vanityCameraDisabled = true;
+		logger::info("Vanity camera disabled while CS UI is open (saved delay: {})", savedVanityCameraDelay);
+	} else if (!wantDisabled && vanityCameraDisabled) {
+		setting->data.f = savedVanityCameraDelay;
+		vanityCameraDisabled = false;
+		logger::info("Vanity camera restored (delay: {})", savedVanityCameraDelay);
+	}
 }
 
 bool Menu::IsPreviewFlying()

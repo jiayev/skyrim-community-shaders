@@ -40,6 +40,10 @@ namespace SceneSettingsInternal
 	constexpr const char* kPresetMetadataLogoKey = "logo";
 	constexpr const char* kPresetMetadataCoverKey = "cover";
 	constexpr const char* kPresetMetadataScreenshotsKey = "screenshots";
+	/// Community Shaders MAJOR.MINOR.PATCH the preset was authored against.
+	constexpr const char* kPresetMetadataCsVersionKey = "csVersion";
+	/// Feature short names the preset expects to be loaded.
+	constexpr const char* kPresetMetadataRequiredFeaturesKey = "requiredFeatures";
 	constexpr const char* kTimeOfDayTransitionHoursKey = "periodTransitionHours";
 
 	using namespace Util::Settings;

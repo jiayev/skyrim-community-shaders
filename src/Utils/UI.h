@@ -199,14 +199,33 @@ namespace Util
 	 */
 	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected, int a_marked = -1);
 
-	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch. */
-	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
+	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch.
+	 *  @return True when the banner is left-clicked. */
+	bool StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
 
-	/** @brief When locked, draws a lock banner and greys every control until the scope ends. */
+	/** @brief Side length of DrawLockStatusBadge's rounded chip (scales with UI). */
+	float GetLockStatusBadgeSize();
+
+	/**
+	 * @brief Pale green/red rounded lock/unlock chip used by the CS Editor action bar and weather headers.
+	 * @param a_min Top-left of the badge in screen space.
+	 * @param a_locked True draws a lock in SuccessColor; false draws unlock in Error.
+	 * @param a_drawList Optional; defaults to the current window draw list.
+	 */
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList = nullptr);
+
+	/**
+	 * @brief Interactive lock badge that toggles via ButtonBehavior.
+	 * @return True on the frame the badge is clicked.
+	 */
+	bool LockStatusBadgeButton(const char* a_id, bool a_locked, const char* a_tooltip = nullptr);
+
+	/** @brief When locked, draws a lock banner and greys every control until the scope ends.
+	 *  @param a_outBannerClicked Optional; set when the banner is left-clicked (e.g. to navigate). */
 	class LockedSection
 	{
 	public:
-		LockedSection(bool a_locked, const char* a_message);
+		LockedSection(bool a_locked, const char* a_message, bool* a_outBannerClicked = nullptr);
 		~LockedSection();
 
 		LockedSection(const LockedSection&) = delete;
@@ -393,6 +412,19 @@ namespace Util
 	 */
 	bool BeginWithCustomHeader(const char* name, bool* p_open,
 		const std::function<void()>& drawExtras = nullptr, ImGuiWindowFlags flags = 0);
+
+	/**
+	 * @brief Shared height for CS Editor floating headers and the top action bar.
+	 * Native GetFrameHeight() is only FontSize + FramePadding.y*2, which makes glyphs look glued
+	 * to the top edge; this doubles the vertical pad so content sits dead-centre with equal air.
+	 */
+	float GetEditorChromeHeaderHeight();
+
+	/**
+	 * @brief Y offset from a chrome row's top to the ImGui text cursor so capital-letter ink is centred.
+	 * Uses FontBaked::Ascent (line-box top → bottom of 'A'), not the full FontSize em-box.
+	 */
+	float GetEditorChromeTextCursorOffsetY(float rowHeight);
 
 	/**
 	 * Button with simple flash feedback (matches action icon hover effect style)

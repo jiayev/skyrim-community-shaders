@@ -68,7 +68,7 @@ LightingTemplateWidget::~LightingTemplateWidget()
 void LightingTemplateWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(false, true, false, nullptr, "##LightingTemplateSearch")) {
 		DrawWidgetHeader("##LightingTemplateSearch", false, true);
 		DrawSearchDropdown();
 	}
@@ -118,21 +118,17 @@ void LightingTemplateWidget::DrawBasicSettings()
 
 	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kAmbientColor, LightingTemplateSetting::kDirectionalColor }), T(TKEY("ambient_directional"), "Ambient & Directional"), [&]() {
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kAmbientColor, settings.ambient);
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawColorEdit(LightingTemplateSetting::kDirectionalColor, settings.directional);
 	});
 
 	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kDirectionalXY, LightingTemplateSetting::kDirectionalZ, LightingTemplateSetting::kDirectionalFade }), T(TKEY("directional_settings"), "Directional Settings"), [&]() {
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalXY, settings.directionalXY, 0.0f, 360.0f);
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalZ, settings.directionalZ, 0.0f, 360.0f);
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kDirectionalFade, settings.directionalFade, 0.0f, 10.0f);
 	});
 
 	drawMatchedHeader(MatchesAnySearch({ LightingTemplateSetting::kLightFadeStart, LightingTemplateSetting::kLightFadeEnd }), T(TKEY("light_fade"), "Light Fade"), [&]() {
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kLightFadeStart, settings.lightFadeStart, 0.0f, 163840.0f);
-		ImGui::Spacing();
 		changed |= WeatherUtils::DrawSliderFloat(LightingTemplateSetting::kLightFadeEnd, settings.lightFadeEnd, 0.0f, 163840.0f);
 	});
 

@@ -185,6 +185,12 @@ namespace SceneWidgetBinding
 		/// Opens the page that can actually edit a greyed Unbound/Unavailable setting.
 		void NavigateGreyedSetting() const;
 
+		/** @brief Applies the same enable path as ticking the left override checkbox. */
+		void EnableOverride();
+		/** @brief Double-click / Ctrl+click / Shift+click on a greyed control ticks the override on.
+		 *  @return True when the gesture fired and the override was enabled. */
+		bool TryEnableOverrideFromGesture();
+
 		/** @brief Writes an edit into this control's entries, reviving a tombstone and creating missing entries first. */
 		void Commit();
 		/** @brief Draws the leading marker column.

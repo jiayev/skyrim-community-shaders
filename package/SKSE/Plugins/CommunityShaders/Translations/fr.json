@@ -55,9 +55,7 @@
     "cs_editor.color_stars": "Étoiles",
     "cs_editor.color_sun": "Soleil",
     "cs_editor.color_sunlight": "Lumière du soleil",
-    "cs_editor.colors_3_plus": "(Les couleurs utilisées 3 fois ou plus apparaîtront ici)",
     "cs_editor.colour": "Couleur",
-    "cs_editor.colours": "Couleurs",
     "cs_editor.confirm_delete_saved_file": "Êtes-vous sûr de vouloir supprimer le fichier de paramètres enregistré ?",
     "cs_editor.contribution": "Contribution",
     "cs_editor.copy_all_from_parent": "Copiez toutes les valeurs des paramètres de la météo parente",
@@ -102,8 +100,6 @@
     "cs_editor.enabled_badge": "[Activé]",
     "cs_editor.exit_free_camera": "Quitter la caméra libre",
     "cs_editor.exit_play_mode": "Quitter le mode jeu",
-    "cs_editor.fav_most_colours": "Couleurs préférées/les plus fréquemment utilisées ici.",
-    "cs_editor.fav_most_values": "Valeurs favorites/les plus fréquemment utilisées ici.",
     "cs_editor.favorites": "Favoris",
     "cs_editor.favorites_count": "Favoris : %d",
     "cs_editor.favourites": "Favoris",
@@ -121,7 +117,11 @@
     "cs_editor.fog_power": "Puissance du brouillard",
     "cs_editor.fog_power_short": "Puissance",
     "cs_editor.force_this_weather": "Forcez cette météo",
-    "cs_editor.force_weather": "Force Météo",
     "cs_editor.form_id": "ID du formulaire",
-    "cs_editor.form_id_label": "ID du formulaire : %08X"
+    "cs_editor.form_id_label": "ID du formulaire : %08X",
+    "cs_editor.colors_3_plus": "(Les couleurs utilisées 3 fois ou plus apparaîtront ici)",
+    "cs_editor.colours": "Couleurs",
+    "cs_editor.fav_most_colours": "Couleurs préférées/les plus fréquemment utilisées ici.",
+    "cs_editor.fav_most_values": "Valeurs favorites/les plus fréquemment utilisées ici.",
+    "cs_editor.force_weather": "Force Météo"
 }

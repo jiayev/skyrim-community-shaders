@@ -14,8 +14,6 @@ public:
 private:
 	// UI section rendering methods
 	void RenderSettingsPanel();
-	/** @brief Preset combo that hotswaps and persists the selection, with Refresh and Open Folder buttons. */
-	void RenderPresetSelector();
 	void RenderWeatherControl();
 	void RenderDebugControl();
 

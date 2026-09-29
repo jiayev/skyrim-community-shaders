@@ -94,6 +94,18 @@ public:
 	/** @brief Whether presetRoot has enbseries.ini and enbseries/enbeffect.fx; outReason says what is missing. */
 	static bool ValidateLibraryPreset(const std::filesystem::path& presetRoot, std::string& outReason);
 
+	/** @brief Folder that currently holds the active enbseries.ini + enbseries/ (library, pack, or Legacy). */
+	std::filesystem::path GetActivePresetRoot() const;
+
+	/** @brief Whether the active selection has a valid ENBSeries layout that can be exported. */
+	bool CanExportActivePreset() const;
+
+	/**
+	 * @brief Saves the live ENB settings (optional) and copies enbseries.ini + enbseries/ into destRoot.
+	 *  Only those ENB files are copied — never the whole Legacy game/Data root. No-ops when source == dest.
+	 */
+	bool ExportActivePresetTo(const std::filesystem::path& destRoot, bool saveCurrent = true);
+
 private:
 	/** @brief Whether the Legacy install lives under Data rather than the game root. */
 	bool UseDataFolder() const;

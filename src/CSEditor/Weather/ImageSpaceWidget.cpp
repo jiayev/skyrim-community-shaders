@@ -92,7 +92,7 @@ void ImageSpaceWidget::DrawWidget()
 	WeatherUtils::SetCurrentWidget(this);
 	auto editorWindow = EditorWindow::GetSingleton();
 
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(false, true, false, nullptr, "##ImageSpaceSearch")) {
 		DrawWidgetHeader("##ImageSpaceSearch", false, true);
 		DrawSearchDropdown();
 	}

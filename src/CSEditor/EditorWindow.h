@@ -125,10 +125,6 @@ public:
 	 */
 	void AdjustFlySpeed(float scrollDelta);
 
-	// Vanity camera control
-	bool vanityCameraDisabled = false;
-	float savedVanityCameraDelay = 180.0f;
-
 	// Game HUD hiding (tm equivalent)
 	bool gameMenusHidden = false;
 
@@ -236,12 +232,6 @@ public:
 
 	/** @brief Shows a category in the objects window, by its stable English ID. */
 	void SelectCategory(std::string category) { m_selectedCategory = std::move(category); }
-
-	/** @brief Disable Skyrim's vanity camera to prevent auto-rotation while editing. */
-	void DisableVanityCamera();
-
-	/** @brief Restore vanity camera to its previous delay setting. */
-	void RestoreVanityCamera();
 
 	/** @brief Hide the game HUD and menus (equivalent to the 'tm' console command). */
 	void HideGameMenus();

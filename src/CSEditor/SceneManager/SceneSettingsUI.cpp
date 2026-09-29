@@ -5,16 +5,21 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <string>
+#include <vector>
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "../LocationTypeIcons.h"
 #include "../Weather/WeatherWidget.h"
 #include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
+#include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsManager.h"
+#include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 #include "../WeatherUtils.h"
@@ -159,8 +164,9 @@ namespace
 		return context;
 	}
 
-	/// Whether a page edits one period at a time: the Scene Manager panel always does except indoors,
-	/// weather and location pages follow their scene's active saved set.
+	/// Whether a page edits one period at a time. The Scene Manager panel has no flat mode, so it
+	/// always does, except indoors where the aperiodic interior layer takes the panel over. Weather
+	/// and location pages follow the saved set their scene has active.
 	bool ResolvePeriodEditing(const SceneSettingsManager::SceneContextId& baseContext, bool sceneManagerPanel)
 	{
 		if (sceneManagerPanel)
@@ -168,8 +174,9 @@ namespace
 		return SceneSettingsManager::GetSingleton()->IsSceneTimeOfDayEnabled(baseContext);
 	}
 
-	/// Resolves the active period, updating the follow/pin state as a side effect.
-	/// Call exactly once per panel per frame so the scrub/pin logic is not applied twice.
+	/// Resolves which period is currently active, updating the follow/pin state as a side effect.
+	/// Call exactly once per panel per frame - the title row's toolbar and the period bar itself
+	/// both need this value, and running the scrub/pin logic twice would double-apply it.
 	int ResolveActivePeriod(bool editing)
 	{
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
@@ -188,8 +195,11 @@ namespace
 		return periodBar.selected < 0 ? live : periodBar.selected;
 	}
 
-	/// Draws the period control and its interior / Time of Day checkbox, returning the period to edit.
-	/// `active` is this frame's ResolveActivePeriod result; a click here may advance it.
+	/// Draws the period segmented control and its companion checkbox (the interior indicator, or
+	/// the Time of Day toggle), and returns the period the panel below it should edit. `active` is
+	/// the value ResolveActivePeriod already computed for this panel this frame; a click here may
+	/// advance it further. The page toolbar used to share this row, but now sits on the title row
+	/// above so navigation (this bar) and actions stay visually distinct.
 	int DrawPeriodBarRow(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
 		bool sceneManagerPanel, int active)
 	{
@@ -300,7 +310,9 @@ namespace
 			periodEditingThisFrame |= periodEditing;
 			int active = ResolveActivePeriod(periodEditing);
 
-			// Actions share the title row so they don't crowd the period bar's navigation below.
+			// Title row: the panel's identity (Scene Manager panel only) shares a row with its
+			// actions, like a window header with its buttons beside the title, rather than the
+			// actions crowding the period bar's navigation row below.
 			if (sceneManagerPanel) {
 				EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
 				ImGui::SameLine();
@@ -366,7 +378,7 @@ namespace
 		}
 	}
 
-	const char* GetLocationTypeIcon(SceneSettingsManager::LocationTargetType type)
+	const char* GetLocationCategoryIcon(SceneSettingsManager::LocationTargetType type)
 	{
 		switch (type) {
 		case SceneSettingsManager::LocationTargetType::Worldspace:
@@ -382,10 +394,53 @@ namespace
 		}
 	}
 
-	/// The type glyph leading a row's name, muted so the name stays the thing read first.
-	void DrawLocationTypeIcon(SceneSettingsManager::LocationTargetType type)
+	/** @brief LocType FA glyph when the target is (or resolves to) a location-type keyword. */
+	const char* ResolveLocTypeGlyph(const SceneSettingsManager::LocationTarget& target)
 	{
-		const char* icon = GetLocationTypeIcon(type);
+		using LocationTargetType = SceneSettingsManager::LocationTargetType;
+
+		if (target.type == LocationTargetType::LocationType && !target.editorId.empty())
+			return LocationTypeIcons::LookupLocationTypeIcon(target.editorId);
+
+		// Concrete locations: pick the most specific LocType keyword they carry.
+		if (target.type != LocationTargetType::Location)
+			return nullptr;
+
+		RE::BGSLocation* location = nullptr;
+		if (target.formId != 0) {
+			location = RE::TESForm::LookupByID<RE::BGSLocation>(target.formId);
+		} else if (!target.formKey.empty()) {
+			// Quiet resolve — SpidToFormId logs on miss, and authored lists redraw every frame.
+			const auto components = Util::ParseSpid(target.formKey);
+			if (auto* handler = RE::TESDataHandler::GetSingleton();
+				handler && components.localFormId != 0 && !components.pluginName.empty())
+				location = handler->LookupForm<RE::BGSLocation>(components.localFormId, components.pluginName);
+		}
+		if (!location)
+			return nullptr;
+
+		std::vector<std::string> locTypeIds;
+		for (auto* keyword : location->GetKeywords()) {
+			if (!SceneSettingsLocationTargets::IsLocationTypeKeyword(keyword))
+				continue;
+			auto editorId = Util::GetFormEditorID(keyword);
+			if (!editorId.empty())
+				locTypeIds.push_back(std::move(editorId));
+		}
+		return LocationTypeIcons::ResolvePrimaryLocationTypeIcon(locTypeIds);
+	}
+
+	const char* GetLocationTargetIcon(const SceneSettingsManager::LocationTarget& target)
+	{
+		if (const char* locTypeIcon = ResolveLocTypeGlyph(target))
+			return locTypeIcon;
+		return GetLocationCategoryIcon(target.type);
+	}
+
+	/// The type glyph leading a row's name, muted so the name stays the thing read first.
+	void DrawLocationTypeIcon(const SceneSettingsManager::LocationTarget& target)
+	{
+		const char* icon = GetLocationTargetIcon(target);
 		const float box = ImGui::GetFontSize() * kLocationIconBoxScale;
 		const float offset = std::max(0.0f, (box - ImGui::CalcTextSize(icon).x) * 0.5f);
 		const float start = ImGui::GetCursorPosX();
@@ -394,7 +449,6 @@ namespace
 		ImGui::SameLine(start + box);
 	}
 
-	/** @brief Push an alternate-row color, raised to a visible minimum when the theme's is too faint. */
 	void PushLocationRowShade()
 	{
 		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
@@ -505,7 +559,7 @@ namespace
 		ImGui::PushID(target.formKey.c_str());
 
 		ImGui::TableNextColumn();
-		DrawLocationTypeIcon(target.type);
+		DrawLocationTypeIcon(target);
 		ImGui::TextUnformatted(target.name.c_str());
 		DrawLocationDetailColumns(target);
 
@@ -545,9 +599,15 @@ namespace
 
 	bool LocationTargetMatchesSearch(const SceneSettingsManager::LocationTarget& target, const std::string& query)
 	{
-		return Util::StringMatchesSearch(target.name, query) ||
-		       Util::StringMatchesSearch(GetLocationIdentityText(target), query) ||
-		       Util::StringMatchesSearch(GetLocationTypeLabel(target.type), query);
+		if (Util::StringMatchesSearch(target.name, query) ||
+			Util::StringMatchesSearch(GetLocationIdentityText(target), query) ||
+			Util::StringMatchesSearch(GetLocationTypeLabel(target.type), query))
+			return true;
+		if (target.type == SceneSettingsManager::LocationTargetType::LocationType) {
+			if (const auto label = LocationTypeIcons::LookupLocationTypeLabel(target.editorId); !label.empty())
+				return Util::StringMatchesSearch(std::string(label), query);
+		}
+		return false;
 	}
 
 	/// Every place the game defines, searchable, so targets away from the player can be added too.
@@ -598,11 +658,10 @@ namespace
 		// The row selectable spans every column, so the button has to claim the clicks over it.
 		ImGui::SetNextItemAllowOverlap();
 
+		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
 		auto* menu = globals::menu;
 		if (!menu || !menu->uiIcons.deleteSettings.texture)
 			return Util::ErrorTextButton(T(TKEY("remove"), "Remove"));
-
-		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
 		return Util::ErrorImageButton("##remove", menu->uiIcons.deleteSettings.texture, { iconSize, iconSize });
 	}
 
@@ -639,7 +698,7 @@ namespace
 			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
 				return window.open && window.target.type == target.type && window.target.formKey == target.formKey;
 			});
-			DrawLocationTypeIcon(target.type);
+			DrawLocationTypeIcon(target);
 			if (Util::TableRowSelectable(target.name.c_str(), opened,
 					ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap) &&
 				ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -743,8 +802,9 @@ void SceneSettingsUI::DrawLocationWindows()
 		}
 
 		SetupWidgetWindowDefaults(kLocationWidgetType);
-		// The form key keeps the id stable while the visible name stays readable.
-		const auto title = std::format("{} ({})###SceneLocation_{}", window.target.name,
+		// FA LocType / category glyph left of the title (same pattern as weather popouts).
+		const char* typeIcon = GetLocationTargetIcon(window.target);
+		const auto title = std::format("{}  {} ({})###SceneLocation_{}", typeIcon, window.target.name,
 			GetLocationTypeLabel(window.target.type), window.target.formKey);
 		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &window.open, nullptr, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
 		UpdateWidgetTypeSize(kLocationWidgetType);
@@ -802,6 +862,79 @@ void SceneSettingsUI::OpenSceneContext(const SceneSettingsManager::SceneContextI
 		panelSelectedFeature = featureShortName;
 		break;
 	}
+}
+
+bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureShortName,
+	const std::vector<std::string>& settingPath, const std::string& settingKey)
+{
+	CSEditor::OpenEditorWindow();
+	auto* editorWindow = EditorWindow::GetSingleton();
+	auto* manager = SceneSettingsManager::GetSingleton();
+	if (!editorWindow || !editorWindow->open || !manager)
+		return false;
+
+	const auto& targets = manager->GetCurrentLocationTargets();
+	if (targets.empty()) {
+		editorWindow->ShowNotification(
+			T(TKEY("scene_override_location_unknown"),
+				"Can't tell where you are yet. Step into the world, then try again."),
+			Util::Colors::GetWarning(), 4.0f);
+		return false;
+	}
+
+	// Flat Location is the layer that accepts non-blendable settings Weather/TOD grey out.
+	if (!SceneSettingsManager::IsSettingAllowedForType(SceneSettingsManager::SceneType::Location,
+			featureShortName, settingPath, settingKey, false)) {
+		editorWindow->ShowNotification(
+			T(TKEY("scene_override_location_unsupported"),
+				"This place can't hold that setting — Location scenes don't support it either."),
+			Util::Colors::GetWarning(), 4.0f);
+		return false;
+	}
+
+	// Chain is outermost-first; the last link is the place you're actually standing in.
+	const auto& target = targets.back();
+	const bool alreadyAuthored = manager->IsLocationTargetAuthored(target.type, target.formKey);
+	if (!alreadyAuthored && !manager->AddLocationTarget(target)) {
+		editorWindow->ShowNotification(
+			T(TKEY("scene_override_location_add_failed"),
+				"Couldn't add an override for where you are. Check the log."),
+			Util::Colors::GetWarning(), 4.0f);
+		return false;
+	}
+
+	const SceneSettingsManager::SceneContextId locationContext{
+		.type = SceneSettingsManager::SceneContextType::Location,
+		.period = TimeOfDayPeriod::Count,
+		.locationType = target.type,
+		.locationFormKey = target.formKey,
+	};
+	// Period sets require blendable values; turn Time of Day off so this setting is editable here.
+	bool turnedOffTod = false;
+	if (manager->IsSceneTimeOfDayEnabled(locationContext)) {
+		manager->SetSceneTimeOfDayEnabled(locationContext, false);
+		turnedOffTod = true;
+	}
+
+	auto& window = OpenLocationWindow(target);
+	window.selectedFeature = featureShortName;
+	window.pendingFocus = true;
+
+	if (!alreadyAuthored) {
+		editorWindow->ShowNotification(
+			I18n::GetSingleton()->Format("cs_editor.scene_override_location_added",
+				{ { "place", target.name } },
+				"Added {place} — edit this setting here."),
+			Util::Colors::GetInfo(), 3.0f);
+	} else if (turnedOffTod) {
+		editorWindow->ShowNotification(
+			I18n::GetSingleton()->Format("cs_editor.scene_override_location_flat",
+				{ { "place", target.name } },
+				"Opened {place}. Time of Day is off here so this setting can be edited."),
+			Util::Colors::GetInfo(), 3.5f);
+	}
+
+	return true;
 }
 
 void SceneSettingsUI::SyncTimePause()

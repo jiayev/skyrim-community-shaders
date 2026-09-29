@@ -2,6 +2,8 @@
 
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
+#include "Features/Effects11.h"
+#include "Features/Effects11/PresetManager.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsOverwrites.h"
 #include "Utils/FileSystem.h"
@@ -14,6 +16,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <set>
 
 using namespace SceneSettingsInternal;
@@ -143,11 +146,28 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		logger::error("[SceneSettings] Preset '{}' not exported: version '{}' is not MAJOR.MINOR.PATCH", info.name, info.version);
 		return false;
 	}
-	// Weather and location configs load lazily; baking before they exist would sweep their files and
-	// write nothing back.
-	if (!TryEnsureWeatherDataLoaded() || !TryEnsureLocationDataLoaded()) {
-		logger::error("[SceneSettings] Preset '{}' not exported: weather or location data is not loaded", info.name);
+
+	const bool exportEffects11 = info.type == PresetType::E11;
+	const bool hasScenePayload = HasAnyUserEntries() || !GetOverwriteModNames().empty();
+	// CS exports always bake scene files; E11 exports bake them when any scene layer exists.
+	bool exportScene = info.type == PresetType::CS || hasScenePayload;
+
+	if (exportEffects11 && (!globals::features::effects11.loaded || !PresetManager::GetSingleton().CanExportActivePreset())) {
+		logger::error("[SceneSettings] Preset '{}' not exported: Effects 11 has no valid active ENB layout to copy", info.name);
 		return false;
+	}
+
+	// Weather and location configs load lazily; baking before they exist would sweep their files and
+	// write nothing back. E11-only exports can skip the bake when that data is unavailable.
+	if (exportScene) {
+		if (!TryEnsureWeatherDataLoaded() || !TryEnsureLocationDataLoaded()) {
+			if (!exportEffects11) {
+				logger::error("[SceneSettings] Preset '{}' not exported: weather or location data is not loaded", info.name);
+				return false;
+			}
+			logger::warn("[SceneSettings] Preset '{}': scene bake skipped; weather or location data is not loaded", info.name);
+			exportScene = false;
+		}
 	}
 
 	const auto safeModName = Util::FileHelpers::SanitizeFileName(info.name);
@@ -188,137 +208,157 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	std::map<std::filesystem::path, std::optional<std::string>> packedFileBySource;
 	std::set<std::string> usedFileDests;
 	bool fileCopyFailed = false;
-	const auto resolveEntryFileSource = [](const SettingEntry* entry) -> std::optional<std::filesystem::path> {
-		if (entry->deleted || !entry->value.is_string() || entry->value.get_ref<const std::string&>().empty())
-			return std::nullopt;
-		auto source = UnifiedPresetCatalog::GetSingleton().ResolveActivePackPath(entry->value.get<std::string>());
-		std::error_code ec;
-		if (!std::filesystem::is_regular_file(source, ec))
-			return std::nullopt;
-		return source;
-	};
-	const auto packFile = [&](const SettingEntry* entry) -> const SettingEntry* {
-		const auto source = resolveEntryFileSource(entry);
-		if (!source)
-			return entry;
-		auto [it, inserted] = packedFileBySource.try_emplace(*source);
-		if (inserted) {
-			auto dest = std::filesystem::path(kPackFileDir) / source->filename();
-			for (int suffix = 2; usedFileDests.contains(Util::FixFilePath(dest.generic_string())); ++suffix)
-				dest = std::filesystem::path(kPackFileDir) /
-				       std::format("{}_{}{}", source->stem().string(), suffix, source->extension().string());
-			usedFileDests.insert(Util::FixFilePath(dest.generic_string()));
-			it->second = copyPackFile(*source, dest);
-			fileCopyFailed |= !it->second;
-		}
-		if (!it->second)
-			return entry;
-		auto& packed = packedFileEntries.emplace_back(*entry);
-		packed.value = *it->second;
-		return &packed;
-	};
+	size_t sceneFileCount = 0;
+	bool wroteAll = true;
 
-	// A file the pack already ships keeps its path, so no other source may be copied over it.
-	const auto reserveInPackSource = [&](const SettingEntry* entry) {
-		const auto source = resolveEntryFileSource(entry);
-		if (!source)
-			return;
-		std::error_code sourceError, rootError;
-		const auto relative = std::filesystem::absolute(*source, sourceError).lexically_relative(std::filesystem::absolute(packRoot, rootError));
-		if (sourceError || rootError || relative.empty() || relative.generic_string().starts_with(".."))
-			return;
-		const auto relativeString = relative.generic_string();
-		usedFileDests.insert(Util::FixFilePath(relativeString));
-		packedFileBySource.try_emplace(*source, relativeString);
-	};
+	if (exportScene) {
+		const auto resolveEntryFileSource = [](const SettingEntry* entry) -> std::optional<std::filesystem::path> {
+			if (entry->deleted || !entry->value.is_string() || entry->value.get_ref<const std::string&>().empty())
+				return std::nullopt;
+			auto source = UnifiedPresetCatalog::GetSingleton().ResolveActivePackPath(entry->value.get<std::string>());
+			std::error_code ec;
+			if (!std::filesystem::is_regular_file(source, ec))
+				return std::nullopt;
+			return source;
+		};
+		const auto packFile = [&](const SettingEntry* entry) -> const SettingEntry* {
+			const auto source = resolveEntryFileSource(entry);
+			if (!source)
+				return entry;
+			auto [it, inserted] = packedFileBySource.try_emplace(*source);
+			if (inserted) {
+				auto dest = std::filesystem::path(kPackFileDir) / source->filename();
+				for (int suffix = 2; usedFileDests.contains(Util::FixFilePath(dest.generic_string())); ++suffix)
+					dest = std::filesystem::path(kPackFileDir) /
+					       std::format("{}_{}{}", source->stem().string(), suffix, source->extension().string());
+				usedFileDests.insert(Util::FixFilePath(dest.generic_string()));
+				it->second = copyPackFile(*source, dest);
+				fileCopyFailed |= !it->second;
+			}
+			if (!it->second)
+				return entry;
+			auto& packed = packedFileEntries.emplace_back(*entry);
+			packed.value = *it->second;
+			return &packed;
+		};
 
-	/// One output file: the root it must stay inside, the type description its metadata carries, and the
-	/// entries baked into it.
-	struct PresetFile
-	{
-		std::filesystem::path allowedRoot;
-		std::string typeDescription;
-		json extraMetadata = json::object();
-		std::vector<const SettingEntry*> entries;
-	};
-	std::map<std::pair<std::filesystem::path, std::string>, PresetFile> files;
+		// A file the pack already ships keeps its path, so no other source may be copied over it.
+		const auto reserveInPackSource = [&](const SettingEntry* entry) {
+			const auto source = resolveEntryFileSource(entry);
+			if (!source)
+				return;
+			std::error_code sourceError, rootError;
+			const auto relative = std::filesystem::absolute(*source, sourceError).lexically_relative(std::filesystem::absolute(packRoot, rootError));
+			if (sourceError || rootError || relative.empty() || relative.generic_string().starts_with(".."))
+				return;
+			const auto relativeString = relative.generic_string();
+			usedFileDests.insert(Util::FixFilePath(relativeString));
+			packedFileBySource.try_emplace(*source, relativeString);
+		};
 
-	const auto bakeContext = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
-								 const std::filesystem::path& allowedRoot, const std::filesystem::path& baseDir,
-								 std::string_view sceneLabel, const json& extraMetadata = json::object()) {
-		const auto directory = GetOverwriteDir(baseDir, context.period);
-		for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context)) {
-			auto& file = files[{ directory, identity.featureShortName }];
-			file.allowedRoot = allowedRoot;
-			file.typeDescription = GetOverwriteTypeDescription(sceneLabel, context.period);
-			file.extraMetadata = extraMetadata;
-			file.entries.push_back(entry);
-		}
-	};
+		/// One output file: the root it must stay inside, the type description its metadata carries, and the
+		/// entries baked into it.
+		struct PresetFile
+		{
+			std::filesystem::path allowedRoot;
+			std::string typeDescription;
+			json extraMetadata = json::object();
+			std::vector<const SettingEntry*> entries;
+		};
+		std::map<std::pair<std::filesystem::path, std::string>, PresetFile> files;
 
-	const auto interiorRoot = GetOverwritesPath(SceneType::InteriorOnly, packRoot);
-	bakeContext({ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count },
-		GetEntries(SceneType::InteriorOnly), interiorRoot, interiorRoot, "Interior Only");
+		const auto bakeContext = [&](const SceneContextId& context, const std::vector<SettingEntry>& sourceEntries,
+									 const std::filesystem::path& allowedRoot, const std::filesystem::path& baseDir,
+									 std::string_view sceneLabel, const json& extraMetadata = json::object()) {
+			const auto directory = GetOverwriteDir(baseDir, context.period);
+			for (const auto& [identity, entry] : BuildEffectiveContextEntries(sourceEntries, context)) {
+				auto& file = files[{ directory, identity.featureShortName }];
+				file.allowedRoot = allowedRoot;
+				file.typeDescription = GetOverwriteTypeDescription(sceneLabel, context.period);
+				file.extraMetadata = extraMetadata;
+				file.entries.push_back(entry);
+			}
+		};
 
-	const auto timeOfDayRoot = GetOverwritesPath(SceneType::TimeOfDay, packRoot);
-	for (auto period : kPeriods)
-		bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
-			GetEntries(SceneType::TimeOfDay), timeOfDayRoot, timeOfDayRoot, "Time of Day");
+		const auto interiorRoot = GetOverwritesPath(SceneType::InteriorOnly, packRoot);
+		bakeContext({ .type = SceneContextType::Interior, .period = TimeOfDayPeriod::Count },
+			GetEntries(SceneType::InteriorOnly), interiorRoot, interiorRoot, "Interior Only");
 
-	// Both saved sets ship; the metadata carries the mode that picks between them.
-	const auto bakeSceneSets = [&](SceneContextId context, const PeriodicSceneConfig& config,
-								   const std::filesystem::path& allowedRoot, const std::filesystem::path& sceneDir,
-								   std::string_view sceneLabel, json metadata = json::object()) {
-		metadata[kTimeOfDayEnabledKey] = config.timeOfDayEnabled;
-		bakeContext(context, config.entries, allowedRoot, sceneDir, sceneLabel, metadata);
-		for (auto period : kPeriods) {
-			context.period = period;
+		const auto timeOfDayRoot = GetOverwritesPath(SceneType::TimeOfDay, packRoot);
+		for (auto period : kPeriods)
+			bakeContext({ .type = SceneContextType::TimeOfDay, .period = period },
+				GetEntries(SceneType::TimeOfDay), timeOfDayRoot, timeOfDayRoot, "Time of Day");
+
+		// Both saved sets ship; the metadata carries the mode that picks between them.
+		const auto bakeSceneSets = [&](SceneContextId context, const PeriodicSceneConfig& config,
+									   const std::filesystem::path& allowedRoot, const std::filesystem::path& sceneDir,
+									   std::string_view sceneLabel, json metadata = json::object()) {
+			metadata[kTimeOfDayEnabledKey] = config.timeOfDayEnabled;
 			bakeContext(context, config.entries, allowedRoot, sceneDir, sceneLabel, metadata);
+			for (auto period : kPeriods) {
+				context.period = period;
+				bakeContext(context, config.entries, allowedRoot, sceneDir, sceneLabel, metadata);
+			}
+		};
+
+		const auto weatherRoot = GetWeatherOverwritesDir(packRoot);
+		for (const auto& [weatherId, config] : weatherSceneConfigs)
+			bakeSceneSets({ .type = SceneContextType::Weather, .weatherId = weatherId }, config,
+				weatherRoot, weatherRoot / Util::FormIdToSpid(weatherId), "Weather");
+
+		const auto locationRoot = GetLocationOverwritesDir(packRoot);
+		for (const auto& [configKey, config] : locationSceneConfigs) {
+			const auto* targetDescription = GetLocationTargetTypeName(config.type);
+			bakeSceneSets({ .type = SceneContextType::Location,
+							  .locationType = config.type,
+							  .locationFormKey = config.formKey },
+				config, locationRoot, locationRoot / config.formKey, targetDescription,
+				json{ { "targetType", targetDescription },
+					{ "targetName", config.name },
+					{ "coc", config.cocCode } });
 		}
-	};
 
-	const auto weatherRoot = GetWeatherOverwritesDir(packRoot);
-	for (const auto& [weatherId, config] : weatherSceneConfigs)
-		bakeSceneSets({ .type = SceneContextType::Weather, .weatherId = weatherId }, config,
-			weatherRoot, weatherRoot / Util::FormIdToSpid(weatherId), "Weather");
+		// In-pack files are claimed across every output before any other source is named.
+		for (const auto& [fileKey, file] : files)
+			std::ranges::for_each(file.entries, reserveInPackSource);
+		for (auto& [fileKey, file] : files)
+			std::ranges::transform(file.entries, file.entries.begin(), packFile);
 
-	const auto locationRoot = GetLocationOverwritesDir(packRoot);
-	for (const auto& [configKey, config] : locationSceneConfigs) {
-		const auto* targetDescription = GetLocationTargetTypeName(config.type);
-		bakeSceneSets({ .type = SceneContextType::Location,
-						  .locationType = config.type,
-						  .locationFormKey = config.formKey },
-			config, locationRoot, locationRoot / config.formKey, targetDescription,
-			json{ { "targetType", targetDescription },
-				{ "targetName", config.name },
-				{ "coc", config.cocCode } });
+		wroteAll = !fileCopyFailed;
+		// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
+		// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
+		for (const auto& path : FindPresetFiles(safeModName)) {
+			std::error_code ec;
+			std::filesystem::remove(path, ec);
+			if (ec) {
+				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
+				wroteAll = false;
+			}
+		}
+
+		for (const auto& [key, file] : files) {
+			const auto& [directory, featureShortName] = key;
+			const auto path = directory / std::format("{}_{}.json", safeModName, featureShortName);
+			if (!WriteGroupedOverwriteFile(file.allowedRoot, path, featureShortName, file.typeDescription, file.entries,
+					file.extraMetadata)) {
+				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
+				wroteAll = false;
+			}
+		}
+		sceneFileCount = files.size();
 	}
 
-	// In-pack files are claimed across every output before any other source is named.
-	for (const auto& [fileKey, file] : files)
-		std::ranges::for_each(file.entries, reserveInPackSource);
-	for (auto& [fileKey, file] : files)
-		std::ranges::transform(file.entries, file.entries.begin(), packFile);
-
-	bool wroteAll = !fileCopyFailed;
-	// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
-	// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
-	for (const auto& path : FindPresetFiles(safeModName)) {
-		std::error_code ec;
-		std::filesystem::remove(path, ec);
-		if (ec) {
-			logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
+	if (exportEffects11) {
+		const auto effects11Root = packRoot / UnifiedPresetCatalog::kEffects11PackSubdir;
+		if (!PresetManager::GetSingleton().ExportActivePresetTo(effects11Root, true)) {
+			logger::error("[SceneSettings] Preset '{}' failed to export Effects 11 files into '{}'",
+				safeModName, effects11Root.string());
 			wroteAll = false;
-		}
-	}
-
-	for (const auto& [key, file] : files) {
-		const auto& [directory, featureShortName] = key;
-		const auto path = directory / std::format("{}_{}.json", safeModName, featureShortName);
-		if (!WriteGroupedOverwriteFile(file.allowedRoot, path, featureShortName, file.typeDescription, file.entries,
-				file.extraMetadata)) {
-			logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
-			wroteAll = false;
+		} else {
+			if (!manifest.contains("backends") || !manifest["backends"].is_object())
+				manifest["backends"] = json::object();
+			manifest["backends"]["effects11"] = true;
+			manifest["effects11"] = json{ { "path", UnifiedPresetCatalog::kEffects11PackSubdir } };
 		}
 	}
 
@@ -336,6 +376,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	setOrErase(kPresetMetadataAuthorKey, info.author);
 	setOrErase(kPresetMetadataDescriptionKey, info.description);
 	setOrErase(kPresetMetadataTagsKey, info.tags);
+	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
+	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
 
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
@@ -370,10 +412,12 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	}
 
 	std::error_code activeEc;
-	if (std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc))
+	if (exportScene && std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc))
 		ReloadOverwrites();
 
-	logger::info("[SceneSettings] Exported preset '{}' as {} file(s) to '{}'", safeModName, files.size(), packRoot.string());
+	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s){}, type {}) to '{}'",
+		safeModName, sceneFileCount, exportEffects11 ? ", Effects 11" : "",
+		UnifiedPresetCatalog::GetPresetTypeName(info.type), packRoot.string());
 	return wroteAll;
 }
 
@@ -405,6 +449,8 @@ std::optional<SceneSettingsManager::PresetMetadata> SceneSettingsManager::ReadPr
 		.author = readString(kPresetMetadataAuthorKey),
 		.description = readString(kPresetMetadataDescriptionKey),
 		.tags = readStrings(kPresetMetadataTagsKey),
+		.csVersion = readString(kPresetMetadataCsVersionKey),
+		.requiredFeatures = readStrings(kPresetMetadataRequiredFeaturesKey),
 		.logo = readString(kPresetMetadataLogoKey),
 		.cover = readString(kPresetMetadataCoverKey),
 		.screenshots = readStrings(kPresetMetadataScreenshotsKey),

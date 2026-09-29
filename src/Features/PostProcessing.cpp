@@ -322,6 +322,8 @@ void PostProcessing::DrawSettings()
 
 void PostProcessing::LoadSettings(json& o_json)
 {
+	// Deferred to Prepass so a load lands at a fixed point in the frame instead of mid-pass
+	// (Scene Manager and overrides call this from State::Draw); SaveSettings reports it until then.
 	pendingSettings = o_json;
 }
 
@@ -353,6 +355,9 @@ void PostProcessing::ProcessSettings(json& o_json)
 
 void PostProcessing::SaveSettings(json& o_json)
 {
+	// A load not yet applied is the newest state, so report it rather than the live pipeline. This means
+	// a Save -> Load -> Save round trip within one frame cannot observe clamping by the pipeline;
+	// callers verifying retention (Scene Manager) only see it once Prepass has consumed the load.
 	if (!pendingSettings.empty()) {
 		o_json = pendingSettings;
 		return;
@@ -435,19 +440,11 @@ void PostProcessing::SavePresetTo(std::string a_name)
 		return;
 	}
 
-	std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
-	std::ofstream o{ presetPath };
-	if (!o.is_open() || !o.good()) {
-		logger::warn("Failed to open preset file for writing: {}", presetPath);
-		return;
-	}
-
-	try {
-		o << std::setw(4) << a_presets;
-		logger::info("Saving preset to {}", presetPath);
-	} catch (const std::exception& e) {
-		logger::warn("Failed to write preset to file: {}. Error: {}", presetPath, e.what());
-	}
+	const std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
+	if (Util::FileHelpers::WriteJsonAtomically(presetPath, a_presets, 4, "post processing preset"))
+		logger::info("Saved preset to {}", presetPath);
+	else
+		logger::warn("Failed to write preset file: {}", presetPath);
 }
 
 void PostProcessing::RestoreDefaultSettings()

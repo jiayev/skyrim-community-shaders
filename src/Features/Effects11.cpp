@@ -14,6 +14,7 @@
 #include "Deferred.h"
 #include "Globals.h"
 #include "IBL.h"
+#include "PostProcessing.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
@@ -621,6 +622,12 @@ bool Effects11::WantsTonemapOwnership()
 	// pipeline for that frame.
 	auto& effectManager = EffectManager::GetSingleton();
 	if (!effectManager.IsInitialized() || !effectManager.IsPresetLoaded())
+		return false;
+
+	// Post Processing tonemapping and Effects 11 tonemapping cannot share the frame; when PP
+	// wants ownership, force UseOriginalPostProcessing on so this preset yields (avoids a black screen).
+	auto& postProcessing = globals::features::postProcessing;
+	if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
 		return false;
 
 	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");

@@ -144,7 +144,7 @@ void WeatherWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
 	const float scale = Util::GetUIScale();
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(false, true, true, weather, "##WeatherSearch")) {
 		// Draw header with search and all buttons
 		DrawWidgetHeader("##WeatherSearch", false, true, true, weather);
 		DrawSearchDropdown();
@@ -351,7 +351,6 @@ void WeatherWidget::DrawWidget()
 						PopHighlightIfNeeded(rowId, recordHighlighted);
 					ImGui::PopID();
 				}
-				ImGui::Spacing();
 			};
 			auto drawSingleRecordSection = [&](const char* sectionLabel, const char* recordId, const char* inheritKey, const char* valueLabel, const char* pickerId, auto& recordRef, auto& parentRef, auto& widgets, const std::string& buttonId, const char* openTooltip) {
 				if (!MatchesSearch(recordId))
@@ -380,7 +379,6 @@ void WeatherWidget::DrawWidget()
 
 				if (recordHighlighted)
 					PopHighlightIfNeeded(recordId, recordHighlighted);
-				ImGui::Spacing();
 			};
 
 			auto* parentImageSpaceRefs = parentWidget ? parentWidget->settings.imageSpaceRefs : settings.imageSpaceRefs;
@@ -1116,7 +1114,6 @@ void WeatherWidget::DrawCloudSettings()
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.3f);
 			if (WeatherUtils::DrawSliderInt8(std::format("Cloud Layer Speed Y##{}", layer), settings.clouds[i].cloudLayerSpeedY))
 				changed = true;
-			ImGui::Spacing();
 			if (WeatherUtils::DrawSliderInt8(std::format("Cloud Layer Speed X##{}", layer), settings.clouds[i].cloudLayerSpeedX))
 				changed = true;
 			ImGui::PopItemWidth();
@@ -1187,7 +1184,6 @@ void WeatherWidget::DrawCloudSettings()
 				TOD::EndTODTable();
 			}
 
-			ImGui::Spacing();
 			ImGui::Unindent(10.0f * scale);
 		}
 	}

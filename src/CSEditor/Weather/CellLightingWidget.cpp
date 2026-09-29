@@ -57,7 +57,7 @@ namespace
 void CellLightingWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##CellLightingSearch")) {
 		DrawWidgetHeader("##CellLightingSearch", true, true);
 		DrawSearchDropdown();
 	}
@@ -104,7 +104,6 @@ void CellLightingWidget::DrawWidget()
 					changed |= drawInherited(settings.inheritAmbientColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kAmbientColor, settings.ambient);
 					});
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritDirectionalColor, [&]() {
 						return WeatherUtils::DrawColorEdit(CellLightingSetting::kDirectionalColor, settings.directional);
 					});
@@ -123,7 +122,6 @@ void CellLightingWidget::DrawWidget()
 						settings.directionalXY = static_cast<uint32_t>(xyDegrees);
 						changed = true;
 					}
-					ImGui::Spacing();
 					if (DrawIfMatchesSearch(CellLightingSetting::kZRotation, [&](const char* label) {
 							return drawInherited(settings.inheritDirectionalRotation, [&]() {
 								return DrawWithHighlight(label, [&]() {
@@ -134,7 +132,6 @@ void CellLightingWidget::DrawWidget()
 						settings.directionalZ = static_cast<uint32_t>(zDegrees);
 						changed = true;
 					}
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritDirectionalFade, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kDirectionalFade, settings.directionalFade, 0.0f, 1.0f);
 					});
@@ -144,7 +141,6 @@ void CellLightingWidget::DrawWidget()
 					changed |= drawInherited(settings.inheritLightFadeDistances, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kLightFadeStart, settings.lightFadeStart, 0.0f, 163840.0f);
 					});
-					ImGui::Spacing();
 					changed |= drawInherited(settings.inheritLightFadeDistances, [&]() {
 						return WeatherUtils::DrawSliderFloat(CellLightingSetting::kLightFadeEnd, settings.lightFadeEnd, 0.0f, 163840.0f);
 					});

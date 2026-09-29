@@ -1,13 +1,13 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
-#include "../I18n/I18n.h"
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
+#include "../I18n/I18n.h"
 #include "D3D.h"
 #include "FileSystem.h"
-#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
+#include "IconsFontAwesome5.h"
 #include "Menu/IconLoader.h"
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
@@ -309,7 +309,7 @@ namespace Util
 		return clicked;
 	}
 
-	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color)
+	bool StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color)
 	{
 		const float scale = GetUIScale();
 		const ImVec2 padding{ 12.0f * scale, 8.0f * scale };
@@ -335,15 +335,76 @@ namespace Util
 		ImGui::PopStyleColor();
 
 		ImGui::SetCursorScreenPos(min);
-		ImGui::Dummy({ width, height });
+		const bool clicked = ImGui::InvisibleButton("##StatusBanner", { width, height });
+		if (ImGui::IsItemHovered())
+			ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+		return clicked;
 	}
 
-	LockedSection::LockedSection(bool a_locked, const char* a_message) :
+	float GetLockStatusBadgeSize()
+	{
+		const float scale = GetUIScale();
+		const char* icon = ICON_FA_LOCK;
+		const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+		constexpr float kPad = 3.0f;
+		return std::max(iconSize.x, iconSize.y) + kPad * 2.0f * scale;
+	}
+
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList)
+	{
+		if (!a_drawList)
+			a_drawList = ImGui::GetWindowDrawList();
+
+		const float size = GetLockStatusBadgeSize();
+		const char* icon = a_locked ? ICON_FA_LOCK : ICON_FA_UNLOCK;
+		const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+		const auto& statusPalette = Menu::GetSingleton()->GetTheme().StatusPalette;
+		const ImVec4 statusColor = a_locked ? statusPalette.SuccessColor : statusPalette.Error;
+		ImVec4 fill = statusColor;
+		fill.w = 0.22f;
+		ImVec4 border = statusColor;
+		border.w = 0.55f;
+
+		const ImVec2 max(a_min.x + size, a_min.y + size);
+		const float rounding = std::min(ImGui::GetStyle().FrameRounding, size * 0.35f);
+		a_drawList->AddRectFilled(a_min, max, ImGui::GetColorU32(fill), rounding);
+		a_drawList->AddRect(a_min, max, ImGui::GetColorU32(border), rounding);
+		a_drawList->AddText(
+			ImVec2(a_min.x + (size - iconSize.x) * 0.5f, a_min.y + (size - iconSize.y) * 0.5f),
+			ImGui::GetColorU32(statusColor), icon);
+	}
+
+	bool LockStatusBadgeButton(const char* a_id, bool a_locked, const char* a_tooltip)
+	{
+		ImGuiWindow* window = ImGui::GetCurrentWindow();
+		if (!window)
+			return false;
+
+		const float size = GetLockStatusBadgeSize();
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		const ImRect bb(min, ImVec2(min.x + size, min.y + size));
+		const ImGuiID id = window->GetID(a_id);
+		ImGui::ItemSize(bb.GetSize());
+		if (!ImGui::ItemAdd(bb, id))
+			return false;
+
+		bool hovered = false;
+		bool held = false;
+		const bool clicked = ImGui::ButtonBehavior(bb, id, &hovered, &held);
+		DrawLockStatusBadge(min, a_locked);
+		if (a_tooltip)
+			AddTooltip(a_tooltip);
+		return clicked;
+	}
+
+	LockedSection::LockedSection(bool a_locked, const char* a_message, bool* a_outBannerClicked) :
 		m_locked(a_locked)
 	{
 		if (!m_locked)
 			return;
-		StatusBanner(ICON_FA_LOCK, a_message, Colors::GetWarning());
+		const bool clicked = StatusBanner(ICON_FA_LOCK, a_message, Colors::GetWarning());
+		if (a_outBannerClicked && clicked)
+			*a_outBannerClicked = true;
 		ImGui::Spacing();
 		ImGui::BeginDisabled();
 	}
@@ -965,11 +1026,15 @@ namespace Util
 		return visible;
 	}
 
-	/** @brief Last frame's dock state per window title: NoTitleBar is decided before Begin(), but
-	 *  IsWindowDocked() only knows after, so the header lags a dock transition by one frame. */
+	// Whether each custom-header window was docked last frame, keyed by its full "Label###id"
+	// title. NoTitleBar has to be decided before Begin(), but IsWindowDocked() only reports the
+	// true state after it - so, like the main window's own header, this frame draws whatever last
+	// frame was and re-checks are one frame behind a dock/undock transition.
 	static std::unordered_map<std::string, bool> s_customHeaderWasDocked;
 
-	/** @brief Draws the close button's X, matching DrawRoundedCloseHighlight's geometry; nothing else renders it. */
+	// Draws the close button's crossed lines, matching DrawRoundedCloseHighlight's native geometry.
+	// Unlike the native button, nothing else renders the X, so it has to be drawn unconditionally
+	// rather than only while highlighted.
 	static void DrawCustomHeaderCloseCross(const ImVec2& min, const ImVec2& max)
 	{
 		const ImVec2 c((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
@@ -981,28 +1046,61 @@ namespace Util
 		drawList->AddLine({ c.x + d, c.y - d }, { c.x - d, c.y + d }, col);
 	}
 
-	/** @brief Draws the floating header: draggable title, optional extras, and a right-pinned close button. */
+	float GetEditorChromeHeaderHeight()
+	{
+		// FontSize + FramePadding.y on each side of the glyph, then the same pad again as outer air
+		// so title glyphs / icons are not flush with the window's top edge.
+		return ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 4.0f;
+	}
+
+	float GetEditorChromeTextCursorOffsetY(float rowHeight)
+	{
+		// ImGui's text cursor is the top of the FontSize line box. Capitals occupy ~[0, Ascent],
+		// so centre that ink band in the row: offset = rowHeight/2 - Ascent/2.
+		const float ascent = ImGui::GetFontBaked()->Ascent;
+		return rowHeight * 0.5f - ascent * 0.5f;
+	}
+
+	// Draws the custom floating header: the title (also the drag handle), an optional
+	// caller-supplied control cluster, and a close button pinned to the right edge. Runs
+	// unconditionally (not gated on Begin()'s return value), same as a native title bar always
+	// drawing regardless of what the body does - collapsing is disabled for these windows (see
+	// BeginWithCustomHeader), so there is no risk of a hidden body stranding the header.
 	static void DrawCustomHeaderRow(ImGuiWindow* window, const char* name, bool* p_open,
 		const std::function<void()>& drawExtras)
 	{
-		const float rowHeight = ImGui::GetFrameHeight();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float rowHeight = GetEditorChromeHeaderHeight();
 		const float avail = ImGui::GetContentRegionAvail().x;
-		const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+		const ImVec2 contentStart = ImGui::GetCursorScreenPos();
+		// Begin() lands the cursor below WindowPadding; pull the header flush under the border so
+		// the title/icons aren't sitting in a padded gap beneath the window's top edge.
+		const ImVec2 rowStart(contentStart.x, contentStart.y - style.WindowPadding.y);
 
-		ImGui::AlignTextToFramePadding();
+		ImGui::SetCursorScreenPos(rowStart);
+		// AllowOverlap so title/extras/close drawn afterward still receive hover/click.
+		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight), ImGuiButtonFlags_AllowOverlap);
+		// Drag only while actively dragging this item — a click on the close button must not start a move.
+		if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+			ImGui::StartMouseMovingWindow(window);
+
+		// Title: centre capital-letter ink in the row (see GetEditorChromeTextCursorOffsetY).
+		ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + GetEditorChromeTextCursorOffsetY(rowHeight)));
 		std::string_view displayTitle(name);
 		if (const auto hash = displayTitle.find("##"); hash != std::string_view::npos)
 			displayTitle = displayTitle.substr(0, hash);
 		ImGui::TextUnformatted(displayTitle.data(), displayTitle.data() + displayTitle.size());
 
 		if (drawExtras) {
-			ImGui::SameLine();
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 			drawExtras();
 		}
 
 		if (p_open) {
-			const float closeSize = ImGui::GetFontSize() + kTitleBarButtonPadding * 2.0f;
-			ImGui::SetCursorScreenPos(ImVec2(rowStart.x + avail - closeSize, rowStart.y + (rowHeight - closeSize) * 0.5f));
+			// Square hit target centred in the row so top/bottom air matches the title glyphs.
+			const float closeSize = ImGui::GetFontSize() + style.FramePadding.y * 2.0f;
+			ImGui::SetCursorScreenPos(ImVec2(rowStart.x + avail - closeSize,
+				rowStart.y + (rowHeight - closeSize) * 0.5f));
 			auto _style = TransparentIconButtonStyle();
 			const bool clicked = ImGui::Button("##CustomHeaderClose", ImVec2(closeSize, closeSize));
 			DrawCustomHeaderCloseCross(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -1010,22 +1108,25 @@ namespace Util
 				*p_open = false;
 		}
 
-		ImGui::SetCursorScreenPos(rowStart);
-		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight));
-		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-			ImGui::StartMouseMovingWindow(window);
-
-		ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + rowHeight));
-		ImGui::Spacing();
+		// Separator is the bottom edge of the bar — no ItemInnerSpacing above it (that was
+		// doubling the bottom air vs the top). Zero ItemSpacing so Separator itself doesn't
+		// insert another half-gap; restore WindowPadding below for the body, matching native
+		// title-bar → content layout.
+		ImGui::SetCursorScreenPos(ImVec2(contentStart.x, rowStart.y + rowHeight));
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(style.ItemSpacing.x, 0.0f));
 		ImGui::Separator();
-		ImGui::Spacing();
+		ImGui::PopStyleVar();
+		ImGui::SetCursorScreenPos(ImVec2(contentStart.x, ImGui::GetCursorScreenPos().y + style.WindowPadding.y));
 	}
 
 	bool BeginWithCustomHeader(const char* name, bool* p_open,
 		const std::function<void()>& drawExtras, ImGuiWindowFlags flags)
 	{
 		bool& wasDocked = s_customHeaderWasDocked[name];
-		// A window collapsed through the custom header would have nothing left on screen to expand it.
+		// Collapsing relies on the native title bar staying interactive while the body is skipped,
+		// which the floating custom header can't reproduce safely - a window collapsed through it
+		// would have nothing left on screen able to expand it again. Disabled unconditionally,
+		// same as the main Community Shaders window's own custom header.
 		ImGuiWindowFlags windowFlags = flags | ImGuiWindowFlags_NoCollapse;
 		if (!wasDocked)
 			windowFlags |= ImGuiWindowFlags_NoTitleBar;
@@ -1041,10 +1142,12 @@ namespace Util
 		wasDocked = isDocked;
 
 		if (isDocked) {
-			// The dock tab bar already supplies the title and close x.
+			// A shared dock tab bar already supplies the title and close x; only the rounded
+			// highlight polish applies here, same as every other BeginWithRoundedClose window.
 			DrawRoundedTitleBarButtonHighlights(window, p_open != nullptr, false);
 		} else {
-			// Not gated on `visible`, so the drag handle and close button stay reachable.
+			// Drawn unconditionally (not gated on `visible`) so the drag handle and close button
+			// are always reachable, matching a native title bar's always-on behavior.
 			DrawCustomHeaderRow(window, name, p_open, drawExtras);
 		}
 		return visible;
@@ -1543,16 +1646,13 @@ namespace Util
 		const float circleStroke = size * ThemeManager::Constants::SEARCH_ICON_STROKE_RATIO;
 		const float handleStroke = size * ThemeManager::Constants::SEARCH_ICON_HANDLE_STROKE_RATIO;
 
-		// Use themed text color with reduced alpha for search icon
 		auto& theme = globals::menu->GetTheme().Palette;
 		ImVec4 iconColor = theme.Text;
-		iconColor.w *= alpha;  // Apply alpha multiplier for subtler appearance
+		iconColor.w *= alpha;
 		ImU32 placeholderColor = ImGui::GetColorU32(iconColor);
 
-		// Draw circle
 		drawList->AddCircle(center, radius, placeholderColor, 12, circleStroke);
 
-		// Draw handle
 		ImVec2 handleStart = ImVec2(center.x + radius * 0.81f, center.y + radius * 0.81f);
 		ImVec2 handleEnd = ImVec2(handleStart.x + size * 0.29f, handleStart.y + size * 0.29f);
 		drawList->AddLine(handleStart, handleEnd, placeholderColor, handleStroke);

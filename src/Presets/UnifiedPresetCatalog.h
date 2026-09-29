@@ -24,10 +24,15 @@ public:
 	enum class PresetType
 	{
 		CS,
-		E11
+		E11,
+		Baseline
 	};
 
 	static constexpr const char* kPresetTypeKey = "type";
+	/** @brief Default relative folder inside a pack that holds enbseries.ini + enbseries/. */
+	static constexpr const char* kEffects11PackSubdir = "effects11";
+	/** @brief Folder inside a pack holding baseline feature overwrites, one `<FeatureShortName>.json` per feature. */
+	static constexpr const char* kBaselineSubdir = "Baseline";
 
 	/** @brief The manifest spelling of a preset type. */
 	static const char* GetPresetTypeName(PresetType type);
@@ -42,9 +47,16 @@ public:
 		std::string description;
 		std::string nexusUrl;  ///< Optional "nexusUrl" manifest field; shown as a link when non-empty.
 		std::vector<std::string> tags;
+		/// Community Shaders version the pack was made for (MAJOR.MINOR.PATCH); empty = unspecified.
+		std::string csVersion;
+		/// Feature short names the pack expects loaded; missing ones surface as warnings in the browser.
+		std::vector<std::string> requiredFeatures;
 
 		bool hasEffects11 = false;
 		bool hasCSPresets = false;
+		bool hasBaseline = false;
+		/// Feature short names the pack's Baseline folder sets, sorted; empty without a baseline payload.
+		std::vector<std::string> baselineFeatures;
 		/// Declared type; groups the pack, while the has* payload flags still decide what Apply loads.
 		std::optional<PresetType> type;
 		bool valid = true;
@@ -67,8 +79,20 @@ public:
 		bool IsE11() const { return type ? *type == PresetType::E11 : hasEffects11; }
 		/** @brief Grouped as CS: the declared type, else whether scene files were found. */
 		bool IsCS() const { return type ? *type == PresetType::CS : hasCSPresets; }
+		/** @brief Grouped as Baseline: the declared type, else whether a Baseline folder was found. */
+		bool IsBaseline() const { return type ? *type == PresetType::Baseline : hasBaseline; }
 		/** @brief Grouped under the given type. */
-		bool IsType(PresetType presetType) const { return presetType == PresetType::E11 ? IsE11() : IsCS(); }
+		bool IsType(PresetType presetType) const
+		{
+			switch (presetType) {
+			case PresetType::E11:
+				return IsE11();
+			case PresetType::Baseline:
+				return IsBaseline();
+			default:
+				return IsCS();
+			}
+		}
 	};
 
 	static UnifiedPresetCatalog& GetSingleton();
@@ -102,8 +126,21 @@ public:
 	/** @brief Drops every pack's artwork textures. */
 	void ReleaseAllArtwork();
 
-	/** @brief Applies Effects11, then swaps the Scene Manager overwrite layer to this pack's CS Presets files. */
+	/** @brief Applies Effects11, swaps the Scene Manager overwrite layer to this pack's CS Presets files, and
+	 *  enables its Baseline overwrites. A Baseline-only pack leaves the active pack and scene layer untouched. */
 	bool ApplyPack(const std::string& id, bool saveEffects11Current = true);
+
+	/** @brief Ids of packs whose Baseline overwrites are enabled, in layering order (a later pack wins conflicts). */
+	const std::vector<std::string>& GetBaselinePackIds() const { return baselinePackIds; }
+	/** @brief Whether a pack's Baseline overwrites are enabled. */
+	bool IsBaselineEnabled(const std::string& id) const;
+	/** @brief Stops applying a pack's Baseline overwrites from the next load; values already in use are kept.
+	 *  @return False when the pack was not enabled. */
+	bool RemoveBaseline(const std::string& id);
+
+	/** @brief Writes a starter manifest for a pack folder that has none, so an exported Baseline shows up as a preset.
+	 *  @return True when a manifest exists afterwards. */
+	static bool EnsureBaselineManifest(const std::filesystem::path& packRoot, const std::string& displayName);
 
 	/** @brief Creates the presets root if needed and opens its real path in Explorer. */
 	bool OpenPresetsFolder() const;
@@ -130,10 +167,13 @@ public:
 private:
 	UnifiedPresetCatalog() { LoadActiveState(); }
 
-	/** @brief Reads the persisted active pack id, clearing it when the state file is missing or bad. */
+	/** @brief Reads the persisted active pack id and Baseline pack ids, clearing them when the state file is missing or bad. */
 	void LoadActiveState();
-	/** @brief Writes the active pack id next to the presets. */
+	/** @brief Writes the active pack id and Baseline pack ids next to the presets. */
 	void SaveActiveState() const;
+
+	/** @brief Enables a pack's Baseline overwrites as the last layer and reapplies them to the loaded features. */
+	void EnableBaseline(const PackInfo& pack);
 
 	/** @brief Adds each folder under Presets as a pack, read from its manifest. */
 	void DiscoverUnifiedPacks();
@@ -149,4 +189,5 @@ private:
 
 	std::vector<PackInfo> packs;
 	std::string activePackId;
+	std::vector<std::string> baselinePackIds;
 };

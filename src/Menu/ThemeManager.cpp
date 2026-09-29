@@ -893,14 +893,10 @@ bool ThemeManager::SaveTheme(const std::string& themeName, const json& themeSett
 		logger::debug("SaveTheme: Themes directory ensured: {}", themesDir.string());
 
 		// Write the theme file
-		std::ofstream file(filePath);
-		if (!file.is_open()) {
-			logger::warn("Failed to create theme file: {}", filePath.string());
+		if (!Util::FileHelpers::WriteJsonAtomically(filePath, fullTheme, 4, "theme file")) {
+			logger::warn("Failed to write theme file: {}", filePath.string());
 			return false;
 		}
-
-		file << fullTheme.dump(4);  // Pretty print with 4-space indentation
-		file.close();
 
 		logger::info("Saved theme: {} to {}", themeName, filePath.string());
 

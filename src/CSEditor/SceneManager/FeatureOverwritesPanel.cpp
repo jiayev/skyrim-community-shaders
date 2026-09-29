@@ -2,6 +2,7 @@
 
 #include "CSEditor/EditorWindow.h"
 #include "Feature.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
@@ -31,6 +32,7 @@ namespace
 		ImGuiTextFilter filter;
 		bool failed = false;
 		bool featureLocked = false;
+		bool toPresetPack = false;
 	};
 
 	ExportState exportState;
@@ -175,7 +177,11 @@ namespace
 		Util::AddTooltip(info.filePath.c_str());
 
 		ImGui::TableNextColumn();
-		if (ImGui::SmallButton(T(TKEY("delete"), "Delete"))) {
+		if (!info.packId.empty()) {
+			// Removed from the Presets page, which owns the pack.
+			ImGui::TextDisabled("%s", T(TKEY("preset_pack"), "Preset pack"));
+			Util::AddTooltip(T(TKEY("preset_pack_tooltip"), "Applied from a Baseline preset pack. Manage it from the Presets page."));
+		} else if (ImGui::SmallButton(T(TKEY("delete"), "Delete"))) {
 			deletePath = info.filePath;
 			deletePopup.title = T(TKEY("delete_title"), "Delete Feature Overwrite?");
 			deletePopup.message = std::vformat(T(TKEY("delete_message"), "Delete '{0}' from disk? It stops applying on the next load; values already in use are kept."),
@@ -214,6 +220,7 @@ void FeatureOverwritesPanel::BeginExport(Feature* feature)
 	exportState.failed = false;
 	exportState.filter.Clear();
 	exportState.featureLocked = feature != nullptr;
+	exportState.toPresetPack = false;
 
 	if (feature) {
 		AddExportFeature(feature);
@@ -243,6 +250,10 @@ void FeatureOverwritesPanel::DrawExport()
 
 	ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
 	const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);
+	ImGui::Checkbox(T(TKEY("export.to_pack"), "Save as Baseline preset pack"), &exportState.toPresetPack);
+	Util::AddTooltip(T(TKEY("export.to_pack_tooltip"),
+		"Writes Presets/<Mod Name>/Baseline/<Feature>.json with a starter manifest instead of an Overrides file.\n"
+		"It then appears on the Presets page under Baseline, with author, version and description you can edit in the manifest."));
 	ImGui::TextWrapped("%s", exportState.featureLocked ?
 								 T(TKEY("export.description_feature"), "Choose the settings to export, without scene-specific values.") :
 								 T(TKEY("export.description"), "Choose one feature and the settings to export, without scene-specific values."));
@@ -274,9 +285,12 @@ void FeatureOverwritesPanel::DrawExport()
 		}
 
 		exportState.failed = !feature || !SettingsOverrideManager::GetSingleton()->ExportSettings(modName,
-											 exportState.shortNames[exportState.featureIndex], paths, settings);
-		if (!exportState.failed)
+											 exportState.shortNames[exportState.featureIndex], paths, settings, exportState.toPresetPack);
+		if (!exportState.failed) {
+			if (exportState.toPresetPack)
+				UnifiedPresetCatalog::GetSingleton().Discover();
 			ImGui::CloseCurrentPopup();
+		}
 	}
 }
 

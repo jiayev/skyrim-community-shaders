@@ -85,6 +85,8 @@ struct PostProcessing : Feature
 	 */
 	Settings GetCommonBufferData();
 
+	/// Settings from LoadSettings/RestoreDefaultSettings awaiting ProcessSettings in SetupResources or Prepass.
+	/// While non-empty, SaveSettings returns this instead of the live pipeline state.
 	json pendingSettings = {};
 
 	void ProcessSettings(json& o_json);

@@ -202,6 +202,10 @@ public:
 		std::string author;
 		std::string description;
 		std::vector<std::string> tags;
+		/// Community Shaders version this export was authored on (MAJOR.MINOR.PATCH).
+		std::string csVersion;
+		/// Feature short names the pack expects loaded.
+		std::vector<std::string> requiredFeatures;
 		std::filesystem::path logoSource;
 		std::filesystem::path coverSource;
 		std::vector<std::filesystem::path> screenshotSources;
@@ -211,6 +215,7 @@ public:
 	};
 
 	/** @brief Bakes every context's winning values into Presets/<Name>/, replacing its scene files and merging its manifest and artwork.
+	 *  When type is E11, also saves and copies the active ENB layout into Presets/<Name>/effects11/.
 	 *  @return Whether every file was written. */
 	bool ExportPreset(const PresetExportInfo& info);
 
@@ -222,6 +227,8 @@ public:
 		std::string author;
 		std::string description;
 		std::vector<std::string> tags;
+		std::string csVersion;
+		std::vector<std::string> requiredFeatures;
 		std::string logo;
 		std::string cover;
 		std::vector<std::string> screenshots;

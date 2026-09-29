@@ -109,7 +109,7 @@ void ExponentialHeightFog::DrawSettings()
 {
 	const auto& enb = globals::features::effects11;
 	const Util::LockedSection enbLock(enb.loaded && enb.enableEffect,
-		T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	ImGui::Checkbox(T(TKEY("enable_exp_height_fog"), "Enable Exponential Height Fog"), (bool*)&settings.enabled);
 	ImGui::SliderFloat(T(TKEY("start_distance"), "Start Distance"), &settings.startDistance, 0.0f, 100000.0f, "%.1f");

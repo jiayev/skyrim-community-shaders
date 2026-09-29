@@ -22,7 +22,7 @@ namespace
 void ReferenceEffectWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##ReferenceEffectSearch")) {
 		DrawWidgetHeader("##ReferenceEffectSearch", true, true);
 		DrawSearchDropdown();
 		BeginScrollableContent("##REScroll");

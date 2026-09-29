@@ -30,7 +30,7 @@ namespace
 void VolumetricLightingWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##VolumetricLightingSearch")) {
 		DrawWidgetHeader("##VolumetricLightingSearch", true, true);
 		DrawSearchDropdown();
 	}

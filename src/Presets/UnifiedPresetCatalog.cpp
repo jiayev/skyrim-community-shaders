@@ -1,11 +1,15 @@
 #include "UnifiedPresetCatalog.h"
 #include "PCH.h"
 
+#include "Feature.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Globals.h"
 #include "CSEditor/SceneManager/SceneManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "I18n/I18n.h"
+#include "Presets/PresetCompatibility.h"
+#include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
@@ -25,8 +29,9 @@ namespace
 {
 	constexpr intptr_t kShellExecuteSuccessThreshold = 32;
 	constexpr const char* kActiveStateFileName = "_active.json";
+	constexpr const char* kBaselinePackIdsKey = "baselinePackIds";
 	constexpr const char* kLegacyMetaFileName = "preset.json";
-	constexpr const char* kEffects11PackSubdir = "effects11";
+	constexpr const char* kEffects11PackSubdir = UnifiedPresetCatalog::kEffects11PackSubdir;
 	// The colon keeps it out of the pack folder namespace, like orphan "e11:" ids.
 	constexpr const char* kEffects11LegacyPackId = "legacy:effects11";
 	constexpr std::string_view kEffects11OrphanPrefix = "e11:";
@@ -72,12 +77,36 @@ namespace
 		if (it == manifest.end())
 			return std::nullopt;
 		if (it->is_string()) {
-			for (auto type : { PresetType::CS, PresetType::E11 })
+			for (auto type : { PresetType::CS, PresetType::E11, PresetType::Baseline })
 				if (Util::IEquals(it->get_ref<const std::string&>(), UnifiedPresetCatalog::GetPresetTypeName(type)))
 					return type;
 		}
 		logger::warn("[Presets] Pack '{}' has unknown type '{}'; grouping by detected payloads", packId, it->dump());
 		return std::nullopt;
+	}
+
+	/** @brief Whether an id from persisted state is a plain pack folder name, never a path or an orphan id. */
+	bool IsPackFolderId(const std::string& id)
+	{
+		return !id.empty() && id != "." && id != ".." && id.find_first_of("/\\:") == std::string::npos;
+	}
+
+	/** @brief Feature short names set by a pack's Baseline folder, sorted and de-duplicated. */
+	std::vector<std::string> ListBaselineFeatures(const std::filesystem::path& packRoot)
+	{
+		std::vector<std::string> features;
+		std::error_code ec;
+		for (const auto& entry : std::filesystem::directory_iterator(packRoot / UnifiedPresetCatalog::kBaselineSubdir, ec)) {
+			std::error_code typeEc;
+			if (!entry.is_regular_file(typeEc))
+				continue;
+			auto name = SettingsOverrideManager::ParseBaselineFeatureName(entry.path());
+			if (!name.empty())
+				features.push_back(std::move(name));
+		}
+		std::ranges::sort(features);
+		features.erase(std::unique(features.begin(), features.end()), features.end());
+		return features;
 	}
 
 	bool IsImageExtension(const std::filesystem::path& path)
@@ -215,7 +244,14 @@ std::filesystem::path UnifiedPresetCatalog::GetPackManifestPath(const std::files
 
 const char* UnifiedPresetCatalog::GetPresetTypeName(PresetType type)
 {
-	return type == PresetType::E11 ? "E11" : "CS";
+	switch (type) {
+	case PresetType::E11:
+		return "E11";
+	case PresetType::Baseline:
+		return "Baseline";
+	default:
+		return "CS";
+	}
 }
 
 json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoot, std::string* outError)
@@ -285,6 +321,7 @@ std::filesystem::path UnifiedPresetCatalog::ResolveActivePackPath(const std::fil
 void UnifiedPresetCatalog::LoadActiveState()
 {
 	activePackId.clear();
+	baselinePackIds.clear();
 	const auto path = GetPresetsRealPath() / kActiveStateFileName;
 	std::ifstream in(path);
 	if (!in)
@@ -293,8 +330,15 @@ void UnifiedPresetCatalog::LoadActiveState()
 		json j;
 		in >> j;
 		activePackId = j.value("activePackId", "");
+		if (const auto ids = j.find(kBaselinePackIdsKey); ids != j.end() && ids->is_array()) {
+			for (const auto& id : *ids) {
+				if (id.is_string() && IsPackFolderId(id.get_ref<const std::string&>()) && !IsBaselineEnabled(id.get<std::string>()))
+					baselinePackIds.push_back(id.get<std::string>());
+			}
+		}
 	} catch (...) {
 		activePackId.clear();
+		baselinePackIds.clear();
 	}
 }
 
@@ -305,8 +349,9 @@ void UnifiedPresetCatalog::SaveActiveState() const
 	try {
 		json j;
 		j["activePackId"] = activePackId;
-		std::ofstream out(path);
-		out << std::setw(4) << j;
+		j[kBaselinePackIdsKey] = baselinePackIds;
+		if (!Util::FileHelpers::WriteJsonAtomically(path, j, 4, "active pack state"))
+			logger::warn("[Presets] Failed to save active pack state to {}", path.string());
 	} catch (const std::exception& e) {
 		logger::warn("[Presets] Failed to save active pack state: {}", e.what());
 	}
@@ -355,11 +400,18 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.version = meta.value("version", "");
 			pack.description = meta.value("description", "");
 			pack.nexusUrl = meta.value("nexusUrl", "");
+			pack.csVersion = meta.value("csVersion", "");
 			pack.type = ReadPresetType(meta, packId);
 			if (meta.contains("tags") && meta["tags"].is_array()) {
 				for (const auto& tag : meta["tags"]) {
 					if (tag.is_string())
 						pack.tags.push_back(tag.get<std::string>());
+				}
+			}
+			if (meta.contains("requiredFeatures") && meta["requiredFeatures"].is_array()) {
+				for (const auto& feature : meta["requiredFeatures"]) {
+					if (feature.is_string())
+						pack.requiredFeatures.push_back(feature.get<std::string>());
 				}
 			}
 
@@ -384,15 +436,17 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
 		pack.hasEffects11 = !pack.effects11Root.empty();
 		pack.hasCSPresets = SceneSettingsManager::HasScenePayload(packRoot);
+		pack.baselineFeatures = ListBaselineFeatures(packRoot);
+		pack.hasBaseline = !pack.baselineFeatures.empty();
 
 		if (pack.description.empty())
 			pack.description = InferDescriptionFromReadme(packRoot);
 		InferMissingArtwork(pack);
 
-		if (!pack.hasEffects11 && !pack.hasCSPresets) {
+		if (!pack.hasEffects11 && !pack.hasCSPresets && !pack.hasBaseline) {
 			pack.valid = false;
 			if (pack.invalidReason.empty())
-				pack.invalidReason = "No Effects11 or CS Presets payload found";
+				pack.invalidReason = "No Effects11, CS Presets or Baseline payload found";
 		}
 
 		packs.push_back(std::move(pack));
@@ -638,13 +692,77 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 	if (pack->hasCSPresets)
 		appliedAny = true;
 
+	// A Baseline-only pack is its own layer, so it must not displace the active Effects 11 / CS pack.
 	if (appliedAny) {
 		SetActivePackId(id);
 		// The scene layer always follows the active pack, so a pack without scene files clears it.
 		globals::features::sceneManager.ReloadOverwrites();
 	}
 
+	if (pack->hasBaseline) {
+		EnableBaseline(*pack);
+		appliedAny = true;
+	}
+
 	return appliedAny;
+}
+
+bool UnifiedPresetCatalog::IsBaselineEnabled(const std::string& id) const
+{
+	return std::ranges::find(baselinePackIds, id) != baselinePackIds.end();
+}
+
+void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
+{
+	// Re-enabling moves the pack to the end so it wins conflicts against the other Baseline packs.
+	std::erase(baselinePackIds, pack.id);
+	baselinePackIds.push_back(pack.id);
+	SaveActiveState();
+
+	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
+
+	// The baseline is the layer beneath the scene, so reapply it without the scene's values in play.
+	SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+	for (const auto& featureName : pack.baselineFeatures) {
+		auto* feature = Feature::FindFeatureByShortName(featureName);
+		if (!feature || !feature->loaded) {
+			logger::info("[Presets] Baseline '{}': feature '{}' is not loaded; it applies once the feature loads", pack.id, featureName);
+			continue;
+		}
+		if (!feature->ReapplyOverrideSettings())
+			logger::warn("[Presets] Baseline '{}': nothing applied to '{}' (see Feature Issues for rejected files)", pack.id, featureName);
+	}
+}
+
+bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)
+{
+	if (std::erase(baselinePackIds, id) == 0)
+		return false;
+	SaveActiveState();
+
+	auto* overrides = SettingsOverrideManager::GetSingleton();
+	overrides->RefreshOverrides();
+	// Drops the .user deltas of features that no longer have any override behind them.
+	overrides->CleanupStaleUserOverrides();
+	logger::info("[Presets] Removed Baseline pack '{}'", id);
+	return true;
+}
+
+bool UnifiedPresetCatalog::EnsureBaselineManifest(const std::filesystem::path& packRoot, const std::string& displayName)
+{
+	const auto manifestPath = GetPackManifestPath(packRoot);
+	std::error_code ec;
+	if (std::filesystem::exists(manifestPath, ec))
+		return true;
+
+	json manifest;
+	manifest["name"] = displayName;
+	manifest["author"] = "";
+	manifest["version"] = "1.0.0";
+	manifest["description"] = "";
+	manifest[kPresetTypeKey] = GetPresetTypeName(PresetType::Baseline);
+	manifest["csVersion"] = PresetCompatibility::CurrentCsVersionString();
+	return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
 }
 
 bool UnifiedPresetCatalog::OpenPresetsFolder() const

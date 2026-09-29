@@ -33,7 +33,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void IBL::DrawSettings()
 {
 	const Util::LockedSection enbLock(IsManagedByENB(),
-		T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	ImGui::Checkbox(T(TKEY("enable_ibl"), "Enable IBL"), (bool*)&settings.EnableIBL);
 	if (auto _tt = Util::HoverTooltipWrapper()) {

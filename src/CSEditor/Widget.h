@@ -169,8 +169,15 @@ public:
 	/** @brief Type name for widget-type-level state sharing (window size, etc.). */
 	virtual const char* GetWidgetTypeName() const = 0;
 
-	/** @brief Call instead of SetupWidgetWindowDefaults + ImGui::Begin. Tracks per-type window size. */
-	bool BeginWidgetWindow();
+	/**
+	 * @brief Call instead of SetupWidgetWindowDefaults + ImGui::Begin. Tracks per-type window size.
+	 *
+	 * Action-button flags are consumed by the floating custom header (via drawExtras) when they
+	 * fit beside the title; otherwise DrawWidgetHeader falls back to an inline row. Docked windows
+	 * skip the custom header and place actions in the native title bar from DrawWidgetHeader.
+	 * When searchId is set, the search field is drawn in the title bar between the title and actions.
+	 */
+	bool BeginWidgetWindow(bool showApply = true, bool showSaveLoadRevert = false, bool showForceWeather = false, RE::TESWeather* weather = nullptr, const char* searchId = nullptr);
 
 	/** @brief Queue focus for the next BeginWidgetWindow call (use instead of SetWindowFocus on a not-yet-drawn window). */
 	void RequestFocus() { m_pendingFocus = true; }
@@ -241,12 +248,22 @@ public:
 	virtual bool RequiresManualApply() const { return false; }
 
 	/**
+	 * @brief Draw action buttons inside the native title bar (docked windows) or the floating
+	 *        custom header row (when called from BeginWithCustomHeader's drawExtras).
+	 *
+	 * Returns false when there is no host row or the row is too narrow; the caller should then
+	 * draw the actions inline beside the search bar.
+	 * @param customHeaderRow True when drawing inside BeginWithCustomHeader's drawExtras callback.
+	 * @param searchId When non-null, draws the search field centred between the title and actions.
+	 */
+	bool DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather, bool customHeaderRow = false, const char* searchId = nullptr);
+
+	/**
 	 * @brief Draw the common widget header with search bar and action buttons.
-	 * @param searchId         ImGui ID for the search input.
-	 * @param showApply        If true, show the Apply button.
-	 * @param showSaveLoadRevert If true, show Save/Load/Revert buttons.
-	 * @param showForceWeather If true, show the Force Weather lock button.
-	 * @param weather          The weather form for the Force Weather button (required when showForceWeather is true).
+	 *
+	 * Action buttons and search are placed in the title/custom header when BeginWidgetWindow
+	 * already drew them, or in the native title bar when docked; otherwise they sit inline.
+	 * Flags must match the values passed to BeginWidgetWindow.
 	 */
 	void DrawWidgetHeader(const char* searchId, bool showApply = true, bool showSaveLoadRevert = false, bool showForceWeather = false, RE::TESWeather* weather = nullptr);
 
@@ -440,6 +457,8 @@ protected:
 	// while the buffer is unchanged.
 	std::string searchResultsForQuery;
 	bool m_pendingFocus = false;
+	bool m_customHeaderActionsDrawn = false;
+	bool m_titleBarSearchDrawn = false;
 
 	void ClearSearchState(bool clearBuffer);
 	void NavigateToSearchResult(const SearchResult& result);

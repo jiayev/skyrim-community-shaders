@@ -41,7 +41,7 @@ namespace
 void PrecipitationWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##PrecipitationSearch")) {
 		DrawWidgetHeader("##PrecipitationSearch", true, true);
 		DrawSearchDropdown();
 

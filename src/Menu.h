@@ -157,6 +157,8 @@ public:
 	void RecordDirectInputWheelDelta(std::int32_t delta);
 	/** @brief Returns true if the menu should consume all input (menu open or capturing hotkey) */
 	bool ShouldSwallowInput();
+	/** @brief Keeps Skyrim's AFK vanity camera off while any CS UI is open (settings, editor, first-time setup). */
+	void SyncVanityCamera();
 	/** @brief Returns true if the free camera preview is in flying mode */
 	bool IsPreviewFlying();
 	/**
@@ -567,6 +569,10 @@ private:
 	// suppressed so a shared single-key binding (e.g. End) doesn't also fire once
 	// the modifier is released first.
 	std::unordered_set<uint32_t> _comboFiredKeys;
+
+	// Skyrim AFK vanity camera — delayed spin while idle. Held off while any CS UI is open.
+	bool vanityCameraDisabled = false;
+	float savedVanityCameraDelay = 180.0f;
 
 	Menu() = default;
 

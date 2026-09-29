@@ -6,11 +6,13 @@
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "PresetManager.h"
 #include "SettingManager.h"
 #include "State.h"
 #include "TextureManager.h"
+#include "Utils/UI.h"
 
 #include <format>
 
@@ -48,98 +50,6 @@ void MenuManager::RenderImGui()
 	ImGui::EndChild();
 
 	ImGui::EndTable();
-}
-
-void MenuManager::RenderPresetSelector()
-{
-	constexpr float kPresetComboButtonReserve = 160.0f;
-
-	auto& presetManager = PresetManager::GetSingleton();
-	auto& effects11 = globals::features::effects11;
-	const auto& theme = globals::menu->GetSettings().Theme.StatusPalette;
-
-	if (presetManager.GetPresets().empty())
-		presetManager.DiscoverPresets();
-
-	const auto& presets = presetManager.GetPresets();
-
-	int currentItem = 0;
-	for (size_t i = 0; i < presets.size(); ++i) {
-		if (presets[i].id == presetManager.GetActivePresetId()) {
-			currentItem = static_cast<int>(i);
-			break;
-		}
-	}
-
-	ImGui::Text("Preset");
-	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - kPresetComboButtonReserve);
-	const char* preview = presets.empty() ? "None" : presets[currentItem].displayName.c_str();
-	if (ImGui::BeginCombo("##Effects11Preset", preview)) {
-		for (size_t i = 0; i < presets.size(); ++i) {
-			const auto& preset = presets[i];
-			ImGui::BeginDisabled(!preset.valid);
-			const bool selected = static_cast<int>(i) == currentItem;
-			std::string label = preset.displayName;
-			if (!preset.valid)
-				label += std::format(" ({})", preset.invalidReason);
-
-			if (ImGui::Selectable(label.c_str(), selected) && preset.valid) {
-				if (presetManager.SwitchPreset(preset.id, true)) {
-					effects11.PersistActivePreset();
-					currentItem = static_cast<int>(i);
-				}
-			}
-			if (selected)
-				ImGui::SetItemDefaultFocus();
-			ImGui::EndDisabled();
-		}
-		ImGui::EndCombo();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Switch ENB FX presets. Selection is saved to Community Shaders settings immediately. Recompiles Effects11 shaders only (not Community Shaders).");
-	}
-
-	ImGui::SameLine();
-	if (ImGui::Button("Refresh")) {
-		const auto previous = presetManager.GetActivePresetId();
-		presetManager.DiscoverPresets();
-		if (!presetManager.SetActivePreset(previous)) {
-			presetManager.ReloadActive();
-			effects11.PersistActivePreset();
-		} else {
-			effects11.settings.ActivePreset = previous;
-		}
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Rescan %s for installed presets", PresetManager::kPresetsRootRelative);
-	}
-
-	ImGui::SameLine();
-	if (ImGui::Button("Open Folder")) {
-		presetManager.OpenPresetsFolder();
-	}
-	if (ImGui::IsItemHovered()) {
-		ImGui::SetTooltip("Open %s in Explorer. Each subfolder needs %s + %s/.",
-			PresetManager::kPresetsRootRelative,
-			PresetManager::kEnbSeriesIniName,
-			PresetManager::kEnbSeriesDirName);
-	}
-
-	ImGui::TextWrapped("%s", presetManager.GetActivePresetStatusSummary().c_str());
-
-	if (presetManager.IsLegacyActive() && presetManager.GetValidLibraryPresetCount() > 0) {
-		ImGui::TextColored(theme.Warning,
-			"Tip: select a folder preset above for one-click hotswap. Legacy root/Data files are left untouched.");
-	}
-
-	const uint32_t failed = EffectManager::GetSingleton().GetFailedEffectCount();
-	if (failed > 0) {
-		ImGui::TextColored(theme.Error, "%u effect(s) failed to compile", failed);
-	}
-
-	if (!effects11.raindropStatus.empty()) {
-		ImGui::TextColored(theme.Warning, "Rain: %s", effects11.raindropStatus.c_str());
-	}
 }
 
 void MenuManager::RenderSettingsPanel()
@@ -214,16 +124,6 @@ void MenuManager::RenderSettingsPanel()
 	ImGui::EndDisabled();
 
 	ImGui::Separator();
-
-	if (globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11 &&
-		globals::features::postProcessing.loaded &&
-		globals::features::postProcessing.WantsTonemapOwnership()) {
-		ImGui::TextColored(
-			Menu::GetSingleton()->GetTheme().StatusPalette.Warning,
-			"Effects 11 is overriding Post Processing's tonemapping.\n"
-			"Enable \"UseOriginalPostProcessing\" below to hand it back.");
-		ImGui::Separator();
-	}
 
 	if (ImGui::BeginChild("SettingsScroll", ImVec2(0, 0), false)) {
 		RenderAllSettings();
@@ -469,10 +369,23 @@ void MenuManager::RenderAllSettings()
 									{
 										// Covers both a missing preset and one whose enbeffect.fx failed to compile
 										const bool noPreset = category == "GLOBAL" && settingKey == "UseEffect" && !EffectManager::GetSingleton().IsPresetLoaded();
+										const bool forcedByPostProcessing = category == "EFFECT" && settingKey == "UseOriginalPostProcessing" &&
+										                                    globals::features::postProcessing.loaded &&
+										                                    globals::features::postProcessing.WantsTonemapOwnership();
 
-										bool v = !noPreset && settingManager.GetValue<bool>(settingID, true);
-										ImGui::BeginDisabled(noPreset);
-										if (ImGui::Checkbox(("##" + settingKey).c_str(), &v)) {
+										if (forcedByPostProcessing) {
+											const char* lockMsg = T("feature.effects11.use_original_controlled_by_pp",
+												"This setting is controlled by Post Processing.");
+											if (Util::StatusBanner(ICON_FA_LOCK, lockMsg, Util::Colors::GetWarning()))
+												Menu::GetSingleton()->SelectFeatureMenu(globals::features::postProcessing.GetShortName());
+											Util::AddTooltip(T("feature.effects11.use_original_controlled_by_pp_tooltip",
+												"Post Processing controls tonemapping, so UseOriginalPostProcessing is forced on.\nClick to open Post Processing settings."));
+											ImGui::Spacing();
+										}
+
+										bool v = forcedByPostProcessing || (!noPreset && settingManager.GetValue<bool>(settingID, true));
+										ImGui::BeginDisabled(noPreset || forcedByPostProcessing);
+										if (ImGui::Checkbox(("##" + settingKey).c_str(), &v) && !forcedByPostProcessing) {
 											settingManager.SetValue<bool>(settingID, v);
 										}
 										ImGui::EndDisabled();
