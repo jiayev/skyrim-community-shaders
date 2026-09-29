@@ -97,11 +97,20 @@ namespace DCLF
 		 */
 		std::optional<bool> InSunCascades(const RE::NiBound& a_bound) const;
 		/**
-		 * @brief This frame's captured cascades as BuildDraws tests them (BuildDrawsLatch): per cascade, 6 planes and
-		 * then 6 custom planes as (normal, constant), and the two active-plane masks (0 custom: none). Render thread,
-		 * after the sun's Accumulate. Returns the number of cascades, 0 when none were captured this frame.
+		 * @brief One cascade as BuildDraws tests it (the colour latch's cascade region, IndirectDraws: kSunCascadeBytes): the
+		 * two active-plane masks (0 custom: none), then 6 planes and 6 custom planes as (normal, constant).
 		 */
-		std::uint32_t GpuCascades(std::uint32_t (&a_masks)[4][2], float (&a_planes)[4][12][4]) const;
+		struct GpuCascade
+		{
+			std::uint32_t masks[2]{};
+			std::uint32_t pad[2]{};
+			float planes[12][4]{};
+		};
+		/**
+		 * @brief This frame's captured cascades as BuildDraws tests them, into a_out (cleared first). Render thread, after the
+		 * sun's Accumulate. Empty when none were captured this frame.
+		 */
+		void GpuCascades(std::vector<GpuCascade>& a_out) const;
 		/** @brief Whether this frame's full-frustum cull applied the entry exclusion (its cascades will be captured). */
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
 		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit this frame. */
@@ -196,7 +205,9 @@ namespace DCLF
 			std::shared_ptr<SunExclusion> exclusion;  // kept alive until the next full-frustum cull
 			std::uint32_t stamp = 0;
 			bool probe = false;                       // dry: nothing removed, the bits compared instead
-			std::array<Cascade, 4> cascades{};
+			// One per cascade of the sun's Accumulate (grown there, while bitsReady is clear, so no reader sees it move); the
+			// first cascadeCount are this frame's.
+			std::vector<Cascade> cascades;
 			std::uint32_t cascadeCount = 0;
 			std::uint32_t sunBits = 0;                // every cascade's bit
 		};

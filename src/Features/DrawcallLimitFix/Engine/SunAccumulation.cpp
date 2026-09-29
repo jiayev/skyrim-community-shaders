@@ -44,7 +44,6 @@ namespace DCLF
 		constexpr std::size_t kGeometryRendererData = 0x138;
 		constexpr std::size_t kGeometryType = 0x150;
 		constexpr std::size_t kDismemberSkinReady = 0x98;
-		constexpr std::uint32_t kMaxCascades = 4;
 
 		/** @brief Whether M1 applies this frame: the claims it skips registrations by exist and are in force. */
 		bool M1Active(const ToggleSet& a_toggles)
@@ -81,8 +80,8 @@ namespace DCLF
 		 */
 		struct SunCall
 		{
-			std::array<const void*, kMaxCascades> accumulators{};
-			std::array<std::shared_ptr<const PassCapture::ClaimSet>, kMaxCascades> claims{};
+			std::vector<const void*> accumulators;
+			std::vector<std::shared_ptr<const PassCapture::ClaimSet>> claims;
 			std::uint32_t count = 0;
 			int cascade = -1;  // the cascade FUN_1414f0920 is culling (index into accumulators), -1 between them
 			std::uint64_t skipped = 0;
@@ -98,8 +97,9 @@ namespace DCLF
 		};
 		thread_local SunCall* currentCall = nullptr;
 
-		// The sun's accumulators as the last Accumulate saw them, for spotting a sun registration made elsewhere.
-		std::array<std::atomic<const void*>, kMaxCascades> knownAccumulators{};
+		// The sun's accumulators as the last Accumulate saw them, for spotting a sun registration made elsewhere: published
+		// whole when they change, read by the registration threads.
+		std::atomic<std::shared_ptr<const std::vector<const void*>>> knownAccumulators;
 
 		/**
 		 * @brief FUN_1414b2140 without the mode's registration: its early-outs (a dismemberment skin not yet set up, no
@@ -217,7 +217,8 @@ namespace DCLF
 		frameState.exclusion = std::move(exclusion);
 		frameState.stamp = stamp;
 		frameState.probe = probe;
-		frameState.cascades = {};
+		for (auto& cascade : frameState.cascades)
+			cascade = {};
 		frameState.cascadeCount = 0;
 		frameState.sunBits = 0;
 		exclusionLive.store(true, std::memory_order_release);
@@ -244,25 +245,24 @@ namespace DCLF
 		return false;
 	}
 
-	std::uint32_t SunAccumulation::GpuCascades(std::uint32_t (&a_masks)[4][2], float (&a_planes)[4][12][4]) const
+	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
+		a_out.clear();
 		if (!exclusionLive.load(std::memory_order_acquire))
-			return 0;
-		std::uint32_t count = 0;
+			return;
 		const auto& state = frameState;
-		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size() && count < 4; ++c) {
+		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size(); ++c) {
 			const auto& cascade = state.cascades[c];
 			if (!cascade.captured)
 				continue;
+			auto& out = a_out.emplace_back();
 			for (std::uint32_t p = 0; p < 6; ++p) {
-				std::memcpy(a_planes[count][p], cascade.planes[p].data(), sizeof(float) * 4);
-				std::memcpy(a_planes[count][6 + p], cascade.customPlanes[p].data(), sizeof(float) * 4);
+				std::memcpy(out.planes[p], cascade.planes[p].data(), sizeof(float) * 4);
+				std::memcpy(out.planes[6 + p], cascade.customPlanes[p].data(), sizeof(float) * 4);
 			}
-			a_masks[count][0] = cascade.planeMask;
-			a_masks[count][1] = cascade.customMask;
-			++count;
+			out.masks[0] = cascade.planeMask;
+			out.masks[1] = cascade.customMask;
 		}
-		return count;
 	}
 
 	std::uint32_t SunAccumulation::RemovedGeometryIndex(const RE::BSGeometry* a_geometry) const
@@ -361,19 +361,25 @@ namespace DCLF
 				SunCall call;
 				auto& descriptors = a_light->GetRuntimeData().shadowmapDescriptors;
 				const bool active = M1Active(ActiveToggles());
-				for (std::uint32_t i = 0; i < descriptors.size() && call.count < kMaxCascades; ++i) {
+				call.accumulators.reserve(descriptors.size());
+				call.claims.reserve(descriptors.size());
+				for (std::uint32_t i = 0; i < descriptors.size(); ++i) {
 					auto* accumulator = descriptors[i].shaderAccumulator.get();
 					if (!accumulator)
 						continue;
-					call.accumulators[call.count] = accumulator;
-					knownAccumulators[call.count].store(accumulator, std::memory_order_relaxed);
+					call.accumulators.push_back(accumulator);
 					// The claims PassCapture would withhold this accumulator's passes by: its batch renderer's
 					// render mode's, when the renderer is a shadow view's.
-					if (active)
-						if (const auto* data = accumulator->GetRuntimeData())
-							call.claims[call.count] = PassCapture::Get().ShadowClaimsForBatch(data->batchRenderer);
+					const auto* data = active ? accumulator->GetRuntimeData() : nullptr;
+					call.claims.push_back(data ? PassCapture::Get().ShadowClaimsForBatch(data->batchRenderer) : nullptr);
 					++call.count;
 				}
+				if (const auto known = knownAccumulators.load(std::memory_order_acquire); !known || *known != call.accumulators)
+					knownAccumulators.store(std::make_shared<const std::vector<const void*>>(call.accumulators), std::memory_order_release);
+				// Room for every cascade before any is captured: the registration threads read the cascades only once bitsReady
+				// is set, which the full-frustum cull cleared before this.
+				if (self.frameState.cascades.size() < call.count)
+					self.frameState.cascades.resize(call.count);
 				currentCall = &call;
 				const std::int64_t start = Now();
 				func(a_light, a_count, a_arg2, a_arg3);
@@ -413,11 +419,9 @@ namespace DCLF
 				auto* geometry = static_cast<RE::BSGeometry*>(a_geometry);
 				if (cascade < 0) {
 					if (!call) {
-						for (const auto& known : knownAccumulators)
-							if (known.load(std::memory_order_relaxed) == a_accumulator) {
-								self.offThread.fetch_add(1, std::memory_order_relaxed);
-								break;
-							}
+						if (const auto known = knownAccumulators.load(std::memory_order_acquire);
+							known && std::find(known->begin(), known->end(), a_accumulator) != known->end())
+							self.offThread.fetch_add(1, std::memory_order_relaxed);
 					}
 					if (PrimaryCull::Probe() && PrimaryCull::Get().Counting())
 						PrimaryCull::Get().NoteRegistration(a_accumulator, geometry);

@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 #include <winrt/base.h>
 
@@ -13,11 +15,13 @@ namespace DCLF
 	 * @brief The game's D3D11 buffers as the render graph sees them.
 	 *
 	 * Resolves a buffer once through RenderGraphRuntime::DescribeResource, which marks it stable in DXVK
-	 * (never relocated or renamed from then on), and keeps a reference on it while it is cached, so the
-	 * Vulkan handle and device address stay valid. Entries no table used for kEvictFrames frames are
-	 * released. Buffers the game can map cannot be made stable; they are remembered as rejected.
+	 * (never relocated or renamed from then on), and hands out a lease that holds a reference on it, so the
+	 * Vulkan handle and device address stay valid. An entry lives exactly as long as a lease on it does (the
+	 * geometry slots that draw the buffer, and the publications they are in): the registry holds it weakly, and
+	 * the last lease's release queues it for removal. Buffers the game can map cannot be made stable; they are
+	 * not remembered (the object's verdict is, SceneStore's UnstableBuffer).
 	 *
-	 * Render thread only.
+	 * Render thread only, except that a lease may be released on any thread.
 	 */
 	class GpuResources
 	{
@@ -33,7 +37,7 @@ namespace DCLF
 		{
 			Buffer buffer;
 			std::uint64_t generation = 0;  // unique on successful import, including pointer reuse
-			std::shared_ptr<const void> owner;  // pins the D3D11 buffer beyond cache eviction
+			std::shared_ptr<const void> owner;  // pins the D3D11 buffer and keeps the entry
 		};
 
 		struct Stats
@@ -53,25 +57,13 @@ namespace DCLF
 		bool Enabled() const;
 
 		/**
-		 * @brief The buffer's Vulkan view, resolving it on first use; nullopt if it cannot be made stable.
-		 *
-		 * By value: the entries live in a map whose storage moves when it grows, so a pointer into it is
-		 * only good until the next first-time Resolve. Returning one was how a vertex address came out as
-		 * garbage whenever the index buffer's insert reallocated the map - harmless while the table was
-		 * rebuilt every frame, a device loss once a slot kept the record.
+		 * @brief A lease on the buffer's Vulkan view, resolving it when no lease on it is held; nullopt if it cannot be
+		 * made stable. The buffer stays resolved while the caller holds the lease.
 		 */
-		std::optional<Buffer> Resolve(ID3D11Buffer* a_buffer);
-		/**
-		 * @brief Marks a resolved buffer as used this frame without resolving it: what a persistent
-		 * geometry slot does each frame so the reference it depends on is not evicted. False if the
-		 * buffer is not held (the slot must resolve again).
-		 */
-		bool Touch(ID3D11Buffer* a_buffer);
-		/** @brief Retains an already imported buffer for an immutable publication; never imports inline. */
-		std::optional<LeasedBuffer> Lease(ID3D11Buffer* a_buffer);
+		std::optional<LeasedBuffer> Acquire(ID3D11Buffer* a_buffer);
 
-		/** @brief Once per frame, before the tables are built: releases entries unused for kEvictFrames. */
-		void BeginFrame(std::uint32_t a_frame);
+		/** @brief Once per frame, before the tables are built: removes the entries whose last lease went. */
+		void BeginFrame();
 
 		const Stats& GetStats() const { return stats; }
 
@@ -79,21 +71,22 @@ namespace DCLF
 		void Clear();
 
 	private:
-		static constexpr std::uint32_t kEvictFrames = 600;
-
 		struct Entry
 		{
-			winrt::com_ptr<ID3D11Buffer> reference;
-			std::shared_ptr<const void> owner;
 			Buffer buffer;
 			std::uint64_t generation = 0;
-			std::uint32_t lastUsed = 0;
-			bool stable = false;
+			std::weak_ptr<const void> owner;
+		};
+		// The keys whose last lease went, from whichever thread released it.
+		struct Released
+		{
+			std::mutex mutex;
+			std::vector<ID3D11Buffer*> keys;
 		};
 
 		ankerl::unordered_dense::map<ID3D11Buffer*, Entry> entries;
+		std::shared_ptr<Released> released = std::make_shared<Released>();
 		std::uint64_t nextGeneration = 1;
-		std::uint32_t frame = 0;
 		Stats stats;
 	};
 }

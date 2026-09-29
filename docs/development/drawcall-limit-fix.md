@@ -183,6 +183,15 @@ those targets over the native ones before the deferred composite, so the frame s
     view is imported into BasicRHI without ownership, with simultaneous access, and gets a view in ORG's
     shader-visible heap (a slot from ORG's descriptor service, retired against ORG's fences on eviction).
     A null view (the engine binds none) reads zero through a null descriptor, as D3D11's null SRV does.
+    An import is not made on the render thread (since 2026-09-29). Marking the image stable is a synchronous
+    chunk on DXVK's CS thread, and the view creation blocks in the driver, for milliseconds each while the game
+    streams textures (up to 20 ms inside the Z-prepass inputs). `GpuTextures::RequestBinding` queues an unknown
+    view for a DCLF import thread and returns it pending. The material stays unresolved, and its draws are
+    deferred, which leaves them the engine's (a deferred draw is never marked drawn, so nothing is claimed).
+    A later refresh takes the settled import. The same applies to projected textures, the shadow mask and the
+    shadow casters' diffuse. Only the frame's textures (t16 and up) still import inline
+    (`ResolveBinding`): their draws cannot be deferred, and they are a few stable render targets. A settled
+    import nobody asks for again within 30 s is released.
 -   **Samplers** are copies of the renderer's own D3D11 sampler states, the table the engine selects from by
     the shadow state's address and filter modes (engine notes: samplers).
 -   **Per-frame constant buffers and dynamic structured buffers** are never locked: `ConstantMirror` keeps
@@ -4798,6 +4807,48 @@ as able to get a record (`PerFrameOf`).
 -   The event drain is unchanged (0.05-0.06 ms).
 -   The ten stubs take 285 bytes of the SKSE trampoline, which went from 2 to 4 KiB.
 
+## Scene membership (bindings by events)
+
+An eligible object's main-pass binding (pipeline slot, material slot, shading, lights' room) is decided when the scene
+phase writes its record, not by what the engine registered this frame. The camera no longer adds or drops bindings.
+
+-   **Binding.** `WriteObject` queues every eligible, non-shadow-only record it writes (`bindQueue`), whether the object
+    entered the scene or an event rewrote it. `BindByMembership` builds the object's pass from the object alone
+    (`PrimaryCull::MembershipPass`), and the accumulate phase patches it once, as a member (`kObjectMember`, the
+    resident records). The queue waits until the engine's Lighting shader exists, because the material records are its
+    `SetupMaterial`.
+-   **Rewrites keep the binding.** A member written again (a skin, a face or a mover, every frame; or an event) keeps
+    its slot, its patch and its membership. It is bound again only when what the binding reads changed
+    (`MemberBindingStands`: the derivation cache's witnesses, meaning property, material, geometry slot, fade state,
+    alpha and interior). Animated shading and the extras rows (projected UV, land blend) are per-frame inputs that the
+    watch resamples (`RefreshFrameConstants`), so members take them too.
+-   **Fade-out.** The GPU's fade test measures from the object's own fade node (`Tables::lodFade`, which is now written
+    for every object with a fade node; `kLodFadeHeld` marks the ones without the draw's LOD fades), not from its entry
+    root. So an object whose fade node is not its entry root can be a member too.
+-   **Moves are not exits.** The engine moves physics objects between a cell's dynamic and static nodes as they wake and
+    sleep. Each move is a detach followed by an attach. A detached geometry that is back under a tracked category node
+    by the end of the event batch keeps its entry (`detachMoves`; the attach has evaluated it again). About 3,000-10,000
+    moves happen per 5 s in Riverwood, and before this change every one of them released a member and its material.
+-   **Sun candidates.** The per-root signature is a set hash, so a moved geometry, which is listed again at the end of
+    its root's dependents, does not rebuild the snapshot.
+
+**Lifetimes are usage counts.** Geometry, pipeline and material slots are all freed at their last reference, after
+the journal batch (`SlotTable::DrainUnreferenced`), with no idle-frame grace. A game buffer's `GpuResources` entry lives
+exactly as long as a lease on it does: the geometry slots hold the leases, the registry holds entries weakly, and the
+last lease's release queues the removal. There is no touch and no eviction age, and rejections are not cached. A
+written material is re-evaluated in place while its slot is referenced. The category-node set is rebuilt only on a
+signature change or a detach (no 30-frame backstop).
+
+Still on the registered path: objects `MembershipPass` cannot model (decal shapes, fading or translucent ones), and
+skins whose LOD row selects no partition (released as Hidden). The latter show up as NPC shields and weapons.
+
+Measured (Riverwood, camera turning, 5 s intervals):
+-   Material slots retired on last reference: 46 / 207 / 123 / 113 per interval. Before membership it was about 600
+    per 6 s, and with membership but before the rewrite and move fixes it was 310-520.
+-   About 3,050 material slots are alive, up from about 2,100, because every eligible object in the scene is now bound.
+-   Scene phase 1.3-1.8 ms and accumulate phase 0.8-1.1 ms, the same range as before.
+-   Resident parity: 0 of about 99,000 records differ. Holes: 0.
+
 ## Resident entries (culling-job elimination, phase 4)
 
 A stood-in entry still took its list job every frame: the frustum test picked which synthetic passes were built, and
@@ -5318,6 +5369,8 @@ the sun's full-frustum culling processes.
 -   **The latch grew to 2 KB.** The sun has six processes at Riverwood, more than the four cascade plane sets the
     latch already held, and the rule is a union over processes, where a cascade's plane sets intersect.
 -   **Above eight processes** the CPU's flag is used, as before.
+-   **Since 2026-09-29** the processes are no longer in each view's latch: one region per frame slot holds any number
+    of them, and the CPU flag is gone (dclf-architecture.md, "The sun's plane sets and the view rasterizer states").
 -   **Check** (`CS_DCLF_PERSISTENT_PARITY`): the latch's test, run on the CPU over every sun input, against the old
     verdict. Tour: 0 differences over about 100,000 inputs a window. The sampled views' GPU counts (tested, drawn,
     rejected) are the same as the CPU flag's.

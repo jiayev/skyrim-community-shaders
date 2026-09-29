@@ -207,19 +207,16 @@ namespace DCLF
 		 * @brief The shadow key's index in the shadow pipeline set, or kNotReady.
 		 *
 		 * A separate set from the main pass's: its pipelines write depth alone, into the engine's shadow
-		 * map format, with the rasterizer state of the view (the key's RasterShadowState, which must be
-		 * registered) and no colour attachment (engine notes: shadow maps).
+		 * map format, with the rasterizer state of the view (the key's viewState, which must be registered)
+		 * and no colour attachment (engine notes: shadow maps).
 		 * @param a_depthFormat the shadow map array's format; pipelines are rebuilt if it changes.
 		 */
 		std::uint32_t FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat);
 
-		/** @brief How many distinct shadow view rasterizer states a key can name (1 to this). */
-		static constexpr std::uint32_t kMaxShadowRasterStates = 15;
-
 		/**
-		 * @brief The id (1 to kMaxShadowRasterStates) of a shadow view's rasterizer state, registering it the
-		 * first time; 0 when the registry is full or the state has something a pipeline cannot express (no
-		 * depth clipping, wireframe). Views with equal states share the id and so their pipelines.
+		 * @brief The id (1 and up, as many as the views have) of a shadow view's rasterizer state, registering it
+		 * the first time; 0 when the state has something a pipeline cannot express (no depth clipping,
+		 * wireframe). Views with equal states share the id and so their pipelines.
 		 *
 		 * The state is the one the engine binds for the view, read from its table while the view is drawn
 		 * (IndirectDraws::CaptureShadowView): Community Shaders' ShadowmapCascadeRasterizerFix swaps in
@@ -228,8 +225,11 @@ namespace DCLF
 		 */
 		std::uint32_t ShadowRasterStateId(const D3D11_RASTERIZER_DESC& a_desc, std::uint32_t a_renderMode);
 
-		/** @brief The registered ids seen with a render mode, as a mask (bit id). */
-		std::uint32_t ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const;
+		/** @brief How many shadow view rasterizer states are registered (ids 1 to this). */
+		std::uint32_t ShadowRasterStateCount() const;
+
+		/** @brief The registered ids seen with a render mode, ascending. */
+		std::vector<std::uint32_t> ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const;
 
 		/** @brief Adds finished pipelines to the set (call once per frame). */
 		void Update();

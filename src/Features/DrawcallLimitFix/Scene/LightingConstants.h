@@ -183,8 +183,13 @@ namespace DCLF
 		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (SceneStore::Tables::skinWetness),
 		// zero for everything else. Per object like the rest, so the binding record stays per (material, pipeline).
 		float skinPerGeometry[4];
+		// The specular and envmap LOD fades, made by the draw from the frame's camera (LodFadeFrame): the fade node's world
+		// bound centre, and in the word its LOD type and which fades it applies (kLodFadeTypeMask, kLodFadeSpecular, ...);
+		// 0 when nothing fades, and MaterialData's fades are the property's.
+		float lodFadeNode[3];
+		std::uint32_t lodFadeFlags;
 		// To 256 bytes: each row is a constant-buffer block of its own (DCLFObjects.hlsli), bound per draw at its address.
-		std::uint32_t reserved[12]{};
+		std::uint32_t reserved[8]{};
 	};
 	static_assert(sizeof(BindlessObject) == 256);
 

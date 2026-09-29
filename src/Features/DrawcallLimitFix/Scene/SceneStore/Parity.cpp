@@ -133,6 +133,7 @@ namespace DCLF
 		for (std::uint32_t d = 0; d < dense.objects.size(); ++d)
 			denseIndex.emplace(dense.objectGeometry[d], d);
 		auto note = [&](const char* a_what, const RE::BSGeometry* a_geometry) {
+			++walkParity.byWhat[a_what];
 			if (walkParity.first.empty())
 				walkParity.first = fmt::format("{} on '{}'", a_what, a_geometry && a_geometry->name.c_str() ? a_geometry->name.c_str() : "?");
 		};
@@ -206,7 +207,21 @@ namespace DCLF
 						entryIt != tracked.end() && entryIt->second.sunEntryNode && entryIt->second.sunEntryNode->name.c_str() ? entryIt->second.sunEntryNode->name.c_str() : "?",
 						a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
 				}
-			} else if (slots.shadowDiffuse[s] != dense.shadowDiffuse[d] || slots.shadowMaterial[s] != dense.shadowMaterial[d])
+			} else if (slots.lodFade[s] != dense.lodFade[d]) {
+				what = "the LOD fade node";
+				if (walkParity.firstLodFade.empty()) {
+					const auto entryIt = tracked.find(const_cast<RE::BSGeometry*>(geometry));
+					const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+					const auto* fadeNode = property ? property->fadeNode : nullptr;
+					const auto& a = slots.lodFade[s];
+					const auto& b = dense.lodFade[d];
+					walkParity.firstLodFade = fmt::format("'{}' (per-frame {}, fade node '{}' {} the sun entry node): kept ({:.2f} {:.2f} {:.2f} type {}) now ({:.2f} {:.2f} {:.2f} type {})",
+						geometry->name.c_str() ? geometry->name.c_str() : "?", entryIt != tracked.end() && entryIt->second.perFrame,
+						fadeNode && fadeNode->name.c_str() ? fadeNode->name.c_str() : "?",
+						entryIt != tracked.end() && entryIt->second.sunEntryNode == fadeNode ? "is" : "is not", a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+				}
+			}
+			else if (slots.shadowDiffuse[s] != dense.shadowDiffuse[d] || slots.shadowMaterial[s] != dense.shadowMaterial[d])
 				what = "the shadow material";
 			else if ((slots.faceStream[s] == kNoFaceStream) != (dense.faceStream[d] == kNoFaceStream))
 				what = "the face stream";
@@ -302,6 +317,12 @@ namespace DCLF
 		}
 		if (walkParity.checks % 5 == 0) {
 			const bool ok = !walkParity.differ && !walkParity.missing && !walkParity.extra && !walkParity.staleVerdicts && !walkParity.staleTraits;
+			std::string byWhat;
+			for (const auto& [what, count] : walkParity.byWhat)
+				byWhat += fmt::format("{}{} {}", byWhat.empty() ? "" : ", ", what, count);
+			if (!byWhat.empty())
+				logger::info("[DCLF] walk parity differences by what: {}{}{}", byWhat, walkParity.firstLodFade.empty() ? "" : "; first LOD fade node: ",
+					walkParity.firstLodFade);
 			logger::info("[DCLF] walk parity: {} checks, {} objects compared, {} differ, {} missing, {} extra, {} stale verdicts, {} stale traits ({} slots, {} free){}{}{}{}{}{}",
 				walkParity.checks, walkParity.objects, walkParity.differ, walkParity.missing, walkParity.extra, walkParity.staleVerdicts, walkParity.staleTraits,
 				tables.objects.size(), tables.objectFree.size(), ok ? " <- OK" : "; first: ", ok ? "" : walkParity.first,

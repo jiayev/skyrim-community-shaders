@@ -6,6 +6,9 @@ namespace DCLF
 	{
 		if (a_count <= objects.size())
 			return;
+		// A draw's object word carries the index below its local shadow lights (kObjectIndexMask).
+		if (a_count > std::size_t(kObjectIndexMask) + 1)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} object slots do not fit a draw's object word ({} at most)", a_count, kObjectIndexMask + 1u));
 		objects.resize(a_count, FreeObjectRecord());
 		objectGeometry.resize(a_count, nullptr);
 		objectIdentity.resize(a_count, 0);
@@ -24,6 +27,7 @@ namespace DCLF
 		shadowReject.resize(a_count, 0);
 		skyTechnique.resize(a_count, 0);
 		sunEntry.resize(a_count, std::array<float, 4>{});
+		lodFade.resize(a_count, std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f });
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
 		faceStream.resize(a_count, kNoFaceStream);
@@ -45,6 +49,7 @@ namespace DCLF
 		columns.tree = treeAnim[a_slot];
 		columns.wetness = skinWetness[a_slot];
 		columns.sunEntry = sunEntry[a_slot];
+		columns.lodFade = lodFade[a_slot];
 		columns.extraOffset = extraOffset[a_slot];
 		if (columns.extraOffset != kNoExtraRows && (std::size_t(columns.extraOffset) + kExtraRows) * 4 <= extraRows.size())
 			std::memcpy(columns.extras.data(), &extraRows[std::size_t(columns.extraOffset) * 4], sizeof(columns.extras));
@@ -75,12 +80,12 @@ namespace DCLF
 		const auto& x = a.object;
 		const auto& y = b.object;
 		if (!same(x.world, y.world) || !same(x.previousWorld, y.previousWorld) || !same(x.boundCenter, y.boundCenter) || !same(x.boundRadius, y.boundRadius) ||
-			!same(a.sunEntry, b.sunEntry))
+			!same(a.sunEntry, b.sunEntry) || !same(a.lodFade, b.lodFade))
 			causes |= kChangePlacement;
 		if (x.flags != y.flags || x.materialIndex != y.materialIndex || x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex ||
 			!same(a.fadeDistance, b.fadeDistance) || a.sceneFlags != b.sceneFlags)
 			causes |= kChangeBindings;
-		if (!same(a.shading, b.shading) || !same(a.emissiveMult, b.emissiveMult) || !same(a.wetness, b.wetness))
+		if (!same(a.shading, b.shading) || !same(a.emissiveMult, b.emissiveMult) || !same(a.wetness, b.wetness) || !same(a.lodFade, b.lodFade))
 			causes |= kChangeShading;
 		if (!same(a.lights, b.lights))
 			causes |= kChangeLights;
@@ -169,6 +174,7 @@ namespace DCLF
 		shadowReject[a_slot] = 0;
 		skyTechnique[a_slot] = 0;
 		sunEntry[a_slot] = {};
+		lodFade[a_slot] = { 0.0f, 0.0f, 0.0f, -1.0f };
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
 		faceStream[a_slot] = kNoFaceStream;
@@ -209,6 +215,7 @@ namespace DCLF
 			shadowReject.clear();
 			skyTechnique.clear();
 			sunEntry.clear();
+		lodFade.clear();
 			fadeDistance.clear();
 			residentSlot.clear();
 			// Every slot is gone: the log's readers read them all again.
@@ -302,6 +309,7 @@ namespace DCLF
 		shadowReject.clear();
 		skyTechnique.clear();
 		sunEntry.clear();
+		lodFade.clear();
 		fadeDistance.clear();
 		residentSlot.clear();
 		InvalidateChangeLog();

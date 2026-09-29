@@ -66,8 +66,6 @@ namespace DCLF
 		float specularLODFade = 1.0f;  // what GetRenderPasses stores in the property for the PS constants
 		float envmapLODFade = 1.0f;
 		std::uint32_t derivedPass = 0;  // the pass descriptor derived from the property (kNotDerived if it cannot be)
-		float derivedSpecularLODFade = 1.0f;  // the LOD fades the derivation computed, beside the property's (derivedPass)
-		float derivedEnvmapLODFade = 1.0f;
 		// Which technique produced Ineligible::Technique, so coverage can be widened against a histogram
 		// rather than a guess. kRefractionReject marks the refraction rejection, which is not a technique.
 		std::uint32_t rejectedTechnique = 62;  // 62 = never set, so an empty field cannot read as `none`
@@ -90,23 +88,15 @@ namespace DCLF
 	/** @brief LightingDescriptors::derivedPass when the derivation leaves the object native. */
 	inline constexpr std::uint32_t kNotDerived = ~0u;
 
-	/** @brief FadeStateOf: the object has a fade-sensitive flag but no fade node, or a non-finite metric. */
+	/** @brief FadeStateOf: the object has a fade-sensitive flag but no fade node. */
 	inline constexpr std::uint8_t kFadeNoNode = 0x40;
-	inline constexpr std::uint8_t kFadeInvalid = 0x80;
 
 	/**
-	 * @brief The whole camera dependence of the classification, in one byte.
-	 *
-	 * Two bits say whether the specular and environment-map LOD fades have run out, which is all the fade
-	 * metric contributes to the derived technique. An object with none of the fade-sensitive flags has no
-	 * camera dependence and returns 0 without reading the fade node. Comparing this per frame is what lets
-	 * the rest of the classification be cached.
+	 * @brief What the classification reads of the property's fading, in one byte: kFadeNoNode when it has a
+	 * fade-sensitive flag (specular, envmap) but no fade node, which leaves it native; 0 otherwise. The LOD metric is not
+	 * read: the fades it produces are the draw's (LodFadeFrame), so the derived technique does not depend on the camera.
 	 */
 	std::uint8_t FadeStateOf(const RE::BSShaderProperty* a_property);
-	/** @brief FadeStateOf's reading of the fade node alone: its LOD metric past the specular and envmap fade ends, or kFadeInvalid. */
-	std::uint8_t LodFadeStateOf(const RE::BSFadeNode* a_fadeNode);
-	/** @brief Whether the property's derivation reads its fade node's LOD metric (FadeStateOf is not constant for it). */
-	bool FadeSensitive(const RE::BSShaderProperty* a_property);
 
 	/**
 	 * @brief Pass descriptor bits GetRenderPasses sets from per-frame engine state rather than from the
@@ -115,6 +105,64 @@ namespace DCLF
 	 * global other renders toggle (engine notes: GetRenderPasses runtime bits).
 	 */
 	inline constexpr std::uint32_t kRuntimePassBits = 0x1061c0u;
+	/**
+	 * @brief The bits a registered pass supplies over the derivation (DeriveLightingDescriptors): the runtime bits, the
+	 * screen-door fade (AdditionalAlphaMask, 23) and the snow conditions' bits 19 and 21, which the derivation does not set.
+	 */
+	inline constexpr std::uint32_t kRegisteredPassBits = (1u << 20) | (1u << 23) | (1u << 19) | (1u << 21);
+	/**
+	 * @brief The shadow bits of the object's pass, as far as they do not depend on the frame's lights (GetRenderPasses, AE
+	 * 0x1414adfb0): ShadowDir where the sun's shadow may apply, DefShadow where deferred shadows do, and where there is
+	 * DefShadow without ShadowDir one shadow light in the count, which is what makes the technique bind the shadow mask (the
+	 * pixel stage drops the count). The draw then decides per frame (BuildDrawsCS): ShadowDir when its bound meets a
+	 * cascade (kObjectSunTest), DefShadow when that or a local shadow light reaches it (LocalShadowLights).
+	 */
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry);
+	inline constexpr std::uint32_t kShadowBits = 0x61c0u;  // ShadowDir, DefShadow and the shadow light count
+
+	/**
+	 * @brief The main camera's specular and envmap LOD fades, computed by the draw (Lighting.hlsl, DCLFLodFade) from what
+	 * BSFadeNode::OnVisible's fade value (FUN_14147b110) and GetRenderPasses' fade (FUN_14147c470) read. A DCLF object's
+	 * technique keeps both features whatever the distance, so its descriptor, pipeline and material do not change with the
+	 * camera; past a fade's end the draw's factor is 0, which is what dropping the feature draws (engine notes: LOD fades).
+	 * Uploaded once an epoch after the frame lighting (PS b13, c6-c12).
+	 */
+	struct LodFadeFrame
+	{
+		float eye[3]{};           // the main camera's world position
+		float lodAdjust = 1.0f;   // its NiCamera::lodAdjust
+		float specularStart = 0.0f, specularEnd = 0.0f, envmapStart = 0.0f, envmapEnd = 0.0f;
+		float metricScale = 0.0f;     // the metric per scaled distance (0x141aa6300)
+		float defaultScale = 0.0f;    // the distance scale when the LOD type's divisor is not positive (0x141ad2840)
+		float metricOverride = 0.0f;  // the metric every node takes instead, when overridden (0x14332a254 against 0x141769578)
+		float overridden = 0.0f;      // 1 when metricOverride applies
+		float divisors[16]{};         // per LOD type (+0x153 & 0xF): the distance scales by lodAdjust / divisor (0x142032e00)
+		// 1 when BSFadeNode::OnVisible updates the metric at all (0x142032dfd); otherwise every node keeps the one it has, and
+		// so do the property's fades, which the draw then reads as they are.
+		float fadesOn = 0.0f;
+		float pad[3]{};
+	};
+	static_assert(sizeof(LodFadeFrame) == 128);
+	/** @brief This frame's, from the main camera and the engine's settings. Render thread. */
+	LodFadeFrame SampleLodFadeFrame();
+	/** @brief The object row's LOD fade word (BindlessObject::lodFadeFlags): the fade node's LOD type, and the fades the draw applies. */
+	inline constexpr std::uint32_t kLodFadeTypeMask = 0xFu;
+	inline constexpr std::uint32_t kLodFadeSpecular = 1u << 4;  // MaterialData.y, and SSRParams.w with kLodFadeSsr
+	inline constexpr std::uint32_t kLodFadeEnvmap = 1u << 5;    // MaterialData.x
+	inline constexpr std::uint32_t kLodFadeSsr = 1u << 6;       // the pass writes SSRParams.w (render flag 2 clear)
+	/**
+	 * @brief The property's fade node: its world bound centre (the fade-out test's, SetFadeRow) and its LOD type in w (as a
+	 * float), plus kLodFadeHeld when the draw's LOD fades do not apply: none of the fade-sensitive flags, or kIgnoreFade on the
+	 * node, which BSFadeNode::OnVisible skips (its metric, and so the property's fades, stay as they are). w < 0: no fade node.
+	 */
+	std::array<float, 4> LodFadeNodeOf(const RE::BSShaderProperty* a_property);
+	inline constexpr float kLodFadeHeld = 16.0f;
+	/** @brief Whether a LodFadeNodeOf row has the draw fade the property's LOD fades. */
+	inline bool LodFadesApply(const std::array<float, 4>& a_node) { return a_node[3] >= 0.0f && a_node[3] < kLodFadeHeld; }
+	/** @brief The fade node's LOD metric the frame's camera gives it (FUN_14147b110's +0x144): the draw's, on the CPU. */
+	float LodMetricOf(const LodFadeFrame& a_frame, const std::array<float, 4>& a_node);
+	/** @brief GetRenderPasses' fade at a metric (FUN_14147c470): 1 before start, 0 past end, where the engine drops the feature. */
+	float LodFadeAt(float a_metric, float a_start, float a_end);
 
 	/** @brief Pass descriptor of a BSRenderPass (passEnum minus the Lighting shader's base). */
 	inline constexpr std::uint32_t PassDescriptorOf(std::uint32_t a_passEnum) { return a_passEnum - 0x4800002Du; }
@@ -226,17 +274,13 @@ namespace DCLF
 	 * @brief The vertex and pixel descriptors the native main (deferred) pass uses for this geometry, derived without
 	 * running GetRenderPasses; the reason the object stays native, or None.
 	 *
-	 * For an object the accumulator holds, the property derivation's only effect is derivedPass, which nothing but
-	 * the CS_DCLF_DERIVE_PROBE diagnostic reads: the pass descriptor comes from the accumulated technique, and the
-	 * two LOD fades are read from the property. Skipping it there saves the fade metric, SelectLightingTechnique,
-	 * ten flag tests and a virtual GetFeature() call per eligible object, every frame.
+	 * The descriptor is the property's, whatever the camera: the specular and envmap LOD fades are the draw's
+	 * (LodFadeFrame). derivedPass is that derivation alone.
 	 *
-	 * @param a_accumulated The geometry's accumulated pass this frame (SceneStore::FindAccumulatedPass), or
-	 * null. When present its technique is the pass descriptor (it is what the draw uses); the derivation
-	 * from the property is kept in derivedPass for comparison. Without it the derivation stands, with its
-	 * guesses for the kRuntimePassBits.
-	 * @param a_wantDerived Compute derivedPass even when the accumulator supplies the real one.
+	 * @param a_accumulated The geometry's accumulated pass this frame (SceneStore::FindAccumulatedPass), or null. When
+	 * present it gives the bits the property does not (kRegisteredPassBits); without it the derivation's guesses for them
+	 * stand.
 	 */
 	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
-		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_wantDerived = true);
+		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out);
 }

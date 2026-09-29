@@ -257,6 +257,10 @@ namespace DCLF
 			uploads(a_resources->frameConstants, lightingTables.frameLighting.data(), sizeof(lightingTables.frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 			a_resources->frameLightingUploaded = lightingTables.frameLightingVersion;
 		}
+		// The LOD fades' frame inputs, after the frame lighting in the same block (PS b13, c6): this frame's camera, every
+		// epoch (the draw fades specular and envmap by distance, LodFadeFrame).
+		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
+		uploads(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
 
 		lap(3);
 		// Upload (the graph's upload pass runs ahead of every pass of this epoch). The worker's build staged its
@@ -542,13 +546,47 @@ namespace DCLF
 			latch.treeHeight[0] = treeHeight[0];
 			latch.treeHeight[1] = treeHeight[1];
 		}
-		// The colour pass: this frame's cascades, for the synthetic passes' sun test. The sun's Accumulate has run.
+		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (as
+		// many as the sun has: the block grows to hold them). The sun's Accumulate has run.
+		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 		if (!depthOnly) {
-			latch.sunState = kSunTestOn | SunAccumulation::Get().GpuCascades(latch.sunMasks, latch.sunPlanes);
+			SunAccumulation::Get().GpuCascades(sunCascades);
+			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
+			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
+			localShadows = LocalShadowLights::Sample();
+			shadowVolumes.clear();
+			for (const auto& light : localShadows.lights) {
+				for (const auto& volume : light.volumes) {
+					auto& out = shadowVolumes.emplace_back();
+					out.masks[0] = volume.masks[0];
+					out.masks[1] = volume.masks[1];
+					out.maskBit = light.maskBit;
+					out.affectsLand = light.affectsLand ? 1u : 0u;
+					out.sphere[0] = light.center[0];
+					out.sphere[1] = light.center[1];
+					out.sphere[2] = light.center[2];
+					out.sphere[3] = light.radius;
+					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
+				}
+			}
+			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
+			const auto& layout = a_resources->latchLayout;
+			const std::uint32_t header[4] = { static_cast<std::uint32_t>(sunCascades.size()), 0, 0, 0 };
+			a_resources->latch->Write(latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
+			if (!sunCascades.empty())
+				a_resources->latch->Write(latchSlot, MainLatchLayout::CascadeOffset() + kSunRegionHeader, std::as_bytes(std::span(sunCascades)));
+			const std::uint32_t volumeHeader[4] = { static_cast<std::uint32_t>(shadowVolumes.size()), 0, 0, 0 };
+			a_resources->latch->Write(latchSlot, layout.ShadowVolumeOffset(), std::as_bytes(std::span(volumeHeader)));
+			if (!shadowVolumes.empty())
+				a_resources->latch->Write(latchSlot, layout.ShadowVolumeOffset() + kSunRegionHeader, std::as_bytes(std::span(shadowVolumes)));
+			latch.sunState = kSunTestOn;
+			latch.sunCascadeOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
+			latch.localShadowOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + layout.ShadowVolumeOffset();
 			sunUpload = latch;
 			ArmFeedback(*a_resources, frameNumber, static_cast<std::uint32_t>(tables.objects.size()));
 		}
-		a_resources->latch->WriteValue(RenderGraphRuntime::Get().Host()->CurrentFrameSlot(), 0, latch);
+		a_resources->latch->WriteValue(latchSlot, 0, latch);
+		frame->latch = a_resources->latch;
 
 		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations);
 		lap(6);

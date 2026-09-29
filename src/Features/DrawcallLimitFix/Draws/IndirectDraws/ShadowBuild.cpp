@@ -138,8 +138,8 @@ namespace DCLF::Draws
 			if (record != 0 && !(record < k.slotReady.size() && k.slotReady[record]))
 				return 2;
 			const bool volumetricOnly = !skyMode && (object.flags & kObjectVolumetricOnly) != 0;
-			const std::uint32_t classStates = volumetricOnly ? (a_in.modeRasterStates[m] >> 16) : (a_in.modeRasterStates[m] & 0xFFFFu);
-			if (classStates == 0)
+			const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
+			if (classStates.empty())
 				return 0;
 			const std::uint32_t technique = skyMode ? a_tables.skyTechnique[o] : (a_tables.shadowTechnique[o] | ModeBitsOf(m));
 			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
@@ -147,11 +147,9 @@ namespace DCLF::Draws
 			const auto slotIt = a_lookups.shadowSlots.find(key);
 			if (slotIt == a_lookups.shadowSlots.end())
 				return 2;
-			for (std::uint32_t states = classStates; states; states &= states - 1) {
-				const auto& row = a_lookups.shadowMapRows[std::countr_zero(states)];
-				if ((slotIt->second < row.size() ? row[slotIt->second] : Lookups::kNone) == Lookups::kNone)
+			for (const std::uint32_t state : classStates)
+				if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone)
 					return 2;
-			}
 			if (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))
 				return 3;
 			a_input = { slotIt->second, record, object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
@@ -224,7 +222,7 @@ namespace DCLF::Draws
 		// The objects the log names (or every object on a resync, or when a mode's views changed their states - a record
 		// depends on whether Skylighting's map is drawn): their record, then their entry in each mode.
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			resync |= k.modes[m].active && k.modes[m].rasterStates != (a_in.modeUsed[m] ? a_in.modeRasterStates[m] : 0u);
+			resync |= k.modes[m].active && k.modes[m].rasterStates != (a_in.modeUsed[m] ? a_in.modeRasterStates[m] : ModeRasterStates{});
 		std::vector<std::uint32_t> changed;
 		if (resync) {
 			changed.reserve(objects);
@@ -250,16 +248,16 @@ namespace DCLF::Draws
 		a_out.rowsWanted = static_cast<std::uint32_t>(k.slotMaterial.size());
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			auto& mode = k.modes[m];
-			const std::uint32_t states = a_in.modeUsed[m] ? a_in.modeRasterStates[m] : 0u;
+			const ModeRasterStates states = a_in.modeUsed[m] ? a_in.modeRasterStates[m] : ModeRasterStates{};
 			if (!mode.active || mode.rasterStates != states) {
 				// A mode's views changed their states: every object again for it.
 				mode.Reset();
 				mode.active = true;
 				mode.rasterStates = states;
-				if (states)
+				if (!states.Empty())
 					for (std::uint32_t o = 0; o < objects; ++o)
 						take(m, o);
-			} else if (states) {
+			} else if (!states.Empty()) {
 				for (const std::uint32_t o : changed)
 					take(m, o);
 				// What waited: again, while it still waits.
@@ -527,7 +525,7 @@ namespace DCLF::Draws
 		// Row 0: every caster without alpha testing (no texture offset, the null texture).
 		ShadowMaterialRow plain;
 		plain.diffuse = nullIndex;
-		if (a_kept && a_in.sunEntryPlaneMasks.size() <= kMaxSunEntryProcesses) {
+		if (a_kept) {
 			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain);
 			CountModeDraws(a_out);
 			if (PersistentParityEnabled() && ParityDue(a_in.frameNumber))
@@ -617,8 +615,8 @@ namespace DCLF::Draws
 				// The states of the views that draw this caster's class. A volumetric-only caster with no view
 				// of the copy under this mode is no input at all: it is then the engine's, unclaimed.
 				const bool volumetricOnly = !skyMode && (object.flags & kObjectVolumetricOnly) != 0;
-				const std::uint32_t classStates = volumetricOnly ? (a_in.modeRasterStates[m] >> 16) : (a_in.modeRasterStates[m] & 0xFFFFu);
-				if (volumetricOnly && classStates == 0)
+				const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
+				if (volumetricOnly && classStates.empty())
 					continue;
 				const std::uint32_t technique = skyMode ? a_tables.skyTechnique[o] : (a_tables.shadowTechnique[o] | modeBits);
 				const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
@@ -633,16 +631,14 @@ namespace DCLF::Draws
 				// Every view of the mode has to be able to draw it: the claim withholds the engine's pass
 				// from all of them, so a view without the pipeline would leave the caster to nobody.
 				bool deferred = false, missing = false;
-				for (std::uint32_t states = classStates; states; states &= states - 1) {
-					const auto& row = a_lookups.shadowMapRows[std::countr_zero(states)];
-					const std::uint32_t pipeline = slotIt->second < row.size() ? row[slotIt->second] : Lookups::kNone;
-					if (pipeline == Lookups::kNone) {
+				for (const std::uint32_t state : classStates) {
+					if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone) {
 						// Not resolved yet, or resolved to nothing: which of the two is in shadowPipelines.
-						const auto pipelineIt = a_lookups.shadowPipelines.find({ technique, WithShadowState(key.rasterFlags, std::countr_zero(states)), key.vertexLayout });
+						const auto pipelineIt = a_lookups.shadowPipelines.find({ technique, key.rasterFlags, key.vertexLayout, state });
 						(pipelineIt == a_lookups.shadowPipelines.end() ? deferred : missing) = true;
 					}
 				}
-				if (deferred || missing || classStates == 0) {
+				if (deferred || missing || classStates.empty()) {
 					a_out.deferredPipelines += deferred ? 1 : 0;
 					++a_out.skippedPipeline;
 					a_out.skySkipped += skyMode ? 1 : 0;
@@ -658,15 +654,11 @@ namespace DCLF::Draws
 					continue;
 				}
 				// The sun's entry rule (kCullSunEntry): BuildDraws tests the entry's sphere, carried in the fade row, against the
-				// frame's full-frustum processes in the view's latch - so the input does not change with the frame's planes.
-				// With more processes than the latch holds, the verdict is taken here, on the CPU.
-				const bool entryOnGpu = a_in.sunEntryPlaneMasks.size() <= kMaxSunEntryProcesses;
-				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex,
-					(object.flags & ~kObjectDecal) | kInputDrawable | (!entryOnGpu && OutsideSunEntry(a_in, a_tables, o) ? kInputOutsideSunEntry : 0u),
+				// frame's full-frustum processes in the latch block - so the input does not change with the frame's planes.
+				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
 					{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius, static_cast<std::uint32_t>(o), 0,
 					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex });
-				if (entryOnGpu)
-					SetSunEntryRow(inputs.back(), a_tables, o);
+				SetSunEntryRow(inputs.back(), a_tables, o);
 			}
 		}
 		CountModeDraws(a_out);

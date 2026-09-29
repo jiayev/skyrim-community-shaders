@@ -336,7 +336,7 @@ namespace DCLF::Draws
 			BuildDrawsFrame prepared{};
 			const auto now = segment;
 			const auto frame = CurrentFrame(*resources, now);
-			if (!frame || !resources->buildDraws || !resources->latch || !resources->dispatchSignature)
+			if (!frame || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			const std::uint32_t phase = Phase(now);
 			// The second phase belongs to the depth segment only: it is what re-tests phase 1's rejects
@@ -344,10 +344,10 @@ namespace DCLF::Draws
 			if (fixedPhase == 2 && now != RenderGraphRuntime::Segment::ZPrepass)
 				return prepared;
 			prepared.program = resources->buildDraws;
-			prepared.latch = resources->latch;
+			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			auto& constants = prepared.constants;
-			constants.latchIndex = resources->latch->SrvIndex();
+			constants.latchIndex = frame->latch->SrvIndex();
 			// The depth segment's phases read its own inputs (Resources::inputsDepth), the colour segment the colour inputs.
 			const bool depthInputs = (phase == 1 || phase == 2) && resources->inputsDepth;
 			constants.inputsIndex = CaptureViewIndex(a_preparation, depthInputs ? a_bindings.inputsDepth : a_bindings.inputs);

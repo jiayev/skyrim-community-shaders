@@ -12,16 +12,21 @@
 #include "Common/MotionBlur.hlsli"
 #include "Common/Permutation.hlsli"
 
-// The pixel stage's pass descriptor. Under DCLF a synthetic pass carries the sun's bits (DefShadow, ShadowDir)
-// for any object that can take the sun's shadow, and BuildDrawsCS marks the draws whose bound meets no cascade this
-// frame (DCLFSunMiss): those draw as GetRenderPasses' pass without the two bits would.
+// The pixel stage's pass descriptor. Under DCLF a pass carries the shadow bits the object can take (StaticShadowBits), and
+// the draw decides them as GetRenderPasses' light selection would this frame (BuildDrawsCS): ShadowDir unless its bound
+// meets no cascade (DCLFSunMiss), DefShadow when the sun or a local shadow light (DCLFLocalShadowMask) reaches it.
 uint PixelDescriptor()
 {
 #if defined(DCLF_BINDLESS)
+	uint descriptor = Permutation::PixelShaderDescriptor;
 	if (DCLFSunMiss)
-		return Permutation::PixelShaderDescriptor & ~(Permutation::LightingFlags::DefShadow | Permutation::LightingFlags::ShadowDir);
-#endif
+		descriptor &= ~Permutation::LightingFlags::ShadowDir;
+	if (!(descriptor & Permutation::LightingFlags::ShadowDir) && DCLFLocalShadowMask == 0)
+		descriptor &= ~Permutation::LightingFlags::DefShadow;
+	return descriptor;
+#else
 	return Permutation::PixelShaderDescriptor;
+#endif
 }
 
 #include "Common/Random.hlsli"
@@ -670,14 +675,45 @@ cbuffer DCLFFrameLighting : register(b13)
 	float3 DirLightColor : packoffset(c1);
 	row_major float3x4 DirectionalAmbient : packoffset(c2);
 	float4 AmbientSpecularTintAndFresnelPower : packoffset(c5);  // Fresnel power in z, color in xyz
+	// The LOD fades' frame inputs (LodFadeFrame): what BSFadeNode::OnVisible's fade value and GetRenderPasses' fade read.
+	float4 DCLFLodFadeEye : packoffset(c6);          // the main camera's world position, its lodAdjust in w
+	float4 DCLFLodFadeThresholds : packoffset(c7);   // specular start and end, envmap start and end
+	float4 DCLFLodFadeMetric : packoffset(c8);       // metric scale, default scale, the override metric, 1 when overridden
+	float4 DCLFLodFadeDivisors[4] : packoffset(c9);  // per LOD type
+	float4 DCLFLodFadeState : packoffset(c13);       // x: 1 when the engine updates the metric at all (else the property's fades stand)
 };
 #endif  // DCLF_BINDLESS
 
 #if defined(DCLF_BINDLESS)
-static float4 MaterialData = DCLFObjects[DCLFObjectIndex].MaterialData;
+// The fade node's LOD metric under the frame's camera (FUN_14147b110's +0x144): the distance to its bound centre, scaled by
+// lodAdjust over its LOD type's divisor (the default scale when that is not positive), times the metric scale.
+float DCLFLodMetric(float3 a_node, uint a_type)
+{
+	if (DCLFLodFadeMetric.w != 0)
+		return DCLFLodFadeMetric.z;
+	const float divisor = DCLFLodFadeDivisors[a_type >> 2][a_type & 3];
+	const float scale = divisor > 0 ? DCLFLodFadeEye.w / divisor : DCLFLodFadeMetric.y;
+	return length(a_node - DCLFLodFadeEye.xyz) * scale * DCLFLodFadeMetric.x;
+}
+// GetRenderPasses' fade at a metric (FUN_14147c470): 1 up to the start, 0 past the end, where the engine drops the feature.
+float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
+{
+	if (a_end < a_metric)
+		return 0;
+	if (a_metric <= a_start)
+		return 1;
+	return saturate((a_metric - a_end) / (a_start - a_end));
+}
+static const uint DCLFLodFades = DCLFLodFadeState.x != 0 ? DCLFObjects[DCLFObjectIndex].DCLFLodFadeFlags : 0;
+static const float DCLFLodMetricValue = DCLFLodFades ? DCLFLodMetric(DCLFObjects[DCLFObjectIndex].DCLFLodFadeNode, DCLFLodFades & 0xF) : 0;
+static const float DCLFSpecularLodFade = DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y);
+static float4 MaterialData = float4(
+	(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFObjects[DCLFObjectIndex].MaterialData.x,
+	(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFObjects[DCLFObjectIndex].MaterialData.y,
+	DCLFObjects[DCLFObjectIndex].MaterialData.zw);
 static float3 EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
 // Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
-static float DCLFSSRSpecular = DCLFObjects[DCLFObjectIndex].EmitColor.w;
+static float DCLFSSRSpecular = (DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFObjects[DCLFObjectIndex].EmitColor.w;
 // ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
 static float4 ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
 static float4 ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];

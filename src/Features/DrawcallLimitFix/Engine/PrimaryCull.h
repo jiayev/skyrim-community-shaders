@@ -106,6 +106,15 @@ namespace DCLF
 		/** @brief CS_DCLF_RESIDENT_PARITY: the synthetic pass built from scratch (no cache), for SceneStore's comparison. */
 		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, AccumulatedPass& a_out);
 		/**
+		 * @brief The pass SceneStore binds an object with by scene membership: a synthetic pass from the object alone (the
+		 * resident's), false where one cannot model it (decals, fading or translucent).
+		 */
+		bool MembershipPass(const RE::BSGeometry* a_geometry, AccumulatedPass& a_out) { return ResidentPassOf(a_geometry, a_out); }
+		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
+		static float MembershipFadeDistance(const RE::NiAVObject* a_root) { return FadeDistanceOf(a_root); }
+		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
+		static std::uint32_t MembershipWitness() { return ResidentWitness(); }
+		/**
 		 * @brief This frame's main camera as BSFadeNode::OnVisible measures from it: its position and its LOD factor
 		 * (NiCamera +0x184), for BuildDraws' fade test (kObjectFadeTest). Zero when the cut did not see a camera.
 		 */
@@ -248,9 +257,9 @@ namespace DCLF
 		static float FadeDistanceOf(const RE::NiAVObject* a_root);
 		/**
 		 * @brief What a fade root's resident passes were built from that the feedback's servicing changes: its LOD level
-		 * (+0x152, the LOD row), and with a_sensitive its LOD metric past the specular and envmap fade ends.
+		 * (+0x152, the LOD row).
 		 */
-		static std::uint16_t FadeWitnessOf(const RE::NiAVObject* a_root, bool a_sensitive);
+		static std::uint16_t FadeWitnessOf(const RE::NiAVObject* a_root);
 		/** @brief The frame globals the residents' patches read (the static sun bits, the fade distances): a change ends them all. */
 		static std::uint32_t ResidentWitness();
 		/** @brief A join (render thread): the entry's passes into residentPasses, and its record; false when refused. */
@@ -324,8 +333,6 @@ namespace DCLF
 			std::uint64_t lodRowDiffer = 0;             // the fade node's LOD row != the pass's LODMode (skinned LOD)
 			std::uint64_t fading = 0;                   // fading at registration
 			std::uint64_t alphaMask = 0;                // AdditionalAlphaMask (screen-door fade)
-			std::uint64_t specularFadeDiffer = 0;       // derived LOD fade != the property's, beyond 1e-3
-			std::uint64_t envmapFadeDiffer = 0;
 			std::array<std::uint64_t, 32> hints{};      // accumulation hint
 			std::uint64_t sunAgree = 0;                 // SunShadowBits against the registered bits 13 and 14
 			std::uint64_t sunEngineOnly = 0;
@@ -475,7 +482,6 @@ namespace DCLF
 			bool probation = false;  // joined out of view before its admission; Admit confirms it
 			// A fade root's state its passes were built from (FadeWitnessOf): the feedback evicts it when that changes.
 			std::uint16_t fadeWitness = 0;
-			bool fadeSensitive = false;  // a member's derivation reads the root's LOD metric (LightingDescriptors' FadeSensitive)
 		};
 		// By root. Changed on the render thread only, before and after the list jobs, which read it.
 		ankerl::unordered_dense::map<const RE::NiAVObject*, Resident> residents;
@@ -507,7 +513,7 @@ namespace DCLF
 			std::shared_ptr<const SunCandidates> candidates;
 			std::vector<std::uint32_t> stoodIn;
 			std::uint32_t residentFrom = ~0u;  // stoodIn[residentFrom..] are resident entries
-			// Per resident entry: Resident::fadeWitness, fadeSensitive in bit 16, and a fade root (not Plain) in bit 17.
+			// Per resident entry: Resident::fadeWitness, and a fade root (not Plain) in bit 17.
 			std::vector<std::uint32_t> fadeWitness;
 			// The stood-in entries' roots, held: the decode touches them a frame or more later, when a cell unload may
 			// have freed what the snapshot names. Taken while the list jobs had just traversed them (alive), released on
@@ -536,7 +542,6 @@ namespace DCLF
 			std::uint64_t flags = 0;
 			std::uint8_t fadeState = 0;
 			std::uint32_t derivedPass = kNotDerived;
-			bool extras = false;  // the record takes extras rows each frame (projected UV, land blending): never resident
 		};
 		ankerl::unordered_dense::map<const RE::BSGeometry*, DerivedEntry> derivedCache;
 	};

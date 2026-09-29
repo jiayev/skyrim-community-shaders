@@ -117,11 +117,23 @@ namespace DCLF
 		// A shadow input names its caster's key slot (technique with mode bits, raster flags without a view
 		// state, vertex layout), not a pipeline: the views of one render mode share the inputs but not the
 		// rasterizer state. Slots are append-only. shadowMapRows[state][slot] is the pipeline of that slot's
-		// key under that view rasterizer state (DrawPipelines::ShadowRasterStateId), kNone where there is none
-		// yet; a view's row goes into the shadow latch block for BuildDrawsCS to resolve its draws through.
+		// key under that view rasterizer state (DrawPipelines::ShadowRasterStateId, as many as are registered),
+		// kNone where there is none yet; a view's row goes into the shadow latch block for BuildDrawsCS to
+		// resolve its draws through.
 		ankerl::unordered_dense::map<ShadowPipelineKey, std::uint32_t, ShadowPipelineKeyHash> shadowSlots;
 		std::vector<ShadowPipelineKey> shadowSlotKeys;
-		std::array<std::vector<std::uint32_t>, 16> shadowMapRows;
+		std::vector<std::vector<std::uint32_t>> shadowMapRows;
+		/** @brief A view rasterizer state's map row, empty when it has none yet. */
+		std::span<const std::uint32_t> ShadowMapRow(std::uint32_t a_state) const
+		{
+			return a_state < shadowMapRows.size() ? std::span<const std::uint32_t>(shadowMapRows[a_state]) : std::span<const std::uint32_t>();
+		}
+		/** @brief A key slot's pipeline under a view rasterizer state, kNone when it has none yet. */
+		std::uint32_t ShadowMapPipeline(std::uint32_t a_state, std::uint32_t a_slot) const
+		{
+			const auto row = ShadowMapRow(a_state);
+			return a_slot < row.size() ? row[a_slot] : kNone;
+		}
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::uint32_t> shadowTextures;
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::shared_ptr<const void>> shadowTextureOwners;
 		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> pendingShadowTextures;

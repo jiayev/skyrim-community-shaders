@@ -63,7 +63,9 @@ namespace DCLF
 			const bool switchNodes = ActiveToggles().switchNodes;
 			for (const auto* root : sunEntriesDirty) {
 				bool candidate = false;
-				Fnv1a signature;
+				// The dependents as a set (a sum of their hashes): a geometry moved between containers is listed again at the
+				// end, which changes nothing.
+				std::uint64_t signature = 0;
 				if (const auto it = rootDependents.find(root); it != rootDependents.end() && !it->second.empty()) {
 					candidate = true;
 					for (auto* geometry : it->second) {
@@ -73,15 +75,17 @@ namespace DCLF
 							break;
 						}
 						const std::uint64_t allows = PrimaryEntryAllows(entry->second, *geometry) ? 1 : 0;
-						signature.Mix(reinterpret_cast<std::uintptr_t>(geometry) * 2 + allows);
+						Fnv1a member;
+						member.Mix(reinterpret_cast<std::uintptr_t>(geometry) * 2 + allows);
+						signature += member.value;
 					}
 				}
 				if (candidate ? sunCandidateSet.insert(root).second : sunCandidateSet.erase(root) != 0)
 					changed = true;
 				if (candidate) {
-					const auto [slot, inserted] = primarySignature.try_emplace(root, signature.value);
-					if (!inserted && slot->second != signature.value) {
-						slot->second = signature.value;
+					const auto [slot, inserted] = primarySignature.try_emplace(root, signature);
+					if (!inserted && slot->second != signature) {
+						slot->second = signature;
 						changed = true;
 					}
 				} else {

@@ -197,6 +197,11 @@ namespace DCLF
 			patchedFrame[objectId] = frame;
 		}
 		object.materialIndex = a_patch.material;
+		if (a_patch.resident) {
+			if (materialMember.size() <= a_patch.material)
+				materialMember.resize(std::size_t(a_patch.material) + 1, 0);
+			materialMember[a_patch.material] = 1;
+		}
 		object.pipelineIndex = a_patch.pipeline;
 		object.flags = a_patch.flags;
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
@@ -269,7 +274,7 @@ namespace DCLF
 		// Resident records (PrimaryCull): a frame the primary's cut did not keep them, every one ends; the entries joining
 		// this frame have their passes patched once below.
 		const bool residentsLive = PrimaryCull::Get().TakeResidentsLive();
-		if (!residentsLive && (!residents.empty() || PrimaryCull::Get().HasResidents()))
+		if (!residentsLive && PrimaryCull::Get().HasResidents())
 			PrimaryCull::Get().EndAllResidents();
 		residentJoining.clear();
 		if (residentsLive)
@@ -277,6 +282,7 @@ namespace DCLF
 				residentJoining.insert(geometry);
 				AddAccumulatedPass(geometry, pass);
 			}
+		BindByMembership();
 		// The engine's passes for what PrimaryCull draws synthetically take the same sun bits, so both sources of an
 		// object's pass need one pipeline (and the probe still compares against the engine's own bits).
 		if (!PrimaryCull::Probe())
@@ -340,8 +346,9 @@ namespace DCLF
 			}
 			const std::uint32_t objectId = trackedEntry->objectId;
 			// Resident: patched once, kept; a pass the engine registered for it anyway (its root was entry 0 of a list,
-			// which Process2 culls) is withheld by static ownership and changes nothing here.
-			if (IsResidentSlot(objectId)) {
+			// which Process2 culls) is withheld by static ownership and changes nothing here. A member bound again
+			// (BindByMembership) is patched.
+			if (IsResidentSlot(objectId) && !residentJoining.contains(geometry)) {
 				++residentStats.registered;
 				continue;
 			}
@@ -389,7 +396,7 @@ namespace DCLF
 				descriptors.envmapLODFade = lightingProperty.envmapLODFade;
 				++stats.derivedHits;
 			} else {
-				reason = ClassifyStatic(*geometry, &descriptors, accumulated, derivationStats || primaryProbe, &castCache);
+				reason = ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
 			}
 			timer.Add(BuildPart::ClassifyStatic);
 			const bool primaryCandidate = primaryProbe && accumulated && PrimaryCull::Get().UnderListedCandidate(geometry);
@@ -441,7 +448,104 @@ namespace DCLF
 			// Only computed when something will report them: this whole block exists to feed one log line.
 			if (derivationStats && accumulated && descriptors.derivedPass != kNotDerived) {
 				++stats.derivationChecked;
-				const std::uint32_t differing = descriptors.derivedPass ^ descriptors.pass;
+				// Against the pass the engine registered. Where its LOD fades ran out it dropped Specular or the Envmap
+				// technique, which the derivation keeps (the draw fades them): those bits are the fades' and counted apart,
+				// and the draw's fades are checked against the engine's own (LodMetricOf, LodFadeAt).
+				std::uint32_t differing = descriptors.derivedPass ^ accumulated->technique;
+				if (!lodFadeSampled) {
+					lodFadeSample = SampleLodFadeFrame();
+					lodFadeSampled = true;
+				}
+				if (const auto node = LodFadeNodeOf(property); LodFadesApply(node) && lodFadeSample.fadesOn != 0.0f) {
+					++stats.lodFadeChecked;
+					const float metric = LodMetricOf(lodFadeSample, node);
+					const float engineMetric = std::bit_cast<float>(property->fadeNode->GetRuntimeData().unk144);
+					const bool metricSame = std::abs(metric - engineMetric) <= 1e-4f * std::max(1.0f, std::abs(engineMetric));
+					if (!metricSame)
+						++stats.lodMetricDiffers;
+					const auto& lighting = *static_cast<const RE::BSLightingShaderProperty*>(property);
+					const std::uint32_t registered = accumulated->technique;
+					std::uint32_t fadeBits = 0;
+					bool fadeDiffers = false;
+					if (descriptors.derivedPass & kSpecularBit) {
+						const float drawn = LodFadeAt(metric, lodFadeSample.specularStart, lodFadeSample.specularEnd);
+						const float engine = (registered & kSpecularBit) ? lighting.specularLODFade : 0.0f;
+						fadeDiffers |= std::abs(drawn - engine) > 1e-3f;
+						if (!(registered & kSpecularBit))
+							fadeBits |= kSpecularBit;
+					}
+					if (((descriptors.derivedPass >> 24) & 0x3f) == kTechniqueEnvmap) {
+						const float drawn = LodFadeAt(metric, lodFadeSample.envmapStart, lodFadeSample.envmapEnd);
+						const bool engineOn = ((registered >> 24) & 0x3f) == kTechniqueEnvmap;
+						const float engine = engineOn ? lighting.envmapLODFade : 0.0f;
+						fadeDiffers |= std::abs(drawn - engine) > 1e-3f;
+						if (!engineOn)
+							fadeBits |= 0x3fu << 24;
+					}
+					if (fadeDiffers) {
+						++stats.lodFadeDiffers;
+						if (stats.lodFadeFirst.empty())
+							stats.lodFadeFirst = fmt::format("'{}' metric {} (engine {}), specular {} (engine {}), envmap {} (engine {}), registered {:08X}",
+								geometry->name.c_str() ? geometry->name.c_str() : "?", metric, engineMetric,
+								LodFadeAt(metric, lodFadeSample.specularStart, lodFadeSample.specularEnd), lighting.specularLODFade,
+								LodFadeAt(metric, lodFadeSample.envmapStart, lodFadeSample.envmapEnd), lighting.envmapLODFade, registered);
+					}
+					if (differing & fadeBits) {
+						++stats.derivationFadeBits;
+						differing &= ~fadeBits;
+					}
+				}
+				// What a pass built from the object alone (PrimaryCull::FreshSyntheticPass) would lose against the registered one:
+				// the bits the registration still gives (kRegisteredPassBits), the sub-pass, the hint and a skin's LOD row.
+				if (accumulated->pass) {
+					++stats.syntheticChecked;
+					AccumulatedPass fresh;
+					if (!PrimaryCull::FreshSyntheticPass(*geometry, fresh)) {
+						++stats.syntheticNotBuilt;
+					} else {
+						const std::uint32_t bits = (fresh.technique ^ accumulated->technique) & kRegisteredPassBits;
+						const bool subPass = fresh.subPass != accumulated->subPass, hint = fresh.hint != accumulated->hint;
+						const bool lodRow = data.skinInstance && fresh.lodRow != accumulated->lodRow;
+						stats.syntheticBits |= bits;
+						stats.syntheticBitsDiffer += bits ? 1u : 0u;
+						stats.syntheticSubPass += subPass ? 1u : 0u;
+						stats.syntheticHint += hint ? 1u : 0u;
+						stats.syntheticLodRow += lodRow ? 1u : 0u;
+						if ((bits || subPass || hint || lodRow) && stats.syntheticFirst.empty())
+							stats.syntheticFirst = fmt::format("'{}' technique {:08X} (registered {:08X}), sub-pass {} ({}), hint {} ({}), LOD row {} ({})",
+								geometry->name.c_str() ? geometry->name.c_str() : "?", fresh.technique, accumulated->technique, fresh.subPass,
+								accumulated->subPass, fresh.hint, accumulated->hint, fresh.lodRow, accumulated->lodRow);
+					}
+				}
+				// The local shadow lights' selection (LocalShadowLights) against the engine's: the LLF mask of the pass it registered.
+				if (lightLimitFixLoaded && accumulated->pass) {
+					if (!localShadowsSampled) {
+						localShadowsSample = LocalShadowLights::Sample();
+						localShadowsSampled = true;
+					}
+					const auto& bound = geometry->worldBound;
+					const float center[3]{ bound.center.x, bound.center.y, bound.center.z };
+					const std::uint32_t predicted = localShadowsSample.MaskOf(property, center, bound.radius);
+					const std::uint32_t engine = LightLimitFix::GetShadowBitMask(accumulated->pass);
+					++stats.shadowMaskChecked;
+					stats.shadowMaskEngine += engine ? 1u : 0u;
+					if (predicted != engine) {
+						++stats.shadowMaskDiffers;
+						stats.shadowMaskOver += (predicted & ~engine) ? 1u : 0u;
+						stats.shadowMaskUnder += (engine & ~predicted) ? 1u : 0u;
+						if (stats.shadowMaskFirst.empty())
+						{
+							std::string lights;
+							for (const auto& light : localShadowsSample.lights) {
+								const float dx = center[0] - light.center[0], dy = center[1] - light.center[1], dz = center[2] - light.center[2];
+								lights += fmt::format(" [bit {:X} r {:.0f} at {:.0f}, {} volumes]", light.maskBit, light.radius, std::sqrt(dx * dx + dy * dy + dz * dz), light.volumes.size());
+							}
+							stats.shadowMaskFirst = fmt::format("'{}' predicted {:X} engine {:X} (bound {:.1f} {:.1f} {:.1f} r {:.1f}, pass shadow lights {}; lights:{})",
+								geometry->name.c_str() ? geometry->name.c_str() : "?", predicted, engine, center[0], center[1], center[2], bound.radius,
+								accumulated->pass->numShadowLights, lights);
+						}
+					}
+				}
 				if (const std::uint32_t bits = differing & ~kRuntimePassBits) {
 					++stats.derivationDiffers;
 					stats.derivationBits |= bits;
@@ -591,7 +695,8 @@ namespace DCLF
 				              (ExternalEmittance::ShouldSuppress(interior, property, geometry) ? kObjectSuppressExternalEmittance : 0u) |
 				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
 				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
-				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u);
+				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
+				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u);
 				if (accumulated) {
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;
@@ -628,9 +733,10 @@ namespace DCLF
 
 			// The patch. Everything above decided what this object draws with; here it goes into the
 			// record the scene phase appended, at the index that phase fixed.
-			// A resident pass is patched once and kept, unless the record needs this frame's extras rows.
+			// A member's pass is patched once and kept; its extras rows (projected UV, land blend) follow the eye and a clock
+			// through the watch (kWatchExtras, RefreshFrameConstants).
 			const bool landBlendRecord = descriptors.technique == 8 || descriptors.technique == 19;
-			const bool resident = accumulated && accumulated->resident && !descriptors.projectedUV && !landBlendRecord && residentJoining.contains(geometry);
+			const bool resident = accumulated && accumulated->resident && residentJoining.contains(geometry);
 			AccumulatePatch patch;
 			patch.object = objectId;
 			patch.material = materialSlot;
@@ -642,9 +748,11 @@ namespace DCLF
 			patch.projectedUV = descriptors.projectedUV;
 			patch.landBlend = landBlendRecord;
 			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated ? kObjectNativeVisible : 0u) |
-			              (accumulated && accumulated->sunTest ? kObjectSunTest : 0u) | (resident && accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) |
+			              // The sun's bits are decided by the draw for every pass: a registered one's come from StaticShadowBits.
+			              (accumulated && (accumulated->pass ? (descriptors.pass & 0x2000u) != 0 : accumulated->sunTest) ? kObjectSunTest : 0u) |
+			              (resident && accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) |
 			              (resident && accumulated->heightTest ? kObjectHeightTest : 0u) |
-			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u);
+			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) | (resident ? kObjectMember : 0u);
 			patch.fadeDistance = resident ? accumulated->fadeDistance : 0.0f;
 			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
@@ -697,6 +805,9 @@ namespace DCLF
 			                   entry->second.accumulateReasonFrame == frame ? 2u :                                          // a verdict of the frame
 			                   3u;                                                                                          // material, or extras rows
 			++residentStats.failedBy[cause];
+			// A member whose binding could not be taken again is not bound any more.
+			if (entry != tracked.end() && entry->second.slot != kNoObjectSlot && IsResidentSlot(entry->second.slot))
+				DropResidentSlot(entry->second.slot, false, true);
 		}
 		residentJoining.clear();
 		LapseAccumulated();
@@ -772,6 +883,66 @@ namespace DCLF
 		ProcessMaterialWrites();
 		RefreshTextureTransforms();
 		ValidateMaterialSlice();
+	}
+
+	void SceneStore::BindByMembership()
+	{
+		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
+		// The frame globals a membership pass reads changed (the static sun bits, the fade distances): every resident is bound
+		// again from this frame's.
+		if (const std::uint32_t witness = PrimaryCull::MembershipWitness(); witness != membershipWitness) {
+			bindQueue.insert(bindQueue.end(), residents.begin(), residents.end());
+			EndAllResidency();
+			membershipWitness = witness;
+		}
+		// Material records are the engine's SetupMaterial through its Lighting shader, which exists only once the engine has drawn
+		// with it: until then the queue waits (the records at load are the whole scene).
+		if (!ConstantEvaluator::Get().HasLightingShader())
+			return;
+		auto& primary = PrimaryCull::Get();
+		for (const std::uint32_t slot : std::exchange(bindQueue, {})) {
+			if (slot >= tables.objects.size() || (tables.objects[slot].flags & (kObjectFree | kObjectShadowOnly)))
+				continue;
+			auto* geometry = const_cast<RE::BSGeometry*>(tables.objectGeometry[slot]);
+			const auto trackedIt = geometry ? tracked.find(geometry) : tracked.end();
+			// A record written every frame (a mover, an actor's part, animated shading) is bound again every frame: its slots are
+			// referenced again in the same batch, so nothing about it is retired.
+			if (trackedIt == tracked.end() || trackedIt->second.slot != slot || trackedIt->second.objectStamp != objectStamp ||
+				trackedIt->second.candidateReason != Ineligible::None)
+				continue;
+			// A member written again keeps its binding while what the binding reads is the same (the derivation cache's
+			// witnesses): a skin, a face or a mover is written every frame for its transform, bones or stream alone.
+			const auto& data = geometry->GetGeometryRuntimeData();
+			if (IsResidentSlot(slot) && MemberBindingStands(slot, *geometry, trackedIt->second)) {
+				++residentStats.membershipKept;
+				continue;
+			}
+			AccumulatedPass pass;
+			if (!primary.MembershipPass(geometry, pass))
+				continue;
+			// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
+			// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
+			if (const auto* fadeNode = data.shaderProperty ? data.shaderProperty->fadeNode : nullptr) {
+				pass.fadeDistance = PrimaryCull::MembershipFadeDistance(fadeNode);
+				const auto* rtti = fadeNode->GetRTTI();
+				pass.heightTest = rtti && rtti->name && std::strcmp(rtti->name, "BSTreeNode") == 0;
+			}
+			accumulatedPasses.insert_or_assign(geometry, pass);
+			residentJoining.insert(geometry);
+			++residentStats.membershipQueued;
+		}
+	}
+
+	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const
+	{
+		const auto& derived = a_entry.derived;
+		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
+		const auto* material = property ? property->material : nullptr;
+		const bool alphaBelowOne = material && static_cast<const RE::BSLightingShaderMaterialBase*>(material)->materialAlpha < 1.0f;
+		return derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
+		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(property) &&
+		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
+		       derived.materialSlot == tables.objects[a_slot].materialIndex;
 	}
 
 	void SceneStore::LapseAccumulated()

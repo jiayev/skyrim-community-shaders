@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Published/SceneIdentity.h"
 #include "Features/DrawcallLimitFix/Common/SlotTable.h"
 #include "LightingDescriptors.h"
+#include "LocalShadows.h"
 #include "ConstantEvaluator.h"
 #include "Lookups.h"
 #include "Records.h"
@@ -346,8 +347,12 @@ namespace DCLF
 			// which the cascade culls walk): centre and radius, absolute world space; a negative radius when the
 			// entry is never tested (an actor's, whose entry is its cell's container). SceneStore::SunEntryOf.
 			std::vector<std::array<float, 4>> sunEntry;  // parallel to objects
-			// A resident object's fade-out distance (kObjectFadeTest, AccumulatedPass::fadeDistance), against its entry
-			// root's centre (sunEntry): > 0 scaled by the camera's LOD factor, < 0 unscaled. Meaningless without the flag.
+			// The property's fade node, for the fade-out test and the draw's specular and envmap LOD fades (LodFadeFrame,
+			// LodFadeNodeOf): its world bound centre, and in w its LOD type (plus kLodFadeHeld without the LOD fades); w < 0 when
+			// the object has no fade node.
+			std::vector<std::array<float, 4>> lodFade;  // parallel to objects
+			// A member's fade-out distance (kObjectFadeTest, AccumulatedPass::fadeDistance), against its fade node's centre
+			// (lodFade): > 0 scaled by the camera's LOD factor, < 0 unscaled. Meaningless without the flag.
 			std::vector<float> fadeDistance;  // parallel to objects
 			// Which slots hold a resident record (PrimaryCull's).
 			std::vector<std::uint8_t> residentSlot;  // parallel to objects
@@ -387,6 +392,7 @@ namespace DCLF
 				ObjectTreeAnim tree{};
 				std::array<float, 4> wetness{};
 				std::array<float, 4> sunEntry{};
+				std::array<float, 4> lodFade{};
 				std::array<float, kExtraRows * 4> extras{};
 				const RE::BSGeometry* geometry = nullptr;
 				std::uint64_t identity = 0;
@@ -449,9 +455,9 @@ namespace DCLF
 			/**
 			 * @brief The three shared tables keep their slots across frames (CS_DCLF_DERIVED_CACHE).
 			 *
-			 * Which slots are alive, and how long, is each table's SlotTable: a slot lives while objects reference it and
-			 * for SlotTable::kIdleFrames after (SceneStore::UpdateSlotReferences counts the references from the logs), and
-			 * the expiry runs before the loop, so no object of the frame can point at a slot it reuses. A table's columns
+			 * Which slots are alive is each table's SlotTable: a slot lives while objects reference it
+			 * (SceneStore::UpdateSlotReferences counts the references from the logs), and the drain runs before the loop,
+			 * so no object of the frame can point at a slot it reuses. A table's columns
 			 * are listed once (GeometryColumns, PipelineColumns, MaterialColumns), which is what grows and clears them.
 			 *
 			 * lastUsed is the frame a slot was last used, which is not its liveness: it certifies the raw engine pointers a
@@ -561,6 +567,7 @@ namespace DCLF
 			std::uint32_t categoryNodes = 0;
 			std::uint64_t attachedEvents = 0;
 			std::uint64_t detachedEvents = 0;
+			std::uint64_t detachMoves = 0;  // detached geometries attached again in the same batch (kept, not erased)
 			std::uint64_t validationDrops = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
 			// Of those, the ones the engine ITSELF drew in the main pass this frame - it registered a
@@ -653,6 +660,17 @@ namespace DCLF
 			// counter masked the runtime half out entirely, which made "0 differ" read as a much stronger
 			// result than it was.
 			std::uint32_t derivationChecked = 0;
+			std::uint32_t derivationFadeBits = 0;  // differ only where the engine's LOD fades ran out (the draw fades them)
+			// The draw's LOD fades against the engine's, on the registered objects with a fade node (CS_DCLF_DERIVE_PROBE).
+			std::uint32_t lodFadeChecked = 0, lodMetricDiffers = 0, lodFadeDiffers = 0;
+			std::string lodFadeFirst;
+			// The local shadow lights' selection (LocalShadowLights) against the engine's LLF mask (CS_DCLF_DERIVE_PROBE).
+			std::uint32_t shadowMaskChecked = 0, shadowMaskEngine = 0, shadowMaskDiffers = 0, shadowMaskOver = 0, shadowMaskUnder = 0;
+			std::string shadowMaskFirst;
+			// A pass built from the object alone (PrimaryCull::FreshSyntheticPass) against the registered one (CS_DCLF_DERIVE_PROBE).
+			std::uint32_t syntheticChecked = 0, syntheticNotBuilt = 0, syntheticBitsDiffer = 0, syntheticBits = 0, syntheticSubPass = 0,
+						  syntheticHint = 0, syntheticLodRow = 0;
+			std::string syntheticFirst;
 			std::uint32_t derivationDiffers = 0;        // differ outside kRuntimePassBits
 			std::uint32_t derivationBits = 0;           // OR of those differing bits
 			std::uint32_t derivationRuntimeDiffers = 0;  // differ inside kRuntimePassBits
@@ -670,6 +688,7 @@ namespace DCLF
 			std::uint32_t materialCacheStale = 0;     // of those, ones that disagreed: must be 0
 			std::uint32_t materialCacheEntries = 0;
 			std::uint32_t materialCacheEvicted = 0;
+			std::uint32_t materialEvictedMember = 0;  // of them, slots a membership resident had been bound to (materialMember)
 			// MaterialSources: materials written this frame, and what became of their slots; the live
 			// evaluations the frame-sourced components were taken from (one per signature).
 			std::uint32_t materialWrites = 0;
@@ -797,6 +816,8 @@ namespace DCLF
 		struct ResidentStats
 		{
 			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, registered = 0, frames = 0, resident = 0;
+			std::uint64_t membershipQueued = 0;  // records BindByMembership handed a pass
+			std::uint64_t membershipKept = 0;    // members written again whose binding stands
 			std::array<std::uint64_t, 4> failedBy{};  // the engine's pass, no record, a frame verdict, material or extras
 			std::uint64_t parityChecks = 0, parityChecked = 0, parityPass = 0, parityRecord = 0;
 			std::uint64_t parityPending = 0;  // residents whose fade root is fading: the feedback's next decode ends them
@@ -994,7 +1015,7 @@ namespace DCLF
 		RE::NiNode* CategoryNodeOf(RE::NiAVObject* a_object) const { return FindCategoryNode(a_object, nullptr); }
 		/**
 		 * @brief The frame a category node was found, and why the refresh that found it ran (0 signature change,
-		 * 1 forced by a detach or rescan, 2 the backstop); false when unknown (diagnostics).
+		 * 1 forced by a detach or rescan); false when unknown (diagnostics).
 		 */
 		bool GetCategoryInfo(const RE::NiNode* a_node, std::uint32_t& a_frame, std::uint8_t& a_cause) const;
 
@@ -1006,7 +1027,7 @@ namespace DCLF
 		static bool CacheableVerdict(Ineligible a_reason);
 		/** @brief Static eligibility of an arbitrary geometry, without the per-frame checks. */
 		static Ineligible ClassifyStatic(RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated = nullptr,
-			bool a_wantDerived = true, RE::BSLightingShaderProperty** a_castCache = nullptr);
+			RE::BSLightingShaderProperty** a_castCache = nullptr);
 
 		/** @brief The lighting pass the main-camera accumulator holds for a geometry this frame, or null. */
 		const AccumulatedPass* FindAccumulatedPass(const RE::BSGeometry* a_geometry) const;
@@ -1230,10 +1251,8 @@ namespace DCLF
 		std::uint32_t sunCandidatesBuilt = 0;  // the generation the snapshot was built for
 
 		void RefreshCategoryNodes(bool a_force = false);
-		// The signature the category set was last rebuilt for, and how many Presents it has been
-		// unchanged; the backstop rebuild exists for anything the signature cannot see.
+		// The signature the category set was last rebuilt for.
 		std::uint64_t categorySignature = 0;
-		std::uint32_t categoryIdleFrames = 0;
 		RE::NiNode* FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const;
 		void AddSubtree(RE::NiAVObject* a_root);
 		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason);
@@ -1324,6 +1343,8 @@ namespace DCLF
 		 * rescan's new entries reuse the slots of the ones it replaces instead of growing the arrays past them.
 		 */
 		void ReleaseObjectSlot(Tracked& a_entry);
+		/** @brief Whether a member's binding still holds for its object as it is now (the derivation cache's witnesses). */
+		bool MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const;
 		void EraseTracked(RE::BSGeometry* a_geometry);
 		/** @brief CS_DCLF_WALK_PARITY=1: every 60 frames, the slot tables against a dense rebuild, object by object. */
 		void CheckWalkParity();
@@ -1339,6 +1360,8 @@ namespace DCLF
 			std::string first;
 			std::string firstStale;
 			std::string firstStaleTraits;
+			std::map<std::string, std::uint32_t> byWhat;  // the differences by what differs
+			std::string firstLodFade;
 		} walkParity;
 		// The dense rebuild classifies every entry from scratch, without the verdict caches, and keeps its verdicts
 		// here: the classification itself is what walk parity checks the kept one against.
@@ -1676,6 +1699,11 @@ namespace DCLF
 		 */
 		void LapseAccumulated();
 		/**
+		 * @brief Scene membership: binds the bind queue's records from passes built from the objects (PrimaryCull::MembershipPass),
+		 * as residents, which the engine's registrations and the lapse leave alone until the record is written again.
+		 */
+		void BindByMembership();
+		/**
 		 * @brief CS_DCLF_CHANGE_LOG_PARITY=1: every 60 frames each slot's columns are kept, and a frame later every slot
 		 * whose columns changed in between must be in the log for that frame with the causes that changed. At the scene
 		 * phase's start, before anything of the frame writes.
@@ -1767,6 +1795,16 @@ namespace DCLF
 		std::uint32_t validatedFrame = ~0u;
 		std::vector<RE::BSGeometry*> pendingEvaluation;
 		// The slots this accumulate phase patched, and the last one's; patchedFrame (per slot) is the frame of its last patch.
+		// CS_DCLF_DERIVE_PROBE's LOD fade parity: the frame's inputs, sampled once a frame when first needed.
+		LodFadeFrame lodFadeSample;
+		bool lodFadeSampled = false;
+		LocalShadowLights localShadowsSample;
+		bool localShadowsSampled = false;
+		// Scene membership: the eligible records the scene phase wrote this frame, bound by the accumulate phase from a pass
+		// built from the object (PrimaryCull::MembershipPass) and kept as residents until written again or released.
+		std::vector<std::uint32_t> bindQueue;
+		std::vector<std::uint8_t> materialMember;  // per material slot: a membership resident was bound to it (diagnostic)
+		std::uint32_t membershipWitness = ~0u;  // PrimaryCull::MembershipWitness when the residents were bound
 		std::vector<std::uint32_t> accumulatePatched;
 		std::vector<std::uint32_t> lastPatched;
 		std::vector<std::uint32_t> patchedFrame;

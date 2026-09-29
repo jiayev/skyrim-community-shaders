@@ -270,6 +270,16 @@ namespace DCLF
 		a_out.extraOffset = extras ? static_cast<std::uint32_t>(a_tables.bones.size() / 4) * 2 + a_tables.extraOffset[a_objectIndex] : 0u;
 		const auto wetness = a_objectIndex < a_tables.skinWetness.size() ? a_tables.skinWetness[a_objectIndex] : std::array<float, 4>{};
 		std::memcpy(a_out.skinPerGeometry, wetness.data(), sizeof(a_out.skinPerGeometry));
+		// The LOD fades the pass draws with (MakeShading's rule: MaterialData.x for the Envmap technique, .y and SSRParams.w
+		// with Specular), faded by the draw when the object has a fade node.
+		const auto& node = a_objectIndex < a_tables.lodFade.size() ? a_tables.lodFade[a_objectIndex] : std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f };
+		std::uint32_t fades = 0;
+		if (LodFadesApply(node) && !(object.flags & kObjectNoBindings) && object.pipelineIndex < a_tables.pipelines.size()) {
+			const std::uint32_t pass = a_tables.pipelines[object.pipelineIndex].passDescriptor;
+			fades = ((pass & 0x200u) ? kLodFadeSpecular | ((a_renderFlags & 2) ? 0u : kLodFadeSsr) : 0u) | (((pass >> 24) & 0x3f) == 1 ? kLodFadeEnvmap : 0u);
+		}
+		std::memcpy(a_out.lodFadeNode, node.data(), sizeof(a_out.lodFadeNode));
+		a_out.lodFadeFlags = fades ? fades | (static_cast<std::uint32_t>(node[3]) & kLodFadeTypeMask) : 0u;
 	}
 
 	std::uint32_t PackedPositionOf(const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_firstVariable,

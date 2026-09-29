@@ -32,16 +32,36 @@ namespace DCLF
 			BuildDrawsLatch& a_latch)
 		{
 			const auto& layout = a_resources.latchLayout;
+			// Every registered state has its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
+			if (a_rasterState == 0 || a_rasterState > layout.rasterStates)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow view rasterizer state {} past the latch's {} rows", a_rasterState, layout.rasterStates));
 			const std::uint32_t mapRowOffset = layout.MapOffset() + (a_rasterState - 1) * layout.MapRowBytes();
 			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + mapRowOffset;
 			if (!a_write)
 				return;
-			// Every key slot fits its row (ReserveShadowViews, before the epoch): past it is a defect of that reserve.
-			const auto& row = a_lookups.shadowMapRows[a_rasterState];
+			// Every key slot fits its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
+			const auto row = a_lookups.ShadowMapRow(a_rasterState);
 			if (row.size() > layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
-				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row.data(), row.size())));
+				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(row));
+		}
+
+		/**
+		 * @brief Writes the sun's full-frustum processes into a frame slot's region of the shadow latch block (ShadowLatchLayout::
+		 * SunEntryOffset) and returns where, in bytes into the block, as a sun view's latch names it (BuildDrawsLatch::sunEntryOffset).
+		 */
+		std::uint32_t WriteSunEntryRegion(ShadowResources& a_resources, std::uint32_t a_latchSlot, std::span<const SunEntryProcess> a_processes)
+		{
+			const auto& layout = a_resources.latchLayout;
+			// Every process fits (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
+			if (a_processes.size() > layout.sunProcesses)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} sun full-frustum processes past the latch's {}", a_processes.size(), layout.sunProcesses));
+			const std::uint32_t header[4] = { static_cast<std::uint32_t>(a_processes.size()), 0, 0, 0 };
+			a_resources.latch->Write(a_latchSlot, layout.SunEntryOffset(), std::as_bytes(std::span(header)));
+			if (!a_processes.empty())
+				a_resources.latch->Write(a_latchSlot, layout.SunEntryOffset() + kSunRegionHeader, std::as_bytes(a_processes));
+			return static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + layout.SunEntryOffset();
 		}
 
 		/**
@@ -322,6 +342,8 @@ namespace DCLF
 		auto& payload = impl->shadowPayload;
 		const auto& view = impl->skyView;
 		const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(kSkyMode));
+		// Its state's map row: a state first seen by this frame's capture of the map has none yet.
+		impl->ReserveShadowLatch(0, resources->latchLayout.keySlots, DrawPipelines::Get().ShadowRasterStateCount(), resources->latchLayout.sunProcesses);
 		impl->ReserveShadowSequences(store.GetTables(), 1, kSkySlot);
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
 			resources->skyFrame.store(nullptr, std::memory_order_release);
@@ -393,16 +415,17 @@ namespace DCLF
 		const std::uint32_t frameNumber = store.GetFrame();
 		auto resources = impl->shadow;
 		std::array<bool, kShadowModeCount> modeUsed{};
-		std::array<std::uint32_t, kShadowModeCount> modeRasterStates{};
+		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (const auto& view : pending) {
 			modeUsed[view.modeIndex] = true;
-			modeRasterStates[view.modeIndex] |= 1u << (view.rasterState + (view.casterClass ? 16u : 0u));
+			modeRasterStates[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
 		}
 		// Skylighting's occlusion map is drawn later in the frame, by its own epoch, from this build: its occluders
 		// under the state its view drew with last (known once the engine's own draw of the map has been captured).
 		if (SceneStore::SkyOcclusionEnabled() && impl->skyRasterState && impl->skyDsvFormat != DXGI_FORMAT_UNKNOWN) {
 			modeUsed[kSkyMode] = true;
-			modeRasterStates[kSkyMode] = 1u << impl->skyRasterState;
+			modeRasterStates[kSkyMode] = {};
+			modeRasterStates[kSkyMode].Add(impl->skyRasterState, false);
 		}
 		// One pipeline set per shadow map format: every target the engine has is D16 (engine notes), and a
 		// view whose target differed would rebuild the set on every epoch, so the first view's is taken.
@@ -432,7 +455,8 @@ namespace DCLF
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				if (modeUsed[m])
 					keys += m == kSkyMode ? tables.skyKeysUsed.size() : tables.shadowKeysUsed.size();
-			impl->ReserveShadowViews(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys));
+			impl->ReserveShadowLatch(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
+				static_cast<std::uint32_t>(in.sunEntryProcesses.size()));
 		}
 		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(pending.size()), kFirstShadowViewSlot);
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
@@ -567,7 +591,8 @@ namespace DCLF
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
 			frame->latch = resources->latch;
-			std::uint32_t mapRowsWritten = 0;  // bit per view rasterizer state whose map row is in the latch
+			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
+			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			for (std::uint32_t index = 0; index < pending.size(); ++index) {
 				const auto& view = pending[index];
 				const std::uint32_t slot = kFirstShadowViewSlot + index;
@@ -584,28 +609,26 @@ namespace DCLF
 				                  (view.casterClass ? kCullVolumetricOnly : kCullCastersOnly) | (view.sunView ? kCullSunEntry : 0u);
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
-				// A sun view's entry rule on the GPU: the frame's full-frustum processes (six at the sun's usual setup), which
-				// BuildDraws tests every input's entry sphere against (SetSunEntryRow).
-				const auto& entryMasks = payload.inputs.sunEntryPlaneMasks;
-				if (view.sunView && entryMasks.size() <= kMaxSunEntryProcesses) {
-					latch.sunEntryCount = static_cast<std::uint32_t>(entryMasks.size());
-					for (std::size_t process = 0; process < entryMasks.size(); ++process) {
-						latch.sunEntryMasks[process] = entryMasks[process];
-						for (std::uint32_t plane = 0; plane < 6; ++plane)
-							std::memcpy(latch.sunEntryPlanes[process][plane], payload.inputs.sunEntryPlanes[process * 6 + plane].data(), 4 * sizeof(float));
-					}
-					// CS_DCLF_PERSISTENT_PARITY: the GPU's test on the latch as written, against the CPU's verdict, per input.
+				// A sun view's entry rule on the GPU: the slot's region of the frame's full-frustum processes (written once, below the
+				// loop's first sun view), which BuildDraws tests every input's entry sphere against (SetSunEntryRow).
+				if (view.sunView) {
+					if (!sunEntryOffset)
+						sunEntryOffset = WriteSunEntryRegion(*resources, latchSlot, payload.inputs.sunEntryProcesses);
+					latch.sunEntryOffset = sunEntryOffset;
+					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the input's fade row, against the CPU's verdict from
+					// the tables' entry, per input.
 					if (PersistentParityEnabled() && ParityDue(frameNumber)) {
 						const auto& tablesNow = store.GetTables();
 						for (const auto& input : payload.Flat(view.modeIndex)) {
 							const bool cpu = OutsideSunEntry(payload.inputs, tablesNow, input.objectIndex);
 							++shadowStats.sunEntryChecks;
-							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryLatch(latch, input.fade) ? 1 : 0;
+							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, input.fade) ? 1 : 0;
 						}
 					}
 				}
-				const bool rowWritten = (mapRowsWritten >> view.rasterState) & 1;
-				mapRowsWritten |= 1u << view.rasterState;
+				const bool rowWritten = view.rasterState < mapRowsWritten.size() && mapRowsWritten[view.rasterState];
+				if (view.rasterState < mapRowsWritten.size())
+					mapRowsWritten[view.rasterState] = true;
 				UseShadowMapRow(*resources, store.GetLookups(), latchSlot, view.rasterState, !rowWritten, latch);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
@@ -683,7 +706,7 @@ namespace DCLF
 	}
 
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
-		const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates) const
+		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const
 	{
 		ZoneScopedN("CS.DCLF.PrepareShadowInputs");
 		ShadowInputs in;
@@ -698,10 +721,14 @@ namespace DCLF
 					if (!process)
 						continue;
 					const auto& planes = process->planes;
-					for (std::uint32_t p = 0; p < 6; ++p)
-						in.sunEntryPlanes.push_back({ planes.cullingPlanes[p].normal.x, planes.cullingPlanes[p].normal.y, planes.cullingPlanes[p].normal.z,
-							planes.cullingPlanes[p].constant });
-					in.sunEntryPlaneMasks.push_back(planes.activePlanes.underlying() & 0x3Fu);
+					auto& out = in.sunEntryProcesses.emplace_back();
+					for (std::uint32_t p = 0; p < 6; ++p) {
+						out.planes[p][0] = planes.cullingPlanes[p].normal.x;
+						out.planes[p][1] = planes.cullingPlanes[p].normal.y;
+						out.planes[p][2] = planes.cullingPlanes[p].normal.z;
+						out.planes[p][3] = planes.cullingPlanes[p].constant;
+					}
+					out.mask = planes.activePlanes.underlying() & 0x3Fu;
 				}
 		in.sunCandidates = a_store.GetSunCandidates();
 		in.addresses.constants = a_resources.constantsAddress;
@@ -764,7 +791,7 @@ namespace DCLF
 		const ShadowInputs inputs = job.inputs;
 		const bool claims = PassCapture::ShadowWithholdingEnabled();
 		// The count buffers the worker zeroes: those of the slots last frame's views took, taken here, because the render thread
-		// adds slots (ReserveShadowViews) while the worker runs.
+		// adds slots (ReserveShadowLatch) while the worker runs.
 		std::vector<std::shared_ptr<org::Buffer>> counts;
 		for (std::uint32_t v = 0; v < job.views && kFirstShadowViewSlot + v < impl->shadow->count.size(); ++v)
 			counts.push_back(impl->shadow->count[kFirstShadowViewSlot + v]);

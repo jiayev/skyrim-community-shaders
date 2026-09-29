@@ -106,15 +106,19 @@ namespace DCLF
 				const auto& bound = a_item.sunEntryNode->worldBound;
 				entry = { bound.center.x, bound.center.y, bound.center.z, bound.radius };
 			}
+			// The fade node moves with it (LodFadeNodeOf).
+			const auto lodFade = LodFadeNodeOf(geometry->GetGeometryRuntimeData().shaderProperty.get());
 			auto& object = tables.objects[slot];
 			// Only a real change is one: a mover that stood still this frame changes nothing.
 			if (std::memcmp(object.world, world, sizeof(world)) != 0 || std::memcmp(object.previousWorld, previousWorld, sizeof(previousWorld)) != 0 ||
-				std::memcmp(object.boundCenter, center, sizeof(center)) != 0 || object.boundRadius != radius || tables.sunEntry[slot] != entry) {
+				std::memcmp(object.boundCenter, center, sizeof(center)) != 0 || object.boundRadius != radius || tables.sunEntry[slot] != entry ||
+				tables.lodFade[slot] != lodFade) {
 				std::memcpy(object.world, world, sizeof(world));
 				std::memcpy(object.previousWorld, previousWorld, sizeof(previousWorld));
 				std::memcpy(object.boundCenter, center, sizeof(center));
 				object.boundRadius = radius;
 				tables.sunEntry[slot] = entry;
+				tables.lodFade[slot] = lodFade;
 				changed |= kTakePlacement;
 			}
 		}
@@ -123,7 +127,8 @@ namespace DCLF
 
 	std::uint8_t SceneStore::TakeRoot(const RootPlacement& a_item, bool a_noteAll)
 	{
-		// SunEntryOf for every dependent that has a record: they all read this root's bound.
+		// SunEntryOf for every dependent that has a record: they all read this root's bound. So does a dependent's LOD fade
+		// node when the root is its fade node (LodFadeNodeOf), which it usually is.
 		const auto dependents = rootDependents.find(a_item.root);
 		if (dependents == rootDependents.end())
 			return 0;
@@ -135,8 +140,10 @@ namespace DCLF
 			if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.slot >= tables.sunEntry.size())
 				continue;
 			const std::uint32_t slot = it->second.slot;
-			if (tables.sunEntry[slot] != entry || a_noteAll) {
+			const auto lodFade = LodFadeNodeOf(geometry->GetGeometryRuntimeData().shaderProperty.get());
+			if (tables.sunEntry[slot] != entry || tables.lodFade[slot] != lodFade || a_noteAll) {
 				tables.sunEntry[slot] = entry;
+				tables.lodFade[slot] = lodFade;
 				rootChangedSlots.push_back(slot);
 				changed = kTakePlacement;
 			}

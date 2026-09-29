@@ -4,7 +4,7 @@ namespace DCLF
 {
 	std::uint32_t SceneStore::AllocateGeometrySlot()
 	{
-		const auto allocation = tables.geometrySlots.Allocate(frame);
+		const auto allocation = tables.geometrySlots.Allocate();
 		if (allocation.grown) {
 			tables.GeometryColumns(kGrowColumn);
 			tables.NoteGeometry(allocation.slot);
@@ -14,7 +14,7 @@ namespace DCLF
 
 	std::uint32_t SceneStore::AllocatePipelineSlot()
 	{
-		const auto allocation = tables.pipelineSlots.Allocate(frame);
+		const auto allocation = tables.pipelineSlots.Allocate();
 		if (allocation.grown)
 			tables.PipelineColumns(kGrowColumn);
 		return allocation.slot;
@@ -22,7 +22,7 @@ namespace DCLF
 
 	std::uint32_t SceneStore::AllocateMaterialSlot()
 	{
-		const auto allocation = tables.materialSlots.Allocate(frame);
+		const auto allocation = tables.materialSlots.Allocate();
 		if (allocation.grown)
 			tables.MaterialColumns(kGrowColumn);
 		return allocation.slot;
@@ -65,6 +65,9 @@ namespace DCLF
 		materialIndex.clear();
 		materialDependents.clear();
 		materialOwners.clear();
+		bindQueue.clear();
+		membershipWitness = ~0u;
+		materialMember.clear();
 		// The lookup import owners were reset above. The next shadow-index
 		// reconstruction must publish additions even if an SRV address recurs.
 		shadowTextureMembers.clear();
@@ -152,8 +155,10 @@ namespace DCLF
 				++geometriesProbed;
 				const auto& record = tables.geometries[slot];
 				const auto* triShape = tables.geometrySlotKey[slot];
-				const auto vertex = gpu.Resolve(record.vertexBuffer);
-				const auto index = gpu.Resolve(record.indexBuffer);
+				const auto vertexLease = gpu.Acquire(record.vertexBuffer);
+				const auto indexLease = gpu.Acquire(record.indexBuffer);
+				const auto* vertex = vertexLease ? &vertexLease->buffer : nullptr;
+				const auto* index = indexLease ? &indexLease->buffer : nullptr;
 				const bool same = triShape && vertex && index && vertex->address == record.vertexAddress && index->address == record.indexAddress &&
 				                  reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer) == record.vertexBuffer &&
 				                  reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer) == record.indexBuffer;
@@ -175,7 +180,7 @@ namespace DCLF
 	{
 		auto& link = slotReferences.link;
 		if (a_slot < link.size()) {
-			tables.geometrySlots.Release(link[a_slot].slot, link[a_slot].generation, frame);
+			tables.geometrySlots.Release(link[a_slot].slot, link[a_slot].generation);
 			link[a_slot] = {};
 		}
 		geometryIndex.erase(tables.geometrySlotKey[a_slot]);
@@ -212,7 +217,7 @@ namespace DCLF
 			if (a_counted == a_now)
 				return;
 			if (a_counted.slot != SlotReferences::kNone)
-				a_table.Release(a_counted.slot, a_counted.generation, frame);
+				a_table.Release(a_counted.slot, a_counted.generation);
 			if (a_now.slot != SlotReferences::kNone)
 				a_table.AddRef(a_now.slot, a_now.generation);
 			a_counted = a_now;
@@ -238,9 +243,9 @@ namespace DCLF
 		};
 		if (!r.objects.Continues(tables.changeLog, tablesGeneration) || !r.links.Continues(tables.geometryLog, tablesGeneration)) {
 			// Every reference counted again: the first frame, new tables, or a log this reader fell behind.
-			tables.geometrySlots.ResetReferences(frame);
-			tables.pipelineSlots.ResetReferences(frame);
-			tables.materialSlots.ResetReferences(frame);
+			tables.geometrySlots.ResetReferences();
+			tables.pipelineSlots.ResetReferences();
+			tables.materialSlots.ResetReferences();
 			r.object.assign(tables.objects.size(), {});
 			r.link.assign(tables.geometries.size(), {});
 			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
@@ -262,19 +267,21 @@ namespace DCLF
 	void SceneStore::SweepSlots()
 	{
 		UpdateSlotReferences();
-		std::uint32_t freed = tables.geometrySlots.Expire(frame, [&](std::uint32_t a_slot) { ClearGeometrySlot(a_slot); });
-		freed += tables.pipelineSlots.Expire(frame, [&](std::uint32_t a_slot) {
+		// Every slot has explicit users (the object records, a skin's chain): its last reference going frees it, after the
+		// whole journal batch, with no grace period.
+		std::uint32_t freed = tables.geometrySlots.DrainUnreferenced([&](std::uint32_t a_slot) { ClearGeometrySlot(a_slot); });
+		freed += tables.pipelineSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
 			pipelineIndex.erase(tables.pipelines[a_slot]);
 			tables.geometryTemplate[a_slot] = nullptr;
 			tables.geometryConstantsValid[a_slot] = 0;
 			tables.pipelineLastUsed[a_slot] = Tables::kSlotFree;
 			tables.retiredPipelineSlots.push_back(a_slot);
 		});
-		// Material records have explicit object users. Consume their last-reference
-		// transitions after the whole journal batch, without a frame-age grace period.
 		freed += tables.materialSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
 			ClearMaterialSlot(a_slot);
 			++stats.materialCacheEvicted;
+			if (a_slot < materialMember.size() && std::exchange(materialMember[a_slot], 0))
+				++stats.materialEvictedMember;
 		});
 		stats.slotsSwept += freed;
 		if (freed)
