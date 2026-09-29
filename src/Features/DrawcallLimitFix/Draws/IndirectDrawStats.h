@@ -161,7 +161,8 @@ namespace DCLF
 		std::uint32_t skippedTexture = 0;  // alpha-tested casters whose diffuse could not be resolved, last view
 		std::uint32_t deferredTextures = 0;   // of those, ones whose diffuse the lookups had not resolved yet (next frame)
 		std::uint32_t deferredPipelines = 0;  // casters whose shadow pipeline the lookups had no entry for yet
-		std::uint32_t records = 0;         // binding records, last frame
+		std::uint32_t records = 0;         // material rows, last frame
+		std::uint32_t waitingRows = 0;     // materials past the rows' table, waiting for it to grow, last frame
 		double cpuMs = 0.0;                // per report interval, all views
 		double captureMs = 0.0;            // per report interval, the hooks' captures
 		double prepareMs = 0.0;            // of which the once-per-frame preparation

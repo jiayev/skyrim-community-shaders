@@ -72,7 +72,8 @@ namespace DCLF::Draws
 		if (differ.Bytes("objects", a.objects.Count() ? a.objects.At(0) : nullptr, a.objects.Count() * sizeof(BindlessObject),
 				b.objects.Count() ? b.objects.At(0) : nullptr, b.objects.Count() * sizeof(BindlessObject)))
 			return false;
-		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || vectorDiffers("records", a.records, b.records) ||
+		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || differ.Bytes("material rows", a.materialRows.At(0), a.materialRows.Count() * sizeof(ShadowMaterialRow), b.materialRows.At(0),
+				b.materialRows.Count() * sizeof(ShadowMaterialRow)) ||
 			vectorDiffers("object records", a.objectRecord, b.objectRecord) || a.bones.Rows() != b.bones.Rows() ||
 			vectorDiffers("geometries", a.geometries.Flat(), b.geometries.Flat()))
 			return false;
@@ -129,10 +130,23 @@ namespace DCLF
 			std::size_t entries = 0;
 			for (const auto& mode : k.modes)
 				entries += mode.inputs.Size();
-			text += fmt::format("[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} records written a build, {} entries and {} records held, {} resyncs; parity {} inputs checked, {} differ{}{}\n",
-				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.recordsWritten) / k.builds, entries, k.records.Size(), k.resyncs,
-				k.parity.checks, k.parity.mismatches, k.parity.Verdict(true), "");
-			k.builds = k.entriesWritten = k.recordsWritten = k.resyncs = 0;
+			const auto* rowsTable = impl->shadow ? &impl->shadow->materialRows : nullptr;
+			text += fmt::format(
+				"[DCLF] persistent shadow state: {} builds, {:.1f} entries and {:.1f} material rows written a build, {} entries and {} material rows held "
+				"(table {} rows, grown {} times), {} resyncs; parity {} inputs checked, {} differ{}\n",
+				k.builds, static_cast<double>(k.entriesWritten) / k.builds, static_cast<double>(k.rowsWritten) / k.builds, entries, k.rows.Size(),
+				rowsTable ? rowsTable->capacity : 0u, rowsTable ? rowsTable->growths : 0u, k.resyncs, k.parity.checks, k.parity.mismatches, k.parity.Verdict(true));
+			if (impl->shadow)
+				impl->shadow->materialRows.growths = 0;
+			if (!k.missingBy.empty()) {
+				std::string why;
+				for (const auto& [reason, count] : k.missingBy)
+					why += fmt::format("{}{} {} (first {})", why.empty() ? "" : ", ", reason, count, k.missingFirst[reason]);
+				text += fmt::format("[DCLF] persistent shadow state: inputs of the per-frame build only, by why: {}\n", why);
+				k.missingBy.clear();
+				k.missingFirst.clear();
+			}
+			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
 			k.parity.Reset();
 		}
 		for (auto [name, store] : { std::pair{ "main", &impl->mainBones }, std::pair{ "shadow", &impl->shadowBones } }) {

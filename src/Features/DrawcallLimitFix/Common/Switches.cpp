@@ -107,6 +107,7 @@ namespace DCLF
 			{ CoverageProbe, "CS_DCLF_COVERAGE_PROBE", D, N, false, "1: which shaders the objects DCLF leaves native use" },
 			{ DeriveProbe, "CS_DCLF_DERIVE_PROBE", D, N, false, "1: derivation statistics in the report" },
 			{ SlotProbe, "CS_DCLF_SLOT_PROBE", D, N, false, "1: slot lifetime statistics in the report" },
+			{ TableStart, "CS_DCLF_TABLE_START", D, N, false, "small: the growable GPU tables start with a few rows, so that growth runs early and often" },
 			{ SkylightDumpDir, "CS_DCLF_SKYLIGHT_DUMP_DIR", D, N, false, "where CS_DCLF_SKYLIGHT_PARITY writes the maps it compares" },
 			{ DepthTrace, "CS_DCLF_DEPTH_TRACE", D, N, false, "1: the D3D11 calls that touch the main depth buffer, for five frames" },
 			{ DrawTrace, "CS_DCLF_DRAW_TRACE", D, N, false, "1: the callers of the D3D11 draws" },

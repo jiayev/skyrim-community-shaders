@@ -40,9 +40,12 @@ namespace DCLF
 				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row.data(), std::min<std::size_t>(row.size(), kMaxShadowSlots))));
 		}
 
-		/** @brief Where a view draws: its slot's buffers and records, and its viewport and depth range in its target's slice. */
+		/**
+		 * @brief Where a view draws: its slot's buffers, its viewport and depth range in its target's slice, and its push data
+		 * (DrawPipelines.h, kShadowPushWords): the frame record, its own blocks at its slot of the arena's head, and the build's.
+		 */
 		ShadowFrameView FrameViewOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target, std::uint32_t a_capacity,
-			std::uint64_t a_recordsAddress)
+			const ShadowResources& a_resources, const ShadowPayload& a_payload)
 		{
 			ShadowFrameView out{};
 			out.slot = a_slot;
@@ -56,7 +59,19 @@ namespace DCLF
 			out.maxDepth = a_view.maxDepth;
 			out.target = a_target;
 			out.slice = a_view.slice;
-			out.recordsAddress = a_recordsAddress;
+			out.materialRows = a_resources.materialRows.address;
+			const std::uint64_t base = a_resources.constantsAddress;
+			const std::uint64_t viewBlock = base + std::uint64_t(a_slot) * kShadowViewSlotBytes;
+			auto push = [&](std::uint32_t a_word, std::uint64_t a_address) {
+				out.push[a_word] = static_cast<std::uint32_t>(a_address);
+				out.push[a_word + 1] = static_cast<std::uint32_t>(a_address >> 32);
+			};
+			push(kShadowPushFrameRecord, base + kShadowFrameRecordOffset);
+			push(kShadowPushViewBlock, viewBlock);
+			push(kShadowPushPerFrame, viewBlock + kShadowPerFrameOffset);
+			push(kShadowPushZeros, a_payload.zerosAddress);
+			push(kShadowPushSharedData, a_payload.sharedDataAddress);
+			push(kShadowPushFeatureData, a_payload.featureDataAddress);
 			return out;
 		}
 
@@ -295,20 +310,12 @@ namespace DCLF
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
 			resources->skyFrame.store(nullptr, std::memory_order_release);
 			CommitUploads uploads(impl->commitStagedPool);
-			// The view slot's blocks, its copy of the frame's binding records naming them, and its count zeroed. The
-			// occluders, records, objects and geometries were uploaded by this frame's shadow commit.
-			const std::uint64_t base = resources->constantsAddress;
+			// The view slot's blocks, which its push data names, and its count zeroed. The occluders, material rows, frame
+			// record, objects and geometries were uploaded by this frame's shadow commit.
 			const std::uint64_t viewBlockOffset = std::uint64_t(kSkySlot) * kShadowViewSlotBytes;
 			const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
 			uploads(resources->constants, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
 			uploads(resources->constants, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
-			auto& slotRecords = impl->shadowSlotRecords;
-			slotRecords = payload.records;
-			for (auto& record : slotRecords) {
-				AddressToSlot(record, base + viewBlockOffset, base + perFrameOffset);
-			}
-			const std::uint64_t recordsOffset = std::uint64_t(kSkySlot) * kShadowRecordCapacity * sizeof(DrawBindings);
-			uploads(resources->records, slotRecords.data(), slotRecords.size() * sizeof(DrawBindings), recordsOffset);
 			uploads(resources->count[kSkySlot], kZeroCounts, sizeof(kZeroCounts), 0);
 			// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn.
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
@@ -322,7 +329,7 @@ namespace DCLF
 			frame->indirect = indirect;
 			const auto& previousShape = resources->skyPublished;
 			const std::uint32_t capacity = GrowCapacity(previousShape && !previousShape->views.empty() ? previousShape->views.front().capacity : 0u, inputCount, kMaxDraws);
-			frame->views.push_back(FrameViewOf(view, kSkySlot, kSkyMode, kSkyDepthTarget, capacity, resources->recordsAddress + recordsOffset));
+			frame->views.push_back(FrameViewOf(view, kSkySlot, kSkyMode, kSkyDepthTarget, capacity, *resources, payload));
 			PublishShape(std::move(frame), resources->skyPublished, resources->skyFrame, resources->shapeGenerations);
 		}, impl->shadowExecutionOwner);
 		shadowStats.skyMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -384,6 +391,7 @@ namespace DCLF
 		const DXGI_FORMAT dsvFormat = pending.front().dsvFormat;
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
+		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
 		impl->shadowJob.modes = modeUsed;
 		impl->shadowJob.rasterStates = modeRasterStates;
@@ -451,11 +459,9 @@ namespace DCLF
 			// than a reused recording reading latch values this execution never wrote).
 			resources->frame.store(nullptr, std::memory_order_release);
 			CommitUploads uploads(impl->commitStagedPool);
-			// ---- The commit: the shared uploads, the per-mode inputs, then per view its blocks at its slot of
-			// the arena's head, its copy of the records naming them, its count buffer zeroed, and the view.
-			const std::uint64_t base = resources->constantsAddress;
+			// ---- The commit: the shared uploads (the material rows among them), the per-mode inputs, then per view its blocks
+			// at its slot of the arena's head, its count buffer zeroed, and the view.
 			auto& arena = payload.arena;
-			auto& records = payload.records;
 			bool staged = false;
 			std::uint32_t stagedSlots = 0;
 			TracyCZoneN(shadowCommitZone, "CS.DCLF.ShadowInputs.CommitShared", true);
@@ -477,7 +483,15 @@ namespace DCLF
 				EmitGeometryDraws(payload.geometries, resources->tablesHeld.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(resources->geometries, a_data, a_bytes, a_offset);
 				});
+				payload.materialRows.Emit(resources->materialRowsHeld, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+					uploads(resources->materialRows.buffer, a_data, a_bytes, a_offset);
+				});
 			}
+			// The rows the table holds (none past its capacity, which the build left waiting), and what the next frame's
+			// Reserve grows it to. A build without the kept state wrote them whole: the table holds no journal version.
+			resources->materialRowsHeld = payload.kept ? payload.materialRows.Version() : 0;
+			impl->shadowRowsWanted = payload.rowsWanted;
+			shadowStats.waitingRows = payload.waitingRows;
 			// Either path uploaded the object records, the bone rows and the geometry slots' draws the buffers did not hold.
 			if (payload.objects.Version())
 				resources->tablesHeld.objects = payload.objects.Version();
@@ -492,7 +506,7 @@ namespace DCLF
 			if (payload.bones.Version())
 				resources->tablesHeld.bones = payload.bones.Version();
 			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, resources->facePositions, resources->faceUploaded, uploads);
-			shadowStats.records = static_cast<std::uint32_t>(records.size());
+			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
 			shadowStats.deferredTextures = payload.deferredTextures;
@@ -503,9 +517,9 @@ namespace DCLF
 				if (!staged)
 					EmitShadowInputs(payload, m, payload.kept ? resources->inputsUploaded[m] : 0,
 						[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { uploads(resources->inputs[m], a_data, a_bytes, a_offset); });
-				// Either path wrote what the buffer did not hold.
-				if (payload.kept)
-					resources->inputsUploaded[m] = payload.regionInputs[m].Version();
+				// Either path wrote what the buffer did not hold; a build without the kept state wrote it whole, which no
+				// version of the kept state is.
+				resources->inputsUploaded[m] = payload.kept ? payload.regionInputs[m].Version() : 0;
 				shadowStats.inputs = static_cast<std::uint32_t>(payload.ModeInputs(m));
 			}
 			inputsMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - inputsStart).count();
@@ -520,7 +534,6 @@ namespace DCLF
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
-			auto& slotRecords = impl->shadowSlotRecords;
 			std::uint32_t mapRowsWritten = 0;  // bit per view rasterizer state whose map row is in the latch
 			for (std::uint32_t slot = 0; slot < pending.size(); ++slot) {
 				const auto& view = pending[slot];
@@ -528,23 +541,8 @@ namespace DCLF
 				const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
 				std::memcpy(arena.At(viewBlockOffset, sizeof(view.viewBlock)).data(), view.viewBlock, sizeof(view.viewBlock));
 				std::memcpy(arena.At(perFrameOffset, view.perFrameBytes).data(), view.perFrame.data(), view.perFrameBytes);
-				const std::uint64_t recordsOffset = std::uint64_t(slot) * kShadowRecordCapacity * sizeof(DrawBindings);
-				if (slot >= stagedSlots) {
-					if (payload.kept) {
-						EmitShadowRecords(payload, resources->recordsUploaded[slot], base + viewBlockOffset, base + perFrameOffset,
-							[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { uploads(resources->records, a_data, a_bytes, recordsOffset + a_offset); });
-					} else {
-						slotRecords = records;
-						for (auto& record : slotRecords) {
-							AddressToSlot(record, base + viewBlockOffset, base + perFrameOffset);
-						}
-						uploads(resources->records, slotRecords.data(), slotRecords.size() * sizeof(DrawBindings), recordsOffset);
-					}
+				if (slot >= stagedSlots)
 					uploads(resources->count[slot], kZeroCounts, sizeof(kZeroCounts), 0);
-				}
-				// Either path wrote what the slot did not hold.
-				if (payload.kept)
-					resources->recordsUploaded[slot] = payload.recordChanges.version;
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(view.modeIndex));
 				// The view's values into its latch: frustum culling alone (mode 1), the single phase, and no
 				// engine-visibility gate - a caster is drawn whether or not the main camera kept it.
@@ -584,7 +582,7 @@ namespace DCLF
 						if (previous.slot == slot)
 							previousCapacity = previous.capacity;
 				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex, GrowCapacity(previousCapacity, inputCount, kMaxDraws),
-					resources->recordsAddress + recordsOffset));
+					*resources, payload));
 			}
 			// Staged, only the view head this epoch wrote goes up from here; the rest of the arena is the worker's.
 			const auto& bytes = arena.Bytes();
@@ -600,8 +598,9 @@ namespace DCLF
 					views += fmt::format("{}view {} mode {:#x} target {} slice {} at ({} {}) {}x{} {} inputs (capacity {})", views.empty() ? "" : "; ", pending[v].viewId,
 						pending[v].renderMode, view.target, view.slice, view.x, view.y, view.width, view.height, payload.ModeInputs(view.modeIndex), view.capacity);
 				}
-				logger::info("[DCLF] shadow epoch: {} views ({} without a pipeline, {} without a texture), {} records: {}", frame->views.size(),
-					shadowStats.skippedPipeline, shadowStats.skippedTexture, shadowStats.records, views);
+				logger::info("[DCLF] shadow epoch: {} views ({} without a pipeline, {} without a texture), {} material rows ({} waiting for the table to grow, {} held): {}",
+					frame->views.size(), shadowStats.skippedPipeline, shadowStats.skippedTexture, shadowStats.records, payload.waitingRows,
+					resources->materialRows.capacity, views);
 			}
 			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations);
 			TracyCZoneEnd(shadowViewsZone);
@@ -642,6 +641,15 @@ namespace DCLF
 		shadowStats.cpuMs += totalMs;
 	}
 
+	void IndirectDraws::Impl::ReserveShadowRows()
+	{
+		// What the last build wanted, with a quarter more: the table grows ahead of the scene, not a frame behind it.
+		if (!shadow || !shadowRowsWanted)
+			return;
+		if (shadow->materialRows.Reserve(shadowRowsWanted + shadowRowsWanted / 4))
+			shadow->materialRowsHeld = 0;  // a new backing holds nothing
+	}
+
 	ShadowInputs IndirectDraws::Impl::PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 		const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates) const
 	{
@@ -665,19 +673,17 @@ namespace DCLF
 				}
 		in.sunCandidates = a_store.GetSunCandidates();
 		in.addresses.constants = a_resources.constantsAddress;
-		in.addresses.records = a_resources.recordsAddress;
+		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.objectsIndex = a_resources.objectsIndex;
 		in.addresses.bonesIndex = a_resources.bonesIndex;
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.facePositionsAddress : 0;
-		in.addresses.recordCapacity = kShadowRecordCapacity;
+		in.addresses.recordCapacity = a_resources.materialRows.capacity;
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;
 		in.tablesHeld = a_resources.tablesHeld;
 		in.inputsHeld = a_resources.inputsUploaded;
-		for (const auto held : a_resources.recordsUploaded)
-			if (held && (!in.recordsOldestHeld || held < in.recordsOldestHeld))
-				in.recordsOldestHeld = held;
+		in.materialRowsHeld = a_resources.materialRowsHeld;
 		if (auto* csState = globals::state) {
 			const auto* shared = reinterpret_cast<const std::byte*>(&csState->lastSharedData);
 			in.sharedData.assign(shared, shared + sizeof(State::SharedDataCB));
@@ -706,6 +712,8 @@ namespace DCLF
 			++async.notKicked;
 			return;
 		}
+		// The material rows' table grows here, on the render thread before the worker reads it, if the last build wanted more.
+		impl->ReserveShadowRows();
 		job.inputs = impl->PrepareShadowInputs(store, *impl->shadow, job.modes, job.rasterStates);
 		++async.kicked;
 		const auto* tablesPtr = &tables;

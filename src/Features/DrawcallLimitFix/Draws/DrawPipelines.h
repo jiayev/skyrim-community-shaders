@@ -22,13 +22,30 @@ namespace DCLF
 	 * push data (LayoutRangeSource::PushAddress), set once per pass, instead of from each draw's binding record
 	 * (IndirectAddress), which saves the shaders the record's indirection (colour pass 3.3 -> 2.1 ms at Riverwood). Push data: the record address
 	 * range (4 words, for alignment), then these addresses, the vertex stage's registers ascending and then the pixel stage's.
-	 * The shadow views keep every register in the binding record, in a layout of their own (their pass-wide blocks are per view and
-	 * per build, not the main pass's frame slots).
+	 * The shadow views push their pass-wide blocks too, in a layout of their own (kShadowPushWords): theirs are per view and per
+	 * build, not the main pass's frame slots.
 	 */
 	inline constexpr std::uint32_t kFramePushVS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 11) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushPS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 9) | (1u << 10) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushBinding = 191;
 	inline constexpr std::uint32_t kFramePushWords = 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
+	/*
+	 * The shadow views' layout: the draw's words are its material row's address (ShadowMaterialRow, read as the Utility
+	 * vertex shader's PerMaterial block, b1, and for the diffuse, t0) and the object word; everything else is the view's,
+	 * pushed once per view: six addresses (kShadowPushFrameRecord and after). The frame record gives every other texture and
+	 * sampler, and each constant buffer register reads one of the pushed blocks. So the rows are one table for every view,
+	 * each a constant-buffer block (256 bytes), and a view's own blocks are never copied into them.
+	 */
+	inline constexpr std::uint32_t kShadowPushWords = 12;
+	// The view's words: the addresses of the frame record, its PerTechnique (b0) and VS_PerFrame (b12) blocks, the zero block,
+	// SharedData (b5) and FeatureData (b6).
+	inline constexpr std::uint32_t kShadowPushFrameRecord = 0, kShadowPushViewBlock = 2, kShadowPushPerFrame = 4, kShadowPushZeros = 6,
+								   kShadowPushSharedData = 8, kShadowPushFeatureData = 10;
+	inline constexpr std::uint32_t kPerFrameVertexRegister = 12;  // VS_PerFrame (Lighting.hlsl, Utility.hlsl): ViewProj at c8
+	inline constexpr std::uint32_t kSharedDataRegister = 5;       // SharedData (SharedData.hlsli), bound by Community Shaders
+	inline constexpr std::uint32_t kFeatureDataRegister = 6;      // FeatureData, likewise
+	/** @brief Where the diffuse's descriptor index sits in a shadow material row: after its texture offset (c0). */
+	inline constexpr std::uint32_t kShadowRowDiffuseOffset = 16;
 	/*
 	 * Every DCLF draw signature (colour, depth, shadow) is preprocessed explicitly, before the passes that execute it
 	 * (CommandList::PreprocessIndirect), instead of by the driver inside each call.

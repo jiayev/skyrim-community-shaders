@@ -79,9 +79,9 @@ namespace DCLF
 	}
 
 	// On the worker, after the shadow build: what the commit would upload that does not depend on the views it
-	// captures - the shared tables, the used modes' inputs, the arena past its view head - and, per view slot the
-	// job expects, the records naming that slot's blocks and its zeroed counters. The commit uploads the view
-	// head and any slot past a_slots itself.
+	// captures - the shared tables, the material rows, the used modes' inputs, the arena past its view head (the frame
+	// record and the blocks) - and, per view slot the job expects, its zeroed counters. The commit uploads the view head
+	// and any slot past a_slots itself.
 	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::uint32_t a_slots,
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool)
 	{
@@ -104,32 +104,17 @@ namespace DCLF
 				batch->Stage(UploadTarget::FromShared(a_resources.inputs[m]), a_offset, a_data, a_bytes);
 			});
 		}
+		// The material rows the table does not hold (all of them without the kept state, or in a new backing).
+		a_payload.materialRows.Emit(a_payload.kept ? a_payload.inputs.materialRowsHeld : 0, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			batch->Stage(UploadTarget::FromShared(a_resources.materialRows.buffer), a_offset, a_data, a_bytes);
+		});
 		const auto& bytes = a_payload.arena.Bytes();
-		if (bytes.size() > kShadowMaterialBlocksOffset)
-			batch->Stage(UploadTarget::FromShared(a_resources.constants), kShadowMaterialBlocksOffset, bytes.data() + kShadowMaterialBlocksOffset,
-				bytes.size() - kShadowMaterialBlocksOffset);
+		if (bytes.size() > kShadowFrameRecordOffset)
+			batch->Stage(UploadTarget::FromShared(a_resources.constants), kShadowFrameRecordOffset, bytes.data() + kShadowFrameRecordOffset,
+				bytes.size() - kShadowFrameRecordOffset);
 		const std::uint32_t slots = std::min<std::uint32_t>(a_slots, kMaxShadowViews);
-		const std::uint64_t base = a_payload.inputs.addresses.constants;
-		for (std::uint32_t slot = 0; slot < slots; ++slot) {
-			const std::uint64_t viewBlockOffset = std::uint64_t(slot) * kShadowViewSlotBytes;
-			const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
-			const std::uint64_t recordsOffset = std::uint64_t(slot) * kShadowRecordCapacity * sizeof(DrawBindings);
-			if (a_payload.kept) {
-				// The kept records: what the slot does not hold yet.
-				EmitShadowRecords(a_payload, a_resources.recordsUploaded[slot], base + viewBlockOffset, base + perFrameOffset,
-					[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-						batch->Stage(UploadTarget::FromShared(a_resources.records), recordsOffset + a_offset, a_data, a_bytes);
-					});
-			} else if (auto* staging = batch->Stage(UploadTarget::FromShared(a_resources.records), recordsOffset, a_payload.records.size() * sizeof(DrawBindings))) {
-				// Whole records into write-combined staging, in order: written, never read.
-				for (std::size_t r = 0; r < a_payload.records.size(); ++r) {
-					DrawBindings record = a_payload.records[r];
-					AddressToSlot(record, base + viewBlockOffset, base + perFrameOffset);
-					std::memcpy(staging + r * sizeof(DrawBindings), &record, sizeof(DrawBindings));
-				}
-			}
+		for (std::uint32_t slot = 0; slot < slots; ++slot)
 			batch->Stage(UploadTarget::FromShared(a_resources.count[slot]), 0, kZeroCounts, sizeof(kZeroCounts));
-		}
 		a_payload.stagedSlots = slots;
 		a_payload.stagedFor = &a_resources;
 		a_payload.staged = std::move(batch);
@@ -482,6 +467,53 @@ namespace DCLF
 			logger::info("[DCLF] {} epoch: tables frame {} holding {} objects; render area {}x{}, depth range [{}, {}] (captured [{}, {}]), replay {}, eye ({:.2f} {:.2f} {:.2f}), ViewProj z row {}",
 				depthOnly ? "z-prepass" : "colour", frameNumber, tables.liveObjects, frame->width, frame->height, frame->minDepth, frame->maxDepth,
 				a_capture.minDepth, a_capture.maxDepth, replayVertexInputs ? "on" : "off", a_capture.eye.x, a_capture.eye.y, a_capture.eye.z, viewProjZ);
+		}
+		// The jitter the colour epoch projects with (dclf-open-defects.md, "DCLF's draws appear not to carry the TAA /
+		// upscaler jitter"): the packed ViewProj (c8) against the same buffer's unjittered one (c12), the main pass's own
+		// b12 now, Community Shaders' cached frame buffer, and the last colour epoch's.
+		if (!depthOnly && SwitchEnabled(Switch::Stats)) {
+			std::span<const std::byte> packed;
+			if (replayVertexInputs)
+				packed = prepassVS[kPerFrameVertexRegister];
+			else if (auto* buffer = a_capture.vsBuffers[kPerFrameVertexRegister])
+				packed = mirror.Contents(buffer);
+			if (packed.size() >= 16 * 4 * sizeof(float)) {
+				const auto* p = reinterpret_cast<const float*>(packed.data());
+				auto maxDiff = [&](const float* a_other) {
+					float d = 0.0f;
+					for (int i = 0; i < 16; ++i)
+						d = std::max(d, std::abs(p[32 + i] - a_other[i]));
+					return d;
+				};
+				auto& j = jitterProbe;
+				j.vsUnjittered += maxDiff(p + 48);
+				j.vsUnjitteredMax = std::max(j.vsUnjitteredMax, maxDiff(p + 48));
+				if (auto* buffer = a_capture.vsBuffers[kPerFrameVertexRegister]) {
+					const auto main = mirror.Contents(buffer);
+					if (main.size() >= 48 * sizeof(float)) {
+						const float d = maxDiff(reinterpret_cast<const float*>(main.data()) + 32);
+						j.vsMain += d;
+						j.vsMainMax = std::max(j.vsMainMax, d);
+					}
+				}
+				const float cached = maxDiff(reinterpret_cast<const float*>(&globals::game::frameBufferCached.data) + 32);
+				j.vsCached += cached;
+				j.vsCachedMax = std::max(j.vsCachedMax, cached);
+				if (j.havePrevious) {
+					const float d = maxDiff(j.previous.data());
+					j.vsPrevious += d;
+					j.vsPreviousMax = std::max(j.vsPreviousMax, d);
+				}
+				std::copy(p + 32, p + 48, j.previous.begin());
+				j.havePrevious = true;
+				if (++j.epochs == 300) {
+					logger::info("[DCLF] colour epoch ViewProj over {} epochs (mean / max of the largest element difference): against its unjittered copy {:.2e} / {:.2e}, "
+								 "the main pass's b12 now {:.2e} / {:.2e}, the cached frame buffer {:.2e} / {:.2e}, the previous epoch's {:.2e} / {:.2e}; jitter {:.6f} {:.6f}",
+						j.epochs, j.vsUnjittered / j.epochs, j.vsUnjitteredMax, j.vsMain / j.epochs, j.vsMainMax, j.vsCached / j.epochs, j.vsCachedMax,
+						j.vsPrevious / j.epochs, j.vsPreviousMax, p[32 + 2] - p[48 + 2], p[32 + 6] - p[48 + 6]);
+					j = { .previous = j.previous, .havePrevious = true };
+				}
+			}
 		}
 		if (depthOnly) {
 			prepassEye = a_capture.eye;

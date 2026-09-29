@@ -7,9 +7,10 @@ namespace DCLF::Draws
 {
 	constexpr const char* kExtensionId = "cs.dclf.main-opaque";
 	constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
-	// The shadow views' binding records: one for every draw without alpha testing, and one per material
-	// of the alpha-tested casters (their diffuse and texture offset).
-	constexpr std::uint32_t kShadowRecordCapacity = 512;  // per view slot (the exterior needs ~160)
+	// The shadow views' material rows (ShadowMaterialRow): row 0 for every draw without alpha testing, and one per material
+	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
+	// needs more rows (GrowableRows), from this many.
+	constexpr std::uint32_t kShadowMaterialRowsInitial = 256;
 	// The views one frame's shadow epoch can hold: the exterior has four (two cascades, twice); an
 	// interior with several shadow-casting point lights has two hemispheres per light.
 	constexpr std::uint32_t kMaxShadowViews = 16;
@@ -28,7 +29,10 @@ namespace DCLF::Draws
 	// The arena's head holds one slot per view: its PerTechnique block (b0) then its VS_PerFrame copy (b12).
 	constexpr std::uint64_t kShadowPerFrameOffset = 256;
 	constexpr std::uint64_t kShadowViewSlotBytes = 256 + 1024;
-	constexpr std::uint64_t kShadowMaterialBlocksOffset = kShadowViewSlotBytes * kMaxShadowViews;
+	// After the view slots: the frame record (the shadow draws' textures and samplers, DrawBindings), which the views' push
+	// data names, then the arena's blocks (the zero block, SharedData, FeatureData).
+	constexpr std::uint64_t kShadowFrameRecordOffset = kShadowViewSlotBytes * kMaxShadowViews;
+	constexpr std::uint64_t kShadowArenaBlocksOffset = kShadowFrameRecordOffset + 1024;
 	// [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), and
 	// [2] kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM, the volumetric lighting copy: the engine's second draw of
 	// each cascade's accumulator, with flag 0x100, draws batch group 15 alone (FUN_1414b44f0) - the passes

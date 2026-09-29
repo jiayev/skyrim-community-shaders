@@ -515,11 +515,49 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the indirect draw pipeline layout");
 				return false;
 			}
-			// The shadow views keep every register in the binding record (DrawPipelines.h, kFramePushVS).
-			rhi::PushConstantRangeDesc shadowRecordAddress = recordAddress;
-			shadowRecordAddress.num32BitValues = 3;
-			const rhi::PipelineLayoutDesc shadowDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ ranges, static_cast<std::uint32_t>(std::size(ranges)) },
-				.pushConstants = { &shadowRecordAddress, 1u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
+			// The shadow views (DrawPipelines.h, kShadowPushWords): the draw's words name its material row, the view's the rest.
+			rhi::PushConstantRangeDesc shadowPush[2] = { recordAddress, pushConstants[1] };
+			shadowPush[1].num32BitValues = kShadowPushWords;
+			auto pushed = [&](std::uint32_t a_binding, rhi::ShaderStage a_stage, std::uint32_t a_root, std::uint32_t a_word) {
+				auto out = range(a_binding, 1, a_stage, rhi::LayoutRangeSource::PushAddress, 0);
+				out.addressRootIndex = a_root;
+				out.addressOffset32 = a_word;
+				return out;
+			};
+			auto fromFrameRecord = [&](rhi::LayoutBindingRange a_range) {
+				a_range.addressRootIndex = 1;
+				a_range.addressOffset32 = kShadowPushFrameRecord;
+				return a_range;
+			};
+			std::vector<rhi::LayoutBindingRange> shadowRanges;
+			for (const bool pixel : { false, true }) {
+				const auto stage = pixel ? rhi::ShaderStage::Pixel : rhi::ShaderStage::Vertex;
+				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+					const std::uint32_t b = kBindingShiftB + r;
+					if (!pixel && r == 1)
+						shadowRanges.push_back(pushed(b, stage, 0, 0));  // the material row itself
+					else if (r == 0)
+						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushViewBlock));
+					else if (r == kPerFrameVertexRegister)
+						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushPerFrame));
+					else if (r == kSharedDataRegister)
+						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushSharedData));
+					else if (r == kFeatureDataRegister)
+						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushFeatureData));
+					else
+						shadowRanges.push_back(pushed(b, stage, 1, kShadowPushZeros));
+				}
+			}
+			// The diffuse (t0) from the draw's row; t1 and up, the samplers and the vertex stage's buffers from the frame record.
+			shadowRanges.push_back(range(kBindingShiftT, 1, rhi::ShaderStage::Pixel, rhi::LayoutRangeSource::IndirectIndex, kShadowRowDiffuseOffset));
+			shadowRanges.push_back(fromFrameRecord(range(kBindingShiftT + 1, kTextureRegisters - 1, rhi::ShaderStage::Pixel, rhi::LayoutRangeSource::IndirectIndex,
+				offsetof(DrawBindings, textures) + 4)));
+			shadowRanges.push_back(fromFrameRecord(range(kBindingShiftS, kSamplerRegisters, rhi::ShaderStage::Pixel, rhi::LayoutRangeSource::IndirectIndex,
+				offsetof(DrawBindings, samplers), true)));
+			shadowRanges.push_back(fromFrameRecord(range(kBonesBufferBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, rhi::LayoutRangeSource::IndirectIndex,
+				offsetof(DrawBindings, textures) + 4 * std::size_t{ kBonesBufferRegister })));
+			const rhi::PipelineLayoutDesc shadowDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ shadowRanges.data(), static_cast<std::uint32_t>(shadowRanges.size()) },
+				.pushConstants = { shadowPush, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
 			if (device.CreatePipelineLayout(shadowDesc, shadowLayout) != rhi::Result::Ok) {
 				supported = false;
 				logger::error("[DCLF] Could not create the shadow views' pipeline layout");

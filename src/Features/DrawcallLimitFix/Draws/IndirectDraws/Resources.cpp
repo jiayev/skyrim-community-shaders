@@ -45,6 +45,46 @@ namespace DCLF::Draws
 	}
 }
 
+namespace DCLF::Draws
+{
+	bool GrowableRows::Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return false;
+		stride = a_stride;
+		capacity = std::max(a_rows, 1u);
+		name = a_name;
+		buffer = DeviceBuffer(std::uint64_t(capacity) * stride, a_name);
+		address = AddressOf(host->GetDesc().device, *buffer);
+		++generation;
+		return address != 0;
+	}
+
+	bool GrowableRows::Reserve(std::uint32_t a_rows)
+	{
+		if (!buffer || a_rows <= capacity)
+			return false;
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return false;
+		// Doubling, so that a table filling up grows a handful of times, not every frame.
+		std::uint32_t rows = capacity;
+		while (rows < a_rows)
+			rows *= 2;
+		// A new backing for the same graph resource: the old one is released through ORG's deletion queue, frames in flight
+		// after the GPU last used it.
+		buffer->ResizeBytes(std::uint64_t(rows) * stride);
+		buffer->SetName(name.c_str());
+		address = AddressOf(host->GetDesc().device, *buffer);
+		logger::info("[DCLF] {}: {} rows grown to {} ({} KB)", name, capacity, rows, std::uint64_t(rows) * stride / 1024);
+		capacity = rows;
+		++generation;
+		++growths;
+		return true;
+	}
+}
+
 namespace DCLF
 {
 	// The graph resources: the main pass's (Setup) and the shadow views' (SetupShadow, ImportShadowDepth).
@@ -276,7 +316,12 @@ namespace DCLF
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<ShadowResources>();
 		state->constants = DeviceBuffer(kShadowConstantBytes, "cs.dclf.shadow.constants");
-		state->records = DeviceBuffer(std::uint64_t(kMaxShadowViews) * kShadowRecordCapacity * sizeof(DrawBindings), "cs.dclf.shadow.records");
+		// One table of material rows for every view (kShadowMaterialRowsInitial), grown as the kept state needs.
+		const std::uint32_t initialRows = SwitchValue(Switch::TableStart) == "small" ? 4u : kShadowMaterialRowsInitial;
+		if (!state->materialRows.Create(sizeof(ShadowMaterialRow), initialRows, "cs.dclf.shadow.material-rows")) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(2, "no device address for the shadow material rows");
+		}
 		state->objects = StructuredBuffer(kMaxObjects, sizeof(BindlessObject), "cs.dclf.shadow.objects", state->objectsIndex);
 		state->bones = StructuredBuffer(kMaxBoneRows, 16, "cs.dclf.shadow.bones", state->bonesIndex);
 		state->facePositions = DeviceBuffer(std::uint64_t(kFacePositionVertices) * 16, "cs.dclf.shadow.face-positions");
@@ -304,8 +349,7 @@ namespace DCLF
 		state->preprocessSky = PreprocessStates::Create(device, host->FrameSlots(), "Skylighting's occlusion map");
 		state->facePositionsAddress = AddressOf(device, *state->facePositions);
 		state->constantsAddress = AddressOf(device, *state->constants);
-		state->recordsAddress = AddressOf(device, *state->records);
-		if (!state->constantsAddress || !state->recordsAddress) {
+		if (!state->constantsAddress) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(2, "no device address for the shadow buffers");
 		}

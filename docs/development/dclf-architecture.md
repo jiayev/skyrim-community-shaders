@@ -84,7 +84,7 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
     -   the constant blocks and binding records per (material, pipeline) pair (`PersistentBindings`, `BuildCache`);
     -   the resident objects' draw inputs (`ResidentRegion`);
     -   the drawn set (`DrawnMarks`);
-    -   the shadow inputs and records per render mode (`ShadowKept`).
+    -   the shadow inputs per render mode and the shadow material rows (`ShadowKept`).
 5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the build's constant arena,
     binding records, draw inputs and the kept stores' changes. `BuildMainPayload` (`Draws/IndirectDraws/MainBuild.cpp`)
     and `BuildShadowPayload` are the two builders. On the worker, the payload is also staged into an upload batch.
@@ -94,6 +94,31 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
         indirect draw sequences;
     -   the draw passes execute them;
     -   the colour epoch draws exactly the set the Z-prepass decided (the per-object visibility words).
+
+## Growable tables
+
+The GPU tables DCLF keeps are moving from compile-time capacities (`GpuLayouts.h`), whose overflow skipped or waited,
+to tables that grow, the way BasicRenderer's are (a slot allocator with a free list, a capacity that doubles, the old
+buffer released after the GPU is done with it). Each table holds one copy of its data, indexed by what the data depends
+on, and every row is a constant-buffer block (256-byte aligned), so a table can be read as an array of constant buffers.
+
+**Shadow views (done).** A draw's binding is split three ways (`DrawPipelines.h`, `kShadowPushWords`):
+-   **per draw:** the draw's words name its material row (`ShadowMaterialRow`: the Utility vertex shader's
+    `PerMaterial` block, `b1`, which the pushed address names directly, and the diffuse's index for `t0`);
+-   **per view:** pushed once per view: the view's `PerTechnique` (`b0`) and `VS_PerFrame` (`b12`) blocks, the zero
+    block, `SharedData` (`b5`), `FeatureData` (`b6`), and the frame record (`DrawBindings`: every other texture and
+    sampler, and the object and bone tables);
+-   **per material:** the rows, one table for every view (`ShadowResources::materialRows`, a `GrowableRows`).
+
+The table grows on the render thread before the shadow build is taken, to what the last build wanted plus a quarter
+(`IndirectDraws::Impl::ReserveShadowRows`), through `Buffer::ResizeBytes`: the graph resource stays the same, and the
+old backing goes through ORG's deletion queue. A new backing holds nothing, so every row is sent again. A material
+past the capacity waits one frame and its casters stay the engine's meanwhile. `CS_DCLF_TABLE_START=small` starts the
+table at 4 rows, to exercise the growth.
+
+**Next.** The same split for the main pass (a pipeline row and a material row per draw, a frame record, the tables
+shared by the Z-prepass and colour segments); one set of object, bone, geometry and face tables for the main and shadow
+epochs, grown rather than capped; draw outputs sized per epoch.
 
 ## Ownership: how the engine stops drawing DCLF's objects
 
