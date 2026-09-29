@@ -195,9 +195,13 @@ namespace DCLF
 		struct PassFrame
 		{
 			std::uint64_t generation = 0;
-			// ExecuteIndirect max counts (GrowCapacity): the phase-1/colour draws, and each decal group.
+			// ExecuteIndirect max counts (GrowCapacity, within the buffer's ranges): the phase-1/colour draws, and each decal group.
 			std::uint32_t drawCapacity = 0;
 			std::array<std::uint32_t, kDecalGroups> decalCapacity{};
+			// The sequence buffer's ranges as the epoch sized it (Resources::sequenceDraws, sequenceDecals): its layout.
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
+			// The rows' tables' addresses (Resources::materialRows, pipelineRows), which a growth moves.
+			std::uint64_t materialRows = 0, pipelineRows = 0;
 			std::uint32_t cullMode = 0;
 			bool probePixel = false;
 			std::uint32_t probeX = 0, probeY = 0;
@@ -209,7 +213,8 @@ namespace DCLF
 
 			bool SameShape(const PassFrame& o) const
 			{
-				return drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && cullMode == o.cullMode &&
+				return drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
+				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
 				       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect);
@@ -253,10 +258,15 @@ namespace DCLF
 			std::uint32_t countIndex;
 			std::uint32_t sequencesIndex;
 			std::uint32_t sequenceStride;  // bytes (sizeof(DrawSequence))
-			std::uint32_t padding[2];
+			std::uint32_t drawLimit;       // the draws' range (BuildDrawsConstants::phaseTwoBase)
+			std::uint32_t padding;
 		};
 		constexpr std::uint32_t kSortSequencesConstantWords = sizeof(SortSequencesConstants) / 4;
 		constexpr std::uint32_t kSortSequencesGroup = 64;  // SortSequencesCS.hlsl's
+		// A sort's rank word holds the pipeline in its top 12 bits and the rank below (BuildDrawsCS.hlsl, kSortRankBits): a
+		// draw range past this is a hard failure until the ranks get a word of their own.
+		constexpr std::uint32_t kSortRankLimit = 1u << 20;
+		static_assert(DrawPipelines::kMaxPipelines <= (1u << 12));
 
 		/**
 		 * @brief The sort by pipeline (SortDraws) of phase 1's and the colour segment's sequences. BuildDraws stages the sequences
@@ -276,8 +286,8 @@ namespace DCLF
 
 			static constexpr std::uint32_t kKeys = DrawPipelines::kMaxPipelines;
 
-			/** @brief Null, logged, when either program could not be created. */
-			static std::shared_ptr<DrawSort> Create(rhi::Device a_device)
+			/** @brief Null, logged, when either program could not be created. Staging and ranks for a_draws (they grow with the sequences). */
+			static std::shared_ptr<DrawSort> Create(rhi::Device a_device, std::uint32_t a_draws)
 			{
 				auto sort = std::make_shared<DrawSort>();
 				sort->prefixSum = PrefixSum::Load(a_device);
@@ -289,8 +299,8 @@ namespace DCLF
 				sort->counts = CreateWords(kKeys, true, "cs.dclf.sort-counts");
 				sort->offsets = CreateWords(kKeys, true, "cs.dclf.sort-offsets");
 				sort->blockSums = CreateWords(PrefixSum::Blocks(kKeys), true, "cs.dclf.sort-block-sums");
-				sort->staging = CreateWords(std::uint64_t(kMaxDraws) * sizeof(DrawSequence) / 4, true, "cs.dclf.sort-staging");
-				sort->ranks = CreateWords(kMaxDraws, true, "cs.dclf.sort-ranks");
+				sort->staging = CreateWords(std::uint64_t(a_draws) * sizeof(DrawSequence) / 4, true, "cs.dclf.sort-staging");
+				sort->ranks = CreateWords(a_draws, true, "cs.dclf.sort-ranks");
 				return sort;
 			}
 
@@ -372,7 +382,12 @@ namespace DCLF
 		struct Resources
 		{
 			std::vector<FrameBuffer> frameBuffers;
-			std::shared_ptr<org::Buffer> constants, records;
+			std::shared_ptr<org::Buffer> constants;
+			// The main pass's rows (DrawPipelines.h, kMaterialRowBytes / kPipelineRowBytes), one table each for both segments,
+			// indexed by the scene's material and pipeline slots; grown before an epoch to the tables' slot counts
+			// (Impl::ReserveMainSequences). The versions of the kept rows (MainRows) they hold: 0 in a new backing.
+			GrowableRows materialRows, pipelineRows;
+			std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
 			// The per-object records the DCLF_BINDLESS builds read, at t127 of every draw of the epoch.
 			std::shared_ptr<org::Buffer> objects;
 			std::uint32_t objectsIndex = 0;  // its SRV's descriptor heap index
@@ -384,6 +399,9 @@ namespace DCLF
 			std::uint64_t facePositionsAddress = 0;
 			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
 			std::shared_ptr<org::Buffer> inputs, geometries, sequences, count;  // BuildDraws: in, in, out, out
+			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
+			// decal group. Grown before an epoch to hold every draw the scene can produce (Impl::ReserveMainSequences).
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
 			// The Z-prepass segment's draw inputs: each main segment keeps its resident region at the head of its own buffer
 			// (the colour segment's is `inputs`), and the version of the region the buffer holds, per segment (0 Z-prepass,
 			// 1 colour), written by the commit that uploads it.
@@ -395,19 +413,10 @@ namespace DCLF
 			TablesHeld tablesHeld;
 			// The frame lighting version (SceneStore::Tables::frameLightingVersion) its frame slot holds (kFrameSlotLighting).
 			std::uint32_t frameLightingUploaded = 0;
-			// The Z-prepass segment's constant blocks and binding records (Step 4 of "Persistent draw state"): each segment
-			// keeps its blocks and records across frames in buffers of its own. Per segment (0 Z-prepass, 1 colour): the
-			// versions the buffers hold, and the frame textures (t16 and up) as the last commit resolved them.
-			// Frame textures are patched into upload copies, never into kept record templates.
-			std::shared_ptr<org::Buffer> constantsDepth, recordsDepth;
-			std::uint64_t constantsDepthAddress = 0, recordsDepthAddress = 0;
-			std::array<std::uint64_t, 2> constantsUploaded{}, recordsUploaded{};
-			std::array<std::array<std::uint32_t, kTextureRegisters>, 2> committedFrameTextures{};
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
 			winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
-			std::uint64_t constantsAddress = 0, recordsAddress = 0;
-			std::uint32_t recordCapacity = 0;  // entries in `records`, which deduplication makes far fewer
+			std::uint64_t constantsAddress = 0;
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
@@ -486,7 +495,7 @@ namespace DCLF
 		{
 			std::array<org::DeclaredViewToken, kColorTargets> targets{};
 			org::DeclaredViewToken depth;
-			org::ResourceBindingToken sequences, count, records, constants, objects, bones;
+			org::ResourceBindingToken sequences, count, materialRows, pipelineRows, constants, objects, bones;
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
 		};
@@ -706,6 +715,7 @@ namespace DCLF
 			std::uint32_t target = 0;  // index into ShadowResources::depth
 			std::uint32_t slice = 0;
 			std::uint64_t materialRows = 0;  // the shadow material rows' address (one table for every view)
+			std::uint32_t sequenceDraws = 0;  // its slot's sequence buffer, in draws (ShadowResources::sequenceDraws)
 			// The view's push data (DrawPipelines.h, kShadowPushWords): its blocks' addresses, pushed once for its draws.
 			std::array<std::uint32_t, kShadowPushWords> push{};
 
@@ -767,6 +777,9 @@ namespace DCLF
 			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
 			std::array<std::shared_ptr<org::Buffer>, kShadowModeCount> inputs;               // per render mode
 			std::array<std::shared_ptr<org::Buffer>, kMaxShadowViews> sequences, count;      // per view slot
+			// Each slot's sequence buffer, in draws: grown before the epoch that uses the slot to hold every draw the scene can
+			// produce (Impl::ReserveShadowSequences).
+			std::array<std::uint32_t, kMaxShadowViews> sequenceDraws{};
 			std::array<winrt::com_ptr<ID3D11Buffer>, kMaxShadowViews> countD3D11;             // the counters, read back
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
 			TablesHeld tablesHeld;  // as Resources::tablesHeld
@@ -890,7 +903,10 @@ namespace DCLF
 		constexpr std::uint64_t kFrameSlotBytes = 65536;
 		constexpr std::uint32_t kFrameSlotSharedLight = 2 * kConstantBufferRegisters;
 		constexpr std::uint32_t kFrameSlotLighting = kFrameSlotSharedLight + 1;
-		constexpr std::uint32_t kFrameSlotCount = kFrameSlotLighting + 1;
+		// The frame record (DrawBindings): every register a draw's rows do not give - the frame slots' addresses, the frame's
+		// textures (t16 and up), the object and bone tables - written by each commit (FrameRecordOf).
+		constexpr std::uint32_t kFrameSlotRecord = kFrameSlotLighting + 1;
+		constexpr std::uint32_t kFrameSlotCount = kFrameSlotRecord + 1;
 		constexpr std::uint64_t kFrameConstantBytes = std::uint64_t(kFrameSlotCount) * kFrameSlotBytes;
 
 		constexpr std::uint64_t FrameSlotOffset(bool a_pixelStage, std::uint32_t a_register)
@@ -901,14 +917,13 @@ namespace DCLF
 		inline std::array<std::uint32_t, kFramePushWords> FramePushWords(std::uint64_t a_frameConstants)
 		{
 			std::array<std::uint32_t, kFramePushWords> words{};
-			std::uint32_t word = 0;
+			std::uint32_t word = kFramePushRegisters;
 			for (const bool pixel : { false, true }) {
 				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
 				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
 					if (!((mask >> r) & 1))
 						continue;
-					// What BuildMainPayload names under bindless draws: the frame slot, the shared light block at PS b3 and the
-					// frame lighting at PS b13 (kFrameLightingRegister).
+					// The frame slot, the shared light block at PS b3 and the frame lighting at PS b13 (kFrameLightingRegister).
 					std::uint64_t address = a_frameConstants + FrameSlotOffset(pixel, r);
 					if (pixel && r == 3)
 						address = a_frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
@@ -918,6 +933,9 @@ namespace DCLF
 					words[word++] = static_cast<std::uint32_t>(address >> 32);
 				}
 			}
+			const std::uint64_t record = a_frameConstants + std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes;
+			words[kFramePushRecord] = static_cast<std::uint32_t>(record);
+			words[kFramePushRecord + 1] = static_cast<std::uint32_t>(record >> 32);
 			return words;
 		}
 
@@ -931,9 +949,12 @@ namespace DCLF
 		// What a build addresses in an epoch's buffers; a change means the resources were recreated under it.
 		struct ResourceAddresses
 		{
-			std::uint64_t constants = 0, records = 0, frameConstants = 0;
+			// records: the material rows' table (the shadow views' ShadowMaterialRow, the main pass's MaterialRow); pipelineRows: the
+			// main pass's pipeline rows.
+			std::uint64_t constants = 0, records = 0, pipelineRows = 0, frameConstants = 0;
 			std::uint64_t facePositions = 0;  // the shadow epoch's face positions buffer (kFacePositionVertices float4s)
-			std::uint32_t objectsIndex = 0, bonesIndex = 0, recordCapacity = 0;
+			std::uint32_t objectsIndex = 0, bonesIndex = 0;
+			std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
 			const void* identity = nullptr;
 
 			bool operator==(const ResourceAddresses&) const = default;
@@ -1103,6 +1124,99 @@ namespace DCLF
 			bool DrewLast(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const { return geometry == a_geometry && (drawn || a_frame - last <= 1); }
 		};
 
+		/**
+		 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). Its header's addresses hold the
+		 * blocks' offsets in the row until the upload adds the row's own address (EmitMainRows): a table that grows is sent again
+		 * whole, with the new addresses.
+		 */
+		template <std::size_t Bytes>
+		struct RowBytes
+		{
+			std::array<std::byte, Bytes> bytes{};
+		};
+		using MaterialRow = RowBytes<kMaterialRowBytes>;
+		using PipelineRow = RowBytes<kPipelineRowBytes>;
+		inline MaterialRowHeader& HeaderOf(MaterialRow& a_row) { return *reinterpret_cast<MaterialRowHeader*>(a_row.bytes.data() + kMaterialRowHeader); }
+		inline PipelineRowHeader& HeaderOf(PipelineRow& a_row) { return *reinterpret_cast<PipelineRowHeader*>(a_row.bytes.data() + kPipelineRowHeader); }
+
+		/**
+		 * @brief The main pass's rows, kept across frames and shared by the Z-prepass and colour builds (which run in frame order,
+		 * one at a time, like the object records'): a material row per material slot and a pipeline row per pipeline slot, each
+		 * written again only when what it is written from changed (its key), and sent as what changed since the version the
+		 * table holds. What a pair of them can draw is checked per build (MainBuild::AssembleRecord), from what each row holds.
+		 */
+		struct MainRows
+		{
+			KeptArray<MaterialRow> material;
+			KeptArray<PipelineRow> pipeline;
+			struct MaterialState
+			{
+				std::array<std::uint32_t, 8> key{};
+				bool written = false;
+				bool texturesOk = false;  // every texture the material sets resolved (else deferred: waiting for them)
+				bool deferred = false;
+				std::uint32_t missingTexture = 0;
+				std::uint32_t textures = 0;  // t0-t15 the row gives a descriptor (bit per register)
+				std::uint32_t samplers = 0;  // s0-s15 likewise
+				std::uint32_t features = 0;  // kFeatureMaterialRegisters likewise
+				std::uint64_t tables = 0;    // the constant tables its blocks were packed with (a hash)
+				bool blocksOk = false;       // both blocks fit their places
+			};
+			struct PipelineState
+			{
+				std::array<std::uint32_t, 6> key{};
+				bool written = false;
+				bool blocksOk = false;
+				bool shadowMask = false, shadowMaskSampler = false;  // t14, s14 given
+			};
+			std::vector<MaterialState> materials;
+			std::vector<PipelineState> pipelines;
+			const void* identity = nullptr;
+			std::uint32_t generation = 0;  // the tables generation its rows were written for
+			bool active = false;
+			// Since the last report.
+			std::uint64_t builds = 0, materialsWritten = 0, pipelinesWritten = 0, resyncs = 0;
+			std::atomic<std::uint32_t> busy{ 0 };
+		};
+
+		/**
+		 * @brief Rows a table at a_held lacks, each with its header's addresses made absolute (a_base plus the row's offset):
+		 * a_emit(data, bytes, offset). a_patch(row, rowAddress) fixes one row's header.
+		 */
+		template <class Row, class Patch, class Emit>
+		std::size_t EmitMainRows(const KeptView<Row>& a_rows, std::uint64_t a_held, std::uint64_t a_base, Patch&& a_patch, Emit&& a_emit)
+		{
+			if (!a_rows.elements)
+				return 0;
+			const auto& rows = *a_rows.elements;
+			std::vector<Row> run;
+			std::size_t sent = 0;
+			a_rows.changes.ForEachRun(a_held, rows.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+				run.assign(rows.begin() + static_cast<std::ptrdiff_t>(a_first), rows.begin() + static_cast<std::ptrdiff_t>(a_first + a_count));
+				for (std::size_t i = 0; i < run.size(); ++i)
+					a_patch(run[i], a_base + (a_first + i) * sizeof(Row));
+				a_emit(run.data(), run.size() * sizeof(Row), static_cast<std::size_t>(a_first) * sizeof(Row));
+				sent += run.size();
+			});
+			return sent;
+		}
+		inline void PatchRowAddresses(MaterialRow& a_row, std::uint64_t a_address)
+		{
+			auto& header = HeaderOf(a_row);
+			header.vsMaterial += a_address;
+			header.psMaterial += a_address;
+		}
+		inline void PatchRowAddresses(PipelineRow& a_row, std::uint64_t a_address)
+		{
+			auto& header = HeaderOf(a_row);
+			for (auto* address : { &header.vsTechnique, &header.psTechnique, &header.vsGeometry, &header.psGeometry, &header.vsPermutation, &header.psPermutation })
+				*address += a_address;
+		}
+		/** @brief An input's rows (BuildDrawsCS.hlsl, RowsOf): the pipeline slot in the high 12 bits, the material slot in the low 20. */
+		constexpr std::uint32_t kRowPipelineShift = 20;
+		constexpr std::uint32_t kRowMaterialMask = (1u << kRowPipelineShift) - 1;
+		constexpr std::uint32_t RowsOf(std::uint32_t a_pipeline, std::uint32_t a_material) { return (a_pipeline << kRowPipelineShift) | a_material; }
+
 		struct MainInputs
 		{
 			std::uint32_t frameNumber = 0;
@@ -1129,36 +1243,31 @@ namespace DCLF
 			// uploads only the entries changed since that one.
 			std::uint64_t residentUploaded = 0;
 			TablesHeld tablesHeld;  // likewise the kept tables (Resources::tablesHeld)
-			// Step 4: the versions of the segment's constants and records its buffers hold, and the frame textures the last
-			// commit resolved (Resources::constantsUploaded, recordsUploaded, committedFrameTextures).
-			std::uint64_t constantsUploaded = 0, recordsUploaded = 0;
-			std::array<std::uint32_t, kTextureRegisters> frameTextures{};
+			// The versions of the kept rows the tables hold (Resources::materialRowsHeld, pipelineRowsHeld): what the rows'
+			// journals keep changes for.
+			std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
 		};
 
 		struct MainPayload
 		{
 			MainInputs inputs;
 			ConstantArena arena;
-			std::vector<DrawBindings> records;
-			std::vector<std::shared_ptr<const void>> bindingOwners;  // exact roots used by this payload, including clean kept records
+			std::vector<std::shared_ptr<const void>> bindingOwners;  // exact roots used by this payload, including clean kept rows
 			std::vector<DrawSequence> sequences;  // CPU templates of BuildDraws' output
 			std::array<std::vector<DrawSequence>, kDecalGroups> decalTemplates;  // by group and slot
 			std::vector<DrawInput> inputList;
 			GeometryDrawsOut geometryDraws;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			ObjectRecordsOut objectRecords;  // the DCLF_BINDLESS per-object table
-			// Step 4 (PersistentBindings): the segment's constant blocks and binding records, kept across frames. The arena and
-			// `records` stay empty; these are uploaded as the ranges changed since the version the buffers hold.
-			bool persistent = false;
-			KeptView<std::byte> keptConstants;
-			KeptView<DrawBindings> keptRecords;  // immutable templates; the commit patches separate upload copies
-			std::vector<std::array<std::uint64_t, 2>> patchMasks;  // per record: the frame registers (t64 * i + bit) it reads
-			std::uint32_t recordsHeld = 0;
-			std::uint64_t blocksWritten = 0, recordsWritten = 0;
+			// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the version
+			// the tables hold.
+			KeptView<MaterialRow> materialRows;
+			KeptView<PipelineRow> pipelineRows;
+			std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
 			BonesOut bones;                             // the rows: current then previous, then the extras
-			// The frame's textures (t16 and up) are the epoch's own descriptor indices, which only the commit
-			// can resolve: the build leaves these (record, register) pairs for it.
-			std::vector<std::pair<std::uint32_t, std::uint32_t>> framePatches;
+			// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
+			// record): the commit counts the ones it could not.
+			std::array<std::uint64_t, 2> frameRegisters{};
 			// The colour build's drawn changes (DrawnMarks): each slot whose drawn state changed since version drawnBase, with its
 			// state now; all of them when drawnFull. The commit applies them when drawnBase is what it applied last.
 			struct DrawnChange
@@ -1182,7 +1291,7 @@ namespace DCLF
 			std::uint32_t missingVertexConstants = 0, missingPixelConstants = 0;
 			std::uint32_t decalsDrawn = 0, shortBuffers = 0, deferredTextures = 0;
 			std::uint32_t bindlessParityChecks = 0, bindlessParityMismatches = 0;
-			std::uint32_t recordParityChecks = 0, recordParityMismatches = 0;
+			std::uint32_t rowTableConflicts = 0;  // pairs whose pipeline's constant tables are not the ones its material row was packed with
 			std::array<double, 7> partMs{};
 			// The first draw past its buffers, for the commit to log with the geometry's name.
 			struct ShortBuffer
@@ -1190,12 +1299,11 @@ namespace DCLF
 				std::uint32_t object = ~0u;
 				std::uint64_t vertexNeeded = 0, indexNeeded = 0;
 			} shortBuffer;
-			// The worker's build stages its uploads itself (StageMainPayload), so the commit on the render thread
-			// only submits the batch and patches the frame textures into the staged records. For the resources
-			// it was staged against; a build made on the render thread has none.
+			// The worker's build stages its uploads itself (StageMainPayload), so the commit on the render thread only submits the
+			// batch. For the resources it was staged against, and the rows' backings then; a build made on the render thread has none.
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
-			DrawBindings* stagedRecords = nullptr;
 			const void* stagedFor = nullptr;
+			std::uint64_t stagedRowsGeneration = 0;
 			// The segment's resident region (ResidentRegion): its inputs lead the input buffer, uploaded when residentVersion
 			// is not the one the buffer holds (Resources::residentUploaded); inputList follows them.
 			KeptView<DrawInput> resident;
@@ -1208,28 +1316,24 @@ namespace DCLF
 				residentDraws = residentPairs = residentUndrawable = residentResyncs = 0;
 				residentParityChecks = residentParityMismatches = residentMissing = 0;
 				staged.reset();
-				stagedRecords = nullptr;
 				stagedFor = nullptr;
+				stagedRowsGeneration = 0;
 				arena.Reset();
-				records.clear();
 				bindingOwners.clear();
 				sequences.clear();
 				inputList.clear();
 				geometryDraws.Reset();
 				faceStreams.clear();
-				framePatches.clear();
+				frameRegisters = {};
 				drawnChanges.clear();
 				drawnVersion = drawnBase = 0;
 				drawnFull = drawnValid = false;
 				objectState.clear();
 				objectRecords.Reset();
 				bones.Reset();
-				persistent = false;
-				keptConstants.Reset();
-				keptRecords.Reset();
-				patchMasks.clear();
-				recordsHeld = 0;
-				blocksWritten = recordsWritten = 0;
+				materialRows.Reset();
+				pipelineRows.Reset();
+				materialRowsWritten = pipelineRowsWritten = 0;
 				for (auto& templates : decalTemplates)
 					templates.clear();
 				decalCount = {};
@@ -1238,7 +1342,7 @@ namespace DCLF
 				missingNext = 0;
 				missingVertexConstants = missingPixelConstants = 0;
 				decalsDrawn = shortBuffers = deferredTextures = 0;
-				bindlessParityChecks = bindlessParityMismatches = recordParityChecks = recordParityMismatches = 0;
+				bindlessParityChecks = bindlessParityMismatches = rowTableConflicts = 0;
 				partMs = {};
 				shortBuffer = {};
 			}
@@ -1300,6 +1404,8 @@ namespace DCLF
 			// Rows the build needed, within the table's capacity or not: what the next frame's Reserve grows it to. The
 			// materials past the capacity wait for it (their casters stay the engine's this frame).
 			std::uint32_t rowsWanted = 0, waitingRows = 0;
+			// Per mode, the draws its inputs can produce (a skin draws once per partition): its views' max count.
+			std::array<std::uint32_t, kShadowModeCount> modeDraws{};
 			// The blocks every view's push data names besides its own (kShadowPushZeros and after), in the arena.
 			std::uint64_t zerosAddress = 0, sharedDataAddress = 0, featureDataAddress = 0;
 			std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
@@ -1358,6 +1464,7 @@ namespace DCLF
 				frameRecord = {};
 				materialRows.Reset();
 				rowsWanted = waitingRows = 0;
+				modeDraws = {};
 				zerosAddress = sharedDataAddress = featureDataAddress = 0;
 				bindingOwners.clear();
 				objectRecord.clear();
@@ -1550,25 +1657,16 @@ namespace DCLF
 			return count;
 		}
 
-		// Resolved descriptor heap indices per (material, pipeline) pair. The texture and sampler loops depend on
-		// nothing per-object: the material's textures, the pipeline's technique (the shadow mask) and its
-		// register usage, plus this frame's shared textures. Running them per draw meant 128 + 16 iterations and
-		// a heap lookup each for every one of ~950 draws, when there are only about 150 distinct pairs.
+		/**
+		 * @brief A (material, pipeline) pair's verdict for one build (MainBuild::AssembleRecord): its rows, or why it cannot draw.
+		 * The skip counters are per draw, so a pair that cannot keeps the reason and every draw of it raises it.
+		 */
 		struct ResolvedBindings
 		{
-			std::array<std::uint32_t, kTextureRegisters> textures{};
-			std::array<std::uint32_t, kSamplerRegisters> samplers{};
-			std::vector<std::uint32_t> patchRegisters;  // the frame textures the pair's record needs
-			bool texturesOk = false;
-			bool samplersOk = false;
+			std::uint32_t recordIndex = kNoRecord;  // RowsOf(pipeline, material)
+			std::uint32_t skipReason = kNoSkip;
 			bool deferred = false;
 			std::uint32_t missingTexture = 0;  // the register that failed, for the skip sample
-			// Deduplication: once nothing in the binding record is per-object, every draw of a (material,
-			// pipeline) pair wants the same record, so the pair keeps its index here and the assembly runs once.
-			// A pair that could not be assembled keeps the reason instead, because the skip counters are per
-			// DRAW and have to be raised for each of them, not once per pair.
-			std::uint32_t recordIndex = kNoRecord;
-			std::uint32_t skipReason = kNoSkip;
 		};
 
 		// The PerGeometry group, packed once per pipeline. Every object on a pipeline shares all of it but five
@@ -1681,13 +1779,11 @@ namespace DCLF
 			std::vector<std::uint8_t> drawsOf;   // per entry: its sequences, 0 when it cannot be drawn this frame
 			struct Pair
 			{
-				std::uint32_t slot = 0;   // its record's index, stable while any entry uses it
+				std::uint32_t slot = 0;   // its rows (RowsOf), once it can draw
 				std::uint32_t count = 0;  // the entries using it
-				bool ok = true;           // this build assembled its record
+				bool ok = true;           // this build found its rows can draw it
 			};
 			ankerl::unordered_dense::map<std::uint64_t, Pair> pairs;
-			std::vector<std::uint32_t> freeSlots;
-			std::uint32_t slotCount = 0;
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pipelines;  // pipeline -> (set index, entries)
 			MarkedList pending;  // depth: joined slots the colour epoch has not drawn yet
 			std::size_t draws = 0;
@@ -1709,107 +1805,6 @@ namespace DCLF
 				*this = ResidentRegion{};
 				inputs = std::move(kept);
 				inputs.Clear();
-			}
-		};
-
-		/** @brief A constant block kept across frames in a segment's constants buffer (PersistentBindings). */
-		struct PersistentBlock
-		{
-			std::uint64_t offset = ~0ull;
-			std::uint32_t size = 0;
-		};
-
-		/**
-		 * @brief A segment's constant blocks and binding records, kept across frames (drawcall-limit-fix.md, "Persistent draw
-		 * state", Step 4). Each pipeline's and each (material, pipeline) pair's blocks stay at one address in the segment's
-		 * constants buffer, and each pair's record at one slot of its records buffer; a block or a record is written again
-		 * only when its bytes change, and the commit uploads the ranges written since the version the buffers hold. The
-		 * records carry the frame textures (t16 and up) as the last commit resolved them; the commit patches the records
-		 * again when one of those changes.
-		 */
-		struct PersistentBindings
-		{
-			bool active = false;
-			const void* identity = nullptr;
-			std::uint64_t constantsBase = 0, recordsBase = 0, constantsCapacity = 0;
-			std::uint32_t recordCapacity = 0;
-			KeptArray<std::byte> constants;  // journalled by block ranges
-			std::array<std::vector<std::uint64_t>, 257> constantFree{};  // freed blocks by 256-byte units
-			KeptArray<DrawBindings> records;
-			std::vector<std::array<std::uint64_t, 2>> patchMasks;  // per record slot
-			std::vector<std::uint32_t> recordFree;
-			std::uint64_t blocksWritten = 0, recordsRewritten = 0;  // this build
-
-			static std::uint32_t Units(std::size_t a_bytes) { return static_cast<std::uint32_t>(std::min<std::size_t>((std::max<std::size_t>(a_bytes, 16) + 255) / 256, 256)); }
-			void FreeBlock(PersistentBlock& a_block)
-			{
-				if (a_block.offset != ~0ull)
-					constantFree[Units(a_block.size)].push_back(a_block.offset);
-				a_block = {};
-			}
-			/** @brief The block's address with a_bytes of a_data in it (written only when they differ), or 0 when the buffer is full. */
-			std::uint64_t Place(PersistentBlock& a_block, const std::byte* a_data, std::size_t a_bytes, std::size_t a_size)
-			{
-				const std::size_t size = std::max<std::size_t>({ a_size, a_bytes, 16 });
-				const std::uint32_t units = Units(size);
-				if (a_bytes > std::size_t(units) * 256)
-					return 0;
-				if (a_block.offset != ~0ull && Units(a_block.size) != units)
-					FreeBlock(a_block);
-				bool fresh = false;
-				if (a_block.offset == ~0ull) {
-					auto& free = constantFree[units];
-					if (!free.empty()) {
-						a_block.offset = free.back();
-						free.pop_back();
-					} else {
-						const std::uint64_t offset = constants.Size();
-						if (offset + std::uint64_t(units) * 256 > constantsCapacity)
-							return 0;
-						constants.Mutable().resize(offset + std::size_t(units) * 256);
-						a_block.offset = offset;
-					}
-					fresh = true;
-				}
-				a_block.size = static_cast<std::uint32_t>(size);
-				const std::size_t blockBytes = std::size_t(units) * 256;
-				const auto* held = constants.Get().data() + a_block.offset;
-				if (fresh || std::memcmp(held, a_data, a_bytes) != 0) {
-					auto* out = constants.Mutable().data() + a_block.offset;
-					std::memcpy(out, a_data, a_bytes);
-					std::memset(out + a_bytes, 0, blockBytes - a_bytes);
-					constants.MarkRange(a_block.offset, blockBytes);
-					++blocksWritten;
-				}
-				return constantsBase + a_block.offset;
-			}
-			std::uint32_t AcquireRecord()
-			{
-				if (!recordFree.empty()) {
-					const std::uint32_t slot = recordFree.back();
-					recordFree.pop_back();
-					return slot;
-				}
-				if (records.Size() >= recordCapacity)
-					return kNoRecord;
-				records.Mutable().emplace_back();
-				patchMasks.emplace_back();
-				records.Mark(records.Size() - 1);
-				return static_cast<std::uint32_t>(records.Size() - 1);
-			}
-			void ReleaseRecord(std::uint32_t& a_slot)
-			{
-				if (a_slot != kNoRecord) {
-					recordFree.push_back(a_slot);
-					if (a_slot < patchMasks.size())
-						patchMasks[a_slot] = {};
-				}
-				a_slot = kNoRecord;
-			}
-			void WriteRecord(std::uint32_t a_slot, const DrawBindings& a_record, const std::array<std::uint64_t, 2>& a_patchMask)
-			{
-				patchMasks[a_slot] = a_patchMask;
-				recordsRewritten += records.Set(a_slot, a_record) ? 1u : 0u;
 			}
 		};
 
@@ -1845,15 +1840,8 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief What BuildMainPayload derives per (material, pipeline) pair and per pipeline, kept across frames.
-		 *
-		 * The pair's texture and sampler indices and its packed PerMaterial groups, and the pipeline's packed
-		 * PerTechnique groups and PerGeometry template, change only when a slot, a lookup or an evaluated constant
-		 * does, and deriving them is most of a build's cost. An entry keeps a copy of every input it was derived
-		 * from, member by member (MaterialRecord has padding that nothing writes), and is reused only when this
-		 * build's inputs are byte-identical; anything else rebuilds it. So the cache cannot serve a stale value,
-		 * and a build with the cache produces the same bytes as one without: CS_DCLF_ASYNC=probe compares the
-		 * worker's (cached) build with an uncached inline one every epoch.
+		 * @brief What BuildMainPayload keeps per segment across frames: the resident region and the drawn marks. The blocks and
+		 * descriptors a draw reads are the rows' (MainRows), which both segments share.
 		 *
 		 * One per epoch kind (colour, Z-prepass), used by one build at a time: the worker's, or the render
 		 * thread's when it builds inline (the worker's job for that kind is then done or waited for).
@@ -1862,117 +1850,13 @@ namespace DCLF
 		{
 			struct PackedGroup
 			{
-				std::size_t size = 0;           // what ConstantGroupSize said, the size the block is allocated with
+				std::size_t size = 0;           // what ConstantGroupSize said
 				std::vector<std::byte> bytes;   // the block's contents as packed (at least 16 bytes)
 				bool valid = false;
 			};
-			struct Pair
-			{
-				std::vector<std::byte> sources;
-				ResolvedBindings resolved;  // the resolution fields only; recordIndex and skipReason are per build
-				bool hasResolved = false;
-				PackedGroup vs, ps;         // PerMaterial
-				// Where the frame's floats (MainInputs::materialPatchedFloats / materialPatchedVSFloats, in that
-				// order) sit in the packed groups, as dword offsets or ~0: a reused group gets this frame's values
-				// written there.
-				std::vector<std::uint32_t> psPatchPositions;
-				std::vector<std::uint32_t> vsPatchPositions;
-				std::uint32_t lastUsed = 0;
-				// PersistentBindings: the pair's PerMaterial blocks and its record's slot, and the versions of everything they were
-				// written from (PairKeyOf): while they are the same, the build takes the slot and does nothing else.
-				PersistentBlock materialVS, materialPS;
-				std::uint32_t recordSlot = kNoRecord;
-				std::array<std::uint32_t, 12> cleanKey{};
-				bool clean = false;
-			};
-			struct Pipeline
-			{
-				std::vector<std::byte> sources;
-				PackedGroup techniqueVS, techniquePS;
-				GeometryTemplate geometry;  // without its addresses, which are per build
-				bool hasGeometry = false;
-				std::uint32_t lastUsed = 0;
-				// PersistentBindings: the pipeline's technique, PerGeometry template and permutation blocks; the versions they were
-				// written from (the constants' and the lookup entry's), and a count of their moves (their pairs' records hold
-				// their addresses).
-				PersistentBlock techniqueVSBlock, techniquePSBlock, geometryVSBlock, geometryPSBlock, permutationBlock;
-				std::uint32_t constantsVersion = 0, techniqueVersion = 0, lookupVersion = 0, addressVersion = 0;
-				bool clean = false;
-			};
-			ankerl::unordered_dense::map<std::uint64_t, Pair> pairs;
-			ankerl::unordered_dense::map<std::uint32_t, Pipeline> pipelines;
 			std::vector<std::byte> scratch;
 			ResidentRegion region;
-			PersistentBindings persistent;
 			DrawnMarks drawnMarks;
-			std::uint64_t pairHits = 0, pairMisses = 0, pipelineHits = 0, pipelineMisses = 0;
-			std::uint64_t persistentBuilds = 0, persistentBlocks = 0, persistentRecords = 0, persistentResets = 0;  // since the last report
-			std::uint64_t persistentParityChecks = 0, persistentParityMismatches = 0;
-			std::uint64_t persistentCleanPipelines = 0, persistentCleanPairs = 0, persistentDirtyPipelines = 0, persistentDirtyPairs = 0;
-			std::string persistentParityFirst;
-
-			void Sweep(std::uint32_t a_frame)
-			{
-				static constexpr std::uint32_t kIdleFrames = 64;
-				for (auto it = pairs.begin(); it != pairs.end();) {
-					if (a_frame - it->second.lastUsed <= kIdleFrames) {
-						++it;
-						continue;
-					}
-					persistent.FreeBlock(it->second.materialVS);
-					persistent.FreeBlock(it->second.materialPS);
-					persistent.ReleaseRecord(it->second.recordSlot);
-					it = pairs.erase(it);
-				}
-				for (auto it = pipelines.begin(); it != pipelines.end();) {
-					if (a_frame - it->second.lastUsed <= kIdleFrames) {
-						++it;
-						continue;
-					}
-					for (auto* block : { &it->second.techniqueVSBlock, &it->second.techniquePSBlock, &it->second.geometryVSBlock, &it->second.geometryPSBlock,
-							 &it->second.permutationBlock })
-						persistent.FreeBlock(*block);
-					it = pipelines.erase(it);
-				}
-			}
-
-			/** @brief A build's start: the persistent state follows the segment's buffers, and its dirty ranges the uploads. */
-			void BeginPersistent(const ResourceAddresses& a_addresses, std::uint64_t a_constantsCapacity, std::uint64_t a_constantsUploaded, std::uint64_t a_recordsUploaded)
-			{
-				auto& state = persistent;
-				// What the buffers hold is the version they were sent: what is written from here on is sent alone.
-				state.constants.BeginBuild(a_constantsUploaded);
-				state.records.BeginBuild(a_recordsUploaded);
-				if (!state.active || state.identity != a_addresses.identity || state.constantsBase != a_addresses.constants || state.recordsBase != a_addresses.records ||
-					state.recordCapacity != a_addresses.recordCapacity) {
-					// New buffers (the resources were recreated), or the first build: every block and record again. The versions
-					// go on counting, so no version of the old buffers is taken for one of the new.
-					auto constants = std::move(state.constants);
-					auto records = std::move(state.records);
-					state = {};
-					state.constants = std::move(constants);
-					state.records = std::move(records);
-					state.constants.Clear();
-					state.records.Clear();
-					state.active = true;
-					state.identity = a_addresses.identity;
-					state.constantsBase = a_addresses.constants;
-					state.recordsBase = a_addresses.records;
-					state.constantsCapacity = a_constantsCapacity;
-					state.recordCapacity = a_addresses.recordCapacity;
-					for (auto& [key, pair] : pairs) {
-						pair.materialVS = pair.materialPS = {};
-						pair.recordSlot = kNoRecord;
-						pair.clean = false;
-					}
-					for (auto& [key, pipeline] : pipelines) {
-						pipeline.techniqueVSBlock = pipeline.techniquePSBlock = pipeline.geometryVSBlock = pipeline.geometryPSBlock = pipeline.permutationBlock = {};
-						pipeline.clean = false;
-					}
-					++persistentResets;
-				}
-				state.blocksWritten = state.recordsRewritten = 0;
-			}
 		};
 
 		/** @brief Packs a constant group into a cached group (at least 16 bytes, the rest zero). */
@@ -2011,14 +1895,6 @@ namespace DCLF
 			return false;
 		}
 
-		/**
-		 * @brief CS_DCLF_PERSISTENT_PARITY: a kept build against the same build made the per-frame way (a_reference): every
-		 * object either draws must draw in both, with a record that binds the same textures and samplers and constant buffers
-		 * holding the same bytes (the kept blocks' sizes are their groups'; an address outside the segment's constants, a frame
-		 * slot, must be the same address).
-		 */
-		void CheckPersistentBindings(const MainPayload& a_kept, const MainPayload& a_reference, const BuildCache& a_cache, std::uint64_t a_constantsBase,
-			const std::array<std::uint32_t, kTextureRegisters>& a_frameTextures, std::uint64_t& a_checks, std::uint64_t& a_mismatches, std::string& a_first);
 
 		/**
 		 * @brief The main-pass epoch's draws, from the tables and the lookups: pure.
@@ -2029,7 +1905,7 @@ namespace DCLF
 		 * own textures are left as patches for the commit. The per-frame constant blocks are addressed by
 		 * their fixed slots (FrameSlotOffset) for the slots the inputs say the commit supplies.
 		 */
-		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out,
+		void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
 			BuildCache* a_cache = nullptr, ObjectRecordStore* a_objects = nullptr, BonesStore* a_bones = nullptr, GeometryStore* a_geometries = nullptr);
 
 		// The objects a mode's inputs draw, as the geometry the native shadow loop withholds (PassCapture).
@@ -2447,6 +2323,13 @@ namespace DCLF
 			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> stagedPool;
 		} shadowJob;
 		ShadowPayload shadowProbePayload;
+		/**
+		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked
+		 * objects can produce (SceneDrawBound). A bound over the device's max sequence count, or over the sort's rank field,
+		 * is a hard failure.
+		 */
+		void ReserveMainSequences(const SceneStore::Tables& a_tables);
+		void ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first = 0);
 		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
 		void ReserveShadowRows();
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
@@ -2485,6 +2368,7 @@ namespace DCLF
 		BuildCache* CacheFor(std::size_t a_job) { return &buildCaches[a_job]; }
 		// The persistent object records: the main epochs' buffer's (both segments'), and the shadow epoch's.
 		ObjectRecordStore mainObjects, shadowObjects;
+		MainRows mainRows;  // both main segments' (MainRows)
 		BonesStore mainBones, shadowBones;  // likewise the bone rows
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records (Step 6)
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
@@ -2644,6 +2528,7 @@ namespace DCLF
 			// Per decal group, by slot: what the CPU expects there (a culled slot reads back with an index
 			// count of zero and is otherwise identical).
 			std::array<std::vector<DrawSequence>, kDecalGroups> expectedDecals;
+			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when it was copied
 			std::uint32_t framesLeft = 0;
 		};
 		std::optional<ParityReadback> parity;

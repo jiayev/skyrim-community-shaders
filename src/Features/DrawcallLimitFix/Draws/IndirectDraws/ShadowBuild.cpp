@@ -462,6 +462,21 @@ namespace DCLF::Draws
 		}
 	}
 
+	namespace
+	{
+		/** @brief Per used mode, the draws its inputs can produce (a skin once per partition): its views' max count. */
+		void CountModeDraws(ShadowPayload& a_out)
+		{
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+				if (!a_out.inputs.modeUsed[m])
+					continue;
+				std::uint64_t draws = 0;
+				a_out.ForEachInput(m, [&](const DrawInput& a_input) { draws += a_input.partitions ? std::popcount(a_input.partitions) : 1; });
+				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
+			}
+		}
+	}
+
 	void BuildShadowPayload(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out,
 		ObjectRecordStore* a_objects, BonesStore* a_bones, ShadowKept* a_kept, GeometryStore* a_geometries)
 	{
@@ -516,6 +531,7 @@ namespace DCLF::Draws
 		plain.diffuse = nullIndex;
 		if (a_kept && a_in.sunEntryPlaneMasks.size() <= kMaxSunEntryProcesses) {
 			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain);
+			CountModeDraws(a_out);
 			if (PersistentParityEnabled() && ParityDue(a_in.frameNumber))
 				CheckKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept);
 			return;
@@ -655,6 +671,7 @@ namespace DCLF::Draws
 					SetSunEntryRow(inputs.back(), a_tables, o);
 			}
 		}
+		CountModeDraws(a_out);
 	}
 }
 

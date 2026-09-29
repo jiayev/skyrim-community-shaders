@@ -14,8 +14,23 @@ namespace DCLF::Draws
 			std::span<const std::uint8_t> vsTable, psTable;
 			const Lookups::RegisterUsageBits* usage = nullptr;
 			std::uint32_t shadowMaskIndex = Lookups::kNone;
-			std::uint64_t techniqueVS = 0, techniquePS = 0;
+			std::uint64_t tables = 0;  // TablesHash of its constant tables
+			bool rowOk = false;        // its pipeline row's blocks fit (MainRows)
 		};
+
+		/** @brief A pipeline's constant tables, hashed (FNV-1a): what a material row was packed with. */
+		std::uint64_t TablesHash(std::span<const std::uint8_t> a_vs, std::span<const std::uint8_t> a_ps)
+		{
+			std::uint64_t hash = 14695981039346656037ull;
+			auto mix = [&](std::span<const std::uint8_t> a_table) {
+				hash = (hash ^ a_table.size()) * 1099511628211ull;
+				for (const auto byte : a_table)
+					hash = (hash ^ byte) * 1099511628211ull;
+			};
+			mix(a_vs);
+			mix(a_ps);
+			return hash;
+		}
 
 		/** @brief The slot of the projected textures (SceneStore::ProjectedTextures) a ProjectedUV pipeline binds at a_slot, or -1. */
 		std::int32_t ProjectedSlot(bool a_projectedPipeline, std::uint32_t a_slot)
@@ -37,9 +52,10 @@ namespace DCLF::Draws
 		class MainBuild
 		{
 		public:
-			MainBuild(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, BuildCache* a_cache,
+			MainBuild(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows, BuildCache* a_cache,
 				ObjectRecordStore* a_objects, BonesStore* a_bones, GeometryStore* a_geometries) :
-				in(a_in), tables(a_tables), lookups(a_lookups), out(a_out), cache(a_cache), objectStore(a_objects), boneStore(a_bones), geometryStore(a_geometries)
+				in(a_in), tables(a_tables), lookups(a_lookups), out(a_out), rows(a_rows), cache(a_cache), objectStore(a_objects), boneStore(a_bones),
+				geometryStore(a_geometries)
 			{}
 
 			void Run();
@@ -49,28 +65,20 @@ namespace DCLF::Draws
 			const SceneStore::Tables& tables;
 			const Lookups& lookups;
 			MainPayload& out;
+			MainRows& rows;
 			BuildCache* cache;
 			ObjectRecordStore* objectStore;
 			BonesStore* boneStore;
 			GeometryStore* geometryStore;
 
 			decltype(MainPayload::arena)& arena = out.arena;
-			decltype(MainPayload::records)& records = out.records;
 			decltype(MainPayload::sequences)& sequences = out.sequences;
 			decltype(MainPayload::inputList)& drawInputs = out.inputList;
 			decltype(MainPayload::decalCount)& decalCount = out.decalCount;
 			decltype(MainPayload::decalTemplates)& decalTemplates = out.decalTemplates;
 			const decltype(MainPayload::objectRecords)& objectRecords = out.objectRecords;
 			const bool depthOnly = in.depthOnly;
-			const std::uint64_t base = in.addresses.constants;
 			const std::uint32_t frameNumber = in.frameNumber;
-			// The segment's constant blocks and binding records kept across frames (PersistentBindings), except under the build
-			// parity, which reads the per-build layout.
-			const bool persistent = cache && !BuildParityEnabled();
-			PersistentBindings* kept = persistent ? &cache->persistent : nullptr;
-			// The record is identical for every draw of a (material, pipeline) pair: everything per object is in the object
-			// record the shaders read by the draw's index (DCLF_BINDLESS, DCLF_BINDLESS_DRAW).
-			const bool dedupParity = in.dedupParity;
 			const bool bindlessParity = in.bindlessParity;
 			const decltype(MainInputs::eye)& eye = in.eye;
 			const decltype(MainInputs::previousEye)& previousEye = in.previousEye;
@@ -79,13 +87,11 @@ namespace DCLF::Draws
 			// The frame registers' blocks (FrameRegisters).
 			std::array<std::uint64_t, kConstantBufferRegisters> frameVS{}, framePS{};
 			std::uint64_t sharedLightBlock = 0, frameLightingBlock = 0;
-			// Blocks shared by many objects: per pipeline, and per (material, pipeline) pair.
+			// Per pipeline: its set index, constant tables and register usage, and whether its row is whole.
 			std::vector<PipelineBlocks> pipelineBlocks;
-			ankerl::unordered_dense::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> materialBlocks;  // (material, pipeline) -> VS, PS
-			// Resolved descriptor heap indices per (material, pipeline) pair (ResolvedBindings).
-			ankerl::unordered_dense::map<std::uint64_t, ResolvedBindings> resolvedBindings;  // (material, pipeline)
-			ankerl::unordered_dense::map<std::uint32_t, GeometryTemplate> geometryTemplates;  // pipeline
-			ankerl::unordered_dense::map<std::uint64_t, std::uint64_t> permutationBlocks;  // (pipeline, extra bits)
+			// Per (material, pipeline) pair: its verdict this build (ResolvedBindings).
+			ankerl::unordered_dense::map<std::uint64_t, ResolvedBindings> resolvedBindings;
+			ankerl::unordered_dense::map<std::uint32_t, GeometryTemplate> geometryTemplates;  // pipeline: the bindless parity's
 			// The colour segment's drawn marks (DrawnMarks): kept across builds, sent as changes.
 			DrawnMarks* marks = nullptr;
 			std::vector<std::uint32_t> loopDrawn;  // what the loop draws this build (DrawnMarks)
@@ -99,7 +105,7 @@ namespace DCLF::Draws
 			std::size_t regionInputs = 0, regionDraws = 0;
 
 			void Reset();
-			std::uint64_t Block(const void* a_data, std::size_t a_size);
+			void BeginRows();
 			void FrameRegisters();
 			void PackPipelines();
 			void BeginMarks();
@@ -112,22 +118,17 @@ namespace DCLF::Draws
 			// The Z-prepass's gate without withholding: what the colour epoch drew last frame.
 			bool DrewLastFrame(std::uint32_t o) const;
 
-			// The (material, pipeline) pair's bindings record, assembled once per build:
-			// its index, or kNoRecord after skip() recorded why. At a_slot when the pair has a stable slot in the resident
-			// region (below), appended otherwise.
-			std::uint32_t AssembleRecord(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks, std::uint32_t a_slot);
-			/** @brief A pair whose record cannot be built: why, per draw, and its kept entry no longer clean. */
-			void FailPair(ResolvedBindings& resolved, const ObjectRecord& object, Skip a_reason);
-			/** @brief The pair's resolution from its cache entry, when everything it is derived from is unchanged. */
-			bool PairFromCache(std::uint64_t pairKey, const ObjectRecord& object, const PipelineBlocks& blocks, bool projectedPipeline, ResolvedBindings& resolved);
-			/** @brief The pair's texture and sampler heap indices, into its cache entry too. */
-			void ResolvePair(std::uint64_t pairKey, const ObjectRecord& object, const PipelineBlocks& blocks, bool projectedPipeline, ResolvedBindings& resolved);
-			/** @brief The pair's PerMaterial blocks (VS, PS). */
-			const std::pair<std::uint64_t, std::uint64_t>& MaterialBlocksOf(std::uint64_t pairKey, const MaterialRecord& material, const PipelineBlocks& blocks);
-			/** @brief The pipeline's PerGeometry template blocks (VS, PS). */
-			std::pair<std::uint64_t, std::uint64_t> GeometryBlocksOf(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks);
-			/** @brief The pipeline's permutation block. */
-			std::uint64_t PermutationBlockOf(const ObjectRecord& object);
+			// The (material, pipeline) pair's rows, checked once per build: RowsOf(pipeline, material), or kNoRecord after
+			// Skipped() recorded why (per draw).
+			std::uint32_t AssembleRecord(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks);
+			/** @brief What the pair's rows give against what its pipeline reads: its verdict. */
+			void ResolvePair(const ObjectRecord& object, const PipelineBlocks& blocks, ResolvedBindings& resolved);
+			/** @brief The pipeline's row (MainRows), written again when what it is written from changed. */
+			void WritePipelineRow(std::uint32_t p, const PipelineBlocks& blocks);
+			/** @brief The material's row, written again when what it is written from changed. */
+			void WriteMaterialRow(std::uint32_t m, std::uint32_t p, const PipelineBlocks& blocks);
+			/** @brief CS_DCLF_BINDLESS_PARITY: the object record against the PerGeometry group it replaces. */
+			void CheckBindless(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks);
 
 			void BuildResidentRegion();
 			static std::uint64_t PairKeyOf(const ObjectRecord& a_object) { return (std::uint64_t(a_object.materialIndex) << 32) | a_object.pipelineIndex; }
@@ -182,26 +183,38 @@ namespace DCLF::Draws
 	void MainBuild::Reset()
 	{
 		TracyCZoneN(resetMainZone, "CS.DCLF.BuildMain.Reset", true);
-		if (cache && (in.frameNumber % 64) == 0)
-			cache->Sweep(in.frameNumber);
 		out.Reset();
 		out.inputs = in;
 		if (lookups.sharedBindingBlock)
 			out.bindingOwners.push_back(lookups.sharedBindingBlock);
-		arena.Reset(depthOnly ? kDepthConstantBytes : kConstantBytes);
-		if (kept)
-			cache->BeginPersistent(in.addresses, depthOnly ? kDepthConstantBytes : kConstantBytes, in.constantsUploaded, in.recordsUploaded);
+		arena.Reset(kConstantBytes);
+		BeginRows();
 		TracyCZoneEnd(resetMainZone);
 	}
 
-	std::uint64_t MainBuild::Block(const void* a_data, std::size_t a_size)
+	void MainBuild::BeginRows()
 	{
-		const auto offset = arena.Allocate(a_size);
-		if (offset == ~0ull)
-			return 0;
-		if (a_data)
-			std::memcpy(arena.At(offset, a_size).data(), a_data, a_size);
-		return base + offset;
+		// What the tables hold is the version they were sent: what is written from here on is sent alone.
+		rows.material.BeginBuild(in.materialRowsHeld);
+		rows.pipeline.BeginBuild(in.pipelineRowsHeld);
+		if (!rows.active || rows.identity != in.addresses.identity || rows.generation != in.tablesGeneration) {
+			// New resources or new tables (the slots mean other things): every row again; the journals count on.
+			rows.material.Clear();
+			rows.pipeline.Clear();
+			rows.materials.clear();
+			rows.pipelines.clear();
+			rows.active = true;
+			rows.identity = in.addresses.identity;
+			rows.generation = in.tablesGeneration;
+			++rows.resyncs;
+		}
+		++rows.builds;
+		if (rows.material.Size() < tables.materials.size())
+			rows.material.Mutable().resize(tables.materials.size());
+		if (rows.pipeline.Size() < tables.pipelines.size())
+			rows.pipeline.Mutable().resize(tables.pipelines.size());
+		rows.materials.resize(std::max(rows.materials.size(), tables.materials.size()));
+		rows.pipelines.resize(std::max(rows.pipelines.size(), tables.pipelines.size()));
 	}
 
 	void MainBuild::FrameRegisters()
@@ -227,7 +240,7 @@ namespace DCLF::Draws
 		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
 			auto& blocks = pipelineBlocks[p];
 			// The pipeline table keeps its slots across frames; only the ones this frame's objects use
-			// get blocks (a swept or idle slot has no object pointing at it).
+			// get rows (a swept or idle slot has no object pointing at it).
 			if (!tables.PipelineUsed(p, frameNumber) || p >= lookups.pipelines.size())
 				continue;
 			const auto& entry = lookups.pipelines[p];
@@ -238,102 +251,72 @@ namespace DCLF::Draws
 			blocks.psTable = entry.psTable;
 			blocks.usage = &entry.usage[depthOnly ? kDepthVariant : kColorVariant];
 			blocks.shadowMaskIndex = entry.shadowMaskIndex;
-			const auto& technique = tables.TechniqueOf(p);
-			const std::uint32_t techniqueVersion = tables.TechniqueRowOf(p).constantsVersion;
-			BuildCache::Pipeline* cached = nullptr;
-			// Kept and clean: the constants and the lookup entry are the versions its blocks were written from.
-			if (kept) {
-				auto& entryKept = cache->pipelines[static_cast<std::uint32_t>(p)];
-				entryKept.lastUsed = frameNumber;
-				const std::uint32_t constantsVersion = p < tables.pipelineConstantsVersion.size() ? tables.pipelineConstantsVersion[p] : 0u;
-				if (entryKept.clean && entryKept.constantsVersion == constantsVersion && entryKept.techniqueVersion == techniqueVersion &&
-					entryKept.lookupVersion == entry.version &&
-					entryKept.techniqueVSBlock.offset != ~0ull && entryKept.techniquePSBlock.offset != ~0ull) {
-					blocks.techniqueVS = kept->constantsBase + entryKept.techniqueVSBlock.offset;
-					blocks.techniquePS = kept->constantsBase + entryKept.techniquePSBlock.offset;
-					++cache->persistentCleanPipelines;
-					continue;
-				}
-				++cache->persistentDirtyPipelines;
-			}
-			if (cache) {
-				// Everything the pipeline's technique groups and PerGeometry template are packed from.
-				auto& sources = cache->scratch;
-				sources.clear();
-				AppendSource(sources, technique.vs.floats);
-				AppendSource(sources, technique.ps.floats);
-				AppendSource(sources, tables.geometryConstants[p].vs.floats);
-				AppendSource(sources, tables.geometryConstants[p].ps.floats);
-				AppendSource(sources, blocks.vsTable);
-				AppendSource(sources, blocks.psTable);
-				cached = &cache->pipelines[static_cast<std::uint32_t>(p)];
-				cached->lastUsed = frameNumber;
-				if (SameSources(cached->sources, sources)) {
-					++cache->pipelineHits;
-				} else {
-					++cache->pipelineMisses;
-					cached->techniqueVS.valid = cached->techniquePS.valid = cached->hasGeometry = false;
-				}
-			}
-			auto pack = [&](const ConstantBlock& a_block, const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_first,
-							BuildCache::PackedGroup* a_packed, PersistentBlock* a_kept) {
-				if (kept && a_packed && a_kept) {
-					// Kept: packed only when the sources changed, written only when the bytes did.
-					if (!a_packed->valid)
-						PackGroupInto(a_block, a_layout, a_table, a_variables, a_first, *a_packed);
-					return kept->Place(*a_kept, a_packed->bytes.data(), a_packed->bytes.size(), a_packed->size);
-				}
-				if (a_packed && a_packed->valid) {
-					const auto address = Block(nullptr, a_packed->size);
-					if (address)
-						std::memcpy(arena.At(address - base, a_packed->bytes.size()).data(), a_packed->bytes.data(), a_packed->bytes.size());
-					return address;
-				}
-				const auto size = ConstantGroupSize(a_layout, a_table, a_variables, a_first);
-				const auto address = Block(nullptr, size);
-				if (address) {
-					const auto slice = arena.At(address - base, std::max<std::size_t>(size, 16));
-					PackConstantGroup(a_block, a_layout, a_table, a_variables, a_first, slice);
-					if (a_packed) {
-						a_packed->size = size;
-						a_packed->bytes.assign(slice.begin(), slice.end());
-						a_packed->valid = true;
-					}
-				}
-				return address;
-			};
-			const std::array<std::uint64_t, 5> offsetsBefore = cached ? std::array<std::uint64_t, 5>{ cached->techniqueVSBlock.offset, cached->techniquePSBlock.offset,
-				cached->geometryVSBlock.offset, cached->geometryPSBlock.offset, cached->permutationBlock.offset } : std::array<std::uint64_t, 5>{};
-			blocks.techniqueVS = pack(technique.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerTechnique], kVSFirstVariable[kPerTechnique],
-				cached ? &cached->techniqueVS : nullptr, cached ? &cached->techniqueVSBlock : nullptr);
-			blocks.techniquePS = pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique],
-				cached ? &cached->techniquePS : nullptr, cached ? &cached->techniquePSBlock : nullptr);
-			if (kept && cached) {
-				// The PerGeometry template and the permutation too: its pairs' records name these blocks, and a clean pair
-				// is not looked at again, so they are brought up to date here, with the pipeline's constants.
-				if (!cached->hasGeometry) {
-					PackGeometryTemplate(tables.geometryConstants[p], blocks.vsTable, blocks.psTable, true, cached->geometry);
-					cached->hasGeometry = true;
-				}
-				if (!cached->geometry.vs.empty())
-					kept->Place(cached->geometryVSBlock, cached->geometry.vs.data(), cached->geometry.vs.size(), cached->geometry.vs.size());
-				if (!cached->geometry.ps.empty())
-					kept->Place(cached->geometryPSBlock, cached->geometry.ps.data(), cached->geometry.ps.size(), cached->geometry.ps.size());
-				const auto& permutation = tables.permutations[p];
-				const std::uint32_t data[8] = { permutation.vertexShaderDescriptor, permutation.pixelShaderDescriptor, permutation.extraShaderDescriptor,
-					permutation.extraFeatureDescriptor, 0, 0, 0, 0 };
-				kept->Place(cached->permutationBlock, reinterpret_cast<const std::byte*>(data), sizeof(data), sizeof(data));
-				const std::array<std::uint64_t, 5> offsetsAfter{ cached->techniqueVSBlock.offset, cached->techniquePSBlock.offset, cached->geometryVSBlock.offset,
-					cached->geometryPSBlock.offset, cached->permutationBlock.offset };
-				if (offsetsAfter != offsetsBefore)
-					++cached->addressVersion;
-				cached->constantsVersion = p < tables.pipelineConstantsVersion.size() ? tables.pipelineConstantsVersion[p] : 0u;
-				cached->techniqueVersion = techniqueVersion;
-				cached->lookupVersion = entry.version;
-				cached->clean = blocks.techniqueVS && blocks.techniquePS;
-			}
+			blocks.tables = TablesHash(blocks.vsTable, blocks.psTable);
+			WritePipelineRow(static_cast<std::uint32_t>(p), blocks);
+			blocks.rowOk = rows.pipelines[p].blocksOk;
 		}
 		TracyCZoneEnd(pipelinesZone);
+	}
+
+	void MainBuild::WritePipelineRow(std::uint32_t p, const PipelineBlocks& blocks)
+	{
+		// What the row is written from: the pipeline's constants and permutation, its technique's constants and bindings (the
+		// shadow mask's filter), its lookup entry (the tables, the shadow mask), and the shared lookups (the samplers).
+		auto& state = rows.pipelines[p];
+		const auto& techniqueRow = tables.TechniqueRowOf(p);
+		const std::array<std::uint32_t, 6> key{ p < tables.pipelineConstantsVersion.size() ? tables.pipelineConstantsVersion[p] : 0u, techniqueRow.constantsVersion,
+			techniqueRow.bindingVersion, lookups.pipelines[p].version, lookups.sharedVersion, 1u };
+		if (state.written && state.key == key)
+			return;
+		const auto& technique = tables.TechniqueOf(p);
+		PipelineRow row;
+		bool ok = true;
+		auto pack = [&](const ConstantBlock& a_block, const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_first,
+						std::uint32_t a_offset, std::uint32_t a_room) {
+			if (ConstantGroupSize(a_layout, a_table, a_variables, a_first) > a_room) {
+				ok = false;
+				return;
+			}
+			PackConstantGroup(a_block, a_layout, a_table, a_variables, a_first, std::span(row.bytes.data() + a_offset, a_room));
+		};
+		pack(technique.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerTechnique], kVSFirstVariable[kPerTechnique], kPipelineRowTechniqueVS, kPipelineRowTechniqueBytes);
+		pack(technique.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerTechnique], kPSFirstVariable[kPerTechnique], kPipelineRowTechniquePS, kPipelineRowTechniqueBytes);
+		// The PerGeometry template: everything the objects do not override (they read theirs from the object record).
+		GeometryTemplate geometry;
+		PackGeometryTemplate(tables.geometryConstants[p], blocks.vsTable, blocks.psTable, true, geometry);
+		if (geometry.vs.size() > kPipelineRowGeometryVSBytes || geometry.ps.size() > kPipelineRowGeometryPSBytes)
+			ok = false;
+		else {
+			std::memcpy(row.bytes.data() + kPipelineRowGeometryVS, geometry.vs.data(), geometry.vs.size());
+			std::memcpy(row.bytes.data() + kPipelineRowGeometryPS, geometry.ps.data(), geometry.ps.size());
+		}
+		// The permutation: SuppressExternalEmittance is the only per-object bit DCLF puts in this block, and it is read at
+		// exactly one place in the whole shader tree - Effect.hlsl's GetLightingColor - never by Lighting.hlsl or anything it
+		// includes: for these pipelines the block is the pipeline's alone.
+		const auto& permutation = tables.permutations[p];
+		const std::uint32_t data[8] = { permutation.vertexShaderDescriptor, permutation.pixelShaderDescriptor, permutation.extraShaderDescriptor,
+			permutation.extraFeatureDescriptor, 0, 0, 0, 0 };
+		std::memcpy(row.bytes.data() + kPipelineRowPermutation, data, sizeof(data));
+		auto& header = HeaderOf(row);
+		header.vsTechnique = kPipelineRowTechniqueVS;
+		header.psTechnique = kPipelineRowTechniquePS;
+		header.vsGeometry = kPipelineRowGeometryVS;
+		header.psGeometry = kPipelineRowGeometryPS;
+		header.vsPermutation = header.psPermutation = kPipelineRowPermutation;
+		// The technique's shadow mask (t14, s14), or the null texture where the technique binds none.
+		const std::uint32_t shadowMask = technique.shadowMask ? blocks.shadowMaskIndex : lookups.nullTexture;
+		header.shadowMask = shadowMask == Lookups::kNone ? 0u : shadowMask;
+		const std::uint32_t filter = technique.shadowMask && technique.filterModes[kShadowMaskSlot] != kUnwrittenFilterMode ? technique.filterModes[kShadowMaskSlot] : 0u;
+		const std::uint32_t sampler = lookups.Sampler(0, filter);
+		header.shadowMaskSampler = sampler == Lookups::kNone ? 0u : sampler;
+		state.shadowMask = shadowMask != Lookups::kNone;
+		state.shadowMaskSampler = sampler != Lookups::kNone;
+		state.blocksOk = ok;
+		state.key = key;
+		state.written = true;
+		if (rows.pipeline.Set(p, row))
+			++out.pipelineRowsWritten;
+		++rows.pipelinesWritten;
 	}
 
 	void MainBuild::BeginMarks()
@@ -379,7 +362,7 @@ namespace DCLF::Draws
 		Mark(6);
 		if (!depthOnly) {
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
-				decalCount[group] = std::min(tables.decalCount[group], kMaxDecalDraws);
+				decalCount[group] = tables.decalCount[group];  // the sequence buffer's decal ranges hold them all (ReserveMainSequences)
 				decalTemplates[group].resize(decalCount[group]);
 			}
 		}
@@ -406,516 +389,220 @@ namespace DCLF::Draws
 		partStart = now;
 	}
 
-	std::uint32_t MainBuild::AssembleRecord(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks, std::uint32_t a_slot)
+	std::uint32_t MainBuild::AssembleRecord(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks)
 	{
-		const auto& usage = *blocks.usage;
-		const auto& material = tables.materials[object.materialIndex];
-		// A ProjectedUV pipeline binds the engine's four projected textures (SceneStore captured them
-		// from a native draw) at the slots SetupGeometry fills, with its wrap/anisotropic modes.
-		const bool projectedPipeline = (tables.pipelines[object.pipelineIndex].passDescriptor & 0x8000u) != 0;
-		DrawBindings bindings{};
-
-		auto [resolvedIt, newResolved] = resolvedBindings.try_emplace((std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex);
+		(void)o;
+		auto [resolvedIt, newResolved] = resolvedBindings.try_emplace(PairKeyOf(object));
 		auto& resolved = resolvedIt->second;
 		if (newResolved) {
 			if (object.materialIndex < lookups.materials.size() && lookups.materials[object.materialIndex].bindingBlock)
 				out.bindingOwners.push_back(lookups.materials[object.materialIndex].bindingBlock);
 			if (object.pipelineIndex < lookups.pipelines.size() && lookups.pipelines[object.pipelineIndex].shadowMaskOwner)
 				out.bindingOwners.push_back(lookups.pipelines[object.pipelineIndex].shadowMaskOwner);
+			ResolvePair(object, blocks, resolved);
 		}
-		// Kept: the versions of everything the pair's record and blocks are written from. The same as when they were
-		// written, and the pair is its slot: nothing else about it is looked at.
-		std::array<std::uint32_t, 12> pairVersions{};
-		if (kept) {
-			const std::uint32_t m = object.materialIndex, p = object.pipelineIndex;
-			const auto& pipelineEntry = cache->pipelines[p];
-			pairVersions = { m < tables.materialVersion.size() ? tables.materialVersion[m] : 0u,
-				m < tables.materialFrameVersion.size() ? tables.materialFrameVersion[m] : 0u, m < lookups.materials.size() ? lookups.materials[m].version : 0u,
-				p < lookups.pipelines.size() ? lookups.pipelines[p].version : 0u, p < tables.pipelineBindingVersion.size() ? tables.pipelineBindingVersion[p] : 0u,
-				lookups.sharedVersion, pipelineEntry.addressVersion, in.vsFrameMask, in.psFrameMask, 1u,
-				pipelineEntry.clean ? 1u : 0u, tables.TechniqueRowOf(p).bindingVersion };
-			if (newResolved && !dedupParity) {
-				if (const auto found = cache->pairs.find((std::uint64_t(m) << 32) | p);
-					found != cache->pairs.end() && found->second.clean && found->second.cleanKey == pairVersions && found->second.recordSlot != kNoRecord) {
-					found->second.lastUsed = frameNumber;
-					resolved.recordIndex = found->second.recordSlot;
-					++cache->persistentCleanPairs;
-					return found->second.recordSlot;
-				}
-				++cache->persistentDirtyPairs;
-			}
-		}
-		// Assembled once per (material, pipeline) pair when the record no longer varies per object, and per
-		// draw otherwise. Everything in here - the texture and sampler heap indices, the material,
-		// technique, geometry, permutation, light, alpha and emissive blocks, and the per-frame defaults
-		// - is then a property of the pair or of the epoch, so a second draw of the same pair needs
-		// nothing but its index.
+		// Per DRAW: the pair probe above, which every candidate pays whether or not it draws.
+		Mark(4);
 		if (resolved.skipReason != kNoSkip) {
-			Skipped(static_cast<Skip>(resolved.skipReason));  // per draw, not once per pair
+			if (resolved.skipReason == static_cast<std::uint32_t>(Skip::Texture) && out.missingNext < out.missingTextures.size())
+				out.missingTextures[out.missingNext++] = resolved.missingTexture;
 			if (resolved.deferred)
 				++out.deferredTextures;
+			Skipped(static_cast<Skip>(resolved.skipReason));  // per draw, not once per pair
 			return kNoRecord;
 		}
-		std::uint32_t recordIndex = resolved.recordIndex;
-		// Per DRAW: the loop entry and the resolvedBindings probe above, which every candidate pays
-		// whether or not it assembles a record.
-		Mark(4);
-		if (recordIndex == kNoRecord || dedupParity) {
-			const std::uint64_t pairKey = (std::uint64_t(object.materialIndex) << 32) | object.pipelineIndex;
-			const bool pairFromCache = newResolved && cache && PairFromCache(pairKey, object, blocks, projectedPipeline, resolved);
-			if (newResolved && !pairFromCache)
-				ResolvePair(pairKey, object, blocks, projectedPipeline, resolved);
-			if (!resolved.texturesOk) {
-				// The sample is recorded per skipped draw, not per distinct pair.
-				if (out.missingNext < out.missingTextures.size())
-					out.missingTextures[out.missingNext++] = resolved.missingTexture;
-				if (resolved.deferred)
-					++out.deferredTextures;
-				FailPair(resolved, object, Skip::Texture);
-				return kNoRecord;
-			}
-			if (!resolved.samplersOk) {
-				FailPair(resolved, object, Skip::Sampler);
-				return kNoRecord;
-			}
-			std::copy(resolved.textures.begin(), resolved.textures.end(), bindings.textures);
-			std::copy(resolved.samplers.begin(), resolved.samplers.end(), bindings.samplers);
-			Mark(0);
-
-			const auto& materialBlock = MaterialBlocksOf(pairKey, material, blocks);
-			const auto [geometryVS, geometryPS] = GeometryBlocksOf(o, object, blocks);
-			// NumStrictLights 0, and nothing else is read: the zeroed frame slot, for every draw.
-			const std::uint64_t lightBlock = sharedLightBlock;
-			const std::uint64_t permutationBlock = PermutationBlockOf(object);
-
-			Mark(1);
-			std::copy(frameVS.begin(), frameVS.end(), bindings.vertexConstants);
-			std::copy(framePS.begin(), framePS.end(), bindings.pixelConstants);
-			bindings.vertexConstants[kPerTechnique] = blocks.techniqueVS;
-			bindings.vertexConstants[kPerMaterial] = materialBlock.first;
-			bindings.vertexConstants[kPerGeometry] = geometryVS;
-			bindings.vertexConstants[4] = permutationBlock;
-			bindings.pixelConstants[kPerTechnique] = blocks.techniquePS;
-			bindings.pixelConstants[kPerMaterial] = materialBlock.second;
-			bindings.pixelConstants[kPerGeometry] = geometryPS;
-			bindings.pixelConstants[3] = lightBlock;
-			bindings.pixelConstants[4] = permutationBlock;
-			bindings.pixelConstants[kFrameLightingRegister] = frameLightingBlock;
-			// The alpha test reference (PS b11), Linear Lighting's emissive multiplier and Advanced Skin's wetness
-			// come from the object record (DCLF_BINDLESS_DRAW), not from blocks of their own.
-			bool constantsOk = true;
-			for (std::uint32_t b = 0; b < kConstantBufferRegisters; ++b) {
-				if (((usage.vertexConstants >> b) & 1) && !bindings.vertexConstants[b]) {
-					constantsOk = false;
-					out.missingVertexConstants |= 1u << b;
-				}
-				if (((usage.pixelConstants >> b) & 1) && !bindings.pixelConstants[b]) {
-					constantsOk = false;
-					out.missingPixelConstants |= 1u << b;
-				}
-			}
-			if (!constantsOk) {
-				FailPair(resolved, object, Skip::Constants);
-				return kNoRecord;
-			}
-
-			// Kept records are immutable templates. Current-frame descriptor indices live only in
-			// commit-owned upload copies, so a frame texture change cannot dirty the scene cache.
-			std::array<std::uint64_t, 2> patchMask{};
-			if (kept) {
-				for (const auto t : resolved.patchRegisters) {
-					bindings.textures[t] = 0;
-					patchMask[t / 64] |= 1ull << (t % 64);
-				}
-			}
-			if (recordIndex != kNoRecord) {
-				// CS_DCLF_DEDUP_PARITY=1: the pair already has a record and this draw just rebuilt
-				// one from scratch, so they must be byte-identical. This is the direct answer to
-				// "is the record really the same for every draw of a pair", and the only check that
-				// would catch a per-object dependency nobody has noticed.
-				++out.recordParityChecks;
-				const DrawBindings& held = kept ? kept->records.Get()[recordIndex] : records[recordIndex];
-				if (std::memcmp(&held, &bindings, sizeof(DrawBindings)) != 0 && out.recordParityMismatches++ == 0)
-					logger::warn("[DCLF] record dedup parity: object {} rebuilds a different record than its (material {}, pipeline {}) pair holds",
-						o, object.materialIndex, object.pipelineIndex);
-			} else if (kept) {
-				// The pair's slot, its own for as long as the pair is cached; written only when the record changed.
-				auto& cachedPair = cache->pairs[pairKey];
-				if (cachedPair.recordSlot == kNoRecord)
-					cachedPair.recordSlot = kept->AcquireRecord();
-				if (cachedPair.recordSlot == kNoRecord) {
-					FailPair(resolved, object, Skip::RecordCapacity);
-					return kNoRecord;
-				}
-				kept->WriteRecord(cachedPair.recordSlot, bindings, patchMask);
-				cachedPair.cleanKey = pairVersions;
-				cachedPair.clean = true;
-				recordIndex = cachedPair.recordSlot;
-				resolved.recordIndex = recordIndex;
-			} else {
-				if (a_slot != kNoRecord) {
-					// A resident region's pair: its stable slot (the records up to the region's slot count are its).
-					recordIndex = a_slot;
-					records[a_slot] = bindings;
-				} else {
-					if (records.size() >= in.addresses.recordCapacity) {
-						FailPair(resolved, object, Skip::RecordCapacity);
-						return kNoRecord;
-					}
-					recordIndex = static_cast<std::uint32_t>(records.size());
-					records.push_back(bindings);
-				}
-				for (const auto t : resolved.patchRegisters)
-					out.framePatches.emplace_back(recordIndex, t);
-				resolved.recordIndex = recordIndex;
-			}
-		}
-
-		return recordIndex;
+		return resolved.recordIndex;
 	}
 
-	void MainBuild::FailPair(ResolvedBindings& resolved, const ObjectRecord& object, Skip a_reason)
+	void MainBuild::ResolvePair(const ObjectRecord& object, const PipelineBlocks& blocks, ResolvedBindings& resolved)
 	{
-		resolved.skipReason = static_cast<std::uint32_t>(a_reason);
-		if (kept)
-			if (const auto found = cache->pairs.find(PairKeyOf(object)); found != cache->pairs.end())
-				found->second.clean = false;
-		Skipped(a_reason);
-	}
-
-	bool MainBuild::PairFromCache(std::uint64_t pairKey, const ObjectRecord& object, const PipelineBlocks& blocks, bool projectedPipeline, ResolvedBindings& resolved)
-	{
+		const std::uint32_t m = object.materialIndex, p = object.pipelineIndex;
+		// An input names its rows in one word (RowsOf): past its fields is a hard failure, like the sequence limits, until the
+		// input gets a word of its own.
+		if (m > kRowMaterialMask || p >= (1u << (32 - kRowPipelineShift)))
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: material slot {} or pipeline slot {} past an input's row fields", m, p));
+		auto fail = [&](Skip a_reason) { resolved.skipReason = static_cast<std::uint32_t>(a_reason); };
+		Mark(0);
+		WriteMaterialRow(m, p, blocks);
+		const auto& material = rows.materials[m];
+		const auto& pipeline = rows.pipelines[p];
 		const auto& usage = *blocks.usage;
-		const auto& technique = tables.TechniqueOf(object.pipelineIndex);
-		// Everything the pair's resolution and PerMaterial groups are derived from.
-		auto& sources = cache->scratch;
-		sources.clear();
-		// The material record by its version (Tables::materialVersion), which is new whenever the record is
-		// rewritten; the frame's floats MaterialSources writes into it are not part of it, and a reused
-		// group gets them written over below.
-		AppendSource(sources, object.materialIndex < tables.materialVersion.size() ? tables.materialVersion[object.materialIndex] : 0u);
-		AppendSource(sources, tables.materialSlotKey[object.materialIndex].first);
-		AppendSource(sources, tables.materialSlotKey[object.materialIndex].second);
-		if (object.materialIndex < lookups.materials.size()) {
-			const auto& entry = lookups.materials[object.materialIndex];
-			AppendSource(sources, entry.key.first);
-			AppendSource(sources, entry.key.second);
-			AppendSource(sources, entry.textureIndex);
-			AppendSource(sources, entry.featureIndex);
-			AppendSource(sources, entry.resolved);
-		} else {
-			AppendSource(sources, ~0u);
+		Mark(1);
+		// The row was packed with its technique's constant tables; a pipeline of the same slot with others would read it wrong.
+		if (material.tables != blocks.tables) {
+			if (out.rowTableConflicts++ == 0)
+				logger::warn("[DCLF] material slot {} was packed with other constant tables than pipeline slot {} has; its draws stay native", m, p);
+			return fail(Skip::Constants);
 		}
-		AppendSource(sources, technique.filterModes);
-		AppendSource(sources, technique.shadowMask);
-		AppendSource(sources, blocks.shadowMaskIndex);
-		AppendSource(sources, usage.vertexConstants);
-		AppendSource(sources, usage.pixelConstants);
-		AppendSource(sources, usage.textures);
-		AppendSource(sources, usage.samplers);
-		AppendSource(sources, blocks.vsTable);
-		AppendSource(sources, blocks.psTable);
-		AppendSource(sources, projectedPipeline);
-		AppendSource(sources, lookups.nullTexture);
-		AppendSource(sources, lookups.samplers);
-		AppendSource(sources, lookups.projectedTextures);
-		AppendSource(sources, in.addresses.objectsIndex);
-		AppendSource(sources, in.addresses.bonesIndex);
-		AppendSource(sources, depthOnly);
-		auto& entry = cache->pairs[pairKey];
-		entry.lastUsed = frameNumber;
-		if (SameSources(entry.sources, sources) && entry.hasResolved) {
-			++cache->pairHits;
-			resolved.textures = entry.resolved.textures;
-			resolved.samplers = entry.resolved.samplers;
-			resolved.patchRegisters = entry.resolved.patchRegisters;
-			resolved.texturesOk = entry.resolved.texturesOk;
-			resolved.samplersOk = entry.resolved.samplersOk;
-			resolved.deferred = entry.resolved.deferred;
-			resolved.missingTexture = entry.resolved.missingTexture;
-			return true;
-		} else {
-			++cache->pairMisses;
-			entry.hasResolved = false;
-			entry.vs.valid = entry.ps.valid = false;
+		if (!material.texturesOk) {
+			resolved.deferred = material.deferred;
+			resolved.missingTexture = material.missingTexture;
+			return fail(Skip::Texture);
 		}
-		return false;
-	}
-
-	void MainBuild::ResolvePair(std::uint64_t pairKey, const ObjectRecord& object, const PipelineBlocks& blocks, bool projectedPipeline, ResolvedBindings& resolved)
-	{
-		const auto& usage = *blocks.usage;
-		const auto& material = tables.materials[object.materialIndex];
-		const auto& technique = tables.TechniqueOf(object.pipelineIndex);
-		// Textures: the material's, the technique's shadow mask, then the frame's.
-		resolved.texturesOk = true;
-		const Lookups::Material* materialLookup = object.materialIndex < lookups.materials.size() ? &lookups.materials[object.materialIndex] : nullptr;
-		const bool materialResolved = materialLookup && materialLookup->resolved &&
-		                              materialLookup->key.first == tables.materialSlotKey[object.materialIndex].first &&
-		                              materialLookup->key.second == tables.materialSlotKey[object.materialIndex].second;
+		// Textures: the material row's (t0-t15 but t14, the features'), the pipeline row's (t14), the frame record's (the rest).
 		for (std::uint32_t t = 0; t < kTextureRegisters; ++t) {
-			// Slots below 16 the material and technique leave alone read a null view (natively: whatever
-			// an earlier draw left bound). A frame register the pipeline reads
-			// is the epoch's own descriptor, patched in by the commit; on the Z-prepass the pixel stage's
-			// per-frame textures are not bound yet, so a depth pipeline reading one is skipped.
-			std::uint32_t index = t < kPixelTextureSlots ? lookups.nullTexture : kInvalidIndex;
-			bool patch = false;
-			if (t == kObjectBufferRegister)
-				index = in.addresses.objectsIndex;
-			else if (t == kBonesBufferRegister)
-				index = in.addresses.bonesIndex;
-			else if (t < kPixelTextureSlots && ((material.textureWritten >> t) & 1)) {
-				if (!materialResolved) {
-					resolved.deferred = true;
-					resolved.texturesOk = false;
-					resolved.missingTexture = t;
-					break;
-				}
-				index = materialLookup->textureIndex[t];
-			} else if (t == kShadowMaskSlot && technique.shadowMask)
-				index = blocks.shadowMaskIndex;
-			else if (const auto p = ProjectedSlot(projectedPipeline, t); p >= 0)
-				index = lookups.projectedTextures[p];
-			else if (const int f = FeatureMaterialSlot(t); f >= 0 && material.featureTextures[f]) {
-				// A feature's per-material texture (Advanced Skin's t71, t74).
-				if (!materialResolved) {
-					resolved.deferred = true;
-					resolved.texturesOk = false;
-					resolved.missingTexture = t;
-					break;
-				}
-				index = materialLookup->featureIndex[f];
-			}
-			else if (t >= kPixelTextureSlots && !depthOnly) {
-				index = 0;
-				patch = usage.UsesTexture(t);
-			}
-			if (index == kInvalidIndex && usage.UsesTexture(t)) {
-				resolved.texturesOk = false;
+			if (!usage.UsesTexture(t))
+				continue;
+			bool given = true;
+			if (t == kShadowMaskSlot)
+				given = pipeline.shadowMask;
+			else if (t < kPixelTextureSlots)
+				given = (material.textures >> t) & 1;
+			else if (const int f = FeatureMaterialSlot(t); f >= 0)
+				given = (material.features >> f) & 1;
+			else if (t == kObjectBufferRegister || t == kBonesBufferRegister)
+				given = true;
+			else if (depthOnly)
+				given = false;  // the Z-prepass has no frame textures bound yet
+			else
+				out.frameRegisters[t / 64] |= 1ull << (t % 64);  // the commit resolves it into the frame record
+			if (!given) {
 				resolved.missingTexture = t;
-				break;
+				return fail(Skip::Texture);
 			}
-			resolved.textures[t] = index == kInvalidIndex ? 0 : index;
-			if (patch)
-				resolved.patchRegisters.push_back(t);
 		}
+		for (std::uint32_t sampler = 0; sampler < kSamplerRegisters; ++sampler) {
+			if (!((usage.samplers >> sampler) & 1))
+				continue;
+			const bool given = sampler == kShadowMaskSlot ? pipeline.shadowMaskSampler : ((material.samplers >> sampler) & 1) != 0;
+			if (!given)
+				return fail(Skip::Sampler);
+		}
+		// Constant buffers: the rows' (b0, b1, b2, b4), the pass's (the frame slots, PS b3 and b13).
+		bool constantsOk = true;
+		for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+			const bool rowRegister = r == kPerTechnique || r == kPerMaterial || r == kPerGeometry || r == 4;
+			const bool rowsOk = r == kPerMaterial ? material.blocksOk : pipeline.blocksOk;
+			if ((usage.vertexConstants >> r) & 1) {
+				if (rowRegister ? !rowsOk : !frameVS[r]) {
+					constantsOk = false;
+					out.missingVertexConstants |= 1u << r;
+				}
+			}
+			if ((usage.pixelConstants >> r) & 1) {
+				const bool pass = r == 3 || r == kFrameLightingRegister;
+				if (rowRegister ? !rowsOk : !(pass || framePS[r])) {
+					constantsOk = false;
+					out.missingPixelConstants |= 1u << r;
+				}
+			}
+		}
+		if (!constantsOk)
+			return fail(Skip::Constants);
+		resolved.recordIndex = RowsOf(p, m);
+	}
 
-		// Samplers: the modes the material (or, for the shadow mask, the technique) sets.
-		resolved.samplersOk = true;
-		for (std::uint32_t s = 0; s < kSamplerRegisters; ++s) {
+	void MainBuild::WriteMaterialRow(std::uint32_t m, std::uint32_t p, const PipelineBlocks& blocks)
+	{
+		// What the row is written from: the material record and its frame values, its lookup entry (the descriptors), the
+		// shared lookups (the null texture, the samplers, the projected textures), its technique's bindings (the filter
+		// modes a material leaves unwritten) and the constant tables it is packed with.
+		auto& state = rows.materials[m];
+		const Lookups::Material* lookup = m < lookups.materials.size() ? &lookups.materials[m] : nullptr;
+		const bool projected = (tables.pipelines[p].passDescriptor & 0x8000u) != 0;
+		const std::array<std::uint32_t, 8> key{ m < tables.materialVersion.size() ? tables.materialVersion[m] : 0u,
+			m < tables.materialFrameVersion.size() ? tables.materialFrameVersion[m] : 0u, lookup ? lookup->version : ~0u, lookups.sharedVersion,
+			tables.TechniqueRowOf(p).bindingVersion, projected ? 1u : 0u, static_cast<std::uint32_t>(blocks.tables), static_cast<std::uint32_t>(blocks.tables >> 32) };
+		if (state.written && state.key == key)
+			return;
+		const auto& material = tables.materials[m];
+		const auto& technique = tables.TechniqueOf(p);
+		MaterialRow row;
+		state = {};
+		// The PerMaterial blocks, packed through the technique's tables.
+		const auto vsSize = ConstantGroupSize(LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial]);
+		const auto psSize = ConstantGroupSize(LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial]);
+		state.blocksOk = vsSize <= kMaterialRowVSBytes && psSize <= kMaterialRowPSBytes;
+		if (state.blocksOk) {
+			PackConstantGroup(material.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial],
+				std::span(row.bytes.data() + kMaterialRowVS, kMaterialRowVSBytes));
+			PackConstantGroup(material.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial],
+				std::span(row.bytes.data() + kMaterialRowPS, kMaterialRowPSBytes));
+		}
+		auto& header = HeaderOf(row);
+		header.vsMaterial = kMaterialRowVS;
+		header.psMaterial = kMaterialRowPS;
+		// The textures: the material's, a projected technique's projected ones, the null texture where neither binds one. The
+		// shadow mask (t14) is the pipeline row's.
+		const bool resolved = lookup && lookup->resolved && lookup->key.first == tables.materialSlotKey[m].first && lookup->key.second == tables.materialSlotKey[m].second;
+		state.texturesOk = true;
+		for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
+			std::uint32_t index = lookups.nullTexture;
+			if ((material.textureWritten >> t) & 1) {
+				if (!resolved) {
+					state.texturesOk = false;
+					state.deferred = true;
+					state.missingTexture = t;
+					break;
+				}
+				index = lookup->textureIndex[t];
+			} else if (const auto slot = ProjectedSlot(projected, t); slot >= 0) {
+				index = lookups.projectedTextures[slot];
+			}
+			if (t == kShadowMaskSlot)
+				continue;
+			header.textures[t] = index == kInvalidIndex ? 0u : index;
+			state.textures |= index == kInvalidIndex ? 0u : (1u << t);
+		}
+		for (std::uint32_t f = 0; f < kFeatureMaterialTextures && state.texturesOk; ++f) {
+			std::uint32_t index = lookups.nullTexture;
+			if (material.featureTextures[f]) {
+				if (!resolved) {
+					state.texturesOk = false;
+					state.deferred = true;
+					state.missingTexture = kFeatureMaterialRegisters[f];
+					break;
+				}
+				index = lookup->featureIndex[f];
+			}
+			header.features[f] = index == kInvalidIndex ? 0u : index;
+			state.features |= index == kInvalidIndex ? 0u : (1u << f);
+		}
+		// The samplers: the modes the material sets (its technique's filter where it leaves it), a projected technique's.
+		for (std::uint32_t sampler = 0; sampler < kSamplerRegisters; ++sampler) {
+			if (sampler == kShadowMaskSlot)
+				continue;
 			std::uint32_t address = 0, filter = 0;
-			if (s < kPixelTextureSlots && ((material.textureWritten >> s) & 1)) {
-				address = material.addressModes[s];
-				filter = material.filterModes[s] != kUnwrittenFilterMode ? material.filterModes[s] : technique.filterModes[s];
-			} else if (s == kShadowMaskSlot && technique.shadowMask) {
-				filter = technique.filterModes[s];
-			} else if (ProjectedSlot(projectedPipeline, s) >= 0) {
+			if ((material.textureWritten >> sampler) & 1) {
+				address = material.addressModes[sampler];
+				filter = material.filterModes[sampler] != kUnwrittenFilterMode ? material.filterModes[sampler] : technique.filterModes[sampler];
+			} else if (ProjectedSlot(projected, sampler) >= 0) {
 				address = 3;  // SetupGeometry: wrap, anisotropic (engine notes: samplers)
 				filter = 1;
 			}
 			if (filter == kUnwrittenFilterMode)
 				filter = 0;
 			const auto index = lookups.Sampler(address, filter);
-			if (index == kInvalidIndex && ((usage.samplers >> s) & 1)) {
-				resolved.samplersOk = false;
-				break;
-			}
-			resolved.samplers[s] = index == kInvalidIndex ? 0 : index;
+			header.samplers[sampler] = index == kInvalidIndex ? 0u : index;
+			state.samplers |= index == kInvalidIndex ? 0u : (1u << sampler);
 		}
-		if (cache) {
-			auto& entry = cache->pairs[pairKey];
-			entry.resolved = resolved;
-			entry.resolved.recordIndex = kNoRecord;
-			entry.resolved.skipReason = kNoSkip;
-			entry.hasResolved = true;
-		}
+		state.tables = blocks.tables;
+		state.key = key;
+		state.written = true;
+		if (rows.material.Set(m, row))
+			++out.materialRowsWritten;
+		++rows.materialsWritten;
 	}
 
-	const std::pair<std::uint64_t, std::uint64_t>& MainBuild::MaterialBlocksOf(std::uint64_t pairKey, const MaterialRecord& material, const PipelineBlocks& blocks)
+	void MainBuild::CheckBindless(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks)
 	{
-		// Constant buffers.
-		auto& materialBlock = materialBlocks[pairKey];
-		if (kept && !materialBlock.first && !materialBlock.second) {
-			// Kept: the pair's two blocks, packed when its sources changed, with this frame's floats written over
-			// them as below, and written to the buffer only where the bytes differ.
-			auto& cachedPair = cache->pairs[pairKey];
-			auto keep = [&](BuildCache::PackedGroup& a_packed, PersistentBlock& a_block, std::vector<std::uint32_t>& a_positions, const std::vector<std::uint32_t>& a_floats,
-							const ConstantBlock& a_group, const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables,
-							std::uint32_t a_first) {
-				if (!a_packed.valid || a_positions.size() != a_floats.size()) {
-					PackGroupInto(a_group, a_layout, a_table, a_variables, a_first, a_packed);
-					a_positions.clear();
-					for (const auto index : a_floats)
-						a_positions.push_back(PackedPositionOf(a_layout, a_table, a_variables, a_first, index));
-				}
-				auto& bytes = cache->scratch;
-				bytes.assign(a_packed.bytes.begin(), a_packed.bytes.end());
-				for (std::size_t i = 0; i < a_positions.size(); ++i) {
-					const auto position = a_positions[i];
-					const auto index = a_floats[i];
-					if (position == ~0u || std::size_t(position) * 4 + 4 > bytes.size() || index >= a_group.floats.size())
-						continue;
-					const float value = a_group.Written(index) ? a_group.floats[index] : 0.0f;
-					std::memcpy(bytes.data() + std::size_t(position) * 4, &value, 4);
-				}
-				return kept->Place(a_block, bytes.data(), bytes.size(), a_packed.size);
-			};
-			materialBlock.first = keep(cachedPair.vs, cachedPair.materialVS, cachedPair.vsPatchPositions, in.materialPatchedVSFloats, material.vs, LightingVSLayout(),
-				blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial]);
-			materialBlock.second = keep(cachedPair.ps, cachedPair.materialPS, cachedPair.psPatchPositions, in.materialPatchedFloats, material.ps, LightingPSLayout(),
-				blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial]);
-		}
-		if (!materialBlock.first && !materialBlock.second) {
-			// The pair's entry was checked (or rebuilt) when the pair was first met this build.
-			BuildCache::Pair* cachedPair = nullptr;
-			if (cache) {
-				const auto found = cache->pairs.find(pairKey);
-				cachedPair = found != cache->pairs.end() ? &found->second : nullptr;
-			}
-			auto pack = [&](const ConstantBlock& a_block, const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_first,
-							BuildCache::PackedGroup* a_packed) {
-				if (a_packed && a_packed->valid) {
-					const auto address = Block(nullptr, a_packed->size);
-					if (address)
-						std::memcpy(arena.At(address - base, a_packed->bytes.size()).data(), a_packed->bytes.data(), a_packed->bytes.size());
-					return address;
-				}
-				const auto size = ConstantGroupSize(a_layout, a_table, a_variables, a_first);
-				const auto address = Block(nullptr, size);
-				if (address) {
-					const auto slice = arena.At(address - base, std::max<std::size_t>(size, 16));
-					PackConstantGroup(a_block, a_layout, a_table, a_variables, a_first, slice);
-					if (a_packed) {
-						a_packed->size = size;
-						a_packed->bytes.assign(slice.begin(), slice.end());
-						a_packed->valid = true;
-					}
-				}
-				return address;
-			};
-			const bool vsReused = cachedPair && cachedPair->vs.valid && cachedPair->vsPatchPositions.size() == in.materialPatchedVSFloats.size();
-			materialBlock.first = pack(material.vs, LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial],
-				cachedPair ? &cachedPair->vs : nullptr);
-			if (cachedPair && !vsReused) {
-				cachedPair->vsPatchPositions.clear();
-				for (const auto index : in.materialPatchedVSFloats)
-					cachedPair->vsPatchPositions.push_back(PackedPositionOf(LightingVSLayout(), blocks.vsTable, kVSGroups[kPerMaterial], kVSFirstVariable[kPerMaterial], index));
-			}
-			if (vsReused && materialBlock.first) {
-				auto slice = arena.At(materialBlock.first - base, cachedPair->vs.bytes.size());
-				for (std::size_t i = 0; i < cachedPair->vsPatchPositions.size(); ++i) {
-					const auto position = cachedPair->vsPatchPositions[i];
-					const auto index = in.materialPatchedVSFloats[i];
-					if (position == ~0u || std::size_t(position) * 4 + 4 > slice.size() || index >= material.vs.floats.size())
-						continue;
-					const float value = material.vs.Written(index) ? material.vs.floats[index] : 0.0f;
-					std::memcpy(slice.data() + std::size_t(position) * 4, &value, 4);
-				}
-			}
-			// The PS group carries the frame's floats (IBLParams): a reused group has this frame's values
-			// written over them, as PackConstantGroup would write them (an unwritten float packs as zero).
-			const bool psReused = cachedPair && cachedPair->ps.valid && cachedPair->psPatchPositions.size() == in.materialPatchedFloats.size();
-			materialBlock.second = pack(material.ps, LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial],
-				cachedPair ? &cachedPair->ps : nullptr);
-			if (cachedPair && !psReused) {
-				cachedPair->psPatchPositions.clear();
-				for (const auto index : in.materialPatchedFloats)
-					cachedPair->psPatchPositions.push_back(PackedPositionOf(LightingPSLayout(), blocks.psTable, kPSGroups[kPerMaterial], kPSFirstVariable[kPerMaterial], index));
-			}
-			if (psReused && materialBlock.second) {
-				auto slice = arena.At(materialBlock.second - base, cachedPair->ps.bytes.size());
-				for (std::size_t i = 0; i < cachedPair->psPatchPositions.size(); ++i) {
-					const auto position = cachedPair->psPatchPositions[i];
-					const auto index = in.materialPatchedFloats[i];
-					if (position == ~0u || std::size_t(position) * 4 + 4 > slice.size() || index >= material.ps.floats.size())
-						continue;
-					const float value = material.ps.Written(index) ? material.ps.floats[index] : 0.0f;
-					std::memcpy(slice.data() + std::size_t(position) * 4, &value, 4);
-				}
-			}
-		}
-		return materialBlock;
-	}
-
-	std::pair<std::uint64_t, std::uint64_t> MainBuild::GeometryBlocksOf(std::uint32_t o, const ObjectRecord& object, const PipelineBlocks& blocks)
-	{
-		std::uint64_t geometryVS = 0, geometryPS = 0;
-		// A pipeline's PerGeometry template: one block per stage (kept, or the build's).
-		auto uploadTemplate = [&](const std::vector<std::byte>& a_group, BuildCache::Pipeline* a_pipeline, bool a_pixel) -> std::uint64_t {
-			if (a_group.empty())
-				return 0;  // the stage does not declare the buffer
-			if (kept && a_pipeline)
-				return kept->Place(a_pixel ? a_pipeline->geometryPSBlock : a_pipeline->geometryVSBlock, a_group.data(), a_group.size(), a_group.size());
-			const auto address = Block(nullptr, a_group.size());
-			if (address)
-				std::memcpy(arena.At(address - base, std::max<std::size_t>(a_group.size(), 16)).data(), a_group.data(), a_group.size());
-			return address;
-		};
-		{
-			auto [templateIt, newTemplate] = geometryTemplates.try_emplace(object.pipelineIndex);
-			auto& geometryTemplate = templateIt->second;
-			BuildCache::Pipeline* cachedPipeline = nullptr;
-			if (newTemplate && cache) {
-				const auto found = cache->pipelines.find(object.pipelineIndex);
-				cachedPipeline = found != cache->pipelines.end() ? &found->second : nullptr;
-			}
-			if (newTemplate && cachedPipeline && cachedPipeline->hasGeometry) {
-				geometryTemplate.vs = cachedPipeline->geometry.vs;
-				geometryTemplate.ps = cachedPipeline->geometry.ps;
-				geometryTemplate.offsets = cachedPipeline->geometry.offsets;
-				geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
-				geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
-			} else if (newTemplate) {
-				// The pipeline's own values, which is everything the objects do not override.
-				PackGeometryTemplate(tables.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, true, geometryTemplate);
-				if (cachedPipeline) {
-					cachedPipeline->geometry.vs = geometryTemplate.vs;
-					cachedPipeline->geometry.ps = geometryTemplate.ps;
-					cachedPipeline->geometry.offsets = geometryTemplate.offsets;
-					cachedPipeline->hasGeometry = true;
-				}
-				geometryTemplate.vsAddress = uploadTemplate(geometryTemplate.vs, cachedPipeline, false);
-				geometryTemplate.psAddress = uploadTemplate(geometryTemplate.ps, cachedPipeline, true);
-			}
-			// One pair of blocks for the whole pipeline, written when the template was built.
-			geometryVS = geometryTemplate.vsAddress;
-			geometryPS = geometryTemplate.psAddress;
-			// CS_DCLF_BINDLESS_PARITY=1: the record the shaders read against the PerGeometry group the engine's
-			// constant buffer holds for the same object (PatchObjectGeometry). The two derive from the same inputs
-			// through the same unwritten-component rule, so anything but bit equality is a defect in the
-			// record's layout or in the way it is filled, caught on the CPU with no readback.
-			if (bindlessParity && o < objectRecords.Count()) {
-				parityVS.assign(geometryTemplate.vs.begin(), geometryTemplate.vs.end());
-				parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
-				PatchObjectGeometry(tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
-				IndirectDraws::Stats parityStats{};
-				CheckBindlessRecord(tables, o, *objectRecords.At(o), eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
-				out.bindlessParityChecks += parityStats.bindlessParityChecks;
-				out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
-			}
-		}
-		return { geometryVS, geometryPS };
-	}
-
-	std::uint64_t MainBuild::PermutationBlockOf(const ObjectRecord& object)
-	{
-		const auto& permutation = tables.permutations[object.pipelineIndex];
-		// SuppressExternalEmittance is the only per-object bit DCLF puts in this block, and it is
-		// read at exactly one place in the whole shader tree - Effect.hlsl's GetLightingColor -
-		// never by Lighting.hlsl or anything it includes. So for these pipelines it is dead, and the
-		// block keys on the pipeline alone, which is what makes the binding record identical for a
-		// (material, pipeline) pair.
-		const std::uint32_t extra = permutation.extraShaderDescriptor;
-		auto& permutationBlock = permutationBlocks[(std::uint64_t(object.pipelineIndex) << 32) | extra];
-		if (!permutationBlock) {
-			const std::uint32_t data[8] = { permutation.vertexShaderDescriptor, permutation.pixelShaderDescriptor, extra, permutation.extraFeatureDescriptor, 0, 0, 0, 0 };
-			// Kept per pipeline: nothing in it is per object.
-			if (kept)
-				permutationBlock = kept->Place(cache->pipelines[object.pipelineIndex].permutationBlock, reinterpret_cast<const std::byte*>(data), sizeof(data), sizeof(data));
-			else
-				permutationBlock = Block(data, sizeof(data));
-		}
-		return permutationBlock;
+		// CS_DCLF_BINDLESS_PARITY=1: the record the shaders read against the PerGeometry group the engine's constant buffer holds
+		// for the same object (PatchObjectGeometry). The two derive from the same inputs through the same unwritten-component
+		// rule, so anything but bit equality is a defect in the record's layout or in the way it is filled, caught on the CPU
+		// with no readback.
+		if (o >= objectRecords.Count())
+			return;
+		auto [templateIt, newTemplate] = geometryTemplates.try_emplace(object.pipelineIndex);
+		auto& geometryTemplate = templateIt->second;
+		if (newTemplate)
+			PackGeometryTemplate(tables.geometryConstants[object.pipelineIndex], blocks.vsTable, blocks.psTable, true, geometryTemplate);
+		parityVS.assign(geometryTemplate.vs.begin(), geometryTemplate.vs.end());
+		parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
+		PatchObjectGeometry(tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
+		IndirectDraws::Stats parityStats{};
+		CheckBindlessRecord(tables, o, *objectRecords.At(o), eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
+		out.bindlessParityChecks += parityStats.bindlessParityChecks;
+		out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
 	}
 
 	// The resident region (BuildCache::ResidentRegion; drawcall-limit-fix.md, "Persistent resident draws"): the resident
@@ -927,9 +614,9 @@ namespace DCLF::Draws
 		region = cache && !BuildParityEnabled() ? &cache->region : nullptr;
 		if (!region && cache && cache->region.cursor.active)
 			cache->region.Reset();
-		// The whole scene with kept bindings (its pairs' records are theirs); the Z-prepass's only where its gate is not the
-		// colour epoch's last frame (withholding): with that gate, what is not resident stays the loop's.
-		wholeScene = kept && (!depthOnly || in.withholding);
+		// The whole scene (every pair's rows are the scene's); the Z-prepass's only where its gate is not the colour epoch's last
+		// frame (withholding): with that gate, what is not resident stays the loop's.
+		wholeScene = region && (!depthOnly || in.withholding);
 		TracyCZoneN(residentRegionZone, "CS.DCLF.BuildMain.ResidentRegion", true);
 		if (region) {
 			UpdateRegionEntries();
@@ -978,6 +665,7 @@ namespace DCLF::Draws
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
 		const auto pair = r.pairs.find(PairKeyOf(object));
 		const bool drawable = blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
+		// The pair's slot is its rows (RowsOf).
 		const std::uint32_t partitions = PartitionsOf(tables, o);
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
 			{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius, o, 0, partitions };
@@ -990,17 +678,10 @@ namespace DCLF::Draws
 	{
 		auto& r = *region;
 		auto [pair, fresh] = r.pairs.try_emplace(a_key);
-		if (fresh && kept) {
-			// Its record is the pair's kept one, whose slot the assembly below gives it.
+		if (fresh) {
+			// Its rows, once the check below (UpdateRegionPairs) finds the pair can draw.
 			pair->second.slot = kNoRecord;
 			pair->second.ok = false;
-		} else if (fresh) {
-			if (!r.freeSlots.empty()) {
-				pair->second.slot = r.freeSlots.back();
-				r.freeSlots.pop_back();
-			} else {
-				pair->second.slot = r.slotCount++;
-			}
 		}
 		++pair->second.count;
 		const auto pipeline = static_cast<std::uint32_t>(a_key);
@@ -1013,11 +694,8 @@ namespace DCLF::Draws
 		auto& r = *region;
 		if (a_key == kNoPair)
 			return;
-		if (const auto pair = r.pairs.find(a_key); pair != r.pairs.end() && --pair->second.count == 0) {
-			if (!kept)
-				r.freeSlots.push_back(pair->second.slot);
+		if (const auto pair = r.pairs.find(a_key); pair != r.pairs.end() && --pair->second.count == 0)
 			r.pairs.erase(pair);
-		}
 		if (const auto state = r.pipelines.find(static_cast<std::uint32_t>(a_key)); state != r.pipelines.end() && --state->second.second == 0)
 			r.pipelines.erase(state);
 	}
@@ -1060,13 +738,10 @@ namespace DCLF::Draws
 		const std::uint64_t key = (object.flags & kObjectNoBindings) ? kNoPair : PairKeyOf(object);
 		std::uint32_t i = r.indexOf[o];
 		if (i == kNoRegion) {
-			// Past the region's share of the buffers, or of the record slots, it stays with the loop.
-			const std::uint32_t partitions = PartitionsOf(tables, o);
-			const std::size_t objectDraws = partitions ? static_cast<std::size_t>(std::popcount(partitions)) : 1;
-			const bool slot = kept || r.pairs.contains(key) || !r.freeSlots.empty() || r.slotCount < in.addresses.recordCapacity / 2;
+			// Past the region's share of the inputs it stays with the loop. Its draws need no share (the sequence buffer holds every
+			// draw the scene can produce), nor its pair a slot (the pair's rows are the scene's).
 			const std::size_t inputLimit = wholeScene ? kMaxInputs - kLoopReserve : kMaxInputs / 2;
-			const std::size_t drawLimit = wholeScene ? kMaxDraws - kLoopReserve : kMaxDraws / 2;
-			if (r.inputs.Size() >= inputLimit || r.draws + objectDraws > drawLimit || !slot)
+			if (r.inputs.Size() >= inputLimit)
 				return;
 			i = r.Add(o);
 			r.pairOf.push_back(key);
@@ -1158,8 +833,6 @@ namespace DCLF::Draws
 				state.first = pipelineBlocks[pipeline].setIndex;
 				changedPipelines.push_back(pipeline);
 			}
-		if (!kept)
-			records.resize(r.slotCount);
 		std::vector<std::uint64_t> changedPairs;
 		currentObject = ~0u;
 		for (auto& [key, pair] : r.pairs) {
@@ -1170,12 +843,8 @@ namespace DCLF::Draws
 				ObjectRecord object{};
 				object.materialIndex = static_cast<std::uint32_t>(key >> 32);
 				object.pipelineIndex = pipeline;
-				if (kept) {
-					slot = AssembleRecord(~0u, object, pipelineBlocks[pipeline], kNoRecord);
-					ok = slot != kNoRecord;
-				} else {
-					ok = AssembleRecord(~0u, object, pipelineBlocks[pipeline], pair.slot) == pair.slot;
-				}
+				slot = AssembleRecord(~0u, object, pipelineBlocks[pipeline]);
+				ok = slot != kNoRecord;
 			}
 			if (ok != pair.ok || (ok && slot != pair.slot)) {
 				pair.ok = ok;
@@ -1418,22 +1087,19 @@ namespace DCLF::Draws
 			Skipped(Skip::Geometry);
 			return;
 		}
-		// The draw cap: BuildDraws writes into the first half of the sequence buffer, and the count
-		// is ExecuteIndirect's maxCount. Decals have their own ranges.
-		const std::size_t objectDraws = partitions ? static_cast<std::size_t>(std::popcount(partitions)) : 1;
-		if (!decalGroup && sequences.size() + regionDraws + objectDraws > kMaxDraws) {
-			Skipped(Skip::Capacity);
-			return;
-		}
-		const std::uint32_t recordIndex = AssembleRecord(o, object, blocks, kNoRecord);
+		// No draw cap: the sequence buffer's draws range holds every draw the scene can produce (ReserveMainSequences).
+		const std::uint32_t recordIndex = AssembleRecord(o, object, blocks);
 		if (recordIndex == kNoRecord)
 			return;
+		if (bindlessParity)
+			CheckBindless(o, object, blocks);
 		// The CPU template of what BuildDraws writes (checked with CS_DCLF_BUILD_PARITY).
 		Mark(2);
 		auto sequence = tables.draws[o];
 		sequence.pipelineIndex = blocks.setIndex;
 		sequence.objectIndex = o;
-		sequence.bindingsAddress = in.addresses.records + std::uint64_t(recordIndex) * sizeof(DrawBindings);
+		sequence.pipelineRowAddress = in.addresses.pipelineRows + std::uint64_t(recordIndex >> kRowPipelineShift) * kPipelineRowBytes;
+		sequence.materialRowAddress = in.addresses.records + std::uint64_t(recordIndex & kRowMaterialMask) * kMaterialRowBytes;
 		if (streamIndex != ~0u)
 			SetSequenceStream(sequence, tables, o, in.addresses.facePositions);
 		if (decalGroup) {
@@ -1529,31 +1195,15 @@ namespace DCLF::Draws
 		if (in.addresses.facePositions)
 			out.faceStreams = tables.faceStreams;
 		UpdateBones(boneStore, in.tablesHeld.bones, tables, in.tablesGeneration, out.bones);
-		if (kept) {
-			out.persistent = true;
-			out.keptConstants = kept->constants.View();
-			out.keptRecords = kept->records.View();
-			out.patchMasks = kept->patchMasks;
-			out.recordsHeld = static_cast<std::uint32_t>(kept->records.Size() - kept->recordFree.size());
-			out.blocksWritten = kept->blocksWritten;
-			out.recordsWritten = kept->recordsRewritten;
-			++cache->persistentBuilds;
-			cache->persistentBlocks += kept->blocksWritten;
-			cache->persistentRecords += kept->recordsRewritten;
-			if (PersistentParityEnabled() && ParityDue(frameNumber)) {
-				MainPayload reference;
-				BuildMainPayload(in, tables, lookups, reference);
-				CheckPersistentBindings(out, reference, *cache, base, in.frameTextures, cache->persistentParityChecks, cache->persistentParityMismatches,
-					cache->persistentParityFirst);
-			}
-		}
+		out.materialRows = rows.material.View();
+		out.pipelineRows = rows.pipeline.View();
 		Mark(5);
 	}
 
-	void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out,
+	void BuildMainPayload(const MainInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, MainPayload& a_out, MainRows& a_rows,
 		BuildCache* a_cache, ObjectRecordStore* a_objects, BonesStore* a_bones, GeometryStore* a_geometries)
 	{
-		MainBuild(a_in, a_tables, a_lookups, a_out, a_cache, a_objects, a_bones, a_geometries).Run();
+		MainBuild(a_in, a_tables, a_lookups, a_out, a_rows, a_cache, a_objects, a_bones, a_geometries).Run();
 	}
 }
 

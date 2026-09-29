@@ -83,6 +83,71 @@ namespace DCLF::Draws
 		++growths;
 		return true;
 	}
+
+	namespace
+	{
+		/** @brief The largest max count one indirect draw may have on this device (IndirectCommandsFeatureInfo::maxSequenceCount). */
+		std::uint32_t DeviceMaxSequences()
+		{
+			static const std::uint32_t max = [] {
+				::IndirectCommandsFeatureInfo indirect{};
+				auto* host = RenderGraphRuntime::Get().Host();
+				if (!host || host->GetDesc().device.QueryFeatureInfo(&indirect.header) != rhi::Result::Ok)
+					return 0u;
+				logger::info("[DCLF] indirect draws: up to {} sequences per call", indirect.maxSequenceCount);
+				return indirect.maxSequenceCount;
+			}();
+			return max;
+		}
+
+		/**
+		 * @brief Every draw the scene's tracked objects can produce: one per object, or one per partition a skin draws. A view's
+		 * draws are a part of it, whatever the culling keeps, so a sequence buffer that holds it holds any epoch's.
+		 */
+		std::uint32_t SceneDrawBound(const SceneStore::Tables& a_tables)
+		{
+			std::uint64_t draws = 0;
+			const std::size_t objects = a_tables.objects.size();
+			const bool partitioned = a_tables.skinPartitions.size() >= objects;
+			for (std::size_t o = 0; o < objects; ++o) {
+				if (a_tables.objects[o].flags & kObjectFree)
+					continue;
+				const std::uint32_t partitions = partitioned ? a_tables.skinPartitions[o] : 0u;
+				draws += partitions ? std::popcount(partitions) : 1;
+			}
+			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
+		}
+
+		/** @brief Room for a_needed, doubling from a_current. */
+		std::uint32_t Doubled(std::uint32_t a_current, std::uint32_t a_needed)
+		{
+			std::uint64_t capacity = std::max(a_current, 1u);
+			while (capacity < a_needed)
+				capacity *= 2;
+			return static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX));
+		}
+
+		/**
+		 * @brief A draw range the device cannot execute in one call, or the sort cannot rank: a hard failure, until the draws
+		 * are split over several calls (2D indexing).
+		 */
+		[[noreturn]] void SequenceLimitFailure(const char* a_what, std::uint32_t a_draws, std::uint32_t a_limit)
+		{
+			const auto message = fmt::format("Drawcall Limit Fix: {} needs {} draws in one indirect draw, over the limit of {}", a_what, a_draws, a_limit);
+			logger::critical("[DCLF] {}", message);
+			spdlog::default_logger()->flush();
+			stl::report_and_fail(message);
+		}
+
+		void CheckSequenceLimits(const char* a_what, std::uint32_t a_draws, bool a_sorted)
+		{
+			const std::uint32_t device = DeviceMaxSequences();
+			if (device && a_draws > device)
+				SequenceLimitFailure(a_what, a_draws, device);
+			if (a_sorted && a_draws > kSortRankLimit)
+				SequenceLimitFailure(a_what, a_draws, kSortRankLimit);
+		}
+	}
 }
 
 namespace DCLF
@@ -117,20 +182,25 @@ namespace DCLF
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<Resources>();
 		state->constants = DeviceBuffer(kConstantBytes, "cs.dclf.constants");
-		state->recordCapacity = kMaxRecordsDeduplicated;
-		state->records = DeviceBuffer(std::uint64_t(state->recordCapacity) * sizeof(DrawBindings), "cs.dclf.records");
-		state->constantsDepth = DeviceBuffer(kDepthConstantBytes, "cs.dclf.constants-depth");
-		state->recordsDepth = DeviceBuffer(std::uint64_t(state->recordCapacity) * sizeof(DrawBindings), "cs.dclf.records-depth");
+		// The rows both segments' draws name (MainRows): grown before each epoch to the scene's material and pipeline slots.
+		const bool smallRows = SwitchValue(Switch::TableStart) == "small";
+		if (!state->materialRows.Create(kMaterialRowBytes, smallRows ? 4u : 1024u, "cs.dclf.material-rows") ||
+			!state->pipelineRows.Create(kPipelineRowBytes, smallRows ? 4u : 256u, "cs.dclf.pipeline-rows")) {
+			logger::error("[DCLF] The main rows have no device address");
+			return false;
+		}
 		// Structured rather than raw, because the shaders read it through an SRV at t127 instead of
 		// through a device address the way the constants and the binding records are read.
 		state->objects = StructuredBuffer(kMaxObjects, sizeof(BindlessObject), "cs.dclf.objects", state->objectsIndex);
 		state->bones = StructuredBuffer(kMaxBoneRows, 16, "cs.dclf.bones", state->bonesIndex);
 		state->facePositions = DeviceBuffer(std::uint64_t(kFacePositionVertices) * 16, "cs.dclf.face-positions");
 		state->facePositionsAddress = AddressOf(device, *state->facePositions);
-		// Twice kMaxDraws: phase 1 and the colour segment write the first half, phase 2 the second. The
-		// CPU records where phase 2's draw starts, so the two need ranges fixed in advance rather than
-		// one range shared through an atomic counter.
-		state->sequences = CreateWords(std::uint64_t(kSequenceSlots) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences");
+		// The draws' range, phase 2's and the decal groups' (GpuLayouts.h, SequenceSlots), grown before each epoch to hold every
+		// draw the scene can produce (ReserveMainSequences).
+		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
+		state->sequenceDraws = smallTables ? 64u : kInitialSequenceDraws;
+		state->sequenceDecals = smallTables ? 16u : kInitialDecalDraws;
+		state->sequences = CreateWords(SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence) / 4, true, "cs.dclf.sequences");
 		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
 		// One word per object in the frame's tables: what the depth segment's culling decided, read by
 		// the colour segment so that it draws exactly the same set.
@@ -186,9 +256,9 @@ namespace DCLF
 		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), host->FrameSlots());
 		// The phase-1 and colour draws executed grouped by pipeline: BuildDraws appends in whatever order its threads
 		// finish, which made nearly every sequence of the indirect draw switch pipeline.
-		state->sort = DrawSort::Create(device);
+		state->sort = DrawSort::Create(device, state->sequenceDraws);
 		if (BuildParityEnabled())
-			state->sequencesD3D11 = WrapWords(*state->sequences, std::uint64_t(kSequenceSlots) * sizeof(DrawSequence));
+			state->sequencesD3D11 = WrapWords(*state->sequences, SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence));
 		if (!SwitchValue(Switch::GBufferProbe).empty()) {
 			state->probe = DeviceBuffer(std::uint64_t(kProbeSlots) * kProbeSlotBytes, "cs.dclf.gbuffer-probe");
 			state->probeD3D11 = WrapWords(*state->probe, std::uint64_t(kProbeSlots) * kProbeSlotBytes);
@@ -200,12 +270,9 @@ namespace DCLF
 			state->visibilityD3D11 = WrapWords(*state->visibility, kMaxObjects * sizeof(std::uint32_t));
 		state->frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
 		state->constantsAddress = AddressOf(device, *state->constants);
-		state->recordsAddress = AddressOf(device, *state->records);
-		state->constantsDepthAddress = AddressOf(device, *state->constantsDepth);
-		state->recordsDepthAddress = AddressOf(device, *state->recordsDepth);
 		state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 
-		if (!state->constantsAddress || !state->recordsAddress || !state->frameConstantsAddress) {
+		if (!state->constantsAddress || !state->frameConstantsAddress) {
 			logger::error("[DCLF] Draw data buffers have no device address");
 			return false;
 		}
@@ -304,6 +371,59 @@ namespace DCLF
 		return true;
 	}
 
+	void IndirectDraws::Impl::ReserveMainSequences(const SceneStore::Tables& a_tables)
+	{
+		if (!resources)
+			return;
+		auto& r = *resources;
+		const std::uint32_t draws = SceneDrawBound(a_tables);
+		std::uint32_t decals = 0;
+		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+			decals = std::max(decals, a_tables.decalCount[group]);
+		CheckSequenceLimits("the main pass", draws, true);
+		CheckSequenceLimits("a decal group", decals, false);
+		// The rows: one per material and pipeline slot, with a quarter more so the tables grow ahead of the scene.
+		const auto materialSlots = static_cast<std::uint32_t>(a_tables.materials.size()), pipelineSlots = static_cast<std::uint32_t>(a_tables.pipelines.size());
+		if (r.materialRows.Reserve(materialSlots + materialSlots / 4))
+			r.materialRowsHeld = 0;  // a new backing holds nothing
+		if (r.pipelineRows.Reserve(pipelineSlots + pipelineSlots / 4))
+			r.pipelineRowsHeld = 0;
+		if (draws <= r.sequenceDraws && decals <= r.sequenceDecals)
+			return;
+		const std::uint32_t newDraws = Doubled(r.sequenceDraws, draws), newDecals = Doubled(r.sequenceDecals, decals);
+		const std::uint64_t slots = SequenceSlots(newDraws, newDecals);
+		// New backings for the same graph resources: the epochs rewrite them whole, and the old ones are released through ORG's
+		// deletion queue once the GPU is done with them.
+		r.sequences->ResizeStructured(static_cast<std::uint32_t>(slots * sizeof(DrawSequence) / 4));
+		if (r.sort) {
+			r.sort->staging->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(newDraws) * sizeof(DrawSequence) / 4));
+			r.sort->ranks->ResizeStructured(newDraws);
+		}
+		if (r.sequencesD3D11)
+			r.sequencesD3D11 = WrapWords(*r.sequences, slots * sizeof(DrawSequence));
+		logger::info("[DCLF] main sequences: {} draws and {} per decal group grown to {} and {} ({} KB)", r.sequenceDraws, r.sequenceDecals, newDraws, newDecals,
+			slots * sizeof(DrawSequence) / 1024);
+		r.sequenceDraws = newDraws;
+		r.sequenceDecals = newDecals;
+	}
+
+	void IndirectDraws::Impl::ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first)
+	{
+		if (!shadow)
+			return;
+		const std::uint32_t draws = SceneDrawBound(a_tables);
+		CheckSequenceLimits("a shadow view", draws, false);
+		for (std::uint32_t slot = a_first; slot < std::min(a_first + a_slots, kMaxShadowViews); ++slot) {
+			auto& capacity = shadow->sequenceDraws[slot];
+			if (draws <= capacity)
+				continue;
+			const std::uint32_t grown = Doubled(capacity, draws);
+			shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(grown) * sizeof(DrawSequence) / 4));
+			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, std::uint64_t(grown) * sizeof(DrawSequence) / 1024);
+			capacity = grown;
+		}
+	}
+
 	bool IndirectDraws::Impl::SetupShadow()
 	{
 		if (shadow)
@@ -326,7 +446,10 @@ namespace DCLF
 		state->bones = StructuredBuffer(kMaxBoneRows, 16, "cs.dclf.shadow.bones", state->bonesIndex);
 		state->facePositions = DeviceBuffer(std::uint64_t(kFacePositionVertices) * 16, "cs.dclf.shadow.face-positions");
 		for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-			state->sequences[s] = CreateWords(std::uint64_t(kMaxDraws) * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str());
+			// Small: a slot's buffer grows to the scene's draws the first time a view uses it (ReserveShadowSequences), so the
+			// slots no frame uses stay small.
+			state->sequenceDraws[s] = 64u;
+			state->sequences[s] = CreateWords(std::uint64_t(state->sequenceDraws[s]) * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str());
 			state->count[s] = CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str());
 			state->countD3D11[s] = WrapWords(*state->count[s], kCountWords * sizeof(std::uint32_t));
 		}

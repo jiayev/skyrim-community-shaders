@@ -116,6 +116,13 @@ old backing goes through ORG's deletion queue. A new backing holds nothing, so e
 past the capacity waits one frame and its casters stay the engine's meanwhile. `CS_DCLF_TABLE_START=small` starts the
 table at 4 rows, to exercise the growth.
 
+**Draw outputs (done).** No sequence buffer has a fixed draw capacity: each is grown before its epoch to hold every draw
+the scene's tracked objects can produce (`SceneDrawBound`), through `Buffer::ResizeStructured`
+(`Impl::ReserveMainSequences`, `ReserveShadowSequences`). The main buffer's ranges (phase 1 and colour, phase 2, one per
+decal group) travel to `BuildDrawsCS` and `SortSequencesCS` in their constants (`BuildDrawsConstants::phaseTwoBase`,
+`decalBase`, `decalStride`). Each indirect draw's max count is its epoch's own draws, grown as a power of two so the
+recording settles. A bound past the device's max sequence count, or the sort's 2^20 ranks, is a hard failure.
+
 **Next.** The same split for the main pass (a pipeline row and a material row per draw, a frame record, the tables
 shared by the Z-prepass and colour segments); one set of object, bone, geometry and face tables for the main and shadow
 epochs, grown rather than capped; draw outputs sized per epoch.

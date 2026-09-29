@@ -76,6 +76,56 @@ times. The soft shadow rose from 0.62 to 0.76 over the run, as the sun moved. DC
 on the same curve, for example DCLF 0.630, native 0.624 and 0.651, DCLF 0.717 to 0.760, native 0.747, with no offset
 between them.
 
+## Resolved: fixed draw limits (16,384 per view, 2,048 per decal group)
+
+**What they did.** Every sequence buffer held a compile-time `kMaxDraws` (16,384) draws, and each indirect draw's max
+count was clamped to it. The main pass skipped draws past it on the CPU (`Skip::Capacity`) and capped its resident
+region's share; the decal groups clamped at 2,048; a shadow view's max count came from its inputs, not its draws (a
+skin draws once per partition), and a view with more draws dropped the tail while still claiming the casters.
+
+**Fix (2026-09-28).** No draw limit: every sequence buffer (the main pass's, and each shadow view slot's) is grown on
+the render thread before its epoch to hold every draw the scene's tracked objects can produce (`SceneDrawBound`: one
+per object, or one per partition of a skin), and the main buffer's ranges (phase 1, phase 2, each decal group) are passed
+to `BuildDrawsCS` and `SortSequencesCS` in their constants instead of fixed in the shaders. A view's max count is its
+mode's own draws (`ShadowPayload::modeDraws`). A bound over the device's `maxIndirectSequenceCount` (4,194,303 on the RTX
+3090 Ti; BasicRHI now reports it as `IndirectCommandsFeatureInfo::maxSequenceCount`), or over the sort's rank field
+(2^20, the key now takes 12 bits and the rank 20), is a hard failure (`stl::report_and_fail`) until the draws are split
+over several calls. At the new save the bound is past 16,384: the buffers grew to 32,768 on the first frame.
+
+**Validated.** `CS_DCLF_TABLE_START=small` (64 draws, 16 per decal group) grew to 32,768 and 256 on the first frame;
+`BuildDraws` parity 18 of 18 and decal parity 158 slots, 0 differ; set parity no damage, nothing withheld and drawn by
+nobody; persistent parity 0 differ; `SKYLIGHT_PARITY` in range.
+
+## The render graph's upload submission failed once (intermittent)
+
+**Evidence.** One `CS_DCLF_TABLE_START=small` run (`draws-small`, 2026-09-28) disabled the graph 18 seconds in:
+`Async epochs could not submit their uploads` (`PersistentGraphHost.cpp`, the upload list's `Submit` returned an error).
+No Aftermath dump was written, so the device was not lost. The same message ended `step24-still-off` (an earlier build,
+before the growable tables), and the rerun with the same switches (`draws-small2`) ran clean.
+
+A second occurrence (`fixclean-parity`, 2026-09-29, the full featureset with the parity switches on) named the result:
+`rhi::Result 17`, **`InvalidArgument`**, 10 seconds after the first epoch. So it is not a transient queue error: the
+upload list's `Submit` rejected something in what the epoch handed it.
+
+**Next step.** Find which argument check in BasicRHI's upload submission returns `InvalidArgument`, and log what it
+rejected (the target, the offset and size against the target's size) where it does.
+
+## Resolved: device loss in every DCLF draw pass after the split records (Phase 3)
+
+**Symptom.** With Phase 3's per-draw push data (the pipeline row's and material row's addresses and the object word,
+20 bytes), the Z-prepass, colour and shadow passes lost the device within a second: `DMA_PageFault`, no fault address,
+usually no active shader, at a rate rising with the draws executed.
+
+**Cause.** A generated commands push data token over 16 bytes, on NVIDIA (GA102, driver 616.56). Isolated on top of the
+last committed state: a 12- or 16-byte token was healthy and a 20-byte one lost the device, whatever the shaders read;
+the same 20 bytes as two tokens was healthy. Neither the extension nor the device's limits state a bound.
+
+**Fix.** BasicRHI's Vulkan backend splits a `Constant` indirect argument into push data tokens of at most 16 bytes
+(`kMaxPushDataTokenBytes`, `rhi_vulkan.cpp`; its README's backend conventions). DCLF's signature and stream layout are
+unchanged. Validated with the full featureset (two runs) and with the build, persistent and set parity checks on (two
+runs): no device loss, `BuildDraws` and decal parity OK, the persistent tables 0 differ, set parity without damage. (One
+of the parity runs hit the intermittent upload failure above, which disables the graph without a device loss.)
+
 ## Parity checks that already fail on the baseline
 
 Found while validating the code cleanup (Stages 0-4 of the cleanup plan), by running every parity check on

@@ -50,12 +50,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 	// read holds what the constant buffer path would have given them, which no screenshot can say.
 	if ((frame % kReportInterval) == 0) {
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
-		if (draws.recordParityChecks) {
-			if (draws.recordParityMismatches)
-				logger::warn("[DCLF] record dedup parity MISMATCH: {} of {} rebuilt records differ from their pair's", draws.recordParityMismatches, draws.recordParityChecks);
-			else
-				logger::info("[DCLF] record dedup parity OK: {} rebuilt records match their pair's byte for byte", draws.recordParityChecks);
-		}
+		if (draws.rowTableConflicts)
+			logger::warn("[DCLF] main rows: {} (material, pipeline) pairs met a pipeline whose constant tables differ from their material row's; those draws stay native",
+				draws.rowTableConflicts);
 		if (draws.bindlessParityChecks) {
 			if (draws.bindlessParityMismatches)
 				logger::warn("[DCLF] bindless record parity MISMATCH: {} of {} components differ", draws.bindlessParityMismatches, draws.bindlessParityChecks);

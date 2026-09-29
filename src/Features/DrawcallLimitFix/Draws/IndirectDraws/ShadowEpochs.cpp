@@ -60,6 +60,7 @@ namespace DCLF
 			out.target = a_target;
 			out.slice = a_view.slice;
 			out.materialRows = a_resources.materialRows.address;
+			out.sequenceDraws = a_resources.sequenceDraws[a_slot];
 			const std::uint64_t base = a_resources.constantsAddress;
 			const std::uint64_t viewBlock = base + std::uint64_t(a_slot) * kShadowViewSlotBytes;
 			auto push = [&](std::uint32_t a_word, std::uint64_t a_address) {
@@ -73,6 +74,18 @@ namespace DCLF
 			push(kShadowPushSharedData, a_payload.sharedDataAddress);
 			push(kShadowPushFeatureData, a_payload.featureDataAddress);
 			return out;
+		}
+
+		/**
+		 * @brief A view's max count: its mode's draws, within its slot's sequence buffer, which holds every draw the scene can
+		 * produce (ReserveShadowSequences, before the epoch). A mode past it is a defect of that bound, never draws to drop.
+		 */
+		std::uint32_t ShadowViewCapacity(std::uint32_t a_previous, std::uint32_t a_draws, std::uint32_t a_slotDraws)
+		{
+			if (a_draws > a_slotDraws)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: a shadow view's {} draws past its sequence buffer's {} (the scene's draw bound missed them)",
+					a_draws, a_slotDraws));
+			return GrowCapacity(a_previous, a_draws, a_slotDraws);
 		}
 
 		/**
@@ -307,6 +320,7 @@ namespace DCLF
 		auto& payload = impl->shadowPayload;
 		const auto& view = impl->skyView;
 		const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(kSkyMode));
+		impl->ReserveShadowSequences(store.GetTables(), 1, kSkySlot);
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
 			resources->skyFrame.store(nullptr, std::memory_order_release);
 			CommitUploads uploads(impl->commitStagedPool);
@@ -328,7 +342,8 @@ namespace DCLF
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
 			const auto& previousShape = resources->skyPublished;
-			const std::uint32_t capacity = GrowCapacity(previousShape && !previousShape->views.empty() ? previousShape->views.front().capacity : 0u, inputCount, kMaxDraws);
+			const std::uint32_t capacity = ShadowViewCapacity(previousShape && !previousShape->views.empty() ? previousShape->views.front().capacity : 0u,
+				payload.modeDraws[kSkyMode], resources->sequenceDraws[kSkySlot]);
 			frame->views.push_back(FrameViewOf(view, kSkySlot, kSkyMode, kSkyDepthTarget, capacity, *resources, payload));
 			PublishShape(std::move(frame), resources->skyPublished, resources->skyFrame, resources->shapeGenerations);
 		}, impl->shadowExecutionOwner);
@@ -405,6 +420,7 @@ namespace DCLF
 			return;
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 
+		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(pending.size()));
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			struct BodyTimer
@@ -581,7 +597,8 @@ namespace DCLF
 					for (const auto& previous : previousShape->views)
 						if (previous.slot == slot)
 							previousCapacity = previous.capacity;
-				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex, GrowCapacity(previousCapacity, inputCount, kMaxDraws),
+				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex,
+					ShadowViewCapacity(previousCapacity, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
 					*resources, payload));
 			}
 			// Staged, only the view head this epoch wrote goes up from here; the rest of the arena is the worker's.

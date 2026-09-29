@@ -42,12 +42,14 @@ struct DCLFObjectRecord
 	float4 DCLFSkinPerGeometry;
 };
 
-// The indirect draw's push data. The first two words are the binding record's address, which the pipeline
-// layout consumes to resolve this draw's buffers and descriptors; only the object word is read here.
+// The indirect draw's push data (DrawPipelines.h, kDrawPushWords). The first four words are its rows' addresses (the
+// pipeline row's, then the material row's), which the pipeline layout consumes to resolve this draw's buffers and
+// descriptors; only the object word is read here.
 cbuffer DCLFPushData : register(b190)
 {
-	uint2 DCLFRecordAddress : packoffset(c0.x);
-	uint DCLFObjectWord : packoffset(c0.z);
+	uint2 DCLFPipelineRowAddress : packoffset(c0.x);
+	uint2 DCLFMaterialRowAddress : packoffset(c0.z);
+	uint DCLFObjectWord : packoffset(c1.x);
 };
 
 // The object word: the object's index, and in the top bit kObjectSunMiss (Records.h), which BuildDrawsCS sets on
