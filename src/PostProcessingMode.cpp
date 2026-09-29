@@ -2,6 +2,7 @@
 
 #include "Features/Effects11.h"
 #include "Features/Effects11/EffectManager.h"
+#include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -39,6 +40,9 @@ namespace PostProcessingMode
 		if (effects11Available)
 			globals::features::effects11.SetUseEffect(mode == Mode::Effects11);
 		globals::features::postProcessing.bypass = mode != Mode::PostProcessing;
+		// Switching to Post Processing always starts linear; running without it is a manual opt-out.
+		if (mode == Mode::PostProcessing)
+			globals::features::linearLighting.settings.enableLinearLighting = true;
 	}
 
 	void DrawSelector()
@@ -61,7 +65,8 @@ namespace PostProcessingMode
 		if (CanUseEffects11())
 			addSegment(Mode::Effects11, T("ui.post_processing_mode.effects11", "Effects 11"));
 
-		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected))
+		// Re-clicking the active mode must not undo a manual Linear Lighting opt-out.
+		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected) && modes[selected] != current)
 			Set(modes[selected]);
 		Util::AddTooltip(T("ui.post_processing_mode.tooltip",
 			"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
