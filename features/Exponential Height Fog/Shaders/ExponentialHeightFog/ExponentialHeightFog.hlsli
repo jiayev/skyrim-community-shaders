@@ -299,7 +299,7 @@ namespace ExponentialHeightFog
 
 		fogColor += directionalInscattering;
 		const float opacity = 1.0f - expFogFactor;
-		float4 analyticalFog = float4(opacity > 1e-6f ? fogColor / opacity : 0.0f.xxx, opacity);
+		float4 analyticalFog = float4(fogColor, opacity);
 		if (!applyVolumetricFog) {
 			return analyticalFog;
 		}
