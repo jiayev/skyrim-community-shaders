@@ -179,6 +179,13 @@ takes the per-frame path and decides the entry rule on the CPU, with the same re
 is a `BuildDrawsCS` change). The view rasterizer states (`DrawPipelines::kMaxShadowRasterStates`, 15, packed in 16-bit
 masks): past it the view stays native.
 
+**Object rows (measured, 2026-09-29).** An object's row (`BindlessObject`, `DCLFObjectRecord`) is 256 bytes, padded from
+208 so the table stays viewable as an array of constant-buffer blocks. The shaders read it as the structured buffer at
+`t127`, indexed by the draw's object word. Reading it as a constant buffer instead (a per-draw push address, `b189`,
+written by `BuildDrawsCS`; 8 push words and a 100-byte `DrawSequence`) was built and A/B'd on the RTX 3090 Ti, with the
+same rows and the camera turning, two 60 s runs each: colour 1.03 against 1.02 ms, shadow views 1.98 against 1.94 ms,
+Z-prepass depth 0.286 against 0.277 ms. The constant buffer was no faster on any pass, so it was not kept.
+
 ## Ownership: how the engine stops drawing DCLF's objects
 
 An object is withheld from the engine only after DCLF has drawn it. The claims are what the last epoch drew.

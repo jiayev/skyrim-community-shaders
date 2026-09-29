@@ -17,10 +17,24 @@ namespace DCLF
 
 	void IndirectDraws::PublishClaims()
 	{
+		auto& capture = PassCapture::Get();
+		// Without the render graph (it failed, or is not running) no shadow epoch draws, and the shadow claims are only
+		// republished by one that does: the last ones would withhold their casters from views the engine now draws.
+		if (!GpuResources::Get().Enabled())
+			for (std::uint32_t mode = 0; mode < PassCapture::kShadowModes; ++mode)
+				capture.PublishShadowClaims(mode, nullptr);
 		if (!ActiveToggles().ownership)
 			return;
 		const auto frame = SceneStore::Get().GetFrame();
-		auto& capture = PassCapture::Get();
+		// No colour epoch committed this frame (the render graph failed or is not running, or the epoch was not ready), so DCLF
+		// drew nothing: every drawn slot is undrawn, which unclaims its geometry from the next frame on the usual path (below),
+		// and the next colour build sends every slot again.
+		if (impl->drawnCommitFrame != frame) {
+			for (std::uint32_t slot = 0; slot < impl->slotDrawn.size(); ++slot)
+				if (impl->slotDrawn[slot].drawn)
+					impl->ApplyDrawn(slot, nullptr, false, frame);
+			impl->drawnResync = true;
+		}
 
 		// Hole detector. Everything claimed when this frame's passes were registered should have been
 		// drawn by the colour epoch that has just run; the native loop was told not to draw it. Counted on

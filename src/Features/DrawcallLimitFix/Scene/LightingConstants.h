@@ -183,8 +183,10 @@ namespace DCLF
 		// Advanced Skin's SkinPerGeometry (PS b7): the owning actor's wetness (SceneStore::Tables::skinWetness),
 		// zero for everything else. Per object like the rest, so the binding record stays per (material, pipeline).
 		float skinPerGeometry[4];
+		// To 256 bytes: each row is a constant-buffer block of its own (DCLFObjects.hlsli), bound per draw at its address.
+		std::uint32_t reserved[12]{};
 	};
-	static_assert(sizeof(BindlessObject) == 208);
+	static_assert(sizeof(BindlessObject) == 256);
 
 	/**
 	 * @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group. World and

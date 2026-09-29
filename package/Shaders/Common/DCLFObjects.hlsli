@@ -40,6 +40,7 @@ struct DCLFObjectRecord
 	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read
 	// when DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
 	float4 DCLFSkinPerGeometry;
+	uint4 DCLFReserved[3];  // to 256 bytes: a constant-buffer block a row
 };
 
 // The indirect draw's push data (DrawPipelines.h, kDrawPushWords). The first four words are its rows' addresses (the
@@ -57,6 +58,8 @@ cbuffer DCLFPushData : register(b190)
 static const uint DCLFObjectIndex = DCLFObjectWord & 0x7FFFFFFFu;
 static const bool DCLFSunMiss = (DCLFObjectWord & 0x80000000u) != 0;
 
+// The object rows, by the draw's object index. Read as a structured buffer: reading the row as a constant buffer at its
+// address (a per-draw push address) measured no faster on NVIDIA (dclf-architecture.md, "Object rows").
 StructuredBuffer<DCLFObjectRecord> DCLFObjects : register(t127);
 // The epoch's row buffer (IndirectDraws: kBonesBufferRegister): every skinned object's bone palette
 // rows end to end, current then previous, and after them the per-object extras rows (DCLFExtraOffset).
