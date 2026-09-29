@@ -1375,12 +1375,17 @@ namespace SIE
 
 		std::wstring GetDiskPath(const RE::BSShader& shader, uint32_t descriptor, ShaderClass shaderClass)
 		{
+			const std::string_view name = shader.fxpFilename;
+			if (name == "RunGrass" &&
+				(descriptor & 0b1111) == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepthStencil)) {
+				descriptor = (descriptor & ~0b1111u) | static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth);
+			}
+
 			std::array<D3D_SHADER_MACRO, 64> defines{};
 			GetShaderDefines(shader, descriptor, std::span{ defines });
 			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString + ";" + MergeDefinesString(defines, true));
 			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
 
-			const std::string_view name = shader.fxpFilename;
 			const std::wstring wname(name.begin(), name.end());
 			switch (shaderClass) {
 			case ShaderClass::Pixel:
@@ -1462,15 +1467,25 @@ namespace SIE
 				bool diskCacheOutdated = false;
 				if (cache.UseFileWatcher()) {
 					// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
-					auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
-					diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
-					if (diskCacheOutdated)
-						logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					// An unreadable timestamp means freshness can't be verified; treat it as a miss.
+					std::error_code ec;
+					const auto diskCacheFileTime = std::filesystem::last_write_time(diskPath, ec);
+					if (ec) {
+						diskCacheOutdated = true;
+						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+					} else {
+						auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(diskCacheFileTime);
+						diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
+						if (diskCacheOutdated)
+							logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					}
 				} else if (cache.IsSkipUnchangedShaders()) {
 					// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
 					std::error_code ec;
 					const auto diskCacheTime = std::filesystem::last_write_time(diskPath, ec);
 					if (ec) {
+						// An unreadable timestamp means freshness can't be verified; treat it as a miss.
+						diskCacheOutdated = true;
 						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
 					} else {
 						const std::wstring shaderSourcePath = GetShaderPath(

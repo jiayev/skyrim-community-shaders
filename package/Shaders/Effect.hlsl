@@ -708,6 +708,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 	bool inWorld = Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld;
 
+#			if defined(EFFECTS11)
+	float clusteredPointScale = SharedData::enbSettings.Enable ? SharedData::enbSettings.ParticlePointLightingInfluence : 1.0;
+#			else
+	float clusteredPointScale = 1.0;
+#			endif
+
 	uint clusterIndex = 0;
 	if (inWorld && LightLimitFix::GetClusterIndex(screenUV, viewPosition.z, clusterIndex)) {
 		lightCount = LightLimitFix::lightGrid[clusterIndex].lightCount;
@@ -733,7 +739,7 @@ PS_OUTPUT main(PS_INPUT input)
 #			endif
 
 			float3 lightColor = Color::PointLight(light.color.xyz) * intensityMultiplier * 0.5 * light.fade * Color::EffectLightingScale;
-			propertyColor += lightColor;
+			propertyColor += lightColor * clusteredPointScale;
 		}
 	}
 

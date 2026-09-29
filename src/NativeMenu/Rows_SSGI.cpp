@@ -8,7 +8,7 @@
 #include <array>
 #include <optional>
 
-#define I18N_KEY_PREFIX "native_menu.ssgi."
+#define I18N_KEY_PREFIX "feature.screen_space_gi."
 
 namespace
 {
@@ -58,12 +58,12 @@ namespace
 	std::vector<std::string> SSGIQualityOptions()
 	{
 		return {
-			T(TKEY("preset_ao_only"), "AO Only"),
-			T(TKEY("preset_low"), "Low"),
-			T(TKEY("preset_standard"), "Standard"),
-			T(TKEY("preset_extreme"), "Extreme"),
-			T(TKEY("preset_reference"), "Reference"),
-			T(TKEY("preset_custom"), "Custom"),
+			T(TKEY("ao_only"), "AO only"),
+			T(TKEY("low"), "Low"),
+			T(TKEY("standard"), "Standard"),
+			T(TKEY("extreme"), "Extreme"),
+			T(TKEY("reference"), "Reference"),
+			T(TKEY("custom"), "Custom"),
 		};
 	}
 

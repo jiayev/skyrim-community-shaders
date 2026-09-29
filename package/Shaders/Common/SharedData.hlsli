@@ -279,6 +279,9 @@ namespace SharedData
 		uint UseProceduralGradientWeights;
 		float ProceduralGradientWeightCurve;
 
+		float LightSpriteCurve;
+		float3 pad1;
+
 		float ParticleIntensity;
 		float ParticleLightingInfluence;
 		float ParticleAmbientInfluence;
@@ -367,7 +370,9 @@ namespace SharedData
 	struct TruePBRSettings
 	{
 		float VertexAOStrength;
-		uint3 pad;
+		uint EnableMicroShadows;
+		float MicroShadowStrength;
+		uint pad;
 	};
 
 	struct PostProcessingSettings
@@ -413,6 +418,12 @@ namespace SharedData
 		float CubemapToF0Multiplier;
 		float ComplexMaterialF0Multiplier;
 		float pad;
+	};
+
+	struct HorizonFixSettings
+	{
+		float farWaterDistance;
+		float3 pad;
 	};
 
 	struct PhysSkyData
@@ -519,6 +530,7 @@ namespace SharedData
 		SkinData skinData;
 		SSPLSSettings ssplsSettings;
 		VanillaFresnelSettings vanillaFresnelSettings;
+		HorizonFixSettings horizonFixSettings;
 		PhysSkyData physSkyData;
 		PseudoSunBounceSettings pseudoSunBounceSettings;
 	};

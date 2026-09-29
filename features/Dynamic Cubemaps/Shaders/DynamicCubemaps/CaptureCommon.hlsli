@@ -86,7 +86,11 @@ bool SampleCapture(uint3 texel, out float3 position, out float3 color, out float
 
 	float2 sampleUV = FrameBuffer::GetDynamicResolutionAdjustedScreenPosition(uv);
 	float depth = DepthTexture.SampleLevel(LinearSampler, sampleUV, 0);
+#if defined(REFLECTIONS)
+	if (SharedData::GetScreenDepth(depth) <= 16.5)
+#else
 	if (depth == 1.0 || SharedData::GetScreenDepth(depth) <= 16.5)
+#endif
 		return false;
 
 	float4 positionCS = mul(FrameBuffer::CameraViewProjInverse, float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), depth, 1.0));
