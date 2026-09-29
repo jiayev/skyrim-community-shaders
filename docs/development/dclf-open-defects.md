@@ -47,34 +47,34 @@ the image does not change. It is still a parity gap.
 **Fix:** build opaque pipelines from the engine's blend state for their write mode, as decal pipelines
 already do (`DrawPipelines::ReadEngineState`).
 
-## DCLF's draws appear not to carry the TAA / upscaler jitter
+## Resolved: DCLF's draws carry the TAA / upscaler jitter
 
-**Probably explained by the empty samplers; to re-measure.** A sampler that neither filters nor selects
-mips returns the same texel for sub-pixel movement, which is what this measured.
+The earlier evidence was that every G-buffer target DCLF wrote at one road pixel held the same value frame after
+frame while the native draw's moved. That came from the empty sampler descriptors, which return the same texel for
+sub-pixel movement.
 
-**Evidence (inferred).** With `CS_DCLF_TARGET_PROBE` at one road pixel, every G-buffer target DCLF writes
-holds the same value frame after frame (normal, roughness, AO to four decimals), while the native draw's
-values move every frame. The camera is still, so the native variation is the sub-pixel jitter; DCLF's lack
-of it suggests its vertex stage runs without the jitter. The colour epoch replays the Z-prepass's
-vertex-stage constants (`prepassVS`), which come from the native depth pass.
+**Measured (2026-09-28, standing, full featureset).** Under `CS_DCLF_STATS` the colour epoch compares the
+`ViewProj` it packs (VS_PerFrame c8) with other matrices, over 300 epochs:
 
-**Why it matters:** temporal AA and the upscalers accumulate over the jitter sequence, so unjittered objects
-lose their anti-aliasing and resolve detail, and may shimmer against jittered native objects.
+- the same buffer's unjittered matrix (c12): differs by 3.6e-4 on average;
+- the previous epoch's: differs by 5.9e-4 on average, with the camera still, so it moves with the jitter;
+- the b12 the native main pass binds at that moment: identical (0);
+- Community Shaders' cached frame buffer: identical (0).
 
-**Next step:** compare the projection that DCLF's epochs pack (`VS_PerFrame.ViewProj`) with the jittered
-one the native main pass binds, on the same frame.
+DCLF projects with the engine's jittered matrix, bit for bit. The comparison stays in the report ("colour epoch
+ViewProj over 300 epochs").
 
-## The VSM soft shadow differs at the road
+## Resolved: the VSM soft shadow matches native
 
-**To re-measure after the sampler fix:** the VSM lookup samples through `LinearSampler`.
+The earlier reading (DCLF 0.0005, native 1.0 at a road pixel) was taken while every DCLF sampler was an empty
+descriptor, and the VSM lookup samples through `LinearSampler`.
 
-**Evidence.** Pixel shader telemetry (`CS_DCLF_SHADOW_DEBUG_OUTPUT`, `ShadowSampling::GetLightingShadow` at
-the road pixel): DCLF 0.0005, native 1.0, from the same permutation, the same t18 VSM and the same t98
-cascade data (`CS_DCLF_SHADOWS=0`, so the shadow maps match native). It only feeds soft lighting and coat
-terms, so it is not the brightness, and it is not explained yet.
-
-**Next step:** the VSM lookup inputs per pixel: the light-space position, the cascade picked and the moments
-read, native against DCLF.
+**Measured (2026-09-28).** `CS_DCLF_SHADOW_DEBUG_OUTPUT=1` now makes Lighting.hlsl write the sun's shadow terms into the
+Diffuse target, native and DCLF alike: `dirSoftShadow`, `dirVSMDetailedShadow` and `dirDetailedShadow`.
+`CS_DCLF_TARGET_PROBE` read a 64 x 64 block at a still view while `CS_DCLF_TEST_TOGGLE` switched DCLF off and on three
+times. The soft shadow rose from 0.62 to 0.76 over the run, as the sun moved. DCLF's and native's samples interleave
+on the same curve, for example DCLF 0.630, native 0.624 and 0.651, DCLF 0.717 to 0.760, native 0.747, with no offset
+between them.
 
 ## Parity checks that already fail on the baseline
 
@@ -103,16 +103,32 @@ is `CS_DCLF_PERSISTENT_PARITY`'s job, and it says nothing about whether the work
 **Fix.** Compare like with like: either build the reference from the same kept stores (as a snapshot, since
 the build advances them), or compare only the parts that do not depend on them.
 
-### The kept shadow state misses some clamped-cascade inputs
+### Resolved: the kept shadow state missed casters once their materials outnumbered the record slots
 
-**Evidence.** `CS_DCLF_PERSISTENT_PARITY`'s shadow state check: 100-260 of about 556,000 inputs differ per
-interval, and the first is always `object N: mode 1: an input of the per-frame build only`. The kept shadow
-state holds fewer inputs for render mode 1 (clamped) than a per-frame build of the same frame.
+**Evidence (2026-09-28, the new save).** `CS_DCLF_PERSISTENT_PARITY` split the missing inputs by why the kept build
+lacked them: every one was "waiting", with a record slot of 792-799 against a capacity of 512 (`'Symbol'`, `'shoes'`,
+`'HairMaleImperial1'`). The count grew from 8 to 168 per interval as NPCs came into view.
 
-**Why it matters.** Those are casters that the kept build leaves out of a clamped shadow view, so they may be
-missing shadows, unless the per-frame build is the one that is wrong.
+**Cause.** The kept state gives every alpha-tested material of every tracked caster its own record slot: about 800 at
+this save, against the 110-130 a per-frame build of one frame's casters needs. The records were copied into each of
+the 16 view slots (only the view's `b0` and `b12` differed), so their capacity was a compile-time 512 per slot, and a
+slot at 512 or above never became ready: its casters waited for ever and stayed the engine's.
 
-**Next step.** Log the missing objects' names and which kept-state event should have added them.
+**Fix.** The shadow draws' registers were split by what they depend on, so that nothing caps the materials:
+- a material row per slot (`ShadowMaterialRow`, 256 bytes: the Utility vertex shader's `PerMaterial` block and the
+  diffuse's descriptor index), in one table every view reads (`ShadowResources::materialRows`);
+- the view's blocks and the frame record (every other texture and sampler) in push data, once per view
+  (`DrawPipelines.h`, `kShadowPushWords`).
+
+The table grows (`GrowableRows`, `Buffer::ResizeBytes`) on the render thread before the build when the last build
+wanted more rows; a slot past the capacity waits one frame. Kept slots are taken lowest-first, so the table stays
+dense.
+
+**Validated.** Persistent parity 0 differ in every interval, with 797 rows held at this save (it grew once, 256 to 1,024
+rows, and 540 materials waited that one frame). With `CS_DCLF_TABLE_START=small` (4 rows) it grew once to 1,024 and
+stayed at 0 differ. `SKYLIGHT_PARITY` in its usual range (DCLF farther 0, nearer 935-1,398 texels), which checks the new
+layout's diffuse and pushed blocks on the GPU. The broader move away from fixed capacities is planned in
+`dclf-architecture.md` ("Growable tables").
 
 ### Walk parity: the cooking spit's sun entry moves without an event
 

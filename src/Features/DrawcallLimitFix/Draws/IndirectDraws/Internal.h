@@ -68,6 +68,7 @@
 #	include <cstring>
 
 #	include "GpuLayouts.h"
+#	include "GrowableRows.h"
 
 namespace DCLF
 {
@@ -153,7 +154,6 @@ namespace DCLF
 		constexpr std::uint32_t kPerDrawVS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 4) | (1u << 9) | (1u << 10);
 		// b7 is Advanced Skin's SkinPerGeometry: bound per draw, for the actor the engine drew last (kSkinRegister).
 		constexpr std::uint32_t kPerDrawPS = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
-		constexpr std::uint32_t kPerFrameVertexRegister = 12;  // VS_PerFrame (Lighting.hlsl): ViewProj at c8
 		// Bytes per texel, for printing exactly the pixel a readback holds and nothing beyond it.
 		inline std::uint32_t FormatBytes(DXGI_FORMAT a_format)
 		{
@@ -178,8 +178,6 @@ namespace DCLF
 		// The probe's sample points, in the order they happen within a frame.
 		constexpr const char* kProbeFirstLabel = "before z-prepass";
 
-		constexpr std::uint32_t kSharedDataRegister = 5;   // SharedData (SharedData.hlsli), bound by Community Shaders
-		constexpr std::uint32_t kFeatureDataRegister = 6;  // FeatureData, likewise
 		constexpr std::uint32_t kLinearLightingRegister = 8;  // LLPerGeometry: Linear Lighting's per-object emissive multiplier
 		constexpr std::uint32_t kSkinRegister = 7;             // SkinPerGeometry: Advanced Skin's per-object wetness
 		constexpr std::uint32_t kStrictLightDataBytes = 1216;  // LightLimitFix.hlsli StrictLightData (15 lights)
@@ -707,7 +705,9 @@ namespace DCLF
 			float minDepth = 0.0f, maxDepth = 1.0f;
 			std::uint32_t target = 0;  // index into ShadowResources::depth
 			std::uint32_t slice = 0;
-			std::uint64_t recordsAddress = 0;  // the slot's copy of the binding records
+			std::uint64_t materialRows = 0;  // the shadow material rows' address (one table for every view)
+			// The view's push data (DrawPipelines.h, kShadowPushWords): its blocks' addresses, pushed once for its draws.
+			std::array<std::uint32_t, kShadowPushWords> push{};
 
 			bool operator==(const ShadowFrameView&) const = default;
 		};
@@ -757,7 +757,9 @@ namespace DCLF
 		{
 			// The explicit DGC preprocesses' state lists: the shadow views' pass, Skylighting's.
 			std::shared_ptr<PreprocessStates> preprocessShadow, preprocessSky;
-			std::shared_ptr<org::Buffer> constants, records, objects, bones, geometries, visibility;
+			std::shared_ptr<org::Buffer> constants, objects, bones, geometries, visibility;
+			// The material rows every view's draws name (ShadowMaterialRow), grown with the kept state.
+			GrowableRows materialRows;
 			// NPC face shapes' positions (SceneStore::Tables::faceStreams), a region per shape, read by the draws as
 			// the second vertex stream. A region is uploaded when its snapshot's generation is not the one it holds.
 			std::shared_ptr<org::Buffer> facePositions;
@@ -768,10 +770,11 @@ namespace DCLF
 			std::array<winrt::com_ptr<ID3D11Buffer>, kMaxShadowViews> countD3D11;             // the counters, read back
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
 			TablesHeld tablesHeld;  // as Resources::tablesHeld
-			// The kept shadow state's versions (ShadowKept) each mode's input buffer and each view slot's records hold.
+			// The kept shadow state's versions (ShadowKept) each mode's input buffer and the material rows hold: 0 when a build
+			// without the kept state wrote the buffer, or when the rows' backing is new.
 			std::array<std::uint64_t, kShadowModeCount> inputsUploaded{};
-			std::array<std::uint64_t, kMaxShadowViews> recordsUploaded{};
-			std::uint64_t constantsAddress = 0, recordsAddress = 0;
+			std::uint64_t materialRowsHeld = 0;
+			std::uint64_t constantsAddress = 0;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			// The engine's shadow map arrays, imported once each (re-imported when the engine recreates
 			// them), with a depth-stencil view per slice.
@@ -1241,6 +1244,22 @@ namespace DCLF
 			}
 		};
 
+		/**
+		 * @brief A row of the shadow views' material table: the Utility vertex shader's PerMaterial block (b1, its texture
+		 * offset), which the draw's pushed address names directly, and the diffuse's descriptor index for t0 after it
+		 * (kShadowRowDiffuseOffset). One constant-buffer block (256 bytes): the table is an array of them. Row 0 is every caster
+		 * without alpha testing (no offset, the null texture).
+		 */
+		struct ShadowMaterialRow
+		{
+			std::array<float, 4> texcoord{};  // offset xy, scale zw
+			std::uint32_t diffuse = 0;
+			std::array<std::uint32_t, 59> unused{};
+
+			bool operator==(const ShadowMaterialRow& o) const { return texcoord == o.texcoord && diffuse == o.diffuse; }
+		};
+		static_assert(sizeof(ShadowMaterialRow) == kConstantAlignment && offsetof(ShadowMaterialRow, diffuse) == kShadowRowDiffuseOffset);
+
 		struct ShadowInputs
 		{
 			std::uint32_t frameNumber = 0;
@@ -1264,25 +1283,31 @@ namespace DCLF
 			std::vector<std::byte> sharedData, featureData;
 			std::uint32_t lookupGeneration = 0, tablesGeneration = 0;
 			TablesHeld tablesHeld;  // ShadowResources::tablesHeld
-			// The versions of the kept shadow state the buffers hold (ShadowResources::inputsUploaded), and the oldest of the view
-			// slots' copies of the records (recordsUploaded, of the slots holding any): what the journals keep changes for.
+			// The versions of the kept shadow state the buffers hold (ShadowResources::inputsUploaded, materialRowsHeld): what the
+			// journals keep changes for.
 			std::array<std::uint64_t, kShadowModeCount> inputsHeld{};
-			std::uint64_t recordsOldestHeld = 0;
+			std::uint64_t materialRowsHeld = 0;
 		};
 
 		struct ShadowPayload
 		{
 			ShadowInputs inputs;
 			std::vector<std::shared_ptr<const void>> bindingOwners;
-			ConstantArena arena;  // the view slots' head is reserved; the commit writes the views into it
-			std::vector<DrawBindings> records;  // per-view registers (b0, b12) unset
-			std::vector<std::uint32_t> objectRecord;  // per object: its binding record, or ~0u when it cannot draw
+			ConstantArena arena;  // the view slots' head and the frame record are reserved; the commit writes the views into it
+			DrawBindings frameRecord{};  // every view's textures and samplers but the diffuse (kShadowFrameRecordOffset)
+			// The rows the inputs name: the kept state's (journalled), or the build's own (version 0: sent whole).
+			KeptView<ShadowMaterialRow> materialRows;
+			// Rows the build needed, within the table's capacity or not: what the next frame's Reserve grows it to. The
+			// materials past the capacity wait for it (their casters stay the engine's this frame).
+			std::uint32_t rowsWanted = 0, waitingRows = 0;
+			// The blocks every view's push data names besides its own (kShadowPushZeros and after), in the arena.
+			std::uint64_t zerosAddress = 0, sharedDataAddress = 0, featureDataAddress = 0;
+			std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
 			std::array<std::vector<DrawInput>, kShadowModeCount> inputList;  // per render mode: the frame's own (after the kept region)
-			// The kept state (ShadowKept): per mode the region's inputs at the head of the mode's buffer, and the records' changes,
-			// each sent as what changed since the version a buffer holds (a view slot holds its own copy of the records).
+			// The kept state (ShadowKept): per mode the region's inputs at the head of the mode's buffer, sent as what changed
+			// since the version the buffer holds.
 			bool kept = false;
 			std::array<KeptView<DrawInput>, kShadowModeCount> regionInputs;
-			ChangeJournal::Snapshot recordChanges;
 			// Per mode, the build version at which an object last joined or left its inputs (ShadowKept::Mode::membership);
 			// 0 without the kept state.
 			std::array<std::uint64_t, kShadowModeCount> membership{};
@@ -1330,7 +1355,10 @@ namespace DCLF
 				claims = {};
 				sunExclusion.reset();
 				arena.Reset();
-				records.clear();
+				frameRecord = {};
+				materialRows.Reset();
+				rowsWanted = waitingRows = 0;
+				zerosAddress = sharedDataAddress = featureDataAddress = 0;
 				bindingOwners.clear();
 				objectRecord.clear();
 				for (auto& modeInputs : inputList)
@@ -1340,7 +1368,6 @@ namespace DCLF
 				kept = false;
 				regionInputs = {};
 				membership = {};
-				recordChanges.Reset();
 				geometries.Reset();
 				faceStreams.clear();
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
@@ -2079,11 +2106,10 @@ namespace DCLF
 		 * @brief The shadow epoch's inputs and binding records, kept across frames (drawcall-limit-fix.md, "Persistent draw
 		 * state", Step 6). Per render mode, a region of the casters' inputs, changed only by the change log's entries for them,
 		 * by a mode's views changing their rasterizer states, and by what was waiting (a pipeline or a diffuse texture not yet
-		 * resolved) becoming ready; the per-frame list is only the face shapes. The records: the plain one and one per
-		 * alpha-tested material, at slots the materials keep; their texcoord blocks sit at fixed offsets in the arena, which is
-		 * written whole every build (it is a few KB), so a record changes only when its texture does. The records and each
-		 * mode's inputs are KeptArrays: a buffer (a mode's, or a view slot's copy of the records) is sent what changed since the
-		 * version it holds.
+		 * resolved) becoming ready; the per-frame list is only the face shapes. The material rows (ShadowMaterialRow): the plain
+		 * one and one per alpha-tested material, at slots the materials keep, lowest free first, in one table every view reads
+		 * (ShadowResources::materialRows, which grows when the slots outnumber it: a slot past its capacity waits a frame). The
+		 * rows and each mode's inputs are KeptArrays: a buffer is sent what changed since the version it holds.
 		 */
 		struct ShadowKept
 		{
@@ -2092,14 +2118,17 @@ namespace DCLF
 			LogCursor cursor;
 			const void* identity = nullptr;
 			std::uint64_t build = 0;  // counts the builds: what ShadowKept::Mode::membership stamps
-			KeptArray<DrawBindings> records;
+			KeptArray<ShadowMaterialRow> rows;
 			ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::uint32_t> slotOf;
 			std::vector<const RE::BSShaderMaterial*> slotMaterial;
 			std::vector<ID3D11ShaderResourceView*> slotDiffuse;
 			std::vector<std::uint32_t> slotRefs;
 			std::vector<std::uint8_t> slotReady;
-			std::vector<std::uint32_t> freeSlots;
-			std::vector<std::uint32_t> objectRecord;  // per object: its record slot, 0 the plain one, kNoRecord, kWaiting
+			std::vector<std::uint32_t> freeSlots;  // a min-heap: the lowest free slot is taken first, so the table stays dense
+			std::vector<std::uint32_t> objectRecord;  // per object: its material row, 0 the plain one, kNoRecord, kWaiting
+			// CS_DCLF_PERSISTENT_PARITY: the per-frame build's inputs the kept build lacks, by why, and the first of each.
+			std::map<std::string, std::uint64_t> missingBy;
+			std::map<std::string, std::string> missingFirst;
 			std::vector<const RE::BSShaderMaterial*> objectMaterial;  // per object: the material its slot is held for
 			struct Mode : KeptRegion
 			{
@@ -2134,24 +2163,24 @@ namespace DCLF
 			/** @brief Empty, for every object to be read again; the journals count on and the report's counters stay. */
 			void Reset()
 			{
-				auto keptRecords = std::move(records);
+				auto keptRows = std::move(rows);
 				std::array<Mode, kShadowModeCount> keptModes;
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 					keptModes[m].inputs = std::move(modes[m].inputs);
-				const auto counters = std::tuple{ build, builds, entriesWritten, recordsWritten, resyncs };
+				const auto counters = std::tuple{ build, builds, entriesWritten, rowsWritten, resyncs };
 				auto keptParity = std::move(parity);
 				*this = ShadowKept{};
-				records = std::move(keptRecords);
-				records.Clear();
+				rows = std::move(keptRows);
+				rows.Clear();
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 					modes[m].inputs = std::move(keptModes[m].inputs);
 					modes[m].inputs.Clear();
 				}
-				std::tie(build, builds, entriesWritten, recordsWritten, resyncs) = counters;
+				std::tie(build, builds, entriesWritten, rowsWritten, resyncs) = counters;
 				parity = std::move(keptParity);
 			}
 			// Since the last report.
-			std::uint64_t builds = 0, entriesWritten = 0, recordsWritten = 0, resyncs = 0;
+			std::uint64_t builds = 0, entriesWritten = 0, rowsWritten = 0, resyncs = 0;
 			ParityCounter parity;
 		};
 
@@ -2167,40 +2196,6 @@ namespace DCLF
 			const auto& list = a_payload.inputList[a_mode];
 			if (!list.empty())
 				a_emit(list.data(), list.size() * sizeof(DrawInput), region * sizeof(DrawInput));
-		}
-
-		/** @brief A shadow record addressed to its view slot: b0 names the slot's view block, b12 its per-frame block. */
-		inline void AddressToSlot(DrawBindings& a_record, std::uint64_t a_viewBlock, std::uint64_t a_perFrame)
-		{
-			a_record.vertexConstants[0] = a_viewBlock;
-			a_record.pixelConstants[0] = a_viewBlock;
-			a_record.vertexConstants[kPerFrameVertexRegister] = a_perFrame;
-			a_record.pixelConstants[kPerFrameVertexRegister] = a_perFrame;
-		}
-
-		/**
-		 * @brief A view slot's copy of the records (the per-view registers b0 and b12 named): the ones newer than what the slot
-		 * holds, or all of them without the kept state. Returns whether it wrote any.
-		 */
-		template <class Emit>
-		bool EmitShadowRecords(const ShadowPayload& a_payload, std::uint64_t a_held, std::uint64_t a_viewBlock, std::uint64_t a_perFrame, Emit&& a_emit)
-		{
-			const auto& records = a_payload.records;
-			auto copy = [&](std::size_t a_first, std::size_t a_end) {
-				std::vector<DrawBindings> block(records.begin() + a_first, records.begin() + a_end);
-				for (auto& record : block) {
-					AddressToSlot(record, a_viewBlock, a_perFrame);
-				}
-				a_emit(block.data(), block.size() * sizeof(DrawBindings), a_first * sizeof(DrawBindings));
-			};
-			if (!a_payload.kept) {
-				if (!records.empty())
-					copy(0, records.size());
-				return !records.empty();
-			}
-			return a_payload.recordChanges.ForEachRun(a_held, records.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
-				copy(static_cast<std::size_t>(a_first), static_cast<std::size_t>(a_first + a_count));
-			}) != 0;
 		}
 
 		/**
@@ -2423,7 +2418,6 @@ namespace DCLF
 		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);
 		using PendingView = Draws::PendingView;
 		std::vector<PendingView> pendingViews;
-		std::vector<DrawBindings> shadowSlotRecords;  // one slot's copy of the records, while it uploads
 		// Skylighting's occlusion map (ExecuteSkyOcclusion): the view as the engine's RenderMask set it up (CaptureSkyOcclusion),
 		// the state and format its pipelines are built for, and the frame whose shadow commit uploaded its occluders.
 		PendingView skyView;
@@ -2453,6 +2447,9 @@ namespace DCLF
 			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> stagedPool;
 		} shadowJob;
 		ShadowPayload shadowProbePayload;
+		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
+		void ReserveShadowRows();
+		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates) const;
 		void DropShadowJob(IndirectDraws::Stats& a_stats);
@@ -2614,6 +2611,14 @@ namespace DCLF
 		winrt::com_ptr<ID3D11Texture2D> mainPassDepth;  // what the main pass binds, to check the depth pass against
 		bool loggedDepthMismatch = false;
 		bool loggedNoViewProj = false;
+		// The colour epoch's jitter measurement (Uploads.cpp, under CS_DCLF_STATS).
+		struct JitterProbe
+		{
+			std::uint32_t epochs = 0;
+			float vsUnjittered = 0, vsUnjitteredMax = 0, vsMain = 0, vsMainMax = 0, vsCached = 0, vsCachedMax = 0, vsPrevious = 0, vsPreviousMax = 0;
+			std::array<float, 16> previous{};
+			bool havePrevious = false;
+		} jitterProbe;
 		bool loggedFrameConstants = false;
 
 		// CS_DCLF_GBUFFER_PROBE=<x>x<y>: the texel the in-epoch probe passes copy out, read back a few

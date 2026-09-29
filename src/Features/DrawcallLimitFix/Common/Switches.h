@@ -73,6 +73,7 @@ namespace DCLF
 		CoverageProbe,
 		DeriveProbe,
 		SlotProbe,
+		TableStart,
 		SkylightDumpDir,
 		DepthTrace,
 		DrawTrace,

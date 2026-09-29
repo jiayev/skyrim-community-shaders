@@ -186,6 +186,7 @@ namespace DCLF
 		void ResolveUntracked(std::uint32_t a_frame);
 		std::map<std::string, std::uint32_t> untrackedResolved;  // "<source> after <n> frames" -> geometries
 		std::vector<std::string> untrackedStuck;                 // chains of those still untracked after kStuckFrames
+		std::string compareContext;  // appended to a block's mismatch samples (CompareGeometry)
 		std::uint64_t notInTables = 0;         // tracked geometry drawn natively but excluded this frame
 		std::map<std::uint8_t, std::uint64_t> notInTablesBy;  // by its verdict now (Ineligible), and the first of each named
 		std::map<std::uint8_t, std::string> notInTablesFirst;

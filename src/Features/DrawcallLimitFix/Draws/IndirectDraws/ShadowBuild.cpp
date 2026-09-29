@@ -3,10 +3,9 @@
 
 namespace DCLF::Draws
 {
-	/** @brief The kept path of BuildShadowPayload: the records and the inputs from the kept state (ShadowKept). */
-	template <class Block>
+	/** @brief The kept path of BuildShadowPayload: the material rows and the inputs from the kept state (ShadowKept). */
 	void BuildKeptShadow(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
-		const DrawBindings& a_plain, Block&& a_block)
+		const ShadowMaterialRow& a_plain)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
 		const std::uint32_t objects = static_cast<std::uint32_t>(std::min<std::size_t>(a_tables.objects.size(), kMaxObjects));
@@ -14,7 +13,7 @@ namespace DCLF::Draws
 		// Membership changes of this build carry this stamp.
 		const std::uint64_t build = ++k.build;
 		// What the buffers hold is the version they were sent: what changes from here on is sent alone.
-		k.records.BeginBuild(a_in.recordsOldestHeld);
+		k.rows.BeginBuild(a_in.materialRowsHeld);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			k.modes[m].inputs.BeginBuild(a_in.inputsHeld[m]);
 		bool resync = !k.cursor.Continues(a_tables.changeLog, a_in.tablesGeneration) || k.identity != a_in.addresses.identity || k.objectRecord.size() > objects;
@@ -28,49 +27,40 @@ namespace DCLF::Draws
 			k.objectRecord.resize(objects, ShadowKept::kNoRecord);
 			k.objectMaterial.resize(objects, nullptr);
 		}
-		auto writeRecord = [&](std::uint32_t a_slot, const DrawBindings& a_record) {
-			if (a_slot >= k.records.Size()) {
-				auto& records = k.records.Mutable();
-				records.resize(std::size_t(a_slot) + 1);
-				records[a_slot] = a_record;
-				k.records.Mark(a_slot);
-				++k.recordsWritten;
-			} else if (k.records.Set(a_slot, a_record)) {
-				++k.recordsWritten;
+		auto writeRow = [&](std::uint32_t a_slot, const ShadowMaterialRow& a_row) {
+			if (a_slot >= k.rows.Size()) {
+				auto& rows = k.rows.Mutable();
+				rows.resize(std::size_t(a_slot) + 1);
+				rows[a_slot] = a_row;
+				k.rows.Mark(a_slot);
+				++k.rowsWritten;
+			} else if (k.rows.Set(a_slot, a_row)) {
+				++k.rowsWritten;
 			}
 		};
-		// ---- The records: the plain one, and each material's.
+		// ---- The material rows: the plain one, and each material's.
 		if (k.slotMaterial.empty()) {
 			k.slotMaterial.push_back(nullptr);  // slot 0: the plain record
 			k.slotDiffuse.push_back(nullptr);
 			k.slotRefs.push_back(0);
 			k.slotReady.push_back(1);
 		}
-		writeRecord(0, a_plain);
-		// The texcoord blocks at fixed offsets: one 256-byte block per slot after the arena's shared blocks (allocated once the
-		// build's slots are known; the base is the same every build).
-		std::uint64_t texcoordBase = 0;
+		writeRow(0, a_plain);
 		const std::uint32_t transformBuffer = globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
-		auto& arena = a_out.arena;
-		const std::uint64_t base = a_in.addresses.constants;
-		auto materialRecord = [&](std::uint32_t a_slot) {
+		auto materialRow = [&](std::uint32_t a_slot) {
 			// The material's diffuse and texture offset (read off the material now: shader-property controllers move it
-			// between the walk and this build), in the slot's fixed block.
+			// between the walk and this build). A slot past the table's capacity waits for the next frame's growth.
 			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[a_slot]);
 			const auto textureIt = k.slotDiffuse[a_slot] ? a_lookups.shadowTextures.find(k.slotDiffuse[a_slot]) : a_lookups.shadowTextures.end();
-			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone && texcoordBase &&
-			                   a_slot < kShadowRecordCapacity;
+			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone && a_slot < a_in.addresses.recordCapacity;
 			k.slotReady[a_slot] = ready ? 1 : 0;
 			if (!ready)
 				return;
-			const std::uint64_t block = texcoordBase + std::uint64_t(a_slot) * 256;
-			const std::array<float, 4> texcoord{ material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y,
-				material->texCoordScale[transformBuffer].x, material->texCoordScale[transformBuffer].y };
-			std::memcpy(arena.At(block - base, sizeof(texcoord)).data(), texcoord.data(), sizeof(texcoord));
-			DrawBindings bindings = a_plain;
-			bindings.vertexConstants[1] = block;
-			bindings.textures[0] = textureIt->second;
-			writeRecord(a_slot, bindings);
+			ShadowMaterialRow row;
+			row.texcoord = { material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y, material->texCoordScale[transformBuffer].x,
+				material->texCoordScale[transformBuffer].y };
+			row.diffuse = textureIt->second;
+			writeRow(a_slot, row);
 			if (const auto owner = a_lookups.shadowTextureOwners.find(k.slotDiffuse[a_slot]); owner != a_lookups.shadowTextureOwners.end())
 				a_out.bindingOwners.push_back(owner->second);
 		};
@@ -91,6 +81,7 @@ namespace DCLF::Draws
 			if (fresh) {
 				std::uint32_t slot;
 				if (!k.freeSlots.empty()) {
+					std::pop_heap(k.freeSlots.begin(), k.freeSlots.end(), std::greater<>());
 					slot = k.freeSlots.back();
 					k.freeSlots.pop_back();
 				} else {
@@ -115,6 +106,7 @@ namespace DCLF::Draws
 				k.slotDiffuse[slot] = nullptr;
 				k.slotReady[slot] = 0;
 				k.freeSlots.push_back(slot);
+				std::push_heap(k.freeSlots.begin(), k.freeSlots.end(), std::greater<>());
 			}
 			k.objectRecord[o] = ShadowKept::kNoRecord;
 			k.objectMaterial[o] = nullptr;
@@ -249,12 +241,15 @@ namespace DCLF::Draws
 		k.cursor.Advance(a_tables.changeLog);
 		for (const std::uint32_t o : changed)
 			takeRecord(o);
-		texcoordBase = a_block(nullptr, std::size_t(256) * std::max<std::size_t>(k.slotMaterial.size(), 1));
-		// The records of every material slot held (its texture may have been resolved since, its texcoord moves).
-		for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot)
-			if (k.slotMaterial[slot])
-				materialRecord(slot);
-		a_out.records = k.records.Get();
+		// The rows of every material slot held (its texture may have been resolved since, its texcoord moves, the table may
+		// have grown to hold it).
+		for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot) {
+			if (!k.slotMaterial[slot])
+				continue;
+			materialRow(slot);
+			a_out.waitingRows += slot >= a_in.addresses.recordCapacity ? 1 : 0;
+		}
+		a_out.rowsWanted = static_cast<std::uint32_t>(k.slotMaterial.size());
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			auto& mode = k.modes[m];
 			const std::uint32_t states = a_in.modeUsed[m] ? a_in.modeRasterStates[m] : 0u;
@@ -327,8 +322,12 @@ namespace DCLF::Draws
 			a_out.deferredPipelines += static_cast<std::uint32_t>(mode.waiting.size());
 			a_out.skippedPipeline += static_cast<std::uint32_t>(mode.waiting.size());
 		}
+		// Skylighting's map is DCLF's only when every occluder is drawn: what waits leaves it to the engine this frame.
+		if (a_in.modeUsed[kSkyMode])
+			for (const std::uint32_t o : k.modes[kSkyMode].waiting)
+				a_out.skySkipped += o < k.modes[kSkyMode].waitingMark.size() && k.modes[kSkyMode].waitingMark[o] ? 1 : 0;
 		a_out.kept = true;
-		a_out.recordChanges = k.records.View().changes;
+		a_out.materialRows = k.rows.View();
 	}
 
 	std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const SunCandidates>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
@@ -401,18 +400,9 @@ namespace DCLF::Draws
 	{
 		ShadowPayload reference;
 		BuildShadowPayload(a_in, a_tables, a_lookups, reference);
-		const std::uint64_t base = a_in.addresses.constants;
 		auto fail = [&](std::uint32_t a_object, const std::string& a_what) {
 			if (k.parity.mismatches++ == 0)
 				k.parity.first = fmt::format("object {}: {}", a_object, a_what);
-		};
-		auto texcoordOf = [&](const ShadowPayload& a_payload, const DrawBindings& a_record) {
-			std::array<float, 4> values{};
-			const auto& bytes = a_payload.arena.Bytes();
-			const std::uint64_t address = a_record.vertexConstants[1];
-			if (address >= base && address - base + sizeof(values) <= bytes.size())
-				std::memcpy(values.data(), bytes.data() + (address - base), sizeof(values));
-			return values;
 		};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_in.modeUsed[m])
@@ -424,7 +414,24 @@ namespace DCLF::Draws
 				++k.parity.checks;
 				const auto it = keptInputs.find(input.objectIndex);
 				if (it == keptInputs.end()) {
-					fail(input.objectIndex, fmt::format("mode {}: an input of the per-frame build only", m));
+					// Why the kept build lacks it: no record, waiting on a pipeline or texture, in the frame's face list, or
+					// held nowhere (an object no change named since it became a caster).
+					const std::uint32_t o = input.objectIndex;
+					const auto& mode = k.modes[m];
+					const std::uint32_t record = o < k.objectRecord.size() ? k.objectRecord[o] : ShadowKept::kNoRecord;
+					const char* why = record == ShadowKept::kNoRecord                        ? "no record" :
+					                  o < mode.waitingMark.size() && mode.waitingMark[o]      ? "waiting" :
+					                  o < mode.faceMark.size() && mode.faceMark[o]            ? "a face" :
+					                  mode.Holds(o)                                           ? "held" :
+					                                                                            "not held";
+					auto& count = k.missingBy[why];
+					if (!count++) {
+						const auto* geometry = o < a_tables.objectGeometry.size() ? a_tables.objectGeometry[o] : nullptr;
+						k.missingFirst[why] = fmt::format("'{}' (object {}, flags {:#x}, technique {:#x}, record {} against {})",
+							geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", o, a_tables.objects[o].flags, a_tables.shadowTechnique[o], record,
+							input.recordIndex);
+					}
+					fail(o, fmt::format("mode {}: an input of the per-frame build only ({})", m, why));
 					continue;
 				}
 				++matched;
@@ -435,15 +442,15 @@ namespace DCLF::Draws
 					fail(input.objectIndex, fmt::format("mode {}: the input differs", m));
 					continue;
 				}
-				if (xr >= a_kept.records.size() || yr >= reference.records.size()) {
-					fail(input.objectIndex, "a record index out of range");
+				// The rows by value: the two builds number them differently.
+				const auto* a = a_kept.materialRows.At(xr);
+				const auto* b = reference.materialRows.At(yr);
+				if (!a || !b) {
+					fail(input.objectIndex, "a material row out of range");
 					continue;
 				}
-				const auto& a = a_kept.records[xr];
-				const auto& b = reference.records[yr];
-				if (std::memcmp(a.textures, b.textures, sizeof(a.textures)) != 0 || std::memcmp(a.samplers, b.samplers, sizeof(a.samplers)) != 0 ||
-					texcoordOf(a_kept, a) != texcoordOf(reference, b))
-					fail(input.objectIndex, fmt::format("mode {}: its record differs (kept {} against {})", m, xr, yr));
+				if (!(*a == *b))
+					fail(input.objectIndex, fmt::format("mode {}: its material row differs (kept {} against {})", m, xr, yr));
 			}
 			if (matched != keptInputs.size())
 				fail(~0u, fmt::format("mode {}: {} inputs of the kept build only", m, keptInputs.size() - matched));
@@ -465,7 +472,6 @@ namespace DCLF::Draws
 			a_out.bindingOwners.push_back(a_lookups.sharedBindingBlock);
 		const std::uint64_t base = a_in.addresses.constants;
 		auto& arena = a_out.arena;
-		auto& records = a_out.records;
 		auto block = [&](const void* a_data, std::size_t a_size) -> std::uint64_t {
 			const auto offset = arena.Allocate(a_size);
 			if (offset == ~0ull)
@@ -482,45 +488,40 @@ namespace DCLF::Draws
 		AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
 		if (a_in.addresses.facePositions)
 			a_out.faceStreams = a_tables.faceStreams;
-		// The binding records, built once with the per-view registers (b0, b12) unset; each view slot
-		// uploads its own copy of them naming its blocks at the head of the arena.
-		(void)arena.Allocate(kShadowMaterialBlocksOffset);
-		DrawBindings plain{};
-		// No register the Utility shaders declare may be left at address zero: a pipeline that reads
-		// one arrives from the background compiler seconds after the first epoch, and a null read is
-		// a device loss. Everything not supplied below reads zeros.
+		// The views' blocks at the head of the arena (the commit's), then the frame record, then the blocks every view's push
+		// data names. No register the Utility shaders declare may be left at address zero: a pipeline that reads one arrives
+		// from the background compiler seconds after the first epoch, and a null read is a device loss. Everything not
+		// supplied below reads zeros.
+		(void)arena.Allocate(kShadowArenaBlocksOffset);
 		static constexpr std::size_t kZeroBlockBytes = 1024;
-		const std::uint64_t zeros = block(nullptr, kZeroBlockBytes);
-		for (auto& address : plain.vertexConstants)
-			address = zeros;
-		for (auto& address : plain.pixelConstants)
-			address = zeros;
+		a_out.zerosAddress = block(nullptr, kZeroBlockBytes);
 		// Community Shaders' SharedData (b5) and FeatureData (b6): the alpha-tested pixel stage samples
 		// its diffuse with SharedData::MipBias. Packed from the copies the inputs carry, as the main epochs do.
-		if (!a_in.sharedData.empty()) {
-			plain.pixelConstants[kSharedDataRegister] = block(a_in.sharedData.data(), a_in.sharedData.size());
-			plain.vertexConstants[kSharedDataRegister] = plain.pixelConstants[kSharedDataRegister];
-		}
-		if (!a_in.featureData.empty()) {
-			plain.pixelConstants[kFeatureDataRegister] = block(a_in.featureData.data(), a_in.featureData.size());
-			plain.vertexConstants[kFeatureDataRegister] = plain.pixelConstants[kFeatureDataRegister];
-		}
+		a_out.sharedDataAddress = a_in.sharedData.empty() ? a_out.zerosAddress : block(a_in.sharedData.data(), a_in.sharedData.size());
+		a_out.featureDataAddress = a_in.featureData.empty() ? a_out.zerosAddress : block(a_in.featureData.data(), a_in.featureData.size());
+		// The frame record: every texture and sampler but the diffuse, which is the draw's material row's.
+		auto& frameRecord = a_out.frameRecord;
 		const std::uint32_t nullIndex = a_lookups.nullTexture == Lookups::kNone ? 0u : a_lookups.nullTexture;
-		for (auto& index : plain.textures)
+		for (auto& index : frameRecord.textures)
 			index = nullIndex;
-		plain.textures[kObjectBufferRegister] = a_in.addresses.objectsIndex;
-		plain.textures[kBonesBufferRegister] = a_in.addresses.bonesIndex;
+		frameRecord.textures[kObjectBufferRegister] = a_in.addresses.objectsIndex;
+		frameRecord.textures[kBonesBufferRegister] = a_in.addresses.bonesIndex;
 		const std::uint32_t wrapAnisotropic = a_lookups.Sampler(static_cast<std::uint32_t>(RE::BSGraphics::TextureAddressMode::kWrapSWrapT),
 			static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic));
-		for (auto& index : plain.samplers)
+		for (auto& index : frameRecord.samplers)
 			index = wrapAnisotropic == Lookups::kNone ? 0u : wrapAnisotropic;
+		std::memcpy(arena.At(kShadowFrameRecordOffset, sizeof(DrawBindings)).data(), &frameRecord, sizeof(DrawBindings));
+		// Row 0: every caster without alpha testing (no texture offset, the null texture).
+		ShadowMaterialRow plain;
+		plain.diffuse = nullIndex;
 		if (a_kept && a_in.sunEntryPlaneMasks.size() <= kMaxSunEntryProcesses) {
-			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain, block);
+			BuildKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept, plain);
 			if (PersistentParityEnabled() && ParityDue(a_in.frameNumber))
 				CheckKeptShadow(a_in, a_tables, a_lookups, a_out, *a_kept);
 			return;
 		}
-		records.push_back(plain);  // record 0: every caster without alpha testing
+		std::vector<ShadowMaterialRow> rows;
+		rows.push_back(plain);
 		auto& objectRecord = a_out.objectRecord;
 		objectRecord.assign(a_tables.objects.size(), ~0u);
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::uint32_t> recordByMaterial;
@@ -553,28 +554,35 @@ namespace DCLF::Draws
 				++a_out.skippedTexture;
 				continue;
 			}
-			if (textureIt->second == Lookups::kNone || records.size() >= kShadowRecordCapacity) {
+			if (textureIt->second == Lookups::kNone) {
 				++a_out.skippedTexture;
 				continue;
 			}
-			DrawBindings bindings = plain;
+			// Past the table's capacity: it waits for the next frame's growth (rowsWanted), and stays the engine's meanwhile.
+			++a_out.rowsWanted;
+			if (rows.size() >= a_in.addresses.recordCapacity) {
+				++a_out.waitingRows;
+				continue;
+			}
 			// The texture transform off the material now, not from the walk: shader-property controllers
 			// (BSLightingShaderPropertyFloatController::Update) move it between Main::Draw, where the walk
 			// starts, and BeforeShadowMaps, where this build is kicked. Of the two buffers, the one the frame
 			// reads (BSShaderManager::State::textureTransformCurrentBuffer, flipped by Main::Update), as
 			// BSUtilityShader::SetupMaterial does; the controllers write the other one.
 			const std::uint32_t transformBuffer = globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
-			const std::array<float, 4> texcoord{ material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y,
-				material->texCoordScale[transformBuffer].x, material->texCoordScale[transformBuffer].y };
-			bindings.vertexConstants[1] = block(texcoord.data(), sizeof(texcoord));
-			bindings.textures[0] = textureIt->second;
+			ShadowMaterialRow row;
+			row.texcoord = { material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y, material->texCoordScale[transformBuffer].x,
+				material->texCoordScale[transformBuffer].y };
+			row.diffuse = textureIt->second;
 			if (const auto owner = a_lookups.shadowTextureOwners.find(srv); owner != a_lookups.shadowTextureOwners.end())
 				a_out.bindingOwners.push_back(owner->second);
-			const auto index = static_cast<std::uint32_t>(records.size());
-			records.push_back(bindings);
+			const auto index = static_cast<std::uint32_t>(rows.size());
+			rows.push_back(row);
 			recordByMaterial.emplace(material, index);
 			objectRecord[o] = index;
 		}
+		a_out.rowsWanted += 1;  // row 0
+		a_out.materialRows = { std::make_shared<const std::vector<ShadowMaterialRow>>(std::move(rows)), {} };
 
 		// ---- The inputs per render mode among the captured views: every caster with a ready pipeline
 		// for its technique under that mode. The cascades share one set; a spot light has its own.

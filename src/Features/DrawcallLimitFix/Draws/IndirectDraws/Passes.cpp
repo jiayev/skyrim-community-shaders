@@ -911,9 +911,10 @@ namespace DCLF::Draws
 				constants.geometriesIndex = geometriesIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
-				constants.recordsAddressLo = static_cast<std::uint32_t>(view.recordsAddress);
-				constants.recordsAddressHi = static_cast<std::uint32_t>(view.recordsAddress >> 32);
-				constants.recordStride = sizeof(DrawBindings);
+				// A draw's words name its material row (the table every view reads).
+				constants.recordsAddressLo = static_cast<std::uint32_t>(view.materialRows);
+				constants.recordsAddressHi = static_cast<std::uint32_t>(view.materialRows >> 32);
+				constants.recordStride = sizeof(ShadowMaterialRow);
 				// The single phase (the latch holds the frustum-only mode, with no engine-visibility gate).
 				constants.phaseBits = 0;
 				// The visibility words are written per object by every dispatch; nothing reads them here.
@@ -943,7 +944,7 @@ namespace DCLF::Draws
 	{
 		std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
 		std::array<org::ResourceBindingToken, kMaxShadowViews> sequences, count;
-		org::ResourceBindingToken records, constants, objects, bones;
+		org::ResourceBindingToken materialRows, constants, objects, bones;
 	};
 
 	struct ShadowPrepared
@@ -983,7 +984,7 @@ namespace DCLF::Draws
 				bindings.sequences[s] = a_builder.IndirectArguments(resources->sequences[s]);
 				bindings.count[s] = a_builder.IndirectArguments(resources->count[s]);
 			}
-			bindings.records = a_builder.ShaderResource(resources->records, noViews).Resource();
+			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
 			bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
 			bindings.bones = a_builder.ShaderResource(resources->bones, noViews).Resource();
@@ -1051,10 +1052,13 @@ namespace DCLF::Draws
 				begin.depth = &depth;
 				begin.debugName = a_prepared.sky ? "DCLF Skylighting occlusion" : "DCLF shadow view";
 			}
-			auto beginView = [&](rhi::CommandList& a_list, const rhi::PassBeginInfo& a_begin) {
+			// A view's pass: its slice, the layout, the topology and its push data (its blocks) - on the command list, and on a
+			// preprocess state list, identically.
+			auto beginView = [&](rhi::CommandList& a_list, const rhi::PassBeginInfo& a_begin, const ShadowFrameView& a_view) {
 				a_list.BeginPass(a_begin);
 				a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
 				a_list.BindLayout(frame.indirect.layout);
+				a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, a_view.push.data());
 			};
 			auto sequences = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.sequences[frame.views[a_view.index].slot]).GetHandle(); };
 			auto counts = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.count[frame.views[a_view.index].slot]).GetHandle(); };
@@ -1065,7 +1069,7 @@ namespace DCLF::Draws
 				state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
 				for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 					const auto& prepared = a_prepared.views[i];
-					beginView(state, begins[i]);
+					beginView(state, begins[i], frame.views[prepared.index]);
 					commands.PreprocessIndirect(state, frame.indirect.signature, sequences(prepared), 0, counts(prepared), 0, frame.views[prepared.index].capacity);
 					state.EndPass();
 				}
@@ -1073,7 +1077,7 @@ namespace DCLF::Draws
 			}
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
 				const auto& prepared = a_prepared.views[i];
-				beginView(commands, begins[i]);
+				beginView(commands, begins[i], frame.views[prepared.index]);
 				commands.ExecuteIndirect(frame.indirect.signature, sequences(prepared), 0, counts(prepared), 0, frame.views[prepared.index].capacity);
 				commands.EndPass();
 			}
@@ -1093,7 +1097,7 @@ namespace DCLF::Draws
 		void PrepareForBuild(org::RenderGraph& a_graph) override
 		{
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.constants"), resources->constants);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.records"), resources->records);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.material-rows"), resources->materialRows.buffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.objects"), resources->objects);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.bones"), resources->bones);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.face-positions"), resources->facePositions);

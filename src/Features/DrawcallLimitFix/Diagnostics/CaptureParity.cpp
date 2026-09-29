@@ -206,8 +206,8 @@ namespace DCLF
 				if (++mismatchByVariable[fmt::format("{} {}", a_what, i)] <= 2) {
 					float native = 0;
 					std::memcpy(&native, &a_native.bytes[(nativeOffset + firstComponent) * 4], 4);
-					NoteMismatch(fmt::format("{} {} variable {} component {}: DCLF {}, native {}", Describe(a_geometry), a_what, i, firstComponent,
-						a_expected.floats[ourOffset + firstComponent], native));
+					NoteMismatch(fmt::format("{} {} variable {} component {}: DCLF {}, native {}{}", Describe(a_geometry), a_what, i, firstComponent,
+						a_expected.floats[ourOffset + firstComponent], native, compareContext));
 				}
 			}
 		}
@@ -266,6 +266,10 @@ namespace DCLF
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
 		bool ok = true;
+		// For the samples: the descriptor DCLF evaluated the pipeline with (the native one matches it, or the draw is a
+		// technique mismatch), and whether the object is skinned.
+		compareContext = fmt::format(" (pipeline descriptor {:08X}, skinned object {})", tables.pipelines[object.pipelineIndex].passDescriptor,
+			(object.flags & kObjectSkinned) != 0);
 		// TreeParams and WindTimers are written by SetupGeometry for technique 12 only; for anything else
 		// the native buffer holds whatever the last tree left there, and the shader never reads them, so they are
 		// compared for technique 12 alone (decals, drawn after everything, would otherwise mismatch on the leftover).
@@ -623,6 +627,7 @@ namespace DCLF
 	void CaptureParity::OnNativeLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags)
 	{
 		pendingObject = -1;
+		compareContext.clear();
 		if (ConstantEvaluator::Evaluating() || !globals::deferred->deferredPass || !a_pass || !a_pass->geometry)
 			return;
 		InstallDrawHook();

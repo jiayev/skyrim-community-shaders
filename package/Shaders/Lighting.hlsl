@@ -3488,21 +3488,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #		if defined(DCLF_SHADOW_DEBUG) && defined(DEFERRED)
-	// [TEMP] DCLF only: the sun's shadow terms in place of the colour, read back with CS_DCLF_GBUFFER_PROBE.
-	// The base colour texture at mip 0, three ways (luminance): x through the sampler (SampleLevel), y without
-	// one (Load), z the shader's own biased sample.
-#			if defined(TRUE_PBR) && !defined(LANDSCAPE)
-	{
-		uint width, height, levels;
-		TexColorSampler.GetDimensions(0, width, height, levels);
-		const int2 texel = int2(frac(diffuseUv) * float2(width, height));
-		const float3 luma = float3(0.2126, 0.7152, 0.0722);
-		psout.Diffuse = float4(dot(TexColorSampler.SampleLevel(SampColorSampler, (float2(texel) + 0.5) / float2(width, height), 0).rgb, luma),
-			dot(TexColorSampler.Load(int3(texel, 0)).rgb, luma), dot(rawBaseColor.rgb, luma), 0);
-	}
-#			else
-	psout.Diffuse = -1.0.xxxx;
-#			endif
+	// [TEMP] Native and DCLF alike: the sun's shadow terms in place of the colour, read back with CS_DCLF_TARGET_PROBE
+	// (dclf-open-defects.md, "The VSM soft shadow differs"): x the VSM soft shadow, y its detailed term, z the detailed
+	// shadow the lighting uses.
+	psout.Diffuse = float4(dirSoftShadow, dirVSMDetailedShadow, dirDetailedShadow, 1);
 #		endif
 #	endif  // !DCLF_DEPTH_ONLY
 
