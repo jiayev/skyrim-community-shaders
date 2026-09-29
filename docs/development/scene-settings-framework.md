@@ -20,15 +20,15 @@ below is behavioral, never a change to the file format.
 
 Everything belonging to the system lives under `src/CSEditor/SceneManager/`.
 
-| File | Role |
-| ---- | ---- |
-| `SceneSettingsManager.h` | The public interface: storage, persistence, resolver, apply/restore, blending. |
-| `SceneSettingsPolicy.h` | Hand-maintained allow/deny lists consumed by the manager. |
-| `SceneManager.{h,cpp}` | The `Feature` that *is* the manager: it inherits `SceneSettingsManager`, forwards the lifecycle hooks and draws the debug view. |
-| `cmake/generate_scene_settings_catalog.py` | Build-time generator; parses `src/**/*.{h,hpp,cpp,cxx}`. |
-| `features/Scene Manager/` | `CORE` marker + `SceneManager.ini` (version `1-0-0`). |
-| `tests/test_scene_settings_catalog_generator.py` | Generator unit tests (hermetic + catalog assertions). |
-| `tests/test_scene_settings_policy.py` | Checks the policy lists against the real catalog. |
+| File                                             | Role                                                                                                                            |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `SceneSettingsManager.h`                         | The public interface: storage, persistence, resolver, apply/restore, blending.                                                  |
+| `SceneSettingsPolicy.h`                          | Hand-maintained allow/deny lists consumed by the manager.                                                                       |
+| `SceneManager.{h,cpp}`                           | The `Feature` that _is_ the manager: it inherits `SceneSettingsManager`, forwards the lifecycle hooks and draws the debug view. |
+| `cmake/generate_scene_settings_catalog.py`       | Build-time generator; parses `src/**/*.{h,hpp,cpp,cxx}`.                                                                        |
+| `features/Scene Manager/`                        | `CORE` marker + `SceneManager.ini` (version `1-0-0`).                                                                           |
+| `tests/test_scene_settings_catalog_generator.py` | Generator unit tests (hermetic + catalog assertions).                                                                           |
+| `tests/test_scene_settings_policy.py`            | Checks the policy lists against the real catalog.                                                                               |
 
 Generated into `${CMAKE_CURRENT_BINARY_DIR}/generated` (e.g. `build/ALL/generated`), never committed:
 
@@ -41,16 +41,16 @@ Generated into `${CMAKE_CURRENT_BINARY_DIR}/generated` (e.g. `build/ALL/generate
 `SceneSettingsManager` is one class declared in one header, but its members are defined across several
 translation units so no single file stays unreadable. Find a member by what it does, not by file name:
 
-| TU | Holds |
-| -- | ----- |
-| `SceneSettingsManager.cpp` | Singleton (the constructor registers `this`, so it is `globals::features::sceneManager`), lifecycle, `Update()`, name/path resolution. |
-| `SceneSettingsResolve.cpp` | `ResolveAndApply()` and the apply/restore pipeline. |
-| `SceneSettingsSerialization.cpp` | `SceneManager.json` load and save. |
-| `SceneSettingsDiscovery.cpp` | Overwrite-file scanning and preset baking. |
-| `SceneSettingsContext.cpp` | Context add / update / remove. |
-| `SceneSettingsCopy.cpp` | The [generic copy API](#generic-scene-copy-api). |
-| `SceneSettingsWeather.cpp` / `SceneSettingsLocation.cpp` | The weather and location layers. |
-| `SceneSettingsDebug.cpp` | The resolver-state debug view. |
+| TU                                                       | Holds                                                                                                                                  |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `SceneSettingsManager.cpp`                               | Singleton (the constructor registers `this`, so it is `globals::features::sceneManager`), lifecycle, `Update()`, name/path resolution. |
+| `SceneSettingsResolve.cpp`                               | `ResolveAndApply()` and the apply/restore pipeline.                                                                                    |
+| `SceneSettingsSerialization.cpp`                         | `SceneManager.json` load and save.                                                                                                     |
+| `SceneSettingsDiscovery.cpp`                             | Overwrite-file scanning and preset baking.                                                                                             |
+| `SceneSettingsContext.cpp`                               | Context add / update / remove.                                                                                                         |
+| `SceneSettingsCopy.cpp`                                  | The [generic copy API](#generic-scene-copy-api).                                                                                       |
+| `SceneSettingsWeather.cpp` / `SceneSettingsLocation.cpp` | The weather and location layers.                                                                                                       |
+| `SceneSettingsDebug.cpp`                                 | The resolver-state debug view.                                                                                                         |
 
 Helpers that more than one of those needs are not file-local. They live in four internal namespaces with
 their own headers, and every consumer opens them with a file-scope `using namespace`:
@@ -136,7 +136,7 @@ Applying a value goes JSON patch → `LoadSettings` → shader constants, which 
 would otherwise bound it. Every in-app path already produces in-range values (the interceptor replays the
 feature's own clamping widget, blending lerps between two valid endpoints, a copy moves a value that was
 valid at its source), so the exposure is the on-disk contract: `IsSceneSettingValueAllowed` gates the
-*type* of a value, not its range, and a hand-edited or foreign `SceneManager.json` can carry anything.
+_type_ of a value, not its range, and a hand-edited or foreign `SceneManager.json` can carry anything.
 
 `ClampCatalogNumericValue()` closes that in `ApplyCatalogSceneSettings()`, the one place any scene value
 reaches a feature. It covers `EditorSemantic::Numeric` entries carrying `hasNumericBounds` (416 of the
@@ -193,13 +193,13 @@ wins. Both read the same files; only the winner differs. Preserve the inversion 
 
 A location resolves to a **chain** of targets, broadest first, built by `BuildLocationTargetChain()`:
 
-| `LocationTargetType` | Source | Notes |
-| -------------------- | ------ | ----- |
-| `Worldspace` | The `TESWorldSpace` of an **exterior** cell | Interiors contribute none. |
-| `LocationType` | `LocType*` keywords on the **innermost** location | Deduplicated and sorted by form key, so the chain is stable. |
-| `Region` | The `TESRegion` covering an **exterior** cell | `Sky::region` when the player is in that cell, since it knows which of the overlapping regions won; otherwise the cell's first non-null `GetRegionList()` entry. Interiors contribute no region. |
-| `Location` | The `BGSLocation` chain, walked through `parentLoc` and reversed | Cycle-guarded by a visited FormID set. |
-| `Cell` | The player's parent cell | Its `editorId` is the coc code. |
+| `LocationTargetType` | Source                                                           | Notes                                                                                                                                                                                            |
+| -------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Worldspace`         | The `TESWorldSpace` of an **exterior** cell                      | Interiors contribute none.                                                                                                                                                                       |
+| `LocationType`       | `LocType*` keywords on the **innermost** location                | Deduplicated and sorted by form key, so the chain is stable.                                                                                                                                     |
+| `Region`             | The `TESRegion` covering an **exterior** cell                    | `Sky::region` when the player is in that cell, since it knows which of the overlapping regions won; otherwise the cell's first non-null `GetRegionList()` entry. Interiors contribute no region. |
+| `Location`           | The `BGSLocation` chain, walked through `parentLoc` and reversed | Cycle-guarded by a visited FormID set.                                                                                                                                                           |
+| `Cell`               | The player's parent cell                                         | Its `editorId` is the coc code.                                                                                                                                                                  |
 
 `GetCurrentLocationTargets()` caches the player's chain by location + cell + region FormID; the region is
 part of the key because overlapping regions can change winner without the cell changing.
@@ -257,15 +257,15 @@ another implementation has an intent worth preserving through the round trip.
 The resolver runs every frame, so everything it can precompute is cached and invalidated by revision
 counter rather than rebuilt:
 
-| Cache | Invalidated by | Holds |
-| ----- | -------------- | ----- |
-| `timeOfDayValueGroups`, `weatherValueGroups` | `sceneValueRevision` | Per-address `std::array<std::optional<float>, kPeriodCount>` period values, so blending never re-walks the entry lists. |
-| `featureBaseSnapshots` | `InvalidateFeatureSnapshot()` | A feature's settings JSON with the scene layer folded back out, used as the baseline source. |
-| `configuredFeatureNamesCache` | `configuredFeatureNamesRevision` | Which features have any scene entry at all. |
-| `cachedLocationOverrides` | `locationOverridesDirty` | The resolved location layer, rebuilt only when the target chain or an entry moved. |
-| `resolvedSettingsScratch` | reused every resolve | The resolved map itself, so the per-frame path does not reallocate. |
-| `cachedLocationTargets` | location/cell/region FormID change | The player's target chain. |
-| `featureApplyDocuments` | `InvalidateFeatureSnapshot()` | The settings JSON each apply mutates in place, so a transition frame never re-serializes the feature. |
+| Cache                                        | Invalidated by                     | Holds                                                                                                                   |
+| -------------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `timeOfDayValueGroups`, `weatherValueGroups` | `sceneValueRevision`               | Per-address `std::array<std::optional<float>, kPeriodCount>` period values, so blending never re-walks the entry lists. |
+| `featureBaseSnapshots`                       | `InvalidateFeatureSnapshot()`      | A feature's settings JSON with the scene layer folded back out, used as the baseline source.                            |
+| `configuredFeatureNamesCache`                | `configuredFeatureNamesRevision`   | Which features have any scene entry at all.                                                                             |
+| `cachedLocationOverrides`                    | `locationOverridesDirty`           | The resolved location layer, rebuilt only when the target chain or an entry moved.                                      |
+| `resolvedSettingsScratch`                    | reused every resolve               | The resolved map itself, so the per-frame path does not reallocate.                                                     |
+| `cachedLocationTargets`                      | location/cell/region FormID change | The player's target chain.                                                                                              |
+| `featureApplyDocuments`                      | `InvalidateFeatureSnapshot()`      | The settings JSON each apply mutates in place, so a transition frame never re-serializes the feature.                   |
 
 **Divergence from upstream, deliberate:** upstream bumps `sceneValueRevision` at ~22 call sites and sets
 `locationOverridesDirty` at ~9. This fork funnels both through `MarkSceneValuesDirty()`, called from
@@ -279,7 +279,7 @@ skipped until the pending values actually change.
 ### SceneLayerGuard
 
 `SceneSettingsManager::SceneLayerGuard` is an RAII suspend of the scene layer. Anything that reads or writes
-a feature's *base* settings must hold one, otherwise it captures an overridden value as if it were the user's
+a feature's _base_ settings must hold one, otherwise it captures an overridden value as if it were the user's
 choice. It is default-constructed (`SceneLayerGuard guard;`) and no-ops when the manager singleton does not
 exist yet. Current holders: `State::Load`, `State::SaveToJson` and `State::LoadFromJson`, one internal manager
 path (`GetFeatureSettingValue`), the two settings reads in the `FeatureOverwritesPanel` export dialog, and six
@@ -300,12 +300,12 @@ A context is a `SceneContextId`: a `SceneContextType` plus whichever of `period`
 `locationType` + `locationFormKey` that type uses. `IsValidSceneContext()` rejects any mixed combination,
 so a malformed context can never reach the mutation path.
 
-| Method | Const | Purpose |
-| ------ | ----- | ------- |
-| `GetCopySources(destination)` | yes | Every context that holds something usable, with a localized label and a compatible-setting count. Excludes the destination itself. Sorted by type, then label. |
-| `GetCopyDestinations(source)` | yes | Every context the source can copy into, including pages with nothing authored yet. |
-| `GetCopyCandidates(source, destination)` | yes | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives the confirmation dialog. |
-| `CopySettings(source, destination, conflictPolicy)` | no | Performs the copy and returns a `CopyResult` (`copied` / `skipped` / `overwritten` / `incompatible` / `hadConflicts` / `cancelled`). |
+| Method                                              | Const | Purpose                                                                                                                                                        |
+| --------------------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GetCopySources(destination)`                       | yes   | Every context that holds something usable, with a localized label and a compatible-setting count. Excludes the destination itself. Sorted by type, then label. |
+| `GetCopyDestinations(source)`                       | yes   | Every context the source can copy into, including pages with nothing authored yet.                                                                             |
+| `GetCopyCandidates(source, destination)`            | yes   | Per-setting preview: display name, value, `compatible`, `conflicts`. Drives the confirmation dialog.                                                           |
+| `CopySettings(source, destination, conflictPolicy)` | no    | Performs the copy and returns a `CopyResult` (`copied` / `skipped` / `overwritten` / `incompatible` / `hadConflicts` / `cancelled`).                           |
 
 A copy always takes the whole source context. The per-setting variant upstream carries (`CopyScope::Setting`
 plus a `SettingIdentity`) was removed: this fork's toolbar is page-scoped, and a single setting is moved by
@@ -343,12 +343,12 @@ wins, otherwise the source's.
 
 Rooted at `Util::PathHelpers::GetSceneSettingsPath()` = `<CommunityShaders>/SceneSettings`.
 
-| Path | Contents |
-| ---- | ---- |
-| `SceneManager.json` | All user-authored entries (interior, TOD, weather, location) in one document. |
-| `InteriorOnly/`, `TimeOfDay/<Period>/` | Mod-shipped overwrite files per scene type. |
-| `Weather/<SPID>/` | Per-weather overwrites, folder keyed by `Util::FormIdToSpid`. |
-| `Locations/<form key>/` | Every location target type shares one tree; the target's type comes from its form. |
+| Path                                   | Contents                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `SceneManager.json`                    | All user-authored entries (interior, TOD, weather, location) in one document.      |
+| `InteriorOnly/`, `TimeOfDay/<Period>/` | Mod-shipped overwrite files per scene type.                                        |
+| `Weather/<SPID>/`                      | Per-weather overwrites, folder keyed by `Util::FormIdToSpid`.                      |
+| `Locations/<form key>/`                | Every location target type shares one tree; the target's type comes from its form. |
 
 A weather or location folder holds its flat set directly and its per-period set in `<Period>/` subfolders
 (`ForEachOverwriteSetDir`). The saved mode is written as `timeOfDayEnabled`; the older view-only
@@ -374,12 +374,48 @@ are **blocked** rather than clobbering it, and unknown fields on an entry are pr
         `LUT` (`LUT::LoadSettings` rereads its texture from disk), DoF `HighlightShape`, Motion Blur
         `VelocityScale`, and the Color Grading tonemapper selection (`enableTonemap`, `useOpenDrt`,
         `currentTonemapper`, `tonemapParams`), which recompiles shaders.
--   `kLocationFeatureWhitelist` (6) and `kTimeOfDayFeatureWhitelist` (10): which features those scene types
+-   `kLocationFeatureWhitelist` (7) and `kTimeOfDayFeatureWhitelist` (11): which features those scene types
     may target.
 
 `PostProcessing` defers its load: `LoadSettings` stores the JSON and `ProcessSettings` applies it in
 `Prepass`. Its per-load path must stay cheap because a blend reloads every frame, so sub-features reconcile
 settings-sized resources in `Draw` and Color Grading recompiles only when the tonemapper changes.
+
+### Physical Sky
+
+Physical Sky participates in interior, location, time-of-day and weather settings. Its scene surface
+controls weather state and illumination, while cloud optical response, world configuration and noise
+sources remain global:
+
+| Settings                                                                                                                                                             | Scene behavior                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sun/moon colors, sunlight and aerial-perspective mixes, sky-static brightness, atmospheric scattering and absorption, sun disk radius                                | Blend as floats, including each color component.                                                                                                                                                |
+| Low-cloud density, vertical profile, height and map scale; cirrus altitude, repeat length and density                                                                | Blend as floats.                                                                                                                                                                                |
+| NDF coverage, type and height remapping, frequencies, offsets, base heights and local influence weights; cirrus coverage/type remapping, frequencies and offsets     | Blend as floats over fixed noise sources. The existing 2D map generator updates changed parameters during rendering.                                                                            |
+| Low/high cloud X/Y velocities, development and disturbance                                                                                                           | Blend vector components, then integrate the live velocity into the existing wind state. The renderer caps travel speed at 80 m/s; loading an override does not restart wind motion.             |
+| Cloud scattering/phase/powder/ambient response, cirrus lighting scale, vanilla-cloud relighting and silver lining, cloud-shadow remapping                            | Global optical and artistic response. Actual cloud brightness still changes with illumination, density and shape.                                                                               |
+| Feature, directional-light, sky-static, sun-disk and cloud switches                                                                                                  | Available to interior and non-periodic location contexts. Weather and periodic contexts require transitionable floats, so fade cloud density instead of toggling clouds during a weather blend. |
+| Worldspace whitelist, exterior/interior eligibility, fallback ground height, planet/atmosphere radii                                                                 | Global world setup. A scene cannot bypass the whitelist or enable rendering in an interior unless the global interior opt-in allows it.                                                         |
+| Half-resolution shadows, tracing/shadow range and march step                                                                                                         | Global quality settings.                                                                                                                                                                        |
+| NDF source mode, noise slots/seeds and noise-source parameters, texture paths, local blend mode, height driver, cirrus pattern generation, 3D cloud-noise parameters | Global resource authoring. In particular, 3D noise generation spans multiple frames; blending its parameters would keep restarting that work.                                                   |
+
+The scene replica hides worldspace editing, noise-source and texture authoring, discrete map modes and
+the debug tab, since their buttons and texture selectors act on global state rather than individual
+scene entries. Other global controls remain visible but disabled by policy. Wind uses direct X/Y
+controls in both the feature page and scene replicas so the catalog and baseline editor bind the same
+stored values, without ambiguous angle wraparound.
+
+Cloud-map fields are discovered from their direct-member JSON initializer, preserving the versioned
+payload. `DragFloat2` interception binds input and output intervals separately to the same persisted
+four-component range. Constant array indices distinguish the two cirrus weather channels.
+
+`PhysicalSky::LoadSettings` only restores the serialized settings. Atmosphere LUTs and cloud constants
+already update during rendering; no resource reload or shader compilation is added to the scene apply
+path. Cloud shape/map changes retain existing temporal-history invalidation, including during blends;
+wind-only changes keep motion reprojection. Existing settings paths and the versioned cloud-map payload
+remain unchanged, so normal scene baseline capture/restore also preserves global cloud resources.
+Interior appearance overrides follow
+Physical Sky's existing global interior opt-in.
 
 When adding a feature to a whitelist, run `tests/test_scene_settings_policy.py`; it fails if a name is not
 discovered in the generated catalog.
@@ -388,10 +424,10 @@ discovered in the generated catalog.
 
 `Feature` gained two virtuals in this port (`src/Feature.h`):
 
-| Virtual | Default | Meaning |
-| ------- | ------- | ------- |
-| `IsAlwaysEnabled()` | `false` | Infrastructure that cannot be disabled at boot. `State` erases it from `disabledFeatures` and refuses toggles. |
-| `UsesMainSettings()` | `true` | Persists through the shared settings JSON; gates override discovery. |
+| Virtual              | Default | Meaning                                                                                                        |
+| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------- |
+| `IsAlwaysEnabled()`  | `false` | Infrastructure that cannot be disabled at boot. `State` erases it from `disabledFeatures` and refuses toggles. |
+| `UsesMainSettings()` | `true`  | Persists through the shared settings JSON; gates override discovery.                                           |
 
 `Feature::RegisterWeatherVariables()` was **removed**. Features no longer register anything; they just draw
 plain ImGui controls over persisted members.
@@ -403,11 +439,11 @@ someone asks for the UI layer.
 
 ### Excluded upstream files
 
-| File | Lines | What it was |
-| ---- | ----- | ----------- |
-| upstream `SceneSettingsUI.{h,cpp}` | ~3180 | The authoring UI: add-setting dialogs, per-scene panels, weather scene panel. This fork's `src/CSEditor/SceneManager/SceneSettingsUI.{h,cpp}` is unrelated in-house work that happens to share the name. |
-| `src/SceneSettingsUIHooks.{h,cpp}` | ~776 | ImGui interception marking scene-controlled widgets and offering right-click capture. |
-| `src/Features/SceneManagerUI.{h,cpp}` | ~34 | `SceneManager::DrawSettings()` body. |
+| File                                  | Lines | What it was                                                                                                                                                                                              |
+| ------------------------------------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| upstream `SceneSettingsUI.{h,cpp}`    | ~3180 | The authoring UI: add-setting dialogs, per-scene panels, weather scene panel. This fork's `src/CSEditor/SceneManager/SceneSettingsUI.{h,cpp}` is unrelated in-house work that happens to share the name. |
+| `src/SceneSettingsUIHooks.{h,cpp}`    | ~776  | ImGui interception marking scene-controlled widgets and offering right-click capture.                                                                                                                    |
+| `src/Features/SceneManagerUI.{h,cpp}` | ~34   | `SceneManager::DrawSettings()` body.                                                                                                                                                                     |
 
 Correspondingly, `SceneManager` here has **no** `PostPostLoad()` (upstream's called
 `SceneSettingsUIHooks::Install()`), and its `DrawSettings()` is a debug view of the resolver's live state

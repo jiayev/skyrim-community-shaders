@@ -510,6 +510,46 @@ def collect_nlohmann_macros(paths: list[Path]) -> dict[str, list[str]]:
     return macros
 
 
+def collect_json_initializer_fields(paths: list[Path]) -> dict[str, list[str]]:
+    schemas: dict[str, list[str]] = {}
+    signature = re.compile(
+        r'\bvoid\s+to_json\s*\(\s*nlohmann::json\s*&\s*(\w+)\s*,\s*'
+        r'const\s+([\w:]+)\s*&\s*(\w+)\s*\)\s*\{')
+    for path in paths:
+        raw = read_text(path)
+        text = masked_text(path)
+        for match in signature.finditer(text):
+            end = find_matching_brace(text, match.end() - 1)
+            if end < 0:
+                continue
+            target, type_name, value = match.groups()
+            body = text[match.end():end]
+            assignment = re.fullmatch(
+                rf'\s*{re.escape(target)}\s*=\s*\{{(.*)\}}\s*;\s*',
+                body, flags=re.DOTALL)
+            if not assignment:
+                continue
+            offset = match.end() + assignment.start(1)
+            initializer = raw[offset:offset + len(assignment.group(1))]
+            fields: list[str] = []
+            for item in split_args(initializer):
+                pair = re.fullmatch(r'\s*\{\s*"(\w+)"\s*,\s*(.*?)\s*\}\s*', item,
+                                    flags=re.DOTALL)
+                if not pair:
+                    break
+                key, expression = pair.groups()
+                if re.fullmatch(rf'{re.escape(value)}\s*\.\s*{re.escape(key)}', expression):
+                    fields.append(key)
+                elif not re.fullmatch(r'(?:\d+(?:\.\d+)?[uUfF]?|true|false|"[^"\n]*")', expression):
+                    break
+            else:
+                if fields:
+                    if type_name in schemas and schemas[type_name] != fields:
+                        raise SystemExit(f"conflicting JSON initializers for {type_name}")
+                    schemas[type_name] = fields
+    return schemas
+
+
 def collect_struct_bodies(paths: list[Path]) -> dict[str, str]:
     bodies: dict[str, str] = {}
     for path in paths:
@@ -2644,11 +2684,10 @@ def find_parameter_origin(
     for index, (_, name, _) in enumerate(parameters):
         match = re.fullmatch(
             rf"\s*&?\s*{re.escape(name)}"
-            r"((?:\.[A-Za-z_]\w*)*)\s*",
+            r"((?:\.[A-Za-z_]\w*|\[\s*\d+\s*\])*)\s*",
             expression)
         if match:
-            member_path = tuple(
-                part for part in match.group(1).split(".") if part)
+            member_path = tuple(re.findall(r"[A-Za-z_]\w*|\d+", match.group(1)))
             return index, member_path
     return None
 
@@ -4153,6 +4192,10 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
     src_paths = sorted({p for p in src_paths if p.exists()})
 
     macros = collect_nlohmann_macros(src_paths)
+    for type_name, fields in collect_json_initializer_fields(src_paths).items():
+        if type_name in macros and macros[type_name] != fields:
+            raise SystemExit(f"conflicting serialized fields for {type_name}")
+        macros[type_name] = fields
     struct_bodies = collect_struct_bodies(src_paths)
     struct_fields = {name: parse_struct_fields(body) for name, body in struct_bodies.items()}
     enum_types = collect_enum_types(src_paths)
@@ -4973,6 +5016,7 @@ SOURCE_WIDGET_ENTRY_POINTS = {
     "ColorEdit4": ("ColorEdit4",),
     "Combo": ("Combo", "RadioButton"),
     "DragFloat": ("DragFloat",),
+    "DragFloat2": ("DragFloat2",),
     "DragFloat4": ("DragFloat4",),
     "InputFloat": ("InputFloat",),
     "InputFloat2": ("InputFloat2",),

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "CloudShadows.h"
 #include "Deferred.h"
 #include "I18n/I18n.h"
@@ -263,6 +264,9 @@ void PhysicalSky::SaveSettings(json& o_json)
 
 void PhysicalSky::DrawSettings()
 {
+	if (SceneWidgetInterceptor::IsArmed())
+		ImGui::TextWrapped("%s", T(TKEY("scene_settings_hint"), "Scene settings control sunlight, atmosphere, cloud motion, shape, density and distribution. Cloud lighting response, noise sources, textures, worldspace setup and rendering quality remain global. Interior settings require Physical Sky to be enabled for interiors."));
+
 	if (ImGui::BeginTabBar("##PHYSSKY")) {
 		if (ImGui::BeginTabItem(T(TKEY("general"), "General"))) {
 			SettingsGeneral();
@@ -280,7 +284,7 @@ void PhysicalSky::DrawSettings()
 			SettingsClouds();
 			ImGui::EndTabItem();
 		}
-		if (ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::BeginTabItem(T(TKEY("debug"), "Debug"))) {
 			SettingsDebug();
 			ImGui::EndTabItem();
 		}
@@ -337,8 +341,8 @@ void PhysicalSky::SettingsGeneral()
 			ImGui::Text("%s", T(TKEY("used_when_current_worldspace_is_not_in_whitelist"), "Used when current worldspace is not in whitelist (or worldspace data is unavailable), including forced interiors."));
 	}
 
-	ImGui::SeparatorText(T(TKEY("worldspace_whitelist"), "Worldspace Whitelist"));
-	{
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		ImGui::SeparatorText(T(TKEY("worldspace_whitelist"), "Worldspace Whitelist"));
 		static std::string newWorldspaceEditorID;
 		static float newWorldspaceZBottom = -14500.f;
 
@@ -604,27 +608,10 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("cloud_motion"), "Cloud Motion"));
 	{
 		auto& wind = settings.cloudLayer.wind;
-		static float lowAngle = 0.f;
-		static float highAngle = 0.f;
-		auto drawWind = [](const char* speedLabel, const char* directionLabel, float2& velocity, float& angle) {
-			float speed = std::hypot(velocity.x, velocity.y);
-			if (!std::isfinite(speed)) {
-				velocity = {};
-				speed = 0.f;
-			}
-			if (speed > 1e-4f)
-				angle = std::fmod(std::atan2(velocity.y, velocity.x) * (180.f / 3.14159265f) + 360.f, 360.f);
-			bool changed = ImGui::SliderFloat(speedLabel, &speed, 0.f, 80.f, "%.1f m/s");
-			changed |= ImGui::SliderFloat(directionLabel, &angle, 0.f, 360.f, "%.0f deg");
-			if (changed) {
-				const float radians = angle * (3.14159265f / 180.f);
-				velocity = { std::cos(radians) * speed, std::sin(radians) * speed };
-			}
-		};
-		drawWind(T(TKEY("cloud_low_wind_speed"), "Low Cloud Speed"), T(TKEY("cloud_low_wind_direction"), "Low Cloud Travel Direction"), wind.lowVelocity, lowAngle);
-		drawWind(T(TKEY("cloud_high_wind_speed"), "High Cloud Speed"), T(TKEY("cloud_high_wind_direction"), "High Cloud Travel Direction"), wind.highVelocity, highAngle);
+		ImGui::SliderFloat2(T(TKEY("cloud_low_wind_velocity"), "Low Cloud Velocity (X/Y)"), &wind.lowVelocity.x, -80.f, 80.f, "%.1f m/s", ImGuiSliderFlags_AlwaysClamp);
+		ImGui::SliderFloat2(T(TKEY("cloud_high_wind_velocity"), "High Cloud Velocity (X/Y)"), &wind.highVelocity.x, -80.f, 80.f, "%.1f m/s", ImGuiSliderFlags_AlwaysClamp);
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloud_wind_direction_desc"), "Travel direction: 0 degrees = +X, 90 degrees = +Y. Weather transitions blend velocity vectors."));
+			ImGui::Text("%s", T(TKEY("cloud_wind_velocity_desc"), "Horizontal velocity in world X/Y axes. Scene transitions blend the components, including across direction changes. The resulting travel speed is capped at 80 m/s."));
 		ImGui::SliderFloat(T(TKEY("cloud_development"), "Development Speed"), &wind.development, 0.f, 1.f, "%.2f");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cloud_development_desc"), "Controls internal low-cloud evolution. Zero freezes development while wind continues to carry the clouds."));
@@ -655,8 +642,8 @@ void PhysicalSky::SettingsVolumetricClouds()
 	}
 
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
-	{
-		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
+	ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
+	if (!SceneWidgetInterceptor::IsArmed()) {
 		cloudNoiseGenerator.DrawSettings(settings.cloudNoise);
 		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
 			LoadCloudTextures();

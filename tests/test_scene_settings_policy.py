@@ -178,6 +178,93 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 self.assertTrue(any(is_prefix(prefix, address)
                                     for prefix in blacklist))
 
+    def test_physical_sky_appearance_supports_scene_blending(self):
+        entries = {
+            (entry["path"], entry["key"]): entry
+            for entry in self.entries if entry["feature"] == "PhysicalSky"
+        }
+        blacklist = [normalize_path(path) for path in self.blacklist]
+        location = [normalize_path(path) for path in self.location_paths]
+        time = [normalize_path(path) for path in self.time_paths]
+        appearance = [
+            ("", "vanillaMix"), ("", "trMix"), ("", "apLumMix"), ("", "apTrMix"),
+            ("", "skyStaticsBrightness"), ("", "sunDiskRad"),
+            ("sunlightColor", "x"), ("masserColor", "y"), ("secundaColor", "z"),
+            ("rayleighScatter", "x"), ("rayleighScatterAP1", "x"),
+            ("aerosolScatter", "y"), ("aerosolAbsorption", "z"),
+            ("ozoneAbsorption", "x"), ("ozoneAbsorptionAP1", "x"),
+            ("cloudLayer/low", "densityScale"), ("cloudLayer/low", "ndfAltitudeOffset"),
+            ("cloudLayer/cirrus", "densityScale"), ("cloudLayer/cirrus", "altitude"),
+            ("cloudLayer/wind/lowVelocity", "x"), ("cloudLayer/wind/lowVelocity", "y"),
+            ("cloudLayer/wind/highVelocity", "x"), ("cloudLayer/wind/highVelocity", "y"),
+            ("cloudLayer/wind", "development"), ("cloudLayer/wind", "disturbance"),
+            ("cloudMap/procedural/parameters/primary/range", "w"),
+            ("cloudMap/procedural/parameters/secondary/range", "w"),
+            ("cloudMap/procedural/parameters/modeling/range", "w"),
+            ("cloudMap/procedural/parameters/modeling/offset", "x"),
+            ("cloudMap/procedural/parameters/heightVariation", "exponent"),
+            ("cloudMap/procedural/parameters/baseHeight", "y"),
+            ("cloudMap/procedural/parameters/bottomTypeRange", "z"),
+            ("cloudMap/procedural/parameters/windOffset", "x"),
+            ("cloudMap/procedural/parameters", "localModelingWeight"),
+            ("cloudMap/procedural/parameters", "localHeightWeight"),
+            ("cloudMap/procedural/parameters", "localWindScale"),
+            ("cloudLayer/cirrus/weather/0/range", "w"),
+            ("cloudLayer/cirrus/weather/1/range", "z"),
+            ("cloudLayer/cirrus/weather/1", "frequency"),
+            ("cloudLayer/cirrus/weather/1/offset", "y"),
+        ]
+        for identity in appearance:
+            with self.subTest(setting=identity):
+                entry = entries[identity]
+                address = normalize_path(catalog_address(entry))
+                self.assertIn("SceneControllable", entry["flags"])
+                self.assertIn("Transitionable", entry["flags"])
+                self.assertFalse(any(is_prefix(prefix, address) for prefix in blacklist))
+                self.assertTrue(any(is_prefix(prefix, address) for prefix in location))
+                self.assertTrue(any(is_prefix(prefix, address) for prefix in time))
+
+    def test_physical_sky_cloud_optics_resources_and_quality_stay_global(self):
+        global_paths = [
+            ("enableAllExteriorCells",), ("forceEnableAllInteriorCells",),
+            ("fallbackZBottom",), ("planetRadius",), ("atmosphereRadius",),
+            ("halfResApShadow",), ("rayMarchRange",), ("shadowVolumeRange",),
+            ("marchStepScale",), ("cloudNoise",),
+            ("cloudRelightMix",), ("cloudOriginalMix",),
+            ("silverLiningMix",), ("silverLiningSpread",), ("cloudShadowRemapRange",),
+            ("cloudLayer", "lighting"), ("cloudLayer", "cirrus", "lightingScale"),
+            ("cloudMap", "type"), ("cloudMap", "texture"),
+            ("cloudMap", "procedural", "noise"), ("cloudMap", "procedural", "local"),
+            ("cloudMap", "procedural", "localMaskPath"),
+            ("cloudMap", "procedural", "parameters", "heightFromCoverage"),
+            ("cloudMap", "procedural", "parameters", "localBlendMode"),
+            ("cloudLayer", "cirrus", "weatherPath"),
+            ("cloudLayer", "cirrus", "patternsPath"),
+            ("cloudLayer", "cirrus", "weather", "0", "noise"),
+            ("cloudLayer", "cirrus", "weather", "1", "noise"),
+            ("cloudLayer", "cirrus", "patternSeed"),
+            ("cloudLayer", "cirrus", "patternWarp"),
+            ("cloudLayer", "cirrus", "patternDetail"),
+        ]
+        global_paths.extend(("cloudMap", "procedural", "parameters", layer, "noise")
+                            for layer in ("primary", "secondary", "coverageGain", "modeling", "modelingGain", "heightVariation"))
+        blacklist = [normalize_path(path) for path in self.blacklist]
+        for path in global_paths:
+            prefix = normalize_path(("PhysicalSky", *path))
+            matches = [address for address in self.addresses if is_prefix(prefix, address)]
+            with self.subTest(path=path):
+                self.assertTrue(matches)
+                self.assertTrue(all(any(is_prefix(blocked, address) for blocked in blacklist)
+                                    for address in matches))
+
+    def test_physical_sky_switches_are_not_transitionable(self):
+        switches = [entry for entry in self.entries
+                    if entry["feature"] == "PhysicalSky" and entry["type"] == "Boolean"]
+        self.assertTrue(switches)
+        for entry in switches:
+            with self.subTest(setting=catalog_address(entry)):
+                self.assertNotIn("Transitionable", entry["flags"])
+
     def test_manager_consumes_every_policy_collection(self):
         for name in (
                 "kSettingBlacklist",

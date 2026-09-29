@@ -1,5 +1,6 @@
 #include "Features/PhysicalSky.h"
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
@@ -161,19 +162,69 @@ const char* NdfManager::GetSettingsHint(const NdfSettings& settings)
 				   "Two coverage signals and a shared type signal drive the profiles. Height variation changes only the bottom bound. Noise slots can be generated locally or supplied as DDS textures.");
 }
 
+static void DrawNdfLayer(const char* label, NdfNoiseLayer& layer, bool power)
+{
+	if (!ImGui::TreeNode(label))
+		return;
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		const char* slotNames[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
+		int slot = static_cast<int>(std::min(layer.noise, 4u));
+		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slotNames, IM_ARRAYSIZE(slotNames)))
+			layer.noise = static_cast<uint32_t>(slot);
+	}
+	ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
+	ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
+	if (power)
+		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &layer.exponent, 0.01f, 8.f);
+	ImGui::TextUnformatted(T(TKEY("ndf_remap"), "Remap"));
+	ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -16.f, 16.f);
+	ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, -16.f, 16.f);
+	ImGui::TreePop();
+}
+
+static void DrawNdfParameters(NdfGenerationParameters& parameters)
+{
+	DrawNdfLayer(T(TKEY("ndf_primary_coverage"), "Primary coverage"), parameters.primary, true);
+	DrawNdfLayer(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), parameters.secondary, true);
+	DrawNdfLayer(T(TKEY("ndf_coverage_gain"), "Coverage gain"), parameters.coverageGain, false);
+	DrawNdfLayer(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true);
+	if (ImGui::TreeNode(T(TKEY("ndf_bottom_type"), "Bottom type"))) {
+		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &parameters.bottomTypeRange.x, 0.01f, -16.f, 16.f);
+		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &parameters.bottomTypeRange.z, 0.01f, -16.f, 16.f);
+		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &parameters.bottomTypeExponent, 0.01f, 8.f);
+		ImGui::TreePop();
+	}
+	DrawNdfLayer(T(TKEY("ndf_type_gain"), "Type gain"), parameters.modelingGain, false);
+	ImGui::PushID("heightAuxiliaryRange");
+	ImGui::TextUnformatted(T(TKEY("ndf_height_auxiliary"), "Bottom shaping start from top type"));
+	ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &parameters.heightAuxiliaryRange.x, 0.01f, -16.f, 16.f);
+	ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &parameters.heightAuxiliaryRange.z, 0.01f, -16.f, 16.f);
+	ImGui::PopID();
+	ImGui::SliderFloat2(T(TKEY("ndf_base_height_rg"), "Base height RG"), &parameters.baseHeight.x, 0.f, 1.f);
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		bool fromCoverage = parameters.heightFromCoverage != 0u;
+		if (ImGui::Checkbox(T(TKEY("ndf_height_from_coverage"), "Height variation from coverage"), &fromCoverage))
+			parameters.heightFromCoverage = fromCoverage ? 1u : 0u;
+	}
+	DrawNdfLayer(T(TKEY("ndf_bottom_height_variation"), "Bottom height variation"), parameters.heightVariation, true);
+	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
+}
+
 void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures)
 {
-	const char* generatorNames[] = {
-		T(TKEY("ndf_type_texture_pair"), "Texture Pair"),
-		T(TKEY("ndf_type_procedural"), "Procedural")
-	};
-	int source = settings.type == NdfType::Texture ? 0 : 1;
-	if (ImGui::Combo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), &source, generatorNames, IM_ARRAYSIZE(generatorNames)))
-		settings.type = source == 0 ? NdfType::Texture : NdfType::Procedural;
-	ImGui::TextWrapped("%s", GetSettingsHint(settings));
-	if (ImGui::TreeNode(T(TKEY("ndf_texture_inputs"), "Texture inputs"))) {
-		textures.DrawUI();
-		ImGui::TreePop();
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		const char* generatorNames[] = {
+			T(TKEY("ndf_type_texture_pair"), "Texture Pair"),
+			T(TKEY("ndf_type_procedural"), "Procedural")
+		};
+		int source = settings.type == NdfType::Texture ? 0 : 1;
+		if (ImGui::Combo(T(TKEY("cloud_map_generator"), "Cloud Map Generator"), &source, generatorNames, IM_ARRAYSIZE(generatorNames)))
+			settings.type = source == 0 ? NdfType::Texture : NdfType::Procedural;
+		ImGui::TextWrapped("%s", GetSettingsHint(settings));
+		if (ImGui::TreeNode(T(TKEY("ndf_texture_inputs"), "Texture inputs"))) {
+			textures.DrawUI();
+			ImGui::TreePop();
+		}
 	}
 	const auto textureChoice = [&](const char* label, std::string& path, uint32_t channels, const char* emptyLabel = T(TKEY("ndf_none"), "None")) {
 		if (ImGui::BeginCombo(label, path.empty() ? emptyLabel : path.c_str())) {
@@ -187,7 +238,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 		if (!path.empty() && !IsTextureNdf(textures.Query(path), channels))
 			ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible texture; using generated input (local influences are skipped)."));
 	};
-	if (settings.type == NdfType::Texture) {
+	if (!SceneWidgetInterceptor::IsArmed() && settings.type == NdfType::Texture) {
 		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), settings.texture.heightPath, 2);
 		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.texture.modelingPath, 3);
 		if (settings.texture.heightPath.empty() || settings.texture.modelingPath.empty())
@@ -195,60 +246,27 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 	}
 	auto& procedural = settings.procedural;
 	auto& parameters = procedural.parameters;
-	const auto rangeControl = [](const char* label, float4& range) {
-		ImGui::PushID(label);
-		ImGui::TextUnformatted(label);
-		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &range.x, 0.01f, -16.f, 16.f);
-		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &range.z, 0.01f, -16.f, 16.f);
-		ImGui::PopID();
-	};
-	const auto layerControl = [&](const char* label, NdfNoiseLayer& layer, bool power) {
-		if (!ImGui::TreeNode(label))
-			return;
-		const char* slotNames[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
-		int slot = static_cast<int>(std::min(layer.noise, 4u));
-		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slotNames, IM_ARRAYSIZE(slotNames)))
-			layer.noise = static_cast<uint32_t>(slot);
-		ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
-		ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
-		if (power)
-			ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &layer.exponent, 0.01f, 8.f);
-		rangeControl(T(TKEY("ndf_remap"), "Remap"), layer.range);
-		ImGui::TreePop();
-	};
-	layerControl(T(TKEY("ndf_primary_coverage"), "Primary coverage"), parameters.primary, true);
-	layerControl(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), parameters.secondary, true);
-	layerControl(T(TKEY("ndf_coverage_gain"), "Coverage gain"), parameters.coverageGain, false);
-	layerControl(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true);
-	if (ImGui::TreeNode(T(TKEY("ndf_bottom_type"), "Bottom type"))) {
-		rangeControl(T(TKEY("ndf_remap"), "Remap"), parameters.bottomTypeRange);
-		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &parameters.bottomTypeExponent, 0.01f, 8.f);
-		ImGui::TreePop();
-	}
-	layerControl(T(TKEY("ndf_type_gain"), "Type gain"), parameters.modelingGain, false);
-	rangeControl(T(TKEY("ndf_height_auxiliary"), "Bottom shaping start from top type"), parameters.heightAuxiliaryRange);
-	ImGui::SliderFloat2(T(TKEY("ndf_base_height_rg"), "Base height RG"), &parameters.baseHeight.x, 0.f, 1.f);
-	bool fromCoverage = parameters.heightFromCoverage != 0u;
-	if (ImGui::Checkbox(T(TKEY("ndf_height_from_coverage"), "Height variation from coverage"), &fromCoverage))
-		parameters.heightFromCoverage = fromCoverage ? 1u : 0u;
-	layerControl(T(TKEY("ndf_bottom_height_variation"), "Bottom height variation"), parameters.heightVariation, true);
-	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
+	DrawNdfParameters(settings.procedural.parameters);
 	if (ImGui::TreeNode(T(TKEY("ndf_local_influence"), "Local NDF influence"))) {
-		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), procedural.local.heightPath, 2);
-		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), procedural.local.modelingPath, 3);
-		textureChoice(T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), procedural.localMaskPath, 1);
-		const char* blendModes[] = {
-			T(TKEY("ndf_blend_interpolate"), "Interpolate"),
-			T(TKEY("ndf_blend_maximum"), "Maximum")
-		};
-		int mode = parameters.localBlendMode == 0u ? 0 : 1;
-		if (ImGui::Combo(T(TKEY("ndf_modeling_blend"), "Modeling blend"), &mode, blendModes, IM_ARRAYSIZE(blendModes)))
-			parameters.localBlendMode = static_cast<uint32_t>(mode);
-		ImGui::SliderFloat(T(TKEY("ndf_modeling_weight"), "Modeling weight"), &parameters.localModelingWeight, 0.f, 1.f);
-		ImGui::SliderFloat(T(TKEY("ndf_height_weight"), "Height weight"), &parameters.localHeightWeight, 0.f, 1.f);
-		ImGui::DragFloat(T(TKEY("ndf_local_offset_multiplier"), "Local offset multiplier"), &parameters.localWindScale, 0.01f, -4.f, 4.f);
+		if (!SceneWidgetInterceptor::IsArmed()) {
+			textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), procedural.local.heightPath, 2);
+			textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), procedural.local.modelingPath, 3);
+			textureChoice(T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), procedural.localMaskPath, 1);
+			const char* blendModes[] = {
+				T(TKEY("ndf_blend_interpolate"), "Interpolate"),
+				T(TKEY("ndf_blend_maximum"), "Maximum")
+			};
+			int mode = parameters.localBlendMode == 0u ? 0 : 1;
+			if (ImGui::Combo(T(TKEY("ndf_modeling_blend"), "Modeling blend"), &mode, blendModes, IM_ARRAYSIZE(blendModes)))
+				parameters.localBlendMode = static_cast<uint32_t>(mode);
+		}
+		ImGui::SliderFloat(T(TKEY("ndf_modeling_weight"), "Modeling weight"), &settings.procedural.parameters.localModelingWeight, 0.f, 1.f);
+		ImGui::SliderFloat(T(TKEY("ndf_height_weight"), "Height weight"), &settings.procedural.parameters.localHeightWeight, 0.f, 1.f);
+		ImGui::DragFloat(T(TKEY("ndf_local_offset_multiplier"), "Local offset multiplier"), &settings.procedural.parameters.localWindScale, 0.01f, -4.f, 4.f);
 		ImGui::TreePop();
 	}
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
 	for (uint32_t index = 0; index < 4; ++index) {
 		ImGui::PushID(static_cast<int>(index));
 		if (ImGui::TreeNode("Noise", T(TKEY("ndf_noise_input"), "Noise input %u"), index)) {
@@ -650,14 +668,33 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
 
-void CirrusMapManager::DrawSettings(CirrusSettings& settings, TextureManager& textures)
+static void DrawCirrusWeather(const char* label, NdfNoiseLayer& layer)
+{
+	if (!ImGui::TreeNode(label))
+		return;
+	ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -1.f, 1.f);
+	ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, 0.f, 1.f);
+	ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
+	ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		const char* slots[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
+		int slot = static_cast<int>(std::min(layer.noise, 4u));
+		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slots, IM_ARRAYSIZE(slots)))
+			layer.noise = static_cast<uint32_t>(slot);
+	}
+	ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four Cloud Map noise inputs."));
+	ImGui::TreePop();
+}
+
+void CirrusMapManager::DrawSettings(CirrusSettings& cirrus, TextureManager& textures)
 {
 	ImGui::SeparatorText(T(TKEY("cirrus"), "Cirrus"));
-	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &settings.enabled);
-	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &settings.altitude, 1.f, 24000.f, "%.0f m");
-	ImGui::SliderFloat(T(TKEY("cirrus_pattern_scale"), "Pattern Repeat Length"), &settings.patternScale, 100.f, 64000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
-	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &settings.densityScale, 0.f, 4.f, "%.3f");
-	ImGui::SliderFloat(T(TKEY("cirrus_lighting_scale"), "Cirrus Lighting Scale"), &settings.lightingScale, 0.f, 4.f, "%.3f");
+	ImGui::Checkbox(T(TKEY("enable_cirrus"), "Enable Cirrus"), &cirrus.enabled);
+	ImGui::SliderFloat(T(TKEY("cirrus_altitude"), "Cirrus Altitude"), &cirrus.altitude, 1.f, 24000.f, "%.0f m");
+	ImGui::SliderFloat(T(TKEY("cirrus_pattern_scale"), "Pattern Repeat Length"), &cirrus.patternScale, 100.f, 64000.f, "%.0f m", ImGuiSliderFlags_Logarithmic);
+	ImGui::SliderFloat(T(TKEY("cirrus_density_scale"), "Cirrus Density Scale"), &cirrus.densityScale, 0.f, 4.f, "%.3f");
+	ImGui::SliderFloat(T(TKEY("cirrus_lighting_scale"), "Cirrus Lighting Scale"), &cirrus.lightingScale, 0.f, 4.f, "%.3f");
+
 	const auto textureChoice = [&](const char* label, std::string& path, uint32_t channels) {
 		const char* generated = T(TKEY("ndf_type_procedural"), "Procedural");
 		if (ImGui::BeginCombo(label, path.empty() ? generated : path.c_str())) {
@@ -671,35 +708,23 @@ void CirrusMapManager::DrawSettings(CirrusSettings& settings, TextureManager& te
 		if (!path.empty() && !NdfManager::IsTextureNdf(textures.Query(path), channels))
 			ImGui::TextColored({ 1, 0.3f, 0.2f, 1 }, "%s", T(TKEY("ndf_incompatible_texture"), "Missing or incompatible texture; using generated input (local influences are skipped)."));
 	};
-	if (ImGui::TreeNode(T(TKEY("cirrus_texture_inputs"), "Cirrus texture inputs"))) {
-		textures.DrawUI();
-		ImGui::TreePop();
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		if (ImGui::TreeNode(T(TKEY("cirrus_texture_inputs"), "Cirrus texture inputs"))) {
+			textures.DrawUI();
+			ImGui::TreePop();
+		}
+		textureChoice(T(TKEY("cirrus_weather_rg"), "Coverage / Type RG"), cirrus.weatherPath, 2);
+		textureChoice(T(TKEY("cirrus_patterns_rgb"), "Wispy / Round / Streaky RGB"), cirrus.patternsPath, 3);
+		if (!NdfManager::IsTextureNdf(textures.Query(cirrus.patternsPath), 3)) {
+			ImGui::InputScalar(T(TKEY("cirrus_pattern_seed"), "Pattern Seed"), ImGuiDataType_U32, &cirrus.patternSeed);
+			ImGui::SliderFloat(T(TKEY("cirrus_pattern_warp"), "Pattern Warp"), &cirrus.patternWarp, 0.f, 0.5f);
+			ImGui::SliderFloat(T(TKEY("cirrus_pattern_detail"), "Pattern Detail"), &cirrus.patternDetail, 0.f, 1.f);
+		}
 	}
-	textureChoice(T(TKEY("cirrus_weather_rg"), "Coverage / Type RG"), settings.weatherPath, 2);
-	textureChoice(T(TKEY("cirrus_patterns_rgb"), "Wispy / Round / Streaky RGB"), settings.patternsPath, 3);
-	if (!NdfManager::IsTextureNdf(textures.Query(settings.patternsPath), 3)) {
-		ImGui::InputScalar(T(TKEY("cirrus_pattern_seed"), "Pattern Seed"), ImGuiDataType_U32, &settings.patternSeed);
-		ImGui::SliderFloat(T(TKEY("cirrus_pattern_warp"), "Pattern Warp"), &settings.patternWarp, 0.f, 0.5f);
-		ImGui::SliderFloat(T(TKEY("cirrus_pattern_detail"), "Pattern Detail"), &settings.patternDetail, 0.f, 1.f);
-	}
-	if (NdfManager::IsTextureNdf(textures.Query(settings.weatherPath), 2))
+	if (NdfManager::IsTextureNdf(textures.Query(cirrus.weatherPath), 2))
 		return;
-	const char* labels[] = { T(TKEY("cirrus_coverage"), "Cirrus Coverage"), T(TKEY("cirrus_type"), "Cirrus Type") };
-	for (uint32_t i = 0; i < 2; ++i) {
-		if (!ImGui::TreeNode(labels[i]))
-			continue;
-		auto& layer = settings.weather[i];
-		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &layer.range.x, 0.01f, -1.f, 1.f);
-		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &layer.range.z, 0.01f, 0.f, 1.f);
-		ImGui::DragFloat(T(TKEY("ndf_frequency"), "Frequency"), &layer.frequency, 0.05f, 0.f, 64.f);
-		ImGui::DragFloat2(T(TKEY("ndf_offset"), "Offset"), &layer.offset.x, 0.005f);
-		const char* slots[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
-		int slot = static_cast<int>(std::min(layer.noise, 4u));
-		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slots, IM_ARRAYSIZE(slots)))
-			layer.noise = static_cast<uint32_t>(slot);
-		ImGui::TextWrapped("%s", T(TKEY("cirrus_shared_noise"), "Uses the four Cloud Map noise inputs."));
-		ImGui::TreePop();
-	}
+	DrawCirrusWeather(T(TKEY("cirrus_coverage"), "Cirrus Coverage"), cirrus.weather[0]);
+	DrawCirrusWeather(T(TKEY("cirrus_type"), "Cirrus Type"), cirrus.weather[1]);
 }
 
 #undef I18N_KEY_PREFIX

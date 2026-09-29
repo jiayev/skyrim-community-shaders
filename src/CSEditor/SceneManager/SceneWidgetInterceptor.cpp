@@ -31,6 +31,7 @@ namespace
 	auto* RealSliderFloat3 = &ImGui::SliderFloat3;
 	auto* RealSliderFloat4 = &ImGui::SliderFloat4;
 	auto* RealDragFloat = &ImGui::DragFloat;
+	auto* RealDragFloat2 = &ImGui::DragFloat2;
 	auto* RealDragFloat4 = &ImGui::DragFloat4;
 	auto* RealInputFloat = &ImGui::InputFloat;
 	auto* RealInputFloat2 = &ImGui::InputFloat2;
@@ -186,6 +187,14 @@ namespace
 			*guard.Float() = static_cast<float>(value);
 		});
 		return guard.Finish(dropped || changed);
+	}
+
+	bool DetouredDragFloat2(const char* label, float v[2], float speed, float vMin, float vMax,
+		const char* format, ImGuiSliderFlags flags)
+	{
+		if (!ShouldIntercept())
+			return RealDragFloat2(label, v, speed, vMin, vMax, format, flags);
+		return InterceptFloatVector<2>(RealDragFloat2, label, v, speed, vMin, vMax, format, flags);
 	}
 
 	bool DetouredDragFloat4(const char* label, float v[4], float speed, float vMin, float vMax,
@@ -373,6 +382,7 @@ namespace
 			{ "SliderFloat3", reinterpret_cast<PVOID*>(&RealSliderFloat3), reinterpret_cast<PVOID>(&DetouredSliderFloat3) },
 			{ "SliderFloat4", reinterpret_cast<PVOID*>(&RealSliderFloat4), reinterpret_cast<PVOID>(&DetouredSliderFloat4) },
 			{ "DragFloat", reinterpret_cast<PVOID*>(&RealDragFloat), reinterpret_cast<PVOID>(&DetouredDragFloat) },
+			{ "DragFloat2", reinterpret_cast<PVOID*>(&RealDragFloat2), reinterpret_cast<PVOID>(&DetouredDragFloat2) },
 			{ "DragFloat4", reinterpret_cast<PVOID*>(&RealDragFloat4), reinterpret_cast<PVOID>(&DetouredDragFloat4) },
 			{ "InputFloat", reinterpret_cast<PVOID*>(&RealInputFloat), reinterpret_cast<PVOID>(&DetouredInputFloat) },
 			{ "InputFloat2", reinterpret_cast<PVOID*>(&RealInputFloat2), reinterpret_cast<PVOID>(&DetouredInputFloat2) },

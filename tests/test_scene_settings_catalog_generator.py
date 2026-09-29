@@ -56,6 +56,63 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(fields["mode"], "uint")
         self.assertEqual(fields["enabled"], "bool")
 
+    def test_versioned_json_initializer_discovers_only_direct_members(self):
+        source = '''
+        void to_json(nlohmann::json& j, const MapSettings& value)
+        {
+            j = { { "version", 2 }, { "type", value.type }, { "layers", value.layers } };
+        }
+        void to_json(nlohmann::json& j, const Renamed& value)
+        {
+            j = { { "other", value.field } };
+        }
+        void to_json(nlohmann::json& j, const Transformed& value)
+        {
+            j = { { "amount", value.amount * 2 } };
+        }
+        void to_json(nlohmann::json& j, const Conditional& value)
+        {
+            if (value.enabled) j = { { "amount", value.amount } };
+        }
+        // void to_json(nlohmann::json& j, const Commented& value) { j = { { "x", value.x } }; }
+        '''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "Settings.cpp"
+            path.write_text(source, encoding="utf-8")
+            schemas = GENERATOR.collect_json_initializer_fields([path])
+        self.assertEqual(schemas, {"MapSettings": ["type", "layers"]})
+
+    def test_parameter_origins_accept_only_constant_array_indices(self):
+        parameters = (("Settings", "value", None),)
+        self.assertEqual(
+            GENERATOR.find_parameter_origin("&value.layers[ 1 ].range.z", parameters),
+            (0, ("layers", "1", "range", "z")))
+        for expression in ("value.layers[index]", "value.layers[1 + 1]", "value.amount * 2"):
+            self.assertIsNone(GENERATOR.find_parameter_origin(expression, parameters))
+
+    def test_physical_sky_distribution_ranges_bind_both_intervals(self):
+        roots = [
+            (f"cloudMap/procedural/parameters/{layer}/range", -16.0, 16.0, -16.0, 16.0)
+            for layer in ("primary", "secondary", "coverageGain", "modeling", "modelingGain", "heightVariation")
+        ] + [
+            (f"cloudLayer/cirrus/weather/{index}/range", -1.0, 1.0, 0.0, 1.0)
+            for index in range(2)
+        ]
+        for path, input_min, input_max, output_min, output_max in roots:
+            for component, key in enumerate("xyzw"):
+                with self.subTest(path=path, component=key):
+                    entry = self.entries_by_id[("PhysicalSky", path, key)]
+                    self.assertEqual(entry["sourceWidget"], "DragFloat2")
+                    self.assertIn("SceneControllable", entry["flags"])
+                    self.assertIn("Transitionable", entry["flags"])
+                    self.assertEqual(entry["serializedPath"], path.rsplit("/", 1)[0])
+                    self.assertEqual(entry["serializedKey"], "range")
+                    self.assertEqual(entry["serializedComponent"], component)
+                    self.assertEqual(entry["aggregateStart"], 0 if component < 2 else 2)
+                    self.assertEqual(entry["aggregateCount"], 2)
+                    self.assertEqual((entry["minimum"], entry["maximum"]),
+                                     (input_min, input_max) if component < 2 else (output_min, output_max))
+
     def test_multiline_and_cast_initializers_preserve_field_types(self):
         fields = GENERATOR.parse_struct_fields("""
             uint mode = (uint)Mode::Default;
@@ -1549,6 +1606,22 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertEqual(ripple_lifetime["editorSemantic"], "Numeric")
         self.assertFalse(ripple_lifetime["hasNumericBounds"])
         self.assertIn("SceneControllable", ripple_lifetime["flags"])
+
+    def test_physical_sky_wind_binds_serialized_vector_components(self):
+        for velocity in ("lowVelocity", "highVelocity"):
+            for index, component in enumerate(("x", "y")):
+                with self.subTest(velocity=velocity, component=component):
+                    entry = self.entries_by_id[
+                        ("PhysicalSky", f"cloudLayer/wind/{velocity}", component)]
+                    self.assertIn("SceneControllable", entry["flags"])
+                    self.assertIn("Transitionable", entry["flags"])
+                    self.assertEqual(entry["sourceWidget"], "SliderFloat2")
+                    self.assertEqual(entry["serializedPath"], "cloudLayer/wind")
+                    self.assertEqual(entry["serializedKey"], velocity)
+                    self.assertEqual(entry["serializedComponent"], index)
+                    self.assertEqual(entry["aggregateCount"], 2)
+                    self.assertEqual(entry["aggregateStart"], 0)
+                    self.assertEqual((entry["minimum"], entry["maximum"]), (-80.0, 80.0))
 
     def test_hidden_persisted_values_have_no_editor(self):
         hidden = [
