@@ -95,14 +95,16 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 	linearLighting.SRGBToWorking(&data.volumetricFogAlbedo.x);
 	linearLighting.SRGBToWorking(&data.volumetricFogEmissive.x);
 
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			data.enabled = 0;
-		}
-	}
+	if (IsSuppressed())
+		data.enabled = 0;
 
 	return data;
+}
+
+bool ExponentialHeightFog::IsSuppressed() const
+{
+	// The world/local map keeps its vanilla fog; height fog tuned for eye level washes it out
+	return (globals::features::effects11.loaded && globals::features::effects11.enableEffect) || globals::state->isMapMenuOpen;
 }
 
 void ExponentialHeightFog::DrawSettings()
@@ -401,6 +403,10 @@ void ExponentialHeightFog::Prepass()
 		ReleaseVolumetricResources();
 		return;
 	}
+
+	// Shaders ignore the fog volume while suppressed, so skip building it but keep the resources
+	if (IsSuppressed())
+		return;
 
 	EnsureVolumetricResources();
 

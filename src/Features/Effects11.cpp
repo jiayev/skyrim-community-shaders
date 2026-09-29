@@ -4,11 +4,10 @@
 
 #include "Effects11/D3D11StateBackup.h"
 #include "Effects11/ENBHelper.h"
+#include "Effects11/Editor/Effects11Editor.h"
 #include "Effects11/EffectManager.h"
-#include "Effects11/MenuManager.h"
 #include "Effects11/PresetManager.h"
 #include "Effects11/SettingManager.h"
-#include "Effects11/WeatherManager.h"
 
 #include "CloudShadows.h"
 #include "Deferred.h"
@@ -34,6 +33,9 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	CheckCommonData();
 
+	if (!perFrameCacheChecker.IsNewFrame())
+		return perFrameCache;
+
 	auto& settingManager = SettingManager::GetSingleton();
 	PerFrame data{};
 
@@ -43,7 +45,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.CloudsCurve = settingManager.GetInterpolatedTimeOfDayValue("CloudsCurve", "SKY");
 	data.CloudsDesaturation = settingManager.GetInterpolatedTimeOfDayValue("CloudsDesaturation", "SKY");
 	data.CloudsEdgeIntensity = settingManager.GetValue<float>("CloudsEdgeIntensity", "SKY");
-	data.CloudsEdgeMoonMultiplier = settingManager.GetValue<float>("CloudsEdgeMoonMultiplier", "SKY");
+	data.CloudsEdgeMoonMultiplier = settingManager.GetInterpolatedTimeOfDayValue("CloudsEdgeMoonMultiplier", "SKY");
 
 	data.VolumetricRaysDesaturation = settingManager.GetInterpolatedTimeOfDayValue("Desaturation", "GAMEVOLUMETRICRAYS");
 	auto colorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "GAMEVOLUMETRICRAYS");
@@ -53,6 +55,7 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	data.ProceduralGradientWeightCurve = settingManager.GetInterpolatedTimeOfDayValue("ProceduralGradientWeightCurve", "SKY");
 
 	data.LightSpriteIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "LIGHTSPRITE");
+	data.LightSpriteCurve = settingManager.GetInterpolatedTimeOfDayValue("Curve", "LIGHTSPRITE");
 
 	data.ParticleIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "PARTICLE");
 	data.ParticleLightingInfluence = settingManager.GetInterpolatedTimeOfDayValue("LightingInfluence", "PARTICLE");
@@ -67,12 +70,12 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 	}
 	data.VolumetricRaysSkyColorAmount = settingManager.GetInterpolatedTimeOfDayValue("SkyColorAmount", "VOLUMETRICRAYS");
 
-	data.EnableRain = enableEffect && raindropSRV;
+	data.EnableRain = IsRainEnabled();
 	data.RainMotionStretch = settingManager.GetInterpolatedTimeOfDayValue("MotionStretch", "RAIN");
 	data.RainMotionTransparency = settingManager.GetInterpolatedTimeOfDayValue("MotionTransparency", "RAIN");
 
-	data.FireIntensity = settingManager.GetInterpolatedTimeOfDayValue("FireIntensity", "FIRE");
-	data.FireCurve = settingManager.GetInterpolatedTimeOfDayValue("FireCurve", "FIRE");
+	data.FireIntensity = settingManager.GetInterpolatedTimeOfDayValue("Intensity", "FIRE");
+	data.FireCurve = settingManager.GetInterpolatedTimeOfDayValue("Curve", "FIRE");
 
 	data.EnableProceduralSun = enableEffect && settingManager.GetValue<bool>("EnableProceduralSun", "EFFECT");
 
@@ -94,12 +97,13 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 
 	data.ProceduralSunGlowIntensity = settingManager.GetInterpolatedTimeOfDayValue("GlowIntensity", "PROCEDURALSUN");
 
+	perFrameCache = data;
 	return data;
 }
 
 void Effects11::DrawSettings()
 {
-	MenuManager::GetSingleton().RenderImGui();
+	Effects11Editor::GetSingleton().DrawLauncher();
 }
 
 bool Effects11::IsPresetEnabled() const
@@ -321,10 +325,13 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 
 		auto dirLightColorF3 = NiToF3(dirLightColor);
 
-		float sunlightScale = FLT_MIN;
+		// A near-zero scale would blow up the divide below, so treat it as unset
+		static constexpr float minSunlightScale = 1e-3f;
+		float sunlightScale = 1.0f;
 		auto imageSpaceManager = globals::game::imageSpaceManager;
 		if (imageSpaceManager) {
-			sunlightScale = std::max(imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale, FLT_MIN);
+			const float rawSunlightScale = imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
+			sunlightScale = rawSunlightScale > minSunlightScale ? rawSunlightScale : 1.0f;
 		}
 		dirLightColorF3 *= sunlightScale;
 
@@ -408,6 +415,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 
 			auto starsColorF3 = NiToF3(starsColor);
 
+			starsColorF3 = Curve(starsColorF3, settingManager.GetInterpolatedTimeOfDayValue("StarsCurve", "SKY"));
 			starsColorF3 = Intensity(starsColorF3, settingManager.GetInterpolatedTimeOfDayValue("StarsIntensity", "SKY"));
 
 			starsColor = F3ToNi(starsColorF3);
@@ -428,6 +436,7 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 
 			auto skyStaticsColorF3 = NiToF3(skyStaticsColor);
 
+			skyStaticsColorF3 = Curve(skyStaticsColorF3, settingManager.GetInterpolatedTimeOfDayValue("Curve", "VOLUMETRICFOG"));
 			skyStaticsColorF3 = ColorFilter(skyStaticsColorF3, settingManager.GetInterpolatedColorTimeOfDayValue("ColorFilter", "VOLUMETRICFOG"), 0.0f);
 			skyStaticsColorF3 = Intensity(skyStaticsColorF3, settingManager.GetInterpolatedTimeOfDayValue("Intensity", "VOLUMETRICFOG"));
 
@@ -510,16 +519,11 @@ void Effects11::CheckCommonData()
 
 		enableEffect = !globals::state->IsFullScreenMenuOpen() && globals::shaderCache->IsEnabled() && effectManager.IsPresetLoaded();
 
-		auto& weatherManager = WeatherManager::GetSingleton();
-
 		effectManager.UpdateCommonData();
 
 		const auto& commonData = effectManager.GetCommonData();
 		settingManager.SetTimeOfDayData(commonData.timeOfDay1, commonData.timeOfDay2);
-
-		uint32_t currentWeatherID = weatherManager.GetEffectiveWeatherID(static_cast<uint32_t>(commonData.weather[0]));
-		uint32_t lastWeatherID = weatherManager.GetEffectiveWeatherID(static_cast<uint32_t>(commonData.weather[1]));
-		settingManager.SetWeatherBlendFactors(currentWeatherID, lastWeatherID, commonData.weather[2]);
+		settingManager.SetWeatherBlendFactors(effectManager.currentWeatherID, effectManager.previousWeatherID, commonData.weather[2]);
 	}
 }
 
@@ -617,6 +621,11 @@ void Effects11::ModifySky(RE::BSRenderPass* Pass)
 	}
 }
 
+bool Effects11::IsRainEnabled()
+{
+	return enableEffect && raindropSRV && SettingManager::GetSingleton().GetValue<bool>(EffectManager::GetSingleton().ids.enableRain);
+}
+
 void Effects11::ModifyParticle(RE::BSRenderPass* Pass)
 {
 	if (!enableEffect || !raindropSRV)
@@ -627,6 +636,9 @@ void Effects11::ModifyParticle(RE::BSRenderPass* Pass)
 
 	auto state = globals::state;
 	if (state->currentPixelDescriptor != static_cast<uint32_t>(SIE::ShaderCache::ParticleShaderTechniques::EnvCubeRain))
+		return;
+
+	if (!IsRainEnabled())
 		return;
 
 	auto context = globals::d3d::context;
@@ -646,6 +658,8 @@ void Effects11::ParticleShaderHacks()
 	if (!state->currentShader || state->currentShader->shaderType.get() != RE::BSShader::Type::Particle)
 		return;
 	if (state->currentPixelDescriptor != static_cast<uint32_t>(SIE::ShaderCache::ParticleShaderTechniques::EnvCubeRain))
+		return;
+	if (!IsRainEnabled())
 		return;
 
 	auto context = globals::d3d::context;

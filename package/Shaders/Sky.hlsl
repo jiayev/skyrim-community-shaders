@@ -1,4 +1,5 @@
 #include "Common/ColorManagement.hlsli"
+#include "Common/FlareOcclusion.hlsli"
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Math.hlsli"
 #include "Common/Permutation.hlsli"
@@ -61,6 +62,29 @@ cbuffer PerGeometry : register(b2)
 	float2 TexCoordOff : packoffset(c16);
 };
 
+#	if defined(DITHER) && defined(TEX)
+/** @brief Fraction of the sun's neighbourhood showing sky, since the vanilla sun query quad sees gaps between distant ridges. */
+float GetSunGlareVisibility()
+{
+	// Scene depth belongs to the main view, not the reflection camera
+	if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection)
+		return 1.0;
+
+	float4 sunPositionCS = mul(FrameBuffer::CameraViewProj, float4(SharedData::SunDirection.xyz, 0.0));
+	if (sunPositionCS.w <= 0.0)
+		return 1.0;
+
+	float2 sunUV = sunPositionCS.xy / sunPositionCS.w * float2(0.5, -0.5) + 0.5;
+	uint visibleSamples = 0;
+	[unroll] for (uint i = 0; i < FlareOcclusion::SampleCount; i++)
+	{
+		float2 sampleUV = sunUV + FlareOcclusion::GetSampleOffset(i);
+		visibleSamples += FrameBuffer::IsOutsideFrame(sampleUV) || SharedData::GetDepth(sampleUV) >= 1.0;
+	}
+	return FlareOcclusion::GetVisibility(visibleSamples);
+}
+#	endif
+
 VS_OUTPUT main(VS_INPUT input)
 {
 	VS_OUTPUT vsout;
@@ -117,7 +141,10 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Color.w = BlendColor[0].w * input.Color.w;
 	vsout.SkyBlendColor0 = float4(BlendColor[0].xyz * VParams, 0);
 	vsout.SkyBlendColor2 = float4(BlendColor[2].xyz * VParams, 0);
-#	endif      // OCCLUSION MOONMASK HORIZFADE
+#		if defined(DITHER) && defined(TEX)
+	vsout.Color.w *= GetSunGlareVisibility();
+#		endif
+#	endif  // OCCLUSION MOONMASK HORIZFADE
 
 	vsout.Position = mul(WorldViewProj, inputPosition).xyww;
 	vsout.WorldPosition = mul(World, inputPosition);
@@ -307,7 +334,12 @@ PS_OUTPUT main(PS_INPUT input)
 #	if defined(EXP_HEIGHT_FOG)
 	const bool inReflection = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InReflection) != 0;
 	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
-		float3 skyFogPosition = normalize(input.FogPosition.xyz) * SharedData::CameraData.x;
+		float skyFogDistance = SharedData::CameraData.x;
+#		if defined(HORIZON_FIX)
+		// Match the main view (ISSAOComposite.hlsl): fog the sky out to the HorizonFix far water's horizon
+		skyFogDistance = max(skyFogDistance, SharedData::horizonFixSettings.farWaterDistance);
+#		endif
+		float3 skyFogPosition = normalize(input.FogPosition.xyz) * skyFogDistance;
 		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, FrameBuffer::CameraPosAdjust.xyz, psout.Color.xyz, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
 		psout.Color.xyz = lerp(psout.Color.xyz, exponentialHeightFog.xyz, exponentialHeightFog.w);
 	}
@@ -319,15 +351,18 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Normal = float4(0.5, 0.5, 0, psout.Color.w * alphaTransmittance);
 
 #	if defined(CLOUD_SHADOWS) && defined(CLOUDS) && !defined(DEFERRED)
-	psout.CloudShadows = psout.Color.w * alphaTransmittance;
+	// A broadcast alpha would square coverage under SRC_ALPHA blending.
+	psout.CloudShadows = float4(1, 1, 1, psout.Color.w * alphaTransmittance);
 
 	// Keep sun behind scene depth to prevent halo leaks through geometry.
 	float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 	if (depth < input.Position.z)
 		psout.Color.w = 0;
 
-#	else
+#	elif !defined(DITHER) || !defined(TEX)
 	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
+	// The sun glare pass (DITHER + TEX) is skipped: it fades by depth coverage in the VS instead,
+	// and the per-pixel reject made the glare disappear.
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 		if (depth < input.Position.z)

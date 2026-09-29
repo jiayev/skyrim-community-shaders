@@ -5,6 +5,10 @@
 #include <memory>
 #include <winrt/base.h>
 
+// C4324: the aligned PerFrame cache member pads the struct
+#pragma warning(push)
+#pragma warning(disable: 4324)
+
 struct Effects11 : Feature
 {
 public:
@@ -53,6 +57,9 @@ public:
 		float ProceduralSunCoronaScale;
 		uint UseProceduralGradientWeights;
 		float ProceduralGradientWeightCurve;
+
+		float LightSpriteCurve;
+		float pad1[3];
 
 		float ParticleIntensity;
 		float ParticleLightingInfluence;
@@ -134,6 +141,7 @@ public:
 	 *         back to the vanilla pass.
 	 */
 	bool RenderTonemap(RE::RENDER_TARGET a_input, RE::RENDER_TARGET a_output);
+	bool IsRainEnabled();
 
 	/** @brief True when the effect chain replaced ISHDR this frame, leaving an SDR scene for HDR Display to expand. */
 	bool ReplacedTonemapperThisFrame() const;
@@ -142,4 +150,10 @@ private:
 	bool presetActive = false;
 	bool resourcesReady = false;
 	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
+
+	// The feature buffer is rebuilt several times per frame, so GetCommonBufferData's lookups are replayed from here
+	PerFrame perFrameCache{};
+	Util::FrameChecker perFrameCacheChecker;
 };
+
+#pragma warning(pop)
