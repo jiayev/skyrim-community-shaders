@@ -1345,6 +1345,29 @@ void PhysicalSky::RestoreGrassSampler()
 	originalPSGrassSampler = nullptr;
 }
 
+void PhysicalSky::ModifyWater()
+{
+	auto context = globals::d3d::context;
+	context->PSGetSamplers(13, 1, originalPSWaterSampler.put());
+
+	auto& samplerModifiedBits = globals::game::shadowState->GetRuntimeData().PSSamplerModifiedBits;
+	originalPSWaterSamplerModifiedBits = samplerModifiedBits & (1u << 13);
+	samplerModifiedBits &= ~(1u << 13);
+
+	auto sampler = sampSv.get();
+	context->PSSetSamplers(13, 1, &sampler);
+}
+
+void PhysicalSky::RestoreWaterSampler()
+{
+	auto context = globals::d3d::context;
+	auto sampler = originalPSWaterSampler.get();
+	context->PSSetSamplers(13, 1, &sampler);
+	originalPSWaterSampler = nullptr;
+	globals::game::shadowState->GetRuntimeData().PSSamplerModifiedBits |= originalPSWaterSamplerModifiedBits;
+	originalPSWaterSamplerModifiedBits = 0;
+}
+
 void PhysicalSky::Hooks::BSSkyShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
 {
 	globals::features::physicalSky.ModifySky();
@@ -1367,4 +1390,16 @@ void PhysicalSky::Hooks::BSGrassShader_RestoreGeometry::thunk(RE::BSShader* This
 {
 	func(This, Pass, RenderFlags);
 	globals::features::physicalSky.RestoreGrassSampler();
+}
+
+void PhysicalSky::Hooks::BSWaterShader_SetupGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+	globals::features::physicalSky.ModifyWater();
+}
+
+void PhysicalSky::Hooks::BSWaterShader_RestoreGeometry::thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags)
+{
+	func(This, Pass, RenderFlags);
+	globals::features::physicalSky.RestoreWaterSampler();
 }

@@ -443,11 +443,15 @@ struct PhysicalSky final : public Feature
 
 	ID3D11SamplerState* originalPSSamplers[2] = { nullptr, nullptr };
 	winrt::com_ptr<ID3D11SamplerState> originalPSGrassSampler = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> originalPSWaterSampler = nullptr;
+	uint32_t originalPSWaterSamplerModifiedBits = 0;
 
 	void ModifySky();
 	void RestoreSamplers();
 	void ModifyGrass();
 	void RestoreGrassSampler();
+	void ModifyWater();
+	void RestoreWaterSampler();
 	struct Hooks
 	{
 		struct BSSkyShader_SetupGeometry
@@ -474,12 +478,26 @@ struct PhysicalSky final : public Feature
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		struct BSWaterShader_SetupGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		struct BSWaterShader_RestoreGeometry
+		{
+			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		static void Install()
 		{
 			stl::write_vfunc<0x6, BSSkyShader_SetupGeometry>(RE::VTABLE_BSSkyShader[0]);
 			stl::write_vfunc<0x7, BSSkyShader_RestoreGeometry>(RE::VTABLE_BSSkyShader[0]);
 			stl::write_vfunc<0x6, BSGrassShader_SetupGeometry>(RE::VTABLE_BSGrassShader[0]);
 			stl::write_vfunc<0x7, BSGrassShader_RestoreGeometry>(RE::VTABLE_BSGrassShader[0]);
+			stl::write_vfunc<0x6, BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+			stl::write_vfunc<0x7, BSWaterShader_RestoreGeometry>(RE::VTABLE_BSWaterShader[0]);
 		}
 	};
 };
