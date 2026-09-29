@@ -1281,6 +1281,12 @@ void PhysicalSky::AccumShadow()
 	auto state = globals::state;
 	auto context = globals::d3d::context;
 
+	if (state->isMapMenuOpen) {
+		constexpr FLOAT clearShadow[4] = {};
+		context->ClearUnorderedAccessViewFloat(texApShadow->uav.get(), clearShadow);
+		return;
+	}
+
 	auto& volumetricShadows = globals::features::volumetricShadows;
 	if (!volumetricShadows.loaded)
 		return;

@@ -252,7 +252,7 @@ float4 LoadCloudBoundary(uint2 pixel, float3 ray)
 	const float4 clip = mul(info.previousViewProj, float4(previousPosition, 1));
 	const float2 previousUv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
 	CloudTemporalSample result;
-	bool useHistory = info.historyValid != 0u && clip.w > 0.0 && all(previousUv == saturate(previousUv));
+	bool useHistory = info.historyValid != 0u && all(info.previousFrameDim > 0.0) && clip.w > 0.0 && all(previousUv == saturate(previousUv));
 	if (useHistory) {
 		result = ReconstructCloud(TexVolHistoryTr, TexVolHistoryLum, TexVolHistoryAux,
 			previousUv * info.previousFrameDim - 0.5, int2(info.previousFrameDim) - 1, false);

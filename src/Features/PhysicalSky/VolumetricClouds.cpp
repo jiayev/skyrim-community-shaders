@@ -846,75 +846,86 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	}
 
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap) {
-		const CloudBoundaryCB boundaryData = {
-			.gridOriginSpacing = { boundaryOrigin.x, boundaryOrigin.y, boundarySpacing.x, boundarySpacing.y },
-			.fieldFrequencyWind = { sbData.lowNdfFrequency.x, sbData.lowNdfFrequency.y, noiseWindOffset.x, noiseWindOffset.y },
-			.shearAltitude = { sbData.cloudShapeShear.x, sbData.cloudShapeShear.y, sbData.lowCloudBaseAltitude, sbData.lowCloudTopAltitude },
-			.evolution = sbData.cloudEvolution,
-			.frameDimensions = { textureDim.x, textureDim.y, static_cast<float>(lowW), static_cast<float>(lowH) },
-			.planetRadius = sbData.planetRadius,
-			.bottomZ = sbData.bottomZ,
-			.gridCellCount = kCloudBoundaryCells,
-			.cloudFrameIndex = volFrameIndex
-		};
-		RenderCloudBoundary(boundaryData, ndfTextures);
-		auto* boundarySrv = texCloudBoundary->srv.get();
-		context->CSSetShaderResources(15, 1, &boundarySrv);
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11ShaderResourceView* nullTemporalSrvs[6] = {};
 		ID3D11ShaderResourceView* nullOutputs[2] = {};
 		context->PSSetShaderResources(110, 2, nullOutputs);
 		context->PSSetShaderResources(114, 2, nullOutputs);
 		context->PSSetShaderResources(116, 1, nullOutputs);
-		texVolTr.swap(texVolHistoryTr);
-		texVolLum.swap(texVolHistoryLum);
-		texVolAux.swap(texVolHistoryAux);
 		texVolCubeTr.swap(texVolCubeHistoryTr);
 		texVolCubeLum.swap(texVolCubeHistoryLum);
 		texVolCubeAux.swap(texVolCubeHistoryAux);
-		outputSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume->srv.get() };
 		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(13, 1, &ambientShSrv);
-		std::array<ID3D11UnorderedAccessView*, 3> uavs = { texVolLowTr->uav.get(), texVolLowLum->uav.get(), texVolLowAux->uav.get() };
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(csVolMainView.get(), nullptr, 0);
-		globals::profiler->BeginPass("PhysicalSky::VolumetricMainView");
-		context->Dispatch((lowW + 7u) >> 3, (lowH + 7u) >> 3, 1);
-		globals::profiler->EndPass();
-		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+		std::array<ID3D11UnorderedAccessView*, 3> uavs = {};
+		if (!state->isMapMenuOpen) {
+			const CloudBoundaryCB boundaryData = {
+				.gridOriginSpacing = { boundaryOrigin.x, boundaryOrigin.y, boundarySpacing.x, boundarySpacing.y },
+				.fieldFrequencyWind = { sbData.lowNdfFrequency.x, sbData.lowNdfFrequency.y, noiseWindOffset.x, noiseWindOffset.y },
+				.shearAltitude = { sbData.cloudShapeShear.x, sbData.cloudShapeShear.y, sbData.lowCloudBaseAltitude, sbData.lowCloudTopAltitude },
+				.evolution = sbData.cloudEvolution,
+				.frameDimensions = { textureDim.x, textureDim.y, static_cast<float>(lowW), static_cast<float>(lowH) },
+				.planetRadius = sbData.planetRadius,
+				.bottomZ = sbData.bottomZ,
+				.gridCellCount = kCloudBoundaryCells,
+				.cloudFrameIndex = volFrameIndex
+			};
+			RenderCloudBoundary(boundaryData, ndfTextures);
+			auto* boundarySrv = texCloudBoundary->srv.get();
+			context->CSSetShaderResources(15, 1, &boundarySrv);
+			texVolTr.swap(texVolHistoryTr);
+			texVolLum.swap(texVolHistoryLum);
+			texVolAux.swap(texVolHistoryAux);
+			uavs = { texVolLowTr->uav.get(), texVolLowLum->uav.get(), texVolLowAux->uav.get() };
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(csVolMainView.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VolumetricMainView");
+			context->Dispatch((lowW + 7u) >> 3, (lowH + 7u) >> 3, 1);
+			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
 
-		std::array<ID3D11ShaderResourceView*, 3> historySrvs = {
-			texVolHistoryTr->srv.get(), texVolHistoryLum->srv.get(), texVolHistoryAux->srv.get()
-		};
-		std::array<ID3D11ShaderResourceView*, 3> traceSrvs = {
-			texVolLowTr->srv.get(), texVolLowLum->srv.get(), texVolLowAux->srv.get()
-		};
-		context->CSSetShaderResources(17, (uint)historySrvs.size(), historySrvs.data());
-		context->CSSetShaderResources(20, (uint)traceSrvs.size(), traceSrvs.data());
-		uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
-		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
-		context->CSSetShader(csVolReproject.get(), nullptr, 0);
-		globals::profiler->BeginPass("PhysicalSky::VolumetricReproject");
-		context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
-		globals::profiler->EndPass();
-		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
-		context->CSSetShaderResources(17, (uint)historySrvs.size(), nullTemporalSrvs);
-		context->CSSetShaderResources(20, (uint)traceSrvs.size(), nullTemporalSrvs);
+			std::array<ID3D11ShaderResourceView*, 3> historySrvs = {
+				texVolHistoryTr->srv.get(), texVolHistoryLum->srv.get(), texVolHistoryAux->srv.get()
+			};
+			std::array<ID3D11ShaderResourceView*, 3> traceSrvs = {
+				texVolLowTr->srv.get(), texVolLowLum->srv.get(), texVolLowAux->srv.get()
+			};
+			context->CSSetShaderResources(17, (uint)historySrvs.size(), historySrvs.data());
+			context->CSSetShaderResources(20, (uint)traceSrvs.size(), traceSrvs.data());
+			uavs = { texVolTr->uav.get(), texVolLum->uav.get(), texVolAux->uav.get() };
+			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
+			context->CSSetShader(csVolReproject.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VolumetricReproject");
+			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
+			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+			context->CSSetShaderResources(17, (uint)historySrvs.size(), nullTemporalSrvs);
+			context->CSSetShaderResources(20, (uint)traceSrvs.size(), nullTemporalSrvs);
 
-		std::array<ID3D11ShaderResourceView*, 3> resultSrvs = {
-			texVolTr->srv.get(), texVolLum->srv.get(), texVolAux->srv.get()
-		};
-		context->CSSetShaderResources(29, (uint)resultSrvs.size(), resultSrvs.data());
-		std::array<ID3D11UnorderedAccessView*, 3> filteredUavs = {
-			texVolFilteredTr->uav.get(), texVolFilteredLum->uav.get(), texVolFilteredAux->uav.get()
-		};
-		context->CSSetUnorderedAccessViews(3, (uint)filteredUavs.size(), filteredUavs.data(), nullptr);
-		context->CSSetShader(csVolFilter.get(), nullptr, 0);
-		globals::profiler->BeginPass("PhysicalSky::VolumetricFilter");
-		context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
-		globals::profiler->EndPass();
-		context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
-		context->CSSetShaderResources(29, (uint)resultSrvs.size(), nullTemporalSrvs);
+			std::array<ID3D11ShaderResourceView*, 3> resultSrvs = {
+				texVolTr->srv.get(), texVolLum->srv.get(), texVolAux->srv.get()
+			};
+			context->CSSetShaderResources(29, (uint)resultSrvs.size(), resultSrvs.data());
+			std::array<ID3D11UnorderedAccessView*, 3> filteredUavs = {
+				texVolFilteredTr->uav.get(), texVolFilteredLum->uav.get(), texVolFilteredAux->uav.get()
+			};
+			context->CSSetUnorderedAccessViews(3, (uint)filteredUavs.size(), filteredUavs.data(), nullptr);
+			context->CSSetShader(csVolFilter.get(), nullptr, 0);
+			globals::profiler->BeginPass("PhysicalSky::VolumetricFilter");
+			context->Dispatch((renderW + 7u) >> 3, (renderH + 7u) >> 3, 1);
+			globals::profiler->EndPass();
+			context->CSSetUnorderedAccessViews(3, 3, nullUavs, nullptr);
+			context->CSSetShaderResources(29, (uint)resultSrvs.size(), nullTemporalSrvs);
+		} else {
+			constexpr FLOAT clearTr[4] = { 1.f, 1.f, 1.f, 1.f };
+			constexpr FLOAT clearLum[4] = {};
+			context->ClearUnorderedAccessViewFloat(texVolTr->uav.get(), clearTr);
+			context->ClearUnorderedAccessViewFloat(texVolLum->uav.get(), clearLum);
+			context->ClearUnorderedAccessViewFloat(texVolAux->uav.get(), clearLum);
+			context->ClearUnorderedAccessViewFloat(texVolFilteredTr->uav.get(), clearTr);
+			context->ClearUnorderedAccessViewFloat(texVolFilteredLum->uav.get(), clearLum);
+			context->ClearUnorderedAccessViewFloat(texVolFilteredAux->uav.get(), clearLum);
+		}
 		outputSrvs[0] = texVolFilteredTr->srv.get();
 		outputSrvs[1] = texVolFilteredLum->srv.get();
 
@@ -962,7 +973,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryWind = volWind;
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
-		volHistoryFrameDim = frameDim;
+		volHistoryFrameDim = state->isMapMenuOpen ? float2{} : frameDim;
 		++volFrameIndex;
 	}
 
