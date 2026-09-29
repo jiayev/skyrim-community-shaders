@@ -174,10 +174,31 @@ keys plus every key a used mode may add when the epoch body refreshes them. Eith
 (`ShadowLatchLayout`), which the passes take from the published frame (`ShadowFrame::latch`), never from the resources,
 since async epochs prepare them on the host thread. A view is never left native for want of a slot.
 
-**Still capped.** The sun's full-frustum processes a view's latch holds (`kMaxSunEntryProcesses`, 8): past it the build
-takes the per-frame path and decides the entry rule on the CPU, with the same result (moving them to a shared latch region
-is a `BuildDrawsCS` change). The view rasterizer states (`DrawPipelines::kMaxShadowRasterStates`, 15, packed in 16-bit
-masks): past it the view stays native.
+**The sun's plane sets and the view rasterizer states (done, 2026-09-29).** Nothing in the shadow path is capped any more:
+- **The sun's full-frustum processes** (the engine culls the scene once per `fullFrustumCullingProcessArray` entry before
+  the cascades, and a cascade only walks entries some process kept; 6 at the exterior save). They were copied into every
+  sun view's latch, at most 8; past 8 the entry rule went to the CPU and the kept shadow state was bypassed. Now they are
+  written once per frame slot into a region of the shadow latch block (`ShadowLatchLayout::SunEntryOffset`, a count and
+  112-byte `SunEntryProcess` records), which every sun view's latch names (`BuildDrawsLatch::sunEntryOffset`). The input
+  always carries its entry sphere, and the kept state is always used.
+- **The sun's cascades** for the colour pass's sun test. They were at most 4 (`SunAccumulation::kMaxCascades`, the
+  latch's `sunMasks/sunPlanes[4]`), and a fifth was silently dropped. The engine has no bound: the count is `iNumSplits`,
+  the shadow map array's slices (Ghidra: `ShadowSceneNode` constructor to `BSShadowDirectionalLight::SetShadowMapCount`,
+  a `BSTArray` resize). Now `SunAccumulation` keeps them in a vector, grown at the sun's `Accumulate` while `bitsReady` is
+  clear, and the colour epoch writes them into a region after the main latch (`MainLatchLayout`, 208-byte
+  `SunAccumulation::GpuCascade` records), growing the block when it needs to (`ReserveMainLatch`; a `PassFrame` keeps
+  its own block).
+- **View rasterizer states.** A state id was 4 bits of the shadow key and a bit of 16-bit masks: the 16th distinct state
+  left its view native. Now the id is a field of `ShadowPipelineKey` (`viewState`, also in the pipeline recipe id), a
+  mode's states are sorted lists (`ModeRasterStates`: casters and volumetric-only), the lookups' map rows are a vector,
+  and the latch's map rows are a grown dimension (`ShadowLatchLayout::rasterStates`).
+
+`BuildDrawsLatch` shrank from 2,048 to 256 bytes. `Impl::ReserveShadowLatch` grows view slots, key slots, state rows and
+processes before the epoch (the sky epoch reserves too, for a state first seen by its capture), and
+`CS_DCLF_TABLE_START=small` starts states and processes at 1 and the main latch at 1 cascade.
+
+Still native, by design rather than capacity: focus shadows (an actor's own shadow; DCLF has no caster set for them)
+and views whose rasterizer state no pipeline can express (wireframe, no depth clip).
 
 **Object rows (measured, 2026-09-29).** An object's row (`BindlessObject`, `DCLFObjectRecord`) is 256 bytes, padded from
 208 so the table stays viewable as an array of constant-buffer blocks. The shaders read it as the structured buffer at

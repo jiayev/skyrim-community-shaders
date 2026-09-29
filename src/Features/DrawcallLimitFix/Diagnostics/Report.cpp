@@ -108,10 +108,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (!missing.empty())
 			skipped += " (missing" + missing + ")";
 		const auto& textures = DCLF::GpuTextures::Get().GetStats();
-		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers",
+		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers; imports: {} made off the render thread, {} in flight",
 			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
-			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers);
+			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers, textures.importedAsync, textures.importsPending);
 		if (draws.frameTexturesMissing) {
 			std::string registers;
 			for (std::uint32_t t = 0; t < 128; ++t) {
@@ -223,9 +223,18 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				bitBreakdown += std::format("{} bit {}{}={}", bitBreakdown.empty() ? "" : ",", bit,
 					((1u << bit) & DCLF::kRuntimePassBits) ? "*" : "", stats.derivationBitCounts[bit]);
 			}
-			logger::info("[DCLF] derivation (last frame): {} objects compared, {} would stay native; property bits: {} differ ({:08X}); runtime bits: {} differ ({:08X}); per bit (* = runtime):{}",
-				stats.derivationChecked, stats.derivationNative, stats.derivationDiffers, stats.derivationBits,
+			logger::info("[DCLF] derivation (last frame): {} objects compared, {} would stay native; property bits: {} differ ({:08X}), {} only where the engine's LOD fades ran out; runtime bits: {} differ ({:08X}); per bit (* = runtime):{}",
+				stats.derivationChecked, stats.derivationNative, stats.derivationDiffers, stats.derivationBits, stats.derivationFadeBits,
 				stats.derivationRuntimeDiffers, stats.derivationRuntimeBits, bitBreakdown.empty() ? std::string(" none") : bitBreakdown);
+			logger::info("[DCLF] LOD fades (last frame): {} objects with a fade node compared; the metric differs from the engine's on {}, the draw's fades on {}{}{}",
+				stats.lodFadeChecked, stats.lodMetricDiffers, stats.lodFadeDiffers, stats.lodFadeFirst.empty() ? "" : "; first: ", stats.lodFadeFirst,
+				stats.lodFadeDiffers ? " <- LOD FADE" : "");
+			logger::info("[DCLF] local shadow lights (last frame): {} objects compared, {} with a shadow light by the engine; the selection differs on {} ({} with a light the engine did not take, {} missing one){}{}",
+				stats.shadowMaskChecked, stats.shadowMaskEngine, stats.shadowMaskDiffers, stats.shadowMaskOver, stats.shadowMaskUnder,
+				stats.shadowMaskFirst.empty() ? "" : "; first: ", stats.shadowMaskFirst);
+			logger::info("[DCLF] passes from the object (last frame): {} registered objects compared, {} not built; against the registration: {} differ in the bits it gives ({:08X}), {} in the sub-pass, {} in the hint, {} in a skin's LOD row{}{}",
+				stats.syntheticChecked, stats.syntheticNotBuilt, stats.syntheticBitsDiffer, stats.syntheticBits, stats.syntheticSubPass, stats.syntheticHint,
+				stats.syntheticLodRow, stats.syntheticFirst.empty() ? "" : "; first: ", stats.syntheticFirst);
 		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed); against the accumulator: {} compared, {} missing, {} extra, {} technique differs, {} subPass differs{}",
@@ -276,19 +285,19 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			stats.templateDefects ? " <- CULLED TEMPLATE" : "");
 		// The material cache and its standing alarm. materialCacheStale must be 0: it is the count of
 		// entries that were re-evaluated live and disagreed with what the cache would have served.
-		logger::info("[DCLF] materials (last frame): {} evaluated; {} written ({} re-evaluated, {} dropped), {} frame samples; slots {} alive (+{} retired on last reference); validated {}, stale {}{}",
+		logger::info("[DCLF] materials (last frame): {} evaluated; {} written ({} re-evaluated, {} dropped), {} frame samples; slots {} alive (+{} retired on last reference, {} of them a member's); validated {}, stale {}{}",
 			stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped,
 			stats.frameMaterialSamples,
-			stats.materialCacheEntries, stats.materialCacheEvicted, stats.materialsValidated, stats.materialCacheStale,
+			stats.materialCacheEntries, stats.materialCacheEvicted, stats.materialEvictedMember, stats.materialsValidated, stats.materialCacheStale,
 			stats.materialCacheStale ? " <- STALE MATERIAL" : "");
 		if (stats.materialCacheStale)
 			logger::warn("[DCLF] material cache staleness is in: {}{}{}{}{}{}",
 				(stats.materialDiffMask & 1) ? "vs " : "", (stats.materialDiffMask & 2) ? "ps " : "",
 				(stats.materialDiffMask & 4) ? "textures " : "", (stats.materialDiffMask & 8) ? "address " : "",
 				(stats.materialDiffMask & 16) ? "filter " : "", (stats.materialDiffMask & 32) ? "written" : "");
-		logger::info("[DCLF] tracked {} under {} category nodes: {} objects ({} the engine also kept, {} of them with the sun's shadow mask; {} with derived descriptors), {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{}, validation drops {}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
+		logger::info("[DCLF] tracked {} under {} category nodes: {} objects ({} the engine also kept, {} of them with the sun's shadow mask; {} with derived descriptors), {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{} ({} geometries moved), validation drops {}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
 			stats.tracked, stats.categoryNodes, stats.objects, stats.nativeVisible, stats.nativeShadowMasked, stats.derivedDescriptors, stats.geometries, stats.pipelines, stats.materials, reasons,
-			stats.attachedEvents, stats.detachedEvents, stats.validationDrops, timing.eventsMs / frames,
+			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
 		{

@@ -7,6 +7,7 @@
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 
 namespace DCLF
 {
@@ -79,12 +80,6 @@ namespace DCLF
 			return true;
 		}
 
-		float FadeNodeLodMetric(const RE::BSFadeNode* a_fadeNode)
-		{
-			// BSFadeNode+0x144 (RUNTIME_DATA unk144) holds a float despite CommonLib's integer type.
-			return std::bit_cast<float>(a_fadeNode->GetRuntimeData().unk144);
-		}
-
 
 		// BSLightingShader::SetupTechnique splits the pass descriptor (engine notes, SetupTechnique).
 		constexpr std::uint32_t VertexDescriptorFromPass(std::uint32_t d)
@@ -105,37 +100,100 @@ namespace DCLF
 
 	std::uint8_t FadeStateOf(const RE::BSShaderProperty* a_property)
 	{
-		// The camera dependence of the derivation, reduced to what the classification actually reads. The
-		// LOD metric feeds DeriveLightingDescriptors in exactly three ways - reject on !isfinite, clear
-		// kSpecular past its fade end, clear kEnvMap past its - so two bits and an invalid marker capture
-		// all of it. The fade *floats* the metric also produces are overwritten from the property by
-		// RefreshFrameConstants before any draw reads them, so they do not belong in the witness.
-		//
-		// An object with none of the fade-sensitive flags has no camera dependence at all and returns 0
-		// without touching the node, which is the common case.
 		if (!a_property)
 			return 0;
 		const std::uint64_t f = a_property->flags.underlying();
 		if (!(f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))))
 			return 0;
-		const auto* fadeNode = a_property->fadeNode;
-		if (!fadeNode)
-			return kFadeNoNode;
-		return LodFadeStateOf(fadeNode);
+		return a_property->fadeNode ? 0 : kFadeNoNode;
 	}
 
-	std::uint8_t LodFadeStateOf(const RE::BSFadeNode* a_fadeNode)
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry)
 	{
-		const float metric = FadeNodeLodMetric(a_fadeNode);
-		if (!std::isfinite(metric))
-			return kFadeInvalid;
-		return static_cast<std::uint8_t>((lodFade.specularEnd < metric ? 1u : 0u) | (lodFade.envmapEnd < metric ? 2u : 0u));
+		using Engine::Global;
+		constexpr std::uintptr_t kMainAccumulator = 0x338c830;     // BSShaderAccumulator*, render mode 0
+		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
+		constexpr std::uintptr_t kNoSunShadowDir = 0x20330a4;      // byte: GetRenderPasses gives no pass ShadowDir
+		constexpr std::uintptr_t kScreenDoorFades = 0x2033468;     // byte: screen-door fades are on
+		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
+		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		const auto* accumulator = Global<std::uint8_t*>(kMainAccumulator);
+		if (!lighting || !accumulator)
+			return 0;
+		const std::uint64_t flags = lighting->flags.underlying();
+		const auto* fadeNode = lighting->fadeNode;
+		const float fade = fadeNode ? fadeNode->GetRuntimeData().currentFade : 1.0f;
+		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
+		const float alpha = (material ? material->materialAlpha : 1.0f) * fade;
+		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
+		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
+		// GetRenderPasses: local_164, local_167, local_165/local_168 and local_158.
+		const bool translucent = alpha < 1.0f || blended;
+		const bool screenDoor = Global<std::uint8_t>(kScreenDoorFades) && fadeNode && fadeNode->GetRuntimeData().unk154 && fade < 1.0f &&
+		                        !(flags & (1ull << 19));
+		constexpr std::uint64_t kOpaqueClasses = 0x800c000000ull;
+		const bool eligible = !translucent || (screenDoor && !blended) || (flags & kOpaqueClasses);
+		bool deferred = accumulator[kAccumulatorDeferredShadow] != 0;
+		if (!screenDoor || blended)
+			deferred = deferred && !((alpha < 1.0f || blended || (flags & (1ull << 33))) && !(flags & kOpaqueClasses));
+		bool shadowDir = deferred && eligible && !Global<std::uint8_t>(kNoSunShadowDir);
+		bool defShadow = deferred;
+		if (!(flags & 0x800c000100ull) && !lighting->shadowMapOrMaskPasses.head)
+			shadowDir = defShadow = false;
+		return (shadowDir ? 0x2000u : 0u) | (defShadow ? 0x4000u : 0u) | (defShadow && !shadowDir ? 0x40u : 0u);
 	}
 
-	bool FadeSensitive(const RE::BSShaderProperty* a_property)
+	LodFadeFrame SampleLodFadeFrame()
 	{
-		return a_property && a_property->fadeNode &&
-		       (a_property->flags.underlying() & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap)));
+		using Engine::Global;
+		LodFadeFrame frame;
+		if (const auto* camera = RE::Main::WorldRootCamera()) {
+			frame.eye[0] = camera->world.translate.x;
+			frame.eye[1] = camera->world.translate.y;
+			frame.eye[2] = camera->world.translate.z;
+			frame.lodAdjust = camera->GetRuntimeData2().lodAdjust;
+		}
+		frame.specularStart = lodFade.specularStart;
+		frame.specularEnd = lodFade.specularEnd;
+		frame.envmapStart = lodFade.envmapStart;
+		frame.envmapEnd = lodFade.envmapEnd;
+		frame.metricScale = Global<float>(0x1aa6300);
+		frame.defaultScale = Global<float>(0x1ad2840);
+		frame.metricOverride = Global<float>(0x332a254);
+		frame.overridden = Global<float>(0x332a254) != Global<float>(0x1769578) ? 1.0f : 0.0f;
+		for (std::uint32_t type = 0; type < 16; ++type)
+			frame.divisors[type] = Global<float>(0x2032e00 + type * 4);
+		frame.fadesOn = Global<std::uint8_t>(0x2032dfd) ? 1.0f : 0.0f;
+		return frame;
+	}
+
+	std::array<float, 4> LodFadeNodeOf(const RE::BSShaderProperty* a_property)
+	{
+		if (!a_property || !a_property->fadeNode)
+			return { 0.0f, 0.0f, 0.0f, -1.0f };
+		const auto* node = a_property->fadeNode;
+		const bool held = !(a_property->flags.underlying() & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))) ||
+		                  node->GetFlags().any(RE::NiAVObject::Flag::kIgnoreFade);
+		const auto& center = node->worldBound.center;
+		return { center.x, center.y, center.z, static_cast<float>(Engine::At<std::uint8_t>(node, 0x153) & 0xF) + (held ? kLodFadeHeld : 0.0f) };
+	}
+
+	float LodMetricOf(const LodFadeFrame& a_frame, const std::array<float, 4>& a_node)
+	{
+		// FUN_14147b110: the distance from the camera to the node's bound centre, scaled by lodAdjust over the LOD type's
+		// divisor (the default scale when that is not positive), times the metric scale; or the override.
+		if (a_frame.overridden != 0.0f)
+			return a_frame.metricOverride;
+		const float divisor = a_frame.divisors[static_cast<std::uint32_t>(a_node[3]) & 0xF];
+		const float scale = divisor > 0.0f ? a_frame.lodAdjust / divisor : a_frame.defaultScale;
+		const float dx = a_node[0] - a_frame.eye[0], dy = a_node[1] - a_frame.eye[1], dz = a_node[2] - a_frame.eye[2];
+		return std::sqrt(dx * dx + dy * dy + dz * dz) * scale * a_frame.metricScale;
+	}
+
+	float LodFadeAt(float a_metric, float a_start, float a_end)
+	{
+		float fade = 0.0f;
+		return LodFadeVisible(a_metric, a_start, a_end, fade) ? fade : 0.0f;
 	}
 
 	void RefreshLodFadeSettings()
@@ -303,7 +361,7 @@ namespace DCLF
 	}
 
 	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
-		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_wantDerived)
+		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out)
 	{
 		std::uint64_t f = a_property.flags.underlying();
 
@@ -370,37 +428,17 @@ namespace DCLF
 		if (alpha && alpha->GetAlphaBlending() && a_out.decalGroup != 2)
 			return Ineligible::AlphaBlend;
 
-		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque, fully
-		// faded-in object. Phase 5 (no native accumulation) depends on it; while the accumulator holds the
-		// pass it is only compared with the drawn technique (SceneStore stats, derivation disagreements).
+		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque object with its specular and
+		// envmap LOD fades not run out: the draw fades those two by distance (LodFadeFrame), so the descriptor is the same
+		// at every distance. Where the accumulator holds a pass, only its per-frame bits are taken from it (below).
 		std::uint32_t derived = 0;
-		float specularFade = a_property.specularLODFade;
-		float envmapFade = a_property.envmapLODFade;
-		// Skipped entirely for an accumulated object unless the probe wants the comparison: see the
-		// header. Everything below this point that the accumulated path reads is recomputed there.
-		const bool deriveNeeded = !a_accumulated || a_wantDerived;
-		const Ineligible derivedReason = !deriveNeeded ? Ineligible::None : [&] {
-			// Distance LOD fades GetRenderPasses applies before choosing the technique: specular and the
-			// environment map switch off past their [LightingShader] thresholds.
-			// Without a fade node GetRenderPasses never computes these fades, so the property fields the draw
-			// reads may be stale. Leave such objects native rather than guess.
+		const float specularFade = a_property.specularLODFade;
+		const float envmapFade = a_property.envmapLODFade;
+		const Ineligible derivedReason = [&] {
+			// Without a fade node GetRenderPasses never computes the LOD fades, so the property fields the draw reads may be
+			// stale. Leave such objects native rather than guess.
 			if (!a_property.fadeNode && (f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow) | Bit(Flag::kEnvMap))))
 				return Ineligible::Fading;
-			if (const auto* fadeNode = a_property.fadeNode) {
-				const float metric = FadeNodeLodMetric(fadeNode);
-				// A non-finite metric leaves the engine's fades undefined (its clamp keeps the NaN); leave it native.
-				if (!std::isfinite(metric))
-					return Ineligible::Fading;
-				if ((f & (Bit(Flag::kSpecular) | Bit(Flag::kMultiIndexSnow))) && !LodFadeVisible(metric, lodFade.specularStart, lodFade.specularEnd, specularFade))
-					f &= ~Bit(Flag::kSpecular);
-				if ((f & Bit(Flag::kEnvMap)) && !LodFadeVisible(metric, lodFade.envmapStart, lodFade.envmapEnd, envmapFade)) {
-					// kSnow keeps the envmap past its fade distance, but then the engine never writes the fade and
-					// the draw reads a stale property field. Leave that case native.
-					if (f & Bit(Flag::kSnow))
-						return Ineligible::Fading;
-					f &= ~Bit(Flag::kEnvMap);
-				}
-			}
 
 			const std::uint32_t technique = SelectLightingTechnique(f);
 			if (!IsSupportedTechnique(technique)) {
@@ -451,32 +489,19 @@ namespace DCLF
 			return Ineligible::None;
 		}();
 
-		std::uint32_t d = 0;
+		if (derivedReason != Ineligible::None)
+			return derivedReason;
+		a_out.derivedPass = derived;
+		std::uint32_t d = derived;
 		if (a_accumulated) {
-			// The technique the accumulator registered the pass under is what SetupTechnique receives. Its fade
-			// decisions and the property's fade values come from the same GetRenderPasses call, which the
-			// engine only repeats when the light state changes; a fresh derivation can differ near a fade
-			// threshold.
-			d = a_accumulated->technique;
-			if (!IsSupportedTechnique((d >> 24) & 0x3f)) {
-				a_out.rejectedTechnique = (d >> 24) & 0x3f;
-				return Ineligible::Technique;
-			}
+			// The pass the accumulator registered gives only what the property does not: DoAlphaTest, the screen-door fade and the
+			// snow bits (kRegisteredPassBits). The rest is the derivation's, so the technique does not change with the distance the
+			// engine's LOD fades were taken at, and the shadow bits are StaticShadowBits', which the draw decides per frame.
+			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | StaticShadowBits(a_geometry);
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
 			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)
 				return Ineligible::Fading;
-			a_out.derivedSpecularLODFade = specularFade;
-			a_out.derivedEnvmapLODFade = envmapFade;
-			specularFade = a_property.specularLODFade;
-			envmapFade = a_property.envmapLODFade;
-			a_out.derivedPass = deriveNeeded && derivedReason == Ineligible::None ? derived : kNotDerived;
-		} else {
-			if (derivedReason != Ineligible::None)
-				return derivedReason;
-			// Without an accumulated pass the per-frame bits are unknown; the derivation's guesses stand.
-			d = derived;
-			a_out.derivedPass = derived;
 		}
 
 		uint vertex = VertexDescriptorFromPass(d);

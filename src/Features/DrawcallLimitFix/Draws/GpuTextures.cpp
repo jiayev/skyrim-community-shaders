@@ -16,9 +16,13 @@
 #	include <Tracy/Tracy.hpp>
 
 #	include <atomic>
+#	include <chrono>
+#	include <condition_variable>
 #	include <cstdlib>
 #	include <mutex>
 #	include <format>
+#	include <thread>
+#	include <vector>
 
 namespace DCLF
 {
@@ -164,6 +168,12 @@ namespace DCLF
 			std::atomic<std::uint32_t> liveCount{ 0 };
 			std::uint64_t nextSerial = 0;
 		};
+		enum class State : std::uint8_t
+		{
+			Pending,
+			Ready,
+			Rejected
+		};
 		struct ImportedBacking
 		{
 			winrt::com_ptr<ID3D11ShaderResourceView> view;
@@ -179,25 +189,254 @@ namespace DCLF
 			std::weak_ptr<Registry> registry;
 			ID3D11ShaderResourceView* key = nullptr;
 			std::uint64_t serial = 0;
+			// The fields above are the importing thread's until it stores the state (release); a lookup reads it first.
+			std::atomic<State> state{ State::Pending };
 			~Entry()
 			{
-				if (auto state = registry.lock()) {
+				if (auto owner = registry.lock()) {
 					if (binding)
-						state->liveCount.fetch_sub(1, std::memory_order_relaxed);
-					std::scoped_lock lock(state->mutex);
-					if (const auto found = state->entries.find(key); found != state->entries.end() && found->second.serial == serial)
-						state->entries.erase(found);
+						owner->liveCount.fetch_sub(1, std::memory_order_relaxed);
+					std::scoped_lock lock(owner->mutex);
+					if (const auto found = owner->entries.find(key); found != owner->entries.end() && found->second.serial == serial)
+						owner->entries.erase(found);
 				}
 			}
 		};
-
+		// The counters the import thread writes as well as the render thread.
+		struct Counters
+		{
+			std::array<std::atomic<std::uint32_t>, static_cast<std::size_t>(Reject::Count)> rejected{};
+			std::atomic<std::uint32_t> unsupportedLayouts{ 0 };
+			std::atomic<std::uint32_t> pending{ 0 };  // queued for the import thread, not settled yet
+			std::atomic<std::uint64_t> importedAsync{ 0 };
+		};
+		// Everything an import needs, owned, so the import thread can make it outside any epoch: the descriptor service is
+		// retained from the graph (its heap allocation is locked), not the epoch's active pointer.
+		struct ImportContext
+		{
+			std::shared_ptr<org::runtime::IDescriptorService> service;
+			std::shared_ptr<org::runtime::ResourceCleanupQueue> cleanup;
+			rhi::Device device;
+			std::shared_ptr<const void> deviceOwner;
+		};
+		struct Request
+		{
+			std::shared_ptr<Entry> entry;
+			ImportContext context;
+			std::shared_ptr<Counters> counters;
+			std::uint32_t sourceTag = ~0u;
+		};
+		// The import thread's queue. The thread shares it, so the last owner only signals it and never joins.
+		struct Importer
+		{
+			std::mutex mutex;
+			std::condition_variable wake;
+			std::vector<Request> queue;
+			bool stop = false;
+		};
+		enum class Found
+		{
+			Unknown,
+			Ready,
+			Pending,
+			Rejected
+		};
 		std::shared_ptr<Registry> registry;
+		std::shared_ptr<Counters> counters = std::make_shared<Counters>();
+		std::shared_ptr<Importer> importer;
 		std::weak_ptr<org::runtime::ResourceCleanupQueue> cleanup;
 		std::array<std::uint32_t, kAddressModes * kFilterModes> samplers{};
 		std::array<org::OwnedDescriptorBinding, kAddressModes * kFilterModes> samplerBindings{};
 		std::array<bool, kAddressModes * kFilterModes> samplerFailed{};
 		org::OwnedDescriptorBinding nullBinding;
 		std::uint32_t nullIndex = kInvalid;
+
+		~Impl()
+		{
+			if (importer) {
+				{
+					std::scoped_lock lock(importer->mutex);
+					importer->stop = true;
+				}
+				importer->wake.notify_one();
+			}
+		}
+
+		// What an import needs, from the epoch the render thread is in; false outside one (the caller asks again in one).
+		static bool MakeContext(ImportContext& a_context)
+		{
+			auto* host = RenderGraphRuntime::Get().Host();
+			auto* service = org::runtime::GetActiveDescriptorService();
+			if (!host || !service || !host->Graph())
+				return false;
+			a_context.service = host->Graph()->RetainDescriptorService();
+			a_context.cleanup = service->GetResourceCleanupQueue();
+			a_context.device = host->GetDesc().device;
+			a_context.deviceOwner = RenderGraphRuntime::Get().DeviceOwner();
+			return a_context.service && a_context.cleanup && a_context.deviceOwner;
+		}
+
+		// The registry's answer for a view; under its lock. The registry holds entries weakly: an import in flight is owned by
+		// whoever asked for it (RequestBinding's owner) and by the import thread, and goes when neither holds it any more.
+		Found Find(Registry& a_registry, ID3D11ShaderResourceView* a_view, Binding& a_binding)
+		{
+			const auto found = a_registry.entries.find(a_view);
+			if (found == a_registry.entries.end())
+				return Found::Unknown;
+			auto& slot = found->second;
+			if (auto live = slot.live.lock()) {
+				switch (live->state.load(std::memory_order_acquire)) {
+				case State::Pending:
+					a_binding.index = kInvalid;
+					a_binding.owner = std::move(live);  // the asker holds the import until it settles
+					a_binding.pending = true;
+					return Found::Pending;
+				case State::Rejected:
+					slot.rejected = std::move(live);
+					a_binding = { kInvalid, {} };
+					return Found::Rejected;
+				case State::Ready:
+					a_binding.index = live->index;
+					a_binding.owner = live->index == kInvalid ? std::shared_ptr<const void>{} : std::move(live);
+					return Found::Ready;
+				}
+			}
+			if (slot.rejected) {
+				a_binding = { kInvalid, {} };
+				return Found::Rejected;
+			}
+			return Found::Unknown;
+		}
+
+		// The import: marks the image stable in DXVK (a synchronous chunk on its CS thread), wraps it in BasicRHI and writes
+		// its view into ORG's heap. Any thread; the entry is the caller's until Settle.
+		static Reject Import(Entry& a_entry, const ImportContext& a_context, Counters& a_counters, std::uint32_t a_sourceTag)
+		{
+			auto* view = a_entry.view.get();
+			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+			view->GetDesc(&viewDesc);
+			rhi::SrvDesc srv{};
+			if (!DescribeView(viewDesc, srv)) {
+				if (a_counters.rejected[static_cast<std::size_t>(Reject::View)].load(std::memory_order_relaxed) < 8)
+					logger::info("[DCLF] Game texture view not supported: format {}, dimension {}", static_cast<int>(viewDesc.Format), static_cast<int>(viewDesc.ViewDimension));
+				return Reject::View;
+			}
+
+			DxvkOrgInteropResourceInfo info{};
+			{
+				ZoneScopedN("CS.DCLF.Texture.Import.DescribeResource");
+				if (!RenderGraphRuntime::Get().DescribeResource(view, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+					return Reject::NotImage;
+			}
+			const auto& image = info.image;
+			// DXVK keeps images it hands out (marked stable) in GENERAL and uses them between the graph's
+			// commands: imported with simultaneous access, they are read in GENERAL and never transitioned.
+			if (image.layout != VK_IMAGE_LAYOUT_GENERAL) {
+				if (a_counters.unsupportedLayouts.fetch_add(1, std::memory_order_relaxed) == 0)
+					logger::warn("[DCLF] A game texture is in Vulkan layout {}, not GENERAL; such textures stay native", static_cast<int>(image.layout));
+				return Reject::Import;
+			}
+
+			rhi::vulkan::ImportedImageDesc import{};
+			import.image = image.image;
+			import.createInfo.flags = image.flags;
+			import.createInfo.imageType = image.type;
+			import.createInfo.format = image.format;
+			import.createInfo.extent = image.extent;
+			import.createInfo.mipLevels = image.mipLevels;
+			import.createInfo.arrayLayers = image.arrayLayers;
+			import.createInfo.samples = image.samples;
+			import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+			import.createInfo.usage = image.usage;
+			import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			import.currentLayout = image.layout;
+			import.simultaneousAccess = true;
+			// Aftermath resource tracking reports Vulkan object names at a fault. Distinguish
+			// imports by the stable DXVK image and the game SRV that produced this view.
+			const auto importName = std::format("DCLF texture image {:#x} SRV {:#x}",
+				reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(view));
+			import.debugName = importName.c_str();
+			{
+				ZoneScopedN("CS.DCLF.Texture.Import.WrapImage");
+				if (rhi::vulkan::import_image(a_context.device, import, a_entry.image) != rhi::Result::Ok || !a_entry.image)
+					return Reject::Import;
+			}
+
+			srv.componentMapping = MappingOf(image.components);
+			auto backing = a_context.cleanup->Make<ImportedBacking>();
+			backing->view.copy_from(view);
+			backing->image = std::move(a_entry.image);
+			{
+				ZoneScopedN("CS.DCLF.Texture.Import.CreateView");
+				a_entry.binding = a_context.service->CreateOwnedShaderResourceView(a_context.deviceOwner, backing->image.Get(), backing, srv);
+			}
+			if (!a_entry.binding)
+				return Reject::View;
+			a_entry.index = a_entry.binding.Index();
+			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
+			if (!SwitchValue(Switch::TraceTexturePaths).empty()) {
+				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(view)));
+				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(image.image)));
+			}
+			return Reject::None;
+		}
+
+		// Publishes an import's result: its fields, then its state (release).
+		static void Settle(Entry& a_entry, Reject a_reject, Counters& a_counters)
+		{
+			a_entry.reject = a_reject;
+			if (a_reject != Reject::None)
+				a_counters.rejected[static_cast<std::size_t>(a_reject)].fetch_add(1, std::memory_order_relaxed);
+			else if (auto owner = a_entry.registry.lock())
+				owner->liveCount.fetch_add(1, std::memory_order_relaxed);
+			a_entry.state.store(a_reject == Reject::None ? State::Ready : State::Rejected, std::memory_order_release);
+		}
+
+		static void RunImporter(Importer& a_importer)
+		{
+#	if defined(TRACY_ENABLE)
+			tracy::SetThreadName("CS DCLF texture import");
+#	endif
+			std::vector<Request> batch;
+			for (;;) {
+				{
+					std::unique_lock lock(a_importer.mutex);
+					a_importer.wake.wait(lock, [&] { return a_importer.stop || !a_importer.queue.empty(); });
+					if (a_importer.stop)
+						return;
+					batch.swap(a_importer.queue);
+				}
+				for (auto& request : batch) {
+					ZoneScopedN("CS.DCLF.Texture.ImportAsync");
+					Reject reject = Reject::Import;
+					try {
+						reject = Import(*request.entry, request.context, *request.counters, request.sourceTag);
+					} catch (const std::exception& e) {
+						logger::error("[DCLF] A game texture could not be imported; its draws stay native: {}", e.what());
+					}
+					if (reject == Reject::None)
+						request.counters->importedAsync.fetch_add(1, std::memory_order_relaxed);
+					Settle(*request.entry, reject, *request.counters);
+					request.counters->pending.fetch_sub(1, std::memory_order_relaxed);
+				}
+				// The thread's references: an import nobody asks for any more (its material went away meanwhile) goes here.
+				batch.clear();
+			}
+		}
+
+		void Queue(Request&& a_request)
+		{
+			if (!importer) {
+				importer = std::make_shared<Importer>();
+				std::thread([state = importer] { RunImporter(*state); }).detach();
+			}
+			{
+				std::scoped_lock lock(importer->mutex);
+				importer->queue.push_back(std::move(a_request));
+			}
+			importer->wake.notify_one();
+		}
 	};
 
 	GpuTextures::GpuTextures() :
@@ -220,33 +459,26 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Texture.ResolveBinding");
 		if (!a_view)
 			return NullBinding();
-		// A descriptor import is legal only inside an epoch. Do not cache an Import
-		// rejection merely because the caller reached us outside that boundary:
-		// the same view may become executable at the next epoch.
-		auto* service = org::runtime::GetActiveDescriptorService();
-		auto* host = RenderGraphRuntime::Get().Host();
 		auto registry = impl->registry;
 		if (registry) {
 			ZoneScopedN("CS.DCLF.Texture.RegistryLookup");
+			Binding binding;
 			std::scoped_lock lock(registry->mutex);
-			if (const auto found = registry->entries.find(a_view); found != registry->entries.end()) {
-				if (auto live = found->second.live.lock())
-					return { live->index, live->index == kInvalid ? std::shared_ptr<const void>{} : live };
-				if (found->second.rejected)
-					return { kInvalid, {} };
-			}
+			if (impl->Find(*registry, a_view, binding) != Impl::Found::Unknown)
+				return binding;  // a pending import is not waited for: the caller asks again (its binding is kInvalid)
 		}
-		if (!service || !host)
-			return { kInvalid, {} };
-		const auto cleanup = service->GetResourceCleanupQueue();
-		if (!cleanup)
+		// A descriptor import is legal only inside an epoch. Do not cache an Import
+		// rejection merely because the caller reached us outside that boundary:
+		// the same view may become executable at the next epoch.
+		Impl::ImportContext context;
+		if (!Impl::MakeContext(context))
 			return { kInvalid, {} };
 		{
 			ZoneScopedN("CS.DCLF.Texture.Import");
-			impl->cleanup = cleanup;
+			impl->cleanup = context.cleanup;
 			if (!registry)
-				impl->registry = registry = cleanup->Make<Impl::Registry>();
-			auto entry = cleanup->Make<Impl::Entry>();
+				impl->registry = registry = context.cleanup->Make<Impl::Registry>();
+			auto entry = context.cleanup->Make<Impl::Entry>();
 			entry->view.copy_from(a_view);
 			entry->registry = registry;
 			entry->key = a_view;
@@ -254,94 +486,60 @@ namespace DCLF
 				ZoneScopedN("CS.DCLF.Texture.Import.Register");
 				std::scoped_lock lock(registry->mutex);
 				entry->serial = ++registry->nextSerial;
-				registry->entries[a_view] = { entry, {}, entry->serial };
+				auto& slot = registry->entries[a_view];
+				slot = {};
+				slot.live = entry;
+				slot.serial = entry->serial;
 			}
-			auto reject = [&](Reject a_reason) {
-				entry->reject = a_reason;
-				{
-					std::scoped_lock lock(registry->mutex);
-					if (const auto found = registry->entries.find(a_view); found != registry->entries.end() && found->second.serial == entry->serial)
-						found->second.rejected = entry;
-				}
-				++stats.rejected[static_cast<std::size_t>(a_reason)];
-				return Binding{ kInvalid, {} };
-			};
-
-			D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
-			a_view->GetDesc(&viewDesc);
-			rhi::SrvDesc srv{};
-			if (!DescribeView(viewDesc, srv)) {
-				if (stats.rejected[static_cast<std::size_t>(Reject::View)] < 8)
-					logger::info("[DCLF] Game texture view not supported: format {}, dimension {}", static_cast<int>(viewDesc.Format), static_cast<int>(viewDesc.ViewDimension));
-				return reject(Reject::View);
-			}
-
-			DxvkOrgInteropResourceInfo info{};
-			{
-				ZoneScopedN("CS.DCLF.Texture.Import.DescribeResource");
-				if (!RenderGraphRuntime::Get().DescribeResource(a_view, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
-					return reject(Reject::NotImage);
-			}
-			const auto& image = info.image;
-			// DXVK keeps images it hands out (marked stable) in GENERAL and uses them between the graph's
-			// commands: imported with simultaneous access, they are read in GENERAL and never transitioned.
-			if (image.layout != VK_IMAGE_LAYOUT_GENERAL) {
-				if (stats.unsupportedLayouts++ == 0)
-					logger::warn("[DCLF] A game texture is in Vulkan layout {}, not GENERAL; such textures stay native", static_cast<int>(image.layout));
-				return reject(Reject::Import);
-			}
-
-			rhi::vulkan::ImportedImageDesc import{};
-			import.image = image.image;
-			import.createInfo.flags = image.flags;
-			import.createInfo.imageType = image.type;
-			import.createInfo.format = image.format;
-			import.createInfo.extent = image.extent;
-			import.createInfo.mipLevels = image.mipLevels;
-			import.createInfo.arrayLayers = image.arrayLayers;
-			import.createInfo.samples = image.samples;
-			import.createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-			import.createInfo.usage = image.usage;
-			import.createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			import.createInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-			import.currentLayout = image.layout;
-			import.simultaneousAccess = true;
-			// Aftermath resource tracking reports Vulkan object names at a fault. Distinguish
-			// imports by the stable DXVK image and the game SRV that produced this view.
-			const auto importName = std::format("DCLF texture image {:#x} SRV {:#x}",
-				reinterpret_cast<std::uintptr_t>(image.image), reinterpret_cast<std::uintptr_t>(a_view));
-			import.debugName = importName.c_str();
-			auto device = host->GetDesc().device;
-			{
-				ZoneScopedN("CS.DCLF.Texture.Import.WrapImage");
-				if (rhi::vulkan::import_image(device, import, entry->image) != rhi::Result::Ok || !entry->image)
-					return reject(Reject::Import);
-			}
-
-			srv.componentMapping = MappingOf(image.components);
-			auto deviceOwner = RenderGraphRuntime::Get().DeviceOwner();
-			if (!deviceOwner)
-				return reject(Reject::Import);
-			auto backing = cleanup->Make<Impl::ImportedBacking>();
-			backing->view.copy_from(a_view);
-			backing->image = std::move(entry->image);
-			{
-				ZoneScopedN("CS.DCLF.Texture.Import.CreateView");
-				entry->binding = service->CreateOwnedShaderResourceView(deviceOwner, backing->image.Get(), backing, srv);
-			}
-			if (!entry->binding) {
-				return reject(Reject::View);
-			}
-			entry->index = entry->binding.Index();
-			registry->liveCount.fetch_add(1, std::memory_order_relaxed);
-			TracyPlot("CS.DCLF.Texture.ImportSource", static_cast<std::int64_t>(a_sourceTag));
-			const bool traceIdentities = !SwitchValue(Switch::TraceTexturePaths).empty();
-			if (traceIdentities) {
-				TracyPlot("CS.DCLF.Texture.ImportView", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(a_view)));
-				TracyPlot("CS.DCLF.Texture.ImportImage", static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(image.image)));
+			const auto reject = Impl::Import(*entry, context, *impl->counters, a_sourceTag);
+			Impl::Settle(*entry, reject, *impl->counters);
+			if (reject != Reject::None) {
+				std::scoped_lock lock(registry->mutex);
+				if (const auto found = registry->entries.find(a_view); found != registry->entries.end() && found->second.serial == entry->serial)
+					found->second.rejected = entry;
+				return { kInvalid, {} };
 			}
 			return { entry->index, entry };
 		}
+	}
+
+	GpuTextures::Binding GpuTextures::RequestBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag)
+	{
+		ZoneScopedN("CS.DCLF.Texture.RequestBinding");
+		if (!a_view)
+			return NullBinding();
+		auto registry = impl->registry;
+		if (registry) {
+			Binding binding;
+			std::scoped_lock lock(registry->mutex);
+			if (impl->Find(*registry, a_view, binding) != Impl::Found::Unknown)
+				return binding;
+		}
+		// Outside an epoch nothing is queued; the caller asks again inside one.
+		Impl::ImportContext context;
+		if (!Impl::MakeContext(context))
+			return { kInvalid, {}, true };
+		impl->cleanup = context.cleanup;
+		if (!registry)
+			impl->registry = registry = context.cleanup->Make<Impl::Registry>();
+		auto entry = context.cleanup->Make<Impl::Entry>();
+		entry->view.copy_from(a_view);  // the SRV stays alive (and its address unused) while it is imported
+		entry->registry = registry;
+		entry->key = a_view;
+		{
+			std::scoped_lock lock(registry->mutex);
+			entry->serial = ++registry->nextSerial;
+			auto& slot = registry->entries[a_view];
+			slot = {};
+			slot.live = entry;
+			slot.serial = entry->serial;
+		}
+		impl->counters->pending.fetch_add(1, std::memory_order_relaxed);
+		// The caller owns the import from here on (as does the import thread until it settles): it keeps the owner with
+		// the view it asked for, and asks again for the index.
+		Binding binding{ kInvalid, entry, true };
+		impl->Queue({ std::move(entry), std::move(context), impl->counters, a_sourceTag });
+		return binding;
 	}
 
 	bool GpuTextures::KnownBinding(ID3D11ShaderResourceView* a_view, Binding& a_binding)
@@ -353,19 +551,16 @@ namespace DCLF
 		const auto registry = impl->registry;
 		if (!registry)
 			return false;
-		std::scoped_lock lock(registry->mutex);
-		const auto found = registry->entries.find(a_view);
-		if (found == registry->entries.end())
+		Binding binding;  // a_binding's previous owner is released after the lock: an entry's destructor takes it
+		Impl::Found found;
+		{
+			std::scoped_lock lock(registry->mutex);
+			found = impl->Find(*registry, a_view, binding);
+		}
+		if (found != Impl::Found::Ready && found != Impl::Found::Rejected)
 			return false;
-		if (auto live = found->second.live.lock()) {
-			a_binding = { live->index, live->index == kInvalid ? std::shared_ptr<const void>{} : live };
-			return true;
-		}
-		if (found->second.rejected) {
-			a_binding = { kInvalid, {} };
-			return true;
-		}
-		return false;
+		a_binding = std::move(binding);
+		return true;
 	}
 
 	std::uint32_t GpuTextures::NullIndex()
@@ -436,6 +631,12 @@ namespace DCLF
 	GpuTextures::Stats GpuTextures::GetStats() const
 	{
 		auto result = stats;
+		const auto& counters = *impl->counters;
+		for (std::size_t i = 0; i < result.rejected.size(); ++i)
+			result.rejected[i] = counters.rejected[i].load(std::memory_order_relaxed);
+		result.unsupportedLayouts = counters.unsupportedLayouts.load(std::memory_order_relaxed);
+		result.importsPending = counters.pending.load(std::memory_order_relaxed);
+		result.importedAsync = counters.importedAsync.load(std::memory_order_relaxed);
 		if (const auto registry = impl->registry) {
 			result.cached = registry->liveCount.load(std::memory_order_relaxed);
 			std::scoped_lock lock(registry->mutex);
@@ -450,6 +651,8 @@ namespace DCLF
 	{
 		++generation;
 		impl->registry.reset();
+		// Imports in flight settle into the old registry and counters, which their requests hold.
+		impl->counters = std::make_shared<Impl::Counters>();
 		impl->samplers.fill(kInvalid);
 		impl->samplerBindings = {};
 		impl->samplerFailed.fill(false);

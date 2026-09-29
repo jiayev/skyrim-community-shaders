@@ -30,7 +30,8 @@ namespace LightLimitFix
 	// declaration and its layout: only the names change source, and NSCB_ALIAS is already exactly this
 	// shape of static under DXC. Every other includer of this header compiles the aliases unchanged.
 	static const int RoomIndex = DCLFObjects[DCLFObjectIndex].RoomIndex;
-	static const uint ShadowBitMask = DCLFObjects[DCLFObjectIndex].ShadowBitMask;
+	// The shadow lights are the draw's, selected by BuildDrawsCS this frame (the object word), not the record's.
+	static const uint ShadowBitMask = DCLFLocalShadowMask;
 #else
 	NSCB_ALIAS(LightLimitFix, int, RoomIndex)
 	NSCB_ALIAS(LightLimitFix, uint, ShadowBitMask)

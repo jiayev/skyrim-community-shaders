@@ -55,7 +55,8 @@ namespace DCLF::Draws
 			a_lookups.sharedVersion = a_lookups.NextVersion();
 		}
 		for (std::size_t i = 0; i < a_lookups.projectedTextures.size(); ++i) {
-			const auto binding = a_projected.valid ? textures.ResolveBinding(a_projected.views[i], static_cast<std::uint32_t>(32 + i)) : GpuTextures::Binding{ Lookups::kNone, {} };
+			// Imported off this thread (RequestBinding): kInvalid while it is, which defers the draws that read it.
+			const auto binding = a_projected.valid ? textures.RequestBinding(a_projected.views[i], static_cast<std::uint32_t>(32 + i)) : GpuTextures::Binding{ Lookups::kNone, {} };
 			const bool ownerChanged = a_lookups.projectedOwners[i].get() != binding.owner.get();
 			if (ownerChanged) ++a_lookups.generation;
 			if (note(a_lookups.projectedTextures[i], binding.index) || ownerChanged)
@@ -98,6 +99,7 @@ namespace DCLF::Draws
 				}
 				if (entry.texturesGeneration != textures.Generation())
 					entry.alternateCharacterLight = {};
+				bool importsPending = false;  // a texture the import thread has not finished (RequestBinding)
 				for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 					if (!((material.textureWritten >> t) & 1)) {
 						if (t == kAlternatingMaterialTextureRegister)
@@ -114,7 +116,8 @@ namespace DCLF::Draws
 					auto& alternate = entry.alternateCharacterLight;
 					const auto* view = material.textures[t];
 					const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner ?
-						GpuTextures::Binding{ alternate.index, alternate.owner } : textures.ResolveBinding(material.textures[t], t);
+						GpuTextures::Binding{ alternate.index, alternate.owner } : textures.RequestBinding(material.textures[t], t);
+					importsPending |= binding.pending;
 					const bool tracePaths = !SwitchValue(Switch::TraceTexturePaths).empty();
 					if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
 						TracyPlot("CS.DCLF.Texture.ChangedMaterialSlot", static_cast<std::int64_t>(slot));
@@ -150,7 +153,8 @@ namespace DCLF::Draws
 					entry.views[t] = material.textures[t];
 				}
 				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
-					const auto binding = material.featureTextures[f] ? textures.ResolveBinding(material.featureTextures[f], 16 + f) : GpuTextures::Binding{ Lookups::kNone, {} };
+					const auto binding = material.featureTextures[f] ? textures.RequestBinding(material.featureTextures[f], 16 + f) : GpuTextures::Binding{ Lookups::kNone, {} };
+					importsPending |= binding.pending;
 					const std::uint32_t index = binding.index;
 					const bool ownerChanged = entry.featureOwners[f].get() != binding.owner.get();
 					const bool indexChanged = note(entry.featureIndex[f], index);
@@ -161,11 +165,14 @@ namespace DCLF::Draws
 					entry.featureOwners[f] = binding.owner;
 					entry.featureViews[f] = material.featureTextures[f];
 				}
-				if (!entry.resolved) {
+				// A texture still being imported leaves the material unresolved: its draws defer (they stay the engine's), and the
+				// next refresh asks again. It turns resolved, a new version, when the last one arrives. Nothing else changes
+				// while it waits, so the builds made meanwhile stay current.
+				if (!importsPending && !entry.resolved) {
 					++a_lookups.generation;
 					entry.version = a_lookups.NextVersion();
 				}
-				entry.resolved = true;
+				entry.resolved = !importsPending;
 				entry.written = material.textureWritten;
 				entry.texturesGeneration = textures.Generation();
 				entry.recordVersion = a_tables.materialVersion[slot];
@@ -193,10 +200,11 @@ namespace DCLF::Draws
 				const auto& technique = a_tables.TechniqueOf(p);
 				auto& entry = a_lookups.pipelines[p];
 				auto* view = technique.shadowMask ? technique.shadowMaskTexture : nullptr;
+				// A view still being imported holds its owner with no index yet: asked again until it has one.
 				if (entry.shadowMaskView == view && entry.shadowMaskTextureGeneration == textures.Generation() &&
-					(view ? static_cast<bool>(entry.shadowMaskOwner) : entry.shadowMaskIndex == Lookups::kNone))
+					(view ? entry.shadowMaskOwner && entry.shadowMaskIndex != Lookups::kNone : entry.shadowMaskIndex == Lookups::kNone))
 					continue;
-				const auto binding = technique.shadowMask ? textures.ResolveBinding(technique.shadowMaskTexture, 48) : GpuTextures::Binding{ Lookups::kNone, {} };
+				const auto binding = technique.shadowMask ? textures.RequestBinding(technique.shadowMaskTexture, 48) : GpuTextures::Binding{ Lookups::kNone, {} };
 				const bool ownerChanged = entry.shadowMaskOwner.get() != binding.owner.get();
 				if (ownerChanged) ++a_lookups.generation;
 				if (note(entry.shadowMaskIndex, binding.index) || ownerChanged)
@@ -273,7 +281,7 @@ namespace DCLF::Draws
 	}
 
 	void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
-		const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups)
+		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups)
 	{
 		ZoneScopedN("CS.DCLF.RefreshShadowLookups");
 		auto& textures = GpuTextures::Get();
@@ -299,16 +307,25 @@ namespace DCLF::Draws
 			ZoneScopedN("CS.DCLF.RefreshShadow.RetryTextures");
 			const std::vector<ID3D11ShaderResourceView*> pending(a_lookups.pendingShadowTextures.begin(), a_lookups.pendingShadowTextures.end());
 			for (auto* srv : pending) {
-				const auto binding = textures.ResolveBinding(srv, 192);
+				// Still imported (RequestBinding): not in the table yet, so its casters wait (deferredTextures). The import's
+				// owner is held meanwhile.
+				const auto binding = textures.RequestBinding(srv, 192);
+				if (binding.pending) {
+					a_lookups.shadowTextureOwners[srv] = binding.owner;
+					continue;
+				}
 				auto [slot, inserted] = a_lookups.shadowTextures.try_emplace(srv, binding.index);
 				const auto owner = a_lookups.shadowTextureOwners.find(srv);
-				if (inserted || slot->second != binding.index || owner == a_lookups.shadowTextureOwners.end() || owner->second.get() != binding.owner.get())
+				const void* heldOwner = owner == a_lookups.shadowTextureOwners.end() ? nullptr : owner->second.get();
+				if (inserted || slot->second != binding.index || heldOwner != binding.owner.get())
 					++a_lookups.generation;
 				slot->second = binding.index;
-				if (binding.owner) {
+				if (binding.owner)
 					a_lookups.shadowTextureOwners[srv] = binding.owner;
-					a_lookups.pendingShadowTextures.erase(srv);
-				}
+				else if (owner != a_lookups.shadowTextureOwners.end())
+					a_lookups.shadowTextureOwners.erase(owner);
+				// Imported or rejected (kInvalid, which its casters skip): a rejection is permanent, so neither is asked again.
+				a_lookups.pendingShadowTextures.erase(srv);
 			}
 		}
 		TracyCZoneValue(shadowTexturesZone, (static_cast<std::uint64_t>(textureChanges.size()) << 32) | a_lookups.pendingShadowTextures.size());
@@ -323,6 +340,10 @@ namespace DCLF::Draws
 		// multiplying a render-thread hitch when a scene exposes several techniques at once.
 		bool mayRequestProgram = true;
 		TracyCZoneN(shadowPipelinesZone, "CS.DCLF.RefreshShadow.Pipelines", true);
+		// Every state of each mode's views, either caster class.
+		std::array<std::vector<std::uint32_t>, kShadowModeCount> modeStates;
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+			modeStates[m] = a_modeRasterStates[m].All();
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_modeUsed[m])
 				continue;
@@ -334,7 +355,7 @@ namespace DCLF::Draws
 				const ShadowPipelineKey slotKey{ key.technique | modeBits, key.rasterFlags, key.vertexLayout };
 				auto slotIt = a_lookups.shadowSlots.find(slotKey);
 				if (slotIt == a_lookups.shadowSlots.end()) {
-					// The latch's map rows hold every slot this refresh can add (ReserveShadowViews, before the epoch).
+					// The latch's map rows hold every slot this refresh can add (ReserveShadowLatch, before the epoch).
 					slotIt = a_lookups.shadowSlots.emplace(slotKey, static_cast<std::uint32_t>(a_lookups.shadowSlotKeys.size())).first;
 					a_lookups.shadowSlotKeys.push_back(slotKey);
 					++a_lookups.generation;
@@ -348,9 +369,8 @@ namespace DCLF::Draws
 					return found;
 				}();
 				// The key under each rasterizer state its mode's views draw with.
-				for (std::uint32_t states = (a_modeRasterStates[m] & 0xFFFFu) | (a_modeRasterStates[m] >> 16); states; states &= states - 1) {
-					const auto state = static_cast<std::uint32_t>(std::countr_zero(states));
-					const ShadowPipelineKey viewKey{ slotKey.technique, WithShadowState(slotKey.rasterFlags, state), slotKey.vertexLayout };
+				for (const std::uint32_t state : modeStates[m]) {
+					const ShadowPipelineKey viewKey{ slotKey.technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
 					const std::uint32_t set = [&] {
 						ZoneScopedN("CS.DCLF.RefreshShadow.FindPipeline");
 						return program ? pipelines.FindShadow(viewKey, *program, format) : DrawPipelines::kNotReady;
@@ -361,6 +381,8 @@ namespace DCLF::Draws
 						++a_lookups.generation;
 						it->second = index;
 					}
+					if (a_lookups.shadowMapRows.size() <= state)
+						a_lookups.shadowMapRows.resize(std::size_t(state) + 1);
 					auto& row = a_lookups.shadowMapRows[state];
 					if (row.size() <= slot)
 						row.resize(slot + 1, Lookups::kNone);

@@ -68,7 +68,7 @@ namespace DCLF
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
 			RefreshLodFadeSettings();
 			auto& gpu = GpuResources::Get();
-			gpu.BeginFrame(frame);
+			gpu.BeginFrame();
 			const bool resolveBuffers = gpu.Enabled();
 			frameResolveBuffers = resolveBuffers;
 			if (resolveBuffers != graphWasActive) {
@@ -235,6 +235,15 @@ namespace DCLF
 		stats.rejectedBlended = stats.rejectedOpaque = stats.rejectedOpaqueAlphaTest = 0;
 		stats.shadowMaskPipelines = 0;
 		stats.derivationChecked = stats.derivationDiffers = stats.derivationBits = stats.derivationNative = 0;
+		stats.derivationFadeBits = stats.lodFadeChecked = stats.lodMetricDiffers = stats.lodFadeDiffers = 0;
+		stats.lodFadeFirst.clear();
+		lodFadeSampled = false;
+		stats.shadowMaskChecked = stats.shadowMaskEngine = stats.shadowMaskDiffers = stats.shadowMaskOver = stats.shadowMaskUnder = 0;
+		stats.shadowMaskFirst.clear();
+		stats.syntheticChecked = stats.syntheticNotBuilt = stats.syntheticBitsDiffer = stats.syntheticBits = stats.syntheticSubPass = 0;
+		stats.syntheticHint = stats.syntheticLodRow = 0;
+		stats.syntheticFirst.clear();
+		localShadowsSampled = false;
 		stats.derivationRuntimeDiffers = stats.derivationRuntimeBits = 0;
 		stats.derivationBitCounts.fill(0);
 		stats.materialsEvaluated = 0;
@@ -296,11 +305,11 @@ namespace DCLF
 		const bool coverageProbe = SwitchEnabled(Switch::CoverageProbe);
 		auto* trackedEntry = &a_tracked;
 		const auto& entry = a_tracked;
-		// A resident's record written again: an event changed it, and its patch is gone with the write.
-		if (!denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot)) {
-			DropResidentSlot(a_tracked.slot, true, false);
+		// A member's record written again (an event, or its per-frame inputs): it stays a member with its binding if the
+		// write keeps it eligible in the same slot, and BindByMembership binds it again only if what the binding reads changed.
+		const bool wasMember = !denseWalk && a_tracked.slot != kNoObjectSlot && IsResidentSlot(a_tracked.slot);
+		if (wasMember)
 			++residentStats.rewritten;
-		}
 
 		// Eligibility, and nothing else. This phase needs no lighting descriptors - the pipeline and
 		// material belong to the accumulator's half - so the verdict is taken from Tracked's own
@@ -378,7 +387,7 @@ namespace DCLF
 				reason = verdict.reason;
 				++stats.classifyHits;
 			} else {
-				reason = ClassifyStatic(*geometry, &descriptors, nullptr, false, &castCache);
+				reason = ClassifyStatic(*geometry, &descriptors, nullptr, &castCache);
 				if (hit) {
 					// probe: the cache said one thing and the computation another, which is a defect.
 					++stats.classifyChecked;
@@ -547,8 +556,12 @@ namespace DCLF
 		// The accumulated half is the accumulate phase's: a record written again for the same object keeps the patch the
 		// last phase gave it, which the next renews or lets lapse (LapseAccumulated). An entry written every frame (a face,
 		// an actor's part) would otherwise lose its patch here and take it back there, every frame.
-		const bool keepHalf = !denseWalk && objectId == slotBefore && objectId < patchedFrame.size() && patchedFrame[objectId] + 1 == frame &&
-		                      !(tables.objects[objectId].flags & kObjectFree);
+		const bool keepMember = wasMember && objectId == slotBefore && a_bucket == Ineligible::None && !shadowOnly &&
+		                        !(tables.objects[objectId].flags & kObjectFree);
+		if (wasMember && !keepMember)
+			DropResidentSlot(slotBefore, true, false);
+		const bool keepHalf = keepMember || (!denseWalk && objectId == slotBefore && objectId < patchedFrame.size() && patchedFrame[objectId] + 1 == frame &&
+		                                        !(tables.objects[objectId].flags & kObjectFree));
 		tables.objectSeen[objectId] = walkSerial;
 		if (objectBoneRows) {
 			const std::size_t at = std::size_t(tables.PlaceBones(objectId, objectBoneRows)) * 4;
@@ -620,6 +633,7 @@ namespace DCLF
 			useKey(tables.skyKeysUsed, skyTechnique);
 		}
 		tables.sunEntry[objectId] = SunEntryOf(*trackedEntry, *geometry);
+		tables.lodFade[objectId] = LodFadeNodeOf(data.shaderProperty.get());
 		if (face.positions)
 			PushFaceStream(*geometry, objectId, face, faceRegion);
 		else
@@ -670,6 +684,9 @@ namespace DCLF
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;
 			trackedEntry->objectId = objectId;
+			// Scene membership: an eligible record written (entering the scene, or an event rewrote it) is bound again.
+			if (a_bucket == Ineligible::None && !shadowOnly)
+				bindQueue.push_back(objectId);
 		}
 
 		const auto& geometryRecord = tables.geometries[geometrySlot];
@@ -709,39 +726,24 @@ namespace DCLF
 		const bool resolveBuffers = frameResolveBuffers;
 		auto geometryIt = geometryIndex.find(a_triShape);
 		const bool newGeometry = geometryIt == geometryIndex.end();
-		// First use of the slot this frame needs a Touch.
-		const bool needsTouch = !newGeometry && resolveBuffers && tables.geometryLastUsed[geometryIt->second] != frame;
 		// A slot found by address but describing other buffers is a TriShape reallocated at the same
-		// address: it is resolved again into the same slot. A slot whose buffer references were
-		// evicted (nothing touched them for kEvictFrames) is resolved again the same way.
+		// address: it is resolved again into the same slot. So is one resolved while the render graph was off.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
 		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
 		                               tables.geometries[geometryIt->second].vertexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer) ||
-		                               tables.geometries[geometryIt->second].indexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer) ||
-		                               (needsTouch &&
-		                                   (!gpu.Touch(tables.geometries[geometryIt->second].vertexBuffer) || !gpu.Touch(tables.geometries[geometryIt->second].indexBuffer))));
+		                               tables.geometries[geometryIt->second].indexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
 		if (staleGeometry)
 			++stats.geometriesRefreshed;
 		if (newGeometry || staleGeometry) {
-			// The buffers are resolved once per TRISHAPE, not once per object.
-			//
-			// Skipping the call altogether is NOT safe and is why this is a move rather than a cache:
-			// GpuResources holds a reference on each buffer so its address cannot be reused, and it
-			// drops that reference when an entry goes kEvictFrames without a Resolve. Resolving per
-			// TriShape still touches every entry DCLF depends on every frame, so nothing is evicted
-			// out from under the tables.
-			std::optional<GpuResources::Buffer> vertexBuffer;
-			std::optional<GpuResources::Buffer> indexBuffer;
+			// The buffers are resolved once per TRISHAPE, not once per object. The slot's leases keep them resolved
+			// (GpuResources) for as long as the slot lives.
 			std::optional<GpuResources::LeasedBuffer> vertexLease, indexLease;
 			if (resolveBuffers) {
 				// The render graph reads the game's buffers in place; they must never move (GpuResources).
-				vertexBuffer = gpu.Resolve(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
-				indexBuffer = gpu.Resolve(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
-				if (vertexBuffer && indexBuffer) {
-					vertexLease = gpu.Lease(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
-					indexLease = gpu.Lease(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
-				}
+				vertexLease = gpu.Acquire(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
+				if (vertexLease)
+					indexLease = gpu.Acquire(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
 				if (!vertexLease || !indexLease) {
 					// Nothing was inserted, so the next object sharing this TriShape retries, exactly
 					// as it did when every object resolved for itself. A stale slot is freed: its
@@ -766,11 +768,11 @@ namespace DCLF
 			record.vertexCount = a_skinPartition ? a_skinPartition->vertices : shape.vertexCount;
 			record.indexCount = static_cast<std::uint32_t>(a_skinPartition ? a_skinPartition->triangles : shape.triangleCount) * 3;
 			record.firstIndex = 0;
-			if (vertexBuffer && indexBuffer) {
-				record.vertexAddress = vertexBuffer->address;
-				record.vertexBytes = vertexBuffer->size;
-				record.indexAddress = indexBuffer->address;
-				record.indexBytes = indexBuffer->size;
+			if (vertexLease && indexLease) {
+				record.vertexAddress = vertexLease->buffer.address;
+				record.vertexBytes = vertexLease->buffer.size;
+				record.indexAddress = indexLease->buffer.address;
+				record.indexBytes = indexLease->buffer.size;
 			}
 			const std::uint32_t slot = staleGeometry ? geometryIt->second : AllocateGeometrySlot();
 			// Other objects' draws copied the old record: the delta walk re-evaluates the ones it kept.
@@ -1468,25 +1470,20 @@ namespace DCLF
 
 	void SceneStore::FinishDeltaWalk(PartTimer& a_timer)
 	{
-		// The kept slots' geometry slots: a referenced one lives (Tables::geometrySlots), so nothing renews them here. Their buffer
-		// references are touched every 64 frames, staggered by slot, against GpuResources' kEvictFrames. A slot whose touch
-		// fails, every unresolved slot once buffers start resolving (the render graph came back), and a slot
-		// ResolveGeometrySlot freed are stale: the objects drawing them are written again, which resolves them.
+		// The kept slots' geometry slots: a referenced one lives (Tables::geometrySlots), and its leases keep its buffers
+		// resolved (GpuResources). Every unresolved slot once buffers start resolving (the render graph came back), and a slot
+		// ResolveGeometrySlot freed, are stale: the objects drawing them are written again, which resolves them.
 		std::optional<ScenePartScope> scanScope(std::in_place, stats.scenePartMs[static_cast<std::size_t>(ScenePart::GeometryScan)],
 			stats.scenePartFrameMs[static_cast<std::size_t>(ScenePart::GeometryScan)]);
 		TracyCZoneN(scanZone, "CS.DCLF.Scene.GeometryScan", true);
-		auto& gpu = GpuResources::Get();
 		const bool resolveBuffers = frameResolveBuffers;
 		const std::size_t second = order.size();
 		staleGeometrySlots.clear();
-		if (resolveBuffers) {
-			const bool every = !geometryResolvedLastWalk;
-			for (std::uint32_t g = every ? 0u : (frame & 63u); g < tables.geometries.size(); g += every ? 1u : 64u) {
-				const auto used = tables.geometryLastUsed[g];
-				if (!tables.geometrySlots.Alive(g) || used == frame)
-					continue;  // free, or written this frame (resolved or touched by the write)
-				const auto& record = tables.geometries[g];
-				if (!record.vertexAddress || !gpu.Touch(record.vertexBuffer) || !gpu.Touch(record.indexBuffer))
+		if (resolveBuffers && !geometryResolvedLastWalk) {
+			for (std::uint32_t g = 0; g < tables.geometries.size(); ++g) {
+				if (!tables.geometrySlots.Alive(g) || tables.geometryLastUsed[g] == frame)
+					continue;  // free, or written this frame (resolved by the write)
+				if (!tables.geometries[g].vertexAddress)
 					staleGeometrySlots.push_back(g);
 			}
 		}

@@ -89,14 +89,12 @@ namespace DCLF
 	void SceneStore::RefreshCategoryNodes(bool a_force)
 	{
 		// The set's content changes only when a cell attaches or detaches, so it is rebuilt when the signature says
-		// something moved, when a detach was seen, or on a slow backstop cadence in case both miss something.
-		constexpr std::uint32_t kBackstopFrames = 30;
+		// something moved or when a detach was seen (walk parity finds anything both miss).
 		const std::uint64_t signature = CategorySignature();
-		if (!a_force && signature == categorySignature && ++categoryIdleFrames < kBackstopFrames)
+		if (!a_force && signature == categorySignature)
 			return;
-		const std::uint8_t cause = a_force ? 1 : signature != categorySignature ? 0 : 2;
+		const std::uint8_t cause = a_force ? 1 : 0;
 		categorySignature = signature;
-		categoryIdleFrames = 0;
 
 		ankerl::unordered_dense::set<RE::NiNode*> current;
 
@@ -343,7 +341,7 @@ namespace DCLF
 	}
 
 	Ineligible SceneStore::ClassifyStatic(RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated,
-		bool a_wantDerived, RE::BSLightingShaderProperty** a_castCache)
+		RE::BSLightingShaderProperty** a_castCache)
 	{
 		// An NPC face shape (a dynamic shape under a BSFaceGenNiNode) takes the checks below like any shape. Its
 		// positions are not in its buffers but in FaceSnapshots: the walk gives every record of one its stream
@@ -413,7 +411,7 @@ namespace DCLF
 			return Ineligible::AlphaBlend;
 
 		LightingDescriptors descriptors;
-		const Ineligible reason = DeriveLightingDescriptors(*property, a_geometry, a_accumulated, descriptors, a_wantDerived);
+		const Ineligible reason = DeriveLightingDescriptors(*property, a_geometry, a_accumulated, descriptors);
 		if (a_descriptors) {
 			if (reason == Ineligible::None) {
 				*a_descriptors = descriptors;

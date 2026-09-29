@@ -263,7 +263,9 @@ namespace DCLF
 		state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
 		if (!state->dispatchSignature)
 			return NotReady(7, "the BuildDraws dispatch signature could not be created");
-		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), host->FrameSlots());
+		state->latchLayout.cascades = SwitchValue(Switch::TableStart) == "small" ? 1u : kInitialSunCascades;
+		state->latchLayout.shadowVolumes = SwitchValue(Switch::TableStart) == "small" ? 1u : kInitialShadowVolumes;
+		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", state->latchLayout.Bytes(), host->FrameSlots());
 		// The phase-1 and colour draws executed grouped by pipeline: BuildDraws appends in whatever order its threads
 		// finish, which made nearly every sequence of the indirect draw switch pipeline.
 		state->sort = DrawSort::Create(device, state->sequenceDraws);
@@ -456,7 +458,7 @@ namespace DCLF
 		return true;
 	}
 
-	void IndirectDraws::Impl::ReserveShadowViews(std::uint32_t a_views, std::uint32_t a_keys)
+	void IndirectDraws::Impl::ReserveShadowLatch(std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
 		if (!shadow || !host)
@@ -475,15 +477,44 @@ namespace DCLF
 			layout.keySlots = Doubled(layout.keySlots, a_keys);
 			logger::info("[DCLF] shadow key slots: {} grown to {}", r.latchLayout.keySlots, layout.keySlots);
 		}
+		if (a_rasterStates > layout.rasterStates) {
+			layout.rasterStates = Doubled(layout.rasterStates, a_rasterStates);
+			logger::info("[DCLF] shadow view rasterizer state rows: {} grown to {}", r.latchLayout.rasterStates, layout.rasterStates);
+		}
+		if (a_sunProcesses > layout.sunProcesses) {
+			layout.sunProcesses = Doubled(layout.sunProcesses, a_sunProcesses);
+			logger::info("[DCLF] sun full-frustum processes: {} grown to {}", r.latchLayout.sunProcesses, layout.sunProcesses);
+		}
 		if (layout == r.latchLayout)
 			return;
 		r.latchLayout = layout;
-		// Every execution writes its frame slot's region whole (the views' latches, the map rows of their states), and a block
+		// Every execution writes its frame slot's region whole (the views' latches, the map rows of their states, the sun's
+		// processes), and a block
 		// frames in flight still read stays alive in the frames they prepared.
 		r.latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", layout.Bytes(), host->FrameSlots());
 		// The passes declare every slot's buffers: the graph is built again, with them, on this epoch.
 		if (newSlots)
 			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+	}
+
+	void IndirectDraws::Impl::ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		auto& layout = a_resources.latchLayout;
+		if (!host || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes))
+			return;
+		if (a_cascades > layout.cascades) {
+			const std::uint32_t grown = Doubled(layout.cascades, a_cascades);
+			logger::info("[DCLF] sun cascades in the main latch: {} grown to {}", layout.cascades, grown);
+			layout.cascades = grown;
+		}
+		if (a_shadowVolumes > layout.shadowVolumes) {
+			const std::uint32_t grown = Doubled(layout.shadowVolumes, a_shadowVolumes);
+			logger::info("[DCLF] local shadow light volumes in the main latch: {} grown to {}", layout.shadowVolumes, grown);
+			layout.shadowVolumes = grown;
+		}
+		// Every execution writes its frame slot's region whole; the frames in flight keep the old block (PassFrame::latch).
+		a_resources.latch = std::make_shared<org::LatchBlock>("cs.dclf.latch", a_resources.latchLayout.Bytes(), host->FrameSlots());
 	}
 
 	void IndirectDraws::Impl::ReserveSceneTables(const SceneStore::Tables& a_tables)
@@ -593,7 +624,8 @@ namespace DCLF
 		state->scene = scene;
 		// CS_DCLF_TABLE_START=small: room for Skylighting's map and one view, and a few key slots.
 		const bool smallSlots = SwitchValue(Switch::TableStart) == "small";
-		state->latchLayout = { smallSlots ? 2u : kInitialShadowViewSlots, smallSlots ? 16u : kInitialShadowKeySlots };
+		state->latchLayout = { smallSlots ? 2u : kInitialShadowViewSlots, smallSlots ? 16u : kInitialShadowKeySlots, smallSlots ? 1u : kInitialShadowRasterStates,
+			smallSlots ? 1u : kInitialSunProcesses };
 		AddShadowViewSlots(*state, state->latchLayout.viewSlots);
 		if (!state->viewBlocks.Create(static_cast<std::uint32_t>(kShadowViewSlotBytes), state->latchLayout.viewSlots, "cs.dclf.shadow.view-blocks")) {
 			shadowSetupFailed = true;

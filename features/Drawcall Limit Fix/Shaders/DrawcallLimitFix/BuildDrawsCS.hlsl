@@ -85,9 +85,21 @@ static float4 CullPlanes[6];
 // the row holds each slot's pipeline under the view's rasterizer state (depth bias, culling). 0 when the
 // inputs name pipelines themselves (the main camera).
 static uint PipelineMapOffset;
-// The main colour pass: kSunTestOn and the number of cascades (the latch's sunMasks and sunPlanes follow).
+// The main colour pass: kSunTestOn when the sun test applies, and the frame's cascades, in bytes into the latch block
+// (a count, then per cascade its two plane masks and 12 planes: IndirectDraws.cpp, SunAccumulation::GpuCascade).
 static uint SunState;
 static const uint kSunTestOn = 0x80000000u;
+static uint SunCascadeOffset;
+// A view of the sun: the frame's full-frustum processes, in bytes into the latch block (a count, then per process its plane
+// mask and 6 planes: IndirectDraws.cpp, SunEntryProcess), shared by the slot's sun views. 0: no entry test.
+static uint SunEntryOffset;
+static const uint kSunRegionHeader = 16;
+static const uint kSunCascadeBytes = 208;
+static const uint kSunEntryProcessBytes = 112;
+// The colour pass: the frame's local shadow lights, in bytes into the latch block (a count, then per volume its two plane
+// masks, the light's mask bit and landscape flag, its sphere and 12 planes: IndirectDraws.cpp, GpuShadowVolume). 0: none tested.
+static uint LocalShadowOffset;
+static const uint kShadowVolumeBytes = 224;
 // The depth segment: the main camera's position and its LOD factor, the fade test's (kObjectFadeTest).
 static float4 FadeEye;
 // The depth segment: the tree height test's base and limit (kObjectHeightTest); the limit is +infinity when it is off.
@@ -108,8 +120,44 @@ void LoadLatch()
 		asfloat(latch.Load4(LatchOffset + 64)), asfloat(latch.Load4(LatchOffset + 80)));
 	PipelineMapOffset = latch.Load(LatchOffset + 192);
 	SunState = latch.Load(LatchOffset + 196);
-	FadeEye = asfloat(latch.Load4(LatchOffset + 1008));
 	TreeHeight = asfloat(latch.Load2(LatchOffset + 200));
+	FadeEye = asfloat(latch.Load4(LatchOffset + 208));
+	const uint3 sunRegions = latch.Load3(LatchOffset + 224);
+	SunCascadeOffset = sunRegions.x;
+	SunEntryOffset = sunRegions.y;
+	LocalShadowOffset = sunRegions.z;
+}
+
+// Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local
+// shadow lights whose sphere its bound meets and whose shadowmap descriptor's planes it is inside, less the ones a landscape
+// property does not take.
+uint LocalShadowMask(float3 a_centre, float a_radius, bool a_landscape)
+{
+	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+	const uint volumes = latch.Load(LocalShadowOffset);
+	uint mask = 0;
+	[loop] for (uint v = 0; v < volumes; ++v) {
+		const uint record = LocalShadowOffset + kSunRegionHeader + v * kShadowVolumeBytes;
+		const uint4 head = latch.Load4(record);  // plane masks, mask bit, landscape
+		if ((mask & head.z) != 0 || (a_landscape && head.w == 0))
+			continue;
+		const float4 sphere = asfloat(latch.Load4(record + 16));
+		const float3 offset = a_centre - sphere.xyz;
+		const float reach = sphere.w + a_radius;
+		if (dot(offset, offset) > reach * reach)
+			continue;
+		bool inside = true;
+		[loop] for (uint p = 0; p < 12 && inside; ++p) {
+			const uint planeMask = p < 6 ? head.x : head.y;
+			if ((planeMask & (1u << (p % 6))) == 0)
+				continue;
+			const float4 plane = asfloat(latch.Load4(record + 32 + p * 16));
+			inside = dot(plane.xyz, a_centre) - plane.w >= -a_radius;
+		}
+		if (inside)
+			mask |= head.z;
+	}
+	return mask;
 }
 
 // A synthetic pass whose pipeline carries the sun's bits (kObjectSunTest): whether its bound meets any of this
@@ -118,15 +166,16 @@ void LoadLatch()
 bool InSunCascades(float3 a_centre, float a_radius)
 {
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-	const uint cascades = min(SunState & 0xFu, 4u);
+	const uint cascades = latch.Load(SunCascadeOffset);
 	[loop] for (uint c = 0; c < cascades; ++c) {
-		const uint2 masks = latch.Load2(LatchOffset + 208 + c * 8);
+		const uint record = SunCascadeOffset + kSunRegionHeader + c * kSunCascadeBytes;
+		const uint2 masks = latch.Load2(record);
 		bool inside = true;
 		[loop] for (uint p = 0; p < 12 && inside; ++p) {
 			const uint mask = p < 6 ? masks.x : masks.y;
 			if ((mask & (1u << (p % 6))) == 0)
 				continue;
-			const float4 plane = asfloat(latch.Load4(LatchOffset + 240 + (c * 12 + p) * 16));
+			const float4 plane = asfloat(latch.Load4(record + 16 + p * 16));
 			inside = dot(plane.xyz, a_centre) - plane.w >= -a_radius;
 		}
 		if (inside)
@@ -135,21 +184,24 @@ bool InSunCascades(float3 a_centre, float a_radius)
 	return false;
 }
 
-// A view of the sun: whether an entry sphere is outside every one of the frame's full-frustum processes (the latch's sun entry
-// block, IndirectDraws.cpp: BuildDrawsLatch::sunEntryPlanes). A count of 0: no verdict here.
+// A view of the sun: whether an entry sphere is outside every one of the frame's full-frustum processes (the slot's sun entry
+// region, IndirectDraws.cpp: BuildDrawsLatch::sunEntryOffset, OutsideSunEntryProcesses). None: no verdict here.
 bool OutsideSunEntry(float4 a_entry)
 {
+	if (SunEntryOffset == 0)
+		return false;
 	ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-	const uint processes = min(latch.Load(LatchOffset + 1024), 8u);
+	const uint processes = latch.Load(SunEntryOffset);
 	if (processes == 0)
 		return false;
 	[loop] for (uint process = 0; process < processes; ++process) {
-		const uint mask = latch.Load(LatchOffset + 1028 + process * 4);
+		const uint record = SunEntryOffset + kSunRegionHeader + process * kSunEntryProcessBytes;
+		const uint mask = latch.Load(record);
 		bool outside = false;
 		[loop] for (uint p = 0; p < 6 && !outside; ++p) {
 			if ((mask & (1u << p)) == 0)
 				continue;
-			const float4 plane = asfloat(latch.Load4(LatchOffset + 1072 + (process * 6 + p) * 16));
+			const float4 plane = asfloat(latch.Load4(record + 16 + p * 16));
 			outside = dot(plane.xyz, a_entry.xyz) - plane.w < -a_entry.w;
 		}
 		if (!outside)
@@ -208,9 +260,8 @@ bool NoNearPlane() { return (CullFlags & 0x200) != 0; }
 bool CastersOnly() { return (CullFlags & 0x400) != 0; }
 bool VolumetricOnly() { return (CullFlags & 0x800) != 0; }
 // A view of the sun: an input whose entry is outside the sun's full-frustum processes is none of its casters
-// (IndirectDraws.cpp: kCullSunEntry, kInputOutsideSunEntry).
+// (IndirectDraws.cpp: kCullSunEntry).
 bool SunEntry() { return (CullFlags & 0x1000) != 0; }
-static const uint kInputOutsideSunEntry = 1u << 25;
 
 uint2 HzbBaseSize() { return uint2(HzbSizePacked & 0xFFFF, HzbSizePacked >> 16); }
 float2 HzbUvScale() { return float2(HzbUvScalePacked & 0xFFFF, HzbUvScalePacked >> 16) / 65535.0; }
@@ -221,6 +272,11 @@ static const uint kObjectNativeVisible = 1u << 3;
 // cascade (kObjectSunMiss), which the pixel stage reads (DCLFObjects.hlsli).
 static const uint kObjectSunTest = 1u << 26;
 static const uint kObjectSunMiss = 1u << 31;
+// The object word's local shadow lights (Records.h: kObjectLocalShadowShift), and a landscape property's flag, whose selection
+// takes only the lights that take landscape (kObjectLandscapeLights).
+static const uint kObjectLocalShadowShift = 26;
+static const uint kObjectLandscapeLights = 1u << 29;
+static const uint kObjectMember = 1u << 30;
 // A resident object under a fade root (Records.h): the depth segment's first phase drops it past its fade-out distance
 // unless it was in view last frame (FadeHidden).
 static const uint kObjectFadeTest = 1u << 27;
@@ -503,6 +559,10 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 			sunCount.InterlockedAdd(kCountSunMissed, 1, sunScratch);
 		}
 	}
+	if (LocalShadowOffset != 0) {
+		const float4 bound = asfloat(inputs.Load4(inputOffset + 16));
+		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
+	}
 	const bool drawable = (input.w & kInputDrawable) != 0;
 	const uint phase = CullPhase();
 	uint scratch;
@@ -511,15 +571,10 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	const bool volumetricCaster = (input.w & kObjectVolumetricOnly) != 0;
 	if ((CastersOnly() && volumetricCaster) || (VolumetricOnly() && !volumetricCaster))
 		return;
-	// The sun's entry rule: the input's entry sphere (its fade row) outside every full-frustum process of the frame, which the
-	// view's latch holds as its cascade plane sets (IndirectDraws.cpp: SetSunEntryRow); or the CPU's verdict, where the frame
-	// has more processes than the latch holds.
-	if (SunEntry()) {
-		if ((input.w & kInputOutsideSunEntry) != 0)
-			return;
-		if (OutsideSunEntry(asfloat(inputs.Load4(inputOffset + 48))))
-			return;
-	}
+	// The sun's entry rule: the input's entry sphere (its fade row, IndirectDraws.cpp: SetSunEntryRow) outside every full-frustum
+	// process of the frame.
+	if (SunEntry() && OutsideSunEntry(asfloat(inputs.Load4(inputOffset + 48))))
+		return;
 
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
 	// previous frame left there can be executed: a culled or undrawable decal writes the same sequence
@@ -623,9 +678,12 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	// expected win, not a defect, and is counted separately so the two can never be confused. Whether such
 	// a rejection was correct is a question about visibility, which only a depth test can answer
 	// (CS_DCLF_CULL_VALIDATE), not one the engine's opinion can settle.
-	if (frustumRejected && nativeVisible)
+	// An object bound by scene membership (kObjectMember) carries kObjectNativeVisible to be drawn wherever it is found; the
+	// engine's decision is not in it.
+	const bool engineKept = nativeVisible && (input.w & kObjectMember) == 0;
+	if (frustumRejected && engineKept)
 		count.InterlockedAdd(kCountFalseNegative, 1, scratch);
-	if (occlusionRejected && nativeVisible)
+	if (occlusionRejected && engineKept)
 		count.InterlockedAdd(kCountOccludedVisible, 1, scratch);
 	if (!cullRejected && !nativeVisible && phase != kPhaseColour)
 		count.InterlockedAdd(kCountRescued, 1, scratch);

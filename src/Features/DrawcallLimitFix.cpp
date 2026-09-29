@@ -392,8 +392,8 @@ void DrawcallLimitFix::EarlyPrepass()
 				const auto* program = programs.FindShadow(key.technique | bits, *utility);
 				if (!program)
 					continue;
-				for (std::uint32_t states = pipelines.ShadowRasterStatesOfMode(mode); states; states &= states - 1) {
-					const DCLF::ShadowPipelineKey viewKey{ key.technique | bits, DCLF::WithShadowState(key.rasterFlags, std::countr_zero(states)), key.vertexLayout };
+				for (const std::uint32_t state : pipelines.ShadowRasterStatesOfMode(mode)) {
+					const DCLF::ShadowPipelineKey viewKey{ key.technique | bits, key.rasterFlags, key.vertexLayout, state };
 					pipelines.FindShadow(viewKey, *program, shadowFormat);
 				}
 			}

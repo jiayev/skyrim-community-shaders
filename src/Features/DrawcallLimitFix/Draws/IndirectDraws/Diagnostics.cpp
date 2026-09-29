@@ -478,14 +478,13 @@ namespace DCLF
 		context->CopyResource(readback.count.get(), a_resources->countD3D11.get());
 		readback.framesLeft = 3;
 		// The CPU's side of the sun test, over the same frame's colour inputs and the same planes.
-		const std::uint32_t cascades = sunUpload.sunState & ~kSunTestOn;
 		auto sunTest = [&](const DrawInput& input) {
 			if (!(input.flags & kObjectSunTest) || !(sunUpload.sunState & kSunTestOn))
 				return;
 			++readback.sunCpuTested;
 			bool inside = false;
-			for (std::uint32_t c = 0; c < cascades && !inside; ++c)
-				inside = InSunCascade(sunUpload, c, input.boundCentre, input.boundRadius);
+			for (std::size_t c = 0; c < sunCascades.size() && !inside; ++c)
+				inside = InSunCascade(sunCascades[c], input.boundCentre, input.boundRadius);
 			readback.sunCpuMissed += inside ? 0 : 1;
 		};
 		if (a_payload.resident.elements)
@@ -515,6 +514,22 @@ namespace DCLF
 			const std::uint32_t culled = static_cast<const std::uint32_t*>(countMap.pData)[1];
 			const auto* gpuSequences = static_cast<const DrawSequence*>(sequencesMap.pData);
 			std::vector<DrawSequence> built(gpuSequences, gpuSequences + std::min<std::size_t>(count, parity->sequenceDraws));
+			// The local shadow lights BuildDraws selected, from each object word, against the CPU's selection; then out of the word,
+			// which the CPU's templates do not carry.
+			std::size_t localChecked = 0, localDiffering = 0;
+			std::string localFirst;
+			auto takeLocalShadows = [&](DrawSequence& a_sequence) {
+				const std::uint32_t gpu = (a_sequence.objectIndex & kObjectLocalShadowMask) >> kObjectLocalShadowShift;
+				a_sequence.objectIndex &= ~kObjectLocalShadowMask;
+				const std::uint32_t object = a_sequence.objectIndex & kObjectIndexMask;
+				const auto it = parity->expectedLocalShadows.find(object);
+				const std::uint32_t cpu = it != parity->expectedLocalShadows.end() ? it->second : 0u;
+				++localChecked;
+				if (gpu != cpu && localDiffering++ == 0)
+					localFirst = fmt::format("object {}: GPU {:X}, CPU {:X}", object, gpu, cpu);
+			};
+			for (auto& sequence : built)
+				takeLocalShadows(sequence);
 			// The decal slots: fixed, so they compare in place. A culled slot is the template with an index
 			// count of zero; anything else differing is a defect.
 			std::size_t decalDiffering = 0, decalCulled = 0, decalSlots = 0;
@@ -529,7 +544,10 @@ namespace DCLF
 						++decalCulled;
 						continue;
 					}
-					if (std::memcmp(&slots[slot], &expectedDecals[slot], sizeof(DrawSequence)) != 0)
+					DrawSequence decal = slots[slot];
+					takeLocalShadows(decal);
+					decal.objectIndex &= ~kObjectSunMiss;  // as the draws below: the CPU's template has no cascade test
+					if (std::memcmp(&decal, &expectedDecals[slot], sizeof(DrawSequence)) != 0)
 						++decalDiffering;
 				}
 			}
@@ -573,6 +591,10 @@ namespace DCLF
 				++e;
 			}
 			++a_stats.buildParityChecks;
+			logger::info("[DCLF] BuildDraws local shadow lights {}: {} draws, {} differ from the CPU's selection{}{}", localDiffering ? "MISMATCH" : "OK",
+				localChecked, localDiffering, localFirst.empty() ? "" : "; first: ", localFirst);
+			if (localDiffering)
+				++a_stats.buildParityMismatches;
 			if (decalSlots)
 				logger::info("[DCLF] BuildDraws decal parity {}: {} slots, {} culled, {} differ", decalDiffering ? "MISMATCH" : "OK", decalSlots, decalCulled, decalDiffering);
 			if (decalDiffering)
@@ -643,6 +665,18 @@ namespace DCLF
 				if (!(input.flags & kObjectNativeVisible))
 					continue;
 				readback.expected.insert(readback.expected.end(), sequences.begin() + first, sequences.begin() + sequence);
+			}
+		}
+		// The CPU's local shadow selection for every object the epoch drew, with the volumes it uploaded (none on the Z-prepass).
+		if (!a_payload.inputs.depthOnly) {
+			const auto& tables = SceneStore::Get().GetTables();
+			for (const auto& input : inputs) {
+				if (!(input.flags & kInputDrawable) || input.objectIndex >= tables.objects.size() || input.objectIndex >= tables.objectGeometry.size())
+					continue;
+				const auto* geometry = tables.objectGeometry[input.objectIndex];
+				const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+				const float center[3]{ input.boundCentre[0], input.boundCentre[1], input.boundCentre[2] };
+				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, center, input.boundRadius) & 0xFu;
 			}
 		}
 		readback.framesLeft = 3;

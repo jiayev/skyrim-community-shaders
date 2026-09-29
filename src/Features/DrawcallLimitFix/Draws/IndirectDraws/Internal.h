@@ -209,6 +209,9 @@ namespace DCLF
 			rhi::DescriptorHeapHandle resourceHeap{};
 			rhi::DescriptorHeapHandle samplerHeap{};
 			IndirectState indirect{};
+			// The latch block the epoch wrote (Resources::latch): a colour epoch with more cascades than it holds makes a new one
+			// (ReserveMainLatch), and a frame in flight keeps reading its own.
+			std::shared_ptr<const org::LatchBlock> latch;
 
 			bool SameShape(const PassFrame& o) const
 			{
@@ -216,7 +219,7 @@ namespace DCLF
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
-				       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect);
+				       SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) && latch == o.latch;
 			}
 		};
 
@@ -498,8 +501,10 @@ namespace DCLF
 			std::array<std::atomic<std::shared_ptr<const PassFrame>>, 2> frames;
 			std::array<std::shared_ptr<const PassFrame>, 2> published;
 			std::uint64_t shapeGenerations = 0;
-			// Per frame slot, one BuildDrawsLatch: all BuildDraws dispatches of an epoch share the values.
+			// Per frame slot, one BuildDrawsLatch (all BuildDraws dispatches of an epoch share the values), then the colour pass's
+			// cascades (latchLayout, grown by ReserveMainLatch).
 			std::shared_ptr<org::LatchBlock> latch;
+			MainLatchLayout latchLayout;
 			rhi::CommandSignaturePtr dispatchSignature;
 			// The sort by pipeline of phase 1's and the colour segment's sequences (one view); null when it is off.
 			std::shared_ptr<DrawSort> sort;
@@ -791,7 +796,7 @@ namespace DCLF
 			// The scene's tables, every epoch's (SceneBuffers).
 			std::shared_ptr<SceneBuffers> scene;
 			std::array<std::shared_ptr<org::Buffer>, kShadowModeCount> inputs;               // per render mode
-			// Per view slot (kSkySlot, then the views'), as many as the latch layout's viewSlots (Impl::ReserveShadowViews):
+			// Per view slot (kSkySlot, then the views'), as many as the latch layout's viewSlots (Impl::ReserveShadowLatch):
 			// its sequence and count buffers, its sequence buffer's draws - grown before the epoch that uses the slot to hold
 			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
 			std::vector<std::shared_ptr<org::Buffer>> sequences, count;
@@ -1395,21 +1400,44 @@ namespace DCLF
 		};
 		static_assert(sizeof(ShadowMaterialRow) == kConstantAlignment && offsetof(ShadowMaterialRow, diffuse) == kShadowRowDiffuseOffset);
 
+		/**
+		 * @brief A shadow render mode's view rasterizer states this frame (DrawPipelines::ShadowRasterStateId), ascending: those
+		 * of the views of ordinary casters, and those of the views of the volumetric lighting copy, which draw the
+		 * volumetric-only casters alone (kObjectVolumetricOnly). A caster is an input only when its pipeline is ready under
+		 * every state of the views that draw its class.
+		 */
+		struct ModeRasterStates
+		{
+			std::vector<std::uint32_t> casters, volumetric;
+
+			void Add(std::uint32_t a_state, bool a_volumetric)
+			{
+				auto& ids = a_volumetric ? volumetric : casters;
+				if (const auto it = std::lower_bound(ids.begin(), ids.end(), a_state); it == ids.end() || *it != a_state)
+					ids.insert(it, a_state);
+			}
+			const std::vector<std::uint32_t>& Of(bool a_volumetric) const { return a_volumetric ? volumetric : casters; }
+			bool Empty() const { return casters.empty() && volumetric.empty(); }
+			/** @brief Every state of either class, once each. */
+			std::vector<std::uint32_t> All() const
+			{
+				std::vector<std::uint32_t> all;
+				std::set_union(casters.begin(), casters.end(), volumetric.begin(), volumetric.end(), std::back_inserter(all));
+				return all;
+			}
+			bool operator==(const ModeRasterStates&) const = default;
+		};
+
 		struct ShadowInputs
 		{
 			std::uint32_t frameNumber = 0;
 			std::array<bool, kShadowModeCount> modeUsed{};
-			// Per mode, the rasterizer states of its views (bit DrawPipelines::ShadowRasterStateId): a caster is
-			// an input only when its pipeline is ready under every state of the views that draw its class. Bits
-			// 0-15 are the states of the views of ordinary casters, bits 16-31 those of the views of the
-			// volumetric lighting copy, which draw the volumetric-only casters alone (kObjectVolumetricOnly).
-			std::array<std::uint32_t, kShadowModeCount> modeRasterStates{};
-			// The sun's full-frustum culling processes' planes ((normal, constant), inside where
-			// dot(normal, p) - constant >= 0) and their active masks, as the full-frustum cull (FUN_141511f30)
-			// has just used them: an object whose entry (SceneStore::Tables::sunEntry) is outside every process
-			// is no candidate of the sun's cascade culls (kInputOutsideSunEntry).
-			std::vector<std::array<float, 4>> sunEntryPlanes;  // 6 per process
-			std::vector<std::uint32_t> sunEntryPlaneMasks;     // 1 per process
+			// Per mode, the rasterizer states of its views.
+			std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
+			// The sun's full-frustum culling processes, as the full-frustum cull (FUN_141511f30) has just used them: an object
+			// whose entry (SceneStore::Tables::sunEntry) is outside every one is no candidate of the sun's cascade culls. However
+			// many there are: the sun views' latches name them in a shared region of the latch block (ReserveShadowLatch).
+			std::vector<SunEntryProcess> sunEntryProcesses;
 			// The sun entries the scene store found DCLF could take out of the cascade culls (SunAccumulation): the build
 			// turns them into the next frame's exclusion, with the claims.
 			std::shared_ptr<const SunCandidates> sunCandidates;
@@ -1536,9 +1564,6 @@ namespace DCLF
 			return a_object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[a_object] : 0u;
 		}
 
-		/** @brief The sun's full-frustum processes a shadow view's latch holds (BuildDrawsLatch::sunEntryPlanes). */
-		constexpr std::size_t kMaxSunEntryProcesses = 8;
-
 		/**
 		 * @brief A shadow input's sun entry (kCullSunEntry): its entry's sphere in the fade row, which BuildDraws tests against the
 		 * view's processes (outside every one: no caster of the sun). An entry that is never tested is inside every process.
@@ -1558,17 +1583,17 @@ namespace DCLF
 			}
 		}
 
-		/** @brief A depth-segment input's fade test (kObjectFadeTest): its entry root's centre and its fade-out distance. */
+		/** @brief A depth-segment input's fade test (kObjectFadeTest): its fade node's centre and its fade-out distance. */
 		inline void SetFadeRow(DrawInput& a_input, const SceneStore::Tables& a_tables, std::size_t a_object)
 		{
-			if (!(a_input.flags & (kObjectFadeTest | kObjectHeightTest)) || a_object >= a_tables.fadeDistance.size() || a_object >= a_tables.sunEntry.size())
+			if (!(a_input.flags & (kObjectFadeTest | kObjectHeightTest)) || a_object >= a_tables.fadeDistance.size() || a_object >= a_tables.lodFade.size())
 				return;
-			const auto& entry = a_tables.sunEntry[a_object];
-			if (entry[3] < 0.0f)
-				return;  // no entry root: nothing to measure
-			a_input.fade[0] = entry[0];
-			a_input.fade[1] = entry[1];
-			a_input.fade[2] = entry[2];
+			const auto& node = a_tables.lodFade[a_object];
+			if (node[3] < 0.0f)
+				return;  // no fade node: nothing to measure
+			a_input.fade[0] = node[0];
+			a_input.fade[1] = node[1];
+			a_input.fade[2] = node[2];
 			a_input.fade[3] = a_tables.fadeDistance[a_object];
 		}
 
@@ -1979,26 +2004,13 @@ namespace DCLF
 			const SceneStore::Tables& a_tables, SunExclusionCache* a_cache = nullptr);
 
 		// Whether an object's entry is outside every one of the sun's full-frustum processes, so the sun's cascade
-		// culls never reach it (ShadowInputs::sunEntryPlanes).
+		// culls never reach it (ShadowInputs::sunEntryProcesses): the CPU's verdict, from the tables, which the persistent
+		// parity compares with the test BuildDraws makes on the input's fade row.
 		inline bool OutsideSunEntry(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, std::size_t a_object)
 		{
-			if (a_in.sunEntryPlaneMasks.empty() || a_object >= a_tables.sunEntry.size())
+			if (a_object >= a_tables.sunEntry.size() || a_tables.sunEntry[a_object][3] < 0.0f)
 				return false;
-			const auto& entry = a_tables.sunEntry[a_object];
-			if (entry[3] < 0.0f)
-				return false;
-			for (std::size_t process = 0; process < a_in.sunEntryPlaneMasks.size(); ++process) {
-				bool outside = false;
-				for (std::uint32_t p = 0; p < 6 && !outside; ++p) {
-					if (!(a_in.sunEntryPlaneMasks[process] & (1u << p)))
-						continue;
-					const auto& plane = a_in.sunEntryPlanes[process * 6 + p];
-					outside = plane[0] * entry[0] + plane[1] * entry[1] + plane[2] * entry[2] - plane[3] < -entry[3];
-				}
-				if (!outside)
-					return false;
-			}
-			return true;
+			return OutsideSunEntryProcesses(a_in.sunEntryProcesses, a_tables.sunEntry[a_object].data());
 		}
 
 		/**
@@ -2032,7 +2044,7 @@ namespace DCLF
 			struct Mode : KeptRegion
 			{
 				bool active = false;
-				std::uint32_t rasterStates = 0;
+				ModeRasterStates rasterStates;
 				std::vector<const RE::BSGeometry*> claimedOf;  // per object: the geometry its entry claims
 				std::vector<std::uint32_t> waiting;  // objects waiting for a pipeline or a texture
 				std::vector<std::uint8_t> waitingMark;
@@ -2131,7 +2143,7 @@ namespace DCLF
 
 		/** @brief The shadow epoch's entries: the alpha-tested casters' diffuse textures, and the pipelines of the modes in use. */
 		void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
-			const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups);
+			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups);
 
 		constexpr std::size_t kAsyncColour = 0;
 		constexpr std::size_t kAsyncZPrepass = 1;
@@ -2163,8 +2175,7 @@ namespace DCLF
 		inline bool SameShadowInputs(const ShadowInputs& a_job, const ShadowInputs& a_epoch)
 		{
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.modeUsed == a_epoch.modeUsed &&
-			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunEntryPlanes == a_epoch.sunEntryPlanes &&
-			       a_job.sunEntryPlaneMasks == a_epoch.sunEntryPlaneMasks && a_job.sunCandidates == a_epoch.sunCandidates &&
+			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunEntryProcesses == a_epoch.sunEntryProcesses && a_job.sunCandidates == a_epoch.sunCandidates &&
 			       a_job.addresses == a_epoch.addresses && a_job.sharedData == a_epoch.sharedData && a_job.featureData == a_epoch.featureData &&
 			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;
 		}
@@ -2339,7 +2350,7 @@ namespace DCLF
 			AsyncWorker::JobHandle handle;
 			ShadowInputs inputs;
 			std::array<bool, kShadowModeCount> modes{};
-			std::array<std::uint32_t, kShadowModeCount> rasterStates{};
+			std::array<ModeRasterStates, kShadowModeCount> rasterStates{};
 			bool modesKnown = false;
 			std::uint32_t views = 0;  // last frame's view count: the record slots the job stages
 			std::uint32_t loggedStale = 0;
@@ -2360,10 +2371,12 @@ namespace DCLF
 		 * more slots are more buffers, which the shadow passes declare, so the graph is built again; either growth is a new
 		 * latch block.
 		 */
-		void ReserveShadowViews(std::uint32_t a_views, std::uint32_t a_keys);
+		void ReserveShadowLatch(std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
+		// The main latch block's cascade region: a new block when the frame has more cascades than it holds.
+		static void ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes);
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
-			const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates) const;
+			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
 		void DropShadowJob(IndirectDraws::Stats& a_stats);
 		std::uint32_t shadowLoggedReasons = 0;
 		bool ShadowNotReady(std::uint32_t a_reason, const char* a_what)
@@ -2568,6 +2581,9 @@ namespace DCLF
 			std::array<std::vector<DrawSequence>, kDecalGroups> expectedDecals;
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;  // the buffer's ranges when it was copied
 			std::uint32_t framesLeft = 0;
+			// By object: the local shadow lights the CPU selects with the volumes the epoch uploaded (LocalShadowLights), which
+			// BuildDraws put in the draw's object word (kObjectLocalShadowMask); none on the Z-prepass.
+			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> expectedLocalShadows;
 		};
 		std::optional<ParityReadback> parity;
 		std::uint32_t parityEpochs = 0;
@@ -2583,7 +2599,11 @@ namespace DCLF
 		};
 		std::optional<CullReadback> cullReadback;
 		std::uint32_t cullEpochs = 0;
-		BuildDrawsLatch sunUpload{};  // the colour epoch's last latch: the cascades its BuildDraws tested against
+		BuildDrawsLatch sunUpload{};  // the colour epoch's last latch
+		std::vector<SunAccumulation::GpuCascade> sunCascades;  // and the cascades its BuildDraws tested against
+		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
+		LocalShadowLights localShadows;
+		std::vector<GpuShadowVolume> shadowVolumes;
 
 		/**
 		 * @brief The colour commit, render thread: arms a free feedback slot for this frame's copy (FeedbackPass),

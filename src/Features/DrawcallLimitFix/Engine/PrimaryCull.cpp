@@ -200,8 +200,9 @@ namespace DCLF
 
 	bool PrimaryCull::ResidentOn()
 	{
-		static const bool on = SceneStore::SwitchEventsLive();
-		return on;
+		// Off: SceneStore binds every eligible object by scene membership (its bind queue), whatever the cut, so an entry's
+		// residency here would only duplicate it - and end it on every frame the cut does not apply.
+		return false;
 	}
 
 	bool PrimaryCull::FreshSyntheticPass(const RE::BSGeometry& a_geometry, AccumulatedPass& a_out)
@@ -210,7 +211,7 @@ namespace DCLF
 		if (!lighting)
 			return false;
 		LightingDescriptors descriptors;
-		if (DeriveLightingDescriptors(*lighting, a_geometry, nullptr, descriptors, true) != Ineligible::None)
+		if (DeriveLightingDescriptors(*lighting, a_geometry, nullptr, descriptors) != Ineligible::None)
 			return false;
 		if (!SyntheticPass(a_geometry, descriptors.derivedPass, a_out, true))
 			return false;
@@ -268,11 +269,11 @@ namespace DCLF
 		return std::isfinite(distance) ? distance : 0.0f;
 	}
 
-	std::uint16_t PrimaryCull::FadeWitnessOf(const RE::NiAVObject* a_root, bool a_sensitive)
+	std::uint16_t PrimaryCull::FadeWitnessOf(const RE::NiAVObject* a_root)
 	{
-		const std::uint32_t level = At<std::uint8_t>(a_root, 0x152) & 0xF;
-		const std::uint32_t metric = a_sensitive ? LodFadeStateOf(static_cast<const RE::BSFadeNode*>(a_root)) : 0u;
-		return static_cast<std::uint16_t>(level | (metric << 8));
+		// The LOD metric is not part of it: the specular and envmap LOD fades are the draw's (LodFadeFrame), so the passes
+		// do not change with it.
+		return static_cast<std::uint16_t>(At<std::uint8_t>(a_root, 0x152) & 0xF);
 	}
 
 	std::uint32_t PrimaryCull::ResidentWitness()
@@ -329,11 +330,10 @@ namespace DCLF
 		const std::uint8_t fadeState = FadeStateOf(property);
 		if (cached.property != property || cached.material != lighting->material || cached.flags != lighting->flags.underlying() || cached.fadeState != fadeState) {
 			LightingDescriptors descriptors;
-			const auto reason = DeriveLightingDescriptors(*lighting, *a_geometry, nullptr, descriptors, true);
-			cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived,
-					descriptors.projectedUV || descriptors.technique == 8 || descriptors.technique == 19 };
+			const auto reason = DeriveLightingDescriptors(*lighting, *a_geometry, nullptr, descriptors);
+			cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 		}
-		if (cached.extras || !SyntheticPass(*a_geometry, cached.derivedPass, a_out, true))
+		if (!SyntheticPass(*a_geometry, cached.derivedPass, a_out, true))
 			return false;
 		a_out.resident = true;
 		return true;
@@ -421,11 +421,9 @@ namespace DCLF
 				const auto* geometry = cut.members[m].geometry;
 				resident.members.push_back(geometry);
 				residentMemberRoot[geometry] = root;
-				const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-				resident.fadeSensitive = resident.fadeSensitive || (FadeSensitive(property) && property->fadeNode == root);
 			}
 		if (cut.plans[a_e] != EntryPlan::Plain)
-			resident.fadeWitness = FadeWitnessOf(root, resident.fadeSensitive);
+			resident.fadeWitness = FadeWitnessOf(root);
 		residents.emplace(root, std::move(resident));
 		if (a_probation) {
 			probationRoots.push_back(root);
@@ -867,8 +865,7 @@ namespace DCLF
 		tag->fadeWitness.reserve(residents.size());
 		for (const auto& [root, resident] : residents) {
 			tag->stoodIn.push_back(resident.entry);
-			tag->fadeWitness.push_back(resident.fadeWitness | (resident.fadeSensitive ? 0x10000u : 0u) |
-									   (cut.plans[resident.entry] != EntryPlan::Plain ? 0x20000u : 0u));
+			tag->fadeWitness.push_back(resident.fadeWitness | (cut.plans[resident.entry] != EntryPlan::Plain ? 0x20000u : 0u));
 		}
 		tag->roots.reserve(tag->stoodIn.size());
 		for (const std::uint32_t e : tag->stoodIn)
@@ -934,7 +931,7 @@ namespace DCLF
 				return;
 			if (!Settled(a_root)) {
 				unsettledRoots.push_back(a_root);
-			} else if (FadeWitnessOf(a_root, (a_witness & 0x10000u) != 0) != (a_witness & 0xFFFFu)) {
+			} else if (FadeWitnessOf(a_root) != (a_witness & 0xFFFFu)) {
 				unsettledRoots.push_back(a_root);
 				counters.residentsWitness.fetch_add(1, std::memory_order_relaxed);
 			}
@@ -1033,9 +1030,8 @@ namespace DCLF
 			if (cached.property != property || cached.material != lighting->material || cached.flags != lighting->flags.underlying() ||
 				cached.fadeState != fadeState) {
 				LightingDescriptors descriptors;
-				const auto reason = DeriveLightingDescriptors(*lighting, *geometry, nullptr, descriptors, true);
-				cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived,
-					descriptors.projectedUV || descriptors.technique == 8 || descriptors.technique == 19 };
+				const auto reason = DeriveLightingDescriptors(*lighting, *geometry, nullptr, descriptors);
+				cached = { property, lighting->material, lighting->flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
 			}
 			AccumulatedPass pass;
 			if (!SyntheticPass(*geometry, cached.derivedPass, pass, true)) {
@@ -1175,42 +1171,13 @@ namespace DCLF
 		const auto inCascades = SunAccumulation::Get().InSunCascades(a_geometry.worldBound);
 		if (!inCascades)
 			return ~0u;
-		return *inCascades ? SunShadowStatic(a_geometry) : 0u;
+		// Out of every cascade it loses ShadowDir only: a local shadow light may still give it DefShadow (the draw decides).
+		return *inCascades ? SunShadowStatic(a_geometry) : SunShadowStatic(a_geometry) & ~0x2000u;
 	}
 
 	std::uint32_t PrimaryCull::SunShadowStatic(const RE::BSGeometry& a_geometry)
 	{
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
-		if (!lighting)
-			return 0;
-		const std::uint64_t flags = lighting->flags.underlying();
-		const auto* fadeNode = lighting->fadeNode;
-		const float fade = fadeNode ? fadeNode->GetRuntimeData().currentFade : 1.0f;
-		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-		const float alpha = (material ? material->materialAlpha : 1.0f) * fade;
-		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
-		// GetRenderPasses (AE 0x1414adfb0): local_164, local_167, local_165/local_168 and local_158.
-		const bool translucent = alpha < 1.0f || blended;
-		const bool screenDoor = Global<std::uint8_t>(kScreenDoorFades) && fadeNode && fadeNode->GetRuntimeData().unk154 && fade < 1.0f &&
-		                        !(flags & (1ull << 19));
-		constexpr std::uint64_t kOpaqueClasses = 0x800c000000ull;
-		const bool eligible = !translucent || (screenDoor && !blended) || (flags & kOpaqueClasses);
-		const bool shadowDirAllowed = eligible && !Global<std::uint8_t>(kNoSunShadowDir);
-		bool deferred = Global<std::uint8_t*>(kMainAccumulator)[kAccumulatorDeferredShadow] != 0;
-		if (!screenDoor || blended)
-			deferred = deferred && !((alpha < 1.0f || blended || (flags & (1ull << 33))) && !(flags & kOpaqueClasses));
-		// FUN_1414fcf80: ShadowDir when a mask bit names the sun (a cascade the bound meets: the caller's test).
-		bool shadowDir = shadowDirAllowed;
-		bool defShadow = deferred;
-		if (!deferred)
-			shadowDir = false;
-		else if (!shadowDir)
-			defShadow = false;  // no shadowed point light either (the caller's precondition)
-		if (!(flags & 0x800c000100ull) && !lighting->shadowMapOrMaskPasses.head)
-			shadowDir = defShadow = false;
-		return (shadowDir ? 0x2000u : 0u) | (defShadow ? 0x4000u : 0u);
+		return StaticShadowBits(a_geometry);
 	}
 
 	void PrimaryCull::UnifySunBits(const RE::BSGeometry* a_geometry, AccumulatedPass& a_pass) const
@@ -1222,9 +1189,9 @@ namespace DCLF
 		if (it == candidates.geometries.end() || it->second >= candidates.primaryGeometry.size() || !candidates.primaryGeometry[it->second])
 			return;
 		const std::uint32_t sun = SunShadowStatic(*a_geometry);
-		a_pass.technique = (a_pass.technique & ~0x6000u) | sun;
+		a_pass.technique = (a_pass.technique & ~kShadowBits) | sun;
 		a_pass.passEnum = a_pass.technique + 0x4800002Du;
-		a_pass.sunTest = sun != 0;
+		a_pass.sunTest = (sun & 0x2000u) != 0;
 	}
 
 	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu)
@@ -1258,15 +1225,15 @@ namespace DCLF
 			hint = (~static_cast<std::uint32_t>(flags >> 33) & 1u) | 6u;
 		else if (flags & (1ull << 61))
 			hint = 11;  // TreeAnim
-		else if (!sun)
-			hint = 15;  // opaque with no shadow work (no shadowed point light: the caller's precondition)
+		else if (!(sun & 0x2000u))
+			hint = 15;  // opaque with no sun shadow work
 		a_out = {};
 		a_out.subPass = PassCapture::SubPassOf(&a_geometry, flags);
-		a_out.technique = DrawnPassDescriptor((a_derivedPass & ~0x6000u) | sun, a_out.subPass);
+		a_out.technique = DrawnPassDescriptor((a_derivedPass & ~kShadowBits) | sun, a_out.subPass);
 		a_out.passEnum = a_out.technique + 0x4800002Du;
 		a_out.hint = hint;
 		a_out.lodRow = SceneStore::LodRowOf(a_geometry, property);
-		a_out.sunTest = a_sunOnGpu && sun != 0;
+		a_out.sunTest = a_sunOnGpu && (sun & 0x2000u) != 0;
 		return true;
 	}
 
@@ -1308,12 +1275,6 @@ namespace DCLF
 			++d.sunOnly;
 		for (std::uint32_t remaining = differing; remaining; remaining &= remaining - 1)
 			++d.bits[std::countr_zero(remaining)];
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = static_cast<const RE::BSLightingShaderProperty*>(property);
-		if (std::abs(a_descriptors.derivedSpecularLODFade - lighting->specularLODFade) > 1e-3f)
-			++d.specularFadeDiffer;
-		if (std::abs(a_descriptors.derivedEnvmapLODFade - lighting->envmapLODFade) > 1e-3f)
-			++d.envmapFadeDiffer;
 		if (const std::uint32_t sun = SunShadowBits(a_geometry); sun == ~0u) {
 			++d.sunUnknown;
 		} else {
@@ -1439,9 +1400,11 @@ namespace DCLF
 				s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.synthetic / applied, s.unmodelled / applied,
 				s.synthInline / applied, s.synthLate / applied, s.hiddenSkipped / applied, s.localShadowed / applied, s.holes,
 				s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied, s.synthWaitTicks * toMs / applied);
-			if (ResidentOn()) {
+			{
 				const auto r = SceneStore::Get().TakeResidentStats();
 				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
+				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras), {} rewritten ({} kept their binding), {} released",
+					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.rewritten, r.membershipKept, r.released);
 				const std::uint64_t residentVisible = feedbackCounters.residentsVisible.exchange(0, std::memory_order_relaxed);
 				const std::uint64_t residentDecoded = feedbackCounters.residents.exchange(0, std::memory_order_relaxed);
 				const double decodedFrames = std::max<double>(static_cast<double>(feedbackCounters.frames.load(std::memory_order_relaxed)), 1.0);
@@ -1505,9 +1468,9 @@ namespace DCLF
 					reasons += fmt::format(" {}={:.1f}", r < kIneligibleNames.size() ? kIneligibleNames[r] : "?", d.byReason[r] / f);
 			logger::info("[DCLF] primary derivation, per frame: {:.0f} registered objects under listed candidates: {:.1f} ineligible ({}), {:.1f} not derived; "
 						 "descriptor: {:.1f} differ outside the sun bits, {:.1f} only in them; bits:{}; {:.1f} with shadowed point lights, {:.1f} LOD rows differ, "
-						 "{:.1f} fading, {:.1f} screen-door; LOD fades differ: specular {:.1f}, envmap {:.1f}; hints:{}",
+						 "{:.1f} fading, {:.1f} screen-door; hints:{}",
 				n, d.ineligible / f, reasons, d.notDerived / f, d.differ / f, d.sunOnly / f, bits, d.shadowLights / f, d.lodRowDiffer / f, d.fading / f, d.alphaMask / f,
-				d.specularFadeDiffer / f, d.envmapFadeDiffer / f, hints);
+				hints);
 			for (const auto& [sample, count] : d.samples)
 				logger::info("[DCLF] primary derivation differs: {:.2f}/frame {}", count / f, sample);
 			logger::info("[DCLF] primary sun bits, per frame: {:.1f} agree, {:.1f} engine only, {:.1f} DCLF only, {:.1f} otherwise, {:.1f} unknown",

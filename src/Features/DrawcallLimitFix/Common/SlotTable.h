@@ -11,24 +11,22 @@ namespace DCLF
 	 * vectors the table grows together (Tables::GeometryColumns, PipelineColumns, MaterialColumns).
 	 *
 	 * A slot lives while something references it - the objects' records, and for a geometry slot the partition before it
-	 * in a skin's chain - counted from the tables' logs (SceneStore::UpdateSlotReferences), and for kIdleFrames after its
-	 * last reference goes, so an object that comes back soon finds its slot. A slot can also be freed while referenced
-	 * (its record no longer describes anything); its generation then moves on, and every count taken against the old
-	 * generation lapses instead of landing on the slot's next use.
+	 * in a skin's chain - counted from the tables' logs (SceneStore::UpdateSlotReferences), and is freed after the batch
+	 * in which its last reference went (DrainUnreferenced). A slot can also be freed while referenced (its record no
+	 * longer describes anything); its generation then moves on, and every count taken against the old generation lapses
+	 * instead of landing on the slot's next use.
 	 */
 	class SlotTable
 	{
 	public:
-		static constexpr std::uint32_t kIdleFrames = 64;
-
 		struct Allocation
 		{
 			std::uint32_t slot = 0;
 			bool grown = false;  // a new slot at the end: the caller grows its columns
 		};
 
-		/** @brief A free slot, or a new one; unreferenced, so it is freed once idle unless a reference comes. */
-		Allocation Allocate(std::uint32_t a_frame)
+		/** @brief A free slot, or a new one; unreferenced, so the next drain frees it unless a reference comes. */
+		Allocation Allocate()
 		{
 			Allocation allocation;
 			if (!freeList.empty()) {
@@ -40,12 +38,11 @@ namespace DCLF
 				alive.push_back(0);
 				refs.push_back(0);
 				generation.push_back(0);
-				idleSince.push_back(0);
 			}
 			alive[allocation.slot] = 1;
 			refs[allocation.slot] = 0;
 			++aliveCount;
-			BecomeIdle(allocation.slot, a_frame);
+			BecomeIdle(allocation.slot);
 			return allocation;
 		}
 		/** @brief Frees a slot whatever references it has: the counts taken against it lapse. */
@@ -71,42 +68,25 @@ namespace DCLF
 			if (refs[a_slot]++ == 0)
 				++referencedCount;
 		}
-		void Release(std::uint32_t a_slot, std::uint32_t a_generation, std::uint32_t a_frame)
+		void Release(std::uint32_t a_slot, std::uint32_t a_generation)
 		{
 			if (!Alive(a_slot) || generation[a_slot] != a_generation || refs[a_slot] == 0)
 				return;
 			if (--refs[a_slot] == 0) {
 				--referencedCount;
-				BecomeIdle(a_slot, a_frame);
+				BecomeIdle(a_slot);
 			}
 		}
-		/** @brief Every count to zero, before a recount; each live slot's idle time starts now. */
-		void ResetReferences(std::uint32_t a_frame)
+		/** @brief Every count to zero, before a recount: each live slot is unreferenced until the recount says otherwise. */
+		void ResetReferences()
 		{
 			idle.clear();
 			referencedCount = 0;
 			for (std::uint32_t slot = 0; slot < alive.size(); ++slot) {
 				refs[slot] = 0;
 				if (alive[slot])
-					BecomeIdle(slot, a_frame);
+					BecomeIdle(slot);
 			}
-		}
-		/** @brief Frees the slots unreferenced for more than kIdleFrames, calling a_onFree(slot) first. */
-		template <class F>
-		std::uint32_t Expire(std::uint32_t a_frame, F&& a_onFree)
-		{
-			std::uint32_t freed = 0;
-			while (!idle.empty() && a_frame - idle.front().frame > kIdleFrames) {
-				const auto entry = idle.front();
-				idle.pop_front();
-				// An entry stands only for the slot's latest idle spell, at the generation it was taken.
-				if (!Alive(entry.slot) || generation[entry.slot] != entry.generation || refs[entry.slot] || idleSince[entry.slot] != entry.frame)
-					continue;
-				a_onFree(entry.slot);
-				Free(entry.slot);
-				++freed;
-			}
-			return freed;
 		}
 		/**
 		 * @brief Consume last-reference events after a complete batch of reference changes.
@@ -135,19 +115,15 @@ namespace DCLF
 		void Clear() { *this = {}; }
 
 	private:
-		void BecomeIdle(std::uint32_t a_slot, std::uint32_t a_frame)
-		{
-			idleSince[a_slot] = a_frame;
-			idle.push_back({ a_slot, generation[a_slot], a_frame });
-		}
+		void BecomeIdle(std::uint32_t a_slot) { idle.push_back({ a_slot, generation[a_slot] }); }
 
 		struct Idle
 		{
-			std::uint32_t slot = 0, generation = 0, frame = 0;
+			std::uint32_t slot = 0, generation = 0;
 		};
 		std::vector<std::uint8_t> alive;
-		std::vector<std::uint32_t> refs, generation, idleSince, freeList;
-		std::deque<Idle> idle;  // in frame order
+		std::vector<std::uint32_t> refs, generation, freeList;
+		std::deque<Idle> idle;  // last-reference events, in order
 		std::size_t aliveCount = 0, referencedCount = 0;
 	};
 }

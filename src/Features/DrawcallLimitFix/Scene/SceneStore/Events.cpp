@@ -465,6 +465,10 @@ namespace DCLF
 
 		{
 			DCLF_SCENE_PART(AttachDetach, "CS.DCLF.Scene.AttachDetach");
+			// A detach leaves the scene only if nothing attached the geometry again by the end of the batch: the engine moves
+			// objects between containers (a cell's dynamic and static nodes, as their physics wakes and sleeps) with a detach and
+			// an attach, which is a move. Its entry, slot and binding stay; the attach has evaluated it again (AddGeometry).
+			std::vector<RE::BSGeometry*> detached;
 			for (auto* event = events; event; event = event->next) {
 				if (event->type == SceneTracker::EventType::Attached) {
 					++stats.attachedEvents;
@@ -472,9 +476,16 @@ namespace DCLF
 						AddSubtree(event->node.get());
 				} else {
 					++stats.detachedEvents;
-					for (auto* geometry : event->removed)
-						EraseTracked(geometry);
+					detached.insert(detached.end(), event->removed.begin(), event->removed.end());
 				}
+			}
+			for (auto* geometry : detached) {
+				// Only a tracked geometry is known to be alive (its entry holds it) and so safe to walk up from.
+				if (tracked.contains(geometry) && FindCategoryNode(geometry, nullptr)) {
+					++stats.detachMoves;
+					continue;
+				}
+				EraseTracked(geometry);
 			}
 			SceneTracker::FreeEvents(events);
 		}

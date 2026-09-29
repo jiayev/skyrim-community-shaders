@@ -18,13 +18,21 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kSkyRenderMode = 0x1C;
 	// The shadow epoch's view slots (ShadowResources): Skylighting's occlusion map draws through slot 0, the frame's shadow
 	// views through the slots after it (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
-	// grown before its epoch (Impl::ReserveShadowViews) - the exterior has four (two cascades, twice), an interior two
+	// grown before its epoch (Impl::ReserveShadowLatch) - the exterior has four (two cascades, twice), an interior two
 	// hemispheres per shadow-casting point light - from this many. Likewise the key slots the pipeline map rows hold
 	// (Lookups::shadowSlotKeys: one per caster key and render mode).
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
 	constexpr std::uint32_t kSkySlot = 0;
 	constexpr std::uint32_t kFirstShadowViewSlot = 1;
 	constexpr std::uint32_t kInitialShadowKeySlots = 1024;
+	// And the latch's pipeline map rows (one per view rasterizer state, DrawPipelines::ShadowRasterStateId) and the sun's
+	// full-frustum processes it holds (six and six at the exterior save), grown likewise.
+	constexpr std::uint32_t kInitialShadowRasterStates = 8;
+	constexpr std::uint32_t kInitialSunProcesses = 8;
+	// The main latch block's cascades (MainLatchLayout), grown by the colour epoch that needs more (two at the exterior save).
+	constexpr std::uint32_t kInitialSunCascades = 4;
+	// And its local shadow light volumes (GpuShadowVolume): three lights at most accumulate a frame, a point light's descriptor each.
+	constexpr std::uint32_t kInitialShadowVolumes = 8;
 	constexpr std::uint64_t kShadowConstantBytes = 1ull << 20;
 	// A view slot's blocks, a row of their own table (ShadowResources::viewBlocks): the view's Utility PerTechnique block (b0),
 	// then its VS_PerFrame copy (b12), written by its epoch's commit.
@@ -117,9 +125,6 @@ namespace DCLF::Draws
 	// submits an input for every candidate so the culling covers them all, but builds records only for
 	// the ones it may draw.
 	constexpr std::uint32_t kInputDrawable = 1u << 16;
-	// A shadow input whose entry is outside the sun's full-frustum processes (OutsideSunEntry): the sun's views
-	// skip it (kCullSunEntry); a spot light's views, which share the mode's inputs, do not.
-	constexpr std::uint32_t kInputOutsideSunEntry = 1u << 25;
 	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
 	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
 	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
@@ -206,45 +211,67 @@ namespace DCLF::Draws
 		// slots, and the row holds each slot's pipeline under the view's rasterizer state. 0 when the inputs
 		// name pipelines themselves (the main camera).
 		std::uint32_t pipelineMapOffset;
-		// The main colour pass only: kSunTestOn and the number of cascades below, which BuildDraws tests every
-		// kObjectSunTest input's bound against (a miss marks the draw kObjectSunMiss). 0 elsewhere.
+		// The main colour pass only: kSunTestOn when BuildDraws tests every kObjectSunTest input's bound against the frame's
+		// cascades (sunCascadeOffset; a miss marks the draw kObjectSunMiss). 0 elsewhere.
 		std::uint32_t sunState;
 		// The depth segment: BSTreeNode::OnVisible's height test for the kObjectHeightTest inputs, the base and the
 		// limit (PrimaryCull::TreeHeightTest; +infinity when the test is off). 0 elsewhere.
 		float treeHeight[2];
-		// Per cascade: the active masks of its planes and its custom planes (0: none), then 6 planes and 6 custom
-		// planes as (normal, constant), outside when dot(normal, c) - constant < -r (SunAccumulation's test).
-		std::uint32_t sunMasks[4][2];
-		float sunPlanes[4][12][4];
 		// The depth segment: the main camera's position and LOD factor (NiCamera +0x184), as BSFadeNode::OnVisible
 		// measures a fade root's distance (PrimaryCull::FadeEye), for the kObjectFadeTest inputs. 0 elsewhere.
 		float fadeEye[4];
-		// A view of the sun (kCullSunEntry): the frame's full-frustum culling processes (ShadowInputs::sunEntryPlanes), each
-		// 6 planes with its active mask. An input whose entry sphere (its fade row, SetSunEntryRow) is outside every one is
-		// none of the sun's casters. A count of 0 leaves the verdict to the input's kInputOutsideSunEntry.
-		std::uint32_t sunEntryCount;
-		std::uint32_t sunEntryMasks[8];
-		std::uint32_t sunEntryPad[3];
-		float sunEntryPlanes[8][6][4];
-		std::uint8_t reserved[208];
+		// The colour pass: the frame's sun cascades (a SunRegion of SunAccumulation::GpuCascade), in bytes into the latch block.
+		std::uint32_t sunCascadeOffset;
+		// A view of the sun (kCullSunEntry): the frame's full-frustum culling processes (a SunRegion of SunEntryProcess), in bytes
+		// into the latch block, shared by every sun view of the slot. An input whose entry sphere (its fade row, SetSunEntryRow)
+		// is outside every process is none of the sun's casters. 0: no entry test.
+		std::uint32_t sunEntryOffset;
+		// The colour pass: the frame's local shadow lights (a SunRegion of GpuShadowVolume, LocalShadowLights), in bytes into the
+		// latch block. BuildDraws puts each input's Light Limit Fix shadow mask into its object word (kObjectLocalShadowShift),
+		// which the pixel stage takes for ShadowBitMask and its DefShadow. 0 elsewhere.
+		std::uint32_t localShadowOffset;
+		std::uint32_t reserved[5];
 	};
-	static_assert(sizeof(BuildDrawsLatch) == 2048 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
+	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
-				  offsetof(BuildDrawsLatch, sunMasks) == 208 && offsetof(BuildDrawsLatch, sunPlanes) == 240 && offsetof(BuildDrawsLatch, fadeEye) == 1008 &&
-				  offsetof(BuildDrawsLatch, sunEntryCount) == 1024 && offsetof(BuildDrawsLatch, sunEntryMasks) == 1028 &&
-				  offsetof(BuildDrawsLatch, sunEntryPlanes) == 1072);
+				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&
+				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&
+				  offsetof(BuildDrawsLatch, localShadowOffset) == 232);
+	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
-	/** @brief The sun's entry rule on the latch, as BuildDrawsCS applies it: outside every full-frustum process. */
-	inline bool OutsideSunEntryLatch(const BuildDrawsLatch& a_latch, const float a_entry[4])
+	/**
+	 * @brief The sun's per-frame plane sets in a latch block, grown with the frame: a 16-byte header (the record count), then the
+	 * records. The sun's full-frustum processes (SunEntryProcess, in the shadow latch block) and its cascades
+	 * (SunAccumulation::GpuCascade, in the main one); neither has a bound in the engine (the processes are the full-frustum
+	 * cull's jobs, the cascades iNumSplits).
+	 */
+	struct SunEntryProcess
 	{
-		if (!a_latch.sunEntryCount)
+		std::uint32_t mask = 0;  // the active planes
+		std::uint32_t pad[3]{};
+		float planes[6][4]{};    // (normal, constant), inside where dot(normal, p) - constant >= 0
+
+		bool operator==(const SunEntryProcess&) const = default;
+	};
+	static_assert(sizeof(SunEntryProcess) == 112 && sizeof(SunAccumulation::GpuCascade) == 208);
+	constexpr std::uint32_t kSunRegionHeader = 16;
+	template <class Record>
+	constexpr std::uint32_t SunRegionBytes(std::uint32_t a_records)
+	{
+		return kSunRegionHeader + a_records * static_cast<std::uint32_t>(sizeof(Record));
+	}
+
+	/** @brief The sun's entry rule, as BuildDrawsCS applies it to the latch's processes: outside every one. */
+	inline bool OutsideSunEntryProcesses(std::span<const SunEntryProcess> a_processes, const float a_entry[4])
+	{
+		if (a_processes.empty())
 			return false;
-		for (std::uint32_t process = 0; process < a_latch.sunEntryCount; ++process) {
+		for (const auto& process : a_processes) {
 			bool outside = false;
 			for (std::uint32_t p = 0; p < 6 && !outside; ++p) {
-				if (!(a_latch.sunEntryMasks[process] & (1u << p)))
+				if (!(process.mask & (1u << p)))
 					continue;
-				const float* plane = a_latch.sunEntryPlanes[process][p];
+				const float* plane = process.planes[p];
 				outside = plane[0] * a_entry[0] + plane[1] * a_entry[1] + plane[2] * a_entry[2] - plane[3] < -a_entry[3];
 			}
 			if (!outside)
@@ -252,31 +279,59 @@ namespace DCLF::Draws
 		}
 		return true;
 	}
-	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
-	/** @brief SunAccumulation's sphere test against one cascade of the latch (what BuildDrawsCS does). */
-	inline bool InSunCascade(const BuildDrawsLatch& a_latch, std::uint32_t a_cascade, const float a_centre[3], float a_radius)
+	/** @brief SunAccumulation's sphere test against one cascade (what BuildDrawsCS does). */
+	inline bool InSunCascade(const SunAccumulation::GpuCascade& a_cascade, const float a_centre[3], float a_radius)
 	{
 		for (std::uint32_t set = 0; set < 2; ++set) {
-			const std::uint32_t mask = a_latch.sunMasks[a_cascade][set];
+			const std::uint32_t mask = a_cascade.masks[set];
 			for (std::uint32_t p = 0; p < 6; ++p) {
 				if (!(mask & (1u << p)))
 					continue;
-				const float* plane = a_latch.sunPlanes[a_cascade][set * 6 + p];
+				const float* plane = a_cascade.planes[set * 6 + p];
 				if (plane[0] * a_centre[0] + plane[1] * a_centre[1] + plane[2] * a_centre[2] - plane[3] < -a_radius)
 					return false;
 			}
 		}
 		return true;
 	}
-	/** @brief The shadow latch block's region per frame slot: the view slots' latches, then a pipeline map row per view rasterizer state. */
+	/**
+	 * @brief The shadow latch block's region per frame slot: the view slots' latches, a pipeline map row per view rasterizer state
+	 * (DrawPipelines::ShadowRasterStateId, 1 to rasterStates), then the sun's full-frustum processes. Each dimension is grown
+	 * before the epoch (Impl::ReserveShadowLatch).
+	 */
 	struct ShadowLatchLayout
 	{
-		std::uint32_t viewSlots = 0, keySlots = 0;
+		std::uint32_t viewSlots = 0, keySlots = 0, rasterStates = 0, sunProcesses = 0;
 		std::uint32_t MapOffset() const { return viewSlots * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t MapRowBytes() const { return keySlots * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
-		std::uint32_t Bytes() const { return MapOffset() + DrawPipelines::kMaxShadowRasterStates * MapRowBytes(); }
+		std::uint32_t SunEntryOffset() const { return MapOffset() + rasterStates * MapRowBytes(); }
+		std::uint32_t Bytes() const { return SunEntryOffset() + SunRegionBytes<SunEntryProcess>(sunProcesses); }
 		bool operator==(const ShadowLatchLayout&) const = default;
+	};
+	/** @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades. */
+	/**
+	 * @brief One cull volume of a local shadow light (LocalShadowLights::Light::Volume), as BuildDraws tests an input against it:
+	 * the light's sphere, then a shadowmap descriptor's frustum and custom planes. A light of several descriptors has a record for
+	 * each, with the same mask bit.
+	 */
+	struct GpuShadowVolume
+	{
+		std::uint32_t masks[2];     // the active planes: frustum (planes 0-5), custom (6-11)
+		std::uint32_t maskBit;      // Light Limit Fix's ShadowBitMask bit (1 << maskIndex)
+		std::uint32_t affectsLand;  // 1: taken by landscape properties too (kObjectLandscapeLights)
+		float sphere[4];            // the light's centre and radius
+		float planes[12][4];        // (normal, constant), inside where dot(normal, p) - constant >= 0
+	};
+	static_assert(sizeof(GpuShadowVolume) == 224);
+
+	struct MainLatchLayout
+	{
+		std::uint32_t cascades = 0;
+		std::uint32_t shadowVolumes = 0;
+		static constexpr std::uint32_t CascadeOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
+		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<SunAccumulation::GpuCascade>(cascades); }
+		std::uint32_t Bytes() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
 	};
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it
 	// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing there.
@@ -286,6 +341,6 @@ namespace DCLF::Draws
 	// shadow view everything else. Neither is set for the main camera.
 	constexpr std::uint32_t kCullCastersOnly = 0x400;
 	constexpr std::uint32_t kCullVolumetricOnly = 0x800;
-	// cullFlags: a view of the sun (its cascades and their volumetric copies), which skips kInputOutsideSunEntry.
+	// cullFlags: a view of the sun (its cascades and their volumetric copies), which applies the sun's entry rule (sunEntryOffset).
 	constexpr std::uint32_t kCullSunEntry = 0x1000;
 }

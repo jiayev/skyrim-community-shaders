@@ -92,10 +92,21 @@ namespace DCLF
 		// A resident tree (PrimaryCull): the depth segment's first phase drops it, as a final verdict, where
 		// BSTreeNode::OnVisible's height test would (its entry root's centre above the frame's limit).
 		kObjectHeightTest = 1u << 28,
+		// A landscape property (kLandscape, kNoLODLandFade): the main pass's light selection gives it only the local shadow
+		// lights that take landscape (BSShadowLight +0x61; LocalShadowLights).
+		kObjectLandscapeLights = 1u << 29,
+		// Bound by scene membership (SceneStore::BindByMembership): drawn whenever the GPU finds it (it carries
+		// kObjectNativeVisible for that), whatever the engine registered, so it is no reference for the engine's culling.
+		kObjectMember = 1u << 30,
 	};
 
 	/** @brief The high bit of a draw's object-index word: the draw misses every sun cascade (kObjectSunTest). */
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
+	// The object word's local shadow lights (BuildDrawsCS, LocalShadowLights): Light Limit Fix's ShadowBitMask of the draw, whose
+	// lights are shadow mask channels 0-3. The object index is below them.
+	inline constexpr std::uint32_t kObjectLocalShadowShift = 26;
+	inline constexpr std::uint32_t kObjectLocalShadowMask = 0xFu << kObjectLocalShadowShift;
+	inline constexpr std::uint32_t kObjectIndexMask = (1u << kObjectLocalShadowShift) - 1;
 
 	/**
 	 * @brief The face positions buffer (FaceSnapshots) holds one float4 per vertex of every face shape drawn, each shape in a
@@ -187,14 +198,16 @@ namespace DCLF
 	 * technique the engine derives for the caster (ShadowViews.h), which does not follow the Lighting
 	 * descriptors the main pass's key is built from - two objects sharing a Lighting pipeline can cast
 	 * with different Utility techniques, and one Utility technique serves objects of many Lighting
-	 * pipelines. The raster flags carry two-sidedness and, for a pipeline (not a caster's base key), the
-	 * view's rasterizer state at kRasterShadowStateShift (DrawPipelines::ShadowRasterStateId).
+	 * pipelines. The raster flags carry two-sidedness; a pipeline (not a caster's base key, whose viewState is 0) is for one
+	 * view rasterizer state (DrawPipelines::ShadowRasterStateId, 1 and up).
 	 */
 	struct ShadowPipelineKey
 	{
 		std::uint32_t technique = 0;     // Utility technique, mode bits included
-		std::uint32_t rasterFlags = 0;   // kRasterTwoSided, and the view's rasterizer state id at kRasterShadowStateShift
+		std::uint32_t rasterFlags = 0;   // kRasterTwoSided
 		std::uint64_t vertexLayout = 0;  // as PipelineKey::vertexLayout
+		std::uint32_t viewState = 0;     // the view's rasterizer state id; 0 for a caster's base key (a key slot)
+		std::uint32_t reserved = 0;      // hashed as bytes: no padding
 
 		bool operator==(const ShadowPipelineKey&) const = default;
 	};
@@ -241,8 +254,6 @@ namespace DCLF
 		kRasterAlphaToCoverage = 1u << 11,
 		kRasterWriteModeShift = 12,  // 4 bits: alphaBlendWriteMode (0-12)
 		kRasterBlendExtra = 1u << 16,
-		// Shadow keys only: 4 bits, the view's rasterizer state (DrawPipelines::ShadowRasterStateId, 1-15).
-		kRasterShadowStateShift = 17,
 		// Main keys only: 3 bits, Extended Translucency's material model for the draw XOR DescriptorDisabled (so an
 		// opaque key, whose model is disabled, keeps 0 here). ExtendedTranslucency::MaterialModelOf sets it per
 		// geometry in the feature's SetupGeometry hook; it differs from disabled only for blended geometry (blended
@@ -255,11 +266,6 @@ namespace DCLF
 	inline constexpr std::uint32_t RasterDepthBiasMode(std::uint32_t a_flags) { return (a_flags >> kRasterDepthBiasShift) & 15u; }
 	inline constexpr std::uint32_t RasterBlendMode(std::uint32_t a_flags) { return (a_flags >> kRasterBlendModeShift) & 7u; }
 	inline constexpr std::uint32_t RasterWriteMode(std::uint32_t a_flags) { return (a_flags >> kRasterWriteModeShift) & 15u; }
-	inline constexpr std::uint32_t RasterShadowState(std::uint32_t a_flags) { return (a_flags >> kRasterShadowStateShift) & 15u; }
-	inline constexpr std::uint32_t WithShadowState(std::uint32_t a_flags, std::uint32_t a_state)
-	{
-		return (a_flags & ~(15u << kRasterShadowStateShift)) | ((a_state & 15u) << kRasterShadowStateShift);
-	}
 	/** @brief Everything but the two-sided bit and the translucency model: what selects the engine's state objects. */
 	inline constexpr std::uint32_t RasterStateBits(std::uint32_t a_flags) { return a_flags & ~(kRasterTwoSided | kRasterTranslucencyMask); }
 	inline constexpr std::uint32_t RasterTranslucency(std::uint32_t a_flags) { return (a_flags & kRasterTranslucencyMask) >> kRasterTranslucencyShift; }

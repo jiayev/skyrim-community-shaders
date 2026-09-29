@@ -40,7 +40,12 @@ struct DCLFObjectRecord
 	// Advanced Skin's SkinPerGeometry (b7): the owning actor's wetness, zero for everything else. Only read
 	// when DCLF_BINDLESS_DRAW is also defined (Skin.hlsli).
 	float4 DCLFSkinPerGeometry;
-	uint4 DCLFReserved[3];  // to 256 bytes: a constant-buffer block a row
+	// The specular and envmap LOD fades, made by the draw from the frame's camera (Lighting.hlsl, DCLFFrameLighting c6-c12):
+	// the fade node's world bound centre, and its LOD type (bits 0-3) and which fades apply (bit 4 specular, 5 envmap, 6
+	// SSRParams.w with specular) in the word; 0 when nothing fades and MaterialData's fades are the property's.
+	float3 DCLFLodFadeNode;
+	uint DCLFLodFadeFlags;
+	uint4 DCLFReserved[2];  // to 256 bytes: a constant-buffer block a row
 };
 
 // The indirect draw's push data (DrawPipelines.h, kDrawPushWords). The first four words are its rows' addresses (the
@@ -53,9 +58,11 @@ cbuffer DCLFPushData : register(b190)
 	uint DCLFObjectWord : packoffset(c1.x);
 };
 
-// The object word: the object's index, and in the top bit kObjectSunMiss (Records.h), which BuildDrawsCS sets on
-// a synthetic pass carrying the sun's bits whose bound meets none of this frame's cascades.
-static const uint DCLFObjectIndex = DCLFObjectWord & 0x7FFFFFFFu;
+// The object word (Records.h): the object's index in bits 0-25; the local shadow lights BuildDrawsCS selected for the draw
+// in bits 26-29 (Light Limit Fix's ShadowBitMask, whose lights are shadow mask channels 0-3); and in the top bit
+// kObjectSunMiss, which BuildDrawsCS sets on a pass carrying the sun's bits whose bound meets none of this frame's cascades.
+static const uint DCLFObjectIndex = DCLFObjectWord & 0x03FFFFFFu;
+static const uint DCLFLocalShadowMask = (DCLFObjectWord >> 26) & 0xFu;
 static const bool DCLFSunMiss = (DCLFObjectWord & 0x80000000u) != 0;
 
 // The object rows, by the draw's object index. Read as a structured buffer: reading the row as a constant buffer at its

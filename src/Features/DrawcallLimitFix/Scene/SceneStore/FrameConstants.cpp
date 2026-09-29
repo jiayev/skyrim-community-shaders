@@ -236,8 +236,9 @@ namespace DCLF
 			const auto key = tables.materialSlotKey[slot];
 			if (!key.first || !written(key.first))
 				continue;
+			// A referenced slot's key is a bound object's material, and so live: it is evaluated again in place.
 			MaterialRecord live;
-			if (tables.materialLastUsed[slot] == frame && canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
+			if (tables.materialSlots.References(slot) && canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
 				if (!(live == tables.materials[slot])) {
 					tables.materials[slot] = live;
 					tables.materialVersion[slot] = ++materialVersions;
@@ -247,7 +248,7 @@ namespace DCLF
 				tables.ListMaterialSlot(slot, frame);
 				continue;
 			}
-			// Not drawn this frame (or not evaluable): dropped, so that its next use evaluates it afresh. An
+			// Unreferenced (the drain frees it) or not evaluable: dropped, so that its next use evaluates it afresh. An
 			// object's cached derivation checks its slot is still allocated to the same key.
 			ClearMaterialSlot(slot);
 			tables.materialSlots.Free(slot);

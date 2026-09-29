@@ -900,12 +900,12 @@ namespace DCLF
 		if (impl->shadowInFlight >= kMaxInFlight || impl->shadowSetPipelines.size() >= kMaxPipelines)
 			return kNotReady;
 		// The view's rasterizer state: every shadow pipeline is built for one (ShadowRasterStateId).
-		const std::uint32_t stateId = RasterShadowState(a_key.rasterFlags);
+		const std::uint32_t stateId = a_key.viewState;
 		if (stateId == 0 || stateId > impl->shadowRasterStates.size())
 			return kNotReady;
 		const Impl::ShadowRasterState state = impl->shadowRasterStates[stateId - 1];
 		org::services::PipelineRecipe recipe;
-		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout);
+		recipe.id = fmt::format("dclf.shadow.{:08X}.{:X}.{:016X}.{}", a_key.technique, a_key.rasterFlags, a_key.vertexLayout, a_key.viewState);
 		recipe.shaderKey = ShadowPipelineKeyHash{}(a_key);
 		recipe.fixedFunctionKey = static_cast<std::uint64_t>(a_depthFormat);
 		recipe.build = [device = impl->device, layout = impl->ShadowLayout(), key = a_key, program = &a_program, format = a_depthFormat, state] {
@@ -941,11 +941,6 @@ namespace DCLF
 				return static_cast<std::uint32_t>(i + 1);
 			}
 		}
-		if (states.size() >= kMaxShadowRasterStates) {
-			if (impl->loggedShadowRasterFailures++ < kMaxLoggedFailures)
-				logger::warn("[DCLF] more than {} shadow view rasterizer states; the view stays native", kMaxShadowRasterStates);
-			return 0;
-		}
 		states.push_back(state);
 		impl->shadowRasterStateModes.push_back(modeBit);
 		logger::info("[DCLF] shadow view rasterizer state {} (mode {:#x}): depth bias {} (clamp {}, slope {}), cull {}, front {}", states.size(), a_renderMode,
@@ -953,15 +948,20 @@ namespace DCLF
 		return static_cast<std::uint32_t>(states.size());
 	}
 
-	std::uint32_t DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const
+	std::uint32_t DrawPipelines::ShadowRasterStateCount() const
 	{
+		return static_cast<std::uint32_t>(impl->shadowRasterStates.size());
+	}
+
+	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t a_renderMode) const
+	{
+		std::vector<std::uint32_t> ids;
 		if (a_renderMode < 0xC || a_renderMode >= 0xC + 32)
-			return 0;
-		std::uint32_t mask = 0;
+			return ids;
 		for (std::size_t i = 0; i < impl->shadowRasterStateModes.size(); ++i)
 			if (impl->shadowRasterStateModes[i] & (1u << (a_renderMode - 0xC)))
-				mask |= 1u << (i + 1);
-		return mask;
+				ids.push_back(static_cast<std::uint32_t>(i + 1));
+		return ids;
 	}
 
 	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey> a_keys)
@@ -1141,7 +1141,7 @@ namespace DCLF
 	std::uint32_t DrawPipelines::Find(const PipelineKey&, const ShaderPrograms::Program&) { return kNotReady; }
 	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT) { return kNotReady; }
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
-	std::uint32_t DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t) const { return 0; }
+	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t) const { return {}; }
 	void DrawPipelines::Update() {}
 	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey>) {}
 }
