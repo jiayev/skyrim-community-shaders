@@ -87,7 +87,6 @@ namespace DCLF
 			{ ResidentDrawParity, "CS_DCLF_RESIDENT_DRAW_PARITY", P, N, false, "1: the resident region's draws against a whole-scene build" },
 			{ BuildParity, "CS_DCLF_BUILD_PARITY", P, N, false, "1: the build cache against a fresh build" },
 			{ SetParity, "CS_DCLF_SET_PARITY", P, N, false, "1: the per-object visibility words read back after the colour epoch against the CPU's decisions" },
-			{ DedupParity, "CS_DCLF_DEDUP_PARITY", P, N, false, "1: every draw's binding record built for it alone, against the shared record it uses" },
 			{ BindlessParity, "CS_DCLF_BINDLESS_PARITY", P, N, false, "1: the object records against the values of the constant groups they replace" },
 			{ PassParity, "CS_DCLF_PASS_PARITY", P, N, false, "1: the derived passes against the accumulated ones" },
 			{ CaptureParity, "CS_DCLF_CAPTURE_PARITY", P, N, false, "1: the tables against the engine's own lighting draws (run with CS_DCLF_OWNERSHIP=off)" },

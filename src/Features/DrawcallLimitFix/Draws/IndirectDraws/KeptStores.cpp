@@ -41,7 +41,7 @@ namespace DCLF::Draws
 		std::uint32_t a_frame, ObjectRecordsOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
-		const std::size_t count = std::min<std::size_t>(a_tables.objects.size(), kMaxObjects);
+		const std::size_t count = a_tables.objects.size();
 		if (!a_store) {
 			auto records = std::make_shared<std::vector<BindlessObject>>(count);
 			for (std::size_t r = 0; r < count; ++r)
@@ -112,7 +112,7 @@ namespace DCLF::Draws
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateGeometryDraws");
 		a_out = {};
-		const std::size_t count = std::min<std::size_t>(a_tables.geometries.size(), kMaxGeometries);
+		const std::size_t count = a_tables.geometries.size();
 		auto pack = [&](std::size_t a_slot) { return PackGeometryDraw(a_tables, static_cast<std::uint32_t>(a_slot), count); };
 		if (!a_store) {
 			auto packed = std::make_shared<std::vector<GeometryDraw>>(count);

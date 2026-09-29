@@ -98,11 +98,10 @@ namespace DCLF
 	inline constexpr std::uint32_t kObjectSunMiss = 1u << 31;
 
 	/**
-	 * @brief The shadow epochs' face positions buffer (FaceSnapshots): one float4 per vertex of every face shape
-	 * drawn, each shape in a region SceneStore keeps for it while it is walked. Bound as a face draw's second
-	 * vertex stream, which is where the engine's own draw puts BSDynamicTriShape::dynamicData.
+	 * @brief The face positions buffer (FaceSnapshots) holds one float4 per vertex of every face shape drawn, each shape in a
+	 * region SceneStore keeps for it while it is walked, and is bound as a face draw's second vertex stream, which is where the
+	 * engine's own draw puts BSDynamicTriShape::dynamicData. A shape without a region yet has kNoFaceRegion.
 	 */
-	inline constexpr std::uint32_t kFacePositionVertices = 1u << 20;
 	inline constexpr std::uint32_t kNoFaceRegion = ~0u;
 	inline constexpr std::uint32_t kNoFaceStream = ~0u;
 

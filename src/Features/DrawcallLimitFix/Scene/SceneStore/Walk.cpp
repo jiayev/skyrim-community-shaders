@@ -180,10 +180,6 @@ namespace DCLF
 				break;
 			}
 			if (!region.count) {
-				if (faceRegionTop + a_vertexCount > kFacePositionVertices) {
-					faceRegions.erase(a_geometry);
-					return kNoFaceRegion;
-				}
 				region.first = faceRegionTop;
 				region.count = a_vertexCount;
 				faceRegionTop += a_vertexCount;

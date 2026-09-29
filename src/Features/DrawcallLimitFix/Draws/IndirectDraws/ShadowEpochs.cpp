@@ -31,18 +31,22 @@ namespace DCLF
 		void UseShadowMapRow(ShadowResources& a_resources, const Lookups& a_lookups, std::uint32_t a_latchSlot, std::uint32_t a_rasterState, bool a_write,
 			BuildDrawsLatch& a_latch)
 		{
-			const std::uint32_t mapRowOffset = kShadowPipelineMapOffset + (a_rasterState - 1) * kShadowPipelineMapRowBytes;
+			const auto& layout = a_resources.latchLayout;
+			const std::uint32_t mapRowOffset = layout.MapOffset() + (a_rasterState - 1) * layout.MapRowBytes();
 			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + mapRowOffset;
 			if (!a_write)
 				return;
+			// Every key slot fits its row (ReserveShadowViews, before the epoch): past it is a defect of that reserve.
 			const auto& row = a_lookups.shadowMapRows[a_rasterState];
+			if (row.size() > layout.keySlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
-				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row.data(), std::min<std::size_t>(row.size(), kMaxShadowSlots))));
+				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row.data(), row.size())));
 		}
 
 		/**
 		 * @brief Where a view draws: its slot's buffers, its viewport and depth range in its target's slice, and its push data
-		 * (DrawPipelines.h, kShadowPushWords): the frame record, its own blocks at its slot of the arena's head, and the build's.
+		 * (DrawPipelines.h, kShadowPushWords): the frame record, its own blocks at its slot's row of the view blocks, and the build's.
 		 */
 		ShadowFrameView FrameViewOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target, std::uint32_t a_capacity,
 			const ShadowResources& a_resources, const ShadowPayload& a_payload)
@@ -62,7 +66,7 @@ namespace DCLF
 			out.materialRows = a_resources.materialRows.address;
 			out.sequenceDraws = a_resources.sequenceDraws[a_slot];
 			const std::uint64_t base = a_resources.constantsAddress;
-			const std::uint64_t viewBlock = base + std::uint64_t(a_slot) * kShadowViewSlotBytes;
+			const std::uint64_t viewBlock = a_resources.viewBlocks.address + std::uint64_t(a_slot) * kShadowViewSlotBytes;
 			auto push = [&](std::uint32_t a_word, std::uint64_t a_address) {
 				out.push[a_word] = static_cast<std::uint32_t>(a_address);
 				out.push[a_word + 1] = static_cast<std::uint32_t>(a_address >> 32);
@@ -204,8 +208,6 @@ namespace DCLF
 			}
 			return notReady(ShadowNotReady::Depth);
 		}
-		if (impl->pendingViews.size() >= kSkySlot)
-			return notReady(ShadowNotReady::Capacity);
 		// The rasterizer state the engine draws this view with: its table entry for the renderer's modes, read
 		// now, while the view is drawn - Community Shaders' ShadowmapCascadeRasterizerFix swaps per-cascade
 		// copies with their own depth bias into that table for exactly this window, and the volumetric copy
@@ -328,8 +330,8 @@ namespace DCLF
 			// record, objects and geometries were uploaded by this frame's shadow commit.
 			const std::uint64_t viewBlockOffset = std::uint64_t(kSkySlot) * kShadowViewSlotBytes;
 			const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
-			uploads(resources->constants, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
-			uploads(resources->constants, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
+			uploads(resources->viewBlocks.buffer, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
+			uploads(resources->viewBlocks.buffer, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
 			uploads(resources->count[kSkySlot], kZeroCounts, sizeof(kZeroCounts), 0);
 			// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn.
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
@@ -341,6 +343,7 @@ namespace DCLF
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
+			frame->latch = resources->latch;
 			const auto& previousShape = resources->skyPublished;
 			const std::uint32_t capacity = ShadowViewCapacity(previousShape && !previousShape->views.empty() ? previousShape->views.front().capacity : 0u,
 				payload.modeDraws[kSkyMode], resources->sequenceDraws[kSkySlot]);
@@ -406,6 +409,7 @@ namespace DCLF
 		const DXGI_FORMAT dsvFormat = pending.front().dsvFormat;
 		double prepareMs = 0.0, inputsMs = 0.0, blocksMs = 0.0, bodyMs = 0.0;
 
+		impl->ReserveSceneTables(tables);
 		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
 		impl->shadowJob.modes = modeUsed;
@@ -420,7 +424,17 @@ namespace DCLF
 			return;
 		auto frameOwners = cleanup->Make<std::vector<std::shared_ptr<const void>>>();
 
-		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(pending.size()));
+		// The view slots and the key slots this epoch can name: the lookups' keys, and every key a used mode may add to them
+		// when the body refreshes them.
+		{
+			const auto& lookups = store.GetLookups();
+			std::size_t keys = lookups.shadowSlotKeys.size();
+			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+				if (modeUsed[m])
+					keys += m == kSkyMode ? tables.skyKeysUsed.size() : tables.shadowKeysUsed.size();
+			impl->ReserveShadowViews(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys));
+		}
+		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(pending.size()), kFirstShadowViewSlot);
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			struct BodyTimer
@@ -464,7 +478,7 @@ namespace DCLF
 					[&](ShadowPayload& a_probe) { BuildShadowPayload(job.inputs, tables, lookups, a_probe); });
 			} else {
 				++async.builtInline;
-				BuildShadowPayload(in, tables, lookups, payload, impl->ShadowObjects(), impl->ShadowBones(), impl->ShadowKeptState(), impl->ShadowGeometries());
+				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneBones(), impl->ShadowKeptState(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->shadowExecutionOwner = frameOwners;
@@ -490,14 +504,15 @@ namespace DCLF
 			if (staged) {
 				org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(payload.staged));
 			} else {
-				payload.objects.Emit(resources->tablesHeld.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					uploads(resources->objects, a_data, a_bytes, a_offset);
+				auto& scene = *resources->scene;
+				payload.objects.Emit(scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+					uploads(scene.objects, a_data, a_bytes, a_offset);
 				});
-				EmitBones(payload.bones, resources->tablesHeld.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					uploads(resources->bones, a_data, a_bytes, a_offset);
+				EmitBones(payload.bones, scene.held.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+					uploads(scene.bones, a_data, a_bytes, a_offset);
 				});
-				EmitGeometryDraws(payload.geometries, resources->tablesHeld.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					uploads(resources->geometries, a_data, a_bytes, a_offset);
+				EmitGeometryDraws(payload.geometries, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+					uploads(scene.geometries, a_data, a_bytes, a_offset);
 				});
 				payload.materialRows.Emit(resources->materialRowsHeld, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(resources->materialRows.buffer, a_data, a_bytes, a_offset);
@@ -509,19 +524,20 @@ namespace DCLF
 			impl->shadowRowsWanted = payload.rowsWanted;
 			shadowStats.waitingRows = payload.waitingRows;
 			// Either path uploaded the object records, the bone rows and the geometry slots' draws the buffers did not hold.
+			auto& scene = *resources->scene;
 			if (payload.objects.Version())
-				resources->tablesHeld.objects = payload.objects.Version();
+				scene.held.objects = payload.objects.Version();
 			if (payload.geometries.Version())
-				resources->tablesHeld.geometries = payload.geometries.Version();
+				scene.held.geometries = payload.geometries.Version();
 			if (PersistentParityEnabled() && payload.bones.Version()) {
-				auto& bonesStore = impl->shadowBones;
-				EmitBones(payload.bones, resources->tablesHeld.bones, &bonesStore, [](const void*, std::size_t, std::size_t) {});
+				auto& bonesStore = impl->boneStore;
+				EmitBones(payload.bones, scene.held.bones, &bonesStore, [](const void*, std::size_t, std::size_t) {});
 				if (ParityDue(payload.inputs.frameNumber))
 					CheckBones(bonesStore, payload.bones);
 			}
 			if (payload.bones.Version())
-				resources->tablesHeld.bones = payload.bones.Version();
-			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, resources->facePositions, resources->faceUploaded, uploads);
+				scene.held.bones = payload.bones.Version();
+			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
@@ -550,14 +566,15 @@ namespace DCLF
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
+			frame->latch = resources->latch;
 			std::uint32_t mapRowsWritten = 0;  // bit per view rasterizer state whose map row is in the latch
-			for (std::uint32_t slot = 0; slot < pending.size(); ++slot) {
-				const auto& view = pending[slot];
+			for (std::uint32_t index = 0; index < pending.size(); ++index) {
+				const auto& view = pending[index];
+				const std::uint32_t slot = kFirstShadowViewSlot + index;
 				const std::uint64_t viewBlockOffset = std::uint64_t(slot) * kShadowViewSlotBytes;
-				const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
-				std::memcpy(arena.At(viewBlockOffset, sizeof(view.viewBlock)).data(), view.viewBlock, sizeof(view.viewBlock));
-				std::memcpy(arena.At(perFrameOffset, view.perFrameBytes).data(), view.perFrame.data(), view.perFrameBytes);
-				if (slot >= stagedSlots)
+				uploads(resources->viewBlocks.buffer, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
+				uploads(resources->viewBlocks.buffer, view.perFrame.data(), view.perFrameBytes, viewBlockOffset + kShadowPerFrameOffset);
+				if (index >= stagedSlots)
 					uploads(resources->count[slot], kZeroCounts, sizeof(kZeroCounts), 0);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(view.modeIndex));
 				// The view's values into its latch: frustum culling alone (mode 1), the single phase, and no
@@ -601,11 +618,9 @@ namespace DCLF
 					ShadowViewCapacity(previousCapacity, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
 					*resources, payload));
 			}
-			// Staged, only the view head this epoch wrote goes up from here; the rest of the arena is the worker's.
-			const auto& bytes = arena.Bytes();
-			const std::size_t arenaBytes = staged ? std::min<std::size_t>(bytes.size(), pending.size() * kShadowViewSlotBytes) : bytes.size();
-			if (arenaBytes)
-				uploads(resources->constants, bytes.data(), arenaBytes, 0);
+			// The arena (the frame record and the blocks), when the worker did not stage it.
+			if (const auto& bytes = arena.Bytes(); !staged && !bytes.empty())
+				uploads(resources->constants, bytes.data(), bytes.size(), 0);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			static std::uint32_t logged = 0;
 			if (logged++ % 600 == 0) {
@@ -691,14 +706,14 @@ namespace DCLF
 		in.sunCandidates = a_store.GetSunCandidates();
 		in.addresses.constants = a_resources.constantsAddress;
 		in.addresses.records = a_resources.materialRows.address;
-		in.addresses.objectsIndex = a_resources.objectsIndex;
-		in.addresses.bonesIndex = a_resources.bonesIndex;
-		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.facePositionsAddress : 0;
+		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
+		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
+		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;
-		in.tablesHeld = a_resources.tablesHeld;
+		in.tablesHeld = a_resources.scene->held;
 		in.inputsHeld = a_resources.inputsUploaded;
 		in.materialRowsHeld = a_resources.materialRowsHeld;
 		if (auto* csState = globals::state) {
@@ -718,6 +733,9 @@ namespace DCLF
 		// tables and the frame's reference eye is set. The build runs on the worker while the engine draws
 		// the shadow maps, for last frame's render modes (a change is stale, and built inline).
 		impl->DropShadowJob(stats);
+		// The scene stores are the main jobs' too; last frame's were joined by their epochs or dropped at EndFrame.
+		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j)
+			impl->DropMainJob(j, stats);
 		if (!ActiveToggles().shadows || failed || !AsyncEnabled())
 			return;
 		auto& async = stats.async[kAsyncShadow];
@@ -730,6 +748,7 @@ namespace DCLF
 			return;
 		}
 		// The material rows' table grows here, on the render thread before the worker reads it, if the last build wanted more.
+		impl->ReserveSceneTables(tables);
 		impl->ReserveShadowRows();
 		job.inputs = impl->PrepareShadowInputs(store, *impl->shadow, job.modes, job.rasterStates);
 		++async.kicked;
@@ -737,16 +756,22 @@ namespace DCLF
 		const auto* lookups = &store.GetLookups();
 		auto* payload = &impl->shadowPayload;
 		auto* pool = &job.stagedPool;
-		auto* objects = impl->ShadowObjects();
-		auto* bonesStore = impl->ShadowBones();
-		auto* geometriesStore = impl->ShadowGeometries();
+		auto* objects = impl->SceneObjects();
+		auto* bonesStore = impl->SceneBones();
+		auto* geometriesStore = impl->SceneGeometries();
 		auto* exclusionCache = &impl->sunExclusionCache;
 		auto* kept = impl->ShadowKeptState();
 		const ShadowInputs inputs = job.inputs;
 		const bool claims = PassCapture::ShadowWithholdingEnabled();
-		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, target = impl->shadow, slots = job.views, claims](std::stop_token) {
+		// The count buffers the worker zeroes: those of the slots last frame's views took, taken here, because the render thread
+		// adds slots (ReserveShadowViews) while the worker runs.
+		std::vector<std::shared_ptr<org::Buffer>> counts;
+		for (std::uint32_t v = 0; v < job.views && kFirstShadowViewSlot + v < impl->shadow->count.size(); ++v)
+			counts.push_back(impl->shadow->count[kFirstShadowViewSlot + v]);
+		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, target = impl->shadow,
+																counts = std::move(counts), claims](std::stop_token) {
 			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, bonesStore, kept, geometriesStore);
-			StageShadowPayload(*payload, *target, slots, *pool);
+			StageShadowPayload(*payload, *target, counts, *pool);
 			if (claims) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Claims");
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -793,7 +818,7 @@ namespace DCLF
 		if ((epoch % 127) != 0 || !shadow || shadow->labels.empty())
 			return;
 		const auto& view = shadow->labels[(epoch / 127) % shadow->labels.size()];
-		if (view.slot >= kMaxShadowViews || !shadow->countD3D11[view.slot])
+		if (view.slot >= shadow->countD3D11.size() || !shadow->countD3D11[view.slot])
 			return;
 		D3D11_BUFFER_DESC desc{};
 		shadow->countD3D11[view.slot]->GetDesc(&desc);

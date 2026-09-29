@@ -334,8 +334,7 @@ namespace DCLF::Draws
 				const ShadowPipelineKey slotKey{ key.technique | modeBits, key.rasterFlags, key.vertexLayout };
 				auto slotIt = a_lookups.shadowSlots.find(slotKey);
 				if (slotIt == a_lookups.shadowSlots.end()) {
-					if (a_lookups.shadowSlotKeys.size() >= kMaxShadowSlots)
-						continue;  // its casters stay native
+					// The latch's map rows hold every slot this refresh can add (ReserveShadowViews, before the epoch).
 					slotIt = a_lookups.shadowSlots.emplace(slotKey, static_cast<std::uint32_t>(a_lookups.shadowSlotKeys.size())).first;
 					a_lookups.shadowSlotKeys.push_back(slotKey);
 					++a_lookups.generation;

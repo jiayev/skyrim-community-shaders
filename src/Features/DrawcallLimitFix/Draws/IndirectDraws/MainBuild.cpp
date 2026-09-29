@@ -71,7 +71,6 @@ namespace DCLF::Draws
 			BonesStore* boneStore;
 			GeometryStore* geometryStore;
 
-			decltype(MainPayload::arena)& arena = out.arena;
 			decltype(MainPayload::sequences)& sequences = out.sequences;
 			decltype(MainPayload::inputList)& drawInputs = out.inputList;
 			decltype(MainPayload::decalCount)& decalCount = out.decalCount;
@@ -187,7 +186,6 @@ namespace DCLF::Draws
 		out.inputs = in;
 		if (lookups.sharedBindingBlock)
 			out.bindingOwners.push_back(lookups.sharedBindingBlock);
-		arena.Reset(kConstantBytes);
 		BeginRows();
 		TracyCZoneEnd(resetMainZone);
 	}
@@ -323,7 +321,7 @@ namespace DCLF::Draws
 	{
 		// The per-object states are set parity's alone (CS_DCLF_SET_PARITY).
 		if (SetParityEnabled())
-			out.objectState.assign(std::min<std::size_t>(tables.objects.size(), kMaxObjects), kObjectStateAbsent);
+			out.objectState.assign(tables.objects.size(), kObjectStateAbsent);
 		// The colour segment's drawn marks (DrawnMarks): kept across builds, sent as changes.
 		marks = cache && !depthOnly ? &cache->drawnMarks : nullptr;
 		if (marks) {
@@ -630,7 +628,7 @@ namespace DCLF::Draws
 
 	bool MainBuild::RegionEligible(std::uint32_t o) const
 	{
-		if (o >= tables.objects.size() || o >= kMaxObjects)
+		if (o >= tables.objects.size())
 			return false;
 		const bool resident = ResidentAt(o);
 		if (!resident && !wholeScene)
@@ -738,11 +736,8 @@ namespace DCLF::Draws
 		const std::uint64_t key = (object.flags & kObjectNoBindings) ? kNoPair : PairKeyOf(object);
 		std::uint32_t i = r.indexOf[o];
 		if (i == kNoRegion) {
-			// Past the region's share of the inputs it stays with the loop. Its draws need no share (the sequence buffer holds every
-			// draw the scene can produce), nor its pair a slot (the pair's rows are the scene's).
-			const std::size_t inputLimit = wholeScene ? kMaxInputs - kLoopReserve : kMaxInputs / 2;
-			if (r.inputs.Size() >= inputLimit)
-				return;
+			// No share to stay within: the region and the loop together have at most an input per object, which the input buffer
+			// holds (ReserveSceneTables), and the sequence buffer holds every draw the scene can produce.
 			i = r.Add(o);
 			r.pairOf.push_back(key);
 			r.drawsOf.push_back(0);
@@ -1001,7 +996,7 @@ namespace DCLF::Draws
 			// The depth segment still submits it cull-only, with its bounds: that is what the tables
 			// carry the whole tracked set for, and what the culling is measured against the engine
 			// with.
-			if (depthOnly && o < kMaxObjects && drawInputs.size() + regionInputs < kMaxInputs) {
+			if (depthOnly) {
 				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
 					{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
 					static_cast<std::uint32_t>(o), 0 });
@@ -1043,15 +1038,6 @@ namespace DCLF::Draws
 		const auto& geometry = tables.geometries[object.geometryIndex];
 		if (!geometry.vertexAddress || !geometry.indexAddress) {
 			Skipped(Skip::Geometry);
-			return;
-		}
-		// The object's table index addresses its record and its visibility word, and it travels to
-		// the shaders as the draw's third root constant. Past the table's capacity it addresses
-		// neither, and robust buffer access turns that into zeros - a world matrix of zeros collapses
-		// the object to a point at the eye with no other sign. Both caps come before the cull-only
-		// push below, so no input reaches the buffer unchecked.
-		if (o >= kMaxObjects || drawInputs.size() + regionInputs >= kMaxInputs) {
-			Skipped(Skip::Capacity);
 			return;
 		}
 		// The Z-prepass must write depth for exactly the objects the native loop is leaving to DCLF,

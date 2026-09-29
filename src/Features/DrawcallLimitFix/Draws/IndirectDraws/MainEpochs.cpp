@@ -348,7 +348,9 @@ namespace DCLF
 		auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
 		auto resources = impl->resources;
-		// The sequence buffer holds every draw the scene can produce: grown here, before the epoch, when it would not.
+		// The scene tables hold the frame's, and the sequence buffer every draw the scene can produce: grown here, before the
+		// epoch, when they would not.
+		impl->ReserveSceneTables(tables);
 		impl->ReserveMainSequences(tables);
 		stats.skipped = {};
 		stats.missingTextures = {};
@@ -417,7 +419,7 @@ namespace DCLF
 					});
 			} else {
 				++async.builtInline;
-				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->MainObjects(), impl->MainBones(), impl->MainGeometries());
+				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneBones(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
@@ -502,7 +504,13 @@ namespace DCLF
 			++async.notKicked;
 			return;
 		}
+		// The scene stores are the shadow build's too: it is joined at AfterShadowMaps, before either main job is kicked.
+		DropShadowJob(a_stats);
 		auto& store = SceneStore::Get();
+		// What the build is built against: the scene tables and the rows grown to the frame's (the epoch's own reserve then finds
+		// nothing to grow).
+		ReserveSceneTables(store.GetTables());
+		ReserveMainSequences(store.GetTables());
 		job.inputs = PrepareMainInputs(nullptr, a_depthOnly, *resources, job.vsMask, job.psMask, store);
 		// A build without the bindless parity does not read the eye (PrepareMainInputs leaves it zero), so the
 		// prediction only matters where it does.
@@ -515,9 +523,9 @@ namespace DCLF
 		const auto* lookups = &store.GetLookups();
 		auto* payload = &mainPayload[index];
 		auto* cache = CacheFor(index);
-		auto* objects = MainObjects();
-		auto* bonesStore = MainBones();
-		auto* geometriesStore = MainGeometries();
+		auto* objects = SceneObjects();
+		auto* bonesStore = SceneBones();
+		auto* geometriesStore = SceneGeometries();
 		auto* rows = &mainRows;
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
@@ -669,14 +677,12 @@ namespace DCLF
 
 	MainInputs IndirectDraws::Impl::PrepareMainInputs(const Capture* a_capture, bool a_depthOnly, const Resources& a_resources, std::uint32_t a_vsMask, std::uint32_t a_psMask, const SceneStore& a_store)
 	{
-		const bool dedupParity = SwitchEnabled(Switch::DedupParity);
 		const bool bindlessParity = SwitchEnabled(Switch::BindlessParity);
 		MainInputs in;
 		in.frameNumber = a_store.GetFrame();
 		in.depthOnly = a_depthOnly;
 		in.residentUploaded = a_resources.residentUploaded[a_depthOnly && a_resources.inputsDepth ? 0 : 1];
-		in.tablesHeld = a_resources.tablesHeld;
-		in.dedupParity = dedupParity;
+		in.tablesHeld = a_resources.scene->held;
 		in.bindlessParity = bindlessParity;
 		in.withholding = ActiveToggles().ownership;
 		// Camera-relative world matrices: the colour epoch must use the eye the Z-prepass used, or the
@@ -698,16 +704,15 @@ namespace DCLF
 		in.vsFrameMask = a_vsMask;
 		in.psFrameMask = a_psMask;
 		// The rows both segments share, and the versions of them the tables hold.
-		in.addresses.constants = a_resources.constantsAddress;
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.pipelineRows = a_resources.pipelineRows.address;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
 		in.materialRowsHeld = a_resources.materialRowsHeld;
 		in.pipelineRowsHeld = a_resources.pipelineRowsHeld;
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
-		in.addresses.objectsIndex = a_resources.objectsIndex;
-		in.addresses.bonesIndex = a_resources.bonesIndex;
-		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.facePositionsAddress : 0;
+		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
+		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
+		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;

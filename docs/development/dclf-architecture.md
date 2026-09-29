@@ -81,12 +81,12 @@ engine writers ──events──▶ SceneStore tables ──change log──▶
 4.  **Kept stores.** Each epoch kind keeps its GPU-side state across frames, and rewrites only what the change log
     names:
     -   the object records (`ObjectRecordStore`), bone rows (`BonesStore`) and geometry table (`GeometryStore`);
-    -   the constant blocks and binding records per (material, pipeline) pair (`PersistentBindings`, `BuildCache`);
+    -   the main pass's material and pipeline rows (`MainRows`), shared by the Z-prepass and colour builds;
     -   the resident objects' draw inputs (`ResidentRegion`);
     -   the drawn set (`DrawnMarks`);
     -   the shadow inputs per render mode and the shadow material rows (`ShadowKept`).
-5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the build's constant arena,
-    binding records, draw inputs and the kept stores' changes. `BuildMainPayload` (`Draws/IndirectDraws/MainBuild.cpp`)
+5.  **Payload.** A build is a pure function from the tables and lookups to a payload: the rows it wrote, the draw
+    inputs and the kept stores' changes. `BuildMainPayload` (`Draws/IndirectDraws/MainBuild.cpp`)
     and `BuildShadowPayload` are the two builders. On the worker, the payload is also staged into an upload batch.
 6.  **Commit and epoch.** On the render thread, the commit adds what only it has: the frame's constant buffers
     (`ConstantMirror`), the per-frame textures and the latch. Then one render-graph epoch runs the GPU work:
@@ -123,9 +123,61 @@ decal group) travel to `BuildDrawsCS` and `SortSequencesCS` in their constants (
 `decalBase`, `decalStride`). Each indirect draw's max count is its epoch's own draws, grown as a power of two so the
 recording settles. A bound past the device's max sequence count, or the sort's 2^20 ranks, is a hard failure.
 
-**Next.** The same split for the main pass (a pipeline row and a material row per draw, a frame record, the tables
-shared by the Z-prepass and colour segments); one set of object, bone, geometry and face tables for the main and shadow
-epochs, grown rather than capped; draw outputs sized per epoch.
+**Main pass (done).** The same split, with a pipeline row as well (`DrawPipelines.h`, `kDrawPush*`):
+-   **per draw:** six words of push data: the pipeline row's address (words 0-1), the material row's (2-3) and the object
+    (4). `BuildDrawsCS` computes both addresses from the input's `y` (`RowsOf`: the pipeline slot in the high 12 bits, the
+    material slot in the low 20) and the tables' bases in its constants;
+-   **per material slot** (`MaterialRow`, 1024 bytes): the vertex and pixel `PerMaterial` blocks (`b1`), then a header
+    with t0-t15, s0-s15 and the feature textures (t71, t74). A material slot is keyed by (material, pass descriptor), and
+    the pack tables depend only on the technique, so the row is packed once for every pipeline and both segments;
+-   **per pipeline slot** (`PipelineRow`, 2048 bytes): the technique blocks (`b0`), the geometry template (`b2`), the
+    permutation (`b4`), and the shadow mask (t14, s14);
+-   **per pass:** the frame push: the frame slots' addresses and the frame record (`DrawBindings`: the frame textures
+    from t16, and the object and bone tables).
+
+The rows are kept across frames (`MainRows`, a `KeptArray` each): a row is written again only when its key changes, and
+the tables are sent what changed since the version they hold. Each row's header holds its blocks' offsets until the
+upload adds the row's own address (`EmitMainRows`), so a table that grows is simply sent again. Both tables
+(`Resources::materialRows`, `pipelineRows`) are `GrowableRows`, grown before each epoch to the scene's slot counts plus a
+quarter (`Impl::ReserveMainSequences`). Whether a (material, pipeline) pair can draw - a texture, sampler or constant
+block the pipeline reads that the row lacks - is checked per build, from what each row holds (`MainBuild::AssembleRecord`).
+
+The DGC push-data token of a `Constant` argument is at most 16 bytes on NVIDIA; BasicRHI splits larger ones, so the
+six-word draw push is two tokens (BasicRHI `README.md`, and "Resolved: device loss in every DCLF draw pass" in
+`dclf-open-defects.md`).
+
+**Scene tables (done).** One set of object records (`t127`), bone rows (`t126`), geometry rows and face positions serves
+every epoch - the shadow views', Skylighting's, the Z-prepass's and the colour segment's (`SceneBuffers`, shared by
+`Resources` and `ShadowResources`). One store keeps each (`Impl::objectStore`, `boneStore`, `geometryStore`). Their builds
+run in frame order - the shadow build (kicked at `BeforeShadowMaps`, joined at `AfterShadowMaps`), then the Z-prepass's
+(kicked at `EarlyPrepass`), then the colour build's - and each kick drops a job still outstanding, so no two builds write a
+store at once. Each commit sends what changed since the version the buffers hold (`SceneBuffers::held`), which the commit
+before it wrote. Object slots are fixed from the scene phase on, so Skylighting's epoch, which draws the shadow build's
+inputs after the Z-prepass commit, reads the same objects' records.
+
+Every scene table grows (`Impl::ReserveSceneTables`, on the render thread before any build's inputs are taken): to the
+objects, the geometry slots plus one row per face stream, every palette current and previous plus the extras, and the
+highest face region, doubling. A growth gives the buffer a new SRV slot or address (the old ones are retired once the GPU
+is done with them), resets its held version so the next commit sends it whole, and counts in `SceneBuffers::generation`,
+so a batch staged before it is not submitted after it. The per-object buffers - the visibility and frustum words, the
+draw inputs of both segments and every shadow mode, the feedback slots - follow the object capacity
+(`ReserveObjectBuffers`): a segment or a mode has at most one input per object, so no input share or loop reserve is
+needed. A build past a reserved capacity is a hard failure at its commit (`CheckSceneCapacity`), never data dropped.
+
+**Shadow view and key slots (done).** Skylighting's map draws through view slot 0 and the frame's shadow views through the
+slots after it, as many as the frame has (`Impl::ReserveShadowViews`, before the epoch). A slot is a sequence buffer, a
+count buffer and a row of the view blocks (`ShadowResources::viewBlocks`: the view's `b0` and `b12`, out of the constants
+arena, so the worker's staged arena does not depend on the view count). More slots are more buffers the passes declare,
+so the shadow extension is added again and the graph is built with them; the kick hands the worker the count buffers it
+zeroes, because slots are added while it runs. The pipeline map rows hold every key slot the epoch can name: the lookups'
+keys plus every key a used mode may add when the epoch body refreshes them. Either growth is a new latch block
+(`ShadowLatchLayout`), which the passes take from the published frame (`ShadowFrame::latch`), never from the resources,
+since async epochs prepare them on the host thread. A view is never left native for want of a slot.
+
+**Still capped.** The sun's full-frustum processes a view's latch holds (`kMaxSunEntryProcesses`, 8): past it the build
+takes the per-frame path and decides the entry rule on the CPU, with the same result (moving them to a shared latch region
+is a `BuildDrawsCS` change). The view rasterizer states (`DrawPipelines::kMaxShadowRasterStates`, 15, packed in 16-bit
+masks): past it the view stays native.
 
 ## Ownership: how the engine stops drawing DCLF's objects
 
@@ -204,7 +256,7 @@ fails on the baseline is listed in [dclf-open-defects.md](./dclf-open-defects.md
 | `CS_DCLF_SKYLIGHT_PARITY` | DCLF's Skylighting occlusion map against the engine's |
 | `CS_DCLF_ASYNC=probe` | Each worker build against an inline one |
 | `CS_DCLF_CAPTURE_PARITY` (with `CS_DCLF_OWNERSHIP=off`) | The tables against the engine's own lighting draws: descriptors, transforms, every constant group, textures |
-| `CS_DCLF_SET_PARITY`, `CS_DCLF_DEDUP_PARITY`, `CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_PASS_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
+| `CS_DCLF_SET_PARITY`, `CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_PASS_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
 
 The standard validation is two 60-second runs on the same save:
 

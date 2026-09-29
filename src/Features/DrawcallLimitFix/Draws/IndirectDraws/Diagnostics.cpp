@@ -47,7 +47,7 @@ namespace DCLF::Draws
 		auto rowsDiffer = [&](const char* a_name, const auto& a_lhs, const auto& a_rhs, std::size_t a_stride) {
 			return bytesDiffer(a_name, a_lhs.At(0), a_lhs.Count() * a_stride, a_rhs.At(0), a_rhs.Count() * a_stride);
 		};
-		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || rowsDiffer("material rows", a.materialRows, b.materialRows, sizeof(MaterialRow)) ||
+		if (rowsDiffer("material rows", a.materialRows, b.materialRows, sizeof(MaterialRow)) ||
 			rowsDiffer("pipeline rows", a.pipelineRows, b.pipelineRows, sizeof(PipelineRow)) ||
 			vectorDiffers("sequences", a.sequences, b.sequences) || vectorDiffers("inputs", a.inputList, b.inputList) ||
 			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || bytesDiffer("objects", a.objectRecords.At(0), a.objectRecords.Count() * sizeof(BindlessObject), b.objectRecords.At(0),
@@ -106,11 +106,9 @@ namespace DCLF
 				impl->resources ? impl->resources->materialRows.capacity : 0u, impl->resources ? impl->resources->pipelineRows.capacity : 0u, rows.resyncs);
 			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
 		}
-		for (auto [name, store] : { std::pair{ "main", &impl->mainObjects }, std::pair{ "shadow", &impl->shadowObjects } }) {
-			if (!store->updates)
-				continue;
-			text += fmt::format("[DCLF] persistent object records ({}): {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
-				name, store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, store->parity.checks,
+		if (auto* store = &impl->objectStore; store->updates) {
+			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
+				store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, store->parity.checks,
 				store->parity.mismatches, store->collisions && store->parity.checks ? std::string(" <- DIFFER") : store->parity.Verdict(true));
 			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
 			store->parity.Reset();
@@ -138,18 +136,14 @@ namespace DCLF
 			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
 			k.parity.Reset();
 		}
-		for (auto [name, store] : { std::pair{ "main", &impl->mainBones }, std::pair{ "shadow", &impl->shadowBones } }) {
-			if (!store->updates)
-				continue;
-			text += fmt::format("[DCLF] persistent bone rows ({}): {} updates, {} resyncs, {} capacity rows; parity {} checked, {} differ{}\n", name, store->updates, store->resyncs,
+		if (auto* store = &impl->boneStore; store->updates) {
+			text += fmt::format("[DCLF] persistent bone rows: {} updates, {} resyncs, {} capacity rows; parity {} checked, {} differ{}\n", store->updates, store->resyncs,
 				store->capacity, store->parity.checks, store->parity.mismatches, store->parity.Verdict());
 			store->updates = store->resyncs = 0;
 			store->parity.Reset();
 		}
-		for (auto [name, store] : { std::pair{ "main", &impl->mainGeometries }, std::pair{ "shadow", &impl->shadowGeometries } }) {
-			if (!store->updates)
-				continue;
-			text += fmt::format("[DCLF] persistent geometry table ({}): {} updates, {:.2f} slots repacked an update, {} slots held, {} resyncs; parity {} checked, {} differ{}\n", name,
+		if (auto* store = &impl->geometryStore; store->updates) {
+			text += fmt::format("[DCLF] persistent geometry table: {} updates, {:.2f} slots repacked an update, {} slots held, {} resyncs; parity {} checked, {} differ{}\n",
 				store->updates, static_cast<double>(store->rewritten) / store->updates, store->packed.Size(), store->resyncs, store->parity.checks, store->parity.mismatches,
 				store->parity.Verdict(true));
 			store->updates = store->rewritten = store->resyncs = 0;
@@ -372,12 +366,17 @@ namespace DCLF
 		if (!a_resources->visibilityD3D11 || a_depth.inputs.frameNumber != a_colour.inputs.frameNumber || setParityFrames.size() >= 8)
 			return;
 		SetParityFrame snapshot;
-		if (!setParityStaging.empty()) {
-			snapshot.staging = std::move(setParityStaging.back());
+		D3D11_BUFFER_DESC desc{};
+		a_resources->visibilityD3D11->GetDesc(&desc);
+		// A released staging of another size (the visibility buffer grew since) is dropped.
+		while (!setParityStaging.empty() && !snapshot.staging) {
+			D3D11_BUFFER_DESC held{};
+			setParityStaging.back()->GetDesc(&held);
+			if (held.ByteWidth == desc.ByteWidth)
+				snapshot.staging = std::move(setParityStaging.back());
 			setParityStaging.pop_back();
-		} else {
-			D3D11_BUFFER_DESC desc{};
-			a_resources->visibilityD3D11->GetDesc(&desc);
+		}
+		if (!snapshot.staging) {
 			desc.Usage = D3D11_USAGE_STAGING;
 			desc.BindFlags = 0;
 			desc.MiscFlags = 0;
@@ -393,7 +392,7 @@ namespace DCLF
 		snapshot.colourState = a_colour.objectState;
 		const auto& tables = store.GetTables();
 		const auto claims = PassCapture::Get().CurrentClaims();
-		const std::size_t objects = std::min<std::size_t>(tables.objects.size(), kMaxObjects);
+		const std::size_t objects = tables.objects.size();
 		snapshot.flags.assign(objects, 0);
 		snapshot.geometry.assign(objects, nullptr);
 		for (std::size_t o = 0; o < objects && o < tables.objectGeometry.size(); ++o) {
