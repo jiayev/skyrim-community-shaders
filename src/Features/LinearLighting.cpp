@@ -107,6 +107,21 @@ void LinearLighting::PostSetupResources()
 {
 	if (configuredLinearLighting && !globals::features::effects11.IsPresetEnabled() && !globals::features::postProcessing.loaded)
 		stl::report_and_fail("Linear Lighting requires Post Processing for its display transform."sv);
+	resourcesReady = true;
+}
+
+void LinearLighting::Reset()
+{
+	if (!resourcesReady)
+		return;
+	// Without Post Processing's display transform the toggle stays inert instead of failing at runtime.
+	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	const bool acescg = linearLighting && settings.enableACEScg;
+	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg)
+		globals::shaderCache->Reload([this, linearLighting, acescg] {
+			configuredLinearLighting = linearLighting;
+			configuredACEScg = acescg;
+		});
 }
 
 void LinearLighting::ClearShaderCache()
@@ -260,6 +275,8 @@ namespace
 	{
 		static void thunk(RE::BSShader* shader, RE::BSRenderPass* pass, uint32_t renderFlags)
 		{
+			if (!globals::features::linearLighting.IsLinearLightingActive())
+				return func(shader, pass, renderFlags);
 			if constexpr (Type == RE::BSShader::Type::Lighting) {
 				globals::state->permutationData.BaseTextureIsWorking = 0;
 				if (pass && pass->shaderProperty && pass->shaderProperty->material) {
@@ -489,6 +506,8 @@ namespace
 	{
 		static DWORD thunk(RE::UI3DSceneManager* manager, int scheme, RE::NiCamera* camera, bool arg4)
 		{
+			if (!globals::features::linearLighting.IsLinearLightingActive())
+				return func(manager, scheme, camera, arg4);
 			auto& renderToUI = globals::state->permutationData.RenderToUI;
 			const uint previous = renderToUI;
 			renderToUI = 1;
@@ -563,9 +582,8 @@ void LinearLighting::Load()
 {
 	configuredLinearLighting = loaded && settings.enableLinearLighting;
 	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
-	if (!configuredLinearLighting)
-		return;
 
+	// Installed regardless of the toggle so Reset() can enable Linear Lighting without a restart.
 	struct UploadCall : Xbyak::CodeGenerator
 	{
 		UploadCall(uintptr_t target, bool waterMaterial = false)

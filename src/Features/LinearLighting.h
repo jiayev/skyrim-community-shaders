@@ -85,6 +85,8 @@ struct LinearLighting : Feature
 	/** @brief Draws the ImGui settings UI for color management and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
 	virtual void PostSetupResources() override;
+	/** @brief Recompiles shaders when the Linear Lighting or ACEScg toggles no longer match the active permutation. */
+	virtual void Reset() override;
 	virtual void ClearShaderCache() override;
 	virtual void ModifySharedLighting(SharedLighting& lighting) override;
 	virtual void Load() override;
@@ -111,4 +113,5 @@ private:
 
 	bool configuredLinearLighting = false;
 	bool configuredACEScg = false;
+	bool resourcesReady = false;
 };
