@@ -306,24 +306,25 @@ namespace DCLF
 
 	/**
 	 * @brief One indirect draw, in the argument order of the command signature (BasicRHI packs arguments
-	 * like D3D12, 4-byte aligned): pipeline set index, push data (the DrawBindings record's address),
-	 * two vertex buffer views, index buffer view (D3D12 VBV / IBV layouts), DrawIndexed.
+	 * like D3D12, 4-byte aligned): pipeline set index, push data (its pipeline row's and material row's addresses and
+	 * the object word), two vertex buffer views, index buffer view (D3D12 VBV / IBV layouts), DrawIndexed.
 	 *
 	 * The second view is slot 1, where a dynamic shape's positions are (FaceSnapshots; the engine's own draw
 	 * binds BSDynamicTriShape::dynamicData there). Every other draw repeats its slot 0 view, which a layout
 	 * without a second stream never reads.
 	 *
 	 * The scene tables hold the geometry part with the pipeline's table index; the main-pass epoch
-	 * replaces it with the pipeline set index and fills in the record address.
+	 * replaces it with the pipeline set index and fills in the rows' addresses.
 	 */
 #pragma pack(push, 4)
 	struct DrawSequence
 	{
 		std::uint32_t pipelineIndex;
-		std::uint64_t bindingsAddress;
-		// The object's index in SceneStore::Tables::objects, pushed as the third root constant word so the
-		// shaders can reach per-object data without it travelling in the binding record. The three words
-		// are one contiguous Constant indirect argument, so this must stay adjacent to bindingsAddress.
+		// The draw's rows (IndirectDraws: the pipeline row's registers, and the material row's), and the object's index in
+		// SceneStore::Tables::objects, by which the shaders reach per-object data. The five words are one contiguous Constant
+		// indirect argument (the layout's per-draw push data), so they stay together, in this order.
+		std::uint64_t pipelineRowAddress;
+		std::uint64_t materialRowAddress;
 		std::uint32_t objectIndex;
 		std::uint64_t vertexBufferAddress;  // GeometryRecord::vertexAddress (0 without the render graph)
 		std::uint32_t vertexBufferSize;
@@ -341,11 +342,12 @@ namespace DCLF
 		std::uint32_t firstInstance;
 	};
 #pragma pack(pop)
-	static_assert(sizeof(DrawSequence) == 84);
-	static_assert(offsetof(DrawSequence, bindingsAddress) == 4);
-	static_assert(offsetof(DrawSequence, objectIndex) == 12);
-	static_assert(offsetof(DrawSequence, vertexBufferAddress) == 16);
-	static_assert(offsetof(DrawSequence, streamBufferAddress) == 32);
-	static_assert(offsetof(DrawSequence, indexBufferAddress) == 48);
-	static_assert(offsetof(DrawSequence, indexCount) == 64);
+	static_assert(sizeof(DrawSequence) == 92);
+	static_assert(offsetof(DrawSequence, pipelineRowAddress) == 4);
+	static_assert(offsetof(DrawSequence, materialRowAddress) == 12);
+	static_assert(offsetof(DrawSequence, objectIndex) == 20);
+	static_assert(offsetof(DrawSequence, vertexBufferAddress) == 24);
+	static_assert(offsetof(DrawSequence, streamBufferAddress) == 40);
+	static_assert(offsetof(DrawSequence, indexBufferAddress) == 56);
+	static_assert(offsetof(DrawSequence, indexCount) == 72);
 }

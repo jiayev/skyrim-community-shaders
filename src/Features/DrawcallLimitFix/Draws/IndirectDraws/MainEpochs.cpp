@@ -348,6 +348,8 @@ namespace DCLF
 		auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
 		auto resources = impl->resources;
+		// The sequence buffer holds every draw the scene can produce: grown here, before the epoch, when it would not.
+		impl->ReserveMainSequences(tables);
 		stats.skipped = {};
 		stats.missingTextures = {};
 		stats.missingVertexConstants = stats.missingPixelConstants = 0;
@@ -408,10 +410,14 @@ namespace DCLF
 			if (useAsync) {
 				++async.used;
 				ProbeWorkerBuild(payload, impl->probePayload, async, depthOnly ? "zprepass" : "colour",
-					[&](MainPayload& a_probe) { BuildMainPayload(job.inputs, tables, lookups, a_probe); });
+					[&](MainPayload& a_probe) {
+						// Its own rows, written from scratch (the worker's are the scene's, kept across frames).
+						MainRows probeRows;
+						BuildMainPayload(job.inputs, tables, lookups, a_probe, probeRows);
+					});
 			} else {
 				++async.builtInline;
-				BuildMainPayload(in, tables, lookups, payload, impl->CacheFor(jobIndex), impl->MainObjects(), impl->MainBones(), impl->MainGeometries());
+				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->MainObjects(), impl->MainBones(), impl->MainGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
@@ -512,10 +518,12 @@ namespace DCLF
 		auto* objects = MainObjects();
 		auto* bonesStore = MainBones();
 		auto* geometriesStore = MainGeometries();
+		auto* rows = &mainRows;
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
-		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, cache, objects, bonesStore, geometriesStore, pool, target = resources](std::stop_token) {
-			BuildMainPayload(inputs, *tables, *lookups, *payload, cache, objects, bonesStore, geometriesStore);
+		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, rows, cache, objects, bonesStore, geometriesStore, pool,
+																							target = resources](std::stop_token) {
+			BuildMainPayload(inputs, *tables, *lookups, *payload, *rows, cache, objects, bonesStore, geometriesStore);
 			if (target)
 				StageMainPayload(*payload, *target, *pool);
 		});
@@ -689,18 +697,17 @@ namespace DCLF
 			in.eye = in.previousEye = {};
 		in.vsFrameMask = a_vsMask;
 		in.psFrameMask = a_psMask;
-		// Each segment's constants and records are its own (the Z-prepass's in Resources::constantsDepth, recordsDepth).
-		const bool depthBuffers = a_depthOnly && a_resources.recordsDepth;
-		in.addresses.constants = depthBuffers ? a_resources.constantsDepthAddress : a_resources.constantsAddress;
-		in.addresses.records = depthBuffers ? a_resources.recordsDepthAddress : a_resources.recordsAddress;
-		in.constantsUploaded = a_resources.constantsUploaded[a_depthOnly ? 0 : 1];
-		in.recordsUploaded = a_resources.recordsUploaded[a_depthOnly ? 0 : 1];
-		in.frameTextures = a_resources.committedFrameTextures[a_depthOnly ? 0 : 1];
+		// The rows both segments share, and the versions of them the tables hold.
+		in.addresses.constants = a_resources.constantsAddress;
+		in.addresses.records = a_resources.materialRows.address;
+		in.addresses.pipelineRows = a_resources.pipelineRows.address;
+		in.addresses.recordCapacity = a_resources.materialRows.capacity;
+		in.materialRowsHeld = a_resources.materialRowsHeld;
+		in.pipelineRowsHeld = a_resources.pipelineRowsHeld;
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
 		in.addresses.objectsIndex = a_resources.objectsIndex;
 		in.addresses.bonesIndex = a_resources.bonesIndex;
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.facePositionsAddress : 0;
-		in.addresses.recordCapacity = a_resources.recordCapacity;
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;

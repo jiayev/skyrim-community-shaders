@@ -5,39 +5,34 @@ namespace DCLF
 {
 	namespace
 	{
-		// The payload's own uploads: the constant arena, the per-object records and bone rows, the binding records,
-		// and the draw inputs with their geometry. Each buffer has its own condition: a depth epoch where every
-		// candidate is cull-only has no records and plenty of inputs, and BuildDraws dispatches over the inputs.
+		// The payload's own uploads: the constant arena, the rows, the per-object records and bone rows, and the draw inputs
+		// with their geometry. Each buffer has its own condition: a depth epoch where every candidate is cull-only has plenty
+		// of inputs, and BuildDraws dispatches over the inputs.
 		template <class Emit>
 		void ForEachMainPayloadUpload(const MainPayload& a_payload, const Resources& a_resources, Emit&& a_emit)
 		{
-			// Each segment's constants and records are its own buffers (the Z-prepass's: Resources::constantsDepth, recordsDepth).
-			const bool depthBuffers = a_payload.inputs.depthOnly && a_resources.recordsDepth;
-			const auto& constantsTarget = depthBuffers ? a_resources.constantsDepth : a_resources.constants;
-			const auto& recordsTarget = depthBuffers ? a_resources.recordsDepth : a_resources.records;
-			const std::size_t segment = a_payload.inputs.depthOnly ? 0 : 1;
 			const auto& bytes = a_payload.arena.Bytes();
 			if (!bytes.empty())
-				a_emit(constantsTarget, bytes.data(), bytes.size(), false, 0);
-			if (a_payload.persistent) {
-				ZoneScopedN("CS.DCLF.UploadRanges.Bindings");
-				// The kept blocks and records: what changed since the version the buffers hold, else all of them.
-				a_payload.keptConstants.Emit(a_resources.constantsUploaded[segment],
-					[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(constantsTarget, a_data, a_bytes, false, a_offset); });
-				a_payload.keptRecords.Emit(a_resources.recordsUploaded[segment],
-					[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(recordsTarget, a_data, a_bytes, false, a_offset); });
+				a_emit(a_resources.constants, bytes.data(), bytes.size(), 0);
+			{
+				ZoneScopedN("CS.DCLF.UploadRanges.Rows");
+				// The rows the tables do not hold, their headers' addresses made absolute (both segments share them).
+				EmitMainRows(a_payload.materialRows, a_payload.inputs.materialRowsHeld, a_resources.materialRows.address, [](MaterialRow& a_row, std::uint64_t a_address) {
+					PatchRowAddresses(a_row, a_address);
+				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.materialRows.buffer, a_data, a_bytes, a_offset); });
+				EmitMainRows(a_payload.pipelineRows, a_payload.inputs.pipelineRowsHeld, a_resources.pipelineRows.address, [](PipelineRow& a_row, std::uint64_t a_address) {
+					PatchRowAddresses(a_row, a_address);
+				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.pipelineRows.buffer, a_data, a_bytes, a_offset); });
 			}
 			TracyCZoneN(objectUploadZone, "CS.DCLF.UploadRanges.Objects", true);
 			a_payload.objectRecords.Emit(a_resources.tablesHeld.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(a_resources.objects, a_data, a_bytes, false, a_offset);
+				a_emit(a_resources.objects, a_data, a_bytes, a_offset);
 			});
 			TracyCZoneEnd(objectUploadZone);
 			if (a_resources.bones)
 				EmitBones(a_payload.bones, a_resources.tablesHeld.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					a_emit(a_resources.bones, a_data, a_bytes, false, a_offset);
+					a_emit(a_resources.bones, a_data, a_bytes, a_offset);
 				});
-			if (!a_payload.records.empty())
-				a_emit(recordsTarget, a_payload.records.data(), a_payload.records.size() * sizeof(DrawBindings), true, 0);
 			// The segment's input buffer: the resident region at its head when the buffer does not hold this version of it,
 			// then the frame's own inputs after it.
 			const bool depth = a_payload.inputs.depthOnly && a_resources.inputsDepth;
@@ -45,36 +40,41 @@ namespace DCLF
 			const std::size_t regionCount = a_payload.resident.Count();
 			TracyCZoneN(residentUploadZone, "CS.DCLF.UploadRanges.Resident", true);
 			a_payload.resident.Emit(a_resources.residentUploaded[depth ? 0 : 1],
-				[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(inputs, a_data, a_bytes, false, a_offset); });
+				[&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(inputs, a_data, a_bytes, a_offset); });
 			if (!a_payload.inputList.empty())
-				a_emit(inputs, a_payload.inputList.data(), a_payload.inputList.size() * sizeof(DrawInput), false, regionCount * sizeof(DrawInput));
+				a_emit(inputs, a_payload.inputList.data(), a_payload.inputList.size() * sizeof(DrawInput), regionCount * sizeof(DrawInput));
 			TracyCZoneEnd(residentUploadZone);
 			EmitGeometryDraws(a_payload.geometryDraws, a_resources.tablesHeld.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(a_resources.geometries, a_data, a_bytes, false, a_offset);
+				a_emit(a_resources.geometries, a_data, a_bytes, a_offset);
 			});
 		}
 
 		// Render thread: the payload through the commit's uploads, copied now.
 		void UploadMainPayload(const MainPayload& a_payload, const Resources& a_resources, CommitUploads& a_uploads)
 		{
-			ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, bool, std::size_t a_offset) {
+			ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 				a_uploads(a_target, a_data, a_bytes, a_offset);
 			});
+		}
+
+		/** @brief The rows' backings a staged batch was staged against: one of them grown since, and it is not submitted. */
+		std::uint64_t RowsGeneration(const Resources& a_resources)
+		{
+			return (a_resources.materialRows.generation << 32) ^ a_resources.pipelineRows.generation;
 		}
 	}
 
 	// On the worker, after the build: the payload's uploads into a staged batch (a released one from the job's
-	// pool, or a new one), so the commit copies nothing. The records' staging is kept for the commit's patches.
+	// pool, or a new one), so the commit copies nothing.
 	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool)
 	{
 		ZoneScopedN("CS.DCLF.StageMainPayload");
 		auto batch = AcquireStagedBatch(a_pool);
-		ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, bool a_records, std::size_t a_offset) {
-			auto* staging = batch->Stage(org::runtime::UploadTarget::FromShared(a_target), a_offset, a_data, a_bytes);
-			if (a_records)
-				a_payload.stagedRecords = reinterpret_cast<DrawBindings*>(staging);
+		ForEachMainPayloadUpload(a_payload, a_resources, [&](const auto& a_target, const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			batch->Stage(org::runtime::UploadTarget::FromShared(a_target), a_offset, a_data, a_bytes);
 		});
 		a_payload.stagedFor = &a_resources;
+		a_payload.stagedRowsGeneration = RowsGeneration(a_resources);
 		a_payload.staged = std::move(batch);
 	}
 
@@ -142,7 +142,7 @@ namespace DCLF
 		const std::size_t shapeIndex = depthOnly ? kDepthShape : kColourShape;
 		a_resources->frames[shapeIndex].store(nullptr, std::memory_order_release);
 
-		// The frame's textures (t16 and up), resolved now and patched into the records that read them.
+		// The frame's textures (t16 and up), resolved now into the frame record.
 		std::array<std::uint32_t, kTextureRegisters> frameTextures;
 		frameTextures.fill(kInvalidIndex);
 		if (frameTextureGeneration != textures.Generation()) {
@@ -185,48 +185,61 @@ namespace DCLF
 			uploads(frameBuffer.copy, contents.data() + offset, bytes, 0);
 			frameTextures[frameBuffer.textureRegister] = frameBuffer.copy->GetSRVInfo(0).slot.index;
 		}
+		// The frame textures the drawn pipelines read but the commit could not resolve: they read zero, as an unbound view does
+		// natively; counted, because the build could not skip the draws for them. A view bound natively that could not be
+		// resolved (a buffer that is not a CPU-written structured buffer) lands here too, and reads zero where the native draw
+		// reads the resource.
 		std::uint32_t frameTexturesMissing = 0;
 		std::array<std::uint64_t, 2> missingRegisters{};
-		for (const auto& [record, t] : a_payload.framePatches) {
-			const std::uint32_t index = frameTextures[t];
-			// A frame texture the pipeline reads but the pass did not bind reads zero, as an unbound view does
-			// natively; counted, because the build could not skip the draw for it. A view bound natively that
-			// could not be resolved (a buffer that is not a CPU-written structured buffer) lands here too, and
-			// reads zero where the native draw reads the resource.
-			if (index == kInvalidIndex) {
-				++frameTexturesMissing;
-				missingRegisters[(t >> 6) & 1] |= 1ull << (t & 63);
-				static std::array<bool, kTextureRegisters> described{};
-				if (t < kTextureRegisters && !std::exchange(described[t], true)) {
-					if (auto* view = a_capture.psViews[t]) {
-						D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
-						view->GetDesc(&viewDesc);
-						winrt::com_ptr<ID3D11Resource> resource;
-						view->GetResource(resource.put());
-						std::string what = fmt::format("view dimension {}, format {}", static_cast<std::uint32_t>(viewDesc.ViewDimension), static_cast<std::uint32_t>(viewDesc.Format));
-						if (auto buffer = resource.try_as<ID3D11Buffer>()) {
-							D3D11_BUFFER_DESC bufferDesc{};
-							buffer->GetDesc(&bufferDesc);
-							what += fmt::format(", buffer of {} bytes, stride {}, usage {}, CPU access {:X}, bind {:X}, misc {:X}", bufferDesc.ByteWidth, bufferDesc.StructureByteStride,
-								static_cast<std::uint32_t>(bufferDesc.Usage), bufferDesc.CPUAccessFlags, bufferDesc.BindFlags, bufferDesc.MiscFlags);
-						}
-						char name[128]{};
-						UINT size = sizeof(name) - 1;
-						if (SUCCEEDED(resource->GetPrivateData(WKPDID_D3DDebugObjectName, &size, name)))
-							what += fmt::format(", '{}'", name);
-						logger::warn("[DCLF] frame texture t{} is bound natively but not resolved: {}", t, what);
-					} else {
-						logger::warn("[DCLF] frame texture t{} is read but nothing is bound there at the capture", t);
+		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
+			if (!((a_payload.frameRegisters[t / 64] >> (t % 64)) & 1) || frameTextures[t] != kInvalidIndex)
+				continue;
+			++frameTexturesMissing;
+			missingRegisters[t / 64] |= 1ull << (t % 64);
+			static std::array<bool, kTextureRegisters> described{};
+			if (!std::exchange(described[t], true)) {
+				if (auto* view = a_capture.psViews[t]) {
+					D3D11_SHADER_RESOURCE_VIEW_DESC viewDesc{};
+					view->GetDesc(&viewDesc);
+					winrt::com_ptr<ID3D11Resource> resource;
+					view->GetResource(resource.put());
+					std::string what = fmt::format("view dimension {}, format {}", static_cast<std::uint32_t>(viewDesc.ViewDimension), static_cast<std::uint32_t>(viewDesc.Format));
+					if (auto buffer = resource.try_as<ID3D11Buffer>()) {
+						D3D11_BUFFER_DESC bufferDesc{};
+						buffer->GetDesc(&bufferDesc);
+						what += fmt::format(", buffer of {} bytes, stride {}, usage {}, CPU access {:X}, bind {:X}, misc {:X}", bufferDesc.ByteWidth, bufferDesc.StructureByteStride,
+							static_cast<std::uint32_t>(bufferDesc.Usage), bufferDesc.CPUAccessFlags, bufferDesc.BindFlags, bufferDesc.MiscFlags);
 					}
+					char name[128]{};
+					UINT size = sizeof(name) - 1;
+					if (SUCCEEDED(resource->GetPrivateData(WKPDID_D3DDebugObjectName, &size, name)))
+						what += fmt::format(", '{}'", name);
+					logger::warn("[DCLF] frame texture t{} is bound natively but not resolved: {}", t, what);
+				} else {
+					logger::warn("[DCLF] frame texture t{} is read but nothing is bound there at the capture", t);
 				}
 			}
-			const std::uint32_t value = index == kInvalidIndex ? (textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
-			a_payload.records[record].textures[t] = value;
-			if (a_payload.stagedRecords)
-				a_payload.stagedRecords[record].textures[t] = value;  // write-combined: written, never read
 		}
 		a_stats.frameTexturesMissing = frameTexturesMissing;
 		a_stats.frameTexturesMissingRegisters = missingRegisters;
+		// The frame record: every register a draw's rows do not give (DrawPipelines.h) - the frame slots, the frame's textures,
+		// the object and bone tables.
+		{
+			DrawBindings frameRecord{};
+			const std::uint64_t frameConstants = a_resources->frameConstantsAddress;
+			for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
+				frameRecord.vertexConstants[r] = ((in.vsFrameMask >> r) & 1) ? frameConstants + FrameSlotOffset(false, r) : 0;
+				frameRecord.pixelConstants[r] = ((in.psFrameMask >> r) & 1) ? frameConstants + FrameSlotOffset(true, r) : 0;
+			}
+			frameRecord.pixelConstants[3] = frameConstants + std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes;
+			frameRecord.pixelConstants[kFrameLightingRegister] = frameConstants + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes;
+			const std::uint32_t nullIndex = textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u;
+			for (std::uint32_t t = 0; t < kTextureRegisters; ++t)
+				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
+			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
+			frameRecord.textures[kBonesBufferRegister] = in.addresses.bonesIndex;
+			uploads(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+		}
 		lap(2);
 
 		// The frame slots: each block into its slot, and the zeroed light block every draw's b3 reads.
@@ -250,14 +263,16 @@ namespace DCLF
 		// Upload (the graph's upload pass runs ahead of every pass of this epoch). The worker's build staged its
 		// payload itself: one submission, no copies here. A build made here, or staged against resources since
 		// recreated, is uploaded from its vectors.
+		// The rows' tables hold every slot the tables have (ReserveMainSequences, before the epoch): past them is a defect of
+		// that reserve, never a row to drop.
+		if (a_payload.materialRows.Count() > a_resources->materialRows.capacity || a_payload.pipelineRows.Count() > a_resources->pipelineRows.capacity)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} material and {} pipeline rows past their tables' {} and {}", a_payload.materialRows.Count(),
+				a_payload.pipelineRows.Count(), a_resources->materialRows.capacity, a_resources->pipelineRows.capacity));
 		const auto& bytes = a_payload.arena.Bytes();
-		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get();
-		if (staged) {
+		// A batch staged against these resources and these rows' backings (one grown since holds nothing it staged against).
+		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get() && a_payload.stagedRowsGeneration == RowsGeneration(*a_resources);
+		if (staged)
 			org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(a_payload.staged));
-			a_payload.stagedRecords = nullptr;
-		} else if (!bytes.empty()) {
-			uploads(depthOnly && a_resources->constantsDepth ? a_resources->constantsDepth : a_resources->constants, bytes.data(), bytes.size(), 0);
-		}
 		if (a_resources->facePositions)
 			UploadFaceStreams(a_payload.faceStreams, a_resources->facePositions, a_resources->faceUploaded, uploads);
 		// The depth segment clears every counter; the colour segment clears only the word its own draws
@@ -277,46 +292,9 @@ namespace DCLF
 		}
 		if (!staged)
 			UploadMainPayload(a_payload, *a_resources, uploads);
-		// The kept records are immutable templates. Patch only commit-owned copies, after the worker's
-		// base uploads. A rewritten base record also needs a patch even when the frame texture did not
-		// change: its upload replaced the GPU's previously resolved descriptor with the template's zero.
-		if (a_payload.persistent && !depthOnly && a_payload.keptRecords.elements) {
-			auto& committed = a_resources->committedFrameTextures[1];
-			std::array<std::uint64_t, 2> used{}, changed{}, missing{};
-			for (const auto& mask : a_payload.patchMasks) {
-				used[0] |= mask[0];
-				used[1] |= mask[1];
-			}
-			for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters; ++t) {
-				const std::uint32_t index = frameTextures[t];
-				const std::uint32_t value = index == kInvalidIndex ? (textures.NullIndex() != kInvalidIndex ? textures.NullIndex() : 0u) : index;
-				const bool indexChanged = committed[t] != value;
-				committed[t] = value;
-				const std::uint64_t bit = 1ull << (t % 64);
-				if (!(used[t / 64] & bit))
-					continue;
-				if (index == kInvalidIndex)
-					missing[t / 64] |= bit;
-				if (indexChanged)
-					changed[t / 64] |= bit;
-			}
-			std::uint32_t keptMissing = 0;
-			const auto& recordsTarget = a_resources->records;
-			for (std::uint32_t slot = 0; slot < a_payload.patchMasks.size() && slot < a_payload.keptRecords.Count(); ++slot) {
-				const auto& mask = a_payload.patchMasks[slot];
-				keptMissing += static_cast<std::uint32_t>(std::popcount(mask[0] & missing[0]) + std::popcount(mask[1] & missing[1]));
-			}
-			const std::uint32_t patched = EmitFrameRecordPatches(a_payload.keptRecords, a_resources->recordsUploaded[1],
-				std::span<const std::array<std::uint64_t, 2>>(a_payload.patchMasks), changed, committed,
-				[&](std::size_t slot, const DrawBindings& record) { uploads(recordsTarget, &record, sizeof(record), slot * sizeof(DrawBindings)); });
-			a_stats.frameTexturesMissing = keptMissing;
-			a_stats.frameTexturesMissingRegisters = missing;
-			a_stats.framePatchedRecords += patched;
-		}
-		if (a_payload.persistent) {
-			a_resources->constantsUploaded[depthOnly ? 0 : 1] = a_payload.keptConstants.Version();
-			a_resources->recordsUploaded[depthOnly ? 0 : 1] = a_payload.keptRecords.Version();
-		}
+		// Either path uploaded the rows the tables did not hold.
+		a_resources->materialRowsHeld = a_payload.materialRows.Version();
+		a_resources->pipelineRowsHeld = a_payload.pipelineRows.Version();
 		// Either path uploaded the resident region when the buffer held another version of it, and the object records.
 		a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
 		const std::size_t objectBytes = a_payload.objectRecords.Emit(a_resources->tablesHeld.objects, [](const void*, std::size_t, std::size_t) {});
@@ -357,8 +335,7 @@ namespace DCLF
 		a_stats.deferredTextures = a_payload.deferredTextures;
 		a_stats.bindlessParityChecks += a_payload.bindlessParityChecks;
 		a_stats.bindlessParityMismatches += a_payload.bindlessParityMismatches;
-		a_stats.recordParityChecks += a_payload.recordParityChecks;
-		a_stats.recordParityMismatches += a_payload.recordParityMismatches;
+		a_stats.rowTableConflicts += a_payload.rowTableConflicts;
 		for (std::size_t i = 0; i < a_payload.partMs.size(); ++i)
 			a_stats.partMs[i] = a_payload.partMs[i];
 		if (!depthOnly)
@@ -374,9 +351,9 @@ namespace DCLF
 					shortBuffer.vertexNeeded, geometry.vertexBytes, geometry.firstIndex + geometry.indexCount, shortBuffer.indexNeeded, geometry.indexBytes);
 			}
 		}
-		a_stats.uploadBytes = bytes.size() + a_payload.records.size() * sizeof(DrawBindings) + a_payload.inputList.size() * sizeof(DrawInput) +
-		                      geometryBytes + objectBytes;
-		a_stats.records = a_payload.persistent ? a_payload.recordsHeld : static_cast<std::uint32_t>(a_payload.records.size());
+		a_stats.uploadBytes = bytes.size() + (a_payload.materialRowsWritten * sizeof(MaterialRow)) + (a_payload.pipelineRowsWritten * sizeof(PipelineRow)) +
+		                      a_payload.inputList.size() * sizeof(DrawInput) + geometryBytes + objectBytes;
+		a_stats.records = static_cast<std::uint32_t>(a_payload.materialRows.Count());
 		lap(6);
 		// What the colour epoch drew: the native loop's skip set and the claims, from the build's changes alone. A build made
 		// against another applied version than this one asks for every slot again.
@@ -409,9 +386,20 @@ namespace DCLF
 		const std::uint32_t inputCount = static_cast<std::uint32_t>(a_payload.inputList.size() + (a_payload.resident.Count()));
 		const auto& previousShape = a_resources->published[shapeIndex];
 		auto frame = std::make_shared<PassFrame>();
-		frame->drawCapacity = GrowCapacity(previousShape ? previousShape->drawCapacity : 0u, drawCount, kMaxDraws);
-		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
-			frame->decalCapacity[group] = GrowCapacity(previousShape ? previousShape->decalCapacity[group] : 0u, decalCount[group], kMaxDecalDraws);
+		// The max counts within the sequence buffer's ranges, which hold every draw the scene can produce (ReserveMainSequences,
+		// before the epoch): a count past them is a defect of that bound, never a draw to drop.
+		frame->sequenceDraws = a_resources->sequenceDraws;
+		frame->sequenceDecals = a_resources->sequenceDecals;
+		frame->materialRows = a_resources->materialRows.address;
+		frame->pipelineRows = a_resources->pipelineRows.address;
+		if (drawCount > frame->sequenceDraws)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, frame->sequenceDraws));
+		frame->drawCapacity = GrowCapacity(previousShape ? previousShape->drawCapacity : 0u, drawCount, frame->sequenceDraws);
+		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
+			if (decalCount[group] > frame->sequenceDecals)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], frame->sequenceDecals));
+			frame->decalCapacity[group] = GrowCapacity(previousShape ? previousShape->decalCapacity[group] : 0u, decalCount[group], frame->sequenceDecals);
+		}
 		frame->width = a_capture.viewportWidth;
 		frame->height = a_capture.viewportHeight;
 		// Both epochs rasterise with the main pass's depth range; see Impl::mainMinDepth.

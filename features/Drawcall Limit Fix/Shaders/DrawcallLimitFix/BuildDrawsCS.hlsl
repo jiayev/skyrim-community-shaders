@@ -14,9 +14,11 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint GeometriesIndex;  // ByteAddressBuffer: GeometryDraw[]
 	uint SequencesIndex;   // RWByteAddressBuffer: DrawSequence[]
 	uint CountIndex;       // RWByteAddressBuffer: uint (zeroed before the dispatch)
-	uint RecordsAddressLo;  // device address of DrawBindings[0]
-	uint RecordsAddressHi;
-	uint RecordStride;
+	// The rows an input's y names (IndirectDraws: RowsOf): the material rows' table (the low 20 bits), and the pipeline
+	// rows' (the high 12; a table of stride 0 for the shadow views, whose inputs name no pipeline row).
+	uint MaterialRowsAddressLo;
+	uint MaterialRowsAddressHi;
+	uint MaterialRowStride;
 	// Bits 4-7: the culling phase, which is the pass's; the mode and the native-visible gate are the
 	// frame's and come from the latch.
 	uint PhaseBits;
@@ -39,8 +41,19 @@ cbuffer BuildDrawsConstants : register(b0)
 	// word of SortCountsIndex). SortSequencesCS.hlsl then writes it to the sequences, grouped by pipeline, once the prefix
 	// sum has turned the counts into each pipeline's first slot. 0: append into the sequences directly.
 	uint SortCountsIndex;   // RWByteAddressBuffer: uint[kSortKeys], zero before the dispatch
-	uint SortStagingIndex;  // RWByteAddressBuffer: DrawSequence[kPhaseTwoSequenceBase]
-	uint SortRanksIndex;    // RWByteAddressBuffer: uint[kPhaseTwoSequenceBase]
+	uint SortStagingIndex;  // RWByteAddressBuffer: DrawSequence[PhaseTwoBase]
+	uint SortRanksIndex;    // RWByteAddressBuffer: uint[PhaseTwoBase]
+	// The sequence buffer's ranges, in sequences (IndirectDraws: the buffer is sized before each epoch to hold every draw it
+	// can produce). Phase 2 writes after the draws' range: its draw is recorded on the CPU, which cannot know how many
+	// sequences phase 1 wrote, so the two need ranges fixed in advance rather than one range shared by an atomic counter.
+	// The decal ranges follow phase 2's: one range of DecalStride slots per group, slot = the decal's ordinal in the
+	// engine's draw order.
+	uint PhaseTwoBase;
+	uint DecalBase;
+	uint DecalStride;
+	uint PipelineRowStride;
+	uint PipelineRowsAddressLo;
+	uint PipelineRowsAddressHi;
 }
 
 // The execution's values, from the latch (BuildDrawsLatch): read once per thread at the top of main. The
@@ -218,7 +231,7 @@ static const uint kObjectVolumetricOnly = 1u << 23;
 // A decal, with its group (1 = the engine's opaque decal group, 2 = the blended one) in bits 20-21.
 // Decals are never occluders: they are not submitted to the depth segment at all, and the colour segment
 // tests them ONCE, here, against the HZB rebuilt at the end of this frame's depth segment - which is final
-// by then - and writes their sequences to fixed slots (kDecalSequenceBase) rather than appending them, so
+// by then - and writes their sequences to fixed slots (DecalBase) rather than appending them, so
 // that overlapping decals are drawn in the engine's order every frame.
 static const uint kObjectDecal = 1u << 7;
 static const uint kObjectDecalGroupShift = 20;
@@ -268,16 +281,10 @@ static const uint kCountFadeHidden = 104;
 static const uint kFrustumStampMask = 0x0FFFFFFFu;
 static const uint kFrustumFadeHidden = 0x80000000u;
 
-// Phase 2 writes into the far half of the sequence buffer. Its draw is recorded on the CPU, which cannot
-// know how many sequences phase 1 wrote, so the two need ranges that are fixed in advance rather than one
-// range shared by an atomic counter.
-static const uint kPhaseTwoSequenceBase = 16384;  // kMaxDraws
-// The decal ranges follow phase 2's: one range of kMaxDecalDraws slots per group, slot = the decal's
-// ordinal in the engine's draw order (IndirectDraws.cpp keeps the CPU side of these in step).
-static const uint kDecalSequenceBase = 32768;  // 2 * kMaxDraws
-static const uint kMaxDecalDraws = 2048;
-// The pipelines a sort distinguishes: the pipeline sets' capacity (DrawPipelines::kMaxPipelines).
+// The pipelines a sort distinguishes: the pipeline sets' capacity (DrawPipelines::kMaxPipelines). A rank word holds the key
+// in its top 12 bits and the rank among the key's sequences below (IndirectDraws caps the draws' range at kSortRankLimit).
 static const uint kSortKeys = 4096;
+static const uint kSortRankBits = 20;
 
 // DrawInput: 64 bytes (pipeline/record/geometry/flags, the world-space bounding sphere, the object index, the
 // decal ordinal, the skin partitions to draw, the GeometryDraw of a second vertex stream or ~0, and the fade row:
@@ -289,25 +296,42 @@ static const uint kGeometryStride = 40;
 // mask names them (bit i = partition i), and each partition's GeometryDraw links to the next one's.
 static const uint kMaxPartitions = 8;
 static const uint kNoPartition = 0xFFFFFFFFu;
-// DrawSequence: 84 bytes, 4-byte packed. Words 1-3 are the root constants (DrawBindings address, then
-// the object index), which is why the object index sits between the record address and the vertex buffer.
+// DrawSequence: 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
+// then the object index), which is why the object index sits between the rows' addresses and the vertex buffer.
 // The second vertex buffer view (slot 1) is a face shape's positions (FaceSnapshots), else the first again.
-static const uint kSequenceStride = 84;
+static const uint kSequenceStride = 92;
 static const uint kIndexFormatR16 = 57;  // DXGI_FORMAT_R16_UINT
 static const uint kNoStream = 0xFFFFFFFFu;
 
 // One sequence at a slot of the dispatch's sequence buffer.
-void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint recordLo, uint recordHi, uint objectIndex, uint4 vertexBuffer,
+void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint4 rows, uint objectIndex, uint4 vertexBuffer,
 	uint4 streamBuffer, uint4 indexBuffer, uint indexCount, uint firstIndex)
 {
 	const uint base = slot * kSequenceStride;
 	sequences.Store(base + 0, pipeline);
-	sequences.Store3(base + 4, uint3(recordLo, recordHi, objectIndex));
-	sequences.Store4(base + 16, vertexBuffer);
-	sequences.Store4(base + 32, streamBuffer);
-	sequences.Store4(base + 48, uint4(indexBuffer.xyz, kIndexFormatR16));
-	sequences.Store4(base + 64, uint4(indexCount, 1, firstIndex, 0));
-	sequences.Store(base + 80, 0);
+	sequences.Store4(base + 4, rows);
+	sequences.Store(base + 20, objectIndex);
+	sequences.Store4(base + 24, vertexBuffer);
+	sequences.Store4(base + 40, streamBuffer);
+	sequences.Store4(base + 56, uint4(indexBuffer.xyz, kIndexFormatR16));
+	sequences.Store4(base + 72, uint4(indexCount, 1, firstIndex, 0));
+	sequences.Store(base + 88, 0);
+}
+
+// A 64-bit address: a table's base plus a 32-bit offset, with the carry.
+uint2 AddressOf(uint a_lo, uint a_hi, uint a_offset)
+{
+	const uint lo = a_lo + a_offset;
+	return uint2(lo, a_hi + (lo < a_lo ? 1 : 0));
+}
+
+// An input's rows (its y: the pipeline row in the high 12 bits, the material row in the low 20): their addresses, the
+// draw's first four push words.
+uint4 RowsOf(uint a_rows)
+{
+	const uint2 pipelineRow = PipelineRowStride ? AddressOf(PipelineRowsAddressLo, PipelineRowsAddressHi, (a_rows >> 20) * PipelineRowStride) : uint2(0, 0);
+	const uint2 materialRow = AddressOf(MaterialRowsAddressLo, MaterialRowsAddressHi, (a_rows & 0xFFFFFu) * MaterialRowStride);
+	return uint4(pipelineRow, materialRow);
 }
 
 // The bounding sphere's world-space AABB, projected corner by corner. The box contains the sphere, so
@@ -505,8 +529,8 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 		if (phase != kPhaseColour && phase != kPhaseSingle)
 			return;  // the depth segment never submits one; belt and braces
 		const uint decalOrdinal = inputs.Load(inputOffset + 36);
-		if (decalOrdinal >= kMaxDecalDraws)
-			return;
+		if (decalOrdinal >= DecalStride)
+			return;  // never: the range holds every ordinal of the group
 		bool culled = !drawable;
 		if (drawable && CullMode() != 0) {
 			count.InterlockedAdd(kCountDecalsTested, 1, scratch);
@@ -519,12 +543,10 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 		const uint4 vertexBuffer = geometries.Load4(geometryOffset);
 		const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);
 		const uint firstIndex = geometries.Load(geometryOffset + 32);
-		const uint recordOffset = input.y * RecordStride;
-		const uint recordLo = RecordsAddressLo + recordOffset;
-		const uint recordHi = RecordsAddressHi + (recordLo < RecordsAddressLo ? 1 : 0);
+		const uint4 rows = RowsOf(input.y);
 		const uint decalStreamIndex = inputs.Load(inputOffset + 44);
 		const uint4 decalStream = decalStreamIndex != kNoStream ? geometries.Load4(decalStreamIndex * kGeometryStride) : vertexBuffer;
-		StoreSequence(sequences, kDecalSequenceBase + (decalGroup - 1) * kMaxDecalDraws + decalOrdinal, input.x, recordLo, recordHi, objectWord,
+		StoreSequence(sequences, DecalBase + (decalGroup - 1) * DecalStride + decalOrdinal, input.x, rows, objectWord,
 			vertexBuffer, decalStream, indexBuffer, culled ? 0 : indexBuffer.w, firstIndex);
 		// A decal's word: never drawn in depth, drawn in colour unless culled.
 		if (phase == kPhaseColour)
@@ -652,10 +674,8 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	if (sorted && pipeline >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
-	// 64-bit record address = RecordsAddress + record index * RecordStride.
-	const uint recordOffset = input.y * RecordStride;
-	const uint recordLo = RecordsAddressLo + recordOffset;
-	const uint recordHi = RecordsAddressHi + (recordLo < RecordsAddressLo ? 1 : 0);
+	// The draw's rows' addresses (its push data).
+	const uint4 rows = RowsOf(input.y);
 
 	// One draw of the input's geometry, or - for a skin of several partitions - one per partition its mask
 	// names, walking the partitions' GeometryDraw links. Every draw is the same object: one record, one
@@ -674,25 +694,25 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 
 			// Phase 2 appends into a reserved part of the same buffer, with a counter of its own, because its
 			// draw is recorded separately and the offset a recorded draw starts at has to be known on the CPU.
-			// The CPU caps the templates at kMaxDraws; the guard keeps a phase inside its own range regardless.
+			// The range holds every draw the epoch can produce; the guard keeps a phase inside its own range regardless.
 			uint slot;
 			count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
-			if (slot >= kPhaseTwoSequenceBase)
+			if (slot >= PhaseTwoBase)
 				return;
 			const uint4 secondStream = streamIndex != kNoStream ? stream : vertexBuffer;
 			if (sorted) {
 				RWByteAddressBuffer sortCounts = ResourceDescriptorHeap[SortCountsIndex];
 				RWByteAddressBuffer staging = ResourceDescriptorHeap[SortStagingIndex];
 				RWByteAddressBuffer ranks = ResourceDescriptorHeap[SortRanksIndex];
-				// The scatter reads the key back from the rank word (the key in the high 16 bits, the rank below: a rank is
-				// under kPhaseTwoSequenceBase), so that the key need not be a field of the sequence.
+				// The scatter reads the key back from the rank word (the key in the top 12 bits, the rank in the low 20: a rank
+				// is under PhaseTwoBase, which IndirectDraws keeps within them), so that the key need not be a field of the sequence.
 				const uint key = pipeline;
 				uint rank;
 				sortCounts.InterlockedAdd(key * 4, 1, rank);
-				ranks.Store(slot * 4, (key << 16) | rank);
-				StoreSequence(staging, slot, pipeline, recordLo, recordHi, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				ranks.Store(slot * 4, (key << kSortRankBits) | rank);
+				StoreSequence(staging, slot, pipeline, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
 			} else {
-				StoreSequence(sequences, slot + (phase == kPhaseTwo ? kPhaseTwoSequenceBase : 0), pipeline, recordLo, recordHi, objectWord, vertexBuffer,
+				StoreSequence(sequences, slot + (phase == kPhaseTwo ? PhaseTwoBase : 0), pipeline, rows, objectWord, vertexBuffer,
 					secondStream, indexBuffer, indexBuffer.w, firstIndex);
 			}
 		}

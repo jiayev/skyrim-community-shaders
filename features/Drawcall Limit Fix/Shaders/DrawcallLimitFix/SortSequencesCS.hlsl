@@ -6,23 +6,25 @@
 
 cbuffer SortSequencesConstants : register(b0)
 {
-	uint StagingIndex;    // ByteAddressBuffer: DrawSequence[kMaxDraws], as BuildDrawsCS appended them
-	uint RanksIndex;      // ByteAddressBuffer: uint[kMaxDraws], each the sequence's sort key << 16 | its rank among the key's
+	uint StagingIndex;    // ByteAddressBuffer: DrawSequence[DrawLimit], as BuildDrawsCS appended them
+	uint RanksIndex;      // ByteAddressBuffer: uint[DrawLimit], each the sequence's sort key << 20 | its rank among the key's
 	uint OffsetsIndex;    // ByteAddressBuffer: uint[kSortKeys], each key's first slot
 	uint CountIndex;      // ByteAddressBuffer: the draw count words (kCountDrawn, the sequences appended)
 	uint SequencesIndex;  // RWByteAddressBuffer: DrawSequence[], what the draw executes
 	uint SequenceStride;  // bytes: DrawSequence (BuildDrawsCS's kSequenceStride)
-	uint Padding[2];
+	uint DrawLimit;       // the draws' range: BuildDrawsCS's PhaseTwoBase
+	uint Padding;
 }
 
-static const uint kMaxDraws = 16384;     // BuildDrawsCS's kPhaseTwoSequenceBase
 static const uint kCountDrawn = 0;
+static const uint kSortRankBits = 20;  // BuildDrawsCS's
+static const uint kSortRankMask = (1u << kSortRankBits) - 1;
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	ByteAddressBuffer count = ResourceDescriptorHeap[CountIndex];
 	const uint index = dispatchID.x;
-	if (index >= min(count.Load(kCountDrawn), kMaxDraws))
+	if (index >= min(count.Load(kCountDrawn), DrawLimit))
 		return;
 	ByteAddressBuffer staging = ResourceDescriptorHeap[StagingIndex];
 	ByteAddressBuffer ranks = ResourceDescriptorHeap[RanksIndex];
@@ -32,7 +34,7 @@ static const uint kCountDrawn = 0;
 	const uint source = index * SequenceStride;
 	const uint4 head = staging.Load4(source);  // the pipeline, then the root constants
 	const uint keyRank = ranks.Load(index * 4);
-	const uint target = (offsets.Load((keyRank >> 16) * 4) + (keyRank & 0xFFFF)) * SequenceStride;
+	const uint target = (offsets.Load((keyRank >> kSortRankBits) * 4) + (keyRank & kSortRankMask)) * SequenceStride;
 	sequences.Store4(target, head);
 	[loop] for (uint word = 16; word + 16 <= SequenceStride; word += 16)
 		sequences.Store4(target + word, staging.Load4(source + word));

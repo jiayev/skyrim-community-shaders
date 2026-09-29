@@ -44,11 +44,15 @@ namespace DCLF::Draws
 			return differ.Bytes(a_name, a_lhs, a_lhsBytes, a_rhs, a_rhsBytes);
 		};
 		auto vectorDiffers = [&](const char* a_name, const auto& a_lhs, const auto& a_rhs) { return differ.Vectors(a_name, a_lhs, a_rhs); };
-		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || vectorDiffers("records", a.records, b.records) ||
+		auto rowsDiffer = [&](const char* a_name, const auto& a_lhs, const auto& a_rhs, std::size_t a_stride) {
+			return bytesDiffer(a_name, a_lhs.At(0), a_lhs.Count() * a_stride, a_rhs.At(0), a_rhs.Count() * a_stride);
+		};
+		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || rowsDiffer("material rows", a.materialRows, b.materialRows, sizeof(MaterialRow)) ||
+			rowsDiffer("pipeline rows", a.pipelineRows, b.pipelineRows, sizeof(PipelineRow)) ||
 			vectorDiffers("sequences", a.sequences, b.sequences) || vectorDiffers("inputs", a.inputList, b.inputList) ||
 			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || bytesDiffer("objects", a.objectRecords.At(0), a.objectRecords.Count() * sizeof(BindlessObject), b.objectRecords.At(0),
 				b.objectRecords.Count() * sizeof(BindlessObject)) ||
-			a.bones.Rows() != b.bones.Rows() || vectorDiffers("patches", a.framePatches, b.framePatches) ||
+			a.bones.Rows() != b.bones.Rows() || a.frameRegisters != b.frameRegisters ||
 			a.drawnChanges.size() != b.drawnChanges.size())
 			return false;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
@@ -95,27 +99,12 @@ namespace DCLF
 	std::string IndirectDraws::AsyncReport()
 	{
 		std::string text = AsyncWorker::Get().Report();
-		for (std::size_t i = 0; i < impl->buildCaches.size(); ++i) {
-			auto& cache = impl->buildCaches[i];
-			if (!(cache.pairHits + cache.pairMisses + cache.pipelineHits + cache.pipelineMisses))
-				continue;
-			text += fmt::format("[DCLF] build cache ({}): pairs {} reused, {} rebuilt; pipelines {} reused, {} rebuilt; {} pairs and {} pipelines held\n",
-				i == kAsyncZPrepass ? "zprepass" : "colour", cache.pairHits, cache.pairMisses, cache.pipelineHits, cache.pipelineMisses, cache.pairs.size(),
-				cache.pipelines.size());
-			cache.pairHits = cache.pairMisses = cache.pipelineHits = cache.pipelineMisses = 0;
-			if (const double n = static_cast<double>(cache.persistentBuilds)) {
-				const auto& kept = cache.persistent;
-				text += fmt::format("[DCLF] persistent bindings ({}): {} builds; a build: {:.1f} pipelines and {:.1f} pairs clean, {:.1f} and {:.1f} looked at, {:.1f} blocks and {:.1f} records written; {} records held, {:.0f} KB of blocks, {} resets; parity {} draws checked, {} differ{}{}\n",
-					i == kAsyncZPrepass ? "zprepass" : "colour", cache.persistentBuilds, cache.persistentCleanPipelines / n, cache.persistentCleanPairs / n,
-					cache.persistentDirtyPipelines / n, cache.persistentDirtyPairs / n, cache.persistentBlocks / n, cache.persistentRecords / n,
-					kept.records.Size() - kept.recordFree.size(), kept.constants.Size() / 1024.0, cache.persistentResets, cache.persistentParityChecks,
-					cache.persistentParityMismatches, cache.persistentParityChecks ? (cache.persistentParityMismatches ? " <- DIFFER; first: " : " <- OK") : "",
-					cache.persistentParityFirst);
-				cache.persistentBuilds = cache.persistentBlocks = cache.persistentRecords = cache.persistentResets = 0;
-				cache.persistentCleanPipelines = cache.persistentCleanPairs = cache.persistentDirtyPipelines = cache.persistentDirtyPairs = 0;
-				cache.persistentParityChecks = cache.persistentParityMismatches = 0;
-				cache.persistentParityFirst.clear();
-			}
+		if (auto& rows = impl->mainRows; rows.builds) {
+			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
+								"(tables {} and {} rows), {} resyncs\n",
+				rows.builds, double(rows.materialsWritten) / rows.builds, double(rows.pipelinesWritten) / rows.builds, rows.material.Size(), rows.pipeline.Size(),
+				impl->resources ? impl->resources->materialRows.capacity : 0u, impl->resources ? impl->resources->pipelineRows.capacity : 0u, rows.resyncs);
+			rows.builds = rows.materialsWritten = rows.pipelinesWritten = rows.resyncs = 0;
 		}
 		for (auto [name, store] : { std::pair{ "main", &impl->mainObjects }, std::pair{ "shadow", &impl->shadowObjects } }) {
 			if (!store->updates)
@@ -526,14 +515,14 @@ namespace DCLF
 			const std::uint32_t count = static_cast<const std::uint32_t*>(countMap.pData)[0];
 			const std::uint32_t culled = static_cast<const std::uint32_t*>(countMap.pData)[1];
 			const auto* gpuSequences = static_cast<const DrawSequence*>(sequencesMap.pData);
-			std::vector<DrawSequence> built(gpuSequences, gpuSequences + std::min<std::size_t>(count, kMaxDraws));
+			std::vector<DrawSequence> built(gpuSequences, gpuSequences + std::min<std::size_t>(count, parity->sequenceDraws));
 			// The decal slots: fixed, so they compare in place. A culled slot is the template with an index
 			// count of zero; anything else differing is a defect.
 			std::size_t decalDiffering = 0, decalCulled = 0, decalSlots = 0;
 			for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 				const auto& expectedDecals = parity->expectedDecals[group];
-				const auto* slots = gpuSequences + kDecalSequenceBase + group * kMaxDecalDraws;
-				for (std::size_t slot = 0; slot < expectedDecals.size() && slot < kMaxDecalDraws; ++slot, ++decalSlots) {
+				const auto* slots = gpuSequences + 2 * std::size_t(parity->sequenceDraws) + std::size_t(group) * parity->sequenceDecals;
+				for (std::size_t slot = 0; slot < expectedDecals.size() && slot < parity->sequenceDecals; ++slot, ++decalSlots) {
 					// A zero-count slot draws nothing whatever its other fields hold: it is either a decal
 					// the culling rejected or a blank the epoch pushed for one it could not build a record
 					// for (whose template is then empty). Either way only the count matters.
@@ -596,8 +585,14 @@ namespace DCLF
 				++a_stats.buildParityMismatches;
 				logger::warn("[DCLF] BuildDraws parity MISMATCH: GPU wrote {}, CPU templated {} ({} counted culled); {} differ, {} have no template{}", count,
 					expected.size(), culled, differing, missing,
-					first != SIZE_MAX ? fmt::format(" (first: object {}, pipeline {} vs {}, index count {} vs {})", built[first].objectIndex, built[first].pipelineIndex,
-											expected[firstExpected].pipelineIndex, built[first].indexCount, expected[firstExpected].indexCount) :
+					first != SIZE_MAX ? fmt::format(" (first: object {}, GPU vs CPU: pipeline {} vs {}, rows {:#x}/{:#x} vs {:#x}/{:#x}, vertices {:#x}/{} vs {:#x}/{}, "
+													"indices {:#x}/{} vs {:#x}/{}, index count {} vs {}, first index {} vs {})",
+											built[first].objectIndex, built[first].pipelineIndex, expected[firstExpected].pipelineIndex, built[first].pipelineRowAddress,
+											built[first].materialRowAddress, expected[firstExpected].pipelineRowAddress, expected[firstExpected].materialRowAddress,
+											built[first].vertexBufferAddress, built[first].vertexBufferSize, expected[firstExpected].vertexBufferAddress,
+											expected[firstExpected].vertexBufferSize, built[first].indexBufferAddress, built[first].indexBufferSize,
+											expected[firstExpected].indexBufferAddress, expected[firstExpected].indexBufferSize, built[first].indexCount,
+											expected[firstExpected].indexCount, built[first].firstIndex, expected[firstExpected].firstIndex) :
 										"");
 			}
 			parity.reset();
@@ -623,6 +618,8 @@ namespace DCLF
 		ParityReadback readback;
 		readback.sequences = staging(a_resources->sequencesD3D11.get());
 		readback.count = staging(a_resources->countD3D11.get());
+		readback.sequenceDraws = a_resources->sequenceDraws;
+		readback.sequenceDecals = a_resources->sequenceDecals;
 		// The templates cover every candidate; the gate drops the ones the engine culled before BuildDraws
 		// writes a sequence for them, and it is a pure per-object flag test, so the expectation can apply it
 		// exactly. Frustum culling cannot be predicted here, which is why parity and culling are separate

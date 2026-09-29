@@ -10,6 +10,7 @@
 #include <bit>
 #include <vector>
 
+#include "Features/DrawcallLimitFix/Scene/ConstantEvaluator.h"
 #include "Features/DrawcallLimitFix/Scene/Records.h"
 #include "ShaderPrograms.h"
 
@@ -28,7 +29,15 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushVS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 11) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushPS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 9) | (1u << 10) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushBinding = 191;
-	inline constexpr std::uint32_t kFramePushWords = 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
+	// First the frame record's address (every register a draw's rows do not give), then the registers' addresses.
+	inline constexpr std::uint32_t kFramePushRecord = 0;
+	inline constexpr std::uint32_t kFramePushRegisters = 2;
+	inline constexpr std::uint32_t kFramePushWords = kFramePushRegisters + 2 * (std::popcount(kFramePushVS) + std::popcount(kFramePushPS));
+	/*
+	 * A draw's own push data (DrawSequence's Constant argument): its pipeline row's address, its material row's, the object
+	 * word, and a pad word so the pass's push data after it starts 8-byte aligned (BasicRHI packs the ranges back to back).
+	 */
+	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushArgumentWords = 5, kDrawPushWords = 6;
 	/*
 	 * The shadow views' layout: the draw's words are its material row's address (ShadowMaterialRow, read as the Utility
 	 * vertex shader's PerMaterial block, b1, and for the diffuse, t0) and the object word; everything else is the view's,
@@ -46,6 +55,44 @@ namespace DCLF
 	inline constexpr std::uint32_t kFeatureDataRegister = 6;      // FeatureData, likewise
 	/** @brief Where the diffuse's descriptor index sits in a shadow material row: after its texture offset (c0). */
 	inline constexpr std::uint32_t kShadowRowDiffuseOffset = 16;
+
+	/*
+	 * The main pass's rows (IndirectDraws: Resources::materialRows, pipelineRows). A draw names one of each; the registers they
+	 * do not give come from the frame record. Each constant block sits at a 256-byte offset, so a table is an array of
+	 * constant buffers, and each row's header holds its blocks' addresses (written at upload, from the table's base) and
+	 * its descriptor indices, which the layout's indirect ranges read.
+	 *
+	 * A material row is a material slot's (SceneStore::Tables::materials, keyed {material, pass descriptor}): its PerMaterial
+	 * blocks (b1), packed through its technique's constant tables, and its textures and samplers - the material's, a
+	 * projected technique's projected textures (t3, t8, t10, t11), the features' (t71, t74). A pipeline row is a pipeline
+	 * slot's: its technique blocks (b0), its PerGeometry template (b2), its permutation (b4), and its technique's shadow mask
+	 * (t14, s14).
+	 */
+	inline constexpr std::uint32_t kMaterialRowBytes = 1024;
+	inline constexpr std::uint32_t kMaterialRowVS = 0, kMaterialRowPS = 256, kMaterialRowHeader = 768;
+	inline constexpr std::uint32_t kMaterialRowVSBytes = 256, kMaterialRowPSBytes = 512;
+	struct MaterialRowHeader
+	{
+		std::uint64_t vsMaterial = 0, psMaterial = 0;  // b1: the row's own blocks
+		std::uint32_t textures[kPixelTextureSlots]{};
+		std::uint32_t samplers[16]{};
+		std::uint32_t features[kFeatureMaterialTextures]{};
+	};
+	static_assert(kMaterialRowHeader + sizeof(MaterialRowHeader) <= kMaterialRowBytes);
+	inline constexpr std::uint32_t kPipelineRowBytes = 2048;
+	inline constexpr std::uint32_t kPipelineRowTechniqueVS = 0, kPipelineRowTechniquePS = 256, kPipelineRowGeometryVS = 512, kPipelineRowGeometryPS = 768,
+								   kPipelineRowPermutation = 1280, kPipelineRowHeader = 1536;
+	inline constexpr std::uint32_t kPipelineRowTechniqueBytes = 256, kPipelineRowGeometryVSBytes = 256, kPipelineRowGeometryPSBytes = 512,
+								   kPipelineRowPermutationBytes = 256;
+	struct PipelineRowHeader
+	{
+		std::uint64_t vsTechnique = 0, psTechnique = 0;  // b0
+		std::uint64_t vsGeometry = 0, psGeometry = 0;    // b2
+		std::uint64_t vsPermutation = 0, psPermutation = 0;  // b4: one block, both stages
+		std::uint32_t shadowMask = 0;                    // t14
+		std::uint32_t shadowMaskSampler = 0;             // s14
+	};
+	static_assert(kPipelineRowHeader + sizeof(PipelineRowHeader) <= kPipelineRowBytes);
 	/*
 	 * Every DCLF draw signature (colour, depth, shadow) is preprocessed explicitly, before the passes that execute it
 	 * (CommandList::PreprocessIndirect), instead of by the driver inside each call.

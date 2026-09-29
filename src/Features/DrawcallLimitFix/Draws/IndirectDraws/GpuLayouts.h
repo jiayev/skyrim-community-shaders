@@ -42,20 +42,25 @@ namespace DCLF::Draws
 	// [3] depth target 10 as Skylighting swaps it in: its own occlusion map (ExecuteSkyOcclusion).
 	constexpr std::uint32_t kShadowDepthTargets = 4;
 	constexpr std::uint32_t kSkyDepthTarget = 3;
-	constexpr std::uint32_t kMaxDraws = 16384;
+	// The sequence buffers (BuildDraws' output) have no fixed draw capacity: each is sized, before its epoch, to hold every draw
+	// the scene's tracked objects can produce (SceneDrawBound), growing when that does, and each indirect draw's max count
+	// is its epoch's own bound. They start at these (CS_DCLF_TABLE_START=small: a few). A bound over the device's
+	// maxSequenceCount is a hard failure.
+	constexpr std::uint32_t kInitialSequenceDraws = 16384;
+	constexpr std::uint32_t kInitialDecalDraws = 2048;
 	constexpr std::uint64_t kConstantBytes = 48ull << 20;
 	// The Z-prepass segment's own constants buffer: its blocks are the colour segment's pipelines' and pairs' (a few MB).
 	constexpr std::uint64_t kDepthConstantBytes = 16ull << 20;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
 	constexpr std::uint32_t kColorTargets = 8;
-	constexpr std::uint32_t kMaxGeometries = kMaxDraws;
+	constexpr std::uint32_t kMaxGeometries = 16384;
 	// The per-object record table (ObjectRecord) is indexed by a table index, not a draw index, so it
 	// covers every candidate the frame tracks rather than only the ones drawn.
 	constexpr std::uint32_t kMaxObjects = 32768;
 	// Draw inputs and the visibility buffer are sized by the table, not by the draw count: the depth
 	// segment submits a cull-only input for every candidate it may not draw, and BuildDraws indexes the
-	// visibility word by the object's TABLE index. Sizing either by kMaxDraws is an overrun waiting for
-	// a cell with more than kMaxDraws tracked objects.
+	// visibility word by the object's TABLE index. Sizing either by the draws is an overrun waiting for
+	// a cell with more tracked objects than draws.
 	constexpr std::uint32_t kMaxInputs = kMaxObjects;
 	// Distinct binding records an epoch may hold, and the size of the buffer behind them. Deduplicated
 	// they are one per (material, pipeline) pair: 85 behind 727 candidates in the Bannered Mare, 105
@@ -63,7 +68,7 @@ namespace DCLF::Draws
 	// 13.1 MB a record per draw would need: everything per object is in the object record (BindlessObject).
 	constexpr std::uint32_t kMaxRecordsDeduplicated = 2048;
 	// The 32-bit record offset BuildDraws computes (input.y * RecordStride) has to address all of it.
-	static_assert(std::uint64_t(kMaxDraws) * sizeof(DrawBindings) < (std::uint64_t(1) << 32));
+	static_assert(std::uint64_t(kMaxRecordsDeduplicated) * sizeof(DrawBindings) < (std::uint64_t(1) << 32));
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested, [3] engine-culled and gated out,
@@ -123,20 +128,18 @@ namespace DCLF::Draws
 	// A shadow input whose entry is outside the sun's full-frustum processes (OutsideSunEntry): the sun's views
 	// skip it (kCullSunEntry); a spot light's views, which share the mode's inputs, do not.
 	constexpr std::uint32_t kInputOutsideSunEntry = 1u << 25;
-	// Where phase 2 appends its sequences; see BuildDrawsCS.hlsl.
-	constexpr std::uint32_t kPhaseTwoSequenceBase = kMaxDraws;
-	// The decal ranges: one of kMaxDecalDraws fixed slots per group after phase 2's range. A decal's
-	// sequence goes to the slot of its ordinal in the engine's draw order (SceneStore::Tables::
-	// decalOrdinal), so the second pass draws decals in that order every frame; a culled one is the
-	// same sequence with an index count of zero.
-	constexpr std::uint32_t kMaxDecalDraws = 2048;
+	// The main sequence buffer's ranges (Resources::sequenceDraws, sequenceDecals): phase 1 and the colour segment's draws,
+	// then phase 2's (the CPU records where its draw starts, so the two need ranges fixed in advance rather than one shared
+	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
+	// engine's draw order (SceneStore::Tables::decalOrdinal), so the second pass draws decals in that order every frame; a
+	// culled one is the same sequence with an index count of zero. BuildDrawsConstants carries the bases.
 	// The bones buffer (VS t126): every skinned object's palette rows, current then previous, per epoch.
 	// 131,072 float4 rows is 2 MB: each skin keeps its block (SceneStore PlaceBones), so there are holes; the exterior needs
 	// ~13,500-18,000 current rows.
 	constexpr std::uint32_t kMaxBoneRows = 131072;
 	constexpr std::uint32_t kDecalGroups = 2;
-	constexpr std::uint32_t kDecalSequenceBase = 2 * kMaxDraws;
-	constexpr std::uint32_t kSequenceSlots = kDecalSequenceBase + kDecalGroups * kMaxDecalDraws;
+	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
+	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
 
 #pragma pack(push, 4)
 	struct GeometryDraw
@@ -162,9 +165,11 @@ namespace DCLF::Draws
 		std::uint32_t geometriesIndex;
 		std::uint32_t sequencesIndex;
 		std::uint32_t countIndex;
-		std::uint32_t recordsAddressLo;
-		std::uint32_t recordsAddressHi;
-		std::uint32_t recordStride;
+		// The rows an input's y names (BuildDrawsCS.hlsl, RowsOf): the material rows' table (y's low 20 bits) and, below, the
+		// pipeline rows' (its high 12; stride 0 for the shadow views).
+		std::uint32_t materialRowsAddressLo;
+		std::uint32_t materialRowsAddressHi;
+		std::uint32_t materialRowStride;
 		std::uint32_t phaseBits;         // the culling phase in bits 4-7 (CullFlags' phase field)
 		std::uint32_t visibilityIndex;   // RWByteAddressBuffer: one uint per object in the tables
 		std::uint32_t latchOffset;       // set at record time: the slot's region plus the dispatch's latch
@@ -177,8 +182,16 @@ namespace DCLF::Draws
 		std::uint32_t sortCountsIndex;
 		std::uint32_t sortStagingIndex;
 		std::uint32_t sortRanksIndex;
+		// The sequence buffer's ranges, in sequences: phase 2's first slot (the end of the draws' range, which a draw never
+		// reaches: its epoch's bound fits), the first decal slot, and each decal group's range.
+		std::uint32_t phaseTwoBase;
+		std::uint32_t decalBase;
+		std::uint32_t decalStride;
+		std::uint32_t pipelineRowStride;
+		std::uint32_t pipelineRowsAddressLo;
+		std::uint32_t pipelineRowsAddressHi;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 72);
+	static_assert(sizeof(BuildDrawsConstants) == 96);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**

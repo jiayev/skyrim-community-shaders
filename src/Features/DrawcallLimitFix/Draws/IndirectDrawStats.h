@@ -51,7 +51,6 @@ namespace DCLF
 		// Frame textures (t16 and up) a record reads that the pass had not bound at the commit, last epoch.
 		std::uint32_t frameTexturesMissing = 0;
 		std::array<std::uint64_t, 2> frameTexturesMissingRegisters{};  // which registers, as a bit set
-		std::uint32_t framePatchedRecords = 0;  // kept records the commits patched for a frame texture that changed (PersistentBindings)
 		std::uint32_t cullDrawn = 0;     // sequences BuildDraws wrote, last sampled epoch
 		std::uint32_t cullRejected = 0;  // draws its culling rejected (CS_DCLF_CULL)
 		std::uint32_t cullTested = 0;    // draws it tested at all: 0 means the culling did not run
@@ -101,10 +100,8 @@ namespace DCLF
 		// component, because that is the granularity at which a layout mistake shows.
 		std::uint32_t bindlessParityChecks = 0;
 		std::uint32_t bindlessParityMismatches = 0;
-		// CS_DCLF_DEDUP_PARITY: a binding record rebuilt per draw against the one its (material,
-		// pipeline) pair holds. Zero mismatches is what says the deduplication is sound.
-		std::uint32_t recordParityChecks = 0;
-		std::uint32_t recordParityMismatches = 0;
+		// Pairs whose pipeline's constant tables were not the ones their material row was packed with (they stayed native).
+		std::uint32_t rowTableConflicts = 0;
 		// CS_DCLF_ASYNC: per job kind (colour, Z-prepass, shadow), per report interval.
 		struct Async
 		{

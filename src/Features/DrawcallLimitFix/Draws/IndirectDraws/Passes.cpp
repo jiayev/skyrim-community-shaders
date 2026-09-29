@@ -22,12 +22,9 @@ namespace DCLF::Draws
 			bindings.sequences = a_builder.IndirectArguments(resources->sequences);
 			bindings.count = a_builder.IndirectArguments(resources->count);
 			// Read through device addresses; declared so the graph orders them after their uploads.
-			bindings.records = a_builder.ShaderResource(resources->records, noViews).Resource();
+			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
+			bindings.pipelineRows = a_builder.ShaderResource(resources->pipelineRows.buffer, noViews).Resource();
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
-			if (resources->recordsDepth) {
-				a_builder.ShaderResource(resources->recordsDepth, noViews);
-				a_builder.ShaderResource(resources->constantsDepth, noViews);
-			}
 			if (resources->objects)
 				bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
 			if (resources->bones)
@@ -138,7 +135,7 @@ namespace DCLF::Draws
 				// Phase 2 draws only the rescues, from the reserved half of the sequence buffer and
 				// its own counter word. Its argument offset has to be a constant the CPU knows, which
 				// is why the two phases have fixed ranges instead of sharing one.
-				const std::uint64_t argumentOffset = a_prepared.phaseTwo ? std::uint64_t(kPhaseTwoSequenceBase) * sizeof(DrawSequence) : 0;
+				const std::uint64_t argumentOffset = a_prepared.phaseTwo ? std::uint64_t(frame.sequenceDraws) * sizeof(DrawSequence) : 0;
 				const std::uint64_t countOffset = a_prepared.phaseTwo ? kCountDrawnPhaseTwoBytes : 0;
 				if (stats)
 					stats->Start(commands, statsSlot, depthKind);
@@ -181,7 +178,9 @@ namespace DCLF::Draws
 			rhi::PassBeginInfo decalDepthBegin = begin;  // depth only
 			decalDepthBegin.debugName = "DCLF decal depth";
 			const auto colourSignature = frame.indirect.signatures[kColorVariant];
-			auto decalArguments = [](std::uint32_t a_group) { return std::uint64_t(kDecalSequenceBase + a_group * kMaxDecalDraws) * sizeof(DrawSequence); };
+			auto decalArguments = [&](std::uint32_t a_group) {
+				return (2 * std::uint64_t(frame.sequenceDraws) + std::uint64_t(a_group) * frame.sequenceDecals) * sizeof(DrawSequence);
+			};
 			auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(kCountDecalGroupWord + a_group) * sizeof(std::uint32_t); };
 
 			// Every call below is preprocessed here, before the first pass: generated inside the pass
@@ -359,11 +358,13 @@ namespace DCLF::Draws
 			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
-			// The depth segment's phases name its own records (Resources::recordsDepth).
-			const std::uint64_t recordsAddress = (phase == 1 || phase == 2) && resources->recordsDepth ? resources->recordsDepthAddress : resources->recordsAddress;
-			constants.recordsAddressLo = static_cast<std::uint32_t>(recordsAddress);
-			constants.recordsAddressHi = static_cast<std::uint32_t>(recordsAddress >> 32);
-			constants.recordStride = sizeof(DrawBindings);
+			// The rows both segments' draws name (MainRows), at their tables' addresses as the epoch sized them.
+			constants.materialRowsAddressLo = static_cast<std::uint32_t>(frame->materialRows);
+			constants.materialRowsAddressHi = static_cast<std::uint32_t>(frame->materialRows >> 32);
+			constants.materialRowStride = kMaterialRowBytes;
+			constants.pipelineRowsAddressLo = static_cast<std::uint32_t>(frame->pipelineRows);
+			constants.pipelineRowsAddressHi = static_cast<std::uint32_t>(frame->pipelineRows >> 32);
+			constants.pipelineRowStride = kPipelineRowBytes;
 			constants.phaseBits = (phase & 0xFu) << 4;
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
@@ -379,6 +380,10 @@ namespace DCLF::Draws
 				constants.sortStagingIndex = CaptureViewIndex(a_preparation, a_bindings.sortStaging);
 				constants.sortRanksIndex = CaptureViewIndex(a_preparation, a_bindings.sortRanks);
 			}
+			// The sequence buffer's ranges as the epoch sized them.
+			constants.phaseTwoBase = frame->sequenceDraws;
+			constants.decalBase = 2 * frame->sequenceDraws;
+			constants.decalStride = frame->sequenceDecals;
 			return prepared;
 		}
 
@@ -417,11 +422,12 @@ namespace DCLF::Draws
 	{
 		std::shared_ptr<const ComputeProgram> program;
 		SortSequencesConstants constants{};
+		std::uint32_t groups = 0;
 	};
 
 	/**
 	 * @brief The sort's scatter (DrawSort), after its segment's BuildDraws and the scan. It covers every slot BuildDraws can
-	 * append (kMaxDraws), each thread past the count returning.
+	 * append (the draws' range as the epoch sized it), each thread past the count returning.
 	 */
 	class SortSequencesPass final : public org::TypedRenderGraphPass<SortSequencesPass, SortSequencesFrame, SortSequencesBindings>
 	{
@@ -462,18 +468,21 @@ namespace DCLF::Draws
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.sequenceStride = static_cast<std::uint32_t>(sizeof(DrawSequence));
+			const auto frame = CurrentFrame(*resources, segment);
+			constants.drawLimit = frame ? frame->sequenceDraws : 0;
+			prepared.groups = (constants.drawLimit + kSortSequencesGroup - 1) / kSortSequencesGroup;
 			return prepared;
 		}
 
 		static void Record(const SortSequencesBindings&, const SortSequencesFrame& a_frame, org::PassRecordContext& a_recording)
 		{
-			if (!a_frame.program)
+			if (!a_frame.program || !a_frame.groups)
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
 			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kSortSequencesConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
-			commands.Dispatch(kMaxDraws / kSortSequencesGroup, 1, 1);
+			commands.Dispatch(a_frame.groups, 1, 1);
 		}
 
 	private:
@@ -912,9 +921,10 @@ namespace DCLF::Draws
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
 				// A draw's words name its material row (the table every view reads).
-				constants.recordsAddressLo = static_cast<std::uint32_t>(view.materialRows);
-				constants.recordsAddressHi = static_cast<std::uint32_t>(view.materialRows >> 32);
-				constants.recordStride = sizeof(ShadowMaterialRow);
+				constants.materialRowsAddressLo = static_cast<std::uint32_t>(view.materialRows);
+				constants.materialRowsAddressHi = static_cast<std::uint32_t>(view.materialRows >> 32);
+				constants.materialRowStride = sizeof(ShadowMaterialRow);  // no pipeline rows: their stride stays 0
+				constants.phaseTwoBase = view.sequenceDraws;  // the slot's range: its draws never reach it
 				// The single phase (the latch holds the frustum-only mode, with no engine-visibility gate).
 				constants.phaseBits = 0;
 				// The visibility words are written per object by every dispatch; nothing reads them here.
@@ -1149,11 +1159,8 @@ namespace DCLF::Draws
 		void PrepareForBuild(org::RenderGraph& a_graph) override
 		{
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.constants"), resources->constants);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.records"), resources->records);
-			if (resources->recordsDepth) {
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.constants-depth"), resources->constantsDepth);
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.records-depth"), resources->recordsDepth);
-			}
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.material-rows"), resources->materialRows.buffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pipeline-rows"), resources->pipelineRows.buffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.sequences"), resources->sequences);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs"), resources->inputs);
 			if (resources->inputsDepth)
