@@ -173,6 +173,11 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	const auto safeModName = Util::FileHelpers::SanitizeFileName(info.name);
 	if (safeModName.empty() || IsReservedPresetName(safeModName))
 		return false;
+	if (const auto* pack = UnifiedPresetCatalog::GetSingleton().FindPack(safeModName); pack && !pack->AcceptsExport(info.type)) {
+		logger::error("[SceneSettings] Preset '{}' not exported: the existing pack is not a {} preset",
+			safeModName, UnifiedPresetCatalog::GetPresetTypeName(info.type));
+		return false;
+	}
 
 	const auto packRoot = Util::PathHelpers::GetUnifiedPackPath(safeModName);
 	// Merged into rather than replaced, so fields other backends own (effects11, backends) survive.

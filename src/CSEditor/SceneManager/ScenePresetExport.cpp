@@ -170,10 +170,10 @@ namespace
 			PrefillFromExisting(*meta);
 	}
 
-	/** @brief Orphan and legacy Effects 11 installs live outside Presets/, so export cannot write to them. */
+	/** @brief Orphan and legacy Effects 11 installs live outside Presets/, and CS and E11 packs never take the other's export. */
 	bool IsExportTarget(const UnifiedPresetCatalog::PackInfo& pack)
 	{
-		return pack.source == UnifiedPresetCatalog::SourceKind::UnifiedPack;
+		return pack.source == UnifiedPresetCatalog::SourceKind::UnifiedPack && pack.AcceptsExport(form.type);
 	}
 
 	/** @brief One pack row: name and type badges over author and version. @return Whether it was clicked. */
@@ -571,7 +571,9 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
 		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);
 		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(form.version);
-		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion);
+		const auto* existingPack = UnifiedPresetCatalog::GetSingleton().FindPack(sanitizedName);
+		const bool typeMismatch = existingPack && !existingPack->AcceptsExport(form.type);
+		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion || typeMismatch);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
@@ -594,6 +596,10 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 				Util::kTooltipWhenDisabled);
 		else if (!validVersion)
 			Util::AddTooltip(T(TKEY("scene_export_invalid_version"), "Use a MAJOR.MINOR.PATCH version, such as 1.0.0."),
+				Util::kTooltipWhenDisabled);
+		else if (typeMismatch)
+			Util::AddTooltip(T(TKEY("scene_export_type_mismatch"),
+								 "A preset with this name already exists for the other pipeline. Pick a different name or switch the preset type."),
 				Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);

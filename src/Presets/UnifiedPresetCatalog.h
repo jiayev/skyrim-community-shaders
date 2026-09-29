@@ -93,6 +93,13 @@ public:
 				return IsCS();
 			}
 		}
+		/** @brief Whether a CS or E11 export may write into the pack: false when it is grouped only under the other one. */
+		bool AcceptsExport(PresetType exportType) const
+		{
+			assert(exportType != PresetType::Baseline);
+			const auto otherType = exportType == PresetType::E11 ? PresetType::CS : PresetType::E11;
+			return IsType(exportType) || !IsType(otherType);
+		}
 	};
 
 	static UnifiedPresetCatalog& GetSingleton();

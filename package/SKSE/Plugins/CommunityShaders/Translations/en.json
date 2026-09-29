@@ -373,6 +373,7 @@
     "cs_editor.scene_export_type_e11": "E11 Preset",
     "cs_editor.scene_export_type_e11_hint": "Copies the active ENB files into Presets/<Name>/effects11/.",
     "cs_editor.scene_export_type_e11_unavailable": "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11.",
+    "cs_editor.scene_export_type_mismatch": "A preset with this name already exists for the other pipeline. Pick a different name or switch the preset type.",
     "cs_editor.scene_export_version": "Version",
     "cs_editor.scene_feature_list_empty": "No loaded feature exposes scene settings.",
     "cs_editor.scene_feature_list_title": "Features",
