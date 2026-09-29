@@ -21,7 +21,9 @@
 #include "Feature.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "Presets/PresetCompatibility.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
@@ -35,11 +37,14 @@ namespace
 	using PresetType = SceneSettingsManager::PresetType;
 
 	constexpr const char* kExportPopupId = "##ScenePresetExport";
+	constexpr const char* kPickerPopupId = "##ScenePresetExportPicker";
 
 	/// The list scrolls rather than growing past the screen, like the copy preview does.
 	constexpr float kModListHeight = 120.0f;
 	constexpr float kModalWidth = 560.0f;
 	constexpr float kDescriptionLines = 3.0f;
+	constexpr float kPickerWidth = 420.0f;
+	constexpr float kPickerListHeight = 260.0f;
 
 	/// Files a destructive confirmation names before it stops listing and counts the rest.
 	constexpr size_t kMaxListedFiles = 8;
@@ -60,6 +65,7 @@ namespace
 	std::string existingCover;
 	std::vector<std::string> existingScreenshots;
 	std::vector<std::filesystem::path> collidingFiles;
+	std::string pickerSearch;
 
 	SceneContextId exportContext;
 	bool dialogActive = false;
@@ -154,6 +160,103 @@ namespace
 		form.logoSource.clear();
 		form.coverSource.clear();
 		form.screenshotSources.clear();
+	}
+
+	/** @brief Prefills from the pack the typed name targets, when one exists on disk. */
+	void PrefillFromName()
+	{
+		const auto packId = Util::FileHelpers::SanitizeFileName(form.name);
+		if (const auto meta = SceneSettingsManager::ReadPresetMetadata(Util::PathHelpers::GetUnifiedPackPath(packId)))
+			PrefillFromExisting(*meta);
+	}
+
+	/** @brief Orphan and legacy Effects 11 installs live outside Presets/, so export cannot write to them. */
+	bool IsExportTarget(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		return pack.source == UnifiedPresetCatalog::SourceKind::UnifiedPack;
+	}
+
+	/** @brief One pack row: name and type badges over author and version. @return Whether it was clicked. */
+	bool DrawPickerRow(const UnifiedPresetCatalog::PackInfo& pack, bool selected)
+	{
+		ImGui::PushID(pack.id.c_str());
+		const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
+		const float rowHeight = ImGui::GetTextLineHeightWithSpacing() * 2.0f;
+		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0.0f, rowHeight));
+
+		ImGui::SetCursorScreenPos(ImVec2(rowOrigin.x + ImGui::GetStyle().FramePadding.x, rowOrigin.y));
+		ImGui::BeginGroup();
+		ImGui::TextUnformatted(pack.name.c_str());
+		ImGui::SameLine();
+		PresetsPageRenderer::DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
+		if (!pack.author.empty() || !pack.version.empty()) {
+			const auto meta = pack.author.empty() ? std::format("v{}", pack.version) :
+			                  pack.version.empty() ? pack.author :
+			                                         std::format("{} · v{}", pack.author, pack.version);
+			ImGui::TextDisabled("%s", meta.c_str());
+		}
+		ImGui::EndGroup();
+
+		// Park the cursor past the row so the next highlight cannot overlap this one.
+		ImGui::SetCursorScreenPos(ImVec2(rowOrigin.x, rowOrigin.y + rowHeight + ImGui::GetStyle().ItemSpacing.y));
+		ImGui::Dummy(ImVec2(0.0f, 0.0f));
+		ImGui::PopID();
+		return clicked;
+	}
+
+	/** @brief Button that opens the picker, disabled while no pack can be exported into. */
+	void DrawPickerButton(const char* label)
+	{
+		const auto& packs = UnifiedPresetCatalog::GetSingleton().GetPacks();
+		ImGui::BeginDisabled(std::ranges::none_of(packs, IsExportTarget));
+		if (ImGui::Button(label)) {
+			pickerSearch.clear();
+			ImGui::OpenPopup(kPickerPopupId);
+		}
+		ImGui::EndDisabled();
+		Util::AddTooltip(T(TKEY("scene_export_existing_tooltip"), "Export into an existing preset."),
+			Util::kTooltipWhenDisabled);
+	}
+
+	/** @brief Searchable list of the installed packs; picking one targets it as the export name. */
+	void DrawPresetPicker()
+	{
+		const float scale = Util::GetUIScale();
+		ImGui::SetNextWindowSize(ImVec2(kPickerWidth * scale, 0.0f), ImGuiCond_Always);
+		auto popup = Util::CenteredPopupModal(kPickerPopupId);
+		if (!popup || EditorWindow::ClosePopupOnEscape())
+			return;
+
+		if (ImGui::IsWindowAppearing())
+			ImGui::SetKeyboardFocusHere();
+		ImGui::SetNextItemWidth(-1);
+		ImGui::InputTextWithHint("##ScenePresetExportPickerSearch", T("menu.presets.search", "Search presets..."), &pickerSearch);
+
+		auto& catalog = UnifiedPresetCatalog::GetSingleton();
+		const auto currentId = Util::FileHelpers::SanitizeFileName(form.name);
+		const UnifiedPresetCatalog::PackInfo* picked = nullptr;
+		if (ImGui::BeginChild("##ScenePresetExportPickerList", ImVec2(0.0f, kPickerListHeight * scale), ImGuiChildFlags_Borders)) {
+			bool anyShown = false;
+			for (const size_t index : catalog.Query(std::nullopt, pickerSearch)) {
+				const auto& pack = catalog.GetPacks()[index];
+				if (!IsExportTarget(pack))
+					continue;
+				anyShown = true;
+				if (DrawPickerRow(pack, pack.id == currentId))
+					picked = &pack;
+			}
+			if (!anyShown)
+				ImGui::TextDisabled("%s", T(TKEY("scene_export_picker_empty"), "No presets match."));
+		}
+		ImGui::EndChild();
+
+		if (picked) {
+			form.name = picked->id;
+			PrefillFromName();
+			ImGui::CloseCurrentPopup();
+		}
+		if (ImGui::Button(T(TKEY("cancel"), "Cancel")))
+			ImGui::CloseCurrentPopup();
 	}
 
 	bool IsFeatureRequired(const std::string& shortName)
@@ -354,6 +457,8 @@ void ScenePresetExport::Open(const SceneContextId& context)
 	dialogActive = true;
 	pendingOpen = true;
 	ResetFormFields();
+	// The Presets page may never have scanned this session, and packs may have changed since.
+	UnifiedPresetCatalog::GetSingleton().Discover();
 }
 
 void ScenePresetExport::Draw(const SceneContextId& context)
@@ -420,13 +525,14 @@ void ScenePresetExport::Draw(const SceneContextId& context)
 
 		ImGui::Separator();
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
-		ImGui::SetNextItemWidth(-1);
+		const char* existingLabel = T(TKEY("scene_export_existing"), "Existing...");
+		ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(existingLabel).x + style.FramePadding.x * 2.0f + style.ItemInnerSpacing.x));
 		ImGui::InputText("##ScenePresetExportName", &form.name);
-		if (ImGui::IsItemDeactivatedAfterEdit()) {
-			const auto packId = Util::FileHelpers::SanitizeFileName(form.name);
-			if (const auto meta = SceneSettingsManager::ReadPresetMetadata(Util::PathHelpers::GetUnifiedPackPath(packId)))
-				PrefillFromExisting(*meta);
-		}
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			PrefillFromName();
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		DrawPickerButton(existingLabel);
+		DrawPresetPicker();
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
 		ImGui::SetNextItemWidth(-1);
