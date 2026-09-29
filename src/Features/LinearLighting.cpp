@@ -6,6 +6,7 @@
 
 #include "Effects11.h"
 #include "Globals.h"
+#include "IconsFontAwesome5.h"
 #include "InverseSquareLighting/Common.h"
 #include "PhysicalSky.h"
 #include "PostProcessing.h"
@@ -42,10 +43,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
+	// Effects 11 overrides the result, not the controls, so they stay editable under the banner.
+	if (globals::features::effects11.IsActive()) {
+		Util::StatusBanner(ICON_FA_LOCK, "Effects 11 overrides Linear Lighting while UseEffect is enabled.", Util::Colors::GetWarning());
+		ImGui::Spacing();
+	}
 	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
-	if (globals::features::effects11.IsActive())
-		ImGui::TextDisabled("%s", T(TKEY("effects11_override"), "Effects 11 overrides Linear Lighting while UseEffect is enabled."));
+	Util::Text::Secondary("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
 
 	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
 		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
@@ -73,7 +78,7 @@ void LinearLighting::DrawSettings()
 				ImGui::SliderFloat(T(TKEY("particle_effects_multiplier"), "Particle Effects Multiplier"), &settings.particleEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("light_sprite_effects_multiplier"), "Light Sprite Effects Multiplier"), &settings.lightSpriteEffectMult, 0.0f, 10.0f, "%.2f");
 				ImGui::SliderFloat(T(TKEY("fire_effects_multiplier"), "Fire Effects Multiplier"), &settings.fireEffectMult, 0.0f, 10.0f, "%.2f");
-				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax, "%.2f");
+				ImGui::SliderFloat(T(TKEY("fire_effects_curve"), "Fire Effects Curve"), &settings.fireEffectCurve, FireEffectCurveMin, FireEffectCurveMax, "%.2f");
 				ImGui::TreePop();
 			}
 
@@ -91,7 +96,7 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
 		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
-	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, Settings::FireEffectCurveMin, Settings::FireEffectCurveMax);
+	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, FireEffectCurveMin, FireEffectCurveMax);
 }
 
 void LinearLighting::SaveSettings(json& o_json)

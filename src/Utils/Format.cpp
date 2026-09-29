@@ -265,6 +265,12 @@ namespace Util
 										   });
 	}
 
+	std::string ToLower(std::string text)
+	{
+		std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		return text;
+	}
+
 	std::string GetShaderDefinesSuffix(const std::string& definesStr)
 	{
 		if (definesStr.empty())
@@ -275,5 +281,40 @@ namespace Util
 			h *= 16777619u;  // FNV prime
 		}
 		return std::format("_{:08X}", h);
+	}
+
+	std::string PrettifyIdentifier(std::string_view id)
+	{
+		if (id.empty())
+			return {};
+
+		std::string result;
+		result.reserve(id.size() + id.size() / 4);
+		const auto appendSpaceIfNeeded = [&]() {
+			if (!result.empty() && result.back() != ' ')
+				result += ' ';
+		};
+
+		for (size_t i = 0; i < id.size(); ++i) {
+			const char character = id[i];
+			if (character == '_' || character == '-') {
+				appendSpaceIfNeeded();
+				continue;
+			}
+
+			if (i > 0 && std::isupper(static_cast<unsigned char>(character))) {
+				const char previous = id[i - 1];
+				const bool previousUpper = std::isupper(static_cast<unsigned char>(previous));
+				const bool previousSeparator = previous == '_' || previous == '-';
+				if ((!previousUpper && !previousSeparator) ||
+					(previousUpper && i + 1 < id.size() && std::islower(static_cast<unsigned char>(id[i + 1]))))
+					appendSpaceIfNeeded();
+			}
+
+			result += result.empty() || result.back() == ' ' ?
+				static_cast<char>(std::toupper(static_cast<unsigned char>(character))) : character;
+		}
+
+		return result;
 	}
 }  // namespace Util

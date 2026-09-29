@@ -87,6 +87,17 @@ namespace Util
 			return GetCommunityShaderPath() / "Themes";
 		}
 
+		std::filesystem::path GetEffects11PresetsPath()
+		{
+			return GetCommunityShaderPath() / kEffects11PresetsSubdir;
+		}
+
+		std::filesystem::path GetUnifiedPresetsPath()
+		{
+			return GetCommunityShaderPath() / kUnifiedPresetsSubdir;
+		}
+
+
 		std::filesystem::path GetTranslationsPath()
 		{
 			return GetCommunityShaderPath() / "Translations";
@@ -169,6 +180,66 @@ namespace Util
 		{
 			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / "Themes";
 		}
+
+		std::filesystem::path GetEffects11PresetsRealPath()
+		{
+			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kEffects11PresetsSubdir;
+		}
+
+		std::filesystem::path GetUnifiedPresetsRealPath()
+		{
+			return GetRootRealPath() / "SKSE" / "Plugins" / "CommunityShaders" / kUnifiedPresetsSubdir;
+		}
+
+		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath)
+		{
+			std::vector<std::filesystem::path> roots{ GetCommunityShaderPath() / relativePath };
+			if (const auto realRoot = GetRootRealPath(); !realRoot.empty()) {
+				auto realPath = realRoot / "SKSE" / "Plugins" / "CommunityShaders" / relativePath;
+				std::error_code ec;
+				if (!std::filesystem::equivalent(roots.front(), realPath, ec))
+					roots.push_back(std::move(realPath));
+			}
+			return roots;
+		}
+
+		bool IsHiddenLibraryEntry(std::string_view name)
+		{
+			return name.starts_with('_') || name.starts_with('.');
+		}
+
+		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories)
+		{
+			std::vector<std::filesystem::path> found;
+			const auto isListed = [&](const std::filesystem::path& name) {
+				return std::ranges::any_of(found, [&](const auto& path) {
+					return _wcsicmp(path.filename().c_str(), name.c_str()) == 0;
+				});
+			};
+			for (const auto& root : GetCommunityShaderScanRoots(relativePath)) {
+				std::error_code ec;
+				for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
+					std::error_code typeEc;
+					const bool wantedType = directories ? entry.is_directory(typeEc) : entry.is_regular_file(typeEc);
+					const auto name = entry.path().filename();
+					if (wantedType && !name.empty() && !IsHiddenLibraryEntry(name.string()) && !isListed(name))
+						found.push_back(entry.path());
+				}
+			}
+			return found;
+		}
+
+		std::filesystem::path GetUnifiedPackPath(const std::string& packId)
+		{
+			const auto roots = GetCommunityShaderScanRoots(kUnifiedPresetsSubdir);
+			for (const auto& root : roots) {
+				std::error_code ec;
+				if (std::filesystem::is_directory(root / packId, ec))
+					return root / packId;
+			}
+			return roots.front() / packId;
+		}
+
 
 		std::filesystem::path GetFeaturesRealPath()
 		{
@@ -293,6 +364,76 @@ namespace Util
 			}
 
 			return name;
+		}
+
+		bool WriteFileAtomically(const std::filesystem::path& path, std::string_view content, std::string_view context)
+		{
+			std::error_code ec;
+			if (!path.parent_path().empty()) {
+				std::filesystem::create_directories(path.parent_path(), ec);
+				if (ec) {
+					logger::error("Could not create directory for {} '{}': {}", context, path.string(), ec.message());
+					return false;
+				}
+			}
+
+			// Process and thread qualified so concurrent writers cannot collide on the temporary.
+			auto temporaryPath = path;
+			temporaryPath += std::format(".{}.{}.tmp", ::GetCurrentProcessId(), ::GetCurrentThreadId());
+			{
+				std::ofstream file(temporaryPath, std::ios::binary | std::ios::trunc);
+				if (!file.is_open()) {
+					logger::error("Could not open temporary {} file '{}'", context, temporaryPath.string());
+					return false;
+				}
+				file.write(content.data(), static_cast<std::streamsize>(content.size()));
+				file.flush();
+				if (file.fail()) {
+					logger::error("Could not write temporary {} file '{}'", context, temporaryPath.string());
+					file.close();
+					std::filesystem::remove(temporaryPath, ec);
+					return false;
+				}
+				file.close();
+				if (file.fail()) {
+					logger::error("Could not close temporary {} file '{}'", context, temporaryPath.string());
+					std::filesystem::remove(temporaryPath, ec);
+					return false;
+				}
+			}
+
+			if (!::MoveFileExW(temporaryPath.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+				const auto moveError = ::GetLastError();
+				// Virtual filesystems can reject the replace while still allowing a direct write.
+				std::ofstream fallback(path, std::ios::binary | std::ios::trunc);
+				if (fallback.is_open()) {
+					fallback.write(content.data(), static_cast<std::streamsize>(content.size()));
+					fallback.flush();
+					const bool wrote = !fallback.fail();
+					fallback.close();
+					if (wrote && !fallback.fail()) {
+						std::filesystem::remove(temporaryPath, ec);
+						logger::warn("Replaced {} '{}' by direct write (Win32 error {})", context, path.string(), moveError);
+						return true;
+					}
+				}
+				logger::error("Could not replace {} '{}' (Win32 error {})", context, path.string(), moveError);
+				std::filesystem::remove(temporaryPath, ec);
+				return false;
+			}
+			return true;
+		}
+
+		bool WriteJsonAtomically(const std::filesystem::path& path, const nlohmann::json& data, int indent, std::string_view context)
+		{
+			std::string serialized;
+			try {
+				serialized = data.dump(indent);
+			} catch (const std::exception& e) {
+				logger::error("Could not serialize {} '{}': {}", context, path.string(), e.what());
+				return false;
+			}
+			return WriteFileAtomically(path, serialized, context);
 		}
 	}
 }

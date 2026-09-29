@@ -47,6 +47,7 @@ struct PostProcessing;
 struct Skin;
 struct PseudoSunBounce;
 struct ScreenshotFeature;
+struct SceneManager;
 
 class State;
 class Deferred;
@@ -54,7 +55,6 @@ struct TruePBR;
 class RenderDoc;
 class RemoteControl;
 class Menu;
-class WeatherManager;
 class SceneSettingsManager;
 
 namespace SIE
@@ -143,6 +143,7 @@ namespace globals
 		extern CSEditor csEditor;
 		extern ExponentialHeightFog exponentialHeightFog;
 		extern TruePBR truePBR;
+		extern SceneManager sceneManager;
 		extern PostProcessing postProcessing;
 		extern Skin skin;
 		extern PseudoSunBounce pseudoSunBounce;
@@ -262,7 +263,6 @@ namespace globals
 	extern Menu* menu;
 	extern SIE::ShaderCache* shaderCache;
 	extern Profiler* profiler;
-	extern WeatherManager* weatherManager;
 	extern SceneSettingsManager* sceneSettingsManager;
 
 	/** @brief Initializes core singletons (ShaderCache, State, Menu, Deferred). Called once at plugin load. */

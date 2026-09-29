@@ -35,8 +35,6 @@ public:
 
 	virtual void LoadSettings(json& o_json) override;
 	virtual void SaveSettings(json& o_json) override;
-	/** @brief Registers IBL parameters as weather-interpolatable variables. */
-	virtual void RegisterWeatherVariables() override;
 
 	/** @brief Binds IBL and static fallback textures as pixel shader resources for the reflections prepass. */
 	virtual void ReflectionsPrepass() override;
@@ -60,7 +58,6 @@ public:
 		float FogAmount = 0.0f;
 		uint DALCMode = 2;  // 0: Luminance Ratio, 1: Color Ratio, 2: DALC + Sky
 		uint SkylightingAffectsEnv = 0;
-		bool DisableInInteriors = true;
 		bool DisableInWorldMap = true;
 		bool DisableInLoadingScreen = true;
 		uint EffectNormalization = 0;

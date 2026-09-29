@@ -173,6 +173,10 @@ namespace Util
 	 */
 	void SetTooltipPositionNearMouse(float estimatedHeight, float estimatedWidth = 0.0f);
 
+	/** @brief Hover flags that still show tooltips on greyed controls, which must explain why they are greyed. */
+	inline constexpr ImGuiHoveredFlags kTooltipWhenDisabled =
+		ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled;
+
 	/**
 	 * Shows a positioned tooltip with wrapped text when the previous item is hovered.
 	 * Uses SetTooltipPositionNearMouse for viewport-aware placement.
@@ -186,6 +190,43 @@ namespace Util
 	 * @param a_desc Tooltip text to show
 	 */
 	void HelpMarker(const char* a_desc);
+
+	/**
+	 * @brief Compact segmented control: one rounded track, label-sized segments, the selection in the accent colour.
+	 * @param a_selected In/out selected index
+	 * @param a_marked Index to flag with a dot when it is not the selection, or -1
+	 * @return True on the frame a segment is clicked
+	 */
+	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected, int a_marked = -1);
+
+	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch. */
+	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
+
+	/** @brief When locked, draws a lock banner and greys every control until the scope ends. */
+	class LockedSection
+	{
+	public:
+		LockedSection(bool a_locked, const char* a_message);
+		~LockedSection();
+
+		LockedSection(const LockedSection&) = delete;
+		LockedSection& operator=(const LockedSection&) = delete;
+
+	private:
+		bool m_locked;
+	};
+
+	/** @brief Explainer text behind a collapsed-by-default disclosure row. */
+	void Explainer(const char* a_label, const char* a_text);
+
+	/**
+	 * @brief Thin vertical rule separating groups of related toolbar buttons, used in place of SameLine().
+	 * @param a_continueLine False when the next item calls SameLine() itself.
+	 */
+	void ToolbarDivider(bool a_continueLine = true);
+
+	/** @brief Width ToolbarDivider() occupies, for toolbars that right-align before drawing. */
+	float GetToolbarDividerWidth();
 
 	/**
 	 * Confirmation popup for clearing shader cache.
@@ -333,9 +374,25 @@ namespace Util
 	/** @brief Draws the rounded hover/active fill for the last submitted item. */
 	bool DrawCurrentItemRoundedButtonHighlight(ImDrawList* drawList = nullptr);
 
+	/** @brief Draws a circle icon, filled or outlined, on the window draw list. */
+	void DrawIconCircle(ImVec2 center, float radius, ImU32 color, bool filled);
+
+	/** @brief Reserves one text-line-high square and draws a dot centred in it, so callers can test ImGui::IsItemHovered(). */
+	void DrawInlineIndicatorDot(ImU32 color, bool filled);
+
 	/** @brief ImGui::Begin() wrappers that replace native title-bar button highlights with rounded ones. */
 	bool BeginWithRoundedClose(const char* name, bool* p_open, ImGuiWindowFlags flags = 0);
 	bool BeginPopupModalWithRoundedClose(const char* name, bool* p_open = nullptr, ImGuiWindowFlags flags = 0);
+
+	/**
+	 * @brief Like BeginWithRoundedClose, but floating windows get a flat custom header that doubles as the
+	 * drag handle; docked windows keep their native tab. Collapsing is always disabled.
+	 * @param p_open     Close flag cleared by the header's close button; nullptr omits the button.
+	 * @param drawExtras Optional compact controls between the title and close button, floating only.
+	 * @param flags      Extra window flags; NoTitleBar is managed per dock state.
+	 */
+	bool BeginWithCustomHeader(const char* name, bool* p_open,
+		const std::function<void()>& drawExtras = nullptr, ImGuiWindowFlags flags = 0);
 
 	/**
 	 * Button with simple flash feedback (matches action icon hover effect style)
@@ -446,46 +503,6 @@ namespace Util
 	 * @return The offset to add to cursor X position to center the content
 	 */
 	float GetCenterOffsetForContent(float contentWidth);
-
-	/**
-	 * Weather-controlled UI helpers
-	 * These functions automatically check if a setting has a weather-specific override
-	 * and disable the control if it's being controlled by the current weather
-	 */
-	namespace WeatherUI
-	{
-		/**
-		 * Check if a specific setting is currently controlled by weather
-		 * @param feature The feature to check
-		 * @param settingName The name of the setting (must match registered weather variable name)
-		 * @return True if weather is overriding this setting
-		 */
-		bool IsWeatherControlled(Feature* feature, const char* settingName);
-
-		/**
-		 * Weather-aware slider float that greys out when controlled by weather
-		 * @param label The label for the slider
-		 * @param feature The feature this setting belongs to
-		 * @param settingName The name of the setting (must match registered weather variable name)
-		 * @param value Pointer to the value
-		 * @param min Minimum value
-		 * @param max Maximum value
-		 * @param format Display format
-		 * @return True if value was changed (only possible when not weather-controlled)
-		 */
-		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format = "%.3f");
-
-		/**
-		 * Weather-aware checkbox that greys out when controlled by weather
-		 */
-		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value);
-
-		/**
-		 * Weather-aware color edit that greys out when controlled by weather
-		 */
-		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3]);
-		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4]);
-	}
 
 	/**
 	 * Constraint-aware UI helpers
@@ -967,6 +984,12 @@ namespace Util
 	 */
 	ImVec4 GetPulsingColor(const ImVec4& baseColor, float speed = 4.0f, float minBrightness = 0.7f, float maxBrightness = 1.0f);
 
+	/** @brief Tints the next control's frame and border with an opaque marker color to show where its value comes from. */
+	void PushTintedFrameStyle(const ImVec4& color);
+
+	/** @brief Pops the style pushed by PushTintedFrameStyle. Always call after the corresponding push. */
+	void PopTintedFrameStyle();
+
 	/**
 	 * @brief Draws the feature search bar with magnifying glass icon.
 	 * @param searchString Reference to the search string to modify
@@ -999,6 +1022,10 @@ namespace Util
 		ImVec4 GetError();     // Red - error/negative (from theme Error)
 		ImVec4 GetInfo();      // Blue - informational (from theme InfoColor)
 		ImVec4 GetDisabled();  // Gray - disabled items (from theme Disable)
+		/** @brief Muted but legible text for live controls; inactive controls use GetDisabled() instead. */
+		ImVec4 GetSecondary();
+		/** @brief The shared "active/selected" colour for rows, segments, and tabs. */
+		ImVec4 GetAccent();
 
 	}
 
@@ -1015,6 +1042,8 @@ namespace Util
 		void WrappedInfo(const char* fmt, ...) IM_FMTARGS(1);
 		void Disabled(const char* fmt, ...) IM_FMTARGS(1);
 		void WrappedDisabled(const char* fmt, ...) IM_FMTARGS(1);
+		void Secondary(const char* fmt, ...) IM_FMTARGS(1);
+		void WrappedSecondary(const char* fmt, ...) IM_FMTARGS(1);
 	}
 
 	/**

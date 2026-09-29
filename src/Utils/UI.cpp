@@ -1,17 +1,17 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "../I18n/I18n.h"
 #include "D3D.h"
 #include "FileSystem.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
+#include "IconsFontAwesome5.h"
 #include "Menu/IconLoader.h"
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
 #include "ShaderCache.h"
-#include "WeatherManager.h"
-#include "WeatherVariableRegistry.h"
 
 #ifndef DIRECTINPUT_VERSION
 #	define DIRECTINPUT_VERSION 0x0800
@@ -42,6 +42,7 @@
 #include <sstream>
 #include <stb_image.h>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -91,7 +92,7 @@ namespace Util
 	HoverTooltipWrapper::HoverTooltipWrapper() :
 		previousFont(nullptr)
 	{
-		hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+		hovered = ImGui::IsItemHovered(kTooltipWhenDisabled);
 		if (hovered) {
 			ImGui::BeginTooltip();
 			ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
@@ -242,6 +243,148 @@ namespace Util
 		AddTooltip(a_desc, ImGuiHoveredFlags_DelayShort);
 	}
 
+	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected, int a_marked)
+	{
+		const auto& style = ImGui::GetStyle();
+		const ImVec2 framePadding = style.FramePadding;
+		const float rounding = style.FrameRounding;
+		// Segments sit inside the track, so the whole control is exactly one frame tall.
+		const float inset = std::floor(framePadding.y * 0.75f);
+		const float segmentHeight = ImGui::GetFrameHeight() - inset * 2.0f;
+
+		// The track goes down first: tables share this draw list's channel splitter, so it cannot be split here.
+		float trackWidth = inset * static_cast<float>(a_count + 1);
+		for (int i = 0; i < a_count; ++i)
+			trackWidth += ImGui::CalcTextSize(a_labels[i], nullptr, true).x + framePadding.x * 2.0f;
+		const ImVec2 trackMin = ImGui::GetCursorScreenPos();
+		const ImVec2 trackMax{ trackMin.x + trackWidth, trackMin.y + ImGui::GetFrameHeight() };
+		auto* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(trackMin, trackMax, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+
+		ImVec4 hovered = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+		hovered.w *= 0.5f;
+		const ImVec4 selectedFill = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+		const ImVec4 secondary = Colors::GetSecondary();
+
+		ImGui::PushID(a_id);
+		ImGui::BeginGroup();
+		ImGui::SetCursorScreenPos({ trackMin.x + inset, trackMin.y + inset });
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, { inset, 0.0f });
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { framePadding.x, (segmentHeight - ImGui::GetFontSize()) * 0.5f });
+
+		bool clicked = false;
+		for (int i = 0; i < a_count; ++i) {
+			if (i > 0)
+				ImGui::SameLine();
+			const bool selected = i == a_selected;
+			ImGui::PushID(i);
+			ImGui::PushStyleColor(ImGuiCol_Button, selected ? selectedFill : ImVec4());
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, selected ? selectedFill : hovered);
+			ImGui::PushStyleColor(ImGuiCol_ButtonActive, selectedFill);
+			ImGui::PushStyleColor(ImGuiCol_Text, selected ? style.Colors[ImGuiCol_Text] : secondary);
+			if (ImGui::Button(a_labels[i])) {
+				a_selected = i;
+				clicked = true;
+			}
+			ImGui::PopStyleColor(4);
+			ImGui::PopID();
+
+			if (i == a_marked && !selected) {
+				const ImVec2 min = ImGui::GetItemRectMin();
+				const ImVec2 max = ImGui::GetItemRectMax();
+				const float radius = std::max(1.5f, ImGui::GetFontSize() * 0.1f);
+				drawList->AddCircleFilled({ max.x - framePadding.x * 0.5f, (min.y + max.y) * 0.5f }, radius,
+					ImGui::GetColorU32(Colors::GetAccent()));
+			}
+		}
+
+		// Claim the track's trailing and bottom inset so the next item lands clear of it.
+		ImGui::SameLine(0.0f, 0.0f);
+		ImGui::Dummy({ inset, segmentHeight });
+		ImGui::Dummy({ 0.0f, inset });
+		ImGui::PopStyleVar(3);
+		ImGui::EndGroup();
+		ImGui::PopID();
+		return clicked;
+	}
+
+	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color)
+	{
+		const float scale = GetUIScale();
+		const ImVec2 padding{ 12.0f * scale, 8.0f * scale };
+		const float gap = 8.0f * scale;
+		const float width = ImGui::GetContentRegionAvail().x;
+		const float iconWidth = ImGui::CalcTextSize(a_icon).x;
+		const float wrapWidth = std::max(1.0f, width - padding.x * 2.0f - iconWidth - gap);
+		const ImVec2 textSize = ImGui::CalcTextSize(a_message, nullptr, false, wrapWidth);
+		const float height = textSize.y + padding.y * 2.0f;
+
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		ImVec4 fill = a_color;
+		fill.w *= 0.16f;
+		auto* drawList = ImGui::GetWindowDrawList();
+		drawList->AddRectFilled(min, { min.x + width, min.y + height }, ImGui::GetColorU32(fill), ImGui::GetStyle().FrameRounding);
+		drawList->AddText({ min.x + padding.x, min.y + padding.y }, ImGui::GetColorU32(a_color), a_icon);
+
+		ImGui::SetCursorScreenPos({ min.x + padding.x + iconWidth + gap, min.y + padding.y });
+		ImGui::PushStyleColor(ImGuiCol_Text, a_color);
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
+		ImGui::TextUnformatted(a_message);
+		ImGui::PopTextWrapPos();
+		ImGui::PopStyleColor();
+
+		ImGui::SetCursorScreenPos(min);
+		ImGui::Dummy({ width, height });
+	}
+
+	LockedSection::LockedSection(bool a_locked, const char* a_message) :
+		m_locked(a_locked)
+	{
+		if (!m_locked)
+			return;
+		StatusBanner(ICON_FA_LOCK, a_message, Colors::GetWarning());
+		ImGui::Spacing();
+		ImGui::BeginDisabled();
+	}
+
+	LockedSection::~LockedSection()
+	{
+		if (m_locked)
+			ImGui::EndDisabled();
+	}
+
+	void Explainer(const char* a_label, const char* a_text)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Text, Colors::GetSecondary());
+		if (ImGui::TreeNodeEx(a_label, ImGuiTreeNodeFlags_NoTreePushOnOpen)) {
+			ImGui::Indent();
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextUnformatted(a_text);
+			ImGui::PopTextWrapPos();
+			ImGui::Unindent();
+		}
+		ImGui::PopStyleColor();
+	}
+
+	void ToolbarDivider(bool a_continueLine)
+	{
+		if (!a_continueLine) {
+			ImGui::SameLine();
+			ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical, 1.0f);
+			return;
+		}
+		const float spacing = ImGui::GetStyle().ItemSpacing.x * 2.0f;
+		ImGui::SameLine(0.0f, spacing);
+		ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical, 1.0f);
+		ImGui::SameLine(0.0f, spacing);
+	}
+
+	float GetToolbarDividerWidth()
+	{
+		return ImGui::GetStyle().ItemSpacing.x * 4.0f + 1.0f;
+	}
+
 	// Static state for clear shader cache confirmation popup
 	static bool showClearCacheConfirmation = false;
 	static bool dontAskAgainCheckbox = false;
@@ -389,11 +532,16 @@ namespace Util
 		return result;
 	}
 
+	constexpr float kPercentageScale = 1e2f;
+
 	bool PercentageSlider(const char* label, float* data, float lb, float ub, const char* format)
 	{
-		float percentageData = (*data) * 1e2f;
+		// The slider binds a temporary, so name the member it stands for or scene authoring misses it.
+		SceneWidgetInterceptor::ProxyScope sceneProxy(data, kPercentageScale);
+
+		float percentageData = (*data) * kPercentageScale;
 		bool retval = ImGui::SliderFloat(label, &percentageData, lb, ub, format);
-		(*data) = percentageData * 1e-2f;
+		(*data) = percentageData / kPercentageScale;
 		return retval;
 	}
 
@@ -660,6 +808,26 @@ namespace Util
 		return DrawRoundedButtonHighlight(ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()), ImGui::IsItemHovered(), ImGui::IsItemActive(), drawList);
 	}
 
+	void DrawIconCircle(ImVec2 center, float radius, ImU32 color, bool filled)
+	{
+		auto* drawList = ImGui::GetWindowDrawList();
+		if (filled)
+			drawList->AddCircleFilled(center, radius, color, ThemeManager::Constants::ICON_CIRCLE_SEGMENTS);
+		else
+			drawList->AddCircle(center, radius, color, ThemeManager::Constants::ICON_CIRCLE_SEGMENTS,
+				ThemeManager::Constants::ICON_OUTLINE_THICKNESS * GetUIScale());
+	}
+
+	void DrawInlineIndicatorDot(ImU32 color, bool filled)
+	{
+		const float lineHeight = ImGui::GetTextLineHeight();
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(lineHeight, lineHeight));
+		const float halfLine = lineHeight * 0.5f;
+		DrawIconCircle(ImVec2(origin.x + halfLine, origin.y + halfLine),
+			lineHeight * ThemeManager::Constants::SCENE_INDICATOR_RADIUS_RATIO, color, filled);
+	}
+
 	// Shared constants for title-bar button overlays
 	static constexpr float kTitleBarButtonPadding = 2.0f;
 	static constexpr float kCloseCrossDiagonalScale = 0.5f / std::numbers::sqrt2_v<float>;
@@ -794,6 +962,92 @@ namespace Util
 		}
 		if (visible)
 			DrawRoundedTitleBarButtonHighlights(ImGui::GetCurrentWindowRead(), p_open != nullptr, false);
+		return visible;
+	}
+
+	/** @brief Last frame's dock state per window title: NoTitleBar is decided before Begin(), but
+	 *  IsWindowDocked() only knows after, so the header lags a dock transition by one frame. */
+	static std::unordered_map<std::string, bool> s_customHeaderWasDocked;
+
+	/** @brief Draws the close button's X, matching DrawRoundedCloseHighlight's geometry; nothing else renders it. */
+	static void DrawCustomHeaderCloseCross(const ImVec2& min, const ImVec2& max)
+	{
+		const ImVec2 c((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+		const float sz = max.x - min.x;
+		const float d = sz * kCloseCrossDiagonalScale - kCloseCrossInset;
+		const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->AddLine({ c.x - d, c.y - d }, { c.x + d, c.y + d }, col);
+		drawList->AddLine({ c.x + d, c.y - d }, { c.x - d, c.y + d }, col);
+	}
+
+	/** @brief Draws the floating header: draggable title, optional extras, and a right-pinned close button. */
+	static void DrawCustomHeaderRow(ImGuiWindow* window, const char* name, bool* p_open,
+		const std::function<void()>& drawExtras)
+	{
+		const float rowHeight = ImGui::GetFrameHeight();
+		const float avail = ImGui::GetContentRegionAvail().x;
+		const ImVec2 rowStart = ImGui::GetCursorScreenPos();
+
+		// A row-wide drag catcher; AllowOverlap lets the title and buttons drawn after it still get input.
+		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight), ImGuiButtonFlags_AllowOverlap);
+		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+			ImGui::StartMouseMovingWindow(window);
+
+		ImGui::SetCursorScreenPos(rowStart);
+		ImGui::AlignTextToFramePadding();
+		std::string_view displayTitle(name);
+		if (const auto hash = displayTitle.find("##"); hash != std::string_view::npos)
+			displayTitle = displayTitle.substr(0, hash);
+		ImGui::TextUnformatted(displayTitle.data(), displayTitle.data() + displayTitle.size());
+
+		if (drawExtras) {
+			ImGui::SameLine();
+			drawExtras();
+		}
+
+		if (p_open) {
+			const float closeSize = ImGui::GetFontSize() + kTitleBarButtonPadding * 2.0f;
+			ImGui::SetCursorScreenPos(ImVec2(rowStart.x + avail - closeSize, rowStart.y + (rowHeight - closeSize) * 0.5f));
+			auto _style = TransparentIconButtonStyle();
+			const bool clicked = ImGui::Button("##CustomHeaderClose", ImVec2(closeSize, closeSize));
+			DrawCustomHeaderCloseCross(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+			if (clicked)
+				*p_open = false;
+		}
+
+		ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + rowHeight));
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+	}
+
+	bool BeginWithCustomHeader(const char* name, bool* p_open,
+		const std::function<void()>& drawExtras, ImGuiWindowFlags flags)
+	{
+		bool& wasDocked = s_customHeaderWasDocked[name];
+		// A window collapsed through the custom header would have nothing left on screen to expand it.
+		ImGuiWindowFlags windowFlags = flags | ImGuiWindowFlags_NoCollapse;
+		if (!wasDocked)
+			windowFlags |= ImGuiWindowFlags_NoTitleBar;
+
+		bool visible = false;
+		{
+			NativeTitleBarButtonHighlightGuard guard;
+			visible = ImGui::Begin(name, p_open, windowFlags);
+		}
+
+		ImGuiWindow* window = ImGui::GetCurrentWindowRead();
+		const bool isDocked = ImGui::IsWindowDocked();
+		wasDocked = isDocked;
+
+		if (isDocked) {
+			// The dock tab bar already supplies the title and close x.
+			DrawRoundedTitleBarButtonHighlights(window, p_open != nullptr, false);
+		} else {
+			// Not gated on `visible`, so the drag handle and close button stay reachable.
+			DrawCustomHeaderRow(window, name, p_open, drawExtras);
+		}
 		return visible;
 	}
 
@@ -1265,6 +1519,22 @@ namespace Util
 			baseColor.w);
 	}
 
+	void PushTintedFrameStyle(const ImVec4& color)
+	{
+		using Constants = ThemeManager::Constants;
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(color.x, color.y, color.z, Constants::TINTED_FRAME_BG_ALPHA));
+		ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(color.x, color.y, color.z, Constants::TINTED_FRAME_BG_HOVERED_ALPHA));
+		ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(color.x, color.y, color.z, Constants::TINTED_FRAME_BG_ACTIVE_ALPHA));
+		ImGui::PushStyleColor(ImGuiCol_Border, color);
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, Constants::TINTED_FRAME_BORDER_SIZE);
+	}
+
+	void PopTintedFrameStyle()
+	{
+		ImGui::PopStyleColor(4);
+		ImGui::PopStyleVar();
+	}
+
 	void DrawSearchIcon(const ImVec2& position, float size, float alpha)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -1518,6 +1788,22 @@ namespace Util
 			return globals::menu->GetTheme().StatusPalette.Disable;
 		}
 
+		ImVec4 GetSecondary()
+		{
+			// Keeps well above AA contrast on the theme's dark panels while staying clearly below primary.
+			constexpr float kSecondaryTextAlpha = 0.72f;
+			auto color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+			color.w *= kSecondaryTextAlpha;
+			return color;
+		}
+
+		ImVec4 GetAccent()
+		{
+			auto color = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+			color.w = 1.0f;
+			return color;
+		}
+
 	}
 
 	namespace Text
@@ -1563,6 +1849,8 @@ namespace Util
 		UTIL_TEXT_WRAPPED(WrappedInfo, GetInfo)
 		UTIL_TEXT(Disabled, GetDisabled)
 		UTIL_TEXT_WRAPPED(WrappedDisabled, GetDisabled)
+		UTIL_TEXT(Secondary, GetSecondary)
+		UTIL_TEXT_WRAPPED(WrappedSecondary, GetSecondary)
 
 #undef UTIL_TEXT
 #undef UTIL_TEXT_WRAPPED
@@ -2105,257 +2393,6 @@ namespace Util
 		}
 
 		return clicked;
-	}
-
-	namespace WeatherUI
-	{
-		bool IsWeatherControlled(Feature* feature, const char* settingName)
-		{
-			if (!feature || !settingName) {
-				return false;
-			}
-
-			auto* globalRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			auto* weatherManager = globals::weatherManager;
-
-			// Check if this feature has registered weather variables
-			std::string featureName = feature->GetShortName();
-			if (!globalRegistry->HasWeatherSupport(featureName)) {
-				return false;
-			}
-
-			// Still controlled if variable is mid-transition (e.g., transitioning to a weather without an override)
-			if (globalRegistry->IsFeatureVariableInTransition(featureName, settingName)) {
-				return true;
-			}
-
-			// Check if current weather exists
-			auto currentWeathers = weatherManager->GetCurrentWeathers();
-			if (!currentWeathers.currentWeather) {
-				return false;
-			}
-
-			// Load weather settings for this feature
-			json weatherSettings;
-			if (!weatherManager->LoadSettingsFromWeather(currentWeathers.currentWeather, featureName, weatherSettings)) {
-				return false;
-			}
-
-			// Check if this specific setting has an override
-			return weatherSettings.contains(settingName) && !weatherSettings[settingName].is_null();
-		}
-
-		bool SliderFloat(const char* label, Feature* feature, const char* settingName, float* value, float min, float max, const char* format)
-		{
-			bool isControlled = IsWeatherControlled(feature, settingName);
-
-			if (isControlled) {
-				auto* weatherManager = globals::weatherManager;
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-				// Make it look like a clickable button when weather-controlled
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.3f, 0.3f, 0.4f, 0.8f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.4f, 0.4f, 0.5f, 0.9f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.5f, 0.5f, 0.6f, 1.0f));
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
-			}
-
-			ImGuiSliderFlags flags = isControlled ? (static_cast<ImGuiSliderFlags>(ImGuiSliderFlags_NoInput) | static_cast<ImGuiSliderFlags>(ImGuiSliderFlags_ReadOnly)) : ImGuiSliderFlags_None;
-			bool changed = ImGui::SliderFloat(label, value, min, max, format, flags);
-
-			if (isControlled) {
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor(3);
-
-				// Check if clicked
-				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = globals::weatherManager;
-					auto* editorWindow = EditorWindow::GetSingleton();
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-					if (currentWeathers.currentWeather && editorWindow) {
-						editorWindow->OpenWeatherFeatureSetting(
-							currentWeathers.currentWeather,
-							feature->GetShortName(),
-							settingName);
-					}
-				}
-
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
-					auto* weatherManager = globals::weatherManager;
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					Util::Text::Warning("Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					Util::Text::Success("Click to open CS Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				return false;  // Prevent changes when weather-controlled
-			}
-
-			return changed;
-		}
-
-		bool Checkbox(const char* label, Feature* feature, const char* settingName, bool* value)
-		{
-			bool isControlled = IsWeatherControlled(feature, settingName);
-
-			if (isControlled) {
-				auto* weatherManager = globals::weatherManager;
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-				ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.3f, 0.3f, 0.4f, 0.8f));
-				ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.4f, 0.4f, 0.5f, 0.9f));
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
-				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			}
-
-			bool changed = ImGui::Checkbox(label, value);
-
-			if (isControlled) {
-				ImGui::PopItemFlag();
-				ImGui::PopStyleVar();
-				ImGui::PopStyleColor(2);
-
-				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = globals::weatherManager;
-					auto* editorWindow = EditorWindow::GetSingleton();
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-					if (currentWeathers.currentWeather && editorWindow) {
-						editorWindow->OpenWeatherFeatureSetting(
-							currentWeathers.currentWeather,
-							feature->GetShortName(),
-							settingName);
-					}
-				}
-
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
-					auto* weatherManager = globals::weatherManager;
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					Util::Text::Warning("Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					Util::Text::Success("Click to open CS Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				return false;
-			}
-
-			return changed;
-		}
-
-		bool ColorEdit3(const char* label, Feature* feature, const char* settingName, float col[3])
-		{
-			bool isControlled = IsWeatherControlled(feature, settingName);
-
-			if (isControlled) {
-				auto* weatherManager = globals::weatherManager;
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
-				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			}
-
-			bool changed = ImGui::ColorEdit3(label, col);
-
-			if (isControlled) {
-				ImGui::PopItemFlag();
-				ImGui::PopStyleVar();
-
-				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = globals::weatherManager;
-					auto* editorWindow = EditorWindow::GetSingleton();
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-					if (currentWeathers.currentWeather && editorWindow) {
-						editorWindow->OpenWeatherFeatureSetting(
-							currentWeathers.currentWeather,
-							feature->GetShortName(),
-							settingName);
-					}
-				}
-
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
-					auto* weatherManager = globals::weatherManager;
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					Util::Text::Warning("Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					Util::Text::Success("Click to open CS Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				return false;
-			}
-
-			return changed;
-		}
-
-		bool ColorEdit4(const char* label, Feature* feature, const char* settingName, float col[4])
-		{
-			bool isControlled = IsWeatherControlled(feature, settingName);
-
-			if (isControlled) {
-				auto* weatherManager = globals::weatherManager;
-				auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-				ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.7f);
-				ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
-			}
-
-			bool changed = ImGui::ColorEdit4(label, col);
-
-			if (isControlled) {
-				ImGui::PopItemFlag();
-				ImGui::PopStyleVar();
-
-				if (ImGui::IsItemClicked()) {
-					auto* weatherManager = globals::weatherManager;
-					auto* editorWindow = EditorWindow::GetSingleton();
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-
-					if (currentWeathers.currentWeather && editorWindow) {
-						editorWindow->OpenWeatherFeatureSetting(
-							currentWeathers.currentWeather,
-							feature->GetShortName(),
-							settingName);
-					}
-				}
-
-				if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-					ImGui::BeginTooltip();
-					auto* weatherManager = globals::weatherManager;
-					auto currentWeathers = weatherManager->GetCurrentWeathers();
-					ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-					Util::Text::Warning("Weather Override Active");
-					ImGui::TextWrapped("This setting is controlled by the current weather (%s).",
-						currentWeathers.currentWeather ? currentWeathers.currentWeather->GetFormEditorID() : "Unknown");
-					ImGui::Separator();
-					Util::Text::Success("Click to open CS Editor");
-					ImGui::PopTextWrapPos();
-					ImGui::EndTooltip();
-				}
-
-				return false;
-			}
-
-			return changed;
-		}
 	}
 
 	bool InputComboWidget(

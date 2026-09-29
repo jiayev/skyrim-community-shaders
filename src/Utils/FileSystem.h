@@ -25,6 +25,10 @@ namespace Util
 	 */
 	namespace PathHelpers
 	{
+		/** @brief Preset library folders, relative to the CommunityShaders plugin directory. */
+		constexpr const char* kUnifiedPresetsSubdir = "Presets";
+		constexpr const char* kEffects11PresetsSubdir = "Effects11/Presets";
+
 		/**
 		 * Gets the base Data directory path
 		 * @return Current working directory / "Data"
@@ -96,6 +100,18 @@ namespace Util
 		 * @return CommunityShaderPath / "Themes"
 		 */
 		std::filesystem::path GetThemesPath();
+
+		/**
+		 * Gets the Effects11 presets library path (VFS / in-game Data path).
+		 * @return CommunityShaderPath / "Effects11" / "Presets"
+		 */
+		std::filesystem::path GetEffects11PresetsPath();
+
+		/**
+		 * Gets the unified shader presets library path (VFS).
+		 * @return CommunityShaderPath / "Presets"
+		 */
+		std::filesystem::path GetUnifiedPresetsPath();
 
 		/**
 		 * Gets the Translations directory path for i18n locale files
@@ -190,6 +206,35 @@ namespace Util
 		std::filesystem::path GetThemesRealPath();
 
 		/**
+		 * Returns the real path to the Effects11 presets library (for Explorer / create_directories).
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Effects11" / "Presets"
+		 */
+		std::filesystem::path GetEffects11PresetsRealPath();
+
+		/**
+		 * Returns the real path to the unified presets library.
+		 * @return  <mod_root> / "SKSE" / "Plugins" / "CommunityShaders" / "Presets"
+		 */
+		std::filesystem::path GetUnifiedPresetsRealPath();
+
+		/**
+		 * @brief Directories to scan for a CommunityShaders subfolder: the Data (VFS) path, then the mod's
+		 * real folder when distinct, since MO2 hides folders created there mid-session from the VFS.
+		 * @param relativePath Path under CommunityShaders, e.g. "Presets".
+		 */
+		std::vector<std::filesystem::path> GetCommunityShaderScanRoots(const std::filesystem::path& relativePath);
+
+		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
+		bool IsHiddenLibraryEntry(std::string_view name);
+
+		/** @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root; first root wins. */
+		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories);
+
+		/** @brief Folder of a unified preset pack: the first scan root holding it, else the Data (VFS) path,
+		 *  which MO2 routes to its overwrite folder. */
+		std::filesystem::path GetUnifiedPackPath(const std::string& packId);
+
+		/**
 		 * Returns the real path to the Features directory containing feature INI files.
 		 * @return  <mod_root> / "Shaders" / "Features"
 		 */
@@ -251,6 +296,16 @@ namespace Util
 		 * @return Sanitized string safe for use as a filename
 		 */
 		std::string SanitizeFileName(std::string name);
+
+		/**
+		 * @brief Writes to a sibling temporary, then replaces the target, so a failure never leaves a truncated file.
+		 * @param context Human-readable description used in log messages
+		 * @return true when the target now holds the new contents
+		 */
+		bool WriteFileAtomically(const std::filesystem::path& path, std::string_view content, std::string_view context);
+
+		/** @brief Serializes JSON and writes it through WriteFileAtomically; a serialization failure leaves the target untouched. */
+		bool WriteJsonAtomically(const std::filesystem::path& path, const nlohmann::json& data, int indent, std::string_view context);
 	}
 
 	/**

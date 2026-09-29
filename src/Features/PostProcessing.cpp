@@ -53,13 +53,17 @@ void PostProcessing::DrawSettings()
 	ImGui::EndGroup();
 	ImGui::BeginGroup();
 	static std::string newPresetName = "";
-	ImGui::InputText("##NewPresetName", &newPresetName);
+	ImGui::SetNextItemWidth(220.0f);
+	ImGui::InputTextWithHint("##NewPresetName", T("feature.post_processing.save_name_hint", "Save as name..."), &newPresetName);
 
 	ImGui::SameLine();
 	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
 		if (!newPresetName.empty())
 			SavePresetTo(newPresetName);
 	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("%s", T("feature.post_processing.save_tooltip",
+									"Writes a JSON under PostProcessing/."));
 
 	ImGui::EndGroup();
 
@@ -325,7 +329,9 @@ void PostProcessing::LoadSettings(json& o_json)
 
 void PostProcessing::ProcessSettings(json& o_json)
 {
-	logger::info("Loading post processing settings...");
+	// Scene blends reload every frame, so no info-level log and no per-load SetupResources:
+	// settings-dependent resources are reconciled in Draw.
+	logger::debug("Loading post processing settings...");
 
 	for (auto& feat : pipeline) {
 		if (feat && o_json.contains(feat->GetType())) {
@@ -333,8 +339,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 				feat->enabled = o_json.value(feat->GetType(), json::object()).value("enabled", true);
 			json featSettings = o_json.value(feat->GetType(), json::object()).value("settings", json::object());
 			feat->LoadSettings(featSettings);
-			if (loaded)
-				feat->SetupResources();
 		}
 	}
 
@@ -856,7 +860,7 @@ PostProcessing::Settings PostProcessing::GetCommonBufferData()
 void PostProcessing::Prepass()
 {
 	if (!pendingSettings.empty()) {
-		logger::info("Processing pending post processing settings...");
+		logger::debug("Processing pending post processing settings...");
 		ProcessSettings(pendingSettings);
 		pendingSettings = {};
 	}

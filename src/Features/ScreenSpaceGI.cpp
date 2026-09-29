@@ -2,6 +2,7 @@
 
 #include <DirectXTex.h>
 
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Deferred.h"
 #include "DynamicCubemaps.h"
 #include "I18n/I18n.h"
@@ -106,7 +107,7 @@ void ScreenSpaceGI::DrawSettings()
 
 		int resolutionMode = settings.QuarterRes ? 2 : (settings.HalfRes ? 1 : 0);
 		bool resolutionChanged = false;
-		if (ImGui::BeginTable("SSGI Resolution", 3)) {
+		if (!SceneWidgetInterceptor::IsArmed() && ImGui::BeginTable("SSGI Resolution", 3)) {
 			ImGui::TableNextColumn();
 			resolutionChanged |= ImGui::RadioButton(T(TKEY("full_resolution"), "Full Resolution"), &resolutionMode, 0);
 
@@ -216,6 +217,11 @@ void ScreenSpaceGI::DrawSettings()
 			resetReblurHistory |= globals::features::nrd.DrawReblurSettings(settings.Reblur, showAdvanced, "ssgi_reblur");
 	}
 
+	// The buffer viewer has no scene-context meaning, so hide it while a Scene Manager replica
+	// is borrowing this panel to author overrides.
+	if (SceneWidgetInterceptor::IsArmed())
+		return;
+
 	///////////////////////////////
 	ImGui::SeparatorText(T(TKEY("debug"), "Debug"));
 
@@ -247,6 +253,8 @@ void ScreenSpaceGI::DrawSettings()
 
 void ScreenSpaceGI::LoadSettings(json& o_json)
 {
+	const auto previous = settings;
+
 	settings = o_json;
 	if (settings.QuarterRes)
 		settings.HalfRes = false;
@@ -254,7 +262,11 @@ void ScreenSpaceGI::LoadSettings(json& o_json)
 		settings.HalfRes = false;
 		settings.QuarterRes = false;
 	}
-	recompileFlag = true;
+	recompileFlag = recompileFlag ||
+	                settings.HalfRes != previous.HalfRes ||
+	                settings.QuarterRes != previous.QuarterRes ||
+	                settings.EnableGI != previous.EnableGI ||
+	                settings.EnableSH != previous.EnableSH;
 	resetReblurHistory = true;
 	outputReady = false;
 	hasMultiBounceHistory = false;

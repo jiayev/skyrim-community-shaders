@@ -225,9 +225,7 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 	if (auto popup = Util::CenteredPopupModal(popupId)) {
 		deleteConfirmationFrame = ImGui::GetFrameCount();
 		ImGui::Text("%s", T(TKEY("confirm_delete_saved_file"), "Are you sure you want to delete the saved settings file?"));
-		ImGui::Spacing();
 		ImGui::Separator();
-		ImGui::Spacing();
 
 		const float scale = Util::GetUIScale();
 		const float buttonWidth = 120.0f * scale;
@@ -284,7 +282,7 @@ bool Widget::BeginWidgetWindow()
 		ImGui::SetNextWindowFocus();
 		m_pendingFocus = false;
 	}
-	bool result = Util::BeginWithRoundedClose(GetWindowTitle().c_str(), &open, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
+	bool result = Util::BeginWithCustomHeader(GetWindowTitle().c_str(), &open, nullptr, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
 	UpdateWidgetTypeSize(GetWidgetTypeName());
 	return result;
 }
@@ -294,17 +292,18 @@ void Widget::ForceWeatherReinit(RE::TESWeather* weather)
 	auto* sky = globals::game::sky;
 	if (weather && sky && sky->currentWeather == weather) {
 		sky->ForceWeather(weather, true);
-		sky->ReleaseWeatherOverride();
+		// An engaged lock owns the override slot; releasing it flickers the sky until the lock reasserts.
+		if (EditorWindow::GetSingleton()->IsWeatherLocked())
+			EditorWindow::MaintainWeatherLock();
+		else
+			sky->ReleaseWeatherOverride();
 	}
 }
 
 void Widget::ForceCurrentWeatherReinit()
 {
-	auto* sky = globals::game::sky;
-	if (sky && sky->currentWeather) {
-		sky->ForceWeather(sky->currentWeather, true);
-		sky->ReleaseWeatherOverride();
-	}
+	if (auto* sky = globals::game::sky)
+		ForceWeatherReinit(sky->currentWeather);
 }
 
 void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather)
@@ -341,8 +340,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		const char* lockLabel = isLocked ? T(TKEY("unlock"), "Unlock") : T(TKEY("force_weather"), "Force Weather");
 
 		if (isLocked) {
-			ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kLockButtonColor);
-			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, WidgetUI::kLockButtonHoverColor);
+			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
 		}
 		if (ImGui::Button(lockLabel)) {
 			if (isLocked)
@@ -403,11 +402,13 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Save/Load/Revert/Delete group
 		if (showSaveLoadRevert) {
+			Util::ToolbarDivider(false);
 			iconButton("_Save", menu->uiIcons.saveSettings.texture, T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
 			iconButton("_Load", menu->uiIcons.loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
 			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, T(TKEY("revert_to_original"), "Revert to original game values"), [&]() { RevertChanges(); });
 
 			if (HasSavedFile() && menu->uiIcons.deleteSettings.texture) {
+				Util::ToolbarDivider(false);
 				ImGui::SameLine();
 				if (Util::ErrorImageButton((std::string(searchId) + "_Delete").c_str(), menu->uiIcons.deleteSettings.texture, buttonSize))
 					ImGui::OpenPopup("DeleteConfirmation");
@@ -443,6 +444,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 			// Save/Load/Revert/Delete group
 			if (showSaveLoadRevert) {
+				Util::ToolbarDivider(false);
 				textButton(T(TKEY("save"), "Save"), T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
 				textButton(T(TKEY("load"), "Load"), T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
 				ImGui::SameLine();
@@ -451,6 +453,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 				Util::AddTooltip(T(TKEY("revert_to_original"), "Revert to original game values"));
 
 				if (HasSavedFile()) {
+					Util::ToolbarDivider(false);
 					ImGui::SameLine();
 					if (Util::ErrorTextButton(T(TKEY("delete"), "Delete")))
 						ImGui::OpenPopup("DeleteConfirmation");

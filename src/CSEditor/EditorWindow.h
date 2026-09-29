@@ -73,6 +73,9 @@ public:
 	/** @brief Bottom Y of the viewport window, set during layout for palette positioning. */
 	float viewportBottomY = 0.0f;
 
+	/** @brief Last frame's viewport collapse state, so Draw() can skip the framebuffer copy. */
+	bool viewportCollapsed = false;
+
 	// Time control constants
 	static constexpr float kVanillaTimeScale = 20.0f;
 	static constexpr float kGameHourMax = 23.99f;
@@ -131,6 +134,10 @@ public:
 
 	/** @brief Draw the Objects browser window listing all editable form widgets. */
 	void ShowObjectsWindow();
+
+	/** @brief Draw a compact "Active: <weather>" line matching the indicator atop other object categories.
+	 *  @param drawTrailer Follow with a separator; pass false to keep adding to the same row. */
+	void DrawActiveWeatherIndicator(bool drawTrailer = true);
 
 	/** @brief Draw the game viewport preview window with render target display. */
 	void ShowViewportWindow();
@@ -221,8 +228,14 @@ public:
 	/** @brief Set by popup close-on-ESC to suppress the same key-up from also closing the editor. */
 	bool suppressNextEditorEscape = false;
 
+	/** @brief Closes the current popup on ESC without letting the same press close the editor. @return True if it closed. */
+	static bool ClosePopupOnEscape();
+
 	/** @brief Returns true if the editor can be opened (game is loaded and not in main menu). */
 	static bool CanBeOpen();
+
+	/** @brief Shows a category in the objects window, by its stable English ID. */
+	void SelectCategory(std::string category) { m_selectedCategory = std::move(category); }
 
 	/** @brief Disable Skyrim's vanity camera to prevent auto-rotation while editing. */
 	void DisableVanityCamera();
@@ -353,14 +366,6 @@ public:
 	 */
 	bool IsFavorite(const std::string& widgetId) const;
 
-	/**
-	 * @brief Navigate to and highlight a specific feature setting within a weather widget.
-	 * @param weather     The weather form to open.
-	 * @param featureName The feature tab name to select.
-	 * @param settingName The setting ID to scroll to and highlight.
-	 */
-	void OpenWeatherFeatureSetting(RE::TESWeather* weather, const std::string& featureName, const std::string& settingName);
-
 	/** @brief Destructor. Releases owned textures and widget resources. */
 	~EditorWindow();
 
@@ -379,6 +384,15 @@ private:
 
 	// Widget focus tracking for Ctrl+W
 	Widget* lastFocusedWidget = nullptr;
+
+	/** @brief Locks the current weather once any in-progress transition finishes, unless the user already locked one. */
+	void LockWeatherForOverlay();
+
+	/// True while the lock belongs to the overlay, so closing it only releases what it took.
+	bool weatherLockedByOverlay = false;
+
+	/// True from overlay open until its weather lock engages or the overlay closes.
+	bool overlayWeatherLockPending = false;
 
 	// Time control state
 	bool timePaused = false;

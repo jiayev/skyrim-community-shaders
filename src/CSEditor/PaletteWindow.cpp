@@ -29,7 +29,7 @@ void PaletteWindow::Draw()
 	ImGui::SetNextWindowPos(
 		ImVec2(displaySize.x - paletteWidth - pad, bottomY - paletteHeight),
 		layoutCond);
-	if (Util::BeginWithRoundedClose(T(TKEY("palette"), "Palette"), &open, ImGuiWindowFlags_NoFocusOnAppearing)) {
+	if (Util::BeginWithCustomHeader(T(TKEY("palette"), "Palette"), &open, nullptr, ImGuiWindowFlags_NoFocusOnAppearing)) {
 		if (ImGui::BeginTabBar("PaletteTabs")) {
 			if (ImGui::BeginTabItem(T(TKEY("colours"), "Colours"))) {
 				DrawColorsTab();
@@ -56,7 +56,6 @@ void PaletteWindow::DrawColorsTab()
 	// Favorites section at top
 	ImGui::SeparatorText(T(TKEY("favourites"), "Favourites"));
 	ImGui::TextWrapped("%s", T(TKEY("drag_colours_here"), "Drag colours here to save as favourites."));
-	ImGui::Spacing();
 
 	for (int i = 0; i < maxFavoriteSlots; i++) {
 		if (i > 0)
@@ -128,10 +127,6 @@ void PaletteWindow::DrawColorsTab()
 			ImGui::EndDragDropTarget();
 		}
 	}
-	ImGui::Spacing();
-	ImGui::Spacing();
-
-	// Recently Used section
 	ImGui::SeparatorText(T(TKEY("recently_used"), "Recently Used"));
 	auto recentColors = GetRecentColors(5);
 
@@ -166,15 +161,8 @@ void PaletteWindow::DrawColorsTab()
 					.c_str());
 		}
 	}
-	ImGui::Spacing();
-
-	// Most Used section
-	ImGui::Separator();
-	ImGui::Spacing();
-	ImGui::TextUnformatted(T(TKEY("most_used"), "Most Used"));
-	ImGui::Spacing();
+	ImGui::SeparatorText(T(TKEY("most_used"), "Most Used"));
 	ImGui::TextWrapped("%s", T(TKEY("fav_most_colours"), "Favourite/most commonly used colours here."));
-	ImGui::Spacing();
 
 	auto mostUsedColors = GetMostUsedColors(20);
 
@@ -245,20 +233,21 @@ void PaletteWindow::DrawValuesTab()
 				ImGui::SetClipboardText(std::to_string(entry->value).c_str());
 			}
 
+			// Drag source
+			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+				ImGui::SetDragDropPayload("VALUE_DND", &entry->value, sizeof(float));
+				ImGui::Text("%s: %.3f", entry->name.c_str(), entry->value);
+				ImGui::EndDragDropSource();
+			}
+
 			Util::AddTooltip(std::format("{}\n{}",
 				std::vformat(T(TKEY("used_times"), "Used {} times"), std::make_format_args(entry->useCount)),
 				T(TKEY("click_to_copy"), "Click to copy"))
 					.c_str());
 		}
 	}
-	ImGui::Spacing();
-	// Most Used section
-	ImGui::Separator();
-	ImGui::Spacing();
-	ImGui::TextUnformatted(T(TKEY("most_used"), "Most Used"));
-	ImGui::Spacing();
+	ImGui::SeparatorText(T(TKEY("most_used"), "Most Used"));
 	ImGui::TextWrapped("%s", T(TKEY("fav_most_values"), "Favourite/most commonly used values here."));
-	ImGui::Spacing();
 
 	auto mostUsedValues = GetMostUsedValues(20);
 
@@ -273,6 +262,13 @@ void PaletteWindow::DrawValuesTab()
 				copiedValueName = entry->name;
 				hasValueInClipboard = true;
 				ImGui::SetClipboardText(std::to_string(entry->value).c_str());
+			}
+
+			// Drag source
+			if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+				ImGui::SetDragDropPayload("VALUE_DND", &entry->value, sizeof(float));
+				ImGui::Text("%s: %.3f", entry->name.c_str(), entry->value);
+				ImGui::EndDragDropSource();
 			}
 
 			// Right-click to remove

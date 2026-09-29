@@ -7,6 +7,9 @@
 #include <ranges>
 #include <unordered_set>
 
+#include "CSEditor/SceneManager/FeatureOverwritesPanel.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Feature.h"
 #include "FeatureConstraints.h"
 #include "FeatureIssues.h"
@@ -16,27 +19,28 @@
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
 #include "Menu/ThemeManager.h"
-#include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
-#include "WeatherVariableRegistry.h"
 
 namespace
 {
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
-	constexpr std::array<const char*, 5> CORE_MENU_NAMES = {
-		"Home", "General", "Advanced", "Profiling", "Display"
+	constexpr std::array<const char*, 6> CORE_MENU_NAMES = {
+		"Home", "Presets", "General", "Advanced", "Profiling", "Display"
 	};
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
 	{
 		if (std::strcmp(canonicalName, "Home") == 0)
 			return T("menu.features.home", "Home");
+		if (std::strcmp(canonicalName, "Presets") == 0)
+			return T("menu.features.presets", "Presets");
 		if (std::strcmp(canonicalName, "General") == 0)
 			return T("menu.features.general", "General");
 		if (std::strcmp(canonicalName, "Advanced") == 0)
@@ -360,6 +364,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	auto menuList = std::vector<MenuFuncInfo>{
 		BuiltInMenu{ T("menu.features.home", "Home"), []() { HomePageRenderer::RenderHomePage(); } },
+		BuiltInMenu{ T("menu.features.presets", "Presets"), []() { PresetsPageRenderer::Render(); } },
 		BuiltInMenu{ T("menu.features.general", "General"), drawGeneralSettings },
 		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings },
 		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } }
@@ -614,6 +619,27 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 		ImGui::TextColored(StageTagColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
 	}
 
+	// A feature only authored for other scenes still gets a hollow dot, so its settings stay discoverable.
+	if (auto* sceneManager = globals::sceneSettingsManager; sceneManager->HasAnySceneEntriesForFeature(featureName)) {
+		const bool applying = sceneManager->IsFeatureSceneControlled(featureName);
+		ImGui::SameLine();
+		Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), applying);
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(applying ?
+									   T("menu.features.scene_indicator_overriding",
+										   "Scene Manager is overriding settings here. Blue settings show its values.") :
+									   T("menu.features.scene_indicator_configured",
+										   "Has Scene Manager settings for other times, weathers or locations."));
+
+		if (sceneManager->HasSketches(featureName)) {
+			ImGui::SameLine();
+			Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetSuccess()), true);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(T("menu.features.scene_indicator_sketched",
+					"Has settings sketched over the Scene Manager's values. They revert once you leave this feature."));
+		}
+	}
+
 	// Display version if loaded
 	if (isLoaded) {
 		ImGui::SameLine();
@@ -655,15 +681,11 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	bool hasFailedMessage = !feat->failedLoadedMessage.empty();
 
 	if (ImGui::BeginChild("##FeatureConfigFrame", { 0, 0 }, true)) {
-		// Compute scene-controlled state once for both header and settings
-		auto* sceneManager = globals::sceneSettingsManager;
-		bool sceneControlled = sceneManager->HasActiveSettingsForFeature(featureName) && !sceneManager->IsFeaturePaused(featureName);
-
 		// Render feature header with integrated action buttons
-		RenderFeatureHeader(feat, isDisabled, isLoaded, sceneControlled);
+		RenderFeatureHeader(feat, isDisabled, isLoaded);
 
 		// Render feature settings content
-		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage, sceneControlled);
+		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage);
 
 		// Render restore defaults button (floating in bottom-right)
 		RenderRestoreDefaultsButton(feat, isDisabled, isLoaded);
@@ -673,7 +695,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	RenderReactiveConstraintWarningDialog();
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded, bool sceneControlled)
+void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded)
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 	const auto featureName = feat->GetShortName();
@@ -690,7 +712,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
+	const char* exportButtonText = T("menu.features.export_overwrite", "Export Overwrite");
+	float exportButtonWidth = ImGui::CalcTextSize(exportButtonText).x + buttonPadding;
+	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
+
 	float totalButtonWidth = bootToggleWidth;
+	if (canExport) {
+		totalButtonWidth += exportButtonWidth + buttonSpacing;
+	}
 	if (!isDisabled && isLoaded && hasOverrides) {
 		totalButtonWidth += overrideButtonWidth + buttonSpacing;
 	}
@@ -749,44 +778,51 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 			bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
 	}
 
+	if (canExport) {
+		ImGui::SameLine();
+		if (ImGui::Button(exportButtonText, { exportButtonWidth, 0 }))
+			FeatureOverwritesPanel::BeginExport(feat);
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"%s",
+				T("menu.features.export_overwrite_tooltip",
+					"Export selected settings as a feature overwrite file.\n"
+					"Overwrites are loaded at startup."));
+		}
+	}
+
 	// Apply Override button (when feature has available overrides)
 	if (!isDisabled && isLoaded && hasOverrides) {
 		ImGui::SameLine();
-		if (sceneControlled)
-			ImGui::BeginDisabled();
 		if (ImGui::Button(overrideButtonText, { overrideButtonWidth, 0 })) {
+			// The override replaces the base settings, not the values the scene is applying over them.
+			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
 			if (feat->ReapplyOverrideSettings()) {
 				logger::info("Successfully reapplied override settings for {}", featureName);
 			} else {
 				logger::warn("Failed to reapply override settings for {}", featureName);
 			}
 		}
-		if (sceneControlled)
-			ImGui::EndDisabled();
 
 		if (auto _tt = Util::HoverTooltipWrapper()) {
-			if (sceneControlled) {
-				ImGui::Text(
-					"%s",
-					T("menu.features.cannot_apply_overrides_scene",
-						"Cannot apply overrides while scene-specific settings are active.\n"
-						"Pause scene settings for this feature first."));
-			} else {
-				ImGui::Text(
-					"%s",
-					T("menu.features.restore_override_tooltip",
-						"Restores original override settings from mod files.\n"
-						"This will discard your customizations and revert to\n"
-						"the mod author's recommended settings."));
-			}
+			ImGui::Text(
+				"%s",
+				T("menu.features.restore_override_tooltip",
+					"Restores original override settings from mod files.\n"
+					"This will discard your customizations and revert to\n"
+					"the mod author's recommended settings."));
 		}
 	}
+
+	// Drawn after all header items so the modal cannot clobber their hover state.
+	if (canExport)
+		FeatureOverwritesPanel::DrawExport();
 
 	// Restore cursor position after the title and separator
 	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage, bool sceneControlled)
+void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage)
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
 
@@ -796,48 +832,13 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::Text("%s", T("menu.features.enable_to_access_config", "Enable the feature above to access its configuration options."));
 	} else {
 		if (isLoaded) {
-			auto weatherRegistry = WeatherVariables::GlobalWeatherRegistry::GetSingleton();
-			if (weatherRegistry->HasWeatherSupport(feat->GetShortName())) {
-				bool paused = weatherRegistry->IsFeaturePaused(feat->GetShortName());
-				if (ImGui::Checkbox(T("menu.features.pause_weather_overrides", "Pause Weather Overrides"), &paused)) {
-					weatherRegistry->SetFeaturePaused(feat->GetShortName(), paused);
-				}
-				if (auto _tt = Util::HoverTooltipWrapper()) {
-					ImGui::Text(
-						"%s",
-						T("menu.features.pause_weather_tooltip",
-							"Temporarily disable weather-based setting adjustments for this feature.\n"
-							"This state is not saved."));
-				}
-				ImGui::Separator();
-			}
-
-			// Scene-specific settings toggle (Interior Only / TimeOfDay / Weather-Specific)
-			// Show toggle whenever scene entries exist for this feature, even if feature-paused
-			{
-				const auto& featureShortName = feat->GetShortName();
-				auto* sceneMgr = globals::sceneSettingsManager;
-				bool scenePaused = sceneMgr->IsFeaturePaused(featureShortName);
-				if (sceneControlled || scenePaused) {
-					bool active = !scenePaused;
-					if (Util::FeatureToggle("##PauseSceneSettings", &active))
-						sceneMgr->SetFeaturePaused(featureShortName, !active);
-					ImGui::SameLine();
-					ImGui::Text("%s", T("menu.features.scene_specific_settings", "Scene Specific Settings"));
-					if (auto _tt = Util::HoverTooltipWrapper()) {
-						ImGui::Text("%s", T(scenePaused ? "menu.features.scene_paused_tooltip" : "menu.features.scene_active_tooltip",
-											  scenePaused ? "Paused - click to resume" : "Active - click to pause"));
-					}
-					ImGui::Separator();
-				}
-			}
-
-			// Disable feature settings while scene overrides are actively applied (not paused)
-			if (sceneControlled)
-				ImGui::BeginDisabled();
-
 			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			feat->DrawSettings();
+			{
+				// Sketches live only while their feature is on screen; the next Update drops any other.
+				globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
+				SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
+				feat->DrawSettings();
+			}
 
 			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
@@ -845,9 +846,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 			}
 
 			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
-
-			if (sceneControlled)
-				ImGui::EndDisabled();
 
 			// --- Reactive constraint detection ---
 			// Compare the current full constraint set against g_knownConstraintKeys.
@@ -950,14 +948,14 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
 
 	auto& menu = *globals::menu;
-	if (menu.uiIcons.featureSettingRevert.texture) {
-		if (ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize)) {
-			feat->RestoreDefaultSettings();
-		}
-	} else {
-		if (ImGui::Button("R##RestoreDefaults", iconSize)) {
-			feat->RestoreDefaultSettings();
-		}
+	const bool restore = menu.uiIcons.featureSettingRevert.texture ?
+	                         ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize) :
+	                         ImGui::Button("R##RestoreDefaults", iconSize);
+	if (restore) {
+		feat->RestoreDefaultSettings();
+		// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
+		// the next resolve restores the pre-default values.
+		globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
 	}
 
 	ImGui::PopStyleColor(3);

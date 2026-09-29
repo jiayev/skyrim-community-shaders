@@ -11,12 +11,17 @@
 
 #include "CloudShadows.h"
 #include "Deferred.h"
+#include "Globals.h"
 #include "IBL.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	Effects11::Settings,
+	ActivePreset)
 
 bool Effects11::HasShaderDefine(RE::BSShader::Type)
 {
@@ -104,6 +109,49 @@ Effects11::PerFrame Effects11::GetCommonBufferData()
 void Effects11::DrawSettings()
 {
 	Effects11Editor::GetSingleton().DrawLauncher();
+}
+
+void Effects11::SyncActivePresetFromSettings()
+{
+	auto& presetManager = PresetManager::GetSingleton();
+	presetManager.DiscoverPresets();
+	if (!presetManager.SetActivePreset(settings.ActivePreset)) {
+		const auto repaired = presetManager.GetActivePresetId();
+		if (settings.ActivePreset != repaired) {
+			settings.ActivePreset = repaired;
+			// Defer disk write: LoadSettings runs mid State::Load; Save then would be unsafe.
+			activePresetNeedsPersist = true;
+		}
+	}
+}
+
+void Effects11::PersistActivePreset()
+{
+	settings.ActivePreset = PresetManager::GetSingleton().GetActivePresetId();
+	activePresetNeedsPersist = false;
+	if (globals::state)
+		globals::state->Save();
+}
+
+void Effects11::LoadSettings(json& o_json)
+{
+	settings = o_json;
+	SyncActivePresetFromSettings();
+}
+
+void Effects11::SaveSettings(json& o_json)
+{
+	settings.ActivePreset = PresetManager::GetSingleton().GetActivePresetId();
+	o_json = settings;
+}
+
+void Effects11::RestoreDefaultSettings()
+{
+	settings = {};
+	auto& presetManager = PresetManager::GetSingleton();
+	presetManager.DiscoverPresets();
+	presetManager.SelectDefaultPreset();
+	PersistActivePreset();
 }
 
 bool Effects11::IsPresetEnabled() const
@@ -203,6 +251,9 @@ void Effects11::LoadRaindropTexture()
 
 void Effects11::SetupResources()
 {
+	SyncActivePresetFromSettings();
+	if (activePresetNeedsPersist)
+		PersistActivePreset();
 	// Initialize() -> Apply() already loads the raindrop texture; do not load it again here.
 	EffectManager::GetSingleton().Initialize();
 }

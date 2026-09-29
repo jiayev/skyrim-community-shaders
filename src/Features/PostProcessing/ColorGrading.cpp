@@ -9,7 +9,6 @@
 #include "Features/HDRDisplay.h"
 #include "Features/LinearLighting.h"
 #include "Features/PostProcessing.h"
-#include "Menu.h"
 #include "OpenDRTIo.h"
 
 #include <DDSTextureLoader.h>
@@ -596,6 +595,9 @@ void ColorGrading::RestoreDefaultSettings()
 
 void ColorGrading::LoadSettings(json& o_json)
 {
+	const bool oldUseOpenDrt = settings.useOpenDrt;
+	const int oldTonemapperType = tonemapperType;
+
 	try {
 		settings = o_json;
 		auto& spaces = getAvailableColorSpaces();
@@ -611,6 +613,7 @@ void ColorGrading::LoadSettings(json& o_json)
 	} catch (const json::exception& e) {
 		logger::error("Failed to load Color Grading settings: {}", e.what());
 		RestoreDefaultSettings();
+		return;
 	}
 
 	try {
@@ -625,7 +628,8 @@ void ColorGrading::LoadSettings(json& o_json)
 		settings.odrtConfig = {};
 	}
 
-	recompileFlag = true;
+	// Recompiling drops the shaders until the async compile lands, so scene blends must not trigger it.
+	recompileFlag = recompileFlag || settings.useOpenDrt != oldUseOpenDrt || tonemapperType != oldTonemapperType;
 }
 
 void ColorGrading::SaveSettings(json& o_json)
@@ -1040,7 +1044,6 @@ void ColorGrading::Draw(TextureInfo& inout_tex)
 	globals::profiler->EndPass();
 
 	const bool curveReadbackActive =
-		Menu::GetSingleton()->IsEnabled &&
 		curveReadbackRequested &&
 		ImGui::GetCurrentContext() &&
 		curveReadbackRequestFrame >= ImGui::GetFrameCount() - 1;
