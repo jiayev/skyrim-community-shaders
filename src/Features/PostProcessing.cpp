@@ -18,10 +18,6 @@
 
 #include <format>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	PostProcessing::Settings,
-	DisableVanillaTonemapping)
-
 void PostProcessing::DrawSettings()
 {
 	static int pipelinePageNum = 0;
@@ -72,10 +68,13 @@ void PostProcessing::DrawSettings()
 
 	PostProcessingMode::DrawSelector();
 
-	ImGui::SameLine();
-	ImGui::BeginDisabled(PostProcessingMode::Get() != PostProcessingMode::Mode::PostProcessing);
-	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
-	ImGui::EndDisabled();
+	auto& linearLighting = globals::features::linearLighting;
+	if (linearLighting.loaded) {
+		ImGui::SameLine();
+		ImGui::BeginDisabled(PostProcessingMode::Get() != PostProcessingMode::Mode::PostProcessing);
+		ImGui::Checkbox(T("feature.linear_lighting.enable_linear_lighting", "Enable Linear Lighting"), (bool*)&linearLighting.settings.enableLinearLighting);
+		ImGui::EndDisabled();
+	}
 
 	ImGui::Separator();
 
@@ -326,9 +325,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 		}
 	}
 
-	if (o_json.contains("ppsettings"))
-		settings = o_json["ppsettings"];
-
 	if (o_json.contains("cinematic_camera")) {
 		json camJson = o_json["cinematic_camera"];
 		cinematicCamera.LoadSettings(camJson);
@@ -344,6 +340,7 @@ void PostProcessing::SaveSettings(json& o_json)
 	// callers verifying retention (Scene Manager) only see it once Prepass has consumed the load.
 	if (!pendingSettings.empty()) {
 		o_json = pendingSettings;
+		o_json.erase("ppsettings");
 		return;
 	}
 
@@ -358,11 +355,10 @@ void PostProcessing::SaveSettings(json& o_json)
 		}
 	}
 
-	o_json["ppsettings"] = settings;
-
 	json camJson{};
 	cinematicCamera.SaveSettings(camJson);
 	o_json["cinematic_camera"] = camJson;
+	o_json.erase("ppsettings");
 }
 
 std::vector<std::string> PostProcessing::LoadPresets()
@@ -455,7 +451,6 @@ void PostProcessing::RestoreDefaultSettings()
 		LoadPresetFrom("default");
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load default preset. Error: {}", e.what());
-		settings = {};
 		cinematicCamera.RestoreDefaultSettings();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
@@ -816,24 +811,12 @@ bool PostProcessing::WantsTonemapOwnership() const
 {
 	if (globals::features::linearLighting.IsLinearLightingActive())
 		return !globals::state->IsMainOrLoadingMenuOpen();
-	return !bypass && settings.DisableVanillaTonemapping != 0;
+	return !bypass;
 }
 
 bool PostProcessing::IsTonemapOwnedByEffects11() const
 {
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
-}
-
-PostProcessing::Settings PostProcessing::GetCommonBufferData()
-{
-	Settings data = settings;
-
-	// Effects11 outputs gamma-space SDR from its own tonemapper. Leaving this flag set would
-	// make ISHDR take its passthrough branch and HDROutputCS treat the scene as linear and
-	// already display-mapped, skipping AutoHDR and the BT.2020 conversion.
-	data.DisableVanillaTonemapping = globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing;
-
-	return data;
 }
 
 void PostProcessing::Prepass()

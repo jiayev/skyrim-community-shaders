@@ -1282,7 +1282,6 @@
     "feature.post_processing.depth_of_field_values": "景深数值：",
     "feature.post_processing.depth_of_field_values_detail": "景深强度：%.3f\n景深距离：%.3f\n景深范围：%.3f\n景深标志：%d\n天空景深模糊半径：%d",
     "feature.post_processing.description": "提供高级后处理图像效果，用于提升游戏画面质量。",
-    "feature.post_processing.disable_vanilla_tonemapping": "禁用原版色调映射",
     "feature.post_processing.do_f.adaptive_gather": "自适应采样",
     "feature.post_processing.do_f.adaptive_gather_desc": "使用固定的低采样数卷积核和感知弥散圆大小的图像金字塔。",
     "feature.post_processing.do_f.auto_focus": "自动对焦",

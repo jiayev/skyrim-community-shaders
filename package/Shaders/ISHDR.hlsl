@@ -150,7 +150,7 @@ PS_OUTPUT main(PS_INPUT input)
 		isHDR = false;
 
 #		if defined(POSTPROCESS)
-	if (SharedData::postProcessingSettings.DisableVanillaTonemapping) {
+	if (SharedData::TonemapOwner == SharedData::TonemapOwnerPostProcessing) {
 		if (!isHDR) {
 			inputColor = TransferFunctions::LinearToGamma22(inputColor);
 		}

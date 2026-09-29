@@ -308,8 +308,5 @@
             "ExposureCompensationEV": 0.0
         }
     },
-    "ppsettings": {
-        "DisableVanillaTonemapping": 1
-    },
     "preset_name": "default"
 }

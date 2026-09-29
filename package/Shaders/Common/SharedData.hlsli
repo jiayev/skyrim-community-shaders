@@ -6,6 +6,10 @@
 
 namespace SharedData
 {
+	static const uint TonemapOwnerVanilla = 0;
+	static const uint TonemapOwnerPostProcessing = 1;
+	static const uint TonemapOwnerEffects11 = 2;
+
 	cbuffer SharedData : register(b5)
 	{
 		float4 WaterData[25];
@@ -30,7 +34,7 @@ namespace SharedData
 		float WaterSystemHeight;  // TES::GetWaterHeight in camera-relative Z; -FLT_MAX when no water body found
 		uint PostWaterComposite;
 		uint ResetHistory;
-		float pad0;
+		uint TonemapOwner;
 		float4 AmbientSHR;
 		float4 AmbientSHG;
 		float4 AmbientSHB;
@@ -368,7 +372,6 @@ namespace SharedData
 		ExponentialHeightFogSettings exponentialHeightFogSettings;
 		TruePBRSettings truePBRSettings;
 		SkinData skinData;
-		PostProcessingSettings postProcessingSettings;
 	};
 
 	Texture2D<float4> DepthTexture : register(t17);

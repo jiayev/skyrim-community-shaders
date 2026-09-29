@@ -1464,7 +1464,6 @@
     "feature.post_processing.depth_of_field_values": "Depth of Field Values:",
     "feature.post_processing.depth_of_field_values_detail": "DOF Strength: %.3f\nDOF Distance: %.3f\nDOF Range: %.3f\nDOF Flags: %d\nDOF Sky Blur Radius: %d",
     "feature.post_processing.description": "Post Processing provides advanced image effects and enhancements to improve the visual quality of the game.",
-    "feature.post_processing.disable_vanilla_tonemapping": "Disable Vanilla Tonemapping",
     "feature.post_processing.do_f.adaptive_gather": "Adaptive Gather",
     "feature.post_processing.do_f.adaptive_gather_desc": "Uses a fixed low-sample kernel and a CoC-aware image pyramid.",
     "feature.post_processing.do_f.auto_focus": "Auto Focus",

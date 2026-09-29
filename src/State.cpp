@@ -204,8 +204,7 @@ State::TonemapOwner State::GetTonemapOwner()
 	const bool effects11CanRender = !IsMainOrLoadingMenuOpen();
 
 	// Effects11 wins ties: its effects form a complete ENB preset (tonemap, bloom, lens,
-	// adaptation) that looks wrong when only partially applied, whereas Post Processing
-	// degrades gracefully to the vanilla tonemap.
+	// adaptation) that looks wrong when only partially applied.
 	if (effects11.loaded && effects11CanRender && effects11.WantsTonemapOwnership())
 		tonemapOwner = TonemapOwner::kEffects11;
 	else if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
@@ -1157,6 +1156,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		data.SunColor = lighting.sun.GetColor();
 		data.MasserColor = lighting.masser.GetColor();
 		data.SecundaColor = lighting.secunda.GetColor();
+		data.TonemapOwner = static_cast<uint>(GetTonemapOwner());
 		sharedDataCB->Update(data);
 	}
 
