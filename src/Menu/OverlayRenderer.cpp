@@ -170,6 +170,15 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::ClearActiveID();
 	}
 
+	// Before the skip check so the editor's close edge is never missed.
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
+		editorWindow->open = false;
+		if (editorWindow->IsInPreviewMode())
+			editorWindow->ExitPreviewMode();
+	}
+	editorWindow->UpdateOpenState();
+
 	if (ShouldSkipRendering()) {
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
@@ -183,17 +192,9 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	auto* editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
-		editorWindow->open = false;
-		if (editorWindow->IsInPreviewMode())
-			editorWindow->ExitPreviewMode();
-	}
-	editorWindow->UpdateOpenState();
-
-	// The Effects 11 editor, the CS Editor and the Community Shaders menu are exclusive
+	// The Effects 11 editor and the Community Shaders menu are exclusive; the CS Editor hosts it.
 	auto& effects11Editor = Effects11Editor::GetSingleton();
-	if (effects11Editor.IsOpen() && (editorWindow->open || menu.IsEnabled))
+	if (effects11Editor.IsOpen() && menu.IsEnabled)
 		effects11Editor.Close(false);
 
 	if (editorWindow->open) {

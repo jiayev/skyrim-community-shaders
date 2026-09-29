@@ -1,7 +1,10 @@
 #include "EditorWindow.h"
 
 #include "../I18n/I18n.h"
+#include "FeatureSettingsWindow.h"
 #include "Features/CSEditor.h"
+#include "Features/Effects11.h"
+#include "Features/Effects11/Editor/Effects11Editor.h"
 #include "Features/HDRDisplay.h"
 #include "Features/Upscaling.h"
 #include "Globals.h"
@@ -29,7 +32,7 @@
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, selectedCategory, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, showFeaturesWindow, showPostProcessingWindow, selectedCategory, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
 
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled)
 {
@@ -1308,9 +1311,25 @@ void EditorWindow::RenderUI()
 			}
 			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
 			}
+			if (ImGui::Checkbox(T(TKEY("features_window"), "Features"), &settings.showFeaturesWindow))
+				Save();
+			if (ImGui::Checkbox(T(TKEY("post_processing_window"), "Post Processing"), &settings.showPostProcessingWindow))
+				Save();
+
+			// The editor, not Effects11Editor, owns restoring the main menu, hence Open/Close(false).
+			auto& effects11Editor = Effects11Editor::GetSingleton();
+			const bool effects11Loaded = globals::features::effects11.loaded;
+			bool effects11Open = effects11Editor.IsOpen();
+			ImGui::BeginDisabled(!effects11Loaded);
+			if (ImGui::Checkbox(T(TKEY("effects11_window"), "Effects 11"), &effects11Open))
+				effects11Open ? effects11Editor.Open(false) : effects11Editor.Close(false);
+			ImGui::EndDisabled();
+			if (!effects11Loaded)
+				Util::AddTooltip(T(TKEY("effects11_window_unavailable"), "Effects 11 is not loaded"), Util::kTooltipWhenDisabled);
 
 			if (ImGui::MenuItem(T(TKEY("reset_window_layout"), "Reset Window Layout"))) {
 				resetLayout = true;
+				Effects11Editor::GetSingleton().RequestLayoutReset();
 			}
 
 			ImGui::Separator();
@@ -1679,6 +1698,15 @@ void EditorWindow::RenderUI()
 	// Show palette window
 	PaletteWindow::GetSingleton()->Draw();
 
+	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
+	Effects11Editor::GetSingleton().Draw();
+
+	const bool featuresWasOpen = settings.showFeaturesWindow;
+	const bool postProcessingWasOpen = settings.showPostProcessingWindow;
+	FeatureSettingsWindow::Draw(settings.showFeaturesWindow, settings.showPostProcessingWindow);
+	if (featuresWasOpen != settings.showFeaturesWindow || postProcessingWasOpen != settings.showPostProcessingWindow)
+		Save();
+
 	if (resetLayout)
 		ResetWidgetTypeSizes();
 	resetLayout = false;
@@ -1741,11 +1769,17 @@ void EditorWindow::UpdateOpenState()
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
 		LockWeatherForOverlay();
+		Effects11Editor::GetSingleton().Close();  // Restores the menu first so returnToMenu below records it.
+		returnToMenu = globals::menu->IsEnabled;
+		globals::menu->IsEnabled = false;
 
 	} else if (!open && wasOpen) {
 		lightEditor.ResetOverrides();
 		ShowGameMenus();
 		BackgroundBlur::SetCSEditorActive(false);
+		Effects11Editor::GetSingleton().Close(false);
+		if (std::exchange(returnToMenu, false))
+			globals::menu->IsEnabled = true;
 		if (weatherLockedByOverlay) {
 			UnlockWeather();
 			weatherLockedByOverlay = false;

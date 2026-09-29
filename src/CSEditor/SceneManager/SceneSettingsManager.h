@@ -708,13 +708,14 @@ public:
 	// --- Baseline sketches (main menu) ---
 
 	/** @brief Records a main-menu edit of a feature's base value. Where a scene applies, the edit
-	 *  becomes a sketch the resolver holds in place until the sketches are dropped. */
+	 *  becomes a sketch the resolver holds in place until the sketches are dropped. Another
+	 *  feature's sketches are dropped first. */
 	void RecordBaselineEdit(const SettingIdentity& setting, const json& value);
 	/** @brief Whether a main-menu edit is currently held as a sketch at this address. */
 	bool IsSketched(const SettingIdentity& setting) const;
 	/** @brief Whether the held sketches belong to this feature. */
 	bool HasSketches(const std::string& featureShortName) const;
-	/// Keeps one feature's sketches alive through the next Update; any other feature's are dropped.
+	/// Keeps this feature's sketches alive through the next Update; without a retain from a drawn body they drop.
 	void RetainSketches(const std::string& featureShortName);
 
 	/** @brief The context supplying an address's winning value: narrowest location link, else weather, else

@@ -1097,7 +1097,7 @@ void Menu::ProcessInputEventQueue()
 				auto shaderCache = globals::shaderCache;
 				KeyAction keyActions[] = {
 					{ settings.ToggleKey, [this]() {
-						 if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+						 if (!HomePageRenderer::ShouldShowFirstTimeSetup() && !EditorWindow::GetSingleton()->open) {
 							 IsEnabled = !IsEnabled;
 							 if (IsEnabled)
 								 ImGui::GetIO().ClearInputKeys();  // Prevent toggle key from remaining "held" in ImGui after open.
@@ -1152,7 +1152,7 @@ void Menu::ProcessInputEventQueue()
 
 			// Hardcoded Shift+Enter toggle for the CS menu (always available)
 			if (event.IsDown() && key == VK_RETURN && (GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
-				if (!HomePageRenderer::ShouldShowFirstTimeSetup()) {
+				if (!HomePageRenderer::ShouldShowFirstTimeSetup() && !EditorWindow::GetSingleton()->open) {
 					IsEnabled = !IsEnabled;
 					if (IsEnabled)
 						ImGui::GetIO().ClearInputKeys();
@@ -1250,8 +1250,13 @@ void Menu::ProcessInputEventQueue()
 						// Screenshot lightbox takes priority over closing the menu.
 					} else if (editorWindow && editorWindow->IsInPreviewMode()) {
 						editorWindow->ExitPreviewMode();
-					} else if (editorWindow && editorWindow->open && editorWindow->ShouldHandleEscapeKey()) {
-						editorWindow->open = false;
+					} else if (editorWindow && editorWindow->open) {
+						// Both guards consume one-shot flags, so evaluate each unconditionally.
+						auto& hostedEffects11Editor = Effects11Editor::GetSingleton();
+						const bool editorHandlesEscape = editorWindow->ShouldHandleEscapeKey();
+						const bool effects11Allows = !hostedEffects11Editor.IsOpen() || hostedEffects11Editor.ShouldHandleEscapeKey();
+						if (editorHandlesEscape && effects11Allows)
+							editorWindow->open = false;
 					} else if (auto& effects11Editor = Effects11Editor::GetSingleton(); effects11Editor.IsOpen()) {
 						if (effects11Editor.ShouldHandleEscapeKey())
 							effects11Editor.Close();

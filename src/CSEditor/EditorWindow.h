@@ -301,6 +301,8 @@ public:
 		std::map<std::string, std::vector<std::string>> recentWidgets;
 		int maxRecentWidgets = 10;
 		bool showViewport = true;
+		bool showFeaturesWindow = false;
+		bool showPostProcessingWindow = false;
 		std::string selectedCategory = "Weather";
 
 		// Per-widget-type window sizes (serialized as JSON for persistence)
@@ -380,6 +382,8 @@ private:
 
 	/// True while the lock belongs to the overlay, so closing it only releases what it took.
 	bool weatherLockedByOverlay = false;
+	/** @brief The main menu was open when the editor opened, so closing the editor reopens it. */
+	bool returnToMenu = false;
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;

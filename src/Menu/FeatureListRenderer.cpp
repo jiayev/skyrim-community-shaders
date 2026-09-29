@@ -1,6 +1,7 @@
 #include "FeatureListRenderer.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <format>
 #include <imgui.h>
@@ -141,34 +142,6 @@ namespace
 		return MenuFonts::BeginTabItemWithFont(label, role, flags);
 	}
 
-	std::string TranslateFeatureCategory(std::string_view category)
-	{
-		if (category == FeatureCategories::kCharacters)
-			return T("feature.category.characters", "Characters");
-		if (category == FeatureCategories::kDisplay)
-			return T("feature.category.display", "Display");
-		if (category == FeatureCategories::kGrass)
-			return T("feature.category.grass", "Grass");
-		if (category == FeatureCategories::kLandscapeAndTextures)
-			return T("feature.category.landscape_and_textures", "Landscape & Textures");
-		if (category == FeatureCategories::kLighting)
-			return T("feature.category.lighting", "Lighting");
-		if (category == FeatureCategories::kMaterials)
-			return T("feature.category.materials", "Materials");
-		if (category == "Post-Processing")
-			return T("feature.category.post_processing", "Post-Processing");
-		if (category == FeatureCategories::kOther)
-			return T("feature.category.other", "Other");
-		if (category == FeatureCategories::kSky)
-			return T("feature.category.sky", "Sky");
-		if (category == FeatureCategories::kUtility)
-			return T("feature.category.utility", "Utility");
-		if (category == FeatureCategories::kWater)
-			return T("feature.category.water", "Water");
-
-		return std::string(category);
-	}
-
 	/**
 	 * @brief Draws a feature header with the feature name in large text and version in smaller text
 	 * @param featureName The display name of the feature
@@ -302,6 +275,78 @@ namespace
 
 	// "Don't show again" checkbox state inside the modal (reset each time popup opens).
 	bool g_dontShowAgainCheckbox = false;
+
+	/**
+	 * @brief Queues the warning popup for constraints that appeared since the last call; the first call only seeds.
+	 * Diffing every frame also catches changes made outside DrawSettings (e.g. Upscaling's render-loop resolutionScale).
+	 */
+	void DetectReactiveConstraints()
+	{
+		if (g_reactiveWarningShow)  // don't overwrite a pending popup
+			return;
+
+		auto currentConstraints = FeatureConstraints::GetAllActiveConstraints();
+
+		if (!g_knownConstraintKeysInitialised) {
+			// First time: seed known set, no popup
+			for (const auto& [settingId, result] : currentConstraints) {
+				g_knownConstraintKeys.insert(settingId.featureShortName + "|" + settingId.settingPath);
+			}
+			g_knownConstraintKeysInitialised = true;
+			return;
+		}
+
+		// Diff: find keys present now but not previously known
+		std::vector<std::pair<FeatureConstraints::SettingId, FeatureConstraints::ConstraintResult>> newConstraints;
+		std::unordered_set<std::string> currentKeys;
+		for (const auto& [settingId, result] : currentConstraints) {
+			std::string key = settingId.featureShortName + "|" + settingId.settingPath;
+			currentKeys.insert(key);
+			if (g_knownConstraintKeys.find(key) == g_knownConstraintKeys.end()) {
+				newConstraints.emplace_back(settingId, result);
+			}
+		}
+		// Update known set to current (removes keys for constraints that went away)
+		g_knownConstraintKeys = std::move(currentKeys);
+
+		if (!newConstraints.empty() && !globals::menu->GetSettings().SkipConstraintWarning) {
+			logger::info("Reactive constraint detection: {} new constraints", newConstraints.size());
+			for (const auto& [settingId, result] : newConstraints) {
+				logger::info("  - {}.{} forced to {} by {}", settingId.featureShortName, settingId.settingPath, FeatureConstraints::FormatConstraintValue(result.forcedValue), result.sources.empty() ? "?" : result.sources[0].featureName);
+			}
+			g_reactiveWarningShow = true;
+			g_reactiveWarningConstraints = std::move(newConstraints);
+			g_dontShowAgainCheckbox = false;
+		}
+	}
+}
+
+std::string FeatureListRenderer::TranslateCategory(std::string_view category)
+{
+	if (category == FeatureCategories::kCharacters)
+		return T("feature.category.characters", "Characters");
+	if (category == FeatureCategories::kDisplay)
+		return T("feature.category.display", "Display");
+	if (category == FeatureCategories::kGrass)
+		return T("feature.category.grass", "Grass");
+	if (category == FeatureCategories::kLandscapeAndTextures)
+		return T("feature.category.landscape_and_textures", "Landscape & Textures");
+	if (category == FeatureCategories::kLighting)
+		return T("feature.category.lighting", "Lighting");
+	if (category == FeatureCategories::kMaterials)
+		return T("feature.category.materials", "Materials");
+	if (category == "Post-Processing")
+		return T("feature.category.post_processing", "Post-Processing");
+	if (category == FeatureCategories::kOther)
+		return T("feature.category.other", "Other");
+	if (category == FeatureCategories::kSky)
+		return T("feature.category.sky", "Sky");
+	if (category == FeatureCategories::kUtility)
+		return T("feature.category.utility", "Utility");
+	if (category == FeatureCategories::kWater)
+		return T("feature.category.water", "Water");
+
+	return std::string(category);
 }
 
 void FeatureListRenderer::RenderFeatureList(
@@ -388,10 +433,9 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		});
 	}
 
-	// Define category order
-	std::vector<std::string> categoryOrder = { "Display", "Utility", "Characters", "Grass", "Lighting", "Materials", "Post-Processing", "Sky", "Landscape & Textures", "Water", "Other" };
 	// Add categorized features to menu with collapsible headers
-	for (const std::string& category : categoryOrder) {
+	for (const auto categoryName : FeatureCategories::kMenuOrder) {
+		const std::string category(categoryName);
 		if (categorizedFeatures.find(category) != categorizedFeatures.end() && !categorizedFeatures[category].empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
@@ -410,7 +454,7 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 
 	// Add any categories not in the predefined order
 	for (const auto& [category, features] : categorizedFeatures) {
-		if (std::find(categoryOrder.begin(), categoryOrder.end(), category) == categoryOrder.end() && !features.empty()) {
+		if (std::ranges::find(FeatureCategories::kMenuOrder, std::string_view(category)) == FeatureCategories::kMenuOrder.end() && !features.empty()) {
 			// Initialize expansion state if not exists
 			if (categoryExpansionStates.find(category) == categoryExpansionStates.end()) {
 				categoryExpansionStates[category] = true;  // Default to expanded
@@ -573,7 +617,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const CategoryHeader& head
 	{
 		MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
 		int count = Menu::categoryCounts[std::string(header.name)];
-		const auto categoryLabel = TranslateFeatureCategory(header.name);
+		const auto categoryLabel = TranslateCategory(header.name);
 		Util::DrawCategoryHeader(header.name.c_str(), categoryLabel.c_str(), isExpanded, count);
 	}
 
@@ -692,7 +736,7 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 	}
 	ImGui::EndChild();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
-	RenderReactiveConstraintWarningDialog();
+	DrawConstraintWarningDialog(pendingFeatureSelection);
 }
 
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bool isDisabled, bool isLoaded)
@@ -822,6 +866,29 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	ImGui::SetCursorScreenPos(cursorPosAfterHeader);
 }
 
+void FeatureListRenderer::DrawFeatureBody(Feature* feat)
+{
+	assert(feat && feat->loaded);
+
+	const ImVec2 cursorPosBefore = ImGui::GetCursorPos();
+	{
+		// Sketches live only while their feature is on screen; the next Update drops any other.
+		globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
+		SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
+		feat->DrawSettings();
+	}
+	const ImVec2 cursorPosAfter = ImGui::GetCursorPos();
+
+	DetectReactiveConstraints();
+
+	const float cursorEpsilon = 0.1f;
+	bool cursorMoved = (std::abs(cursorPosAfter.x - cursorPosBefore.x) > cursorEpsilon ||
+						std::abs(cursorPosAfter.y - cursorPosBefore.y) > cursorEpsilon);
+	if (!cursorMoved) {
+		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Disable, "%s", T("menu.features.no_settings_available", "There are no settings available for this feature."));
+	}
+}
+
 void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, bool isDisabled, bool isLoaded, bool hasFailedMessage)
 {
 	auto& themeSettings = globals::menu->GetSettings().Theme;
@@ -832,68 +899,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 		ImGui::Text("%s", T("menu.features.enable_to_access_config", "Enable the feature above to access its configuration options."));
 	} else {
 		if (isLoaded) {
-			ImVec2 cursorPosBefore = ImGui::GetCursorPos();
-			{
-				// Sketches live only while their feature is on screen; the next Update drops any other.
-				globals::sceneSettingsManager->RetainSketches(feat->GetShortName());
-				SceneWidgetInterceptor::Scope baselineScope({ .feature = feat, .baseline = true });
-				feat->DrawSettings();
-			}
+			DrawFeatureBody(feat);
 
 			if (feat != &globals::features::csEditor && ProfilingRenderer::HasFeatureTimers(feat->GetShortName())) {
 				ImGui::SeparatorText(T("menu.features.profiling", "Profiling"));
 				ProfilingRenderer::RenderFeatureTimers(feat->GetShortName());
-			}
-
-			ImVec2 cursorPosAfter = ImGui::GetCursorPos();
-
-			// --- Reactive constraint detection ---
-			// Compare the current full constraint set against g_knownConstraintKeys.
-			// On the very first frame we just seed the set (no popup); after that
-			// any key that wasn't previously known triggers the warning.
-			// This catches both same-frame changes (e.g. TerrainBlending toggle)
-			// and next-frame changes (e.g. Upscaling, whose resolutionScale is
-			// updated in the render loop, not in DrawSettings).
-			if (!g_reactiveWarningShow) {  // don't overwrite a pending popup
-				auto currentConstraints = FeatureConstraints::GetAllActiveConstraints();
-
-				if (!g_knownConstraintKeysInitialised) {
-					// First time: seed known set, no popup
-					for (const auto& [settingId, result] : currentConstraints) {
-						g_knownConstraintKeys.insert(settingId.featureShortName + "|" + settingId.settingPath);
-					}
-					g_knownConstraintKeysInitialised = true;
-				} else {
-					// Diff: find keys present now but not previously known
-					std::vector<std::pair<FeatureConstraints::SettingId, FeatureConstraints::ConstraintResult>> newConstraints;
-					std::unordered_set<std::string> currentKeys;
-					for (const auto& [settingId, result] : currentConstraints) {
-						std::string key = settingId.featureShortName + "|" + settingId.settingPath;
-						currentKeys.insert(key);
-						if (g_knownConstraintKeys.find(key) == g_knownConstraintKeys.end()) {
-							newConstraints.emplace_back(settingId, result);
-						}
-					}
-					// Update known set to current (removes keys for constraints that went away)
-					g_knownConstraintKeys = std::move(currentKeys);
-
-					if (!newConstraints.empty() && !globals::menu->GetSettings().SkipConstraintWarning) {
-						logger::info("Reactive constraint detection: {} new constraints", newConstraints.size());
-						for (const auto& [settingId, result] : newConstraints) {
-							logger::info("  - {}.{} forced to {} by {}", settingId.featureShortName, settingId.settingPath, FeatureConstraints::FormatConstraintValue(result.forcedValue), result.sources.empty() ? "?" : result.sources[0].featureName);
-						}
-						g_reactiveWarningShow = true;
-						g_reactiveWarningConstraints = std::move(newConstraints);
-						g_dontShowAgainCheckbox = false;
-					}
-				}
-			}
-
-			const float cursorEpsilon = 0.1f;
-			bool cursorMoved = (std::abs(cursorPosAfter.x - cursorPosBefore.x) > cursorEpsilon ||
-								std::abs(cursorPosAfter.y - cursorPosBefore.y) > cursorEpsilon);
-			if (!cursorMoved) {
-				ImGui::TextColored(themeSettings.StatusPalette.Disable, "%s", T("menu.features.no_settings_available", "There are no settings available for this feature."));
 			}
 		} else {
 			if (FeatureIssues::IsObsoleteFeature(feat->GetShortName())) {
@@ -965,7 +975,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	}
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog()
+void FeatureListRenderer::DrawConstraintWarningDialog(std::string& pendingFeatureSelection)
 {
 	if (!g_reactiveWarningShow) {
 		return;
@@ -988,6 +998,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 		ImGui::Spacing();
 		ImGui::Separator();
 		ImGui::Spacing();
+
+		std::string navigationTarget;  // Set on a link click so the table and popup still end cleanly.
 
 		// Table columns: Impacted Feature | Setting | Constrained By | Forced To
 		if (ImGui::BeginTable("##ReactiveConstraintTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
@@ -1013,11 +1025,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 						}
 					}
 					if (ImGui::Selectable(fmt::format("{}##imp{}", targetDisplayName, rowIndex).c_str())) {
-						pendingFeatureSelection = settingId.featureShortName;
-						ImGui::CloseCurrentPopup();
-						g_reactiveWarningShow = false;
-						g_reactiveWarningConstraints.clear();
-						return;
+						navigationTarget = settingId.featureShortName;
+						break;
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(T("menu.features.click_to_navigate", "Click to navigate to %s"), targetDisplayName.c_str());
@@ -1032,11 +1041,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 				ImGui::TableSetColumnIndex(2);
 				if (!result.sources.empty()) {
 					if (ImGui::Selectable(fmt::format("{}##src{}", result.sources[0].featureName, rowIndex).c_str())) {
-						pendingFeatureSelection = result.sources[0].featureShortName;
-						ImGui::CloseCurrentPopup();
-						g_reactiveWarningShow = false;
-						g_reactiveWarningConstraints.clear();
-						return;
+						navigationTarget = result.sources[0].featureShortName;
+						break;
 					}
 					if (auto _tt = Util::HoverTooltipWrapper()) {
 						ImGui::Text(T("menu.features.click_to_navigate", "Click to navigate to %s"), result.sources[0].featureName.c_str());
@@ -1059,6 +1065,15 @@ void FeatureListRenderer::DrawMenuVisitor::RenderReactiveConstraintWarningDialog
 			}
 
 			ImGui::EndTable();
+		}
+
+		if (!navigationTarget.empty()) {
+			pendingFeatureSelection = navigationTarget;
+			g_reactiveWarningShow = false;
+			g_reactiveWarningConstraints.clear();
+			ImGui::CloseCurrentPopup();
+			ImGui::EndPopup();
+			return;
 		}
 
 		ImGui::Spacing();
