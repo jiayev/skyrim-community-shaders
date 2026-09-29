@@ -13,7 +13,6 @@
 #	include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #	include "Features/DrawcallLimitFix/Engine/EngineStates.h"
 #	include "Features/DrawcallLimitFix/Engine/FaceSnapshots.h"
-#	include "Features/DrawcallLimitFix/Common/FrameRecordPatches.h"
 #	include "Features/DrawcallLimitFix/Draws/GpuResources.h"
 #	include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
@@ -379,26 +378,45 @@ namespace DCLF
 			std::vector<Slot> slots;
 		};
 
+		/**
+		 * @brief The scene's tables on the GPU, one set for every epoch - the shadow views', Skylighting's, the Z-prepass's and
+		 * the colour segment's: the object records (t127), the bone rows (t126), the geometry table (BuildDraws' draws) and the
+		 * NPC face shapes' positions (the face draws' second stream). Kept by one store each (Impl::objectStore, boneStore,
+		 * geometryStore), whose builds run in frame order - the shadow build, the Z-prepass's, the colour build's, each joined
+		 * before the next is kicked - so each commit sends what changed since the version the buffers hold, which the commit
+		 * before it wrote. Created with the first epoch's resources and kept across their recreation.
+		 */
+		struct SceneBuffers
+		{
+			std::shared_ptr<org::Buffer> objects, bones, geometries, facePositions;
+			// Their SRVs' descriptor heap indices, and the positions' address: a growth gives the buffer new ones (the old ones
+			// are retired once the GPU is done with them), so every build takes them from here, after ReserveSceneTables.
+			std::uint32_t objectsIndex = 0, bonesIndex = 0;
+			std::uint64_t facePositionsAddress = 0;
+			// What each holds (GpuLayouts.h, kInitialObjects), grown by ReserveSceneTables; `generation` counts the growths, so a
+			// batch staged before one is not submitted after it.
+			std::uint32_t objectCapacity = 0, geometryRows = 0, boneRows = 0, faceVertices = 0;
+			std::uint64_t generation = 0;
+			std::uint32_t growths = 0;  // since the last report
+			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
+			// The versions of the stores' records, rows and slots the buffers hold, written by the commit that uploads them.
+			TablesHeld held;
+		};
+
 		struct Resources
 		{
 			std::vector<FrameBuffer> frameBuffers;
-			std::shared_ptr<org::Buffer> constants;
 			// The main pass's rows (DrawPipelines.h, kMaterialRowBytes / kPipelineRowBytes), one table each for both segments,
 			// indexed by the scene's material and pipeline slots; grown before an epoch to the tables' slot counts
 			// (Impl::ReserveMainSequences). The versions of the kept rows (MainRows) they hold: 0 in a new backing.
 			GrowableRows materialRows, pipelineRows;
 			std::uint64_t materialRowsHeld = 0, pipelineRowsHeld = 0;
-			// The per-object records the DCLF_BINDLESS builds read, at t127 of every draw of the epoch.
-			std::shared_ptr<org::Buffer> objects;
-			std::uint32_t objectsIndex = 0;  // its SRV's descriptor heap index
-			// The bone palette rows the skinned draws read, at t126 (kBonesBufferRegister).
-			std::shared_ptr<org::Buffer> bones;
-			std::uint32_t bonesIndex = 0;
-			// NPC face shapes' positions, the draws' second stream: the shadow epoch's buffer, this epoch's own copy.
-			std::shared_ptr<org::Buffer> facePositions;
-			std::uint64_t facePositionsAddress = 0;
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
-			std::shared_ptr<org::Buffer> inputs, geometries, sequences, count;  // BuildDraws: in, in, out, out
+			// The scene's tables, every epoch's (SceneBuffers): the object records, bone rows, geometry table and face positions.
+			std::shared_ptr<SceneBuffers> scene;
+			std::shared_ptr<org::Buffer> inputs, sequences, count;  // BuildDraws: in, out, out (and the scene's geometries)
+			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum, the feedback slots): the scene's
+			// object capacity, grown with it (ReserveObjectBuffers).
+			std::uint32_t objectCapacity = 0;
 			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
 			// decal group. Grown before an epoch to hold every draw the scene can produce (Impl::ReserveMainSequences).
 			std::uint32_t sequenceDraws = 0, sequenceDecals = 0;
@@ -407,16 +425,11 @@ namespace DCLF
 			// 1 colour), written by the commit that uploads it.
 			std::shared_ptr<org::Buffer> inputsDepth;
 			std::array<std::uint64_t, 2> residentUploaded{};
-			// The version of the persistent object records (ObjectRecordStore) `objects` holds, written by the commit that
-			// uploads it; 0 for a new buffer, which no version is. Likewise the bone rows (BonesStore) and the geometry slots'
-			// draws (GeometryStore).
-			TablesHeld tablesHeld;
 			// The frame lighting version (SceneStore::Tables::frameLightingVersion) its frame slot holds (kFrameSlotLighting).
 			std::uint32_t frameLightingUploaded = 0;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
 			winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
-			std::uint64_t constantsAddress = 0;
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
@@ -457,6 +470,7 @@ namespace DCLF
 				struct Slot
 				{
 					std::shared_ptr<org::Buffer> staging;
+					std::uint32_t capacity = 0;  // the objects its staging holds (grown while it is free)
 					std::atomic<std::uint32_t> state{ Free };
 					std::uint64_t fenceValue = 0;
 					std::uint32_t frame = 0, stamp = 0, objects = 0;
@@ -495,7 +509,7 @@ namespace DCLF
 		{
 			std::array<org::DeclaredViewToken, kColorTargets> targets{};
 			org::DeclaredViewToken depth;
-			org::ResourceBindingToken sequences, count, materialRows, pipelineRows, constants, objects, bones;
+			org::ResourceBindingToken sequences, count, materialRows, pipelineRows, objects, bones;
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
 		};
@@ -736,10 +750,13 @@ namespace DCLF
 			rhi::DescriptorHeapHandle samplerHeap{};
 			ShadowIndirectState indirect{};
 			std::vector<ShadowFrameView> views;
+			// The latch block the views' values were written to (ShadowResources::latch, replaced when the slots grow): read by
+			// the passes' preparation from here, on whichever thread prepares them.
+			std::shared_ptr<const org::LatchBlock> latch;
 
 			bool SameShape(const ShadowFrame& o) const
 			{
-				return SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
+				return latch == o.latch && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
 				       SameHandle(indirect.layout, o.indirect.layout) && SameHandle(indirect.set, o.indirect.set) && SameHandle(indirect.signature, o.indirect.signature) &&
 				       views == o.views;
 			}
@@ -767,22 +784,22 @@ namespace DCLF
 		{
 			// The explicit DGC preprocesses' state lists: the shadow views' pass, Skylighting's.
 			std::shared_ptr<PreprocessStates> preprocessShadow, preprocessSky;
-			std::shared_ptr<org::Buffer> constants, objects, bones, geometries, visibility;
+			std::shared_ptr<org::Buffer> constants, visibility;
+			std::uint32_t objectCapacity = 0;  // what visibility and the inputs hold, as Resources::objectCapacity
 			// The material rows every view's draws name (ShadowMaterialRow), grown with the kept state.
 			GrowableRows materialRows;
-			// NPC face shapes' positions (SceneStore::Tables::faceStreams), a region per shape, read by the draws as
-			// the second vertex stream. A region is uploaded when its snapshot's generation is not the one it holds.
-			std::shared_ptr<org::Buffer> facePositions;
-			std::uint64_t facePositionsAddress = 0;
-			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
+			// The scene's tables, every epoch's (SceneBuffers).
+			std::shared_ptr<SceneBuffers> scene;
 			std::array<std::shared_ptr<org::Buffer>, kShadowModeCount> inputs;               // per render mode
-			std::array<std::shared_ptr<org::Buffer>, kMaxShadowViews> sequences, count;      // per view slot
-			// Each slot's sequence buffer, in draws: grown before the epoch that uses the slot to hold every draw the scene can
-			// produce (Impl::ReserveShadowSequences).
-			std::array<std::uint32_t, kMaxShadowViews> sequenceDraws{};
-			std::array<winrt::com_ptr<ID3D11Buffer>, kMaxShadowViews> countD3D11;             // the counters, read back
-			std::uint32_t objectsIndex = 0, bonesIndex = 0;
-			TablesHeld tablesHeld;  // as Resources::tablesHeld
+			// Per view slot (kSkySlot, then the views'), as many as the latch layout's viewSlots (Impl::ReserveShadowViews):
+			// its sequence and count buffers, its sequence buffer's draws - grown before the epoch that uses the slot to hold
+			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
+			std::vector<std::shared_ptr<org::Buffer>> sequences, count;
+			std::vector<std::uint32_t> sequenceDraws;
+			std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
+			// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
+			GrowableRows viewBlocks;
+			ShadowLatchLayout latchLayout;
 			// The kept shadow state's versions (ShadowKept) each mode's input buffer and the material rows hold: 0 when a build
 			// without the kept state wrote the buffer, or when the rows' backing is new.
 			std::array<std::uint64_t, kShadowModeCount> inputsUploaded{};
@@ -800,7 +817,8 @@ namespace DCLF
 			std::atomic<std::shared_ptr<const ShadowFrame>> skyFrame;
 			std::shared_ptr<const ShadowFrame> skyPublished;
 			std::uint64_t shapeGenerations = 0;
-			// Per frame slot, one BuildDrawsLatch per view slot.
+			// Per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows (latchLayout); a new block when either
+			// grows. The passes read it from the published frame (ShadowFrame::latch).
 			std::shared_ptr<org::LatchBlock> latch;
 			rhi::CommandSignaturePtr dispatchSignature;
 			// This frame's views as the engine named them (render thread), for the culling readback's report.
@@ -859,7 +877,7 @@ namespace DCLF
 		class ConstantArena
 		{
 		public:
-			void Reset(std::uint64_t a_capacity = kConstantBytes)
+			void Reset(std::uint64_t a_capacity)
 			{
 				bytes.clear();
 				capacity = a_capacity;
@@ -880,7 +898,7 @@ namespace DCLF
 
 		private:
 			std::vector<std::byte> bytes;
-			std::uint64_t capacity = kConstantBytes;
+			std::uint64_t capacity = 0;
 		};
 
 		// ---------------------------------------------------------------------------------------------
@@ -952,7 +970,7 @@ namespace DCLF
 			// records: the material rows' table (the shadow views' ShadowMaterialRow, the main pass's MaterialRow); pipelineRows: the
 			// main pass's pipeline rows.
 			std::uint64_t constants = 0, records = 0, pipelineRows = 0, frameConstants = 0;
-			std::uint64_t facePositions = 0;  // the shadow epoch's face positions buffer (kFacePositionVertices float4s)
+			std::uint64_t facePositions = 0;  // the face positions buffer (SceneBuffers::facePositions)
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
 			std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
 			const void* identity = nullptr;
@@ -963,10 +981,10 @@ namespace DCLF
 		/**
 		 * @brief The per-object records (BindlessObject) one objects buffer holds, kept across frames (drawcall-limit-fix.md,
 		 * "Persistent draw state", Step 3): a record is written again only when the change log names a column it is built
-		 * from, and the buffer is sent what changed since the version it holds (KeptArray). One for the main epochs' buffer,
-		 * one for the shadow epoch's. Its builds run in frame order - the shadow build, then the Z-prepass, then the colour
-		 * build, each joined (or cancelled, which waits) before the next is kicked, on the one worker or inline - so nothing
-		 * else writes it meanwhile; `collisions` counts it if anything ever does.
+		 * from, and the buffer is sent what changed since the version it holds (KeptArray). One, for every epoch's builds
+		 * (SceneBuffers). Its builds run in frame order - the shadow build, then the Z-prepass, then the colour build, each
+		 * joined (or cancelled, which waits) before the next is kicked, on the one worker or inline - so nothing else writes
+		 * it meanwhile; `collisions` counts it if anything ever does.
 		 */
 		struct ObjectRecordStore
 		{
@@ -987,7 +1005,7 @@ namespace DCLF
 		 * the extras - read straight from the tables' arrays, and journalled as rows, so the buffer is sent the rows changed
 		 * since the version it holds. The change log names them: a palette's rows (kChangePalette), its place (kChangeSkin),
 		 * an extras block's rows or place (kChangeExtras). A new capacity moves everything past the palettes, so it is a
-		 * resync. One for the main epochs' buffer, one for the shadow epoch's; in frame order like ObjectRecordStore.
+		 * resync. One, for every epoch's builds (SceneBuffers); in frame order like ObjectRecordStore.
 		 */
 		struct BonesStore
 		{
@@ -1029,7 +1047,7 @@ namespace DCLF
 		template <class Emit>
 		std::size_t EmitBones(const BonesOut& a_out, std::uint64_t a_held, BonesStore* a_parity, Emit&& a_emit)
 		{
-			const std::uint32_t rows = std::min<std::uint32_t>(a_out.Rows(), kMaxBoneRows);
+			const std::uint32_t rows = a_out.Rows();
 			if (!rows || !a_out.bones)
 				return 0;
 			const std::uint64_t capacity = a_out.capacity;
@@ -1054,7 +1072,7 @@ namespace DCLF
 		/** @brief CS_DCLF_PERSISTENT_PARITY: the rows the buffer holds, as uploaded, against the tables' now. */
 		inline void CheckBones(BonesStore& a_store, const BonesOut& a_out)
 		{
-			const std::uint32_t rows = std::min<std::uint32_t>(a_out.Rows(), kMaxBoneRows);
+			const std::uint32_t rows = a_out.Rows();
 			if (a_store.uploaded.size() < std::size_t(rows) * 4)
 				return;
 			bool same = true;
@@ -1087,8 +1105,8 @@ namespace DCLF
 
 		/**
 		 * @brief The geometry slots' draws one geometry buffer holds, kept across builds (Step 7): repacked from the tables'
-		 * geometry log (Tables::geometryLog), and sent as the slots changed since the version the buffer holds. One for the
-		 * main epochs' buffer, one for the shadow epoch's; in frame order like ObjectRecordStore.
+		 * geometry log (Tables::geometryLog), and sent as the slots changed since the version the buffer holds. One, for every
+		 * epoch's builds (SceneBuffers); in frame order like ObjectRecordStore.
 		 */
 		struct GeometryStore
 		{
@@ -1200,6 +1218,19 @@ namespace DCLF
 			});
 			return sent;
 		}
+		/**
+		 * @brief A build's scene rows and inputs against the capacities reserved before its inputs were taken (ReserveSceneTables):
+		 * past them is a defect of that reserve, never data to drop.
+		 */
+		inline void CheckSceneCapacity(const SceneBuffers& a_scene, std::size_t a_objects, std::size_t a_geometries, std::size_t a_boneRows, std::size_t a_inputs,
+			std::uint32_t a_inputCapacity, const char* a_what)
+		{
+			if (a_objects <= a_scene.objectCapacity && a_geometries <= a_scene.geometryRows && a_boneRows <= a_scene.boneRows && a_inputs <= a_inputCapacity)
+				return;
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {}'s build is past its tables: {} objects of {}, {} geometry rows of {}, {} bone rows of {}, {} inputs of {}",
+				a_what, a_objects, a_scene.objectCapacity, a_geometries, a_scene.geometryRows, a_boneRows, a_scene.boneRows, a_inputs, a_inputCapacity));
+		}
+
 		inline void PatchRowAddresses(MaterialRow& a_row, std::uint64_t a_address)
 		{
 			auto& header = HeaderOf(a_row);
@@ -1221,7 +1252,7 @@ namespace DCLF
 		{
 			std::uint32_t frameNumber = 0;
 			bool depthOnly = false;
-			bool dedupParity = false, bindlessParity = false;
+			bool bindlessParity = false;
 			bool withholding = false;
 			RE::NiPoint3 eye, previousEye;
 			std::uint32_t vsFrameMask = 0, psFrameMask = 0;  // the frame slots the commit supplies
@@ -1251,7 +1282,6 @@ namespace DCLF
 		struct MainPayload
 		{
 			MainInputs inputs;
-			ConstantArena arena;
 			std::vector<std::shared_ptr<const void>> bindingOwners;  // exact roots used by this payload, including clean kept rows
 			std::vector<DrawSequence> sequences;  // CPU templates of BuildDraws' output
 			std::array<std::vector<DrawSequence>, kDecalGroups> decalTemplates;  // by group and slot
@@ -1304,6 +1334,7 @@ namespace DCLF
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
 			const void* stagedFor = nullptr;
 			std::uint64_t stagedRowsGeneration = 0;
+			std::uint64_t stagedSceneGeneration = 0;  // the scene tables' (SceneBuffers::generation) the batch was staged against
 			// The segment's resident region (ResidentRegion): its inputs lead the input buffer, uploaded when residentVersion
 			// is not the one the buffer holds (Resources::residentUploaded); inputList follows them.
 			KeptView<DrawInput> resident;
@@ -1318,7 +1349,7 @@ namespace DCLF
 				staged.reset();
 				stagedFor = nullptr;
 				stagedRowsGeneration = 0;
-				arena.Reset();
+				stagedSceneGeneration = 0;
 				bindingOwners.clear();
 				sequences.clear();
 				inputList.clear();
@@ -1460,7 +1491,7 @@ namespace DCLF
 				stagedSlots = 0;
 				claims = {};
 				sunExclusion.reset();
-				arena.Reset();
+				arena.Reset(kShadowConstantBytes);
 				frameRecord = {};
 				materialRows.Reset();
 				rowsWanted = waitingRows = 0;
@@ -1491,7 +1522,7 @@ namespace DCLF
 		void ForEachDrawnGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw)
 		{
 			std::uint32_t slot = a_firstSlot;
-			for (std::uint32_t i = 0; i < kMaxSkinPartitions && slot < a_tables.geometries.size() && slot < kMaxGeometries; ++i) {
+			for (std::uint32_t i = 0; i < kMaxSkinPartitions && slot < a_tables.geometries.size(); ++i) {
 				if (a_partitions == 0 || ((a_partitions >> i) & 1))
 					a_draw(slot);
 				if ((a_partitions >> (i + 1)) == 0)
@@ -1597,14 +1628,13 @@ namespace DCLF
 		// BSGraphics::VertexDesc: the position attribute's flag in the second stream (bit 54 + attribute 0).
 		constexpr std::uint64_t kPositionInSecondStream = 1ull << 54;
 
-		// The GeometryDraw of object a_object's positions, or ~0u: not a face shape, no positions buffer, or past
-		// kMaxGeometries. AppendFaceStreams writes them at these indices.
+		// The GeometryDraw of object a_object's positions, or ~0u: not a face shape, or no positions buffer. AppendFaceStreams
+		// writes them at these indices, after the slots (the geometry table holds both: ReserveSceneTables).
 		inline std::uint32_t FaceStreamGeometry(const SceneStore::Tables& a_tables, std::size_t a_object, std::uint64_t a_positions)
 		{
 			if (!a_positions || a_object >= a_tables.faceStream.size() || a_tables.faceStream[a_object] == kNoFaceStream)
 				return ~0u;
-			const std::size_t index = std::min<std::size_t>(a_tables.geometries.size(), kMaxGeometries) + a_tables.faceStream[a_object];
-			return index < kMaxGeometries ? static_cast<std::uint32_t>(index) : ~0u;
+			return static_cast<std::uint32_t>(a_tables.geometries.size() + a_tables.faceStream[a_object]);
 		}
 
 		inline bool IsFaceObject(const SceneStore::Tables& a_tables, std::size_t a_object)
@@ -1619,8 +1649,6 @@ namespace DCLF
 				return;
 			auto& a_out = a_geometries.faces;
 			for (const auto& stream : a_tables.faceStreams) {
-				if (a_geometries.SlotCount() + a_out.size() >= kMaxGeometries)
-					break;
 				GeometryDraw draw{};
 				draw.vertexBufferAddress = a_positions + std::uint64_t(stream.region) * 16;
 				draw.vertexBufferSize = stream.vertexCount * 16;
@@ -1677,9 +1705,6 @@ namespace DCLF
 			std::vector<std::byte> vs;
 			std::vector<std::byte> ps;
 			GeometryPatchOffsets offsets;
-			// With DCLF_BINDLESS nothing in the group is per-object, so the pipeline's objects share one pair of
-			// arena blocks instead of allocating, copying and patching a pair each.
-			std::uint64_t vsAddress = 0, psAddress = 0;
 		};
 
 		/**
@@ -1705,8 +1730,6 @@ namespace DCLF
 		/** @brief ResidentRegion::indexOf: the object is not in the region. */
 		constexpr std::uint32_t kNoRegion = ~0u;
 		constexpr std::uint64_t kNoPair = ~0ull;  // a region entry without bindings (a cull-only candidate)
-		// What the region leaves the per-frame loop of the input and draw capacity (decals have their own ranges).
-		constexpr std::uint32_t kLoopReserve = 2048;
 
 		/** @brief CS_DCLF_RESIDENT_DRAW_PARITY=1: every 60 frames, each region entry written again from the tables and compared. */
 		inline bool ResidentDrawParityEnabled()
@@ -2127,7 +2150,7 @@ namespace DCLF
 		{
 			auto sameEye = [](const RE::NiPoint3& a, const RE::NiPoint3& b) { return std::memcmp(&a, &b, sizeof(RE::NiPoint3)) == 0; };
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly &&
-			       a_job.dedupParity == a_epoch.dedupParity && a_job.bindlessParity == a_epoch.bindlessParity && a_job.withholding == a_epoch.withholding &&
+			       a_job.bindlessParity == a_epoch.bindlessParity && a_job.withholding == a_epoch.withholding &&
 			       sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
 			       a_job.vsFrameMask == a_epoch.vsFrameMask && a_job.psFrameMask == a_epoch.psFrameMask && a_job.decalCount == a_epoch.decalCount &&
 			       a_job.drawnCommitted == a_epoch.drawnCommitted && a_job.drawnResync == a_epoch.drawnResync &&
@@ -2266,7 +2289,7 @@ namespace DCLF
 	using namespace Draws;
 
 	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool);
-	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::uint32_t a_slots,
+	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::span<const std::shared_ptr<org::Buffer>> a_counts,
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool);
 
 	struct IndirectDraws::Impl
@@ -2332,6 +2355,12 @@ namespace DCLF
 		void ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first = 0);
 		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
 		void ReserveShadowRows();
+		/**
+		 * @brief View slots for Skylighting's map and a_views views, and pipeline map rows of a_keys key slots, before the epoch:
+		 * more slots are more buffers, which the shadow passes declare, so the graph is built again; either growth is a new
+		 * latch block.
+		 */
+		void ReserveShadowViews(std::uint32_t a_views, std::uint32_t a_keys);
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<std::uint32_t, kShadowModeCount>& a_modeRasterStates) const;
@@ -2366,20 +2395,29 @@ namespace DCLF
 		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> commitStagedPool;
 		std::array<BuildCache, 2> buildCaches;  // indexed like mainPayload
 		BuildCache* CacheFor(std::size_t a_job) { return &buildCaches[a_job]; }
-		// The persistent object records: the main epochs' buffer's (both segments'), and the shadow epoch's.
-		ObjectRecordStore mainObjects, shadowObjects;
+		// The scene tables (SceneBuffers) and their stores, every epoch's: the builds run in frame order, each joined before
+		// the next is kicked (KickShadowBuild and KickMainJob drop a job still outstanding).
+		std::shared_ptr<SceneBuffers> scene;
+		/** @brief The scene tables, created once (render thread). False when they have no device address. */
+		bool EnsureSceneBuffers(rhi::Device a_device);
+		/**
+		 * @brief The scene tables grown to hold what a_tables does, and the per-object buffers with them (ReserveObjectBuffers).
+		 * Render thread, before a build's inputs are taken: the tables are final for the frame from the scene phase on, so the
+		 * first call of a frame does any growing and the builds after it see the capacities they are built against.
+		 */
+		void ReserveSceneTables(const SceneStore::Tables& a_tables);
+		/** @brief The main and shadow resources' per-object buffers grown to the scene's object capacity. */
+		void ReserveObjectBuffers();
+		ObjectRecordStore objectStore;
+		BonesStore boneStore;
+		GeometryStore geometryStore;
+		ObjectRecordStore* SceneObjects() { return &objectStore; }
+		BonesStore* SceneBones() { return &boneStore; }
+		GeometryStore* SceneGeometries() { return &geometryStore; }
 		MainRows mainRows;  // both main segments' (MainRows)
-		BonesStore mainBones, shadowBones;  // likewise the bone rows
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records (Step 6)
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
-		BonesStore* MainBones() { return &mainBones; }
-		BonesStore* ShadowBones() { return &shadowBones; }
-		ObjectRecordStore* MainObjects() { return &mainObjects; }
-		ObjectRecordStore* ShadowObjects() { return &shadowObjects; }
-		GeometryStore mainGeometries, shadowGeometries;  // likewise the geometry slots' draws
 		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
-		GeometryStore* MainGeometries() { return &mainGeometries; }
-		GeometryStore* ShadowGeometries() { return &shadowGeometries; }
 		std::array<std::uint32_t, 4> decalWords{};  // the count buffer's decal words, uploaded per colour epoch
 
 		/** @brief The per-frame constant blocks of an epoch from the capture's mirrors (render thread; records the Z-prepass's bytes for the replay). */
@@ -2567,6 +2605,8 @@ namespace DCLF
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const std::uint32_t index = (feedback.cursor + i) % count;
 				auto& slot = *feedback.slots[index];
+				if (slot.capacity < a_objects)
+					continue;  // grown once it is free (ReserveObjectBuffers)
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
 				if (!slot.state.compare_exchange_strong(expected, Resources::Feedback::Recording, std::memory_order_acq_rel))
 					continue;

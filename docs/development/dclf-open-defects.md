@@ -107,8 +107,15 @@ A second occurrence (`fixclean-parity`, 2026-09-29, the full featureset with the
 `rhi::Result 17`, **`InvalidArgument`**, 10 seconds after the first epoch. So it is not a transient queue error: the
 upload list's `Submit` rejected something in what the epoch handed it.
 
-**Next step.** Find which argument check in BasicRHI's upload submission returns `InvalidArgument`, and log what it
-rejected (the target, the offset and size against the target's size) where it does.
+**Where.** The one place BasicRHI's Vulkan backend records `InvalidArgument` on a command list is
+`cl_copyBufferRegion`: a copy past its source's or destination's size marks the list, and its `Submit` fails. The async
+host records the staged uploads (`UploadInstance::RecordStagedUploads`) against each target's backing at record time,
+so the likeliest cause is a copy staged against another size of its target than the one current when it is recorded.
+Both now say so: BasicRHI logs the rejected copy (`Vulkan buffer copy rejected: ...`, the handles, offsets and sizes)
+and ORG logs the target by name (`staged upload of ... into '<name>' is past its ... bytes`); the host's message names
+the result (`rhi::Result InvalidArgument`).
+
+**Next step.** On the next occurrence, the named buffer says which producer staged against the wrong size.
 
 ## Resolved: device loss in every DCLF draw pass after the split records (Phase 3)
 
@@ -240,7 +247,12 @@ end of the scene tables, as the light path always has, so this is not a change t
 **Next step.** Identify the writer (the candidates in that window are `FUN_140742470`, which `Main::Draw` calls with
 the player's position, and the first-person culling), and decide whether the record should take the later value.
 
-### Capture parity: `EyePosition` differs on 600-900 draws
+### Capture parity: `EyePosition` differs on a candle lantern after a load
+
+**Now (2026-09-29, `val-p3-capture`).** 45 mismatches in the first interval, 1 in the second, 0 after: all
+`EyePosition` on one `CandleLanternWithCandle` (`DCLF -25480.871, native 0`). The beards and hair lines below no longer
+mismatch. What follows is the entry as first recorded.
+
 
 **Evidence.** `CS_DCLF_CAPTURE_PARITY` with ownership off: 600-900 of about 9,600 checked draws mismatch per
 interval, all in VS PerGeometry variable 2 (`EyePosition`, written only by the Envmap, Eye and 0x10

@@ -99,10 +99,17 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			if (draws.skipped[i])
 				skipped += fmt::format(" {}={}", DCLF::kSkipNames[i], draws.skipped[i]);
 		}
+		// A sample of what the texture and constants skips were missing, when there were any.
+		std::string missing;
+		if (draws.skipped[static_cast<std::size_t>(DCLF::DrawSkip::Texture)])
+			missing += fmt::format(" t{} t{} t{} t{}", draws.missingTextures[0], draws.missingTextures[1], draws.missingTextures[2], draws.missingTextures[3]);
+		if (draws.skipped[static_cast<std::size_t>(DCLF::DrawSkip::Constants)])
+			missing += fmt::format(" VS b{:04X} PS b{:04X}", draws.missingVertexConstants, draws.missingPixelConstants);
+		if (!missing.empty())
+			skipped += " (missing" + missing + ")";
 		const auto& textures = DCLF::GpuTextures::Get().GetStats();
-		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} binding records, skipped:{} (missing t{} t{} t{} t{}, VS b{:04X} PS b{:04X}); {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers",
-			draws.drawn, draws.records, skipped, draws.missingTextures[0], draws.missingTextures[1], draws.missingTextures[2], draws.missingTextures[3], draws.missingVertexConstants,
-			draws.missingPixelConstants, draws.uploadBytes / 1048576.0,
+		logger::info("[DCLF] indirect draws (last frame): {} candidates built from {} material rows, skipped:{}; {:.1f} MB uploaded, {:.3f} ms CPU; {} epochs, {} not ready; textures {} live in {} registry slots, {} cleanup pending, rejected {}/{}/{}, {} samplers",
+			draws.drawn, draws.records, skipped, draws.uploadBytes / 1048576.0,
 			draws.cpuMs, draws.epochs, draws.notReady, textures.cached, textures.registrySlots, textures.cleanupPending,
 			textures.rejected[1], textures.rejected[2], textures.rejected[3], textures.samplers);
 		if (draws.frameTexturesMissing) {

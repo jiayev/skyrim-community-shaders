@@ -52,7 +52,6 @@ namespace DCLF
 		ResidentDrawParity,
 		BuildParity,
 		SetParity,
-		DedupParity,
 		BindlessParity,
 		PassParity,
 		CaptureParity,

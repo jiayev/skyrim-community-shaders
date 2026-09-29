@@ -118,6 +118,17 @@ namespace DCLF::Draws
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 		}
 
+		/** @brief A shadow view slot's buffers for every slot up to a_slots (small: a slot's sequences grow the first time a view uses it). */
+		void AddShadowViewSlots(ShadowResources& a_state, std::uint32_t a_slots)
+		{
+			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
+				a_state.sequenceDraws.push_back(64u);
+				a_state.sequences.push_back(CreateWords(64ull * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str()));
+				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
+				a_state.countD3D11.push_back(WrapWords(*a_state.count.back(), kCountWords * sizeof(std::uint32_t)));
+			}
+		}
+
 		/** @brief Room for a_needed, doubling from a_current. */
 		std::uint32_t Doubled(std::uint32_t a_current, std::uint32_t a_needed)
 		{
@@ -181,7 +192,6 @@ namespace DCLF
 
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<Resources>();
-		state->constants = DeviceBuffer(kConstantBytes, "cs.dclf.constants");
 		// The rows both segments' draws name (MainRows): grown before each epoch to the scene's material and pipeline slots.
 		const bool smallRows = SwitchValue(Switch::TableStart) == "small";
 		if (!state->materialRows.Create(kMaterialRowBytes, smallRows ? 4u : 1024u, "cs.dclf.material-rows") ||
@@ -189,12 +199,11 @@ namespace DCLF
 			logger::error("[DCLF] The main rows have no device address");
 			return false;
 		}
-		// Structured rather than raw, because the shaders read it through an SRV at t127 instead of
-		// through a device address the way the constants and the binding records are read.
-		state->objects = StructuredBuffer(kMaxObjects, sizeof(BindlessObject), "cs.dclf.objects", state->objectsIndex);
-		state->bones = StructuredBuffer(kMaxBoneRows, 16, "cs.dclf.bones", state->bonesIndex);
-		state->facePositions = DeviceBuffer(std::uint64_t(kFacePositionVertices) * 16, "cs.dclf.face-positions");
-		state->facePositionsAddress = AddressOf(device, *state->facePositions);
+		if (!EnsureSceneBuffers(device)) {
+			logger::error("[DCLF] The face positions buffer has no device address");
+			return false;
+		}
+		state->scene = scene;
 		// The draws' range, phase 2's and the decal groups' (GpuLayouts.h, SequenceSlots), grown before each epoch to hold every
 		// draw the scene can produce (ReserveMainSequences).
 		const bool smallTables = SwitchValue(Switch::TableStart) == "small";
@@ -204,8 +213,9 @@ namespace DCLF
 		state->count = CreateWords(kCountWords, true, "cs.dclf.draw-count");
 		// One word per object in the frame's tables: what the depth segment's culling decided, read by
 		// the colour segment so that it draws exactly the same set.
-		state->visibility = CreateWords(kMaxObjects, true, "cs.dclf.visibility");
-		state->frustum = CreateWords(kMaxObjects, true, "cs.dclf.frustum");
+		state->objectCapacity = scene->objectCapacity;
+		state->visibility = CreateWords(state->objectCapacity, true, "cs.dclf.visibility");
+		state->frustum = CreateWords(state->objectCapacity, true, "cs.dclf.frustum");
 		{
 			// The feedback ring: at least as many slots as frames in flight, and at least 4.
 			auto feedback = std::make_shared<Resources::Feedback>();
@@ -217,7 +227,8 @@ namespace DCLF
 				const std::uint32_t slots = std::max<std::uint32_t>(host->FrameSlots(), 4u);
 				for (std::uint32_t i = 0; i < slots; ++i) {
 					auto slot = std::make_unique<Resources::Feedback::Slot>();
-					slot->staging = org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(kMaxObjects) * sizeof(std::uint32_t));
+					slot->staging = org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
+					slot->capacity = state->objectCapacity;
 					slot->staging->SetName(fmt::format("cs.dclf.feedback{}", i).c_str());
 					feedback->slots.push_back(std::move(slot));
 				}
@@ -244,9 +255,8 @@ namespace DCLF
 			}
 		}
 		state->preprocessMain = PreprocessStates::Create(device, host->FrameSlots(), "the main segment");
-		state->inputs = CreateWords(std::uint64_t(kMaxInputs) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs");
-		state->inputsDepth = CreateWords(std::uint64_t(kMaxInputs) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth");
-		state->geometries = CreateWords(std::uint64_t(kMaxGeometries) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
+		state->inputs = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs");
+		state->inputsDepth = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, "cs.dclf.draw-inputs-depth");
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws)
 			return NotReady(7, "the BuildDraws program could not be created");
@@ -267,12 +277,11 @@ namespace DCLF
 		// counter that is always zero reads exactly like a clean result.
 		state->countD3D11 = WrapWords(*state->count, kCountWords * sizeof(std::uint32_t));
 		if (SetParityEnabled())
-			state->visibilityD3D11 = WrapWords(*state->visibility, kMaxObjects * sizeof(std::uint32_t));
+			state->visibilityD3D11 = WrapWords(*state->visibility, std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
 		state->frameConstants = DeviceBuffer(kFrameConstantBytes, "cs.dclf.frame-constants");
-		state->constantsAddress = AddressOf(device, *state->constants);
 		state->frameConstantsAddress = AddressOf(device, *state->frameConstants);
 
-		if (!state->constantsAddress || !state->frameConstantsAddress) {
+		if (!state->frameConstantsAddress) {
 			logger::error("[DCLF] Draw data buffers have no device address");
 			return false;
 		}
@@ -413,7 +422,7 @@ namespace DCLF
 			return;
 		const std::uint32_t draws = SceneDrawBound(a_tables);
 		CheckSequenceLimits("a shadow view", draws, false);
-		for (std::uint32_t slot = a_first; slot < std::min(a_first + a_slots, kMaxShadowViews); ++slot) {
+		for (std::uint32_t slot = a_first; slot < std::min<std::size_t>(a_first + a_slots, shadow->sequences.size()); ++slot) {
 			auto& capacity = shadow->sequenceDraws[slot];
 			if (draws <= capacity)
 				continue;
@@ -421,6 +430,141 @@ namespace DCLF
 			shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(grown) * sizeof(DrawSequence) / 4));
 			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, std::uint64_t(grown) * sizeof(DrawSequence) / 1024);
 			capacity = grown;
+		}
+	}
+
+	bool IndirectDraws::Impl::EnsureSceneBuffers(rhi::Device a_device)
+	{
+		if (scene)
+			return true;
+		auto buffers = std::make_shared<SceneBuffers>();
+		const bool smallStart = SwitchValue(Switch::TableStart) == "small";
+		buffers->objectCapacity = smallStart ? 64u : kInitialObjects;
+		buffers->geometryRows = smallStart ? 64u : kInitialGeometries;
+		buffers->boneRows = smallStart ? 256u : kInitialBoneRows;
+		buffers->faceVertices = smallStart ? 1024u : kInitialFaceVertices;
+		// Structured, because the shaders read the object records and the bone rows through SRVs (t127, t126); the geometry
+		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
+		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex);
+		buffers->bones = StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex);
+		buffers->geometries = CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
+		buffers->facePositions = DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions");
+		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions);
+		if (!buffers->facePositionsAddress)
+			return false;
+		scene = std::move(buffers);
+		return true;
+	}
+
+	void IndirectDraws::Impl::ReserveShadowViews(std::uint32_t a_views, std::uint32_t a_keys)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!shadow || !host)
+			return;
+		auto& r = *shadow;
+		ShadowLatchLayout layout = r.latchLayout;
+		const std::uint32_t slots = kFirstShadowViewSlot + a_views;
+		const bool newSlots = slots > layout.viewSlots;
+		if (newSlots) {
+			layout.viewSlots = Doubled(layout.viewSlots, slots);
+			AddShadowViewSlots(r, layout.viewSlots);
+			r.viewBlocks.Reserve(layout.viewSlots);  // rewritten whole by every epoch that uses a slot: nothing to send again
+			logger::info("[DCLF] shadow view slots: {} grown to {}", r.latchLayout.viewSlots, layout.viewSlots);
+		}
+		if (a_keys > layout.keySlots) {
+			layout.keySlots = Doubled(layout.keySlots, a_keys);
+			logger::info("[DCLF] shadow key slots: {} grown to {}", r.latchLayout.keySlots, layout.keySlots);
+		}
+		if (layout == r.latchLayout)
+			return;
+		r.latchLayout = layout;
+		// Every execution writes its frame slot's region whole (the views' latches, the map rows of their states), and a block
+		// frames in flight still read stays alive in the frames they prepared.
+		r.latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", layout.Bytes(), host->FrameSlots());
+		// The passes declare every slot's buffers: the graph is built again, with them, on this epoch.
+		if (newSlots)
+			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
+	}
+
+	void IndirectDraws::Impl::ReserveSceneTables(const SceneStore::Tables& a_tables)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!scene || !host)
+			return;
+		auto& s = *scene;
+		// Doubling, so a scene filling up grows a handful of times. A new backing holds nothing: the held version goes to 0, and
+		// the next commit sends the table whole.
+		auto grow = [&](const char* a_name, std::uint32_t& a_capacity, std::uint64_t a_needed, std::uint32_t a_rowBytes, auto&& a_resize) {
+			if (a_needed <= a_capacity)
+				return false;
+			const std::uint32_t rows = Doubled(a_capacity, static_cast<std::uint32_t>(std::min<std::uint64_t>(a_needed, UINT32_MAX)));
+			a_resize(rows);
+			logger::info("[DCLF] scene {}: {} grown to {} ({} KB)", a_name, a_capacity, rows, std::uint64_t(rows) * a_rowBytes / 1024);
+			a_capacity = rows;
+			++s.generation;
+			++s.growths;
+			return true;
+		};
+		if (grow("object records", s.objectCapacity, a_tables.objects.size(), sizeof(BindlessObject), [&](std::uint32_t a_rows) {
+				s.objects->ResizeStructured(a_rows);
+				s.objectsIndex = s.objects->GetSRVInfo(0).slot.index;
+			}))
+			s.held.objects = 0;
+		// The slots, then one row per face stream (AppendFaceStreams).
+		if (grow("geometry rows", s.geometryRows, a_tables.geometries.size() + a_tables.faceStreams.size(), sizeof(GeometryDraw),
+				[&](std::uint32_t a_rows) { s.geometries->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(a_rows) * sizeof(GeometryDraw) / 4)); }))
+			s.held.geometries = 0;
+		// Every palette, current then previous, then the extras (BonesOut::Rows).
+		if (grow("bone rows", s.boneRows, 2ull * a_tables.BoneCapacity() + a_tables.extraRows.size() / 4, 16, [&](std::uint32_t a_rows) {
+				s.bones->ResizeStructured(a_rows);
+				s.bonesIndex = s.bones->GetSRVInfo(0).slot.index;
+			}))
+			s.held.bones = 0;
+		std::uint64_t faceVertices = 0;
+		for (const auto& stream : a_tables.faceStreams)
+			faceVertices = std::max<std::uint64_t>(faceVertices, std::uint64_t(stream.region) + stream.vertexCount);
+		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
+				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);
+				s.facePositionsAddress = AddressOf(host->GetDesc().device, *s.facePositions);
+			}))
+			s.faceUploaded.clear();  // every region again
+		ReserveObjectBuffers();
+	}
+
+	void IndirectDraws::Impl::ReserveObjectBuffers()
+	{
+		if (!scene)
+			return;
+		const std::uint32_t objects = scene->objectCapacity;
+		const auto inputWords = [&] { return static_cast<std::uint32_t>(std::uint64_t(objects) * sizeof(DrawInput) / 4); };
+		if (resources && resources->objectCapacity < objects) {
+			auto& r = *resources;
+			r.visibility->ResizeStructured(objects);
+			if (r.frustum)
+				r.frustum->ResizeStructured(objects);
+			r.inputs->ResizeStructured(inputWords());
+			if (r.inputsDepth)
+				r.inputsDepth->ResizeStructured(inputWords());
+			r.residentUploaded = {};  // the new input buffers hold no region
+			if (r.visibilityD3D11)
+				r.visibilityD3D11 = WrapWords(*r.visibility, std::uint64_t(objects) * sizeof(std::uint32_t));
+			r.objectCapacity = objects;
+		}
+		// A feedback slot's staging grows while the slot is free; one still in flight is grown once it is back (ArmFeedback passes
+		// over a slot too small for the frame).
+		if (resources && resources->feedback)
+			for (auto& slot : resources->feedback->slots)
+				if (slot->capacity < objects && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
+					slot->staging->ResizeBytes(std::uint64_t(objects) * sizeof(std::uint32_t));
+					slot->capacity = objects;
+				}
+		if (shadow && shadow->objectCapacity < objects) {
+			auto& r = *shadow;
+			r.visibility->ResizeStructured(objects);
+			for (auto& inputs : r.inputs)
+				inputs->ResizeStructured(inputWords());
+			r.inputsUploaded = {};  // the new input buffers hold none of the kept state's inputs
+			r.objectCapacity = objects;
 		}
 	}
 
@@ -442,21 +586,23 @@ namespace DCLF
 			shadowSetupFailed = true;
 			return ShadowNotReady(2, "no device address for the shadow material rows");
 		}
-		state->objects = StructuredBuffer(kMaxObjects, sizeof(BindlessObject), "cs.dclf.shadow.objects", state->objectsIndex);
-		state->bones = StructuredBuffer(kMaxBoneRows, 16, "cs.dclf.shadow.bones", state->bonesIndex);
-		state->facePositions = DeviceBuffer(std::uint64_t(kFacePositionVertices) * 16, "cs.dclf.shadow.face-positions");
-		for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-			// Small: a slot's buffer grows to the scene's draws the first time a view uses it (ReserveShadowSequences), so the
-			// slots no frame uses stay small.
-			state->sequenceDraws[s] = 64u;
-			state->sequences[s] = CreateWords(std::uint64_t(state->sequenceDraws[s]) * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str());
-			state->count[s] = CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str());
-			state->countD3D11[s] = WrapWords(*state->count[s], kCountWords * sizeof(std::uint32_t));
+		if (!EnsureSceneBuffers(device)) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(2, "no device address for the face positions");
 		}
-		state->visibility = CreateWords(kMaxObjects, true, "cs.dclf.shadow.visibility");
+		state->scene = scene;
+		// CS_DCLF_TABLE_START=small: room for Skylighting's map and one view, and a few key slots.
+		const bool smallSlots = SwitchValue(Switch::TableStart) == "small";
+		state->latchLayout = { smallSlots ? 2u : kInitialShadowViewSlots, smallSlots ? 16u : kInitialShadowKeySlots };
+		AddShadowViewSlots(*state, state->latchLayout.viewSlots);
+		if (!state->viewBlocks.Create(static_cast<std::uint32_t>(kShadowViewSlotBytes), state->latchLayout.viewSlots, "cs.dclf.shadow.view-blocks")) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(2, "no device address for the shadow view blocks");
+		}
+		state->objectCapacity = scene->objectCapacity;
+		state->visibility = CreateWords(state->objectCapacity, true, "cs.dclf.shadow.visibility");
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-			state->inputs[m] = CreateWords(std::uint64_t(kMaxInputs) * sizeof(DrawInput) / 4, false, fmt::format("cs.dclf.shadow.draw-inputs{}", m).c_str());
-		state->geometries = CreateWords(std::uint64_t(kMaxGeometries) * sizeof(GeometryDraw) / 4, false, "cs.dclf.shadow.geometries");
+			state->inputs[m] = CreateWords(std::uint64_t(state->objectCapacity) * sizeof(DrawInput) / 4, false, fmt::format("cs.dclf.shadow.draw-inputs{}", m).c_str());
 		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
 		if (!state->buildDraws) {
 			shadowSetupFailed = true;
@@ -467,10 +613,9 @@ namespace DCLF
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the BuildDraws dispatch signature could not be created");
 		}
-		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", kShadowLatchBytes, host->FrameSlots());
+		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", state->latchLayout.Bytes(), host->FrameSlots());
 		state->preprocessShadow = PreprocessStates::Create(device, host->FrameSlots(), "the shadow views");
 		state->preprocessSky = PreprocessStates::Create(device, host->FrameSlots(), "Skylighting's occlusion map");
-		state->facePositionsAddress = AddressOf(device, *state->facePositions);
 		state->constantsAddress = AddressOf(device, *state->constants);
 		if (!state->constantsAddress) {
 			shadowSetupFailed = true;

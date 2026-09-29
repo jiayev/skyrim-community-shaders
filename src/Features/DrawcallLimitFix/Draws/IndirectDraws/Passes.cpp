@@ -24,14 +24,10 @@ namespace DCLF::Draws
 			// Read through device addresses; declared so the graph orders them after their uploads.
 			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
 			bindings.pipelineRows = a_builder.ShaderResource(resources->pipelineRows.buffer, noViews).Resource();
-			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
-			if (resources->objects)
-				bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
-			if (resources->bones)
-				bindings.bones = a_builder.ShaderResource(resources->bones, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
+			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
 			// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
-			if (resources->facePositions)
-				a_builder.VertexBuffer(resources->facePositions);
+			a_builder.VertexBuffer(resources->scene->facePositions);
 			for (const auto& frameBuffer : resources->frameBuffers)
 				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
 			if (resources->lightLimitFix) {
@@ -307,7 +303,7 @@ namespace DCLF::Draws
 			bindings.inputs = a_builder.ShaderResource(resources->inputs).View();
 			if (resources->inputsDepth)
 				bindings.inputsDepth = a_builder.ShaderResource(resources->inputsDepth).View();
-			bindings.geometries = a_builder.ShaderResource(resources->geometries).View();
+			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
 			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
@@ -853,7 +849,7 @@ namespace DCLF::Draws
 	struct ShadowBuildBindings
 	{
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
-		std::array<org::DeclaredViewToken, kMaxShadowViews> sequences, count;
+		std::vector<org::DeclaredViewToken> sequences, count;  // per view slot
 		org::DeclaredViewToken geometries, visibility;
 	};
 
@@ -883,11 +879,11 @@ namespace DCLF::Draws
 			ShadowBuildBindings bindings{};
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				bindings.inputs[m] = a_builder.ShaderResource(resources->inputs[m]).View();
-			for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-				bindings.sequences[s] = a_builder.UnorderedAccess(resources->sequences[s]).View();
-				bindings.count[s] = a_builder.UnorderedAccess(resources->count[s]).View();
+			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
+				bindings.sequences.push_back(a_builder.UnorderedAccess(resources->sequences[s]).View());
+				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
 			}
-			bindings.geometries = a_builder.ShaderResource(resources->geometries).View();
+			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			return bindings;
 		}
@@ -902,20 +898,20 @@ namespace DCLF::Draws
 		{
 			ShadowBuildPrepared prepared{};
 			const auto frame = CurrentShadowFrame(*resources, sky);
-			if (!frame || frame->views.empty() || !resources->buildDraws || !resources->latch || !resources->dispatchSignature)
+			if (!frame || frame->views.empty() || !resources->buildDraws || !frame->latch || !resources->dispatchSignature)
 				return prepared;
 			prepared.program = resources->buildDraws;
-			prepared.latch = resources->latch;
+			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
 			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			for (const auto& view : frame->views) {
-				if (view.slot >= kMaxShadowViews || view.modeIndex >= kShadowModeCount)
+				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
 					continue;
 				ShadowBuildPrepared::Dispatch dispatch{};
 				dispatch.latchOffset = view.slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
 				auto& constants = dispatch.constants;
-				constants.latchIndex = resources->latch->SrvIndex();
+				constants.latchIndex = frame->latch->SrvIndex();
 				constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs[view.modeIndex]);
 				constants.geometriesIndex = geometriesIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
@@ -953,8 +949,8 @@ namespace DCLF::Draws
 	struct ShadowPassBindings
 	{
 		std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
-		std::array<org::ResourceBindingToken, kMaxShadowViews> sequences, count;
-		org::ResourceBindingToken materialRows, constants, objects, bones;
+		std::vector<org::ResourceBindingToken> sequences, count;  // per view slot
+		org::ResourceBindingToken materialRows, constants, viewBlocks, objects, bones;
 	};
 
 	struct ShadowPrepared
@@ -990,17 +986,18 @@ namespace DCLF::Draws
 						bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
 				}
 			}
-			for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
-				bindings.sequences[s] = a_builder.IndirectArguments(resources->sequences[s]);
-				bindings.count[s] = a_builder.IndirectArguments(resources->count[s]);
+			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
+				bindings.sequences.push_back(a_builder.IndirectArguments(resources->sequences[s]));
+				bindings.count.push_back(a_builder.IndirectArguments(resources->count[s]));
 			}
 			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
-			bindings.objects = a_builder.ShaderResource(resources->objects, noViews).Resource();
-			bindings.bones = a_builder.ShaderResource(resources->bones, noViews).Resource();
+			bindings.viewBlocks = a_builder.ShaderResource(resources->viewBlocks.buffer, noViews).Resource();
+			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
+			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
 			// The face positions are read by the input assembler (the draws' second stream), after the commit's
 			// uploads into them.
-			a_builder.VertexBuffer(resources->facePositions);
+			a_builder.VertexBuffer(resources->scene->facePositions);
 			return bindings;
 		}
 
@@ -1018,7 +1015,7 @@ namespace DCLF::Draws
 				return prepared;
 			for (std::uint32_t i = 0; i < frame->views.size(); ++i) {
 				const auto& view = frame->views[i];
-				if (!view.capacity || view.slot >= kMaxShadowViews || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
+				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
 					(view.target == kSkyDepthTarget) != sky)
 					continue;
 				if (view.slice >= resources->depthLayers[view.target])
@@ -1098,6 +1095,15 @@ namespace DCLF::Draws
 		bool sky = false;
 	};
 
+	/** @brief The scene tables, which both extensions register (the same identifiers: the second registration is an update). */
+	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
+	{
+		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.objects"), a_scene.objects);
+		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), a_scene.bones);
+		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.geometries"), a_scene.geometries);
+		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
+	}
+
 	class ShadowExtension final : public org::RenderGraph::IRenderGraphExtension
 	{
 	public:
@@ -1108,14 +1114,12 @@ namespace DCLF::Draws
 		{
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.constants"), resources->constants);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.material-rows"), resources->materialRows.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.objects"), resources->objects);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.bones"), resources->bones);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.face-positions"), resources->facePositions);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.geometries"), resources->geometries);
+			RegisterSceneBuffers(a_graph, *resources->scene);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.visibility"), resources->visibility);
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
-			for (std::uint32_t s = 0; s < kMaxShadowViews; ++s) {
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
+			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
 			}
@@ -1158,14 +1162,13 @@ namespace DCLF::Draws
 
 		void PrepareForBuild(org::RenderGraph& a_graph) override
 		{
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.constants"), resources->constants);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.material-rows"), resources->materialRows.buffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pipeline-rows"), resources->pipelineRows.buffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.sequences"), resources->sequences);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs"), resources->inputs);
 			if (resources->inputsDepth)
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.geometries"), resources->geometries);
+			RegisterSceneBuffers(a_graph, *resources->scene);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
@@ -1173,10 +1176,6 @@ namespace DCLF::Draws
 			if (resources->feedback)
 				for (std::size_t i = 0; i < resources->feedback->slots.size(); ++i)
 					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.feedback{}", i)), resources->feedback->slots[i]->staging);
-			if (resources->bones)
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), resources->bones);
-			if (resources->facePositions)
-				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), resources->facePositions);
 			for (const auto& frameBuffer : resources->frameBuffers)
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)

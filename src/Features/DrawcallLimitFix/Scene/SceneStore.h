@@ -1856,9 +1856,9 @@ namespace DCLF
 			std::uint32_t evaluatedMax = 0;
 		} delta;
 		/**
-		 * @brief A face shape's region of the positions buffer (Records.h kFacePositionVertices), kept while the
-		 * walks see the shape; kNoFaceRegion when the buffer is full. EndFaceWalk frees the regions of shapes the
-		 * walk did not see. The walk's thread alone.
+		 * @brief A face shape's region of the positions buffer, kept while the walks see the shape (the buffer grows to hold
+		 * every region: IndirectDraws' ReserveSceneTables). EndFaceWalk frees the regions of shapes the walk did not see. The
+		 * walk's thread alone.
 		 */
 		std::uint32_t FaceRegionOf(const RE::BSGeometry* a_geometry, std::uint32_t a_vertexCount);
 		void EndFaceWalk();

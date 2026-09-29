@@ -19,7 +19,6 @@ namespace DCLF
 		Capacity,
 		NotSkippedNatively,  // Z-prepass only: the native loop still draws this object, so it owns its depth
 		CandidateOnly,       // kept for the GPU culling to reject, but not drawable, so it has no bindings
-		RecordCapacity,      // too many DISTINCT (material, pipeline) pairs, which is not the draw cap
 		Count
 	};
 
@@ -131,7 +130,6 @@ namespace DCLF
 		Tables,     // the scene phase has not built this frame's tables, or the view is unknown
 		Depth,      // the engine's shadow map could not be imported, or the view draws into an unknown target
 		Epoch,      // the epoch itself failed
-		Capacity,   // more views this frame than the epoch holds (kMaxShadowViews)
 		Count
 	};
 
@@ -179,9 +177,9 @@ namespace DCLF
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(ShadowViewNotReady::Count)> kShadowNotReadyNames{
-		"setup", "pipelines", "tables", "depth", "epoch", "capacity"
+		"setup", "pipelines", "tables", "depth", "epoch"
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(DrawSkip::Count)> kSkipNames{ "pipeline", "geometry", "texture", "sampler",
-		"constants", "capacity", "not-skipped-natively", "candidate-only", "record-capacity" };
+		"constants", "capacity", "not-skipped-natively", "candidate-only" };
 }

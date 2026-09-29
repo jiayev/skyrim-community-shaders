@@ -11,28 +11,29 @@ namespace DCLF::Draws
 	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
 	// needs more rows (GrowableRows), from this many.
 	constexpr std::uint32_t kShadowMaterialRowsInitial = 256;
-	// The views one frame's shadow epoch can hold: the exterior has four (two cascades, twice); an
-	// interior with several shadow-casting point lights has two hemispheres per light.
-	constexpr std::uint32_t kMaxShadowViews = 16;
 	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, and kSkyMode: Skylighting's occlusion map (render mode 0x1C),
 	// whose occluders the frame's shadow build lists too and whose own epoch draws them (ExecuteSkyOcclusion).
 	constexpr std::uint32_t kShadowModeCount = 4;
 	constexpr std::uint32_t kSkyMode = 3;
 	constexpr std::uint32_t kSkyRenderMode = 0x1C;
-	// The view slot Skylighting's occlusion map draws through; the shadow views take the others.
-	constexpr std::uint32_t kSkySlot = kMaxShadowViews - 1;
-	// Key slots a shadow epoch can name (Lookups::shadowSlotKeys): one per caster key and render mode.
-	constexpr std::uint32_t kMaxShadowSlots = 1024;
+	// The shadow epoch's view slots (ShadowResources): Skylighting's occlusion map draws through slot 0, the frame's shadow
+	// views through the slots after it (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
+	// grown before its epoch (Impl::ReserveShadowViews) - the exterior has four (two cascades, twice), an interior two
+	// hemispheres per shadow-casting point light - from this many. Likewise the key slots the pipeline map rows hold
+	// (Lookups::shadowSlotKeys: one per caster key and render mode).
+	constexpr std::uint32_t kInitialShadowViewSlots = 8;
+	constexpr std::uint32_t kSkySlot = 0;
+	constexpr std::uint32_t kFirstShadowViewSlot = 1;
+	constexpr std::uint32_t kInitialShadowKeySlots = 1024;
 	constexpr std::uint64_t kShadowConstantBytes = 1ull << 20;
-	// Fixed slots at the head of the shadow constants: the view's Utility PerTechnique block and its
-	// VS_PerFrame block, rewritten per view so that the records built once a frame can point at them.
-	// The arena's head holds one slot per view: its PerTechnique block (b0) then its VS_PerFrame copy (b12).
+	// A view slot's blocks, a row of their own table (ShadowResources::viewBlocks): the view's Utility PerTechnique block (b0),
+	// then its VS_PerFrame copy (b12), written by its epoch's commit.
 	constexpr std::uint64_t kShadowPerFrameOffset = 256;
 	constexpr std::uint64_t kShadowViewSlotBytes = 256 + 1024;
-	// After the view slots: the frame record (the shadow draws' textures and samplers, DrawBindings), which the views' push
+	// The shadow constants: the frame record (the shadow draws' textures and samplers, DrawBindings), which the views' push
 	// data names, then the arena's blocks (the zero block, SharedData, FeatureData).
-	constexpr std::uint64_t kShadowFrameRecordOffset = kShadowViewSlotBytes * kMaxShadowViews;
-	constexpr std::uint64_t kShadowArenaBlocksOffset = kShadowFrameRecordOffset + 1024;
+	constexpr std::uint64_t kShadowFrameRecordOffset = 0;
+	constexpr std::uint64_t kShadowArenaBlocksOffset = 1024;
 	// [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), and
 	// [2] kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM, the volumetric lighting copy: the engine's second draw of
 	// each cascade's accumulator, with flag 0x100, draws batch group 15 alone (FUN_1414b44f0) - the passes
@@ -48,27 +49,18 @@ namespace DCLF::Draws
 	// maxSequenceCount is a hard failure.
 	constexpr std::uint32_t kInitialSequenceDraws = 16384;
 	constexpr std::uint32_t kInitialDecalDraws = 2048;
-	constexpr std::uint64_t kConstantBytes = 48ull << 20;
-	// The Z-prepass segment's own constants buffer: its blocks are the colour segment's pipelines' and pairs' (a few MB).
-	constexpr std::uint64_t kDepthConstantBytes = 16ull << 20;
 	constexpr std::uint64_t kConstantAlignment = 256;  // uniform buffer address alignment (conservative)
 	constexpr std::uint32_t kColorTargets = 8;
-	constexpr std::uint32_t kMaxGeometries = 16384;
-	// The per-object record table (ObjectRecord) is indexed by a table index, not a draw index, so it
-	// covers every candidate the frame tracks rather than only the ones drawn.
-	constexpr std::uint32_t kMaxObjects = 32768;
-	// Draw inputs and the visibility buffer are sized by the table, not by the draw count: the depth
-	// segment submits a cull-only input for every candidate it may not draw, and BuildDraws indexes the
-	// visibility word by the object's TABLE index. Sizing either by the draws is an overrun waiting for
-	// a cell with more tracked objects than draws.
-	constexpr std::uint32_t kMaxInputs = kMaxObjects;
-	// Distinct binding records an epoch may hold, and the size of the buffer behind them. Deduplicated
-	// they are one per (material, pipeline) pair: 85 behind 727 candidates in the Bannered Mare, 105
-	// behind 1616 in Dragonsreach. 2048 is about twenty times the worst seen, and 1.6 MB against the
-	// 13.1 MB a record per draw would need: everything per object is in the object record (BindlessObject).
-	constexpr std::uint32_t kMaxRecordsDeduplicated = 2048;
-	// The 32-bit record offset BuildDraws computes (input.y * RecordStride) has to address all of it.
-	static_assert(std::uint64_t(kMaxRecordsDeduplicated) * sizeof(DrawBindings) < (std::uint64_t(1) << 32));
+	// The scene tables' first capacities (SceneBuffers), which Impl::ReserveSceneTables grows to what the tables hold, doubling
+	// (CS_DCLF_TABLE_START=small: a few rows each). The object capacity sizes every per-object buffer too: the object records,
+	// the visibility and frustum words (indexed by the object's table index), and the draw inputs - a segment or a shadow mode
+	// has at most one input per object (a cull-only one for a candidate it may not draw), so an input buffer the size of the
+	// object table holds any build's. The geometry rows are the slots' then one per face stream; the bone rows every palette,
+	// current then previous, then the extras; the face vertices every face shape's region.
+	constexpr std::uint32_t kInitialObjects = 32768;
+	constexpr std::uint32_t kInitialGeometries = 16384;
+	constexpr std::uint32_t kInitialBoneRows = 131072;
+	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
 	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested, [3] engine-culled and gated out,
@@ -133,10 +125,6 @@ namespace DCLF::Draws
 	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
 	// engine's draw order (SceneStore::Tables::decalOrdinal), so the second pass draws decals in that order every frame; a
 	// culled one is the same sequence with an index count of zero. BuildDrawsConstants carries the bases.
-	// The bones buffer (VS t126): every skinned object's palette rows, current then previous, per epoch.
-	// 131,072 float4 rows is 2 MB: each skin keeps its block (SceneStore PlaceBones), so there are holes; the exterior needs
-	// ~13,500-18,000 current rows.
-	constexpr std::uint32_t kMaxBoneRows = 131072;
 	constexpr std::uint32_t kDecalGroups = 2;
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
 	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
@@ -281,10 +269,15 @@ namespace DCLF::Draws
 		}
 		return true;
 	}
-	// The shadow latch block: the views' latches, then one pipeline map row per view rasterizer state.
-	constexpr std::uint32_t kShadowPipelineMapOffset = kMaxShadowViews * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
-	constexpr std::uint32_t kShadowPipelineMapRowBytes = kMaxShadowSlots * static_cast<std::uint32_t>(sizeof(std::uint32_t));
-	constexpr std::uint32_t kShadowLatchBytes = kShadowPipelineMapOffset + DrawPipelines::kMaxShadowRasterStates * kShadowPipelineMapRowBytes;
+	/** @brief The shadow latch block's region per frame slot: the view slots' latches, then a pipeline map row per view rasterizer state. */
+	struct ShadowLatchLayout
+	{
+		std::uint32_t viewSlots = 0, keySlots = 0;
+		std::uint32_t MapOffset() const { return viewSlots * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
+		std::uint32_t MapRowBytes() const { return keySlots * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t Bytes() const { return MapOffset() + DrawPipelines::kMaxShadowRasterStates * MapRowBytes(); }
+		bool operator==(const ShadowLatchLayout&) const = default;
+	};
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it
 	// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing there.
 	constexpr std::uint32_t kCullNoNearPlane = 0x200;

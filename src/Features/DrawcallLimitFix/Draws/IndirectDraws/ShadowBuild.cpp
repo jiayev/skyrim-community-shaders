@@ -8,7 +8,7 @@ namespace DCLF::Draws
 		const ShadowMaterialRow& a_plain)
 	{
 		ZoneScopedN("CS.DCLF.BuildShadow.Kept");
-		const std::uint32_t objects = static_cast<std::uint32_t>(std::min<std::size_t>(a_tables.objects.size(), kMaxObjects));
+		const std::uint32_t objects = static_cast<std::uint32_t>(a_tables.objects.size());
 		++k.builds;
 		// Membership changes of this build carry this stamp.
 		const std::uint64_t build = ++k.build;
@@ -201,8 +201,6 @@ namespace DCLF::Draws
 			}
 			std::uint32_t i = mode.indexOf[o];
 			if (i == kNoRegion) {
-				if (mode.inputs.Size() >= kMaxInputs - kLoopReserve)
-					return;
 				mode.Add(o, input);
 				mode.membership = build;
 				++k.entriesWritten;
@@ -503,8 +501,8 @@ namespace DCLF::Draws
 		AppendFaceStreams(a_tables, a_in.addresses.facePositions, a_out.geometries);
 		if (a_in.addresses.facePositions)
 			a_out.faceStreams = a_tables.faceStreams;
-		// The views' blocks at the head of the arena (the commit's), then the frame record, then the blocks every view's push
-		// data names. No register the Utility shaders declare may be left at address zero: a pipeline that reads one arrives
+		// The frame record at the head of the arena, then the blocks every view's push data names (the views' own blocks are
+		// their slots' rows, the commit's). No register the Utility shaders declare may be left at address zero: a pipeline that reads one arrives
 		// from the background compiler seconds after the first epoch, and a null read is a device loss. Everything not
 		// supplied below reads zeros.
 		(void)arena.Allocate(kShadowArenaBlocksOffset);
@@ -542,7 +540,7 @@ namespace DCLF::Draws
 		objectRecord.assign(a_tables.objects.size(), ~0u);
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::uint32_t> recordByMaterial;
 		const bool haveShadowMaterials = a_tables.shadowMaterial.size() == a_tables.objects.size();
-		for (std::size_t o = 0; o < a_tables.objects.size() && o < kMaxObjects; ++o) {
+		for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
 			const auto& object = a_tables.objects[o];
 			// A record for every caster and every occluder of Skylighting's map; the alpha-tested ones name their diffuse.
 			const std::uint32_t sky = o < a_tables.skyTechnique.size() && a_in.modeUsed[kSkyMode] ? a_tables.skyTechnique[o] : 0u;
@@ -608,7 +606,7 @@ namespace DCLF::Draws
 				continue;
 			const bool skyMode = m == kSkyMode;
 			const std::uint32_t modeBits = ModeBitsOf(m);
-			for (std::size_t o = 0; o < a_tables.objects.size() && o < kMaxObjects && inputs.size() < kMaxInputs; ++o) {
+			for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
 				const auto& object = a_tables.objects[o];
 				if (skyMode ? (o >= a_tables.skyTechnique.size() || !a_tables.skyTechnique[o]) : (object.flags & kObjectNoShadow) != 0)
 					continue;
