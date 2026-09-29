@@ -6,7 +6,6 @@
 
 #include "Effects11.h"
 #include "Globals.h"
-#include "IconsFontAwesome5.h"
 #include "InverseSquareLighting/Common.h"
 #include "PostProcessing.h"
 #include "PostProcessingMode.h"
@@ -40,12 +39,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
-	// Effects 11 overrides the result, not the controls, so they stay editable under the banner.
-	if (globals::features::effects11.IsActive()) {
-		Util::StatusBanner(ICON_FA_LOCK, "Effects 11 overrides Linear Lighting while UseEffect is enabled.", Util::Colors::GetWarning());
-		ImGui::Spacing();
-	}
-	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	using PostProcessingMode::Mode;
+	const Mode mode = PostProcessingMode::Get();
+	const bool overridden = mode != Mode::PostProcessing;
+	const Util::LockedSection modeLock(overridden, mode == Mode::Effects11 ?
+	                                                   T(TKEY("overridden_by_effects11"), "Effects 11 overrides Linear Lighting.") :
+	                                                   T(TKEY("off_in_vanilla"), "Vanilla post processing turns Linear Lighting off."));
+
+	// A disabled checkbox never reports a click, so the saved setting survives the forced-off display.
+	bool linearLightingDisplay = settings.enableLinearLighting && !overridden;
+	if (ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), &linearLightingDisplay))
+		settings.enableLinearLighting = linearLightingDisplay;
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
 	Util::Text::Secondary("%s", T(TKEY("startup_settings"), "Linear Lighting and working color space settings require a restart."));
 

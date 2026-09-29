@@ -68,15 +68,11 @@ void PostProcessing::DrawSettings()
 
 	PostProcessingMode::DrawSelector();
 
-	auto& linearLighting = globals::features::linearLighting;
-	if (linearLighting.loaded) {
-		ImGui::SameLine();
-		ImGui::BeginDisabled(PostProcessingMode::Get() != PostProcessingMode::Mode::PostProcessing);
-		ImGui::Checkbox(T("feature.linear_lighting.enable_linear_lighting", "Enable Linear Lighting"), (bool*)&linearLighting.settings.enableLinearLighting);
-		ImGui::EndDisabled();
-	}
-
 	ImGui::Separator();
+
+	// Effects 11 discards the pipeline output, so its controls would do nothing.
+	const Util::LockedSection effects11Lock(PostProcessingMode::Get() == PostProcessingMode::Mode::Effects11,
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	{
 		auto& cam = cinematicCamera;
