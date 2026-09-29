@@ -1,13 +1,13 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
-#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "../I18n/I18n.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "D3D.h"
 #include "FileSystem.h"
+#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
-#include "IconsFontAwesome5.h"
 #include "Menu/IconLoader.h"
 #include "Menu/ThemeManager.h"
 #include "PerfUtils.h"
@@ -989,12 +989,6 @@ namespace Util
 		const float avail = ImGui::GetContentRegionAvail().x;
 		const ImVec2 rowStart = ImGui::GetCursorScreenPos();
 
-		// A row-wide drag catcher; AllowOverlap lets the title and buttons drawn after it still get input.
-		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight), ImGuiButtonFlags_AllowOverlap);
-		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-			ImGui::StartMouseMovingWindow(window);
-
-		ImGui::SetCursorScreenPos(rowStart);
 		ImGui::AlignTextToFramePadding();
 		std::string_view displayTitle(name);
 		if (const auto hash = displayTitle.find("##"); hash != std::string_view::npos)
@@ -1015,6 +1009,11 @@ namespace Util
 			if (clicked)
 				*p_open = false;
 		}
+
+		ImGui::SetCursorScreenPos(rowStart);
+		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight));
+		if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+			ImGui::StartMouseMovingWindow(window);
 
 		ImGui::SetCursorScreenPos(ImVec2(rowStart.x, rowStart.y + rowHeight));
 		ImGui::Spacing();
