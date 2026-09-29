@@ -114,8 +114,10 @@ public:
 	virtual void Prepass() override;
 	virtual void ClearShaderCache() override;
 
-	/** @brief Flips the "UseEffect" GLOBAL setting; bound to the Effects 11 toggle hotkey. */
+	/** @brief Switches between Effects 11 and Vanilla; bound to the Effects 11 toggle hotkey. */
 	void ToggleEnabled();
+	/** @brief Writes the "UseEffect" GLOBAL setting; go through PostProcessingMode::Set to keep the pipelines exclusive. */
+	void SetUseEffect(bool enabled);
 	bool IsPresetEnabled() const;
 	bool IsActive() const { return presetActive; }
 

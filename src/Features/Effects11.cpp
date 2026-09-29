@@ -15,6 +15,7 @@
 #include "Globals.h"
 #include "IBL.h"
 #include "PostProcessing.h"
+#include "PostProcessingMode.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
@@ -160,11 +161,14 @@ bool Effects11::IsPresetEnabled() const
 
 void Effects11::ToggleEnabled()
 {
-	if (!EffectManager::GetSingleton().IsPresetLoaded())
-		return;
+	using PostProcessingMode::Mode;
+	PostProcessingMode::Set(IsPresetEnabled() ? Mode::Vanilla : Mode::Effects11);
+}
+
+void Effects11::SetUseEffect(bool enabled)
+{
 	auto& settingManager = SettingManager::GetSingleton();
-	const uint32_t id = settingManager.GetSettingID("UseEffect", "GLOBAL");
-	settingManager.SetValue<bool>(id, !settingManager.GetValue<bool>(id));
+	settingManager.SetValue<bool>(settingManager.GetSettingID("UseEffect", "GLOBAL"), enabled);
 }
 
 void Effects11::LoadRaindropTexture()
@@ -266,8 +270,12 @@ void Effects11::Reset()
 	if (!resourcesReady)
 		return;
 	const bool enabled = IsPresetEnabled();
-	if (enabled != presetActive)
+	if (enabled != presetActive) {
+		// UseEffect can also turn on from an ini reload or preset switch; Post Processing must still yield.
+		if (enabled)
+			PostProcessingMode::Set(PostProcessingMode::Mode::Effects11);
 		globals::shaderCache->Reload([this, enabled] { presetActive = enabled; });
+	}
 }
 
 void Effects11::ClearShaderCache()

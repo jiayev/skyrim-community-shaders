@@ -26,7 +26,6 @@
     "cs_editor.color_fog_far": "フォグ(遠距離)",
     "cs_editor.color_fog_near": "フォグ(近距離)",
     "cs_editor.color_moon_glare": "ムーングレア",
-    "cs_editor.cs_editor": "CSエディター",
     "cs_editor.currently_exterior_cell": "現在は屋外セルにいます",
     "menu.settings.toggle_key": "トグルキー:",
     "menu.setup.press_to_close": "続けるにはEnterかEscキーを押してください",
@@ -44,5 +43,6 @@
     "ui.copy": "コピー",
     "ui.dont_ask_again": "もう表示しない",
     "ui.search": "検索…",
-    "ui.search_features": "機能を検索…"
+    "ui.search_features": "機能を検索…",
+    "cs_editor.cs_editor": "CSエディター"
 }

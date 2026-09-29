@@ -59,7 +59,6 @@
     "cs_editor.confirm_delete_saved_file": "Czy jesteś pewien, że chcesz usunąć plik z zapisanymi ustawieniami?",
     "cs_editor.contribution": "Wkład",
     "cs_editor.copy_all_from_parent": "Kopiuj wartości wszystkich parametrów od pogody rodzica",
-    "cs_editor.cs_editor": "Edytor CS",
     "cs_editor.currently_exterior_cell": "Jesteś aktualnie w komórce na zewnątrz.",
     "cs_editor.custom_color": "Własny kolor",
     "cs_editor.custom_color_contribution": "Wkład własnego koloru",
@@ -89,5 +88,6 @@
     "cs_editor.drag_colours_here": "Przeciągnij kolory żeby zapisać jako ulubione.",
     "cs_editor.drag_to_favourites": "Przeciągnij kolor tutaj aby dodać go do ulubionych",
     "cs_editor.colors_3_plus": "(Kolory użyte 3 razy lub więcej pojawią się tutaj)",
-    "cs_editor.colours": "Kolory"
+    "cs_editor.colours": "Kolory",
+    "cs_editor.cs_editor": "Edytor CS"
 }

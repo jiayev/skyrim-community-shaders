@@ -4,6 +4,7 @@
 #include "imgui_stdlib.h"
 
 #include "Menu.h"
+#include "PostProcessingMode.h"
 #include "Profiler.h"
 #include "State.h"
 #include "Util.h"
@@ -69,29 +70,12 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	// Effects11 replaces the whole tonemap pass, so these toggles would have no effect while
-	// it owns the frame. Disable them rather than let them silently do nothing.
-	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
-
-	ImGui::BeginDisabled(tonemapTakenByEffects11);
-
-	// A disabled checkbox never reports a click, so bypass keeps its stored value while forced on.
-	bool bypassDisplay = bypass || tonemapTakenByEffects11;
-	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
-		bypass = bypassDisplay;
+	PostProcessingMode::DrawSelector();
 
 	ImGui::SameLine();
+	ImGui::BeginDisabled(PostProcessingMode::Get() != PostProcessingMode::Mode::PostProcessing);
 	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
 	ImGui::EndDisabled();
-
-	if (tonemapTakenByEffects11) {
-		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
-		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
-									 "Tonemapping is currently handled by Effects 11. Post Processing effects that run "
-									 "before tonemapping still apply. To use Post Processing tonemapping instead, either "
-									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
-		ImGui::PopStyleColor();
-	}
 
 	ImGui::Separator();
 

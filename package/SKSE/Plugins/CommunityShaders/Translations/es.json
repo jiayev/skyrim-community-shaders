@@ -67,7 +67,6 @@
     "cs_editor.confirm_delete_saved_file": "Está seguro/a que desea eliminar el archivo de configuración guardado?",
     "cs_editor.contribution": "Contribución",
     "cs_editor.copy_all_from_parent": "Copiar todos los valores parámetro del clima padre",
-    "cs_editor.cs_editor": "Editor CS",
     "cs_editor.currently_exterior_cell": "Actualmente te encuentras en una celda exterior.",
     "cs_editor.custom_color": "Color Personalizado",
     "cs_editor.custom_color_contribution": "Contribución de (al?) Color Personalizado",
@@ -107,5 +106,6 @@
     "cs_editor.drag_to_favourites": "Arrastre un color aquí para añadir a favoritos",
     "cs_editor.edit_current_cell_lighting": "Editar Iluminación de Celda Actual",
     "cs_editor.colors_3_plus": "(Colores usados + de 3 veces apareceran aquí)",
-    "cs_editor.colours": "Colores"
+    "cs_editor.colours": "Colores",
+    "cs_editor.cs_editor": "Editor CS"
 }

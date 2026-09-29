@@ -8,6 +8,7 @@
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "I18n/I18n.h"
+#include "PostProcessingMode.h"
 #include "Presets/PresetCompatibility.h"
 #include "SettingsOverrideManager.h"
 #include "Utils/FileSystem.h"
@@ -675,6 +676,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		return false;
 
 	bool appliedAny = false;
+	bool effects11Applied = false;
 
 	if (pack->hasEffects11) {
 		auto& presetManager = PresetManager::GetSingleton();
@@ -683,7 +685,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		const auto e11Id = GetEffects11PresetId(*pack);
 		if (presetManager.SwitchPreset(e11Id, saveEffects11Current)) {
 			globals::features::effects11.PersistActivePreset();
-			appliedAny = true;
+			appliedAny = effects11Applied = true;
 		} else {
 			logger::warn("[Presets] Failed to switch Effects11 preset '{}'", e11Id);
 		}
@@ -697,6 +699,9 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		SetActivePackId(id);
 		// The scene layer always follows the active pack, so a pack without scene files clears it.
 		globals::features::sceneManager.ReloadOverwrites();
+		// Applying a pack, even again, re-selects the pipeline it was authored for.
+		using PostProcessingMode::Mode;
+		PostProcessingMode::Set(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
 	}
 
 	if (pack->hasBaseline) {

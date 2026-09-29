@@ -3,11 +3,10 @@
 #include "EffectManager.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/ShaderPatches.h"
-#include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
-#include "IconsFontAwesome5.h"
 #include "Menu.h"
+#include "PostProcessingMode.h"
 #include "PresetManager.h"
 #include "SettingManager.h"
 #include "State.h"
@@ -72,10 +71,17 @@ void MenuManager::RenderSettingsPanel()
 			"Rain: %s", globals::features::effects11.raindropStatus.c_str());
 	}
 
-	ImGui::Separator();
-
 	// Without a preset there is no ini to write back to, so saving would only create stubs
 	const bool presetLoaded = effectManager.IsPresetLoaded();
+
+	PostProcessingMode::DrawSelector();
+	if (!presetLoaded) {
+		ImGui::SameLine();
+		ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Warning,
+			"%s", T("feature.effects11.no_valid_preset", "No valid preset loaded"));
+	}
+
+	ImGui::Separator();
 
 	ImGui::BeginDisabled(!presetLoaded);
 	if (ImGui::Button("Save & Apply")) {
@@ -280,7 +286,8 @@ void MenuManager::RenderAllSettings()
 				}
 
 				for (const auto& category : categories) {
-					if (!settingManager.IsCategoryEnabled(category))
+					// GLOBAL only holds UseEffect, which the shared post processing selector drives
+					if (!settingManager.IsCategoryEnabled(category) || category == "GLOBAL")
 						continue;
 
 					ImGuiTreeNodeFlags flags = (tabName == "Weather") ? ImGuiTreeNodeFlags_None : ImGuiTreeNodeFlags_DefaultOpen;
@@ -367,34 +374,9 @@ void MenuManager::RenderAllSettings()
 								switch (settingInfo->type) {
 								case SettingType::Bool:
 									{
-										// Covers both a missing preset and one whose enbeffect.fx failed to compile
-										const bool noPreset = category == "GLOBAL" && settingKey == "UseEffect" && !EffectManager::GetSingleton().IsPresetLoaded();
-										const bool forcedByPostProcessing = category == "EFFECT" && settingKey == "UseOriginalPostProcessing" &&
-										                                    globals::features::postProcessing.loaded &&
-										                                    globals::features::postProcessing.WantsTonemapOwnership();
-
-										if (forcedByPostProcessing) {
-											const char* lockMsg = T("feature.effects11.use_original_controlled_by_pp",
-												"This setting is controlled by Post Processing.");
-											if (Util::StatusBanner(ICON_FA_LOCK, lockMsg, Util::Colors::GetWarning()))
-												Menu::GetSingleton()->SelectFeatureMenu(globals::features::postProcessing.GetShortName());
-											Util::AddTooltip(T("feature.effects11.use_original_controlled_by_pp_tooltip",
-												"Post Processing controls tonemapping, so UseOriginalPostProcessing is forced on.\nClick to open Post Processing settings."));
-											ImGui::Spacing();
-										}
-
-										bool v = forcedByPostProcessing || (!noPreset && settingManager.GetValue<bool>(settingID, true));
-										ImGui::BeginDisabled(noPreset || forcedByPostProcessing);
-										if (ImGui::Checkbox(("##" + settingKey).c_str(), &v) && !forcedByPostProcessing) {
+										bool v = settingManager.GetValue<bool>(settingID, true);
+										if (ImGui::Checkbox(("##" + settingKey).c_str(), &v)) {
 											settingManager.SetValue<bool>(settingID, v);
-										}
-										ImGui::EndDisabled();
-
-										if (noPreset) {
-											ImGui::SameLine();
-											ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Warning);
-											ImGui::TextUnformatted(T("feature.effects11.no_valid_preset", "No valid preset loaded"));
-											ImGui::PopStyleColor();
 										}
 										break;
 									}

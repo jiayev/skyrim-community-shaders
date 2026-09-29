@@ -9,6 +9,7 @@
 #include "IconsFontAwesome5.h"
 #include "InverseSquareLighting/Common.h"
 #include "PostProcessing.h"
+#include "PostProcessingMode.h"
 #include "ShaderCache.h"
 #include "Utils/ColorSpace.h"
 #include "Utils/Game.h"
@@ -114,8 +115,9 @@ void LinearLighting::Reset()
 {
 	if (!resourcesReady)
 		return;
-	// Without Post Processing's display transform the toggle stays inert instead of failing at runtime.
-	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	// Needs Post Processing's display transform, so Vanilla mode turns it off; Effects 11 gates it separately via IsActive.
+	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded &&
+	                            PostProcessingMode::Get() != PostProcessingMode::Mode::Vanilla;
 	const bool acescg = linearLighting && settings.enableACEScg;
 	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg)
 		globals::shaderCache->Reload([this, linearLighting, acescg] {

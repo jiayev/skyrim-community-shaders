@@ -59,7 +59,6 @@
     "cs_editor.confirm_delete_saved_file": "Êtes-vous sûr de vouloir supprimer le fichier de paramètres enregistré ?",
     "cs_editor.contribution": "Contribution",
     "cs_editor.copy_all_from_parent": "Copiez toutes les valeurs des paramètres de la météo parente",
-    "cs_editor.cs_editor": "Éditeur CS",
     "cs_editor.currently_exterior_cell": "Vous vous trouvez actuellement dans une cellule extérieure.",
     "cs_editor.custom_color": "Couleur personnalisée",
     "cs_editor.dalc_header": "Éclairage ambiant directionnel (DALC)",
@@ -101,7 +100,6 @@
     "cs_editor.exit_free_camera": "Quitter la caméra libre",
     "cs_editor.exit_play_mode": "Quitter le mode jeu",
     "cs_editor.favorites": "Favoris",
-    "cs_editor.favorites_count": "Favoris : %d",
     "cs_editor.favourites": "Favoris",
     "cs_editor.filter_all": "Tous",
     "cs_editor.filter_editor_id": "ID de l'éditeur",
@@ -121,7 +119,9 @@
     "cs_editor.form_id_label": "ID du formulaire : %08X",
     "cs_editor.colors_3_plus": "(Les couleurs utilisées 3 fois ou plus apparaîtront ici)",
     "cs_editor.colours": "Couleurs",
+    "cs_editor.cs_editor": "Éditeur CS",
     "cs_editor.fav_most_colours": "Couleurs préférées/les plus fréquemment utilisées ici.",
     "cs_editor.fav_most_values": "Valeurs favorites/les plus fréquemment utilisées ici.",
+    "cs_editor.favorites_count": "Favoris : %d",
     "cs_editor.force_weather": "Force Météo"
 }
