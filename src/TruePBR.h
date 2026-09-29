@@ -79,9 +79,12 @@ public:
 	struct alignas(16) Settings
 	{
 		float VertexAOStrength = 1.0f;
-		uint pad[3];
+		uint EnableMicroShadows = 1;
+		float MicroShadowStrength = 1.0f;
+		uint pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(Settings);
+	static_assert(sizeof(Settings) == 16);
 
 	Settings settings;
 
@@ -109,6 +112,13 @@ public:
 	 * @return True if PBR setup was performed, false if the material is not PBR.
 	 */
 	bool BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::BSLightingShaderMaterialBase const* material);
+	/**
+	 * @brief Converts a generated grass material to PBR.
+	 *
+	 * @param sourceProperty Source lighting property containing the PBR material.
+	 * @param grassProperty Generated grass property to update.
+	 */
+	void SetupGrassMaterial(RE::BSLightingShaderProperty* sourceProperty, RE::BSLightingShaderProperty* grassProperty);
 
 	/**
 	 * @brief Binds extended PBR shader resources (displacement, RMAOS textures) to the device context.

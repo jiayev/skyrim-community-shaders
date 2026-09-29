@@ -211,7 +211,8 @@ namespace ExponentialHeightFog
 		}
 #endif
 
-		fogColor = fogInscatteringColor * (1.0f - expFogFactor);
+		// Callers blend with the returned opacity (.w), so the color must not be pre-weighted by it.
+		fogColor = fogInscatteringColor;
 
 		float3 directionalInscattering = 0;
 
@@ -231,7 +232,7 @@ namespace ExponentialHeightFog
 			float cosTheta = dot(lightDirection, viewDirection);
 			float phase = HenyeyGreenstein(cosTheta, SharedData::exponentialHeightFogSettings.directionalInscatteringAnisotropy);
 			float3 directionalLightInscattering = dirLightColor * phase;
-			directionalInscattering = directionalLightInscattering * (1.0f - expFogFactor) * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
+			directionalInscattering = directionalLightInscattering * SharedData::exponentialHeightFogSettings.directionalInscatteringMultiplier;
 		}
 
 		fogColor += directionalInscattering;

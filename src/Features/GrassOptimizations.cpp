@@ -655,16 +655,19 @@ void GrassOptimizations::ClearShaderCache()
 		shader = nullptr;
 	};
 	release(cullCS);
+	cullCSFailed = false;
 	hiZ.ClearShaderCache();
 	bucketStore.ClearShaderCache();
 }
 
 ID3D11ComputeShader* GrassOptimizations::GetCullCS()
 {
-	if (!cullCS) {
+	if (!cullCS && !cullCSFailed) {
 		cullCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\GrassOptimizations\\GrassCullingCS.hlsl", {}, "cs_5_0"));
-		if (!cullCS)
+		if (!cullCS) {
+			cullCSFailed = true;
 			logger::error("[GRASS OPTIMIZATIONS] cull CS load failed — feature disabled");
+		}
 	}
 	return cullCS;
 }
@@ -717,7 +720,7 @@ void GrassOptimizations::CullBucket(GrassBucket& b, ID3D11DeviceContext* ctx)
 		if (!bin.active || !bin.argsBuf)
 			continue;
 		const UINT countOffset = (UINT)(tier * sizeof(uint32_t));
-		const D3D11_BOX countBox{ countOffset, 0, 0, countOffset + sizeof(uint32_t), 1, 1 };
+		const D3D11_BOX countBox{ countOffset, 0, 0, static_cast<UINT>(countOffset + sizeof(uint32_t)), 1, 1 };
 		ctx->CopySubresourceRegion(bin.argsBuf, 0, instanceCountOffset, 0, 0, b.lodCounterBuf, 0, &countBox);
 	}
 }
@@ -921,7 +924,8 @@ void GrassOptimizations::Hooks::DrawInstanceTriShape::thunk(RE::BSRenderPass* pa
 
 		const uint32_t meshId = self.bucketStore.meshLibrary.ResolveMeshId(geometry);
 		const uint32_t triCount = meshId ? 0u : (uint32_t)geometry->GetTrishapeRuntimeData().triangleCount;
-		auto it = self.bucketStore.buckets.find({ meshId, meshId ? nullptr : diffuseTexture, triCount, meshId ? 0u : descVal });
+		auto* material = static_cast<RE::BSGrassShaderProperty*>(shaderProperty.get())->material;
+		auto it = self.bucketStore.buckets.find({ meshId, material, meshId ? nullptr : diffuseTexture, triCount, meshId ? 0u : descVal });
 		if (it == self.bucketStore.buckets.end() || !it->second.totalInstances || !it->second.instanceBuf) {
 			VanillaDrawInstanceTriShape(geometry);
 			return;

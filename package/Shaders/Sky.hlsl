@@ -437,7 +437,12 @@ PS_OUTPUT main(PS_INPUT input)
 
 #	if defined(EXP_HEIGHT_FOG)
 	if (inReflection && SharedData::exponentialHeightFogSettings.enabled) {
-		float3 skyFogPosition = normalize(input.FogPosition.xyz) * SharedData::CameraData.x;
+		float skyFogDistance = SharedData::CameraData.x;
+#		if defined(HORIZON_FIX)
+		// Match the main view (ISSAOComposite.hlsl): fog the sky out to the HorizonFix far water's horizon
+		skyFogDistance = max(skyFogDistance, SharedData::horizonFixSettings.farWaterDistance);
+#		endif
+		float3 skyFogPosition = normalize(input.FogPosition.xyz) * skyFogDistance;
 		float4 exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFogNoVolumetric(skyFogPosition, FrameBuffer::CameraPosAdjust.xyz, psout.Color.xyz, float4(input.Position.xy * FrameBuffer::DynamicResolutionParams2.xy, input.Position.z, 1));
 		psout.Color.xyz = lerp(psout.Color.xyz, exponentialHeightFog.xyz, exponentialHeightFog.w);
 	}
@@ -456,8 +461,10 @@ PS_OUTPUT main(PS_INPUT input)
 	if (depth < input.Position.z)
 		psout.Color.w = 0;
 
-#	else
+#	elif !defined(DITHER) || !defined(TEX)
 	// Even without cloud shadows enabled, sun disc should be occluded by scene depth (clouds, terrain, etc.)
+	// The sun glare pass (DITHER + TEX) is skipped: vanilla fades it through the sun occlusion query,
+	// and the per-pixel reject made the glare disappear.
 	if ((Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsSun)) {
 		float depth = TexDepthSampler.Load(int3(input.Position.xy, 0));
 		if (depth < input.Position.z)

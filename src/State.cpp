@@ -279,11 +279,6 @@ void State::Reset()
 
 void State::Setup()
 {
-	// Detect Moon and Stars mod for compatibility adjustments
-	moonAndStarsLoaded = GetModuleHandle(L"po3_MoonMod.dll") != nullptr;
-	if (moonAndStarsLoaded)
-		logger::info("Moon and Stars detected, compatibility enabled");
-
 	globals::features::truePBR.SetupResources();
 	SetupResources();
 
@@ -750,9 +745,8 @@ std::vector<std::pair<std::string, std::string>>* State::GetDefines()
 
 bool State::ShaderEnabled(const RE::BSShader::Type a_type)
 {
-	auto index = magic_enum::enum_integer(a_type) + 1;
-	if (index < sizeof(enabledClasses)) {
-		return enabledClasses[index];
+	if (a_type > RE::BSShader::Type::None && a_type < RE::BSShader::Type::Total) {
+		return enabledClasses[magic_enum::enum_integer(a_type) - 1];
 	}
 	return false;
 }
@@ -1083,12 +1077,11 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		}
 
 		if (auto sky = globals::game::sky) {
+			const auto& skySync = globals::features::skySync;
+
 			// Process sun
 			if (auto sun = sky->sun; sun && sun->root && sky->root) {
-				const auto& sunPos = sun->root->world.translate;
-				const auto& skyPos = sky->root->world.translate;
-				float3 sunDirection = { sunPos.x - skyPos.x, sunPos.y - skyPos.y, sunPos.z - skyPos.z };
-				sunDirection.Normalize();
+				const auto sunDirection = skySync.GetCelestialDirection(sky, SkySync::Caster::Sun);
 				data.SunDirection = { sunDirection.x, sunDirection.y, sunDirection.z, 0.0f };
 
 				if (sun->sunBase) {
@@ -1098,14 +1091,14 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 			}
 
 			if (auto masser = sky->masser) {
-				auto dir = Util::Moon::GetDirection(masser, moonAndStarsLoaded);
+				auto dir = skySync.GetCelestialDirection(sky, SkySync::Caster::Masser);
 				data.MasserDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (masser->root && !masser->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 					data.MasserColor = Util::Moon::GetBlendColor(masser, Util::Moon::MasserBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
 			}
 
 			if (auto secunda = sky->secunda) {
-				auto dir = Util::Moon::GetDirection(secunda, moonAndStarsLoaded);
+				auto dir = skySync.GetCelestialDirection(sky, SkySync::Caster::Secunda);
 				data.SecundaDirection = { dir.x, dir.y, dir.z, 0.0f };
 				if (secunda->root && !secunda->root->GetFlags().any(RE::NiAVObject::Flag::kHidden))
 					data.SecundaColor = Util::Moon::GetBlendColor(secunda, Util::Moon::SecundaBaseColor, globals::features::skySync.settings.NewMoonIntensity, globals::features::skySync.settings.CrescentMoonIntensity, globals::features::skySync.settings.FullMoonIntensity);
