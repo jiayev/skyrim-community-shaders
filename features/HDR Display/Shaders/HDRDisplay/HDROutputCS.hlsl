@@ -37,7 +37,7 @@ cbuffer PerFrame : register(b0)
 	bool hdrEnabled = enableHDR > 0.5;
 	bool skipUI = skipUIComposite > 0.5;
 	bool isMainLoading = isMainOrLoadingMenu > 0.5;
-	bool postProcessOutput = SharedData::postProcessingSettings.DisableVanillaTonemapping != 0 && !isMainLoading;
+	bool postProcessOutput = SharedData::TonemapOwner == SharedData::TonemapOwnerPostProcessing && !isMainLoading;
 
 	float3 finalColor;
 

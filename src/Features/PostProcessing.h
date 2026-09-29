@@ -26,12 +26,6 @@ struct PostProcessing : Feature
 		return &singleton;
 	}
 
-	struct alignas(16) Settings
-	{
-		uint DisableVanillaTonemapping = 1;
-		uint pad[3];
-	} settings;
-
 	const std::string ppPresetPath = "Data\\SKSE\\Plugins\\CommunityShaders\\PostProcessing";
 
 	virtual inline std::string GetName() override { return "Post Processing"; }
@@ -61,10 +55,6 @@ struct PostProcessing : Feature
 
 	/**
 	 * @brief Whether Post Processing wants to replace the vanilla tonemap this frame.
-	 *
-	 * Queried by State::GetTonemapOwner() to arbitrate against Effects11. Note this is
-	 * narrower than "is the pipeline active": with DisableVanillaTonemapping off the
-	 * pipeline still runs its effects and then hands off to the vanilla tonemap.
 	 */
 	bool WantsTonemapOwnership() const;
 
@@ -75,15 +65,6 @@ struct PostProcessing : Feature
 	 * write to a game render target must bail out rather than do work nothing consumes.
 	 */
 	bool IsTonemapOwnedByEffects11() const;
-
-	/**
-	 * @brief Builds the shared-buffer payload, masking flags the arbiter has revoked.
-	 *
-	 * DisableVanillaTonemapping is forced to 0 unless Post Processing actually owns the
-	 * tonemap, so ISHDR and HDROutputCS do not assume a linear, already-tonemapped scene
-	 * when another feature produced the image.
-	 */
-	Settings GetCommonBufferData();
 
 	json pendingSettings = {};
 

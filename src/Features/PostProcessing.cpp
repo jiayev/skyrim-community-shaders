@@ -17,10 +17,6 @@
 
 #include <format>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	PostProcessing::Settings,
-	DisableVanillaTonemapping)
-
 void PostProcessing::DrawSettings()
 {
 	static int pipelinePageNum = 0;
@@ -65,8 +61,7 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	// Effects11 replaces the whole tonemap pass, so these toggles would have no effect while
-	// it owns the frame. Disable them rather than let them silently do nothing.
+	// Effects11 replaces the whole tonemap pass, so bypass has no effect while it owns the frame.
 	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
 
 	ImGui::BeginDisabled(tonemapTakenByEffects11);
@@ -76,15 +71,12 @@ void PostProcessing::DrawSettings()
 	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
 		bypass = bypassDisplay;
 
-	ImGui::SameLine();
-	ImGui::Checkbox(T("feature.post_processing.disable_vanilla_tonemapping", "Disable Vanilla Tonemapping"), (bool*)&settings.DisableVanillaTonemapping);
 	ImGui::EndDisabled();
 
 	if (tonemapTakenByEffects11) {
 		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
 		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
-									 "Tonemapping is currently handled by Effects 11. Post Processing effects that run "
-									 "before tonemapping still apply. To use Post Processing tonemapping instead, either "
+									 "Tonemapping is currently handled by Effects 11. To use Post Processing tonemapping instead, either "
 									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
 		ImGui::PopStyleColor();
 	}
@@ -336,9 +328,6 @@ void PostProcessing::ProcessSettings(json& o_json)
 		}
 	}
 
-	if (o_json.contains("ppsettings"))
-		settings = o_json["ppsettings"];
-
 	if (o_json.contains("cinematic_camera")) {
 		json camJson = o_json["cinematic_camera"];
 		cinematicCamera.LoadSettings(camJson);
@@ -351,6 +340,7 @@ void PostProcessing::SaveSettings(json& o_json)
 {
 	if (!pendingSettings.empty()) {
 		o_json = pendingSettings;
+		o_json.erase("ppsettings");
 		return;
 	}
 
@@ -365,11 +355,10 @@ void PostProcessing::SaveSettings(json& o_json)
 		}
 	}
 
-	o_json["ppsettings"] = settings;
-
 	json camJson{};
 	cinematicCamera.SaveSettings(camJson);
 	o_json["cinematic_camera"] = camJson;
+	o_json.erase("ppsettings");
 }
 
 std::vector<std::string> PostProcessing::LoadPresets()
@@ -470,7 +459,6 @@ void PostProcessing::RestoreDefaultSettings()
 		LoadPresetFrom("default");
 	} catch (const std::exception& e) {
 		logger::warn("Failed to load default preset. Error: {}", e.what());
-		settings = {};
 		cinematicCamera.RestoreDefaultSettings();
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
 		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
@@ -831,24 +819,12 @@ bool PostProcessing::WantsTonemapOwnership() const
 {
 	if (globals::features::linearLighting.IsLinearLightingActive())
 		return !globals::state->IsMainOrLoadingMenuOpen();
-	return !bypass && settings.DisableVanillaTonemapping != 0;
+	return !bypass;
 }
 
 bool PostProcessing::IsTonemapOwnedByEffects11() const
 {
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
-}
-
-PostProcessing::Settings PostProcessing::GetCommonBufferData()
-{
-	Settings data = settings;
-
-	// Effects11 outputs gamma-space SDR from its own tonemapper. Leaving this flag set would
-	// make ISHDR take its passthrough branch and HDROutputCS treat the scene as linear and
-	// already display-mapped, skipping AutoHDR and the BT.2020 conversion.
-	data.DisableVanillaTonemapping = globals::state->GetTonemapOwner() == State::TonemapOwner::kPostProcessing;
-
-	return data;
 }
 
 void PostProcessing::Prepass()
