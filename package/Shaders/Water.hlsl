@@ -328,6 +328,9 @@ SamplerState FlowMapSampler : register(s8);
 SamplerState FlowMapNormalsSampler : register(s9);
 SamplerState SSRReflectionSampler : register(s10);
 SamplerState RawSSRReflectionSampler : register(s11);
+#		if defined(PHYSICAL_SKY)
+SamplerState ApSampler : register(s13);
+#		endif
 
 Texture2D<float4> ReflectionTex : register(t0);
 Texture2D<float4> RefractionTex : register(t1);
@@ -1264,7 +1267,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled) {
 		const float3 waterViewDir = normalize(input.WPosition.xyz);
 		const float waterDist = length(input.WPosition.xyz);
-		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, ApSampler);
 		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
 		if (!SharedData::PostWaterComposite)
 			finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
@@ -1326,7 +1329,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (SharedData::physSkyData.enabled) {
 		const float3 waterViewDir = normalize(input.WPosition.xyz);
 		const float waterDist = length(input.WPosition.xyz);
-		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, DepthSampler);
+		const float4 apSample = PhysSky::SampleAp(waterViewDir, input.HPosition.xy, waterDist, ApSampler);
 		finalColorPreFog = finalColorPreFog * apSample.w + apSample.xyz;
 		if (!SharedData::PostWaterComposite)
 			finalColorPreFog = PhysSky::CompositeVolumetricClouds(finalColorPreFog, input.HPosition.xy);
