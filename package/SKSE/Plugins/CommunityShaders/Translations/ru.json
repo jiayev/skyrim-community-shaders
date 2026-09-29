@@ -2041,19 +2041,5 @@
     "ui.copy": "Копировать",
     "ui.dont_ask_again": "Больше не спрашивать",
     "ui.search": "Поиск...",
-    "ui.search_features": "Поиск функций...",
-    "feature.linear_lighting.ambient_gamma": "Гамма рассеянного",
-    "feature.linear_lighting.color_gamma": "Цветовая гамма",
-    "feature.linear_lighting.effect_gamma": "Гамма эффектов",
-    "feature.linear_lighting.effect_transparency_gamma": "Гамма прозрачности эффектов",
-    "feature.linear_lighting.emissive_color_gamma": "Гамма излучаемого цвета",
-    "feature.linear_lighting.enable": "Включить линейное освещение",
-    "feature.linear_lighting.fog_gamma": "Гамма тумана",
-    "feature.linear_lighting.fog_transparency_gamma": "Гамма прозрачности тумана",
-    "feature.linear_lighting.gamma_settings": "Настройки гаммы",
-    "feature.linear_lighting.glowmap_gamma": "Гамма карты свечения",
-    "feature.linear_lighting.light_gamma": "Гамма света",
-    "feature.linear_lighting.sky_gamma": "Гамма неба",
-    "feature.linear_lighting.vl_gamma": "Гамма объёмного освещения",
-    "feature.linear_lighting.water_gamma": "Гамма воды"
+    "ui.search_features": "Поиск функций..."
 }
