@@ -58,6 +58,17 @@ namespace
 		needGap = true;
 	}
 
+	bool CanApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline);
+	}
+
+	void ApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		if (UnifiedPresetCatalog::GetSingleton().ApplyPack(pack.id, true))
+			logger::info("[Presets] Applied pack '{}'", pack.id);
+	}
+
 	void DrawRoundedImage(ImDrawList* dl, ImTextureID texture, const ImVec2& p0, const ImVec2& p1, float rounding)
 	{
 		dl->AddImageRounded(texture, p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE, rounding);
@@ -280,12 +291,14 @@ void PresetsPageRenderer::RenderList(float width)
 		ImGui::PushID(pack.id.c_str());
 
 		const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
-		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowHeight));
+		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, rowHeight));
 		if (clicked) {
 			selectedPackId = pack.id;
 			lightboxPackId.clear();
 			lightboxImageIndex = -1;
 			lightboxSuppressClose = false;
+			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && CanApplyPack(pack))
+				ApplyPack(pack);
 		}
 
 		// Draw contents inside the selectable bounds, then park the cursor past the row so the
@@ -448,8 +461,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::Spacing();
 
 			// Compact apply + folder icon; both auto-size so they stay readable when the CS window is narrow.
-			const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPresets || pack->hasBaseline);
-			ImGui::BeginDisabled(!canApply);
+			ImGui::BeginDisabled(!CanApplyPack(*pack));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
@@ -459,11 +471,8 @@ void PresetsPageRenderer::RenderDetail()
 				1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
-			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset"))) {
-				if (catalog.ApplyPack(pack->id, true)) {
-					logger::info("[Presets] Applied pack '{}'", pack->id);
-				}
-			}
+			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
+				ApplyPack(*pack);
 			ImGui::PopStyleColor(4);
 			ImGui::PopStyleVar();
 			ImGui::EndDisabled();
