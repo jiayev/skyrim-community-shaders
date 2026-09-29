@@ -4,6 +4,7 @@
 
 #include "Globals.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "I18n/I18n.h"
 #include "State.h"
 
 namespace NativeMenu
@@ -51,6 +52,6 @@ namespace NativeMenu
 	void Register()
 	{
 		Vendor::SystemMenuHook::Install();
-		RegisterRows("Graphics", GraphicsRows());
+		RegisterRows(T("native_menu.graphics.tab", "Graphics"), GraphicsRows());
 	}
 }

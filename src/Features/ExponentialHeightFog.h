@@ -99,6 +99,8 @@ private:
 	};
 	STATIC_ASSERT_ALIGNAS_16(VolumetricFogCB);
 
+	/** @brief Shaders see height fog as disabled: an ENB preset replaces it, or the map is open. */
+	bool IsSuppressed() const;
 	void EnsureVolumetricResources();
 	void ReleaseVolumetricResources();
 	void BindIntegratedLightScattering();

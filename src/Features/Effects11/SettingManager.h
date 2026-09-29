@@ -1,8 +1,16 @@
 #pragma once
 
-#include <map>
 #include <optional>
 #include <shared_mutex>
+#include <string_view>
+
+/** @brief Lets the string-keyed setting maps be probed with a string_view, so the per-frame
+ *  lookups made with string literals never allocate a temporary std::string. */
+struct SettingStringHash
+{
+	using is_transparent = void;
+	size_t operator()(std::string_view value) const noexcept { return std::hash<std::string_view>{}(value); }
+};
 
 enum class SettingType
 {
@@ -106,6 +114,7 @@ struct Setting
 	float step = 0.01f;
 	std::string dependsOnKey;
 	std::string dependsOnCategory;
+	std::vector<std::string> legacyKeys;
 };
 
 class SettingManager
@@ -126,7 +135,7 @@ public:
 		float3 defaultValue, bool hasWeatherSupport = false);
 
 	template <typename T>
-	T GetValue(const std::string& key, const std::string& category, bool rawValue = false);
+	T GetValue(std::string_view key, std::string_view category, bool rawValue = false);
 
 	template <typename T>
 	T GetValue(uint32_t id, bool rawValue = false);
@@ -134,25 +143,31 @@ public:
 	template <typename T>
 	void SetValue(uint32_t id, const T& value);
 
-	uint32_t GetSettingID(const std::string& key, const std::string& category) const;
+	uint32_t GetSettingID(std::string_view key, std::string_view category) const;
 
-	float GetInterpolatedTimeOfDayValue(const std::string& key, const std::string& category);
-	float3 GetInterpolatedColorTimeOfDayValue(const std::string& key, const std::string& category);
+	float GetInterpolatedTimeOfDayValue(std::string_view key, std::string_view category);
+	float3 GetInterpolatedColorTimeOfDayValue(std::string_view key, std::string_view category);
 
-	const Setting* GetSettingInfo(const std::string& key, const std::string& category) const;
+	const Setting* GetSettingInfo(std::string_view key, std::string_view category) const;
 	std::vector<std::string> GetSettingsByCategory(const std::string& category) const;
 	bool CategoryHasWeatherSupport(const std::string& category) const;
 	void SetCategoryExteriorOnly(const std::string& category, bool exteriorOnly);
 	bool IsCategoryExteriorOnly(const std::string& category) const;
 
-	std::map<std::string, std::vector<std::string>> GetCategorizedSettings() const;
+	/** @brief Every category in registration order. */
+	std::vector<std::string> GetCategories() const;
 
 	void SetCategoryDependency(const std::string& category, const std::string& dependsOnKey, const std::string& dependsOnCategory);
+	/** @brief The {key, category} of the bool setting that switches a category on, or empty strings when it has none. */
+	std::pair<std::string, std::string> GetCategoryDependency(const std::string& category) const;
 	void SetSettingDependency(const std::string& key, const std::string& category, const std::string& dependsOnKey, const std::string& dependsOnCategory);
+	void SetSettingLegacyKey(const std::string& key, const std::string& category, const std::string& legacyKey);
 	bool IsCategoryEnabled(const std::string& category);
 	bool IsSettingEnabled(const std::string& key, const std::string& category);
 
 	// Weather integration
+	/** @brief True when EnableMultipleWeathers is on, so weather-aware settings read and write the weather files. */
+	bool IsWeatherSystemEnabled() const;
 	void SetWeatherBlendFactors(uint32_t currentWeatherID, uint32_t lastWeatherID, float blendFactor);
 	void LoadWeatherSettings(const std::vector<uint32_t>& weatherIDs, const std::string& filePath);
 	void SaveWeatherSettings(const std::string& weatherKey, const std::string& filePath);
@@ -179,9 +194,8 @@ public:
 private:
 	struct CategorySettings
 	{
-		std::unordered_map<std::string, uint32_t> settings;  // key -> ID
+		std::unordered_map<std::string, uint32_t, SettingStringHash, std::equal_to<>> settings;  // key -> ID
 		std::vector<std::string> settingOrder;
-		std::string tab = "Main";
 		bool ignoreWeatherSystem = false;
 		bool ignoreWeatherSystemInterior = true;
 		bool lastSavedIgnoreWeatherSystem = false;
@@ -192,7 +206,7 @@ private:
 	};
 
 	std::vector<Setting> allSettings;
-	std::unordered_map<std::string, CategorySettings> categories;
+	std::unordered_map<std::string, CategorySettings, SettingStringHash, std::equal_to<>> categories;
 	std::vector<std::string> categoryOrder;
 	std::unordered_map<uint32_t, std::vector<SettingValue>> weatherData;
 	std::unordered_map<uint32_t, std::vector<SettingValue>> lastSavedWeatherData;
@@ -200,6 +214,7 @@ private:
 	uint32_t currentWeatherID = 0;
 	uint32_t lastWeatherID = 0;
 	float weatherBlendFactor = 0.0f;
+	uint32_t multipleWeathersSettingID = 0xFFFFFFFF;
 
 	float timeOfDay1[4] = { 0, 0, 0, 0 };
 	float timeOfDay2[4] = { 0, 0, 0, 0 };
@@ -208,12 +223,13 @@ private:
 
 	void RegisterSettingInternal(Setting& setting);
 	void LoadWeatherIgnoreSettings(const std::string& filePath);
+	bool IsWeatherSystemEnabledInternal() const;
 
 	template <typename T>
 	T GetValueInternal(uint32_t id, bool rawValue = false) const;
 	template <typename T>
 	void SetValueInternal(uint32_t id, const T& value);
-	uint32_t GetSettingIDInternal(const std::string& key, const std::string& category) const;
+	uint32_t GetSettingIDInternal(std::string_view key, std::string_view category) const;
 
 	SettingValue InterpolateValues(const SettingValue& a, const SettingValue& b, float t) const;
 	float ComputeTimeOfDayInterpolation(const TimeOfDayValue& value) const;
