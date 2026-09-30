@@ -113,7 +113,7 @@ namespace DCLF::Draws
 				if (a_tables.objects[o].flags & kObjectFree)
 					continue;
 				const std::uint32_t partitions = partitioned ? a_tables.skinPartitions[o] : 0u;
-				draws += partitions ? std::popcount(partitions) : 1;
+				draws += PartitionDraws(partitions);
 			}
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 		}

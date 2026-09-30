@@ -393,6 +393,9 @@ namespace DCLF
 		const auto& tables = store.GetTables();
 		const auto claims = PassCapture::Get().CurrentClaims();
 		const std::size_t objects = tables.objects.size();
+		// Left out of the engine's cull or registration this frame (PrimaryCull): the native loop does not draw it.
+		const auto& stoodIn = PrimaryCull::Get().StoodInMembers();
+		const ankerl::unordered_dense::set<const RE::BSGeometry*> leftOut(stoodIn.begin(), stoodIn.end());
 		snapshot.flags.assign(objects, 0);
 		snapshot.geometry.assign(objects, nullptr);
 		for (std::size_t o = 0; o < objects && o < tables.objectGeometry.size(); ++o) {
@@ -406,7 +409,7 @@ namespace DCLF
 				flags |= 4;
 			if (geometry && claims && claims->contains(geometry)) {
 				flags |= 8;
-				if (PassCapture::Get().WithheldThisFrame(geometry))
+				if (leftOut.contains(geometry))
 					flags |= 1;
 			}
 			snapshot.flags[o] = flags;
@@ -657,7 +660,7 @@ namespace DCLF
 			for (const auto& input : inputs) {
 				if (!(input.flags & kInputDrawable) || (input.flags & kObjectDecal))
 					continue;
-				const std::size_t templates = input.partitions ? static_cast<std::size_t>(std::popcount(input.partitions)) : 1;
+				const std::size_t templates = PartitionDraws(input.partitions);
 				if (sequence + templates > sequences.size())
 					break;
 				const std::size_t first = sequence;

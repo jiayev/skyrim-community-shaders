@@ -230,11 +230,12 @@ namespace DCLF
 			sceneFlags.clear();
 			objectFree.clear();
 			liveObjects = 0;
+			// The decals' ordinals are the member decals' (SceneStore::OrderDecals), kept with the objects.
+			decalOrdinal.clear();
+			decalCount = {};
 		}
 		// The per-frame lists: every walk refills them, and the slots' offsets into them are rewritten with them.
 		actorObjects.clear();
-		decalOrdinal.clear();
-		decalCount = {};
 		faceStreams.clear();
 		shadowTextureSet.clear();
 		shadowTextureSeen.clear();
@@ -292,7 +293,6 @@ namespace DCLF
 		geometryConstants.clear();
 		geometryConstantsValid.clear();
 		geometryTemplate.clear();
-		geometryTemplateNative.clear();
 		techniques.clear();
 		techniqueRow.clear();
 		permutations.clear();

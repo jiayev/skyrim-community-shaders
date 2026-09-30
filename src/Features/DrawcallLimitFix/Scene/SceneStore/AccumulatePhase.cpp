@@ -30,153 +30,45 @@ namespace DCLF
 			if (group && group->batchRenderer)
 				mainBatchRenderers.insert(group->batchRenderer);
 		}
-		// Published for the registration hook, which runs before this and so uses the previous frame's
-		// set. These pointers are stable across frames, and an empty set on the first frame simply means
-		// nothing is withheld yet.
-		PassCapture::Get().SetMainBatchRenderers(
-			std::make_shared<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>>(mainBatchRenderers));
 		return true;
 	}
 
-	void SceneStore::CollectAccumulatedPasses()
+	const RE::BSRenderPass* SceneStore::TemplatePassOf(RE::BSShaderProperty* a_property) const
 	{
-		accumulatedPasses.clear();
-		// The latched accumulator, not `currentAccumulator`. BuildFrame now runs at EarlyPrepass, before
-		// the depth pass, where `currentAccumulator` is still null because nothing is being rendered yet -
-		// but the accumulator has held its passes since the cull job finished, which `Main::Draw` does
-		// before the shadow maps. Measured: 612 passes at EarlyPrepass, at the end of the depth pass and
-		// at Prepass alike, against 0 from `currentAccumulator` at the first two.
-		auto* accumulator = latchedAccumulator ? latchedAccumulator : *globals::game::currentAccumulator.get();
-		auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
-		if (!batch)
-			return;  // before the first latch, i.e. the first frame only
-
-		// BSBatchRenderer::renderPass holds PassGroup structs inline (the engine indexes it as
-		// data + (pass + group * 6) * 8), not the PassGroup pointers CommonLib declares; each of the five
-		// entries heads a list chained through passGroupNext. renderPassMap maps each group's technique
-		// (what SetupTechnique receives) to its index; the engine reads it as buckets of
-		// { key, value, next } at +0x48, bucket count at +0x2C (engine notes: batch renderer).
-		struct MapEntry
-		{
-			std::uint32_t key;
-			std::uint32_t value;
-			const MapEntry* next;
-		};
-		auto addBatch = [&](const RE::BSBatchRenderer* a_batch) {
-			const auto* base = reinterpret_cast<const std::uint8_t*>(a_batch);
-			const auto* buckets = *reinterpret_cast<const MapEntry* const*>(base + 0x48);
-			const std::uint32_t bucketCount = *reinterpret_cast<const std::uint32_t*>(base + 0x2c);
-			const auto* groups = reinterpret_cast<const RE::BSBatchRenderer::PassGroup*>(a_batch->renderPass.data());
-			const std::uint32_t groupCount = a_batch->renderPass.size();
-			for (std::uint32_t b = 0; buckets && groups && b < bucketCount; ++b) {
-				const auto& entry = buckets[b];
-				if (!entry.next || entry.value >= groupCount)
-					continue;  // empty bucket
-				const std::uint32_t technique = entry.key;
-				const auto& group = groups[entry.value];
-				for (std::uint32_t subPass = 0; subPass < 5; ++subPass) {
-					std::uint32_t chainIndex = 0;
-					for (auto* pass = group.passes[subPass]; pass; pass = pass->passGroupNext, ++chainIndex) {
-						if (pass->geometry && pass->shader && pass->shader->shaderType.get() == RE::BSShader::Type::Lighting)
-							AddAccumulatedPass(pass->geometry, AccumulatedPass{ pass, DrawnPassDescriptor(PassDescriptorOf(technique), subPass), subPass,
-																   pass->passEnum, pass->accumulationHint, chainIndex, PassCapture::FadingAtRegistration(pass), LodRowOf(*pass) });
-					}
-				}
-			}
-		};
-		addBatch(batch);
-		// Geometry groups sort their passes in batch renderers of their own.
-		for (auto* group : batch->geometryGroups) {
-			if (group && group->batchRenderer)
-				addBatch(group->batchRenderer);
-		}
+		const auto* pass = a_property ? FindLightingPass(a_property) : nullptr;
+		return pass ? pass : frameLightingPass;
 	}
 
-	void SceneStore::CompareCapturedPasses(bool a_compare)
+	void SceneStore::DrainCapture()
 	{
 		auto& capture = PassCapture::Get();
 		if (!capture.Installed())
 			return;
-		// Always drained, whether or not anything is compared: the capture buffer is fixed-capacity and a
-		// frame that does not drain it overflows.
+		// Always drained: the capture buffer is fixed-capacity and a frame that does not drain it overflows. The main
+		// camera's registrations are no source of bindings (scene membership is); the diagnostics read them.
 		const auto entries = capture.Drain();
-		auto& captureStats = capture.MutableStats();
-		captureStats.compared = captureStats.missing = captureStats.extra = captureStats.techniqueDiffers = captureStats.subPassDiffers = 0;
-		if (!a_compare) {
-			// The normal path needs only the first registration per geometry. Insert directly into the
-			// retained table instead of allocating a second map and hashing every geometry twice.
-			bool foundMain = false;
-			for (const auto& entry : entries) {
-				if (!mainBatchRenderers.contains(entry.batch))
-					continue;
-				if (!foundMain) {
-					accumulatedPasses.clear();
-					foundMain = true;
-				}
-				// Preserve the capture's first-registration rule, including duplicate hint-10 passes.
-				accumulatedPasses.try_emplace(entry.geometry,
-					AccumulatedPass{ entry.pass, DrawnPassDescriptor(PassDescriptorOf(entry.technique), entry.subPass), entry.subPass, entry.passEnum,
-						entry.pass ? static_cast<std::uint32_t>(entry.pass->accumulationHint) : 0u,
-						0xFFFFFFu - static_cast<std::uint32_t>(std::min<std::size_t>(static_cast<std::size_t>(&entry - entries.data()), 0xFFFFFFu)),
-						entry.fading, entry.pass ? LodRowOf(*entry.pass) : 3u });
+		frameLightingPass = nullptr;
+		for (const auto& entry : entries)
+			if (entry.pass && mainBatchRenderers.contains(entry.batch) && entry.pass->shader &&
+				entry.pass->shader->shaderType.get() == RE::BSShader::Type::Lighting && entry.pass->numLights > 0 && entry.pass->sceneLights) {
+				frameLightingPass = entry.pass;
+				break;
 			}
-			return;  // An empty capture preserves the caller's accumulator fallback.
-		}
-
-		// Only the main camera's registrations; the shadow cameras register into their own renderers.
-		ankerl::unordered_dense::map<const RE::BSGeometry*, const PassCapture::Entry*> captured;
+		if (SwitchValue(Switch::DecalOrderProbe) == "1")
+			Scene::ProbeDecalOrder(entries, mainBatchRenderers);
+		// Eligible objects DCLF has not bound that the engine registered: a scene event DCLF missed (a record not written
+		// again, a verdict not taken again) shows up here.
 		for (const auto& entry : entries) {
-			if (mainBatchRenderers.contains(entry.batch))
-				captured.try_emplace(entry.geometry, &entry);
-		}
-
-		for (const auto& [geometry, accumulated] : a_compare ? accumulatedPasses : decltype(accumulatedPasses){}) {
-			++captureStats.compared;
-			const auto it = captured.find(geometry);
-			if (it == captured.end()) {
-				++captureStats.missing;
+			if (!entry.geometry || !mainBatchRenderers.contains(entry.batch) || entry.fading)
 				continue;
-			}
-			if (DrawnPassDescriptor(PassDescriptorOf(it->second->technique), it->second->subPass) != accumulated.technique)
-				++captureStats.techniqueDiffers;
-			if (it->second->subPass != accumulated.subPass)
-				++captureStats.subPassDiffers;
+			const auto it = tracked.find(const_cast<RE::BSGeometry*>(entry.geometry));
+			if (it == tracked.end() || it->second.candidateReason != Ineligible::None || IsMember(FindObject(entry.geometry)))
+				continue;
+			++residentStats.registeredUnbound;
+			if (residentStats.registeredUnboundFirst.empty())
+				residentStats.registeredUnboundFirst = fmt::format("'{}' under '{}' (hint {})", entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "",
+					entry.geometry->parent && entry.geometry->parent->name.c_str() ? entry.geometry->parent->name.c_str() : "", entry.hint);
 		}
-		if (a_compare) {
-			for (const auto& [geometry, entry] : captured) {
-				if (!accumulatedPasses.contains(geometry))
-					++captureStats.extra;
-			}
-		}
-
-		// The tables are built from the capture rather than the accumulator walk once the two agree. The
-		// walk stops working the moment a pass is withheld from the batch renderer, which is the whole
-		// point of static ownership; the capture sees the registration regardless of what happens to it
-		// afterwards. Falling back when the capture is empty keeps the first frame and any unexpected
-		// path working.
-		if (captured.empty())
-			return;
-		accumulatedPasses.clear();
-		for (const auto& [geometry, entry] : captured) {
-			// The hint is read off the pass now, on the render thread, while the pass is alive for the
-			// frame. RegisterPass PREPENDS to its list (Ghidra: passGroupNext = head; head = pass), so the
-			// engine draws a bucket in reverse registration order; the chain position is reversed here so
-			// that an ascending sort on it is the draw order, as it is for the accumulator walk.
-			AddAccumulatedPass(geometry,
-				AccumulatedPass{ entry->pass, DrawnPassDescriptor(PassDescriptorOf(entry->technique), entry->subPass), entry->subPass, entry->passEnum,
-					entry->pass ? static_cast<std::uint32_t>(entry->pass->accumulationHint) : 0u,
-					0xFFFFFFu - static_cast<std::uint32_t>(std::min<std::size_t>(static_cast<std::size_t>(entry - entries.data()), 0xFFFFFFu)),
-					entry->fading, entry->pass ? LodRowOf(*entry->pass) : 3u });
-		}
-	}
-
-	void SceneStore::AddAccumulatedPass(const RE::BSGeometry* a_geometry, const AccumulatedPass& a_pass)
-	{
-		// One pass per object, the first registered - except that a hint-10 pass (a LOD cross-fade's copy of the
-		// old level, the native loop's) never stands for an object that also has a pass of its own.
-		const auto [it, inserted] = accumulatedPasses.try_emplace(a_geometry, a_pass);
-		if (!inserted && it->second.hint == 10 && a_pass.hint != 10)
-			it->second = a_pass;
 	}
 
 	const AccumulatedPass* SceneStore::FindAccumulatedPass(const RE::BSGeometry* a_geometry) const
@@ -190,12 +82,6 @@ namespace DCLF
 		const std::uint32_t objectId = a_patch.object;
 		const AccumulateSnapshot before(tables, objectId);
 		auto& object = tables.objects[objectId];
-		if (!a_patch.resident) {
-			accumulatePatched.push_back(objectId);
-			if (patchedFrame.size() < tables.objects.size())
-				patchedFrame.resize(tables.objects.size(), 0);
-			patchedFrame[objectId] = frame;
-		}
 		object.materialIndex = a_patch.material;
 		if (a_patch.resident) {
 			if (materialMember.size() <= a_patch.material)
@@ -230,7 +116,12 @@ namespace DCLF
 		stats.derivedDescriptors += a_patch.derivedDescriptor ? 1 : 0;
 		if (a_patch.decalKey) {
 			++stats.decals[(static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1) & 1];
-			decalOrder.push_back({ a_patch.decalKey, objectId });
+			if (a_patch.resident) {
+				memberDecals[objectId] = a_patch.decalKey & ~std::uint64_t(0xFFFFFF);
+				memberDecalsChanged = true;
+			} else {
+				decalOrder.push_back({ a_patch.decalKey, objectId });
+			}
 		}
 	}
 
@@ -247,26 +138,17 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Accumulate.Tables");
 		if (!sceneBuilt) {
 			// A load screen, or the feature installed mid-frame: nothing to patch.
-			CompareCapturedPasses(false);
+			DrainCapture();
 			return;
 		}
 		PartTimer timer(stats.partMs, &stats.accumulatePartMs);
 		std::uint32_t fadingThisFrame = 0;
 		TracyCZoneN(captureZone, "CS.DCLF.Accumulate.Capture", true);
-		// The pass table is filled from the capture, which is the source that keeps working once passes
-		// are withheld from the batch renderer. The accumulator walk is the cross-check.
-		// CS_DCLF_PASS_PARITY=1: the accumulator walk every frame, and the capture compared with it.
-		const bool passParity = SwitchEnabled(Switch::PassParity);
-		const bool haveAccumulator = RefreshMainBatchRenderers();
-		if (passParity)
-			CollectAccumulatedPasses();
-		else
-			accumulatedPasses.clear();
-		CompareCapturedPasses(passParity);
-		// The capture had nothing and the walk was skipped: take the walk after all, so the first frame
-		// after a latch is not empty.
-		if (accumulatedPasses.empty() && haveAccumulator && !passParity)
-			CollectAccumulatedPasses();
+		// The pass table holds the frame's membership joins alone (BindByMembership); the engine's registrations are drained
+		// for the diagnostics.
+		RefreshMainBatchRenderers();
+		accumulatedPasses.clear();
+		DrainCapture();
 		// The roots the last decode found faded out or back in (kObjectFadedOut); then the frames of visibility feedback that
 		// completed, decoded on the worker (the stood-in roots' fade, LOD and tree state).
 		PrimaryCull::Get().ApplyFadeChanges();
@@ -274,12 +156,6 @@ namespace DCLF
 		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
 		BindByMembership();
-		// The engine's passes for what PrimaryCull draws synthetically take the same sun bits, so both sources of an
-		// object's pass need one pipeline (and the probe still compares against the engine's own bits).
-		if (!PrimaryCull::Probe())
-			for (auto& [geometry, pass] : accumulatedPasses)
-				if (pass.pass)
-					PrimaryCull::Get().UnifySunBits(geometry, pass);
 		timer.Add(BuildPart::Walk);
 
 		TracyCZoneEnd(captureZone);
@@ -397,22 +273,8 @@ namespace DCLF
 			// or DCLF keeps drawing what the engine has stopped drawing.
 			if (reason == Ineligible::None)
 				reason = ClassifyFrame(*trackedEntry, accumulated);
-			// The skin partitions the main camera draws, from its registered pass's LODMode rather than the fade
-			// node the scene phase read for the shadow views. None is not drawn at all.
-			if (reason == Ineligible::None && accumulated && data.skinInstance && data.skinInstance->skinPartition) {
-				const std::uint32_t mask = SkinPartitionMask(*data.skinInstance, accumulated->lodRow);
-				if (!mask)
-					reason = Ineligible::Hidden;
-				else if (objectId < tables.skinPartitions.size()) {
-					// The walk writes the scene's mask again (every skin is written every walk); a resident's is the kept skin's,
-					// from the same LOD row.
-					const auto partitionMask = static_cast<std::uint8_t>(data.skinInstance->skinPartition->numPartitions > 1 ? mask : 0);
-					if (tables.skinPartitions[objectId] != partitionMask) {
-						tables.skinPartitions[objectId] = partitionMask;
-						tables.NoteChange(objectId, kChangeSkin);
-					}
-				}
-			}
+			// The skin partitions are the walk's (Tables::skinPartitions): GetRenderPasses gives the main pass the same row, the
+			// fade node's LOD level.
 			// A pass in an alpha-test list is drawn with DoAlphaTest whatever it was registered with
 			// (DrawnPassDescriptor, applied where the passes are taken).
 			// The histogram is the scene phase's, taken over the whole tracked set; where this phase -
@@ -563,18 +425,12 @@ namespace DCLF
 				staticFlags = derived.staticFlags;
 				key = derived.key;
 				tables.MarkMaterialUsed(materialSlot, frame);
-				// The per-frame template: a pipeline's template is always a property of an object of this
-				// frame (the first to use the slot, upgraded to a native-visible one by the election), so a
-				// persistent slot never points at a property the game has since freed. The constants are
-				// evaluated from it at Prepass (RefreshFrameConstants).
+				// The per-frame template: a pipeline's template is always a property of a member of this frame (the first
+				// to use the slot; KeepResidentsAlive takes one for the rest), so a persistent slot never points at a
+				// property the game has since freed. The constants are evaluated from it at Prepass (RefreshFrameConstants).
 				if (tables.pipelineLastUsed[pipelineSlot] != frame) {
 					tables.MarkPipelineUsed(pipelineSlot, frame);
 					tables.geometryTemplate[pipelineSlot] = property;
-					tables.geometryTemplateNative[pipelineSlot] = accumulated ? 1 : 0;
-				} else if (accumulated && !tables.geometryTemplateNative[pipelineSlot]) {
-					tables.geometryTemplate[pipelineSlot] = property;
-					tables.geometryTemplateNative[pipelineSlot] = 1;
-					++stats.templateUpgrades;
 				}
 				timer.Add(BuildPart::DedupHit);
 			} else {
@@ -595,11 +451,9 @@ namespace DCLF
 				auto pipelineIt = pipelineIndex.find(key);
 				const bool newPipeline = pipelineIt == pipelineIndex.end();
 				if (!newPipeline && tables.pipelineLastUsed[pipelineIt->second] != frame) {
-					// The slot's first use this frame: this object's property is the template until the
-					// election finds a native-visible one (see the cached path).
+					// The slot's first use this frame: this object's property is the template (see the cached path).
 					tables.MarkPipelineUsed(pipelineIt->second, frame);
 					tables.geometryTemplate[pipelineIt->second] = property;
-					tables.geometryTemplateNative[pipelineIt->second] = accumulated ? 1 : 0;
 				}
 				if (newPipeline) {
 					timer.Add(BuildPart::Dedup);
@@ -608,12 +462,11 @@ namespace DCLF
 					// Per-frame PerGeometry values for this pass descriptor, from any object's lighting pass
 					// (it supplies the scene light list the engine reads the sun from).
 					GeometryConstants constants{};
-					const auto* templatePass = FindLightingPass(property);
+					const auto* templatePass = TemplatePassOf(property);
 					const bool valid = templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, kMainPassRenderFlags, constants);
 					tables.geometryConstants[slot] = constants;
 					tables.geometryConstantsValid[slot] = valid ? 1 : 0;
 					tables.geometryTemplate[slot] = property;
-					tables.geometryTemplateNative[slot] = accumulated ? 1 : 0;
 
 					tables.pipelineTechnique[slot] = TechniqueRowFor(descriptors.pass);
 					stats.shadowMaskPipelines += tables.TechniqueOf(slot).shadowMask ? 1 : 0;
@@ -632,24 +485,6 @@ namespace DCLF
 					tables.pipelineConstantsVersion[slot] = tables.NextVersion();
 					tables.pipelineBindingVersion[slot] = tables.NextVersion();
 					pipelineIt = pipelineIndex.emplace(key, slot).first;
-					timer.Add(BuildPart::PipelineEval);
-				} else if (accumulated && !tables.geometryTemplateNative[pipelineIt->second]) {
-					// The election. This pipeline's per-frame lighting template belongs to an object the
-					// engine culled, and here is one it kept: take the template over. An object the engine
-					// kept is by definition in the lighting situation being drawn, so it is the correct
-					// template, and this is the ordering guarantee stated as a rule about the objects rather
-					// than as a rule about the order they are visited in.
-					const auto slot = pipelineIt->second;
-					GeometryConstants constants;
-					const auto* templatePass = FindLightingPass(property);
-					if (templatePass && evaluator.EvaluateGeometry(*templatePass, descriptors.pass, kMainPassRenderFlags, constants)) {
-						tables.geometryConstants[slot] = constants;
-						tables.geometryConstantsValid[slot] = 1;
-						tables.pipelineConstantsVersion[slot] = tables.NextVersion();
-					}
-					tables.geometryTemplate[slot] = property;
-					tables.geometryTemplateNative[slot] = 1;
-					++stats.templateUpgrades;
 					timer.Add(BuildPart::PipelineEval);
 				}
 				pipelineSlot = pipelineIt->second;
@@ -800,7 +635,6 @@ namespace DCLF
 				DropResidentSlot(entry->second.slot, true);
 		}
 		residentJoining.clear();
-		LapseAccumulated();
 		KeepResidentsAlive();
 		++residentStats.frames;
 		residentStats.resident += residents.size();
@@ -826,38 +660,8 @@ namespace DCLF
 			stats.pipelines = 0;
 			stats.pipelines = static_cast<std::uint32_t>(tables.usedPipelines.size());
 		}
-		// Decal draw order: sort the frame's decals by the engine's key and hand each its slot in its
-		// group. Tens to a few hundred entries; the sort is the whole cost.
-		// Last frame's ordinals are reset, not the whole column.
-		if (tables.decalOrdinal.size() != tables.objects.size())
-			tables.decalOrdinal.resize(tables.objects.size(), ~0u);
-		for (const std::uint32_t o : decalOrdered)
-			if (o < tables.decalOrdinal.size())
-				tables.decalOrdinal[o] = ~0u;
-		decalOrdered.clear();
-		tables.decalCount = {};
-		if (!decalOrder.empty()) {
-			std::sort(decalOrder.begin(), decalOrder.end(), [](const auto& a, const auto& b) { return a.key < b.key; });
-			for (const auto& entry : decalOrder) {
-				const std::uint32_t group = static_cast<std::uint32_t>(entry.key >> 60) - 1;
-				tables.decalOrdinal[entry.object] = tables.decalCount[group & 1]++;
-				decalOrdered.push_back(entry.object);
-			}
-		}
-		// The 4c gate, checked over the finished tables rather than asserted from the election: no
-		// native-visible object may draw on a pipeline whose lighting template came from a culled one.
-		stats.templateDefects = 0;
-		stats.pipelinesCulledOnly = 0;
-		for (std::size_t p = 0; p < tables.geometryTemplateNative.size(); ++p)
-			stats.pipelinesCulledOnly += (tables.PipelineUsed(p, frame) && !tables.geometryTemplateNative[p]) ? 1u : 0u;
-		if (stats.pipelinesCulledOnly) {
-			for (const auto& object : tables.objects) {
-				if (!(object.flags & kObjectNativeVisible) || (object.flags & kObjectNoBindings))
-					continue;
-				if (object.pipelineIndex < tables.geometryTemplateNative.size() && !tables.geometryTemplateNative[object.pipelineIndex])
-					++stats.templateDefects;
-			}
-		}
+		// Decal draw order (DecalOrder.cpp).
+		OrderDecals();
 		if (countSlots) {
 			stats.materials = 0;
 			for (const auto used : tables.materialLastUsed)
@@ -947,25 +751,6 @@ namespace DCLF
 		       derived.property == property && derived.material == material && derived.fadeState == FadeStateOf(property) &&
 		       derived.alphaBelowOne == alphaBelowOne && derived.interior == frameInterior && derived.pipelineSlot == tables.objects[a_slot].pipelineIndex &&
 		       derived.materialSlot == tables.objects[a_slot].materialIndex;
-	}
-
-	void SceneStore::LapseAccumulated()
-	{
-		ZoneScopedN("CS.DCLF.Accumulate.Lapse");
-		// A patch this phase did not renew: the engine no longer registers the object (culled, hidden, faded out), or it
-		// has no bindings this frame. Its record goes back to the scene half; a resident's is kept by its residency.
-		std::uint32_t lapsed = 0;
-		for (const std::uint32_t slot : lastPatched) {
-			if (slot < patchedFrame.size() && patchedFrame[slot] == frame)
-				continue;
-			if (IsResidentSlot(slot))
-				continue;
-			ResetAccumulatedHalf(slot);
-			++lapsed;
-		}
-		delta.restored += lapsed;
-		lastPatched.swap(accumulatePatched);
-		accumulatePatched.clear();
 	}
 
 	void SceneStore::ResetAccumulatedHalf(std::uint32_t a_slot)

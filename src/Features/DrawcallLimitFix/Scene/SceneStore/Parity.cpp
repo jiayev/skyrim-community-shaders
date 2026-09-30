@@ -171,7 +171,7 @@ namespace DCLF
 			const std::uint32_t d = it->second;
 			denseIndex.erase(it);
 			const char* what = nullptr;
-			// Every record keeps its accumulated half across walks (LapseAccumulated): compared as the walk left it, which
+			// A member keeps its accumulated half across walks (keepMember): compared as the walk left it, which
 			// is the scene half alone (the accumulated half's columns are the accumulate phase's, checked by the change log).
 			auto objectRecord = slots.objects[s];
 			auto drawRecord = slots.draws[s];

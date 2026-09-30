@@ -174,6 +174,8 @@ namespace DCLF
 					return false;
 			return true;
 		}
+		/** @brief A set hash of entry a_e's DCLF members (not the engine's) in the current snapshot. */
+		std::uint64_t MemberSignature(std::uint32_t a_e) const;
 		/** @brief Render thread, before the list jobs: memberLive of entry a_e's members, from the switches. */
 		void RefreshLive(std::uint32_t a_e);
 		/**
@@ -328,7 +330,9 @@ namespace DCLF
 			std::vector<const RE::NiAVObject*> roots;         // per candidate entry index
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> eligible;  // root -> entry index, plan not Rejected
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
-			ankerl::unordered_dense::set<const RE::NiAVObject*> admittedRoots;  // the same by node, kept across snapshots
+			// The same by node, kept across snapshots with the set of DCLF members it was admitted with (MemberSignature): a root
+			// whose members changed (a decal attached, a part swapped) is admitted again only once the new ones are drawn.
+			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
 			std::vector<std::uint32_t> pendingAdmission;       // entries to check for admission (Admit): a new snapshot's, a member newly drawn, in view
 			std::array<const RE::NiCullingProcess*, 16> processes{};  // the list processes this frame
 			std::uint32_t processCount = 0;

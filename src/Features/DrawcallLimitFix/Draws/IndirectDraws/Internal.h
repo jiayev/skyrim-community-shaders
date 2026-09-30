@@ -1549,6 +1549,8 @@ namespace DCLF
 		template <class F>
 		void ForEachDrawnGeometry(const SceneStore::Tables& a_tables, std::uint32_t a_firstSlot, std::uint32_t a_partitions, F&& a_draw)
 		{
+			if (a_partitions == kNoPartitions)
+				return;
 			std::uint32_t slot = a_firstSlot;
 			for (std::uint32_t i = 0; i < kMaxSkinPartitions && slot < a_tables.geometries.size(); ++i) {
 				if (a_partitions == 0 || ((a_partitions >> i) & 1))

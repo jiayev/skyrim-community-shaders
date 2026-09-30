@@ -353,11 +353,6 @@ void DrawcallLimitFix::EarlyPrepass()
 		TracyCZoneEnd(lookupZone);
 	}
 
-	// What the native loop was told to leave to DCLF but DCLF cannot draw this frame goes back to it now,
-	// before the depth and main passes: an object DCLF has no bindings for, or whose pipeline is not built.
-	if (DCLF::ActiveToggles().ownership)
-		DCLF::PassCapture::Get().HandBackUndrawable(DrawableThisFrame);
-
 	// The shadow views' programs: one Utility build per technique of the frame's casters, per render mode
 	// among the views the engine drew. Requested here, beside the Lighting builds, so they are compiled
 	// long before a shadow epoch would draw with them.
@@ -846,7 +841,7 @@ void DrawcallLimitFix::DrawSettings()
 			ImGui::TextUnformatted(("GPU (ORG pass timestamps, last report):\n" + gpu).c_str());
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		if (active.ownership)
-			ImGui::Text("Ownership: %u withheld, %u claimed, %u holes", capture.withheld, capture.claimed, capture.holes);
+			ImGui::Text("Ownership: %u claimed, %u holes", capture.claimed, capture.holes);
 		if (active.shadows) {
 			const auto& shadow = DCLF::IndirectDraws::Get().GetShadowStats();
 			ImGui::Text("Shadow views (since the last report): %u offered, %u drawn, %u not ready; last view %u inputs, %u records; sampled culling: %u tested, %u rejected",

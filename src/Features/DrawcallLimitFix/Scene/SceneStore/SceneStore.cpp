@@ -26,8 +26,9 @@ namespace DCLF
 		fullEvaluation = true;
 		perFrameSet.clear();
 		pendingEvaluation.clear();
-		accumulatePatched.clear();
-		lastPatched.clear();
+		memberDecals.clear();
+		materialEvaluationsPending.clear();
+		memberDecalsChanged = true;
 		fadeChanged.clear();
 		fadeDependents.clear();
 		propertyChanged.clear();

@@ -41,6 +41,8 @@ namespace DCLF
 			tables.residentSlot[a_slot] = 0;
 			tables.NoteChange(a_slot, kChangeMembership);
 		}
+		if (memberDecals.erase(a_slot))
+			memberDecalsChanged = true;
 		if (a_restore)
 			ResetAccumulatedHalf(a_slot);
 	}
@@ -48,6 +50,8 @@ namespace DCLF
 	void SceneStore::EndAllResidency()
 	{
 		residentMaintenanceDirty = true;
+		memberDecals.clear();
+		memberDecalsChanged = true;
 		for (const std::uint32_t slot : residents) {
 			ResetAccumulatedHalf(slot);
 			residentPos[slot] = kNotResident;
@@ -82,12 +86,10 @@ namespace DCLF
 		}
 		for (const auto& [pipeline, slot] : residentPipelines) {
 			if (pipeline < tables.pipelineLastUsed.size() && tables.pipelineLastUsed[pipeline] != frame) {
-				// No accumulated object used the pipeline this frame: the resident's property is its lighting template, as
-				// the first user's would be. A resident is drawn whenever the GPU finds it, so it counts as kept.
+				// No member joined on the pipeline this frame: a member's property is its lighting template.
 				const auto* geometry = tables.objectGeometry[slot];
 				tables.MarkPipelineUsed(pipeline, frame);
 				tables.geometryTemplate[pipeline] = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-				tables.geometryTemplateNative[pipeline] = 1;
 			}
 		}
 		for (const std::uint32_t material : residentMaterials)

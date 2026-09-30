@@ -34,6 +34,16 @@ namespace DCLF
 		return mask;
 	}
 
+	std::uint16_t SceneStore::SkinPartitionsOf(const RE::BSGeometry& a_geometry)
+	{
+		const auto& data = a_geometry.GetGeometryRuntimeData();
+		const auto* partitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
+		if (!partitions)
+			return 0;
+		const std::uint32_t mask = SkinPartitionMask(*data.skinInstance, LodRowOf(a_geometry, data.shaderProperty.get()));
+		return static_cast<std::uint16_t>(!mask ? kNoPartitions : partitions->numPartitions > 1 ? mask : 0u);
+	}
+
 	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		Ineligible reason = Ineligible::None;

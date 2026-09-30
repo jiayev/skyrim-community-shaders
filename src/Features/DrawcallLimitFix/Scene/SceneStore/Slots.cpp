@@ -74,8 +74,8 @@ namespace DCLF
 		shadowDirtySlots.clear();
 		++tablesGeneration;
 		fullEvaluation = true;
-		accumulatePatched.clear();
-		lastPatched.clear();
+		memberDecals.clear();
+		memberDecalsChanged = true;
 	}
 
 	void SceneStore::CheckObjectSlots(bool a_resolveBuffers)
@@ -274,7 +274,18 @@ namespace DCLF
 			tables.pipelineLastUsed[a_slot] = Tables::kSlotFree;
 			tables.retiredPipelineSlots.push_back(a_slot);
 		});
+		const bool slotParity = SwitchEnabled(Switch::PersistentParity);
 		freed += tables.materialSlots.DrainUnreferenced([&](std::uint32_t a_slot) {
+			// CS_DCLF_PERSISTENT_PARITY: a bound record still naming the slot is a reference the counts missed.
+			if (slotParity)
+				for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
+					if (!(tables.objects[o].flags & (kObjectNoBindings | kObjectFree)) && tables.objects[o].materialIndex == a_slot) {
+						static std::uint32_t logged = 0;
+						if (logged++ < 10)
+							logger::error("[DCLF] material slot {} drained while object {} '{}' (flags {:#x}, member {}) is bound to it, frame {}", a_slot, o,
+								tables.objectGeometry[o] && tables.objectGeometry[o]->name.c_str() ? tables.objectGeometry[o]->name.c_str() : "", tables.objects[o].flags,
+								IsResidentSlot(o), frame);
+					}
 			ClearMaterialSlot(a_slot);
 			++stats.materialCacheEvicted;
 			if (a_slot < materialMember.size() && std::exchange(materialMember[a_slot], 0))
