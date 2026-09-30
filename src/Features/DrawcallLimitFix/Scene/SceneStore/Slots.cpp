@@ -110,7 +110,7 @@ namespace DCLF
 			// longer the scene phase's, so the next delta walk writes it again.
 			pendingEvaluation.push_back(tables.objectGeometry[o]);
 			DropResidentSlot(static_cast<std::uint32_t>(o), false);
-			object.flags = (object.flags & ~(kObjectNativeVisible | kObjectSunTest)) | kObjectNoBindings;
+			object.flags = (object.flags & ~(kObjectMember | kObjectSunTest)) | kObjectNoBindings;
 			object.geometryIndex = object.pipelineIndex = object.materialIndex = 0;
 			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry);
 		}

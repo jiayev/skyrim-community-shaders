@@ -134,7 +134,7 @@ namespace DCLF
 			const bool passSame = built && fresh.technique == patch.pass.technique && fresh.subPass == patch.pass.subPass && fresh.hint == patch.pass.hint &&
 			                      fresh.lodRow == patch.pass.lodRow && fresh.sunTest == patch.pass.sunTest;
 			const auto& object = tables.objects[slot];
-			const bool recordSame = object.pipelineIndex == patch.pipeline && object.materialIndex == patch.material && (object.flags & kObjectNativeVisible) &&
+			const bool recordSame = object.pipelineIndex == patch.pipeline && object.materialIndex == patch.material && (object.flags & kObjectMember) &&
 			                        !(object.flags & kObjectNoBindings);
 			residentStats.parityPass += passSame ? 0 : 1;
 			residentStats.parityRecord += recordSame ? 0 : 1;

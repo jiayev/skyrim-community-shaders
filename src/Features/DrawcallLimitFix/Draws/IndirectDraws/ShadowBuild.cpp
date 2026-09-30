@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 
 namespace DCLF::Draws
 {
@@ -44,6 +45,7 @@ namespace DCLF::Draws
 			k.slotDiffuse.push_back(nullptr);
 			k.slotRefs.push_back(0);
 			k.slotReady.push_back(1);
+			k.slotOwner.emplace_back();
 		}
 		writeRow(0, a_plain);
 		const std::uint32_t transformBuffer = globals::game::smState ? (globals::game::smState->textureTransformCurrentBuffer & 1) : 0u;
@@ -55,14 +57,27 @@ namespace DCLF::Draws
 			const bool ready = textureIt != a_lookups.shadowTextures.end() && textureIt->second != Lookups::kNone && a_slot < a_in.addresses.recordCapacity;
 			k.slotReady[a_slot] = ready ? 1 : 0;
 			if (!ready)
-				return;
+				return false;
 			ShadowMaterialRow row;
 			row.texcoord = { material->texCoordOffset[transformBuffer].x, material->texCoordOffset[transformBuffer].y, material->texCoordScale[transformBuffer].x,
 				material->texCoordScale[transformBuffer].y };
 			row.diffuse = textureIt->second;
 			writeRow(a_slot, row);
-			if (const auto owner = a_lookups.shadowTextureOwners.find(k.slotDiffuse[a_slot]); owner != a_lookups.shadowTextureOwners.end())
-				a_out.bindingOwners.push_back(owner->second);
+			const auto owner = a_lookups.shadowTextureOwners.find(k.slotDiffuse[a_slot]);
+			std::shared_ptr<const void> held = owner != a_lookups.shadowTextureOwners.end() ? owner->second : nullptr;
+			if (k.slotOwner[a_slot] != held) {
+				k.slotOwner[a_slot] = std::move(held);
+				k.ownersChanged = true;
+			}
+			return true;
+		};
+		auto markRow = [&](std::uint32_t a_slot) {
+			if (k.rowDirtyMark.size() <= a_slot)
+				k.rowDirtyMark.resize(std::size_t(a_slot) + 1, 0);
+			if (!k.rowDirtyMark[a_slot]) {
+				k.rowDirtyMark[a_slot] = 1;
+				k.rowDirty.push_back(a_slot);
+			}
 		};
 		// An object's record: the plain one, its material's (acquired), or none.
 		auto recordOf = [&](std::uint32_t o) -> std::uint32_t {
@@ -90,11 +105,13 @@ namespace DCLF::Draws
 					k.slotDiffuse.push_back(nullptr);
 					k.slotRefs.push_back(0);
 					k.slotReady.push_back(0);
+					k.slotOwner.emplace_back();
 				}
 				it->second = slot;
 				k.slotMaterial[slot] = material;
 				k.slotDiffuse[slot] = a_tables.shadowDiffuse[o];
 				k.slotReady[slot] = 0;
+				markRow(slot);
 			}
 			return it->second;
 		};
@@ -105,6 +122,12 @@ namespace DCLF::Draws
 				k.slotMaterial[slot] = nullptr;
 				k.slotDiffuse[slot] = nullptr;
 				k.slotReady[slot] = 0;
+				if (k.slotOwner[slot]) {
+					k.slotOwner[slot].reset();
+					k.ownersChanged = true;
+				}
+				if (slot < k.transformWatchBuild.size())
+					k.transformWatchBuild[slot] = 0;
 				k.freeSlots.push_back(slot);
 				std::push_heap(k.freeSlots.begin(), k.freeSlots.end(), std::greater<>());
 			}
@@ -237,14 +260,63 @@ namespace DCLF::Draws
 		k.cursor.Advance(a_tables.changeLog);
 		for (const std::uint32_t o : changed)
 			takeRecord(o);
-		// The rows of every material slot held (its texture may have been resolved since, its texcoord moves, the table may
-		// have grown to hold it).
-		for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot) {
-			if (!k.slotMaterial[slot])
-				continue;
-			materialRow(slot);
-			a_out.waitingRows += slot >= a_in.addresses.recordCapacity ? 1 : 0;
+		// The material rows, on events (ShadowKept::rowDirty). The lookups (a texture resolved, dropped or moved) or the table's
+		// capacity changed: every slot again.
+		if (k.lookupsGeneration != a_lookups.generation || k.rowCapacity != a_in.addresses.recordCapacity) {
+			k.lookupsGeneration = a_lookups.generation;
+			k.rowCapacity = a_in.addresses.recordCapacity;
+			for (std::uint32_t slot = 1; slot < k.slotMaterial.size(); ++slot)
+				if (k.slotMaterial[slot])
+					markRow(slot);
 		}
+		// The controllers' texture-transform events, and the slots they keep watched: the frame reads one of the two buffers
+		// (textureTransformCurrentBuffer, flipped each frame), so a slot is read again while they differ.
+		std::vector<const RE::BSShaderMaterial*> moved;
+		DCLF::MaterialSources::DrainShadowTransformChanges(moved);
+		if (k.transformWatchBuild.size() < k.slotMaterial.size())
+			k.transformWatchBuild.resize(k.slotMaterial.size(), 0);
+		for (const auto* material : moved)
+			if (const auto it = k.slotOf.find(material); it != k.slotOf.end()) {
+				if (!k.transformWatchBuild[it->second])
+					k.transformWatch.push_back(it->second);
+				k.transformWatchBuild[it->second] = build;
+			}
+		for (std::size_t w = 0; w < k.transformWatch.size();) {
+			const std::uint32_t slot = k.transformWatch[w];
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(k.slotMaterial[slot]);
+			const bool keep = material && k.transformWatchBuild[slot] &&
+			                  (build - k.transformWatchBuild[slot] <= 2 || material->texCoordOffset[0] != material->texCoordOffset[1] ||
+								  material->texCoordScale[0] != material->texCoordScale[1]);
+			if (!keep) {
+				k.transformWatchBuild[slot] = 0;
+				k.transformWatch[w] = k.transformWatch.back();
+				k.transformWatch.pop_back();
+				continue;
+			}
+			markRow(slot);
+			++w;
+		}
+		// A slot not written (its texture not resolved, or past the capacity) stays for the next build.
+		for (std::size_t d = 0; d < k.rowDirty.size();) {
+			const std::uint32_t slot = k.rowDirty[d];
+			if (slot < k.slotMaterial.size() && k.slotMaterial[slot] && !materialRow(slot)) {
+				a_out.waitingRows += slot >= a_in.addresses.recordCapacity ? 1 : 0;
+				++d;
+				continue;
+			}
+			k.rowDirtyMark[slot] = 0;
+			k.rowDirty[d] = k.rowDirty.back();
+			k.rowDirty.pop_back();
+		}
+		if (k.ownersChanged) {
+			auto owners = std::make_shared<std::vector<std::shared_ptr<const void>>>();
+			for (const auto& owner : k.slotOwner)
+				if (owner)
+					owners->push_back(owner);
+			k.owners = std::move(owners);
+			k.ownersChanged = false;
+		}
+		a_out.bindingOwners.push_back(k.owners);
 		a_out.rowsWanted = static_cast<std::uint32_t>(k.slotMaterial.size());
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			auto& mode = k.modes[m];

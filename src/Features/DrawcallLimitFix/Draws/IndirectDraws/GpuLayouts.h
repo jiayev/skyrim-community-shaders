@@ -71,8 +71,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
-	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested, [3] engine-culled and gated out,
-	// [4] false negatives (the engine kept it, the culling rejected it), [5] rescued.
+	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; [3]-[5] and [16] free.
 	constexpr std::uint32_t kCountWords = 28;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
@@ -196,7 +195,7 @@ namespace DCLF::Draws
 	{
 		std::uint32_t dispatch[3];      // groups x, y, z
 		std::uint32_t drawCount;        // inputs to cull
-		std::uint32_t cullFlags;        // mode in bits 0-3, RequireNativeVisible at 8, NoNearPlane at 9 (the phase is pushed)
+		std::uint32_t cullFlags;        // mode in bits 0-3, NoNearPlane at 9 (the phase is pushed)
 		std::uint32_t visibilityStamp;  // marks the verdicts as this frame's; see BuildDrawsCS.hlsl
 		std::uint32_t hzbUvScalePacked; // rendered area over the area the HZB covers, 16-bit fixed point
 		std::uint32_t cullPlaneMask;    // which of cullPlanes are tested; 0 for the main camera

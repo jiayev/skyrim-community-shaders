@@ -265,6 +265,8 @@ namespace DCLF
 			ResolveSunEntry(entry, *a_geometry);
 			if (entry.sunEntryNode) {
 				rootDependents[entry.sunEntryNode].push_back(a_geometry);
+				if (const auto* reference = entry.sunEntryNode->GetUserData(); reference && rootReference.try_emplace(entry.sunEntryNode, reference).second)
+					referenceRoot[reference] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;
 				dirtyRoots.push_back(entry.sunEntryNode);
 				MarkSunEntryDirty(entry.sunEntryNode);
@@ -532,13 +534,12 @@ namespace DCLF
 					return Ineligible::Actor;
 		}
 
-		// Fading: as the pass was registered when there is one (the withholding decided on that same value),
-		// else as the fade node stands now.
+		// Fading: a membership pass is built from the settled state (the fade is the feedback's). Without one (the scene
+		// phase, for the shadow views) a fade is only the native loop's when fades are not DCLF's at all; the shadow views
+		// skip faded casters themselves (ShadowReject::Faded).
 		auto* property = a_tracked.geometry->GetGeometryRuntimeData().shaderProperty.get();
-		// Without the pass (the scene phase, for the shadow views) a fade is only the native loop's when fades
-		// are not DCLF's at all; the shadow views skip faded casters themselves (ShadowReject::Faded).
-		const bool fading = a_accumulated ? a_accumulated->fading :
-		                                    !ActiveToggles().fading && property && property->fadeNode && property->fadeNode->GetRuntimeData().currentFade < 1.0f;
+		const bool fading = !a_accumulated && !ActiveToggles().fading && property && property->fadeNode &&
+		                    property->fadeNode->GetRuntimeData().currentFade < 1.0f;
 		if (fading)
 			return Ineligible::Fading;
 

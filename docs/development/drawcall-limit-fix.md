@@ -3310,6 +3310,19 @@ offsets. The scene probe used to show the same thing at about 1 in 300 frames.
     from eviction (`kEvictFrames` 600). The cost went from 18 to 5 µs.
 -   **Shadow claims.** The shadow job builds each mode's claim set. The epoch publishes it when it drew the
     job's build, and otherwise builds it as before. This took 48 µs per frame off the render thread.
+-   **Material rows on events** (added later). The kept build no longer reads every held material (about 800) each
+    build. A slot's row is written when the slot is taken, while it waits (texture not resolved, or past the table's
+    capacity), and while its material's texture transform moves: the controllers' hook
+    (`BSLightingShaderPropertyFloatController::Update`, types above `0x13`) feeds a second queue
+    (`MaterialSources::DrainShadowTransformChanges`), and a slot stays watched while its two transform buffers differ or
+    for 2 builds after the last event, as the main pass's watch does. A change of the lookups' generation or of the
+    capacity writes every slot. The texture owners go to the payload as one shared bundle, rebuilt only when a slot's
+    owner changes. Persistent parity compares the rows by value on every input: 0 differ.
+-   **A claim stands only while its view is drawn** (added later). A view the epoch cannot draw (setup, tables or
+    pipelines not ready) gives its mode's claims back (`GiveBackShadowMode`), so the engine draws that mode's
+    casters from the next frame until an epoch draws it again. The report's `<- HOLES` counts only the views whose
+    casters the engine withheld that frame (`notReadyWithheld`). The 18 views not ready after a load (the first two
+    frames, before any shadow pipeline exists) withhold nothing: a load clears the claims. So they were never holes.
 
 ### Not yet at the gate
 
@@ -3620,15 +3633,38 @@ lived, and where the double draws are.
     `VS PerGeometry 5`. The same flight with `CS_DCLF_LOD_CROSSFADE=0` shows the same three variables at
     24-95, so this is a residue of the flight, not of the split. It is not yet explained.
 
-**Still to do:** the copy itself, drawn by DCLF. The stencil reference has only 32 values, so it can be up to
-32 indirect ranges, each setting the reference. It also needs:
+**What the copy is** (reverse engineered later; this supersedes "the old level" above):
 
--   a pipeline variant with the engine's stencil mode `0xB`;
--   a per-object scale for `MaterialData.z`;
--   an answer to what the stencil buffer holds at that point, and whether the native depth pass draws the
-    copies.
+-   **The level state** (`FUN_14147a430`, the only writer): `+0x152` low nibble is the level L (1-3, 3 nearest), the high
+    nibble last call's; `+0x153 & 0x70` is `0x20` when settled. A crossing always pairs L with L+1, and `+0x14C` is L+1's
+    weight. Going up, L stays and `+0x14C` rises from 0 to 1, then L increments. Going down, L drops at once and
+    `+0x14C` falls from 1 to 0. Not seen for 20 frames (`+0x13c`), or with `DAT_142032dfc` off, the level is set with no
+    crossing.
+-   **The pass** (`GetRenderPasses`, AE `1414adfb0`): for a `kMeshLOD` geometry whose root is crossing, each of its
+    passes gets a copy with the same technique, hint 10 and `+0x1e = L | 0x80`. The object's own pass has `+0x1e = L`.
+    As a partition row (`LodRowOf`: index, plus 4 for `0x80`), the object's own pass draws the partitions of LOD byte
+    below L, and the copy exactly those of LOD byte L: the detail level L+1 adds, not the old level. For a geometry
+    without skin partitions the row selects nothing different, so the copy redraws the same mesh at the same depth,
+    with fewer alpha-tested texels.
+-   **Its state** (`SetupGeometry`): `MaterialData.z` is the alpha times `+0x14C`, and the depth-stencil state is stencil
+    mode `0xB` with reference `int(+0x14C * 31)` (the scale is 31.0 at `1419de7e0`). Mode `0xB` (the state table,
+    `FUN_140e657b0`) is stencil on, masks `0xFF`, every op KEEP, function GREATER: the copy draws where its reference is
+    above the stencil value. A hint-10 pass without `0x80` (a fade under flag bit 19) uses `currentFade` (`+0x130`)
+    instead.
+-   **The stencil at that point**: `FUN_1414ccb30` clears depth and stencil to 0 at the start of the main scene. In an
+    interior it then draws each room's portal geometry with stencil mode 1 (ALWAYS, REPLACE) and reference room + 1.
+    So the test meets 0 in an exterior and the room index in an interior, and it is a bound, not a 32-level dither: the
+    visible fade of an alpha-tested copy is the alpha test on the scaled alpha.
+-   **The depth pass** draws no copy: `GetRenderPasses` adds one utility (depth) pass per geometry, none for the copy.
 
-It would save 20-35 native draws a frame, and only while moving.
+**Measured** (Riverwood, 60 s straight at 40 units a frame and 60 s circling, with a temporary census of the level
+writer): 2,357 `kMeshLOD` members, none of them a skin with a partition of LOD byte 1 or 2, and 0 level changes and 0
+crossings started anywhere, from about 1,000 level-writer calls a frame. Setting the non-tree distances to 3000 and 1500
+in memory (`setini`) changed nothing either. Cross-fades look like an unused feature in SE.
+
+**So DCLF keeps crossing roots stood in** (`StandIn` no longer hands them to the engine; the fade service steps them)
+and draws no copy. `CS_DCLF_LOD_CROSSFADE` and the `SkipNativePass` / capture-parity rules above stay for the engine's
+own objects.
 
 ## Material records from their sources
 
@@ -4839,8 +4875,8 @@ last lease's release queues the removal. There is no touch and no eviction age, 
 written material is re-evaluated in place while its slot is referenced. The category-node set is rebuilt only on a
 signature change or a detach (no 30-frame backstop).
 
-Still on the registered path: objects `MembershipPass` cannot model (decal shapes, fading or translucent ones), and
-skins whose LOD row selects no partition (released as Hidden). The latter show up as NPC shields and weapons.
+Fading objects, skins whose LOD row selects no partition, and decals became members later ("Every eligible object a
+member", below). No eligible object is on the engine's registered path any more.
 
 Measured (Riverwood, camera turning, 5 s intervals):
 -   Material slots retired on last reference: 46 / 207 / 123 / 113 per interval. Before membership it was about 600
@@ -4856,7 +4892,7 @@ for DCLF's objects is only what the engine itself would do to their nodes.
 
 -   **The stand-in** (`PrimaryCull::StandIn`, the list processes' `Process1`) returns for an admitted entry without
     traversing it. It builds no passes. Its members in view are recorded for the light-mask clear and the hole check.
-    A DCLF geometry not bound yet, like an engine member (a decal, an effect), is handed to the registration
+    A DCLF geometry not bound yet, like an engine member (an effect, a blended object), is handed to the registration
     (`AppendVirtual`).
 -   **Admission by readiness** (`Admit`): an entry is admitted once the colour build draws every DCLF member it shows,
     in view or not. The check runs when a member's drawn mark turns on, and once per entry of a new snapshot. It only
@@ -4864,8 +4900,8 @@ for DCLF's objects is only what the engine itself would do to their nodes.
     geometry may already be released.
 -   **Fades** go through the feedback, not the engine's cull:
     -   A fading root stays stood in. The decode steps its fade with the engine's own functions (`ServiceFade`), from
-        the GPU's frustum stamps, one frame late as the engine's 2-frame window allows. Only a LOD cross-fade (old-level
-        copy, hint 10) still goes to the engine.
+        the GPU's frustum stamps, one frame late as the engine's 2-frame window allows. A LOD cross-fade stays stood in too (none occur
+        in SE's settings: "LOD cross-fades").
     -   The engine draws a fading opaque object as a plain opaque pass (no screen-door and no blend at Riverwood, measured).
     -   So a member only needs the cutoff: a root whose fade service says `OnVisible` stops (`currentFade` or
         `fadeAmount` 0) marks its members `kObjectFadedOut` (`Tables::fadedOut`, on a change only), and BuildDraws
@@ -4875,7 +4911,7 @@ for DCLF's objects is only what the engine itself would do to their nodes.
         leaves multiplied by whichever camera's fade it last saw.
 -   **Local shadow lights** no longer stop the stand-in: a member's are the GPU's (`LocalShadowLights`).
 -   **Leaf exclusion** (`PrimaryCull::Owned`, the list processes' `AppendVirtual`): wherever the engine still culls
-    (the actor entry, a LOD cross-fade, an entry not admitted, a stale snapshot), an owned geometry is not handed to the
+    (the actor entry, an entry not admitted, a stale snapshot), an owned geometry is not handed to the
     registration. Owned means a member that the colour build draws (the claims).
 -   The entry residency below (joins, probation, evictions) is gone: membership replaced it.
 
@@ -4891,6 +4927,87 @@ Measured (Riverwood, camera turning):
 -   Holes 0, resident parity 0 of about 99,000.
 -   Scene phase 1.2-1.3 ms (from 1.8-2.0), accumulate phase 0.6-0.8 ms (from 0.9-1.1).
 
+## Every eligible object a member
+
+The last three cases that still needed the engine's main-camera registration are members, and the registered path is
+gone. What the engine registers for the main camera is read for diagnostics only.
+
+-   **Fading objects.** `SyntheticPass` judges the object's settled state (the material's alpha, the alpha property's
+    blending), not its current fade. `GetRenderPasses` (AE `1414adfb0`) draws a screen-door fade of an unblended, fully
+    opaque material as the plain opaque pass with `alpha = materialAlpha`. It takes hint 9 (blended, sorted) when
+    screen-door is not possible or the object is blended, and hint 10 for a LOD cross-fade's old-level copy (flag bit 19).
+    A member's fade is the feedback's (`kObjectFadedOut`).
+-   **Skins whose LOD row selects no partition.** They stay members that draw nothing, instead of being released as
+    Hidden and bound again when the row changes (the NPC shields and weapons that rebuilt their materials over and
+    over). `Tables::skinPartitions` is 16 bits with `kNoPartitions` (bit 8) for "none"; `SkinPartitionsOf` feeds the walk
+    and `KeepSkin`, `PartitionDraws` counts the draws for every reader, and BuildDraws returns early on `kNoPartitions`.
+    The row is the fade node's LOD level (`+0x152 & 0xF`), which `GetRenderPasses` also reads, so there is no per-pass
+    mask. Its only writer, `FUN_14147a430` (called from `FUN_14147a160`, `BSLeafAnimNode::OnVisible` and `ServiceFade`),
+    is detoured into the fade watch, which rewrites the skin when the level changes.
+-   **Decals.** A decal's group comes from the settled state as `GetRenderPasses` computes it:
+    `2 + (materialAlpha < 1 or blended)`. Every decal without `kMultiIndexSnow` takes DoAlphaTest. `PrimaryEntryAllows`
+    stands decals in (both groups) while `CS_DCLF_DECALS` is on. Their depth is DCLF's decal depth pass ("Decal depth").
+
+### Decal order
+
+The engine draws a decal chain (a group's technique bucket and sub-pass list) in reverse registration order, so
+overlapping decals need the engine's registration order, reconstructed without the registration
+(`Scene/SceneStore/DecalOrder.cpp`):
+
+-   `DoSceneListAccumRegisterJob` is one main-accumulator job. It runs `ProcessJob` (`140e28af0`, under a global lock)
+    over the list processes in order.
+-   Each process registers its plain appends (`+0x128`) in traversal order, then its alpha and `BSOrderedNode` groups
+    (`+0x301d8`, queued by `AppendVirtual`, `140e288e0`, for a group other than -1).
+-   `BGSDecalNode::OnVisible` visits its decals' `Get3D()` last to first.
+-   The first job culls list 0, then the extra list (`0x338c888`).
+
+The key is (list, ordered group, position in the list, child path from the entry; a `BGSDecalNode`'s children by
+reverse index). `CS_DCLF_DECAL_ORDER_PROBE` checks it against the captured registrations while the engine still
+registers decals (for example with `CS_DCLF_DECALS=0`): 0 of about 24.5 million pairs out of order.
+
+The engine's own order is not stable. `BuildSceneLists` (`14064bc20`) deals the roots round robin into the lists and
+skips hidden ones, so showing or hiding any root earlier in the scene reorders the decal roots after it: on 14-24% of
+frames while the camera turns. So there are two modes (`CS_DCLF_DECAL_ORDER`):
+
+-   `stable` (default): the scene's order (the key from the top of the scene), sorted again only when the member decals
+    change (`memberDecalsChanged`).
+-   `engine`: the frame's scene lists, every frame, with the extra list after list 0. It reproduces the engine's
+    swaps.
+
+`OrderDecals` sorts by chain ascending, then the key descending, then the object, and writes `Tables::decalOrdinal`
+and `decalCount`. Both are kept with the objects across walks and cleared only when the objects are.
+
+### The registered path, retired
+
+-   The accumulate phase's pass table holds the frame's membership joins alone. The registered fill
+    (`CollectAccumulatedPasses`, `CS_DCLF_PASS_PARITY`), `LapseAccumulated`, the main pass's `Withhold` and
+    `HandBackUndrawable` are gone. `DrainCapture` feeds the diagnostics, including "registrations of eligible objects
+    not bound".
+-   Every record with bindings is a member (`kObjectMember`); every other record is a culling candidate
+    (`kObjectNoBindings`). `kObjectNativeVisible`, BuildDraws' `RequireNativeVisible` gate and the counters measured
+    against the engine's cull (engine-culled, false negatives, rescued, occluded-visible) went with it.
+-   Leaf exclusion is live whenever ownership is on; the stand-in keeps its own switch. The hole detector covers what was
+    left out of the engine's cull (`StoodInMembers`), and set parity's "withheld" bit means the same.
+-   Admission carried across snapshots is keyed by the root's member set (`MemberSignature`), so attaching an object
+    to an admitted root checks it again.
+-   A pipeline's per-frame constants are evaluated from a member's property with the frame's Lighting pass
+    (`TemplatePassOf`), since no member has a registered pass of its own.
+
+**Material slots follow their references.** `ProcessMaterialWrites` first counts the references from the frame's
+joins (`UpdateSlotReferences`), then frees only unreferenced slots. A referenced slot whose evaluation fails keeps its
+last record and is evaluated again next frame (`materialEvaluationsPending`, `materialsHeld`). Before this, a written
+material that members still used could be freed, and `Permanent Decal` objects lost their draw during loads. Under
+`CS_DCLF_PERSISTENT_PARITY`, `DrainUnreferenced` reports a freed material that a bound object still references.
+
+The engine still draws a member for one frame when DCLF first draws it (its claim is published after the colour
+epoch). That is the same pixels twice, not a hole: about 1,300 objects during a load, about 2 per 300 frames after.
+
+Measured (Riverwood, camera turning):
+-   Skins: joins that failed on the frame's verdict 44 -> 7, material slots retired 565 -> 354 per interval.
+-   Decals: 2,202 member decals; decal parity 0 differ in both order modes; 9,128 of 9,128 entries stood in.
+-   Holes 0, including loads and `CS_DCLF_PRIMARY_EXCLUDE=0`; constants parity 690 of 690 pipelines; resident, build,
+    persistent and Skylighting parity clean.
+
 ## Resident entries (culling-job elimination, phase 4)
 
 Superseded by scene membership (above); kept for the reasoning.
@@ -4903,8 +5020,8 @@ neither ([dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md), "Phase 
 **Its records persist** (`SceneStore`'s resident records):
 -   Each DCLF member's record is patched once, from its synthetic pass, through the accumulate phase's own patch
     (`AccumulatedPass::resident`). It is not in `accumulatePatched`, so no walk restores it.
--   It keeps `kObjectNativeVisible`, so BuildDraws draws it whenever the GPU's cull finds it. There is no CPU visibility
-    for it at all.
+-   It keeps `kObjectNativeVisible` (since removed: every bound record is a member), so BuildDraws draws it whenever the
+    GPU's cull finds it. There is no CPU visibility for it at all.
 -   Each frame the accumulate phase only keeps its pipeline and material slots alive (`KeepResidentsAlive`: `lastUsed`,
     and the lighting template when no other object used the pipeline). `RefreshFrameConstants` resamples its shading
     with every other bound record's.

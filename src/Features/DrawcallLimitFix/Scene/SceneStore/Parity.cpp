@@ -103,7 +103,6 @@ namespace DCLF
 		const auto savedStamp = objectStamp;
 		const auto savedStats = stats;
 		const auto savedSkinned = skinnedObjects;
-		const auto savedDecalOrder = decalOrder;
 		// The dense walk may resolve a geometry slot the delta walk did not (an object only it writes, which is a
 		// difference): the index map is not part of the tables, so it is kept too.
 		const auto savedGeometryIndex = geometryIndex;
@@ -126,7 +125,6 @@ namespace DCLF
 		objectStamp = savedStamp;
 		stats = savedStats;
 		skinnedObjects = savedSkinned;
-		decalOrder = savedDecalOrder;
 
 		++walkParity.checks;
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> denseIndex;
@@ -206,6 +204,32 @@ namespace DCLF
 						geometry->name.c_str() ? geometry->name.c_str() : "?", entryIt != tracked.end() && entryIt->second.perFrame, entryIt != tracked.end() ? PerFrameTraits(entryIt->second, *geometry) : 999u,
 						entryIt != tracked.end() && entryIt->second.sunEntryNode && entryIt->second.sunEntryNode->name.c_str() ? entryIt->second.sunEntryNode->name.c_str() : "?",
 						a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3]);
+					// What under the root could move its bound with no mover's trait (RootMovesNow): its subtree, briefly.
+					if (entryIt != tracked.end() && entryIt->second.sunEntryNode) {
+						std::string subtree;
+						std::uint32_t listed = 0;
+						VisitSubtree(const_cast<RE::NiAVObject*>(entryIt->second.sunEntryNode), [&](RE::NiAVObject& a_object) {
+							++listed;
+							// Only what could move: controllers, a collision object (with its body's motion type), a skin.
+							auto* collision = a_object.collisionObject.get();
+							auto* ni = collision ? collision->AsBhkNiCollisionObject() : nullptr;
+							const auto* bodyRtti = ni && ni->body ? ni->body->GetRTTI() : nullptr;
+							int motion = -1;
+							if (bodyRtti && bodyRtti->GetName() && std::strstr(bodyRtti->GetName(), "RigidBody"))
+								if (auto* entity = static_cast<RE::hkpEntity*>(static_cast<RE::hkReferencedObject*>(ni->body->referencedObject.get())))
+									motion = static_cast<int>(entity->motion.type.get());
+							const auto* geometry = a_object.AsGeometry();
+							const bool skin = geometry && geometry->GetGeometryRuntimeData().skinInstance;
+							if (a_object.GetControllers() || collision || skin) {
+								const auto* rtti = a_object.GetRTTI();
+								subtree += fmt::format(" ['{}' {}{}{}{}]", a_object.name.c_str() ? a_object.name.c_str() : "", rtti && rtti->name ? rtti->name : "?",
+									a_object.GetControllers() ? " controllers" : "", collision ? fmt::format(" collision {} motion {}", bodyRtti && bodyRtti->GetName() ? bodyRtti->GetName() : "no body", motion) : std::string(),
+									skin ? " skin" : "");
+							}
+							return true;
+						});
+						walkParity.first += fmt::format("; root subtree ({} objects):{}", listed, subtree);
+					}
 				}
 			} else if (slots.lodFade[s] != dense.lodFade[d]) {
 				what = "the LOD fade node";

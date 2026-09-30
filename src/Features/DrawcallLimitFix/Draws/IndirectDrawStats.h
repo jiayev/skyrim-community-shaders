@@ -53,12 +53,7 @@ namespace DCLF
 		std::uint32_t cullDrawn = 0;     // sequences BuildDraws wrote, last sampled epoch
 		std::uint32_t cullRejected = 0;  // draws its culling rejected (CS_DCLF_CULL)
 		std::uint32_t cullTested = 0;    // draws it tested at all: 0 means the culling did not run
-		// Against the engine's own culling, which the draw inputs carry per object (kObjectNativeVisible).
-		std::uint32_t cullEngineCulled = 0;     // candidates the engine culled, gated out (kObjectNativeVisible)
-		std::uint32_t cullFalseNegatives = 0;   // the engine kept it, the culling here rejected it: a defect
-		std::uint32_t cullRescued = 0;          // the engine culled it, the culling here kept it
 		std::uint32_t cullOccluded = 0;         // rejected by the HZB rather than by the frustum
-		std::uint32_t cullOccludedVisible = 0;  // of those, ones the engine's own culling had kept
 		// The second phase, which re-tests what the first rejected against the rebuilt HZB.
 		std::uint32_t cullDrawnPhaseTwo = 0;      // depth draws it added
 		std::uint32_t cullRescuedByPhaseTwo = 0;  // objects it brought back
@@ -87,7 +82,6 @@ namespace DCLF
 		struct HzbSample
 		{
 			bool valid = false;
-			bool nativeVisible = false;
 			float farthest = 0.0f, nearestZ = 0.0f;
 			float uvMin[2]{}, uvMax[2]{};
 			std::uint32_t mip = 0;
@@ -141,6 +135,7 @@ namespace DCLF
 		std::uint32_t viewsDrawn = 0;      // views drawn by an epoch
 		std::uint32_t epochs = 0;          // shadow epochs run (one per frame with views)
 		std::uint32_t notReady = 0;        // views skipped: resources, pipelines or the depth import not ready
+		std::uint32_t notReadyWithheld = 0;  // of those, views whose casters the engine withheld this frame: holes
 		std::array<std::uint32_t, static_cast<std::size_t>(ShadowViewNotReady::Count)> notReadyReasons{};
 		std::uint32_t focusSkipped = 0;    // focus views, left native
 		std::uint32_t faceUploads = 0;        // face position regions uploaded (a head's snapshot changed), per report interval

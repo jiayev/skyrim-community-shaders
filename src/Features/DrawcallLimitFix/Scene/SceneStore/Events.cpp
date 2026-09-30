@@ -463,6 +463,8 @@ namespace DCLF
 			fadeDependents.clear();
 			propertyDependents.clear();
 			rootDependents.clear();
+			rootReference.clear();
+			referenceRoot.clear();
 			dirtyRoots.clear();
 			rootMotion.clear();
 			movingRoots.clear();

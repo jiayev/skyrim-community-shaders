@@ -714,11 +714,6 @@ namespace DCLF
 
 		bool mismatch = false;
 		const auto* accumulated = store.FindAccumulatedPass(geometry);
-		if (!accumulated || accumulated->pass != a_pass) {
-			mismatch = true;
-			NoteMismatch(fmt::format("{} drawn pass {} is not the accumulated pass {}", Describe(geometry), fmt::ptr(a_pass),
-				fmt::ptr(accumulated ? accumulated->pass : nullptr)));
-		}
 		// A pass in an alpha-test list is drawn by DCLF with DoAlphaTest whatever the native draw's technique
 		// carries this frame (DrawnPassDescriptor), so the native side is compared as DCLF normalises it.
 		const std::uint32_t list = accumulated ? accumulated->subPass : 0u;

@@ -60,7 +60,7 @@ cbuffer BuildDrawsConstants : register(b0)
 // first three words of the latch are this dispatch's own indirect arguments.
 static uint DrawCount;
 // Bits 0-3 are the mode (0 off, 1 frustum, 2 frustum then the HZB), bits 4-7 the phase (from the push
-// constants), bit 8 RequireNativeVisible, and bit 9 NoNearPlane.
+// constants), and bit 9 NoNearPlane.
 static uint CullFlags;
 // Stamps the verdicts this frame publishes. A word that does not carry the current stamp was not
 // written this frame, and the colour segment then treats the object as visible rather than trusting a
@@ -247,11 +247,6 @@ static const uint kVisibilityVerdictMask = 3;
 static const uint kVisibilityDepthDrawn = 4;
 static const uint kVisibilityColourDrawn = 8;
 static const uint kVisibilityStampShift = 4;
-// When set, only objects the engine's own culling kept (kObjectNativeVisible) may be drawn, which is what
-// the native loop skips and therefore what the frame has to contain. When clear, the GPU culling alone
-// decides and DCLF draws objects the engine culled. The counters are written either way, so the
-// cross-tabulation below measures the culling against the engine even while the gate is on.
-bool RequireNativeVisible() { return (CullFlags & 0x100) != 0; }
 // A clamped shadow view (render mode 0xE) pancakes what lies in front of its near plane onto it
 // (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so a caster there still writes depth and must be kept.
 bool NoNearPlane() { return (CullFlags & 0x200) != 0; }
@@ -267,7 +262,6 @@ uint2 HzbBaseSize() { return uint2(HzbSizePacked & 0xFFFF, HzbSizePacked >> 16);
 float2 HzbUvScale() { return float2(HzbUvScalePacked & 0xFFFF, HzbUvScalePacked >> 16) / 65535.0; }
 
 // Object flags (Records.h), as the draw input carries them.
-static const uint kObjectNativeVisible = 1u << 3;
 // A synthetic main pass with the sun's bits (Records.h), and the object word's mark for a draw that misses every
 // cascade (kObjectSunMiss), which the pixel stage reads (DCLFObjects.hlsli).
 static const uint kObjectSunTest = 1u << 26;
@@ -304,9 +298,7 @@ static const uint kInputDrawable = 1u << 16;
 static const uint kCountDrawn = 0;          // sequences written
 static const uint kCountCulled = 4;         // rejected by this frame's culling
 static const uint kCountTested = 8;         // looked at by the culling at all
-static const uint kCountEngineCulled = 12;  // candidates the engine culled and the gate dropped
-static const uint kCountFalseNegative = 16; // the engine kept it and the culling rejected it: a defect
-static const uint kCountRescued = 20;       // the engine culled it and the culling kept it
+// Words 3-5 and 16 are free (they counted against the engine's own culling, which no longer marks the objects).
 static const uint kCountOccluded = 24;      // rejected by the HZB rather than by the frustum
 // What the HZB actually held under the objects that were tested, so that a suspicious rejection count can
 // be told apart from an HZB that is uniformly empty or uniformly full without a texture readback.
@@ -320,7 +312,6 @@ static const uint kSampleNearestZ = 48;
 static const uint kSampleUvMin = 52;
 static const uint kSampleUvMax = 56;
 static const uint kSampleMip = 60;
-static const uint kCountOccludedVisible = 64;  // the HZB rejected it and the engine had kept it: the win
 static const uint kCountDrawnPhaseTwo = 68;    // sequences phase 2 appended, and the count its draw reads
 static const uint kCountRescuedByPhaseTwo = 72;  // objects phase 1 rejected and the rebuilt HZB brought back
 // Decals: the two groups' slot counts (uploaded by the CPU, read by their draws) and the culling's tallies.
@@ -469,7 +460,7 @@ bool ScreenExtent(float3 boundCentre, float boundRadius, out float2 uvMin, out f
 // texels are large enough that four of them cover it. Taking the maximum of those four and requiring it to
 // be nearer than the object is conservative twice over: the mip is a max reduction, and the object is
 // represented by the nearest point of a box that already contains its sphere.
-bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample)
+bool Occluded(float3 boundCentre, float boundRadius)
 {
 	if (HzbIndex == 0 || HzbMips == 0)
 		return false;
@@ -527,7 +518,7 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 			counters.Store(kSampleNearestZ, asuint(nearestZ));
 			counters.Store(kSampleUvMin, (uint(saturate(uvMin.x) * 65535.0) & 0xFFFF) | (uint(saturate(uvMin.y) * 65535.0) << 16));
 			counters.Store(kSampleUvMax, (uint(saturate(uvMax.x) * 65535.0) & 0xFFFF) | (uint(saturate(uvMax.y) * 65535.0) << 16));
-			counters.Store(kSampleMip, uint(mip) | (uint(nativeVisibleForSample) << 8));
+			counters.Store(kSampleMip, uint(mip));
 		}
 	}
 	return occluded;
@@ -549,7 +540,6 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	const uint inputOffset = draw * kInputStride;
 	const uint4 input = inputs.Load4(inputOffset);  // pipeline index, record index, geometry index, flags
 	const uint objectIndex = inputs.Load(inputOffset + 32);
-	const bool nativeVisible = (input.w & kObjectNativeVisible) != 0;
 	// The word the draw's root constants carry: the object index, and kObjectSunMiss when a synthetic pass with the
 	// sun's bits meets no cascade this frame. Tested and counted for every such input, drawn or not, so the count
 	// compares with the CPU's over the same inputs.
@@ -595,7 +585,7 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 		if (drawable && CullMode() != 0) {
 			count.InterlockedAdd(kCountDecalsTested, 1, scratch);
 			const float4 bound = asfloat(inputs.Load4(inputOffset + 16));
-			culled = Culled(bound.xyz, bound.w) || (CullMode() >= 2 && Occluded(bound.xyz, bound.w, nativeVisible));
+			culled = Culled(bound.xyz, bound.w) || (CullMode() >= 2 && Occluded(bound.xyz, bound.w));
 			if (culled)
 				count.InterlockedAdd(kCountDecalsCulled, 1, scratch);
 		}
@@ -636,7 +626,7 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 		frustumRejected = phase != kPhaseTwo && Culled(bound.xyz, bound.w);
 		if (frustumRejected) {
 			count.InterlockedAdd(kCountCulled, 1, scratch);
-		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w, nativeVisible)) {
+		} else if (CullMode() >= 2 && Occluded(bound.xyz, bound.w)) {
 			occlusionRejected = true;
 			count.InterlockedAdd(kCountOccluded, 1, scratch);
 		}
@@ -674,29 +664,8 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	// A final verdict, like the frustum's: the colour segment reads it, and phase 2 never revisits it.
 	cullRejected = cullRejected || fadeHidden || (input.w & kObjectFadedOut) != 0;
 
-	// The engine's own decision is a useful reference, but only for the frustum test, where the engine is
-	// exact and the two should agree: rejecting something it kept is then a defect, and is counted as one.
-	//
-	// It is NOT a reference for occlusion. The engine's occlusion is planes, boxes and room/portal
-	// visibility, all of which keep plenty of geometry that is in fact hidden - that is the whole reason
-	// for testing against a depth pyramid. An object the engine kept and the HZB rejected is therefore the
-	// expected win, not a defect, and is counted separately so the two can never be confused. Whether such
-	// a rejection was correct is a question about visibility, which only a depth test can answer
-	// (CS_DCLF_CULL_VALIDATE), not one the engine's opinion can settle.
-	// An object bound by scene membership (kObjectMember) carries kObjectNativeVisible to be drawn wherever it is found; the
-	// engine's decision is not in it.
-	const bool engineKept = nativeVisible && (input.w & kObjectMember) == 0;
-	if (frustumRejected && engineKept)
-		count.InterlockedAdd(kCountFalseNegative, 1, scratch);
-	if (occlusionRejected && engineKept)
-		count.InterlockedAdd(kCountOccludedVisible, 1, scratch);
-	if (!cullRejected && !nativeVisible && phase != kPhaseColour)
-		count.InterlockedAdd(kCountRescued, 1, scratch);
-
-	// Whether this dispatch appends a draw for the object: past the culling, the engine-visibility gate and
-	// the bindings.
-	const bool gated = RequireNativeVisible() && !nativeVisible;
-	const bool draws = !cullRejected && !gated && drawable;
+	// Whether this dispatch appends a draw for the object: past the culling, and with bindings.
+	const bool draws = !cullRejected && drawable;
 
 	// Publish the decision, and whether the depth segment drew the object. Phase 1 writes one for every
 	// candidate, so the buffer is completely rewritten each frame and nothing stale survives into the colour
@@ -718,13 +687,6 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 
 	if (cullRejected)
 		return;
-	if (gated) {
-		if (phase != kPhaseColour)
-			count.InterlockedAdd(kCountEngineCulled, 1, scratch);
-		// The gate is about what may be DRAWN, so it must not change the published visibility: the colour
-		// segment applies the same gate to the same objects and would otherwise disagree with itself.
-		return;
-	}
 	// Cull-only inputs carry no bindings record, so there is nothing to draw even though the object is
 	// visible and its visibility has been published.
 	if (!drawable)

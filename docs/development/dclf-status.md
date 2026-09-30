@@ -33,7 +33,7 @@ Riverwood, ms per frame:
 | Work | Cost | Where it could go |
 | --- | --- | --- |
 | Waiting on the main camera's list and registration jobs | 0.30 | Shrinks with coverage; the rest is [dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md) |
-| DCLF's accumulate phase: the per-frame table patch from registered and synthetic passes | about 0.35 | Per-object state from events, the sun's bits on the GPU |
+| DCLF's accumulate phase: the membership joins' table patch | about 0.35 | Per-object state from events, the sun's bits on the GPU |
 | DCLF's late per-object constants (`RefreshFrameConstants`: shading, extras, wetness) | not split out | Per-frame globals on the GPU (projected-UV matrix, land blend, wind); events for the rest |
 | DCLF's prologue (`GpuResources::Touch`, `UpdateSkin`) | 0.14-0.18 | Bone palettes on the GPU |
 | DCLF's epochs (Z-prepass, colour, shadow, LLF) | 0.12 + 0.69 + 0.09-0.25 + 0.02 | The colour epoch's join on its build ("Epochs that only submit") |
@@ -46,23 +46,10 @@ The scene walk (about 0.5 ms) and the table builds run on DCLF's worker.
 
 ## Decals and the primary's stand-in
 
-Decals are DCLF's: table objects, drawn by its decal pass. Under the primary's stand-in, their pass comes from the
-engine's registration:
-
--   Under a stood-in entry, a decal is handed to the engine's registration (`AppendVirtual`).
--   DCLF captures and withholds the resulting pass as usual.
--   So decals cost registration, not traversal (153 geometries a frame across every class handed back this way).
-
-Two things keep them from synthetic passes:
-
-1.  **Order.** Overlapping decals draw in the engine's order, which DCLF takes from the capture's registration
-    sequence. A synthetic decal needs that sequence reconstructed, from the job and the position in its traversal,
-    and merged with the decals the engine still registers.
-2.  **Depth.** A decal with `kZBufferWrite` has its depth drawn by the native depth pass, which a registration keeps
-    and a synthetic pass loses. DCLF writes no decal depth. Either DCLF's Z-prepass draws it with the decal's bias
-    state, or a measurement shows nothing reads it (it is the host's depth pulled toward the camera).
-
-The blend and write states are already derived without a native draw (drawcall-limit-fix.md, "Decals").
+Decals are scene members like every other eligible object, stood in with their entries (drawcall-limit-fix.md, "Every
+eligible object a member"). Their order is the scene's by default, or the engine's scene lists with
+`CS_DCLF_DECAL_ORDER=engine`. Their depth is DCLF's decal depth pass (drawcall-limit-fix.md, "Decal depth"). Nothing
+eligible is registered by the engine any more.
 
 ## What removing the culling jobs takes
 

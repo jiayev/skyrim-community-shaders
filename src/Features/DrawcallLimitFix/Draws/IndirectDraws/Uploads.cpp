@@ -524,7 +524,7 @@ namespace DCLF
 		latch.dispatch[1] = 1;
 		latch.dispatch[2] = 1;
 		latch.drawCount = inputCount;
-		latch.cullFlags = (hasViewProj ? frame->cullMode : 0u) | 0x100u;  // RequireNativeVisible
+		latch.cullFlags = hasViewProj ? frame->cullMode : 0u;
 		// The frame number, not the epoch: the depth segment publishes and the colour segment reads within one
 		// frame, so the stamp has to be the thing they share.
 		latch.visibilityStamp = frameNumber & 0x0FFFFFFFu;  // 28 bits: BuildDrawsCS keeps flags below it

@@ -245,10 +245,9 @@ namespace DCLF
 		// registers in the order of its scene lists (DecalOrder.cpp's key, which the order probe measures). Stable: the
 		// scene's order, taken again only when the decals change. Engine: the frame's lists, every frame.
 		const bool engineOrder = SwitchValue(Switch::DecalOrder) == "engine";
-		if (!engineOrder && !memberDecalsChanged && decalOrder.empty() && !decalOrderRegistered)
+		if (!engineOrder && !memberDecalsChanged)
 			return;
 		memberDecalsChanged = false;
-		decalOrderRegistered = !decalOrder.empty();
 		if (tables.decalOrdinal.size() != tables.objects.size())
 			tables.decalOrdinal.resize(tables.objects.size(), ~0u);
 		for (const std::uint32_t o : decalOrdered)
@@ -282,7 +281,7 @@ namespace DCLF
 			std::uint32_t object;
 		};
 		std::vector<Ordered> ordered;
-		ordered.reserve(memberDecals.size() + decalOrder.size());
+		ordered.reserve(memberDecals.size());
 		auto add = [&](std::uint32_t a_object, std::uint64_t a_chain) {
 			const auto* geometry = a_object < tables.objectGeometry.size() ? tables.objectGeometry[a_object] : nullptr;
 			if (!geometry)
@@ -301,9 +300,6 @@ namespace DCLF
 		};
 		for (const auto& [object, chain] : memberDecals)
 			add(object, chain);
-		for (const auto& entry : decalOrder)
-			if (!memberDecals.contains(entry.object))
-				add(entry.object, entry.key & ~std::uint64_t(0xFFFFFF));
 		std::sort(ordered.begin(), ordered.end(), [](const Ordered& a_a, const Ordered& a_b) {
 			if (a_a.chain != a_b.chain)
 				return a_a.chain < a_b.chain;

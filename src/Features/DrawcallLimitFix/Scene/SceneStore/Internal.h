@@ -251,6 +251,8 @@ namespace DCLF
 		inline EventQueue<const void*> hiddenEvents;
 		inline bool hiddenEventsInstalled = false;
 		bool InstallHiddenStores();
+		/** @brief The patched store (its address in the image) whose stub holds a_address, or 0 (HiddenWatch's report). */
+		std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address);
 
 		inline void PushMove(const void* a_key)
 		{

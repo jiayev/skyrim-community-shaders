@@ -556,12 +556,11 @@ namespace DCLF
 		auto& out = jobOut[a_slot];
 		++out.seen;
 		const bool fadeRoot = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
-		// A LOD cross-fade: the engine's (GetRenderPasses adds the old level's copy, a hint-10 pass, which DCLF does not draw).
-		// A fade is the feedback's: its fade service steps it, and a faded-out root draws nothing (kObjectFadedOut).
-		if (fadeRoot && (At<std::uint8_t>(a_object, 0x153) & 0x70) != 0x20) {
+		// A fade, and a LOD cross-fade, are the feedback's: its fade service steps them, and a faded-out root draws nothing
+		// (kObjectFadedOut). A cross-fade's hint-10 copy is not drawn (drawcall-limit-fix.md, "LOD cross-fades": none occur
+		// in SE's settings); crossing roots are counted, for the report.
+		if (fadeRoot && (At<std::uint8_t>(a_object, 0x153) & 0x70) != 0x20)
 			++out.notSettled;
-			return false;
-		}
 		if (!cut.admitted[e]) {
 			// The engine culls it this frame (less what the leaf exclusion keeps from its registration); Admit decides its admission.
 			EngineProcess1(a_process, a_object, a_arg);
@@ -893,20 +892,6 @@ namespace DCLF
 		return StaticShadowBits(a_geometry);
 	}
 
-	void PrimaryCull::UnifySunBits(const RE::BSGeometry* a_geometry, AccumulatedPass& a_pass) const
-	{
-		if (!gpuSunFrame || !cut.candidates || a_pass.sunTest)
-			return;
-		const auto& candidates = *cut.candidates;
-		const auto it = candidates.geometries.find(a_geometry);
-		if (it == candidates.geometries.end() || it->second >= candidates.primaryGeometry.size() || !candidates.primaryGeometry[it->second])
-			return;
-		const std::uint32_t sun = SunShadowStatic(*a_geometry);
-		a_pass.technique = (a_pass.technique & ~kShadowBits) | sun;
-		a_pass.passEnum = a_pass.technique + 0x4800002Du;
-		a_pass.sunTest = (sun & 0x2000u) != 0;
-	}
-
 	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu)
 	{
 		if (a_derivedPass == kNotDerived)
@@ -946,82 +931,6 @@ namespace DCLF
 		a_out.lodRow = SceneStore::LodRowOf(a_geometry, property);
 		a_out.sunTest = a_sunOnGpu && (sun & 0x2000u) != 0;
 		return true;
-	}
-
-	bool PrimaryCull::UnderListedCandidate(const RE::BSGeometry* a_geometry) const
-	{
-		const auto* candidates = frameCandidates.get();
-		if (!candidates)
-			return false;
-		const auto it = candidates->geometries.find(a_geometry);
-		return it != candidates->geometries.end() && listed[candidates->geometryEntry[it->second]];
-	}
-
-	void PrimaryCull::NoteDerived(const RE::BSGeometry& a_geometry, const LightingDescriptors& a_descriptors, const AccumulatedPass& a_accumulated,
-		Ineligible a_reason, std::uint32_t a_derivedLodRow)
-	{
-		auto& d = derived;
-		++d.objects;
-		++d.hints[std::min<std::uint32_t>(a_accumulated.hint, 31)];
-		d.fading += a_accumulated.fading ? 1 : 0;
-		d.alphaMask += (a_accumulated.technique & kPassAdditionalAlphaMask) ? 1 : 0;
-		if (const auto* pass = a_accumulated.pass; pass && pass->numShadowLights)
-			++d.shadowLights;
-		if (a_geometry.GetGeometryRuntimeData().skinInstance && a_derivedLodRow != a_accumulated.lodRow)
-			++d.lodRowDiffer;
-		if (a_reason != Ineligible::None) {
-			++d.ineligible;
-			++d.byReason[std::min<std::size_t>(static_cast<std::size_t>(a_reason), d.byReason.size() - 1)];
-			return;
-		}
-		if (a_descriptors.derivedPass == kNotDerived) {
-			++d.notDerived;
-			return;
-		}
-		constexpr std::uint32_t kSunBits = 0x6000u;
-		const std::uint32_t differing = a_descriptors.derivedPass ^ a_descriptors.pass;
-		if (differing & ~kSunBits)
-			++d.differ;
-		else if (differing)
-			++d.sunOnly;
-		for (std::uint32_t remaining = differing; remaining; remaining &= remaining - 1)
-			++d.bits[std::countr_zero(remaining)];
-		if (const std::uint32_t sun = SunShadowBits(a_geometry); sun == ~0u) {
-			++d.sunUnknown;
-		} else {
-			const std::uint32_t engine = a_descriptors.pass & kSunBits;
-			if (sun == engine)
-				++d.sunAgree;
-			else if (!sun)
-				++d.sunEngineOnly;
-			else if (!engine)
-				++d.sunDclfOnly;
-			else
-				++d.sunOther;
-			if (sun != engine && d.sunSamples.size() < 24) {
-				const auto& bound = a_geometry.worldBound;
-				++d.sunSamples[fmt::format("'{}' under '{}': engine {:#x} DCLF {:#x}, bound ({:.0f} {:.0f} {:.0f}) r {:.0f}, hint {}",
-					a_geometry.name.c_str() ? a_geometry.name.c_str() : "?", a_geometry.parent && a_geometry.parent->name.c_str() ? a_geometry.parent->name.c_str() : "?",
-					engine, sun, bound.center.x, bound.center.y, bound.center.z, bound.radius, a_accumulated.hint)];
-			}
-		}
-		if (AccumulatedPass built; !SyntheticPass(a_geometry, a_descriptors.derivedPass, built)) {
-			++d.synthUnmodeled;
-		} else {
-			const bool technique = built.technique != a_accumulated.technique, subPass = built.subPass != a_accumulated.subPass;
-			const bool hint = built.hint != a_accumulated.hint, lodRow = built.lodRow != a_accumulated.lodRow;
-			d.synthTechnique += technique, d.synthSubPass += subPass, d.synthHint += hint, d.synthLodRow += lodRow;
-			if (!technique && !subPass && !hint && !lodRow)
-				++d.synthAgree;
-			else if (d.synthSamples.size() < 24)
-				++d.synthSamples[fmt::format("'{}' under '{}': technique {:08X}/{:08X} subPass {}/{} hint {}/{} lodRow {}/{} (engine/DCLF)",
-					a_geometry.name.c_str() ? a_geometry.name.c_str() : "?", a_geometry.parent && a_geometry.parent->name.c_str() ? a_geometry.parent->name.c_str() : "?",
-					a_accumulated.technique, built.technique, a_accumulated.subPass, built.subPass, a_accumulated.hint, built.hint, a_accumulated.lodRow, built.lodRow)];
-		}
-		if ((differing & ~kSunBits) && d.samples.size() < 40)
-			++d.samples[fmt::format("'{}' under '{}': registered {:08X} derived {:08X} (hint {}, subPass {})", a_geometry.name.c_str() ? a_geometry.name.c_str() : "?",
-				a_geometry.parent && a_geometry.parent->name.c_str() ? a_geometry.parent->name.c_str() : "?", a_descriptors.pass, a_descriptors.derivedPass,
-				a_accumulated.hint, a_accumulated.subPass)];
 	}
 
 	struct PrimaryCull::Hooks
@@ -1123,7 +1032,7 @@ namespace DCLF
 			const double toMs = 1000.0 / static_cast<double>(frequency.QuadPart);
 			const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
 			logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} stale, {} preconditions); per frame {:.0f} eligible entries reached, "
-						 "{:.0f} stood in for ({:.0f} in view), {:.1f} cross-fading LOD (the engine's), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
+						 "{:.0f} stood in for ({:.0f} in view), {:.1f} cross-fading LOD (stood in), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
 						 "{:.1f} hidden, {:.1f} with a local light's shadow bit; {} roots faded out or in; {:.1f} owned geometries left out of the engine's registration; {} holes; "
 						 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms",
 				s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, s.seen / applied, s.skipped / applied, s.visibleEntries / applied,
@@ -1170,35 +1079,5 @@ namespace DCLF
 			logger::info("[DCLF] primary census, not a candidate: {:.2f}/frame {}", top[i].first / f, top[i].second);
 		logger::info("[DCLF] primary census, the player's 3D:{}", playerChain);
 		census = {};
-		if (derived.objects) {
-			const double n = static_cast<double>(derived.objects) / f;
-			auto& d = derived;
-			std::string bits, hints, reasons;
-			for (std::uint32_t b = 0; b < 32; ++b)
-				if (d.bits[b])
-					bits += fmt::format(" {}={:.1f}", b, d.bits[b] / f);
-			for (std::uint32_t h = 0; h < 32; ++h)
-				if (d.hints[h])
-					hints += fmt::format(" {}={:.1f}", h, d.hints[h] / f);
-			for (std::size_t r = 0; r < d.byReason.size(); ++r)
-				if (d.byReason[r])
-					reasons += fmt::format(" {}={:.1f}", r < kIneligibleNames.size() ? kIneligibleNames[r] : "?", d.byReason[r] / f);
-			logger::info("[DCLF] primary derivation, per frame: {:.0f} registered objects under listed candidates: {:.1f} ineligible ({}), {:.1f} not derived; "
-						 "descriptor: {:.1f} differ outside the sun bits, {:.1f} only in them; bits:{}; {:.1f} with shadowed point lights, {:.1f} LOD rows differ, "
-						 "{:.1f} fading, {:.1f} screen-door; hints:{}",
-				n, d.ineligible / f, reasons, d.notDerived / f, d.differ / f, d.sunOnly / f, bits, d.shadowLights / f, d.lodRowDiffer / f, d.fading / f, d.alphaMask / f,
-				hints);
-			for (const auto& [sample, count] : d.samples)
-				logger::info("[DCLF] primary derivation differs: {:.2f}/frame {}", count / f, sample);
-			logger::info("[DCLF] primary sun bits, per frame: {:.1f} agree, {:.1f} engine only, {:.1f} DCLF only, {:.1f} otherwise, {:.1f} unknown",
-				d.sunAgree / f, d.sunEngineOnly / f, d.sunDclfOnly / f, d.sunOther / f, d.sunUnknown / f);
-			for (const auto& [sample, count] : d.sunSamples)
-				logger::info("[DCLF] primary sun bits differ: {:.2f}/frame {}", count / f, sample);
-			logger::info("[DCLF] primary synthetic pass, per frame: {:.1f} agree in every field, {:.1f} not modelled; differ: technique {:.1f}, subPass {:.1f}, hint {:.1f}, LOD row {:.1f}",
-				d.synthAgree / f, d.synthUnmodeled / f, d.synthTechnique / f, d.synthSubPass / f, d.synthHint / f, d.synthLodRow / f);
-			for (const auto& [sample, count] : d.synthSamples)
-				logger::info("[DCLF] primary synthetic pass differs: {:.2f}/frame {}", count / f, sample);
-			derived = {};
-		}
 	}
 }

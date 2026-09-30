@@ -829,14 +829,14 @@ void DrawcallLimitFix::DrawSettings()
 			flags += fmt::format(", {} {}", toggle.name, active.*toggle.member ? 1 : 0);
 		ImGui::TextWrapped("%s", flags.c_str());
 		ImGui::Text("Tracked geometry: %u (under %u category nodes)", stats.tracked, stats.categoryNodes);
-		ImGui::Text("Objects this frame: %u (%u the engine's culling also kept), geometries: %u, pipelines: %u", stats.objects, stats.nativeVisible, stats.geometries, stats.pipelines);
+		ImGui::Text("Objects this frame: %u, geometries: %u, pipelines: %u", stats.objects, stats.geometries, stats.pipelines);
 		for (std::size_t i = 1; i < stats.ineligible.size(); ++i) {
 			if (stats.ineligible[i])
 				ImGui::Text("Left native (%s): %u", DCLF::kIneligibleNames[i].data(), stats.ineligible[i]);
 		}
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
-		ImGui::Text("Indirect draws: %u drawn from %u records, %u epochs; culling tested %u, rejected %u, false negatives %u",
-			draws.drawn, draws.records, draws.epochs, draws.cullTested, draws.cullRejected, draws.cullFalseNegatives);
+		ImGui::Text("Indirect draws: %u drawn from %u records, %u epochs; culling tested %u, rejected %u",
+			draws.drawn, draws.records, draws.epochs, draws.cullTested, draws.cullRejected);
 		if (const auto& gpu = RenderGraphRuntime::Get().GpuTimingSummary(); !gpu.empty())
 			ImGui::TextUnformatted(("GPU (ORG pass timestamps, last report):\n" + gpu).c_str());
 		const auto& capture = DCLF::PassCapture::Get().GetStats();

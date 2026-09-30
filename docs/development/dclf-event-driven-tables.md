@@ -534,6 +534,13 @@ An entry whose only motion is its reference root's bound (`kTraitRootMoves` alon
 registers the root (`movingRoots`), the render thread queues the roots whose reference or category node had an event
 (`QueueRoots`), and the placement job writes the root's bound into every dependent's sun entry (`TakeRoot`).
 
+**A still root's bound moves too** (added later). Walk parity kept finding one sun entry off by a tenth of a unit:
+`FireSpitCooking`, whose subtree holds nothing `RootMovesNow` counts (one fixed body, no controllers, no skins), so it
+was never in `movingRoots`. The cells' update passes recompute its bound anyway. So `QueueRoots` also queues any listed
+reference root (`referenceRoot`, kept with `rootDependents`) whose reference had a move event this frame or the last
+(`movedKeys`). That is about 780 more bounds read a frame on the placement job, and `TakeRoot` still writes only what
+changed (about 22 sun entries a frame, as before). Walk parity: 0 sun entries differ, from 5 in every interval.
+
 Whiterun, standing (the work, not the time):
 
 | Per frame | Before | Movers by event |
@@ -585,6 +592,16 @@ because property pointer swaps have no choke point.
 | actor frame verdicts taken again | about 1,260 | 21-32 (about 220 hidden events) |
 | flight | about 274 | 5 |
 | verdicts that changed with no event (parity frames) | | 0: standing, the flight, equip and unequip, `killall`, capture |
+
+**A flip after the drain is a frame late, not missed** (added later). Riverwood's walk parity sometimes found an NPC's
+`Shield:0` verdict stale, and the witness counted it as "changed with no event". `CS_DCLF_HIDDEN_WATCH=1` (hardware
+write watchpoints on the chain's flags, armed by such a miss: `Diagnostics/HiddenWatch.cpp`) named the writers. They are
+two patched stores, `0x140bc193c` (hide) and `0x140bc194b` (show), which toggle that NPC's `SHIELD` node every 150-360 ms
+from job threads. Both push their events. A flip that lands between the walk's drain (`DrainHiddenEvents`) and its read
+of the chain changes the state while its event waits for the next frame. A parity frame's witness then sees a change
+with no event this frame, and walk parity a stale verdict. A normal frame takes the verdict again on the next frame, when
+the event drains. So DCLF follows such a flip one frame late, like any event after the drain, and the "missed" count on
+those frames is this race, not a store the patches lack.
 
 **Starting points for the rest (Ghidra, AE).**
 
