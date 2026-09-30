@@ -35,8 +35,8 @@ namespace
 {
 	// Core built-in menu names that always appear first in the menu list
 	// These are canonical identifiers used for logic — NOT translated
-	constexpr std::array<const char*, 6> CORE_MENU_NAMES = {
-		"Home", "Presets", "General", "Advanced", "Profiling", "Display"
+	constexpr std::array<const char*, 7> CORE_MENU_NAMES = {
+		"Home", "Presets", "General", "Advanced", "Profiling", "CS Editor", "Display"
 	};
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
@@ -51,6 +51,8 @@ namespace
 			return T("menu.features.advanced", "Advanced");
 		if (std::strcmp(canonicalName, "Profiling") == 0)
 			return T("menu.features.profiling", "Profiling");
+		if (std::strcmp(canonicalName, "CS Editor") == 0)
+			return T("menu.features.cs_editor", "CS Editor");
 		if (std::strcmp(canonicalName, "Display") == 0)
 			return T("menu.features.display", "Display");
 		return canonicalName;
@@ -415,7 +417,8 @@ std::vector<FeatureListRenderer::MenuFuncInfo> FeatureListRenderer::BuildMenuLis
 		BuiltInMenu{ T("menu.features.presets", "Presets"), []() { PresetsPageRenderer::Render(); } },
 		BuiltInMenu{ T("menu.features.general", "General"), drawGeneralSettings },
 		BuiltInMenu{ T("menu.features.advanced", "Advanced"), drawAdvancedSettings },
-		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } }
+		BuiltInMenu{ T("menu.features.profiling", "Profiling"), []() { ProfilingRenderer::RenderStatistics(); } },
+		BuiltInMenu{ T("menu.features.cs_editor", "CS Editor"), []() { globals::features::csEditor.DrawSettings(); } }
 	};  // NOTE: The menu list is rebuilt every frame, so category expansion states
 	// persist correctly. This is acceptable since the list is small and built
 	// infrequently, but could be optimized if performance becomes an issue.
@@ -585,6 +588,8 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 
 	// Use error color for Feature Issues menu item
 	bool isFeatureIssues = (menu.name == T("menu.features.feature_issues", "Feature Issues"));
+	bool isCSEditor = (menu.name == T("menu.features.cs_editor", "CS Editor"));
+
 	if (isFeatureIssues) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
 		ImGui::PushStyleColor(ImGuiCol_Text, themeSettings.StatusPalette.Error);
@@ -593,6 +598,23 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 			selectedMenuRef = listId;
 
 		ImGui::PopStyleColor();
+	} else if (isCSEditor) {
+		const auto& info = globals::menu->GetSettings().Theme.StatusPalette.InfoColor;
+		ImVec4 pill = info;
+		pill.w = selectedMenuRef == listId ? 0.35f : 0.18f;
+		const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+		const float rowH = ImGui::GetTextLineHeightWithSpacing();
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			rowMin,
+			ImVec2(rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + rowH),
+			ImGui::ColorConvertFloat4ToU32(pill),
+			rowH * 0.5f);
+		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(info.x, info.y, info.z, 0.28f));
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(info.x, info.y, info.z, 0.40f));
+		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
+			selectedMenuRef = listId;
+		ImGui::PopStyleColor(3);
 	} else {
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;

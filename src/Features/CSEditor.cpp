@@ -181,9 +181,6 @@ void CSEditor::DrawSettings()
 	ImGui::Spacing();
 	ImGui::SeparatorText(T(TKEY("weather_picker"), "Weather Picker"));
 
-	// Time controls
-	DrawTimeControls();
-
 	// Basic CS editor info
 	DrawWeatherStatusPanel();
 

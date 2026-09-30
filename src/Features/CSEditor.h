@@ -19,9 +19,9 @@ public:
 	virtual std::string GetDisplayName() override { return T("feature.cs_editor.name", "CS Editor"); }
 	virtual inline std::string GetShortName() override { return "CSEditor"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_EDITOR"; }
-	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
+	virtual inline std::string_view GetCategory() const override { return "CS Editor"; }
 	virtual bool IsCore() const override { return true; }
-	virtual bool IsInMenu() const override { return true; }
+	virtual bool IsInMenu() const override { return false; }
 
 	virtual inline std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
@@ -121,6 +121,17 @@ public:
 	 */
 	static ImVec4 GetWeatherFlagColorByName(const std::string& flagName);
 
+	// Accessors for Weather Picker Window
+	static std::vector<RE::TESWeather*>& GetFilteredWeathers() { return s_filteredWeathers; }
+	static int& GetSelectedWeatherIdx() { return s_selectedWeatherIdx; }
+	static bool GetAccelerateWeatherChange() { return s_accelerateWeatherChange; }
+	static RE::TESWeather*& GetCachedLastWeather() { return s_cachedLastWeather; }
+	static int FindWeatherIndex(RE::TESWeather* targetWeather);
+
+	// Implement OverlayFeature interface
+	void DrawOverlay() override;
+	bool IsOverlayVisible() const override;
+
 private:
 	void DrawShowInOverlayToggle();
 	void DrawTimeControls();
@@ -176,10 +187,5 @@ private:
 	static void EnsureDataLoaded();
 	static void LoadAllWeathers();
 	static void UpdateFilteredWeathers();
-	static int FindWeatherIndex(RE::TESWeather* targetWeather);
 	static std::vector<std::string> GetWeatherFlagNames(RE::TESWeather* weather);
-
-	// Implement OverlayFeature interface
-	void DrawOverlay() override;
-	bool IsOverlayVisible() const override;
 };

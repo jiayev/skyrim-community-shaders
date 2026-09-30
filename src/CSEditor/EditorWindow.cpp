@@ -17,6 +17,7 @@
 #include "Menu/BackgroundBlur.h"
 #include "Menu/Fonts.h"
 #include "PaletteWindow.h"
+#include "WeatherPickerWindow.h"
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
@@ -1262,6 +1263,8 @@ void EditorWindow::RenderUI()
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x, yPad));
+		// Make action bar slightly more transparent
+		barBg.w = ThemeManager::Constants::OVERLAP_MIN_ALPHA * 0.7f;
 		ImGui::PushStyleColor(ImGuiCol_WindowBg, barBg);
 
 		constexpr ImGuiWindowFlags kActionBarFlags =
@@ -1376,6 +1379,8 @@ void EditorWindow::RenderUI()
 				Util::AddTooltip(T(TKEY("viewport_unavailable_hdr"), "Viewport is unavailable when HDR Display is enabled"), Util::kTooltipWhenDisabled);
 			}
 			if (ImGui::Checkbox(T(TKEY("palette"), "Palette"), &PaletteWindow::GetSingleton()->open)) {
+			}
+			if (ImGui::Checkbox(T(TKEY("weather_picker"), "Weather Picker"), &WeatherPickerWindow::GetSingleton()->open)) {
 			}
 			if (ImGui::Checkbox(T(TKEY("features_window"), "Features"), &settings.showFeaturesWindow))
 				Save();
@@ -1521,6 +1526,7 @@ void EditorWindow::RenderUI()
 		const float barWidth = ImGui::GetWindowSize().x;
 		const float& itemSpacing = ImGui::GetStyle().ItemSpacing.x;
 		const float sliderWidth = kMenuBarSliderWidth * scale * 0.75f;
+		const float halfSliderWidth = sliderWidth * 0.5f;
 
 		float rightCursor = clipRight;
 
@@ -1533,9 +1539,12 @@ void EditorWindow::RenderUI()
 		rightCursor -= itemSpacing + kDividerThickness;
 		dividerX[dividerCount++] = rightCursor;
 
-		// Time slider is one frame tall — same row box as the icon buttons.
-		rightCursor -= itemSpacing + sliderWidth;
-		const float sliderX = rightCursor;
+		// Time scrubber split in half - game time and time speed
+		rightCursor -= itemSpacing + halfSliderWidth;
+		const float timeSpeedSliderX = rightCursor;
+
+		rightCursor -= itemSpacing + halfSliderWidth;
+		const float gameTimeSliderX = rightCursor;
 
 		rightCursor -= itemSpacing + iconSize;
 		const float pauseButtonX = rightCursor;
@@ -1663,10 +1672,23 @@ void EditorWindow::RenderUI()
 		}
 
 		auto calendar = GetCalendar();
-		if (calendar && calendar->gameHour) {
-			ImGui::SetCursorScreenPos(ImVec2(sliderX, iconY));
-			ImGui::SetNextItemWidth(sliderWidth);
-			DrawPausedAwareGameHourSlider("##MenuBarSlider");
+		if (calendar && calendar->gameHour && calendar->timeScale) {
+			ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
+			ImGui::SetNextItemWidth(halfSliderWidth);
+			DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
+
+			if (timePaused)
+				timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
+			else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
+				timeScaleSlider = calendar->timeScale->value;
+
+			ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
+			ImGui::SetNextItemWidth(halfSliderWidth);
+			ImGui::BeginDisabled(timePaused);
+			if (ImGui::SliderFloat("##MenuBarTimeScaleSlider", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
+					timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla") : "%.1fx", ImGuiSliderFlags_Logarithmic))
+				calendar->timeScale->value = timeScaleSlider;
+			ImGui::EndDisabled();
 		}
 
 		// Close — white cross, no red fill
@@ -1742,6 +1764,9 @@ void EditorWindow::RenderUI()
 	// Show palette window
 	PaletteWindow::GetSingleton()->Draw();
 
+	// Show weather picker window
+	WeatherPickerWindow::GetSingleton()->Draw();
+
 	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
 	Effects11Editor::GetSingleton().Draw();
 
@@ -1785,6 +1810,7 @@ void EditorWindow::SetupResources()
 {
 	Load();
 	PaletteWindow::GetSingleton()->Load();
+	WeatherPickerWindow::GetSingleton()->Load();
 	InvalidateJsonAttachmentCache();
 
 	// Populate all widget collections using WidgetFactory templates
