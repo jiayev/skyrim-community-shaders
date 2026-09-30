@@ -125,7 +125,17 @@ public:
 	void ToggleEnabled();
 	/** @brief Writes the "UseEffect" GLOBAL setting; go through PostProcessingMode::Set to keep the pipelines exclusive. */
 	void SetUseEffect(bool enabled);
+	/** @brief UseEffect is on in enbseries.ini; does not require a compiled preset. */
+	bool IsUseEffectEnabled() const;
+	/** @brief UseEffect on and a compiled preset is ready (Effects 11 actually drives the frame). */
 	bool IsPresetEnabled() const;
+	/**
+	 * @brief Use Original Post Processing cannot be turned off: Effects 11 is selected but no
+	 * usable preset is loaded, so the game's tonemap must keep running.
+	 */
+	bool IsUseOriginalPostProcessingForced() const;
+	/** @brief Writes UseOriginalPostProcessing=true while IsUseOriginalPostProcessingForced(). */
+	void EnforceOriginalPostProcessingIfNeeded();
 	bool IsActive() const { return presetActive; }
 
 	void DrawVolumetricRays();

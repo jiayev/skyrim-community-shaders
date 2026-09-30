@@ -11,6 +11,7 @@
 #include "PostProcessingMode.h"
 #include "Presets/PresetCompatibility.h"
 #include "SettingsOverrideManager.h"
+#include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
@@ -415,6 +416,12 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 						pack.requiredFeatures.push_back(feature.get<std::string>());
 				}
 			}
+			if (const auto disableAtBoot = meta.find(kDisableAtBootKey); disableAtBoot != meta.end() && disableAtBoot->is_object()) {
+				for (auto it = disableAtBoot->begin(); it != disableAtBoot->end(); ++it) {
+					if (it.value().is_boolean())
+						pack.disableAtBoot[it.key()] = it.value().get<bool>();
+				}
+			}
 
 			if (meta.contains("logo") && meta["logo"].is_string())
 				pack.logoPath = ResolveRelative(packRoot, meta["logo"].get<std::string>());
@@ -438,7 +445,8 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.hasEffects11 = !pack.effects11Root.empty();
 		pack.hasCSPresets = SceneSettingsManager::HasScenePayload(packRoot);
 		pack.baselineFeatures = ListBaselineFeatures(packRoot);
-		pack.hasBaseline = !pack.baselineFeatures.empty();
+		pack.hasBaseline = !pack.baselineFeatures.empty() || !pack.disableAtBoot.empty() ||
+			(pack.type && *pack.type == PresetType::Baseline);
 
 		if (pack.description.empty())
 			pack.description = InferDescriptionFromReadme(packRoot);
@@ -737,6 +745,57 @@ void UnifiedPresetCatalog::EnableBaseline(const PackInfo& pack)
 		if (!feature->ReapplyOverrideSettings())
 			logger::warn("[Presets] Baseline '{}': nothing applied to '{}' (see Feature Issues for rejected files)", pack.id, featureName);
 	}
+
+	// Disable-at-boot entries take effect on the next game start; persist them with the rest of Settings.
+	if (!pack.disableAtBoot.empty()) {
+		auto* state = globals::state;
+		bool changed = false;
+		for (const auto& [featureName, disabled] : pack.disableAtBoot) {
+			if (state->IsFeatureDisabled(featureName) == disabled)
+				continue;
+			state->SetFeatureDisabled(featureName, disabled);
+			changed = true;
+			logger::info("[Presets] Baseline '{}': {} '{}' at boot", pack.id, disabled ? "disable" : "enable", featureName);
+		}
+		if (changed)
+			state->Save();
+	}
+}
+
+bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled)
+{
+	auto* pack = FindPack(packId);
+	if (!pack || featureShortName.empty())
+		return false;
+
+	const auto manifestPath = GetPackManifestPath(pack->rootPath);
+	std::string readError;
+	json manifest = ReadPackManifest(pack->rootPath, &readError);
+	if (!readError.empty() && !std::filesystem::exists(manifestPath)) {
+		if (!EnsureBaselineManifest(pack->rootPath, pack->name.empty() ? packId : pack->name))
+			return false;
+		manifest = ReadPackManifest(pack->rootPath, &readError);
+	}
+	if (!readError.empty()) {
+		logger::warn("[Presets] Cannot update disableAtBoot for '{}': {}", packId, readError);
+		return false;
+	}
+
+	if (!manifest.contains(kDisableAtBootKey) || !manifest[kDisableAtBootKey].is_object())
+		manifest[kDisableAtBootKey] = json::object();
+	manifest[kDisableAtBootKey][featureShortName] = disabled;
+
+	if (!Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest"))
+		return false;
+
+	pack->disableAtBoot[featureShortName] = disabled;
+	pack->hasBaseline = !pack->baselineFeatures.empty() || !pack->disableAtBoot.empty() ||
+		(pack->type && *pack->type == PresetType::Baseline);
+	if (!pack->type)
+		pack->type = PresetType::Baseline;
+
+	logger::info("[Presets] Pack '{}': {} '{}' at boot in manifest", packId, disabled ? "disable" : "enable", featureShortName);
+	return true;
 }
 
 bool UnifiedPresetCatalog::RemoveBaseline(const std::string& id)

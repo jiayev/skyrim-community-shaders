@@ -1,17 +1,17 @@
 #include "Widget.h"
+#include "Menu/IconLoader.h"
 
-#include <algorithm>
-#include <cctype>
 #include <format>
 #include <functional>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/WeatherTypeIcons.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -258,71 +258,6 @@ std::string Widget::GetFolderName() const
 	}
 }
 
-namespace
-{
-	/** @brief Infer a weather-class FA glyph from a descriptive editor ID / name. */
-	const char* ResolveWeatherTypeIconFromLabel(std::string_view label)
-	{
-		if (label.empty())
-			return nullptr;
-
-		std::string lower(label);
-		std::transform(lower.begin(), lower.end(), lower.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-
-		auto has = [&](std::string_view token) {
-			return lower.find(token) != std::string::npos;
-		};
-
-		// Most specific tokens first — e.g. SkyrimOvercastRain is rain, not cloudy.
-		if (has("rain") || has("storm") || has("thunder"))
-			return ICON_FA_CLOUD_RAIN;
-		if (has("snow") || has("blizzard") || has("ice"))
-			return ICON_FA_SNOWFLAKE;
-		if (has("cloud") || has("overcast") || has("fog") || has("mist"))
-			return ICON_FA_CLOUD;
-		if (has("clear") || has("sunny") || has("pleasant"))
-			return ICON_FA_CERTIFICATE;
-		return nullptr;
-	}
-
-	/** @brief Primary weather-class FA glyph for a weather record; nullptr when weather is null. */
-	const char* ResolveWeatherTypeIcon(RE::TESWeather* weather)
-	{
-		if (!weather)
-			return nullptr;
-
-		// Prefer editor ID / display name: vanilla classification flags are often wrong
-		// (SkyrimCloudy is flagged Pleasant in Skyrim.esm).
-		if (const char* editorId = weather->GetFormEditorID()) {
-			if (const char* icon = ResolveWeatherTypeIconFromLabel(editorId))
-				return icon;
-		}
-		if (const char* name = weather->GetName()) {
-			if (const char* icon = ResolveWeatherTypeIconFromLabel(name))
-				return icon;
-		}
-
-		using Flag = RE::TESWeather::WeatherDataFlag;
-		// Same priority as CSEditor::GetWeatherTypeColor — one class icon, not every set bit.
-		if (weather->data.flags.any(Flag::kRainy))
-			return ICON_FA_CLOUD_RAIN;
-		if (weather->data.flags.any(Flag::kSnow))
-			return ICON_FA_SNOWFLAKE;
-		if (weather->data.flags.any(Flag::kCloudy))
-			return ICON_FA_CLOUD;
-		if (weather->data.flags.any(Flag::kPleasant))
-			return ICON_FA_CERTIFICATE;
-
-		constexpr uint32_t kOtherFlags =
-			static_cast<uint32_t>(Flag::kPermAurora) | static_cast<uint32_t>(Flag::kAuroraFollowsSun);
-		if (weather->data.flags.underlying() & kOtherFlags)
-			return ICON_FA_QUESTION;
-		// Unmarked weathers without a descriptive name — don't assume sunny.
-		return ICON_FA_QUESTION;
-	}
-}
-
 bool Widget::BeginWidgetWindow(bool showApply, bool showSaveLoadRevert, bool showForceWeather, RE::TESWeather* weather, const char* searchId)
 {
 	SetupWidgetWindowDefaults(GetWidgetTypeName());
@@ -333,16 +268,22 @@ bool Widget::BeginWidgetWindow(bool showApply, bool showSaveLoadRevert, bool sho
 	m_customHeaderActionsDrawn = false;
 	m_titleBarSearchDrawn = false;
 
-	// FA type glyph sits to the left of the title (same colour as the title text — white/simple).
+	// Weather type icon sits left of the title via drawLeading (standalone icon fonts).
 	std::string title = GetWindowTitle();
-	if (const char* typeIcon = ResolveWeatherTypeIcon(weather))
-		title = std::format("{}  {}", typeIcon, title);
+	const auto typeIcon = WeatherTypeIcons::Resolve(weather);
+	const bool hasLeadingIcon = typeIcon.has_value();
 
 	bool result = Util::BeginWithCustomHeader(title.c_str(), &open,
 		[this, showApply, showSaveLoadRevert, showForceWeather, weather, searchId]() {
 			m_customHeaderActionsDrawn = DrawTitleBarActions(showApply, showSaveLoadRevert, showForceWeather, weather, true, searchId);
 		},
-		ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
+		ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags,
+		hasLeadingIcon ?
+			[typeIcon](ImVec2 iconMin, float iconSize) {
+				WeatherTypeIcons::Draw(typeIcon, ImGui::GetWindowDrawList(), iconMin, iconSize,
+					ImGui::GetColorU32(ImGuiCol_Text));
+			} :
+			std::function<void(ImVec2, float)>{});
 	UpdateWidgetTypeSize(GetWidgetTypeName());
 	return result;
 }
@@ -467,8 +408,8 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 	if (showApply && (!editorWindow->settings.autoApplyChanges || RequiresManualApply())) {
 		const char* tooltip = T(TKEY("apply_changes"), "Apply changes to the game");
 		auto onClick = [this]() { ApplyChanges(); };
-		if (useIcons && menu->uiIcons.applyToGame.texture) {
-			addIcon("##TitleApply", menu->uiIcons.applyToGame.texture, tooltip, onClick);
+		if (useIcons && Util::IconLoader::GetIcons().applyToGame.texture) {
+			addIcon("##TitleApply", Util::IconLoader::GetIcons().applyToGame.texture, tooltip, onClick);
 		} else {
 			auto& action = addText("##TitleApply", T(TKEY("apply"), "Apply"), tooltip, onClick);
 			auto fill = statusPalette.SuccessColor;
@@ -481,12 +422,24 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 	if (showSaveLoadRevert) {
 		const size_t groupStart = actions.size();
 
-		const char* saveTooltip = T(TKEY("save_to_file"), "Save to file");
+		const bool unsaved = HasUnsavedChanges();
+		const char* saveTooltip = unsaved ?
+			T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+			T(TKEY("save_to_file"), "Save to file");
 		auto saveClick = [this]() { Save(); };
-		if (useIcons)
-			addFaIcon("##TitleSave", ICON_FA_SAVE, saveTooltip, saveClick);
-		else
-			addText("##TitleSave", T(TKEY("save"), "Save"), saveTooltip, saveClick);
+		std::optional<ImVec4> unsavedColor;
+		if (unsaved) {
+			auto color = statusPalette.Error;
+			color.w = 0.75f;  // muted red — dirty save affordance without a separate label
+			unsavedColor = color;
+		}
+		if (useIcons) {
+			auto& action = addFaIcon("##TitleSave", ICON_FA_SAVE, saveTooltip, saveClick);
+			action.textColor = unsavedColor;
+		} else {
+			auto& action = addText("##TitleSave", T(TKEY("save"), "Save"), saveTooltip, saveClick);
+			action.textColor = unsavedColor;
+		}
 
 		const char* loadTooltip = T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)");
 		auto loadClick = [this]() { Load(); };
@@ -678,13 +631,8 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 					}
 				}
 				if (action.faIcon) {
-					const ImVec2 glyphSize = ImGui::CalcTextSize(action.faIcon);
-					const float unusedBelow = fontSize - ImGui::GetFontBaked()->Ascent;
 					const ImU32 col = action.textColor ? ImGui::GetColorU32(*action.textColor) : textCol;
-					drawList->AddText(
-						ImVec2(bb.Min.x + (action.width - glyphSize.x) * 0.5f,
-							bb.Min.y + (itemH - fontSize) * 0.5f + unusedBelow * 0.5f),
-						col, action.faIcon);
+					Icons::DrawCenteredGlyph(drawList, bb.Min, bb.GetSize(), Icons::FA(action.faIcon), col);
 				}
 				break;
 			}
@@ -771,13 +719,15 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		}
 	};
 
-	auto drawUnsavedIndicator = [&]() {
-		if (!HasUnsavedChanges() || !menu)
-			return;
-		ImGui::SameLine();
-		ImGui::TextColored(menu->GetTheme().StatusPalette.Warning, "%s", T(TKEY("unsaved_changes"), "(UNSAVED CHANGES)"));
-		Util::AddTooltip(T(TKEY("unsaved_changes_tooltip"), "Unsaved changes - click save to keep"));
-	};
+	const bool unsaved = HasUnsavedChanges();
+	const char* saveTooltip = unsaved ?
+		T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+		T(TKEY("save_to_file"), "Save to file");
+	ImVec4 unsavedSaveColor{};
+	if (unsaved && menu) {
+		unsavedSaveColor = menu->GetTheme().StatusPalette.Error;
+		unsavedSaveColor.w = 0.75f;
+	}
 
 	if (useIcons) {
 		const float iconSize = ImGui::GetFrameHeight() * WidgetUI::kIconButtonSizeRatio;
@@ -805,8 +755,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 
 		// Apply button
 		if (inlineActions && showApply && (!editorWindow->settings.autoApplyChanges || RequiresManualApply())) {
-			if (menu->uiIcons.applyToGame.texture) {
-				iconButton("_Apply", menu->uiIcons.applyToGame.texture, T(TKEY("apply_changes"), "Apply changes to the game"), [&]() { ApplyChanges(); });
+			if (Util::IconLoader::GetIcons().applyToGame.texture) {
+				iconButton("_Apply", Util::IconLoader::GetIcons().applyToGame.texture, T(TKEY("apply_changes"), "Apply changes to the game"), [&]() { ApplyChanges(); });
 			} else {
 				ImGui::SameLine();
 				if (ImGui::Button(T(TKEY("apply"), "Apply")))
@@ -818,32 +768,37 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		// Save/Load/Revert/Delete group
 		if (inlineActions && showSaveLoadRevert) {
 			Util::ToolbarDivider(false);
-			iconButton("_Save", menu->uiIcons.saveSettings.texture, T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
-			iconButton("_Load", menu->uiIcons.loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
-			iconButton("_Revert", menu->uiIcons.featureSettingRevert.texture, T(TKEY("revert_to_original"), "Revert to original game values"), [&]() { RevertChanges(); });
+			ImGui::SameLine();
+			if (unsaved)
+				ImGui::PushStyleColor(ImGuiCol_Text, unsavedSaveColor);
+			if (Icons::Button(std::format("{}##_Save", searchId ? searchId : "").c_str(), Icons::FA(ICON_FA_SAVE)))
+				Save();
+			if (unsaved)
+				ImGui::PopStyleColor();
+			Util::AddTooltip(saveTooltip);
+			iconButton("_Load", Util::IconLoader::GetIcons().loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
+			iconButton("_Revert", Util::IconLoader::GetIcons().featureSettingRevert.texture, T(TKEY("revert_to_original"), "Revert to original game values"), [&]() { RevertChanges(); });
 
-			if (HasSavedFile() && menu->uiIcons.deleteSettings.texture) {
+			if (HasSavedFile()) {
 				Util::ToolbarDivider(false);
 				ImGui::SameLine();
-				if (Util::ErrorImageButton((std::string(searchId) + "_Delete").c_str(), menu->uiIcons.deleteSettings.texture, buttonSize))
-					ImGui::OpenPopup("DeleteConfirmation");
+				{
+					Icons::FontGuard font(Icons::Family::FontAwesome);
+					if (Util::ErrorTextButton(std::format("{}{}_Delete", ICON_FA_TRASH_ALT, searchId).c_str()))
+						ImGui::OpenPopup("DeleteConfirmation");
+				}
 				Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
 			}
 		}
 
-		drawUnsavedIndicator();
 		ImGui::PopStyleColor(2);
 		ImGui::PopStyleVar(2);
 	} else {
-		if (!menu) {
-			drawSearchBar();
-			if (inlineActions)
-				drawForceWeatherButton();
-		} else {
-			drawSearchBar();
-			if (inlineActions)
-				drawForceWeatherButton();
+		drawSearchBar();
+		if (inlineActions)
+			drawForceWeatherButton();
 
+		if (menu) {
 			auto textButton = [&](const char* label, const char* tooltip, auto callback) {
 				ImGui::SameLine();
 				if (Util::ButtonWithFlash(label))
@@ -862,7 +817,14 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			// Save/Load/Revert/Delete group
 			if (inlineActions && showSaveLoadRevert) {
 				Util::ToolbarDivider(false);
-				textButton(T(TKEY("save"), "Save"), T(TKEY("save_to_file"), "Save to file"), [&]() { Save(); });
+				ImGui::SameLine();
+				if (unsaved)
+					ImGui::PushStyleColor(ImGuiCol_Text, unsavedSaveColor);
+				if (Util::ButtonWithFlash(T(TKEY("save"), "Save")))
+					Save();
+				if (unsaved)
+					ImGui::PopStyleColor();
+				Util::AddTooltip(saveTooltip);
 				textButton(T(TKEY("load"), "Load"), T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
 				ImGui::SameLine();
 				if (Util::WarningButton(T(TKEY("revert"), "Revert")))
@@ -877,8 +839,6 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 					Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
 				}
 			}
-
-			drawUnsavedIndicator();
 		}
 	}
 
@@ -890,7 +850,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 		Util::AddTooltip(T(TKEY("manual_apply_required_tooltip"), "This form type is only re-read by the engine on weather reinit.\nAuto-apply is disabled - use the Apply button."));
 	}
 
-	if (!m_titleBarSearchDrawn || inlineActions || HasUnsavedChanges() ||
+	if (!m_titleBarSearchDrawn || inlineActions ||
 		(showApply && RequiresManualApply() && editorWindow->settings.autoApplyChanges))
 		ImGui::Separator();
 

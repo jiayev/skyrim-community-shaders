@@ -6,6 +6,7 @@
 #include "RE/B/BSShaderManager.h"
 #include "RE/N/NiSourceTexture.h"
 #include "Utils/Game.h"
+#include "Utils/UI.h"
 
 #include <format>
 
@@ -47,12 +48,12 @@ void PrecipitationWidget::DrawWidget()
 
 		bool changed = false;
 
-		if (ImGui::BeginTabBar("PrecipitationTabs")) {
+		if (Util::BeginPillTabBar("PrecipitationTabs")) {
 			const ImGuiTabItemFlags particleFlags = GetTabFlagsForOverride(PrecipitationTab::kParticle);
 			const ImGuiTabItemFlags positionFlags = GetTabFlagsForOverride(PrecipitationTab::kPosition);
 			const ImGuiTabItemFlags textureFlags = GetTabFlagsForOverride(PrecipitationTab::kTexture);
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_particle"), "Particle"), nullptr, particleFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_particle"), "Particle"), nullptr, particleFlags)) {
 				BeginScrollableContent("##ParticleScroll");
 				if (DrawIfMatchesSearch(PrecipitationSetting::kType, [&](const char* label) {
 						ImGui::SeparatorText(T(TKEY("particle_type"), "Particle Type"));
@@ -79,10 +80,10 @@ void PrecipitationWidget::DrawWidget()
 					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kRotationVelocity, settings.rotationVelocity, 0.0f, 10000.0f);
 				}
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_position"), "Position"), nullptr, positionFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_position"), "Position"), nullptr, positionFlags)) {
 				BeginScrollableContent("##PositionScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kCenterOffsetMin, PrecipitationSetting::kCenterOffsetMax, PrecipitationSetting::kStartRotationRange })) {
 					ImGui::SeparatorText(T(TKEY("offset"), "Offset"));
@@ -96,10 +97,10 @@ void PrecipitationWidget::DrawWidget()
 					changed |= WeatherUtils::DrawSliderFloat(PrecipitationSetting::kParticleDensity, settings.particleDensity, 0.0f, 1000.0f);
 				}
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_texture"), "Texture"), nullptr, textureFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_texture"), "Texture"), nullptr, textureFlags)) {
 				BeginScrollableContent("##TextureScroll");
 				if (MatchesAnySearch({ PrecipitationSetting::kNumSubtexturesX, PrecipitationSetting::kNumSubtexturesY })) {
 					ImGui::SeparatorText(T(TKEY("subtextures"), "Subtextures"));
@@ -145,10 +146,10 @@ void PrecipitationWidget::DrawWidget()
 				});
 
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			ImGui::EndTabBar();
+			Util::EndPillTabBar();
 		}
 
 		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges)

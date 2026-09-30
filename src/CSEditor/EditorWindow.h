@@ -215,6 +215,21 @@ public:
 	 */
 	bool DrawGameHourSlider(const char* label = "Game Time", const char* format = "%.2f");
 
+	/**
+	 * @brief Game-hour slider with paused overlay format and error-colored text when time is paused.
+	 * @param id Hidden ImGui id (e.g. "##FeatureGameTime").
+	 * @return True if the game calendar is valid and the slider was drawn.
+	 */
+	bool DrawPausedAwareGameHourSlider(const char* id);
+
+	/**
+	 * @brief Shared pause/resume icon toggle (clock-pause glyph, red chrome when paused).
+	 * @param id Hidden ImGui id.
+	 * @param size Button size; (0,0) uses the current frame height.
+	 * @return True if the button was clicked (pause state is toggled on click).
+	 */
+	bool DrawTimePauseToggle(const char* id, const ImVec2& size = ImVec2(0, 0));
+
 	/** @brief Draw the full time controls panel (pause, game time, timescale). */
 	void DrawTimeControls();
 
@@ -296,6 +311,8 @@ public:
 		bool autoApplyChanges = true;
 		bool useTextButtons = false;
 		bool enableInheritFromParent = false;
+		/// When false (default), Debug TreeNode / CollapsingHeader sections are hidden in the Features editor.
+		bool showFeatureDebug = false;
 		float editorUIScale = 1.0f;
 		std::vector<std::string> favoriteWidgets;
 		std::map<std::string, std::vector<std::string>> recentWidgets;

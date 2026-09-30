@@ -9,9 +9,15 @@
 #include "Features/Upscaling.h"
 #include "Globals.h"
 #include "IconsFontAwesome5.h"
+#include "IconsLucide.h"
+#include "IconsTabler.h"
 #include "Menu.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Menu/BackgroundBlur.h"
+#include "Menu/Fonts.h"
 #include "PaletteWindow.h"
+#include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
@@ -21,6 +27,10 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
+#ifndef ICON_FA_PERSON_WALKING
+#define ICON_FA_PERSON_WALKING ICON_FA_WALKING  // FA5 name; FA6 calls this person-walking
+#endif
+
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -29,10 +39,53 @@
 
 #include <algorithm>
 
+namespace
+{
+	constexpr float kToggleIconButtonPadding = 1.0f;
+	constexpr float kToggleActiveAlpha = 0.6f;
+	constexpr float kToggleHoverAlpha = 0.8f;
+	constexpr float kInactiveHoverAlpha = 0.25f;
+
+	Util::ConfirmationPopup deleteSceneChangesConfirmation;
+
+	/** @brief Toggle-style icon button with active fill chrome. Does not set cursor position. */
+	bool DrawToggleIconButton(const char* id, Icons::GlyphRef glyph, bool isActive, const ImVec4& activeColor,
+		const ImVec2& size, ImU32 glyphColor)
+	{
+		ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kToggleIconButtonPadding, kToggleIconButtonPadding));
+		if (isActive) {
+			auto color = activeColor;
+			color.w = kToggleActiveAlpha;
+			auto hover = color;
+			hover.w = kToggleHoverAlpha;
+			ImGui::PushStyleColor(ImGuiCol_Button, color);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+		} else {
+			auto hover = ImGui::ColorConvertU32ToFloat4(glyphColor);
+			hover.w = kInactiveHoverAlpha;
+			ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
+			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
+		}
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
+		const bool clicked = ImGui::InvisibleButton(id, size);
+		const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+		if (isActive || ImGui::IsItemHovered())
+			ImGui::GetWindowDrawList()->AddRectFilled(bb.Min, bb.Max,
+				ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive :
+										  (ImGui::IsItemHovered() ? ImGuiCol_ButtonHovered : ImGuiCol_Button)),
+				ImGui::GetStyle().FrameRounding);
+		Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(), glyph, glyphColor);
+		ImGui::PopStyleColor(3);
+		ImGui::PopStyleVar(2);
+		return clicked;
+	}
+}  // namespace
+
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, showFeaturesWindow, showPostProcessingWindow, selectedCategory, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, showFeatureDebug, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, showFeaturesWindow, showPostProcessingWindow, selectedCategory, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
 
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled)
 {
@@ -115,12 +168,8 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 		DrawIconWave(center, buttonSize.x * 0.7f, iconColor, filled);
 	} else if (strcmp(iconType, "flag") == 0) {
 		ImGui::PushFont(nullptr, ImGui::GetFontSize());
-		const float fontSize = ImGui::GetFontSize();
-		const ImVec2 glyphSize = ImGui::CalcTextSize(ICON_FA_FLAG);
-		const float unusedBelow = fontSize - ImGui::GetFontBaked()->Ascent;
 		const ImU32 flagColor = ImGui::GetColorU32(filled ? Util::Colors::GetAccent() : ImGui::GetStyleColorVec4(ImGuiCol_Text));
-		drawList->AddText(ImVec2(center.x - glyphSize.x * 0.5f, center.y - fontSize * 0.5f + unusedBelow * 0.5f),
-			flagColor, ICON_FA_FLAG);
+		Icons::DrawCenteredGlyph(drawList, cursorPos, buttonSize, Icons::FA(ICON_FA_FLAG), flagColor);
 		ImGui::PopFont();
 	}
 
@@ -725,18 +774,14 @@ void EditorWindow::ShowObjectsWindow()
 				auto drawJsonDeleteButton = [&](Widget* widget) {
 					ImGui::TableNextColumn();
 					if (HasCachedJsonAttachment(widget)) {
-						auto* menu = globals::menu;
-						if (menu && menu->uiIcons.deleteSettings.texture) {
-							const float iconSize = ImGui::GetFrameHeight() * 0.85f;
-							ImGui::SetNextItemAllowOverlap();
-							char idBuf[32];
-							snprintf(idBuf, sizeof(idBuf), "##jsondel_%s", widget->GetFormID().c_str());
-							if (Util::ErrorImageButton(idBuf, menu->uiIcons.deleteSettings.texture, { iconSize, iconSize })) {
-								pendingDeleteWidget = widget;
-								pendingDeletePopupRequested = true;
-							}
-							Util::AddTooltip(T(TKEY("delete_json_file"), "Delete JSON file"));
+						ImGui::SetNextItemAllowOverlap();
+						Icons::FontGuard font(Icons::Family::FontAwesome);
+						const auto deleteLabel = std::format("{}##jsondel_{}", ICON_FA_TRASH_ALT, widget->GetFormID());
+						if (Util::ErrorTextButton(deleteLabel.c_str())) {
+							pendingDeleteWidget = widget;
+							pendingDeletePopupRequested = true;
 						}
+						Util::AddTooltip(T(TKEY("delete_json_file"), "Delete JSON file"));
 					}
 				};
 
@@ -1182,10 +1227,10 @@ void EditorWindow::RenderUI()
 	}
 
 	// Floating action bar: BeginMainMenuBar forces WindowRounding=0, so we own the window instead.
+	// Edge inset stays in fixed screen pixels so a taller bar (from editor UI scale) sits closer to
+	// the top instead of being pushed away by a scale-multiplied margin.
 	const float scale = Util::GetUIScale();
-	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
-	// Bar sits closer to the screen edges than other editor chrome.
-	const float actionBarPad = pad * 0.5f;
+	const float actionBarPad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * 0.5f;
 	// Same chrome height as widget title bars so File/icons/text share equal top/bottom air.
 	const float actionBarHeight = Util::GetEditorChromeHeaderHeight();
 	const float actionBarBottom = actionBarPad + actionBarHeight;
@@ -1193,8 +1238,8 @@ void EditorWindow::RenderUI()
 		ImGuiViewport* viewport = ImGui::GetMainViewport();
 		const auto& style = ImGui::GetStyle();
 		const float rounding = style.FrameRounding;
-		const float baseFramePadY = style.FramePadding.y;
-		const float baseFrameH = ImGui::GetFrameHeight();
+		const float frameH = ImGui::GetFrameHeight();
+		const float yPad = std::max(0.0f, (actionBarHeight - frameH) * 0.5f);
 		// Same fill as overlapping CS windows: theme WindowBg RGB at OVERLAP_MIN_ALPHA.
 		const ImU32 bgRGB = ImGui::GetColorU32(ImGuiCol_WindowBg) & ~IM_COL32_A_MASK;
 		ImVec4 barBg = ImGui::ColorConvertU32ToFloat4(bgRGB);
@@ -1204,20 +1249,27 @@ void EditorWindow::RenderUI()
 		ImGui::SetNextWindowSize(ImVec2(viewport->Size.x - actionBarPad * 2.0f, actionBarHeight));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, rounding);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-		// Double FramePadding.y so BeginMenuBar's GetFrameHeight() matches actionBarHeight and
-		// File/Settings/etc. centre in the taller bar instead of hugging the top.
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, baseFramePadY * 2.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.FramePadding.x, yPad));
 		ImGui::PushStyleColor(ImGuiCol_WindowBg, barBg);
-		// MenuBarBg is drawn with top-only rounding and would square the bottom corners — keep it clear.
-		ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
 
 		constexpr ImGuiWindowFlags kActionBarFlags =
 			ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-			ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_MenuBar;
+			ImGuiWindowFlags_NoNavFocus;
 
-		if (ImGui::Begin("##CSEditorActionBar", nullptr, kActionBarFlags) && ImGui::BeginMenuBar()) {
+		if (ImGui::Begin("##CSEditorActionBar", nullptr, kActionBarFlags)) {
+		// BeginMenu outside a MenuBar uses vertical layout: SpanAvailWidth + open-on-hover,
+		// so hovering anywhere on the bar opens File (Save/Close) and covers the icon row.
+		// Force horizontal layout so menus behave like a toolbar without ImGuiWindowFlags_MenuBar
+		// (which would reserve a second chrome strip under our custom-height bar).
+		// MenuBarAppending must also be set: otherwise FindBestWindowPosForPopup treats the
+		// dropdown as a side-child menu and parks it over this bar instead of below it.
+		ImGuiWindow* barWindow = ImGui::GetCurrentWindow();
+		const ImGuiLayoutType barLayoutBackup = barWindow->DC.LayoutType;
+		const bool menuBarAppendingBackup = barWindow->DC.MenuBarAppending;
+		barWindow->DC.LayoutType = ImGuiLayoutType_Horizontal;
+		barWindow->DC.MenuBarAppending = true;
+		ImGui::AlignTextToFramePadding();
 
 		if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
 			if (ImGui::MenuItem(T(TKEY("save_all_open_widgets"), "Save All Open Widgets"), "Ctrl+S")) {
@@ -1247,6 +1299,7 @@ void EditorWindow::RenderUI()
 				WidgetFactory::DrawCloseAllMenuItem(*collection);
 			ImGui::EndMenu();
 		}
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		if (ImGui::BeginMenu(T(TKEY("settings"), "Settings"))) {
 			if (ImGui::MenuItem(T(TKEY("general_settings"), "General Settings"))) {
 				showSettingsWindow = true;
@@ -1297,6 +1350,7 @@ void EditorWindow::RenderUI()
 			Util::AddTooltip(T(TKEY("enable_inherit_tooltip"), "Show inherit from parent options in weather widgets"));
 			ImGui::EndMenu();
 		}
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		if (ImGui::BeginMenu(T(TKEY("window"), "Window"))) {
 			const bool hdrActive = globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR;
 			if (hdrActive)
@@ -1350,6 +1404,7 @@ void EditorWindow::RenderUI()
 
 			ImGui::EndMenu();
 		}
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
 			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
@@ -1362,7 +1417,7 @@ void EditorWindow::RenderUI()
 			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("scene_settings_greyed_label"), "Why are some settings greyed?"));
 			ImGui::PushTextWrapPos(0.0f);
 			ImGui::TextUnformatted(T(TKEY("scene_settings_greyed_note"),
-				"Greyed settings cannot be overridden here. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
+				"Greyed settings cannot be overridden on this page. Some cannot be overridden by any scene; others need a different kind, such as a location override."));
 			ImGui::PopTextWrapPos();
 			ImGui::Separator();
 			ImGui::Text("%s", T(TKEY("total_objects"), "Total Objects:"));
@@ -1375,35 +1430,27 @@ void EditorWindow::RenderUI()
 		auto menu = globals::menu;
 		const auto& statusPalette = menu->GetTheme().StatusPalette;
 		const auto& textColor = menu->GetTheme().Palette.Text;
-		constexpr float kIconButtonPadding = 1.0f;
-		// Icon hit boxes stay at the pre-push frame size; the taller bar just adds equal air around them.
-		const float iconButtonDim = baseFrameH - kIconButtonPadding * 2.0f;
-		const ImVec2 iconButtonSize(iconButtonDim, iconButtonDim);
-		const float iconButtonTotalH = iconButtonDim + kIconButtonPadding * 2.0f;
-		const auto iconTint = Util::GetIconTint();
+		// One chrome size and one row Y for every icon button so scale changes move the bar as a unit.
+		const float iconSize = frameH;
+		const ImVec2 iconButtonSize(iconSize, iconSize);
 
 		const ImVec2 barPos = ImGui::GetWindowPos();
 		const float barMinY = barPos.y;
-		const float barCenterY = barMinY + actionBarHeight * 0.5f;
-		auto CenteredY = [barCenterY](float itemHeight) {
-			return barCenterY - itemHeight * 0.5f;
-		};
-		const float fontSize = ImGui::GetFontSize();
-		const float unusedBelow = fontSize - ImGui::GetFontBaked()->Ascent;
+		const float iconY = barMinY + (actionBarHeight - iconSize) * 0.5f;
 		const float textY = barMinY + Util::GetEditorChromeTextCursorOffsetY(actionBarHeight);
-		const float iconY = CenteredY(iconButtonTotalH);
 
 		const ImVec4 enabledColor = statusPalette.SuccessColor;
 		const ImVec4 disabledColor = statusPalette.Error;
-		// Soft red for paused time — distinct from the green “active” accent used elsewhere.
-		const ImVec4 pausedColor = statusPalette.Error;
+		// Soft red for paused time lives in DrawTimePauseToggle / DrawPausedAwareGameHourSlider.
+
+		ImGui::SameLine();
 
 		// Undo — FA glyph (not theme PNG)
 		{
 			const bool canUndo = CanUndo();
 			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kIconButtonPadding, kIconButtonPadding));
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 			{
 				auto _style = Util::TransparentIconButtonStyle();
 				ImGui::InvisibleButton("##GlobalUndo", iconButtonSize);
@@ -1413,30 +1460,60 @@ void EditorWindow::RenderUI()
 				ImVec4 undoCol = canUndo ? textColor : statusPalette.Disable;
 				if (!canUndo)
 					undoCol.w = 0.5f;
-				const ImVec2 glyphSize = ImGui::CalcTextSize(ICON_FA_UNDO);
-				ImGui::GetWindowDrawList()->AddText(
-					ImVec2(bb.Min.x + (bb.GetWidth() - glyphSize.x) * 0.5f,
-						bb.Min.y + (bb.GetHeight() - fontSize) * 0.5f + unusedBelow * 0.5f),
-					ImGui::GetColorU32(undoCol), ICON_FA_UNDO);
+				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
+					Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
 			}
 			ImGui::PopStyleVar(2);
 			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
-		// Right-aligned items — use SetCursorScreenPos to bypass menu bar GroupOffset
-		const float clipRight = ImGui::GetWindowDrawList()->GetClipRectMax().x;
+		// Delete authored scene changes — global action, same row as Undo.
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		{
+			auto* sceneManager = globals::sceneSettingsManager;
+			const bool canDelete = sceneManager && sceneManager->HasAnyUserEntries();
+			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
+			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+			{
+				auto _style = Util::TransparentIconButtonStyle();
+				ImGui::InvisibleButton("##DeleteSceneChanges", iconButtonSize);
+				const ImRect bb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+				if (ImGui::IsItemClicked() && canDelete) {
+					deleteSceneChangesConfirmation.title = T(TKEY("scene_page_delete_changes_title"), "Delete changes");
+					deleteSceneChangesConfirmation.message = T(TKEY("scene_page_delete_changes_message"),
+						"Remove every setting you have authored, in every context, and let the installed preset drive the "
+						"scene?\n\nSettings you removed from the preset come back too. This cannot be undone.");
+					deleteSceneChangesConfirmation.confirmLabel = T(TKEY("scene_page_delete_changes"), "Delete Changes");
+					deleteSceneChangesConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
+					deleteSceneChangesConfirmation.Request();
+				}
+				ImVec4 deleteCol = canDelete ? statusPalette.Error : statusPalette.Disable;
+				if (!canDelete)
+					deleteCol.w = 0.5f;
+				Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), bb.Min, bb.GetSize(),
+					SceneActionIcons::kDelete, ImGui::GetColorU32(deleteCol));
+			}
+			ImGui::PopStyleVar(2);
+			Util::AddTooltip(canDelete ?
+					T(TKEY("scene_page_delete_changes_tooltip"),
+						"Deletes your authored scene changes everywhere so the installed preset applies again.") :
+					T(TKEY("scene_page_delete_changes_empty_tooltip"),
+						"No authored scene changes to delete."),
+				Util::kTooltipWhenDisabled);
+		}
+
+		// Right-aligned items — X from the trailing edge; Y shares iconY / textY with the left cluster.
+		const float clipRight = barPos.x + ImGui::GetWindowSize().x - style.FramePadding.x;
 		const float barMinX = barPos.x;
 		const float barWidth = ImGui::GetWindowSize().x;
 		const float& itemSpacing = ImGui::GetStyle().ItemSpacing.x;
 		const float sliderWidth = kMenuBarSliderWidth * scale * 0.75f;
 
-		float rightCursor = clipRight - ImGui::GetStyle().FramePadding.x;
+		float rightCursor = clipRight;
 
-		// Close — neutral white FA times, no red square
-		const float closeButtonSize = iconButtonDim;
-		rightCursor -= closeButtonSize;
+		rightCursor -= iconSize;
 		const float xButtonX = rightCursor;
-		const float xButtonY = CenteredY(closeButtonSize);
 
 		constexpr float kDividerThickness = 1.0f;
 		std::array<float, 2> dividerX{};
@@ -1444,36 +1521,20 @@ void EditorWindow::RenderUI()
 		rightCursor -= itemSpacing + kDividerThickness;
 		dividerX[dividerCount++] = rightCursor;
 
-		// Time slider
+		// Time slider is one frame tall — same row box as the icon buttons.
 		rightCursor -= itemSpacing + sliderWidth;
 		const float sliderX = rightCursor;
-		const float sliderY = CenteredY(baseFrameH);
 
-		// Pause Time button
-		float pauseButtonX = 0;
-		bool hasPauseButton = menu && menu->uiIcons.pauseTime.texture;
-		if (hasPauseButton) {
-			rightCursor -= itemSpacing + iconButtonDim + kIconButtonPadding * 2.0f;
-			pauseButtonX = rightCursor;
-		}
+		rightCursor -= itemSpacing + iconSize;
+		const float pauseButtonX = rightCursor;
 
-		// Preview mode buttons (free camera / play mode)
-		const float previewButtonWidth = iconButtonDim + kIconButtonPadding * 2.0f;
 		float freeCameraX = 0, playModeX = 0;
-		bool hasFreeCam = menu && menu->uiIcons.freeCamera.texture;
-		bool hasPlayMode = menu && menu->uiIcons.playMode.texture;
-		if (hasFreeCam || hasPlayMode) {
-			rightCursor -= itemSpacing + kDividerThickness;
-			dividerX[dividerCount++] = rightCursor;
-		}
-		if (hasPlayMode) {
-			rightCursor -= itemSpacing + previewButtonWidth;
-			playModeX = rightCursor;
-		}
-		if (hasFreeCam) {
-			rightCursor -= itemSpacing + previewButtonWidth;
-			freeCameraX = rightCursor;
-		}
+		rightCursor -= itemSpacing + kDividerThickness;
+		dividerX[dividerCount++] = rightCursor;
+		rightCursor -= itemSpacing + iconSize;
+		playModeX = rightCursor;
+		rightCursor -= itemSpacing + iconSize;
+		freeCameraX = rightCursor;
 
 		// Preview mode status text
 		float previewStatusX = 0;
@@ -1528,12 +1589,9 @@ void EditorWindow::RenderUI()
 				drawList->AddLine({ dividerX[i], barMinY + inset }, { dividerX[i], barMinY + actionBarHeight - inset }, dividerColor, kDividerThickness);
 		}
 
-		// Centered weather lock/name + period — share the badge's vertical mid so labels
-		// don't sit low like a subscript beside the lock icon.
 		float centerX = centerClusterX;
 		if (weatherName) {
-			const float badgeY = CenteredY(lockBadgeSize);
-			const float weatherTextY = badgeY + (lockBadgeSize - fontSize) * 0.5f;
+			const float badgeY = iconY + (iconSize - lockBadgeSize) * 0.5f;
 			ImGui::SetCursorScreenPos(ImVec2(centerX, badgeY));
 			if (Util::LockStatusBadgeButton("##ActionBarWeatherLock", weatherLocked,
 					weatherLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("force_this_weather"), "Force This Weather"))) {
@@ -1543,43 +1601,27 @@ void EditorWindow::RenderUI()
 					LockWeather(statusWeather);
 			}
 			centerX += lockBadgeSize + weatherStatusGap;
-			ImGui::SetCursorScreenPos(ImVec2(centerX, weatherTextY));
+			if (ImGuiWindow* window = ImGui::GetCurrentWindow())
+				window->DC.CurrLineTextBaseOffset = 0.0f;
+			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
 			ImGui::TextColored(weatherLocked ? enabledColor : disabledColor, "%s", weatherName);
 			centerX += weatherNameW + itemSpacing;
-			ImGui::SetCursorScreenPos(ImVec2(centerX, weatherTextY));
+			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
 			ImGui::TextUnformatted(periodBuf);
 		} else {
-			ImGui::SetCursorScreenPos(ImVec2(centerX, CenteredY(fontSize)));
+			ImGui::SetCursorScreenPos(ImVec2(centerX, textY));
 			ImGui::TextUnformatted(periodBuf);
 		}
 
-		// Toggle-style image button helper (active uses activeColor, inactive transparent)
-		auto DrawToggleIconButton = [&](const char* id, ImTextureRef texture, bool isActive, float posX, const ImVec4& activeColor) -> bool {
+		// Toggle-style FA/Lucide/Tabler glyph button — same chrome as the old image toggles.
+		auto PlaceToggleIconButton = [&](const char* id, Icons::GlyphRef glyph, bool isActive, float posX, const ImVec4& activeColor) -> bool {
 			ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
-			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(kIconButtonPadding, kIconButtonPadding));
-			if (isActive) {
-				auto color = activeColor;
-				color.w = kToggleActiveAlpha;
-				auto hover = color;
-				hover.w = kToggleHoverAlpha;
-				ImGui::PushStyleColor(ImGuiCol_Button, color);
-				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
-			} else {
-				auto hover = textColor;
-				hover.w = kInactiveHoverAlpha;
-				ImGui::PushStyleColor(ImGuiCol_Button, WidgetUI::kIconButtonTransparent);
-				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hover);
-			}
-			bool clicked = ImGui::ImageButton(id, texture, iconButtonSize, ImVec2(0, 0), ImVec2(1, 1), WidgetUI::kIconButtonTransparent, iconTint);
-			ImGui::PopStyleColor(2);
-			ImGui::PopStyleVar(2);
-			return clicked;
+			return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
 		};
 
-		if (hasFreeCam) {
+		{
 			bool isActive = previewMode == PreviewMode::FreeCamera || previewMode == PreviewMode::FreeCameraLocked;
-			if (DrawToggleIconButton("##FreeCamera", menu->uiIcons.freeCamera.texture, isActive, freeCameraX, enabledColor)) {
+			if (PlaceToggleIconButton("##FreeCamera", Icons::LC(ICON_LC_SCAN_EYE), isActive, freeCameraX, enabledColor)) {
 				if (isActive)
 					ExitPreviewMode();
 				else
@@ -1589,9 +1631,9 @@ void EditorWindow::RenderUI()
 					T(TKEY("exit_free_camera"), "Exit Free Camera (right-click or Shift+End)") :
 					T(TKEY("free_camera_scroll"), "Free Camera (scroll to adjust speed)"));
 		}
-		if (hasPlayMode) {
+		{
 			bool isActive = previewMode == PreviewMode::PlayMode;
-			if (DrawToggleIconButton("##PlayMode", menu->uiIcons.playMode.texture, isActive, playModeX, enabledColor)) {
+			if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_PERSON_WALKING), isActive, playModeX, enabledColor)) {
 				if (isActive)
 					ExitPreviewMode();
 				else
@@ -1603,57 +1645,47 @@ void EditorWindow::RenderUI()
 		}
 
 		{
-			bool isPaused = IsTimePaused();
-			if (hasPauseButton && DrawToggleIconButton("##GlobalPauseTime", menu->uiIcons.pauseTime.texture, isPaused, pauseButtonX, pausedColor))
-				TogglePause();
-			Util::AddTooltip(isPaused ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
+			ImGui::SetCursorScreenPos(ImVec2(pauseButtonX, iconY));
+			DrawTimePauseToggle("##GlobalPauseTime", iconButtonSize);
+			Util::AddTooltip(IsTimePaused() ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
 		}
 
 		auto calendar = GetCalendar();
 		if (calendar && calendar->gameHour) {
-			ImGui::SetCursorScreenPos(ImVec2(sliderX, sliderY));
+			ImGui::SetCursorScreenPos(ImVec2(sliderX, iconY));
 			ImGui::SetNextItemWidth(sliderWidth);
-			const bool isPaused = IsTimePaused();
-			const char* timeFormat = isPaused ?
-				T(TKEY("time_slider_paused"), "Time: %.2f (paused)") :
-				"Time: %.2f";
-			if (isPaused)
-				ImGui::PushStyleColor(ImGuiCol_Text, pausedColor);
-			DrawGameHourSlider("##MenuBarSlider", timeFormat);
-			if (isPaused)
-				ImGui::PopStyleColor();
+			DrawPausedAwareGameHourSlider("##MenuBarSlider");
 		}
 
 		// Close — white cross, no red fill
-		ImGui::SetCursorScreenPos(ImVec2(xButtonX, xButtonY));
+		ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 		{
 			auto _style = Util::TransparentIconButtonStyle();
-			const bool closeClicked = ImGui::InvisibleButton("##ActionBarClose", ImVec2(closeButtonSize, closeButtonSize));
+			const bool closeClicked = ImGui::InvisibleButton("##ActionBarClose", iconButtonSize);
 			const ImRect closeBb(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
 			if (ImGui::IsItemHovered())
 				Util::DrawRoundedButtonHighlight(closeBb, true, ImGui::IsItemActive(), ImGui::GetWindowDrawList());
-			const ImVec2 glyphSize = ImGui::CalcTextSize(ICON_FA_TIMES);
-			ImGui::GetWindowDrawList()->AddText(
-				ImVec2(closeBb.Min.x + (closeBb.GetWidth() - glyphSize.x) * 0.5f,
-					closeBb.Min.y + (closeBb.GetHeight() - fontSize) * 0.5f + unusedBelow * 0.5f),
-				ImGui::GetColorU32(textColor), ICON_FA_TIMES);
+			Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), closeBb.Min, closeBb.GetSize(),
+				Icons::FA(ICON_FA_TIMES), ImGui::GetColorU32(textColor));
 			if (closeClicked)
 				open = false;
 		}
 		ImGui::PopStyleVar();
 		Util::AddTooltip(T(TKEY("close_cs_editor"), "Close CS Editor (Esc)"));
 
-		ImGui::EndMenuBar();
+		barWindow->DC.LayoutType = barLayoutBackup;
+		barWindow->DC.MenuBarAppending = menuBarAppendingBackup;
 		}
 		ImGui::End();
-		ImGui::PopStyleColor(2);
-		ImGui::PopStyleVar(4);
+		ImGui::PopStyleColor(1);
+		ImGui::PopStyleVar(3);
 	}
 
 	// Establish a viewport-wide DockSpace so all editor windows are snappable and dockable
 	ImGui::DockSpaceOverViewport(0, nullptr, ImGuiDockNodeFlags_PassthruCentralNode);
 
+	const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
 	auto width = ImGui::GetIO().DisplaySize.x;
 	auto height = ImGui::GetIO().DisplaySize.y;
 	const float availableWidth = width - pad * 3.0f;  // left pad + gap + right pad
@@ -1706,6 +1738,14 @@ void EditorWindow::RenderUI()
 	FeatureSettingsWindow::Draw(settings.showFeaturesWindow, settings.showPostProcessingWindow);
 	if (featuresWasOpen != settings.showFeaturesWindow || postProcessingWasOpen != settings.showPostProcessingWindow)
 		Save();
+
+	if (deleteSceneChangesConfirmation.Draw()) {
+		if (auto* sceneManager = globals::sceneSettingsManager) {
+			// An export earlier this session left the mod layer holding what was on disk before it.
+			sceneManager->ReloadOverwrites();
+			sceneManager->ClearAllUserEntries();
+		}
+	}
 
 	if (resetLayout)
 		ResetWidgetTypeSizes();
@@ -1909,6 +1949,7 @@ void EditorWindow::ShowSettingsWindow()
 		};
 		const CategoryOption options[] = {
 			{ "General", T(TKEY("general"), "General") },
+			{ "Features", T(TKEY("features"), "Features") },
 			{ "Flags", T(TKEY("flags"), "Flags") }
 		};
 		for (const auto& option : options) {
@@ -1939,8 +1980,7 @@ void EditorWindow::ShowSettingsWindow()
 				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 				ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 				auto _style = Util::TransparentIconButtonStyle();
-				const auto resetLabel = std::format("{}##ResetUIScale", ICON_FA_UNDO);
-				if (ImGui::Button(resetLabel.c_str())) {
+				if (Icons::Button("##ResetUIScale", Icons::FA(ICON_FA_UNDO))) {
 					settings.editorUIScale = 1.0f;
 					Save();
 				}
@@ -1969,6 +2009,14 @@ void EditorWindow::ShowSettingsWindow()
 				settings.favoriteWidgets.clear();
 				Save();
 			}
+
+		} else if (settingsSelectedCategory == "Features") {
+			if (ImGui::Checkbox(T(TKEY("show_feature_debug"), "Show Debug sections"), &settings.showFeatureDebug)) {
+				Save();
+			}
+			Util::AddTooltip(T(TKEY("show_feature_debug_tooltip"),
+				"Show Debug dropdowns in the Features and Post Processing editors.\n"
+				"Hidden by default because they are rarely useful when authoring feature preset baselines."));
 
 		} else if (settingsSelectedCategory == "Flags") {
 			if (ImGui::BeginTable("FlagsTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -2018,8 +2066,7 @@ void EditorWindow::ShowSettingsWindow()
 						ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 						ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 						auto _style = Util::TransparentIconButtonStyle();
-						const auto deleteLabel = std::format("{}##{}", ICON_FA_TRASH_ALT, recordMarker.first);
-						if (ImGui::Button(deleteLabel.c_str())) {
+						if (Icons::Button(std::format("##{}", recordMarker.first).c_str(), Icons::FA(ICON_FA_TRASH_ALT))) {
 							markerToDelete = recordMarker.first;
 						}
 						ImGui::PopStyleVar(2);
@@ -2476,6 +2523,37 @@ bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 	return true;
 }
 
+bool EditorWindow::DrawPausedAwareGameHourSlider(const char* id)
+{
+	const bool isPaused = IsTimePaused();
+	const char* timeFormat = isPaused ?
+		T(TKEY("time_slider_paused"), "Time: %.2f (paused)") :
+		"Time: %.2f";
+	if (isPaused)
+		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Error);
+	const bool drawn = DrawGameHourSlider(id, timeFormat);
+	if (isPaused)
+		ImGui::PopStyleColor();
+	return drawn;
+}
+
+bool EditorWindow::DrawTimePauseToggle(const char* id, const ImVec2& size)
+{
+	ImVec2 buttonSize = size;
+	if (buttonSize.x <= 0.0f || buttonSize.y <= 0.0f) {
+		const float frameH = ImGui::GetFrameHeight();
+		buttonSize = ImVec2(frameH, frameH);
+	}
+
+	const ImVec4 pausedColor = Menu::GetSingleton()->GetTheme().StatusPalette.Error;
+	const ImU32 glyphColor = ImGui::GetColorU32(ImGuiCol_Text);
+	const bool isPaused = IsTimePaused();
+	const bool clicked = DrawToggleIconButton(id, Icons::TI(ICON_TI_CLOCK_PAUSE), isPaused, pausedColor, buttonSize, glyphColor);
+	if (clicked)
+		TogglePause();
+	return clicked;
+}
+
 void EditorWindow::DrawTimeControls()
 {
 	auto calendar = GetCalendar();
@@ -2486,46 +2564,44 @@ void EditorWindow::DrawTimeControls()
 	if (timePaused && calendar->timeScale->value > 0.0f)
 		timePaused = false;
 
-	const float framePadX = ImGui::GetStyle().FramePadding.x * 2.0f;
-	const char* resumeTimeText = T(TKEY("resume_time"), "Resume Time");
-	const char* pauseTimeText = T(TKEY("pause_time"), "Pause Time");
-	const char* resetSpeedText = T(TKEY("reset_speed"), "Reset Speed");
-	const float buttonWidth = std::max({ ImGui::CalcTextSize(resumeTimeText).x,
-								  ImGui::CalcTextSize(pauseTimeText).x,
-								  ImGui::CalcTextSize(resetSpeedText).x }) +
-	                          framePadX;
-	if (ImGui::Button(timePaused ? resumeTimeText : pauseTimeText, ImVec2(buttonWidth, 0)))
-		TogglePause();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text("%s", T(TKEY("pause_time_tooltip"), "Pause or resume game time progression"));
-	ImGui::SameLine();
-	DrawGameHourSlider(T(TKEY("game_time"), "Game Time"));
+	const float gap = ImGui::GetStyle().ItemSpacing.x;
+	const float iconSize = ImGui::GetFrameHeight();
+	const float avail = ImGui::GetContentRegionAvail().x;
+	const float sliderWidth = std::max(40.0f, (avail - iconSize * 2.0f - gap * 3.0f) * 0.5f);
+
+	ImGui::SetNextItemWidth(sliderWidth);
+	DrawPausedAwareGameHourSlider("##FeatureGameTime");
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("game_time_tooltip"), "Adjust the current game time"));
 
-	// Sync slider with actual value
+	ImGui::SameLine();
+	DrawTimePauseToggle("##FeaturePauseTime", ImVec2(iconSize, iconSize));
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", T(TKEY("pause_time_tooltip"), "Pause or resume game time progression"));
+
 	if (timePaused)
 		timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
 	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
 		timeScaleSlider = calendar->timeScale->value;
 
-	// Row 2: Reset Speed + TimeScale slider + speed label
-	if (ImGui::Button(resetSpeedText, ImVec2(buttonWidth, 0)))
-		ResetTimeScale();
-	if (auto _tt = Util::HoverTooltipWrapper())
-		ImGui::Text(T(TKEY("reset_speed_tooltip"), "Reset time speed to vanilla (%.1fx)"), kVanillaTimeScale);
-
 	ImGui::SameLine();
+	ImGui::SetNextItemWidth(sliderWidth);
 	ImGui::BeginDisabled(timePaused);
 	if (ImGui::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "", ImGuiSliderFlags_Logarithmic))
+			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
 		calendar->timeScale->value = timeScaleSlider;
 	ImGui::EndDisabled();
-
-	ImGui::SameLine();
-	ImGui::Text("%.1fx", calendar->timeScale->value);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
+
+	ImGui::SameLine();
+	{
+		auto _style = Util::TransparentIconButtonStyle();
+		if (Icons::Button("##FeatureResetSpeed", Icons::FA(ICON_FA_UNDO), ImVec2(iconSize, iconSize)))
+			ResetTimeScale();
+	}
+	if (auto _tt = Util::HoverTooltipWrapper())
+		ImGui::Text(T(TKEY("reset_speed_tooltip"), "Reset time speed to vanilla (%.1fx)"), kVanillaTimeScale);
 }
 
 bool EditorWindow::CanBeOpen()

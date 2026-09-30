@@ -1,6 +1,7 @@
 #include "PresetCompatibility.h"
 
 #include "Feature.h"
+#include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Plugin.h"
@@ -55,6 +56,24 @@ namespace PresetCompatibility
 		// Tolerate a trailing build segment (e.g. 0.8.0.0) by ignoring the rest.
 		out = parsed;
 		return true;
+	}
+
+	ReleaseStage ReleaseStageFromVersion(std::string_view version)
+	{
+		SemVer parsed{};
+		if (!ParseSemVer(version, parsed))
+			return ReleaseStage::Release;
+		if (parsed.major > 0)
+			return ReleaseStage::Release;
+		if (parsed.minor > 0)
+			return ReleaseStage::Beta;
+		return ReleaseStage::Alpha;
+	}
+
+	ImVec4 StageTagColor(ReleaseStage stage)
+	{
+		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
+		return stage == ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
 	}
 
 	VersionGap CompareRequiredCsVersion(std::string_view requiredCsVersion)

@@ -70,7 +70,7 @@ void CellLightingWidget::DrawWidget()
 	} else {
 		bool changed = false;
 
-		if (ImGui::BeginTabBar("CellLightingTabs")) {
+		if (Util::BeginPillTabBar("CellLightingTabs")) {
 			const ImGuiTabItemFlags basicFlags = GetTabFlagsForOverride(CellLightingTab::kBasic);
 			const ImGuiTabItemFlags fogFlags = GetTabFlagsForOverride(CellLightingTab::kFog);
 			const ImGuiTabItemFlags dalcFlags = GetTabFlagsForOverride(CellLightingTab::kDalc);
@@ -87,7 +87,7 @@ void CellLightingWidget::DrawWidget()
 				return result;
 			};
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
 				BeginScrollableContent("##BasicScroll");
 
 				auto drawMatchedHeader = [&](bool matches, const char* label, auto draw) {
@@ -153,10 +153,10 @@ void CellLightingWidget::DrawWidget()
 				});
 
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_fog"), "Fog"), nullptr, fogFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_fog"), "Fog"), nullptr, fogFlags)) {
 				BeginScrollableContent("##FogScroll");
 
 				DrawSearchSectionIfMatches(CellLightingSetting::kFogNearColor, [&](const char*) {
@@ -196,10 +196,10 @@ void CellLightingWidget::DrawWidget()
 				});
 
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_dalc"), "DALC"), nullptr, dalcFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_dalc"), "DALC"), nullptr, dalcFlags)) {
 				BeginScrollableContent("##DALCScroll");
 
 				if (MatchesAnySearch({ CellLightingSetting::kSpecular, CellLightingSetting::kFresnelPower })) {
@@ -236,10 +236,10 @@ void CellLightingWidget::DrawWidget()
 				}
 
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			if (ImGui::BeginTabItem(T(TKEY("tab_inheritance"), "Inheritance"), nullptr, inheritFlags)) {
+			if (Util::BeginPillTabItem(T(TKEY("tab_inheritance"), "Inheritance"), nullptr, inheritFlags)) {
 				BeginScrollableContent("##InheritanceScroll");
 				ImGui::TextWrapped("%s", T(TKEY("inherit_flags_desc"), "These flags control which lighting properties are inherited from the cell's lighting template."));
 				ImGui::Separator();
@@ -255,10 +255,10 @@ void CellLightingWidget::DrawWidget()
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritFogMaxClamp, settings.inheritFogMax);
 				changed |= WeatherUtils::DrawCheckbox(CellLightingSetting::kInheritLightFadeDistances, settings.inheritLightFadeDistances);
 				EndScrollableContent();
-				ImGui::EndTabItem();
+				Util::EndPillTabItem();
 			}
 
-			ImGui::EndTabBar();
+			Util::EndPillTabBar();
 		}
 
 		if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {

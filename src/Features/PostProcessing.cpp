@@ -1,6 +1,8 @@
 #include "PostProcessing.h"
 
+#include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
 #include "imgui_stdlib.h"
 
 #include "Menu.h"
@@ -47,6 +49,21 @@ void PostProcessing::DrawSettings()
 		}
 	}
 
+	// CS Editor button
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
+		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
+		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
+			ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+		ImGui::SameLine();
+		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
+		if (Icons::LabeledButton("##PostProcessingOpenCSEditor", brush, csEditorTitle))
+			CSEditor::OpenEditorWindow();
+		Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
+	}
+
 	ImGui::EndGroup();
 	ImGui::BeginGroup();
 	static std::string newPresetName = "";
@@ -81,8 +98,8 @@ void PostProcessing::DrawSettings()
 			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
 								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
 		ImGui::SameLine();
-		auto ccLabel = std::format("{} {}", ICON_FA_BARS, T("feature.post_processing.cinematic_camera.settings", "Settings"));
-		if (ImGui::Button(ccLabel.c_str()))
+		if (Icons::LabeledButton("##CinematicCameraSettings", Icons::FA(ICON_FA_BARS),
+				T("feature.post_processing.cinematic_camera.settings", "Settings")))
 			pipelinePageNum = 2;
 
 		if (const auto* state = cam.GetState()) {
@@ -128,7 +145,7 @@ void PostProcessing::DrawSettings()
 				ImGui::PushID(feat->GetType().c_str());
 				drawEnabled("##Enabled", *feat);
 				ImGui::SameLine();
-				if (ImGui::Button(ICON_FA_BARS)) {
+				if (Icons::Button("##Bars", Icons::FA(ICON_FA_BARS))) {
 					pipelineFeatIdx = i;
 					pipelinePageNum = 1;
 				}
@@ -142,8 +159,8 @@ void PostProcessing::DrawSettings()
 			}
 		}
 	} else if (pipelinePageNum == 1) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -158,8 +175,8 @@ void PostProcessing::DrawSettings()
 				ImGui::TextWrapped("%s", description.c_str());
 
 				ImGui::Spacing();
-				auto recompileLabel = std::format("{} {}", ICON_FA_SYNC, T("feature.post_processing.recompile_shaders", "Recompile Shaders"));
-				if (ImGui::Button(recompileLabel.c_str())) {
+				if (Icons::LabeledButton("##RecompileShaders", Icons::FA(ICON_FA_SYNC),
+						T("feature.post_processing.recompile_shaders", "Recompile Shaders"))) {
 					feat->ClearShaderCache();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -185,8 +202,8 @@ void PostProcessing::DrawSettings()
 			pipelinePageNum = 0;
 		}
 	} else if (pipelinePageNum == 2) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -813,6 +830,15 @@ bool PostProcessing::WantsTonemapOwnership() const
 bool PostProcessing::IsTonemapOwnedByEffects11() const
 {
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
+}
+
+bool PostProcessing::WantsAutoHDR() const
+{
+	if (globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
+		return false;
+
+	auto* colorGrading = static_cast<const ColorGrading*>(pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get());
+	return colorGrading && colorGrading->IsActive() && colorGrading->WantsAutoHDR();
 }
 
 void PostProcessing::Prepass()

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <map>
 #include <tuple>
@@ -14,6 +15,8 @@
 #include "../EditorWindow.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneSettingsContextRules.h"
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsUI.h"
@@ -29,10 +32,6 @@ namespace
 {
 	using Kind = SceneWidgetBinding::Value::Kind;
 	using SettingMetadata = SceneSettingsCatalog::SettingMetadata;
-
-	/// Smaller than the location menu's delete icon (SceneSettingsUI.cpp): the gutter sits inline
-	/// with a checkbox rather than a table row, so the icon needs to read as the lighter action.
-	constexpr float kRemoveIconScale = 0.75f;
 
 	/// A control shrunk to make room for the gutter never goes below this, so a narrow panel keeps
 	/// a slider you can still aim at.
@@ -451,12 +450,6 @@ namespace
 	}
 }
 
-void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
-{
-	if (const auto traits = GetScalarTraits(a_type); traits.write)
-		traits.write(a_destination, a_value);
-}
-
 SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, GutterPolicy a_policy) :
 	label(a_label), value(a_value), policy(a_policy)
 {
@@ -720,12 +713,7 @@ void SceneWidgetBinding::Guard::DrawBaselineGutter()
 				SceneSettingsUI::OpenSceneContext(*context, identity.featureShortName);
 		Util::AddTooltip(T(TKEY("baseline_jump_tooltip"), "Open the Scene Manager page supplying this value."));
 	} else {
-		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
-		auto* menu = Menu::GetSingleton();
-		const bool committed = menu && menu->uiIcons.saveSettings.texture ?
-		                           ImGui::ImageButton("##SketchCommit", menu->uiIcons.saveSettings.texture,
-		                               ImVec2(iconSize, iconSize)) :
-		                           ImGui::Button(T(TKEY("baseline_commit"), "Commit"));
+		const bool committed = Icons::Button("##SketchCommit", SceneActionIcons::kSave);
 		if (committed) {
 			std::vector<SceneSettingsManager::SettingIdentity> sketched;
 			for (const auto& component : components)
@@ -1299,13 +1287,7 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 	ImGui::PushID(label);
 
 	const auto& style = ImGui::GetStyle();
-	auto* menu = Menu::GetSingleton();
-	const bool hasRemoveIcon = menu && menu->uiIcons.deleteSettings.texture;
-	const float removeIconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
-	const float removeWidth = hasRemoveIcon ?
-	                              removeIconSize :
-	                              ImGui::CalcTextSize(T(TKEY("scene_override_remove"), "Remove")).x +
-	                                  style.FramePadding.x * 2.0f;
+	const float removeWidth = Icons::CalcGlyphSize(SceneActionIcons::kDelete).x + style.FramePadding.x * 2.0f;
 	gutterConsumedWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
 
 	// The gutter fills solid where the control only tints: it reads as a state marker, not a hint.
@@ -1338,10 +1320,11 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 
 	ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 	ImGui::BeginDisabled(!hasOverride);
-	const bool removeClicked = hasRemoveIcon ?
-	                               Util::ErrorImageButton("##SceneOverrideRemove", menu->uiIcons.deleteSettings.texture,
-	                                   ImVec2(removeIconSize, removeIconSize)) :
-	                               Util::ErrorTextButton(T(TKEY("scene_override_remove"), "Remove"));
+	bool removeClicked = false;
+	{
+		Icons::FontGuard font(SceneActionIcons::kDelete);
+		removeClicked = Util::ErrorTextButton(std::format("{}##SceneOverrideRemove", SceneActionIcons::kDelete.utf8).c_str());
+	}
 	ImGui::EndDisabled();
 	const char* removeTooltip = nullptr;
 	if (state == State::Overwritten)

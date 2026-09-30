@@ -33,21 +33,6 @@ namespace
 	{
 		return packRoot.empty() ? std::filesystem::path{} : packRoot / directoryName;
 	}
-
-	/// RAII CPU pass for the in-game Profiling UI; ends the pass on every early-return path.
-	struct ProfilerPassScope
-	{
-		explicit ProfilerPassScope(const std::string& name)
-		{
-			if (globals::profiler)
-				globals::profiler->BeginPass(name);
-		}
-		~ProfilerPassScope()
-		{
-			if (globals::profiler)
-				globals::profiler->EndPass();
-		}
-	};
 }
 
 SceneSettingsManager::SceneSettingsManager()
@@ -624,7 +609,6 @@ void SceneSettingsManager::Update()
 			return;
 		lastUpdateFrame = frame;
 	}
-	ProfilerPassScope profilerPass("SceneSettingsManager::Update");
 	// Nothing retained them since the last Update: the menu closed or left the feature.
 	if (!std::exchange(sketchesRetained, false))
 		DropSketches();

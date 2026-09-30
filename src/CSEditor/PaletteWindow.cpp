@@ -29,14 +29,17 @@ void PaletteWindow::Draw()
 	ImGui::SetNextWindowPos(ImVec2(displaySize.x - pad, bottomY), layoutCond, ImVec2(1.0f, 1.0f));
 
 	constexpr ImGuiWindowFlags kFlags =
+		ImGuiWindowFlags_NoTitleBar |
 		ImGuiWindowFlags_NoFocusOnAppearing |
 		ImGuiWindowFlags_AlwaysAutoResize |
 		ImGuiWindowFlags_NoResize |
 		ImGuiWindowFlags_NoScrollbar |
 		ImGuiWindowFlags_NoScrollWithMouse |
-		ImGuiWindowFlags_NoSavedSettings;
+		ImGuiWindowFlags_NoSavedSettings |
+		ImGuiWindowFlags_NoCollapse;
 
-	if (Util::BeginWithCustomHeader(T(TKEY("palette"), "Palette"), &open, nullptr, kFlags)) {
+	// No title/close chrome — toggle via the action-bar Palette checkbox.
+	if (ImGui::Begin("##CSEditorPalette", nullptr, kFlags)) {
 		DrawContents();
 	}
 	ImGui::End();

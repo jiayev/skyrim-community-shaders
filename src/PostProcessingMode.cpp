@@ -16,17 +16,18 @@ namespace PostProcessingMode
 	{
 		constexpr int kModeCount = 3;
 
-		/** @brief Without a compiled preset UseEffect has nothing to enable. */
+		/** @brief Effects 11 feature is ready to claim the pipeline slot (preset optional). */
 		bool CanUseEffects11()
 		{
 			const auto& effectManager = EffectManager::GetSingleton();
-			return globals::features::effects11.loaded && effectManager.IsInitialized() && effectManager.IsPresetLoaded();
+			return globals::features::effects11.loaded && effectManager.IsInitialized();
 		}
 	}
 
 	Mode Get()
 	{
-		if (globals::features::effects11.IsPresetEnabled())
+		// UseEffect selects the Effects 11 slot even before a preset compiles; original PP is forced then.
+		if (globals::features::effects11.IsUseEffectEnabled())
 			return Mode::Effects11;
 		const auto& postProcessing = globals::features::postProcessing;
 		return postProcessing.loaded && !postProcessing.bypass ? Mode::PostProcessing : Mode::Vanilla;
@@ -68,7 +69,18 @@ namespace PostProcessingMode
 		// Re-clicking the active mode must not undo a manual Linear Lighting opt-out.
 		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected) && modes[selected] != current)
 			Set(modes[selected]);
-		Util::AddTooltip(T("ui.post_processing_mode.tooltip",
-			"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
+
+		const bool effects11WithoutPreset = globals::features::effects11.IsUseOriginalPostProcessingForced();
+		if (effects11WithoutPreset) {
+			Util::AddTooltip(T("ui.post_processing_mode.effects11_no_preset_tooltip",
+				"Effects 11 is selected, but no usable preset is loaded.\n"
+				"Use Original Post Processing stays on so the game's tonemap keeps running until you install a preset."));
+			ImGui::Spacing();
+			Util::Text::WrappedWarning("%s", T("ui.post_processing_mode.effects11_no_preset",
+				"No Effects 11 preset loaded — Use Original Post Processing is forced on."));
+		} else {
+			Util::AddTooltip(T("ui.post_processing_mode.tooltip",
+				"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
+		}
 	}
 }

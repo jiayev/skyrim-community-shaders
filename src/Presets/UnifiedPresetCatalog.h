@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include <winrt/base.h>
 
@@ -29,6 +30,8 @@ public:
 	};
 
 	static constexpr const char* kPresetTypeKey = "type";
+	/** @brief Manifest object of feature short names → disabled-at-boot (same shape as Settings "Disable at Boot"). */
+	static constexpr const char* kDisableAtBootKey = "disableAtBoot";
 	/** @brief Default relative folder inside a pack that holds enbseries.ini + enbseries/. */
 	static constexpr const char* kEffects11PackSubdir = "effects11";
 	/** @brief Folder inside a pack holding baseline feature overwrites, one `<FeatureShortName>.json` per feature. */
@@ -57,6 +60,8 @@ public:
 		bool hasBaseline = false;
 		/// Feature short names the pack's Baseline folder sets, sorted; empty without a baseline payload.
 		std::vector<std::string> baselineFeatures;
+		/// Feature short names → disabled at boot when this baseline pack is enabled (manifest disableAtBoot).
+		std::unordered_map<std::string, bool> disableAtBoot;
 		/// Declared type; groups the pack, while the has* payload flags still decide what Apply loads.
 		std::optional<PresetType> type;
 		bool valid = true;
@@ -144,6 +149,13 @@ public:
 	/** @brief Stops applying a pack's Baseline overwrites from the next load; values already in use are kept.
 	 *  @return False when the pack was not enabled. */
 	bool RemoveBaseline(const std::string& id);
+
+	/**
+	 * @brief Sets whether a feature is disabled at boot in a pack's manifest disableAtBoot object.
+	 * Creating or clearing the last entry refreshes hasBaseline. Writes the manifest atomically.
+	 * @return False when the pack is missing or the manifest could not be written.
+	 */
+	bool SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled);
 
 	/** @brief Writes a starter manifest for a pack folder that has none, so an exported Baseline shows up as a preset.
 	 *  @return True when a manifest exists afterwards. */

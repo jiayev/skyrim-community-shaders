@@ -1,4 +1,5 @@
 #include "FontSelector.h"
+#include "Menu/FontAtlasState.h"
 
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -15,8 +16,7 @@ namespace MenuFonts::Selector
 			Menu::ThemeSettings::FontRoleSettings& roleSettings,
 			Menu::FontRole role,
 			const std::string& familyName,
-			const Util::Fonts::StyleInfo& style,
-			Menu& menu)
+			const Util::Fonts::StyleInfo& style)
 		{
 			roleSettings.Family = familyName;
 			roleSettings.Style = style.style;
@@ -24,7 +24,7 @@ namespace MenuFonts::Selector
 			if (role == Menu::FontRole::Body) {
 				themeSettings.FontName = roleSettings.File;
 			}
-			menu.pendingFontReload = true;
+			MenuFonts::GetAtlasState().pendingFontReload = true;
 		}
 
 		const Util::Fonts::StyleInfo* ResolveFamilyDefaultStyle(const Util::Fonts::FamilyInfo& family)
@@ -91,13 +91,12 @@ namespace MenuFonts::Selector
 									roleSettings,
 									role,
 									newFamily.name,
-									*defaultStyle,
-									menu);
+									*defaultStyle);
 							} else {
 								roleSettings.Family = newFamily.name;
 								roleSettings.Style.clear();
 								roleSettings.File.clear();
-								menu.pendingFontReload = true;
+								MenuFonts::GetAtlasState().pendingFontReload = true;
 							}
 						}
 					}
@@ -142,8 +141,7 @@ namespace MenuFonts::Selector
 							roleSettings,
 							role,
 							selectedFamily.name,
-							selectedFamily.styles[s],
-							menu);
+							selectedFamily.styles[s]);
 					}
 				}
 				if (isSelected) {
@@ -190,13 +188,13 @@ namespace MenuFonts::Selector
 
 		const std::string scaleLabel = std::format("{} Scale##{}", descriptor.displayName, roleIndex);
 		if (ImGui::SliderFloat(scaleLabel.c_str(), &roleSettings.SizeScale, 0.5f, 2.5f, "%.2fx", ImGuiSliderFlags_AlwaysClamp)) {
-			menu.pendingFontReload = true;
+			MenuFonts::GetAtlasState().pendingFontReload = true;
 		}
 		ImGui::SameLine();
 		const std::string resetLabel = std::format("Reset##Scale{}", roleIndex);
 		if (ImGui::Button(resetLabel.c_str())) {
 			roleSettings.SizeScale = Menu::GetFontRoleDefaultScale(role);
-			menu.pendingFontReload = true;
+			MenuFonts::GetAtlasState().pendingFontReload = true;
 		}
 
 		if (role == Menu::FontRole::Title) {

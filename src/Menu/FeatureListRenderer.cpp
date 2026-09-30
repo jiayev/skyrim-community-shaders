@@ -15,7 +15,10 @@
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "IconsLucide.h"
 #include "Menu.h"
+#include "Menu/IconLoader.h"
+#include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/HomePageRenderer.h"
 #include "Menu/PresetsPageRenderer.h"
 #include "Menu/ProfilingRenderer.h"
@@ -751,18 +754,17 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	const char* overrideButtonText = T("menu.features.apply_override", "Apply Override");
 	float bootToggleWidth = ImGui::GetFrameHeight() * 1.6f;
 	float overrideButtonWidth = ImGui::CalcTextSize(overrideButtonText).x + buttonPadding;
+	const float exportIconSize = ImGui::GetFrameHeight();
 
 	// Check if override is available for this feature
 	auto overrideManager = SettingsOverrideManager::GetSingleton();
 	bool hasOverrides = overrideManager && overrideManager->HasFeatureOverrides(featureName);
 
-	const char* exportButtonText = T("menu.features.export_overwrite", "Export Overwrite");
-	float exportButtonWidth = ImGui::CalcTextSize(exportButtonText).x + buttonPadding;
 	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
 	float totalButtonWidth = bootToggleWidth;
 	if (canExport) {
-		totalButtonWidth += exportButtonWidth + buttonSpacing;
+		totalButtonWidth += exportIconSize + buttonSpacing;
 	}
 	if (!isDisabled && isLoaded && hasOverrides) {
 		totalButtonWidth += overrideButtonWidth + buttonSpacing;
@@ -795,6 +797,23 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	ImGui::SetCursorScreenPos(ImVec2(titleStartPos.x + availableWidth - totalButtonWidth, buttonY));
 
+	// Export overwrite (icon) sits left of the boot toggle
+	if (canExport) {
+		{
+			auto _style = Util::TransparentIconButtonStyle();
+			if (Icons::Button("##ExportOverwrite", Icons::LC(ICON_LC_SHARE), ImVec2(exportIconSize, exportIconSize)))
+				FeatureOverwritesPanel::BeginExport(feat);
+		}
+		if (auto _tt = Util::HoverTooltipWrapper()) {
+			ImGui::Text(
+				"%s",
+				T("menu.features.export_overwrite_tooltip",
+					"Export selected settings as a feature overwrite file.\n"
+					"Overwrites are loaded at startup."));
+		}
+		ImGui::SameLine();
+	}
+
 	// Enable/Disable at boot toggle
 	bool bootEnabled = !isDisabled;
 
@@ -820,19 +839,6 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 				"Restart required for changes to take effect.\n"
 				"Disabling removes performance impact."),
 			bootEnabled ? T("menu.features.enabled", "Enabled") : T("menu.features.disabled", "Disabled"));
-	}
-
-	if (canExport) {
-		ImGui::SameLine();
-		if (ImGui::Button(exportButtonText, { exportButtonWidth, 0 }))
-			FeatureOverwritesPanel::BeginExport(feat);
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.export_overwrite_tooltip",
-					"Export selected settings as a feature overwrite file.\n"
-					"Overwrites are loaded at startup."));
-		}
 	}
 
 	// Apply Override button (when feature has available overrides)
@@ -957,9 +963,8 @@ void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* 
 	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
 	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
 
-	auto& menu = *globals::menu;
-	const bool restore = menu.uiIcons.featureSettingRevert.texture ?
-	                         ImGui::ImageButton("##RestoreDefaults", menu.uiIcons.featureSettingRevert.texture, iconSize) :
+	const bool restore = Util::IconLoader::GetIcons().featureSettingRevert.texture ?
+	                         ImGui::ImageButton("##RestoreDefaults", Util::IconLoader::GetIcons().featureSettingRevert.texture, iconSize) :
 	                         ImGui::Button("R##RestoreDefaults", iconSize);
 	if (restore) {
 		feat->RestoreDefaultSettings();

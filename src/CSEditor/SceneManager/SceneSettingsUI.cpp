@@ -10,19 +10,16 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
-#include "../LocationTypeIcons.h"
 #include "../Weather/WeatherWidget.h"
 #include "Features/CSEditor.h"
-#include "IconsFontAwesome5.h"
-#include "Menu.h"
+#include "Menu/Icons/helpers/LocationTargetIcons.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
-#include "SceneSettingsLocationTargets.h"
 #include "SceneSettingsManager.h"
-#include "Utils/Form.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
-#include "../WeatherUtils.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
 
@@ -55,8 +52,6 @@ namespace
 	constexpr float kMinRowShadeAlpha = 0.04f;
 	/// Rows the picker shows before it scrolls.
 	constexpr float kLocationPickerVisibleRows = 10.0f;
-	/// Matches the weather list's JSON delete icon, which sits a little inside the row height.
-	constexpr float kRemoveIconScale = 0.85f;
 	/// Outlined like the weather editor's lists, which frame their rows the same way.
 	constexpr ImGuiTableFlags kLocationTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
@@ -152,6 +147,15 @@ namespace
 		}
 	}
 
+	/// Labels for the period segmented control, filled in period order.
+	std::array<const char*, kPeriodCount> GetPeriodLabels()
+	{
+		std::array<const char*, kPeriodCount> labels{};
+		for (int period = 0; period < kPeriodCount; ++period)
+			labels[period] = GetPeriodLabel(period);
+		return labels;
+	}
+
 	/// The context one page edits: the selected period's set while editing periods, else the flat set.
 	SceneSettingsManager::SceneContextId ResolvePageContext(
 		const SceneSettingsManager::SceneContextId& baseContext, TimeOfDayPeriod period, bool periodEditing)
@@ -188,53 +192,108 @@ namespace
 				periodBar.lastHour = hour;
 			}
 		} else if (periodBar.selected < 0) {
-			// Pin the follow state so a disabled bar stops reacting to time entirely.
+			// Pin the follow state so a flat (all-day) bar stops reacting to time entirely.
 			periodBar.selected = live;
 		}
 
 		return periodBar.selected < 0 ? live : periodBar.selected;
 	}
 
-	/// Draws the period segmented control and its companion checkbox (the interior indicator, or
-	/// the Time of Day toggle), and returns the period the panel below it should edit. `active` is
-	/// the value ResolveActivePeriod already computed for this panel this frame; a click here may
-	/// advance it further. The page toolbar used to share this row, but now sits on the title row
-	/// above so navigation (this bar) and actions stay visually distinct.
-	int DrawPeriodBarRow(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
+	/// Pins the bar to a period and jumps game time into its middle so the scene matches the edit.
+	void PinPeriodAndJump(int period)
+	{
+		periodBar.selected = period;
+		periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(period));
+		SceneSettingsManager::SetGameHour(periodBar.lastHour);
+	}
+
+	/// Turns period editing on for this scene and lands on the chosen period.
+	void EnableTimeOfDayEditing(const SceneSettingsManager::SceneContextId& baseContext, int period)
+	{
+		SceneSettingsManager::GetSingleton()->SetSceneTimeOfDayEnabled(baseContext, true);
+		PinPeriodAndJump(period);
+	}
+
+	/// Returns to the flat all-day set; both sets are kept on disk.
+	void DisableTimeOfDayEditing(const SceneSettingsManager::SceneContextId& baseContext)
+	{
+		SceneSettingsManager::GetSingleton()->SetSceneTimeOfDayEnabled(baseContext, false);
+		periodBar.selected = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
+		periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
+	}
+
+	/// Compact chip that exits period editing back to one all-day settings set.
+	bool DrawAllDayChip()
+	{
+		const char* label = T(TKEY("period_bar_all_day"), "All day");
+		const bool clicked = ImGui::Button(label);
+		Util::AddTooltip(T(TKEY("period_bar_all_day_tooltip"),
+			"Use one set of settings for the whole day instead of separate period sets. "
+			"Period settings are kept, so turning Time of Day back on restores them."));
+		return clicked;
+	}
+
+	struct PeriodBarResult
+	{
+		int active = 0;
+		bool editing = false;
+	};
+
+	/// Draws the period segmented control and returns the period/mode the panel below should edit.
+	/// Weather and location pages fold Time of Day enable into the first period click, and expose
+	/// an All day chip to leave period mode. The Scene Manager panel has no flat mode: outdoors it
+	/// always edits periods, and indoors the bar yields to the interior layer indicator.
+	PeriodBarResult DrawPeriodBarRow(const SceneSettingsManager::SceneContextId& baseContext, bool editing,
 		bool sceneManagerPanel, int active)
 	{
 		const bool interior = sceneManagerPanel && interiorEnabled;
+		const bool canToggleTimeOfDay = !sceneManagerPanel && !interior;
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
+		const auto labels = GetPeriodLabels();
 
-		std::array<const char*, kPeriodCount> labels{};
-		for (int period = 0; period < kPeriodCount; ++period)
-			labels[period] = GetPeriodLabel(period);
-
-		ImGui::BeginDisabled(!editing);
-		// Dot the live period only when the selection has left it, so the bar always shows where time actually is.
-		if (Util::SegmentedControl("PeriodBar", labels.data(), kPeriodCount, active, editing ? live : -1)) {
-			periodBar.selected = active;
-			// Jump time into the middle of the period so the scene shows what is being edited.
-			// The baseline moves with it, or the scrub check would drop straight back to following.
-			periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(active));
-			SceneSettingsManager::SetGameHour(periodBar.lastHour);
+		ImGui::BeginDisabled(interior);
+		// Flat mode keeps the bar clickable but muted, so the current period still reads as "all day".
+		const bool muted = canToggleTimeOfDay && !editing;
+		// Dot the live period only when editing and the selection has left it.
+		const int marked = editing ? live : -1;
+		if (Util::SegmentedControl("PeriodBar", labels.data(), kPeriodCount, active, marked, muted)) {
+			if (canToggleTimeOfDay && !editing) {
+				EnableTimeOfDayEditing(baseContext, active);
+				editing = true;
+			} else {
+				PinPeriodAndJump(active);
+			}
 		}
 		ImGui::EndDisabled();
 
-		// The state line explains the bar rather than changing what it does, so it lives on hover.
 		char periodStatus[256];
 		if (interior)
-			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s",
+				T(TKEY("period_bar_interior"), "Time of day editing is unavailable indoors."));
 		else if (!editing)
-			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_off"), "Time of day is off, so one set of settings applies all day. The bar does not follow game time."));
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s",
+				T(TKEY("period_bar_off"),
+					"One set of settings applies all day. Click a period to edit settings for that time of day."));
 		else if (periodBar.selected < 0)
-			std::snprintf(periodStatus, sizeof(periodStatus), "%s", T(TKEY("period_bar_following"), "Following the time of day. Click a period to jump to it and edit it on its own."));
+			std::snprintf(periodStatus, sizeof(periodStatus), "%s",
+				T(TKEY("period_bar_following"),
+					"Following the time of day. Click a period to jump to it and edit it on its own."));
 		else
-			std::snprintf(periodStatus, sizeof(periodStatus), T(TKEY("period_bar_manual"), "Editing %s. Scrub the time of day to follow it again."), labels[active]);
+			std::snprintf(periodStatus, sizeof(periodStatus),
+				T(TKEY("period_bar_manual"), "Editing %s. Scrub the time of day to follow it again."), labels[active]);
 		Util::AddTooltip(periodStatus, Util::kTooltipWhenDisabled);
 
-		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
+		if (canToggleTimeOfDay && editing) {
+			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
+			if (DrawAllDayChip()) {
+				DisableTimeOfDayEditing(baseContext);
+				editing = false;
+				active = periodBar.selected;
+			}
+		}
+
 		if (sceneManagerPanel) {
+			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
 			// Indicator only: interior always follows the cell the player is actually in, so
 			// toggling it by hand would silently do nothing when the layer can't resolve.
 			ImGui::BeginDisabled();
@@ -243,23 +302,9 @@ namespace
 			Util::AddTooltip(T(TKEY("interior_toggle_tooltip"),
 				"Shows whether interior settings are being edited. Follows the cell the player is in."),
 				Util::kTooltipWhenDisabled);
-		} else {
-			// Enabling re-couples the bar to live time, so it always lands on the current period.
-			bool timeOfDayEnabled = editing;
-			if (ImGui::Checkbox(T(TKEY("time_of_day_toggle"), "Time of Day"), &timeOfDayEnabled)) {
-				SceneSettingsManager::GetSingleton()->SetSceneTimeOfDayEnabled(baseContext, timeOfDayEnabled);
-				if (timeOfDayEnabled) {
-					periodBar.selected = -1;
-					periodBar.lastHour = SceneSettingsManager::GetCurrentGameHour();
-				}
-			}
-			Util::AddTooltip(T(TKEY("time_of_day_toggle_tooltip"),
-				"Use a separate set of settings for each period instead of one set for the whole day. "
-				"Both sets are kept, so switching back restores the other. Game time pauses while a period is being edited."),
-				ImGuiHoveredFlags_DelayNormal);
 		}
 
-		return active;
+		return { active, editing };
 	}
 
 	/// Scene-capable features, resolved once: loaded features and the catalog are fixed after boot.
@@ -307,7 +352,6 @@ namespace
 		bool periodEditing = false;
 		if (withPeriodBar) {
 			periodEditing = ResolvePeriodEditing(baseContext, sceneManagerPanel);
-			periodEditingThisFrame |= periodEditing;
 			int active = ResolveActivePeriod(periodEditing);
 
 			// Title row: the panel's identity (Scene Manager panel only) shares a row with its
@@ -320,7 +364,11 @@ namespace
 			ScenePageToolbar::Draw(ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing));
 			ImGui::Separator();
 
-			active = DrawPeriodBarRow(baseContext, periodEditing, sceneManagerPanel, active);
+			// A period click can enable Time of Day this frame; apply that before resolving the page.
+			const auto bar = DrawPeriodBarRow(baseContext, periodEditing, sceneManagerPanel, active);
+			periodEditing = bar.editing;
+			active = bar.active;
+			periodEditingThisFrame |= periodEditing;
 			context = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing);
 			ImGui::Separator();
 		} else {
@@ -378,74 +426,33 @@ namespace
 		}
 	}
 
-	const char* GetLocationCategoryIcon(SceneSettingsManager::LocationTargetType type)
+	LocationTargetIcons::TargetView MakeLocationTargetView(const SceneSettingsManager::LocationTarget& target)
 	{
-		switch (type) {
-		case SceneSettingsManager::LocationTargetType::Worldspace:
-			return ICON_FA_GLOBE_EUROPE;
-		case SceneSettingsManager::LocationTargetType::LocationType:
-			return ICON_FA_TAG;
-		case SceneSettingsManager::LocationTargetType::Region:
-			return ICON_FA_MAP;
-		case SceneSettingsManager::LocationTargetType::Cell:
-			return ICON_FA_BORDER_ALL;
-		default:
-			return ICON_FA_MAP_MARKER_ALT;
-		}
+		return {
+			.category = static_cast<LocationTargetIcons::Category>(target.type),
+			.editorId = target.editorId,
+			.formId = target.formId,
+			.formKey = target.formKey,
+		};
 	}
 
-	/** @brief LocType FA glyph when the target is (or resolves to) a location-type keyword. */
-	const char* ResolveLocTypeGlyph(const SceneSettingsManager::LocationTarget& target)
+	Icons::GlyphRef GetLocationTargetIcon(const SceneSettingsManager::LocationTarget& target)
 	{
-		using LocationTargetType = SceneSettingsManager::LocationTargetType;
-
-		if (target.type == LocationTargetType::LocationType && !target.editorId.empty())
-			return LocationTypeIcons::LookupLocationTypeIcon(target.editorId);
-
-		// Concrete locations: pick the most specific LocType keyword they carry.
-		if (target.type != LocationTargetType::Location)
-			return nullptr;
-
-		RE::BGSLocation* location = nullptr;
-		if (target.formId != 0) {
-			location = RE::TESForm::LookupByID<RE::BGSLocation>(target.formId);
-		} else if (!target.formKey.empty()) {
-			// Quiet resolve — SpidToFormId logs on miss, and authored lists redraw every frame.
-			const auto components = Util::ParseSpid(target.formKey);
-			if (auto* handler = RE::TESDataHandler::GetSingleton();
-				handler && components.localFormId != 0 && !components.pluginName.empty())
-				location = handler->LookupForm<RE::BGSLocation>(components.localFormId, components.pluginName);
-		}
-		if (!location)
-			return nullptr;
-
-		std::vector<std::string> locTypeIds;
-		for (auto* keyword : location->GetKeywords()) {
-			if (!SceneSettingsLocationTargets::IsLocationTypeKeyword(keyword))
-				continue;
-			auto editorId = Util::GetFormEditorID(keyword);
-			if (!editorId.empty())
-				locTypeIds.push_back(std::move(editorId));
-		}
-		return LocationTypeIcons::ResolvePrimaryLocationTypeIcon(locTypeIds);
-	}
-
-	const char* GetLocationTargetIcon(const SceneSettingsManager::LocationTarget& target)
-	{
-		if (const char* locTypeIcon = ResolveLocTypeGlyph(target))
-			return locTypeIcon;
-		return GetLocationCategoryIcon(target.type);
+		return LocationTargetIcons::Resolve(MakeLocationTargetView(target));
 	}
 
 	/// The type glyph leading a row's name, muted so the name stays the thing read first.
 	void DrawLocationTypeIcon(const SceneSettingsManager::LocationTarget& target)
 	{
-		const char* icon = GetLocationTargetIcon(target);
+		const Icons::GlyphRef icon = GetLocationTargetIcon(target);
 		const float box = ImGui::GetFontSize() * kLocationIconBoxScale;
-		const float offset = std::max(0.0f, (box - ImGui::CalcTextSize(icon).x) * 0.5f);
+		const float offset = std::max(0.0f, (box - Icons::CalcGlyphSize(icon).x) * 0.5f);
 		const float start = ImGui::GetCursorPosX();
 		ImGui::SetCursorPosX(start + offset);
-		Util::Text::Secondary("%s", icon);
+		{
+			Icons::FontGuard font(icon);
+			Util::Text::Secondary("%s", icon.utf8);
+		}
 		ImGui::SameLine(start + box);
 	}
 
@@ -505,9 +512,9 @@ namespace
 	/// Trailing icon action for an addable row: quiet until hovered, a check once the place is listed.
 	bool DrawLocationAddButton(bool authored)
 	{
-		const char* label = authored ? ICON_FA_CHECK "##add" : ICON_FA_PLUS "##add";
+		const Icons::GlyphRef icon = authored ? SceneActionIcons::kAdded : SceneActionIcons::kAdd;
 		const float padding = ImGui::GetStyle().FramePadding.x * 0.5f;
-		const float width = ImGui::CalcTextSize(label, nullptr, true).x + padding * 2.0f;
+		const float width = Icons::CalcGlyphSize(icon).x + padding * 2.0f;
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - width));
 
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, { padding, 0.0f });
@@ -515,7 +522,7 @@ namespace
 		auto _style = Util::TransparentIconButtonStyle();
 		ImGui::PushStyleColor(ImGuiCol_Text, Util::Colors::GetSecondary());
 		ImGui::BeginDisabled(authored);
-		const bool clicked = ImGui::Button(label);
+		const bool clicked = Icons::Button("##add", icon);
 		ImGui::EndDisabled();
 		ImGui::PopStyleColor();
 		ImGui::PopStyleVar(2);
@@ -652,17 +659,13 @@ namespace
 		ImGui::PopStyleColor();
 	}
 
-	/// The editor's delete icon, matching the weather list's JSON removal action.
+	/// Trash icon matching other CS Editor delete actions.
 	bool DrawLocationRemoveButton()
 	{
 		// The row selectable spans every column, so the button has to claim the clicks over it.
 		ImGui::SetNextItemAllowOverlap();
-
-		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
-		auto* menu = globals::menu;
-		if (!menu || !menu->uiIcons.deleteSettings.texture)
-			return Util::ErrorTextButton(T(TKEY("remove"), "Remove"));
-		return Util::ErrorImageButton("##remove", menu->uiIcons.deleteSettings.texture, { iconSize, iconSize });
+		Icons::FontGuard font(SceneActionIcons::kDelete);
+		return Util::ErrorTextButton(std::format("{}##remove", SceneActionIcons::kDelete.utf8).c_str());
 	}
 
 	/// The user's list: double-click a row to edit it, or drop it and its settings.
@@ -802,11 +805,18 @@ void SceneSettingsUI::DrawLocationWindows()
 		}
 
 		SetupWidgetWindowDefaults(kLocationWidgetType);
-		// FA LocType / category glyph left of the title (same pattern as weather popouts).
-		const char* typeIcon = GetLocationTargetIcon(window.target);
-		const auto title = std::format("{}  {} ({})###SceneLocation_{}", typeIcon, window.target.name,
+		// LocType / category glyph left of the title (same pattern as weather popouts).
+		const Icons::GlyphRef typeIcon = GetLocationTargetIcon(window.target);
+		const auto title = std::format("{} ({})###SceneLocation_{}", window.target.name,
 			GetLocationTypeLabel(window.target.type), window.target.formKey);
-		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &window.open, nullptr, ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags);
+		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &window.open, nullptr,
+			ImGuiWindowFlags_NoSavedSettings | kStickyHeaderFlags,
+			typeIcon ?
+				[typeIcon](ImVec2 iconMin, float iconSize) {
+					Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), iconMin, ImVec2(iconSize, iconSize),
+						typeIcon, ImGui::GetColorU32(ImGuiCol_Text));
+				} :
+				std::function<void(ImVec2, float)>{});
 		UpdateWidgetTypeSize(kLocationWidgetType);
 		if (visible) {
 			const SceneSettingsManager::SceneContextId context{

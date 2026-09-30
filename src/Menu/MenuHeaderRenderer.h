@@ -33,12 +33,12 @@ public:
 	 * @param uiScale Current UI scale factor for sizing icon buttons.
 	 * @param uiIcons Reference to the loaded icon textures and sizes.
 	 */
-	static void RenderHeader(bool isDocked, bool showLogo, bool canShowIcons, float uiScale, const Menu::UIIcons& uiIcons);
+	static void RenderHeader(bool isDocked, bool showLogo, bool canShowIcons, float uiScale, const Util::IconLoader::UIIcons& uiIcons);
 
 private:
-	static std::vector<ActionIcon> BuildActionIcons(bool canShowIcons, const Menu::UIIcons& uiIcons);
+	static std::vector<ActionIcon> BuildActionIcons(bool canShowIcons, const Util::IconLoader::UIIcons& uiIcons);
 	static void RenderActionIcons(const std::vector<ActionIcon>& actionIcons, bool isDocked, float uiScale);
 	static void RenderDockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
 	static void RenderUndockedIcons(const std::vector<ActionIcon>& actionIcons, float uiScale);
-	static void RenderWatermarkLogo(const Menu::UIIcons& uiIcons);
+	static void RenderWatermarkLogo(const Util::IconLoader::UIIcons& uiIcons);
 };
