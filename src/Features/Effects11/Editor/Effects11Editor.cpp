@@ -18,6 +18,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "PostProcessingMode.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "feature.effects11.editor."
@@ -430,6 +431,8 @@ void Effects11Editor::DrawSettingsWindow()
 void Effects11Editor::DrawNoPreset()
 {
 	const auto& mainEffect = EffectManager::GetSingleton().enbEffect;
+	auto& effects11 = globals::features::effects11;
+	effects11.EnforceOriginalPostProcessingIfNeeded();
 
 	Util::Text::Warning("%s", T(TKEY("no_preset_title"), "No preset loaded"));
 	ImGui::Spacing();
@@ -444,7 +447,23 @@ void Effects11Editor::DrawNoPreset()
 			"enbseries folder (containing at least enbeffect.fx) are in the game folder or in Data, "
 			"then click Reload Shaders."));
 	}
+	ImGui::PopTextWrapPos();
+
 	ImGui::Spacing();
+	if (effects11.IsUseOriginalPostProcessingForced()) {
+		const Util::LockedSection originalPPLock(true, T(TKEY("original_pp_forced"),
+			"Use Original Post Processing is forced on until a usable preset is available."));
+		bool forcedOn = true;
+		ImGui::Checkbox(T(TKEY("use_original_post_processing"), "Use Original Post Processing"), &forcedOn);
+		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
+			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
+			"Use Original Post Processing stays on so the game keeps a working image.\n"
+			"Install a preset and reload shaders to unlock it."),
+			Util::kTooltipWhenDisabled);
+	}
+
+	ImGui::Spacing();
+	ImGui::PushTextWrapPos(0.0f);
 	Util::TextUnformattedDisabled(T(TKEY("looking_for"), "Looking for:"));
 	ImGui::TextUnformatted(presetPaths.mainEffect.c_str());
 	ImGui::PopTextWrapPos();
@@ -486,9 +505,19 @@ void Effects11Editor::DrawToolbar()
 	Util::AddTooltip(T(TKEY("shader_panel_tip"), "Show or hide the panel with the .fx shader parameters."));
 
 	const char* saveLabel = T(TKEY("save"), "Save");
-	if (dirty ? Util::SuccessButton(saveLabel) : ImGui::Button(saveLabel))
+	const char* saveTip = dirty ?
+		T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+		T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
+	if (dirty) {
+		auto color = globals::menu->GetTheme().StatusPalette.Error;
+		color.w = 0.75f;
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+	}
+	if (ImGui::Button(saveLabel))
 		Save();
-	Util::AddTooltip(T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S"));
+	if (dirty)
+		ImGui::PopStyleColor();
+	Util::AddTooltip(saveTip);
 
 	ImGui::SameLine();
 	if (ImGui::Button(T(TKEY("revert"), "Revert")))
@@ -502,14 +531,6 @@ void Effects11Editor::DrawToolbar()
 	Util::AddTooltip(T(TKEY("reload_shaders_tip"),
 		"Recompile the .fx files and reload everything from disk.\n"
 		"Use this after changing a compile-time option or editing a shader file."));
-
-	const char* stateText = dirty ? T(TKEY("unsaved_changes"), "Unsaved changes") : T(TKEY("all_saved"), "All changes saved");
-	SameLineIfFits(ImGui::CalcTextSize(stateText).x);
-	ImGui::AlignTextToFramePadding();
-	if (dirty)
-		Util::Text::Warning("%s", stateText);
-	else
-		Util::TextUnformattedDisabled(stateText);
 
 	if (shaderReloadNeeded)
 		Util::Text::WrappedWarning("%s", T(TKEY("reload_needed"), "Compile-time options changed. Save, then click Reload Shaders to apply them."));
@@ -896,7 +917,10 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	auto& settingManager = SettingManager::GetSingleton();
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
-	const bool editable = a_categoryActive && dependencyMet;
+	const bool forcedOriginalPP = a_setting.type == SettingType::Bool &&
+		a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
+		globals::features::effects11.IsUseOriginalPostProcessingForced();
+	const bool editable = a_categoryActive && dependencyMet && !forcedOriginalPP;
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
 	bool labelHovered = false;
@@ -906,7 +930,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	case SettingType::Bool:
 		{
 			labelHovered = Effects11UI::PropertyLabel(name.c_str(), !editable);
-			bool value = settingManager.GetValue<bool>(a_setting.id, true);
+			bool value = forcedOriginalPP || settingManager.GetValue<bool>(a_setting.id, true);
 			bool changed = ImGui::Checkbox("##v", &value);
 
 			if (const auto* effect = EffectForToggle(a_setting); effect && !effect->IsFilePresent()) {
@@ -929,7 +953,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 				}
 			}
 
-			if (changed) {
+			if (changed && !forcedOriginalPP) {
 				settingManager.SetValue<bool>(a_setting.id, value);
 				dirty = true;
 			}
@@ -973,6 +997,12 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	ImGui::EndDisabled();
 	if (labelHovered)
 		DrawSettingTooltip(a_setting, name, dependencyMet);
+	if (forcedOriginalPP)
+		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
+			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
+			"Use Original Post Processing stays on so the game keeps a working image.\n"
+			"Install a preset and reload shaders to unlock it."),
+			Util::kTooltipWhenDisabled);
 	ImGui::PopID();
 }
 
@@ -1181,6 +1211,11 @@ void Effects11Editor::DrawSettingTooltip(const Setting& a_setting, const std::st
 		const auto needs = I18n::GetSingleton()->Format(TKEY("needs_setting"), { { "setting", Effects11UI::PrettifyName(a_setting.dependsOnKey) } },
 			"Turn on \"{setting}\" to use this.");
 		Util::Text::WrappedWarning("%s", needs.c_str());
+	}
+	if (a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
+		globals::features::effects11.IsUseOriginalPostProcessingForced()) {
+		Util::Text::WrappedWarning("%s", T(TKEY("original_pp_forced"),
+			"Use Original Post Processing is forced on until a usable preset is available."));
 	}
 	Util::TextUnformattedDisabled(T(TKEY("context_hint"), "Right-click a value for reset, copy and paste."));
 	ImGui::PopTextWrapPos();
@@ -1478,6 +1513,8 @@ void Effects11Editor::DrawLauncher()
 		RefreshPresetPaths();
 	Util::TextUnformattedDisabled(presetPaths.iniDisplay.c_str());
 	Util::AddTooltip(presetPaths.iniFull.c_str());
+	ImGui::TextWrapped("%s", T("feature.effects11.use_presets_tab",
+		"Load and switch Effects11 presets from the Presets page in the left navigation."));
 
 	ImGui::Spacing();
 	const float scale = Util::GetUIScale();
@@ -1500,27 +1537,19 @@ void Effects11Editor::DrawLauncher()
 	ImGui::Spacing();
 	ImGui::Separator();
 
-	const uint32_t useEffectID = settingManager.GetSettingID("UseEffect", "GLOBAL");
-	bool enabled = presetLoaded && settingManager.GetValue<bool>(useEffectID);
-	ImGui::BeginDisabled(!presetLoaded);
-	if (ImGui::Checkbox(T(TKEY("enable_effects"), "Enable Effects 11"), &enabled)) {
-		settingManager.SetValue<bool>(useEffectID, enabled);
-		dirty = true;
-	}
-	ImGui::EndDisabled();
-	{
-		const auto tip = I18n::GetSingleton()->Format(TKEY("enable_effects_tip"),
-			{ { "key", Util::Input::KeyIdToString(menuSettings.Effects11ToggleKey) } },
-			"Master switch for the whole preset.\nHotkey: {key}");
-		Util::AddTooltip(tip.c_str(), ImGuiHoveredFlags_AllowWhenDisabled);
-	}
+	// The shared selector drives UseEffect, which is saved to enbseries.ini with the rest of the preset
+	const bool wasEnabled = globals::features::effects11.IsPresetEnabled();
+	PostProcessingMode::DrawSelector();
+	dirty |= globals::features::effects11.IsPresetEnabled() != wasEnabled;
 	if (dirty) {
-		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("unsaved_changes"), "Unsaved changes")).x);
-		ImGui::AlignTextToFramePadding();
-		Util::Text::Warning("%s", T(TKEY("unsaved_changes"), "Unsaved changes"));
-		ImGui::SameLine();
-		if (Util::SuccessButton(T(TKEY("save"), "Save")))
+		SameLineIfFits(ImGui::CalcTextSize(T(TKEY("save"), "Save")).x);
+		auto color = globals::menu->GetTheme().StatusPalette.Error;
+		color.w = 0.75f;
+		ImGui::PushStyleColor(ImGuiCol_Text, color);
+		if (ImGui::Button(T(TKEY("save"), "Save")))
 			Save();
+		ImGui::PopStyleColor();
+		Util::AddTooltip(T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save."));
 	}
 
 	if (!effectManager.enbEffect.IsFilePresent())

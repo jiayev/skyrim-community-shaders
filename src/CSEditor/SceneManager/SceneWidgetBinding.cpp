@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <format>
 #include <functional>
 #include <map>
 #include <tuple>
@@ -14,6 +15,8 @@
 #include "../EditorWindow.h"
 #include "Globals.h"
 #include "Menu.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneSettingsContextRules.h"
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsUI.h"
@@ -29,10 +32,6 @@ namespace
 {
 	using Kind = SceneWidgetBinding::Value::Kind;
 	using SettingMetadata = SceneSettingsCatalog::SettingMetadata;
-
-	/// Smaller than the location menu's delete icon (SceneSettingsUI.cpp): the gutter sits inline
-	/// with a checkbox rather than a table row, so the icon needs to read as the lighter action.
-	constexpr float kRemoveIconScale = 0.75f;
 
 	/// A control shrunk to make room for the gutter never goes below this, so a narrow panel keeps
 	/// a slider you can still aim at.
@@ -59,7 +58,6 @@ namespace
 			[](void* destination, double number) { *static_cast<T*>(destination) = static_cast<T>(number); } };
 	}
 
-	/** @brief Size and read/write thunks for an ImGui scalar type; empty when unsupported. */
 	ScalarTraits GetScalarTraits(ImGuiDataType type)
 	{
 		switch (type) {
@@ -205,8 +203,9 @@ namespace
 		return found != cache.end() ? found->second : cache.emplace(a_page, Collect(a_page)).first->second;
 	}
 
-	/// The layers a page sits on top of, highest first; the live cell picks interior or exterior
-	/// under a location, exactly as the resolver does.
+	/// The layers a page sits on top of, highest first: weather resolves over time of day, and a
+	/// location over whichever stack is running. Interior and the exterior stack never resolve at the
+	/// same time, so the live cell picks the one a location sits on, exactly as the resolver does.
 	std::vector<SceneContextId> CollectLowerContexts(const SceneContextId& a_page)
 	{
 		std::vector<SceneContextId> lower;
@@ -281,7 +280,6 @@ namespace
 	using PeriodEntries = std::array<std::optional<size_t>, kPeriodCount>;
 	using UserEntryIndex = std::map<SceneSettingsManager::SettingIdentity, PeriodEntries>;
 
-	/** @brief A feature's user entry index in a context, rebuilt when entry presentation changes. */
 	const UserEntryIndex& GetContextUserEntryIndex(const SceneContextId& a_context, const std::string& a_feature)
 	{
 		static std::map<std::pair<SceneContextId, std::string>,
@@ -326,8 +324,9 @@ namespace
 				.locationFormKey = target->formKey }));
 	}
 
-	/// The layers resolved above a page, lowest first; mirrors CollectLowerContexts, so a page on the
-	/// stack the live scene is not running has nothing above it.
+	/// The layers a page is resolved under, lowest first: weather resolves over time of day, and the
+	/// location chain over whichever stack is running. Mirror image of CollectLowerContexts, so a page
+	/// belonging to the stack the live scene is not running has nothing above it.
 	std::vector<SceneContextId> CollectUpperContexts(const SceneContextId& a_page)
 	{
 		std::vector<SceneContextId> upper;
@@ -409,8 +408,9 @@ namespace
 		return sawOverwrite ? SettingLayer::Overwrite : SettingLayer::None;
 	}
 
-	/** @brief The entry a context applies at an address for the given periods, or null; user beats
-	 *  overwrite and the last of a source wins, as in the resolver. */
+	/** @brief The entry one context applies at an address for the periods asked for, or null when it
+	 *  supplies nothing. A user entry outranks an overwrite, and the last of a source wins, as the
+	 *  resolver overlays them. */
 	const SceneSettingsManager::SettingEntry* FindSupplyingEntry(const SceneContextId& a_context,
 		const SceneSettingsManager::SettingIdentity& a_setting, PeriodMask a_periods)
 	{
@@ -450,12 +450,6 @@ namespace
 	}
 }
 
-void SceneWidgetBinding::WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value)
-{
-	if (const auto traits = GetScalarTraits(a_type); traits.write)
-		traits.write(a_destination, a_value);
-}
-
 SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, GutterPolicy a_policy) :
 	label(a_label), value(a_value), policy(a_policy)
 {
@@ -481,8 +475,9 @@ SceneWidgetBinding::Guard::Guard(const char* a_label, const Value& a_value, Gutt
 	metadata = SceneSettingsCatalog::FindSettingForControl(
 		context->feature, proxy ? proxy->member : value.data);
 	if (!metadata) {
-		// Not catalogued (e.g. "Show Advanced"): left live rather than greyed, since it never
-		// promised an override.
+		// Not a catalogued setting at all (e.g. a plain UI toggle like "Show Advanced"), so the
+		// interceptor has nothing to bind. Left live rather than greyed: it never promised an
+		// override in the first place.
 		state = State::Unsupported;
 		return;
 	}
@@ -718,12 +713,7 @@ void SceneWidgetBinding::Guard::DrawBaselineGutter()
 				SceneSettingsUI::OpenSceneContext(*context, identity.featureShortName);
 		Util::AddTooltip(T(TKEY("baseline_jump_tooltip"), "Open the Scene Manager page supplying this value."));
 	} else {
-		auto* menu = Menu::GetSingleton();
-		const float iconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
-		const bool committed = menu && menu->uiIcons.saveSettings.texture ?
-		                           ImGui::ImageButton("##SketchCommit", menu->uiIcons.saveSettings.texture,
-									   ImVec2(iconSize, iconSize)) :
-		                           ImGui::Button(T(TKEY("baseline_commit"), "Commit"));
+		const bool committed = Icons::Button("##SketchCommit", SceneActionIcons::kSave);
 		if (committed) {
 			std::vector<SceneSettingsManager::SettingIdentity> sketched;
 			for (const auto& component : components)
@@ -1119,8 +1109,9 @@ std::optional<ImVec4> SceneWidgetBinding::Guard::ResolveProvenanceColor() const
 	if (mixedAcrossPeriods)
 		return Util::Colors::GetWarning();
 
-	// A later layer wins, so this page's value never reaches the scene. Red is reserved for a user
-	// edit shadowing a preset, the only losing pair that is a decision rather than layering.
+	// Something resolving after this page wins here, so nothing this page says reaches the scene. Red
+	// is kept for the user's own edit shadowing a preset: the one losing pair that is a decision
+	// rather than the layering doing its job.
 	if (upperLayer != SceneSettingsManager::SettingLayer::None) {
 		const bool userShadowsPreset = winningLayer == SceneSettingsManager::SettingLayer::Overwrite &&
 		                               upperLayer != SceneSettingsManager::SettingLayer::Overwrite;
@@ -1170,9 +1161,10 @@ std::string SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 	case State::Unavailable:
 		{
 			std::string text = T(TKEY("scene_override_unavailable"),
-				"This kind of scene cannot hold this setting. Edit it on a Location scene instead.");
+				"This kind of scene cannot hold this setting. Edit it for where you are standing instead.");
 			text += "\n";
-			text += T(TKEY("scene_override_nav_hint"), "Ctrl+click or right-click to open it there.");
+			text += T(TKEY("scene_override_nav_hint_location"),
+				"Ctrl+click or right-click to open a Location override for where you are.");
 			return text;
 		}
 	case State::Overwritten:
@@ -1192,6 +1184,51 @@ std::string SceneWidgetBinding::Guard::ResolveStatusTooltip() const
 	}
 }
 
+void SceneWidgetBinding::Guard::EnableOverride()
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	// Any gesture on a killed value means the user wants it back, so it captures like an absent one.
+	if (state == State::Deleted) {
+		SetTombstoned(false);
+		ForgetEntries();
+	}
+	if (state == State::Absent || state == State::Overwritten || state == State::Deleted) {
+		// Enabling captures the feature's current value as the override.
+		// An aggregate fanned over six periods is 24 entries, so it saves once, not per entry.
+		if (EnsureEntries(true))
+			manager->SaveAllUserSettings();
+		return;
+	}
+	if (state != State::Paused)
+		return;
+	// One click normalises a partly paused aggregate instead of inverting each entry.
+	for (const auto index : CollectOwnedEntries()) {
+		const auto entries = manager->GetContextEntries(contextId);
+		if (index < entries.size() && entries[index].paused)
+			manager->TogglePauseContextEntry(contextId, index);
+	}
+	ResolveState();
+}
+
+bool SceneWidgetBinding::Guard::TryEnableOverrideFromGesture()
+{
+	// Only states where the left checkbox is off and ticking it starts editing.
+	if (state != State::Paused && state != State::Absent && state != State::Overwritten &&
+		state != State::Deleted)
+		return false;
+	if (!ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+		return false;
+
+	const ImGuiIO& io = ImGui::GetIO();
+	const bool activate = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ||
+	                      (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && (io.KeyCtrl || io.KeyShift));
+	if (!activate)
+		return false;
+
+	EnableOverride();
+	return true;
+}
+
 void SceneWidgetBinding::Guard::NavigateGreyedSetting() const
 {
 	if (state == State::Unbound) {
@@ -1203,9 +1240,24 @@ void SceneWidgetBinding::Guard::NavigateGreyedSetting() const
 		return;
 	}
 	if (state == State::Unavailable) {
-		if (auto* editor = EditorWindow::GetSingleton())
-			editor->SelectCategory("Locations");
-		ImGui::SetWindowFocus(T(TKEY("weather_lighting_browser"), "CS Editor Browser"));
+		// Prefer the catalog address: Unavailable leaves components empty so identity.settingKey
+		// may never have been filled in ResolveComponents.
+		const std::string feature = !identity.featureShortName.empty() ? identity.featureShortName :
+		                             (metadata ? std::string{ metadata->featureShortName } : std::string{});
+		const auto path = !identity.settingPath.empty() ? identity.settingPath :
+		                                                   (metadata ? SceneSettingsManager::SplitSettingPath(metadata->settingPath) :
+																	   std::vector<std::string>{});
+		const std::string key = !identity.settingKey.empty() ? identity.settingKey :
+		                        (metadata ? std::string{ metadata->settingKey } : std::string{});
+		if (feature.empty()) {
+			if (auto* editor = EditorWindow::GetSingleton())
+				editor->ShowNotification(
+					T(TKEY("scene_override_location_unsupported"),
+						"This place can't hold that setting — Location scenes don't support it either."),
+					Util::Colors::GetWarning(), 4.0f);
+			return;
+		}
+		SceneSettingsUI::OpenCurrentLocationForSetting(feature, path, key);
 	}
 }
 
@@ -1235,13 +1287,7 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 	ImGui::PushID(label);
 
 	const auto& style = ImGui::GetStyle();
-	auto* menu = Menu::GetSingleton();
-	const bool hasRemoveIcon = menu && menu->uiIcons.deleteSettings.texture;
-	const float removeIconSize = ImGui::GetFrameHeight() * kRemoveIconScale;
-	const float removeWidth = hasRemoveIcon ?
-	                              removeIconSize :
-	                              ImGui::CalcTextSize(T(TKEY("scene_override_remove"), "Remove")).x +
-	                                  style.FramePadding.x * 2.0f;
+	const float removeWidth = Icons::CalcGlyphSize(SceneActionIcons::kDelete).x + style.FramePadding.x * 2.0f;
 	gutterConsumedWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + removeWidth;
 
 	// The gutter fills solid where the control only tints: it reads as a state marker, not a hint.
@@ -1256,22 +1302,14 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 		ImGui::PopStyleColor(3);
 
 	if (toggled) {
-		auto* manager = SceneSettingsManager::GetSingleton();
-		// Any gesture on a killed value means the user wants it back, so it captures like an absent one.
-		if (state == State::Deleted) {
-			SetTombstoned(false);
-			ForgetEntries();
-		}
-		if (state == State::Absent || state == State::Overwritten) {
-			// Ticking captures the feature's current value as the override.
-			// An aggregate fanned over six periods is 24 entries, so it saves once, not per entry.
-			if (EnsureEntries(true))
-				manager->SaveAllUserSettings();
+		if (enabled) {
+			EnableOverride();
 		} else {
+			auto* manager = SceneSettingsManager::GetSingleton();
 			// One click normalises a partly paused aggregate instead of inverting each entry.
 			for (const auto index : CollectOwnedEntries()) {
 				const auto entries = manager->GetContextEntries(contextId);
-				if (index < entries.size() && entries[index].paused == enabled)
+				if (index < entries.size() && !entries[index].paused)
 					manager->TogglePauseContextEntry(contextId, index);
 			}
 			ResolveState();
@@ -1282,10 +1320,11 @@ bool SceneWidgetBinding::Guard::DrawGutter()
 
 	ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 	ImGui::BeginDisabled(!hasOverride);
-	const bool removeClicked = hasRemoveIcon ?
-	                               Util::ErrorImageButton("##SceneOverrideRemove", menu->uiIcons.deleteSettings.texture,
-									   ImVec2(removeIconSize, removeIconSize)) :
-	                               Util::ErrorTextButton(T(TKEY("scene_override_remove"), "Remove"));
+	bool removeClicked = false;
+	{
+		Icons::FontGuard font(SceneActionIcons::kDelete);
+		removeClicked = Util::ErrorTextButton(std::format("{}##SceneOverrideRemove", SceneActionIcons::kDelete.utf8).c_str());
+	}
 	ImGui::EndDisabled();
 	const char* removeTooltip = nullptr;
 	if (state == State::Overwritten)
@@ -1511,6 +1550,12 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 				NavigateGreyedSetting();
 		}
 		return false;
+	}
+
+	// Greyed / unticked override: the same gestures as ticking the left checkbox start editing.
+	if (TryEnableOverrideFromGesture()) {
+		ResolveState();
+		BindDisplayValue();
 	}
 
 	// Read the drag state before the menu or the gutter becomes the current item.

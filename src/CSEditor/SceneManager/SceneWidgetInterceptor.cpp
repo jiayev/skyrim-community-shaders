@@ -83,36 +83,6 @@ namespace
 		       state != SceneWidgetBinding::State::Unavailable;
 	}
 
-	// Mirrors AcceptPaletteColorDrop below: the palette's "VALUE_DND" payload is a raw float, not a
-	// type ImGui's own widgets recognise, so every intercepted scalar slider must accept it by hand.
-	bool AcceptPaletteValueDrop(double& a_outValue)
-	{
-		bool accepted = false;
-		if (ImGui::BeginDragDropTarget()) {
-			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("VALUE_DND")) {
-				if (payload->DataSize == sizeof(float)) {
-					a_outValue = static_cast<double>(*static_cast<const float*>(payload->Data));
-					accepted = true;
-				}
-			}
-			ImGui::EndDragDropTarget();
-		}
-		return accepted;
-	}
-
-	/** @brief Writes a dropped palette value into the guard's storage through a_write, which every
-	 *  scalar control does differently.
-	 *  @return Whether one was dropped, and so whether the control changed. */
-	template <typename Write>
-	bool ApplyPaletteValueDrop(const SceneWidgetBinding::Guard& a_guard, Write a_write)
-	{
-		double dropped = 0.0;
-		if (!CanAcceptPaletteDrop(a_guard) || !AcceptPaletteValueDrop(dropped))
-			return false;
-		a_write(dropped);
-		return true;
-	}
-
 	bool DetouredSliderFloat(const char* label, float* v, float vMin, float vMax,
 		const char* format, ImGuiSliderFlags flags)
 	{
@@ -120,11 +90,7 @@ namespace
 			return RealSliderFloat(label, v, vMin, vMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		const bool changed = RealSliderFloat(label, guard.Float(), vMin, vMax, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			*guard.Float() = static_cast<float>(std::clamp(value, (double)vMin, (double)vMax));
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealSliderFloat(label, guard.Float(), vMin, vMax, format, flags));
 	}
 
 	/** @brief Binds an N-component float control; the vector widgets differ only in N and trailing args. */
@@ -226,11 +192,7 @@ namespace
 			return RealSliderInt(label, v, vMin, vMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Int(v));
-		const bool changed = RealSliderInt(label, guard.Int(), vMin, vMax, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			*guard.Int() = std::clamp(static_cast<int>(std::lround(value)), vMin, vMax);
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealSliderInt(label, guard.Int(), vMin, vMax, format, flags));
 	}
 
 	bool DetouredSliderScalar(const char* label, ImGuiDataType dataType, void* data,
@@ -240,11 +202,7 @@ namespace
 			return RealSliderScalar(label, dataType, data, min, max, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Scalar(data, dataType));
-		const bool changed = RealSliderScalar(label, dataType, guard.Raw(), min, max, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			SceneWidgetBinding::WriteScalarValue(guard.Raw(), dataType, value);
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealSliderScalar(label, dataType, guard.Raw(), min, max, format, flags));
 	}
 
 	bool DetouredInputScalar(const char* label, ImGuiDataType dataType, void* data,
@@ -268,12 +226,7 @@ namespace
 			return RealSliderAngle(label, radians, degreesMin, degreesMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(radians));
-		const bool changed = RealSliderAngle(label, guard.Float(), degreesMin, degreesMax, format, flags);
-		// The palette stores raw slider units, and an angle slider's raw unit is radians, so a
-		// dropped value is written as-is rather than reinterpreted through the degree bounds.
-		const bool dropped = ApplyPaletteValueDrop(
-			guard, [&](double value) { *guard.Float() = static_cast<float>(value); });
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealSliderAngle(label, guard.Float(), degreesMin, degreesMax, format, flags));
 	}
 
 	bool DetouredCheckbox(const char* label, bool* v)

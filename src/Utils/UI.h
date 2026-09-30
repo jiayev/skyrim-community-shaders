@@ -195,18 +195,60 @@ namespace Util
 	 * @brief Compact segmented control: one rounded track, label-sized segments, the selection in the accent colour.
 	 * @param a_selected In/out selected index
 	 * @param a_marked Index to flag with a dot when it is not the selection, or -1
+	 * @param a_muted Dims the selection so the bar still looks active while representing an off/flat mode
 	 * @return True on the frame a segment is clicked
 	 */
-	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected, int a_marked = -1);
+	bool SegmentedControl(const char* a_id, const char* const* a_labels, int a_count, int& a_selected,
+		int a_marked = -1, bool a_muted = false);
 
-	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch. */
-	void StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
+	/**
+	 * @brief Glass/mica pill tab bar — drop-in replacement for ImGui::BeginTabBar / BeginTabItem.
+	 * Draws a compact translucent track with a selected pill instead of classic folder tabs.
+	 * Nesting is supported (stack). Tab labels from the previous frame drive the strip layout.
+	 */
+	bool BeginPillTabBar(const char* str_id);
+	bool BeginPillTabItem(const char* label, bool* p_open = nullptr, ImGuiTabItemFlags flags = 0);
+	void EndPillTabItem();
+	void EndPillTabBar();
+	/** @brief True while a BeginPillTabBar has not yet been closed (for font helpers). */
+	bool IsInsidePillTabBar();
 
-	/** @brief When locked, draws a lock banner and greys every control until the scope ends. */
+	/** @brief Full-width tinted bar with an icon glyph, for a state that changes what the user can touch.
+	 *  @return True when the banner is left-clicked. */
+	bool StatusBanner(const char* a_icon, const char* a_message, const ImVec4& a_color);
+
+	/** @brief Side length of DrawLockStatusBadge's rounded chip (scales with UI). */
+	float GetLockStatusBadgeSize();
+
+	/**
+	 * @brief Pale green/red rounded lock/unlock chip used by the CS Editor action bar and weather headers.
+	 * @param a_min Top-left of the badge in screen space.
+	 * @param a_locked True draws a lock in SuccessColor; false draws unlock in Error.
+	 * @param a_drawList Optional; defaults to the current window draw list.
+	 */
+	void DrawLockStatusBadge(ImVec2 a_min, bool a_locked, ImDrawList* a_drawList = nullptr);
+
+	/**
+	 * @brief Interactive lock badge that toggles via ButtonBehavior.
+	 * @return True on the frame the badge is clicked.
+	 */
+	bool LockStatusBadgeButton(const char* a_id, bool a_locked, const char* a_tooltip = nullptr);
+
+	/**
+	 * @brief Soft rectangular HDR/SDR capability pill (muted blue / muted red).
+	 * @param a_supportsHDR True draws "HDR"; false draws "SDR".
+	 */
+	float MeasureHdrSdrCapabilityPillWidth(bool a_supportsHDR);
+	void DrawHdrSdrCapabilityPillAt(ImVec2 a_min, float a_rowHeight, bool a_supportsHDR, ImDrawList* a_drawList = nullptr);
+	/** @brief Draws the pill at the current cursor and advances layout with Dummy. */
+	void DrawHdrSdrCapabilityPill(bool a_supportsHDR);
+
+	/** @brief When locked, draws a lock banner and greys every control until the scope ends.
+	 *  @param a_outBannerClicked Optional; set when the banner is left-clicked (e.g. to navigate). */
 	class LockedSection
 	{
 	public:
-		LockedSection(bool a_locked, const char* a_message);
+		LockedSection(bool a_locked, const char* a_message, bool* a_outBannerClicked = nullptr);
 		~LockedSection();
 
 		LockedSection(const LockedSection&) = delete;
@@ -387,12 +429,28 @@ namespace Util
 	/**
 	 * @brief Like BeginWithRoundedClose, but floating windows get a flat custom header that doubles as the
 	 * drag handle; docked windows keep their native tab. Collapsing is always disabled.
-	 * @param p_open     Close flag cleared by the header's close button; nullptr omits the button.
-	 * @param drawExtras Optional compact controls between the title and close button, floating only.
-	 * @param flags      Extra window flags; NoTitleBar is managed per dock state.
+	 * @param p_open      Close flag cleared by the header's close button; nullptr omits the button.
+	 * @param drawExtras  Optional compact controls between the title and close button, floating only.
+	 * @param flags       Extra window flags; NoTitleBar is managed per dock state.
+	 * @param drawLeading Optional icon drawn left of the title (floating custom header only).
+	 *                    Receives the icon's top-left and the reserved square size (font size).
 	 */
 	bool BeginWithCustomHeader(const char* name, bool* p_open,
-		const std::function<void()>& drawExtras = nullptr, ImGuiWindowFlags flags = 0);
+		const std::function<void()>& drawExtras = nullptr, ImGuiWindowFlags flags = 0,
+		const std::function<void(ImVec2 iconMin, float iconSize)>& drawLeading = nullptr);
+
+	/**
+	 * @brief Shared height for CS Editor floating headers and the top action bar.
+	 * Native GetFrameHeight() is only FontSize + FramePadding.y*2, which makes glyphs look glued
+	 * to the top edge; this doubles the vertical pad so content sits dead-centre with equal air.
+	 */
+	float GetEditorChromeHeaderHeight();
+
+	/**
+	 * @brief Y offset from a chrome row's top to the ImGui text cursor so capital-letter ink is centred.
+	 * Uses FontBaked::Ascent (line-box top → bottom of 'A'), not the full FontSize em-box.
+	 */
+	float GetEditorChromeTextCursorOffsetY(float rowHeight);
 
 	/**
 	 * Button with simple flash feedback (matches action icon hover effect style)

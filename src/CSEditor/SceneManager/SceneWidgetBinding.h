@@ -50,10 +50,6 @@ namespace SceneWidgetBinding
 		}
 	};
 
-	/// Writes a number into a scalar of the given ImGui data type; no-op for a type the intercepted
-	/// scalar widgets don't accept. Shared so palette value drops write the same way the widgets do.
-	void WriteScalarValue(void* a_destination, ImGuiDataType a_type, double a_value);
-
 	/// Scratch for one widget value of any intercepted kind, sized for the widest control.
 	struct ValueStorage
 	{
@@ -61,7 +57,7 @@ namespace SceneWidgetBinding
 	};
 
 	/// Whether this call owns the gutter: a radio group's buttons share one address, so members defer to
-	/// one toggle. GroupMember has no caller yet, but keeps the first radio group from drawing two gutters.
+	/// one toggle (see SceneWidgetInterceptor radio path).
 	enum class GutterPolicy : std::uint8_t
 	{
 		Owner,
@@ -116,9 +112,6 @@ namespace SceneWidgetBinding
 
 		/** @brief How the control resolved this frame. */
 		State GetState() const { return state; }
-
-		/** @brief The catalog setting the control binds; null when it is not bindable. */
-		const SceneSettingsCatalog::SettingMetadata* GetMetadata() const { return metadata; }
 
 	private:
 		/// Greys the control for the rest of the call, so an unbindable one cannot edit the base value.
@@ -184,6 +177,12 @@ namespace SceneWidgetBinding
 		std::string ResolveStatusTooltip() const;
 		/// Opens the page that can actually edit a greyed Unbound/Unavailable setting.
 		void NavigateGreyedSetting() const;
+
+		/** @brief Applies the same enable path as ticking the left override checkbox. */
+		void EnableOverride();
+		/** @brief Double-click / Ctrl+click / Shift+click on a greyed control ticks the override on.
+		 *  @return True when the gesture fired and the override was enabled. */
+		bool TryEnableOverrideFromGesture();
 
 		/** @brief Writes an edit into this control's entries, reviving a tombstone and creating missing entries first. */
 		void Commit();

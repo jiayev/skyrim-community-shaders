@@ -60,10 +60,17 @@ namespace Util
 		std::filesystem::path GetFontsPath();
 
 		/**
-		 * Gets the CommunityShaders Icons directory path
+		 * Gets the CommunityShaders Icons directory path (UI textures / glyphs).
 		 * @return Interface / "Icons"
 		 */
 		std::filesystem::path GetIconsPath();
+
+		/**
+		 * Gets the deployed icon-font directory (FA / Lucide / Tabler / Game Icons + licenses).
+		 * Kept under Icons so it stays out of the user Fonts catalog.
+		 * @return Icons / "glyphs"
+		 */
+		std::filesystem::path GetIconFontsPath();
 
 		/**
 		 * Gets the CommunityShaders Cursors directory path

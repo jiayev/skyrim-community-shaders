@@ -2,6 +2,7 @@
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "../WeatherUtils.h"
+#include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
 
@@ -30,13 +31,13 @@ namespace
 void VolumetricLightingWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##VolumetricLightingSearch")) {
 		DrawWidgetHeader("##VolumetricLightingSearch", true, true);
 		DrawSearchDropdown();
 	}
 	bool changed = false;
 
-	if (ImGui::BeginTabBar("VolumetricLightingTabs")) {
+	if (Util::BeginPillTabBar("VolumetricLightingTabs")) {
 		const ImGuiTabItemFlags basicFlags = GetTabFlagsForOverride(VolumetricLightingTab::kBasic);
 		const ImGuiTabItemFlags densityFlags = GetTabFlagsForOverride(VolumetricLightingTab::kDensity);
 		const ImGuiTabItemFlags advancedFlags = GetTabFlagsForOverride(VolumetricLightingTab::kAdvanced);
@@ -47,7 +48,7 @@ void VolumetricLightingWidget::DrawWidget()
 			});
 		};
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_basic"), "Basic"), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			drawSection(VolumetricLightingSetting::kIntensity, T(TKEY("intensity"), "Intensity"), [&]() {
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kIntensity, settings.intensity, 0.0f, 50.0f);
@@ -65,10 +66,10 @@ void VolumetricLightingWidget::DrawWidget()
 				}
 			});
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_density"), "Density"), nullptr, densityFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_density"), "Density"), nullptr, densityFlags)) {
 			BeginScrollableContent("##DensityScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kSize, VolumetricLightingSetting::kWindSpeed, VolumetricLightingSetting::kFallingSpeed })) {
 				ImGui::SeparatorText(T(TKEY("density_settings"), "Density Settings"));
@@ -78,10 +79,10 @@ void VolumetricLightingWidget::DrawWidget()
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kFallingSpeed, settings.densityFallingSpeed, 0.0f, 100.0f);
 			}
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"), nullptr, advancedFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_advanced"), "Advanced"), nullptr, advancedFlags)) {
 			BeginScrollableContent("##AdvancedScroll");
 			if (MatchesAnySearch({ VolumetricLightingSetting::kContribution, VolumetricLightingSetting::kScattering })) {
 				ImGui::SeparatorText(T(TKEY("phase_function"), "Phase Function"));
@@ -92,10 +93,10 @@ void VolumetricLightingWidget::DrawWidget()
 				changed |= WeatherUtils::DrawSliderFloat(VolumetricLightingSetting::kRangeFactor, settings.samplingRangeFactor, 0.0f, 160.0f);
 			});
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		ImGui::EndTabBar();
+		Util::EndPillTabBar();
 	}
 
 	if (changed && EditorWindow::GetSingleton()->settings.autoApplyChanges) {

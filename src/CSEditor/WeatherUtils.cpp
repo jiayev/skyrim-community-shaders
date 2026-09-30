@@ -483,11 +483,8 @@ namespace WeatherUtils
 			s_int8Tracker.OnValueChanged(trackerKey, property, currentTime);
 		}
 
-		// Track completed values to palette (strip widget prefix from palette key)
-		auto completed = s_int8Tracker.GetCompletedEntries(currentTime, debounceDelay);
-		for (const auto& [key, value] : completed) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), static_cast<float>(value));
-		}
+		// Flush completed slider debounce entries (value palette tracking removed).
+		(void)s_int8Tracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		return changed;
 	}
@@ -607,11 +604,8 @@ namespace WeatherUtils
 			s_floatTracker.OnValueChanged(trackerKey, property, currentTime);
 		}
 
-		// Track completed values to palette (strip widget prefix from palette key)
-		auto completed = s_floatTracker.GetCompletedEntries(currentTime, debounceDelay);
-		for (const auto& [key, value] : completed) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), value);
-		}
+		// Flush completed slider debounce entries (value palette tracking removed).
+		(void)s_floatTracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		return changed;
 	}
@@ -816,10 +810,8 @@ namespace TOD
 				ImGui::PopStyleVar();
 		}
 
-		// Track completed entries to palette
-		for (const auto& [key, value] : s_todSliderTracker.GetCompletedEntries(currentTime, debounceDelay)) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), value);
-		}
+		// Flush completed TOD slider debounce entries (value palette tracking removed).
+		(void)s_todSliderTracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		PopTODHighlight(label, highlighted);
 		return changed;
@@ -1050,10 +1042,8 @@ namespace TOD
 			ImGui::EndGroup();
 		}
 
-		// Track completed entries to palette
-		for (const auto& [key, value] : s_todSliderInheritTracker.GetCompletedEntries(currentTime, debounceDelay)) {
-			PaletteWindow::GetSingleton()->TrackValueUsage(std::string(UnscopeKey(key)), value);
-		}
+		// Flush completed TOD slider debounce entries (value palette tracking removed).
+		(void)s_todSliderInheritTracker.GetCompletedEntries(currentTime, debounceDelay);
 
 		PopTODHighlight(label, highlighted);
 		return changed;

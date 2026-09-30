@@ -1,11 +1,15 @@
 #include "PresetsPageRenderer.h"
 #include "PCH.h"
 
+#include "Feature.h"
+#include "Features/CSEditor.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "IconsFontAwesome5.h"
 #include "Menu.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Presets/PresetCompatibility.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "Util.h"
 #include "Utils/UI.h"
@@ -21,8 +25,9 @@ std::optional<UnifiedPresetCatalog::PresetType> PresetsPageRenderer::typeFilter;
 char PresetsPageRenderer::searchBuffer[128] = {};
 std::string PresetsPageRenderer::selectedPackId;
 bool PresetsPageRenderer::discovered = false;
-std::string PresetsPageRenderer::heroPackId;
-int PresetsPageRenderer::heroImageIndex = -1;
+std::string PresetsPageRenderer::lightboxPackId;
+int PresetsPageRenderer::lightboxImageIndex = -1;
+bool PresetsPageRenderer::lightboxSuppressClose = false;
 
 namespace
 {
@@ -34,6 +39,11 @@ namespace
 	const char* BackendLabelCS(bool compact)
 	{
 		return compact ? "CS" : "CS Presets";
+	}
+
+	const char* BackendLabelBaseline(bool)
+	{
+		return T("menu.presets.filter_baseline", "Baseline");
 	}
 
 	float BadgeGap()
@@ -49,13 +59,24 @@ namespace
 		needGap = true;
 	}
 
+	bool CanApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline);
+	}
+
+	void ApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		if (UnifiedPresetCatalog::GetSingleton().ApplyPack(pack.id, true))
+			logger::info("[Presets] Applied pack '{}'", pack.id);
+	}
+
 	void DrawRoundedImage(ImDrawList* dl, ImTextureID texture, const ImVec2& p0, const ImVec2& p1, float rounding)
 	{
 		dl->AddImageRounded(texture, p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE, rounding);
 	}
 
 	/** @brief Circular translucent arrow button centered on center; returns true when clicked. */
-	bool DrawCarouselArrow(const char* id, const char* icon, const ImVec2& center, float diameter)
+	bool DrawCarouselArrow(const char* id, Icons::GlyphRef icon, const ImVec2& center, float diameter)
 	{
 		ImGui::SetCursorScreenPos(ImVec2(center.x - diameter * 0.5f, center.y - diameter * 0.5f));
 		ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, diameter * 0.5f);
@@ -65,9 +86,6 @@ namespace
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.0f, 0.0f, 0.7f));
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.0f, 0.0f, 0.85f));
 
-		ImGui::PushFont(nullptr, ImGui::GetCurrentContext()->FontSizeBase * 0.85f);
-		const float fontSize = ImGui::GetFontSize();
-		const ImVec2 labelSize = ImGui::CalcTextSize(icon);
 		const bool clicked = ImGui::InvisibleButton(id, ImVec2(diameter, diameter));
 		const ImVec2 p0 = ImGui::GetItemRectMin();
 		const ImVec2 p1 = ImGui::GetItemRectMax();
@@ -76,13 +94,7 @@ namespace
 				ImGui::IsItemHovered()                                                     ? ImGuiCol_ButtonHovered :
 																							   ImGuiCol_Button);
 		dl->AddCircleFilled(ImVec2((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f), diameter * 0.5f, bg);
-		// Center the font's em-box on the circle, then shift by the unused space below the
-		// ascent so the glyph ink (not the extra leading) lands on the circle's midpoint.
-		const float unusedBelow = fontSize - ImGui::GetFontBaked()->Ascent;
-		const float textX = (p0.x + p1.x - labelSize.x) * 0.5f;
-		const float textY = (p0.y + p1.y - fontSize) * 0.5f + unusedBelow * 0.5f;
-		dl->AddText(ImVec2(textX, textY), ImGui::GetColorU32(ImGuiCol_Text), icon);
-		ImGui::PopFont();
+		Icons::DrawCenteredGlyph(dl, p0, ImVec2(p1.x - p0.x, p1.y - p0.y), icon, ImGui::GetColorU32(ImGuiCol_Text));
 
 		ImGui::PopStyleColor(3);
 		ImGui::PopStyleVar(3);
@@ -108,7 +120,7 @@ bool PresetsPageRenderer::FilterChip(const char* label, bool selected)
 	return clicked;
 }
 
-float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool compact)
+float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact)
 {
 	const ImGuiStyle& style = ImGui::GetStyle();
 	float width = 0.0f;
@@ -121,13 +133,18 @@ float PresetsPageRenderer::MeasureBackendBadgesWidth(bool hasE11, bool hasCSPres
 		AppendBadgeGap(width, needGap);
 		width += ImGui::CalcTextSize(BackendLabelCS(compact)).x + style.FramePadding.x * 2.0f;
 	}
+	if (hasBaseline) {
+		AppendBadgeGap(width, needGap);
+		width += ImGui::CalcTextSize(BackendLabelBaseline(compact)).x + style.FramePadding.x * 2.0f;
+	}
 	return width;
 }
 
-void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPresets, bool compact)
+void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact)
 {
 	const auto& info = globals::menu->GetTheme().StatusPalette.InfoColor;
 	const auto& warning = globals::menu->GetTheme().StatusPalette.Warning;
+	const auto& success = globals::menu->GetTheme().StatusPalette.SuccessColor;
 	const float gap = BadgeGap();
 
 	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
@@ -147,11 +164,22 @@ void PresetsPageRenderer::DrawBackendBadges(bool hasE11, bool hasCSPresets, bool
 	if (hasCSPresets) {
 		if (needGap)
 			ImGui::SameLine(0.0f, gap);
+		needGap = true;
 		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(warning.x, warning.y, warning.z, 0.85f));
 		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, warning);
 		ImGui::PushStyleColor(ImGuiCol_ButtonActive, warning);
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.06f, 0.02f, 1.0f));
 		ImGui::SmallButton(BackendLabelCS(compact));
+		ImGui::PopStyleColor(4);
+	}
+	if (hasBaseline) {
+		if (needGap)
+			ImGui::SameLine(0.0f, gap);
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(success.x, success.y, success.z, 0.85f));
+		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, success);
+		ImGui::PushStyleColor(ImGuiCol_ButtonActive, success);
+		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.02f, 0.08f, 0.04f, 1.0f));
+		ImGui::SmallButton(BackendLabelBaseline(compact));
 		ImGui::PopStyleColor(4);
 	}
 	ImGui::EndGroup();
@@ -177,13 +205,15 @@ void PresetsPageRenderer::RenderToolbar()
 	typeChip(T("menu.presets.filter_e11", "E11"), PresetType::E11);
 	ImGui::SameLine();
 	typeChip(T("menu.presets.filter_cs", "CS"), PresetType::CS);
+	ImGui::SameLine();
+	typeChip(T("menu.presets.filter_baseline", "Baseline"), PresetType::Baseline);
 
 	// A small divider keeps these maintenance actions from reading as more filter chips.
 	Util::ToolbarDivider();
 
 	{
 		auto _style = Util::TransparentIconButtonStyle();
-		if (ImGui::Button(ICON_FA_SYNC_ALT "##PresetsRefresh")) {
+		if (Icons::Button("##PresetsRefresh", Icons::FA(ICON_FA_SYNC_ALT))) {
 			catalog.Discover();
 			discovered = true;
 		}
@@ -191,10 +221,25 @@ void PresetsPageRenderer::RenderToolbar()
 			ImGui::SetTooltip("%s", T("menu.presets.refresh_tooltip", "Rescan unified packs and Effects 11 library presets."));
 
 		ImGui::SameLine();
-		if (ImGui::Button(ICON_FA_FOLDER_OPEN "##PresetsOpenFolder"))
+		if (Icons::Button("##PresetsOpenFolder", Icons::FA(ICON_FA_FOLDER_OPEN)))
 			catalog.OpenPresetsFolder();
 		if (ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
+	}
+
+	// CS Editor — same toolbar row, pinned to the right edge.
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
+		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
+		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
+			ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+		ImGui::SameLine();
+		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
+		if (Icons::LabeledButton("##PresetsOpenCSEditor", brush, csEditorTitle))
+			CSEditor::OpenEditorWindow();
+		Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
 	}
 }
 
@@ -220,7 +265,6 @@ void PresetsPageRenderer::RenderList(float width)
 	const float rowPad = 6.0f * scale;
 	const float logoSize = 40.0f * scale;
 	const float rowGap = ImGui::GetStyle().ItemSpacing.y;
-	const float rowHeight = logoSize + rowPad * 2.0f;
 
 	for (size_t idx : indices) {
 		const auto& packId = catalog.GetPacks()[idx].id;
@@ -229,16 +273,25 @@ void PresetsPageRenderer::RenderList(float width)
 			continue;
 		auto& pack = *packPtr;
 		const bool selected = selectedPackId == pack.id;
-		const bool isActive = catalog.GetActivePackId() == pack.id;
+		const bool isActive = catalog.GetActivePackId() == pack.id || catalog.IsBaselineEnabled(pack.id);
+		const auto compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
+		const int warnLines = (compat.versionGap != PresetCompatibility::VersionGap::None ? 1 : 0) +
+		                      (!compat.featuresMessage.empty() ? 1 : 0);
+		const float textLines = 2.0f + static_cast<float>(warnLines);
+		const float textBlockH = ImGui::GetTextLineHeightWithSpacing() * textLines;
+		const float rowHeight = std::max(logoSize, textBlockH) + rowPad * 2.0f;
 
 		ImGui::PushID(pack.id.c_str());
 
 		const ImVec2 rowOrigin = ImGui::GetCursorScreenPos();
-		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap, ImVec2(0, rowHeight));
+		const bool clicked = ImGui::Selectable("##row", selected, ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, rowHeight));
 		if (clicked) {
 			selectedPackId = pack.id;
-			heroPackId.clear();
-			heroImageIndex = -1;
+			lightboxPackId.clear();
+			lightboxImageIndex = -1;
+			lightboxSuppressClose = false;
+			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && CanApplyPack(pack))
+				ApplyPack(pack);
 		}
 
 		// Draw contents inside the selectable bounds, then park the cursor past the row so the
@@ -264,7 +317,7 @@ void PresetsPageRenderer::RenderList(float width)
 			MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
 			ImGui::TextUnformatted(pack.name.c_str());
 			ImGui::SameLine(0.0f, 8.0f * scale);
-			DrawBackendBadges(pack.IsE11(), pack.IsCS(), true);
+			DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
 			if (isActive) {
 				ImGui::SameLine(0.0f, 6.0f * scale);
 				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active", "Active"));
@@ -289,8 +342,11 @@ void PresetsPageRenderer::RenderList(float width)
 				meta = T("menu.presets.source_enb", "ENB / Effects 11");
 			else if (pack.IsCS())
 				meta = T("menu.presets.source_cs", "CS Presets");
+			else if (pack.IsBaseline())
+				meta = T("menu.presets.source_baseline", "Baseline feature settings");
 			if (!meta.empty())
 				ImGui::TextDisabled("%s", meta.c_str());
+			PresetCompatibility::DrawWarnings(compat, true);
 		}
 		ImGui::EndGroup();
 
@@ -320,14 +376,17 @@ void PresetsPageRenderer::RenderDetail()
 
 	catalog.EnsureArtwork(*pack);
 
-	if (heroPackId != pack->id) {
-		heroPackId = pack->id;
-		heroImageIndex = -1;  // cover only until a screenshot is chosen
+	if (lightboxPackId != pack->id) {
+		lightboxPackId = pack->id;
+		lightboxImageIndex = -1;
+		lightboxSuppressClose = false;
 	}
-	if (heroImageIndex >= static_cast<int>(pack->screenshotSRVs.size()))
-		heroImageIndex = -1;
+	if (lightboxImageIndex >= static_cast<int>(pack->screenshotSRVs.size())) {
+		lightboxImageIndex = -1;
+		lightboxSuppressClose = false;
+	}
 
-	const float badgesWidth = MeasureBackendBadgesWidth(pack->IsE11(), pack->IsCS(), false);
+	const float badgesWidth = MeasureBackendBadgesWidth(pack->IsE11(), pack->IsCS(), pack->IsBaseline(), false);
 	const float posterH = ImGui::GetFrameHeight() * 6.0f;
 	const float posterW = posterH * (2.0f / 3.0f);  // movie-poster portrait
 
@@ -365,9 +424,20 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad);
 			ImGui::BeginGroup();
 			{
+				const auto stage = PresetCompatibility::ReleaseStageFromVersion(pack->version);
+				const std::string stageTag = Feature::GetReleaseStageTag(
+					stage == PresetCompatibility::ReleaseStage::Alpha ? Feature::ReleaseStage::Alpha :
+					stage == PresetCompatibility::ReleaseStage::Beta  ? Feature::ReleaseStage::Beta :
+																		 Feature::ReleaseStage::Release);
+
 				MenuFonts::FontRoleGuard title(Menu::FontRole::Heading);
 				ImGui::SetWindowFontScale(1.35f);
 				ImGui::TextWrapped("%s", pack->name.c_str());
+				if (!stageTag.empty()) {
+					ImGui::SameLine(0.0f, style.ItemSpacing.x);
+					MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
+					ImGui::TextColored(PresetCompatibility::StageTagColor(stage), "%s", stageTag.c_str());
+				}
 				ImGui::SetWindowFontScale(1.0f);
 			}
 			{
@@ -384,20 +454,18 @@ void PresetsPageRenderer::RenderDetail()
 					Util::Text::Secondary("%s", metaLine.c_str());
 				if (!pack->nexusUrl.empty()) {
 					ImGui::SameLine(0.0f, style.ItemSpacing.x);
-					if (ImGui::SmallButton(ICON_FA_EXTERNAL_LINK_ALT "##NexusLink"))
+					if (Icons::Button("##NexusLink", Icons::FA(ICON_FA_EXTERNAL_LINK_ALT)))
 						ShellExecuteA(NULL, "open", pack->nexusUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 					Util::AddTooltip(T("menu.presets.nexus_link_tooltip", "Open this preset's Nexus Mods page."));
 				}
+				PresetCompatibility::DrawWarnings(
+					PresetCompatibility::Evaluate(pack->csVersion, pack->requiredFeatures), false);
 			}
 
 			ImGui::Spacing();
 
-			// Apply fills whatever is left of this column; the folder icon takes one frame
-			// square so the pair never overflows when the CS window is narrowed.
-			const float folderSize = ImGui::GetFrameHeight();
-			const float applyWidth = std::max(0.0f, ImGui::GetContentRegionAvail().x - folderSize - style.ItemSpacing.x);
-			const bool canApply = pack->valid && (pack->hasEffects11 || pack->hasCSPresets);
-			ImGui::BeginDisabled(!canApply);
+			// Compact apply + folder icon; both auto-size so they stay readable when the CS window is narrow.
+			ImGui::BeginDisabled(!CanApplyPack(*pack));
 			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
 			ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(
@@ -407,25 +475,37 @@ void PresetsPageRenderer::RenderDetail()
 				1.0f));
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
-			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset"), ImVec2(applyWidth, 0))) {
-				if (catalog.ApplyPack(pack->id, true)) {
-					logger::info("[Presets] Applied pack '{}'", pack->id);
-				}
-			}
+			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
+				ApplyPack(*pack);
 			ImGui::PopStyleColor(4);
 			ImGui::PopStyleVar();
 			ImGui::EndDisabled();
 
 			ImGui::SameLine(0.0f, style.ItemSpacing.x);
-			ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-			if (ImGui::Button(ICON_FA_FOLDER_OPEN "##OpenPack", ImVec2(folderSize, folderSize)))
-				catalog.OpenPackFolder(pack->id);
-			ImGui::PopStyleVar();
-			Util::AddTooltip(T("menu.presets.open_pack", "Open Pack Folder"));
+			{
+				auto _style = Util::TransparentIconButtonStyle();
+				ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+				if (Icons::Button("##OpenPack", Icons::FA(ICON_FA_FOLDER_OPEN)))
+					catalog.OpenPackFolder(pack->id);
+				ImGui::PopStyleVar();
+			}
+			Util::AddTooltip(T("menu.presets.open_pack", "Open Preset Folder"));
+
+			const bool baselineEnabled = catalog.IsBaselineEnabled(pack->id);
+			if (baselineEnabled) {
+				ImGui::SameLine(0.0f, style.ItemSpacing.x);
+				if (ImGui::Button(T("menu.presets.remove_baseline", "Remove Baseline")))
+					catalog.RemoveBaseline(pack->id);
+				Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
+					"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
+			}
 
 			if (catalog.GetActivePackId() == pack->id) {
 				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
 				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
+			} else if (baselineEnabled) {
+				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
+				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.baseline_enabled", "This pack's baseline settings are enabled."));
 			}
 
 			ImGui::EndGroup();
@@ -438,51 +518,13 @@ void PresetsPageRenderer::RenderDetail()
 			const float titleLineH = ImGui::GetTextLineHeight() * 1.35f;
 			const float badgeH = ImGui::GetFrameHeight();
 			ImGui::SetCursorPosY(ImGui::GetCursorPosY() + titleTopPad + std::max(0.0f, (titleLineH - badgeH) * 0.5f));
-			DrawBackendBadges(pack->IsE11(), pack->IsCS(), false);
+			DrawBackendBadges(pack->IsE11(), pack->IsCS(), pack->IsBaseline(), false);
 		}
 
 		ImGui::EndTable();
 	}
 
 	ImGui::Spacing();
-
-	// Screenshot viewer only after a thumbnail click, not auto-filled with cover.
-	const bool showViewer = heroImageIndex >= 0 && heroImageIndex < static_cast<int>(pack->screenshotSRVs.size()) &&
-							pack->screenshotSRVs[static_cast<size_t>(heroImageIndex)];
-	if (showViewer) {
-		const float viewerW = ImGui::GetContentRegionAvail().x * 0.72f;
-		const float viewerH = viewerW * (9.0f / 16.0f);
-		const float arrowBtn = ImGui::GetFrameHeight() * 1.15f;
-		const float viewerOffsetX = (ImGui::GetContentRegionAvail().x - viewerW) * 0.5f;
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + viewerOffsetX);
-
-		const ImVec2 heroOrigin = ImGui::GetCursorScreenPos();
-		ImGui::Dummy(ImVec2(viewerW, viewerH));
-		ImDrawList* dl = ImGui::GetWindowDrawList();
-		DrawRoundedImage(dl,
-			reinterpret_cast<ImTextureID>(pack->screenshotSRVs[static_cast<size_t>(heroImageIndex)].get()),
-			heroOrigin,
-			ImVec2(heroOrigin.x + viewerW, heroOrigin.y + viewerH),
-			style.FrameRounding);
-
-		const int shotCount = static_cast<int>(pack->screenshotSRVs.size());
-		if (shotCount > 1) {
-			const float midY = heroOrigin.y + viewerH * 0.5f;
-			const float inset = style.ItemSpacing.x;
-			if (DrawCarouselArrow("##HeroPrev", ICON_FA_ANGLE_LEFT,
-					ImVec2(heroOrigin.x + inset + arrowBtn * 0.5f, midY), arrowBtn)) {
-				heroImageIndex = (heroImageIndex - 1 + shotCount) % shotCount;
-			}
-			if (DrawCarouselArrow("##HeroNext", ICON_FA_ANGLE_RIGHT,
-					ImVec2(heroOrigin.x + viewerW - inset - arrowBtn * 0.5f, midY), arrowBtn)) {
-				heroImageIndex = (heroImageIndex + 1) % shotCount;
-			}
-		}
-
-		ImGui::SetCursorScreenPos(ImVec2(heroOrigin.x - viewerOffsetX, heroOrigin.y + viewerH));
-		ImGui::Dummy(ImVec2(0, 0));
-		ImGui::Spacing();
-	}
 
 	if (!pack->description.empty()) {
 		MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
@@ -495,6 +537,42 @@ void PresetsPageRenderer::RenderDetail()
 		ImGui::Spacing();
 		ImGui::TextDisabled("%s", T("menu.presets.cs_layer_note",
 			"Applying makes this pack's CS Presets the active scene layer, replacing the previous pack's."));
+	}
+
+	if (pack->hasBaseline) {
+		ImGui::Spacing();
+		ImGui::TextDisabled("%s", T("menu.presets.baseline_layer_note",
+			"Baseline settings are feature defaults applied beneath the Scene Manager, independent of the active pack. "
+			"They win over saved settings until you change a value yourself."));
+		if (!pack->baselineFeatures.empty()) {
+			ImGui::SeparatorText(T("menu.presets.baseline_features", "Baseline feature settings"));
+			for (const auto& featureName : pack->baselineFeatures) {
+				auto* feature = Feature::FindFeatureByShortName(featureName);
+				if (feature)
+					ImGui::BulletText("%s", feature->GetDisplayName().c_str());
+				else
+					ImGui::BulletText("%s %s", featureName.c_str(), T("menu.presets.baseline_feature_unavailable", "(not available)"));
+			}
+		}
+		if (!pack->disableAtBoot.empty()) {
+			ImGui::Spacing();
+			ImGui::SeparatorText(T("menu.presets.baseline_boot", "Disable at boot"));
+			ImGui::TextDisabled("%s", T("menu.presets.baseline_boot_note",
+				"Applied when this Baseline pack is enabled. A game restart is still required for load/unload."));
+			std::vector<std::pair<std::string, bool>> bootEntries(pack->disableAtBoot.begin(), pack->disableAtBoot.end());
+			std::ranges::sort(bootEntries, {}, &std::pair<std::string, bool>::first);
+			for (const auto& [featureName, disabled] : bootEntries) {
+				std::string label = featureName;
+				for (auto* feature : Feature::GetFeatureList()) {
+					if (feature && feature->GetShortName() == featureName) {
+						label = feature->GetDisplayName();
+						break;
+					}
+				}
+				ImGui::BulletText("%s — %s", label.c_str(),
+					disabled ? T("menu.features.disabled", "Disabled") : T("menu.features.enabled", "Enabled"));
+			}
+		}
 	}
 
 	if (!pack->valid && !pack->invalidReason.empty()) {
@@ -511,26 +589,137 @@ void PresetsPageRenderer::RenderDetail()
 			if (i > 0)
 				ImGui::SameLine(0.0f, style.ItemSpacing.x);
 			ImGui::PushID(static_cast<int>(i));
-			const bool isFeatured = static_cast<int>(i) == heroImageIndex;
+			const bool isOpen = static_cast<int>(i) == lightboxImageIndex;
 			const bool clicked = ImGui::InvisibleButton("##shot", ImVec2(thumb, thumbH));
 			const ImVec2 p0 = ImGui::GetItemRectMin();
 			const ImVec2 p1 = ImGui::GetItemRectMax();
 			ImDrawList* dl = ImGui::GetWindowDrawList();
 			if (pack->screenshotSRVs[i])
 				DrawRoundedImage(dl, reinterpret_cast<ImTextureID>(pack->screenshotSRVs[i].get()), p0, p1, style.FrameRounding);
-			if (isFeatured || ImGui::IsItemHovered()) {
-				const ImU32 border = ImGui::ColorConvertFloat4ToU32(isFeatured ?
+			if (isOpen || ImGui::IsItemHovered()) {
+				const ImU32 border = ImGui::ColorConvertFloat4ToU32(isOpen ?
 						theme.StatusPalette.InfoColor :
 						ImGui::GetStyleColorVec4(ImGuiCol_Border));
-				dl->AddRect(p0, p1, border, style.FrameRounding, 0, style.FrameBorderSize + (isFeatured ? 1.0f : 0.0f));
+				dl->AddRect(p0, p1, border, style.FrameRounding, 0, style.FrameBorderSize + (isOpen ? 1.0f : 0.0f));
 			}
-			if (clicked)
-				heroImageIndex = static_cast<int>(i);
+			if (clicked) {
+				lightboxImageIndex = static_cast<int>(i);
+				lightboxSuppressClose = true;
+			}
 			ImGui::PopID();
 		}
 	}
 
 	ImGui::EndChild();
+}
+
+bool PresetsPageRenderer::CloseLightboxIfOpen()
+{
+	if (lightboxImageIndex < 0)
+		return false;
+	lightboxImageIndex = -1;
+	lightboxSuppressClose = false;
+	return true;
+}
+
+void PresetsPageRenderer::RenderScreenshotLightbox()
+{
+	if (lightboxImageIndex < 0)
+		return;
+
+	auto& catalog = UnifiedPresetCatalog::GetSingleton();
+	auto* pack = catalog.FindPack(selectedPackId);
+	if (!pack || lightboxImageIndex >= static_cast<int>(pack->screenshotSRVs.size()) ||
+		!pack->screenshotSRVs[static_cast<size_t>(lightboxImageIndex)]) {
+		lightboxImageIndex = -1;
+		return;
+	}
+
+	catalog.EnsureArtwork(*pack);
+
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const int shotCount = static_cast<int>(pack->screenshotSRVs.size());
+
+	// Full-viewport dim layer. Semi-transparent WindowBg lets BackgroundBlur show through.
+	ImGui::SetNextWindowPos(viewport->Pos);
+	ImGui::SetNextWindowSize(viewport->Size);
+	ImGui::SetNextWindowFocus();
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.02f, 0.02f, 0.04f, 0.72f));
+
+	constexpr ImGuiWindowFlags kFlags =
+		ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+		ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+		ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoCollapse;
+
+	if (!ImGui::Begin("##PresetScreenshotLightbox", nullptr, kFlags)) {
+		ImGui::End();
+		ImGui::PopStyleColor();
+		ImGui::PopStyleVar(3);
+		return;
+	}
+
+	const float maxW = viewport->Size.x * 0.8f;
+	const float maxH = viewport->Size.y * 0.8f;
+	float imgW = maxW;
+	float imgH = imgW * (9.0f / 16.0f);
+	if (imgH > maxH) {
+		imgH = maxH;
+		imgW = imgH * (16.0f / 9.0f);
+	}
+
+	const ImVec2 imgOrigin(
+		viewport->Pos.x + (viewport->Size.x - imgW) * 0.5f,
+		viewport->Pos.y + (viewport->Size.y - imgH) * 0.5f);
+	const ImVec2 imgEnd(imgOrigin.x + imgW, imgOrigin.y + imgH);
+
+	// Backdrop → image → arrows. AllowOverlap so later items win hover/click over earlier ones;
+	// without it, arrow hits land on the image (or image hits on the backdrop) and dismiss.
+	ImGui::SetNextItemAllowOverlap();
+	ImGui::SetCursorScreenPos(viewport->Pos);
+	const bool backdropClicked = ImGui::InvisibleButton("##LightboxBackdrop", viewport->Size);
+
+	ImGui::SetNextItemAllowOverlap();
+	ImGui::SetCursorScreenPos(imgOrigin);
+	const bool imageClicked = ImGui::InvisibleButton("##LightboxImage", ImVec2(imgW, imgH));
+	ImDrawList* dl = ImGui::GetWindowDrawList();
+	DrawRoundedImage(dl,
+		reinterpret_cast<ImTextureID>(pack->screenshotSRVs[static_cast<size_t>(lightboxImageIndex)].get()),
+		imgOrigin, imgEnd, style.FrameRounding);
+
+	bool navigated = false;
+	if (shotCount > 1) {
+		const float arrowBtn = ImGui::GetFrameHeight() * 1.35f;
+		const float midY = imgOrigin.y + imgH * 0.5f;
+		const float inset = style.ItemSpacing.x * 2.0f;
+		if (DrawCarouselArrow("##LightboxPrev", Icons::FA(ICON_FA_ANGLE_LEFT),
+				ImVec2(imgOrigin.x + inset + arrowBtn * 0.5f, midY), arrowBtn)) {
+			lightboxImageIndex = (lightboxImageIndex - 1 + shotCount) % shotCount;
+			navigated = true;
+		}
+		if (DrawCarouselArrow("##LightboxNext", Icons::FA(ICON_FA_ANGLE_RIGHT),
+				ImVec2(imgEnd.x - inset - arrowBtn * 0.5f, midY), arrowBtn)) {
+			lightboxImageIndex = (lightboxImageIndex + 1) % shotCount;
+			navigated = true;
+		}
+	}
+
+	// Escape is primarily consumed in Menu::ProcessInputEventQueue via CloseLightboxIfOpen.
+	// Suppress click-to-close until the mouse releases so the opening thumb click cannot dismiss it.
+	if (lightboxSuppressClose && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+		lightboxSuppressClose = false;
+
+	if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		lightboxImageIndex = -1;
+	else if (!lightboxSuppressClose && !navigated && (imageClicked || backdropClicked))
+		lightboxImageIndex = -1;
+
+	ImGui::End();
+	ImGui::PopStyleColor();
+	ImGui::PopStyleVar(3);
 }
 
 void PresetsPageRenderer::Render()
@@ -559,4 +748,6 @@ void PresetsPageRenderer::Render()
 	RenderDetail();
 
 	ImGui::EndChild();
+
+	RenderScreenshotLightbox();
 }

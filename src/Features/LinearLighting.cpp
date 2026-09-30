@@ -6,10 +6,10 @@
 
 #include "Effects11.h"
 #include "Globals.h"
-#include "IconsFontAwesome5.h"
 #include "InverseSquareLighting/Common.h"
 #include "PhysicalSky.h"
 #include "PostProcessing.h"
+#include "PostProcessingMode.h"
 #include "ShaderCache.h"
 #include "SkySync.h"
 #include "Utils/ColorSpace.h"
@@ -43,25 +43,30 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 
 void LinearLighting::DrawSettings()
 {
-	// Effects 11 overrides the result, not the controls, so they stay editable under the banner.
-	if (globals::features::effects11.IsActive()) {
-		Util::StatusBanner(ICON_FA_LOCK, "Effects 11 overrides Linear Lighting while UseEffect is enabled.", Util::Colors::GetWarning());
-		ImGui::Spacing();
-	}
-	ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), (bool*)&settings.enableLinearLighting);
+	using PostProcessingMode::Mode;
+	const Mode mode = PostProcessingMode::Get();
+	const bool overridden = mode != Mode::PostProcessing;
+	const Util::LockedSection modeLock(overridden, mode == Mode::Effects11 ?
+													   T(TKEY("overridden_by_effects11"), "Effects 11 overrides Linear Lighting.") :
+													   T(TKEY("off_in_vanilla"), "Vanilla post processing turns Linear Lighting off."));
+
+	// A disabled checkbox never reports a click, so the saved setting survives the forced-off display.
+	bool linearLightingDisplay = settings.enableLinearLighting && !overridden;
+	if (ImGui::Checkbox(T(TKEY("enable_linear_lighting"), "Enable Linear Lighting"), &linearLightingDisplay))
+		settings.enableLinearLighting = linearLightingDisplay;
 	ImGui::Checkbox(T(TKEY("enable_acescg"), "Enable ACEScg Wide Gamut"), (bool*)&settings.enableACEScg);
 
-	if (ImGui::BeginTabBar("##LinearLightingTabs", ImGuiTabBarFlags_None)) {
-		if (ImGui::BeginTabItem(T(TKEY("tab_general"), "General"))) {
+	if (Util::BeginPillTabBar("##LinearLightingTabs")) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_general"), "General"))) {
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("directional_light_multiplier"), "Directional Light Multiplier"), &settings.directionalLightMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("ambient_multiplier"), "Ambient Multiplier"), &settings.ambientMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("glowmap_multiplier"), "Glowmap Multiplier"), &settings.glowmapMult, 0.0f, 10.0f, "%.2f");
 
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
+		if (Util::BeginPillTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
 			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, 0.0f, 10.0f, "%.2f");
@@ -81,10 +86,10 @@ void LinearLighting::DrawSettings()
 				ImGui::TreePop();
 			}
 
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		ImGui::EndTabBar();
+		Util::EndPillTabBar();
 	}
 
 	JiayeStatement::GetSingleton()->DrawJSInfo();
@@ -119,8 +124,9 @@ void LinearLighting::Reset()
 {
 	if (!resourcesReady)
 		return;
-	// Without Post Processing's display transform the toggle stays inert instead of failing at runtime.
-	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded;
+	// Needs Post Processing's display transform, so Vanilla mode turns it off; Effects 11 gates it separately via IsActive.
+	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded &&
+	                            PostProcessingMode::Get() != PostProcessingMode::Mode::Vanilla;
 	const bool acescg = linearLighting && settings.enableACEScg;
 	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg)
 		globals::shaderCache->Reload([this, linearLighting, acescg] {

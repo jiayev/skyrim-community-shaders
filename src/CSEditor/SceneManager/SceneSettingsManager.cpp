@@ -33,21 +33,6 @@ namespace
 	{
 		return packRoot.empty() ? std::filesystem::path{} : packRoot / directoryName;
 	}
-
-	/// RAII CPU pass for the in-game Profiling UI; ends the pass on every early-return path.
-	struct ProfilerPassScope
-	{
-		explicit ProfilerPassScope(const std::string& name)
-		{
-			if (globals::profiler)
-				globals::profiler->BeginPass(name);
-		}
-		~ProfilerPassScope()
-		{
-			if (globals::profiler)
-				globals::profiler->EndPass();
-		}
-	};
 }
 
 SceneSettingsManager::SceneSettingsManager()
@@ -618,7 +603,6 @@ RE::BSEventNotifyControl SceneSettingsManager::MenuOpenCloseEventHandler::Proces
 
 void SceneSettingsManager::Update()
 {
-	ProfilerPassScope profilerPass("SceneSettingsManager::Update");
 	if (globals::state) {
 		const auto frame = globals::state->frameCount;
 		if (lastUpdateFrame == frame)
@@ -742,9 +726,12 @@ void SceneSettingsManager::RecordBaselineEdit(const SettingIdentity& setting, co
 	if (!appliedSettings.contains(setting) || baselineIt == baselineSettings.end())
 		return;
 
+	if (!sketchOriginals.empty() && !HasSketches(setting.featureShortName))
+		DropSketches();
 	assert((sketchOriginals.empty() || sketchOriginals.begin()->first.featureShortName == setting.featureShortName) &&
-		   "sketches belong to the one feature the menu shows");
+		   "sketches belong to one feature at a time");
 	sketchOriginals.try_emplace(setting, baselineIt->second);
+	sketchesRetained = true;
 	baselineIt->second = value;
 	appliedSettings[setting] = value;
 	locationTransitionBatchesDirty = true;
@@ -762,9 +749,8 @@ bool SceneSettingsManager::HasSketches(const std::string& featureShortName) cons
 
 void SceneSettingsManager::RetainSketches(const std::string& featureShortName)
 {
-	if (!sketchOriginals.empty() && !HasSketches(featureShortName))
-		DropSketches();
-	sketchesRetained = true;
+	if (HasSketches(featureShortName))
+		sketchesRetained = true;
 }
 
 void SceneSettingsManager::DropSketches()

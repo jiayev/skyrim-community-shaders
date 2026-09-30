@@ -14,7 +14,7 @@ namespace
 void LensFlareWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(true, true, false, nullptr, "##LensFlareSearch")) {
 		DrawWidgetHeader("##LensFlareSearch", true, true);
 		DrawSearchDropdown();
 	}

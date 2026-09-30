@@ -144,7 +144,7 @@ void WeatherWidget::DrawWidget()
 {
 	WeatherUtils::SetCurrentWidget(this);
 	const float scale = Util::GetUIScale();
-	if (BeginWidgetWindow()) {
+	if (BeginWidgetWindow(false, true, true, weather, "##WeatherSearch")) {
 		// Draw header with search and all buttons
 		DrawWidgetHeader("##WeatherSearch", false, true, true, weather);
 		DrawSearchDropdown();
@@ -214,7 +214,7 @@ void WeatherWidget::DrawWidget()
 	}
 
 	// Tab bar for organizing settings
-	if (ImGui::BeginTabBar("WeatherSettingsTabs", ImGuiTabBarFlags_None)) {
+	if (Util::BeginPillTabBar("WeatherSettingsTabs")) {
 		const ImGuiTabItemFlags basicFlags = GetTabFlagsForOverride(WeatherTab::kBasic);
 		const ImGuiTabItemFlags dalcFlags = GetTabFlagsForOverride(WeatherTab::kDalc);
 		const ImGuiTabItemFlags atmosphereFlags = GetTabFlagsForOverride(WeatherTab::kAtmosphere);
@@ -223,7 +223,7 @@ void WeatherWidget::DrawWidget()
 		const ImGuiTabItemFlags recordsFlags = GetTabFlagsForOverride(WeatherTab::kRecords);
 		const ImGuiTabItemFlags sceneManagerFlags = GetTabFlagsForOverride(WeatherTab::kSceneManager);
 
-		if (ImGui::BeginTabItem(T(TKEY("basic"), WeatherTab::kBasic), nullptr, basicFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("basic"), WeatherTab::kBasic), nullptr, basicFlags)) {
 			BeginScrollableContent("##BasicScroll");
 			DrawProperties(T(TKEY("category_sun"), "Sun"), { { "Sun Damage", UINT8_SLIDER } });
 			DrawProperties(T(TKEY("category_wind"), "Wind"), { { "Wind Speed", UINT8_SLIDER }, { "Wind Direction", UINT8_SLIDER }, { "Wind Direction Range", UINT8_SLIDER } });
@@ -233,37 +233,37 @@ void WeatherWidget::DrawWidget()
 			DrawProperties(T(TKEY("category_visual_effects"), "Visual Effects"), { { "Visual Effect Begin", UINT8_SLIDER }, { "Visual Effect End", UINT8_SLIDER } });
 			DrawProperties(T(TKEY("category_weather_transition"), "Weather Transition"), { { "Trans Delta", UINT8_SLIDER } });
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
-		if (ImGui::BeginTabItem(T(TKEY("lighting_dalc"), WeatherTab::kDalc), nullptr, dalcFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("lighting_dalc"), WeatherTab::kDalc), nullptr, dalcFlags)) {
 			BeginScrollableContent("##DALCScroll");
 			DrawDALCSettings();
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("atmosphere_colors"), WeatherTab::kAtmosphere), nullptr, atmosphereFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("atmosphere_colors"), WeatherTab::kAtmosphere), nullptr, atmosphereFlags)) {
 			BeginScrollableContent("##AtmosphereScroll");
 			DrawWeatherColorSettings();
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("clouds"), WeatherTab::kClouds), nullptr, cloudsFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("clouds"), WeatherTab::kClouds), nullptr, cloudsFlags)) {
 			BeginScrollableContent("##CloudsScroll");
 			DrawCloudSettings();
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("fog"), WeatherTab::kFog), nullptr, fogFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("fog"), WeatherTab::kFog), nullptr, fogFlags)) {
 			BeginScrollableContent("##FogScroll");
 			DrawFogSettings();
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("records"), WeatherTab::kRecords), nullptr, recordsFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("records"), WeatherTab::kRecords), nullptr, recordsFlags)) {
 			BeginScrollableContent("##RecordsScroll");
 			ImGui::TextWrapped("%s", T(TKEY("form_record_references"), "Form record references used by this weather."));
 			ImGui::Separator();
@@ -351,7 +351,6 @@ void WeatherWidget::DrawWidget()
 						PopHighlightIfNeeded(rowId, recordHighlighted);
 					ImGui::PopID();
 				}
-				ImGui::Spacing();
 			};
 			auto drawSingleRecordSection = [&](const char* sectionLabel, const char* recordId, const char* inheritKey, const char* valueLabel, const char* pickerId, auto& recordRef, auto& parentRef, auto& widgets, const std::string& buttonId, const char* openTooltip) {
 				if (!MatchesSearch(recordId))
@@ -380,7 +379,6 @@ void WeatherWidget::DrawWidget()
 
 				if (recordHighlighted)
 					PopHighlightIfNeeded(recordId, recordHighlighted);
-				ImGui::Spacing();
 			};
 
 			auto* parentImageSpaceRefs = parentWidget ? parentWidget->settings.imageSpaceRefs : settings.imageSpaceRefs;
@@ -397,16 +395,16 @@ void WeatherWidget::DrawWidget()
 			}
 
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
 
-		if (ImGui::BeginTabItem(T(TKEY("scene_manager"), WeatherTab::kSceneManager), nullptr, sceneManagerFlags)) {
+		if (Util::BeginPillTabItem(T(TKEY("scene_manager"), WeatherTab::kSceneManager), nullptr, sceneManagerFlags)) {
 			BeginScrollableContent("##SceneManagerScroll");
 			SceneSettingsUI::DrawWeatherSceneTab(weather ? weather->GetFormID() : 0);
 			EndScrollableContent();
-			ImGui::EndTabItem();
+			Util::EndPillTabItem();
 		}
-		ImGui::EndTabBar();
+		Util::EndPillTabBar();
 	}
 	ImGui::End();
 }
@@ -1116,7 +1114,6 @@ void WeatherWidget::DrawCloudSettings()
 			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.3f);
 			if (WeatherUtils::DrawSliderInt8(std::format("Cloud Layer Speed Y##{}", layer), settings.clouds[i].cloudLayerSpeedY))
 				changed = true;
-			ImGui::Spacing();
 			if (WeatherUtils::DrawSliderInt8(std::format("Cloud Layer Speed X##{}", layer), settings.clouds[i].cloudLayerSpeedX))
 				changed = true;
 			ImGui::PopItemWidth();
@@ -1187,7 +1184,6 @@ void WeatherWidget::DrawCloudSettings()
 				TOD::EndTODTable();
 			}
 
-			ImGui::Spacing();
 			ImGui::Unindent(10.0f * scale);
 		}
 	}
@@ -1687,7 +1683,33 @@ std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() con
 	results.push_back({ T(TKEY("record_precipitation"), "Precipitation"), WeatherTab::kRecords, WeatherRecord::kPrecipitation });
 	results.push_back({ T(TKEY("record_visual_effect"), "Visual Effect"), WeatherTab::kRecords, WeatherRecord::kVisualEffect });
 
+	if (auto* sceneManager = SceneSettingsManager::GetSingleton()) {
+		const SceneSettingsManager::SceneContextId context{
+			.type = SceneSettingsManager::SceneContextType::Weather,
+			.weatherId = weather->GetFormID(),
+		};
+		for (const auto& entry : sceneManager->GetContextEntries(context)) {
+			std::string displayName = std::format("{}: {}", SceneSettingsManager::GetFeatureDisplayName(entry.featureShortName), entry.displayName);
+			if (entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
+				displayName = std::format("{} ({})", displayName, SceneSettingsManager::kPeriodNames[static_cast<int>(entry.period)]);
+			results.push_back({ std::move(displayName), WeatherTab::kSceneManager, entry.featureShortName });
+		}
+	}
+
 	return results;
+}
+
+void WeatherWidget::NavigateToSearchResult(const SearchResult& result)
+{
+	if (result.tabName == WeatherTab::kSceneManager) {
+		SceneSettingsUI::OpenSceneContext({
+			.type = SceneSettingsManager::SceneContextType::Weather,
+			.weatherId = weather->GetFormID(),
+		}, result.settingId);
+		return;
+	}
+
+	Widget::NavigateToSearchResult(result);
 }
 
 ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)

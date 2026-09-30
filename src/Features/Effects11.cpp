@@ -13,6 +13,8 @@
 #include "Deferred.h"
 #include "Globals.h"
 #include "IBL.h"
+#include "PostProcessing.h"
+#include "PostProcessingMode.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "TerrainShadows.h"
@@ -154,20 +156,47 @@ void Effects11::RestoreDefaultSettings()
 	PersistActivePreset();
 }
 
+bool Effects11::IsUseEffectEnabled() const
+{
+	return loaded && SettingManager::GetSingleton().GetValue<bool>("UseEffect", "GLOBAL");
+}
+
 bool Effects11::IsPresetEnabled() const
 {
 	auto& manager = EffectManager::GetSingleton();
-	return loaded && manager.IsInitialized() && manager.IsPresetLoaded() &&
-	       SettingManager::GetSingleton().GetValue<bool>("UseEffect", "GLOBAL");
+	return IsUseEffectEnabled() && manager.IsInitialized() && manager.IsPresetLoaded();
+}
+
+bool Effects11::IsUseOriginalPostProcessingForced() const
+{
+	// Selected as the pipeline with nothing for enbeffect.fx to run — keep vanilla tonemap.
+	return IsUseEffectEnabled() && !EffectManager::GetSingleton().IsPresetLoaded();
+}
+
+void Effects11::EnforceOriginalPostProcessingIfNeeded()
+{
+	if (!IsUseOriginalPostProcessingForced())
+		return;
+	auto& settingManager = SettingManager::GetSingleton();
+	const uint32_t id = settingManager.GetSettingID("UseOriginalPostProcessing", "EFFECT");
+	if (id == 0xFFFFFFFF)
+		return;
+	if (!settingManager.GetValue<bool>(id))
+		settingManager.SetValue<bool>(id, true);
 }
 
 void Effects11::ToggleEnabled()
 {
-	if (!EffectManager::GetSingleton().IsPresetLoaded())
-		return;
+	using PostProcessingMode::Mode;
+	// Toggle the UseEffect pipeline slot even when no preset is loaded; original PP stays forced then.
+	PostProcessingMode::Set(IsUseEffectEnabled() ? Mode::Vanilla : Mode::Effects11);
+}
+
+void Effects11::SetUseEffect(bool enabled)
+{
 	auto& settingManager = SettingManager::GetSingleton();
-	const uint32_t id = settingManager.GetSettingID("UseEffect", "GLOBAL");
-	settingManager.SetValue<bool>(id, !settingManager.GetValue<bool>(id));
+	settingManager.SetValue<bool>(settingManager.GetSettingID("UseEffect", "GLOBAL"), enabled);
+	EnforceOriginalPostProcessingIfNeeded();
 }
 
 void Effects11::LoadRaindropTexture()
@@ -268,9 +297,17 @@ void Effects11::Reset()
 {
 	if (!resourcesReady)
 		return;
+	EnforceOriginalPostProcessingIfNeeded();
 	const bool enabled = IsPresetEnabled();
-	if (enabled != presetActive)
+	if (enabled != presetActive) {
+		// UseEffect can also turn on from an ini reload or preset switch; Post Processing must still yield.
+		if (enabled)
+			PostProcessingMode::Set(PostProcessingMode::Mode::Effects11);
 		globals::shaderCache->Reload([this, enabled] { presetActive = enabled; });
+	} else if (IsUseEffectEnabled() && PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11) {
+		// UseEffect on without a compiled preset still claims the pipeline slot (original PP forced).
+		PostProcessingMode::Set(PostProcessingMode::Mode::Effects11);
+	}
 }
 
 void Effects11::ClearShaderCache()
@@ -625,6 +662,15 @@ bool Effects11::WantsTonemapOwnership()
 	// pipeline for that frame.
 	auto& effectManager = EffectManager::GetSingleton();
 	if (!effectManager.IsInitialized() || !effectManager.IsPresetLoaded())
+		return false;
+
+	// Post Processing tonemapping and Effects 11 tonemapping cannot share the frame; when PP
+	// wants ownership, force UseOriginalPostProcessing on so this preset yields (avoids a black screen).
+	auto& postProcessing = globals::features::postProcessing;
+	if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
+		return false;
+
+	if (IsUseOriginalPostProcessingForced())
 		return false;
 
 	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");

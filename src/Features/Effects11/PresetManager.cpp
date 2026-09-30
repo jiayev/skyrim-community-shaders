@@ -293,6 +293,96 @@ bool PresetManager::OpenPresetsFolder() const
 	return reinterpret_cast<intptr_t>(result) > kShellExecuteSuccessThreshold;
 }
 
+std::filesystem::path PresetManager::GetActivePresetRoot() const
+{
+	return GetENBSeriesIniPath().parent_path();
+}
+
+bool PresetManager::CanExportActivePreset() const
+{
+	std::string reason;
+	return ValidateLibraryPreset(GetActivePresetRoot(), reason);
+}
+
+bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, bool saveCurrent)
+{
+	if (destRoot.empty()) {
+		logger::error("[Effects11] Export failed: destination root is empty");
+		return false;
+	}
+
+	if (!discovered)
+		DiscoverPresets();
+
+	const auto* current = FindPreset(activePresetId);
+	if (!current || !current->valid) {
+		logger::error("[Effects11] Export failed: active preset '{}' is missing or invalid",
+			FormatPresetIdForLog(activePresetId));
+		return false;
+	}
+
+	if (saveCurrent) {
+		SettingManager::GetSingleton().Save();
+		EffectManager::GetSingleton().Save();
+	}
+
+	const auto sourceRoot = GetActivePresetRoot();
+	std::string sourceReason;
+	if (!ValidateLibraryPreset(sourceRoot, sourceReason)) {
+		logger::error("[Effects11] Export failed: active preset root '{}' is invalid ({})",
+			sourceRoot.string(), sourceReason);
+		return false;
+	}
+
+	std::error_code ec;
+	if (std::filesystem::equivalent(sourceRoot, destRoot, ec)) {
+		logger::info("[Effects11] Export skipped copy; '{}' is already the active preset root", destRoot.string());
+		return true;
+	}
+
+	Util::FileHelpers::EnsureDirectoryExists(destRoot);
+
+	const auto srcIni = sourceRoot / kEnbSeriesIniName;
+	const auto srcSeries = sourceRoot / kEnbSeriesDirName;
+	const auto destIni = destRoot / kEnbSeriesIniName;
+	const auto destSeries = destRoot / kEnbSeriesDirName;
+
+	std::filesystem::remove(destIni, ec);
+	std::filesystem::remove_all(destSeries, ec);
+
+	std::filesystem::copy_file(srcIni, destIni, std::filesystem::copy_options::overwrite_existing, ec);
+	if (ec) {
+		logger::error("[Effects11] Export failed copying '{}': {}", srcIni.string(), ec.message());
+		return false;
+	}
+
+	std::filesystem::copy(srcSeries, destSeries,
+		std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, ec);
+	if (ec) {
+		logger::error("[Effects11] Export failed copying '{}': {}", srcSeries.string(), ec.message());
+		return false;
+	}
+
+	// Optional companion file some ENB packs ship next to enbseries.ini.
+	const auto srcLocal = sourceRoot / "enblocal.ini";
+	if (std::filesystem::is_regular_file(srcLocal, ec)) {
+		std::filesystem::copy_file(srcLocal, destRoot / "enblocal.ini",
+			std::filesystem::copy_options::overwrite_existing, ec);
+		if (ec)
+			logger::warn("[Effects11] Export could not copy enblocal.ini: {}", ec.message());
+	}
+
+	std::string destReason;
+	if (!ValidateLibraryPreset(destRoot, destReason)) {
+		logger::error("[Effects11] Export wrote an invalid layout at '{}': {}", destRoot.string(), destReason);
+		return false;
+	}
+
+	logger::info("[Effects11] Exported active preset '{}' to '{}'",
+		FormatPresetIdForLog(activePresetId), destRoot.string());
+	return true;
+}
+
 std::string PresetManager::GetActivePresetStatusSummary() const
 {
 	const auto* preset = FindPreset(activePresetId);

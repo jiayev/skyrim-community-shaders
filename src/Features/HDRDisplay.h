@@ -172,7 +172,7 @@ public:
 		float pad0;                      ///< 1.0 = main menu/loading screen active
 		float fgTweenMenuMidAlphaBoost;  ///< 1.0 = TweenMenu (pause) open — FG UIBrightnessCS mid-alpha boost only
 		float previewSDR;                ///< 1.0 = emit gamma 2.2 SDR (crop preview) instead of PQ HDR10
-		float applyAutoHDR;              ///< 1.0 = Effects11 replaced ISHDR, so expand its SDR result into HDR
+		float applyAutoHDR;              ///< 1.0 = expand SDR tonemap output (Effects11 or PP SDR tonemapper + AutoHDR) into HDR
 		float pad2;
 		float pad3;
 	};

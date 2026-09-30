@@ -64,7 +64,7 @@ using json = nlohmann::json;
  *       "Warning": [1.0, 0.6, 0.2, 1.0],         // Warning messages
  *       "RestartNeeded": [0.4, 1.0, 0.4, 1.0],   // Restart required indicator
  *       "CurrentHotkey": [1.0, 1.0, 0.0, 1.0],   // Active hotkey highlight
- *       "SuccessColor": [0.0, 1.0, 0.0, 1.0],    // Success messages
+ *       "SuccessColor": [0.32, 0.68, 0.42, 1.0], // Success / positive (muted for text & button contrast)
  *       "InfoColor": [0.2, 0.6, 1.0, 1.0]        // Info messages
  *     },
  *
@@ -108,7 +108,9 @@ using json = nlohmann::json;
  * - Role 3 (Subtitle):   Secondary text, descriptions
  *
  * Each role can have different font family, style, and size scale.
- * Fonts must exist in Data\SKSE\Plugins\CommunityShaders\Fonts\
+ * UI fonts live under Data\Interface\CommunityShaders\Fonts\
+ * Icon fonts (FA / Lucide / Tabler / Game Icons) are standalone ImFonts under Icons\glyphs\
+ * (see Icons::FA / LC / TI helpers); they are not merged into UI role fonts.
  *
  * BLUR SHADER SYSTEM:
  * ===================

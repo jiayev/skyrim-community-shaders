@@ -1,10 +1,14 @@
 #include "PostProcessing.h"
 
+#include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
 #include "imgui_stdlib.h"
 
 #include "JiayeStatement.h"
 #include "Menu.h"
+#include "PostProcessingMode.h"
+#include "Profiler.h"
 #include "State.h"
 #include "Util.h"
 
@@ -46,6 +50,21 @@ void PostProcessing::DrawSettings()
 		}
 	}
 
+	// CS Editor button
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
+		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
+		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
+		                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+		ImGui::SameLine();
+		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
+		if (Icons::LabeledButton("##PostProcessingOpenCSEditor", brush, csEditorTitle))
+			CSEditor::OpenEditorWindow();
+		Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
+	}
+
 	ImGui::EndGroup();
 	ImGui::BeginGroup();
 	static std::string newPresetName = "";
@@ -65,27 +84,13 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	// Effects11 replaces the whole tonemap pass, so bypass has no effect while it owns the frame.
-	const bool tonemapTakenByEffects11 = IsTonemapOwnedByEffects11();
-
-	ImGui::BeginDisabled(tonemapTakenByEffects11);
-
-	// A disabled checkbox never reports a click, so bypass keeps its stored value while forced on.
-	bool bypassDisplay = bypass || tonemapTakenByEffects11;
-	if (ImGui::Checkbox(T("feature.post_processing.bypass", "Bypass"), &bypassDisplay))
-		bypass = bypassDisplay;
-
-	ImGui::EndDisabled();
-
-	if (tonemapTakenByEffects11) {
-		ImGui::PushStyleColor(ImGuiCol_Text, Menu::GetSingleton()->GetTheme().StatusPalette.Warning);
-		ImGui::TextWrapped("%s", T("feature.post_processing.tonemap_owned_by_effects11",
-									 "Tonemapping is currently handled by Effects 11. To use Post Processing tonemapping instead, either "
-									 "disable Effects 11 or enable its \"UseOriginalPostProcessing\" setting."));
-		ImGui::PopStyleColor();
-	}
+	PostProcessingMode::DrawSelector();
 
 	ImGui::Separator();
+
+	// Effects 11 discards the pipeline output, so its controls would do nothing.
+	const Util::LockedSection effects11Lock(PostProcessingMode::Get() == PostProcessingMode::Mode::Effects11,
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	{
 		auto& cam = cinematicCamera;
@@ -94,8 +99,8 @@ void PostProcessing::DrawSettings()
 			ImGui::Text("%s", T("feature.post_processing.cinematic_camera.description",
 								  "Controls lens, focus, exposure and FOV. Exposure processing runs automatically while the camera is active; other effects must be enabled separately."));
 		ImGui::SameLine();
-		auto ccLabel = std::format("{} {}", ICON_FA_BARS, T("feature.post_processing.cinematic_camera.settings", "Settings"));
-		if (ImGui::Button(ccLabel.c_str()))
+		if (Icons::LabeledButton("##CinematicCameraSettings", Icons::FA(ICON_FA_BARS),
+				T("feature.post_processing.cinematic_camera.settings", "Settings")))
 			pipelinePageNum = 2;
 
 		if (const auto* state = cam.GetState()) {
@@ -141,7 +146,7 @@ void PostProcessing::DrawSettings()
 				ImGui::PushID(feat->GetType().c_str());
 				drawEnabled("##Enabled", *feat);
 				ImGui::SameLine();
-				if (ImGui::Button(ICON_FA_BARS)) {
+				if (Icons::Button("##Bars", Icons::FA(ICON_FA_BARS))) {
 					pipelineFeatIdx = i;
 					pipelinePageNum = 1;
 				}
@@ -155,8 +160,8 @@ void PostProcessing::DrawSettings()
 			}
 		}
 	} else if (pipelinePageNum == 1) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -171,8 +176,8 @@ void PostProcessing::DrawSettings()
 				ImGui::TextWrapped("%s", description.c_str());
 
 				ImGui::Spacing();
-				auto recompileLabel = std::format("{} {}", ICON_FA_SYNC, T("feature.post_processing.recompile_shaders", "Recompile Shaders"));
-				if (ImGui::Button(recompileLabel.c_str())) {
+				if (Icons::LabeledButton("##RecompileShaders", Icons::FA(ICON_FA_SYNC),
+						T("feature.post_processing.recompile_shaders", "Recompile Shaders"))) {
 					feat->ClearShaderCache();
 				}
 				if (auto _tt = Util::HoverTooltipWrapper())
@@ -198,8 +203,8 @@ void PostProcessing::DrawSettings()
 			pipelinePageNum = 0;
 		}
 	} else if (pipelinePageNum == 2) {
-		auto backLabel = std::format("{} {}", ICON_FA_ARROW_LEFT, T("feature.post_processing.back_to_pipeline", "Back to Pipeline"));
-		if (ImGui::Button(backLabel.c_str())) {
+		if (Icons::LabeledButton("##BackToPipeline", Icons::FA(ICON_FA_ARROW_LEFT),
+				T("feature.post_processing.back_to_pipeline", "Back to Pipeline"))) {
 			pipelinePageNum = 0;
 		}
 		ImGui::Separator();
@@ -316,6 +321,8 @@ void PostProcessing::DrawSettings()
 
 void PostProcessing::LoadSettings(json& o_json)
 {
+	// Deferred to Prepass so a load lands at a fixed point in the frame instead of mid-pass
+	// (Scene Manager and overrides call this from State::Draw); SaveSettings reports it until then.
 	pendingSettings = o_json;
 }
 
@@ -344,6 +351,9 @@ void PostProcessing::ProcessSettings(json& o_json)
 
 void PostProcessing::SaveSettings(json& o_json)
 {
+	// A load not yet applied is the newest state, so report it rather than the live pipeline. This means
+	// a Save -> Load -> Save round trip within one frame cannot observe clamping by the pipeline;
+	// callers verifying retention (Scene Manager) only see it once Prepass has consumed the load.
 	if (!pendingSettings.empty()) {
 		o_json = pendingSettings;
 		o_json.erase("ppsettings");
@@ -426,19 +436,11 @@ void PostProcessing::SavePresetTo(std::string a_name)
 		return;
 	}
 
-	std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
-	std::ofstream o{ presetPath };
-	if (!o.is_open() || !o.good()) {
-		logger::warn("Failed to open preset file for writing: {}", presetPath);
-		return;
-	}
-
-	try {
-		o << std::setw(4) << a_presets;
-		logger::info("Saving preset to {}", presetPath);
-	} catch (const std::exception& e) {
-		logger::warn("Failed to write preset to file: {}. Error: {}", presetPath, e.what());
-	}
+	const std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
+	if (Util::FileHelpers::WriteJsonAtomically(presetPath, a_presets, 4, "post processing preset"))
+		logger::info("Saved preset to {}", presetPath);
+	else
+		logger::warn("Failed to write preset file: {}", presetPath);
 }
 
 void PostProcessing::RestoreDefaultSettings()
@@ -831,6 +833,15 @@ bool PostProcessing::WantsTonemapOwnership() const
 bool PostProcessing::IsTonemapOwnedByEffects11() const
 {
 	return globals::state->GetTonemapOwner() == State::TonemapOwner::kEffects11;
+}
+
+bool PostProcessing::WantsAutoHDR() const
+{
+	if (globals::state->GetTonemapOwner() != State::TonemapOwner::kPostProcessing)
+		return false;
+
+	auto* colorGrading = static_cast<const ColorGrading*>(pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get());
+	return colorGrading && colorGrading->IsActive() && colorGrading->WantsAutoHDR();
 }
 
 void PostProcessing::Prepass()

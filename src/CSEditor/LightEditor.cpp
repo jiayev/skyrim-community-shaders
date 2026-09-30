@@ -3,6 +3,7 @@
 #include "../Features/LightLimitFix.h"
 #include "../I18n/I18n.h"
 #include "../Menu.h"
+#include "../Utils/FileSystem.h"
 #include "../Utils/UI.h"
 #include "EditorWindow.h"
 #include "imgui_internal.h"
@@ -131,11 +132,6 @@ static bool WriteLPConfig(const std::filesystem::path& filePath, nlohmann::order
 {
 	StripNullValues(config);
 
-	std::ofstream outFile(filePath);
-	if (!outFile.is_open()) {
-		logger::warn("[LightEditor] Failed to write Light Placer config: {}", filePath.string());
-		return false;
-	}
 	std::string output = config.dump(1, '\t');
 
 	static const std::regex vec3Pattern(R"(\[\n\s*([-\d.eE+]+),\n\s*([-\d.eE+]+),\n\s*([-\d.eE+]+)\n\s*\])");
@@ -197,10 +193,8 @@ static bool WriteLPConfig(const std::filesystem::path& filePath, nlohmann::order
 		output = std::move(result);
 	}
 
-	outFile << output;
-	outFile.flush();
-	if (outFile.fail()) {
-		logger::warn("[LightEditor] Failed to write Light Placer config to {}: stream error", filePath.string());
+	if (!Util::FileHelpers::WriteFileAtomically(filePath, output, "Light Placer config")) {
+		logger::warn("[LightEditor] Failed to write Light Placer config: {}", filePath.string());
 		return false;
 	}
 	return true;
@@ -760,7 +754,7 @@ void LightEditor::DrawSettings()
 		}
 	}
 
-	ImGui::Spacing();
+	ImGui::Separator();
 
 	if (selected.isAttached) {
 		EnsureLighFormListBuilt();
@@ -810,8 +804,6 @@ void LightEditor::DrawSettings()
 	// External emittance applies to any reference-backed bulb, so it lives outside the attached-only block.
 	DrawExternalEmittanceCombo();
 
-	ImGui::Spacing();
-
 	WeatherUtils::DrawColorEdit(T(TKEY("color"), "Color"), reinterpret_cast<float3&>(current.data.diffuse));
 	if (lpInfo.isLPLight) {
 		ImGui::SameLine();
@@ -855,14 +847,11 @@ void LightEditor::DrawSettings()
 			ApplyShadowDepthBias();
 	}
 
-	ImGui::Spacing();
+	ImGui::Separator();
 
 	if (!selected.isOther && current.data.lighFormId != 0 && selected.hasPosition) {
 		ImGui::Text(T(TKEY("position_format"), "X: %.2f, Y: %.2f, Z: %.2f"), displayInfo.pos.x, displayInfo.pos.y, displayInfo.pos.z);
-		ImGui::Spacing();
 		ImGui::SliderFloat3(T(TKEY("position"), "Position"), &current.pos.x, -1000.f, 1000.f, "%.0f");
-
-		ImGui::Spacing();
 
 		auto* flags = reinterpret_cast<uint32_t*>(&current.tesFlags);
 		auto* runtimeFlags = reinterpret_cast<uint32_t*>(&current.data.flags);
@@ -939,9 +928,7 @@ void LightEditor::SavePopupPrefs() const
 	j["addLighSearch"] = addLighSearch;
 	j["addPopupMode"] = addPopupMode;
 	j["addLightSubMode"] = addLightSubMode;
-	std::ofstream out(kPopupPrefsPath.data());
-	if (out.is_open())
-		out << j.dump(1, '\t');
+	Util::FileHelpers::WriteFileAtomically(kPopupPrefsPath, j.dump(1, '\t'), "light editor prefs");
 }
 
 void LightEditor::LoadPopupPrefs()

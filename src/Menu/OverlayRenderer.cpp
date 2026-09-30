@@ -19,6 +19,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/FontAtlasState.h"
 #include "ShaderCache.h"
 #include "State.h"
 #include "Menu/CursorLoader.h"
@@ -151,6 +152,9 @@ void OverlayRenderer::RenderOverlay(
 	float& cachedFontSize,
 	float currentFontSize)
 {
+	// Always sync — including frames that skip drawing — so closing the last CS UI restores vanity.
+	menu.SyncVanityCamera();
+
 	processInputEventQueue();
 
 	// ImGui only takes game input while a CS window owns it. Otherwise status overlays
@@ -167,6 +171,15 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::ClearActiveID();
 	}
 
+	// Before the skip check so the editor's close edge is never missed.
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
+		editorWindow->open = false;
+		if (editorWindow->IsInPreviewMode())
+			editorWindow->ExitPreviewMode();
+	}
+	editorWindow->UpdateOpenState();
+
 	if (ShouldSkipRendering()) {
 		io.ClearInputKeys();
 		io.ClearEventsQueue();
@@ -180,17 +193,9 @@ void OverlayRenderer::RenderOverlay(
 	RenderShaderCompilationStatus(keyIdToString);
 	RenderShaderBlockingStatus();
 
-	auto* editorWindow = EditorWindow::GetSingleton();
-	if (editorWindow->open && !EditorWindow::CanBeOpen()) {
-		editorWindow->open = false;
-		if (editorWindow->IsInPreviewMode())
-			editorWindow->ExitPreviewMode();
-	}
-	editorWindow->UpdateOpenState();
-
-	// The Effects 11 editor, the CS Editor and the Community Shaders menu are exclusive
+	// The Effects 11 editor and the Community Shaders menu are exclusive; the CS Editor hosts it.
 	auto& effects11Editor = Effects11Editor::GetSingleton();
-	if (effects11Editor.IsOpen() && (editorWindow->open || menu.IsEnabled))
+	if (effects11Editor.IsOpen() && menu.IsEnabled)
 		effects11Editor.Close(false);
 
 	if (editorWindow->open) {
@@ -243,7 +248,7 @@ void OverlayRenderer::HandleFontReload(Menu& menu, float& cachedFontSize, float 
 {
 	bool fontSizeChanged = std::abs(cachedFontSize - currentFontSize) > ThemeManager::Constants::FONT_CACHE_EPSILON;
 	std::string desiredSignature = menu.BuildFontSignature(currentFontSize);
-	bool signatureChanged = desiredSignature != menu.cachedFontSignature;
+	bool signatureChanged = desiredSignature != MenuFonts::GetAtlasState().cachedFontSignature;
 
 	if (fontSizeChanged || signatureChanged) {
 		if (!ThemeManager::ReloadFont(menu, cachedFontSize)) {

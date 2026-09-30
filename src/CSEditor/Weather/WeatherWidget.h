@@ -150,6 +150,7 @@ public:
 	bool HasUnsavedChanges() const override;
 
 private:
+	void NavigateToSearchResult(const SearchResult& result) override;
 	void InitializeInheritFlags();
 	void DrawDALCSettings();
 	void DrawWeatherColorSettings();

@@ -17,7 +17,7 @@ void CloudShadows::DrawSettings()
 {
 	const auto& enb = globals::features::effects11;
 	const Util::LockedSection enbLock(enb.loaded && enb.enableEffect,
-		T("common.settings_managed_by_enb", "Settings are currently managed by ENB."));
+		T("common.settings_managed_by_enb", "This setting is managed by Effects 11."));
 
 	ImGui::SliderFloat(T(TKEY("opacity"), "Opacity"), &settings.Opacity, 0.0f, 4.0f, "%.1f");
 	if (auto _tt = Util::HoverTooltipWrapper()) {

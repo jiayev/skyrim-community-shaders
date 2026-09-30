@@ -30,6 +30,9 @@ public:
 		json overrideData;
 		bool isGlobal = false;
 
+		// Presets pack id when the file comes from a pack's Baseline folder; empty for Overrides/ files
+		std::string packId;
+
 		// Metadata from override file
 		std::string version;
 		std::string description;
@@ -50,10 +53,16 @@ public:
 	}
 
 	/**
-	 * @brief Discovers all override files in the overrides directory
+	 * @brief Discovers override files in the overrides directory, then in the Baseline folder of each enabled preset pack
 	 * @return Number of override files discovered
 	 */
 	size_t DiscoverOverrides();
+
+	/**
+	 * @brief The feature a Baseline file targets: the part of the file stem after the last underscore, or the whole stem
+	 * @return Empty for non-JSON, hidden or temporary files
+	 */
+	static std::string ParseBaselineFeatureName(const std::filesystem::path& filePath);
 
 	/**
 	 * @brief Applies overrides to a specific feature's settings JSON
@@ -222,12 +231,13 @@ public:
 
 	/**
 	 * @brief Writes selected feature settings to a shippable override file, merging into an existing one
-	 * @param modName Mod name used for the file prefix; sanitized before use
+	 * @param modName Mod name used for the file prefix, or the pack folder name when toPresetPack; sanitized before use
 	 * @param settingPaths JSON pointers into featureSettings, as reported by Util::Settings::GetExportSettings
+	 * @param toPresetPack Write `Presets/<modName>/Baseline/<Feature>.json` (creating a starter manifest) instead of an Overrides/ file
 	 * @return True if the override file was written
 	 */
 	bool ExportSettings(const std::string& modName, const std::string& featureName,
-		std::span<const std::string> settingPaths, const json& featureSettings);
+		std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack = false);
 
 private:
 	SettingsOverrideManager() = default;
@@ -238,9 +248,19 @@ private:
 	/**
 	 * @brief Loads a single override file
 	 * @param filePath Path to the override file
+	 * @param packId Presets pack the file belongs to; names come from the pack and file stem, and the file
+	 *        must target a known feature, so a pack can never carry a global override
 	 * @return Override info if successful, nullptr otherwise
 	 */
-	std::unique_ptr<OverrideInfo> LoadOverrideFile(const std::filesystem::path& filePath);
+	std::unique_ptr<OverrideInfo> LoadOverrideFile(const std::filesystem::path& filePath, const std::string& packId = {});
+
+	/**
+	 * @brief Loads every override file in one directory into the discovered set
+	 * @param directory Folder to scan (not recursive)
+	 * @param packId Presets pack id, or empty for the Overrides/ folder
+	 * @return Number of files processed, counted against the per-scan safety limit
+	 */
+	size_t DiscoverDirectory(const std::filesystem::path& directory, const std::string& packId);
 
 	/**
 	 * @brief Parses mod name and feature name from filename

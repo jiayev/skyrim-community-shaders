@@ -76,6 +76,8 @@ struct ColorGrading : public PostProcessFeature
 		uint logType = 0;
 		bool invertLog = false;
 		bool enableTonemap = true;
+		/// When HDR Display is on and the selected tonemapper is SDR-only, expand via Pumbo AutoHDR.
+		bool enableAutoHDR = true;
 		int processColorSpace = 0;
 
 		OpenDRTSettings odrtConfig;
@@ -159,6 +161,9 @@ struct ColorGrading : public PostProcessFeature
 
 	virtual void SetupResources() override;
 	virtual void ClearShaderCache() override;
+	/** @brief Drop in-memory PS/CS and recompile for the current tonemapper; keeps disk cache. */
+	void ReloadActiveShaders();
+	void ReleaseActiveShaders();
 	void CompileShaders();
 
 	virtual void RestoreDefaultSettings() override;
@@ -169,6 +174,12 @@ struct ColorGrading : public PostProcessFeature
 
 	virtual void Draw(TextureInfo&) override;
 	void UpdateColorSpaceTransforms(bool hdrEnabled = false);
+
+	/**
+	 * @brief True when HDR Display is on, tonemapping is enabled, the active tonemapper is
+	 *        SDR-only (not OpenDRT / not supportsHDR), and the user enabled AutoHDR.
+	 */
+	bool WantsAutoHDR() const;
 
 	void OutputTextures();
 
