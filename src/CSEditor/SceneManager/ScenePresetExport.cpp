@@ -32,7 +32,6 @@
 
 namespace
 {
-	using SceneContextId = SceneSettingsManager::SceneContextId;
 	using PresetExportInfo = SceneSettingsManager::PresetExportInfo;
 	using PresetType = SceneSettingsManager::PresetType;
 
@@ -67,7 +66,6 @@ namespace
 	std::vector<std::filesystem::path> collidingFiles;
 	std::string pickerSearch;
 
-	SceneContextId exportContext;
 	bool dialogActive = false;
 	bool pendingOpen = false;
 	bool exportRequested = false;
@@ -451,9 +449,8 @@ bool ScenePresetExport::CanExport()
 	return globals::features::effects11.loaded && PresetManager::GetSingleton().CanExportActivePreset();
 }
 
-void ScenePresetExport::Open(const SceneContextId& context)
+void ScenePresetExport::Open()
 {
-	exportContext = context;
 	dialogActive = true;
 	pendingOpen = true;
 	ResetFormFields();
@@ -461,9 +458,9 @@ void ScenePresetExport::Open(const SceneContextId& context)
 	UnifiedPresetCatalog::GetSingleton().Discover();
 }
 
-void ScenePresetExport::Draw(const SceneContextId& context)
+void ScenePresetExport::Draw()
 {
-	if (!dialogActive || context != exportContext)
+	if (!dialogActive)
 		return;
 
 	auto* manager = SceneSettingsManager::GetSingleton();

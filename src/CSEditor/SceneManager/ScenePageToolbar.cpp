@@ -156,7 +156,7 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 	ImGui::SameLine();
 	ImGui::BeginDisabled(!ScenePresetExport::CanExport());
 	if (ImGui::Button(exportLabel))
-		ScenePresetExport::Open(context);
+		ScenePresetExport::Open();
 	ImGui::EndDisabled();
 	Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
 						  "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
@@ -185,7 +185,6 @@ void ScenePageToolbar::Draw(const SceneContextId& context)
 
 	clearConfirmation.Draw(context, [&] { manager->ClearContextEntries(context); });
 	SceneCopyModal::Draw(context);
-	ScenePresetExport::Draw(context);
 
 	ImGui::PopID();
 }

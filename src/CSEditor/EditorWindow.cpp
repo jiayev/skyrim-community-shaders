@@ -18,6 +18,7 @@
 #include "Menu/Fonts.h"
 #include "PaletteWindow.h"
 #include "WeatherPickerWindow.h"
+#include "SceneManager/ScenePresetExport.h"
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
@@ -46,8 +47,55 @@ namespace
 	constexpr float kToggleActiveAlpha = 0.6f;
 	constexpr float kToggleHoverAlpha = 0.8f;
 	constexpr float kInactiveHoverAlpha = 0.25f;
+	constexpr float kMenuShortcutScale = 0.85f;
 
 	Util::ConfirmationPopup deleteSceneChangesConfirmation;
+
+	/** @brief MenuItem with a smaller right-aligned shortcut subtext. */
+	bool MenuItemWithShortcutSubtext(const char* label, const char* shortcut, bool enabled = true)
+	{
+		ImGuiWindow* window = ImGui::GetCurrentWindow();
+		if (window->SkipItems)
+			return false;
+
+		const float prevScale = ImGui::GetStyle().FontScaleMain;
+		ImVec2 shortcutSize{};
+		if (shortcut && shortcut[0]) {
+			ImGui::GetStyle().FontScaleMain = prevScale * kMenuShortcutScale;
+			shortcutSize = ImGui::CalcTextSize(shortcut);
+			ImGui::GetStyle().FontScaleMain = prevScale;
+		}
+
+		// Stretch like MenuItem and reserve room for the smaller shortcut column.
+		const float shortcutReserve = shortcutSize.x > 0.0f ?
+			shortcutSize.x + ImGui::GetStyle().ItemInnerSpacing.x * 2.0f :
+			0.0f;
+		if (shortcutReserve > 0.0f)
+			window->DC.CursorMaxPos.x = std::max(window->DC.CursorMaxPos.x, window->DC.CursorPos.x + ImGui::CalcTextSize(label, nullptr, true).x + shortcutReserve);
+
+		if (!enabled)
+			ImGui::BeginDisabled();
+		const bool pressed = ImGui::Selectable(label, false, ImGuiSelectableFlags_SpanAvailWidth);
+		if (!enabled)
+			ImGui::EndDisabled();
+
+		if (shortcutSize.x > 0.0f && ImGui::IsItemVisible()) {
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			ImGui::GetStyle().FontScaleMain = prevScale * kMenuShortcutScale;
+			ImGui::GetWindowDrawList()->AddText(
+				ImVec2(max.x - ImGui::GetStyle().ItemInnerSpacing.x - shortcutSize.x,
+					min.y + (max.y - min.y - shortcutSize.y) * 0.5f),
+				ImGui::GetColorU32(ImGuiCol_TextDisabled), shortcut);
+			ImGui::GetStyle().FontScaleMain = prevScale;
+		}
+
+		if (pressed && enabled) {
+			ImGui::CloseCurrentPopup();
+			return true;
+		}
+		return false;
+	}
 
 	/** @brief Toggle-style icon button with active fill chrome. Does not set cursor position. */
 	bool DrawToggleIconButton(const char* id, Icons::GlyphRef glyph, bool isActive, const ImVec4& activeColor,
@@ -1239,6 +1287,17 @@ void EditorWindow::RenderUI()
 		}
 	}
 
+	const bool ctrlDown = ImGui::GetIO().KeyCtrl;
+	const bool shiftDown = ImGui::GetIO().KeyShift;
+	if (ctrlDown && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+		if (shiftDown) {
+			if (ScenePresetExport::CanExport())
+				ScenePresetExport::Open();
+		} else {
+			SaveAll();
+		}
+	}
+
 	// Floating action bar: BeginMainMenuBar forces WindowRounding=0, so we own the window instead.
 	// Edge inset stays in fixed screen pixels so a taller bar (from editor UI scale) sits closer to
 	// the top instead of being pushed away by a scale-multiplied margin.
@@ -1287,12 +1346,11 @@ void EditorWindow::RenderUI()
 		ImGui::AlignTextToFramePadding();
 
 		if (ImGui::BeginMenu(T(TKEY("file"), "File"))) {
-			if (ImGui::MenuItem(T(TKEY("save_all_open_widgets"), "Save All Open Widgets"), "Ctrl+S")) {
+			if (MenuItemWithShortcutSubtext(T(TKEY("save"), "Save"), "Ctrl+S"))
 				SaveAll();
-			}
 
 			// Save individual widgets submenu
-			if (ImGui::BeginMenu(T(TKEY("save"), "Save"))) {
+			if (ImGui::BeginMenu(T(TKEY("save_open_widget"), "Save Widget"))) {
 				bool hasOpen = false;
 				for (auto* collection : GetWidgetCollections())
 					hasOpen = WidgetFactory::DrawSaveWidgetMenuItems(*collection, hasOpen);
@@ -1308,6 +1366,15 @@ void EditorWindow::RenderUI()
 
 				ImGui::EndMenu();
 			}
+
+			ImGui::Separator();
+
+			const bool canExport = ScenePresetExport::CanExport();
+			if (MenuItemWithShortcutSubtext(T(TKEY("export_preset"), "Export Preset..."), "Ctrl+Shift+S", canExport))
+				ScenePresetExport::Open();
+			Util::AddTooltip(T(TKEY("scene_page_export_tooltip"),
+								  "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
+				Util::kTooltipWhenDisabled);
 
 			ImGui::Separator();
 			for (auto* collection : GetWidgetCollections())
@@ -1425,7 +1492,8 @@ void EditorWindow::RenderUI()
 		if (ImGui::BeginMenu(T(TKEY("help"), "Help"))) {
 			ImGui::TextColored(Menu::GetSingleton()->GetTheme().StatusPalette.InfoColor, "%s", T(TKEY("keyboard_shortcuts"), "Keyboard Shortcuts:"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_f"), "Ctrl+F: Focus search"));
-			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save all open widgets"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_s"), "Ctrl+S: Save local WIP"));
+			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_shift_s"), "Ctrl+Shift+S: Export preset"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_w"), "Ctrl+W: Close focused widget"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_ctrl_z"), "Ctrl+Z: Undo"));
 			ImGui::BulletText("%s", T(TKEY("shortcut_enter"), "Enter: Open selected widget"));
@@ -1767,6 +1835,8 @@ void EditorWindow::RenderUI()
 	// Show weather picker window
 	WeatherPickerWindow::GetSingleton()->Draw();
 
+	ScenePresetExport::Draw();
+
 	// OverlayRenderer draws Effects11Editor only while the CS Editor is closed, so the editor hosts it.
 	Effects11Editor::GetSingleton().Draw();
 
@@ -1932,17 +2002,23 @@ void EditorWindow::Draw()
 
 void EditorWindow::SaveAll()
 {
-	auto saveOpen = [](auto& widgets) {
+	auto saveDirtyOrOpen = [](auto& widgets) {
 		for (auto& w : widgets)
-			if (w->IsOpen())
+			if (w->IsOpen() || w->HasUnsavedChanges())
 				w->Save();
 	};
 	for (auto* collection : GetWidgetCollections())
-		saveOpen(*collection);
-	if (currentCellLightingWidget && currentCellLightingWidget->IsOpen())
+		saveDirtyOrOpen(*collection);
+	if (currentCellLightingWidget && (currentCellLightingWidget->IsOpen() || currentCellLightingWidget->HasUnsavedChanges()))
 		currentCellLightingWidget->Save();
 
+	if (auto* sceneManager = SceneSettingsManager::GetSingleton())
+		sceneManager->SaveAllUserSettings();
+
 	Save();
+
+	if (globals::state)
+		globals::state->Save(State::ConfigMode::USER);
 }
 
 void EditorWindow::SaveSettings()
