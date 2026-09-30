@@ -306,18 +306,19 @@ namespace
 		const ImVec4 secondary = Util::Colors::GetSecondary();
 
 		if (inTitleBar) {
-			ImGui::TextColored(secondary, "|");
-			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+			// Spaces around the pipe so it reads as "Features | Create…".
+			ImGui::TextColored(secondary, " | ");
+			// Title/| use the body line box; subtext is smaller. Align capital-ink midlines
+			// (not the full FontSize box mid — that sits the hint too low).
+			const float capMidY = ImGui::GetItemRectMin().y + ImGui::GetFontBaked()->Ascent * 0.5f;
+			const float nextX = ImGui::GetItemRectMax().x;
+			MenuFonts::FontRoleGuard subtext(Menu::FontRole::Subtext);
+			ImGui::SetCursorScreenPos(ImVec2(nextX, capMidY - ImGui::GetFontBaked()->Ascent * 0.5f));
+			ImGui::TextColored(secondary, "%s", hint);
+			return;
 		}
 
 		MenuFonts::FontRoleGuard subtext(Menu::FontRole::Subtext);
-		if (inTitleBar) {
-			// Title/| use the body line box; subtext is smaller, so a shared top cursor leaves it
-			// sitting high. Re-anchor to the same capital-ink midline as the preceding chrome.
-			const float midY = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f;
-			const float ascent = ImGui::GetFontBaked()->Ascent;
-			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, midY - ascent * 0.5f));
-		}
 		ImGui::TextColored(secondary, "%s", hint);
 	}
 
