@@ -2037,7 +2037,21 @@ namespace DCLF
 			std::vector<ID3D11ShaderResourceView*> slotDiffuse;
 			std::vector<std::uint32_t> slotRefs;
 			std::vector<std::uint8_t> slotReady;
+			std::vector<std::shared_ptr<const void>> slotOwner;  // the diffuse texture's import, while the slot's row names it
 			std::vector<std::uint32_t> freeSlots;  // a min-heap: the lowest free slot is taken first, so the table stays dense
+			// The rows written on events, not every build: a slot is written when acquired, while it waits (its texture not
+			// resolved, or past the table's capacity), while its material's texture transform moves (the controllers' events,
+			// watched while its two buffers differ or for 2 builds after the last event), and all of them when the lookups or
+			// the capacity change.
+			std::vector<std::uint32_t> rowDirty;
+			std::vector<std::uint8_t> rowDirtyMark;
+			std::vector<std::uint32_t> transformWatch;
+			std::vector<std::uint64_t> transformWatchBuild;  // per slot: the build of its last event, 0 unwatched
+			std::uint64_t lookupsGeneration = ~0ull;
+			std::uint32_t rowCapacity = 0;
+			// Every slot's owner, as one root for the payloads (bindingOwners), rebuilt when an owner changes.
+			std::shared_ptr<const std::vector<std::shared_ptr<const void>>> owners;
+			bool ownersChanged = true;
 			std::vector<std::uint32_t> objectRecord;  // per object: its material row, 0 the plain one, kNoRecord, kWaiting
 			// CS_DCLF_PERSISTENT_PARITY: the per-frame build's inputs the kept build lacks, by why, and the first of each.
 			std::map<std::string, std::uint64_t> missingBy;
@@ -2340,6 +2354,8 @@ namespace DCLF
 		std::uint32_t skyInputs = 0, skySkipped = 0;
 		// CS_DCLF_SHADOW_OWNERSHIP=static: the claim set built from the inputs of a mode, published once per
 		// input rebuild (the views of one frame that share a mode share the inputs and the claims).
+		/** @brief A shadow view not drawn: counts a hole when its mode withholds casters this frame, and hands the mode back. */
+		void GiveBackShadowMode(std::uint32_t a_modeIndex, IndirectDraws::ShadowStats& a_stats);
 		void PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,
 			IndirectDraws::ShadowStats& a_stats);
 		ShadowPayload shadowPayload;

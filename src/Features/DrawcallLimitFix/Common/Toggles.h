@@ -21,9 +21,7 @@ namespace DCLF
 		// Claimed passes are withheld from the main camera's batch renderer (PassCapture).
 		bool ownership = false;
 		// How BuildDrawsCS filters the frame's draws before it writes their sequences: 0 off, 1 frustum, 2 frustum then
-		// the HZB. The inputs are the whole tracked set, including what the engine's own culling rejected, so the
-		// culling has real work to do. It must never reject an object the engine kept (kObjectNativeVisible): those are
-		// counted as false negatives, and any is a defect in the projection.
+		// the HZB. The inputs are the whole tracked set, so the culling has real work to do.
 		std::uint8_t cullMode = 0;
 
 		// The object classes (LightingDescriptors):

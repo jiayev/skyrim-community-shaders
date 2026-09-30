@@ -340,7 +340,7 @@ namespace DCLF
 						alive ? geometry->name.c_str() : "?", alpha ? " (alpha tested)" : "", current ? kVerdicts[verdict] : "not this frame's",
 						stateName(o < snapshot.depthState.size() ? snapshot.depthState[o] : kObjectStateAbsent),
 						stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent),
-						(flags & 2) ? "engine kept it" : "engine culled it", (flags & 8) ? ", claimed" : "", withheld ? ", withheld" : "");
+						(flags & 2) ? "member" : "not bound", (flags & 8) ? ", claimed" : "", withheld ? ", withheld" : "");
 				}
 			}
 			context->Unmap(snapshot.staging.get(), 0);
@@ -403,7 +403,7 @@ namespace DCLF
 			snapshot.geometry[o] = geometry;
 			const auto objectFlags = tables.objects[o].flags;
 			std::uint8_t flags = 0;
-			if (objectFlags & kObjectNativeVisible)
+			if (objectFlags & kObjectMember)
 				flags |= 2;
 			if (objectFlags & kObjectAlphaTest)
 				flags |= 4;
@@ -429,9 +429,6 @@ namespace DCLF
 				a_stats.cullDrawn = words[0];
 				a_stats.cullRejected = words[1];
 				a_stats.cullTested = words[2];
-				a_stats.cullEngineCulled = words[3];
-				a_stats.cullFalseNegatives = words[4];
-				a_stats.cullRescued = words[5];
 				a_stats.cullOccluded = words[6];
 				a_stats.hzbNear = words[7];
 				a_stats.hzbFar = words[8];
@@ -444,12 +441,10 @@ namespace DCLF
 					a_stats.hzbSample.uvMin[1] = (words[13] >> 16) / 65535.0f;
 					a_stats.hzbSample.uvMax[0] = (words[14] & 0xFFFF) / 65535.0f;
 					a_stats.hzbSample.uvMax[1] = (words[14] >> 16) / 65535.0f;
-					a_stats.hzbSample.mip = words[15] & 0xFF;
-					a_stats.hzbSample.nativeVisible = (words[15] >> 8) != 0;
+					a_stats.hzbSample.mip = words[15];
 				} else {
 					a_stats.hzbSample.valid = false;
 				}
-				a_stats.cullOccludedVisible = words[16];
 				a_stats.cullDrawnPhaseTwo = words[17];
 				a_stats.cullRescuedByPhaseTwo = words[18];
 				a_stats.decalsCulled = words[kCountDecalsCulledWord];
@@ -665,8 +660,6 @@ namespace DCLF
 					break;
 				const std::size_t first = sequence;
 				sequence += templates;
-				if (!(input.flags & kObjectNativeVisible))
-					continue;
 				readback.expected.insert(readback.expected.end(), sequences.begin() + first, sequences.begin() + sequence);
 			}
 		}

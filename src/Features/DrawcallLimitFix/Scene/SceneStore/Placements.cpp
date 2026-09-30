@@ -8,9 +8,13 @@ namespace DCLF
 	{
 		// A reference's animation pushes several in a row.
 		const void* last = nullptr;
+		std::swap(movedKeys[0], movedKeys[1]);
+		movedKeys[0].clear();
 		stats.moveEvents += moveEvents.Drain([&](const void* a_key) {
-			if (a_key != std::exchange(last, a_key))
+			if (a_key != std::exchange(last, a_key)) {
 				movedFrame[a_key] = frame;
+				movedKeys[0].push_back(a_key);
+			}
 		});
 		// A node event names a node: the reference above it, or its category node when no node up to it has one.
 		for (const auto& node : nodeChanged) {
@@ -19,8 +23,10 @@ namespace DCLF
 				key = object->GetUserData();
 			if (!key)
 				key = FindCategoryNode(node.get(), nullptr);
-			if (key)
+			if (key) {
 				movedFrame[key] = frame;
+				movedKeys[0].push_back(key);
+			}
 		}
 		if (a_full)
 			moveUngatedThrough = frame + 1;
@@ -174,6 +180,17 @@ namespace DCLF
 			}
 			rootPlacements.push_back({ root, !moved });
 		}
+		// A root RootMoves found still, whose reference had a move event this frame or the last: the cells' update passes
+		// recompute its bound (FireSpitCooking's drifts by a tenth of a unit with nothing under it moving). TakeRoot writes
+		// only what changed.
+		if (moveGating) {
+			ankerl::unordered_dense::set<const RE::NiAVObject*> still;
+			for (const auto& keys : movedKeys)
+				for (const void* key : keys)
+					if (const auto it = referenceRoot.find(key); it != referenceRoot.end() && !movingRoots.contains(it->second) && still.insert(it->second).second)
+						rootPlacements.push_back({ it->second, false });
+			placementStats.stillRoots += still.size();
+		}
 	}
 
 	void SceneStore::KickPlacements()
@@ -238,7 +255,8 @@ namespace DCLF
 		if (!writers.empty())
 			line += fmt::format("; move writers' calls: {}", writers);
 		if (p.roots || p.rootsGated)
-			line += fmt::format("; roots: {} bounds taken ({} sun entries changed), {} left for want of a move event", p.roots, p.rootSlotsChanged, p.rootsGated);
+			line += fmt::format("; roots: {} bounds taken ({} of still roots on a move event; {} sun entries changed), {} left for want of a move event", p.roots, p.stillRoots,
+				p.rootSlotsChanged, p.rootsGated);
 		if (p.witnessed)
 			line += fmt::format("; move events: {} movers they skip taken on parity frames, {} changed{}{}", p.witnessed, p.missed,
 				p.missed ? " <- MISSED; first: " : " <- OK", p.firstMissed);

@@ -192,6 +192,8 @@ namespace DCLF
 		auto notReady = [&](ShadowNotReady a_reason) {
 			++shadowStats.notReady;
 			++shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)];
+			if (a_renderMode >= PassCapture::kFirstShadowMode)
+				impl->GiveBackShadowMode(a_renderMode - PassCapture::kFirstShadowMode, shadowStats);
 		};
 		if (!pipelines.Enabled() || !utility || !impl->SetupShadow())
 			return notReady(ShadowNotReady::Setup);
@@ -396,6 +398,8 @@ namespace DCLF
 		auto notReady = [&](ShadowNotReady a_reason) {
 			shadowStats.notReady += static_cast<std::uint32_t>(pending.size());
 			shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)] += static_cast<std::uint32_t>(pending.size());
+			for (const auto& view : pending)
+				impl->GiveBackShadowMode(view.modeIndex, shadowStats);
 			pending.clear();
 			impl->DropShadowJob(stats);
 		};
@@ -863,6 +867,18 @@ namespace DCLF
 		readback.view = view.viewId;
 		readback.mode = view.renderMode;
 		shadowCullReadback = std::move(readback);
+	}
+
+	void IndirectDraws::Impl::GiveBackShadowMode(std::uint32_t a_modeIndex, IndirectDraws::ShadowStats& a_stats)
+	{
+		// A claim stands only while DCLF draws its view: the engine withheld this view's casters (last frame's claims), so it
+		// is a hole this frame, and the mode is handed back to the engine from the next frame until an epoch draws it again.
+		auto& capture = PassCapture::Get();
+		if (a_modeIndex >= PassCapture::kShadowModes || !capture.ShadowModeWithheld(a_modeIndex))
+			return;
+		++a_stats.notReadyWithheld;
+		capture.PublishShadowClaims(a_modeIndex, nullptr);
+		a_stats.claimed[a_modeIndex] = 0;
 	}
 
 	void IndirectDraws::Impl::PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,

@@ -111,9 +111,8 @@ namespace DCLF::Draws
 			void PrepareObjects();
 			void Skipped(Skip a_reason);
 			void Mark(std::size_t a_part);
-			// Drawn, for the marks: what BuildDraws writes a sequence for, and the engine kept (only what the engine's culling
-			// kept may be drawn; the culling counters still measure the whole tracked set).
-			bool NativeDrawn(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectNativeVisible); }
+			// Drawn, for the marks: a member, which BuildDraws writes a sequence for wherever the culling finds it.
+			bool NativeDrawn(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectMember); }
 			// The Z-prepass's gate without withholding: what the colour epoch drew last frame.
 			bool DrewLastFrame(std::uint32_t o) const;
 
@@ -638,7 +637,7 @@ namespace DCLF::Draws
 			return false;
 		if (object.flags & kObjectNoBindings)
 			return wholeScene && depthOnly && object.geometryIndex < tables.geometries.size();
-		if ((resident && !(object.flags & kObjectNativeVisible)) || ObjectDecalGroup(object.flags))
+		if (ObjectDecalGroup(object.flags))
 			return false;
 		if (object.pipelineIndex >= pipelineBlocks.size() || object.pipelineIndex >= tables.pipelines.size() || object.geometryIndex >= tables.geometries.size())
 			return false;
@@ -1118,13 +1117,8 @@ namespace DCLF::Draws
 				});
 			}
 		}
-		// Only what BuildDraws will actually write a sequence for counts as drawn. The tables now hold
-		// the whole tracked set, so a candidate the gate drops must not be recorded here: the native
-		// loop would skip its pass (it has none while the engine culls it, but it regains one the
-		// moment the engine sees it again) and, worse, the Z-prepass draws exactly what the colour
-		// epoch drew last frame, so a stale mark would write depth for an object nothing then shades.
-		// The gate is a per-object flag test and so is predictable here; frustum rejection is not,
-		// which is what the false-negative counter exists to catch.
+		// Only what BuildDraws will actually write a sequence for counts as drawn: the Z-prepass draws exactly what the
+		// colour epoch drew last frame, so a stale mark would write depth for an object nothing then shades.
 		if (marks && o < tables.objectGeometry.size() && NativeDrawn(o)) {
 			marks->Set(o, tables.objectGeometry[o], true);
 			if (marks->loopStamp.size() <= o)

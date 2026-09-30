@@ -4151,6 +4151,7 @@ namespace SIE
 					availableTasks.insert(std::move(node));
 				}
 			}
+			bool batchStarted = false;
 			if (wasAdded) {
 				// Increment counters inside the lock so that TryTakeNext, which reads
 				// IsCompiling() after waking up, sees the updated totalTasks and
@@ -4167,6 +4168,7 @@ namespace SIE
 				if (doneTasks >= prevTotal) {
 					QueryPerformanceCounter(&lastReset);
 					lastCalculation = lastReset;
+					batchStarted = true;
 				}
 
 				// If compilation was previously marked complete (prematurely, because a
@@ -4183,6 +4185,9 @@ namespace SIE
 				totalPriorityWeight += static_cast<uint64_t>(task.GetPriority()) + 1;
 			}
 			lock.unlock();
+			// Info, with the completion below: a run can tell from the log whether compilation is still going.
+			if (batchStarted)
+				logger::info("Compilation started");
 			if (wasAdded) {
 				conditionVariable.notify_one();
 			}
@@ -4278,7 +4283,7 @@ namespace SIE
 
 		// Log completion outside the lock
 		if (shouldLogCompletion) {
-			logger::debug("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
+			logger::info("Compilation completed in {} ms", GetHumanTime(completionTimeMs));
 			auto& compileDedupe = SShaderCache::GetCompileDedupe();
 			logger::debug("Compile dedupe: {} compiles shared, {} restored from the persistent store, {} MiB retained, {} blobs over the retention cap",
 				contentDedupeTasks.load(), contentStoreHitTasks.load(), compileDedupe.RetainedBytes() >> 20, compileDedupe.DroppedBlobs());

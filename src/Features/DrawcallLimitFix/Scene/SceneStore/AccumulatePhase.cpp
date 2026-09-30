@@ -83,11 +83,9 @@ namespace DCLF
 		const AccumulateSnapshot before(tables, objectId);
 		auto& object = tables.objects[objectId];
 		object.materialIndex = a_patch.material;
-		if (a_patch.resident) {
-			if (materialMember.size() <= a_patch.material)
-				materialMember.resize(std::size_t(a_patch.material) + 1, 0);
-			materialMember[a_patch.material] = 1;
-		}
+		if (materialMember.size() <= a_patch.material)
+			materialMember.resize(std::size_t(a_patch.material) + 1, 0);
+		materialMember[a_patch.material] = 1;
 		object.pipelineIndex = a_patch.pipeline;
 		object.flags = a_patch.flags | FadedOutBit(objectId);
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
@@ -105,23 +103,13 @@ namespace DCLF
 		} else {
 			tables.FreeExtras(objectId);
 		}
-		// This object reached the patch only after the IsResidentSlot fast path
-		// rejected it, so resident means a new membership. Include that column
-		// in the same before/after journal as the other value-only writes.
-		if (a_patch.resident)
-			tables.residentSlot[objectId] = 1;
+		// A membership join: the column goes into the same before/after journal as the other value-only writes.
+		tables.residentSlot[objectId] = 1;
 		before.NoteWrite(tables, objectId);
-		stats.nativeVisible += a_patch.nativeVisible ? 1 : 0;
-		stats.nativeShadowMasked += a_patch.nativeShadowMasked ? 1 : 0;
-		stats.derivedDescriptors += a_patch.derivedDescriptor ? 1 : 0;
 		if (a_patch.decalKey) {
 			++stats.decals[(static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1) & 1];
-			if (a_patch.resident) {
-				memberDecals[objectId] = a_patch.decalKey & ~std::uint64_t(0xFFFFFF);
-				memberDecalsChanged = true;
-			} else {
-				decalOrder.push_back({ a_patch.decalKey, objectId });
-			}
+			memberDecals[objectId] = a_patch.decalKey;
+			memberDecalsChanged = true;
 		}
 	}
 
@@ -129,9 +117,9 @@ namespace DCLF
 	 * @brief The accumulator half of the frame, at EarlyPrepass.
 	 *
 	 * The main camera's passes are complete only once Main_RenderShadowMaps returns, so everything that
-	 * depends on them is here: the capture drain, the pipeline and material slots, the per-frame lighting
-	 * template, the shading and light lists, the decal order and kObjectNativeVisible. It patches the
-	 * records BuildScenePhase appended, in place and by object index.
+	 * depends on them is here: the capture drain, the membership joins' pipeline and material slots, the
+	 * per-frame lighting template, the shading and light lists and the decal order. It patches the records
+	 * BuildScenePhase appended, in place and by object index.
 	 */
 	void SceneStore::BuildAccumulatePhase()
 	{
@@ -168,14 +156,9 @@ namespace DCLF
 		// CS_DCLF_DERIVED_CACHE=probe: the cached derivation is served and also recomputed, and the two compared.
 		const bool derivedProbe = SwitchValue(Switch::DerivedCache) == "probe";
 		const bool derivationStats = SwitchEnabled(Switch::DeriveProbe);
-		// CS_DCLF_PRIMARY_EXCLUDE=probe: what the objects under the primary's candidate entries take from their
-		// registration, against what DCLF derives (PrimaryCull::NoteDerived).
-		const bool primaryProbe = PrimaryCull::Probe() && PrimaryCull::Get().Installed();
 
-		// What this phase has anything to do with: the engine's accumulated passes alone - ~1,700 of the exterior's
-		// 10,000 tracked objects. An object the engine did not accumulate cannot be drawn (the draws are gated on the
-		// engine's visibility): it is a culling candidate and nothing more, and its scene record already carries
-		// everything the culling reads.
+		// What this phase has anything to do with: the frame's membership joins (BindByMembership). Every other
+		// record keeps its binding, or has none and is a culling candidate only.
 		accumulateOrder.clear();
 		TracyCZoneN(orderZone, "CS.DCLF.Accumulate.Order", true);
 		accumulateOrder.reserve(accumulatedPasses.size());
@@ -190,43 +173,10 @@ namespace DCLF
 		TracyCZoneN(objectsZone, "CS.DCLF.Accumulate.Objects", true);
 		for (auto& [geometry, trackedEntry, accumulated] : accumulateOrder) {
 			timer.Add(BuildPart::LoopTail);
-			if (!accumulated)
-				continue;
-			if (trackedEntry->objectStamp != objectStamp) {
-				// No record: the scene phase found it ineligible, which is where the histogram's "drawn"
-				// column comes from. A verdict of None here means the record itself failed (an unstable
-				// buffer) or the cached verdict was stale, so that one is cleared and reported.
-				if (accumulated) {
-					++stats.ineligibleDrawn[static_cast<std::size_t>(trackedEntry->candidateReason)];
-					if (trackedEntry->candidateReason == Ineligible::None) {
-						++stats.accumulatedWithoutRecord;
-						trackedEntry->candidateFrame = 0;
-						pendingEvaluation.push_back(geometry);
-					} else if (trackedEntry->candidateReason == Ineligible::Hidden || trackedEntry->candidateReason == Ineligible::Switch) {
-						// The engine drew what the kept verdict calls hidden or unselected: shown since. A static's hidden
-						// bit has no event of its own, and this is the engine's cull saying so.
-						trackedEntry->candidateFrame = 0;
-						pendingEvaluation.push_back(geometry);
-					}
-				}
-				continue;
-			}
+			// BindByMembership joins only records written this frame with a verdict of None, never a shadow-only one.
 			const std::uint32_t objectId = trackedEntry->objectId;
-			// Resident: patched once, kept; a pass the engine registered for it anyway (its root was entry 0 of a list,
-			// which Process2 culls) is withheld by static ownership and changes nothing here. A member bound again
-			// (BindByMembership) is patched.
-			if (IsResidentSlot(objectId) && !residentJoining.contains(geometry)) {
-				++residentStats.registered;
-				continue;
-			}
 			auto& object = tables.objects[objectId];
 			const std::uint32_t geometrySlot = object.geometryIndex;
-			// A shadow-only record: the main pass cannot take it, which the scene phase has already decided.
-			if (object.flags & kObjectShadowOnly) {
-				if (accumulated)
-					++stats.ineligibleDrawn[static_cast<std::size_t>(trackedEntry->candidateReason)];
-				continue;
-			}
 
 			auto& data = geometry->GetGeometryRuntimeData();
 			auto* property = data.shaderProperty.get();
@@ -240,7 +190,7 @@ namespace DCLF
 			// witnesses all match and whose slots still carry the keys they were derived for, the
 			// classification and the whole derived section are skipped.
 			auto& derived = trackedEntry->derived;
-			bool derivedHit = accumulated && derived.valid && derived.generation == tablesGeneration &&
+			bool derivedHit = derived.valid && derived.generation == tablesGeneration &&
 			                  derived.geometrySlot == geometrySlot && derived.property == witnessProperty &&
 			                  derived.material == witnessMaterial && derived.fadeState == fadeState && derived.technique == accumulated->technique &&
 			                  derived.subPass == accumulated->subPass && derived.hint == accumulated->hint && derived.interior == interior &&
@@ -266,7 +216,6 @@ namespace DCLF
 				reason = ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
 			}
 			timer.Add(BuildPart::ClassifyStatic);
-			const bool primaryCandidate = primaryProbe && accumulated && PrimaryCull::Get().UnderListedCandidate(geometry);
 			// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
 			// states of this frame, and the scene phase's verdict for them is the last classification's
 			// (for a static, the last event's). An object that has just been hidden must lose its bindings now,
@@ -275,13 +224,8 @@ namespace DCLF
 				reason = ClassifyFrame(*trackedEntry, accumulated);
 			// The skin partitions are the walk's (Tables::skinPartitions): GetRenderPasses gives the main pass the same row, the
 			// fade node's LOD level.
-			// A pass in an alpha-test list is drawn with DoAlphaTest whatever it was registered with
-			// (DrawnPassDescriptor, applied where the passes are taken).
-			// The histogram is the scene phase's, taken over the whole tracked set; where this phase -
-			// which has the accumulated pass, and so the decal group - reaches a different verdict, the
-			// object is moved between the buckets so the report reads as it did before the split.
-			if (primaryCandidate)
-				PrimaryCull::Get().NoteDerived(*geometry, descriptors, *accumulated, reason, LodRowOf(*geometry, property));
+			// The histogram is the scene phase's, taken over the whole tracked set; where this phase reaches a
+			// different verdict, the object is moved between the buckets.
 			if (reason != trackedEntry->candidateReason) {
 				--stats.ineligible[static_cast<std::size_t>(trackedEntry->candidateReason)];
 				++stats.ineligible[static_cast<std::size_t>(reason)];
@@ -289,17 +233,15 @@ namespace DCLF
 			if (reason != Ineligible::None) {
 				trackedEntry->accumulateReason = reason;
 				trackedEntry->accumulateReasonFrame = frame;
-				// Eligible for a record but not for bindings: it stays native this frame, which is what
-				// its scene record already says (kObjectNoBindings, not native-visible).
-				if (accumulated)
-					++stats.ineligibleDrawn[static_cast<std::size_t>(reason)];
+				// Eligible for a record but not for bindings: it stays native, which is what its scene record
+				// already says (kObjectNoBindings).
 				derived.valid = false;
 				continue;
 			}
 			timer.Add(BuildPart::ClassifyFrame);
 
 			// Only computed when something will report them: this whole block exists to feed one log line.
-			if (derivationStats && accumulated && descriptors.derivedPass != kNotDerived) {
+			if (derivationStats && descriptors.derivedPass != kNotDerived) {
 				++stats.derivationChecked;
 				// Against the pass the engine registered. Where its LOD fades ran out it dropped Specular or the Envmap
 				// technique, which the derivation keeps (the draw fades them): those bits are the fades' and counted apart,
@@ -346,57 +288,6 @@ namespace DCLF
 					if (differing & fadeBits) {
 						++stats.derivationFadeBits;
 						differing &= ~fadeBits;
-					}
-				}
-				// What a pass built from the object alone (PrimaryCull::FreshSyntheticPass) would lose against the registered one:
-				// the bits the registration still gives (kRegisteredPassBits), the sub-pass, the hint and a skin's LOD row.
-				if (accumulated->pass) {
-					++stats.syntheticChecked;
-					AccumulatedPass fresh;
-					if (!PrimaryCull::FreshSyntheticPass(*geometry, fresh)) {
-						++stats.syntheticNotBuilt;
-					} else {
-						const std::uint32_t bits = (fresh.technique ^ accumulated->technique) & kRegisteredPassBits;
-						const bool subPass = fresh.subPass != accumulated->subPass, hint = fresh.hint != accumulated->hint;
-						const bool lodRow = data.skinInstance && fresh.lodRow != accumulated->lodRow;
-						stats.syntheticBits |= bits;
-						stats.syntheticBitsDiffer += bits ? 1u : 0u;
-						stats.syntheticSubPass += subPass ? 1u : 0u;
-						stats.syntheticHint += hint ? 1u : 0u;
-						stats.syntheticLodRow += lodRow ? 1u : 0u;
-						if ((bits || subPass || hint || lodRow) && stats.syntheticFirst.empty())
-							stats.syntheticFirst = fmt::format("'{}' technique {:08X} (registered {:08X}), sub-pass {} ({}), hint {} ({}), LOD row {} ({})",
-								geometry->name.c_str() ? geometry->name.c_str() : "?", fresh.technique, accumulated->technique, fresh.subPass,
-								accumulated->subPass, fresh.hint, accumulated->hint, fresh.lodRow, accumulated->lodRow);
-					}
-				}
-				// The local shadow lights' selection (LocalShadowLights) against the engine's: the LLF mask of the pass it registered.
-				if (lightLimitFixLoaded && accumulated->pass) {
-					if (!localShadowsSampled) {
-						localShadowsSample = LocalShadowLights::Sample();
-						localShadowsSampled = true;
-					}
-					const auto& bound = geometry->worldBound;
-					const float center[3]{ bound.center.x, bound.center.y, bound.center.z };
-					const std::uint32_t predicted = localShadowsSample.MaskOf(property, center, bound.radius);
-					const std::uint32_t engine = LightLimitFix::GetShadowBitMask(accumulated->pass);
-					++stats.shadowMaskChecked;
-					stats.shadowMaskEngine += engine ? 1u : 0u;
-					if (predicted != engine) {
-						++stats.shadowMaskDiffers;
-						stats.shadowMaskOver += (predicted & ~engine) ? 1u : 0u;
-						stats.shadowMaskUnder += (engine & ~predicted) ? 1u : 0u;
-						if (stats.shadowMaskFirst.empty())
-						{
-							std::string lights;
-							for (const auto& light : localShadowsSample.lights) {
-								const float dx = center[0] - light.center[0], dy = center[1] - light.center[1], dz = center[2] - light.center[2];
-								lights += fmt::format(" [bit {:X} r {:.0f} at {:.0f}, {} volumes]", light.maskBit, light.radius, std::sqrt(dx * dx + dy * dy + dz * dz), light.volumes.size());
-							}
-							stats.shadowMaskFirst = fmt::format("'{}' predicted {:X} engine {:X} (bound {:.1f} {:.1f} {:.1f} r {:.1f}, pass shadow lights {}; lights:{})",
-								geometry->name.c_str() ? geometry->name.c_str() : "?", predicted, engine, center[0], center[1], center[2], bound.radius,
-								accumulated->pass->numShadowLights, lights);
-						}
 					}
 				}
 				if (const std::uint32_t bits = differing & ~kRuntimePassBits) {
@@ -523,7 +414,7 @@ namespace DCLF
 				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
 				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u);
-				if (accumulated) {
+				{
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;
 						const bool same = derived.pipelineSlot == pipelineSlot && derived.materialSlot == materialSlot &&
@@ -552,8 +443,6 @@ namespace DCLF
 					derived.geometrySlot = geometrySlot;
 					derived.pipelineSlot = pipelineSlot;
 					derived.materialSlot = materialSlot;
-				} else {
-					derived.valid = false;
 				}
 			}
 
@@ -562,27 +451,20 @@ namespace DCLF
 			// A member's pass is patched once and kept; its extras rows (projected UV, land blend) follow the eye and a clock
 			// through the watch (kWatchExtras, RefreshFrameConstants).
 			const bool landBlendRecord = descriptors.technique == 8 || descriptors.technique == 19;
-			const bool resident = accumulated && accumulated->resident && residentJoining.contains(geometry);
 			AccumulatePatch patch;
 			patch.object = objectId;
 			patch.material = materialSlot;
 			patch.pipeline = pipelineSlot;
-			patch.resident = resident;
-			patch.nativeVisible = accumulated && !resident;
-			patch.nativeShadowMasked = accumulated && (descriptors.pass & 0x6000u) == 0x6000u;
-			patch.derivedDescriptor = !accumulated;
 			patch.projectedUV = descriptors.projectedUV;
 			patch.landBlend = landBlendRecord;
-			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated ? kObjectNativeVisible : 0u) |
-			              // The sun's bits are decided by the draw for every pass: a registered one's come from StaticShadowBits.
-			              (accumulated && (accumulated->pass ? (descriptors.pass & 0x2000u) != 0 : accumulated->sunTest) ? kObjectSunTest : 0u) |
-			              (resident && accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) |
-			              (resident && accumulated->heightTest ? kObjectHeightTest : 0u) |
-			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) | (resident ? kObjectMember : 0u);
-			patch.fadeDistance = resident ? accumulated->fadeDistance : 0.0f;
+			// The sun's bits are decided by the draw (the synthetic pass's kObjectSunTest).
+			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated->sunTest ? kObjectSunTest : 0u) |
+			              (accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) | (accumulated->heightTest ? kObjectHeightTest : 0u) |
+			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) | kObjectMember;
+			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
-			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult, resident);
+			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult, true);
 			patch.emissiveMult = emissiveMult;
 			if (lightLimitFixLoaded) {
 				auto& lightFix = globals::features::lightLimitFix;
@@ -591,8 +473,6 @@ namespace DCLF
 					trackedEntry->roomMapGeneration = lightFix.GetRoomMapGeneration();
 				}
 				patch.lights.roomIndex = trackedEntry->roomIndex;
-				if (accumulated)
-					patch.lights.shadowBitMask = accumulated->pass ? LightLimitFix::GetShadowBitMask(accumulated->pass) : 0u;
 			}
 			if (patch.flags & kObjectTreeAnim)
 				DeriveTreeAnim(*property, patch.tree);
@@ -602,31 +482,28 @@ namespace DCLF
 					++stats.fadingFrames;
 				++stats.fadingDrawn;
 			}
-			if (descriptors.decalGroup && accumulated) {
+			// A member decal's chain (DecalOrder.cpp): its group, technique and sub-pass.
+			if (descriptors.decalGroup) {
 				patch.decalKey = (std::uint64_t(descriptors.decalGroup) << 60) | (std::uint64_t(accumulated->technique & 0x3FFFFFFF) << 28) |
-				                 (std::uint64_t(accumulated->subPass & 7) << 24) | (accumulated->chainIndex & 0xFFFFFF);
+				                 (std::uint64_t(accumulated->subPass & 7) << 24);
 			}
 			timer.Add(BuildPart::Record);
 			ApplyAccumulatePatch(patch);
 			timer.Add(BuildPart::ApplyPatch);
-			if (resident) {
-				MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
-				residentJoining.erase(geometry);
-				++residentStats.joined;
-			}
+			MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
+			residentJoining.erase(geometry);
+			++residentStats.joined;
 			timer.Add(BuildPart::Record);
 		}
 
 		TracyCZoneEnd(objectsZone);
 		TracyCZoneN(residentsZone, "CS.DCLF.Accumulate.Residents", true);
-		// Resident passes that were not patched (no record, a verdict of the frame, a material not ready, extras rows, or
-		// the engine's own pass for the object): their entries leave residency.
+		// Membership joins that were not patched (a verdict of the frame, a material not ready): their entries leave
+		// residency.
 		for (const auto* geometry : residentJoining) {
 			++residentStats.failed;
-			const auto* pass = FindAccumulatedPass(geometry);
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
-			const auto cause = pass && !pass->resident ? 0u :                                                             // the engine's pass took the object
-			                   entry == tracked.end() || entry->second.objectStamp != objectStamp ? 1u :                  // no record
+			const auto cause = entry == tracked.end() || entry->second.objectStamp != objectStamp ? 1u :                  // no record
 			                   entry->second.accumulateReasonFrame == frame ? 2u :                                          // a verdict of the frame
 			                   3u;                                                                                          // material, or extras rows
 			++residentStats.failedBy[cause];

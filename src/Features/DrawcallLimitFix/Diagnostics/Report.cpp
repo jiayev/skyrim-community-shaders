@@ -1,4 +1,5 @@
 #include "Features/DrawcallLimitFix.h"
+#include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
 
 #include "Deferred.h"
 #include "CaptureParity.h"
@@ -26,12 +27,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
 		if (draws.cullDrawn || draws.cullRejected || draws.cullOccluded) {
 			const std::uint32_t rejected = draws.cullRejected + draws.cullOccluded;
-			logger::info("[DCLF] culling: {} draws written, {} of {} tested were rejected ({:.1f}%: {} outside the frustum, {} occluded, {} of those the engine had kept); against the engine: {} it culled were gated out, {} it culled were kept, {} it kept the frustum test rejected{}",
+			logger::info("[DCLF] culling: {} draws written, {} of {} tested were rejected ({:.1f}%: {} outside the frustum, {} occluded)",
 				draws.cullDrawn, rejected, draws.cullTested,
 				draws.cullTested ? 100.0 * rejected / draws.cullTested : 0.0,
-				draws.cullRejected, draws.cullOccluded, draws.cullOccludedVisible,
-				draws.cullEngineCulled, draws.cullRescued, draws.cullFalseNegatives,
-				draws.cullFalseNegatives ? " <- FALSE NEGATIVES" : "");
+				draws.cullRejected, draws.cullOccluded);
 			if (draws.cullRescuedByPhaseTwo || draws.cullDrawnPhaseTwo)
 				logger::info("[DCLF] two-phase culling: phase 2 brought back {} objects the stale HZB had rejected, and drew depth for {} of them",
 					draws.cullRescuedByPhaseTwo, draws.cullDrawnPhaseTwo);
@@ -40,9 +39,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 					draws.hzbSampled, draws.hzbNear, draws.hzbFar);
 			if (draws.hzbSample.valid) {
 				const auto& sample = draws.hzbSample;
-				logger::info("[DCLF] HZB rejection sample: farthest {:.6f} against nearest {:.6f}, uv ({:.4f} {:.4f})-({:.4f} {:.4f}), mip {}, engine {}",
+				logger::info("[DCLF] HZB rejection sample: farthest {:.6f} against nearest {:.6f}, uv ({:.4f} {:.4f})-({:.4f} {:.4f}), mip {}",
 					sample.farthest, sample.nearestZ, sample.uvMin[0], sample.uvMin[1], sample.uvMax[0], sample.uvMax[1],
-					sample.mip, sample.nativeVisible ? "kept it" : "culled it");
+					sample.mip);
 			}
 		}
 	}
@@ -72,7 +71,7 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		std::string reasons;
 		for (std::size_t i = 1; i < stats.ineligible.size(); ++i) {
 			if (stats.ineligible[i])
-				reasons += fmt::format(" {}={}({} drawn)", DCLF::kIneligibleNames[i], stats.ineligible[i], stats.ineligibleDrawn[i]);
+				reasons += fmt::format(" {}={}", DCLF::kIneligibleNames[i], stats.ineligible[i]);
 		}
 		const double frames = std::max(1u, timing.frames);
 		// The per-part breakdown appears only under CS_DCLF_PROFILE=1, because that is the only time it is
@@ -158,9 +157,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 					shadow.sunEntryMismatches, shadow.sunEntryMismatches ? " <- DIFFER" : " <- OK");
 			if (DCLF::PassCapture::ShadowWithholdingEnabled()) {
 				const auto& captured = DCLF::PassCapture::Get().GetStats();
-				logger::info("[DCLF] shadow ownership: withheld plain {} / clamped {} / paraboloid {} passes, {} volumetric-only passes and {} of hints 11, 7 and 3 (last frame); claimed {} / {} / {} casters; {} face regions uploaded; {} views not ready under ownership{}",
+				logger::info("[DCLF] shadow ownership: withheld plain {} / clamped {} / paraboloid {} passes, {} volumetric-only passes and {} of hints 11, 7 and 3 (last frame); claimed {} / {} / {} casters; {} face regions uploaded; {} views not ready under ownership, {} of them with withheld casters{}",
 					captured.shadowWithheld[0], captured.shadowWithheld[1], captured.shadowWithheld[2], captured.volumetricWithheld, captured.directWithheld, shadow.claimed[0], shadow.claimed[1],
-					shadow.claimed[2], shadow.faceUploads, shadow.notReady, shadow.notReady ? " <- HOLES" : "");
+					shadow.claimed[2], shadow.faceUploads, shadow.notReady, shadow.notReadyWithheld, shadow.notReadyWithheld ? " <- HOLES" : "");
 			}
 			if (shadow.skyDrawn || shadow.skyNotReady || skyNativeFrames)
 				logger::info("[DCLF] Skylighting occlusion: DCLF drew {} maps ({} occluders, last), {} it could not draw, {} left to the engine; render thread {:.3f} ms per map",
@@ -229,12 +228,6 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::info("[DCLF] LOD fades (last frame): {} objects with a fade node compared; the metric differs from the engine's on {}, the draw's fades on {}{}{}",
 				stats.lodFadeChecked, stats.lodMetricDiffers, stats.lodFadeDiffers, stats.lodFadeFirst.empty() ? "" : "; first: ", stats.lodFadeFirst,
 				stats.lodFadeDiffers ? " <- LOD FADE" : "");
-			logger::info("[DCLF] local shadow lights (last frame): {} objects compared, {} with a shadow light by the engine; the selection differs on {} ({} with a light the engine did not take, {} missing one){}{}",
-				stats.shadowMaskChecked, stats.shadowMaskEngine, stats.shadowMaskDiffers, stats.shadowMaskOver, stats.shadowMaskUnder,
-				stats.shadowMaskFirst.empty() ? "" : "; first: ", stats.shadowMaskFirst);
-			logger::info("[DCLF] passes from the object (last frame): {} registered objects compared, {} not built; against the registration: {} differ in the bits it gives ({:08X}), {} in the sub-pass, {} in the hint, {} in a skin's LOD row{}{}",
-				stats.syntheticChecked, stats.syntheticNotBuilt, stats.syntheticBitsDiffer, stats.syntheticBits, stats.syntheticSubPass, stats.syntheticHint,
-				stats.syntheticLodRow, stats.syntheticFirst.empty() ? "" : "; first: ", stats.syntheticFirst);
 		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed)", capture.captured, capture.threads, capture.overflowed);
@@ -289,8 +282,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				(stats.materialDiffMask & 1) ? "vs " : "", (stats.materialDiffMask & 2) ? "ps " : "",
 				(stats.materialDiffMask & 4) ? "textures " : "", (stats.materialDiffMask & 8) ? "address " : "",
 				(stats.materialDiffMask & 16) ? "filter " : "", (stats.materialDiffMask & 32) ? "written" : "");
-		logger::info("[DCLF] tracked {} under {} category nodes: {} objects ({} the engine also kept, {} of them with the sun's shadow mask; {} with derived descriptors), {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{} ({} geometries moved), validation drops {}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
-			stats.tracked, stats.categoryNodes, stats.objects, stats.nativeVisible, stats.nativeShadowMasked, stats.derivedDescriptors, stats.geometries, stats.pipelines, stats.materials, reasons,
+		logger::info("[DCLF] tracked {} under {} category nodes: {} objects, {} geometries, {} pipelines, {} materials; left native:{}; events +{} -{} ({} geometries moved), validation drops {}; CPU per frame: events {:.3f} ms, tables {:.3f} ms (scene {:.3f}, max {:.3f}; accumulate {:.3f}, max {:.3f}){}",
+			stats.tracked, stats.categoryNodes, stats.objects, stats.geometries, stats.pipelines, stats.materials, reasons,
 			stats.attachedEvents, stats.detachedEvents, stats.detachMoves, stats.validationDrops, timing.eventsMs / frames,
 			(timing.sceneMs + timing.buildMs) / frames, timing.sceneMs / frames, timing.sceneMaxMs, timing.buildMs / frames, timing.buildMaxMs,
 			parts);
@@ -336,6 +329,11 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 						stats.firstVerdictMissed);
 				if (const auto line = store.PlacementReport(); !line.empty())
 					logger::info("{}", line);
+				if (const auto watch = DCLF::HiddenWatch::TakeReport(frame); !watch.empty()) {
+					std::istringstream watchLines(watch);
+					for (std::string line; std::getline(watchLines, line);)
+						logger::info("{}", line);
+				}
 			}
 			if (DCLF::SceneStore::ProfileEnabled()) {
 				std::string kinds;

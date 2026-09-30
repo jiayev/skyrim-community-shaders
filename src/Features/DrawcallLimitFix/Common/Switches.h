@@ -72,6 +72,7 @@ namespace DCLF
 		DeriveProbe,
 		SlotProbe,
 		DecalOrderProbe,
+		HiddenWatch,
 		DecalOrder,
 		TableStart,
 		SkylightDumpDir,

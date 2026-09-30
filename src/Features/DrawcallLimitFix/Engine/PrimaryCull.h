@@ -67,16 +67,6 @@ namespace DCLF
 		void NoteRegistration(const void* a_accumulator, const RE::BSGeometry* a_geometry);
 		bool Counting() const { return counting.load(std::memory_order_relaxed); }
 
-		/** @brief Render thread, after the list jobs: whether the geometry is under a candidate entry the lists hold. */
-		bool UnderListedCandidate(const RE::BSGeometry* a_geometry) const;
-		/**
-		 * @brief The accumulate phase, render thread, for an object under a listed candidate entry: what its
-		 * registration gave it (the technique, the light assignment, the LOD mode, the fade), against what DCLF
-		 * derives without it.
-		 */
-		void NoteDerived(const RE::BSGeometry& a_geometry, const LightingDescriptors& a_descriptors, const AccumulatedPass& a_accumulated,
-			Ineligible a_reason, std::uint32_t a_derivedLodRow);
-
 		/**
 		 * @brief Render thread, after the sun's Accumulate: the pass descriptor's ShadowDir and DefShadow bits (13, 14)
 		 * GetRenderPasses would give the geometry's main pass this frame, for a geometry no shadowed point light reaches;
@@ -112,14 +102,6 @@ namespace DCLF
 		 * with the frame's feedback copy to its decode. Null when the cut did not apply this frame.
 		 */
 		std::shared_ptr<void> TakeFeedbackTag() { return std::exchange(pendingTag, {}); }
-		/**
-		 * @brief The accumulate phase, render thread: gives an engine-registered pass the synthetic pass's sun bits (the
-		 * static rule, and kObjectSunTest for the GPU's cascade test) when the geometry is one PrimaryCull draws
-		 * synthetically, so the two sources of its pass share one pipeline key. Drawing it before admission is then
-		 * the evidence that its synthetic pass can be drawn. Only on a frame the cut applies (no local shadow light).
-		 */
-		void UnifySunBits(const RE::BSGeometry* a_geometry, AccumulatedPass& a_pass) const;
-
 		/**
 		 * @brief The main pass GetRenderPasses would register for the geometry this frame, built without it: the
 		 * derived pass descriptor with the sun's bits, the batch list, the accumulation hint and the LOD row. False for
@@ -224,34 +206,6 @@ namespace DCLF
 		};
 		Registrations registrations;
 
-		/** @brief NoteDerived's counters (render thread). */
-		struct Derived
-		{
-			std::uint64_t objects = 0;
-			std::uint64_t notDerived = 0;               // the derivation leaves it native
-			std::uint64_t ineligible = 0;               // this frame's verdict is not None
-			std::array<std::uint64_t, 40> byReason{};   // ... by Ineligible
-			std::uint64_t differ = 0;                   // derived pass descriptor != registered, outside bits 13 and 14
-			std::uint64_t sunOnly = 0;                  // ... only in bits 13 and 14
-			std::array<std::uint64_t, 32> bits{};       // per differing bit
-			std::uint64_t shadowLights = 0;             // the pass has shadowed point lights (bits 6-8, LLF's mask)
-			std::uint64_t lodRowDiffer = 0;             // the fade node's LOD row != the pass's LODMode (skinned LOD)
-			std::uint64_t fading = 0;                   // fading at registration
-			std::uint64_t alphaMask = 0;                // AdditionalAlphaMask (screen-door fade)
-			std::array<std::uint64_t, 32> hints{};      // accumulation hint
-			std::uint64_t sunAgree = 0;                 // SunShadowBits against the registered bits 13 and 14
-			std::uint64_t sunEngineOnly = 0;
-			std::uint64_t sunDclfOnly = 0;
-			std::uint64_t sunOther = 0;                 // the two bits disagree in another way (one of them)
-			std::uint64_t sunUnknown = 0;               // the cascades were not known
-			std::map<std::string, std::uint64_t> sunSamples;
-			std::uint64_t synthAgree = 0;               // SyntheticPass against the captured pass, every field
-			std::uint64_t synthUnmodeled = 0;
-			std::uint64_t synthTechnique = 0, synthSubPass = 0, synthHint = 0, synthLodRow = 0;
-			std::map<std::string, std::uint64_t> synthSamples;
-			std::map<std::string, std::uint64_t> samples;  // a few differing objects
-		};
-		Derived derived;
 		std::string playerChain;
 
 		/** @brief Per candidate entry, what the snapshot and a walk of its subtree say (once per generation). */

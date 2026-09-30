@@ -60,6 +60,12 @@ namespace DCLF::MaterialSources
 			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
 			return queue;
 		}
+		// The same events for the kept shadow build (ShadowKept), which runs before the main pass drains its own.
+		EventQueue<const RE::BSShaderMaterial*, 8192>& ShadowTransformQueue()
+		{
+			static EventQueue<const RE::BSShaderMaterial*, 8192> queue;
+			return queue;
+		}
 
 		// ---- Hooks.
 		// A controller's own type field (+0x50): which member of the property or material it writes.
@@ -114,8 +120,10 @@ namespace DCLF::MaterialSources
 					const auto scale0 = material->texCoordScale[0], scale1 = material->texCoordScale[1];
 					func(a_this, a_data);
 					if (property->material != material || offset0 != material->texCoordOffset[0] || offset1 != material->texCoordOffset[1] ||
-						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1])
+						scale0 != material->texCoordScale[0] || scale1 != material->texCoordScale[1]) {
 						TransformQueue().Push(material);
+						ShadowTransformQueue().Push(material);
+					}
 				} else if (type <= 0x13 && type != 0xb && property && property->material && ControllerDestinationTablesKnown()) {
 					auto* material = property->material;
 					const auto offset = std::size_t(FloatDestinations()[type]) * sizeof(float);
@@ -279,6 +287,11 @@ namespace DCLF::MaterialSources
 	void DrainTransformChanges(ankerl::unordered_dense::set<const RE::BSShaderMaterial*>& a_out)
 	{
 		TransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.insert(a_material); });
+	}
+
+	void DrainShadowTransformChanges(std::vector<const RE::BSShaderMaterial*>& a_out)
+	{
+		ShadowTransformQueue().Drain([&](const RE::BSShaderMaterial* a_material) { a_out.push_back(a_material); });
 	}
 
 	std::uint32_t Signature(std::uint32_t a_passDescriptor)

@@ -32,11 +32,7 @@ namespace DCLF
 		kObjectAlphaTest = 1u << 0,  // alpha test on, reference = threshold / 255 (as the native draw's AlphaTestRef)
 		kObjectTwoSided = 1u << 1,   // no culling (the native main pass culls back faces otherwise)
 		kObjectSuppressExternalEmittance = 1u << 2,  // ExtraShaderDescriptors::SuppressExternalEmittance in the permutation buffer
-		// The engine's main-camera accumulator holds this object this frame, so its own culling (frustum,
-		// occlusion planes, rooms and portals) kept it. The tables carry the whole tracked set so that the
-		// GPU culling has a real input to reject from; this bit is what tells the two apart, and it is the
-		// reference the culling is measured against (BuildDrawsCS: RequireNativeVisible).
-		kObjectNativeVisible = 1u << 3,
+		// Bit 3 is free.
 		// A skinned object (CS_DCLF_SKINNED): its vertices come from the skin partition's own buffer and its
 		// vertex shader reads the bone palette rows at BindlessObject::boneOffset / previousBoneOffset.
 		kObjectSkinned = 1u << 4,
@@ -99,8 +95,8 @@ namespace DCLF
 		// A landscape property (kLandscape, kNoLODLandFade): the main pass's light selection gives it only the local shadow
 		// lights that take landscape (BSShadowLight +0x61; LocalShadowLights).
 		kObjectLandscapeLights = 1u << 29,
-		// Bound by scene membership (SceneStore::BindByMembership): drawn whenever the GPU finds it (it carries
-		// kObjectNativeVisible for that), whatever the engine registered, so it is no reference for the engine's culling.
+		// Bound by scene membership (SceneStore::BindByMembership): drawn whenever the GPU finds it. Every record with bindings
+		// is a member; the rest are culling candidates (kObjectNoBindings).
 		kObjectMember = 1u << 30,
 	};
 

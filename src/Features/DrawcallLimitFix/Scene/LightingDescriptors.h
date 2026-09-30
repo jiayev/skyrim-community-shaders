@@ -174,29 +174,17 @@ namespace DCLF
 	std::uint32_t SelectLightingTechnique(std::uint64_t a_flags);
 
 	/**
-	 * @brief Where the main-camera accumulator holds a geometry's lighting pass this frame.
-	 * technique is the batch group's key, the pass descriptor SetupTechnique receives (it can differ from
-	 * the pass's own passEnum: the accumulator adds DoAlphaTest when it registers the pass).
+	 * @brief A member's main pass, built from the object alone (PrimaryCull::MembershipPass): what GetRenderPasses would
+	 * register for it. technique is the batch group's key, the pass descriptor SetupTechnique receives.
 	 */
 	struct AccumulatedPass
 	{
-		const RE::BSRenderPass* pass = nullptr;
 		std::uint32_t technique = 0;  // pass descriptor (key minus the Lighting base)
 		std::uint32_t subPass = 0;    // PassGroup list 0-4; the renderer draws 1, 3 and 4 with alpha testing
 		std::uint32_t passEnum = 0;   // the pass's own passEnum when the tables were built (diagnostics)
 		// The pass's accumulation hint (BSRenderPass+0x1C): which geometry group of the batch renderer it
-		// was drawn from, and for decals which of the two decal groups. Kept because the pass pointer is
-		// not dereferenced again once the tables are built.
+		// would be drawn from, and for decals which of the two decal groups.
 		std::uint32_t hint = 0;
-		// Where in its pass-group chain the pass sits, so that decals can be drawn in the engine's order
-		// (group, technique bucket, list, chain) rather than in whatever order the culling appends.
-		std::uint32_t chainIndex = 0;
-		// Whether the object's fade was the native loop's when the pass was registered
-		// (PassCapture::FadingAtRegistration: a hint-10 pass, a blended fade, or any fade with CS_DCLF_FADING
-		// off) - the same moment the native loop was or was not told to leave it to DCLF (PassCapture::Withhold).
-		// The accumulate phase's fading verdict reads this rather than the fade node later in the frame, so the
-		// two decisions cannot disagree.
-		bool fading = false;
 		// The pass's LODMode as a row of the engine's partition table (index + singleLevel * 4): which skin
 		// partitions the main camera draws (SceneStore::SkinPartitionMask).
 		std::uint32_t lodRow = 3;

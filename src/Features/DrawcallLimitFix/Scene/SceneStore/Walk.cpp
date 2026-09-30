@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
 
 namespace DCLF
 {
@@ -20,7 +21,7 @@ namespace DCLF
 	 * cull; what moves before BeforeShadowMaps is listed at DrawcallLimitFix::BeginSceneFrame.
 	 *
 	 * The records leave the accumulator's half unset: no pipeline, no material, kObjectNoBindings, and
-	 * kObjectNativeVisible clear. BuildAccumulatePhase patches them in place by object index, which is
+	 * no bindings (kObjectNoBindings). BuildAccumulatePhase patches them in place by object index, which is
 	 * fixed for the frame from here on.
 	 */
 	void SceneStore::BuildScenePhase()
@@ -57,8 +58,7 @@ namespace DCLF
 			InvalidateObjectIndices();
 			accumulatedPasses.clear();
 			stats.objects = 0;
-			stats.nativeVisible = stats.nativeShadowMasked = stats.derivedDescriptors = 0;
-			stats.geometries = 0;
+				stats.geometries = 0;
 			stats.pipelines = 0;
 			stats.materials = 0;
 			return;
@@ -229,7 +229,6 @@ namespace DCLF
 		if (FaceSnapshots::Enabled())
 			FaceSnapshots::Get().BeginWalk();
 		stats.ineligible.fill(0);
-		stats.ineligibleDrawn.fill(0);
 		stats.techniqueRejects.fill(0);
 		stats.propertyRejects.clear();
 		stats.rejectedBlended = stats.rejectedOpaque = stats.rejectedOpaqueAlphaTest = 0;
@@ -238,18 +237,11 @@ namespace DCLF
 		stats.derivationFadeBits = stats.lodFadeChecked = stats.lodMetricDiffers = stats.lodFadeDiffers = 0;
 		stats.lodFadeFirst.clear();
 		lodFadeSampled = false;
-		stats.shadowMaskChecked = stats.shadowMaskEngine = stats.shadowMaskDiffers = stats.shadowMaskOver = stats.shadowMaskUnder = 0;
-		stats.shadowMaskFirst.clear();
-		stats.syntheticChecked = stats.syntheticNotBuilt = stats.syntheticBitsDiffer = stats.syntheticBits = stats.syntheticSubPass = 0;
-		stats.syntheticHint = stats.syntheticLodRow = 0;
-		stats.syntheticFirst.clear();
-		localShadowsSampled = false;
 		stats.derivationRuntimeDiffers = stats.derivationRuntimeBits = 0;
 		stats.derivationBitCounts.fill(0);
 		stats.materialsEvaluated = 0;
 		stats.materialDiffMask = 0;
 		stats.materialsValidated = stats.materialCacheStale = 0;
-		stats.nativeVisible = stats.nativeShadowMasked = stats.derivedDescriptors = 0;
 		stats.classifyHits = stats.classifyChecked = stats.classifyDiffers = stats.castResolved = 0;
 		stats.derivedHits = stats.derivedChecked = stats.derivedDiffers = 0;
 		stats.accumulatedWithoutRecord = 0;
@@ -258,7 +250,6 @@ namespace DCLF
 		stats.projectedUV = stats.landBlend = 0;
 		stats.shadowCasters = 0;
 		stats.shadowRejects = {};
-		decalOrder.clear();
 
 		skinnedObjects.clear();
 
@@ -968,6 +959,11 @@ namespace DCLF
 			} else {
 				rootMotion.erase(a_tracked.listedRoot);
 				movingRoots.erase(a_tracked.listedRoot);
+				if (const auto reference = rootReference.find(a_tracked.listedRoot); reference != rootReference.end()) {
+					if (const auto back = referenceRoot.find(reference->second); back != referenceRoot.end() && back->second == a_tracked.listedRoot)
+						referenceRoot.erase(back);
+					rootReference.erase(reference);
+				}
 			}
 			a_tracked.listedRoot = nullptr;
 		}
@@ -1128,6 +1124,13 @@ namespace DCLF
 		if (now != cached && !announced && !stats.verdictsMissed++)
 			stats.firstVerdictMissed = fmt::format("'{}' {} now {}", a_tracked.geometry->name.c_str() ? a_tracked.geometry->name.c_str() : "?",
 				kIneligibleNames[static_cast<std::size_t>(cached)], kIneligibleNames[static_cast<std::size_t>(now)]);
+		// CS_DCLF_HIDDEN_WATCH: the chain's nearest four nodes, for the store that flips them next.
+		if (now != cached && !announced && HiddenWatch::Enabled()) {
+			std::array<const RE::NiAVObject*, 4> nodes{};
+			for (std::size_t i = 0; i < nodes.size() && i < a_tracked.hiddenChain.size(); ++i)
+				nodes[i] = static_cast<const RE::NiAVObject*>(a_tracked.hiddenChain[i]);
+			HiddenWatch::Arm(nodes);
+		}
 		return now == cached;
 	}
 

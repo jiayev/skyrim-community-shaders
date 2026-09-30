@@ -550,13 +550,6 @@ namespace DCLF
 		{
 			std::uint32_t tracked = 0;
 			std::uint32_t objects = 0;
-			// Of those objects, the ones the engine's main-camera accumulator also holds this frame. The
-			// remainder are candidates the engine culled, which the GPU culling is measured against.
-			std::uint32_t nativeVisible = 0;
-			// The sun's shadow mask (ShadowDir and DefShadow, pass descriptor bits 13 and 14): which objects'
-			// descriptors carry it. Only an accumulated pass has those bits; a derived descriptor never does.
-			std::uint32_t nativeShadowMasked = 0;   // accumulated, with both bits
-			std::uint32_t derivedDescriptors = 0;   // not accumulated: the property derivation, no shadow bits
 			std::uint32_t geometries = 0;
 			std::uint32_t pipelines = 0;
 			std::uint32_t materials = 0;
@@ -567,12 +560,6 @@ namespace DCLF
 			std::uint64_t detachMoves = 0;  // detached geometries attached again in the same batch (kept, not erased)
 			std::uint64_t validationDrops = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
-			// Of those, the ones the engine ITSELF drew in the main pass this frame - it registered a
-			// lighting pass for them and DCLF declined it. This is what a coverage class is worth.
-			//
-			// Tracked count is not: it counts objects the engine culled as well, and ranking by it is what
-			// made BSEffectShader look like the largest prize at 3057 when it draws ~13 a frame.
-			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligibleDrawn{};
 			// Decal candidates this frame, by group (Records.h ObjectDecalGroup - 1).
 			std::array<std::uint32_t, 2> decals{};
 			// CS_DCLF_FADING: objects given bindings with the screen-door fade (AdditionalAlphaMask), summed over
@@ -661,13 +648,6 @@ namespace DCLF
 			// The draw's LOD fades against the engine's, on the registered objects with a fade node (CS_DCLF_DERIVE_PROBE).
 			std::uint32_t lodFadeChecked = 0, lodMetricDiffers = 0, lodFadeDiffers = 0;
 			std::string lodFadeFirst;
-			// The local shadow lights' selection (LocalShadowLights) against the engine's LLF mask (CS_DCLF_DERIVE_PROBE).
-			std::uint32_t shadowMaskChecked = 0, shadowMaskEngine = 0, shadowMaskDiffers = 0, shadowMaskOver = 0, shadowMaskUnder = 0;
-			std::string shadowMaskFirst;
-			// A pass built from the object alone (PrimaryCull::FreshSyntheticPass) against the registered one (CS_DCLF_DERIVE_PROBE).
-			std::uint32_t syntheticChecked = 0, syntheticNotBuilt = 0, syntheticBitsDiffer = 0, syntheticBits = 0, syntheticSubPass = 0,
-						  syntheticHint = 0, syntheticLodRow = 0;
-			std::string syntheticFirst;
 			std::uint32_t derivationDiffers = 0;        // differ outside kRuntimePassBits
 			std::uint32_t derivationBits = 0;           // OR of those differing bits
 			std::uint32_t derivationRuntimeDiffers = 0;  // differ inside kRuntimePassBits
@@ -790,10 +770,10 @@ namespace DCLF
 		static bool ResidentParityEnabled();
 		struct ResidentStats
 		{
-			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, registered = 0, frames = 0, resident = 0;
+			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, frames = 0, resident = 0;
 			std::uint64_t membershipQueued = 0;  // records BindByMembership handed a pass
 			std::uint64_t membershipKept = 0;    // members written again whose binding stands
-			std::array<std::uint64_t, 4> failedBy{};  // the engine's pass, no record, a frame verdict, material or extras
+			std::array<std::uint64_t, 4> failedBy{};  // (unused), no record, a frame verdict, material or extras
 			std::uint64_t parityChecks = 0, parityChecked = 0, parityPass = 0, parityRecord = 0;
 			std::uint64_t parityPending = 0;  // residents whose fade root is fading: the feedback's next decode ends them
 			std::uint64_t registeredUnbound = 0;  // main-pass registrations of eligible objects DCLF has not bound (DrainCapture)
@@ -1309,25 +1289,14 @@ namespace DCLF
 		std::vector<OrderEntry> order;
 		// Lookup keys are valid only for this walk; the captured recordId is durable.
 		ankerl::unordered_dense::map<const RE::BSFaceGenNiNode*, std::shared_ptr<const FaceSnapshots::HeadView>> capturedFaceHeads;
-		// The accumulate phase's iteration: the objects it has anything to do, which off the =tracked
-		// culling input is the engine's accumulated passes rather than the whole tracked set. A member
-		// for its capacity, like `order`.
+		// The accumulate phase's iteration: the frame's membership joins. A member for its capacity, like `order`.
 		std::vector<OrderEntry> accumulateOrder;
-		// The decal objects of the frame with their engine draw-order key, sorted after the loop into
-		// Tables::decalOrdinal. A member for its capacity, like `order`.
-		struct DecalOrderEntry
-		{
-			std::uint64_t key;  // group, technique, list, chain index - in that significance
-			std::uint32_t object;
-		};
-		std::vector<DecalOrderEntry> decalOrder;
 		// Member decals (DecalOrder.cpp): object -> its chain, the decal key's group, technique and sub-pass. Joined with the
 		// membership patch, left with the membership (DropResidentSlot). Their draw order within a chain is the scene's
 		// (CS_DCLF_DECAL_ORDER, default stable) or the engine's scene lists' of the frame (=engine).
 		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> memberDecals;
 		bool memberDecalsChanged = true;
-		bool decalOrderRegistered = false;  // the last ordering had registered decals (decalOrder), which change every frame
-		/** @brief Tables::decalOrdinal and decalCount: the member decals and this frame's registered ones, in the engine's draw order. */
+		/** @brief Tables::decalOrdinal and decalCount: the member decals, in the engine's draw order. */
 		void OrderDecals();
 		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;
 		// Diagnostics: the frame each category node was found and the refresh's cause (GetCategoryInfo), and
@@ -1488,7 +1457,7 @@ namespace DCLF
 			ObjectShading shading{};
 			ObjectLights lights{};
 			ObjectTreeAnim tree{};
-			bool resident = false, projectedUV = false, landBlend = false, nativeVisible = false, nativeShadowMasked = false, derivedDescriptor = false;
+			bool projectedUV = false, landBlend = false;
 			std::uint64_t decalKey = 0;
 		};
 		void ApplyAccumulatePatch(const AccumulatePatch& a_patch);
@@ -1615,7 +1584,7 @@ namespace DCLF
 		std::shared_ptr<void> placementJob;  // AsyncWorker::JobHandle
 		struct PlacementStats
 		{
-			std::uint64_t items = 0, inlineItems = 0, late = 0, defects = 0, probes = 0, probeMoved = 0, witnessed = 0, missed = 0, roots = 0, rootsGated = 0,
+			std::uint64_t items = 0, inlineItems = 0, late = 0, defects = 0, probes = 0, probeMoved = 0, witnessed = 0, missed = 0, roots = 0, stillRoots = 0, rootsGated = 0,
 				rootSlotsChanged = 0;
 			std::string firstMoved, firstMissed;
 		} placementStats;
@@ -1634,6 +1603,9 @@ namespace DCLF
 		 * changed is a missed event (PlacementReport).
 		 */
 		ankerl::unordered_dense::map<const void*, std::uint32_t> movedFrame;
+		// The keys with a move event this frame and the last (movedKeys[0] this frame's): QueueRoots takes the bound of a root
+		// whose reference had one, whatever RootMoves says (the cells' update passes recompute a still root's bound).
+		std::array<std::vector<const void*>, 2> movedKeys;
 		bool moveGating = false;
 		bool moveWitness = false;
 		std::uint32_t moveUngatedThrough = 0;
@@ -1802,8 +1774,6 @@ namespace DCLF
 		// CS_DCLF_DERIVE_PROBE's LOD fade parity: the frame's inputs, sampled once a frame when first needed.
 		LodFadeFrame lodFadeSample;
 		bool lodFadeSampled = false;
-		LocalShadowLights localShadowsSample;
-		bool localShadowsSampled = false;
 		// Scene membership: the eligible records the scene phase wrote this frame, bound by the accumulate phase from a pass
 		// built from the object (PrimaryCull::MembershipPass) and kept as residents until written again or released.
 		std::vector<std::uint32_t> bindQueue;
@@ -1882,6 +1852,9 @@ namespace DCLF
 		std::vector<const RE::NiAVObject*> dirtyRoots;
 		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> propertyDependents;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> rootDependents;
+		// A listed reference root's reference, and back (the root is a key once its last dependent leaves: it may be gone).
+		ankerl::unordered_dense::map<const RE::NiAVObject*, const void*> rootReference;
+		ankerl::unordered_dense::map<const void*, const RE::NiAVObject*> referenceRoot;
 		std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> buckets{};
 		struct DeltaStats
 		{

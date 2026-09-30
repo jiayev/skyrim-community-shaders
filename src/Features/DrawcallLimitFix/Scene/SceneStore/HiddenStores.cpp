@@ -579,6 +579,24 @@ namespace DCLF::Scene
 		};
 	}
 
+	namespace
+	{
+		std::uintptr_t stubCode = 0;
+		std::vector<std::size_t> stubEntries;
+	}
+
+	std::uintptr_t HiddenStoreSiteOf(std::uintptr_t a_address)
+	{
+		if (!stubCode || a_address < stubCode || stubEntries.empty())
+			return 0;
+		const auto offset = a_address - stubCode;
+		const auto it = std::upper_bound(stubEntries.begin(), stubEntries.end(), offset);
+		if (it == stubEntries.begin())
+			return 0;
+		const auto index = static_cast<std::size_t>(it - stubEntries.begin()) - 1;
+		return index < HiddenStoreSites().size() ? 0x140000000 + HiddenStoreSites()[index].offset : 0;
+	}
+
 	bool InstallHiddenStores()
 	{
 		const auto& sites = HiddenStoreSites();
@@ -616,6 +634,8 @@ namespace DCLF::Scene
 		}
 		std::memcpy(code, stubs.getCode(), stubs.getSize());
 		::FlushInstructionCache(::GetCurrentProcess(), code, stubs.getSize());
+		stubCode = reinterpret_cast<std::uintptr_t>(code);
+		stubEntries = entries;
 		for (std::size_t i = 0; i < sites.size(); ++i) {
 			const std::uintptr_t at = base + sites[i].offset;
 			std::array<std::uint8_t, 12> patch{ 0xE8, 0, 0, 0, 0, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
