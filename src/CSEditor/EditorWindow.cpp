@@ -311,16 +311,7 @@ void EditorWindow::DrawActiveWeatherIndicator(bool drawTrailer)
 		return;
 
 	const auto id = weather->GetFormID();
-
-	// A real button (not a bare text link) so it reads as an action with a normal hit target.
-	ImGui::AlignTextToFramePadding();
-	Util::Text::Secondary("%s", T(TKEY("active"), "Active:"));
-	ImGui::SameLine();
-	ImGui::TextUnformatted(ResolveEditorId(weather, weatherWidgets).c_str());
-	ImGui::SameLine();
-	Util::Text::Secondary("(0x%08X)", id);
-	ImGui::SameLine();
-	if (Util::ButtonWithFlash(std::format("{}##active_weather_indicator", T(TKEY("open"), "Open")).c_str())) {
+	const auto openWeatherEditor = [&]() {
 		for (const auto& widget : weatherWidgets) {
 			if (widget->form && widget->form->GetFormID() == id) {
 				widget->SetOpen(true);
@@ -328,6 +319,27 @@ void EditorWindow::DrawActiveWeatherIndicator(bool drawTrailer)
 				break;
 			}
 		}
+	};
+
+	// A real button (not a bare text link) so it reads as an action with a normal hit target.
+	ImGui::AlignTextToFramePadding();
+	Util::Text::Secondary("%s", T(TKEY("active"), "Active:"));
+	ImGui::SameLine();
+	const std::string weatherName = ResolveEditorId(weather, weatherWidgets);
+	const ImVec2 weatherTextSize = ImGui::CalcTextSize(weatherName.c_str());
+	const ImVec2 weatherTextPos = ImGui::GetCursorScreenPos();
+	ImGui::SetCursorScreenPos(weatherTextPos);
+	ImGui::InvisibleButton("##active_weather_name", weatherTextSize);
+	if (ImGui::IsItemHovered())
+		ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+	if (ImGui::IsItemClicked())
+		openWeatherEditor();
+	ImGui::GetWindowDrawList()->AddText(weatherTextPos, ImGui::GetColorU32(ImGuiCol_TextLink), weatherName.c_str());
+	ImGui::SameLine();
+	Util::Text::Secondary("(0x%08X)", id);
+	ImGui::SameLine();
+	if (Util::ButtonWithFlash(std::format("{}##active_weather_indicator", T(TKEY("open"), "Open")).c_str())) {
+		openWeatherEditor();
 	}
 	Util::AddTooltip(T(TKEY("open_active_weather_tooltip"), "Open this weather's editor window."));
 	if (drawTrailer)

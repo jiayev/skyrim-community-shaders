@@ -461,7 +461,7 @@ protected:
 	bool m_titleBarSearchDrawn = false;
 
 	void ClearSearchState(bool clearBuffer);
-	void NavigateToSearchResult(const SearchResult& result);
+	virtual void NavigateToSearchResult(const SearchResult& result);
 };
 
 /** @brief Lightweight widget for caching form data without full editing functionality. */

@@ -902,24 +902,24 @@ void Widget::DrawSearchDropdown()
 		if (clickedOutside || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
 			dropdownVisible = false;
 		} else {
-			const size_t shown = std::min(WidgetUI::kSearchDropdownMaxResults, searchResults.size());
-			for (size_t i = 0; i < shown; ++i) {
-				const auto& result = searchResults[i];
-				std::string label = result.tabName.empty() ? result.displayName : std::format("{} ({})", result.displayName, result.tabName);
+			const size_t visibleRows = std::min(WidgetUI::kSearchDropdownMaxResults, searchResults.size());
+			const float childHeight = ImGui::GetFrameHeightWithSpacing() * static_cast<float>(visibleRows);
+			if (ImGui::BeginChild("##SearchDropdownResults", ImVec2(0.0f, childHeight), ImGuiChildFlags_Borders)) {
+				ImGuiListClipper clipper;
+				clipper.Begin(static_cast<int>(searchResults.size()), ImGui::GetTextLineHeightWithSpacing());
+				while (clipper.Step()) {
+					for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
+						const auto& result = searchResults[static_cast<size_t>(i)];
+						std::string label = result.tabName.empty() ? result.displayName : std::format("{} ({})", result.displayName, result.tabName);
 
-				ImGui::PushID(static_cast<int>(i));
-				if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups)) {
-					NavigateToSearchResult(result);
-					navigatedFromSearch = true;
+						ImGui::PushID(i);
+						if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_NoAutoClosePopups)) {
+							NavigateToSearchResult(result);
+							navigatedFromSearch = true;
+						}
+						ImGui::PopID();
+					}
 				}
-				ImGui::PopID();
-			}
-
-			if (searchResults.size() > WidgetUI::kSearchDropdownMaxResults) {
-				ImGui::Separator();
-				auto count = searchResults.size() - WidgetUI::kSearchDropdownMaxResults;
-				auto formatted = std::vformat(T(TKEY("more_results"), "... {} more results"), std::make_format_args(count));
-				ImGui::TextDisabled("%s", formatted.c_str());
 			}
 		}
 	}

@@ -1683,7 +1683,33 @@ std::vector<Widget::SearchResult> WeatherWidget::CollectSearchableSettings() con
 	results.push_back({ T(TKEY("record_precipitation"), "Precipitation"), WeatherTab::kRecords, WeatherRecord::kPrecipitation });
 	results.push_back({ T(TKEY("record_visual_effect"), "Visual Effect"), WeatherTab::kRecords, WeatherRecord::kVisualEffect });
 
+	if (auto* sceneManager = SceneSettingsManager::GetSingleton()) {
+		const SceneSettingsManager::SceneContextId context{
+			.type = SceneSettingsManager::SceneContextType::Weather,
+			.weatherId = weather->GetFormID(),
+		};
+		for (const auto& entry : sceneManager->GetContextEntries(context)) {
+			std::string displayName = std::format("{}: {}", SceneSettingsManager::GetFeatureDisplayName(entry.featureShortName), entry.displayName);
+			if (entry.period != SceneSettingsManager::TimeOfDayPeriod::Count)
+				displayName = std::format("{} ({})", displayName, SceneSettingsManager::kPeriodNames[static_cast<int>(entry.period)]);
+			results.push_back({ std::move(displayName), WeatherTab::kSceneManager, entry.featureShortName });
+		}
+	}
+
 	return results;
+}
+
+void WeatherWidget::NavigateToSearchResult(const SearchResult& result)
+{
+	if (result.tabName == WeatherTab::kSceneManager) {
+		SceneSettingsUI::OpenSceneContext({
+			.type = SceneSettingsManager::SceneContextType::Weather,
+			.weatherId = weather->GetFormID(),
+		}, result.settingId);
+		return;
+	}
+
+	Widget::NavigateToSearchResult(result);
 }
 
 ID3D11ShaderResourceView* WeatherWidget::GetCloudTexture(int layerIndex)

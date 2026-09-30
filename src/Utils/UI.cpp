@@ -1310,7 +1310,7 @@ namespace Util
 			const float iconSize = ImGui::GetFontSize();
 			const float iconY = rowStart.y + (rowHeight - iconSize) * 0.5f;
 			drawLeading(ImVec2(rowStart.x, iconY), iconSize);
-			titleX += iconSize + style.ItemInnerSpacing.x;
+			titleX += iconSize + style.ItemInnerSpacing.x + 2.0f;
 		}
 
 		// Title: centre capital-letter ink in the row (see GetEditorChromeTextCursorOffsetY).
