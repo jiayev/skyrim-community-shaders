@@ -1245,7 +1245,7 @@ void EditorWindow::ShowViewportWindow()
 void EditorWindow::ShowWidgetWindow()
 {
 	// Global shortcut for closing focused widget (Ctrl+W)
-	if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+	if (ImGui::GetIO().KeyCtrl && !ImGui::GetIO().WantTextInput && ImGui::IsKeyPressed(ImGuiKey_W, false)) {
 		if (lastFocusedWidget && lastFocusedWidget->IsOpen()) {
 			lastFocusedWidget->SetOpen(false);
 			lastFocusedWidget = nullptr;
@@ -1280,21 +1280,22 @@ void EditorWindow::RenderUI()
 			ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, ThemeManager::Constants::EDITOR_VIEWPORT_BACKGROUND_DIM_ALPHA)));
 	}
 
-	// Check for Ctrl+Z to undo
-	if ((ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-		if (CanUndo()) {
-			PerformUndo();
+	// Global shortcuts yield to a focused text field so typing isn't hijacked.
+	if (!io.WantTextInput) {
+		// Check for Ctrl+Z to undo
+		if ((ImGui::IsKeyDown(ImGuiKey_LeftCtrl) || ImGui::IsKeyDown(ImGuiKey_RightCtrl)) && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+			if (CanUndo()) {
+				PerformUndo();
+			}
 		}
-	}
 
-	const bool ctrlDown = ImGui::GetIO().KeyCtrl;
-	const bool shiftDown = ImGui::GetIO().KeyShift;
-	if (ctrlDown && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-		if (shiftDown) {
-			if (ScenePresetExport::CanExport())
-				ScenePresetExport::Open();
-		} else {
-			SaveAll();
+		if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
+			if (io.KeyShift) {
+				if (ScenePresetExport::CanExport())
+					ScenePresetExport::Open();
+			} else {
+				SaveAll();
+			}
 		}
 	}
 
@@ -2016,9 +2017,6 @@ void EditorWindow::SaveAll()
 		sceneManager->SaveAllUserSettings();
 
 	Save();
-
-	if (globals::state)
-		globals::state->Save(State::ConfigMode::USER);
 }
 
 void EditorWindow::SaveSettings()
