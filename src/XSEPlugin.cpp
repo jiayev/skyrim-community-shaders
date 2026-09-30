@@ -11,7 +11,6 @@
 #include "ShaderCache.h"
 #include "State.h"
 
-
 #define DLLEXPORT __declspec(dllexport)
 
 std::list<std::string> errors;
@@ -78,6 +77,13 @@ extern "C" DLLEXPORT bool SKSEAPI SKSEPlugin_Query(const SKSE::QueryInterface*, 
 void MessageHandler(SKSE::MessagingInterface::Message* message)
 {
 	switch (message->type) {
+	case SKSE::MessagingInterface::kPreLoadGame:
+	case SKSE::MessagingInterface::kNewGame:
+		{
+			if (errors.empty())
+				Feature::ForEachLoadedFeature("GameReset", [](Feature* feature) { feature->GameReset(); });
+			break;
+		}
 	case SKSE::MessagingInterface::kPostPostLoad:
 		{
 			if (errors.empty()) {
@@ -191,7 +197,7 @@ bool Load()
 		L"Data/SKSE/Plugins/NVIDIA_Reflex.dll",
 		L"Data/SKSE/Plugins/MARA.dll",
 		L"Data/SKSE/Plugins/NativeWaterLightStabilizer.dll",
-	    L"Data/SKSE/Plugins/DynamicWetness.dll"
+		L"Data/SKSE/Plugins/DynamicWetness.dll"
 	};
 
 	for (const auto dll : incompatibleDLLs) {

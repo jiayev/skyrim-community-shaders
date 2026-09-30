@@ -1,277 +1,101 @@
-# Advanced Skin asset materials (v1)
+# Advanced Skin material system
 
-This implementation replaces the old Skin profile/rule engine. Path selectors,
-glob matching, geometry-signature origin inference, material inheritance trees,
-and `_rfaos` / `_wet` discovery are no longer runtime inputs. Existing global
-wetness settings remain. This intentionally changes the appearance of assets
-that depended on legacy rules.
+For creation steps, see the [artist guide](advanced-skin-artist-guide.md). This document describes the material contract and implementation boundaries.
 
-## Supported scope
+## Asset and assignment model
 
-| Source / workflow                                                 | Current implementation                                                                                              |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `CSSkinMaterial` on the rendered geometry                         | Complete material plus stable surface UUID                                                                          |
-| Direct native `BGSTextureSet` on non-head FaceGenRGBTint material | Exact record assignment; no texture-path comparison                                                                 |
-| Head TXST selection                                               | Capture the engine-selected record on the specific property during head-part preparation (SE/AE)                    |
-| Converted alternate textures                                      | Capture native TXST → runtime texture-set conversion; accept only the set actually retained by the material (SE/AE) |
-| Race and NPC adjustments                                          | Exact current race / actor-base FormKey, parameters only                                                            |
-| Local edits                                                       | Surface, NPC base, or NPC base × surface; unsaved preview is separate                                               |
-| NIF publisher                                                     | SSE 20.2.0.7, user 12, stream 100; BSTriShape, BSDynamicTriShape and BSSubIndexTriShape with skin shaders           |
-| ESP publisher                                                     | Explicit ARMA NAM0/NAM1 assignment through xEdit; copies complete native TXST and ARMA records                      |
+A material belongs to the mesh's `BSLightingShaderProperty`. Its typed extra data stores parameters; its ordinary `BSShaderTextureSet` stores texture paths. Preserve the native FaceGen (4) or FaceGenRGBTint (5) shader, flags, UV transform, skinning and face generation behavior. Environment mapping, multilayer parallax, decals and menu materials are incompatible.
 
-An unknown TXST source does not disable NIF materials or race/NPC parameter
-adjustments. It does prevent record-based material selection and record-based
-user surface identity. The editor reports this boundary. Neither head-part names
-nor an actor's list of referenced TXST records are substitutes for a source receipt.
+`NiIntegerExtraData` named `CS_SkinVersion`, Integer Data `1`, enables the extension and identifies its storage format. This is a compatibility discriminator, not a feature tier. An absent marker uses native shading. Invalid, duplicate or unsupported fields produce diagnostics and disable the extension. Runtime finite floats are clamped; the authoring tool refuses invalid source data so it cannot silently rewrite it.
 
-Head preparation receipts survive ordinary property clones when the copied
-feature, texture set and normal texture agree. They are replaced on the next
-head preparation or successful property texture-set application. Material,
-texture-set or normal-texture replacement invalidates a head receipt. Generated
-face diffuse textures do not identify TXST and are not used for that check.
-Conversion receipts retain their texture set; changing its paths invalidates the
-receipt. A path snapshot only detects mutation; it cannot discover a source.
-Both receipt caches are bounded at 4096 entries and retain referenced objects to
-prevent address reuse. Cache-only references are pruned during periodic prepass
-maintenance. Eviction falls back to the remaining known sources.
+Parameters are optional and default as follows. Attach these blocks to the **shader property**, not the geometry or root.
 
-The extra source hooks are disabled on VR. FaceGen/appearance pipelines that
-bypass the verified engine entries remain unconfirmed; this is not a claim of
-full third-party or pre-generated FaceGen coverage.
+| Extra-data name          | Type               | Default | Range   |
+| ------------------------ | ------------------ | ------: | ------- |
+| CS_SkinRoughness         | NiFloatExtraData   |     0.6 | 0–1     |
+| CS_SkinReflectance       | NiFloatExtraData   |   0.028 | 0–0.08  |
+| CS_SkinFuzz              | NiFloatExtraData   |    0.25 | 0–1     |
+| CS_SkinDetailEnabled     | NiIntegerExtraData |       1 | 0 or 1  |
+| CS_SkinDetailStrength    | NiFloatExtraData   |    0.25 | 0–1     |
+| CS_SkinDetailTiling      | NiFloatExtraData   |      10 | 0.1–100 |
+| CS_SkinSSSAmount         | NiFloatExtraData   |       1 | 0–1     |
+| CS_SkinTransmission      | NiFloatExtraData   |     0.1 | 0–1     |
+| CS_SkinTransmissionDepth | NiFloatExtraData   |     0.2 | 0.001–1 |
+| CS_SkinWetResponse       | NiFloatExtraData   |       1 | 0–1     |
 
-## Creator workflow
+## Texture contract
 
-Run from the repository using Python 3.10+ with Tk:
+Slot numbers below are zero-based **NIF array indices**, not ESP TX field numbers. All extension channels are sampled as linear data, including files tagged sRGB. Paths must be relative `textures/...dds` resources; optional `Data/` is normalized away. There is no suffix search, path-based material assignment, JSON registry or race-name special case.
 
-```powershell
-python tools/skin_materials.py gui
-```
+| NIF slot      | Purpose                                     | Channels                                                                  | Native TXST field    |
+| ------------- | ------------------------------------------- | ------------------------------------------------------------------------- | -------------------- |
+| 0, 1, 3, 6, 7 | Native diffuse, normal and face inputs      | Native meanings preserved                                                 | Native mapping       |
+| 2             | Native skin texture; transmission thickness | `thickness = 1 - saturate(R)`; white is thin                              | TX03                 |
+| 4             | Optional wet surface                        | RGB tangent normal, A wet response mask                                   | TX05                 |
+| 5             | Optional Skin controls / RFAOS              | R roughness multiplier, G fuzz multiplier, B AO, A reflectance multiplier | TX02                 |
+| 8             | Optional detail                             | RGB tangent normal, A main-UV region strength                             | No native TXST field |
 
-Open a NIF, explicitly select a skin geometry block, edit its parameters and two
-optional texture resources, then **Publish NIF copy**. Output must be a new file;
-the source and existing output files are protected. The publisher re-reads the
-output and verifies the material. Existing blocks retain their indices; unedited
-block bodies and the root footer are preserved verbatim.
+Controls multiply the corresponding material scalars. The resulting perceptual roughness is clamped to 0.02–1, F0 to 0–0.08. Missing controls use white multipliers; missing wet input uses a flat normal and white mask. AO affects indirect lighting. Old detail AO has no runtime meaning.
 
-Re-exporting an authored surface preserves its UUID. For weight variants such
-as `_0` / `_1`, explicitly reuse the same UUID in both selected surfaces. For an
-independent asset, select **Independent asset** to generate a new one. There is
-no automatic pairing by filename or shape name. Repeated publication appends a
-new extra-data block; old unreferenced blocks are left intact to avoid renumbering
-references in opaque blocks.
+Extension resources use an independent 2D DDS loader. In particular, native slot 4 is routed as a cubemap by the engine; the Skin shader must not use that native resource. Standard RGBA8, BC1/2/3/7 DDS formats are supported, with BC7 or uncompressed RGBA8 preferred for masks. BC5 UNORM is supported only for detail: reconstruct positive Z and use mask 1. Signed BC5, arrays, volumes, cubemaps and unsupported formats are rejected. A broken explicit detail texture disables that detail input rather than substituting the global one.
 
-Material drafts can be saved, reopened and copied into other explicitly selected
-surfaces. They are authoring inputs, not runtime presets. The game editor exports
-drafts to `Data/Shaders/Skin/Authoring/<name>.skinmaterial.json`.
-Include any newly authored DDS resources in the mod at the exact Data-relative
-paths assigned by the material; the NIF publisher does not copy texture files.
+Detail RGB samples transformed main UV multiplied by detail tiling, with a wrap sampler. Alpha samples transformed main UV separately, with native addressing and its own derivatives/mip selection. Thus mask regions do not move when tiling changes. Zero strength, black mask or disabled detail leaves the base normal unchanged. Tangent-space detail is composed using RNM; model-space base normals use a surface basis derived from world position and main UV.
 
-For a record assignment, place `tools/Advanced Skin - Publish ARMA Material.pas`
-in xEdit's Edit Scripts directory and apply it to exactly one ARMA record. Choose
-male or female, a material draft, and a new plugin name/staging location. The
-script takes the winning original TXST, clones its complete native contents,
-creates an ARMA override and changes only the selected NAM0/NAM1 reference. It
-verifies the new reference before exporting a new directory containing:
+An empty detail slot inherits the global texture, strength and tiling, including the global body tiling multiplier outside the head. A custom detail slot uses its material strength and tiling without global multiplication. The global detail switch and material enable-detail switch both gate detail. The shipped global normal is BC5 UNORM with no AO channel.
 
-```text
-MySkin.esp
-Shaders/Skin/Materials/MySkin.esp.skin.json
-```
+Post-process SSS continues to receive the existing scalar `baseColor.a * SSSAmount` through the existing render target. It retains the existing SSS feature and profile. The native skin texture drives only the direct-light transmission term, controlled independently by transmission strength and depth. No render-target channel is added.
 
-The script does not create empty native texture slots as an inheritance device.
-Its scope is the selected ARMA field, which may be shared by several actors or
-armors. It does not create an NPC-specific armor distribution. Review that scope
-in xEdit before installing the staging directory as a mod. An `.incomplete`
-directory after an error is not a finished package. The xEdit script has been
-statically reviewed against xEdit's scripting adapters; it has not been executed
-in xEdit in this change.
+## Native assignment and source tracking
 
-The **Plugin package** window can add exact TXST materials or sparse race/NPC
-adjustments to a new or existing package. Only checked adjustment fields are
-written. It validates the document, not the existence of records in a game load
-order. Record types, loaded plugins and ESL local-ID ranges are checked again by
-the runtime. A package's owner must be an installed plugin; generating a JSON
-package alone does not create that plugin. Re-export packages after compacting
-FormIDs.
+Nonempty extension inputs from the **actually applied** TXST replace NIF slots 4 and 5. Empty TXST extension inputs inherit the original NIF baseline, never the previous TXST. Native texture slots keep native replacement behavior. Slot 8 and typed parameters remain in the NIF. Unmarked assets do not reinterpret extension slots; a character instance can explicitly enable a material using neutral defaults.
 
-## Game editor
+Source tracking observes property PostLink, property clones, native TXST conversion and head-part preparation. Conversion receipts refer to the actual generated texture-set object retained by the material. Path snapshots only invalidate receipts after mutation; matching paths never discover a source. Head receipts carry the actual head part, NPC and selected TXST. An unknown replacement of the normal or texture set invalidates a head receipt. Tint generation does not define material identity.
 
-Open **CS Editor → Skin Editor**, or **Advanced Skin → Surface Material Editor**.
-Both use the same selection, draft and preview state.
+SE 1.5.97 and AE 1.6.1170 native entries were inspected in Ghidra for conversion, head preparation, PostLink and texture loading. Address-library pairs used for the three detours are 20905/21361, 26259/26838 and 26260/26839. Property hooks use the existing CommonLib virtual interfaces. VR does not install these three detours or expose persistent character targets; third-party pipelines that bypass the observed engine entries remain preview-only where provenance is unavailable.
 
-Select the player, console reference or crosshair target, then select an actual
-skin geometry. The display shows the base material source, identity, applied
-adjustments and missing texture channels. Choose one scope:
+## Character customization and persistence
 
--   This material surface: NIF UUID, or a confirmed TXST if there is no valid UUID.
--   This NPC: all actors using that base; parameters only.
--   This NPC's surface: the conjunction of those two identities.
+Players and NPCs use the same per-actor instances. Logical parts are Face, Body, Hands and Feet, with explicitly identified first-person and third-person surfaces. Face identity comes from observed head-part preparation. Body identity comes from actual biped clone ancestry and ARMO/ARMA assignment. A material type or node name alone does not establish a part.
 
-Parameter checkboxes store explicit edits, including values equal to defaults.
-Complete material editing starts from the base before race/NPC/user parameter
-adjustments. Preview starts enabled and can be toggled for comparison. It
-substitutes the draft for the selected scope's saved entry at that scope's normal
-priority; more specific edits can still win. Unchecking an existing override
-therefore previews inheritance correctly, and saving has the same result.
-Cancel restores the saved entry. Saving changes only the local user file;
-it does not write an author's NIF or plugin package. A target without the required
-stable identity is preview-only until authored with the offline tool.
+Each part can retain separate sparse overrides for selected surfaces. Guards contain plugin-local race/head-part/ARMO/ARMA identities, sex, source material location, view, full bounded UV/topology/normal-space layout data, native UV transform, and base DDS paths/content fingerprints. Positions and generated tint are excluded. Changed appearances pause affected surfaces; matching context resumes them. Explicit rebind replaces the selected material slot's guard and retains unrelated surfaces.
 
-**Restore Parameter Values** stages removal of the selected scope's parameter
-patch. **Use Author Material** stages removal of its complete replacement; other
-applicable user scopes and race/NPC adjustments still apply. Both can be previewed
-and cancelled before saving. Save or cancel a dirty draft before changing the
-selected surface/scope. Identity changes disable that draft's preview and saving
-until it is reloaded.
+Committed settings use Data/SKSE/Plugins/CommunityShaders/AdvancedSkin/State.json. The editor can open another configuration or save a copy to an explicit writable location; Location.json remembers that choice. **Save and apply** writes immediately, stages and reads back output, checks disk conflicts, and retains recovery backups before publishing the runtime snapshot. Failure retains the previous committed state and draft. **Undo last saved character edit** is another persisted operation.
 
-**Import Material Draft** reads the named file in `Data/Shaders/Skin/Authoring`
-into complete-material mode. **Export Material Draft** writes the edited base
-with this scope's explicitly checked parameter changes; it does not bake the
-resolved race/NPC adjustments into the material. NPC-only edits can export a
-draft but cannot import a complete replacement into their runtime scope.
+The Player key is shared by playthroughs using this configuration. Loading an older save or starting a new game does not restore historical Skin settings. Choose a scheme explicitly to switch settings. NPC keys identify placed actor references by originating plugin and local ID, never all instances of an NPC base. Dynamically generated references receive session-only settings; read/load/menu lifecycle changes clear those instances. Lifecycle changes invalidate runtime handles and previews while preserving external persistent state.
 
-## Runtime contract
+No Skin SKSE serialization callbacks are registered. Old Skin co-save records are not automatically imported and other plugins' co-saves are untouched. Configuration limits are 64 MiB, 1024 actors, four parts, 32 surface records per part, 1024-byte resource/reference strings and 4 MiB of encoded layout per surface. Invalid or unsupported files are rejected, not replaced with empty data. **Restore latest valid backup** explicitly restores a validated publication backup.
 
-Only a `NiStringExtraData` named `CSSkinMaterial` on the actual `BSGeometry` is
-read. Parent nodes and shader properties are not searched. Its UTF-8 string is:
+**Copy Skin settings from player** captures committed effective settings, including inherited NIF/TXST inputs, while preserving global-detail fallback. It never copies preview edits, wetness, native color/normal/thickness textures, race or morphs. Receivers get independent values and their own adaptation guards. **Use as copy source** and **Apply copied scheme** support other source actors; named multi-part schemes use the same transfer pipeline.
 
-```json
-{
-    "schemaVersion": 1,
-    "surfaceId": "84b6db16-90be-4d38-b0c7-dcc68430cc3c",
-    "material": {
-        "name": "Example",
-        "parameters": {
-            "SkinMainRoughness": 0.7,
-            "SkinSecondRoughness": 0.35,
-            "SkinSpecularTexMultiplier": 1.0,
-            "SecondarySpecularStrength": 0.15,
-            "F0": 0.0278,
-            "BaseColorMultiplier": 1.0,
-            "PhysicalMainRoughnessMultiplier": 1.3,
-            "PhysicalSecondRoughnessMultiplier": 0.75,
-            "PhysicalSpecularStrength": 1.0,
-            "ExtraEdgeRoughness": 0.25,
-            "EnableSkinDetail": true,
-            "SkinDetailStrength": 0.25,
-            "SkinDetailTiling": 10.0,
-            "BodyTilingMultiplier": 2.0,
-            "Translucency": 0.1,
-            "sssWidth": 0.2,
-            "UseSSS": true,
-            "FuzzStrength": 1.0,
-            "FuzzRoughness": 0.35,
-            "FuzzF0": 0.045
-        },
-        "textures": { "rfaos": null, "wetness": null }
-    }
-}
-```
+Automatic transfer requires matching part/view, unambiguous source values, layout and UV transform. Source and receiver need not share race, head-part, ARMA or native texture paths. Unsupported or missing parts open a review rather than silently applying a subset. Manual mappings require receiver preview and explicit texture-mapping confirmation. Selected surface updates commit together; unrelated parts remain unchanged. Schemes list DDS inputs in the transfer review, and DDS files remain dependencies when sharing.
 
-The canonical field names, frozen defaults and ranges are in
-`src/Features/Skin/SkinParameters.def`,
-shared by C++ validation, the game editor and the Python publisher.
+In-place DDS edits require **Reload skin resources**, which refreshes content fingerprints. No filesystem watcher is installed. Configurations apply to every game session using the selected directory; mod-manager profile isolation is not assumed.
 
-Complete material selection is:
+## Editor and publication
 
-```text
-default → valid NIF → confirmed TXST package → user surface → user NPC × surface
-```
+The CS Editor's **Skin Editor** works on source files, with a separate temporary preview on explicitly selected loaded geometry. Parameters use localized controls and DDS file pickers. Undo/redo covers draft parameter and texture edits. Switching away from an unsaved document or character draft asks whether to keep editing or discard it. Closing the editor cancels preview.
 
-Then apply parameters:
+Source provenance includes the NIF path, property block and file fingerprint. **Edit source NIF** requires the loaded snapshot to match. Otherwise the user opens a source explicitly. Live FaceGen, morph, pose or skinning buffers are never serialized as asset geometry.
 
-```text
-race → NPC → user surface → user NPC → user NPC × surface
-```
+The narrow writer supports SSE 20.2.0.7, user version 12, stream 100, little endian, without block groups. It preserves existing block indices, strings, unknown blocks, native shader tails, geometry, weights, partitions and controllers. It appends typed extras and texture sets, replacing only selected property data. **Make independent** clones a shared property and changes one supported shape's property link. Unsupported or invalid materials remain read-only. Unreferenced superseded blocks are deliberately preserved rather than rewriting unknown references.
 
-Each plugin has one package named exactly `<ownerPlugin>.skin.json`. Packages are
-ordered by the engine's `TESDataHandler::files` traversal, with its active file
-last, not by filenames or FormID indices. Full and light plugins retain their
-actual interleaving. For each target, a later owner's whole entry replaces an
-earlier owner's entry. Duplicate targets within one package are excluded from
-that package; array order cannot break ties. Invalid entries are diagnosed and
-excluded, allowing a valid lower source to apply. A syntactically invalid file
-retains its previous snapshot; deleting a file removes it. Manual reload also
-re-reads NIF metadata and retries texture loads.
+Saving compares the source bytes, reparses output, verifies changed material values and unchanged blocks, stages and reads back all files, then publishes with recovery backups. Multi-file output stages everything before replacing anything and attempts rollback on failure; it is not a filesystem transaction. Recovery failures are reported with paths. A pre-existing `.cs-skin.tmp` is never silently overwritten.
 
-Record keys contain the original owning plugin and local hex ID. No EditorID or
-runtime load-order prefix is stored. User edits are kept in:
+**Save NIF with Skin textures** chooses a NIF beneath the destination mod's `meshes` directory and lists the NIF and all explicit extension DDS dependencies before writing. `textures` is placed alongside `meshes`. Native diffuse, normal and skin textures remain dependencies of the original mod. Batch output uses individually selected NIFs, property blocks and destinations. It does not enumerate assets using name patterns.
 
-```text
-Data/Shaders/Skin/User/SkinMaterials.user.json
-```
+Material presets are ordinary material-only NIFs. The shipped `meshes/CS/Skin/SkinMaterial.nif` is a template, not a renderable actor mesh. Preset import lets the author select parameters and textures. Built-in texture tools combine grayscale controls or detail RGB plus an independently authored UV mask and generate linear DDS mipmaps. No artist Python installation or JSON copy/paste is required. An explicit, approximate importer can recover complete materials from old JSON exports; it does not import assignment rules, detail AO or old wet encoding.
 
-The user document is `{schemaVersion: 1, edits: [...]}`. Each edit has `target`,
-`parameters`, and an optional complete `material`. A target contains `surfaceId`
-or `txst`, optionally combined with `npc`; NPC-only targets cannot replace a
-material. FormKey objects contain `plugin` and `localFormId`. Unknown fields,
-duplicate JSON keys, unknown versions, non-finite/out-of-range parameters and
-invalid target forms are rejected.
+## Code organization and localization
 
-Texture paths are explicit `textures/...dds` resources relative to Data, with
-slashes/case normalized. Null disables a channel; complete materials have no
-inherit state. A valid material with a missing texture retains its parameters
-and disables only that channel. The loader probes the engine resource stream,
-checks DDS metadata, rejects non-2D/array/cube resources and known fallback SRVs,
-then binds the loaded resource without modifying the native texture set.
+-   `Material/`: typed contract, defaults, validation and sparse overrides.
+-   `Runtime/`: native source receipts, Actor target description, textures, rendering and wetness.
+-   `Persistence/`: bounded external configurations, portable schemes and runtime lifecycle.
+-   `Editor/`: NIF preservation, publication, texture tools, legacy import and UI.
 
-Limits: 64 KiB per NIF payload, 4 MiB per JSON file, 4096 entries per array, 4096
-package files, 64 MiB aggregate input JSON, 16 JSON nesting levels and 256 MiB per
-DDS resource. Runtime geometry caches hold strong references, are capped at 4096
-geometries and expire after 600 unobserved frames. Texture-pair caches are capped
-at 1024. File scans occur in prepass, not per draw; material parsing and resource
-loads occur only on cold/invalidation paths. The shared b7 buffer is updated for
-every skin draw. The wetness calculation and t71/t72/t74 bindings are preserved.
+Skin UI and errors use the existing `feature.skin.*` translation namespace, inline English defaults, generated `en.json` and `zh_CN.json`. Wire names and file field names remain stable technical identifiers. Other languages use the project's normal English fallback. CS global settings retain their existing settings persistence; JSON is not an asset material authoring format.
 
-## Migration
+## Validation boundary
 
-**Import legacy parameters** extracts candidate payloads for review. It does not
-execute or convert old selectors, parent chains or texture discovery. Each field
-must be explicitly checked before import. Full race profiles are labelled as all
-20 fields; equality with a default is not used to infer author intent. Extra
-texture resources must be assigned explicitly in the new material.
+This change has only static review and asset-data checks. No project build, shader compilation or in-game acceptance run was performed. Before release, verify SE/AE loading and cloning, actual TXST replacement, custom detail versus global inheritance, mask UV/tiling at multiple mip levels, zero-mask base-normal preservation, wetness, native SSS versus transmission, shared-property save/reopen, source conflicts and failed publication recovery. Exercise RaceMenu race/sex/head/body changes, ordinary morphs, first-person hands, matching-context resume, explicit rebind, immediate external save, failed publication, copy/undo, scheme import, older saves, new games and dynamic NPC session boundaries. VR and pipelines without verified provenance must remain visibly limited.
 
-## Verification and remaining acceptance work
-
-Performed without a plugin build or shader compilation:
-
--   Static C++/header/API review and formatting.
--   13 Python data tests for typed/sparse parameters, complete materials, path
-    rejection, duplicate keys/targets, legacy import, NIF opaque-block preservation,
-    UUID reuse/regeneration, malformed streams and staging overwrite protection.
--   Byte-identical no-op round trip of the repository's existing WaterMesh.nif.
--   Translation extraction/orphan/order checks and `git diff --check`.
-
-No in-game, xEdit, NifSkope or creator-GUI execution has been performed. Before
-release, verify SE/AE rendering, real body/head NIF publication, BSA and loose DDS
-loading, texture failure behavior, shared TXST scope, clone/re-equip/race changes,
-preview cancellation and sequential draws with distinct profiles. Source hooks
-have been statically checked in Ghidra for SE 1.5.97 and AE 1.6.1170; runtime
-acceptance remains necessary before claiming those paths are game-tested.
-
-| Entry                            | Address Library SE / AE | Verified addresses SE / AE |
-| -------------------------------- | ----------------------- | -------------------------- |
-| Native TXST conversion           | 20905 / 21361           | `1402d19a0` / `1403270c0`  |
-| Property texture-set application | 99865 / 106510          | `1412c5ab0` / `1414ad7d0`  |
-| Prepare head part                | 26259 / 26838           | `1403d2a60` / `14042bd90`  |
-| Apply selected head normal       | 26260 / 26839           | `1403d2fc0` / `14042c410`  |
-
-The normal update passes the selected `BGSTextureSet` and actual property together.
-A thread-local head-preparation context carries that pair to the property's
-final `PrecacheTextures` call (vtable slot `0x3A`), after tint/detail updates. A
-preparation without a selected record clears any prior head assignment. Ordinary
-cloning uses the lighting property's `CreateClone` slot `0x17`; texture path
-mutation uses `BSShaderTextureSet::SetTexturePath` slot `0x27`. The property
-texture-set function forwards to the material's `OnLoadTextureSet`; the adapter
-checks the resulting material set rather than assuming the requested set won.
-
-The ordering adapter was checked against SE `CompileFiles` at `14016e660` and
-its `140174710` loader loop, which traverses the list at `TESDataHandler + 0xD60`
-before loading the active file. Mixed ESP/ESL package conflicts still need an
-in-game acceptance check.
-
-Format/API references:
-[nifxml](https://github.com/niftools/nifxml/blob/develop/nif.xml),
-[xEdit TES5 records](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Core/wbDefinitionsTES5.pas),
-[xEdit JSON example](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/Build/Edit%20Scripts/JSON%20-%20Demo.pas),
-[xEdit file scripting adapter](https://github.com/TES5Edit/TES5Edit/blob/dev-4.1.6/xEdit/JvI/xejviScriptAdapterFile.pas).
+Format reference: [nifly's native shader serialization](https://github.com/ousnius/nifly/blob/main/src/Shaders.cpp) and [NIF object serialization](https://github.com/ousnius/nifly/blob/main/src/Objects.cpp).
