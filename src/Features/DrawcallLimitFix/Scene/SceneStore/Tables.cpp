@@ -28,6 +28,7 @@ namespace DCLF
 		skyTechnique.resize(a_count, 0);
 		sunEntry.resize(a_count, std::array<float, 4>{});
 		lodFade.resize(a_count, std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f });
+		fadedOut.resize(a_count, 0);
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
 		faceStream.resize(a_count, kNoFaceStream);
@@ -175,6 +176,7 @@ namespace DCLF
 		skyTechnique[a_slot] = 0;
 		sunEntry[a_slot] = {};
 		lodFade[a_slot] = { 0.0f, 0.0f, 0.0f, -1.0f };
+		fadedOut[a_slot] = 0;
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
 		faceStream[a_slot] = kNoFaceStream;
@@ -216,6 +218,7 @@ namespace DCLF
 			skyTechnique.clear();
 			sunEntry.clear();
 		lodFade.clear();
+			fadedOut.clear();
 			fadeDistance.clear();
 			residentSlot.clear();
 			// Every slot is gone: the log's readers read them all again.
@@ -310,6 +313,7 @@ namespace DCLF
 		skyTechnique.clear();
 		sunEntry.clear();
 		lodFade.clear();
+		fadedOut.clear();
 		fadeDistance.clear();
 		residentSlot.clear();
 		InvalidateChangeLog();

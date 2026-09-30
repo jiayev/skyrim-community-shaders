@@ -351,6 +351,8 @@ namespace DCLF
 			// LodFadeNodeOf): its world bound centre, and in w its LOD type (plus kLodFadeHeld without the LOD fades); w < 0 when
 			// the object has no fade node.
 			std::vector<std::array<float, 4>> lodFade;  // parallel to objects
+			// Whether the object's fade root has faded out (kObjectFadedOut, which every write of the record's flags carries from here).
+			std::vector<std::uint8_t> fadedOut;  // parallel to objects
 			// A member's fade-out distance (kObjectFadeTest, AccumulatedPass::fadeDistance), against its fade node's centre
 			// (lodFade): > 0 scaled by the camera's LOD factor, < 0 unscaled. Meaningless without the flag.
 			std::vector<float> fadeDistance;  // parallel to objects
@@ -794,23 +796,12 @@ namespace DCLF
 		 */
 		bool TakeSwitchChanges(std::vector<const RE::NiAVObject*>& a_out);
 
-		// Resident records (dclf-cull-job-elimination.md, "Phase 4 in detail"). An object PrimaryCull makes resident has
-		// the accumulated half of its record patched once, from a resident pass (AccumulatedPass::resident), and kept
-		// across frames: it is not restored at the next walk, it stays native-visible, and only its slots are kept alive
-		// each frame (KeepResidentsAlive). The walk rewriting or releasing its record ends it, and so does a failed patch;
-		// those are reported (TakeResidentEvictions).
-		/** @brief Render thread: the record is written only by events (no face, actor, skin or animated shading, not per frame in full). */
-		bool ResidentCapable(const RE::BSGeometry* a_geometry) const;
-		/** @brief Render thread, before the accumulate phase: ends the geometry's residency now (its accumulated half restored). */
-		void EndResidency(const RE::BSGeometry* a_geometry);
-		/** @brief Render thread: ends every residency now. */
+		// Scene members' records (drawcall-limit-fix.md, "Scene membership"): the accumulated half of a member's record is
+		// patched once, from its membership pass (AccumulatedPass::resident, BindByMembership), and kept across frames: it is
+		// not restored at the next walk, and only its slots are kept alive each frame (KeepResidentsAlive). A rewrite keeps it
+		// while its binding stands; a release or a failed patch ends it.
+		/** @brief Render thread: ends every membership now (the frame globals a membership pass reads changed). */
 		void EndAllResidency();
-		/**
-		 * @brief PrimaryCull, render thread: the residents whose residency the walk or the accumulate phase ended since the
-		 * last call (a record rewritten, released or not patched), and the sun entry nodes something was attached under or
-		 * detached from (their entries' members changed).
-		 */
-		void TakeResidentEvictions(std::vector<const RE::BSGeometry*>& a_geometries, std::vector<const RE::NiAVObject*>& a_roots);
 		/** @brief CS_DCLF_RESIDENT_PARITY=1: every 60 frames, each resident's pass built again and its record, against its patch. */
 		static bool ResidentParityEnabled();
 		struct ResidentStats
@@ -989,6 +980,19 @@ namespace DCLF
 
 		/** @brief Index into GetTables().objects for this frame, or -1 when the geometry is not drawn by DCLF. */
 		std::int32_t FindObject(const RE::BSGeometry* a_geometry) const;
+		/**
+		 * @brief Whether the object is bound by scene membership (drawn from its record whenever the GPU finds it). Read-only:
+		 * the list jobs ask it, while nothing binds (the accumulate phase runs after them).
+		 */
+		bool IsMember(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
+		/**
+		 * @brief Any thread: a fade node's currentFade changed outside the engine's own writers (PrimaryCull's fade service), for
+		 * the fade watch (its dependents' Faded shadow verdicts).
+		 */
+		static void NoteFadeChanged(const RE::NiAVObject* a_fadeNode);
+		/** @brief Render thread: the object's fade root faded out, or back in (kObjectFadedOut). */
+		void SetFadedOut(std::int32_t a_object, bool a_fadedOut);
+		std::uint32_t FadedOutBit(std::uint32_t a_object) const { return a_object < tables.fadedOut.size() && tables.fadedOut[a_object] ? kObjectFadedOut : 0u; }
 		/**
 		 * @brief For reports: why a tracked geometry has no bindings this frame - the accumulate phase's
 		 * verdict if it made one this frame (a_accumulate set), else the scene phase's cached one. None when it
@@ -1671,7 +1675,7 @@ namespace DCLF
 		 * brought up to date (CatchUpSwitch) and, in a delta walk, the entries under it are classified again.
 		 */
 		void ApplySwitchEvents(bool a_full);
-		// Resident records (ResidentCapable).
+		// Scene members' records.
 		struct ResidentPatch
 		{
 			AccumulatedPass pass;
@@ -1680,8 +1684,8 @@ namespace DCLF
 		static constexpr std::uint32_t kNotResident = ~0u;
 		bool IsResidentSlot(std::uint32_t a_slot) const { return a_slot < residentPos.size() && residentPos[a_slot] != kNotResident; }
 		void MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch);
-		/** @brief Ends a slot's residency: a_restore resets its accumulated half now; a_notify reports the geometry to PrimaryCull. */
-		void DropResidentSlot(std::uint32_t a_slot, bool a_notify, bool a_restore);
+		/** @brief Ends a slot's membership: a_restore resets its accumulated half now. */
+		void DropResidentSlot(std::uint32_t a_slot, bool a_restore);
 		/** @brief A slot's accumulated half back as the scene phase wrote it (its patch lapsed, or its residency ended). */
 		void ResetAccumulatedHalf(std::uint32_t a_slot);
 		/** @brief The accumulate phase: the residents' pipeline and material slots used this frame, and a template when none was. */
@@ -1875,8 +1879,6 @@ namespace DCLF
 		bool residentMaintenanceDirty = true;
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> residentPipelines;  // pipeline -> first resident object
 		std::vector<std::uint32_t> residentMaterials, residentTrees;
-		std::vector<const RE::BSGeometry*> residentEvictions;  // for PrimaryCull (TakeResidentEvictions)
-		std::vector<const RE::NiAVObject*> residentRootEvents;
 		ankerl::unordered_dense::set<const RE::BSGeometry*> residentJoining;  // this frame's resident passes, until patched
 		ResidentStats residentStats;
 		// Sun entry nodes something was attached under or detached from since the last walk (keys).

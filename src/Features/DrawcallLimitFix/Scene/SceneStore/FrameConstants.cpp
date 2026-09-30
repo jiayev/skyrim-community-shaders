@@ -483,7 +483,7 @@ namespace DCLF
 					const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get());
 					descriptors.specularLODFade = lighting.specularLODFade;
 					descriptors.envmapLODFade = lighting.envmapLODFade;
-					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult);
+					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(o));
 					sp.first = fmt::format("slot {} '{}' (watch {:#x}, flags {:#x}, patched {} frames ago): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
 						o, geometry->name.c_str() ? geometry->name.c_str() : "", o < tables.shadingWatch.size() ? tables.shadingWatch[o] : 0, tables.objects[o].flags,
 						o < patchedFrame.size() ? frame - patchedFrame[o] : ~0u, now.materialData[0], now.materialData[1], now.materialData[2], held.materialData[0],
@@ -569,7 +569,7 @@ namespace DCLF
 		descriptors.specularLODFade = lighting.specularLODFade;
 		descriptors.envmapLODFade = lighting.envmapLODFade;
 		float emissiveMult = tables.emissiveMult[a_slot];
-		const auto shading = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult);
+		const auto shading = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(a_slot));
 		if (std::memcmp(&shading, &tables.shading[a_slot], sizeof(shading)) == 0 && std::bit_cast<std::uint32_t>(emissiveMult) == std::bit_cast<std::uint32_t>(tables.emissiveMult[a_slot]))
 			return false;
 		if (a_write) {

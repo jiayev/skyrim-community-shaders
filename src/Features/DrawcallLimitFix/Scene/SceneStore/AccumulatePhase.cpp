@@ -203,7 +203,7 @@ namespace DCLF
 			materialMember[a_patch.material] = 1;
 		}
 		object.pipelineIndex = a_patch.pipeline;
-		object.flags = a_patch.flags;
+		object.flags = a_patch.flags | FadedOutBit(objectId);
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
 		tables.SetWatch(objectId, Tables::kWatchExtras, a_patch.projectedUV || a_patch.landBlend);
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
@@ -267,21 +267,12 @@ namespace DCLF
 		// after a latch is not empty.
 		if (accumulatedPasses.empty() && haveAccumulator && !passParity)
 			CollectAccumulatedPasses();
-		// The objects the primary's cull left out this frame (PrimaryCull): their main passes, built without a
-		// registration, stand where the engine's would have.
-		for (const auto& [geometry, pass] : PrimaryCull::Get().BuildSyntheticPasses())
-			AddAccumulatedPass(geometry, pass);
-		// Resident records (PrimaryCull): a frame the primary's cut did not keep them, every one ends; the entries joining
-		// this frame have their passes patched once below.
-		const bool residentsLive = PrimaryCull::Get().TakeResidentsLive();
-		if (!residentsLive && PrimaryCull::Get().HasResidents())
-			PrimaryCull::Get().EndAllResidents();
+		// The roots the last decode found faded out or back in (kObjectFadedOut); then the frames of visibility feedback that
+		// completed, decoded on the worker (the stood-in roots' fade, LOD and tree state).
+		PrimaryCull::Get().ApplyFadeChanges();
+		PrimaryCull::Get().KickFeedbackDecode();
+		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
-		if (residentsLive)
-			for (const auto& [geometry, pass] : PrimaryCull::Get().ResidentPasses()) {
-				residentJoining.insert(geometry);
-				AddAccumulatedPass(geometry, pass);
-			}
 		BindByMembership();
 		// The engine's passes for what PrimaryCull draws synthetically take the same sun bits, so both sources of an
 		// object's pass need one pipeline (and the probe still compares against the engine's own bits).
@@ -756,7 +747,7 @@ namespace DCLF
 			patch.fadeDistance = resident ? accumulated->fadeDistance : 0.0f;
 			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
-			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult);
+			patch.shading = MakeShading(*static_cast<RE::BSLightingShaderProperty*>(property), descriptors, kMainPassRenderFlags, emissiveMult, resident);
 			patch.emissiveMult = emissiveMult;
 			if (lightLimitFixLoaded) {
 				auto& lightFix = globals::features::lightLimitFix;
@@ -796,7 +787,6 @@ namespace DCLF
 		// Resident passes that were not patched (no record, a verdict of the frame, a material not ready, extras rows, or
 		// the engine's own pass for the object): their entries leave residency.
 		for (const auto* geometry : residentJoining) {
-			residentEvictions.push_back(geometry);
 			++residentStats.failed;
 			const auto* pass = FindAccumulatedPass(geometry);
 			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
@@ -807,7 +797,7 @@ namespace DCLF
 			++residentStats.failedBy[cause];
 			// A member whose binding could not be taken again is not bound any more.
 			if (entry != tracked.end() && entry->second.slot != kNoObjectSlot && IsResidentSlot(entry->second.slot))
-				DropResidentSlot(entry->second.slot, false, true);
+				DropResidentSlot(entry->second.slot, true);
 		}
 		residentJoining.clear();
 		LapseAccumulated();
@@ -933,6 +923,20 @@ namespace DCLF
 		}
 	}
 
+	void SceneStore::SetFadedOut(std::int32_t a_object, bool a_fadedOut)
+	{
+		if (a_object < 0 || static_cast<std::size_t>(a_object) >= tables.objects.size() || static_cast<std::size_t>(a_object) >= tables.fadedOut.size())
+			return;
+		const auto o = static_cast<std::uint32_t>(a_object);
+		if (tables.fadedOut[o] == (a_fadedOut ? 1 : 0))
+			return;
+		tables.fadedOut[o] = a_fadedOut ? 1 : 0;
+		if (tables.objects[o].flags & kObjectFree)
+			return;
+		tables.objects[o].flags = (tables.objects[o].flags & ~kObjectFadedOut) | (a_fadedOut ? kObjectFadedOut : 0u);
+		tables.NoteChange(o, kChangeBindings);
+	}
+
 	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const
 	{
 		const auto& derived = a_entry.derived;
@@ -970,7 +974,7 @@ namespace DCLF
 			return;
 		const auto columnsBefore = tables.ColumnsOf(a_slot);
 		auto& object = tables.objects[a_slot];
-		object.flags = tables.sceneFlags[a_slot];
+		object.flags = tables.sceneFlags[a_slot] | FadedOutBit(a_slot);
 		object.materialIndex = 0;
 		object.pipelineIndex = 0;
 		tables.draws[a_slot].pipelineIndex = 0;

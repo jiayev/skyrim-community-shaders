@@ -60,6 +60,9 @@ namespace DCLF
 		// BindlessObject::extraOffset (Records: kExtraRows rows, layout in SceneStore::RefreshFrameConstants):
 		// the ProjectedUV texture matrix and pixel parameters (CS_DCLF_PROJECTED_UV), and the landscape
 		// blend parameters of the MTLand techniques (CS_DCLF_MTLAND).
+		// The object's fade root has faded out (BSFadeNode::OnVisible stops at a root whose currentFade or fadeAmount is 0): BuildDraws
+		// draws nothing of it. From the visibility feedback's fade service (PrimaryCull), kept in Tables::fadedOut.
+		kObjectFadedOut = 1u << 17,
 		kObjectProjectedUV = 1u << 18,
 		kObjectLandBlend = 1u << 19,
 		kObjectDecalGroupShift = 20,

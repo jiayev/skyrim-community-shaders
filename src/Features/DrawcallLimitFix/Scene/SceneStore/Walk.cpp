@@ -559,7 +559,7 @@ namespace DCLF
 		const bool keepMember = wasMember && objectId == slotBefore && a_bucket == Ineligible::None && !shadowOnly &&
 		                        !(tables.objects[objectId].flags & kObjectFree);
 		if (wasMember && !keepMember)
-			DropResidentSlot(slotBefore, true, false);
+			DropResidentSlot(slotBefore, false);
 		const bool keepHalf = keepMember || (!denseWalk && objectId == slotBefore && objectId < patchedFrame.size() && patchedFrame[objectId] + 1 == frame &&
 		                                        !(tables.objects[objectId].flags & kObjectFree));
 		tables.objectSeen[objectId] = walkSerial;
@@ -658,6 +658,7 @@ namespace DCLF
 			// The extras rows are allocated by the accumulate phase, which is where the descriptors that
 			// decide whether an object needs them are derived.
 			tables.FreeExtras(objectId);
+			object.flags |= FadedOutBit(objectId);
 			tables.objects[objectId] = object;
 			tables.shading[objectId] = ObjectShading{};
 			tables.emissiveMult[objectId] = 1.0f;
@@ -1428,8 +1429,6 @@ namespace DCLF
 			dirtyRoots.erase(std::unique(dirtyRoots.begin(), dirtyRoots.end()), dirtyRoots.end());
 			for (const auto* root : dirtyRoots)
 				ScheduleRoot(root);
-			if (!residents.empty())
-				residentRootEvents.insert(residentRootEvents.end(), dirtyRoots.begin(), dirtyRoots.end());
 			dirtyRoots.clear();
 			count(delta.roots);
 		}

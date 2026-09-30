@@ -7,20 +7,6 @@ namespace DCLF
 		return SwitchEnabled(Switch::ResidentParity);
 	}
 
-	bool SceneStore::ResidentCapable(const RE::BSGeometry* a_geometry) const
-	{
-		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
-		if (it == tracked.end())
-			return false;
-		const auto& entry = it->second;
-		// A record, eligible, written by events only: the light path's placement is fine (TakePlacement keeps the
-		// accumulated half), and so is a kept skin's (KeepSkin and TakePlacement: the partition mask and the palette rows, from the
-		// same LOD row the synthetic pass reads; a skin it cannot keep is written in full, which ends the residency). A
-		// full write every frame is not, and neither are the per-frame inputs of a face, an actor or animated shading.
-		return entry.slot != kNoObjectSlot && entry.objectStamp == objectStamp && entry.candidateReason == Ineligible::None && !entry.faceShape &&
-		       !entry.actorOwned && !(entry.lightTraits & kTraitAnimatedShading) && !(entry.perFrame && !entry.lightTraits);
-	}
-
 	void SceneStore::MarkResidentSlot(std::uint32_t a_slot, const ResidentPatch& a_patch)
 	{
 		residentMaintenanceDirty = true;
@@ -38,7 +24,7 @@ namespace DCLF
 			tables.residentSlot[a_slot] = 1;
 	}
 
-	void SceneStore::DropResidentSlot(std::uint32_t a_slot, bool a_notify, bool a_restore)
+	void SceneStore::DropResidentSlot(std::uint32_t a_slot, bool a_restore)
 	{
 		if (!IsResidentSlot(a_slot))
 			return;
@@ -57,15 +43,6 @@ namespace DCLF
 		}
 		if (a_restore)
 			ResetAccumulatedHalf(a_slot);
-		if (a_notify && a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot])
-			residentEvictions.push_back(tables.objectGeometry[a_slot]);
-	}
-
-	void SceneStore::EndResidency(const RE::BSGeometry* a_geometry)
-	{
-		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
-		if (it != tracked.end() && it->second.slot != kNoObjectSlot)
-			DropResidentSlot(it->second.slot, false, true);
 	}
 
 	void SceneStore::EndAllResidency()
@@ -81,14 +58,6 @@ namespace DCLF
 		}
 		residents.clear();
 		residentPatches.clear();
-	}
-
-	void SceneStore::TakeResidentEvictions(std::vector<const RE::BSGeometry*>& a_geometries, std::vector<const RE::NiAVObject*>& a_roots)
-	{
-		a_geometries.clear();
-		a_geometries.swap(residentEvictions);
-		a_roots.clear();
-		a_roots.swap(residentRootEvents);
 	}
 
 	void SceneStore::KeepResidentsAlive()

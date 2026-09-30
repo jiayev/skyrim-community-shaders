@@ -4849,7 +4849,52 @@ Measured (Riverwood, camera turning, 5 s intervals):
 -   Scene phase 1.3-1.8 ms and accumulate phase 0.8-1.1 ms, the same range as before.
 -   Resident parity: 0 of about 99,000 records differ. Holes: 0.
 
+## The primary's cull with scene membership
+
+Members (above) are drawn from their records whenever the GPU finds them. What is left of the engine's main-camera cull
+for DCLF's objects is only what the engine itself would do to their nodes.
+
+-   **The stand-in** (`PrimaryCull::StandIn`, the list processes' `Process1`) returns for an admitted entry without
+    traversing it. It builds no passes. Its members in view are recorded for the light-mask clear and the hole check.
+    A DCLF geometry not bound yet, like an engine member (a decal, an effect), is handed to the registration
+    (`AppendVirtual`).
+-   **Admission by readiness** (`Admit`): an entry is admitted once the colour build draws every DCLF member it shows,
+    in view or not. The check runs when a member's drawn mark turns on, and once per entry of a new snapshot. It only
+    runs against a current snapshot, and skips members no longer tracked: during a cell load a stale snapshot's
+    geometry may already be released.
+-   **Fades** go through the feedback, not the engine's cull:
+    -   A fading root stays stood in. The decode steps its fade with the engine's own functions (`ServiceFade`), from
+        the GPU's frustum stamps, one frame late as the engine's 2-frame window allows. Only a LOD cross-fade (old-level
+        copy, hint 10) still goes to the engine.
+    -   The engine draws a fading opaque object as a plain opaque pass (no screen-door and no blend at Riverwood, measured).
+    -   So a member only needs the cutoff: a root whose fade service says `OnVisible` stops (`currentFade` or
+        `fadeAmount` 0) marks its members `kObjectFadedOut` (`Tables::fadedOut`, on a change only), and BuildDraws
+        drops them while still stamping them, so the root can fade back in.
+    -   The service's own writes of `currentFade` are reported to the fade watch (`SceneStore::NoteFadeChanged`).
+    -   A member's `MaterialData.z` is the material's alpha, not the property's `alpha`, which `GetRenderPasses`
+        leaves multiplied by whichever camera's fade it last saw.
+-   **Local shadow lights** no longer stop the stand-in: a member's are the GPU's (`LocalShadowLights`).
+-   **Leaf exclusion** (`PrimaryCull::Owned`, the list processes' `AppendVirtual`): wherever the engine still culls
+    (the actor entry, a LOD cross-fade, an entry not admitted, a stale snapshot), an owned geometry is not handed to the
+    registration. Owned means a member that the colour build draws (the claims).
+-   The entry residency below (joins, probation, evictions) is gone: membership replaced it.
+
+**Found along the way: character-lit materials lost t11 every other frame.** The character light's t11 ping-pongs
+between two render targets, and the material lookups keep the other incarnation's binding
+(`alternateCharacterLight`). Since imports became asynchronous, that binding could have been kept while pending (no
+index), and was then reused forever on that parity. Every actor part's draw dropped on alternate frames: 9,000-26,000
+holes per 300 frames. An alternate is now reused only with its index.
+
+Measured (Riverwood, camera turning):
+-   9,128 of 9,130 entries stood in for.
+-   0 passes of members registered by the engine after load. The engine's registrations went from about 750 to 520-630 a frame.
+-   Holes 0, resident parity 0 of about 99,000.
+-   Scene phase 1.2-1.3 ms (from 1.8-2.0), accumulate phase 0.6-0.8 ms (from 0.9-1.1).
+
 ## Resident entries (culling-job elimination, phase 4)
+
+Superseded by scene membership (above); kept for the reasoning.
+
 
 A stood-in entry still took its list job every frame: the frustum test picked which synthetic passes were built, and
 each synthetic pass went through the accumulate phase, which restored it at the next walk. A **resident** entry needs
