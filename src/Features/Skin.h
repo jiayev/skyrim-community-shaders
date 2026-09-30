@@ -1,11 +1,14 @@
 #pragma once
 
 #include "I18n/I18n.h"
+#include "Skin/Editor/Files.h"
+#include "Skin/Editor/NifDocument.h"
+#include "Skin/Editor/TextureTools.h"
+#include "Skin/Runtime/ActorTargets.h"
+#include "Skin/Runtime/Textures.h"
 
 #include <mutex>
-#include <shared_mutex>
 
-/** @brief Advanced skin rendering feature with dual specular lobes, detail textures, and wetness effects. */
 struct Skin : Feature
 {
 	static Skin* GetSingleton()
@@ -13,89 +16,45 @@ struct Skin : Feature
 		static Skin singleton;
 		return &singleton;
 	}
-
-	virtual inline std::string GetName() override { return "Advanced Skin"; }
-	virtual inline std::string GetDisplayName() override { return T("feature.skin.name", "Advanced Skin"); }
-	virtual inline std::string GetShortName() override { return "Skin"; }
-	virtual inline std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
-	virtual std::string_view GetCategory() const override { return FeatureCategories::kCharacters; }
-	/** @brief Returns a description and list of key features for the UI summary. */
-	virtual std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
+	std::string GetName() override { return "Advanced Skin"; }
+	std::string GetDisplayName() override { return T("feature.skin.name", "Advanced Skin"); }
+	std::string GetShortName() override { return "Skin"; }
+	std::string_view GetShaderDefineName() override { return "CS_SKIN"; }
+	std::string_view GetCategory() const override { return FeatureCategories::kCharacters; }
+	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override
 	{
-		return {
-			T("feature.skin.description", "Advanced Skin enhances character skin rendering with multiple techniques."),
-			{ T("feature.skin.key_feature_1", "Physically-based dual specular lobes for realistic skin highlights"),
-				T("feature.skin.key_feature_2", "Tiled skin detail textures for enhanced realism"),
-				T("feature.skin.key_feature_3", "Extra texture support for roughness, translucency, and wetness"),
-				T("feature.skin.key_feature_4", "Reworked wetness system for dynamic skin effects") }
-		};
+		return { T("feature.skin.skin_materials_with_character_customization", "Skin materials authored in NIF assets, with optional player and NPC customization."),
+			{ T("feature.skin.roughness_fuzz_and_reflectance_controls", "Roughness, fuzz and reflectance controls"), T("feature.skin.detail_normals_with_a_main_uv_region_mask", "Detail normals with a main-UV region mask"),
+				T("feature.skin.independent_transmission_and_post_process_sss_strength", "Independent transmission and post-process SSS strength"), T("feature.skin.nif_editing_preview_and_character_persistence", "NIF editing, preview and character persistence") } };
 	}
-	virtual inline bool HasShaderDefine(RE::BSShader::Type t) override
-	{
-		return t == RE::BSShader::Type::Lighting;
-	};
-
-	virtual void RestoreDefaultSettings() override;
-	/** @brief Draws the ImGui settings panel for Advanced Skin configuration. */
-	virtual void DrawSettings() override;
-
-	virtual void LoadSettings(json& o_json) override;
-	virtual void SaveSettings(json& o_json) override;
-
-	/** @brief Binds the skin detail texture to the pixel shader during the prepass stage. */
-	virtual void Prepass() override;
-	/** @brief Installs rendering hooks for material and geometry setup after plugin load. */
-	virtual void PostPostLoad() override;
-
-	/** @brief Creates GPU resources including the skin detail texture and per-geometry constant buffer. */
-	virtual void SetupResources() override;
-
-	/** @brief Reloads the skin detail normal map texture from disk. */
-	void ReloadSkinDetail();
-	/** @brief Loads the skin detail normal map DDS texture and creates its shader resource view. */
-	void LoadSkinDetailTexture();
-
-	/** @brief Appearance settings that can be overridden per race (and, later, per actor). */
-	struct SkinProfile
-	{
-		float SkinMainRoughness = 0.7f;
-		float SkinSecondRoughness = 0.35f;
-		float SkinSpecularTexMultiplier = 1.0f;
-		float SecondarySpecularStrength = 0.15f;
-		float F0 = 0.0278f;
-		float BaseColorMultiplier = 1.0f;
-		float PhysicalMainRoughnessMultiplier = 1.3f;
-		float PhysicalSecondRoughnessMultiplier = 0.75f;
-		float PhysicalSpecularStrength = 1.0f;
-		float ExtraEdgeRoughness = 0.25f;
-		bool EnableSkinDetail = true;
-		float SkinDetailStrength = 0.25f;
-		float SkinDetailTiling = 10.0f;
-		float BodyTilingMultiplier = 2.0f;
-		float Translucency = 0.1f;
-		float sssWidth = 0.2f;
-		bool UseSSS = true;
-		float FuzzStrength = 1.0f;
-		float FuzzRoughness = 0.35f;
-		float FuzzF0 = 0.045f;
-	};
+	bool HasShaderDefine(RE::BSShader::Type a_type) override { return a_type == RE::BSShader::Type::Lighting; }
+	void RestoreDefaultSettings() override;
+	void DrawSettings() override;
+	void LoadSettings(json& a_json) override;
+	void SaveSettings(json& a_json) override;
+	void Prepass() override;
+	void PostPostLoad() override;
+	void SetupResources() override;
+	void DataLoaded() override;
+	void GameReset() override;
+	void DrawMaterialEditor();
+	void SetShaderResources(ID3D11DeviceContext* a_context);
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	void RestoreSampler();
 
 	struct Settings
 	{
 		bool EnableSkin = true;
-		/** @brief Compatibility-only filename discovery. Disabled because GetTexture returns placeholders for missing resources. */
-		bool EnableLegacyExtraTextureDiscovery = false;
+		bool EnableDetail = true;
+		float DetailStrength = 0.25f;
+		float DetailTiling = 10.0f;
+		float BodyTiling = 2.0f;
+		std::string DetailTexture = "Data/Shaders/Skin/skin_detail_n.dds";
 		float ExtraSkinWetness = 0.0f;
 		float WetFadeTime = 10.0f;
 		float StartSweat = 0.75f;
 		float FullSweat = 0.15f;
-		float4 WetParams = { 512.0f, 0.7f, 10.0f, 4.0f };
-
-		SkinProfile DefaultProfile;
-		/** @brief Named profile pool, shared by any number of bindings. */
-		std::map<std::string, SkinProfile> Profiles;
-		/** @brief Race editor ID -> profile name. */
-		std::map<std::string, std::string> RaceProfiles;
+		float4 WetParams{ 512.0f, 0.7f, 10.0f, 4.0f };
 	} settings;
 
 	struct alignas(16) SkinData
@@ -108,407 +67,180 @@ struct Skin : Feature
 		float4 physicalParams;
 		float4 wetParams;
 	};
-
 	struct alignas(16) PerGeometryData
 	{
 		float4 skinPerGeometry;
-		/** @brief x = HasRfaos, y = HasWetness. Explicit flags avoid inferring state from fallback texture dimensions. */
 		float4 materialFlags;
 		SkinData profile;
 	};
-
-	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
-	float playerStamina = 0.0f;
-	float playerStaminaMax = 0.0f;
-
-	/** @brief GPU-ready profile data; index 0 is always the default profile. */
-	std::vector<SkinData> profileData;
-	/** @brief CPU-side profiles parallel to profileData (index-aligned), kept as the partial-merge base. */
-	std::vector<SkinProfile> profileBaseData;
-	std::unordered_map<std::string, uint32_t> profileNameToIndex;
-	std::unordered_map<RE::FormID, uint32_t> raceProfileIndex;
-	uint32_t profileDataRevision = 0;
-	bool profileBindingsDirty = true;
-
-	/** @brief Override key scope: per-NIF mesh vs per-NPC base form ID. */
-	enum class OverrideKind
-	{
-		Nif,
-		BaseId
-	};
-
-	struct ExtraTextures
-	{
-		RE::NiSourceTexturePtr rfaosTexture;
-		RE::NiSourceTexturePtr wetnessTexture;
-		std::string extraTexturePath;
-		std::string wetnessTexturePath;
-		bool hasExtraTexture = false;
-		bool hasWetnessTexture = false;
-	};
-
-	/** @brief A rule texture channel: inherit the previous value, disable it, or bind an explicit path. */
-	struct TextureChannel
-	{
-		enum class State
-		{
-			Inherit,
-			Disabled,
-			Path
-		};
-
-		State state = State::Inherit;
-		std::string path;
-	};
-
-	struct TextureMaterial
-	{
-		TextureChannel rfaos;
-		TextureChannel wetness;
-	};
-
-	/** @brief Per-NIF / Per-BaseID JSON override store (Data\Shaders\Skin\Overrides). */
-	struct OverrideStore
-	{
-		enum class Domain
-		{
-			Surface,
-			Appearance,
-			Local
-		};
-
-		/** @brief A resolved override entry in the effective (merged) view. */
-		struct Entry
-		{
-			std::string source;  // "User" or the mod .json file name
-			bool isUser = false;
-			json partial;  // partial SkinProfile JSON
-		};
-
-		/** @brief Exact-match selector. All populated fields must match the rendered geometry. */
-		struct Selector
-		{
-			std::string nif;
-			std::string nifGlob;
-			std::string shape;
-			std::string shapeGlob;
-			std::string baseId;
-			std::string referenceId;
-			std::string race;
-			std::string normal;
-			std::string normalPrefix;
-			std::string normalGlob;
-			std::string diffuse;
-			std::string diffusePrefix;
-			std::string diffuseGlob;
-			std::string armor;
-			std::string armorAddon;
-			std::string slot;
-			std::string sex;
-			std::string shaderFeature;
-			std::string tag;
-
-			uint32_t Specificity() const;
-			bool HasActorSelector() const;
-			bool HasSurfaceSelector() const;
-		};
-
-		/** @brief One partial node in a typed, single-parent material-instance hierarchy. */
-		struct MaterialInstance
-		{
-			std::string id;
-			std::string parent;
-			std::string source;
-			bool isUser = false;
-			Domain domain = Domain::Surface;
-			json parameters = json::object();
-			TextureMaterial textures;
-			bool valid = true;
-		};
-
-		/** @brief Chooses one winner chain in exactly one composition domain. */
-		struct Binding
-		{
-			std::string id;
-			std::string source;
-			std::string use;
-			bool isUser = false;
-			Domain domain = Domain::Surface;
-			int32_t priority = 0;
-			uint32_t sourceOrder = 0;
-			Selector match;
-		};
-
-		/** @brief A unified rule may independently select a profile payload and/or texture material payload. */
-		struct Rule
-		{
-			std::string id;
-			std::string source;
-			bool isUser = false;
-			int32_t priority = 0;
-			uint32_t sourceOrder = 0;
-			Selector match;
-			std::string profile;
-			json profileOverrides = json::object();
-			std::string material;
-			TextureMaterial textures;
-		};
-
-		/** @brief Effective merged NIF overrides (user wins); normalized key -> entry. */
-		std::unordered_map<std::string, Entry> nifOverrides;
-		/** @brief Effective merged BaseID overrides (user wins); normalized key -> entry. */
-		std::unordered_map<std::string, Entry> baseIdOverrides;
-		/** @brief User-authored NIF partials, persisted to User\SkinOverrides.user.json. */
-		std::unordered_map<std::string, json> userNifOverrides;
-		/** @brief User-authored BaseID partials, persisted to User\SkinOverrides.user.json. */
-		std::unordered_map<std::string, json> userBaseIdOverrides;
-		/** @brief Named partial profile payloads referenced by unified rules. */
-		std::unordered_map<std::string, Entry> namedProfiles;
-		/** @brief Named extra texture payloads referenced by unified rules. */
-		std::unordered_map<std::string, TextureMaterial> materials;
-		/** @brief Deterministically sorted unified rules; later matching rules have higher precedence. */
-		std::vector<Rule> rules;
-		/** @brief Optional complete root material. advanced-skin:default falls back to settings.DefaultProfile. */
-		std::unordered_map<std::string, Entry> baseMaterials;
-		std::unordered_map<std::string, MaterialInstance> surfaceInstances;
-		std::unordered_map<std::string, MaterialInstance> appearanceInstances;
-		std::unordered_map<std::string, MaterialInstance> localInstances;
-		/** @brief tag -> recursive classifier expression (all/any/not plus selector leaves). */
-		std::unordered_map<std::string, json> classifiers;
-		/** @brief Deterministically sorted; the last matching binding in each domain is its winner. */
-		std::vector<Binding> bindings;
-		/** @brief Last scanned override file set: file path -> last write time. */
-		std::unordered_map<std::string, std::filesystem::file_time_type> fileTimes;
-		/** @brief Bumped whenever the override set changes; invalidates per-geometry caches. */
-		uint32_t revision = 0;
-
-		/** @brief Scans the overrides directory (and User subfolder) and reloads when the file set changes. */
-		void Refresh();
-		/** @brief Returns the effective partial override for a kind + normalized key, or nullptr. */
-		const json* Lookup(OverrideKind a_kind, const std::string& a_key) const;
-		/** @brief Adds/overwrites a user override and persists it. */
-		void AddOverride(OverrideKind a_kind, const std::string& a_key, const json& a_partial);
-		/** @brief Removes a user override (revealing any mod override underneath) and persists. */
-		void RemoveOverride(OverrideKind a_kind, const std::string& a_key);
-		/** @brief Writes the user override file to disk. */
-		void SaveUserOverrides();
-		/** @brief True when no overrides of either kind are loaded. */
-		bool Empty() const { return nifOverrides.empty() && baseIdOverrides.empty() && rules.empty() && bindings.empty(); }
-	};
-
-	/** @brief Immutable facts used by classifiers and all three binding domains for one draw geometry. */
-	struct GeometryContext
-	{
-		std::string nif;
-		std::string legacyNif;
-		std::string shape;
-		std::string baseId;
-		std::string referenceId;
-		std::string race;
-		std::string normal;
-		std::string diffuse;
-		std::string armor;
-		std::string armorFormId;
-		std::string armorAddon;
-		std::string armorAddonFormId;
-		std::string slot;
-		std::string sex;
-		std::string shaderFeature;
-		std::unordered_set<std::string> tags;
-		uint64_t fingerprint = 0;
-	};
-
-	/** @brief Per-geometry override resolution cache, keyed by geometry pointer. */
-	struct GeometryOverrideCacheEntry
-	{
-		SkinData merged{};
-		ExtraTextures textures{};
-		float4 materialFlags = { 0.0f, 0.0f, 0.0f, 0.0f };
-		bool initialized = false;
-		GeometryContext context{};
-		uint64_t contextIdentity = 0;
-		uint64_t contextFingerprint = 0;
-		std::string nifKey;
-		std::string legacyNifKey;
-		std::string shapeKey;
-		std::string baseIdKey;
-		std::string raceKey;
-		std::string normalKey;
-		std::string diffuseKey;
-		uint32_t materialHash = 0;
-		uint32_t profileIndex = UINT32_MAX;
-		uint32_t baseProfileRevision = UINT32_MAX;
-		uint32_t overrideRevision = UINT32_MAX;
-		uint32_t previewRevision = UINT32_MAX;
-	};
-
-	OverrideStore overrideStore;
-	std::unordered_map<RE::BSGeometry*, GeometryOverrideCacheEntry> geometryOverrideCache;
-	std::unordered_map<std::string, ExtraTextures> configuredExtraTextures;
-	uint32_t lastOverrideScanFrame = 0;
-
-	struct GeometryOrigin
-	{
-		std::string nifKey;
-		std::string signature;
-	};
-	mutable std::shared_mutex geometryOriginMutex;
-	std::unordered_map<RE::BSGeometry*, GeometryOrigin> geometryOrigins;
-	std::unordered_map<std::string, std::string> signatureOrigins;
-	std::unordered_set<std::string> ambiguousOriginSignatures;
-
-	/** @brief Packs a profile plus the global (non-per-race) settings into GPU data. */
-	SkinData MakeProfileData(const SkinProfile& a_profile) const;
-	/** @brief Merges a partial JSON object onto a CPU-side profile. */
-	SkinProfile ApplyProfileOverride(const SkinProfile& a_base, const json& a_override) const;
-	GeometryContext BuildGeometryContext(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material) const;
-	bool MatchSelector(const OverrideStore::Selector& a_selector, const GeometryContext& a_context) const;
-	bool MatchClassifier(const json& a_expression, const GeometryContext& a_context, uint32_t a_depth = 0) const;
-	const OverrideStore::MaterialInstance* FindInstance(OverrideStore::Domain a_domain, const std::string& a_id) const;
-	void ApplyInstanceChain(OverrideStore::Domain a_domain, const std::string& a_leaf, SkinProfile& a_profile,
-		std::string& a_rfaosPath, std::string& a_wetnessPath) const;
-	/** @brief Records the source NIF of every geometry loaded by a BSStream. */
-	void RecordNifOrigins(RE::BSStream* a_stream, const char* a_path);
-	/** @brief Resolves the actual source NIF captured during stream loading, if known. */
-	std::string ResolveNifOrigin(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase const* a_material) const;
-	/** @brief Rebuilds the GPU profile array, bumping the revision when the contents change. */
-	void RebuildProfileData();
-	/** @brief Drops cached race->profile resolutions, forcing them to be resolved again. */
-	void InvalidateProfileBindings();
-	/**
-	 * @brief Resolves the profile index used for a race, caching the result by race form ID.
-	 * @param a_race The race to resolve, may be null.
-	 * @return Index into profileData; 0 when no override applies.
-	 */
-	uint32_t GetProfileIndexForRace(const RE::TESRace* a_race);
-
-	/** @brief Draws the global (non-per-race) settings block. */
-	void DrawGlobalSettings();
-	/** @brief Draws the profile selector plus add/duplicate/rename/delete controls. */
-	void DrawProfileManager();
-	/** @brief Draws every per-race-able setting of the given profile.
-	 *  @param a_id Unique ImGui ID scope. DrawProfileSettings is called from several
-	 *  sections at the same time (main editor and override editor), so every call
-	 *  site must supply a distinct ID prefix to avoid widget ID collisions. */
-	void DrawProfileSettings(SkinProfile& a_profile, const char* a_id);
-	/** @brief Draws the race to profile binding table. */
-	void DrawRaceBindings();
-	/** @brief Collects all races with an editor ID for the binding UI. */
-	void RefreshRaceList();
-	/** @brief Draws the per-NIF JSON override manager UI. */
-	void DrawNifOverrides();
-	/** @brief Resolves a reference into the pending pick state (key, label, skin flag). */
-	void ResolveUiPick(RE::TESObjectREFR* a_ref);
-	/** @brief Opens the override editor for a key, seeded from the given base profile. */
-	void BeginOverrideEdit(OverrideKind a_kind, const std::string& a_key, const SkinProfile& a_base, const std::string& a_baseLabel, bool a_isNew);
-	/** @brief Derives all unique normalized NIF override keys for a reference.
-	 *  @return The target's MODL key (when present), captured source NIFs, and
-	 *  legacy per-geometry keys in scenegraph traversal order. */
-	std::vector<std::string> DeriveNifKeysForRef(RE::TESObjectREFR* a_ref) const;
-	/** @brief True if any geometry of the reference uses a skin shader. */
-	bool ReferenceHasSkin(RE::TESObjectREFR* a_ref) const;
-	/** @brief Returns the race for an actor reference, or null. */
-	RE::TESRace* GetRaceForRef(RE::TESObjectREFR* a_ref) const;
-	/** @brief Returns a partial profile JSON containing only fields that differ from the base. */
-	json DiffProfile(const SkinProfile& a_base, const SkinProfile& a_full) const;
-
-	std::string uiSelectedProfile;  // empty = default profile
-	std::string uiPendingRace;
-	std::string uiProfileNameBuffer;
-	std::vector<std::pair<std::string, std::string>> raceList;  // editor ID, display name
-
-	// Per-NIF / Per-BaseID override UI state
-	std::vector<std::string> uiPickNifKeys;  // all unique NIF keys derived from the last pick
-	std::string uiPickKey;                   // currently selected NIF key from uiPickNifKeys
-	std::string uiPickBaseIdKey;             // normalized BaseID key (empty for non-actors)
-	std::string uiPickRefLabel;              // human-readable target label
-	std::string uiPickMessage;               // non-empty = info/error message to show
-	bool uiPickValid = false;
-	bool uiPickHasSkin = false;
-	SkinProfile uiPickBase;       // base profile for a new override (race profile or default)
-	std::string uiPickBaseLabel;  // "Default" or the race editor ID
-
-	bool uiOverrideEditorOpen = false;
-	bool uiOverrideEditorIsNew = false;
-	OverrideKind uiOverrideEditorKind = OverrideKind::Nif;
-	std::string uiOverrideEditorKey;
-	std::string uiOverrideEditorBaseLabel;
-	SkinProfile uiOverrideEditorBase;
-	SkinProfile uiOverrideEditorProfile;
-	/** @brief Unsaved partial currently previewed by the override editor. */
-	json uiOverridePreviewPartial = json::object();
-	/** @brief Bumped whenever the preview changes or closes, invalidating geometry caches. */
-	uint32_t uiOverridePreviewRevision = 0;
-
-	struct ActorWetnessCacheEntry
-	{
-		float4 wetness = { 0.0f, 0.0f, 0.0f, 0.0f };
-		uint frameCount = 0;
-		uint32_t profileIndex = 0;
-	};
-
-	eastl::unique_ptr<Texture2D> texSkinDetail = nullptr;
-	std::unordered_map<uint32_t, ExtraTextures> skinExtraTextures;
-	std::unordered_map<uint32_t, ActorWetnessCacheEntry> actorWetnessMap;  // keyed by actor formID
-
-	/** @brief Packs current skin settings into a GPU constant buffer data structure. */
+	static_assert(sizeof(SkinData) == 112);
+	static_assert(sizeof(PerGeometryData) == 144);
 	SkinData GetCommonBufferData();
 
-	/**
-	 * @brief Queries the water height at the given actor's position.
-	 * @param a_ref The object reference (typically an actor) to query water height for.
-	 * @param a_pos The world position to check for nearby water objects.
-	 * @return The water surface height, or -NI_INFINITY if no water is found.
-	 */
+private:
+	struct TextureEntry
+	{
+		SkinTextures::Resource resource;
+		bool prepared = false;
+	};
+	struct GeometryEntry
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiPointer<RE::BSShaderProperty> property;
+		RE::NiPointer<RE::BSTextureSet> textureSet;
+		RE::NiSourceTexturePtr normal;
+		RE::NiSourceTexturePtr diffuse;
+		const RE::BSShaderMaterial* materialPointer = nullptr;
+		RE::NiAVObject* parent = nullptr;
+		RE::BSGraphics::TriShape* buffer = nullptr;
+		RE::NiSkinPartition* partition = nullptr;
+		std::array<float, 4> uvTransform{};
+		bool modelSpace = false;
+		SkinSources::Snapshot source;
+		SkinMaterials::Material base;
+		SkinMaterials::Material effective;
+		SkinActors::Target target;
+		RE::ActorHandle actor;
+		std::array<std::shared_ptr<TextureEntry>, 3> textures;
+		std::string diagnostic;
+		uint32_t frame = 0;
+		RE::FormID race = 0;
+		uint32_t sex = 0;
+		uint64_t revision = 0;
+		uint64_t actorRevision = 0;
+		bool ready = false;
+		bool inspect = false;
+		bool transferPreview = false;
+		bool head = false;
+		bool overridden = false;
+		bool thickness = false;
+	};
+	struct ActorWetnessCacheEntry
+	{
+		float4 wetness{ 0, 0, 0, 0 };
+		uint32_t frameCount = 0;
+	};
+	struct Editor
+	{
+		struct BatchItem
+		{
+			SkinEditor::NifDocument document;
+			uint32_t block = UINT32_MAX;
+			std::filesystem::path output;
+		};
+		struct TransferRow
+		{
+			RE::NiPointer<RE::BSGeometry> geometry;
+			SkinActors::Part part = SkinActors::Part::Face;
+			SkinActors::Guard guard;
+			int sample = -1;
+			bool include = true;
+			bool confirmed = false;
+			std::string error;
+		};
+		struct Transfer
+		{
+			SkinActors::Scheme scheme;
+			RE::ActorHandle actor;
+			std::string key;
+			uint64_t revision = 0, session = 0;
+			std::vector<TransferRow> rows;
+			bool preview = false;
+		};
+		std::optional<Transfer> transfer;
+		std::optional<SkinActors::Scheme> clipboard;
+		RE::NiPointer<RE::BSGeometry> geometry;
+		std::vector<RE::NiPointer<RE::BSGeometry>> surfaces;
+		std::vector<RE::NiPointer<RE::BSGeometry>> targets;
+		std::optional<SkinEditor::NifDocument> document;
+		std::vector<SkinEditor::NifDocument::Surface> materials;
+		uint32_t selectedBlock = UINT32_MAX;
+		SkinMaterials::Material draft;
+		SkinMaterials::Material baseline;
+		SkinMaterials::Changes changes;
+		SkinMaterials::Changes changesBaseline;
+		std::vector<SkinMaterials::Material> undo;
+		std::vector<SkinMaterials::Material> redo;
+		std::vector<SkinMaterials::Changes> characterUndo;
+		std::vector<SkinMaterials::Changes> characterRedo;
+		std::vector<BatchItem> batch;
+		std::vector<SkinEditor::Output> package;
+		std::optional<SkinEditor::NifDocument> packageDocument;
+		SkinEditor::TextureTools tools;
+		SkinTextures::Resource thumbnail;
+		std::string thumbnailKey;
+		std::optional<SkinMaterials::Material> imported;
+		std::vector<std::pair<std::string, SkinMaterials::Material>> legacy;
+		std::array<bool, SkinMaterials::ParameterCount> importParameters{};
+		std::array<bool, 3> importTextures{};
+		std::string sourceInput;
+		std::string message;
+		std::string error;
+		bool character = false;
+		bool preview = false;
+		bool discardConfirmed = false;
+		std::function<void()> pendingAction;
+		bool editGesture = false;
+		float previewWetness = -1.0f;
+		int channel = 0;
+		int texturePreview = 0;
+	};
+	std::recursive_mutex mutex;
+	std::unordered_map<RE::BSGeometry*, GeometryEntry> geometries;
+	std::unordered_map<std::string, std::shared_ptr<TextureEntry>> textures;
+	std::unordered_map<std::string, uint64_t> resourceRevisions;
+	std::unordered_map<uint32_t, ActorWetnessCacheEntry> actorWetnessMap;
+	std::array<winrt::com_ptr<ID3D11ShaderResourceView>, 3> pendingViews;
+	winrt::com_ptr<ID3D11SamplerState> detailSampler;
+	winrt::com_ptr<ID3D11SamplerState> savedSampler;
+	bool samplerBound = false;
+	eastl::unique_ptr<ConstantBuffer> PerGeometryCB;
+	Editor editor;
+	uint64_t revision = 1;
+	uint64_t session = 0;
+	bool texturesDirty = false;
+	uint32_t lastPrune = 0;
+
+	void Invalidate(bool a_resources = false);
+	std::shared_ptr<TextureEntry> RequestTexture(const std::string& a_path);
+	void Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state);
+	SkinData MakeData(const SkinMaterials::Material& a_material, bool a_head) const;
+	GeometryEntry& Observe(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property);
+	bool PreviewMatches(const GeometryEntry& a_entry) const;
+	void SelectReference(RE::TESObjectREFR* a_reference, bool a_firstPerson = false);
+	void SelectSurface(RE::BSGeometry* a_geometry);
+	void OpenDocument(const std::string& a_path, uint32_t a_block = UINT32_MAX);
+	void SelectMaterial(uint32_t a_block);
+	void DrawMaterialControls();
+	void DrawAssetActions();
+	void DrawCharacterActions();
+	void DrawCharacterStorage();
+	void DrawCharacterSchemeActions();
+	void DrawCharacterTransfer();
+	std::vector<RE::NiPointer<RE::BSGeometry>> DiscoverActor(RE::Actor* a_actor);
+	SkinActors::Scheme CaptureScheme(RE::Actor* a_actor);
+	void BeginTransfer(SkinActors::Scheme a_scheme, RE::Actor* a_actor, bool a_apply);
+	void CommitTransfer();
+	const SkinActors::Sample* TransferSample(const GeometryEntry& a_entry) const;
+	void DrawTextureTools();
+	void DrawBatch();
+	void DrawPresets();
+	void DrawGlobalSettings();
+	bool EditorDirty() const;
+	void ChangeEditor(std::function<void()> a_action);
 	float GetWaterHeight(const RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_pos);
-
-	/**
-	 * @brief Computes per-geometry wetness data (sweat, water submersion, fade) for an actor.
-	 * @param geometry The geometry to retrieve wetness data for.
-	 * @param a_profileIndex Receives the profile index resolved for the geometry's actor.
-	 * @return A float4 containing (sweat, waterWetness, positionZ, waterDepth).
-	 */
-	float4 GetWetness(RE::BSGeometry* geometry, uint32_t& a_profileIndex);
-
-	/**
-	 * @brief Discovers and loads extra skin textures (RFAOS, wetness) based on the material's texture set.
-	 * @param material The lighting shader material to derive texture paths from.
-	 * @param inTextureSet The texture set to search for extra texture slots.
-	 * @param i_hashKey The material hash key used for caching extra textures.
-	 */
-	void SetupExtraTexture(RE::BSLightingShaderMaterialBase const* material, RE::BSTextureSet* inTextureSet, uint32_t i_hashKey);
-	/** @brief Loads an explicit RFAOS/wetness path pair without mutating the material texture set. */
-	ExtraTextures LoadConfiguredExtraTextures(const std::string& a_rfaosPath, const std::string& a_wetnessPath);
-
-	/** @brief Handles material setup for face/face-gen materials, loading extra skin textures as needed. */
-	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
-
-	/** @brief Updates per-geometry wetness constant buffer during geometry setup. */
-	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
-
-	/** @brief Binds extra skin textures (RFAOS, wetness) to pixel shader resource slots. */
-	void SetShaderResources(ID3D11DeviceContext* a_context);
-
+	float4 GetWetness(RE::BSGeometry* a_geometry);
 	struct Hooks
 	{
-		struct BSStream_Load3
+		struct SetupGeometry
 		{
-			static bool thunk(RE::BSStream* a_stream, const char* a_path);
+			static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags);
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
-
-		struct BSLightingShader_SetupGeometry
+		struct RestoreGeometry
 		{
-			static void thunk(RE::BSShader* This, RE::BSRenderPass* Pass, uint32_t RenderFlags);
+			static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags);
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
-
-		static void Install()
-		{
-			stl::write_vfunc<0x3, BSStream_Load3>(RE::VTABLE_BSStream[0]);
-			stl::write_vfunc<0x6, BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
-			logger::info("[Advanced Skin] Installed hooks");
-			return;
-		}
 	};
 };

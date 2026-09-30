@@ -131,7 +131,7 @@ void EvaluateLighting(DirectContext context, MaterialProperties material, float3
 	}
 #	endif
 #	if defined(CS_SKIN_SHADING)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
+	if (Skin::GetSkinData().skinParams.w > 0.0f) {
 		Skin::SkinDirectLightInput(lightingOutput, context, material);
 		float3 softLightColor = context.lightColor * context.softShadow;
 
@@ -196,7 +196,7 @@ void GetIndirectLobeWeights(out IndirectLobeWeights lobeWeights, IndirectContext
 	}
 #	endif
 #	if defined(CS_SKIN_SHADING)
-	if (SharedData::skinData.skinParams.w > 0.0f) {
+	if (Skin::GetSkinData().skinParams.w > 0.0f) {
 		Skin::SkinIndirectLobeWeights(lobeWeights, material, context);
 		return;
 	}
