@@ -280,6 +280,9 @@ static const uint kObjectMember = 1u << 30;
 // A resident object under a fade root (Records.h): the depth segment's first phase drops it past its fade-out distance
 // unless it was in view last frame (FadeHidden).
 static const uint kObjectFadeTest = 1u << 27;
+// The object's fade root has faded out (Records.h): nothing of it is drawn, but its frustum stamp is still written, so the
+// feedback keeps servicing the root and it can fade back in.
+static const uint kObjectFadedOut = 1u << 17;
 // A resident tree (Records.h): phase 1 drops it where BSTreeNode::OnVisible's height test would.
 static const uint kObjectHeightTest = 1u << 28;
 // A volumetric-only caster (Records.h), drawn only by the views of the volumetric lighting copy.
@@ -667,7 +670,7 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 		fadeHidden = fadeHidden || root.z - TreeHeight.x > TreeHeight.y;
 	}
 	// A final verdict, like the frustum's: the colour segment reads it, and phase 2 never revisits it.
-	cullRejected = cullRejected || fadeHidden;
+	cullRejected = cullRejected || fadeHidden || (input.w & kObjectFadedOut) != 0;
 
 	// The engine's own decision is a useful reference, but only for the frustum test, where the engine is
 	// exact and the two should agree: rejecting something it kept is then a defect, and is counted as one.

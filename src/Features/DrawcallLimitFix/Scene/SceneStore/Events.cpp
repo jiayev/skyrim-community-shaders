@@ -365,6 +365,12 @@ namespace DCLF::Scene
 
 namespace DCLF
 {
+	void SceneStore::NoteFadeChanged(const RE::NiAVObject* a_fadeNode)
+	{
+		if (a_fadeNode)
+			Scene::PushFade(static_cast<const RE::BSFadeNode*>(a_fadeNode));
+	}
+
 	bool SceneStore::IsLoadingScreenUp()
 	{
 		auto* ui = RE::UI::GetSingleton();

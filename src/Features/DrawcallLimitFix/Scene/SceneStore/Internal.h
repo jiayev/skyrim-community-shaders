@@ -80,8 +80,9 @@ namespace DCLF
 			return nullptr;
 		}
 
+		// a_member: a scene member's (SceneStore's resident records), whose fades are DCLF's (kObjectFadedOut) and so not in its alpha.
 		inline ObjectShading MakeShading(const RE::BSLightingShaderProperty& a_property, const LightingDescriptors& a_descriptors, std::uint32_t a_renderFlags,
-			float& a_emissiveMult)
+			float& a_emissiveMult, bool a_member)
 		{
 			// BSLightingShader::SetupGeometry (engine notes): which components it writes depends on the pass.
 			const float unwritten = std::bit_cast<float>(kUnwrittenBits);
@@ -89,7 +90,9 @@ namespace DCLF
 			ObjectShading shading{};
 			shading.materialData[0] = a_descriptors.technique == kTechniqueEnvmap ? a_descriptors.envmapLODFade : unwritten;
 			shading.materialData[1] = specular ? a_descriptors.specularLODFade : unwritten;
-			shading.materialData[2] = a_property.alpha;
+			// GetRenderPasses leaves materialAlpha * the fade node's currentFade on the property, for whichever camera called it last.
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
+			shading.materialData[2] = a_member && material ? material->materialAlpha : a_property.alpha;
 			shading.materialData[3] = unwritten;
 			const float mult = a_property.emissiveMult;
 			// The same sample the emissive colour below folds in: the shader divides it out again, so the

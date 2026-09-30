@@ -2490,6 +2490,7 @@ namespace DCLF
 		std::vector<std::pair<const RE::BSGeometry*, std::uint32_t>> pendingUnclaims;  // (geometry, the frame it is unclaimed from)
 		std::uint32_t claimsAdded = 0, claimsDropped = 0, claimsDroppedAfterCull = 0;
 		std::uint64_t drawnChangesApplied = 0, drawnResyncs = 0;
+		std::vector<const RE::BSGeometry*> newlyDrawn;  // geometries whose drawn mark turned on since PublishClaims (PrimaryCull::Admit)
 		bool DrawnThisFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const
 		{
 			if (drawnCommitFrame != a_frame)
@@ -2515,6 +2516,7 @@ namespace DCLF
 				slot.last = a_frame - 1;
 			}
 			if (a_drawn && a_geometry && (!slot.drawn || slot.geometry != a_geometry)) {
+				newlyDrawn.push_back(a_geometry);
 				auto& held = drawnGeometry[a_geometry];
 				held.drawn = true;
 				held.slot = a_slot;

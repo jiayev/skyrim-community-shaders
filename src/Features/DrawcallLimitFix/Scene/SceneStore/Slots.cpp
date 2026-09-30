@@ -43,9 +43,6 @@ namespace DCLF
 
 	void SceneStore::ResetSlotTables()
 	{
-		for (const std::uint32_t slot : residents)
-			if (slot < tables.objectGeometry.size() && tables.objectGeometry[slot])
-				residentEvictions.push_back(tables.objectGeometry[slot]);
 		residents.clear();
 		residentPatches.clear();
 		residentPos.clear();
@@ -112,7 +109,7 @@ namespace DCLF
 			// Neutralised: nothing downstream may draw from slots that are not this frame's. Its record is no
 			// longer the scene phase's, so the next delta walk writes it again.
 			pendingEvaluation.push_back(tables.objectGeometry[o]);
-			DropResidentSlot(static_cast<std::uint32_t>(o), true, false);
+			DropResidentSlot(static_cast<std::uint32_t>(o), false);
 			object.flags = (object.flags & ~(kObjectNativeVisible | kObjectSunTest)) | kObjectNoBindings;
 			object.geometryIndex = object.pipelineIndex = object.materialIndex = 0;
 			tables.NoteChange(static_cast<std::uint32_t>(o), kChangeBindings | kChangeGeometry);
@@ -327,7 +324,7 @@ namespace DCLF
 		if (slot == kNoObjectSlot || slot >= tables.objects.size() || tables.objectGeometry[slot] != a_entry.geometry.get())
 			return;
 		if (IsResidentSlot(slot)) {
-			DropResidentSlot(slot, true, false);
+			DropResidentSlot(slot, false);
 			++residentStats.released;
 		}
 		tables.ResetObject(slot);

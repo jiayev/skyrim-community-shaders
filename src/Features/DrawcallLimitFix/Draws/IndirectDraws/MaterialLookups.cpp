@@ -115,7 +115,8 @@ namespace DCLF::Draws
 					}
 					auto& alternate = entry.alternateCharacterLight;
 					const auto* view = material.textures[t];
-					const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner ?
+					// The other incarnation's binding, when it had its index: one kept while its import was pending is asked for again.
+					const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner && alternate.index != Lookups::kNone ?
 						GpuTextures::Binding{ alternate.index, alternate.owner } : textures.RequestBinding(material.textures[t], t);
 					importsPending |= binding.pending;
 					const bool tracePaths = !SwitchValue(Switch::TraceTexturePaths).empty();
@@ -243,7 +244,7 @@ namespace DCLF::Draws
 					continue;
 				changed = true;
 				const auto& alternate = entry.alternateCharacterLight;
-				if (t == kAlternatingMaterialTextureRegister && alternate.view == material.textures[t] && alternate.owner)
+				if (t == kAlternatingMaterialTextureRegister && alternate.view == material.textures[t] && alternate.owner && alternate.index != Lookups::kNone)
 					bindings[t] = { alternate.index, alternate.owner };
 				else
 					known = textures.KnownBinding(material.textures[t], bindings[t]);
