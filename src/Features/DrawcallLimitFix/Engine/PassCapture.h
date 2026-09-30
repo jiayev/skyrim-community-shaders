@@ -18,10 +18,9 @@ namespace DCLF
 	/**
 	 * @brief Captures each lighting pass as the engine registers it with a batch renderer.
 	 *
-	 * DCLF reads the passes the main camera will draw out of the accumulator's batch renderer
-	 * (`SceneStore::CollectAccumulatedPasses`). That works only while the passes are in there, so it
-	 * cannot survive static ownership, whose whole point is to keep them out. Capturing at registration
-	 * gives the same information one step earlier, from the call that puts a pass into a group.
+	 * The main camera's registrations are no source of DCLF's bindings (scene membership is): the diagnostics read them
+	 * (SceneStore::DrainCapture, the hole detector, the decal order probe), and the shadow views' registrations are withheld
+	 * for the casters DCLF draws.
 	 *
 	 * `BSBatchRenderer::RegisterPass` (vfunc 0x02) is the right place rather than
 	 * `BSLightingShaderProperty::GetRenderPasses`: the two fields DCLF depends on do not exist yet when
@@ -57,35 +56,31 @@ namespace DCLF
 			std::uint32_t overflowed = 0;
 			std::uint32_t threads = 0;    // distinct threads seen registering
 			// Step B gate: the captured set against what the accumulator walk finds.
-			std::uint32_t compared = 0;
-			std::uint32_t missing = 0;     // in the accumulator, not captured
-			std::uint32_t extra = 0;       // captured, not in the accumulator
-			std::uint32_t techniqueDiffers = 0;
-			std::uint32_t subPassDiffers = 0;
-			std::uint32_t withheld = 0;  // passes kept out of the main camera's batch renderer
 			// CS_DCLF_SHADOW_OWNERSHIP=static: Utility passes kept out of the shadow views' batch renderers,
 			// by the view's render mode (plain 0xD, clamped 0xE, paraboloid 0xF).
 			std::array<std::uint32_t, 3> shadowWithheld{};
 			std::uint32_t volumetricWithheld = 0;  // volumetric-only passes (hint 8) kept out of batch group 15
 			std::uint32_t directWithheld = 0;      // shadow passes of hints 11, 7 and 3, which bypass RegisterPass too
 			std::uint32_t claimed = 0;   // objects DCLF said it owns
-			// Claimed but not drawn this frame. Withholding means nothing else will draw them either, so
-			// any of these is a visible hole - the one failure mode static ownership introduces.
+			// Left out of the engine's cull or registration and not drawn this frame: nothing else draws them, so any of
+			// these is a visible hole.
 			std::uint32_t holes = 0;
 			// Claim churn. A claim that goes away hands the object back to the native loop, so if culling
 			// an object unclaims it the engine simply draws it again and the culling saves nothing.
 			std::uint32_t claimsAdded = 0;
 			std::uint32_t claimsDropped = 0;
 			std::uint32_t droppedAfterCull = 0;  // dropped while the engine still had a pass for it
-			std::uint32_t handedBack = 0;        // withheld, then returned to the native loop (HandBackUndrawable)
 		};
 
-		/** @brief The set of geometries DCLF owns; registration is withheld for these. */
+		/**
+		 * @brief The set of geometries DCLF draws (the colour build's drawn marks, dropped a frame after the last draw): the
+		 * main camera's leaf exclusion (PrimaryCull::Owned) and the native loop's skip read it; a shadow mode's claims are its
+		 * casters, withheld from its views' registration.
+		 */
 		using ClaimSet = ankerl::unordered_dense::set<const RE::BSGeometry*>;
 		static constexpr std::uint32_t kShadowModes = 3;
 		struct FrameClaims
 		{
-			std::shared_ptr<const ClaimSet> main;
 			std::array<std::shared_ptr<const ClaimSet>, kShadowModes> shadow;
 		};
 
@@ -107,16 +102,13 @@ namespace DCLF
 		 * not be trusted.
 		 */
 		void PublishClaims(std::shared_ptr<const ClaimSet> a_claims);
-		/** @brief Freeze legacy claims before registration, or install a selected publication's claims. */
+		/** @brief Freeze the shadow claims before registration, or install a selected publication's claims. */
 		void SelectLegacyFrameClaims();
 		void InstallFrameClaims(std::shared_ptr<const FrameClaims> a_claims);
 		void ClearFrameClaims() { InstallFrameClaims(nullptr); }
 
 		/** @brief Latest producer result (the selected frame bundle may still hold the preceding one). */
 		std::shared_ptr<const ClaimSet> CurrentClaims() const { return std::atomic_load(&claims); }
-
-		/** @brief Which batch renderers belong to the main camera; withholding applies only to these. */
-		void SetMainBatchRenderers(std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> a_renderers);
 
 		/** @brief The shadow views' render modes with claims of their own: 0xD plain, 0xE clamped, 0xF paraboloid. */
 		static constexpr std::uint32_t kFirstShadowMode = 0xD;
@@ -154,25 +146,6 @@ namespace DCLF
 		 */
 		static bool FadingAtRegistration(const RE::BSRenderPass* a_pass);
 
-		/**
-		 * @brief EarlyPrepass, render thread: returns every pass withheld this frame whose object DCLF cannot
-		 * draw this frame (a_drawable false) to the batch renderer it was kept from, through the original
-		 * RegisterPass, before the native depth and main passes draw.
-		 *
-		 * Withholding is decided at registration from the claims, which are last frame's draws; whether
-		 * DCLF can draw the object this frame is only known once the tables and pipeline lookups are built.
-		 * Whatever falls between the two - a pipeline variant still compiling, an object that lost its
-		 * bindings this frame - would otherwise be drawn by nobody. Returns how many were handed back.
-		 */
-		std::uint32_t HandBackUndrawable(const std::function<bool(const RE::BSGeometry*)>& a_drawable);
-		/** @brief Whether this frame's HandBackUndrawable returned the geometry to the native loop. */
-		bool HandedBack(const RE::BSGeometry* a_geometry) const { return handedBack.contains(a_geometry); }
-		/**
-		 * @brief For the hole reports, render thread: whether a registration of the geometry was withheld from
-		 * the main camera this frame and not handed back - the native loop will not draw it.
-		 */
-		bool WithheldThisFrame(const RE::BSGeometry* a_geometry);
-
 		/** @brief Takes everything registered since the last call; render thread only. */
 		std::span<const Entry> Drain();
 		/** @brief What the last Drain took (diagnostics); render thread only. */
@@ -203,19 +176,13 @@ namespace DCLF
 		std::atomic<std::uint32_t> lastThread{ 0 };
 		std::atomic<std::uint32_t> threadCount{ 0 };
 		Stats stats;
-		std::atomic<std::uint32_t> withheld{ 0 };
 		// Published whole by the render thread, read by the registering thread. shared_ptr's atomic
 		// load/store keeps the readers safe while the next one is being built.
 		std::shared_ptr<const ClaimSet> claims;
-		// One main+shadow selection for every registration in a frame. A later
-		// PublishClaims only affects the next frame, not this selected state.
+		// One shadow selection for every registration in a frame. A later PublishShadowClaims only affects the next frame.
 		std::shared_ptr<const FrameClaims> frameClaims;
-		// The last drain (valid until the next frame's registrations), and what HandBackUndrawable returned.
+		// The last drain (valid until the next frame's registrations).
 		std::span<const Entry> lastDrain;
-		ankerl::unordered_dense::set<const RE::BSGeometry*> handedBack;
-		ankerl::unordered_dense::set<const RE::BSGeometry*> withheldThisFrame;  // built on the first WithheldThisFrame
-		bool withheldBuilt = false;
-		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> mainRenderers;
 		std::shared_ptr<const ShadowRendererMap> shadowRenderers;
 		std::array<std::shared_ptr<const ClaimSet>, kShadowModes> shadowClaims;
 		std::array<std::atomic<std::uint32_t>, kShadowModes> shadowWithheld{};

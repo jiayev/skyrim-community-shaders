@@ -27,6 +27,22 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	/**
+	 * @brief FUN_14147a430 (node, level): the LOD transition, the only writer of the fade node's LOD level (+0x152 & 0xF, the skin
+	 * partitions' row). The fade update (FUN_14147a160), BSLeafAnimNode::OnVisible and the feedback's fade service call it.
+	 */
+	struct LodLevelUpdate
+	{
+		static void thunk(RE::BSFadeNode* a_this, float a_level)
+		{
+			const std::uint8_t before = a_this->GetRuntimeData().unk152 & 0xF;
+			func(a_this, a_level);
+			if ((a_this->GetRuntimeData().unk152 & 0xF) != before)
+				PushFade(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct LodFadeRenderPasses
 	{
 		static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, std::uint32_t a_renderFlags,
@@ -548,6 +564,8 @@ namespace DCLF
 		constexpr std::uintptr_t kPrependController = 0xd268d0;     // NiObjectNET::PrependController (FUN_140d268d0)
 		constexpr std::uintptr_t kHavokNodeTransform = 0xea55a0;    // FUN_140ea55a0: a node's transform from its rigid body
 		stl::detour_thunk<FadeUpdate>(REL::Offset(kFadeUpdate).address());
+		constexpr std::uintptr_t kLodLevelUpdate = 0x147a430;       // FUN_14147a430: the LOD transition (+0x152)
+		stl::detour_thunk<LodLevelUpdate>(REL::Offset(kLodLevelUpdate).address());
 		stl::detour_thunk<PropertySetFlags>(REL::Offset(kPropertySetFlags).address());
 		stl::detour_thunk<PropertySetMaterial>(REL::Offset(kPropertySetMaterial).address());
 		stl::detour_thunk<PrependController>(REL::Offset(kPrependController).address());

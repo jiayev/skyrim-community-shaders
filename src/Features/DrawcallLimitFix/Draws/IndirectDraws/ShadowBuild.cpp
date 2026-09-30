@@ -467,7 +467,7 @@ namespace DCLF::Draws
 				if (!a_out.inputs.modeUsed[m])
 					continue;
 				std::uint64_t draws = 0;
-				a_out.ForEachInput(m, [&](const DrawInput& a_input) { draws += a_input.partitions ? std::popcount(a_input.partitions) : 1; });
+				a_out.ForEachInput(m, [&](const DrawInput& a_input) { draws += PartitionDraws(a_input.partitions); });
 				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 			}
 		}

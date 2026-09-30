@@ -140,7 +140,8 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief FadeWatch: the fade nodes whose BSFadeNode::currentFade changed, pushed from the engine's writers.
+		 * @brief FadeWatch: the fade nodes whose BSFadeNode::currentFade or LOD level (+0x152 & 0xF, LodLevelUpdate) changed, pushed
+		 * from the engine's writers.
 		 *
 		 * currentFade is written by the cull (AE 1.6.1170): BSFadeNode::OnVisible (0x141479f50, which every fade node
 		 * class reaches; BSLeafAnimNode::OnVisible calls it) writes it directly for one LOD mode and through the fade
@@ -148,6 +149,12 @@ namespace DCLF
 		 * compares the value before and after and pushes the node when it moved. Cull job threads push, the render
 		 * thread drains (SceneStore::ProcessEvents). A few tens a frame while the camera moves, none at rest.
 		 */
+		/**
+		 * @brief CS_DCLF_DECAL_ORDER_PROBE (DecalOrder.cpp): the main registration's decal chains against the order the scene lists
+		 * give them. Render thread, once a frame, with the drained capture.
+		 */
+		void ProbeDecalOrder(std::span<const PassCapture::Entry> a_entries, const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>& a_main);
+
 		inline EventQueue<const RE::BSFadeNode*> fadeEvents;
 		constexpr std::size_t kMaxFadeChanges = 1u << 16;
 

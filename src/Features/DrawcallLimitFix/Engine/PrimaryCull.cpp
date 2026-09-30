@@ -385,9 +385,14 @@ namespace DCLF
 			out.visible.clear();
 			out.pending.clear();
 		}
-		// The stand-in needs the sun's entry exclusion live (its cascades captured) and a current snapshot; otherwise the engine
-		// culls every entry this frame, less what the leaf exclusion keeps from its registration. A member's local shadow
-		// lights are the GPU's (LocalShadowLights), so local shadows need nothing of the engine's cull.
+		// The stand-in (CS_DCLF_PRIMARY_EXCLUDE) needs the sun's entry exclusion live (its cascades captured) and a current
+		// snapshot; otherwise the engine culls every entry this frame, less what the leaf exclusion keeps from its
+		// registration. A member's local shadow lights are the GPU's (LocalShadowLights), so local shadows need nothing of
+		// the engine's cull.
+		if (!ActiveToggles().excludePrimaryEntries) {
+			frameLive.store(true, std::memory_order_release);
+			return;
+		}
 		const bool current = candidates && candidates->generation == SceneStore::Get().GetSunCandidatesGeneration();
 		if (!SunAccumulation::Get().ExclusionLive() || !current) {
 			++(current ? cutStats.skippedPreconditions : cutStats.skippedStale);
@@ -421,7 +426,7 @@ namespace DCLF
 			cut.switches.clear();
 			cut.admitted.assign(entries, 0);
 			cut.eligible.clear();
-			ankerl::unordered_dense::set<const RE::NiAVObject*> admittedRoots;
+			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
 			for (std::uint32_t e = 0; e < entries; ++e) {
 				cut.memberOffsets[e] = static_cast<std::uint32_t>(cut.members.size());
 				cut.switchOffsets[e] = static_cast<std::uint32_t>(cut.switches.size());
@@ -431,9 +436,9 @@ namespace DCLF
 				if (cut.plans[e] == EntryPlan::Rejected)
 					continue;
 				cut.eligible.emplace(cut.roots[e], e);
-				if (cut.admittedRoots.contains(cut.roots[e])) {
+				if (const auto it = cut.admittedRoots.find(cut.roots[e]); it != cut.admittedRoots.end() && it->second == MemberSignature(e)) {
 					cut.admitted[e] = 1;
-					admittedRoots.insert(cut.roots[e]);
+					admittedRoots.emplace(cut.roots[e], it->second);
 				}
 			}
 			cut.admittedRoots = std::move(admittedRoots);
@@ -515,11 +520,20 @@ namespace DCLF
 			}
 			if (all) {
 				cut.admitted[e] = 1;
-				cut.admittedRoots.insert(cut.roots[e]);
+				cut.admittedRoots.insert_or_assign(cut.roots[e], MemberSignature(e));
 				++cutStats.admittedNow;
 			}
 		}
 		cut.pendingAdmission.clear();
+	}
+
+	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
+	{
+		std::uint64_t signature = 0;
+		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1]; ++m)
+			if (!cut.members[m].engine)
+				signature += ankerl::unordered_dense::hash<const RE::BSGeometry*>{}(cut.members[m].geometry);
+		return signature;
 	}
 
 	int PrimaryCull::SlotOf(const RE::NiCullingProcess* a_process) const
@@ -789,7 +803,7 @@ namespace DCLF
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
 		JoinFeedback();
-		if (ActiveToggles().excludePrimaryEntries)
+		if (ActiveToggles().ownership)
 			PrepareFrame();
 		if (!Probe())
 			return;
@@ -902,15 +916,13 @@ namespace DCLF
 		if (!lighting)
 			return false;
 		const std::uint64_t flags = lighting->flags.underlying();
-		const auto* fadeNode = lighting->fadeNode;
-		const float fade = fadeNode ? fadeNode->GetRuntimeData().currentFade : 1.0f;
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
 		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
 		const bool blended = alphaProperty && (alphaProperty->alphaFlags & 1);
-		const bool translucent = (material ? material->materialAlpha : 1.0f) * fade < 1.0f || blended;
-		// Fading and translucent objects take GetRenderPasses' other hints (1, 9, 10) and the screen-door bit; not modelled.
-		if (fade < 1.0f)
-			return false;
+		// The object's settled state, not its current fade: GetRenderPasses (1414adfb0) draws a screen-door fade of an
+		// unblended, fully opaque material as the plain opaque pass with alpha = materialAlpha, and a member's fade is the
+		// feedback's (kObjectFadedOut). Translucent objects take hints 1 and 9 (blended, sorted); not modelled.
+		const bool translucent = (material ? material->materialAlpha : 1.0f) < 1.0f || blended;
 		// On the GPU (a_sunOnGpu): the bits the object takes inside a cascade, and BuildDraws drops them on a miss.
 		const std::uint32_t sun = a_sunOnGpu ? SunShadowStatic(a_geometry) : SunShadowBits(a_geometry);
 		if (sun == ~0u)
@@ -1121,8 +1133,9 @@ namespace DCLF
 			{
 				const auto r = SceneStore::Get().TakeResidentStats();
 				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
-				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras), {} rewritten ({} kept their binding), {} released",
-					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.rewritten, r.membershipKept, r.released);
+				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras), {} rewritten ({} kept their binding), {} released; {} registrations of eligible objects not bound{}{}",
+					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.rewritten, r.membershipKept, r.released,
+					r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
 				if (r.parityChecks)
 					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",
 						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");

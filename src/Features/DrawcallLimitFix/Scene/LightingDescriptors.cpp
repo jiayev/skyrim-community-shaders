@@ -380,17 +380,20 @@ namespace DCLF
 			//           11 otherwise (what the group function set).
 			// Both test depth against everything opaque and neither occludes anything its host does not,
 			// which is why DCLF draws them in a second pass without writing depth (IndirectDraws). Without
-			// an accumulated pass there is no hint, and a decal the engine culled is not worth a cull-only
-			// candidate: single-phase culling has nothing to rescue.
-			if (!ActiveToggles().decals || !a_accumulated || !(f & Bit(Flag::kZBufferTest)))
+			// an accumulated pass (scene membership) the hint is GetRenderPasses' for the settled object:
+			// 2 + (alpha < 1 or blending), with the material's alpha (the fade is the feedback's).
+			if (!ActiveToggles().decals || !(f & Bit(Flag::kZBufferTest)))
 				return Ineligible::Decal;
-			if (a_accumulated->hint == 2) {
+			const auto* decalMaterial = static_cast<const RE::BSLightingShaderMaterialBase*>(a_property.material);
+			const std::uint32_t hint = a_accumulated ? a_accumulated->hint :
+			                           ((decalMaterial && decalMaterial->materialAlpha < 1.0f) || (alpha && alpha->GetAlphaBlending())) ? 3u : 2u;
+			if (hint == 2) {
 				if (alpha && alpha->GetAlphaBlending())
 					return Ineligible::Decal;  // not measured in this group; the state would be a guess
 				a_out.decalGroup = 1;
 				a_out.decalBlendMode = 0;
 				a_out.decalWriteMode = 10;
-			} else if (a_accumulated->hint == 3) {
+			} else if (hint == 3) {
 				// The fading case (alpha < 1 without blending) takes blend mode 1 in the engine and is
 				// also what Ineligible::Fading covers; it is left to the native loop.
 				if (!alpha || !alpha->GetAlphaBlending())
@@ -468,7 +471,9 @@ namespace DCLF
 				d |= Bit(LightingFlag::BackLighting);
 			if (f & Bit(Flag::kAnisotropicLighting))
 				d |= Bit(LightingFlag::AnisoLighting);
-			if (alpha && alpha->GetAlphaTesting())
+			// GetRenderPasses (1414adfb0) gives every decal without kMultiIndexSnow DoAlphaTest, whatever its alpha property.
+			if ((alpha && alpha->GetAlphaTesting()) ||
+				((f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) && !(f & Bit(Flag::kMultiIndexSnow))))
 				d |= Bit(LightingFlag::DoAlphaTest);
 			if (f & Bit(Flag::kCharacterLighting))
 				d |= Bit(LightingFlag::CharacterLight);

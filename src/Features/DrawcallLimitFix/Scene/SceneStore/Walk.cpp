@@ -249,7 +249,6 @@ namespace DCLF
 		stats.materialsEvaluated = 0;
 		stats.materialDiffMask = 0;
 		stats.materialsValidated = stats.materialCacheStale = 0;
-		stats.templateUpgrades = stats.templateDefects = stats.pipelinesCulledOnly = 0;
 		stats.nativeVisible = stats.nativeShadowMasked = stats.derivedDescriptors = 0;
 		stats.classifyHits = stats.classifyChecked = stats.classifyDiffers = stats.castResolved = 0;
 		stats.derivedHits = stats.derivedChecked = stats.derivedDiffers = 0;
@@ -450,19 +449,9 @@ namespace DCLF
 		// skin partitions' own buffers, one draw each (ClassifyStatic has checked every one).
 		const auto* skinPartitions = data.skinInstance ? data.skinInstance->skinPartition.get() : nullptr;
 		const RE::NiSkinPartition::Partition* skinPartition = skinPartitions ? &skinPartitions->partitions[0] : nullptr;
-		// Which of them the engine draws: for the shadow views, from the fade node's LOD level as both of
-		// its pass builders read it; the accumulate phase takes the main camera's from its pass. A skin
-		// the engine draws no partition of is not drawn at all.
-		std::uint32_t partitionMask = 0;
-		if (skinPartitions) {
-			partitionMask = SkinPartitionMask(*data.skinInstance, LodRowOf(*geometry, data.shaderProperty.get()));
-			if (!partitionMask) {
-				--stats.ineligible[static_cast<std::size_t>(reason)];
-				++stats.ineligible[static_cast<std::size_t>(Ineligible::Hidden)];
-				a_bucket = Ineligible::Hidden;
-				return false;
-			}
-		}
+		// Which of them the engine draws, from the fade node's LOD level as both of its pass builders read it. A skin the
+		// engine draws no partition of at this level stays a member that draws nothing (kNoPartitions).
+		const std::uint16_t partitionMask = SkinPartitionsOf(*geometry);
 		auto* triShape = skinPartition ? skinPartition->buffData : data.rendererData;
 		const std::uint32_t geometrySlot = ResolveGeometrySlot(*geometry, triShape, skinPartition, timer);
 		if (geometrySlot == Tables::kSlotFree) {
@@ -553,15 +542,14 @@ namespace DCLF
 		// The object's slot: past the last `continue`, so a slot is only ever taken by a record that is written.
 		const std::uint32_t slotBefore = trackedEntry->slot;
 		const std::uint32_t objectId = AcquireObjectSlot(*trackedEntry, geometry);
-		// The accumulated half is the accumulate phase's: a record written again for the same object keeps the patch the
-		// last phase gave it, which the next renews or lets lapse (LapseAccumulated). An entry written every frame (a face,
-		// an actor's part) would otherwise lose its patch here and take it back there, every frame.
+		// The accumulated half is the membership's: a member written again for the same object keeps its binding (checked
+		// against its witnesses when bound again). An entry written every frame (a face, an actor's part) would otherwise
+		// lose its binding here and take it back there, every frame.
 		const bool keepMember = wasMember && objectId == slotBefore && a_bucket == Ineligible::None && !shadowOnly &&
 		                        !(tables.objects[objectId].flags & kObjectFree);
 		if (wasMember && !keepMember)
 			DropResidentSlot(slotBefore, false);
-		const bool keepHalf = keepMember || (!denseWalk && objectId == slotBefore && objectId < patchedFrame.size() && patchedFrame[objectId] + 1 == frame &&
-		                                        !(tables.objects[objectId].flags & kObjectFree));
+		const bool keepHalf = keepMember;
 		tables.objectSeen[objectId] = walkSerial;
 		if (objectBoneRows) {
 			const std::size_t at = std::size_t(tables.PlaceBones(objectId, objectBoneRows)) * 4;
@@ -681,7 +669,7 @@ namespace DCLF
 			tables.SetWatch(objectId, Tables::kWatchShading,
 				(shaderProperty && shaderProperty->GetControllers()) || (alphaProperty && alphaProperty->GetControllers()));
 		}
-		tables.skinPartitions[objectId] = static_cast<std::uint8_t>(skinPartitions && skinPartitions->numPartitions > 1 ? partitionMask : 0);
+		tables.skinPartitions[objectId] = partitionMask;
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;
 			trackedEntry->objectId = objectId;
@@ -864,20 +852,13 @@ namespace DCLF
 		const std::uint32_t slot = a_tracked.slot;
 		if (!skin || !ActiveToggles().skinned || !(tables.objects[slot].flags & kObjectSkinned))
 			return false;
-		const auto* partitions = skin->skinPartition.get();
-		std::uint32_t mask = 0;
-		if (partitions) {
-			mask = SkinPartitionMask(*skin, LodRowOf(*a_geometry, data.shaderProperty.get()));
-			if (!mask)
-				return false;
-		}
 		// The size the engine's last palette update gave it; the job checks it again after this frame's.
 		const std::uint32_t rows = skin->numMatrices * 3;
 		if (!rows || !skin->boneMatrices || !skin->prevBoneMatrices || rows > 240 || rows != tables.boneRows[slot])
 			return false;
 		skinnedObjects.push_back(a_geometry);
 		++stats.lightSkins;
-		const auto partitionMask = static_cast<std::uint8_t>(partitions && partitions->numPartitions > 1 ? mask : 0);
+		const std::uint16_t partitionMask = SkinPartitionsOf(*a_geometry);
 		if (tables.skinPartitions[slot] != partitionMask)
 			tables.NoteChange(slot, kChangeSkin);
 		tables.skinPartitions[slot] = partitionMask;
@@ -1346,8 +1327,6 @@ namespace DCLF
 			nodeChanged.clear();
 			dirtyRoots.clear();
 			propertyDependents.clear();
-			accumulatePatched.clear();
-			lastPatched.clear();
 			rootMotion.clear();
 			movingRoots.clear();
 			hiddenDependents.clear();

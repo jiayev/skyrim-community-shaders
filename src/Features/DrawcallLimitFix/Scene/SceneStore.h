@@ -242,9 +242,10 @@ namespace DCLF
 			}
 			// Skins of several partitions (CS_DCLF_SKIN_PARTITIONS): bit i draws partition i, walking the
 			// geometry slots' nextPartition links from the object's geometryIndex (partition 0). 0 for every
-			// other object, which draws its one geometry. The scene phase sets it from the fade node's LOD level
-			// for the shadow views; the accumulate phase replaces it from the registered pass for the main camera.
-			std::vector<std::uint8_t> skinPartitions;             // parallel to objects
+			// other object, which draws its one geometry; kNoPartitions for a skin its LOD level draws nothing of. The scene
+			// phase sets it from the fade node's LOD level, the row GetRenderPasses gives the main pass and the shadow views
+			// alike, and rewrites it when the level changes (the fade watch: FUN_14147a430 writes the level).
+			std::vector<std::uint16_t> skinPartitions;            // parallel to objects
 			std::vector<GeometryConstants> geometryConstants;     // parallel to pipelines (per-frame PerGeometry values)
 			std::vector<std::uint8_t> geometryConstantsValid;     // parallel to pipelines
 			// The frame's lighting (DirLightDirection, DirLightColor, DirectionalAmbient, AmbientSpecularTintAndFresnelPower):
@@ -257,12 +258,6 @@ namespace DCLF
 			// The property whose lighting pass supplied each pipeline's per-frame constants, kept so
 			// RefreshFrameConstants can re-evaluate them once the main camera's state is current.
 			std::vector<RE::BSShaderProperty*> geometryTemplate;  // parallel to pipelines
-			// Whether each pipeline's template came from an object the engine itself kept. The template
-			// supplies the scene light list, so one taken from a culled object hands its lighting to every
-			// visible object on that pipeline - the blown-out interior defect. This flag is what lets a
-			// later native-visible object take the template over, which replaces the ordering guarantee
-			// that a persistent table cannot keep.
-			std::vector<std::uint8_t> geometryTemplateNative;     // parallel to pipelines
 			// The PerTechnique values (and the technique's filter modes and shadow mask), one row per TechniqueKey - what
 			// EvaluateTechnique reads of a pass descriptor - which every pipeline of the key shares (pipelineTechnique).
 			// RefreshFrameConstants evaluates each used row once a frame and writes it only when it differs, versioning its
@@ -405,7 +400,8 @@ namespace DCLF
 				std::uint32_t boneOffset = 0, boneRows = 0, extraOffset = kNoExtraRows, shadowTechnique = 0, skyTechnique = 0, faceStream = kNoFaceStream;
 				std::uint32_t boneCapacity = 0;  // where a record's previous palette and extras are, when it has either
 				std::uint32_t sceneFlags = 0;
-				std::uint8_t skinPartitions = 0, shadowReject = 0, resident = 0;
+				std::uint16_t skinPartitions = 0;
+				std::uint8_t shadowReject = 0, resident = 0;
 			};
 			Columns ColumnsOf(std::uint32_t a_slot) const;
 			/** @brief What differs between two snapshots of a slot, as ChangeCause bits. */
@@ -511,7 +507,6 @@ namespace DCLF
 				a_column(geometryConstants);
 				a_column(geometryConstantsValid);
 				a_column(geometryTemplate);
-				a_column(geometryTemplateNative);
 				a_column(pipelineTechnique);
 				a_column(permutations);
 				a_column(pipelineLastUsed, kSlotFree);
@@ -696,19 +691,8 @@ namespace DCLF
 			std::uint32_t materialWrites = 0;
 			std::uint32_t materialsRewritten = 0;
 			std::uint32_t materialsDropped = 0;
+			std::uint32_t materialsHeld = 0;  // referenced slots whose write could not be evaluated yet: kept, asked again
 			std::uint32_t frameMaterialSamples = 0;
-			//
-			//   if any native-visible object draws on pipeline p, then geometryTemplate[p] came from a
-			//   native-visible object.
-			//
-			// Only that implication matters. A pipeline used *solely* by culled candidates is templated by
-			// one of them and always will be, because there is no native-visible object on it to elect,
-			// and no visible object is harmed by its light list.
-			//
-			// templateDefects is measured from the objects after the loop, not from the election
-			std::uint32_t templateDefects = 0;      // native-visible objects on a culled-templated pipeline; must be 0
-			std::uint32_t pipelinesCulledOnly = 0;  // pipelines no native-visible object draws on (informational)
-			std::uint32_t templateUpgrades = 0;     // templates a later native-visible object took over
 		};
 
 		void ResetTimes()
@@ -812,6 +796,8 @@ namespace DCLF
 			std::array<std::uint64_t, 4> failedBy{};  // the engine's pass, no record, a frame verdict, material or extras
 			std::uint64_t parityChecks = 0, parityChecked = 0, parityPass = 0, parityRecord = 0;
 			std::uint64_t parityPending = 0;  // residents whose fade root is fading: the feedback's next decode ends them
+			std::uint64_t registeredUnbound = 0;  // main-pass registrations of eligible objects DCLF has not bound (DrainCapture)
+			std::string registeredUnboundFirst;
 		};
 		ResidentStats TakeResidentStats() { return std::exchange(residentStats, {}); }
 
@@ -977,6 +963,11 @@ namespace DCLF
 		 * clear, then NiSkinPartition::Unk_25 applies the table. 0 when it draws none.
 		 */
 		static std::uint32_t SkinPartitionMask(const RE::NiSkinInstance& a_skin, std::uint32_t a_lodRow);
+		/**
+		 * @brief Tables::skinPartitions for a geometry: 0 without a skin partition, kNoPartitions where its LOD row draws
+		 * none, the mask for a skin of several partitions, 0 for one of a single drawn partition.
+		 */
+		static std::uint16_t SkinPartitionsOf(const RE::BSGeometry& a_geometry);
 
 		/** @brief Index into GetTables().objects for this frame, or -1 when the geometry is not drawn by DCLF. */
 		std::int32_t FindObject(const RE::BSGeometry* a_geometry) const;
@@ -1262,12 +1253,22 @@ namespace DCLF
 		void AddGeometry(RE::BSGeometry* a_geometry, RE::NiNode* a_categoryNode, Ineligible a_parentReason);
 		void ValidateSlice();
 		void FindLightingShader();
-		void CollectAccumulatedPasses();
-		void AddAccumulatedPass(const RE::BSGeometry* a_geometry, const AccumulatedPass& a_pass);
-		/** @brief The main camera's batch renderers, for the capture hook's filter. Cheap; every frame. */
+		/** @brief The main camera's batch renderers, for the diagnostics' filter of the capture. Cheap; every frame. */
 		bool RefreshMainBatchRenderers();
-		/** @brief Fills accumulatedPasses from the capture; compares it against the walk when asked. */
-		void CompareCapturedPasses(bool a_compare);
+		/**
+		 * @brief Drains the capture: the frame's lighting pass (below), and the diagnostics (registered eligible objects DCLF has
+		 * not bound, the decal order probe).
+		 */
+		void DrainCapture();
+		/**
+		 * @brief A Lighting pass the main camera registered this frame with its light list (FindLightingPass's test), valid
+		 * until the frame's accumulator is cleared. A member's property has no main-camera pass (the engine does not register
+		 * it), so a pipeline's PerGeometry block is evaluated from this pass under its own descriptor: what differs per object
+		 * is overridden per draw, and the rest is the frame's or the descriptor's.
+		 */
+		const RE::BSRenderPass* frameLightingPass = nullptr;
+		/** @brief The pass a pipeline's template evaluates from: the property's own Lighting pass, else the frame's. */
+		const RE::BSRenderPass* TemplatePassOf(RE::BSShaderProperty* a_property) const;
 		/** @brief A cheap hash of everything RefreshCategoryNodes reads to find category nodes. */
 		std::uint64_t CategorySignature() const;
 		// a_accumulated: the frame's registered pass, whose captured fade state then stands in for the live one.
@@ -1320,6 +1321,14 @@ namespace DCLF
 			std::uint32_t object;
 		};
 		std::vector<DecalOrderEntry> decalOrder;
+		// Member decals (DecalOrder.cpp): object -> its chain, the decal key's group, technique and sub-pass. Joined with the
+		// membership patch, left with the membership (DropResidentSlot). Their draw order within a chain is the scene's
+		// (CS_DCLF_DECAL_ORDER, default stable) or the engine's scene lists' of the frame (=engine).
+		ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> memberDecals;
+		bool memberDecalsChanged = true;
+		bool decalOrderRegistered = false;  // the last ordering had registered decals (decalOrder), which change every frame
+		/** @brief Tables::decalOrdinal and decalCount: the member decals and this frame's registered ones, in the engine's draw order. */
+		void OrderDecals();
 		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;
 		// Diagnostics: the frame each category node was found and the refresh's cause (GetCategoryInfo), and
 		// the source AddGeometry stamps on new entries.
@@ -1377,11 +1386,11 @@ namespace DCLF
 		ankerl::unordered_dense::map<const RE::BSShaderMaterial*, std::vector<std::uint32_t>> materialDependents;
 		void ListMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
 		void UnlistMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
-		// Lighting passes of the main-camera accumulator's batches this frame, by geometry.
+		// The frame's membership joins' passes (BindByMembership), by geometry.
 		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedPasses;
-		// The accumulator CollectAccumulatedPasses last saw non-null (Step A probe).
+		// The main camera's accumulator, latched non-null.
 		RE::BSGraphics::BSShaderAccumulator* latchedAccumulator = nullptr;
-		// The batch renderers the main accumulator draws from, refreshed by CollectAccumulatedPasses.
+		// The batch renderers the main accumulator draws from (RefreshMainBatchRenderers).
 		// Registration is captured from every batch renderer in the game, including the shadow cameras',
 		// so the captured set has to be filtered to these before it can be compared or used.
 		ankerl::unordered_dense::set<const RE::BSBatchRenderer*> mainBatchRenderers;
@@ -1439,6 +1448,8 @@ namespace DCLF
 		 */
 		void ProcessMaterialWrites();
 		ankerl::unordered_dense::set<const RE::BSShaderMaterial*> writtenMaterials;
+		// Referenced material slots whose last write could not be evaluated yet (ProcessMaterialWrites asks again next frame).
+		std::vector<std::uint32_t> materialEvaluationsPending;
 
 	public:
 		/** @brief The materials this frame's accumulate phase drained as written (diagnostics). */
@@ -1536,10 +1547,6 @@ namespace DCLF
 		 */
 		static std::uint64_t ShadingInputsOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry);
 		/**
-		 * @brief A kept skinned record: the engine's palette update and its rows into this walk's lists, and the
-		 * partitions its fade node's LOD level draws, as WriteObject would. False when WriteObject must (no partition
-		 * drawn, or no rows).
-		 */
 		/**
 		 * @brief Whether a kept record's skin stays as written: skinning on, its partitions drawn, its palette the
 		 * record's size. Notes a partition mask that changed; the palette itself is the scene placement job's.
@@ -1697,12 +1704,6 @@ namespace DCLF
 		void ListFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		void UnlistFadeDependent(RE::BSGeometry* a_geometry, Tracked& a_tracked);
 		/**
-		 * @brief End of the accumulate phase: the slots the last one patched and this one did not have their patch lapse
-		 * (their accumulated half reset). A patch this phase renewed stays, so a record keeps its patch for as long as the
-		 * engine (or PrimaryCull) keeps giving it a pass, and changes only when that pass does.
-		 */
-		void LapseAccumulated();
-		/**
 		 * @brief Scene membership: binds the bind queue's records from passes built from the objects (PrimaryCull::MembershipPass),
 		 * as residents, which the engine's registrations and the lapse leave alone until the record is written again.
 		 */
@@ -1798,7 +1799,6 @@ namespace DCLF
 		std::uint64_t perFrameLayout = ~0ull;
 		std::uint32_t validatedFrame = ~0u;
 		std::vector<RE::BSGeometry*> pendingEvaluation;
-		// The slots this accumulate phase patched, and the last one's; patchedFrame (per slot) is the frame of its last patch.
 		// CS_DCLF_DERIVE_PROBE's LOD fade parity: the frame's inputs, sampled once a frame when first needed.
 		LodFadeFrame lodFadeSample;
 		bool lodFadeSampled = false;
@@ -1809,9 +1809,6 @@ namespace DCLF
 		std::vector<std::uint32_t> bindQueue;
 		std::vector<std::uint8_t> materialMember;  // per material slot: a membership resident was bound to it (diagnostic)
 		std::uint32_t membershipWitness = ~0u;  // PrimaryCull::MembershipWitness when the residents were bound
-		std::vector<std::uint32_t> accumulatePatched;
-		std::vector<std::uint32_t> lastPatched;
-		std::vector<std::uint32_t> patchedFrame;
 		std::vector<std::uint32_t> refreshedGeometry;  // geometry slots ResolveGeometrySlot re-resolved in place this walk
 		// Slot liveness (Tables' SlotTables): the references, counted from the logs. Per object slot, the geometry, pipeline
 		// and material it was counted as referencing (slot and generation); per geometry slot, the partition after it in a

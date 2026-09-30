@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <cstdint>
 #include <type_traits>
 
@@ -133,6 +134,16 @@ namespace DCLF
 	inline constexpr std::uint32_t kNoPartition = ~0u;
 	/** @brief The most partitions a skin DCLF draws may have: one bit each in the draw's partition mask. */
 	inline constexpr std::uint32_t kMaxSkinPartitions = 8;
+	/**
+	 * @brief Tables::skinPartitions for a skin whose fade node's LOD level draws none of its partitions (SkinPartitionMask 0:
+	 * the engine draws nothing of it at that level). The object stays a member with its bindings; BuildDraws writes no draw.
+	 */
+	inline constexpr std::uint32_t kNoPartitions = 1u << kMaxSkinPartitions;
+	/** @brief The draws a partition mask gives: one per partition it names, one for 0 (the one geometry), none for kNoPartitions. */
+	inline constexpr std::uint32_t PartitionDraws(std::uint32_t a_partitions)
+	{
+		return a_partitions == kNoPartitions ? 0u : a_partitions ? static_cast<std::uint32_t>(std::popcount(a_partitions)) : 1u;
+	}
 
 	/**
 	 * @brief Geometry shared by every object that uses the same BSGraphics::TriShape.

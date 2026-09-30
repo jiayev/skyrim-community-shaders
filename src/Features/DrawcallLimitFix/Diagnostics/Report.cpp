@@ -237,13 +237,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				stats.syntheticLodRow, stats.syntheticFirst.empty() ? "" : "; first: ", stats.syntheticFirst);
 		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed); against the accumulator: {} compared, {} missing, {} extra, {} technique differs, {} subPass differs{}",
-			capture.captured, capture.threads, capture.overflowed, capture.compared, capture.missing, capture.extra,
-			capture.techniqueDiffers, capture.subPassDiffers,
-			(capture.missing || capture.techniqueDiffers || capture.subPassDiffers) ? "" : " <- OK");
+		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed)", capture.captured, capture.threads, capture.overflowed);
 		if (DCLF::ActiveToggles().ownership)
-			logger::info("[DCLF] static ownership: {} passes withheld from the batch renderer, {} objects claimed, {} claimed but not drawn{}",
-				capture.withheld, capture.claimed, capture.holes, capture.holes ? " <- HOLES" : "");
+			logger::info("[DCLF] static ownership: {} objects claimed, {} left out of the engine's cull and not drawn{}",
+				capture.claimed, capture.holes, capture.holes ? " <- HOLES" : "");
 		if (DCLF::ActiveToggles().ownership)
 			logger::info("[DCLF] claim churn: +{} -{} ({} of the drops still had an engine pass, so the native loop takes them back)",
 				capture.claimsAdded, capture.claimsDropped, capture.droppedAfterCull);
@@ -280,13 +277,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::info("[DCLF] left native by property type:{}; {} alpha blended, {} opaque ({} alpha tested)",
 				byProperty, stats.rejectedBlended, stats.rejectedOpaque, stats.rejectedOpaqueAlphaTest);
 		}
-		logger::info("[DCLF] pipeline templates: {} of {} drawn only by culled candidates, {} taken over this frame; {} visible objects on a culled template{}",
-			stats.pipelinesCulledOnly, stats.pipelines, stats.templateUpgrades, stats.templateDefects,
-			stats.templateDefects ? " <- CULLED TEMPLATE" : "");
 		// The material cache and its standing alarm. materialCacheStale must be 0: it is the count of
 		// entries that were re-evaluated live and disagreed with what the cache would have served.
-		logger::info("[DCLF] materials (last frame): {} evaluated; {} written ({} re-evaluated, {} dropped), {} frame samples; slots {} alive (+{} retired on last reference, {} of them a member's); validated {}, stale {}{}",
-			stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped,
+		logger::info("[DCLF] materials (last frame): {} evaluated; {} written ({} re-evaluated, {} dropped, {} held for another evaluation), {} frame samples; slots {} alive (+{} retired on last reference, {} of them a member's); validated {}, stale {}{}",
+			stats.materialsEvaluated, stats.materialWrites, stats.materialsRewritten, stats.materialsDropped, stats.materialsHeld,
 			stats.frameMaterialSamples,
 			stats.materialCacheEntries, stats.materialCacheEvicted, stats.materialEvictedMember, stats.materialsValidated, stats.materialCacheStale,
 			stats.materialCacheStale ? " <- STALE MATERIAL" : "");

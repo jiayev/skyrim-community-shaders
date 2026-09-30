@@ -36,13 +36,9 @@ namespace DCLF
 			impl->drawnResync = true;
 		}
 
-		// Hole detector. Everything claimed when this frame's passes were registered should have been
-		// drawn by the colour epoch that has just run; the native loop was told not to draw it. Counted on
+		// Hole detector: what the engine's cull or registration left out this frame (PrimaryCull: the stood-in entries' members
+		// in view and the leaf exclusion's geometries) should have been drawn by the colour epoch that has just run. Counted on
 		// the CPU, exactly, with no readback.
-		// A hole is an object that was withheld *and* not drawn. Being claimed is not enough on its own:
-		// an object the engine culled this frame is never registered, so it is never withheld either, and
-		// nobody was going to draw it. The test for "the engine would have drawn it" is that its pass was
-		// captured this frame, which is exactly what the tables are built from.
 		auto& store = SceneStore::Get();
 		auto& captureStats = capture.MutableStats();
 		captureStats.holes = 0;
@@ -51,52 +47,27 @@ namespace DCLF
 		{
 			std::uint32_t frames = 0, framesWithHoles = 0, holes = 0, samples = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> byReason{};
-			std::uint32_t inTables = 0, handedBack = 0;
-			std::uint32_t memberPasses = 0;  // withheld passes of scene members: the engine registered what DCLF owns
+			std::uint32_t memberPasses = 0;  // main-pass registrations of scene members: the engine draws what DCLF draws too
 			std::uint32_t memberSamples = 0;
 		};
 		static HoleReport report;
 		std::uint32_t frameHoles = 0;
-		// A hole was withheld, and withholding is a registration's (claimed when it registered): walked from this frame's
-		// withheld registrations, which are far fewer than the claims.
-		static std::vector<const RE::BSGeometry*> holeGeometries;
-		holeGeometries.clear();
-		for (const auto& entry : capture.LastDrain()) {
-			if (entry.withheld && entry.geometry && !capture.HandedBack(entry.geometry) && !impl->DrawnThisFrame(entry.geometry, frame))
-				holeGeometries.push_back(entry.geometry);
-			if (entry.withheld && entry.geometry && store.IsMember(store.FindObject(entry.geometry))) {
+		{
+			const auto& mainRenderers = store.GetMainBatchRenderers();
+			for (const auto& entry : capture.LastDrain()) {
+				if (!entry.geometry || !mainRenderers.contains(entry.batch) || !store.IsMember(store.FindObject(entry.geometry)) ||
+					!impl->DrawnThisFrame(entry.geometry, frame))
+					continue;
 				++report.memberPasses;
 				if (report.memberSamples++ < 5)
 					logger::info("[DCLF] a scene member's pass registered by the engine, frame {}: '{}' under '{}', hint {}", frame, entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "",
 						entry.geometry->parent && entry.geometry->parent->name.c_str() ? entry.geometry->parent->name.c_str() : "", entry.hint);
 			}
 		}
-		std::sort(holeGeometries.begin(), holeGeometries.end());
-		holeGeometries.erase(std::unique(holeGeometries.begin(), holeGeometries.end()), holeGeometries.end());
-		for (const auto* geometry : holeGeometries) {
-			const auto* accumulated = store.FindAccumulatedPass(geometry);
-			++captureStats.holes;
-			++frameHoles;
-			bool fromAccumulate = false;
-			const Ineligible reason = store.ReasonThisFrame(geometry, &fromAccumulate);
-			++report.byReason[static_cast<std::size_t>(reason)];
-			const std::int32_t object = store.FindObject(geometry);
-			report.inTables += object >= 0;
-			if (report.samples++ < 30) {
-				logger::info("[DCLF] hole, frame {}: '{}' withheld and not drawn - {} ({}), {}, pass technique {:#x} list {}, last drawn by DCLF {}", frame,
-					geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase",
-					object >= 0 ? fmt::format("object {} in the tables", object) : std::string("not in the tables"), accumulated ? accumulated->technique : 0u,
-					accumulated ? accumulated->subPass : 0u,
-					impl->drawnGeometry.contains(geometry) ? fmt::format("{} frames ago", frame - impl->drawnGeometry.find(geometry)->second.last) : std::string("never"));
-			}
-		}
-		// The claimed objects with a pass this frame (registered, synthetic or resident), for the reports alone: every 16th
-		// frame, held in between.
+		// The claimed objects, for the reports alone: every 16th frame, held in between.
 		if (frame % 16 == 0) {
-			captureStats.claimed = 0;
-			if (const auto previous = capture.CurrentClaims())
-				for (const auto& [geometry, pass] : store.GetAccumulatedPasses())
-					captureStats.claimed += previous->contains(geometry) ? 1u : 0u;
+			const auto previous = capture.CurrentClaims();
+			captureStats.claimed = previous ? static_cast<std::uint32_t>(previous->size()) : 0u;
 		}
 		// The members in view under the entries the primary's cull stood in for (PrimaryCull): nothing registered them, so
 		// one the colour epoch did not draw is a hole whatever the claims say.
@@ -104,13 +75,36 @@ namespace DCLF
 			if (impl->DrawnThisFrame(geometry, frame))
 				continue;
 			PrimaryCull::Get().CountHole();
+			++captureStats.holes;
 			++frameHoles;
 			bool fromAccumulate = false;
 			const Ineligible reason = store.ReasonThisFrame(geometry, &fromAccumulate);
 			++report.byReason[static_cast<std::size_t>(reason)];
-			if (report.samples++ < 30)
-				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({})", frame,
-					geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase");
+			if (report.samples++ < 30) {
+				const auto& tables = store.GetTables();
+				const std::int32_t object = store.FindObject(geometry);
+				const bool inTables = object >= 0 && static_cast<std::size_t>(object) < tables.objects.size();
+				const std::uint32_t flags = inTables ? tables.objects[object].flags : 0u;
+				const std::uint32_t ordinal = inTables && static_cast<std::size_t>(object) < tables.decalOrdinal.size() ? tables.decalOrdinal[object] : ~0u;
+				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({}); object {}, flags {:#x}, member {}, decal ordinal {} of {}/{}, "
+							 "last drawn {}, colour build state {}, material slot {} ({})",
+					frame, geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase", object,
+					flags, store.IsMember(object), ordinal, tables.decalCount[0], tables.decalCount[1],
+					impl->drawnGeometry.contains(geometry) ? fmt::format("{} frames ago", frame - impl->drawnGeometry.find(geometry)->second.last) : std::string("never"),
+					inTables && static_cast<std::size_t>(object) < impl->mainPayload[kAsyncColour].objectState.size() ?
+						static_cast<int>(impl->mainPayload[kAsyncColour].objectState[object]) : -1,
+					inTables ? tables.objects[object].materialIndex : ~0u, [&]() -> std::string {
+						const std::uint32_t m = inTables ? tables.objects[object].materialIndex : ~0u;
+						const auto& lookups = store.GetLookups();
+						if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size())
+							return "no lookup";
+						const auto& lookup = lookups.materials[m];
+						return fmt::format("resolved {}, key {}, material version {}, lookup record version {}; slot alive {}, keyed {}, last used {} (frame {}), references {}", lookup.resolved,
+							lookup.key == tables.materialSlotKey[m] ? "current" : "stale", m < tables.materialVersion.size() ? tables.materialVersion[m] : 0ull, lookup.recordVersion,
+							tables.materialSlots.Alive(m), tables.materialSlotKey[m].first != nullptr, m < tables.materialLastUsed.size() ? tables.materialLastUsed[m] : ~0u, frame,
+							tables.materialSlots.References(m));
+					}());
+			}
 		}
 		// The entries whose members the colour build draws in full are left out of the primary's cull from the next frame on.
 		{
@@ -118,7 +112,6 @@ namespace DCLF
 			impl->newlyDrawn.clear();
 		}
 		++report.frames;
-		report.handedBack += captureStats.handedBack;
 		report.holes += frameHoles;
 		report.framesWithHoles += frameHoles != 0;
 		if (report.frames == 300) {
@@ -126,9 +119,8 @@ namespace DCLF
 			for (std::size_t r = 0; r < report.byReason.size(); ++r)
 				if (report.byReason[r])
 					reasons += fmt::format(" {}={}", kIneligibleNames[r], report.byReason[r]);
-			logger::info("[DCLF] holes over {} frames: {} in {} frames ({} of them in the tables); by reason:{}; {} withheld passes handed back to the native loop; "
-						 "{} passes of scene members registered by the engine (withheld)",
-				report.frames, report.holes, report.framesWithHoles, report.inTables, reasons.empty() ? " -" : reasons, report.handedBack, report.memberPasses);
+			logger::info("[DCLF] holes over {} frames: {} in {} frames; by reason:{}; {} passes of drawn scene members registered by the engine as well",
+				report.frames, report.holes, report.framesWithHoles, reasons.empty() ? " -" : reasons, report.memberPasses);
 			report = {};
 		}
 

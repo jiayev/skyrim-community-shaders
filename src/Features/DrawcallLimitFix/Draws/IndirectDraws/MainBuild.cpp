@@ -669,7 +669,7 @@ namespace DCLF::Draws
 			{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius, o, 0, partitions };
 		if (depthOnly)
 			SetFadeRow(a_input, tables, o);
-		return drawable ? static_cast<std::uint8_t>(partitions ? std::popcount(partitions) : 1) : std::uint8_t{ 0 };
+		return drawable ? static_cast<std::uint8_t>(PartitionDraws(partitions)) : std::uint8_t{ 0 };
 	}
 
 	void MainBuild::RegionAcquire(std::uint64_t a_key)

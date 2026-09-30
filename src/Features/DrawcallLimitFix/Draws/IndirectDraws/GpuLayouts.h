@@ -111,7 +111,7 @@ namespace DCLF::Draws
 		std::uint32_t objectIndex;
 		std::uint32_t decalOrdinal;  // decals only: the slot in the group's range
 		// Skins of several partitions: bit i draws partition i (Tables::skinPartitions); 0 draws the one
-		// geometry. Left 0 by every input that is not such a skin.
+		// geometry, kNoPartitions nothing. Left 0 by every input that is not a skin.
 		std::uint32_t partitions;
 		// A shadow input's second vertex stream: the GeometryDraw holding a face shape's positions (the shadow
 		// payload appends them after the geometry slots), or ~0u. The main pass never has one.

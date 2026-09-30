@@ -355,6 +355,8 @@ static const uint kGeometryStride = 40;
 // mask names them (bit i = partition i), and each partition's GeometryDraw links to the next one's.
 static const uint kMaxPartitions = 8;
 static const uint kNoPartition = 0xFFFFFFFFu;
+// The mask of a skin whose LOD level draws none of its partitions (Records.h): no draw at all.
+static const uint kNoPartitions = 1u << 8;
 // DrawSequence: 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
 // then the object index), which is why the object index sits between the rows' addresses and the vertex buffer.
 // The second vertex buffer view (slot 1) is a face shape's positions (FaceSnapshots), else the first again.
@@ -742,6 +744,8 @@ bool Occluded(float3 boundCentre, float boundRadius, bool nativeVisibleForSample
 	// names, walking the partitions' GeometryDraw links. Every draw is the same object: one record, one
 	// visibility word, one verdict.
 	const uint partitions = inputs.Load(inputOffset + 40);
+	if (partitions == kNoPartitions)
+		return;
 	// The second stream, the same for every partition: a face shape's positions are the whole shape's.
 	const uint streamIndex = inputs.Load(inputOffset + 44);
 	const uint4 stream = streamIndex != kNoStream ? geometries.Load4(streamIndex * kGeometryStride) : uint4(0, 0, 0, 0);

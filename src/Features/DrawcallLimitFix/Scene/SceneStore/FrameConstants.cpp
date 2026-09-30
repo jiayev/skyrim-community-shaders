@@ -212,14 +212,21 @@ namespace DCLF
 		writtenMaterials.clear();
 		const bool complete = MaterialSources::Drain(writtenMaterials);
 		stats.materialWrites = static_cast<std::uint32_t>(writtenMaterials.size());
-		stats.materialsRewritten = stats.materialsDropped = 0;
-		if (complete && writtenMaterials.empty())
+		stats.materialsRewritten = stats.materialsDropped = stats.materialsHeld = 0;
+		// The referenced slots a write could not be evaluated for yet (the Lighting shader not found, the material not ready):
+		// asked again, as if written again, until they are.
+		std::vector<std::uint32_t> retry = std::move(materialEvaluationsPending);
+		materialEvaluationsPending.clear();
+		if (complete && writtenMaterials.empty() && retry.empty())
 			return;
 		if (!complete)
 			logger::warn("[DCLF] material write queue overflowed: every material record is re-evaluated");
 		auto& evaluator = ConstantEvaluator::Get();
 		const bool canEvaluate = evaluator.HasLightingShader();
 		auto written = [&](const RE::BSShaderMaterial* a_material) { return !complete || writtenMaterials.contains(a_material); };
+		// Whether a slot is referenced is read below: the references are counted from the tables' logs, which this frame's
+		// bindings (a member joined since the walk's sweep) are in but not counted yet.
+		UpdateSlotReferences();
 		std::vector<std::uint32_t> affected;
 		if (complete) {
 			for (const auto* material : writtenMaterials)
@@ -230,26 +237,36 @@ namespace DCLF
 			for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot)
 				affected.push_back(slot);
 		}
-		for (const std::uint32_t slot : affected) {
+		const std::size_t written_ = affected.size();
+		affected.insert(affected.end(), retry.begin(), retry.end());
+		for (std::size_t i = 0; i < affected.size(); ++i) {
+			const std::uint32_t slot = affected[i];
 			if (!tables.materialSlots.Alive(slot))
 				continue;
 			const auto key = tables.materialSlotKey[slot];
-			if (!key.first || !written(key.first))
+			if (!key.first || (i < written_ && !written(key.first)))
 				continue;
-			// A referenced slot's key is a bound object's material, and so live: it is evaluated again in place.
-			MaterialRecord live;
-			if (tables.materialSlots.References(slot) && canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
-				if (!(live == tables.materials[slot])) {
-					tables.materials[slot] = live;
-					tables.materialVersion[slot] = ++materialVersions;
-					tables.MarkMaterialTextureChanged(slot, frame);
-					++stats.materialsRewritten;
+			// A referenced slot's key is a bound object's material, and so live: it is evaluated again in place. One that
+			// cannot be evaluated now keeps its last record, which its objects go on drawing with, and is asked again next
+			// frame: a referenced slot is never freed under the objects that hold it (a member is bound once).
+			if (tables.materialSlots.References(slot)) {
+				MaterialRecord live;
+				if (canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
+					if (!(live == tables.materials[slot])) {
+						tables.materials[slot] = live;
+						tables.materialVersion[slot] = ++materialVersions;
+						tables.MarkMaterialTextureChanged(slot, frame);
+						++stats.materialsRewritten;
+					}
+				} else if (std::find(materialEvaluationsPending.begin(), materialEvaluationsPending.end(), slot) == materialEvaluationsPending.end()) {
+					materialEvaluationsPending.push_back(slot);
+					++stats.materialsHeld;
 				}
 				tables.ListMaterialSlot(slot, frame);
 				continue;
 			}
-			// Unreferenced (the drain frees it) or not evaluable: dropped, so that its next use evaluates it afresh. An
-			// object's cached derivation checks its slot is still allocated to the same key.
+			// Unreferenced (the drain frees it): dropped, so that its next use evaluates it afresh. An object's cached
+			// derivation checks its slot is still allocated to the same key.
 			ClearMaterialSlot(slot);
 			tables.materialSlots.Free(slot);
 			++stats.materialsDropped;
@@ -328,7 +345,7 @@ namespace DCLF
 			// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
 			// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
 			auto* property = tables.geometryTemplate[i];
-			auto templatePassOf = [&]() { return property ? FindLightingPass(property) : nullptr; };
+			auto templatePassOf = [&]() { return TemplatePassOf(property); };
 			const std::uint32_t geometryTechnique = (tables.pipelines[i].passDescriptor >> 24) & 0x3f;
 			const bool writesEye = geometryTechnique == 1 || geometryTechnique == 0xb || geometryTechnique == 0x10;
 			const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
@@ -484,9 +501,9 @@ namespace DCLF
 					descriptors.specularLODFade = lighting.specularLODFade;
 					descriptors.envmapLODFade = lighting.envmapLODFade;
 					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(o));
-					sp.first = fmt::format("slot {} '{}' (watch {:#x}, flags {:#x}, patched {} frames ago): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
+					sp.first = fmt::format("slot {} '{}' (watch {:#x}, flags {:#x}): material data ({} {} {}) against ({} {} {}), emit ({} {} {}) against ({} {} {}), mult {} against {}",
 						o, geometry->name.c_str() ? geometry->name.c_str() : "", o < tables.shadingWatch.size() ? tables.shadingWatch[o] : 0, tables.objects[o].flags,
-						o < patchedFrame.size() ? frame - patchedFrame[o] : ~0u, now.materialData[0], now.materialData[1], now.materialData[2], held.materialData[0],
+						now.materialData[0], now.materialData[1], now.materialData[2], held.materialData[0],
 						held.materialData[1], held.materialData[2], now.emitColor[0], now.emitColor[1], now.emitColor[2], held.emitColor[0], held.emitColor[1],
 						held.emitColor[2], emissiveMult, tables.emissiveMult[o]);
 				}

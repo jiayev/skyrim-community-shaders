@@ -41,10 +41,14 @@ namespace DCLF
 		if (a_tracked.slot == kNoObjectSlot || a_tracked.candidateFrame == 0 || a_tracked.candidateReason != Ineligible::None)
 			return false;
 		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		if (!property || (property->flags.underlying() & 0xc000000ull))  // the decal flags: their depth is the native depth pass's
+		if (!property)
+			return false;
+		// A decal is a member like any other (its group from the settled state); the blended decal group is DCLF's too.
+		const bool decal = (property->flags.underlying() & 0xc000000ull) != 0;
+		if (decal && !ActiveToggles().decals)
 			return false;
 		const auto* alpha = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		return !(alpha && (alpha->alphaFlags & 1));
+		return decal || !(alpha && (alpha->alphaFlags & 1));
 	}
 
 	void SceneStore::UpdateSunCandidates(bool a_full)
