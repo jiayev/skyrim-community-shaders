@@ -77,6 +77,7 @@ namespace SkinEditor
 		{
 			std::filesystem::path path, temporary, backup;
 			Bytes before;
+			const Output* output = nullptr;
 			bool existed = false;
 			bool replaced = false;
 		};
@@ -91,9 +92,11 @@ namespace SkinEditor
 				if (!destinations.insert(key).second)
 					throw std::runtime_error(T("feature.skin.more_than_one_output_uses_the_same_destination", "More than one output uses the same destination."));
 				std::filesystem::create_directories(file.path.parent_path());
-				file.temporary = file.path.wstring() + L".cs-skin.tmp";
-				if (std::filesystem::exists(file.temporary))
-					throw std::runtime_error(T("feature.skin.recover_or_move_the_previous_staged_file", "Recover or move the previous staged file: ") + UTF8(file.temporary));
+				file.output = &output;
+				const auto temporary = file.path.wstring() + L".cs-skin." + std::to_wstring(GetCurrentProcessId()) + L"." + std::to_wstring(GetTickCount64());
+				file.temporary = temporary + L".tmp";
+				for (uint32_t suffix = 1; std::filesystem::exists(file.temporary); ++suffix)
+					file.temporary = temporary + L"." + std::to_wstring(suffix) + L".tmp";
 				file.existed = std::filesystem::exists(file.path);
 				if (file.existed) {
 					file.before = ReadResource(UTF8(file.path));
@@ -113,19 +116,52 @@ namespace SkinEditor
 			for (auto& file : files) {
 				if (std::filesystem::exists(file.path) != file.existed || (file.existed && ReadResource(UTF8(file.path)) != file.before))
 					throw std::runtime_error(T("feature.skin.output_changed_during_publication", "Output changed during publication: ") + UTF8(file.path));
-				const bool success = file.existed ?
-				                         ReplaceFileW(file.path.c_str(), file.temporary.c_str(), file.backup.c_str(), 0, nullptr, nullptr) != FALSE :
-				                         MoveFileExW(file.temporary.c_str(), file.path.c_str(), MOVEFILE_WRITE_THROUGH) != FALSE;
-				if (!success)
-					throw std::runtime_error(T("feature.skin.could_not_publish", "Could not publish: ") + UTF8(file.path));
-				file.replaced = true;
+				if (file.existed) {
+					if (!CopyFileW(file.path.c_str(), file.backup.c_str(), TRUE)) {
+						const auto code = GetLastError();
+						throw std::runtime_error(I18n::GetSingleton()->Format("feature.skin.backup_write_failed", { { "path", UTF8(file.backup) }, { "code", std::to_string(code) } }, "Could not create backup: {path} (Windows error {code}). The original file has not been replaced."));
+					}
+					if (ReadResource(UTF8(file.backup)) != file.before)
+						throw std::runtime_error(T("feature.skin.backup_verification_failed", "Backup verification failed: ") + UTF8(file.backup));
+				}
+				const auto unchanged = [&] {
+					return std::filesystem::exists(file.path) == file.existed && (!file.existed || ReadResource(UTF8(file.path)) == file.before);
+				};
+				if (!unchanged())
+					throw std::runtime_error(T("feature.skin.output_changed_during_publication", "Output changed during publication: ") + UTF8(file.path));
+				const DWORD flags = MOVEFILE_WRITE_THROUGH | (file.existed ? MOVEFILE_REPLACE_EXISTING : 0);
+				if (MoveFileExW(file.temporary.c_str(), file.path.c_str(), flags)) {
+					file.replaced = true;
+				} else {
+					const auto code = GetLastError();
+					if (!unchanged())
+						throw std::runtime_error(T("feature.skin.output_changed_during_publication", "Output changed during publication: ") + UTF8(file.path));
+					std::ofstream fallback(file.path, std::ios::binary | std::ios::trunc);
+					if (fallback.is_open()) {
+						file.replaced = true;
+						fallback.write(reinterpret_cast<const char*>(file.output->bytes.data()), static_cast<std::streamsize>(file.output->bytes.size()));
+						fallback.flush();
+						fallback.close();
+					}
+					if (!file.replaced || fallback.fail())
+						throw std::runtime_error(I18n::GetSingleton()->Format("feature.skin.publish_write_failed", { { "path", UTF8(file.path) }, { "code", std::to_string(code) } }, "Could not save: {path} (replacement failed with Windows error {code}; direct write also failed). Your draft is retained."));
+					logger::warn("[Advanced Skin] Saved '{}' by direct write after replacement failed with Windows error {}", UTF8(file.path), code);
+				}
+				if (ReadResource(UTF8(file.path)) != file.output->bytes)
+					throw std::runtime_error(T("feature.skin.saved_file_verification_failed", "Saved file verification failed: ") + UTF8(file.path));
+				std::error_code ignored;
+				std::filesystem::remove(file.temporary, ignored);
 			}
 		} catch (const std::exception& error) {
 			std::string message = error.what();
 			for (auto it = files.rbegin(); it != files.rend(); ++it) {
-				if (!it->replaced && (it->backup.empty() || !std::filesystem::exists(it->backup)))
+				if (!it->replaced)
 					continue;
-				const bool restored = it->existed ? CopyFileW(it->backup.c_str(), it->path.c_str(), FALSE) != FALSE : DeleteFileW(it->path.c_str()) != FALSE;
+				bool restored = false;
+				try {
+					restored = it->existed ? CopyFileW(it->backup.c_str(), it->path.c_str(), FALSE) != FALSE && ReadResource(UTF8(it->path)) == it->before : DeleteFileW(it->path.c_str()) != FALSE;
+				} catch (const std::exception&) {
+				}
 				if (!restored)
 					message += T("feature.skin.recovery_required", " Recovery required: ") + UTF8(it->path) + T("feature.skin.backup", "; backup: ") + UTF8(it->backup);
 			}

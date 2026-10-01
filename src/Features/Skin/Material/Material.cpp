@@ -17,7 +17,7 @@ namespace SkinMaterials
 	{
 		switch (static_cast<Parameter>(a_index)) {
 		case Parameter::Roughness:
-			return T("feature.skin.roughness", "Roughness");
+			return T("feature.skin.primary_roughness", "Primary Roughness");
 		case Parameter::Reflectance:
 			return T("feature.skin.reflectance", "Reflectance (F0)");
 		case Parameter::Fuzz:
@@ -36,10 +36,42 @@ namespace SkinMaterials
 			return T("feature.skin.transmission_depth", "Transmission depth");
 		case Parameter::WetResponse:
 			return T("feature.skin.wet_response", "Wet response");
+		case Parameter::SecondaryRoughness:
+			return T("feature.skin.secondary_roughness", "Secondary Roughness");
+		case Parameter::SpecularTextureMultiplier:
+			return T("feature.skin.specular_texture_multiplier", "Specular Texture Multiplier");
+		case Parameter::SecondarySpecularStrength:
+			return T("feature.skin.secondary_specular_strength", "Secondary Specular Strength");
+		case Parameter::BaseColorMultiplier:
+			return T("feature.skin.base_color_multiplier", "Base Color Multiplier");
+		case Parameter::PhysicalMainRoughnessMultiplier:
+			return T("feature.skin.physical_main_roughness_multiplier", "Physical Main Roughness Multiplier");
+		case Parameter::PhysicalSecondRoughnessMultiplier:
+			return T("feature.skin.physical_second_roughness_multiplier", "Physical Second Roughness Multiplier");
+		case Parameter::PhysicalSpecularStrength:
+			return T("feature.skin.physical_specular_multiplier", "Physical Specular Multiplier");
+		case Parameter::ExtraEdgeRoughness:
+			return T("feature.skin.extra_edge_roughness", "Extra Edge Roughness");
+		case Parameter::FuzzRoughness:
+			return T("feature.skin.fuzz_roughness", "Fuzz Roughness");
+		case Parameter::FuzzF0:
+			return T("feature.skin.fuzz_f0", "Fuzz F0");
+		case Parameter::TransmissionEnabled:
+			return T("feature.skin.transmission_enabled", "Enable transmission");
+		case Parameter::BodyTilingMultiplier:
+			return T("feature.skin.body_tiling_multiplier", "Body Tiling Multiplier");
 		default:
 			return "";
 		}
 	}
+	const char* SettingName(size_t a_index)
+	{
+		static constexpr std::array<const char*, ParameterCount> names{
+			"SkinMainRoughness", "F0", "FuzzStrength", "EnableSkinDetail", "SkinDetailStrength", "SkinDetailTiling", "SSSAmount", "Translucency", "sssWidth", "WetResponse", "SkinSecondRoughness", "SkinSpecularTexMultiplier", "SecondarySpecularStrength", "BaseColorMultiplier", "PhysicalMainRoughnessMultiplier", "PhysicalSecondRoughnessMultiplier", "PhysicalSpecularStrength", "ExtraEdgeRoughness", "FuzzRoughness", "FuzzF0", "UseSSS", "BodyTilingMultiplier"
+		};
+		return names.at(a_index);
+	}
+
 	std::span<const ParameterInfo, ParameterCount> ParameterTable()
 	{
 		static constexpr std::array<ParameterInfo, ParameterCount> fields{ {
@@ -111,8 +143,10 @@ namespace SkinMaterials
 	Material Apply(Material a_base, const Changes& a_changes)
 	{
 		for (size_t i = 0; i < ParameterCount; ++i)
-			if (a_changes.parameters[i])
+			if (a_changes.parameters[i]) {
 				a_base.parameters.values[i] = *a_changes.parameters[i];
+				a_base.specified[i] = true;
+			}
 		for (size_t i = 0; i < a_changes.textures.size(); ++i) {
 			const auto& texture = a_changes.textures[i];
 			if (texture.mode != TextureMode::Inherit)
@@ -120,6 +154,18 @@ namespace SkinMaterials
 		}
 		a_base.enabled = true;
 		return a_base;
+	}
+
+	Material Resolve(Material a_material, const Parameters& a_defaults)
+	{
+		for (size_t i = 0; i < ParameterCount; ++i)
+			if (!a_material.enabled || !a_material.specified[i])
+				a_material.parameters.values[i] = a_defaults.values[i];
+		if (!a_material.enabled)
+			a_material.textures = {};
+		a_material.specified.fill(true);
+		a_material.enabled = true;
+		return a_material;
 	}
 
 	bool IsCompatible(const RE::BSShaderProperty* a_property)
@@ -172,6 +218,7 @@ namespace SkinMaterials
 						throw std::runtime_error(T("feature.skin.expected_finite_float_data", "Expected finite Float Data: ") + found->first);
 					value = number->value;
 				}
+				result.material.specified[i] = true;
 				result.material.parameters.values[i] = std::clamp(value, fields[i].minimum, fields[i].maximum);
 				if (value != result.material.parameters.values[i])
 					result.diagnostic += found->first + T("feature.skin.was_clamped", " was clamped. ");

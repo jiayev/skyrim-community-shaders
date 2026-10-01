@@ -159,11 +159,11 @@ namespace Skin
 		SharedData::SkinData skinData = GetSkinData();
 		float3 sssTransmittance = SSSSTransmittance(
 									  0.0f,
-									  skinData.sssParams.y,
+									  max(skinData.sssParams.y, 1e-4f),
 									  N,
 									  L,
 									  material.Thickness) *
-		                          skinData.sssParams.x;
+		                          skinData.sssParams.x * skinData.sssParams.w;
 		lightingOutput.transmission = min(sssTransmittance * context.lightColor * context.softShadow * material.BaseColor, context.lightColor);
 	}
 

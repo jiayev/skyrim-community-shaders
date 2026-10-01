@@ -1664,7 +1664,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float2 wetUV = uv * skinData.skinDetailParams.y;
 #			endif
 	float2 dynamicWet = Skin::GetWetness(input.WorldPosition.z + FrameBuffer::CameraPosAdjust.z, worldNormal.xyz);
-	float skinWetness = Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask * skinData.physicalParams.x;
+	float skinWetness = Skin::PerlinNoise(wetUV, skinData.wetParams.x, skinData.wetParams.y, skinData.wetParams.z, clamp(dynamicWet.x + dynamicWet.y + skinData.skinParams2.y, 0.f, 2.f)) * skinWetMask * skinData.physicalParams.w;
 	float3 heightWetNormal = CalculateNormalFromHeight(skinWetness, skinData.wetParams.w * 0.0005, uv);
 	if (skinEnabled)
 #		else
@@ -1686,9 +1686,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			if (normalOnly)
 				detailNormal.z = sqrt(saturate(1.0f - dot(detailNormal.xy, detailNormal.xy)));
 			float detailMask = normalOnly ? 1.0f : saturate(Skin::TexSkinDetailNormal.SampleBias(SampNormalSampler, uv, SharedData::MipBias).a);
-			float detailWeight = saturate(skinData.skinDetailParams.z * detailMask);
-			if (detailWeight > 0.0f) {
-				detailNormal = normalize(lerp(float3(0, 0, 1), detailNormal, detailWeight));
+			float detailWeight = skinData.skinDetailParams.z * detailMask;
+			if (detailWeight != 0.0f) {
+				detailNormal = normalize(float3(detailNormal.xy * detailWeight, max(detailNormal.z, 1e-4f)));
 				combinedTangentNormal = normalize(ReorientNormal(tangentNormal, detailNormal));
 				worldNormal.xyz = normalize(mul(tbn, combinedTangentNormal));
 			}
@@ -1969,14 +1969,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #	if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
-		material.Roughness = clamp(skinData.skinParams.x * skinRoughness, 0.02f, 1.0f);
-		material.RoughnessSecondary = clamp(material.Roughness * 0.5f, 0.02f, 1.0f);
+		const float extraRoughness = BRDF::F_Schlick(0.04f, saturate(dot(worldNormal.xyz, viewDirection))) * skinData.fuzzParams.w;
+		material.Roughness = saturate(skinData.skinParams.x - skinData.skinParams.z * material.Glossiness);
+		material.RoughnessSecondary = skinData.skinParams.y;
+		if (hasSkinExtra) {
+			material.Roughness = skinRoughness * skinData.physicalParams.x;
+			material.RoughnessSecondary = skinRoughness * skinData.physicalParams.y;
+		}
+		material.Roughness = clamp(material.Roughness + extraRoughness, 0.02f, 1.0f);
+		material.RoughnessSecondary = clamp(material.RoughnessSecondary + extraRoughness, 0.02f, 1.0f);
 		material.SecondarySpecIntensity = skinData.skinParams2.x;
 		material.Thickness = 1.0f - saturate(skinsk.x);
-		material.F0 = clamp(skinData.skinParams2.zzz * skinSpecular, 0.0f, 0.08f);
+		material.F0 = hasSkinExtra ? 0.08f * skinSpecular * skinData.physicalParams.z : skinData.skinParams2.zzz;
 		material.AO = saturate(skinAO);
 		material.Curvature = Skin::CalculateCurvature(worldNormal.xyz);
-		material.FuzzWeight = saturate(skinData.fuzzParams.x * skinFuzzMask);
+		material.FuzzWeight = skinData.fuzzParams.x * skinFuzzMask;
 		material.FuzzRoughness = skinData.fuzzParams.y;
 		material.FuzzColor = skinData.fuzzParams.zzz;
 	}
@@ -2210,7 +2217,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
-		float wetResponse = saturate(skinData.physicalParams.x * skinWetMask);
+		float wetResponse = saturate(skinData.physicalParams.w * skinWetMask);
 		wetnessState.glossinessAlbedo *= wetResponse;
 		wetnessState.glossinessSpecular *= wetResponse;
 		wetnessState.normal = normalize(lerp(worldNormal.xyz, wetnessState.normal, wetResponse));

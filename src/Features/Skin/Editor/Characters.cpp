@@ -173,17 +173,18 @@ void Skin::BeginTransfer(SkinActors::Scheme scheme, RE::Actor* actor, bool apply
 	editor.changes = editor.changesBaseline;
 	editor.characterUndo.clear();
 	editor.characterRedo.clear();
-	editor.preview = false;
 	editor.transfer = std::move(transfer);
+	editor.workspace = Editor::Workspace::Character;
+	editor.step = 2;
 	Invalidate();
 	bool ready = std::any_of(editor.transfer->scheme.selected.begin(), editor.transfer->scheme.selected.end(), [](bool value) { return value; });
 	for (const auto& row : editor.transfer->rows)
 		if (editor.transfer->scheme.selected[static_cast<size_t>(row.part)] && (!row.error.empty() || row.sample < 0))
 			ready = false;
 	if (apply && ready)
-		CommitTransfer();
+		RunCharacterSave([this] { CommitTransfer(); });
 	else
-		editor.message = T("feature.skin.review_character_transfer", "Review the selected parts and surface mappings before saving. Nothing has been applied.");
+		editor.message = T("feature.skin.review_character_transfer", "Review the selected parts and surface mappings. Preview is temporary until you save.");
 }
 
 void Skin::CommitTransfer()
@@ -239,9 +240,8 @@ void Skin::CommitTransfer()
 		throw std::runtime_error(T("feature.skin.select_transfer_parts", "Select at least one part to copy."));
 	for (size_t part = 0; part < incoming.size(); ++part)
 		Merge(next, static_cast<SkinActors::Part>(part), incoming[part]);
-	SkinActors::Commit(transfer.key, std::move(next), transfer.revision, transfer.session);
+	SkinActors::Commit(transfer.key, std::move(next), transfer.revision, transfer.session, editor.confirmSave ? &*editor.saveConflict : nullptr);
 	editor.transfer.reset();
-	editor.preview = false;
 	editor.previewWetness = -1;
 	if (editor.geometry && SkinActors::Belongs(editor.geometry.get(), actor.get()))
 		SelectSurface(editor.geometry.get());
@@ -249,23 +249,21 @@ void Skin::CommitTransfer()
 	Invalidate();
 }
 
-void Skin::DrawCharacterActions()
+void Skin::DrawCharacterTargets()
 {
 	auto& entry = geometries.at(editor.geometry.get());
-	const auto current = SkinActors::Get();
 	ImGui::Separator();
 	ImGui::TextWrapped("%s", entry.target.name.c_str());
 	if (!entry.target.error.empty())
 		ImGui::TextWrapped("%s", entry.target.error.c_str());
 	if (entry.target.part >= SkinActors::Part::Count) {
-		DrawCharacterSchemeActions();
 		return;
 	}
 	const auto part = entry.target.part;
 	ImGui::TextUnformatted(SkinActors::PartNames()[static_cast<size_t>(part)]);
 	if (!entry.target.persistent)
 		ImGui::TextWrapped("%s", T("feature.skin.character_session_only", "Applied for this game session only. This actor has no persistent plugin reference."));
-	if (ImGui::TreeNode(T("feature.skin.explicit_surface_targets", "Explicit surface targets"))) {
+	if (ImGui::TreeNodeEx(T("feature.skin.explicit_surface_targets", "Explicit surface targets"), ImGuiTreeNodeFlags_DefaultOpen)) {
 		UIScope tree{ [] { ImGui::TreePop(); } };
 		ImGui::TextWrapped("%s", T("feature.skin.character_surface_selection", "Select the surfaces of this character and part that should receive the edit. Discover the player's first-person view separately when needed."));
 		for (const auto& surface : editor.surfaces) {
@@ -289,74 +287,148 @@ void Skin::DrawCharacterActions()
 			}
 		}
 	}
+}
+
+bool Skin::RunCharacterSave(std::function<void()> action)
+{
+	try {
+		action();
+		editor.pendingSave = {};
+		editor.saveConflict.reset();
+		editor.error.clear();
+		return true;
+	} catch (const SkinActors::SaveConflict& conflict) {
+		editor.pendingSave = std::move(action);
+		editor.saveConflict = conflict;
+		editor.error.clear();
+		return false;
+	} catch (const std::exception& error) {
+		editor.error = error.what();
+		logger::warn("[Advanced Skin Editor] {}", error.what());
+		return false;
+	}
+}
+
+void Skin::DrawCharacterStorageStatus()
+{
+	const auto state = SkinActors::Get();
+	if (state->available)
+		return;
+	ImGui::TextWrapped("%s", T("feature.skin.character_storage_retry", "The configuration could not be loaded. You can keep editing and save here: a missing file will be recreated; an unreadable file requires a backup before replacement."));
+	if (!state->message.empty())
+		ImGui::TextWrapped("%s", state->message.c_str());
+	ImGui::TextWrapped("%s", UTF8(state->path).c_str());
+	if (ImGui::Button(T("feature.skin.manage_character_configuration", "Manage character configuration")))
+		editor.workspace = Editor::Workspace::Storage;
+}
+
+void Skin::SaveCharacterDraft()
+{
+	if (!editor.geometry)
+		throw std::runtime_error(T("feature.skin.select_loaded_character", "Select a character with loaded 3D."));
+	auto& entry = geometries.at(editor.geometry.get());
+	const auto part = entry.target.part;
+	if (part >= SkinActors::Part::Count || editor.targets.empty())
+		throw std::runtime_error(T("feature.skin.select_save_surfaces", "Select at least one surface to save."));
+	const auto current = SkinActors::Get();
 	const auto* binding = SkinActors::Find(*current, entry.target.key);
-	const bool rebind = binding && !binding->parts[static_cast<size_t>(part)].empty() && !SkinActors::Find(binding, part, entry.target.guard);
+	SkinActors::Binding next = binding ? *binding : SkinActors::Binding{};
+	next.name = entry.target.name;
+	next.persistent = entry.target.persistent;
+	const auto key = entry.target.key;
+	const auto loadedSurfaces = DiscoverActor(entry.target.actor.get().get());
+	std::vector<SkinActors::Surface> edits;
+	Validate(editor.changes);
+	for (const auto& geometry : editor.targets) {
+		if (!SkinActors::Belongs(geometry.get(), entry.target.actor.get().get()))
+			throw std::runtime_error(T("feature.skin.select_loaded_character", "Select a character with loaded 3D."));
+		auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+		if (!IsCompatible(property))
+			throw std::runtime_error(T("feature.skin.this_surface_is_no_longer_compatible", "This surface is no longer compatible."));
+		auto& target = Observe(geometry.get(), property);
+		Prepare(target, current);
+		if (target.target.key != key || !target.target.error.empty() || target.target.part != part)
+			throw std::runtime_error(T("feature.skin.character_changed", "The character configuration or game session changed. Select the current target again."));
+		CheckTextures(Apply(target.base, editor.changes));
+		for (const auto& other : loadedSurfaces)
+			if (std::find(editor.targets.begin(), editor.targets.end(), other) == editor.targets.end() &&
+				geometries.at(other.get()).target.guard == target.target.guard)
+				throw std::runtime_error(T("feature.skin.shared_character_surface", "These surfaces share a persistent identity. Include them together with identical settings, or give them independent source materials."));
+		edits.push_back({ editor.changes, target.target.guard });
+	}
+	Merge(next, part, edits);
+	SkinActors::Commit(key, std::move(next), current->revision, current->session, editor.confirmSave ? &*editor.saveConflict : nullptr);
+	const auto saved = SkinActors::Get();
+	const auto* surface = SkinActors::Find(SkinActors::Find(*saved, key), part, entry.target.guard);
+	editor.changes = editor.changesBaseline = surface ? surface->changes : Changes{};
+	editor.message = saved->message;
+	Invalidate();
+}
+
+void Skin::DrawCharacterActions()
+{
+	auto& entry = geometries.at(editor.geometry.get());
+	if (entry.target.persistent)
+		DrawCharacterStorageStatus();
+	std::string blocked;
+	if (!SkinActors::Belongs(editor.geometry.get(), entry.target.actor.get().get()))
+		blocked = T("feature.skin.select_loaded_character", "Select a character with loaded 3D.");
+	else if (!IsCompatible(editor.geometry->GetGeometryRuntimeData().shaderProperty.get()))
+		blocked = T("feature.skin.this_surface_is_no_longer_compatible", "This surface is no longer compatible.");
+	else if (!entry.target.error.empty())
+		blocked = entry.target.error;
+	else if (entry.target.part >= SkinActors::Part::Count)
+		blocked = T("feature.skin.character_part_unverified", "This surface has no verified face or body-part assignment. Select a supported surface.");
+	else if (editor.targets.empty())
+		blocked = T("feature.skin.select_save_surfaces", "Select at least one surface to save.");
+	else if (editor.transfer)
+		blocked = T("feature.skin.finish_transfer_first", "Save or cancel the current copy operation first.");
+	if (!blocked.empty())
+		ImGui::TextWrapped("%s", blocked.c_str());
+	const auto part = entry.target.part;
+	const auto current = SkinActors::Get();
+	const auto* binding = SkinActors::Find(*current, entry.target.key);
+	const bool rebind = part < SkinActors::Part::Count && binding && !binding->parts[static_cast<size_t>(part)].empty() && !SkinActors::Find(binding, part, entry.target.guard);
 	if (rebind)
 		ImGui::TextWrapped("%s", T("feature.skin.character_rebind_notice", "This appearance does not match a saved surface. Review the draft before saving it for this appearance."));
 	{
-		ImGui::BeginDisabled((entry.target.persistent && !current->available) || !entry.target.error.empty() || editor.targets.empty() || bool(editor.transfer));
+		ImGui::BeginDisabled(!blocked.empty());
 		UIScope disabled{ [] { ImGui::EndDisabled(); } };
 		const auto* label = entry.target.persistent ? (rebind ?
 															  T("feature.skin.save_for_this_appearance", "Save for this appearance") :
 															  T("feature.skin.save_apply_character", "Save and apply")) :
 		                                              T("feature.skin.apply_character_session", "Apply for this session");
-		if (ImGui::Button(label)) {
-			SkinActors::Binding next = binding ? *binding : SkinActors::Binding{};
-			next.name = entry.target.name;
-			next.persistent = entry.target.persistent;
+		if (ImGui::Button(label, ImVec2(-FLT_MIN, 0)))
+			RunCharacterSave([this] { SaveCharacterDraft(); });
+	}
+	if (part >= SkinActors::Part::Count)
+		return;
+	if (ImGui::CollapsingHeader(T("feature.skin.saved_edit_actions", "Reset or undo saved settings"))) {
+		if (ImGui::Button(T("feature.skin.clear_this_part_s_customization", "Clear this part's customization"))) {
 			const auto key = entry.target.key;
-			const auto loadedSurfaces = DiscoverActor(entry.target.actor.get().get());
-			std::vector<SkinActors::Surface> edits;
-			Validate(editor.changes);
-			for (const auto& geometry : editor.targets) {
-				if (!SkinActors::Belongs(geometry.get(), entry.target.actor.get().get()))
-					throw std::runtime_error(T("feature.skin.select_loaded_character", "Select a character with loaded 3D."));
-				auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-				if (!IsCompatible(property))
-					throw std::runtime_error(T("feature.skin.this_surface_is_no_longer_compatible", "This surface is no longer compatible."));
-				auto& target = Observe(geometry.get(), property);
-				Prepare(target, current);
-				if (target.target.key != key || !target.target.error.empty() || target.target.part != part)
-					throw std::runtime_error(T("feature.skin.character_changed", "The character configuration or game session changed. Select the current target again."));
-				CheckTextures(Apply(target.base, editor.changes));
-				for (const auto& other : loadedSurfaces)
-					if (std::find(editor.targets.begin(), editor.targets.end(), other) == editor.targets.end() &&
-						geometries.at(other.get()).target.guard == target.target.guard)
-						throw std::runtime_error(T("feature.skin.shared_character_surface", "These surfaces share a persistent identity. Include them together with identical settings, or give them independent source materials."));
-				edits.push_back({ editor.changes, target.target.guard });
-			}
-			Merge(next, part, edits);
-			SkinActors::Commit(key, std::move(next), current->revision, current->session);
-			editor.changesBaseline = editor.changes;
-			editor.preview = false;
-			editor.previewWetness = -1;
-			editor.message = SkinActors::Get()->message;
-			Invalidate();
+			ChangeEditor([this, key, part] {
+				RunCharacterSave([this, key, part] {
+					const auto state = SkinActors::Get();
+					SkinActors::Clear(key, part, state->revision, state->session, editor.confirmSave ? &*editor.saveConflict : nullptr);
+					editor.changes = editor.changesBaseline = {};
+					editor.transfer.reset();
+					Invalidate();
+				});
+			});
+		}
+		if (current->undo.contains(entry.target.key) && ImGui::Button(T("feature.skin.undo_saved_character_edit", "Undo last saved character edit"))) {
+			const auto key = entry.target.key;
+			ChangeEditor([this, key] {
+				RunCharacterSave([this, key] {
+					const auto state = SkinActors::Get();
+					SkinActors::Undo(key, state->revision, state->session, editor.confirmSave ? &*editor.saveConflict : nullptr);
+					if (editor.geometry)
+						SelectSurface(editor.geometry.get());
+					Invalidate();
+				});
+			});
 		}
 	}
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.skin.clear_this_part_s_customization", "Clear this part's customization"))) {
-		const auto key = entry.target.key;
-		ChangeEditor([this, key, part] {
-			const auto state = SkinActors::Get();
-			SkinActors::Clear(key, part, state->revision, state->session);
-			editor.changes = editor.changesBaseline = {};
-			editor.preview = false;
-			editor.transfer.reset();
-			Invalidate();
-		});
-	}
-	if (current->undo.contains(entry.target.key) && ImGui::Button(T("feature.skin.undo_saved_character_edit", "Undo last saved character edit"))) {
-		const auto key = entry.target.key;
-		ChangeEditor([this, key] {
-			const auto state = SkinActors::Get();
-			SkinActors::Undo(key, state->revision, state->session);
-			if (editor.geometry)
-				SelectSurface(editor.geometry.get());
-			Invalidate();
-		});
-	}
-	DrawCharacterSchemeActions();
 }
 
 void Skin::DrawCharacterSchemeActions()
@@ -397,9 +469,14 @@ void Skin::DrawCharacterSchemeActions()
 
 void Skin::DrawCharacterStorage()
 {
-	if (!ImGui::CollapsingHeader(T("feature.skin.character_configuration", "Character configuration")))
-		return;
+	ImGui::SeparatorText(T("feature.skin.character_configuration", "Character configuration"));
 	const auto current = SkinActors::Get();
+	const auto changeStorage = [this](std::function<void()> action) {
+		if (editor.character)
+			ChangeEditor([this, action = std::move(action)] { action(); RefreshCharacterDraft(); });
+		else
+			action();
+	};
 	ImGui::TextWrapped("%s", UTF8(current->path).c_str());
 	ImGui::TextWrapped("%s", current->message.c_str());
 	if (ImGui::Button(T("feature.skin.open_character_folder", "Open configuration folder"))) {
@@ -408,16 +485,16 @@ void Skin::DrawCharacterStorage()
 	}
 	if (ImGui::Button(T("feature.skin.open_character_configuration", "Open configuration...")))
 		if (const auto path = ChooseFile(false, ConfigurationFilter, L"json", current->path))
-			ChangeEditor([path = *path] { SkinActors::OpenStorage(path, false); });
+			changeStorage([path = *path] { SkinActors::OpenStorage(path, false); });
 	ImGui::SameLine();
 	if (ImGui::Button(T("feature.skin.save_character_configuration_as", "Save configuration as...")))
 		if (const auto path = ChooseFile(true, ConfigurationFilter, L"json", current->path))
-			ChangeEditor([path = *path] { SkinActors::OpenStorage(path, true); });
+			changeStorage([path = *path] { SkinActors::OpenStorage(path, true); });
 	if (ImGui::Button(T("feature.skin.new_character_configuration", "New configuration...")))
 		if (const auto path = ChooseFile(true, ConfigurationFilter, L"json", SkinActors::Directory() / "NewSkin.json"))
-			ChangeEditor([path = *path] { SkinActors::OpenStorage(path, true, true); });
+			changeStorage([path = *path] { SkinActors::OpenStorage(path, true, true); });
 	if (ImGui::Button(T("feature.skin.restore_character_backup", "Restore latest valid backup")))
-		ChangeEditor([] { SkinActors::Recover(); });
+		changeStorage([] { SkinActors::Recover(); });
 	for (const auto& [key, binding] : current->actors) {
 		ImGui::PushID(key.c_str());
 		UIScope id{ [] { ImGui::PopID(); } };
@@ -434,11 +511,13 @@ void Skin::DrawCharacterStorage()
 			ImGui::SameLine();
 			if (ImGui::SmallButton(T("feature.skin.clear", "Clear")))
 				ChangeEditor([this, key, part = static_cast<SkinActors::Part>(i)] {
-					const auto state = SkinActors::Get();
-					SkinActors::Clear(key, part, state->revision, state->session);
-					if (editor.geometry && geometries.at(editor.geometry.get()).target.key == key)
-						SelectSurface(editor.geometry.get());
-					Invalidate();
+					RunCharacterSave([this, key, part] {
+						const auto state = SkinActors::Get();
+						SkinActors::Clear(key, part, state->revision, state->session, editor.confirmSave ? &*editor.saveConflict : nullptr);
+						if (editor.geometry && geometries.at(editor.geometry.get()).target.key == key)
+							SelectSurface(editor.geometry.get());
+						Invalidate();
+					});
 				});
 		}
 	}
@@ -503,13 +582,32 @@ void Skin::DrawCharacterTransfer()
 			}
 		}
 	}
-	if (ImGui::Checkbox(T("feature.skin.preview_character_transfer", "Preview mapped surfaces"), &transfer.preview))
-		Invalidate();
+	ImGui::TextWrapped("%s", T("feature.skin.transfer_preview_automatic", "Included surface mappings preview automatically. Save to keep the result, or cancel to restore the previous settings."));
+	if (transfer.key == "player" || SkinActors::PersistentKey(transfer.key))
+		DrawCharacterStorageStatus();
 	if (ImGui::Button(T("feature.skin.save_selected_character_parts", "Save and apply selected parts")))
-		CommitTransfer();
+		RunCharacterSave([this] { CommitTransfer(); });
 	ImGui::SameLine();
 	if (ImGui::Button(T("feature.skin.cancel", "Cancel"))) {
 		editor.transfer.reset();
 		Invalidate();
 	}
+}
+
+void Skin::RefreshCharacterDraft()
+{
+	if (!editor.character || !editor.geometry)
+		return;
+	const auto& entry = geometries.at(editor.geometry.get());
+	if (!SkinActors::Belongs(editor.geometry.get(), entry.target.actor.get().get()) || !IsCompatible(editor.geometry->GetGeometryRuntimeData().shaderProperty.get())) {
+		editor.changes = editor.changesBaseline = {};
+		editor.transfer.reset();
+		Invalidate();
+		return;
+	}
+	const auto workspace = editor.workspace;
+	const auto step = editor.step;
+	SelectSurface(editor.geometry.get());
+	editor.workspace = workspace;
+	editor.step = step;
 }

@@ -45,10 +45,7 @@ struct Skin : Feature
 	struct Settings
 	{
 		bool EnableSkin = true;
-		bool EnableDetail = true;
-		float DetailStrength = 0.25f;
-		float DetailTiling = 10.0f;
-		float BodyTiling = 2.0f;
+		SkinMaterials::Parameters DefaultProfile;
 		std::string DetailTexture = "Data/Shaders/Skin/skin_detail_n.dds";
 		float ExtraSkinWetness = 0.0f;
 		float WetFadeTime = 10.0f;
@@ -122,6 +119,16 @@ private:
 	};
 	struct Editor
 	{
+		enum class Workspace
+		{
+			Asset,
+			Character,
+			Textures,
+			Storage
+		};
+		Workspace workspace = Workspace::Asset;
+		int step = 0;
+		int materialSection = 0;
 		struct BatchItem
 		{
 			SkinEditor::NifDocument document;
@@ -169,6 +176,8 @@ private:
 		SkinEditor::TextureTools tools;
 		SkinTextures::Resource thumbnail;
 		std::string thumbnailKey;
+		std::string generatedDDS;
+		bool generatedDetail = false;
 		std::optional<SkinMaterials::Material> imported;
 		std::vector<std::pair<std::string, SkinMaterials::Material>> legacy;
 		std::array<bool, SkinMaterials::ParameterCount> importParameters{};
@@ -180,6 +189,9 @@ private:
 		bool preview = false;
 		bool discardConfirmed = false;
 		std::function<void()> pendingAction;
+		std::function<void()> pendingSave;
+		std::optional<SkinActors::SaveConflict> saveConflict;
+		bool confirmSave = false;
 		bool editGesture = false;
 		float previewWetness = -1.0f;
 		int channel = 0;
@@ -206,12 +218,24 @@ private:
 	void Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state);
 	SkinData MakeData(const SkinMaterials::Material& a_material, bool a_head) const;
 	GeometryEntry& Observe(RE::BSGeometry* a_geometry, RE::BSShaderProperty* a_property);
+	void UpdateEditorPreview();
+	void DrawCharacterStorageStatus();
+	bool RunCharacterSave(std::function<void()> a_action);
+	void SaveCharacterDraft();
 	bool PreviewMatches(const GeometryEntry& a_entry) const;
-	void SelectReference(RE::TESObjectREFR* a_reference, bool a_firstPerson = false);
+	void SelectReference(RE::TESObjectREFR* a_reference, bool a_firstPerson = false, bool a_previewOnly = false);
 	void SelectSurface(RE::BSGeometry* a_geometry);
 	void OpenDocument(const std::string& a_path, uint32_t a_block = UINT32_MAX);
 	void SelectMaterial(uint32_t a_block);
 	void DrawMaterialControls();
+	void DrawEditorTarget();
+	void DrawEditorPreview();
+	void DrawEditorSurfacePicker(bool a_previewOnly);
+	void DrawEditorSave();
+	void DrawEditorHistory();
+	void DrawEditorDialogs();
+	void DrawCharacterTargets();
+	void RefreshCharacterDraft();
 	void DrawAssetActions();
 	void DrawCharacterActions();
 	void DrawCharacterStorage();

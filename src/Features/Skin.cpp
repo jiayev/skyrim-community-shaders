@@ -4,13 +4,14 @@
 #include <cmath>
 #include <imgui_stdlib.h>
 
+using namespace SkinMaterials;
+
 void Skin::LoadSettings(json& a_json)
 {
 	std::lock_guard lock(mutex);
 	Settings next;
 	try {
 		next.EnableSkin = a_json.value("EnableSkin", true);
-		next.EnableDetail = a_json.value("EnableDetail", true);
 		next.DetailTexture = a_json.value("DetailTexture", next.DetailTexture);
 		auto number = [&](const char* name, float& value, float minimum, float maximum) {
 			const float input = a_json.value(name, value);
@@ -18,9 +19,22 @@ void Skin::LoadSettings(json& a_json)
 				throw std::runtime_error(std::string(T("feature.skin.invalid_setting", "Invalid setting: ")) + name);
 			value = std::clamp(input, minimum, maximum);
 		};
-		number("DetailStrength", next.DetailStrength, 0, 1);
-		number("DetailTiling", next.DetailTiling, 0.1f, 100);
-		number("BodyTiling", next.BodyTiling, 0.1f, 5);
+		const auto& profile = a_json.contains("DefaultProfile") ? a_json.at("DefaultProfile") : a_json;
+		const auto fields = ParameterTable();
+		for (size_t i = 0; i < fields.size(); ++i) {
+			const auto& field = fields[i];
+			float value = field.integer ? (profile.value(SettingName(i), field.initial != 0) ? 1.0f : 0.0f) : profile.value(SettingName(i), field.initial);
+			if (!std::isfinite(value))
+				throw std::runtime_error(std::string(T("feature.skin.invalid_setting", "Invalid setting: ")) + SettingName(i));
+			next.DefaultProfile.values[i] = std::clamp(value, field.minimum, field.maximum);
+		}
+		if (!a_json.contains("DefaultProfile")) {
+			if (a_json.contains("EnableDetail"))
+				next.DefaultProfile[Parameter::DetailEnabled] = a_json.at("EnableDetail").get<bool>() ? 1.0f : 0.0f;
+			number("DetailStrength", next.DefaultProfile[Parameter::DetailStrength], -2, 2);
+			number("DetailTiling", next.DefaultProfile[Parameter::DetailTiling], 0.1f, 100);
+			number("BodyTiling", next.DefaultProfile[Parameter::BodyTilingMultiplier], 0.1f, 5);
+		}
 		number("ExtraSkinWetness", next.ExtraSkinWetness, 0, 2);
 		number("WetFadeTime", next.WetFadeTime, 0, 50);
 		number("StartSweat", next.StartSweat, 0, 1);
@@ -42,9 +56,12 @@ void Skin::LoadSettings(json& a_json)
 void Skin::SaveSettings(json& a_json)
 {
 	std::lock_guard lock(mutex);
-	a_json = { { "EnableSkin", settings.EnableSkin }, { "EnableDetail", settings.EnableDetail },
-		{ "DetailStrength", settings.DetailStrength }, { "DetailTiling", settings.DetailTiling },
-		{ "BodyTiling", settings.BodyTiling }, { "DetailTexture", settings.DetailTexture },
+	json profile = json::object();
+	const auto fields = ParameterTable();
+	for (size_t i = 0; i < fields.size(); ++i)
+		profile[SettingName(i)] = fields[i].integer ? json(settings.DefaultProfile.values[i] != 0) : json(settings.DefaultProfile.values[i]);
+	a_json = { { "EnableSkin", settings.EnableSkin }, { "DefaultProfile", profile },
+		{ "DetailTexture", settings.DetailTexture },
 		{ "ExtraSkinWetness", settings.ExtraSkinWetness }, { "WetFadeTime", settings.WetFadeTime },
 		{ "StartSweat", settings.StartSweat }, { "FullSweat", settings.FullSweat }, { "WetParams", settings.WetParams } };
 }
@@ -60,11 +77,22 @@ void Skin::DrawSettings()
 {
 	std::lock_guard lock(mutex);
 	bool changed = ImGui::Checkbox(T("feature.skin.enable_advanced_skin", "Enable Advanced Skin"), &settings.EnableSkin);
-	changed |= ImGui::Checkbox(T("feature.skin.enable_skin_detail", "Enable skin detail"), &settings.EnableDetail);
+	ImGui::TextWrapped("%s", T("feature.skin.global_material_inheritance", "Applies to all compatible skin. Materials and characters override only the values explicitly selected in their editors."));
+	if (ImGui::CollapsingHeader(T("feature.skin.common_parameters", "Common skin parameters"), ImGuiTreeNodeFlags_DefaultOpen)) {
+		const auto fields = ParameterTable();
+		for (const auto parameter : ParameterOrder) {
+			const auto i = static_cast<size_t>(parameter);
+			auto& value = settings.DefaultProfile.values[i];
+			if (fields[i].integer) {
+				bool enabled = value != 0;
+				changed |= ImGui::Checkbox(ParameterLabel(i), &enabled);
+				value = enabled ? 1.0f : 0.0f;
+			} else {
+				changed |= ImGui::SliderFloat(ParameterLabel(i), &value, fields[i].minimum, fields[i].maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			}
+		}
+	}
 	ImGui::TextWrapped("%s", T("feature.skin.global_detail_applies_when_a_material_has_no_detail_texture", "Global detail applies when a material has no detail texture. Its alpha mask uses the model's main UV, independently of tiling."));
-	changed |= ImGui::SliderFloat(T("feature.skin.global_detail_strength", "Global detail strength"), &settings.DetailStrength, 0, 1, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-	changed |= ImGui::SliderFloat(T("feature.skin.global_detail_tiling", "Global detail tiling"), &settings.DetailTiling, 0.1f, 100, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-	changed |= ImGui::SliderFloat(T("feature.skin.global_body_tiling_multiplier", "Global body tiling multiplier"), &settings.BodyTiling, 0.1f, 5, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	changed |= ImGui::InputText(T("feature.skin.global_detail_dds", "Global detail DDS"), &settings.DetailTexture);
 	ImGui::SameLine();
 	if (ImGui::Button(T("feature.skin.choose_dds", "Choose DDS"))) {
@@ -95,6 +123,10 @@ void Skin::DrawGlobalSettings()
 	changed |= ImGui::SliderFloat(T("feature.skin.wetness_fade_time", "Wetness fade time"), &settings.WetFadeTime, 0, 50, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	changed |= ImGui::SliderFloat(T("feature.skin.sweat_starts_below_stamina", "Sweat starts below stamina"), &settings.StartSweat, 0, 1, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	changed |= ImGui::SliderFloat(T("feature.skin.full_sweat_below_stamina", "Full sweat below stamina"), &settings.FullSweat, 0, 1, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T("feature.skin.wetness_perlin_noise_scale", "Wetness Perlin Noise Scale"), &settings.WetParams.x, 0, 1024, "%.1f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T("feature.skin.wetness_perlin_noise_lacunarity", "Wetness Perlin Noise Lacunarity"), &settings.WetParams.y, 0, 2, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T("feature.skin.wetness_perlin_noise_persistence", "Wetness Perlin Noise Persistence"), &settings.WetParams.z, 0, 20, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+	changed |= ImGui::SliderFloat(T("feature.skin.wetness_normal_scale", "Wetness Normal Scale"), &settings.WetParams.w, 0, 20, "%.3f", ImGuiSliderFlags_AlwaysClamp);
 	if (changed)
 		Invalidate();
 }
