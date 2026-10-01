@@ -4,11 +4,11 @@
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
 #include "Features/CloudShadows.h"
-#include "Globals.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainShadows.h"
+#include "Globals.h"
 #include "I18n/I18n.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -396,12 +396,8 @@ void ExponentialHeightFog::Prepass()
 		return;
 	}
 
-	// Pause while suppressed: skip building, but keep resources and history contiguous so the fog resumes from its cache
-	if (IsSuppressed()) {
-		if (lastPrepassFrame != UINT32_MAX)
-			lastPrepassFrame = globals::state->frameCount;
+	if (IsSuppressed())
 		return;
-	}
 
 	EnsureVolumetricResources();
 
@@ -496,8 +492,6 @@ void ExponentialHeightFog::Prepass()
 		0.0f,
 		0.0f
 	};
-	cb.historyViewProj = historyViewProj;
-	cb.historyPosAdjust = historyPosAdjust;
 	volumetricFogCB->Update(cb);
 
 	auto context = globals::d3d::context;
@@ -608,8 +602,6 @@ void ExponentialHeightFog::Prepass()
 	}
 
 	lastPrepassFrame = globals::state->frameCount;
-	historyViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered();
-	historyPosAdjust = globals::game::frameBufferCached.GetCameraPosAdjust();
 	BindIntegratedLightScattering();
 }
 
