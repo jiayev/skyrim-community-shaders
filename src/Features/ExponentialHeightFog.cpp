@@ -580,12 +580,8 @@ void ExponentialHeightFog::Prepass()
 		return;
 	}
 
-	// Pause while suppressed: skip building, but keep resources and history contiguous so the fog resumes from its cache
-	if (IsSuppressed()) {
-		if (lastPrepassFrame != UINT32_MAX)
-			lastPrepassFrame = globals::state->frameCount;
+	if (IsSuppressed())
 		return;
-	}
 
 	EnsureVolumetricResources();
 
@@ -718,8 +714,6 @@ void ExponentialHeightFog::Prepass()
 		0.0f,
 		0.0f
 	};
-	cb.historyViewProj = historyViewProj;
-	cb.historyPosAdjust = historyPosAdjust;
 	volumetricFogCB->Update(cb);
 
 	auto context = globals::d3d::context;
@@ -915,8 +909,6 @@ void ExponentialHeightFog::Prepass()
 	}
 
 	lastPrepassFrame = globals::state->frameCount;
-	historyViewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered();
-	historyPosAdjust = globals::game::frameBufferCached.GetCameraPosAdjust();
 	BindIntegratedLightScattering();
 }
 #undef I18N_KEY_PREFIX
