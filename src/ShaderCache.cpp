@@ -1363,6 +1363,47 @@ namespace SIE
 			return type;
 		}
 
+		/** @brief True only for a whole DXBC container, so a torn or corrupt cache file never reaches CreateXShader. */
+		static bool IsIntactDxbc(ID3DBlob* blob)
+		{
+			constexpr size_t kHeaderSize = 32;
+			constexpr size_t kTotalSizeOffset = 24;
+			if (!blob || blob->GetBufferSize() < kHeaderSize)
+				return false;
+			const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
+			uint32_t totalSize = 0;
+			std::memcpy(&totalSize, bytes + kTotalSizeOffset, sizeof(totalSize));
+			return std::memcmp(bytes, "DXBC", 4) == 0 && totalSize == blob->GetBufferSize();
+		}
+
+		/** @brief Reads a cached blob, deleting the file and returning null when it is unreadable or not intact DXBC. */
+		static winrt::com_ptr<ID3DBlob> ReadIntactBlob(const std::wstring& diskPath)
+		{
+			winrt::com_ptr<ID3DBlob> blob;
+			if (FAILED(D3DReadFileToBlob(diskPath.c_str(), blob.put())))
+				return nullptr;
+			if (IsIntactDxbc(blob.get()))
+				return blob;
+			logger::warn("Discarding corrupt cached shader {}", Util::WStringToString(diskPath));
+			std::error_code ec;
+			std::filesystem::remove(diskPath, ec);
+			return nullptr;
+		}
+
+		/** @brief Writes through a sibling temp file and a rename, so a crash mid-write cannot leave a torn blob at diskPath. */
+		static bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob)
+		{
+			const std::wstring tempPath = diskPath + L".tmp";
+			std::error_code ec;
+			if (SUCCEEDED(D3DWriteBlobToFile(blob, tempPath.c_str(), true))) {
+				std::filesystem::rename(tempPath, diskPath, ec);
+				if (!ec)
+					return true;
+			}
+			std::filesystem::remove(tempPath, ec);
+			return false;
+		}
+
 		/**
 		 * @brief Compiles or retrieves a cached shader.
 		 *
@@ -1449,13 +1490,10 @@ namespace SIE
 
 				if (diskCacheOutdated) {
 					// Fall through to recompile from source.
-				} else if (FAILED(D3DReadFileToBlob(diskPath.c_str(), &shaderBlob))) {
+				} else if (auto intactBlob = ReadIntactBlob(diskPath); !intactBlob) {
 					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
-
-					if (shaderBlob != nullptr) {
-						shaderBlob->Release();
-					}
 				} else {
+					shaderBlob = intactBlob.detach();
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
 					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, /*fromDisk=*/true);
 					return shaderBlob;
@@ -1588,8 +1626,7 @@ namespace SIE
 					}
 				}
 
-				const HRESULT saveResult = D3DWriteBlobToFile(shaderBlob, diskPath.c_str(), true);
-				if (FAILED(saveResult)) {
+				if (!WriteBlobAtomic(diskPath, shaderBlob)) {
 					logger::error("Failed to save shader to {}", Util::WStringToString(diskPath));
 				} else {
 					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
