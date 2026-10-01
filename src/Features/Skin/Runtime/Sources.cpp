@@ -192,9 +192,9 @@ namespace SkinSources
 		std::array<std::string, 9> result;
 		if (a_textureSet) {
 			if (auto* form = skyrim_cast<RE::BGSTextureSet*>(a_textureSet)) {
-				constexpr std::array<size_t, 8> records{ 0, 1, 3, 4, 5, 2, 6, 7 };
-				for (size_t i = 0; i < records.size(); ++i) {
-					const auto* name = form->textures[records[i]].textureName.c_str();
+				constexpr std::array<size_t, 8> textureSlots{ 0, 1, 3, 4, 5, 2, 6, 7 };
+				for (size_t i = 0; i < textureSlots.size(); ++i) {
+					const auto* name = form->textures[textureSlots[i]].textureName.c_str();
 					if (!name || !*name)
 						continue;
 					std::string path(name);
