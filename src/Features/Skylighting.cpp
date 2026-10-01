@@ -7,6 +7,8 @@
 #include "Utils/D3D.h"
 #include "Utils/VersionedRelocation.h"
 
+#include <numbers>
+
 #define I18N_KEY_PREFIX "feature.skylighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -33,9 +35,16 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
-	UINT clr[1] = { 0 };
+	// Unit SH (fully unoccluded), matching Skylighting::UNIT_SH; probes the occlusion map does not reach would otherwise keep the previous location's values
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
+	// ClearUnorderedAccessViewUint always reads four values
+	const UINT clr[4] = { 0, 0, 0, 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clr);
+	// All 32 history bits lit, so a reset does not fade in from black while the history refills
+	const UINT litHistory[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), litHistory);
 
 	float clrf[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
@@ -439,7 +448,6 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
 					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |

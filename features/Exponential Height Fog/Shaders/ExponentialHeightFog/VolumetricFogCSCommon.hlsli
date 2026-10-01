@@ -12,6 +12,8 @@ cbuffer VolumetricFogCB : register(b0)
 	float4 VolumetricFogFrameJitterOffsets[16];
 	float4 VolumetricFogHistoryParameters;
 	float4 VolumetricFogJitterParameters;
+	row_major float4x4 VolumetricFogHistoryViewProj;  // Camera the history volume was built with
+	float4 VolumetricFogHistoryPosAdjust;
 	uint4 VolumetricFogFarGridSizeAndFlags;  // far volume (quarter lattice)
 	float4 VolumetricFogFarInvGridSizeAndNearFade;
 	float4 VolumetricFogFarGridZParams;

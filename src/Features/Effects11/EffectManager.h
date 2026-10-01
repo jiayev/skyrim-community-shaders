@@ -91,7 +91,8 @@ public:
 	struct CommonVariableData
 	{
 		float timer[4];
-		float weather[4];
+		float weather[4];     // x/y = current/outgoing weather form IDs (mod index stripped, location-mapped), z = transition, w = game hour
+		float enbWeather[4];  // ENB SDK "Weather": x/y = [WEATHERnnn] indices of those weathers (0 = not listed), z/w as weather
 		float timeOfDay1[4];
 		float timeOfDay2[4];
 		float eNightDayFactor;
@@ -147,7 +148,8 @@ public:
 	void ExecuteEffect(EffectBase& effect, uint32_t enableSettingID = 0xFFFFFFFF);
 
 	// Texture copy using pixel shader
-	void CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination, bool dither = true);
+	/** @return false if nothing was drawn (missing shaders or invalid views). */
+	bool CopyTexture(ID3D11ShaderResourceView* source, ID3D11RenderTargetView* destination, bool dither = true);
 
 	// Color correction using compute shader
 	void ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV);

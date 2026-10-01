@@ -4,6 +4,7 @@
 #include "PresetManager.h"
 #include "SettingManager.h"
 #include <Windows.h>
+#include <charconv>
 #include <filesystem>
 #include <sstream>
 
@@ -166,7 +167,7 @@ void WeatherManager::LoadLocationWeather()
 
 		uint32_t worldSpaceID = 0;
 		try {
-			worldSpaceID = ParseHexID(sectionName);
+			worldSpaceID = ParseHexID(sectionName) & LocalFormIDMask;
 		} catch (...) {
 			continue;
 		}
@@ -196,7 +197,7 @@ void WeatherManager::LoadLocationWeather()
 			std::string weatherStr = entry.substr(eqPos + 1);
 
 			try {
-				uint32_t locationID = ParseHexID(locationStr);
+				uint32_t locationID = ParseHexID(locationStr) & LocalFormIDMask;
 				uint32_t fakeWeatherID = ParseHexID(weatherStr);
 				if (locationID != 0 && fakeWeatherID != 0) {
 					locationWeatherMap[worldSpaceID][locationID] = fakeWeatherID;
@@ -242,11 +243,11 @@ uint32_t WeatherManager::GetEffectiveWeatherID(uint32_t actualWeatherID)
 
 	try {
 		if (auto worldSpace = parentCell->GetRuntimeData().worldSpace) {
-			worldSpaceID = worldSpace->GetFormID() & 0x00FFFFFF;
+			worldSpaceID = worldSpace->GetFormID() & LocalFormIDMask;
 		}
 
 		if (auto location = parentCell->GetLocation()) {
-			locationID = location->GetFormID() & 0x00FFFFFF;
+			locationID = location->GetFormID() & LocalFormIDMask;
 		}
 	} catch (...) {
 		return actualWeatherID;
@@ -267,6 +268,27 @@ uint32_t WeatherManager::GetEffectiveWeatherID(uint32_t actualWeatherID)
 	}
 
 	return actualWeatherID;
+}
+
+uint32_t WeatherManager::GetWeatherIndex(uint32_t weatherID) const
+{
+	auto& effectManager = EffectManager::GetSingleton();
+	if (!SettingManager::GetSingleton().GetValue<bool>(effectManager.ids.enableMultipleWeathers)) {
+		return 0;
+	}
+
+	auto it = weatherIDMap.find(weatherID);
+	if (it == weatherIDMap.end()) {
+		return 0;
+	}
+
+	// LoadWeatherList only keeps sections starting with "WEATHER", e.g. WEATHER002 -> 2
+	const std::string& sectionName = it->second;
+	constexpr size_t prefixLength = sizeof("WEATHER") - 1;
+	uint32_t index = 0;
+	const char* sectionEnd = sectionName.data() + sectionName.size();
+	const auto result = std::from_chars(sectionName.data() + prefixLength, sectionEnd, index);
+	return result.ec == std::errc() && result.ptr == sectionEnd ? index : 0;
 }
 
 std::unordered_map<std::string, std::string> WeatherManager::GetWeatherFiles() const

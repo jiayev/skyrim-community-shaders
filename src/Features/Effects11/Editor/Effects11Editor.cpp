@@ -452,13 +452,13 @@ void Effects11Editor::DrawNoPreset()
 	ImGui::Spacing();
 	if (effects11.IsUseOriginalPostProcessingForced()) {
 		const Util::LockedSection originalPPLock(true, T(TKEY("original_pp_forced"),
-			"Use Original Post Processing is forced on until a usable preset is available."));
+														   "Use Original Post Processing is forced on until a usable preset is available."));
 		bool forcedOn = true;
 		ImGui::Checkbox(T(TKEY("use_original_post_processing"), "Use Original Post Processing"), &forcedOn);
 		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-			"Use Original Post Processing stays on so the game keeps a working image.\n"
-			"Install a preset and reload shaders to unlock it."),
+							 "Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
+							 "Use Original Post Processing stays on so the game keeps a working image.\n"
+							 "Install a preset and reload shaders to unlock it."),
 			Util::kTooltipWhenDisabled);
 	}
 
@@ -506,8 +506,8 @@ void Effects11Editor::DrawToolbar()
 
 	const char* saveLabel = T(TKEY("save"), "Save");
 	const char* saveTip = dirty ?
-		T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-		T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
+	                          T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+	                          T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
 	if (dirty) {
 		auto color = globals::menu->GetTheme().StatusPalette.Error;
 		color.w = 0.75f;
@@ -596,7 +596,7 @@ void Effects11Editor::DrawStatus()
 		auto weatherName = [&](uint32_t a_id) -> std::string {
 			if (auto* entry = weatherManager.FindWeatherEntry(a_id))
 				return entry->fileName;
-			return I18n::GetSingleton()->Format(TKEY("weather_no_file"), { { "id", std::format("0x{:06X}", a_id) } }, "{id} (no weather file)");
+			return I18n::GetSingleton()->Format(TKEY("weather_no_file"), { { "id", std::format("0x{:08X}", a_id) } }, "{id} (no weather file)");
 		};
 		const auto current = effectManager.currentWeatherID;
 		const auto previous = effectManager.previousWeatherID;
@@ -918,8 +918,8 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
 	const bool forcedOriginalPP = a_setting.type == SettingType::Bool &&
-		a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
-		globals::features::effects11.IsUseOriginalPostProcessingForced();
+	                              a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
+	                              globals::features::effects11.IsUseOriginalPostProcessingForced();
 	const bool editable = a_categoryActive && dependencyMet && !forcedOriginalPP;
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
@@ -999,9 +999,9 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 		DrawSettingTooltip(a_setting, name, dependencyMet);
 	if (forcedOriginalPP)
 		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-			"Use Original Post Processing stays on so the game keeps a working image.\n"
-			"Install a preset and reload shaders to unlock it."),
+							 "Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
+							 "Use Original Post Processing stays on so the game keeps a working image.\n"
+							 "Install a preset and reload shaders to unlock it."),
 			Util::kTooltipWhenDisabled);
 	ImGui::PopID();
 }
@@ -1215,7 +1215,7 @@ void Effects11Editor::DrawSettingTooltip(const Setting& a_setting, const std::st
 	if (a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
 		globals::features::effects11.IsUseOriginalPostProcessingForced()) {
 		Util::Text::WrappedWarning("%s", T(TKEY("original_pp_forced"),
-			"Use Original Post Processing is forced on until a usable preset is available."));
+											 "Use Original Post Processing is forced on until a usable preset is available."));
 	}
 	Util::TextUnformattedDisabled(T(TKEY("context_hint"), "Right-click a value for reset, copy and paste."));
 	ImGui::PopTextWrapPos();
@@ -1514,7 +1514,7 @@ void Effects11Editor::DrawLauncher()
 	Util::TextUnformattedDisabled(presetPaths.iniDisplay.c_str());
 	Util::AddTooltip(presetPaths.iniFull.c_str());
 	ImGui::TextWrapped("%s", T("feature.effects11.use_presets_tab",
-		"Load and switch Effects11 presets from the Presets page in the left navigation."));
+								 "Load and switch Effects11 presets from the Presets page in the left navigation."));
 
 	ImGui::Spacing();
 	const float scale = Util::GetUIScale();

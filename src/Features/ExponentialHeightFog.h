@@ -107,6 +107,8 @@ private:
 		float4 frameJitterOffsets[16] = {};
 		float4 historyParameters = {};
 		float4 jitterParameters = {};  // x = LightScatteringSampleJitterMultiplier, y = StateFrameIndexMod8, zw = unused
+		float4x4 historyViewProj = {};
+		float4 historyPosAdjust = {};
 		// Far volume grid (starts where the near volume ends, runs to volumetricFogDistance).
 		DirectX::XMUINT4 farGridSizeAndFlags = {};
 		float4 farInvGridSizeAndNearFade = {};
@@ -115,7 +117,7 @@ private:
 	};
 	STATIC_ASSERT_ALIGNAS_16(VolumetricFogCB);
 
-	/** @brief Shaders see height fog as disabled: an ENB preset replaces it, or the map is open. */
+	/** @brief Shaders see height fog as disabled: an ENB preset replaces it, or the flat world map is open. */
 	bool IsSuppressed() const;
 	void EnsureVolumetricResources();
 	void ReleaseVolumetricResources();
@@ -154,6 +156,9 @@ private:
 	ID3D11ComputeShader* integrationCS = nullptr;
 	ID3D11ComputeShader* farIntegrationCS = nullptr;
 	DirectX::XMUINT4 currentGridSize = {};
+	// Camera the history volume was built with, so it reprojects correctly after a suppressed pause
+	float4x4 historyViewProj = {};
+	float4 historyPosAdjust = {};
 	DirectX::XMUINT4 currentFarGridSize = {};
 	bool hasLightScatteringHistory = false;
 	bool hasConservativeDepthHistory = false;
