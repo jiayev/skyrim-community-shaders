@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui.h>
 #include <ranges>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Feature.h"
@@ -38,6 +39,29 @@ namespace
 	constexpr std::array<const char*, 7> CORE_MENU_NAMES = {
 		"Home", "Presets", "General", "Advanced", "Profiling", "CS Editor", "Display"
 	};
+
+	/** @brief Draws a full-width Selectable with a rounded accent pill that also carries its hover/selected state. @return True when clicked. */
+	bool PillSelectable(const std::string& label, bool selected)
+	{
+		constexpr float idleAlpha = 0.18f, hoveredAlpha = 0.28f, selectedAlpha = 0.35f;
+		// Last frame's Selectable rect per row: the pill must sit under the text, so it is drawn first
+		static std::unordered_map<ImGuiID, std::pair<ImVec2, ImVec2>> rowRects;
+		auto& [rowMin, rowMax] = rowRects[ImGui::GetID(label.c_str())];
+
+		const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(rowMin, rowMax);
+		ImVec4 pill = globals::menu->GetSettings().Theme.StatusPalette.InfoColor;
+		pill.w = selected ? selectedAlpha : (hovered ? hoveredAlpha : idleAlpha);
+		ImGui::GetWindowDrawList()->AddRectFilled(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(pill), (rowMax.y - rowMin.y) * 0.5f);
+
+		for (auto col : { ImGuiCol_Header, ImGuiCol_HeaderHovered, ImGuiCol_HeaderActive })
+			ImGui::PushStyleColor(col, ImVec4(0, 0, 0, 0));
+		const bool clicked = ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns);
+		ImGui::PopStyleColor(3);
+
+		rowMin = ImGui::GetItemRectMin();
+		rowMax = ImGui::GetItemRectMax();
+		return clicked;
+	}
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
 	{
@@ -589,6 +613,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 	// Use error color for Feature Issues menu item
 	bool isFeatureIssues = (menu.name == T("menu.features.feature_issues", "Feature Issues"));
 	bool isCSEditor = (menu.name == T("menu.features.cs_editor", "CS Editor"));
+	bool isPresets = (menu.name == T("menu.features.presets", "Presets"));
 
 	if (isFeatureIssues) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
@@ -598,23 +623,9 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 			selectedMenuRef = listId;
 
 		ImGui::PopStyleColor();
-	} else if (isCSEditor) {
-		const auto& info = globals::menu->GetSettings().Theme.StatusPalette.InfoColor;
-		ImVec4 pill = info;
-		pill.w = selectedMenuRef == listId ? 0.35f : 0.18f;
-		const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-		const float rowH = ImGui::GetTextLineHeightWithSpacing();
-		ImGui::GetWindowDrawList()->AddRectFilled(
-			rowMin,
-			ImVec2(rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + rowH),
-			ImGui::ColorConvertFloat4ToU32(pill),
-			rowH * 0.5f);
-		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(info.x, info.y, info.z, 0.28f));
-		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(info.x, info.y, info.z, 0.40f));
-		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
+	} else if (isCSEditor || isPresets) {
+		if (PillSelectable(fmt::format(" {} ", menu.name), selectedMenuRef == listId))
 			selectedMenuRef = listId;
-		ImGui::PopStyleColor(3);
 	} else {
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
