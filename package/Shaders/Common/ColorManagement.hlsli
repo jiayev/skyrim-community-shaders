@@ -21,24 +21,25 @@ namespace Color
 	static const float BRDFScale = 1.0;
 #	endif
 
-	/** @brief Decodes a PBR material color for linear math; Effects 11 keeps them gamma-encoded for its gamma pipeline. */
+	/** @brief Gamma lighting pipelines (Linear Lighting off, or an Effects 11 preset) keep PBR material colors gamma 2.2 encoded. */
+#	if !defined(ENABLE_LL)
+	static const bool PBRMaterialIsGammaEncoded = true;
+#	elif defined(EFFECTS11)
+	static const bool PBRMaterialIsGammaEncoded = SharedData::enbSettings.Enable;
+#	else
+	static const bool PBRMaterialIsGammaEncoded = false;
+#	endif
+
+	/** @brief Decodes a PBR material color for linear math. */
 	float3 PBRMaterialToLinear(float3 materialColor)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return TransferFunctions::Gamma22ToLinear(materialColor);
-#	endif
-		return materialColor;
+		return PBRMaterialIsGammaEncoded ? TransferFunctions::Gamma22ToLinear(materialColor) : materialColor;
 	}
 
 	/** @brief Inverse of PBRMaterialToLinear. */
 	float3 LinearToPBRMaterial(float3 linearColor)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return TransferFunctions::LinearToGamma22(linearColor);
-#	endif
-		return linearColor;
+		return PBRMaterialIsGammaEncoded ? TransferFunctions::LinearToGamma22(linearColor) : linearColor;
 	}
 
 	float3 Albedo(float3 color)
@@ -174,15 +175,7 @@ namespace ColorManagement
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 	float3 PBRVertexColorToLinear(float3 encodedVertexColor)
 	{
-#	if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
-			return TransferFunctions::Gamma22ToLinear(encodedVertexColor);
-#	endif
-#	if defined(ENABLE_LL)
-		return TransferFunctions::SRGBToLinear(encodedVertexColor);
-#	else
-		return encodedVertexColor;
-#	endif
+		return Color::PBRMaterialIsGammaEncoded ? TransferFunctions::Gamma22ToLinear(encodedVertexColor) : TransferFunctions::SRGBToLinear(encodedVertexColor);
 	}
 
 	float3 WorkingToUI(float3 color)
