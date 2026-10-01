@@ -501,10 +501,10 @@ namespace SkinActors
 		const auto bytes = Read(path);
 		if (!bytes)
 			Invalid();
-		const auto value = Parse(*bytes);
-		Header(value, "CommunityShaders.Skin.Scheme");
+		const auto schemeJson = Parse(*bytes);
+		Header(schemeJson, "CommunityShaders.Skin.Scheme");
 		Scheme result;
-		const auto& parts = value.at("parts");
+		const auto& parts = schemeJson.at("parts");
 		if (!parts.is_array() || parts.size() != result.parts.size())
 			Invalid();
 		for (size_t i = 0; i < parts.size(); ++i) {

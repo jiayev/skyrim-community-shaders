@@ -1685,6 +1685,7 @@ void Upscaling::MenuManagerDrawInterfaceStartHook::thunk(int64_t a1)
 void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32_t a3, RE::RENDER_TARGET a_target, void* a_4, bool a_5)
 {
 	auto& upscaling = globals::features::upscaling;
+	auto& postProcessing = globals::features::postProcessing;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
 	const bool prepareFrameGeneration = upscaling.ShouldPrepareFrameGeneration();

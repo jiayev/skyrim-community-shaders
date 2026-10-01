@@ -2211,13 +2211,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(CS_SKIN_SHADING)
 	if (skinEnabled) {
 		float wetResponse = saturate(skinData.physicalParams.x * skinWetMask);
-		wetnessGlossinessAlbedo *= wetResponse;
-		wetnessGlossinessSpecular *= wetResponse;
-		wetnessNormal = normalize(lerp(worldNormal.xyz, wetnessNormal, wetResponse));
-	}
-	if (skinEnabled && (skinWetness > 0.0f)) {
-		wetnessState.normal = skinWetNormal;
-		wetnessState.glossinessSpecular = saturate(max(wetnessState.glossinessSpecular, skinWetness));
+		wetnessState.glossinessAlbedo *= wetResponse;
+		wetnessState.glossinessSpecular *= wetResponse;
+		wetnessState.normal = normalize(lerp(worldNormal.xyz, wetnessState.normal, wetResponse));
+		if (skinWetness > 0.0f) {
+			wetnessState.normal = skinWetNormal;
+			wetnessState.glossinessSpecular = saturate(max(wetnessState.glossinessSpecular, skinWetness));
+		}
 		wetnessState.roughness = WetnessEffects::GetSurfaceWetnessRoughness(wetnessState.glossinessSpecular);
 	}
 #		endif

@@ -24,6 +24,7 @@
 #include "Menu/PresetsPageRenderer.h"
 #include "Presets/PresetCompatibility.h"
 #include "Presets/UnifiedPresetCatalog.h"
+#include "SceneSettingsManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
 #include "Utils/UI.h"
@@ -84,9 +85,9 @@ namespace
 
 		auto count = files.size();
 		return std::vformat(T(TKEY("scene_export_replace_message"),
-								 "'{}' already has {} file(s) on disk. Exporting deletes every one of "
-								 "them and writes this preset in their place. If another mod owns "
-								 "these files, they are gone.{}"),
+								"'{}' already has {} file(s) on disk. Exporting deletes every one of "
+								"them and writes this preset in their place. If another mod owns "
+								"these files, they are gone.{}"),
 			std::make_format_args(name, count, listed));
 	}
 
@@ -95,10 +96,10 @@ namespace
 	{
 		auto message = exported ?
 		                   std::vformat(T(TKEY("scene_export_result_success"), "Preset '{}' exported."),
-						   std::make_format_args(name)) :
+							   std::make_format_args(name)) :
 		                   std::vformat(T(TKEY("scene_export_result_failure"),
-										   "Preset '{}' export failed. Check the log for details."),
-						   std::make_format_args(name));
+											"Preset '{}' export failed. Check the log for details."),
+							   std::make_format_args(name));
 		EditorWindow::GetSingleton()->ShowNotification(
 			message, exported ? Util::Colors::GetSuccess() : Util::Colors::GetError());
 	}
@@ -188,7 +189,7 @@ namespace
 		ImGui::SameLine();
 		PresetsPageRenderer::DrawBackendBadges(pack.IsE11(), pack.IsCS(), pack.IsBaseline(), true);
 		if (!pack.author.empty() || !pack.version.empty()) {
-			const auto meta = pack.author.empty() ? std::format("v{}", pack.version) :
+			const auto meta = pack.author.empty()  ? std::format("v{}", pack.version) :
 			                  pack.version.empty() ? pack.author :
 			                                         std::format("{} · v{}", pack.author, pack.version);
 			ImGui::TextDisabled("%s", meta.c_str());
@@ -309,8 +310,8 @@ namespace
 		ImGui::EndChild();
 		ImGui::TextDisabled("%s",
 			I18n::GetSingleton()->Format("cs_editor.scene_export_features_count",
-				{ { "count", std::to_string(form.requiredFeatures.size()) } },
-				"{count} selected")
+									{ { "count", std::to_string(form.requiredFeatures.size()) } },
+									"{count} selected")
 				.c_str());
 		ImGui::EndChild();
 	}
@@ -356,8 +357,9 @@ namespace
 		OPENFILENAMEW ofn{};
 		ofn.lStructSize = sizeof(ofn);
 		ofn.hwndOwner = GetActiveWindow();
-		ofn.lpstrFilter = L"Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds\0"
-						  L"All Files (*.*)\0*.*\0";
+		ofn.lpstrFilter =
+			L"Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds\0"
+			L"All Files (*.*)\0*.*\0";
 		ofn.lpstrFile = buffer.data();
 		ofn.nMaxFile = kBufferChars;
 		ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;
@@ -496,15 +498,15 @@ void ScenePresetExport::Draw()
 			form.type = PresetType::CS;
 		if (form.type == PresetType::E11) {
 			ImGui::TextDisabled("%s", T(TKEY("scene_export_type_e11_hint"),
-				"Copies the active ENB files into Presets/<Name>/effects11/."));
+										  "Copies the active ENB files into Presets/<Name>/effects11/."));
 		}
 		ImGui::Separator();
 
 		ImGui::TextWrapped(
 			"%s", form.type == PresetType::E11 ?
-			          T(TKEY("scene_export_scope_e11"),
-				  "Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.") :
-			          T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
+					  T(TKEY("scene_export_scope_e11"),
+						  "Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.") :
+					  T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
 		ImGui::Separator();
 
 		const auto& modNames = GetCachedModNames(manager);
@@ -554,7 +556,7 @@ void ScenePresetExport::Draw()
 			ImGui::TableNextColumn();
 			ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
 			ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
-				"Images are copied into Presets/<Name>/ for the Presets browser."));
+										  "Images are copied into Presets/<Name>/ for the Presets browser."));
 			DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
 			DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
 				existingCover);
@@ -576,8 +578,8 @@ void ScenePresetExport::Draw()
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
 			exportConfirmation.message = collidingFiles.empty() ?
 			                                 std::vformat(T(TKEY("scene_export_create_message"),
-															 "Write your settings out as the preset '{}'?"),
-													 std::make_format_args(sanitizedName)) :
+															  "Write your settings out as the preset '{}'?"),
+												 std::make_format_args(sanitizedName)) :
 			                                 DescribeCollision(sanitizedName, collidingFiles);
 			exportConfirmation.confirmLabel = collidingFiles.empty() ?
 			                                      T(TKEY("scene_export_confirm"), "Export") :

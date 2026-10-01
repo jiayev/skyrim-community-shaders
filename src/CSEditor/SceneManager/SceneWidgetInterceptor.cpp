@@ -134,11 +134,7 @@ namespace
 			return RealDragFloat(label, v, speed, vMin, vMax, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		const bool changed = RealDragFloat(label, guard.Float(), speed, vMin, vMax, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			*guard.Float() = static_cast<float>(vMin < vMax ? std::clamp(value, (double)vMin, (double)vMax) : value);
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealDragFloat(label, guard.Float(), speed, vMin, vMax, format, flags));
 	}
 
 	bool DetouredInputFloat(const char* label, float* v, float step, float stepFast,
@@ -148,11 +144,7 @@ namespace
 			return RealInputFloat(label, v, step, stepFast, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Float(v));
-		const bool changed = RealInputFloat(label, guard.Float(), step, stepFast, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			*guard.Float() = static_cast<float>(value);
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealInputFloat(label, guard.Float(), step, stepFast, format, flags));
 	}
 
 	bool DetouredDragFloat2(const char* label, float v[2], float speed, float vMin, float vMax,
@@ -212,11 +204,7 @@ namespace
 			return RealInputScalar(label, dataType, data, step, stepFast, format, flags);
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Scalar(data, dataType));
-		const bool changed = RealInputScalar(label, dataType, guard.Raw(), step, stepFast, format, flags);
-		const bool dropped = ApplyPaletteValueDrop(guard, [&](double value) {
-			SceneWidgetBinding::WriteScalarValue(guard.Raw(), dataType, value);
-		});
-		return guard.Finish(dropped || changed);
+		return guard.Finish(RealInputScalar(label, dataType, guard.Raw(), step, stepFast, format, flags));
 	}
 
 	bool DetouredSliderAngle(const char* label, float* radians, float degreesMin, float degreesMax,

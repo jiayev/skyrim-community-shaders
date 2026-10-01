@@ -119,8 +119,8 @@ void Skin::SelectSurface(RE::BSGeometry* a_geometry)
 	editor.changes = {};
 	if (editor.character) {
 		const auto* binding = SkinActors::Find(*characters, entry.target.key);
-		if (const auto* surface = SkinActors::Find(binding, entry.target.part, entry.target.guard))
-			editor.changes = surface->changes;
+		if (const auto* savedSurface = SkinActors::Find(binding, entry.target.part, entry.target.guard))
+			editor.changes = savedSurface->changes;
 		else if (binding && entry.target.part < SkinActors::Part::Count) {
 			const auto& part = binding->parts[static_cast<size_t>(entry.target.part)];
 			if (part.size() == 1)

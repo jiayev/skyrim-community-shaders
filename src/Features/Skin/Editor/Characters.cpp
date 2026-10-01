@@ -305,7 +305,7 @@ void Skin::DrawCharacterActions()
 			next.name = entry.target.name;
 			next.persistent = entry.target.persistent;
 			const auto key = entry.target.key;
-			const auto loaded = DiscoverActor(entry.target.actor.get().get());
+			const auto loadedSurfaces = DiscoverActor(entry.target.actor.get().get());
 			std::vector<SkinActors::Surface> edits;
 			Validate(editor.changes);
 			for (const auto& geometry : editor.targets) {
@@ -319,7 +319,7 @@ void Skin::DrawCharacterActions()
 				if (target.target.key != key || !target.target.error.empty() || target.target.part != part)
 					throw std::runtime_error(T("feature.skin.character_changed", "The character configuration or game session changed. Select the current target again."));
 				CheckTextures(Apply(target.base, editor.changes));
-				for (const auto& other : loaded)
+				for (const auto& other : loadedSurfaces)
 					if (std::find(editor.targets.begin(), editor.targets.end(), other) == editor.targets.end() &&
 						geometries.at(other.get()).target.guard == target.target.guard)
 						throw std::runtime_error(T("feature.skin.shared_character_surface", "These surfaces share a persistent identity. Include them together with identical settings, or give them independent source materials."));
