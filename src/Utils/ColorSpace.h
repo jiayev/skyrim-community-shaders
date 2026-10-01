@@ -19,16 +19,16 @@ namespace Util::ColorSpace
 		}
 	};
 
-	inline constexpr float GAME_GAMMA = 1.8f;
+	inline constexpr float GAME_GAMMA = 1.6f;
 	inline constexpr float GAME_GAMMA_INV = 1.0f / GAME_GAMMA;
 
 	/** @brief sRGB EOTF：Encoded -> Linear. */
 	float SRGBToLinear(float encodedSRGB);
 	/** @brief sRGB OETF：Linear -> Encoded. */
 	float LinearToSRGB(float linearValue);
-	/** @brief In game gamma 1.8 -> Linear. */
+	/** @brief In game gamma 1.6 -> Linear. */
 	float GameGammaToLinear(float encoded);
-	/** @brief Linear -> In game gamma 1.8. */
+	/** @brief Linear -> In game gamma 1.6. */
 	float LinearToGameGamma(float linearValue);
 
 	/** @brief Apply SRGBToLinear to RGB 3-component in-place. */
