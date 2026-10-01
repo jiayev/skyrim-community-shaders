@@ -15,6 +15,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/HDRDisplay.h"
 #include "Features/InteriorSun.h"
+#include "Features/LinearLighting.h"
 #include "Features/PerformanceOverlay.h"
 #include "Features/PostProcessing.h"
 #include "Features/Skin.h"
@@ -1046,8 +1047,7 @@ void State::UpdateSharedData([[maybe_unused]] bool a_inWorld, [[maybe_unused]] b
 		lighting.directionalLight = dirLight;
 		lighting.directional.color = lightRuntimeData.diffuse;
 		lighting.directional.intensity = lightRuntimeData.fade;
-		if (auto imageSpaceManager = globals::game::imageSpaceManager)
-			lighting.directional.intensity *= imageSpaceManager->GetRuntimeData().data.baseData.hdr.sunlightScale;
+		lighting.directional.intensity *= globals::features::linearLighting.GetSunlightScale(dirLight);
 		lighting.directional.alpha = lighting.directional.intensity;
 
 		const auto& direction = dirLight->GetWorldDirection();
