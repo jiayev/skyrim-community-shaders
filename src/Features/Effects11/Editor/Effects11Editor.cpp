@@ -431,8 +431,6 @@ void Effects11Editor::DrawSettingsWindow()
 void Effects11Editor::DrawNoPreset()
 {
 	const auto& mainEffect = EffectManager::GetSingleton().enbEffect;
-	auto& effects11 = globals::features::effects11;
-	effects11.EnforceOriginalPostProcessingIfNeeded();
 
 	Util::Text::Warning("%s", T(TKEY("no_preset_title"), "No preset loaded"));
 	ImGui::Spacing();
@@ -448,19 +446,6 @@ void Effects11Editor::DrawNoPreset()
 			"then click Reload Shaders."));
 	}
 	ImGui::PopTextWrapPos();
-
-	ImGui::Spacing();
-	if (effects11.IsUseOriginalPostProcessingForced()) {
-		const Util::LockedSection originalPPLock(true, T(TKEY("original_pp_forced"),
-			"Use Original Post Processing is forced on until a usable preset is available."));
-		bool forcedOn = true;
-		ImGui::Checkbox(T(TKEY("use_original_post_processing"), "Use Original Post Processing"), &forcedOn);
-		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-			"Use Original Post Processing stays on so the game keeps a working image.\n"
-			"Install a preset and reload shaders to unlock it."),
-			Util::kTooltipWhenDisabled);
-	}
 
 	ImGui::Spacing();
 	ImGui::PushTextWrapPos(0.0f);
@@ -917,10 +902,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	auto& settingManager = SettingManager::GetSingleton();
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
-	const bool forcedOriginalPP = a_setting.type == SettingType::Bool &&
-		a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
-		globals::features::effects11.IsUseOriginalPostProcessingForced();
-	const bool editable = a_categoryActive && dependencyMet && !forcedOriginalPP;
+	const bool editable = a_categoryActive && dependencyMet;
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
 	bool labelHovered = false;
@@ -930,7 +912,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	case SettingType::Bool:
 		{
 			labelHovered = Effects11UI::PropertyLabel(name.c_str(), !editable);
-			bool value = forcedOriginalPP || settingManager.GetValue<bool>(a_setting.id, true);
+			bool value = settingManager.GetValue<bool>(a_setting.id, true);
 			bool changed = ImGui::Checkbox("##v", &value);
 
 			if (const auto* effect = EffectForToggle(a_setting); effect && !effect->IsFilePresent()) {
@@ -953,7 +935,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 				}
 			}
 
-			if (changed && !forcedOriginalPP) {
+			if (changed) {
 				settingManager.SetValue<bool>(a_setting.id, value);
 				dirty = true;
 			}
@@ -997,12 +979,6 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	ImGui::EndDisabled();
 	if (labelHovered)
 		DrawSettingTooltip(a_setting, name, dependencyMet);
-	if (forcedOriginalPP)
-		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-			"Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-			"Use Original Post Processing stays on so the game keeps a working image.\n"
-			"Install a preset and reload shaders to unlock it."),
-			Util::kTooltipWhenDisabled);
 	ImGui::PopID();
 }
 
@@ -1211,11 +1187,6 @@ void Effects11Editor::DrawSettingTooltip(const Setting& a_setting, const std::st
 		const auto needs = I18n::GetSingleton()->Format(TKEY("needs_setting"), { { "setting", Effects11UI::PrettifyName(a_setting.dependsOnKey) } },
 			"Turn on \"{setting}\" to use this.");
 		Util::Text::WrappedWarning("%s", needs.c_str());
-	}
-	if (a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
-		globals::features::effects11.IsUseOriginalPostProcessingForced()) {
-		Util::Text::WrappedWarning("%s", T(TKEY("original_pp_forced"),
-			"Use Original Post Processing is forced on until a usable preset is available."));
 	}
 	Util::TextUnformattedDisabled(T(TKEY("context_hint"), "Right-click a value for reset, copy and paste."));
 	ImGui::PopTextWrapPos();

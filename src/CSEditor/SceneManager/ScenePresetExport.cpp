@@ -1,4 +1,5 @@
 #include "ScenePresetExport.h"
+#include "SceneSettingsManager.h"
 
 #include <algorithm>
 #include <cctype>

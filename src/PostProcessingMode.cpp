@@ -6,28 +6,49 @@
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
+#include "Utils/FileSystem.h"
 #include "Utils/UI.h"
 
 #include <array>
+#include <optional>
 
 namespace PostProcessingMode
 {
 	namespace
 	{
 		constexpr int kModeCount = 3;
+		constexpr const char* kSettingKey = "Post Processing Mode";
+		constexpr Mode kDefaultMode = Mode::Vanilla;
 
-		/** @brief Effects 11 feature is ready to claim the pipeline slot (preset optional). */
+		/** @brief Mode read from the user settings, held until Effects 11 can take it. */
+		std::optional<Mode> pendingMode;
+		/** @brief The pending mode is only the default, so an installed Effects 11 preset may still take over. */
+		bool detectPreset = false;
+
+		/** @brief Effects 11 is initialized, so its UseEffect setting can be written. */
+		bool IsEffects11Ready()
+		{
+			return globals::features::effects11.loaded && EffectManager::GetSingleton().IsInitialized();
+		}
+
+		/** @brief Effects 11 has a compiled preset to run, so it can claim the pipeline slot. */
 		bool CanUseEffects11()
 		{
-			const auto& effectManager = EffectManager::GetSingleton();
-			return globals::features::effects11.loaded && effectManager.IsInitialized();
+			return IsEffects11Ready() && EffectManager::GetSingleton().IsPresetLoaded();
+		}
+
+		/** @brief Switches the pipeline flags without the user-facing side effects of Set(). */
+		void Apply(Mode mode)
+		{
+			if (IsEffects11Ready())
+				globals::features::effects11.SetUseEffect(mode == Mode::Effects11);
+			globals::features::postProcessing.bypass = mode != Mode::PostProcessing;
 		}
 	}
 
 	Mode Get()
 	{
-		// UseEffect selects the Effects 11 slot even before a preset compiles; original PP is forced then.
-		if (globals::features::effects11.IsUseEffectEnabled())
+		if (globals::features::effects11.IsPresetEnabled())
 			return Mode::Effects11;
 		const auto& postProcessing = globals::features::postProcessing;
 		return postProcessing.loaded && !postProcessing.bypass ? Mode::PostProcessing : Mode::Vanilla;
@@ -35,15 +56,47 @@ namespace PostProcessingMode
 
 	void Set(Mode mode)
 	{
-		const bool effects11Available = CanUseEffects11();
-		if (mode == Mode::Effects11 && !effects11Available)
+		if (mode == Mode::Effects11 && !CanUseEffects11())
 			return;
-		if (effects11Available)
-			globals::features::effects11.SetUseEffect(mode == Mode::Effects11);
-		globals::features::postProcessing.bypass = mode != Mode::PostProcessing;
+		pendingMode.reset();
+		Apply(mode);
 		// Switching to Post Processing always starts linear; running without it is a manual opt-out.
 		if (mode == Mode::PostProcessing)
 			globals::features::linearLighting.settings.enableLinearLighting = true;
+	}
+
+	void Load(const json& a_general)
+	{
+		const auto saved = a_general.find(kSettingKey);
+		const auto savedMode = saved != a_general.end() && saved->is_string() ?
+		                           magic_enum::enum_cast<Mode>(saved->get<std::string>()) :
+		                           std::nullopt;
+		// Without a user settings file, the merged value is the SettingsDefault.json one, not a user choice.
+		std::error_code ec;
+		detectPreset = !savedMode || !std::filesystem::exists(Util::PathHelpers::GetSettingsUserPath(), ec);
+		pendingMode = savedMode.value_or(kDefaultMode);
+		// Effects 11 is not initialized this early, so only the bypass can apply now.
+		globals::features::postProcessing.bypass = *pendingMode != Mode::PostProcessing;
+	}
+
+	void Save(json& a_general)
+	{
+		// Keep an unresolved default unsaved so preset detection still runs on the next boot.
+		if (pendingMode && detectPreset)
+			return;
+		// Before Effects 11 initializes, Get() cannot see its UseEffect choice yet.
+		const bool modeKnown = globals::features::postProcessing.loaded &&
+		                       (!globals::features::effects11.loaded || EffectManager::GetSingleton().IsInitialized());
+		a_general[kSettingKey] = magic_enum::enum_name(pendingMode.value_or(modeKnown ? Get() : kDefaultMode));
+	}
+
+	void ApplyPending()
+	{
+		if (!pendingMode)
+			return;
+		const Mode mode = detectPreset && globals::features::effects11.IsUseEffectEnabled() ? Mode::Effects11 : *pendingMode;
+		Apply(mode == Mode::Effects11 && !CanUseEffects11() ? Mode::Vanilla : mode);
+		pendingMode.reset();
 	}
 
 	void DrawSelector()
@@ -70,17 +123,7 @@ namespace PostProcessingMode
 		if (Util::SegmentedControl("PostProcessingMode", labels.data(), count, selected) && modes[selected] != current)
 			Set(modes[selected]);
 
-		const bool effects11WithoutPreset = globals::features::effects11.IsUseOriginalPostProcessingForced();
-		if (effects11WithoutPreset) {
-			Util::AddTooltip(T("ui.post_processing_mode.effects11_no_preset_tooltip",
-				"Effects 11 is selected, but no usable preset is loaded.\n"
-				"Use Original Post Processing stays on so the game's tonemap keeps running until you install a preset."));
-			ImGui::Spacing();
-			Util::Text::WrappedWarning("%s", T("ui.post_processing_mode.effects11_no_preset",
-				"No Effects 11 preset loaded — Use Original Post Processing is forced on."));
-		} else {
-			Util::AddTooltip(T("ui.post_processing_mode.tooltip",
-				"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
-		}
+		Util::AddTooltip(T("ui.post_processing_mode.tooltip",
+			"Only one pipeline runs at a time. Vanilla uses the game's original post processing."));
 	}
 }
