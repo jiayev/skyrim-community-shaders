@@ -429,6 +429,7 @@ namespace DCLF::Draws
 				++c.reused;
 				exclusion->excluded = c.excluded;
 				exclusion->excludedCount = c.excludedCount;
+				exclusion->version = c.version;
 				exclusion->removed = std::make_unique<std::atomic<std::uint32_t>[]>(count);
 				exclusion->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_candidates->geometryEntry.size());
 				return exclusion;
@@ -447,8 +448,13 @@ namespace DCLF::Draws
 				exclusion->excluded[a_candidates->geometryEntry[it->second]] = 0;
 		}
 		exclusion->excludedCount = static_cast<std::uint32_t>(std::count(exclusion->excluded.begin(), exclusion->excluded.end(), std::uint8_t(1)));
+		// A new version only for new content: a full build that comes out as the cached one keeps its version.
+		static std::atomic<std::uint64_t> versions{ 0 };
+		const bool same = a_cache && a_cache->valid && a_cache->candidates == a_candidates && a_cache->excluded == exclusion->excluded;
+		exclusion->version = same ? a_cache->version : versions.fetch_add(1, std::memory_order_relaxed) + 1;
 		if (a_cache) {
 			auto& c = *a_cache;
+			c.version = exclusion->version;
 			if (wouldReuse) {
 				c.parity.Check(c.excluded == exclusion->excluded);
 			}

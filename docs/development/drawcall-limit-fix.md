@@ -4865,9 +4865,10 @@ under, listed with the member (`ListFadeRoot`, beside the tree slots) and releas
 **The pass** (`FadeStateCS.hlsl`, `cs.dclf.z.fade-state`), first in the depth segment's epoch, one thread per root:
 
 -   A state row whose generation is not its static row's starts from `initial`.
--   Once a frame, a root whose bound sphere is inside the depth segment's frustum (planes from its view-projection, as
-    the cull's sphere test) gets its class's `OnVisible`: the tree height test, the leaf LOD step, the fade update, the
-    tree's LOD fix-up. The verdict records what it saw and whether `OnVisible` would go on into the children.
+-   Once a frame, a root the main camera's cull would visit gets its class's `OnVisible`: the tree height test, the leaf
+    LOD step, the fade update, the tree's LOD fix-up. The verdict records what it saw and whether `OnVisible` would go on
+    into the children. Which roots the cull visits is `Process1`'s test, compound frustum included ("Roots with
+    engine-drawn parts", below); it was the depth segment's frustum alone until F2.
 -   The frame's inputs (`FadeFrame`: the cull's camera and the fade globals) are a one-row buffer the depth commit writes.
 
 **The port** (`Scene/FadeState.cpp`) is the same state machine in C++, instruction for instruction (operation order,
@@ -4976,10 +4977,9 @@ So the walk is per entry, by event (`Cut::walk`):
 -   `CS_DCLF_PERSISTENT_PARITY` walks every entry, for the hole check and the light masks, and counts what an entry the
     walk would skip handed to the registration (`stand-in walk parity`, 0).
 
-The decode is no longer joined (`PollFeedback`). It services the mixed roots on copies of their nodes (the engine's
-functions read and write only the node), and the job's last store publishes it (`decodeReady`). At the full-frustum
-cull and at Present, the render thread applies a finished decode's states (`FadeState::WriteNode`, the fade watch told)
-and the write-back changes; one still running waits for the next poll, and no decode is kicked while one is out.
+The decode is no longer joined (`PollFeedback`): the job's last store publishes it (`decodeReady`), and the render
+thread applies a finished one at the full-frustum cull and at Present; one still running waits for the next poll. Its
+service of the mixed roots is gone since F2 ("Roots with engine-drawn parts"); it takes the write-back changes alone.
 
 Measured (e5a-parity, e5a-plain, e5b-parity; Riverwood, camera turning): every parity OK (the Shield race apart), holes
 0, stand-in walk parity 0. Entries walked a frame 9,128 -> ~577 (the mixed ones). The decode: 300 kicked, 0 joined,
@@ -5009,6 +5009,151 @@ own sky occlusion map with the same machinery, which DCLF already drew natively.
 Measured (p1-parity, p2-rain with `CS_DCLF_TEST_COMMANDS='100:fw 10a241'`, Riverwood, camera turning): the sky map's
 parity as before the change; the mask drawn by DCLF 300 of 300 frames once it rains (18,700 occluders); its parity
 ~99.6% of texels equal, DCLF never farther, nearer on ~1,000 texels (the sky map's pattern); every other parity OK.
+
+## The scene lists without DCLF's roots
+
+`DrawWorld_BuildSceneLists` (`0x14064bc20`, a job of `Main::Draw`'s, finished before the shadow lights) deals every
+reference root of the loaded cells round robin into the six scene lists (`skyrim-engine-notes.md`, "The primary's cull:
+the scene lists"). Three readers walk every entry: the main camera's list jobs, the sun's full-frustum cull, and
+`Precipitation::SetupMask`. For a root DCLF draws whole, all three only produced results DCLF threw away: the stand-in's
+lookup, the full-frustum cull followed by the exclusion filter that took the root back out of its `objectArray`, and an
+occlusion map DCLF draws itself.
+
+**The filter** (`CS_DCLF_LIST_FILTER`, on unless `0`; `PrimaryCull::PublishListFilter`, `FilterSceneLists`):
+
+-   At the scene phase's end, before `Main::Draw` queues the build, the render thread publishes the roots this frame's
+    lists leave out. A root qualifies when its entry is admitted, has nothing for the registration (`Cut::walk` clear: no
+    engine-drawn part, every member bound), and the exclusion the coming full-frustum cull applies takes it out of the
+    sun's cascades (the pending `SunExclusion`, for the same snapshot). Both occlusion maps must be DCLF's, and the decal
+    order must not be the lists' (`CS_DCLF_DECAL_ORDER=engine`, and its probe). The set is rebuilt only when an entry's
+    verdict changes; Present withdraws it.
+-   A detour on `BuildSceneLists` removes those roots after the engine's build, on the build's own job. Each list keeps
+    an entry: its job sets the process's frustum up from the first.
+-   **Put back** (`RestoreSceneLists`): when the engine draws an occlusion map after all (DCLF's not ready, or a texel
+    parity frame's reference render), the left-out roots are appended to the lists before `SetupMask` culls them.
+    Nothing reads the lists between the list jobs and `ClearLists` but the occlusion maps.
+-   **Checks:** a parity frame (`CS_DCLF_PERSISTENT_PARITY`, every 60th) leaves the lists whole, and the stand-in counts
+    any root the filter would have left out that it did not skip (not admitted, walked, or a geometry handed to the
+    registration). The report also counts filtered frames whose full-frustum cull applied no exclusion, and members whose
+    binding was lost while their root was out of the lists. All must be 0.
+
+Measured (f1a-plain and f1a-parity2, Riverwood, camera turning, rain from frame 100):
+-   About 8,500 of 11,100 entries are left out per frame.
+-   The stand-in sees 777 entries a frame (9,128 before), and the sun's `objectArray` holds 539 (2,163 before).
+-   The full-frustum cull went from about 0.10 to 0.045 ms on the render thread, and its exclusion filter from 0.089
+    to 0.046 ms.
+-   Every check above 0, holes 0, and both occlusion parities as before.
+
+**Kept across frames** (`Engine/SceneLists.cpp`; `PrimaryCull::ListMode`). The engine's build walks the object root
+(`ShadowSceneNode` child 3: its two whole entries, then every cell's listed category nodes and their roots) the same
+way every frame in an exterior. Only what follows the camera changes: a portal graph's rooms and occlusion planes, and
+the extra list. So the object root's part of the lists is DCLF's:
+-   **Keep:** when nothing it reads moved, the lists stay as the last frame left them. `ClearLists` skips the scene
+    lists, and the build trims each list back to its kept part.
+-   **Rebuild:** when something moved, DCLF builds that part itself on the build's job (`EnumerateSceneLists`, less
+    the filter's roots), in about 0.25 ms for about 3,950 entries.
+-   **Either way the engine's build still runs**, for the extra list and the camera's part. Its `AsNode` call on the
+    object root (`0x14064be5a`, `mov rax,[rcx]; call [rax+0x18]`) is patched to return null, so it skips the walk.
+-   **Engine:** the engine's own build, filtered as above. Used in an interior or with no unbound space (its other
+    branches), and on parity frames. The lists are cleared first: `Main::Draw` clears them only at the frame's end,
+    after the occlusion maps, so after a kept frame they still hold DCLF's build. Missing this put every root in
+    twice and hung the render thread.
+
+What a rebuild is triggered by:
+-   **Hidden roots stay in kept lists.** The readers do not skip a hidden entry: `Process1` has no hidden test, and the
+    list cull (`FUN_140e28f70`) skips one only when its context's `+0x61` is set, which `FUN_1414bf2b0` leaves 0. A
+    detour on the list cull sets that flag for the scene lists and the extra list (`CullList`). That is exact: the
+    engine's build leaves hidden roots out, and the cull skips hidden children itself. Each list starts with an empty
+    node that is never hidden, so its cull's `Process2` still sets the frustum up.
+-   **Structure:** an attach or detach of a cell or a category node, but not under the two whole entries (the actors).
+    The attach/detach detours report it (`NoteListStructure`). A root attached under or detached from a category node
+    is not a rebuild: it goes into a queue (`listEvents`, in event order), and the next build applies it to the kept
+    lists (`ApplyListEvents`). An attach appends the root to the next list in the round robin, unless the category node
+    is not listed, the root is DCLF's, or it is category node 6's first child. A detach swap-removes it, by the root's
+    place (`listPositions`). An attach holds its root until applied, and the job releases nothing itself: everything
+    goes to Present.
+-   **A hidden bit** written on one of those nodes (`NoteHiddenKey`, from SceneStore's hidden events).
+-   **A new filter.** The filter is built again only when the cut's admissions or walks move (`cutVersion`), or the
+    exclusion's content does (`SunExclusion::version`, carried over by a reuse).
+-   **The build's globals:** the list count, the worldspace flag that skips category node 2, and the object root.
+-   **The lists not being DCLF's:** after an engine frame, or after roots were put back for an occlusion map.
+
+Two rules keep this safe:
+-   Roots the build's job lets go of are released at Present (`listGraveyard`), where the engine unloads. A kept list
+    may hold a detached cell's last reference.
+-   **Child indices run to `_freeIdx`** (`NiTArray::free_idx()`, null entries included), as the engine's do. CommonLib's
+    `size()` counts only the non-null entries, so a node with holes lost its last children. The list parity found this.
+    The same fix went to `SceneTracker`'s detach by index, the stand-in's switch children, the category lookup and the
+    decal order's child index.
+
+**Check:** on a parity frame, the engine's lists are compared with DCLF's enumeration. Every root of the engine's must
+be in it, and every other root must be hidden.
+
+Measured (f1c-parity; Riverwood, camera turning, rain from frame 100):
+-   285 of 300 frames keep the lists. The 10 rebuilds a report follow the parity's own frames (the engine's build,
+    and roots put back for the occlusion parity).
+-   About 1,000-1,500 root events a report, of which about 30 change a list.
+-   The list parity: 0 of the engine's roots missing, 0 extra roots not hidden.
+-   Holes 0, and every other parity check as before.
+
+## Roots with engine-drawn parts, culled by the engine
+
+An admitted entry with engine-drawn parts (`Cut::mixed`) was stood in like any other. Its node, which the engine's own
+draws of those parts read, was serviced by the visibility feedback's decode: the frustum stamps were read back each frame,
+and the engine's fade functions were run on a copy of the node a frame late. Now the engine culls such an entry whole:
+-   **The stand-in passes it to the engine's `Process1`.** Its `OnVisible` updates the node the engine's parts are drawn
+    from. DCLF's members under it are kept from the registration by the `AppendVirtual` hook, and FadeStateCS runs the same
+    update for them as an owned root without write-back.
+-   **Gone:** the decode's service (`ConsumeFeedback`, `ServiceWrite`, `Cut::decode`, the feedback tag), and the frustum
+    stamps' copy and its staging buffers. The feedback ring carries FadeStateCS's changes for the write-back roots and
+    nothing else.
+
+**The engine's cull test, on the GPU.** Two copies of one state machine stay equal only on equal inputs. A new
+`CS_DCLF_FADE_PARITY` check snapshots each logged mixed root's node at the depth commit (after the list jobs' `OnVisible`)
+and compares it with FadeStateCS's state that frame. It differed on most roots: the engine left `lastVisible` and the
+LOD metric at 0 while the GPU's moved. The list processes cull through a compound frustum, the portal graph's portals
+and occlusion planes: at Riverwood about 46 operators over 22 plane sets, rejecting about 90% of the mixed roots the
+frustum lets through. `Process1` (`0x140e28390`, list processes recurse to geometry) runs `OnVisible` when:
+-   the node is `kAlwaysDraw` (flag bit 11), or the cull mode is 1;
+-   the node is pre-processed (bit 12) and the process does not ignore pre-processing (and is not in cull mode 4): then
+    unless bit 20 is set, with no test;
+-   a compound frustum is active (operators present, cull mode not 3): the view test (unless `skipViewFrustum`), then
+    `BSCompoundFrustum::Process` (`0x140e320b0`);
+-   otherwise: the view test.
+
+`BSCompoundFrustum::Process` is a small program:
+-   Each operator is 12 bytes: {type, next if true, next if false}. Type 2 accepts and type 3 rejects.
+-   Type 7 passes unless the bound is wholly outside an active plane of its set. Type 8 passes unless the bound is wholly
+    inside every active plane of its set (an occluder's volume). For both, the plane set index is the next record's
+    first word.
+-   The planes it deactivates on the way (a bound wholly inside one) change no outcome within a call, and `Process1`
+    restores them around each node.
+
+So FadeStateCS repeats that test (`EngineInView`, `CompoundVisible`):
+-   **The block** (`Records.h`, `kFadeVisibility*`) holds the process's cull mode and flags, then the operator records
+    and the plane sets, whole. The program references records past `freeOp` and sets past `freePlane`, so copying only
+    the in-use counts broke the test.
+-   **When it is sampled:** the compound frustum exists only while a list job culls through it. The first list job to
+    see it samples the block (`PrimaryCull::StandIn`); without one, the render thread samples after the jobs. It is
+    uploaded with the depth commit.
+-   **The root's flags** (always-draw, pre-processed, bit 20) join its static row (`kFadeRootAlwaysDraw`,
+    `kFadeRootPreprocessed`, `kFadeRootPreprocessHidden`).
+-   **The bound's radius** is the record's sun entry row, which the placements keep current. A member's sun entry node is
+    its reference root, which is the fade root. The listed radius is 0 for a dynamic reference listed before its first
+    bound.
+-   **Placement snaps:** the cell attach's snap of a fade node (`FUN_14147aa20`: its fade, faded-in flag, snap radius
+    and last visible frame) is an event (`fadeSnapEvents`). The root's row is taken from the node again, at a new
+    generation (`ReseedFadeRoot`): a dynamic reference can be listed before its snap.
+
+This corrects DCLF's fade semantics for every owned root, not only the mixed ones. Since E1 the GPU had been stepping
+the fade of roots behind an occlusion plane, which the engine leaves alone. The older parities could not see it: they
+replay the GPU's own in-view verdict.
+
+Measured (f2-parity4; Riverwood, camera turning, rain from frame 100):
+-   577 mixed entries a frame culled by the engine.
+-   FadeStateCS against the engine's node: 381 checks, all exact or within rounding.
+-   The pass against the port as before; holes 0; every parity OK (the Shield race apart).
+-   The compound frustum never outgrew the block.
 
 ## Switch selection by event (culling-job elimination, phase 3)
 

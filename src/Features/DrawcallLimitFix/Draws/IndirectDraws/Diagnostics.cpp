@@ -648,6 +648,16 @@ namespace DCLF
 		readback.base = base;
 		readback.roots.assign(a_tables.fadeRoots.begin() + base, a_tables.fadeRoots.begin() + std::min(count, base + kFadeLogEntries));
 		readback.inputs = a_inputs;
+		readback.nodes.resize(readback.roots.size());
+		readback.engine.assign(readback.roots.size(), 0);
+		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
+			const auto bits = readback.roots[i].bits;
+			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
+			if (node && (bits & kFadeRootOwned) && !(bits & kFadeRootWriteBack)) {
+				readback.nodes[i] = FadeState::ReadNode(*node);
+				readback.engine[i] = 1;
+			}
+		}
 		fadeReadback = std::move(readback);
 		return base;
 	}
@@ -703,6 +713,25 @@ namespace DCLF
 			// Only what the pass did that frame, for the row it had.
 			if (entry.root != done.base + i || entry.after.frame != done.frame || entry.after.generation != root.generation || !root.generation)
 				continue;
+			// A root the engine culls too: its OnVisible on the node and FadeStateCS's for the members, from the same state.
+			if (i < done.engine.size() && done.engine[i]) {
+				++p.engineChecked;
+				const auto& n = done.nodes[i];
+				const auto& g = entry.after;
+				const auto within = [](float a_a, float a_b) { return std::abs(a_a - a_b) <= 1e-5f * std::max(1.0f, std::abs(a_a)); };
+				const auto engineDifferences = FadeState::Differences(n, g);
+				if (engineDifferences.empty())
+					++p.engineExact;
+				else if (n.flags == g.flags && n.lastVisible == g.lastVisible && (n.levels & 0xFFFF) == (g.levels & 0xFFFF) && within(n.currentFade, g.currentFade) &&
+						 within(n.snapRadius, g.snapRadius) && within(n.amountFade, g.amountFade) && within(n.metric, g.metric) && within(n.previousMetric, g.previousMetric) &&
+						 within(n.blend, g.blend))
+					++p.engineRounding;
+				else {
+					++p.engineDiffer;
+					if (p.engineFirst.empty())
+						p.engineFirst = fmt::format("root {} (plan {}, verdict {:#x}): {}", entry.root, root.bits & kFadeRootPlanMask, g.verdict, engineDifferences);
+				}
+			}
 			++p.updates;
 			FadeNodeState port = entry.before;
 			std::uint32_t verdict = 0;
@@ -732,6 +761,9 @@ namespace DCLF
 		if ((p.logs % 10) == 0) {
 			logger::info("[DCLF] fade state parity (FadeStateCS against the port): {} logs, {} root updates ({} in view, {} serviced); {} exact, {} within rounding, {} differ{}{}",
 				p.logs, p.updates, p.inView, p.serviced, p.exact, p.rounding, p.differ, p.differ ? " <- FADE STATE" : " <- OK", p.first.empty() ? "" : "; first: " + p.first);
+			logger::info("[DCLF] fade state of roots with engine-drawn parts (FadeStateCS against the engine's node): {} checked, {} exact, {} within rounding, {} differ{}{}",
+				p.engineChecked, p.engineExact, p.engineRounding, p.engineDiffer, p.engineDiffer ? " <- ENGINE FADE" : " <- OK",
+				p.engineFirst.empty() ? "" : "; first: " + p.engineFirst);
 			p = {};
 		}
 	}

@@ -177,6 +177,14 @@ namespace DCLF
 		}
 
 		/**
+		 * @brief Placement snaps: FUN_14147aa20 (node, camera), from the cell attach (FUN_1402d1280, FUN_1402d5090), sets a fade
+		 * node's fade, its faded-in flag, its snap radius (+0x134) and its last visible frame from the camera. A root listed
+		 * before its snap (a dynamic reference's) would keep the state it was listed with on the GPU: its row is taken from
+		 * the node again (SceneStore::ReseedFadeRoot). Identity only; the drain follows the attach and detach events.
+		 */
+		inline EventQueue<const void*> fadeSnapEvents;
+
+		/**
 		 * @brief SceneEvents: the delta walk's structural events (dclf-event-driven-tables.md, "Phase 3"), pushed
 		 * from the engine's writers on whichever thread runs them, drained by the render thread (ProcessEvents).
 		 *

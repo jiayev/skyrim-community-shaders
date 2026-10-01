@@ -75,6 +75,19 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// FUN_14147aa20: a fade node's placement snap (fadeSnapEvents).
+	struct FadeSnap
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
+		{
+			const auto result = func(a_node, a_camera);
+			if (a_node)
+				fadeSnapEvents.Push(a_node);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct LodFadeRenderPasses
 	{
 		static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, std::uint32_t a_renderFlags,
@@ -483,6 +496,7 @@ namespace DCLF
 			SceneTracker::FreeEvents(tracker.Drain());
 			DrainFadeEvents(fadeChanged);
 			fadeChanged.clear();
+			fadeSnapEvents.Drain([](const void*) {});
 			DrainPropertyEvents(propertyChanged);
 			propertyChanged.clear();
 			DrainLodFadeEvents(propertyChanged);
@@ -576,6 +590,8 @@ namespace DCLF
 				ValidateSlice();
 		}
 		DCLF_SCENE_PART(StructuralEvents, "CS.DCLF.Scene.StructuralEvents");
+		// Fade roots placed since their listing: their rows again from the node.
+		fadeSnapEvents.Drain([&](const void* a_node) { ReseedFadeRoot(a_node); });
 		// The fade nodes whose currentFade changed since the last drain (the delta walk re-evaluates their dependents).
 		DrainFadeEvents(fadeChanged);
 		if (fadeChanged.size() > kMaxFadeChanges) {
@@ -623,6 +639,8 @@ namespace DCLF
 		stl::detour_thunk<FadeUpdate>(REL::Offset(kFadeUpdate).address());
 		constexpr std::uintptr_t kLodLevelUpdate = 0x147a430;       // FUN_14147a430: the LOD transition (+0x152)
 		stl::detour_thunk<LodLevelUpdate>(REL::Offset(kLodLevelUpdate).address());
+		constexpr std::uintptr_t kFadeSnap = 0x147aa20;             // FUN_14147aa20: a fade node's placement snap
+		stl::detour_thunk<FadeSnap>(REL::Offset(kFadeSnap).address());
 		stl::detour_thunk<PropertySetFlags>(REL::Offset(kPropertySetFlags).address());
 		stl::detour_thunk<PropertySetMaterial>(REL::Offset(kPropertySetMaterial).address());
 		stl::detour_thunk<PrependController>(REL::Offset(kPrependController).address());

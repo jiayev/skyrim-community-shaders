@@ -312,7 +312,7 @@ namespace DCLF
 				inputs.lodAdjust = eye[3];
 				logBase = NextFadeLog(a_store.GetFrame(), a_store.GetTables(), inputs);
 			}
-			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads);
+			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, PrimaryCull::Get().FadeVisibility());
 		}
 		// The streams as the tables hold them now, whichever frame's build this is.
 		const auto streams = CommitSceneStreams(*a_resources->scene, a_store.GetTables(), a_store.GetFrame(), a_store.GetTablesGeneration(), uploads);
@@ -608,7 +608,7 @@ namespace DCLF
 			latch.sunCascadeOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
 			latch.localShadowOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + layout.ShadowVolumeOffset();
 			sunUpload = latch;
-			ArmFeedback(*a_resources, frameNumber, static_cast<std::uint32_t>(tables.objects.size()));
+			ArmFeedback(*a_resources, frameNumber);
 		}
 		a_resources->latch->WriteValue(latchSlot, 0, latch);
 		frame->latch = a_resources->latch;

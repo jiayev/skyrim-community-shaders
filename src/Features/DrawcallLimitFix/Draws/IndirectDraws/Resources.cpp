@@ -227,9 +227,6 @@ namespace DCLF
 				const std::uint32_t slots = std::max<std::uint32_t>(host->FrameSlots(), 4u);
 				for (std::uint32_t i = 0; i < slots; ++i) {
 					auto slot = std::make_unique<Resources::Feedback::Slot>();
-					slot->staging = org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
-					slot->capacity = state->objectCapacity;
-					slot->staging->SetName(fmt::format("cs.dclf.feedback{}", i).c_str());
 					if (scene->fadeChanges) {
 						slot->fadeCapacity = scene->fadeChangeCapacity;
 						slot->fadeStaging = org::Buffer::CreateShared(rhi::HeapType::Readback, kFadeChangeHeaderBytes + std::uint64_t(slot->fadeCapacity) * sizeof(FadeChange));
@@ -480,6 +477,7 @@ namespace DCLF
 			buffers->fadeRoots = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused);
 			buffers->fadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true);
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
+			buffers->fadeVisibility = CreateWords(kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
 			buffers->fadeChangeCapacity = smallStart ? 4u : kInitialFadeChanges;
 			buffers->fadeChanges = CreateWords((kFadeChangeHeaderBytes + std::uint64_t(buffers->fadeChangeCapacity) * sizeof(FadeChange)) / 4, true, "cs.dclf.fade-changes");
@@ -643,10 +641,6 @@ namespace DCLF
 		// over a slot too small for the frame).
 		if (resources && resources->feedback)
 			for (auto& slot : resources->feedback->slots) {
-				if (slot->capacity < objects && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
-					slot->staging->ResizeBytes(std::uint64_t(objects) * sizeof(std::uint32_t));
-					slot->capacity = objects;
-				}
 				const std::uint32_t changes = scene ? scene->fadeChangeCapacity : 0u;
 				if (slot->fadeStaging && slot->fadeCapacity < changes && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
 					slot->fadeStaging->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(changes) * sizeof(FadeChange));

@@ -396,6 +396,9 @@ namespace DCLF::FadeState
 		const std::uint8_t flags109 = At<std::uint8_t>(&a_node, 0x109);
 		const bool tree = a_node.GetRTTI() == reinterpret_cast<const RE::NiRTTI*>(base + kTreeRtti);
 		row.bits = PlanOf(a_node) | (std::uint32_t(flags109) << kFadeRootBitsShift) | TreeLodBits(a_node) | (tree ? kFadeRootTreeThresholds : 0u);
+		const std::uint32_t objectFlags = At<std::uint32_t>(&a_node, 0xF4);
+		row.bits |= ((objectFlags & (1u << 11)) ? kFadeRootAlwaysDraw : 0u) | ((objectFlags & (1u << 12)) ? kFadeRootPreprocessed : 0u) |
+		            ((objectFlags & (1u << 20)) ? kFadeRootPreprocessHidden : 0u);
 		// FUN_14147a430's scale, with the engine's own CRT, in its order.
 		row.lodScale = 1.0f;
 		if (flags109 & 2) {

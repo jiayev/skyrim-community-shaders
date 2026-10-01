@@ -1049,6 +1049,8 @@ namespace DCLF
 		FadeWriteStats TakeFadeWriteStats() { return std::exchange(fadeWriteStats, {}); }
 		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
 		void ReseedOwnedFadeRoots();
+		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
+		void ReseedFadeRoot(const void* a_node);
 		/**
 		 * @brief For reports: why a tracked geometry has no bindings this frame - the accumulate phase's
 		 * verdict if it made one this frame (a_accumulate set), else the scene phase's cached one. None when it
