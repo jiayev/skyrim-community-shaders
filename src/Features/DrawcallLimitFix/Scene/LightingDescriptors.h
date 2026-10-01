@@ -117,7 +117,7 @@ namespace DCLF
 	 * pixel stage drops the count). The draw then decides per frame (BuildDrawsCS): ShadowDir when its bound meets a
 	 * cascade (kObjectSunTest), DefShadow when that or a local shadow light reaches it (LocalShadowLights).
 	 */
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry);
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled);
 	inline constexpr std::uint32_t kShadowBits = 0x61c0u;  // ShadowDir, DefShadow and the shadow light count
 
 	/**

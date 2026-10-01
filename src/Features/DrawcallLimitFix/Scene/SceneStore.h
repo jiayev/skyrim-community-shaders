@@ -1038,20 +1038,23 @@ namespace DCLF
 		struct OwnedFadeRoot
 		{
 			const RE::NiAVObject* node = nullptr;
-			bool writeBack = false;  // kFadeRootWriteBack: no engine-drawn part
+			bool standIn = false;  // kFadeRootStoodIn: no engine-drawn part
 		};
 		void SetFadeRootsOwned(const std::vector<OwnedFadeRoot>& a_owned);
 		/**
-		 * @brief Render thread, while nothing reads the fade nodes (after the feedback's join): FadeStateCS's changes onto the
-		 * write-back roots' nodes, oldest first; a change for a row since listed again, reseeded or no longer written back is
-		 * dropped. A node whose fade or LOD level changed is reported to the fade watch, as the engine's writers are.
+		 * @brief Render thread: whether the fade node's state is the GPU's alone (a stood-in root, kFadeRootStoodIn): the engine
+		 * does not cull it, so its node keeps what the engine last left there, and a reader takes the GPU's state or the settled
+		 * one instead.
 		 */
-		void ApplyFadeChanges(const std::vector<FadeChange>& a_changes);
-		struct FadeWriteStats
+		bool FadeOnGpu(const RE::NiAVObject* a_fadeNode) const
 		{
-			std::uint64_t applied = 0, dropped = 0, watched = 0;
-		};
-		FadeWriteStats TakeFadeWriteStats() { return std::exchange(fadeWriteStats, {}); }
+			const auto it = a_fadeNode ? fadeRootOwned.find(a_fadeNode) : fadeRootOwned.end();
+			return it != fadeRootOwned.end() && it->second;
+		}
+		std::size_t StoodInFadeRoots() const
+		{
+			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
+		}
 		/** @brief PrimaryCull: after frames the engine culled every entry (its OnVisible ran on the nodes), every owned root again from its node. */
 		void ReseedOwnedFadeRoots();
 		/** @brief A listed fade root's row from its node again (a new generation: the GPU's state restarts from it), owned bits kept. */
@@ -1964,11 +1967,13 @@ namespace DCLF
 		// The decals given an ordinal last frame, whose decalOrdinal entries are reset this frame.
 		std::vector<std::uint32_t> decalOrdered;
 		std::vector<const RE::BSFadeNode*> fadeChanged;  // drained from FadeWatch at ProcessEvents
-		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is written back (kFadeRootWriteBack).
+		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
-		FadeWriteStats fadeWriteStats;
-		/** @brief The root's row owned or not; a root newly owned is seeded again from its node (a new generation). */
-		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_writeBack);
+		/**
+		 * @brief The root's row owned or not; a root newly owned is seeded again from its node (a new generation). One whose
+		 * stood-in state changes is reported to the fade watch: its dependents' shadow verdicts read its fade from elsewhere.
+		 */
+		void MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn);
 		ankerl::unordered_dense::map<const RE::BSFadeNode*, std::vector<RE::BSGeometry*>> fadeDependents;
 		// The structural events (SceneEvents in SceneStore.cpp), drained at ProcessEvents: properties by key, nodes held.
 		std::vector<const void*> propertyChanged;

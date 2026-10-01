@@ -22,6 +22,7 @@
 #include "DrawcallLimitFix/Draws/ShaderPrograms.h"
 #include "DrawcallLimitFix/Engine/ShadowViews.h"
 #include "DrawcallLimitFix/Common/Toggles.h"
+#include "DrawcallLimitFix/Engine/LocalLightCull.h"
 #include "DrawcallLimitFix/Engine/PassCapture.h"
 #include "DrawcallLimitFix/Scene/SceneStore.h"
 #include "DrawcallLimitFix/Engine/SceneTracker.h"
@@ -207,6 +208,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// Registration hooks may run on cull workers. They must all read one
 	// ownership selection even when an epoch publishes next frame's claims.
 	DCLF::PassCapture::Get().SelectLegacyFrameClaims();
+	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
 	const auto start = std::chrono::steady_clock::now();
 	store.BuildFrame(DCLF::SceneStore::Phase::Scene);
 	const double sceneMs = MillisecondsSince(start);

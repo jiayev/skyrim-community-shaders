@@ -194,9 +194,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 												 draws.residentParityMismatches || draws.residentMissing || draws.residentPairsStale ? " <- RESIDENT DRAW PARITY" : " <- OK") :
 											 std::string());
 		if (draws.fadeTested)
-			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; "
-						 "{} roots, change buffer {} changes, {} frames of changes sent again whole since the start",
-				draws.fadeTested, draws.fadeHidden, draws.fadeRoots, draws.fadeChangeCapacity, draws.fadeChangesLost);
+			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; {} roots",
+				draws.fadeTested, draws.fadeHidden, draws.fadeRoots);
 		logger::info("[DCLF] skip (last frame): {} of {} native passes left to the indirect draws ({} in the depth pass, {} in the opaque pass)",
 			skipStats.skipped, skipStats.offered, skipStats.skippedInDepth, skipStats.skippedInOpaque);
 		if (!skipSamples.empty()) {

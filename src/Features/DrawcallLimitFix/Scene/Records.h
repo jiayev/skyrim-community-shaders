@@ -470,27 +470,13 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootAlwaysDraw = 1u << 20;
 	inline constexpr std::uint32_t kFadeRootPreprocessed = 1u << 21;
 	inline constexpr std::uint32_t kFadeRootPreprocessHidden = 1u << 22;
-	// An owned root with no engine-drawn part: nothing on the CPU services it, and the engine's other readers of its node (the
-	// other views' culls, GetRenderPasses, DCLF's own classification) take the GPU's state written back (FadeChange). An owned
-	// root with engine-drawn parts is culled by the engine, whose OnVisible updates its node; FadeStateCS runs the same update for
-	// its DCLF members (CS_DCLF_FADE_PARITY compares the two).
-	inline constexpr std::uint32_t kFadeRootWriteBack = 1u << 19;
-
-	/**
-	 * @brief A write-back root whose node-visible state changed in an update (the fade, its target, the LOD levels and
-	 * transition, the blend, the fadeAmount-driven fade), appended by FadeStateCS after a 16-byte header (its first word: the
-	 * appends attempted, which past the capacity says how large the buffer must grow) and read back with the visibility
-	 * feedback.
-	 */
-	struct FadeChange
-	{
-		std::uint32_t root = 0;
-		std::uint32_t padding[3]{};
-		FadeNodeState state;
-	};
-	static_assert(sizeof(FadeChange) == 64);
-	inline constexpr std::uint32_t kFadeChangeHeaderBytes = 16;
-	inline constexpr std::uint32_t kInitialFadeChanges = 1024;
+	// An owned root with no engine-drawn part, which the stand-in culls in the engine's place: its state is FadeStateCS's alone,
+	// and its node keeps what the engine last left there (nothing writes the GPU's back). DCLF's own readers take the GPU's
+	// state (a shadow view's fading caster, BuildDrawsCS) or the settled one (ShadowCasterReject, the synthetic pass); the
+	// engine reads the node only on the frames it culls the root again, whose OnVisible starts from it (drawcall-limit-fix.md,
+	// "No fade write-back"). An owned root with engine-drawn parts is culled by the engine, whose OnVisible updates its node;
+	// FadeStateCS runs the same update for its DCLF members (CS_DCLF_FADE_PARITY compares the two).
+	inline constexpr std::uint32_t kFadeRootStoodIn = 1u << 19;
 	inline constexpr std::uint32_t kNoFadeRoot = ~0u;
 
 	/** @brief The frame's inputs to the fade update: the main camera and the engine's fade globals (AE addresses). */
@@ -528,8 +514,8 @@ namespace DCLF
 		std::uint32_t padding = 0;
 		float divisors[16]{};             // 0x142032e00, per LOD type
 		// The pass's per-frame values, here rather than in its prepared invocation (which is prepared ahead of the commit):
-		// the root slots, the scene frame, the parity log's first root (~0u: none), and 1 to append every write-back root.
-		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, writeAll = 0;
+		// the root slots, the scene frame and the parity log's first root (~0u: none).
+		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, reserved = 0;
 	};
 	static_assert(sizeof(FadeFrame) == 208);
 

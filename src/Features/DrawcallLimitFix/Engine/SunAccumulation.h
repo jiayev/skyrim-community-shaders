@@ -119,7 +119,15 @@ namespace DCLF
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
 		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit this frame. */
 		std::uint32_t SunBits() const { return frameState.sunBits; }
-
+		/** @brief Whether a_node is an entry this frame's exclusion excludes (render thread, while it is live). */
+		bool Excluded(const void* a_node) const
+		{
+			const auto* exclusion = frameState.exclusion.get();
+			if (!exclusion || !exclusion->candidates)
+				return false;
+			const auto it = exclusion->candidates->entries.find(static_cast<const RE::NiAVObject*>(a_node));
+			return it != exclusion->candidates->entries.end() && exclusion->excluded[it->second];
+		}
 		/** @brief CS_DCLF_SUN_EXCLUDE=probe: the exclusion runs dry, and DCLF's sun bits are compared with the engine's. */
 		static bool ExclusionProbe();
 
@@ -144,6 +152,16 @@ namespace DCLF
 			std::int64_t filterTicks = 0;             // the render thread's compaction
 			std::uint64_t cascadeRegistrationsUnderRemoved = 0;  // must be 0: a cascade reached a removed entry anyway
 		};
+		/**
+		 * @brief The cascade culls' skip of excluded entries (Hooks::CascadeProcess1): an excluded entry the objectArray still
+		 * reaches through a node above it. Job threads may count.
+		 */
+		struct SkipStats
+		{
+			std::atomic<std::uint64_t> skipped{ 0 }, parityFrames{ 0 }, parityLost{ 0 };
+			std::string parityLostFirst;  // render thread (the cascades' registrations run on it)
+		};
+		SkipStats skipStats;
 
 		/** @brief The registration thunks' view of the sun's bits (job threads). */
 		struct BitStats
@@ -179,6 +197,16 @@ namespace DCLF
 		 */
 		std::uint32_t RemovedGeometryIndex(const RE::BSGeometry* a_geometry) const;
 		bool UnderRemovedEntry(const RE::BSGeometry* a_geometry) const { return RemovedGeometryIndex(a_geometry) != ~0u; }
+		/** @brief Whether a_geometry is under an entry this frame's exclusion excludes (removed or skipped). */
+		bool UnderExcludedEntry(const RE::BSGeometry* a_geometry) const
+		{
+			const auto* exclusion = frameState.exclusion.get();
+			if (!exclusion || !exclusion->candidates)
+				return false;
+			const auto& candidates = *exclusion->candidates;
+			const auto it = candidates.geometries.find(a_geometry);
+			return it != candidates.geometries.end() && exclusion->excluded[candidates.geometryEntry[it->second]];
+		}
 		/**
 		 * @brief A registration after the sun's Accumulate, any thread: a geometry under a removed entry gets the bits of
 		 * the cascades its bound meets, ORed into its activeLightMask before GetRenderPasses reads it. Under the probe
@@ -209,6 +237,9 @@ namespace DCLF
 			std::shared_ptr<SunExclusion> exclusion;  // kept alive until the next full-frustum cull
 			std::uint32_t stamp = 0;
 			bool probe = false;                       // dry: nothing removed, the bits compared instead
+			// CS_DCLF_PERSISTENT_PARITY's frames: the cascade culls skip nothing, and an unclaimed caster registered under an
+			// excluded entry counts as one the skip would lose.
+			bool parity = false;
 			// One per cascade of the sun's Accumulate (grown there, while bitsReady is clear, so no reader sees it move); the
 			// first cascadeCount are this frame's.
 			std::vector<Cascade> cascades;

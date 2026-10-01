@@ -431,16 +431,6 @@ namespace DCLF
 			std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
 			FadeFrame fadeFrame{};
 			std::uint32_t fadeLogBase = ~0u;
-			// The write-back roots' changes (FadeChange, after a kFadeChangeHeaderBytes header the depth commit zeroes), copied
-			// into each visibility feedback slot. fadeChangesNeeded: the capacity an overflow asked for (ReserveSceneTables grows
-			// to it); fadeWriteAll: the next update appends every write-back root, the changes an overflow lost included.
-			std::shared_ptr<org::Buffer> fadeChanges;
-			std::uint32_t fadeChangeCapacity = 0, fadeChangesNeeded = 0;
-			bool fadeWriteAll = false, fadeWriteAllFrame = false;
-			std::uint64_t fadeChangesLost = 0;  // NoteFadeChangesLost, and frames whose changes were not copied
-			// Set when a frame's changes reached no feedback copy (a copy abandoned, or a frame missing from the copies' headers,
-			// which FadeStateCS stamps with its frame): the depth commit then sends every write-back root again.
-			std::atomic<bool> fadeCopyMissed{ false };
 			std::shared_ptr<const ComputeProgram> fadeState;
 		};
 
@@ -461,26 +451,16 @@ namespace DCLF
 			}
 			a_scene.fadeRootCount = a_scene.fadeRootsHeld == a_tables.fadeRootsVersion ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
 			if (a_scene.fadeFrameNumber != a_frame) {
-				// Changes that never reached a feedback slot (a copy abandoned, a frame without one): every write-back root again.
-				if (a_scene.fadeCopyMissed.exchange(false, std::memory_order_acq_rel)) {
-					a_scene.fadeWriteAll = true;
-					++a_scene.fadeChangesLost;
-				}
 				a_scene.fadeFrameNumber = a_frame;
 				a_scene.fadeFrame = a_inputs;
 				if (a_scene.fadeVisibility && a_visibility.size() == kFadeVisibilityBytes)
 					a_uploads(a_scene.fadeVisibility, a_visibility.data(), a_visibility.size(), 0);
 				a_scene.fadeLogBase = a_logBase;
-				// This frame's changes start from none; after an overflow, once the buffer has grown, every write-back root once.
-				static constexpr std::uint32_t kZeroHeader[4]{};
-				a_uploads(a_scene.fadeChanges, kZeroHeader, sizeof(kZeroHeader), 0);
-				a_scene.fadeWriteAllFrame = std::exchange(a_scene.fadeWriteAll, false);
 			}
 			// The frame row, with the pass's per-frame values, every commit.
 			a_scene.fadeFrame.rootCount = a_scene.fadeRootCount;
 			a_scene.fadeFrame.sceneFrame = a_scene.fadeFrameNumber;
 			a_scene.fadeFrame.logBase = a_scene.fadeLogBase;
-			a_scene.fadeFrame.writeAll = a_scene.fadeWriteAllFrame ? 1u : 0u;
 			a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
 		}
 
@@ -527,7 +507,7 @@ namespace DCLF
 			// The scene's tables, every epoch's (SceneBuffers): the object records, bone rows, geometry table and face positions.
 			std::shared_ptr<SceneBuffers> scene;
 			std::shared_ptr<org::Buffer> inputs, sequences, count;  // BuildDraws: in, out, out (and the scene's geometries)
-			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum, the feedback slots): the scene's
+			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's
 			// object capacity, grown with it (ReserveObjectBuffers).
 			std::uint32_t objectCapacity = 0;
 			// The sequence buffer's ranges (GpuLayouts.h, SequenceSlots): draws per draw range (phase 1 and colour, phase 2) and per
@@ -565,39 +545,6 @@ namespace DCLF
 			// Per object, the stamp of the last frame the main camera's depth phase 1 found its bound inside the frustum
 			// (occlusion aside: the engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
 			std::shared_ptr<org::Buffer> frustum;
-			/**
-			 * @brief FadeStateCS's changes, copied back for the write-back roots (dclf-cull-job-elimination.md, "Phase 2"): a
-			 * ring of readback slots they are copied into after the colour segment, a timeline of its own signalled after each
-			 * copy completes, and a consumer that decodes completed slots in fence order. Nothing waits for it, and nothing
-			 * assumes one frame in flight: a frame with no free slot records no copy (the changes are sent again whole).
-			 */
-			struct Feedback
-			{
-				enum State : std::uint32_t
-				{
-					Free,
-					Growing,    // the render thread is growing its staging (ReserveObjectBuffers)
-					Submitted,  // its copy is prepared (FeedbackPass) and its fence value reserved
-					Decoding,
-				};
-				struct Slot
-				{
-					// The frame's fade changes (SceneBuffers::fadeChanges, header and all), and the changes it holds.
-					std::shared_ptr<org::Buffer> fadeStaging;
-					std::uint32_t fadeCapacity = 0;
-					std::uint32_t fadeHeld = 0;  // the changes its copy took this time
-					std::atomic<std::uint32_t> state{ Free };
-					std::uint64_t fenceValue = 0;
-				};
-				std::vector<std::unique_ptr<Slot>> slots;
-				std::shared_ptr<rhi::TimelinePtr> timeline;
-				std::atomic<std::uint64_t> fenceCounter{ 0 };
-				std::atomic<std::uint32_t> cursor{ 0 };
-				// The last frame whose changes a drained copy held (its header's stamp), for the drain to find frames none held.
-				std::uint32_t lastCopiedFrame = 0;
-				std::atomic<std::uint64_t> statArmed{ 0 }, statDropped{ 0 }, statAbandoned{ 0 }, statDecoded{ 0 };
-			};
-			std::shared_ptr<Feedback> feedback;
 			std::shared_ptr<PassStats> passStats;  // CS_DCLF_PASS_STATS
 			// The explicit DGC preprocesses' state list of the colour segment's passes. The depth pass
 			// has none: IndirectState::depthPassSignature.
@@ -1622,6 +1569,7 @@ namespace DCLF
 			// publishes; empty for a build made on the render thread, which builds them at the publish.
 			std::array<std::shared_ptr<const PassCapture::ClaimSet>, kShadowModeCount> claims;
 			std::shared_ptr<SunExclusion> sunExclusion;  // likewise, from the cascades' mode (BuildSunExclusion)
+			std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (LocalLightCull)
 
 			void Reset()
 			{
@@ -1630,6 +1578,7 @@ namespace DCLF
 				stagedSlots = 0;
 				claims = {};
 				sunExclusion.reset();
+				parabolicExclusion.reset();
 				arena.Reset(kShadowConstantBytes);
 				frameRecord = {};
 				materialRows.Reset();
@@ -1673,6 +1622,15 @@ namespace DCLF
 		inline std::uint32_t PartitionsOf(const SceneStore::Tables& a_tables, std::uint32_t a_object)
 		{
 			return a_object < a_tables.skinPartitions.size() ? a_tables.skinPartitions[a_object] : 0u;
+		}
+
+		/**
+		 * @brief An object's fade root slot (Tables::objectFadeRoot), ~0u for none: a shadow input's, whose BuildDraws drops the
+		 * caster while a stood-in root fades (kFadeRootStoodIn). A member's root changes only with a noted change (ListFadeRoot).
+		 */
+		inline std::uint32_t FadeRootOf(const SceneStore::Tables& a_tables, std::uint32_t a_object)
+		{
+			return a_object < a_tables.objectFadeRoot.size() ? a_tables.objectFadeRoot[a_object] : ~0u;
 		}
 
 		/**
@@ -2107,6 +2065,24 @@ namespace DCLF
 
 		// The cascades' render mode (0xE, ShadowMapClamped) as an index of the shadow modes.
 		constexpr std::uint32_t kSunShadowMode = 0xE - PassCapture::kFirstShadowMode;
+		// The point lights' render mode (0xF, ShadowMapParabolic) as an index of the shadow modes.
+		constexpr std::uint32_t kParabolicShadowMode = 0xF - PassCapture::kFirstShadowMode;
+
+		/**
+		 * @brief Whether an object is of the volumetric-only class in mode a_mode: drawn only by the views of the sun's
+		 * volumetric lighting copy. A point light registers a volumetric-only caster like any other (drawcall-limit-fix.md,
+		 * "Point lights' shadow culls without DCLF's entries"), so in the paraboloid mode it is an ordinary caster.
+		 */
+		inline bool VolumetricClass(std::uint32_t a_mode, std::uint32_t a_flags)
+		{
+			return !IsOcclusionMode(a_mode) && a_mode != kParabolicShadowMode && (a_flags & kObjectVolumetricOnly) != 0;
+		}
+		/** @brief A shadow input's flags: the object's, as the mode's views test them (BuildDrawsCS's caster classes). */
+		inline std::uint32_t InputFlagsOf(std::uint32_t a_mode, std::uint32_t a_flags)
+		{
+			const std::uint32_t flags = (a_flags & ~kObjectDecal) | kInputDrawable;
+			return VolumetricClass(a_mode, a_flags) || IsOcclusionMode(a_mode) ? flags : flags & ~kObjectVolumetricOnly;
+		}
 
 		/** @brief The technique bits a mode index adds to an object's base technique: none for an occlusion view's, which are complete. */
 		inline std::uint32_t ModeBitsOf(std::uint32_t a_mode)
@@ -2629,6 +2605,7 @@ namespace DCLF
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records (Step 6)
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
 		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
+		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (LocalLightCull)
 		std::array<std::uint32_t, 4> decalWords{};  // the count buffer's decal words, uploaded per colour epoch
 
 		/** @brief The per-frame constant blocks of an epoch from the capture's mirrors (render thread; records the Z-prepass's bytes for the replay). */
@@ -2813,11 +2790,6 @@ namespace DCLF
 		LocalShadowLights localShadows;
 		std::vector<GpuShadowVolume> shadowVolumes;
 
-		/**
-		 * @brief The colour commit, render thread: arms a free feedback slot for this frame's copy of FadeStateCS's changes
-		 * (FeedbackPass). A slot armed but never prepared is returned first; with no free slot the frame is dropped, never
-		 * waited for (the changes are sent again whole).
-		 */
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are
@@ -2856,7 +2828,7 @@ namespace DCLF
 			std::uint32_t frame = 0, base = 0, framesLeft = 0;
 			std::vector<FadeRootStatic> roots;  // the static rows from base, as uploaded that frame
 			FadeFrame inputs{};
-			// An owned root with engine-drawn parts (no write-back): its node after the engine's own OnVisible that frame (the
+			// An owned root with engine-drawn parts (not stood in): its node after the engine's own OnVisible that frame (the
 			// list jobs have run), which FadeStateCS's update for its members must equal.
 			std::vector<FadeNodeState> nodes;
 			std::vector<std::uint8_t> engine;

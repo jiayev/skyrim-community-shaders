@@ -1,5 +1,6 @@
 #include "Internal.h"
 
+
 namespace DCLF::Scene
 {
 	struct FadeOnVisible

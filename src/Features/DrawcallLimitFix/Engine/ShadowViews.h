@@ -37,8 +37,7 @@ namespace DCLF
 		 * alpha blending. The sun's and the spot lights' accumulators (their UpdateCamera: drawDecals +0x12C = 0,
 		 * +0x12D = 1) are registered through FUN_1414b2a60 (AE), which drops such a property before it asks for a
 		 * pass; GetRenderPasses_ShadowMapOrMask then drops the bit-18 ones again. A paraboloid light keeps the
-		 * constructor's drawDecals = 1 and casts the ones without bit 18: not a DCLF caster, so left unclaimed the
-		 * engine draws it there and nowhere else.
+		 * constructor's drawDecals = 1 and casts the ones without bit 18 (DecalPointLight).
 		 */
 		DecalNoZWrite,
 		NoCastShadows,  // kCastShadows clear while the engine's shadow global demands it
@@ -50,12 +49,23 @@ namespace DCLF
 		 * (kObjectVolumetricOnly), and PassCapture withholds the engine's pass.
 		 */
 		VolumetricOnly,
+		/**
+		 * A DecalNoZWrite decal without bit 18. By the reading of FUN_1414b2a60 above a paraboloid light would cast it, but
+		 * measured it never does: with the point lights' culls whole (LocalLightCull's parity frames, every insertion
+		 * watched), 2,099 such decals at Riverwood and 80 in the Bannered Mare gave no paraboloid pass. So it is no caster
+		 * of any mode; LocalLightCull's parity reports one if a scene ever registers it.
+		 */
+		DecalPointLight,
 		Count
 	};
 	const char* ShadowRejectName(ShadowReject a_reason);
 
-	/** @brief The engine's verdict on whether an object casts into a shadow map. */
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
+	/**
+	 * @brief The engine's verdict on whether an object casts into a shadow map. a_fadeOnGpu: its fade node is stood in
+	 * (SceneStore::FadeOnGpu), whose node is not its state: Faded then takes the material's alpha alone, and a shadow view's
+	 * BuildDraws drops the caster while the GPU's state fades it (kFadeRootStoodIn).
+	 */
+	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu);
 
 	/**
 	 * @brief The Utility technique the engine derives for a caster, without the view's mode bits.

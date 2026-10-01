@@ -160,7 +160,7 @@ namespace DCLF::Draws
 				return 0;
 			if (record != 0 && !(record < k.slotReady.size() && k.slotReady[record]))
 				return 2;
-			const bool volumetricOnly = !occlusionMode && (object.flags & kObjectVolumetricOnly) != 0;
+			const bool volumetricOnly = VolumetricClass(m, object.flags);
 			const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
 			if (classStates.empty())
 				return 0;
@@ -175,8 +175,8 @@ namespace DCLF::Draws
 					return 2;
 			if (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))
 				return 3;
-			a_input = { slotIt->second, record, object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
-				{}, 0.0f, o, 0, PartitionsOf(a_tables, o), ~0u };
+			a_input = { slotIt->second, record, object.geometryIndex, InputFlagsOf(m, object.flags),
+				{}, 0.0f, o, 0, PartitionsOf(a_tables, o), ~0u, FadeRootOf(a_tables, o) };
 			return 1;
 		};
 		auto removeEntry = [&](ShadowKept::Mode& a_mode, std::uint32_t o) {
@@ -362,7 +362,7 @@ namespace DCLF::Draws
 				if (slotIt == a_lookups.shadowSlots.end())
 					continue;
 				list.push_back({ slotIt->second, k.objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
-					{}, 0.0f, o, 0, PartitionsOf(a_tables, o), streamIndex });
+					{}, 0.0f, o, 0, PartitionsOf(a_tables, o), streamIndex, FadeRootOf(a_tables, o) });
 				if (o < a_tables.objectGeometry.size() && a_tables.objectGeometry[o])
 					faceGeometries.push_back(a_tables.objectGeometry[o]);
 			}
@@ -441,8 +441,11 @@ namespace DCLF::Draws
 			if (a_input.objectIndex < isInput.size())
 				isInput[a_input.objectIndex] = 1;
 		});
+		// An object blocks its entry when the engine would cast it into this mode's views and this build does not draw it there:
+		// every caster the scene phase found (a volumetric-only one too: a paraboloid light registers it like any other).
+		auto engineCaster = [&](std::size_t o) { return !(a_tables.objects[o].flags & kObjectNoShadow); };
 		for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
-			if ((a_tables.objects[o].flags & (kObjectFree | kObjectNoShadow)) || isInput[o])
+			if ((a_tables.objects[o].flags & kObjectFree) || isInput[o] || !engineCaster(o))
 				continue;
 			if (const auto it = a_candidates->geometries.find(a_tables.objectGeometry[o]); it != a_candidates->geometries.end())
 				exclusion->excluded[a_candidates->geometryEntry[it->second]] = 0;
@@ -692,7 +695,7 @@ namespace DCLF::Draws
 				}
 				// The states of the views that draw this caster's class. A volumetric-only caster with no view
 				// of the copy under this mode is no input at all: it is then the engine's, unclaimed.
-				const bool volumetricOnly = !occlusionMode && (object.flags & kObjectVolumetricOnly) != 0;
+				const bool volumetricOnly = VolumetricClass(m, object.flags);
 				const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
 				if (volumetricOnly && classStates.empty())
 					continue;
@@ -733,9 +736,9 @@ namespace DCLF::Draws
 				}
 				// The sun's entry rule (kCullSunEntry): BuildDraws tests the entry's sphere, carried in the fade row, against the
 				// frame's full-frustum processes in the latch block - so the input does not change with the frame's planes.
-				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
+				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, InputFlagsOf(m, object.flags),
 					{}, 0.0f, static_cast<std::uint32_t>(o), 0,
-					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex });
+					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex, FadeRootOf(a_tables, static_cast<std::uint32_t>(o)) });
 			}
 		}
 		CountModeDraws(a_out);

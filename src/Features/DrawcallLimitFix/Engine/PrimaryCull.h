@@ -124,8 +124,11 @@ namespace DCLF
 		void NoteMemberLost(const RE::BSGeometry* a_geometry);
 		/** @brief Render thread: every residency ended (SceneStore::EndAllResidency): every entry walked until the next snapshot. */
 		void NoteAllMembersLost();
-		/** @brief Render thread, after the registration jobs: the decode of the completed feedback frames, on the worker. */
-		void KickFeedbackDecode();
+		/**
+		 * @brief Render thread, after the registration jobs: CS_DCLF_PERSISTENT_PARITY's light mask check of the owned members in
+		 * view.
+		 */
+		void CheckLightMasks();
 		/**
 		 * @brief After the colour epoch, render thread: admission by readiness. An entry is admitted, and left out of the
 		 * engine's cull from the next frame on, once the colour build draws every DCLF member it shows (a_drawn), in view or
@@ -143,10 +146,9 @@ namespace DCLF
 		 */
 		bool Owned(const RE::BSGeometry& a_geometry) const;
 		void Report(std::uint32_t a_frame, std::uint32_t a_interval);
-		/** @brief At Present, render thread: a finished feedback decode's results are applied (polled, never waited for). */
+		/** @brief At Present, render thread. */
 		void EndFrame()
 		{
-			PollFeedback();
 			listFilter.store(nullptr, std::memory_order_release);
 			listMode.store(ListMode::Engine, std::memory_order_release);
 			// Roots the build's job let go of: released here, where the engine unloads (one may hold a detached cell's last
@@ -393,15 +395,6 @@ namespace DCLF
 		std::uintptr_t geometryOnVisible = 0;  // BSGeometry's OnVisible (vtable slot 0x34): a member's must be it
 		/** @brief BSTreeNode::OnVisible's height test: true when the tree is above the limit (not drawn, not updated). */
 		static bool TreeAboveLimit(const RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process);
-		/** @brief The decode (worker): one frame's fade changes, kept for ApplyFadeChanges (an overflow noted). */
-		void TakeFadeChanges(std::uint32_t a_appended, std::uint32_t a_held, const FadeChange* a_changes);
-		/**
-		 * @brief Render thread, while nothing reads the fade nodes (after the full-frustum cull, at Present): a finished decode's
-		 * FadeStateCS changes onto the write-back roots' nodes. One still running is left for the next poll: nothing waits, and
-		 * no decode is kicked while one is out.
-		 */
-		void PollFeedback();
-		std::atomic<bool> decodeReady{ false };  // the decode job's last store: its results may be applied
 		/** @brief Render thread, after the full-frustum cull: this frame's preconditions, and a new snapshot's plans. */
 		void PrepareFrame();
 		/** @brief CS_DCLF_FADE_PARITY, after PrepareFrame: the fade port against the engine's functions (FadeState::CheckPort). */
@@ -503,8 +496,6 @@ namespace DCLF
 		CutStats cutStats;
 		std::string maskFirst;  // the light mask parity's first geometry with bits
 		std::uint32_t frameSunBits = 0;  // the sun's cascade bits this frame (AfterListJobs), for CheckLightMasks
-		/** @brief CS_DCLF_PERSISTENT_PARITY, after the registration jobs: the owned members in view whose light mask is not 0. */
-		void CheckLightMasks();
 		std::vector<const RE::BSGeometry*> frameVisible;  // this frame's members in view under stood-in entries
 		std::vector<const RE::NiAVObject*> switchChanges;  // scratch: SceneStore::TakeSwitchChanges
 		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
@@ -520,10 +511,10 @@ namespace DCLF
 		FadeState::PortCheck fadePort;      // its counts since the report
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
-		std::shared_ptr<void> feedbackJob;                 // the worker's feedback decode (an AsyncWorker::JobHandle)
 		// The fade roots DCLF services (SyncFadeOwnership: the admitted entries' with a fade plan), and whether a frame since
 		// the last applied one left every entry to the engine (their nodes are then seeded again).
 		std::vector<const RE::NiAVObject*> ownedFadeRoots;
+		std::uint32_t standInLodSkins = 0;  // stood-in members whose skin's partitions follow the LOD level (SyncFadeOwnership)
 		bool fadeSkipped = false;
 		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries. */
 		void SyncFadeOwnership();
@@ -531,12 +522,6 @@ namespace DCLF
 		void RefreshWalk(std::uint32_t a_e);
 		std::vector<std::uint32_t> walkRefresh;  // entries whose member lost its binding: refreshed at the next PrepareFrame
 		bool walkEverything = false;             // CS_DCLF_PERSISTENT_PARITY: every entry walked (the hole and light mask checks)
-		// FadeStateCS's changes the decodes took (worker), applied after the join (render thread); the capacity an overflow asked for.
-		std::vector<FadeChange> fadeChangesTaken;
-		std::atomic<std::uint32_t> fadeChangesNeeded{ 0 };
-		std::uint64_t fadeChangesApplied = 0;
-		/** @brief After a join, render thread: the decoded frames' fade changes onto the write-back roots' nodes. */
-		void ApplyFadeChanges();
 
 		/** @brief The derived pass descriptor per geometry, recomputed when what it reads changes. */
 		struct DerivedEntry

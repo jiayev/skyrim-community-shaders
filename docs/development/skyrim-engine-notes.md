@@ -1128,6 +1128,41 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     about 1e14 (no LOD distance in practice). `0x14200d640` was 1, so every LOD store is 0. The near cap
     (`0x14200d670`) was 40.
 
+### Water reflections: the cube map
+
+-   **Only the cube map draws geometry.** `TESWaterReflections::Update` (`0x140520570`, from `FUN_140644f60` /
+    `FUN_140521c80` in `Main::Draw`, while the main cull jobs run) draws it for a reflection with the dynamic-cubemap
+    flag. It draws 2 faces a frame, and all 6 under a menu, every `fCubeMapRefreshRate`. It then sorts the faces by
+    their measured cost.
+-   **Plane reflections are dead.** The constructor (`FUN_1405202b0`) zeroes their sorter and culling process, nothing
+    renders one, and `Water.hlsl` samples only the cube map (t3) and SSR.
+-   **The camera.** `BSCubeMapCamera` (constructor `FUN_1414ed1b0`, size `0x1C8`): roots at `+0x188` (count `+0x198`),
+    two accumulators at `+0x1A0`/`+0x1A8`, a 90 degree frustum.
+-   **Its roots** (`FUN_1405275e0`, the add-root) are only LOD land `*0x14315b898` and LOD objects `*0x14315b8a0`
+    (which global is which is inferred), `gLODTrees`, and the Sky root, gated by `bReflectLODLand`,
+    `bReflectLODObjects`, `bReflectLODTrees` and `bReflectSky`. A census saw exactly the Sky, LOD Trees and two unnamed
+    roots, twice a frame. The `ShadowSceneNode` and the scene lists are never added.
+-   **The cull.** The static `BSCullingProcess` (`0x14332bda0`) with cull mode 3, through `FUN_1414bf320`.
+-   **The render modes:** `0x1B` with silhouettes, `0x19` without the sky, otherwise 0. Mode `0x19` registers only
+    accumulation hints 6 and 7 (`FUN_1414b2b90`).
+-   **The targets:** cube target 0 (`kREFLECTIONS`), depth 6.
+-   **`Update` hides the player** and every water shape while a face draws, and gives the sky root `kAlwaysDraw`.
+-   CS Dynamic Cubemaps draws no geometry: it is a compute pass over the main colour and depth.
+
+### Point lights' shadow culls
+
+-   **`BSShadowParabolicLight::Accumulate`** (`0x14151b960`) fills a descriptor for `BSCullingProcess::Process`
+    (`FUN_1414bf320(desc, mode, 0)`):
+    -   the accumulators, the camera, the cull mode (`portalStrict + 3`), the radius;
+    -   `+0x5C = 1`, which selects the static `BSParabolicCullingProcess` (`0x14335bfa0`; otherwise the static
+        `BSCullingProcess`, `0x14332bda0`);
+    -   either its root list (`sceneAccumArray`, mode 1, the list path `FUN_140e28f70`), or with none the scene's object
+        root (`ShadowSceneNode` child 3, mode 0, the process's `Process` vfunc `0xB8`).
+-   So a point light without its own list culls every loaded reference.
+-   **`BSParabolicCullingProcess::Process1`** is `0x141519a90` (vtable slot `0x16`).
+-   **`BSShadowDirectionalLight::Accumulate`** (`0x141511c80`) culls each cascade through `FUN_1414f0920`, with the
+    static `BSCullingProcess` over its full-frustum processes' `objectArray`.
+
 ## The material database: how a material is shared and released
 
 `BSShaderProperty::SetMaterial` (`0x14147bff0`) never stores the material it is given. It asks the material manager

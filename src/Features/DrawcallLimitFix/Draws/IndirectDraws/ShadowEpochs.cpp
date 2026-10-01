@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
 
 namespace DCLF
 {
@@ -766,6 +767,11 @@ namespace DCLF
 				if (modeUsed[kSunShadowMode])
 					SunAccumulation::Get().PublishExclusion(usedWorkerBuild ? payload.sunExclusion :
 					                                                          BuildSunExclusion(payload.inputs.sunCandidates, payload, kSunShadowMode, SceneStore::Get().GetTables(), &impl->sunExclusionCache));
+				// The paraboloid views' claims decide which entries the next frame's point-light culls may skip (none when no
+				// point light was drawn: a light new next frame is culled by the engine, as its claims are not live yet).
+				LocalLightCull::Publish(!modeUsed[kParabolicShadowMode] ? nullptr :
+				                        usedWorkerBuild                ? payload.parabolicExclusion :
+				                                                         BuildSunExclusion(payload.inputs.sunCandidates, payload, kParabolicShadowMode, SceneStore::Get().GetTables(), &impl->parabolicExclusionCache));
 			}
 			pending.clear();
 		} else {
@@ -920,6 +926,7 @@ namespace DCLF
 		auto* bonesStore = impl->SceneBones();
 		auto* geometriesStore = impl->SceneGeometries();
 		auto* exclusionCache = &impl->sunExclusionCache;
+		auto* parabolicCache = &impl->parabolicExclusionCache;
 		auto* kept = impl->ShadowKeptState();
 		const ShadowInputs inputs = job.inputs;
 		const bool claims = PassCapture::ShadowWithholdingEnabled();
@@ -928,7 +935,7 @@ namespace DCLF
 		std::vector<std::shared_ptr<org::Buffer>> counts;
 		for (std::uint32_t v = 0; v < job.views && kFirstShadowViewSlot + v < impl->shadow->count.size(); ++v)
 			counts.push_back(impl->shadow->count[kFirstShadowViewSlot + v]);
-		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, target = impl->shadow,
+		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, parabolicCache, target = impl->shadow,
 																counts = std::move(counts), claims](std::stop_token) {
 			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, bonesStore, kept, geometriesStore);
 			StageShadowPayload(*payload, *target, counts, *pool);
@@ -939,6 +946,8 @@ namespace DCLF
 						payload->claims[m] = ShadowClaimSet(payload->inputList[m], *tablesPtr);
 				if (inputs.modeUsed[kSunShadowMode])
 					payload->sunExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kSunShadowMode, *tablesPtr, exclusionCache);
+				if (inputs.modeUsed[kParabolicShadowMode])
+					payload->parabolicExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kParabolicShadowMode, *tablesPtr, parabolicCache);
 			}
 		});
 	}

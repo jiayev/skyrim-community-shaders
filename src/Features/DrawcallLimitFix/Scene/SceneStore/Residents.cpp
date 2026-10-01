@@ -207,7 +207,7 @@ namespace DCLF
 			row.object = a_slot;
 			row.generation = ++tables.fadeRootGenerations;
 			if (const auto owned = fadeRootOwned.find(node); owned != fadeRootOwned.end())
-				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootWriteBack : 0u);
+				row.bits |= kFadeRootOwned | (owned->second ? kFadeRootStoodIn : 0u);
 			tables.fadeRoots[r] = row;
 			tables.fadeRootNode[r] = node;
 			if (const auto* lodSwitch = FadeState::TreeLodSwitch(*node))
@@ -217,6 +217,8 @@ namespace DCLF
 		}
 		++tables.fadeRootRefs[it->second];
 		current = it->second;
+		// The shadow inputs name it (FadeRootOf).
+		tables.NoteChange(a_slot, kChangeBindings);
 	}
 
 	void SceneStore::UnlistFadeRoot(std::uint32_t a_slot)
@@ -236,8 +238,11 @@ namespace DCLF
 		current = kNoFadeRoot;
 	}
 
-	void SceneStore::MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_writeBack)
+	void SceneStore::MarkFadeRootOwned(const void* a_node, bool a_owned, bool a_standIn)
 	{
+		const auto* node = static_cast<const RE::NiAVObject*>(a_node);
+		if (const auto before = fadeRootOwned.find(a_node); (before != fadeRootOwned.end() && before->second) != (a_owned && a_standIn))
+			NoteFadeChanged(node);
 		const auto it = tables.fadeRootIndex.find(a_node);
 		if (it == tables.fadeRootIndex.end())
 			return;
@@ -245,12 +250,12 @@ namespace DCLF
 		if (a_owned) {
 			// From here the GPU's state is the members': it starts from the node as the engine left it.
 			const std::uint32_t object = row.object;
-			row = FadeState::StaticOf(*static_cast<const RE::NiAVObject*>(a_node));
+			row = FadeState::StaticOf(*node);
 			row.object = object;
 			row.generation = ++tables.fadeRootGenerations;
-			row.bits |= kFadeRootOwned | (a_writeBack ? kFadeRootWriteBack : 0u);
+			row.bits |= kFadeRootOwned | (a_standIn ? kFadeRootStoodIn : 0u);
 		} else {
-			row.bits &= ~(kFadeRootOwned | kFadeRootWriteBack);
+			row.bits &= ~(kFadeRootOwned | kFadeRootStoodIn);
 		}
 		++tables.fadeRootsVersion;
 	}
@@ -259,13 +264,13 @@ namespace DCLF
 	{
 		ankerl::unordered_dense::map<const void*, bool> owned;
 		for (const auto& root : a_owned)
-			owned.insert_or_assign(root.node, root.writeBack);
-		for (const auto& [node, writeBack] : fadeRootOwned)
+			owned.insert_or_assign(root.node, root.standIn);
+		for (const auto& [node, standIn] : fadeRootOwned)
 			if (!owned.contains(node))
 				MarkFadeRootOwned(node, false, false);
-		for (const auto& [node, writeBack] : owned)
-			if (const auto it = fadeRootOwned.find(node); it == fadeRootOwned.end() || it->second != writeBack)
-				MarkFadeRootOwned(node, true, writeBack);
+		for (const auto& [node, standIn] : owned)
+			if (const auto it = fadeRootOwned.find(node); it == fadeRootOwned.end() || it->second != standIn)
+				MarkFadeRootOwned(node, true, standIn);
 		fadeRootOwned = std::move(owned);
 	}
 
@@ -276,7 +281,7 @@ namespace DCLF
 			return;
 		auto& row = tables.fadeRoots[it->second];
 		const std::uint32_t object = row.object;
-		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootWriteBack);
+		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootStoodIn);
 		row = FadeState::StaticOf(*static_cast<const RE::NiAVObject*>(a_node));
 		row.object = object;
 		row.generation = ++tables.fadeRootGenerations;
@@ -286,26 +291,8 @@ namespace DCLF
 
 	void SceneStore::ReseedOwnedFadeRoots()
 	{
-		for (const auto& [node, writeBack] : fadeRootOwned)
-			MarkFadeRootOwned(node, true, writeBack);
-	}
-
-	void SceneStore::ApplyFadeChanges(const std::vector<FadeChange>& a_changes)
-	{
-		for (const auto& change : a_changes) {
-			const std::uint32_t r = change.root;
-			if (r >= tables.fadeRoots.size() || !tables.fadeRootNode[r] || tables.fadeRoots[r].generation != change.state.generation ||
-				!(tables.fadeRoots[r].bits & kFadeRootWriteBack)) {
-				++fadeWriteStats.dropped;
-				continue;
-			}
-			auto* node = static_cast<RE::NiAVObject*>(const_cast<void*>(tables.fadeRootNode[r]));
-			++fadeWriteStats.applied;
-			if (FadeState::WriteNode(*node, change.state)) {
-				NoteFadeChanged(node);
-				++fadeWriteStats.watched;
-			}
-		}
+		for (const auto& [node, standIn] : fadeRootOwned)
+			MarkFadeRootOwned(node, true, standIn);
 	}
 
 	void SceneStore::RefreshFadeRootSwitch(const RE::NiAVObject* a_switch)
@@ -347,10 +334,10 @@ namespace DCLF
 			const auto* geometry = tables.objectGeometry[slot];
 			if (!geometry)
 				continue;
-			// A root that has started to fade since the feedback's last decode: that decode's successor ends the residency (the
-			// frame of latency every root state the feedback services has), so its pass is not compared.
+			// A root the engine updates that has started to fade: its pass is not compared. A stood-in root's node is not its
+			// state (FadeOnGpu), and its members' passes are the settled state's.
 			if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
-				property && property->fadeNode && property->fadeNode->GetRuntimeData().currentFade < 1.0f) {
+				property && property->fadeNode && !FadeOnGpu(property->fadeNode) && property->fadeNode->GetRuntimeData().currentFade < 1.0f) {
 				++residentStats.parityPending;
 				continue;
 			}
