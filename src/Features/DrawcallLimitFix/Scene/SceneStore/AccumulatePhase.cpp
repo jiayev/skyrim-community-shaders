@@ -396,6 +396,7 @@ namespace DCLF
 					materialOwners[slot].reset(const_cast<RE::BSShaderMaterial*>(material));
 					tables.materials[slot] = record;
 					tables.materialVersion[slot] = ++materialVersions;
+					tables.NoteMaterial(slot);
 					tables.materialSlotKey[slot] = std::pair{ material, descriptors.pass };
 					tables.ListMaterialSlot(slot, frame);
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;

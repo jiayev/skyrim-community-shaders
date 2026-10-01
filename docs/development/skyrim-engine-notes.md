@@ -1109,6 +1109,24 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     `+0x158`, and within the manager's distance sets the amplitude `+0x15C` to a wave of `+0x78 * +0x164`
     (`FUN_140438950`) times the tree's base amplitude (its data's `+0xB0`). `BSLightingShader::SetupGeometry` copies
     `+0x164` to `+0x168` after every native tree draw.
+-   **The two lists.**
+    -   The tree list is `+0x20` (a `BSTArray`, size at `+0x30`). `FUN_140437200` adds a `BSTreeNode` to it, under the
+        lock at `+0x10`.
+    -   The animation list is `+0x50` (size at `+0x60`). `FUN_1404376f0` adds a `BSLeafAnimNode` to it, under the lock
+        at `+0x18`. Each add takes a reference to the node by hand (`+0x8`).
+    -   `FUN_140437840(manager, node)` removes a node from its list. A tree is searched for in `+0x20`, any other node
+        in `+0x50`; the remove keeps the list's order and drops the reference. It is reached through a one-instruction
+        thunk at `0x140282cc0`, from a vtable at `0x1417a0188`.
+    -   `FUN_140437ae0` empties both lists (from `TES` and from the manager's teardown, `FUN_140437030`).
+    -   The callers of the adds are `FUN_140192e90` and `FUN_140192fd0`, which pick the add by exact RTTI.
+-   **Which trees the tree list's loop visits.** `FUN_140437e50` skips a tree unless its first child's multibound
+    (`AsMultiBoundNode`, `+0x128`, its shape at `+0x18`) has the cull result 1 (`+0x10`) from the last cull, or the
+    process's cull mode is 3.
+-   **The update time.** `FUN_140437d40` stores how long its last update took at `+0x7C`, in ms. The next update's
+    budget is derived from it.
+-   **In one load order:** at Riverwood the tree list was empty and the animation list held 2,562 nodes. `+0x80` was
+    about 1e14 (no LOD distance in practice). `0x14200d640` was 1, so every LOD store is 0. The near cap
+    (`0x14200d670`) was 40.
 
 ## The material database: how a material is shared and released
 

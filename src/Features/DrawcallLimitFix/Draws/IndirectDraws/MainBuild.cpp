@@ -652,15 +652,19 @@ namespace DCLF::Draws
 			return false;
 		if (object.flags & kObjectNoBindings)
 			return wholeScene && depthOnly && object.geometryIndex < tables.geometries.size();
-		if (ObjectDecalGroup(object.flags))
-			return false;
 		if (object.pipelineIndex >= pipelineBlocks.size() || object.pipelineIndex >= tables.pipelines.size() || object.geometryIndex >= tables.geometries.size())
 			return false;
 		const auto& geometry = tables.geometries[object.geometryIndex];
 		if (!geometry.vertexAddress || !geometry.indexAddress)
 			return false;
-		return !IsFaceObject(tables, o) && FaceStreamGeometry(tables, o, in.addresses.facePositions) == ~0u &&
-		       !(tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
+		// A decal: the colour segment's alone, with its ordinal in its group's range (OrderDecals, which logs a change for every
+		// decal it moves). One of several partitions is an entry too, never drawable (RegionEntry).
+		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
+			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= tables.decalCount[(group - 1) & 1])
+				return false;
+		// A face shape, or a pipeline reading its position from the second stream: only with its positions' stream.
+		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
+		return !needsStream || FaceStreamGeometry(tables, o, in.addresses.facePositions) != ~0u;
 	}
 
 	std::uint8_t MainBuild::RegionEntry(std::uint32_t o, DrawInput& a_input)
@@ -676,14 +680,20 @@ namespace DCLF::Draws
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
 		const auto pair = r.pairs.find(PairKeyOf(object));
-		const bool drawable = blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok;
+		// A decal's slot in its group's range, which holds one sequence: one of several partitions cannot draw there. A decal it
+		// cannot draw is still an input, which BuildDraws writes as a zero-count draw (the loop's blank).
+		const bool decal = ObjectDecalGroup(object.flags) != 0;
+		const std::uint32_t ordinal = decal ? tables.decalOrdinal[o] : 0u;
+		const std::uint32_t partitions = decal ? 0u : PartitionsOf(tables, o);
+		const bool drawable = blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
 		// The pair's slot is its rows (RowsOf).
-		const std::uint32_t partitions = PartitionsOf(tables, o);
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
-			{}, 0.0f, o, 0, partitions };
+			{}, 0.0f, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
 		if (depthOnly)
 			SetFadeRow(a_input, tables, o);
-		return drawable ? static_cast<std::uint8_t>(PartitionDraws(partitions)) : std::uint8_t{ 0 };
+		if (!drawable)
+			return 0;
+		return decal ? kRegionDecal : static_cast<std::uint8_t>(PartitionDraws(partitions));
 	}
 
 	void MainBuild::RegionAcquire(std::uint64_t a_key)
@@ -694,6 +704,9 @@ namespace DCLF::Draws
 			// Its rows, once the check below (UpdateRegionPairs) finds the pair can draw.
 			pair->second.slot = kNoRecord;
 			pair->second.ok = false;
+			pair->second.skip = kNoSkip;
+			r.materialPairs[static_cast<std::uint32_t>(a_key >> 32)].push_back(a_key);
+			r.freshPairs.push_back(a_key);
 		}
 		++pair->second.count;
 		const auto pipeline = static_cast<std::uint32_t>(a_key);
@@ -707,6 +720,17 @@ namespace DCLF::Draws
 		if (a_key == kNoPair)
 			return;
 		if (const auto pair = r.pairs.find(a_key); pair != r.pairs.end() && --pair->second.count == 0) {
+			if (!pair->second.ok && pair->second.skip != kNoSkip)
+				--r.skipCounts[pair->second.skip];
+			if (const auto list = r.materialPairs.find(static_cast<std::uint32_t>(a_key >> 32)); list != r.materialPairs.end()) {
+				auto& keys = list->second;
+				if (const auto at = std::find(keys.begin(), keys.end(), a_key); at != keys.end()) {
+					*at = keys.back();
+					keys.pop_back();
+				}
+				if (keys.empty())
+					r.materialPairs.erase(list);
+			}
 			r.pairs.erase(pair);
 			r.pairsChanged = true;
 		}
@@ -718,7 +742,8 @@ namespace DCLF::Draws
 	{
 		auto& r = *region;
 		r.undrawable += (a_draws ? 0 : 1) - (r.drawsOf[i] ? 0 : 1);
-		r.draws = r.draws - r.drawsOf[i] + a_draws;
+		r.draws = r.draws - RegionDraws(r.drawsOf[i]) + RegionDraws(a_draws);
+		r.decals = r.decals - (r.drawsOf[i] == kRegionDecal ? 1 : 0) + (a_draws == kRegionDecal ? 1 : 0);
 		r.drawsOf[i] = a_draws;
 	}
 
@@ -731,7 +756,8 @@ namespace DCLF::Draws
 		RegionRelease(r.pairOf[i]);
 		r.touched.push_back(o);
 		r.undrawable -= r.drawsOf[i] ? 0 : 1;
-		r.draws -= r.drawsOf[i];
+		r.draws -= RegionDraws(r.drawsOf[i]);
+		r.decals -= r.drawsOf[i] == kRegionDecal ? 1 : 0;
 		// The entry's columns follow the entry the region moves into its place.
 		const auto removal = r.Remove(o);
 		r.pairOf[removal.at] = r.pairOf[removal.from];
@@ -830,7 +856,15 @@ namespace DCLF::Draws
 			for (const auto& change : r.cursor.Unread(tables.changeLog))
 				if (change.causes & kInputCauses)
 					RegionTake(change.slot);
+			// A face shape's stream index counts from the geometry slots (FaceStreamGeometry): when their count moves, or the
+			// positions buffer comes or goes, every face entry again.
+			if (const std::size_t base = in.addresses.facePositions ? tables.geometries.size() : 0; base != r.faceBase) {
+				for (const auto& stream : tables.faceStreams)
+					if (stream.object != SceneStore::Tables::kNoFaceObject && stream.object < tables.objects.size())
+						RegionTake(stream.object);
+			}
 		}
+		r.faceBase = in.addresses.facePositions ? tables.geometries.size() : 0;
 		r.cursor.Advance(tables.changeLog);
 	}
 
@@ -866,18 +900,60 @@ namespace DCLF::Draws
 			}
 		// A pair is resolved again only when what its resolution reads changed (PairWitness): a material written or its
 		// textures resolved, a pipeline's rows or set, the frame slots bound. The rest keep their verdict, their frame textures
-		// and their owners (in the region's bundle).
+		// and their owners (in the region's bundle). Which pairs could have changed follows from events: the material logs, the
+		// pairs new since the last build, the pipelines whose half moved; everything when the frame's half moved or a log
+		// cannot be read on.
 		const std::uint64_t frameWitness = (std::uint64_t(in.vsFrameMask) << 32) ^ std::uint64_t(in.psFrameMask) ^ (depthOnly ? (1ull << 63) : 0ull) ^ 1ull;
-		const bool everyPair = frameWitness != r.frameWitness;
+		bool everyPair = frameWitness != r.frameWitness;
 		r.frameWitness = frameWitness;
+		if (!r.materialCursor.Continues(tables.materialLog, in.tablesGeneration) || !r.lookupCursor.Continues(lookups.materialLog, lookups.logGeneration)) {
+			everyPair = true;
+			r.materialCursor.Restart(in.tablesGeneration);
+			r.lookupCursor.Restart(lookups.logGeneration);
+		}
 		std::vector<std::uint64_t> changedPairs;
 		currentObject = ~0u;
 		// The pipelines' halves once per build; a pair's own half is its material's three versions.
+		TracyCZoneN(pairsPipelinesZone, "CS.DCLF.BuildMain.Pairs.Pipelines", true);
 		std::vector<std::uint64_t> pipelineWitness(pipelineBlocks.size(), 0);
-		for (const auto& [pipeline, state] : r.pipelines)
-			if (pipeline < pipelineBlocks.size() && pipelineBlocks[pipeline].setIndex != Lookups::kNone)
+		bool pipelineMoved = false;
+		for (const auto& [pipeline, state] : r.pipelines) {
+			if (pipeline >= pipelineBlocks.size())
+				continue;
+			if (pipelineBlocks[pipeline].setIndex != Lookups::kNone)
 				pipelineWitness[pipeline] = PipelineWitness(pipeline);
-		for (auto& [key, pair] : r.pairs) {
+			auto& seen = r.pipelineWitness[pipeline];
+			pipelineMoved |= seen != pipelineWitness[pipeline];
+			seen = pipelineWitness[pipeline];
+		}
+		TracyCZoneEnd(pairsPipelinesZone);
+		TracyCZoneN(pairsResolveZone, "CS.DCLF.BuildMain.Pairs.Resolve", true);
+		std::vector<std::uint64_t> check;
+		if (everyPair || pipelineMoved) {
+			check.reserve(r.pairs.size());
+			for (const auto& [key, pair] : r.pairs)
+				check.push_back(key);
+		} else {
+			auto material = [&](std::uint32_t a_material) {
+				if (const auto list = r.materialPairs.find(a_material); list != r.materialPairs.end())
+					check.insert(check.end(), list->second.begin(), list->second.end());
+			};
+			for (const std::uint32_t m : r.materialCursor.Unread(tables.materialLog))
+				material(m);
+			for (const std::uint32_t m : r.lookupCursor.Unread(lookups.materialLog))
+				material(m);
+			check.insert(check.end(), r.freshPairs.begin(), r.freshPairs.end());
+			std::sort(check.begin(), check.end());
+			check.erase(std::unique(check.begin(), check.end()), check.end());
+		}
+		r.freshPairs.clear();
+		r.materialCursor.Advance(tables.materialLog);
+		r.lookupCursor.Advance(lookups.materialLog);
+		for (const std::uint64_t key : check) {
+			const auto found = r.pairs.find(key);
+			if (found == r.pairs.end())
+				continue;
+			auto& pair = found->second;
 			const auto pipeline = static_cast<std::uint32_t>(key);
 			const auto material = static_cast<std::uint32_t>(key >> 32);
 			const bool pipelineOk = pipeline < pipelineBlocks.size() && pipelineBlocks[pipeline].setIndex != Lookups::kNone;
@@ -889,15 +965,14 @@ namespace DCLF::Draws
 				witness = (witness ^ (material < lookups.materialVersions.size() ? lookups.materialVersions[material] : ~0u)) * 0x100000001b3ull;
 				witness |= 1;  // never 0, which is "never resolved"
 			}
-			if (!everyPair && witness == pair.witness) {
-				if (!pair.ok && pair.skip != kNoSkip)
-					Skipped(static_cast<Skip>(pair.skip));
+			if (!everyPair && witness == pair.witness)
 				continue;
-			}
 			bool ok = pipelineOk;
 			std::uint32_t slot = pair.slot;
 			const auto registersBefore = out.frameRegisters;
 			out.frameRegisters = {};
+			if (!pair.ok && pair.skip != kNoSkip)
+				--r.skipCounts[pair.skip];
 			pair.skip = kNoSkip;
 			if (ok) {
 				ObjectRecord object{};
@@ -909,11 +984,17 @@ namespace DCLF::Draws
 					if (const auto resolved = resolvedBindings.find(PairKeyOf(object)); resolved != resolvedBindings.end())
 						pair.skip = resolved->second.skipReason;
 			}
+			if (!ok && pair.skip != kNoSkip)
+				++r.skipCounts[pair.skip];
+			// The bundle is made again only when what it holds for this pair moved.
+			const void* binding = material < lookups.materials.size() ? lookups.materials[material].bindingBlock.get() : nullptr;
+			const void* mask = pipeline < lookups.pipelines.size() ? lookups.pipelines[pipeline].shadowMaskOwner.get() : nullptr;
+			if (out.frameRegisters != pair.frameRegisters || binding != pair.bindingSeen || mask != pair.maskSeen || !pair.witness)
+				r.pairsChanged = true;
 			pair.frameRegisters = out.frameRegisters;
 			out.frameRegisters[0] = registersBefore[0] | pair.frameRegisters[0];
 			out.frameRegisters[1] = registersBefore[1] | pair.frameRegisters[1];
 			pair.witness = witness;
-			r.pairsChanged = true;
 			if (ok != pair.ok || (ok && slot != pair.slot)) {
 				pair.ok = ok;
 				if (ok)
@@ -921,21 +1002,31 @@ namespace DCLF::Draws
 				changedPairs.push_back(key);
 			}
 		}
+		TracyCZoneEnd(pairsResolveZone);
+		TracyCZoneN(pairsBundleZone, "CS.DCLF.BuildMain.Pairs.Bundle", true);
+		// The pairs that cannot draw, as the report counts them every build.
+		for (std::size_t reason = 0; reason < r.skipCounts.size(); ++reason)
+			out.skipped[reason] += r.skipCounts[reason];
 		// Every pair's frame textures and owners, made again when one was resolved (or one left: RegionRelease).
 		if (r.pairsChanged) {
 			r.pairsChanged = false;
 			r.frameRegisters = {};
 			auto owners = std::make_shared<std::vector<std::shared_ptr<const void>>>();
 			owners->reserve(r.pairs.size() * 2);
-			for (const auto& [key, pair] : r.pairs) {
+			for (auto& [key, pair] : r.pairs) {
 				r.frameRegisters[0] |= pair.frameRegisters[0];
 				r.frameRegisters[1] |= pair.frameRegisters[1];
 				const auto pipeline = static_cast<std::uint32_t>(key);
 				const auto material = static_cast<std::uint32_t>(key >> 32);
-				if (material < lookups.materials.size() && lookups.materials[material].bindingBlock)
+				pair.bindingSeen = pair.maskSeen = nullptr;
+				if (material < lookups.materials.size() && lookups.materials[material].bindingBlock) {
 					owners->push_back(lookups.materials[material].bindingBlock);
-				if (pipeline < lookups.pipelines.size() && lookups.pipelines[pipeline].shadowMaskOwner)
+					pair.bindingSeen = lookups.materials[material].bindingBlock.get();
+				}
+				if (pipeline < lookups.pipelines.size() && lookups.pipelines[pipeline].shadowMaskOwner) {
 					owners->push_back(lookups.pipelines[pipeline].shadowMaskOwner);
+					pair.maskSeen = lookups.pipelines[pipeline].shadowMaskOwner.get();
+				}
 			}
 			r.owners = std::move(owners);
 		}
@@ -943,6 +1034,8 @@ namespace DCLF::Draws
 		out.frameRegisters[1] |= r.frameRegisters[1];
 		if (r.owners)
 			out.bindingOwners.push_back(r.owners);
+		TracyCZoneEnd(pairsBundleZone);
+		ZoneScopedN("CS.DCLF.BuildMain.Pairs.Inputs");
 		if (!changedPipelines.empty() || !changedPairs.empty()) {
 			auto& inputs = r.inputs.Mutable();
 			for (std::uint32_t i = 0; i < inputs.size(); ++i) {
@@ -982,6 +1075,20 @@ namespace DCLF::Draws
 			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
 				if (RegionEligible(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion) && !r.pending.Contains(o))
 					++out.residentMissing;
+			// Every pair's witness as UpdateRegionPairs makes it, against the one it holds: a difference is a change no event named.
+			for (const auto& [key, pair] : r.pairs) {
+				const auto pipeline = static_cast<std::uint32_t>(key);
+				const auto material = static_cast<std::uint32_t>(key >> 32);
+				if (pipeline >= pipelineBlocks.size() || pipelineBlocks[pipeline].setIndex == Lookups::kNone)
+					continue;
+				std::uint64_t witness = PipelineWitness(pipeline);
+				witness = (witness ^ (material < tables.materialVersion.size() ? tables.materialVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialFrameVersion.size() ? tables.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < lookups.materialVersions.size() ? lookups.materialVersions[material] : ~0u)) * 0x100000001b3ull;
+				witness |= 1;
+				++out.residentPairsChecked;
+				out.residentPairsStale += witness != pair.witness ? 1 : 0;
+			}
 		}
 	}
 
@@ -1038,8 +1145,9 @@ namespace DCLF::Draws
 		if (!out.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
 				if (inputs[i].objectIndex < out.objectState.size())
-					out.objectState[inputs[i].objectIndex] =
-						r.drawsOf[i] ? kObjectStateDrawable : static_cast<std::uint8_t>(r.pairOf[i] == kNoPair ? Skip::CandidateOnly : Skip::Pipeline);
+					out.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
+					                                         r.drawsOf[i]                  ? kObjectStateDrawable :
+					                                                                         static_cast<std::uint8_t>(r.pairOf[i] == kNoPair ? Skip::CandidateOnly : Skip::Pipeline);
 			// The candidates nobody submits.
 			for (std::uint32_t o = 0; o < r.candidate.size() && o < out.objectState.size(); ++o)
 				if (r.candidate[o] && out.objectState[o] == kObjectStateAbsent)
@@ -1050,6 +1158,7 @@ namespace DCLF::Draws
 		out.residentUndrawable = static_cast<std::uint32_t>(r.undrawable);
 		out.resident = r.inputs.View();
 		out.residentDraws = static_cast<std::uint32_t>(r.draws);
+		out.decalsDrawn += static_cast<std::uint32_t>(r.decals);
 		out.residentPairs = static_cast<std::uint32_t>(r.pairs.size());
 		regionInputs = inputs.size();
 		regionDraws = r.draws;

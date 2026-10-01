@@ -185,12 +185,17 @@ namespace DCLF
 			auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
 			if (!slot.state.compare_exchange_strong(expected, Resources::Feedback::Decoding, std::memory_order_acq_rel))
 				continue;
-			VisibilityFeedbackFrame frame{ slot.frame };
+			VisibilityFeedbackFrame frame{};
 			void* fadeMapped = nullptr;
 			if (slot.fadeStaging && slot.fadeHeld) {
 				slot.fadeStaging->GetAPIResource().Map(&fadeMapped);
 				if (fadeMapped) {
 					frame.fadeAppended = *static_cast<const std::uint32_t*>(fadeMapped);
+					// The header's frame stamp (FadeStateCS): a frame between the last copy's and this one's reached no copy.
+					frame.frame = static_cast<const std::uint32_t*>(fadeMapped)[1];
+					if (feedback.lastCopiedFrame && frame.frame > feedback.lastCopiedFrame + 1 && resources->scene)
+						resources->scene->fadeCopyMissed.store(true, std::memory_order_release);
+					feedback.lastCopiedFrame = std::max(feedback.lastCopiedFrame, frame.frame);
 					frame.fadeHeld = slot.fadeHeld;
 					frame.fadeChanges = reinterpret_cast<const FadeChange*>(static_cast<const std::byte*>(fadeMapped) + kFadeChangeHeaderBytes);
 				}

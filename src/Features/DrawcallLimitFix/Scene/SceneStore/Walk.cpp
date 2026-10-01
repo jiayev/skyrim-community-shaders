@@ -34,6 +34,7 @@ namespace DCLF
 			// The change log keeps its tail (Tables::changeLog): a reader that has not read past the trimmed half reads every
 			// slot again.
 			tables.changeLog.Trim(1u << 17);
+			tables.materialLog.Trim(1u << 16);
 			tables.geometryLog.Trim(1u << 16);
 			CheckChangeLog();
 		}
@@ -758,13 +759,6 @@ namespace DCLF
 			trackedEntry->identity);
 		if (trackedEntry->actorOwned)
 			tables.actorObjects.push_back(objectId);
-		{
-			const auto& runtime = geometry->GetGeometryRuntimeData();
-			const auto* shaderProperty = runtime.shaderProperty.get();
-			const auto* alphaProperty = runtime.alphaProperty.get();
-			tables.SetWatch(objectId, Tables::kWatchShading,
-				(shaderProperty && shaderProperty->GetControllers()) || (alphaProperty && alphaProperty->GetControllers()));
-		}
 		tables.skinPartitions[objectId] = partitionMask;
 		if (!denseWalk) {
 			trackedEntry->objectStamp = objectStamp;

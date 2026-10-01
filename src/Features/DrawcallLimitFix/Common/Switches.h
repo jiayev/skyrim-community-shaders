@@ -36,6 +36,7 @@ namespace DCLF
 		SunExclude,
 		PrimaryExclude,
 		ListFilter,
+		TreeList,
 		MoveEvents,
 		HiddenEvents,
 		Skylight,

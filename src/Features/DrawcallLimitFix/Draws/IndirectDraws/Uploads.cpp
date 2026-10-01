@@ -355,6 +355,8 @@ namespace DCLF
 		a_stats.residentParityChecks += a_payload.residentParityChecks;
 		a_stats.residentParityMismatches += a_payload.residentParityMismatches;
 		a_stats.residentMissing += a_payload.residentMissing;
+		a_stats.residentPairsChecked += a_payload.residentPairsChecked;
+		a_stats.residentPairsStale += a_payload.residentPairsStale;
 		a_stats.boneRows = static_cast<std::uint32_t>(streams.boneRowsSent);
 
 		lap(4);
@@ -608,7 +610,6 @@ namespace DCLF
 			latch.sunCascadeOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + MainLatchLayout::CascadeOffset();
 			latch.localShadowOffset = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot)) + layout.ShadowVolumeOffset();
 			sunUpload = latch;
-			ArmFeedback(*a_resources, frameNumber);
 		}
 		a_resources->latch->WriteValue(latchSlot, 0, latch);
 		frame->latch = a_resources->latch;

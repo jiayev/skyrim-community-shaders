@@ -397,12 +397,15 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeVisibilityOpsOffset = 16;
 	inline constexpr std::uint32_t kFadeVisibilitySetsOffset = kFadeVisibilityOpsOffset + kFadeVisibilityOps * 16;
 	inline constexpr std::uint32_t kFadeVisibilitySetBytes = 112;
-	inline constexpr std::uint32_t kFadeVisibilityBytes = kFadeVisibilitySetsOffset + kFadeVisibilitySets * kFadeVisibilitySetBytes;
+	// Then the process's own view planes (NiCullingProcess::planes, +0x3C), which its sphere test uses (FUN_140d3ff10).
+	inline constexpr std::uint32_t kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + kFadeVisibilitySets * kFadeVisibilitySetBytes;
+	inline constexpr std::uint32_t kFadeVisibilityBytes = kFadeVisibilityViewOffset + kFadeVisibilitySetBytes;
 	inline constexpr std::uint32_t kFadeVisibilityValid = 1u << 0;          // sampled this frame (else: the frustum alone)
 	inline constexpr std::uint32_t kFadeVisibilityCompound = 1u << 1;       // the compound frustum applies (cull mode not 3)
 	inline constexpr std::uint32_t kFadeVisibilitySkipView = 1u << 2;       // its skipViewFrustum: the frustum test is not made
 	inline constexpr std::uint32_t kFadeVisibilityIgnorePreprocess = 1u << 3;  // the process's ignorePreprocess, or cull mode 4
 	inline constexpr std::uint32_t kFadeVisibilityCullModeShift = 8;        // the process's cull mode (0-4)
+	inline constexpr std::uint32_t kFadeVisibilityViewPlanes = 1u << 4;     // the view planes are the process's (else the latch's)
 
 	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is
@@ -524,8 +527,11 @@ namespace DCLF
 		float treeHeightLimit = 0.0f;     // 0x142032fa0, +infinity while the test is off
 		std::uint32_t padding = 0;
 		float divisors[16]{};             // 0x142032e00, per LOD type
+		// The pass's per-frame values, here rather than in its prepared invocation (which is prepared ahead of the commit):
+		// the root slots, the scene frame, the parity log's first root (~0u: none), and 1 to append every write-back root.
+		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, writeAll = 0;
 	};
-	static_assert(sizeof(FadeFrame) == 192);
+	static_assert(sizeof(FadeFrame) == 208);
 
 	/** @brief CS_DCLF_FADE_PARITY: one root's update as FadeStateCS made it, for the C++ port to make again. */
 	struct FadeLogEntry

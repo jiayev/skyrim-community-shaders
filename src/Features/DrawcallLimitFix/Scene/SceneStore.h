@@ -245,13 +245,10 @@ namespace DCLF
 			std::vector<std::array<float, 4>> skinWetness;        // parallel to objects
 			std::vector<std::uint32_t> actorObjects;  // sorted by object index (the walk sorts it)
 			ActorValueIndex actorWetness;
-			// The slots whose shading or extras rows have per-frame inputs no event reports, which RefreshFrameConstants
-			// resamples every frame: a controller on the shader or alpha property animates the emissive colour and
-			// multiplier or the alpha (kWatchShading, set by WriteObject), and ProjectedUV and land blend follow the eye
-			// and a clock (kWatchExtras, set by the accumulate phase's patch). Everything else about an object's shading
-			// changes only with a patch, which samples it. watched lists each watched slot once; the resample drops the
-			// slots that lost their bits or were freed.
-			static constexpr std::uint8_t kWatchShading = 1u << 0;
+			// The slots whose extras rows have per-frame inputs no event reports, which RefreshFrameConstants resamples every
+			// frame: ProjectedUV and land blend follow the eye and a clock (kWatchExtras, set by the accumulate phase's patch).
+			// Shading is resampled by events only (RefreshFrameConstants). watched lists each watched slot once; the resample
+			// drops the slots that lost their bits or were freed.
 			static constexpr std::uint8_t kWatchExtras = 1u << 1;
 			std::vector<std::uint8_t> shadingWatch;               // parallel to objects (grown on demand)
 			MarkedList watched;
@@ -408,8 +405,16 @@ namespace DCLF
 			// like the change log.
 			EventLog<std::uint32_t> geometryLog;
 			void NoteGeometry(std::uint32_t a_slot) { geometryLog.Push(a_slot); }
+			// The material slots whose record (materialVersion) or frame components (materialFrameVersion) changed: what the
+			// resident region's pairs are resolved again for (MainBuild::UpdateRegionPairs), read like the change log.
+			EventLog<std::uint32_t> materialLog;
+			void NoteMaterial(std::uint32_t a_slot) { materialLog.Push(a_slot); }
 			/** @brief Every slot is to be read again: every reader of the change log resyncs. */
-			void InvalidateChangeLog() { changeLog.Invalidate(); }
+			void InvalidateChangeLog()
+			{
+				changeLog.Invalidate();
+				materialLog.Invalidate();
+			}
 			/** @brief A slot's columns, everything a persistent consumer builds from, for the writers to compare against. */
 			struct Columns
 			{

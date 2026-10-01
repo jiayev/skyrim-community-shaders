@@ -26,6 +26,7 @@ namespace DCLF::Draws
 				a_lookups.materials[slot] = {};
 				if (slot < a_lookups.materialVersions.size())
 					a_lookups.materialVersions[slot] = 0;
+				a_lookups.materialLog.Push(static_cast<std::uint32_t>(slot));
 				++a_lookups.generation;
 			}
 		}
@@ -190,6 +191,8 @@ namespace DCLF::Draws
 					entry.version = a_lookups.NextVersion();
 				}
 				entry.resolved = !importsPending;
+				if (a_lookups.materialVersions[slot] != entry.version)
+					a_lookups.materialLog.Push(static_cast<std::uint32_t>(slot));
 				a_lookups.materialVersions[slot] = entry.version;
 				entry.written = material.textureWritten;  // the record's, so a character-light pass's is not resolved every refresh
 				entry.texturesGeneration = textures.Generation();

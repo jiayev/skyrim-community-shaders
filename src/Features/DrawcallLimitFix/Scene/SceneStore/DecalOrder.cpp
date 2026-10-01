@@ -250,9 +250,15 @@ namespace DCLF
 		memberDecalsChanged = false;
 		if (tables.decalOrdinal.size() != tables.objects.size())
 			tables.decalOrdinal.resize(tables.objects.size(), ~0u);
+		// The ordinals before, for the change log: a decal's ordinal is its draw input's (the resident region's entries follow
+		// the log), so every decal whose ordinal moves is a change.
+		std::vector<std::pair<std::uint32_t, std::uint32_t>> before;
+		before.reserve(decalOrdered.size());
 		for (const std::uint32_t o : decalOrdered)
-			if (o < tables.decalOrdinal.size())
+			if (o < tables.decalOrdinal.size()) {
+				before.emplace_back(o, tables.decalOrdinal[o]);
 				tables.decalOrdinal[o] = ~0u;
+			}
 		decalOrdered.clear();
 		tables.decalCount = {};
 
@@ -309,10 +315,21 @@ namespace DCLF
 				return false;
 			return a_a.object < a_b.object;
 		});
+		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 		for (const auto& entry : ordered) {
 			const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
-			tables.decalOrdinal[entry.object] = tables.decalCount[group & 1]++;
+			const std::uint32_t ordinal = tables.decalCount[group & 1]++;
+			tables.decalOrdinal[entry.object] = ordinal;
 			decalOrdered.push_back(entry.object);
+			const auto it = previous.find(entry.object);
+			if (it == previous.end() || it->second != ordinal)
+				tables.NoteChange(entry.object, kChangeBindings);
+			if (it != previous.end())
+				previous.erase(it);
 		}
+		// Decals no longer ordered (left the members, or no longer decals).
+		for (const auto& [object, ordinal] : previous)
+			if (ordinal != ~0u && object < tables.objects.size())
+				tables.NoteChange(object, kChangeBindings);
 	}
 }

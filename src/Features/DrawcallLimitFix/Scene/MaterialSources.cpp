@@ -130,13 +130,19 @@ namespace DCLF::MaterialSources
 					std::uint32_t before = 0;
 					std::memcpy(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before));
 					func(a_this, a_data);
+					// A member's shading takes the material's alpha (MakeShading): its dependents are resampled too.
 					if (property->material != material ||
-						std::memcmp(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before)) != 0)
+						std::memcmp(&before, reinterpret_cast<const std::byte*>(material) + offset, sizeof(before)) != 0) {
 						NoteWritten(material);
+						ShadingQueue().Push(property);
+					}
 				} else {
 					func(a_this, a_data);
-					if (type != 0xb && type <= 0x13)
+					if (type != 0xb && type <= 0x13) {
 						NoteTarget(a_this);
+						if (property)
+							ShadingQueue().Push(property);
+					}
 				}
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
