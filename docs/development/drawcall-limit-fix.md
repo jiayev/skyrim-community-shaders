@@ -3431,6 +3431,51 @@ Gates met on this path:
 -   0 ticket waits in steady state;
 -   ORG's tests pass.
 
+### A regression: every ticket stale (found 2026-10-01)
+
+Three passes added later broke the "0 ticket waits" gate:
+-   **TreeWind** runs in every drawing epoch. Its revision held `treeCommits`, which every commit bumped.
+-   **FadeState** runs in the depth epoch. Its revision held `fadeCommits`, bumped in the same way.
+-   **The feedback copy** runs in the colour epoch and had no revision at all, which makes a ticket uncheckable.
+
+Each did this on purpose: its per-frame values (the counts, the scene frame, the tree inputs, the log base, the
+feedback slot the colour commit armed) were baked into the prepared invocation. So the shadow, depth and colour tickets
+were always stale. The host prepared each one again on the commit and the render thread waited for it
+(`ORG.Host.ReprepareStaleTicket`, `ORG.Host.WaitTicket`): about 2.6 ms a frame. DCLF's wait tracer counts only DCLF's
+own joins, so it never showed. A Tracy capture found it.
+
+**The rule this restores:** a pass's prepared invocation holds only what its recording depends on. Everything a commit
+knows goes into a buffer the commit uploads.
+-   **TreeWind** reads `TreeWindFrameRow` (the counts, the frame and its inputs; `cs.dclf.tree-frame`), which every
+    commit uploads.
+-   **FadeState** reads the root count, scene frame, log base and write-all flag from its `FadeFrame` row, which the
+    depth commit now uploads on every commit.
+-   **Both** dispatch every slot the buffers hold, and the shaders stop at the row's count. Their revisions are the
+    scene buffers' layout (`SceneBuffers::layout`, bumped by every growth, since a growth gives the buffers new views),
+    plus the depth shape for FadeState.
+-   **The feedback copy** claims a free slot in its own preparation, on the host thread, and so does each ticket
+    prepared again. Its revision is the segment and the layout.
+    -   Which frame a copy holds is now a stamp FadeStateCS writes into the changes' header (word 1).
+    -   The drain reads the stamp. A frame missing between two copies means that frame's changes reached no copy, and
+        the next depth commit sends every write-back root again (`fadeCopyMissed`).
+    -   An abandoned copy (a discarded ticket) only frees its slot: the ticket prepared in its place claims another.
+    -   Growing a slot's staging claims the slot first (`Growing`), so a preparation cannot take it mid-resize.
+-   **A latent bug fixed on the way:** the fade-changes growth called `ResizeBytes` on a structured buffer, which
+    throws. It had never grown before; the first version of this change abandoned a copy on every preparation that was
+    discarded, which made it grow.
+
+Measured (Riverwood, camera turning; d-base against d-tickets, the second a 7 s capture):
+-   Tickets prepared again: three of five epochs every frame, down to about 1% of epochs (4-6 in 600).
+-   Ticket waits: 0.
+-   Render thread in the epochs (`CS.ORG.ExecuteEpoch`): 4.45 down to 1.67 ms a frame.
+-   The host thread's preparation and recording: 5.0 down to 2.6 ms a frame.
+-   Frame time: mean 17.9 to 12.4 ms, p95 26.5 to 14.9 ms, p99 30.4 to 16.4 ms.
+-   Parity unchanged: fade state against the port exact or within rounding, tree wind OK, copy-back 300 of 300
+    frames decoded, holes 0.
+
+`CS_ORG_EPOCH_STATS=1` reports the host's count of tickets prepared again ("prepared again after the feature's inputs
+changed"). It belongs in every validation that touches a pass.
+
 ## Holes on alpha-tested objects
 
 The symptom: alpha-tested objects (roofs, foliage, thickets, ferns) vanished for a frame at a time, now and
@@ -5138,6 +5183,9 @@ So FadeStateCS repeats that test (`EngineInView`, `CompoundVisible`):
     uploaded with the depth commit.
 -   **The root's flags** (always-draw, pre-processed, bit 20) join its static row (`kFadeRootAlwaysDraw`,
     `kFadeRootPreprocessed`, `kFadeRootPreprocessHidden`).
+-   **The view test** uses the process's own planes and their active mask, carried in the same block
+    (`kFadeVisibilityViewPlanes`), as its sphere test (`FUN_140d3ff10`) reads them. Planes taken from the depth latch's
+    view-projection disagreed with the engine at the frustum's edge, about one root in thirty, in the LOD metric.
 -   **The bound's radius** is the record's sun entry row, which the placements keep current. A member's sun entry node is
     its reference root, which is the fade root. The listed radius is 0 for a dynamic reference listed before its first
     bound.
@@ -5154,6 +5202,40 @@ Measured (f2-parity4; Riverwood, camera turning, rain from frame 100):
 -   FadeStateCS against the engine's node: 381 checks, all exact or within rounding.
 -   The pass against the port as before; holes 0; every parity OK (the Shield race apart).
 -   The compound frustum never outgrew the block.
+
+## Owned trees off the tree manager's animation list
+
+`BSTreeManager` (`0x1420F6A18`) has two lists ([skyrim-engine-notes.md](./skyrim-engine-notes.md), "The tree
+manager"):
+-   **The tree list** (`+0x20`) holds `BSTreeNode`s. Its loop (`FUN_140437e50`) sets the LOD switch and animates the
+    bones of the near trees.
+-   **The animation list** (`+0x50`) holds `BSLeafAnimNode`s. Its loop (`FUN_1404381e0`) runs every frame in
+    `Main::Update` and advances each node's wind clock and gust when the node's `kAccumulated` bit is set.
+
+At Riverwood, in this load order, the tree list is empty and the animation list holds 2,562 nodes. A root DCLF stands
+in has its `kAccumulated` cleared and its wind on the GPU (TreeWindCS). So the loop only tested those roots, but it
+still visited every one of them each frame.
+
+**What changes** (`Engine/TreeAnimation.cpp`, `CS_DCLF_TREE_LIST`, on by default):
+-   **Taking roots off.** `PrimaryCull::SyncFadeOwnership` passes the owned roots without engine-drawn parts to
+    `TreeAnimation::SetOwned`. That runs on a new snapshot or an admission, never per frame. The roots are taken off
+    the animation list in one pass, and roots no longer owned are put back. DCLF keeps the list's reference to each
+    node it took off.
+-   **The lock.** Every edit runs under the manager's own lock (`+0x18`, a `BSSpinLock`), the one the engine's add,
+    remove and update take. The set of nodes taken off is guarded by the same lock.
+-   **The engine's edits are detoured**, so its list membership stays exact:
+    -   A remove (`FUN_140437840`) of a node that is off the list forgets it and drops the list's reference, as the
+        engine's remove would have.
+    -   An add (`FUN_1404376f0`) pushes an event. The render thread takes the node off again if it is owned.
+    -   A clear (`FUN_140437ae0`, from `TES` and the manager's teardown) forgets every node that is off.
+-   **Parity** (with `CS_DCLF_PERSISTENT_PARITY`): the report scans the list for owned roots still on it.
+
+**Native views.** Native draws of an owned tree (water reflections, cubemaps) read the node's wind clock, and so did
+before this change: `kAccumulated` was already clear, so the clock did not advance.
+
+**Measured** (Riverwood, camera turning): 2,173 roots off the list, 389 left on it. The manager's own measure of its
+update (`+0x7C`) went from 0.13-0.24 ms to 0.05-0.07 ms a frame on the main thread (`CS_DCLF_TREE_LIST=0` against on).
+Parity: 0 owned roots on the list, holes 0, every other check as before.
 
 ## Switch selection by event (culling-job elimination, phase 3)
 
@@ -5982,12 +6064,13 @@ These scans were measured one by one, then made event-driven in cost order. Rive
 In all, the render thread's scans went from about 350 to about 105 µs a frame. Every check below is
 `CS_DCLF_PERSISTENT_PARITY`, and was 0 over the tour.
 
-**Shading** (`RefreshFrameConstants`). The resample reads only the slots whose shading inputs change with no event
-(`Tables::watchList`):
--   **Controllers.** A controller on the shader or alpha property animates the emissive colour, the multiplier and
-    the alpha (`kWatchShading`, set by `WriteObject`).
--   **Extras.** ProjectedUV and land blend follow the eye and a clock (`kWatchExtras`, set by the patch).
--   **Actors.** Their alpha fades with the actor.
+**Shading** (`RefreshFrameConstants`). The resample reads only what an event names (since F4; before it, every slot
+with a controller and every actor slot was resampled every frame, about 2,000 a frame at Riverwood, now about 300):
+-   **Controllers.** The float and colour controller hooks report the emissive colour and multiplier they write, and a
+    material field a float controller writes (a member's shading takes the material's alpha).
+-   **The alpha `GetRenderPasses` leaves on the property** (materialAlpha times the fade, for whichever camera registered
+    it last; an actor's fade): its detour compares it with the LOD fades.
+-   **Extras.** ProjectedUV and land blend follow the eye and a clock (`kWatchExtras`, set by the patch): still watched.
 -   **The LOD fades.** `GetRenderPasses` writes them into the property (`specularLODFade`, `envmapLODFade`)
     whenever any view registers the object. A detour on its vtable slot (0x2A) pushes the property when either value
     moved. It fires about once a frame, and the property's dependents are resampled.
@@ -6190,3 +6273,69 @@ each material. Their pairs were resolved again, and their rows rewritten and upl
     record. The Z-prepass's frame record binds the null texture there: the noise only shades.
 -   **The records:** a character-light pass's record keeps t11's sampler modes and no view, and its row binds the null
     texture at t11. The material frame components went from ~1.0 applications to ~1,016 slots a frame to 0.
+
+## No per-object loop in the main builds; pairs by event (2026-10-01)
+
+After the region took the whole scene (Step 5), each build still visited two kinds of object every frame, through
+`MainBuild::RunObjectLoop`, assembling each one's input again:
+-   **decals:** about 2,300, colour only;
+-   **face shapes:** 281, both segments.
+
+The loop cost 0.84 ms a frame on the worker. Neither kind changes from frame to frame:
+-   a decal's ordinal changes only when the member decals do (`OrderDecals`);
+-   a face's stream changes only when its head's stream or the geometry table does.
+
+**Decals in the region.**
+-   **Eligibility:** in the colour segment, with an ordinal in its group's range.
+-   **The entry:** carries the ordinal. A decal it cannot draw is still an entry: BuildDraws writes its slot as a
+    zero-count draw, the loop's blank. That includes a decal of several partitions, which its group's one-sequence slot
+    cannot hold (103 at Riverwood).
+-   **The draw count:** a drawable decal's entry is tagged `kRegionDecal` in `drawsOf`. It counts as drawn for the marks,
+    but not toward the draws' range: its sequence is in its group's range. Counting it there would overrun the draws'
+    bound.
+-   **Ordinal changes:** `OrderDecals` logs a `kChangeBindings` change for every decal whose ordinal moved, or that left
+    the order, so the region takes those entries again from the change log.
+
+**Faces in the region.**
+-   **The entry:** an object that needs its positions' stream (a face shape, or a pipeline reading its position from
+    the second stream) is an entry with its stream index (`FaceStreamGeometry`).
+-   **What the index counts from:** the geometry slots' count. When that count moves, or the positions buffer comes or
+    goes, the region takes every face entry again (`ResidentRegion::faceBase`). A face's own stream change is already
+    a `kChangeGeometry` change.
+
+**Pairs by event.** With decals, the colour region holds about 3,580 pairs (from 2,750). `UpdateRegionPairs` still
+scanned every pair's witness on every build, and remade the owner bundle on any resolution: 0.73 ms a frame.
+-   **Which pairs are checked:**
+    -   those of the material slots named by two new logs since the region's last build: `Tables::materialLog`, pushed
+        wherever a material's record or frame version moves, and `Lookups::materialLog`, pushed when a lookup entry's
+        version moves or its slot is retired;
+    -   the pairs new since that build;
+    -   every pair, when a pipeline's half of the witness moved, the frame witness moved, or a log cannot be read on (a
+        trimmed log, new tables, another `Lookups` instance: each instance has its own log generation).
+-   **Unchanged:** the witness comparison still decides what is resolved.
+-   **The skips** the report counts every build come from per-reason counts the region keeps, not from a visit to
+    every pair.
+-   **The owner bundle** is remade only when pairs come or go, or a resolution finds other owners or frame textures
+    than the bundle took for the pair.
+-   **Parity** (`CS_DCLF_RESIDENT_DRAW_PARITY`): every pair's witness is computed again and compared with the one it
+    holds. A difference is a change no event named.
+
+**Results** (Riverwood, camera turning):
+-   Both segments' loops are empty.
+-   Region parity: 0 differ and 0 missing over about 2 million entries.
+-   Pairs: 0 resolved with no event over 327,000 checks.
+-   2,202 decals submitted, as before. Set parity, BuildDraws parity (with the region off) and holes 0.
+
+Worker, ms a frame (d-tickets against d-pairs-t; different captures, so compare the parts, not the totals):
+
+| | before | after |
+| --- | --- | --- |
+| `BuildMain.ObjectLoop` | 0.84 | 0.00 |
+| `BuildMain.Region.Pairs` | 0.32 | 0.52 |
+| `BuildMainPayload` | 1.24 | 0.61 |
+
+What `Region.Pairs` still spends:
+-   **Resolutions:** about 21 pairs a build, materials whose frame values changed (animated texture transforms). Their
+    rows are written once, but each segment's region resolves the pair: about 0.2 ms a build.
+-   **The owner bundle:** remade on most builds, about 0.06 ms.
+-   **The pipelines' witnesses:** about 0.004 ms.

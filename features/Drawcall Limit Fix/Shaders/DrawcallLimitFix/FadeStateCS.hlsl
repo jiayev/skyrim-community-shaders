@@ -14,18 +14,18 @@ cbuffer FadeStateConstants : register(b0)
 	uint ObjectsIndex;  // StructuredBuffer of the object records (a root's centre: its member's fade node row)
 	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
-	uint Count;         // root slots
-	uint Frame;         // the scene frame
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
-	uint LogBase;       // the first root logged this frame; ~0u: none
 	// RWByteAddressBuffer: the write-back roots' changes (Records.h, FadeChange) after a 16-byte header whose first word counts
-	// the appends; the capacity in changes; 1: every write-back root appends this frame (after an overflow).
+	// the appends and whose second is the frame they are from; the capacity in changes.
 	uint ChangesIndex;
 	uint ChangeCapacity;
-	uint WriteAll;
 	uint VisibilityIndex;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 	uint Padding1;
 	uint Padding2;
+	uint Padding3;
+	uint Padding4;
+	uint Padding5;
+	uint Padding6;
 }
 
 struct FadeNodeState
@@ -90,6 +90,12 @@ struct FadeFrame
 	float TreeHeightLimit;
 	uint Padding;
 	float4 Divisors[4];
+	// The pass's per-frame values (the pass is prepared ahead of the commit that writes this row): the root slots, the scene
+	// frame, the parity log's first root (~0u: none), and 1 to append every write-back root this frame (after an overflow).
+	uint RootCount;
+	uint SceneFrame;
+	uint LogBase;
+	uint WriteAll;
 };
 
 struct FadeLogEntry
@@ -393,6 +399,23 @@ static const uint kFadeVisibilityIgnorePreprocess = 1u << 3;
 static const uint kFadeVisibilityOpsOffset = 16;
 static const uint kFadeVisibilitySetsOffset = 16 + 256 * 16;
 static const uint kFadeVisibilitySetBytes = 112;
+static const uint kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + 64 * 112;
+static const uint kFadeVisibilityViewPlanes = 1u << 4;
+
+// The process's own sphere test (FUN_140d3ff10): outside when the bound is wholly behind an active plane.
+bool ProcessInView(ByteAddressBuffer a_block, float3 a_centre, float a_radius)
+{
+	const uint mask = a_block.Load(kFadeVisibilityViewOffset + 96u);
+	[unroll] for (uint p = 0; p < 6u; ++p) {
+		if ((mask & (1u << p)) == 0u)
+			continue;
+		const float4 plane = asfloat(a_block.Load4(kFadeVisibilityViewOffset + p * 16u));
+		const float d = ((plane.y * a_centre.y + plane.x * a_centre.x) + a_centre.z * plane.z) - plane.w;
+		if (d <= -a_radius)
+			return false;
+	}
+	return true;
+}
 
 // BSCompoundFrustum::Process: the operator program from its first operator. Type 2 accepts and 3 rejects; type 7 passes
 // unless the bound is wholly outside an active plane of its set; type 8 passes unless the bound is wholly inside every
@@ -456,23 +479,30 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		return true;
 	if ((a_rootBits & kFadeRootPreprocessed) != 0u && (header.x & kFadeVisibilityIgnorePreprocess) == 0u)
 		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
+	const bool view = (header.x & kFadeVisibilityViewPlanes) != 0u ? ProcessInView(block, a_centre, a_radius) : InView(a_centre, a_radius);
 	if ((header.x & kFadeVisibilityCompound) != 0u)
-		return ((header.x & kFadeVisibilitySkipView) != 0u || InView(a_centre, a_radius)) && CompoundVisible(block, header, a_centre, a_radius);
-	return InView(a_centre, a_radius);
+		return ((header.x & kFadeVisibilitySkipView) != 0u || view) && CompoundVisible(block, header, a_centre, a_radius);
+	return view;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	const uint index = dispatchID.x;
-	if (index >= Count)
+	StructuredBuffer<FadeFrame> frames = ResourceDescriptorHeap[FrameIndex];
+	F = frames[0];
+	// The changes' frame stamp, which the feedback drain reads from each copy (a frame missing between copies lost its changes).
+	if (index == 0 && ChangesIndex != 0) {
+		RWByteAddressBuffer changes = ResourceDescriptorHeap[ChangesIndex];
+		changes.Store(4, F.SceneFrame);
+	}
+	// The dispatch covers every slot the buffers hold; the frame row's count ends it.
+	if (index >= F.RootCount)
 		return;
 	StructuredBuffer<FadeRootStatic> roots = ResourceDescriptorHeap[RootsIndex];
 	RWStructuredBuffer<FadeNodeState> states = ResourceDescriptorHeap[StatesIndex];
-	StructuredBuffer<FadeFrame> frames = ResourceDescriptorHeap[FrameIndex];
 	const FadeRootStatic root = roots[index];
 	if (root.Object == kNoObject || root.Generation == 0)
 		return;
-	F = frames[0];
 	FadeNodeState state = states[index];
 	if (state.Generation != root.Generation) {
 		state = root.Initial;
@@ -481,7 +511,7 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		state.Frame = 0;
 	}
 	// Once a frame, and only with a camera.
-	if (state.Frame == Frame || F.LodAdjust == 0.0f)
+	if (state.Frame == F.SceneFrame || F.LodAdjust == 0.0f)
 		return;
 	const FadeNodeState before = state;
 	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
@@ -493,13 +523,13 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 	state.Verdict = 0;
 	if (EngineInView(centre, radius, root.Bits))
 		state.Verdict = OnVisible(state, root, centre);
-	state.Frame = Frame;
+	state.Frame = F.SceneFrame;
 	states[index] = state;
 	// A write-back root's node follows (SceneStore::ApplyFadeChanges): what the engine's other readers see changed.
 	if ((root.Bits & kFadeRootWriteBack) != 0 && ChangesIndex != 0) {
 		const bool changed = before.CurrentFade != state.CurrentFade || ((before.Flags ^ state.Flags) & kFadeFlagFadedIn) != 0 ||
 		                     ((before.Levels ^ state.Levels) & 0xFFFFu) != 0 || before.Blend != state.Blend || before.AmountFade != state.AmountFade;
-		if (changed || WriteAll != 0) {
+		if (changed || F.WriteAll != 0) {
 			RWByteAddressBuffer changes = ResourceDescriptorHeap[ChangesIndex];
 			uint slot;
 			changes.InterlockedAdd(0, 1, slot);
@@ -512,13 +542,13 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 			}
 		}
 	}
-	if (LogBase != 0xFFFFFFFFu && index >= LogBase && index - LogBase < 64u) {
+	if (F.LogBase != 0xFFFFFFFFu && index >= F.LogBase && index - F.LogBase < 64u) {
 		RWStructuredBuffer<FadeLogEntry> log = ResourceDescriptorHeap[LogIndex];
 		FadeLogEntry entry;
 		entry.Before = before;
 		entry.After = state;
 		entry.Centre = centre;
 		entry.Root = index;
-		log[index - LogBase] = entry;
+		log[index - F.LogBase] = entry;
 	}
 }

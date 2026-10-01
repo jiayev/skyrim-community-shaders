@@ -16,9 +16,19 @@ cbuffer TreeWindConstants : register(b0)
 	uint ClocksIndex;   // RWStructuredBuffer<TreeClock> (mode 0), StructuredBuffer (mode 1)
 	uint ListIndex;     // StructuredBuffer<uint2>: object slot, tree slot (mode 1)
 	uint RecordsIndex;  // RWStructuredBuffer of the object records (mode 1)
-	uint Count;         // tree slots (mode 0) or members (mode 1)
-	uint Frame;
+	uint FrameIndex;    // StructuredBuffer<TreeWindFrameRow>, one row (every commit's)
 	uint TreeWord;      // the record's TreeParams, in 16-byte words (BindlessObject::tree)
+	uint Padding0;
+}
+
+// The frame's values (GpuLayouts.h, TreeWindFrameRow), a buffer rather than constants: the pass is prepared ahead of the
+// commit that knows them. The dispatch covers every slot the buffers hold; the counts end it.
+struct TreeWindFrameRow
+{
+	uint TreeCount;    // tree slots (mode 0)
+	uint ObjectCount;  // members (mode 1)
+	uint Frame;
+	uint RowPadding;
 	float DeltaTime;
 	float CameraX;
 	float CameraY;
@@ -29,9 +39,11 @@ cbuffer TreeWindConstants : register(b0)
 	float FadeStart;
 	float FadeEnd;
 	float TimerScale;
-	uint Padding0;
-	uint Padding1;
-}
+	uint RowPadding1;
+	uint RowPadding2;
+};
+
+static TreeWindFrameRow W;
 
 struct TreeStatic
 {
@@ -88,14 +100,16 @@ float FastSqrt(float a_value)
 
 float Distance2(float3 a_position)
 {
-	precise float3 d = a_position - float3(CameraX, CameraY, CameraZ);
+	precise float3 d = a_position - float3(W.CameraX, W.CameraY, W.CameraZ);
 	return d.x * d.x + d.y * d.y + d.z * d.z;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	const uint index = dispatchID.x;
-	if (index >= Count)
+	StructuredBuffer<TreeWindFrameRow> frames = ResourceDescriptorHeap[FrameIndex];
+	W = frames[0];
+	if (index >= (Mode == 0 ? W.TreeCount : W.ObjectCount))
 		return;
 	StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
 	if (Mode == 0) {
@@ -107,17 +121,17 @@ float Distance2(float3 a_position)
 			clock.PreviousTimer = tree.PreviousTimer;
 			clock.Amplitude = tree.Amplitude;
 			clock.Generation = tree.Generation;
-			clock.Frame = Frame;
-		} else if (clock.Frame != Frame) {
+			clock.Frame = W.Frame;
+		} else if (clock.Frame != W.Frame) {
 			// SetupGeometry kept last frame's timer as the previous one; the manager advances a node with a model, and takes
 			// its gust only within its range.
 			clock.PreviousTimer = clock.Timer;
 			if (tree.Animated != 0) {
-				clock.Timer = clock.Timer + DeltaTime;
-				if (Distance2(tree.Position) < MaxDistance2)
-					clock.Amplitude = Gust(WindSpeed * clock.Timer) * tree.ModelAmplitude;
+				clock.Timer = clock.Timer + W.DeltaTime;
+				if (Distance2(tree.Position) < W.MaxDistance2)
+					clock.Amplitude = Gust(W.WindSpeed * clock.Timer) * tree.ModelAmplitude;
 			}
-			clock.Frame = Frame;
+			clock.Frame = W.Frame;
 		}
 		clocks[index] = clock;
 		return;
@@ -138,8 +152,8 @@ float Distance2(float3 a_position)
 		previousTimer = clock.PreviousTimer;
 	}
 	const float distance = member.y != kNodelessTree ? FastSqrt(distance2) : 0.0f;
-	precise float faded = (1.0f - (distance - FadeStart) / (FadeEnd - FadeStart)) * amplitude;
+	precise float faded = (1.0f - (distance - W.FadeStart) / (W.FadeEnd - W.FadeStart)) * amplitude;
 	faded = min(max(faded, 0.0f), amplitude);
-	records[member.x].Words[TreeWord] = asuint(float4(0.0f, WindMagnitude, faded, leafFrequency));
-	records[member.x].Words[TreeWord + 1] = asuint(float4(timer * TimerScale, previousTimer * TimerScale, distance2, amplitude));
+	records[member.x].Words[TreeWord] = asuint(float4(0.0f, W.WindMagnitude, faded, leafFrequency));
+	records[member.x].Words[TreeWord + 1] = asuint(float4(timer * W.TimerScale, previousTimer * W.TimerScale, distance2, amplitude));
 }

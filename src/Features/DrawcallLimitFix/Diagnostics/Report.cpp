@@ -190,7 +190,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 						 "versions uploaded, {} resyncs; parity {} entries checked, {} differ, {} missing{}",
 				draws.residentInputs, draws.residentDraws, draws.residentPairs, draws.residentUndrawable, draws.residentVersions, draws.residentResyncs,
 				draws.residentParityChecks, draws.residentParityMismatches, draws.residentMissing,
-				draws.residentParityChecks ? (draws.residentParityMismatches || draws.residentMissing ? " <- RESIDENT DRAW PARITY" : " <- OK") : "");
+				draws.residentParityChecks ? fmt::format("; pairs {} checked, {} resolved with no event{}", draws.residentPairsChecked, draws.residentPairsStale,
+												 draws.residentParityMismatches || draws.residentMissing || draws.residentPairsStale ? " <- RESIDENT DRAW PARITY" : " <- OK") :
+											 std::string());
 		if (draws.fadeTested)
 			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; "
 						 "{} roots, change buffer {} changes, {} frames of changes sent again whole since the start",

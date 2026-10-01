@@ -95,9 +95,13 @@ namespace DCLF::Scene
 		{
 			const float specular = a_property->specularLODFade;
 			const float envmap = a_property->envmapLODFade;
+			const float alpha = a_property->alpha;
 			auto* passes = func(a_property, a_geometry, a_renderFlags, a_accumulator);
+			// The LOD fades, and the alpha it leaves on the property (materialAlpha times the fade node's fade, for whichever
+			// camera registered it last), which a record that is not a member's shades with (MakeShading).
 			if (std::bit_cast<std::uint32_t>(a_property->specularLODFade) != std::bit_cast<std::uint32_t>(specular) ||
-				std::bit_cast<std::uint32_t>(a_property->envmapLODFade) != std::bit_cast<std::uint32_t>(envmap))
+				std::bit_cast<std::uint32_t>(a_property->envmapLODFade) != std::bit_cast<std::uint32_t>(envmap) ||
+				std::bit_cast<std::uint32_t>(a_property->alpha) != std::bit_cast<std::uint32_t>(alpha))
 				lodFadeEvents.Push(a_property);
 			return passes;
 		}

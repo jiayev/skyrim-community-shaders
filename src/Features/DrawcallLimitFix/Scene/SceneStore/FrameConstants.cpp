@@ -29,10 +29,14 @@ namespace DCLF
 		++m.frames;
 		auto apply = [&](std::uint32_t a_slot, const MaterialRecord& a_live) {
 			bool floatsChanged = false;
-			if (MaterialSources::ApplyFrameComponents(a_live, tables.materials[a_slot], tables.materialSlotKey[a_slot].second, &floatsChanged))
+			if (MaterialSources::ApplyFrameComponents(a_live, tables.materials[a_slot], tables.materialSlotKey[a_slot].second, &floatsChanged)) {
 				tables.materialVersion[a_slot] = ++materialVersions;
-			if (floatsChanged)
+				tables.NoteMaterial(a_slot);
+			}
+			if (floatsChanged) {
 				tables.materialFrameVersion[a_slot] = tables.NextVersion();
+				tables.NoteMaterial(a_slot);
+			}
 		};
 		auto keyed = [&](std::uint32_t a_slot, std::uint32_t a_signature) {
 			return a_slot < tables.materials.size() && tables.materialSlots.Alive(a_slot) && tables.materialSlotKey[a_slot].first &&
@@ -118,8 +122,10 @@ namespace DCLF
 			// The material is read only while a member's slot holds it.
 			if (keep && tables.MaterialUsed(slot)) {
 				const auto* material = tables.materialSlotKey[slot].first;
-				if (MaterialSources::ApplyTextureTransform(material, tables.materials[slot]))
+				if (MaterialSources::ApplyTextureTransform(material, tables.materials[slot])) {
 					tables.materialFrameVersion[slot] = tables.NextVersion();
+					tables.NoteMaterial(slot);
+				}
 				const auto* base = static_cast<const RE::BSLightingShaderMaterialBase*>(material);
 				keep = frame - tables.transformWatchFrame[slot] <= 2 || base->texCoordOffset[0] != base->texCoordOffset[1] ||
 				       base->texCoordScale[0] != base->texCoordScale[1];
@@ -270,6 +276,7 @@ namespace DCLF
 					if (!(live == tables.materials[slot])) {
 						tables.materials[slot] = live;
 						tables.materialVersion[slot] = ++materialVersions;
+						tables.NoteMaterial(slot);
 						++stats.materialsRewritten;
 					}
 				} else if (std::find(materialEvaluationsPending.begin(), materialEvaluationsPending.end(), slot) == materialEvaluationsPending.end()) {
@@ -430,14 +437,12 @@ namespace DCLF
 		}
 		++geometryStats.frames;
 
-		// Per-object shading is resampled here too, for the slots whose inputs change with no event (Tables::watched).
-		// The property's alpha, emissive colour and multiplier are animated by controllers: candle and chandelier
-		// emissives flicker, and sampling them at EarlyPrepass instead of here put them far enough from the draw that
-		// capture parity's 0.1% tolerance on EmitColor stopped covering the difference. The LOD fades GetRenderPasses
-		// leaves on the property change only when the engine registers the object, which is a patch, and the patch
-		// samples them. External emittance's shared colour changes with the weather (emittanceEvents). An actor's alpha fades
-		// with the actor. ProjectedUV's and land blend's extras rows follow the
-		// eye and a clock.
+		// Per-object shading is resampled here by event, at the last point before the draw: candle and chandelier emissives
+		// flicker, and sampling them at EarlyPrepass instead of here put them far enough from the draw that capture parity's
+		// 0.1% tolerance on EmitColor stopped covering the difference. The events: the controllers' writes of the emissive
+		// colour and multiplier and of material fields (MaterialSources), the LOD fades and the alpha GetRenderPasses leaves
+		// on the property (an actor's fade among them; lodFadeEvents), and external emittance's shared colour
+		// (emittanceEvents). ProjectedUV's and land blend's extras rows follow the eye and a clock (Tables::watched).
 		auto refreshExtras = [&](std::uint32_t o) {
 			if (tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) {
 				const auto* geometry = tables.objectGeometry[o];
@@ -464,16 +469,10 @@ namespace DCLF
 					watched.RemoveAt(i);
 					continue;
 				}
-				if (bits & Tables::kWatchShading)
-					ResampleShading(o, true);
 				if (bits & Tables::kWatchExtras)
 					refreshExtras(o);
 				++resampled;
 				++i;
-			}
-			for (const std::uint32_t o : tables.actorObjects) {
-				ResampleShading(o, true);
-				++resampled;
 			}
 			lodFadeChanged.clear();
 			DrainLodFadeEvents(lodFadeChanged);

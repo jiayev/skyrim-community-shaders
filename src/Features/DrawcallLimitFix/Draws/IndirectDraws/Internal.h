@@ -402,6 +402,9 @@ namespace DCLF
 			// batch staged before one is not submitted after it.
 			std::uint32_t objectCapacity = 0, geometryRows = 0, boneRows = 0, faceVertices = 0;
 			std::uint64_t generation = 0;
+			// The same count, for the invocation revisions of the passes that bind these buffers (read on the graph host's thread,
+			// which prepares invocations ahead of the commits).
+			std::atomic<std::uint64_t> layout{ 0 };
 			std::uint32_t growths = 0;  // since the last report
 			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
 			// The versions of the stores' records, rows and slots the buffers hold, written by the commit that uploads them.
@@ -410,12 +413,12 @@ namespace DCLF
 			// under a tree. The rows and the list are the commits' uploads (UploadTrees), against the tables' versions; the
 			// clocks are the GPU's alone. The counts and the frame's inputs are what the passes dispatch with (the last commit's).
 			std::shared_ptr<org::Buffer> trees, treeClocks, treeObjects;
+			std::shared_ptr<org::Buffer> treeFrameBuffer;  // TreeWindFrameRow, one row, every commit's
 			std::uint32_t treeCapacity = 0, treeObjectCapacity = 0;
 			std::uint64_t treesHeld = ~0ull, treeObjectsHeld = ~0ull;
 			std::uint32_t treeCount = 0, treeObjectCount = 0;
 			std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
 			TreeWindFrame treeInputs{};
-			std::uint64_t treeCommits = 0;  // every commit's, so each epoch's passes are prepared again
 			std::shared_ptr<const ComputeProgram> treeWind;
 			// Fade roots (FadeStateCS; Records.h, FadeRootStatic): the static rows by root slot (the commits' uploads, against
 			// Tables::fadeRootsVersion), the GPU's state rows, the frame's inputs (a one-row buffer the depth commit writes once
@@ -428,7 +431,6 @@ namespace DCLF
 			std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
 			FadeFrame fadeFrame{};
 			std::uint32_t fadeLogBase = ~0u;
-			std::uint64_t fadeCommits = 0;
 			// The write-back roots' changes (FadeChange, after a kFadeChangeHeaderBytes header the depth commit zeroes), copied
 			// into each visibility feedback slot. fadeChangesNeeded: the capacity an overflow asked for (ReserveSceneTables grows
 			// to it); fadeWriteAll: the next update appends every write-back root, the changes an overflow lost included.
@@ -436,10 +438,9 @@ namespace DCLF
 			std::uint32_t fadeChangeCapacity = 0, fadeChangesNeeded = 0;
 			bool fadeWriteAll = false, fadeWriteAllFrame = false;
 			std::uint64_t fadeChangesLost = 0;  // NoteFadeChangesLost, and frames whose changes were not copied
-			// The frame whose changes the feedback copy took (FeedbackPass), and whether a copy was abandoned since: the depth
-			// commit sends every write-back root again when the last frame's changes were not taken.
-			std::atomic<std::uint32_t> fadeCopiedFrame{ 0 };
-			std::atomic<bool> fadeCopyAbandoned{ false };
+			// Set when a frame's changes reached no feedback copy (a copy abandoned, or a frame missing from the copies' headers,
+			// which FadeStateCS stamps with its frame): the depth commit then sends every write-back root again.
+			std::atomic<bool> fadeCopyMissed{ false };
 			std::shared_ptr<const ComputeProgram> fadeState;
 		};
 
@@ -460,15 +461,13 @@ namespace DCLF
 			}
 			a_scene.fadeRootCount = a_scene.fadeRootsHeld == a_tables.fadeRootsVersion ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
 			if (a_scene.fadeFrameNumber != a_frame) {
-				// The last frame's changes never reached a feedback slot (no colour epoch, no free slot, a copy abandoned).
-				if (a_scene.fadeFrameNumber && (a_scene.fadeCopiedFrame.load(std::memory_order_acquire) != a_scene.fadeFrameNumber ||
-													a_scene.fadeCopyAbandoned.exchange(false, std::memory_order_acq_rel))) {
+				// Changes that never reached a feedback slot (a copy abandoned, a frame without one): every write-back root again.
+				if (a_scene.fadeCopyMissed.exchange(false, std::memory_order_acq_rel)) {
 					a_scene.fadeWriteAll = true;
 					++a_scene.fadeChangesLost;
 				}
 				a_scene.fadeFrameNumber = a_frame;
 				a_scene.fadeFrame = a_inputs;
-				a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
 				if (a_scene.fadeVisibility && a_visibility.size() == kFadeVisibilityBytes)
 					a_uploads(a_scene.fadeVisibility, a_visibility.data(), a_visibility.size(), 0);
 				a_scene.fadeLogBase = a_logBase;
@@ -477,7 +476,12 @@ namespace DCLF
 				a_uploads(a_scene.fadeChanges, kZeroHeader, sizeof(kZeroHeader), 0);
 				a_scene.fadeWriteAllFrame = std::exchange(a_scene.fadeWriteAll, false);
 			}
-			++a_scene.fadeCommits;
+			// The frame row, with the pass's per-frame values, every commit.
+			a_scene.fadeFrame.rootCount = a_scene.fadeRootCount;
+			a_scene.fadeFrame.sceneFrame = a_scene.fadeFrameNumber;
+			a_scene.fadeFrame.logBase = a_scene.fadeLogBase;
+			a_scene.fadeFrame.writeAll = a_scene.fadeWriteAllFrame ? 1u : 0u;
+			a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
 		}
 
 		/**
@@ -505,7 +509,11 @@ namespace DCLF
 				a_scene.treeFrame = a_frame;
 				a_scene.treeInputs = SampleTreeWindFrame();
 			}
-			++a_scene.treeCommits;
+			// The frame row (TreeWindFrameRow), every commit: the pass's invocation is prepared ahead of it.
+			if (a_scene.treeFrameBuffer) {
+				const TreeWindFrameRow row{ a_scene.treeCount, a_scene.treeObjectCount, a_scene.treeFrame, 0, a_scene.treeInputs, {} };
+				a_uploads(a_scene.treeFrameBuffer, &row, sizeof(row), 0);
+			}
 		}
 
 		struct Resources
@@ -568,8 +576,8 @@ namespace DCLF
 				enum State : std::uint32_t
 				{
 					Free,
-					Recording,  // armed at the colour commit, not yet prepared
-					Submitted,  // its copy is recorded and its fence value reserved
+					Growing,    // the render thread is growing its staging (ReserveObjectBuffers)
+					Submitted,  // its copy is prepared (FeedbackPass) and its fence value reserved
 					Decoding,
 				};
 				struct Slot
@@ -580,13 +588,13 @@ namespace DCLF
 					std::uint32_t fadeHeld = 0;  // the changes its copy took this time
 					std::atomic<std::uint32_t> state{ Free };
 					std::uint64_t fenceValue = 0;
-					std::uint32_t frame = 0;
 				};
 				std::vector<std::unique_ptr<Slot>> slots;
 				std::shared_ptr<rhi::TimelinePtr> timeline;
 				std::atomic<std::uint64_t> fenceCounter{ 0 };
-				std::atomic<int> armed{ -1 };
-				std::uint32_t cursor = 0;
+				std::atomic<std::uint32_t> cursor{ 0 };
+				// The last frame whose changes a drained copy held (its header's stamp), for the drain to find frames none held.
+				std::uint32_t lastCopiedFrame = 0;
 				std::atomic<std::uint64_t> statArmed{ 0 }, statDropped{ 0 }, statAbandoned{ 0 }, statDecoded{ 0 };
 			};
 			std::shared_ptr<Feedback> feedback;
@@ -1450,12 +1458,14 @@ namespace DCLF
 			KeptView<DrawInput> resident;
 			std::uint32_t residentDraws = 0, residentPairs = 0, residentUndrawable = 0, residentResyncs = 0;
 			std::uint32_t residentParityChecks = 0, residentParityMismatches = 0, residentMissing = 0;
+			std::uint32_t residentPairsChecked = 0, residentPairsStale = 0;  // pairs whose witness moved with no event (UpdateRegionPairs)
 
 			void Reset()
 			{
 				resident.Reset();
 				residentDraws = residentPairs = residentUndrawable = residentResyncs = 0;
 				residentParityChecks = residentParityMismatches = residentMissing = 0;
+				residentPairsChecked = residentPairsStale = 0;
 				staged.reset();
 				stagedFor = nullptr;
 				stagedRowsGeneration = 0;
@@ -1847,6 +1857,9 @@ namespace DCLF
 
 		/** @brief ResidentRegion::indexOf: the object is not in the region. */
 		constexpr std::uint32_t kNoRegion = ~0u;
+		// ResidentRegion::drawsOf: a drawable decal entry (its sequence is its group's slot), and the draws an entry counts.
+		constexpr std::uint8_t kRegionDecal = 0x80;
+		constexpr std::uint8_t RegionDraws(std::uint8_t a_draws) { return a_draws & 0x7F; }
 		constexpr std::uint64_t kNoPair = ~0ull;  // a region entry without bindings (a cull-only candidate)
 
 		/** @brief CS_DCLF_RESIDENT_DRAW_PARITY=1: every 60 frames, each region entry written again from the tables and compared. */
@@ -1917,7 +1930,9 @@ namespace DCLF
 			LogCursor cursor;               // the change log, and the tables generation it was read from
 			bool depth = false;             // the Z-prepass's: a join waits for the colour epoch's first draw of it
 			std::vector<std::uint64_t> pairOf;   // per entry: its (material, pipeline)
-			std::vector<std::uint8_t> drawsOf;   // per entry: its sequences, 0 when it cannot be drawn this frame
+			// Per entry: its sequences, 0 when it cannot be drawn this frame; a drawable decal is kRegionDecal (its sequence is in
+			// its group's range, not the draws').
+			std::vector<std::uint8_t> drawsOf;
 			struct Pair
 			{
 				std::uint32_t slot = 0;   // its rows (RowsOf), once it can draw
@@ -1927,6 +1942,10 @@ namespace DCLF
 				std::uint64_t witness = 0;
 				std::uint32_t skip = 0;  // its skip reason when it cannot draw (the report counts it every build)
 				std::array<std::uint64_t, 2> frameRegisters{};  // the frame textures its resolution asked for
+				// The owners the region's bundle took for it (its material's binding block, its pipeline's shadow mask): a resolution
+				// that finds others makes the bundle again.
+				const void* bindingSeen = nullptr;
+				const void* maskSeen = nullptr;
 			};
 			ankerl::unordered_dense::map<std::uint64_t, Pair> pairs;
 			// The build's own inputs the pairs' resolutions read (the frame slots bound, the segment), every pair's frame textures,
@@ -1935,14 +1954,28 @@ namespace DCLF
 			std::array<std::uint64_t, 2> frameRegisters{};
 			std::shared_ptr<const void> owners;
 			bool pairsChanged = true;
+			// Which pairs a build checks (UpdateRegionPairs): those of the materials the tables' and the lookups' material logs name
+			// since its last build, the pairs new since, and every pair of a pipeline whose half of the witness moved. A log it
+			// cannot continue, or a frame witness that moved: every pair.
+			LogCursor materialCursor, lookupCursor;
+			ankerl::unordered_dense::map<std::uint32_t, std::vector<std::uint64_t>> materialPairs;  // material -> its pairs
+			std::vector<std::uint64_t> freshPairs;
+			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> pipelineWitness;  // the last build's, per pipeline
+			// The pairs that cannot draw, by skip reason: the report counts them every build without visiting them.
+			std::array<std::uint32_t, static_cast<std::size_t>(IndirectDraws::Skip::Count)> skipCounts{};
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pipelines;  // pipeline -> (set index, entries)
 			MarkedList pending;  // depth: joined slots the colour epoch has not drawn yet
 			std::size_t draws = 0;
+			std::size_t decals = 0;               // drawable decal entries
 			std::size_t undrawable = 0;           // entries with no draw this frame
+			// What every face shape's stream index is relative to (the geometry slots' count; FaceStreamGeometry) and whether the
+			// positions buffer exists: when either moves, every face entry is taken again. ~0: not yet read.
+			std::size_t faceBase = ~std::size_t(0);
 			std::vector<std::uint32_t> touched;  // this build: the slots whose entry it wrote or removed, or whose log entry it read
 			// The whole scene (Step 5): every object the loop would draw as one input with its pair's record, not only the residents,
-			// and the depth segment's cull-only candidates. Every other live object is the per-frame loop's (loopList: decals,
-			// faces, second-stream shapes, what does not fit), or nobody's (a candidate the segment does not submit).
+			// and the depth segment's cull-only candidates, decals (the colour segment's, with their ordinals) and face shapes (with
+			// their position streams). Every other live object is the per-frame loop's (loopList: a decal with no ordinal or of
+			// several partitions, a shape whose stream is missing), or nobody's (a candidate the segment does not submit).
 			bool wholeScene = false;
 			std::vector<std::uint32_t> loopList;   // the slots the loop visits
 			std::vector<std::uint32_t> loopIndex;  // per slot: its place in loopList, or kNoRegion
@@ -2785,32 +2818,6 @@ namespace DCLF
 		 * (FeedbackPass). A slot armed but never prepared is returned first; with no free slot the frame is dropped, never
 		 * waited for (the changes are sent again whole).
 		 */
-		void ArmFeedback(Resources& a_resources, std::uint32_t a_frame)
-		{
-			if (!a_resources.feedback || !a_resources.scene || !a_resources.scene->fadeChanges)
-				return;
-			auto& feedback = *a_resources.feedback;
-			if (const int stale = feedback.armed.exchange(-1, std::memory_order_acq_rel); stale >= 0) {
-				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Recording);
-				feedback.slots[stale]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel);
-			}
-			const auto count = static_cast<std::uint32_t>(feedback.slots.size());
-			for (std::uint32_t i = 0; i < count; ++i) {
-				const std::uint32_t index = (feedback.cursor + i) % count;
-				auto& slot = *feedback.slots[index];
-				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
-				if (!slot.state.compare_exchange_strong(expected, Resources::Feedback::Recording, std::memory_order_acq_rel))
-					continue;
-				feedback.cursor = (index + 1) % count;
-				slot.frame = a_frame;
-				slot.fenceValue = 0;
-				feedback.armed.store(static_cast<int>(index), std::memory_order_release);
-				feedback.statArmed.fetch_add(1, std::memory_order_relaxed);
-				return;
-			}
-			feedback.statDropped.fetch_add(1, std::memory_order_relaxed);
-		}
-
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are

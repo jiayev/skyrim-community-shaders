@@ -99,15 +99,21 @@ namespace DCLF::Draws
 	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
 	constexpr const char* kTreeWindShader = "DrawcallLimitFix/TreeWindCS.hlsl";
-	// TreeWindCS.hlsl's constants: the mode, the buffers' indices, the count, the frame, the record's tree word, then the
-	// frame's inputs (Records.h, TreeWindFrame).
+	// TreeWindCS.hlsl's constants: the mode, the buffers' indices and the record's tree word. The counts, the frame and its
+	// inputs are the frame row (TreeWindFrameRow), which every commit uploads: the invocation is prepared ahead of the commit.
 	struct TreeWindConstants
 	{
-		std::uint32_t mode = 0, treesIndex = 0, clocksIndex = 0, listIndex = 0, recordsIndex = 0, count = 0, frame = 0, treeWord = 0;
-		TreeWindFrame inputs{};
-		std::uint32_t padding[2]{};
+		std::uint32_t mode = 0, treesIndex = 0, clocksIndex = 0, listIndex = 0, recordsIndex = 0, frameIndex = 0, treeWord = 0, padding = 0;
 	};
-	static_assert(sizeof(TreeWindConstants) == 80);
+	static_assert(sizeof(TreeWindConstants) == 32);
+	// TreeWindCS.hlsl's frame row (StructuredBuffer, one row).
+	struct TreeWindFrameRow
+	{
+		std::uint32_t treeCount = 0, objectCount = 0, frame = 0, padding = 0;
+		TreeWindFrame inputs{};
+		std::uint32_t padding2[2]{};
+	};
+	static_assert(sizeof(TreeWindFrameRow) == 64);
 	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
 	constexpr std::uint32_t kTreeWindGroup = 64;
 	// What the tree buffers hold at first (they double as the scene needs).
@@ -119,13 +125,11 @@ namespace DCLF::Draws
 	struct FadeStateConstants
 	{
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
-		std::uint32_t latchIndex = 0, latchOffset = 0, count = 0, frame = 0;
-		std::uint32_t logIndex = 0, logBase = ~0u;
-		// The write-back roots' changes (Records.h, FadeChange): the buffer, its capacity in changes, and 1 to append every
-		// write-back root this frame whether it changed or not (after the buffer grew past an overflow).
-		std::uint32_t changesIndex = 0, changeCapacity = 0, writeAll = 0;
+		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
+		// The write-back roots' changes (Records.h, FadeChange): the buffer and its capacity in changes.
+		std::uint32_t changesIndex = 0, changeCapacity = 0;
 		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
-		std::uint32_t padding[2]{};
+		std::uint32_t padding[6]{};
 	};
 	static_assert(sizeof(FadeStateConstants) == 64);
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
@@ -153,8 +157,8 @@ namespace DCLF::Draws
 		// Skins of several partitions: bit i draws partition i (Tables::skinPartitions); 0 draws the one
 		// geometry, kNoPartitions nothing. Left 0 by every input that is not a skin.
 		std::uint32_t partitions;
-		// A shadow input's second vertex stream: the GeometryDraw holding a face shape's positions (the shadow
-		// payload appends them after the geometry slots), or ~0u. The main pass never has one.
+		// The second vertex stream of a face shape (or of a pipeline reading its position from it): the GeometryDraw holding
+		// its positions, which both payloads append after the geometry slots (FaceStreamGeometry), or ~0u.
 		std::uint32_t streamIndex = ~0u;
 		// The object's fade root slot (SceneStore::Tables::objectFadeRoot; FadeStateCS's state row), ~0u when it has none: the
 		// depth segment's first phase drops it while an owned root's OnVisible stops (kFadeRootOwned).

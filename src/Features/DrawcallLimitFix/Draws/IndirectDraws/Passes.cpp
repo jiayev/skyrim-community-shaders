@@ -500,7 +500,7 @@ namespace DCLF::Draws
 
 	struct TreeWindBindings
 	{
-		org::DeclaredViewToken trees, clocks, list, records;
+		org::DeclaredViewToken trees, clocks, list, records, frame;
 	};
 
 	struct TreeWindFramePrepared
@@ -526,6 +526,7 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			TreeWindBindings bindings{};
 			bindings.trees = a_builder.ShaderResource(scene->trees).View();
+			bindings.frame = a_builder.ShaderResource(scene->treeFrameBuffer).View();
 			if (mode == 0) {
 				bindings.clocks = a_builder.UnorderedAccess(scene->treeClocks).View();
 			} else {
@@ -536,31 +537,32 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
+		// What the recording depends on: the buffers' layout (a growth gives them new views). The counts and the frame's inputs
+		// are the frame row, which every commit uploads.
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 		{
-			a_out.push_back(scene->treeCommits);
+			a_out.push_back(scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(mode);
 		}
 
 		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
 			TreeWindFramePrepared prepared{};
-			const std::uint32_t count = mode == 0 ? scene->treeCount : scene->treeObjectCount;
-			if (!scene->treeWind || !count)
+			// Every slot the buffers hold: the shader stops at the frame row's count.
+			const std::uint32_t count = mode == 0 ? scene->treeCapacity : scene->treeObjectCapacity;
+			if (!scene->treeWind || !count || !scene->treeFrameBuffer)
 				return prepared;
 			prepared.program = scene->treeWind;
 			auto& constants = prepared.constants;
 			constants.mode = mode;
 			constants.treesIndex = CaptureViewIndex(a_preparation, a_bindings.trees);
 			constants.clocksIndex = CaptureViewIndex(a_preparation, a_bindings.clocks);
+			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
 			if (mode == 1) {
 				constants.listIndex = CaptureViewIndex(a_preparation, a_bindings.list);
 				constants.recordsIndex = CaptureViewIndex(a_preparation, a_bindings.records);
 			}
-			constants.count = count;
-			constants.frame = scene->treeFrame;
 			constants.treeWord = static_cast<std::uint32_t>(offsetof(BindlessObject, tree) / 16);
-			constants.inputs = scene->treeInputs;
 			prepared.groups = (count + kTreeWindGroup - 1) / kTreeWindGroup;
 			return prepared;
 		}
@@ -631,10 +633,12 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
+		// What the recording depends on: the buffers' layout and the depth segment's shape (its latch). The root count, the frame
+		// and the log are the frame row (Records.h, FadeFrame), which the depth commit uploads.
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 		{
 			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
-			a_out.push_back(resources->scene->fadeCommits);
+			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(frame ? frame->generation : 0);
 		}
 
@@ -643,7 +647,7 @@ namespace DCLF::Draws
 			FadeStatePrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
-			if (!scene.fadeState || !scene.fadeRootCount || !frame || !frame->latch)
+			if (!scene.fadeState || !scene.fadeRootCapacity || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.fadeState;
 			prepared.latch = frame->latch;
@@ -655,13 +659,10 @@ namespace DCLF::Draws
 			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.latchIndex = frame->latch->SrvIndex();
-			constants.count = scene.fadeRootCount;
-			constants.frame = scene.fadeFrameNumber;
-			constants.logBase = scene.fadeLogBase;
 			constants.changesIndex = CaptureViewIndex(a_preparation, a_bindings.changes);
 			constants.changeCapacity = scene.fadeChangeCapacity;
-			constants.writeAll = scene.fadeWriteAllFrame ? 1u : 0u;
-			prepared.groups = (scene.fadeRootCount + kFadeStateGroup - 1) / kFadeStateGroup;
+			// Every slot the buffers hold: the shader stops at the frame row's count.
+			prepared.groups = (scene.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
 			return prepared;
 		}
 
@@ -698,8 +699,9 @@ namespace DCLF::Draws
 	/**
 	 * @brief Copies FadeStateCS's changes into the feedback slot the colour commit armed, and reserves the slot's fence value
 	 * on the feedback timeline, which the framework signals after the copy completes (as BasicRenderer's
-	 * CLodStructuralStreamingReadbackCopyPass). No invocation revision: a packet with a reservation is prepared every frame.
-	 * A copy abandoned before submission returns its slot.
+	 * CLodStructuralStreamingReadbackCopyPass). Every preparation claims a free slot, on the graph host's thread ahead of the
+	 * commit; a ticket prepared again claims another, and a copy abandoned before submission returns its slot. Which frame's
+	 * changes a copy holds is the header's stamp (FadeStateCS), so nothing of the commit's is needed here.
 	 */
 	class FeedbackPass final : public org::TypedRenderGraphPass<FeedbackPass, FeedbackFrame, FeedbackBindings>
 	{
@@ -720,36 +722,50 @@ namespace DCLF::Draws
 			return bindings;
 		}
 
+		// What the recording depends on: the segment and the buffers' layout. The slot is claimed by each preparation.
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			a_out.push_back(static_cast<std::uint64_t>(segment));
+			a_out.push_back(resources->scene ? resources->scene->layout.load(std::memory_order_acquire) : 0);
+		}
+
 		FeedbackFrame Prepare(const FeedbackBindings&, const org::PassPrepareContext& a_preparation) const
 		{
 			FeedbackFrame prepared{};
-			if (segment != RenderGraphRuntime::Segment::MainOpaque)
+			if (segment != RenderGraphRuntime::Segment::MainOpaque || !resources->scene || !resources->scene->fadeChanges)
 				return prepared;
 			auto feedback = resources->feedback;
-			const int index = feedback->armed.exchange(-1, std::memory_order_acq_rel);
-			if (index < 0 || static_cast<std::size_t>(index) >= feedback->slots.size())
+			// The next free slot, claimed for this preparation.
+			const auto count = static_cast<std::uint32_t>(feedback->slots.size());
+			int index = -1;
+			for (std::uint32_t i = 0; i < count && index < 0; ++i) {
+				const std::uint32_t candidate = (feedback->cursor.load(std::memory_order_relaxed) + i) % count;
+				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
+				if (feedback->slots[candidate]->state.compare_exchange_strong(expected, Resources::Feedback::Submitted, std::memory_order_acq_rel)) {
+					index = static_cast<int>(candidate);
+					feedback->cursor.store((candidate + 1) % count, std::memory_order_relaxed);
+				}
+			}
+			if (index < 0) {
+				feedback->statDropped.fetch_add(1, std::memory_order_relaxed);
 				return prepared;
+			}
+			feedback->statArmed.fetch_add(1, std::memory_order_relaxed);
 			auto& slot = *feedback->slots[index];
-			if (slot.state.load(std::memory_order_acquire) != Resources::Feedback::Recording)
-				return prepared;
 			const std::uint64_t value = feedback->fenceCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 			slot.fenceValue = value;
-			slot.state.store(Resources::Feedback::Submitted, std::memory_order_release);
-			auto scene = resources->scene;
-			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index, scene] {
+			// Abandoned (a ticket discarded before submission): the slot is free again. The ticket prepared in its place claims its
+			// own; a frame whose changes no copy took shows as a gap in the copies' frame stamps (DrainVisibilityFeedback).
+			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index] {
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
-				if (feedback->slots[index]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel)) {
+				if (feedback->slots[index]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel))
 					feedback->statAbandoned.fetch_add(1, std::memory_order_relaxed);
-					scene->fadeCopyAbandoned.store(true, std::memory_order_release);
-				}
 			}));
 			prepared.slot = index;
 			// As many changes as both the buffer and the slot hold; the header's count says whether that was all of them.
 			if (slot.fadeStaging && resources->scene->fadeChanges)
 				prepared.fadeBytes = kFadeChangeHeaderBytes + std::uint64_t(std::min(slot.fadeCapacity, resources->scene->fadeChangeCapacity)) * sizeof(FadeChange);
 			slot.fadeHeld = static_cast<std::uint32_t>(prepared.fadeBytes ? (prepared.fadeBytes - kFadeChangeHeaderBytes) / sizeof(FadeChange) : 0);
-			if (prepared.fadeBytes)
-				resources->scene->fadeCopiedFrame.store(resources->scene->fadeFrameNumber, std::memory_order_release);
 			return prepared;
 		}
 
@@ -1317,6 +1333,7 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-objects"), a_scene.treeObjects);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-frame"), a_scene.treeFrameBuffer);
 		}
 		if (a_scene.fadeRoots) {
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);

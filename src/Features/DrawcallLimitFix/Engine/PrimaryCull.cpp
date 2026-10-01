@@ -7,6 +7,7 @@
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "SunAccumulation.h"
+#include "TreeAnimation.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
@@ -331,6 +332,7 @@ namespace DCLF
 			if (!ownedFadeRoots.empty()) {
 				ownedFadeRoots.clear();
 				SceneStore::Get().SetFadeRootsOwned({});
+				TreeAnimation::SetOwned({});
 			}
 			frameLive.store(true, std::memory_order_release);
 			return;
@@ -483,6 +485,9 @@ namespace DCLF
 					put(kFadeVisibilitySetsOffset + s * kFadeVisibilitySetBytes, sets + s * 0x70, 0x64);
 			}
 		}
+		// The view test's planes: the process's own, as its sphere test reads them.
+		put(kFadeVisibilityViewOffset, reinterpret_cast<const std::byte*>(a_process) + 0x3C, 0x64);
+		header[0] |= kFadeVisibilityViewPlanes;
 		put(0, header, sizeof(header));
 	}
 
@@ -584,9 +589,11 @@ namespace DCLF
 	{
 		// The admitted entries with a fade root, whose members' fade is FadeStateCS's from the next frame on. One with engine-drawn
 		// parts is culled by the engine, which updates its node itself; every other is stood in, written back from the GPU's
-		// state, and its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock need not advance them).
+		// state, and its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock need not advance them), and is
+		// taken off the tree manager's animation list (TreeAnimation).
 		ownedFadeRoots.clear();
 		std::vector<SceneStore::OwnedFadeRoot> owned;
+		std::vector<const RE::NiAVObject*> animated;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
 			const auto plan = cut.plans[e];
 			const bool fade = plan == EntryPlan::FadeRoot || plan == EntryPlan::LeafRoot || plan == EntryPlan::TreeRoot;
@@ -594,10 +601,13 @@ namespace DCLF
 				continue;
 			ownedFadeRoots.push_back(cut.roots[e]);
 			owned.push_back({ cut.roots[e], !cut.mixed[e] });
-			if (!cut.mixed[e])
+			if (!cut.mixed[e]) {
 				std::atomic_ref<std::uint32_t>(At<std::uint32_t>(cut.roots[e], kObjectFlags)).fetch_and(~kFlagAccumulated, std::memory_order_relaxed);
+				animated.push_back(cut.roots[e]);
+			}
 		}
 		SceneStore::Get().SetFadeRootsOwned(owned);
+		TreeAnimation::SetOwned(animated);
 	}
 
 	std::uint64_t PrimaryCull::MemberSignature(std::uint32_t a_e) const
@@ -1080,6 +1090,7 @@ namespace DCLF
 		stl::write_vfunc<0x16, Hooks::Process1>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
+		TreeAnimation::Install();
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
 		installed = true;
@@ -1114,6 +1125,9 @@ namespace DCLF
 						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");
 			}
 			ReportSceneLists(s.filterChecked, s.filterMissed);
+			if (TreeAnimation::Installed() && SwitchEnabled(Switch::PersistentParity))
+				TreeAnimation::CheckParity();
+			logger::info("{}", TreeAnimation::Report());
 			if (walkEverything)
 				logger::info("[DCLF] stand-in walk parity: {} geometries handed to the registration from entries the stand-in would not walk{}", s.walkMissed,
 					s.walkMissed ? " <- STAND-IN WALK" : " <- OK");

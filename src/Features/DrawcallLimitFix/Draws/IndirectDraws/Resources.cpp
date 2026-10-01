@@ -466,6 +466,7 @@ namespace DCLF
 			buffers->trees = StructuredBuffer(buffers->treeCapacity, sizeof(TreeStatic), "cs.dclf.trees", unused);
 			buffers->treeClocks = StructuredBuffer(buffers->treeCapacity, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true);
 			buffers->treeObjects = StructuredBuffer(buffers->treeObjectCapacity, sizeof(TreeObject), "cs.dclf.tree-objects", unused);
+			buffers->treeFrameBuffer = StructuredBuffer(1, sizeof(TreeWindFrameRow), "cs.dclf.tree-frame", unused);
 		} else {
 			logger::warn("[DCLF] The tree wind program could not be created; trees keep the wind they joined with");
 		}
@@ -563,6 +564,7 @@ namespace DCLF
 			logger::info("[DCLF] scene {}: {} grown to {} ({} KB)", a_name, a_capacity, rows, std::uint64_t(rows) * a_rowBytes / 1024);
 			a_capacity = rows;
 			++s.generation;
+			s.layout.fetch_add(1, std::memory_order_release);
 			++s.growths;
 			return true;
 		};
@@ -606,7 +608,7 @@ namespace DCLF
 				s.fadeRootsHeld = ~0ull;
 			// The changes an overflowing frame appended (fadeChangesNeeded): every write-back root once more once grown.
 			if (grow("fade changes", s.fadeChangeCapacity, s.fadeChangesNeeded, sizeof(FadeChange), [&](std::uint32_t a_rows) {
-					s.fadeChanges->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(a_rows) * sizeof(FadeChange));
+					s.fadeChanges->ResizeStructured(static_cast<std::uint32_t>((kFadeChangeHeaderBytes + std::uint64_t(a_rows) * sizeof(FadeChange)) / 4));
 				}))
 				s.fadeWriteAll = true;
 		}
@@ -637,14 +639,17 @@ namespace DCLF
 				r.visibilityD3D11 = WrapWords(*r.visibility, std::uint64_t(objects) * sizeof(std::uint32_t));
 			r.objectCapacity = objects;
 		}
-		// A feedback slot's staging grows while the slot is free; one still in flight is grown once it is back (ArmFeedback passes
-		// over a slot too small for the frame).
+		// A feedback slot's staging grows while the slot is free, held meanwhile (Growing) so that a copy prepared on the graph host's
+		// thread cannot claim it; one still in flight is grown once it is back (its copy takes what it holds).
 		if (resources && resources->feedback)
 			for (auto& slot : resources->feedback->slots) {
 				const std::uint32_t changes = scene ? scene->fadeChangeCapacity : 0u;
-				if (slot->fadeStaging && slot->fadeCapacity < changes && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
+				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
+				if (slot->fadeStaging && slot->fadeCapacity < changes &&
+					slot->state.compare_exchange_strong(expected, Resources::Feedback::Growing, std::memory_order_acq_rel)) {
 					slot->fadeStaging->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(changes) * sizeof(FadeChange));
 					slot->fadeCapacity = changes;
+					slot->state.store(Resources::Feedback::Free, std::memory_order_release);
 				}
 			}
 		if (shadow && shadow->objectCapacity < objects) {

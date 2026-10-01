@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -11,6 +12,7 @@
 
 #include "ConstantEvaluator.h"
 #include "Records.h"
+#include "Features/DrawcallLimitFix/Common/KeptState.h"
 
 struct ID3D11ShaderResourceView;
 
@@ -102,6 +104,15 @@ namespace DCLF
 		std::vector<Material> materials;
 		// Parallel to materials: each entry's version (Material::version), compact for the builds' scans over every pair.
 		std::vector<std::uint32_t> materialVersions;
+		// The material slots whose version changed (or that were retired), for the resident region's pairs
+		// (MainBuild::UpdateRegionPairs). Its generation is this instance's: a reader of another instance's log starts again.
+		EventLog<std::uint32_t> materialLog;
+		std::uint32_t logGeneration = NextLogGeneration();
+		static std::uint32_t NextLogGeneration()
+		{
+			static std::atomic<std::uint32_t> counter{ 0 };
+			return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+		}
 		// The sampler heap index per (address mode, filter mode) of the engine's sampler table: all of them,
 		// resolved once (GpuTextures::Sampler), kNone where the engine has no state.
 		std::array<std::uint32_t, 4 * 5> samplers;
