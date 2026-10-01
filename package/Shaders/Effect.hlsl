@@ -712,6 +712,11 @@ PS_OUTPUT main(PS_INPUT input)
 	isFire = true;
 #			endif
 #		endif
+
+#		if !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
+	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
+		propertyColor *= SharedData::enbSettings.ParticleIntensity;
+#		endif
 #	endif
 
 #	if defined(LIGHTING)
@@ -759,11 +764,6 @@ PS_OUTPUT main(PS_INPUT input)
 #	elif defined(MEMBRANE)
 	propertyColor *= 0;
 	lightingInfluence = 0;
-#	endif
-
-#	if defined(EFFECTS11) && !defined(IS_VOLUMETRIC_FOG) && !defined(MULTBLEND) && !defined(MULTBLEND_DECAL)
-	if (SharedData::enbSettings.Enable && !(Permutation::VertexShaderDescriptor & Permutation::EffectFlags::SkyObject) && !isFire)
-		propertyColor *= SharedData::enbSettings.ParticleIntensity;
 #	endif
 
 	float4 baseTexColor = float4(1, 1, 1, 1);
