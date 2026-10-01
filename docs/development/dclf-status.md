@@ -11,7 +11,7 @@ code is organised, and the parity checks that validate it, is [dclf-architecture
 | | DCLF draws | Still native |
 | --- | --- | --- |
 | **Object classes** | Static rigid geometry, including TruePBR; trees; switch-node children; skinned bodies and armour; actors and faces (Facegen, hair, eyes); decals (opaque, and blended with supported blend modes); ProjectedUV; terrain (when Terrain Blending does not defer it); screen-door fades | Alpha-blended objects and refraction; blended fades (hint 9); a LOD cross-fade's old-level copy (hint 10); LOD terrain and objects; billboards; effect shaders; ParallaxOcc, MultilayerParallax and sparkle; skins beyond DCLF's limits; grass, water, sky, particles; first person |
-| **Views** | Main pass (colour, Z-prepass, decals); the sun's cascades and their volumetric copy; local shadow lights; Skylighting's occlusion map | The water cube map and plane reflections; the precipitation mask; first person; the focus view; the local map |
+| **Views** | Main pass (colour, Z-prepass, decals); the sun's cascades and their volumetric copy; local shadow lights; Skylighting's occlusion map; the precipitation mask | The water cube map (LOD and sky only: no DCLF object reaches it); first person; the focus view; the local map |
 
 **What the engine still culls:**
 
@@ -23,8 +23,9 @@ code is organised, and the parity checks that validate it, is [dclf-architecture
     -   entries not yet admitted.
 -   **The sun.** DCLF's entries are taken out; actors and entries with a native caster remain.
 -   **Skylighting's map.** No engine cull at all.
--   **Local shadow lights.** Still culled by the engine; DCLF claims their draws.
--   **Reflections and precipitation.** Fully native.
+-   **Local shadow lights.** Point lights skip the entries DCLF draws (drawcall-limit-fix.md, "Point lights' shadow
+    culls without DCLF's entries"); DCLF claims the rest's draws.
+-   **Reflections.** The cube map culls only LOD and the sky; plane reflections are never rendered.
 
 ## What is still on the render thread
 
@@ -37,7 +38,7 @@ Riverwood, ms per frame:
 | DCLF's late per-object constants (`RefreshFrameConstants`: shading, extras, wetness) | not split out | Per-frame globals on the GPU (projected-UV matrix, land blend, wind); events for the rest |
 | DCLF's prologue (`GpuResources::Touch`, `UpdateSkin`) | 0.14-0.18 | Bone palettes on the GPU |
 | DCLF's epochs (Z-prepass, colour, shadow, LLF) | 0.12 + 0.69 + 0.09-0.25 + 0.02 | The colour epoch's join on its build ("Epochs that only submit") |
-| The water cube-map reflection | about 0.5, mostly draws | A DCLF-native reflection view, as Skylighting's map |
+| The water cube-map reflection | about 0.5, mostly draws (LOD and sky) | A DCLF-native cube map, once DCLF draws LOD and the sky |
 | The precipitation mask, when it rains | about 0.37 | The same |
 | The sun's residue (actors, native casters, the full-frustum cull) | about 0.15 | Actors into DCLF's shadow set |
 | DCLF's share of the primary's stand-in | 0.02 | Already small |
@@ -74,7 +75,8 @@ draws.
     -   A compute pass can keep each object's fade in a persistent buffer, compute the target from the eye and step it.
         The Lighting shader reads it for the screen-door dither and `MaterialData.z`.
     -   The engine's own consumers read `currentFade` on the CPU: the native views that still register DCLF's objects,
-        and the shadow caster rule. They need a one-frame-late write-back, or those views become DCLF's.
+        and the shadow caster rule. Done without a write-back: those views skip DCLF's entries, and the shadow rule
+        reads the GPU's state (drawcall-limit-fix.md, "No fade write-back").
     -   The engine's "visible within the last 2 frames" snap means late visibility behaves as the engine does.
     -   Blended fades (hint 9) stay native until DCLF draws them.
 -   **LOD level and cross-fade.**

@@ -597,7 +597,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, objects, log, changes, visibility;
+		org::DeclaredViewToken roots, states, frame, objects, log, visibility;
 	};
 
 	struct FadeStatePrepared
@@ -629,7 +629,6 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
 			bindings.objects = a_builder.ShaderResource(scene.objects).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
-			bindings.changes = a_builder.UnorderedAccess(scene.fadeChanges).View();
 			return bindings;
 		}
 
@@ -659,8 +658,6 @@ namespace DCLF::Draws
 			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.latchIndex = frame->latch->SrvIndex();
-			constants.changesIndex = CaptureViewIndex(a_preparation, a_bindings.changes);
-			constants.changeCapacity = scene.fadeChangeCapacity;
 			// Every slot the buffers hold: the shader stops at the frame row's count.
 			prepared.groups = (scene.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
 			return prepared;
@@ -682,105 +679,6 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<Resources> resources;
-	};
-
-	struct FeedbackBindings
-	{
-		org::ResourceBindingToken fadeSource;
-		std::vector<org::ResourceBindingToken> fadeSlots;
-	};
-
-	struct FeedbackFrame
-	{
-		int slot = -1;
-		std::uint64_t fadeBytes = 0;
-	};
-
-	/**
-	 * @brief Copies FadeStateCS's changes into the feedback slot the colour commit armed, and reserves the slot's fence value
-	 * on the feedback timeline, which the framework signals after the copy completes (as BasicRenderer's
-	 * CLodStructuralStreamingReadbackCopyPass). Every preparation claims a free slot, on the graph host's thread ahead of the
-	 * commit; a ticket prepared again claims another, and a copy abandoned before submission returns its slot. Which frame's
-	 * changes a copy holds is the header's stamp (FadeStateCS), so nothing of the commit's is needed here.
-	 */
-	class FeedbackPass final : public org::TypedRenderGraphPass<FeedbackPass, FeedbackFrame, FeedbackBindings>
-	{
-	public:
-		FeedbackPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
-			resources(std::move(a_resources)), segment(a_segment) {}
-
-		FeedbackBindings Declare(org::PassBuilder& a_builder)
-		{
-			a_builder.PreferQueue(org::QueueKind::Graphics);
-			FeedbackBindings bindings{};
-			// The fade roots' changes (FadeStateCS, in the depth segment).
-			if (resources->scene->fadeChanges) {
-				bindings.fadeSource = a_builder.CopySource(resources->scene->fadeChanges);
-				for (const auto& slot : resources->feedback->slots)
-					bindings.fadeSlots.push_back(a_builder.CopyDestination(slot->fadeStaging));
-			}
-			return bindings;
-		}
-
-		// What the recording depends on: the segment and the buffers' layout. The slot is claimed by each preparation.
-		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
-		{
-			a_out.push_back(static_cast<std::uint64_t>(segment));
-			a_out.push_back(resources->scene ? resources->scene->layout.load(std::memory_order_acquire) : 0);
-		}
-
-		FeedbackFrame Prepare(const FeedbackBindings&, const org::PassPrepareContext& a_preparation) const
-		{
-			FeedbackFrame prepared{};
-			if (segment != RenderGraphRuntime::Segment::MainOpaque || !resources->scene || !resources->scene->fadeChanges)
-				return prepared;
-			auto feedback = resources->feedback;
-			// The next free slot, claimed for this preparation.
-			const auto count = static_cast<std::uint32_t>(feedback->slots.size());
-			int index = -1;
-			for (std::uint32_t i = 0; i < count && index < 0; ++i) {
-				const std::uint32_t candidate = (feedback->cursor.load(std::memory_order_relaxed) + i) % count;
-				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
-				if (feedback->slots[candidate]->state.compare_exchange_strong(expected, Resources::Feedback::Submitted, std::memory_order_acq_rel)) {
-					index = static_cast<int>(candidate);
-					feedback->cursor.store((candidate + 1) % count, std::memory_order_relaxed);
-				}
-			}
-			if (index < 0) {
-				feedback->statDropped.fetch_add(1, std::memory_order_relaxed);
-				return prepared;
-			}
-			feedback->statArmed.fetch_add(1, std::memory_order_relaxed);
-			auto& slot = *feedback->slots[index];
-			const std::uint64_t value = feedback->fenceCounter.fetch_add(1, std::memory_order_relaxed) + 1;
-			slot.fenceValue = value;
-			// Abandoned (a ticket discarded before submission): the slot is free again. The ticket prepared in its place claims its
-			// own; a frame whose changes no copy took shows as a gap in the copies' frame stamps (DrainVisibilityFeedback).
-			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index] {
-				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
-				if (feedback->slots[index]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel))
-					feedback->statAbandoned.fetch_add(1, std::memory_order_relaxed);
-			}));
-			prepared.slot = index;
-			// As many changes as both the buffer and the slot hold; the header's count says whether that was all of them.
-			if (slot.fadeStaging && resources->scene->fadeChanges)
-				prepared.fadeBytes = kFadeChangeHeaderBytes + std::uint64_t(std::min(slot.fadeCapacity, resources->scene->fadeChangeCapacity)) * sizeof(FadeChange);
-			slot.fadeHeld = static_cast<std::uint32_t>(prepared.fadeBytes ? (prepared.fadeBytes - kFadeChangeHeaderBytes) / sizeof(FadeChange) : 0);
-			return prepared;
-		}
-
-		static void Record(const FeedbackBindings& a_bindings, const FeedbackFrame& a_frame, org::PassRecordContext& a_recording)
-		{
-			if (a_frame.slot < 0)
-				return;
-			if (a_frame.fadeBytes && static_cast<std::size_t>(a_frame.slot) < a_bindings.fadeSlots.size())
-				a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.fadeSlots[a_frame.slot]).GetHandle(), 0,
-					a_recording.Resolve(a_bindings.fadeSource).GetHandle(), 0, a_frame.fadeBytes);
-		}
-
-	private:
-		std::shared_ptr<Resources> resources;
-		RenderGraphRuntime::Segment segment;
 	};
 
 	struct HzbBindings
@@ -1075,6 +973,7 @@ namespace DCLF::Draws
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
 		std::vector<org::DeclaredViewToken> sequences, count;  // per view slot
 		org::DeclaredViewToken geometries, objects, visibility;
+		org::DeclaredViewToken fadeRoots, fadeStates;
 	};
 
 	struct ShadowBuildPrepared
@@ -1110,6 +1009,11 @@ namespace DCLF::Draws
 			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
+			// The shadow views' casters under stood-in roots follow FadeStateCS's state (the occlusion views' do not).
+			if (!sky && resources->scene->fadeRoots) {
+				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
+				bindings.fadeStates = a_builder.ShaderResource(resources->scene->fadeStates).View();
+			}
 			return bindings;
 		}
 
@@ -1117,6 +1021,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentShadowFrame(*resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(FadeRows() ? 1u : 0u);
 		}
 
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -1131,6 +1036,9 @@ namespace DCLF::Draws
 			const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
 			const auto objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			const bool fadeRows = FadeRows();
+			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
+			const auto fadeStatesIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeStates) : 0u;
 			for (const auto& view : frame->views) {
 				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
 					continue;
@@ -1152,6 +1060,8 @@ namespace DCLF::Draws
 				constants.phaseBits = 0;
 				// The visibility words are written per object by every dispatch; nothing reads them here.
 				constants.visibilityIndex = visibilityIndex;
+				constants.fadeRootsIndex = fadeRootsIndex;
+				constants.fadeStatesIndex = fadeStatesIndex;
 				prepared.dispatches.push_back(dispatch);
 			}
 			return prepared;
@@ -1169,6 +1079,9 @@ namespace DCLF::Draws
 		}
 
 	private:
+		// The fade roots' rows hold the tables' (the depth commit's upload), so a root slot names its row.
+		bool FadeRows() const { return !sky && resources->scene->fadeRoots && resources->scene->fadeRootCount; }
+
 		std::shared_ptr<ShadowResources> resources;
 		bool sky = false;
 	};
@@ -1341,7 +1254,6 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-changes"), a_scene.fadeChanges);
 		}
 	}
 
@@ -1477,10 +1389,6 @@ namespace DCLF::Draws
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.main-opaque",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, colourSegment)))
 					.Epoch(colour));
-			if (resources->feedback && resources->frustum)
-				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.feedback",
-					std::static_pointer_cast<org::RenderPass>(std::make_shared<FeedbackPass>(resources, colourSegment)))
-						.Epoch(colour));
 			if (resources->probe)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.probe-after",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, colourSegment, true)))

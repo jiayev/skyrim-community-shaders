@@ -8,11 +8,13 @@
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "SunAccumulation.h"
 #include "TreeAnimation.h"
+#include "LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 
 #include <algorithm>
+#include <ranges>
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -588,10 +590,11 @@ namespace DCLF
 	void PrimaryCull::SyncFadeOwnership()
 	{
 		// The admitted entries with a fade root, whose members' fade is FadeStateCS's from the next frame on. One with engine-drawn
-		// parts is culled by the engine, which updates its node itself; every other is stood in, written back from the GPU's
-		// state, and its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock need not advance them), and is
-		// taken off the tree manager's animation list (TreeAnimation).
+		// parts is culled by the engine, which updates its node itself; every other is stood in (its state is the GPU's alone,
+		// its node left as the engine last updated it), its kAccumulated cleared once (its trees are TreeWindCS's: the tree clock
+		// need not advance them), and it is taken off the tree manager's animation list (TreeAnimation).
 		ownedFadeRoots.clear();
+		standInLodSkins = 0;
 		std::vector<SceneStore::OwnedFadeRoot> owned;
 		std::vector<const RE::NiAVObject*> animated;
 		for (std::uint32_t e = 0; e < cut.plans.size(); ++e) {
@@ -604,6 +607,12 @@ namespace DCLF
 			if (!cut.mixed[e]) {
 				std::atomic_ref<std::uint32_t>(At<std::uint32_t>(cut.roots[e], kObjectFlags)).fetch_and(~kFlagAccumulated, std::memory_order_relaxed);
 				animated.push_back(cut.roots[e]);
+				// A skin whose drawn partitions follow the node's LOD level (SceneStore::LodRowOf): read from a node that no
+				// longer changes. Counted, for the report.
+				for (std::uint32_t m = cut.memberOffsets[e]; m < cut.memberOffsets[e + 1]; ++m)
+					if (const auto* geometry = cut.members[m].geometry; geometry && geometry->GetFlags().any(RE::NiAVObject::Flag::kMeshLOD) &&
+																	   geometry->GetGeometryRuntimeData().skinInstance)
+						++standInLodSkins;
 			}
 		}
 		SceneStore::Get().SetFadeRootsOwned(owned);
@@ -690,7 +699,7 @@ namespace DCLF
 		if (!cut.walk[e] && !walkEverything)
 			return true;
 		++out.walked;
-		// The root's state (fade, LOD) is FadeStateCS's, written back; what is left here is what the frame draws, by the cull's
+		// The root's state (fade, LOD) is FadeStateCS's; what is left here is what the frame draws, by the cull's
 		// test against the job's own planes (its Process2 set them up from the list's first entry). A tree above the height
 		// limit draws nothing.
 		if (plan == EntryPlan::TreeRoot && TreeAboveLimit(a_object, *a_process))
@@ -788,67 +797,11 @@ namespace DCLF
 						}
 	}
 
-	void PrimaryCull::KickFeedbackDecode()
-	{
-		CheckLightMasks();
-		// The feedback frames whose copies have completed, decoded on the worker every frame (whether or not the cut
-		// applies this one). Kicked after the registration jobs (their CPU is not shared with it), joined at Present
-		// (EndFrame), before the next frame's update reads the tree bits and its list jobs read the fade state.
-		if (!ActiveToggles().excludePrimaryEntries || feedbackJob)
-			return;
-		decodeReady.store(false, std::memory_order_relaxed);
-		auto drain = [this] {
-			IndirectDraws::Get().DrainVisibilityFeedback([this](const IndirectDraws::VisibilityFeedbackFrame& a_frame) {
-				TakeFadeChanges(a_frame.fadeAppended, a_frame.fadeHeld, a_frame.fadeChanges);
-			});
-			decodeReady.store(true, std::memory_order_release);
-		};
-		if (AsyncEnabled())
-			feedbackJob = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-				AsyncWorker::Get().Submit("primary feedback", [drain](std::stop_token) { drain(); })));
-		else
-			drain();
-	}
-
-	void PrimaryCull::PollFeedback()
-	{
-		// A decode still running is left for the next poll; inline (no worker), it has finished already.
-		if (feedbackJob && !decodeReady.load(std::memory_order_acquire))
-			return;
-		feedbackJob.reset();
-		ApplyFadeChanges();
-	}
-
-	void PrimaryCull::TakeFadeChanges(std::uint32_t a_appended, std::uint32_t a_held, const FadeChange* a_changes)
-	{
-		if (!a_changes)
-			return;
-		fadeChangesTaken.insert(fadeChangesTaken.end(), a_changes, a_changes + std::min(a_appended, a_held));
-		// More than the copy held: the buffer grows, and every write-back root is sent again once it has.
-		if (a_appended > a_held) {
-			std::uint32_t needed = fadeChangesNeeded.load(std::memory_order_relaxed);
-			while (needed < a_appended && !fadeChangesNeeded.compare_exchange_weak(needed, a_appended, std::memory_order_relaxed)) {}
-		}
-	}
-
-	void PrimaryCull::ApplyFadeChanges()
-	{
-		// After the join: the worker is done with the list, and nothing reads the fade nodes until the list jobs.
-		if (!fadeChangesTaken.empty()) {
-			SceneStore::Get().ApplyFadeChanges(fadeChangesTaken);
-			fadeChangesApplied += fadeChangesTaken.size();
-			fadeChangesTaken.clear();
-		}
-		if (const auto needed = fadeChangesNeeded.exchange(0, std::memory_order_relaxed))
-			IndirectDraws::Get().NoteFadeChangesLost(needed);
-	}
-
 	void PrimaryCull::AfterFullFrustum()
 	{
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
-		PollFeedback();
 		if (ListsFiltered() && !SunAccumulation::Get().ExclusionLive())
 			++listStats.unexcluded;
 		if (ActiveToggles().ownership)
@@ -962,7 +915,8 @@ namespace DCLF
 
 	std::uint32_t PrimaryCull::SunShadowStatic(const RE::BSGeometry& a_geometry)
 	{
-		return StaticShadowBits(a_geometry);
+		// The settled state's, as the synthetic pass is: a member's fade is the GPU's (and a stood-in root's node is not it).
+		return StaticShadowBits(a_geometry, true);
 	}
 
 	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu)
@@ -1091,6 +1045,7 @@ namespace DCLF
 		stl::write_vfunc<0x18, Hooks::AppendVirtual>(RE::VTABLE_BSGeometryListCullingProcess[0]);
 		InstallSceneLists();
 		TreeAnimation::Install();
+		LocalLightCull::Install();
 		REL::Relocation<std::uintptr_t> triShape{ RE::VTABLE_BSTriShape[0] };
 		geometryOnVisible = reinterpret_cast<const std::uintptr_t*>(triShape.address())[0x34];
 		installed = true;
@@ -1128,6 +1083,9 @@ namespace DCLF
 			if (TreeAnimation::Installed() && SwitchEnabled(Switch::PersistentParity))
 				TreeAnimation::CheckParity();
 			logger::info("{}", TreeAnimation::Report());
+			for (const auto& line : std::views::split(LocalLightCull::Report(), '\n'))
+				if (const std::string text(line.begin(), line.end()); !text.empty())
+					logger::info("{}", text);
 			if (walkEverything)
 				logger::info("[DCLF] stand-in walk parity: {} geometries handed to the registration from entries the stand-in would not walk{}", s.walkMissed,
 					s.walkMissed ? " <- STAND-IN WALK" : " <- OK");
@@ -1141,12 +1099,8 @@ namespace DCLF
 					fadePort.differ ? " <- FADE PORT" : " <- OK", fadePort.first.empty() ? "" : "; first: " + fadePort.first);
 				fadePort = {};
 			}
-			const auto io = IndirectDraws::Get().TakeFeedbackStats();
-			const auto writes = SceneStore::Get().TakeFadeWriteStats();
-			logger::info("[DCLF] fade write-back: {} changes applied ({} reported to the fade watch), {} dropped (the row listed again or reseeded since)",
-				writes.applied, writes.watched, writes.dropped);
-			logger::info("[DCLF] fade changes copied back: {} frames armed, {} dropped (no free slot), {} abandoned, {} decoded; {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
-				io.armed, io.dropped, io.abandoned, io.decoded, mixedPerFrame, std::exchange(visibilityOverflows, 0));
+			logger::info("[DCLF] fade roots: {} stood in ({} of their members skins with LOD levels{}); {:.0f} entries with engine-drawn parts culled by the engine a frame; compound frustum larger than the fade test's block on {} frames",
+				SceneStore::Get().StoodInFadeRoots(), standInLodSkins, standInLodSkins ? " <- LOD SKINS" : "", mixedPerFrame, std::exchange(visibilityOverflows, 0));
 		}
 		if (!Probe() || !census.frames)
 			return;

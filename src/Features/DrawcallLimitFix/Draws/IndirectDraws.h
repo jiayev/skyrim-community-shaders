@@ -15,7 +15,6 @@ namespace RE
 
 namespace DCLF
 {
-	struct FadeChange;  // Scene/Records.h
 
 	/**
 	 * @brief DCLF's objects drawn by the render graph with indirect command streams, into the main pass's own
@@ -61,33 +60,6 @@ namespace DCLF
 		 */
 		bool DrewLastFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const;
 
-		/**
-		 * @brief One frame's copy of FadeStateCS's changes (Records.h, FadeChange), the one thing the GPU's frame hands back to
-		 * the CPU: the header's count of appends, and the changes copied.
-		 */
-		struct VisibilityFeedbackFrame
-		{
-			std::uint32_t frame = 0;
-			std::uint32_t fadeAppended = 0, fadeHeld = 0;
-			const FadeChange* fadeChanges = nullptr;
-		};
-		/**
-		 * @brief Any one thread at a time (DCLF's worker): hands every feedback frame whose copy the GPU has completed
-		 * to a_consume, in submission order, and frees its slot. Never waits: frames still in flight are left for a
-		 * later call. Returns the number decoded. See dclf-cull-job-elimination.md, "Phase 2".
-		 */
-		std::uint32_t DrainVisibilityFeedback(const std::function<void(const VisibilityFeedbackFrame&)>& a_consume);
-		/**
-		 * @brief Render thread: FadeStateCS's changes of a frame did not all reach the nodes (more than the buffer held:
-		 * a_needed, the appends): the buffer grows, and the next update sends every write-back root.
-		 */
-		void NoteFadeChangesLost(std::uint32_t a_needed);
-		/** @brief The feedback's counters since the last call: frames armed, dropped (no free slot), abandoned, decoded. */
-		struct FeedbackStats
-		{
-			std::uint64_t armed = 0, dropped = 0, abandoned = 0, decoded = 0;
-		};
-		FeedbackStats TakeFeedbackStats();
 
 		/**
 		 * @brief Publishes what DCLF owns, for the registration hook to withhold.

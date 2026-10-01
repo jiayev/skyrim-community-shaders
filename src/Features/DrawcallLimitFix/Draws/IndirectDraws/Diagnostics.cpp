@@ -461,11 +461,8 @@ namespace DCLF
 				a_stats.sunMissed = words[kCountSunMissedWord];
 				a_stats.fadeTested = words[kCountFadeTestedWord];
 				a_stats.fadeHidden = words[kCountFadeHiddenWord];
-				if (scene) {
-					a_stats.fadeChangesLost = scene->fadeChangesLost;
-					a_stats.fadeChangeCapacity = scene->fadeChangeCapacity;
+				if (scene)
 					a_stats.fadeRoots = scene->fadeRootCount;
-				}
 				a_stats.sunCpuTested = cullReadback->sunCpuTested;
 				a_stats.sunCpuMissed = cullReadback->sunCpuMissed;
 				context->Unmap(cullReadback->count.get(), 0);
@@ -653,7 +650,7 @@ namespace DCLF
 		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 			const auto bits = readback.roots[i].bits;
 			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
-			if (node && (bits & kFadeRootOwned) && !(bits & kFadeRootWriteBack)) {
+			if (node && (bits & kFadeRootOwned) && !(bits & kFadeRootStoodIn)) {
 				readback.nodes[i] = FadeState::ReadNode(*node);
 				readback.engine[i] = 1;
 			}

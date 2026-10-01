@@ -126,8 +126,7 @@ namespace DCLF::Draws
 	{
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
-		// The write-back roots' changes (Records.h, FadeChange): the buffer and its capacity in changes.
-		std::uint32_t changesIndex = 0, changeCapacity = 0;
+		std::uint32_t reserved[2]{};
 		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 		std::uint32_t padding[6]{};
 	};

@@ -216,27 +216,6 @@ namespace DCLF
 		state->objectCapacity = scene->objectCapacity;
 		state->visibility = CreateWords(state->objectCapacity, true, "cs.dclf.visibility");
 		state->frustum = CreateWords(state->objectCapacity, true, "cs.dclf.frustum");
-		{
-			// The feedback ring: at least as many slots as frames in flight, and at least 4.
-			auto feedback = std::make_shared<Resources::Feedback>();
-			auto timeline = std::make_shared<rhi::TimelinePtr>();
-			if (rhi::Failed(device.CreateTimeline(*timeline, 0, "cs.dclf.feedback")) || !*timeline) {
-				logger::warn("[DCLF] visibility feedback: no timeline; the feedback is off");
-			} else {
-				feedback->timeline = std::move(timeline);
-				const std::uint32_t slots = std::max<std::uint32_t>(host->FrameSlots(), 4u);
-				for (std::uint32_t i = 0; i < slots; ++i) {
-					auto slot = std::make_unique<Resources::Feedback::Slot>();
-					if (scene->fadeChanges) {
-						slot->fadeCapacity = scene->fadeChangeCapacity;
-						slot->fadeStaging = org::Buffer::CreateShared(rhi::HeapType::Readback, kFadeChangeHeaderBytes + std::uint64_t(slot->fadeCapacity) * sizeof(FadeChange));
-						slot->fadeStaging->SetName(fmt::format("cs.dclf.feedback-fades{}", i).c_str());
-					}
-					feedback->slots.push_back(std::move(slot));
-				}
-				state->feedback = std::move(feedback);
-			}
-		}
 		if (PassStats::Enabled()) {
 			auto passStats = std::make_shared<PassStats>();
 			const std::uint32_t slots = host->FrameSlots();
@@ -480,8 +459,6 @@ namespace DCLF
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
 			buffers->fadeVisibility = CreateWords(kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
-			buffers->fadeChangeCapacity = smallStart ? 4u : kInitialFadeChanges;
-			buffers->fadeChanges = CreateWords((kFadeChangeHeaderBytes + std::uint64_t(buffers->fadeChangeCapacity) * sizeof(FadeChange)) / 4, true, "cs.dclf.fade-changes");
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
 		}
@@ -606,11 +583,6 @@ namespace DCLF
 					s.fadeStates->ResizeStructured(a_rows);
 				}))
 				s.fadeRootsHeld = ~0ull;
-			// The changes an overflowing frame appended (fadeChangesNeeded): every write-back root once more once grown.
-			if (grow("fade changes", s.fadeChangeCapacity, s.fadeChangesNeeded, sizeof(FadeChange), [&](std::uint32_t a_rows) {
-					s.fadeChanges->ResizeStructured(static_cast<std::uint32_t>((kFadeChangeHeaderBytes + std::uint64_t(a_rows) * sizeof(FadeChange)) / 4));
-				}))
-				s.fadeWriteAll = true;
 		}
 		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
 				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);
@@ -639,19 +611,6 @@ namespace DCLF
 				r.visibilityD3D11 = WrapWords(*r.visibility, std::uint64_t(objects) * sizeof(std::uint32_t));
 			r.objectCapacity = objects;
 		}
-		// A feedback slot's staging grows while the slot is free, held meanwhile (Growing) so that a copy prepared on the graph host's
-		// thread cannot claim it; one still in flight is grown once it is back (its copy takes what it holds).
-		if (resources && resources->feedback)
-			for (auto& slot : resources->feedback->slots) {
-				const std::uint32_t changes = scene ? scene->fadeChangeCapacity : 0u;
-				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
-				if (slot->fadeStaging && slot->fadeCapacity < changes &&
-					slot->state.compare_exchange_strong(expected, Resources::Feedback::Growing, std::memory_order_acq_rel)) {
-					slot->fadeStaging->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(changes) * sizeof(FadeChange));
-					slot->fadeCapacity = changes;
-					slot->state.store(Resources::Feedback::Free, std::memory_order_release);
-				}
-			}
 		if (shadow && shadow->objectCapacity < objects) {
 			auto& r = *shadow;
 			r.visibility->ResizeStructured(objects);

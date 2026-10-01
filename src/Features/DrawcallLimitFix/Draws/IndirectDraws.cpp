@@ -15,9 +15,6 @@ namespace DCLF
 	}
 	void IndirectDraws::PublishClaims() {}
 	bool IndirectDraws::DrewLastFrame(const RE::BSGeometry*, std::uint32_t) const { return false; }
-	std::uint32_t IndirectDraws::DrainVisibilityFeedback(const std::function<void(const VisibilityFeedbackFrame&)>&) { return 0; }
-	void IndirectDraws::NoteFadeChangesLost(std::uint32_t) {}
-	IndirectDraws::FeedbackStats IndirectDraws::TakeFeedbackStats() { return {}; }
 	void IndirectDraws::CaptureMainPass() {}
 	void IndirectDraws::CheckCapturePoint() {}
 	void IndirectDraws::CaptureDepthPass() {}

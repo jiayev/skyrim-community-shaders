@@ -57,8 +57,9 @@ cbuffer BuildDrawsConstants : register(b0)
 	// StructuredBuffer of 256-byte object records (DCLFObjects.hlsli, BindlessObject): an input's bound, sun entry and fade
 	// node are its record's (a move rewrites the record, never the inputs).
 	uint ObjectsIndex;
-	// The depth segment's first phase: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState> (FadeStateCS.hlsl;
-	// Records.h). An input under an owned root (kFadeRootOwned) is dropped while its root's OnVisible stops. 0 elsewhere.
+	// The depth segment's first phase and the shadow views: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState>
+	// (FadeStateCS.hlsl; Records.h). The first phase drops an input under an owned root (kFadeRootOwned) while its root's
+	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
 	uint FadeRootsIndex;
 	uint FadeStatesIndex;
 }
@@ -92,8 +93,24 @@ struct FadeRootStatic
 	uint Generation;
 };
 static const uint kFadeRootOwned = 1u << 18;
+static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
+
+// Whether a fade root slot (~0u: none) is stood in (kFadeRootStoodIn) and not fully faded in: its state row's fade, or the
+// static row's as listed until FadeStateCS's first update of a new generation.
+bool StoodInFading(uint a_root)
+{
+	if (a_root == 0xFFFFFFFFu)
+		return false;
+	StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+	const FadeRootStatic row = fadeRoots[a_root];
+	if ((row.Bits & kFadeRootStoodIn) == 0)
+		return false;
+	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+	const FadeNodeState state = fadeStates[a_root];
+	return (state.Generation == row.Generation ? state.CurrentFade : row.Initial.CurrentFade) < 1.0;
+}
 
 // The execution's values, from the latch (BuildDrawsLatch): read once per thread at the top of main. The
 // first three words of the latch are this dispatch's own indirect arguments.
@@ -627,6 +644,11 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow)))
 		return;
 	if (MinRadius() && ObjectRow(objectIndex, kObjectBoundRow).w <= 32.0)
+		return;
+	// A shadow view's caster under a stood-in root, whose fade is FadeStateCS's alone: the engine casts no fading caster
+	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict took the material's alpha), nor one under a root
+	// faded out.
+	if (phase == kPhaseSingle && FadeRootsIndex != 0 && StoodInFading(inputs.Load(inputOffset + 48)))
 		return;
 
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a

@@ -6,6 +6,7 @@
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
+#include "Features/DrawcallLimitFix/Common/KeptState.h"
 
 #include <array>
 #include <cstring>
@@ -217,6 +218,8 @@ namespace DCLF
 		frameState.exclusion = std::move(exclusion);
 		frameState.stamp = stamp;
 		frameState.probe = probe;
+		frameState.parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(SceneStore::Get().GetFrame());
+		skipStats.parityFrames.fetch_add(frameState.parity ? 1 : 0, std::memory_order_relaxed);
 		for (auto& cascade : frameState.cascades)
 			cascade = {};
 		frameState.cascadeCount = 0;
@@ -470,8 +473,15 @@ namespace DCLF
 						WriteMaskOnly(a_accumulator, a_geometry);
 					++call->skipped;
 				} else {
+					const bool parityWatch = self.frameState.parity && self.exclusionLive.load(std::memory_order_relaxed) && self.UnderExcludedEntry(geometry);
 					const std::uint32_t passesBefore = PassCapture::PassesOnThisThread();
 					result = func(a_accumulator, a_geometry, a_arg);
+					// One that built a pass is a caster the skip would have lost (a registration without one draws nothing).
+					if (parityWatch && PassCapture::PassesOnThisThread() != passesBefore) {
+						self.skipStats.parityLost.fetch_add(1, std::memory_order_relaxed);
+						if (self.skipStats.parityLostFirst.empty())
+							self.skipStats.parityLostFirst = fmt::format("'{}'", geometry->name.c_str());
+					}
 					// A caster the sun's views do not claim is registered for its native shadow; if DCLF draws its main pass, the
 					// cascade's bit has no main registration to read it (ClearOwnedMask).
 					if (PrimaryCull::Get().Owned(*geometry))
@@ -542,6 +552,33 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/**
+		 * @brief BSCullingProcess::Process1 (vtable slot 0x16), for the sun's cascade culls: the objectArray holds no excluded
+		 * entry (ExcludeEntries), but one can still be reached through a node above it that stays. Skipped there too, stamped
+		 * as removed, so that a geometry of it the main camera registers takes DCLF's bits (ApplySunBits). Only inside the
+		 * sun's Accumulate on its own thread (currentCall), and never on a probe or parity frame.
+		 */
+		struct CascadeProcess1
+		{
+			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
+			{
+				if (SunCall* call = currentCall; call && call->cascade >= 0 && a_object) {
+					auto& self = SunAccumulation::Get();
+					const auto& state = self.frameState;
+					if (self.exclusionLive.load(std::memory_order_relaxed) && !state.probe && !state.parity && state.exclusion && state.exclusion->candidates) {
+						const auto& entries = state.exclusion->candidates->entries;
+						if (const auto it = entries.find(a_object); it != entries.end() && state.exclusion->excluded[it->second]) {
+							state.exclusion->removed[it->second].store(state.stamp, std::memory_order_relaxed);
+							self.skipStats.skipped.fetch_add(1, std::memory_order_relaxed);
+							return;
+						}
+					}
+				}
+				func(a_process, a_object, a_arg);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
 		/** @brief FUN_1414bf320's cascade cull, FUN_140e305c0(full-frustum process, cascade process, arg). */
 		struct CascadeCull
 		{
@@ -589,6 +626,9 @@ namespace DCLF
 		stl::write_thunk_call<Hooks::Cascade>(cascadeCall);
 		stl::write_thunk_call<Hooks::CascadeCull>(cascadeCull);
 		stl::write_thunk_call<Hooks::MaskClear>(maskClear);
+		// The cascades' skip of the excluded entries they reach anyway: with the point lights' (CS_DCLF_LIGHT_EXCLUDE=0: neither).
+		if (SwitchValue(Switch::LightExclude) != "0")
+			stl::write_vfunc<0x16, Hooks::CascadeProcess1>(RE::VTABLE_BSCullingProcess[0]);
 		installed = true;
 		logger::info("[DCLF] sun accumulation installed (Accumulate, its cascades and registrations, the full-frustum cull)");
 	}
@@ -615,15 +655,20 @@ namespace DCLF
 				const auto unclaimed = take(bitStats.probeUnclaimed), noPass = take(bitStats.probeNoPass);
 				logger::info("[DCLF] sun entry exclusion{}: applied on {} frames ({} stale, {} with none); per frame {:.0f} of {:.0f} objectArray entries removed, "
 							 "{:.0f} of {:.0f} candidates excluded, filter {:.3f} ms; {:.0f} registrations took DCLF's bits ({:.0f} with a cascade), {} before the cascades, "
-							 "{} cascade registrations under a removed entry{}",
+							 "{} cascade registrations under a removed entry; excluded entries the cascades reached anyway and skipped {:.0f} a frame, parity {} frames: {} unclaimed casters under an excluded entry{}{}",
 					ExclusionProbe() ? " (probe: dry)" : "", stats.exclusionFrames, stats.exclusionStale, stats.exclusionMissing,
 					stats.entriesRemoved / applied, stats.entriesSeen / applied, stats.excluded / applied, stats.candidates / applied,
 					stats.filterTicks * toMs / applied, written / applied, withBits / applied, notReady, stats.cascadeRegistrationsUnderRemoved,
+					skipStats.skipped.exchange(0) / applied, skipStats.parityFrames.load(), skipStats.parityLost.load(),
+					skipStats.parityFrames.load() ? (skipStats.parityLost.load() ? " <- SUN EXCLUSION; first " + skipStats.parityLostFirst : std::string(" <- OK")) : std::string(),
 					ExclusionProbe() ? fmt::format("; bits compared {}, agree {}, engine only {}, DCLF only {}; unclaimed cascade registrations {} with a pass, {} without",
 										   compared, agree, engineOnly, dclfOnly, unclaimed, noPass) :
 									   std::string());
 			}
 		}
 		stats = {};
+		skipStats.parityFrames = 0;
+		skipStats.parityLost = 0;
+		skipStats.parityLostFirst.clear();
 	}
 }

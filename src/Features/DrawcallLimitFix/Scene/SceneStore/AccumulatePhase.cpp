@@ -137,9 +137,7 @@ namespace DCLF
 		RefreshMainBatchRenderers();
 		accumulatedPasses.clear();
 		DrainCapture();
-		// The frames of visibility feedback that completed, decoded on the worker (the stood-in roots' fade, LOD and tree state
-		// on their nodes, for the engine's readers; the members' own fade is FadeStateCS's).
-		PrimaryCull::Get().KickFeedbackDecode();
+		PrimaryCull::Get().CheckLightMasks();
 		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
 		BindByMembership();

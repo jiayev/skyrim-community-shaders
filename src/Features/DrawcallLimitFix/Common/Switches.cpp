@@ -73,6 +73,7 @@ namespace DCLF
 			{ PrimaryExclude, "CS_DCLF_PRIMARY_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the main camera's cull; probe: a census that removes nothing (live toggle's seed)" },
 			{ ListFilter, "CS_DCLF_LIST_FILTER", F, Reduced::Zero, false, "0: the scene lists keep the roots DCLF draws whole (the engine's cull and the sun's full-frustum cull walk them)" },
 			{ TreeList, "CS_DCLF_TREE_LIST", F, Reduced::Zero, false, "0: the trees DCLF draws stay on the tree manager's animation list (its update walks them every frame)" },
+			{ LightExclude, "CS_DCLF_LIGHT_EXCLUDE", F, Reduced::Async, false, "0: point lights' shadow culls walk DCLF's entries too; probe: nothing skipped, counted" },
 			{ MoveEvents, "CS_DCLF_MOVE_EVENTS", F, Reduced::Zero, false, "0: the light path places every mover every frame instead of those the engine's move events name" },
 			{ HiddenEvents, "CS_DCLF_HIDDEN_EVENTS", F, Reduced::Zero, false, "0: an actor's frame verdict is taken again every frame instead of on its chain's hidden-bit events" },
 			{ Skylight, "CS_DCLF_SKYLIGHT", F, Reduced::UnlessOne, false, "0: Skylighting's occlusion map stays native (live toggle's seed)" },

@@ -108,7 +108,7 @@ namespace DCLF
 		return a_property->fadeNode ? 0 : kFadeNoNode;
 	}
 
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry)
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled)
 	{
 		using Engine::Global;
 		constexpr std::uintptr_t kMainAccumulator = 0x338c830;     // BSShaderAccumulator*, render mode 0
@@ -122,7 +122,8 @@ namespace DCLF
 			return 0;
 		const std::uint64_t flags = lighting->flags.underlying();
 		const auto* fadeNode = lighting->fadeNode;
-		const float fade = fadeNode ? fadeNode->GetRuntimeData().currentFade : 1.0f;
+		// a_settled: fully faded in, whatever the node holds (a member's pass, whose fade is the GPU's).
+		const float fade = fadeNode && !a_settled ? fadeNode->GetRuntimeData().currentFade : 1.0f;
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
 		const float alpha = (material ? material->materialAlpha : 1.0f) * fade;
 		const auto* alphaProperty = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
@@ -546,7 +547,7 @@ namespace DCLF
 			// The pass the accumulator registered gives only what the property does not: DoAlphaTest, the screen-door fade and the
 			// snow bits (kRegisteredPassBits). The rest is the derivation's, so the technique does not change with the distance the
 			// engine's LOD fades were taken at, and the shadow bits are StaticShadowBits', which the draw decides per frame.
-			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | StaticShadowBits(a_geometry);
+			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | StaticShadowBits(a_geometry, false);
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
 			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)

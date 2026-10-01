@@ -4944,8 +4944,9 @@ the port 1,280 updates, 0 differ (96 within rounding). The pass takes 0.006 ms o
 Measured (e2a-parity): holes 0, every parity OK (the Shield race apart); per sampled frame 32-151 members dropped by
 their owned root's state.
 
-**The nodes follow it (E2b).** The engine still reads an owned root's node: the other views' culls (water reflections,
-the precipitation mask, the local map) run `BSFadeNode::OnVisible` without updating it and stop at a faded-out node, and
+**The nodes follow it (E2b).** The engine still reads an owned root's node: the other views' culls (the point lights'
+shadow culls, the sun's cascade residue, the precipitation mask when the engine draws it; not the water reflections,
+whose cube map culls only LOD and the sky: "Which native views touch DCLF's roots") run `BSFadeNode::OnVisible` on it, and
 `GetRenderPasses` and DCLF's own classification (the shadow Faded rule, the skin's LOD row) read its fade and level. So:
 
 -   An owned root without engine-drawn parts is **written back** (`kFadeRootWriteBack`). When an update changes what
@@ -4963,6 +4964,8 @@ the precipitation mask, the local map) run `BSFadeNode::OnVisible` without updat
 Measured (e2b-parity, Riverwood, camera turning): holes 0, every parity OK (the Shield race apart). The decode went
 from 8,287-9,128 stood-in entries a frame to 520-577, and from 0.37-0.55 ms to 0.08-0.10 ms on the worker. Write-back:
 0-1,856 changes per 300 frames (341 reported to the fade watch); no frame lost.
+
+The write-back is gone since R3 ("No fade write-back").
 
 ## The shadow build kicked at the end of the scene phase
 
@@ -5230,7 +5233,8 @@ still visited every one of them each frame.
     -   A clear (`FUN_140437ae0`, from `TES` and the manager's teardown) forgets every node that is off.
 -   **Parity** (with `CS_DCLF_PERSISTENT_PARITY`): the report scans the list for owned roots still on it.
 
-**Native views.** Native draws of an owned tree (water reflections, cubemaps) read the node's wind clock, and so did
+**Native views.** Native draws of an owned tree (the native point-light casters; not the water cube map, which draws only
+LOD and the sky) read the node's wind clock, and so did
 before this change: `kAccumulated` was already clear, so the clock did not advance.
 
 **Measured** (Riverwood, camera turning): 2,173 roots off the list, 389 left on it. The manager's own measure of its
@@ -6339,3 +6343,133 @@ What `Region.Pairs` still spends:
     rows are written once, but each segment's region resolves the pair: about 0.2 ms a build.
 -   **The owner bundle:** remade on most builds, about 0.06 ms.
 -   **The pipelines' witnesses:** about 0.004 ms.
+
+## Which native views touch DCLF's roots (2026-10-01)
+
+The premise that the water reflections and cubemaps cull and register DCLF's objects was wrong
+([skyrim-engine-notes.md](./skyrim-engine-notes.md), "Water reflections: the cube map"). A census settled it
+(`Engine/ViewCensus.cpp`, `CS_DCLF_VIEW_CENSUS=1`, removed after R3):
+-   `BSFadeNode::OnVisible` on owned roots, by culling process instance and class (MSVC RTTI);
+-   `GetRenderPasses` on geometry under owned roots, by the accumulator's render mode (`+0x150`);
+-   the cube map's roots (`FUN_1405275e0`, its add-root);
+-   a sampled stack for the shared static `BSCullingProcess` (`0x14332bda0`).
+
+Riverwood (camera turning, rain) and the Bannered Mare, per 300 frames:
+
+| Who | Owned roots reached | Notes |
+| --- | --- | --- |
+| Point lights (`BSParabolicCullingProcess`, static `0x14335bfa0`) | 40,000-110,000 outside, 47,000-95,000 inside | mostly stood in |
+| The sun's cascades (`BSShadowDirectionalLight::Accumulate`, through the static `BSCullingProcess`) | 1,300-14,500 | mostly stood in: the exclusion's residue |
+| `Precipitation::SetupMask` (same static process) | on the frames the engine draws the mask | |
+| The main list processes | 8,000-13,000 | mixed roots only, by design |
+| The water cube map | none | its roots are the Sky, LOD trees and two LOD roots, twice a frame |
+| `GetRenderPasses` | mode 0 only, under mixed roots | shadow modes register without it |
+
+So the point lights' culls were the write-back's main reader, then the sun's residue.
+
+## Point lights' shadow culls without DCLF's entries (2026-10-01)
+
+`BSShadowParabolicLight::Accumulate` (`0x14151b960`) culls through `BSCullingProcess::Process` (`FUN_1414bf320`). Its
+descriptor's flag at `+0x5C` selects the static `BSParabolicCullingProcess`. With no root list of its own
+(`sceneAccumArray`), the light passes the scene's object root (`ShadowSceneNode` child 3) as the root, cull mode 3 or 4.
+So every point light walked every loaded reference each frame, ran `OnVisible` on DCLF's roots, and registered their
+casters, which `PassCapture` then withheld: DCLF's paraboloid views draw them.
+
+**The exclusion** is the sun's (`BuildSunExclusion`) for the paraboloid mode:
+-   An entry is excluded when every object under it that the engine would cast into a point light is an input of that
+    mode.
+-   **The engine's rule there:** every caster the scene phase found, volumetric-only ones included. A point light
+    registers those through `RegisterPass` like any other: the parity found `Rug12` that way.
+-   **Decals without z-write and bit 18** (`ShadowReject::DecalPointLight`, split from `DecalNoZWrite`): reading
+    `FUN_1414b2a60`, a paraboloid light would cast them. Measured, it never does. With the culls whole on parity frames
+    and every insertion watched, Riverwood's 2,099 and the Bannered Mare's 80 gave no paraboloid pass. They are no
+    caster of any mode, and the parity reports one if a scene ever registers one.
+-   **Where it is built and published:** on the shadow worker beside the sun's, with its own cache, and published after
+    the shadow epoch that drew the paraboloid views (`LocalLightCull::Publish`).
+
+**The skip** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_EXCLUDE`, on by default; `=probe` skips nothing):
+-   **The hook:** `BSParabolicCullingProcess::Process1` (vtable slot `0x16`, checked against `0x141519a90`) returns at
+    an excluded entry.
+-   **The frame's exclusion** is chosen at the scene frame's start, after the frame's claims (`SelectFrame`). It applies
+    only while the paraboloid claims are live and the exclusion was built for the current candidates.
+-   **Parity frames** (`CS_DCLF_PERSISTENT_PARITY`, every 60th) skip nothing. Every paraboloid pass the registration did
+    not withhold under an excluded entry is counted as one the skip would lose, through `RegisterPass` and the direct
+    group inserts alike.
+
+**Results** (camera turning):
+-   Outside: 4.3-5.3 of 5.8-7.3 million `Process1` calls skipped per 300 frames.
+-   Inside: 0.17-0.34 of 0.29-0.51 million.
+-   Parity: 0 passes lost; resident, set, fade and skylight parity OK; holes 0.
+-   **Volumetric-only casters are ordinary casters in the paraboloid mode.** Before, they were the volumetric copy's
+    class in every mode (`VolumetricClass`, `InputFlagsOf`), so point lights drew them natively and they kept their
+    entries in. Paraboloid claims went from 19,806 to 20,182, and the parity's non-withheld paraboloid passes from
+    84-130 to 0.
+-   **Result:** outside parity frames, no point-light cull reaches an owned root.
+
+**Cost** (`BSShadowParabolicLight::Accumulate`, timed, `CS_DCLF_LIGHT_EXCLUDE=0` against on; plain runs):
+
+| Scene | Off, per light | On, per light |
+| --- | --- | --- |
+| Riverwood | 1.4-1.5 ms | 0.45-0.53 ms |
+| Bannered Mare | 0.34-0.42 ms | 0.06 ms |
+
+With 1.5-2 shadowed point lights a frame at Riverwood, that is 1.5-2 ms a frame of main thread. What remains per light
+is the walk through what is not excluded: cells, actors, native objects.
+
+**The sun's cascades, the same way.**
+-   **The residue was all excluded entries.** The census found the sun's cascade culls reaching owned roots, every one
+    of them an excluded entry. The exclusion takes entries out of the full-frustum `objectArray`, but a cascade reaches
+    an entry anyway through a node above it that stays.
+-   **The skip:** `BSCullingProcess::Process1` (vtable slot `0x16`) returns at an excluded entry, but only inside the
+    sun's `Accumulate` on its own thread (`currentCall` with a cascade). It also stamps the entry as removed, so that a
+    native geometry of it the main camera registers takes DCLF's sun bits (`ApplySunBits`).
+-   **Parity frames** skip nothing, and count an unclaimed registration under an excluded entry that built a pass.
+-   **Results:** about 135 entries skipped a frame, parity 0 lost, holes 0. `Accumulate`'s time is unchanged within
+    noise; the point is that no sun cull touches an owned root.
+
+## No fade write-back (2026-10-01)
+
+With the point lights' and the sun's culls skipping DCLF's entries ("Point lights' shadow culls without DCLF's entries"),
+nothing reads a stood-in root's node in steady state. So the write-back (E2b), the last functional readback, is deleted:
+`FadeChange` and FadeStateCS's append, `FeedbackPass`, the feedback ring and its timeline, `DrainVisibilityFeedback`,
+the decode job (`KickFeedbackDecode`, `PollFeedback`, `TakeFadeChanges`), `ApplyFadeChanges` and `fadeCopyMissed`.
+`kFadeRootWriteBack` is now `kFadeRootStoodIn`: the root's state is FadeStateCS's alone, and its node keeps what the
+engine last left there.
+
+**DCLF's own readers of the node:**
+-   **The shadow Faded rule.** `ShadowCasterReject` takes the material's alpha alone for a stood-in root
+    (`SceneStore::FadeOnGpu`). A shadow view's BuildDraws drops a caster under a stood-in root while the GPU's state is
+    not fully faded in. Each shadow input now carries its fade root (`FadeRootOf`), and a member's root changing is
+    noted (`kChangeBindings`). A root whose stood-in state changes is reported to the fade watch, so its dependents'
+    verdicts are taken again.
+-   **The synthetic pass's sun bits.** These are the settled state's (`StaticShadowBits(..., true)`), as the rest of the
+    synthetic pass already was. With screen-door fades the engine gives a fading pass the settled bits anyway.
+-   **The skin's LOD row** (`SkinPartitionsOf`, `LodRowOf`) reads the node's level. A stood-in member with a
+    `kMeshLOD` skin would keep the partitions of the level it had when stood in. They are counted at each ownership
+    change ("fade roots: ... skins with LOD levels" in the report).
+-   **`PassCapture::FadingAtRegistration`** reads the node only for registrations, which reach a stood-in root's
+    geometry only on the frames the engine culls it (below), right after its own `OnVisible` updated the node.
+-   **The resident parity** skips a fading root's pass only when the engine updates the node.
+
+**The frames the engine culls a stood-in root again:**
+-   when the cut does not apply (start-up, a stale snapshot);
+-   when the precipitation mask falls back to the engine, or on its texel parity frames;
+-   in the parity frames of the point lights and the sun;
+-   while the local map menu is open.
+
+`OnVisible` then starts from the node as the engine last left it. Its `lastVisible` is that old, so the engine treats
+the root as long unseen (`LongUnseen`, more than 20 frames): the LOD level snaps with no cross-fade, and the fade snaps
+in or out by distance. That is the state the engine gives any object coming into view. The only difference from the
+GPU's state is a root caught mid-fade, which snaps. After a frame the cut did not apply, every owned root is seeded
+again from its node (`ReseedOwnedFadeRoots`), as before. No readback is needed.
+
+R2's other views:
+-   **The focus view** reached no owned root in the census.
+-   **The local map** culls only while its menu is open, and is covered by the snap above.
+
+**Measured** (r3-out: Riverwood, camera turning, rain, every parity; r3-in: the Bannered Mare, without build parity):
+-   Holes 0 in both. Every check OK, the Shield race apart (one MISSED outside).
+-   The point lights' and the sun's parities lost no pass. Fade state parity: 640 of 640 exact.
+-   8,551 stood-in roots outside and 612 inside. None has a `kMeshLOD` skin among its members.
+-   Stale tickets: 6 of 600 epochs outside, 0 inside, as before.
+-   Gone: the feedback copy (`cs.dclf.feedback`, about 7 us a preparation), the decode job and the node writes.

@@ -123,6 +123,8 @@ namespace DCLF
 		void PublishShadowClaims(std::uint32_t a_modeIndex, std::shared_ptr<const ClaimSet> a_claims);
 		/** @brief Whether the frame's selection withholds any caster from the shadow mode's views (a non-empty claim set). */
 		bool ShadowModeWithheld(std::uint32_t a_modeIndex) const;
+		/** @brief Whether a_batch is a shadow view's batch renderer this frame, and its mode index. */
+		bool ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const;
 		/**
 		 * @brief The claims Withhold decides a pass into this batch renderer by: its shadow view's render mode's, or
 		 * null when the renderer is not a shadow view's (as far as the last ShadowViews rebuild knows) or shadow

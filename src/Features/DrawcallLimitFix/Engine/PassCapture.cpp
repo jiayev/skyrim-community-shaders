@@ -1,5 +1,7 @@
 #include "PassCapture.h"
 
+#include "LocalLightCull.h"
+
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 
@@ -162,6 +164,18 @@ namespace DCLF
 		return selected ? selected->shadow[a_mode] : std::atomic_load(&shadowClaims[a_mode]);
 	}
 
+	bool PassCapture::ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const
+	{
+		const auto renderers = std::atomic_load(&shadowRenderers);
+		if (!renderers)
+			return false;
+		const auto it = renderers->find(a_batch);
+		if (it == renderers->end() || it->second >= kShadowModes)
+			return false;
+		a_mode = it->second;
+		return true;
+	}
+
 	std::shared_ptr<const PassCapture::ClaimSet> PassCapture::ShadowClaimsForBatch(const RE::BSBatchRenderer* a_batch) const
 	{
 		std::uint32_t mode = 0;
@@ -214,6 +228,7 @@ namespace DCLF
 			// and DCLF owns the object outright. Everything the tables need is taken by Record.
 			const bool withheld = capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
+			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
 			if (!withheld)
 				func(a_this, a_pass, a_techniqueID);
 		}
@@ -245,7 +260,9 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (capture.WithholdAtGroup(a_batch, a_pass, capture.volumetricWithheld))
+			const bool withheld = capture.WithholdAtGroup(a_batch, a_pass, capture.volumetricWithheld);
+			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, 8);
+			if (withheld)
 				return;
 			func(a_batch, a_pass, a_group, a_arg);
 		}
@@ -265,7 +282,9 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (capture.WithholdAtGroup(a_batch, a_pass, capture.directWithheld))
+			const bool withheld = capture.WithholdAtGroup(a_batch, a_pass, capture.directWithheld);
+			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, Hint);
+			if (withheld)
 				return;
 			func(a_batch, a_pass, a_group, a_arg);
 		}

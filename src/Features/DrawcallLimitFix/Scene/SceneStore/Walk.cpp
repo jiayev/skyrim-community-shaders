@@ -660,7 +660,7 @@ namespace DCLF
 		// technique. It belongs here and nowhere else: every shadow view is rendered between this
 		// phase and the next, so a verdict taken later would arrive after the views that need it.
 		const auto* shadowProperty = data.shaderProperty.get();
-		const auto shadowReject = ShadowCasterReject(shadowProperty, geometry);
+		const auto shadowReject = ShadowCasterReject(shadowProperty, geometry, FadeOnGpu(shadowProperty ? shadowProperty->fadeNode : nullptr));
 		static_assert(static_cast<std::size_t>(ShadowReject::Count) <= std::tuple_size_v<decltype(stats.shadowRejects)>);
 		++stats.shadowRejects[static_cast<std::size_t>(shadowReject)];
 		ID3D11ShaderResourceView* shadowDiffuse = nullptr;

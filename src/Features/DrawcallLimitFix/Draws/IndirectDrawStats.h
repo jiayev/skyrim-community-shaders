@@ -71,10 +71,7 @@ namespace DCLF
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;
-		// FadeStateCS's write-back: the frames whose changes were lost and sent again whole (since the start), the change
-		// buffer's capacity, the fade roots listed.
-		std::uint64_t fadeChangesLost = 0;
-		std::uint32_t fadeChangeCapacity = 0, fadeRoots = 0;
+		std::uint32_t fadeRoots = 0;  // the fade roots listed
 		// Persistent resident draws (drawcall-limit-fix.md): the colour region's inputs, sequences, pairs at stable record
 		// slots and entries it cannot draw (last epoch); new region versions, resyncs, and CS_DCLF_RESIDENT_DRAW_PARITY's
 		// counts, since the start.

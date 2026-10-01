@@ -15,10 +15,8 @@ cbuffer FadeStateConstants : register(b0)
 	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
-	// RWByteAddressBuffer: the write-back roots' changes (Records.h, FadeChange) after a 16-byte header whose first word counts
-	// the appends and whose second is the frame they are from; the capacity in changes.
-	uint ChangesIndex;
-	uint ChangeCapacity;
+	uint Padding7;
+	uint Padding8;
 	uint VisibilityIndex;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 	uint Padding1;
 	uint Padding2;
@@ -91,11 +89,11 @@ struct FadeFrame
 	uint Padding;
 	float4 Divisors[4];
 	// The pass's per-frame values (the pass is prepared ahead of the commit that writes this row): the root slots, the scene
-	// frame, the parity log's first root (~0u: none), and 1 to append every write-back root this frame (after an overflow).
+	// frame and the parity log's first root (~0u: none).
 	uint RootCount;
 	uint SceneFrame;
 	uint LogBase;
-	uint WriteAll;
+	uint Reserved;
 };
 
 struct FadeLogEntry
@@ -126,9 +124,6 @@ static const uint kFadeRootOther = 3;
 static const uint kFadeRootBitsShift = 8;
 static const uint kFadeRootTreeLod = 1u << 16;
 static const uint kFadeRootTreeThresholds = 1u << 17;
-static const uint kFadeRootWriteBack = 1u << 19;
-static const uint kFadeChangeHeaderBytes = 16;
-static const uint kFadeChangeBytes = 64;
 static const uint kObjectFadeNodeRow = 13;
 static const uint kObjectSunEntryRow = 15;
 static const uint kNoObject = 0xFFFFFFFFu;
@@ -490,11 +485,6 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 	const uint index = dispatchID.x;
 	StructuredBuffer<FadeFrame> frames = ResourceDescriptorHeap[FrameIndex];
 	F = frames[0];
-	// The changes' frame stamp, which the feedback drain reads from each copy (a frame missing between copies lost its changes).
-	if (index == 0 && ChangesIndex != 0) {
-		RWByteAddressBuffer changes = ResourceDescriptorHeap[ChangesIndex];
-		changes.Store(4, F.SceneFrame);
-	}
 	// The dispatch covers every slot the buffers hold; the frame row's count ends it.
 	if (index >= F.RootCount)
 		return;
@@ -525,23 +515,6 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		state.Verdict = OnVisible(state, root, centre);
 	state.Frame = F.SceneFrame;
 	states[index] = state;
-	// A write-back root's node follows (SceneStore::ApplyFadeChanges): what the engine's other readers see changed.
-	if ((root.Bits & kFadeRootWriteBack) != 0 && ChangesIndex != 0) {
-		const bool changed = before.CurrentFade != state.CurrentFade || ((before.Flags ^ state.Flags) & kFadeFlagFadedIn) != 0 ||
-		                     ((before.Levels ^ state.Levels) & 0xFFFFu) != 0 || before.Blend != state.Blend || before.AmountFade != state.AmountFade;
-		if (changed || F.WriteAll != 0) {
-			RWByteAddressBuffer changes = ResourceDescriptorHeap[ChangesIndex];
-			uint slot;
-			changes.InterlockedAdd(0, 1, slot);
-			if (slot < ChangeCapacity) {
-				const uint offset = kFadeChangeHeaderBytes + slot * kFadeChangeBytes;
-				changes.Store4(offset, uint4(index, 0, 0, 0));
-				changes.Store4(offset + 16, uint4(state.Flags, asuint(state.CurrentFade), asuint(state.SnapRadius), asuint(state.LastVisible)));
-				changes.Store4(offset + 32, uint4(asuint(state.AmountFade), asuint(state.Metric), asuint(state.PreviousMetric), asuint(state.Blend)));
-				changes.Store4(offset + 48, uint4(state.Levels, state.Generation, state.Verdict, state.Frame));
-			}
-		}
-	}
 	if (F.LogBase != 0xFFFFFFFFu && index >= F.LogBase && index - F.LogBase < 64u) {
 		RWStructuredBuffer<FadeLogEntry> log = ResourceDescriptorHeap[LogIndex];
 		FadeLogEntry entry;

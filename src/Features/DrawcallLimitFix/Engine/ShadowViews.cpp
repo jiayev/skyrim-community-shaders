@@ -26,13 +26,13 @@ namespace DCLF
 
 	const char* ShadowRejectName(ShadowReject a_reason)
 	{
-		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only" };
+		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only", "decal-point-light" };
 		static_assert(std::size(kNames) == static_cast<std::size_t>(ShadowReject::Count));
 		const auto index = static_cast<std::size_t>(a_reason);
 		return index < std::size(kNames) ? kNames[index] : "?";
 	}
 
-	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
+	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu)
 	{
 		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
 		if (!lighting || !a_geometry)
@@ -43,9 +43,9 @@ namespace DCLF
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
 		const bool decalLike = decal && (flags & Bit(18));
 		if (decal && !(decalLike && (flags & Bit(32)) && blended))
-			return ShadowReject::DecalNoZWrite;
+			return decalLike ? ShadowReject::DecalNoZWrite : ShadowReject::DecalPointLight;
 		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(lighting->material);
-		const float fade = lighting->fadeNode ? const_cast<RE::BSFadeNode*>(lighting->fadeNode)->GetRuntimeData().currentFade : 1.0f;
+		const float fade = lighting->fadeNode && !a_fadeOnGpu ? const_cast<RE::BSFadeNode*>(lighting->fadeNode)->GetRuntimeData().currentFade : 1.0f;
 		if (material && fade * material->materialAlpha < 1.0f)
 			return ShadowReject::Faded;
 		if (flags & 0x8004ull)
