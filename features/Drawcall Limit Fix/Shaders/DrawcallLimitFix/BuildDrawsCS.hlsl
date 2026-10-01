@@ -54,7 +54,46 @@ cbuffer BuildDrawsConstants : register(b0)
 	uint PipelineRowStride;
 	uint PipelineRowsAddressLo;
 	uint PipelineRowsAddressHi;
+	// StructuredBuffer of 256-byte object records (DCLFObjects.hlsli, BindlessObject): an input's bound, sun entry and fade
+	// node are its record's (a move rewrites the record, never the inputs).
+	uint ObjectsIndex;
+	// The depth segment's first phase: StructuredBuffer<FadeRootStatic> and StructuredBuffer<FadeNodeState> (FadeStateCS.hlsl;
+	// Records.h). An input under an owned root (kFadeRootOwned) is dropped while its root's OnVisible stops. 0 elsewhere.
+	uint FadeRootsIndex;
+	uint FadeStatesIndex;
 }
+
+// FadeStateCS.hlsl's rows, as Records.h lays them out.
+struct FadeNodeState
+{
+	uint Flags;
+	float CurrentFade;
+	float SnapRadius;
+	int LastVisible;
+	float AmountFade;
+	float Metric;
+	float PreviousMetric;
+	float Blend;
+	uint Levels;
+	uint Generation;
+	uint Verdict;
+	uint Frame;
+};
+struct FadeRootStatic
+{
+	FadeNodeState Initial;
+	float Radius;
+	float FadeAmount;
+	float NearDistance;
+	float FarDistance;
+	uint Object;
+	uint Bits;
+	float LodScale;
+	uint Generation;
+};
+static const uint kFadeRootOwned = 1u << 18;
+static const uint kFadeVerdictServiced = 1u << 2;
+static const uint kFadeVerdictDrawn = 1u << 3;
 
 // The execution's values, from the latch (BuildDrawsLatch): read once per thread at the top of main. The
 // first three words of the latch are this dispatch's own indirect arguments.
@@ -104,6 +143,21 @@ static const uint kShadowVolumeBytes = 224;
 static float4 FadeEye;
 // The depth segment: the tree height test's base and limit (kObjectHeightTest); the limit is +infinity when it is off.
 static float2 TreeHeight;
+
+// The object record's rows the culling reads (LightingConstants.h, BindlessObject): the fade node's centre, the world bound,
+// the sun entry's sphere.
+struct ObjectRecordRows
+{
+	float4 rows[16];
+};
+static const uint kObjectFadeNodeRow = 13;
+static const uint kObjectBoundRow = 14;
+static const uint kObjectSunEntryRow = 15;
+float4 ObjectRow(uint a_object, uint a_row)
+{
+	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
+	return objects[a_object].rows[a_row];
+}
 
 void LoadLatch()
 {
@@ -257,6 +311,9 @@ bool VolumetricOnly() { return (CullFlags & 0x800) != 0; }
 // A view of the sun: an input whose entry is outside the sun's full-frustum processes is none of its casters
 // (IndirectDraws.cpp: kCullSunEntry).
 bool SunEntry() { return (CullFlags & 0x1000) != 0; }
+// Skylighting's size test, for its occlusion map's view (IndirectDraws.cpp: kCullMinRadius): a bound radius of 32 or less draws
+// nothing, as Skylighting::OcclusionTechnique has it.
+bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 
 uint2 HzbBaseSize() { return uint2(HzbSizePacked & 0xFFFF, HzbSizePacked >> 16); }
 float2 HzbUvScale() { return float2(HzbUvScalePacked & 0xFFFF, HzbUvScalePacked >> 16) / 65535.0; }
@@ -276,7 +333,6 @@ static const uint kObjectMember = 1u << 30;
 static const uint kObjectFadeTest = 1u << 27;
 // The object's fade root has faded out (Records.h): nothing of it is drawn, but its frustum stamp is still written, so the
 // feedback keeps servicing the root and it can fade back in.
-static const uint kObjectFadedOut = 1u << 17;
 // A resident tree (Records.h): phase 1 drops it where BSTreeNode::OnVisible's height test would.
 static const uint kObjectHeightTest = 1u << 28;
 // A volumetric-only caster (Records.h), drawn only by the views of the volumetric lighting copy.
@@ -548,14 +604,14 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		uint sunScratch;
 		RWByteAddressBuffer sunCount = ResourceDescriptorHeap[CountIndex];
 		sunCount.InterlockedAdd(kCountSunTested, 1, sunScratch);
-		const float4 sunBound = asfloat(inputs.Load4(inputOffset + 16));
+		const float4 sunBound = ObjectRow(objectIndex, kObjectBoundRow);
 		if (!InSunCascades(sunBound.xyz, sunBound.w)) {
 			objectWord |= kObjectSunMiss;
 			sunCount.InterlockedAdd(kCountSunMissed, 1, sunScratch);
 		}
 	}
 	if (LocalShadowOffset != 0) {
-		const float4 bound = asfloat(inputs.Load4(inputOffset + 16));
+		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
 		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
 	}
 	const bool drawable = (input.w & kInputDrawable) != 0;
@@ -568,7 +624,9 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		return;
 	// The sun's entry rule: the input's entry sphere (its fade row, IndirectDraws.cpp: SetSunEntryRow) outside every full-frustum
 	// process of the frame.
-	if (SunEntry() && OutsideSunEntry(asfloat(inputs.Load4(inputOffset + 48))))
+	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow)))
+		return;
+	if (MinRadius() && ObjectRow(objectIndex, kObjectBoundRow).w <= 32.0)
 		return;
 
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
@@ -584,7 +642,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		bool culled = !drawable;
 		if (drawable && CullMode() != 0) {
 			count.InterlockedAdd(kCountDecalsTested, 1, scratch);
-			const float4 bound = asfloat(inputs.Load4(inputOffset + 16));
+			const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);
 			culled = Culled(bound.xyz, bound.w) || (CullMode() >= 2 && Occluded(bound.xyz, bound.w));
 			if (culled)
 				count.InterlockedAdd(kCountDecalsCulled, 1, scratch);
@@ -621,7 +679,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	if (phase != kPhaseColour && CullMode() != 0) {
 		// Word 2 separates "the culling rejected nothing" from "the culling did not run".
 		count.InterlockedAdd(kCountTested, 1, scratch);
-		const float4 bound = asfloat(inputs.Load4(inputOffset + 16));  // centre (world), radius
+		const float4 bound = ObjectRow(objectIndex, kObjectBoundRow);  // centre (world), radius
 		// Phase 2 has already had its frustum answer from phase 1 and only revisits occlusion.
 		frustumRejected = phase != kPhaseTwo && Culled(bound.xyz, bound.w);
 		if (frustumRejected) {
@@ -637,12 +695,31 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	bool fadeHidden = false;
 	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected) {
 		RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
+		// A member under a root DCLF owns: its root's OnVisible this frame or when last in view (FadeStateCS, which ran just
+		// before), as the engine's cull would have decided whether to go on into the children.
+		const uint fadeRoot = inputs.Load(inputOffset + 48);
+		bool ownedFade = false;
+		if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {
+			StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+			const FadeRootStatic rootRow = fadeRoots[fadeRoot];
+			ownedFade = (rootRow.Bits & kFadeRootOwned) != 0;
+			if (ownedFade) {
+				StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+				const FadeNodeState fadeState = fadeStates[fadeRoot];
+				fadeHidden = fadeState.Generation == rootRow.Generation && (fadeState.Verdict & kFadeVerdictServiced) != 0 &&
+				             (fadeState.Verdict & kFadeVerdictDrawn) == 0;
+				count.InterlockedAdd(kCountFadeTested, 1, scratch);
+				if (fadeHidden)
+					count.InterlockedAdd(kCountFadeHidden, 1, scratch);
+			}
+		}
 		// A resident under a fade root (kObjectFadeTest), which nothing on the CPU services while it is out of view: past
 		// its fade-out distance, BSFadeNode::OnVisible snaps the fade of a root that was not in view last frame to 0, and
 		// keeps it at 0 once it has, so the draw is dropped. One that was in view and drawn fades out over frames in the
 		// engine; it is drawn until the feedback has the root fading and the entry leaves residency.
-		const float4 fade = asfloat(inputs.Load4(inputOffset + 48));
-		if ((input.w & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
+		// The fade node's centre is the record's, its fade-out distance the input's (fade.w: structural).
+		const float4 fade = float4(ObjectRow(objectIndex, kObjectFadeNodeRow).xyz, asfloat(inputs.Load(inputOffset + 60)));
+		if (!ownedFade && (input.w & kObjectFadeTest) != 0 && fade.w != 0.0 && FadeEye.w != 0.0) {
 			const uint previous = frustumStamps.Load(objectIndex * 4);
 			const bool wasInView = (previous & kFrustumStampMask) == ((VisibilityStamp - 1) & kFrustumStampMask);
 			const bool wasHidden = wasInView && (previous & kFrustumFadeHidden) != 0;
@@ -658,11 +735,11 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	}
 	// BSTreeNode::OnVisible draws nothing of a tree whose root is above the frame's height limit.
 	if (phase == kPhaseOne && !frustumRejected && (input.w & kObjectHeightTest) != 0) {
-		const float3 root = asfloat(inputs.Load3(inputOffset + 48));
+		const float3 root = ObjectRow(objectIndex, kObjectFadeNodeRow).xyz;
 		fadeHidden = fadeHidden || root.z - TreeHeight.x > TreeHeight.y;
 	}
 	// A final verdict, like the frustum's: the colour segment reads it, and phase 2 never revisits it.
-	cullRejected = cullRejected || fadeHidden || (input.w & kObjectFadedOut) != 0;
+	cullRejected = cullRejected || fadeHidden;
 
 	// Whether this dispatch appends a draw for the object: past the culling, and with bindings.
 	const bool draws = !cullRejected && drawable;

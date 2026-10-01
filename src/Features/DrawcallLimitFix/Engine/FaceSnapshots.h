@@ -9,6 +9,7 @@ namespace RE
 {
 	class BSDynamicTriShape;
 	class BSFaceGenNiNode;
+	class BSGeometry;
 }
 
 namespace DCLF
@@ -35,9 +36,15 @@ namespace DCLF
 	 * Shape views retain immutable backing storage for the entire head. Returning a read slot no longer
 	 * invalidates older payloads: a writer replaces the backing when that version still has a lease.
 	 *
-	 * Records are created, rebuilt and retired by the scene walk alone (one thread at a time). The writers
-	 * find them through a fixed open-addressed table keyed by the head, and a retired record is freed only
-	 * once a morph stage has completed after its retirement - no job spans a stage's join.
+	 * Records are created and rebuilt by the scene walk alone (one thread at a time), when it writes a face shape's
+	 * record, and retired when the scene store releases the head: its last face shape left the scene (membership,
+	 * not "seen this walk"). The writers find them through a fixed open-addressed table keyed by the head, and a
+	 * retired record is freed only once a morph stage has completed after its retirement - no job spans a stage's
+	 * join.
+	 *
+	 * A publication is the event a head's shapes follow: BeginWalk names the heads it took a fresh snapshot of, and the
+	 * heads whose writer found their shapes changed (stale), so that the scene store updates their face streams in place
+	 * or writes their shapes again, without visiting them every frame.
 	 */
 	class FaceSnapshots
 	{
@@ -78,17 +85,30 @@ namespace DCLF
 
 		// ---- The scene walk (one thread at a time).
 
-		/** @brief Takes every live head's newest snapshot, and frees the records whose retirement a stage has passed. */
-		void BeginWalk();
 		/**
-		 * @brief A face shape of the walk: registers its head (or rebuilds its record when the head's shapes
+		 * @brief Takes every live head's newest snapshot, and frees the records whose retirement a stage has passed. The
+		 * heads it took a fresh snapshot of go to a_published, the ones a writer found stale (their shapes changed) to
+		 * a_stale, each once.
+		 */
+		void BeginWalk(std::vector<const RE::BSFaceGenNiNode*>& a_published, std::vector<const RE::BSFaceGenNiNode*>& a_stale);
+		/**
+		 * @brief A face shape being written: registers its head (or rebuilds its record when the head's shapes
 		 * changed) and returns the shape's positions in the head's snapshot. Empty while the head has none:
 		 * the engine then draws every shape of it.
 		 */
 		ShapeView Shape(RE::BSDynamicTriShape& a_shape, RE::BSFaceGenNiNode& a_head);
-		/** @brief Complete immutable head capture after Shape registered it in this walk. */
-		HeadView HeadSnapshot(RE::BSFaceGenNiNode& a_head);
-		/** @brief Retires the records of heads the walk did not see. */
+		/**
+		 * @brief A registered shape's positions in its head's current snapshot, without registering anything: a publication's
+		 * update of a kept face stream. Empty when the head has no record or no snapshot, or the record does not hold the shape.
+		 */
+		ShapeView View(const RE::BSGeometry* a_shape, const RE::BSFaceGenNiNode* a_head);
+		/** @brief Complete immutable head capture of the head's current snapshot. */
+		HeadView HeadSnapshot(const RE::BSFaceGenNiNode& a_head);
+		/** @brief The head's last face shape left the scene: its record is retired. */
+		void Release(const RE::BSFaceGenNiNode* a_head);
+		/** @brief Every record is retired (the scene store forgot its entries). */
+		void ReleaseAll();
+		/** @brief The walk's periodic statistics. */
 		void EndWalk();
 
 		struct Stats

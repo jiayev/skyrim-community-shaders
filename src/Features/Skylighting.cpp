@@ -399,7 +399,7 @@ enum class ShaderTechnique
 
 //////////////////////////////////////////////////////////////
 
-std::uint32_t Skylighting::OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting)
+std::uint32_t Skylighting::OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting, bool a_ignoreRadius)
 {
 	using enum RE::BSShaderProperty::EShaderPropertyFlag;
 	using enum RE::BSUtilityShader::Flags;
@@ -418,7 +418,7 @@ std::uint32_t Skylighting::OcclusionTechnique(const RE::BSLightingShaderProperty
 	const bool validOccluder = a_property->flags.any(kZBufferWrite) &&
 		a_property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
 		(a_skylighting || a_property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
-	if (!validOccluder || !(a_geometry->worldBound.radius > minOccluderRadius))
+	if (!validOccluder || (!a_ignoreRadius && !(a_geometry->worldBound.radius > minOccluderRadius)))
 		return 0;
 
 	if (a_skylighting) {
@@ -555,7 +555,22 @@ void Skylighting::RenderOcclusion()
 					precipObject = precip->lastPrecip;
 				}
 				if (precipObject) {
-					precip->SetupMask();
+					// With Drawcall Limit Fix running, its native variant of the mask, as of the sky map below: DCLF draws every
+					// occluder from its own tables, GPU-culled, so the engine's cull and registration (SetupMask) are skipped and
+					// RenderMask only sets the camera and clears the mask. DCLF draws it with the sky map, after that one's
+					// RenderMask (nothing reads the mask in between). Otherwise, or on a frame DCLF cannot draw it, the engine does.
+					auto& dclf = globals::features::drawcallLimitFix;
+					const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kPrecipitationOcclusion);
+					const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kPrecipitationOcclusion);
+					if (!dclfDraws || parity) {
+						precip->SetupMask();
+					} else {
+						// What SetupMask sets: the projection, and the accumulator's camera.
+						static REL::Relocation<void(RE::Precipitation*, RE::NiPointer<RE::NiCamera>)> computeProjection{ REL::RelocationID(25643, 26185) };
+						computeProjection(precip, precip->occlusionData.camera);
+						if (auto* accumulator = precip->occlusionData.accumulator.get())
+							accumulator->camera = precip->occlusionData.camera.get();
+					}
 					auto& effect = precipObject->GetGeometryRuntimeData().shaderProperty;
 					auto shaderProp = effect.get();
 					auto particleShaderProperty = netimmerse_cast<RE::BSParticleShaderProperty*>(shaderProp);
@@ -563,6 +578,11 @@ void Skylighting::RenderOcclusion()
 
 					globals::profiler->BeginPass("Skylighting::PrecipMask");
 					precip->RenderMask(rain);
+					if (parity) {
+						// The engine's mask, kept; then the same view again, cleared, for DCLF's.
+						dclf.CopyOcclusion(DrawcallLimitFix::kPrecipitationOcclusion, 0);
+						precip->RenderMask(rain);
+					}
 					globals::profiler->EndPass();
 				}
 
@@ -631,8 +651,8 @@ void Skylighting::RenderOcclusion()
 				// tables, GPU-culled, so the engine's cull and registration (SetupMask) are skipped and RenderMask only
 				// sets the camera and clears the map. Otherwise, or on a frame DCLF cannot draw it, the engine does.
 				auto& dclf = globals::features::drawcallLimitFix;
-				const bool dclfDraws = dclf.SkyOcclusionReady();
-				const bool parity = dclfDraws && dclf.SkyOcclusionParityFrame();
+				const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kSkyOcclusion);
+				const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kSkyOcclusion);
 				{
 					ZoneScopedN("Skylighting - Setup Projection");
 					_computeProjection(precip, precip->occlusionData.camera);
@@ -649,13 +669,11 @@ void Skylighting::RenderOcclusion()
 					precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 					if (parity) {
 						// The engine's map, kept; then the same view again, cleared, for DCLF's.
-						dclf.CopySkyOcclusion(0);
+						dclf.CopyOcclusion(DrawcallLimitFix::kSkyOcclusion, 0);
 						precip->RenderMask((RE::BSParticleShaderRainEmitter*)rain);
 					}
-					if (dclfDraws)
-						dclf.DrawSkyOcclusion();
-					if (parity)
-						dclf.CopySkyOcclusion(1);
+					// DCLF's occluders into every map it draws this frame (this one, and the precipitation mask above).
+					dclf.DrawOcclusion();
 					globals::profiler->EndPass();
 				}
 				inOcclusion = false;

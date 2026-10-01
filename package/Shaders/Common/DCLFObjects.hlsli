@@ -45,7 +45,9 @@ struct DCLFObjectRecord
 	// SSRParams.w with specular) in the word; 0 when nothing fades and MaterialData's fades are the property's.
 	float3 DCLFLodFadeNode;
 	uint DCLFLodFadeFlags;
-	uint4 DCLFReserved[2];  // to 256 bytes: a constant-buffer block a row
+	// The culling's (BuildDrawsCS): the world bound (centre, radius), and the sun entry's sphere.
+	float4 DCLFBound;
+	float4 DCLFSunEntry;
 };
 
 // The indirect draw's push data (DrawPipelines.h, kDrawPushWords). The first four words are its rows' addresses (the

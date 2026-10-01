@@ -249,6 +249,11 @@ namespace DCLF
 	 */
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out);
 
+	/** @brief The BSTreeNode a property's fade node downcasts to, and its static row and clock now; null when there is none. */
+	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out);
+	/** @brief The frame's tree clock inputs (render thread, any time after Main::Update). */
+	TreeWindFrame SampleTreeWindFrame();
+
 	/**
 	 * @brief The MTLand and MTLandLODBlend techniques (terrain) are eligible when the mtLand toggle is on - unless
 	 * Terrain Blending is on and DCLF is drawing into the frame, because that feature intercepts every

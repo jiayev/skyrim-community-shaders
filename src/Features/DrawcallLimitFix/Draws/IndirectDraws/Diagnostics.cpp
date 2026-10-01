@@ -50,9 +50,7 @@ namespace DCLF::Draws
 		if (rowsDiffer("material rows", a.materialRows, b.materialRows, sizeof(MaterialRow)) ||
 			rowsDiffer("pipeline rows", a.pipelineRows, b.pipelineRows, sizeof(PipelineRow)) ||
 			vectorDiffers("sequences", a.sequences, b.sequences) || vectorDiffers("inputs", a.inputList, b.inputList) ||
-			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || bytesDiffer("objects", a.objectRecords.At(0), a.objectRecords.Count() * sizeof(BindlessObject), b.objectRecords.At(0),
-				b.objectRecords.Count() * sizeof(BindlessObject)) ||
-			a.bones.Rows() != b.bones.Rows() || a.frameRegisters != b.frameRegisters ||
+			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || a.frameRegisters != b.frameRegisters ||
 			a.drawnChanges.size() != b.drawnChanges.size())
 			return false;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
@@ -72,13 +70,9 @@ namespace DCLF::Draws
 	{
 		FirstDifference differ{ a_difference };
 		auto vectorDiffers = [&](const char* a_name, const auto& a_lhs, const auto& a_rhs) { return differ.Vectors(a_name, a_lhs, a_rhs); };
-		// The object records by content: the worker's may be the store's.
-		if (differ.Bytes("objects", a.objects.Count() ? a.objects.At(0) : nullptr, a.objects.Count() * sizeof(BindlessObject),
-				b.objects.Count() ? b.objects.At(0) : nullptr, b.objects.Count() * sizeof(BindlessObject)))
-			return false;
 		if (vectorDiffers("constants", a.arena.Bytes(), b.arena.Bytes()) || differ.Bytes("material rows", a.materialRows.At(0), a.materialRows.Count() * sizeof(ShadowMaterialRow), b.materialRows.At(0),
 				b.materialRows.Count() * sizeof(ShadowMaterialRow)) ||
-			vectorDiffers("object records", a.objectRecord, b.objectRecord) || a.bones.Rows() != b.bones.Rows() ||
+			vectorDiffers("object records", a.objectRecord, b.objectRecord) ||
 			vectorDiffers("geometries", a.geometries.Flat(), b.geometries.Flat()))
 			return false;
 		for (std::size_t m = 0; m < a.inputList.size(); ++m) {
@@ -98,7 +92,7 @@ namespace DCLF
 {
 	std::string IndirectDraws::AsyncReport()
 	{
-		std::string text = AsyncWorker::Get().Report();
+		std::string text = AsyncWorker::Get().Report() + AsyncWorker::Get().RenderWaitReport();
 		if (auto& rows = impl->mainRows; rows.builds) {
 			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
 								"(tables {} and {} rows), {} resyncs\n",
@@ -110,6 +104,14 @@ namespace DCLF
 			text += fmt::format("[DCLF] persistent object records: {} updates, {:.1f} records rewritten an update, {} records held, {} resyncs, {} collisions; parity {} checked, {} differ{}\n",
 				store->updates, static_cast<double>(store->rewritten) / store->updates, store->records.Size(), store->resyncs, store->collisions, store->parity.checks,
 				store->parity.mismatches, store->collisions && store->parity.checks ? std::string(" <- DIFFER") : store->parity.Verdict(true));
+			std::string causes;
+			for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
+				if (store->byCause[c])
+					causes += fmt::format("{}{} {}", causes.empty() ? "" : ", ", kChangeCauseNames[c], store->byCause[c]);
+			text += fmt::format("[DCLF] object record updates by what changed: {} only placements and palettes, {} structural{}{}\n", store->streamOnly,
+				store->structural, causes.empty() ? "" : " (by cause: ", causes.empty() ? "" : causes + ")");
+			store->streamOnly = store->structural = 0;
+			store->byCause = {};
 			store->updates = store->rewritten = store->resyncs = store->collisions = 0;
 			store->parity.Reset();
 		}
@@ -160,8 +162,14 @@ namespace DCLF
 			auto& a = stats.async[i];
 			if (!a.kicked && !a.notKicked && !a.builtInline && !a.leaked)
 				continue;
-			text += fmt::format("[DCLF] async {} epochs: {} used the worker's build, {} built inline ({} not kicked, {} stale, {} late, {} failed, {} cancelled), {} dropped, {} leaked; probe: {} compared, {} differ\n",
-				kNames[i], a.used, a.builtInline, a.notKicked, a.stale, a.late, a.failed, a.cancelled, a.dropped, a.leaked, a.probeCompared, a.probeDiffer);
+			text += fmt::format("[DCLF] async {} epochs: {} used the worker's build, {} built inline ({} not kicked, {} stale ({} on the lookups), {} late, {} failed, {} cancelled), {} dropped, {} leaked; probe: {} compared, {} differ\n",
+				kNames[i], a.used, a.builtInline, a.notKicked, a.stale, a.staleLookups, a.late, a.failed, a.cancelled, a.dropped, a.leaked, a.probeCompared, a.probeDiffer);
+			if (i == kAsyncShadow && a.earlyKicked)
+				text += fmt::format("[DCLF] async shadow early: {} kicked at the end of the scene phase, {} kept at BeforeShadowMaps, {} kicked again ({} change logs, {} shared or feature data, {} other inputs)\n",
+					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
+			if (i == kAsyncColour && a.earlyKicked)
+				text += fmt::format("[DCLF] async colour early: {} kicked at EarlyPrepass, {} kept at Prepass, {} kicked again (tables' versions {}, material records {}, lookups {})\n",
+					a.earlyKicked, a.earlyKept, a.earlyRekicked, a.earlyRekickedBy[0], a.earlyRekickedBy[1], a.earlyRekickedBy[2]);
 			if (i == kAsyncZPrepass && a.kicked)
 				text += fmt::format("[DCLF] async zprepass eye: the predicted eye pair missed the captured one {} times ({} the previous eye only)\n", a.eyeMismatches, a.previousEyeMismatches);
 			a = {};
@@ -453,6 +461,11 @@ namespace DCLF
 				a_stats.sunMissed = words[kCountSunMissedWord];
 				a_stats.fadeTested = words[kCountFadeTestedWord];
 				a_stats.fadeHidden = words[kCountFadeHiddenWord];
+				if (scene) {
+					a_stats.fadeChangesLost = scene->fadeChangesLost;
+					a_stats.fadeChangeCapacity = scene->fadeChangeCapacity;
+					a_stats.fadeRoots = scene->fadeRootCount;
+				}
 				a_stats.sunCpuTested = cullReadback->sunCpuTested;
 				a_stats.sunCpuMissed = cullReadback->sunCpuMissed;
 				context->Unmap(cullReadback->count.get(), 0);
@@ -482,7 +495,7 @@ namespace DCLF
 			++readback.sunCpuTested;
 			bool inside = false;
 			for (std::size_t c = 0; c < sunCascades.size() && !inside; ++c)
-				inside = InSunCascade(sunCascades[c], input.boundCentre, input.boundRadius);
+				inside = InSunCascade(sunCascades[c], SceneStore::Get().GetTables().objects[input.objectIndex].boundCenter, SceneStore::Get().GetTables().objects[input.objectIndex].boundRadius);
 			readback.sunCpuMissed += inside ? 0 : 1;
 		};
 		if (a_payload.resident.elements)
@@ -491,6 +504,236 @@ namespace DCLF
 		for (const auto& input : a_payload.inputList)
 			sunTest(input);
 		cullReadback = std::move(readback);
+	}
+
+	namespace
+	{
+		// FUN_140438950(x, 3), as TreeWindCS.hlsl evaluates it.
+		float TreeGust(float a_x)
+		{
+			const float factors[4] = { 3.14159274f, 9.42477798f, 15.7079639f, 21.9911499f };
+			float lanes[4];
+			for (int i = 0; i < 4; ++i) {
+				float v = a_x * factors[i];
+				v = v - std::nearbyint(v * 0.159154937f) * 6.28318548f;
+				const float v2 = v * v, v3 = v2 * v;
+				lanes[i] = ((-0.166521862f * v3 + v) + 0.00819991343f * (v3 * v2) + -0.000161475939f * (v3 * v2 * v2)) * 0.25f;
+			}
+			return (lanes[3] + lanes[2]) + (lanes[1] + lanes[0]);
+		}
+
+		float TreeFastSqrt(float a_value)
+		{
+			const auto bits = std::bit_cast<std::int32_t>(a_value);
+			const float estimate = std::bit_cast<float>(static_cast<std::uint32_t>(0x5f3759df - (bits >> 1)));
+			return (1.5f - a_value * 0.5f * estimate * estimate) * estimate * a_value;
+		}
+	}
+
+	void IndirectDraws::Impl::ReadTreeWind(const std::shared_ptr<Resources>& a_resources)
+	{
+		auto* context = globals::d3d::context;
+		const auto& tables = SceneStore::Get().GetTables();
+		if (treeReadback) {
+			if (--treeReadback->framesLeft)
+				return;
+			auto readback = std::move(*treeReadback);
+			treeReadback.reset();
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (FAILED(context->Map(readback.records.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+				return;
+			const auto* bytes = static_cast<const std::byte*>(mapped.pData);
+			const auto& in = readback.inputs;
+			std::uint32_t checked = 0, paramsDiffer = 0, fadeDiffer = 0, gustDiffer = 0, gusts = 0;
+			float drift = 0.0f;
+			std::string first;
+			// The engine's clock rate against the GPU's, per node, since the last readback that saw it: by distance (within the
+			// manager's range or not) and whether the model has bones (+0xB8, the near loop's condition).
+			std::array<std::array<std::uint32_t, 4>, 4> rates{};  // [near * 2 + bones][ratio ~0, ~1, ~2, other]
+			ankerl::unordered_dense::map<const void*, std::pair<float, float>> seen;
+			for (std::size_t i = 0; i < readback.samples.size(); ++i) {
+				const auto& sample = readback.samples[i];
+				float tree[8];
+				std::memcpy(tree, bytes + i * sizeof(tree), sizeof(tree));
+				++checked;
+				const bool nodeless = sample.tree == kNodelessTree;
+				// The tree's static row, while the node is still listed under the same slot.
+				const TreeStatic* row = !nodeless && sample.tree < tables.trees.size() && tables.treeNode[sample.tree] == sample.node ? &tables.trees[sample.tree] : nullptr;
+				const float leafFrequency = nodeless ? 1.0f : row ? row->leafFrequency : tree[3];
+				if (tree[0] != 0.0f || tree[1] != in.windMagnitude || tree[3] != leafFrequency) {
+					if (paramsDiffer++ == 0 && first.empty())
+						first = fmt::format("object {} TreeParams ({}, {}, {}, {}), wind magnitude {}, leaf frequency {}", sample.object, tree[0], tree[1], tree[2], tree[3],
+							in.windMagnitude, leafFrequency);
+				}
+				const float amplitude = tree[7];
+				const float distance = nodeless ? 0.0f : TreeFastSqrt(tree[6]);
+				const float faded = std::min(std::max((1.0f - (distance - in.fadeStart) / (in.fadeEnd - in.fadeStart)) * amplitude, 0.0f), amplitude);
+				if (std::abs(faded - tree[2]) > 1e-5f * std::max(1.0f, std::abs(faded))) {
+					if (fadeDiffer++ == 0 && first.empty())
+						first = fmt::format("object {} faded amplitude {} (expected {} from amplitude {} at distance {})", sample.object, tree[2], faded, amplitude, distance);
+				}
+				if (row && row->animated && in.timerScale != 0.0f && tree[6] < in.maxDistance2 && tree[4] != row->timer * in.timerScale) {
+					++gusts;
+					const float timer = tree[4] / in.timerScale;
+					const float gust = TreeGust(in.windSpeed * timer) * row->modelAmplitude;
+					if (std::abs(gust - amplitude) > 1e-3f * std::max(1.0f, std::abs(row->modelAmplitude))) {
+						if (gustDiffer++ == 0 && first.empty())
+							first = fmt::format("object {} amplitude {} (the gust at timer {} is {})", sample.object, amplitude, timer, gust);
+					}
+					const float engineTimer = *reinterpret_cast<const float*>(static_cast<const std::byte*>(sample.node) + 0x164);
+					drift = std::max(drift, std::abs(timer - engineTimer));
+					if (const auto it = treeTimers.find(sample.node); it != treeTimers.end() && timer > it->second.second) {
+						const float ratio = (engineTimer - it->second.first) / (timer - it->second.second);
+						const auto* holder = *reinterpret_cast<const std::byte* const*>(static_cast<const std::byte*>(sample.node) + 0xF8);
+						const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
+						const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
+						const std::size_t bucket = std::abs(ratio) < 0.1f ? 0 : std::abs(ratio - 1.0f) < 0.1f ? 1 : std::abs(ratio - 2.0f) < 0.1f ? 2 : 3;
+						++rates[(tree[6] < in.maxDistance2 ? 2 : 0) + (bones ? 1 : 0)][bucket];
+					}
+					seen[sample.node] = { engineTimer, timer };
+				}
+			}
+			context->Unmap(readback.records.get(), 0);
+			treeTimers = std::move(seen);
+			logger::info("[DCLF] tree wind clock rates (engine over GPU; ~0/~1/~2/other): far {}/{}/{}/{}, far with bones {}/{}/{}/{}, near {}/{}/{}/{}, near with bones {}/{}/{}/{}",
+				rates[0][0], rates[0][1], rates[0][2], rates[0][3], rates[1][0], rates[1][1], rates[1][2], rates[1][3], rates[2][0], rates[2][1], rates[2][2], rates[2][3],
+				rates[3][0], rates[3][1], rates[3][2], rates[3][3]);
+			logger::info("[DCLF] tree wind parity: {} members checked ({} gusts); {} TreeParams, {} fades, {} gusts differ; timers {:.3f} s from the engine's own clocks at most{}{}{}",
+				checked, gusts, paramsDiffer, fadeDiffer, gustDiffer, drift, paramsDiffer || fadeDiffer || gustDiffer ? " <- TREE WIND" : " <- OK", first.empty() ? "" : "; first: ", first);
+			return;
+		}
+		auto& buffers = *a_resources->scene;
+		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || buffers.treeObjectCount != tables.treeObjects.size())
+			return;
+		// The first 64 members, each record's 32 bytes of tree values copied into one staging buffer.
+		TreeReadback readback;
+		const std::size_t count = std::min<std::size_t>(64, tables.treeObjects.size());
+		D3D11_BUFFER_DESC sourceDesc{};
+		sourceDesc.ByteWidth = static_cast<UINT>(std::uint64_t(buffers.objectCapacity) * sizeof(BindlessObject));
+		sourceDesc.Usage = D3D11_USAGE_DEFAULT;
+		sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		sourceDesc.StructureByteStride = sizeof(std::uint32_t);
+		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.objects, sourceDesc);
+		if (!source)
+			return;
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = static_cast<UINT>(count * 32);
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(globals::d3d::device->CreateBuffer(&desc, nullptr, readback.records.put())))
+			return;
+		ScopedPerfEvent event("CS DCLF: tree wind readback");
+		for (std::size_t i = 0; i < count; ++i) {
+			const auto& member = tables.treeObjects[i];
+			const auto offset = static_cast<UINT>(std::uint64_t(member.object) * sizeof(BindlessObject) + offsetof(BindlessObject, tree));
+			const D3D11_BOX box{ offset, 0, 0, offset + 32, 1, 1 };
+			context->CopySubresourceRegion(readback.records.get(), 0, static_cast<UINT>(i * 32), 0, 0, source.get(), 0, &box);
+			readback.samples.push_back({ member.object, member.tree, member.tree < tables.treeNode.size() ? tables.treeNode[member.tree] : nullptr });
+		}
+		readback.inputs = buffers.treeInputs;
+		readback.framesLeft = 3;
+		treeReadback = std::move(readback);
+	}
+
+	std::uint32_t IndirectDraws::Impl::NextFadeLog(std::uint32_t a_frame, const SceneStore::Tables& a_tables, const FadeFrame& a_inputs)
+	{
+		if (!SwitchEnabled(Switch::FadeParity) || fadeReadback || (a_frame % 30) != 0 || a_tables.fadeRoots.empty())
+			return ~0u;
+		const auto count = static_cast<std::uint32_t>(a_tables.fadeRoots.size());
+		const std::uint32_t base = fadeLogCursor < count ? fadeLogCursor : 0u;
+		fadeLogCursor = base + kFadeLogEntries;
+		FadeReadback readback;
+		readback.frame = a_frame;
+		readback.base = base;
+		readback.roots.assign(a_tables.fadeRoots.begin() + base, a_tables.fadeRoots.begin() + std::min(count, base + kFadeLogEntries));
+		readback.inputs = a_inputs;
+		fadeReadback = std::move(readback);
+		return base;
+	}
+
+	void IndirectDraws::Impl::ReadFadeLog(const std::shared_ptr<Resources>& a_resources)
+	{
+		if (!fadeReadback)
+			return;
+		auto* context = globals::d3d::context;
+		auto& readback = *fadeReadback;
+		auto& buffers = *a_resources->scene;
+		if (!readback.log) {
+			// After the depth epoch that logged: the log into a staging buffer, read three frames later.
+			if (!buffers.fadeLog || buffers.fadeLogBase != readback.base || buffers.fadeFrameNumber != readback.frame) {
+				fadeReadback.reset();
+				return;
+			}
+			constexpr UINT bytes = kFadeLogEntries * sizeof(FadeLogEntry);
+			D3D11_BUFFER_DESC sourceDesc{};
+			sourceDesc.ByteWidth = bytes;
+			sourceDesc.Usage = D3D11_USAGE_DEFAULT;
+			sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			sourceDesc.StructureByteStride = sizeof(std::uint32_t);
+			const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.fadeLog, sourceDesc);
+			D3D11_BUFFER_DESC desc{};
+			desc.ByteWidth = bytes;
+			desc.Usage = D3D11_USAGE_STAGING;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			if (!source || FAILED(globals::d3d::device->CreateBuffer(&desc, nullptr, readback.log.put()))) {
+				fadeReadback.reset();
+				return;
+			}
+			ScopedPerfEvent event("CS DCLF: fade state readback");
+			const D3D11_BOX box{ 0, 0, 0, bytes, 1, 1 };
+			context->CopySubresourceRegion(readback.log.get(), 0, 0, 0, 0, source.get(), 0, &box);
+			readback.framesLeft = 3;
+			return;
+		}
+		if (--readback.framesLeft)
+			return;
+		const auto done = std::move(*fadeReadback);
+		fadeReadback.reset();
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(done.log.get(), 0, D3D11_MAP_READ, 0, &mapped)))
+			return;
+		const auto* entries = static_cast<const FadeLogEntry*>(mapped.pData);
+		auto& p = fadeParity;
+		++p.logs;
+		for (std::uint32_t i = 0; i < done.roots.size(); ++i) {
+			const auto& entry = entries[i];
+			const auto& root = done.roots[i];
+			// Only what the pass did that frame, for the row it had.
+			if (entry.root != done.base + i || entry.after.frame != done.frame || entry.after.generation != root.generation || !root.generation)
+				continue;
+			++p.updates;
+			FadeNodeState port = entry.before;
+			std::uint32_t verdict = 0;
+			if (entry.after.verdict & kFadeVerdictInView) {
+				++p.inView;
+				verdict = FadeState::OnVisible(port, root, entry.centre, done.inputs);
+			}
+			p.serviced += (verdict & kFadeVerdictServiced) ? 1 : 0;
+			const auto differences = FadeState::Differences(port, entry.after);
+			if (differences.empty() && verdict == entry.after.verdict) {
+				++p.exact;
+				continue;
+			}
+			// Rounding: the same integers and bits, the floats within a few units in the last place (the GPU's division and
+			// square root need not round as SSE does).
+			const auto close = [](float a_a, float a_b) { return std::abs(a_a - a_b) <= 1e-5f * std::max(1.0f, std::abs(a_a)); };
+			const auto& a = entry.after;
+			const bool rounding = verdict == a.verdict && port.flags == a.flags && port.lastVisible == a.lastVisible && (port.levels & 0xFFFF) == (a.levels & 0xFFFF) &&
+			                      close(port.currentFade, a.currentFade) && close(port.snapRadius, a.snapRadius) && close(port.amountFade, a.amountFade) &&
+			                      close(port.metric, a.metric) && close(port.previousMetric, a.previousMetric) && close(port.blend, a.blend);
+			++(rounding ? p.rounding : p.differ);
+			if (!rounding && p.first.empty())
+				p.first = fmt::format("root {} (plan {}, verdict {:#x}, expected {:#x}): {}", entry.root, root.bits & kFadeRootPlanMask, a.verdict, verdict,
+					differences.empty() ? "the verdict" : differences);
+		}
+		context->Unmap(done.log.get(), 0);
+		if ((p.logs % 10) == 0) {
+			logger::info("[DCLF] fade state parity (FadeStateCS against the port): {} logs, {} root updates ({} in view, {} serviced); {} exact, {} within rounding, {} differ{}{}",
+				p.logs, p.updates, p.inView, p.serviced, p.exact, p.rounding, p.differ, p.differ ? " <- FADE STATE" : " <- OK", p.first.empty() ? "" : "; first: " + p.first);
+			p = {};
+		}
 	}
 
 	void IndirectDraws::Impl::CheckBuildParity(const std::shared_ptr<Resources>& a_resources, const MainPayload& a_payload, IndirectDraws::Stats& a_stats)
@@ -671,8 +914,8 @@ namespace DCLF
 					continue;
 				const auto* geometry = tables.objectGeometry[input.objectIndex];
 				const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-				const float center[3]{ input.boundCentre[0], input.boundCentre[1], input.boundCentre[2] };
-				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, center, input.boundRadius) & 0xFu;
+				const auto& object = tables.objects[input.objectIndex];
+				readback.expectedLocalShadows[input.objectIndex] = localShadows.MaskOf(property, object.boundCenter, object.boundRadius) & 0xFu;
 			}
 		}
 		readback.framesLeft = 3;

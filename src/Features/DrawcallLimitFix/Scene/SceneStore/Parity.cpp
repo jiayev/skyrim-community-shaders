@@ -72,8 +72,8 @@ namespace DCLF
 			g = {};
 		}
 		if (auto& sp = shadingParity; sp.frames) {
-			text += fmt::format("[DCLF] shading resample: {:.1f} slots watched, {:.1f} LOD fade events, {:.1f} resampled a frame; parity {} checks, {} slots compared, {} changed unsampled{}{}\n",
-				static_cast<double>(sp.watched) / sp.frames, static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks, sp.slots, sp.missing,
+			text += fmt::format("[DCLF] shading resample: {:.1f} slots watched, {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} resampled a frame; parity {} checks, {} slots compared, {} changed unsampled{}{}\n",
+				static_cast<double>(sp.watched) / sp.frames, static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks, sp.slots, sp.missing,
 				sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first);
 			sp = {};
 		}
@@ -84,10 +84,11 @@ namespace DCLF
 		}
 		if (auto& t = delta; t.walks) {
 			const double n = t.walks;
-			text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, fade {:.1f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), settling {:.1f}, lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up ({:.2f} at attach), {:.1f} entries classified again\n",
+			text += fmt::format("[DCLF] scene delta: {} walks ({} full), evaluated {:.0f}/frame (max {}; per-frame {:.0f}, of them {:.0f} kept by the light path and {:.0f} moved by it; pending {:.0f}, fade {:.1f}, property {:.1f}, node {:.1f}, sun entry node {:.1f}, geometry {:.1f}), settling {:.1f}, lapsed {:.0f}, {:.0f} live slots; events per frame: {:.1f} property, {:.1f} node; {:.2f} inputs re-read changed; switch events {:.2f}/frame: {:.2f} changed, {:.2f} caught up ({:.2f} at attach), {:.1f} entries classified again; face publications {:.1f}/frame: {:.1f} streams updated in place, {:.2f} shapes written\n",
 				t.walks, t.full, t.evaluated / n, t.evaluatedMax, t.perFrame / n, t.kept / n, t.moved / n, t.pending / n, t.fade / n, t.property / n, t.node / n, t.roots / n,
 				t.geometryDirty / n, t.settling / n, t.restored / n, t.live / n, t.propertyEvents / n, t.nodeEvents / n, t.reread / n,
-				t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, t.switchReclassified / n);
+				t.switchEvents / n, t.switchChanges / n, t.switchCatchUps / n, t.attachCatchUps / n, t.switchReclassified / n, t.facePublished / n, t.faceUpdated / n,
+				t.faceWritten / n);
 			if (rootMotion.size() > (1u << 16))
 				rootMotion.clear();
 			t = {};
@@ -107,6 +108,10 @@ namespace DCLF
 		// difference): the index map is not part of the tables, so it is kept too.
 		const auto savedGeometryIndex = geometryIndex;
 		const auto savedRefreshed = refreshedGeometry;
+		// The face regions likewise: the streams that hold them are the slot tables'.
+		const auto savedFaceRegions = faceRegions;
+		const auto savedFaceRegionFree = faceRegionFree;
+		const auto savedFaceRegionTop = faceRegionTop;
 		// What the delta walk evaluated (BuildFullOrder below overwrites scheduledWalk), for the stale verdicts' report.
 		ankerl::unordered_dense::set<const RE::BSGeometry*> evaluated;
 		for (const auto& [geometry, entry] : tracked)
@@ -120,6 +125,9 @@ namespace DCLF
 		denseWalk = false;
 		geometryIndex = savedGeometryIndex;
 		refreshedGeometry = savedRefreshed;
+		faceRegions = savedFaceRegions;
+		faceRegionFree = savedFaceRegionFree;
+		faceRegionTop = savedFaceRegionTop;
 		const Tables dense = std::move(tables);
 		tables = slots;
 		objectStamp = savedStamp;

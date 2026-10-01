@@ -12,6 +12,7 @@ namespace DCLF
 	{
 		JoinPlacements();
 		tracked.clear();
+		ClearFaceShapes();
 		++trackedLayout;
 		sceneIdentity.Reset();
 		categoryNodes.clear();
@@ -31,6 +32,7 @@ namespace DCLF
 		memberDecalsChanged = true;
 		fadeChanged.clear();
 		fadeDependents.clear();
+		fadeRootOwned.clear();
 		propertyChanged.clear();
 		nodeChanged.clear();
 		dirtyRoots.clear();

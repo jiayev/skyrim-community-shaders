@@ -36,9 +36,15 @@ namespace DCLF
 	 * class of delay as a pipeline still compiling, and never a hole: the native loop is only told to
 	 * withhold what DCLF has drawn).
 	 *
-		 * `generation` changes whenever an entry a build may have read changes its value (a descriptor evicted
-		 * and re-imported, the pipeline set recreated, the tables reset); a payload built against an older
-	 * generation is not committed.
+	 * `generation` changes whenever an entry a main-pass build may have read changes its value (a descriptor evicted
+	 * and re-imported, the pipeline set recreated, the tables reset); a payload built against an older generation is
+	 * not committed. `shadowGeneration` is the same for what a shadow build reads (the shadow textures, slots and
+	 * pipelines, the null texture and the samplers), so the main pass's material churn does not stale its jobs.
+	 *
+	 * An epoch refreshes the lookups after it has taken its worker's build (which read them as they were at the kick),
+	 * or before it builds inline: what changed since reaches the next build. The main pass's kicks refresh them first,
+	 * outside an epoch (a view never imported is asked for again inside one); the shadow kick takes them as the last
+	 * shadow epoch left them, unless shadowRefreshDue says they are behind (a reset, a recreated pipeline set).
 	 */
 	struct Lookups
 	{
@@ -78,15 +84,6 @@ namespace DCLF
 			std::pair<const RE::BSShaderMaterial*, std::uint32_t> key{};
 			std::array<std::uint32_t, kTextureSlots> textureIndex{};  // descriptor heap indices; kNone where unresolvable
 			std::array<std::shared_ptr<const void>, kTextureSlots> textureOwners{};  // pins exact imports through this slot incarnation
-			struct AlternateTexture
-			{
-				ID3D11ShaderResourceView* view = nullptr;
-				std::uint32_t index = kNone;
-				std::shared_ptr<const void> owner;
-			};
-			// The character-light render target alternates in t11. Keep exactly its
-			// other live view; this is a semantic owner, not an age-based cache.
-			AlternateTexture alternateCharacterLight;
 			std::shared_ptr<const void> bindingBlock;  // immutable ORG ownership root for this record version
 			bool resolved = false;
 			// What textureIndex was resolved from, so an unchanged material is not resolved again.
@@ -103,6 +100,8 @@ namespace DCLF
 
 		std::vector<Pipeline> pipelines;
 		std::vector<Material> materials;
+		// Parallel to materials: each entry's version (Material::version), compact for the builds' scans over every pair.
+		std::vector<std::uint32_t> materialVersions;
 		// The sampler heap index per (address mode, filter mode) of the engine's sampler table: all of them,
 		// resolved once (GpuTextures::Sampler), kNone where the engine has no state.
 		std::array<std::uint32_t, 4 * 5> samplers;
@@ -145,6 +144,8 @@ namespace DCLF
 		std::uint32_t versionCounter = 0;
 		std::uint32_t NextVersion() { return ++versionCounter; }
 		std::uint32_t generation = 0;
+		std::uint32_t shadowGeneration = 0;
+		bool shadowRefreshDue = true;
 
 		Lookups() { samplers.fill(kNone); }
 

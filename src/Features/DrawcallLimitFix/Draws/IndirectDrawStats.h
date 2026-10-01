@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <string>
 
+#include "Features/DrawcallLimitFix/Scene/Records.h"
+
 namespace DCLF
 {
 	/** @brief Why an object candidate was not drawn by an epoch (IndirectDrawStats::skipped). */
@@ -69,6 +71,10 @@ namespace DCLF
 		// The fade test (kObjectFadeTest), sampled likewise: resident inputs the depth segment's first phase found in the
 		// frustum under a fade root, and those it dropped past their fade-out distance.
 		std::uint32_t fadeTested = 0, fadeHidden = 0;
+		// FadeStateCS's write-back: the frames whose changes were lost and sent again whole (since the start), the change
+		// buffer's capacity, the fade roots listed.
+		std::uint64_t fadeChangesLost = 0;
+		std::uint32_t fadeChangeCapacity = 0, fadeRoots = 0;
 		// Persistent resident draws (drawcall-limit-fix.md): the colour region's inputs, sequences, pairs at stable record
 		// slots and entries it cannot draw (last epoch); new region versions, resyncs, and CS_DCLF_RESIDENT_DRAW_PARITY's
 		// counts, since the start.
@@ -106,6 +112,13 @@ namespace DCLF
 			std::uint32_t failed = 0;      // the job threw
 			std::uint32_t cancelled = 0;
 			std::uint32_t stale = 0;       // the job's inputs differed from the epoch's
+			std::uint32_t staleLookups = 0;  // of which the lookups' generation (a refresh between kick and epoch)
+			// The colour build kicked early (at EarlyPrepass, behind the Z-prepass's): kept at Prepass, or kicked again because
+			// RefreshFrameConstants or the lookups changed what it read.
+			std::uint32_t earlyKicked = 0, earlyKept = 0, earlyRekicked = 0;
+			// Why: the colour build's by (tables' versions, material records, lookups); the shadow build's by (change logs, CS's
+			// shared or feature data, the other inputs).
+			std::array<std::uint32_t, 3> earlyRekickedBy{};  // the tables' versions, the material records, the lookups
 			std::uint32_t dropped = 0;     // jobs discarded without an epoch to serve
 			std::uint32_t leaked = 0;      // jobs still pending at Present (a defect)
 			std::uint32_t probeCompared = 0;
@@ -159,11 +172,12 @@ namespace DCLF
 		double inputsMs = 0.0;             // of which building (per mode) and uploading the inputs
 		double blocksMs = 0.0;             // of which the view's constant blocks and their uploads
 		double executeMs = 0.0;            // of which the graph's own execution (compile, prepare, record)
-		// Skylighting's occlusion map (ExecuteSkyOcclusion), per report interval.
-		std::uint32_t skyDrawn = 0;        // maps DCLF drew
-		std::uint32_t skyNotReady = 0;     // draws asked for that it could not make
-		std::uint32_t skyInputs = 0;       // occluders, last map
-		double skyMs = 0.0;                // render thread, its epoch
+		// The occlusion maps (ExecuteOcclusion), per occlusion view and report interval.
+		std::array<std::uint32_t, kOcclusionViews> occlusionDrawn{};     // maps DCLF drew
+		std::array<std::uint32_t, kOcclusionViews> occlusionNotReady{};  // draws asked for that it could not make
+		std::array<std::uint32_t, kOcclusionViews> occlusionInputs{};    // occluders, last map
+		double occlusionMs = 0.0;                                          // render thread, their epochs
+		std::uint32_t occlusionEpochs = 0;
 	};
 
 	inline constexpr std::array<const char*, 8> kEpochPartNames{

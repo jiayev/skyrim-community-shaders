@@ -12,6 +12,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
 namespace DCLF
@@ -116,10 +117,15 @@ namespace DCLF
 		const std::vector<const RE::BSGeometry*>& StoodInMembers() const { return frameVisible; }
 		/** @brief The hole test (IndirectDraws::PublishClaims): a stood-in member the colour epoch did not draw. */
 		void CountHole() { ++cutStats.holes; }
+		/**
+		 * @brief Render thread (SceneStore, a member's residency dropped): the geometry's entry is walked again (Cut::walk) until
+		 * the next frame says whether it still needs it.
+		 */
+		void NoteMemberLost(const RE::BSGeometry* a_geometry);
+		/** @brief Render thread: every residency ended (SceneStore::EndAllResidency): every entry walked until the next snapshot. */
+		void NoteAllMembersLost();
 		/** @brief Render thread, after the registration jobs: the decode of the completed feedback frames, on the worker. */
 		void KickFeedbackDecode();
-		/** @brief Render thread, before the decode's kick: the roots the last decode found faded out or back in, onto their members. */
-		void ApplyFadeChanges();
 		/**
 		 * @brief After the colour epoch, render thread: admission by readiness. An entry is admitted, and left out of the
 		 * engine's cull from the next frame on, once the colour build draws every DCLF member it shows (a_drawn), in view or
@@ -129,9 +135,16 @@ namespace DCLF
 		 */
 		void Admit(const std::function<bool(const RE::BSGeometry*)>& a_drawn, const std::vector<const RE::BSGeometry*>& a_newlyDrawn);
 
+		/**
+		 * @brief Any thread from the full-frustum cull to the frame's end (a list process's AppendVirtual, the shadow lights' registrations): whether the geometry is DCLF's to draw, so the engine's cull does not
+		 * hand it to the registration (leaf exclusion). Owned: bound by scene membership and drawn by the colour build (the
+		 * claims). Wherever the engine still culls (an entry not stood in for: actors, a LOD cross-fade), its members are
+		 * left out here.
+		 */
+		bool Owned(const RE::BSGeometry& a_geometry) const;
 		void Report(std::uint32_t a_frame, std::uint32_t a_interval);
-		/** @brief At Present, render thread: the frame's feedback decode is joined (the next frame's update reads what it wrote). */
-		void EndFrame() { JoinFeedback(); }
+		/** @brief At Present, render thread: a finished feedback decode's results are applied (polled, never waited for). */
+		void EndFrame() { PollFeedback(); }
 
 	private:
 		struct Cut;
@@ -232,10 +245,26 @@ namespace DCLF
 		static bool ServiceTreeState(RE::NiAVObject* a_node, const RE::NiCamera& a_camera);
 		/** @brief The decode (worker): one frame's feedback, applied to the entries stood in for in that frame. */
 		void ConsumeFeedback(std::uint32_t a_stamp, std::uint32_t a_objects, const std::uint32_t* a_words, const std::shared_ptr<void>& a_tag);
-		/** @brief Render thread, before the list jobs: the last decode job is done (it wrote the nodes they read). */
-		void JoinFeedback();
+		/** @brief The decode (worker): one frame's fade changes, kept for ApplyFadeChanges (an overflow noted). */
+		void TakeFadeChanges(std::uint32_t a_appended, std::uint32_t a_held, const FadeChange* a_changes);
+		/**
+		 * @brief Render thread, while nothing reads the fade nodes (after the full-frustum cull, at Present): a finished decode's
+		 * results onto the nodes (its service of the mixed roots, FadeStateCS's changes for the write-back roots). One still
+		 * running is left for the next poll: nothing waits, and no decode is kicked while one is out.
+		 */
+		void PollFeedback();
+		/** @brief The decode (worker): a mixed root's service, run on a copy of its node; the state is applied by PollFeedback. */
+		struct ServiceWrite
+		{
+			RE::NiAVObject* root = nullptr;  // held by its frame's tag until applied
+			FadeNodeState state;
+		};
+		std::vector<ServiceWrite> serviceWrites;
+		std::atomic<bool> decodeReady{ false };  // the decode job's last store: its results may be applied
 		/** @brief Render thread, after the full-frustum cull: this frame's preconditions, and a new snapshot's plans. */
 		void PrepareFrame();
+		/** @brief CS_DCLF_FADE_PARITY, after PrepareFrame: the fade port against the engine's functions (FadeState::CheckPort). */
+		void CheckFadePort();
 		/** @brief The list process's index among the scene lists', or -1 (any other process sharing the vtable). */
 		int SlotOf(const RE::NiCullingProcess* a_process) const;
 		/**
@@ -243,13 +272,6 @@ namespace DCLF
 		 * have done, done without traversing it (the class comment). False: the engine's Process1 runs as usual.
 		 */
 		bool StandIn(int a_slot, RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg);
-		/**
-		 * @brief A list process's AppendVirtual, job thread: whether the geometry is DCLF's to draw, so the engine's cull does not
-		 * hand it to the registration (leaf exclusion). Owned: bound by scene membership and drawn by the colour build (the
-		 * claims). Wherever the engine still culls (an entry not stood in for: actors, a LOD cross-fade), its members are
-		 * left out here.
-		 */
-		bool Owned(const RE::BSGeometry& a_geometry) const;
 
 		/**
 		 * @brief The snapshot's eligible entries, as the list jobs read them. Rebuilt on the render thread before the jobs
@@ -284,6 +306,16 @@ namespace DCLF
 			std::vector<const RE::NiAVObject*> roots;         // per candidate entry index
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> eligible;  // root -> entry index, plan not Rejected
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
+			std::vector<std::uint8_t> mixed;                  // per entry index: some member is the engine's (drawn from the node)
+			// Per entry index: the decode services its root (an admitted fade entry with engine-drawn parts, whose node the engine
+			// reads in its own draws). A fade entry without is written back from FadeStateCS (kFadeRootWriteBack), and a plain
+			// one needs nothing (kAccumulated has one reader, the tree clock). Written by SyncFadeOwnership between the jobs.
+			std::vector<std::uint8_t> decode;
+			// Per entry index: the stand-in walks it (its bound test and its members): it has engine-drawn members to hand to
+			// the registration, or a member shown but not bound (handed over until it is). Any other admitted entry is left
+			// to the GPU whole. Kept by events (RefreshWalk): a new snapshot, a member's binding lost (NoteMemberLost, then
+			// the next frame), a member newly drawn.
+			std::vector<std::uint8_t> walk;
 			// The same by node, kept across snapshots with the set of DCLF members it was admitted with (MemberSignature): a root
 			// whose members changed (a decal attached, a part swapped) is admitted again only once the new ones are drawn.
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> admittedRoots;
@@ -301,7 +333,7 @@ namespace DCLF
 			std::vector<const RE::BSGeometry*> visible;
 			std::vector<std::uint32_t> pending;
 			std::vector<std::uint32_t> stoodIn;  // entries the job left to DCLF this frame, in view or not
-			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0;
+			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0, walked = 0, walkMissed = 0;
 			std::uint64_t hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
 			std::uint64_t unbound = 0;                      // DCLF geometries in view not bound yet, handed to the engine
 			std::uint64_t excluded = 0;                     // owned geometries the engine's cull reached, not handed to its registration
@@ -315,8 +347,10 @@ namespace DCLF
 			std::uint64_t skippedStale = 0, skippedPreconditions = 0;
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0;
 			std::uint64_t notSettled = 0, notAdmitted = 0, admittedNow = 0;
-			std::uint64_t members = 0, unbound = 0, hiddenSkipped = 0, localShadowed = 0;
-			std::uint64_t fadeChanges = 0;  // roots the fade service found faded out or back in
+			std::uint64_t members = 0, unbound = 0, hiddenSkipped = 0;
+			std::uint64_t maskChecked = 0, maskSun = 0, maskOther = 0;
+			std::uint64_t walked = 0;  // entries the stand-in walked (Cut::walk, or every one under the parity)
+			std::uint64_t walkMissed = 0;  // CS_DCLF_PERSISTENT_PARITY: geometries handed to the registration from entries Cut::walk leaves  // CS_DCLF_PERSISTENT_PARITY: owned members in view, and their masks not 0
 			std::uint64_t excluded = 0;     // owned geometries the engine's own cull reached and did not register (leaf exclusion)
 			std::uint64_t holes = 0;
 			std::uint64_t engineMembers = 0;  // the engine's members in view, handed to its registration
@@ -327,12 +361,18 @@ namespace DCLF
 			std::int64_t prepareTicks = 0, afterTicks = 0;
 		};
 		CutStats cutStats;
+		std::string maskFirst;  // the light mask parity's first geometry with bits
+		std::uint32_t frameSunBits = 0;  // the sun's cascade bits this frame (AfterListJobs), for CheckLightMasks
+		/** @brief CS_DCLF_PERSISTENT_PARITY, after the registration jobs: the owned members in view whose light mask is not 0. */
+		void CheckLightMasks();
 		std::vector<const RE::BSGeometry*> frameVisible;  // this frame's members in view under stood-in entries
 		std::vector<const RE::NiAVObject*> switchChanges;  // scratch: SceneStore::TakeSwitchChanges
 		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSGeometry*>> frameClaims;  // the claims, for Owned (PrepareFrame)
 		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in PrepareFrame
 		std::uint64_t frameCounter = 0;
+		std::uint32_t fadePortCursor = 0;  // CheckFadePort's next entry
+		FadeState::PortCheck fadePort;      // its counts since the report
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
 		std::shared_ptr<void> feedbackJob;                 // the worker's feedback decode (an AsyncWorker::JobHandle)
@@ -348,16 +388,27 @@ namespace DCLF
 			std::vector<RE::NiPointer<RE::NiAVObject>> roots;
 		};
 		std::vector<std::uint32_t> stoodInScratch;
-		// The fade service's verdicts (the decode, on the worker): per entry of the snapshot, whether its root has faded out, and
-		// the changes since ApplyFadeChanges; the objects marked faded out (render thread), unmarked on a new snapshot.
-		std::vector<std::uint8_t> entryFadedOut;
-		std::vector<std::pair<std::uint32_t, bool>> fadeChanges;
-		ankerl::unordered_dense::set<std::int32_t> fadedOutObjects;
+		// The fade roots DCLF services (SyncFadeOwnership: the admitted entries' with a fade plan), and whether a frame since
+		// the last applied one left every entry to the engine (their nodes are then seeded again).
+		std::vector<const RE::NiAVObject*> ownedFadeRoots;
+		bool fadeSkipped = false;
+		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries, and the entries the decode services. */
+		void SyncFadeOwnership();
+		/** @brief Cut::walk of entry a_e, from its members now (render thread, between the jobs). */
+		void RefreshWalk(std::uint32_t a_e);
+		std::vector<std::uint32_t> walkRefresh;  // entries whose member lost its binding: refreshed at the next PrepareFrame
+		bool walkEverything = false;             // CS_DCLF_PERSISTENT_PARITY: every entry walked (the hole and light mask checks)
+		// FadeStateCS's changes the decodes took (worker), applied after the join (render thread); the capacity an overflow asked for.
+		std::vector<FadeChange> fadeChangesTaken;
+		std::atomic<std::uint32_t> fadeChangesNeeded{ 0 };
+		std::uint64_t fadeChangesApplied = 0;
+		/** @brief After a join, render thread: the decoded frames' fade changes onto the write-back roots' nodes. */
+		void ApplyFadeChanges();
 		std::vector<std::shared_ptr<void>> retiredTags;  // decoded frames' tags: the worker appends, the render thread clears after the join
 		/** @brief The decode's counters (worker), read and reset by the report. */
 		struct FeedbackCounters
 		{
-			std::atomic<std::uint64_t> frames{ 0 }, stale{ 0 }, entries{ 0 }, visible{ 0 }, serviced{ 0 }, unresolved{ 0 };
+			std::atomic<std::uint64_t> frames{ 0 }, stale{ 0 }, entries{ 0 }, visible{ 0 }, serviced{ 0 }, unresolved{ 0 }, fadedOut{ 0 };
 		};
 		FeedbackCounters feedbackCounters;
 

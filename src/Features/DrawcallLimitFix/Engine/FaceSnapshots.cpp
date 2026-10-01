@@ -58,8 +58,10 @@ namespace DCLF
 			std::atomic<bool> wantsCapture{ true };
 			// A capture found a shape whose vertex count or data changed: the walk rebuilds the record.
 			std::atomic<bool> stale{ false };
-			// The walk's.
+			// The walk's: the walk that last compared the record against its head's shapes (Shape), and whether its staleness
+			// was reported (BeginWalk).
 			std::uint32_t seenWalk = 0;
+			bool staleReported = false;
 			std::uint64_t retiredAtStage = 0;
 
 		};
@@ -280,7 +282,7 @@ namespace DCLF
 		logger::info("[DCLF] face snapshots installed on the face morphing stage");
 	}
 
-	void FaceSnapshots::BeginWalk()
+	void FaceSnapshots::BeginWalk(std::vector<const RE::BSFaceGenNiNode*>& a_published, std::vector<const RE::BSFaceGenNiNode*>& a_stale)
 	{
 		auto& d = *impl;
 		++d.walk;
@@ -290,9 +292,50 @@ namespace DCLF
 				const auto previous = record->latest.exchange(record->readSlot, std::memory_order_acq_rel);
 				record->readSlot = previous & kSlotMask;
 				++d.stats.acquired;
+				a_published.push_back(record->head.get());
+			}
+			if (!record->staleReported && record->stale.load(std::memory_order_relaxed)) {
+				record->staleReported = true;
+				a_stale.push_back(record->head.get());
 			}
 		}
 		d.stats.heads = static_cast<std::uint32_t>(d.live.size());
+	}
+
+	FaceSnapshots::ShapeView FaceSnapshots::View(const RE::BSGeometry* a_shape, const RE::BSFaceGenNiNode* a_head)
+	{
+		auto& d = *impl;
+		auto* record = d.Lookup(a_head);
+		if (!record)
+			return {};
+		const auto generation = record->slotGeneration[record->readSlot];
+		if (generation == 0)
+			return {};
+		for (const auto& shape : record->shapes) {
+			if (shape.shape.get() != a_shape)
+				continue;
+			auto owner = record->storage.Acquire(record->readSlot);
+			const float* positions = owner->data() + shape.offset;
+			return { positions, shape.vertexCount, generation, std::move(owner) };
+		}
+		return {};
+	}
+
+	void FaceSnapshots::Release(const RE::BSFaceGenNiNode* a_head)
+	{
+		auto& d = *impl;
+		if (auto* record = d.Lookup(a_head)) {
+			std::erase(d.live, record);
+			d.Retire(record);
+		}
+	}
+
+	void FaceSnapshots::ReleaseAll()
+	{
+		auto& d = *impl;
+		for (auto* record : d.live)
+			d.Retire(record);
+		d.live.clear();
 	}
 
 	FaceSnapshots::ShapeView FaceSnapshots::Shape(RE::BSDynamicTriShape& a_shape, RE::BSFaceGenNiNode& a_head)
@@ -350,11 +393,11 @@ namespace DCLF
 		return {};
 	}
 
-	FaceSnapshots::HeadView FaceSnapshots::HeadSnapshot(RE::BSFaceGenNiNode& a_head)
+	FaceSnapshots::HeadView FaceSnapshots::HeadSnapshot(const RE::BSFaceGenNiNode& a_head)
 	{
 		auto& d = *impl;
 		const auto* record = d.Lookup(&a_head);
-		if (!record || record->seenWalk != d.walk || !record->recordId)
+		if (!record || !record->recordId)
 			return {};
 		const auto generation = record->slotGeneration[record->readSlot];
 		if (!generation)
@@ -377,12 +420,6 @@ namespace DCLF
 	void FaceSnapshots::EndWalk()
 	{
 		auto& d = *impl;
-		std::erase_if(d.live, [&](Impl::Record* a_record) {
-			if (a_record->seenWalk == d.walk)
-				return false;
-			d.Retire(a_record);
-			return true;
-		});
 		if (d.walk % kStatsInterval == 0 && (!d.live.empty() || d.stats.retired)) {
 			const auto stats = TakeStats();
 			const auto writer = TakeWriterStats();

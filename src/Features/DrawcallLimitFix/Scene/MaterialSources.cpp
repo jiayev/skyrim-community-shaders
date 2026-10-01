@@ -343,14 +343,32 @@ namespace DCLF::MaterialSources
 			}
 		if (!(a_passDescriptor & kCharacterLight) || !((a_live.textureWritten >> kCharacterLightSlot) & 1))
 			return false;
-		const bool changed = a_record.textures[kCharacterLightSlot] != a_live.textures[kCharacterLightSlot] ||
-		                     a_record.addressModes[kCharacterLightSlot] != a_live.addressModes[kCharacterLightSlot] ||
-		                     a_record.filterModes[kCharacterLightSlot] != a_live.filterModes[kCharacterLightSlot];
-		a_record.textures[kCharacterLightSlot] = a_live.textures[kCharacterLightSlot];
+		// The view is the frame's (CharacterLightView, the frame record's kCharacterLightRegister): the record holds none, so the
+		// render target alternating every frame changes no record.
+		const bool changed = a_record.textures[kCharacterLightSlot] != nullptr || a_record.addressModes[kCharacterLightSlot] != a_live.addressModes[kCharacterLightSlot] ||
+		                     a_record.filterModes[kCharacterLightSlot] != a_live.filterModes[kCharacterLightSlot] ||
+		                     !((a_record.textureWritten >> kCharacterLightSlot) & 1);
+		a_record.textures[kCharacterLightSlot] = nullptr;
 		a_record.addressModes[kCharacterLightSlot] = a_live.addressModes[kCharacterLightSlot];
 		a_record.filterModes[kCharacterLightSlot] = a_live.filterModes[kCharacterLightSlot];
 		a_record.textureWritten |= 1u << kCharacterLightSlot;
 		return changed;
+	}
+
+	void StripFrameViews(MaterialRecord& a_record, std::uint32_t a_passDescriptor)
+	{
+		if (a_passDescriptor & kCharacterLight)
+			a_record.textures[kCharacterLightSlot] = nullptr;
+	}
+
+	bool FrameCharacterLight(std::uint32_t a_passDescriptor)
+	{
+		return (a_passDescriptor & kCharacterLight) != 0;
+	}
+
+	ID3D11ShaderResourceView* CharacterLightView(const MaterialRecord& a_live, std::uint32_t a_passDescriptor)
+	{
+		return (a_passDescriptor & kCharacterLight) && ((a_live.textureWritten >> kCharacterLightSlot) & 1) ? a_live.textures[kCharacterLightSlot] : nullptr;
 	}
 
 	bool ApplyTextureTransform(const RE::BSShaderMaterial* a_material, MaterialRecord& a_record)

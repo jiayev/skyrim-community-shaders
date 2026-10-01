@@ -99,9 +99,9 @@ namespace DCLF
 						if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size())
 							return "no lookup";
 						const auto& lookup = lookups.materials[m];
-						return fmt::format("resolved {}, key {}, material version {}, lookup record version {}; slot alive {}, keyed {}, last used {} (frame {}), references {}", lookup.resolved,
+						return fmt::format("resolved {}, key {}, material version {}, lookup record version {}; slot alive {}, keyed {}, used {} (frame {}), references {}", lookup.resolved,
 							lookup.key == tables.materialSlotKey[m] ? "current" : "stale", m < tables.materialVersion.size() ? tables.materialVersion[m] : 0ull, lookup.recordVersion,
-							tables.materialSlots.Alive(m), tables.materialSlotKey[m].first != nullptr, m < tables.materialLastUsed.size() ? tables.materialLastUsed[m] : ~0u, frame,
+							tables.materialSlots.Alive(m), tables.materialSlotKey[m].first != nullptr, tables.MaterialUsed(m), frame,
 							tables.materialSlots.References(m));
 					}());
 			}
@@ -190,7 +190,18 @@ namespace DCLF
 			resource.Map(&mapped);
 			if (mapped) {
 				VisibilityFeedbackFrame frame{ slot.frame, slot.stamp, slot.objects, static_cast<const std::uint32_t*>(mapped), slot.tag };
+				void* fadeMapped = nullptr;
+				if (slot.fadeStaging && slot.fadeHeld) {
+					slot.fadeStaging->GetAPIResource().Map(&fadeMapped);
+					if (fadeMapped) {
+						frame.fadeAppended = *static_cast<const std::uint32_t*>(fadeMapped);
+						frame.fadeHeld = slot.fadeHeld;
+						frame.fadeChanges = reinterpret_cast<const FadeChange*>(static_cast<const std::byte*>(fadeMapped) + kFadeChangeHeaderBytes);
+					}
+				}
 				a_consume(frame);
+				if (fadeMapped)
+					slot.fadeStaging->GetAPIResource().Unmap(0, 0);
 				resource.Unmap(0, 0);
 				++decoded;
 			}
@@ -199,6 +210,16 @@ namespace DCLF
 		}
 		feedback.statDecoded.fetch_add(decoded, std::memory_order_relaxed);
 		return decoded;
+	}
+
+	void IndirectDraws::NoteFadeChangesLost(std::uint32_t a_needed)
+	{
+		if (!impl->scene)
+			return;
+		auto& scene = *impl->scene;
+		scene.fadeChangesNeeded = std::max(scene.fadeChangesNeeded, a_needed);
+		scene.fadeWriteAll = true;
+		++scene.fadeChangesLost;
 	}
 
 	IndirectDraws::FeedbackStats IndirectDraws::TakeFeedbackStats()
@@ -399,20 +420,30 @@ namespace DCLF
 			// The worker's build, if one was kicked for this epoch and it was built for exactly these inputs;
 			// otherwise the build runs here. A late or stale job is dropped (its payload is the one this
 			// build overwrites, so a late job is waited for before the inline build; counted). Joined before
-			// the lookup refresh below: the worker reads the lookups until it is done.
+			// the lookup refresh: the worker reads the lookups until it is done. The kick refreshed them for the job, so
+			// they are refreshed here after it is taken (queueing the imports only an epoch can), or before the build here.
 			const auto joinStart = std::chrono::steady_clock::now();
 			const auto joined = JoinJob(job.handle);
-			const auto lookupsStart = std::chrono::steady_clock::now();
-			stats.commitUs[0] += std::chrono::duration<double, std::micro>(lookupsStart - joinStart).count();
+			stats.commitUs[0] += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - joinStart).count();
 			auto& lookups = store.MutableLookups();
-			RefreshMaterialLookups(store, tables, in.frameNumber, store.GetProjectedTextures(), lookups);
+			auto refresh = [&] {
+				const auto lookupsStart = std::chrono::steady_clock::now();
+				RefreshMaterialLookups(store, tables, true, store.GetProjectedTextures(), lookups);
+				stats.commitUs[1] += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - lookupsStart).count();
+			};
 			in.lookupGeneration = lookups.generation;
-			stats.commitUs[1] += std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - lookupsStart).count();
 
+			// The early colour build reads the lookups until Prepass: this epoch refreshes them only when none runs (KickColourBuild
+			// refreshes them then). An inline build of this epoch refreshes them first, so it ends that build (kicked again then).
+			const bool colourReading = depthOnly && impl->colourEarly && impl->mainJobs[kAsyncColour].handle;
 			bool useAsync = false;
 			if (job.handle) {
 				useAsync = TakeJob(
-					joined, async, [&] { return SameInputs(job.inputs, in); }, [&] { impl->LogStaleMainJob(jobIndex, in); });
+					joined, async, [&] { return SameInputs(job.inputs, in); }, [&] {
+						if (job.inputs.lookupGeneration != in.lookupGeneration)
+							++async.staleLookups;
+						impl->LogStaleMainJob(jobIndex, in);
+					});
 				// The Z-prepass job's eye is a prediction: counted apart from the other reasons for staleness.
 				if (depthOnly && joined == AsyncWorker::WaitResult::Done) {
 					const bool eyeDiffers = std::memcmp(&job.inputs.eye, &in.eye, sizeof(RE::NiPoint3)) != 0;
@@ -435,10 +466,18 @@ namespace DCLF
 					});
 			} else {
 				++async.builtInline;
+				if (colourReading) {
+					impl->DropMainJob(kAsyncColour, stats);
+					impl->colourEarly = false;
+				}
+				refresh();
+				in.lookupGeneration = lookups.generation;
 				BuildMainPayload(in, tables, lookups, payload, impl->mainRows, impl->CacheFor(jobIndex), impl->SceneObjects(), impl->SceneBones(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
 			impl->CommitMainPayload(capture, blocks, payload, resources, store, stats, *frameOwners);
+			if (useAsync && !(colourReading && impl->colourEarly))
+				refresh();
 		}, frameOwners);
 		capture.Release();
 		++stats.epochs;
@@ -449,6 +488,10 @@ namespace DCLF
 		// ran most recently alternates between two unrelated populations.
 		if (ok && !depthOnly)
 			impl->ReadCullCounters(resources, stats, payload);
+		if (ok && !depthOnly && PersistentParityEnabled())
+			impl->ReadTreeWind(resources);
+		if (ok && depthOnly)
+			impl->ReadFadeLog(resources);
 		if (ok && !depthOnly && SetParityEnabled())
 			impl->CheckSetParity(resources, impl->mainPayload[1], payload);
 
@@ -463,12 +506,43 @@ namespace DCLF
 			logger::error("[DCLF] The main-pass epoch failed; the render graph is disabled");
 	}
 
+	void IndirectDraws::BeforeFrameConstants()
+	{
+		// The early colour build reads the tables RefreshFrameConstants is about to write: done first. It is usually done
+		// already (kicked ~2 ms earlier, behind the Z-prepass build); one still running is waited for, or dropped.
+		auto& job = impl->mainJobs[kAsyncColour];
+		if (!impl->colourEarly || !job.handle)
+			return;
+		if (AsyncWorker::Get().Wait(job.handle, AsyncWaitBudget()) != AsyncWorker::WaitResult::Done) {
+			impl->DropMainJob(kAsyncColour, stats);
+			impl->colourEarly = false;
+		}
+	}
+
 	void IndirectDraws::KickColourBuild()
 	{
 		// The colour epoch's inputs are final from here (RefreshFrameConstants was the frame's last writer of
 		// the tables), and the epoch itself is ~1.5-2 ms of native rendering away: the build runs on the
 		// worker in between, so the render thread only commits when the epoch comes. It replays the Z-prepass's
 		// eye and constants; without them the eye would come from a capture that does not exist yet.
+		// A build kicked at EarlyPrepass (KickZPrepassBuild) is kept when nothing it read has changed since: not the versioned
+		// values RefreshFrameConstants writes (BuildInputsWitness), nor the lookups (a refresh here, which an import the
+		// Z-prepass epoch queued may move).
+		auto& store = SceneStore::Get();
+		auto& early = impl->mainJobs[kAsyncColour];
+		if (std::exchange(impl->colourEarly, false) && early.handle) {
+			RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
+			if (store.BuildInputsWitness() == impl->colourWitness && early.inputs.lookupGeneration == store.GetLookups().generation) {
+				++stats.async[kAsyncColour].earlyKept;
+				return;
+			}
+			auto& by = stats.async[kAsyncColour].earlyRekickedBy;
+			const auto witness = store.BuildInputsWitness();
+			by[0] += (witness >> 32) != (impl->colourWitness >> 32) ? 1u : 0u;
+			by[1] += static_cast<std::uint32_t>(witness) != static_cast<std::uint32_t>(impl->colourWitness) ? 1u : 0u;
+			by[2] += early.inputs.lookupGeneration != store.GetLookups().generation ? 1u : 0u;
+			++stats.async[kAsyncColour].earlyRekicked;
+		}
 		impl->DropMainJob(kAsyncColour, stats);
 		if (!AsyncEnabled())
 			return;
@@ -476,10 +550,8 @@ namespace DCLF
 			++stats.async[kAsyncColour].notKicked;
 			return;
 		}
-		// RefreshFrameMaterials has just written this frame's t11 into the character-lit records: the lookups
-		// follow before the kick, or the epoch's own refresh would leave the job built against last frame's.
-		auto& store = SceneStore::Get();
-		RefreshKnownMaterialTextures(store, store.MutableLookups());
+		// The lookups as RefreshFrameConstants left the material records, and the job built against them.
+		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
 		impl->KickMainJob(false, nullptr, nullptr, stats);
 	}
 
@@ -500,13 +572,24 @@ namespace DCLF
 		}
 		const RE::NiPoint3 eye = camera->world.translate;
 		const RE::NiPoint3 previousEye = impl->prepassEye;
-		// The material lookups, as final as they can be made before the kick: a volatile material's textures
-		// can change every frame (the character light's t11 alternates between two render targets), and
-		// resolving them only in the epoch's own preparation bumped the lookups' generation under a job already
-		// built against them - it went stale in 290 frames of 300.
+		// The material lookups, as final as they can be made before the kick (this frame's members, their textures): the
+		// job is built against them, and the epoch refreshes them only after taking it. Resolving them in the epoch's own
+		// preparation instead bumped the lookups' generation under a job already built (a fifth of the frames stale while
+		// the camera turned).
 		auto& store = SceneStore::Get();
-		RefreshKnownMaterialTextures(store, store.MutableLookups());
+		RefreshMaterialLookups(store, store.GetTables(), true, store.GetProjectedTextures(), store.MutableLookups());
 		impl->KickMainJob(true, &eye, &previousEye, stats);
+		// The colour build too, behind it on the worker: its inputs are final from here but for what RefreshFrameConstants
+		// writes at Prepass, which first waits for it (BeforeFrameConstants) and kicks it again only when that changed what it
+		// read. Not under the bindless parity, whose builds read the eye the Z-prepass epoch captures.
+		impl->DropMainJob(kAsyncColour, stats);
+		impl->colourEarly = false;
+		if (impl->resources && impl->prepassInputs && !SwitchEnabled(Switch::BindlessParity)) {
+			impl->colourWitness = store.BuildInputsWitness();
+			impl->KickMainJob(false, nullptr, nullptr, stats);
+			impl->colourEarly = static_cast<bool>(impl->mainJobs[kAsyncColour].handle);
+			stats.async[kAsyncColour].earlyKicked += impl->colourEarly ? 1u : 0u;
+		}
 	}
 
 	void IndirectDraws::Impl::KickMainJob(bool a_depthOnly, const RE::NiPoint3* a_eye, const RE::NiPoint3* a_previousEye, IndirectDraws::Stats& a_stats)
@@ -555,6 +638,7 @@ namespace DCLF
 
 	void IndirectDraws::EndFrame()
 	{
+		AsyncWorker::Get().NoteFrame();
 		// A job kicked this frame and never joined (the epoch did not run: a load screen, a failed setup) must
 		// not outlive the frame: its inputs name this frame's tables.
 		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j) {

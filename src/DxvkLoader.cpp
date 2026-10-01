@@ -115,7 +115,8 @@ namespace DxvkLoader
 		}
 
 		// DXVK reads DXVK_DEBUG once at instance creation, so the request has to be in place before
-		// the game creates its device.
+		// the game creates its device. Opt-in (CS_GPU_CRASH_ANALYSIS=1): DXVK's hang mode serialises
+		// concurrent command recording.
 		//
 		// Not conditional on Aftermath having armed. Aftermath is Nvidia-only, but AMD's Radeon GPU
 		// Detective reads the same debug-utils labels as the [APP] half of its execution marker
@@ -149,6 +150,8 @@ namespace DxvkLoader
 				logger::info("[DXVK] DXVK_DEBUG=hang -- requesting device faults and GPU checkpoints");
 			else
 				logger::warn("[DXVK] Failed to request GPU crash analysis (error {})", ::GetLastError());
+		} else {
+			logger::info("[DXVK] GPU crash analysis off (CS_GPU_CRASH_ANALYSIS=1 requests DXVK_DEBUG=hang)");
 		}
 
 		const auto dir = GetRuntimeDir();

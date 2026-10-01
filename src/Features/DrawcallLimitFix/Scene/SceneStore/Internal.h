@@ -80,7 +80,7 @@ namespace DCLF
 			return nullptr;
 		}
 
-		// a_member: a scene member's (SceneStore's resident records), whose fades are DCLF's (kObjectFadedOut) and so not in its alpha.
+		// a_member: a scene member's (SceneStore's resident records), whose fades are DCLF's (FadeStateCS) and so not in its alpha.
 		inline ObjectShading MakeShading(const RE::BSLightingShaderProperty& a_property, const LightingDescriptors& a_descriptors, std::uint32_t a_renderFlags,
 			float& a_emissiveMult, bool a_member)
 		{
@@ -163,7 +163,13 @@ namespace DCLF
 			return a_node->GetRuntimeData().currentFade;
 		}
 
-		inline void PushFade(const RE::BSFadeNode* a_node) { fadeEvents.Push(a_node); }
+		// SceneStore::MuteFadeEvents: this thread runs the engine's fade functions on a copy of a node.
+		inline thread_local bool fadeEventsMuted = false;
+		inline void PushFade(const RE::BSFadeNode* a_node)
+		{
+			if (!fadeEventsMuted)
+				fadeEvents.Push(a_node);
+		}
 
 		inline void DrainFadeEvents(std::vector<const RE::BSFadeNode*>& a_out)
 		{
@@ -209,6 +215,23 @@ namespace DCLF
 		inline void DrainLodFadeEvents(std::vector<const void*>& a_out)
 		{
 			lodFadeEvents.Drain([&](const void* a_key) { a_out.push_back(a_key); });
+		}
+
+		/**
+		 * @brief Emittance events: the shared colours external emittance reads, when they change. A Lighting property with
+		 * kExternalEmittance has its emissiveColor pointed (FUN_141480fc0, from the cell attach FUN_1402d2f60) at its
+		 * reference's emittance source: a light's colour (TESObjectLIGH +0x118, constant), a region's emittanceColor
+		 * (TESRegion +0x40, which the cell's emittance update FUN_1402b4390 blends from the region's weather) or the sky's
+		 * colour for sky-lit movable statics (Sky +0x9c of its colours, from Sky's colour update FUN_14040ba70). Both
+		 * updates write through Sky::SetColor (0x14040d970), whose detour pushes the colour when it moved; the colour is a
+		 * key in propertyDependents (ListDependents), and RefreshFrameConstants resamples its dependents' shading as it does
+		 * for a LOD fade event. The main thread and the cell update jobs push, the render thread drains.
+		 */
+		inline EventQueue<const void*> emittanceEvents;
+
+		inline void DrainEmittanceEvents(std::vector<const void*>& a_out)
+		{
+			emittanceEvents.Drain([&](const void* a_key) { a_out.push_back(a_key); });
 		}
 
 		inline void DrainPropertyEvents(std::vector<const void*>& a_out)

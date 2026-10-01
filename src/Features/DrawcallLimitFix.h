@@ -92,19 +92,26 @@ struct DrawcallLimitFix : Feature
 	const SkipStats& GetSkipStats() const { return skipStats; }
 
 	/**
-	 * @brief Skylighting's occlusion map, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
-	 * docs/development/drawcall-limit-fix.md, "Skylighting's occlusion map, drawn by DCLF"). Render thread.
-	 * SkyOcclusionReady: DCLF draws this frame's map, so the engine's SetupMask is skipped. DrawSkyOcclusion: after
-	 * RenderMask, which set the view up and cleared the map, DCLF's occluders into it.
+	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
+	 * docs/development/drawcall-limit-fix.md, "The occlusion maps, drawn by DCLF"): Skylighting's sky map, and the
+	 * precipitation mask its hook renders first. Render thread. OcclusionReady: DCLF draws this frame's map, so the engine's
+	 * SetupMask is skipped for it. DrawOcclusion: after both maps' RenderMask, which set each view up and cleared its map,
+	 * DCLF's occluders into every map whose OcclusionReady said so, in one epoch.
 	 */
-	bool SkyOcclusionReady();
-	void DrawSkyOcclusion();
+	enum OcclusionMap : std::uint32_t
+	{
+		kSkyOcclusion = 0,            // DCLF::kOcclusionSky
+		kPrecipitationOcclusion = 1,  // DCLF::kOcclusionPrecipitation
+	};
+	bool OcclusionReady(OcclusionMap a_map);
+	void DrawOcclusion();
 	/**
-	 * @brief CS_DCLF_SKYLIGHT_PARITY=1: every 120th map is rendered both ways, the engine's first; CopySkyOcclusion(0)
-	 * keeps the engine's, CopySkyOcclusion(1) DCLF's, and the two are compared texel by texel a few frames later.
+	 * @brief CS_DCLF_SKYLIGHT_PARITY=1: every 120th frame a map is rendered both ways, the engine's first; CopyOcclusion(map, 0)
+	 * keeps the engine's before the map is cleared again, DrawOcclusion keeps DCLF's, and the two are compared texel by texel
+	 * a few frames later.
 	 */
-	bool SkyOcclusionParityFrame();
-	void CopySkyOcclusion(std::uint32_t a_stage);
+	bool OcclusionParityFrame(OcclusionMap a_map);
+	void CopyOcclusion(OcclusionMap a_map, std::uint32_t a_stage);
 
 private:
 	struct Hooks
@@ -200,7 +207,11 @@ private:
 		std::uint32_t sceneTablesFrames = 0;
 		std::uint32_t frames = 0;
 	} timing;
-	std::uint32_t skyNativeFrames = 0;  // Skylighting maps left to the engine (DCLF not ready), per report interval
+	// Per occlusion view (DCLF::kOcclusionSky, kOcclusionPrecipitation), the maps left to the engine (DCLF not ready) per
+	// report interval; and the views this frame's Ready calls said DCLF draws (DrawOcclusion's epoch draws them).
+	std::array<std::uint32_t, 2> occlusionNativeFrames{};
+	std::uint32_t occlusionWanted = 0;
+	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
 	void ReportStats(std::uint32_t a_frame);
 	static constexpr std::uint32_t kReportInterval = 300;

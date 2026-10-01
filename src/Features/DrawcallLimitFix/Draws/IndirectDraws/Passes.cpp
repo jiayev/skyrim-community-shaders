@@ -267,8 +267,9 @@ namespace DCLF::Draws
 
 	struct BuildDrawsBindings
 	{
-		org::DeclaredViewToken inputs, inputsDepth, geometries, sequences, count, hzb, visibility, frustum;
+		org::DeclaredViewToken inputs, inputsDepth, geometries, objects, sequences, count, hzb, visibility, frustum;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
+		org::DeclaredViewToken fadeRoots, fadeStates;
 	};
 
 	struct BuildDrawsFrame
@@ -304,11 +305,17 @@ namespace DCLF::Draws
 			if (resources->inputsDepth)
 				bindings.inputsDepth = a_builder.ShaderResource(resources->inputsDepth).View();
 			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
 			bindings.count = a_builder.UnorderedAccess(resources->count).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(resources->frustum).View();
+			// The depth segment's first phase reads the fade roots' state (FadeStateCS, just before it).
+			if (segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2 && resources->scene->fadeRoots) {
+				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
+				bindings.fadeStates = a_builder.ShaderResource(resources->scene->fadeStates).View();
+			}
 			// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
 			// frame's depth. Both read the same resource; what differs is where they sit relative to
 			// the build, which is why the ordering below is the whole design.
@@ -352,6 +359,7 @@ namespace DCLF::Draws
 			const bool depthInputs = (phase == 1 || phase == 2) && resources->inputsDepth;
 			constants.inputsIndex = CaptureViewIndex(a_preparation, depthInputs ? a_bindings.inputsDepth : a_bindings.inputs);
 			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
+			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
 			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
 			// The rows both segments' draws name (MainRows), at their tables' addresses as the epoch sized them.
@@ -366,6 +374,10 @@ namespace DCLF::Draws
 			// The frustum stamps: the depth segment's first phase alone tests every candidate's frustum.
 			if (resources->frustum && phase == 1)
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
+			if (phase == 1 && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
+				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
+				constants.fadeStatesIndex = CaptureViewIndex(a_preparation, a_bindings.fadeStates);
+			}
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
@@ -486,16 +498,199 @@ namespace DCLF::Draws
 		RenderGraphRuntime::Segment segment;
 	};
 
+	struct TreeWindBindings
+	{
+		org::DeclaredViewToken trees, clocks, list, records;
+	};
+
+	struct TreeWindFramePrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		TreeWindConstants constants{};
+		std::uint32_t groups = 0;
+	};
+
+	/**
+	 * @brief Tree wind (TreeWindCS.hlsl): mode 0 brings the tree clocks to this frame (once a frame, whichever epoch runs it
+	 * first), mode 1 writes the members' TreeParams and WindTimers into their records, after the epoch's uploads and ahead
+	 * of the draws that read them. Both run in every epoch that draws or uploads the scene's records.
+	 */
+	class TreeWindPass final : public org::TypedRenderGraphPass<TreeWindPass, TreeWindFramePrepared, TreeWindBindings>
+	{
+	public:
+		TreeWindPass(std::shared_ptr<SceneBuffers> a_scene, std::uint32_t a_mode) :
+			scene(std::move(a_scene)), mode(a_mode) {}
+
+		TreeWindBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			TreeWindBindings bindings{};
+			bindings.trees = a_builder.ShaderResource(scene->trees).View();
+			if (mode == 0) {
+				bindings.clocks = a_builder.UnorderedAccess(scene->treeClocks).View();
+			} else {
+				bindings.clocks = a_builder.ShaderResource(scene->treeClocks).View();
+				bindings.list = a_builder.ShaderResource(scene->treeObjects).View();
+				bindings.records = a_builder.UnorderedAccess(scene->objects).View();
+			}
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			a_out.push_back(scene->treeCommits);
+			a_out.push_back(mode);
+		}
+
+		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			TreeWindFramePrepared prepared{};
+			const std::uint32_t count = mode == 0 ? scene->treeCount : scene->treeObjectCount;
+			if (!scene->treeWind || !count)
+				return prepared;
+			prepared.program = scene->treeWind;
+			auto& constants = prepared.constants;
+			constants.mode = mode;
+			constants.treesIndex = CaptureViewIndex(a_preparation, a_bindings.trees);
+			constants.clocksIndex = CaptureViewIndex(a_preparation, a_bindings.clocks);
+			if (mode == 1) {
+				constants.listIndex = CaptureViewIndex(a_preparation, a_bindings.list);
+				constants.recordsIndex = CaptureViewIndex(a_preparation, a_bindings.records);
+			}
+			constants.count = count;
+			constants.frame = scene->treeFrame;
+			constants.treeWord = static_cast<std::uint32_t>(offsetof(BindlessObject, tree) / 16);
+			constants.inputs = scene->treeInputs;
+			prepared.groups = (count + kTreeWindGroup - 1) / kTreeWindGroup;
+			return prepared;
+		}
+
+		static void Record(const TreeWindBindings&, const TreeWindFramePrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.groups)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeWindConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.Dispatch(a_frame.groups, 1, 1);
+		}
+
+	private:
+		std::shared_ptr<SceneBuffers> scene;
+		std::uint32_t mode = 0;
+	};
+
+	/** @brief The two tree wind passes, first in an epoch's list (after its uploads, ahead of everything that reads the records). */
+	void AddTreeWindPasses(const std::shared_ptr<SceneBuffers>& a_scene, const char* a_prefix, std::uint32_t a_epoch, std::vector<org::RenderGraph::ExternalPassDesc>& a_out)
+	{
+		if (!a_scene || !a_scene->treeWind || !a_scene->trees)
+			return;
+		for (std::uint32_t mode = 0; mode < 2; ++mode)
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute(fmt::format("{}.tree-wind-{}", a_prefix, mode ? "records" : "clocks"),
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeWindPass>(a_scene, mode)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(a_epoch));
+	}
+
+	struct FadeStateBindings
+	{
+		org::DeclaredViewToken roots, states, frame, objects, log, changes;
+	};
+
+	struct FadeStatePrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		FadeStateConstants constants{};
+		std::shared_ptr<const org::LatchBlock> latch;
+		std::uint32_t groups = 0;
+	};
+
+	/**
+	 * @brief The fade roots' state (FadeStateCS.hlsl): each root's OnVisible for the main camera whenever its bound is in the
+	 * depth segment's frustum, once a frame, ahead of that segment's culling.
+	 */
+	class FadeStatePass final : public org::TypedRenderGraphPass<FadeStatePass, FadeStatePrepared, FadeStateBindings>
+	{
+	public:
+		explicit FadeStatePass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		FadeStateBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const auto& scene = *resources->scene;
+			FadeStateBindings bindings{};
+			bindings.roots = a_builder.ShaderResource(scene.fadeRoots).View();
+			bindings.states = a_builder.UnorderedAccess(scene.fadeStates).View();
+			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
+			bindings.objects = a_builder.ShaderResource(scene.objects).View();
+			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
+			bindings.changes = a_builder.UnorderedAccess(scene.fadeChanges).View();
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			a_out.push_back(resources->scene->fadeCommits);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			FadeStatePrepared prepared{};
+			const auto& scene = *resources->scene;
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			if (!scene.fadeState || !scene.fadeRootCount || !frame || !frame->latch)
+				return prepared;
+			prepared.program = scene.fadeState;
+			prepared.latch = frame->latch;
+			auto& constants = prepared.constants;
+			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
+			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
+			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
+			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
+			constants.latchIndex = frame->latch->SrvIndex();
+			constants.count = scene.fadeRootCount;
+			constants.frame = scene.fadeFrameNumber;
+			constants.logBase = scene.fadeLogBase;
+			constants.changesIndex = CaptureViewIndex(a_preparation, a_bindings.changes);
+			constants.changeCapacity = scene.fadeChangeCapacity;
+			constants.writeAll = scene.fadeWriteAllFrame ? 1u : 0u;
+			prepared.groups = (scene.fadeRootCount + kFadeStateGroup - 1) / kFadeStateGroup;
+			return prepared;
+		}
+
+		static void Record(const FadeStateBindings&, const FadeStatePrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
+				return;
+			auto constants = a_frame.constants;
+			// The depth segment's BuildDrawsLatch in this frame slot (RecordLatchedDispatch's offset 0).
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFadeStateConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+			commands.Dispatch(a_frame.groups, 1, 1);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
 	struct FeedbackBindings
 	{
-		org::ResourceBindingToken source;
-		std::vector<org::ResourceBindingToken> slots;
+		org::ResourceBindingToken source, fadeSource;
+		std::vector<org::ResourceBindingToken> slots, fadeSlots;
 	};
 
 	struct FeedbackFrame
 	{
 		int slot = -1;
-		std::uint64_t bytes = 0;
+		std::uint64_t bytes = 0, fadeBytes = 0;
 	};
 
 	/**
@@ -517,6 +712,12 @@ namespace DCLF::Draws
 			bindings.source = a_builder.CopySource(resources->frustum);
 			for (const auto& slot : resources->feedback->slots)
 				bindings.slots.push_back(a_builder.CopyDestination(slot->staging));
+			// The fade roots' changes (FadeStateCS, in the depth segment), with the stamps.
+			if (resources->scene->fadeChanges) {
+				bindings.fadeSource = a_builder.CopySource(resources->scene->fadeChanges);
+				for (const auto& slot : resources->feedback->slots)
+					bindings.fadeSlots.push_back(a_builder.CopyDestination(slot->fadeStaging));
+			}
 			return bindings;
 		}
 
@@ -535,15 +736,23 @@ namespace DCLF::Draws
 			const std::uint64_t value = feedback->fenceCounter.fetch_add(1, std::memory_order_relaxed) + 1;
 			slot.fenceValue = value;
 			slot.state.store(Resources::Feedback::Submitted, std::memory_order_release);
-			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index] {
+			auto scene = resources->scene;
+			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index, scene] {
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
 				if (feedback->slots[index]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel)) {
 					feedback->slots[index]->tag.reset();
 					feedback->statAbandoned.fetch_add(1, std::memory_order_relaxed);
+					scene->fadeCopyAbandoned.store(true, std::memory_order_release);
 				}
 			}));
 			prepared.slot = index;
 			prepared.bytes = std::uint64_t(slot.objects) * sizeof(std::uint32_t);
+			// As many changes as both the buffer and the slot hold; the header's count says whether that was all of them.
+			if (slot.fadeStaging && resources->scene->fadeChanges)
+				prepared.fadeBytes = kFadeChangeHeaderBytes + std::uint64_t(std::min(slot.fadeCapacity, resources->scene->fadeChangeCapacity)) * sizeof(FadeChange);
+			slot.fadeHeld = static_cast<std::uint32_t>(prepared.fadeBytes ? (prepared.fadeBytes - kFadeChangeHeaderBytes) / sizeof(FadeChange) : 0);
+			if (prepared.fadeBytes)
+				resources->scene->fadeCopiedFrame.store(resources->scene->fadeFrameNumber, std::memory_order_release);
 			return prepared;
 		}
 
@@ -553,6 +762,9 @@ namespace DCLF::Draws
 				return;
 			a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.slots[a_frame.slot]).GetHandle(), 0,
 				a_recording.Resolve(a_bindings.source).GetHandle(), 0, a_frame.bytes);
+			if (a_frame.fadeBytes && static_cast<std::size_t>(a_frame.slot) < a_bindings.fadeSlots.size())
+				a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.fadeSlots[a_frame.slot]).GetHandle(), 0,
+					a_recording.Resolve(a_bindings.fadeSource).GetHandle(), 0, a_frame.fadeBytes);
 		}
 
 	private:
@@ -841,16 +1053,17 @@ namespace DCLF::Draws
 		return result;
 	}
 
+	/** @brief The frame shape a shadow epoch's passes draw: the shadow views', or (a_sky) the occlusion views'. */
 	std::shared_ptr<const ShadowFrame> CurrentShadowFrame(const ShadowResources& a_resources, bool a_sky)
 	{
-		return (a_sky ? a_resources.skyFrame : a_resources.frame).load(std::memory_order_acquire);
+		return (a_sky ? a_resources.occlusionFrame : a_resources.frame).load(std::memory_order_acquire);
 	}
 
 	struct ShadowBuildBindings
 	{
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
 		std::vector<org::DeclaredViewToken> sequences, count;  // per view slot
-		org::DeclaredViewToken geometries, visibility;
+		org::DeclaredViewToken geometries, objects, visibility;
 	};
 
 	struct ShadowBuildPrepared
@@ -884,6 +1097,7 @@ namespace DCLF::Draws
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
 			}
 			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			return bindings;
 		}
@@ -904,6 +1118,7 @@ namespace DCLF::Draws
 			prepared.latch = frame->latch;
 			prepared.signature = resources->dispatchSignature->GetHandle();
 			const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
+			const auto objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			for (const auto& view : frame->views) {
 				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
@@ -914,6 +1129,7 @@ namespace DCLF::Draws
 				constants.latchIndex = frame->latch->SrvIndex();
 				constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs[view.modeIndex]);
 				constants.geometriesIndex = geometriesIndex;
+				constants.objectsIndex = objectsIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
 				// A draw's words name its material row (the table every view reads).
@@ -978,9 +1194,9 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			const std::span<const org::SrvView> noViews{};
 			ShadowPassBindings bindings{};
-			// The shadow views draw into the shadow maps, Skylighting's epoch into its occlusion map alone.
+			// The shadow views draw into the shadow maps, the occlusion epoch into the occlusion maps alone.
 			for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
-				if (resources->depth[i] && (i == kSkyDepthTarget) == sky) {
+				if (resources->depth[i] && IsOcclusionTarget(i) == sky) {
 					bindings.depthViews[i].reserve(resources->depthLayers[i]);
 					for (std::uint32_t slice = 0; slice < resources->depthLayers[i]; ++slice)
 						bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
@@ -1016,7 +1232,7 @@ namespace DCLF::Draws
 			for (std::uint32_t i = 0; i < frame->views.size(); ++i) {
 				const auto& view = frame->views[i];
 				if (!view.capacity || view.slot >= a_bindings.sequences.size() || view.target >= kShadowDepthTargets || !resources->depth[view.target] ||
-					(view.target == kSkyDepthTarget) != sky)
+					IsOcclusionTarget(view.target) != sky)
 					continue;
 				if (view.slice >= resources->depthLayers[view.target])
 					continue;
@@ -1057,7 +1273,7 @@ namespace DCLF::Draws
 				depth.stencilLoad = rhi::LoadOp::Load;
 				depth.stencilStore = rhi::StoreOp::Store;
 				begin.depth = &depth;
-				begin.debugName = a_prepared.sky ? "DCLF Skylighting occlusion" : "DCLF shadow view";
+				begin.debugName = a_prepared.sky ? "DCLF occlusion map" : "DCLF shadow view";
 			}
 			// A view's pass: its slice, the layout, the topology and its push data (its blocks) - on the command list, and on a
 			// preprocess state list, identically.
@@ -1102,6 +1318,18 @@ namespace DCLF::Draws
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), a_scene.bones);
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.geometries"), a_scene.geometries);
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
+		if (a_scene.trees) {
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-objects"), a_scene.treeObjects);
+		}
+		if (a_scene.fadeRoots) {
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-changes"), a_scene.fadeChanges);
+		}
 	}
 
 	class ShadowExtension final : public org::RenderGraph::IRenderGraphExtension
@@ -1132,6 +1360,7 @@ namespace DCLF::Draws
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
+			AddTreeWindPasses(resources->scene, "cs.dclf.shadow", epoch, a_out);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<ShadowBuildDrawsPass>(resources, false)))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -1210,6 +1439,13 @@ namespace DCLF::Draws
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(a_epoch));
 			};
+			AddTreeWindPasses(resources->scene, "cs.dclf.z", depth, a_out);
+			// The fade roots' state, before the depth segment's culling reads it.
+			if (resources->scene->fadeState && resources->scene->fadeRoots)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.fade-state",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<FadeStatePass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -1218,6 +1454,7 @@ namespace DCLF::Draws
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
 					.Epoch(depth));
+			AddTreeWindPasses(resources->scene, "cs.dclf", colour, a_out);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, colourSegment)))
 					.PreferQueue(org::QueueKind::Graphics)

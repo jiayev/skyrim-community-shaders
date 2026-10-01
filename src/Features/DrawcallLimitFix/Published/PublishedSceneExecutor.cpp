@@ -2,9 +2,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
+#include <bit>
 #include <exception>
 #include <mutex>
+#include <semaphore>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -24,44 +25,138 @@ namespace DCLF
 			std::shared_ptr<ExecutorScope> scope;
 			Task task;
 		};
-		mutable std::mutex mutex;
-		std::condition_variable changed;
-		std::atomic_bool stopping{ false };
-		std::array<std::vector<Job>, 2> queues;
-		std::array<std::size_t, 2> capacities;
-		Statistics stats;
-		State(std::size_t coordinator, std::size_t preparation) : capacities{ coordinator, preparation }
+
+		// A bounded multi-producer multi-consumer ring (Vyukov): each cell's sequence says whose turn it is, so a push and
+		// a pop are one compare-exchange on their cursor each and never wait for one another.
+		struct Ring
 		{
-			if (!coordinator || !preparation) throw std::invalid_argument("scene executor capacity must be positive");
-			queues[0].reserve(coordinator);
-			queues[1].reserve(preparation);
+			struct Cell
+			{
+				std::atomic<std::size_t> sequence;
+				Job job;
+			};
+			std::unique_ptr<Cell[]> cells;
+			std::size_t mask = 0;
+			std::size_t capacity = 0;  // the requested bound; the ring is the power of two above it
+			alignas(64) std::atomic<std::size_t> head{ 0 };  // the next push
+			alignas(64) std::atomic<std::size_t> tail{ 0 };  // the next pop
+
+			explicit Ring(std::size_t a_capacity) : capacity(a_capacity)
+			{
+				const std::size_t size = std::bit_ceil(std::max<std::size_t>(a_capacity, 2));
+				cells = std::make_unique<Cell[]>(size);
+				mask = size - 1;
+				for (std::size_t i = 0; i < size; ++i)
+					cells[i].sequence.store(i, std::memory_order_relaxed);
+			}
+			std::size_t Size() const
+			{
+				const auto pushed = head.load(std::memory_order_acquire);
+				const auto popped = tail.load(std::memory_order_acquire);
+				return pushed > popped ? pushed - popped : 0;
+			}
+			bool Push(Job&& a_job)
+			{
+				std::size_t position = head.load(std::memory_order_relaxed);
+				for (;;) {
+					if (position - tail.load(std::memory_order_acquire) >= capacity)
+						return false;
+					auto& cell = cells[position & mask];
+					const std::size_t sequence = cell.sequence.load(std::memory_order_acquire);
+					const auto difference = static_cast<std::ptrdiff_t>(sequence) - static_cast<std::ptrdiff_t>(position);
+					if (difference == 0) {
+						if (head.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+							cell.job = std::move(a_job);
+							cell.sequence.store(position + 1, std::memory_order_release);
+							return true;
+						}
+					} else if (difference < 0) {
+						return false;  // full
+					} else {
+						position = head.load(std::memory_order_relaxed);
+					}
+				}
+			}
+			bool Pop(Job& a_job)
+			{
+				std::size_t position = tail.load(std::memory_order_relaxed);
+				for (;;) {
+					auto& cell = cells[position & mask];
+					const std::size_t sequence = cell.sequence.load(std::memory_order_acquire);
+					const auto difference = static_cast<std::ptrdiff_t>(sequence) - static_cast<std::ptrdiff_t>(position + 1);
+					if (difference == 0) {
+						if (tail.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
+							a_job = std::move(cell.job);
+							cell.job = {};
+							cell.sequence.store(position + mask + 1, std::memory_order_release);
+							return true;
+						}
+					} else if (difference < 0) {
+						return false;  // empty
+					} else {
+						position = tail.load(std::memory_order_relaxed);
+					}
+				}
+			}
+		};
+
+		struct Domain
+		{
+			Ring ring;
+			std::counting_semaphore<> available{ 0 };  // one release per pushed job, and per wake-up (Cancel, Shutdown)
+			unsigned workers = 0;
+			std::atomic<std::size_t> active{ 0 }, highWater{ 0 };
+			explicit Domain(std::size_t a_capacity) : ring(a_capacity) {}
+		};
+
+		std::atomic_bool stopping{ false };
+		std::array<std::unique_ptr<Domain>, 2> domains;
+		std::atomic<std::uint64_t> accepted{ 0 }, completed{ 0 }, cancelled{ 0 }, rejected{ 0 }, failed{ 0 };
+
+		State(std::size_t coordinator, std::size_t preparation, unsigned preparationWorkers)
+		{
+			if (!coordinator || !preparation || !preparationWorkers)
+				throw std::invalid_argument("scene executor capacity and workers must be positive");
+			domains[0] = std::make_unique<Domain>(coordinator);
+			domains[1] = std::make_unique<Domain>(preparation);
+			domains[0]->workers = 1;
+			domains[1]->workers = preparationWorkers;
+		}
+		// Every worker of every domain looks again (a cancelled scope's timers, shutdown).
+		void WakeAll()
+		{
+			for (auto& domain : domains)
+				domain->available.release(domain->workers);
 		}
 		void Run(unsigned domain);
+		void Execute(unsigned domain, Job& job);
 	};
 
 	struct PublishedSceneExecutor::ExecutorScope final : org::async::TaskScope
 	{
 		std::shared_ptr<State> owner;
 		std::atomic_bool cancelled{ false };
-		std::size_t pending = 0;  // owner mutex, includes executing work and timers
+		std::atomic<std::size_t> pending{ 0 };  // includes executing work and timers
+		// The first failure: written when a task throws, read by Wait (both off the frame path).
+		mutable std::mutex failureMutex;
 		std::exception_ptr failure;
 		explicit ExecutorScope(std::shared_ptr<State> value) : owner(std::move(value)) {}
 		bool StopRequested() const noexcept override { return cancelled.load() || owner->stopping.load(); }
 		void Cancel() noexcept override
 		{
-			{
-				std::lock_guard lock(owner->mutex);
-				cancelled.store(true);
-			}
-			owner->changed.notify_all();
+			cancelled.store(true);
+			owner->WakeAll();  // its timers are reclaimed now, not at their deadline
 		}
 		void Wait() const override
 		{
 			if (currentExecutor == owner.get()) throw std::logic_error("scene workers cannot wait on scene scopes");
-			std::unique_lock lock(owner->mutex);
-			owner->changed.wait(lock, [&] { return pending == 0; });
-			const auto error = failure;
-			lock.unlock();
+			for (auto value = pending.load(); value != 0; value = pending.load())
+				pending.wait(value);
+			std::exception_ptr error;
+			{
+				std::lock_guard lock(failureMutex);
+				error = failure;
+			}
 			if (error) std::rethrow_exception(error);
 		}
 	};
@@ -72,66 +167,86 @@ namespace DCLF
 		std::vector<std::thread> workers;
 	};
 
+	void PublishedSceneExecutor::State::Execute(unsigned domain, Job& job)
+	{
+		auto& d = *domains[domain];
+		d.active.fetch_add(1, std::memory_order_relaxed);
+		auto scope = std::move(job.scope);
+		std::exception_ptr error;
+		const bool wasCancelled = scope->StopRequested();
+		if (!wasCancelled) {
+			try { job.task({ [scope] { return scope->StopRequested(); } }); }
+			catch (...) { error = std::current_exception(); }
+		}
+		// Release captured resources before signalling completion, including when the task never started. Cancel never
+		// destroys queued work.
+		job.task = {};
+		d.active.fetch_sub(1, std::memory_order_relaxed);
+		if (error) {
+			failed.fetch_add(1, std::memory_order_relaxed);
+			std::lock_guard lock(scope->failureMutex);
+			if (!scope->failure) scope->failure = error;
+		} else if (wasCancelled) {
+			cancelled.fetch_add(1, std::memory_order_relaxed);
+		} else {
+			completed.fetch_add(1, std::memory_order_relaxed);
+		}
+		if (scope->pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+			scope->pending.notify_all();
+	}
+
 	void PublishedSceneExecutor::State::Run(unsigned domain)
 	{
 		currentExecutor = this;
+		auto& d = *domains[domain];
+		// The delayed jobs this worker took from the ring before their time: its own, earliest first.
+		std::vector<Job> timers;
+		auto later = [](const Job& a, const Job& b) { return a.ready > b.ready; };
 		for (;;) {
-			Job job;
-			{
-				std::unique_lock lock(mutex);
-				auto& queue = queues[domain];
-				for (;;) {
-					if (queue.empty()) {
-						if (stopping.load()) { currentExecutor = nullptr; return; }
-						changed.wait(lock);
-						continue;
-					}
-					// Cancelled timers are reclaimed immediately on their worker lane.
-					auto next = std::find_if(queue.begin(), queue.end(), [](const Job& value) { return value.scope->StopRequested(); });
-					if (next == queue.end()) {
-						next = std::min_element(queue.begin(), queue.end(), [](const Job& a, const Job& b) { return a.ready < b.ready; });
-						if (next->ready > std::chrono::steady_clock::now()) {
-							const auto deadline = next->ready;
-							changed.wait_until(lock, deadline);
-							continue;
-						}
-					}
-					job = std::move(*next);
-					queue.erase(next);
-					stats.queued[domain] = queue.size();
-					++stats.active[domain];
-					break;
+			// Due timers and cancelled ones first (a cancelled scope's timers are reclaimed now, not at their deadline).
+			const auto now = std::chrono::steady_clock::now();
+			if (std::any_of(timers.begin(), timers.end(), [&](const Job& a_job) { return a_job.ready <= now || a_job.scope->StopRequested(); })) {
+				std::vector<Job> kept;
+				for (auto& timer : timers) {
+					if (timer.ready <= now || timer.scope->StopRequested())
+						Execute(domain, timer);
+					else
+						kept.push_back(std::move(timer));
 				}
+				timers = std::move(kept);
+				std::make_heap(timers.begin(), timers.end(), later);
 			}
-			auto scope = std::move(job.scope);
-			std::exception_ptr error;
-			const bool cancelled = scope->StopRequested();
-			if (!cancelled) {
-				try { job.task({ [scope] { return scope->StopRequested(); } }); }
-				catch (...) { error = std::current_exception(); }
+			if (stopping.load() && timers.empty() && d.ring.Size() == 0) {
+				currentExecutor = nullptr;
+				return;
 			}
-			// Release captured resources before signalling completion, outside locks,
-			// including when the task never started. Cancel never destroys queued work.
-			job.task = {};
-			{
-				std::lock_guard lock(mutex);
-				--stats.active[domain];
-				--scope->pending;
-				if (error) { ++stats.failed; if (!scope->failure) scope->failure = error; }
-				else if (cancelled) ++stats.cancelled;
-				else ++stats.completed;
+			// One token per pushed job, and per wake-up (Cancel, Shutdown): acquired before the pop, so tokens never pile up.
+			if (stopping.load())
+				(void)d.available.try_acquire_for(std::chrono::milliseconds(1));  // draining: never block on a spent token
+			else if (timers.empty())
+				d.available.acquire();
+			else if (!d.available.try_acquire_until(timers.front().ready))
+				continue;  // the earliest timer is due
+			Job job;
+			if (!d.ring.Pop(job))
+				continue;  // a wake-up, or a job another worker took with its token
+			if (job.ready > std::chrono::steady_clock::now() && !job.scope->StopRequested()) {
+				timers.push_back(std::move(job));
+				std::push_heap(timers.begin(), timers.end(), later);
+			} else {
+				Execute(domain, job);
 			}
-			changed.notify_all();
 		}
 	}
 
-	PublishedSceneExecutor::PublishedSceneExecutor(std::size_t coordinatorCapacity, std::size_t preparationCapacity) :
-		state(std::make_shared<State>(coordinatorCapacity, preparationCapacity)), threads(std::make_unique<Threads>())
+	PublishedSceneExecutor::PublishedSceneExecutor(std::size_t coordinatorCapacity, std::size_t preparationCapacity, unsigned preparationWorkers) :
+		state(std::make_shared<State>(coordinatorCapacity, preparationCapacity, preparationWorkers)), threads(std::make_unique<Threads>())
 	{
-		threads->workers.reserve(3);
+		threads->workers.reserve(1 + preparationWorkers);
 		try {
-			for (unsigned domain : { 0u, 1u, 1u })
-				threads->workers.emplace_back([shared = state, domain] { shared->Run(domain); });
+			threads->workers.emplace_back([shared = state] { shared->Run(0); });
+			for (unsigned i = 0; i < preparationWorkers; ++i)
+				threads->workers.emplace_back([shared = state] { shared->Run(1); });
 		} catch (...) {
 			Shutdown();
 			throw;
@@ -156,39 +271,55 @@ namespace DCLF
 	{
 		const auto own = std::dynamic_pointer_cast<ExecutorScope>(scope);
 		const auto now = std::chrono::steady_clock::now();
-		std::unique_lock lock(state->mutex);
 		if (!own || own->owner != state || own->StopRequested() || !task || !Layout.Contains(cls) ||
 			delay > std::chrono::steady_clock::time_point::max() - now) {
-			++state->stats.rejected;
+			state->rejected.fetch_add(1, std::memory_order_relaxed);
 			return false;
 		}
-		auto& queue = state->queues[cls.domain];
-		if (queue.size() == state->capacities[cls.domain]) { ++state->stats.rejected; return false; }
-		queue.push_back({ now + (std::max)(delay, std::chrono::steady_clock::duration::zero()), own, std::move(task) });
-		++own->pending;
-		++state->stats.accepted;
-		state->stats.queued[cls.domain] = queue.size();
-		state->stats.highWater[cls.domain] = (std::max)(state->stats.highWater[cls.domain], queue.size());
-		lock.unlock();
-		state->changed.notify_all();
+		auto& domain = *state->domains[cls.domain];
+		// Counted before the push: a worker may finish the job before this returns.
+		own->pending.fetch_add(1, std::memory_order_acq_rel);
+		if (!domain.ring.Push({ now + (std::max)(delay, std::chrono::steady_clock::duration::zero()), own, std::move(task) })) {
+			if (own->pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+				own->pending.notify_all();
+			state->rejected.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		state->accepted.fetch_add(1, std::memory_order_relaxed);
+		const std::size_t queued = domain.ring.Size();
+		for (std::size_t high = domain.highWater.load(std::memory_order_relaxed); queued > high &&
+			 !domain.highWater.compare_exchange_weak(high, queued, std::memory_order_relaxed);) {}
+		domain.available.release();
 		return true;
 	}
 
 	PublishedSceneExecutor::Statistics PublishedSceneExecutor::GetStatistics() const
 	{
-		std::lock_guard lock(state->mutex);
-		return state->stats;
+		Statistics stats;
+		stats.accepted = state->accepted.load();
+		stats.completed = state->completed.load();
+		stats.cancelled = state->cancelled.load();
+		stats.rejected = state->rejected.load();
+		stats.failed = state->failed.load();
+		for (std::size_t d = 0; d < 2; ++d) {
+			stats.queued[d] = state->domains[d]->ring.Size();
+			stats.active[d] = state->domains[d]->active.load();
+			stats.highWater[d] = state->domains[d]->highWater.load();
+		}
+		return stats;
 	}
 
 	void PublishedSceneExecutor::Shutdown()
 	{
 		if (currentExecutor == state.get()) throw std::logic_error("scene executor shutdown must run on its owner");
 		std::lock_guard shutdownLock(threads->shutdownMutex);
-		{
-			std::lock_guard lock(state->mutex);
-			state->stopping.store(true);
-		}
-		state->changed.notify_all();
+		state->stopping.store(true);
+		state->WakeAll();
 		for (auto& worker : threads->workers) if (worker.joinable()) worker.join();
+		// A dispatch that passed its check before stopping and pushed after its domain's workers left: run as cancelled here,
+		// so its scope's count still reaches zero.
+		for (unsigned domain = 0; domain < 2; ++domain)
+			for (State::Job job; state->domains[domain]->ring.Pop(job);)
+				state->Execute(domain, job);
 	}
 }

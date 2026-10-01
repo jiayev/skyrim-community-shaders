@@ -2012,6 +2012,57 @@ derive them as above, and let capture parity's new per-variable histogram confir
 shows up immediately as `VS PerGeometry 4` or `5`, which is what makes replicating engine arithmetic
 safe to attempt at all. Only then do the two values need adding to `BindlessObject` and the shader.
 
+### Tree wind on the GPU (2026-09-30)
+
+DCLF's members take their tree wind from the GPU (`TreeWindCS.hlsl`). Nothing reads the tree nodes per frame; the
+accumulate phase's per-frame `DeriveTreeAnim` over every resident tree (`KeepResidentsAlive`) is gone.
+
+**The engine's update, reverse-engineered** (headless Ghidra; `FUN_140437d40` from `Main::Update`):
+-   **Callers and inputs.** The manager is `BSTreeManager` (pointer at `0x1420F6A18`). It runs from `Main::Update` with
+    the frame's seconds (`0x1431CC288`, the global `GetSecondsPassed` reads). The update is time-budgeted (it
+    breaks when a QPC budget runs out, checked every 4 trees) and runs under the manager's mutexes.
+-   **Loop 1** (`FUN_1404381e0`, list `+0x50`) covers each node with `kAccumulated` and a model (`+0xF8`, its
+    `+0x40`):
+    -   the timer advances: `+0x164 += dt`;
+    -   the squared camera distance: `+0x158 = |world translate (+0xA0) - camera|²`;
+    -   the gust, when `+0x158 <` the manager's `+0x80`:
+        `+0x15C = FUN_140438950(manager+0x78 * +0x164, 3) * model+0xB0`.
+-   **Loop 2** (list `+0x38`) covers the nearest trees (`FUN_140437e50`: within `+0x80`, capped and sorted), for
+    those whose model has bones (`+0xB8`). They get the same timer and gust, plus the CPU bone animation
+    (`FUN_140438ed0`) and a world update.
+-   **The gust:** `FUN_140438950(x, 3)` = 0.25 × the sum of sin(kπx) over k = 1, 3, 5, 7. It is SIMD: the argument
+    is reduced to [-π, π] with the 2^23 rounding trick, the sine is an odd polynomial (constants at `0x141846E64`),
+    and the lanes are summed as (l3 + l2) + (l1 + l0).
+-   **The draw:** `SetupGeometry`'s case 0xc then reads the node as before (TreeParams, WindTimers) and keeps the
+    timer as the previous one (`+0x168`).
+
+**On the GPU:**
+-   **Rows.** `Tables::trees` holds one `TreeStatic` row per tree node a member draws under (`ListTree` when the
+    member joins, `UnlistTree` when it leaves; refcounted by members). The row carries the node's position, leaf
+    frequency, model scale and its clock at listing. `Tables::treeObjects` lists the members and their tree slots.
+    The commits upload both when their versions move (`UploadTrees`).
+-   **Clocks.** `TreeWindCS` mode 0 keeps one `TreeClock` per slot, the GPU's alone. It starts from the static row
+    when the generation is new, then advances once a frame, whichever epoch runs first.
+-   **Records.** Mode 1 writes each member's TreeParams and WindTimers into its object record (the objects buffer
+    takes unordered access), as SetupGeometry would. That includes the engine's fast square root, bit for bit.
+-   **Order.** Both modes run first in the shadow, Z-prepass and colour epochs, after the uploads, which carry a
+    record as it joined.
+
+**Deliberate difference: the clock always advances.** The engine advances a node only while it is visible
+(`kAccumulated`, which the feedback still keeps on visible stood-in roots, since a root can have parts the engine
+draws) and within its time budget. The GPU advances every member tree every frame.
+-   **Measured** (persistent parity's clock-rate histogram): the engine's clock ran at 0 to 1 times the GPU's, by
+    the fraction of the interval the tree was in view. The differences are therefore only in the phase of trees out
+    of view.
+-   **Not replicated:** loop 2's second `dt` for near trees with bones. No such tree was in the test scene to
+    validate it.
+
+**Check** (`CS_DCLF_PERSISTENT_PARITY`, every 120th colour epoch, 64 members read back): TreeParams.y and .w exact
+against the frame's wind magnitude and the leaf frequency, the fade exact against the record's own distance, the
+gust against `FUN_140438950` at the record's timer, and the timers' drift from the engine's own clocks reported.
+Results: 0 differences in steady state, holes 0, all parity OK; tree changes in the change log went from 84 a frame
+to ~1.
+
 ### Trees, landed
 
 `CS_DCLF_TREES=1` brings technique 12 into coverage. The Whiterun exterior goes from ~2900 to **3862
@@ -2879,6 +2930,39 @@ Two defects surfaced on the way, and both are fixed:
 `CS_DCLF_ASYNC_EYE` was dropped: the prediction has not missed once, and `CS_DCLF_ASYNC_JOBS` without
 `zprepass` already keeps the Z-prepass inline.
 
+**Refresh after the take (2026-09-30).** With every eligible object a member, the camera turning joins and retires
+members every frame, and each joiner's first lookup resolution bumped the generation between a kick and its epoch:
+the Z-prepass job went stale on about a fifth of the frames, and the shadow job (whose build reads none of the
+material lookups) on a quarter to a third. Now:
+
+-   The main-pass kicks run `RefreshMaterialLookups` in full, outside an epoch (a view never imported is left
+    unresolved there, since only an epoch can queue its import). An epoch compares its inputs with the job's first
+    and refreshes afterwards; only an inline build refreshes before it builds. What the refresh changes reaches the
+    next frame's job. A draw that job defers stays the engine's: admission waits for the colour epoch to have drawn it.
+-   The shadow build keys on `Lookups::shadowGeneration`, bumped only by what it reads (shadow textures, slots,
+    pipelines, the null texture, the samplers). The shadow kick takes the lookups as the last shadow epoch left them;
+    `shadowRefreshDue` (a reset, a recreated pipeline set) makes the epoch refresh before it compares.
+
+-   A full refresh at every kick re-resolved the ~500 character-lit materials whose record version the t11
+    alternation renews every frame (0.9 ms a frame, 3,700 registry requests). An entry now keeps every view it already
+    holds resolved without asking the registry, and its binding block holds both t11 incarnations, so a swap between
+    them does not reseal it (0.23 ms a frame for five refreshes).
+
+Parity run with the camera turning: Z-prepass 300 of 300 epochs on the worker's build (from 226-250), shadow
+272-292 (from 188-245; the rest stale on the views' raster states, none on the lookups), holes 0.
+
+**Shadow inputs independent of the frame's views (2026-09-30).** A caster is an input only if its key slot has a
+pipeline under every rasterizer state of its class's views, and the kick predicted those states from last frame. The
+prediction missed on 3-23 frames in 300. The diagnostic showed why:
+-   the sun's cascades alternate their depth-bias states frame by frame (`[5,6]` / `[2,3]`, ShadowmapCascadeRasterizerFix);
+-   a local light's view with culling off (state 1) appears for single frames.
+
+Now `Impl::shadowStatesSeen` holds, per mode and caster class, every state its views have drawn with. It grows when a
+state first appears (`DrawPipelines`' ids only grow), and the inputs, the claims and `RefreshShadowLookups`' pipelines
+are for all of them. Each view's latch row is still its own state's. Result: a job goes stale only when a state first
+appears (once or twice at startup), then 0 per 300 frames; holes 0; set parity reports nothing withheld and drawn by
+nobody.
+
 Gate (the same route and switches as Phase 2):
 
 | check | `probe` | `on` |
@@ -3709,8 +3793,9 @@ An overflowing ring treats every material as written. The producers:
 
 **The build** repacks the frame-sourced floats into a reused (material, pipeline) group without a new
 version: PS as before, and now VS (`materialPatchedVSFloats`) for `TexcoordOffset`. The colour kick and the
-Z-prepass kick bring the known material textures up to date first (`RefreshKnownMaterialTextures`), so a
-changed t11 index does not leave a pre-built job stale.
+Z-prepass kick refresh the material lookups first (`RefreshMaterialLookups` outside an epoch: a view never
+imported waits for the epoch's refresh), and the epoch refreshes them only after taking the job, so a changed
+t11 index or a joining member does not leave a pre-built job stale.
 
 **The alarm.** The rolling validator (8 records a frame) and `CS_DCLF_MATERIAL_CACHE=probe` compare a
 record with a live evaluation outside its frame-sourced components. They only report
@@ -4757,6 +4842,174 @@ at Present (`PrimaryCull::EndFrame`), before the next frame's `Main::Update` rea
     calls the engine's own functions, one frame later; a parity of the state machines themselves would need a node
     both update, which the stand-in rules out by design.
 
+## Fades on the GPU
+
+The feedback above keeps the stood-in roots' fade and LOD state on the CPU: the render thread joins a worker's decode,
+which runs the engine's fade functions per root a frame late. The engine's functions read only the node and globals and
+write only the node ([skyrim-engine-notes.md](./skyrim-engine-notes.md), "Fade state: inputs, outputs and their other
+readers"), so the same state machine runs on the GPU instead, in the frame it is for. Step E1 builds it beside the CPU's,
+which stays authoritative until the GPU's agrees.
+
+**The tables** (`SceneStore::Tables::fadeRoots`, `Records.h`, `FadeRootStatic`). A slot per fade node a member draws
+under, listed with the member (`ListFadeRoot`, beside the tree slots) and released with its last one:
+
+-   The static row is read from the node when it is listed (`FadeState::StaticOf`): its state as `initial`, its bound
+    radius, `fadeAmount`, near and far, `+0x109`, its plan by its `OnVisible` (fade, leaf, tree or another class), and the
+    LOD step's distance scale, `powf`/`logf` of the radius computed with the engine's own CRT (the GPU cannot round them
+    the same).
+-   A tree's LOD switch selecting past child 0 (`BSTreeNode::OnVisible`'s LOD fix-up) is an input the tree manager
+    changes: the switch events refresh it (`RefreshFadeRootSwitch`).
+-   The root's centre is a member's record (the fade node row, which placements keep current), chosen again when
+    membership changes.
+
+**The pass** (`FadeStateCS.hlsl`, `cs.dclf.z.fade-state`), first in the depth segment's epoch, one thread per root:
+
+-   A state row whose generation is not its static row's starts from `initial`.
+-   Once a frame, a root whose bound sphere is inside the depth segment's frustum (planes from its view-projection, as
+    the cull's sphere test) gets its class's `OnVisible`: the tree height test, the leaf LOD step, the fade update, the
+    tree's LOD fix-up. The verdict records what it saw and whether `OnVisible` would go on into the children.
+-   The frame's inputs (`FadeFrame`: the cull's camera and the fade globals) are a one-row buffer the depth commit writes.
+
+**The port** (`Scene/FadeState.cpp`) is the same state machine in C++, instruction for instruction (operation order,
+`MINSS`/`MAXSS`, the comparisons' unordered cases). `CS_DCLF_FADE_PARITY` checks both sides of it:
+
+-   the port against the engine's functions, run on a copy of the node with the fade watch muted (`FadeState::CheckPort`,
+    64 snapshot roots every 30 frames at `AfterFullFrustum`);
+-   the pass against the port: every 30 frames the pass logs 64 roots' state before and after, read back three frames
+    later and made again by the port with the GPU's frustum verdict (`ReadFadeLog`). The GPU's division and square root
+    may round differently, so equal integers and bits with floats within 1e-5 count apart, as rounding.
+
+Measured (e1-parity, Riverwood, camera turning): the port against the engine 1,216 roots, 0 differ; the pass against
+the port 1,280 updates, 0 differ (96 within rounding). The pass takes 0.006 ms of GPU.
+
+**The members follow it (E2a).** A root is *owned* (`kFadeRootOwned`) while PrimaryCull stands in for its admitted entry
+(`SyncFadeOwnership`, on a new snapshot or an admission). Only then does nothing but DCLF run its `OnVisible`:
+
+-   The draw input names the root (`DrawInput::fadeRoot`), and the depth segment's first phase drops a member while its
+    owned root's latest serviced `OnVisible` stops (`kFadeVerdictServiced` without `kFadeVerdictDrawn`), as a final
+    verdict. The pass runs just before it in the same epoch, so the cut is the frame's own, as the engine's cull is.
+-   A root's state is seeded again from its node when it becomes owned, and every owned root after frames the cut did not
+    apply (`ReseedOwnedFadeRoots`): the engine's `OnVisible` ran on them meanwhile.
+-   Members of a root DCLF does not own (an actor's, an entry not admitted) keep the distance test (`kObjectFadeTest`).
+-   `kObjectFadedOut`, `Tables::fadedOut`, `SetFadedOut` and `ApplyFadeChanges` are gone. The decode still services the
+    nodes for the engine's own readers (the next step's subject); its verdict is only counted ("faded out" in the
+    feedback report).
+
+Measured (e2a-parity): holes 0, every parity OK (the Shield race apart); per sampled frame 32-151 members dropped by
+their owned root's state.
+
+**The nodes follow it (E2b).** The engine still reads an owned root's node: the other views' culls (water reflections,
+the precipitation mask, the local map) run `BSFadeNode::OnVisible` without updating it and stop at a faded-out node, and
+`GetRenderPasses` and DCLF's own classification (the shadow Faded rule, the skin's LOD row) read its fade and level. So:
+
+-   An owned root without engine-drawn parts is **written back** (`kFadeRootWriteBack`). When an update changes what
+    those readers see (the fade, its target bit, the levels and transition, the blend, the `fadeAmount` fade), the pass
+    appends the state (`FadeChange`) to a buffer the depth commit zeroes. The visibility feedback copies it with the
+    stamps; the decode takes the changes, and after the join the render thread writes them onto the nodes
+    (`SceneStore::ApplyFadeChanges`, checked against the row's generation) and reports a changed fade or level to the
+    fade watch, as the engine's writers are. The LOD metric and the last-visible frame ride along with a change, not
+    every frame: the other views' LOD fades read a metric from the last change.
+-   Lost changes are sent again whole: past the buffer (it grows to the appends counted), or a frame whose changes no
+    feedback copy took (no colour epoch, no free slot, an abandoned copy). The next update appends every write-back root.
+-   Such a root's `kAccumulated` is cleared once: its trees are TreeWindCS's, so the tree clock need not advance them.
+-   The decode services only roots with engine-drawn parts (`Cut::decode`): the stand-in lists no other entry.
+
+Measured (e2b-parity, Riverwood, camera turning): holes 0, every parity OK (the Shield race apart). The decode went
+from 8,287-9,128 stood-in entries a frame to 520-577, and from 0.37-0.55 ms to 0.08-0.10 ms on the worker. Write-back:
+0-1,856 changes per 300 frames (341 reported to the fade watch); no frame lost.
+
+## The shadow build kicked at the end of the scene phase
+
+With the fade cut on the GPU nothing in the primary's cull writes the tables, so the shadow build's inputs are final at
+the end of the scene phase (1.2 ms into the frame) rather than at BeforeShadowMaps (5.85 ms):
+
+-   `KickShadowBuildEarly` kicks it there, behind the placement job on the worker. `KeepEarlyShadowBuild` keeps it at
+    BeforeShadowMaps when nothing it read moved: the change logs it takes (`SceneStore::ShadowInputsWitness`: the notes of
+    `kShadowChangeCauses` and the geometry slots written) and the inputs the epoch compares. Otherwise it is kicked again
+    there, as before, and the cause is counted (`async shadow early`).
+-   The placement join writes the tables the build reads, so before either join (BeforeShadowMaps, or EarlyPrepass in a
+    frame without shadow maps) the early build is finished first (`BeforePlacementJoin`: waited for up to the async
+    budget, or dropped). It has ~4.6 ms of slack.
+-   Two inputs became the epoch's, not the build's. The sun's full-frustum planes (the cull that sets them runs after
+    the scene phase) were only ever the epoch's latch's. CS's SharedData and FeatureData, which the water reflections'
+    prepasses refresh every frame after the scene phase: the build places their blocks, and the shadow commit writes the
+    frame's bytes over them. The epoch compares only their sizes.
+
+Measured (e3-parity2, e3-waits; Riverwood, camera turning): every parity OK (the Shield race apart), holes 0. The early
+build is kept on 291-300 of 300 frames (the rest: the views' raster states moved). Render-thread waits 0.010-0.027
+ms/frame (from ~0.10), with no shadow join among them.
+
+## Owned members' light masks, without a clear
+
+The main registration reads a geometry's `activeLightMask` and clears it, so every later registration in the frame (the
+reflections, the other views) reads 0. An owned member (`PrimaryCull::Owned`: a member the colour build draws) has no
+main registration, so the render thread used to clear the masks of every member in view after the list jobs: per
+member, per frame. The writers now leave them 0 instead:
+
+-   `SunAccumulation`'s registration thunk (every `FUN_140e28af0` registration): a shadow light's accumulation of an
+    owned geometry (`+0x160` neither 0 nor `0xFFFF`), and a sun cascade's registration of an unclaimed caster, run as
+    before and then leave its mask 0 (`ClearOwnedMask`); a claimed caster's mask write (`WriteMaskOnly`) becomes the
+    same; no registration of one takes the sun's bits (`ApplySunBits`).
+-   A geometry the colour build starts drawing has its mask cleared once (`PrimaryCull::Admit`, the newly drawn): bits
+    written while it was the engine's or not yet drawn (out of view inside a cascade, say) have no reader to clear them.
+-   `CS_DCLF_PERSISTENT_PARITY` checks it after the registration jobs (`CheckLightMasks`): owned members in view with any
+    bit, by the sun's and other lights'.
+
+Measured (e4-parity5, e4-plain; Riverwood, camera turning): light masks 0 of 0.95-2.0 million checked per window, every
+other parity OK (the Shield race apart), holes 0. The render thread's work after the list jobs 0.14-0.27 -> 0.011 ms a
+frame. The first version left the sun's bits on a few geometries (the unclaimed cascade path, then bits from before the
+geometry was drawn), which the check named.
+
+## The stand-in without per-member work
+
+With fades, light masks and the decode off it, the stand-in's walk of an admitted entry (its bound test, then each
+member's hidden, switch and binding test) only fed the hole check, unless the entry has something for the registration.
+So the walk is per entry, by event (`Cut::walk`):
+
+-   Walked: an entry with engine-drawn members (handed to the registration every frame), or with a member shown but not
+    bound (handed over until it is). Every other admitted entry is left to the GPU whole: one lookup in the list job.
+-   Kept by events (`RefreshWalk`): a new snapshot; a member's residency dropped (`NoteMemberLost`, from
+    `DropResidentSlot`: walked until the next frame says whether a shown member is unbound, or hidden or unselected
+    after all); a member newly drawn; every residency ended (`NoteAllMembersLost`).
+-   Hidden members and switch selections need nothing here: they leave membership through classification (the hidden
+    stores and switch events).
+-   `CS_DCLF_PERSISTENT_PARITY` walks every entry, for the hole check and the light masks, and counts what an entry the
+    walk would skip handed to the registration (`stand-in walk parity`, 0).
+
+The decode is no longer joined (`PollFeedback`). It services the mixed roots on copies of their nodes (the engine's
+functions read and write only the node), and the job's last store publishes it (`decodeReady`). At the full-frustum
+cull and at Present, the render thread applies a finished decode's states (`FadeState::WriteNode`, the fade watch told)
+and the write-back changes; one still running waits for the next poll, and no decode is kicked while one is out.
+
+Measured (e5a-parity, e5a-plain, e5b-parity; Riverwood, camera turning): every parity OK (the Shield race apart), holes
+0, stand-in walk parity 0. Entries walked a frame 9,128 -> ~577 (the mixed ones). The decode: 300 kicked, 0 joined,
+every frame decoded.
+
+## The occlusion maps, drawn by DCLF
+
+The engine's precipitation occlusion mask (where rain and snow stop) is a depth view from above: `Precipitation::SetupMask`
+culls and registers every scene list (`FUN_1414bf320(ctx, 1)` over `0x14338c870`), `Precipitation::RenderMask` renders
+it into depth target 10. Skylighting hooks the call (`Main_Precipitation_RenderOcclusion`) and renders it first, then its
+own sky occlusion map with the same machinery, which DCLF already drew natively. Both are now one kind of view, an
+*occlusion view* (`Records.h`, `kOcclusionViews`: `kOcclusionSky`, `kOcclusionPrecipitation`):
+
+-   Per view: its pass rule (`Skylighting::OcclusionTechnique` with `a_skylighting` true or false: the precipitation mask
+    takes no skinned object, no multi-texture landscape, and none of the sky map's BSX filter), technique column and
+    pipeline keys (`Tables::occlusionTechnique`, `occlusionKeysUsed`), shadow-build mode (`OcclusionModeOf`), view slot
+    (`OcclusionSlot`), depth target (`OcclusionDepthTarget`; the sky map's is target 10 while Skylighting swaps its own
+    texture in, the mask's target 10 itself), capture (`CaptureOcclusion`, at FinishAccumulating for render mode 0x1C:
+    the sky map while Skylighting's `inOcclusion`, else the mask) and readiness (`OcclusionReady`).
+-   Skylighting asks for each map (`DrawcallLimitFix::OcclusionReady`); when DCLF is ready it skips `SetupMask` (sets the
+    projection and the accumulator's camera itself), and `RenderMask` only clears. `DrawOcclusion`, after the sky map's
+    `RenderMask`, draws every map asked for in one epoch (`ExecuteOcclusion`); nothing reads the mask in between.
+-   `CS_DCLF_SKYLIGHT_PARITY` compares either map texel by texel (the engine's render kept, the map cleared, DCLF's).
+    The mask's texture is taken when its engine render is kept, before Skylighting swaps target 10.
+-   `CS_DCLF_PRECIPITATION=0` leaves the mask to the engine; without Skylighting the engine draws both.
+
+Measured (p1-parity, p2-rain with `CS_DCLF_TEST_COMMANDS='100:fw 10a241'`, Riverwood, camera turning): the sky map's
+parity as before the change; the mask drawn by DCLF 300 of 300 frames once it rains (18,700 occluders); its parity
+~99.6% of texels equal, DCLF never farther, nearer on ~1,000 texels (the sky map's pattern); every other parity OK.
+
 ## Switch selection by event (culling-job elimination, phase 3)
 
 Which child an `NiSwitchNode` draws was a per-frame test in two places:
@@ -5022,8 +5275,8 @@ neither ([dclf-cull-job-elimination.md](./dclf-cull-job-elimination.md), "Phase 
     (`AccumulatedPass::resident`). It is not in `accumulatePatched`, so no walk restores it.
 -   It keeps `kObjectNativeVisible` (since removed: every bound record is a member), so BuildDraws draws it whenever the
     GPU's cull finds it. There is no CPU visibility for it at all.
--   Each frame the accumulate phase only keeps its pipeline and material slots alive (`KeepResidentsAlive`: `lastUsed`,
-    and the lighting template when no other object used the pipeline). `RefreshFrameConstants` resamples its shading
+-   Each frame the accumulate phase only takes its pipeline's lighting template again (`KeepResidentsAlive`); the used
+    sets change only with membership (since the used-set cleanup). `RefreshFrameConstants` resamples its shading
     with every other bound record's.
 
 **Its list job returns at once** (`StandIn`, a lookup by root). The feedback decode services its root with the stood-in
@@ -5593,6 +5846,12 @@ In all, the render thread's scans went from about 350 to about 105 µs a frame. 
 -   **The LOD fades.** `GetRenderPasses` writes them into the property (`specularLODFade`, `envmapLODFade`)
     whenever any view registers the object. A detour on its vtable slot (0x2A) pushes the property when either value
     moved. It fires about once a frame, and the property's dependents are resampled.
+-   **External emittance.** A property with `kExternalEmittance` reads a colour it does not own: its reference's
+    light, its region's `emittanceColor` (blended from the region's weather), or one of the sky's colours. The weather
+    rewrites that colour in place, with no event on the property (found as a MISSED resample after `fw`, on Riverwood's
+    mill fan). Both writers go through `Sky::SetColor`; its detour pushes the colour when it moved
+    (`emittanceEvents`), the colour is listed as a key in `propertyDependents`, and its dependents are resampled.
+    Pointing a property at another colour is a property event (`skyrim-engine-notes.md`, "External emittance").
 -   **The render flags** changing resamples every slot.
 -   **A bug the watch exposed.** A hit in the derivation cache (`Tracked::Derived`) reused the cached LOD fades, and
     the old per-frame resample corrected them at Prepass. Every object in the fade band changed twice a frame
@@ -5732,9 +5991,12 @@ implementation, which every kept structure uses:
     -   **Counting.** `UpdateSlotReferences` counts them from the change and geometry logs. Each count records the
         slot's generation, since a geometry or material slot can be freed while referenced.
     -   **Freeing.** A slot is freed 64 frames after its last reference goes. That expiry is an event, not a sweep.
-    -   **`lastUsed` stays.** Only it certifies that the raw engine pointers a slot holds (a pipeline's lighting
-        template, a material key) are this frame's. Every bound object renews its slots each frame, through the
-        accumulate phase or `KeepResidentsAlive`, and `CheckObjectSlots` enforces that.
+    -   **The used sets are the members' slots.** `usedPipelineBits` / `usedMaterialBits` certify the raw engine pointers
+        a slot holds (a pipeline's lighting template, a material key) for evaluation. A joining member marks its slots,
+        `KeepResidentsAlive` sets them again from the residents when membership changed, and a drained slot leaves them
+        at once; nothing re-marks them per frame. The template is taken from a resident's property every frame (a
+        property swap rewrites a member only when an event names it). `CheckObjectSlots` holds every bound record to
+        the sets; persistent parity compares them with the slots the bound records name.
 -   **Technique rows.**
     -   **Rows.** There is one row per `TechniqueKey`, evaluated once a frame. Its floats and its bindings are
         versioned separately.
@@ -5749,3 +6011,37 @@ implementation, which every kept structure uses:
 -   **Validation:**
     -   the full parity tour after each stage, 0 throughout;
     -   timings unchanged within noise (Riverwood colour build 0.61 ms, Z-prepass 0.65-0.67 ms).
+
+## The resident region's pairs by witness (2026-09-30)
+
+`MainBuild::UpdateRegionPairs` resolved every (material, pipeline) pair of the resident region on every build, ~3,500
+pairs twice a frame, to learn whether each could still draw: 1.86 ms a frame on the worker, the render thread's
+critical path.
+-   **A witness per pair.** Each pair now keeps a witness of what its resolution reads:
+    -   the pipeline's half, once per build (`PipelineWitness`: the pipeline row's key and flags, the set, the
+        technique's bindings, the constant tables);
+    -   the material's three versions (record, frame components, lookup entry; `Lookups::materialVersions` is a
+        compact mirror of the entries' versions);
+    -   the region's frame-slot masks and segment.
+
+    Only a pair whose witness moved is resolved again.
+-   **One owner bundle.** The pairs' binding owners are one bundle held by the region, made again when a pair changes,
+    so each build no longer copies ~7,000 owners.
+
+Results: `Region.Pairs` 1.86 -> ~1.1 ms a frame, colour jobs late 0 of 300 (from 72-96), render-thread wait on the
+worker 3.0 -> 2.3 ms. Parity (build, persistent, resident draw, set) clean.
+
+**The character light's t11 is the frame's.** About 500 character-lit materials' records used to change every frame,
+because `TexCharacterLightProjNoiseSampler` (t11) is a ping-pong render target that the frame components wrote into
+each material. Their pairs were resolved again, and their rows rewritten and uploaded, twice a frame.
+-   **Why not a second layout:** an indirect pipeline set requires one layout for all its pipelines (BasicRHI
+    `IndirectPipelineSetDesc`), so a layout of its own would split the colour pass's command streams.
+-   **A register of its own:** under `DCLF_BINDLESS`, `Lighting.hlsl` reads the character light's noise from
+    `DCLFCharacterLightNoise` at t125 (`kCharacterLightRegister`), a frame register, in both of t11's uses when the pass
+    descriptor has `CharacterLight` (the character light, and a projected technique's noise). t11 keeps its other
+    meanings (`TexLandNormal5Sampler`, a projected technique's noise texture).
+-   **The view:** the frame components take it from a character-light signature's live sample
+    (`MaterialSources::CharacterLightView`, `Tables::characterLightView`). The colour commit resolves it into the frame
+    record. The Z-prepass's frame record binds the null texture there: the noise only shades.
+-   **The records:** a character-light pass's record keeps t11's sampler modes and no view, and its row binds the null
+    texture at t11. The material frame components went from ~1.0 applications to ~1,016 slots a frame to 0.

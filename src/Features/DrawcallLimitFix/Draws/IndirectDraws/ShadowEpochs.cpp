@@ -284,12 +284,12 @@ namespace DCLF
 		shadowStats.captureMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
-	void IndirectDraws::CaptureSkyOcclusion()
+	void IndirectDraws::CaptureOcclusion(std::uint32_t a_view)
 	{
-		// The hook's half, as CaptureShadowView: where the engine's RenderMask has just drawn Skylighting's map (the
-		// clear, and whatever SetupMask registered), with which camera and state. Taken whether or not DCLF draws the
-		// map this frame: the state and format are what next frame's build prepares the pipelines for.
-		if (!ActiveToggles().shadows || failed || !SceneStore::SkyOcclusionEnabled() || !impl->SetupShadow())
+		// The hook's half, as CaptureShadowView: where the engine's RenderMask has just drawn an occlusion map (the clear, and
+		// whatever SetupMask registered), with which camera and state. Taken whether or not DCLF draws the map this frame: the
+		// state and format are what next frame's build prepares the pipelines for.
+		if (a_view >= kOcclusionViews || !ActiveToggles().shadows || failed || !SceneStore::OcclusionEnabled(a_view) || !impl->SetupShadow())
 			return;
 		auto& shadowState = globals::game::shadowState->GetRuntimeData();
 		const std::uint32_t target = shadowState.depthStencil;
@@ -298,90 +298,117 @@ namespace DCLF
 		// property, 1 otherwise). So the view's state is back-face culling at the renderer's fill, bias and scissor
 		// modes, and a two-sided occluder's key draws without culling, as a two-sided caster's does.
 		const std::uint32_t rasterState = EngineRasterStateId(shadowState.rasterStateFillMode, 1, shadowState.rasterStateDepthBiasMode,
-			shadowState.rasterStateScissorMode, kSkyRenderMode);
-		if (!rasterState || !impl->ImportShadowDepth(kSkyDepthTarget, target))
+			shadowState.rasterStateScissorMode, kOcclusionRenderMode);
+		if (!rasterState || !impl->ImportShadowDepth(OcclusionDepthTarget(a_view), target))
 			return;
-		auto& view = impl->skyView;
+		auto& occlusion = impl->occlusion[a_view];
+		auto& view = occlusion.view;
 		view = {};
 		view.viewId = ~0u;
-		view.renderMode = kSkyRenderMode;
-		view.modeIndex = kSkyMode;
-		view.targetIndex = kSkyDepthTarget;
+		view.renderMode = kOcclusionRenderMode;
+		view.modeIndex = OcclusionModeOf(a_view);
+		view.targetIndex = OcclusionDepthTarget(a_view);
 		view.slice = shadowState.depthStencilSlice;
 		view.rasterState = rasterState;
 		CaptureViewTarget(view, target);
 		CapturePerFrame(view);
-		impl->skyRasterState = rasterState;
-		impl->skyDsvFormat = view.dsvFormat;
-		impl->skyCapturedFrame = SceneStore::Get().GetFrame();
+		occlusion.rasterState = rasterState;
+		occlusion.dsvFormat = view.dsvFormat;
+		occlusion.capturedFrame = SceneStore::Get().GetFrame();
 	}
 
-	bool IndirectDraws::SkyOcclusionReady() const
+	bool IndirectDraws::OcclusionReady(std::uint32_t a_view) const
 	{
-		// This frame's shadow commit uploaded every occluder (none left out for a pipeline or a texture not yet
-		// resolved), and the map's target is imported.
-		return !failed && ActiveToggles().shadows && SceneStore::SkyOcclusionEnabled() && impl->shadow && impl->skyRasterState &&
-		       impl->skyCommittedFrame == SceneStore::Get().GetFrame() && impl->skySkipped == 0 && impl->shadow->depth[kSkyDepthTarget];
+		// This frame's shadow commit uploaded every occluder (none left out for a pipeline or a texture not yet resolved), and
+		// the map's target is imported.
+		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !SceneStore::OcclusionEnabled(a_view) || !impl->shadow)
+			return false;
+		const auto& occlusion = impl->occlusion[a_view];
+		return occlusion.rasterState && occlusion.committedFrame == SceneStore::Get().GetFrame() && occlusion.skipped == 0 &&
+		       impl->shadow->depth[OcclusionDepthTarget(a_view)];
 	}
 
-	bool IndirectDraws::ExecuteSkyOcclusion()
+	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views)
 	{
-		ZoneScopedN("CS.DCLF.ExecuteSkyOcclusion");
+		ZoneScopedN("CS.DCLF.ExecuteOcclusion");
 		const auto start = std::chrono::steady_clock::now();
 		auto& store = SceneStore::Get();
 		const std::uint32_t frameNumber = store.GetFrame();
-		if (!SkyOcclusionReady() || impl->skyCapturedFrame != frameNumber || impl->skyView.rasterState != impl->skyRasterState) {
-			++shadowStats.skyNotReady;
-			return false;
+		// The views asked for that can be drawn: ready, captured this frame, under the state their pipelines were built for.
+		std::uint32_t drawable = 0;
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+			if (!(a_views & (1u << v)))
+				continue;
+			const auto& occlusion = impl->occlusion[v];
+			if (OcclusionReady(v) && occlusion.capturedFrame == frameNumber && occlusion.view.rasterState == occlusion.rasterState)
+				drawable |= 1u << v;
+			else
+				++shadowStats.occlusionNotReady[v];
 		}
 		const auto indirect = GetShadowIndirectState();
-		if (!indirect.valid) {
-			++shadowStats.skyNotReady;
-			return false;
+		if (!drawable || !indirect.valid) {
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				shadowStats.occlusionNotReady[v] += (drawable & (1u << v)) ? 1 : 0;
+			return 0;
 		}
-		ScopedPerfEvent event("CS DCLF: Skylighting occlusion (CPU)");
+		ScopedPerfEvent event("CS DCLF: occlusion maps (CPU)");
 		auto resources = impl->shadow;
 		auto& payload = impl->shadowPayload;
-		const auto& view = impl->skyView;
-		const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(kSkyMode));
-		// Its state's map row: a state first seen by this frame's capture of the map has none yet.
+		// The views' states' map rows: a state first seen by this frame's capture has none yet.
 		impl->ReserveShadowLatch(0, resources->latchLayout.keySlots, DrawPipelines::Get().ShadowRasterStateCount(), resources->latchLayout.sunProcesses);
-		impl->ReserveShadowSequences(store.GetTables(), 1, kSkySlot);
+		impl->ReserveShadowSequences(store.GetTables(), kOcclusionViews, OcclusionSlot(0));
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
-			resources->skyFrame.store(nullptr, std::memory_order_release);
+			resources->occlusionFrame.store(nullptr, std::memory_order_release);
 			CommitUploads uploads(impl->commitStagedPool);
-			// The view slot's blocks, which its push data names, and its count zeroed. The occluders, material rows, frame
-			// record, objects and geometries were uploaded by this frame's shadow commit.
-			const std::uint64_t viewBlockOffset = std::uint64_t(kSkySlot) * kShadowViewSlotBytes;
-			const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
-			uploads(resources->viewBlocks.buffer, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
-			uploads(resources->viewBlocks.buffer, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
-			uploads(resources->count[kSkySlot], kZeroCounts, sizeof(kZeroCounts), 0);
-			// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn.
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			auto latch = ShadowViewLatch(view, inputCount, frameNumber);
-			latch.cullFlags = 1u;
-			UseShadowMapRow(*resources, store.GetLookups(), latchSlot, view.rasterState, true, latch);
-			resources->latch->WriteValue(latchSlot, kSkySlot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 			auto frame = std::make_shared<ShadowFrame>();
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
 			frame->latch = resources->latch;
-			const auto& previousShape = resources->skyPublished;
-			const std::uint32_t capacity = ShadowViewCapacity(previousShape && !previousShape->views.empty() ? previousShape->views.front().capacity : 0u,
-				payload.modeDraws[kSkyMode], resources->sequenceDraws[kSkySlot]);
-			frame->views.push_back(FrameViewOf(view, kSkySlot, kSkyMode, kSkyDepthTarget, capacity, *resources, payload));
-			PublishShape(std::move(frame), resources->skyPublished, resources->skyFrame, resources->shapeGenerations);
+			const auto& previousShape = resources->occlusionPublished;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+				if (!(drawable & (1u << v)))
+					continue;
+				const auto& view = impl->occlusion[v].view;
+				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
+				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(mode));
+				// The view slot's blocks, which its push data names, and its count zeroed. The occluders, material rows, frame
+				// record, objects and geometries were uploaded by this frame's shadow commit.
+				const std::uint64_t viewBlockOffset = std::uint64_t(slot) * kShadowViewSlotBytes;
+				const std::uint64_t perFrameOffset = viewBlockOffset + kShadowPerFrameOffset;
+				uploads(resources->viewBlocks.buffer, view.viewBlock, sizeof(view.viewBlock), viewBlockOffset);
+				uploads(resources->viewBlocks.buffer, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
+				uploads(resources->count[slot], kZeroCounts, sizeof(kZeroCounts), 0);
+				// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn, and the rule's
+				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound.
+				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
+				latch.cullFlags = 1u | kCullMinRadius;
+				UseShadowMapRow(*resources, store.GetLookups(), latchSlot, view.rasterState, true, latch);
+				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				std::uint32_t previousCapacity = 0;
+				if (previousShape)
+					for (const auto& previous : previousShape->views)
+						if (previous.slot == slot)
+							previousCapacity = previous.capacity;
+				const std::uint32_t capacity = ShadowViewCapacity(previousCapacity, payload.modeDraws[mode], resources->sequenceDraws[slot]);
+				frame->views.push_back(FrameViewOf(view, slot, mode, OcclusionDepthTarget(v), capacity, *resources, payload));
+				shadowStats.occlusionInputs[v] = inputCount;
+				++shadowStats.occlusionDrawn[v];
+			}
+			PublishShape(std::move(frame), resources->occlusionPublished, resources->occlusionFrame, resources->shapeGenerations);
 		}, impl->shadowExecutionOwner);
-		shadowStats.skyMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		++shadowStats.occlusionEpochs;
 		if (!ok) {
-			++shadowStats.skyNotReady;
-			return false;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				if (drawable & (1u << v)) {
+					--shadowStats.occlusionDrawn[v];
+					++shadowStats.occlusionNotReady[v];
+				}
+			return 0;
 		}
-		++shadowStats.skyDrawn;
-		shadowStats.skyInputs = inputCount;
-		return true;
+		return drawable;
 	}
 
 	void IndirectDraws::ExecuteShadowFrame()
@@ -419,17 +446,28 @@ namespace DCLF
 		const std::uint32_t frameNumber = store.GetFrame();
 		auto resources = impl->shadow;
 		std::array<bool, kShadowModeCount> modeUsed{};
-		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
+		// Per mode and caster class, every rasterizer state its views have drawn with (DrawPipelines' ids, which only
+		// grow): the build's inputs and the shadow pipelines are for all of them, so which of its views a frame draws -
+		// the sun's cascades alternate their depth-bias states frame by frame, a local light's culling-off view comes and
+		// goes - changes nothing the build reads. It grows when a state first appears. Each view's latch row is its own.
 		for (const auto& view : pending) {
 			modeUsed[view.modeIndex] = true;
-			modeRasterStates[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
+			impl->shadowStatesSeen[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
 		}
-		// Skylighting's occlusion map is drawn later in the frame, by its own epoch, from this build: its occluders
-		// under the state its view drew with last (known once the engine's own draw of the map has been captured).
-		if (SceneStore::SkyOcclusionEnabled() && impl->skyRasterState && impl->skyDsvFormat != DXGI_FORMAT_UNKNOWN) {
-			modeUsed[kSkyMode] = true;
-			modeRasterStates[kSkyMode] = {};
-			modeRasterStates[kSkyMode].Add(impl->skyRasterState, false);
+		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+			if (modeUsed[m])
+				modeRasterStates[m] = impl->shadowStatesSeen[m];
+		// The occlusion maps are drawn later in the frame, by their own epoch, from this build: their occluders under the state
+		// each view drew with last (known once the engine's own draw of the map has been captured).
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+			const auto& occlusion = impl->occlusion[v];
+			if (!SceneStore::OcclusionEnabled(v) || !occlusion.rasterState || occlusion.dsvFormat == DXGI_FORMAT_UNKNOWN)
+				continue;
+			const std::uint32_t m = OcclusionModeOf(v);
+			modeUsed[m] = true;
+			modeRasterStates[m] = {};
+			modeRasterStates[m].Add(occlusion.rasterState, false);
 		}
 		// One pipeline set per shadow map format: every target the engine has is D16 (engine notes), and a
 		// view whose target differed would rebuild the set on every epoch, so the first view's is taken.
@@ -458,7 +496,7 @@ namespace DCLF
 			std::size_t keys = lookups.shadowSlotKeys.size();
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				if (modeUsed[m])
-					keys += m == kSkyMode ? tables.skyKeysUsed.size() : tables.shadowKeysUsed.size();
+					keys += IsOcclusionMode(m) ? tables.occlusionKeysUsed[OcclusionOfMode(m)].size() : tables.shadowKeysUsed.size();
 			impl->ReserveShadowLatch(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
 				static_cast<std::uint32_t>(in.sunEntryProcesses.size()));
 		}
@@ -474,27 +512,55 @@ namespace DCLF
 			bodyTimer.start = std::chrono::steady_clock::now();
 
 			// The worker's build if one was kicked and it was built for exactly these inputs, else the build
-			// here. Joined before the lookups are refreshed: the worker reads them until it is done.
+			// here. Joined before the lookups are refreshed: the worker reads them until it is done. The job read them as the
+			// last epoch left them; they are refreshed after it is taken (what changed reaches the next frame's build), or
+			// before the build here. Lookups that are behind (shadowRefreshDue) are refreshed first either way.
 			bool useAsync = false;
 			TracyCZoneN(shadowPrepareZone, "CS.DCLF.ShadowInputs.Prepare", true);
 			const auto prepareStart = std::chrono::steady_clock::now();
 			auto& job = impl->shadowJob;
 			const auto joined = JoinJob(job.handle);
 			auto& lookups = store.MutableLookups();
-			RefreshMaterialLookups(store, tables, frameNumber, store.GetProjectedTextures(), lookups);
-			RefreshShadowLookups(store, tables, modeUsed, modeRasterStates, dsvFormat, impl->skyDsvFormat, lookups);
-			in.lookupGeneration = lookups.generation;
+			auto refresh = [&] {
+				RefreshMaterialLookups(store, tables, false, store.GetProjectedTextures(), lookups);
+				RefreshShadowLookups(store, tables, modeUsed, modeRasterStates, dsvFormat, impl->OcclusionFormats(), lookups);
+			};
+			bool refreshed = false;
+			if (lookups.shadowRefreshDue || !job.handle) {
+				refresh();
+				refreshed = true;
+			}
+			in.lookupGeneration = lookups.shadowGeneration;
 			if (job.handle) {
 				useAsync = TakeJob(
 					joined, async, [&] { return SameShadowInputs(job.inputs, in); },
 					[&] {
-						if (job.loggedStale++ < 4) {
+						if (job.inputs.lookupGeneration != in.lookupGeneration)
+							++async.staleLookups;
+						if (const auto logged = job.loggedStale++; logged < 4 || logged % 64 == 0) {
 							const auto& k = job.inputs;
-							logger::info("[DCLF] async shadow: the job's inputs are stale (frame {} vs {}, modes {}{}{} vs {}{}{}, shared data {}, feature data {}, tables {} vs {}, lookups {} vs {}, resources {})",
+							logger::info("[DCLF] async shadow: the job's inputs are stale (frame {} vs {}, modes {}{}{} vs {}{}{}, raster states {}, sun planes {} ({} vs {}), sun candidates {}, shared data {}, feature data {}, tables {} vs {}, lookups {} vs {}, resources {})",
 								k.frameNumber, in.frameNumber, int(k.modeUsed[0]), int(k.modeUsed[1]), int(k.modeUsed[2]),
-								int(in.modeUsed[0]), int(in.modeUsed[1]), int(in.modeUsed[2]), k.sharedData == in.sharedData ? "same" : "differs",
+								int(in.modeUsed[0]), int(in.modeUsed[1]), int(in.modeUsed[2]), k.modeRasterStates == in.modeRasterStates ? "same" : "differ",
+								k.sunEntryProcesses == in.sunEntryProcesses ? "same" : "differ", k.sunEntryProcesses.size(), in.sunEntryProcesses.size(),
+								k.sunCandidates == in.sunCandidates ? "same" : "differ", k.sharedData == in.sharedData ? "same" : "differs",
 								k.featureData == in.featureData ? "same" : "differs", k.tablesGeneration, in.tablesGeneration, k.lookupGeneration,
 								in.lookupGeneration, k.addresses == in.addresses ? "same" : "changed");
+						}
+						// Which views' states moved: per mode, the casters' and the volumetric copies' state ids, the job's and the epoch's.
+						if (job.inputs.modeRasterStates != in.modeRasterStates && job.loggedStates++ < 40) {
+							auto ids = [](const std::vector<std::uint32_t>& a_ids) {
+								std::string out;
+								for (const auto id : a_ids)
+									out += (out.empty() ? "" : ",") + std::to_string(id);
+								return out;
+							};
+							std::string text;
+							for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
+								if (job.inputs.modeRasterStates[m] != in.modeRasterStates[m])
+									text += fmt::format(" mode {}: casters [{}] -> [{}], volumetric [{}] -> [{}];", m, ids(job.inputs.modeRasterStates[m].casters),
+										ids(in.modeRasterStates[m].casters), ids(job.inputs.modeRasterStates[m].volumetric), ids(in.modeRasterStates[m].volumetric));
+							logger::info("[DCLF] async shadow: raster states moved at frame {} ({} views):{}", in.frameNumber, pending.size(), text);
 						}
 					});
 				job.handle = {};
@@ -502,10 +568,18 @@ namespace DCLF
 			usedWorkerBuild = useAsync;
 			if (useAsync) {
 				++async.used;
+				// The epoch's full-frustum planes, for its latch (the build may have been kicked before the cull that sets them).
+				payload.inputs.sunEntryProcesses = in.sunEntryProcesses;
 				ProbeWorkerBuild(payload, impl->shadowProbePayload, async, "shadow",
 					[&](ShadowPayload& a_probe) { BuildShadowPayload(job.inputs, tables, lookups, a_probe); });
+				if (!refreshed)
+					refresh();
 			} else {
 				++async.builtInline;
+				if (!refreshed) {
+					refresh();
+					in.lookupGeneration = lookups.shadowGeneration;
+				}
 				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneBones(), impl->ShadowKeptState(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
@@ -533,12 +607,6 @@ namespace DCLF
 				org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(payload.staged));
 			} else {
 				auto& scene = *resources->scene;
-				payload.objects.Emit(scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					uploads(scene.objects, a_data, a_bytes, a_offset);
-				});
-				EmitBones(payload.bones, scene.held.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-					uploads(scene.bones, a_data, a_bytes, a_offset);
-				});
 				EmitGeometryDraws(payload.geometries, scene.held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 					uploads(scene.geometries, a_data, a_bytes, a_offset);
 				});
@@ -551,21 +619,14 @@ namespace DCLF
 			resources->materialRowsHeld = payload.kept ? payload.materialRows.Version() : 0;
 			impl->shadowRowsWanted = payload.rowsWanted;
 			shadowStats.waitingRows = payload.waitingRows;
-			// Either path uploaded the object records, the bone rows and the geometry slots' draws the buffers did not hold.
+			// Either path uploaded the geometry slots' draws the buffers did not hold. The object records and the bone rows are
+			// the streams, as the tables hold them now (CommitSceneStreams).
 			auto& scene = *resources->scene;
-			if (payload.objects.Version())
-				scene.held.objects = payload.objects.Version();
 			if (payload.geometries.Version())
 				scene.held.geometries = payload.geometries.Version();
-			if (PersistentParityEnabled() && payload.bones.Version()) {
-				auto& bonesStore = impl->boneStore;
-				EmitBones(payload.bones, scene.held.bones, &bonesStore, [](const void*, std::size_t, std::size_t) {});
-				if (ParityDue(payload.inputs.frameNumber))
-					CheckBones(bonesStore, payload.bones);
-			}
-			if (payload.bones.Version())
-				scene.held.bones = payload.bones.Version();
+			impl->CommitSceneStreams(scene, store.GetTables(), store.GetFrame(), store.GetTablesGeneration(), uploads);
 			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
+			UploadTrees(store.GetTables(), store.GetFrame(), scene, uploads);
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
 			shadowStats.skippedPipeline = payload.skippedPipeline;
@@ -619,14 +680,17 @@ namespace DCLF
 					if (!sunEntryOffset)
 						sunEntryOffset = WriteSunEntryRegion(*resources, latchSlot, payload.inputs.sunEntryProcesses);
 					latch.sunEntryOffset = sunEntryOffset;
-					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the input's fade row, against the CPU's verdict from
-					// the tables' entry, per input.
+					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the object record's entry sphere (the kept records the
+					// epoch uploads), against the CPU's verdict from the tables' entry, per input.
 					if (PersistentParityEnabled() && ParityDue(frameNumber)) {
 						const auto& tablesNow = store.GetTables();
+						const auto& records = impl->objectStore.records.Get();
 						for (const auto& input : payload.Flat(view.modeIndex)) {
+							if (input.objectIndex >= records.size())
+								continue;
 							const bool cpu = OutsideSunEntry(payload.inputs, tablesNow, input.objectIndex);
 							++shadowStats.sunEntryChecks;
-							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, input.fade) ? 1 : 0;
+							shadowStats.sunEntryMismatches += cpu != OutsideSunEntryProcesses(payload.inputs.sunEntryProcesses, records[input.objectIndex].sunEntry) ? 1 : 0;
 						}
 					}
 				}
@@ -648,6 +712,14 @@ namespace DCLF
 			// The arena (the frame record and the blocks), when the worker did not stage it.
 			if (const auto& bytes = arena.Bytes(); !staged && !bytes.empty())
 				uploads(resources->constants, bytes.data(), bytes.size(), 0);
+			// CS's SharedData and FeatureData as the frame has them now, over the build's copies (it may have been kicked before
+			// the water reflections' prepasses refreshed them).
+			const auto writeBlock = [&](std::uint64_t a_address, const std::vector<std::byte>& a_bytes) {
+				if (a_address && a_address != payload.zerosAddress && !a_bytes.empty() && a_address >= in.addresses.constants)
+					uploads(resources->constants, a_bytes.data(), a_bytes.size(), a_address - in.addresses.constants);
+			};
+			writeBlock(payload.sharedDataAddress, in.sharedData);
+			writeBlock(payload.featureDataAddress, in.featureData);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			static std::uint32_t logged = 0;
 			if (logged++ % 600 == 0) {
@@ -672,18 +744,21 @@ namespace DCLF
 		if (ok) {
 			++shadowStats.epochs;
 			shadowStats.viewsDrawn += static_cast<std::uint32_t>(pending.size());
-			// Skylighting's occluders are uploaded: its map can be DCLF's this frame if none was left out.
-			if (modeUsed[kSkyMode]) {
-				impl->skyCommittedFrame = frameNumber;
-				impl->skyInputs = static_cast<std::uint32_t>(payload.ModeInputs(kSkyMode));
-				impl->skySkipped = payload.skySkipped;
+			// The occlusion maps' occluders are uploaded: each map can be DCLF's this frame if none was left out.
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+				if (!modeUsed[OcclusionModeOf(v)])
+					continue;
+				auto& occlusion = impl->occlusion[v];
+				occlusion.committedFrame = frameNumber;
+				occlusion.inputs = static_cast<std::uint32_t>(payload.ModeInputs(OcclusionModeOf(v)));
+				occlusion.skipped = payload.occlusionSkipped[v];
 			}
 			impl->ReadShadowCullCounters(frameNumber, shadowStats);
 			// Static shadow ownership: what this frame's epoch drew for a mode is what that mode's views'
 			// registrations are withheld for, from the next frame on.
 			if (PassCapture::ShadowWithholdingEnabled()) {
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-					if (modeUsed[m] && m != kSkyMode)
+					if (modeUsed[m] && !IsOcclusionMode(m))
 						impl->PublishShadowClaims(PassCapture::kFirstShadowMode + m, payload.inputList[m], usedWorkerBuild || payload.kept ? payload.claims[m] : nullptr,
 							shadowStats);
 				}
@@ -743,7 +818,7 @@ namespace DCLF
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
-		in.lookupGeneration = a_store.GetLookups().generation;
+		in.lookupGeneration = a_store.GetLookups().shadowGeneration;
 		in.tablesHeld = a_resources.scene->held;
 		in.inputsHeld = a_resources.inputsUploaded;
 		in.materialRowsHeld = a_resources.materialRowsHeld;
@@ -758,11 +833,65 @@ namespace DCLF
 		return in;
 	}
 
+	void IndirectDraws::KickShadowBuildEarly()
+	{
+		// The shadow build's inputs are final from the end of the scene phase (dclf-gpu-driven-frame.md: nothing between
+		// it and the shadow maps writes what the build reads, but the change notes the witness watches and CS's shared data,
+		// which the water reflections' prepasses refresh): kicked here, behind the placement job, and kept at BeforeShadowMaps
+		// when nothing it read has moved.
+		impl->shadowEarly = false;
+		KickShadowBuild();
+		if (impl->shadowJob.handle) {
+			impl->shadowEarly = true;
+			impl->shadowWitness = SceneStore::Get().ShadowInputsWitness();
+			++stats.async[kAsyncShadow].earlyKicked;
+		}
+	}
+
+	void IndirectDraws::BeforePlacementJoin()
+	{
+		auto& job = impl->shadowJob;
+		if (!impl->shadowEarly || !job.handle)
+			return;
+		if (AsyncWorker::Get().Wait(job.handle, AsyncWaitBudget()) != AsyncWorker::WaitResult::Done) {
+			impl->DropShadowJob(stats);
+			impl->shadowEarly = false;
+			++stats.async[kAsyncShadow].earlyRekicked;
+			++stats.async[kAsyncShadow].earlyRekickedBy[2];
+		}
+	}
+
+	bool IndirectDraws::KeepEarlyShadowBuild()
+	{
+		auto& job = impl->shadowJob;
+		if (!std::exchange(impl->shadowEarly, false) || !job.handle || !impl->shadow)
+			return false;
+		auto& async = stats.async[kAsyncShadow];
+		auto& store = SceneStore::Get();
+		// What the build read, read again: the change logs (the witness), then the inputs the epoch compares.
+		if (store.ShadowInputsWitness() != impl->shadowWitness) {
+			++async.earlyRekicked;
+			++async.earlyRekickedBy[0];
+			return false;
+		}
+		const auto now = impl->PrepareShadowInputs(store, *impl->shadow, job.modes, job.rasterStates);
+		if (!SameShadowInputs(job.inputs, now)) {
+			++async.earlyRekicked;
+			++async.earlyRekickedBy[now.sharedData.size() != job.inputs.sharedData.size() || now.featureData.size() != job.inputs.featureData.size() ? 1 : 2];
+			return false;
+		}
+		++async.earlyKept;
+		return true;
+	}
+
 	void IndirectDraws::KickShadowBuild()
 	{
 		// The shadow epoch's inputs are final from here to AfterShadowMaps: the scene phase has just built the
 		// tables and the frame's reference eye is set. The build runs on the worker while the engine draws
-		// the shadow maps, for last frame's render modes (a change is stale, and built inline).
+		// the shadow maps, for last frame's render modes (a change is stale, and built inline). A build kicked at the end of
+		// the scene phase is kept when nothing it read has moved since (KeepEarlyShadowBuild).
+		if (KeepEarlyShadowBuild())
+			return;
 		impl->DropShadowJob(stats);
 		// The scene stores are the main jobs' too; last frame's were joined by their epochs or dropped at EndFrame.
 		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j)
@@ -806,7 +935,7 @@ namespace DCLF
 			if (claims) {
 				ZoneScopedN("CS.DCLF.BuildShadow.Claims");
 				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-					if (inputs.modeUsed[m] && m != kSkyMode && !payload->kept)
+					if (inputs.modeUsed[m] && !IsOcclusionMode(m) && !payload->kept)
 						payload->claims[m] = ShadowClaimSet(payload->inputList[m], *tablesPtr);
 				if (inputs.modeUsed[kSunShadowMode])
 					payload->sunExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kSunShadowMode, *tablesPtr, exclusionCache);

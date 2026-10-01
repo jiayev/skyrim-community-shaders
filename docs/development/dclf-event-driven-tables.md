@@ -638,3 +638,62 @@ This is the CPU side of the GPU-driven plan's Phase 3, stated precisely enough t
 per-frame loops that depend on the engine's culls: the accumulate phase, and fades. Those go when DCLF's objects
 leave the engine's walks (that plan's Phases 1 and 2). The two are independent in order, but slots make both
 easier: GPU visibility, fades and view masks are all per-slot data.
+
+## Retiring the per-frame walk (2026-09-30)
+
+The delta walk still evaluated ~3,930 per-frame entries every frame (`Tracked::perFrame`). `CS_DCLF_PROFILE=1` split
+the 0.8 ms of `Scene.Evaluate` this way:
+-   **The light path:** 3,381 entries, 0.57 ms. The entries' traits: moves 1,942, root moves 1,839, skins 1,531,
+    actors 1,494, faces 493, animated shading 186.
+-   **Face shapes written in full:** 287 entries, 0.10 ms.
+-   **Actor entries with no record:** 240 entries, 0.04 ms.
+
+**What the actor polling found** (`CS_DCLF_INPUT_WATCH=1`, every classify and shading input by component, on each
+re-read):
+-   Classify inputs: re-read ~1,760 times a frame, 62-112 changes per 300 frames. Every one was the small-bound test
+    (`worldBound.radius <= 32`) of an animated actor's bound crossing 32.
+-   Shading inputs: re-read ~1,690 times a frame, 0 changes.
+
+**The small-bound test is the GPU's.** It only zeroes Skylighting's occlusion technique
+(`Skylighting::OcclusionTechnique`). The CPU now classifies without it (`a_ignoreRadius`), and the sky view's
+BuildDraws rejects a bound radius of 32 or less (`kCullMinRadius`) against the record's own bound, which the
+placements keep current. The bound left `ClassifyInputsOf`. Skylighting parity stayed within its baseline (DCLF
+never farther).
+
+**The actors' re-reads are event-gated.** Every input a classification reads now has an event that writes the entry
+in full: property flags and materials, controllers, fades, hidden bits, attach and detach, and the material alpha
+(`BSLightingShaderProperty::SetMaterialAlpha`, vtable slot 0x31, newly hooked). `Actor::SetAlpha` writes the root's
+`+0x100` (a fade, not the material). The light path and `WriteObject`'s cached branch therefore no longer re-read
+`ClassifyInputsOf` / `ShadingInputsOf`. `CS_DCLF_INPUT_WATCH=1` still re-reads them and reports any change no event
+announced (`<- MISSED`). In a scripted run (`CS_DCLF_TEST_COMMANDS`: spawns, unequip and equip, invisibility on and
+off, `SetActorAlpha`) it found 0, and walk parity was clean but for the race below. The light path went from 0.57 ms
+to 0.48 ms.
+
+**The hidden flip race, named.** The `SHIELD` (and `Symbol`) flips are `BShkVisibilityController::Func3` (stores
+`0x140bc193c` / `0x140bc194b`): the Havok behaviour graph's visibility controller, on behaviour jobs that can run
+while the scene phase reads. The patched stores announce them, and DCLF follows a frame late. The fix is
+event-carried state (the event's value applied in order), not another read.
+
+**Face shapes follow their heads' publications.**
+-   **Membership:** a tracked face shape is listed under its head (`SceneStore::faceHeads`, `ListFaceShape` /
+    `UnlistFaceShape`). The head's last shape leaving releases its record (`FaceSnapshots::Release`), not a walk that
+    did not see it. A shape leaving while others stay marks the head stale, so its siblings are written again and the
+    record is rebuilt without it.
+-   **Persistent streams:** `Tables::faceStreams` keeps a slot's stream with its record (`SetFaceStream` /
+    `ClearFaceStream`, free entries `kNoFaceObject`). A face region is freed when the last stream holding it is
+    (`faceStreamsReleased`), not when a walk misses it.
+-   **Publications are the event:** `FaceSnapshots::BeginWalk` names the heads it took a fresh snapshot of and the
+    heads a writer found stale. `ApplyFacePublications` updates the kept streams in place (`FaceSnapshots::View`).
+    It writes a shape again when it waited for a first snapshot (`Tracked::faceWaiting`) or its head's record no
+    longer holds it, and every shape of a stale head. The light path no longer takes face snapshots, and a face shape
+    is no longer per frame for being one.
+-   **Checked** with spawned actors (`CS_DCLF_TEST_COMMANDS`): the morph jobs' snapshots were taken in place (up to
+    4.6 streams a frame); walk parity showed only the race below; persistent parity clean; holes 0.
+
+**Still per frame:** the actors' entries (moves, skins, verdicts) and movers without a key.
+-   **Placements:** ~2,800 a frame in the test scene, since the actors animate continuously. A move event could place
+    them directly (a key's dependents), but the work stays; only the visit goes.
+-   **A skin's partition mask** reads its fade node's LOD level (`+0x152`). Its one writer is the fade node's LOD
+    selection, `FUN_14147a430(fadeNode, distance)` (the constructor aside): the event to hook. The dismembered
+    partitions' `editorVisible` is the other input.
+-   **The per-walk lists** (`actorObjects`, `skinnedObjects`; the latter is never read) have to be kept by membership.

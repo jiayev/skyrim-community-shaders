@@ -56,6 +56,8 @@ namespace DCLF
 		bool excludeSunEntries = false;
 		// DCLF draws Skylighting's occlusion map.
 		bool skyOcclusion = false;
+		// DCLF draws the precipitation occlusion mask (with Skylighting, whose hook renders it).
+		bool precipitationOcclusion = false;
 		// The main camera's cull skips the references DCLF draws entirely (PrimaryCull).
 		bool excludePrimaryEntries = false;
 

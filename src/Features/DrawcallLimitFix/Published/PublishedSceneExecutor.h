@@ -10,11 +10,10 @@
 namespace DCLF
 {
 
-	// Dedicated to scene publication: one coordinator and two preparation threads.
-	// Domain queues (including timers) are bounded independently. Dispatch never
-	// executes work inline or waits for capacity; a short admission mutex protects
-	// queue accounting, never user work. This is not a wait-free enqueue API.
-	// Scope waits and Shutdown are teardown/test APIs, not normal-frame operations.
+	// Dedicated to scene publication: one coordinator and a configurable number of preparation threads.
+	// Each domain's queue (including its timers) is bounded independently. Dispatch is lock-free: a job goes into its
+	// domain's bounded MPMC ring and a semaphore wakes a worker; it never executes work inline or waits for capacity
+	// (a full ring rejects). Scope waits and Shutdown are teardown/test APIs, not normal-frame operations.
 	class PublishedSceneExecutor final : public org::async::GraphScheduler
 	{
 	public:
@@ -28,7 +27,7 @@ namespace DCLF
 			std::array<std::size_t, 2> queued{}, active{}, highWater{};
 		};
 
-		explicit PublishedSceneExecutor(std::size_t coordinatorCapacity = 256, std::size_t preparationCapacity = 256);
+		explicit PublishedSceneExecutor(std::size_t coordinatorCapacity = 256, std::size_t preparationCapacity = 256, unsigned preparationWorkers = 2);
 		~PublishedSceneExecutor() override;
 		PublishedSceneExecutor(const PublishedSceneExecutor&) = delete;
 		PublishedSceneExecutor& operator=(const PublishedSceneExecutor&) = delete;
