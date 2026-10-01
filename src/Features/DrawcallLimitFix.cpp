@@ -213,6 +213,10 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
 	store.EndSceneFrame();
+	// The shadow build, behind the placement job (KickPlacements, at the walk's end): kept at BeforeShadowMaps when nothing
+	// it read moved.
+	if (DCLF::ActiveToggles().shadows)
+		DCLF::IndirectDraws::Get().KickShadowBuildEarly();
 	const double tablesMs = MillisecondsSince(tablesStart);
 	timing.sceneTablesMs += tablesMs;
 	timing.sceneTablesMaxMs = std::max(timing.sceneTablesMaxMs, tablesMs);
@@ -226,7 +230,9 @@ void DrawcallLimitFix::BeforeShadowMaps()
 		return;
 	ScopedPerfEvent event("CS DCLF: shadow views");
 	const auto start = std::chrono::steady_clock::now();
-	// The kept records' placements and palettes (the scene placement job), before the shadow views read them.
+	// The kept records' placements and palettes (the scene placement job), before the shadow views read them; the early
+	// shadow build, which reads the tables the join writes, is done first.
+	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	DCLF::SceneStore::Get().JoinPlacements();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the claims, the epochs - identifies a view by this list.
@@ -263,6 +269,8 @@ void DrawcallLimitFix::EarlyPrepass()
 	// before the shadow maps (Main::Draw) - and because the tables read the latched accumulator rather
 	// than `currentAccumulator`, which is not set this early.
 	auto& store = DCLF::SceneStore::Get();
+	// A frame without shadow maps: the early shadow build is still out, and reads the tables the join writes.
+	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	store.JoinPlacements();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
@@ -279,7 +287,7 @@ void DrawcallLimitFix::EarlyPrepass()
 		TracyCZoneN(requestZone, "CS.DCLF.Accumulate.RequestLighting", true);
 		const auto& tables = store.GetTables();
 		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
-			if (!tables.PipelineUsed(p, store.GetFrame()))
+			if (!tables.PipelineUsed(p))
 				continue;
 			if (const auto* program = programs.Find(tables.pipelines[p], *lighting))
 				pipelines.Find(tables.pipelines[p], *program);
@@ -298,12 +306,14 @@ void DrawcallLimitFix::EarlyPrepass()
 			// The set was recreated (a target change): every index a build may hold is stale.
 			lookups.pipelineSetGeneration = pipelines.Generation();
 			++lookups.generation;
+			++lookups.shadowGeneration;
+			lookups.shadowRefreshDue = true;
 		}
 		lookups.pipelines.resize(tables.pipelines.size());
 		auto& cache = SIE::ShaderCache::Instance();
 		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
 			auto& entry = lookups.pipelines[p];
-			if (!tables.PipelineUsed(p, store.GetFrame())) {
+			if (!tables.PipelineUsed(p)) {
 				if (entry.setIndex != DCLF::Lookups::kNone)
 					entry.version = lookups.NextVersion();
 				entry.setIndex = DCLF::Lookups::kNone;
@@ -402,15 +412,18 @@ void DrawcallLimitFix::EarlyPrepass()
 
 namespace
 {
-	/** @brief CS_DCLF_SKYLIGHT_PARITY: the two renders of one map, kept and compared once readable. */
+	/** @brief CS_DCLF_SKYLIGHT_PARITY: the two renders of one occlusion map, kept and compared once readable. */
 	struct SkyParity
 	{
 		std::array<winrt::com_ptr<ID3D11Texture2D>, 2> staging;
 		D3D11_TEXTURE2D_DESC desc{};
+		ID3D11Texture2D* texture = nullptr;  // the map's, as stage 0 found it (Skylighting swaps the precipitation target meanwhile)
 		std::uint32_t framesLeft = 0;
+		std::uint32_t frames = 0;
 		bool pending = false;
 	};
-	SkyParity skyParity;
+	std::array<SkyParity, 2> occlusionParity;
+	constexpr const char* kOcclusionNames[2] = { "Skylighting", "precipitation" };
 
 	bool SkyParityEnabled()
 	{
@@ -418,9 +431,9 @@ namespace
 		return enabled;
 	}
 
-	void CompareSkyParity()
+	void CompareSkyParity(std::uint32_t a_map)
 	{
-		auto& parity = skyParity;
+		auto& parity = occlusionParity[a_map];
 		if (!parity.pending || --parity.framesLeft)
 			return;
 		parity.pending = false;
@@ -469,7 +482,7 @@ namespace
 			if (dumps < 4) {
 				const auto directory = std::filesystem::path(DCLF::SwitchValue(DCLF::Switch::SkylightDumpDir).empty() ? "." : DCLF::SwitchValue(DCLF::Switch::SkylightDumpDir));
 				for (std::uint32_t image = 0; image < 2; ++image) {
-					std::ofstream out(directory / fmt::format("sky-parity-{}-{}.pgm", dumps, image ? "dclf" : "engine"), std::ios::binary);
+					std::ofstream out(directory / fmt::format("{}-parity-{}-{}.pgm", a_map ? "precipitation" : "sky", dumps, image ? "dclf" : "engine"), std::ios::binary);
 					out << "P5\n" << parity.desc.Width << " " << parity.desc.Height << "\n65535\n";
 					for (std::uint32_t y = 0; y < parity.desc.Height; ++y)
 						for (std::uint32_t x = 0; x < parity.desc.Width; ++x) {
@@ -478,44 +491,65 @@ namespace
 							out.write(bytes, 2);
 						}
 				}
-				logger::info("[DCLF] Skylighting occlusion parity: map {} written to {}", dumps, directory.string());
+				logger::info("[DCLF] {} occlusion parity: map {} written to {}", kOcclusionNames[a_map], dumps, directory.string());
 				++dumps;
 			}
 		}
 		context->Unmap(parity.staging[0].get(), 0);
 		context->Unmap(parity.staging[1].get(), 0);
-		logger::info("[DCLF] Skylighting occlusion parity: {}x{} format {}: {} texels equal of {}, DCLF farther {} nearer {} ({} by more than 1/256), max diff {:.6f}, mean diff {:.6f}; clear texels engine {} DCLF {}",
-			parity.desc.Width, parity.desc.Height, static_cast<std::uint32_t>(format), equal, texels, dclfFarther, dclfNearer, bigDiff, maxDiff,
+		logger::info("[DCLF] {} occlusion parity: {}x{} format {}: {} texels equal of {}, DCLF farther {} nearer {} ({} by more than 1/256), max diff {:.6f}, mean diff {:.6f}; clear texels engine {} DCLF {}",
+			kOcclusionNames[a_map], parity.desc.Width, parity.desc.Height, static_cast<std::uint32_t>(format), equal, texels, dclfFarther, dclfNearer, bigDiff, maxDiff,
 			texels - equal ? sumDiff / double(texels - equal) : 0.0, engineFar, dclfFar);
 	}
 }
 
-bool DrawcallLimitFix::SkyOcclusionReady()
+bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 {
-	if (!Running() || !DCLF::SceneStore::SkyOcclusionEnabled())
+	static_assert(kSkyOcclusion == DCLF::kOcclusionSky && kPrecipitationOcclusion == DCLF::kOcclusionPrecipitation);
+	if (!Running() || !DCLF::SceneStore::OcclusionEnabled(a_map))
 		return false;
-	const bool ready = DCLF::IndirectDraws::Get().SkyOcclusionReady();
-	skyNativeFrames += ready ? 0 : 1;
+	const bool ready = DCLF::IndirectDraws::Get().OcclusionReady(a_map);
+	occlusionNativeFrames[a_map] += ready ? 0 : 1;
+	occlusionWanted |= ready ? 1u << a_map : 0u;
 	return ready;
 }
 
-void DrawcallLimitFix::DrawSkyOcclusion()
+void DrawcallLimitFix::DrawOcclusion()
 {
-	DCLF::IndirectDraws::Get().ExecuteSkyOcclusion();
+	// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch; then DCLF's render of each map whose
+	// engine render a parity frame kept.
+	const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
+	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
+	for (std::uint32_t map = 0; map < 2; ++map)
+		if (occlusionParityWaiting & (1u << map)) {
+			if (drawn & (1u << map))
+				CopyOcclusion(static_cast<OcclusionMap>(map), 1);
+			else
+				occlusionParity[map].staging = {};
+		}
+	occlusionParityWaiting = 0;
 }
 
-bool DrawcallLimitFix::SkyOcclusionParityFrame()
+bool DrawcallLimitFix::OcclusionParityFrame(OcclusionMap a_map)
 {
-	static std::uint32_t frames = 0;
-	return SkyParityEnabled() && !skyParity.pending && (frames++ % 120) == 60;
+	auto& parity = occlusionParity[a_map];
+	return SkyParityEnabled() && !parity.pending && (parity.frames++ % 120) == 60;
 }
 
-void DrawcallLimitFix::CopySkyOcclusion(std::uint32_t a_stage)
+void DrawcallLimitFix::CopyOcclusion(OcclusionMap a_map, std::uint32_t a_stage)
 {
-	auto* texture = globals::features::skylighting.texOcclusion ? globals::features::skylighting.texOcclusion->resource.get() : nullptr;
+	auto& parity = occlusionParity[a_map];
+	// The map's texture: Skylighting's own, or depth target 10 as stage 0 finds it (Skylighting swaps its own in later).
+	ID3D11Texture2D* texture = parity.texture;
+	if (a_stage == 0) {
+		if (a_map == kSkyOcclusion)
+			texture = globals::features::skylighting.texOcclusion ? globals::features::skylighting.texOcclusion->resource.get() : nullptr;
+		else if (auto* renderer = globals::game::renderer)
+			texture = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kPRECIPITATION_OCCLUSION_MAP].texture;
+		parity.texture = texture;
+	}
 	if (!texture || a_stage > 1)
 		return;
-	auto& parity = skyParity;
 	if (a_stage == 0) {
 		texture->GetDesc(&parity.desc);
 		D3D11_TEXTURE2D_DESC desc = parity.desc;
@@ -532,6 +566,8 @@ void DrawcallLimitFix::CopySkyOcclusion(std::uint32_t a_stage)
 	if (!parity.staging[a_stage])
 		return;
 	globals::d3d::context->CopyResource(parity.staging[a_stage].get(), texture);
+	if (a_stage == 0)
+		occlusionParityWaiting |= 1u << a_map;
 	if (a_stage == 1) {
 		parity.pending = true;
 		parity.framesLeft = 4;
@@ -540,7 +576,8 @@ void DrawcallLimitFix::CopySkyOcclusion(std::uint32_t a_stage)
 
 void DrawcallLimitFix::Prepass()
 {
-	CompareSkyParity();
+	for (std::uint32_t map = 0; map < 2; ++map)
+		CompareSkyParity(map);
 	DCLF::ProbeShadowMask(Running());
 	DCLF::ProbeShadowMaps(Running());
 	if (!Running())
@@ -550,6 +587,8 @@ void DrawcallLimitFix::Prepass()
 	// The one point in the frame where `currentAccumulator` is the main camera's accumulator. The accumulate phase
 	// (EarlyPrepass) runs before it is set, and reads this latch.
 	store.LatchAccumulator();
+	// The early colour build reads what RefreshFrameConstants writes: done first.
+	DCLF::IndirectDraws::Get().BeforeFrameConstants();
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
 	store.RefreshFrameConstants();
@@ -663,13 +702,13 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 	if (!globals::features::drawcallLimitFix.Running())
 		return;
 	const auto mode = static_cast<std::uint32_t>(a_accumulator->GetRuntimeData().renderMode);
-	// Skylighting's occlusion map (render mode 0x1C, the precipitation accumulator while Skylighting draws its own map).
+	// The occlusion maps (render mode 0x1C, the precipitation accumulator): Skylighting's own map while it draws it
+	// (inOcclusion), else the precipitation mask.
 	if (mode == 0x1C) {
 		auto* sky = globals::game::sky;
 		auto* precip = sky ? sky->precip : nullptr;
-		if (globals::features::skylighting.inOcclusion && precip &&
-			precip->occlusionData.accumulator.get() == reinterpret_cast<RE::BSShaderAccumulator*>(a_accumulator))
-			DCLF::IndirectDraws::Get().CaptureSkyOcclusion();
+		if (precip && precip->occlusionData.accumulator.get() == reinterpret_cast<RE::BSShaderAccumulator*>(a_accumulator))
+			DCLF::IndirectDraws::Get().CaptureOcclusion(globals::features::skylighting.inOcclusion ? DCLF::kOcclusionSky : DCLF::kOcclusionPrecipitation);
 		return;
 	}
 	if (mode < 0xD || mode > 0xF)

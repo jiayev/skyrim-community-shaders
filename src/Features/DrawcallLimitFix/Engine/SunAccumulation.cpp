@@ -407,6 +407,18 @@ namespace DCLF
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
 
+		/**
+		 * @brief An owned geometry's activeLightMask as the engine would leave it once its main registration had read it: 0. DCLF
+		 * draws its main pass (PrimaryCull::Owned), so no main registration ever consumes the bits the shadow lights' accumulations
+		 * write, and every later registration of it (the reflections, the other views) reads 0, as with the engine's own.
+		 */
+		static void ClearOwnedMask(void* a_geometry)
+		{
+			if (void* property = At<void*>(a_geometry, kGeometryShaderProperty))
+				if (void* lightData = At<void*>(property, kPropertyLightData))
+					At<std::uint32_t>(lightData, kLightDataActiveMask) = 0;
+		}
+
 		/** @brief FUN_140e28af0's calls of the accumulator's registration, FUN_1414b2140(accumulator, geometry, arg). */
 		template <std::uint32_t Site>
 		struct Register
@@ -425,6 +437,15 @@ namespace DCLF
 					}
 					if (PrimaryCull::Probe() && PrimaryCull::Get().Counting())
 						PrimaryCull::Get().NoteRegistration(a_accumulator, geometry);
+					// An owned geometry: a shadow light's accumulation (+0x160 neither 0 nor 0xFFFF) leaves its mask 0, and no
+					// registration of it takes the sun's bits (ClearOwnedMask).
+					const std::uint32_t lightIndex = At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex);
+					if (PrimaryCull::Get().Owned(*geometry)) {
+						const auto result = func(a_accumulator, a_geometry, a_arg);
+						if (lightIndex != 0 && lightIndex != 0xFFFF)
+							ClearOwnedMask(a_geometry);
+						return result;
+					}
 					// The main camera's registrations read the mask, then clear it (+0x160 = 0xFFFF) for the next frame.
 					if (self.bitsReady.load(std::memory_order_acquire))
 						self.ApplySunBits(geometry, At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex) == 0xFFFF);
@@ -442,11 +463,19 @@ namespace DCLF
 				if (underRemoved && !self.frameState.probe)
 					++self.stats.cascadeRegistrationsUnderRemoved;
 				if (claimed) {
-					WriteMaskOnly(a_accumulator, a_geometry);
+					// An owned geometry's mask stays 0 (ClearOwnedMask); any other takes the cascade's bit for its main registration.
+					if (PrimaryCull::Get().Owned(*geometry))
+						ClearOwnedMask(a_geometry);
+					else
+						WriteMaskOnly(a_accumulator, a_geometry);
 					++call->skipped;
 				} else {
 					const std::uint32_t passesBefore = PassCapture::PassesOnThisThread();
 					result = func(a_accumulator, a_geometry, a_arg);
+					// A caster the sun's views do not claim is registered for its native shadow; if DCLF draws its main pass, the
+					// cascade's bit has no main registration to read it (ClearOwnedMask).
+					if (PrimaryCull::Get().Owned(*geometry))
+						ClearOwnedMask(a_geometry);
 					++call->registered;
 					if (underRemoved && self.frameState.probe)
 						self.NoteProbeUnclaimed(geometry, PassCapture::PassesOnThisThread() - passesBefore);

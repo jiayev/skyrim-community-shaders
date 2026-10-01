@@ -43,6 +43,38 @@ namespace DCLF::Scene
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	// Sky::SetColor (0x14040d970): a colour from a weather blend, written in place. External emittance reads some of those
+	// colours through its emissiveColor pointer (emittanceEvents).
+	struct SkySetColor
+	{
+		static void thunk(RE::Sky* a_sky, RE::NiColor* a_colour, void* a_blend, float a_flash)
+		{
+			const RE::NiColor before = a_colour ? *a_colour : RE::NiColor{};
+			func(a_sky, a_colour, a_blend, a_flash);
+			if (a_colour && std::memcmp(&before, a_colour, sizeof(before)) != 0)
+				emittanceEvents.Push(a_colour);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// FUN_141480fc0 (object, &colour): points the external emittance of the object's Lighting and effect properties at a
+	// colour, recursively. The colour a Lighting property reads is a classification input (ListDependents lists the entry
+	// under it); a re-point with no flag change would otherwise go unseen, so it is a property event.
+	struct SetExternalEmittance
+	{
+		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
+		{
+			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
+			auto* property = geometry ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr;
+			const RE::NiColor* before = property ? property->emissiveColor : nullptr;
+			const auto result = func(a_object, a_colour);
+			if (property && property->emissiveColor != before)
+				PushProperty(property);
+			return result;
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
 	struct LodFadeRenderPasses
 	{
 		static RE::BSShaderProperty::RenderPassArray* thunk(RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, std::uint32_t a_renderFlags,
@@ -78,6 +110,21 @@ namespace DCLF::Scene
 			const auto* before = a_this->material;
 			func(a_this, a_material, a_unique);
 			if (a_this->material != before)
+				PushProperty(a_this);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	// BSLightingShaderProperty::SetMaterialAlpha (vtable slot 0x31): the material alpha a classification and a record read.
+	struct PropertySetMaterialAlpha
+	{
+		static void thunk(RE::BSLightingShaderProperty* a_this, float a_alpha)
+		{
+			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
+			const float before = material ? material->materialAlpha : 0.0f;
+			func(a_this, a_alpha);
+			material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
+			if (material && std::bit_cast<std::uint32_t>(material->materialAlpha) != std::bit_cast<std::uint32_t>(before))
 				PushProperty(a_this);
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
@@ -387,6 +434,11 @@ namespace DCLF
 			Scene::PushFade(static_cast<const RE::BSFadeNode*>(a_fadeNode));
 	}
 
+	void SceneStore::MuteFadeEvents(bool a_muted)
+	{
+		Scene::fadeEventsMuted = a_muted;
+	}
+
 	bool SceneStore::IsLoadingScreenUp()
 	{
 		auto* ui = RE::UI::GetSingleton();
@@ -435,6 +487,8 @@ namespace DCLF
 			propertyChanged.clear();
 			DrainLodFadeEvents(propertyChanged);
 			propertyChanged.clear();
+			DrainEmittanceEvents(propertyChanged);
+			propertyChanged.clear();
 			DrainNodeEvents(nodeChanged);
 			nodeChanged.clear();
 			moveEvents.Discard();
@@ -455,6 +509,7 @@ namespace DCLF
 			for (auto& [geometry, entry] : tracked)
 				ReleaseObjectSlot(entry);
 			tracked.clear();
+			ClearFaceShapes();
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
@@ -573,6 +628,11 @@ namespace DCLF
 		stl::detour_thunk<PrependController>(REL::Offset(kPrependController).address());
 		stl::detour_thunk<HavokNodeTransform>(REL::Offset(kHavokNodeTransform).address());
 		stl::write_vfunc<0x2A, LodFadeRenderPasses>(RE::VTABLE_BSLightingShaderProperty[0]);
+		constexpr std::uintptr_t kSkySetColor = 0x40d970;            // Sky::SetColor
+		constexpr std::uintptr_t kSetExternalEmittance = 0x1480fc0;  // FUN_141480fc0: external emittance, per property
+		stl::detour_thunk<SkySetColor>(REL::Offset(kSkySetColor).address());
+		stl::detour_thunk<SetExternalEmittance>(REL::Offset(kSetExternalEmittance).address());
+		stl::write_vfunc<0x31, PropertySetMaterialAlpha>(RE::VTABLE_BSLightingShaderProperty[0]);
 		lodFadeEventsInstalled = true;
 		if (InstallSwitchStores()) {
 			// NiSwitchNode's own child edits (NiNode vtable slots 0x35, 0x37-0x3C, as SceneTracker's).
@@ -585,7 +645,7 @@ namespace DCLF
 			DetourSwitchSlot<SwitchSetAt2>(0x3C);
 			switchEventsInstalled = true;
 		}
-		logger::info("[DCLF] scene events installed (fades, property flags and materials, LOD fades, Havok node transforms, controllers): OnVisible at {:#x}",
+		logger::info("[DCLF] scene events installed (fades, property flags, materials and material alpha, LOD fades, emittance, Havok node transforms, controllers): OnVisible at {:#x}",
 			onVisible - REL::Module::get().base() + 0x140000000);
 		InstallMoveEvents();
 		hiddenEventsInstalled = InstallHiddenStores();
@@ -683,6 +743,7 @@ namespace DCLF
 				switchesApplied.push_back(node);
 			else
 				switchResync = true;
+			RefreshFadeRootSwitch(node);
 			if (a_full)
 				continue;
 			// Every entry under it: which of them the switch draws is a classification input (ClassifyFrame).

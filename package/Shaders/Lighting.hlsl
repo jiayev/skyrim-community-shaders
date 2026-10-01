@@ -557,6 +557,12 @@ Texture2D<float4> TexProjDetail : register(t10);
 #		endif
 
 Texture2D<float4> TexCharacterLightProjNoiseSampler : register(t11);
+#		if defined(DCLF_BINDLESS)
+// The character light's noise under DCLF (DrawPipelines.h: kCharacterLightRegister). The engine binds it at t11, but it is a
+// render target that alternates every frame: the frame record gives it, not the material row. A character-light pass reads it
+// here for both of t11's uses.
+Texture2D<float4> DCLFCharacterLightNoise : register(t125);
+#		endif
 Texture2D<float4> TexRimSoftLightWorldMapOverlaySampler : register(t12);
 
 #		if defined(WORLD_MAP) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE))
@@ -2036,7 +2042,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 projWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	float3 triFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
 	float3 triWeights = Triplanar::GetWeights(tbnTr[2], triFaceNormal);
+#		if defined(DCLF_BINDLESS)
+	float projNoise = (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) ?
+	                      Triplanar::Sample(DCLFCharacterLightNoise, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x :
+	                      Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
+#		else
 	float projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, projWorldPos, triWeights, ProjectedUVParams.z).x;
+#		endif
 	float3 texProj = normalize(input.TexProj);
 #		if defined(TREE_ANIM) || defined(LODOBJECTSHD)
 	float vertexAlpha = 1;
@@ -2944,7 +2956,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if !defined(LANDSCAPE)
 	if (Permutation::PixelShaderDescriptor & Permutation::LightingFlags::CharacterLight) {
 		float charLightMul = saturate(dot(viewDirection, worldNormal.xyz)) * CharacterLightParams.x + CharacterLightParams.y * saturate(dot(float2(0.164398998, -0.986393988), worldNormal.yz));
+#		if defined(DCLF_BINDLESS)
+		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * DCLFCharacterLightNoise.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+#		else
 		float charLightColor = min(CharacterLightParams.w, max(0, CharacterLightParams.z * TexCharacterLightProjNoiseSampler.Sample(SampCharacterLightProjNoiseSampler, baseShadowUV).x));
+#		endif
 		diffuseColor += (charLightMul * charLightColor).xxx;
 	}
 #	endif

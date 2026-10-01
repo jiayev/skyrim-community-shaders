@@ -10,6 +10,7 @@
 #include "Features/LightLimitFix.h"
 #include "Features/Skin.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
+#include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 #include "State.h"
 
 namespace DCLF
@@ -216,7 +217,9 @@ namespace DCLF
 
 	bool CaptureParity::CompareMaterial(const RE::BSGeometry* a_geometry, std::uint32_t a_materialIndex)
 	{
-		const auto& record = SceneStore::Get().GetTables().materials[a_materialIndex];
+		const auto& tables = SceneStore::Get().GetTables();
+		const auto& record = tables.materials[a_materialIndex];
+		const bool frameCharacterLight = MaterialSources::FrameCharacterLight(tables.materialSlotKey[a_materialIndex].second);
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
 		bool ok = true;
@@ -234,10 +237,12 @@ namespace DCLF
 				continue;
 			const auto* native = reinterpret_cast<const ID3D11ShaderResourceView*>(state.PSTexture[slot]);
 			const auto nativeMode = static_cast<std::uint32_t>(state.PSTextureAddressMode[slot].underlying());
-			if (native != record.textures[slot] || nativeMode != record.addressModes[slot]) {
+			// A character-light pass's t11 is the frame's view (the frame record's kCharacterLightRegister).
+			const auto* view = frameCharacterLight && slot == 11 ? tables.characterLightView : record.textures[slot];
+			if (native != view || nativeMode != record.addressModes[slot]) {
 				ok = false;
 				NoteMismatch(fmt::format("{} texture slot {}: DCLF {} mode {}, native {} mode {}", Describe(a_geometry), slot,
-					fmt::ptr(record.textures[slot]), record.addressModes[slot], fmt::ptr(native), nativeMode));
+					fmt::ptr(view), record.addressModes[slot], fmt::ptr(native), nativeMode));
 			}
 		}
 		return ok;

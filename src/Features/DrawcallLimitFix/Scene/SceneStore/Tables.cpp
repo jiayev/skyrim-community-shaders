@@ -25,10 +25,10 @@ namespace DCLF
 		extraOffset.resize(a_count, kNoExtraRows);
 		shadowTechnique.resize(a_count, 0);
 		shadowReject.resize(a_count, 0);
-		skyTechnique.resize(a_count, 0);
+		for (auto& column : occlusionTechnique)
+			column.resize(a_count, 0);
 		sunEntry.resize(a_count, std::array<float, 4>{});
 		lodFade.resize(a_count, std::array<float, 4>{ 0.0f, 0.0f, 0.0f, -1.0f });
-		fadedOut.resize(a_count, 0);
 		fadeDistance.resize(a_count, 0.0f);
 		residentSlot.resize(a_count, 0);
 		faceStream.resize(a_count, kNoFaceStream);
@@ -64,7 +64,8 @@ namespace DCLF
 		columns.boneOffset = boneOffset[a_slot];
 		columns.boneRows = boneRows[a_slot];
 		columns.shadowTechnique = shadowTechnique[a_slot];
-		columns.skyTechnique = skyTechnique[a_slot];
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+			columns.occlusionTechnique[v] = occlusionTechnique[v][a_slot];
 		columns.faceStream = faceStream[a_slot];
 		columns.boneCapacity = (columns.boneRows || columns.extraOffset != kNoExtraRows) ? BoneCapacity() : 0u;
 		columns.sceneFlags = sceneFlags[a_slot];
@@ -98,7 +99,7 @@ namespace DCLF
 			causes |= (a.boneRows || b.boneRows ? kChangeSkin : 0u) | (a.extraOffset != kNoExtraRows || b.extraOffset != kNoExtraRows ? kChangeExtras : 0u);
 		if (a.extraOffset != b.extraOffset || !same(a.extras, b.extras))
 			causes |= kChangeExtras;
-		if (a.shadowTechnique != b.shadowTechnique || a.shadowReject != b.shadowReject || a.skyTechnique != b.skyTechnique || a.shadowDiffuse != b.shadowDiffuse ||
+		if (a.shadowTechnique != b.shadowTechnique || a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique || a.shadowDiffuse != b.shadowDiffuse ||
 			a.shadowMaterial != b.shadowMaterial)
 			causes |= kChangeShadow;
 		// The draw template's geometry half: everything but the pipeline index, which is the bindings'.
@@ -173,18 +174,48 @@ namespace DCLF
 		draws[a_slot] = DrawSequence{};
 		shadowTechnique[a_slot] = 0;
 		shadowReject[a_slot] = 0;
-		skyTechnique[a_slot] = 0;
+		for (auto& column : occlusionTechnique)
+			column[a_slot] = 0;
 		sunEntry[a_slot] = {};
 		lodFade[a_slot] = { 0.0f, 0.0f, 0.0f, -1.0f };
-		fadedOut[a_slot] = 0;
 		fadeDistance[a_slot] = 0.0f;
 		residentSlot[a_slot] = 0;
-		faceStream[a_slot] = kNoFaceStream;
+		ClearFaceStream(a_slot);
 		shadowDiffuse[a_slot] = nullptr;
 		shadowMaterial[a_slot] = nullptr;
 		objectSeen[a_slot] = 0;
 		sceneFlags[a_slot] = FreeObjectRecord().flags;
 		NoteWrite(a_slot, before);
+	}
+
+	void SceneStore::Tables::SetFaceStream(std::uint32_t a_slot, FaceStream a_stream)
+	{
+		a_stream.object = a_slot;
+		auto& index = faceStream[a_slot];
+		if (index == kNoFaceStream) {
+			if (!faceStreamFree.empty()) {
+				index = faceStreamFree.back();
+				faceStreamFree.pop_back();
+			} else {
+				index = static_cast<std::uint32_t>(faceStreams.size());
+				faceStreams.emplace_back();
+			}
+		} else if (const auto& held = faceStreams[index]; held.geometry != a_stream.geometry || held.region != a_stream.region) {
+			faceStreamsReleased.emplace_back(held.geometry, held.region);
+		}
+		faceStreams[index] = std::move(a_stream);
+	}
+
+	void SceneStore::Tables::ClearFaceStream(std::uint32_t a_slot)
+	{
+		auto& index = faceStream[a_slot];
+		if (index == kNoFaceStream)
+			return;
+		auto& stream = faceStreams[index];
+		faceStreamsReleased.emplace_back(stream.geometry, stream.region);
+		stream = {};
+		faceStreamFree.push_back(index);
+		index = kNoFaceStream;
 	}
 
 	void SceneStore::Tables::ClearFrame(bool a_keepObjects)
@@ -215,14 +246,19 @@ namespace DCLF
 			extraFree.clear();
 			shadowTechnique.clear();
 			shadowReject.clear();
-			skyTechnique.clear();
+			for (auto& column : occlusionTechnique)
+				column.clear();
 			sunEntry.clear();
 		lodFade.clear();
-			fadedOut.clear();
 			fadeDistance.clear();
 			residentSlot.clear();
 			// Every slot is gone: the log's readers read them all again.
 			InvalidateChangeLog();
+			for (const auto& stream : faceStreams)
+				if (stream.object != kNoFaceObject)
+					faceStreamsReleased.emplace_back(stream.geometry, stream.region);
+			faceStreams.clear();
+			faceStreamFree.clear();
 			faceStream.clear();
 			shadowDiffuse.clear();
 			shadowMaterial.clear();
@@ -236,11 +272,11 @@ namespace DCLF
 		}
 		// The per-frame lists: every walk refills them, and the slots' offsets into them are rewritten with them.
 		actorObjects.clear();
-		faceStreams.clear();
 		shadowTextureSet.clear();
 		shadowTextureSeen.clear();
 		shadowKeysUsed.clear();
-		skyKeysUsed.clear();
+		for (auto& keys : occlusionKeysUsed)
+			keys.clear();
 	}
 
 	void SceneStore::Tables::Clear()
@@ -253,14 +289,8 @@ namespace DCLF
 		geometrySlots.Clear();
 		pipelineSlots.Clear();
 		materialSlots.Clear();
-		usedMaterials.clear();
-		usedPipelines.clear();
 		usedMaterialBits.clear();
 		usedPipelineBits.clear();
-		usedMaterialsFrame = usedPipelinesFrame = 0;
-		materialTextureDirty.clear();
-		materialTextureQueued.clear();
-		materialTextureChanges.clear();
 		retiredMaterialSlots.clear();
 		retiredPipelineSlots.clear();
 		shadowTextureChanges.clear();
@@ -285,6 +315,23 @@ namespace DCLF
 		emissiveMult.clear();
 		lights.clear();
 		treeAnim.clear();
+		trees.clear();
+		treeRefs.clear();
+		treeFree.clear();
+		treeNode.clear();
+		treeIndex.clear();
+		objectTree.clear();
+		treeObjects.clear();
+		++treesVersion;
+		++treeObjectsVersion;
+		fadeRoots.clear();
+		fadeRootRefs.clear();
+		fadeRootFree.clear();
+		fadeRootNode.clear();
+		fadeRootIndex.clear();
+		fadeRootSwitch.clear();
+		objectFadeRoot.clear();
+		++fadeRootsVersion;
 		skinWetness.clear();
 		actorObjects.clear();
 		skinPartitions.clear();
@@ -310,83 +357,41 @@ namespace DCLF
 		extraFree.clear();
 		shadowTechnique.clear();
 		shadowReject.clear();
-		skyTechnique.clear();
+		for (auto& column : occlusionTechnique)
+			column.clear();
 		sunEntry.clear();
 		lodFade.clear();
-		fadedOut.clear();
 		fadeDistance.clear();
 		residentSlot.clear();
 		InvalidateChangeLog();
 		faceStreams.clear();
+		faceStreamFree.clear();
+		faceStreamsReleased.clear();
 		faceStream.clear();
 		shadowDiffuse.clear();
 		shadowMaterial.clear();
 		shadowTextureSet.clear();
 		shadowTextureSeen.clear();
 		shadowKeysUsed.clear();
-		skyKeysUsed.clear();
+		for (auto& keys : occlusionKeysUsed)
+			keys.clear();
 		objectSeen.clear();
 		sceneFlags.clear();
 		objectFree.clear();
 		liveObjects = 0;
 	}
 
-	void SceneStore::Tables::MarkMaterialUsed(std::uint32_t a_slot, std::uint32_t a_frame)
+	void SceneStore::Tables::MarkMaterialUsed(std::uint32_t a_slot)
 	{
-		if (usedMaterialsFrame != a_frame) {
-			usedMaterials.clear();
-			std::fill(usedMaterialBits.begin(), usedMaterialBits.end(), 0);
-			usedMaterialsFrame = a_frame;
-		}
-		if (materialLastUsed[a_slot] != a_frame) {
-			materialLastUsed[a_slot] = a_frame;
-			usedMaterials.push_back(a_slot);
-			if (usedMaterialBits.size() <= a_slot / 64)
-				usedMaterialBits.resize(a_slot / 64 + 1, 0);
-			usedMaterialBits[a_slot / 64] |= 1ull << (a_slot % 64);
-		}
-		if (a_slot < materialTextureDirty.size() && materialTextureDirty[a_slot] && !materialTextureQueued[a_slot]) {
-			materialTextureQueued[a_slot] = 1;
-			materialTextureChanges.push_back(a_slot);
-		}
+		if (usedMaterialBits.size() <= a_slot / 64)
+			usedMaterialBits.resize(a_slot / 64 + 1, 0);
+		usedMaterialBits[a_slot / 64] |= 1ull << (a_slot % 64);
 	}
 
-	void SceneStore::Tables::MarkPipelineUsed(std::uint32_t a_slot, std::uint32_t a_frame)
+	void SceneStore::Tables::MarkPipelineUsed(std::uint32_t a_slot)
 	{
-		if (usedPipelinesFrame != a_frame) {
-			usedPipelines.clear();
-			std::fill(usedPipelineBits.begin(), usedPipelineBits.end(), 0);
-			usedPipelinesFrame = a_frame;
-		}
-		if (pipelineLastUsed[a_slot] != a_frame) {
-			pipelineLastUsed[a_slot] = a_frame;
-			usedPipelines.push_back(a_slot);
-			if (usedPipelineBits.size() <= a_slot / 64)
-				usedPipelineBits.resize(a_slot / 64 + 1, 0);
-			usedPipelineBits[a_slot / 64] |= 1ull << (a_slot % 64);
-		}
-	}
-
-	void SceneStore::Tables::MarkMaterialTextureChanged(std::uint32_t a_slot, std::uint32_t a_frame)
-	{
-		if (a_slot >= materialTextureDirty.size()) {
-			materialTextureDirty.resize(a_slot + 1, 0);
-			materialTextureQueued.resize(a_slot + 1, 0);
-		}
-		materialTextureDirty[a_slot] = 1;
-		if (materialLastUsed[a_slot] == a_frame && !materialTextureQueued[a_slot]) {
-			materialTextureQueued[a_slot] = 1;
-			materialTextureChanges.push_back(a_slot);
-		}
-	}
-
-	void SceneStore::Tables::TakeMaterialTextureChanges(std::vector<std::uint32_t>& a_out)
-	{
-		a_out.clear();
-		a_out.swap(materialTextureChanges);
-		for (const auto slot : a_out) {
-			materialTextureQueued[slot] = 0;
-			materialTextureDirty[slot] = 0;
-		}
+		if (usedPipelineBits.size() <= a_slot / 64)
+			usedPipelineBits.resize(a_slot / 64 + 1, 0);
+		usedPipelineBits[a_slot / 64] |= 1ull << (a_slot % 64);
 	}
 }

@@ -21,15 +21,8 @@ namespace DCLF
 					PatchRowAddresses(a_row, a_address);
 				}, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) { a_emit(a_resources.pipelineRows.buffer, a_data, a_bytes, a_offset); });
 			}
-			TracyCZoneN(objectUploadZone, "CS.DCLF.UploadRanges.Objects", true);
+			// Not the object records or the palettes: the commit's (CommitSceneStreams).
 			const auto& scene = *a_resources.scene;
-			a_payload.objectRecords.Emit(scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(scene.objects, a_data, a_bytes, a_offset);
-			});
-			TracyCZoneEnd(objectUploadZone);
-			EmitBones(a_payload.bones, scene.held.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-				a_emit(scene.bones, a_data, a_bytes, a_offset);
-			});
 			// The segment's input buffer: the resident region at its head when the buffer does not hold this version of it,
 			// then the frame's own inputs after it.
 			const bool depth = a_payload.inputs.depthOnly && a_resources.inputsDepth;
@@ -90,12 +83,6 @@ namespace DCLF
 		// one's (frame order), and one that did would only have sent a subset of this.
 		const auto& scene = *a_resources.scene;
 		const TablesHeld& held = a_payload.inputs.tablesHeld;
-		a_payload.objects.Emit(held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(scene.objects), a_offset, a_data, a_bytes);
-		});
-		EmitBones(a_payload.bones, held.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
-			batch->Stage(UploadTarget::FromShared(scene.bones), a_offset, a_data, a_bytes);
-		});
 		EmitGeometryDraws(a_payload.geometries, held.geometries, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
 			batch->Stage(UploadTarget::FromShared(scene.geometries), a_offset, a_data, a_bytes);
 		});
@@ -117,6 +104,36 @@ namespace DCLF
 		a_payload.stagedSlots = static_cast<std::uint32_t>(a_counts.size());
 		a_payload.stagedFor = &a_resources;
 		a_payload.staged = std::move(batch);
+	}
+
+	IndirectDraws::Impl::SceneStreams IndirectDraws::Impl::CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame,
+		std::uint32_t a_generation, CommitUploads& a_uploads)
+	{
+		ZoneScopedN("CS.DCLF.CommitSceneStreams");
+		SceneStreams sent;
+		ObjectRecordsOut objects;
+		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, objects);
+		sent.objects = objects.Count();
+		CheckSceneCapacity(a_scene, objects.Count(), 0, 0, 0, ~0u, "the object records");
+		sent.objectBytes = objects.Emit(a_scene.held.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			a_uploads(a_scene.objects, a_data, a_bytes, a_offset);
+		});
+		if (objects.Version())
+			a_scene.held.objects = objects.Version();
+		BonesOut bones;
+		UpdateBones(SceneBones(), a_scene.held.bones, a_tables, a_generation, bones);
+		sent.boneRows = bones.Rows();
+		CheckSceneCapacity(a_scene, 0, 0, bones.Rows(), 0, ~0u, "the bone rows");
+		BonesStore* bonesParity = PersistentParityEnabled() ? &boneStore : nullptr;
+		sent.boneRowsSent = EmitBones(bones, a_scene.held.bones, bonesParity, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+			a_uploads(a_scene.bones, a_data, a_bytes, a_offset);
+		});
+		if (bonesParity && ParityDue(a_frame))
+			CheckBones(*bonesParity, bones);
+		if (bones.Version())
+			a_scene.held.bones = bones.Version();
+		boneStore.rowsSent += sent.boneRowsSent;
+		return sent;
 	}
 
 	bool IndirectDraws::Impl::CommitMainPayload(const Capture& a_capture, const FrameBlocks& a_blocks, MainPayload& a_payload,
@@ -150,7 +167,8 @@ namespace DCLF
 		}
 		for (std::uint32_t t = kPixelTextureSlots; t < kTextureRegisters && !depthOnly; ++t) {
 			auto& held = frameTextureBindings[t];
-			const auto* view = a_capture.psViews[t];
+			// The character light's noise is the frame's view (Tables::characterLightView), not a captured register.
+			auto* const view = t == kCharacterLightRegister ? tables.characterLightView : a_capture.psViews[t];
 			if (!view) {
 				if (held.view)
 					held = {};
@@ -158,7 +176,7 @@ namespace DCLF
 				continue;  // the shared lookup root already owns the null descriptor
 			}
 			if (held.view != view || !held.binding.owner || held.binding.index == GpuTextures::kInvalid) {
-				held.view = a_capture.psViews[t];
+				held.view = view;
 				held.binding = textures.ResolveBinding(held.view, 64 + t);
 			}
 			frameTextures[t] = held.binding.index;
@@ -272,14 +290,32 @@ namespace DCLF
 			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} material and {} pipeline rows past their tables' {} and {}", a_payload.materialRows.Count(),
 				a_payload.pipelineRows.Count(), a_resources->materialRows.capacity, a_resources->pipelineRows.capacity));
 		// Likewise the scene tables and the inputs (ReserveSceneTables, before the build's inputs were taken).
-		CheckSceneCapacity(*a_resources->scene, a_payload.objectRecords.Count(), a_payload.geometryDraws.Count(), a_payload.bones.Rows(),
-			a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity, "the main pass");
+		CheckSceneCapacity(*a_resources->scene, 0, a_payload.geometryDraws.Count(), 0, a_payload.resident.Count() + a_payload.inputList.size(), a_resources->objectCapacity,
+			"the main pass");
 		// A batch staged against these resources and these rows' backings (one grown since holds nothing it staged against).
 		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get() && a_payload.stagedRowsGeneration == RowsGeneration(*a_resources) &&
 		                    a_payload.stagedSceneGeneration == a_resources->scene->generation;
 		if (staged)
 			org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(a_payload.staged));
 		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
+		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads);
+		// The fade roots, and once a frame their inputs, for FadeStateCS ahead of the depth segment's culling: the main camera
+		// the list jobs cull with (PrimaryCull::FadeEye) and the engine's fade globals.
+		if (depthOnly && a_resources->scene->fadeState) {
+			auto& buffers = *a_resources->scene;
+			std::uint32_t logBase = buffers.fadeLogBase;
+			FadeFrame inputs = buffers.fadeFrame;
+			if (buffers.fadeFrameNumber != a_store.GetFrame()) {
+				inputs = FadeState::SampleFrame(nullptr);
+				const auto eye = PrimaryCull::Get().FadeEye();
+				std::copy_n(eye.data(), 3, inputs.eye);
+				inputs.lodAdjust = eye[3];
+				logBase = NextFadeLog(a_store.GetFrame(), a_store.GetTables(), inputs);
+			}
+			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads);
+		}
+		// The streams as the tables hold them now, whichever frame's build this is.
+		const auto streams = CommitSceneStreams(*a_resources->scene, a_store.GetTables(), a_store.GetFrame(), a_store.GetTablesGeneration(), uploads);
 		// The depth segment clears every counter; the colour segment clears only the word its own draws
 		// append through. The culling happens in the depth segment, so clearing the
 		// whole buffer again here would erase the phase 1 and phase 2 numbers before anything read them
@@ -303,21 +339,10 @@ namespace DCLF
 		// Either path uploaded the resident region when the buffer held another version of it, and the object records.
 		a_resources->residentUploaded[depthOnly && a_resources->inputsDepth ? 0 : 1] = a_payload.resident.Version();
 		auto& held = a_resources->scene->held;
-		const std::size_t objectBytes = a_payload.objectRecords.Emit(held.objects, [](const void*, std::size_t, std::size_t) {});
-		if (a_payload.objectRecords.Version())
-			held.objects = a_payload.objectRecords.Version();
+		const std::size_t objectBytes = streams.objectBytes;
 		const std::size_t geometryBytes = EmitGeometryDraws(a_payload.geometryDraws, held.geometries, [](const void*, std::size_t, std::size_t) {});
 		if (a_payload.geometryDraws.Version())
 			held.geometries = a_payload.geometryDraws.Version();
-		std::size_t boneRowsSent = 0;
-		if (a_payload.bones.Version()) {
-			BonesStore* bonesParity = PersistentParityEnabled() ? &boneStore : nullptr;
-			boneRowsSent = EmitBones(a_payload.bones, held.bones, bonesParity, [](const void*, std::size_t, std::size_t) {});
-			if (bonesParity && ParityDue(frameNumber))
-				CheckBones(*bonesParity, a_payload.bones);
-			held.bones = a_payload.bones.Version();
-			boneStore.rowsSent += boneRowsSent;
-		}
 		a_stats.residentInputs = static_cast<std::uint32_t>(a_payload.resident.Count());
 		if (!depthOnly) {
 			a_stats.residentDraws = a_payload.residentDraws;
@@ -330,7 +355,7 @@ namespace DCLF
 		a_stats.residentParityChecks += a_payload.residentParityChecks;
 		a_stats.residentParityMismatches += a_payload.residentParityMismatches;
 		a_stats.residentMissing += a_payload.residentMissing;
-		a_stats.boneRows = a_payload.bones.Version() ? static_cast<std::uint32_t>(boneRowsSent) : a_payload.bones.Rows();
+		a_stats.boneRows = static_cast<std::uint32_t>(streams.boneRowsSent);
 
 		lap(4);
 		// The build's stats.

@@ -112,6 +112,12 @@ namespace DCLF
 	inline constexpr std::uint32_t kObjectBufferRegister = kTextureRegisters - 1;
 	/** @brief t126: the epoch's bone palette rows (DCLFBones), the other vertex-stage register. */
 	inline constexpr std::uint32_t kBonesBufferRegister = kTextureRegisters - 2;
+	/**
+	 * @brief t125: the character light's noise (DCLFCharacterLightNoise in Lighting.hlsl), which the engine binds at t11. It is a
+	 * render target that alternates every frame, the frame's and not a material's: the frame record gives it, so a material row
+	 * does not change with it. A character-light pass's material row binds the null texture at t11.
+	 */
+	inline constexpr std::uint32_t kCharacterLightRegister = kTextureRegisters - 3;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,

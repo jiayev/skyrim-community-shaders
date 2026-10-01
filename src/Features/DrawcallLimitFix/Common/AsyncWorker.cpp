@@ -81,6 +81,21 @@ namespace DCLF
 		std::condition_variable idle;  // notified whenever a job ends; WaitIdle checks the queue under queueMutex
 		bool stopping = false;
 		std::map<const char*, JobStats> stats;  // render thread
+		// The render thread's waits since the last report (RenderWaitReport): by site, blocked count and time.
+		struct WaitSite
+		{
+			std::uint32_t blocked = 0;
+			double ms = 0.0;
+		};
+		std::map<std::string, WaitSite> renderWaits;
+		std::uint64_t renderLocks = 0;
+		std::uint32_t frames = 0;
+		void NoteWait(std::string_view a_site, const char* a_job, std::chrono::steady_clock::duration a_waited)
+		{
+			auto& site = renderWaits[fmt::format("{} {}", a_site, a_job)];
+			++site.blocked;
+			site.ms += std::chrono::duration<double, std::milli>(a_waited).count();
+		}
 		std::jthread thread;
 
 		void Loop(std::stop_token a_stop)
@@ -164,6 +179,7 @@ namespace DCLF
 			std::lock_guard lock(impl->queueMutex);
 			impl->queue.push_back(job);
 		}
+		++impl->renderLocks;
 		impl->queued.notify_one();
 		++impl->stats[a_name].kicked;
 		JobHandle handle;
@@ -179,10 +195,14 @@ namespace DCLF
 			return WaitResult::None;
 		const auto waitStart = std::chrono::steady_clock::now();
 		std::unique_lock lock(job->mutex);
+		++impl->renderLocks;
+		const bool blocked = job->state == Job::State::Queued || job->state == Job::State::Running;
 		const bool finished = job->finished.wait_for(lock, a_budget, [&] {
 			return job->state != Job::State::Queued && job->state != Job::State::Running;
 		});
 		const auto waited = std::chrono::steady_clock::now() - waitStart;
+		if (blocked)
+			impl->NoteWait("join", job->name, waited);
 		RenderGraphRuntime::AddEpochJoinWait(waited);
 		const double waitedMs = std::chrono::duration<double, std::milli>(waited).count();
 		auto& stats = impl->stats[job->name];
@@ -254,7 +274,9 @@ namespace DCLF
 			++impl->stats[job->name].cancelled;
 			return;
 		}
+		const auto start = std::chrono::steady_clock::now();
 		StopAndJoin(*job);
+		impl->NoteWait("cancel", job->name, std::chrono::steady_clock::now() - start);
 	}
 
 	void AsyncWorker::Drain()
@@ -268,14 +290,48 @@ namespace DCLF
 		}
 		if (!running)
 			return;
+		const auto start = std::chrono::steady_clock::now();
 		StopAndJoin(*running);
+		impl->NoteWait("drain", running->name, std::chrono::steady_clock::now() - start);
 	}
 
 	void AsyncWorker::WaitIdle()
 	{
 		ZoneScopedN("CS.DCLF.Worker.WaitIdle");
+		const auto start = std::chrono::steady_clock::now();
 		std::unique_lock lock(impl->queueMutex);
+		const bool blocked = !impl->queue.empty() || impl->running;
 		impl->idle.wait(lock, [&] { return impl->queue.empty() && !impl->running; });
+		lock.unlock();
+		if (blocked)
+			impl->NoteWait("wait idle", "", std::chrono::steady_clock::now() - start);
+	}
+
+	void AsyncWorker::NoteFrame()
+	{
+		++impl->frames;
+	}
+
+	std::string AsyncWorker::RenderWaitReport()
+	{
+		auto& d = *impl;
+		if (!d.frames)
+			return {};
+		const double n = d.frames;
+		std::uint32_t blocked = 0;
+		double ms = 0.0;
+		std::string sites;
+		for (const auto& [site, wait] : d.renderWaits) {
+			blocked += wait.blocked;
+			ms += wait.ms;
+			sites += fmt::format("{}{} {:.2f}/frame {:.3f} ms/frame", sites.empty() ? "" : ", ", site, wait.blocked / n, wait.ms / n);
+		}
+		auto text = fmt::format("[DCLF] render-thread waits over {} frames: {:.2f} blocked/frame, {:.3f} ms/frame{}{}; worker mutexes taken {:.1f}/frame{}\n", d.frames,
+			blocked / n, ms / n, sites.empty() ? "" : "; by site: ", sites, d.renderLocks / n, blocked ? "" : " <- OK");
+		d.renderWaits.clear();
+		d.renderLocks = 0;
+		d.frames = 0;
+		return text;
 	}
 
 	std::string AsyncWorker::Report()

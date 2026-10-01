@@ -15,6 +15,8 @@ namespace RE
 
 namespace DCLF
 {
+	struct FadeChange;  // Scene/Records.h
+
 	/**
 	 * @brief DCLF's objects drawn by the render graph with indirect command streams, into the main pass's own
 	 * targets and depth; the native loop skips what DCLF drew.
@@ -71,6 +73,9 @@ namespace DCLF
 			std::uint32_t objects = 0;
 			const std::uint32_t* words = nullptr;
 			std::shared_ptr<void> tag;
+			// FadeStateCS's changes that frame (Records.h, FadeChange): the header's count of appends, and the changes copied.
+			std::uint32_t fadeAppended = 0, fadeHeld = 0;
+			const FadeChange* fadeChanges = nullptr;
 		};
 		/**
 		 * @brief Any one thread at a time (DCLF's worker): hands every feedback frame whose copy the GPU has completed
@@ -78,6 +83,11 @@ namespace DCLF
 		 * later call. Returns the number decoded. See dclf-cull-job-elimination.md, "Phase 2".
 		 */
 		std::uint32_t DrainVisibilityFeedback(const std::function<void(const VisibilityFeedbackFrame&)>& a_consume);
+		/**
+		 * @brief Render thread: FadeStateCS's changes of a frame did not all reach the nodes (more than the buffer held:
+		 * a_needed, the appends): the buffer grows, and the next update sends every write-back root.
+		 */
+		void NoteFadeChangesLost(std::uint32_t a_needed);
 		/** @brief The feedback's counters since the last call: frames armed, dropped (no free slot), abandoned, decoded. */
 		struct FeedbackStats
 		{
@@ -126,6 +136,11 @@ namespace DCLF
 		 * worker (AsyncWorker.h). The epoch joins it; a job that cannot serve the epoch is rebuilt inline.
 		 */
 		void KickColourBuild();
+		/**
+		 * @brief Prepass, before RefreshFrameConstants: the colour build kicked early (behind the Z-prepass's) is done before the
+		 * tables it reads are written. KickColourBuild then keeps it, unless what it read changed.
+		 */
+		void BeforeFrameConstants();
 
 		/**
 		 * @brief CS_DCLF_ASYNC: at the end of EarlyPrepass, after the pipeline lookups, submits the Z-prepass
@@ -139,6 +154,16 @@ namespace DCLF
 		 * epoch's build for last frame's render modes. ExecuteShadowFrame joins it; a change of modes is stale.
 		 */
 		void KickShadowBuild();
+		/** @brief The end of the scene phase: the shadow build kicked there, kept at BeforeShadowMaps when nothing it read moved. */
+		void KickShadowBuildEarly();
+		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
+		bool KeepEarlyShadowBuild();
+		/**
+		 * @brief Before a placement join writes the tables (BeforeShadowMaps, or EarlyPrepass in a frame without shadow maps):
+		 * the early shadow build, which reads them, is done first. Usually it is (kicked ~4.6 ms earlier); one still running
+		 * is waited for up to the async budget, or dropped.
+		 */
+		void BeforePlacementJoin();
 
 		/** @brief At Present: a job the frame never joined is dropped and counted (Stats::Async::leaked). */
 		void EndFrame();
@@ -180,15 +205,16 @@ namespace DCLF
 		void ExecuteShadowFrame();
 
 		/**
-		 * @brief Skylighting's occlusion map, drawn by DCLF (Skylighting::RenderOcclusion's variant with DCLF running):
-		 * the engine's RenderMask sets the camera and clears the map, and CaptureSkyOcclusion takes the view at its
-		 * FinishAccumulating hook (render mode 0x1C); ExecuteSkyOcclusion then draws every occluder of the frame's
-		 * shadow build (the objects' Skylighting::OcclusionTechnique) into it, GPU-culled, in its own epoch.
-		 * SkyOcclusionReady says whether it can this frame; when it cannot, the engine's SetupMask registers them.
+		 * @brief The occlusion maps (Records.h, kOcclusionViews: Skylighting's sky map, the precipitation mask), drawn by DCLF
+		 * (Skylighting::RenderOcclusion's variant with DCLF running): the engine's RenderMask sets each view's camera and
+		 * clears its map, and CaptureOcclusion takes the view at its FinishAccumulating hook (render mode 0x1C);
+		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
+		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
+		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
 		 */
-		void CaptureSkyOcclusion();
-		bool SkyOcclusionReady() const;
-		bool ExecuteSkyOcclusion();
+		void CaptureOcclusion(std::uint32_t a_view);
+		bool OcclusionReady(std::uint32_t a_view) const;
+		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
 
 		const ShadowStats& GetShadowStats() const { return shadowStats; }
 		void ResetShadowStats() { shadowStats = {}; }

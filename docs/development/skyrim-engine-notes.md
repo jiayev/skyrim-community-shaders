@@ -203,6 +203,32 @@ name with `RE::GetINISetting("fSpecularLODFadeStart:LightingShader")`.
 Specular and envmap fades are therefore per-frame inputs to the shader descriptors: in Whiterun about 4%
 of the eligible main-pass draws had specular faded out.
 
+## External emittance
+
+A Lighting property with `kExternalEmittance` (flag bit 29) does not own its emissive colour: its `emissiveColor`
+pointer is aimed at a colour shared by everything with the same emittance source (AE 1.6.1170):
+
+-   **The pointer.** `FUN_141480fc0(object, &colour)` walks the object's 3D. For a Lighting property with the flag, it
+    frees the owned colour (when `kOwnEmit`), stores the pointer and clears `kOwnEmit`. For an effect property, it
+    stores the pointer at `+0x88` and sets `kEffectLighting` when it is null. It is called (through `FUN_14147ff60`)
+    by the cell's reference attach, `FUN_1402d2f60`, with:
+    -   a light's colour, `TESObjectLIGH+0x118`, when the reference's emittance source (`ExtraEmittanceSource`, extra
+        type 0x63: `FUN_1402fb9f0`) is a light;
+    -   the region's `emittanceColor`, `TESRegion+0x40`, when the source is a region;
+    -   the sky's colour at `Sky+0x9c` into its colour array, for a sky-lit movable static (`FUN_1402efca0`). The
+        sky also lists the reference (`FUN_140411b90`).
+-   **The colours.**
+    -   The light's is constant. The cell's emittance update, `FUN_1402b4390`, rewrites it from the form's byte colour.
+    -   The region's is rewritten by the same update, with `Sky::SetColor` from the region's current weather. The
+        update runs from `Main::Update`, the cell animation job and `UpdateManagedNodesJob`.
+    -   The sky's is rewritten by Sky's colour update (`FUN_14040ba70`), also with `Sky::SetColor`.
+-   **`Sky::SetColor`** (`0x14040d970`, `(sky, NiColor* out, COLOR_BLEND*, flash)`): the four-way blend of the
+    weather colours, plus the lightning flash clamped to the current weather's limits. It is the only writer of the
+    region and sky colours, and it has these two callers.
+
+So a change of weather changes the emissive colour of every object pointing at the colour, and nothing is written to
+the objects themselves.
+
 ## Renderer shadow state and shader constant groups
 
 `BSGraphics::RendererShadowState` (AE base `0x14202ab70`, CommonLib `RendererShadowState::GetRuntimeData`)
@@ -1028,6 +1054,49 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
     snaps to the new level, settled (`+0x153 & 0x70` = `0x20`); otherwise the change is a cross-fade over frames
     (`+0x14C`).
 -   DCLF tests a resident fade root's distance on the GPU (`drawcall-limit-fix.md`, "Resident entries", step 2).
+
+### Fade state: inputs, outputs and their other readers
+
+Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
+
+-   **Pure.** `FUN_14147b110`, `FUN_14147a160`, `FUN_14147a430` and the three `OnVisible`s read only the node and globals,
+    and write only the node. The one virtual call is `FUN_14147a430`'s `GetRTTI` (a type-4 `BSTreeNode` takes the tree
+    thresholds).
+-   **More state than the summary above:**
+    -   `+0x134` is the world bound radius (`+0xF0`) captured by the placement snap below. `FUN_14147a160` resets a node
+        not visible for 20 frames (not type 8) only while it is below a constant.
+    -   `+0x140` is the last `fadeAmount`-driven fade. With flags bit 14 set and `fadeAmount` or `+0x140` not 1,
+        `FUN_14147a160` steps `+0x130`/`+0x140` toward `fadeAmount` (or snaps above a threshold) and returns.
+    -   `FUN_14147a430` keeps the previous level in `+0x152`'s high nibble, the transition state in `+0x153 & 0x70`
+        (`0x20` settled, `0x10`/`0x30` blending, `0x80`/`0xA0`/`0xC0` the step's outcome), and the blend in `+0x14C`.
+        With `+0x109` bit 1, the thresholds scale by `powf(c, logf(+0xF0 / r) * k)`.
+-   **The node's construction** (`BSFadeNode::ctor_impl`, `0x141479ea0`): near and far `FLT_MAX`, `currentFade` 0
+    (fades on) or 1, flags bits 14, 15 and 17 clear, `+0x153` `0x20` with type 0, `+0x134`, `+0x138`, `+0x13C`, `+0x144`
+    and `+0x148` zero, `+0x14C` and `+0x140` 1, `+0x152` `0xF3`, `+0x109` `(x & 0xEA) | 2`, `+0x154` 1.
+-   **At a reference's attach to its cell** (`FUN_1402d1280`, `FUN_1402d5090`):
+    -   the LOD type (`+0x153` low nibble: 10 or 6 for some references);
+    -   near and far from the bound (`FUN_14021f200` -> `FUN_14147a9b0`; also `TESModelDB::TESProcessor`);
+    -   for the player, or a reference that never fades: flags bit 15 and `currentFade` 1;
+    -   otherwise the **placement snap** `FUN_14147aa20(node, world camera)`: flags bit 14 and
+        `currentFade` from the distance, `+0x134`, and `+0x13C` for types 1 and 4-6.
+
+    All of it precedes DCLF's attach event, so a GPU state slot initialised from the node at join starts from it.
+-   **`fadeAmount` is `NiAVObject+0x100`**, not a fade node field. Its stores are spread over 375 functions, none of
+    them a user of the fade globals; the named ones are `NiAVObject::ctor` and `Actor::SetAlpha` (actors, which are not
+    stood in). The script and enable/disable fades are not pinned down: a GPU fade table needs `fadeAmount` by event or
+    an input parity that names the writer it misses.
+-   **`BSFadeNodeCuller::Process1`** (`0x1414e9a50`, the tree manager's culler) writes only flags bits 12 and 20 from its
+    own frustum test: not fade state.
+-   **The scene lists** (`0x14338c870`, count `0x14338c868`) are read by:
+    -   `DrawWorld_BuildSceneLists` (fills them), `Main::Draw` (its `ClearLists` jobs), `FUN_14063eb50` (creation) and
+        `FUN_14174a1e0` (teardown);
+    -   `NiCamera::CalculateAndDrawShadowCasterLights`: the sun's full-frustum cull (`FUN_141511f30`, `FUN_141511650`)
+        and the primary's list jobs and registration (`FUN_1414cbff0`);
+    -   **`Precipitation::SetupMask`** (`0x1404081c0`), which culls and registers every list from the precipitation
+        camera (`FUN_1414bf320(ctx, 1)`). A root taken out of the lists drops out of the precipitation occlusion mask.
+-   **`activeLightMask` for DCLF's geometry** is written by DCLF itself: `SunAccumulation`'s `WriteMaskOnly` (a claimed
+    caster's cascade bit, M1) and `ApplySunBits` (a removed entry's bits, at the main registration), plus the local
+    shadow lights' own registrations. Each frame starts from `FUN_1414cb640`'s clear.
 
 ### The tree manager: distance, LOD switch and wind clock
 

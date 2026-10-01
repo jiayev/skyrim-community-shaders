@@ -253,6 +253,10 @@ namespace DCLF
 		REL::Relocation<std::uintptr_t> treeWindTimerScale{ REL::Offset(0x1ad28bc) };
 		// A pointer to the object whose +0x304 holds the global wind magnitude.
 		REL::Relocation<std::uintptr_t> treeWindSource{ REL::Offset(0x2033060) };
+		// The tree manager (BSTreeManager*), whose +0x78 is the gust's speed and +0x80 the squared range of its update, and
+		// the frame's seconds the manager advances the clocks by (FUN_140437d40's argument; GetSecondsPassed reads it).
+		REL::Relocation<std::uintptr_t> treeManager{ REL::Offset(0x20f6a18) };
+		REL::Relocation<std::uintptr_t> frameSeconds{ REL::Offset(0x31cc288) };
 		// The fade node the engine treats as "no node" as well as null.
 		REL::Relocation<std::uintptr_t> emptyFadeNode{ REL::Offset(0x332a2a0) };
 
@@ -288,6 +292,46 @@ namespace DCLF
 		{
 			return *reinterpret_cast<const float*>(static_cast<const std::byte*>(a_node) + a_offset);
 		}
+	}
+
+	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out)
+	{
+		a_out = {};
+		const void* node = AsTreeNode(a_property.fadeNode);
+		if (!node)
+			return nullptr;
+		const auto* bytes = static_cast<const std::byte*>(node);
+		std::memcpy(a_out.position, bytes + 0xA0, sizeof(a_out.position));
+		a_out.leafFrequency = TreeNodeFloat(node, 0x160);
+		a_out.timer = TreeNodeFloat(node, 0x164);
+		a_out.previousTimer = TreeNodeFloat(node, 0x168);
+		a_out.amplitude = TreeNodeFloat(node, 0x15c);
+		// The manager advances only a node with a model (+0xF8, its +0x40), and scales the gust by the model's +0xB0.
+		const auto* holder = *reinterpret_cast<const std::byte* const*>(bytes + 0xF8);
+		const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
+		a_out.animated = model ? 1u : 0u;
+		a_out.modelAmplitude = model ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
+		return node;
+	}
+
+	TreeWindFrame SampleTreeWindFrame()
+	{
+		TreeWindFrame frame;
+		frame.deltaTime = GlobalFloat(frameSeconds);
+		if (auto* camera = RE::Main::WorldRootCamera()) {
+			frame.camera[0] = camera->world.translate.x;
+			frame.camera[1] = camera->world.translate.y;
+			frame.camera[2] = camera->world.translate.z;
+		}
+		if (const auto manager = *reinterpret_cast<const std::uintptr_t*>(treeManager.address())) {
+			frame.windSpeed = *reinterpret_cast<const float*>(manager + 0x78);
+			frame.maxDistance2 = *reinterpret_cast<const float*>(manager + 0x80);
+		}
+		frame.windMagnitude = *reinterpret_cast<const float*>(*reinterpret_cast<const std::uintptr_t*>(treeWindSource.address()) + 0x304);
+		frame.fadeStart = GlobalFloat(treeWindFadeStart);
+		frame.fadeEnd = GlobalFloat(treeWindFadeEnd);
+		frame.timerScale = GlobalFloat(treeWindTimerScale);
+		return frame;
 	}
 
 	void DeriveTreeAnim(const RE::BSShaderProperty& a_property, ObjectTreeAnim& a_out)

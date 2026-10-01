@@ -161,10 +161,14 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 					captured.shadowWithheld[0], captured.shadowWithheld[1], captured.shadowWithheld[2], captured.volumetricWithheld, captured.directWithheld, shadow.claimed[0], shadow.claimed[1],
 					shadow.claimed[2], shadow.faceUploads, shadow.notReady, shadow.notReadyWithheld, shadow.notReadyWithheld ? " <- HOLES" : "");
 			}
-			if (shadow.skyDrawn || shadow.skyNotReady || skyNativeFrames)
-				logger::info("[DCLF] Skylighting occlusion: DCLF drew {} maps ({} occluders, last), {} it could not draw, {} left to the engine; render thread {:.3f} ms per map",
-					shadow.skyDrawn, shadow.skyInputs, shadow.skyNotReady, skyNativeFrames, shadow.skyDrawn ? shadow.skyMs / shadow.skyDrawn : 0.0);
-			skyNativeFrames = 0;
+			for (std::uint32_t v = 0; v < DCLF::kOcclusionViews; ++v)
+				if (shadow.occlusionDrawn[v] || shadow.occlusionNotReady[v] || occlusionNativeFrames[v])
+					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} occluders, last), {} it could not draw, {} left to the engine",
+						v == DCLF::kOcclusionSky ? "Skylighting" : "precipitation", shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
+						occlusionNativeFrames[v]);
+			if (shadow.occlusionEpochs)
+				logger::info("[DCLF] occlusion maps: {} epochs, render thread {:.3f} ms per epoch", shadow.occlusionEpochs, shadow.occlusionMs / shadow.occlusionEpochs);
+			occlusionNativeFrames = {};
 			DCLF::IndirectDraws::Get().ResetShadowStats();
 		}
 		if (stats.projectedUV || stats.landBlend)
@@ -188,8 +192,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				draws.residentParityChecks, draws.residentParityMismatches, draws.residentMissing,
 				draws.residentParityChecks ? (draws.residentParityMismatches || draws.residentMissing ? " <- RESIDENT DRAW PARITY" : " <- OK") : "");
 		if (draws.fadeTested)
-			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped past their fade-out distance",
-				draws.fadeTested, draws.fadeHidden);
+			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; "
+						 "{} roots, change buffer {} changes, {} frames of changes sent again whole since the start",
+				draws.fadeTested, draws.fadeHidden, draws.fadeRoots, draws.fadeChangeCapacity, draws.fadeChangesLost);
 		logger::info("[DCLF] skip (last frame): {} of {} native passes left to the indirect draws ({} in the depth pass, {} in the opaque pass)",
 			skipStats.skipped, skipStats.offered, skipStats.skippedInDepth, skipStats.skippedInOpaque);
 		if (!skipSamples.empty()) {
@@ -327,6 +332,16 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 						stats.verdictsChecked / tablesFrames, stats.verdictsSkipped / tablesFrames, stats.hiddenEvents / tablesFrames,
 						DCLF::SceneStore::HiddenEventsLive() ? "" : ", not installed", stats.verdictsMissed, stats.verdictsMissed ? " <- MISSED; first: " : " <- OK",
 						stats.firstVerdictMissed);
+				if (stats.inputRereads[0] || stats.inputRereads[1]) {
+					std::string components;
+					for (std::size_t i = 0; i < stats.inputChanged.size(); ++i)
+						if (stats.inputChanged[i])
+							components += fmt::format("{}{} {}", components.empty() ? "" : ", ", DCLF::SceneStore::kInputComponentNames[i], stats.inputChanged[i]);
+					logger::info("[DCLF] input watch: classify re-reads {:.0f}/frame ({} changed with no event), shading re-reads {:.0f}/frame ({} changed with no event); by component: {}{}{}{}",
+						stats.inputRereads[0] / tablesFrames, stats.inputRereadsChanged[0], stats.inputRereads[1] / tablesFrames, stats.inputRereadsChanged[1],
+						components.empty() ? "none" : components, stats.inputRereadsChanged[0] || stats.inputRereadsChanged[1] ? " <- MISSED" : " <- OK",
+						stats.firstInputChange.empty() ? "" : "; first: ", stats.firstInputChange);
+				}
 				if (const auto line = store.PlacementReport(); !line.empty())
 					logger::info("{}", line);
 				if (const auto watch = DCLF::HiddenWatch::TakeReport(frame); !watch.empty()) {

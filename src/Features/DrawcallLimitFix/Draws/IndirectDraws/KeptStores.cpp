@@ -78,6 +78,16 @@ namespace DCLF::Draws
 			}
 			BindlessObject fresh;
 			s.changedObjects.Clear();
+			std::uint32_t causes = 0;
+			for (const auto& change : s.cursor.Unread(a_tables.changeLog))
+				causes |= change.causes;
+			if (causes & ~(kChangePlacement | kChangePalette)) {
+				++s.structural;
+				for (std::uint32_t c = 0; c < kChangeCauseCount; ++c)
+					s.byCause[c] += (causes >> c) & 1u;
+			} else {
+				++s.streamOnly;
+			}
 			for (const auto& change : s.cursor.Unread(a_tables.changeLog)) {
 				// Every event reads the final immutable table row, not an intermediate value.
 				if (!(change.causes & kObjectRecordCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))

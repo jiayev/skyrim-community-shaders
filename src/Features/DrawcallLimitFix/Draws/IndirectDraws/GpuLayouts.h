@@ -11,19 +11,23 @@ namespace DCLF::Draws
 	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
 	// needs more rows (GrowableRows), from this many.
 	constexpr std::uint32_t kShadowMaterialRowsInitial = 256;
-	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, and kSkyMode: Skylighting's occlusion map (render mode 0x1C),
-	// whose occluders the frame's shadow build lists too and whose own epoch draws them (ExecuteSkyOcclusion).
-	constexpr std::uint32_t kShadowModeCount = 4;
-	constexpr std::uint32_t kSkyMode = 3;
-	constexpr std::uint32_t kSkyRenderMode = 0x1C;
-	// The shadow epoch's view slots (ShadowResources): Skylighting's occlusion map draws through slot 0, the frame's shadow
-	// views through the slots after it (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
+	// Render modes 0xD plain, 0xE clamped, 0xF paraboloid, then one per occlusion view (Records.h, kOcclusionViews:
+	// Skylighting's occlusion map, the precipitation mask; render mode 0x1C both), whose occluders the frame's shadow build
+	// lists too and whose own epoch draws them (ExecuteOcclusion).
+	constexpr std::uint32_t kFirstOcclusionMode = 3;
+	constexpr std::uint32_t kShadowModeCount = kFirstOcclusionMode + kOcclusionViews;
+	constexpr std::uint32_t kOcclusionRenderMode = 0x1C;
+	inline constexpr bool IsOcclusionMode(std::uint32_t a_mode) { return a_mode >= kFirstOcclusionMode; }
+	inline constexpr std::uint32_t OcclusionOfMode(std::uint32_t a_mode) { return a_mode - kFirstOcclusionMode; }
+	inline constexpr std::uint32_t OcclusionModeOf(std::uint32_t a_view) { return kFirstOcclusionMode + a_view; }
+	// The shadow epoch's view slots (ShadowResources): the occlusion views draw through the first slots (OcclusionSlot), the
+	// frame's shadow views through the slots after them (kFirstShadowViewSlot plus the view's index). There are as many as the frame has views,
 	// grown before its epoch (Impl::ReserveShadowLatch) - the exterior has four (two cascades, twice), an interior two
 	// hemispheres per shadow-casting point light - from this many. Likewise the key slots the pipeline map rows hold
 	// (Lookups::shadowSlotKeys: one per caster key and render mode).
 	constexpr std::uint32_t kInitialShadowViewSlots = 8;
-	constexpr std::uint32_t kSkySlot = 0;
-	constexpr std::uint32_t kFirstShadowViewSlot = 1;
+	inline constexpr std::uint32_t OcclusionSlot(std::uint32_t a_view) { return a_view; }
+	constexpr std::uint32_t kFirstShadowViewSlot = kOcclusionViews;
 	constexpr std::uint32_t kInitialShadowKeySlots = 1024;
 	// And the latch's pipeline map rows (one per view rasterizer state, DrawPipelines::ShadowRasterStateId) and the sun's
 	// full-frustum processes it holds (six and six at the exterior save), grown likewise.
@@ -48,9 +52,12 @@ namespace DCLF::Draws
 	// registered with accumulation hint 8, which are the volumetric-only casters
 	// (ShadowReject::VolumetricOnly). DCLF's views of it draw those casters alone (kCullVolumetricOnly).
 	// See CaptureShadowView.
-	// [3] depth target 10 as Skylighting swaps it in: its own occlusion map (ExecuteSkyOcclusion).
-	constexpr std::uint32_t kShadowDepthTargets = 4;
-	constexpr std::uint32_t kSkyDepthTarget = 3;
+	// [3] depth target 10 as Skylighting swaps it in: its own occlusion map; [4] depth target 10 itself, the precipitation
+	// mask (ExecuteOcclusion, OcclusionDepthTarget).
+	constexpr std::uint32_t kFirstOcclusionTarget = 3;
+	constexpr std::uint32_t kShadowDepthTargets = kFirstOcclusionTarget + kOcclusionViews;
+	inline constexpr std::uint32_t OcclusionDepthTarget(std::uint32_t a_view) { return kFirstOcclusionTarget + a_view; }
+	inline constexpr bool IsOcclusionTarget(std::uint32_t a_target) { return a_target >= kFirstOcclusionTarget; }
 	// The sequence buffers (BuildDraws' output) have no fixed draw capacity: each is sized, before its epoch, to hold every draw
 	// the scene's tracked objects can produce (SceneDrawBound), growing when that does, and each indirect draw's max count
 	// is its epoch's own bound. They start at these (CS_DCLF_TABLE_START=small: a few). A bound over the device's
@@ -91,6 +98,37 @@ namespace DCLF::Draws
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
 	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
+	constexpr const char* kTreeWindShader = "DrawcallLimitFix/TreeWindCS.hlsl";
+	// TreeWindCS.hlsl's constants: the mode, the buffers' indices, the count, the frame, the record's tree word, then the
+	// frame's inputs (Records.h, TreeWindFrame).
+	struct TreeWindConstants
+	{
+		std::uint32_t mode = 0, treesIndex = 0, clocksIndex = 0, listIndex = 0, recordsIndex = 0, count = 0, frame = 0, treeWord = 0;
+		TreeWindFrame inputs{};
+		std::uint32_t padding[2]{};
+	};
+	static_assert(sizeof(TreeWindConstants) == 80);
+	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
+	constexpr std::uint32_t kTreeWindGroup = 64;
+	// What the tree buffers hold at first (they double as the scene needs).
+	constexpr std::uint32_t kInitialTrees = 1024;
+	constexpr std::uint32_t kInitialTreeObjects = 4096;
+	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
+	// FadeStateCS.hlsl's constants: the buffers' indices, the depth segment's latch (its view-projection), the root count, the
+	// scene frame, and the parity log's first root (~0u: no log). The frame's inputs are a buffer (Records.h, FadeFrame).
+	struct FadeStateConstants
+	{
+		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
+		std::uint32_t latchIndex = 0, latchOffset = 0, count = 0, frame = 0;
+		std::uint32_t logIndex = 0, logBase = ~0u;
+		// The write-back roots' changes (Records.h, FadeChange): the buffer, its capacity in changes, and 1 to append every
+		// write-back root this frame whether it changed or not (after the buffer grew past an overflow).
+		std::uint32_t changesIndex = 0, changeCapacity = 0, writeAll = 0, padding[3]{};
+	};
+	static_assert(sizeof(FadeStateConstants) == 64);
+	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
+	constexpr std::uint32_t kFadeStateGroup = 64;
+	constexpr std::uint32_t kInitialFadeRoots = 4096;
 	// HzbCS.hlsl's constants: source, target, target size, source size, from-depth, padding.
 	constexpr std::uint32_t kHzbConstantWords = 8;
 
@@ -102,7 +140,8 @@ namespace DCLF::Draws
 		std::uint32_t recordIndex;    // DrawBindings record
 		std::uint32_t geometryIndex;  // GeometryDraw
 		std::uint32_t flags;          // object flags, plus kInputDrawable for this epoch
-		float boundCentre[3];         // absolute world space; the camera is folded into the matrix
+		// Unused (zero): the bound is the object record's (BindlessObject::bound), so a move rewrites no input.
+		float boundCentre[3];
 		float boundRadius;
 		// Index into the frame's object table. The two segments emit different subsets in different
 		// orders, so this is what lets the colour segment look up the visibility the depth segment
@@ -115,9 +154,13 @@ namespace DCLF::Draws
 		// A shadow input's second vertex stream: the GeometryDraw holding a face shape's positions (the shadow
 		// payload appends them after the geometry slots), or ~0u. The main pass never has one.
 		std::uint32_t streamIndex = ~0u;
-		// kObjectFadeTest (the depth segment's inputs): the entry root's centre and the fade-out distance
-		// (SceneStore::Tables::fadeDistance). Zero on every other input.
-		float fade[4] = {};
+		// The object's fade root slot (SceneStore::Tables::objectFadeRoot; FadeStateCS's state row), ~0u when it has none: the
+		// depth segment's first phase drops it while an owned root's OnVisible stops (kFadeRootOwned).
+		std::uint32_t fadeRoot = ~0u;
+		std::uint32_t fadeReserved[2]{};
+		// kObjectFadeTest (the depth segment's inputs, a root DCLF does not own): the fade-out distance
+		// (SceneStore::Tables::fadeDistance); the fade node's centre is the object record's.
+		float fadeDistance = 0.0f;
 	};
 	static_assert(sizeof(DrawInput) == 64);
 	// BuildDrawsCS.hlsl: set on an input the epoch has built a bindings record for. The depth segment
@@ -182,8 +225,14 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowStride;
 		std::uint32_t pipelineRowsAddressLo;
 		std::uint32_t pipelineRowsAddressHi;
+		// The object records (BindlessObject): an input's bound, sun entry and fade node are its record's, not its own.
+		std::uint32_t objectsIndex;
+		// The depth segment's first phase: the fade roots' static rows and FadeStateCS's states (an owned root's members follow
+		// its OnVisible verdict). 0 elsewhere.
+		std::uint32_t fadeRootsIndex;
+		std::uint32_t fadeStatesIndex;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 96);
+	static_assert(sizeof(BuildDrawsConstants) == 108);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -342,4 +391,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCullVolumetricOnly = 0x800;
 	// cullFlags: a view of the sun (its cascades and their volumetric copies), which applies the sun's entry rule (sunEntryOffset).
 	constexpr std::uint32_t kCullSunEntry = 0x1000;
+	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique), for its occlusion map's view: an input whose bound
+	// radius is 32 or less draws nothing.
+	constexpr std::uint32_t kCullMinRadius = 0x2000;
 }

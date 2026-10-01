@@ -74,9 +74,6 @@ namespace DCLF
 		 */
 		Binding RequestBinding(ID3D11ShaderResourceView* a_view, std::uint32_t a_sourceTag = ~0u);
 
-		/** @brief A live import already known without an interop call. */
-		bool KnownBinding(ID3D11ShaderResourceView* a_view, Binding& a_binding);
-
 		/** @brief A null view's descriptor heap index (reads zero); kInvalid when unsupported. */
 		std::uint32_t NullIndex();
 		/** @brief The null descriptor and its exact device-generation owner. */

@@ -241,8 +241,12 @@ bool Aftermath::WantsCrashAnalysis()
 {
 	// Deliberately not gated on g_enabled: on AMD the SDK never arms, and that is exactly the
 	// case where the markers matter most, because Radeon GPU Detective is the tool that will read
-	// them.
-	return true;
+	// them. Opt-in: DXVK's hang mode serialises concurrent command recording.
+	static const bool requested = [] {
+		char buf[8] = {};
+		return ::GetEnvironmentVariableA("CS_GPU_CRASH_ANALYSIS", buf, sizeof(buf)) && buf[0] == '1';
+	}();
+	return requested;
 }
 
 const void* Aftermath::RegisterOrgCheckpoint(void*, const char* a_name) noexcept

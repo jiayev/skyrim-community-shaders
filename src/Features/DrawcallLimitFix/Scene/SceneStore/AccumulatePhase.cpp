@@ -87,7 +87,7 @@ namespace DCLF
 			materialMember.resize(std::size_t(a_patch.material) + 1, 0);
 		materialMember[a_patch.material] = 1;
 		object.pipelineIndex = a_patch.pipeline;
-		object.flags = a_patch.flags | FadedOutBit(objectId);
+		object.flags = a_patch.flags;
 		tables.fadeDistance[objectId] = a_patch.fadeDistance;
 		tables.SetWatch(objectId, Tables::kWatchExtras, a_patch.projectedUV || a_patch.landBlend);
 		tables.draws[objectId].pipelineIndex = a_patch.pipeline;
@@ -137,9 +137,8 @@ namespace DCLF
 		RefreshMainBatchRenderers();
 		accumulatedPasses.clear();
 		DrainCapture();
-		// The roots the last decode found faded out or back in (kObjectFadedOut); then the frames of visibility feedback that
-		// completed, decoded on the worker (the stood-in roots' fade, LOD and tree state).
-		PrimaryCull::Get().ApplyFadeChanges();
+		// The frames of visibility feedback that completed, decoded on the worker (the stood-in roots' fade, LOD and tree state
+		// on their nodes, for the engine's readers; the members' own fade is FadeStateCS's).
 		PrimaryCull::Get().KickFeedbackDecode();
 		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
@@ -315,12 +314,12 @@ namespace DCLF
 				materialSlot = derived.materialSlot;
 				staticFlags = derived.staticFlags;
 				key = derived.key;
-				tables.MarkMaterialUsed(materialSlot, frame);
-				// The per-frame template: a pipeline's template is always a property of a member of this frame (the first
-				// to use the slot; KeepResidentsAlive takes one for the rest), so a persistent slot never points at a
-				// property the game has since freed. The constants are evaluated from it at Prepass (RefreshFrameConstants).
-				if (tables.pipelineLastUsed[pipelineSlot] != frame) {
-					tables.MarkPipelineUsed(pipelineSlot, frame);
+				tables.MarkMaterialUsed(materialSlot);
+				// A pipeline's template is always a member's property (the joiner's while the slot has no member; KeepResidentsAlive
+				// takes a resident's every frame), so a persistent slot never points at a property the game has since freed. The
+				// constants are evaluated from it at Prepass (RefreshFrameConstants).
+				if (!tables.PipelineUsed(pipelineSlot)) {
+					tables.MarkPipelineUsed(pipelineSlot);
 					tables.geometryTemplate[pipelineSlot] = property;
 				}
 				timer.Add(BuildPart::DedupHit);
@@ -341,9 +340,9 @@ namespace DCLF
 					VertexLayoutOf(tables.geometries[geometrySlot].vertexDesc) };
 				auto pipelineIt = pipelineIndex.find(key);
 				const bool newPipeline = pipelineIt == pipelineIndex.end();
-				if (!newPipeline && tables.pipelineLastUsed[pipelineIt->second] != frame) {
-					// The slot's first use this frame: this object's property is the template (see the cached path).
-					tables.MarkPipelineUsed(pipelineIt->second, frame);
+				if (!newPipeline && !tables.PipelineUsed(pipelineIt->second)) {
+					// The slot's first member: this object's property is the template (see the cached path).
+					tables.MarkPipelineUsed(pipelineIt->second);
 					tables.geometryTemplate[pipelineIt->second] = property;
 				}
 				if (newPipeline) {
@@ -379,7 +378,7 @@ namespace DCLF
 					timer.Add(BuildPart::PipelineEval);
 				}
 				pipelineSlot = pipelineIt->second;
-				tables.MarkPipelineUsed(pipelineSlot, frame);
+				tables.MarkPipelineUsed(pipelineSlot);
 
 				// Material state as the engine's SetupMaterial produces it for this pass descriptor.
 				const auto* material = property->material;
@@ -397,7 +396,6 @@ namespace DCLF
 					materialOwners[slot].reset(const_cast<RE::BSShaderMaterial*>(material));
 					tables.materials[slot] = record;
 					tables.materialVersion[slot] = ++materialVersions;
-					tables.MarkMaterialTextureChanged(slot, frame);
 					tables.materialSlotKey[slot] = std::pair{ material, descriptors.pass };
 					tables.ListMaterialSlot(slot, frame);
 					materialIt = materialIndex.emplace(std::pair{ material, descriptors.pass }, slot).first;
@@ -405,7 +403,7 @@ namespace DCLF
 					timer.Add(BuildPart::MaterialEval);
 				}
 				materialSlot = materialIt->second;
-				tables.MarkMaterialUsed(materialSlot, frame);
+				tables.MarkMaterialUsed(materialSlot);
 				timer.Add(BuildPart::DedupHit);
 
 				staticFlags = (alphaTest ? kObjectAlphaTest : 0u) | (twoSided ? kObjectTwoSided : 0u) |
@@ -530,20 +528,17 @@ namespace DCLF
 		const bool slotProbe = SwitchValue(Switch::SlotProbe) == "1";
 		if (slotProbe)
 			ProbeSlots(frameResolveBuffers);
-		// The slot counts, for the reports: the frame's users every 16th frame, held in between; the live and referenced
-		// counts are the slot tables'.
-		const bool countSlots = frame % 16 == 0;
-		if (countSlots) {
-			stats.pipelines = 0;
-			stats.pipelines = static_cast<std::uint32_t>(tables.usedPipelines.size());
-		}
+		// The slot counts, for the reports: the used sets' sizes, and the slot tables' live and referenced counts.
+		auto countBits = [](const std::vector<std::uint64_t>& a_bits) {
+			std::uint32_t count = 0;
+			for (const auto word : a_bits)
+				count += static_cast<std::uint32_t>(std::popcount(word));
+			return count;
+		};
+		stats.pipelines = countBits(tables.usedPipelineBits);
+		stats.materials = countBits(tables.usedMaterialBits);
 		// Decal draw order (DecalOrder.cpp).
 		OrderDecals();
-		if (countSlots) {
-			stats.materials = 0;
-			for (const auto used : tables.materialLastUsed)
-				stats.materials += used == frame ? 1u : 0u;
-		}
 		stats.geometries = static_cast<std::uint32_t>(tables.geometrySlots.ReferencedCount());
 		stats.geometriesAlive = static_cast<std::uint32_t>(tables.geometrySlots.AliveCount());
 		stats.pipelinesAlive = static_cast<std::uint32_t>(tables.pipelineSlots.AliveCount());
@@ -604,20 +599,6 @@ namespace DCLF
 		}
 	}
 
-	void SceneStore::SetFadedOut(std::int32_t a_object, bool a_fadedOut)
-	{
-		if (a_object < 0 || static_cast<std::size_t>(a_object) >= tables.objects.size() || static_cast<std::size_t>(a_object) >= tables.fadedOut.size())
-			return;
-		const auto o = static_cast<std::uint32_t>(a_object);
-		if (tables.fadedOut[o] == (a_fadedOut ? 1 : 0))
-			return;
-		tables.fadedOut[o] = a_fadedOut ? 1 : 0;
-		if (tables.objects[o].flags & kObjectFree)
-			return;
-		tables.objects[o].flags = (tables.objects[o].flags & ~kObjectFadedOut) | (a_fadedOut ? kObjectFadedOut : 0u);
-		tables.NoteChange(o, kChangeBindings);
-	}
-
 	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const
 	{
 		const auto& derived = a_entry.derived;
@@ -636,7 +617,7 @@ namespace DCLF
 			return;
 		const auto columnsBefore = tables.ColumnsOf(a_slot);
 		auto& object = tables.objects[a_slot];
-		object.flags = tables.sceneFlags[a_slot] | FadedOutBit(a_slot);
+		object.flags = tables.sceneFlags[a_slot];
 		object.materialIndex = 0;
 		object.pipelineIndex = 0;
 		tables.draws[a_slot].pipelineIndex = 0;
@@ -672,7 +653,8 @@ namespace DCLF
 			shadowIndexedLive.clear();
 			shadowTextureMembers.clear();
 			shadowKeyMembers.clear();
-			skyKeyMembers.clear();
+			for (auto& members : occlusionKeyMembers)
+				members.clear();
 			stats.shadowCasters = 0;
 			stats.shadowRejects = {};
 			changed.clear();
@@ -702,12 +684,14 @@ namespace DCLF
 			const bool caster = !(a_inputs.flags & kObjectNoShadow);
 			if (caster)
 				a_add ? ++stats.shadowCasters : --stats.shadowCasters;
-			if (a_inputs.diffuse && (caster || a_inputs.skyTechnique))
+			const bool occluder = std::any_of(a_inputs.occlusionTechnique.begin(), a_inputs.occlusionTechnique.end(), [](std::uint32_t a_t) { return a_t != 0; });
+			if (a_inputs.diffuse && (caster || occluder))
 				member(shadowTextureMembers, a_inputs.diffuse, a_slot, a_add);
 			const auto raster = (a_inputs.flags & kObjectTwoSided) ? kRasterTwoSided : 0u;
 			const auto vertex = VertexLayoutOf(a_inputs.vertexDesc);
-			if (a_inputs.skyTechnique)
-				member(skyKeyMembers, ShadowPipelineKey{ a_inputs.skyTechnique, raster, vertex }, a_slot, a_add);
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				if (a_inputs.occlusionTechnique[v])
+					member(occlusionKeyMembers[v], ShadowPipelineKey{ a_inputs.occlusionTechnique[v], raster, vertex }, a_slot, a_add);
 			if (caster)
 				member(shadowKeyMembers, ShadowPipelineKey{ a_inputs.technique, raster, vertex }, a_slot, a_add);
 		};
@@ -727,7 +711,8 @@ namespace DCLF
 		tables.shadowTextureSet.clear();
 		tables.shadowTextureSeen.clear();
 		tables.shadowKeysUsed.clear();
-		tables.skyKeysUsed.clear();
+		for (auto& keys : tables.occlusionKeysUsed)
+			keys.clear();
 		auto emit = [](const auto& a_index, auto& a_out) {
 			using Key = typename std::decay_t<decltype(a_index)>::key_type;
 			std::vector<std::pair<std::uint32_t, Key>> ordered;
@@ -748,6 +733,7 @@ namespace DCLF
 			if (!previousTextures.contains(entry.first))
 				tables.shadowTextureChanges.emplace_back(entry.first, true);
 		emit(shadowKeyMembers, tables.shadowKeysUsed);
-		emit(skyKeyMembers, tables.skyKeysUsed);
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+			emit(occlusionKeyMembers[v], tables.occlusionKeysUsed[v]);
 	}
 }

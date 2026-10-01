@@ -887,8 +887,9 @@ demanding save and then reproduced an `Error_DMA_PageFault` at GPU VA
 two diagnostics-enabled runs instead faulted during loading. This small
 sample does not establish causality, but enabling the heavier driver features
 by default would be unsafe without isolating their effect. The checked-in
-default therefore keeps `DXVK_DEBUG=hang` (device fault details and native
-checkpoints) and leaves `VK_NV_device_diagnostics_config` resource tracking,
+default therefore kept `DXVK_DEBUG=hang` (device fault details and native
+checkpoints; since 2026-09-30 opt-in with `CS_GPU_CRASH_ANALYSIS=1`, because the
+hang mode serialises concurrent command recording) and leaves `VK_NV_device_diagnostics_config` resource tracking,
 shader debug info and shader error reporting behind
 `DXVK_AFTERMATH_DIAGNOSTICS=1`. Those features are probed before use.
 

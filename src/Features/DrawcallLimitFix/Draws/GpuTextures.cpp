@@ -542,27 +542,6 @@ namespace DCLF
 		return binding;
 	}
 
-	bool GpuTextures::KnownBinding(ID3D11ShaderResourceView* a_view, Binding& a_binding)
-	{
-		if (!a_view) {
-			a_binding = { impl->nullIndex, impl->nullBinding.Owner() };
-			return impl->nullIndex != kInvalid;
-		}
-		const auto registry = impl->registry;
-		if (!registry)
-			return false;
-		Binding binding;  // a_binding's previous owner is released after the lock: an entry's destructor takes it
-		Impl::Found found;
-		{
-			std::scoped_lock lock(registry->mutex);
-			found = impl->Find(*registry, a_view, binding);
-		}
-		if (found != Impl::Found::Ready && found != Impl::Found::Rejected)
-			return false;
-		a_binding = std::move(binding);
-		return true;
-	}
-
 	std::uint32_t GpuTextures::NullIndex()
 	{
 		if (impl->nullIndex != kInvalid)
@@ -678,7 +657,6 @@ namespace DCLF
 		return textures;
 	}
 	GpuTextures::Binding GpuTextures::ResolveBinding(ID3D11ShaderResourceView*, std::uint32_t) { return {}; }
-	bool GpuTextures::KnownBinding(ID3D11ShaderResourceView*, Binding&) { return false; }
 	std::uint32_t GpuTextures::NullIndex() { return kInvalid; }
 	GpuTextures::Binding GpuTextures::NullBinding() { return {}; }
 	std::uint32_t GpuTextures::Sampler(std::uint32_t, std::uint32_t) { return kInvalid; }

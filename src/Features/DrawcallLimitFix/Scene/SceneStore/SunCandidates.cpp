@@ -2,9 +2,12 @@
 
 namespace DCLF
 {
-	bool SceneStore::SkyOcclusionEnabled()
+	bool SceneStore::OcclusionEnabled(std::uint32_t a_view)
 	{
-		return ActiveToggles().skyOcclusion && globals::features::skylighting.loaded;
+		// Skylighting's RenderOcclusion drives both maps (its hook of the engine's precipitation mask, then its own map).
+		if (!globals::features::skylighting.loaded)
+			return false;
+		return a_view == kOcclusionSky ? ActiveToggles().skyOcclusion : a_view == kOcclusionPrecipitation && ActiveToggles().precipitationOcclusion;
 	}
 
 	void SceneStore::DropSunCandidates()

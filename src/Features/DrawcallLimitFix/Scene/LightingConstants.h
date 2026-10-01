@@ -188,10 +188,15 @@ namespace DCLF
 		// 0 when nothing fades, and MaterialData's fades are the property's.
 		float lodFadeNode[3];
 		std::uint32_t lodFadeFlags;
-		// To 256 bytes: each row is a constant-buffer block of its own (DCLFObjects.hlsli), bound per draw at its address.
-		std::uint32_t reserved[8]{};
+		// The culling's (BuildDrawsCS): the world bound (centre, radius) and the sun entry's sphere (SceneStore::Tables::sunEntry;
+		// radius +max when it has none, inside every process). A move rewrites the record, not the draw inputs, which carry
+		// no placement (drawcall-limit-fix.md, "Placements in the object record").
+		float bound[4];
+		float sunEntry[4];
 	};
 	static_assert(sizeof(BindlessObject) == 256);
+	// BuildDrawsCS.hlsl reads these by their float4 index in the record (kObjectFadeNodeRow, kObjectBoundRow, kObjectSunEntryRow).
+	static_assert(offsetof(BindlessObject, lodFadeNode) == 13 * 16 && offsetof(BindlessObject, bound) == 14 * 16 && offsetof(BindlessObject, sunEntry) == 15 * 16);
 
 	/**
 	 * @brief Fills one, from the same inputs PatchObjectGeometry writes into a packed group. World and

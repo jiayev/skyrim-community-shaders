@@ -3,11 +3,17 @@
 
 namespace DCLF::Draws
 {
-	void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, std::uint32_t a_frame, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups)
+	void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, bool a_members, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups)
 	{
 		ZoneScopedN("CS.DCLF.RefreshMaterialLookups");
 		auto& textures = GpuTextures::Get();
-		const auto cleanup = org::runtime::GetActiveDescriptorService()->GetResourceCleanupQueue();
+		// Outside an epoch (a main-pass kick) a view never imported is not queued (RequestBinding): its material stays
+		// unresolved until the epoch's refresh asks again. The samplers are created only inside one.
+		const bool inEpoch = org::runtime::GetActiveDescriptorService() != nullptr;
+		auto* host = RenderGraphRuntime::Get().Host();
+		const auto cleanup = host ? host->ResourceCleanup() : nullptr;
+		if (!cleanup)
+			return;
 		auto sealOwners = [&](std::vector<std::shared_ptr<const void>> owners) -> std::shared_ptr<const void> {
 			ZoneScopedN("CS.DCLF.RefreshMaterial.SealOwners");
 			return org::ExecutionResourceLease::Create(cleanup, std::move(owners)).Owner();
@@ -18,6 +24,8 @@ namespace DCLF::Draws
 		for (const auto slot : retired) {
 			if (slot < a_lookups.materials.size()) {
 				a_lookups.materials[slot] = {};
+				if (slot < a_lookups.materialVersions.size())
+					a_lookups.materialVersions[slot] = 0;
 				++a_lookups.generation;
 			}
 		}
@@ -45,14 +53,19 @@ namespace DCLF::Draws
 			a_slot = a_value;
 			return changed;
 		};
-		if (note(a_lookups.nullTexture, textures.NullIndex()))
+		// The null texture and the samplers are the shadow builds' too.
+		if (note(a_lookups.nullTexture, textures.NullIndex())) {
 			a_lookups.sharedVersion = a_lookups.NextVersion();
-		if (!a_lookups.samplersResolved) {
+			++a_lookups.shadowGeneration;
+		}
+		if (!a_lookups.samplersResolved && inEpoch) {
 			for (std::uint32_t address = 0; address < 4; ++address)
 				for (std::uint32_t filter = 0; filter < 5; ++filter)
 					a_lookups.samplers[Lookups::SamplerIndex(address, filter)] = textures.Sampler(address, filter);
 			a_lookups.samplersResolved = true;
 			a_lookups.sharedVersion = a_lookups.NextVersion();
+			++a_lookups.generation;
+			++a_lookups.shadowGeneration;
 		}
 		for (std::size_t i = 0; i < a_lookups.projectedTextures.size(); ++i) {
 			// Imported off this thread (RequestBinding): kInvalid while it is, which defers the draws that read it.
@@ -76,10 +89,13 @@ namespace DCLF::Draws
 		}
 		TracyCZoneN(materialBindingZone, "CS.DCLF.RefreshMaterial.Materials", true);
 		a_lookups.materials.resize(a_tables.materials.size());
-		for (std::size_t word = 0; word < a_tables.usedMaterialBits.size(); ++word) {
+		a_lookups.materialVersions.resize(a_tables.materials.size(), 0);
+		// The members' materials and pipelines, once the accumulate phase has settled this frame's (a_members: not the shadow
+		// epoch's refresh, ahead of it).
+		for (std::size_t word = 0; a_members && word < a_tables.usedMaterialBits.size(); ++word) {
 			for (std::uint64_t remaining = a_tables.usedMaterialBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t slot = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
-				if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
+				if (slot >= a_tables.materials.size())
 					continue;
 				auto& entry = a_lookups.materials[slot];
 				const auto& key = a_tables.materialSlotKey[slot];
@@ -97,13 +113,14 @@ namespace DCLF::Draws
 				if (entry.resolved && entry.recordVersion == a_tables.materialVersion[slot] && entry.written == material.textureWritten && entry.texturesGeneration == textures.Generation()) {
 					continue;
 				}
-				if (entry.texturesGeneration != textures.Generation())
-					entry.alternateCharacterLight = {};
+				// A new record version is most often one texture: a view the entry already holds, resolved, is kept as it is,
+				// without asking the registry again.
+				const bool sameGeneration = entry.texturesGeneration == textures.Generation();
+				// A character-light pass's t11 is the frame's (kCharacterLightRegister): the record holds its modes, no view.
+				const std::uint32_t textureWritten = material.textureWritten & ~(MaterialSources::FrameCharacterLight(key.second) ? 1u << kCharacterLightMaterialRegister : 0u);
 				bool importsPending = false;  // a texture the import thread has not finished (RequestBinding)
 				for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-					if (!((material.textureWritten >> t) & 1)) {
-						if (t == kAlternatingMaterialTextureRegister)
-							entry.alternateCharacterLight = {};  // a cleared register releases both incarnations
+					if (!((textureWritten >> t) & 1)) {
 						if (note(entry.textureIndex[t], Lookups::kNone)) {
 							entry.version = a_lookups.NextVersion();
 							bindingDirty = true;
@@ -113,11 +130,10 @@ namespace DCLF::Draws
 						entry.views[t] = nullptr;
 						continue;
 					}
-					auto& alternate = entry.alternateCharacterLight;
 					const auto* view = material.textures[t];
-					// The other incarnation's binding, when it had its index: one kept while its import was pending is asked for again.
-					const auto binding = t == kAlternatingMaterialTextureRegister && alternate.view == view && alternate.owner && alternate.index != Lookups::kNone ?
-						GpuTextures::Binding{ alternate.index, alternate.owner } : textures.RequestBinding(material.textures[t], t);
+					if (sameGeneration && entry.views[t] == view && entry.textureOwners[t] && entry.textureIndex[t] != Lookups::kNone)
+						continue;
+					const auto binding = textures.RequestBinding(material.textures[t], t);
 					importsPending |= binding.pending;
 					const bool tracePaths = !SwitchValue(Switch::TraceTexturePaths).empty();
 					if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
@@ -142,24 +158,24 @@ namespace DCLF::Draws
 							}
 						}
 					}
-					if (entry.views[t] != view && t == kAlternatingMaterialTextureRegister)
-						alternate = { entry.views[t], entry.textureIndex[t], entry.textureOwners[t] };
 					const bool ownerChanged = entry.textureOwners[t].get() != binding.owner.get();
 					const bool indexChanged = note(entry.textureIndex[t], binding.index);
-					bindingDirty |= ownerChanged || indexChanged;
 					if (ownerChanged) ++a_lookups.generation;
 					if (indexChanged || ownerChanged)
 						entry.version = a_lookups.NextVersion();
 					entry.textureOwners[t] = binding.owner;
 					entry.views[t] = material.textures[t];
+					bindingDirty |= ownerChanged;
 				}
 				for (std::uint32_t f = 0; f < kFeatureMaterialTextures; ++f) {
+					if (sameGeneration && entry.featureViews[f] == material.featureTextures[f] && (!material.featureTextures[f] || (entry.featureOwners[f] && entry.featureIndex[f] != Lookups::kNone)))
+						continue;
 					const auto binding = material.featureTextures[f] ? textures.RequestBinding(material.featureTextures[f], 16 + f) : GpuTextures::Binding{ Lookups::kNone, {} };
 					importsPending |= binding.pending;
 					const std::uint32_t index = binding.index;
 					const bool ownerChanged = entry.featureOwners[f].get() != binding.owner.get();
 					const bool indexChanged = note(entry.featureIndex[f], index);
-					bindingDirty |= ownerChanged || indexChanged;
+					bindingDirty |= ownerChanged;
 					if (ownerChanged) ++a_lookups.generation;
 					if (indexChanged || ownerChanged)
 						entry.version = a_lookups.NextVersion();
@@ -174,7 +190,8 @@ namespace DCLF::Draws
 					entry.version = a_lookups.NextVersion();
 				}
 				entry.resolved = !importsPending;
-				entry.written = material.textureWritten;
+				a_lookups.materialVersions[slot] = entry.version;
+				entry.written = material.textureWritten;  // the record's, so a character-light pass's is not resolved every refresh
 				entry.texturesGeneration = textures.Generation();
 				entry.recordVersion = a_tables.materialVersion[slot];
 				if (bindingDirty) {
@@ -191,12 +208,10 @@ namespace DCLF::Draws
 		TracyCZoneEnd(materialBindingZone);
 		// The technique's shadow mask, per used pipeline: the frame's view, so it is refreshed every epoch.
 		a_lookups.pipelines.resize(std::max(a_lookups.pipelines.size(), a_tables.pipelines.size()));
-		for (std::size_t word = 0; word < a_tables.usedPipelineBits.size(); ++word) {
+		for (std::size_t word = 0; a_members && word < a_tables.usedPipelineBits.size(); ++word) {
 			for (std::uint64_t remaining = a_tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
 				const std::uint32_t p = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
 				if (p >= a_tables.pipelines.size())
-					continue;
-				if (!a_tables.PipelineUsed(p, a_frame))
 					continue;
 				const auto& technique = a_tables.TechniqueOf(p);
 				auto& entry = a_lookups.pipelines[p];
@@ -217,72 +232,9 @@ namespace DCLF::Draws
 		}
 	}
 
-	void RefreshKnownMaterialTextures(SceneStore& a_store, Lookups& a_lookups)
-	{
-		ZoneScopedN("CS.DCLF.RefreshKnownMaterialTextures");
-		const auto& a_tables = a_store.GetTables();
-		const std::uint32_t a_frame = a_store.GetFrame();
-		auto& textures = GpuTextures::Get();
-		auto* host = RenderGraphRuntime::Get().Host();
-		if (!host)
-			return;
-		const auto cleanup = host->ResourceCleanup();
-		if (!cleanup)
-			return;
-		auto refreshSlot = [&](std::size_t slot) {
-			if (slot >= a_tables.materialLastUsed.size() || a_tables.materialLastUsed[slot] != a_frame)
-				return;
-			auto& entry = a_lookups.materials[slot];
-			const auto& material = a_tables.materials[slot];
-			if (!entry.resolved || entry.key != a_tables.materialSlotKey[slot] || entry.written != material.textureWritten ||
-				entry.recordVersion == a_tables.materialVersion[slot])
-				return;
-			std::array<GpuTextures::Binding, kPixelTextureSlots> bindings{};
-			bool changed = false, known = true;
-			for (std::uint32_t t = 0; t < kPixelTextureSlots && known; ++t) {
-				if (!((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t])
-					continue;
-				changed = true;
-				const auto& alternate = entry.alternateCharacterLight;
-				if (t == kAlternatingMaterialTextureRegister && alternate.view == material.textures[t] && alternate.owner && alternate.index != Lookups::kNone)
-					bindings[t] = { alternate.index, alternate.owner };
-				else
-					known = textures.KnownBinding(material.textures[t], bindings[t]);
-			}
-			if (!changed || !known)
-				return;
-			for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-				if (!((material.textureWritten >> t) & 1) || entry.views[t] == material.textures[t])
-					continue;
-				if (entry.textureIndex[t] != bindings[t].index || entry.textureOwners[t].get() != bindings[t].owner.get()) {
-					++a_lookups.generation;
-					entry.version = a_lookups.NextVersion();
-				}
-				if (t == kAlternatingMaterialTextureRegister)
-					entry.alternateCharacterLight = { entry.views[t], entry.textureIndex[t], entry.textureOwners[t] };
-				entry.textureIndex[t] = bindings[t].index;
-				entry.textureOwners[t] = std::move(bindings[t].owner);
-				entry.views[t] = material.textures[t];
-			}
-			std::vector<std::shared_ptr<const void>> owners;
-			owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
-			for (const auto& owner : entry.textureOwners)
-				owners.push_back(owner);
-			for (const auto& owner : entry.featureOwners)
-				owners.push_back(owner);
-			entry.bindingBlock = org::ExecutionResourceLease::Create(cleanup, std::move(owners)).Owner();
-			if (entry.featureViews == material.featureTextures)
-				entry.recordVersion = a_tables.materialVersion[slot];
-		};
-		std::vector<std::uint32_t> changed;
-		a_store.TakeMaterialTextureChanges(changed);
-		for (const std::uint32_t slot : changed)
-			if (slot < a_tables.materials.size() && slot < a_lookups.materials.size())
-				refreshSlot(slot);
-	}
-
 	void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
-		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups)
+		const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, const std::array<DXGI_FORMAT, kOcclusionViews>& a_occlusionFormats,
+		Lookups& a_lookups)
 	{
 		ZoneScopedN("CS.DCLF.RefreshShadowLookups");
 		auto& textures = GpuTextures::Get();
@@ -299,7 +251,7 @@ namespace DCLF::Draws
 					a_lookups.pendingShadowTextures.insert(srv);
 				} else {
 					a_lookups.pendingShadowTextures.erase(srv);
-					if (a_lookups.shadowTextures.erase(srv)) ++a_lookups.generation;
+					if (a_lookups.shadowTextures.erase(srv)) ++a_lookups.shadowGeneration;
 					a_lookups.shadowTextureOwners.erase(srv);
 				}
 			}
@@ -319,7 +271,7 @@ namespace DCLF::Draws
 				const auto owner = a_lookups.shadowTextureOwners.find(srv);
 				const void* heldOwner = owner == a_lookups.shadowTextureOwners.end() ? nullptr : owner->second.get();
 				if (inserted || slot->second != binding.index || heldOwner != binding.owner.get())
-					++a_lookups.generation;
+					++a_lookups.shadowGeneration;
 				slot->second = binding.index;
 				if (binding.owner)
 					a_lookups.shadowTextureOwners[srv] = binding.owner;
@@ -348,9 +300,9 @@ namespace DCLF::Draws
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_modeUsed[m])
 				continue;
-			// Skylighting's map takes its own keys (complete techniques) and its target's format.
-			const auto& keys = m == kSkyMode ? a_tables.skyKeysUsed : a_tables.shadowKeysUsed;
-			const DXGI_FORMAT format = m == kSkyMode ? a_skyFormat : a_dsvFormat;
+			// An occlusion view takes its own keys (complete techniques) and its target's format.
+			const auto& keys = IsOcclusionMode(m) ? a_tables.occlusionKeysUsed[OcclusionOfMode(m)] : a_tables.shadowKeysUsed;
+			const DXGI_FORMAT format = IsOcclusionMode(m) ? a_occlusionFormats[OcclusionOfMode(m)] : a_dsvFormat;
 			for (const auto& key : keys) {
 				const std::uint32_t modeBits = ModeBitsOf(m);
 				const ShadowPipelineKey slotKey{ key.technique | modeBits, key.rasterFlags, key.vertexLayout };
@@ -359,7 +311,7 @@ namespace DCLF::Draws
 					// The latch's map rows hold every slot this refresh can add (ReserveShadowLatch, before the epoch).
 					slotIt = a_lookups.shadowSlots.emplace(slotKey, static_cast<std::uint32_t>(a_lookups.shadowSlotKeys.size())).first;
 					a_lookups.shadowSlotKeys.push_back(slotKey);
-					++a_lookups.generation;
+					++a_lookups.shadowGeneration;
 				}
 				const std::uint32_t slot = slotIt->second;
 				const auto* program = [&] {
@@ -379,7 +331,7 @@ namespace DCLF::Draws
 					const std::uint32_t index = set == DrawPipelines::kNotReady ? Lookups::kNone : set;
 					auto [it, inserted] = a_lookups.shadowPipelines.try_emplace(viewKey, index);
 					if (inserted || it->second != index) {
-						++a_lookups.generation;
+						++a_lookups.shadowGeneration;
 						it->second = index;
 					}
 					if (a_lookups.shadowMapRows.size() <= state)
@@ -392,6 +344,7 @@ namespace DCLF::Draws
 			}
 		}
 		TracyCZoneEnd(shadowPipelinesZone);
+		a_lookups.shadowRefreshDue = false;
 	}
 }
 

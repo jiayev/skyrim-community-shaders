@@ -13,9 +13,11 @@
 #	include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 #	include "Features/DrawcallLimitFix/Engine/EngineStates.h"
 #	include "Features/DrawcallLimitFix/Engine/FaceSnapshots.h"
+#	include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #	include "Features/DrawcallLimitFix/Draws/GpuResources.h"
 #	include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
 #	include "Features/DrawcallLimitFix/Scene/LightingConstants.h"
+#	include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 #	include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #	include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
 #	include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -181,7 +183,7 @@ namespace DCLF
 		constexpr std::uint32_t kSkinRegister = 7;             // SkinPerGeometry: Advanced Skin's per-object wetness
 		constexpr std::uint32_t kStrictLightDataBytes = 1216;  // LightLimitFix.hlsli StrictLightData (15 lights)
 		constexpr std::uint32_t kLightsRegister = 35;          // t35-t37: Light Limit Fix's lights, list and grid
-		constexpr std::uint32_t kAlternatingMaterialTextureRegister = 11;  // character-light ping-pong render target
+		constexpr std::uint32_t kCharacterLightMaterialRegister = 11;  // the engine's register of the character light's noise (kCharacterLightRegister)
 		constexpr std::uint32_t kInvalidIndex = GpuTextures::kInvalid;
 
 		/**
@@ -404,7 +406,104 @@ namespace DCLF
 			ankerl::unordered_dense::map<std::uint32_t, std::uint64_t> faceUploaded;  // region -> generation (render thread)
 			// The versions of the stores' records, rows and slots the buffers hold, written by the commit that uploads them.
 			TablesHeld held;
+			// Tree wind (TreeWindCS; Records.h, TreeStatic): the tree rows and their clocks by tree slot, and the members drawing
+			// under a tree. The rows and the list are the commits' uploads (UploadTrees), against the tables' versions; the
+			// clocks are the GPU's alone. The counts and the frame's inputs are what the passes dispatch with (the last commit's).
+			std::shared_ptr<org::Buffer> trees, treeClocks, treeObjects;
+			std::uint32_t treeCapacity = 0, treeObjectCapacity = 0;
+			std::uint64_t treesHeld = ~0ull, treeObjectsHeld = ~0ull;
+			std::uint32_t treeCount = 0, treeObjectCount = 0;
+			std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
+			TreeWindFrame treeInputs{};
+			std::uint64_t treeCommits = 0;  // every commit's, so each epoch's passes are prepared again
+			std::shared_ptr<const ComputeProgram> treeWind;
+			// Fade roots (FadeStateCS; Records.h, FadeRootStatic): the static rows by root slot (the commits' uploads, against
+			// Tables::fadeRootsVersion), the GPU's state rows, the frame's inputs (a one-row buffer the depth commit writes once
+			// a frame), and CS_DCLF_FADE_PARITY's log (kFadeLogEntries roots from fadeLogBase, ~0u: none this frame).
+			std::shared_ptr<org::Buffer> fadeRoots, fadeStates, fadeFrameBuffer, fadeLog;
+			std::uint32_t fadeRootCapacity = 0;
+			std::uint64_t fadeRootsHeld = ~0ull;
+			std::uint32_t fadeRootCount = 0;
+			std::uint32_t fadeFrameNumber = 0;  // the scene frame of fadeFrame
+			FadeFrame fadeFrame{};
+			std::uint32_t fadeLogBase = ~0u;
+			std::uint64_t fadeCommits = 0;
+			// The write-back roots' changes (FadeChange, after a kFadeChangeHeaderBytes header the depth commit zeroes), copied
+			// into each visibility feedback slot. fadeChangesNeeded: the capacity an overflow asked for (ReserveSceneTables grows
+			// to it); fadeWriteAll: the next update appends every write-back root, the changes an overflow lost included.
+			std::shared_ptr<org::Buffer> fadeChanges;
+			std::uint32_t fadeChangeCapacity = 0, fadeChangesNeeded = 0;
+			bool fadeWriteAll = false, fadeWriteAllFrame = false;
+			std::uint64_t fadeChangesLost = 0;  // NoteFadeChangesLost, and frames whose changes were not copied
+			// The frame whose changes the feedback copy took (FeedbackPass), and whether a copy was abandoned since: the depth
+			// commit sends every write-back root again when the last frame's changes were not taken.
+			std::atomic<std::uint32_t> fadeCopiedFrame{ 0 };
+			std::atomic<bool> fadeCopyAbandoned{ false };
+			std::shared_ptr<const ComputeProgram> fadeState;
 		};
+
+		/**
+		 * @brief The depth commit's fade uploads (render thread): the static rows where the buffer does not hold the tables'
+		 * version, whole, and the frame's inputs once a frame. a_logBase: the parity log's first root this frame (~0u: none).
+		 */
+		template <class Uploads>
+		void UploadFadeRoots(const SceneStore::Tables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase, SceneBuffers& a_scene,
+			Uploads& a_uploads)
+		{
+			if (!a_scene.fadeState || !a_scene.fadeRoots)
+				return;
+			if (a_scene.fadeRootsHeld != a_tables.fadeRootsVersion && a_tables.fadeRoots.size() <= a_scene.fadeRootCapacity) {
+				if (!a_tables.fadeRoots.empty())
+					a_uploads(a_scene.fadeRoots, a_tables.fadeRoots.data(), a_tables.fadeRoots.size() * sizeof(FadeRootStatic), 0);
+				a_scene.fadeRootsHeld = a_tables.fadeRootsVersion;
+			}
+			a_scene.fadeRootCount = a_scene.fadeRootsHeld == a_tables.fadeRootsVersion ? static_cast<std::uint32_t>(a_tables.fadeRoots.size()) : 0u;
+			if (a_scene.fadeFrameNumber != a_frame) {
+				// The last frame's changes never reached a feedback slot (no colour epoch, no free slot, a copy abandoned).
+				if (a_scene.fadeFrameNumber && (a_scene.fadeCopiedFrame.load(std::memory_order_acquire) != a_scene.fadeFrameNumber ||
+													a_scene.fadeCopyAbandoned.exchange(false, std::memory_order_acq_rel))) {
+					a_scene.fadeWriteAll = true;
+					++a_scene.fadeChangesLost;
+				}
+				a_scene.fadeFrameNumber = a_frame;
+				a_scene.fadeFrame = a_inputs;
+				a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
+				a_scene.fadeLogBase = a_logBase;
+				// This frame's changes start from none; after an overflow, once the buffer has grown, every write-back root once.
+				static constexpr std::uint32_t kZeroHeader[4]{};
+				a_uploads(a_scene.fadeChanges, kZeroHeader, sizeof(kZeroHeader), 0);
+				a_scene.fadeWriteAllFrame = std::exchange(a_scene.fadeWriteAll, false);
+			}
+			++a_scene.fadeCommits;
+		}
+
+		/**
+		 * @brief A commit's tree uploads (render thread): the rows and the list where the buffers do not hold the tables'
+		 * versions, whole (they change when a tree member joins or leaves), and the frame's inputs once a frame.
+		 */
+		template <class Uploads>
+		void UploadTrees(const SceneStore::Tables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads)
+		{
+			if (!a_scene.treeWind || !a_scene.trees)
+				return;
+			if (a_scene.treesHeld != a_tables.treesVersion && a_tables.trees.size() <= a_scene.treeCapacity) {
+				if (!a_tables.trees.empty())
+					a_uploads(a_scene.trees, a_tables.trees.data(), a_tables.trees.size() * sizeof(TreeStatic), 0);
+				a_scene.treesHeld = a_tables.treesVersion;
+			}
+			if (a_scene.treeObjectsHeld != a_tables.treeObjectsVersion && a_tables.treeObjects.size() <= a_scene.treeObjectCapacity) {
+				if (!a_tables.treeObjects.empty())
+					a_uploads(a_scene.treeObjects, a_tables.treeObjects.data(), a_tables.treeObjects.size() * sizeof(TreeObject), 0);
+				a_scene.treeObjectsHeld = a_tables.treeObjectsVersion;
+			}
+			a_scene.treeCount = a_scene.treesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
+			a_scene.treeObjectCount = a_scene.treeObjectsHeld == a_tables.treeObjectsVersion ? static_cast<std::uint32_t>(a_tables.treeObjects.size()) : 0u;
+			if (a_scene.treeFrame != a_frame) {
+				a_scene.treeFrame = a_frame;
+				a_scene.treeInputs = SampleTreeWindFrame();
+			}
+			++a_scene.treeCommits;
+		}
 
 		struct Resources
 		{
@@ -474,6 +573,10 @@ namespace DCLF
 				{
 					std::shared_ptr<org::Buffer> staging;
 					std::uint32_t capacity = 0;  // the objects its staging holds (grown while it is free)
+					// The frame's fade changes (SceneBuffers::fadeChanges, header and all), and the changes it holds.
+					std::shared_ptr<org::Buffer> fadeStaging;
+					std::uint32_t fadeCapacity = 0;
+					std::uint32_t fadeHeld = 0;  // the changes its copy took this time
 					std::atomic<std::uint32_t> state{ Free };
 					std::uint64_t fenceValue = 0;
 					std::uint32_t frame = 0, stamp = 0, objects = 0;
@@ -796,7 +899,7 @@ namespace DCLF
 			// The scene's tables, every epoch's (SceneBuffers).
 			std::shared_ptr<SceneBuffers> scene;
 			std::array<std::shared_ptr<org::Buffer>, kShadowModeCount> inputs;               // per render mode
-			// Per view slot (kSkySlot, then the views'), as many as the latch layout's viewSlots (Impl::ReserveShadowLatch):
+			// Per view slot (the occlusion views', then the shadow views'), as many as the latch layout's viewSlots (Impl::ReserveShadowLatch):
 			// its sequence and count buffers, its sequence buffer's draws - grown before the epoch that uses the slot to hold
 			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
 			std::vector<std::shared_ptr<org::Buffer>> sequences, count;
@@ -818,9 +921,9 @@ namespace DCLF
 			std::array<std::uint32_t, kShadowDepthTargets> depthLayers{};
 			std::atomic<std::shared_ptr<const ShadowFrame>> frame;
 			std::shared_ptr<const ShadowFrame> published;  // survives a frame without views
-			// Skylighting's occlusion map: its own epoch's one view (ExecuteSkyOcclusion).
-			std::atomic<std::shared_ptr<const ShadowFrame>> skyFrame;
-			std::shared_ptr<const ShadowFrame> skyPublished;
+			// The occlusion maps: their own epoch's views (ExecuteOcclusion).
+			std::atomic<std::shared_ptr<const ShadowFrame>> occlusionFrame;
+			std::shared_ptr<const ShadowFrame> occlusionPublished;
 			std::uint64_t shapeGenerations = 0;
 			// Per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows (latchLayout); a new block when either
 			// grows. The passes read it from the published frame (ShadowFrame::latch).
@@ -999,6 +1102,10 @@ namespace DCLF
 			std::atomic<std::uint32_t> busy{ 0 };
 			// Since the last report.
 			std::uint64_t updates = 0, rewritten = 0, resyncs = 0, collisions = 0;
+			// Phase D's measure: updates whose changes were only placements and palettes (the per-frame streams), and the
+			// updates with any other cause, by cause.
+			std::uint64_t streamOnly = 0, structural = 0;
+			std::array<std::uint64_t, kChangeCauseCount> byCause{};
 			ParityCounter parity;
 		};
 
@@ -1293,13 +1400,11 @@ namespace DCLF
 			std::vector<DrawInput> inputList;
 			GeometryDrawsOut geometryDraws;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
-			ObjectRecordsOut objectRecords;  // the DCLF_BINDLESS per-object table
 			// The rows (MainRows), kept across frames and shared by both segments: uploaded as the rows changed since the version
 			// the tables hold.
 			KeptView<MaterialRow> materialRows;
 			KeptView<PipelineRow> pipelineRows;
 			std::uint64_t materialRowsWritten = 0, pipelineRowsWritten = 0;
-			BonesOut bones;                             // the rows: current then previous, then the extras
 			// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
 			// record): the commit counts the ones it could not.
 			std::array<std::uint64_t, 2> frameRegisters{};
@@ -1365,8 +1470,6 @@ namespace DCLF
 				drawnVersion = drawnBase = 0;
 				drawnFull = drawnValid = false;
 				objectState.clear();
-				objectRecords.Reset();
-				bones.Reset();
 				materialRows.Reset();
 				pipelineRows.Reset();
 				materialRowsWritten = pipelineRowsWritten = 0;
@@ -1495,13 +1598,11 @@ namespace DCLF
 				ForEachInput(a_mode, [&](const DrawInput& a_input) { out.push_back(a_input); });
 				return out;
 			}
-			ObjectRecordsOut objects;
-			BonesOut bones;
 			GeometryDrawsOut geometries;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
-			// Occluders of Skylighting's map left out (no record, no pipeline yet): the map is then the engine's this frame.
-			std::uint32_t skySkipped = 0;
+			// Per occlusion view, its occluders left out (no record, no pipeline yet): the map is then the engine's this frame.
+			std::array<std::uint32_t, kOcclusionViews> occlusionSkipped{};
 			// The worker's build stages its uploads itself (StageShadowPayload): everything but the arena's view
 			// head, and the records of the first stagedSlots view slots. For the resources it was staged against.
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
@@ -1529,15 +1630,13 @@ namespace DCLF
 				objectRecord.clear();
 				for (auto& modeInputs : inputList)
 					modeInputs.clear();
-				objects.Reset();
-				bones.Reset();
 				kept = false;
 				regionInputs = {};
 				membership = {};
 				geometries.Reset();
 				faceStreams.clear();
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
-				skySkipped = 0;
+				occlusionSkipped = {};
 			}
 		};
 
@@ -1567,36 +1666,20 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief A shadow input's sun entry (kCullSunEntry): its entry's sphere in the fade row, which BuildDraws tests against the
-		 * view's processes (outside every one: no caster of the sun). An entry that is never tested is inside every process.
+		 * @brief A depth-segment input's fade row: its fade root's slot (FadeStateCS's state, which an owned root's members
+		 * follow), and for the distance test of a root DCLF does not own (kObjectFadeTest), its fade-out distance. The node's
+		 * centre is its object record's (BindlessObject::lodFadeNode), which a move rewrites; the slot and the distance only
+		 * change with its membership and bindings.
 		 */
-		inline void SetSunEntryRow(DrawInput& a_input, const SceneStore::Tables& a_tables, std::size_t a_object)
-		{
-			const bool entry = a_object < a_tables.sunEntry.size() && a_tables.sunEntry[a_object][3] >= 0.0f;
-			if (entry) {
-				const auto& sphere = a_tables.sunEntry[a_object];
-				a_input.fade[0] = sphere[0];
-				a_input.fade[1] = sphere[1];
-				a_input.fade[2] = sphere[2];
-				a_input.fade[3] = sphere[3];
-			} else {
-				a_input.fade[0] = a_input.fade[1] = a_input.fade[2] = 0.0f;
-				a_input.fade[3] = std::numeric_limits<float>::max();
-			}
-		}
-
-		/** @brief A depth-segment input's fade test (kObjectFadeTest): its fade node's centre and its fade-out distance. */
 		inline void SetFadeRow(DrawInput& a_input, const SceneStore::Tables& a_tables, std::size_t a_object)
 		{
+			if (a_object < a_tables.objectFadeRoot.size())
+				a_input.fadeRoot = a_tables.objectFadeRoot[a_object];
 			if (!(a_input.flags & (kObjectFadeTest | kObjectHeightTest)) || a_object >= a_tables.fadeDistance.size() || a_object >= a_tables.lodFade.size())
 				return;
-			const auto& node = a_tables.lodFade[a_object];
-			if (node[3] < 0.0f)
+			if (a_tables.lodFade[a_object][3] < 0.0f)
 				return;  // no fade node: nothing to measure
-			a_input.fade[0] = node[0];
-			a_input.fade[1] = node[1];
-			a_input.fade[2] = node[2];
-			a_input.fade[3] = a_tables.fadeDistance[a_object];
+			a_input.fadeDistance = a_tables.fadeDistance[a_object];
 		}
 
 		// A draw template's geometry half, from a slot (SceneStore builds the object's first the same way). The second
@@ -1677,6 +1760,12 @@ namespace DCLF
 			auto& a_out = a_geometries.faces;
 			for (const auto& stream : a_tables.faceStreams) {
 				GeometryDraw draw{};
+				// A free entry (its object's record has none) is a draw nothing names.
+				if (stream.object == SceneStore::Tables::kNoFaceObject) {
+					draw.nextPartition = kNoPartition;
+					a_out.push_back(draw);
+					continue;
+				}
 				draw.vertexBufferAddress = a_positions + std::uint64_t(stream.region) * 16;
 				draw.vertexBufferSize = stream.vertexCount * 16;
 				draw.vertexStride = 16;
@@ -1702,6 +1791,8 @@ namespace DCLF
 		{
 			std::uint32_t count = 0;
 			for (const auto& stream : a_streams) {
+				if (stream.object == SceneStore::Tables::kNoFaceObject)
+					continue;
 				auto& uploaded = a_uploaded[stream.region];
 				if (uploaded == stream.generation)
 					continue;
@@ -1832,8 +1923,18 @@ namespace DCLF
 				std::uint32_t slot = 0;   // its rows (RowsOf), once it can draw
 				std::uint32_t count = 0;  // the entries using it
 				bool ok = true;           // this build found its rows can draw it
+				// What its resolution read (MainBuild::PairWitness): it is resolved again only when that changes. 0: never resolved.
+				std::uint64_t witness = 0;
+				std::uint32_t skip = 0;  // its skip reason when it cannot draw (the report counts it every build)
+				std::array<std::uint64_t, 2> frameRegisters{};  // the frame textures its resolution asked for
 			};
 			ankerl::unordered_dense::map<std::uint64_t, Pair> pairs;
+			// The build's own inputs the pairs' resolutions read (the frame slots bound, the segment), every pair's frame textures,
+			// and every pair's binding owners in one bundle, which each build's payload holds: made again when a pair is resolved.
+			std::uint64_t frameWitness = 0;
+			std::array<std::uint64_t, 2> frameRegisters{};
+			std::shared_ptr<const void> owners;
+			bool pairsChanged = true;
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pipelines;  // pipeline -> (set index, entries)
 			MarkedList pending;  // depth: joined slots the colour epoch has not drawn yet
 			std::size_t draws = 0;
@@ -1974,10 +2075,30 @@ namespace DCLF
 		// The cascades' render mode (0xE, ShadowMapClamped) as an index of the shadow modes.
 		constexpr std::uint32_t kSunShadowMode = 0xE - PassCapture::kFirstShadowMode;
 
-		/** @brief The technique bits a mode index adds to an object's base technique: none for Skylighting's map, whose are complete. */
+		/** @brief The technique bits a mode index adds to an object's base technique: none for an occlusion view's, which are complete. */
 		inline std::uint32_t ModeBitsOf(std::uint32_t a_mode)
 		{
-			return a_mode == kSkyMode ? 0u : ShadowModeBits(PassCapture::kFirstShadowMode + a_mode);
+			return IsOcclusionMode(a_mode) ? 0u : ShadowModeBits(PassCapture::kFirstShadowMode + a_mode);
+		}
+
+		/** @brief The technique object a_object draws with under mode a_mode: an occlusion view's own, or its caster technique with the mode's bits. 0: none. */
+		inline std::uint32_t ModeTechnique(const SceneStore::Tables& a_tables, std::uint32_t a_mode, std::size_t a_object)
+		{
+			if (IsOcclusionMode(a_mode)) {
+				const auto& column = a_tables.occlusionTechnique[OcclusionOfMode(a_mode)];
+				return a_object < column.size() ? column[a_object] : 0u;
+			}
+			return (a_tables.objects[a_object].flags & kObjectNoShadow) ? 0u : (a_tables.shadowTechnique[a_object] | ModeBitsOf(a_mode));
+		}
+
+		/** @brief The techniques of the occlusion views among a_modeUsed object a_object draws into, ORed (its record, and whether alpha-tested). */
+		inline std::uint32_t OcclusionTechniques(const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed, std::size_t a_object)
+		{
+			std::uint32_t techniques = 0;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				if (a_modeUsed[OcclusionModeOf(v)] && a_object < a_tables.occlusionTechnique[v].size())
+					techniques |= a_tables.occlusionTechnique[v][a_object];
+			return techniques;
 		}
 
 		/**
@@ -2146,20 +2267,12 @@ namespace DCLF
 		 * this frame. Material slots retain their exact imported bindings until a
 		 * replacement or slot-retirement event releases them.
 		 */
-		void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, std::uint32_t a_frame, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups);
-
-		/**
-		 * @brief Outside an epoch (render thread): brings resolved material entries up to date where every view
-		 * that changed is one GpuTextures already knows. A volatile material's textures can change every frame
-		 * - the character light's t11 alternates between two render targets - and a job kicked before the
-		 * epoch's own refresh would otherwise be built against the old indices and go stale. Anything that
-		 * needs an import is left to the epoch (RefreshMaterialLookups), where the descriptor service is active.
-		 */
-		void RefreshKnownMaterialTextures(SceneStore& a_store, Lookups& a_lookups);
+		void RefreshMaterialLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, bool a_members, const SceneStore::ProjectedTextures& a_projected, Lookups& a_lookups);
 
 		/** @brief The shadow epoch's entries: the alpha-tested casters' diffuse textures, and the pipelines of the modes in use. */
 		void RefreshShadowLookups(SceneStore& a_store, const SceneStore::Tables& a_tables, const std::array<bool, kShadowModeCount>& a_modeUsed,
-			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, DXGI_FORMAT a_skyFormat, Lookups& a_lookups);
+			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates, DXGI_FORMAT a_dsvFormat, const std::array<DXGI_FORMAT, kOcclusionViews>& a_occlusionFormats,
+			Lookups& a_lookups);
 
 		constexpr std::size_t kAsyncColour = 0;
 		constexpr std::size_t kAsyncZPrepass = 1;
@@ -2190,9 +2303,14 @@ namespace DCLF
 
 		inline bool SameShadowInputs(const ShadowInputs& a_job, const ShadowInputs& a_epoch)
 		{
+			// Not the sun's full-frustum planes: the build does not read them, and the epoch writes its own into the latch (the
+			// full-frustum cull runs after the scene phase, where the build may be kicked).
+			// Nor CS's SharedData and FeatureData beyond their sizes: the build only places their blocks, and the epoch writes the
+			// frame's over them (the water reflections' prepasses refresh them after the scene phase).
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.modeUsed == a_epoch.modeUsed &&
-			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunEntryProcesses == a_epoch.sunEntryProcesses && a_job.sunCandidates == a_epoch.sunCandidates &&
-			       a_job.addresses == a_epoch.addresses && a_job.sharedData == a_epoch.sharedData && a_job.featureData == a_epoch.featureData &&
+			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunCandidates == a_epoch.sunCandidates &&
+			       a_job.addresses == a_epoch.addresses && a_job.sharedData.size() == a_epoch.sharedData.size() &&
+			       a_job.featureData.size() == a_epoch.featureData.size() &&
 			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;
 		}
 
@@ -2344,14 +2462,26 @@ namespace DCLF
 		void ReadShadowCullCounters(std::uint32_t a_frame, IndirectDraws::ShadowStats& a_stats);
 		using PendingView = Draws::PendingView;
 		std::vector<PendingView> pendingViews;
-		// Skylighting's occlusion map (ExecuteSkyOcclusion): the view as the engine's RenderMask set it up (CaptureSkyOcclusion),
-		// the state and format its pipelines are built for, and the frame whose shadow commit uploaded its occluders.
-		PendingView skyView;
-		std::uint32_t skyCapturedFrame = ~0u;
-		std::uint32_t skyRasterState = 0;
-		DXGI_FORMAT skyDsvFormat = DXGI_FORMAT_UNKNOWN;
-		std::uint32_t skyCommittedFrame = ~0u;
-		std::uint32_t skyInputs = 0, skySkipped = 0;
+		// Per occlusion view (ExecuteOcclusion): the view as the engine's RenderMask set it up (CaptureOcclusion), the state and
+		// format its pipelines are built for, and the frame whose shadow commit uploaded its occluders.
+		struct OcclusionState
+		{
+			PendingView view;
+			std::uint32_t capturedFrame = ~0u;
+			std::uint32_t rasterState = 0;
+			DXGI_FORMAT dsvFormat = DXGI_FORMAT_UNKNOWN;
+			std::uint32_t committedFrame = ~0u;
+			std::uint32_t inputs = 0, skipped = 0;
+		};
+		std::array<OcclusionState, kOcclusionViews> occlusion;
+		/** @brief The occlusion views' formats, for RefreshShadowLookups. */
+		std::array<DXGI_FORMAT, kOcclusionViews> OcclusionFormats() const
+		{
+			std::array<DXGI_FORMAT, kOcclusionViews> viewFormats{};
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+				viewFormats[v] = occlusion[v].dsvFormat;
+			return viewFormats;
+		}
 		// CS_DCLF_SHADOW_OWNERSHIP=static: the claim set built from the inputs of a mode, published once per
 		// input rebuild (the views of one frame that share a mode share the inputs and the claims).
 		/** @brief A shadow view not drawn: counts a hole when its mode withholds casters this frame, and hands the mode back. */
@@ -2372,8 +2502,12 @@ namespace DCLF
 			bool modesKnown = false;
 			std::uint32_t views = 0;  // last frame's view count: the record slots the job stages
 			std::uint32_t loggedStale = 0;
+			std::uint32_t loggedStates = 0;
 			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> stagedPool;
 		} shadowJob;
+		// Per mode, the rasterizer states its views have drawn with, per caster class (ExecuteShadowFrame): what the shadow
+		// build's inputs are for.
+		std::array<ModeRasterStates, kShadowModeCount> shadowStatesSeen{};
 		ShadowPayload shadowProbePayload;
 		/**
 		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked
@@ -2444,6 +2578,18 @@ namespace DCLF
 		GeometryStore geometryStore;
 		ObjectRecordStore* SceneObjects() { return &objectStore; }
 		BonesStore* SceneBones() { return &boneStore; }
+		/**
+		 * @brief The per-frame streams (drawcall-limit-fix.md, "The streams leave the builds"): the object records and the bone
+		 * rows the tables hold now, updated from the change log and uploaded as the changes since what the scene buffers hold.
+		 * Render thread, at every epoch's commit, before its passes: a placement, a palette or a shading value reaches the
+		 * epoch that draws it, whichever build it ran with, and no build waits for them. Returns the rows it sent.
+		 */
+		struct SceneStreams
+		{
+			std::size_t objects = 0, boneRows = 0, objectBytes = 0, boneRowsSent = 0;
+		};
+		SceneStreams CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame, std::uint32_t a_generation,
+			CommitUploads& a_uploads);
 		GeometryStore* SceneGeometries() { return &geometryStore; }
 		MainRows mainRows;  // both main segments' (MainRows)
 		ShadowKept shadowKept;  // the shadow epoch's inputs and records (Step 6)
@@ -2560,6 +2706,14 @@ namespace DCLF
 		// frame to frame, so the previous frame's value is right for this frame's prepass.
 		float mainMinDepth = 0.0f, mainMaxDepth = 0.0f;
 		bool prepassInputs = false;
+		// The colour build kicked at EarlyPrepass (KickZPrepassBuild), and the witness of the tables it read
+		// (SceneStore::BuildInputsWitness), until Prepass keeps or replaces it.
+		bool colourEarly = false;
+		std::uint64_t colourWitness = 0;
+		// The shadow build kicked at the end of the scene phase (KickShadowBuildEarly), and the change logs' witness it read
+		// (SceneStore::ShadowInputsWitness), until BeforeShadowMaps keeps or replaces it.
+		bool shadowEarly = false;
+		std::uint64_t shadowWitness = 0;
 		std::uint32_t loggedDepthViewport = 0;
 		std::uint32_t loggedColourViewport = 0;
 
@@ -2664,6 +2818,52 @@ namespace DCLF
 		}
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
+		/**
+		 * @brief CS_DCLF_PERSISTENT_PARITY: tree wind parity. Every 120th colour epoch the records of up to 64 tree members are
+		 * read back (3 frames later) and checked: TreeParams.y and .w against the frame's wind magnitude and the node's leaf
+		 * frequency, the amplitude's fade against its own distance, and the gust against the engine's formula at the record's
+		 * timer; and the timers' drift from the engine's own clock on the node is reported.
+		 */
+		void ReadTreeWind(const std::shared_ptr<Resources>& a_resources);
+		struct TreeReadback
+		{
+			winrt::com_ptr<ID3D11Buffer> records;
+			std::uint32_t framesLeft = 0;
+			struct Sample
+			{
+				std::uint32_t object = 0, tree = 0;
+				const void* node = nullptr;
+			};
+			std::vector<Sample> samples;
+			TreeWindFrame inputs{};
+		};
+		std::optional<TreeReadback> treeReadback;
+		ankerl::unordered_dense::map<const void*, std::pair<float, float>> treeTimers;  // node -> engine's and GPU's timers at the last readback
+		std::uint32_t treeEpochs = 0;
+
+		/**
+		 * @brief CS_DCLF_FADE_PARITY: FadeStateCS against the C++ port (Scene/FadeState.h). Every 30th frame the depth commit
+		 * has the pass log kFadeLogEntries roots from a rotating cursor (NextFadeLog keeps their static rows and the frame's
+		 * inputs); the log is copied after the depth epoch and checked three frames later (ReadFadeLog): each logged update
+		 * made again by the port from the state it started from, with the GPU's frustum verdict.
+		 */
+		std::uint32_t NextFadeLog(std::uint32_t a_frame, const SceneStore::Tables& a_tables, const FadeFrame& a_inputs);
+		void ReadFadeLog(const std::shared_ptr<Resources>& a_resources);
+		struct FadeReadback
+		{
+			winrt::com_ptr<ID3D11Buffer> log;
+			std::uint32_t frame = 0, base = 0, framesLeft = 0;
+			std::vector<FadeRootStatic> roots;  // the static rows from base, as uploaded that frame
+			FadeFrame inputs{};
+		};
+		std::optional<FadeReadback> fadeReadback;
+		std::uint32_t fadeLogCursor = 0;
+		struct FadeParity
+		{
+			std::uint64_t logs = 0, updates = 0, inView = 0, serviced = 0, exact = 0, rounding = 0, differ = 0;
+			std::string first;
+		};
+		FadeParity fadeParity;
 
 		// CS_DCLF_SET_PARITY: one snapshot per frame in flight, read back a few frames later.
 		struct SetParityFrame

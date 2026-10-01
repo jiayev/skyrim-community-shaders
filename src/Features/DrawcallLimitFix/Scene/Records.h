@@ -57,9 +57,7 @@ namespace DCLF
 		// BindlessObject::extraOffset (Records: kExtraRows rows, layout in SceneStore::RefreshFrameConstants):
 		// the ProjectedUV texture matrix and pixel parameters (CS_DCLF_PROJECTED_UV), and the landscape
 		// blend parameters of the MTLand techniques (CS_DCLF_MTLAND).
-		// The object's fade root has faded out (BSFadeNode::OnVisible stops at a root whose currentFade or fadeAmount is 0): BuildDraws
-		// draws nothing of it. From the visibility feedback's fade service (PrimaryCull), kept in Tables::fadedOut.
-		kObjectFadedOut = 1u << 17,
+		// Bit 17 is free: an owned fade root's faded-out state is the GPU's (FadeStateCS, kFadeRootOwned).
 		kObjectProjectedUV = 1u << 18,
 		kObjectLandBlend = 1u << 19,
 		kObjectDecalGroupShift = 20,
@@ -318,6 +316,196 @@ namespace DCLF
 		float windTimers[4]{};   // wind timer, previous wind timer, unused, unused
 	};
 	static_assert(sizeof(ObjectTreeAnim) == 32);
+
+	/**
+	 * @brief A tree's wind clock on the GPU (TreeWindCS.hlsl; drawcall-limit-fix.md, "Tree wind on the GPU").
+	 *
+	 * The engine's tree manager (FUN_1404381e0, from Main::Update) advances a BSTreeNode's timer (+0x164) by the frame's
+	 * seconds, measures its squared distance to the camera (+0x158), and within its range (manager +0x80) takes the gust
+	 * amplitude (+0x15C) from the timer: 0.25 * sum over k in {1,3,5,7} of sin(k * pi * manager+0x78 * timer), times the
+	 * model's scale (model +0xB0). SetupGeometry then reads them and keeps the timer as the previous one (+0x168). DCLF's
+	 * members take all of it from TreeWindCS: one TreeStatic row per tree node a member draws (the CPU's, written when the
+	 * node is listed), one TreeClock row per node (the GPU's, initialised from the static row's values when its generation
+	 * is new), and one TreeObject per member drawing under a node, whose record's TreeParams and WindTimers the pass writes.
+	 */
+	struct TreeStatic
+	{
+		float position[3]{};       // the node's world translate (+0xA0)
+		float leafFrequency = 1.0f;  // +0x160
+		float modelAmplitude = 0.0f; // the model's +0xB0
+		float timer = 0.0f;          // the node's clock when listed: +0x164, +0x168, +0x15C
+		float previousTimer = 0.0f;
+		float amplitude = 1.0f;
+		std::uint32_t generation = 0;  // new for every listing: the clock row takes the values above again
+		std::uint32_t animated = 0;    // a model is attached (the manager advances only such a node)
+		std::uint32_t padding[2]{};
+	};
+	static_assert(sizeof(TreeStatic) == 48);
+
+	struct TreeClock
+	{
+		float timer, previousTimer, amplitude;
+		std::uint32_t generation, frame;
+		std::uint32_t padding[3];
+	};
+	static_assert(sizeof(TreeClock) == 32);
+
+	// A member drawing under a tree node: its object slot and the node's tree slot (kNodelessTree: the engine's defaults).
+	struct TreeObject
+	{
+		std::uint32_t object, tree;
+	};
+	inline constexpr std::uint32_t kNoTree = ~0u;
+	inline constexpr std::uint32_t kNodelessTree = ~0u - 1;
+
+	/** @brief The frame's inputs to the tree clocks (TreeWindCS.hlsl's constants after its indices). */
+	struct TreeWindFrame
+	{
+		float deltaTime = 0.0f;  // the frame's seconds (GetSecondsPassed's global)
+		float camera[3]{};       // the main camera's world position
+		float windSpeed = 0.0f;  // the tree manager's +0x78
+		float maxDistance2 = 0.0f;  // its +0x80
+		float windMagnitude = 0.0f;
+		float fadeStart = 0.0f, fadeEnd = 0.0f;
+		float timerScale = 0.0f;
+	};
+
+	/**
+	 * @brief The occlusion maps DCLF draws from its own tables, each a view of the precipitation accumulator (render mode
+	 * 0x1C) the engine would otherwise fill by culling and registering the scene lists (Precipitation::SetupMask):
+	 * Skylighting's sky occlusion map, and the precipitation occlusion mask. Each has its own pass rule
+	 * (Skylighting::OcclusionTechnique), technique column, pipeline keys, shadow-build mode, view slot and depth target.
+	 */
+	inline constexpr std::uint32_t kOcclusionViews = 2;
+	inline constexpr std::uint32_t kOcclusionSky = 0;
+	inline constexpr std::uint32_t kOcclusionPrecipitation = 1;
+
+	/**
+	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is
+	 * a root: one FadeRootStatic row per root (the CPU's, written when the node is listed) and one FadeNodeState row (the
+	 * GPU's, seeded from the static row's `initial` when its generation is new). The pass runs the node's OnVisible for
+	 * the main camera whenever its bound is in view, as the engine's cull does (Scene/FadeState.h ports it to C++).
+	 *
+	 * FadeNodeState is the node's own fields, as BSFadeNode keeps them (skyrim-engine-notes.md, "Fade state").
+	 */
+	struct FadeNodeState
+	{
+		std::uint32_t flags = 0;          // +0xF4, only kFadeFlag* (bits 14, 15, 27)
+		float currentFade = 1.0f;         // +0x130
+		float snapRadius = 0.0f;          // +0x134: the bound radius at the placement snap (FUN_14147aa20)
+		std::int32_t lastVisible = 0;     // +0x13C: the fade frame counter it was last in view
+		float amountFade = 1.0f;          // +0x140: the last fadeAmount-driven fade
+		float metric = 0.0f;              // +0x144: the LOD metric (GetRenderPasses' LOD fades)
+		float previousMetric = 0.0f;      // +0x148
+		float blend = 0.0f;               // +0x14C: the LOD cross-fade
+		std::uint32_t levels = 0;         // +0x152 (levels: current, previous) | +0x153 (LOD type, transition) << 8
+		std::uint32_t generation = 0;     // the static row's it was seeded from
+		std::uint32_t verdict = 0;        // kFadeVerdict*: what its last update saw and decided
+		std::uint32_t frame = 0;          // the scene frame of its last update
+	};
+	static_assert(sizeof(FadeNodeState) == 48);
+	inline constexpr std::uint32_t kFadeFlagFadedIn = 1u << 14;    // the fade's target: faded in
+	inline constexpr std::uint32_t kFadeFlagSettled = 1u << 15;    // OnVisible skips the update while fully faded in
+	inline constexpr std::uint32_t kFadeFlagLodInUpdate = 1u << 27;  // FUN_14147a160 runs the LOD step first
+	inline constexpr std::uint32_t kFadeFlagMask = kFadeFlagFadedIn | kFadeFlagSettled | kFadeFlagLodInUpdate;
+	inline constexpr std::uint32_t kFadeVerdictInView = 1u << 0;     // the bound was in the frustum
+	inline constexpr std::uint32_t kFadeVerdictAboveLimit = 1u << 1;  // a tree above the height limit: no update
+	inline constexpr std::uint32_t kFadeVerdictServiced = 1u << 2;   // OnVisible ran
+	inline constexpr std::uint32_t kFadeVerdictDrawn = 1u << 3;      // OnVisible went on into the children
+
+	struct FadeRootStatic
+	{
+		FadeNodeState initial;            // the node as listed
+		float radius = 0.0f;              // +0xF0, the world bound's (the centre is the member record's fade node row)
+		float fadeAmount = 1.0f;          // NiAVObject +0x100
+		float nearDistance = 0.0f;        // +0x128
+		float farDistance = 0.0f;         // +0x12C
+		std::uint32_t object = ~0u;       // a member's object slot, whose record's fade node row is the root's centre
+		std::uint32_t bits = 0;           // kFadeRoot*, and +0x109 in bits 8-15
+		float lodScale = 1.0f;            // FUN_14147a430's distance scale: powf(e44, logf(+0xF0 / e40) * e54) with +0x109 bit 1
+		std::uint32_t generation = 0;     // new for every listing (and every input refresh): the state row is seeded again
+	};
+	static_assert(sizeof(FadeRootStatic) == 80);
+	inline constexpr std::uint32_t kFadeRootPlanMask = 0x3u;  // which OnVisible the node has
+	inline constexpr std::uint32_t kFadeRootFade = 0;         // BSFadeNode's
+	inline constexpr std::uint32_t kFadeRootLeaf = 1;         // BSLeafAnimNode's: the LOD step, then BSFadeNode's
+	inline constexpr std::uint32_t kFadeRootTree = 2;         // BSTreeNode's: the height test, BSLeafAnimNode's, the LOD fix-up
+	inline constexpr std::uint32_t kFadeRootOther = 3;        // another class's: not serviced
+	inline constexpr std::uint32_t kFadeRootBitsShift = 8;    // +0x109
+	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;     // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
+	inline constexpr std::uint32_t kFadeRootTreeThresholds = 1u << 17;  // a BSTreeNode: a type-4 node takes the tree LOD thresholds
+	// DCLF services the root's OnVisible (PrimaryCull's admitted, stood-in entries): its members follow the GPU's state. The
+	// engine updates every other root's node itself, and their members keep the distance test (kObjectFadeTest).
+	inline constexpr std::uint32_t kFadeRootOwned = 1u << 18;
+	// An owned root with no engine-drawn part: nothing on the CPU services it, and the engine's other readers of its node (the
+	// other views' culls, GetRenderPasses, DCLF's own classification) take the GPU's state written back (FadeChange). An owned
+	// root with engine-drawn parts keeps the CPU's service of its node (PrimaryCull's decode).
+	inline constexpr std::uint32_t kFadeRootWriteBack = 1u << 19;
+
+	/**
+	 * @brief A write-back root whose node-visible state changed in an update (the fade, its target, the LOD levels and
+	 * transition, the blend, the fadeAmount-driven fade), appended by FadeStateCS after a 16-byte header (its first word: the
+	 * appends attempted, which past the capacity says how large the buffer must grow) and read back with the visibility
+	 * feedback.
+	 */
+	struct FadeChange
+	{
+		std::uint32_t root = 0;
+		std::uint32_t padding[3]{};
+		FadeNodeState state;
+	};
+	static_assert(sizeof(FadeChange) == 64);
+	inline constexpr std::uint32_t kFadeChangeHeaderBytes = 16;
+	inline constexpr std::uint32_t kInitialFadeChanges = 1024;
+	inline constexpr std::uint32_t kNoFadeRoot = ~0u;
+
+	/** @brief The frame's inputs to the fade update: the main camera and the engine's fade globals (AE addresses). */
+	struct FadeFrame
+	{
+		float eye[3]{};                   // the main camera's world position
+		float lodAdjust = 0.0f;           // its +0x184; 0: no camera this frame, nothing is updated
+		std::int32_t counter = 0;         // the fade frame counter (0x142032e50)
+		float deltaTime = 0.0f;           // 0x142033084
+		std::uint32_t fadesOn = 0;        // 0x142032dfd: OnVisible updates fades
+		std::uint32_t lodUpdates = 0;     // 0x142032dfc
+		float fadeInTime = 0.0f;          // 0x142032e2c
+		float fadeOutTime = 0.0f;         // 0x142032e30
+		float fadeInAbove = 0.0f;         // 0x142032e34
+		float fadeOutBelow = 0.0f;        // 0x142032e38
+		float blendTime = 0.0f;           // 0x142032e3c
+		float distanceMult = 0.0f;        // 0x142032e48
+		float stepMax = 0.0f;             // 0x142032e4c
+		float amountTime = 0.0f;          // 0x14332a214
+		float metricScale = 0.0f;         // 0x141aa6300
+		float defaultScale = 0.0f;        // 0x141ad2840
+		float metricOverride = 0.0f;      // 0x14332a254
+		std::uint32_t overridden = 0;     // 0x14332a254 != 0x141769578 (also selects OnVisible's type-6 branch when clear)
+		float lodFar = 0.0f;              // 0x14332a22c
+		float lodNear = 0.0f;             // 0x14332a25c
+		float treeLodFar = 0.0f;          // 0x14332a238
+		float treeLodNear = 0.0f;         // 0x14332a268
+		float lodMinimum = 0.0f;          // 0x1433dcfa8
+		float one = 1.0f;                 // 0x141ad2870
+		float amountSnapAbove = 0.0f;     // 0x141ad2874
+		float amountSnapOffset = 0.0f;    // 0x141ad288c
+		float snapRadiusLimit = 0.0f;     // 0x141ad29f4
+		float treeHeightBase = 0.0f;      // BSTreeNode::OnVisible's height test: 0x14332a2f0
+		float treeHeightLimit = 0.0f;     // 0x142032fa0, +infinity while the test is off
+		std::uint32_t padding = 0;
+		float divisors[16]{};             // 0x142032e00, per LOD type
+	};
+	static_assert(sizeof(FadeFrame) == 192);
+
+	/** @brief CS_DCLF_FADE_PARITY: one root's update as FadeStateCS made it, for the C++ port to make again. */
+	struct FadeLogEntry
+	{
+		FadeNodeState before;
+		FadeNodeState after;
+		float centre[3]{};
+		std::uint32_t root = ~0u;
+	};
+	static_assert(sizeof(FadeLogEntry) == 112);
+	inline constexpr std::uint32_t kFadeLogEntries = 64;
 
 	/**
 	 * @brief One indirect draw, in the argument order of the command signature (BasicRHI packs arguments

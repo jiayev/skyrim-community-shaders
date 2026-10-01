@@ -29,10 +29,8 @@ namespace DCLF
 		++m.frames;
 		auto apply = [&](std::uint32_t a_slot, const MaterialRecord& a_live) {
 			bool floatsChanged = false;
-			if (MaterialSources::ApplyFrameComponents(a_live, tables.materials[a_slot], tables.materialSlotKey[a_slot].second, &floatsChanged)) {
+			if (MaterialSources::ApplyFrameComponents(a_live, tables.materials[a_slot], tables.materialSlotKey[a_slot].second, &floatsChanged))
 				tables.materialVersion[a_slot] = ++materialVersions;
-				tables.MarkMaterialTextureChanged(a_slot, frame);
-			}
 			if (floatsChanged)
 				tables.materialFrameVersion[a_slot] = tables.NextVersion();
 		};
@@ -44,10 +42,10 @@ namespace DCLF
 			// The live sample, from a slot of the signature drawn this frame (the last one's while it still is). With none
 			// drawn nothing of the signature is: the slots take the sample when one is.
 			auto& slots = entry.slots;
-			if (!(keyed(entry.representative, signature) && tables.materialLastUsed[entry.representative] == frame)) {
+			if (!(keyed(entry.representative, signature) && tables.MaterialUsed(entry.representative))) {
 				entry.representative = ~0u;
 				for (const std::uint32_t slot : slots)
-					if (keyed(slot, signature) && tables.materialLastUsed[slot] == frame) {
+					if (keyed(slot, signature) && tables.MaterialUsed(slot)) {
 						entry.representative = slot;
 						break;
 					}
@@ -60,6 +58,8 @@ namespace DCLF
 				continue;
 			++stats.frameMaterialSamples;
 			++m.samples;
+			if (auto* view = MaterialSources::CharacterLightView(live, key.second))
+				tables.characterLightView = view;
 			if (entry.appliedValid) {
 				MaterialRecord probe = entry.applied;
 				bool floatsChanged = false;
@@ -67,6 +67,7 @@ namespace DCLF
 					continue;
 			}
 			entry.applied = live;
+			MaterialSources::ApplyFrameComponents(live, entry.applied, key.second);
 			entry.appliedValid = true;
 			++m.applications;
 			for (std::size_t i = 0; i < slots.size();) {
@@ -114,8 +115,8 @@ namespace DCLF
 		for (std::size_t i = 0; i < list.size();) {
 			const std::uint32_t slot = list[i];
 			bool keep = slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialSlotKey[slot].first;
-			// The material is read only while a slot drawn this frame holds it.
-			if (keep && tables.materialLastUsed[slot] == frame) {
+			// The material is read only while a member's slot holds it.
+			if (keep && tables.MaterialUsed(slot)) {
 				const auto* material = tables.materialSlotKey[slot].first;
 				if (MaterialSources::ApplyTextureTransform(material, tables.materials[slot]))
 					tables.materialFrameVersion[slot] = tables.NextVersion();
@@ -140,24 +141,35 @@ namespace DCLF
 		const bool enabled = SwitchEnabled(Switch::PersistentParity);
 		if (!enabled || !ParityDue(frame, 45))
 			return;
-		// The normal path consumes writer-produced use lists. On a parity frame compare them against the
-		// old full-table discovery before trusting their absence to skip descriptor/import work.
-		auto compareUsed = [&](const auto& a_lastUsed, const auto& a_emitted, const auto& a_bits, const char* a_name) {
-			std::vector<std::uint32_t> discovered, emitted = a_emitted, bitmap;
-			for (std::uint32_t slot = 0; slot < a_lastUsed.size(); ++slot)
-				if (a_lastUsed[slot] == frame)
-					discovered.push_back(slot);
-			for (std::size_t word = 0; word < a_bits.size(); ++word)
-				for (std::uint64_t remaining = a_bits[word]; remaining; remaining &= remaining - 1)
-					bitmap.push_back(static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining)));
-			std::sort(emitted.begin(), emitted.end());
-			emitted.erase(std::unique(emitted.begin(), emitted.end()), emitted.end());
-			if (emitted != discovered || bitmap != discovered)
-				logger::warn("[DCLF] {} use journal differs from table scan at frame {}: {} emitted, {} bitmap, {} discovered", a_name, frame,
-					emitted.size(), bitmap.size(), discovered.size());
-		};
-		compareUsed(tables.materialLastUsed, tables.usedMaterials, tables.usedMaterialBits, "material");
-		compareUsed(tables.pipelineLastUsed, tables.usedPipelines, tables.usedPipelineBits, "pipeline");
+		// The used sets are kept by membership changes. On a parity frame compare them against the slots the bound records
+		// name, before trusting their absence to skip descriptor/import work.
+		{
+			std::vector<std::uint64_t> pipelines(tables.usedPipelineBits.size()), materials(tables.usedMaterialBits.size());
+			auto set = [](std::vector<std::uint64_t>& a_bits, std::uint32_t a_slot) {
+				if (a_bits.size() <= a_slot / 64)
+					a_bits.resize(a_slot / 64 + 1, 0);
+				a_bits[a_slot / 64] |= 1ull << (a_slot % 64);
+			};
+			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
+				if (!(tables.objects[o].flags & (kObjectNoBindings | kObjectFree))) {
+					set(pipelines, tables.objects[o].pipelineIndex);
+					set(materials, tables.objects[o].materialIndex);
+				}
+			auto compare = [&](std::vector<std::uint64_t> a_named, const std::vector<std::uint64_t>& a_used, const char* a_name) {
+				a_named.resize(std::max(a_named.size(), a_used.size()), 0);
+				std::uint32_t missing = 0, extra = 0;
+				for (std::size_t word = 0; word < a_named.size(); ++word) {
+					const std::uint64_t used = word < a_used.size() ? a_used[word] : 0;
+					missing += static_cast<std::uint32_t>(std::popcount(a_named[word] & ~used));
+					extra += static_cast<std::uint32_t>(std::popcount(used & ~a_named[word]));
+				}
+				if (missing || extra)
+					logger::warn("[DCLF] {} used set differs from the bound records at frame {}: {} named but not used, {} used but not named", a_name, frame,
+						missing, extra);
+			};
+			compare(std::move(pipelines), tables.usedPipelineBits, "pipeline");
+			compare(std::move(materials), tables.usedMaterialBits, "material");
+		}
 		auto& evaluator = ConstantEvaluator::Get();
 		if (!evaluator.HasLightingShader())
 			return;
@@ -165,7 +177,7 @@ namespace DCLF
 		++m.checks;
 		ankerl::unordered_dense::map<std::uint32_t, MaterialRecord> live;
 		for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot) {
-			if (tables.materialLastUsed[slot] != frame || !tables.materialSlotKey[slot].first)
+			if (!tables.MaterialUsed(slot) || !tables.materialSlotKey[slot].first)
 				continue;
 			const auto key = tables.materialSlotKey[slot];
 			const std::uint32_t signature = MaterialSources::Signature(key.second);
@@ -252,10 +264,12 @@ namespace DCLF
 			if (tables.materialSlots.References(slot)) {
 				MaterialRecord live;
 				if (canEvaluate && evaluator.EvaluateMaterial(key.first, key.second, live)) {
+					// Its frame-sourced components (and the character light's t11, which records hold no view of) are the
+					// frame's, kept by RefreshFrameMaterials: only the material's own values are compared and rewritten.
+					MaterialSources::CopyFrameComponents(tables.materials[slot], live, key.second);
 					if (!(live == tables.materials[slot])) {
 						tables.materials[slot] = live;
 						tables.materialVersion[slot] = ++materialVersions;
-						tables.MarkMaterialTextureChanged(slot, frame);
 						++stats.materialsRewritten;
 					}
 				} else if (std::find(materialEvaluationsPending.begin(), materialEvaluationsPending.end(), slot) == materialEvaluationsPending.end()) {
@@ -299,109 +313,110 @@ namespace DCLF
 		const bool geometryParityEnabled = SwitchEnabled(Switch::PersistentParity);
 		const bool geometryParityFrame = geometryParityEnabled && ParityDue(frame, 30);
 		geometryStats.checks += geometryParityFrame ? 1u : 0u;
-		for (const std::uint32_t i : tables.usedPipelines) {
-			if (i >= tables.pipelines.size() || i >= tables.geometryTemplate.size())
-				continue;
-			if (!tables.PipelineUsed(i, frame))
-				continue;
-			// The technique constants are the frame's (fog, settings, and the shadow mask's view), so a
-			// pipeline slot that outlives the frame takes them fresh here, as it did when the pipeline
-			// table was rebuilt every frame. Serving the slot's first evaluation instead was both a parity
-			// regression and, at startup, a stale view pointer handed to the render graph. They are its technique
-			// row's (Tables::TechniqueRow): evaluated once a frame for all the pipelines of its key, and written, and
-			// versioned, only where the values differ.
-			auto sameFloats = [](const ConstantBlock& a, const ConstantBlock& b) { return std::memcmp(a.floats.data(), b.floats.data(), sizeof(a.floats)) == 0; };
-			auto& row = tables.techniques[tables.pipelineTechnique[i]];
-			if (row.evaluated != frame) {
-				row.evaluated = frame;
-				TechniqueConstants now;
-				EvaluateTechnique(tables.pipelines[i].passDescriptor, now);
-				const bool floats = !sameFloats(now.vs, row.value.vs) || !sameFloats(now.ps, row.value.ps);
-				const bool binding = now.filterModes != row.value.filterModes || now.shadowMask != row.value.shadowMask ||
-				                     now.shadowMaskTexture != row.value.shadowMaskTexture;
-				if (floats || binding)
-					row.value = now;
-				if (floats)
-					row.constantsVersion = tables.NextVersion();
-				if (binding)
-					row.bindingVersion = tables.NextVersion();
-				// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
-				if (geometryParityFrame) {
-					TechniqueConstants reference;
-					EvaluateTechnique(tables.pipelines[i].passDescriptor, reference);
-					++geometryStats.techniquesChecked;
-					if (!sameFloats(reference.vs, row.value.vs) || !sameFloats(reference.ps, row.value.ps) || reference.filterModes != row.value.filterModes ||
-						reference.shadowMask != row.value.shadowMask || reference.shadowMaskTexture != row.value.shadowMaskTexture)
-						++geometryStats.techniquesDiffer;
-				}
-			}
-			// A pipeline's PerGeometry block is evaluated in full once (and again when the render flags change); what of it
-			// changes afterwards is either overridden per object (ObjectGeometryConstants) or one of the frame's globals
-			// (kPSFrameGeometry: the sun's direction and colour, the ambient terms), which every pipeline that writes them
-			// shares and which are copied from the frame's one sample. SetupGeometry writes EyePosition only for Envmap, Eye
-			// and technique 0x10, and the same for all three (the camera less posAdjust in world space, 0x1414dd040): their
-			// pipelines take it from the frame's one evaluation of such a pipeline (eyeSample). The frame's globals are kept
-			// in the block for the constant-buffer path and the parity checks, but no DCLF_BINDLESS draw reads them there
-			// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
-			// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
-			auto* property = tables.geometryTemplate[i];
-			auto templatePassOf = [&]() { return TemplatePassOf(property); };
-			const std::uint32_t geometryTechnique = (tables.pipelines[i].passDescriptor >> 24) & 0x3f;
-			const bool writesEye = geometryTechnique == 1 || geometryTechnique == 0xb || geometryTechnique == 0x10;
-			const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
-			auto& held = tables.geometryConstants[i];
-			bool ownChanged = false;
-			if (!full && writesEye) {
-				CopyFrameGeometry(eyeSample.constants, held);
-				CopyEyePosition(eyeSample.constants, held);
-			} else if (full) {
-				const auto* templatePass = templatePassOf();
-				if (!templatePass)
-					continue;  // keep what BuildFrame evaluated rather than blanking it
-				GeometryConstants constants;
-				if (!evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, constants))
+		for (std::size_t word = 0; word < tables.usedPipelineBits.size(); ++word) {
+			for (std::uint64_t remaining = tables.usedPipelineBits[word]; remaining; remaining &= remaining - 1) {
+				const std::uint32_t i = static_cast<std::uint32_t>(word * 64 + std::countr_zero(remaining));
+				if (i >= tables.pipelines.size() || i >= tables.geometryTemplate.size())
 					continue;
-				++geometryStats.full;
-				publishLighting(constants);
-				// Its own values: what a bindless draw reads from the block (PackGeometryTemplate's mask).
-				ownChanged = !tables.geometryConstantsValid[i] || !SameBindlessGeometry(constants, held);
-				held = constants;
-				if (writesEye && !eyeSample.valid) {
-					eyeSample.constants = constants;
-					eyeSample.valid = true;
-				}
-			} else {
-				if (!frameSample.valid) {
-					if (const auto* templatePass = templatePassOf()) {
-						frameSample.valid = evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, frameSample.constants);
-						++geometryStats.samples;
-						if (frameSample.valid)
-							publishLighting(frameSample.constants);
+				// The technique constants are the frame's (fog, settings, and the shadow mask's view), so a
+				// pipeline slot that outlives the frame takes them fresh here, as it did when the pipeline
+				// table was rebuilt every frame. Serving the slot's first evaluation instead was both a parity
+				// regression and, at startup, a stale view pointer handed to the render graph. They are its technique
+				// row's (Tables::TechniqueRow): evaluated once a frame for all the pipelines of its key, and written, and
+				// versioned, only where the values differ.
+				auto sameFloats = [](const ConstantBlock& a, const ConstantBlock& b) { return std::memcmp(a.floats.data(), b.floats.data(), sizeof(a.floats)) == 0; };
+				auto& row = tables.techniques[tables.pipelineTechnique[i]];
+				if (row.evaluated != frame) {
+					row.evaluated = frame;
+					TechniqueConstants now;
+					EvaluateTechnique(tables.pipelines[i].passDescriptor, now);
+					const bool floats = !sameFloats(now.vs, row.value.vs) || !sameFloats(now.ps, row.value.ps);
+					const bool binding = now.filterModes != row.value.filterModes || now.shadowMask != row.value.shadowMask ||
+					                     now.shadowMaskTexture != row.value.shadowMaskTexture;
+					if (floats || binding)
+						row.value = now;
+					if (floats)
+						row.constantsVersion = tables.NextVersion();
+					if (binding)
+						row.bindingVersion = tables.NextVersion();
+					// CS_DCLF_PERSISTENT_PARITY: the row against a second evaluation, once a frame.
+					if (geometryParityFrame) {
+						TechniqueConstants reference;
+						EvaluateTechnique(tables.pipelines[i].passDescriptor, reference);
+						++geometryStats.techniquesChecked;
+						if (!sameFloats(reference.vs, row.value.vs) || !sameFloats(reference.ps, row.value.ps) || reference.filterModes != row.value.filterModes ||
+							reference.shadowMask != row.value.shadowMask || reference.shadowMaskTexture != row.value.shadowMaskTexture)
+							++geometryStats.techniquesDiffer;
 					}
 				}
-				if (!frameSample.valid)
-					continue;
-				CopyFrameGeometry(frameSample.constants, held);
-			}
-			if (ownChanged) {
-				tables.pipelineConstantsVersion[i] = tables.NextVersion();
-				++geometryStats.changed;
-			}
-			tables.geometryConstantsValid[i] = 1;
-			// CS_DCLF_PERSISTENT_PARITY: the block against a full evaluation, in what no object overrides; the frame
-			// lighting is checked against each reference after the loop, where the reference writes it.
-			if (geometryParityFrame) {
-				GeometryConstants reference;
-				const auto* templatePass = templatePassOf();
-				if (templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
-					CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
-					lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
+				// A pipeline's PerGeometry block is evaluated in full once (and again when the render flags change); what of it
+				// changes afterwards is either overridden per object (ObjectGeometryConstants) or one of the frame's globals
+				// (kPSFrameGeometry: the sun's direction and colour, the ambient terms), which every pipeline that writes them
+				// shares and which are copied from the frame's one sample. SetupGeometry writes EyePosition only for Envmap, Eye
+				// and technique 0x10, and the same for all three (the camera less posAdjust in world space, 0x1414dd040): their
+				// pipelines take it from the frame's one evaluation of such a pipeline (eyeSample). The frame's globals are kept
+				// in the block for the constant-buffer path and the parity checks, but no DCLF_BINDLESS draw reads them there
+				// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
+				// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
+				auto* property = tables.geometryTemplate[i];
+				auto templatePassOf = [&]() { return TemplatePassOf(property); };
+				const std::uint32_t geometryTechnique = (tables.pipelines[i].passDescriptor >> 24) & 0x3f;
+				const bool writesEye = geometryTechnique == 1 || geometryTechnique == 0xb || geometryTechnique == 0x10;
+				const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
+				auto& held = tables.geometryConstants[i];
+				bool ownChanged = false;
+				if (!full && writesEye) {
+					CopyFrameGeometry(eyeSample.constants, held);
+					CopyEyePosition(eyeSample.constants, held);
+				} else if (full) {
+					const auto* templatePass = templatePassOf();
+					if (!templatePass)
+						continue;  // keep what BuildFrame evaluated rather than blanking it
+					GeometryConstants constants;
+					if (!evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, constants))
+						continue;
+					++geometryStats.full;
+					publishLighting(constants);
+					// Its own values: what a bindless draw reads from the block (PackGeometryTemplate's mask).
+					ownChanged = !tables.geometryConstantsValid[i] || !SameBindlessGeometry(constants, held);
+					held = constants;
+					if (writesEye && !eyeSample.valid) {
+						eyeSample.constants = constants;
+						eyeSample.valid = true;
+					}
+				} else {
+					if (!frameSample.valid) {
+						if (const auto* templatePass = templatePassOf()) {
+							frameSample.valid = evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, frameSample.constants);
+							++geometryStats.samples;
+							if (frameSample.valid)
+								publishLighting(frameSample.constants);
+						}
+					}
+					if (!frameSample.valid)
+						continue;
+					CopyFrameGeometry(frameSample.constants, held);
+				}
+				if (ownChanged) {
+					tables.pipelineConstantsVersion[i] = tables.NextVersion();
+					++geometryStats.changed;
+				}
+				tables.geometryConstantsValid[i] = 1;
+				// CS_DCLF_PERSISTENT_PARITY: the block against a full evaluation, in what no object overrides; the frame
+				// lighting is checked against each reference after the loop, where the reference writes it.
+				if (geometryParityFrame) {
+					GeometryConstants reference;
+					const auto* templatePass = templatePassOf();
+					if (templatePass && evaluator.EvaluateGeometry(*templatePass, tables.pipelines[i].passDescriptor, kMainPassRenderFlags, reference)) {
+						CheckFrameGeometry(static_cast<std::uint32_t>(i), reference, held);
+						lightingReferences.emplace_back(static_cast<std::uint32_t>(i), reference);
+					}
 				}
 			}
 		}
 		if (lightingWritten && std::memcmp(frameLighting.data(), tables.frameLighting.data(), sizeof(frameLighting)) != 0) {
 			std::memcpy(tables.frameLighting.data(), frameLighting.data(), sizeof(frameLighting));
-			tables.frameLightingVersion = tables.NextVersion();
+			tables.frameLightingVersion = ++tables.frameLightingCounter;
 			++geometryStats.lightingVersions;
 		}
 		for (const auto& [pipeline, reference] : lightingReferences) {
@@ -420,7 +435,8 @@ namespace DCLF
 		// emissives flicker, and sampling them at EarlyPrepass instead of here put them far enough from the draw that
 		// capture parity's 0.1% tolerance on EmitColor stopped covering the difference. The LOD fades GetRenderPasses
 		// leaves on the property change only when the engine registers the object, which is a patch, and the patch
-		// samples them. An actor's alpha fades with the actor. ProjectedUV's and land blend's extras rows follow the
+		// samples them. External emittance's shared colour changes with the weather (emittanceEvents). An actor's alpha fades
+		// with the actor. ProjectedUV's and land blend's extras rows follow the
 		// eye and a clock.
 		auto refreshExtras = [&](std::uint32_t o) {
 			if (tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) {
@@ -461,6 +477,9 @@ namespace DCLF
 			}
 			lodFadeChanged.clear();
 			DrainLodFadeEvents(lodFadeChanged);
+			const std::size_t lodFades = lodFadeChanged.size();
+			DrainEmittanceEvents(lodFadeChanged);
+			shadingParity.emittanceEvents += lodFadeChanged.size() - lodFades;
 			MaterialSources::DrainShadingChanges(lodFadeChanged);
 			std::sort(lodFadeChanged.begin(), lodFadeChanged.end());
 			lodFadeChanged.erase(std::unique(lodFadeChanged.begin(), lodFadeChanged.end()), lodFadeChanged.end());
@@ -758,6 +777,8 @@ namespace DCLF
 			--stats.ineligible[static_cast<std::size_t>(Ineligible::None)];
 			return false;
 		}
+		// A record holds no view of the character light's t11 (the frame's: MaterialSources::ApplyFrameComponents).
+		MaterialSources::StripFrameViews(a_record, a_pass);
 		++stats.materialsEvaluated;
 		return true;
 	}
@@ -836,15 +857,16 @@ namespace DCLF
 				NoteStaleMaterial(slot, key, served, live);
 		};
 		if (mode == "probe") {
-			for (const auto slot : tables.usedMaterials)
-				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot) && tables.materialLastUsed[slot] == frame)
+			Tables::ForEachBit(tables.usedMaterialBits, [&](const std::uint32_t slot) {
+				if (slot < tables.materials.size() && tables.materialSlots.Alive(slot))
 					validate(slot);
+			});
 			return;
 		}
 		std::uint32_t looked = 0;
 		for (std::uint32_t n = 0; n < kMaterialValidationsPerFrame * kMaterialValidationStride && looked < kMaterialValidationsPerFrame; ++n) {
 			const std::uint32_t slot = materialValidationCursor++ % static_cast<std::uint32_t>(tables.materials.size());
-			if (tables.materialLastUsed[slot] != frame)
+			if (!tables.MaterialUsed(slot))
 				continue;
 			++looked;
 			validate(slot);

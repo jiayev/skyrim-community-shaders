@@ -121,6 +121,13 @@ namespace DCLF
 		/** @brief The report lines (one per job name) since the last reset, or empty when nothing ran. */
 		std::string Report();
 
+		/**
+		 * @brief The render thread's waits (Phase D's gate: none): every Wait, Cancel, Drain or WaitIdle that found its job
+		 * unfinished and blocked, by site, and the worker mutexes the render thread took. Counted per frame (NoteFrame).
+		 */
+		void NoteFrame();
+		std::string RenderWaitReport();
+
 		void ResetStats();
 
 		~AsyncWorker();

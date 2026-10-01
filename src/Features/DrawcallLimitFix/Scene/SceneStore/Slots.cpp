@@ -48,12 +48,15 @@ namespace DCLF
 		residentPos.clear();
 		residentMaintenanceDirty = true;
 		tables.Clear();
+		ClearFaceRegions();
 		// Drop material binding owners on world/device reset without permitting
 		// an old worker snapshot to match a newly empty lookup generation.
 		const auto lookupGeneration = lookups.generation;
+		const auto shadowGeneration = lookups.shadowGeneration;
 		const auto lookupVersion = lookups.versionCounter;
 		lookups = Lookups{};
 		lookups.generation = lookupGeneration + 1;
+		lookups.shadowGeneration = shadowGeneration + 1;
 		lookups.versionCounter = lookupVersion;
 		for (auto& [geometry, entry] : tracked)
 			entry.slot = kNoObjectSlot;
@@ -69,7 +72,8 @@ namespace DCLF
 		// reconstruction must publish additions even if an SRV address recurs.
 		shadowTextureMembers.clear();
 		shadowKeyMembers.clear();
-		skyKeyMembers.clear();
+		for (auto& members : occlusionKeyMembers)
+			members.clear();
 		shadowIndexNeedsRebuild = true;
 		shadowDirtySlots.clear();
 		++tablesGeneration;
@@ -90,23 +94,23 @@ namespace DCLF
 				what = "geometry slot free";
 			else if (a_resolveBuffers && (!tables.geometries[object.geometryIndex].vertexAddress || !tables.geometries[object.geometryIndex].indexAddress))
 				what = "geometry slot unresolved";
-			else if (object.pipelineIndex >= tables.pipelines.size() || tables.pipelineLastUsed[object.pipelineIndex] != frame)
-				what = "pipeline slot not of this frame";
-			else if (object.materialIndex >= tables.materials.size() || tables.materialLastUsed[object.materialIndex] != frame)
-				what = "material slot not of this frame";
+			else if (object.pipelineIndex >= tables.pipelines.size() || !tables.PipelineUsed(object.pipelineIndex))
+				what = "pipeline slot not a member's";
+			else if (object.materialIndex >= tables.materials.size() || !tables.MaterialUsed(object.materialIndex))
+				what = "material slot not a member's";
 			else if (!tables.geometryTemplate[object.pipelineIndex])
 				what = "pipeline without a template";
 			if (!what)
 				continue;
 			if (stats.slotViolations++ == 0) {
 				const auto* geometry = tables.objectGeometry[o];
-				logger::error("[DCLF] slot check: object {} '{}' {} (geometry {} used {}, pipeline {} used {}, material {} used {}, frame {})",
+				logger::error("[DCLF] slot check: object {} '{}' {} (geometry {} written {}, pipeline {} used {}, material {} used {}, member {}, frame {})",
 					o, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", what,
 					object.geometryIndex, object.geometryIndex < tables.geometryLastUsed.size() ? tables.geometryLastUsed[object.geometryIndex] : ~0u,
-					object.pipelineIndex, object.pipelineIndex < tables.pipelineLastUsed.size() ? tables.pipelineLastUsed[object.pipelineIndex] : ~0u,
-					object.materialIndex, object.materialIndex < tables.materialLastUsed.size() ? tables.materialLastUsed[object.materialIndex] : ~0u, frame);
+					object.pipelineIndex, tables.PipelineUsed(object.pipelineIndex), object.materialIndex, tables.MaterialUsed(object.materialIndex),
+					IsResidentSlot(static_cast<std::uint32_t>(o)), frame);
 			}
-			// Neutralised: nothing downstream may draw from slots that are not this frame's. Its record is no
+			// Neutralised: nothing downstream may draw from slots no member holds. Its record is no
 			// longer the scene phase's, so the next delta walk writes it again.
 			pendingEvaluation.push_back(tables.objectGeometry[o]);
 			DropResidentSlot(static_cast<std::uint32_t>(o), false);
@@ -127,7 +131,7 @@ namespace DCLF
 		std::string first;
 		if (evaluator.HasLightingShader()) {
 			for (std::uint32_t slot = 0; slot < tables.materials.size(); ++slot) {
-				if (tables.materialLastUsed[slot] != frame)
+				if (!tables.MaterialUsed(slot))
 					continue;
 				const auto key = tables.materialSlotKey[slot];
 				MaterialRecord live;
@@ -199,7 +203,7 @@ namespace DCLF
 		UnlistMaterialDependent(key.first, a_slot);
 		materialOwners[a_slot].reset();
 		tables.materialSlotKey[a_slot] = { nullptr, 0u };
-		tables.materialLastUsed[a_slot] = Tables::kSlotFree;
+		tables.UnmarkMaterial(a_slot);
 		tables.retiredMaterialSlots.push_back(a_slot);
 	}
 
@@ -271,7 +275,7 @@ namespace DCLF
 			pipelineIndex.erase(tables.pipelines[a_slot]);
 			tables.geometryTemplate[a_slot] = nullptr;
 			tables.geometryConstantsValid[a_slot] = 0;
-			tables.pipelineLastUsed[a_slot] = Tables::kSlotFree;
+			tables.UnmarkPipeline(a_slot);
 			tables.retiredPipelineSlots.push_back(a_slot);
 		});
 		const bool slotParity = SwitchEnabled(Switch::PersistentParity);
@@ -351,6 +355,7 @@ namespace DCLF
 			MoveBucket(it->second, Ineligible::Count);
 			UnlistFadeDependent(it->first, it->second);
 			UnlistDependents(it->first, it->second, true);
+			UnlistFaceShape(it->first, it->second);
 			sceneIdentity.Detach(a_geometry);
 			tracked.erase(it);
 			++trackedLayout;

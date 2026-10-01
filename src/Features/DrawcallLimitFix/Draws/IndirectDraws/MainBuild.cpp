@@ -75,7 +75,6 @@ namespace DCLF::Draws
 			decltype(MainPayload::inputList)& drawInputs = out.inputList;
 			decltype(MainPayload::decalCount)& decalCount = out.decalCount;
 			decltype(MainPayload::decalTemplates)& decalTemplates = out.decalTemplates;
-			const decltype(MainPayload::objectRecords)& objectRecords = out.objectRecords;
 			const bool depthOnly = in.depthOnly;
 			const std::uint32_t frameNumber = in.frameNumber;
 			const bool bindlessParity = in.bindlessParity;
@@ -149,6 +148,7 @@ namespace DCLF::Draws
 			void UpdateRegionEntries();
 			/** @brief The entries of a pipeline whose set index changed and of a pair whose record could or could no longer be built. */
 			void UpdateRegionPairs();
+			std::uint64_t PipelineWitness(std::uint32_t p) const;
 			void CheckRegionParity();
 			/** @brief Every slot this build touched: the region's, the loop's (loopList) or nobody's, and whether it is a candidate only. */
 			void RouteTouched();
@@ -238,7 +238,7 @@ namespace DCLF::Draws
 			auto& blocks = pipelineBlocks[p];
 			// The pipeline table keeps its slots across frames; only the ones this frame's objects use
 			// get rows (a swept or idle slot has no object pointing at it).
-			if (!tables.PipelineUsed(p, frameNumber) || p >= lookups.pipelines.size())
+			if (!tables.PipelineUsed(p) || p >= lookups.pipelines.size())
 				continue;
 			const auto& entry = lookups.pipelines[p];
 			if (entry.setIndex == Lookups::kNone || !(entry.key == tables.pipelines[p]))
@@ -348,12 +348,8 @@ namespace DCLF::Draws
 
 	void MainBuild::PrepareObjects()
 	{
-		// The per-object record table the DCLF_BINDLESS builds read. It is indexed by the object's table
-		// index, which the draw carries as its third root constant word, so it is filled for every
-		// candidate rather than only the drawn ones - a candidate skipped here still reaches the
-		// culling, and an index that addressed nothing would be worse than one that addresses a record
-		// no draw reads. Kept across frames in the store (the records the change log names are written again).
-		UpdateObjectRecords(objectStore, in.tablesHeld.objects, tables, in.tablesGeneration, frameNumber, out.objectRecords);
+		// The per-object records and the palettes are the commit's (CommitSceneStreams), not the build's: they change every
+		// frame, and the build only with the scene's structure.
 
 		// Everything before the loop: the per-epoch maps and the object records.
 		Mark(6);
@@ -450,7 +446,9 @@ namespace DCLF::Draws
 			else if (t == kObjectBufferRegister || t == kBonesBufferRegister)
 				given = true;
 			else if (depthOnly)
-				given = false;  // the Z-prepass has no frame textures bound yet
+				// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character
+				// light's noise, which only shades: the depth variant's output never reads it.
+				given = t == kCharacterLightRegister;
 			else
 				out.frameRegisters[t / 64] |= 1ull << (t % 64);  // the commit resolves it into the frame record
 			if (!given) {
@@ -522,10 +520,13 @@ namespace DCLF::Draws
 		// The textures: the material's, a projected technique's projected ones, the null texture where neither binds one. The
 		// shadow mask (t14) is the pipeline row's.
 		const bool resolved = lookup && lookup->resolved && lookup->key.first == tables.materialSlotKey[m].first && lookup->key.second == tables.materialSlotKey[m].second;
+		// A character-light pass's t11 is the frame's (kCharacterLightRegister, which its shaders read instead): the null texture.
+		const std::uint32_t textureWritten = material.textureWritten &
+		                                     ~(MaterialSources::FrameCharacterLight(tables.materialSlotKey[m].second) ? 1u << kCharacterLightMaterialRegister : 0u);
 		state.texturesOk = true;
 		for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
 			std::uint32_t index = lookups.nullTexture;
-			if ((material.textureWritten >> t) & 1) {
+			if ((textureWritten >> t) & 1) {
 				if (!resolved) {
 					state.texturesOk = false;
 					state.deferred = true;
@@ -587,7 +588,7 @@ namespace DCLF::Draws
 		// for the same object (PatchObjectGeometry). The two derive from the same inputs through the same unwritten-component
 		// rule, so anything but bit equality is a defect in the record's layout or in the way it is filled, caught on the CPU
 		// with no readback.
-		if (o >= objectRecords.Count())
+		if (o >= tables.objects.size())
 			return;
 		auto [templateIt, newTemplate] = geometryTemplates.try_emplace(object.pipelineIndex);
 		auto& geometryTemplate = templateIt->second;
@@ -597,7 +598,9 @@ namespace DCLF::Draws
 		parityPS.assign(geometryTemplate.ps.begin(), geometryTemplate.ps.end());
 		PatchObjectGeometry(tables, o, renderFlags, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS);
 		IndirectDraws::Stats parityStats{};
-		CheckBindlessRecord(tables, o, *objectRecords.At(o), eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
+		BindlessObject record;
+		BuildObjectRecord(tables, o, SceneStore::kMainPassRenderFlags, record);
+		CheckBindlessRecord(tables, o, record, eye, previousEye, geometryTemplate.offsets, parityVS, parityPS, parityStats);
 		out.bindlessParityChecks += parityStats.bindlessParityChecks;
 		out.bindlessParityMismatches += parityStats.bindlessParityMismatches;
 	}
@@ -616,11 +619,23 @@ namespace DCLF::Draws
 		wholeScene = region && (!depthOnly || in.withholding);
 		TracyCZoneN(residentRegionZone, "CS.DCLF.BuildMain.ResidentRegion", true);
 		if (region) {
-			UpdateRegionEntries();
-			UpdateRegionPairs();
+			{
+				ZoneScopedN("CS.DCLF.BuildMain.Region.Entries");
+				UpdateRegionEntries();
+			}
+			{
+				ZoneScopedN("CS.DCLF.BuildMain.Region.Pairs");
+				UpdateRegionPairs();
+			}
 			CheckRegionParity();
-			RouteTouched();
-			PublishRegion();
+			{
+				ZoneScopedN("CS.DCLF.BuildMain.Region.Route");
+				RouteTouched();
+			}
+			{
+				ZoneScopedN("CS.DCLF.BuildMain.Region.Publish");
+				PublishRegion();
+			}
 		}
 		TracyCZoneEnd(residentRegionZone);
 	}
@@ -654,7 +669,7 @@ namespace DCLF::Draws
 		const auto& object = tables.objects[o];
 		if (object.flags & kObjectNoBindings) {
 			// A cull-only candidate: its bounds for the culling, nothing to draw (the input the loop writes for one).
-			a_input = { 0, 0, object.geometryIndex, object.flags, { object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+			a_input = { 0, 0, object.geometryIndex, object.flags, {}, 0.0f,
 				o, 0 };
 			SetFadeRow(a_input, tables, o);
 			return 0;
@@ -665,7 +680,7 @@ namespace DCLF::Draws
 		// The pair's slot is its rows (RowsOf).
 		const std::uint32_t partitions = PartitionsOf(tables, o);
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
-			{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius, o, 0, partitions };
+			{}, 0.0f, o, 0, partitions };
 		if (depthOnly)
 			SetFadeRow(a_input, tables, o);
 		return drawable ? static_cast<std::uint8_t>(PartitionDraws(partitions)) : std::uint8_t{ 0 };
@@ -691,8 +706,10 @@ namespace DCLF::Draws
 		auto& r = *region;
 		if (a_key == kNoPair)
 			return;
-		if (const auto pair = r.pairs.find(a_key); pair != r.pairs.end() && --pair->second.count == 0)
+		if (const auto pair = r.pairs.find(a_key); pair != r.pairs.end() && --pair->second.count == 0) {
 			r.pairs.erase(pair);
+			r.pairsChanged = true;
+		}
 		if (const auto state = r.pipelines.find(static_cast<std::uint32_t>(a_key)); state != r.pipelines.end() && --state->second.second == 0)
 			r.pipelines.erase(state);
 	}
@@ -807,13 +824,33 @@ namespace DCLF::Draws
 				}
 			}
 			// The log since this region's last build, whenever its changes were made.
-			// What a draw input carries: its placement and fade row, its bindings, its geometry and partitions, its residency.
-			constexpr std::uint32_t kInputCauses = kChangePlacement | kChangeBindings | kChangeSkin | kChangeGeometry | kChangeMembership;
+			// What a draw input carries: its fade distance and bindings, its geometry and partitions, its residency. Not its
+			// placement: the bound, the sun entry and the fade node are its object record's.
+			constexpr std::uint32_t kInputCauses = kChangeBindings | kChangeSkin | kChangeGeometry | kChangeMembership;
 			for (const auto& change : r.cursor.Unread(tables.changeLog))
 				if (change.causes & kInputCauses)
 					RegionTake(change.slot);
 		}
 		r.cursor.Advance(tables.changeLog);
+	}
+
+	std::uint64_t MainBuild::PipelineWitness(std::uint32_t p) const
+	{
+		// What ResolvePair reads of the pipeline: the technique's bindings, whether it is projected, the constant tables, the set,
+		// and the pipeline row as this build wrote it (PackPipelines). The material's half is three versions (UpdateRegionPairs).
+		std::uint64_t value = 0xcbf29ce484222325ull;
+		auto mix = [&](std::uint64_t a_word) { value = (value ^ a_word) * 0x100000001b3ull; };
+		const auto& blocks = pipelineBlocks[p];
+		mix(lookups.sharedVersion);
+		mix(tables.TechniqueRowOf(p).bindingVersion);
+		mix((tables.pipelines[p].passDescriptor & 0x8000u) != 0 ? 1u : 0u);
+		mix(blocks.tables);
+		mix(blocks.setIndex);
+		const auto& pipeline = rows.pipelines[p];
+		for (const auto word : pipeline.key)
+			mix(word);
+		mix((pipeline.written ? 1u : 0u) | (pipeline.blocksOk ? 2u : 0u) | (pipeline.shadowMask ? 4u : 0u) | (pipeline.shadowMaskSampler ? 8u : 0u));
+		return value;
 	}
 
 	void MainBuild::UpdateRegionPairs()
@@ -827,19 +864,56 @@ namespace DCLF::Draws
 				state.first = pipelineBlocks[pipeline].setIndex;
 				changedPipelines.push_back(pipeline);
 			}
+		// A pair is resolved again only when what its resolution reads changed (PairWitness): a material written or its
+		// textures resolved, a pipeline's rows or set, the frame slots bound. The rest keep their verdict, their frame textures
+		// and their owners (in the region's bundle).
+		const std::uint64_t frameWitness = (std::uint64_t(in.vsFrameMask) << 32) ^ std::uint64_t(in.psFrameMask) ^ (depthOnly ? (1ull << 63) : 0ull) ^ 1ull;
+		const bool everyPair = frameWitness != r.frameWitness;
+		r.frameWitness = frameWitness;
 		std::vector<std::uint64_t> changedPairs;
 		currentObject = ~0u;
+		// The pipelines' halves once per build; a pair's own half is its material's three versions.
+		std::vector<std::uint64_t> pipelineWitness(pipelineBlocks.size(), 0);
+		for (const auto& [pipeline, state] : r.pipelines)
+			if (pipeline < pipelineBlocks.size() && pipelineBlocks[pipeline].setIndex != Lookups::kNone)
+				pipelineWitness[pipeline] = PipelineWitness(pipeline);
 		for (auto& [key, pair] : r.pairs) {
 			const auto pipeline = static_cast<std::uint32_t>(key);
-			bool ok = pipeline < pipelineBlocks.size() && pipelineBlocks[pipeline].setIndex != Lookups::kNone;
+			const auto material = static_cast<std::uint32_t>(key >> 32);
+			const bool pipelineOk = pipeline < pipelineBlocks.size() && pipelineBlocks[pipeline].setIndex != Lookups::kNone;
+			std::uint64_t witness = 1ull;
+			if (pipelineOk) {
+				witness = pipelineWitness[pipeline];
+				witness = (witness ^ (material < tables.materialVersion.size() ? tables.materialVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < tables.materialFrameVersion.size() ? tables.materialFrameVersion[material] : 0u)) * 0x100000001b3ull;
+				witness = (witness ^ (material < lookups.materialVersions.size() ? lookups.materialVersions[material] : ~0u)) * 0x100000001b3ull;
+				witness |= 1;  // never 0, which is "never resolved"
+			}
+			if (!everyPair && witness == pair.witness) {
+				if (!pair.ok && pair.skip != kNoSkip)
+					Skipped(static_cast<Skip>(pair.skip));
+				continue;
+			}
+			bool ok = pipelineOk;
 			std::uint32_t slot = pair.slot;
+			const auto registersBefore = out.frameRegisters;
+			out.frameRegisters = {};
+			pair.skip = kNoSkip;
 			if (ok) {
 				ObjectRecord object{};
-				object.materialIndex = static_cast<std::uint32_t>(key >> 32);
+				object.materialIndex = material;
 				object.pipelineIndex = pipeline;
 				slot = AssembleRecord(~0u, object, pipelineBlocks[pipeline]);
 				ok = slot != kNoRecord;
+				if (!ok)
+					if (const auto resolved = resolvedBindings.find(PairKeyOf(object)); resolved != resolvedBindings.end())
+						pair.skip = resolved->second.skipReason;
 			}
+			pair.frameRegisters = out.frameRegisters;
+			out.frameRegisters[0] = registersBefore[0] | pair.frameRegisters[0];
+			out.frameRegisters[1] = registersBefore[1] | pair.frameRegisters[1];
+			pair.witness = witness;
+			r.pairsChanged = true;
 			if (ok != pair.ok || (ok && slot != pair.slot)) {
 				pair.ok = ok;
 				if (ok)
@@ -847,6 +921,28 @@ namespace DCLF::Draws
 				changedPairs.push_back(key);
 			}
 		}
+		// Every pair's frame textures and owners, made again when one was resolved (or one left: RegionRelease).
+		if (r.pairsChanged) {
+			r.pairsChanged = false;
+			r.frameRegisters = {};
+			auto owners = std::make_shared<std::vector<std::shared_ptr<const void>>>();
+			owners->reserve(r.pairs.size() * 2);
+			for (const auto& [key, pair] : r.pairs) {
+				r.frameRegisters[0] |= pair.frameRegisters[0];
+				r.frameRegisters[1] |= pair.frameRegisters[1];
+				const auto pipeline = static_cast<std::uint32_t>(key);
+				const auto material = static_cast<std::uint32_t>(key >> 32);
+				if (material < lookups.materials.size() && lookups.materials[material].bindingBlock)
+					owners->push_back(lookups.materials[material].bindingBlock);
+				if (pipeline < lookups.pipelines.size() && lookups.pipelines[pipeline].shadowMaskOwner)
+					owners->push_back(lookups.pipelines[pipeline].shadowMaskOwner);
+			}
+			r.owners = std::move(owners);
+		}
+		out.frameRegisters[0] |= r.frameRegisters[0];
+		out.frameRegisters[1] |= r.frameRegisters[1];
+		if (r.owners)
+			out.bindingOwners.push_back(r.owners);
 		if (!changedPipelines.empty() || !changedPairs.empty()) {
 			auto& inputs = r.inputs.Mutable();
 			for (std::uint32_t i = 0; i < inputs.size(); ++i) {
@@ -997,7 +1093,7 @@ namespace DCLF::Draws
 			// with.
 			if (depthOnly) {
 				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-					{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+					{}, 0.0f,
 					static_cast<std::uint32_t>(o), 0 });
 				SetFadeRow(drawInputs.back(), tables, o);
 			}
@@ -1026,7 +1122,7 @@ namespace DCLF::Draws
 		if (decalGroup) {
 			decalSlot.inputs = &drawInputs;
 			decalSlot.blank = { 0, 0, object.geometryIndex, object.flags,
-				{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+				{}, 0.0f,
 				static_cast<std::uint32_t>(o), tables.decalOrdinal[o] };
 		}
 		const auto& blocks = pipelineBlocks[object.pipelineIndex];
@@ -1051,7 +1147,7 @@ namespace DCLF::Draws
 			// would reach the colour segment with no verdict at all. What it does not get is a
 			// bindings record, which is the expensive part and the only part a draw needs.
 			drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-				{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+				{}, 0.0f,
 				static_cast<std::uint32_t>(o), 0 });
 			SetFadeRow(drawInputs.back(), tables, o);
 			Skipped(Skip::NotSkippedNatively);
@@ -1092,7 +1188,7 @@ namespace DCLF::Draws
 			decalSlot.inputs = nullptr;  // drawn: the blank is not needed
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
 				object.flags | kInputDrawable,
-				{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+				{}, 0.0f,
 				static_cast<std::uint32_t>(o), ordinal, 0, streamIndex });
 			decalTemplates[(decalGroup - 1) & 1][ordinal] = sequence;
 			++out.decalsDrawn;
@@ -1103,7 +1199,7 @@ namespace DCLF::Draws
 				out.objectState[o] = kObjectStateDrawable;
 			drawInputs.push_back({ blocks.setIndex, recordIndex, object.geometryIndex,
 				object.flags | kInputDrawable,
-				{ object.boundCenter[0], object.boundCenter[1], object.boundCenter[2] }, object.boundRadius,
+				{}, 0.0f,
 				static_cast<std::uint32_t>(o), 0, partitions, streamIndex });
 			if (depthOnly)
 				SetFadeRow(drawInputs.back(), tables, o);
@@ -1174,7 +1270,6 @@ namespace DCLF::Draws
 		AppendFaceStreams(tables, in.addresses.facePositions, out.geometryDraws);
 		if (in.addresses.facePositions)
 			out.faceStreams = tables.faceStreams;
-		UpdateBones(boneStore, in.tablesHeld.bones, tables, in.tablesGeneration, out.bones);
 		out.materialRows = rows.material.View();
 		out.pipelineRows = rows.pipeline.View();
 		Mark(5);

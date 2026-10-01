@@ -280,6 +280,17 @@ namespace DCLF
 		}
 		std::memcpy(a_out.lodFadeNode, node.data(), sizeof(a_out.lodFadeNode));
 		a_out.lodFadeFlags = fades ? fades | (static_cast<std::uint32_t>(node[3]) & kLodFadeTypeMask) : 0u;
+		a_out.bound[0] = object.boundCenter[0];
+		a_out.bound[1] = object.boundCenter[1];
+		a_out.bound[2] = object.boundCenter[2];
+		a_out.bound[3] = object.boundRadius;
+		const bool entry = a_objectIndex < a_tables.sunEntry.size() && a_tables.sunEntry[a_objectIndex][3] >= 0.0f;
+		if (entry) {
+			std::memcpy(a_out.sunEntry, a_tables.sunEntry[a_objectIndex].data(), sizeof(a_out.sunEntry));
+		} else {
+			a_out.sunEntry[0] = a_out.sunEntry[1] = a_out.sunEntry[2] = 0.0f;
+			a_out.sunEntry[3] = std::numeric_limits<float>::max();
+		}
 	}
 
 	std::uint32_t PackedPositionOf(const StageLayout& a_layout, std::span<const std::uint8_t> a_table, std::uint64_t a_variables, std::uint32_t a_firstVariable,

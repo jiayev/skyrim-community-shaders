@@ -120,7 +120,9 @@ public:
 	 * own map (inOcclusion) rather than the precipitation mask. Reads only the property, the geometry and its fade
 	 * node's BSX flags, so Drawcall Limit Fix's native variant of the map classifies its objects with it too.
 	 */
-	static std::uint32_t OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting);
+	// a_ignoreRadius: the technique as if the geometry passed the size test (worldBound.radius > 32); Drawcall Limit Fix applies
+	// that test on the GPU, against the object's bound when it draws.
+	static std::uint32_t OcclusionTechnique(const RE::BSLightingShaderProperty* a_property, RE::BSGeometry* a_geometry, bool a_skylighting, bool a_ignoreRadius = false);
 
 	// Hooks
 	struct BSLightingShaderProperty_GetPrecipitationOcclusionMapRenderPassesImpl

@@ -14,9 +14,9 @@ namespace DCLF::Draws
 		}
 
 		/** @brief A structured buffer the shaders read through its SRV; a_index is the SRV's descriptor slot. */
-		std::shared_ptr<org::Buffer> StructuredBuffer(std::uint32_t a_elements, std::uint32_t a_stride, const char* a_name, std::uint32_t& a_index)
+		std::shared_ptr<org::Buffer> StructuredBuffer(std::uint32_t a_elements, std::uint32_t a_stride, const char* a_name, std::uint32_t& a_index, bool a_unorderedAccess = false)
 		{
-			auto created = org::Buffer::CreateUnmaterializedStructuredBuffer(a_elements, a_stride, false);
+			auto created = org::Buffer::CreateUnmaterializedStructuredBuffer(a_elements, a_stride, a_unorderedAccess);
 			created->SetName(a_name);
 			created->Materialize();
 			a_index = created->GetSRVInfo(0).slot.index;
@@ -230,6 +230,11 @@ namespace DCLF
 					slot->staging = org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(state->objectCapacity) * sizeof(std::uint32_t));
 					slot->capacity = state->objectCapacity;
 					slot->staging->SetName(fmt::format("cs.dclf.feedback{}", i).c_str());
+					if (scene->fadeChanges) {
+						slot->fadeCapacity = scene->fadeChangeCapacity;
+						slot->fadeStaging = org::Buffer::CreateShared(rhi::HeapType::Readback, kFadeChangeHeaderBytes + std::uint64_t(slot->fadeCapacity) * sizeof(FadeChange));
+						slot->fadeStaging->SetName(fmt::format("cs.dclf.feedback-fades{}", i).c_str());
+					}
 					feedback->slots.push_back(std::move(slot));
 				}
 				state->feedback = std::move(feedback);
@@ -447,13 +452,40 @@ namespace DCLF
 		buffers->faceVertices = smallStart ? 1024u : kInitialFaceVertices;
 		// Structured, because the shaders read the object records and the bone rows through SRVs (t127, t126); the geometry
 		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
-		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex);
+		// The object records take TreeWindCS's writes of the trees' wind (unordered access).
+		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex, true);
 		buffers->bones = StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex);
 		buffers->geometries = CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
 		buffers->facePositions = DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions");
 		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions);
 		if (!buffers->facePositionsAddress)
 			return false;
+		// Tree wind (TreeWindCS): without its program the members' records keep the wind they joined with.
+		buffers->treeWind = ComputeProgram::Load(a_device, { .source = kTreeWindShader, .constantWords = kTreeWindConstantWords });
+		if (buffers->treeWind) {
+			std::uint32_t unused = 0;
+			buffers->treeCapacity = smallStart ? 4u : kInitialTrees;
+			buffers->treeObjectCapacity = smallStart ? 16u : kInitialTreeObjects;
+			buffers->trees = StructuredBuffer(buffers->treeCapacity, sizeof(TreeStatic), "cs.dclf.trees", unused);
+			buffers->treeClocks = StructuredBuffer(buffers->treeCapacity, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true);
+			buffers->treeObjects = StructuredBuffer(buffers->treeObjectCapacity, sizeof(TreeObject), "cs.dclf.tree-objects", unused);
+		} else {
+			logger::warn("[DCLF] The tree wind program could not be created; trees keep the wind they joined with");
+		}
+		// Fade roots (FadeStateCS): without its program the fades stay the CPU's alone.
+		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
+		if (buffers->fadeState) {
+			std::uint32_t unused = 0;
+			buffers->fadeRootCapacity = smallStart ? 4u : kInitialFadeRoots;
+			buffers->fadeRoots = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused);
+			buffers->fadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true);
+			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
+			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
+			buffers->fadeChangeCapacity = smallStart ? 4u : kInitialFadeChanges;
+			buffers->fadeChanges = CreateWords((kFadeChangeHeaderBytes + std::uint64_t(buffers->fadeChangeCapacity) * sizeof(FadeChange)) / 4, true, "cs.dclf.fade-changes");
+		} else {
+			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
+		}
 		scene = std::move(buffers);
 		return true;
 	}
@@ -553,7 +585,33 @@ namespace DCLF
 			s.held.bones = 0;
 		std::uint64_t faceVertices = 0;
 		for (const auto& stream : a_tables.faceStreams)
-			faceVertices = std::max<std::uint64_t>(faceVertices, std::uint64_t(stream.region) + stream.vertexCount);
+			if (stream.object != SceneStore::Tables::kNoFaceObject)
+				faceVertices = std::max<std::uint64_t>(faceVertices, std::uint64_t(stream.region) + stream.vertexCount);
+		// The tree rows and clocks by tree slot, the members' list. A new clock backing holds no clock: every tree starts again
+		// from the values it was listed with (its static row), once.
+		if (s.trees) {
+			if (grow("tree rows", s.treeCapacity, a_tables.trees.size(), sizeof(TreeStatic) + sizeof(TreeClock), [&](std::uint32_t a_rows) {
+					s.trees->ResizeStructured(a_rows);
+					s.treeClocks->ResizeStructured(a_rows);
+				}))
+				s.treesHeld = ~0ull;
+			if (grow("tree members", s.treeObjectCapacity, a_tables.treeObjects.size(), sizeof(TreeObject), [&](std::uint32_t a_rows) { s.treeObjects->ResizeStructured(a_rows); }))
+				s.treeObjectsHeld = ~0ull;
+		}
+		// The fade roots' static and state rows by root slot. A new state backing holds no state: every root is seeded again
+		// from its static row (a zero generation is never a listing's).
+		if (s.fadeRoots) {
+			if (grow("fade roots", s.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState), [&](std::uint32_t a_rows) {
+					s.fadeRoots->ResizeStructured(a_rows);
+					s.fadeStates->ResizeStructured(a_rows);
+				}))
+				s.fadeRootsHeld = ~0ull;
+			// The changes an overflowing frame appended (fadeChangesNeeded): every write-back root once more once grown.
+			if (grow("fade changes", s.fadeChangeCapacity, s.fadeChangesNeeded, sizeof(FadeChange), [&](std::uint32_t a_rows) {
+					s.fadeChanges->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(a_rows) * sizeof(FadeChange));
+				}))
+				s.fadeWriteAll = true;
+		}
 		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
 				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);
 				s.facePositionsAddress = AddressOf(host->GetDesc().device, *s.facePositions);
@@ -584,11 +642,17 @@ namespace DCLF
 		// A feedback slot's staging grows while the slot is free; one still in flight is grown once it is back (ArmFeedback passes
 		// over a slot too small for the frame).
 		if (resources && resources->feedback)
-			for (auto& slot : resources->feedback->slots)
+			for (auto& slot : resources->feedback->slots) {
 				if (slot->capacity < objects && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
 					slot->staging->ResizeBytes(std::uint64_t(objects) * sizeof(std::uint32_t));
 					slot->capacity = objects;
 				}
+				const std::uint32_t changes = scene ? scene->fadeChangeCapacity : 0u;
+				if (slot->fadeStaging && slot->fadeCapacity < changes && slot->state.load(std::memory_order_acquire) == Resources::Feedback::Free) {
+					slot->fadeStaging->ResizeBytes(kFadeChangeHeaderBytes + std::uint64_t(changes) * sizeof(FadeChange));
+					slot->fadeCapacity = changes;
+				}
+			}
 		if (shadow && shadow->objectCapacity < objects) {
 			auto& r = *shadow;
 			r.visibility->ResizeStructured(objects);
@@ -681,7 +745,7 @@ namespace DCLF
 		desc.hasDSV = true;
 		desc.dsvFormat = desc.format;
 		static constexpr const char* kNames[kShadowDepthTargets] = { "DCLF shadow maps (ESRAM)", "DCLF shadow maps", "DCLF volumetric shadow maps (ESRAM)",
-			"DCLF Skylighting occlusion map" };
+			"DCLF Skylighting occlusion map", "DCLF precipitation occlusion mask" };
 		auto imported = ImportImage(host->GetDesc().device, info.image, desc, kNames[a_index]);
 		if (!imported)
 			return ShadowNotReady(5, "the shadow map could not be imported (not in the general layout?)");
