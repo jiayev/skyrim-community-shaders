@@ -6,48 +6,60 @@ For creation steps, see the [artist guide](advanced-skin-artist-guide.md). This 
 
 A material belongs to the mesh's `BSLightingShaderProperty`. Its typed extra data stores parameters; its ordinary `BSShaderTextureSet` stores texture paths. Preserve the native FaceGen (4) or FaceGenRGBTint (5) shader, flags, UV transform, skinning and face generation behavior. Environment mapping, multilayer parallax, decals and menu materials are incompatible.
 
-`NiIntegerExtraData` named `CS_SkinVersion`, Integer Data `1`, enables the extension and identifies its storage format. This is a compatibility discriminator, not a feature tier. An absent marker uses native shading. Invalid, duplicate or unsupported fields produce diagnostics and disable the extension. Runtime finite floats are clamped; the authoring tool refuses invalid source data so it cannot silently rewrite it.
+Enabling the feature applies Advanced Skin to all compatible skin materials. The common settings are the baseline. `NiIntegerExtraData` named `CS_SkinVersion`, Integer Data `1`, identifies an optional material override. It is not required for Advanced Skin shading. Absent markers use common settings. Invalid, duplicate or unsupported material fields produce diagnostics and fall back to common settings without interpreting extension slots. Runtime finite floats are clamped; the authoring tool refuses invalid source data so it cannot silently rewrite it.
 
-Parameters are optional and default as follows. Attach these blocks to the **shader property**, not the geometry or root.
+Parameters are optional. Each omitted field inherits its current common setting; explicit fields override only that parameter, and character overrides are applied last. The table lists factory values for the common settings, not baked material defaults. Attach these blocks to the **shader property**, not the geometry or root.
 
-| Extra-data name          | Type               | Default | Range   |
-| ------------------------ | ------------------ | ------: | ------- |
-| CS_SkinRoughness         | NiFloatExtraData   |     0.6 | 0–1     |
-| CS_SkinReflectance       | NiFloatExtraData   |   0.028 | 0–0.08  |
-| CS_SkinFuzz              | NiFloatExtraData   |    0.25 | 0–1     |
-| CS_SkinDetailEnabled     | NiIntegerExtraData |       1 | 0 or 1  |
-| CS_SkinDetailStrength    | NiFloatExtraData   |    0.25 | 0–1     |
-| CS_SkinDetailTiling      | NiFloatExtraData   |      10 | 0.1–100 |
-| CS_SkinSSSAmount         | NiFloatExtraData   |       1 | 0–1     |
-| CS_SkinTransmission      | NiFloatExtraData   |     0.1 | 0–1     |
-| CS_SkinTransmissionDepth | NiFloatExtraData   |     0.2 | 0.001–1 |
-| CS_SkinWetResponse       | NiFloatExtraData   |       1 | 0–1     |
+| Extra-data name                          | Type               | Factory value | Range     |
+| ---------------------------------------- | ------------------ | ------------: | --------- |
+| CS_SkinRoughness                         | NiFloatExtraData   |           0.7 | 0.0–1.0   |
+| CS_SkinSecondaryRoughness                | NiFloatExtraData   |          0.35 | 0.0–1.0   |
+| CS_SkinSpecularTextureMultiplier         | NiFloatExtraData   |           1.0 | 0.0–10.0  |
+| CS_SkinSecondarySpecularStrength         | NiFloatExtraData   |          0.15 | 0.0–1.0   |
+| CS_SkinReflectance                       | NiFloatExtraData   |        0.0278 | 0.0–0.1   |
+| CS_SkinBaseColorMultiplier               | NiFloatExtraData   |           1.0 | 0.0–2.0   |
+| CS_SkinPhysicalMainRoughnessMultiplier   | NiFloatExtraData   |           1.3 | 0.0–2.0   |
+| CS_SkinPhysicalSecondRoughnessMultiplier | NiFloatExtraData   |          0.75 | 0.0–2.0   |
+| CS_SkinPhysicalSpecularStrength          | NiFloatExtraData   |           1.0 | 0.0–2.0   |
+| CS_SkinExtraEdgeRoughness                | NiFloatExtraData   |          0.25 | 0.0–1.0   |
+| CS_SkinFuzz                              | NiFloatExtraData   |           1.0 | 0.0–2.0   |
+| CS_SkinFuzzRoughness                     | NiFloatExtraData   |          0.35 | 0.1–1.0   |
+| CS_SkinFuzzF0                            | NiFloatExtraData   |         0.045 | 0.0–0.5   |
+| CS_SkinTransmissionEnabled               | NiIntegerExtraData |           1.0 | 0 or 1    |
+| CS_SkinTransmission                      | NiFloatExtraData   |           0.1 | 0.0–1.0   |
+| CS_SkinTransmissionDepth                 | NiFloatExtraData   |           0.2 | 0.0–1.0   |
+| CS_SkinSSSAmount                         | NiFloatExtraData   |           1.0 | 0.0–1.0   |
+| CS_SkinDetailEnabled                     | NiIntegerExtraData |           1.0 | 0 or 1    |
+| CS_SkinDetailStrength                    | NiFloatExtraData   |          0.25 | -2.0–2.0  |
+| CS_SkinDetailTiling                      | NiFloatExtraData   |          10.0 | 0.1–100.0 |
+| CS_SkinBodyTilingMultiplier              | NiFloatExtraData   |           2.0 | 0.1–5.0   |
+| CS_SkinWetResponse                       | NiFloatExtraData   |           1.0 | 0.0–1.0   |
 
 ## Texture contract
 
 Slot numbers below are zero-based **NIF array indices**, not ESP TX field numbers. All extension channels are sampled as linear data, including files tagged sRGB. Paths must be relative `textures/...dds` resources; optional `Data/` is normalized away. There is no suffix search, path-based material assignment, JSON registry or race-name special case.
 
-| NIF slot      | Purpose                                     | Channels                                                                  | Native TXST field    |
-| ------------- | ------------------------------------------- | ------------------------------------------------------------------------- | -------------------- |
-| 0, 1, 3, 6, 7 | Native diffuse, normal and face inputs      | Native meanings preserved                                                 | Native mapping       |
-| 2             | Native skin texture; transmission thickness | `thickness = 1 - saturate(R)`; white is thin                              | TX03                 |
-| 4             | Optional wet surface                        | RGB tangent normal, A wet response mask                                   | TX05                 |
-| 5             | Optional Skin controls / RFAOS              | R roughness multiplier, G fuzz multiplier, B AO, A reflectance multiplier | TX02                 |
-| 8             | Optional detail                             | RGB tangent normal, A main-UV region strength                             | No native TXST field |
+| NIF slot      | Purpose                                     | Channels                                         | Native TXST field    |
+| ------------- | ------------------------------------------- | ------------------------------------------------ | -------------------- |
+| 0, 1, 3, 6, 7 | Native diffuse, normal and face inputs      | Native meanings preserved                        | Native mapping       |
+| 2             | Native skin texture; transmission thickness | `thickness = 1 - saturate(R)`; white is thin     | TX03                 |
+| 4             | Optional wet surface                        | RGB tangent normal, A wet response mask          | TX05                 |
+| 5             | Optional Skin controls / RFAOS              | R roughness, G fuzz multiplier, B AO, A specular | TX02                 |
+| 8             | Optional detail                             | RGB tangent normal, A main-UV region strength    | No native TXST field |
 
-Controls multiply the corresponding material scalars. The resulting perceptual roughness is clamped to 0.02–1, F0 to 0–0.08. Missing controls use white multipliers; missing wet input uses a flat normal and white mask. AO affects indirect lighting. Old detail AO has no runtime meaning.
+Without RFAOS, the two lobes use their independent roughness values; the original vanilla specular-map multiplier adjusts the first lobe. With RFAOS, R is multiplied separately by Physical Main Roughness Multiplier and Physical Second Roughness Multiplier. Extra Edge Roughness applies to both, and the resulting roughness is clamped to 0.02–1. Secondary Specular Strength controls the lobe mix. Without RFAOS, F0 uses Reflectance; with RFAOS it uses `0.08 * A * PhysicalSpecularStrength`. Fuzz keeps its strength, roughness and F0 controls. Missing wet input uses a flat normal and white mask. AO affects indirect lighting. Old detail AO has no runtime meaning.
 
 Extension resources use an independent 2D DDS loader. In particular, native slot 4 is routed as a cubemap by the engine; the Skin shader must not use that native resource. Standard RGBA8, BC1/2/3/7 DDS formats are supported, with BC7 or uncompressed RGBA8 preferred for masks. BC5 UNORM is supported only for detail: reconstruct positive Z and use mask 1. Signed BC5, arrays, volumes, cubemaps and unsupported formats are rejected. A broken explicit detail texture disables that detail input rather than substituting the global one.
 
 Detail RGB samples transformed main UV multiplied by detail tiling, with a wrap sampler. Alpha samples transformed main UV separately, with native addressing and its own derivatives/mip selection. Thus mask regions do not move when tiling changes. Zero strength, black mask or disabled detail leaves the base normal unchanged. Tangent-space detail is composed using RNM; model-space base normals use a surface basis derived from world position and main UV.
 
-An empty detail slot inherits the global texture, strength and tiling, including the global body tiling multiplier outside the head. A custom detail slot uses its material strength and tiling without global multiplication. The global detail switch and material enable-detail switch both gate detail. The shipped global normal is BC5 UNORM with no AO channel.
+An empty detail slot inherits the global texture. Detail enable, strength, tiling and body tiling follow the same common → material → character parameter inheritance as other settings, independently of texture selection. Body tiling applies outside the head. The shipped global normal is BC5 UNORM with no AO channel.
 
 Post-process SSS continues to receive the existing scalar `baseColor.a * SSSAmount` through the existing render target. It retains the existing SSS feature and profile. The native skin texture drives only the direct-light transmission term, controlled independently by transmission strength and depth. No render-target channel is added.
 
 ## Native assignment and source tracking
 
-Nonempty extension inputs from the **actually applied** TXST replace NIF slots 4 and 5. Empty TXST extension inputs inherit the original NIF baseline, never the previous TXST. Native texture slots keep native replacement behavior. Slot 8 and typed parameters remain in the NIF. Unmarked assets do not reinterpret extension slots; a character instance can explicitly enable a material using neutral defaults.
+Nonempty extension inputs from the **actually applied** TXST replace NIF slots 4 and 5. Empty TXST extension inputs inherit the original NIF baseline, never the previous TXST. Native texture slots keep native replacement behavior. Slot 8 and typed parameters remain in the NIF. Unmarked assets do not reinterpret extension slots; character overrides are layered over the common settings when no material override exists.
 
 Source tracking observes property PostLink, property clones, native TXST conversion and head-part preparation. Conversion receipts refer to the actual generated texture-set object retained by the material. Path snapshots only invalidate receipts after mutation; matching paths never discover a source. Head receipts carry the actual head part, NPC and selected TXST. An unknown replacement of the normal or texture set invalidates a head receipt. Tint generation does not define material identity.
 
@@ -61,11 +73,13 @@ Each part can retain separate sparse overrides for selected surfaces. Guards con
 
 Committed settings use Data/SKSE/Plugins/CommunityShaders/AdvancedSkin/State.json. The editor can open another configuration or save a copy to an explicit writable location; Location.json remembers that choice. **Save and apply** writes immediately, stages and reads back output, checks disk conflicts, and retains recovery backups before publishing the runtime snapshot. Failure retains the previous committed state and draft. **Undo last saved character edit** is another persisted operation.
 
+Character saves reconcile the current file with the loaded baseline at part granularity. Unedited parts and external changes to other characters survive; conflicting edits require an in-place choice with the draft retained. Confirmation applies only to the exact disk contents shown, and a changed file is reviewed again. Missing configuration files are recreated from the loaded state plus the edit. Unreadable files require explicit backup-and-replace confirmation. Publication stages and verifies bytes, creates and verifies the recovery backup, then uses the project's MoveFileEx replacement pattern with a verified direct-write fallback for virtual filesystems. Write failures retain the draft and report the replacement error; failed publication attempts restore only destinations actually written.
+
 The Player key is shared by playthroughs using this configuration. Loading an older save or starting a new game does not restore historical Skin settings. Choose a scheme explicitly to switch settings. NPC keys identify placed actor references by originating plugin and local ID, never all instances of an NPC base. Dynamically generated references receive session-only settings; read/load/menu lifecycle changes clear those instances. Lifecycle changes invalidate runtime handles and previews while preserving external persistent state.
 
 No Skin SKSE serialization callbacks are registered. Old Skin co-save records are not automatically imported and other plugins' co-saves are untouched. Configuration limits are 64 MiB, 1024 actors, four parts, 32 surface records per part, 1024-byte resource/reference strings and 4 MiB of encoded layout per surface. Invalid or unsupported files are rejected, not replaced with empty data. **Restore latest valid backup** explicitly restores a validated publication backup.
 
-**Copy Skin settings from player** captures committed effective settings, including inherited NIF/TXST inputs, while preserving global-detail fallback. It never copies preview edits, wetness, native color/normal/thickness textures, race or morphs. Receivers get independent values and their own adaptation guards. **Use as copy source** and **Apply copied scheme** support other source actors; named multi-part schemes use the same transfer pipeline.
+**Copy Skin settings from player** captures committed effective settings, including inherited NIF/TXST inputs, while retaining an empty detail slot as global-texture fallback. It never copies preview edits, wetness, native color/normal/thickness textures, race or morphs. Receivers get independent values and their own adaptation guards. **Use as copy source** and **Apply copied scheme** support other source actors; named multi-part schemes use the same transfer pipeline.
 
 Automatic transfer requires matching part/view, unambiguous source values, layout and UV transform. Source and receiver need not share race, head-part, ARMA or native texture paths. Unsupported or missing parts open a review rather than silently applying a subset. Manual mappings require receiver preview and explicit texture-mapping confirmation. Selected surface updates commit together; unrelated parts remain unchanged. Schemes list DDS inputs in the transfer review, and DDS files remain dependencies when sharing.
 
@@ -73,7 +87,9 @@ In-place DDS edits require **Reload skin resources**, which refreshes content fi
 
 ## Editor and publication
 
-The CS Editor's **Skin Editor** works on source files, with a separate temporary preview on explicitly selected loaded geometry. Parameters use localized controls and DDS file pickers. Undo/redo covers draft parameter and texture edits. Switching away from an unsaved document or character draft asks whether to keep editing or discard it. Closing the editor cancels preview.
+The CS Editor's **Skin Editor** separates NIF authoring, character customization, texture tools and configuration management. Authoring and customization each have target selection, material adjustment, and review/save stages. A persistent context header and history/navigation footer surround the scrolling workspace. Material controls are grouped by texture, dual specular, fuzz, transmission/SSS, detail and wetness; narrow layouts use selectors instead of sidebars.
+
+NIF preview-target selection is independent of file selection and cannot replace the open document. Preview activation is derived from the open editor and a valid selected surface, with no manual enable switch. Tools retain the draft and its preview; selecting a different editing target uses the unsaved-draft guard. Character transfer review replaces the ordinary inspector until saved or cancelled. Generated DDS output can be assigned directly to the retained draft. Skin Editor works on source files, with a separate temporary preview on explicitly selected loaded geometry. Parameters use localized controls and DDS file pickers. Undo/redo covers draft parameter and texture edits. Switching away from an unsaved document or character draft asks whether to keep editing or discard it. Closing the editor cancels preview; reopening resumes it. Save commits the draft without disabling preview. Transfer mappings preview automatically until saved or cancelled. Save blockers appear beside the action, including configuration diagnostics and a link to its management workspace. Unsigned resource fingerprints are range-checked as integers without JSON signed/unsigned comparisons, so the full 64-bit range can round-trip.
 
 Source provenance includes the NIF path, property block and file fingerprint. **Edit source NIF** requires the loaded snapshot to match. Otherwise the user opens a source explicitly. Live FaceGen, morph, pose or skinning buffers are never serialized as asset geometry.
 
@@ -83,7 +99,7 @@ Saving compares the source bytes, reparses output, verifies changed material val
 
 **Save NIF with Skin textures** chooses a NIF beneath the destination mod's `meshes` directory and lists the NIF and all explicit extension DDS dependencies before writing. `textures` is placed alongside `meshes`. Native diffuse, normal and skin textures remain dependencies of the original mod. Batch output uses individually selected NIFs, property blocks and destinations. It does not enumerate assets using name patterns.
 
-Material presets are ordinary material-only NIFs. The shipped `meshes/CS/Skin/SkinMaterial.nif` is a template, not a renderable actor mesh. Preset import lets the author select parameters and textures. Built-in texture tools combine grayscale controls or detail RGB plus an independently authored UV mask and generate linear DDS mipmaps. No artist Python installation or JSON copy/paste is required. An explicit, approximate importer can recover complete materials from old JSON exports; it does not import assignment rules, detail AO or old wet encoding.
+Material presets are ordinary material-only NIFs. The shipped `meshes/CS/Skin/SkinMaterial.nif` is a template, not a renderable actor mesh. Preset import lets the author select parameters and textures. Built-in texture tools combine grayscale controls or detail RGB plus an independently authored UV mask and generate linear DDS mipmaps. No artist Python installation or JSON copy/paste is required. An explicit importer can recover the original skin parameters and RFAOS input from old JSON exports; it does not import assignment rules, detail AO or old wet encoding.
 
 ## Code organization and localization
 
@@ -92,7 +108,7 @@ Material presets are ordinary material-only NIFs. The shipped `meshes/CS/Skin/Sk
 -   `Persistence/`: bounded external configurations, portable schemes and runtime lifecycle.
 -   `Editor/`: NIF preservation, publication, texture tools, legacy import and UI.
 
-Skin UI and errors use the existing `feature.skin.*` translation namespace, inline English defaults, generated `en.json` and `zh_CN.json`. Wire names and file field names remain stable technical identifiers. Other languages use the project's normal English fallback. CS global settings retain their existing settings persistence; JSON is not an asset material authoring format.
+Skin UI and errors use the existing `feature.skin.*` translation namespace, inline English defaults, generated `en.json` and `zh_CN.json`. Wire names and file field names remain stable technical identifiers. Other languages use the project's normal English fallback. CS global settings retain their existing settings persistence and load both original flat settings and DefaultProfile fields; JSON is not an asset material authoring format.
 
 ## Validation boundary
 

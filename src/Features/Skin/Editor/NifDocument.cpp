@@ -249,6 +249,7 @@ namespace SkinEditor
 								throw std::runtime_error(std::string(T("feature.skin.wrong_field_type", "Wrong field type: ")) + table[i].name);
 							Reader field{ block.bytes };
 							field.Get<uint32_t>();
+							material.specified[i] = true;
 							material.parameters.values[i] = table[i].integer ? static_cast<float>(field.Get<int32_t>()) : field.Get<float>();
 							if (field.pos != field.bytes.size())
 								throw std::runtime_error(T("feature.skin.unexpected_extra_data_payload", "Unexpected extra-data payload."));
@@ -393,6 +394,8 @@ namespace SkinEditor
 			extras.push_back(next.AddBlock("NiIntegerExtraData", std::move(marker)));
 			const auto table = ParameterTable();
 			for (size_t i = 0; i < table.size(); ++i) {
+				if (!a_material.specified[i])
+					continue;
 				Bytes field;
 				Put(field, next.AddString(table[i].name));
 				if (table[i].integer)

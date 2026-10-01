@@ -4,6 +4,8 @@
 
 #include <map>
 #include <memory>
+#include <stdexcept>
+#include <vector>
 
 namespace SkinActors
 {
@@ -31,10 +33,18 @@ namespace SkinActors
 		std::array<float, 4> uvTransform{};
 		bool operator==(const Guard&) const = default;
 	};
+	struct SaveConflict : std::runtime_error
+	{
+		std::filesystem::path path;
+		std::vector<uint8_t> contents;
+		SaveConflict(const char* a_message, std::filesystem::path a_path, std::vector<uint8_t> a_contents) :
+			std::runtime_error(a_message), path(std::move(a_path)), contents(std::move(a_contents)) {}
+	};
 	struct Surface
 	{
 		SkinMaterials::Changes changes;
 		Guard guard;
+		bool operator==(const Surface&) const = default;
 	};
 	using Parts = std::array<std::vector<Surface>, 4>;
 	struct Binding
@@ -79,9 +89,9 @@ namespace SkinActors
 	uint64_t Session();
 	const Binding* Find(const State& a_state, const std::string& a_key);
 	const Surface* Find(const Binding* a_binding, Part a_part, const Guard& a_guard);
-	void Commit(const std::string& a_key, Binding a_binding, uint64_t a_revision, uint64_t a_session);
-	void Clear(const std::string& a_key, Part a_part, uint64_t a_revision, uint64_t a_session);
-	void Undo(const std::string& a_key, uint64_t a_revision, uint64_t a_session);
+	void Commit(const std::string& a_key, Binding a_binding, uint64_t a_revision, uint64_t a_session, const SaveConflict* a_confirmed = nullptr);
+	void Clear(const std::string& a_key, Part a_part, uint64_t a_revision, uint64_t a_session, const SaveConflict* a_confirmed = nullptr);
+	void Undo(const std::string& a_key, uint64_t a_revision, uint64_t a_session, const SaveConflict* a_confirmed = nullptr);
 	void OpenStorage(const std::filesystem::path& a_path, bool a_copy, bool a_empty = false);
 	void Recover();
 	void SaveScheme(const std::filesystem::path& a_path, const Scheme& a_scheme);

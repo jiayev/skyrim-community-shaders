@@ -8,6 +8,7 @@
 #include <fstream>
 #include <limits>
 #include <mutex>
+#include <set>
 
 namespace SkinActors
 {
@@ -77,9 +78,12 @@ namespace SkinActors
 		template <class Value>
 		Value Unsigned(const json& value)
 		{
-			if (!value.is_number_integer() || value < 0 || value > std::numeric_limits<Value>::max())
+			if (!value.is_number_integer() || (!value.is_number_unsigned() && value.get<int64_t>() < 0))
 				Invalid();
-			return value.get<Value>();
+			const auto number = value.get<uint64_t>();
+			if (number > std::numeric_limits<Value>::max())
+				Invalid();
+			return static_cast<Value>(number);
 		}
 		void Array(const json& value, size_t size)
 		{
@@ -96,8 +100,10 @@ namespace SkinActors
 		void Write(const std::filesystem::path& path, const json& value, const std::optional<std::vector<uint8_t>>& expected)
 		{
 			const auto bytes = Bytes(value);
-			if (Parse(bytes) != value || Read(path) != expected)
-				throw std::runtime_error(T("feature.skin.configuration_conflict", "The configuration changed on disk. Reopen it before saving."));
+			if (Parse(bytes) != value)
+				throw std::runtime_error(T("feature.skin.configuration_encoding_failed", "Configuration verification failed before writing. Your draft is retained."));
+			if (Read(path) != expected)
+				throw std::runtime_error(T("feature.skin.configuration_conflict", "The file changed again during saving. Your draft is retained; save again to review the latest file."));
 			const SkinEditor::Output output{ path, bytes };
 			SkinEditor::Publish(std::span(&output, 1));
 			if (Read(path) != std::optional(bytes))
@@ -117,7 +123,7 @@ namespace SkinActors
 			SkinMaterials::Changes result;
 			const auto& numbers = value.at("parameters");
 			const auto& textures = value.at("textures");
-			if (!numbers.is_array() || numbers.size() != result.parameters.size() || !textures.is_array() || textures.size() != result.textures.size())
+			if (!numbers.is_array() || (numbers.size() != 10 && numbers.size() != result.parameters.size()) || !textures.is_array() || textures.size() != result.textures.size())
 				Invalid();
 			for (size_t i = 0; i < numbers.size(); ++i)
 				if (!numbers[i].is_null())
@@ -243,13 +249,69 @@ namespace SkinActors
 			if (state->revision != expectedRevision || state->session != expectedSession)
 				throw std::runtime_error(T("feature.skin.character_changed", "The character configuration or game session changed. Select the current target again."));
 		}
-		void Submit(State next)
+		void Submit(State next, const SaveConflict* confirmed)
 		{
-			if (!state->available)
-				throw std::runtime_error(T("feature.skin.character_storage_unavailable", "Character storage is unavailable. Reopen a valid configuration or recover a backup."));
+			const auto currentDisk = Read(state->path);
+			const bool approved = confirmed && confirmed->path == state->path && currentDisk && confirmed->contents == *currentDisk;
+			if (currentDisk && (currentDisk != disk || !state->available)) {
+				State external;
+				bool readable = true;
+				try {
+					Decode(external, Parse(*currentDisk));
+				} catch (const std::exception&) {
+					readable = false;
+					if (!approved)
+						throw SaveConflict(T("feature.skin.save_unreadable_configuration", "The existing configuration cannot be read. Back it up and replace it with the settings currently loaded in the editor, or keep editing without changing the file."), state->path, *currentDisk);
+				}
+				if (readable) {
+					std::set<std::string> keys;
+					for (const auto& [key, binding] : state->actors)
+						if (binding.persistent)
+							keys.insert(key);
+					for (const auto& [key, binding] : next.actors)
+						if (binding.persistent)
+							keys.insert(key);
+					const Binding empty;
+					bool conflict = false;
+					for (const auto& key : keys) {
+						const auto* before = Find(*state, key);
+						const auto* edited = Find(next, key);
+						const auto* onDisk = Find(external, key);
+						const auto& base = before ? *before : empty;
+						const auto& ours = edited ? *edited : empty;
+						Binding merged = onDisk ? *onDisk : empty;
+						bool changed = false;
+						for (size_t part = 0; part < ours.parts.size(); ++part) {
+							if (ours.parts[part] == base.parts[part])
+								continue;
+							conflict |= merged.parts[part] != base.parts[part] && merged.parts[part] != ours.parts[part];
+							merged.parts[part] = ours.parts[part];
+							changed = true;
+						}
+						if (!changed)
+							continue;
+						next.undo[key] = onDisk ? *onDisk : empty;
+						if (edited)
+							merged.name = edited->name;
+						if (std::all_of(merged.parts.begin(), merged.parts.end(), [](const auto& part) { return part.empty(); }))
+							external.actors.erase(key);
+						else
+							external.actors[key] = std::move(merged);
+					}
+					if (conflict && !approved)
+						throw SaveConflict(T("feature.skin.save_conflicting_parts", "The same character parts were changed on disk. Back up the disk version and save your edits for those parts? Other characters and unedited parts will be kept."), state->path, *currentDisk);
+					for (const auto& [key, binding] : next.actors)
+						if (!binding.persistent)
+							external.actors[key] = binding;
+					next.actors = std::move(external.actors);
+				}
+			}
+			if (next.actors.size() > MaxActors)
+				Invalid();
 			const auto value = Encode(next);
-			Write(state->path, value, disk);
+			Write(state->path, value, currentDisk);
 			disk = Bytes(value);
+			next.available = true;
 			next.message = T("feature.skin.character_saved", "Character configuration saved. Loading a game does not roll it back.");
 			Publish(std::move(next));
 		}
@@ -342,7 +404,7 @@ namespace SkinActors
 		const auto found = std::find_if(surfaces.begin(), surfaces.end(), [&](const auto& surface) { return surface.guard == guard; });
 		return found == surfaces.end() ? nullptr : &*found;
 	}
-	void Commit(const std::string& key, Binding binding, uint64_t expectedRevision, uint64_t expectedSession)
+	void Commit(const std::string& key, Binding binding, uint64_t expectedRevision, uint64_t expectedSession, const SaveConflict* confirmed)
 	{
 		binding.persistent = !key.starts_with("session:");
 		if (key.empty() || binding.name.size() > 1024 || (binding.persistent && key != "player" && !PersistentKey(key)))
@@ -373,24 +435,24 @@ namespace SkinActors
 			next.message = T("feature.skin.character_session_only", "Applied for this game session only. This actor has no persistent plugin reference.");
 			Publish(std::move(next));
 		} else {
-			Submit(std::move(next));
+			Submit(std::move(next), confirmed);
 		}
 	}
-	void Clear(const std::string& key, Part part, uint64_t expectedRevision, uint64_t expectedSession)
+	void Clear(const std::string& key, Part part, uint64_t expectedRevision, uint64_t expectedSession, const SaveConflict* confirmed)
 	{
 		const auto current = Get();
 		const auto old = Find(*current, key);
 		Binding next = old ? *old : Binding{};
 		next.parts.at(static_cast<size_t>(part)).clear();
-		Commit(key, std::move(next), expectedRevision, expectedSession);
+		Commit(key, std::move(next), expectedRevision, expectedSession, confirmed);
 	}
-	void Undo(const std::string& key, uint64_t expectedRevision, uint64_t expectedSession)
+	void Undo(const std::string& key, uint64_t expectedRevision, uint64_t expectedSession, const SaveConflict* confirmed)
 	{
 		const auto current = Get();
 		const auto found = current->undo.find(key);
 		if (found == current->undo.end())
 			return;
-		Commit(key, found->second, expectedRevision, expectedSession);
+		Commit(key, found->second, expectedRevision, expectedSession, confirmed);
 	}
 	void Reset()
 	{
@@ -515,7 +577,7 @@ namespace SkinActors
 			for (const auto& value : samples) {
 				Sample sample;
 				const auto changes = DecodeChanges(value.at("material"));
-				if (std::any_of(changes.parameters.begin(), changes.parameters.end(), [](const auto& v) { return !v; }) ||
+				if (std::any_of(changes.parameters.begin(), changes.parameters.begin() + value.at("material").at("parameters").size(), [](const auto& v) { return !v; }) ||
 					std::any_of(changes.textures.begin(), changes.textures.end(), [](const auto& t) { return t.mode == SkinMaterials::TextureMode::Inherit; }))
 					Invalid();
 				sample.material = SkinMaterials::Apply({}, changes);

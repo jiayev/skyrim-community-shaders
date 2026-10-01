@@ -16,9 +16,18 @@ namespace SkinMaterials
 		Count
 	};
 	inline constexpr size_t ParameterCount = static_cast<size_t>(Parameter::Count);
+	inline constexpr std::array<Parameter, ParameterCount> ParameterOrder{
+		Parameter::Roughness, Parameter::SecondaryRoughness, Parameter::SpecularTextureMultiplier,
+		Parameter::SecondarySpecularStrength, Parameter::Reflectance, Parameter::BaseColorMultiplier,
+		Parameter::PhysicalMainRoughnessMultiplier, Parameter::PhysicalSecondRoughnessMultiplier, Parameter::PhysicalSpecularStrength,
+		Parameter::ExtraEdgeRoughness, Parameter::Fuzz, Parameter::FuzzRoughness, Parameter::FuzzF0,
+		Parameter::TransmissionEnabled, Parameter::Transmission, Parameter::TransmissionDepth, Parameter::SSSAmount,
+		Parameter::DetailEnabled, Parameter::DetailStrength, Parameter::DetailTiling, Parameter::BodyTilingMultiplier, Parameter::WetResponse
+	};
 	inline constexpr std::array<uint32_t, 3> TextureSlots{ 5, 4, 8 };
 	std::array<const char*, 3> TextureLabels();
 	const char* ParameterLabel(size_t a_index);
+	const char* SettingName(size_t a_index);
 
 	struct ParameterInfo
 	{
@@ -46,6 +55,7 @@ namespace SkinMaterials
 	struct Material
 	{
 		Parameters parameters;
+		std::array<bool, ParameterCount> specified{};
 		std::array<std::string, 3> textures;
 		bool enabled = false;
 		bool operator==(const Material&) const = default;
@@ -89,4 +99,5 @@ namespace SkinMaterials
 	void Validate(const Material& a_material);
 	void Validate(const Changes& a_changes);
 	Material Apply(Material a_base, const Changes& a_changes);
+	Material Resolve(Material a_material, const Parameters& a_defaults);
 }

@@ -65,6 +65,25 @@ std::shared_ptr<Skin::TextureEntry> Skin::RequestTexture(const std::string& a_pa
 	return entry;
 }
 
+void Skin::UpdateEditorPreview()
+{
+	const bool open = EditorWindow::GetSingleton()->open;
+	const auto found = geometries.find(editor.geometry.get());
+	const bool preview = open && !editor.transfer && editor.geometry && found != geometries.end() &&
+	                     (editor.character ? !editor.targets.empty() : editor.document && editor.selectedBlock != UINT32_MAX) &&
+	                     (!found->second.actor || SkinActors::Belongs(editor.geometry.get(), found->second.actor.get().get())) &&
+	                     IsCompatible(editor.geometry->GetGeometryRuntimeData().shaderProperty.get());
+	const bool transferPreview = open && editor.transfer && bool(editor.transfer->actor.get());
+	if (editor.preview != preview || (editor.transfer && editor.transfer->preview != transferPreview)) {
+		editor.preview = preview;
+		if (editor.transfer)
+			editor.transfer->preview = transferPreview;
+		Invalidate();
+	}
+	if (!open)
+		editor.previewWetness = -1;
+}
+
 bool Skin::PreviewMatches(const GeometryEntry& a_entry) const
 {
 	return (editor.transfer && editor.transfer->preview && a_entry.transferPreview) || (editor.preview && (editor.character ?
@@ -124,7 +143,7 @@ void Skin::Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state)
 	a_entry.transferPreview = false;
 	a_entry.textures = {};
 	try {
-		a_entry.base = SkinSources::AssignedMaterial(a_entry.source);
+		a_entry.base = Resolve(SkinSources::AssignedMaterial(a_entry.source), settings.DefaultProfile);
 		a_entry.thickness = a_entry.source.asset && !a_entry.source.asset->textures[2].empty();
 		if (auto* txst = RE::TESForm::LookupByID<RE::BGSTextureSet>(a_entry.source.txst))
 			a_entry.thickness = !SkinSources::Paths(txst)[2].empty();
@@ -156,7 +175,7 @@ void Skin::Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state)
 			}
 		}
 		if (valid && editor.preview && (editor.character ? std::find(editor.targets.begin(), editor.targets.end(), a_entry.geometry) != editor.targets.end() : editor.geometry == a_entry.geometry))
-			a_entry.effective = editor.character ? Apply(a_entry.base, editor.changes) : editor.draft;
+			a_entry.effective = editor.character ? Apply(a_entry.base, editor.changes) : Resolve(editor.draft, settings.DefaultProfile);
 		if (valid && editor.transfer && editor.transfer->preview)
 			if (const auto* sample = TransferSample(a_entry)) {
 				a_entry.effective = sample->material;
@@ -175,7 +194,7 @@ void Skin::Prepare(GeometryEntry& a_entry, const SkinActors::Snapshot& a_state)
 		if (a_entry.effective.textures[2].empty())
 			a_entry.textures[2] = RequestTexture(settings.DetailTexture);
 	} catch (const std::exception& e) {
-		a_entry.effective = {};
+		a_entry.effective = Resolve({}, settings.DefaultProfile);
 		a_entry.diagnostic = e.what();
 	}
 	a_entry.revision = revision;
@@ -188,13 +207,6 @@ void Skin::Prepass()
 	std::lock_guard lock(mutex);
 	const auto characters = SkinActors::Get();
 	RestoreSampler();
-	if ((editor.preview || (editor.transfer && editor.transfer->preview)) && !EditorWindow::GetSingleton()->open) {
-		editor.preview = false;
-		if (editor.transfer)
-			editor.transfer->preview = false;
-		editor.previewWetness = -1;
-		Invalidate();
-	}
 	if (session != characters->session) {
 		geometries.clear();
 		actorWetnessMap.clear();
@@ -205,6 +217,7 @@ void Skin::Prepass()
 		texturesDirty = true;
 		session = characters->session;
 	}
+	UpdateEditorPreview();
 	for (auto& [geometry, entry] : geometries) {
 		if (entry.actor && !SkinActors::Belongs(geometry, entry.actor.get().get())) {
 			entry.ready = false;
@@ -244,18 +257,14 @@ Skin::SkinData Skin::MakeData(const Material& a_material, bool a_head) const
 		auto& value = p.values[i];
 		value = std::isfinite(value) ? std::clamp(value, field.minimum, field.maximum) : field.initial;
 	}
-	const bool globalDetail = a_material.textures[2].empty();
 	SkinData data{};
-	data.skinParams = { p[Parameter::Roughness], 0, 0, float(settings.EnableSkin && a_material.enabled) };
-	data.skinParams2 = { 0.15f, settings.ExtraSkinWetness, p[Parameter::Reflectance], 1.0f };
-	data.skinDetailParams = {
-		globalDetail ? settings.DetailTiling * (a_head ? 1.0f : settings.BodyTiling) : p[Parameter::DetailTiling],
-		1.0f, globalDetail ? settings.DetailStrength : p[Parameter::DetailStrength],
-		float(settings.EnableDetail && p[Parameter::DetailEnabled] != 0)
-	};
-	data.sssParams = { p[Parameter::Transmission], p[Parameter::TransmissionDepth], p[Parameter::SSSAmount], 1.0f };
-	data.fuzzParams = { p[Parameter::Fuzz], 0.5f, 0.04f, 0.0f };
-	data.physicalParams = { p[Parameter::WetResponse], 0, 0, 0 };
+	data.skinParams = { p[Parameter::Roughness], p[Parameter::SecondaryRoughness], p[Parameter::SpecularTextureMultiplier], float(settings.EnableSkin) };
+	data.skinParams2 = { p[Parameter::SecondarySpecularStrength], settings.ExtraSkinWetness, p[Parameter::Reflectance], p[Parameter::BaseColorMultiplier] };
+	const float bodyTiling = a_head ? 1.0f : p[Parameter::BodyTilingMultiplier];
+	data.skinDetailParams = { p[Parameter::DetailTiling] * bodyTiling, bodyTiling, p[Parameter::DetailStrength], float(p[Parameter::DetailEnabled] != 0) };
+	data.sssParams = { p[Parameter::Transmission], p[Parameter::TransmissionDepth], p[Parameter::SSSAmount], p[Parameter::TransmissionEnabled] };
+	data.fuzzParams = { p[Parameter::Fuzz], p[Parameter::FuzzRoughness], p[Parameter::FuzzF0], p[Parameter::ExtraEdgeRoughness] };
+	data.physicalParams = { p[Parameter::PhysicalMainRoughnessMultiplier], p[Parameter::PhysicalSecondRoughnessMultiplier], p[Parameter::PhysicalSpecularStrength], p[Parameter::WetResponse] };
 	data.wetParams = settings.WetParams;
 	return data;
 }
@@ -263,9 +272,7 @@ Skin::SkinData Skin::MakeData(const Material& a_material, bool a_head) const
 Skin::SkinData Skin::GetCommonBufferData()
 {
 	std::lock_guard lock(mutex);
-	Material material;
-	material.enabled = true;
-	return MakeData(material, false);
+	return MakeData(Resolve({}, settings.DefaultProfile), false);
 }
 
 void Skin::RestoreSampler()
@@ -288,11 +295,14 @@ void Skin::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!PerGeometryCB)
 		return;
 	PerGeometryData data{};
-	data.profile = MakeData(Material{}, false);
+	data.profile = MakeData(Resolve({}, settings.DefaultProfile), false);
+	data.profile.skinParams.w = 0;
 	if (a_pass && a_pass->geometry) {
 		data.skinPerGeometry = GetWetness(a_pass->geometry);
 		if (SkinMaterials::IsCompatible(a_pass->shaderProperty)) {
 			auto& entry = Observe(a_pass->geometry, a_pass->shaderProperty);
+			data.profile = MakeData(Resolve({}, settings.DefaultProfile), entry.head);
+			data.profile.skinDetailParams.w = 0;
 			if (entry.ready && entry.revision == revision && session == SkinActors::Session() && entry.actorRevision == SkinActors::Revision()) {
 				data.profile = MakeData(entry.effective, entry.head);
 				for (size_t i = 0; i < entry.textures.size(); ++i) {
