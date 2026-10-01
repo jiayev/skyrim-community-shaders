@@ -488,16 +488,18 @@ void Effects11::CheckCommonData()
 		const auto& commonData = effectManager.GetCommonData();
 		settingManager.SetTimeOfDayData(commonData.timeOfDay1, commonData.timeOfDay2);
 		settingManager.SetWeatherBlendFactors(effectManager.currentWeatherID, effectManager.previousWeatherID, commonData.weather[2]);
+
+		pointLighting.curve = settingManager.GetInterpolatedTimeOfDayValue("PointLightingCurve", "ENVIRONMENT");
+		pointLighting.desaturation = settingManager.GetInterpolatedTimeOfDayValue("PointLightingDesaturation", "ENVIRONMENT");
+		pointLighting.intensity = settingManager.GetInterpolatedTimeOfDayValue("PointLightingIntensity", "ENVIRONMENT");
 	}
 }
 
 void Effects11::OverridePointLightColor(float3& a_color)
 {
-	auto& settingManager = SettingManager::GetSingleton();
-
-	a_color = Curve(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingCurve", "ENVIRONMENT"));
-	a_color = Desaturation(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingDesaturation", "ENVIRONMENT"));
-	a_color = Intensity(a_color, settingManager.GetInterpolatedTimeOfDayValue("PointLightingIntensity", "ENVIRONMENT"));
+	a_color = Curve(a_color, pointLighting.curve);
+	a_color = Desaturation(a_color, pointLighting.desaturation);
+	a_color = Intensity(a_color, pointLighting.intensity);
 }
 
 void Effects11::OverrideAmbientLighting(DirectionalAmbientColors& DirectionalAmbientColors)
