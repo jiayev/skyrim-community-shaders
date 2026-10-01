@@ -213,6 +213,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
 	store.EndSceneFrame();
+	// The roots this frame's scene lists leave out, before Main::Draw queues their build.
+	DCLF::PrimaryCull::Get().PublishListFilter();
 	// The shadow build, behind the placement job (KickPlacements, at the walk's end): kept at BeforeShadowMaps when nothing
 	// it read moved.
 	if (DCLF::ActiveToggles().shadows)
@@ -506,10 +508,15 @@ namespace
 bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 {
 	static_assert(kSkyOcclusion == DCLF::kOcclusionSky && kPrecipitationOcclusion == DCLF::kOcclusionPrecipitation);
-	if (!Running() || !DCLF::SceneStore::OcclusionEnabled(a_map))
+	if (!Running() || !DCLF::SceneStore::OcclusionEnabled(a_map)) {
+		DCLF::PrimaryCull::Get().RestoreSceneLists();
 		return false;
+	}
 	const bool ready = DCLF::IndirectDraws::Get().OcclusionReady(a_map);
 	occlusionNativeFrames[a_map] += ready ? 0 : 1;
+	// The engine draws this map from the scene lists: whole again.
+	if (!ready)
+		DCLF::PrimaryCull::Get().RestoreSceneLists();
 	occlusionWanted |= ready ? 1u << a_map : 0u;
 	return ready;
 }
@@ -533,7 +540,11 @@ void DrawcallLimitFix::DrawOcclusion()
 bool DrawcallLimitFix::OcclusionParityFrame(OcclusionMap a_map)
 {
 	auto& parity = occlusionParity[a_map];
-	return SkyParityEnabled() && !parity.pending && (parity.frames++ % 120) == 60;
+	const bool due = SkyParityEnabled() && !parity.pending && (parity.frames++ % 120) == 60;
+	// The engine's reference map culls the scene lists: whole again.
+	if (due)
+		DCLF::PrimaryCull::Get().RestoreSceneLists();
+	return due;
 }
 
 void DrawcallLimitFix::CopyOcclusion(OcclusionMap a_map, std::uint32_t a_stage)

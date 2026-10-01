@@ -595,7 +595,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, objects, log, changes;
+		org::DeclaredViewToken roots, states, frame, objects, log, changes, visibility;
 	};
 
 	struct FadeStatePrepared
@@ -624,6 +624,7 @@ namespace DCLF::Draws
 			bindings.roots = a_builder.ShaderResource(scene.fadeRoots).View();
 			bindings.states = a_builder.UnorderedAccess(scene.fadeStates).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
+			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
 			bindings.objects = a_builder.ShaderResource(scene.objects).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
 			bindings.changes = a_builder.UnorderedAccess(scene.fadeChanges).View();
@@ -650,6 +651,7 @@ namespace DCLF::Draws
 			constants.rootsIndex = CaptureViewIndex(a_preparation, a_bindings.roots);
 			constants.statesIndex = CaptureViewIndex(a_preparation, a_bindings.states);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
+			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
 			constants.latchIndex = frame->latch->SrvIndex();
@@ -683,21 +685,21 @@ namespace DCLF::Draws
 
 	struct FeedbackBindings
 	{
-		org::ResourceBindingToken source, fadeSource;
-		std::vector<org::ResourceBindingToken> slots, fadeSlots;
+		org::ResourceBindingToken fadeSource;
+		std::vector<org::ResourceBindingToken> fadeSlots;
 	};
 
 	struct FeedbackFrame
 	{
 		int slot = -1;
-		std::uint64_t bytes = 0, fadeBytes = 0;
+		std::uint64_t fadeBytes = 0;
 	};
 
 	/**
-	 * @brief Copies the frustum stamps into the feedback slot the colour commit armed, and reserves the slot's fence
-	 * value on the feedback timeline, which the framework signals after the copy completes (as BasicRenderer's
-	 * CLodStructuralStreamingReadbackCopyPass). No invocation revision: a packet with a reservation is prepared
-	 * every frame. A copy abandoned before submission returns its slot.
+	 * @brief Copies FadeStateCS's changes into the feedback slot the colour commit armed, and reserves the slot's fence value
+	 * on the feedback timeline, which the framework signals after the copy completes (as BasicRenderer's
+	 * CLodStructuralStreamingReadbackCopyPass). No invocation revision: a packet with a reservation is prepared every frame.
+	 * A copy abandoned before submission returns its slot.
 	 */
 	class FeedbackPass final : public org::TypedRenderGraphPass<FeedbackPass, FeedbackFrame, FeedbackBindings>
 	{
@@ -709,10 +711,7 @@ namespace DCLF::Draws
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			FeedbackBindings bindings{};
-			bindings.source = a_builder.CopySource(resources->frustum);
-			for (const auto& slot : resources->feedback->slots)
-				bindings.slots.push_back(a_builder.CopyDestination(slot->staging));
-			// The fade roots' changes (FadeStateCS, in the depth segment), with the stamps.
+			// The fade roots' changes (FadeStateCS, in the depth segment).
 			if (resources->scene->fadeChanges) {
 				bindings.fadeSource = a_builder.CopySource(resources->scene->fadeChanges);
 				for (const auto& slot : resources->feedback->slots)
@@ -740,13 +739,11 @@ namespace DCLF::Draws
 			a_preparation.Reserve(std::make_shared<const org::runtime::ExternalSignalReservation>(feedback->timeline, value, [feedback, index, scene] {
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
 				if (feedback->slots[index]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel)) {
-					feedback->slots[index]->tag.reset();
 					feedback->statAbandoned.fetch_add(1, std::memory_order_relaxed);
 					scene->fadeCopyAbandoned.store(true, std::memory_order_release);
 				}
 			}));
 			prepared.slot = index;
-			prepared.bytes = std::uint64_t(slot.objects) * sizeof(std::uint32_t);
 			// As many changes as both the buffer and the slot hold; the header's count says whether that was all of them.
 			if (slot.fadeStaging && resources->scene->fadeChanges)
 				prepared.fadeBytes = kFadeChangeHeaderBytes + std::uint64_t(std::min(slot.fadeCapacity, resources->scene->fadeChangeCapacity)) * sizeof(FadeChange);
@@ -758,10 +755,8 @@ namespace DCLF::Draws
 
 		static void Record(const FeedbackBindings& a_bindings, const FeedbackFrame& a_frame, org::PassRecordContext& a_recording)
 		{
-			if (a_frame.slot < 0 || !a_frame.bytes)
+			if (a_frame.slot < 0)
 				return;
-			a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.slots[a_frame.slot]).GetHandle(), 0,
-				a_recording.Resolve(a_bindings.source).GetHandle(), 0, a_frame.bytes);
 			if (a_frame.fadeBytes && static_cast<std::size_t>(a_frame.slot) < a_bindings.fadeSlots.size())
 				a_recording.Commands().CopyBufferRegion(a_recording.Resolve(a_bindings.fadeSlots[a_frame.slot]).GetHandle(), 0,
 					a_recording.Resolve(a_bindings.fadeSource).GetHandle(), 0, a_frame.fadeBytes);
@@ -1327,6 +1322,7 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-changes"), a_scene.fadeChanges);
 		}
@@ -1402,9 +1398,6 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
-			if (resources->feedback)
-				for (std::size_t i = 0; i < resources->feedback->slots.size(); ++i)
-					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.feedback{}", i)), resources->feedback->slots[i]->staging);
 			for (const auto& frameBuffer : resources->frameBuffers)
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.frame-buffer.t{}", frameBuffer.textureRegister)), frameBuffer.copy);
 			for (std::uint32_t i = 0; i < resources->targetCount; ++i)

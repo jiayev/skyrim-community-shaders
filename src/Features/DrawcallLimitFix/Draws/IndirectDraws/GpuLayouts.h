@@ -123,7 +123,9 @@ namespace DCLF::Draws
 		std::uint32_t logIndex = 0, logBase = ~0u;
 		// The write-back roots' changes (Records.h, FadeChange): the buffer, its capacity in changes, and 1 to append every
 		// write-back root this frame whether it changed or not (after the buffer grew past an overflow).
-		std::uint32_t changesIndex = 0, changeCapacity = 0, writeAll = 0, padding[3]{};
+		std::uint32_t changesIndex = 0, changeCapacity = 0, writeAll = 0;
+		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
+		std::uint32_t padding[2]{};
 	};
 	static_assert(sizeof(FadeStateConstants) == 64);
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;

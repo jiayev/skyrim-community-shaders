@@ -269,6 +269,21 @@ namespace DCLF
 		fadeRootOwned = std::move(owned);
 	}
 
+	void SceneStore::ReseedFadeRoot(const void* a_node)
+	{
+		const auto it = tables.fadeRootIndex.find(a_node);
+		if (it == tables.fadeRootIndex.end())
+			return;
+		auto& row = tables.fadeRoots[it->second];
+		const std::uint32_t object = row.object;
+		const std::uint32_t kept = row.bits & (kFadeRootOwned | kFadeRootWriteBack);
+		row = FadeState::StaticOf(*static_cast<const RE::NiAVObject*>(a_node));
+		row.object = object;
+		row.generation = ++tables.fadeRootGenerations;
+		row.bits |= kept;
+		++tables.fadeRootsVersion;
+	}
+
 	void SceneStore::ReseedOwnedFadeRoots()
 	{
 		for (const auto& [node, writeBack] : fadeRootOwned)

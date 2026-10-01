@@ -421,6 +421,7 @@ namespace DCLF
 			// Tables::fadeRootsVersion), the GPU's state rows, the frame's inputs (a one-row buffer the depth commit writes once
 			// a frame), and CS_DCLF_FADE_PARITY's log (kFadeLogEntries roots from fadeLogBase, ~0u: none this frame).
 			std::shared_ptr<org::Buffer> fadeRoots, fadeStates, fadeFrameBuffer, fadeLog;
+			std::shared_ptr<org::Buffer> fadeVisibility;  // the main camera's cull test (Records.h, kFadeVisibilityBytes)
 			std::uint32_t fadeRootCapacity = 0;
 			std::uint64_t fadeRootsHeld = ~0ull;
 			std::uint32_t fadeRootCount = 0;
@@ -448,7 +449,7 @@ namespace DCLF
 		 */
 		template <class Uploads>
 		void UploadFadeRoots(const SceneStore::Tables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase, SceneBuffers& a_scene,
-			Uploads& a_uploads)
+			Uploads& a_uploads, const std::vector<std::byte>& a_visibility)
 		{
 			if (!a_scene.fadeState || !a_scene.fadeRoots)
 				return;
@@ -468,6 +469,8 @@ namespace DCLF
 				a_scene.fadeFrameNumber = a_frame;
 				a_scene.fadeFrame = a_inputs;
 				a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
+				if (a_scene.fadeVisibility && a_visibility.size() == kFadeVisibilityBytes)
+					a_uploads(a_scene.fadeVisibility, a_visibility.data(), a_visibility.size(), 0);
 				a_scene.fadeLogBase = a_logBase;
 				// This frame's changes start from none; after an overflow, once the buffer has grown, every write-back root once.
 				static constexpr std::uint32_t kZeroHeader[4]{};
@@ -555,10 +558,10 @@ namespace DCLF
 			// (occlusion aside: the engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
 			std::shared_ptr<org::Buffer> frustum;
 			/**
-			 * @brief The main camera's visibility feedback (dclf-cull-job-elimination.md, "Phase 2"): a ring of readback
-			 * slots the frustum stamps are copied into after the colour segment, a timeline of its own signalled after each
+			 * @brief FadeStateCS's changes, copied back for the write-back roots (dclf-cull-job-elimination.md, "Phase 2"): a
+			 * ring of readback slots they are copied into after the colour segment, a timeline of its own signalled after each
 			 * copy completes, and a consumer that decodes completed slots in fence order. Nothing waits for it, and nothing
-			 * assumes one frame in flight: a frame with no free slot records no copy.
+			 * assumes one frame in flight: a frame with no free slot records no copy (the changes are sent again whole).
 			 */
 			struct Feedback
 			{
@@ -571,16 +574,13 @@ namespace DCLF
 				};
 				struct Slot
 				{
-					std::shared_ptr<org::Buffer> staging;
-					std::uint32_t capacity = 0;  // the objects its staging holds (grown while it is free)
 					// The frame's fade changes (SceneBuffers::fadeChanges, header and all), and the changes it holds.
 					std::shared_ptr<org::Buffer> fadeStaging;
 					std::uint32_t fadeCapacity = 0;
 					std::uint32_t fadeHeld = 0;  // the changes its copy took this time
 					std::atomic<std::uint32_t> state{ Free };
 					std::uint64_t fenceValue = 0;
-					std::uint32_t frame = 0, stamp = 0, objects = 0;
-					std::shared_ptr<void> tag;
+					std::uint32_t frame = 0;
 				};
 				std::vector<std::unique_ptr<Slot>> slots;
 				std::shared_ptr<rhi::TimelinePtr> timeline;
@@ -2113,6 +2113,7 @@ namespace DCLF
 			std::uint64_t membership = 0;
 			std::vector<std::uint8_t> excluded;
 			std::uint32_t excludedCount = 0;
+			std::uint64_t version = 0;  // SunExclusion::version of excluded
 			bool valid = false;
 			std::uint64_t builds = 0, reused = 0;  // since the last report
 			ParityCounter parity;
@@ -2780,35 +2781,28 @@ namespace DCLF
 		std::vector<GpuShadowVolume> shadowVolumes;
 
 		/**
-		 * @brief The colour commit, render thread: arms a free feedback slot for this frame's copy (FeedbackPass),
-		 * with the consumer's tag (PrimaryCull's stood-in entries). A slot armed but never prepared is returned first;
-		 * with no free slot the frame is dropped, never waited for.
+		 * @brief The colour commit, render thread: arms a free feedback slot for this frame's copy of FadeStateCS's changes
+		 * (FeedbackPass). A slot armed but never prepared is returned first; with no free slot the frame is dropped, never
+		 * waited for (the changes are sent again whole).
 		 */
-		void ArmFeedback(Resources& a_resources, std::uint32_t a_frame, std::uint32_t a_objects)
+		void ArmFeedback(Resources& a_resources, std::uint32_t a_frame)
 		{
-			auto tag = PrimaryCull::Get().TakeFeedbackTag();
-			if (!a_resources.feedback || !a_resources.frustum || !tag)
+			if (!a_resources.feedback || !a_resources.scene || !a_resources.scene->fadeChanges)
 				return;
 			auto& feedback = *a_resources.feedback;
 			if (const int stale = feedback.armed.exchange(-1, std::memory_order_acq_rel); stale >= 0) {
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Recording);
-				if (feedback.slots[stale]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel))
-					feedback.slots[stale]->tag.reset();
+				feedback.slots[stale]->state.compare_exchange_strong(expected, Resources::Feedback::Free, std::memory_order_acq_rel);
 			}
 			const auto count = static_cast<std::uint32_t>(feedback.slots.size());
 			for (std::uint32_t i = 0; i < count; ++i) {
 				const std::uint32_t index = (feedback.cursor + i) % count;
 				auto& slot = *feedback.slots[index];
-				if (slot.capacity < a_objects)
-					continue;  // grown once it is free (ReserveObjectBuffers)
 				auto expected = static_cast<std::uint32_t>(Resources::Feedback::Free);
 				if (!slot.state.compare_exchange_strong(expected, Resources::Feedback::Recording, std::memory_order_acq_rel))
 					continue;
 				feedback.cursor = (index + 1) % count;
 				slot.frame = a_frame;
-				slot.stamp = a_frame & 0x0FFFFFFFu;  // BuildDrawsLatch::visibilityStamp
-				slot.objects = a_objects;
-				slot.tag = std::move(tag);
 				slot.fenceValue = 0;
 				feedback.armed.store(static_cast<int>(index), std::memory_order_release);
 				feedback.statArmed.fetch_add(1, std::memory_order_relaxed);
@@ -2855,13 +2849,18 @@ namespace DCLF
 			std::uint32_t frame = 0, base = 0, framesLeft = 0;
 			std::vector<FadeRootStatic> roots;  // the static rows from base, as uploaded that frame
 			FadeFrame inputs{};
+			// An owned root with engine-drawn parts (no write-back): its node after the engine's own OnVisible that frame (the
+			// list jobs have run), which FadeStateCS's update for its members must equal.
+			std::vector<FadeNodeState> nodes;
+			std::vector<std::uint8_t> engine;
 		};
 		std::optional<FadeReadback> fadeReadback;
 		std::uint32_t fadeLogCursor = 0;
 		struct FadeParity
 		{
 			std::uint64_t logs = 0, updates = 0, inView = 0, serviced = 0, exact = 0, rounding = 0, differ = 0;
-			std::string first;
+			std::uint64_t engineChecked = 0, engineExact = 0, engineRounding = 0, engineDiffer = 0;  // the GPU's state against the engine's node
+			std::string first, engineFirst;
 		};
 		FadeParity fadeParity;
 

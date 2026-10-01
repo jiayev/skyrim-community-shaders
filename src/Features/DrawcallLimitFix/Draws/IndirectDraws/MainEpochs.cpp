@@ -185,27 +185,20 @@ namespace DCLF
 			auto expected = static_cast<std::uint32_t>(Resources::Feedback::Submitted);
 			if (!slot.state.compare_exchange_strong(expected, Resources::Feedback::Decoding, std::memory_order_acq_rel))
 				continue;
-			auto resource = slot.staging->GetAPIResource();
-			void* mapped = nullptr;
-			resource.Map(&mapped);
-			if (mapped) {
-				VisibilityFeedbackFrame frame{ slot.frame, slot.stamp, slot.objects, static_cast<const std::uint32_t*>(mapped), slot.tag };
-				void* fadeMapped = nullptr;
-				if (slot.fadeStaging && slot.fadeHeld) {
-					slot.fadeStaging->GetAPIResource().Map(&fadeMapped);
-					if (fadeMapped) {
-						frame.fadeAppended = *static_cast<const std::uint32_t*>(fadeMapped);
-						frame.fadeHeld = slot.fadeHeld;
-						frame.fadeChanges = reinterpret_cast<const FadeChange*>(static_cast<const std::byte*>(fadeMapped) + kFadeChangeHeaderBytes);
-					}
+			VisibilityFeedbackFrame frame{ slot.frame };
+			void* fadeMapped = nullptr;
+			if (slot.fadeStaging && slot.fadeHeld) {
+				slot.fadeStaging->GetAPIResource().Map(&fadeMapped);
+				if (fadeMapped) {
+					frame.fadeAppended = *static_cast<const std::uint32_t*>(fadeMapped);
+					frame.fadeHeld = slot.fadeHeld;
+					frame.fadeChanges = reinterpret_cast<const FadeChange*>(static_cast<const std::byte*>(fadeMapped) + kFadeChangeHeaderBytes);
 				}
-				a_consume(frame);
-				if (fadeMapped)
-					slot.fadeStaging->GetAPIResource().Unmap(0, 0);
-				resource.Unmap(0, 0);
-				++decoded;
 			}
-			slot.tag.reset();
+			a_consume(frame);
+			if (fadeMapped)
+				slot.fadeStaging->GetAPIResource().Unmap(0, 0);
+			++decoded;
 			slot.state.store(Resources::Feedback::Free, std::memory_order_release);
 		}
 		feedback.statDecoded.fetch_add(decoded, std::memory_order_relaxed);

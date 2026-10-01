@@ -117,7 +117,7 @@ namespace DCLF
 			auto& children = loaded->cell3D->GetChildren();
 			for (auto category : kDrawnCategories) {
 				const auto index = static_cast<std::uint16_t>(category);
-				if (index < children.size() && children[index]) {
+				if (index < children.free_idx() && children[index]) {
 					if (auto* node = children[index]->AsNode())
 						current.insert(node);
 				}

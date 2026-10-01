@@ -58,7 +58,7 @@ namespace DCLF
 				return ~0u;
 			}
 			const auto& children = a_parent.GetChildren();
-			for (std::uint16_t i = 0; i < children.size(); ++i)
+			for (std::uint16_t i = 0; i < children.free_idx(); ++i)
 				if (children[i].get() == a_child)
 					return i;
 			a_miss = Miss::NotChild;

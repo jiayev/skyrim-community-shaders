@@ -41,6 +41,8 @@ namespace DCLF
 		std::shared_ptr<const SunCandidates> candidates;
 		std::vector<std::uint8_t> excluded;  // per candidate index
 		std::uint32_t excludedCount = 0;
+		// Changes only when excluded does (a reuse carries its predecessor's): the scene lists' filter compares it.
+		std::uint64_t version = 0;
 		// Per candidate index, the stamp of the full-frustum cull that took the entry out (SunAccumulation's frame
 		// stamp): the registration thunks' test. Written on the render thread, read by the registration jobs.
 		std::unique_ptr<std::atomic<std::uint32_t>[]> removed;
@@ -89,6 +91,8 @@ namespace DCLF
 		 * applies, once. Null: nothing is excluded.
 		 */
 		void PublishExclusion(std::shared_ptr<SunExclusion> a_exclusion) { pendingExclusion = std::move(a_exclusion); }
+		/** @brief Render thread: the exclusion the next full-frustum cull will apply (null: none published). */
+		std::shared_ptr<const SunExclusion> PendingExclusion() const { return pendingExclusion; }
 
 		/**
 		 * @brief Render thread, from the end of the sun's Accumulate to the next full-frustum cull: whether the bound

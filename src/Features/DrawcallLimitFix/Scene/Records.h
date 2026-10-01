@@ -381,6 +381,30 @@ namespace DCLF
 	inline constexpr std::uint32_t kOcclusionPrecipitation = 1;
 
 	/**
+	 * @brief The main camera's cull test, as FadeStateCS repeats it for each root (the list processes' Process1, AE
+	 * 0x140e28390): the process's cull mode and flags, and its compound frustum (BSCompoundFrustum, the portal graph's portals
+	 * and occlusion planes), which Process1 evaluates (BSCompoundFrustum::Process, 0x140e320b0) before it runs the node's
+	 * OnVisible. The compound frustum exists only while a list job culls through it: the first job to see it samples the
+	 * block (PrimaryCull::StandIn), else the render thread does after the jobs; uploaded whole with the depth commit.
+	 *
+	 * Layout (bytes): the header (mode, operator count, plane set count, first operator), then kFadeVisibilityOps operators
+	 * of four words (the engine's 12-byte {type, next if true, next if false}, padded; an operator of type 7 or 8 takes the
+	 * next record's first word as its plane set), then kFadeVisibilitySets plane sets (NiFrustumPlanes: six planes as
+	 * normal and constant, then the active mask).
+	 */
+	inline constexpr std::uint32_t kFadeVisibilityOps = 256;
+	inline constexpr std::uint32_t kFadeVisibilitySets = 64;
+	inline constexpr std::uint32_t kFadeVisibilityOpsOffset = 16;
+	inline constexpr std::uint32_t kFadeVisibilitySetsOffset = kFadeVisibilityOpsOffset + kFadeVisibilityOps * 16;
+	inline constexpr std::uint32_t kFadeVisibilitySetBytes = 112;
+	inline constexpr std::uint32_t kFadeVisibilityBytes = kFadeVisibilitySetsOffset + kFadeVisibilitySets * kFadeVisibilitySetBytes;
+	inline constexpr std::uint32_t kFadeVisibilityValid = 1u << 0;          // sampled this frame (else: the frustum alone)
+	inline constexpr std::uint32_t kFadeVisibilityCompound = 1u << 1;       // the compound frustum applies (cull mode not 3)
+	inline constexpr std::uint32_t kFadeVisibilitySkipView = 1u << 2;       // its skipViewFrustum: the frustum test is not made
+	inline constexpr std::uint32_t kFadeVisibilityIgnorePreprocess = 1u << 3;  // the process's ignorePreprocess, or cull mode 4
+	inline constexpr std::uint32_t kFadeVisibilityCullModeShift = 8;        // the process's cull mode (0-4)
+
+	/**
 	 * @brief Fade roots on the GPU (FadeStateCS.hlsl; drawcall-limit-fix.md, "Fades on the GPU"). A member's fade node is
 	 * a root: one FadeRootStatic row per root (the CPU's, written when the node is listed) and one FadeNodeState row (the
 	 * GPU's, seeded from the static row's `initial` when its generation is new). The pass runs the node's OnVisible for
@@ -434,12 +458,19 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeRootBitsShift = 8;    // +0x109
 	inline constexpr std::uint32_t kFadeRootTreeLod = 1u << 16;     // a tree whose LOD switch selects past child 0 (+0x180's +0x12C)
 	inline constexpr std::uint32_t kFadeRootTreeThresholds = 1u << 17;  // a BSTreeNode: a type-4 node takes the tree LOD thresholds
-	// DCLF services the root's OnVisible (PrimaryCull's admitted, stood-in entries): its members follow the GPU's state. The
-	// engine updates every other root's node itself, and their members keep the distance test (kObjectFadeTest).
+	// FadeStateCS's state is the members' (PrimaryCull's admitted entries): their members follow the GPU's state. The engine
+	// updates every other root's node itself, and their members keep the distance test (kObjectFadeTest).
 	inline constexpr std::uint32_t kFadeRootOwned = 1u << 18;
+	// The node's own flags BSCullingProcess::Process1 (AE 0x140e28390) reads before OnVisible: kAlwaysDraw (bit 11) skips
+	// the bound tests; kPreProcessedNode (bit 12) skips them too unless the process ignores preprocessing, and with bit 20
+	// set the node is then not visited at all.
+	inline constexpr std::uint32_t kFadeRootAlwaysDraw = 1u << 20;
+	inline constexpr std::uint32_t kFadeRootPreprocessed = 1u << 21;
+	inline constexpr std::uint32_t kFadeRootPreprocessHidden = 1u << 22;
 	// An owned root with no engine-drawn part: nothing on the CPU services it, and the engine's other readers of its node (the
 	// other views' culls, GetRenderPasses, DCLF's own classification) take the GPU's state written back (FadeChange). An owned
-	// root with engine-drawn parts keeps the CPU's service of its node (PrimaryCull's decode).
+	// root with engine-drawn parts is culled by the engine, whose OnVisible updates its node; FadeStateCS runs the same update for
+	// its DCLF members (CS_DCLF_FADE_PARITY compares the two).
 	inline constexpr std::uint32_t kFadeRootWriteBack = 1u << 19;
 
 	/**

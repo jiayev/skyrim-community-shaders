@@ -12,6 +12,7 @@
 
 #include <ankerl/unordered_dense.h>
 
+#include "Features/DrawcallLimitFix/Common/EventQueue.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
@@ -35,15 +36,17 @@ namespace DCLF
 	 * The cut (toggle `excludePrimaryEntries`, CS_DCLF_PRIMARY_EXCLUDE): the list processes' Process1 (vtable slot 0x16,
 	 * shared with every other list process, so filtered by process) stands in for the cull of every eligible entry, on
 	 * the list job's own thread. For an admitted, settled entry in view (the job's own planes) it:
-	 *   - leaves the root's OnVisible update to the visibility feedback (ConsumeFeedback: the fade, a leaf node's LOD
-	 *     step, a tree's LOD fix-up and the visibility bit the tree clock reads), and tests a tree's height;
+	 *   - leaves the root's OnVisible update to FadeStateCS (the fade, a leaf node's LOD step, a tree's LOD fix-up), written
+	 *     back onto the node, and tests a tree's height;
 	 *   - does nothing for its geometries bound by scene membership (SceneStore::IsMember): their records are drawn
 	 *     whenever the GPU finds them;
 	 *   - hands every other geometry in view to the engine's registration as the cull would (the process's
 	 *     AppendVirtual, in the traversal's order): decals, effects and blended objects, and a DCLF geometry not bound yet.
 	 * Switch nodes are followed by event (a member is drawn while every switch above it selects its path: memberLive,
 	 * updated from SceneStore's switch events, which also bring a newly selected child up to date), and a root that is
-	 * fading or cross-fading LOD leaves the entry to the engine's Process1 that frame. An entry is eligible when its nodes are plain (NiNode, BSMultiBoundNode, switch
+	 * fading or cross-fading LOD leaves the entry to the engine's Process1 that frame. An entry with engine-drawn parts
+	 * (Cut::mixed) is the engine's Process1's whole: its OnVisible updates the node the engine's draws read, the AppendVirtual
+	 * hook keeps DCLF's members from the registration, and FadeStateCS runs the same update for those members. An entry is eligible when its nodes are plain (NiNode, BSMultiBoundNode, switch
 	 * nodes; a fade, leaf or tree root) and its geometries use BSGeometry's OnVisible, with at least one DCLF draws;
 	 * it is admitted once the colour epoch has drawn all of those (Admit). After the jobs the render thread only
 	 * gathers the jobs' output and clears the activeLightMask of what DCLF draws, as the main registration would.
@@ -96,13 +99,10 @@ namespace DCLF
 		 * (NiCamera +0x184), for BuildDraws' fade test (kObjectFadeTest). Zero when the cut did not see a camera.
 		 */
 		std::array<float, 4> FadeEye() const { return fadeEye; }
+		/** @brief The main camera's cull test for FadeStateCS this frame (Records.h, kFadeVisibilityBytes), sampled after the list jobs. */
+		const std::vector<std::byte>& FadeVisibility() const { return fadeVisibility; }
 		/** @brief BSTreeNode::OnVisible's height test this frame, for BuildDraws (kObjectHeightTest): the base and the limit (+infinity: off). */
 		std::array<float, 2> TreeHeightTest() const { return treeHeight; }
-		/**
-		 * @brief The colour commit, render thread (IndirectDraws::ArmFeedback): this frame's stood-in entries, carried
-		 * with the frame's feedback copy to its decode. Null when the cut did not apply this frame.
-		 */
-		std::shared_ptr<void> TakeFeedbackTag() { return std::exchange(pendingTag, {}); }
 		/**
 		 * @brief The main pass GetRenderPasses would register for the geometry this frame, built without it: the
 		 * derived pass descriptor with the sun's bits, the batch list, the accumulation hint and the LOD row. False for
@@ -144,7 +144,56 @@ namespace DCLF
 		bool Owned(const RE::BSGeometry& a_geometry) const;
 		void Report(std::uint32_t a_frame, std::uint32_t a_interval);
 		/** @brief At Present, render thread: a finished feedback decode's results are applied (polled, never waited for). */
-		void EndFrame() { PollFeedback(); }
+		void EndFrame()
+		{
+			PollFeedback();
+			listFilter.store(nullptr, std::memory_order_release);
+			listMode.store(ListMode::Engine, std::memory_order_release);
+			// Roots the build's job let go of: released here, where the engine unloads (one may hold a detached cell's last
+			// reference).
+			listGraveyard.clear();
+		}
+
+		/**
+		 * @brief Render thread, at the scene phase's end (before Main::Draw queues DrawWorld_BuildSceneLists): this frame's
+		 * scene lists (Engine/SceneLists.cpp; drawcall-limit-fix.md, "The scene lists without DCLF's roots").
+		 *
+		 * The roots they leave out (CS_DCLF_LIST_FILTER): an entry admitted with nothing for the registration (no engine-drawn
+		 * part, every member bound: Cut::walk clear) that the exclusion this frame's full-frustum cull applies takes out of
+		 * the sun's cascades, while DCLF draws both occlusion maps. Then the main camera's list jobs (the stand-in's lookup)
+		 * and the sun's full-frustum cull never see it.
+		 *
+		 * How they are made: the object root's part (every cell's roots, and its two whole entries) kept from the last frame
+		 * where nothing it reads moved (ListMode::Keep), built by DCLF where something did (Rebuild), or the engine's own build,
+		 * filtered, in an interior or on a parity frame (Engine). In the first two the engine's build still runs and adds what
+		 * follows the camera (a portal graph's rooms and occlusion planes) and the extra list, but skips the object root
+		 * (ObjectRootAsNode). Kept lists hold hidden roots too: every scene list's cull skips them (the list cull's own flag,
+		 * CullList), and a hidden cell or category node, a structure change under them (NoteListStructure) or a new filter
+		 * rebuilds them.
+		 */
+		void PublishListFilter();
+		/** @brief This frame's scene lists leave DCLF's roots out (render thread, after BuildSceneLists' job). */
+		bool ListsFiltered() const { return listsFiltered.load(std::memory_order_acquire); }
+		/**
+		 * @brief Render thread: an occlusion map the engine draws this frame (DCLF's not ready), whose Precipitation::SetupMask
+		 * culls the lists: the roots this frame's filter left out are put back into them first (one map that frame needs
+		 * them; nothing reads the lists between the list jobs and ClearLists but the occlusion maps).
+		 */
+		void RestoreSceneLists();
+		/**
+		 * @brief Any thread, from the attach and detach detours (SceneTracker): a_child attached to a_parent (after the attach)
+		 * or about to be detached from it. A root under a category node is applied to the kept lists by the next build
+		 * (listEvents); anything higher (a category node under a cell, a cell under the object root) rebuilds them.
+		 */
+		void NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached);
+		/** @brief Render thread, SceneStore's hidden events: a hidden bit written on a structure node rebuilds the kept lists. */
+		void NoteHiddenKey(const void* a_key)
+		{
+			if (listStructural.contains(a_key)) {
+				listStructure.fetch_add(1, std::memory_order_relaxed);
+				listStats.structureBy[3].fetch_add(1, std::memory_order_relaxed);
+			}
+		}
 
 	private:
 		struct Cut;
@@ -186,6 +235,115 @@ namespace DCLF
 
 		/** @brief After the full-frustum cull, render thread: the census of the lists. */
 		void AfterFullFrustum();
+		/** @brief The scene lists' hooks (SceneLists.cpp). */
+		struct ListHooks;
+		friend struct ListHooks;
+		void InstallSceneLists();
+		/** @brief The report's scene lists line (a_checked, a_missed: the dry runs' stand-in counts). */
+		void ReportSceneLists(std::uint64_t a_checked, std::uint64_t a_missed);
+		enum class ListMode : std::uint8_t
+		{
+			Engine,   // the engine builds and ClearLists clears them; the filter takes DCLF's roots out after the build
+			Rebuild,  // DCLF builds them: the structure, a hidden structure node, the filter or the build's globals moved
+			Keep,     // as the last frame left them
+		};
+		/** @brief The roots the scene lists leave out (PublishListFilter), for one snapshot. Immutable once published. */
+		struct ListFilter
+		{
+			std::shared_ptr<const SunCandidates> candidates;
+			ankerl::unordered_dense::set<const RE::NiAVObject*> roots;
+		};
+		/** @brief The current filter (render thread): listFilterBuilt again while no entry's verdict moved. */
+		std::shared_ptr<const ListFilter> CurrentListFilter();
+		/**
+		 * @brief The engine's build walks the object root alike every frame in the exterior branch (an interior's follows the
+		 * camera): its preconditions, and the globals it reads, as a witness.
+		 */
+		bool ListsKeepable(std::uint64_t& a_witness);
+		/** @brief The build's job: DCLF's build of the object root's part, less the filter's roots, hidden roots included. */
+		void RebuildSceneLists(const ListFilter* a_filter);
+		/**
+		 * @brief The object root's roots, as RebuildSceneLists and the parity enumerate them: a_list(root, a_first) (a_first:
+		 * object root children 0 and 1, which go to list 0), a_structural(node) for the nodes whose hidden bit or children decide
+		 * which roots those are. Hidden roots are included.
+		 */
+		template <class List, class Structural>
+		static void EnumerateSceneLists(const RE::NiAVObject* a_objectRoot, bool a_skipCategory2, List&& a_list, Structural&& a_structural);
+		/** @brief The build's job, Rebuild and Keep: what the engine's build does on the object root besides the lists (kAccumulated). */
+		void ListUpkeep();
+		/** @brief The build's job, a parity frame: the engine's lists against DCLF's enumeration (hidden roots aside). */
+		void CheckSceneLists();
+		/** @brief DrawWorld_BuildSceneLists' job, after the engine's build: the published roots taken out of the lists. */
+		void FilterSceneLists();
+		/** @brief Whether a_list is one of the scene lists (a_extra: or the extra list). */
+		static bool IsSceneList(const void* a_list, bool a_extra);
+
+		std::atomic<ListMode> listMode{ ListMode::Engine };          // this frame's, until Present; read by the list jobs' hooks
+		std::atomic<std::shared_ptr<const ListFilter>> listFilter;  // this frame's, until Present; read by the build's job
+		std::shared_ptr<const ListFilter> listFilterBuilt;          // the last built, published again while nothing moved
+		std::shared_ptr<const ListFilter> listFilterKept;           // the one the kept lists leave out (the build's job writes)
+		std::shared_ptr<const ListFilter> parityFilter;             // a parity frame's dry run, read by the list jobs
+		std::vector<std::uint8_t> listRemovable;                    // per entry index: in listFilterBuilt
+		std::uint64_t filterCutVersion = ~0ull, filterExclusionVersion = ~0ull;  // what listFilterBuilt was made from
+		std::uint64_t cutVersion = 0;                               // bumped when an entry's admission or walk changes
+		std::vector<std::uint8_t> filterScratch;                    // the build's job
+		std::atomic<bool> listsFiltered{ false };
+		std::atomic<bool> listsDirty{ true };                       // the lists are not DCLF's build (the engine's, or restored)
+		std::atomic<std::uint32_t> listStructure{ 0 };              // NoteListStructure, NoteHiddenKey
+		std::uint32_t listStructureBuilt = ~0u;                     // the build's job writes, the render thread reads after Finish
+		std::uint64_t listWitness = 0, listWitnessBuilt = ~0ull;
+		bool listParity = false;                                    // this frame's engine build is checked (CheckSceneLists)
+		// The structure nodes of the last build (the build's job writes, the render thread reads between frames), and the
+		// pointers the detours compare with (any thread).
+		ankerl::unordered_dense::set<const void*> listStructural;
+		std::atomic<const RE::NiAVObject*> listObjectRoot{ nullptr };
+		std::atomic<const RE::NiAVObject*> listWholeEntries[2]{ nullptr, nullptr };
+		// Each list's first entry: an empty node, never hidden, so each cull's Process2 sets its frustum up.
+		std::array<RE::NiPointer<RE::NiNode>, 16> listSentinels;
+		std::array<std::uint32_t, 16> listKeptSize{};  // each list's kept part (the build's job); the engine's per-frame entries follow
+		bool skipObjectRoot = false;                   // the build's job: ObjectRootAsNode returns null
+		/** @brief A root attached under or detached from a category node, in event order. */
+		struct ListEvent
+		{
+			RE::NiPointer<RE::NiAVObject> held;  // an attach's root, kept alive until applied (then released at Present)
+			const RE::NiAVObject* child = nullptr;
+			const RE::NiAVObject* parent = nullptr;
+			bool attached = false;
+		};
+		EventQueue<ListEvent> listEvents;
+		/** @brief The build's job, Keep: the queued roots onto the kept lists. False when one needs a rebuild. */
+		bool ApplyListEvents(const ListFilter* a_filter);
+		/** @brief The build's job, Rebuild and Engine: the queued events, dropped (the build reads the structure as it is now). */
+		void DropListEvents();
+		// The build's job: the kept lists' listed category nodes (their child index under the cell), and each root's place.
+		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint16_t> listCategories;
+		ankerl::unordered_dense::map<const RE::NiAVObject*, std::pair<std::uint32_t, std::uint32_t>> listPositions;
+		std::uint32_t listNext = 0;  // the round robin's next list
+		std::vector<RE::NiPointer<RE::NiAVObject>> listGraveyard;  // the build's job fills, Present releases
+		/** @brief The build's job: the scene lists emptied, their references kept for Present (listGraveyard). */
+		void BuryLists();
+		bool listsKeepInstalled = false;               // the object root's call site was found and patched
+		struct ListStats
+		{
+			std::uint64_t frames = 0, published = 0, built = 0, dryRuns = 0;
+			std::uint64_t notToggled = 0, notCurrent = 0, noExclusion = 0, noOcclusion = 0, decalOrder = 0;
+			std::uint64_t restored = 0;           // frames an occlusion map the engine drew put the left-out roots back
+			std::uint64_t unexcluded = 0;         // must be 0: filtered lists, and the full-frustum cull applied no exclusion
+			std::uint64_t lostWhileOut = 0;       // a member's binding lost while its root was out of the lists
+			std::uint64_t engineFrames = 0, notKeepable = 0;  // the engine built them, and of those for want of the exterior branch
+			// Why not keepable: no hidden events, no scene or processes, not unbound space (or no entry), an interior, too few scene children.
+			std::array<std::uint64_t, 5> notKeepableBy{};
+			std::atomic<std::uint64_t> filtered{ 0 }, entries{ 0 }, removed{ 0 };  // the build's job
+			std::atomic<std::uint64_t> kept{ 0 }, rebuilt{ 0 }, lateRebuilds{ 0 }, rebuildTicks{ 0 }, rebuildEntries{ 0 };
+			std::atomic<std::uint64_t> parityChecks{ 0 }, parityMissing{ 0 }, parityExtra{ 0 };  // missing: the engine's not in DCLF's; extra: DCLF's, not hidden, not the engine's
+			std::uint64_t rebuildStructure = 0, rebuildFilter = 0, rebuildWitness = 0, rebuildDirty = 0;
+			// The events that rebuild them: a child of the object root, of a cell (a category node), of a category node (a root)
+			// attached or detached; a structure node's hidden bit written.
+			std::array<std::atomic<std::uint64_t>, 4> structureBy{};
+			std::atomic<std::uint64_t> eventsApplied{ 0 }, eventsAdded{ 0 }, eventsRemoved{ 0 }, eventsRebuilt{ 0 };  // the build's job
+			std::string parityFirst;  // the build's job, read after Finish
+		};
+		ListStats listStats;
 		/** @brief After the list jobs' Finish, render thread. */
 		void AfterListJobs();
 
@@ -233,33 +391,16 @@ namespace DCLF
 		/** @brief The entry's plan; its members are appended to cut.members (not for a rejected entry). */
 		EntryPlan PlanOf(std::uint32_t a_entry, const RE::NiAVObject* a_root);
 		std::uintptr_t geometryOnVisible = 0;  // BSGeometry's OnVisible (vtable slot 0x34): a member's must be it
-		/**
-		 * @brief BSFadeNode::OnVisible (AE 0x141479f50) and BSLeafAnimNode::OnVisible (0x14147c9c0) for the main camera,
-		 * without the recursion: the fade and LOD state the engine's cull would have updated. Returns whether OnVisible
-		 * would have gone on into the children (false once the node has faded out).
-		 */
-		static bool ServiceFade(RE::NiAVObject* a_node, bool a_leaf, const RE::NiCamera& a_camera);
 		/** @brief BSTreeNode::OnVisible's height test: true when the tree is above the limit (not drawn, not updated). */
 		static bool TreeAboveLimit(const RE::NiAVObject* a_node, const RE::NiCullingProcess& a_process);
-		/** @brief BSTreeNode::OnVisible past its height test: the leaf update and the LOD fix-up. */
-		static bool ServiceTreeState(RE::NiAVObject* a_node, const RE::NiCamera& a_camera);
-		/** @brief The decode (worker): one frame's feedback, applied to the entries stood in for in that frame. */
-		void ConsumeFeedback(std::uint32_t a_stamp, std::uint32_t a_objects, const std::uint32_t* a_words, const std::shared_ptr<void>& a_tag);
 		/** @brief The decode (worker): one frame's fade changes, kept for ApplyFadeChanges (an overflow noted). */
 		void TakeFadeChanges(std::uint32_t a_appended, std::uint32_t a_held, const FadeChange* a_changes);
 		/**
 		 * @brief Render thread, while nothing reads the fade nodes (after the full-frustum cull, at Present): a finished decode's
-		 * results onto the nodes (its service of the mixed roots, FadeStateCS's changes for the write-back roots). One still
-		 * running is left for the next poll: nothing waits, and no decode is kicked while one is out.
+		 * FadeStateCS changes onto the write-back roots' nodes. One still running is left for the next poll: nothing waits, and
+		 * no decode is kicked while one is out.
 		 */
 		void PollFeedback();
-		/** @brief The decode (worker): a mixed root's service, run on a copy of its node; the state is applied by PollFeedback. */
-		struct ServiceWrite
-		{
-			RE::NiAVObject* root = nullptr;  // held by its frame's tag until applied
-			FadeNodeState state;
-		};
-		std::vector<ServiceWrite> serviceWrites;
 		std::atomic<bool> decodeReady{ false };  // the decode job's last store: its results may be applied
 		/** @brief Render thread, after the full-frustum cull: this frame's preconditions, and a new snapshot's plans. */
 		void PrepareFrame();
@@ -295,7 +436,7 @@ namespace DCLF
 			std::vector<const RE::NiSwitchNode*> switches;
 			std::vector<std::uint32_t> memberOffsets;  // per candidate entry index: its geometries in members, in the cull's order
 			std::vector<Member> members;
-			std::vector<std::int32_t> memberObject;    // per member: its object index in the tables (-1: none), for the feedback
+			std::vector<std::int32_t> memberObject;    // per member: its object index in the tables (-1: none)
 			// Per member: every switch above it selects its path. Read from the switches for a new snapshot, then kept by
 			// the switch events (SceneStore::TakeSwitchChanges) for the entries they name (switchEntry).
 			std::vector<std::uint8_t> memberLive;
@@ -307,10 +448,6 @@ namespace DCLF
 			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> eligible;  // root -> entry index, plan not Rejected
 			std::vector<std::uint8_t> admitted;               // per entry index: DCLF has drawn all of it (see the class)
 			std::vector<std::uint8_t> mixed;                  // per entry index: some member is the engine's (drawn from the node)
-			// Per entry index: the decode services its root (an admitted fade entry with engine-drawn parts, whose node the engine
-			// reads in its own draws). A fade entry without is written back from FadeStateCS (kFadeRootWriteBack), and a plain
-			// one needs nothing (kAccumulated has one reader, the tree clock). Written by SyncFadeOwnership between the jobs.
-			std::vector<std::uint8_t> decode;
 			// Per entry index: the stand-in walks it (its bound test and its members): it has engine-drawn members to hand to
 			// the registration, or a member shown but not bound (handed over until it is). Any other admitted entry is left
 			// to the GPU whole. Kept by events (RefreshWalk): a new snapshot, a member's binding lost (NoteMemberLost, then
@@ -332,11 +469,12 @@ namespace DCLF
 		{
 			std::vector<const RE::BSGeometry*> visible;
 			std::vector<std::uint32_t> pending;
-			std::vector<std::uint32_t> stoodIn;  // entries the job left to DCLF this frame, in view or not
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0, walked = 0, walkMissed = 0;
 			std::uint64_t hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
 			std::uint64_t unbound = 0;                      // DCLF geometries in view not bound yet, handed to the engine
 			std::uint64_t excluded = 0;                     // owned geometries the engine's cull reached, not handed to its registration
+			std::uint64_t filterChecked = 0, filterMissed = 0;  // a parity frame's dry run: roots it would leave out, and the stand-in's disagreements
+			std::uint64_t mixed = 0;                        // admitted entries with engine-drawn parts, culled by the engine
 		};
 		std::array<JobOut, 16> jobOut;
 
@@ -353,6 +491,8 @@ namespace DCLF
 			std::uint64_t walkMissed = 0;  // CS_DCLF_PERSISTENT_PARITY: geometries handed to the registration from entries Cut::walk leaves  // CS_DCLF_PERSISTENT_PARITY: owned members in view, and their masks not 0
 			std::uint64_t excluded = 0;     // owned geometries the engine's own cull reached and did not register (leaf exclusion)
 			std::uint64_t holes = 0;
+			std::uint64_t filterChecked = 0, filterMissed = 0;
+			std::uint64_t mixed = 0;
 			std::uint64_t engineMembers = 0;  // the engine's members in view, handed to its registration
 			std::uint64_t switchStale = 0;    // entries the engine culled this frame because a switch's selected child was out of date
 			std::uint64_t unselected = 0;     // members under an unselected switch child
@@ -370,29 +510,22 @@ namespace DCLF
 		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSGeometry*>> frameClaims;  // the claims, for Owned (PrepareFrame)
 		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in PrepareFrame
+		std::vector<std::byte> fadeVisibility;  // FadeVisibility: by the first list job with a compound frustum, else AfterListJobs
+		std::atomic<bool> visibilitySampled{ false };
+		std::uint64_t visibilityOverflows = 0;  // frames whose compound frustum outgrew the block (the frustum alone that frame)
+		/** @brief A list job (the first with a compound frustum), else AfterListJobs: the list processes' cull test into fadeVisibility. */
+		void SampleFadeVisibility(const RE::NiCullingProcess* a_process);
 		std::uint64_t frameCounter = 0;
 		std::uint32_t fadePortCursor = 0;  // CheckFadePort's next entry
 		FadeState::PortCheck fadePort;      // its counts since the report
 		bool standInLive = false;        // this frame's snapshot is current: the stand-in runs
 		bool liveStale = true;                             // a frame skipped the switch changes: memberLive is read again
 		std::shared_ptr<void> feedbackJob;                 // the worker's feedback decode (an AsyncWorker::JobHandle)
-		std::shared_ptr<void> pendingTag;                  // this frame's stood-in entries, until the colour commit takes them
-		/** @brief A feedback frame's tag: the entries stood in for, and the snapshot their indices belong to. */
-		struct FeedbackTag
-		{
-			std::shared_ptr<const SunCandidates> candidates;
-			std::vector<std::uint32_t> stoodIn;
-			// The stood-in entries' roots, held: the decode touches them a frame or more later, when a cell unload may
-			// have freed what the snapshot names. Taken while the list jobs had just traversed them (alive), released on
-			// the render thread (retiredTags), never on the worker.
-			std::vector<RE::NiPointer<RE::NiAVObject>> roots;
-		};
-		std::vector<std::uint32_t> stoodInScratch;
 		// The fade roots DCLF services (SyncFadeOwnership: the admitted entries' with a fade plan), and whether a frame since
 		// the last applied one left every entry to the engine (their nodes are then seeded again).
 		std::vector<const RE::NiAVObject*> ownedFadeRoots;
 		bool fadeSkipped = false;
-		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries, and the entries the decode services. */
+		/** @brief SceneStore::SetFadeRootsOwned from the current snapshot's admitted fade entries. */
 		void SyncFadeOwnership();
 		/** @brief Cut::walk of entry a_e, from its members now (render thread, between the jobs). */
 		void RefreshWalk(std::uint32_t a_e);
@@ -404,13 +537,6 @@ namespace DCLF
 		std::uint64_t fadeChangesApplied = 0;
 		/** @brief After a join, render thread: the decoded frames' fade changes onto the write-back roots' nodes. */
 		void ApplyFadeChanges();
-		std::vector<std::shared_ptr<void>> retiredTags;  // decoded frames' tags: the worker appends, the render thread clears after the join
-		/** @brief The decode's counters (worker), read and reset by the report. */
-		struct FeedbackCounters
-		{
-			std::atomic<std::uint64_t> frames{ 0 }, stale{ 0 }, entries{ 0 }, visible{ 0 }, serviced{ 0 }, unresolved{ 0 }, fadedOut{ 0 };
-		};
-		FeedbackCounters feedbackCounters;
 
 		/** @brief The derived pass descriptor per geometry, recomputed when what it reads changes. */
 		struct DerivedEntry

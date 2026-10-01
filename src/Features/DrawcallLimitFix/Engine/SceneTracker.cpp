@@ -1,5 +1,7 @@
 #include "SceneTracker.h"
 
+#include "PrimaryCull.h"
+
 namespace DCLF
 {
 	namespace
@@ -16,7 +18,7 @@ namespace DCLF
 		RE::NiAVObject* ChildAt(RE::NiNode* a_node, std::uint32_t a_index)
 		{
 			auto& children = a_node->GetChildren();
-			return a_index < children.size() ? children[static_cast<std::uint16_t>(a_index)].get() : nullptr;
+			return a_index < children.free_idx() ? children[static_cast<std::uint16_t>(a_index)].get() : nullptr;
 		}
 
 		struct AttachChild
@@ -24,6 +26,7 @@ namespace DCLF
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
 			{
 				func(a_this, a_child, a_firstAvail);
+				PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
 				SceneTracker::Get().PushAttached(a_child);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -33,6 +36,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
+				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
 				SceneTracker::Get().PushDetached(a_child);
 				func(a_this, a_child, a_out);
 			}
@@ -43,6 +47,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
 			{
+				PrimaryCull::Get().NoteListStructure(a_this, a_child, false);
 				SceneTracker::Get().PushDetached(a_child);
 				func(a_this, a_child);
 			}
@@ -53,6 +58,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
+				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
 				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
 				func(a_this, a_index, a_out);
 			}
@@ -63,6 +69,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
 			{
+				PrimaryCull::Get().NoteListStructure(a_this, ChildAt(a_this, a_index), false);
 				SceneTracker::Get().PushDetached(ChildAt(a_this, a_index));
 				func(a_this, a_index);
 			}
@@ -74,9 +81,13 @@ namespace DCLF
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 			{
 				auto* previous = ChildAt(a_this, a_index);
-				if (previous != a_child)
+				if (previous != a_child) {
+					PrimaryCull::Get().NoteListStructure(a_this, previous, false);
 					SceneTracker::Get().PushDetached(previous);
+				}
 				func(a_this, a_index, a_child, a_out);
+				if (previous != a_child)
+					PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
 				SceneTracker::Get().PushAttached(a_child);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
@@ -87,9 +98,13 @@ namespace DCLF
 			static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
 			{
 				auto* previous = ChildAt(a_this, a_index);
-				if (previous != a_child)
+				if (previous != a_child) {
+					PrimaryCull::Get().NoteListStructure(a_this, previous, false);
 					SceneTracker::Get().PushDetached(previous);
+				}
 				func(a_this, a_index, a_child);
+				if (previous != a_child)
+					PrimaryCull::Get().NoteListStructure(a_this, a_child, true);
 				SceneTracker::Get().PushAttached(a_child);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;

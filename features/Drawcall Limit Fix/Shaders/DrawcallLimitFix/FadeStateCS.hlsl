@@ -23,7 +23,7 @@ cbuffer FadeStateConstants : register(b0)
 	uint ChangesIndex;
 	uint ChangeCapacity;
 	uint WriteAll;
-	uint Padding0;
+	uint VisibilityIndex;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 	uint Padding1;
 	uint Padding2;
 }
@@ -124,6 +124,7 @@ static const uint kFadeRootWriteBack = 1u << 19;
 static const uint kFadeChangeHeaderBytes = 16;
 static const uint kFadeChangeBytes = 64;
 static const uint kObjectFadeNodeRow = 13;
+static const uint kObjectSunEntryRow = 15;
 static const uint kNoObject = 0xFFFFFFFFu;
 
 static FadeFrame F;
@@ -378,6 +379,88 @@ bool InView(float3 a_centre, float a_radius)
 	return true;
 }
 
+// The main camera's cull test for the root, as the list processes' Process1 (AE 0x140e28390) makes it before the node's
+// OnVisible: the node's always-draw and preprocessed flags, the process's cull mode, and with a compound frustum (the portal
+// graph's portals and occlusion planes) BSCompoundFrustum::Process (0x140e320b0) after the view test. Records.h,
+// kFadeVisibility*, has the block's layout; PrimaryCull::SampleFadeVisibility fills it.
+static const uint kFadeRootAlwaysDraw = 1u << 20;
+static const uint kFadeRootPreprocessed = 1u << 21;
+static const uint kFadeRootPreprocessHidden = 1u << 22;
+static const uint kFadeVisibilityValid = 1u << 0;
+static const uint kFadeVisibilityCompound = 1u << 1;
+static const uint kFadeVisibilitySkipView = 1u << 2;
+static const uint kFadeVisibilityIgnorePreprocess = 1u << 3;
+static const uint kFadeVisibilityOpsOffset = 16;
+static const uint kFadeVisibilitySetsOffset = 16 + 256 * 16;
+static const uint kFadeVisibilitySetBytes = 112;
+
+// BSCompoundFrustum::Process: the operator program from its first operator. Type 2 accepts and 3 rejects; type 7 passes
+// unless the bound is wholly outside an active plane of its set; type 8 passes unless the bound is wholly inside every
+// active plane of its set; either goes to its record's next-if-true or next-if-false. The planes the engine deactivates
+// as it goes (a bound wholly inside one) change no outcome within one call.
+bool CompoundVisible(ByteAddressBuffer a_block, uint4 a_header, float3 a_centre, float a_radius)
+{
+	uint op = a_header.w;
+	[loop] for (uint step = 0; step < 512u; ++step) {
+		if (op >= a_header.y)
+			return true;
+		const uint3 record = a_block.Load3(kFadeVisibilityOpsOffset + op * 16u);
+		if (record.x == 2u)
+			return true;
+		if (record.x == 3u)
+			return false;
+		bool result = false;
+		if (record.x == 7u || record.x == 8u) {
+			const uint set = op + 1u < a_header.y ? a_block.Load(kFadeVisibilityOpsOffset + (op + 1u) * 16u) : 0xFFFFFFFFu;
+			if (set >= a_header.z)
+				return true;
+			const uint base = kFadeVisibilitySetsOffset + set * kFadeVisibilitySetBytes;
+			const uint mask = a_block.Load(base + 96u);
+			if (mask == 0u) {
+				result = record.x == 7u;
+			} else {
+				uint p = 0;
+				[loop] for (; p < 6u; ++p) {
+					if ((mask & (1u << p)) == 0u)
+						continue;
+					const float4 plane = asfloat(a_block.Load4(base + p * 16u));
+					// The engine's order: y, then x, then z, less the constant.
+					const float d = ((plane.y * a_centre.y + plane.x * a_centre.x) + a_centre.z * plane.z) - plane.w;
+					if (d <= -a_radius)
+						break;
+					if (record.x == 8u && d < a_radius)
+						break;
+				}
+				result = record.x == 7u ? p == 6u : p != 6u;
+			}
+		}
+		op = result ? record.y : record.z;
+	}
+	return true;
+}
+
+bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
+{
+	if (VisibilityIndex == 0)
+		return InView(a_centre, a_radius);
+	ByteAddressBuffer block = ResourceDescriptorHeap[VisibilityIndex];
+	const uint4 header = block.Load4(0);
+	if ((header.x & kFadeVisibilityValid) == 0u)
+		return InView(a_centre, a_radius);
+	if (a_radius == 0.0f && (a_rootBits & kFadeRootAlwaysDraw) == 0u)
+		return false;
+	const uint cullMode = (header.x >> 8) & 0xFFu;
+	if (cullMode == 2u)
+		return false;
+	if (cullMode == 1u || (a_rootBits & kFadeRootAlwaysDraw) != 0u)
+		return true;
+	if ((a_rootBits & kFadeRootPreprocessed) != 0u && (header.x & kFadeVisibilityIgnorePreprocess) == 0u)
+		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
+	if ((header.x & kFadeVisibilityCompound) != 0u)
+		return ((header.x & kFadeVisibilitySkipView) != 0u || InView(a_centre, a_radius)) && CompoundVisible(block, header, a_centre, a_radius);
+	return InView(a_centre, a_radius);
+}
+
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	const uint index = dispatchID.x;
@@ -403,8 +486,12 @@ bool InView(float3 a_centre, float a_radius)
 	const FadeNodeState before = state;
 	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
 	const float3 centre = objects[root.Object].Rows[kObjectFadeNodeRow].xyz;
+	// The bound's radius as the engine reads it now: the member's sun entry node is its reference root, which is the fade
+	// root (the record's row 15, kept by the placements; a negative or unbounded radius: none, the listed radius instead).
+	const float entryRadius = objects[root.Object].Rows[kObjectSunEntryRow].w;
+	const float radius = entryRadius >= 0.0f && entryRadius < 1e30f ? entryRadius : root.Radius;
 	state.Verdict = 0;
-	if (InView(centre, root.Radius))
+	if (EngineInView(centre, radius, root.Bits))
 		state.Verdict = OnVisible(state, root, centre);
 	state.Frame = Frame;
 	states[index] = state;

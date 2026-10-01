@@ -62,18 +62,12 @@ namespace DCLF
 		bool DrewLastFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const;
 
 		/**
-		 * @brief One frame of the main camera's visibility feedback, decoded: per object in that frame's tables, the
-		 * stamp of the last frame its bound was inside the frustum (BuildDraws' depth phase 1). The object was in view
-		 * in this frame when its word equals `stamp`. The tag is what the consumer attached when the frame was armed.
+		 * @brief One frame's copy of FadeStateCS's changes (Records.h, FadeChange), the one thing the GPU's frame hands back to
+		 * the CPU: the header's count of appends, and the changes copied.
 		 */
 		struct VisibilityFeedbackFrame
 		{
 			std::uint32_t frame = 0;
-			std::uint32_t stamp = 0;
-			std::uint32_t objects = 0;
-			const std::uint32_t* words = nullptr;
-			std::shared_ptr<void> tag;
-			// FadeStateCS's changes that frame (Records.h, FadeChange): the header's count of appends, and the changes copied.
 			std::uint32_t fadeAppended = 0, fadeHeld = 0;
 			const FadeChange* fadeChanges = nullptr;
 		};
