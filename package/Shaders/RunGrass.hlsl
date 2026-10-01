@@ -950,7 +950,7 @@ PS_OUTPUT main(PS_INPUT input)
 	float4 shadowColor = TexShadowMaskSampler.Load(int3(input.HPosition.xy, 0));
 
 	float llDirLightMult = (SharedData::linearLightingSettings.enableLinearLighting && !SharedData::linearLightingSettings.isDirLightLinear) ? SharedData::linearLightingSettings.dirLightMult : 1.0f;
-	float3 dirLightColor = Color::DirectionalLight(DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
+	dirLightColor = Color::DirectionalLight(SharedData::DirLightColor.xyz / max(llDirLightMult, 1e-5), SharedData::linearLightingSettings.isDirLightLinear) * llDirLightMult;
 
 	// Apply world shadow (terrain shadows, cloud shadows) directly to light color
 	if (!SharedData::InInterior)
