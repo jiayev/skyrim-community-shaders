@@ -78,6 +78,11 @@ struct DrawcallLimitFix : Feature
 	// Whether DCLF can draw the geometry this frame: a record with bindings and a built pipeline. Valid from
 	// EarlyPrepass (the accumulate phase and the pipeline lookups) to the end of the frame.
 	static bool DrawableThisFrame(const RE::BSGeometry* a_geometry);
+	/**
+	 * @brief The pipeline slot's SPIR-V program and indirect pipeline: its set index, or DrawPipelines::kNotReady, requesting
+	 * what is missing. Each build a request starts is logged as a warning (on demand: the precompile missed it).
+	 */
+	static std::uint32_t RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting);
 
 	/** @brief How many native passes were skipped in the last frame, and how many were offered. */
 	struct SkipStats

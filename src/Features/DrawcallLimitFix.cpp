@@ -291,10 +291,8 @@ void DrawcallLimitFix::EarlyPrepass()
 		TracyCZoneN(requestZone, "CS.DCLF.Accumulate.RequestLighting", true);
 		const auto& tables = store.GetTables();
 		for (std::size_t p = 0; p < tables.pipelines.size(); ++p) {
-			if (!tables.PipelineUsed(p))
-				continue;
-			if (const auto* program = programs.Find(tables.pipelines[p], *lighting))
-				pipelines.Find(tables.pipelines[p], *program);
+			if (tables.PipelineUsed(p))
+				RequestLightingPipeline(static_cast<std::uint32_t>(p), *lighting);
 		}
 		TracyCZoneEnd(requestZone);
 		TracyCZoneN(updateZone, "CS.DCLF.Accumulate.PublishPipelines", true);
@@ -324,8 +322,7 @@ void DrawcallLimitFix::EarlyPrepass()
 				continue;
 			}
 			const auto& key = tables.pipelines[p];
-			const auto* program = programs.Find(key, *lighting);
-			const std::uint32_t setIndex = program ? pipelines.Find(key, *program) : DCLF::DrawPipelines::kNotReady;
+			const std::uint32_t setIndex = RequestLightingPipeline(static_cast<std::uint32_t>(p), *lighting);
 			auto* vs = cache.GetVertexShader(*lighting, key.vertexDescriptor);
 			auto* ps = cache.GetPixelShader(*lighting, key.pixelDescriptor);
 			const std::uint32_t resolved = (setIndex != DCLF::DrawPipelines::kNotReady && vs && ps) ? setIndex : DCLF::Lookups::kNone;
@@ -398,12 +395,12 @@ void DrawcallLimitFix::EarlyPrepass()
 				const std::uint32_t bits = DCLF::ShadowModeBits(mode);
 				if (!(modeBits & bits))
 					continue;
-				const auto* program = programs.FindShadow(key.technique | bits, *utility);
+				const auto* program = DCLF::RequestShadowProgram(key.technique | bits, key, ~0u, *utility);
 				if (!program)
 					continue;
 				for (const std::uint32_t state : pipelines.ShadowRasterStatesOfMode(mode)) {
 					const DCLF::ShadowPipelineKey viewKey{ key.technique | bits, key.rasterFlags, key.vertexLayout, state };
-					pipelines.FindShadow(viewKey, *program, shadowFormat);
+					DCLF::RequestShadowPipeline(viewKey, *program, shadowFormat, key, ~0u);
 				}
 			}
 		}
@@ -625,6 +622,34 @@ bool DrawcallLimitFix::DrawableThisFrame(const RE::BSGeometry* a_geometry)
 {
 	const auto& store = DCLF::SceneStore::Get();
 	return store.ObjectDrawable(store.FindObject(a_geometry));
+}
+
+std::uint32_t DrawcallLimitFix::RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting)
+{
+	// Everything built here is built at runtime, which a complete precompile and cache would avoid: each build a request
+	// starts is logged with the key, the objects that need it and its nearest relative, to find what the precompile misses.
+	const auto& store = DCLF::SceneStore::Get();
+	const auto& key = store.GetTables().pipelines[a_slot];
+	auto& programs = DCLF::ShaderPrograms::Get();
+	auto& pipelines = DCLF::DrawPipelines::Get();
+	const auto describeKey = [&] {
+		return fmt::format("VS {:08X} PS {:08X} pass {:08X} ({}), raster {:X}, vertex layout {:016X}", key.vertexDescriptor, key.pixelDescriptor, key.passDescriptor,
+			DCLF::LightingTechniqueName((key.passDescriptor >> 24) & 0x3f), key.rasterFlags, key.vertexLayout);
+	};
+	std::uint8_t onDemand = 0;
+	const auto* program = programs.Find(key, a_lighting, &onDemand);
+	if (onDemand)
+		logger::warn("[DCLF] on-demand SPIR-V compile: Lighting {} that no precompile requested ({}), for pipeline slot {}: {}; used by {}",
+			DCLF::ShaderPrograms::OnDemandStages(onDemand), SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
+			a_slot, describeKey(), store.DescribePipelineUsers(a_slot));
+	if (!program)
+		return DCLF::DrawPipelines::kNotReady;
+	bool requested = false;
+	const std::uint32_t setIndex = pipelines.Find(key, *program, &requested);
+	if (requested)
+		logger::warn("[DCLF] on-demand pipeline build: Lighting pipeline slot {}: {}; used by {}; {}", a_slot, describeKey(), store.DescribePipelineUsers(a_slot),
+			pipelines.NearestKey(key));
+	return setIndex;
 }
 
 bool DrawcallLimitFix::SkipNativePass(RE::BSRenderPass* a_pass)

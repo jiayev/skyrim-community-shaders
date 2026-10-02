@@ -1070,6 +1070,13 @@ namespace DCLF
 			const auto& record = tables.objects[a_object];
 			return !(record.flags & kObjectNoBindings) && PipelineDrawable(record.pipelineIndex);
 		}
+		/**
+		 * @brief For the on-demand build warnings: how many objects use the pipeline slot, and the first one (its geometry,
+		 * reference and the reference's base form type). Walks the objects: only for a pipeline that is being built.
+		 */
+		std::string DescribePipelineUsers(std::uint32_t a_pipeline) const;
+		/** @brief The same for a shadow caster key (no mode bits), of the shadow casters or of an occlusion view's (a_occlusion). */
+		std::string DescribeShadowKeyUsers(const ShadowPipelineKey& a_key, std::uint32_t a_occlusion = ~0u) const;
 		/** @brief PrimaryCull::MembershipWitness when the residents were last bound (BindByMembership). */
 		std::uint32_t BoundMembershipWitness() const { return membershipWitness; }
 		/**

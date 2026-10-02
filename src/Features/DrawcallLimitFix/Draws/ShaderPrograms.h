@@ -66,8 +66,19 @@ namespace DCLF
 		/** @brief Whether SPIR-V compilation is available (render graph active, DXC loaded). */
 		bool Enabled() const;
 
-		/** @brief The key's program once both stages compiled; requests them on first call. Null otherwise. */
-		const Program* Find(const PipelineKey& a_key, RE::BSShader& a_lighting);
+		/**
+		 * @brief Stages a runtime request (Find, FindShadow) asked for before any precompile task had (OnDemand*): what the
+		 * precompile missed, compiled on demand unless the disk cache has it. Logged when the program is ready (Update).
+		 */
+		static constexpr std::uint8_t kOnDemandVertex = 1, kOnDemandPixel = 2, kOnDemandDepthPixel = 4;
+		/** @brief "VS, PS, depth PS" for a set of kOnDemand bits. */
+		static std::string OnDemandStages(std::uint8_t a_stages);
+
+		/**
+		 * @brief The key's program once both stages compiled; requests them on first call. Null otherwise.
+		 * @param a_onDemand Set to the stages this call requested that no precompile had (kOnDemand*), 0 otherwise.
+		 */
+		const Program* Find(const PipelineKey& a_key, RE::BSShader& a_lighting, std::uint8_t* a_onDemand = nullptr);
 
 		/**
 		 * @brief SPIR-V builds of one Utility technique, for a shadow view's draws.
@@ -88,7 +99,8 @@ namespace DCLF
 		 * valid for the process (pipeline builds keep it).
 		 * @param a_allowRequest False returns null for an unseen technique without starting its builds.
 		 */
-		const ShadowProgram* FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr);
+		const ShadowProgram* FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr,
+			std::uint8_t* a_onDemand = nullptr);
 
 		/** @brief Collects finished compilations (call once per frame). */
 		void Update();

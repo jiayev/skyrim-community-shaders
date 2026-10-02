@@ -11,6 +11,8 @@
 #	include "RenderGraph/RenderGraphRuntime.h"
 #	include "SpirvReflection.h"
 #	include "Features/DrawcallLimitFix/Scene/VertexInput.h"
+#	include "Features/DrawcallLimitFix/Scene/SceneStore.h"
+#	include "ShaderCache.h"
 
 #	include <OpenRenderGraph/PersistentGraphHost.h>
 #	include <ORGModuleServices/PipelineService.h>
@@ -290,6 +292,7 @@ namespace DCLF
 		bool attempted = false;
 		org::services::PipelineService service;
 		ankerl::unordered_dense::map<PipelineKey, Entry, PipelineKeyHash> entries;
+		std::string recreatedBy, shadowRecreatedBy;  // the last recreation of each set, for NearestKey's warnings
 		// The shadow views' own set: one pipeline per (Utility technique, vertex layout, raster state),
 		// depth only, into the engine's shadow map format.
 		ankerl::unordered_dense::map<ShadowPipelineKey, Entry, ShadowPipelineKeyHash> shadowEntries;
@@ -839,12 +842,104 @@ namespace DCLF
 			++generation;
 			impl->inFlight = 0;
 			stats.requested = stats.ready = stats.failed = 0;
+			impl->recreatedBy = fmt::format("main pass targets {} -> {}", describe(targets), describe(a_formats));
 		}
 		targets = a_formats;
 	}
 
-	std::uint32_t DrawPipelines::Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program)
+	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion,
+		RE::BSShader& a_utility, bool a_allowRequest, bool* a_requested)
 	{
+		std::uint8_t onDemand = 0;
+		const auto* program = ShaderPrograms::Get().FindShadow(a_technique, a_utility, a_allowRequest, a_requested, &onDemand);
+		if (onDemand)
+			logger::warn("[DCLF] on-demand SPIR-V compile: Utility {} of technique {:08X} that no precompile requested ({}): raster {:X}, vertex layout {:016X}; used by {}",
+				ShaderPrograms::OnDemandStages(onDemand), a_technique,
+				SIE::ShaderCache::Instance().IsCompiling() ? "Community Shaders' compile workers still busy" : "Community Shaders' compile workers idle",
+				a_casterKey.rasterFlags, a_casterKey.vertexLayout, SceneStore::Get().DescribeShadowKeyUsers(a_casterKey, a_occlusion));
+		return program;
+	}
+
+	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey& a_viewKey, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_format,
+		const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion)
+	{
+		auto& pipelines = DrawPipelines::Get();
+		bool requested = false;
+		const std::uint32_t index = pipelines.FindShadow(a_viewKey, a_program, a_format, &requested);
+		if (requested)
+			logger::warn("[DCLF] on-demand pipeline build: shadow technique {:08X}, raster {:X}, vertex layout {:016X}, view state {}, format {}; used by {}; {}",
+				a_viewKey.technique, a_viewKey.rasterFlags, a_viewKey.vertexLayout, a_viewKey.viewState, static_cast<int>(a_format),
+				SceneStore::Get().DescribeShadowKeyUsers(a_casterKey, a_occlusion), pipelines.NearestShadowKey(a_viewKey));
+		return index;
+	}
+
+	namespace
+	{
+		// The fields of two keys that differ, as "name a -> b", and how many bits differ in all.
+		struct KeyDifference
+		{
+			std::uint32_t bits = 0;
+			std::string fields;
+			void Field(const char* a_name, std::uint64_t a_from, std::uint64_t a_to)
+			{
+				if (a_from == a_to)
+					return;
+				bits += static_cast<std::uint32_t>(std::popcount(a_from ^ a_to));
+				fields += fmt::format("{}{} {:X} -> {:X} (bits {:X})", fields.empty() ? "" : ", ", a_name, a_from, a_to, a_from ^ a_to);
+			}
+		};
+	}
+
+	std::string DrawPipelines::NearestKey(const PipelineKey& a_key) const
+	{
+		const PipelineKey* nearest = nullptr;
+		KeyDifference best;
+		for (const auto& [key, entry] : impl->entries) {
+			if (key == a_key)
+				continue;
+			KeyDifference difference;
+			difference.Field("vertex", key.vertexDescriptor, a_key.vertexDescriptor);
+			difference.Field("pixel", key.pixelDescriptor, a_key.pixelDescriptor);
+			difference.Field("pass", key.passDescriptor, a_key.passDescriptor);
+			difference.Field("raster", key.rasterFlags, a_key.rasterFlags);
+			difference.Field("vertex layout", key.vertexLayout, a_key.vertexLayout);
+			if (!nearest || difference.bits < best.bits) {
+				nearest = &key;
+				best = std::move(difference);
+			}
+		}
+		if (!nearest)
+			return impl->recreatedBy.empty() ? std::string("the first pipeline") : fmt::format("no other pipeline since the set was recreated ({})", impl->recreatedBy);
+		return fmt::format("nearest requested pipeline differs in {}", best.fields);
+	}
+
+	std::string DrawPipelines::NearestShadowKey(const ShadowPipelineKey& a_key) const
+	{
+		const ShadowPipelineKey* nearest = nullptr;
+		KeyDifference best;
+		for (const auto& [key, entry] : impl->shadowEntries) {
+			if (key == a_key)
+				continue;
+			KeyDifference difference;
+			difference.Field("technique", key.technique, a_key.technique);
+			difference.Field("raster", key.rasterFlags, a_key.rasterFlags);
+			difference.Field("vertex layout", key.vertexLayout, a_key.vertexLayout);
+			difference.Field("view state", key.viewState, a_key.viewState);
+			if (!nearest || difference.bits < best.bits) {
+				nearest = &key;
+				best = std::move(difference);
+			}
+		}
+		if (!nearest)
+			return impl->shadowRecreatedBy.empty() ? std::string("the first shadow pipeline") :
+			                                         fmt::format("no other shadow pipeline since the set was recreated ({})", impl->shadowRecreatedBy);
+		return fmt::format("nearest requested shadow pipeline differs in {}", best.fields);
+	}
+
+	std::uint32_t DrawPipelines::Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program, bool* a_requested)
+	{
+		if (a_requested)
+			*a_requested = false;
 		if (!HasTargetFormats() || !Enabled())
 			return kNotReady;
 		if (auto it = impl->entries.find(a_key); it != impl->entries.end())
@@ -876,11 +971,16 @@ namespace DCLF
 		entry.future = impl->service.Request(std::move(recipe));
 		++impl->inFlight;
 		++stats.requested;
+		if (a_requested)
+			*a_requested = true;
 		return kNotReady;
 	}
 
-	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat)
+	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,
+		bool* a_requested)
 	{
+		if (a_requested)
+			*a_requested = false;
 		if (a_depthFormat == DXGI_FORMAT_UNKNOWN || !Enabled())
 			return kNotReady;
 		if (impl->shadowDepthFormat != a_depthFormat) {
@@ -894,6 +994,7 @@ namespace DCLF
 				shadowUsage.clear();
 				impl->shadowInFlight = 0;
 				stats.shadowRequested = stats.shadowReady = stats.shadowFailed = 0;
+				impl->shadowRecreatedBy = fmt::format("shadow map format {} -> {}", static_cast<int>(impl->shadowDepthFormat), static_cast<int>(a_depthFormat));
 			}
 			impl->shadowDepthFormat = a_depthFormat;
 		}
@@ -917,6 +1018,8 @@ namespace DCLF
 		entry.future = impl->service.Request(std::move(recipe));
 		++impl->shadowInFlight;
 		++stats.shadowRequested;
+		if (a_requested)
+			*a_requested = true;
 		return kNotReady;
 	}
 
@@ -1140,8 +1243,19 @@ namespace DCLF
 
 	bool DrawPipelines::Enabled() const { return false; }
 	void DrawPipelines::SetTargetFormats(const TargetFormats& a_formats) { targets = a_formats; }
-	std::uint32_t DrawPipelines::Find(const PipelineKey&, const ShaderPrograms::Program&) { return kNotReady; }
-	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT) { return kNotReady; }
+	std::uint32_t DrawPipelines::Find(const PipelineKey&, const ShaderPrograms::Program&, bool*) { return kNotReady; }
+	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT, bool*) { return kNotReady; }
+	std::string DrawPipelines::NearestKey(const PipelineKey&) const { return {}; }
+	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey&, std::uint32_t, RE::BSShader& a_utility,
+		bool a_allowRequest, bool* a_requested)
+	{
+		return ShaderPrograms::Get().FindShadow(a_technique, a_utility, a_allowRequest, a_requested);
+	}
+	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey&, const ShaderPrograms::ShadowProgram&, DXGI_FORMAT, const ShadowPipelineKey&, std::uint32_t)
+	{
+		return DrawPipelines::kNotReady;
+	}
+	std::string DrawPipelines::NearestShadowKey(const ShadowPipelineKey&) const { return {}; }
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
 	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t) const { return {}; }
 	void DrawPipelines::Update() {}

@@ -174,6 +174,17 @@ namespace DCLF
 	 *
 	 * Render thread only.
 	 */
+	/**
+	 * @brief The shadow views' program for a technique (mode bits included), requesting it, and a warning for each stage the
+	 * request starts that no precompile had (on demand). a_casterKey (no mode bits) and a_occlusion name the casters that need
+	 * it (SceneStore::DescribeShadowKeyUsers). The rest as ShaderPrograms::FindShadow.
+	 */
+	const ShaderPrograms::ShadowProgram* RequestShadowProgram(std::uint32_t a_technique, const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion,
+		RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr);
+	/** @brief DrawPipelines::FindShadow, and a warning for each build it starts (every pipeline is built at runtime). */
+	std::uint32_t RequestShadowPipeline(const ShadowPipelineKey& a_viewKey, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_format,
+		const ShadowPipelineKey& a_casterKey, std::uint32_t a_occlusion);
+
 	class DrawPipelines
 	{
 	public:
@@ -207,7 +218,7 @@ namespace DCLF
 		 * @brief The key's index in the pipeline set, or kNotReady. Requests the pipeline on the first call
 		 * once the program is compiled.
 		 */
-		std::uint32_t Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program);
+		std::uint32_t Find(const PipelineKey& a_key, const ShaderPrograms::Program& a_program, bool* a_requested = nullptr);
 
 		/**
 		 * @brief The shadow key's index in the shadow pipeline set, or kNotReady.
@@ -217,7 +228,14 @@ namespace DCLF
 		 * and no colour attachment (engine notes: shadow maps).
 		 * @param a_depthFormat the shadow map array's format; pipelines are rebuilt if it changes.
 		 */
-		std::uint32_t FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat);
+		std::uint32_t FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,
+			bool* a_requested = nullptr);
+		/**
+		 * @brief For the on-demand build warnings: the pipeline already requested whose key is nearest a_key (fewest differing
+		 * bits), with the fields that differ, or why there is none (the set was recreated, and by what).
+		 */
+		std::string NearestKey(const PipelineKey& a_key) const;
+		std::string NearestShadowKey(const ShadowPipelineKey& a_key) const;
 
 		/**
 		 * @brief The id (1 and up, as many as the views have) of a shadow view's rasterizer state, registering it

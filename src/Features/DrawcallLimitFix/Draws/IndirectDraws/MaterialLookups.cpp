@@ -241,8 +241,6 @@ namespace DCLF::Draws
 	{
 		ZoneScopedN("CS.DCLF.RefreshShadowLookups");
 		auto& textures = GpuTextures::Get();
-		auto& pipelines = DrawPipelines::Get();
-		auto& programs = ShaderPrograms::Get();
 		auto* utility = globals::game::utilityShader;
 		TracyCZoneN(shadowTexturesZone, "CS.DCLF.RefreshShadow.Textures", true);
 		std::vector<std::pair<ID3D11ShaderResourceView*, bool>> textureChanges;
@@ -317,10 +315,13 @@ namespace DCLF::Draws
 					++a_lookups.shadowGeneration;
 				}
 				const std::uint32_t slot = slotIt->second;
+				// Everything requested here is built at runtime: each build a request starts is logged (RequestShadowProgram,
+				// RequestShadowPipeline).
+				const std::uint32_t occlusion = IsOcclusionMode(m) ? OcclusionOfMode(m) : ~0u;
 				const auto* program = [&] {
 					ZoneScopedN("CS.DCLF.RefreshShadow.FindProgram");
 					bool requested = false;
-					const auto* found = programs.FindShadow(slotKey.technique, *utility, mayRequestProgram, &requested);
+					const auto* found = RequestShadowProgram(slotKey.technique, key, occlusion, *utility, mayRequestProgram, &requested);
 					mayRequestProgram &= !requested;
 					return found;
 				}();
@@ -329,7 +330,7 @@ namespace DCLF::Draws
 					const ShadowPipelineKey viewKey{ slotKey.technique, slotKey.rasterFlags, slotKey.vertexLayout, state };
 					const std::uint32_t set = [&] {
 						ZoneScopedN("CS.DCLF.RefreshShadow.FindPipeline");
-						return program ? pipelines.FindShadow(viewKey, *program, format) : DrawPipelines::kNotReady;
+						return program ? RequestShadowPipeline(viewKey, *program, format, key, occlusion) : DrawPipelines::kNotReady;
 					}();
 					const std::uint32_t index = set == DrawPipelines::kNotReady ? Lookups::kNone : set;
 					auto [it, inserted] = a_lookups.shadowPipelines.try_emplace(viewKey, index);

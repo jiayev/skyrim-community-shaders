@@ -73,6 +73,8 @@ namespace DCLF
 #endif
 		std::unique_ptr<ShadowProgram> program;
 		bool failed = false;
+		std::uint8_t onDemand = 0;  // kOnDemand*: the stages no precompile had asked for
+		std::chrono::steady_clock::time_point requested;
 	};
 
 	struct ShaderPrograms::Entry
@@ -84,7 +86,18 @@ namespace DCLF
 #endif
 		std::unique_ptr<Program> program;
 		bool failed = false;
+		std::uint8_t onDemand = 0;  // kOnDemand*: the stages no precompile had asked for
+		std::chrono::steady_clock::time_point requested;
 	};
+
+	std::string ShaderPrograms::OnDemandStages(std::uint8_t a_stages)
+	{
+		std::string text;
+		for (const auto& [bit, name] : { std::pair{ kOnDemandVertex, "VS" }, std::pair{ kOnDemandPixel, "PS" }, std::pair{ kOnDemandDepthPixel, "depth PS" } })
+			if (a_stages & bit)
+				text += fmt::format("{}{}", text.empty() ? "" : ", ", name);
+		return text;
+	}
 
 	ShaderPrograms& ShaderPrograms::Get()
 	{
@@ -189,8 +202,9 @@ namespace DCLF
 		std::vector<Pending> pending;
 #if defined(DCLF_HAS_SHADER_COMPILER)
 		ankerl::unordered_dense::map<std::uint64_t, std::shared_future<org::services::ShaderArtifact>> futures;
+		// a_created: set when this call made the request (no earlier request, precompile or runtime, had).
 		std::shared_future<org::services::ShaderArtifact> Request(ShaderPrograms& owner, const RE::BSShader& shader,
-			bool pixel, std::uint32_t descriptor, bool depth = false)
+			bool pixel, std::uint32_t descriptor, bool depth = false, bool* a_created = nullptr)
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34);
@@ -216,6 +230,8 @@ namespace DCLF
 				std::lock_guard lock(mutex);
 				futures.emplace(key, future);
 			}
+			if (a_created)
+				*a_created = future.valid();
 			return future;
 		}
 #endif
@@ -274,8 +290,10 @@ namespace DCLF
 			});
 	}
 
-	const ShaderPrograms::Program* ShaderPrograms::Find(const PipelineKey& a_key, RE::BSShader& a_lighting)
+	const ShaderPrograms::Program* ShaderPrograms::Find(const PipelineKey& a_key, RE::BSShader& a_lighting, std::uint8_t* a_onDemand)
 	{
+		if (a_onDemand)
+			*a_onDemand = 0;
 		if (!Enabled())
 			return nullptr;
 		const std::uint64_t id = (static_cast<std::uint64_t>(a_key.vertexDescriptor) << 32) | a_key.pixelDescriptor;
@@ -283,9 +301,14 @@ namespace DCLF
 		if (inserted) {
 			it->second = std::make_unique<Entry>();
 #if defined(DCLF_HAS_SHADER_COMPILER)
-			it->second->vertex = stages->Request(*this, a_lighting, false, a_key.vertexDescriptor);
-			it->second->pixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor);
-			it->second->depthPixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true);
+			bool created[3]{};
+			it->second->vertex = stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &created[0]);
+			it->second->pixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &created[1]);
+			it->second->depthPixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &created[2]);
+			it->second->onDemand = static_cast<std::uint8_t>((created[0] ? kOnDemandVertex : 0) | (created[1] ? kOnDemandPixel : 0) | (created[2] ? kOnDemandDepthPixel : 0));
+			it->second->requested = std::chrono::steady_clock::now();
+			if (a_onDemand)
+				*a_onDemand = it->second->onDemand;
 #else
 			(void)a_lighting;
 			it->second->failed = true;
@@ -295,10 +318,13 @@ namespace DCLF
 		return it->second->program.get();
 	}
 
-	const ShaderPrograms::ShadowProgram* ShaderPrograms::FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest, bool* a_requested)
+	const ShaderPrograms::ShadowProgram* ShaderPrograms::FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest, bool* a_requested,
+		std::uint8_t* a_onDemand)
 	{
 		if (a_requested)
 			*a_requested = false;
+		if (a_onDemand)
+			*a_onDemand = 0;
 		if (!Enabled())
 			return nullptr;
 		auto it = shadowEntries.find(a_technique);
@@ -313,8 +339,13 @@ namespace DCLF
 #if defined(DCLF_HAS_SHADER_COMPILER)
 			// Both stages take the same technique: Utility's descriptor is the technique itself, not a
 			// pair of vertex and pixel descriptors as the Lighting shader's is.
-			it->second->vertex = stages->Request(*this, a_utility, false, a_technique);
-			it->second->pixel = stages->Request(*this, a_utility, true, a_technique);
+			bool created[2]{};
+			it->second->vertex = stages->Request(*this, a_utility, false, a_technique, false, &created[0]);
+			it->second->pixel = stages->Request(*this, a_utility, true, a_technique, false, &created[1]);
+			it->second->onDemand = static_cast<std::uint8_t>((created[0] ? kOnDemandVertex : 0) | (created[1] ? kOnDemandPixel : 0));
+			it->second->requested = std::chrono::steady_clock::now();
+			if (a_onDemand)
+				*a_onDemand = it->second->onDemand;
 #else
 			(void)a_utility;
 			it->second->failed = true;
@@ -330,6 +361,22 @@ namespace DCLF
 		const auto ready = [](const auto& a_future) {
 			return a_future.valid() && a_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 		};
+		// The outcome of a stage no precompile had asked for (logged with its reason when it was requested): compiled now, or
+		// found in the disk cache, which a precompile run before would also have filled.
+		const auto onDemandOutcome = [](const char* a_what, std::uint8_t a_stages, std::chrono::steady_clock::time_point a_requested,
+										 std::initializer_list<std::pair<std::uint8_t, const org::services::ShaderArtifact*>> a_artifacts) {
+			if (!a_stages)
+				return;
+			std::uint8_t compiled = 0, cached = 0, failed = 0;
+			for (const auto& [bit, artifact] : a_artifacts) {
+				if (!(a_stages & bit))
+					continue;
+				(!*artifact ? failed : artifact->fromCache ? cached : compiled) |= bit;
+			}
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_requested).count();
+			logger::warn("[DCLF] on-demand SPIR-V {} done after {:.0f} ms: compiled now [{}], from the disk cache [{}], failed [{}]", a_what, ms,
+				OnDemandStages(compiled), OnDemandStages(cached), OnDemandStages(failed));
+		};
 		for (auto& [id, entryPointer] : entries) {
 			auto& entry = *entryPointer;
 			if (entry.program || entry.failed || !ready(entry.vertex) || !ready(entry.pixel) || !ready(entry.depthPixel))
@@ -337,6 +384,8 @@ namespace DCLF
 			const auto& vertex = entry.vertex.get();
 			const auto& pixel = entry.pixel.get();
 			const auto& depthPixel = entry.depthPixel.get();
+			onDemandOutcome(fmt::format("Lighting VS {:08X} PS {:08X}", static_cast<std::uint32_t>(id >> 32), static_cast<std::uint32_t>(id)).c_str(), entry.onDemand,
+				entry.requested, { { kOnDemandVertex, &vertex }, { kOnDemandPixel, &pixel }, { kOnDemandDepthPixel, &depthPixel } });
 			if (!vertex || !pixel || !depthPixel) {
 				entry.failed = true;
 				++stats.failed;
@@ -358,6 +407,8 @@ namespace DCLF
 				continue;
 			const auto& vertex = entry.vertex.get();
 			const auto& pixel = entry.pixel.get();
+			onDemandOutcome(fmt::format("Utility technique {:08X}", technique).c_str(), entry.onDemand, entry.requested,
+				{ { kOnDemandVertex, &vertex }, { kOnDemandPixel, &pixel } });
 			if (!vertex || !pixel) {
 				entry.failed = true;
 				++stats.shadowFailed;
