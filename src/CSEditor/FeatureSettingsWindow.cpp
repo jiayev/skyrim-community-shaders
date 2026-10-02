@@ -6,13 +6,16 @@
 #include <map>
 #include <ranges>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../I18n/I18n.h"
+#include "Browser/BrowserWidgets.h"
 #include "EditorWindow.h"
 #include "Feature.h"
 #include "FeatureCategories.h"
 #include "FeatureDebugFilter.h"
+#include "FeatureListPicker.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
 #include "IconsLucide.h"
@@ -20,8 +23,11 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/Icons/helpers/IconFonts.h"
-#include "Presets/UnifiedPresetCatalog.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneManager/FeatureOverwritesPanel.h"
+#include "SceneManager/SceneLayerHeader.h"
+#include "SceneManager/ScenePresetExport.h"
+#include "SceneManager/SceneSettingsManager.h"
 #include "State.h"
 #include "Utils/UI.h"
 
@@ -39,15 +45,16 @@ namespace
 	/// The divider doubles as the resize grip, so the feature column and the panel share one border.
 	constexpr ImGuiTableFlags kLayoutFlags = ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV;
 
-	/// Post-Processing has its own window; Utility and Display hold editor and output plumbing, not scene look.
+	/// Utility and Display hold editor and output plumbing, not scene look. Post Processing is pinned
+	/// above the categories instead, as the stack most edits start from.
 	constexpr std::array kExcludedCategories = { FeatureCategories::kUtility, FeatureCategories::kDisplay, FeatureCategories::kPostProcessing };
 
 	std::string featureSearch;
 	/// Short name of the feature shown in the Features window; also the constraint dialog's navigation target.
 	std::string selectedFeature;
 	std::map<std::string, bool> categoryExpansion;
-	/// Pack id chosen for writing disableAtBoot; empty until the user picks one.
-	std::string baselineBootPackId;
+	/// Set by Select; the window takes focus on its next Begin.
+	bool focusRequested = false;
 
 	/** @brief Centers the next window at its first-use size, re-applied on Reset Window Layout. */
 	void SetNextWindowLayout()
@@ -65,43 +72,6 @@ namespace
 				return feature;
 		}
 		return nullptr;
-	}
-
-	/** @brief Baseline packs that can receive a disableAtBoot entry, preferring enabled ones. */
-	std::vector<const UnifiedPresetCatalog::PackInfo*> ListBaselineAuthoringPacks()
-	{
-		auto& catalog = UnifiedPresetCatalog::GetSingleton();
-		std::vector<const UnifiedPresetCatalog::PackInfo*> packs;
-		for (const auto& pack : catalog.GetPacks()) {
-			if (pack.IsBaseline() || pack.hasBaseline)
-				packs.push_back(&pack);
-		}
-		std::ranges::sort(packs, [&](const auto* a, const auto* b) {
-			const bool aEnabled = catalog.IsBaselineEnabled(a->id);
-			const bool bEnabled = catalog.IsBaselineEnabled(b->id);
-			if (aEnabled != bEnabled)
-				return aEnabled && !bEnabled;
-			return _stricmp(a->name.c_str(), b->name.c_str()) < 0;
-		});
-		return packs;
-	}
-
-	void EnsureBaselineBootPackSelection(const std::vector<const UnifiedPresetCatalog::PackInfo*>& packs)
-	{
-		if (packs.empty()) {
-			baselineBootPackId.clear();
-			return;
-		}
-		if (std::ranges::any_of(packs, [](const auto* pack) { return pack->id == baselineBootPackId; }))
-			return;
-		auto& catalog = UnifiedPresetCatalog::GetSingleton();
-		for (const auto& id : catalog.GetBaselinePackIds() | std::views::reverse) {
-			if (std::ranges::any_of(packs, [&](const auto* pack) { return pack->id == id; })) {
-				baselineBootPackId = id;
-				return;
-			}
-		}
-		baselineBootPackId = packs.front()->id;
 	}
 
 	/** @brief Boot enable pill only (label lives in the tooltip). Returns false when not drawn. */
@@ -125,68 +95,8 @@ namespace
 				"Toggle whether this feature loads when the game starts.\n"
 				"Restart required for changes to take effect.\n"
 				"Same as Disable at Boot in the main Community Shaders menu."))
-			.c_str());
+				.c_str());
 		return true;
-	}
-
-	/** @brief Optional write of boot state into a baseline pack's disableAtBoot. */
-	void DrawBaselineBootSection(Feature* feature)
-	{
-		if (!feature || feature->IsAlwaysEnabled())
-			return;
-
-		const auto packs = ListBaselineAuthoringPacks();
-		if (packs.empty())
-			return;
-
-		EnsureBaselineBootPackSelection(packs);
-		ImGui::Spacing();
-		ImGui::SeparatorText(T(TKEY("baseline_boot_section"), "Baseline pack"));
-		Util::Text::WrappedSecondary("%s",
-			T(TKEY("baseline_boot_section_desc"),
-				"Store this feature's boot state in a Baseline pack so applying the pack defines which features load."));
-
-		std::string preview = baselineBootPackId;
-		for (const auto* pack : packs) {
-			if (pack->id == baselineBootPackId) {
-				preview = pack->name;
-				break;
-			}
-		}
-		ImGui::SetNextItemWidth(-1.0f);
-		if (ImGui::BeginCombo("##BaselineBootPack", preview.c_str())) {
-			for (const auto* pack : packs) {
-				const bool selected = pack->id == baselineBootPackId;
-				auto label = pack->name;
-				if (UnifiedPresetCatalog::GetSingleton().IsBaselineEnabled(pack->id))
-					label += std::format(" ({})", T(TKEY("baseline_boot_pack_enabled"), "enabled"));
-				if (ImGui::Selectable(label.c_str(), selected))
-					baselineBootPackId = pack->id;
-				if (selected)
-					ImGui::SetItemDefaultFocus();
-			}
-			ImGui::EndCombo();
-		}
-
-		const auto featureName = feature->GetShortName();
-		auto* state = globals::state;
-		const auto* selectedPack = UnifiedPresetCatalog::GetSingleton().FindPack(baselineBootPackId);
-		if (!selectedPack)
-			return;
-
-		bool packDisabled = state->IsFeatureDisabled(featureName);
-		if (const auto it = selectedPack->disableAtBoot.find(featureName); it != selectedPack->disableAtBoot.end())
-			packDisabled = it->second;
-
-		if (ImGui::Checkbox(T(TKEY("baseline_boot_store"), "Disable at boot in this pack"), &packDisabled)) {
-			if (UnifiedPresetCatalog::GetSingleton().SetPackFeatureDisabledAtBoot(baselineBootPackId, featureName, packDisabled)) {
-				if (state->IsFeatureDisabled(featureName) != packDisabled)
-					feature->ToggleAtBootSetting();
-			}
-		}
-		Util::AddTooltip(T(TKEY("baseline_boot_store_tooltip"),
-			"Writes disableAtBoot into the pack manifest. Applying this Baseline pack later sets the same boot state "
-			"(restart still required for load/unload)."));
 	}
 
 	/** @brief Draw the shared export-overwrite icon button (tooltip carries the old label). */
@@ -210,6 +120,10 @@ namespace
 	/** @brief Export overwrite icon, boot controls, and the settings body of one feature. */
 	void DrawSettingsPanel(Feature* feature)
 	{
+		// Names the layer this panel writes to and which scene layers override it here.
+		SceneLayerHeader::DrawBase(feature->GetShortName());
+		ImGui::Separator();
+
 		const bool canExport = feature->loaded && FeatureOverwritesPanel::HasExportableSettings(feature);
 		const float iconSize = ImGui::GetFrameHeight();
 		const float rowStartX = ImGui::GetCursorPosX();
@@ -222,8 +136,6 @@ namespace
 			ImGui::SetCursorPosX(rowStartX + std::max(0.0f, rowAvail - iconSize));
 			DrawExportOverwriteIcon(feature, "##FeatureExportOverwrite");
 		}
-
-		DrawBaselineBootSection(feature);
 
 		if (!feature->loaded) {
 			ImGui::Spacing();
@@ -250,90 +162,71 @@ namespace
 			FeatureOverwritesPanel::DrawExport();
 	}
 
-	/** @brief Search bar and collapsible category groups of the features this window edits. */
+	/** @brief Search bar, Post Processing pinned on top, then collapsible category groups. */
 	void DrawFeatureList()
 	{
-		Util::DrawFeatureSearchBar(featureSearch);
+		static const auto features = Feature::GetFeatureList() | std::views::filter([](Feature* feature) {
+			return feature->IsInMenu() && !feature->IsHiddenUnreleased() &&
+			       std::ranges::find(kExcludedCategories, feature->GetCategory()) == kExcludedCategories.end();
+		}) | std::ranges::to<std::vector>();
 
-		for (const auto category : FeatureCategories::kMenuOrder) {
-			if (std::ranges::find(kExcludedCategories, category) != kExcludedCategories.end())
-				continue;
+		auto& postProcessing = globals::features::postProcessing;
+		Feature* pinned[] = { &postProcessing };
+		const bool pinPostProcessing = postProcessing.IsInMenu() && !postProcessing.IsHiddenUnreleased();
+		if (selectedFeature.empty() && pinPostProcessing)
+			selectedFeature = postProcessing.GetShortName();
 
-			auto features = Feature::GetFeatureList() | std::views::filter([&](Feature* feature) {
-				return feature->IsInMenu() && !feature->IsHiddenUnreleased() && feature->GetCategory() == category &&
-				       Util::FeatureMatchesSearch(feature, featureSearch);
-			}) | std::ranges::to<std::vector>();
-			if (features.empty())
-				continue;
-			std::ranges::sort(features, {}, &Feature::GetDisplayName);
-
-			const std::string categoryKey(category);
-			auto& expanded = categoryExpansion.try_emplace(categoryKey, true).first->second;
+		auto* manager = SceneSettingsManager::GetSingleton();
+		FeatureListPicker::Draw(features, selectedFeature,
 			{
-				MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Heading);
-				Util::DrawCategoryHeader(categoryKey.c_str(), FeatureListRenderer::TranslateCategory(category).c_str(), expanded, static_cast<int>(features.size()));
-			}
-			if (!expanded)
-				continue;
-
-			MenuFonts::FontRoleGuard fontGuard(Menu::FontRole::Subheading);
-			auto& theme = globals::menu->GetSettings().Theme;
-			for (auto* feature : features) {
-				const auto shortName = feature->GetShortName();
-				const bool disabledAtBoot = globals::state->IsFeatureDisabled(shortName);
-				ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-				if (disabledAtBoot)
-					color = theme.StatusPalette.Disable;
-				else if (!feature->loaded)
-					color = feature->installed ? theme.StatusPalette.RestartNeeded : theme.StatusPalette.Disable;
-
-				ImGui::PushStyleColor(ImGuiCol_Text, color);
-				if (ImGui::Selectable(std::format("{}##{}", feature->GetDisplayName(), shortName).c_str(), shortName == selectedFeature))
-					selectedFeature = shortName;
-				ImGui::PopStyleColor();
-			}
-		}
+				.search = &featureSearch,
+				.categories = &categoryExpansion,
+				.pinned = pinPostProcessing ? std::span<Feature* const>(pinned) : std::span<Feature* const>(),
+				// Same dots as the main menu: filled while a scene overrides the feature here, hollow
+				// while its scene settings apply somewhere else.
+				.marker = [manager](const Feature& feature) {
+					const auto shortName = const_cast<Feature&>(feature).GetShortName();
+					if (!manager || !manager->HasAnySceneEntriesForFeature(shortName))
+						return FeatureListPicker::Marker::None;
+					return manager->IsFeatureSceneControlled(shortName) ? FeatureListPicker::Marker::Filled :
+				                                                          FeatureListPicker::Marker::Hollow; },
+				.markerTooltip = [](const Feature&, FeatureListPicker::Marker marker) { return marker == FeatureListPicker::Marker::Filled ?
+			                                                                                       T("menu.features.scene_indicator_overriding",
+																									   "Scene Manager is overriding settings here. Blue settings show its values.") :
+			                                                                                       T("menu.features.scene_indicator_configured",
+																									   "Has Scene Manager settings for other times, weathers or locations."); },
+			});
 	}
 
-	/** @brief Small grey title-bar trailer: Features | Create or enable a Baseline pack… */
-	void DrawBaselinePackTitleHint(bool inTitleBar)
+	/** @brief Opens the preset export in its Baseline form, on the feature being viewed.
+	 *  @param centerY Screen Y to centre the button on, or negative to keep the cursor. */
+	void DrawBaselineExportButton(float centerY)
 	{
-		if (!ListBaselineAuthoringPacks().empty())
-			return;
+		if (centerY >= 0.0f)
+			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, centerY - BrowserUI::IconButtonSize() * 0.5f));
 
-		const char* hint = T(TKEY("baseline_boot_no_packs"),
-			"Create or enable a Baseline pack to store this boot state in a preset.");
-		const ImVec4 secondary = Util::Colors::GetSecondary();
-
-		if (inTitleBar) {
-			// Spaces around the pipe so it reads as "Features | Create…".
-			ImGui::TextColored(secondary, " | ");
-			// Title/| use the body line box; subtext is smaller. Align capital-ink midlines
-			// (not the full FontSize box mid — that sits the hint too low).
-			const float capMidY = ImGui::GetItemRectMin().y + ImGui::GetFontBaked()->Ascent * 0.5f;
-			const float nextX = ImGui::GetItemRectMax().x;
-			MenuFonts::FontRoleGuard subtext(Menu::FontRole::Subtext);
-			ImGui::SetCursorScreenPos(ImVec2(nextX, capMidY - ImGui::GetFontBaked()->Ascent * 0.5f));
-			ImGui::TextColored(secondary, "%s", hint);
-			return;
-		}
-
-		MenuFonts::FontRoleGuard subtext(Menu::FontRole::Subtext);
-		ImGui::TextColored(secondary, "%s", hint);
+		const auto tooltip = std::format("{}\n{}", T(TKEY("baseline_export"), "Export Baseline Preset..."),
+			T(TKEY("baseline_export_tooltip"),
+				"Saves base settings as a preset you can apply on the Presets page."));
+		if (BrowserUI::IconButton("##BaseSettingsExport", SceneActionIcons::kExport, tooltip.c_str()))
+			ScenePresetExport::OpenBaseline(selectedFeature);
 	}
 
 	/** @brief Feature list beside the selected feature's settings. */
 	void DrawFeaturesWindow(bool& open)
 	{
 		SetNextWindowLayout();
-		const auto title = std::format("{}###CSEditorFeatures", T(TKEY("features_window"), "Features"));
+		if (std::exchange(focusRequested, false))
+			ImGui::SetNextWindowFocus();
+		const auto title = std::format("{}###CSEditorFeatures", T(TKEY("base_settings_window"), "Base Settings"));
 		const bool visible = Util::BeginWithCustomHeader(title.c_str(), &open, [] {
-			DrawBaselinePackTitleHint(true);
+			// Follows the title, so the previous item is the title text and gives the row's centre.
+			DrawBaselineExportButton((ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y) * 0.5f);
 		});
 		if (visible) {
-			// Docked windows keep the native tab title, so surface the same hint under it.
+			// Docked windows keep the native tab, which has no room for the button, so it leads the body.
 			if (ImGui::IsWindowDocked())
-				DrawBaselinePackTitleHint(false);
+				DrawBaselineExportButton(-1.0f);
 
 			if (ImGui::BeginTable("##FeaturesLayout", 2, kLayoutFlags)) {
 				ImGui::TableSetupColumn("##FeatureList", ImGuiTableColumnFlags_WidthFixed, kFeatureListWidth * Util::GetUIScale());
@@ -358,39 +251,31 @@ namespace
 		}
 		ImGui::End();
 	}
-
-	/** @brief The whole Post-Processing stack's settings. */
-	void DrawPostProcessingWindow(bool& open)
-	{
-		SetNextWindowLayout();
-		const auto title = std::format("{}###CSEditorPostProcessing", T(TKEY("post_processing_window"), "Post Processing"));
-		if (Util::BeginWithRoundedClose(title.c_str(), &open)) {
-			if (auto& postProcessing = globals::features::postProcessing; postProcessing.loaded)
-				DrawSettingsPanel(&postProcessing);
-			else
-				Util::Text::WrappedDisabled("%s", T(TKEY("scene_feature_unloaded"), "This feature is not loaded, so it has nothing to edit."));
-		}
-		ImGui::End();
-	}
 }
 
-void FeatureSettingsWindow::Draw(bool& featuresOpen, bool& postProcessingOpen)
+void FeatureSettingsWindow::Select(const std::string& featureShortName)
 {
-	if (!featuresOpen && !postProcessingOpen)
+	selectedFeature = featureShortName;
+	focusRequested = true;
+	// A search or a collapsed category would hide the row just chosen.
+	featureSearch.clear();
+	if (auto* feature = FindAnyFeatureByShortName(featureShortName))
+		categoryExpansion[std::string(feature->GetCategory())] = true;
+}
+
+void FeatureSettingsWindow::Draw(bool& open)
+{
+	if (!open)
 		return;
 
 	FeatureDebugFilter::Install();
+	DrawFeaturesWindow(open);
 
-	if (featuresOpen)
-		DrawFeaturesWindow(featuresOpen);
-	if (postProcessingOpen)
-		DrawPostProcessingWindow(postProcessingOpen);
-
-	// Once per frame at top level, so two open windows cannot stack two copies of the modal.
+	// Drawn at top level so the modal is not clipped by the window; navigating to another feature reopens it.
 	const std::string featureBeforeDialog = selectedFeature;
 	FeatureListRenderer::DrawConstraintWarningDialog(selectedFeature);
 	if (selectedFeature != featureBeforeDialog)
-		featuresOpen = true;
+		open = true;
 }
 
 #undef I18N_KEY_PREFIX

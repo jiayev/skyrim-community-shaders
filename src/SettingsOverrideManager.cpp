@@ -1294,6 +1294,12 @@ bool SettingsOverrideManager::DeleteFile(const std::string& filePath)
 	return true;
 }
 
+bool SettingsOverrideManager::IsValidOverrideDocument(const json& document, const std::filesystem::path& filePath)
+{
+	const auto path = filePath.string();
+	return ValidateOverrideFormat(document, path) && ValidateJsonDataTypes(document, "", path);
+}
+
 bool SettingsOverrideManager::ExportSettings(const std::string& modName, const std::string& featureName,
 	std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack)
 {

@@ -722,6 +722,17 @@ public:
 	 *  period or interior. Mid-blend the incoming side wins when it supplies one; null when no scene does. */
 	std::optional<SceneContextId> FindWinningContext(const SettingIdentity& setting) const;
 
+	/// A scene context supplying some of a feature's applied values, and how many of them.
+	struct WinningContext
+	{
+		SceneContextId context;
+		size_t settings = 0;
+	};
+
+	/** @brief The contexts supplying a feature's applied values right now, narrowest first, so the base
+	 *  editor can name the layers overriding it. Empty while no scene applies to the feature. */
+	std::vector<WinningContext> GetWinningContexts(const std::string& featureShortName) const;
+
 	/** @brief Writes sketched values into the context winning each address and restores the base
 	 *  each held before it was sketched. */
 	void CommitSketches(std::span<const SettingIdentity> settings);

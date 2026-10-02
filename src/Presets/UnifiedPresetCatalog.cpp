@@ -9,6 +9,7 @@
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "I18n/I18n.h"
 #include "PostProcessingMode.h"
+#include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
@@ -524,6 +525,8 @@ void UnifiedPresetCatalog::Discover()
 	Util::FileHelpers::EnsureDirectoryExists(GetPresetsRealPath());
 	LoadActiveState();
 
+	// Before the scan, so the packs it creates are listed by it.
+	PostProcessingPresets::MigrateLegacyPresets();
 	DiscoverUnifiedPacks();
 	DiscoverEffects11Orphans();
 	DiscoverEffects11Legacy();

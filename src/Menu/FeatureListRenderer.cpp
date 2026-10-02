@@ -531,6 +531,11 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 					logger::info("Navigated to {} feature menu", pendingFeatureSelection);
 					break;
 				}
+			} else if (const auto* page = std::get_if<BuiltInMenu>(&menuList[i]); page && page->name == pendingFeatureSelection) {
+				// Built-in pages such as Presets are addressed by their display name.
+				selectedMenu = i;
+				logger::info("Navigated to {} page", pendingFeatureSelection);
+				break;
 			}
 		}
 		pendingFeatureSelection.clear();  // Clear after processing

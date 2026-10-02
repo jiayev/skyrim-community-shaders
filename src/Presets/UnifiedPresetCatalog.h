@@ -101,7 +101,9 @@ public:
 		/** @brief Whether a CS or E11 export may write into the pack: false when it is grouped only under the other one. */
 		bool AcceptsExport(PresetType exportType) const
 		{
-			assert(exportType != PresetType::Baseline);
+			// Base settings fit any pack: CS and E11 presets carry a Baseline folder of their own.
+			if (exportType == PresetType::Baseline)
+				return true;
 			const auto otherType = exportType == PresetType::E11 ? PresetType::CS : PresetType::E11;
 			return IsType(exportType) || !IsType(otherType);
 		}

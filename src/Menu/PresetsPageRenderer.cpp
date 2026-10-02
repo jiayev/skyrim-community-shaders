@@ -1,8 +1,10 @@
 #include "PresetsPageRenderer.h"
 #include "PCH.h"
 
+#include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/CSEditor.h"
+#include "Features/Effects11/Editor/Effects11Editor.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -611,6 +613,35 @@ void PresetsPageRenderer::RenderDetail()
 	}
 
 	ImGui::EndChild();
+}
+
+void PresetsPageRenderer::Open()
+{
+	// Both editors hide the main menu while open, so the page would be selected but never seen.
+	if (auto* editorWindow = EditorWindow::GetSingleton(); editorWindow && editorWindow->open)
+		editorWindow->open = false;
+	Effects11Editor::GetSingleton().Close(false);
+
+	auto* menu = globals::menu;
+	if (!menu)
+		return;
+	menu->IsEnabled = true;
+	// Addressed by display name, the same translation the left panel draws.
+	menu->SelectFeatureMenu(T("menu.features.presets", "Presets"));
+}
+
+float PresetsPageRenderer::MeasureOpenButton()
+{
+	const ImGuiStyle& style = ImGui::GetStyle();
+	return Icons::CalcGlyphSize(Icons::FA(ICON_FA_LAYER_GROUP)).x + style.ItemInnerSpacing.x +
+	       ImGui::CalcTextSize(T("menu.presets.open_presets", "Presets")).x + style.FramePadding.x * 2.0f;
+}
+
+void PresetsPageRenderer::DrawOpenButton(const char* id, const char* tooltip)
+{
+	if (Icons::LabeledButton(id, Icons::FA(ICON_FA_LAYER_GROUP), T("menu.presets.open_presets", "Presets")))
+		Open();
+	Util::AddTooltip(tooltip);
 }
 
 bool PresetsPageRenderer::CloseLightboxIfOpen()

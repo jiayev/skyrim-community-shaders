@@ -790,6 +790,37 @@ std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindWi
 	return FindSupplyingContext(setting, period, weatherBlending ? weather.previousWeatherId : weather.currentWeatherId);
 }
 
+std::vector<SceneSettingsManager::WinningContext> SceneSettingsManager::GetWinningContexts(
+	const std::string& featureShortName) const
+{
+	std::vector<WinningContext> winners;
+	// Addresses sort by feature first, so this feature's applied values are one contiguous run.
+	for (auto it = appliedSettings.lower_bound(SettingAddress{ .featureShortName = featureShortName });
+		it != appliedSettings.end() && it->first.featureShortName == featureShortName; ++it) {
+		const auto context = FindWinningContext(it->first);
+		if (!context)
+			continue;
+		if (auto winner = std::ranges::find(winners, *context, &WinningContext::context); winner != winners.end())
+			++winner->settings;
+		else
+			winners.push_back({ *context, 1 });
+	}
+
+	// Narrowest first, the resolve order read backwards.
+	const auto rank = [](const WinningContext& winner) {
+		switch (winner.context.type) {
+		case SceneContextType::Location:
+			return 0;
+		case SceneContextType::Weather:
+			return 1;
+		default:
+			return 2;
+		}
+	};
+	std::ranges::stable_sort(winners, {}, rank);
+	return winners;
+}
+
 std::optional<SceneSettingsManager::SceneContextId> SceneSettingsManager::FindSupplyingContext(
 	const SettingIdentity& setting, TimeOfDayPeriod period, RE::FormID weatherId) const
 {

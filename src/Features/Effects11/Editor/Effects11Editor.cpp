@@ -18,6 +18,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "PostProcessingMode.h"
 #include "Utils/UI.h"
 
@@ -491,8 +492,8 @@ void Effects11Editor::DrawToolbar()
 
 	const char* saveLabel = T(TKEY("save"), "Save");
 	const char* saveTip = dirty ?
-		T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
-		T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
+	                          T(TKEY("unsaved_changes_tooltip"), "There are unsaved changes. Click to save.") :
+	                          T(TKEY("save_tip"), "Write every change to enbseries.ini, the weather files and the shader .ini files.\nShortcut: Ctrl+S");
 	if (dirty) {
 		auto color = globals::menu->GetTheme().StatusPalette.Error;
 		color.w = 0.75f;
@@ -550,6 +551,12 @@ void Effects11Editor::DrawStatus()
 			Util::Text::Error("%s", text.c_str());
 			Util::AddTooltip(T(TKEY("status_failed_files_tip"), "See the Shader Parameters panel for the compiler errors."));
 		}
+		// Switching presets happens on the Presets page; this leaves the editor for it.
+		ImGui::SameLine();
+		if (const float slack = ImGui::GetContentRegionAvail().x - PresetsPageRenderer::MeasureOpenButton(); slack > 0.0f)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + slack);
+		PresetsPageRenderer::DrawOpenButton("##Effects11EditorOpenPresets",
+			T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 	}
 
 	// Time of day
@@ -1484,8 +1491,8 @@ void Effects11Editor::DrawLauncher()
 		RefreshPresetPaths();
 	Util::TextUnformattedDisabled(presetPaths.iniDisplay.c_str());
 	Util::AddTooltip(presetPaths.iniFull.c_str());
-	ImGui::TextWrapped("%s", T("feature.effects11.use_presets_tab",
-		"Load and switch Effects11 presets from the Presets page in the left navigation."));
+	PresetsPageRenderer::DrawOpenButton("##Effects11OpenPresets",
+		T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 
 	ImGui::Spacing();
 	const float scale = Util::GetUIScale();

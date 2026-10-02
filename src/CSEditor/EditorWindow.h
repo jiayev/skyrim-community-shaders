@@ -264,8 +264,15 @@ public:
 	/** @brief True while a notification card is still on screen. */
 	bool HasNotifications() const { return !notifications.empty(); }
 
-	/** @brief Shows a category in the objects window, by its stable English ID. */
-	void SelectCategory(std::string category) { m_selectedCategory = std::move(category); }
+	/** @brief Shows the Base Settings window on a feature and brings it to the front. */
+	void OpenBaseSettings(const std::string& featureShortName);
+
+	/** @brief Shows a category in the objects window, by its stable English ID, and brings that window to the front. */
+	void SelectCategory(std::string category)
+	{
+		m_selectedCategory = std::move(category);
+		m_focusBrowser = true;
+	}
 
 	/** @brief Hide the game HUD and menus (equivalent to the 'tm' console command). */
 	void HideGameMenus();
@@ -337,8 +344,8 @@ public:
 		std::map<std::string, std::vector<std::string>> recentWidgets;
 		int maxRecentWidgets = 10;
 		bool showViewport = true;
+		/// Base Settings window; the key predates the rename from Features.
 		bool showFeaturesWindow = false;
-		bool showPostProcessingWindow = false;
 		std::string selectedCategory = "Weather";
 		/// Browser form pages show the inspector beside (or under) the list.
 		bool browserShowInspector = true;
@@ -451,6 +458,8 @@ private:
 	// Objects window (CS Editor Browser) state
 	std::string m_selectedCategory = "Weather";
 	std::string m_previousSelectedCategory = "Weather";
+	/// Set by SelectCategory; the objects window takes focus on its next Begin.
+	bool m_focusBrowser = false;
 	/// Filters, sort, cached rows and selection of the form-list pages.
 	Browser::FormListState m_formList;
 	/// Compact state the sidebar column was last sized for; unset until the first frame sizes it.

@@ -239,6 +239,13 @@ public:
 	bool ExportSettings(const std::string& modName, const std::string& featureName,
 		std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack = false);
 
+	/**
+	 * @brief Whether a document passes the format and data checks every override file is loaded with,
+	 * for writers that produce whole files rather than going through ExportSettings
+	 * @param filePath Destination, named in the log when a check fails
+	 */
+	bool IsValidOverrideDocument(const json& document, const std::filesystem::path& filePath);
+
 private:
 	SettingsOverrideManager() = default;
 	~SettingsOverrideManager() = default;

@@ -137,7 +137,7 @@ namespace
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteColorEntry, r, g, b, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteValueEntry, name, value, useCount, lastUsedTime, isFavorite)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings::PaletteFavoriteColor, hasValue, r, g, b)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, showFeatureDebug, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, showFeaturesWindow, showPostProcessingWindow, selectedCategory, browserShowInspector, browserSidebarCompact, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EditorWindow::Settings, recordMarkers, markedRecords, autoApplyChanges, useTextButtons, enableInheritFromParent, showFeatureDebug, editorUIScale, favoriteWidgets, recentWidgets, maxRecentWidgets, showViewport, showFeaturesWindow, selectedCategory, browserShowInspector, browserSidebarCompact, widgetTypeSizes, paletteColors, paletteValues, paletteFavorites)
 
 void DrawIconStar(ImVec2 center, float radius, ImU32 color, bool filled)
 {
@@ -500,8 +500,19 @@ void EditorWindow::DrawBrowserPage()
 	FormListPage::Draw(m_formList, context);
 }
 
+void EditorWindow::OpenBaseSettings(const std::string& featureShortName)
+{
+	FeatureSettingsWindow::Select(featureShortName);
+	if (!settings.showFeaturesWindow) {
+		settings.showFeaturesWindow = true;
+		Save();
+	}
+}
+
 void EditorWindow::ShowObjectsWindow()
 {
+	if (std::exchange(m_focusBrowser, false))
+		ImGui::SetNextWindowFocus();
 	Util::BeginWithCustomHeader(T(TKEY("weather_lighting_browser"), "CS Editor Browser"), nullptr);
 
 	// Reset filter state when the user switches categories so stale column
@@ -518,8 +529,9 @@ void EditorWindow::ShowObjectsWindow()
 	const float compactWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 4.0f;
 
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
-		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"),
-			ImGuiTableColumnFlags_WidthFixed | (compact ? ImGuiTableColumnFlags_NoResize : ImGuiTableColumnFlags_None), expandedWidth);
+		// Not NoResize while compact: a fixed column that cannot be resized is sized to its content
+		// instead of its requested width, which is what kept the compact sidebar as wide as before.
+		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"), ImGuiTableColumnFlags_WidthFixed, expandedWidth);
 		ImGui::TableSetupColumn(T(TKEY("objects"), "Objects"), ImGuiTableColumnFlags_WidthStretch);
 
 		// Widths must be set before TableNextRow: the first row locks the layout, after which they are ignored.
@@ -946,10 +958,11 @@ void EditorWindow::RenderUI()
 			}
 			ImGui::Checkbox(T(TKEY("weather_debug"), "Weather Debug"), &showWeatherDebug);
 			Util::AddTooltip(T(TKEY("weather_debug_tooltip"), "Current and last weather details, plus rain & wetness analysis from other features"));
-			if (ImGui::Checkbox(T(TKEY("features_window"), "Features"), &settings.showFeaturesWindow))
+			if (ImGui::Checkbox(T(TKEY("base_settings_window"), "Base Settings"), &settings.showFeaturesWindow))
 				Save();
-			if (ImGui::Checkbox(T(TKEY("post_processing_window"), "Post Processing"), &settings.showPostProcessingWindow))
-				Save();
+			Util::AddTooltip(T(TKEY("base_settings_window_tooltip"),
+				"Every feature's own settings, including Post Processing. They apply everywhere a scene layer does not "
+				"override them."));
 
 			// The editor, not Effects11Editor, owns restoring the main menu, hence Open/Close(false).
 			auto& effects11Editor = Effects11Editor::GetSingleton();
@@ -1369,9 +1382,8 @@ void EditorWindow::RenderUI()
 	Effects11Editor::GetSingleton().Draw();
 
 	const bool featuresWasOpen = settings.showFeaturesWindow;
-	const bool postProcessingWasOpen = settings.showPostProcessingWindow;
-	FeatureSettingsWindow::Draw(settings.showFeaturesWindow, settings.showPostProcessingWindow);
-	if (featuresWasOpen != settings.showFeaturesWindow || postProcessingWasOpen != settings.showPostProcessingWindow)
+	FeatureSettingsWindow::Draw(settings.showFeaturesWindow);
+	if (featuresWasOpen != settings.showFeaturesWindow)
 		Save();
 
 	if (deleteSceneChangesConfirmation.Draw()) {

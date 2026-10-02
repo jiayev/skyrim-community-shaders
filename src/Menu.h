@@ -434,7 +434,8 @@ public:
 	Util::IconLoader::UIIcons& GetUIIcons() { return Util::IconLoader::GetIcons(); }
 	const Util::IconLoader::UIIcons& GetUIIcons() const { return Util::IconLoader::GetIcons(); }
 
-	/** @brief Queues a feature to be selected in the left panel on the next frame */
+	/** @brief Queues a feature to be selected in the left panel on the next frame.
+	 *  @param featureName Feature short name, or a built-in page's display name such as Presets. */
 	void SelectFeatureMenu(const std::string& featureName);
 	static std::unordered_map<std::string, int> categoryCounts;  // Number of features in each feature category
 

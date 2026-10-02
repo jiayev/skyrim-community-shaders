@@ -1,12 +1,20 @@
 #pragma once
 
-/// CS Editor windows that edit feature settings directly, mirroring the main menu's feature pages.
+#include <string>
+
+/// The CS Editor's Base Settings window: every feature's own settings, the same as the main menu's
+/// feature pages, with Post Processing pinned on top. Scene layers override these values.
 namespace FeatureSettingsWindow
 {
 	/**
-	 * @brief Draws the open Features and Post Processing windows and their shared constraint warning.
-	 * @param featuresOpen Features window visibility; cleared by its close button.
-	 * @param postProcessingOpen Post Processing window visibility; cleared by its close button.
+	 * @brief Selects a feature in the window and brings it to the front. The caller shows the window.
+	 * @param featureShortName Feature whose base settings to show.
 	 */
-	void Draw(bool& featuresOpen, bool& postProcessingOpen);
+	void Select(const std::string& featureShortName);
+
+	/**
+	 * @brief Draws the Base Settings window and its constraint warning.
+	 * @param open Window visibility; cleared by its close button, set when the warning navigates to a feature.
+	 */
+	void Draw(bool& open);
 }

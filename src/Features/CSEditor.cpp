@@ -203,8 +203,10 @@ void CSEditor::Prepass()
 		EnsureDataLoaded();
 	}
 
-	// Re-arm the page's auto-open once the menu has been closed.
-	if (!Menu::GetSingleton()->IsEnabled)
+	// Re-arm the page's auto-open once the menu has been closed. Not while either editor is open:
+	// both hide the menu, and closing one returns to it with this page still selected, which would
+	// open the CS Editor again straight away.
+	if (!Menu::GetSingleton()->ShouldSwallowInput())
 		s_autoOpenArmed = true;
 
 	EditorWindow::MaintainWeatherLock();

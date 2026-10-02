@@ -6,12 +6,14 @@
 #include <cstring>
 #include <format>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <vector>
 
 #include "../../I18n/I18n.h"
 #include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
+#include "../FeatureListPicker.h"
 #include "../Weather/WeatherWidget.h"
 #include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
@@ -19,6 +21,7 @@
 #include "Menu/Icons/helpers/LocationTargetIcons.h"
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneFeatureReplica.h"
+#include "SceneLayerHeader.h"
 #include "ScenePageToolbar.h"
 #include "SceneSettingsManager.h"
 #include "Utils/Game.h"
@@ -97,16 +100,10 @@ namespace
 		}
 	}
 
-	/// A selectable feature, with its label built once because the list is fixed after boot.
-	struct FeatureListEntry
-	{
-		std::string shortName;
-		std::string label;
-	};
-
 	/// Each panel keeps its own selection: several can be on screen at once.
 	std::string weatherSelectedFeature;
 	std::string panelSelectedFeature;
+	std::string weatherFeatureSearch;
 
 	/// A location the user opened for editing. Locations are not forms in the widget system, so the
 	/// editor tracks its own windows instead of going through Widget.
@@ -114,6 +111,7 @@ namespace
 	{
 		SceneSettingsManager::LocationTarget target;
 		std::string selectedFeature;
+		std::string featureSearch;
 		bool open = true;
 		bool pendingFocus = false;
 	};
@@ -341,44 +339,67 @@ namespace
 
 	/// Scene-capable features, resolved once: loaded features and the catalog are fixed after boot.
 	/// Transitionable-only is the weather and time-of-day set; the rest also covers interior and location.
-	const std::vector<FeatureListEntry>& GetFeatureEntries(bool transitionableOnly)
+	const std::vector<Feature*>& GetSceneFeatures(bool transitionableOnly)
 	{
 		auto build = [](const std::vector<std::string>& names) {
-			std::vector<FeatureListEntry> entries;
-			entries.reserve(names.size());
-			for (const auto& name : names)
-				entries.push_back({ name, std::format("{}##{}", SceneSettingsManager::GetFeatureDisplayName(name), name) });
-			return entries;
+			std::vector<Feature*> features;
+			features.reserve(names.size());
+			for (const auto& name : names) {
+				if (auto* feature = Feature::FindFeatureByShortName(name))
+					features.push_back(feature);
+			}
+			return features;
 		};
-		static const std::vector<FeatureListEntry> transitionable = build(SceneSettingsManager::GetExteriorRelevantFeatureNames());
-		static const std::vector<FeatureListEntry> all = build(SceneSettingsManager::GetLocationRelevantFeatureNames());
+		static const std::vector<Feature*> transitionable = build(SceneSettingsManager::GetExteriorRelevantFeatureNames());
+		static const std::vector<Feature*> all = build(SceneSettingsManager::GetLocationRelevantFeatureNames());
 		return transitionableOnly ? transitionable : all;
 	}
 
-	/// Draws the feature selectables and returns the feature the panel below should edit.
-	const std::string& DrawFeatureList(std::string& selected, const std::vector<FeatureListEntry>& entries)
+	/// The context the Scene Manager panel edits: the interior layer indoors, else time of day.
+	SceneSettingsManager::SceneContextId GetSceneManagerPanelContext()
 	{
-		if (entries.empty()) {
+		return {
+			.type = interiorEnabled ? SceneSettingsManager::SceneContextType::Interior :
+			                          SceneSettingsManager::SceneContextType::TimeOfDay,
+			.period = interiorEnabled ? TimeOfDayPeriod::Count : TimeOfDayPeriod::Dawn,
+		};
+	}
+
+	/// Whether a context holds any entry for a feature, in any of its periods.
+	bool ContextHasFeature(const SceneSettingsManager::SceneContextId& context, const std::string& featureShortName)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		return manager && std::ranges::any_of(manager->GetContextEntries(context),
+							  [&](const auto& entry) { return entry.featureShortName == featureShortName; });
+	}
+
+	/// The shared feature column, dotting the features this page already holds settings for.
+	void DrawFeatureList(std::string& selected, const std::vector<Feature*>& features,
+		const SceneSettingsManager::SceneContextId& context, std::string* search)
+	{
+		if (features.empty()) {
 			selected.clear();
 			Util::Text::WrappedSecondary("%s",
 				T(TKEY("scene_feature_list_empty"), "No loaded feature exposes scene settings."));
-			return selected;
+			return;
 		}
 
-		if (std::ranges::none_of(entries, [&](const auto& entry) { return entry.shortName == selected; }))
-			selected = entries.front().shortName;
+		if (std::ranges::none_of(features, [&](Feature* feature) { return feature->GetShortName() == selected; }))
+			selected = features.front()->GetShortName();
 
-		for (const auto& entry : entries) {
-			if (ImGui::Selectable(entry.label.c_str(), entry.shortName == selected))
-				selected = entry.shortName;
-		}
-		return selected;
+		FeatureListPicker::Draw(features, selected,
+			{
+				.search = search,
+				.marker = [&context](const Feature& feature) { return ContextHasFeature(context, const_cast<Feature&>(feature).GetShortName()) ?
+			                                                              FeatureListPicker::Marker::Filled :
+			                                                              FeatureListPicker::Marker::None; },
+				.markerTooltip = [](const Feature&, FeatureListPicker::Marker) { return T(TKEY("scene_feature_has_settings"), "Has settings on this page."); },
+			});
 	}
 
-	/// Period bar, intro, and the replicated feature UI bound to one scene context.
-	void DrawPanel(const char* intro, const std::string& selectedFeature,
-		const SceneSettingsManager::SceneContextId& baseContext, bool withPeriodBar = true,
-		bool sceneManagerPanel = false)
+	/// Period bar and actions, the layer header, and the replicated feature UI bound to one scene context.
+	void DrawPanel(const std::string& selectedFeature, const SceneSettingsManager::SceneContextId& baseContext,
+		bool withPeriodBar = true, bool sceneManagerPanel = false)
 	{
 		auto context = baseContext;
 		if (withPeriodBar) {
@@ -386,12 +407,13 @@ namespace
 			if (sceneManagerPanel)
 				EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
 			context = DrawPeriodAndActionsRow(baseContext, sceneManagerPanel);
-			ImGui::Separator();
 		} else {
 			// A page without the bar has no toggle row to share, so the actions get a row of their own.
 			ScenePageToolbar::Draw(context);
 		}
-		Util::Text::WrappedSecondary("%s", intro);
+		// Which layer this page writes to and what an edit there does, the same header Base Settings shows.
+		SceneLayerHeader::DrawScene(context, selectedFeature);
+		ImGui::Separator();
 
 		if (selectedFeature.empty())
 			return;
@@ -400,7 +422,7 @@ namespace
 
 	/// Feature column beside the panel body, split by a divider the user can drag.
 	/// Transitionable features are the weather set; the rest also covers interior and location.
-	void DrawFeatureLayout(std::string& selectedFeature, bool transitionableOnly, const char* intro,
+	void DrawFeatureLayout(std::string& selectedFeature, std::string& featureSearch, bool transitionableOnly,
 		bool withPeriodBar, const SceneSettingsManager::SceneContextId& baseContext)
 	{
 		if (!ImGui::BeginTable("SceneFeatureLayout", 2, kFeatureLayoutFlags))
@@ -412,15 +434,13 @@ namespace
 
 		// Each column scrolls on its own, so a long feature list never drags the panel with it.
 		ImGui::TableSetColumnIndex(0);
-		if (ImGui::BeginChild("##SceneFeatureList")) {
-			Util::Text::Secondary("%s", T(TKEY("scene_feature_list_title"), "Features"));
-			DrawFeatureList(selectedFeature, GetFeatureEntries(transitionableOnly));
-		}
+		if (ImGui::BeginChild("##SceneFeatureList"))
+			DrawFeatureList(selectedFeature, GetSceneFeatures(transitionableOnly), baseContext, &featureSearch);
 		ImGui::EndChild();
 
 		ImGui::TableSetColumnIndex(1);
 		if (ImGui::BeginChild("##SceneFeatureBody"))
-			DrawPanel(intro, selectedFeature, baseContext, withPeriodBar);
+			DrawPanel(selectedFeature, baseContext, withPeriodBar);
 		ImGui::EndChild();
 
 		ImGui::EndTable();
@@ -870,8 +890,7 @@ void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 		.type = SceneSettingsManager::SceneContextType::Weather,
 		.weatherId = weatherId,
 	};
-	DrawFeatureLayout(weatherSelectedFeature, true,
-		T(TKEY("scene_manager_weather_intro"), "Settings overridden while this weather is active."), true, context);
+	DrawFeatureLayout(weatherSelectedFeature, weatherFeatureSearch, true, true, context);
 }
 
 void SceneSettingsUI::DrawSceneManagerPanel()
@@ -881,15 +900,7 @@ void SceneSettingsUI::DrawSceneManagerPanel()
 
 	// The interior layer takes the panel over indoors, and it has no periods.
 	SyncSceneToggles();
-	const bool interior = interiorEnabled;
-	const SceneSettingsManager::SceneContextId context{
-		.type = interior ? SceneSettingsManager::SceneContextType::Interior :
-						   SceneSettingsManager::SceneContextType::TimeOfDay,
-		.period = interior ? TimeOfDayPeriod::Count : TimeOfDayPeriod::Dawn,
-	};
-
-	DrawPanel(T(TKEY("scene_manager_panel_intro"), "Settings overridden by interior and time of day."),
-		panelSelectedFeature, context, true, true);
+	DrawPanel(panelSelectedFeature, GetSceneManagerPanelContext(), true, true);
 }
 
 void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
@@ -898,7 +909,7 @@ void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 
 	ImGui::Indent();
 	ImGui::SetWindowFontScale(kNestedFeatureFontScale);
-	DrawFeatureList(panelSelectedFeature, GetFeatureEntries(false));
+	DrawFeatureList(panelSelectedFeature, GetSceneFeatures(false), GetSceneManagerPanelContext(), nullptr);
 	ImGui::SetWindowFontScale(1.0f);
 	ImGui::Unindent();
 }
@@ -960,9 +971,7 @@ void SceneSettingsUI::DrawLocationWindows()
 				.locationFormKey = window.target.formKey,
 			};
 			// Both sets take location features; a per-period set greys whatever cannot blend.
-			DrawFeatureLayout(window.selectedFeature, false,
-				T(TKEY("scene_manager_location_intro"), "Settings overridden while the player is in this location."),
-				true, context);
+			DrawFeatureLayout(window.selectedFeature, window.featureSearch, false, true, context);
 		}
 		ImGui::End();
 	}
@@ -1006,6 +1015,58 @@ void SceneSettingsUI::OpenSceneContext(const SceneSettingsManager::SceneContextI
 		panelSelectedFeature = featureShortName;
 		break;
 	}
+}
+
+bool SceneSettingsUI::LayerListsFeature(SceneSettingsManager::SceneContextType layer, const std::string& featureShortName)
+{
+	const bool transitionableOnly = layer == SceneSettingsManager::SceneContextType::Weather;
+	return std::ranges::any_of(GetSceneFeatures(transitionableOnly),
+		[&](Feature* feature) { return feature->GetShortName() == featureShortName; });
+}
+
+std::optional<SceneSettingsManager::SceneContextId> SceneSettingsUI::ResolveCurrentLayer(
+	SceneSettingsManager::SceneContextType layer, const std::string& featureShortName)
+{
+	using enum SceneSettingsManager::SceneContextType;
+	auto* manager = SceneSettingsManager::GetSingleton();
+	if (!manager || !LayerListsFeature(layer, featureShortName))
+		return std::nullopt;
+
+	switch (layer) {
+	case TimeOfDay:
+		return SceneSettingsManager::SceneContextId{ .type = TimeOfDay, .period = SceneSettingsManager::GetCurrentPeriod() };
+	case Interior:
+		return SceneSettingsManager::SceneContextId{ .type = Interior };
+	case Weather:
+		{
+			auto* sky = globals::game::sky;
+			if (!sky || !sky->currentWeather)
+				return std::nullopt;
+			return SceneSettingsManager::SceneContextId{ .type = Weather, .weatherId = sky->currentWeather->GetFormID() };
+		}
+	default:
+		{
+			// Outermost first, so the last listed link is the narrowest: the one whose settings win here.
+			const auto& chain = manager->GetCurrentLocationTargets();
+			const auto narrowest = std::ranges::find_if(chain | std::views::reverse, [&](const auto& target) {
+				return manager->IsLocationTargetAuthored(target.type, target.formKey);
+			});
+			if (narrowest == (chain | std::views::reverse).end())
+				return std::nullopt;
+			return SceneSettingsManager::SceneContextId{
+				.type = Location,
+				.locationType = narrowest->type,
+				.locationFormKey = narrowest->formKey,
+			};
+		}
+	}
+}
+
+void SceneSettingsUI::OpenLocationsPage()
+{
+	CSEditor::OpenEditorWindow();
+	if (auto* editorWindow = EditorWindow::GetSingleton(); editorWindow->open)
+		editorWindow->SelectCategory("Locations");
 }
 
 bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureShortName,
