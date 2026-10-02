@@ -1,6 +1,7 @@
 #include "ConstantEvaluator.h"
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
 #include <array>
 #include <cstring>
@@ -264,7 +265,7 @@ namespace DCLF
 			state.PSTexture[slot] = reinterpret_cast<std::remove_reference_t<decltype(state.PSTexture[slot])>>(TextureSentinel(slot));
 			state.PSTextureFilterMode[slot] = static_cast<RE::BSGraphics::TextureFilterMode>(kUnwrittenFilterMode);
 		}
-		shader->currentRawTechnique = a_passDescriptor;
+		shader->currentRawTechnique = SetupTechniqueDescriptor(a_passDescriptor);  // SetupTechnique stores the descriptor it draws
 
 		evaluating = true;
 		a_call(state);
@@ -383,8 +384,8 @@ namespace DCLF
 		a_out.ps.Reset();
 		a_out.filterModes.fill(kUnwrittenFilterMode);
 
-		// Sampler filter modes: diffuse and normal always, then per technique.
-		const std::uint32_t technique = (a_passDescriptor >> 24) & 0x3f;
+		// Sampler filter modes: diffuse and normal always, then per technique, as SetupTechnique draws it.
+		const std::uint32_t technique = (SetupTechniqueDescriptor(a_passDescriptor) >> 24) & 0x3f;
 		a_out.filterModes[0] = a_out.filterModes[1] = kAnisotropic;
 		switch (technique) {
 		case 1:  // Envmap (and 0x10, not drawn): cube map and its mask
@@ -394,7 +395,11 @@ namespace DCLF
 			a_out.filterModes[6] = kAnisotropic;
 			break;
 		case 3:  // Parallax
+		case 7:  // ParallaxOcc
 			a_out.filterModes[3] = kAnisotropic;
+			break;
+		case 11:  // MultilayerParallax: the cube map, its mask and the inner layer
+			a_out.filterModes[4] = a_out.filterModes[5] = a_out.filterModes[8] = kAnisotropic;
 			break;
 		default:
 			break;

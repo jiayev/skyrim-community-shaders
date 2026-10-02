@@ -112,6 +112,10 @@ namespace DCLF
 		std::uint64_t nativeDraws = 0;         // native lighting draws in the main pass
 		std::uint64_t checkedDraws = 0;        // ... of geometry in the DCLF tables
 		std::uint64_t mismatchedDraws = 0;     // ... whose state differs
+		// By the pipeline's technique (pass descriptor bits 24-29): checked draws and mismatched ones.
+		std::array<std::uint64_t, 64> checkedByTechnique{}, mismatchedByTechnique{};
+		std::array<std::string, 64> firstByTechnique;  // the first mismatch of each, whatever the sample limit
+		std::string lastNote;                          // the last NoteMismatch
 		std::uint64_t materialMismatches = 0;  // ... in PerMaterial constants or textures
 		// Each material a draw mismatched on, followed into the following frames' write drains: whether an
 		// event for it arrived after the drain of the frame it mismatched in.

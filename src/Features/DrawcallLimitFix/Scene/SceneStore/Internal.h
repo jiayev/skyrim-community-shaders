@@ -493,11 +493,12 @@ namespace DCLF
 		 * - Technique: the lighting technique is outside the main pass's set (the terrain's landscape blocks);
 		 *   a shadow view draws the Utility technique, which ShadowUtilityTechnique derives from the property.
 		 * - UnsupportedParent: under a BSOrderedNode (hay), which orders blended draws and nothing else.
+		 * - MultiIndex: a BSMultiIndexTriShape, whose shadow passes draw as a tri-shape's (ClassifyStatic).
 		 * Not a billboard: NiBillboardNode turns to the culling camera, which for a shadow view is the light's.
 		 */
 		inline bool ShadowOnlyReason(Ineligible a_reason)
 		{
-			return a_reason == Ineligible::Technique || a_reason == Ineligible::UnsupportedParent;
+			return a_reason == Ineligible::Technique || a_reason == Ineligible::UnsupportedParent || a_reason == Ineligible::MultiIndex;
 		}
 
 		inline bool ShadowOnlyCaster(Ineligible a_reason, RE::BSGeometry& a_geometry)

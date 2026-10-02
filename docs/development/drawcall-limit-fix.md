@@ -6591,3 +6591,31 @@ floes, a few clutter pieces), parallax occlusion (river decals) and refraction.
 **The bits' parity on the tour:** all agree but for the kinds known: the hair at the radius edge, a terrain block once
 (Mzinchaleft, its bound 2,750 units outside the radius: the light gives it nothing), and portal-strict lights' bits DCLF
 gives without the portal test (a cobweb, a spider web: DCLF only, as its members' rule).
+
+### Multi-index shapes in the shadow views; parallax occlusion and multilayer parallax in the main pass (2026-10-01)
+
+**Multi-index shapes** (`Ineligible::MultiIndex`). The cave walls and boulders the tour found keeping light entries in are
+`BSMultiIndexTriShape`s (geometry type 7): a tri-shape plus a second index list and a second shader property, a snow layer
+(`altIndexBuffer`, `additionalShaderProperty`, `useAdditionalTriList`).
+-   **The draw** (`FUN_1414f2ad0`, the pass draw): type 7 draws like a tri-shape (its renderer data, its triangle count), but
+    a pass with accumulation hint 12 (the additional property's main-pass layer) draws the second index list.
+-   **The shadow modes** register the main property's passes alone (`FUN_1414b2a60`: `GetRenderPasses` of the geometry's
+    property), and `FUN_1414b2140` writes the light mask on the main property only.
+-   **So** a multi-index shape is classified as a tri-shape (`ClassifyStatic`), and an eligible one becomes `MultiIndex`: a
+    shadow-only caster (`ShadowOnlyReason`), its main pass the engine's (the snow layer).
+-   **Measured** (Mzinchaleft, Bleak Falls Barrow, Nchuand-Zel; full parity): 95 multi-index shapes shadow-only; no light
+    entry left blocked; holes 0; every check OK, the Shield race apart.
+
+**Parallax occlusion (7) and multilayer parallax (11)** join the main pass's techniques (`IsSupportedTechnique`).
+`SetupMaterial` writes their constants and textures (`ParallaxOccData`, `MultiLayerParallaxData`, the layer and envmap
+maps), which the material records take from the engine's own evaluation. What `SetupTechnique` adds is ported:
+-   **The remap** (`SetupTechniqueDescriptor`): technique 7 draws as 0 unless the parallax-occlusion global
+    (`0x142035500`) is set, and 18 as 9 unless the land-noise global (`0x142032fdb`) is. The vertex and pixel descriptors,
+    `EvaluateTechnique` and the stored technique `SetupGeometry` reads (`BSLightingShader+0x94`) all take the remapped one.
+-   **The samplers:** technique 7 as parallax (slot 3), 11 slots 4, 5 and 8 (the cube map, its mask, the inner layer).
+-   **Capture parity by technique** (`CS_DCLF_CAPTURE_PARITY`, new: checked and mismatched draws per technique, and the
+    first mismatch of each): at Riften, multilayer parallax 3 of 9 and 6 of 18 mismatched, all the specular bit (`0x200`)
+    the engine fades out by distance and DCLF keeps (its specular fades in the draw, `LodFadeFrame`): the same difference
+    technique 0 shows. Material and technique mismatches 0. Parallax occlusion (two river decals on the tour) was never drawn
+    in view on these runs, so its capture is unverified.
+-   **With ownership** (Riften, Mzinchaleft; full parity): holes 0, every check OK, the Shield race apart.

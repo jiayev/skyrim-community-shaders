@@ -30,6 +30,7 @@ namespace DCLF
 		Billboard,           // under an NiBillboardNode: the main cull turns it to the camera
 		Switch,              // under an NiSwitchNode that does not select it this frame (or CS_DCLF_SWITCH_NODES off)
 		TerrainNoBlend,      // Terrain Blending redraws it after its terrain (kNoTransparencyMultiSample)
+		MultiIndex,          // BSMultiIndexTriShape otherwise eligible: its main pass is the engine's (the snow layer), its shadow a tri-shape's
 		Count
 	};
 
@@ -53,6 +54,7 @@ namespace DCLF
 		"billboard",
 		"switch",
 		"terrain-no-blend",
+		"multi-index",
 	};
 
 	struct LightingDescriptors
@@ -172,6 +174,12 @@ namespace DCLF
 
 	/** @brief Technique GetRenderPasses selects from the property flags (engine notes: technique table). */
 	std::uint32_t SelectLightingTechnique(std::uint64_t a_flags);
+	/**
+	 * @brief The descriptor BSLightingShader::SetupTechnique (AE 0x1414db810) draws a pass descriptor with: LODLandNoise (18) is
+	 * LODLand (9) unless the land noise global (0x142032fdb) is set, and ParallaxOcc (7) is None (0) unless the parallax
+	 * occlusion global (0x142035500) is. Its shaders, its samplers and what SetupGeometry reads (+0x94) are that technique's.
+	 */
+	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass);
 	/** @brief The Lighting techniques by id (SelectLightingTechnique), and kRefractionReject's name. */
 	constexpr std::array<std::string_view, 20> kLightingTechniqueNames{ "none", "envmap", "glowmap", "parallax", "facegen",
 		"facegenRGBTint", "hair", "parallaxOcc", "MTLand", "LODLand", "snow", "multilayerParallax", "treeAnim", "LODObjects",
