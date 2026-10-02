@@ -58,8 +58,10 @@ namespace DCLF
 		lookups.generation = lookupGeneration + 1;
 		lookups.shadowGeneration = shadowGeneration + 1;
 		lookups.versionCounter = lookupVersion;
-		for (auto& [geometry, entry] : tracked)
+		for (auto& [geometry, entry] : tracked) {
 			entry.slot = kNoObjectSlot;
+			entry.layerSlot = kNoObjectSlot;
+		}
 		geometryIndex.clear();
 		pipelineIndex.clear();
 		materialIndex.clear();
@@ -151,7 +153,7 @@ namespace DCLF
 		}
 		if (a_resolveBuffers) {
 			for (std::uint32_t slot = 0; slot < tables.geometries.size(); ++slot) {
-				if (tables.geometryLastUsed[slot] != frame)
+				if (tables.geometryLastUsed[slot] != frame || tables.geometryLayerKey[slot])
 					continue;
 				++geometriesProbed;
 				const auto& record = tables.geometries[slot];
@@ -328,8 +330,64 @@ namespace DCLF
 		return slot;
 	}
 
+	std::uint32_t SceneStore::AcquireLayerSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry, std::uint32_t a_base)
+	{
+		if (denseWalk) {
+			const auto slot = static_cast<std::uint32_t>(tables.objects.size());
+			tables.GrowObjects(std::size_t(slot) + 1);
+			tables.objectGeometry[slot] = a_geometry;
+			tables.objectIdentity[slot] = a_tracked.identity;
+			tables.objectGroup[slot] = a_tracked.groupIdentity;
+			return slot;
+		}
+		const std::uint32_t held = a_tracked.layerSlot;
+		if (held != kNoObjectSlot && held < tables.objectGeometry.size() && tables.objectGeometry[held] == a_geometry && tables.layerBase[held] == a_base &&
+			tables.objectIdentity[held] == a_tracked.identity && tables.objectGroup[held] == a_tracked.groupIdentity)
+			return held;
+		ReleaseLayerSlot(a_tracked);  // one of another base slot (the base moved)
+		std::uint32_t slot;
+		if (!tables.objectFree.empty()) {
+			slot = tables.objectFree.back();
+			tables.objectFree.pop_back();
+		} else {
+			slot = static_cast<std::uint32_t>(tables.objects.size());
+			tables.GrowObjects(std::size_t(slot) + 1);
+		}
+		tables.objectGeometry[slot] = a_geometry;
+		tables.objectIdentity[slot] = a_tracked.identity;
+		tables.objectGroup[slot] = a_tracked.groupIdentity;
+		a_tracked.layerSlot = slot;
+		return slot;
+	}
+
+	RE::BSShaderProperty* SceneStore::SlotProperty(std::uint32_t a_slot) const
+	{
+		const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+		if (!geometry)
+			return nullptr;
+		return tables.IsLayer(a_slot) ? LayerPropertyOf(*geometry) : geometry->GetGeometryRuntimeData().shaderProperty.get();
+	}
+
+	void SceneStore::ReleaseLayerSlot(Tracked& a_entry)
+	{
+		const auto slot = std::exchange(a_entry.layerSlot, kNoObjectSlot);
+		if (slot == kNoObjectSlot || slot >= tables.objects.size() || tables.objectGeometry[slot] != a_entry.geometry.get() || !tables.IsLayer(slot))
+			return;
+		shadowSetsDirty = true;
+		shadowDirtySlots.push_back(slot);
+		if (IsResidentSlot(slot)) {
+			DropResidentSlot(slot, false);
+			++residentStats.released;
+		}
+		tables.ResetObject(slot);
+		tables.objectFree.push_back(slot);
+		if (tables.liveObjects)
+			--tables.liveObjects;
+	}
+
 	void SceneStore::ReleaseObjectSlot(Tracked& a_entry)
 	{
+		ReleaseLayerSlot(a_entry);
 		const auto slot = a_entry.slot;
 		a_entry.slot = kNoObjectSlot;
 		a_entry.objectStamp = 0;
@@ -377,8 +435,12 @@ namespace DCLF
 			auto* geometry = tables.objectGeometry[slot];
 			if (!geometry || tables.objectSeen[slot] == walkSerial)
 				continue;
-			if (const auto it = tracked.find(geometry); it != tracked.end() && it->second.slot == slot)
-				it->second.slot = kNoObjectSlot;
+			if (const auto it = tracked.find(geometry); it != tracked.end()) {
+				if (it->second.slot == slot)
+					it->second.slot = kNoObjectSlot;
+				if (it->second.layerSlot == slot)
+					it->second.layerSlot = kNoObjectSlot;
+			}
 			tables.ResetObject(slot);
 			tables.objectFree.push_back(slot);
 		}

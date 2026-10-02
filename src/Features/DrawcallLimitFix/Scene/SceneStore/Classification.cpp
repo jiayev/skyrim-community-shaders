@@ -47,6 +47,7 @@ namespace DCLF
 	RE::NiNode* SceneStore::FindCategoryNode(RE::NiAVObject* a_object, Ineligible* a_parentReason) const
 	{
 		Ineligible reason = Ineligible::None;
+		const RE::NiAVObject* top = a_object;
 		RE::NiNode* node = a_object ? a_object->parent : nullptr;
 		for (std::uint32_t depth = 0; node && depth < kMaxParentDepth; ++depth, node = node->parent) {
 			if (categoryNodes.contains(node)) {
@@ -55,6 +56,16 @@ namespace DCLF
 				return node;
 			}
 			reason = CombineParentReasons(reason, ParentReason(node));
+			top = node;
+		}
+		// A root the portal graph draws with no parent at all (alwaysRenderChildren): filed under its graph's shared portal
+		// node, a category node no walk up from it reaches.
+		if (!node && top && !top->parent && !alwaysRenderRoots.empty()) {
+			if (const auto it = alwaysRenderRoots.find(top); it != alwaysRenderRoots.end()) {
+				if (a_parentReason)
+					*a_parentReason = reason;
+				return it->second.category;
+			}
 		}
 		return nullptr;
 	}
@@ -79,6 +90,15 @@ namespace DCLF
 			mix(cell3D);
 			if (cell3D)
 				hash.Mix(cell3D->GetChildren().size());
+			// The portal graph's parentless roots (RefreshCategoryNodes): a few dozen pointers.
+			if (const auto* graph = loaded ? loaded->portalGraph.get() : nullptr) {
+				mix(graph->portalSharedNode.get());
+				hash.Mix(graph->alwaysRenderChildren.size());
+				for (const auto& child : graph->alwaysRenderChildren) {
+					mix(child.get());
+					mix(child ? child->parent : nullptr);
+				}
+			}
 		};
 		if (auto* tes = RE::TES::GetSingleton()) {
 			if (auto* objRoot = tes->objRoot)
@@ -107,6 +127,7 @@ namespace DCLF
 		categorySignature = signature;
 
 		ankerl::unordered_dense::set<RE::NiNode*> current;
+		ankerl::unordered_dense::map<const RE::NiAVObject*, AlwaysRenderRoot> currentRoots;
 
 		auto addCell = [&](RE::TESObjectCELL* a_cell) {
 			if (!a_cell || !a_cell->IsAttached())
@@ -131,8 +152,16 @@ namespace DCLF
 					if (room)
 						current.insert(room.get());
 				}
-				if (auto* shared = graph->portalSharedNode.get())
+				if (auto* shared = graph->portalSharedNode.get()) {
 					current.insert(shared);
+					// References the graph draws with no parent (Bleak Falls Barrow's chamber pieces and stairs): each root is
+					// filed under the shared node (FindCategoryNode). Held, so a root that leaves the list is still there to
+					// walk when what was tracked under it is dropped.
+					for (const auto& child : graph->alwaysRenderChildren) {
+						if (child && !child->parent)
+							currentRoots.try_emplace(child.get(), AlwaysRenderRoot{ child, shared });
+					}
+				}
 			}
 		};
 
@@ -155,7 +184,7 @@ namespace DCLF
 			}
 		}
 
-		// Cells that went away: drop what was tracked under them.
+		// Cells that went away, and parentless roots the portal graph no longer lists: drop what was tracked under them.
 		bool removedAny = false;
 		for (auto* node : categoryNodes) {
 			if (!current.contains(node)) {
@@ -163,14 +192,39 @@ namespace DCLF
 				break;
 			}
 		}
-		if (removedAny) {
+		bool removedRoot = false;
+		for (const auto& [root, entry] : alwaysRenderRoots) {
+			if (const auto it = currentRoots.find(root); it == currentRoots.end() || it->second.category != entry.category) {
+				removedRoot = true;
+				break;
+			}
+		}
+		if (removedAny || removedRoot) {
 			std::vector<RE::BSGeometry*> stale;
 			for (auto& [geometry, entry] : tracked) {
-				if (!current.contains(entry.categoryNode))
+				if (!current.contains(entry.categoryNode)) {
 					stale.push_back(geometry);
+					continue;
+				}
+				// Filed under a root (its walk up ends without reaching the category node): stale when the root left.
+				if (removedRoot && alwaysRenderRoots.size()) {
+					const RE::NiAVObject* top = geometry;
+					while (top->parent && top->parent != entry.categoryNode)
+						top = top->parent;
+					if (!top->parent && alwaysRenderRoots.contains(top)) {
+						const auto it = currentRoots.find(top);
+						if (it == currentRoots.end() || it->second.category != entry.categoryNode)
+							stale.push_back(geometry);
+					}
+				}
 			}
 			for (auto* geometry : stale)
 				EraseTracked(geometry);
+		}
+		std::vector<RE::NiAVObject*> addedRoots;
+		for (const auto& [root, entry] : currentRoots) {
+			if (!alwaysRenderRoots.contains(root) && categoryNodes.contains(entry.category))
+				addedRoots.push_back(entry.root.get());
 		}
 
 		// Cells that appeared: their content was attached before the cell was, so scan it now.
@@ -180,6 +234,7 @@ namespace DCLF
 				added.push_back(node);
 		}
 		categoryNodes = std::move(current);
+		alwaysRenderRoots = std::move(currentRoots);
 		std::erase_if(categoryFound, [&](const auto& a_entry) { return !categoryNodes.contains(const_cast<RE::NiNode*>(a_entry.first)); });
 		const TrackSource previousSource = addSource;
 		if (addSource != TrackSource::Rescan)
@@ -191,6 +246,13 @@ namespace DCLF
 					AddSubtree(child.get());
 			}
 		}
+		// Roots of a graph whose shared node appeared now are walked here too (FindCategoryNode finds them through it).
+		for (const auto& [root, entry] : alwaysRenderRoots) {
+			if (std::find(added.begin(), added.end(), entry.category) != added.end())
+				AddSubtree(entry.root.get());
+		}
+		for (auto* root : addedRoots)
+			AddSubtree(root);
 		addSource = previousSource;
 	}
 
@@ -384,9 +446,9 @@ namespace DCLF
 		                  netimmerse_cast<RE::BSFaceGenNiNode*>(a_geometry.parent);
 		// A BSMultiIndexTriShape (cave walls, rocks with a snow layer) draws every pass but one as a tri-shape: its renderer data and
 		// its triangle count (FUN_1414f2ad0, type 7). The exception is the additional property's main-pass layer (accumulation
-		// hint 12), drawn from its second index list, so its main pass stays the engine's. The shadow modes register the main
-		// property's passes alone (FUN_1414b2a60), so it casts as a tri-shape: classified as one, an eligible one is MultiIndex,
-		// a shadow-only caster (ShadowOnlyReason).
+		// hint 12), drawn from its second index list: DCLF's layer object (Tracked::layerSlot, ClassifyLayer). The shadow modes
+		// register the main property's passes alone (FUN_1414b2a60), so it casts as a tri-shape. One whose layer DCLF cannot
+		// draw is MultiIndex, a shadow-only caster (ShadowOnlyReason): its two main passes stay the engine's, together.
 		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
 		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex) {
 			if (!face)
@@ -461,7 +523,35 @@ namespace DCLF
 				a_descriptors->rejectedTechnique = descriptors.rejectedTechnique;
 			}
 		}
-		return multiIndex && reason == Ineligible::None ? Ineligible::MultiIndex : reason;
+		if (!multiIndex || reason != Ineligible::None)
+			return reason;
+		const auto* additional = static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData().additionalShaderProperty.get();
+		if (!additional)
+			return Ineligible::None;  // nothing but its own passes: a tri-shape
+		return ActiveToggles().layers && ClassifyLayer(a_geometry, nullptr, nullptr) == Ineligible::None ? Ineligible::None : Ineligible::MultiIndex;
+	}
+
+	Ineligible SceneStore::ClassifyLayer(const RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated)
+	{
+		// The layer's passes are GetRenderPasses of the additional property for this geometry (FUN_1414b2330): the geometry's
+		// alpha property and skin, the layer's flags and material.
+		const auto* layer = netimmerse_cast<const RE::BSLightingShaderProperty*>(LayerPropertyOf(a_geometry));
+		if (!layer)
+			return Ineligible::NotLightingShader;
+		if (a_geometry.GetGeometryRuntimeData().skinInstance)
+			return Ineligible::Skinned;  // a skinned layer is not modelled
+		const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(layer->material);
+		if (material && material->materialAlpha < 1.0f)
+			return Ineligible::AlphaBlend;
+		LightingDescriptors descriptors;
+		const Ineligible reason = DeriveLightingDescriptors(*layer, a_geometry, a_accumulated, descriptors, true);
+		if (a_descriptors) {
+			if (reason == Ineligible::None)
+				*a_descriptors = descriptors;
+			else
+				a_descriptors->rejectedTechnique = descriptors.rejectedTechnique;
+		}
+		return reason;
 	}
 
 	SceneStore::SwitchState SceneStore::ReadSwitch(const RE::NiSwitchNode& a_switch)

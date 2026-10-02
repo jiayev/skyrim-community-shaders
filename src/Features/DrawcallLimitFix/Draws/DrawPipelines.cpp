@@ -618,7 +618,9 @@ namespace DCLF
 			const rhi::SubobjFlags flags{ rhi::PipelineFlags_IndirectBindable };
 			// An opaque-group decal (accumulation hint 2) writes depth where the engine's main pass does: its depth variant is
 			// the decal depth pass's, which draws it before the colour pass with the colour variant's bias and test (engine
-			// notes, "Decals"). A blended decal writes none (depth mode 1), so its depth variant writes nothing either.
+			// notes, "Decals"). A blended decal writes none (depth mode 1), so its depth variant writes nothing either. A
+			// multi-index layer (group 3, the engine's group 2: depth mode 3) writes its depth from its colour draw, after its
+			// host is shaded, as the engine does: no depth variant of it is drawn (the decal depth pass is group 1's alone).
 			const std::uint32_t decalGroup = a_state.valid ? RasterDecalGroup(a_key.rasterFlags) : 0u;
 			for (std::uint32_t variant = 0; variant < kVariantCount; ++variant) {
 				const bool depthOnly = variant == kDepthVariant;
@@ -643,7 +645,7 @@ namespace DCLF
 				// stored depth is whatever lies behind it, so LESS_EQUAL would pass those fragments and run the full
 				// lighting shader before they discard; EQUAL rejects them. A decal (a key with engine state) keeps
 				// LESS_EQUAL: it draws with a depth bias over the surface beneath, which EQUAL never passes.
-				depth.ds.depthWrite = depthOnly && decalGroup != 2;
+				depth.ds.depthWrite = depthOnly ? decalGroup != 2 : decalGroup == 3;
 				depth.ds.depthFunc = depthOnly ? (a_state.valid ? rhi::CompareOp::LessEqual : rhi::CompareOp::Less) :
 				                                 (a_state.valid ? rhi::CompareOp::LessEqual : rhi::CompareOp::Equal);
 				rhi::SubobjBlend blend{};

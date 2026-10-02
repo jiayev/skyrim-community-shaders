@@ -16,6 +16,7 @@ namespace DCLF
 		++trackedLayout;
 		sceneIdentity.Reset();
 		categoryNodes.clear();
+		alwaysRenderRoots.clear();
 		ResetSlotTables();
 		InvalidateObjectIndices();
 		// They hold raw pointers into game allocations now that they outlive the frame, so the teardown
@@ -52,6 +53,14 @@ namespace DCLF
 	{
 		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
 		return it == tracked.end() || it->second.objectStamp != objectStamp ? -1 : static_cast<std::int32_t>(it->second.objectId);
+	}
+
+	std::int32_t SceneStore::FindLayerObject(const RE::BSGeometry* a_geometry) const
+	{
+		const auto it = tracked.find(const_cast<RE::BSGeometry*>(a_geometry));
+		if (it == tracked.end() || it->second.objectStamp != objectStamp || it->second.layerSlot == kNoObjectSlot || !tables.IsLayer(it->second.layerSlot))
+			return -1;
+		return static_cast<std::int32_t>(it->second.layerSlot);
 	}
 
 	Ineligible SceneStore::Classify(RE::BSGeometry* a_geometry) const

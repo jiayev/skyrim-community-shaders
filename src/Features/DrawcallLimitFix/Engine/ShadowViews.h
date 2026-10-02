@@ -56,6 +56,9 @@ namespace DCLF
 		 * of any mode; LocalLightCull's parity reports one if a scene ever registers it.
 		 */
 		DecalPointLight,
+		// A multi-index shape's layer object (SceneStore::Tracked::layerSlot): the shadow modes register the main property's
+		// passes alone (FUN_1414b2a60), so the additional property never casts.
+		Layer,
 		Count
 	};
 	const char* ShadowRejectName(ShadowReject a_reason);

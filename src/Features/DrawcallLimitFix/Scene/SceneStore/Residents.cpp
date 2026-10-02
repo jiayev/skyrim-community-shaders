@@ -54,6 +54,10 @@ namespace DCLF
 			memberDecalsChanged = true;
 		if (a_restore)
 			ResetAccumulatedHalf(a_slot);
+		// A layer and its base are members together (WriteLayer): the other leaves too.
+		const std::uint32_t partner = tables.IsLayer(a_slot) ? tables.layerBase[a_slot] : a_slot < tables.layerOf.size() ? tables.layerOf[a_slot] : kNoObjectSlot;
+		if (partner != kNoObjectSlot)
+			DropResidentSlot(partner, a_restore);
 	}
 
 	void SceneStore::EndAllResidency()
@@ -124,10 +128,8 @@ namespace DCLF
 		}
 		// A member's property is its pipeline's lighting template, read again every frame: the property is the engine's, and a
 		// swap of it rewrites the member only when an event names it.
-		for (const auto& [pipeline, slot] : residentPipelines) {
-			const auto* geometry = tables.objectGeometry[slot];
-			tables.geometryTemplate[pipeline] = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
-		}
+		for (const auto& [pipeline, slot] : residentPipelines)
+			tables.geometryTemplate[pipeline] = SlotProperty(slot);
 		// A tree's wind is TreeWindCS's from here (Records.h, TreeStatic): nothing is taken from the tree nodes per frame.
 	}
 

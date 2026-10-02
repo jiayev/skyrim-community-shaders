@@ -126,6 +126,16 @@ namespace DCLF
 				tables.sunEntry[slot] = entry;
 				tables.lodFade[slot] = lodFade;
 				changed |= kTakePlacement;
+				// Its layer (WriteLayer) has its placement; its fade node is its own property's.
+				if (const std::uint32_t layer = slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot; layer != kNoObjectSlot) {
+					auto& layerObject = tables.objects[layer];
+					std::memcpy(layerObject.world, world, sizeof(world));
+					std::memcpy(layerObject.previousWorld, previousWorld, sizeof(previousWorld));
+					std::memcpy(layerObject.boundCenter, center, sizeof(center));
+					layerObject.boundRadius = radius;
+					tables.sunEntry[layer] = entry;
+					tables.lodFade[layer] = LodFadeNodeOf(LayerPropertyOf(*geometry));
+				}
 			}
 		}
 		return changed;
@@ -152,6 +162,11 @@ namespace DCLF
 				tables.lodFade[slot] = lodFade;
 				rootChangedSlots.push_back(slot);
 				changed = kTakePlacement;
+				if (const std::uint32_t layer = it->second.layerSlot; layer != kNoObjectSlot && tables.IsLayer(layer)) {
+					tables.sunEntry[layer] = entry;
+					tables.lodFade[layer] = LodFadeNodeOf(LayerPropertyOf(*geometry));
+					rootChangedSlots.push_back(layer);
+				}
 			}
 		}
 		return changed;
@@ -287,6 +302,8 @@ namespace DCLF
 				++stats.lightChangedBy[placements[i].reason];
 			if (changed & kTakePlacement) {
 				tables.NoteChange(slot, kChangePlacement);
+				if (const std::uint32_t layer = slot < tables.layerOf.size() ? tables.layerOf[slot] : kNoObjectSlot; layer != kNoObjectSlot)
+					tables.NoteChange(layer, kChangePlacement);
 				++stats.lightPlacedChanged;
 			}
 			if (changed & kTakePalette) {
@@ -325,6 +342,8 @@ namespace DCLF
 				if (!moved)
 					continue;
 				tables.NoteChange(item.slot, (moved & kTakePlacement ? kChangePlacement : 0u) | (moved & kTakePalette ? kChangePalette : 0u));
+				if (const std::uint32_t layer = item.slot < tables.layerOf.size() ? tables.layerOf[item.slot] : kNoObjectSlot; layer != kNoObjectSlot && (moved & kTakePlacement))
+					tables.NoteChange(layer, kChangePlacement);
 				if (!placementStats.probeMoved++)
 					placementStats.firstMoved = item.geometry->name.c_str() ? item.geometry->name.c_str() : "?";
 			}

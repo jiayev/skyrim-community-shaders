@@ -121,8 +121,12 @@ What SetupTechnique writes (ported in `ConstantEvaluator.cpp` `EvaluateTechnique
 
 Per-technique constant writes (constant indices come from the shader's reflected `constantTable`):
 
--   Envmap/MultilayerParallax/Eye (1, 11, 16): writes the eye-position constant and a material float at
-    material `+0x104`.
+-   Envmap/MultilayerParallax/Eye (1, 11, 16): a material float at material `+0x104`, and the eye position.
+-   **The eye position** (VS `EyePosition`) is written for those three techniques and for any pass whose
+    descriptor has bit 9 (`0x200`) or one of `0x21c00` set (the shader's `+0x94`), whatever the technique: hair,
+    most opaque statics. The value is the current accumulator's eye (`FUN_141480b20()` returns `0x14332a3a8`;
+    `+0x16c`) less `posAdjust`, the same for every pass that writes it once Community Shaders' patch keeps every
+    pass in world space. Any other pass leaves the buffer's last value.
 -   MTLand/MTLandLODBlend (8, 19): land blend parameters from the geometry's parent cell data.
 -   LOD techniques (9, 13, 15, 18): two transform uploads (current and previous).
 -   TreeAnim (12): wind parameters from the object's `BSTreeNode`-like parent (`vfunc 0x1f8`).
@@ -169,8 +173,10 @@ still drawn by the main pass. Everything below is under `TES::objRoot` (`TES+0x8
     Shared Geometry'` (`portalGraph->portalSharedNode`). References are moved into their room, including
     actors.
 -   Some interior geometry is drawn with **no parent at all** (about 30 draws per frame in Dragonsreach and
-    Bleak Falls Barrow), probably the portal graph's `alwaysRenderChildren` or its other object lists.
-    Not confirmed.
+    Bleak Falls Barrow: `NorChamberRitual01`, `NorHallBg1wayStairs256` and other statics). Every such root is in
+    the interior's portal graph's `alwaysRenderChildren` (`BSPortalGraph +0x58`; measured 2026-10-02: all of
+    4,969 draws in a report, none in the lists at `+0x78`, `+0x90` or `+0xA8`). The graph is the cell's
+    `loadedData->portalGraph`, and also `ShadowSceneNode`'s.
 
 ### `NiNode` child management overrides
 
@@ -610,7 +616,7 @@ Sources:
 | t2 specular | flag `0x4` with Specular | M `+0x68` |
 | t9 | flag `0x1000` | M `+0x68` |
 | t12 | flag `0x400` or `0x800` | M `+0x60` |
-| t11 character light | flag `0x400000` (CharacterLight) | R `renderTargets[FUN_1414e8b30(0x142033da8)]` |
+| t11 character light | flag `0x400000` (CharacterLight), and only while the target index `0x142033db0` is not negative (it is -1 while a cell loads) | R `renderTargets[FUN_1414e8b30(0x142033da8)]` |
 | per-technique textures | technique 1-4, 7, 9/0x12, 0xb, 0x10 | M `+0xa0`, `+0xa8`, `+0xb0`, ... |
 | texture address modes | with each texture | M `+0x70` |
 | VS 11 TexcoordOffset | always | M `+0xc/+0x10` offset and `+0x1c/+0x20` scale, pair `[G 0x142033180]` (the texture-transform buffer the frame reads) |
@@ -1020,9 +1026,32 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
 -   **The pass draw** (`FUN_1414f2ad0`, from `SetupAndDrawPass` for unskinned geometry) switches on the geometry type
     (`+0x150`): a tri-shape (3) draws its renderer data (`+0x138`) with its triangle count (`+0x158`); a
     `BSMultiIndexTriShape` (7) the same, except a pass with accumulation hint 12, which draws its second index list
-    (`altIndexBuffer`, `FUN_140e465d0`); `BSLODMultiIndexTriShape` (6) picks its LOD level's ranges.
+    (`altIndexBuffer`, `FUN_140e465d0`); `BSLODMultiIndexTriShape` (6) picks its LOD level's ranges. The second list's
+    draw binds `*altIndexBuffer` (`+0x160`, its first qword the `ID3D11Buffer`) as R16 over the renderer data's vertex
+    buffer and draws `altPrimCount` (`+0x168`) triangles from index 0. Hint 12 alone selects it; `useAdditionalTriList`
+    is not read there.
 -   **The shadow modes' registration** (`FUN_1414b2a60`) asks only the geometry's own property for passes, so a multi-index
     shape's additional property never casts.
+-   **The main modes' registration** (`FUN_1414b2330`, render modes 0-3 of the table at `0x14332b020`): after the
+    geometry's own passes, for a multi-index shape (vfunc `0x1a8`) with an `additionalShaderProperty` (`+0x1b0`) it copies
+    the main property's `lightData+0x20` byte into the additional property's, asks the additional property for its
+    passes, sets each one's hint to 12 and inserts it into geometry group 2 with `FUN_1414f5090(batch, pass, 2, 1)` (not
+    `RegisterPass`). Group 2 holds nothing else in the main registration (hint 2 goes to group 3, hint 3 to group 4).
+    `FUN_1414b3bb0` draws it right after group 3, both with depth mode 3 (test and write); group 3's bias mode is
+    `6 + b`, group 2's `8 + b`, both only while the `ToggleDepthBias` byte is set, else 0.
+-   **A multi-index shape's ProjectedUV values** (`SetupGeometry`'s ProjectedUV block, for any of its passes with
+    `kProjectedUV`): `TextureProj` is the shape's `materialProjection` (`+0x16c`, a 4x4 read column by column) rather
+    than the computed projection, and `FUN_1414e00c0` takes `ProjectedUVParams` from `materialParams` (`+0x1bc`, with
+    the same `(1 - a)` arithmetic) and `ProjectedUVParams2.xy` from `normalDampener` (`+0x1d0`) and `materialScale`
+    (`+0x1cc`), leaving `zw` unwritten.
+-   **The vanilla multi-index shapes** (Bleak Falls Barrow's and the glacial caves' walls and boulders, 95 at Bleak Falls
+    Barrow): main property technique 0; additional property technique 14 (`multiIndexSparkle`: `kMultiIndexSnow`,
+    `kProjectedUV`, `kDecal`); `useAdditionalTriList` 0, an alt list as long as the main one, no alpha property. At
+    Yngvild's coast (icebergs, ice piles, glacier pieces) the main properties are technique 0 or multilayer parallax (hints
+    15 and 0), and the layers are drawn (technique 14, hint 12); behind Bleak Falls Barrow's portals none of the shapes are.
+-   **A layer pass's shadow bits:** none. Measured on every native hint-12 draw (pass descriptor `0E008201` against the
+    `0E00E201` the main property's rule gives): ShadowDir needs the property's light mask to name the sun, and the
+    registrations write masks only on the geometry's own property (`FUN_1414b2140`), so DefShadow is cleared with it.
 -   **`SetupTechnique`'s samplers** by the remapped technique: 1 and 0x10 slots 4 and 5; 2 slot 6; 3 and 7 slot 3; 4 slots 3,
     4 and 12; 8 and 0x13 the land maps; 9 and 0x12 the LOD land maps; 0xb slots 4, 5 and 8; 0xe binds slot 10 with address mode 3 and filter 0. Slot n's filter mode is `0x14202ac6c + 4n`. The remap: 0x12 to 9
     unless `0x142032fdb`, 7 to 0 unless `0x142035500`.

@@ -192,6 +192,12 @@ namespace DCLF
 		std::vector<std::string> untrackedStuck;                 // chains of those still untracked after kStuckFrames
 		std::string compareContext;  // appended to a block's mismatch samples (CompareGeometry)
 		std::uint64_t notInTables = 0;         // tracked geometry drawn natively but excluded this frame
+		std::map<std::string, std::pair<std::uint64_t, std::string>> multiIndexDraws;  // by hint and technique
+		std::map<std::string, std::uint64_t> outsideRoots;  // outside the category nodes: the root and the portal graph lists holding it
+		std::uint64_t layerDraws = 0;  // native draws of a multi-index shape's layer (hint 12)
+		std::string firstLayerDraw;
+		std::map<std::uint8_t, std::uint64_t> untrackedBy;  // drawn natively, untracked and not statically eligible, by the verdict
+		std::map<std::uint8_t, std::string> untrackedFirst;
 		std::map<std::uint8_t, std::uint64_t> notInTablesBy;  // by its verdict now (Ineligible), and the first of each named
 		std::map<std::uint8_t, std::string> notInTablesFirst;
 		std::uint64_t nativeOnlyPasses = 0;    // native passes of objects DCLF draws that DCLF does not model (hint 10)

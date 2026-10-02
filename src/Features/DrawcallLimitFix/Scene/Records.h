@@ -50,7 +50,9 @@ namespace DCLF
 		// A decal (CS_DCLF_DECALS). Never an occluder: it is left out of the depth segment entirely and
 		// drawn by the colour segment's second pass, after the opaque draws, in the engine's group order.
 		// The group is in bits 20-21 (kObjectDecalGroupShift): 1 = accumulation hint 2 (the engine's
-		// opaque decal group, drawn first), 2 = hint 3 (the blended one, drawn second).
+		// opaque decal group, geometry group 3, drawn first), 3 = a multi-index shape's layer (hint 12, geometry
+		// group 2, drawn second), 2 = hint 3 (the blended one, geometry group 4, drawn last).
+		// kDecalDrawOrder has the order of their ranges.
 		kObjectDecal = 1u << 7,
 		kObjectAlphaThresholdShift = 8,
 		// Per-object PerGeometry values beyond World and the tree pair, kept in the epoch's row buffer at

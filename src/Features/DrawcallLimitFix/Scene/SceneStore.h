@@ -311,7 +311,7 @@ namespace DCLF
 			// a zero-count one when culled - so that overlapping decals land in the same order every
 			// frame, which an atomic append cannot promise. ~0u for everything that is not a decal.
 			std::vector<std::uint32_t> decalOrdinal;  // parallel to objects
-			std::array<std::uint32_t, 2> decalCount{};
+			std::array<std::uint32_t, 3> decalCount{};
 			// Skinning (CS_DCLF_SKINNED): every skinned object's bone palette rows - the engine's own
 			// NiSkinInstance::boneMatrices (three float4 rows a bone, absolute world space), copied after its
 			// per-frame update - and the previous frame's palettes in the same layout. The epoch packs both into
@@ -520,6 +520,9 @@ namespace DCLF
 			SlotTable geometrySlots, pipelineSlots, materialSlots;
 			std::vector<std::uint32_t> geometryLastUsed;  // parallel to geometries
 			std::vector<const RE::BSGraphics::TriShape*> geometrySlotKey;
+			// A layer's geometry slot (SceneStore::ResolveLayerGeometrySlot): its key is the shape's second index list (a
+			// BSGraphics::IndexBuffer standing in geometrySlotKey, never read as a TriShape).
+			std::vector<std::uint8_t> geometryLayerKey;  // parallel to geometries
 			std::vector<std::pair<const RE::BSShaderMaterial*, std::uint32_t>> materialSlotKey;
 			// The used sets, in slot order: 64 slots per word.
 			std::vector<std::uint64_t> usedMaterialBits, usedPipelineBits;
@@ -555,6 +558,7 @@ namespace DCLF
 				a_column(geometryImports);
 				a_column(geometryLastUsed, kSlotFree);
 				a_column(geometrySlotKey);
+				a_column(geometryLayerKey, std::uint8_t(0));
 			}
 			template <class F>
 			void PipelineColumns(F&& a_column)
@@ -587,6 +591,12 @@ namespace DCLF
 			// Parallel to objects: the flags as the scene phase wrote them. The accumulate phase patches the record in
 			// place; the delta walk restores the scene half of every slot it patched from here.
 			std::vector<std::uint32_t> sceneFlags;
+			// A geometry's main-pass layer (SceneStore::Tracked::layerSlot: a multi-index shape's additional property, drawn
+			// from its second index list) is an object of its own: layerBase is a layer slot's base slot, layerOf a base slot's
+			// layer slot, kNoObjectSlot otherwise. Both parallel to objects.
+			std::vector<std::uint32_t> layerBase;
+			std::vector<std::uint32_t> layerOf;
+			bool IsLayer(std::uint32_t a_slot) const { return a_slot < layerBase.size() && layerBase[a_slot] != kNoObjectSlot; }
 			std::vector<std::uint32_t> objectFree;
 			std::uint32_t liveObjects = 0;
 			/** @brief Grows every per-object array to a_count, the new slots free. */
@@ -615,7 +625,7 @@ namespace DCLF
 			std::uint64_t validationDrops = 0;
 			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> ineligible{};
 			// Decal candidates this frame, by group (Records.h ObjectDecalGroup - 1).
-			std::array<std::uint32_t, 2> decals{};
+			std::array<std::uint32_t, 3> decals{};
 			// CS_DCLF_FADING: objects given bindings with the screen-door fade (AdditionalAlphaMask), summed over
 			// frames until the report takes them (TakeFadingDrawn), since fades are brief.
 			std::uint32_t fadingDrawn = 0;
@@ -837,6 +847,7 @@ namespace DCLF
 			std::uint64_t joined = 0, failed = 0, rewritten = 0, released = 0, frames = 0, resident = 0;
 			std::uint64_t membershipQueued = 0;  // records BindByMembership handed a pass
 			std::uint64_t membershipKept = 0;    // members written again whose binding stands
+			std::uint64_t layerUnpaired = 0;     // a base or a layer that joined without the other, and left again
 			std::array<std::uint64_t, 4> failedBy{};  // (unused), no record, a frame verdict, material or extras
 			std::uint64_t parityChecks = 0, parityChecked = 0, parityPass = 0, parityRecord = 0;
 			std::uint64_t parityPending = 0;  // residents whose fade root is fading: the feedback's next decode ends them
@@ -1033,6 +1044,10 @@ namespace DCLF
 
 		/** @brief Index into GetTables().objects for this frame, or -1 when the geometry is not drawn by DCLF. */
 		std::int32_t FindObject(const RE::BSGeometry* a_geometry) const;
+		/** @brief The geometry's layer object (Tracked::layerSlot) in this walk's tables, or -1. */
+		std::int32_t FindLayerObject(const RE::BSGeometry* a_geometry) const;
+		/** @brief The layer's membership pass this frame (BindByMembership), or null. */
+		const AccumulatedPass* FindAccumulatedLayerPass(const RE::BSGeometry* a_geometry) const;
 		/**
 		 * @brief Whether the object is bound by scene membership (drawn from its record whenever the GPU finds it). Read-only:
 		 * the list jobs ask it, while nothing binds (the accumulate phase runs after them).
@@ -1122,6 +1137,11 @@ namespace DCLF
 		/** @brief Static eligibility of an arbitrary geometry, without the per-frame checks. */
 		static Ineligible ClassifyStatic(RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated = nullptr,
 			RE::BSLightingShaderProperty** a_castCache = nullptr);
+		/**
+		 * @brief Static eligibility of a geometry's main-pass layer (LayerPropertyOf): its descriptors as the layer's pass draws
+		 * them (decal group 3), with a_accumulated the layer's membership pass, or null.
+		 */
+		static Ineligible ClassifyLayer(const RE::BSGeometry& a_geometry, LightingDescriptors* a_descriptors, const AccumulatedPass* a_accumulated);
 
 		/** @brief The lighting pass the main-camera accumulator holds for a geometry this frame, or null. */
 		const AccumulatedPass* FindAccumulatedPass(const RE::BSGeometry* a_geometry) const;
@@ -1263,6 +1283,12 @@ namespace DCLF
 			bool sunEntryResolved = false;
 			// Its light entry (LightEntryOf), listed in lightDependents for as long as it is tracked; null: none.
 			const RE::NiAVObject* lightRoot = nullptr;
+			// Its main-pass layer's object slot (LayerPropertyOf: a multi-index shape's additional property, drawn from the
+			// second index list in decal group 3), kNoObjectSlot while it has none. Written with the base record (WriteLayer),
+			// bound and dropped with it; its positive derivation is layerDerived.
+			std::uint32_t layerSlot = kNoObjectSlot;
+			Derived layerDerived;
+			const void* listedLayerProperty = nullptr;  // the layer's property in propertyDependents
 			// The delta walk's. perFrame: inputs that change from frame to frame (PerFrameTraits: owned by an actor,
 			// skinned, a face shape, under a switch, or a controller or a non-fixed rigid body on its chain), so the
 			// delta walk evaluates it every frame; set at an evaluation that classified it, and kept. scheduledWalk:
@@ -1445,6 +1471,7 @@ namespace DCLF
 			RE::BSGeometry* geometry;
 			Tracked* tracked;  // mutable: BuildFrame updates the cached verdict through it
 			const AccumulatedPass* accumulated;
+			bool layer = false;  // the accumulate phase's: the entry's layer (Tracked::layerSlot) rather than its base
 		};
 		std::vector<OrderEntry> order;
 		// Lookup keys are valid only for this walk; the captured recordId is durable.
@@ -1459,6 +1486,14 @@ namespace DCLF
 		/** @brief Tables::decalOrdinal and decalCount: the member decals, in the engine's draw order. */
 		void OrderDecals();
 		ankerl::unordered_dense::set<RE::NiNode*> categoryNodes;
+		// The portal graphs' parentless roots (alwaysRenderChildren), each filed under its graph's shared portal node, a
+		// category node: FindCategoryNode, RefreshCategoryNodes. The root is held while it is listed here.
+		struct AlwaysRenderRoot
+		{
+			RE::NiPointer<RE::NiAVObject> root;
+			RE::NiNode* category = nullptr;
+		};
+		ankerl::unordered_dense::map<const RE::NiAVObject*, AlwaysRenderRoot> alwaysRenderRoots;
 		// Diagnostics: the frame each category node was found and the refresh's cause (GetCategoryInfo), and
 		// the source AddGeometry stamps on new entries.
 		ankerl::unordered_dense::map<const RE::NiNode*, std::pair<std::uint32_t, std::uint8_t>> categoryFound;
@@ -1485,6 +1520,11 @@ namespace DCLF
 		 * rescan's new entries reuse the slots of the ones it replaces instead of growing the arrays past them.
 		 */
 		void ReleaseObjectSlot(Tracked& a_entry);
+		/** @brief The tracked entry's layer slot for its base slot a_base: its own, or a new one (Tracked::layerSlot). */
+		std::uint32_t AcquireLayerSlot(Tracked& a_tracked, RE::BSGeometry* a_geometry, std::uint32_t a_base);
+		void ReleaseLayerSlot(Tracked& a_entry);
+		/** @brief The property a slot's record draws: its geometry's, or for a layer slot the layer's (LayerPropertyOf). */
+		RE::BSShaderProperty* SlotProperty(std::uint32_t a_slot) const;
 		/** @brief Whether a member's binding still holds for its object as it is now (the derivation cache's witnesses). */
 		bool MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const;
 		void EraseTracked(RE::BSGeometry* a_geometry);
@@ -1517,6 +1557,8 @@ namespace DCLF
 		void UnlistMaterialDependent(const RE::BSShaderMaterial* a_material, std::uint32_t a_slot);
 		// The frame's membership joins' passes (BindByMembership), by geometry.
 		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedPasses;
+		// The frame's membership joins of layers (BindByMembership: PrimaryCull::MembershipLayerPass), by their geometry.
+		ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass> accumulatedLayerPasses;
 		// The main camera's accumulator, latched non-null.
 		RE::BSGraphics::BSShaderAccumulator* latchedAccumulator = nullptr;
 		// The batch renderers the main accumulator draws from (RefreshMainBatchRenderers).
@@ -1620,7 +1662,7 @@ namespace DCLF
 		bool sceneBuilt = false;  // the scene phase ran and the records are this frame's
 		bool frameResolveBuffers = false;
 		bool frameInterior = false;
-		std::array<std::uint32_t, 3> frameDecalBias{};
+		std::array<std::uint32_t, 4> frameDecalBias{};
 		bool graphWasActive = false;  // resolveBuffers of the previous BuildFrame, to log the flip
 		ProjectedTextures projectedTextures;
 		/** @brief Fills one object's extras rows (Prepass: the main camera's state is current). */
@@ -1668,6 +1710,12 @@ namespace DCLF
 		void BuildFullOrder();
 		/** @brief One entry of the scene walk: writes its record at its slot; false when it gets none this frame. */
 		bool WriteObject(RE::BSGeometry* a_geometry, Tracked& a_tracked, PartTimer& a_timer, Ineligible& a_bucket);
+		/**
+		 * @brief The entry's layer record, written after its base record (a_base): the base's placement, the second index list,
+		 * no shadow, no bindings until it joins with the base (BindByMembership). a_member: the base is a main-pass record
+		 * (verdict None); without it, or without a layer, the layer slot is released. a_keepMember: the base kept its binding.
+		 */
+		void WriteLayer(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint32_t a_base, bool a_member, bool a_keepMember, PartTimer& a_timer);
 		/** @brief Why an entry's inputs change from frame to frame (Tracked::perFrame): PerFrameTrait bits, 0 when they do not. */
 		enum PerFrameTrait : std::uint32_t
 		{
@@ -2058,6 +2106,7 @@ namespace DCLF
 		std::vector<std::pair<std::uint32_t, std::uint32_t>> residentPipelines;  // pipeline -> first resident object
 		std::vector<std::uint32_t> residentMaterials, residentTrees;
 		ankerl::unordered_dense::set<const RE::BSGeometry*> residentJoining;  // this frame's resident passes, until patched
+		ankerl::unordered_dense::set<const RE::BSGeometry*> residentLayerJoining;  // the layers' (accumulatedLayerPasses)
 		ResidentStats residentStats;
 		// Sun entry nodes something was attached under or detached from since the last walk (keys).
 		std::vector<const RE::NiAVObject*> dirtyRoots;
@@ -2103,6 +2152,20 @@ namespace DCLF
 		 * @brief The geometry slot for a TriShape: found, refreshed in place, or newly resolved.
 		 * @return the slot, or Tables::kSlotFree when the buffers cannot be made stable for the graph.
 		 */
+		/** @brief What a geometry slot is resolved from: its key in geometryIndex, its buffers and its counts. */
+		struct GeometrySource
+		{
+			const RE::BSGraphics::TriShape* key = nullptr;
+			ID3D11Buffer* vertexBuffer = nullptr;
+			ID3D11Buffer* indexBuffer = nullptr;
+			std::uint64_t vertexDesc = 0;
+			std::uint32_t vertexCount = 0;
+			std::uint32_t indexCount = 0;
+			bool layer = false;  // a layer's second index list (Tables::geometryLayerKey)
+		};
+		std::uint32_t ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer);
+		/** @brief The geometry slot of a multi-index shape's second index list (its layer's draw), or Tables::kSlotFree. */
+		std::uint32_t ResolveLayerGeometrySlot(RE::BSGeometry& a_geometry, PartTimer& a_timer);
 		std::uint32_t ResolveGeometrySlot(RE::BSGeometry& a_geometry, const RE::BSGraphics::TriShape* a_triShape,
 			const RE::NiSkinPartition::Partition* a_skinPartition, PartTimer& a_timer);
 		/** @brief Capture a new material slot; false when nothing can be evaluated. */

@@ -428,8 +428,8 @@ namespace DCLF
 					return reason;
 			return Ineligible::None;
 		}
-		// The frame's globals (kPSFrameGeometry, kVSEyePosition: LightingConstants.h). EyePosition is written only by Envmap,
-		// Eye and technique 0x10; every other technique leaves whatever the constant buffer last held there, which no draw
+		// The frame's globals (kPSFrameGeometry, kVSEyePosition: LightingConstants.h). EyePosition is written only for some
+		// passes (WritesEyePosition); every other pass leaves whatever the constant buffer last held there, which no draw
 		// of it reads.
 		static_assert(std::tuple_size_v<decltype(SceneStore::Tables::frameLighting)> == std::tuple_size_v<FrameLighting>);
 		// What ObjectGeometryConstants writes over the pipeline's block for every object (or every object of the pipeline's

@@ -55,8 +55,19 @@ namespace DCLF
 
 	// The PerGeometry variables that are the frame's globals, the same in every pipeline that writes them (checked by
 	// CS_DCLF_PERSISTENT_PARITY): DirLightDirection, DirLightColor, DirectionalAmbient, AmbientSpecularTintAndFresnelPower
-	// and AmbientColor. EyePosition (VS 2) is written only by Envmap, Eye and technique 0x10, the same for all three.
+	// and AmbientColor. EyePosition (VS 2): see WritesEyePosition.
 	inline constexpr std::uint32_t kVSEyePosition = 2;
+	/**
+	 * @brief Whether SetupGeometry (AE 0x1414dd040) writes EyePosition for a pass descriptor: Envmap, Eye and technique
+	 * 0x10, and any pass with descriptor bit 9 or one of 0x21c00 (hair, specular skin and the like). The value is the same
+	 * for all of them, the camera less posAdjust (Community Shaders' patch keeps every pass in world space); every other
+	 * pass leaves whatever the constant buffer last held, which no draw of it reads.
+	 */
+	inline constexpr bool WritesEyePosition(std::uint32_t a_passDescriptor)
+	{
+		const std::uint32_t technique = (a_passDescriptor >> 24) & 0x3f;
+		return technique == 1 || technique == 0xb || technique == 0x10 || (a_passDescriptor & 0x21e00u) != 0;
+	}
 	inline constexpr std::uint32_t kPSFrameGeometry[5] = { 3, 4, 5, 6, 18 };
 	// The DCLF_BINDLESS pixel stage reads the first four from the frame's own block (DCLFFrameLighting, PS b13 in
 	// Lighting.hlsl), one float4 row each and three for DirectionalAmbient, so no pipeline's block changes with the sun.

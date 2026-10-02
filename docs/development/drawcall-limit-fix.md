@@ -6097,10 +6097,13 @@ with a controller and every actor slot was resampled every frame, about 2,000 a 
     pipelines that write them share them. So:
     -   a pipeline is evaluated in full once, and again when the render flags change;
     -   otherwise one sample a frame is copied into it, compared and written in place.
--   **`EyePosition`** (VS 2). `SetupGeometry` (0x1414dd040) writes it only for Envmap, Eye and technique 0x10, and
-    the same for all three: the camera less `posAdjust`, in world space. Those pipelines take it from the frame's one
-    evaluation of such a pipeline. Every other technique leaves whatever the constant buffer last held, which no draw
-    of it reads, so the check skips it there.
+-   **`EyePosition`** (VS 2). `SetupGeometry` (0x1414dd040) writes it for Envmap, Eye and technique 0x10 and for any
+    pass with descriptor bit 9 or one of `0x21c00` (`WritesEyePosition`; engine notes), the same for all of them: the
+    camera less `posAdjust`, in world space. Those pipelines take it from the frame's one evaluation of such a pipeline.
+    Every other pass leaves whatever the constant buffer last held, which no draw of it reads, so the check skips it
+    there. Until 2026-10-02 the rule named the three techniques alone, so a hair or specular pipeline kept the eye of
+    its first evaluation; complete capture parity (`CS_DCLF_NATIVE_SKIP=0`) showed it on every technique. Lighting.hlsl
+    never reads it, so nothing drawn changed.
 -   **Frame lighting** (`Tables::frameLighting`). The sun's direction moves every frame, so while it sat in every
     pipeline's PerGeometry block about 70 blocks were rewritten each frame.
     -   **Its own block.** The `DCLF_BINDLESS` pixel stage now reads `DirLightDirection`, `DirLightColor`,
@@ -6619,3 +6622,70 @@ maps), which the material records take from the engine's own evaluation. What `S
     technique 0 shows. Material and technique mismatches 0. Parallax occlusion (two river decals on the tour) was never drawn
     in view on these runs, so its capture is unverified.
 -   **With ownership** (Riften, Mzinchaleft; full parity): holes 0, every check OK, the Shield race apart.
+
+**The "STALE material record" warnings on cell changes** were the validation, not a material writer. Every one was a
+character-light pass whose live sample lacked t11 (`written 1807->1007`, `803->3`): `SetupMaterial` binds the character
+light's target only while its index (`0x142033db0`) is not negative, and it is -1 while a cell loads. t11 is the frame's
+(`MaterialSources`), but `CopyFrameComponents` copied it only when the source had written it, so a load frame's sample
+compared unequal. It now copies t11 whole, written or not. A Bleak Falls Barrow load and the three-cave tour: 0 stale.
+
+### Multi-index shapes in the main pass: pass layers (2026-10-02)
+
+A `BSMultiIndexTriShape` with an additional property has two main passes, and the main camera's claims are by geometry,
+so DCLF takes both or neither (engine notes, "The main modes' registration"). The second is a **pass layer**: an object
+of its own, held by the base's tracked entry (`Tracked::layerSlot`; `Tables::layerBase` / `layerOf` link the two slots).
+This is the general shape for any geometry with more than one main pass: each further pass is a layer object with its own
+pipeline, material and geometry, so the decal ordering, culling, rows and kept stores see an ordinary object.
+-   **Classification.** A multi-index shape is classified as a tri-shape; its layer (`LayerPropertyOf`, `ClassifyLayer`) by
+    `DeriveLightingDescriptors(..., a_layer)`: decal group 3, blend 0, write mode 10, the alpha property not applied (render
+    flags 0x41). A shape whose layer DCLF cannot draw stays `MultiIndex` (shadow-only, both passes the engine's), and so
+    does every one with `CS_DCLF_LAYERS=0` (a live toggle, under Decals). A shape with no additional property is a plain
+    tri-shape. Technique 14 (`multiIndexSparkle`) is supported with the layers.
+-   **The record** (`WriteLayer`, after the base's in `WriteObject`): the base's placement, a geometry slot for the second
+    index list (`ResolveLayerGeometrySlot`, keyed by the `altIndexBuffer`, `Tables::geometryLayerKey`), no shadow
+    (`ShadowReject::Layer`), its property's LOD fade node, journaled like any write. Light-path placements and root moves
+    write the layer with the base (`TakePlacement`, `TakeRoot`); release, the slot sweep and the device reset take it too.
+    The layer property is listed in `propertyDependents`, so its events classify the entry again.
+-   **Membership.** `BindByMembership` binds a layer slot with `PrimaryCull::MembershipLayerPass` (hint 12); the
+    accumulate phase's join runs the same code for both (`layer`), with the layer's own derived cache. A base and its layer
+    are members together: `DropResidentSlot` drops the partner, and a frame where one joined without the other drops both
+    (`layers or bases unpaired` in the membership line). A layer's drawn mark claims nothing: the base's claims the geometry.
+-   **The pass.** No shadow bits: a layer's passes never carry ShadowDir or DefShadow (measured), since its property's light
+    mask never names the sun (the registrations write masks on the main property alone). ProjectedUV extras of both
+    objects come from the shape (`materialProjection`, `materialParams`, `normalDampener`, `materialScale`).
+-   **The draw.** Decal group 3, drawn by the second pass between the opaque and blended groups (`kDecalDrawOrder`; its slot
+    count at count word 27), testing LESS_EQUAL with bias mode `8 + b` and writing depth from its colour draw, after its
+    host is shaded; it has no part in the decal depth pass.
+-   **Where the engine draws them.** The sparkle layer is drawn where its shapes are in view and the scene is snowy: the
+    Yngvild exterior's icebergs and ice piles, 149 layers, about 4,000-25,000 native layer draws per report with DCLF
+    off for them. Bleak Falls Barrow's 95 cave pieces are behind portals from the spawn point, and the engine drew none of
+    their passes there.
+-   **Measured.** Capture parity at Yngvild (`CS_DCLF_OWNERSHIP=off`, `CS_DCLF_PRIMARY_EXCLUDE=0`, and the new
+    `CS_DCLF_NATIVE_SKIP=0`, which keeps the native passes of what DCLF drew so that every draw is compared): 19,695
+    layer draws compared; pass and shader descriptors, material, technique and per-geometry constants match (`EyePosition` aside, which
+    every technique showed in this mode until `WritesEyePosition` took the engine's whole rule); draw parity OK over 180,618 draws (the second index
+    list's buffer and count). `ProjectedUVParams2.zw` of a multi-index shape is unwritten by the engine and not compared.
+    With ownership (Yngvild, Bleak Falls Barrow; full parity): holes 0, no base or layer unpaired, every check OK.
+-   **Found along the way.** Capture parity sees only the native passes the skip leaves, which in a settled scene is
+    hardly any (hence the earlier counts of 9 and 18 multilayer draws): `CS_DCLF_NATIVE_SKIP=0` is the switch for a
+    complete comparison. In Bleak Falls Barrow, about 5,000 native draws a report were of geometry whose root fade node
+    has no parent (`NorChamberRitual01` and others), outside every category node and so never tracked. Every such root
+    is in the portal graph's `alwaysRenderChildren`; see "Parentless roots the portal graph draws".
+
+## Parentless roots the portal graph draws (2026-10-02)
+
+-   **What.** An interior's portal graph (`loadedData->portalGraph`) draws the references in `alwaysRenderChildren`
+    (`+0x58`) whatever room the camera is in. Their roots have no parent, so no walk up from them reaches a category
+    node, and DCLF never tracked them: in Bleak Falls Barrow 500-5,000 native draws a report (the ritual chamber, stairs,
+    wall pieces), drawn every frame by the engine.
+-   **How they are tracked.** `RefreshCategoryNodes` files each listed parentless root under its graph's shared portal
+    node, a category node already (`alwaysRenderRoots`), and `FindCategoryNode` returns that node for anything whose
+    walk up ends at such a root. Every walk that stops at the category node runs out of parents first, so the root
+    and its reference stay inside the walks: the move key is the reference's, and hidden bits and switches under the
+    root count as anywhere else. `CaptureCullHiddenBits` already took these roots' hidden bits for the walk.
+-   **Membership by events.** `CategorySignature` folds in each graph's list (its size, every root and its parent), so
+    a root added or removed runs the refresh: a new root is walked (`AddSubtree`), and what was tracked under a root
+    that left is dropped. The map holds each root, so its subtree is still there to walk when that happens. Attaches
+    under a listed root are found through `FindCategoryNode` like any other.
+-   **Measured.** Capture parity in Bleak Falls Barrow: geometry drawn outside the tracked category nodes 4,969 a report
+    to 0, untracked eligible 0, and the roots' draws compare clean (per-geometry: the candle flicker alone).

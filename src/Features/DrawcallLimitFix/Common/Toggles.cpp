@@ -12,6 +12,7 @@ namespace DCLF
 			{ &S::skinned, Switch::Skinned, kOn, "skinned", "Object classes", "Skinned (CS_DCLF_SKINNED)", nullptr, true, {} },
 			{ &S::trees, Switch::Trees, kOn, "trees", {}, "Trees (CS_DCLF_TREES)", nullptr, true, {} },
 			{ &S::decals, Switch::Decals, kOn, "decals", {}, "Decals (CS_DCLF_DECALS)", nullptr, true, {} },
+			{ &S::layers, Switch::Layers, kOn, "multi-index layers", {}, "Multi-index shapes: cave walls with an ice or snow layer (CS_DCLF_LAYERS)", nullptr, true, { &S::decals } },
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
 			{ &S::mtLand, Switch::MtLand, kOn, "terrain", {}, "Terrain (CS_DCLF_MTLAND)", nullptr, true, {} },
 			{ &S::switchNodes, Switch::SwitchNodes, kOn, "switch nodes", {}, "Under switch nodes: trees, harvestables (CS_DCLF_SWITCH_NODES)", nullptr, true, {} },

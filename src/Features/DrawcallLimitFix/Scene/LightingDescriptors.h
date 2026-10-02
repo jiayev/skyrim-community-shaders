@@ -118,8 +118,17 @@ namespace DCLF
 	 * DefShadow without ShadowDir one shadow light in the count, which is what makes the technique bind the shadow mask (the
 	 * pixel stage drops the count). The draw then decides per frame (BuildDrawsCS): ShadowDir when its bound meets a
 	 * cascade (kObjectSunTest), DefShadow when that or a local shadow light reaches it (LocalShadowLights).
+	 * a_property: the property whose pass it is (a multi-index layer's), null for the geometry's own.
 	 */
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled);
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled, const RE::BSLightingShaderProperty* a_property = nullptr);
+	/** @brief A multi-index shape's layer passes' accumulation hint (FUN_1414b2330), which their pass draw reads (FUN_1414f2ad0). */
+	inline constexpr std::uint32_t kLayerHint = 12;
+	/**
+	 * @brief A geometry's main-pass layer: a BSMultiIndexTriShape's additional property, as the main registration takes it
+	 * (FUN_1414b2330: any additional property; the second index list is what its passes draw). Null for anything else, or
+	 * when there is no second list to draw.
+	 */
+	RE::BSShaderProperty* LayerPropertyOf(const RE::BSGeometry& a_geometry);
 	inline constexpr std::uint32_t kShadowBits = 0x61c0u;  // ShadowDir, DefShadow and the shadow light count
 
 	/**
@@ -289,7 +298,8 @@ namespace DCLF
 	 * @param a_accumulated The geometry's accumulated pass this frame (SceneStore::FindAccumulatedPass), or null. When
 	 * present it gives the bits the property does not (kRegisteredPassBits); without it the derivation's guesses for them
 	 * stand.
+	 * @param a_layer a_property is the geometry's layer (LayerPropertyOf), whose passes the engine draws with hint 12.
 	 */
 	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
-		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out);
+		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer = false);
 }

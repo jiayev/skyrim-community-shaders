@@ -34,6 +34,11 @@ namespace DCLF
 			case Technique::ParallaxOcc:
 			case Technique::MultilayerParallax:
 				return true;
+			// A multi-index shape's ice or snow layer (kMultiIndexSnow with kProjectedUV): SparkleParams is SetupMaterial's, the
+			// projected values the shape's own (RefreshObjectExtras), and the slot-10 texture SetupTechnique binds is replaced by
+			// SetupGeometry's projected textures.
+			case Technique::MultiIndexSparkle:
+				return ActiveToggles().layers;
 			case Technique::TreeAnim:
 				return ActiveToggles().trees;
 			// Actor skin (bodies, hands): the Lighting shader's SKIN path with TintColor, a PerMaterial constant.
@@ -113,15 +118,24 @@ namespace DCLF
 		return a_property->fadeNode ? 0 : kFadeNoNode;
 	}
 
-	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled)
+	RE::BSShaderProperty* LayerPropertyOf(const RE::BSGeometry& a_geometry)
+	{
+		if (const_cast<RE::BSGeometry&>(a_geometry).GetType().get() != RE::BSGeometry::Type::kMultiIndexTriShape)
+			return nullptr;
+		const auto& data = static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData();
+		if (!data.altIndexBuffer || !*reinterpret_cast<ID3D11Buffer* const*>(data.altIndexBuffer) || data.altPrimCount == 0)
+			return nullptr;
+		return data.additionalShaderProperty.get();
+	}
+
+	std::uint32_t StaticShadowBits(const RE::BSGeometry& a_geometry, bool a_settled, const RE::BSLightingShaderProperty* a_property)
 	{
 		using Engine::Global;
 		constexpr std::uintptr_t kMainAccumulator = 0x338c830;     // BSShaderAccumulator*, render mode 0
 		constexpr std::size_t kAccumulatorDeferredShadow = 0x178;  // byte: the accumulator draws the deferred shadow mask
 		constexpr std::uintptr_t kNoSunShadowDir = 0x20330a4;      // byte: GetRenderPasses gives no pass ShadowDir
 		constexpr std::uintptr_t kScreenDoorFades = 0x2033468;     // byte: screen-door fades are on
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		const auto* lighting = a_property ? a_property : netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
 		const auto* accumulator = Global<std::uint8_t*>(kMainAccumulator);
 		if (!lighting || !accumulator)
 			return 0;
@@ -421,14 +435,24 @@ namespace DCLF
 	}
 
 	Ineligible DeriveLightingDescriptors(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry,
-		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out)
+		const AccumulatedPass* a_accumulated, LightingDescriptors& a_out, bool a_layer)
 	{
 		std::uint64_t f = a_property.flags.underlying();
 
 		if (f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects) | Bit(Flag::kLODLandscape)))
 			return Ineligible::Lod;
 		const auto* alpha = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
-		if (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) {
+		if (a_layer) {
+			// A multi-index shape's layer (engine notes, "The main modes' registration"): every pass of its property goes into
+			// geometry group 2 with hint 12, whatever its flags, and FUN_1414b3bb0 draws that group after the opaque decals
+			// with the same state - depth test and write, bias mode 8 + b, blending off, write mode 10, render flags 0x41 (the
+			// alpha property is not applied). DCLF's decal group 3, drawn between its opaque and blended groups.
+			if (!ActiveToggles().decals)
+				return Ineligible::Decal;
+			a_out.decalGroup = 3;
+			a_out.decalBlendMode = 0;
+			a_out.decalWriteMode = 10;
+		} else if (f & (Bit(Flag::kDecal) | Bit(Flag::kDynamicDecal))) {
 			// Decals, from what the engine was measured doing with them (engine notes:
 			// decals). A Lighting decal pass carries accumulation hint 2 or 3, and the hint is which
 			// geometry group draws it and with what state:
@@ -488,7 +512,7 @@ namespace DCLF
 
 		// Blended geometry is drawn after the deferred composite, forward and sorted; the one exception is
 		// the engine's blended decal group, which blends inside the G-buffer pass and is handled above.
-		if (alpha && alpha->GetAlphaBlending() && a_out.decalGroup != 2)
+		if (alpha && alpha->GetAlphaBlending() && a_out.decalGroup != 2 && !a_layer)
 			return Ineligible::AlphaBlend;
 
 		// The descriptor derived from the property, as GetRenderPasses builds it for an opaque object with its specular and
@@ -562,7 +586,9 @@ namespace DCLF
 			// The pass the accumulator registered gives only what the property does not: DoAlphaTest, the screen-door fade and the
 			// snow bits (kRegisteredPassBits). The rest is the derivation's, so the technique does not change with the distance the
 			// engine's LOD fades were taken at, and the shadow bits are StaticShadowBits', which the draw decides per frame.
-			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | StaticShadowBits(a_geometry, false);
+			// A layer's pass has no shadow bits: ShadowDir is the property's light mask naming the sun, and the registrations write
+			// masks on the main property alone (FUN_1414b2140), so DefShadow goes too (LayerShadowBits).
+			d = (derived & ~kRegisteredPassBits) | (a_accumulated->technique & kRegisteredPassBits) | (a_layer ? 0u : StaticShadowBits(a_geometry, false, &a_property));
 			// The screen-door fade: Lighting.hlsl discards against a 4x4 screen pattern and MaterialData.z, so
 			// the object stays opaque and the Z-prepass (which keeps the alpha test) dithers identically.
 			if ((d & Bit(LightingFlag::AdditionalAlphaMask)) && !ActiveToggles().fading)

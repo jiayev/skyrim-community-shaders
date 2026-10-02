@@ -318,7 +318,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> previous(before.begin(), before.end());
 		for (const auto& entry : ordered) {
 			const std::uint32_t group = static_cast<std::uint32_t>(entry.chain >> 60) - 1;
-			const std::uint32_t ordinal = tables.decalCount[group & 1]++;
+			const std::uint32_t ordinal = tables.decalCount[group]++;
 			tables.decalOrdinal[entry.object] = ordinal;
 			decalOrdered.push_back(entry.object);
 			const auto it = previous.find(entry.object);

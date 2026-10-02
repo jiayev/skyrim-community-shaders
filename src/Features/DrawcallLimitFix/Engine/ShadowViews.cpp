@@ -26,7 +26,7 @@ namespace DCLF
 
 	const char* ShadowRejectName(ShadowReject a_reason)
 	{
-		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only", "decal-point-light" };
+		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only", "decal-point-light", "layer" };
 		static_assert(std::size(kNames) == static_cast<std::size_t>(ShadowReject::Count));
 		const auto index = static_cast<std::size_t>(a_reason);
 		return index < std::size(kNames) ? kNames[index] : "?";

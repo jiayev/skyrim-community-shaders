@@ -52,7 +52,7 @@ namespace DCLF::Draws
 			PreparedDraws prepared{};
 			const auto now = segment;
 			auto frame = CurrentFrame(*resources, now);
-			if (!frame || (!frame->drawCapacity && !frame->decalCapacity[0] && !frame->decalCapacity[1]) || !frame->indirect.valid)
+			if (!frame || (!frame->drawCapacity && !frame->decalCapacity[0] && !frame->decalCapacity[1] && !frame->decalCapacity[2]) || !frame->indirect.valid)
 				return prepared;
 			// The rescue draw belongs to the depth segment only.
 			if (phaseTwo && now != RenderGraphRuntime::Segment::ZPrepass)
@@ -177,7 +177,8 @@ namespace DCLF::Draws
 			auto decalArguments = [&](std::uint32_t a_group) {
 				return (2 * std::uint64_t(frame.sequenceDraws) + std::uint64_t(a_group) * frame.sequenceDecals) * sizeof(DrawSequence);
 			};
-			auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(kCountDecalGroupWord + a_group) * sizeof(std::uint32_t); };
+			auto decalCount = [](std::uint32_t a_group) { return std::uint64_t(DecalCountWord(a_group)) * sizeof(std::uint32_t); };
+			const bool anyDecals = frame.decalCapacity[0] || frame.decalCapacity[1] || frame.decalCapacity[2];
 
 			// Every call below is preprocessed here, before the first pass: generated inside the pass
 			// instead, by NVIDIA's driver, each colour call cost a fixed ~170 us of idle GPU in these eight-target passes. The
@@ -195,9 +196,9 @@ namespace DCLF::Draws
 				if (frame.drawCapacity)
 					commands.PreprocessIndirect(state, colourSignature, sequences, 0, count, 0, frame.drawCapacity);
 				state.EndPass();
-				if (frame.decalCapacity[0] || frame.decalCapacity[1]) {
+				if (anyDecals) {
 					beginDrawPass(state, decalBegin);
-					for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+					for (const std::uint32_t group : kDecalDrawOrder)
 						if (frame.decalCapacity[group])
 							commands.PreprocessIndirect(state, colourSignature, sequences, decalArguments(group), count, decalCount(group), frame.decalCapacity[group]);
 					state.EndPass();
@@ -231,16 +232,16 @@ namespace DCLF::Draws
 				stats->Resolve(commands, statsSlot, PassStats::kColour);
 
 			// The second pass: decals, after every opaque draw, in the engine's order - its opaque decal
-			// group and then its blended one, each from its own fixed-slot range and its own count word.
-			// The pipelines test depth LESS_EQUAL with the engine's decal bias and write none (the opaque
-			// group's depth is already there, from the decal depth pass). Same attachments, all loaded.
-			if (frame.decalCapacity[0] || frame.decalCapacity[1]) {
+			// group, the multi-index layers, then its blended group, each from its own fixed-slot range and its own count
+			// word. The pipelines test depth LESS_EQUAL with the engine's decal bias; only the layers write depth here (the
+			// opaque group's is already there, from the decal depth pass). Same attachments, all loaded.
+			if (anyDecals) {
 				const bool decalPart = subRange("cs.dclf.colour.decals");
 				beginDrawPass(commands, decalBegin);
-				for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
+				for (const std::uint32_t group : kDecalDrawOrder) {
 					if (!frame.decalCapacity[group])
 						continue;
-					const bool groupPart = subRange(group == 0 ? "cs.dclf.colour.decals-opaque" : "cs.dclf.colour.decals-blended");
+					const bool groupPart = subRange(group == 0 ? "cs.dclf.colour.decals-opaque" : group == 2 ? "cs.dclf.colour.decals-layers" : "cs.dclf.colour.decals-blended");
 					commands.ExecuteIndirect(colourSignature, sequences, decalArguments(group), count, decalCount(group), frame.decalCapacity[group]);
 					endSubRange(groupPart);
 				}

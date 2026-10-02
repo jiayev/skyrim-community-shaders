@@ -31,6 +31,8 @@ namespace DCLF
 		bool trees = false;
 		// decals (accumulation hints 2 and 3), drawn by the second pass;
 		bool decals = false;
+		// multi-index shapes' main passes: the shape, and its layer (the additional property's passes, hint 12) as decal group 3;
+		bool layers = false;
 		// kProjectedUV objects (snow and moss projection);
 		bool projectedUv = false;
 		// terrain, the MTLand and MTLandLODBlend techniques (MtLandEnabled adds the Terrain Blending condition);

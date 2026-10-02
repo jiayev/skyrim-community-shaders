@@ -2609,7 +2609,7 @@ namespace DCLF
 		ShadowKept* ShadowKeptState() { return &shadowKept; }
 		SunExclusionCache sunExclusionCache;  // the shadow builds', in frame order
 		SunExclusionCache parabolicExclusionCache;  // likewise, the paraboloid mode's (LocalLightCull)
-		std::array<std::uint32_t, 4> decalWords{};  // the count buffer's decal words, uploaded per colour epoch
+		std::array<std::uint32_t, 5> decalWords{};  // the count buffer's decal words (19-22, then 27), uploaded per colour epoch
 
 		/** @brief The per-frame constant blocks of an epoch from the capture's mirrors (render thread; records the Z-prepass's bytes for the replay). */
 		void PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out);

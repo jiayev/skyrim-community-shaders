@@ -328,8 +328,9 @@ namespace DCLF
 		// The decal words: each group's slot count for its draw, and the tallies zeroed. Written by the
 		// colour segment only, which is the one that submits decals.
 		if (!depthOnly) {
-			decalWords = { a_payload.decalCount[0], a_payload.decalCount[1], 0u, 0u };
-			uploads(a_resources->count, decalWords.data(), decalWords.size() * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
+			decalWords = { a_payload.decalCount[0], a_payload.decalCount[1], 0u, 0u, a_payload.decalCount[2] };
+			uploads(a_resources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
+			uploads(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 		}
 		if (!staged)
 			UploadMainPayload(a_payload, *a_resources, uploads);

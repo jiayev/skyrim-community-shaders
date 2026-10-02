@@ -135,9 +135,13 @@ namespace DCLF
 		skinnedObjects = savedSkinned;
 
 		++walkParity.checks;
-		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> denseIndex;
+		// A slot is its geometry's base record or its layer's (Tables::layerBase): the two walks pair them by both.
+		auto keyOf = [](const Tables& a_tables, std::uint32_t a_slot) {
+			return std::pair{ a_tables.objectGeometry[a_slot], a_tables.IsLayer(a_slot) };
+		};
+		std::map<std::pair<const RE::BSGeometry*, bool>, std::uint32_t> denseIndex;
 		for (std::uint32_t d = 0; d < dense.objects.size(); ++d)
-			denseIndex.emplace(dense.objectGeometry[d], d);
+			denseIndex.emplace(keyOf(dense, d), d);
 		auto note = [&](const char* a_what, const RE::BSGeometry* a_geometry) {
 			++walkParity.byWhat[a_what];
 			if (walkParity.first.empty())
@@ -168,7 +172,7 @@ namespace DCLF
 			}
 			++liveSeen;
 			++walkParity.objects;
-			const auto it = denseIndex.find(geometry);
+			const auto it = denseIndex.find(keyOf(slots, s));
 			if (it == denseIndex.end()) {
 				++walkParity.extra;
 				note("a slot the dense walk has no object for", geometry);
@@ -318,7 +322,7 @@ namespace DCLF
 			}
 		}
 		if (!denseIndex.empty())
-			note("an object with no slot", denseIndex.begin()->first);
+			note("an object with no slot", denseIndex.begin()->first.first);
 		if (liveSeen != slots.liveObjects || slots.liveObjects + slots.objectFree.size() != slots.objects.size()) {
 			++walkParity.differ;
 			note("the live count", nullptr);

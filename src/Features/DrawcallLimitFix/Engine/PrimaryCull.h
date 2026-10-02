@@ -78,12 +78,12 @@ namespace DCLF
 		 * ~0u when the cascades are not known this frame. The engine's rule (dclf-gpu-driven-frame.md, "Phase 1, step 2"),
 		 * with the sun's mask replaced by the cascade test.
 		 */
-		static std::uint32_t SunShadowBits(const RE::BSGeometry& a_geometry);
+		static std::uint32_t SunShadowBits(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property = nullptr);
 		/**
 		 * @brief The bits SunShadowBits gives a geometry whose bound meets a cascade: what depends on the object and
 		 * the frame's globals alone. The GPU makes the cascade test (kObjectSunTest).
 		 */
-		static std::uint32_t SunShadowStatic(const RE::BSGeometry& a_geometry);
+		static std::uint32_t SunShadowStatic(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property = nullptr);
 		/** @brief CS_DCLF_RESIDENT_PARITY: the synthetic pass built from scratch (no cache), for SceneStore's comparison. */
 		static bool FreshSyntheticPass(const RE::BSGeometry& a_geometry, AccumulatedPass& a_out);
 		/**
@@ -91,6 +91,8 @@ namespace DCLF
 		 * thread; derived descriptors cached per geometry), false where one cannot model it (decals, fading or translucent).
 		 */
 		bool MembershipPass(const RE::BSGeometry* a_geometry, AccumulatedPass& a_out);
+		/** @brief MembershipPass for the geometry's layer (LayerPropertyOf, a_layer): the pass of its property with hint 12. */
+		bool MembershipLayerPass(const RE::BSGeometry* a_geometry, const RE::BSLightingShaderProperty& a_layer, AccumulatedPass& a_out);
 		/** @brief A fade root's fade-out distance for BuildDraws' fade test (kObjectFadeTest), 0 when it has none. */
 		static float MembershipFadeDistance(const RE::NiAVObject* a_root) { return FadeDistanceOf(a_root); }
 		/** @brief The frame globals a membership pass reads (the static sun bits, the fade distances): a change rebinds them all. */
@@ -109,7 +111,8 @@ namespace DCLF
 		 * derived pass descriptor with the sun's bits, the batch list, the accumulation hint and the LOD row. False for
 		 * what it does not model (translucent or fading objects, an unknown cascade test, a descriptor not derived).
 		 */
-		static bool SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu = false);
+		static bool SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu = false,
+			const RE::BSLightingShaderProperty* a_layer = nullptr);
 
 		/**
 		 * @brief This frame's members in view under the entries the list jobs stood in for: nothing registered them, so one
@@ -535,5 +538,6 @@ namespace DCLF
 			std::uint32_t derivedPass = kNotDerived;
 		};
 		ankerl::unordered_dense::map<const RE::BSGeometry*, DerivedEntry> derivedCache;
+		ankerl::unordered_dense::map<const RE::BSGeometry*, DerivedEntry> layerDerivedCache;  // the layers' (MembershipLayerPass)
 	};
 }

@@ -359,16 +359,15 @@ namespace DCLF
 				// A pipeline's PerGeometry block is evaluated in full once (and again when the render flags change); what of it
 				// changes afterwards is either overridden per object (ObjectGeometryConstants) or one of the frame's globals
 				// (kPSFrameGeometry: the sun's direction and colour, the ambient terms), which every pipeline that writes them
-				// shares and which are copied from the frame's one sample. SetupGeometry writes EyePosition only for Envmap, Eye
-				// and technique 0x10, and the same for all three (the camera less posAdjust in world space, 0x1414dd040): their
+				// shares and which are copied from the frame's one sample. SetupGeometry writes EyePosition only for some passes
+				// (WritesEyePosition), the same for all of them (the camera less posAdjust in world space, 0x1414dd040): their
 				// pipelines take it from the frame's one evaluation of such a pipeline (eyeSample). The frame's globals are kept
 				// in the block for the constant-buffer path and the parity checks, but no DCLF_BINDLESS draw reads them there
 				// (frameLighting; kPSBindlessGeometryUnread), and neither the template object's own values, so only what such a
 				// draw reads versions the pipeline (SameBindlessGeometry). The template's pass is looked up only to evaluate.
 				auto* property = tables.geometryTemplate[i];
 				auto templatePassOf = [&]() { return TemplatePassOf(property); };
-				const std::uint32_t geometryTechnique = (tables.pipelines[i].passDescriptor >> 24) & 0x3f;
-				const bool writesEye = geometryTechnique == 1 || geometryTechnique == 0xb || geometryTechnique == 0x10;
+				const bool writesEye = WritesEyePosition(tables.pipelines[i].passDescriptor);
 				const bool full = !constantsRefreshed || !tables.geometryConstantsValid[i] || (writesEye && !eyeSample.valid);
 				auto& held = tables.geometryConstants[i];
 				bool ownChanged = false;
@@ -446,7 +445,7 @@ namespace DCLF
 		auto refreshExtras = [&](std::uint32_t o) {
 			if (tables.objects[o].flags & (kObjectProjectedUV | kObjectLandBlend)) {
 				const auto* geometry = tables.objectGeometry[o];
-				auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+				auto* property = SlotProperty(o);
 				if (property && !(tables.objects[o].flags & kObjectNoBindings))
 					RefreshObjectExtras(o, *static_cast<RE::BSLightingShaderProperty*>(property), *geometry);
 			}
@@ -493,6 +492,10 @@ namespace DCLF
 						continue;
 					ResampleShading(it->second.slot, true);
 					++resampled;
+					if (it->second.layerSlot != kNoObjectSlot) {
+						ResampleShading(it->second.layerSlot, true);
+						++resampled;
+					}
 				}
 			}
 		}
@@ -515,7 +518,7 @@ namespace DCLF
 					LightingDescriptors descriptors;
 					descriptors.pass = tables.pipelines[tables.objects[o].pipelineIndex].passDescriptor;
 					descriptors.technique = (descriptors.pass >> 24) & 0x3f;
-					const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get());
+					const auto& lighting = *static_cast<RE::BSLightingShaderProperty*>(SlotProperty(o));
 					descriptors.specularLODFade = lighting.specularLODFade;
 					descriptors.envmapLODFade = lighting.envmapLODFade;
 					const auto now = MakeShading(lighting, descriptors, kMainPassRenderFlags, emissiveMult, IsResidentSlot(o));
@@ -571,8 +574,7 @@ namespace DCLF
 			const auto& layout = stage ? LightingPSLayout() : LightingVSLayout();
 			const auto& a = stage ? a_reference.ps : a_reference.vs;
 			const auto& b = stage ? a_held.ps : a_held.vs;
-			const std::uint32_t technique = (tables.pipelines[a_pipeline].passDescriptor >> 24) & 0x3f;
-			const bool writesEye = technique == 1 || technique == 0xb || technique == 0x10;
+			const bool writesEye = WritesEyePosition(tables.pipelines[a_pipeline].passDescriptor);
 			const std::uint64_t skip = stage ? kObjectGeometryPS : (kObjectGeometryVS | (writesEye ? 0ull : 1ull << kVSEyePosition));
 			const std::uint64_t perGeometry = stage ? kPSGroups[kPerGeometry] : kVSGroups[kPerGeometry];
 			for (std::uint32_t v = 0; v < layout.count; ++v) {
@@ -592,8 +594,7 @@ namespace DCLF
 	{
 		if (a_slot >= tables.objects.size() || a_slot >= tables.objectGeometry.size())
 			return false;
-		const auto* geometry = tables.objectGeometry[a_slot];
-		auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+		auto* property = SlotProperty(a_slot);
 		if (!property || (tables.objects[a_slot].flags & (kObjectNoBindings | kObjectFree)))
 			return false;
 		const std::uint32_t passDescriptor = tables.pipelines[tables.objects[a_slot].pipelineIndex].passDescriptor;
@@ -704,18 +705,35 @@ namespace DCLF
 				multiply(m, w, p);
 			}
 			float* proj = rows + kExtraRowTextureProj * 4;
-			for (std::uint32_t r = 0; r < 3; ++r) {
-				proj[r * 4 + 0] = m[0 + r];
-				proj[r * 4 + 1] = m[4 + r];
-				proj[r * 4 + 2] = m[8 + r];
-				proj[r * 4 + 3] = m[12 + r];
+			// A multi-index shape's passes take the shape's own projection (SetupGeometry's ProjectedUV block, engine notes):
+			// materialProjection's columns, as stored.
+			const auto* multiIndex = const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape ?
+			                             &static_cast<const RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData() :
+			                             nullptr;
+			if (multiIndex) {
+				const auto& shapeProjection = multiIndex->materialProjection;
+				for (std::uint32_t r = 0; r < 3; ++r) {
+					proj[r * 4 + 0] = shapeProjection.m[0][r];
+					proj[r * 4 + 1] = shapeProjection.m[1][r];
+					proj[r * 4 + 2] = shapeProjection.m[2][r];
+					proj[r * 4 + 3] = shapeProjection.m[3][r];
+				}
+			} else {
+				for (std::uint32_t r = 0; r < 3; ++r) {
+					proj[r * 4 + 0] = m[0 + r];
+					proj[r * 4 + 1] = m[4 + r];
+					proj[r * 4 + 2] = m[8 + r];
+					proj[r * 4 + 3] = m[12 + r];
+				}
 			}
 			// The pixel parameters (FUN_1414e00c0): the property's projectedUVParams folded by its w, its
 			// projectedUVColor, and the two tiling globals with the projected-normals switch.
 			static const REL::Relocation<std::uintptr_t> tilingDiffuse{ REL::Offset(0x2035560) };
 			static const REL::Relocation<std::uintptr_t> tilingDetail{ REL::Offset(0x2035578) };
 			static const REL::Relocation<std::uintptr_t> projectedNormals{ REL::Offset(0x2035518) };
-			const auto& params = a_property.projectedUVParams;
+			// A multi-index shape's: its materialParams for the first, its normalDampener and materialScale for the second's xy
+			// (zw unwritten by the engine).
+			const auto& params = multiIndex ? multiIndex->materialParams : a_property.projectedUVParams;
 			const auto& colour = a_property.projectedUVColor;
 			float* out = rows + kExtraRowProjectedParams * 4;
 			const float fade = 1.0f - params.alpha;
@@ -723,10 +741,17 @@ namespace DCLF
 			out[1] = 0.0f;  // never written by the engine
 			out[2] = params.blue;
 			out[3] = fade * params.green + params.alpha;
-			out[4] = colour.red;
-			out[5] = colour.green;
-			out[6] = colour.blue;
-			out[7] = colour.alpha;
+			if (multiIndex) {
+				out[4] = multiIndex->normalDampener;
+				out[5] = multiIndex->materialScale;
+				out[6] = 0.0f;
+				out[7] = 0.0f;
+			} else {
+				out[4] = colour.red;
+				out[5] = colour.green;
+				out[6] = colour.blue;
+				out[7] = colour.alpha;
+			}
 			out[8] = GlobalFloatAt(tilingDiffuse);
 			out[9] = GlobalFloatAt(tilingDetail);
 			out[10] = 0.0f;

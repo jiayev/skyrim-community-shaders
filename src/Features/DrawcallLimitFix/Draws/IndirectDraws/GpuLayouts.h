@@ -93,6 +93,7 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kCountDecalGroupWord = 19;  // group 1 at word 19, group 2 at word 20
 	constexpr std::uint32_t kCountDecalsCulledWord = 21;
 	constexpr std::uint32_t kCountDecalsTestedWord = 22;
+	constexpr std::uint32_t kCountDecalLayerWord = 27;  // group 3 (the multi-index layers)
 	// Byte offsets of the count words the indirect draws read; they must match BuildDrawsCS.hlsl.
 	constexpr std::uint64_t kCountDrawnPhaseTwoBytes = 68;
 	constexpr const char* kBuildDrawsShader = "DrawcallLimitFix/BuildDrawsCS.hlsl";
@@ -177,7 +178,11 @@ namespace DCLF::Draws
 	// through an atomic counter), then one range per decal group. A decal's sequence goes to the slot of its ordinal in the
 	// engine's draw order (SceneStore::Tables::decalOrdinal), so the second pass draws decals in that order every frame; a
 	// culled one is the same sequence with an index count of zero. BuildDrawsConstants carries the bases.
-	constexpr std::uint32_t kDecalGroups = 2;
+	constexpr std::uint32_t kDecalGroups = 3;
+	/** @brief The decal ranges (ObjectDecalGroup - 1) in the order the second pass draws them: the engine's geometry groups 3, 2, 4. */
+	constexpr std::array<std::uint32_t, kDecalGroups> kDecalDrawOrder{ 0, 2, 1 };
+	/** @brief The count word a decal range's draw reads its slot count from. */
+	constexpr std::uint32_t DecalCountWord(std::uint32_t a_range) { return a_range < 2 ? kCountDecalGroupWord + a_range : kCountDecalLayerWord; }
 	/** @brief The main sequence buffer's slots for a_draws per draw range and a_decals per decal group. */
 	constexpr std::uint64_t SequenceSlots(std::uint32_t a_draws, std::uint32_t a_decals) { return 2ull * a_draws + std::uint64_t(kDecalGroups) * a_decals; }
 
