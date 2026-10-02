@@ -443,7 +443,7 @@ namespace DCLF::Draws
 				given = (material.textures >> t) & 1;
 			else if (const int f = FeatureMaterialSlot(t); f >= 0)
 				given = (material.features >> f) & 1;
-			else if (t == kObjectBufferRegister || t == kBonesBufferRegister)
+			else if (t == kObjectBufferRegister || t == kBonesBufferRegister || t == kTreeWindRegister)
 				given = true;
 			else if (depthOnly)
 				// The Z-prepass has no frame textures bound yet (its frame record binds the null texture), but for the character

@@ -619,6 +619,7 @@ namespace DCLF::Draws
 			index = nullIndex;
 		frameRecord.textures[kObjectBufferRegister] = a_in.addresses.objectsIndex;
 		frameRecord.textures[kBonesBufferRegister] = a_in.addresses.bonesIndex;
+		frameRecord.textures[kTreeWindRegister] = a_in.addresses.treeWindIndex;
 		const std::uint32_t wrapAnisotropic = a_lookups.Sampler(static_cast<std::uint32_t>(RE::BSGraphics::TextureAddressMode::kWrapSWrapT),
 			static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kAnisotropic));
 		for (auto& index : frameRecord.samplers)

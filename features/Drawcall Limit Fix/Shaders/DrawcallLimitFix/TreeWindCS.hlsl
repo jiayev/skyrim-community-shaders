@@ -4,29 +4,29 @@
 // BSLightingShader::SetupGeometry (case 0xc) turns the node into TreeParams and WindTimers. DCLF's members draw with what
 // this pass makes of the same inputs, so nothing reads the tree nodes per frame.
 //
-// Mode 0, one thread per tree slot: the clock row brought to this frame, once per frame however many epochs run it. A
-// row whose generation is not its static row's is new (a listed node) and starts from the node's values.
-// Mode 1, one thread per member drawing under a tree: its record's TreeParams and WindTimers, written after the epoch's
-// uploads, which carry the record as it was when the member joined.
+// One thread per entry of the frame's wind buffer, on the compute queue in the Z-prepass epoch: entry 0 the nodeless trees',
+// entry s + 1 tree slot s, whose clock row it first brings to this frame (a row whose generation is not its static row's is new,
+// a listed node, and starts from the node's values). The entry is what SetupGeometry's case 0xc makes of the tree, which is the
+// same for every member drawing under it (TreeParams, WindTimers with the distance and amplitude in zw), then the listing's
+// generation. The buffers alternate by frame: this frame's
+// is drawn by the next one (Common/DCLFObjects.hlsli, DCLFTreeWind), so nothing waits for this pass.
 
 cbuffer TreeWindConstants : register(b0)
 {
-	uint Mode;
 	uint TreesIndex;    // StructuredBuffer<TreeStatic>
-	uint ClocksIndex;   // RWStructuredBuffer<TreeClock> (mode 0), StructuredBuffer (mode 1)
-	uint ListIndex;     // StructuredBuffer<uint2>: object slot, tree slot (mode 1)
-	uint RecordsIndex;  // RWStructuredBuffer of the object records (mode 1)
+	uint ClocksIndex;   // RWStructuredBuffer<TreeClock>
 	uint FrameIndex;    // StructuredBuffer<TreeWindFrameRow>, one row (every commit's)
-	uint TreeWord;      // the record's TreeParams, in 16-byte words (BindlessObject::tree)
 	uint Padding0;
+	uint2 WindIndices;  // RWStructuredBuffer<float4>: the two wind buffers, written by the frame's parity
+	uint2 Padding1;
 }
 
 // The frame's values (GpuLayouts.h, TreeWindFrameRow), a buffer rather than constants: the pass is prepared ahead of the
 // commit that knows them. The dispatch covers every slot the buffers hold; the counts end it.
 struct TreeWindFrameRow
 {
-	uint TreeCount;    // tree slots (mode 0)
-	uint ObjectCount;  // members (mode 1)
+	uint TreeCount;    // tree slots
+	uint ObjectCount;  // members (unused)
 	uint Frame;
 	uint RowPadding;
 	float DeltaTime;
@@ -68,11 +68,6 @@ struct TreeClock
 	uint3 Padding;
 };
 
-struct ObjectRecordWords
-{
-	uint4 Words[16];
-};
-
 static const uint kNodelessTree = 0xFFFFFFFEu;
 
 // FUN_140438950(x, 3): a quarter of the sum of sin(k pi x) over k = 1, 3, 5, 7, each with the engine's argument reduction
@@ -106,16 +101,20 @@ float Distance2(float3 a_position)
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
-	const uint index = dispatchID.x;
+	const uint entry = dispatchID.x;
 	StructuredBuffer<TreeWindFrameRow> frames = ResourceDescriptorHeap[FrameIndex];
 	W = frames[0];
-	if (index >= (Mode == 0 ? W.TreeCount : W.ObjectCount))
+	if (entry > W.TreeCount)
 		return;
-	StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
-	if (Mode == 0) {
+	// SetupGeometry's case 0xc (DeriveTreeAnim): with no node, distance 0, maximum amplitude 1, leaf frequency 1, no clock.
+	float distance2 = 0.0f, amplitude = 1.0f, leafFrequency = 1.0f, timer = 0.0f, previousTimer = 0.0f;
+	uint generation = kNodelessTree;
+	if (entry != 0) {
+		const uint slot = entry - 1;
+		StructuredBuffer<TreeStatic> trees = ResourceDescriptorHeap[TreesIndex];
 		RWStructuredBuffer<TreeClock> clocks = ResourceDescriptorHeap[ClocksIndex];
-		const TreeStatic tree = trees[index];
-		TreeClock clock = clocks[index];
+		const TreeStatic tree = trees[slot];
+		TreeClock clock = clocks[slot];
 		if (clock.Generation != tree.Generation) {
 			clock.Timer = tree.Timer;
 			clock.PreviousTimer = tree.PreviousTimer;
@@ -133,27 +132,19 @@ float Distance2(float3 a_position)
 			}
 			clock.Frame = W.Frame;
 		}
-		clocks[index] = clock;
-		return;
-	}
-	StructuredBuffer<TreeClock> clocks = ResourceDescriptorHeap[ClocksIndex];
-	StructuredBuffer<uint2> list = ResourceDescriptorHeap[ListIndex];
-	RWStructuredBuffer<ObjectRecordWords> records = ResourceDescriptorHeap[RecordsIndex];
-	const uint2 member = list[index];
-	// SetupGeometry's case 0xc (DeriveTreeAnim): with no node, distance 0, maximum amplitude 1, leaf frequency 1, no clock.
-	float distance2 = 0.0f, amplitude = 1.0f, leafFrequency = 1.0f, timer = 0.0f, previousTimer = 0.0f;
-	if (member.y != kNodelessTree) {
-		const TreeStatic tree = trees[member.y];
-		const TreeClock clock = clocks[member.y];
+		clocks[slot] = clock;
 		distance2 = Distance2(tree.Position);
 		amplitude = clock.Amplitude;
 		leafFrequency = tree.LeafFrequency;
 		timer = clock.Timer;
 		previousTimer = clock.PreviousTimer;
+		generation = tree.Generation;
 	}
-	const float distance = member.y != kNodelessTree ? FastSqrt(distance2) : 0.0f;
+	const float distance = entry != 0 ? FastSqrt(distance2) : 0.0f;
 	precise float faded = (1.0f - (distance - W.FadeStart) / (W.FadeEnd - W.FadeStart)) * amplitude;
 	faded = min(max(faded, 0.0f), amplitude);
-	records[member.x].Words[TreeWord] = asuint(float4(0.0f, W.WindMagnitude, faded, leafFrequency));
-	records[member.x].Words[TreeWord + 1] = asuint(float4(timer * W.TimerScale, previousTimer * W.TimerScale, distance2, amplitude));
+	RWStructuredBuffer<float4> wind = ResourceDescriptorHeap[(W.Frame & 1u) != 0 ? WindIndices.y : WindIndices.x];
+	wind[entry * 3] = float4(0.0f, W.WindMagnitude, faded, leafFrequency);
+	wind[entry * 3 + 1] = float4(timer * W.TimerScale, previousTimer * W.TimerScale, distance2, amplitude);
+	wind[entry * 3 + 2] = float4(asfloat(generation), 0.0f, 0.0f, 0.0f);
 }

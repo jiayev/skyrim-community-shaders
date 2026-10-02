@@ -175,8 +175,8 @@ static precise float3x4 PreviousWorld = float3x4(
 	DCLFObjects[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z));
 // Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
 // buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
-static float4 TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
-static float2 WindTimers = DCLFObjects[DCLFObjectIndex].DCLFWindTimers.xy;
+static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+static float2 WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
 // Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix, from the object's
 // extras rows in the row buffer. An object without extras points at row 0, which nothing reads for it.
 static float4 LandBlendParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 0];

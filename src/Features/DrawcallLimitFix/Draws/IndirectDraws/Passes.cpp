@@ -270,7 +270,7 @@ namespace DCLF::Draws
 	{
 		org::DeclaredViewToken inputs, inputsDepth, geometries, objects, sequences, count, hzb, visibility, frustum;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
-		org::DeclaredViewToken fadeRoots, fadeStates;
+		org::DeclaredViewToken fadeRoots;
 	};
 
 	struct BuildDrawsFrame
@@ -312,11 +312,10 @@ namespace DCLF::Draws
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			if (resources->frustum)
 				bindings.frustum = a_builder.UnorderedAccess(resources->frustum).View();
-			// The depth segment's first phase reads the fade roots' state (FadeStateCS, just before it).
-			if (segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2 && resources->scene->fadeRoots) {
+			// The depth segment's first phase reads the fade roots' static rows, and the states FadeStateCS published the frame before
+			// (its latch's; undeclared, as nothing this frame writes them: SceneBuffers::fadeStatesOut).
+			if (segment == RenderGraphRuntime::Segment::ZPrepass && fixedPhase != 2 && resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
-				bindings.fadeStates = a_builder.ShaderResource(resources->scene->fadeStates).View();
-			}
 			// Phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt from this
 			// frame's depth. Both read the same resource; what differs is where they sit relative to
 			// the build, which is why the ordering below is the whole design.
@@ -377,7 +376,6 @@ namespace DCLF::Draws
 				constants.frustumIndex = CaptureViewIndex(a_preparation, a_bindings.frustum);
 			if (phase == 1 && resources->scene->fadeRoots && resources->scene->fadeRootCount) {
 				constants.fadeRootsIndex = CaptureViewIndex(a_preparation, a_bindings.fadeRoots);
-				constants.fadeStatesIndex = CaptureViewIndex(a_preparation, a_bindings.fadeStates);
 			}
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
@@ -501,7 +499,8 @@ namespace DCLF::Draws
 
 	struct TreeWindBindings
 	{
-		org::DeclaredViewToken trees, clocks, list, records, frame;
+		org::DeclaredViewToken trees, clocks, frame;
+		std::array<org::DeclaredViewToken, 2> wind;
 	};
 
 	struct TreeWindFramePrepared
@@ -512,59 +511,51 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Tree wind (TreeWindCS.hlsl): mode 0 brings the tree clocks to this frame (once a frame, whichever epoch runs it
-	 * first), mode 1 writes the members' TreeParams and WindTimers into their records, after the epoch's uploads and ahead
-	 * of the draws that read them. Both run in every epoch that draws or uploads the scene's records.
+	 * @brief Tree wind (TreeWindCS.hlsl), on the compute queue in the Z-prepass epoch: each tree's clock brought to this frame
+	 * and its TreeParams and WindTimers into this frame's wind buffer (SceneBuffers::treeWindRows, by the frame's parity), which
+	 * the next frame's draws read. Nothing in any epoch reads what it writes, so nothing waits for it: it has the epoch's raster
+	 * work to run beside, and the host orders it against the frames either side (RenderGraphRuntime, the compute queue's entry
+	 * and exit). The readers do not declare the wind buffers for the same reason: the one they read was finished a frame ago.
 	 */
 	class TreeWindPass final : public org::TypedRenderGraphPass<TreeWindPass, TreeWindFramePrepared, TreeWindBindings>
 	{
 	public:
-		TreeWindPass(std::shared_ptr<SceneBuffers> a_scene, std::uint32_t a_mode) :
-			scene(std::move(a_scene)), mode(a_mode) {}
+		explicit TreeWindPass(std::shared_ptr<SceneBuffers> a_scene) :
+			scene(std::move(a_scene)) {}
 
 		TreeWindBindings Declare(org::PassBuilder& a_builder)
 		{
-			a_builder.PreferQueue(org::QueueKind::Graphics);
+			a_builder.PreferQueue(org::QueueKind::Compute);
 			TreeWindBindings bindings{};
 			bindings.trees = a_builder.ShaderResource(scene->trees).View();
 			bindings.frame = a_builder.ShaderResource(scene->treeFrameBuffer).View();
-			if (mode == 0) {
-				bindings.clocks = a_builder.UnorderedAccess(scene->treeClocks).View();
-			} else {
-				bindings.clocks = a_builder.ShaderResource(scene->treeClocks).View();
-				bindings.list = a_builder.ShaderResource(scene->treeObjects).View();
-				bindings.records = a_builder.UnorderedAccess(scene->objects).View();
-			}
+			bindings.clocks = a_builder.UnorderedAccess(scene->treeClocks).View();
+			for (std::uint32_t h = 0; h < 2; ++h)
+				bindings.wind[h] = a_builder.UnorderedAccess(scene->treeWindRows[h]).View();
 			return bindings;
 		}
 
-		// What the recording depends on: the buffers' layout (a growth gives them new views). The counts and the frame's inputs
+		// What the recording depends on: the buffers' layout (a growth gives them new views). The count and the frame's inputs
 		// are the frame row, which every commit uploads.
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 		{
 			a_out.push_back(scene->layout.load(std::memory_order_acquire));
-			a_out.push_back(mode);
 		}
 
 		TreeWindFramePrepared Prepare(const TreeWindBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
 			TreeWindFramePrepared prepared{};
-			// Every slot the buffers hold: the shader stops at the frame row's count.
-			const std::uint32_t count = mode == 0 ? scene->treeCapacity : scene->treeObjectCapacity;
-			if (!scene->treeWind || !count || !scene->treeFrameBuffer)
+			if (!scene->treeWind || !scene->treeFrameBuffer)
 				return prepared;
 			prepared.program = scene->treeWind;
 			auto& constants = prepared.constants;
-			constants.mode = mode;
 			constants.treesIndex = CaptureViewIndex(a_preparation, a_bindings.trees);
 			constants.clocksIndex = CaptureViewIndex(a_preparation, a_bindings.clocks);
 			constants.frameIndex = CaptureViewIndex(a_preparation, a_bindings.frame);
-			if (mode == 1) {
-				constants.listIndex = CaptureViewIndex(a_preparation, a_bindings.list);
-				constants.recordsIndex = CaptureViewIndex(a_preparation, a_bindings.records);
-			}
-			constants.treeWord = static_cast<std::uint32_t>(offsetof(BindlessObject, tree) / 16);
-			prepared.groups = (count + kTreeWindGroup - 1) / kTreeWindGroup;
+			for (std::uint32_t h = 0; h < 2; ++h)
+				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
+			// Every entry the buffers hold (the nodeless one, then the tree slots): the shader stops at the frame row's count.
+			prepared.groups = (scene->treeCapacity + 1 + kTreeWindGroup - 1) / kTreeWindGroup;
 			return prepared;
 		}
 
@@ -581,24 +572,12 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<SceneBuffers> scene;
-		std::uint32_t mode = 0;
 	};
-
-	/** @brief The two tree wind passes, first in an epoch's list (after its uploads, ahead of everything that reads the records). */
-	void AddTreeWindPasses(const std::shared_ptr<SceneBuffers>& a_scene, const char* a_prefix, std::uint32_t a_epoch, std::vector<org::RenderGraph::ExternalPassDesc>& a_out)
-	{
-		if (!a_scene || !a_scene->treeWind || !a_scene->trees)
-			return;
-		for (std::uint32_t mode = 0; mode < 2; ++mode)
-			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute(fmt::format("{}.tree-wind-{}", a_prefix, mode ? "records" : "clocks"),
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeWindPass>(a_scene, mode)))
-					.PreferQueue(org::QueueKind::Graphics)
-					.Epoch(a_epoch));
-	}
 
 	struct FadeStateBindings
 	{
 		org::DeclaredViewToken roots, states, frame, objects, log, visibility;
+		std::array<org::DeclaredViewToken, 2> published;
 	};
 
 	struct FadeStatePrepared
@@ -621,11 +600,13 @@ namespace DCLF::Draws
 
 		FadeStateBindings Declare(org::PassBuilder& a_builder)
 		{
-			a_builder.PreferQueue(org::QueueKind::Graphics);
+			a_builder.PreferQueue(org::QueueKind::Compute);
 			const auto& scene = *resources->scene;
 			FadeStateBindings bindings{};
 			bindings.roots = a_builder.ShaderResource(scene.fadeRoots).View();
 			bindings.states = a_builder.UnorderedAccess(scene.fadeStates).View();
+			for (std::uint32_t h = 0; h < 2; ++h)
+				bindings.published[h] = a_builder.UnorderedAccess(scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
 			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
 			bindings.objects = a_builder.ShaderResource(scene.objects).View();
@@ -658,6 +639,8 @@ namespace DCLF::Draws
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
+			for (std::uint32_t h = 0; h < 2; ++h)
+				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
 			constants.latchIndex = frame->latch->SrvIndex();
 			// Every slot the buffers hold: the shader stops at the frame row's count.
 			prepared.groups = (scene.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
@@ -685,19 +668,21 @@ namespace DCLF::Draws
 	struct HzbBindings
 	{
 		org::DeclaredViewToken depth;
+		org::DeclaredViewToken counter;
 		std::vector<org::DeclaredViewToken> hzbMips;
 	};
 
 	struct HzbFrame
 	{
 		std::shared_ptr<const ComputeProgram> program;
-		// One dispatch per mip, each reading the level above (mip 0 reads the scene depth).
-		struct Level
+		// One single-pass downsample per kHzbDispatchMips levels at most, the first reading the scene depth and each other
+		// the previous one's last level. A domain of up to 4096 texels a side takes one.
+		struct Dispatch
 		{
 			HzbConstants constants{};
 			std::uint32_t groupsX = 0, groupsY = 0;
 		};
-		std::vector<Level> levels;
+		std::vector<Dispatch> dispatches;
 	};
 
 	/**
@@ -708,10 +693,9 @@ namespace DCLF::Draws
 	 * the objects DCLF drew itself. On AE that is inside the depth pass, before the first-person model's
 	 * depth and the rooms' stencil draws, which it therefore leaves out: fewer occluders, never more.
 	 *
-	 * The whole mip chain is one pass with a full memory barrier between the dispatches, rather than one
-	 * pass per level. Levels of a single texture are not separate resources to the graph, so a per-level
-	 * pass would declare the same resource as both its input and its output and the ordering would not
-	 * mean what it reads as.
+	 * The whole mip chain is one dispatch of the single-pass downsampler (HzbCS.hlsl, FidelityFX SPD): a
+	 * dispatch per level with a full barrier between each cost about 0.1 ms, nearly all of it the drains.
+	 * Levels of a single texture are not separate resources to the graph, so the chain is one pass either way.
 	 */
 	class HzbPass final : public org::TypedRenderGraphPass<HzbPass, HzbFrame, HzbBindings>
 	{
@@ -724,6 +708,7 @@ namespace DCLF::Draws
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			HzbBindings bindings{};
 			bindings.depth = a_builder.ShaderResource(resources->nativeDepth).View();
+			bindings.counter = a_builder.UnorderedAccess(resources->hzbCounter).View();
 			bindings.hzbMips.reserve(resources->hzbMips);
 			for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip)
 				bindings.hzbMips.push_back(a_builder.UnorderedAccess(resources->hzb, org::UavView{ UINT32_MAX, mip }).View());
@@ -745,56 +730,77 @@ namespace DCLF::Draws
 			const auto now = segment;
 			if (now != RenderGraphRuntime::Segment::ZPrepass)
 				return prepared;
-			if (!resources->hzb || !resources->hzbProgram)
+			if (!resources->hzb || !resources->hzbProgram || !resources->hzbCounter)
 				return prepared;
+			// A published depth frame: its commit zeroed the group counter (hzbCounterZeroed) before this first dispatch.
 			const auto frame = CurrentFrame(*resources, now);
-			const std::uint32_t renderWidth = frame && frame->width ? frame->width : resources->width;
-			const std::uint32_t renderHeight = frame && frame->height ? frame->height : resources->height;
+			if (!frame)
+				return prepared;
+			const std::uint32_t renderWidth = frame->width ? frame->width : resources->width;
+			const std::uint32_t renderHeight = frame->height ? frame->height : resources->height;
 			prepared.program = resources->hzbProgram;
 			const std::uint32_t depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
-			for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip) {
-				HzbFrame::Level level{};
-				level.constants.targetIndex = CaptureViewIndex(a_preparation, a_bindings.hzbMips[mip]);
-				level.constants.targetSize[0] = std::max(1u, resources->hzbWidth >> mip);
-				level.constants.targetSize[1] = std::max(1u, resources->hzbHeight >> mip);
-				if (mip == 0) {
-					level.constants.fromDepth = 1;
-					level.constants.sourceIndex = depthIndex;
-					// The rendered area, not the texture: the depth image can be larger than the viewport
-					// the draws use, and everything past that viewport is untouched. Bounding the read
-					// here makes those texels answer the far plane, which suppresses culling.
-					level.constants.sourceSize[0] = renderWidth;
-					level.constants.sourceSize[1] = renderHeight;
+			const std::uint32_t counterIndex = CaptureViewIndex(a_preparation, a_bindings.counter);
+			std::vector<std::uint32_t> levelIndices(resources->hzbMips);
+			for (std::uint32_t mip = 0; mip < resources->hzbMips; ++mip)
+				levelIndices[mip] = CaptureViewIndex(a_preparation, a_bindings.hzbMips[mip]);
+			const auto levelSize = [&](std::uint32_t a_mip, std::uint32_t a_axis) {
+				return std::max(1u, (a_axis == 0 ? resources->hzbWidth : resources->hzbHeight) >> a_mip);
+			};
+			for (std::uint32_t level = 0; level < resources->hzbMips;) {
+				HzbFrame::Dispatch dispatch{};
+				auto& constants = dispatch.constants;
+				constants.counterIndex = counterIndex;
+				if (level == 0) {
+					// Mip 0 is half the padded domain, of which the rendered area holds depth: the depth image can be
+					// larger than the viewport the draws use, and everything past that viewport is untouched.
+					constants.fromDepth = 1;
+					constants.sourceIndex = depthIndex;
+					constants.domainSize[0] = resources->hzbWidth * 2;
+					constants.domainSize[1] = resources->hzbHeight * 2;
+					constants.validSize[0] = std::min(renderWidth, constants.domainSize[0]);
+					constants.validSize[1] = std::min(renderHeight, constants.domainSize[1]);
 				} else {
-					level.constants.fromDepth = 0;
-					level.constants.sourceIndex = prepared.levels.back().constants.targetIndex;
-					level.constants.sourceSize[0] = prepared.levels.back().constants.targetSize[0];
-					level.constants.sourceSize[1] = prepared.levels.back().constants.targetSize[1];
+					constants.fromDepth = 0;
+					constants.sourceIndex = levelIndices[level - 1];
+					constants.domainSize[0] = constants.validSize[0] = levelSize(level - 1, 0);
+					constants.domainSize[1] = constants.validSize[1] = levelSize(level - 1, 1);
 				}
-				level.groupsX = (level.constants.targetSize[0] + 7) / 8;
-				level.groupsY = (level.constants.targetSize[1] + 7) / 8;
-				prepared.levels.push_back(level);
+				constants.targetSize[0] = levelSize(level, 0);
+				constants.targetSize[1] = levelSize(level, 1);
+				// A group reduces its tile through six levels; the last group carries on from the sixth only when that
+				// level fits its own tile, which a domain of more than kHzbTile tiles a side does not.
+				const std::uint32_t domain = std::max(constants.domainSize[0], constants.domainSize[1]);
+				const std::uint32_t reach = domain / kHzbTile <= kHzbTile ? kHzbDispatchMips : 6u;
+				constants.mips = std::min(resources->hzbMips - level, reach);
+				for (std::uint32_t i = 0; i < constants.mips; ++i)
+					constants.targetIndices[i] = levelIndices[level + i];
+				dispatch.groupsX = (constants.domainSize[0] + kHzbTile - 1) / kHzbTile;
+				dispatch.groupsY = (constants.domainSize[1] + kHzbTile - 1) / kHzbTile;
+				constants.workGroups = dispatch.groupsX * dispatch.groupsY;
+				level += constants.mips;
+				prepared.dispatches.push_back(dispatch);
 			}
 			return prepared;
 		}
 
 		static void Record(const HzbBindings&, const HzbFrame& a_frame, org::PassRecordContext& a_recording)
 		{
-			if (!a_frame.program || a_frame.levels.empty())
+			if (!a_frame.program || a_frame.dispatches.empty())
 				return;
 			auto& commands = a_recording.Commands();
 			commands.BindLayout(a_frame.program->layout->GetHandle());
 			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
-			for (std::size_t i = 0; i < a_frame.levels.size(); ++i) {
-				const auto& level = a_frame.levels[i];
+			for (std::size_t i = 0; i < a_frame.dispatches.size(); ++i) {
+				const auto& dispatch = a_frame.dispatches[i];
 				if (i != 0) {
-					// The level below must be complete before this one reads it.
+					// The previous dispatch's last level must be complete before this one reads it.
 					const rhi::GlobalBarrier global = rhi::FullMemoryBarrier();
 					const rhi::BarrierBatch batch{ {}, {}, { &global, 1 } };
 					commands.Barriers(batch);
 				}
-				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kHzbConstantWords, reinterpret_cast<const std::uint32_t*>(&level.constants));
-				commands.Dispatch(level.groupsX, level.groupsY, 1);
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kHzbConstantWords, reinterpret_cast<const std::uint32_t*>(&dispatch.constants));
+				commands.Dispatch(dispatch.groupsX, dispatch.groupsY, 1);
 			}
 		}
 
@@ -974,7 +980,7 @@ namespace DCLF::Draws
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
 		std::vector<org::DeclaredViewToken> sequences, count, bucketCounts;  // per view slot
 		org::DeclaredViewToken geometries, objects, visibility, poolFirsts;
-		org::DeclaredViewToken fadeRoots, fadeStates;
+		org::DeclaredViewToken fadeRoots;
 	};
 
 	struct ShadowBuildPrepared
@@ -1012,11 +1018,10 @@ namespace DCLF::Draws
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
-			// The shadow views' casters under stood-in roots follow FadeStateCS's state (the occlusion views' do not).
-			if (!sky && resources->scene->fadeRoots) {
+			// The shadow views' casters under stood-in roots follow FadeStateCS's state (the occlusion views' do not): the static
+			// rows, and the states published the frame before (the latch's, undeclared like the depth segment's).
+			if (!sky && resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
-				bindings.fadeStates = a_builder.ShaderResource(resources->scene->fadeStates).View();
-			}
 			return bindings;
 		}
 
@@ -1043,7 +1048,6 @@ namespace DCLF::Draws
 			const auto poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			const bool fadeRows = FadeRows();
 			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
-			const auto fadeStatesIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeStates) : 0u;
 			for (const auto& view : frame->views) {
 				if (view.slot >= a_bindings.sequences.size() || view.modeIndex >= kShadowModeCount)
 					continue;
@@ -1069,7 +1073,6 @@ namespace DCLF::Draws
 				// The visibility words are written per object by every dispatch; nothing reads them here.
 				constants.visibilityIndex = visibilityIndex;
 				constants.fadeRootsIndex = fadeRootsIndex;
-				constants.fadeStatesIndex = fadeStatesIndex;
 				prepared.dispatches.push_back(dispatch);
 			}
 			return prepared;
@@ -1338,12 +1341,15 @@ namespace DCLF::Draws
 		if (a_scene.trees) {
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.trees"), a_scene.trees);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-clocks"), a_scene.treeClocks);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-objects"), a_scene.treeObjects);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-wind0"), a_scene.treeWindRows[0]);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-wind1"), a_scene.treeWindRows[1]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-frame"), a_scene.treeFrameBuffer);
 		}
 		if (a_scene.fadeRoots) {
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-roots"), a_scene.fadeRoots);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states"), a_scene.fadeStates);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states-out0"), a_scene.fadeStatesOut[0]);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-states-out1"), a_scene.fadeStatesOut[1]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
@@ -1382,7 +1388,6 @@ namespace DCLF::Draws
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
-			AddTreeWindPasses(resources->scene, "cs.dclf.shadow", epoch, a_out);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources)))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -1434,8 +1439,10 @@ namespace DCLF::Draws
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.native-target{}", i)), resources->native[i]);
 			if (resources->nativeDepth)
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.native-depth"), resources->nativeDepth);
-			if (resources->hzb)
+			if (resources->hzb) {
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.hzb"), resources->hzb);
+				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.hzb-counter"), resources->hzbCounter);
+			}
 			if (resources->sort)
 				resources->sort->Register(a_graph);
 		}
@@ -1462,12 +1469,17 @@ namespace DCLF::Draws
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(a_epoch));
 			};
-			AddTreeWindPasses(resources->scene, "cs.dclf.z", depth, a_out);
-			// The fade roots' state, before the depth segment's culling reads it.
+			// The trees' wind for the next frame, beside this epoch's raster work.
+			if (resources->scene->treeWind && resources->scene->trees)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.tree-wind",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeWindPass>(resources->scene)))
+						.PreferQueue(org::QueueKind::Compute)
+						.Epoch(depth));
+			// The fade roots' state for the next frame's culling, beside this epoch's raster work.
 			if (resources->scene->fadeState && resources->scene->fadeRoots)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.fade-state",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<FadeStatePass>(resources)))
-						.PreferQueue(org::QueueKind::Graphics)
+						.PreferQueue(org::QueueKind::Compute)
 						.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))
@@ -1477,7 +1489,6 @@ namespace DCLF::Draws
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
 					.Epoch(depth));
-			AddTreeWindPasses(resources->scene, "cs.dclf", colour, a_out);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, colourSegment)))
 					.PreferQueue(org::QueueKind::Graphics)

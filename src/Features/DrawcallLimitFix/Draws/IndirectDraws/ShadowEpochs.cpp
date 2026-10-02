@@ -909,6 +909,7 @@ namespace DCLF
 				scene.held.geometries = payload.geometries.Version();
 			impl->CommitSceneStreams(scene, store.GetTables(), store.GetFrame(), store.GetTablesGeneration(), uploads);
 			shadowStats.faceUploads += UploadFaceStreams(payload.faceStreams, scene.facePositions, scene.faceUploaded, uploads);
+			ZeroFrameAheadOutputs(scene, uploads);
 			UploadTrees(store.GetTables(), store.GetFrame(), scene, uploads);
 			shadowStats.records = static_cast<std::uint32_t>(payload.materialRows.Count());
 			shadowStats.skippedTexture = payload.skippedTexture;
@@ -968,6 +969,7 @@ namespace DCLF
 				                  (view.casterClass ? kCullVolumetricOnly : kCullCastersOnly) | (view.sunView ? kCullSunEntry : 0u);
 				latch.cullPlaneMask = view.cullPlaneMask;
 				std::memcpy(latch.cullPlanes, view.cullPlanes, sizeof(latch.cullPlanes));
+				latch.fadeStatesIndex = resources->scene->FadeStatesReadIndex(frameNumber);
 				// A sun view's entry rule on the GPU: the slot's region of the frame's full-frustum processes (written once, below the
 				// loop's first sun view), which BuildDraws tests every input's entry sphere against (SetSunEntryRow).
 				if (view.sunView) {
@@ -1117,6 +1119,7 @@ namespace DCLF
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
 		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
+		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
 		in.addresses.identity = &a_resources;

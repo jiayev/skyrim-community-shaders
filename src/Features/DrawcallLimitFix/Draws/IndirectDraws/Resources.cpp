@@ -339,6 +339,7 @@ namespace DCLF
 		hzbDesc.srvFormat = hzbDesc.format;
 		state->hzb = org::PixelBuffer::CreateSharedUnmaterialized(hzbDesc);
 		state->hzb->SetName("cs.dclf.hzb");
+		state->hzbCounter = CreateWords(1, true, "cs.dclf.hzb-counter");
 
 		state->hzbProgram = ComputeProgram::Load(device, { .source = kHzbShader, .constantWords = kHzbConstantWords });
 		if (!state->hzbProgram) {
@@ -432,27 +433,28 @@ namespace DCLF
 		buffers->faceVertices = smallStart ? 1024u : kInitialFaceVertices;
 		// Structured, because the shaders read the object records and the bone rows through SRVs (t127, t126); the geometry
 		// table is BuildDraws' (raw words), and the face positions are a vertex buffer.
-		// The object records take TreeWindCS's writes of the trees' wind (unordered access).
-		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex, true);
+		buffers->objects = StructuredBuffer(buffers->objectCapacity, sizeof(BindlessObject), "cs.dclf.objects", buffers->objectsIndex);
 		buffers->bones = StructuredBuffer(buffers->boneRows, 16, "cs.dclf.bones", buffers->bonesIndex);
 		buffers->geometries = CreateWords(std::uint64_t(buffers->geometryRows) * sizeof(GeometryDraw) / 4, false, "cs.dclf.geometries");
 		buffers->facePositions = DeviceBuffer(std::uint64_t(buffers->faceVertices) * 16, "cs.dclf.face-positions");
 		buffers->facePositionsAddress = AddressOf(a_device, *buffers->facePositions);
 		if (!buffers->facePositionsAddress)
 			return false;
-		// Tree wind (TreeWindCS): without its program the members' records keep the wind they joined with.
+		// Tree wind (TreeWindCS): without its program the members' records keep the wind they joined with (the wind buffers, the
+		// draws' t124, are there either way and stay zero: no entry is a listing's).
 		buffers->treeWind = ComputeProgram::Load(a_device, { .source = kTreeWindShader, .constantWords = kTreeWindConstantWords });
 		if (buffers->treeWind) {
 			std::uint32_t unused = 0;
 			buffers->treeCapacity = smallStart ? 4u : kInitialTrees;
-			buffers->treeObjectCapacity = smallStart ? 16u : kInitialTreeObjects;
 			buffers->trees = StructuredBuffer(buffers->treeCapacity, sizeof(TreeStatic), "cs.dclf.trees", unused);
 			buffers->treeClocks = StructuredBuffer(buffers->treeCapacity, sizeof(TreeClock), "cs.dclf.tree-clocks", unused, true);
-			buffers->treeObjects = StructuredBuffer(buffers->treeObjectCapacity, sizeof(TreeObject), "cs.dclf.tree-objects", unused);
 			buffers->treeFrameBuffer = StructuredBuffer(1, sizeof(TreeWindFrameRow), "cs.dclf.tree-frame", unused);
 		} else {
 			logger::warn("[DCLF] The tree wind program could not be created; trees keep the wind they joined with");
 		}
+		for (std::uint32_t h = 0; h < 2; ++h)
+			buffers->treeWindRows[h] = StructuredBuffer((buffers->treeCapacity + 1) * kTreeWindEntryRows, 16, h ? "cs.dclf.tree-wind1" : "cs.dclf.tree-wind0",
+				buffers->treeWindIndex[h], true);
 		// Fade roots (FadeStateCS): without its program the fades stay the CPU's alone.
 		buffers->fadeState = ComputeProgram::Load(a_device, { .source = kFadeStateShader, .constantWords = kFadeStateConstantWords });
 		if (buffers->fadeState) {
@@ -460,6 +462,9 @@ namespace DCLF
 			buffers->fadeRootCapacity = smallStart ? 4u : kInitialFadeRoots;
 			buffers->fadeRoots = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeRootStatic), "cs.dclf.fade-roots", unused);
 			buffers->fadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.fade-states", unused, true);
+			for (std::uint32_t h = 0; h < 2; ++h)
+				buffers->fadeStatesOut[h] = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
+					buffers->fadeStatesOutIndex[h], true);
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
 			buffers->fadeVisibility = CreateWords(kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
@@ -574,16 +579,20 @@ namespace DCLF
 		for (const auto& stream : a_tables.faceStreams)
 			if (stream.object != SceneStore::Tables::kNoFaceObject)
 				faceVertices = std::max<std::uint64_t>(faceVertices, std::uint64_t(stream.region) + stream.vertexCount);
-		// The tree rows and clocks by tree slot, the members' list. A new clock backing holds no clock: every tree starts again
-		// from the values it was listed with (its static row), once.
+		// The tree rows, clocks and wind entries by tree slot. A new clock backing holds no clock: every tree starts again from
+		// the values it was listed with (its static row), once. New wind backings hold no entry until the next frame's compute.
 		if (s.trees) {
-			if (grow("tree rows", s.treeCapacity, a_tables.trees.size(), sizeof(TreeStatic) + sizeof(TreeClock), [&](std::uint32_t a_rows) {
+			if (grow("tree rows", s.treeCapacity, a_tables.trees.size(), sizeof(TreeStatic) + sizeof(TreeClock) + 2 * kTreeWindEntryRows * 16, [&](std::uint32_t a_rows) {
 					s.trees->ResizeStructured(a_rows);
 					s.treeClocks->ResizeStructured(a_rows);
-				}))
+					for (std::uint32_t h = 0; h < 2; ++h) {
+						s.treeWindRows[h]->ResizeStructured((a_rows + 1) * kTreeWindEntryRows);
+						s.treeWindIndex[h] = s.treeWindRows[h]->GetSRVInfo(0).slot.index;
+					}
+				})) {
 				s.treesHeld = ~0ull;
-			if (grow("tree members", s.treeObjectCapacity, a_tables.treeObjects.size(), sizeof(TreeObject), [&](std::uint32_t a_rows) { s.treeObjects->ResizeStructured(a_rows); }))
-				s.treeObjectsHeld = ~0ull;
+				s.treeWindZeroed = false;
+			}
 		}
 		// The fade roots' static and state rows by root slot. A new state backing holds no state: every root is seeded again
 		// from its static row (a zero generation is never a listing's).
@@ -591,8 +600,14 @@ namespace DCLF
 			if (grow("fade roots", s.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState), [&](std::uint32_t a_rows) {
 					s.fadeRoots->ResizeStructured(a_rows);
 					s.fadeStates->ResizeStructured(a_rows);
-				}))
+					for (std::uint32_t h = 0; h < 2; ++h) {
+						s.fadeStatesOut[h]->ResizeStructured(a_rows);
+						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->GetSRVInfo(0).slot.index;
+					}
+				})) {
 				s.fadeRootsHeld = ~0ull;
+				s.fadeStatesOutZeroed = false;
+			}
 		}
 		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
 				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);

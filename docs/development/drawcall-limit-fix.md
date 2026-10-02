@@ -6927,6 +6927,179 @@ elsewhere.
     (the same gate measures it). The two test EQUAL against each other, so they would have to move together, and the
     colour pass binds far more per draw (the rows' blocks and textures through the layout's indirect ranges).
 
+### The rest of the gap: DCLF's compute, and async compute (investigation)
+
+**The gap by segment** (Save5, GPU event timers, DCLF on against off across a live toggle in one run; 12.35 against
+11.77 ms):
+
+| Segment | On | Off | Gap |
+| --- | --- | --- | --- |
+| Depth (DCLF's Z-prepass segment and the engine's residual depth draws) | 1.03 | 0.67 | +0.36 |
+| World (the colour segment) | 4.50 | 4.37 | +0.13 |
+| Shadow maps | 2.08 | 1.99 | +0.09 |
+| Skylighting occlusion | | | about 0 |
+
+**DCLF's compute passes** (nvperf, frames 3300+, 5 captures; the range profiler drains around each range, so a small pass
+reads high, and in the frame each costs its time plus the drain its barrier forces):
+
+| Segment | Pass (us) |
+| --- | --- |
+| Depth | HZB 98, fade state 33, build-draws 18, sort scan 18 and scatter 9, tree wind 7 and 6, phase-2 build 13; phase-2 depth draw 46 (draws next to nothing: its cost is the pass) |
+| Colour | build-draws 23, sort scan 17 and scatter 8, tree wind 7 and 6 |
+| Shadow | build-draws 23, tree wind 8 and 7, index pool 4 |
+| Sky | build-draws 15 |
+
+The depth segment's draws (0.36 ms, and the engine's residual 0.38 against its native 0.67) are close to native; its
+extra is the compute and the phase-2 pass, about 0.25 ms. The colour segment's compute is about 0.06 ms, the shadow
+epoch's about 0.04.
+
+**What async compute needs here.** CS has no second queue to give ORG today:
+
+-   DXVK creates graphics, transfer and sparse queues (`dxvk_adapter.cpp`, `DxvkDeviceQueueSet`), and the interop
+    (`DxvkOrgInterop.h`) hands BasicRHI the graphics queue alone (`adopt.queues[0]`), so BasicRHI's compute queue aliases it.
+    ORG itself schedules compute passes on a compute queue (a pass's `PreferQueue(QueueKind::Compute)`) and synchronises
+    the queues with timeline semaphores.
+-   The DXVK fork would create a queue of a compute-only family (on NVIDIA, family 2) and export it with its family and
+    index, and the host would adopt it as `queues[1]`.
+-   The host's submission hook sends everything into DXVK's stream (`dxvkEnqueueInteropSubmission`), which submits on the
+    graphics queue in D3D11 order. A compute queue's submissions would be submitted directly, under a lock of their own.
+    Their waits on graphics values still in DXVK's stream are legal (timeline semaphores allow a wait before its signal).
+-   DXVK's own D3D11 work is not in the graph, so an async pass may touch DCLF's buffers only, never an engine resource
+    (the HZB's read of the engine depth stays on the graphics queue). Buffers both queues use need concurrent sharing
+    (BasicRHI's `QueueSharing::Concurrent`) or ownership transfers.
+
+**Where async compute can overlap anything.** Inside an epoch every pass feeds the next (build, sort, draw), so moving a
+pass to the compute queue only adds a cross-queue wait. Overlap needs work whose consumer is not right behind it:
+
+1.  **Built early, drawn later.** The Z-prepass's culling (build-draws and sort, about 45 us) reads the inputs and the
+    predicted eye ready at EarlyPrepass (its job is already kicked there) and the previous frame's HZB: issued on the
+    compute queue at the shadow epoch, it runs beside the shadow maps. The colour segment's build and sort (about 50 us)
+    read the depth segment's visibility, final after phase 2: issued at Prepass, they run beside the G-buffer draws. The
+    shadow epoch's build could start at BeforeShadowMaps, beside the engine's own casters.
+2.  **A frame behind, ping-ponged.** Fade state (33 us) and tree wind's clocks need not be this frame's: computed into one
+    of two buffers while this frame's builds and draws read the other, they overlap whatever runs then. Tree wind's record
+    pass runs in every epoch only because each epoch's record uploads put back the tree words a member joined with; once
+    the uploads leave them alone it runs once a frame, and frame-behind like the clocks. ORG has no history resource: the
+    two buffers would be declared through resolvers (per-frame resolution, `PassBuilder`'s resolver declarations), and
+    whether ORG orders a next-frame reader after a compute writer from the frame before (its per-queue batch history)
+    must be checked before relying on it.
+
+**Not async, but cheaper.**
+
+-   **The HZB** is a dispatch per mip with a full barrier between each (about 12 drains for 98 us). A single-pass
+    downsampler (one dispatch, the last group per tile carrying on to the coarser mips) would do it in one, likely 20-30 us.
+    It reads the engine's depth and phase 2 waits on it, so it stays on the graphics queue.
+-   **Phase 2's depth pass** costs about 46 us drawing next to nothing: a depth pass begun and ended for the rescues. Its
+    cost is fixed; drawing the rescues inside the phase-1 pass is not possible (they need the HZB built from it), but the
+    pass could load and store less (its region), or the rescues could be rare enough to skip when the build counts none
+    (an indirect count already gates the draws; the pass itself is what costs).
+
+**Order proposed:** the single-pass HZB first (graphics queue, no infrastructure, about 70 us); then the compute queue
+(DXVK and host, the largest piece); then the early builds (about 0.1 ms of overlap); then the frame-behind upkeep. Together
+these address roughly 0.2-0.3 ms of the 0.58; the rest is the passes' fixed costs (each epoch's render pass begins,
+uploads and the residual engine draws).
+
+### The HZB in one dispatch (done)
+
+`HzbCS.hlsl` is now AMD's single-pass downsampler (FidelityFX SPD 2.0, `ffx_a.h` and `ffx_spd.h` vendored unchanged
+from BasicRenderer into `Shaders/DrawcallLimitFix/FidelityFX/`): one dispatch of a group per 64x64 tile of the source
+writes mips 0-5 of its tile, and the last group to finish (a global counter, `cs.dclf.hzb-counter`) carries on from mip 5
+to the end.
+
+SPD wants a source whose every level halves evenly. The depth is not one, and nothing is padded or copied for it: the HZB
+was already defined over a power-of-two domain (mip 0 is half the next power of two of the depth), and the callbacks
+answer for the texels the depth does not have. Inside the domain but past the rendered area they read the far plane, as
+before. Outside the domain, or outside a level that is no longer square once its short side is one texel, they read 0,
+the max reduction's identity, since such a texel covers no area. Stores outside a level are dropped. The old per-mip
+build answered the far plane there too, which made the last levels of a non-square chain all far; they are now exact.
+
+A domain wider than 4096 (a render target wider than 4096) is more than one dispatch can finish: its mip 5 is wider than
+the last group's 64x64 tile. `HzbPass` then splits the chain into dispatches of six levels until the rest fits, each
+dispatch reading the previous one's last level.
+
+The counter is zeroed once by the first depth commit (`hzbCounterZeroed`, like the sort's counts); after that the
+last group of each dispatch zeroes it. The pass runs only with a published depth frame, so that commit has happened.
+
+**Result** (Save5): nvperf `cs.dclf.hzb` 97-98 us to 44 us over five samples. The GPU event timers' depth segment went
+from 1.033 to 0.986 ms and the Z-prepass event from 0.655 to 0.609 ms (17 blocks against 18); the whole-frame difference
+is inside the run-to-run noise (about 0.05 ms). Culling is unchanged: 2993 of 8972 occluded against 2919 of 8927, and
+phase 2 brought back 18 objects against 4.
+
+### An async compute queue, and tree wind a frame ahead (done)
+
+**The queue.** Four layers, each fixed where its contract was:
+
+-   **DXVK** (`dxvk_device_info.cpp`, `enableQueues`) creates a queue of the compute-only family (on NVIDIA family 2), the next
+    queue of it when the transfer queue fell back to that family, and never submits to it. The interop exports it
+    (`DxvkOrgInteropDeviceInfo::computeQueue`, interop version 3; both headers bumped together).
+-   **The host** (`RenderGraphRuntime.cpp`) adopts it as BasicRHI's compute queue (`CS_ORG_COMPUTE_QUEUE=0` leaves it
+    aliasing graphics) and submits to it directly under a lock of its own. ORG orders an execution against DXVK's work on the
+    shared queue with barriers (`ExternalQueueBoundary`); a queue the host does not share is the host's to order, and it now
+    does: before an epoch's first compute submission DXVK's stream signals a host timeline where it stands (after every D3D11
+    command so far) and that submission waits for it (`EnqueueStreamPoint`); when the epoch ends the stream waits for the
+    compute queue's last signals (`CloseComputeEpoch`, in the epoch's batch). `ExternalQueueBoundary`'s comment states this.
+-   **ORG** kept every pass on the graphics queue on Vulkan ("until their queue-family ownership policy is captured"). A pass
+    may now leave it when nothing it touches needs a queue-family ownership transfer: every resource
+    `QueueSharing::Concurrent` (both lowerings, `RenderGraphPersistent.cpp` and `RenderGraphCompile.cpp`). Every graph buffer
+    is created concurrent (`GpuBufferBacking`); `BufferBase::TryGetRHIResourceDesc` now says so. A closed execution may use
+    a buffer from several queues (relative waits order it inside, the host's boundary outside); a texture stays on one.
+-   **BasicRHI** clipped a barrier's stages to the recording queue's family but not its accesses: the closed entry's full
+    barrier on the compute queue named colour-attachment access (VUID 02815/02816). `VkAccessForQueue` clips them too.
+
+Validation (`VK_LOADER_LAYERS_ENABLE=*validation`) is clean with the compute queue in use: only Streamline's messages.
+
+**In-epoch compute is a loss.** Fade state moved to the compute queue inside the Z-prepass epoch (its consumer, the build,
+right behind it) put two cross-queue hops into the depth chain: the depth segment 0.986 to 1.110 ms. Work on the compute
+queue has to be off the chain, which upkeep can be when it runs a frame ahead.
+
+**Tree wind a frame ahead.** Every TreeParams and WindTimers value is the tree's, not the member's (its clock, position and
+leaf frequency, and the frame's camera and wind). `TreeWindCS` is now one pass on the compute queue in the Z-prepass epoch,
+a thread per entry (entry 0 the nodeless trees', entry s + 1 tree slot s): it brings the tree's clock to the frame and
+writes the tree's values, three rows an entry (TreeParams, WindTimers with the distance and amplitude, the listing's
+generation), into the frame's wind buffer of two (`SceneBuffers::treeWindRows`, by the frame's parity). Every draw reads
+the other one, the frame before's, at t124 (`kTreeWindRegister`, `DCLFTreeWind`; the frame record names it,
+`TreeWindReadIndex`): so the Z-prepass and colour passes of a frame read the same values, as their EQUAL test needs. A
+record carries its tree slot and that listing's generation in WindTimers.zw (`LightingConstants.cpp`; a slot cannot be
+relisted while a member holds it), and draws the entry only when the generation matches, otherwise the values it joined
+with: a new tree draws its joined wind for its first frame. The buffers are zeroed once per backing (a zero generation is
+no listing's). Nothing in any epoch reads what the pass writes, so nothing waits for it, and the readers do not declare the
+buffers: the one they read was finished a frame ago, and the host's boundary orders the writer against both frames. The
+per-epoch clock and record passes in the shadow, Z-prepass and colour epochs are gone, and the records no longer take GPU
+writes (the uploads used to put back what those passes wrote, which is why they ran in every epoch).
+
+The tree wind parity check (`CS_DCLF_PERSISTENT_PARITY`, now reading the wind buffer) reports 0 of 64 differing, as before.
+
+**Result** (Save5). ORG's pass timestamps: shadow epoch 1.799 to 1.792 ms, Z-prepass 0.542 to 0.537, colour 1.197 to 1.181;
+the GPU frame 12.446 to 12.425 ms with DCLF on (17 blocks each), inside the noise. The per-epoch tree wind passes were 7 us
+each in ORG's own timestamps: nvperf's 13-15 us per epoch were mostly its drains.
+
+**What this says about the rest.** In ORG's timestamps DCLF's upkeep is small: fade state 30 us, the builds and sorts
+10-20 us each, the HZB 42-50 us. The epochs are their draw passes (Z-prepass 0.36, colour 1.14, shadow views 1.71-1.77 ms).
+
+### Fade state a frame ahead (done)
+
+`FadeStateCS` runs on the compute queue in the Z-prepass epoch, like tree wind. Its state rows (`fadeStates`) are its own
+alone, so a frame without the pass never rolls a root back; after each root's update it publishes the root's state into
+the frame's output of two (`SceneBuffers::fadeStatesOut`, by the scene frame's parity), every root every run. The builds
+that read the state (the Z-prepass's phase 1, an owned root's members; the shadow views, a stood-in root's casters) read
+the other output, the frame before's: its descriptor depends on the frame, so it is the latch's
+(`BuildDrawsLatch::fadeStatesIndex`, at +240; `FadeStatesReadIndex`), and the builds no longer declare the states. Both
+already took a state only when its generation was the root's, so a zeroed output (a new backing, zeroed by whichever epoch
+commits first: `ZeroFrameAheadOutputs`) reads as the root's listed state. The verdicts lag a frame: an owned root's members
+follow its OnVisible of the frame before.
+
+**ORG: two reads of a buffer need no order.** The first measurement lost 0.09 ms in the depth segment (1.068 against 0.976):
+fade state reads the object records, and so do the Z-prepass's build and draws, and ORG's scheduler chained every pair of
+consecutive users of a resource, reads included ("deliberately serializes all uses... until state planning can prove
+which reads may overlap"), so the graphics work waited for the compute queue. For a buffer it is provable: a buffer has no
+layout, and a graph buffer is concurrent, so the cross-queue barrier pair is dropped and two reads have nothing between
+them. The scheduler and its validation now order each use after the resource's last write, and a write after every use
+since (`ExperimentalGraphCompiler.cpp`, `OrderUse`); a texture's uses stay serialized. Validation stays clean.
+
+**Result** (Save5, 17 blocks DCLF on): depth segment 0.952 ms (0.976 with tree wind alone, 0.986 before either), the
+Z-prepass event 0.591 (0.612, 0.609); ORG's Z-prepass span 0.508 ms (0.537, 0.542). Fade parity (`CS_DCLF_FADE_PARITY`):
+0 differ against the port and the engine's node; no holes.
+
 Tools for this: the per-view nvperf ranges (a sub-range per view inside `cs.dclf.shadow.view`, selected by exact name,
 since a prefix that also matches the pass takes the pass instead) were a temporary change; the engine's own events
 are selectable by name (`BSShaderAccumulator::FinishAccumulatingDispatch [14]*`).

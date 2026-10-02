@@ -14,7 +14,7 @@
 #	include <vulkan/vulkan.h>
 #endif
 
-#define DXVK_ORG_INTEROP_VERSION 2u
+#define DXVK_ORG_INTEROP_VERSION 3u
 
 extern "C" {
 
@@ -49,6 +49,11 @@ struct DxvkOrgInteropDeviceInfo
 	uint32_t deniedFeatureCount;
 	uint32_t enabledInstanceExtensionCount;  // version 2
 	const char* const* enabledInstanceExtensions;
+	// Version 3: a queue of a compute-only family that DXVK never uses, or null. The client submits to it itself, under a
+	// lock of its own; DXVK's resources stay exclusive to its graphics and transfer families.
+	VkQueue computeQueue;
+	uint32_t computeQueueFamily;
+	uint32_t computeQueueIndex;
 };
 
 enum DxvkOrgInteropResourceKind : uint32_t

@@ -255,6 +255,7 @@ namespace DCLF
 				frameRecord.textures[t] = frameTextures[t] == kInvalidIndex ? nullIndex : frameTextures[t];
 			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
 			frameRecord.textures[kBonesBufferRegister] = in.addresses.bonesIndex;
+			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
 			uploads(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
 		lap(2);
@@ -298,6 +299,7 @@ namespace DCLF
 		if (staged)
 			org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(a_payload.staged));
 		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
+		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
 		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads);
 		// The fade roots, and once a frame their inputs, for FadeStateCS ahead of the depth segment's culling: the main camera
 		// the list jobs cull with (PrimaryCull::FadeEye) and the engine's fade globals.
@@ -325,6 +327,12 @@ namespace DCLF
 		// The sort's counts start at zero; from then on the scan that reads them clears them.
 		if (a_resources->sort)
 			a_resources->sort->ZeroCountsOnce(uploads);
+		// The HZB build's group counter likewise, before its first dispatch (the depth segment's).
+		if (depthOnly && a_resources->hzbCounter && !a_resources->hzbCounterZeroed) {
+			static constexpr std::uint32_t kZero = 0;
+			uploads(a_resources->hzbCounter, &kZero, sizeof(kZero), 0);
+			a_resources->hzbCounterZeroed = true;
+		}
 		// The decal words: each group's slot count for its draw, and the tallies zeroed. Written by the
 		// colour segment only, which is the one that submits decals.
 		if (!depthOnly) {
@@ -573,6 +581,7 @@ namespace DCLF
 			const auto treeHeight = PrimaryCull::Get().TreeHeightTest();
 			latch.treeHeight[0] = treeHeight[0];
 			latch.treeHeight[1] = treeHeight[1];
+			latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);
 		}
 		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (as
 		// many as the sun has: the block grows to hold them). The sun's Accumulate has run.
