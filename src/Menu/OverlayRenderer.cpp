@@ -241,6 +241,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 			 (failed && !hide) ||
 			 effectFailed ||
 			 globals::features::performanceOverlay.settings.ShowInOverlay ||
+			 globals::features::performanceOverlay.settings.ShowWeatherPicker ||
 			 renderDoc->IsAvailable());
 }
 

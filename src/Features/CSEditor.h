@@ -52,6 +52,13 @@ public:
 	 */
 	void RenderWeatherDetailsWindow(bool* open, bool showSectionHeaders = true);
 
+	/**
+	 * Renders the CS Editor's optional Weather Debug window: custom-settings status, filter
+	 * select/clear, current/last weather details and rain & wetness analysis from other features.
+	 * @param open Pointer to the open/close state owned by the caller.
+	 */
+	static void DrawWeatherDebugWindow(bool* open);
+
 	// Core weather display functions that other features can use
 	/**
 	 * Displays weather info for a given weather record.
@@ -72,11 +79,6 @@ public:
 
 	// --- Refactor helpers for RenderCoreWeatherDetails ---
 	/**
-	 * Renders the weather controls section.
-	 * @param sky Active sky instance.
-	 */
-	static void RenderWeatherControls(RE::Sky* sky, bool showSectionHeader = true);
-	/**
 	 * Renders the weather information display section.
 	 * @param sky Active sky instance.
 	 * @param showInteractiveElements Enables interactive controls when true.
@@ -86,9 +88,6 @@ public:
 	struct WeatherDetailsWindowSettings
 	{
 		bool Enabled = false;
-		bool ShowInOverlay = false;
-		ImVec2 Position = ImVec2(50.f, 50.f);
-		bool PositionSet = false;
 	} WeatherDetailsWindow;
 
 	/**
@@ -128,15 +127,31 @@ public:
 	static RE::TESWeather*& GetCachedLastWeather() { return s_cachedLastWeather; }
 	static int FindWeatherIndex(RE::TESWeather* targetWeather);
 
+	// Shared weather-control backend, used by both the feature page and the Weather Picker Window.
+	/** @brief Rebuilds the filtered weather list (and clears the selection) if the flag filter changed. */
+	static void SyncWeatherFilter();
+	/** @brief Switches to the weather at @p filteredIdx of the filtered list, honouring accelerate and the weather lock. */
+	static void SelectWeather(RE::Sky* sky, int filteredIdx);
+	/** @brief Returns the sky to its default weather, releasing the weather lock first so the reset can take hold. */
+	static void ResetWeatherToDefault(RE::Sky* sky);
+	/**
+	 * Draws the transition progress bar for the current -> last weather blend.
+	 * @param width Bar width in pixels (negative fills the available width).
+	 * @param verboseOverlay Include the "Transitioning from X" text in the overlay.
+	 */
+	static void DrawWeatherTransitionBar(RE::Sky* sky, float width, bool verboseOverlay);
+	/**
+	 * Draws the weather-type filter chips plus the accelerate toggle as a 2-column grid of
+	 * colour-coded text toggles (dim = off, bright = on). Updates the shared filter state.
+	 */
+	static void DrawWeatherFilterChips();
+
 	// Implement OverlayFeature interface
 	void DrawOverlay() override;
 	bool IsOverlayVisible() const override;
 
 private:
-	void DrawShowInOverlayToggle();
 	void DrawTimeControls();
-	void DrawWeatherStatusPanel();
-	void DrawWeatherPickerSection();
 
 	// Wind direction offset to align with game's coordinate system
 	static constexpr float WIND_DIRECTION_OFFSET = 30.5f;
@@ -160,6 +175,7 @@ private:
 	static inline float s_accelerationRate = 5.0f;
 	static inline RE::TESWeather* s_cachedLastWeather = nullptr;
 	static inline bool s_isAcceleratingWeatherChange = false;
+	static inline bool s_autoOpenArmed = true;  // feature page opens the editor once per menu session
 	static inline float s_accelerationTime = 0.0f;
 
 	// Static helper for display name extraction

@@ -36,6 +36,7 @@ public:
 	};
 
 	bool open = false;
+	bool showWeatherDebug = false;  // optional Weather Debug window, off by default (not persisted)
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 

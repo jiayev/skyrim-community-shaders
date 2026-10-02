@@ -192,6 +192,24 @@ void DrawIconWave(ImVec2 center, float width, ImU32 color, bool filled)
 	}
 }
 
+// Pennant on a pole. The icon font only ships a solid flag, so the outline state is drawn by hand.
+static void DrawIconFlag(ImVec2 center, float height, ImU32 color, bool filled)
+{
+	auto* drawList = ImGui::GetWindowDrawList();
+	const float width = height * 0.9f;
+	const float thickness = std::max(1.0f, height * 0.1f);
+	const ImVec2 top(center.x - width * 0.4f, center.y - height * 0.5f);
+	const ImVec2 bottom(top.x, center.y + height * 0.5f);
+	const ImVec2 tip(top.x + width, top.y + height * 0.25f);
+	const ImVec2 hoist(top.x, top.y + height * 0.5f);
+
+	drawList->AddLine(top, bottom, color, thickness);
+	if (filled)
+		drawList->AddTriangleFilled(top, tip, hoist, color);
+	else
+		drawList->AddTriangle(top, tip, hoist, color, thickness);
+}
+
 bool IconButton(const char* label, bool filled, const char* iconType)
 {
 	ImVec2 buttonSize(ImGui::GetFrameHeight(), ImGui::GetFrameHeight());
@@ -216,10 +234,7 @@ bool IconButton(const char* label, bool filled, const char* iconType)
 	} else if (strcmp(iconType, "wave") == 0) {
 		DrawIconWave(center, buttonSize.x * 0.7f, iconColor, filled);
 	} else if (strcmp(iconType, "flag") == 0) {
-		ImGui::PushFont(nullptr, ImGui::GetFontSize());
-		const ImU32 flagColor = ImGui::GetColorU32(filled ? Util::Colors::GetAccent() : ImGui::GetStyleColorVec4(ImGuiCol_Text));
-		Icons::DrawCenteredGlyph(drawList, cursorPos, buttonSize, Icons::FA(ICON_FA_FLAG), flagColor);
-		ImGui::PopFont();
+		DrawIconFlag(center, buttonSize.x * 0.5f, iconColor, filled);
 	}
 
 	return result;
@@ -1450,6 +1465,8 @@ void EditorWindow::RenderUI()
 			}
 			if (ImGui::Checkbox(T(TKEY("weather_picker"), "Weather Picker"), &WeatherPickerWindow::GetSingleton()->open)) {
 			}
+			ImGui::Checkbox(T(TKEY("weather_debug"), "Weather Debug"), &showWeatherDebug);
+			Util::AddTooltip(T(TKEY("weather_debug_tooltip"), "Current and last weather details, plus rain & wetness analysis from other features"));
 			if (ImGui::Checkbox(T(TKEY("features_window"), "Features"), &settings.showFeaturesWindow))
 				Save();
 			if (ImGui::Checkbox(T(TKEY("post_processing_window"), "Post Processing"), &settings.showPostProcessingWindow))
@@ -1835,6 +1852,9 @@ void EditorWindow::RenderUI()
 
 	// Show weather picker window
 	WeatherPickerWindow::GetSingleton()->Draw();
+
+	// Optional weather debug window
+	CSEditor::DrawWeatherDebugWindow(&showWeatherDebug);
 
 	ScenePresetExport::Draw();
 
