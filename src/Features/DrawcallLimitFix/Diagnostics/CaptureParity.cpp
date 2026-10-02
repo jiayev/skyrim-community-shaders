@@ -268,6 +268,13 @@ namespace DCLF
 		// previousInputPosition, which nothing uses: it reaches no pixel, native or DCLF's.
 		if (vsLayout.size[kVSWindTimers] > 1)
 			expected.vs.floats[vsLayout.offset[kVSWindTimers] + 1] = std::bit_cast<float>(kUnwrittenBits);
+		// A multi-index shape's ProjectedUVParams2.zw: FUN_1414e00c0 writes only xy from the shape (normalDampener, materialScale),
+		// so the native buffer holds what an earlier draw left there.
+		if ((object.flags & kObjectProjectedUV) && const_cast<RE::BSGeometry*>(a_geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape &&
+			psLayout.size[kPSProjectedUVParams + 1] > 3) {
+			expected.ps.floats[psLayout.offset[kPSProjectedUVParams + 1] + 2] = std::bit_cast<float>(kUnwrittenBits);
+			expected.ps.floats[psLayout.offset[kPSProjectedUVParams + 1] + 3] = std::bit_cast<float>(kUnwrittenBits);
+		}
 
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
@@ -643,7 +650,16 @@ namespace DCLF
 
 		auto& store = SceneStore::Get();
 		auto* geometry = a_pass->geometry;
-		const std::int32_t index = store.FindObject(geometry);
+		// A multi-index shape's layer pass (accumulation hint 12, the second index list) is its layer object's.
+		const bool layerPass = a_pass->accumulationHint == kLayerHint;
+		const std::int32_t index = layerPass ? store.FindLayerObject(geometry) : store.FindObject(geometry);
+		if (const_cast<RE::BSGeometry*>(geometry)->GetType().get() == RE::BSGeometry::Type::kMultiIndexTriShape) {
+			auto& entry = multiIndexDraws[fmt::format("hint {} technique {}", a_pass->accumulationHint, (PassDescriptorOf(a_pass->passEnum) >> 24) & 0x3f)];
+			if (entry.first++ == 0)
+				entry.second = fmt::format("{} property {}", Describe(geometry), fmt::ptr(a_pass->shaderProperty));
+		}
+		if (layerPass && layerDraws++ == 0)
+			firstLayerDraw = fmt::format("{} pass {:08X}, object {}", Describe(geometry), a_pass->passEnum, index);
 
 		if (index < 0) {
 			if (store.IsTracked(geometry)) {
@@ -698,9 +714,42 @@ namespace DCLF
 							chain += fmt::format("#{:08X}/{}", ref->GetFormID(), base ? static_cast<int>(base->GetFormType()) : -1);
 						chain += DescribeRole(node);
 					}
+					// A root with no parent: which of the portal graphs' lists holds it (BSPortalGraph +0x58 alwaysRenderChildren,
+					// +0x78, +0x90, +0xA8), by the scene graph and the list.
+					const RE::NiAVObject* root = geometry;
+					while (root->parent)
+						root = root->parent;
+					std::string where;
+					const auto& shaderState = RE::BSShaderManager::State::GetSingleton();
+					for (std::uint32_t sg = 0; sg < std::size(shaderState.shadowSceneNode); ++sg) {
+						const auto* sceneNode = shaderState.shadowSceneNode[sg];
+						const auto* graph = sceneNode ? sceneNode->GetRuntimeData().portalGraph : nullptr;
+						if (!graph)
+							continue;
+						auto in = [&](const auto& a_list) {
+							for (const auto& entry : a_list)
+								if (entry.get() == root)
+									return true;
+							return false;
+						};
+						if (in(graph->alwaysRenderChildren))
+							where += fmt::format(" graph{}.alwaysRender", sg);
+						if (in(graph->unk78))
+							where += fmt::format(" graph{}.78", sg);
+						if (in(graph->unk90))
+							where += fmt::format(" graph{}.90", sg);
+						if (in(graph->unkA8))
+							where += fmt::format(" graph{}.A8", sg);
+					}
+					++outsideRoots[fmt::format("{}{}", root->parent ? "parented" : "parentless", where.empty() ? " in no graph list" : where)];
 					if (outsideChains.size() < 8)
 						outsideChains.insert(chain);
 				}
+			} else {
+				// Untracked and not statically eligible: by the verdict, and the first of each named.
+				const auto reason = static_cast<std::uint8_t>(SceneStore::ClassifyStatic(*geometry, nullptr));
+				if (!untrackedBy[reason]++)
+					untrackedFirst[reason] = fmt::format("{} hint {}", Describe(geometry), a_pass->accumulationHint);
 			}
 			return;
 		}
@@ -720,7 +769,7 @@ namespace DCLF
 		const auto* state = globals::state;
 
 		bool mismatch = false;
-		const auto* accumulated = store.FindAccumulatedPass(geometry);
+		const auto* accumulated = layerPass ? store.FindAccumulatedLayerPass(geometry) : store.FindAccumulatedPass(geometry);
 		// A pass in an alpha-test list is drawn by DCLF with DoAlphaTest whatever the native draw's technique
 		// carries this frame (DrawnPassDescriptor), so the native side is compared as DCLF normalises it.
 		const std::uint32_t list = accumulated ? accumulated->subPass : 0u;
@@ -904,6 +953,21 @@ namespace DCLF
 		}
 		notInTablesBy.clear();
 		notInTablesFirst.clear();
+		if (!untrackedBy.empty()) {
+			std::string byReason;
+			for (const auto& [reason, count] : untrackedBy)
+				byReason += fmt::format("{}{} {} (first {})", byReason.empty() ? "" : ", ", kIneligibleNames[reason], count, untrackedFirst[reason]);
+			logger::info("[DCLF] capture parity: untracked and ineligible, by the verdict: {}", byReason);
+		}
+		untrackedBy.clear();
+		untrackedFirst.clear();
+		if (layerDraws)
+			logger::info("[DCLF] capture parity: {} native layer draws (hint 12), first {}", layerDraws, firstLayerDraw);
+		layerDraws = 0;
+		firstLayerDraw.clear();
+		for (const auto& [what, entry] : multiIndexDraws)
+			logger::info("[DCLF] capture parity: native multi-index draws, {}: {} (first {})", what, entry.first, entry.second);
+		multiIndexDraws.clear();
 		if (boneChecks)
 			logger::info("[DCLF] bone palette parity {}: {} palettes checked, {} differ", boneMismatches == 0 ? "OK" : "MISMATCH", boneChecks, boneMismatches);
 		boneChecks = boneMismatches = 0;
@@ -940,6 +1004,9 @@ namespace DCLF
 		logger::info("[DCLF] statically eligible geometry drawn outside the tracked category nodes: {}", outsideCategories);
 		for (const auto& chain : outsideChains)
 			logger::info("[DCLF]   parents:{}", chain);
+		for (const auto& [where, count] : outsideRoots)
+			logger::info("[DCLF]   outside roots: {}: {} draws", where, count);
+		outsideRoots.clear();
 		std::string missing;
 		for (const auto& [name, count] : unevaluated)
 			missing += fmt::format(" [{} x{}]", name, count);

@@ -25,6 +25,9 @@ namespace DCLF
 			return *depthBiasEnabled ? 6u + variant : 0u;
 		case 2:
 			return 10u + variant;
+		case 3:
+			// A multi-index shape's layer, geometry group 2 (FUN_1414b3bb0 at 1414b3c7a).
+			return *depthBiasEnabled ? 8u + variant : 0u;
 		default:
 			return 0;
 		}

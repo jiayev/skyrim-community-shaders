@@ -331,11 +331,13 @@ namespace DCLF::MaterialSources
 		for (const auto position : FrameVSFloats())
 			if (a_to.vs.Written(position) && a_from.vs.Written(position))
 				a_to.vs.floats[position] = a_from.vs.floats[position];
-		if ((a_passDescriptor & kCharacterLight) && ((a_from.textureWritten >> kCharacterLightSlot) & 1)) {
+		// Whether t11 is written at all is the frame's too: SetupMaterial binds it only while the character light has a
+		// render target (its index, 0x142033db0, is -1 while a cell loads).
+		if (a_passDescriptor & kCharacterLight) {
 			a_to.textures[kCharacterLightSlot] = a_from.textures[kCharacterLightSlot];
 			a_to.addressModes[kCharacterLightSlot] = a_from.addressModes[kCharacterLightSlot];
 			a_to.filterModes[kCharacterLightSlot] = a_from.filterModes[kCharacterLightSlot];
-			a_to.textureWritten |= 1u << kCharacterLightSlot;
+			a_to.textureWritten = (a_to.textureWritten & ~(1u << kCharacterLightSlot)) | (a_from.textureWritten & (1u << kCharacterLightSlot));
 		}
 	}
 

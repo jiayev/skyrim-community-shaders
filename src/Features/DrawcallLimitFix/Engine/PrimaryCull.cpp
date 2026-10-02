@@ -222,6 +222,21 @@ namespace DCLF
 		return true;
 	}
 
+	bool PrimaryCull::MembershipLayerPass(const RE::BSGeometry* a_geometry, const RE::BSLightingShaderProperty& a_layer, AccumulatedPass& a_out)
+	{
+		auto& cached = layerDerivedCache[a_geometry];
+		const std::uint8_t fadeState = FadeStateOf(&a_layer);
+		if (cached.property != &a_layer || cached.material != a_layer.material || cached.flags != a_layer.flags.underlying() || cached.fadeState != fadeState) {
+			LightingDescriptors descriptors;
+			const auto reason = DeriveLightingDescriptors(a_layer, *a_geometry, nullptr, descriptors, true);
+			cached = { &a_layer, a_layer.material, a_layer.flags.underlying(), fadeState, reason == Ineligible::None ? descriptors.derivedPass : kNotDerived };
+		}
+		if (!SyntheticPass(*a_geometry, cached.derivedPass, a_out, true, &a_layer))
+			return false;
+		a_out.resident = true;
+		return true;
+	}
+
 	void PrimaryCull::RefreshLive(std::uint32_t a_e)
 	{
 		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1]; ++m)
@@ -904,27 +919,28 @@ namespace DCLF
 			(main ? registrations.mainUnder : registrations.depthUnder).fetch_add(1, std::memory_order_relaxed);
 	}
 
-	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry)
+	std::uint32_t PrimaryCull::SunShadowBits(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property)
 	{
 		const auto inCascades = SunAccumulation::Get().InSunCascades(a_geometry.worldBound);
 		if (!inCascades)
 			return ~0u;
 		// Out of every cascade it loses ShadowDir only: a local shadow light may still give it DefShadow (the draw decides).
-		return *inCascades ? SunShadowStatic(a_geometry) : SunShadowStatic(a_geometry) & ~0x2000u;
+		return *inCascades ? SunShadowStatic(a_geometry, a_property) : SunShadowStatic(a_geometry, a_property) & ~0x2000u;
 	}
 
-	std::uint32_t PrimaryCull::SunShadowStatic(const RE::BSGeometry& a_geometry)
+	std::uint32_t PrimaryCull::SunShadowStatic(const RE::BSGeometry& a_geometry, const RE::BSLightingShaderProperty* a_property)
 	{
 		// The settled state's, as the synthetic pass is: a member's fade is the GPU's (and a stood-in root's node is not it).
-		return StaticShadowBits(a_geometry, true);
+		return StaticShadowBits(a_geometry, true, a_property);
 	}
 
-	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu)
+	bool PrimaryCull::SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu,
+		const RE::BSLightingShaderProperty* a_layer)
 	{
 		if (a_derivedPass == kNotDerived)
 			return false;
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
+		const RE::BSShaderProperty* property = a_layer ? a_layer : a_geometry.GetGeometryRuntimeData().shaderProperty.get();
+		const auto* lighting = a_layer ? a_layer : netimmerse_cast<const RE::BSLightingShaderProperty*>(property);
 		if (!lighting)
 			return false;
 		const std::uint64_t flags = lighting->flags.underlying();
@@ -936,11 +952,18 @@ namespace DCLF
 		// GPU's (FadeStateCS). Translucent objects take hints 1 and 9 (blended, sorted); not modelled.
 		const bool translucent = (material ? material->materialAlpha : 1.0f) < 1.0f || blended;
 		// On the GPU (a_sunOnGpu): the bits the object takes inside a cascade, and BuildDraws drops them on a miss.
-		const std::uint32_t sun = a_sunOnGpu ? SunShadowStatic(a_geometry) : SunShadowBits(a_geometry);
+		// A layer takes no shadow bits (measured: its passes never carry ShadowDir or DefShadow): its property's light mask never
+		// names the sun, the registrations writing masks on the main property alone (FUN_1414b2140).
+		const std::uint32_t sun = a_layer ? 0u : a_sunOnGpu ? SunShadowStatic(a_geometry) : SunShadowBits(a_geometry);
 		if (sun == ~0u)
 			return false;
 		std::uint32_t hint = 0;
-		if (flags & 0xc000000ull)
+		if (a_layer) {
+			// Every pass of a layer: hint 12 (FUN_1414b2330). A translucent one is not modelled.
+			if (translucent)
+				return false;
+			hint = kLayerHint;
+		} else if (flags & 0xc000000ull)
 			hint = translucent ? 3 : 2;  // the decal groups
 		else if (translucent)
 			return false;
@@ -1072,9 +1095,9 @@ namespace DCLF
 			{
 				const auto r = SceneStore::Get().TakeResidentStats();
 				const double rf = std::max<double>(static_cast<double>(r.frames), 1.0);
-				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras), {} rewritten ({} kept their binding), {} released; {} registrations of eligible objects not bound{}{}",
+				logger::info("[DCLF] scene membership: {:.0f} objects bound a frame ({} frames); {} records queued, {} joined, {} failed ({} the engine's pass, {} no record, {} a frame verdict, {} material or extras), {} rewritten ({} kept their binding), {} released, {} layers or bases unpaired; {} registrations of eligible objects not bound{}{}",
 					r.resident / rf, r.frames, r.membershipQueued, r.joined, r.failed, r.failedBy[0], r.failedBy[1], r.failedBy[2], r.failedBy[3], r.rewritten, r.membershipKept, r.released,
-					r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
+					r.layerUnpaired, r.registeredUnbound, r.registeredUnboundFirst.empty() ? "" : ", first ", r.registeredUnboundFirst);
 				if (r.parityChecks)
 					logger::info("[DCLF] resident parity: {} checks, {} records compared, {} passes differ, {} records differ ({} not compared: the root fading, leaving at the next decode){}",
 						r.parityChecks, r.parityChecked, r.parityPass, r.parityRecord, r.parityPending, r.parityPass || r.parityRecord ? " <- RESIDENT PARITY" : " <- OK");

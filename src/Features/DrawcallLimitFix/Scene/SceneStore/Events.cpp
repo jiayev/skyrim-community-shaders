@@ -532,6 +532,7 @@ namespace DCLF
 			++trackedLayout;
 			sceneIdentity.Reset();
 			categoryNodes.clear();
+			alwaysRenderRoots.clear();
 			validationCursor = 0;
 			fullEvaluation = true;
 			fadeDependents.clear();

@@ -86,10 +86,10 @@ namespace DCLF
 				const bool inTables = object >= 0 && static_cast<std::size_t>(object) < tables.objects.size();
 				const std::uint32_t flags = inTables ? tables.objects[object].flags : 0u;
 				const std::uint32_t ordinal = inTables && static_cast<std::size_t>(object) < tables.decalOrdinal.size() ? tables.decalOrdinal[object] : ~0u;
-				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({}); object {}, flags {:#x}, member {}, decal ordinal {} of {}/{}, "
+				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({}); object {}, flags {:#x}, member {}, decal ordinal {} of {}/{}/{}, "
 							 "last drawn {}, colour build state {}, material slot {} ({})",
 					frame, geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase", object,
-					flags, store.IsMember(object), ordinal, tables.decalCount[0], tables.decalCount[1],
+					flags, store.IsMember(object), ordinal, tables.decalCount[0], tables.decalCount[1], tables.decalCount[2],
 					impl->drawnGeometry.contains(geometry) ? fmt::format("{} frames ago", frame - impl->drawnGeometry.find(geometry)->second.last) : std::string("never"),
 					inTables && static_cast<std::size_t>(object) < impl->mainPayload[kAsyncColour].objectState.size() ?
 						static_cast<int>(impl->mainPayload[kAsyncColour].objectState[object]) : -1,

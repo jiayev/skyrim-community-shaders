@@ -77,7 +77,7 @@ namespace DCLF
 			// frame. The depth-bias mode of each decal group is frame state (a console toggle and whether sun
 			// shadows are off), read once here rather than per decal.
 			frameInterior = Util::IsInterior();
-			frameDecalBias = { 0u, DecalDepthBiasMode(1), DecalDepthBiasMode(2) };
+			frameDecalBias = { 0u, DecalDepthBiasMode(1), DecalDepthBiasMode(2), DecalDepthBiasMode(3) };
 			auto& evaluator = ConstantEvaluator::Get();
 			ConstantEvaluator::ResetFrameAudits();
 			if (!evaluator.HasLightingShader())
@@ -365,7 +365,7 @@ namespace DCLF
 		BeginWalk();
 		PartTimer timer(stats.partMs);
 		timer.Add(BuildPart::PassLookup);
-		for (auto& [geometry, trackedEntry, unused] : order) {
+		for (auto& [geometry, trackedEntry, unused, layer] : order) {
 			// Per TRACKED object: for a rejected one this is its `continue` and the iteration itself.
 			timer.Add(BuildPart::LoopTail);
 			Ineligible bucket = Ineligible::Count;
@@ -376,6 +376,32 @@ namespace DCLF
 
 		EndFaceWalk();
 		tables.InvalidateChangeLog();
+	}
+
+	namespace
+	{
+		/** @brief An object's draw template (Tables::draws) for its geometry slot's record. */
+		DrawSequence DrawTemplateOf(const GeometryRecord& a_geometry, std::uint32_t a_pipeline)
+		{
+			DrawSequence draw{};
+			draw.pipelineIndex = a_pipeline;
+			draw.vertexBufferAddress = a_geometry.vertexAddress;
+			draw.vertexBufferSize = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_geometry.vertexBytes, UINT32_MAX));
+			draw.vertexStride = a_geometry.vertexStride;
+			// The second stream repeats the first; the epochs replace it with a face shape's positions.
+			draw.streamBufferAddress = draw.vertexBufferAddress;
+			draw.streamBufferSize = draw.vertexBufferSize;
+			draw.streamStride = draw.vertexStride;
+			draw.indexBufferAddress = a_geometry.indexAddress;
+			draw.indexBufferSize = static_cast<std::uint32_t>(std::min<std::uint64_t>(a_geometry.indexBytes, UINT32_MAX));
+			draw.indexFormat = kIndexFormatR16;
+			draw.indexCount = a_geometry.indexCount;
+			draw.instanceCount = 1;
+			draw.firstIndex = a_geometry.firstIndex;
+			draw.vertexOffset = 0;
+			draw.firstInstance = 0;
+			return draw;
+		}
 	}
 
 	bool SceneStore::WriteObject(RE::BSGeometry* geometry, Tracked& a_tracked, PartTimer& timer, Ineligible& a_bucket)
@@ -768,27 +794,85 @@ namespace DCLF
 				bindQueue.push_back(objectId);
 		}
 
-		const auto& geometryRecord = tables.geometries[geometrySlot];
-		DrawSequence draw{};
-		draw.pipelineIndex = keepHalf ? keptPipeline : 0;
-		draw.vertexBufferAddress = geometryRecord.vertexAddress;
-		draw.vertexBufferSize = static_cast<std::uint32_t>(std::min<std::uint64_t>(geometryRecord.vertexBytes, UINT32_MAX));
-		draw.vertexStride = geometryRecord.vertexStride;
-		// The second stream repeats the first; the epochs replace it with a face shape's positions.
-		draw.streamBufferAddress = draw.vertexBufferAddress;
-		draw.streamBufferSize = draw.vertexBufferSize;
-		draw.streamStride = draw.vertexStride;
-		draw.indexBufferAddress = geometryRecord.indexAddress;
-		draw.indexBufferSize = static_cast<std::uint32_t>(std::min<std::uint64_t>(geometryRecord.indexBytes, UINT32_MAX));
-		draw.indexFormat = kIndexFormatR16;
-		draw.indexCount = geometryRecord.indexCount;
-		draw.instanceCount = 1;
-		draw.firstIndex = geometryRecord.firstIndex;
-		draw.vertexOffset = 0;
-		draw.firstInstance = 0;
-		tables.draws[objectId] = draw;
+		tables.draws[objectId] = DrawTemplateOf(tables.geometries[geometrySlot], keepHalf ? keptPipeline : 0);
 		timer.Add(BuildPart::Record);
+		WriteLayer(geometry, *trackedEntry, objectId, a_bucket == Ineligible::None && !shadowOnly, keepHalf, timer);
 		return true;
+	}
+
+	void SceneStore::WriteLayer(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint32_t a_base, bool a_member, bool a_keepMember, PartTimer& a_timer)
+	{
+		auto* property = a_member ? netimmerse_cast<RE::BSLightingShaderProperty*>(LayerPropertyOf(*a_geometry)) : nullptr;
+		const std::uint32_t geometrySlot = property ? ResolveLayerGeometrySlot(*a_geometry, a_timer) : Tables::kSlotFree;
+		if (geometrySlot == Tables::kSlotFree) {
+			if (!denseWalk)
+				ReleaseLayerSlot(a_tracked);
+			return;
+		}
+		const std::uint32_t slotBefore = a_tracked.layerSlot;
+		const std::uint32_t slot = AcquireLayerSlot(a_tracked, a_geometry, a_base);
+		const bool same = !denseWalk && slot == slotBefore;
+		const Tables::Columns columnsBefore = same ? tables.ColumnsOf(slot) : Tables::Columns{};
+		// A layer joins and leaves with its base (BindByMembership, DropResidentSlot): its binding stands while the base's does.
+		const bool keepMember = same && a_keepMember && IsResidentSlot(slot) && !(tables.objects[slot].flags & kObjectFree);
+		if (!denseWalk && !keepMember && IsResidentSlot(slot))
+			DropResidentSlot(slot, false);
+		const auto& base = tables.objects[a_base];
+		ObjectRecord object{};
+		std::memcpy(object.world, base.world, sizeof(object.world));
+		std::memcpy(object.previousWorld, base.previousWorld, sizeof(object.previousWorld));
+		std::memcpy(object.boundCenter, base.boundCenter, sizeof(object.boundCenter));
+		object.boundRadius = base.boundRadius;
+		object.geometryIndex = geometrySlot;
+		// The layer's draws apply no alpha property (render flags 0x41) and cast no shadow; two-sidedness is its property's.
+		object.flags = kObjectNoBindings | kObjectNoShadow |
+		               (property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided) ? kObjectTwoSided : 0u);
+		tables.objectSeen[slot] = walkSerial;
+		tables.FreeBones(slot);
+		tables.shadowTechnique[slot] = 0;
+		tables.shadowReject[slot] = static_cast<std::uint8_t>(ShadowReject::Layer);
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+			tables.occlusionTechnique[v][slot] = 0;
+		tables.sunEntry[slot] = tables.sunEntry[a_base];
+		tables.lodFade[slot] = LodFadeNodeOf(property);
+		tables.ClearFaceStream(slot);
+		tables.shadowDiffuse[slot] = nullptr;
+		tables.shadowMaterial[slot] = nullptr;
+		tables.sceneFlags[slot] = object.flags;
+		tables.objectGeometry[slot] = a_geometry;
+		tables.objectIdentity[slot] = a_tracked.identity;
+		tables.objectGroup[slot] = a_tracked.groupIdentity;
+		tables.layerBase[slot] = a_base;
+		tables.layerOf[a_base] = slot;
+		const std::uint32_t keptPipeline = tables.draws[slot].pipelineIndex;
+		if (keepMember) {
+			const auto& kept = tables.objects[slot];
+			object.flags = (object.flags & kSceneKeptFlags) | (kept.flags & ~kSceneKeptFlags);
+			object.materialIndex = kept.materialIndex;
+			object.pipelineIndex = kept.pipelineIndex;
+			tables.objects[slot] = object;
+		} else {
+			tables.FreeExtras(slot);
+			tables.objects[slot] = object;
+			tables.shading[slot] = ObjectShading{};
+			tables.emissiveMult[slot] = 1.0f;
+			tables.lights[slot] = ObjectLights{};
+			tables.treeAnim[slot] = ObjectTreeAnim{};
+			tables.skinWetness[slot] = {};
+			tables.fadeDistance[slot] = 0.0f;
+		}
+		tables.actorWetness.Set(slot, 0, a_tracked.identity);
+		tables.skinPartitions[slot] = 0;
+		tables.draws[slot] = DrawTemplateOf(tables.geometries[geometrySlot], keepMember ? keptPipeline : 0);
+		if (denseWalk)
+			return;
+		if (same)
+			tables.NoteWrite(slot, columnsBefore);
+		else
+			tables.NoteChange(slot, kChangeAll);
+		shadowSetsDirty = true;
+		shadowDirtySlots.push_back(slot);
+		bindQueue.push_back(slot);
 	}
 
 	/**
@@ -801,17 +885,50 @@ namespace DCLF
 	{
 		if (!a_triShape)
 			return Tables::kSlotFree;
+		const auto& shape = static_cast<RE::BSTriShape&>(a_geometry).GetTrishapeRuntimeData();
+		GeometrySource source;
+		source.key = a_triShape;
+		source.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer);
+		source.indexBuffer = reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer);
+		source.vertexDesc = std::bit_cast<std::uint64_t>(a_triShape->vertexDesc);
+		source.vertexCount = a_skinPartition ? a_skinPartition->vertices : shape.vertexCount;
+		source.indexCount = static_cast<std::uint32_t>(a_skinPartition ? a_skinPartition->triangles : shape.triangleCount) * 3;
+		return ResolveGeometrySource(source, a_timer);
+	}
+
+	std::uint32_t SceneStore::ResolveLayerGeometrySlot(RE::BSGeometry& a_geometry, PartTimer& a_timer)
+	{
+		// The layer's draw (FUN_140e465d0 for a hint-12 pass): the renderer data's vertex buffer, the second index list
+		// (altIndexBuffer, whose first qword is its ID3D11Buffer) as R16, altPrimCount triangles from index 0.
+		const auto* triShape = a_geometry.GetGeometryRuntimeData().rendererData;
+		const auto& data = static_cast<RE::BSMultiIndexTriShape&>(a_geometry).GetMultiIndexTrishapeRuntimeData();
+		auto* indexBuffer = data.altIndexBuffer ? *reinterpret_cast<ID3D11Buffer* const*>(data.altIndexBuffer) : nullptr;
+		if (!triShape || !indexBuffer || !data.altPrimCount)
+			return Tables::kSlotFree;
+		GeometrySource source;
+		source.key = reinterpret_cast<const RE::BSGraphics::TriShape*>(data.altIndexBuffer);
+		source.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer);
+		source.indexBuffer = indexBuffer;
+		source.vertexDesc = std::bit_cast<std::uint64_t>(triShape->vertexDesc);
+		source.vertexCount = static_cast<RE::BSTriShape&>(a_geometry).GetTrishapeRuntimeData().vertexCount;
+		source.indexCount = data.altPrimCount * 3;
+		source.layer = true;
+		return ResolveGeometrySource(source, a_timer);
+	}
+
+	std::uint32_t SceneStore::ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer)
+	{
 		auto& gpu = GpuResources::Get();
 		const bool resolveBuffers = frameResolveBuffers;
-		auto geometryIt = geometryIndex.find(a_triShape);
+		auto geometryIt = geometryIndex.find(a_source.key);
 		const bool newGeometry = geometryIt == geometryIndex.end();
 		// A slot found by address but describing other buffers is a TriShape reallocated at the same
 		// address: it is resolved again into the same slot. So is one resolved while the render graph was off.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
 		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
-		                               tables.geometries[geometryIt->second].vertexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer) ||
-		                               tables.geometries[geometryIt->second].indexBuffer != reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
+		                               tables.geometries[geometryIt->second].vertexBuffer != a_source.vertexBuffer ||
+		                               tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer);
 		if (staleGeometry)
 			++stats.geometriesRefreshed;
 		if (newGeometry || staleGeometry) {
@@ -820,9 +937,9 @@ namespace DCLF
 			std::optional<GpuResources::LeasedBuffer> vertexLease, indexLease;
 			if (resolveBuffers) {
 				// The render graph reads the game's buffers in place; they must never move (GpuResources).
-				vertexLease = gpu.Acquire(reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer));
+				vertexLease = gpu.Acquire(a_source.vertexBuffer);
 				if (vertexLease)
-					indexLease = gpu.Acquire(reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer));
+					indexLease = gpu.Acquire(a_source.indexBuffer);
 				if (!vertexLease || !indexLease) {
 					// Nothing was inserted, so the next object sharing this TriShape retries, exactly
 					// as it did when every object resolved for itself. A stale slot is freed: its
@@ -837,15 +954,14 @@ namespace DCLF
 					return Tables::kSlotFree;
 				}
 			}
-			const auto& shape = static_cast<RE::BSTriShape&>(a_geometry).GetTrishapeRuntimeData();
 			GeometryRecord record;
-			record.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(a_triShape->vertexBuffer);
-			record.indexBuffer = reinterpret_cast<ID3D11Buffer*>(a_triShape->indexBuffer);
-			record.vertexDesc = std::bit_cast<std::uint64_t>(a_triShape->vertexDesc);
+			record.vertexBuffer = a_source.vertexBuffer;
+			record.indexBuffer = a_source.indexBuffer;
+			record.vertexDesc = a_source.vertexDesc;
 			// The stride the engine binds is the desc's low nibble in dwords (engine notes: vertex input).
 			record.vertexStride = static_cast<std::uint32_t>(record.vertexDesc & 0xFu) * 4u;
-			record.vertexCount = a_skinPartition ? a_skinPartition->vertices : shape.vertexCount;
-			record.indexCount = static_cast<std::uint32_t>(a_skinPartition ? a_skinPartition->triangles : shape.triangleCount) * 3;
+			record.vertexCount = a_source.vertexCount;
+			record.indexCount = a_source.indexCount;
 			record.firstIndex = 0;
 			if (vertexLease && indexLease) {
 				record.vertexAddress = vertexLease->buffer.address;
@@ -861,9 +977,10 @@ namespace DCLF
 			tables.geometryImports[slot] = vertexLease && indexLease ? Tables::GeometryImport{ vertexLease->generation, indexLease->generation,
 				vertexLease->owner, indexLease->owner } : Tables::GeometryImport{};
 			tables.NoteGeometry(slot);
-			tables.geometrySlotKey[slot] = a_triShape;
+			tables.geometrySlotKey[slot] = a_source.key;
+			tables.geometryLayerKey[slot] = a_source.layer ? 1 : 0;
 			if (!staleGeometry)
-				geometryIt = geometryIndex.emplace(a_triShape, slot).first;
+				geometryIt = geometryIndex.emplace(a_source.key, slot).first;
 			a_timer.Add(BuildPart::Resolve);
 		} else if (resolveBuffers && tables.geometryLastUsed[geometryIt->second] != frame) {
 			// First use of the slot this frame: the Touch above already kept the references alive.
@@ -1109,6 +1226,15 @@ namespace DCLF
 				propertyDependents[emittance].push_back(a_geometry);
 			a_tracked.listedEmittance = emittance;
 		}
+		// A multi-index shape's layer property (LayerPropertyOf): its events classify the entry again too.
+		const void* layer = LayerPropertyOf(*a_geometry);
+		if (layer != a_tracked.listedLayerProperty) {
+			if (a_tracked.listedLayerProperty)
+				Unlist(propertyDependents, a_tracked.listedLayerProperty, a_geometry);
+			if (layer)
+				propertyDependents[layer].push_back(a_geometry);
+			a_tracked.listedLayerProperty = layer;
+		}
 	}
 
 	void SceneStore::UnlistDependents(RE::BSGeometry* a_geometry, Tracked& a_tracked, bool a_root)
@@ -1119,9 +1245,12 @@ namespace DCLF
 			Unlist(propertyDependents, a_tracked.listedAlpha, a_geometry);
 		if (a_tracked.listedEmittance)
 			Unlist(propertyDependents, a_tracked.listedEmittance, a_geometry);
+		if (a_tracked.listedLayerProperty)
+			Unlist(propertyDependents, a_tracked.listedLayerProperty, a_geometry);
 		a_tracked.listedProperty = nullptr;
 		a_tracked.listedAlpha = nullptr;
 		a_tracked.listedEmittance = nullptr;
+		a_tracked.listedLayerProperty = nullptr;
 		if (a_root)
 			UnlistHiddenChain(a_geometry, a_tracked);
 		if (a_root && a_tracked.lightRoot) {

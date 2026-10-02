@@ -641,6 +641,9 @@ bool DrawcallLimitFix::SkipNativePass(RE::BSRenderPass* a_pass)
 		return false;
 	if (!inDepthPass && !globals::deferred->deferredPass)
 		return false;  // shadows, reflections and cubemaps keep drawing everything
+	static const bool skipOff = DCLF::SwitchValue(DCLF::Switch::NativeSkip) == "0";
+	if (skipOff)
+		return false;
 	// A decal's passes offered in the depth pass (blended ones with kZBufferWrite) draw nothing there: the Lighting shader
 	// never reaches SetupGeometry in the depth pass (engine notes, "Decals"), so they are skipped like any other pass.
 	// Never a pass DCLF does not model, whoever draws its object: a LOD cross-fade's copy of the old level

@@ -36,6 +36,8 @@ namespace DCLF
 		shadowMaterial.resize(a_count, nullptr);
 		objectSeen.resize(a_count, 0);
 		sceneFlags.resize(a_count, FreeObjectRecord().flags);
+		layerBase.resize(a_count, kNoObjectSlot);
+		layerOf.resize(a_count, kNoObjectSlot);
 	}
 
 	SceneStore::Tables::Columns SceneStore::Tables::ColumnsOf(std::uint32_t a_slot) const
@@ -185,6 +187,13 @@ namespace DCLF
 		shadowMaterial[a_slot] = nullptr;
 		objectSeen[a_slot] = 0;
 		sceneFlags[a_slot] = FreeObjectRecord().flags;
+		// The link between a layer and its base goes with either.
+		if (const auto base = layerBase[a_slot]; base < layerOf.size() && layerOf[base] == a_slot)
+			layerOf[base] = kNoObjectSlot;
+		if (const auto layer = layerOf[a_slot]; layer < layerBase.size() && layerBase[layer] == a_slot)
+			layerBase[layer] = kNoObjectSlot;
+		layerBase[a_slot] = kNoObjectSlot;
+		layerOf[a_slot] = kNoObjectSlot;
 		NoteWrite(a_slot, before);
 	}
 
@@ -264,6 +273,8 @@ namespace DCLF
 			shadowMaterial.clear();
 			objectSeen.clear();
 			sceneFlags.clear();
+			layerBase.clear();
+			layerOf.clear();
 			objectFree.clear();
 			liveObjects = 0;
 			// The decals' ordinals are the member decals' (SceneStore::OrderDecals), kept with the objects.
@@ -377,6 +388,8 @@ namespace DCLF
 			keys.clear();
 		objectSeen.clear();
 		sceneFlags.clear();
+		layerBase.clear();
+		layerOf.clear();
 		objectFree.clear();
 		liveObjects = 0;
 	}

@@ -257,7 +257,12 @@ end of the scene tables, as the light path always has, so this is not a change t
 **Next step.** Identify the writer (the candidates in that window are `FUN_140742470`, which `Main::Draw` calls with
 the player's position, and the first-person culling), and decide whether the record should take the later value.
 
-### Capture parity: `EyePosition` differs on a candle lantern after a load
+### Fixed: capture parity: `EyePosition` differs on a candle lantern after a load
+
+**Fixed (2026-10-02).** `SetupGeometry` writes `EyePosition` for any pass with descriptor bit 9 or one of `0x21c00`, not
+only for Envmap, Eye and technique 0x10. The tables kept such a pipeline's eye from its first evaluation; they now copy
+the frame's eye into every pipeline that writes it (`WritesEyePosition`). Complete capture parity has no `EyePosition`
+mismatches. The history follows.
 
 **Now (2026-09-29, `val-p3-capture`).** 45 mismatches in the first interval, 1 in the second, 0 after: all
 `EyePosition` on one `CandleLanternWithCandle` (`DCLF -25480.871, native 0`). The beards and hair lines below no longer

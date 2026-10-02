@@ -91,7 +91,7 @@ namespace DCLF
 		/** @brief Writes this frame's TexcoordOffset from the material's fields into the record; whether a float changed. */
 		bool ApplyTextureTransform(const RE::BSShaderMaterial* a_material, MaterialRecord& a_record);
 
-		/** @brief Copies the frame-sourced components (floats and t11, its view too) of a_from over a_to, for comparisons. */
+		/** @brief Copies the frame-sourced components (floats, and t11 whole: written or not, its view and modes) of a_from over a_to, for comparisons. */
 		void CopyFrameComponents(const MaterialRecord& a_from, MaterialRecord& a_to, std::uint32_t a_passDescriptor);
 	}
 }

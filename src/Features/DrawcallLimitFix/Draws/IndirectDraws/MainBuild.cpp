@@ -660,7 +660,7 @@ namespace DCLF::Draws
 		// A decal: the colour segment's alone, with its ordinal in its group's range (OrderDecals, which logs a change for every
 		// decal it moves). One of several partitions is an entry too, never drawable (RegionEntry).
 		if (const std::uint32_t group = ObjectDecalGroup(object.flags))
-			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= tables.decalCount[(group - 1) & 1])
+			if (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= tables.decalCount[group - 1])
 				return false;
 		// A face shape, or a pipeline reading its position from the second stream: only with its positions' stream.
 		const bool needsStream = IsFaceObject(tables, o) || (tables.pipelines[object.pipelineIndex].vertexLayout & kPositionInSecondStream);
@@ -1140,7 +1140,7 @@ namespace DCLF::Draws
 		if (marks)
 			for (const std::uint32_t o : r.touched) {
 				const bool on = o < r.indexOf.size() && r.indexOf[o] != kNoRegion && r.drawsOf[r.indexOf[o]] && NativeDrawn(o);
-				marks->Set(o, on && o < tables.objectGeometry.size() ? tables.objectGeometry[o] : nullptr, on);
+				marks->Set(o, on && o < tables.objectGeometry.size() && !tables.IsLayer(o) ? tables.objectGeometry[o] : nullptr, on);
 			}
 		if (!out.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
@@ -1213,7 +1213,7 @@ namespace DCLF::Draws
 		// Decals never reach the depth segment: they are not occluders, and they are drawn by the
 		// colour segment's second pass (BuildDrawsCS.hlsl, MainOpaquePass::Record).
 		const std::uint32_t decalGroup = ObjectDecalGroup(object.flags);
-		if (decalGroup && (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[(decalGroup - 1) & 1]))
+		if (decalGroup && (depthOnly || o >= tables.decalOrdinal.size() || tables.decalOrdinal[o] >= decalCount[decalGroup - 1]))
 			return;
 		// A decal that cannot be drawn this epoch must still reach BuildDraws, so that its slot is
 		// written as a zero-count draw rather than left holding whatever a previous frame put there.
@@ -1299,7 +1299,7 @@ namespace DCLF::Draws
 				object.flags | kInputDrawable,
 				{}, 0.0f,
 				static_cast<std::uint32_t>(o), ordinal, 0, streamIndex });
-			decalTemplates[(decalGroup - 1) & 1][ordinal] = sequence;
+			decalTemplates[decalGroup - 1][ordinal] = sequence;
 			++out.decalsDrawn;
 			if (o < out.objectState.size())
 				out.objectState[o] = kObjectStateDecal;
@@ -1325,7 +1325,8 @@ namespace DCLF::Draws
 		// Only what BuildDraws will actually write a sequence for counts as drawn: the Z-prepass draws exactly what the
 		// colour epoch drew last frame, so a stale mark would write depth for an object nothing then shades.
 		if (marks && o < tables.objectGeometry.size() && NativeDrawn(o)) {
-			marks->Set(o, tables.objectGeometry[o], true);
+			// A layer claims nothing: its geometry is its base's, which the base's draw claims (they are members together).
+			marks->Set(o, tables.IsLayer(o) ? nullptr : tables.objectGeometry[o], true);
 			if (marks->loopStamp.size() <= o)
 				marks->loopStamp.resize(std::size_t(o) + 1, 0);
 			marks->loopStamp[o] = marks->serial;

@@ -191,6 +191,38 @@ namespace DCLF
 			entries, exclusion ? fmt::format("snapshot of {}", exclusion->entries.size()) : std::string("not built"));
 		for (const auto& [name, row] : blockers)
 			text += fmt::format("\n    {}: {}; e.g. {}", name, row.count, row.example);
+		// The multi-index shapes (Ineligible::MultiIndex), by their two properties as the main registration (FUN_1414b2330)
+		// takes them: the additional one's passes go into geometry group 2 with hint 12, drawing the second index list.
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		auto propertyOf = [](const RE::BSShaderProperty* a_property) -> std::string {
+			if (!a_property)
+				return "none";
+			const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
+			if (!lighting)
+				return fmt::format("not lighting ({})", a_property->GetRTTI() && a_property->GetRTTI()->name ? a_property->GetRTTI()->name : "?");
+			const std::uint64_t flags = lighting->flags.underlying();
+			auto has = [&](Flag a_flag) { return (flags & static_cast<std::uint64_t>(a_flag)) != 0; };
+			return fmt::format("technique {}{}{}{}{}{}", LightingTechniqueName((flags & 0x8004ull) ? 63u : SelectLightingTechnique(flags)),
+				has(Flag::kProjectedUV) ? " projectedUV" : "", has(Flag::kMultiIndexSnow) ? " multiIndexSnow" : "", has(Flag::kDecal) ? " decal" : "",
+				has(Flag::kZBufferWrite) ? "" : " noZWrite", has(Flag::kSkinned) ? " skinned" : "");
+		};
+		std::map<std::string, Row> multiIndex;
+		for (const auto& [geometry, entry] : tracked) {
+			if (!geometry || entry.candidateFrame == 0 || entry.candidateReason != Ineligible::MultiIndex)
+				continue;
+			const auto& data = static_cast<const RE::BSMultiIndexTriShape*>(geometry)->GetMultiIndexTrishapeRuntimeData();
+			const auto triangles = static_cast<const RE::BSTriShape*>(geometry)->GetTrishapeRuntimeData().triangleCount;
+			const auto& runtime = geometry->GetGeometryRuntimeData();
+			auto& row = multiIndex[fmt::format("main {}; additional {}; useAdditionalTriList {}, alt triangles {}, alpha property {}", propertyOf(runtime.shaderProperty.get()),
+				propertyOf(data.additionalShaderProperty.get()), static_cast<std::uint32_t>(data.useAdditionalTriList),
+				!data.altIndexBuffer ? "no buffer" : data.altPrimCount == 0 ? "none" : data.altPrimCount < triangles ? "fewer" : data.altPrimCount == triangles ? "as many" : "more",
+				runtime.alphaProperty ? (runtime.alphaProperty->alphaFlags & 1 ? "blended" : "yes") : "no")];
+			if (row.count++ == 0)
+				row.example = exampleOf(*geometry, entry.lightRoot ? entry.lightRoot : entry.sunEntryNode);
+		}
+		text += "\n[DCLF] coverage census: multi-index shapes, by their properties:";
+		for (const auto& [name, row] : multiIndex)
+			text += fmt::format("\n    {}: {}; e.g. {}", name, row.count, row.example);
 		return text;
 	}
 

@@ -178,9 +178,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			logger::info("[DCLF] fading: {} screen-door fading objects drawn by DCLF over {} frames", fading, fadingFrames);
 		if (stats.skinned || draws.boneRows)
 			logger::info("[DCLF] skinned (last frame): {} candidates, {} palette rows in the tables, {} rows uploaded by the epoch", stats.skinned, stats.boneRows, draws.boneRows);
-		if (stats.decals[0] || stats.decals[1] || draws.decalsDrawn)
-			logger::info("[DCLF] decals (last frame): {} candidates ({} in the opaque group, {} in the blended group), {} submitted to the second pass, {} of {} tested were culled",
-				stats.decals[0] + stats.decals[1], stats.decals[0], stats.decals[1], draws.decalsDrawn, draws.decalsCulled, draws.decalsTested);
+		if (stats.decals[0] || stats.decals[1] || stats.decals[2] || draws.decalsDrawn)
+			logger::info("[DCLF] decals (last frame): {} candidates ({} in the opaque group, {} multi-index layers, {} in the blended group), {} submitted to the second pass, {} of {} tested were culled",
+				stats.decals[0] + stats.decals[1] + stats.decals[2], stats.decals[0], stats.decals[2], stats.decals[1], draws.decalsDrawn, draws.decalsCulled, draws.decalsTested);
 		if (draws.sunTested || draws.sunCpuTested)
 			logger::info("[DCLF] sun on the GPU (sampled frame): {} synthetic draws tested, {} missed every cascade; the CPU over the same inputs: {} tested, {} missed{}",
 				draws.sunTested, draws.sunMissed, draws.sunCpuTested, draws.sunCpuMissed,

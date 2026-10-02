@@ -77,6 +77,12 @@ namespace DCLF
 		return it == accumulatedPasses.end() ? nullptr : &it->second;
 	}
 
+	const AccumulatedPass* SceneStore::FindAccumulatedLayerPass(const RE::BSGeometry* a_geometry) const
+	{
+		auto it = accumulatedLayerPasses.find(a_geometry);
+		return it == accumulatedLayerPasses.end() ? nullptr : &it->second;
+	}
+
 	void SceneStore::ApplyAccumulatePatch(const AccumulatePatch& a_patch)
 	{
 		const std::uint32_t objectId = a_patch.object;
@@ -107,7 +113,7 @@ namespace DCLF
 		tables.residentSlot[objectId] = 1;
 		before.NoteWrite(tables, objectId);
 		if (a_patch.decalKey) {
-			++stats.decals[(static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1) & 1];
+			++stats.decals[static_cast<std::uint32_t>(a_patch.decalKey >> 60) - 1];
 			memberDecals[objectId] = a_patch.decalKey;
 			memberDecalsChanged = true;
 		}
@@ -136,10 +142,12 @@ namespace DCLF
 		// for the diagnostics.
 		RefreshMainBatchRenderers();
 		accumulatedPasses.clear();
+		accumulatedLayerPasses.clear();
 		DrainCapture();
 		PrimaryCull::Get().CheckLightMasks();
 		// Scene membership: the records written since, bound (patched once below, then kept).
 		residentJoining.clear();
+		residentLayerJoining.clear();
 		BindByMembership();
 		timer.Add(BuildPart::Walk);
 
@@ -148,7 +156,7 @@ namespace DCLF
 		auto& evaluator = ConstantEvaluator::Get();
 		const bool interior = frameInterior;
 		const auto& decalBiasMode = frameDecalBias;
-		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8);
+		const std::uint32_t biasWitness = decalBiasMode[1] | (decalBiasMode[2] << 8) | (decalBiasMode[3] << 16);
 		const bool lightLimitFixLoaded = globals::features::lightLimitFix.loaded;
 		// CS_DCLF_DERIVED_CACHE=probe: the cached derivation is served and also recomputed, and the two compared.
 		const bool derivedProbe = SwitchValue(Switch::DerivedCache) == "probe";
@@ -165,28 +173,38 @@ namespace DCLF
 			if (trackedIt != tracked.end())
 				accumulateOrder.push_back({ mutableGeometry, &trackedIt->second, &pass });
 		}
+		for (auto& [passGeometry, pass] : accumulatedLayerPasses) {
+			auto* mutableGeometry = const_cast<RE::BSGeometry*>(passGeometry);
+			auto trackedIt = tracked.find(mutableGeometry);
+			if (trackedIt != tracked.end())
+				accumulateOrder.push_back({ mutableGeometry, &trackedIt->second, &pass, true });
+		}
 		timer.Add(BuildPart::PassLookup);
 		TracyCZoneEnd(orderZone);
 		TracyCZoneN(objectsZone, "CS.DCLF.Accumulate.Objects", true);
-		for (auto& [geometry, trackedEntry, accumulated] : accumulateOrder) {
+		// One membership join: an entry's base record, or its layer's (Tracked::layerSlot, drawn from the layer property).
+		auto join = [&](RE::BSGeometry* geometry, Tracked* trackedEntry, const AccumulatedPass* accumulated, bool layer) {
 			timer.Add(BuildPart::LoopTail);
 			// BindByMembership joins only records written this frame with a verdict of None, never a shadow-only one.
-			const std::uint32_t objectId = trackedEntry->objectId;
+			const std::uint32_t objectId = layer ? trackedEntry->layerSlot : trackedEntry->objectId;
 			auto& object = tables.objects[objectId];
 			const std::uint32_t geometrySlot = object.geometryIndex;
 
 			auto& data = geometry->GetGeometryRuntimeData();
-			auto* property = data.shaderProperty.get();
+			auto* property = layer ? LayerPropertyOf(*geometry) : data.shaderProperty.get();
+			if (!property)
+				return;
 			auto* witnessProperty = property;
 			const auto* witnessMaterial = witnessProperty ? witnessProperty->material : nullptr;
 			const std::uint8_t fadeState = FadeStateOf(witnessProperty);
-			RE::BSLightingShaderProperty* castCache = trackedEntry->castProperty == witnessProperty ? trackedEntry->castResult : nullptr;
+			RE::BSLightingShaderProperty* castCache = layer ? netimmerse_cast<RE::BSLightingShaderProperty*>(property) :
+			                                          trackedEntry->castProperty == witnessProperty ? trackedEntry->castResult : nullptr;
 			const bool alphaBelowOne = witnessMaterial && static_cast<const RE::BSLightingShaderMaterialBase*>(witnessMaterial)->materialAlpha < 1.0f;
 
 			// The positive derivation, cached (Tracked::Derived): for an accumulated object whose
 			// witnesses all match and whose slots still carry the keys they were derived for, the
 			// classification and the whole derived section are skipped.
-			auto& derived = trackedEntry->derived;
+			auto& derived = layer ? trackedEntry->layerDerived : trackedEntry->derived;
 			bool derivedHit = derived.valid && derived.generation == tablesGeneration &&
 			                  derived.geometrySlot == geometrySlot && derived.property == witnessProperty &&
 			                  derived.material == witnessMaterial && derived.fadeState == fadeState && derived.technique == accumulated->technique &&
@@ -210,7 +228,7 @@ namespace DCLF
 				descriptors.envmapLODFade = lightingProperty.envmapLODFade;
 				++stats.derivedHits;
 			} else {
-				reason = ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
+				reason = layer ? ClassifyLayer(*geometry, &descriptors, accumulated) : ClassifyStatic(*geometry, &descriptors, accumulated, &castCache);
 			}
 			timer.Add(BuildPart::ClassifyStatic);
 			// Per frame whether or not the derivation was cached: hidden, part of an actor and fading are
@@ -223,22 +241,24 @@ namespace DCLF
 			// fade node's LOD level.
 			// The histogram is the scene phase's, taken over the whole tracked set; where this phase reaches a
 			// different verdict, the object is moved between the buckets.
-			if (reason != trackedEntry->candidateReason) {
+			if (!layer && reason != trackedEntry->candidateReason) {
 				--stats.ineligible[static_cast<std::size_t>(trackedEntry->candidateReason)];
 				++stats.ineligible[static_cast<std::size_t>(reason)];
 			}
 			if (reason != Ineligible::None) {
-				trackedEntry->accumulateReason = reason;
-				trackedEntry->accumulateReasonFrame = frame;
+				if (!layer) {
+					trackedEntry->accumulateReason = reason;
+					trackedEntry->accumulateReasonFrame = frame;
+				}
 				// Eligible for a record but not for bindings: it stays native, which is what its scene record
 				// already says (kObjectNoBindings).
 				derived.valid = false;
-				continue;
+				return;
 			}
 			timer.Add(BuildPart::ClassifyFrame);
 
 			// Only computed when something will report them: this whole block exists to feed one log line.
-			if (derivationStats && descriptors.derivedPass != kNotDerived) {
+			if (!layer && derivationStats && descriptors.derivedPass != kNotDerived) {
 				++stats.derivationChecked;
 				// Against the pass the engine registered. Where its LOD fades ran out it dropped Specular or the Envmap
 				// technique, which the derivation keeps (the draw fades them): those bits are the fades' and counted apart,
@@ -300,7 +320,7 @@ namespace DCLF
 					++stats.derivationBitCounts[bit];
 					remaining &= remaining - 1;
 				}
-			} else if (derivationStats && descriptors.derivedPass == kNotDerived) {
+			} else if (!layer && derivationStats && descriptors.derivedPass == kNotDerived) {
 				++stats.derivationNative;
 			}
 			timer.Add(BuildPart::Diagnostics);
@@ -323,7 +343,8 @@ namespace DCLF
 				timer.Add(BuildPart::DedupHit);
 			} else {
 				const bool twoSided = property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kTwoSided);
-				const auto* alpha = data.alphaProperty.get();
+				// A layer's draws apply no alpha property (render flags 0x41, engine notes).
+				const auto* alpha = layer ? nullptr : data.alphaProperty.get();
 				const bool alphaTest = alpha && alpha->GetAlphaTesting();
 
 				// A decal's key carries the engine's fixed-function state indices as well (Records.h): the
@@ -387,7 +408,7 @@ namespace DCLF
 					if (!EvaluateMaterialForSlot(material, descriptors.pass, record)) {
 						// No shader instance yet (nothing drawn so far): stay native this frame.
 						derived.valid = false;
-						continue;
+						return;
 					}
 					const std::uint32_t slot = AllocateMaterialSlot();
 					materialOwners.resize(tables.materials.size());
@@ -488,10 +509,12 @@ namespace DCLF
 			ApplyAccumulatePatch(patch);
 			timer.Add(BuildPart::ApplyPatch);
 			MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
-			residentJoining.erase(geometry);
+			(layer ? residentLayerJoining : residentJoining).erase(geometry);
 			++residentStats.joined;
 			timer.Add(BuildPart::Record);
-		}
+		};
+		for (const auto& entry : accumulateOrder)
+			join(entry.geometry, entry.tracked, entry.accumulated, entry.layer);
 
 		TracyCZoneEnd(objectsZone);
 		TracyCZoneN(residentsZone, "CS.DCLF.Accumulate.Residents", true);
@@ -509,6 +532,22 @@ namespace DCLF
 				DropResidentSlot(entry->second.slot, true);
 		}
 		residentJoining.clear();
+		for (const auto* geometry : residentLayerJoining) {
+			++residentStats.failed;
+			const auto entry = tracked.find(const_cast<RE::BSGeometry*>(geometry));
+			if (entry != tracked.end() && entry->second.layerSlot != kNoObjectSlot && IsResidentSlot(entry->second.layerSlot))
+				DropResidentSlot(entry->second.layerSlot, true);
+		}
+		residentLayerJoining.clear();
+		// A base and its layer are members together: the engine draws both passes of one it does not own (the claims are by
+		// geometry), so a base whose layer did not join leaves again, and a layer whose base did not.
+		for (const auto& entry : accumulateOrder) {
+			const auto& t = *entry.tracked;
+			if (t.layerSlot == kNoObjectSlot || t.slot == kNoObjectSlot || IsResidentSlot(t.slot) == IsResidentSlot(t.layerSlot))
+				continue;
+			++residentStats.layerUnpaired;
+			DropResidentSlot(IsResidentSlot(t.slot) ? t.slot : t.layerSlot, true);
+		}
 		KeepResidentsAlive();
 		++residentStats.frames;
 		residentStats.resident += residents.size();
@@ -570,10 +609,12 @@ namespace DCLF
 				continue;
 			auto* geometry = const_cast<RE::BSGeometry*>(tables.objectGeometry[slot]);
 			const auto trackedIt = geometry ? tracked.find(geometry) : tracked.end();
+			// A layer slot (WriteLayer) joins with its own pass: its property's, with hint 12.
+			const bool layer = tables.IsLayer(slot);
 			// A record written every frame (a mover, an actor's part, animated shading) is bound again every frame: its slots are
 			// referenced again in the same batch, so nothing about it is retired.
-			if (trackedIt == tracked.end() || trackedIt->second.slot != slot || trackedIt->second.objectStamp != objectStamp ||
-				trackedIt->second.candidateReason != Ineligible::None)
+			if (trackedIt == tracked.end() || (layer ? trackedIt->second.layerSlot : trackedIt->second.slot) != slot ||
+				trackedIt->second.objectStamp != objectStamp || trackedIt->second.candidateReason != Ineligible::None)
 				continue;
 			// A member written again keeps its binding while what the binding reads is the same (the derivation cache's
 			// witnesses): a skin, a face or a mover is written every frame for its transform, bones or stream alone.
@@ -583,7 +624,8 @@ namespace DCLF
 				continue;
 			}
 			AccumulatedPass pass;
-			if (!primary.MembershipPass(geometry, pass))
+			const auto* layerProperty = layer ? netimmerse_cast<const RE::BSLightingShaderProperty*>(LayerPropertyOf(*geometry)) : nullptr;
+			if (layer ? !layerProperty || !primary.MembershipLayerPass(geometry, *layerProperty, pass) : !primary.MembershipPass(geometry, pass))
 				continue;
 			// A fade node's objects carry its fade-out distance for BuildDraws' fade test, which measures from the node's centre
 			// (Tables::lodFade, SetFadeRow). A tree's also take its height test.
@@ -592,16 +634,17 @@ namespace DCLF
 				const auto* rtti = fadeNode->GetRTTI();
 				pass.heightTest = rtti && rtti->name && std::strcmp(rtti->name, "BSTreeNode") == 0;
 			}
-			accumulatedPasses.insert_or_assign(geometry, pass);
-			residentJoining.insert(geometry);
+			(layer ? accumulatedLayerPasses : accumulatedPasses).insert_or_assign(geometry, pass);
+			(layer ? residentLayerJoining : residentJoining).insert(geometry);
 			++residentStats.membershipQueued;
 		}
 	}
 
 	bool SceneStore::MemberBindingStands(std::uint32_t a_slot, const RE::BSGeometry& a_geometry, const Tracked& a_entry) const
 	{
-		const auto& derived = a_entry.derived;
-		const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
+		const bool layer = tables.IsLayer(a_slot);
+		const auto& derived = layer ? a_entry.layerDerived : a_entry.derived;
+		const auto* property = layer ? LayerPropertyOf(a_geometry) : a_geometry.GetGeometryRuntimeData().shaderProperty.get();
 		const auto* material = property ? property->material : nullptr;
 		const bool alphaBelowOne = material && static_cast<const RE::BSLightingShaderMaterialBase*>(material)->materialAlpha < 1.0f;
 		return derived.valid && derived.generation == tablesGeneration && derived.geometrySlot == tables.objects[a_slot].geometryIndex &&
