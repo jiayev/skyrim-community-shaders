@@ -203,9 +203,13 @@ namespace DCLF
 			const auto* exclusion = frameState.exclusion.get();
 			if (!exclusion || !exclusion->candidates)
 				return false;
-			const auto& candidates = *exclusion->candidates;
-			const auto it = candidates.geometries.find(a_geometry);
-			return it != candidates.geometries.end() && exclusion->excluded[candidates.geometryEntry[it->second]];
+			// Any ancestor, as the cascades' skip takes it out (CascadeProcess1): a caster under an excluded entry need not be a
+			// candidate geometry (an effect under a cell entry, for one).
+			const auto& entries = exclusion->candidates->entries;
+			for (const RE::NiAVObject* object = a_geometry; object; object = object->parent)
+				if (const auto it = entries.find(object); it != entries.end() && exclusion->excluded[it->second])
+					return true;
+			return false;
 		}
 		/**
 		 * @brief A registration after the sun's Accumulate, any thread: a geometry under a removed entry gets the bits of

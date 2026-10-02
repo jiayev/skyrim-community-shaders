@@ -529,6 +529,7 @@ namespace DCLF
 
 	void PrimaryCull::NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached)
 	{
+		LocalLightCull::NoteStructure(a_parent, a_child, a_attached);
 		const auto* objectRoot = listObjectRoot.load(std::memory_order_acquire);
 		if (!a_parent || !objectRoot)
 			return;
@@ -645,7 +646,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_process, void* a_list, void* a_camera, bool a_skipHidden, bool a_jobs)
 			{
-				func(a_process, a_list, a_camera, a_skipHidden || IsSceneList(a_list, true), a_jobs);
+				func(a_process, a_list, a_camera, a_skipHidden || IsSceneList(a_list, true) || LocalLightCull::OwnsList(a_list), a_jobs);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -664,6 +665,7 @@ namespace DCLF
 		stl::detour_thunk<ListHooks::BuildSceneLists>(base + kBuildSceneLists);
 		stl::detour_thunk<ListHooks::ClearList>(base + kClearList);
 		stl::detour_thunk<ListHooks::CullList>(base + kCullList);
+		cullListHooked = true;
 	}
 
 	void PrimaryCull::ReportSceneLists(std::uint64_t a_checked, std::uint64_t a_missed)

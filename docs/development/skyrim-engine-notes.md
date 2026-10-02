@@ -1162,6 +1162,23 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
 -   **`BSParabolicCullingProcess::Process1`** is `0x141519a90` (vtable slot `0x16`).
 -   **`BSShadowDirectionalLight::Accumulate`** (`0x141511c80`) culls each cascade through `FUN_1414f0920`, with the
     static `BSCullingProcess` over its full-frustum processes' `objectArray`.
+-   **The list path:** `FUN_140e28f70(process, list, camera, skipHidden, jobs)`. It calls `Process` (vfunc `0xB8`) on
+    the first entry and `Process1` (`0xB0`) on each other one, skipping hidden entries when asked. A light reaches it
+    with a `sceneAccumArray` (`+0x528`); skipHidden is `desc+0x61` and jobs is 0.
+-   **`BSParabolicCullingProcess::Process1`** (`0x141519a90`), cull mode 3:
+    -   a `kAlwaysDraw` node is visited untested;
+    -   any other goes through `FUN_141519fe0`. It runs `FUN_14151a1e0(process, &worldBound)` and, when visible, stores
+        the result at `+0x301F4` and calls `OnVisible`.
+    -   `FUN_14151a1e0` is pure. It tests the bound against the light's sphere (centre `+0x30218`, radius `+0x30224`),
+        then against the half-space `+0x30208`/`+0x30214`, with the second hemisphere's process at `+0x30200`.
+    -   `kAccumulated` is set on a visited node when `+0x11D` (`updateAccumulateFlag`) is set: clear for point lights.
+-   **`BSMultiBoundNode::OnVisible`** (`0x140e2d710`):
+    -   it tests its multibound only when the node is not `kAlwaysDraw` and the cull mode is neither 1 nor 3 (mode 4
+        fresh; other modes cached per frame on the shape);
+    -   with `cullingMode == kAllPass` and a cull mode other than 3, it culls its children under mode 1 (no tests);
+    -   under mode 3 it is a plain `NiNode`'s. Exterior cells are `BSMultiBoundNode`s; the object root is a `NiNode`
+        with `kAlwaysDraw`.
+-   **A portal-strict light** (`BSLight::portalStrict`, `+0x47`) culls with mode 4, and any other light with mode 3.
 
 ## The material database: how a material is shared and released
 

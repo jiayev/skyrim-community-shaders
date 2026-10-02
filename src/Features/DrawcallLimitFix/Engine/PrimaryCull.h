@@ -13,6 +13,7 @@
 #include <ankerl/unordered_dense.h>
 
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
+#include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
@@ -149,6 +150,7 @@ namespace DCLF
 		/** @brief At Present, render thread. */
 		void EndFrame()
 		{
+			LocalLightCull::EndFrame();
 			listFilter.store(nullptr, std::memory_order_release);
 			listMode.store(ListMode::Engine, std::memory_order_release);
 			// Roots the build's job let go of: released here, where the engine unloads (one may hold a detached cell's last
@@ -188,9 +190,12 @@ namespace DCLF
 		 * (listEvents); anything higher (a category node under a cell, a cell under the object root) rebuilds them.
 		 */
 		void NoteListStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached);
+		/** @brief Whether the list cull's hook is installed (InstallSceneLists): it skips a lent light list's hidden entries. */
+		static bool CullListHooked() { return cullListHooked; }
 		/** @brief Render thread, SceneStore's hidden events: a hidden bit written on a structure node rebuilds the kept lists. */
 		void NoteHiddenKey(const void* a_key)
 		{
+			LocalLightCull::NoteHiddenKey(a_key);
 			if (listStructural.contains(a_key)) {
 				listStructure.fetch_add(1, std::memory_order_relaxed);
 				listStats.structureBy[3].fetch_add(1, std::memory_order_relaxed);
@@ -324,7 +329,8 @@ namespace DCLF
 		std::vector<RE::NiPointer<RE::NiAVObject>> listGraveyard;  // the build's job fills, Present releases
 		/** @brief The build's job: the scene lists emptied, their references kept for Present (listGraveyard). */
 		void BuryLists();
-		bool listsKeepInstalled = false;               // the object root's call site was found and patched
+		bool listsKeepInstalled = false;
+		static inline bool cullListHooked = false;               // the object root's call site was found and patched
 		struct ListStats
 		{
 			std::uint64_t frames = 0, published = 0, built = 0, dryRuns = 0;
