@@ -6,6 +6,9 @@
 
 namespace Util
 {
+	/** @brief Forces weather and refreshes its cloud passes and sky model. */
+	void ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override);
+
 	/** @brief Pending celestial synchronization requests consumed by the sky update hook. */
 	struct CelestialTransitionRequest
 	{

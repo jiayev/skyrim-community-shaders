@@ -800,7 +800,7 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 				auto selectedWeather = s_filteredWeathers[i];
 
 				if (s_accelerateWeatherChange)
-					sky->ForceWeather(selectedWeather, false);
+					Util::ForceWeather(sky, selectedWeather, false);
 				else
 					sky->SetWeather(selectedWeather, true, false);
 
