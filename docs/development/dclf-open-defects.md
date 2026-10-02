@@ -64,6 +64,43 @@ sub-pixel movement.
 DCLF projects with the engine's jittered matrix, bit for bit. The comparison stays in the report ("colour epoch
 ViewProj over 300 epochs").
 
+## Resolved: DCLF's draws lost the sun where Terrain Shadows' penumbra collapsed
+
+**Symptom (2026-10-02, Riverwood save).** With DCLF on, the whole forward view was in shade: no direct sun and no
+specular on anything DCLF draws. Native objects (actors with `CS_DCLF_ACTORS=0`) stayed lit. A live toggle flipped it
+both ways. The shadow maps, the shadow mask, the VSM copy and the sun's colour and direction (b13 and SharedData) all
+matched native.
+
+**Cause.** `TerrainShadows::GetTerrainShadow` returned `saturate((z - lower) / (upper - lower))`. Where nothing occludes
+a texel, Terrain Shadows' update blends the penumbra's two heights together, so after a few seconds of gameplay the
+divisor is a difference of two identical `lerp`s. Its sign then depends on how the compiler rounds the arithmetic, and
+the compilers differ. In the engine's FXC shaders, translated by DXVK, the divisor came out as exactly zero, so the
+result was +inf and saturated to 1 (lit). In DCLF's DXC pipelines it read 0 (shadowed) at the same pixel with the same
+inputs. With extra debug code around the call, the same DXC function read 1 again. The factor multiplies the sun's
+colour (`GetWorldShadow`), so every DCLF surface lost the sun, and only once the heights had converged: the first frames
+after a load were lit.
+
+**Measured** (`CS_DCLF_SHADOW_DEBUG_OUTPUT` with Lighting.hlsl writing each factor, `CS_DCLF_TARGET_PROBE=1170,215` on a
+sunlit roof):
+
+| | DCLF on | Native |
+| --- | --- | --- |
+| Sun colour read (b13), after the colour transform | 1.84 | 1.84 |
+| After height fog, caustics and world shadow | 0.00 | 1.44 |
+| Terrain shadow | 0.0 | 1.0 |
+| Its inputs: texel, U, world z, both decoded heights | 0.4172 / 0.4172, 0.5298, -3202, -5396 / -5396 | the same |
+| Specular target (rt4) | 0.0000 | 0.003-0.006 |
+
+**Fix.** `GetTerrainShadow` returns the step at the lower height where the penumbra is 1e-3 units or less, and divides
+only where there is a penumbra. Its other callers (volumetric fog, Effects11's volumetric rays) share the fix. After
+it, DCLF's specular at the roof is 0.004-0.008 against native's 0.004-0.005, and the view is sunlit with DCLF on.
+
+**Why no parity check caught it.** Every check compares DCLF's inputs with the engine's: capture parity (descriptors,
+constants, textures, samplers), capture-point parity (the frame's bound buffers and views), and persistent parity (the
+published frame lighting against fresh evaluations). Every input matched. The difference arose inside the shader, where
+the two compilers handle a degenerate division differently, and no check compares what DCLF's draws write with what the
+native draws write at the same pixels.
+
 ## Resolved: the VSM soft shadow matches native
 
 The earlier reading (DCLF 0.0005, native 1.0 at a road pixel) was taken while every DCLF sampler was an empty
@@ -306,7 +343,8 @@ for a NaN. The constant blocks are now compared bit for bit (`ConstantBlock::Sam
 -   `CS_DCLF_SHADOWMAP_PROBE=1`: the sun's cascade texture and the VSM copy, summarised per slice and mip.
 -   `CS_DCLF_SHADOWMASK_PROBE=x,y`: the engine's shadow mask at a pixel.
 -   `CS_DCLF_TARGET_PROBE=x,y`: every bound G-buffer target, averaged over a 64 x 64 block, where the opaque
-    pass ends, DCLF on or off.
+    pass ends, DCLF on or off. Whole pixels of the render resolution (2560 x 1440 under DLSS Quality at 4K), the
+    block's top-left corner; fractions parse as 0.
 -   `CS_DCLF_SHADOW_DEBUG_OUTPUT=1`: a global shader define (`DCLF_SHADOW_DEBUG`) that makes Lighting.hlsl
     write chosen intermediate values into the Diffuse target, native and DCLF alike, cached apart.
     Changing the deployed Lighting.hlsl makes Community Shaders recompile its whole shader cache on the next
