@@ -74,6 +74,7 @@ namespace DCLF::Draws
 	// current then previous, then the extras; the face vertices every face shape's region.
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
+	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (ShadowIndexPool): 16 MB
 	constexpr std::uint32_t kInitialBoneRows = 131072;
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
@@ -121,6 +122,15 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr std::uint32_t kInitialTreeObjects = 4096;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
+	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
+	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
+	struct IndexPoolConstants
+	{
+		std::uint32_t latchIndex = 0, latchOffset = 0, copiesIndex = 0, poolIndex = 0;
+	};
+	constexpr std::uint32_t kIndexPoolConstantWords = sizeof(IndexPoolConstants) / 4;
+	// The copies' dispatch: a group per copy, rows of IndexPoolCS's kGroupsX.
+	constexpr std::uint32_t kIndexPoolGroupsX = 65535;
 	// FadeStateCS.hlsl's constants: the buffers' indices, the depth segment's latch (its view-projection), the root count, the
 	// scene frame, and the parity log's first root (~0u: no log). The frame's inputs are a buffer (Records.h, FadeFrame).
 	struct FadeStateConstants
@@ -241,8 +251,12 @@ namespace DCLF::Draws
 		// its OnVisible verdict). 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
 		std::uint32_t fadeStatesIndex;
+		// A shadow view: its slot's bucket counts (ShadowResources::bucketCounts), a word per bucket. 0 elsewhere.
+		std::uint32_t bucketCountsIndex;
+		// A shadow view: each geometry slot's first index in the index pool (ShadowIndexPool::firsts). 0 elsewhere.
+		std::uint32_t poolFirstsIndex;
 	};
-	static_assert(sizeof(BuildDrawsConstants) == 108);
+	static_assert(sizeof(BuildDrawsConstants) == 116);
 	constexpr std::uint32_t kBuildDrawsConstantWords = sizeof(BuildDrawsConstants) / 4;
 
 	/**
@@ -288,13 +302,17 @@ namespace DCLF::Draws
 		// latch block. BuildDraws puts each input's Light Limit Fix shadow mask into its object word (kObjectLocalShadowShift),
 		// which the pixel stage takes for ShadowBitMask and its DefShadow. 0 elsewhere.
 		std::uint32_t localShadowOffset;
-		std::uint32_t reserved[5];
+		// A shadow view: its bucket table (ShadowLatchLayout::BucketOffset), in bytes into the latch block. The view's map row
+		// names a bucket per key slot, and the table gives each bucket its range of the slot's sequences (first, capacity),
+		// which one plain indirect draw with the bucket's pipeline executes (ShadowViewPass). 0 elsewhere.
+		std::uint32_t bucketTableOffset;
+		std::uint32_t reserved[4];
 	};
 	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&
 				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&
-				  offsetof(BuildDrawsLatch, localShadowOffset) == 232);
+				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236);
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**
@@ -364,7 +382,15 @@ namespace DCLF::Draws
 		std::uint32_t MapOffset() const { return viewSlots * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t MapRowBytes() const { return keySlots * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		std::uint32_t SunEntryOffset() const { return MapOffset() + rasterStates * MapRowBytes(); }
-		std::uint32_t Bytes() const { return SunEntryOffset() + SunRegionBytes<SunEntryProcess>(sunProcesses); }
+		// A view slot's bucket table (BuildDrawsLatch::bucketTableOffset): (first, capacity) per bucket, at most one a key slot.
+		std::uint32_t BucketTableBytes() const { return keySlots * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t BucketOffset(std::uint32_t a_slot) const
+		{
+			return SunEntryOffset() + SunRegionBytes<SunEntryProcess>(sunProcesses) + a_slot * BucketTableBytes();
+		}
+		// The index pool's copies (ShadowIndexPool): their dispatch's groups, then their count.
+		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
+		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		bool operator==(const ShadowLatchLayout&) const = default;
 	};
 	/** @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades. */

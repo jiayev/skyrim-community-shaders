@@ -550,14 +550,25 @@ namespace DCLF::Draws
 
 	namespace
 	{
-		/** @brief Per used mode, the draws its inputs can produce (a skin once per partition): its views' max count. */
+		/**
+		 * @brief Per used mode, the draws its inputs can produce (a skin once per partition): its views' max count; and the same
+		 * per key slot, which sizes the views' buckets.
+		 */
 		void CountModeDraws(ShadowPayload& a_out)
 		{
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 				if (!a_out.inputs.modeUsed[m])
 					continue;
 				std::uint64_t draws = 0;
-				a_out.ForEachInput(m, [&](const DrawInput& a_input) { draws += PartitionDraws(a_input.partitions); });
+				auto& slots = a_out.keySlotDraws[m];
+				slots.clear();
+				a_out.ForEachInput(m, [&](const DrawInput& a_input) {
+					const std::uint32_t inputDraws = PartitionDraws(a_input.partitions);
+					draws += inputDraws;
+					if (a_input.pipelineIndex >= slots.size())
+						slots.resize(std::size_t(a_input.pipelineIndex) + 1, 0u);
+					slots[a_input.pipelineIndex] += inputDraws;
+				});
 				a_out.modeDraws[m] = static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 			}
 		}

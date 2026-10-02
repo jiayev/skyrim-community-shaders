@@ -29,6 +29,9 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushVS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 11) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushPS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 9) | (1u << 10) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushBinding = 191;
+	// The draw's push range (below): under device-generated commands each draw's own words; the shadow views' plain draws push
+	// them once per draw call instead (ShadowViewPass): the call's first sequence, the material rows and the vertex layout.
+	inline constexpr std::uint32_t kDrawPushBinding = 190;
 	// First the frame record's address (every register a draw's rows do not give), then the registers' addresses.
 	inline constexpr std::uint32_t kFramePushRecord = 0;
 	inline constexpr std::uint32_t kFramePushRegisters = 2;
@@ -38,6 +41,14 @@ namespace DCLF
 	 * word, and a pad word so the pass's push data after it starts 8-byte aligned (BasicRHI packs the ranges back to back).
 	 */
 	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushArgumentWords = 5, kDrawPushWords = 6;
+	/*
+	 * A shadow view's plain draw's push words (in the draw's range, kDrawPushBinding): its first sequence's address, which the
+	 * vertex stage indexes by its instance (Utility.hlsl, DCLF_PULLED); the material rows' table, an address the layout's b1
+	 * and t0 ranges may resolve though the stages read the draw's row themselves; and the pipeline's vertex layout.
+	 */
+	inline constexpr std::uint32_t kShadowDrawPushSequences = 0, kShadowDrawPushMaterialRows = 2, kShadowDrawPushVertexLayout = 4;
+	/** @brief Where a DrawSequence's draw arguments start, which the shadow views' plain indexed draws read. */
+	inline constexpr std::uint32_t kSequenceDrawOffset = 72;
 	/*
 	 * The shadow views' layout: the draw's words are its material row's address (ShadowMaterialRow, read as the Utility
 	 * vertex shader's PerMaterial block, b1, and for the diffuse, t0) and the object word; everything else is the view's,
@@ -149,6 +160,13 @@ namespace DCLF
 	inline constexpr std::uint32_t kColorVariant = 0;
 	inline constexpr std::uint32_t kDepthVariant = 1;
 	inline constexpr std::uint32_t kVariantCount = 2;
+	/**
+	 * @brief The shadow views' pipeline classes (DrawPipelines::ShadowDiscards): a pixel stage that cannot defer the depth test,
+	 * and one that can (an alpha test's discard). A view draws the first class's pipelines, then the second's.
+	 */
+	inline constexpr std::uint32_t kShadowDepthOnly = 0;
+	inline constexpr std::uint32_t kShadowDiscards = 1;
+	inline constexpr std::uint32_t kShadowClasses = 2;
 
 	/** @brief Render target and depth formats of the native main (deferred) pass. */
 	struct TargetFormats
@@ -274,6 +292,12 @@ namespace DCLF
 
 		/** @brief The registers of the shadow pipeline at a shadow set index (one FindShadow returned). */
 		const RegisterUsage& ShadowUsage(std::uint32_t a_index) const { return shadowUsage[a_index]; }
+		/**
+		 * @brief Whether the shadow pipeline at a set index is of the discarding class (kShadowDiscards): its pixel stage can
+		 * discard or export depth, so the hardware tests its fragments' depth after shading them. A view draws the other class
+		 * first, so that these fragments meet the opaque casters' depth.
+		 */
+		bool ShadowDiscards(std::uint32_t a_index) const { return a_index < shadowDiscards.size() && shadowDiscards[a_index] != 0; }
 
 		/** @brief Increments whenever the set is recreated (target change): indices from before are stale. */
 		std::uint32_t Generation() const { return generation; }
@@ -289,6 +313,8 @@ namespace DCLF
 		TargetFormats targets;
 		std::vector<std::array<RegisterUsage, kVariantCount>> usage;  // by set index, then variant
 		std::vector<RegisterUsage> shadowUsage;                       // by shadow set index
+		std::vector<std::uint8_t> shadowDiscards;                     // by shadow set index: ShadowDiscards
+		std::vector<std::uint64_t> shadowLayouts;                     // by shadow set index: its key's vertex layout
 		std::uint32_t generation = 0;
 		Stats stats;
 

@@ -72,6 +72,10 @@ struct VS_OUTPUT
 	float Depth: TEXCOORD2;
 #	endif
 #endif
+#if defined(DCLF_PULLED)
+	// The draw's diffuse descriptor and object word, for the pixel stage of a pulled draw (DCLF_PULLED, below).
+	nointerpolation uint2 DCLFDraw: TEXCOORD7;
+#endif
 };
 
 #ifdef VSHADER
@@ -86,10 +90,14 @@ cbuffer PerTechnique : register(b0)
 #	endif
 };
 
+#	if defined(DCLF_PULLED)
+static float4 TexcoordOffset;  // the draw's material row's (DCLF_PULLED, below)
+#	else
 cbuffer PerMaterial : register(b1)
 {
 	float4 TexcoordOffset : packoffset(c0);
 };
+#	endif
 
 cbuffer PerGeometry : register(b2)
 {
@@ -104,7 +112,11 @@ cbuffer PerGeometry : register(b2)
 #	endif
 };
 
-#if defined(DCLF_BINDLESS)
+#if defined(DCLF_PULLED)
+// Set by main from the draw's object (DCLF_PULLED, below), as the DCLF_BINDLESS build's statics.
+static precise row_major float4x4 World;
+static float4 TreeParams;
+#elif defined(DCLF_BINDLESS)
 // Drawcall Limit Fix draws the shadow views indirectly: every object of a view shares one pipeline and
 // one PerGeometry block, so the values that differ between them come from the per-object record instead
 // (Common/DCLFObjects.hlsli). World is absolute in the record and made relative here to the drawing
@@ -123,7 +135,11 @@ float2 SmoothSaturate(float2 value)
 	return value * value * (3 - 2 * value);
 }
 
+#	if defined(DCLF_PULLED)
+VS_OUTPUT DCLFShade(VS_INPUT input)
+#	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
 	VS_OUTPUT vsout;
 
@@ -282,6 +298,88 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
+
+#	if defined(DCLF_PULLED)
+// Drawcall Limit Fix's shadow views draw with plain indirect draws (ShadowViewPass): one per pipeline, which cannot bind a
+// vertex buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at
+// DCLFSequencesAddress + its instance's stride), and through it the draw's object word, material row and geometry. The draw
+// is indexed from the index pool (ShadowIndexPool), with no vertex offset, so the stage's vertex index is the geometry's own,
+// and the stage loads the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them
+// (VertexInput.cpp, BuildVertexElements).
+static const uint kDCLFSequenceStride = 92;
+
+uint64_t DCLFAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
+
+// A stream of the geometry: the vertex buffer (stream 0) or a dynamic shape's positions (stream 1).
+struct DCLFStream
+{
+	uint64_t address;
+	uint stride;
+};
+
+// The address of attribute a_attribute (BSGraphics::Vertex::Attribute) of vertex a_index: its stream as the layout flags it
+// (bit 44 + a in stream 0, else bit 54 + a), and its offset the layout's nibble times four, except the position's (0).
+uint64_t DCLFAttribute(uint a_attribute, uint a_index, DCLFStream a_first, DCLFStream a_second)
+{
+	const bool first = ((DCLFVertexLayout.y >> (12 + a_attribute)) & 1) != 0;
+	const uint offset = a_attribute == 0 ? 0 : ((DCLFVertexLayout.x >> (4 * a_attribute + 4)) & 0xF) * 4;
+	const uint64_t address = first ? a_first.address : a_second.address;
+	const uint stride = first ? a_first.stride : a_second.stride;
+	return address + uint64_t(a_index) * stride + offset;
+}
+
+float4 DCLFUnorm4(uint a_word) { return float4(a_word & 0xFF, (a_word >> 8) & 0xFF, (a_word >> 16) & 0xFF, a_word >> 24) / 255.0; }
+float2 DCLFHalf2(uint a_word) { return float2(f16tof32(a_word), f16tof32(a_word >> 16)); }
+
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	const uint64_t materialRow = DCLFAddress(rows.zw);
+
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+
+	VS_INPUT input;
+	input.PositionMS = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second)));
+#		if defined(TEXTURE)
+	input.TexCoord = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, index, first, second)));
+#		endif
+#		if defined(NORMALS)
+	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, index, first, second)));
+	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, index, first, second)));
+#		endif
+#		if defined(VC)
+	input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
+#		endif
+#		if defined(SKINNED)
+	const uint64_t skinning = DCLFAttribute(6, index, first, second);
+	const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
+	input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
+	input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+#		endif
+
+	// What the DCLF_BINDLESS build's statics hold, from this draw's object and material row.
+	World = float4x4(
+		DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.x),
+		DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
+		DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
+		float4(0, 0, 0, 1));
+	TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
+	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));
+
+	VS_OUTPUT vsout = DCLFShade(input);
+	// The pixel stage's: the diffuse's descriptor (the shadow material row's, kShadowRowDiffuseOffset) and the object word.
+	vsout.DCLFDraw = uint2(vk::RawBufferLoad<uint>(materialRow + 16), DCLFObjectWord);
+	return vsout;
+}
+#	endif
 #endif
 
 typedef VS_OUTPUT PS_INPUT;
@@ -302,7 +400,16 @@ SamplerState SampStencilSampler : register(s5);
 SamplerComparisonState SampFocusShadowMapSamplerComp : register(s6);
 SamplerState SampGrayscaleSampler : register(s7);
 
+#	if defined(DCLF_PULLED)
+// A pulled draw's diffuse, by the descriptor its vertex stage passes (DCLFDraw.x): the draw has no binding record of its own.
+Texture2D<float4> DCLFDiffuse(uint a_index)
+{
+	return ResourceDescriptorHeap[NonUniformResourceIndex(a_index)];
+}
+#		define TexBaseSampler DCLFDiffuse(input.DCLFDraw.x)
+#	else
 Texture2D<float4> TexBaseSampler : register(t0);
+#	endif
 Texture2D<float4> TexNormalSampler : register(t1);
 Texture2D<float4> TexDepthUtilitySampler : register(t2);
 Texture2DArray<float4> TexShadowMapSampler : register(t3);
@@ -360,7 +467,10 @@ float2 GetShadowPCFOffset(uint index)
 #	endif
 }
 
-#	if defined(DCLF_BINDLESS)
+#	if defined(DCLF_PULLED)
+// One pipeline draws every threshold, so the reference is the object's own (its word set by main, below).
+#		define AlphaTestRefRS (DCLFObjects[DCLFObjectIndex].AlphaTestRef)
+#	elif defined(DCLF_BINDLESS)
 // One pipeline draws every threshold, so the reference is the object's own.
 static float DCLFAlphaTestRef = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
 #		define AlphaTestRefRS DCLFAlphaTestRef
@@ -404,9 +514,23 @@ float SampleDualParaboloidShadowPCF(Texture2DArray<float4> tex, SamplerCompariso
 	return visibility / ShadowPCFSampleCount;
 }
 
+// Drawcall Limit Fix's depth-only draws of a technique without an alpha test: the stage has no output and no effect, so it is
+// compiled empty, so its pipeline tests depth before it shades and the empty stage is skipped (DrawPipelines::ShadowDiscards).
+// (The engine's build writes a constant colour to no target.) A TEXTURE technique's test below cannot discard here: its alpha
+// is 1 and the reference at most 1. Left in, it put every textured opaque caster on late depth testing.
+#	if defined(DCLF_BINDLESS) && (defined(RENDER_SHADOWMAP) || defined(RENDER_DEPTH)) && !defined(ALPHA_TEST) && \
+		!defined(ADDITIONAL_ALPHA_MASK) && !defined(RENDER_SHADOWMAP_PB) && !defined(RENDER_SHADOWMASK_ANY) && \
+		!defined(DEBUG_SHADOWSPLIT) && !defined(DEBUG_COLOR) && !defined(DEPTH_WRITE_DECALS) && !defined(STENCIL_ABOVE_WATER)
+void main(PS_INPUT input)
+{
+}
+#	else
 PS_OUTPUT main(PS_INPUT input)
 {
 	PS_OUTPUT psout;
+#	if defined(DCLF_PULLED)
+	DCLFObjectWord = input.DCLFDraw.y;  // what AlphaTestRefRS reads
+#	endif
 
 #	if defined(ADDITIONAL_ALPHA_MASK)
 	uint2 alphaMask = input.PositionCS.xy;
@@ -779,5 +903,6 @@ PS_OUTPUT main(PS_INPUT input)
 
 	return psout;
 }
+#	endif
 
 #endif

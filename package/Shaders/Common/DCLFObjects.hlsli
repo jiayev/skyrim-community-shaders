@@ -50,6 +50,24 @@ struct DCLFObjectRecord
 	float4 DCLFSunEntry;
 };
 
+#	if defined(DCLF_PULLED)
+// A shadow view's plain indirect draw (DrawPipelines.h, kShadowDrawPushSequences and after): pushed once per draw call, so
+// nothing in it is a draw's own. The draw's sequence (its first one's address here, indexed by the draw's instance) holds
+// its object word, its material row's address and its geometry's buffers, which the vertex stage reads (Utility.hlsl).
+cbuffer DCLFPushData : register(b190)
+{
+	uint2 DCLFSequencesAddress : packoffset(c0.x);
+	uint2 DCLFMaterialRowsAddress : packoffset(c0.z);
+	uint2 DCLFVertexLayout : packoffset(c1.x);
+};
+
+// The object word (below), set by the stage's main from the draw's sequence (the vertex stage) or its vertex stage's output
+// (the pixel stage) before anything reads it.
+static uint DCLFObjectWord;
+#		define DCLFObjectIndex (DCLFObjectWord & 0x03FFFFFFu)
+#		define DCLFLocalShadowMask ((DCLFObjectWord >> 26) & 0xFu)
+#		define DCLFSunMiss ((DCLFObjectWord & 0x80000000u) != 0)
+#	else
 // The indirect draw's push data (DrawPipelines.h, kDrawPushWords). The first four words are its rows' addresses (the
 // pipeline row's, then the material row's), which the pipeline layout consumes to resolve this draw's buffers and
 // descriptors; only the object word is read here.
@@ -66,6 +84,7 @@ cbuffer DCLFPushData : register(b190)
 static const uint DCLFObjectIndex = DCLFObjectWord & 0x03FFFFFFu;
 static const uint DCLFLocalShadowMask = (DCLFObjectWord >> 26) & 0xFu;
 static const bool DCLFSunMiss = (DCLFObjectWord & 0x80000000u) != 0;
+#	endif
 
 // The object rows, by the draw's object index. Read as a structured buffer: reading the row as a constant buffer at its
 // address (a per-draw push address) measured no faster on NVIDIA (dclf-architecture.md, "Object rows").

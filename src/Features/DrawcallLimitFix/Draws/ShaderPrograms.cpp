@@ -172,6 +172,10 @@ namespace DCLF
 			// reference, the emissive multiplier, and Light Limit Fix's room index and shadow bit mask.
 			request.defines.push_back({ L"DCLF_BINDLESS", L"1" });
 			request.defines.push_back({ L"DCLF_BINDLESS_DRAW", L"1" });
+			// The shadow views' Utility stages draw with plain indirect draws (ShadowViewPass) and fetch their own indices,
+			// vertices and per-draw words (Utility.hlsl).
+			if (a_sourceName != kSourcePath)
+				request.defines.push_back({ L"DCLF_PULLED", L"1" });
 			// The first few define sets, to reproduce builds with the DXC command line.
 			static std::atomic<std::uint32_t> logged = 0;
 			if (logged.fetch_add(1) < 4) {

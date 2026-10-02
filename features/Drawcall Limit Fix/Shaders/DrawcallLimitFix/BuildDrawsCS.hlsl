@@ -62,6 +62,10 @@ cbuffer BuildDrawsConstants : register(b0)
 	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
 	uint FadeRootsIndex;
 	uint FadeStatesIndex;
+	// A shadow view: RWByteAddressBuffer, its slot's bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
+	uint BucketCountsIndex;
+	// A shadow view: ByteAddressBuffer, each geometry slot's first index in the index pool (ShadowIndexPool), ~0 without one.
+	uint PoolFirstsIndex;
 }
 
 // FadeStateCS.hlsl's rows, as Records.h lays them out.
@@ -160,6 +164,9 @@ static const uint kShadowVolumeBytes = 224;
 static float4 FadeEye;
 // The depth segment: the tree height test's base and limit (kObjectHeightTest); the limit is +infinity when it is off.
 static float2 TreeHeight;
+// A shadow view: its bucket table, in bytes into the latch block (BuildDrawsLatch::bucketTableOffset): the view's map row names
+// a bucket for each key slot, and the table gives each bucket its range of the slot's sequences (first, capacity). 0 elsewhere.
+static uint BucketTableOffset;
 
 // The object record's rows the culling reads (LightingConstants.h, BindlessObject): the fade node's centre, the world bound,
 // the sun entry's sphere.
@@ -197,6 +204,7 @@ void LoadLatch()
 	SunCascadeOffset = sunRegions.x;
 	SunEntryOffset = sunRegions.y;
 	LocalShadowOffset = sunRegions.z;
+	BucketTableOffset = latch.Load(LatchOffset + 236);
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local
@@ -281,7 +289,7 @@ bool OutsideSunEntry(float4 a_entry)
 	return true;
 }
 
-// The draw's pipeline: the input's own, or its key slot's through the view's row of the pipeline map.
+// The draw's pipeline: the input's own, or - a shadow view - its key slot's bucket through the view's row of the map.
 // kNoPipeline when the row has none, which the CPU never lets an input reach; the draw is then dropped
 // rather than executed with an index outside the set.
 static const uint kNoPipeline = 0xFFFFFFFFu;
@@ -441,6 +449,18 @@ void StoreSequence(RWByteAddressBuffer sequences, uint slot, uint pipeline, uint
 	sequences.Store4(base + 56, uint4(indexBuffer.xyz, kIndexFormatR16));
 	sequences.Store4(base + 72, uint4(indexCount, 1, firstIndex, 0));
 	sequences.Store(base + 88, 0);
+}
+
+// A shadow view's sequence: StoreSequence's, its draw a plain indexed draw (ShadowViewPass) from the index pool - its first
+// index the pool's copy of its geometry's (a_poolFirst, ~0 for a geometry without one: no indices), no vertex offset, so the
+// vertex stage's index is the geometry's own, which it fetches the vertex of - and the bucket slot as its first instance.
+void StoreShadowSequence(RWByteAddressBuffer sequences, uint slot, uint instance, uint4 rows, uint objectIndex, uint4 vertexBuffer,
+	uint4 streamBuffer, uint4 indexBuffer, uint indexCount, uint firstIndex, uint a_poolFirst)
+{
+	StoreSequence(sequences, slot, 0, rows, objectIndex, vertexBuffer, streamBuffer, indexBuffer, indexCount, firstIndex);
+	const bool pooled = a_poolFirst != 0xFFFFFFFFu;
+	sequences.Store4(slot * kSequenceStride + 72, uint4(pooled ? indexCount : 0, 1, pooled ? a_poolFirst + firstIndex : 0, 0));
+	sequences.Store(slot * kSequenceStride + 88, instance);
 }
 
 // A 64-bit address: a table's base plus a 32-bit offset, with the carry.
@@ -790,11 +810,18 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// visible and its visibility has been published.
 	if (!drawable)
 		return;
-	const uint pipeline = DrawPipeline(input.x);
+	const uint pipeline = DrawPipeline(input.x);  // a shadow view's: the draw's bucket
 	if (pipeline == kNoPipeline)
 		return;
 	// Phase 2's sequences are few and draw from their own range; they are not sorted.
-	const bool sorted = SortCountsIndex != 0 && phase != kPhaseTwo;
+	const bool secondRange = phase == kPhaseTwo;
+	const bool sorted = SortCountsIndex != 0 && !secondRange;
+	// A shadow view's bucket: its range of the slot's sequences.
+	uint2 bucket = uint2(0, 0);
+	if (BucketTableOffset != 0) {
+		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+		bucket = latch.Load2(BucketTableOffset + pipeline * 8);
+	}
 	if (sorted && pipeline >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
 
@@ -821,25 +848,40 @@ bool Occluded(float3 boundCentre, float boundRadius)
 			// Phase 2 appends into a reserved part of the same buffer, with a counter of its own, because its
 			// draw is recorded separately and the offset a recorded draw starts at has to be known on the CPU.
 			// The range holds every draw the epoch can produce; the guard keeps a phase inside its own range regardless.
-			uint slot;
-			count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
-			if (slot >= PhaseTwoBase)
-				return;
 			const uint4 secondStream = streamIndex != kNoStream ? stream : vertexBuffer;
-			if (sorted) {
-				RWByteAddressBuffer sortCounts = ResourceDescriptorHeap[SortCountsIndex];
-				RWByteAddressBuffer staging = ResourceDescriptorHeap[SortStagingIndex];
-				RWByteAddressBuffer ranks = ResourceDescriptorHeap[SortRanksIndex];
-				// The scatter reads the key back from the rank word (the key in the top 12 bits, the rank in the low 20: a rank
-				// is under PhaseTwoBase, which IndirectDraws keeps within them), so that the key need not be a field of the sequence.
-				const uint key = pipeline;
-				uint rank;
-				sortCounts.InterlockedAdd(key * 4, 1, rank);
-				ranks.Store(slot * 4, (key << kSortRankBits) | rank);
-				StoreSequence(staging, slot, pipeline, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+			uint slot;
+			if (BucketTableOffset != 0) {
+				// A shadow view: the bucket's next slot, counted in its own word. One plain indexed indirect draw with the bucket's
+				// pipeline executes the range (ShadowViewPass); the slot is the draw's instance, by which the vertex stage finds the
+				// sequence (Utility.hlsl, DCLF_PULLED). The table sizes every bucket for all the draws its key slots can produce.
+				RWByteAddressBuffer bucketCounts = ResourceDescriptorHeap[BucketCountsIndex];
+				bucketCounts.InterlockedAdd(pipeline * 4, 1, slot);
+				if (slot < bucket.y) {
+					uint drawn;
+					count.InterlockedAdd(kCountDrawn, 1, drawn);
+					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
+					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
+						firstIndex, poolFirsts.Load(geometryIndex * 4));
+				}
 			} else {
-				StoreSequence(sequences, slot + (phase == kPhaseTwo ? PhaseTwoBase : 0), pipeline, rows, objectWord, vertexBuffer,
-					secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				count.InterlockedAdd(secondRange ? kCountDrawnPhaseTwo : kCountDrawn, 1, slot);
+				if (slot >= PhaseTwoBase)
+					return;
+				if (sorted) {
+					RWByteAddressBuffer sortCounts = ResourceDescriptorHeap[SortCountsIndex];
+					RWByteAddressBuffer staging = ResourceDescriptorHeap[SortStagingIndex];
+					RWByteAddressBuffer ranks = ResourceDescriptorHeap[SortRanksIndex];
+					// The scatter reads the key back from the rank word (the key in the top 12 bits, the rank in the low 20: a rank
+					// is under PhaseTwoBase, which IndirectDraws keeps within them), so that the key need not be a field of the sequence.
+					const uint key = pipeline;
+					uint rank;
+					sortCounts.InterlockedAdd(key * 4, 1, rank);
+					ranks.Store(slot * 4, (key << kSortRankBits) | rank);
+					StoreSequence(staging, slot, pipeline, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				} else {
+					StoreSequence(sequences, slot + (secondRange ? PhaseTwoBase : 0), pipeline, rows, objectWord, vertexBuffer,
+						secondStream, indexBuffer, indexBuffer.w, firstIndex);
+				}
 			}
 		}
 		if ((partitions >> (partition + 1)) == 0)

@@ -6737,3 +6737,196 @@ build is a warning, once, when the request that starts it is made, with what is 
     techniques with DCLF's mode bits (`0xC000`, `0x14000`), which no Community Shaders task compiles, all served from the
     disk cache; 210 Lighting and 224 shadow pipelines, every one. Many Lighting keys differ from an existing one only in
     the pass descriptor's shadow bits (`0x2040`, ShadowDir and DefShadow).
+
+## The GPU-bound gap: shadow views run with late Z (2026-10-02)
+
+At a save where the frame is GPU-bound (Save5, a Riverwood exterior, 2560 x 1440 internal under DLSS Quality at 4K),
+DCLF made the GPU frame slower: 12.7 ms against 11.75 ms native (`CS_GPU_EVENT_TIMERS=300` across a live toggle).
+
+**Where, by segment** (nvperf, `CS_NVPERF_RANGES` over DCLF's graph passes and the engine's events; ms per frame):
+
+| Segment | Native | DCLF (its passes and the engine's residual draws) | Gap |
+| --- | --- | --- | --- |
+| Shadow maps (sun cascades, volumetric copy, point light) | 1.58 | 2.14 | +0.56 |
+| Depth (Z-prepass) | 0.66 | about 0.95 | +0.29 |
+| World (main pass) | 4.36 | 4.37 | 0 |
+| Skylighting occlusion | 0.09 | 0.12 | +0.03 |
+
+In the depth segment the draws match (0.73 against 0.66 ms). The extra is the compute around them: HZB 0.10, phase 2
+0.04, fade states 0.03, builds and sorts 0.05. Every upkeep compute pass together is about 0.35 ms, each 0.006-0.04 ms,
+and the range profiler inflates small ranges.
+
+**The shadow views shade every fragment before testing it.** The same 2.31 M input primitives cost the engine's mode-0xE
+accumulator 1.19 ms and DCLF's cascades 1.66 ms. DCLF launched 6.05 M pixel-shader warps against 4.2 M. The early-Z
+counters (`prop__earlyz_input_samples`, `prop__latez_*`) explain it: the engine's casters send 51 M samples through
+early Z, and DCLF's send none, in every shadow view. DCLF's Z-prepass gets little early Z too (3.8 M samples against the
+engine's 14.5 M). The main colour pass, which writes no depth, gets it normally.
+
+Ruled out, each with a run: depth bias (none at all: still late Z), cull mode (the engine honours `kTwoSided` in shadow
+maps as DCLF does: two-sided passes draw with cull 0, the rest with cull 1, about 28% two-sided), a pixel shader that
+discards or exports depth (DCLF's opaque cascade technique `0xC000` has neither), and the attachment layout (the
+Z-prepass imports its depth the same way).
+
+**Cause.** An indirect execution set holds both kinds of pipeline: opaque casters, and alpha-tested ones whose pixel
+stage discards while depth writes are on. With device-generated commands, the driver puts the whole set on late Z.
+Compiling every DCLF shadow pixel stage empty (a temporary experiment, so no pipeline in the set discards) gave early Z
+in every view (92 M samples in cascade 0, 52 M in cascade 1), 0 pixel-shader warps (an empty stage under early Z is
+skipped), and 1.39 ms for the views against 1.94 ms. With no pixel stage at all (also an experiment: alpha-tested
+casters then shadow solid) the views took 0.79 ms. An indirect execution set needs one stage layout, so a pipeline
+cannot simply drop its pixel stage: `UpdateIndirectPipelineSet` rejects it.
+
+**The split (done; its two sets and second range were replaced by plain draws, below, which keep its class order).** Each
+shadow view drew its casters in two calls, each with its own indirect execution set:
+
+-   **Classes.** `DrawPipelines::BuildShadow` scans the pixel SPIR-V (`FragmentDefersDepth`: `OpKill`,
+    `OpTerminateInvocation`, `OpDemoteToHelperInvocation`, a depth or sample-mask export, image writes, atomics). A
+    pipeline that can defer the depth test is in the discarding class (`kShadowDiscards`), the rest in the depth-only
+    class (`kShadowDepthOnly`). `ShadowSetVersion` holds a set and a signature per class over one index space: a
+    pipeline is written only into its class's set, at its own index (`ApplyClassToSet`), and a set is created with the
+    first pipeline of its class.
+-   **Routing.** `UseShadowMapRow` writes a discarding pipeline's map entry with `kShadowMapSecondRange` (bit 30).
+    BuildDrawsCS sends such a draw to the view's second range of sequences (from `PhaseTwoBase`, the slot's
+    `sequenceDraws`), counted in the phase-2 word, as phase 2 does for the depth segment. A slot's sequence buffer holds
+    both ranges.
+-   **Recording.** `ShadowViewPass` preprocesses and executes, per view, the depth-only call and then the discarding
+    one. A class with no pipeline in the set yet has no call. The culling statistics add the two count words.
+-   **The empty stage.** Utility.hlsl compiles DCLF's depth-only techniques without an alpha test (`RENDER_SHADOWMAP` or
+    `RENDER_DEPTH`, no `ALPHA_TEST`, `ADDITIONAL_ALPHA_MASK` or `RENDER_SHADOWMAP_PB`) with an empty pixel `main`.
+    `TEXTURE` is allowed: its test compares an alpha of 1 with a reference of at most 1, so it never discards, but its
+    `discard` instruction alone put every textured opaque caster (`0xC01B` and the like) in the discarding class. Before
+    that, 180 of 184 shadow pipelines were discarding; after it, 69 are depth-only. The point lights' paraboloid techniques
+    (`RENDER_SHADOWMAP_PB`) discard by design and stay late-Z.
+
+**Result**, the same save, GPU event timers over the frames after 3000 (the passes' SPIR-V and pipelines compile during
+the first frames of gameplay, so a measurement starts after them), two runs each:
+
+| | GPU frame | Shadow views |
+| --- | --- | --- |
+| No split | 13.13 / 13.39 ms | 2.67 / 2.90 ms |
+| Split | 12.87 / 12.86 ms | 2.24 / 2.25 ms |
+| Native, same frames (live toggle) | about 11.85 ms | 2.01 ms |
+
+nvperf at the same frames: the views' early Z went from 0 to 47 M samples and their pixel-shader warps from 7.7 M to
+5.9 M, the engine's figures being 53 M and 6.2 M. The cascades' draws went from 2.2 to 1.5 ms. The shadow maps and the
+image match native across a live toggle. Cascade 0's mean depth steps by about 0.0035 at a toggle, with or without the
+split: a small difference that predates it.
+
+**What is left in the shadow views: device-generated commands.** With the same fragment work as the engine, the views
+still take about 0.5 ms more than its shadow maps, and the front end issues 4.3 times the operations per draw (about 42
+against 9). nvperf's per-call ranges put the preprocesses at 0.2-0.9 ms a frame, mostly cascade 1's two calls, but short
+ranges vary a lot between runs under the range profiler's drains. Tried and ruled out, each against a run at the same
+frames: implicit preprocessing (2.75 against 2.63 ms), sorting the inputs by pipeline (front-end operations 145 k to
+106 k, time unchanged), and a quarter of the max count (preprocess time unchanged).
+
+### The same split for the Z-prepass: measured, not kept
+
+The Z-prepass's late Z looked like the same cause: 4.1 M early-Z samples against 10.1 M late, 8.4 M of them rejected
+after shading. The split was built the same way:
+
+-   the depth variants classed by `FragmentDefersDepth` (49 of 99 cannot discard; DXC compiles `discard` to
+    `OpDemoteToHelperInvocation`);
+-   a set of the opaque ones;
+-   a per-pipeline class bitset in the depth segment's latch;
+-   phase 1's alpha-tested draws in a third range of the sequence buffer, with their own count word;
+-   two calls.
+
+Per call (nvperf, Save5, frames 3300+):
+
+| Call | Draws | Early-Z samples | Late-Z samples | PS warps | Time |
+| --- | --- | --- | --- | --- | --- |
+| Opaque depth variants | 1,277 | 3.68 M | 0.02 M | 0 | 0.15 ms |
+| Alpha-tested depth variants | 753 | 0 | 10.68 M | 433 K | 0.31 ms |
+
+The opaque draws were already on early Z: the baseline's 4.1 M early samples are theirs. Unlike the shadow views, the
+depth pass's mixed set does not put every draw on late Z. The late samples are the alpha-tested foliage's, which must be
+shaded before its depth can be written. The engine's own alpha-tested depth draws behave the same way: 4.6 M of their 6.3 M
+late samples are rejected after shading. So the split only added a generated-commands call (0.46-0.47 ms against 0.35),
+and it was reverted.
+
+Why the shadow views behave differently is not known. Their pipelines carry a depth bias and the views' rasterizer
+states; the depth pass's do not.
+
+### Plain indirect draws for the shadow views (done)
+
+The shadow views (and Skylighting's occlusion map, which uses the same passes) no longer use device-generated commands.
+Each view records one plain `vkCmdDrawIndexedIndirectCount` per pipeline it uses; the vertex stage fetches its own vertices
+and per-draw words.
+
+**The gate.** Before building this, the views were run twice with their generated commands intact but nothing to draw:
+
+| Shadow views, Save5, frames 3000+ | Time |
+| --- | --- |
+| As drawn (the split) | 2.25 ms |
+| Every sequence with `instanceCount = 0` (commands processed, no geometry) | 1.00 ms |
+| No sequences at all (count 0) | 0.63 ms |
+
+So about 1 ms of the views was the generated commands, their preprocesses and the passes' setup, against the engine's
+1.58 ms for its whole sun shadow maps.
+
+**How it works.**
+
+-   **Buckets.** A view rasterizer state's map row now names, per key slot, a *bucket*: the distinct pipelines the row uses,
+    the depth-only class first (`DrawPipelines::ShadowDiscards`), each in index order (`ShadowEpochs.cpp`, `BucketsOfRow`).
+    A plain call's argument offset is fixed on the CPU, so each view sizes its buckets (`SizeShadowBuckets`) from
+    `ShadowPayload::keySlotDraws`, the draws each key slot's inputs can produce, counted in the same walk as `modeDraws`.
+    A bucket keeps its capacity while its draws fit and grows to a power of two past it, so the recorded calls change only
+    when one grows (the slot's sequence buffer holds twice the scene's draw bound, as for the split). The view's bucket
+    table (first, capacity) is in the shadow latch (`ShadowLatchLayout::BucketOffset`, `BuildDrawsLatch::bucketTableOffset`).
+-   **BuildDrawsCS.** A shadow draw takes the next slot of its bucket from the slot's bucket counts
+    (`ShadowResources::bucketCounts`, a word per bucket, zeroed by each commit) and writes its sequence there
+    (`StoreShadowSequence`): the usual `DrawSequence`, whose tail is an indexed draw from the index pool, with the bucket
+    slot as its first instance.
+-   **The index pool** (`ShadowIndexPool`). A plain draw cannot bind an index buffer of its own, so every geometry slot's
+    index buffer is copied into one DCLF buffer, which each view binds once. The shadow commit follows the scene's
+    geometry log with a cursor of its own (`UpdateIndexPool`): a slot the log names lets go of its range and takes its
+    buffer's, a buffer with no range yet gets one (ranges are shared by address, freed with their last slot, and reused
+    first-fit) and a copy. `IndexPoolCS` runs the copies, a group each, from the buffers' device addresses, ahead of the
+    epoch's draws; its dispatch is in the latch. A full pool doubles and lays every range out again. The slots' first
+    indices are a buffer BuildDrawsCS reads. Save5 fits the initial 16 MB.
+-   **The vertex stage** (`Utility.hlsl`, `DCLF_PULLED`, defined for DCLF's Utility builds). Its draw's sequence is at the
+    call's first sequence (pushed per call in the draw push range, `kShadowDrawPushSequences`) plus its instance. From it
+    come the object word, the material row (`TexcoordOffset`) and the geometry's vertex buffer and second stream. The
+    vertex index is the geometry's own (the pool draw has no vertex offset); the attributes are loaded at it and decoded as
+    the engine's input layout for the pipeline's vertex layout has them (`VertexInput.cpp`; the layout is pushed per call).
+    The pixel stage gets the diffuse's descriptor and the object word as `nointerpolation` outputs, and samples the diffuse
+    through `ResourceDescriptorHeap`.
+-   **Recording** (`ShadowViewPass`). Per view: begin the pass, push the view's words, bind the pool, then per bucket with
+    a capacity bind its pipeline, push its words and record the draw over its range with its count word. No preprocess.
+    The shadow pipelines are no longer in execution sets; `ShadowIndirectState` holds them by index (with their vertex
+    layouts and classes), and the published version keeps them alive.
+
+**Result**, Save5, GPU event timers over the frames after 3000:
+
+| | GPU frame | Shadow views |
+| --- | --- | --- |
+| The split (DGC) | 12.83 ms | 2.30 ms |
+| Plain draws, the vertex stage reading indices itself (no pool) | 12.52 ms | 2.15 ms |
+| Plain draws with the index pool | 12.48 / 12.49 ms | 1.97 / 1.97 ms |
+| Native, same session (live toggle) | 11.94 ms | 1.98 ms (sun 1.56, point lights 0.42) |
+
+The split's row here is the same timer read the same way as the others (`gt.py`, every block after the first three); the
+table above gives 2.24-2.25 ms for the later blocks alone.
+
+nvperf (`cs.dclf.shadow.view`, frames 3300+): front-end operations 106 k (DGC) to 22 k for 3,354 draws, the engine's
+ratio; vertex-shader warps 233 k without the pool (an invocation per index) to 108 k with it; pixel-shader warps and early Z
+unchanged (5.95 M, 45 M samples). The shadow maps' means match the DGC path's to about 0.0005 and native's across a live
+toggle, the image is unchanged, and a run with the validation layers (`VK_LOADER_LAYERS_ENABLE=*validation`) reports
+nothing from DCLF: its only messages are Streamline's (a barrier to an undefined layout at startup, and swapchain
+semaphore reuse in the present path).
+
+The shadow views are at parity with the engine's shadow maps. The rest of the GPU frame gap (about 0.55 ms at Save5) is
+elsewhere.
+
+### Next options
+
+1.  **Upkeep compute on the async queue** (fade states, tree wind, builds, sorts; the passes already name their queue
+    with `PreferQueue`): at most about 0.2-0.3 ms, less the cross-queue waits.
+2.  **The HZB and phase 2** (0.14 ms) pay off only when occlusion culling removes more than it costs, which at a
+    GPU-bound exterior is worth measuring with `CS_DCLF_CULL=frustum`.
+3.  **Plain draws for the Z-prepass and the colour pass**, if their generated commands cost as the shadow views' did
+    (the same gate measures it). The two test EQUAL against each other, so they would have to move together, and the
+    colour pass binds far more per draw (the rows' blocks and textures through the layout's indirect ranges).
+
+Tools for this: the per-view nvperf ranges (a sub-range per view inside `cs.dclf.shadow.view`, selected by exact name,
+since a prefix that also matches the pass takes the pass instead) were a temporary change; the engine's own events
+are selectable by name (`BSShaderAccumulator::FinishAccumulatingDispatch [14]*`).

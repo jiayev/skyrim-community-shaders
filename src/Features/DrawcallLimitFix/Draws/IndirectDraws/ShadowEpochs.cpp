@@ -24,12 +24,291 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Points a_latch at its rasterizer state's row of the pipeline map, and writes the row into the frame slot's
-		 * latch block when a_write (once per state and frame). The shader reads the row at an offset into the whole latch
-		 * block, so the offset carries the frame slot's base: a slot-relative one read slot 0's rows, which async epochs never
-		 * write (every draw got pipeline 0).
+		 * @brief A view rasterizer state's buckets (ShadowBucket): the distinct pipelines its map row names, the depth-only class's
+		 * first (DrawPipelines::ShadowDiscards) - a view draws them before the alpha-tested casters, whose fragments then fail
+		 * the depth test sooner - each class in index order; and each key slot's bucket. A pipeline the epoch's state does not
+		 * hold yet (published after it was taken) has no bucket: its key slots draw nothing this frame, as before its index.
 		 */
-		void UseShadowMapRow(ShadowResources& a_resources, const Lookups& a_lookups, std::uint32_t a_latchSlot, std::uint32_t a_rasterState, bool a_write,
+		struct RowBuckets
+		{
+			std::vector<std::uint32_t> pipelines;     // by bucket
+			std::vector<std::uint32_t> bucketOfSlot;  // by key slot: its bucket, or Lookups::kNone
+		};
+
+		RowBuckets BucketsOfRow(std::span<const std::uint32_t> a_row, const ShadowIndirectState& a_indirect)
+		{
+			RowBuckets out;
+			const auto published = static_cast<std::uint32_t>(a_indirect.pipelines.size());
+			for (const auto pipeline : a_row)
+				if (pipeline != Lookups::kNone && pipeline < published)
+					out.pipelines.push_back(pipeline);
+			std::sort(out.pipelines.begin(), out.pipelines.end());
+			out.pipelines.erase(std::unique(out.pipelines.begin(), out.pipelines.end()), out.pipelines.end());
+			std::stable_partition(out.pipelines.begin(), out.pipelines.end(), [&](std::uint32_t a_pipeline) { return a_indirect.discards[a_pipeline] == 0; });
+			ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> bucketOf;
+			for (std::uint32_t b = 0; b < out.pipelines.size(); ++b)
+				bucketOf.emplace(out.pipelines[b], b);
+			out.bucketOfSlot.assign(a_row.size(), Lookups::kNone);
+			for (std::size_t k = 0; k < a_row.size(); ++k)
+				if (const auto it = bucketOf.find(a_row[k]); it != bucketOf.end())
+					out.bucketOfSlot[k] = it->second;
+			return out;
+		}
+
+		/**
+		 * @brief A view's buckets: each sized for every draw its key slots' inputs can produce (ShadowPayload::keySlotDraws), and
+		 * laid out back to back in the slot's sequences. A bucket keeps the capacity its slot's previous view gave it while the
+		 * draws fit, and grows to a power of two past it, so that the recorded draws (their offsets and max counts) change only
+		 * when one grows. The slot holds twice the scene's draw bound (ReserveShadowSequences); past that, the exact sizes,
+		 * which add up to the mode's draws, fit.
+		 */
+		std::vector<ShadowBucket> SizeShadowBuckets(const RowBuckets& a_row, std::span<const std::uint32_t> a_slotDraws, const ShadowFrameView* a_previous,
+			std::uint64_t a_slotSequences)
+		{
+			std::vector<std::uint64_t> need(a_row.pipelines.size(), 0);
+			for (std::size_t k = 0; k < a_row.bucketOfSlot.size() && k < a_slotDraws.size(); ++k)
+				if (a_row.bucketOfSlot[k] != Lookups::kNone)
+					need[a_row.bucketOfSlot[k]] += a_slotDraws[k];
+			std::vector<ShadowBucket> out(need.size());
+			const bool samePipelines = a_previous && a_previous->buckets.size() == out.size() &&
+			                           std::equal(a_previous->buckets.begin(), a_previous->buckets.end(), a_row.pipelines.begin(),
+										   [](const ShadowBucket& a_bucket, std::uint32_t a_pipeline) { return a_bucket.pipeline == a_pipeline; });
+			std::uint64_t total = 0, exact = 0;
+			for (std::size_t b = 0; b < out.size(); ++b) {
+				const std::uint64_t previous = samePipelines ? a_previous->buckets[b].capacity : 0;
+				const std::uint64_t capacity = need[b] <= previous ? previous : std::bit_ceil(need[b]);
+				out[b].pipeline = a_row.pipelines[b];
+				out[b].capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX));
+				total += out[b].capacity;
+				exact += need[b];
+			}
+			if (exact > a_slotSequences)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: a shadow view's {} draws past its slot's {} sequences (the scene's draw bound missed them)",
+					exact, a_slotSequences));
+			if (total > a_slotSequences)
+				for (std::size_t b = 0; b < out.size(); ++b)
+					out[b].capacity = static_cast<std::uint32_t>(need[b]);
+			std::uint32_t first = 0;
+			for (auto& bucket : out) {
+				bucket.first = first;
+				first += bucket.capacity;
+			}
+			return out;
+		}
+
+		/** @brief Writes a view's bucket table into its slot's region of the frame slot's latch, and points a_latch at it. */
+		void WriteBucketTable(ShadowResources& a_resources, std::uint32_t a_latchSlot, std::uint32_t a_slot, std::span<const ShadowBucket> a_buckets,
+			BuildDrawsLatch& a_latch)
+		{
+			const auto& layout = a_resources.latchLayout;
+			// A view has at most a bucket per key slot, and the layout a table's worth per key slot (ReserveShadowLatch).
+			if (a_buckets.size() > layout.keySlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow buckets past the latch's {} key slots", a_buckets.size(), layout.keySlots));
+			std::vector<std::uint32_t> table;
+			table.reserve(a_buckets.size() * 2);
+			for (const auto& bucket : a_buckets) {
+				table.push_back(bucket.first);
+				table.push_back(bucket.capacity);
+			}
+			const std::uint32_t offset = layout.BucketOffset(a_slot);
+			if (!table.empty())
+				a_resources.latch->Write(a_latchSlot, offset, std::as_bytes(std::span(table)));
+			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + offset;
+		}
+
+		/**
+		 * @brief Brings the index pool (ShadowIndexPool) up to the tables: the slots the geometry log names since it last read it
+		 * (every slot when it cannot read on) let go of their ranges and take their buffers' ranges, a buffer with no range yet
+		 * getting one and a copy. The commit uploads the slots' first indices and the copies, and writes the copies' dispatch into
+		 * a_latchSlot's region of the latch; the epoch's IndexPoolPass runs them before the views draw.
+		 */
+		void UpdateIndexPool(ShadowResources& a_resources, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_latchSlot,
+			CommitUploads& a_uploads)
+		{
+			auto& p = *a_resources.pool;
+			const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
+			std::vector<std::array<std::uint32_t, 4>> copies;
+			std::vector<std::uint32_t> changed;
+			bool allFirsts = false;
+			auto release = [&](std::uint32_t a_slot) {
+				const std::uint64_t address = p.slotAddress[a_slot];
+				p.slotAddress[a_slot] = 0;
+				p.slotFirst[a_slot] = ShadowIndexPool::kNoRange;
+				if (!address)
+					return;
+				const auto it = p.ranges.find(address);
+				if (it == p.ranges.end() || --it->second.refs)
+					return;
+				// Back on the free list at once: this frame's copies are ordered after every earlier read of the pool (the
+				// graph's barrier between the views' index reads and the copy's writes).
+				auto [at, inserted] = p.free.emplace(it->second.first, it->second.count);
+				if (auto next = std::next(at); next != p.free.end() && at->first + at->second == next->first) {
+					at->second += next->second;
+					p.free.erase(next);
+				}
+				if (at != p.free.begin()) {
+					if (auto previous = std::prev(at); previous->first + previous->second == at->first) {
+						previous->second += at->second;
+						p.free.erase(at);
+					}
+				}
+				p.indicesHeld -= it->second.count;
+				p.ranges.erase(it);
+			};
+			auto allocate = [&](std::uint32_t a_count) -> std::uint32_t {
+				for (auto it = p.free.begin(); it != p.free.end(); ++it) {
+					if (it->second < a_count)
+						continue;
+					const std::uint32_t first = it->first, rest = it->second - a_count;
+					p.free.erase(it);
+					if (rest)
+						p.free.emplace(first + a_count, rest);
+					return first;
+				}
+				if (std::uint64_t(p.end) + a_count > p.capacity)
+					return ShadowIndexPool::kNoRange;
+				const std::uint32_t first = p.end;
+				p.end += a_count;
+				return first;
+			};
+			auto copyOf = [&](std::uint64_t a_address, const ShadowIndexPool::Range& a_range, std::uint64_t a_bytes) {
+				copies.push_back({ static_cast<std::uint32_t>(a_address), static_cast<std::uint32_t>(a_address >> 32), a_range.first,
+					static_cast<std::uint32_t>((a_bytes + 3) / 4) });
+			};
+			// A full pool: twice what it must hold, every range laid out again from the start and copied again (a new backing,
+			// so frames in flight keep reading the old one).
+			auto grow = [&](std::uint32_t a_more) {
+				std::uint64_t needed = std::uint64_t(p.indicesHeld) + a_more;
+				std::uint64_t capacity = std::max<std::uint64_t>(p.capacity, 2);
+				while (capacity < needed * 2)
+					capacity *= 2;
+				logger::info("[DCLF] shadow index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
+				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
+				p.indices->ResizeStructured(p.capacity / 2);
+				++p.layout;
+				p.free.clear();
+				p.end = 0;
+				copies.clear();
+				ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> moved;
+				for (auto& [address, range] : p.ranges) {
+					range.first = p.end;
+					p.end += range.count;
+					moved.emplace(address, range.first);
+				}
+				for (std::uint32_t g = 0; g < p.slotAddress.size(); ++g) {
+					if (const auto it = moved.find(p.slotAddress[g]); it != moved.end())
+						p.slotFirst[g] = it->second;
+				}
+				for (const auto& [address, range] : p.ranges) {
+					// The bytes the range was given for: its count covers them (an even number of 2-byte indices).
+					copyOf(address, range, std::uint64_t(range.count) * 2);
+				}
+				allFirsts = true;
+			};
+			auto acquire = [&](std::uint32_t a_slot) {
+				const auto& geometry = a_tables.geometries[a_slot];
+				if (!geometry.indexAddress || !geometry.indexBytes)
+					return;
+				auto it = p.ranges.find(geometry.indexAddress);
+				if (it == p.ranges.end()) {
+					const std::uint32_t indices = static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
+					std::uint32_t first = allocate(indices);
+					if (first == ShadowIndexPool::kNoRange) {
+						grow(indices);
+						first = allocate(indices);
+					}
+					it = p.ranges.emplace(geometry.indexAddress, ShadowIndexPool::Range{ first, indices, 0 }).first;
+					p.indicesHeld += indices;
+					copyOf(geometry.indexAddress, it->second, geometry.indexBytes);
+				}
+				++it->second.refs;
+				p.slotAddress[a_slot] = geometry.indexAddress;
+				p.slotFirst[a_slot] = it->second.first;
+			};
+
+			if (!p.cursor.Continues(a_tables.geometryLog, a_generation) || p.slotAddress.size() > count) {
+				// Every slot again, from an empty pool.
+				p.ranges.clear();
+				p.free.clear();
+				p.end = 0;
+				p.indicesHeld = 0;
+				p.slotAddress.assign(count, 0);
+				p.slotFirst.assign(count, ShadowIndexPool::kNoRange);
+				for (std::uint32_t g = 0; g < count; ++g)
+					acquire(g);
+				p.cursor.Restart(a_generation);
+				allFirsts = true;
+			} else {
+				const auto first = static_cast<std::uint32_t>(p.slotAddress.size());
+				p.slotAddress.resize(count, 0);
+				p.slotFirst.resize(count, ShadowIndexPool::kNoRange);
+				for (std::uint32_t g = first; g < count; ++g) {
+					acquire(g);
+					changed.push_back(g);
+				}
+				for (const std::uint32_t g : p.cursor.Unread(a_tables.geometryLog)) {
+					if (g >= count || g >= first)
+						continue;
+					release(g);
+					acquire(g);
+					changed.push_back(g);
+				}
+			}
+			p.cursor.Advance(a_tables.geometryLog);
+
+			// The slots' first indices: every one into a new backing, else the slots changed.
+			if (count > p.firstsCapacity) {
+				while (p.firstsCapacity < count)
+					p.firstsCapacity *= 2;
+				p.firsts->ResizeStructured(p.firstsCapacity);
+				++p.layout;
+				allFirsts = true;
+			}
+			if (allFirsts) {
+				if (count)
+					a_uploads(p.firsts, p.slotFirst.data(), std::size_t(count) * sizeof(std::uint32_t), 0);
+			} else {
+				std::sort(changed.begin(), changed.end());
+				changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
+				for (std::size_t i = 0; i < changed.size();) {
+					std::size_t j = i + 1;
+					while (j < changed.size() && changed[j] == changed[j - 1] + 1)
+						++j;
+					a_uploads(p.firsts, &p.slotFirst[changed[i]], (j - i) * sizeof(std::uint32_t), std::uint64_t(changed[i]) * sizeof(std::uint32_t));
+					i = j;
+				}
+			}
+			// The copies, and their dispatch.
+			const auto copyCount = static_cast<std::uint32_t>(copies.size());
+			if (copyCount > p.copiesCapacity) {
+				while (p.copiesCapacity < copyCount)
+					p.copiesCapacity *= 2;
+				p.copies->ResizeStructured(p.copiesCapacity);
+				++p.layout;
+			}
+			if (copyCount)
+				a_uploads(p.copies, copies.data(), copies.size() * sizeof(copies[0]), 0);
+			const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
+			a_resources.latch->Write(a_latchSlot, a_resources.latchLayout.PoolOffset(), std::as_bytes(std::span(dispatch)));
+		}
+
+		/** @brief The previous shape's view of a slot, if it had one. */
+		const ShadowFrameView* PreviousView(const std::shared_ptr<const ShadowFrame>& a_previous, std::uint32_t a_slot)
+		{
+			if (a_previous)
+				for (const auto& previous : a_previous->views)
+					if (previous.slot == a_slot)
+						return &previous;
+			return nullptr;
+		}
+
+		/**
+		 * @brief Points a_latch at its rasterizer state's row of the pipeline map, and writes the row into the frame slot's
+		 * latch block when a_write (once per state and frame): each key slot's bucket (RowBuckets). The shader reads the row at
+		 * an offset into the whole latch block, so the offset carries the frame slot's base: a slot-relative one read slot 0's
+		 * rows, which async epochs never write (every draw got bucket 0).
+		 */
+		void UseShadowMapRow(ShadowResources& a_resources, const RowBuckets& a_buckets, std::uint32_t a_latchSlot, std::uint32_t a_rasterState, bool a_write,
 			BuildDrawsLatch& a_latch)
 		{
 			const auto& layout = a_resources.latchLayout;
@@ -41,11 +320,11 @@ namespace DCLF
 			if (!a_write)
 				return;
 			// Every key slot fits its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
-			const auto row = a_lookups.ShadowMapRow(a_rasterState);
+			const auto& row = a_buckets.bucketOfSlot;
 			if (row.size() > layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
-				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(row));
+				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
 		}
 
 		/**
@@ -368,6 +647,7 @@ namespace DCLF
 			frame->indirect = indirect;
 			frame->latch = resources->latch;
 			const auto& previousShape = resources->occlusionPublished;
+			const auto& lookups = store.GetLookups();
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
 					continue;
@@ -385,15 +665,17 @@ namespace DCLF
 				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound.
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				latch.cullFlags = 1u | kCullMinRadius;
-				UseShadowMapRow(*resources, store.GetLookups(), latchSlot, view.rasterState, true, latch);
+				const auto buckets = BucketsOfRow(lookups.ShadowMapRow(view.rasterState), indirect);
+				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, true, latch);
+				const auto* previous = PreviousView(previousShape, slot);
+				auto viewBuckets = SizeShadowBuckets(buckets, payload.keySlotDraws[mode], previous, std::uint64_t(kShadowClasses) * resources->sequenceDraws[slot]);
+				WriteBucketTable(*resources, latchSlot, slot, viewBuckets, latch);
+				const std::vector<std::uint32_t> zeroBuckets(std::max<std::size_t>(viewBuckets.size(), 1), 0u);
+				uploads(resources->bucketCounts[slot], zeroBuckets.data(), zeroBuckets.size() * sizeof(std::uint32_t), 0);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
-				std::uint32_t previousCapacity = 0;
-				if (previousShape)
-					for (const auto& previous : previousShape->views)
-						if (previous.slot == slot)
-							previousCapacity = previous.capacity;
-				const std::uint32_t capacity = ShadowViewCapacity(previousCapacity, payload.modeDraws[mode], resources->sequenceDraws[slot]);
+				const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[mode], resources->sequenceDraws[slot]);
 				frame->views.push_back(FrameViewOf(view, slot, mode, OcclusionDepthTarget(v), capacity, *resources, payload));
+				frame->views.back().buckets = std::move(viewBuckets);
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
@@ -652,12 +934,23 @@ namespace DCLF
 			auto frame = std::make_shared<ShadowFrame>();
 			const auto& previousShape = resources->published;
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
+			// The index pool, which this epoch's views and the occlusion epoch's after it draw from.
+			UpdateIndexPool(*resources, store.GetTables(), store.GetTablesGeneration(), latchSlot, uploads);
 			resources->labels.clear();
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
 			frame->latch = resources->latch;
 			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
+			// Per state, its row's buckets (RowBuckets), once.
+			std::vector<std::optional<RowBuckets>> rowBuckets(mapRowsWritten.size());
+			auto bucketsOf = [&](std::uint32_t a_state) -> const RowBuckets& {
+				if (a_state >= rowBuckets.size())
+					rowBuckets.resize(std::size_t(a_state) + 1);
+				if (!rowBuckets[a_state])
+					rowBuckets[a_state] = BucketsOfRow(store.GetLookups().ShadowMapRow(a_state), indirect);
+				return *rowBuckets[a_state];
+			};
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			for (std::uint32_t index = 0; index < pending.size(); ++index) {
 				const auto& view = pending[index];
@@ -698,17 +991,20 @@ namespace DCLF
 				const bool rowWritten = view.rasterState < mapRowsWritten.size() && mapRowsWritten[view.rasterState];
 				if (view.rasterState < mapRowsWritten.size())
 					mapRowsWritten[view.rasterState] = true;
-				UseShadowMapRow(*resources, store.GetLookups(), latchSlot, view.rasterState, !rowWritten, latch);
+				const auto& buckets = bucketsOf(view.rasterState);
+				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, !rowWritten, latch);
+				const auto* previous = PreviousView(previousShape, slot);
+				auto viewBuckets = SizeShadowBuckets(buckets, payload.keySlotDraws[view.modeIndex], previous,
+					std::uint64_t(kShadowClasses) * resources->sequenceDraws[slot]);
+				WriteBucketTable(*resources, latchSlot, slot, viewBuckets, latch);
+				const std::vector<std::uint32_t> zeroBuckets(std::max<std::size_t>(viewBuckets.size(), 1), 0u);
+				uploads(resources->bucketCounts[slot], zeroBuckets.data(), zeroBuckets.size() * sizeof(std::uint32_t), 0);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
-				std::uint32_t previousCapacity = 0;
-				if (previousShape)
-					for (const auto& previous : previousShape->views)
-						if (previous.slot == slot)
-							previousCapacity = previous.capacity;
 				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex,
-					ShadowViewCapacity(previousCapacity, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
+					ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
 					*resources, payload));
+				frame->views.back().buckets = std::move(viewBuckets);
 			}
 			// The arena (the frame record and the blocks), when the worker did not stage it.
 			if (const auto& bytes = arena.Bytes(); !staged && !bytes.empty())

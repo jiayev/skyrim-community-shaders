@@ -972,8 +972,8 @@ namespace DCLF::Draws
 	struct ShadowBuildBindings
 	{
 		std::array<org::DeclaredViewToken, kShadowModeCount> inputs;
-		std::vector<org::DeclaredViewToken> sequences, count;  // per view slot
-		org::DeclaredViewToken geometries, objects, visibility;
+		std::vector<org::DeclaredViewToken> sequences, count, bucketCounts;  // per view slot
+		org::DeclaredViewToken geometries, objects, visibility, poolFirsts;
 		org::DeclaredViewToken fadeRoots, fadeStates;
 	};
 
@@ -1006,10 +1006,12 @@ namespace DCLF::Draws
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				bindings.sequences.push_back(a_builder.UnorderedAccess(resources->sequences[s]).View());
 				bindings.count.push_back(a_builder.UnorderedAccess(resources->count[s]).View());
+				bindings.bucketCounts.push_back(a_builder.UnorderedAccess(resources->bucketCounts[s]).View());
 			}
 			bindings.geometries = a_builder.ShaderResource(resources->scene->geometries).View();
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
+			bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
 			// The shadow views' casters under stood-in roots follow FadeStateCS's state (the occlusion views' do not).
 			if (!sky && resources->scene->fadeRoots) {
 				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
@@ -1023,6 +1025,7 @@ namespace DCLF::Draws
 			const auto frame = CurrentShadowFrame(*resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(FadeRows() ? 1u : 0u);
+			a_out.push_back(resources->pool->layout);
 		}
 
 		ShadowBuildPrepared Prepare(const ShadowBuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -1037,6 +1040,7 @@ namespace DCLF::Draws
 			const auto geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
 			const auto objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			const auto visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			const auto poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
 			const bool fadeRows = FadeRows();
 			const auto fadeRootsIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeRoots) : 0u;
 			const auto fadeStatesIndex = fadeRows ? CaptureViewIndex(a_preparation, a_bindings.fadeStates) : 0u;
@@ -1052,11 +1056,14 @@ namespace DCLF::Draws
 				constants.objectsIndex = objectsIndex;
 				constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences[view.slot]);
 				constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count[view.slot]);
+				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[view.slot]);
+				constants.poolFirstsIndex = poolFirstsIndex;
 				// A draw's words name its material row (the table every view reads).
 				constants.materialRowsAddressLo = static_cast<std::uint32_t>(view.materialRows);
 				constants.materialRowsAddressHi = static_cast<std::uint32_t>(view.materialRows >> 32);
 				constants.materialRowStride = sizeof(ShadowMaterialRow);  // no pipeline rows: their stride stays 0
-				constants.phaseTwoBase = view.sequenceDraws;  // the slot's range: its draws never reach it
+				// The bucket path's draws are bounded by their buckets' capacities (the latch's bucket table); this bounds the other.
+				constants.phaseTwoBase = view.sequenceDraws;
 				// The single phase (the latch holds the frustum-only mode, with no engine-visibility gate).
 				constants.phaseBits = 0;
 				// The visibility words are written per object by every dispatch; nothing reads them here.
@@ -1087,10 +1094,85 @@ namespace DCLF::Draws
 		bool sky = false;
 	};
 
+	struct IndexPoolBindings
+	{
+		org::DeclaredViewToken copies, indices;
+	};
+
+	struct IndexPoolPrepared
+	{
+		std::shared_ptr<const ShadowIndexPool> pool;
+		std::shared_ptr<const org::LatchBlock> latch;
+		std::uint32_t poolOffset = 0;  // ShadowLatchLayout::PoolOffset
+		IndexPoolConstants constants{};
+	};
+
+	/**
+	 * @brief The index pool's copies (ShadowIndexPool, IndexPoolCS.hlsl): the ranges the shadow commit gave out this frame,
+	 * copied from their index buffers before the shadow epoch's views draw from the pool. Its dispatch is in the latch.
+	 */
+	class IndexPoolPass final : public org::TypedRenderGraphPass<IndexPoolPass, IndexPoolPrepared, IndexPoolBindings>
+	{
+	public:
+		explicit IndexPoolPass(std::shared_ptr<ShadowResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		IndexPoolBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			IndexPoolBindings bindings{};
+			bindings.copies = a_builder.ShaderResource(resources->pool->copies).View();
+			bindings.indices = a_builder.UnorderedAccess(resources->pool->indices).View();
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentShadowFrame(*resources, false);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->pool->layout);
+		}
+
+		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			IndexPoolPrepared prepared{};
+			const auto frame = CurrentShadowFrame(*resources, false);
+			if (!frame || !frame->latch)
+				return prepared;
+			prepared.pool = resources->pool;
+			prepared.latch = frame->latch;
+			prepared.poolOffset = resources->latchLayout.PoolOffset();
+			prepared.constants.latchIndex = frame->latch->SrvIndex();
+			prepared.constants.copiesIndex = CaptureViewIndex(a_preparation, a_bindings.copies);
+			prepared.constants.poolIndex = CaptureViewIndex(a_preparation, a_bindings.indices);
+			return prepared;
+		}
+
+		static void Record(const IndexPoolBindings&, const IndexPoolPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.pool || !a_prepared.latch)
+				return;
+			auto constants = a_prepared.constants;
+			const auto& layout = a_prepared.latch;
+			const std::uint64_t offset = layout->Offset(a_recording.FrameSlot()) + a_prepared.poolOffset;
+			constants.latchOffset = static_cast<std::uint32_t>(offset);
+			auto& commands = a_recording.Commands();
+			const auto& program = *a_prepared.pool->program;
+			commands.BindLayout(program.layout->GetHandle());
+			commands.BindPipeline(program.pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kIndexPoolConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+			commands.ExecuteIndirect(a_prepared.pool->dispatchSignature->GetHandle(), layout->Resource()->GetAPIResource().GetHandle(), offset, {}, 0, 1);
+		}
+
+	private:
+		std::shared_ptr<ShadowResources> resources;
+	};
+
 	struct ShadowPassBindings
 	{
 		std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
-		std::vector<org::ResourceBindingToken> sequences, count;  // per view slot
+		std::vector<org::ResourceBindingToken> sequences, bucketCounts;  // per view slot
+		org::ResourceBindingToken pool;  // the index pool (ShadowIndexPool)
 		org::ResourceBindingToken materialRows, constants, viewBlocks, objects, bones;
 	};
 
@@ -1098,7 +1180,6 @@ namespace DCLF::Draws
 	{
 		std::shared_ptr<const ShadowFrame> frame;
 		bool sky = false;
-		PreprocessStates* preprocess = nullptr;  // the frame slot's explicit DGC preprocess state list
 		struct View
 		{
 			std::uint32_t index = 0;  // into frame->views
@@ -1127,18 +1208,21 @@ namespace DCLF::Draws
 						bindings.depthViews[i].push_back(a_builder.DepthReadWrite(resources->depth[i], org::DsvView{ UINT32_MAX, 0, slice }).View());
 				}
 			}
+			// A slot's sequences are both the draws' arguments and what their vertex stage reads by device address (DCLF_PULLED).
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				bindings.sequences.push_back(a_builder.IndirectArguments(resources->sequences[s]));
-				bindings.count.push_back(a_builder.IndirectArguments(resources->count[s]));
+				a_builder.ShaderResource(resources->sequences[s], noViews);
+				bindings.bucketCounts.push_back(a_builder.IndirectArguments(resources->bucketCounts[s]));
 			}
 			bindings.materialRows = a_builder.ShaderResource(resources->materialRows.buffer, noViews).Resource();
 			bindings.constants = a_builder.ShaderResource(resources->constants, noViews).Resource();
 			bindings.viewBlocks = a_builder.ShaderResource(resources->viewBlocks.buffer, noViews).Resource();
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
 			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
-			// The face positions are read by the input assembler (the draws' second stream), after the commit's
-			// uploads into them.
-			a_builder.VertexBuffer(resources->scene->facePositions);
+			// The face positions (a dynamic shape's second stream), and the geometries' vertices and indices, are read by the
+			// vertex stage through their addresses: the face positions after the commit's uploads into them.
+			a_builder.ShaderResource(resources->scene->facePositions, noViews);
+			bindings.pool = a_builder.IndexBuffer(resources->pool->indices);
 			return bindings;
 		}
 
@@ -1146,6 +1230,7 @@ namespace DCLF::Draws
 		{
 			const auto frame = CurrentShadowFrame(*resources, sky);
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->pool->layout);
 		}
 
 		ShadowPrepared Prepare(const ShadowPassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -1166,7 +1251,6 @@ namespace DCLF::Draws
 			if (!prepared.views.empty())
 				prepared.frame = std::move(frame);
 			prepared.sky = sky;
-			prepared.preprocess = (sky ? resources->preprocessSky : resources->preprocessShadow).get();
 			return prepared;
 		}
 
@@ -1200,33 +1284,41 @@ namespace DCLF::Draws
 				begin.depth = &depth;
 				begin.debugName = a_prepared.sky ? "DCLF occlusion map" : "DCLF shadow view";
 			}
-			// A view's pass: its slice, the layout, the topology and its push data (its blocks) - on the command list, and on a
-			// preprocess state list, identically.
-			auto beginView = [&](rhi::CommandList& a_list, const rhi::PassBeginInfo& a_begin, const ShadowFrameView& a_view) {
-				a_list.BeginPass(a_begin);
-				a_list.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
-				a_list.BindLayout(frame.indirect.layout);
-				a_list.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, a_view.push.data());
+			// A view: its pass (its slice, the layout, the topology, its push data: its blocks, and the index pool), then a plain
+			// indexed indirect draw per bucket (ShadowBucket), the depth-only class's first: the bucket's pipeline, its push words
+			// (kShadowDrawPushSequences and after), and its range of the slot's sequences, as many as its count word holds. The
+			// vertex stage fetches each draw's vertices through the sequence its instance names (Utility.hlsl, DCLF_PULLED), since
+			// a plain draw cannot bind a vertex buffer of its own.
+			auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+			auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
+				a_words[0] = static_cast<std::uint32_t>(a_value);
+				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
 			};
-			auto sequences = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.sequences[frame.views[a_view.index].slot]).GetHandle(); };
-			auto counts = [&](const ShadowPrepared::View& a_view) { return a_recording.Resolve(a_bindings.count[frame.views[a_view.index].slot]).GetHandle(); };
-			// Every view's call is preprocessed first, against the frame slot's state list with the view's pass set up as below
-			// (PreprocessStates), and becomes visible at the first view's pass.
-			if (a_prepared.preprocess) {
-				auto& state = a_prepared.preprocess->Begin(a_recording.FrameSlot());
-				state.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
-				for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
-					const auto& prepared = a_prepared.views[i];
-					beginView(state, begins[i], frame.views[prepared.index]);
-					commands.PreprocessIndirect(state, frame.indirect.signature, sequences(prepared), 0, counts(prepared), 0, frame.views[prepared.index].capacity);
-					state.EndPass();
-				}
-				state.End();
-			}
+			const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };  // the whole buffer
 			for (std::size_t i = 0; i < a_prepared.views.size(); ++i) {
-				const auto& prepared = a_prepared.views[i];
-				beginView(commands, begins[i], frame.views[prepared.index]);
-				commands.ExecuteIndirect(frame.indirect.signature, sequences(prepared), 0, counts(prepared), 0, frame.views[prepared.index].capacity);
+				const auto& view = frame.views[a_prepared.views[i].index];
+				commands.BeginPass(begins[i]);
+				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+				commands.BindLayout(frame.indirect.layout);
+				commands.SetIndexBuffer(pool);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kShadowPushWords, view.push.data());
+				const auto sequences = a_recording.Resolve(a_bindings.sequences[view.slot]).GetHandle();
+				const auto counts = a_recording.Resolve(a_bindings.bucketCounts[view.slot]).GetHandle();
+				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
+				for (std::uint32_t b = 0; b < view.buckets.size(); ++b) {
+					const auto& bucket = view.buckets[b];
+					if (!bucket.capacity || bucket.pipeline >= frame.indirect.pipelines.size())
+						continue;
+					const std::uint64_t first = std::uint64_t(bucket.first) * sizeof(DrawSequence);
+					std::uint32_t words[kDrawPushWords]{};
+					split(words + kShadowDrawPushSequences, sequencesAddress + first);
+					split(words + kShadowDrawPushMaterialRows, view.materialRows);
+					split(words + kShadowDrawPushVertexLayout, frame.indirect.vertexLayouts[bucket.pipeline]);
+					commands.BindPipeline(frame.indirect.pipelines[bucket.pipeline]);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+					commands.ExecuteIndirect(frame.indirect.drawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(b) * sizeof(std::uint32_t),
+						bucket.capacity);
+				}
 				commands.EndPass();
 			}
 		}
@@ -1273,9 +1365,13 @@ namespace DCLF::Draws
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.index-pool"), resources->pool->indices);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.pool-firsts"), resources->pool->firsts);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.pool-copies"), resources->pool->copies);
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
+				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.bucket-counts{}", s)), resources->bucketCounts[s]);
 			}
 			for (std::uint32_t i = 0; i < kShadowDepthTargets; ++i) {
 				if (resources->depth[i])
@@ -1287,6 +1383,10 @@ namespace DCLF::Draws
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
 			AddTreeWindPasses(resources->scene, "cs.dclf.shadow", epoch, a_out);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<ShadowBuildDrawsPass>(resources, false)))
 					.PreferQueue(org::QueueKind::Graphics)
