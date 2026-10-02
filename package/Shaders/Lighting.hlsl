@@ -1395,7 +1395,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			define SampleTerrainColor(TEX, SAMP, UV, OFFSET, PBR) StochasticEffect(TEX, SAMP, UV, OFFSET, true, PBR)
 #		else
 #			define SampleTerrain(TEX, SAMP, UV, OFFSET) TEX.SampleBias(SAMP, UV, SharedData::MipBias)
-#			define SampleTerrainColor(TEX, SAMP, UV, OFFSET, PBR) ColorManagement::TextureToWorking(TEX.SampleBias(SAMP, UV, SharedData::MipBias), PBR)
+#			define SampleTerrainColor(TEX, SAMP, UV, OFFSET, PBR) ColorManagement::DiffuseToWorking(TEX.SampleBias(SAMP, UV, SharedData::MipBias), PBR)
 #		endif
 #		if defined(TRUE_PBR)
 	LIGHTING_LANDSCAPE_BLEND_ONE_LAYER_PBR(0, TexColorSampler, SampColorSampler, TexNormalSampler, SampNormalSampler, TexRMAOSSampler, SampRMAOSSampler, PBRParams1, LandscapeTexture1GlintParameters, input.LandBlendWeights1.x)
@@ -1429,7 +1429,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		elif defined(ENABLE_LL) && defined(FACEGEN_RGB_TINT)
 	sampledBaseColor.rgb = GetFacegenRGBTintBaseColor(sampledBaseColor.rgb, uv);
 #		endif
-	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::TextureToWorking(sampledBaseColor, PBRTextures);
+	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::DiffuseToWorking(sampledBaseColor, PBRTextures);
 	baseColor.rgb = Color::Albedo(baseColor.rgb);
 	float4 normalColor;
 	MESH_TV_SAMPLE_BIAS(normalColor, TexNormalSampler, SampNormalSampler, uv);
@@ -1591,14 +1591,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	else
 	{
 		sampledLodLandColor = TexLandLodBlend1Sampler.SampleBias(SampLandLodBlend1Sampler, blendColorUV, SharedData::MipBias);
-		lodLandColor = ColorManagement::TextureToWorking(sampledLodLandColor);
+		lodLandColor = ColorManagement::DiffuseToWorking(sampledLodLandColor);
 	}
 #		else
 	sampledLodLandColor = TexLandLodBlend1Sampler.Sample(SampLandLodBlend1Sampler, input.TexCoord0.zw);
-	lodLandColor = ColorManagement::TextureToWorking(sampledLodLandColor);
+	lodLandColor = ColorManagement::DiffuseToWorking(sampledLodLandColor);
 #		endif
 
-	lodLandColor.xyz *= Color::AlbedoScale;
 #		if defined(LOD_BLENDING)
 	lodLandColor.xyz = pow(abs(lodLandColor.xyz), SharedData::lodBlendingSettings.LODTerrainGamma) * SharedData::lodBlendingSettings.LODTerrainBrightness;
 #		endif  // LOD_BLENDING
@@ -1743,7 +1742,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		discard;
 
 	sampledBaseColor = Triplanar::SampleStochasticBias(TexColorSampler, SampColorSampler, projWorldPos, triWeights, ProjectedUVParams2.y, SharedData::MipBias, screenNoise);
-	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::TextureToWorking(sampledBaseColor, PBRTextures);
+	baseColor = Permutation::BaseTextureIsWorking ? sampledBaseColor : ColorManagement::DiffuseToWorking(sampledBaseColor, PBRTextures);
 	baseColor.rgb = Color::Albedo(baseColor.rgb);
 	worldNormal.xyz = projectedNormal;
 #		elif !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX) && !defined(SPARKLE)
@@ -1753,7 +1752,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projBaseColor = ColorManagement::TextureToWorking(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz, PBRTextures);
+		float3 projBaseColor = ColorManagement::DiffuseToWorking(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz, PBRTextures);
 #			if defined(TRUE_PBR)
 		projBaseColor *= Color::LinearSRGBToWorking(ProjectedUVParams2.xyz);
 #			else
@@ -1768,8 +1767,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			projectedGlintParameters = SparkleParams;
 		}
 		glintParameters = lerp(glintParameters, projectedGlintParameters, projectedMaterialWeight);
-#			else
-		projBaseColor *= Color::AlbedoScale;
 #			endif  // TRUE_PBR
 #			if defined(LOD_BLENDING) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
 		projBaseColor.xyz = pow(abs(projBaseColor.xyz), SharedData::lodBlendingSettings.LODObjectSnowGamma) * SharedData::lodBlendingSettings.LODObjectSnowBrightness;
@@ -1786,7 +1783,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			baseColor.xyz = Color::Albedo(Color::LinearSRGBToWorking(ProjectedUVParams2.xyz));
 #			else
 			baseColor.xyz = ColorManagement::SRGBToWorking(ProjectedUVParams2.xyz);
-			baseColor.xyz *= Color::AlbedoScale;
 #			endif
 #			if defined(SNOW)
 			useSnowDecalSpecular = true;
@@ -2635,7 +2631,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 layerViewProjection = -layerNormal.xyz * layerViewAngle.xxx - tangentViewDirection.xyz;
 	float2 layerUv = uv * MultiLayerParallaxData.zw + (0.0009765625 * (layerValue / abs(layerViewProjection.z))).xx * layerViewProjection.xy;
 
-	float3 layerColor = ColorManagement::TextureToWorking(TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz);
+	float3 layerColor = ColorManagement::DiffuseToWorking(TexLayerSampler.Sample(SampLayerSampler, layerUv).xyz);
 
 	float mlpBlendFactor = saturate(viewNormalAngle) * (1.0 - baseColor.w);
 

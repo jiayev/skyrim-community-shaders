@@ -168,8 +168,8 @@ inline float4 StochasticSampleLOD(float rnd, Texture2D tex, SamplerState samp, f
 	float4 s2 = tex.SampleBias(samp, uv + j2, SharedData::MipBias);
 
 	sampledColor = lerp(s2, s1, STOCHASTIC_LOD_BLEND);
-	s1 = ColorManagement::TextureToWorking(s1);
-	s2 = ColorManagement::TextureToWorking(s2);
+	s1 = ColorManagement::DiffuseToWorking(s1);
+	s2 = ColorManagement::DiffuseToWorking(s2);
 
 	// Simple 2-sample blend weighted toward first sample
 	return lerp(s2, s1, STOCHASTIC_LOD_BLEND);
@@ -189,8 +189,8 @@ inline float4 StochasticEffect(Texture2D tex, SamplerState samp, float2 uv, Stoc
 	float h2 = lerp(dot(s2.rgb, float3(0.2125, 0.7154, 0.0721)), s2.a, step(0.001, s2.a));
 
 	if (colorTexture) {
-		s1 = ColorManagement::TextureToWorking(s1, linearInput);
-		s2 = ColorManagement::TextureToWorking(s2, linearInput);
+		s1 = ColorManagement::DiffuseToWorking(s1, linearInput);
+		s2 = ColorManagement::DiffuseToWorking(s2, linearInput);
 	}
 
 	return StochasticBlendTwoSamples(s1, s2, offsets.tap1Weight, h1, h2);

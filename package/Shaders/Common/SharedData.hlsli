@@ -239,7 +239,7 @@ namespace SharedData
 	struct LinearLightingSettings
 	{
 		uint isMainOrLoadingMenu;
-		float vanillaDiffuseColorMult;
+		float diffuseGamma;
 		float directionalLightMult;
 		float pointLightMult;
 		float ambientMult;
@@ -254,6 +254,9 @@ namespace SharedData
 		float lightSpriteEffectMult;
 		float fireEffectMult;
 		float fireEffectCurve;
+		float diffuseCurve;
+		float diffuseWhiteReflectance;
+		float2 pad;
 	};
 
 	struct ENBSettings
