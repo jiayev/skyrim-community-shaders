@@ -111,4 +111,50 @@ namespace DCLF
 		}
 		return it->second.candidateReason;
 	}
+
+	namespace
+	{
+		std::string DescribeUser(const RE::BSGeometry* a_geometry)
+		{
+			if (!a_geometry)
+				return "no geometry";
+			const char* name = a_geometry->name.c_str();
+			auto* ref = a_geometry->GetUserData();
+			const RE::NiAVObject* root = a_geometry;
+			for (auto* node = a_geometry->parent; node; node = node->parent) {
+				root = node;
+				if (!ref)
+					ref = node->GetUserData();
+			}
+			const auto* base = ref ? ref->GetBaseObject() : nullptr;
+			return fmt::format("'{}' ref {:08X} ({}) under '{}'", name ? name : "", ref ? ref->GetFormID() : 0u, base ? RE::FormTypeToString(base->GetFormType()) : "no base",
+				root->name.c_str() ? root->name.c_str() : "");
+		}
+	}
+
+	std::string SceneStore::DescribePipelineUsers(std::uint32_t a_pipeline) const
+	{
+		std::uint32_t users = 0;
+		std::int64_t first = -1;
+		for (std::size_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
+			if ((tables.objects[o].flags & kObjectFree) || tables.objects[o].pipelineIndex != a_pipeline || !tables.objectGeometry[o])
+				continue;
+			if (users++ == 0)
+				first = static_cast<std::int64_t>(o);
+		}
+		if (first < 0)
+			return "no object yet";
+		return fmt::format("{} objects, first {} {}{}", users, first, DescribeUser(tables.objectGeometry[first]), tables.IsLayer(static_cast<std::uint32_t>(first)) ? " (its layer)" : "");
+	}
+
+	std::string SceneStore::DescribeShadowKeyUsers(const ShadowPipelineKey& a_key, std::uint32_t a_occlusion) const
+	{
+		const auto& index = a_occlusion < kOcclusionViews ? occlusionKeyMembers[a_occlusion] : shadowKeyMembers;
+		const auto it = index.find(a_key);
+		if (it == index.end() || it->second.empty())
+			return "no caster";
+		const std::uint32_t first = *it->second.begin();
+		const auto* geometry = first < tables.objectGeometry.size() ? tables.objectGeometry[first] : nullptr;
+		return fmt::format("{} casters, first {} {}", it->second.size(), first, DescribeUser(geometry));
+	}
 }

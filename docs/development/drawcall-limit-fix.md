@@ -6717,3 +6717,23 @@ pipeline, material and geometry, so the decal ordering, culling, rows and kept s
         as soon as the pipeline is in the set DCLF draws it and the skip withholds the native pass.
 -   **Measured.** Ownership tour (Bleak Falls Barrow, then Yngvild; full parity): holes 0 in every report, every parity
     check OK. The report's primary exclusion line counts "bound but not drawable this frame" and the rebinding frames.
+
+## On-demand builds are logged (2026-10-02)
+
+The goal is no shader or pipeline compiled at runtime: one that is means the precompile missed it. Until then every such
+build is a warning, once, when the request that starts it is made, with what is needed to write a precompile rule:
+
+-   **SPIR-V stages** (`ShaderPrograms::Find`, `FindShadow`): a stage a runtime request asks for before any precompile
+    task did (`kOnDemand*`). "on-demand SPIR-V compile: Lighting|Utility <stages> ..." names the descriptors or
+    technique, whether Community Shaders' compile workers were still busy (the request beat the precompile) or idle (the
+    precompile never asked), the pipeline key, and the objects that use it. A second line, "on-demand SPIR-V ... done
+    after N ms", says which stages DXC compiled and which the disk cache served.
+-   **Pipelines** (`DrawPipelines::Find`, `FindShadow`; `DrawcallLimitFix::RequestLightingPipeline`,
+    `RequestShadowProgram`, `RequestShadowPipeline`): every pipeline is built at runtime today (no precompile, no disk
+    cache). "on-demand pipeline build: Lighting|shadow ..." gives the key, its technique, the objects or casters that need
+    it, and how it differs from the nearest pipeline already requested (`NearestKey`: the fields and bits), or the
+    recreation that left none (a target or shadow-format change).
+-   **First reading** (Bleak Falls Barrow tour): Lighting SPIR-V 0 misses; Utility SPIR-V 40 stages, all the shadow
+    techniques with DCLF's mode bits (`0xC000`, `0x14000`), which no Community Shaders task compiles, all served from the
+    disk cache; 210 Lighting and 224 shadow pipelines, every one. Many Lighting keys differ from an existing one only in
+    the pass descriptor's shadow bits (`0x2040`, ShadowDir and DefShadow).
