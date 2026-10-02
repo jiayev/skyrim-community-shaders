@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Feature.h"
+#include "Features/DrawcallLimitFix/Common/Switches.h"
 
 /**
  * @brief Drawcall Limit Fix: replaces the native opaque render loop with GPU-driven indirect draws
@@ -78,6 +79,19 @@ struct DrawcallLimitFix : Feature
 	// Whether DCLF can draw the geometry this frame: a record with bindings and a built pipeline. Valid from
 	// EarlyPrepass (the accumulate phase and the pipeline lookups) to the end of the frame.
 	static bool DrawableThisFrame(const RE::BSGeometry* a_geometry);
+	/**
+	 * @brief CS_DCLF_DRAW_CENSUS: one native draw (State::Draw, the engine's SetDirtyStates), counted by the pass it is in,
+	 * the shader type and its technique, and reported every 300 frames (Reset).
+	 */
+	void NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor);
+	void ReportDrawCensus();
+	static bool DrawCensusOn()
+	{
+		static const bool on = DCLF::SwitchEnabled(DCLF::Switch::DrawCensus);
+		return on;
+	}
+	ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> drawCensus;
+	std::uint32_t drawCensusFrames = 0;
 	/**
 	 * @brief The pipeline slot's SPIR-V program and indirect pipeline: its set index, or DrawPipelines::kNotReady, requesting
 	 * what is missing. Each build a request starts is logged as a warning (on demand: the precompile missed it).

@@ -127,6 +127,8 @@ void DrawcallLimitFix::Reset()
 	// The test commands run before the installed check, so a CS_DCLF=0 baseline reaches the same place at
 	// the same in-game hour as the run it is compared against.
 	DCLF::RunTestHarness(GetShortName());
+	if (DrawCensusOn() && !DCLF::SceneStore::IsLoadingScreenUp())
+		ReportDrawCensus();
 
 	// Every Present, in menus too: the tracker's queue holds references to attached subtrees and
 	// must not grow while the world is not rendered.
@@ -622,6 +624,58 @@ bool DrawcallLimitFix::DrawableThisFrame(const RE::BSGeometry* a_geometry)
 {
 	const auto& store = DCLF::SceneStore::Get();
 	return store.ObjectDrawable(store.FindObject(a_geometry));
+}
+
+void DrawcallLimitFix::NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor)
+{
+	// The pass: DCLF's Z-prepass hook, the deferred main pass, or else the current accumulator's render mode (shadow maps
+	// 0xD-0xF, occlusion 0x1C, ...), 0xFF with none.
+	std::uint32_t pass = 0xFF;
+	if (inDepthPass)
+		pass = 0x100;
+	else if (globals::deferred->deferredPass)
+		pass = 0x101;
+	else if (auto* accumulator = *globals::game::currentAccumulator.get())
+		pass = static_cast<std::uint32_t>(accumulator->GetRuntimeData().renderMode);
+	const std::uint32_t type = a_shader ? static_cast<std::uint32_t>(a_shader->shaderType.get()) : 0xFF;
+	// Lighting's technique is the pixel descriptor's top byte; any other shader's descriptor is its technique.
+	const std::uint32_t technique = type == static_cast<std::uint32_t>(RE::BSShader::Type::Lighting) ? (a_pixelDescriptor >> 24) & 0x3f : a_pixelDescriptor;
+	(void)a_vertexDescriptor;
+	++drawCensus[(std::uint64_t(pass) << 48) | (std::uint64_t(type) << 40) | technique];
+}
+
+void DrawcallLimitFix::ReportDrawCensus()
+{
+	if (++drawCensusFrames < 300)
+		return;
+	std::vector<std::pair<std::uint32_t, std::uint64_t>> rows;
+	std::uint64_t total = 0;
+	for (const auto& [key, count] : drawCensus) {
+		rows.emplace_back(count, key);
+		total += count;
+	}
+	std::sort(rows.begin(), rows.end(), std::greater<>());
+	const auto passName = [](std::uint32_t a_pass) -> std::string {
+		switch (a_pass) {
+		case 0x100: return "depth prepass";
+		case 0x101: return "deferred main";
+		case 0xFF: return "no accumulator";
+		default: return fmt::format("render mode {:#x}", a_pass);
+		}
+	};
+	std::string text;
+	for (std::size_t i = 0; i < rows.size() && i < 30; ++i) {
+		const auto [count, key] = rows[i];
+		const auto type = static_cast<std::uint32_t>((key >> 40) & 0xFF);
+		const auto technique = static_cast<std::uint32_t>(key & 0xFFFFFFFFull);
+		const auto typeName = type < magic_enum::enum_count<RE::BSShader::Type>() ? magic_enum::enum_name(static_cast<RE::BSShader::Type>(type)) : std::string_view("none");
+		text += fmt::format("\n    {:7.1f}  {}, {} {}", static_cast<double>(count) / drawCensusFrames, passName(static_cast<std::uint32_t>(key >> 48)), typeName,
+			type == static_cast<std::uint32_t>(RE::BSShader::Type::Lighting) ? std::string(DCLF::LightingTechniqueName(technique)) : fmt::format("{:08X}", technique));
+	}
+	logger::info("[DCLF] draw census: {:.1f} native draws a frame over {} frames, {} groups; the largest:{}", static_cast<double>(total) / drawCensusFrames,
+		drawCensusFrames, rows.size(), text);
+	drawCensus.clear();
+	drawCensusFrames = 0;
 }
 
 std::uint32_t DrawcallLimitFix::RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting)

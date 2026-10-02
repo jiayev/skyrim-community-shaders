@@ -111,6 +111,7 @@ namespace DCLF
 			{ Eval, "CS_DCLF_EVAL", D, N, false, "audit: device state before and after each constant evaluation, compared" },
 			{ TraceTexturePaths, "CS_DCLF_TRACE_TEXTURE_PATHS", D, N, false, "set: texture identities are logged with their paths" },
 			{ CoverageProbe, "CS_DCLF_COVERAGE_PROBE", D, N, false, "1: which shaders the objects DCLF leaves native use" },
+			{ DrawCensus, "CS_DCLF_DRAW_CENSUS", D, N, false, "1: the engine's native draws per frame, by pass, shader type and technique" },
 			{ DeriveProbe, "CS_DCLF_DERIVE_PROBE", D, N, false, "1: derivation statistics in the report" },
 			{ SlotProbe, "CS_DCLF_SLOT_PROBE", D, N, false, "1: slot lifetime statistics in the report" },
 			{ DecalOrderProbe, "CS_DCLF_DECAL_ORDER_PROBE", D, N, false, "1: the main pass's decal registration order against the scene lists' order" },

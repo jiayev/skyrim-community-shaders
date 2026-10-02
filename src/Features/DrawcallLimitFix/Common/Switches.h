@@ -77,6 +77,7 @@ namespace DCLF
 		Eval,
 		TraceTexturePaths,
 		CoverageProbe,
+		DrawCensus,
 		DeriveProbe,
 		SlotProbe,
 		DecalOrderProbe,
