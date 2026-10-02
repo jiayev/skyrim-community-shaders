@@ -129,6 +129,16 @@ namespace DCLF
 		/** @brief Render thread: every residency ended (SceneStore::EndAllResidency): every entry walked until the next snapshot. */
 		void NoteAllMembersLost();
 		/**
+		 * @brief Render thread (SceneStore, a member joined with a pipeline still compiling): its entry is walked, the member
+		 * handed to the engine's registration, until the pipeline is drawable.
+		 */
+		void NoteMemberUndrawable(const RE::BSGeometry* a_geometry);
+		/**
+		 * @brief MembershipWitness as PrepareFrame sampled it this frame, before the list jobs (else now): BindByMembership rebinds
+		 * every resident on the frame the stand-in hands them all to the engine.
+		 */
+		std::uint32_t FrameMembershipWitness() const;
+		/**
 		 * @brief Render thread, after the registration jobs: CS_DCLF_PERSISTENT_PARITY's light mask check of the owned members in
 		 * view.
 		 */
@@ -470,6 +480,7 @@ namespace DCLF
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0, notSettled = 0, notAdmitted = 0, walked = 0, walkMissed = 0;
 			std::uint64_t hidden = 0, engineMembers = 0, switchStale = 0, unselected = 0;
 			std::uint64_t unbound = 0;                      // DCLF geometries in view not bound yet, handed to the engine
+			std::uint64_t undrawable = 0;                   // bound members in view the colour build cannot draw, handed to the engine
 			std::uint64_t excluded = 0;                     // owned geometries the engine's cull reached, not handed to its registration
 			std::uint64_t filterChecked = 0, filterMissed = 0;  // a parity frame's dry run: roots it would leave out, and the stand-in's disagreements
 			std::uint64_t mixed = 0;                        // admitted entries with engine-drawn parts, culled by the engine
@@ -484,6 +495,8 @@ namespace DCLF
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0;
 			std::uint64_t notSettled = 0, notAdmitted = 0, admittedNow = 0;
 			std::uint64_t members = 0, unbound = 0, hiddenSkipped = 0;
+			std::uint64_t undrawable = 0;    // bound members in view handed to the engine: a pipeline compiling, or rebindAll
+			std::uint64_t rebindFrames = 0;  // frames every member was handed to the engine (the membership witness changed)
 			std::uint64_t maskChecked = 0, maskSun = 0, maskOther = 0;
 			std::uint64_t walked = 0;  // entries the stand-in walked (Cut::walk, or every one under the parity)
 			std::uint64_t walkMissed = 0;  // CS_DCLF_PERSISTENT_PARITY: geometries handed to the registration from entries Cut::walk leaves  // CS_DCLF_PERSISTENT_PARITY: owned members in view, and their masks not 0
@@ -527,6 +540,18 @@ namespace DCLF
 		void RefreshWalk(std::uint32_t a_e);
 		std::vector<std::uint32_t> walkRefresh;  // entries whose member lost its binding: refreshed at the next PrepareFrame
 		bool walkEverything = false;             // CS_DCLF_PERSISTENT_PARITY: every entry walked (the hole and light mask checks)
+		// The membership witness PrepareFrame sampled (FrameMembershipWitness), the frame it did, and whether it differs from the
+		// one the residents were bound with: then every entry is walked and every member handed to the engine's registration,
+		// since this frame's accumulate phase binds them all again, with pipelines that may still be compiling.
+		std::uint32_t sampledWitness = 0;
+		std::uint32_t sampledWitnessFrame = ~0u;
+		bool rebindAll = false;
+		// Per pipeline slot, whether a build can draw with it (SceneStore::PipelineDrawable), sampled in PrepareFrame for the
+		// list jobs: a member whose pipeline is not is handed to the engine's registration (MemberDrawable).
+		std::vector<std::uint8_t> drawablePipelines;
+		std::vector<const RE::BSGeometry*> undrawableMembers;  // NoteMemberUndrawable: re-walked when their pipeline is drawable
+		/** @brief List jobs and render thread: a bound member the colour build can draw this frame (its pipeline as sampled). */
+		bool MemberDrawable(std::int32_t a_object) const;
 
 		/** @brief The derived pass descriptor per geometry, recomputed when what it reads changes. */
 		struct DerivedEntry

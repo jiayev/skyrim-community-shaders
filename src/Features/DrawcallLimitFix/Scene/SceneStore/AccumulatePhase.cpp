@@ -509,6 +509,10 @@ namespace DCLF
 			ApplyAccumulatePatch(patch);
 			timer.Add(BuildPart::ApplyPatch);
 			MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
+			// A pipeline still compiling: until it is drawable, the member's entry is walked and the member handed to the
+			// engine's registration (PrimaryCull::MemberDrawable), so a stood-in entry never leaves it to nobody.
+			if (!layer && !PipelineDrawable(pipelineSlot))
+				PrimaryCull::Get().NoteMemberUndrawable(geometry);
 			(layer ? residentLayerJoining : residentJoining).erase(geometry);
 			++residentStats.joined;
 			timer.Add(BuildPart::Record);
@@ -594,7 +598,7 @@ namespace DCLF
 		ZoneScopedN("CS.DCLF.Accumulate.BindByMembership");
 		// The frame globals a membership pass reads changed (the static sun bits, the fade distances): every resident is bound
 		// again from this frame's.
-		if (const std::uint32_t witness = PrimaryCull::MembershipWitness(); witness != membershipWitness) {
+		if (const std::uint32_t witness = PrimaryCull::Get().FrameMembershipWitness(); witness != membershipWitness) {
 			bindQueue.insert(bindQueue.end(), residents.begin(), residents.end());
 			EndAllResidency();
 			membershipWitness = witness;

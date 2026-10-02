@@ -624,15 +624,7 @@ void DrawcallLimitFix::Prepass()
 bool DrawcallLimitFix::DrawableThisFrame(const RE::BSGeometry* a_geometry)
 {
 	const auto& store = DCLF::SceneStore::Get();
-	const auto& tables = store.GetTables();
-	const auto& lookups = store.GetLookups();
-	const auto object = store.FindObject(a_geometry);
-	if (object < 0 || static_cast<std::size_t>(object) >= tables.objects.size())
-		return false;
-	const auto& record = tables.objects[object];
-	if (record.flags & DCLF::kObjectNoBindings)
-		return false;
-	return record.pipelineIndex < lookups.pipelines.size() && lookups.pipelines[record.pipelineIndex].setIndex != DCLF::Lookups::kNone;
+	return store.ObjectDrawable(store.FindObject(a_geometry));
 }
 
 bool DrawcallLimitFix::SkipNativePass(RE::BSRenderPass* a_pass)
