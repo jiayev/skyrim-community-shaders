@@ -1,5 +1,6 @@
 #pragma once
 
+#include "PhysicalSky/Aerosol.h"
 #include "PhysicalSky/CloudNoiseGenerator.h"
 #include "PhysicalSky/Ndf.h"
 
@@ -122,6 +123,9 @@ struct PhysicalSky final : public Feature
 
 		float rayleighFalloff = 1 / 8.69645f;                    // in km^-1
 		float3 rayleighScatter = { 6.6049f, 12.345f, 29.413f };  // in megameter^-1
+		Aerosol::Type aerosolType = Aerosol::Type::Custom;
+		float aerosolLoading = 1.f;
+		float aerosolHumidity = 50.f;
 		float aerosolFalloff = 1 / 1.2f;
 		float aerosolPhaseG = 0.8f;
 		float3 aerosolScatter = { 39.96f, 39.96f, 39.96f };
@@ -145,6 +149,8 @@ struct PhysicalSky final : public Feature
 		NdfSettings cloudMap = {};
 		CloudLayer cloudLayer = {};
 		CloudNoiseSettings cloudNoise = {};
+
+		Aerosol::Optics GetAerosolOptics() const;
 	} settings;
 
 	struct CbData

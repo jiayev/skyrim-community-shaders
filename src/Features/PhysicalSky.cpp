@@ -145,6 +145,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	atmosphereRadius,
 	rayleighFalloff,
 	rayleighScatter,
+	aerosolType,
+	aerosolLoading,
+	aerosolHumidity,
 	aerosolFalloff,
 	aerosolPhaseG,
 	aerosolScatter,
@@ -245,6 +248,13 @@ void PhysicalSky::LoadSettings(json& o_json)
 void PhysicalSky::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
+
+Aerosol::Optics PhysicalSky::Settings::GetAerosolOptics() const
+{
+	if (aerosolType > Aerosol::Type::Custom && aerosolType < Aerosol::Type::Count)
+		return Aerosol::Evaluate(aerosolType, aerosolLoading, aerosolHumidity);
+	return { aerosolScatter, aerosolAbsorption, aerosolPhaseG };
 }
 
 void PhysicalSky::DrawSettings()
@@ -487,16 +497,43 @@ void PhysicalSky::SettingsAtmosphere()
 	ImGui::SeparatorText(T(TKEY("aerosol_mie"), "Aerosol (Mie)"));
 	{
 		ImGui::PushID("Mie");
-		ImGui::TextWrapped("%s", T(TKEY("solid_and_liquid_particles_greater_than_1_10"),
-									 "Solid and liquid particles greater than 1/10 of the light wavelength but not too much, like dust. Strongly anisotropic (Mie Scattering). "
-									 "They contributes to the aureole around bright celestial bodies."));
-
-		ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -1, 1);
-		ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		ImGui::TextWrapped("%s", T(TKEY("aerosol_model_desc"), "Suspended particles scatter and absorb light. Choose an aerosol type to control particle loading and relative humidity, or Custom to edit optical coefficients."));
+		const char* types[] = {
+			T(TKEY("aerosol_custom"), "Custom"),
+			T(TKEY("aerosol_continental"), "Continental background"),
+			T(TKEY("aerosol_maritime"), "Marine"),
+			T(TKEY("aerosol_urban"), "Urban pollution"),
+			T(TKEY("aerosol_desert"), "Desert dust")
+		};
+		int type = settings.aerosolType < Aerosol::Type::Count ? static_cast<int>(settings.aerosolType) : 0;
+		if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, types, IM_ARRAYSIZE(types))) {
+			if (type == 0) {
+				const auto optics = settings.GetAerosolOptics();
+				settings.aerosolScatter = optics.scatter;
+				settings.aerosolAbsorption = optics.absorption;
+				settings.aerosolPhaseG = optics.phaseG;
+			}
+			settings.aerosolType = static_cast<Aerosol::Type>(type);
+		}
 		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("usually_1_9_of_scatter_coefficient_dust_pollution"), "Usually 1/9 of scatter coefficient. Dust/pollution is lower, fog is higher."));
-		ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
+			ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+
+		if (type != 0) {
+			ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &settings.aerosolLoading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
+			ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &settings.aerosolHumidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+		} else {
+			ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+			ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		}
+		if (ImGui::TreeNode(T(TKEY("aerosol_vertical_distribution"), "Vertical Distribution"))) {
+			ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
+			ImGui::TreePop();
+		}
 		ImGui::PopID();
 	}
 
@@ -993,6 +1030,7 @@ void PhysicalSky::Reset()
 	auto sunDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Sun)];
 	auto masserDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Masser)];
 	auto secundaDir = skySync.rawDirections[static_cast<int>(SkySync::Caster::Secunda)];
+	const auto aerosol = settings.GetAerosolOptics();
 
 	cbData = {
 		.texDim = res,
@@ -1017,10 +1055,10 @@ void PhysicalSky::Reset()
 		.groundAlbedo = settings.groundAlbedo,
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
-		.aerosolPhaseG = settings.aerosolPhaseG,
-		.aerosolScatter = settings.aerosolScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolPhaseG = aerosol.phaseG,
+		.aerosolScatter = aerosol.scatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
-		.aerosolAbsorption = settings.aerosolAbsorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
+		.aerosolAbsorption = aerosol.absorption * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighFalloff = settings.rayleighFalloff * Util::Units::GAME_UNIT_TO_KM,
 		.rayleighScatter = settings.rayleighScatter * 1e-3 * Util::Units::GAME_UNIT_TO_KM,
 		.ozoneAltitude = settings.ozoneAltitude / Util::Units::GAME_UNIT_TO_KM,
