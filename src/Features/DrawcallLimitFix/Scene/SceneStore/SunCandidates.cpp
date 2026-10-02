@@ -1,5 +1,8 @@
 #include "Internal.h"
 
+#include <map>
+#include <numeric>
+
 namespace DCLF
 {
 	bool SceneStore::OcclusionEnabled(std::uint32_t a_view)
@@ -125,8 +128,70 @@ namespace DCLF
 		case Ineligible::Switch:  // an unselected child: the switch node culls only the selected one
 			return a_switchNodes;
 		default:
-			return false;
+			// A property no shadow view takes, whatever the frame (refraction, for one: a fire's embers, a stream's surface).
+			return a_tracked.geometry && CastsNoShadow(a_tracked.geometry->GetGeometryRuntimeData().shaderProperty.get(), a_tracked.geometry.get());
 		}
+	}
+
+	std::string SceneStore::CoverageCensus() const
+	{
+		struct Row
+		{
+			std::uint32_t count = 0;
+			std::string example;
+		};
+		auto techniqueOf = [](const RE::BSGeometry& a_geometry) -> std::string {
+			const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+			if (!lighting)
+				return "not lighting";
+			const std::uint64_t flags = lighting->flags.underlying();
+			return std::string(LightingTechniqueName((flags & 0x8004ull) ? 63u : SelectLightingTechnique(flags)));
+		};
+		auto describe = [&](const RE::BSGeometry& a_geometry, const Tracked& a_tracked) {
+			const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
+			return fmt::format("{} {}, shadow {}, {}", kIneligibleNames[static_cast<std::size_t>(a_tracked.candidateReason)], techniqueOf(a_geometry),
+				ShadowRejectName(ShadowCasterReject(property, &a_geometry, false)), a_tracked.slot != kNoObjectSlot ? "record" : "no record");
+		};
+		auto exampleOf = [](const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_entry) {
+			return fmt::format("'{}' under '{}'", a_geometry.name.c_str() ? a_geometry.name.c_str() : "", a_entry && a_entry->name.c_str() ? a_entry->name.c_str() : "");
+		};
+		std::map<std::string, Row> techniques, blockers;
+		for (const auto& [geometry, entry] : tracked) {
+			if (!geometry || entry.candidateFrame == 0 || entry.candidateReason != Ineligible::Technique)
+				continue;
+			auto& row = techniques[describe(*geometry, entry)];
+			if (row.count++ == 0)
+				row.example = exampleOf(*geometry, entry.lightRoot ? entry.lightRoot : entry.sunEntryNode);
+		}
+		const bool switchNodes = ActiveToggles().switchNodes;
+		const auto* exclusion = lightCandidates.get();
+		std::uint32_t entries = 0, kept = 0;
+		for (const auto& [root, dependents] : lightDependents) {
+			if (dependents.empty() || IsCategoryNode(root))
+				continue;
+			++entries;
+			if (lightCandidateSet.contains(root))
+				continue;
+			++kept;
+			for (auto* geometry : dependents) {
+				const auto it = tracked.find(geometry);
+				if (it == tracked.end() || LightEntryAllows(it->second, *geometry, switchNodes))
+					continue;
+				auto& row = blockers[it == tracked.end() ? std::string("untracked") : describe(*geometry, it->second)];
+				if (row.count++ == 0)
+					row.example = exampleOf(*geometry, root);
+				break;
+			}
+		}
+		std::string text = fmt::format("[DCLF] coverage census: {} geometries left native for their technique, by verdict, technique, shadow verdict and record:",
+			std::accumulate(techniques.begin(), techniques.end(), 0u, [](std::uint32_t a_sum, const auto& a_row) { return a_sum + a_row.second.count; }));
+		for (const auto& [name, row] : techniques)
+			text += fmt::format("\n    {}: {}; e.g. {}", name, row.count, row.example);
+		text += fmt::format("\n[DCLF] coverage census: {} of {} light entries not candidates (the light candidates {}), by the first geometry that blocks them:", kept,
+			entries, exclusion ? fmt::format("snapshot of {}", exclusion->entries.size()) : std::string("not built"));
+		for (const auto& [name, row] : blockers)
+			text += fmt::format("\n    {}: {}; e.g. {}", name, row.count, row.example);
+		return text;
 	}
 
 	bool SceneStore::PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry)

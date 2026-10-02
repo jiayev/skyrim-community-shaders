@@ -61,8 +61,6 @@ namespace DCLF
 		 * test (FUN_14151a1e0, its sphere), or untested where the cull reached it untested (cull mode 1). A portal-strict light's
 		 * compound frustum is not tested. Parity frames compare them with the engine's.
 		 */
-		/** @brief SunAccumulation's mask-clear hook (Main::Draw's FUN_1414cb640), before the call: a new frame of lights. */
-		void NoteMaskClear();
 		/**
 		 * @brief SunAccumulation's registration hook, a main registration (+0x160 0xFFFF: it reads the mask, then clears it) of
 		 * a geometry DCLF does not draw in the main pass, before the call: a cut entry's takes the lights' bits.

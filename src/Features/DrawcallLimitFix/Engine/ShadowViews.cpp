@@ -65,6 +65,25 @@ namespace DCLF
 		return ShadowReject::None;
 	}
 
+	bool CastsNoShadow(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
+	{
+		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
+		if (!lighting || !a_geometry)
+			return false;
+		const std::uint64_t flags = lighting->flags.underlying();
+		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
+		const bool blended = alpha && (alpha->alphaFlags & 1);
+		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
+		const bool decalLike = decal && (flags & Bit(18));
+		if (decal && !(decalLike && (flags & Bit(32)) && blended))
+			return true;  // DecalNoZWrite, DecalPointLight
+		if (flags & 0x8004ull)
+			return true;  // Refraction: GetRenderPasses_ShadowMapOrMask rejects the flags themselves
+		if (blended && !decalLike)
+			return true;  // AlphaBlended
+		return const_cast<RE::BSLightingShaderProperty*>(lighting)->DetermineUtilityShaderDecl() == 0;
+	}
+
 	std::uint32_t ShadowUtilityTechnique(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry)
 	{
 		auto* lighting = const_cast<RE::BSLightingShaderProperty*>(netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property));

@@ -66,6 +66,13 @@ namespace DCLF
 	 * BuildDraws drops the caster while the GPU's state fades it (kFadeRootStoodIn).
 	 */
 	ShadowReject ShadowCasterReject(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry, bool a_fadeOnGpu);
+	/**
+	 * @brief Whether a Lighting property's own flags give it no shadow pass in any view, whatever the frame: the verdicts of
+	 * ShadowCasterReject that no fade, global or view changes (a rejected decal, refraction, alpha blending, a Utility
+	 * declaration of 0).
+	 * Its entry can leave every shadow cull; only its activeLightMask bits are wanted, which DCLF writes.
+	 */
+	bool CastsNoShadow(const RE::BSShaderProperty* a_property, const RE::BSGeometry* a_geometry);
 
 	/**
 	 * @brief The Utility technique the engine derives for a caster, without the view's mode bits.

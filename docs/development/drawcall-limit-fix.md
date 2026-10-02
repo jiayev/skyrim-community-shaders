@@ -6522,8 +6522,11 @@ on the GPU (`LocalShadowLights`). The engine's main passes under a cut entry (te
 parts) take them from DCLF, as the sun's do (`ApplySunBits`):
 -   **The test.** `FUN_14151a1e0`, the process's bound test, reduces to the light's sphere: visible when
     `(|c - centre| - r) - radius < 0` (skyrim-engine-notes.md, "Point lights' shadow culls").
--   **Per light**, in the `Accumulate` thunk: its ordinal in the frame (from Main::Draw's mask clear; past 32, a light
-    culls everything), its bit (its accumulators' `+0x164`), and the sphere, read from the static process during its cull.
+-   **Per light**, in the `Accumulate` thunk: its ordinal in the frame (from the selection; past 32, a light culls
+    everything), its bit (its accumulators' `+0x164`), and the sphere, read from the static process during its cull. Not
+    from Main::Draw's mask clear (`FUN_1414cb640`): Main::Draw calls it only while the player's third-person 3D is drawn,
+    so in first person the lights accumulate with no clear before them. Keyed on it, the list kept the earlier frames'
+    lights and their reach, and the parity found bits given from them (the interiors tour, High Hrothgar).
 -   **Reach**, recorded in the walk: a filtered category node the light reaches (one stamped store per node per light), or
     an entry its `Process1` skips (stamped words per candidate, `SunExclusion::lightReach`), by the process's state there:
     untested (cull mode 1, under a `kAllPass` multibound), the sphere, or the sphere and the portals (mode 4 with a
@@ -6548,3 +6551,43 @@ parts) take them from DCLF, as the sun's do (`ApplySunBits`):
 
 **What is left:** the blocked entries above, each a paraboloid coverage expansion (technique, unsupported parent, skin
 shape). Once those are covered, a light walks only the cells and the category nodes.
+
+### Properties no shadow view takes, and the tour of the map (2026-10-01)
+
+**The census** (`CS_DCLF_COVERAGE_PROBE`, `SceneStore::CoverageCensus`, every report): every tracked geometry the main pass
+leaves to the engine for its technique, by verdict, technique, shadow verdict and record; and the light entries kept in the
+point lights' culls, by the first geometry that blocks them. Two teleport tours with it and the parity switches: the hold
+cities (Whiterun, Solitude, Windhelm, Riften, Markarth) and the interiors (Dragonsreach, Breezehome, the Blue Palace, the
+Palace of the Kings, Understone Keep, the Ratway, Bleak Falls Barrow, High Hrothgar, Sky Haven Temple, Mzinchaleft,
+Nchuand-Zel).
+
+**What kept light entries in** (most at a location): 126 hay (unsupported parent, decals no shadow view takes), 77
+refraction (a fire's heat haze, streams), 53 cave walls and boulders (not tri-shapes, real casters), 5 actors (hair: a
+skin-shape verdict, alpha-blended), 2 parallax-occlusion river decals.
+
+**The rule** (`CastsNoShadow`, Engine/ShadowViews.cpp; `SunEntryAllows`): a Lighting property whose own flags give it no
+shadow pass in any view, whatever the frame, lets its entry go: the decals `ShadowCasterReject` rejects, refraction
+(`GetRenderPasses_ShadowMapOrMask` rejects the flags themselves), alpha blending outside the decal exception, and a Utility
+declaration of 0. Not a fade (it changes with no event) or the shadow global. The sun's entries take it too, through the
+shared rule. Only the masks are wanted from such a geometry, and DCLF writes them (the lights' bits; the sun's,
+`ApplySunBits`).
+
+**Results.** Riverwood: 9 children culled a light (219 before), 0.07-0.10 ms a light with the parity frames. Every light entry
+on the tour is a candidate but for the cave geometry (not tri-shapes). The main pass's techniques left to the engine across
+the map: terrain (`MTLand`, `MTLandLODBlend`: Terrain Blending draws it after the opaque pass), multilayer parallax (ice
+floes, a few clutter pieces), parallax occlusion (river decals) and refraction.
+
+**Two defects the tours found:**
+-   **The frame's lights.** Main::Draw calls its mask clear (`FUN_1414cb640`, `0x140644d7e`) only inside a block that draws the
+    player's third-person 3D (it unhides it first). In first person the lights accumulate with no clear before them, and the
+    light list was keyed on it: it kept earlier frames' lights and their reach, and a main registration took bits from them
+    (High Hrothgar: 163 differences, every light the same light). The list now starts at the selection, every frame.
+-   **A DXVK hang** (entering the Palace of the Kings): the main thread waited in `DxvkCsThread::injectChunk` (the ORG interop's
+    `GetResourceInfo`, a buffer's address for `GpuResources::Acquire`) while the CS thread waited for work. The CS thread
+    woke one waiter (`notify_one`) per synchronized chunk; upstream has one synchronizing thread, but the interop lets
+    several wait at once, each for its own sequence number, so the wrong one could be woken and the right one never. It
+    wakes all of them now (`extern/dxvk/src/dxvk/dxvk_cs.cpp`).
+
+**The bits' parity on the tour:** all agree but for the kinds known: the hair at the radius edge, a terrain block once
+(Mzinchaleft, its bound 2,750 units outside the radius: the light gives it nothing), and portal-strict lights' bits DCLF
+gives without the portal test (a cobweb, a spider web: DCLF only, as its members' rule).

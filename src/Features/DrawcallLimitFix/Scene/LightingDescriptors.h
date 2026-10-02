@@ -172,6 +172,14 @@ namespace DCLF
 
 	/** @brief Technique GetRenderPasses selects from the property flags (engine notes: technique table). */
 	std::uint32_t SelectLightingTechnique(std::uint64_t a_flags);
+	/** @brief The Lighting techniques by id (SelectLightingTechnique), and kRefractionReject's name. */
+	constexpr std::array<std::string_view, 20> kLightingTechniqueNames{ "none", "envmap", "glowmap", "parallax", "facegen",
+		"facegenRGBTint", "hair", "parallaxOcc", "MTLand", "LODLand", "snow", "multilayerParallax", "treeAnim", "LODObjects",
+		"multiIndexSparkle", "LODObjectHD", "eye", "cloud", "LODLandNoise", "MTLandLODBlend" };
+	inline std::string_view LightingTechniqueName(std::uint32_t a_technique)
+	{
+		return a_technique == 63 ? std::string_view("refraction") : a_technique < kLightingTechniqueNames.size() ? kLightingTechniqueNames[a_technique] : std::string_view("?");
+	}
 
 	/**
 	 * @brief A member's main pass, built from the object alone (PrimaryCull::MembershipPass): what GetRenderPasses would

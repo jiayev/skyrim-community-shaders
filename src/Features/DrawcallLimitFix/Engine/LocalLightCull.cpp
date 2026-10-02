@@ -127,10 +127,10 @@ namespace DCLF::LocalLightCull
 			bool captured = false;
 		};
 		std::array<FrameLight, kMaxLights> frameLights;
-		std::atomic<std::uint32_t> frameLightNext{ 0 };      // the next light's ordinal (from the mask clear)
+		std::atomic<std::uint32_t> frameLightNext{ 0 };      // the next light's ordinal (from the selection)
 		std::atomic<std::uint32_t> frameLightBits{ 0 };      // every light's bit this frame
 		std::atomic<std::uint32_t> lightStamp{ 1 };          // the frame's: the reach words' and the consumed geometries'
-		std::atomic<bool> lightsReady{ false };              // a light accumulated since the mask clear
+		std::atomic<bool> lightsReady{ false };              // a light accumulated since the selection
 		thread_local std::uint32_t currentLight = kNoLight;  // the ordinal of the light whose Accumulate runs on this thread
 
 		struct BitStats
@@ -143,6 +143,22 @@ namespace DCLF::LocalLightCull
 		BitStats bitStats;
 		std::string bitsFirst;  // under firstMutex
 		std::uint32_t bitsLogged = 0;
+
+		/**
+		 * @brief Render thread, at the selection (every frame, before Main::Draw): a new frame of lights. Not Main::Draw's mask
+		 * clear (FUN_1414cb640), which it calls only while the player's third-person 3D is drawn: in first person the lights
+		 * accumulate with no clear before them.
+		 */
+		void ResetFrameLights()
+		{
+			lightsReady.store(false, std::memory_order_relaxed);
+			frameLightNext.store(0, std::memory_order_relaxed);
+			frameLightBits.store(0, std::memory_order_relaxed);
+			for (auto& light : frameLights)
+				light.captured = false;
+			if (lightStamp.fetch_add(1, std::memory_order_relaxed) + 1 == 0)
+				lightStamp.store(1, std::memory_order_relaxed);
+		}
 
 		/** @brief Inside a light's cull: it reached the children of a node (a_words: the node's or the entry's reach words). */
 		void NoteReach(const RE::NiCullingProcess* a_process, std::atomic<std::uint64_t>* a_words)
@@ -492,6 +508,7 @@ namespace DCLF::LocalLightCull
 	{
 		if (!installed)
 			return;
+		ResetFrameLights();
 		++stats.frames;
 		// The culls of the frame read this one; the previous frame's culls are over (they ran before its shadow epoch).
 		std::shared_ptr<SunExclusion> next = pending;
@@ -521,17 +538,6 @@ namespace DCLF::LocalLightCull
 			return;
 		if (const auto it = filter->nodes.find(a_parent); it != filter->nodes.end() && !it->second->dirty.exchange(true, std::memory_order_acq_rel))
 			dirtied.fetch_add(1, std::memory_order_release);
-	}
-
-	void NoteMaskClear()
-	{
-		lightsReady.store(false, std::memory_order_relaxed);
-		frameLightNext.store(0, std::memory_order_relaxed);
-		frameLightBits.store(0, std::memory_order_relaxed);
-		for (auto& light : frameLights)
-			light.captured = false;
-		if (lightStamp.fetch_add(1, std::memory_order_relaxed) + 1 == 0)
-			lightStamp.store(1, std::memory_order_relaxed);
 	}
 
 	void NoteMainRegistration(RE::BSGeometry* a_geometry)

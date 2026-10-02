@@ -1069,6 +1069,12 @@ namespace DCLF
 			const auto it = a_fadeNode ? fadeRootOwned.find(a_fadeNode) : fadeRootOwned.end();
 			return it != fadeRootOwned.end() && it->second;
 		}
+		/**
+		 * @brief CS_DCLF_COVERAGE_PROBE, render thread, at a report: every tracked geometry the main pass leaves to the engine
+		 * for its technique, by technique, shadow verdict and record; and the light entries kept in the point lights' culls,
+		 * by what blocks them (the first geometry LightEntryAllows refuses, or a caster the paraboloid views do not draw).
+		 */
+		std::string CoverageCensus() const;
 		std::size_t StoodInFadeRoots() const
 		{
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));

@@ -526,7 +526,6 @@ namespace DCLF
 		{
 			static void thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
-				LocalLightCull::NoteMaskClear();
 				func(a_1, a_2, a_3, a_4);
 				SunAccumulation::Get().bitsReady.store(false, std::memory_order_relaxed);
 			}
