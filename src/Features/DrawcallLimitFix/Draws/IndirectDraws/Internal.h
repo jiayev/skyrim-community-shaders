@@ -782,6 +782,20 @@ namespace DCLF
 		 * @brief One captured view of the frame's shadow epoch: where to draw its render mode's inputs and
 		 * with which per-view blocks (its record region names them).
 		 */
+		/**
+		 * @brief A shadow view's bucket: one plain indirect draw with one pipeline over a range of the view slot's sequences
+		 * (ShadowViewPass). A view has a bucket per pipeline its rasterizer state's map row names, in the row's order, and the
+		 * bucket's index is what the row holds for its key slots (BuildDrawsCS).
+		 */
+		struct ShadowBucket
+		{
+			std::uint32_t pipeline = 0;  // its shadow set index (ShadowIndirectState::pipelines)
+			std::uint32_t first = 0;     // its range, in sequences
+			std::uint32_t capacity = 0;  // its draw's max count: every draw its key slots' inputs can produce, grown by doubling
+
+			bool operator==(const ShadowBucket&) const = default;
+		};
+
 		struct ShadowFrameView
 		{
 			std::uint32_t slot = 0;       // the view's sequence and count buffers, record region and latch
@@ -795,6 +809,8 @@ namespace DCLF
 			std::uint32_t sequenceDraws = 0;  // its slot's sequence buffer, in draws (ShadowResources::sequenceDraws)
 			// The view's push data (DrawPipelines.h, kShadowPushWords): its blocks' addresses, pushed once for its draws.
 			std::array<std::uint32_t, kShadowPushWords> push{};
+			// Its draws, one per bucket with a capacity, the depth-only class's pipelines first (ShadowEpochs.cpp, ShadowBuckets).
+			std::vector<ShadowBucket> buckets;
 
 			bool operator==(const ShadowFrameView&) const = default;
 		};
@@ -819,9 +835,9 @@ namespace DCLF
 
 			bool SameShape(const ShadowFrame& o) const
 			{
+				// The version holds the pipelines the views' buckets bind (ShadowIndirectState::pipelines).
 				return latch == o.latch && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
-				       SameHandle(indirect.layout, o.indirect.layout) && SameHandle(indirect.set, o.indirect.set) && SameHandle(indirect.signature, o.indirect.signature) &&
-				       views == o.views;
+				       SameHandle(indirect.layout, o.indirect.layout) && indirect.version == o.indirect.version && views == o.views;
 			}
 		};
 
@@ -843,10 +859,40 @@ namespace DCLF
 		}
 
 		/** @brief The shadow views' graph resources: the main path's set, without targets or an HZB, per view slot. */
+		/**
+		 * @brief The shadow views' index pool: the index buffers of the geometry slots, copied into one DCLF buffer, so that the
+		 * views' plain indexed draws bind one index buffer (ShadowViewPass) and keep the hardware's vertex reuse. A range is
+		 * shared by every slot naming the same buffer. The shadow commit gives out ranges as the geometry log names slots, and
+		 * takes one back when its last slot lets go (UpdateIndexPool); the copies run in the shadow epoch before its draws
+		 * (IndexPoolCS). A pool that cannot fit a range doubles, and its ranges are laid out and copied again. Render thread.
+		 */
+		struct ShadowIndexPool
+		{
+			static constexpr std::uint32_t kNoRange = ~0u;
+			struct Range
+			{
+				std::uint32_t first = 0, count = 0, refs = 0;  // in indices; first and count even (4-byte aligned)
+			};
+			std::shared_ptr<org::Buffer> indices;  // 16-bit
+			std::uint32_t capacity = 0;            // in indices
+			std::shared_ptr<org::Buffer> firsts;   // per geometry slot: its range's first index, kNoRange without one
+			std::uint32_t firstsCapacity = 0;
+			std::shared_ptr<org::Buffer> copies;   // this commit's copies: source address (low, high), first index, words
+			std::uint32_t copiesCapacity = 0;
+			std::shared_ptr<const ComputeProgram> program;
+			rhi::CommandSignaturePtr dispatchSignature;
+			std::uint64_t layout = 0;  // bumped whenever a buffer gets a new backing
+			LogCursor cursor;
+			ankerl::unordered_dense::map<std::uint64_t, Range> ranges;  // by index buffer address
+			std::vector<std::uint64_t> slotAddress;                     // per geometry slot: the buffer whose range it holds
+			std::vector<std::uint32_t> slotFirst;                       // per geometry slot: the range's first index
+			std::map<std::uint32_t, std::uint32_t> free;                // first -> count
+			std::uint32_t end = 0;                                      // past the last range ever given out
+			std::uint64_t indicesHeld = 0;                              // live indices, for the report
+		};
+
 		struct ShadowResources
 		{
-			// The explicit DGC preprocesses' state lists: the shadow views' pass, Skylighting's.
-			std::shared_ptr<PreprocessStates> preprocessShadow, preprocessSky;
 			std::shared_ptr<org::Buffer> constants, visibility;
 			std::uint32_t objectCapacity = 0;  // what visibility and the inputs hold, as Resources::objectCapacity
 			// The material rows every view's draws name (ShadowMaterialRow), grown with the kept state.
@@ -859,6 +905,11 @@ namespace DCLF
 			// every draw the scene can produce (Impl::ReserveShadowSequences) - and its counters' readback view. Render thread.
 			std::vector<std::shared_ptr<org::Buffer>> sequences, count;
 			std::vector<std::uint32_t> sequenceDraws;
+			// Per view slot, its buckets' counts (ShadowBucket), a word a bucket: as many as the latch layout's key slots, which
+			// bound a view's buckets (bucketCountWords, grown with them).
+			std::vector<std::shared_ptr<org::Buffer>> bucketCounts;
+			std::uint32_t bucketCountWords = 0;
+			std::shared_ptr<ShadowIndexPool> pool;
 			std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 			// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 			GrowableRows viewBlocks;
@@ -1527,6 +1578,8 @@ namespace DCLF
 			std::uint32_t rowsWanted = 0, waitingRows = 0;
 			// Per mode, the draws its inputs can produce (a skin draws once per partition): its views' max count.
 			std::array<std::uint32_t, kShadowModeCount> modeDraws{};
+			// Per mode, the same by key slot (DrawInput::pipelineIndex): what sizes a view's buckets (ShadowBucket).
+			std::array<std::vector<std::uint32_t>, kShadowModeCount> keySlotDraws;
 			// The blocks every view's push data names besides its own (kShadowPushZeros and after), in the arena.
 			std::uint64_t zerosAddress = 0, sharedDataAddress = 0, featureDataAddress = 0;
 			std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
@@ -1586,6 +1639,8 @@ namespace DCLF
 				materialRows.Reset();
 				rowsWanted = waitingRows = 0;
 				modeDraws = {};
+				for (auto& slots : keySlotDraws)
+					slots.clear();
 				zerosAddress = sharedDataAddress = featureDataAddress = 0;
 				bindingOwners.clear();
 				objectRecord.clear();

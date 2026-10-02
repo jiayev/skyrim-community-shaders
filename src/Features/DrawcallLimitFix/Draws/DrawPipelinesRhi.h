@@ -3,6 +3,7 @@
 // BasicRHI view of DrawPipelines, for the graph pass (include after rhi_interop_vulkan.h).
 #include <array>
 #include <memory>
+#include <vector>
 #include <rhi.h>
 
 #include "DrawPipelines.h"
@@ -26,12 +27,17 @@ namespace DCLF
 
 	IndirectState GetIndirectState();
 
-	/** @brief The shadow views' pipeline set and its command signature (DrawPipelines::FindShadow). */
+	/** @brief The shadow views' pipelines (DrawPipelines::FindShadow), valid once one is published. */
 	struct ShadowIndirectState
 	{
 		rhi::PipelineLayoutHandle layout{};
-		rhi::IndirectPipelineSetHandle set{};
-		rhi::CommandSignatureHandle signature{};
+		// The shadow views' plain indirect draws (ShadowViewPass): every published pipeline by its index, its geometry's vertex
+		// layout (ShadowPipelineKey::vertexLayout, which the pulling vertex stage decodes) and its class (DrawPipelines::
+		// ShadowDiscards), and the signature of a DrawSequence's tail as a plain draw.
+		std::vector<rhi::PipelineHandle> pipelines;
+		std::vector<std::uint64_t> vertexLayouts;
+		std::vector<std::uint8_t> discards;
+		rhi::CommandSignatureHandle drawSignature{};
 		std::shared_ptr<const void> version;  // as IndirectState::version
 		bool valid = false;
 	};

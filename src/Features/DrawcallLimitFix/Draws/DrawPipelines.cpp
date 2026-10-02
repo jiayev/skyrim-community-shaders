@@ -26,12 +26,48 @@ namespace DCLF
 	namespace
 	{
 		constexpr std::uint32_t kMaxInFlight = 4;  // pipeline builds running at once (each is a thread)
+
+		/**
+		 * @brief Whether a fragment program can keep a depth-writing draw from testing depth before it shades: it discards
+		 * (OpKill, OpTerminateInvocation, OpDemoteToHelperInvocation), writes the depth or the sample mask, or writes memory.
+		 * Such a pipeline is of a shadow view's discarding class (DrawPipelines::ShadowDiscards), drawn after the others.
+		 */
+		bool FragmentDefersDepth(std::span<const std::byte> a_spirv)
+		{
+			const std::size_t words = a_spirv.size() / 4;
+			if (words < 5)
+				return true;
+			auto word = [&](std::size_t i) {
+				std::uint32_t w;
+				std::memcpy(&w, a_spirv.data() + i * 4, 4);
+				return w;
+			};
+			constexpr std::uint32_t kOpDecorate = 71, kOpMemberDecorate = 72, kOpImageWrite = 99, kOpAtomicFirst = 227, kOpAtomicLast = 242,
+									kOpKill = 252, kOpTerminateInvocation = 4416, kOpDemoteToHelperInvocation = 5380, kDecorationBuiltIn = 11,
+									kBuiltInSampleMask = 20, kBuiltInFragDepth = 22;
+			auto depthOrMask = [](std::uint32_t a_builtIn) { return a_builtIn == kBuiltInFragDepth || a_builtIn == kBuiltInSampleMask; };
+			for (std::size_t i = 5; i < words;) {
+				const std::uint32_t first = word(i);
+				const std::uint32_t count = first >> 16, op = first & 0xFFFF;
+				if (count == 0 || i + count > words)
+					return true;
+				if (op == kOpKill || op == kOpTerminateInvocation || op == kOpDemoteToHelperInvocation || op == kOpImageWrite ||
+					(op >= kOpAtomicFirst && op <= kOpAtomicLast))
+					return true;
+				if (op == kOpDecorate && count >= 4 && word(i + 2) == kDecorationBuiltIn && depthOrMask(word(i + 3)))
+					return true;
+				if (op == kOpMemberDecorate && count >= 5 && word(i + 3) == kDecorationBuiltIn && depthOrMask(word(i + 4)))
+					return true;
+				i += count;
+			}
+			return false;
+		}
 		constexpr std::uint32_t kMaxLoggedFailures = 8;
 
 		// Register classes as shifted by the SPIR-V builds (ShaderPrograms.h); set 0.
 		// Push data. The DCLF_BINDLESS builds declare a cbuffer here to read the object index out of it;
 		// the address words beside it are still consumed by the layout's indirect ranges, not by a shader.
-		constexpr std::uint32_t kRecordAddressBinding = 190;
+		constexpr std::uint32_t kRecordAddressBinding = kDrawPushBinding;
 		// The two texture registers the vertex stage may declare: the bone palette buffer and, above it,
 		// the per-object record buffer.
 		constexpr std::uint32_t kObjectBufferBinding = kBindingShiftT + kObjectBufferRegister;
@@ -212,11 +248,14 @@ namespace DCLF
 			rhi::CommandSignaturePtr depthPassSignature;  // IndirectState::depthPassSignature, when it differs from the depth variant's
 			std::uint32_t applied = 0;
 		};
-		// The shadow views' set and signature, versioned the same way.
+		// The shadow views' pipelines, versioned the same way: their plain draws bind each by its index (ShadowIndirectState).
 		struct ShadowSetVersion
 		{
-			rhi::IndirectPipelineSetPtr set;
-			rhi::CommandSignaturePtr signature;
+			// The pipelines of [0, applied), held for as long as a recording holds the version (ShadowIndirectState::pipelines),
+			// with their keys' vertex layouts and their classes.
+			std::vector<org::services::PipelinePayload> pipelines;
+			std::vector<std::uint64_t> layouts;
+			std::vector<std::uint8_t> discards;
 			std::uint32_t applied = 0;
 		};
 		// Enough that one is normally free: the published one, and the one the frames still being recorded may hold.
@@ -288,6 +327,9 @@ namespace DCLF
 		// frame slots. Without frame push the shadow views use the main layout.
 		rhi::PipelineLayoutPtr shadowLayout;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
+		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
+		// indexed draw from the index pool (BuildDrawsCS, StoreShadowSequence), whose vertex stage pulls its vertices.
+		rhi::CommandSignaturePtr shadowDrawSignature;
 		bool supported = false;
 		bool attempted = false;
 		org::services::PipelineService service;
@@ -341,6 +383,7 @@ namespace DCLF
 			// Per variant: the Z-prepass build of the pixel stage reads far less than the colour one, and a
 			// draw only has to supply what its own variant declares.
 			std::array<RegisterUsage, kVariantCount> usage;
+			bool discards = false;  // a shadow pipeline whose pixel stage defers the depth test (FragmentDefersDepth)
 		};
 
 		/**
@@ -593,6 +636,16 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the shadow views' pipeline layout");
 				return false;
 			}
+			rhi::IndirectArg draw{};
+			draw.kind = rhi::IndirectArgKind::DrawIndexed;
+			rhi::CommandSignatureDesc drawDesc{};
+			drawDesc.args = { &draw, 1 };
+			drawDesc.byteStride = sizeof(DrawSequence);
+			if (device.CreateCommandSignature(drawDesc, ShadowLayout(), shadowDrawSignature) != rhi::Result::Ok) {
+				supported = false;
+				logger::error("[DCLF] Could not create the shadow views' draw signature");
+				return false;
+			}
 			return true;
 		}
 
@@ -700,8 +753,10 @@ namespace DCLF
 			const rhi::SubobjShader pixelShader{ rhi::ShaderStage::Pixel, { a_program->pixel.data(), static_cast<std::uint32_t>(a_program->pixel.size()) }, "main" };
 			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_depthFormat) };
 			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
+			// The pulling vertex stage (Utility.hlsl, DCLF_PULLED) has no vertex inputs; the pipeline is bound by its draws, not
+			// from an execution set.
 			const rhi::SubobjInputLayout input{ BuildInputLayout(vertex, a_key.vertexLayout) };
-			const rhi::SubobjFlags flags{ rhi::PipelineFlags_IndirectBindable };
+			const rhi::SubobjFlags flags{};
 			rhi::SubobjRaster raster{};
 			raster.rs.cull = (a_key.rasterFlags & kRasterTwoSided) ? rhi::CullMode::None : a_state.cull;
 			raster.rs.frontCCW = a_state.frontCCW;
@@ -725,28 +780,8 @@ namespace DCLF
 			};
 			if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), built->pipelines[kColorVariant]); result != rhi::Result::Ok)
 				throw std::runtime_error(fmt::format("CreatePipeline (shadow) failed ({})", static_cast<int>(result)));
+			built->discards = FragmentDefersDepth(a_program->pixel);
 			return built;
-		}
-
-		/** @brief The shadow set's command signature; the same DrawSequence stream as the main pass's. */
-		bool CreateShadowSignature(ShadowSetVersion& a_version)
-		{
-			rhi::IndirectArg args[6]{};
-			args[0].kind = rhi::IndirectArgKind::PipelineIndex;
-			args[1].kind = rhi::IndirectArgKind::Constant;
-			args[1].u.rootConstants = { 0, 0, kDrawPushArgumentWords };  // the rows' addresses and the object word
-			args[2].kind = rhi::IndirectArgKind::VertexBuffer;
-			args[2].u.vertexBuffer.slot = 0;
-			args[3].kind = rhi::IndirectArgKind::VertexBuffer;
-			args[3].u.vertexBuffer.slot = 1;
-			args[4].kind = rhi::IndirectArgKind::IndexBuffer;
-			args[5].kind = rhi::IndirectArgKind::DrawIndexed;
-			rhi::CommandSignatureDesc desc{};
-			desc.args = { args, 6 };
-			desc.byteStride = sizeof(DrawSequence);
-			desc.pipelineSet = a_version.set->GetHandle();
-			desc.explicitPreprocess = true;
-			return device.CreateCommandSignature(desc, ShadowLayout(), a_version.signature) == rhi::Result::Ok;
 		}
 
 		// The command signature of DrawSequence (Records.h), created with the set it selects from.
@@ -992,6 +1027,8 @@ namespace DCLF
 				impl->shadowVersions.Retire();
 				impl->shadowSetPipelines.clear();
 				shadowUsage.clear();
+				shadowDiscards.clear();
+				shadowLayouts.clear();
 				impl->shadowInFlight = 0;
 				stats.shadowRequested = stats.shadowReady = stats.shadowFailed = 0;
 				impl->shadowRecreatedBy = fmt::format("shadow map format {} -> {}", static_cast<int>(impl->shadowDepthFormat), static_cast<int>(a_depthFormat));
@@ -1161,13 +1198,16 @@ namespace DCLF
 			entry.slot = static_cast<std::uint32_t>(impl->shadowSetPipelines.size());
 			impl->shadowSetPipelines.push_back(artifact.payload);
 			shadowUsage.push_back(built->usage[kColorVariant]);
+			shadowDiscards.push_back(built->discards ? 1 : 0);
+			shadowLayouts.push_back(key.vertexLayout);
 		}
 		const auto shadowAdmitted = static_cast<std::uint32_t>(impl->shadowSetPipelines.size());
 		if (shadowAdmitted) {
 			const auto result = impl->shadowVersions.Publish(shadowAdmitted, [&](Impl::ShadowSetVersion& a_version) {
-				return impl->ApplyToSet(a_version.set, a_version.applied, shadowAdmitted, "DCLF indirect pipelines (shadow)",
-					[&](std::uint32_t a_index) { return static_cast<const Impl::Built*>(impl->shadowSetPipelines[a_index].get())->pipelines[kColorVariant]->GetHandle(); },
-					[&] { return impl->CreateShadowSignature(a_version); });
+				a_version.pipelines.assign(impl->shadowSetPipelines.begin(), impl->shadowSetPipelines.begin() + shadowAdmitted);
+				a_version.layouts.assign(shadowLayouts.begin(), shadowLayouts.begin() + shadowAdmitted);
+				a_version.discards.assign(shadowDiscards.begin(), shadowDiscards.begin() + shadowAdmitted);
+				return true;
 			});
 			using Result = decltype(result);
 			stats.shadowSetPublishes += result == Result::Published;
@@ -1197,8 +1237,12 @@ namespace DCLF
 		if (!impl.layout || !version)
 			return state;
 		state.layout = impl.ShadowLayout();
-		state.set = version->set->GetHandle();
-		state.signature = version->signature->GetHandle();
+		state.pipelines.reserve(version->pipelines.size());
+		for (const auto& payload : version->pipelines)
+			state.pipelines.push_back(static_cast<const DrawPipelines::Impl::Built*>(payload.get())->pipelines[kColorVariant]->GetHandle());
+		state.vertexLayouts = version->layouts;
+		state.discards = version->discards;
+		state.drawSignature = impl.shadowDrawSignature->GetHandle();
 		state.version = std::move(version);
 		state.valid = true;
 		return state;

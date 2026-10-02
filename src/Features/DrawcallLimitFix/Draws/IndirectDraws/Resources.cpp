@@ -123,10 +123,12 @@ namespace DCLF::Draws
 		{
 			for (auto s = static_cast<std::uint32_t>(a_state.sequences.size()); s < a_slots; ++s) {
 				a_state.sequenceDraws.push_back(64u);
-				a_state.sequences.push_back(CreateWords(64ull * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str()));
+				a_state.sequences.push_back(CreateWords(kShadowClasses * 64ull * sizeof(DrawSequence) / 4, true, fmt::format("cs.dclf.shadow.sequences{}", s).c_str()));
 				a_state.count.push_back(CreateWords(kCountWords, true, fmt::format("cs.dclf.shadow.draw-count{}", s).c_str()));
 				a_state.countD3D11.push_back(WrapWords(*a_state.count.back(), kCountWords * sizeof(std::uint32_t)));
+				a_state.bucketCounts.push_back(CreateWords(std::max(a_state.bucketCountWords, 64u), true, fmt::format("cs.dclf.shadow.bucket-counts{}", s).c_str()));
 			}
+			a_state.bucketCountWords = std::max(a_state.bucketCountWords, 64u);
 		}
 
 		/** @brief Room for a_needed, doubling from a_current. */
@@ -409,9 +411,11 @@ namespace DCLF
 			auto& capacity = shadow->sequenceDraws[slot];
 			if (draws <= capacity)
 				continue;
+			// Twice the bound: a view's buckets each hold every draw their key slots can produce, grown by doubling (ShadowBucket).
 			const std::uint32_t grown = Doubled(capacity, draws);
-			shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(grown) * sizeof(DrawSequence) / 4));
-			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, std::uint64_t(grown) * sizeof(DrawSequence) / 1024);
+			const std::uint64_t bytes = std::uint64_t(kShadowClasses) * grown * sizeof(DrawSequence);
+			shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(bytes / 4));
+			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, bytes / 1024);
 			capacity = grown;
 		}
 	}
@@ -484,6 +488,12 @@ namespace DCLF
 		if (a_keys > layout.keySlots) {
 			layout.keySlots = Doubled(layout.keySlots, a_keys);
 			logger::info("[DCLF] shadow key slots: {} grown to {}", r.latchLayout.keySlots, layout.keySlots);
+		}
+		// A word per bucket, and a view has at most a bucket per key slot.
+		if (layout.keySlots > r.bucketCountWords) {
+			r.bucketCountWords = layout.keySlots;
+			for (auto& counts : r.bucketCounts)
+				counts->ResizeStructured(r.bucketCountWords);
 		}
 		if (a_rasterStates > layout.rasterStates) {
 			layout.rasterStates = Doubled(layout.rasterStates, a_rasterStates);
@@ -667,9 +677,24 @@ namespace DCLF
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the BuildDraws dispatch signature could not be created");
 		}
+		// The index pool (ShadowIndexPool), its copy program and its dispatch signature.
+		auto pool = std::make_shared<ShadowIndexPool>();
+		pool->program = ComputeProgram::Load(device, { .source = kIndexPoolShader, .constantWords = kIndexPoolConstantWords });
+		if (pool->program)
+			pool->dispatchSignature = CreateDispatchSignature(device, pool->program->layout->GetHandle());
+		if (!pool->dispatchSignature) {
+			shadowSetupFailed = true;
+			return ShadowNotReady(1, "the index pool's copy program could not be created");
+		}
+		pool->capacity = smallSlots ? 4096u : kInitialPoolIndices;
+		pool->indices = CreateWords(pool->capacity / 2, true, "cs.dclf.shadow.index-pool");
+		pool->firstsCapacity = smallSlots ? 64u : kInitialGeometries;
+		pool->firsts = CreateWords(pool->firstsCapacity, false, "cs.dclf.shadow.pool-firsts");
+		pool->copiesCapacity = smallSlots ? 16u : 1024u;
+		std::uint32_t unusedIndex = 0;
+		pool->copies = StructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), "cs.dclf.shadow.pool-copies", unusedIndex);
+		state->pool = std::move(pool);
 		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", state->latchLayout.Bytes(), host->FrameSlots());
-		state->preprocessShadow = PreprocessStates::Create(device, host->FrameSlots(), "the shadow views");
-		state->preprocessSky = PreprocessStates::Create(device, host->FrameSlots(), "Skylighting's occlusion map");
 		state->constantsAddress = AddressOf(device, *state->constants);
 		if (!state->constantsAddress) {
 			shadowSetupFailed = true;
