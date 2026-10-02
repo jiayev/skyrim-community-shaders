@@ -6473,3 +6473,49 @@ R2's other views:
 -   8,551 stood-in roots outside and 612 inside. None has a `kMeshLOD` skin among its members.
 -   Stale tickets: 6 of 600 epochs outside, 0 inside, as before.
 -   Gone: the feedback copy (`cs.dclf.feedback`, about 7 us a preparation), the decode job and the node writes.
+
+## Point lights' culls through a list of the rest (2026-10-01)
+
+After the skip, a point light still walked the whole object root. A breakdown (Riverwood, per light) showed about 10,000
+entries reached. About 9,100 of them were excluded and skipped. Only about 700 were the engine's: actors, and the fade
+nodes that are not candidates. The time went to the walk itself, not to those entries.
+
+**The list** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_LIST`, on with the skip). A light with no root list of its
+own is lent one for its `Accumulate` call. The engine then takes its own list path: `FUN_1414bf320` mode 1 over
+`BSShadowLight::sceneAccumArray` (`+0x528`), which runs `FUN_140e28f70`. That calls `Process` on the first entry and
+`Process1` on each other one. The array's header is swapped for the call and put back after it.
+-   **What is listed.** Below the object root, the build goes through every node whose `OnVisible` only culls its
+    children, down to the category nodes. Those are exactly `NiNode` or `BSMultiBoundNode` (the exterior cells), not
+    preprocessed and not hidden. Everything else reached is listed whole: the object root's first two children (the main
+    lists' whole entries), each entry, and any node of another class. Excluded entries are left out. A Riverwood list
+    holds about 1,210 roots.
+-   **Its parents' tests.** When a lent list's root is reached, its parents are tested as the walk would have tested them,
+    each once per light. The test is `BSParabolicCullingProcess::Process1`'s for cull mode 3: a `kAlwaysDraw` node is
+    visited untested, any other is tested with `FUN_14151a1e0` against the light's sphere and half-space. A root under a
+    parent that fails is skipped. A parent that passes is marked `kAccumulated` where the process updates that flag
+    (`+0x11D`). Measured: the cells' and category nodes' bounds pass for every light (the walk too reached every
+    entry), and the flag is clear.
+-   **Only for lights that are not portal-strict.** A portal-strict light culls with mode 4. In that mode a cell's
+    `BSMultiBoundNode::OnVisible` (`0x140e2d710`) tests its multibound, and with `kAllPass` it culls the children with
+    no bound tests at all. Such lights walk, as all of the Bannered Mare's lights do.
+-   **Kept by events.** The attach and detach detours (`SceneTracker`, through `NoteListStructure`) report what happens
+    under the nodes gone through. A root under a category node is added or removed. Anything higher, a hidden bit on a
+    node gone through (`NoteHiddenKey`), or a new exclusion version builds the list again. An entry's own
+    hidden bit is the list cull's: `CullList` skips hidden entries for a lent list (`OwnsList`).
+-   **Only while nothing moved.** A light uses the list only when no event arrived since the frame's selection.
+    Otherwise it walks.
+-   **Lifetimes.** The list holds its roots, and lets go of them at Present, as the scene lists do.
+
+**Parity** (`CS_DCLF_PERSISTENT_PARITY` frames, which walk the object root). Every paraboloid pass the engine registers,
+withheld or not (its registration also writes its own geometry's light masks), must be under a listed root or an
+excluded entry. The skip's own check, and the sun cascades' (`SunAccumulation::UnderExcludedEntry`), now look for an excluded entry
+among all of the pass's ancestors. An effect under
+an excluded cell entry is not a candidate geometry, and the old geometry-to-entry lookup missed it. None was found not
+withheld.
+
+**Measured** (Riverwood, camera turning, rain):
+-   Every parity check OK, the Shield race and the plan-0 engine-fade disagreement apart. Holes 0. 0 casters under no
+    listed root, of 300-700 a report.
+-   Point lights' `Accumulate`, five 300-frame windows: 0.89 ms a frame with the list off, 0.46 ms with it on. That is
+    0.17 ms instead of 0.46 ms per light in windows without portal-strict lights.
+-   The Bannered Mare's lights are all portal-strict: they walk, at about 0.07 ms a light. Parity is OK there too.
