@@ -6474,48 +6474,59 @@ R2's other views:
 -   Stale tickets: 6 of 600 epochs outside, 0 inside, as before.
 -   Gone: the feedback copy (`cs.dclf.feedback`, about 7 us a preparation), the decode job and the node writes.
 
-## Point lights' culls through a list of the rest (2026-10-01)
+## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 
-After the skip, a point light still walked the whole object root. A breakdown (Riverwood, per light) showed about 10,000
-entries reached. About 9,100 of them were excluded and skipped. Only about 700 were the engine's: actors, and the fade
-nodes that are not candidates. The time went to the walk itself, not to those entries.
+**The first attempt, a lent list** (replaced). A light that was not portal-strict was lent a list of the object root's
+entries less the excluded ones, through the engine's list path (`BSShadowLight::sceneAccumArray`, `FUN_140e28f70`). That
+saved 0.89 -> 0.46 ms a frame outside, but portal-strict lights (every interior light) could not take it:
+-   under cull mode 4, a cell's `BSMultiBoundNode::OnVisible` (`0x140e2d710`) tests its multibound, and with `kAllPass`
+    culls its children with no tests at all;
+-   `BSParabolicCullingProcess::Process1` tests every node against the portals' compound frustum.
 
-**The list** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_LIST`, on with the skip). A light with no root list of its
-own is lent one for its `Accumulate` call. The engine then takes its own list path: `FUN_1414bf320` mode 1 over
-`BSShadowLight::sceneAccumArray` (`+0x528`), which runs `FUN_140e28f70`. That calls `Process` on the first entry and
-`Process1` on each other one. The array's header is swapped for the call and put back after it.
--   **What is listed.** Below the object root, the build goes through every node whose `OnVisible` only culls its
-    children, down to the category nodes. Those are exactly `NiNode` or `BSMultiBoundNode` (the exterior cells), not
-    preprocessed and not hidden. Everything else reached is listed whole: the object root's first two children (the main
-    lists' whole entries), each entry, and any node of another class. Excluded entries are left out. A Riverwood list
-    holds about 1,210 roots.
--   **Its parents' tests.** When a lent list's root is reached, its parents are tested as the walk would have tested them,
-    each once per light. The test is `BSParabolicCullingProcess::Process1`'s for cull mode 3: a `kAlwaysDraw` node is
-    visited untested, any other is tested with `FUN_14151a1e0` against the light's sphere and half-space. A root under a
-    parent that fails is skipped. A parent that passes is marked `kAccumulated` where the process updates that flag
-    (`+0x11D`). Measured: the cells' and category nodes' bounds pass for every light (the walk too reached every
-    entry), and the flag is clear.
--   **Only for lights that are not portal-strict.** A portal-strict light culls with mode 4. In that mode a cell's
-    `BSMultiBoundNode::OnVisible` (`0x140e2d710`) tests its multibound, and with `kAllPass` it culls the children with
-    no bound tests at all. Such lights walk, as all of the Bannered Mare's lights do.
--   **Kept by events.** The attach and detach detours (`SceneTracker`, through `NoteListStructure`) report what happens
-    under the nodes gone through. A root under a category node is added or removed. Anything higher, a hidden bit on a
-    node gone through (`NoteHiddenKey`), or a new exclusion version builds the list again. An entry's own
-    hidden bit is the list cull's: `CullList` skips hidden entries for a lent list (`OwnsList`).
--   **Only while nothing moved.** A light uses the list only when no event arrived since the frame's selection.
-    Otherwise it walks.
--   **Lifetimes.** The list holds its roots, and lets go of them at Present, as the scene lists do.
+**The category filter** (`Engine/LocalLightCull.cpp`, `CS_DCLF_LIGHT_LIST`, on with the skip). `NiNode::OnVisible`
+(`0x140d1e2c0`, `VTABLE_NiNode` slot 0x34) is trivial. If the bound radius is not 0 or the node is `kAlwaysDraw`, it calls
+`NiAVObject::Cull` (`0x140d1c570`: skip a hidden child, else `Process1`) on each child. Category nodes are exact
+`NiNode`s; `BSFadeNode` and the others call it directly, not through the vtable.
+-   **The override.** Inside a point light's `Accumulate` (a thread-local filter), a category node that is the parent of
+    excluded entries culls its children less those entries, with the same test. Everything above it stays the engine's:
+    cells, multibound tests, `kAllPass`, portals. So every light takes it, portal-strict ones included.
+-   **The build.** The filter is an immutable snapshot, built at the selection for a new exclusion. A node a child is
+    attached to or detached from (`NoteStructure`) is walked natively until the next selection builds it again. Retired
+    snapshots are released two Presents later.
+-   **Empty children.** A tracked category node's child that holds no geometry at all (blood-spray decal placeholders,
+    markers: about 660 at Riverwood) is cut too. A light entry appearing (`GetLightEntriesAppeared`) has those nodes
+    judged again.
+-   **Parity frames** filter nothing. Every paraboloid registration under a filtered node must hang from a child it
+    keeps, or from an excluded entry (any ancestor).
 
-**Parity** (`CS_DCLF_PERSISTENT_PARITY` frames, which walk the object root). Every paraboloid pass the engine registers,
-withheld or not (its registration also writes its own geometry's light masks), must be under a listed root or an
-excluded entry. The skip's own check, and the sun cascades' (`SunAccumulation::UnderExcludedEntry`), now look for an excluded entry
-among all of the pass's ancestors. An effect under
-an excluded cell entry is not a candidate geometry, and the old geometry-to-entry lookup missed it. None was found not
-withheld.
+**The light candidates** (`SceneStore::UpdateLightCandidates`, `GetLightCandidates`). The paraboloid exclusion is built
+from them, not from the sun's candidates.
+-   **The census** (`CS_DCLF_LIGHT_CENSUS`, temporary) showed what point lights still reached outside the excluded
+    entries. Every paraboloid pass the engine registered there was withheld: DCLF already drew them all.
+-   **The masks.** A point light's registration ORs its bit into the `activeLightMask` of every geometry its cull
+    reaches, caster or not (`FUN_1414b2140`; skyrim-engine-notes.md, "the sun's accumulation"). The main pass reads it
+    (the technique's shadow light count). So an entry left out must hold no geometry whose main pass is the engine's.
+-   **A bug since R1.** A cell's multibound node is a sun entry for a geometry with no reference under it. Excluded, the
+    skip left out the whole cell, actors, creeks and terrain blocks included, and their engine-drawn Lighting geometry
+    lost the light's bit. Measured with the new mask parity: 21-47 lost per report outside.
+-   **The rule.** A light entry is a sun entry that is no category node, so entries cannot nest. It is a candidate when
+    every tracked geometry under it is either a table object, or gives the light's registration nothing: hidden, an
+    unselected switch child, or no Lighting property (`LightEntryAllows`). Effects and water under an entry no longer
+    keep it in.
+-   **The exclusion's own rule** (`BuildSunExclusion`, paraboloid mode). A table object blocks its entry when the mode
+    does not draw a caster of it, or when its main pass is the engine's (not a resident member, terrain for one). The
+    cache is invalidated by membership changes too.
+-   **Actors stay the engine's.** Their equipment is shown and hidden with no event, so their candidacy changed every few
+    frames and rebuilt the snapshot, the exclusion and the filter (spikes of 1.5 ms). Many also have engine-drawn parts
+    (beards, hair) that read the mask.
 
-**Measured** (Riverwood, camera turning, rain):
--   Every parity check OK, the Shield race and the plan-0 engine-fade disagreement apart. Holes 0. 0 casters under no
-    listed root, of 300-700 a report.
--   Point lights' `Accumulate`, five 300-frame windows: 0.89 ms a frame with the list off, 0.46 ms with it on. That is
-    0.17 ms instead of 0.46 ms per light in windows without portal-strict lights.
--   The Bannered Mare's lights are all portal-strict: they walk, at about 0.07 ms a light. Parity is OK there too.
+**Measured** (Riverwood with rain, the Bannered Mare; full parity):
+-   Every check OK, the Shield race apart. Light filter parity 0; masks lost 0 of 102-135 a report (the mask parity:
+    "point lights' masks"). Holes 0.
+-   A light culls about 274 children outside (about 980 before) and 3 inside.
+-   Point lights' `Accumulate` is 0.23-0.26 ms a light outside (portal-strict lights included) and about 0.06 inside.
+    The cells and terrain walked again for their masks offset what the cut saved.
+-   Light candidate builds cost at most 0.03 ms. Filter builds cost 0.2-0.24 ms, about 50 per 300 frames.
+
+**What is left:** about 208 actor entries outside, each a skeleton the light's cull walks node by node; the terrain;
+entries with engine-drawn Lighting geometry (streams, hay, creeks); markers, water and particles.

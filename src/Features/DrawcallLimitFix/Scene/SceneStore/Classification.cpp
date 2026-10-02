@@ -264,7 +264,9 @@ namespace DCLF
 			entry.sunEntryNode = nullptr;
 			ResolveSunEntry(entry, *a_geometry);
 			if (entry.sunEntryNode) {
-				rootDependents[entry.sunEntryNode].push_back(a_geometry);
+				auto& dependents = rootDependents[entry.sunEntryNode];
+				lightEntriesAppeared += dependents.empty() ? 1 : 0;
+				dependents.push_back(a_geometry);
 				if (const auto* reference = entry.sunEntryNode->GetUserData(); reference && rootReference.try_emplace(entry.sunEntryNode, reference).second)
 					referenceRoot[reference] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;

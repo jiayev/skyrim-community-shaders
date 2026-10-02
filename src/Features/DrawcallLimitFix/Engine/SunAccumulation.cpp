@@ -443,7 +443,10 @@ namespace DCLF
 					// An owned geometry: a shadow light's accumulation (+0x160 neither 0 nor 0xFFFF) leaves its mask 0, and no
 					// registration of it takes the sun's bits (ClearOwnedMask).
 					const std::uint32_t lightIndex = At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex);
-					if (PrimaryCull::Get().Owned(*geometry)) {
+					const bool owned = PrimaryCull::Get().Owned(*geometry);
+					if (lightIndex != 0 && lightIndex != 0xFFFF)
+						LocalLightCull::NoteMaskWrite(a_accumulator, geometry, owned);
+					if (owned) {
 						const auto result = func(a_accumulator, a_geometry, a_arg);
 						if (lightIndex != 0 && lightIndex != 0xFFFF)
 							ClearOwnedMask(a_geometry);

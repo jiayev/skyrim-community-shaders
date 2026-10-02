@@ -1179,6 +1179,10 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     -   under mode 3 it is a plain `NiNode`'s. Exterior cells are `BSMultiBoundNode`s; the object root is a `NiNode`
         with `kAlwaysDraw`.
 -   **A portal-strict light** (`BSLight::portalStrict`, `+0x47`) culls with mode 4, and any other light with mode 3.
+-   **`NiNode::OnVisible`** (`0x140d1e2c0`, `VTABLE_NiNode` slot 0x34): when the node's bound radius is not 0 or it is
+    `kAlwaysDraw`, `NiAVObject::Cull(child, process, arg)` on each child. `BSFadeNode::OnVisible`, `NiBillboardNode`'s and
+    `ShadowSceneNode`'s call it directly. `NiAVObject::Cull` (`0x140d1c570`) skips a hidden object (flag bit 0), else
+    calls the process's `Process1` (vfunc `0xB0`).
 
 ## The material database: how a material is shared and released
 

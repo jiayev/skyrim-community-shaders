@@ -646,7 +646,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_process, void* a_list, void* a_camera, bool a_skipHidden, bool a_jobs)
 			{
-				func(a_process, a_list, a_camera, a_skipHidden || IsSceneList(a_list, true) || LocalLightCull::OwnsList(a_list), a_jobs);
+				func(a_process, a_list, a_camera, a_skipHidden || IsSceneList(a_list, true), a_jobs);
 			}
 			static inline REL::Relocation<decltype(thunk)> func;
 		};
@@ -665,7 +665,6 @@ namespace DCLF
 		stl::detour_thunk<ListHooks::BuildSceneLists>(base + kBuildSceneLists);
 		stl::detour_thunk<ListHooks::ClearList>(base + kClearList);
 		stl::detour_thunk<ListHooks::CullList>(base + kCullList);
-		cullListHooked = true;
 	}
 
 	void PrimaryCull::ReportSceneLists(std::uint64_t a_checked, std::uint64_t a_missed)
