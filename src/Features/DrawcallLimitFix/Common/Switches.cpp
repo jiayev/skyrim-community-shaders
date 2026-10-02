@@ -104,6 +104,7 @@ namespace DCLF
 			{ Stats, "CS_DCLF_STATS", D, N, false, "1: the periodic report" },
 			{ PassStats, "CS_DCLF_PASS_STATS", D, N, false, "1: per-pass counts in the report" },
 			{ Profile, "CS_DCLF_PROFILE", D, N, false, "1: scene-phase timings in the report" },
+			{ LightCensus, "CS_DCLF_LIGHT_CENSUS", D, N, false, "1: TEMP, what the point lights' culls still reach, by category and why it is not excluded" },
 			{ ShaderDebug, "CS_DCLF_SHADER_DEBUG", D, N, false, "1: SPIR-V with debug info, and the HLSL sources copied beside the log" },
 			{ ShaderSourceDir, "CS_DCLF_SHADER_SOURCE_DIR", D, N, false, "where CS_DCLF_SHADER_DEBUG copies the HLSL sources" },
 			{ Eval, "CS_DCLF_EVAL", D, N, false, "audit: device state before and after each constant evaluation, compared" },

@@ -11,6 +11,7 @@
 
 #include <array>
 #include <atomic>
+#include <map>
 #include <mutex>
 
 // The point lights' shadow culls without DCLF's entries: LocalLightCull.h describes it.
@@ -48,246 +49,310 @@ namespace DCLF::LocalLightCull
 			return it != entries.end() && a_exclusion.excluded[it->second];
 		}
 
-		// ---- The light list (LocalLightCull.h).
-		constexpr std::size_t kSceneAccumArray = 0x528;  // BSShadowLight::sceneAccumArray (AE)
-		constexpr std::uint32_t kListDepth = 3;          // the object root's entries: object root, cell, category node, entry
-		using NodeArray = RE::BSTArray<RE::NiPointer<RE::NiAVObject>>;
-		// The array's own layout, to lend it the list's storage for one call (BSTArray: data, capacity, size).
-		struct ArrayHeader
-		{
-			void* data = nullptr;
-			std::uint32_t capacity = 0, pad0 = 0;
-			std::uint32_t size = 0, pad1 = 0;
-		};
-		static_assert(sizeof(ArrayHeader) == sizeof(NodeArray));
+		// ---- The category filter (LocalLightCull.h).
+		constexpr std::uintptr_t kNodeOnVisible = 0xd1e2c0;  // NiNode::OnVisible, VTABLE_NiNode slot 0x34
+		constexpr std::uintptr_t kCull = 0xd1c570;           // NiAVObject::Cull(object, process, arg)
+		constexpr std::uint32_t kAlwaysDraw = 1u << 11;
 
-		bool listInstalled = false;
-		struct StructureEvent
-		{
-			RE::NiPointer<RE::NiAVObject> held;  // an attach's child, alive until applied (then released at Present)
-			const RE::NiAVObject* child = nullptr;
-			const RE::NiAVObject* parent = nullptr;
-			std::uint32_t depth = 0;  // the parent's below the object root
-			bool attached = false;
-		};
-		EventQueue<StructureEvent> structureEvents;
-		std::atomic<const RE::NiAVObject*> listObjectRoot{ nullptr };
-		// Events pushed and drained: a light uses the list only while the two are equal (nothing moved since the selection).
-		std::atomic<std::uint64_t> eventsPushed{ 0 };
-		std::uint64_t eventsDrained = 0;
-		std::atomic<bool> hiddenMoved{ false };  // a hidden bit on a node the build went through, since the build
+		bool filterInstalled = false;
 
-		struct LightList
+		/** @brief One category node's children less its excluded entries, in child order. */
+		struct CategoryFilter
 		{
-			std::vector<RE::NiPointer<RE::NiAVObject>> roots;
-			ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> position;  // into roots
-			std::vector<std::uint32_t> rootParent;                                         // per root: its parent, into throughNodes
-			// The plain nodes gone through, and each one's parent (kNoParent: the object root's): a lent list tests a root's
-			// parents as the walk would have (ParentsVisible).
-			ankerl::unordered_dense::map<const void*, std::uint32_t> through;  // into throughNodes
-			std::vector<RE::NiAVObject*> throughNodes;
-			std::vector<std::uint32_t> throughParent;
-			ankerl::unordered_dense::set<const void*> watched;  // through, and the hidden ones not
-			const RE::NiAVObject* objectRoot = nullptr;
+			std::vector<RE::NiPointer<RE::NiAVObject>> children;
+			std::uint32_t cut = 0;               // the excluded entries left out
+			std::uint32_t empty = 0;             // and the children holding no geometry (a tracked category node's)
+			std::atomic<bool> dirty{ false };    // a child attached or detached since: the node is walked natively
+		};
+		/** @brief A snapshot: built on the render thread at a selection, read by the light culls and the detours until retired. */
+		struct Filter
+		{
+			ankerl::unordered_dense::map<const RE::NiAVObject*, std::shared_ptr<CategoryFilter>> nodes;
 			const SunCandidates* candidates = nullptr;
 			std::uint64_t exclusionVersion = ~0ull;
-			bool valid = false;
+			std::uint64_t entriesAppeared = 0;  // SceneStore::GetLightEntriesAppeared at the build
 		};
-		LightList lightList;
-		std::vector<RE::NiPointer<RE::NiAVObject>> listGraveyard;
-		std::atomic<bool> listLive{ false };  // this frame's lights may use it
-		thread_local const void* lentArray = nullptr;
-		constexpr std::uint32_t kNoParent = ~0u;
-		// Per node gone through, this light's verdict (lent list only): -1 not tested yet, 0 culled, 1 visible.
-		thread_local std::vector<std::int8_t> parentVerdicts;
+		std::shared_ptr<const Filter> filterBuilt;
+		std::atomic<const Filter*> filterCurrent{ nullptr };  // the detours' (any thread), the built one
+		std::atomic<const Filter*> frameFilter{ nullptr };    // this frame's light culls': null on parity frames
+		std::atomic<std::uint64_t> dirtied{ 0 };              // nodes made dirty, ever
+		std::uint64_t dirtiedSeen = 0;
+		// Retired snapshots, released two Presents later: a detour that loaded one just before it was retired may still read it.
+		std::array<std::vector<std::shared_ptr<const Filter>>, 2> retired;
+		thread_local const Filter* lightFilter = nullptr;  // set for the call by the Accumulate thunk
 
-		struct ListStats
+		struct FilterStats
 		{
-			std::atomic<std::uint64_t> lights{ 0 }, listed{ 0 }, walkedMoved{ 0 }, walkedOwn{ 0 }, walkedStrict{ 0 }, walkedNotLive{ 0 }, listEntries{ 0 };
-			std::atomic<std::uint64_t> parityChecked{ 0 }, parityMissed{ 0 }, parentCulled{ 0 };
-			std::uint64_t builds = 0, added = 0, removed = 0;
+			std::atomic<std::uint64_t> lights{ 0 }, filtered{ 0 }, walkedOwn{ 0 }, walkedNotLive{ 0 };
+			std::atomic<std::uint64_t> nodes{ 0 }, children{ 0 }, cut{ 0 }, dirtyNodes{ 0 };
+			std::atomic<std::uint64_t> parityChecked{ 0 }, parityMissed{ 0 };
+			std::uint64_t builds = 0, nodesRebuilt = 0;
 			std::int64_t buildTicks = 0;
 		};
-		ListStats listStats;
-		std::string listFirstMissed;  // under firstMutex
+		FilterStats filterStats;
+		std::string filterFirstMissed;  // under firstMutex
+		// Parity frames: point lights' mask writes on engine-drawn Lighting geometry, and those under an excluded entry (lost
+		// while the entry is skipped).
+		struct MaskStats
+		{
+			std::atomic<std::uint64_t> writes{ 0 }, underExcluded{ 0 };
+		};
+		MaskStats maskStats;
+		std::string maskFirst;  // under firstMutex
 
 		bool Hidden(const RE::NiAVObject* a_object) { return a_object->GetFlags().any(RE::NiAVObject::Flag::kHidden); }
 
-		/**
-		 * @brief A node whose OnVisible, for a light that is not portal-strict, only culls its children: exactly NiNode, or a
-		 * BSMultiBoundNode (an exterior cell: its OnVisible, AE 0x140e2d710, makes no multibound test and keeps the cull mode
-		 * under cull mode 3, which such a light's cull has); not preprocessed (BSCullingProcess::Process1, AE 0x140e28390: a
-		 * preprocessed node with bit 20 is not visited at all). kAlwaysDraw (the object root has it) skips only the node's own
-		 * bound test: its children are tested one by one either way.
-		 */
-		bool Plain(RE::NiAVObject* a_object)
+		/** @brief A node whose OnVisible is NiNode's own through the vtable: exactly NiNode (the category nodes). */
+		bool ExactNiNode(const RE::NiAVObject* a_object)
 		{
 			static const REL::Relocation<const RE::NiRTTI*> niNode{ RE::NiNode::Ni_RTTI };
-			static const REL::Relocation<const RE::NiRTTI*> multiBoundNode{ RE::BSMultiBoundNode::Ni_RTTI };
-			constexpr std::uint32_t kPreProcessed = 1u << 12;
-			const auto* rtti = a_object->GetRTTI();
-			return (rtti == niNode.get() || rtti == multiBoundNode.get()) && !(a_object->GetFlags().underlying() & kPreProcessed);
-		}
-
-		void ListRoot(RE::NiAVObject* a_object, std::uint32_t a_parent)
-		{
-			lightList.position.insert_or_assign(a_object, static_cast<std::uint32_t>(lightList.roots.size()));
-			lightList.roots.emplace_back(a_object);
-			lightList.rootParent.push_back(a_parent);
-		}
-
-		void UnlistRoot(const RE::NiAVObject* a_object)
-		{
-			const auto it = lightList.position.find(a_object);
-			if (it == lightList.position.end())
-				return;
-			const std::uint32_t at = it->second;
-			lightList.position.erase(it);
-			listGraveyard.push_back(std::move(lightList.roots[at]));
-			if (at + 1 != lightList.roots.size()) {
-				lightList.roots[at] = std::move(lightList.roots.back());
-				lightList.rootParent[at] = lightList.rootParent.back();
-				lightList.position[lightList.roots[at].get()] = at;
-			}
-			lightList.roots.pop_back();
-			lightList.rootParent.pop_back();
-			++listStats.removed;
-		}
-
-		void Visit(RE::NiAVObject* a_object, std::uint32_t a_depth, std::uint32_t a_index, std::uint32_t a_parent, const SunExclusion& a_exclusion)
-		{
-			if (!a_object || Excluded(a_exclusion, a_object))
-				return;
-			// The object root's children 0 and 1 are whole entries (the main lists' rule): no event reports what is under them.
-			const bool whole = a_depth == 1 && a_index < 2;
-			auto* node = a_depth < kListDepth && !whole && Plain(a_object) ? a_object->AsNode() : nullptr;
-			if (!node) {
-				ListRoot(a_object, a_parent);  // its own hidden bit is the list cull's (OwnsList)
-				return;
-			}
-			lightList.watched.insert(node);
-			if (Hidden(node))
-				return;  // nothing under it is culled; unhidden, it is built again
-			const auto index = static_cast<std::uint32_t>(lightList.throughNodes.size());
-			lightList.through.emplace(node, index);
-			lightList.throughNodes.push_back(node);
-			lightList.throughParent.push_back(a_parent);
-			const auto& children = node->GetChildren();
-			for (std::uint16_t i = 0; i < children.free_idx(); ++i)
-				Visit(children[i].get(), a_depth + 1, i, index, a_exclusion);
-		}
-
-		void BuildList(RE::NiAVObject* a_objectRoot, const SunExclusion& a_exclusion)
-		{
-			LARGE_INTEGER start{}, end{};
-			QueryPerformanceCounter(&start);
-			for (auto& root : lightList.roots)
-				listGraveyard.push_back(std::move(root));
-			lightList.roots.clear();
-			lightList.position.clear();
-			lightList.rootParent.clear();
-			lightList.through.clear();
-			lightList.throughNodes.clear();
-			lightList.throughParent.clear();
-			lightList.watched.clear();
-			Visit(a_objectRoot, 0, 0, kNoParent, a_exclusion);
-			lightList.objectRoot = a_objectRoot;
-			lightList.candidates = a_exclusion.candidates.get();
-			lightList.exclusionVersion = a_exclusion.version;
-			lightList.valid = true;
-			hiddenMoved.store(false, std::memory_order_relaxed);
-			QueryPerformanceCounter(&end);
-			++listStats.builds;
-			listStats.buildTicks += end.QuadPart - start.QuadPart;
-		}
-
-		/** @brief Render thread, at the selection: the events since, applied; the list built again where they cannot be. */
-		void UpdateList(const SunExclusion* a_exclusion)
-		{
-			const auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
-			RE::NiAVObject* objectRoot = nullptr;
-			if (sceneNode)
-				if (const auto& scene = sceneNode->GetChildren(); scene.free_idx() > 3)
-					objectRoot = scene[3].get();
-			listObjectRoot.store(objectRoot, std::memory_order_release);
-			bool rebuild = !lightList.valid || lightList.objectRoot != objectRoot || hiddenMoved.load(std::memory_order_relaxed);
-			const std::uint64_t pushed = eventsPushed.load(std::memory_order_acquire);
-			structureEvents.Drain([&](StructureEvent&& a_event) {
-				++eventsDrained;
-				RE::NiPointer<RE::NiAVObject> held = std::move(a_event.held);
-				if (held)
-					listGraveyard.push_back(std::move(held));
-				const auto parent = rebuild ? lightList.through.end() : lightList.through.find(a_event.parent);
-				if (parent == lightList.through.end())
-					return;  // under a node listed whole, or not gone through: nothing listed moved
-				if (a_event.depth + 1 < kListDepth) {
-					rebuild = true;  // a node the build goes through
-					return;
-				}
-				if (!a_event.attached) {
-					UnlistRoot(a_event.child);
-					return;
-				}
-				// A new entry under a category node: listed unless excluded (an exclusion built since lists it again).
-				auto* child = const_cast<RE::NiAVObject*>(a_event.child);
-				if (!lightList.position.contains(child) && a_exclusion && !Excluded(*a_exclusion, child)) {
-					ListRoot(child, parent->second);
-					++listStats.added;
-				}
-			});
-			(void)pushed;
-			if (!a_exclusion || !objectRoot) {
-				lightList.valid = false;
-				return;
-			}
-			rebuild = rebuild || lightList.candidates != a_exclusion->candidates.get() || lightList.exclusionVersion != a_exclusion->version;
-			if (rebuild)
-				BuildList(objectRoot, *a_exclusion);
+			return a_object->GetRTTI() == niNode.get();
 		}
 
 		/**
-		 * @brief A lent list's root reached: whether the walk would have reached it, its parents' tests as Process1 makes them for
-		 * a light that is not portal-strict (BSParabolicCullingProcess::Process1, AE 0x141519a90, cull mode 3: a node with
-		 * kAlwaysDraw is visited untested, any other when FUN_14151a1e0 finds its bound in the light's volume), each made once
-		 * per light, and a visited one marked kAccumulated where the process updates it (+0x11D).
+		 * @brief Whether a subtree holds no geometry: nothing a light's registration would take, and no light entry. Under a
+		 * tracked category node every geometry attached later is tracked, and its entry appearing builds the filter again.
 		 */
-		bool ParentsVisible(RE::NiCullingProcess* a_process, std::uint32_t a_parent)
+		bool HoldsNoGeometry(const RE::NiAVObject* a_object, std::uint32_t a_depth = 0)
 		{
-			if (a_parent == kNoParent || a_parent >= parentVerdicts.size())
+			if (!a_object)
 				return true;
-			auto& verdict = parentVerdicts[a_parent];
-			if (verdict < 0) {
-				bool visible = ParentsVisible(a_process, lightList.throughParent[a_parent]);
-				if (visible) {
-					using BoundTest = std::uint8_t (*)(RE::NiCullingProcess*, const RE::NiBound*);
-					static const REL::Relocation<BoundTest> boundTest{ REL::Offset(0x151a1e0) };
-					auto* node = lightList.throughNodes[a_parent];
-					constexpr std::uint32_t kAlwaysDraw = 1u << 11, kAccumulatedFlag = 1u << 26;
-					visible = (node->GetFlags().underlying() & kAlwaysDraw) || boundTest(a_process, &node->worldBound) != 0;
-					if (visible && reinterpret_cast<const std::uint8_t*>(a_process)[0x11D])
-						std::atomic_ref<std::uint32_t>(*reinterpret_cast<std::uint32_t*>(reinterpret_cast<std::byte*>(node) + 0xF4)).fetch_or(kAccumulatedFlag, std::memory_order_relaxed);
-				}
-				verdict = visible ? 1 : 0;
-			}
-			return verdict != 0;
+			if (a_depth > 64 || const_cast<RE::NiAVObject*>(a_object)->AsGeometry())
+				return false;
+			if (const auto* node = const_cast<RE::NiAVObject*>(a_object)->AsNode())
+				for (const auto& child : node->GetChildren())
+					if (!HoldsNoGeometry(child.get(), a_depth + 1))
+						return false;
+			return true;
 		}
 
-		/** @brief Whether a geometry is under a listed root (parity frames: the list is not lent, the object root is walked). */
-		bool UnderListedRoot(const RE::NiAVObject* a_object, bool& a_underObjectRoot)
+		std::shared_ptr<CategoryFilter> BuildCategory(const RE::NiNode& a_node, const SunExclusion& a_exclusion)
 		{
-			a_underObjectRoot = false;
-			const auto* objectRoot = lightList.objectRoot;
-			for (const auto* object = a_object; object; object = object->parent) {
-				if (lightList.position.contains(object))
-					return true;
-				if (object == objectRoot)
-					a_underObjectRoot = true;
+			auto filter = std::make_shared<CategoryFilter>();
+			const auto& children = a_node.GetChildren();
+			const bool tracked = SceneStore::Get().IsCategoryNode(&a_node);
+			filter->children.reserve(children.size());
+			for (std::uint16_t i = 0; i < children.free_idx(); ++i) {
+				auto* child = children[i].get();
+				if (!child)
+					continue;
+				if (Excluded(a_exclusion, child))
+					++filter->cut;
+				else if (tracked && !SceneStore::Get().IsLightEntry(child) && HoldsNoGeometry(child))
+					++filter->empty;
+				else
+					filter->children.emplace_back(child);
+			}
+			return filter;
+		}
+
+		// ---- TEMP (CS_DCLF_LIGHT_CENSUS): what the point lights' culls still reach, by category and why it is not excluded.
+		bool censusOn = false;
+		std::mutex censusMutex;
+		struct CensusRow
+		{
+			std::uint64_t entries = 0, passes = 0, withheld = 0, masks = 0;
+			std::string example;
+		};
+		std::map<std::string, CensusRow> census;
+		ankerl::unordered_dense::map<const RE::NiAVObject*, std::string> censusClass;  // entry -> class (render thread; read on parity frames)
+
+		/** @brief The first geometries under a node, for the census: none, or the first one's classes. */
+		std::string GeometryOf(const RE::NiAVObject* a_object)
+		{
+			std::uint32_t count = 0;
+			std::string first;
+			const std::function<void(const RE::NiAVObject*, std::uint32_t)> visit = [&](const RE::NiAVObject* a_node, std::uint32_t a_depth) {
+				if (!a_node || count >= 64 || a_depth > 16)
+					return;
+				if (auto* geometry = const_cast<RE::NiAVObject*>(a_node)->AsGeometry()) {
+					if (count++ == 0) {
+						const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get();
+						first = fmt::format("{} {}{}", geometry->GetRTTI() ? geometry->GetRTTI()->name : "?", property && property->GetRTTI() ? property->GetRTTI()->name : "no property",
+							SceneStore::Get().IsTracked(geometry) ? " tracked" : "");
+					}
+					return;
+				}
+				if (const auto* node = const_cast<RE::NiAVObject*>(a_node)->AsNode())
+					for (const auto& child : node->GetChildren())
+						visit(child.get(), a_depth + 1);
+			};
+			visit(a_object, 0);
+			return count ? fmt::format("geometry ({})", first) : "no geometry";
+		}
+
+		std::string ClassOf(const RE::NiAVObject* a_entry, std::uint32_t a_category, bool a_whole, const SunExclusion& a_exclusion)
+		{
+			if (Excluded(a_exclusion, a_entry))
+				return "excluded";
+			const auto* ref = a_entry->GetUserData();
+			const bool actor = ref && ref->IsActor();
+			const std::string where = a_whole ? fmt::format("whole entry {}", a_category) : fmt::format("category {}", a_category);
+			if (actor)
+				return where + ": actor";
+			constexpr std::array<std::uint32_t, 4> kTracked{ 0, 3, 4, 5 };
+			if (!a_whole && std::find(kTracked.begin(), kTracked.end(), a_category) == kTracked.end())
+				return where + " (untracked): " + GeometryOf(a_entry);
+			const auto verdict = SceneStore::Get().EntryCensus(a_entry);
+			if (verdict.kind == 0)
+				return where + ": candidate kept in";
+			if (verdict.kind == 1)
+				return where + ": not a sun entry, " + GeometryOf(a_entry);
+			const auto reason = verdict.reason == Ineligible::Count ? std::string("not classified") :
+			                                                           std::string(kIneligibleNames[static_cast<std::size_t>(verdict.reason)]);
+			return where + ": blocked by " + reason;
+		}
+
+		void TakeCensus(const SunExclusion& a_exclusion)
+		{
+			const auto* sceneNode = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
+			const auto* objectRoot = sceneNode && sceneNode->GetChildren().free_idx() > 3 ? sceneNode->GetChildren()[3].get() : nullptr;
+			const auto* root = objectRoot ? const_cast<RE::NiAVObject*>(objectRoot)->AsNode() : nullptr;
+			if (!root)
+				return;
+			std::scoped_lock lock(censusMutex);
+			for (auto& [name, row] : census)
+				row.entries = 0;
+			censusClass.clear();
+			auto note = [&](const RE::NiAVObject* a_entry, std::string a_class) {
+				auto& row = census[a_class];
+				++row.entries;
+				if (row.example.empty())
+					row.example = a_entry->name.c_str() ? a_entry->name.c_str() : "";
+				censusClass.insert_or_assign(a_entry, std::move(a_class));
+			};
+			const auto& cells = root->GetChildren();
+			for (std::uint16_t i = 0; i < cells.free_idx(); ++i) {
+				const auto* cell = cells[i] ? const_cast<RE::NiAVObject*>(cells[i].get())->AsNode() : nullptr;
+				if (!cell)
+					continue;
+				for (std::uint16_t j = 0; j < cell->GetChildren().free_idx(); ++j) {
+					const auto* child = cell->GetChildren()[j].get();
+					if (!child)
+						continue;
+					if (i < 2) {
+						note(child, ClassOf(child, i, true, a_exclusion));  // a whole entry's children
+						continue;
+					}
+					const auto* category = const_cast<RE::NiAVObject*>(child)->AsNode();
+					if (!category) {
+						note(child, fmt::format("category {}: not a node", j));
+						continue;
+					}
+					for (const auto& entry : category->GetChildren())
+						if (entry)
+							note(entry.get(), ClassOf(entry.get(), j, false, a_exclusion));
+				}
+			}
+		}
+
+		/**
+		 * @brief Render thread, at the selection: the filter for this exclusion. Built whole for a new exclusion (every category
+		 * node that is the parent of an excluded entry); otherwise only the nodes a detour made dirty are built again.
+		 */
+		void UpdateFilter(const SunExclusion* a_exclusion)
+		{
+			if (!a_exclusion) {
+				filterCurrent.store(nullptr, std::memory_order_release);
+				if (filterBuilt)
+					retired[0].push_back(std::move(filterBuilt));
+				return;
+			}
+			const std::uint64_t appeared = SceneStore::Get().GetLightEntriesAppeared();
+			const bool whole = !filterBuilt || filterBuilt->candidates != a_exclusion->candidates.get() || filterBuilt->exclusionVersion != a_exclusion->version;
+			// An entry appeared: the nodes that cut a child for holding no geometry judge it again (it may hold one now).
+			const bool appearedNow = filterBuilt && filterBuilt->entriesAppeared != appeared;
+			const std::uint64_t dirtyNow = dirtied.load(std::memory_order_acquire);
+			if (!whole && !appearedNow && dirtyNow == dirtiedSeen)
+				return;
+			LARGE_INTEGER start{}, end{};
+			QueryPerformanceCounter(&start);
+			auto next = std::make_shared<Filter>();
+			next->candidates = a_exclusion->candidates.get();
+			next->exclusionVersion = a_exclusion->version;
+			next->entriesAppeared = appeared;
+			if (whole) {
+				for (const auto& [entry, index] : a_exclusion->candidates->entries) {
+					if (!a_exclusion->excluded[index] || !entry->parent || !ExactNiNode(entry->parent))
+						continue;
+					const RE::NiAVObject* parent = entry->parent;
+					if (!next->nodes.contains(parent)) {
+						next->nodes.emplace(parent, BuildCategory(*entry->parent, *a_exclusion));
+						++filterStats.nodesRebuilt;
+					}
+				}
+			} else {
+				// The nodes shared with the last snapshot, the dirty ones built again.
+				next->nodes = filterBuilt->nodes;
+				for (auto& [node, category] : next->nodes)
+					if (category->dirty.load(std::memory_order_acquire) || (appearedNow && category->empty)) {
+						category = BuildCategory(*static_cast<const RE::NiNode*>(node), *a_exclusion);
+						++filterStats.nodesRebuilt;
+					}
+			}
+			dirtiedSeen = dirtyNow;
+			if (whole && censusOn)
+				TakeCensus(*a_exclusion);
+			if (filterBuilt)
+				retired[0].push_back(std::move(filterBuilt));
+			filterBuilt = std::move(next);
+			filterCurrent.store(filterBuilt.get(), std::memory_order_release);
+			QueryPerformanceCounter(&end);
+			++filterStats.builds;
+			filterStats.buildTicks += end.QuadPart - start.QuadPart;
+		}
+
+		/**
+		 * @brief NiNode::OnVisible (AE 0x140d1e2c0, VTABLE_NiNode slot 0x34): when the node's bound radius is not 0 or it is
+		 * kAlwaysDraw, NiAVObject::Cull on each child (which skips a hidden one, else calls the process's Process1). Inside a
+		 * point light's cull, a filtered category node does the same over its children less the excluded entries.
+		 */
+		struct NodeOnVisible
+		{
+			static void thunk(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
+			{
+				if (const auto* filter = lightFilter)
+					if (const auto it = filter->nodes.find(a_node); it != filter->nodes.end()) {
+						const auto& category = *it->second;
+						if (!category.dirty.load(std::memory_order_acquire)) {
+							if (a_node->worldBound.radius != 0.0f || (a_node->GetFlags().underlying() & kAlwaysDraw)) {
+								using Cull = void (*)(RE::NiAVObject*, RE::NiCullingProcess*, std::int32_t);
+								static const REL::Relocation<Cull> cull{ REL::Offset(kCull) };
+								for (const auto& child : category.children)
+									cull(child.get(), a_process, a_arg);
+								filterStats.children.fetch_add(category.children.size(), std::memory_order_relaxed);
+								filterStats.cut.fetch_add(category.cut + category.empty, std::memory_order_relaxed);
+							}
+							filterStats.nodes.fetch_add(1, std::memory_order_relaxed);
+							return;
+						}
+						filterStats.dirtyNodes.fetch_add(1, std::memory_order_relaxed);
+					}
+				func(a_node, a_process, a_arg);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/**
+		 * @brief Parity frames (nothing filtered): whether a registered geometry hangs from a filtered category node's kept child,
+		 * when its chain passes through one (a_through).
+		 */
+		bool UnderKeptChild(const Filter& a_filter, const RE::NiAVObject* a_object, bool& a_through)
+		{
+			a_through = false;
+			for (const auto* object = a_object; object && object->parent; object = object->parent) {
+				const auto it = a_filter.nodes.find(object->parent);
+				if (it == a_filter.nodes.end() || it->second->dirty.load(std::memory_order_acquire))
+					continue;
+				a_through = true;
+				const auto& children = it->second->children;
+				return std::find_if(children.begin(), children.end(), [&](const auto& a_child) { return a_child.get() == object; }) != children.end();
 			}
 			return false;
 		}
 
-		// BSShadowParabolicLight::Accumulate (vtable slot 9, 0x14151b960): the point lights' cull and registration, timed; a light
-		// without a root list of its own is lent the light list for the call.
+		// BSShadowParabolicLight::Accumulate (vtable slot 9, 0x14151b960): the point lights' cull and registration, timed; the
+		// frame's category filter applies for the call.
 		std::atomic<std::int64_t> accumulateTicks{ 0 };
 		std::atomic<std::uint64_t> accumulateCalls{ 0 };
 		struct Accumulate
@@ -296,35 +361,15 @@ namespace DCLF::LocalLightCull
 			{
 				LARGE_INTEGER start{}, end{};
 				QueryPerformanceCounter(&start);
-				auto& array = *reinterpret_cast<ArrayHeader*>(static_cast<std::byte*>(a_light) + kSceneAccumArray);
-				bool lend = false;
-				if (listInstalled) {
-					listStats.lights.fetch_add(1, std::memory_order_relaxed);
-					if (!listLive.load(std::memory_order_acquire))
-						listStats.walkedNotLive.fetch_add(1, std::memory_order_relaxed);
-					else if (array.size || a_arg3)
-						listStats.walkedOwn.fetch_add(1, std::memory_order_relaxed);
-					else if (static_cast<const RE::BSLight*>(a_light)->portalStrict)
-						listStats.walkedStrict.fetch_add(1, std::memory_order_relaxed);  // cull mode 4: a cell's OnVisible tests its multibound
-					else if (eventsPushed.load(std::memory_order_acquire) != eventsDrained || hiddenMoved.load(std::memory_order_acquire))
-						listStats.walkedMoved.fetch_add(1, std::memory_order_relaxed);
-					else
-						lend = !lightList.roots.empty();
+				const Filter* filter = nullptr;
+				if (filterInstalled) {
+					filterStats.lights.fetch_add(1, std::memory_order_relaxed);
+					filter = frameFilter.load(std::memory_order_acquire);
+					(filter ? filterStats.filtered : filterStats.walkedNotLive).fetch_add(1, std::memory_order_relaxed);
 				}
-				if (lend) {
-					// The engine's list path reads the array for this call alone (FUN_1414bf320, mode 1); its own header is put back.
-					const ArrayHeader own = array;
-					array = { lightList.roots.data(), static_cast<std::uint32_t>(lightList.roots.size()), 0, static_cast<std::uint32_t>(lightList.roots.size()), 0 };
-					lentArray = &array;
-					parentVerdicts.assign(lightList.throughNodes.size(), std::int8_t(-1));
-					func(a_light, a_count, a_arg2, a_arg3);
-					lentArray = nullptr;
-					array = own;
-					listStats.listed.fetch_add(1, std::memory_order_relaxed);
-					listStats.listEntries.fetch_add(lightList.roots.size(), std::memory_order_relaxed);
-				} else {
-					func(a_light, a_count, a_arg2, a_arg3);
-				}
+				lightFilter = filter;
+				func(a_light, a_count, a_arg2, a_arg3);
+				lightFilter = nullptr;
 				QueryPerformanceCounter(&end);
 				accumulateTicks.fetch_add(end.QuadPart - start.QuadPart, std::memory_order_relaxed);
 				accumulateCalls.fetch_add(1, std::memory_order_relaxed);
@@ -336,12 +381,6 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
-				// A lent list's root: only where the walk would have reached it.
-				if (a_object && lentArray)
-					if (const auto it = lightList.position.find(a_object); it != lightList.position.end() && !ParentsVisible(a_process, lightList.rootParent[it->second])) {
-						listStats.parentCulled.fetch_add(1, std::memory_order_relaxed);
-						return;
-					}
 				if (a_object)
 					if (const auto* exclusion = frameExclusion.load(std::memory_order_acquire)) {
 						stats.visited.fetch_add(1, std::memory_order_relaxed);
@@ -378,10 +417,18 @@ namespace DCLF::LocalLightCull
 		stl::write_vfunc<0x16, Process1>(RE::VTABLE_BSParabolicCullingProcess[0]);
 		probe = SwitchValue(Switch::LightExclude) == "probe";
 		installed = true;
-		// The list's hidden entries are skipped by the list cull's hook (PrimaryCull's CullList, OwnsList).
-		listInstalled = !probe && SwitchValue(Switch::LightList) != "0" && PrimaryCull::CullListHooked();
+		if (!probe && SwitchValue(Switch::LightList) != "0") {
+			REL::Relocation<std::uintptr_t> nodeVtable{ RE::VTABLE_NiNode[0] };
+			if (reinterpret_cast<const std::uintptr_t*>(nodeVtable.address())[0x34] != base + kNodeOnVisible) {
+				logger::warn("[DCLF] point lights' shadow culls: NiNode::OnVisible is not the engine's; the category nodes are walked whole");
+			} else {
+				stl::write_vfunc<0x34, NodeOnVisible>(RE::VTABLE_NiNode[0]);
+				filterInstalled = true;
+			}
+		}
+		censusOn = SwitchEnabled(Switch::LightCensus);
 		logger::info("[DCLF] point lights' shadow culls without DCLF's entries{}{}", probe ? " (probe: nothing skipped)" : "",
-			listInstalled ? ", through a list of the rest" : "");
+			filterInstalled ? ", their category nodes filtered" : "");
 	}
 
 	void Publish(std::shared_ptr<SunExclusion> a_exclusion)
@@ -401,52 +448,78 @@ namespace DCLF::LocalLightCull
 			++stats.noExclusion, next.reset();
 		else if (!PassCapture::Get().ShadowModeWithheld(kParabolicMode))
 			++stats.noClaims, next.reset();  // the registration withholds nothing of the mode: the engine draws its casters
-		else if (next->candidates->generation != SceneStore::Get().GetSunCandidatesGeneration())
+		else if (next->candidates->generation != SceneStore::Get().GetLightCandidatesGeneration())
 			++stats.stale, next.reset();  // built for other candidates: an entry may hold a caster no epoch has drawn yet
 		const bool parity = next && SwitchEnabled(Switch::PersistentParity) && ParityDue(a_frame);
 		parityFrame.store(parity, std::memory_order_relaxed);
 		stats.parityFrames += parity ? 1 : 0;
 		stats.live += next ? 1 : 0;
 		frameExclusion.store(next.get(), std::memory_order_release);
-		if (listInstalled) {
-			UpdateList(next.get());
-			listLive.store(next && !parity && lightList.valid, std::memory_order_release);
+		if (filterInstalled) {
+			UpdateFilter(next.get());
+			frameFilter.store(next && !parity ? filterBuilt.get() : nullptr, std::memory_order_release);
 		}
 		frameHeld = std::move(next);
 	}
 
-	void NoteStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached)
+	void NoteStructure(const RE::NiNode* a_parent, RE::NiAVObject*, bool)
 	{
-		const auto* objectRoot = listInstalled ? listObjectRoot.load(std::memory_order_acquire) : nullptr;
-		if (!objectRoot || !a_parent || !a_child)
+		// A child of a filtered category node attached or detached: the node is walked natively until the next selection.
+		const auto* filter = filterInstalled && a_parent ? filterCurrent.load(std::memory_order_acquire) : nullptr;
+		if (!filter)
 			return;
-		// The parent's depth below the object root; deeper parents are inside what the list holds whole.
-		std::uint32_t depth = 0;
-		const RE::NiAVObject* node = a_parent;
-		while (node && node != objectRoot && depth < kListDepth) {
-			node = node->parent;
-			++depth;
+		if (const auto it = filter->nodes.find(a_parent); it != filter->nodes.end() && !it->second->dirty.exchange(true, std::memory_order_acq_rel))
+			dirtied.fetch_add(1, std::memory_order_release);
+	}
+
+	void NoteMaskWrite(const void* a_accumulator, const RE::BSGeometry* a_geometry, bool a_owned)
+	{
+		if (!installed || !parityFrame.load(std::memory_order_relaxed) || a_owned || !a_geometry || !a_accumulator)
+			return;
+		// A paraboloid light's accumulator (render mode 0xF), and a geometry whose main pass reads the mask (GetRenderPasses of
+		// a Lighting property with light data).
+		if (Engine::At<std::uint32_t>(a_accumulator, 0x150) != 0xF)
+			return;
+		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry->GetGeometryRuntimeData().shaderProperty.get());
+		if (!lighting || !Engine::At<void*>(lighting, 0x70))
+			return;
+		const auto* exclusion = frameExclusion.load(std::memory_order_acquire);
+		bool underExcluded = false;
+		for (const RE::NiAVObject* object = a_geometry; exclusion && object && !underExcluded; object = object->parent)
+			underExcluded = Excluded(*exclusion, object);
+		if (const auto* filter = !underExcluded && filterInstalled ? filterCurrent.load(std::memory_order_acquire) : nullptr) {
+			bool through = false;
+			underExcluded = !UnderKeptChild(*filter, a_geometry, through) && through;
 		}
-		if (node != objectRoot || depth >= kListDepth)
-			return;
-		structureEvents.Push({ a_attached ? RE::NiPointer<RE::NiAVObject>(a_child) : RE::NiPointer<RE::NiAVObject>(), a_child, a_parent, depth, a_attached });
-		eventsPushed.fetch_add(1, std::memory_order_release);
-	}
-
-	void NoteHiddenKey(const void* a_key)
-	{
-		if (listInstalled && lightList.watched.contains(a_key))
-			hiddenMoved.store(true, std::memory_order_release);
-	}
-
-	bool OwnsList(const void* a_list)
-	{
-		return a_list && a_list == lentArray;
+		maskStats.writes.fetch_add(1, std::memory_order_relaxed);
+		if (underExcluded) {
+			maskStats.underExcluded.fetch_add(1, std::memory_order_relaxed);
+			std::scoped_lock lock(firstMutex);
+			if (maskFirst.empty())
+				for (const RE::NiAVObject* object = a_geometry; object; object = object->parent) {
+					const auto* filter = filterCurrent.load(std::memory_order_acquire);
+					const auto node = filter && object->parent ? filter->nodes.find(object->parent) : decltype(filter->nodes)::const_iterator{};
+					const bool filtered = filter && object->parent && node != filter->nodes.end();
+					const bool kept = filtered && std::find_if(node->second->children.begin(), node->second->children.end(), [&](const auto& a_child) { return a_child.get() == object; }) != node->second->children.end();
+					maskFirst += fmt::format(" <- {}:{}{}{}{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "",
+						exclusion && exclusion->candidates->entries.contains(object) ? (Excluded(*exclusion, object) ? " [excluded entry]" : " [entry]") : "",
+						filtered ? (kept ? " [kept]" : " [cut]") : "", SceneStore::Get().IsCategoryNode(object) ? " [category]" : "");
+				}
+		}
+		if (censusOn) {
+			std::scoped_lock lock(censusMutex);
+			for (const RE::NiAVObject* object = a_geometry; object; object = object->parent)
+				if (const auto it = censusClass.find(object); it != censusClass.end()) {
+					++census[it->second].masks;
+					break;
+				}
+		}
 	}
 
 	void EndFrame()
 	{
-		listGraveyard.clear();
+		retired[1].clear();
+		std::swap(retired[0], retired[1]);
 	}
 
 	void NoteRegistration(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_withheld, std::uint32_t a_source)
@@ -462,22 +535,31 @@ namespace DCLF::LocalLightCull
 		bool underExcluded = false;
 		for (const RE::NiAVObject* object = a_pass->geometry; object && !underExcluded; object = object->parent)
 			underExcluded = Excluded(*exclusion, object);
-		// The light list: a caster under the object root that no listed root holds would not be registered with the list lent,
-		// withheld or not (the registration also writes the engine's geometry's light masks).
-		if (listInstalled && lightList.valid && !underExcluded) {
-			bool underObjectRoot = false;
-			if (!UnderListedRoot(a_pass->geometry, underObjectRoot) && underObjectRoot) {
-				listStats.parityMissed.fetch_add(1, std::memory_order_relaxed);
+		if (censusOn) {
+			std::scoped_lock lock(censusMutex);
+			for (const RE::NiAVObject* object = a_pass->geometry; object; object = object->parent)
+				if (const auto it = censusClass.find(object); it != censusClass.end()) {
+					auto& row = census[it->second];
+					++row.passes;
+					row.withheld += a_withheld ? 1 : 0;
+					break;
+				}
+		}
+		// The category filter: a caster under a filtered category node must hang from a child it keeps, withheld or not (the
+		// registration also writes the engine's geometry's light masks).
+		if (const auto* filter = filterInstalled && !underExcluded ? filterCurrent.load(std::memory_order_acquire) : nullptr) {
+			bool through = false;
+			if (!UnderKeptChild(*filter, a_pass->geometry, through) && through) {
+				filterStats.parityMissed.fetch_add(1, std::memory_order_relaxed);
 				std::string chain;
-				for (const RE::NiAVObject* object = a_pass->geometry; object && object != lightList.objectRoot; object = object->parent)
-					chain += fmt::format(" <- {}:{}{}{}{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "", Hidden(object) ? " hidden" : "",
-						exclusion->candidates->entries.contains(object) ? (Excluded(*exclusion, object) ? " [excluded entry]" : " [entry]") : "",
-						lightList.watched.contains(object) ? " [gone through]" : "");
+				for (const RE::NiAVObject* object = a_pass->geometry; object; object = object->parent)
+					chain += fmt::format(" <- {}:{}{}{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "", Hidden(object) ? " hidden" : "",
+						exclusion->candidates->entries.contains(object) ? (Excluded(*exclusion, object) ? " [excluded entry]" : " [entry]") : "");
 				std::scoped_lock lock(firstMutex);
-				if (listFirstMissed.empty())
-					listFirstMissed = chain;
+				if (filterFirstMissed.empty())
+					filterFirstMissed = chain;
 			}
-			listStats.parityChecked.fetch_add(1, std::memory_order_relaxed);
+			filterStats.parityChecked.fetch_add(through ? 1 : 0, std::memory_order_relaxed);
 		}
 		if (a_withheld)
 			return;
@@ -525,23 +607,39 @@ namespace DCLF::LocalLightCull
 		s.wouldSkip = 0;
 		s.frames = s.live = s.noExclusion = s.noClaims = s.stale = s.parityFrames = 0;
 		std::string list;
-		if (listInstalled) {
-			auto& l = listStats;
-			const auto listed = l.listed.exchange(0);
-			const auto checked = l.parityChecked.exchange(0);
-			const auto missed = l.parityMissed.exchange(0);
-			const std::string first = std::exchange(listFirstMissed, {});  // firstMutex is held (above)
-			list = fmt::format("\n[DCLF] point lights' list: {} lights, {} through the list ({:.0f} entries each, {:.0f} of them culled by a parent's test; {} roots now), walked: {} with a root list of their own, {} portal-strict, {} on frames without it, {} after a move since the selection; {} builds ({:.3f} ms each), {} entries added and {} removed by events; parity {} casters checked, {} under no listed root{}{}",
-				l.lights.exchange(0), listed, listed ? static_cast<double>(l.listEntries.exchange(0)) / static_cast<double>(listed) : 0.0,
-				listed ? static_cast<double>(l.parentCulled.exchange(0)) / static_cast<double>(listed) : 0.0,
-				lightList.roots.size(),
-				l.walkedOwn.exchange(0), l.walkedStrict.exchange(0), l.walkedNotLive.exchange(0), l.walkedMoved.exchange(0), l.builds,
-				l.builds ? static_cast<double>(l.buildTicks) * 1000.0 / static_cast<double>(frequency.QuadPart) / static_cast<double>(l.builds) : 0.0, l.added, l.removed,
-				checked, missed, checked || missed ? (missed ? " <- LIGHT LIST" : " <- OK") : "", first.empty() ? "" : "; first:" + first);
-			l.listEntries = 0;
-			l.builds = l.added = l.removed = 0;
-			l.buildTicks = 0;
+		if (filterInstalled) {
+			auto& f = filterStats;
+			const auto checked = f.parityChecked.exchange(0);
+			const auto missed = f.parityMissed.exchange(0);
+			const auto nodes = f.nodes.exchange(0);
+			const std::string first = std::exchange(filterFirstMissed, {});  // firstMutex is held (above)
+			list = fmt::format("\n[DCLF] point lights' category filter: {} lights, {} filtered, {} walked whole (frames without it); {:.1f} filtered nodes a light ({} now), {:.0f} children culled and {:.0f} cut a light, {} dirty nodes walked; {} builds ({} nodes, {:.3f} ms each); parity {} casters under a filtered node checked, {} not under a child it keeps{}{}",
+				f.lights.exchange(0), f.filtered.load(), f.walkedNotLive.exchange(0), f.filtered.load() ? static_cast<double>(nodes) / static_cast<double>(f.filtered.load()) : 0.0,
+				filterBuilt ? filterBuilt->nodes.size() : 0, f.filtered.load() ? static_cast<double>(f.children.exchange(0)) / static_cast<double>(f.filtered.load()) : 0.0,
+				f.filtered.load() ? static_cast<double>(f.cut.exchange(0)) / static_cast<double>(f.filtered.load()) : 0.0, f.dirtyNodes.exchange(0), f.builds, f.nodesRebuilt,
+				f.builds ? static_cast<double>(f.buildTicks) * 1000.0 / static_cast<double>(frequency.QuadPart) / static_cast<double>(f.builds) : 0.0,
+				checked, missed, checked || missed ? (missed ? " <- LIGHT FILTER" : " <- OK") : "", first.empty() ? "" : "; first:" + first);
+			f.filtered = 0;
+			f.children = 0;
+			f.cut = 0;
+			f.builds = f.nodesRebuilt = 0;
+			f.buildTicks = 0;
 		}
-		return timing + "\n" + withFirst + list;
+		{
+			const auto lostMasks = maskStats.underExcluded.exchange(0);
+			list += fmt::format("\n[DCLF] point lights' masks (parity frames): {} written on engine-drawn Lighting geometry, {} of them under an excluded entry or a cut child{}{}",
+				maskStats.writes.exchange(0), lostMasks, lostMasks ? " <- LIGHT MASKS LOST" : "", maskFirst.empty() ? "" : "; first '" + std::exchange(maskFirst, {}) + "'");
+		}
+		std::string censusText;
+		if (censusOn) {
+			std::scoped_lock censusLock(censusMutex);
+			censusText = "\n[DCLF] TEMP point lights' census (entries at the last build; paraboloid passes on parity frames, withheld):";
+			for (auto& [name, row] : census) {
+				censusText += fmt::format("\n    {}: {} entries, {} passes ({} withheld), {} mask writes on engine-drawn Lighting geometry; e.g. '{}'", name, row.entries, row.passes, row.withheld,
+					row.masks, row.example);
+				row.passes = row.withheld = row.masks = 0;
+			}
+		}
+		return timing + "\n" + withFirst + list + censusText;
 	}
 }

@@ -771,7 +771,7 @@ namespace DCLF
 				// point light was drawn: a light new next frame is culled by the engine, as its claims are not live yet).
 				LocalLightCull::Publish(!modeUsed[kParabolicShadowMode] ? nullptr :
 				                        usedWorkerBuild                ? payload.parabolicExclusion :
-				                                                         BuildSunExclusion(payload.inputs.sunCandidates, payload, kParabolicShadowMode, SceneStore::Get().GetTables(), &impl->parabolicExclusionCache));
+				                                                         BuildSunExclusion(payload.inputs.lightCandidates, payload, kParabolicShadowMode, SceneStore::Get().GetTables(), &impl->parabolicExclusionCache));
 			}
 			pending.clear();
 		} else {
@@ -816,6 +816,7 @@ namespace DCLF
 					out.mask = planes.activePlanes.underlying() & 0x3Fu;
 				}
 		in.sunCandidates = a_store.GetSunCandidates();
+		in.lightCandidates = a_store.GetLightCandidates();
 		in.addresses.constants = a_resources.constantsAddress;
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.objectsIndex = a_resources.scene->objectsIndex;
@@ -947,7 +948,7 @@ namespace DCLF
 				if (inputs.modeUsed[kSunShadowMode])
 					payload->sunExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kSunShadowMode, *tablesPtr, exclusionCache);
 				if (inputs.modeUsed[kParabolicShadowMode])
-					payload->parabolicExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kParabolicShadowMode, *tablesPtr, parabolicCache);
+					payload->parabolicExclusion = BuildSunExclusion(inputs.lightCandidates, *payload, kParabolicShadowMode, *tablesPtr, parabolicCache);
 			}
 		});
 	}

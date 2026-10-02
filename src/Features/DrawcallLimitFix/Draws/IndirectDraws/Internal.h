@@ -1501,6 +1501,8 @@ namespace DCLF
 			// The sun entries the scene store found DCLF could take out of the cascade culls (SunAccumulation): the build
 			// turns them into the next frame's exclusion, with the claims.
 			std::shared_ptr<const SunCandidates> sunCandidates;
+			// And those it could take out of the point lights' culls (LocalLightCull): the paraboloid exclusion's.
+			std::shared_ptr<const SunCandidates> lightCandidates;
 			ResourceAddresses addresses{};
 			// Community Shaders' SharedData (b5) and FeatureData (b6), copied from the structs CS keeps.
 			std::vector<std::byte> sharedData, featureData;
@@ -2319,6 +2321,7 @@ namespace DCLF
 			// frame's over them (the water reflections' prepasses refresh them after the scene phase).
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.modeUsed == a_epoch.modeUsed &&
 			       a_job.modeRasterStates == a_epoch.modeRasterStates && a_job.sunCandidates == a_epoch.sunCandidates &&
+			       a_job.lightCandidates == a_epoch.lightCandidates &&
 			       a_job.addresses == a_epoch.addresses && a_job.sharedData.size() == a_epoch.sharedData.size() &&
 			       a_job.featureData.size() == a_epoch.featureData.size() &&
 			       a_job.lookupGeneration == a_epoch.lookupGeneration && a_job.tablesGeneration == a_epoch.tablesGeneration;

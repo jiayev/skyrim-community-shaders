@@ -1621,6 +1621,7 @@ namespace DCLF
 		{
 			DCLF_SCENE_PART(SunCandidates, "CS.DCLF.Scene.SunCandidates");
 			UpdateSunCandidates(full);
+			UpdateLightCandidates(full);
 		}
 		{
 			DCLF_SCENE_PART(FaceWalk, "CS.DCLF.Scene.FaceWalk");

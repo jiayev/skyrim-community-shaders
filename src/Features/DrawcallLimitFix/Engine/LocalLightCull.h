@@ -41,22 +41,23 @@ namespace DCLF
 		std::string Report();
 
 		/**
-		 * The light list (CS_DCLF_LIGHT_LIST, on with the skip): a light without a root list of its own culls the object root's
-		 * entries less the excluded ones, through the engine's list path (FUN_140e28f70: BSShadowLight::sceneAccumArray, lent
-		 * for the call), instead of walking the whole object root to skip them. The list: below the object root, every plain
-		 * NiNode down to the category nodes is gone through (not hidden; its OnVisible only culls its children), and whatever
-		 * else is reached is listed whole (the two whole entries, an entry, a node of another class), the excluded entries
-		 * left out. Kept by the attach and detach events under those nodes and the hidden events on them; built again when
-		 * the exclusion changes. A light uses it only while nothing has moved since the frame's selection; parity frames walk
-		 * the object root and check that every caster the engine registers is under a listed root.
+		 * The category filter (CS_DCLF_LIGHT_LIST, on with the skip): inside a point light's cull, a category node (an exact
+		 * NiNode that is the parent of excluded entries) culls its children less those entries, through NiNode::OnVisible's
+		 * vtable slot, instead of reaching each to skip it. Everything above (the cells and their multibound tests, kAllPass,
+		 * the portals' compound frustum) stays the engine's, so every light takes it, portal-strict ones included. Built at
+		 * the selection for a new exclusion; a node a child is attached to or detached from is walked natively until the
+		 * next selection builds it again. Parity frames filter nothing and check that every caster the engine registers
+		 * under a filtered node hangs from a child it keeps.
 		 */
 		/** @brief Any thread, the attach and detach detours (SceneTracker): a_child attached to or detached from a_parent. */
 		void NoteStructure(const RE::NiNode* a_parent, RE::NiAVObject* a_child, bool a_attached);
-		/** @brief Render thread, SceneStore's hidden events: a hidden bit written on a node. */
-		void NoteHiddenKey(const void* a_key);
-		/** @brief Any thread, the list cull: whether a_list is a light list lent on this thread (its hidden entries are skipped). */
-		bool OwnsList(const void* a_list);
-		/** @brief At Present, render thread: the roots the list let go of are released. */
+		/**
+		 * @brief SunAccumulation's registration hook (FUN_1414b2140), a shadow light's accumulator: on parity frames, a point
+		 * light's mask write (the light's bit into activeLightMask) on a geometry the engine draws in the main pass with a
+		 * Lighting property, which a cut entry would lose. a_owned: DCLF draws its main pass (its mask stays 0).
+		 */
+		void NoteMaskWrite(const void* a_accumulator, const RE::BSGeometry* a_geometry, bool a_owned);
+		/** @brief At Present, render thread: retired filters are released (two Presents later). */
 		void EndFrame();
 	}
 }
