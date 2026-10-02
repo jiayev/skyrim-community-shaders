@@ -1054,6 +1054,25 @@ namespace DCLF
 		 */
 		bool IsMember(std::int32_t a_object) const { return a_object >= 0 && IsResidentSlot(static_cast<std::uint32_t>(a_object)); }
 		/**
+		 * @brief Whether a main-pass build can draw with the pipeline slot now: compiled into the set for the slot's current key
+		 * (MainBuild::PackPipelines' rule). A pipeline a join has just made is compiled in the background, a frame or more.
+		 */
+		bool PipelineDrawable(std::uint32_t a_pipeline) const
+		{
+			return a_pipeline < tables.pipelines.size() && a_pipeline < lookups.pipelines.size() && lookups.pipelines[a_pipeline].setIndex != Lookups::kNone &&
+			       lookups.pipelines[a_pipeline].key == tables.pipelines[a_pipeline];
+		}
+		/** @brief Whether a main-pass build can draw the object now: it has bindings and its pipeline is drawable. */
+		bool ObjectDrawable(std::int32_t a_object) const
+		{
+			if (a_object < 0 || static_cast<std::size_t>(a_object) >= tables.objects.size())
+				return false;
+			const auto& record = tables.objects[a_object];
+			return !(record.flags & kObjectNoBindings) && PipelineDrawable(record.pipelineIndex);
+		}
+		/** @brief PrimaryCull::MembershipWitness when the residents were last bound (BindByMembership). */
+		std::uint32_t BoundMembershipWitness() const { return membershipWitness; }
+		/**
 		 * @brief Any thread: a fade node's currentFade changed outside the engine's own writers (PrimaryCull's fade service), for
 		 * the fade watch (its dependents' Faded shadow verdicts).
 		 */

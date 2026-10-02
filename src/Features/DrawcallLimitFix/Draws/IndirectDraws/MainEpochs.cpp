@@ -87,7 +87,7 @@ namespace DCLF
 				const std::uint32_t flags = inTables ? tables.objects[object].flags : 0u;
 				const std::uint32_t ordinal = inTables && static_cast<std::size_t>(object) < tables.decalOrdinal.size() ? tables.decalOrdinal[object] : ~0u;
 				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({}); object {}, flags {:#x}, member {}, decal ordinal {} of {}/{}/{}, "
-							 "last drawn {}, colour build state {}, material slot {} ({})",
+							 "last drawn {}, colour build state {}, material slot {} ({}); pipeline {}",
 					frame, geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase", object,
 					flags, store.IsMember(object), ordinal, tables.decalCount[0], tables.decalCount[1], tables.decalCount[2],
 					impl->drawnGeometry.contains(geometry) ? fmt::format("{} frames ago", frame - impl->drawnGeometry.find(geometry)->second.last) : std::string("never"),
@@ -103,6 +103,18 @@ namespace DCLF
 							lookup.key == tables.materialSlotKey[m] ? "current" : "stale", m < tables.materialVersion.size() ? tables.materialVersion[m] : 0ull, lookup.recordVersion,
 							tables.materialSlots.Alive(m), tables.materialSlotKey[m].first != nullptr, tables.MaterialUsed(m), frame,
 							tables.materialSlots.References(m));
+					}(),
+					[&]() -> std::string {
+						// The pipeline as the builds' PackPipelines reads it: used, compiled into the set, and compiled for this key.
+						const std::uint32_t p = inTables ? tables.objects[object].pipelineIndex : ~0u;
+						const auto& lookups = store.GetLookups();
+						if (p >= tables.pipelines.size() || p >= lookups.pipelines.size())
+							return fmt::format("{} (no lookup)", p);
+						const auto& entry = lookups.pipelines[p];
+						return fmt::format("{} (descriptor {:08X}, vertex {:08X}, pixel {:08X}; used {}, set index {}, lookup key {}, lookup descriptor {:08X})", p,
+							tables.pipelines[p].passDescriptor, tables.pipelines[p].vertexDescriptor, tables.pipelines[p].pixelDescriptor, tables.PipelineUsed(p),
+							entry.setIndex == Lookups::kNone ? -1 : static_cast<std::int64_t>(entry.setIndex), entry.key == tables.pipelines[p] ? "current" : "stale",
+							entry.key.passDescriptor);
 					}());
 			}
 		}

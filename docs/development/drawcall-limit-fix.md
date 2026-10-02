@@ -6689,3 +6689,31 @@ pipeline, material and geometry, so the decal ordering, culling, rows and kept s
     under a listed root are found through `FindCategoryNode` like any other.
 -   **Measured.** Capture parity in Bleak Falls Barrow: geometry drawn outside the tracked category nodes 4,969 a report
     to 0, untracked eligible 0, and the roots' draws compare clean (per-geometry: the candle flicker alone).
+
+## Members whose pipeline is still compiling (2026-10-02)
+
+-   **The holes.** Every tour had 48-52 holes in two frames right after `coc BleakFallsBarrow01`: skeevers' and bandits'
+    parts, members of stood-in entries, drawn the frame before and then by nobody. Set parity: "withheld natively, drawn by
+    nobody ... depth build skipped: pipeline, colour build skipped: pipeline". Their pipelines had a current key and no
+    set index: compiling.
+-   **Why.** The cell turns the sun's shadows on (`kNoSunShadowDir`, part of `PrimaryCull::MembershipWitness`), so
+    `BindByMembership` binds every resident again in that frame's accumulate phase. The actors' passes gain ShadowDir
+    (`0x40`), a new pipeline compiled in the background for a frame or two. The cull that frame had already stood in for
+    their entries (they were drawn in full the frame before), so the engine registered nothing, and the native skip, which
+    leaves to the engine any pass DCLF cannot draw (`DrawableThisFrame`), had no pass to leave. The `Lookups` contract (a
+    pipeline still compiling delays a draw, never makes a hole) held for the native loop and not for the stand-in.
+-   **The fix: a member DCLF cannot draw this frame is the engine's registration's.**
+    -   `SceneStore::PipelineDrawable` / `ObjectDrawable`: compiled into the set for the slot's current key
+        (`PackPipelines`' rule), and bindings. `DrawableThisFrame` uses it, so the native skip and the builds agree.
+    -   `PrimaryCull::PrepareFrame`, before the list jobs, samples which used pipelines are drawable and the membership
+        witness. The stand-in's walk hands a bound member that is not drawable to the registration instead of DCLF's
+        visible list, and so does `Owned` (the leaf exclusion's test, which the hand-off goes through as well). A witness
+        that differs from the residents' (`rebindAll`) walks every entry and hands every member over, since this frame's
+        accumulate phase binds them all again; `BindByMembership` reads the same sample, so the two always agree on the
+        frame.
+    -   A join onto a pipeline still compiling marks its entry walked (`NoteMemberUndrawable`), and the entry is walked
+        again once the pipeline is drawable (`undrawableMembers`), so it stops walking.
+    -   The engine registers those members that frame, and the native skip draws each pass natively while DCLF cannot;
+        as soon as the pipeline is in the set DCLF draws it and the skip withholds the native pass.
+-   **Measured.** Ownership tour (Bleak Falls Barrow, then Yngvild; full parity): holes 0 in every report, every parity
+    check OK. The report's primary exclusion line counts "bound but not drawable this frame" and the rebinding frames.
