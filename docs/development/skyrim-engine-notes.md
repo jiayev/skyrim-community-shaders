@@ -1017,6 +1017,15 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
     incoming flag, and some mask bit naming the sun); DefShadow is the accumulator's deferred flag (`+0x178`) under alpha
     and fade conditions, cleared without ShadowDir or a shadow light; both are cleared for a property with no shadow
     passes unless flags `0x800c000100`. It copies `kSkinned` into descriptor bit 1 and `kProjectedUV` into bit 15.
+-   **The pass draw** (`FUN_1414f2ad0`, from `SetupAndDrawPass` for unskinned geometry) switches on the geometry type
+    (`+0x150`): a tri-shape (3) draws its renderer data (`+0x138`) with its triangle count (`+0x158`); a
+    `BSMultiIndexTriShape` (7) the same, except a pass with accumulation hint 12, which draws its second index list
+    (`altIndexBuffer`, `FUN_140e465d0`); `BSLODMultiIndexTriShape` (6) picks its LOD level's ranges.
+-   **The shadow modes' registration** (`FUN_1414b2a60`) asks only the geometry's own property for passes, so a multi-index
+    shape's additional property never casts.
+-   **`SetupTechnique`'s samplers** by the remapped technique: 1 and 0x10 slots 4 and 5; 2 slot 6; 3 and 7 slot 3; 4 slots 3,
+    4 and 12; 8 and 0x13 the land maps; 9 and 0x12 the LOD land maps; 0xb slots 4, 5 and 8; 0xe binds slot 10 with address mode 3 and filter 0. Slot n's filter mode is `0x14202ac6c + 4n`. The remap: 0x12 to 9
+    unless `0x142032fdb`, 7 to 0 unless `0x142035500`.
 -   **`Process1`** (`BSCullingProcess::Process1`, `0x140e28390`, the list processes' vtable slot `0x16`): the bound test
     (`TestBaseVisibility3`, or the compound frustum with portals), then the object's `OnVisible`, and `kAccumulated`
     (flags bit 26) set on what it passed and cleared on what it culled. `AppendVirtual(geometry, group)` appends

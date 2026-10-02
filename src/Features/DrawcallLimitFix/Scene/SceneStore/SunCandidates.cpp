@@ -149,7 +149,7 @@ namespace DCLF
 		};
 		auto describe = [&](const RE::BSGeometry& a_geometry, const Tracked& a_tracked) {
 			const auto* property = a_geometry.GetGeometryRuntimeData().shaderProperty.get();
-			return fmt::format("{} {}, shadow {}, {}", kIneligibleNames[static_cast<std::size_t>(a_tracked.candidateReason)], techniqueOf(a_geometry),
+			return fmt::format("{} {} {}, shadow {}, {}", a_geometry.GetRTTI() ? a_geometry.GetRTTI()->name : "?", kIneligibleNames[static_cast<std::size_t>(a_tracked.candidateReason)], techniqueOf(a_geometry),
 				ShadowRejectName(ShadowCasterReject(property, &a_geometry, false)), a_tracked.slot != kNoObjectSlot ? "record" : "no record");
 		};
 		auto exampleOf = [](const RE::BSGeometry& a_geometry, const RE::NiAVObject* a_entry) {

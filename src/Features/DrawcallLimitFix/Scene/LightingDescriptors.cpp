@@ -28,6 +28,11 @@ namespace DCLF
 			case Technique::Envmap:
 			case Technique::Glowmap:
 			case Technique::Parallax:
+			// Parallax occlusion and multilayer parallax: SetupMaterial writes their constants and textures (ParallaxOccData,
+			// MultiLayerParallaxData, the layer and envmap maps), which the material records take from the engine's own
+			// evaluation; SetupTechnique's remap and samplers are SetupTechniqueDescriptor's and EvaluateTechnique's.
+			case Technique::ParallaxOcc:
+			case Technique::MultilayerParallax:
 				return true;
 			case Technique::TreeAnim:
 				return ActiveToggles().trees;
@@ -203,6 +208,16 @@ namespace DCLF
 		lodFade.specularEnd = ReadSetting("fSpecularLODFadeEnd:LightingShader", 0.10f);
 		lodFade.envmapStart = ReadSetting("fEnvmapLODFadeStart:LightingShader", 0.09f);
 		lodFade.envmapEnd = ReadSetting("fEnvmapLODFadeEnd:LightingShader", 0.10f);
+	}
+
+	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass)
+	{
+		const std::uint32_t technique = a_pass & 0x3f000000u;
+		if (technique == 0x12000000u && !*reinterpret_cast<const std::uint8_t*>(REL::Offset(0x2032fdb).address()))
+			return (a_pass & 0xc9ffffffu) | 0x9000000u;
+		if (technique == 0x7000000u && !*reinterpret_cast<const std::uint8_t*>(REL::Offset(0x2035500).address()))
+			return a_pass & 0xc0ffffffu;
+		return a_pass;
 	}
 
 	std::uint32_t SelectLightingTechnique(std::uint64_t f)
@@ -554,8 +569,8 @@ namespace DCLF
 				return Ineligible::Fading;
 		}
 
-		uint vertex = VertexDescriptorFromPass(d);
-		uint pixel = PixelDescriptorFromPass(d);
+		uint vertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
+		uint pixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(d));
 		a_out.rawVertex = vertex;
 		a_out.rawPixel = pixel;
 		globals::state->ModifyShaderLookup(RE::BSShader::Type::Lighting, vertex, pixel, true);

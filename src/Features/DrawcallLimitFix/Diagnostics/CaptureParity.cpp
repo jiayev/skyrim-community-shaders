@@ -100,6 +100,7 @@ namespace DCLF
 
 	void CaptureParity::NoteMismatch(std::string a_message)
 	{
+		lastNote = a_message;
 		if (samples.size() < kMaxSamples)
 			samples.push_back(std::move(a_message));
 	}
@@ -632,6 +633,7 @@ namespace DCLF
 	void CaptureParity::OnNativeLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags)
 	{
 		pendingObject = -1;
+		lastNote.clear();
 		compareContext.clear();
 		if (ConstantEvaluator::Evaluating() || !globals::deferred->deferredPass || !a_pass || !a_pass->geometry)
 			return;
@@ -767,6 +769,11 @@ namespace DCLF
 		}
 		if (mismatch)
 			++mismatchedDraws;
+		++checkedByTechnique[(key.passDescriptor >> 24) & 0x3f];
+		mismatchedByTechnique[(key.passDescriptor >> 24) & 0x3f] += mismatch ? 1 : 0;
+		if (mismatch && firstByTechnique[(key.passDescriptor >> 24) & 0x3f].empty())
+			firstByTechnique[(key.passDescriptor >> 24) & 0x3f] = lastNote.empty() ? fmt::format("{} (no note)", Describe(geometry)) : lastNote;
+		lastNote.clear();
 		pendingObject = index;
 		// What its DrawIndexed calls should bind: the object's geometry, or each partition this pass draws, by
 		// the pass's own LODMode.
@@ -877,6 +884,18 @@ namespace DCLF
 		logger::info("[DCLF] capture parity {}: {} native main-pass lighting draws, {} checked against the tables, {} mismatched ({} material, {} per-geometry, {} technique), {} untracked eligible, {} tracked but excluded, {} native-only passes of DCLF objects; tables hold {} objects / {} geometries / {} pipelines ({} with shadow mask) / {} materials from {} tracked; render flags seen:{}",
 			ok ? "OK" : "MISMATCH", nativeDraws, checkedDraws, mismatchedDraws, materialMismatches, geometryMismatches, techniqueMismatches, untrackedEligible,
 			notInTables, nativeOnlyPasses, stats.objects, stats.geometries, stats.pipelines, stats.shadowMaskPipelines, stats.materials, stats.tracked, flags);
+		{
+			std::string byTechnique;
+			for (std::uint32_t t = 0; t < checkedByTechnique.size(); ++t)
+				if (checkedByTechnique[t])
+					byTechnique += fmt::format(" {} {}/{}", LightingTechniqueName(t), mismatchedByTechnique[t], checkedByTechnique[t]);
+			logger::info("[DCLF] capture parity by technique (mismatched/checked):{}", byTechnique.empty() ? std::string(" none") : byTechnique);
+			for (std::uint32_t t = 0; t < firstByTechnique.size(); ++t)
+				if (!firstByTechnique[t].empty())
+					logger::info("[DCLF]   first {} mismatch: {}", LightingTechniqueName(t), std::exchange(firstByTechnique[t], {}));
+			checkedByTechnique.fill(0);
+			mismatchedByTechnique.fill(0);
+		}
 		if (notInTables) {
 			std::string byReason;
 			for (const auto& [reason, count] : notInTablesBy)

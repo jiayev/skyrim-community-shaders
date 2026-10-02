@@ -382,7 +382,13 @@ namespace DCLF
 		const auto type = a_geometry.GetType().get();
 		const bool face = type == RE::BSGeometry::Type::kDynamicTriShape && FaceSnapshots::Enabled() && a_geometry.parent &&
 		                  netimmerse_cast<RE::BSFaceGenNiNode*>(a_geometry.parent);
-		if (type != RE::BSGeometry::Type::kTriShape) {
+		// A BSMultiIndexTriShape (cave walls, rocks with a snow layer) draws every pass but one as a tri-shape: its renderer data and
+		// its triangle count (FUN_1414f2ad0, type 7). The exception is the additional property's main-pass layer (accumulation
+		// hint 12), drawn from its second index list, so its main pass stays the engine's. The shadow modes register the main
+		// property's passes alone (FUN_1414b2a60), so it casts as a tri-shape: classified as one, an eligible one is MultiIndex,
+		// a shadow-only caster (ShadowOnlyReason).
+		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
+		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex) {
 			if (!face)
 				return Ineligible::NotTriShape;
 		}
@@ -455,7 +461,7 @@ namespace DCLF
 				a_descriptors->rejectedTechnique = descriptors.rejectedTechnique;
 			}
 		}
-		return reason;
+		return multiIndex && reason == Ineligible::None ? Ineligible::MultiIndex : reason;
 	}
 
 	SceneStore::SwitchState SceneStore::ReadSwitch(const RE::NiSwitchNode& a_switch)
