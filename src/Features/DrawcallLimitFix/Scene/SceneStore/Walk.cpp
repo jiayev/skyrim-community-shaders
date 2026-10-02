@@ -1124,6 +1124,11 @@ namespace DCLF
 		a_tracked.listedEmittance = nullptr;
 		if (a_root)
 			UnlistHiddenChain(a_geometry, a_tracked);
+		if (a_root && a_tracked.lightRoot) {
+			MarkLightEntryDirty(a_tracked.lightRoot);
+			Unlist(lightDependents, a_tracked.lightRoot, a_geometry);
+			a_tracked.lightRoot = nullptr;
+		}
 		if (a_root && a_tracked.listedRoot) {
 			MarkSunEntryDirty(a_tracked.listedRoot);
 			// The others under it: its bound takes this one in no more. The node is a key here; it may be gone.
@@ -1415,8 +1420,10 @@ namespace DCLF
 					tables.NoteChange(entry.slot, kChangeAll);
 			}
 			// What its sun entry's candidacy reads (SunEntryAllows).
-			if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason)
+			if (hadSlot != (entry.slot != kNoObjectSlot) || reasonBefore != entry.candidateReason) {
 				MarkSunEntryDirty(entry.sunEntryNode);
+				MarkLightEntryDirty(entry.lightRoot);
+			}
 			if (!(ShadowInputsOf(written ? entry.slot : kNoObjectSlot) == shadowBefore)) {
 				shadowSetsDirty = true;
 				if (slotBefore != kNoObjectSlot)

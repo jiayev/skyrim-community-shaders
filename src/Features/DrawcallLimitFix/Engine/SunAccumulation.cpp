@@ -444,8 +444,6 @@ namespace DCLF
 					// registration of it takes the sun's bits (ClearOwnedMask).
 					const std::uint32_t lightIndex = At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex);
 					const bool owned = PrimaryCull::Get().Owned(*geometry);
-					if (lightIndex != 0 && lightIndex != 0xFFFF)
-						LocalLightCull::NoteMaskWrite(a_accumulator, geometry, owned);
 					if (owned) {
 						const auto result = func(a_accumulator, a_geometry, a_arg);
 						if (lightIndex != 0 && lightIndex != 0xFFFF)
@@ -457,6 +455,9 @@ namespace DCLF
 						self.ApplySunBits(geometry, At<std::uint32_t>(a_accumulator, kAccumulatorLightIndex) == 0xFFFF);
 					else if (!call && self.exclusionLive.load(std::memory_order_acquire) && self.UnderRemovedEntry(geometry))
 						self.bitStats.notReady.fetch_add(1, std::memory_order_relaxed);
+					// And the point lights' bits of a geometry their culls left out (LocalLightCull).
+					if (lightIndex == 0xFFFF)
+						LocalLightCull::NoteMainRegistration(geometry);
 					return func(a_accumulator, a_geometry, a_arg);
 				}
 				std::uint64_t result = 1;
@@ -525,6 +526,7 @@ namespace DCLF
 		{
 			static void thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
+				LocalLightCull::NoteMaskClear();
 				func(a_1, a_2, a_3, a_4);
 				SunAccumulation::Get().bitsReady.store(false, std::memory_order_relaxed);
 			}
