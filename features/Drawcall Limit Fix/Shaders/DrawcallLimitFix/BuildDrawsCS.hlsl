@@ -61,12 +61,16 @@ cbuffer BuildDrawsConstants : register(b0)
 	// (FadeStateCS.hlsl; Records.h). The first phase drops an input under an owned root (kFadeRootOwned) while its root's
 	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
 	uint FadeRootsIndex;
-	uint FadeStatesIndex;
+	uint FadeStatesUnused;  // the states a dispatch reads are its latch's (FadeStatesIndex)
 	// A shadow view: RWByteAddressBuffer, its slot's bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
 	uint BucketCountsIndex;
 	// A shadow view: ByteAddressBuffer, each geometry slot's first index in the index pool (ShadowIndexPool), ~0 without one.
 	uint PoolFirstsIndex;
 }
+
+// StructuredBuffer<FadeNodeState>: FadeStateCS's states as the frame before published them (the latch's fadeStatesIndex, read at
+// the top of main).
+static uint FadeStatesIndex;
 
 // FadeStateCS.hlsl's rows, as Records.h lays them out.
 struct FadeNodeState
@@ -205,6 +209,7 @@ void LoadLatch()
 	SunEntryOffset = sunRegions.y;
 	LocalShadowOffset = sunRegions.z;
 	BucketTableOffset = latch.Load(LatchOffset + 236);
+	FadeStatesIndex = latch.Load(LatchOffset + 240);
 }
 
 // Light Limit Fix's shadow mask of an input, as the main pass's light selection gives it (LocalShadowLights): the local
@@ -737,8 +742,8 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	bool fadeHidden = false;
 	if (FrustumIndex != 0 && phase == kPhaseOne && !frustumRejected) {
 		RWByteAddressBuffer frustumStamps = ResourceDescriptorHeap[FrustumIndex];
-		// A member under a root DCLF owns: its root's OnVisible this frame or when last in view (FadeStateCS, which ran just
-		// before), as the engine's cull would have decided whether to go on into the children.
+		// A member under a root DCLF owns: its root's OnVisible of the frame before or when last in view (FadeStateCS, a frame
+		// ahead), as the engine's cull would have decided whether to go on into the children.
 		const uint fadeRoot = inputs.Load(inputOffset + 48);
 		bool ownedFade = false;
 		if (fadeRoot != 0xFFFFFFFFu && FadeRootsIndex != 0) {

@@ -129,6 +129,11 @@ namespace DCLF
 	 * does not change with it. A character-light pass's material row binds the null texture at t11.
 	 */
 	inline constexpr std::uint32_t kCharacterLightRegister = kTextureRegisters - 3;
+	/**
+	 * @brief t124: the trees' wind the frame's draws read (DCLFTreeWind, Common/DCLFObjects.hlsli; IndirectDraws, TreeWindCS), a
+	 * vertex-stage buffer like the two above it. The frame record gives it: the buffer alternates by frame.
+	 */
+	inline constexpr std::uint32_t kTreeWindRegister = kTextureRegisters - 4;
 
 	/**
 	 * @brief Everything one indirect draw binds, in GPU memory: its address is the draw's only push data,

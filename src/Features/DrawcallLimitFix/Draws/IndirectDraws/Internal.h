@@ -412,11 +412,20 @@ namespace DCLF
 			// Tree wind (TreeWindCS; Records.h, TreeStatic): the tree rows and their clocks by tree slot, and the members drawing
 			// under a tree. The rows and the list are the commits' uploads (UploadTrees), against the tables' versions; the
 			// clocks are the GPU's alone. The counts and the frame's inputs are what the passes dispatch with (the last commit's).
-			std::shared_ptr<org::Buffer> trees, treeClocks, treeObjects;
+			std::shared_ptr<org::Buffer> trees, treeClocks;
 			std::shared_ptr<org::Buffer> treeFrameBuffer;  // TreeWindFrameRow, one row, every commit's
-			std::uint32_t treeCapacity = 0, treeObjectCapacity = 0;
-			std::uint64_t treesHeld = ~0ull, treeObjectsHeld = ~0ull;
-			std::uint32_t treeCount = 0, treeObjectCount = 0;
+			// The trees' wind (TreeWindCS), by entry (kTreeWindEntryRows float4 rows: the nodeless trees', then tree slot s at
+			// s + 1), one buffer per frame parity: the Z-prepass epoch's compute writes the frame's, and every draw reads the
+			// other's through the frame record (kTreeWindRegister, treeWindIndex). Zeroed once per backing (treeWindZeroed): a
+			// zero generation is never a listing's, so a record draws its own values until its tree's entry is written.
+			std::array<std::shared_ptr<org::Buffer>, 2> treeWindRows;
+			std::array<std::uint32_t, 2> treeWindIndex{};
+			bool treeWindZeroed = false;
+			/** @brief The wind buffer a frame's draws read: the one the frame before wrote (TreeWindCS writes by the frame's parity). */
+			std::uint32_t TreeWindReadIndex(std::uint32_t a_frame) const { return treeWindIndex[(a_frame + 1) & 1]; }
+			std::uint32_t treeCapacity = 0;
+			std::uint64_t treesHeld = ~0ull;
+			std::uint32_t treeCount = 0;
 			std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
 			TreeWindFrame treeInputs{};
 			std::shared_ptr<const ComputeProgram> treeWind;
@@ -425,6 +434,14 @@ namespace DCLF
 			// a frame), and CS_DCLF_FADE_PARITY's log (kFadeLogEntries roots from fadeLogBase, ~0u: none this frame).
 			std::shared_ptr<org::Buffer> fadeRoots, fadeStates, fadeFrameBuffer, fadeLog;
 			std::shared_ptr<org::Buffer> fadeVisibility;  // the main camera's cull test (Records.h, kFadeVisibilityBytes)
+			// The states FadeStateCS publishes, one buffer per scene frame parity (the state rows are its own): the builds read the
+			// frame before's (FadeStatesReadIndex, through their latches). Zeroed once per backing (frameAheadZeroed): a zero
+			// generation is never a listing's, and the builds take the static row's state for it.
+			std::array<std::shared_ptr<org::Buffer>, 2> fadeStatesOut;
+			std::array<std::uint32_t, 2> fadeStatesOutIndex{};
+			bool fadeStatesOutZeroed = false;
+			/** @brief The published states a frame's builds read: the frame before's (FadeStateCS writes by the frame's parity). */
+			std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
 			std::uint32_t fadeRootCapacity = 0;
 			std::uint64_t fadeRootsHeld = ~0ull;
 			std::uint32_t fadeRootCount = 0;
@@ -468,6 +485,27 @@ namespace DCLF
 		 * @brief A commit's tree uploads (render thread): the rows and the list where the buffers do not hold the tables'
 		 * versions, whole (they change when a tree member joins or leaves), and the frame's inputs once a frame.
 		 */
+		/**
+		 * @brief A commit's zeroing of the frame-ahead outputs (the trees' wind, the published fade states) in a new backing, before
+		 * any epoch's draws or builds read them: whichever epoch commits first after a growth.
+		 */
+		template <class Uploads>
+		void ZeroFrameAheadOutputs(SceneBuffers& a_scene, Uploads& a_uploads)
+		{
+			if (!a_scene.treeWindZeroed && a_scene.treeWindRows[0]) {
+				const std::vector<std::byte> zeros(std::size_t(a_scene.treeCapacity + 1) * kTreeWindEntryRows * 16);
+				for (const auto& rows : a_scene.treeWindRows)
+					a_uploads(rows, zeros.data(), zeros.size(), 0);
+				a_scene.treeWindZeroed = true;
+			}
+			if (!a_scene.fadeStatesOutZeroed && a_scene.fadeStatesOut[0]) {
+				const std::vector<std::byte> zeros(std::size_t(a_scene.fadeRootCapacity) * sizeof(FadeNodeState));
+				for (const auto& states : a_scene.fadeStatesOut)
+					a_uploads(states, zeros.data(), zeros.size(), 0);
+				a_scene.fadeStatesOutZeroed = true;
+			}
+		}
+
 		template <class Uploads>
 		void UploadTrees(const SceneStore::Tables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads)
 		{
@@ -478,20 +516,14 @@ namespace DCLF
 					a_uploads(a_scene.trees, a_tables.trees.data(), a_tables.trees.size() * sizeof(TreeStatic), 0);
 				a_scene.treesHeld = a_tables.treesVersion;
 			}
-			if (a_scene.treeObjectsHeld != a_tables.treeObjectsVersion && a_tables.treeObjects.size() <= a_scene.treeObjectCapacity) {
-				if (!a_tables.treeObjects.empty())
-					a_uploads(a_scene.treeObjects, a_tables.treeObjects.data(), a_tables.treeObjects.size() * sizeof(TreeObject), 0);
-				a_scene.treeObjectsHeld = a_tables.treeObjectsVersion;
-			}
 			a_scene.treeCount = a_scene.treesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
-			a_scene.treeObjectCount = a_scene.treeObjectsHeld == a_tables.treeObjectsVersion ? static_cast<std::uint32_t>(a_tables.treeObjects.size()) : 0u;
 			if (a_scene.treeFrame != a_frame) {
 				a_scene.treeFrame = a_frame;
 				a_scene.treeInputs = SampleTreeWindFrame();
 			}
 			// The frame row (TreeWindFrameRow), every commit: the pass's invocation is prepared ahead of it.
 			if (a_scene.treeFrameBuffer) {
-				const TreeWindFrameRow row{ a_scene.treeCount, a_scene.treeObjectCount, a_scene.treeFrame, 0, a_scene.treeInputs, {} };
+				const TreeWindFrameRow row{ a_scene.treeCount, 0, a_scene.treeFrame, 0, a_scene.treeInputs, {} };
 				a_uploads(a_scene.treeFrameBuffer, &row, sizeof(row), 0);
 			}
 		}
@@ -551,6 +583,10 @@ namespace DCLF
 			std::shared_ptr<PreprocessStates> preprocessMain;
 			std::shared_ptr<org::PixelBuffer> hzb;
 			std::shared_ptr<const ComputeProgram> hzbProgram;
+			// The single-pass downsample's count of finished groups: zeroed by the first depth commit (hzbCounterZeroed,
+			// render thread), and after that by the last group of each dispatch.
+			std::shared_ptr<org::Buffer> hzbCounter;
+			bool hzbCounterZeroed = false;
 			std::uint32_t hzbWidth = 0, hzbHeight = 0, hzbMips = 0;
 			std::uint32_t width = 0, height = 0;
 			bool lightLimitFix = false;  // LLF's graph buffers are registered (they are read at t35-t37)
@@ -712,14 +748,19 @@ namespace DCLF
 		void RecordLatchedDispatch(BuildDrawsConstants a_constants, const org::LatchBlock& a_latch,
 			rhi::CommandSignatureHandle a_signature, std::uint32_t a_latchOffset, org::PassRecordContext& a_recording);
 
+		/** @brief HzbCS.hlsl's constants: one single-pass downsample of the chain. */
 		struct HzbConstants
 		{
 			std::uint32_t sourceIndex;
-			std::uint32_t targetIndex;
-			std::uint32_t targetSize[2];
-			std::uint32_t sourceSize[2];
 			std::uint32_t fromDepth;
+			std::uint32_t validSize[2];   // the source texels holding depth
+			std::uint32_t domainSize[2];  // the source's power-of-two extent; past validSize it reads the far plane
+			std::uint32_t targetSize[2];  // the first written level's
+			std::uint32_t mips;
+			std::uint32_t workGroups;
+			std::uint32_t counterIndex;
 			std::uint32_t padding;
+			std::uint32_t targetIndices[kHzbDispatchMips];
 		};
 		static_assert(sizeof(HzbConstants) / 4 == kHzbConstantWords);
 
@@ -1086,6 +1127,7 @@ namespace DCLF
 			std::uint64_t constants = 0, records = 0, pipelineRows = 0, frameConstants = 0;
 			std::uint64_t facePositions = 0;  // the face positions buffer (SceneBuffers::facePositions)
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
+			std::uint32_t treeWindIndex = 0;  // the wind buffer the frame's draws read (SceneBuffers::TreeWindReadIndex)
 			std::uint32_t recordCapacity = 0;  // the material rows' table's rows (a row past it waits for the table to grow)
 			const void* identity = nullptr;
 

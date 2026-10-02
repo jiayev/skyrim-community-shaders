@@ -127,7 +127,7 @@ static precise row_major float4x4 World = float4x4(
 	DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
 	DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
 	float4(0, 0, 0, 1));
-static float4 TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
+static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
 #endif
 
 float2 SmoothSaturate(float2 value)
@@ -371,7 +371,7 @@ VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 		DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.y),
 		DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, FrameBuffer::CameraPosAdjust.z),
 		float4(0, 0, 0, 1));
-	TreeParams = DCLFObjects[DCLFObjectIndex].DCLFTreeParams;
+	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
 	TexcoordOffset = asfloat(vk::RawBufferLoad<uint4>(materialRow));
 
 	VS_OUTPUT vsout = DCLFShade(input);

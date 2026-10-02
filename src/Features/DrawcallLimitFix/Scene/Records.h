@@ -315,7 +315,7 @@ namespace DCLF
 	struct ObjectTreeAnim
 	{
 		float treeParams[4]{};   // 0, wind magnitude, amplitude, leaf frequency
-		float windTimers[4]{};   // wind timer, previous wind timer, unused, unused
+		float windTimers[4]{};   // wind timer, previous wind timer, then in the GPU record its tree slot and generation (bits)
 	};
 	static_assert(sizeof(ObjectTreeAnim) == 32);
 

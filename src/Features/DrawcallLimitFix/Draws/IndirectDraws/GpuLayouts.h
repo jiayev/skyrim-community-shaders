@@ -101,12 +101,16 @@ namespace DCLF::Draws
 	constexpr const char* kHzbShader = "DrawcallLimitFix/HzbCS.hlsl";
 	constexpr const char* kSortSequencesShader = "DrawcallLimitFix/SortSequencesCS.hlsl";
 	constexpr const char* kTreeWindShader = "DrawcallLimitFix/TreeWindCS.hlsl";
-	// TreeWindCS.hlsl's constants: the mode, the buffers' indices and the record's tree word. The counts, the frame and its
-	// inputs are the frame row (TreeWindFrameRow), which every commit uploads: the invocation is prepared ahead of the commit.
+	// TreeWindCS.hlsl's constants: the buffers' indices, the two wind buffers' last. The count, the frame and its inputs are
+	// the frame row (TreeWindFrameRow), which every commit uploads: the invocation is prepared ahead of the commit.
 	struct TreeWindConstants
 	{
-		std::uint32_t mode = 0, treesIndex = 0, clocksIndex = 0, listIndex = 0, recordsIndex = 0, frameIndex = 0, treeWord = 0, padding = 0;
+		std::uint32_t treesIndex = 0, clocksIndex = 0, frameIndex = 0, padding0 = 0;
+		std::uint32_t windIndices[2]{};
+		std::uint32_t padding1[2]{};
 	};
+	// The wind buffers' rows per entry (TreeWindCS.hlsl): TreeParams, WindTimers, the listing's generation.
+	constexpr std::uint32_t kTreeWindEntryRows = 3;
 	static_assert(sizeof(TreeWindConstants) == 32);
 	// TreeWindCS.hlsl's frame row (StructuredBuffer, one row).
 	struct TreeWindFrameRow
@@ -120,7 +124,6 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kTreeWindGroup = 64;
 	// What the tree buffers hold at first (they double as the scene needs).
 	constexpr std::uint32_t kInitialTrees = 1024;
-	constexpr std::uint32_t kInitialTreeObjects = 4096;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
@@ -137,7 +140,7 @@ namespace DCLF::Draws
 	{
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
-		std::uint32_t reserved[2]{};
+		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
 		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 		std::uint32_t padding[6]{};
 	};
@@ -145,8 +148,13 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;
 	constexpr std::uint32_t kFadeStateGroup = 64;
 	constexpr std::uint32_t kInitialFadeRoots = 4096;
-	// HzbCS.hlsl's constants: source, target, target size, source size, from-depth, padding.
-	constexpr std::uint32_t kHzbConstantWords = 8;
+	// HzbCS.hlsl's constants (Internal.h, HzbConstants): the source, its valid and padded extents, the levels written and
+	// their descriptors.
+	constexpr std::uint32_t kHzbConstantWords = 24;
+	// The levels one single-pass downsample writes (FidelityFX SPD): a 4096-texel domain to one texel.
+	constexpr std::uint32_t kHzbDispatchMips = 12;
+	// Its group's tile of the source.
+	constexpr std::uint32_t kHzbTile = 64;
 
 
 	// BuildDrawsCS.hlsl's inputs (byte-address buffers).
@@ -247,10 +255,10 @@ namespace DCLF::Draws
 		std::uint32_t pipelineRowsAddressHi;
 		// The object records (BindlessObject): an input's bound, sun entry and fade node are its record's, not its own.
 		std::uint32_t objectsIndex;
-		// The depth segment's first phase: the fade roots' static rows and FadeStateCS's states (an owned root's members follow
-		// its OnVisible verdict). 0 elsewhere.
+		// The depth segment's first phase and the shadow views: the fade roots' static rows (an owned root's members follow its
+		// OnVisible verdict; the states are the latch's, BuildDrawsLatch::fadeStatesIndex). 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
-		std::uint32_t fadeStatesIndex;
+		std::uint32_t fadeStatesUnused;
 		// A shadow view: its slot's bucket counts (ShadowResources::bucketCounts), a word per bucket. 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
 		// A shadow view: each geometry slot's first index in the index pool (ShadowIndexPool::firsts). 0 elsewhere.
@@ -306,13 +314,17 @@ namespace DCLF::Draws
 		// names a bucket per key slot, and the table gives each bucket its range of the slot's sequences (first, capacity),
 		// which one plain indirect draw with the bucket's pipeline executes (ShadowViewPass). 0 elsewhere.
 		std::uint32_t bucketTableOffset;
-		std::uint32_t reserved[4];
+		// The depth segment's first phase and the shadow views: FadeStateCS's states as the frame before published them
+		// (SceneBuffers::FadeStatesReadIndex), whose descriptor depends on the frame and so is the latch's. 0 elsewhere.
+		std::uint32_t fadeStatesIndex;
+		std::uint32_t reserved[3];
 	};
 	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&
 				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&
-				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236);
+				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236 &&
+				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240);
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**

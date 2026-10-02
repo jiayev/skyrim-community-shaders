@@ -600,18 +600,19 @@ namespace DCLF
 			return;
 		}
 		auto& buffers = *a_resources->scene;
-		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || buffers.treeObjectCount != tables.treeObjects.size())
+		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || buffers.treesHeld != tables.treesVersion)
 			return;
-		// The first 64 members, each record's 32 bytes of tree values copied into one staging buffer.
+		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's
+		// Z-prepass epoch wrote, copied into one staging buffer.
 		TreeReadback readback;
 		const std::size_t count = std::min<std::size_t>(64, tables.treeObjects.size());
 		D3D11_BUFFER_DESC sourceDesc{};
-		sourceDesc.ByteWidth = static_cast<UINT>(std::uint64_t(buffers.objectCapacity) * sizeof(BindlessObject));
+		sourceDesc.ByteWidth = static_cast<UINT>(std::uint64_t(buffers.treeCapacity + 1) * kTreeWindEntryRows * 16);
 		sourceDesc.Usage = D3D11_USAGE_DEFAULT;
 		sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		sourceDesc.StructureByteStride = sizeof(std::uint32_t);
-		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.objects, sourceDesc);
+		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[buffers.treeFrame & 1], sourceDesc);
 		if (!source)
 			return;
 		D3D11_BUFFER_DESC desc{};
@@ -623,7 +624,8 @@ namespace DCLF
 		ScopedPerfEvent event("CS DCLF: tree wind readback");
 		for (std::size_t i = 0; i < count; ++i) {
 			const auto& member = tables.treeObjects[i];
-			const auto offset = static_cast<UINT>(std::uint64_t(member.object) * sizeof(BindlessObject) + offsetof(BindlessObject, tree));
+			const std::uint32_t entry = member.tree == kNodelessTree ? 0u : member.tree + 1;
+			const auto offset = static_cast<UINT>(std::uint64_t(entry) * kTreeWindEntryRows * 16);
 			const D3D11_BOX box{ offset, 0, 0, offset + 32, 1, 1 };
 			context->CopySubresourceRegion(readback.records.get(), 0, static_cast<UINT>(i * 32), 0, 0, source.get(), 0, &box);
 			readback.samples.push_back({ member.object, member.tree, member.tree < tables.treeNode.size() ? tables.treeNode[member.tree] : nullptr });

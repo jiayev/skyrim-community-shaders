@@ -28,7 +28,7 @@ struct DCLFObjectRecord
 	// Tree animation (technique 12). Per object: under DCLF_BINDLESS the PerGeometry buffer is one
 	// block for the whole pipeline, and a tree's wind amplitude and clock are its own.
 	float4 DCLFTreeParams;
-	float4 DCLFWindTimers;  // xy used
+	float4 DCLFWindTimers;  // xy used; zw the tree slot and its listing's generation (DCLFTreeWind)
 	// Skinning: this object's bone palette rows in DCLFBones (three float4 rows a bone, current palette
 	// at DCLFBoneOffset, the previous frame's at DCLFPreviousBoneOffset), absolute like World.
 	uint DCLFBoneOffset;
@@ -92,6 +92,33 @@ StructuredBuffer<DCLFObjectRecord> DCLFObjects : register(t127);
 // The epoch's row buffer (IndirectDraws: kBonesBufferRegister): every skinned object's bone palette
 // rows end to end, current then previous, and after them the per-object extras rows (DCLFExtraOffset).
 StructuredBuffer<float4> DCLFBones : register(t126);
+// The trees' wind (IndirectDraws: kTreeWindRegister; TreeWindCS.hlsl): three rows an entry, TreeParams, WindTimers and the
+// listing's generation (x), the
+// nodeless entry first and tree slot s at entry s + 1, as the compute queue made them the frame before (it writes this
+// frame's into the other buffer). An entry is the object's only for the tree listing its record names (DCLFWindTimers.zw:
+// the tree slot and that listing's generation, never 0); otherwise the record's own values, those it joined with, are drawn.
+StructuredBuffer<float4> DCLFTreeWind : register(t124);
+static const uint kDCLFNodelessTree = 0xFFFFFFFEu;
+
+bool DCLFTreeWindEntry(uint a_object, out uint a_entry)
+{
+	const float4 joined = DCLFObjects[a_object].DCLFWindTimers;
+	const uint slot = asuint(joined.z);
+	a_entry = slot == kDCLFNodelessTree ? 0u : slot + 1u;
+	return asuint(joined.w) != 0u && asuint(DCLFTreeWind[a_entry * 3u + 2u].x) == asuint(joined.w);
+}
+
+float4 DCLFTreeParamsOf(uint a_object)
+{
+	uint entry;
+	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u] : DCLFObjects[a_object].DCLFTreeParams;
+}
+
+float2 DCLFWindTimersOf(uint a_object)
+{
+	uint entry;
+	return DCLFTreeWindEntry(a_object, entry) ? DCLFTreeWind[entry * 3u + 1u].xy : DCLFObjects[a_object].DCLFWindTimers.xy;
+}
 
 #endif  // DCLF_BINDLESS
 #endif  // __DCLF_OBJECTS_DEPENDENCY_HLSL__

@@ -259,6 +259,14 @@ namespace DCLF
 		a_out.alphaTestRef = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 		a_out.emissiveMult = a_objectIndex < a_tables.emissiveMult.size() ? a_tables.emissiveMult[a_objectIndex] : 1.0f;
 		a_out.tree = a_objectIndex < a_tables.treeAnim.size() ? a_tables.treeAnim[a_objectIndex] : ObjectTreeAnim{};
+		// The tree listing the member draws under, for the trees' wind (DCLFTreeWind): its slot, and its generation (never 0).
+		if (const std::uint32_t treeSlot = a_objectIndex < a_tables.objectTree.size() ? a_tables.objectTree[a_objectIndex] : kNoTree; treeSlot != kNoTree) {
+			const std::uint32_t generation = treeSlot == kNodelessTree ? kNodelessTree : treeSlot < a_tables.trees.size() ? a_tables.trees[treeSlot].generation : 0u;
+			a_out.tree.windTimers[2] = std::bit_cast<float>(treeSlot);
+			a_out.tree.windTimers[3] = std::bit_cast<float>(generation);
+		} else {
+			a_out.tree.windTimers[2] = a_out.tree.windTimers[3] = 0.0f;
+		}
 		// Skinning: the offsets are into the frame's bone tables, which the epoch packs into its bones
 		// buffer in the same order (current rows first, then the previous rows after all of them).
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();

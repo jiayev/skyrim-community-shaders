@@ -2,9 +2,13 @@
 //
 // The engine updates a BSFadeNode's fade and LOD state in its OnVisible, for the main camera's cull, whenever the node's bound
 // passes the cull's frustum test. This pass does the same for every fade root a DCLF member draws under, from the depth
-// segment's view-projection, before that segment's culling: one thread per root slot. A state row whose generation is not its
-// static row's is new (a listed node) and starts from the node's values. The update is Scene/FadeState.cpp's port of the
-// engine's functions, instruction for instruction; keep the two the same.
+// segment's view-projection: one thread per root slot. A state row whose generation is not its static row's is new (a listed
+// node) and starts from the node's values. The update is Scene/FadeState.cpp's port of the engine's functions, instruction
+// for instruction; keep the two the same.
+//
+// A frame ahead, on the compute queue in the Z-prepass epoch: the state rows are this pass's alone, and every root's state
+// after the update is published into the frame's output of two (by the scene frame's parity). The builds read the other one,
+// the frame before's (BuildDrawsLatch::fadeStatesIndex), so nothing waits for this pass.
 
 cbuffer FadeStateConstants : register(b0)
 {
@@ -15,8 +19,8 @@ cbuffer FadeStateConstants : register(b0)
 	uint LatchIndex;    // ByteAddressBuffer: the depth segment's BuildDrawsLatch (its view-projection)
 	uint LatchOffset;
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
-	uint Padding7;
-	uint Padding8;
+	uint OutIndex0;     // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
+	uint OutIndex1;     // and of the odd
 	uint VisibilityIndex;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
 	uint Padding1;
 	uint Padding2;
@@ -491,9 +495,12 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 	StructuredBuffer<FadeRootStatic> roots = ResourceDescriptorHeap[RootsIndex];
 	RWStructuredBuffer<FadeNodeState> states = ResourceDescriptorHeap[StatesIndex];
 	const FadeRootStatic root = roots[index];
-	if (root.Object == kNoObject || root.Generation == 0)
-		return;
+	RWStructuredBuffer<FadeNodeState> published = ResourceDescriptorHeap[(F.SceneFrame & 1u) != 0 ? OutIndex1 : OutIndex0];
 	FadeNodeState state = states[index];
+	if (root.Object == kNoObject || root.Generation == 0) {
+		published[index] = state;
+		return;
+	}
 	if (state.Generation != root.Generation) {
 		state = root.Initial;
 		state.Generation = root.Generation;
@@ -501,8 +508,10 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		state.Frame = 0;
 	}
 	// Once a frame, and only with a camera.
-	if (state.Frame == F.SceneFrame || F.LodAdjust == 0.0f)
+	if (state.Frame == F.SceneFrame || F.LodAdjust == 0.0f) {
+		published[index] = state;
 		return;
+	}
 	const FadeNodeState before = state;
 	StructuredBuffer<ObjectRecordRows> objects = ResourceDescriptorHeap[ObjectsIndex];
 	const float3 centre = objects[root.Object].Rows[kObjectFadeNodeRow].xyz;
@@ -515,6 +524,7 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		state.Verdict = OnVisible(state, root, centre);
 	state.Frame = F.SceneFrame;
 	states[index] = state;
+	published[index] = state;
 	if (F.LogBase != 0xFFFFFFFFu && index >= F.LogBase && index - F.LogBase < 64u) {
 		RWStructuredBuffer<FadeLogEntry> log = ResourceDescriptorHeap[LogIndex];
 		FadeLogEntry entry;
