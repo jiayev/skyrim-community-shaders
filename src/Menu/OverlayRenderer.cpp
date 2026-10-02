@@ -216,6 +216,11 @@ void OverlayRenderer::RenderOverlay(
 		ImGui::GetIO().MouseDrawCursor = false;
 	}
 
+	// The editor draws its own notifications; while it is closed they still need a host, e.g. the
+	// "cannot open in a loading screen" warning raised by the toggle hotkey.
+	if (!editorWindow->open)
+		editorWindow->RenderNotifications();
+
 	RenderFeatureOverlays();
 	RenderFirstTimeSetupOverlay();
 	HandleABTesting();
@@ -236,6 +241,7 @@ bool OverlayRenderer::ShouldSkipRendering()
 	return !(shaderCache->IsCompiling() ||
 			 Menu::GetSingleton()->IsEnabled ||
 			 EditorWindow::GetSingleton()->open ||
+			 EditorWindow::GetSingleton()->HasNotifications() ||
 			 Effects11Editor::GetSingleton().IsOpen() ||
 			 abTestingManager->IsEnabled() ||
 			 (failed && !hide) ||

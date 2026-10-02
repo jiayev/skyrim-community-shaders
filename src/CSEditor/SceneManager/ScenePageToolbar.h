@@ -3,7 +3,7 @@
 #include "SceneSettingsManager.h"
 
 /// Page-wide actions for one scene context: pause/resume, copy to or from another context
-/// (picked in the Copy modal), export as a preset, and clear page.
+/// (picked in the Copy modal), and clear page. Export is editor-wide and lives on the action bar.
 namespace ScenePageToolbar
 {
 	/// Draws the actions and their dialogs right-aligned on the current row (precede with SameLine to share it).

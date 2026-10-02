@@ -114,11 +114,16 @@ void CSEditor::EnsureDataLoaded()
 
 void CSEditor::OpenEditorWindow()
 {
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (!editorWindow->open && EditorWindow::IsOpeningBlocked()) {
+		editorWindow->WarnOpeningBlocked();
+		return;
+	}
 	if (!EditorWindow::CanBeOpen())
 		return;
 
 	EnsureDataLoaded();
-	EditorWindow::GetSingleton()->open = true;
+	editorWindow->open = true;
 }
 
 void CSEditor::ToggleEditorWindow()
@@ -127,6 +132,10 @@ void CSEditor::ToggleEditorWindow()
 	if (!editorWindow)
 		return;
 
+	if (!editorWindow->open && EditorWindow::IsOpeningBlocked()) {
+		editorWindow->WarnOpeningBlocked();
+		return;
+	}
 	if (!editorWindow->open && !EditorWindow::CanBeOpen())
 		return;
 	if (!editorWindow->open)
@@ -329,9 +338,12 @@ void CSEditor::DrawWeatherDebugWindow(bool* open)
 
 	const float scale = Util::GetUIScale();
 	ImGui::SetNextWindowPos(ImVec2(50.0f * scale, 100.0f * scale), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(600.0f * scale, 800.0f * scale), ImGuiCond_FirstUseEver);
+	// Width 0 auto-fits to the text on first use; the window stays resizable afterwards.
+	ImGui::SetNextWindowSize(ImVec2(0.0f, 520.0f * scale), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(260.0f * scale, 160.0f * scale), ImVec2(FLT_MAX, FLT_MAX));
 
-	const std::string title = std::string(T(TKEY("weather_debug"), "Weather Debug")) + "##CSEditorWeatherDebug";
+	// "Compact" in the ID drops sizes saved by the old 600x800 default.
+	const std::string title = std::string(T(TKEY("weather_debug"), "Weather Debug")) + "##CSEditorWeatherDebugCompact";
 	if (Util::BeginWithRoundedClose(title.c_str(), open, ImGuiWindowFlags_None)) {
 		const auto& theme = Menu::GetSingleton()->GetTheme();
 		auto* sky = globals::game::sky;
@@ -342,14 +354,6 @@ void CSEditor::DrawWeatherDebugWindow(bool* open)
 		} else {
 			ImGui::TextColored(theme.StatusPalette.Warning, "%s", T(TKEY("no_active_weather"), "No Active Weather"));
 		}
-
-		if (ImGui::Button(T(TKEY("select_all"), "Select All")))
-			s_weatherFlagFilter = ALL_WEATHER_FLAGS;
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("clear_all"), "Clear All")))
-			s_weatherFlagFilter = 0x00;
-
-		SyncWeatherFilter();
 
 		RenderCoreWeatherDetails(false, true);
 		RenderFeatureWeatherAnalysis();

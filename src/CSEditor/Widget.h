@@ -94,6 +94,13 @@ public:
 		return cachedEditorID;
 	}
 
+	/** @brief True when the form has no editor ID and GetEditorID() returns the type-prefixed save key instead. */
+	bool HasFallbackEditorID() const
+	{
+		GetEditorID();  // retries the real editor ID, clearing the flag once one exists
+		return isFallbackEditorID;
+	}
+
 	/** @brief SPID-based key for file save/load operations (load-order-portable). */
 	std::string GetSaveKey() const
 	{

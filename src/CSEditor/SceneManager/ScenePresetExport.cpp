@@ -111,6 +111,55 @@ namespace
 			form.type = type;
 	}
 
+	bool IsFeatureRequired(const std::string& shortName)
+	{
+		return std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName) !=
+		       form.requiredFeatures.end();
+	}
+
+	void SetFeatureRequired(const std::string& shortName, bool required)
+	{
+		const auto it = std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName);
+		if (required && it == form.requiredFeatures.end())
+			form.requiredFeatures.push_back(shortName);
+		else if (!required && it != form.requiredFeatures.end())
+			form.requiredFeatures.erase(it);
+	}
+
+	/// Core features ship with every Community Shaders install, so a pack never needs to require them.
+	bool IsCoreFeature(const std::string& shortName)
+	{
+		const auto* feature = Feature::FindFeatureByShortName(shortName);
+		return feature && feature->IsCore();
+	}
+
+	/// Features the required list offers: loaded, user-facing, and not core.
+	bool IsRequirableFeature(const Feature* feature)
+	{
+		return feature && feature->loaded && feature->IsInMenu() && !feature->IsCore();
+	}
+
+	/// Whether the export would carry settings for a feature, from the user or any mod layer.
+	bool HasExportedSettings(const std::string& shortName)
+	{
+		const auto* manager = SceneSettingsManager::GetSingleton();
+		return manager && manager->HasAnySceneEntriesForFeature(shortName);
+	}
+
+	/** @brief Every requirable feature the export carries settings for, which a fresh form starts with. */
+	std::vector<std::string> DetectRequiredFeatures()
+	{
+		std::vector<std::string> detected;
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!IsRequirableFeature(feature))
+				continue;
+			auto shortName = feature->GetShortName();
+			if (HasExportedSettings(shortName))
+				detected.push_back(std::move(shortName));
+		}
+		return detected;
+	}
+
 	/** @brief Clears the form and everything loaded from an existing preset; the type follows the live pipeline. */
 	void ResetFormFields()
 	{
@@ -121,7 +170,7 @@ namespace
 		                PresetType::E11 :
 		                PresetType::CS;
 		form.csVersion = PresetCompatibility::CurrentCsVersionString();
-		form.requiredFeatures.clear();
+		form.requiredFeatures = DetectRequiredFeatures();
 		presetTags.clear();
 		existingLogo.clear();
 		existingCover.clear();
@@ -148,8 +197,12 @@ namespace
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
 			form.csVersion = meta.csVersion;
-		if (form.requiredFeatures.empty())
-			form.requiredFeatures = meta.requiredFeatures;
+		// The pack's own list joins the detected one: it may require features this session has no
+		// settings for. Core entries from older exports are dropped.
+		for (const auto& shortName : meta.requiredFeatures) {
+			if (!shortName.empty() && !IsCoreFeature(shortName) && !IsFeatureRequired(shortName))
+				form.requiredFeatures.push_back(shortName);
+		}
 		existingLogo = meta.logo;
 		existingCover = meta.cover;
 		existingScreenshots = meta.screenshots;
@@ -258,21 +311,6 @@ namespace
 			ImGui::CloseCurrentPopup();
 	}
 
-	bool IsFeatureRequired(const std::string& shortName)
-	{
-		return std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName) !=
-		       form.requiredFeatures.end();
-	}
-
-	void SetFeatureRequired(const std::string& shortName, bool required)
-	{
-		const auto it = std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName);
-		if (required && it == form.requiredFeatures.end())
-			form.requiredFeatures.push_back(shortName);
-		else if (!required && it != form.requiredFeatures.end())
-			form.requiredFeatures.erase(it);
-	}
-
 	/// Compact CS version + feature checklist, sized like the artwork column beside it.
 	void DrawCompatibilityBox()
 	{
@@ -296,23 +334,30 @@ namespace
 			std::sort(features.begin(), features.end(), [](Feature* a, Feature* b) {
 				return a->GetDisplayName() < b->GetDisplayName();
 			});
+			const char* usedLabel = T(TKEY("scene_export_feature_used"), "has settings");
 			for (auto* feature : features) {
-				if (!feature || !feature->loaded || !feature->IsInMenu())
+				if (!IsRequirableFeature(feature))
 					continue;
 				const auto shortName = feature->GetShortName();
 				bool required = IsFeatureRequired(shortName);
 				ImGui::PushID(shortName.c_str());
 				if (ImGui::Checkbox(feature->GetDisplayName().c_str(), &required))
 					SetFeatureRequired(shortName, required);
+				if (HasExportedSettings(shortName)) {
+					ImGui::SameLine();
+					ImGui::TextDisabled("%s", usedLabel);
+				}
 				ImGui::PopID();
 			}
 		}
 		ImGui::EndChild();
 		ImGui::TextDisabled("%s",
 			I18n::GetSingleton()->Format("cs_editor.scene_export_features_count",
-				{ { "count", std::to_string(form.requiredFeatures.size()) } },
-				"{count} selected")
+									{ { "count", std::to_string(form.requiredFeatures.size()) } },
+									"{count} selected")
 				.c_str());
+		Util::AddTooltip(T(TKEY("scene_export_features_tooltip"),
+			"Features this export has settings for start ticked. Core features ship with every install, so they are not listed."));
 		ImGui::EndChild();
 	}
 
@@ -435,6 +480,7 @@ namespace
 		auto info = form;
 		info.name = sanitizedName;
 		info.tags = ParseTags(presetTags);
+		std::erase_if(info.requiredFeatures, IsCoreFeature);
 		return info;
 	}
 }

@@ -234,6 +234,24 @@ namespace Util
 	 */
 	bool LockStatusBadgeButton(const char* a_id, bool a_locked, const char* a_tooltip = nullptr);
 
+	/** @brief Width of a DrawBadgeAt badge for the given label. */
+	float MeasureBadgeWidth(const char* a_label);
+
+	/**
+	 * @brief Soft rectangular label badge, vertically centred in a row.
+	 * @param a_min Top-left of the row in screen space.
+	 * @param a_rowHeight Height of the row the badge is centred in.
+	 * @param a_bg Badge fill; usually the tint at a low alpha.
+	 * @param a_fg Label colour.
+	 * @param a_drawList Optional; defaults to the current window draw list.
+	 * @return The badge width.
+	 */
+	float DrawBadgeAt(ImVec2 a_min, float a_rowHeight, const char* a_label, const ImVec4& a_bg, const ImVec4& a_fg,
+		ImDrawList* a_drawList = nullptr);
+
+	/** @brief Badge tinted from one colour (soft fill, readable label), drawn at the cursor; advances layout with Dummy. */
+	void Badge(const char* a_label, const ImVec4& a_tint);
+
 	/**
 	 * @brief Soft rectangular HDR/SDR capability pill (muted blue / muted red).
 	 * @param a_supportsHDR True draws "HDR"; false draws "SDR".

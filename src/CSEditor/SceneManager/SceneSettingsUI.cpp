@@ -5,15 +5,18 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "../../I18n/I18n.h"
+#include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
 #include "../Weather/WeatherWidget.h"
 #include "Features/CSEditor.h"
-#include "Menu/Icons/helpers/LocationTargetIcons.h"
+#include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/LocationTargetIcons.h"
 #include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "SceneFeatureReplica.h"
 #include "ScenePageToolbar.h"
@@ -42,16 +45,16 @@ namespace
 	/// The objects window nests its list inside the category list, so it reads as a sub-level.
 	constexpr float kNestedFeatureFontScale = 0.85f;
 
-	/// Name and editor ID share the slack; the type and the trailing action are fixed and narrow.
-	constexpr float kLocationTypeColumnWidth = 90.0f;
+	/// Name and editor ID share the slack; the type and the trailing actions are fixed and narrow.
 	constexpr float kLocationAddColumnWidth = 32.0f;
-	constexpr float kLocationRemoveColumnWidth = 40.0f;
+	/// Search fields on the locations page, at the 1080p baseline.
+	constexpr float kLocationSearchWidth = 320.0f;
+	/// The user's list gets a filter once it holds more than this many places.
+	constexpr size_t kAuthoredFilterThreshold = 8;
 	/// Glyphs differ in advance, so each sits centred in a box this many font sizes wide to keep names aligned.
 	constexpr float kLocationIconBoxScale = 1.4f;
-	/// Floor for the alternating row tint, so long lists stay scannable under themes that leave it clear.
-	constexpr float kMinRowShadeAlpha = 0.04f;
 	/// Rows the picker shows before it scrolls.
-	constexpr float kLocationPickerVisibleRows = 10.0f;
+	constexpr float kLocationPickerVisibleRows = 8.0f;
 	/// Outlined like the weather editor's lists, which frame their rows the same way.
 	constexpr ImGuiTableFlags kLocationTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable;
@@ -64,6 +67,7 @@ namespace
 		LocationColumnName,
 		LocationColumnEditorId,
 		LocationColumnType,
+		LocationColumnHere,
 		LocationColumnAction
 	};
 
@@ -121,8 +125,15 @@ namespace
 		/// Catalog indices passing the search, rebuilt only when the query changes.
 		std::vector<size_t> matches;
 		bool matchesValid = false;
+		/// Index into kLocationTargetTypes to browse, or -1 for every type.
+		int typeFilter = -1;
 	};
 	LocationPickerState locationPicker;
+
+	char authoredLocationSearch[256]{};
+	Util::ConfirmationPopup locationRemoveConfirmation;
+	/// The place the open remove confirmation is about.
+	std::optional<SceneSettingsManager::LocationTarget> pendingLocationRemoval;
 
 	// Latch driving the automatic time pause: raised by any page editing a period this frame.
 	bool periodEditingThisFrame = false;
@@ -179,8 +190,7 @@ namespace
 	}
 
 	/// Resolves which period is currently active, updating the follow/pin state as a side effect.
-	/// Call exactly once per panel per frame - the title row's toolbar and the period bar itself
-	/// both need this value, and running the scrub/pin logic twice would double-apply it.
+	/// Call exactly once per panel per frame: running the scrub/pin logic twice would double-apply it.
 	int ResolveActivePeriod(bool editing)
 	{
 		const int live = static_cast<int>(SceneSettingsManager::GetCurrentPeriod());
@@ -284,7 +294,8 @@ namespace
 		Util::AddTooltip(periodStatus, Util::kTooltipWhenDisabled);
 
 		if (canToggleTimeOfDay && editing) {
-			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
+			// Kept close: this row also carries the page toolbar.
+			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
 			if (DrawAllDayChip()) {
 				DisableTimeOfDayEditing(baseContext);
 				editing = false;
@@ -293,7 +304,8 @@ namespace
 		}
 
 		if (sceneManagerPanel) {
-			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 3.0f);
+			// Kept close for the same reason as the All day chip.
+			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
 			// Indicator only: interior always follows the cell the player is actually in, so
 			// toggling it by hand would silently do nothing when the layer can't resolve.
 			ImGui::BeginDisabled();
@@ -305,6 +317,26 @@ namespace
 		}
 
 		return { active, editing };
+	}
+
+	/// One header row for every panel with a period bar: the periods on the left and the page
+	/// actions right-aligned beside them. The actions draw after the bar so they act on the period
+	/// picked this frame, and wrap to their own row when the panel is too narrow for both.
+	/// @return The context the page below edits.
+	SceneSettingsManager::SceneContextId DrawPeriodAndActionsRow(
+		const SceneSettingsManager::SceneContextId& baseContext, bool sceneManagerPanel)
+	{
+		const bool editing = ResolvePeriodEditing(baseContext, sceneManagerPanel);
+		const int active = ResolveActivePeriod(editing);
+
+		// A period click can enable Time of Day this frame; apply that before resolving the page.
+		const auto bar = DrawPeriodBarRow(baseContext, editing, sceneManagerPanel, active);
+		periodEditingThisFrame |= bar.editing;
+		const auto context = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(bar.active), bar.editing);
+
+		ImGui::SameLine();
+		ScenePageToolbar::Draw(context);
+		return context;
 	}
 
 	/// Scene-capable features, resolved once: loaded features and the catalog are fixed after boot.
@@ -349,27 +381,11 @@ namespace
 		bool sceneManagerPanel = false)
 	{
 		auto context = baseContext;
-		bool periodEditing = false;
 		if (withPeriodBar) {
-			periodEditing = ResolvePeriodEditing(baseContext, sceneManagerPanel);
-			int active = ResolveActivePeriod(periodEditing);
-
-			// Title row: the panel's identity (Scene Manager panel only) shares a row with its
-			// actions, like a window header with its buttons beside the title, rather than the
-			// actions crowding the period bar's navigation row below.
-			if (sceneManagerPanel) {
+			// The Scene Manager panel names the weather it layers over on a row of its own.
+			if (sceneManagerPanel)
 				EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
-				ImGui::SameLine();
-			}
-			ScenePageToolbar::Draw(ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing));
-			ImGui::Separator();
-
-			// A period click can enable Time of Day this frame; apply that before resolving the page.
-			const auto bar = DrawPeriodBarRow(baseContext, periodEditing, sceneManagerPanel, active);
-			periodEditing = bar.editing;
-			active = bar.active;
-			periodEditingThisFrame |= periodEditing;
-			context = ResolvePageContext(baseContext, static_cast<TimeOfDayPeriod>(active), periodEditing);
+			context = DrawPeriodAndActionsRow(baseContext, sceneManagerPanel);
 			ImGui::Separator();
 		} else {
 			// A page without the bar has no toggle row to share, so the actions get a row of their own.
@@ -456,16 +472,6 @@ namespace
 		ImGui::SameLine(start + box);
 	}
 
-	void PushLocationRowShade()
-	{
-		ImVec4 shade = ImGui::GetStyleColorVec4(ImGuiCol_TableRowBgAlt);
-		if (shade.w < kMinRowShadeAlpha) {
-			shade = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-			shade.w = kMinRowShadeAlpha;
-		}
-		ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, shade);
-	}
-
 	/// Opens a location's editor window, focusing the existing one rather than opening a second.
 	LocationWindow& OpenLocationWindow(const SceneSettingsManager::LocationTarget& target)
 	{
@@ -480,14 +486,25 @@ namespace
 		return locationWindows.emplace_back(LocationWindow{ .target = target });
 	}
 
-	/// Both location tables identify a target the same way; only the trailing action differs.
-	void SetupLocationColumns(float actionWidth)
+	/// Wide enough for the longest type label plus the header's sort arrow, so it never runs into the action.
+	float GetLocationTypeColumnWidth()
 	{
-		const float scale = Util::GetUIScale();
+		float width = 0.0f;
+		for (const auto type : SceneSettingsManager::kLocationTargetTypes)
+			width = std::max(width, ImGui::CalcTextSize(GetLocationTypeLabel(type)).x);
+		return width + ImGui::GetFontSize();
+	}
+
+	/// Both location tables identify a target the same way; the user's list adds where-you-are and its actions.
+	void SetupLocationColumns(float actionWidth, bool withHere)
+	{
 		ImGui::TableSetupColumn(T(TKEY("location_column_name"), "Name"), ImGuiTableColumnFlags_WidthStretch, 0.0f, LocationColumnName);
 		ImGui::TableSetupColumn(T(TKEY("location_column_editor_id"), "Editor ID"), ImGuiTableColumnFlags_WidthStretch, 0.0f, LocationColumnEditorId);
-		ImGui::TableSetupColumn(T(TKEY("location_column_type"), "Type"), ImGuiTableColumnFlags_WidthFixed, kLocationTypeColumnWidth * scale, LocationColumnType);
-		ImGui::TableSetupColumn("##Action", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, actionWidth * scale, LocationColumnAction);
+		ImGui::TableSetupColumn(T(TKEY("location_column_type"), "Type"), ImGuiTableColumnFlags_WidthFixed, GetLocationTypeColumnWidth(), LocationColumnType);
+		if (withHere)
+			ImGui::TableSetupColumn(T(TKEY("location_column_here"), "Here"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,
+				ImGui::CalcTextSize(T(TKEY("location_column_here"), "Here")).x + ImGui::GetStyle().CellPadding.x, LocationColumnHere);
+		ImGui::TableSetupColumn("##Action", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, actionWidth, LocationColumnAction);
 		ImGui::TableHeadersRow();
 	}
 
@@ -581,7 +598,20 @@ namespace
 		ImGui::PopID();
 	}
 
-	/// The chain the player is standing in, outermost first, each link addable on its own.
+	bool IsSameLocationTarget(const SceneSettingsManager::LocationTarget& lhs, const SceneSettingsManager::LocationTarget& rhs)
+	{
+		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
+	}
+
+	/// Puts the next item on the current line when `width` still fits, otherwise on a new one.
+	void SameLineIfFits(float width)
+	{
+		ImGui::SameLine();
+		if (ImGui::GetContentRegionAvail().x < width)
+			ImGui::NewLine();
+	}
+
+	/// The chain the player is standing in, outermost first, as a breadcrumb of addable chips.
 	void DrawLocationChain()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
@@ -594,14 +624,52 @@ namespace
 			return;
 		}
 
-		PushLocationRowShade();
-		if (ImGui::BeginTable("LocationChain", 4, kLocationTableFlags)) {
-			SetupLocationColumns(kLocationAddColumnWidth);
-			for (const auto& target : targets)
-				DrawLocationAddRow(*manager, target);
-			ImGui::EndTable();
+		const Icons::GlyphRef separator = Icons::FA(ICON_FA_ANGLE_RIGHT);
+		const float separatorWidth = Icons::CalcGlyphSize(separator).x + ImGui::GetStyle().ItemSpacing.x;
+		const ImVec4 added = Util::Colors::GetSuccess();
+		const ImVec4 iconColor = Util::Colors::GetSecondary();
+		for (size_t i = 0; i < targets.size(); ++i) {
+			const auto& target = targets[i];
+			ImGui::PushID(static_cast<int>(i));
+			const bool authored = manager->IsLocationTargetAuthored(target.type, target.formKey);
+			const Icons::GlyphRef icon = GetLocationTargetIcon(target);
+			const float width = BrowserUI::MeasureChip(target.name.c_str(), icon.IsValid()) + BrowserUI::IconButtonSize();
+
+			// The separator only sits between chips that share a line.
+			if (i > 0) {
+				ImGui::SameLine();
+				if (ImGui::GetContentRegionAvail().x >= separatorWidth + width) {
+					ImGui::AlignTextToFramePadding();
+					{
+						Icons::FontGuard font(separator);
+						Util::Text::Disabled("%s", separator.utf8);
 		}
-		ImGui::PopStyleColor();
+					ImGui::SameLine();
+				} else {
+					ImGui::NewLine();
+				}
+			}
+
+			if (BrowserUI::Chip("##link", target.name.c_str(), icon, &iconColor, authored ? &added : nullptr)) {
+				if (authored)
+					OpenLocationWindow(target);
+				else
+					manager->AddLocationTarget(target);
+			}
+			Util::AddTooltip(std::format("{} \xC2\xB7 {}\n{}", GetLocationIdentityText(target), GetLocationTypeLabel(target.type),
+				authored ? T(TKEY("location_chain_open_tooltip"), "On your list. Click to edit its settings.") :
+						   T(TKEY("location_add_tooltip"), "Add to your locations"))
+					.c_str());
+
+			ImGui::SameLine(0.0f, 0.0f);
+			ImGui::BeginDisabled(authored);
+			if (BrowserUI::IconButton("##add", authored ? SceneActionIcons::kAdded : SceneActionIcons::kAdd,
+					authored ? T(TKEY("location_already_added"), "Already on your list.") : T(TKEY("location_add_tooltip"), "Add to your locations"),
+					false, ImGui::GetColorU32(authored ? Util::Colors::GetSuccess() : Util::Colors::GetAccent())))
+				manager->AddLocationTarget(target);
+			ImGui::EndDisabled();
+			ImGui::PopID();
+		}
 	}
 
 	bool LocationTargetMatchesSearch(const SceneSettingsManager::LocationTarget& target, const std::string& query)
@@ -617,38 +685,70 @@ namespace
 		return false;
 	}
 
-	/// Every place the game defines, searchable, so targets away from the player can be added too.
+	/// Every place the game defines, searchable or browsable by type, so targets away from the player can be added too.
 	void DrawLocationPicker()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		if (!manager)
 			return;
 		const auto& catalog = manager->GetLocationCatalog();
+		const float scale = Util::GetUIScale();
 
-		ImGui::SetNextItemWidth(-FLT_MIN);
-		const bool searchChanged = ImGui::InputTextWithHint("##LocationSearch",
-			T(TKEY("location_search"), "Search by name, editor ID, or type..."), locationPicker.search,
-			IM_ARRAYSIZE(locationPicker.search));
-		// The catalog runs to thousands of forms, so it is filtered only when the query changes.
-		if (searchChanged || !locationPicker.matchesValid) {
+		bool changed = BrowserUI::SearchField("##LocationSearch", locationPicker.search, IM_ARRAYSIZE(locationPicker.search),
+			T(TKEY("location_search"), "Search by name, editor ID, or type..."),
+			std::min(ImGui::GetContentRegionAvail().x, kLocationSearchWidth * scale), false);
+
+		const ImVec4 iconColor = Util::Colors::GetSecondary();
+		const ImVec4 accent = Util::Colors::GetAccent();
+		const auto& types = SceneSettingsManager::kLocationTargetTypes;
+		for (int index = 0; index < static_cast<int>(types.size()); ++index) {
+			ImGui::PushID(index);
+			const char* label = GetLocationTypeLabel(types[index]);
+			const Icons::GlyphRef icon = GetLocationTargetIcon(SceneSettingsManager::LocationTarget{ .type = types[index] });
+			SameLineIfFits(BrowserUI::MeasureChip(label, icon.IsValid()));
+			const bool active = locationPicker.typeFilter == index;
+			if (BrowserUI::Chip("##type", label, icon, &iconColor, active ? &accent : nullptr)) {
+				locationPicker.typeFilter = active ? -1 : index;
+				changed = true;
+			}
+			Util::AddTooltip(T(TKEY("location_type_chip_tooltip"), "Browse every place of this type."));
+			ImGui::PopID();
+		}
+
 			const std::string query = locationPicker.search;
+		// The catalog runs to thousands of forms, so it is filtered only when the query or type changes.
+		if (changed || !locationPicker.matchesValid) {
 			locationPicker.matches.clear();
-			for (size_t index = 0; index < catalog.size(); ++index)
-				if (LocationTargetMatchesSearch(catalog[index], query))
+			for (size_t index = 0; index < catalog.size(); ++index) {
+				const auto& target = catalog[index];
+				if (locationPicker.typeFilter >= 0 && target.type != types[locationPicker.typeFilter])
+					continue;
+				if (query.empty() || LocationTargetMatchesSearch(target, query))
 					locationPicker.matches.push_back(index);
+			}
 			locationPicker.matchesValid = true;
 		}
 
+		// Nothing to list until the user narrows the catalog, so it does not bury the rest of the page.
+		if (query.empty() && locationPicker.typeFilter < 0) {
+			Util::Text::WrappedDisabled("%s", I18n::GetSingleton()->Format(TKEY("location_search_hint"),
+																	  { { "count", std::to_string(catalog.size()) } },
+																	  "Type to search {count} places, or pick a type to browse them.")
+												  .c_str());
+			return;
+		}
 		if (locationPicker.matches.empty()) {
 			Util::Text::WrappedSecondary("%s", T(TKEY("location_search_empty"), "No places match the search."));
 			return;
 		}
 
-		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * kLocationPickerVisibleRows };
-		PushLocationRowShade();
+		const float rows = std::min(static_cast<float>(locationPicker.matches.size()) + 1.0f, kLocationPickerVisibleRows);
+		const ImVec2 tableSize{ 0.0f, ImGui::GetFrameHeightWithSpacing() * rows };
+		{
+			BrowserUI::RowShadeScope shade;
 		if (ImGui::BeginTable("LocationCatalog", 4, kLocationTableFlags | ImGuiTableFlags_ScrollY, tableSize)) {
 			ImGui::TableSetupScrollFreeze(0, 1);
-			SetupLocationColumns(kLocationAddColumnWidth);
+				SetupLocationColumns(kLocationAddColumnWidth * scale, false);
 			ImGuiListClipper clipper;
 			clipper.Begin(static_cast<int>(locationPicker.matches.size()));
 			while (clipper.Step())
@@ -656,19 +756,26 @@ namespace
 					DrawLocationAddRow(*manager, catalog[locationPicker.matches[row]]);
 			ImGui::EndTable();
 		}
-		ImGui::PopStyleColor();
+		}
+		Util::Text::Disabled("%s", I18n::GetSingleton()->Format(TKEY("location_result_count"),
+														   { { "shown", std::to_string(locationPicker.matches.size()) }, { "total", std::to_string(catalog.size()) } },
+														   "{shown} of {total} places")
+									   .c_str());
 	}
 
-	/// Trash icon matching other CS Editor delete actions.
-	bool DrawLocationRemoveButton()
+	/// Asks before dropping a location, since its authored settings go with it.
+	void RequestLocationRemoval(const SceneSettingsManager::LocationTarget& target)
 	{
-		// The row selectable spans every column, so the button has to claim the clicks over it.
-		ImGui::SetNextItemAllowOverlap();
-		Icons::FontGuard font(SceneActionIcons::kDelete);
-		return Util::ErrorTextButton(std::format("{}##remove", SceneActionIcons::kDelete.utf8).c_str());
+		pendingLocationRemoval = target;
+		locationRemoveConfirmation.title = T(TKEY("location_remove_title"), "Remove location?");
+		locationRemoveConfirmation.message = I18n::GetSingleton()->Format(TKEY("location_remove_message"), { { "place", target.name } },
+			"Remove {place} from your list? The settings authored for it are deleted too.");
+		locationRemoveConfirmation.confirmLabel = T(TKEY("remove"), "Remove");
+		locationRemoveConfirmation.cancelLabel = T(TKEY("cancel"), "Cancel");
+		locationRemoveConfirmation.Request();
 	}
 
-	/// The user's list: double-click a row to edit it, or drop it and its settings.
+	/// The user's list: double-click or the pen to edit a location, the bin to drop it and its settings.
 	void DrawAuthoredLocations()
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
@@ -681,25 +788,32 @@ namespace
 			return;
 		}
 
-		PushLocationRowShade();
-		if (!ImGui::BeginTable("AuthoredLocations", 4, kAuthoredLocationTableFlags)) {
-			ImGui::PopStyleColor();
-			return;
+		// A filter only earns its row once the list is long enough to need one.
+		if (targets.size() > kAuthoredFilterThreshold) {
+			BrowserUI::SearchField("##AuthoredSearch", authoredLocationSearch, IM_ARRAYSIZE(authoredLocationSearch),
+				T(TKEY("location_filter_list"), "Filter your list..."),
+				std::min(ImGui::GetContentRegionAvail().x, kLocationSearchWidth * Util::GetUIScale()), false);
+			if (const std::string query = authoredLocationSearch; !query.empty())
+				std::erase_if(targets, [&query](const auto& target) { return !LocationTargetMatchesSearch(target, query); });
 		}
 
-		SetupLocationColumns(kLocationRemoveColumnWidth);
+		const auto& here = manager->GetCurrentLocationTargets();
+		const float button = BrowserUI::IconButtonSize();
+		const float actionWidth = button * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+		{
+			BrowserUI::RowShadeScope shade;
+			if (ImGui::BeginTable("AuthoredLocations", 5, kAuthoredLocationTableFlags)) {
+				SetupLocationColumns(actionWidth, true);
 		// The list is rebuilt from the manager each frame, so it is re-sorted each frame too.
 		SortLocationTargets(targets);
 
-		// Removal mutates the manager's map, so it waits until the rows are submitted.
-		const SceneSettingsManager::LocationTarget* pendingRemoval = nullptr;
 		for (const auto& target : targets) {
 			ImGui::TableNextRow();
 			ImGui::PushID(target.formKey.c_str());
 
 			ImGui::TableNextColumn();
 			const bool opened = std::ranges::any_of(locationWindows, [&](const auto& window) {
-				return window.open && window.target.type == target.type && window.target.formKey == target.formKey;
+						return window.open && IsSameLocationTarget(window.target, target);
 			});
 			DrawLocationTypeIcon(target);
 			if (Util::TableRowSelectable(target.name.c_str(), opened,
@@ -709,21 +823,37 @@ namespace
 			DrawLocationDetailColumns(target);
 
 			ImGui::TableNextColumn();
-			if (DrawLocationRemoveButton())
-				pendingRemoval = &target;
-			Util::AddTooltip(T(TKEY("location_remove_tooltip"),
-				"Drops the location from the list along with the settings authored for it."));
+					if (std::ranges::any_of(here, [&](const auto& link) { return IsSameLocationTarget(link, target); })) {
+						Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetSuccess()), true);
+						Util::AddTooltip(T(TKEY("location_here_tooltip"), "You are here: its settings apply now."));
+					}
+
+					ImGui::TableNextColumn();
+					ImGui::SetNextItemAllowOverlap();
+					if (BrowserUI::IconButton("##edit", Icons::FA(ICON_FA_PEN), T(TKEY("location_edit_tooltip"), "Edit its settings"), opened))
+						OpenLocationWindow(target);
+					ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
+					ImGui::SetNextItemAllowOverlap();
+					const ImVec4 error = Util::Colors::GetError();
+					if (BrowserUI::IconButton("##remove", SceneActionIcons::kDelete,
+							T(TKEY("location_remove_tooltip"), "Drops the location from the list along with the settings authored for it."),
+							false, ImGui::GetColorU32(ImVec4(error.x, error.y, error.z, 0.8f))))
+						RequestLocationRemoval(target);
 
 			ImGui::PopID();
 		}
 		ImGui::EndTable();
-		ImGui::PopStyleColor();
+			}
+		}
 
-		if (pendingRemoval) {
-			std::erase_if(locationWindows, [&](const auto& window) {
-				return window.target.type == pendingRemoval->type && window.target.formKey == pendingRemoval->formKey;
-			});
-			manager->RemoveLocationTarget(pendingRemoval->type, pendingRemoval->formKey);
+		// Removal mutates the manager's map, so it runs after the rows are submitted.
+		if (locationRemoveConfirmation.Draw() && pendingLocationRemoval) {
+			const auto target = *pendingLocationRemoval;
+			std::erase_if(locationWindows, [&](const auto& window) { return IsSameLocationTarget(window.target, target); });
+			manager->RemoveLocationTarget(target.type, target.formKey);
+			pendingLocationRemoval.reset();
+		} else if (!locationRemoveConfirmation.IsOpen()) {
+			pendingLocationRemoval.reset();
 		}
 	}
 }
@@ -746,8 +876,8 @@ void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
 
 void SceneSettingsUI::DrawSceneManagerPanel()
 {
-	// DrawPanel below draws the active-weather indicator itself, on the same row as the page
-	// toolbar, since this is the only caller that passes sceneManagerPanel = true.
+	// DrawPanel below draws the active-weather indicator itself, above the period and actions row,
+	// since this is the only caller that passes sceneManagerPanel = true.
 
 	// The interior layer takes the panel over indoors, and it has no periods.
 	SyncSceneToggles();
@@ -775,22 +905,26 @@ void SceneSettingsUI::DrawSceneManagerCategoryFeatures()
 
 void SceneSettingsUI::DrawLocationBrowser()
 {
-	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator();
+	EditorWindow::GetSingleton()->DrawActiveWeatherIndicator(false);
 
 	Util::Explainer(T(TKEY("location_browser_intro_label"), "How locations resolve"),
 		T(TKEY("location_browser_intro"),
 			"Locations resolve last, so they win over interior, time of day, and weather. Narrower places win over broader ones: "
 			"a cell over its location, a location over its region, location types, and worldspace."));
 
-	ImGui::SeparatorText(T(TKEY("location_add_from_here"), "Add from where you are"));
-	DrawLocationChain();
-
-	ImGui::SeparatorText(T(TKEY("location_add_any"), "Add any place"));
-	DrawLocationPicker();
-
-	ImGui::SeparatorText(T(TKEY("location_list_title"), "Your locations"));
+	// The user's own list comes first: it is what they come back to edit.
+	ImGui::Spacing();
+	BrowserUI::SectionLabel(T(TKEY("location_list_title"), "Your locations"));
 	Util::AddTooltip(T(TKEY("location_list_tooltip"), "Double-click a location to edit its settings."));
 	DrawAuthoredLocations();
+
+	ImGui::Spacing();
+	BrowserUI::SectionLabel(T(TKEY("location_add_from_here"), "Add from where you are"));
+	DrawLocationChain();
+
+	ImGui::Spacing();
+	BrowserUI::SectionLabel(T(TKEY("location_add_any"), "Add any place"));
+	DrawLocationPicker();
 }
 
 void SceneSettingsUI::DrawLocationWindows()
