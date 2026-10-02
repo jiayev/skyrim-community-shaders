@@ -3,9 +3,17 @@
 
 // MIRROR OF: src/Utils/ColorSpace.h
 
+#ifndef CS_GAME_GAMMA
+#	define CS_GAME_GAMMA 1.6
+#endif
+
 namespace TransferFunctions
 {
+#if defined(ENABLE_LL)
+	static const float GAME_GAMMA = CS_GAME_GAMMA;
+#else
 	static const float GAME_GAMMA = 1.6;
+#endif
 	static const float GAME_GAMMA_INV = 1.0 / GAME_GAMMA;
 	static const float GAMMA_22 = 2.2;
 	static const float GAMMA_22_INV = 1.0 / GAMMA_22;
