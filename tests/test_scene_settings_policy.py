@@ -191,7 +191,9 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("", "skyStaticsBrightness"), ("", "sunDiskRad"),
             ("sunlightColor", "x"), ("masserColor", "y"), ("secundaColor", "z"),
             ("rayleighScatter", "x"), ("rayleighScatterAP1", "x"),
-            ("aerosolScatter", "y"), ("aerosolAbsorption", "z"),
+            ("aerosolScatter", "x"), ("aerosolScatter", "y"), ("aerosolScatter", "z"),
+            ("aerosolAbsorption", "x"), ("aerosolAbsorption", "y"), ("aerosolAbsorption", "z"),
+            ("", "aerosolPhaseG"),
             ("ozoneAbsorption", "x"), ("ozoneAbsorptionAP1", "x"),
             ("cloudLayer/low", "densityScale"), ("cloudLayer/low", "ndfAltitudeOffset"),
             ("cloudLayer/cirrus", "densityScale"), ("cloudLayer/cirrus", "altitude"),
@@ -230,6 +232,9 @@ class SceneSettingsPolicyTests(unittest.TestCase):
             ("fallbackZBottom",), ("planetRadius",), ("atmosphereRadius",),
             ("halfResApShadow",), ("rayMarchRange",), ("shadowVolumeRange",),
             ("marchStepScale",), ("cloudNoise",),
+            # The aerosol mixture, loading and humidity are authoring inputs: the coefficients they
+            # derive are what a scene stores, so the inputs themselves must stay out of the layer.
+            ("aerosolType",), ("aerosolLoading",), ("aerosolHumidity",),
             ("cloudRelightMix",), ("cloudOriginalMix",),
             ("silverLiningMix",), ("silverLiningSpread",), ("cloudShadowRemapRange",),
             ("cloudLayer", "lighting"), ("cloudLayer", "cirrus", "lightingScale"),
@@ -256,6 +261,34 @@ class SceneSettingsPolicyTests(unittest.TestCase):
                 self.assertTrue(matches)
                 self.assertTrue(all(any(is_prefix(blocked, address) for blocked in blacklist)
                                     for address in matches))
+
+    def test_physical_sky_aerosol_mixture_is_an_authoring_input(self):
+        """A discrete mixture cannot be interpolated, so the coefficients it derives are the only
+        aerosol values a scene may hold: the knobs stay out of the layer, the optics stay blendable."""
+        entries = {
+            (entry["path"], entry["key"]): entry
+            for entry in self.entries if entry["feature"] == "PhysicalSky"
+        }
+        coefficients = [
+            ("aerosolScatter", "x"), ("aerosolScatter", "y"), ("aerosolScatter", "z"),
+            ("aerosolAbsorption", "x"), ("aerosolAbsorption", "y"), ("aerosolAbsorption", "z"),
+            ("", "aerosolPhaseG"),
+        ]
+        for identity in coefficients:
+            with self.subTest(setting=identity):
+                entry = entries[identity]
+                self.assertIn("Transitionable", entry["flags"])
+                self.assertIn("SceneControllable", entry["flags"])
+
+        blacklist = [normalize_path(path) for path in self.blacklist]
+        for key in ("aerosolType", "aerosolLoading", "aerosolHumidity"):
+            with self.subTest(setting=key):
+                address = normalize_path(catalog_address(entries[("", key)]))
+                self.assertTrue(any(is_prefix(prefix, address) for prefix in blacklist))
+
+        # The floating-point knobs are transitionable in the catalog, but blacklisting is what keeps
+        # them out of the layer; only the mixture enum may never claim a midpoint to interpolate to.
+        self.assertNotIn("Transitionable", entries[("", "aerosolType")]["flags"])
 
     def test_physical_sky_switches_are_not_transitionable(self):
         switches = [entry for entry in self.entries

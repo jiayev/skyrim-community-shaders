@@ -6,6 +6,7 @@
 #include <cmath>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/SceneManager/SceneSettingsContextRules.h"
 #include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "CloudShadows.h"
 #include "Deferred.h"
@@ -149,6 +150,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	rayleighFalloff,
 	rayleighScatter,
 	rayleighScatterAP1,
+	aerosolType,
+	aerosolLoading,
+	aerosolHumidity,
 	aerosolFalloff,
 	aerosolPhaseG,
 	aerosolScatter,
@@ -235,6 +239,205 @@ namespace
 			v.x * m._31 + v.y * m._32 + v.z * m._33
 		};
 	}
+
+	////////////////////////////////////////////////////////////////////////////////////////////////
+	// Scene-scoped aerosol authoring.
+	//
+	// The scene layer blends numeric addresses, so a scene can only carry the aerosol appearance as
+	// the coefficient triple the shader reads: the mixture, loading and humidity are authoring
+	// inputs that derive that triple, and a discrete mixture cannot be interpolated at all. In a
+	// scene page the feature therefore draws the picker below, which writes the derived coefficients
+	// into the armed context's own entries, and leaves the authoring knobs to the main menu.
+
+	constexpr std::string_view kSceneFeatureShortName = "PhysicalSky";
+
+	/// Session UI state of the scene picker: the mixture a scene page is about to write, and the
+	/// context it was seeded for. Not persisted, and deliberately outside `settings`.
+	struct SceneAerosolPicker
+	{
+		Aerosol::Type type = Aerosol::Type::Custom;
+		float loading = 1.f;
+		float humidity = 50.f;
+		SceneSettingsManager::SceneContextId context;
+		bool seeded = false;
+	};
+
+	SceneAerosolPicker sceneAerosolPicker;
+
+	/// One scene entry behind the aerosol optics the shader reads.
+	struct AerosolOpticsAddress
+	{
+		std::string_view settingPath;  // a vector member carries its own path; the scalar has none
+		std::string_view settingKey;
+		const float* value;
+	};
+
+	/// The seven addresses a mixture resolves to. A vector's components are separate entries, keyed
+	/// by component, which is how the catalog describes them.
+	std::array<AerosolOpticsAddress, 7> GetAerosolOpticsAddresses(const Aerosol::Optics& a_optics)
+	{
+		return { { { "aerosolScatter", "x", &a_optics.scatter.x },
+			{ "aerosolScatter", "y", &a_optics.scatter.y },
+			{ "aerosolScatter", "z", &a_optics.scatter.z },
+			{ "aerosolAbsorption", "x", &a_optics.absorption.x },
+			{ "aerosolAbsorption", "y", &a_optics.absorption.y },
+			{ "aerosolAbsorption", "z", &a_optics.absorption.z },
+			{ "", "aerosolPhaseG", &a_optics.phaseG } } };
+	}
+
+	std::vector<std::string> GetAerosolOpticsSettingPath(const AerosolOpticsAddress& a_address)
+	{
+		std::vector<std::string> path;
+		if (!a_address.settingPath.empty())
+			path.emplace_back(a_address.settingPath);
+		return path;
+	}
+
+	/// Whether an entry this context owns holds a value, rather than being a tombstone.
+	bool IsAuthoredAerosolEntry(std::span<const SceneSettingsManager::SettingEntry> a_entries,
+		std::optional<size_t> a_index)
+	{
+		return a_index && *a_index < a_entries.size() && !a_entries[*a_index].deleted;
+	}
+
+	/// Writes the coefficients a mixture resolves to into the armed context's own entries, so a
+	/// weather or time-of-day transition interpolates the optics rather than switching the mixture.
+	/// @return How many addresses the context now authors.
+	size_t WriteSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context,
+		const Aerosol::Optics& a_optics)
+	{
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto rules = SceneSettingsContextRules::GetSceneContextRules(a_context);
+		const auto featureName = std::string(kSceneFeatureShortName);
+		const auto addresses = GetAerosolOpticsAddresses(a_optics);
+
+		// Structure first: clearing a tombstone or adding an entry renumbers the entries behind it,
+		// so no index may be carried across this pass (the interceptor's guard resolves the same way).
+		for (const auto& address : addresses) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			if (!SceneSettingsManager::IsSettingAllowedForType(rules.sceneType, featureName, path, key,
+					rules.requireNumeric))
+				continue;
+			auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (index && !IsAuthoredAerosolEntry(manager->GetContextEntries(a_context), index)) {
+				// A tombstone holds no value, so it goes before the new one lands.
+				manager->ClearContextTombstone(a_context, featureName, path, key);
+				index = std::nullopt;
+			}
+			if (!index)
+				manager->AddContextSetting(a_context, featureName, path, key, true);
+		}
+
+		// Value pass: every address the context can hold now resolves to a live entry.
+		std::array<SceneSettingsManager::EntryValueUpdate, 7> updates{};
+		size_t count = 0;
+		for (const auto& address : addresses) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			const auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (!index)
+				continue;
+			updates[count++] = { *index, json(*address.value) };
+		}
+		if (count == 0)
+			return 0;
+
+		// One atomic update, saved and reapplied once: the adds above only deferred their own save.
+		manager->UpdateContextEntryValues(a_context, std::span(updates.data(), count));
+		return count;
+	}
+
+	/// How many of the coefficients in a context come from the context's own entries.
+	size_t CountSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context)
+	{
+		const Aerosol::Optics none{};
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto featureName = std::string(kSceneFeatureShortName);
+		const auto entries = manager->GetContextEntries(a_context);
+		size_t authored = 0;
+		for (const auto& address : GetAerosolOpticsAddresses(none)) {
+			if (IsAuthoredAerosolEntry(entries,
+					manager->FindContextUserEntry(a_context, featureName,
+						GetAerosolOpticsSettingPath(address), std::string(address.settingKey))))
+				++authored;
+		}
+		return authored;
+	}
+
+	/// Drops every coefficient this context authored, restoring inheritance from the layers below.
+	void ClearSceneAerosolOptics(const SceneSettingsManager::SceneContextId& a_context)
+	{
+		const Aerosol::Optics none{};
+		auto* manager = SceneSettingsManager::GetSingleton();
+		const auto featureName = std::string(kSceneFeatureShortName);
+		for (const auto& address : GetAerosolOpticsAddresses(none)) {
+			const auto path = GetAerosolOpticsSettingPath(address);
+			const auto key = std::string(address.settingKey);
+			const auto index = manager->FindContextUserEntry(a_context, featureName, path, key);
+			if (index && IsAuthoredAerosolEntry(manager->GetContextEntries(a_context), index))
+				manager->RemoveContextSetting(a_context, *index);
+		}
+	}
+
+	/// The scene page's substitute for the authoring knobs: pick a mixture, and its coefficients
+	/// become this context's own. The knobs themselves hold no scene value, which is why the scene
+	/// policy bars them.
+	void DrawSceneAerosolPicker(const SceneSettingsManager::SceneContextId& a_context,
+		const char* const a_typeNames[], int a_typeCount)
+	{
+		const auto rules = SceneSettingsContextRules::GetSceneContextRules(a_context);
+		// Judged on the scalar coefficient, which every context that can hold the aerosol look accepts.
+		const bool allowed = SceneSettingsManager::IsSettingAllowedForType(rules.sceneType,
+			std::string(kSceneFeatureShortName), {}, "aerosolPhaseG", rules.requireNumeric);
+
+		ImGui::TextWrapped("%s", T(TKEY("aerosol_scene_desc"),
+									 "Scenes blend the optical coefficients below, so a mixture is written as the coefficients it resolves to. Particle loading and relative humidity are authoring inputs and are not stored per scene."));
+
+		ImGui::BeginDisabled(!allowed);
+
+		bool changed = false;
+		int type = static_cast<int>(sceneAerosolPicker.type);
+		if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, a_typeNames, a_typeCount)) {
+			sceneAerosolPicker.type = type > 0 && type < static_cast<int>(Aerosol::Type::Count) ?
+			                              static_cast<Aerosol::Type>(type) :
+			                              Aerosol::Type::Custom;
+			changed = true;
+		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+
+		if (sceneAerosolPicker.type != Aerosol::Type::Custom) {
+			changed |= ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &sceneAerosolPicker.loading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
+			changed |= ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &sceneAerosolPicker.humidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+		}
+
+		if (changed && sceneAerosolPicker.type != Aerosol::Type::Custom) {
+			WriteSceneAerosolOptics(a_context,
+				Aerosol::Evaluate(sceneAerosolPicker.type, sceneAerosolPicker.loading, sceneAerosolPicker.humidity));
+		}
+
+		const auto authored = CountSceneAerosolOptics(a_context);
+		if (authored > 0) {
+			ImGui::Text(T(TKEY("aerosol_scene_authored"), "Aerosol coefficients stored for this scene: %zu of 7."), authored);
+			ImGui::SameLine();
+			if (ImGui::Button(T(TKEY("aerosol_scene_clear"), "Clear"))) {
+				ClearSceneAerosolOptics(a_context);
+				changed = true;
+			}
+		} else {
+			ImGui::TextDisabled("%s", T(TKEY("aerosol_scene_inherited"), "Aerosol coefficients: inherited from the settings below the scene."));
+		}
+
+		ImGui::EndDisabled();
+
+		if (!allowed)
+			Util::AddTooltip(T(TKEY("aerosol_scene_unsupported"), "This place cannot hold the aerosol coefficients."), Util::kTooltipWhenDisabled);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -250,16 +453,46 @@ void PhysicalSky::DataLoaded()
 void PhysicalSky::RestoreDefaultSettings()
 {
 	settings = {};
+	// The scene picker mirrors the inputs it seeds from, so it goes back with them.
+	sceneAerosolPicker = {};
 }
 
 void PhysicalSky::LoadSettings(json& o_json)
 {
+	// The aerosol mixture, loading and humidity are authoring inputs: the value the shader reads and
+	// the scene layer blends is the coefficient triple they resolve to. A document that moves one of
+	// the three (a config, a preset, a feature override) therefore has to re-derive that triple,
+	// while a document carrying only the scene layer's own values leaves the inputs alone - which is
+	// what keeps a blend of the inputs from overwriting the blend of the coefficients.
+	const auto loadedType = settings.aerosolType;
+	const auto loadedLoading = settings.aerosolLoading;
+	const auto loadedHumidity = settings.aerosolHumidity;
 	settings = o_json;
+	if (settings.aerosolType != loadedType ||
+		settings.aerosolLoading != loadedLoading ||
+		settings.aerosolHumidity != loadedHumidity)
+		settings.ApplyAerosolOptics();
 }
 
 void PhysicalSky::SaveSettings(json& o_json)
 {
 	o_json = settings;
+}
+
+Aerosol::Optics PhysicalSky::Settings::GetAerosolOptics() const
+{
+	if (aerosolType > Aerosol::Type::Custom && aerosolType < Aerosol::Type::Count)
+		return Aerosol::Evaluate(aerosolType, aerosolLoading, aerosolHumidity);
+	return { aerosolScatter, aerosolAbsorption, aerosolPhaseG };
+}
+
+void PhysicalSky::Settings::ApplyAerosolOptics()
+{
+	// Custom already answers with the members, so this leaves an authored coefficient set untouched.
+	const auto optics = GetAerosolOptics();
+	aerosolScatter = optics.scatter;
+	aerosolAbsorption = optics.absorption;
+	aerosolPhaseG = optics.phaseG;
 }
 
 void PhysicalSky::DrawSettings()
@@ -508,16 +741,72 @@ void PhysicalSky::SettingsAtmosphere()
 	ImGui::SeparatorText(T(TKEY("aerosol_mie"), "Aerosol (Mie)"));
 	{
 		ImGui::PushID("Mie");
-		ImGui::TextWrapped("%s", T(TKEY("solid_and_liquid_particles_greater_than_1_10"),
-									 "Solid and liquid particles greater than 1/10 of the light wavelength but not too much, like dust. Strongly anisotropic (Mie Scattering). "
-									 "They contributes to the aureole around bright celestial bodies."));
+		ImGui::TextWrapped("%s", T(TKEY("aerosol_model_desc"), "Suspended particles scatter and absorb light. Choose an aerosol type to control particle loading and relative humidity, or Custom to edit optical coefficients."));
+		const char* types[] = {
+			T(TKEY("aerosol_custom"), "Custom"),
+			T(TKEY("aerosol_continental"), "Continental background"),
+			T(TKEY("aerosol_maritime"), "Marine"),
+			T(TKEY("aerosol_urban"), "Urban pollution"),
+			T(TKEY("aerosol_desert"), "Desert dust")
+		};
+		// The proxy stays a plain cast of the stored enum: the scene settings catalog
+		// resolves a combo's backing setting through exactly this shape, and a ternary
+		// here would leave the setting out of the catalog.
+		int type = static_cast<int>(settings.aerosolType);
 
-		ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -1, 1);
-		ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("usually_1_9_of_scatter_coefficient_dust_pollution"), "Usually 1/9 of scatter coefficient. Dust/pollution is lower, fog is higher."));
-		ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
+		// A scene page authors the coefficients the shader reads, because that is the only part of
+		// the aerosol look a transition can interpolate; the main menu authors the mixture those
+		// coefficients come from. Both end up at the same three addresses, so the widgets below are
+		// drawn once and the mixture never has to be an interpolated value.
+		const auto* scene = SceneWidgetInterceptor::GetArmedContext();
+		const bool sceneScoped = scene && !scene->baseline;
+		if (sceneScoped) {
+			// Seed once per context: a scene page opens on the look the author already sees.
+			if (!sceneAerosolPicker.seeded || sceneAerosolPicker.context != scene->contextId) {
+				sceneAerosolPicker.type = settings.aerosolType < Aerosol::Type::Count ?
+				                              settings.aerosolType :
+				                              Aerosol::Type::Custom;
+				sceneAerosolPicker.loading = settings.aerosolLoading;
+				sceneAerosolPicker.humidity = settings.aerosolHumidity;
+				sceneAerosolPicker.context = scene->contextId;
+				sceneAerosolPicker.seeded = true;
+			}
+			DrawSceneAerosolPicker(scene->contextId, types, IM_ARRAYSIZE(types));
+		} else {
+			if (type < 0 || type >= static_cast<int>(Aerosol::Type::Count))
+				type = 0;
+			if (ImGui::Combo(T(TKEY("aerosol_type"), "Aerosol Type"), &type, types, IM_ARRAYSIZE(types))) {
+				// Selecting a mixture re-derives the coefficients; switching back to Custom keeps
+				// them, because a physical mixture had already written them, so the look is
+				// continuous either way.
+				settings.aerosolType = static_cast<Aerosol::Type>(type);
+				settings.ApplyAerosolOptics();
+			}
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("aerosol_type_desc"), "OPAC mixtures: continental clean, maritime clean, urban, and desert. Marine particles respond strongly to humidity; urban pollution includes absorbing soot. Dust also contains a water-soluble fraction."));
+
+			if (type != 0) {
+				if (ImGui::SliderFloat(T(TKEY("aerosol_loading"), "Particle Loading"), &settings.aerosolLoading, 0.f, 10.f, "%.2f x", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp))
+					settings.ApplyAerosolOptics();
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("aerosol_loading_desc"), "Multiplier of the selected type's reference dry particle number densities. 1x uses the OPAC reference mixture; 0 removes aerosols. Humidity changes particle size, not this loading. This is not AQI or PM2.5."));
+				if (ImGui::SliderFloat(T(TKEY("aerosol_humidity"), "Relative Humidity"), &settings.aerosolHumidity, 0.f, 99.f, "%.1f %%", ImGuiSliderFlags_AlwaysClamp))
+					settings.ApplyAerosolOptics();
+				if (auto _tt = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("aerosol_humidity_desc"), "Effective relative humidity throughout the aerosol layer. Uses OPAC hygroscopic growth data from 0 to 99% RH. Higher humidity usually increases scattering; absorption and forward scattering follow the selected mixture. Does not simulate condensation or fog droplets."));
+			}
+		}
+		// A scene page shows the coefficients whatever mixture they came from: they are what that
+		// page stores, and the picker above is only a shortcut for writing them.
+		if (sceneScoped || type == 0) {
+			ImGui::SliderFloat(T(TKEY("anisotropy"), "Anisotropy"), &settings.aerosolPhaseG, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+			ImGui::ColorEdit3(T(TKEY("scatter"), "Scatter"), &settings.aerosolScatter.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+			ImGui::ColorEdit3(T(TKEY("absorption"), "Absorption"), &settings.aerosolAbsorption.x, ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+		}
+		if (ImGui::TreeNode(T(TKEY("aerosol_vertical_distribution"), "Vertical Distribution"))) {
+			ImGui::SliderFloat(T(TKEY("falloff"), "Falloff"), &settings.aerosolFalloff, 0.f, 2.f, "%.2f km^-1");
+			ImGui::TreePop();
+		}
 		ImGui::PopID();
 	}
 
@@ -1040,6 +1329,8 @@ void PhysicalSky::Reset()
 		.groundAlbedo = sRGBToWorkingGamut(settings.groundAlbedo),
 		.cloudShadowRemapRange = settings.cloudShadowRemapRange,
 		.aerosolFalloff = settings.aerosolFalloff * Util::Units::GAME_UNIT_TO_KM,
+		// The coefficient members are what the scene layer blends: a weather or time-of-day
+		// transition interpolates the optics a mixture resolved to, never the discrete mixture.
 		.aerosolPhaseG = settings.aerosolPhaseG,
 		.aerosolScatter = settings.aerosolScatter * 1e-3f * Util::Units::GAME_UNIT_TO_KM,
 		.halfResApShadow = settings.halfResApShadow ? 1u : 0u,
