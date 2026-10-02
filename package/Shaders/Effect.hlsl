@@ -916,14 +916,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (composeMedium) {
 		const float4 medium = ViewMedium::SampleViewMedium(input.WorldPosition.xyz, screenUV, SampBaseSampler);
 #		if defined(ADDBLEND)
-#			if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable) {
-			if (isFire)
-				blendedColor = pow(abs(blendedColor), SharedData::enbSettings.FireCurve) * SharedData::enbSettings.FireIntensity;
-			else
-				blendedColor *= SharedData::enbSettings.LightSpriteIntensity;
-		}
-#			endif
+		blendedColor = Color::AdditiveEffect(blendedColor, isFire);
 		blendedColor = ColorManagement::SceneColor::ScaleByLinear(blendedColor, medium.a);
 #		elif defined(MULTBLEND) || defined(MULTBLEND_DECAL)
 		blendedColor = lerp(1.0.xxx, lightColor, medium.a);
