@@ -898,7 +898,8 @@ in a cascade that frame. Skipping that accumulation changes main-pass techniques
 set some other way. `lastAccumulatedFrameCount` has no reader found yet.
 
 **Who clears the masks.** `FUN_1414cb640`, which `Main::Draw` calls before the shadow lights accumulate (at
-`0x140644d7e`), writes accumulator `0x14338c840`'s `+0x160` as the 8-byte `0xFFFF` (so `+0x164` becomes 0) while
+`0x140644d7e`, inside a block that runs only while the player's third-person 3D is drawn: it unhides it first, so in first
+person there is no clear and the lights accumulate all the same), writes accumulator `0x14338c840`'s `+0x160` as the 8-byte `0xFFFF` (so `+0x164` becomes 0) while
 `DAT_14338c911` is 0. It then registers culling process `0x14338c640`'s culled geometries through that accumulator
 (`FUN_140e28af0`), and the registration zeroes their masks. Each shadow light then ORs its bits in.
 

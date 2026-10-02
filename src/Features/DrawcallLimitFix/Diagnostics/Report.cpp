@@ -254,19 +254,18 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		// itself kept; anything else hands a culled object's scene light list to the visible objects drawn
 		// on that pipeline, which is the blown-out interior lighting defect.
 		{
-			static constexpr const char* kTechniqueNames[20] = { "none", "envmap", "glowmap", "parallax", "facegen",
-				"facegenRGBTint", "hair", "parallaxOcc", "MTLand", "LODLand", "snow", "multilayerParallax", "treeAnim",
-				"LODObjects", "multiIndexSparkle", "LODObjectHD", "eye", "cloud", "LODLandNoise", "MTLandLODBlend" };
 			std::string techniques;
 			for (std::size_t t = 0; t < stats.techniqueRejects.size(); ++t) {
 				if (!stats.techniqueRejects[t])
 					continue;
-				const char* name = t == 63 ? "refraction" : (t < 20 ? kTechniqueNames[t] : "?");
-				techniques += fmt::format("{}{}({})={}", techniques.empty() ? "" : " ", name, t, stats.techniqueRejects[t]);
+				techniques += fmt::format("{}{}({})={}", techniques.empty() ? "" : " ", DCLF::LightingTechniqueName(static_cast<std::uint32_t>(t)), t, stats.techniqueRejects[t]);
 			}
 			if (!techniques.empty())
 				logger::info("[DCLF] left native by technique: {}", techniques);
 		}
+		if (DCLF::SwitchEnabled(DCLF::Switch::CoverageProbe))
+			for (const auto& line : std::views::split(store.CoverageCensus(), '\n'))
+				logger::info("{}", std::string_view(line.begin(), line.end()));
 		if (!stats.propertyRejects.empty()) {
 			std::vector<std::pair<const RE::NiRTTI*, std::uint32_t>> sorted(stats.propertyRejects.begin(), stats.propertyRejects.end());
 			std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
