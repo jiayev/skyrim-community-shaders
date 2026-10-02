@@ -103,8 +103,8 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 
 bool ExponentialHeightFog::IsSuppressed() const
 {
-	// The world/local map keeps its vanilla fog; height fog tuned for eye level washes it out
-	return (globals::features::effects11.loaded && globals::features::effects11.enableEffect) || globals::state->isMapMenuOpen;
+	// The flat world map keeps its vanilla fog; the 3D map runs on the scene kept from before it opened
+	return (globals::features::effects11.loaded && globals::features::effects11.enableEffect) || globals::state->IsFlatWorldMapOpen();
 }
 
 void ExponentialHeightFog::DrawSettings()
@@ -404,7 +404,6 @@ void ExponentialHeightFog::Prepass()
 		return;
 	}
 
-	// Shaders ignore the fog volume while suppressed, so skip building it but keep the resources
 	if (IsSuppressed())
 		return;
 
