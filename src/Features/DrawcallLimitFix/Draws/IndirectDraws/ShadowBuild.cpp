@@ -414,8 +414,7 @@ namespace DCLF::Draws
 			++c.builds;
 			bool reuse = c.valid && membership && c.candidates == a_candidates && c.membership == membership &&
 			             c.cursor.Continues(a_tables.changeLog, a_payload.inputs.tablesGeneration);
-			// The paraboloid mode reads residency too (below).
-			const std::uint32_t causes = kChangeBindings | kChangeGeometry | (a_mode == kParabolicShadowMode ? kChangeMembership : 0u);
+			const std::uint32_t causes = kChangeBindings | kChangeGeometry;
 			if (reuse)
 				for (const auto& change : c.cursor.Unread(a_tables.changeLog))
 					if (change.causes & causes) {
@@ -434,6 +433,8 @@ namespace DCLF::Draws
 				exclusion->version = c.version;
 				exclusion->removed = std::make_unique<std::atomic<std::uint32_t>[]>(count);
 				exclusion->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_candidates->geometryEntry.size());
+				if (a_mode == kParabolicShadowMode)
+					exclusion->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(count * 3);
 				return exclusion;
 			}
 		}
@@ -444,17 +445,14 @@ namespace DCLF::Draws
 				isInput[a_input.objectIndex] = 1;
 		});
 		// An object blocks its entry when the engine would cast it into this mode's views and this build does not draw it there:
-		// every caster the scene phase found (a volumetric-only one too: a paraboloid light registers it like any other).
-		// The paraboloid mode's also blocks it when its main pass is the engine's (not a resident member): a point light's
-		// registration writes the light's bit into its activeLightMask, which that main pass reads (FUN_1414b2140, on every
-		// geometry the cull reaches, caster or not), and a skipped entry would lose it.
+		// every caster the scene phase found (a volumetric-only one too: a paraboloid light registers it like any other). A
+		// point light's registration also writes the light's bit into the activeLightMask of every geometry its cull reaches,
+		// which an engine-drawn main pass reads: LocalLightCull writes those of a skipped entry's geometries itself.
 		auto engineCaster = [&](std::size_t o) { return !(a_tables.objects[o].flags & kObjectNoShadow); };
-		const bool masks = a_mode == kParabolicShadowMode;
 		for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
 			if (a_tables.objects[o].flags & kObjectFree)
 				continue;
-			const bool engineMainPass = masks && !(o < a_tables.residentSlot.size() && a_tables.residentSlot[o]);
-			if (!engineMainPass && (isInput[o] || !engineCaster(o)))
+			if (isInput[o] || !engineCaster(o))
 				continue;
 			if (const auto it = a_candidates->geometries.find(a_tables.objectGeometry[o]); it != a_candidates->geometries.end())
 				exclusion->excluded[a_candidates->geometryEntry[it->second]] = 0;
@@ -479,6 +477,8 @@ namespace DCLF::Draws
 		}
 		exclusion->removed = std::make_unique<std::atomic<std::uint32_t>[]>(count);
 		exclusion->cleared = std::make_unique<std::atomic<std::uint32_t>[]>(a_candidates->geometryEntry.size());
+		if (a_mode == kParabolicShadowMode)
+			exclusion->lightReach = std::make_unique<std::atomic<std::uint64_t>[]>(count * 3);
 		return exclusion;
 	}
 

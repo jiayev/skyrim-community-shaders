@@ -70,7 +70,6 @@ namespace DCLF
 		Stats,
 		PassStats,
 		Profile,
-		LightCensus,
 		ShaderDebug,
 		ShaderSourceDir,
 		Eval,

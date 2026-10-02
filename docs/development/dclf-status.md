@@ -23,8 +23,10 @@ code is organised, and the parity checks that validate it, is [dclf-architecture
     -   entries not yet admitted.
 -   **The sun.** DCLF's entries are taken out; actors and entries with a native caster remain.
 -   **Skylighting's map.** No engine cull at all.
--   **Local shadow lights.** Point lights skip the entries DCLF draws (drawcall-limit-fix.md, "Point lights' shadow
-    culls without DCLF's entries"); DCLF claims the rest's draws.
+-   **Local shadow lights.** Point lights' culls skip the entries DCLF draws, actors and terrain included, and DCLF writes
+    the lights' mask bits of the engine-drawn parts under them (drawcall-limit-fix.md, "Point lights' culls: the category
+    filter, and the light candidates"). Left: entries with a technique-blocked, unsupported-parent or skin-shape caster.
+    About 0.1 ms a light outside.
 -   **Reflections.** The cube map culls only LOD and the sky; plane reflections are never rendered.
 
 ## What is still on the render thread

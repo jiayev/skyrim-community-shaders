@@ -26,19 +26,17 @@ namespace DCLF
 
 	bool SceneStore::LightEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_switchNodes)
 	{
-		if (a_tracked.slot != kNoObjectSlot)
+		// What the sun's rule allows (the caster rule gives an alpha-blended or fading property no shadow pass, the paraboloid's as
+		// the cascades'), and any geometry without a Lighting property. The lights' bits of every geometry are LocalLightCull's.
+		if (SunEntryAllows(a_tracked, a_switchNodes))
 			return true;
-		if (a_tracked.candidateFrame == 0)
-			return false;
-		if (a_tracked.candidateReason == Ineligible::Hidden || (a_tracked.candidateReason == Ineligible::Switch && a_switchNodes))
-			return true;
-		return !netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		return a_tracked.candidateFrame != 0 && !netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
 	}
 
 	const std::vector<RE::BSGeometry*>* SceneStore::LightDependentsOf(const RE::NiAVObject* a_root) const
 	{
-		const auto it = rootDependents.find(a_root);
-		if (it == rootDependents.end() || it->second.empty() || categoryNodes.contains(static_cast<RE::NiNode*>(const_cast<RE::NiAVObject*>(a_root))))
+		const auto it = lightDependents.find(a_root);
+		if (it == lightDependents.end() || it->second.empty() || IsCategoryNode(a_root))
 			return nullptr;
 		return &it->second;
 	}
@@ -50,7 +48,7 @@ namespace DCLF
 			lightCandidateSet.clear();
 			lightSignature.clear();
 			lightEntriesDirty.clear();
-			for (const auto& [root, dependents] : rootDependents)
+			for (const auto& [root, dependents] : lightDependents)
 				lightEntriesDirty.push_back(root);
 		}
 		if (!lightEntriesDirty.empty()) {
@@ -96,9 +94,11 @@ namespace DCLF
 		auto snapshot = std::make_shared<SunCandidates>();
 		snapshot->generation = lightCandidatesGeneration;
 		snapshot->entries.reserve(lightCandidateSet.size());
+		snapshot->entryNodes.reserve(lightCandidateSet.size());
 		std::uint32_t index = 0;
 		for (const auto* root : lightCandidateSet) {
 			snapshot->entries.emplace(root, index);
+			snapshot->entryNodes.push_back(root);
 			if (const auto* dependents = LightDependentsOf(root))
 				for (auto* geometry : *dependents)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second)
@@ -127,34 +127,6 @@ namespace DCLF
 		default:
 			return false;
 		}
-	}
-
-	SceneStore::EntryVerdict SceneStore::EntryCensus(const RE::NiAVObject* a_node) const
-	{
-		EntryVerdict verdict;
-		const auto it = rootDependents.find(a_node);
-		if (it == rootDependents.end() || it->second.empty()) {
-			verdict.kind = 1;
-			return verdict;
-		}
-		verdict.geometries = static_cast<std::uint32_t>(it->second.size());
-		const bool switchNodes = ActiveToggles().switchNodes;
-		for (auto* geometry : it->second) {
-			const auto entry = tracked.find(geometry);
-			if (entry == tracked.end() || (entry->second.slot == kNoObjectSlot && entry->second.candidateFrame == 0)) {
-				verdict = { 2, Ineligible::Count, verdict.geometries, verdict.slots, geometry };
-				return verdict;
-			}
-			if (entry->second.slot != kNoObjectSlot) {
-				++verdict.slots;
-				continue;
-			}
-			if (!SunEntryAllows(entry->second, switchNodes)) {
-				verdict = { 2, entry->second.candidateReason, verdict.geometries, verdict.slots, geometry };
-				return verdict;
-			}
-		}
-		return verdict;
 	}
 
 	bool SceneStore::PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry)
@@ -229,9 +201,11 @@ namespace DCLF
 		auto snapshot = std::make_shared<SunCandidates>();
 		snapshot->generation = sunCandidatesGeneration;
 		snapshot->entries.reserve(sunCandidateSet.size());
+		snapshot->entryNodes.reserve(sunCandidateSet.size());
 		std::uint32_t index = 0;
 		for (const auto* root : sunCandidateSet) {
 			snapshot->entries.emplace(root, index);
+			snapshot->entryNodes.push_back(root);
 			if (const auto it = rootDependents.find(root); it != rootDependents.end())
 				for (auto* geometry : it->second)
 					if (snapshot->geometries.emplace(geometry, static_cast<std::uint32_t>(snapshot->geometryEntry.size())).second) {

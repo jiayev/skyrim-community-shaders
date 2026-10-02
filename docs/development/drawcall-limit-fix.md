@@ -6501,32 +6501,50 @@ saved 0.89 -> 0.46 ms a frame outside, but portal-strict lights (every interior 
 
 **The light candidates** (`SceneStore::UpdateLightCandidates`, `GetLightCandidates`). The paraboloid exclusion is built
 from them, not from the sun's candidates.
--   **The census** (`CS_DCLF_LIGHT_CENSUS`, temporary) showed what point lights still reached outside the excluded
-    entries. Every paraboloid pass the engine registered there was withheld: DCLF already drew them all.
--   **The masks.** A point light's registration ORs its bit into the `activeLightMask` of every geometry its cull
-    reaches, caster or not (`FUN_1414b2140`; skyrim-engine-notes.md, "the sun's accumulation"). The main pass reads it
-    (the technique's shadow light count). So an entry left out must hold no geometry whose main pass is the engine's.
 -   **A bug since R1.** A cell's multibound node is a sun entry for a geometry with no reference under it. Excluded, the
     skip left out the whole cell, actors, creeks and terrain blocks included, and their engine-drawn Lighting geometry
-    lost the light's bit. Measured with the new mask parity: 21-47 lost per report outside.
--   **The rule.** A light entry is a sun entry that is no category node, so entries cannot nest. It is a candidate when
-    every tracked geometry under it is either a table object, or gives the light's registration nothing: hidden, an
-    unselected switch child, or no Lighting property (`LightEntryAllows`). Effects and water under an entry no longer
-    keep it in.
--   **The exclusion's own rule** (`BuildSunExclusion`, paraboloid mode). A table object blocks its entry when the mode
-    does not draw a caster of it, or when its main pass is the engine's (not a resident member, terrain for one). The
-    cache is invalidated by membership changes too.
--   **Actors stay the engine's.** Their equipment is shown and hidden with no event, so their candidacy changed every few
-    frames and rebuilt the snapshot, the exclusion and the filter (spikes of 1.5 ms). Many also have engine-drawn parts
-    (beards, hair) that read the mask.
+    lost the light's mask bit (below). The first mask parity measured 21-47 lost per report outside.
+-   **Light entries** (`LightEntryOf`, `lightDependents`, `Tracked::lightRoot`). An actor's geometry has no sun entry: its
+    light entry is its actor's root (its category node's child whose reference is an actor), carried items included.
+    Any other geometry's is its sun entry, unless that is a category node (a cell's or a room's), so entries cannot nest.
+-   **The rule** (`LightEntryAllows`). An entry is a candidate when every tracked geometry under it is a table object, or
+    gives the light's registration no pass: what the sun's rule allows (hidden, alpha-blended, fading, an unselected switch
+    child: the caster rule is the same function for the paraboloid mode), or no Lighting property. The exclusion
+    (`BuildSunExclusion`) then asks that every table object that casts be the mode's input.
+-   **Actors' churn** was the reason they stayed the engine's in the first version: the equipment's hidden bits flip with
+    no event of their own. With the rule above, a hidden part and a shown one both allow the entry, so the flips change
+    nothing: 1 stale frame in 300 at Riverwood.
 
-**Measured** (Riverwood with rain, the Bannered Mare; full parity):
--   Every check OK, the Shield race apart. Light filter parity 0; masks lost 0 of 102-135 a report (the mask parity:
-    "point lights' masks"). Holes 0.
--   A light culls about 274 children outside (about 980 before) and 3 inside.
--   Point lights' `Accumulate` is 0.23-0.26 ms a light outside (portal-strict lights included) and about 0.06 inside.
-    The cells and terrain walked again for their masks offset what the cut saved.
--   Light candidate builds cost at most 0.03 ms. Filter builds cost 0.2-0.24 ms, about 50 per 300 frames.
+**The lights' bits** (`LocalLightCull::NoteMainRegistration`, `NoteMaskClear`). A point light's registration ORs its bit
+into the `activeLightMask` of every geometry its cull reaches, caster or not (`FUN_1414b2140`; skyrim-engine-notes.md,
+"the sun's accumulation"), and the main pass reads it (`GetRenderPasses`: the shadow lights). DCLF's members take theirs
+on the GPU (`LocalShadowLights`). The engine's main passes under a cut entry (terrain, actors' hair, technique-blocked
+parts) take them from DCLF, as the sun's do (`ApplySunBits`):
+-   **The test.** `FUN_14151a1e0`, the process's bound test, reduces to the light's sphere: visible when
+    `(|c - centre| - r) - radius < 0` (skyrim-engine-notes.md, "Point lights' shadow culls").
+-   **Per light**, in the `Accumulate` thunk: its ordinal in the frame (from Main::Draw's mask clear; past 32, a light
+    culls everything), its bit (its accumulators' `+0x164`), and the sphere, read from the static process during its cull.
+-   **Reach**, recorded in the walk: a filtered category node the light reaches (one stamped store per node per light), or
+    an entry its `Process1` skips (stamped words per candidate, `SunExclusion::lightReach`), by the process's state there:
+    untested (cull mode 1, under a `kAllPass` multibound), the sphere, or the sphere and the portals (mode 4 with a
+    compound frustum, which DCLF does not test; DCLF's members' GPU rule does not either).
+-   **The write.** At a geometry's main registration (`+0x160 == 0xFFFF`, not owned), before the original call: per light
+    that reached its entry, the light's bit when untested or its bound is in the sphere. Once a frame per geometry, as the
+    engine's main registration reads the mask and clears it.
+-   **Parity** (persistent-parity frames cut nothing): DCLF's bits against the engine's, where a cut would have taken the
+    geometry out ("point lights' bits"). Riverwood: 570-960 compared a report, all agree but for 2 hair shapes in about
+    8,000, which the engine gave a bit 3 units outside the sphere (its skinned bound moves between the light's cull and the
+    main registration; at the radius the light contributes nothing). Bannered Mare: all agree, portal-strict lights
+    included.
 
-**What is left:** about 208 actor entries outside, each a skeleton the light's cull walks node by node; the terrain;
-entries with engine-drawn Lighting geometry (streams, hay, creeks); markers, water and particles.
+**Measured** (Riverwood with rain, camera turning; the Bannered Mare):
+-   Every check OK, the Shield race apart. Light filter parity 0, light exclusion parity 0, holes 0.
+-   Entries a light still walks outside: 5 actors (a skin-shape part), 79 technique-blocked (streams, campfires), 126
+    under an unsupported parent (hay), a few particles and water: about 219 children culled a light, 12,516 cut. Inside: 3.
+-   Point lights' `Accumulate`, without the parity switches: 0.10-0.11 ms a light outside (about 2.3 lights a frame), against
+    0.56-0.70 ms with the filter off (`CS_DCLF_LIGHT_LIST=0`: the per-entry skip only) and 0.23-0.26 before the actors and
+    the bits. Inside: 0.024 ms a light (0.06 before).
+-   Filter builds 0.17-0.25 ms, about 35 per 300 frames.
+
+**What is left:** the blocked entries above, each a paraboloid coverage expansion (technique, unsupported parent, skin
+shape). Once those are covered, a light walks only the cells and the category nodes.

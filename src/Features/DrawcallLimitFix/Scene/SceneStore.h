@@ -952,10 +952,10 @@ namespace DCLF
 		std::uint32_t GetSunCandidatesGeneration() const { return sunCandidatesGeneration; }
 		/**
 		 * @brief The entries DCLF can take out of the point lights' culls (UpdateLightCandidates), and their generation now:
-		 * the sun entries that are no category node (a reference's root, a terrain block's multibound node) whose every tracked
-		 * geometry is a table object (the paraboloid exclusion
-		 * then asks that it be drawn in the mode, and that its main pass be DCLF's: BuildSunExclusion), or one the light's
-		 * registration takes nothing from (LightEntryAllows).
+		 * the light entries (LightEntryOf: an actor's root, a reference's, a terrain block's multibound node) whose every
+		 * tracked geometry is a table object (the paraboloid exclusion then asks that it be drawn in the mode:
+		 * BuildSunExclusion), or one the light's registration takes nothing from (LightEntryAllows). The lights' bits of their
+		 * geometries are LocalLightCull's.
 		 */
 		std::shared_ptr<const SunCandidates> GetLightCandidates() const { return lightCandidates; }
 		/**
@@ -1069,19 +1069,6 @@ namespace DCLF
 			const auto it = a_fadeNode ? fadeRootOwned.find(a_fadeNode) : fadeRootOwned.end();
 			return it != fadeRootOwned.end() && it->second;
 		}
-		/**
-		 * @brief TEMP (CS_DCLF_LIGHT_CENSUS), render thread: whether a node is a sun entry candidate and, if not, why. kind 0: a
-		 * candidate; 1: no tracked geometry has it as its sun entry; 2: a geometry under it blocks it (reason: its candidate
-		 * reason, or Count when it is not tracked or not classified yet).
-		 */
-		struct EntryVerdict
-		{
-			std::uint32_t kind = 0;
-			Ineligible reason = Ineligible::None;
-			std::uint32_t geometries = 0, slots = 0;
-			const RE::BSGeometry* blocker = nullptr;
-		};
-		EntryVerdict EntryCensus(const RE::NiAVObject* a_node) const;
 		std::size_t StoodInFadeRoots() const
 		{
 			return static_cast<std::size_t>(std::count_if(fadeRootOwned.begin(), fadeRootOwned.end(), [](const auto& a_root) { return a_root.second; }));
@@ -1268,6 +1255,8 @@ namespace DCLF
 			// once: the scene graph above a tracked geometry does not change while it is tracked.
 			const RE::NiAVObject* sunEntryNode = nullptr;
 			bool sunEntryResolved = false;
+			// Its light entry (LightEntryOf), listed in lightDependents for as long as it is tracked; null: none.
+			const RE::NiAVObject* lightRoot = nullptr;
 			// The delta walk's. perFrame: inputs that change from frame to frame (PerFrameTraits: owned by an actor,
 			// skinned, a face shape, under a switch, or a controller or a non-fixed rigid body on its chain), so the
 			// delta walk evaluates it every frame; set at an evaluation that classified it, and kept. scheduledWalk:
@@ -1347,25 +1336,34 @@ namespace DCLF
 		static bool PrimaryEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry);
 		void MarkSunEntryDirty(const RE::NiAVObject* a_entry)
 		{
-			if (a_entry) {
+			if (a_entry)
 				sunEntriesDirty.push_back(a_entry);
+		}
+		void MarkLightEntryDirty(const RE::NiAVObject* a_entry)
+		{
+			if (a_entry)
 				lightEntriesDirty.push_back(a_entry);
-			}
 		}
 		/**
+		 * @brief A tracked geometry's light entry (UpdateLightCandidates): its actor's root when it hangs from one (its category
+		 * node's child, whose reference is an actor: an actor has no sun entry), else its sun entry unless that is a category
+		 * node (a cell's or a room's multibound node, which holds other entries).
+		 */
+		const RE::NiAVObject* LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const;
+		/**
 		 * @brief Whether a tracked geometry lets its light entry leave the point lights' culls. A table object: the exclusion
-		 * decides (BuildSunExclusion). Any other must give the light's registration nothing: hidden, an unselected switch
-		 * child, or no Lighting property. A Lighting geometry is a caster or reads the light's bit in activeLightMask in its
-		 * main pass (FUN_1414b2140 writes it on every geometry the cull reaches), which a cut entry would lose.
+		 * decides (BuildSunExclusion). Any other must give the light's registration no pass: what the sun's rule allows
+		 * (SunEntryAllows: hidden, alpha-blended, fading, an unselected switch child), or no Lighting property. The light's bit
+		 * in its activeLightMask, which the registration writes on every geometry the cull reaches, is LocalLightCull's.
 		 */
 		static bool LightEntryAllows(const Tracked& a_tracked, const RE::BSGeometry& a_geometry, bool a_switchNodes);
 		void UpdateLightCandidates(bool a_full);
 		/**
-		 * @brief A light entry's tracked geometries, or null: a sun entry's (rootDependents) that is not a category node. A
-		 * cell's or a room's multibound node is a sun entry for a geometry with no reference under it; left out of a point
-		 * light's cull it would take every entry under it along.
+		 * @brief A light entry's tracked geometries (lightDependents), or null; null too for a node that has become a category
+		 * node since (left out of a point light's cull, it would take every entry under it along).
 		 */
 		const std::vector<RE::BSGeometry*>* LightDependentsOf(const RE::NiAVObject* a_root) const;
+		ankerl::unordered_dense::map<const RE::NiAVObject*, std::vector<RE::BSGeometry*>> lightDependents;  // by light entry
 		ankerl::unordered_dense::set<const RE::NiAVObject*> lightCandidateSet;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint64_t> lightSignature;  // its geometries, as a set
 		std::vector<const RE::NiAVObject*> lightEntriesDirty;

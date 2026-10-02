@@ -264,17 +264,36 @@ namespace DCLF
 			entry.sunEntryNode = nullptr;
 			ResolveSunEntry(entry, *a_geometry);
 			if (entry.sunEntryNode) {
-				auto& dependents = rootDependents[entry.sunEntryNode];
-				lightEntriesAppeared += dependents.empty() ? 1 : 0;
-				dependents.push_back(a_geometry);
+				rootDependents[entry.sunEntryNode].push_back(a_geometry);
 				if (const auto* reference = entry.sunEntryNode->GetUserData(); reference && rootReference.try_emplace(entry.sunEntryNode, reference).second)
 					referenceRoot[reference] = entry.sunEntryNode;
 				entry.listedRoot = entry.sunEntryNode;
 				dirtyRoots.push_back(entry.sunEntryNode);
 				MarkSunEntryDirty(entry.sunEntryNode);
 			}
+			if (const auto* lightEntry = LightEntryOf(entry, *a_geometry)) {
+				auto& dependents = lightDependents[lightEntry];
+				lightEntriesAppeared += dependents.empty() ? 1 : 0;
+				dependents.push_back(a_geometry);
+				entry.lightRoot = lightEntry;
+				MarkLightEntryDirty(lightEntry);
+			}
 		}
 		pendingEvaluation.push_back(a_geometry);
+	}
+
+	const RE::NiAVObject* SceneStore::LightEntryOf(const Tracked& a_tracked, const RE::BSGeometry& a_geometry) const
+	{
+		// The category node's child it hangs from: an actor's root is its light entry, whatever is under it (carried items too).
+		if (const auto* category = a_tracked.categoryNode) {
+			const RE::NiAVObject* root = &a_geometry;
+			for (const auto* node = a_geometry.parent; node && node != category; node = node->parent)
+				root = node;
+			if (root != &a_geometry && root->parent == category)
+				if (const auto* reference = root->GetUserData(); reference && reference->GetFormType() == RE::FormType::ActorCharacter)
+					return root;
+		}
+		return a_tracked.sunEntryNode && !IsCategoryNode(a_tracked.sunEntryNode) ? a_tracked.sunEntryNode : nullptr;
 	}
 
 	void SceneStore::AddSubtree(RE::NiAVObject* a_root)

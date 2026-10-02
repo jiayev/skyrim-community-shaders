@@ -1169,9 +1169,18 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     -   a `kAlwaysDraw` node is visited untested;
     -   any other goes through `FUN_141519fe0`. It runs `FUN_14151a1e0(process, &worldBound)` and, when visible, stores
         the result at `+0x301F4` and calls `OnVisible`.
-    -   `FUN_14151a1e0` is pure. It tests the bound against the light's sphere (centre `+0x30218`, radius `+0x30224`),
-        then against the half-space `+0x30208`/`+0x30214`, with the second hemisphere's process at `+0x30200`.
+    -   `FUN_14151a1e0` is pure. It tests the bound against the light's sphere (centre `+0x30218`, radius `+0x30224`):
+        visible when `(|c - centre| - r) - radius < 0`. It then tests the half-space `+0x30208`/`+0x30214`, with the second
+        hemisphere's process at `+0x30200`, but only to say which hemisphere: a bound inside the sphere is visible either
+        way (with no second hemisphere, only the degenerate `r == 0` on the plane is culled). So the test is the sphere.
     -   `kAccumulated` is set on a visited node when `+0x11D` (`updateAccumulateFlag`) is set: clear for point lights.
+    -   Its other modes (cull mode `+0x30198`): 1 (`kAllPass`) visits untested, 2 (`kAllFail`) culls. A node with flag bit 12
+        (unless `ignorePreprocess`) is culled when bit 20 is set, else visited untested. A `kAlwaysDraw` node is visited
+        untested. With a compound frustum (`+0x301A0`, its `freeOp` `+0xBC` not 0) and a mode other than 3, a node must pass
+        `FUN_14151a1e0` and `BSCompoundFrustum::Process` (the portals), with the active plane state saved and restored
+        around it.
+    -   The process is static and every point light's: its sphere is the current light's only during that light's
+        `Accumulate`. The light's mask bit is its accumulators' `+0x164` (`+0x160` the shadow-light count + 1).
 -   **`BSMultiBoundNode::OnVisible`** (`0x140e2d710`):
     -   it tests its multibound only when the node is not `kAlwaysDraw` and the cull mode is neither 1 nor 3 (mode 4
         fresh; other modes cached per frame on the shape);

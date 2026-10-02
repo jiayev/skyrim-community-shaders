@@ -24,6 +24,7 @@ namespace DCLF
 	{
 		std::uint32_t generation = 0;
 		ankerl::unordered_dense::map<const RE::NiAVObject*, std::uint32_t> entries;     // entry node -> entry index
+		std::vector<const RE::NiAVObject*> entryNodes;                                  // entry index -> entry node
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> geometries;  // every tracked geometry under one -> geometry index
 		std::vector<std::uint32_t> geometryEntry;                                       // geometry index -> entry index
 		// Per geometry index: a main-pass table object PrimaryCull can give a synthetic pass (SceneStore::PrimaryEntryAllows);
@@ -50,6 +51,9 @@ namespace DCLF
 		// 0xFFFF: it reads the mask, then zeroes it): the engine's mask holds none of the sun's bits after it, so DCLF's
 		// are not written again that frame.
 		std::unique_ptr<std::atomic<std::uint32_t>[]> cleared;
+		// The paraboloid mode's (LocalLightCull): per candidate index, three stamped words (LocalLightCull's reach kinds) of the
+		// point lights whose cull reached the entry this frame and skipped it (Process1). Null for the sun's.
+		std::unique_ptr<std::atomic<std::uint64_t>[]> lightReach;
 	};
 
 	/**
