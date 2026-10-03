@@ -589,7 +589,7 @@ void CSEditor::SelectWeather(RE::Sky* sky, int filteredIdx)
 	auto selectedWeather = s_filteredWeathers[filteredIdx];
 
 	if (s_accelerateWeatherChange)
-		sky->ForceWeather(selectedWeather, false);
+		Util::ForceWeather(sky, selectedWeather, false);
 	else
 		sky->SetWeather(selectedWeather, true, false);
 
