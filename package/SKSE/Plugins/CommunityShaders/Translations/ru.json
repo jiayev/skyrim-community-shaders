@@ -765,7 +765,6 @@
     "feature.linear_lighting.projected_effects_multiplier": "Множитель проецируемых эффектов",
     "feature.linear_lighting.tab_advanced": "Дополнительно",
     "feature.linear_lighting.tab_general": "Общее",
-    "feature.linear_lighting.vanilla_diffuse_color_multiplier": "Ванильный множитель диффузного цвета",
     "feature.lod_blending.description": "Обеспечивает плавные визуальные переходы между объектами LOD и объектами полной детализации, устраняя резкие переходы и создавая плавную визуальную непрерывность.",
     "feature.lod_blending.disable_terrain_vertex_colors": "Отключить цвета вершин рельефа",
     "feature.lod_blending.disable_terrain_vertex_colors_tooltip": "Отключает раскраску вершин на ближнем рельефе. Лучше сочетать с LOD рельефа, сгенерированным в xLODGen с интенсивностью цвета вершин 0.",
@@ -1996,5 +1995,6 @@
     "feature.cs_editor.using_default_settings": "Используются настройки по умолчанию",
     "feature.cs_editor.weather": "Погода",
     "feature.cs_editor.weather_controls": "Управление погодой",
-    "feature.cs_editor.weather_picker": "Выбор погоды"
+    "feature.cs_editor.weather_picker": "Выбор погоды",
+    "feature.linear_lighting.vanilla_diffuse_color_multiplier": "Ванильный множитель диффузного цвета"
 }

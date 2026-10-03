@@ -237,6 +237,12 @@ namespace BrowserUI
 		return clicked;
 	}
 
+	bool FilterChip(const char* id, const ChipFace& face, bool selected)
+	{
+		const ImVec4 accent = Util::Colors::GetAccent();
+		return Chip(id, face.label, face.icon, face.iconColor ? &*face.iconColor : nullptr, selected ? &accent : nullptr);
+	}
+
 	void SameLineIfFits(float width)
 	{
 		ImGui::SameLine();

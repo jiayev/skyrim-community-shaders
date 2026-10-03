@@ -58,6 +58,7 @@
 #define ICON_FA_SKULL "\xef\x95\x8c"	// U+f54c
 #define ICON_FA_STORE "\xef\x95\x8e"	// U+f54e
 #define ICON_FA_WALKING "\xef\x95\x94"	// U+f554
+#define ICON_FA_FILE_EXPORT "\xef\x95\xae"	// U+f56e
 #define ICON_FA_HOTEL "\xef\x96\x94"	// U+f594
 #define ICON_FA_LAYER_GROUP "\xef\x97\xbd"	// U+f5fd
 #define ICON_FA_CROSS "\xef\x99\x94"	// U+f654
@@ -124,6 +125,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf54c, 0xf54c,
 	0xf54e, 0xf54e,
 	0xf554, 0xf554,
+	0xf56e, 0xf56e,
 	0xf594, 0xf594,
 	0xf5fd, 0xf5fd,
 	0xf654, 0xf654,

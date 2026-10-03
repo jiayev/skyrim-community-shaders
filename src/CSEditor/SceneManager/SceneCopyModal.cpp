@@ -25,6 +25,7 @@
 #include "Menu/Icons/helpers/LocationTargetIcons.h"
 #include "Menu/Icons/helpers/WeatherTypeIcons.h"
 #include "SceneSettingsContextRules.h"
+#include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -54,8 +55,6 @@ namespace
 	constexpr float kPeriodDotRadiusEm = 0.16f;
 
 	constexpr size_t kSearchBufferSize = 256;
-	/// Decimals a float shows in the details, before trailing zeros are trimmed.
-	constexpr int kValueDecimals = 3;
 
 	constexpr ImGuiTableFlags kListTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
@@ -235,13 +234,9 @@ namespace
 	};
 	std::map<SceneContextId, SourceCheck> sourceChecks;
 
-	/** @brief What a filter chip shows: its label, optionally led by a coloured glyph. */
-	struct ChipFace
-	{
-		const char* label = nullptr;
-		Icons::GlyphRef icon{};
-		std::optional<ImVec4> iconColor;
-	};
+	using BrowserUI::ChipFace;
+	using BrowserUI::FilterChip;
+	using Util::Settings::FormatValue;
 
 	/** @brief What one side of the preview names, and the glyph leading it. */
 	struct PreviewSide
@@ -355,22 +350,6 @@ namespace
 	std::string FormatCount(const char* format, size_t count)
 	{
 		return std::vformat(format, std::make_format_args(count));
-	}
-
-	/** @brief A value as the details show it: strings unquoted, booleans as On / Off, floats without trailing zeros. */
-	std::string FormatValue(const json& value)
-	{
-		if (value.is_string())
-			return value.get<std::string>();
-		if (value.is_boolean())
-			return value.get<bool>() ? T(TKEY("scene_copy_value_on"), "On") : T(TKEY("scene_copy_value_off"), "Off");
-		if (!value.is_number_float())
-			return value.dump();
-		auto text = std::format("{:.{}f}", value.get<double>(), kValueDecimals);
-		text.erase(text.find_last_not_of('0') + 1);
-		if (text.ends_with('.'))
-			text.pop_back();
-		return text;
 	}
 
 	/** @brief The glyph an outcome's chip and rows carry, in the outcome's colour. */
@@ -553,14 +532,6 @@ namespace
 	{
 		*static_cast<int*>(data->UserData) += data->EventKey == ImGuiKey_UpArrow ? -1 : 1;
 		return 0;
-	}
-
-	/** @brief A filter toggle: a chip filled in the accent while selected. */
-	bool FilterChip(const char* id, const ChipFace& face, bool selected)
-	{
-		const ImVec4 accent = Util::Colors::GetAccent();
-		return BrowserUI::Chip(id, face.label, face.icon, face.iconColor ? &*face.iconColor : nullptr,
-			selected ? &accent : nullptr);
 	}
 
 	/** @brief An "All" chip, then one chip per option, wrapping as needed; picking one narrows the filter to it. */

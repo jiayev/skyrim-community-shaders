@@ -74,6 +74,18 @@ namespace
 			return false;
 		}
 	}
+
+	/** @brief Erases one setting leaf, then any groups it leaves empty. */
+	void EraseSettingPath(json& document, json::json_pointer pointer)
+	{
+		while (!pointer.empty() && document.contains(pointer)) {
+			auto& parent = document.at(pointer.parent_pointer());
+			parent.erase(pointer.back());
+			if (!parent.empty())
+				return;
+			pointer = pointer.parent_pointer();
+		}
+	}
 }
 
 size_t SettingsOverrideManager::DiscoverOverrides()
@@ -84,6 +96,7 @@ size_t SettingsOverrideManager::DiscoverOverrides()
 
 	overrides.clear();
 	featureOverrideMap.clear();
+	++revision;
 
 	// Overrides/ first, then each enabled pack in layering order: later files win merge conflicts.
 	DiscoverDirectory(GetOverridesDirectory(), {});
@@ -319,19 +332,27 @@ size_t SettingsOverrideManager::ReapplyFeatureOverrides(const std::string& featu
 	return ApplyOverrides(featureName, featureJson);
 }
 
-void SettingsOverrideManager::SetOverrideEnabled(const std::string& modName, const std::string& featureName, bool isEnabled)
+bool SettingsOverrideManager::SetOverrideEnabled(const std::string& filePath, bool isEnabled)
 {
-	for (auto& override : overrides) {
-		if (override.modName == modName &&
-			((featureName.empty() && override.isGlobal) || override.featureName == featureName)) {
-			override.enabled = isEnabled;
-			logger::info("{} override from {} for {}",
-				isEnabled ? "Enabled" : "Disabled",
-				modName,
-				featureName.empty() ? "Global" : featureName);
-			break;
-		}
+	// Same eligibility as DeleteFile: only discovered Overrides/ files, never a pack's.
+	const auto found = std::ranges::find(overrides, filePath, &OverrideInfo::filePath);
+	if (found == overrides.end() || !found->packId.empty()) {
+		return false;
 	}
+
+	json document;
+	if (!ReadOverrideDocument(filePath, document)) {
+		return false;
+	}
+	document["_metadata"]["enabled"] = isEnabled;
+	if (!IsValidOverrideDocument(document, filePath) ||
+		!Util::FileHelpers::WriteJsonAtomically(filePath, document, kOverrideJsonIndent, "override file")) {
+		return false;
+	}
+
+	logger::info("{} override file {}", isEnabled ? "Enabled" : "Disabled", filePath);
+	RefreshOverrides();
+	return true;
 }
 
 void SettingsOverrideManager::RefreshOverrides()
@@ -1303,61 +1324,85 @@ bool SettingsOverrideManager::IsValidOverrideDocument(const json& document, cons
 	return ValidateOverrideFormat(document, path) && ValidateJsonDataTypes(document, "", path);
 }
 
-bool SettingsOverrideManager::ExportSettings(const std::string& modName, const std::string& featureName,
-	std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack)
+std::filesystem::path SettingsOverrideManager::GetExportDestination(const std::string& modName, const std::string& featureName, bool toPresetPack) const
 {
 	const auto safeName = Util::FileHelpers::SanitizeFileName(modName);
+	if (safeName.empty()) {
+		return {};
+	}
+	// The real path, not the VFS one, so the export lands in a folder the user can actually write to.
+	return toPresetPack ?
+	           UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath() / safeName / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName) :
+	           GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
+}
+
+std::optional<json> SettingsOverrideManager::ReadExportTarget(const std::filesystem::path& destination)
+{
+	std::error_code ec;
+	if (!std::filesystem::exists(destination, ec)) {
+		return json::object();
+	}
+	json document;
+	if (!ReadOverrideDocument(destination, document)) {
+		return std::nullopt;
+	}
+	return document;
+}
+
+bool SettingsOverrideManager::ExportSettings(const std::string& modName, const std::string& featureName,
+	std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack, std::span<const std::string> removePaths)
+{
+	const auto destination = GetExportDestination(modName, featureName, toPresetPack);
 	auto* feature = Feature::FindFeatureByShortName(featureName);
-	if (safeName.empty() || settingPaths.empty() || !feature || !feature->UsesMainSettings()) {
+	if (destination.empty() || (settingPaths.empty() && removePaths.empty()) || !feature || !feature->UsesMainSettings()) {
 		return false;
 	}
 
 	const auto available = Util::Settings::GetExportSettings(featureName, featureSettings);
-	for (const auto& path : settingPaths) {
-		if (std::ranges::find(available, path, &Util::Settings::ExportSetting::path) == available.end()) {
-			logger::error("Cannot export unknown setting '{}' of {}", path, featureName);
-			return false;
+	for (const auto& paths : { settingPaths, removePaths }) {
+		for (const auto& path : paths) {
+			if (std::ranges::find(available, path, &Util::Settings::ExportSetting::path) == available.end()) {
+				logger::error("Cannot export unknown setting '{}' of {}", path, featureName);
+				return false;
+			}
 		}
 	}
 
 	const auto selected = Util::Settings::SelectSettingPaths(featureSettings, { settingPaths.begin(), settingPaths.end() });
-	if (selected.empty()) {
+	if (selected.empty() && !settingPaths.empty()) {
 		return false;
-	}
-
-	std::filesystem::path destination;
-	if (toPresetPack) {
-		// The real path, not the VFS one, so the export lands in a folder the user can actually write to.
-		const auto packRoot = UnifiedPresetCatalog::GetSingleton().GetPresetsRealPath() / safeName;
-		Util::FileHelpers::EnsureDirectoryExists(packRoot / UnifiedPresetCatalog::kBaselineSubdir);
-		if (!UnifiedPresetCatalog::EnsureBaselineManifest(packRoot, modName)) {
-			return false;
-		}
-		destination = packRoot / UnifiedPresetCatalog::kBaselineSubdir / std::format("{}.json", featureName);
-	} else {
-		destination = GetOverridesDirectory() / std::format("{}_{}.json", safeName, featureName);
 	}
 
 	// Merge into an existing file of the same name so repeated exports accumulate rather than truncate,
 	// reading it raw so any _metadata the author wrote survives.
-	json document = json::object();
-	std::error_code ec;
-	if (std::filesystem::exists(destination, ec) && !ReadOverrideDocument(destination, document)) {
+	auto document = ReadExportTarget(destination);
+	if (!document) {
 		logger::error("Refusing to overwrite unreadable override file {}", destination.string());
 		return false;
 	}
-	document.update(selected, true);
+	for (const auto& path : removePaths) {
+		EraseSettingPath(*document, json::json_pointer(path));
+	}
+	document->update(selected, true);
 
-	if (!ValidateOverrideFormat(document, destination.string()) || !ValidateJsonDataTypes(document, "", destination.string())) {
+	if (!IsValidOverrideDocument(*document, destination)) {
 		return false;
+	}
+
+	if (toPresetPack) {
+		const auto packRoot = destination.parent_path().parent_path();
+		Util::FileHelpers::EnsureDirectoryExists(destination.parent_path());
+		if (!UnifiedPresetCatalog::EnsureBaselineManifest(packRoot, modName)) {
+			return false;
+		}
 	}
 
 	// Atomic so a failed export cannot leave a third party's override file truncated.
-	if (!Util::FileHelpers::WriteJsonAtomically(destination, document, kOverrideJsonIndent, "override file")) {
+	if (!Util::FileHelpers::WriteJsonAtomically(destination, *document, kOverrideJsonIndent, "override file")) {
 		return false;
 	}
 
-	logger::info("Exported {} setting(s) of {} to {}", selected.size(), featureName, destination.string());
+	logger::info("Exported {} setting(s) of {} to {}, removed {}", settingPaths.size(), featureName, destination.string(), removePaths.size());
 	RefreshOverrides();
 	return true;
 }

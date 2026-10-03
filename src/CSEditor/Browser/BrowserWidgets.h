@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <imgui.h>
+#include <optional>
 #include <string>
 
 /** @brief Hand-drawn five-point star (the icon font has no outline star). Defined in EditorWindow.cpp. */
@@ -59,6 +60,17 @@ namespace BrowserUI
 	 */
 	bool Chip(const char* id, const char* label, Icons::GlyphRef icon = {}, const ImVec4* iconColor = nullptr,
 		const ImVec4* tint = nullptr);
+
+	/** @brief What a filter chip shows: its label, optionally led by a coloured glyph. */
+	struct ChipFace
+	{
+		const char* label = nullptr;
+		Icons::GlyphRef icon{};
+		std::optional<ImVec4> iconColor;
+	};
+
+	/** @brief A filter toggle: a chip filled in the accent while selected. */
+	bool FilterChip(const char* id, const ChipFace& face, bool selected);
 
 	/** @brief Stays on the current line when `width` more pixels fit, else wraps to the next. */
 	void SameLineIfFits(float width);

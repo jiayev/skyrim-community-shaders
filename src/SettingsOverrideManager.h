@@ -3,6 +3,7 @@
 #include <ctime>
 #include <filesystem>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -86,6 +87,9 @@ public:
 	 */
 	const std::vector<OverrideInfo>& GetOverrides() const { return overrides; }
 
+	/** @brief Bumped on every discovery, so callers can cache what they derive from GetOverrides(). */
+	std::uint64_t GetRevision() const { return revision; }
+
 	/**
 	 * @brief Gets overrides for a specific feature
 	 * @param featureName The short name of the feature
@@ -109,12 +113,10 @@ public:
 	size_t ReapplyFeatureOverrides(const std::string& featureName, json& featureJson);
 
 	/**
-	 * @brief Enables or disables a specific override
-	 * @param modName Name of the mod
-	 * @param featureName Feature name (empty for global)
-	 * @param isEnabled Whether to enable the override
+	 * @brief Persists `_metadata.enabled` in an Overrides/ file present in GetOverrides(); takes effect on the next load
+	 * @return True if the file was rewritten; pack files are refused
 	 */
-	void SetOverrideEnabled(const std::string& modName, const std::string& featureName, bool isEnabled);
+	bool SetOverrideEnabled(const std::string& filePath, bool isEnabled);
 
 	/**
 	 * @brief Clears all cached overrides and forces rediscovery
@@ -230,14 +232,28 @@ public:
 	bool DeleteFile(const std::string& filePath);
 
 	/**
+	 * @brief The file ExportSettings writes for these arguments
+	 * @return Empty when modName sanitizes to nothing
+	 */
+	std::filesystem::path GetExportDestination(const std::string& modName, const std::string& featureName, bool toPresetPack) const;
+
+	/**
+	 * @brief Reads an export destination raw, keeping its _metadata
+	 * @return An empty object when the file does not exist yet, nullopt when it exists but cannot be read
+	 */
+	static std::optional<json> ReadExportTarget(const std::filesystem::path& destination);
+
+	/**
 	 * @brief Writes selected feature settings to a shippable override file, merging into an existing one
 	 * @param modName Mod name used for the file prefix, or the pack folder name when toPresetPack; sanitized before use
 	 * @param settingPaths JSON pointers into featureSettings, as reported by Util::Settings::GetExportSettings
 	 * @param toPresetPack Write `Presets/<modName>/Baseline/<Feature>.json` (creating a starter manifest) instead of an Overrides/ file
+	 * @param removePaths Settings to drop from the existing file, in the same form as settingPaths
 	 * @return True if the override file was written
 	 */
 	bool ExportSettings(const std::string& modName, const std::string& featureName,
-		std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack = false);
+		std::span<const std::string> settingPaths, const json& featureSettings, bool toPresetPack = false,
+		std::span<const std::string> removePaths = {});
 
 	/**
 	 * @brief Whether a document passes the format and data checks every override file is loaded with,
@@ -319,6 +335,7 @@ private:
 	std::unordered_map<std::string, std::vector<size_t>> featureOverrideMap;  // Maps feature name to override indices
 	bool enabled = true;
 	bool discovered = false;
+	std::uint64_t revision = 0;
 
 	static constexpr const char* GLOBAL_SUFFIX = "_Global.json";
 

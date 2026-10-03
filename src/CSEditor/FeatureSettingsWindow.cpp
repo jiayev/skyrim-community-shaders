@@ -18,7 +18,6 @@
 #include "FeatureListPicker.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
-#include "IconsLucide.h"
 #include "Menu.h"
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
@@ -99,24 +98,6 @@ namespace
 		return true;
 	}
 
-	/** @brief Draw the shared export-overwrite icon button (tooltip carries the old label). */
-	void DrawExportOverwriteIcon(Feature* feature, const char* id)
-	{
-		const float iconSize = ImGui::GetFrameHeight();
-		{
-			auto _style = Util::TransparentIconButtonStyle();
-			if (Icons::Button(id, Icons::LC(ICON_LC_SHARE), ImVec2(iconSize, iconSize)))
-				FeatureOverwritesPanel::BeginExport(feature);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.export_overwrite_tooltip",
-					"Export selected settings as a feature overwrite file.\n"
-					"Overwrites are loaded at startup."));
-		}
-	}
-
 	/** @brief Export overwrite icon, boot controls, and the settings body of one feature. */
 	void DrawSettingsPanel(Feature* feature)
 	{
@@ -134,7 +115,7 @@ namespace
 			if (drewBoot)
 				ImGui::SameLine();
 			ImGui::SetCursorPosX(rowStartX + std::max(0.0f, rowAvail - iconSize));
-			DrawExportOverwriteIcon(feature, "##FeatureExportOverwrite");
+			FeatureOverwritesPanel::DrawExportButton(feature, "##FeatureExportOverwrite");
 		}
 
 		if (!feature->loaded) {

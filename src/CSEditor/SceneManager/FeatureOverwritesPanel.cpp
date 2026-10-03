@@ -1,197 +1,222 @@
 #include "FeatureOverwritesPanel.h"
 
-#include "CSEditor/EditorWindow.h"
+#include "CSEditor/Browser/BrowserWidgets.h"
 #include "Feature.h"
+#include "I18n/I18n.h"
+#include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
 #include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsManager.h"
 #include "SettingsOverrideManager.h"
-#include "Utils/FileSystem.h"
 #include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
 
 #include <algorithm>
+#include <cassert>
 #include <filesystem>
 #include <format>
+#include <tuple>
+#include <unordered_map>
 
 #define I18N_KEY_PREFIX "feature.scene_manager.overwrites."
 
 namespace
 {
-	constexpr size_t kVisibleExportRows = 12;
-	constexpr float kExportPopupWidthEm = 30.0f;
-	constexpr const char* kExportComboId = "##FeatureOverwritesExportFeature";
+	constexpr int kColumnCount = 6;
+	constexpr int kActionButtonCount = 2;
 
-	struct ExportState
+	/** @brief One overwrite file as the table shows it, copied so actions that rediscover mid-frame are safe. */
+	struct OverwriteRow
 	{
-		char modName[128]{};
-		std::vector<std::string> shortNames;
-		std::vector<std::string> labels;
-		int featureIndex = -1;
-		std::vector<Util::Settings::ExportSetting> settings;
-		std::vector<uint8_t> selected;
-		ImGuiTextFilter filter;
-		bool failed = false;
-		bool featureLocked = false;
-		bool toPresetPack = false;
+		std::string feature;
+		std::string featureName;
+		std::string modName;
+		std::string packId;
+		std::string filePath;
+		/// Newline-joined keys the feature does not have; while any exist the file is not applied.
+		std::string unknownKeys;
+		size_t settingCount = 0;
+		bool enabled = true;
 	};
 
-	ExportState exportState;
+	SceneSettingsManager::RevisionCache<std::vector<OverwriteRow>> rowCache;
 	Util::ConfirmationPopup deletePopup;
 	std::string deletePath;
 	bool actionFailed = false;
+	bool notAppliedOnly = false;
 
-	std::string GetExportPopupTitle()
+	std::vector<OverwriteRow> BuildRows()
 	{
-		return std::string(T(TKEY("export.title"), "Export Feature Settings")) + "##FeatureOverwritesExport";
-	}
-
-	/** @brief Selects a feature and lists its exportable settings, all initially selected. */
-	void SelectFeature(int index)
-	{
-		exportState.featureIndex = index;
-		exportState.settings.clear();
-		exportState.filter.Clear();
-		exportState.failed = false;
-		if (auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[index])) {
-			json settings;
-			{
-				// Export the author's own values, not whatever the active scene is applying.
-				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-				feature->SaveSettings(settings);
+		auto* manager = SettingsOverrideManager::GetSingleton();
+		std::vector<OverwriteRow> rows;
+		for (const auto& info : manager->GetOverrides()) {
+			if (!manager->IsApplicable(info))
+				continue;
+			auto* feature = info.isGlobal ? nullptr : Feature::FindFeatureByShortName(info.featureName);
+			OverwriteRow row{ .feature = feature ? feature->GetDisplayName() : std::string(T(TKEY("global"), "Global")),
+				.featureName = info.featureName,
+				.modName = info.modName,
+				.packId = info.packId,
+				.filePath = info.filePath,
+				.settingCount = Util::Settings::GetExportSettings(info.featureName, info.overrideData).size(),
+				.enabled = info.enabled };
+			auto unknownKeys = info.unknownKeys;
+			if (feature && unknownKeys.empty()) {
+				// Rediscovery clears the verdict until the next load applies the file, so recheck against the live shape.
+				json shape;
+				feature->SaveSettings(shape);
+				Util::Settings::CollectUnknownSettingKeys(info.overrideData, shape, "", unknownKeys);
 			}
-			exportState.settings = Util::Settings::GetExportSettings(feature->GetShortName(), settings);
+			for (const auto& key : unknownKeys)
+				row.unknownKeys += (row.unknownKeys.empty() ? "" : "\n") + key;
+			rows.push_back(std::move(row));
 		}
-		exportState.selected.assign(exportState.settings.size(), uint8_t{ 1 });
+		std::ranges::sort(rows, {}, [](const OverwriteRow& row) { return std::tie(row.feature, row.modName); });
+		return rows;
 	}
 
-	void AddExportFeature(Feature* feature)
+	/** @brief Export button, and a chip narrowing the table to files that are not applied. */
+	void DrawToolbar(const std::vector<OverwriteRow>& rows)
 	{
-		exportState.shortNames.push_back(feature->GetShortName());
-		exportState.labels.push_back(feature->GetDisplayName());
+		if (Icons::LabeledButton("##export", Icons::FA(ICON_FA_FILE_EXPORT), T(TKEY("export.button"), "Export Settings")))
+			FeatureOverwritesPanel::BeginExport();
+		Util::AddTooltip(T(TKEY("export.toolbar_tooltip"), "Saves settings of one or more features as overwrite files loaded at startup."));
+
+		auto count = static_cast<size_t>(std::ranges::count_if(rows, [](const OverwriteRow& row) { return row.enabled && !row.unknownKeys.empty(); }));
+		notAppliedOnly &= count != 0;
+		if (count == 0)
+			return;
+		const auto label = std::vformat(T(TKEY("not_applied_count"), "{} not applied"), std::make_format_args(count));
+		const ImVec4 warning = Util::Colors::GetWarning();
+		BrowserUI::RightAlign(BrowserUI::MeasureChip(label.c_str(), true));
+		if (BrowserUI::Chip("##notApplied", label.c_str(), Icons::FA(ICON_FA_TIMES), &warning, notAppliedOnly ? &warning : nullptr))
+			notAppliedOnly = !notAppliedOnly;
+		Util::AddTooltip(notAppliedOnly ? T("cs_editor.scene_copy_filter_clear_tooltip", "Click to list every setting again.") :
+		                                  T(TKEY("not_applied_tooltip"), "These name settings their feature does not have, so they are skipped. Click to list only them."));
 	}
 
-	/** @brief Fills the picker with loaded features that have exportable settings, sorted by display name. */
-	void AddExportableFeatures()
+	void DrawEnableToggle(const OverwriteRow& row)
 	{
-		auto features = Feature::GetFeatureList();
-		std::ranges::sort(features, [](Feature* a, Feature* b) { return a->GetDisplayName() < b->GetDisplayName(); });
-		for (auto* feature : features)
-			if (feature->loaded && FeatureOverwritesPanel::HasExportableSettings(feature))
-				AddExportFeature(feature);
+		const bool isPack = !row.packId.empty();
+		bool enabled = row.enabled;
+		{
+			const Util::DisableGuard pack(isPack);
+			if (ImGui::Checkbox("##enabled", &enabled))
+				actionFailed = !SettingsOverrideManager::GetSingleton()->SetOverrideEnabled(row.filePath, enabled);
+		}
+		Util::AddTooltip(isPack ? T(TKEY("enable_pack_tooltip"), "Part of a preset pack. Enable or disable the pack from the Presets page.") :
+		                          T(TKEY("enable_tooltip"), "Loads this overwrite at startup. Changes take effect on the next game start."),
+			Util::kTooltipWhenDisabled);
 	}
 
-	/** @brief Draws the feature picker; returns true once a feature is selected. */
-	bool DrawFeaturePicker()
+	void DrawSource(const OverwriteRow& row)
 	{
-		ImGui::SetNextItemWidth(-FLT_MIN);
-		const char* preview = exportState.featureIndex >= 0 ? exportState.labels[exportState.featureIndex].c_str() :
-		                                                      T(TKEY("export.select_feature"), "Select Feature...");
-		if (ImGui::BeginCombo(kExportComboId, preview)) {
-			const auto searchText = Util::DrawComboSearchInput(kExportComboId);
-			for (size_t index = 0; index < exportState.shortNames.size(); ++index) {
-				const auto& label = exportState.labels[index];
-				if (!searchText.empty() && !Util::StringMatchesSearch(label, searchText))
-					continue;
-				ImGui::PushID(exportState.shortNames[index].c_str());
-				if (ImGui::Selectable(label.c_str(), static_cast<int>(index) == exportState.featureIndex)) {
-					SelectFeature(static_cast<int>(index));
-					Util::ClearComboSearch(kExportComboId);
-				}
-				ImGui::PopID();
-			}
-			ImGui::EndCombo();
+		ImGui::TextUnformatted(row.modName.c_str());
+		Util::AddTooltip(row.filePath.c_str());
+		if (row.packId.empty())
+			return;
+		BrowserUI::InlineBadge(T(TKEY("pack_badge"), "PACK"), Util::Colors::GetInfo());
+		Util::AddTooltip(T(TKEY("preset_pack_tooltip"), "Applied from a Baseline preset pack. Manage it from the Presets page."));
+	}
+
+	void DrawStatus(const OverwriteRow& row)
+	{
+		if (!row.enabled) {
+			Util::TextUnformattedDisabled(T(TKEY("status_disabled"), "Disabled"));
+			Util::AddTooltip(T(TKEY("status_disabled_tooltip"), "Not loaded from the next game start."));
+		} else if (!row.unknownKeys.empty()) {
+			ImGui::TextColored(Util::Colors::GetWarning(), "%s", T(TKEY("status_not_applied"), "Not applied"));
+			const auto tooltip = std::format("{}\n{}",
+				T(TKEY("status_not_applied_tooltip"), "Names settings this feature does not have, so none of it is applied:"), row.unknownKeys);
+			Util::AddTooltip(tooltip.c_str());
 		} else {
-			Util::ClearComboSearch(kExportComboId);
+			ImGui::TextColored(Util::Colors::GetSuccess(), "%s", T(TKEY("status_applied"), "Applied"));
 		}
-		return exportState.featureIndex >= 0;
 	}
 
-	void DrawSelectionButtons()
+	void RequestDelete(const OverwriteRow& row)
 	{
-		if (ImGui::Button(T(TKEY("select_all"), "Select All")))
-			std::ranges::fill(exportState.selected, uint8_t{ 1 });
+		const auto filename = std::filesystem::path(row.filePath).filename().string();
+		deletePath = row.filePath;
+		deletePopup.title = T(TKEY("delete_title"), "Delete Feature Overwrite?");
+		deletePopup.message = std::vformat(T(TKEY("delete_message"), "Delete '{0}' from disk? It stops applying on the next load; values already in use are kept."),
+			std::make_format_args(filename));
+		deletePopup.confirmLabel = T(TKEY("delete"), "Delete");
+		deletePopup.cancelLabel = T(TKEY("cancel"), "Cancel");
+		deletePopup.Request();
+	}
+
+	/** @brief Edit, then Delete for Overrides files or Open folder for pack files, which the Presets page owns. */
+	void DrawActions(const OverwriteRow& row)
+	{
+		auto* feature = row.featureName.empty() ? nullptr : Feature::FindFeatureByShortName(row.featureName);
+		const bool editable = feature && FeatureOverwritesPanel::HasExportableSettings(feature);
+		{
+			const Util::DisableGuard global(!editable);
+			if (BrowserUI::IconButton("##edit", Icons::FA(ICON_FA_PEN),
+					editable ? T(TKEY("edit_tooltip"), "Edit: opens the export on this file with its settings ticked.") :
+							   T(TKEY("edit_global_tooltip"), "Global overwrites span several features and cannot be edited here.")))
+				FeatureOverwritesPanel::BeginExportInto(feature, row.modName, !row.packId.empty());
+		}
 		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("select_none"), "Select None")))
-			std::ranges::fill(exportState.selected, uint8_t{ 0 });
+		if (row.packId.empty()) {
+			if (BrowserUI::IconButton("##delete", SceneActionIcons::kDelete, T(TKEY("delete"), "Delete"), false,
+					ImGui::GetColorU32(Util::Colors::GetError())))
+				RequestDelete(row);
+		} else if (BrowserUI::IconButton("##folder", Icons::FA(ICON_FA_FOLDER_OPEN),
+					   T(TKEY("open_pack_tooltip"), "Open the pack folder. Remove the pack from the Presets page."))) {
+			UnifiedPresetCatalog::GetSingleton().OpenPackFolder(row.packId);
+		}
 	}
 
-	/** @brief Search box and filtered list of the selected feature's exportable settings. */
-	void DrawSettingList()
+	void DrawRow(const OverwriteRow& row)
 	{
-		ImGui::SetNextItemWidth(-FLT_MIN);
-		if (ImGui::InputTextWithHint("##SettingsFilter", T(TKEY("export.search"), "Search Settings"),
-				exportState.filter.InputBuf, IM_ARRAYSIZE(exportState.filter.InputBuf)))
-			exportState.filter.Build();
-
-		std::vector<size_t> visible;
-		for (size_t index = 0; index < exportState.settings.size(); ++index)
-			if (exportState.filter.PassFilter(exportState.settings[index].label.c_str()))
-				visible.push_back(index);
-
-		const auto& style = ImGui::GetStyle();
-		const float rowHeight = ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f;
-		const auto rows = std::clamp(visible.size(), size_t{ 1 }, kVisibleExportRows);
-		const float height = rowHeight * static_cast<float>(rows) + style.WindowPadding.y * 2.0f;
-
-		if (ImGui::BeginChild("##Settings", ImVec2(0.0f, height), ImGuiChildFlags_Borders)) {
-			if (ImGui::BeginTable("##SettingList", 1, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
-				ImGuiListClipper clipper;
-				clipper.Begin(static_cast<int>(visible.size()), rowHeight);
-				while (clipper.Step()) {
-					for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
-						const auto index = visible[row];
-						const auto& setting = exportState.settings[index];
-						ImGui::PushID(setting.path.c_str());
-						ImGui::TableNextRow();
-						ImGui::TableNextColumn();
-						bool selected = exportState.selected[index] != 0;
-						if (ImGui::Checkbox(setting.label.c_str(), &selected))
-							exportState.selected[index] = selected;
-						Util::AddTooltip(setting.path.c_str());
-						ImGui::PopID();
-					}
-				}
-				ImGui::EndTable();
-			}
-		}
-		ImGui::EndChild();
-	}
-
-	/** @brief Draws one overwrite row and requests deletion when its button is pressed. */
-	void DrawOverwriteRow(const SettingsOverrideManager::OverrideInfo& info)
-	{
-		ImGui::PushID(info.filePath.c_str());
-		ImGui::TableNextRow();
+		const float rowHeight = BrowserUI::RowHeight();
+		ImGui::PushID(row.filePath.c_str());
+		ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+		ImGui::TableNextColumn();
+		if (row.enabled)
+			BrowserUI::RowStripe(ImGui::GetColorU32(row.unknownKeys.empty() ? Util::Colors::GetSuccess() : Util::Colors::GetWarning()), rowHeight);
+		DrawEnableToggle(row);
 
 		ImGui::TableNextColumn();
-		auto* feature = Feature::FindFeatureByShortName(info.featureName);
-		const auto name = feature ? feature->GetDisplayName() : std::string(T(TKEY("global"), "Global"));
-		ImGui::TextUnformatted(name.c_str());
+		ImGui::AlignTextToFramePadding();
+		ImGui::TextUnformatted(row.feature.c_str());
 
 		ImGui::TableNextColumn();
-		ImGui::TextUnformatted(info.modName.c_str());
+		ImGui::AlignTextToFramePadding();
+		DrawSource(row);
 
 		ImGui::TableNextColumn();
-		const auto filename = std::filesystem::path(info.filePath).filename().string();
-		ImGui::TextUnformatted(filename.c_str());
-		Util::AddTooltip(info.filePath.c_str());
+		ImGui::AlignTextToFramePadding();
+		ImGui::Text("%zu", row.settingCount);
 
 		ImGui::TableNextColumn();
-		if (!info.packId.empty()) {
-			// Removed from the Presets page, which owns the pack.
-			ImGui::TextDisabled("%s", T(TKEY("preset_pack"), "Preset pack"));
-			Util::AddTooltip(T(TKEY("preset_pack_tooltip"), "Applied from a Baseline preset pack. Manage it from the Presets page."));
-		} else if (ImGui::SmallButton(T(TKEY("delete"), "Delete"))) {
-			deletePath = info.filePath;
-			deletePopup.title = T(TKEY("delete_title"), "Delete Feature Overwrite?");
-			deletePopup.message = std::vformat(T(TKEY("delete_message"), "Delete '{0}' from disk? It stops applying on the next load; values already in use are kept."),
-				std::make_format_args(filename));
-			deletePopup.confirmLabel = T(TKEY("delete"), "Delete");
-			deletePopup.cancelLabel = T(TKEY("cancel"), "Cancel");
-			deletePopup.Request();
-		}
+		ImGui::AlignTextToFramePadding();
+		DrawStatus(row);
 
+		ImGui::TableNextColumn();
+		DrawActions(row);
 		ImGui::PopID();
+	}
+
+	void DrawTable(const std::vector<OverwriteRow>& rows)
+	{
+		BrowserUI::RowShadeScope shade;
+		if (!ImGui::BeginTable("##OverwriteFiles", kColumnCount, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_SizingStretchProp))
+			return;
+		const float actionsWidth = BrowserUI::IconButtonSize() * kActionButtonCount + ImGui::GetStyle().ItemSpacing.x * (kActionButtonCount - 1);
+		ImGui::TableSetupColumn("##enabled", ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("feature"), "Feature"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T(TKEY("source"), "Source"), ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn(T(TKEY("settings"), "Settings"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn(T(TKEY("status"), "Status"), ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn("##actions", ImGuiTableColumnFlags_WidthFixed, actionsWidth);
+		ImGui::TableHeadersRow();
+		for (const auto& row : rows)
+			if (!notAppliedOnly || (row.enabled && !row.unknownKeys.empty()))
+				DrawRow(row);
+		ImGui::EndTable();
 	}
 }
 
@@ -209,118 +234,20 @@ bool FeatureOverwritesPanel::HasExportableSettings(Feature* feature)
 	return it->second;
 }
 
-void FeatureOverwritesPanel::BeginExport(Feature* feature)
-{
-	// Reset field by field: ImGuiTextFilter holds ranges pointing into its own buffer, so it must not be copied.
-	exportState.shortNames.clear();
-	exportState.labels.clear();
-	exportState.settings.clear();
-	exportState.selected.clear();
-	exportState.featureIndex = -1;
-	exportState.failed = false;
-	exportState.filter.Clear();
-	exportState.featureLocked = feature != nullptr;
-	exportState.toPresetPack = false;
-
-	if (feature) {
-		AddExportFeature(feature);
-		SelectFeature(0);
-	} else {
-		AddExportableFeatures();
-	}
-
-	ImGui::OpenPopup(GetExportPopupTitle().c_str());
-}
-
-void FeatureOverwritesPanel::DrawExport()
-{
-	const auto title = GetExportPopupTitle();
-	if (!ImGui::IsPopupOpen(title.c_str()))
-		return;
-
-	const float width = ImGui::GetFontSize() * kExportPopupWidthEm;
-	ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, ImGui::GetMainViewport()->WorkSize.y));
-	bool open = true;
-	auto popup = Util::CenteredPopupModal(title.c_str(), &open);
-	if (!popup)
-		return;
-
-	if (EditorWindow::ClosePopupOnEscape())
-		return;
-
-	ImGui::InputText(T(TKEY("export.mod_name"), "Mod Name"), exportState.modName, IM_ARRAYSIZE(exportState.modName));
-	const auto modName = Util::FileHelpers::SanitizeFileName(exportState.modName);
-	ImGui::Checkbox(T(TKEY("export.to_pack"), "Save as Baseline preset pack"), &exportState.toPresetPack);
-	Util::AddTooltip(T(TKEY("export.to_pack_tooltip"),
-		"Writes Presets/<Mod Name>/Baseline/<Feature>.json with a starter manifest instead of an Overrides file.\n"
-		"It then appears on the Presets page under Baseline, with author, version and description you can edit in the manifest."));
-	ImGui::TextWrapped("%s", exportState.featureLocked ?
-								 T(TKEY("export.description_feature"), "Choose the settings to export, without scene-specific values.") :
-								 T(TKEY("export.description"), "Choose one feature and the settings to export, without scene-specific values."));
-	ImGui::TextWrapped("%s", T(TKEY("export.existing"), "Existing files with the same name are updated. Other settings and metadata are preserved."));
-
-	if (!exportState.featureLocked && !DrawFeaturePicker())
-		return;
-
-	DrawSelectionButtons();
-	DrawSettingList();
-
-	if (exportState.failed)
-		Util::Text::WrappedError("%s", T(TKEY("export.failed"), "Could not export the selected settings. Check the log and try again."));
-
-	const auto count = std::ranges::count(exportState.selected, uint8_t{ 1 });
-	auto disabled = Util::DisableGuard(modName.empty() || count == 0);
-	const auto label = std::vformat(T(TKEY("export.count"), "Export ({0})"), std::make_format_args(count));
-	if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
-		std::vector<std::string> paths;
-		for (size_t index = 0; index < exportState.settings.size(); ++index)
-			if (exportState.selected[index])
-				paths.push_back(exportState.settings[index].path);
-
-		json settings;
-		auto* feature = Feature::FindFeatureByShortName(exportState.shortNames[exportState.featureIndex]);
-		if (feature) {
-			SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
-			feature->SaveSettings(settings);
-		}
-
-		exportState.failed = !feature || !SettingsOverrideManager::GetSingleton()->ExportSettings(modName,
-											 exportState.shortNames[exportState.featureIndex], paths, settings, exportState.toPresetPack);
-		if (!exportState.failed) {
-			if (exportState.toPresetPack)
-				UnifiedPresetCatalog::GetSingleton().Discover();
-			ImGui::CloseCurrentPopup();
-		}
-	}
-}
-
 void FeatureOverwritesPanel::Draw()
 {
 	auto* manager = SettingsOverrideManager::GetSingleton();
+	const auto& rows = rowCache.Get(manager->GetRevision(), BuildRows);
 
-	if (ImGui::Button(T(TKEY("export.button"), "Export Settings")))
-		BeginExport();
+	DrawToolbar(rows);
 	if (actionFailed)
 		Util::Text::WrappedError("%s", T(TKEY("action_failed"), "Could not update the overwrite. Check the log and try again."));
 
-	bool any = false;
-	if (ImGui::BeginTable("##OverwriteFiles", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-		ImGui::TableSetupColumn(T(TKEY("feature"), "Feature"));
-		ImGui::TableSetupColumn(T(TKEY("mod"), "Mod"));
-		ImGui::TableSetupColumn(T(TKEY("file"), "File"));
-		ImGui::TableSetupColumn("##Actions", ImGuiTableColumnFlags_WidthFixed);
-		ImGui::TableHeadersRow();
-		for (const auto& info : manager->GetOverrides()) {
-			if (!info.enabled || !manager->IsApplicable(info))
-				continue;
-			any = true;
-			DrawOverwriteRow(info);
-		}
-		ImGui::EndTable();
-	}
-
-	if (!any)
-		ImGui::TextDisabled("%s", T(TKEY("empty"), "No feature overwrites are currently applied."));
+	if (rows.empty())
+		BrowserUI::EmptyState(T(TKEY("empty"), "No feature overwrites yet."),
+			T(TKEY("empty_hint"), "Export settings to create one, or install a mod that ships them."));
+	else
+		DrawTable(rows);
 
 	if (deletePopup.Draw())
 		actionFailed = !manager->DeleteFile(deletePath);

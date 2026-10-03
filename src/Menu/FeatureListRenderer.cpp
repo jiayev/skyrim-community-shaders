@@ -16,7 +16,6 @@
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
-#include "IconsLucide.h"
 #include "Menu.h"
 #include "Menu/IconLoader.h"
 #include "Menu/Icons/helpers/IconFonts.h"
@@ -833,18 +832,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Export overwrite (icon) sits left of the boot toggle
 	if (canExport) {
-		{
-			auto _style = Util::TransparentIconButtonStyle();
-			if (Icons::Button("##ExportOverwrite", Icons::LC(ICON_LC_SHARE), ImVec2(exportIconSize, exportIconSize)))
-				FeatureOverwritesPanel::BeginExport(feat);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.export_overwrite_tooltip",
-					"Export selected settings as a feature overwrite file.\n"
-					"Overwrites are loaded at startup."));
-		}
+		FeatureOverwritesPanel::DrawExportButton(feat, "##ExportOverwrite");
 		ImGui::SameLine();
 	}
 
