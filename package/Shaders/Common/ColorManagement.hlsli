@@ -9,12 +9,7 @@
 #if defined(PSHADER) || defined(CSHADER) || defined(COMPUTESHADER)
 namespace Color
 {
-#	if defined(TRUE_PBR)
-	static const float AlbedoScale = 1.0;
-#	else
-	static const float AlbedoScale = SharedData::linearLightingSettings.vanillaDiffuseColorMult;
-#	endif
-
+	// Legacy lighting lobes are calibrated against Lambert diffuse.
 #	if defined(ENABLE_LL)
 	static const float BRDFScale = Math::INV_PI;
 #	else
@@ -51,7 +46,7 @@ namespace Color
 #	if defined(TRUE_PBR)
 		color = LinearToPBRMaterial(color);
 #	endif
-		return color * AlbedoScale;
+		return color;
 	}
 
 	float3 Light(float3 color)
@@ -132,6 +127,25 @@ namespace Color
 namespace ColorManagement
 {
 	static const float LEGACY_TEXTURE_GAMMA = 1.8;
+
+	float3 DiffuseToWorking(float3 color, bool linearInput = false)
+	{
+#if defined(ENABLE_LL)
+		if (!linearInput) {
+			color = pow(saturate(color), SharedData::linearLightingSettings.diffuseGamma);
+			float3 scaledColor = SharedData::linearLightingSettings.diffuseCurve * color;
+			color = SharedData::linearLightingSettings.diffuseWhiteReflectance * (scaledColor / (1.0 - color + scaledColor));
+		}
+		return Color::LinearSRGBToWorking(color);
+#else
+		return color;
+#endif
+	}
+
+	float4 DiffuseToWorking(float4 color, bool linearInput = false)
+	{
+		return float4(DiffuseToWorking(color.rgb, linearInput), color.a);
+	}
 
 	float3 TextureToWorking(float3 color, bool linearInput = false)
 	{

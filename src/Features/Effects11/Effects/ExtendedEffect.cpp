@@ -258,7 +258,7 @@ void ExtendedEffect::RebuildWeatherCaches()
 			continue;
 
 		weatherSlotOfVariable[i] = static_cast<int>(weatherVarSlots.size());
-		weatherVarSlots.push_back({ i, std::move(iniKey), GetComponentCount(uiVar.type), IsPerComponentVector(uiVar) });
+		weatherVarSlots.push_back({ i, std::move(iniKey), GetComponentCount(uiVar.type), IsPerComponentVector(uiVar), uiVar.separation == "ExteriorWeather" });
 	}
 
 	for (const auto& [weatherID, values] : weatherData) {
@@ -316,6 +316,7 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 	auto pick = [](const std::vector<ParsedWeatherValue>* parsed, size_t slotIndex, int c, float fallback) {
 		return parsed && ((*parsed)[slotIndex].definedMask & (1u << c)) ? (*parsed)[slotIndex].values[c] : fallback;
 	};
+	const bool interior = EffectManager::GetSingleton().GetCommonData().eInteriorFactor > 0.0f;
 
 	for (size_t slotIndex = 0; slotIndex < weatherVarSlots.size(); ++slotIndex) {
 		const auto& slot = weatherVarSlots[slotIndex];
@@ -323,9 +324,14 @@ void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWea
 		float* blended = slot.components == 1 ? &uiVar.floatValue : uiVar.vectorValue;
 		const float* base = slot.components == 1 ? &uiVar.baseFloatValue : uiVar.baseVectorValue;
 
+		// Still written indoors, to undo any weather value
+		const bool useWeather = !(interior && slot.exteriorWeather);
+		const auto* slotCurrentValues = useWeather ? currentValues : nullptr;
+		const auto* slotLastValues = useWeather ? lastValues : nullptr;
+
 		for (int c = 0; c < slot.components; ++c) {
-			const float currentVal = pick(currentValues, slotIndex, c, base[c]);
-			const float lastVal = pick(lastValues, slotIndex, c, base[c]);
+			const float currentVal = pick(slotCurrentValues, slotIndex, c, base[c]);
+			const float lastVal = pick(slotLastValues, slotIndex, c, base[c]);
 			blended[c] = lastVal + blendFactor * (currentVal - lastVal);
 		}
 
@@ -349,7 +355,9 @@ void ExtendedEffect::SyncWeatherVarFromUI(size_t index, uint32_t weatherID)
 		return;
 
 	// Must match ApplyWeatherBlending: with weather overrides off, edits belong to the base value
-	auto* entry = IsWeatherSeparated(uiVar) && IsMultipleWeathersEnabled() ? WeatherManager::GetSingleton().FindWeatherEntry(weatherID) : nullptr;
+	const bool exteriorWeatherIndoors = uiVar.separation == "ExteriorWeather" && EffectManager::GetSingleton().GetCommonData().eInteriorFactor > 0.0f;
+	const bool usesWeather = IsWeatherSeparated(uiVar) && IsMultipleWeathersEnabled() && !exteriorWeatherIndoors;
+	auto* entry = usesWeather ? WeatherManager::GetSingleton().FindWeatherEntry(weatherID) : nullptr;
 	std::string iniKey = GetVariableIniKey(uiVar);
 	if (!entry || iniKey.empty()) {
 		CaptureBaseValue(uiVar);

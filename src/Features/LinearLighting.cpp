@@ -1,5 +1,7 @@
 #include "LinearLighting.h"
 
+#include <cmath>
+
 #include "../I18n/I18n.h"
 #include "State.h"
 #include "Util.h"
@@ -20,7 +22,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LinearLighting::Settings,
 	enableLinearLighting,
 	enableACEScg,
-	vanillaDiffuseColorMult,
+	gameGamma,
+	diffuseGamma,
+	diffuseMidReflectance,
+	diffuseWhiteReflectance,
 	directionalLightMult,
 	pointLightMult,
 	ambientMult,
@@ -64,8 +69,19 @@ void LinearLighting::DrawSettings()
 		}
 
 		if (Util::BeginPillTabItem(T(TKEY("tab_advanced"), "Advanced"))) {
+			ImGui::SeparatorText(T(TKEY("color_calibration"), "Color Calibration"));
+			ImGui::InputFloat(T(TKEY("diffuse_gamma"), "Diffuse Gamma"), &settings.diffuseGamma, 0.0f, 0.0f, "%.3f");
+			ImGui::InputFloat(T(TKEY("diffuse_mid_reflectance"), "Diffuse Reflectance at 0.5"), &settings.diffuseMidReflectance, 0.0f, 0.0f, "%.6f");
+			ImGui::InputFloat(T(TKEY("diffuse_white_reflectance"), "Diffuse White Reflectance"), &settings.diffuseWhiteReflectance, 0.0f, 0.0f, "%.3f");
+			ImGui::TextWrapped("%s", T(TKEY("color_calibration_hint"), "Diffuse settings update immediately. Gamma: 0.1 to 4. White: 0.001 to 1. Midpoint: 0.0001 to 99.9% of white."));
+			ImGui::InputFloat(T(TKEY("game_gamma"), "Game Gamma"), &settings.gameGamma, 0.0f, 0.0f, "%.3f");
+			const bool valid = std::isfinite(settings.gameGamma) && settings.gameGamma >= 0.1f && settings.gameGamma <= 4.0f;
+			ImGui::TextWrapped("%s", T(TKEY("game_gamma_hint"), "Game Gamma: 0.1 to 4. Apply to recompile shaders."));
+			ImGui::BeginDisabled(!valid);
+			if (ImGui::Button(T(TKEY("apply_game_gamma"), "Apply Game Gamma")))
+				applyGameGamma = settings.gameGamma != configuredGameGamma;
+			ImGui::EndDisabled();
 			ImGui::SeparatorText(T(TKEY("multipliers"), "Multipliers"));
-			ImGui::SliderFloat(T(TKEY("vanilla_diffuse_color_multiplier"), "Vanilla Diffuse Color Multiplier"), &settings.vanillaDiffuseColorMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("emissive_color_multiplier"), "Emissive Color Multiplier"), &settings.emitColorMult, 0.0f, 10.0f, "%.2f");
 			ImGui::SliderFloat(T(TKEY("point_light_multiplier"), "Point Light Multiplier"), &settings.pointLightMult, 0.0f, 10.0f, "%.2f");
 
@@ -95,7 +111,14 @@ void LinearLighting::LoadSettings(json& o_json)
 	settings = o_json;
 	if (o_json.contains("mode") && !o_json.contains("enableLinearLighting"))
 		settings.enableLinearLighting = o_json.value("mode", 0u) == 1u;
+	if (o_json.contains("vanillaDiffuseColorMult") && !o_json.contains("diffuseMidReflectance")) {
+		const float scale = o_json.value("vanillaDiffuseColorMult", 1.0f);
+		settings.diffuseMidReflectance *= scale;
+		if (!o_json.contains("diffuseWhiteReflectance"))
+			settings.diffuseWhiteReflectance = std::min(scale, 1.0f);
+	}
 	settings.fireEffectCurve = std::clamp(settings.fireEffectCurve, FireEffectCurveMin, FireEffectCurveMax);
+	applyGameGamma = settings.gameGamma != configuredGameGamma;
 }
 
 void LinearLighting::SaveSettings(json& o_json)
@@ -119,15 +142,27 @@ void LinearLighting::Reset()
 {
 	if (!resourcesReady)
 		return;
+	if (applyGameGamma && !IsLinearLightingActive())
+		ApplyGameGamma();
 	// Needs Post Processing's display transform, so Vanilla mode turns it off; Effects 11 gates it separately via IsActive.
 	const bool linearLighting = settings.enableLinearLighting && globals::features::postProcessing.loaded &&
 	                            PostProcessingMode::Get() != PostProcessingMode::Mode::Vanilla;
 	const bool acescg = linearLighting && settings.enableACEScg;
-	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg)
+	if (linearLighting != configuredLinearLighting || acescg != configuredACEScg || applyGameGamma)
 		globals::shaderCache->Reload([this, linearLighting, acescg] {
 			configuredLinearLighting = linearLighting;
 			configuredACEScg = acescg;
+			if (applyGameGamma)
+				ApplyGameGamma();
 		});
+}
+
+void LinearLighting::ApplyGameGamma()
+{
+	settings.gameGamma = std::clamp(std::isfinite(settings.gameGamma) ? settings.gameGamma : 1.6f, 0.1f, 4.0f);
+	configuredGameGamma = settings.gameGamma;
+	gameGammaDefine = std::format("{:.9f}", settings.gameGamma);
+	applyGameGamma = false;
 }
 
 void LinearLighting::ClearShaderCache()
@@ -158,18 +193,28 @@ std::vector<std::pair<std::string_view, std::string_view>> LinearLighting::GetSh
 	std::vector<std::pair<std::string_view, std::string_view>> options;
 	if (IsACEScgActive())
 		options.emplace_back("ENABLE_ACESCG", "");
+	if (IsLinearLightingActive())
+		options.emplace_back("CS_GAME_GAMMA", gameGammaDefine);
 	return options;
 }
 
 void LinearLighting::RestoreDefaultSettings()
 {
 	settings = {};
+	applyGameGamma = settings.gameGamma != configuredGameGamma;
 }
 
 LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 {
 	auto data = PerFrameData{};
-	data.vanillaDiffuseColorMult = 1.0f;
+	const auto bounded = [](float value, float fallback, float min, float max) {
+		return std::clamp(std::isfinite(value) ? value : fallback, min, max);
+	};
+	data.diffuseGamma = bounded(settings.diffuseGamma, 2.2f, 0.1f, 4.0f);
+	data.diffuseWhiteReflectance = bounded(settings.diffuseWhiteReflectance, 1.0f, 0.001f, 1.0f);
+	const float reflectance = bounded(settings.diffuseMidReflectance, 0.2871746f, 0.0001f, data.diffuseWhiteReflectance * 0.999f);
+	const float midpoint = std::pow(0.5f, data.diffuseGamma);
+	data.diffuseCurve = reflectance * (1.0f - midpoint) / (midpoint * (data.diffuseWhiteReflectance - reflectance));
 	data.directionalLightMult = 1.0f;
 	data.pointLightMult = 1.0f;
 	data.ambientMult = 1.0f;
@@ -190,7 +235,7 @@ LinearLighting::PerFrameData LinearLighting::GetCommonBufferData()
 	if (!loaded || !IsLinearLightingActive())
 		return data;
 
-	data.vanillaDiffuseColorMult = settings.vanillaDiffuseColorMult;
+	// Legacy light colors represent the response of a white Lambert surface.
 	data.directionalLightMult = RE::NI_PI * settings.directionalLightMult;
 	data.pointLightMult = RE::NI_PI * settings.pointLightMult;
 	data.ambientMult = settings.ambientMult;
@@ -529,8 +574,6 @@ namespace
 namespace ImageSpaceColorManagement
 {
 	constexpr std::size_t VOLUMETRIC_LIGHTING_COLOR = 0;
-	constexpr std::size_t FOG_NEAR_COLOR = 4;
-	constexpr std::size_t FOG_FAR_COLOR = 8;
 
 	template <std::size_t... ColorOffsets>
 	class ScopedInputColors
@@ -586,6 +629,7 @@ namespace ImageSpaceColorManagement
 
 void LinearLighting::Load()
 {
+	ApplyGameGamma();
 	configuredLinearLighting = loaded && settings.enableLinearLighting;
 	configuredACEScg = configuredLinearLighting && settings.enableACEScg;
 
@@ -645,16 +689,6 @@ void LinearLighting::Load()
 	}
 	if (DetourTransactionCommit() != NO_ERROR)
 		stl::report_and_fail("Linear Lighting: could not commit the menu hook."sv);
-	stl::write_vfunc<0x1,
-		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeFog,
-			ImageSpaceColorManagement::FOG_NEAR_COLOR,
-			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-		RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
-	stl::write_vfunc<0x1,
-		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog,
-			ImageSpaceColorManagement::FOG_NEAR_COLOR,
-			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-		RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
 	stl::write_vfunc<0x1,
 		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeVolumetricLighting,
 			ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(

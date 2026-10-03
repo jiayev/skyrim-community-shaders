@@ -126,7 +126,8 @@ static const float3 noise3D[32] = {
 			shadowSample = lerp(1.0, shadowSample, fadeFactor);
 		}
 
-		uint bitmask = isValid ? outShadowBitmask[dtid] : 0;
+		// Unseeded history starts fully lit to match the cleared visibility of 1.0
+		uint bitmask = isValid ? outShadowBitmask[dtid] : 0xFFFFFFFFu;
 		bitmask &= ~(1u << bitIndex);
 		if (shadowSample > 0.5)
 			bitmask |= (1u << bitIndex);
@@ -136,7 +137,7 @@ static const float3 noise3D[32] = {
 		float shadow = float(countbits(bitmask)) / 32.0;
 		outShadowVisibility[dtid] = shadow;
 	} else if (!isValid) {
-		outShadowBitmask[dtid] = 0;
+		outShadowBitmask[dtid] = 0xFFFFFFFFu;
 		outShadowVisibility[dtid] = 1.0;
 	}
 }

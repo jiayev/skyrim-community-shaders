@@ -176,6 +176,14 @@ private:
 	/** Set when Sync repairs ActivePreset during load; flushed in SetupResources. */
 	bool activePresetNeedsPersist = false;
 
+	/** @brief Point light settings, resolved once per frame in CheckCommonData since OverridePointLightColor runs per light. */
+	struct PointLightingParams
+	{
+		float curve = 1.0f;
+		float desaturation = 0.0f;
+		float intensity = 1.0f;
+	} pointLighting;
+
 	// The feature buffer is rebuilt several times per frame, so GetCommonBufferData's lookups are replayed from here
 	PerFrame perFrameCache{};
 	Util::FrameChecker perFrameCacheChecker;

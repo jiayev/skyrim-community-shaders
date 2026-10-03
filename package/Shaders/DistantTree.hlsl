@@ -187,7 +187,7 @@ PS_OUTPUT main(PS_INPUT input)
 	psout.Diffuse.w = 0;
 #	else
 	float4 baseColor = TexDiffuse.SampleBias(SampDiffuse, input.TexCoord.xy, SharedData::MipBias);
-	baseColor.xyz = Color::Albedo(ColorManagement::TextureToWorking(baseColor.xyz));
+	baseColor.xyz = Color::Albedo(ColorManagement::DiffuseToWorking(baseColor.xyz));
 
 	if ((baseColor.w - AlphaTestRefRS) < 0) {
 		discard;

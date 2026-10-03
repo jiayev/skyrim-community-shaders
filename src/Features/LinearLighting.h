@@ -26,7 +26,6 @@ struct LinearLighting : Feature
 	/** @brief ENABLE_LL is a compile-time define; emit it only when the feature is enabled. */
 	virtual inline std::string_view GetShaderDefineName() override { return "ENABLE_LL"; }
 	virtual inline bool HasShaderDefine(RE::BSShader::Type) override { return IsLinearLightingActive(); }
-	/** @brief ACEScg contributes the working-gamut shader define. */
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetShaderDefineOptions() override;
 	virtual std::vector<std::pair<std::string_view, std::string_view>> GetCommonShaderDefines() override;
 
@@ -37,9 +36,12 @@ struct LinearLighting : Feature
 	{
 		uint enableLinearLighting = true;
 		uint enableACEScg = false;
+		float gameGamma = 1.6f;
+		float diffuseGamma = 2.2f;
+		float diffuseMidReflectance = 0.2871746f;
+		float diffuseWhiteReflectance = 1.0f;
 
 		// Lighting multipliers
-		float vanillaDiffuseColorMult = 1.0f;
 		float directionalLightMult = 1.0f;
 		float pointLightMult = 1.0f;
 		float ambientMult = 1.0f;
@@ -64,7 +66,7 @@ struct LinearLighting : Feature
 	struct alignas(16) PerFrameData
 	{
 		uint isMainOrLoadingMenu;
-		float vanillaDiffuseColorMult;
+		float diffuseGamma;
 		float directionalLightMult;
 		float pointLightMult;
 		float ambientMult;
@@ -79,13 +81,16 @@ struct LinearLighting : Feature
 		float lightSpriteEffectMult;
 		float fireEffectMult;
 		float fireEffectCurve;
+		float diffuseCurve;
+		float diffuseWhiteReflectance;
+		float2 pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrameData);
 
 	/** @brief Draws the ImGui settings UI for color management and lighting multiplier configuration. */
 	virtual void DrawSettings() override;
 	virtual void PostSetupResources() override;
-	/** @brief Recompiles shaders when the Linear Lighting or ACEScg toggles no longer match the active permutation. */
+	/** @brief Applies pending shader settings at the frame boundary. */
 	virtual void Reset() override;
 	virtual void ClearShaderCache() override;
 	virtual void ModifySharedLighting(SharedLighting& lighting) override;
@@ -108,6 +113,11 @@ struct LinearLighting : Feature
 	void ClearSunlightColor(const RE::NiLight* light);
 
 private:
+	void ApplyGameGamma();
+
+	std::string gameGammaDefine = "1.6";
+	float configuredGameGamma = 1.6f;
+	bool applyGameGamma = false;
 	const RE::NiLight* workingSunlight = nullptr;
 	RE::NiColor workingSunlightColor{};
 
