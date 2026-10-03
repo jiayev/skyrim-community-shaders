@@ -48,6 +48,10 @@ namespace DCLF
 			std::vector<std::byte> vertex;  // SPIR-V
 			std::vector<std::byte> pixel;
 			std::vector<std::byte> depthPixel;  // the same permutation built with DCLF_DEPTH_ONLY
+			// The Z-prepass's plain draws' stages (DCLF_PULLED; MainOpaquePass): the vertex stage fetching its draw's vertices and
+			// rows itself, and the depth pixel stage reading its material row's inputs itself (PulledMaterialSource).
+			std::vector<std::byte> pulledVertex;
+			std::vector<std::byte> pulledDepthPixel;
 		};
 
 		struct Stats
@@ -70,7 +74,8 @@ namespace DCLF
 		 * @brief Stages a runtime request (Find, FindShadow) asked for before any precompile task had (OnDemand*): what the
 		 * precompile missed, compiled on demand unless the disk cache has it. Logged when the program is ready (Update).
 		 */
-		static constexpr std::uint8_t kOnDemandVertex = 1, kOnDemandPixel = 2, kOnDemandDepthPixel = 4;
+		static constexpr std::uint8_t kOnDemandVertex = 1, kOnDemandPixel = 2, kOnDemandDepthPixel = 4, kOnDemandPulledVertex = 8,
+									  kOnDemandPulledDepthPixel = 16;
 		/** @brief "VS, PS, depth PS" for a set of kOnDemand bits. */
 		static std::string OnDemandStages(std::uint8_t a_stages);
 
@@ -125,6 +130,7 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<Entry>> entries;
 		ankerl::unordered_dense::map<std::uint32_t, std::unique_ptr<ShadowEntry>> shadowEntries;
 		std::vector<std::byte> source;
+		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;
 		std::vector<std::filesystem::path> dependencies;
 		bool sourcesLoaded = false;

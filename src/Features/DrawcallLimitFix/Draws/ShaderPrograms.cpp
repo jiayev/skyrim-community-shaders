@@ -5,12 +5,15 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <regex>
+#include <sstream>
 
 #include <Tracy/Tracy.hpp>
 
 #include "RenderGraph/RenderGraphRuntime.h"
 #include "ShaderCache.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Scene/ConstantEvaluator.h"
 
 #if defined(CS_HAS_ORG_MODULE_SERVICES) && defined(ORG_MODULE_SERVICES_HAS_DXC)
 #	include <ORGModuleServices/ShaderCompiler.h>
@@ -65,6 +68,142 @@ namespace DCLF
 		}
 	}
 
+	namespace
+	{
+		/**
+		 * @brief Lighting.hlsl for a pulled build (DCLF_PULLED): its rows' inputs, which a device-generated draw's layout maps from
+		 * the rows' addresses in its push data (DrawPipelines.cpp, the main layout), read from the rows its sequence names instead
+		 * (Common/DCLFObjects.hlsli, DCLFMaterialRowAddress and DCLFPipelineRowAddress). A plain draw call binds once for draws
+		 * of many pipeline slots (the Z-prepass's buckets are its depth pipelines'), so nothing it binds may be a row's:
+		 * - the material row's: the PerMaterial blocks (b1), the material textures (t0-t15 but t14, and the features' t71 and
+		 *   t74) and their samplers (s0-s15 but s14);
+		 * - the pipeline row's: the PerTechnique blocks (b0), the PerGeometry template (b2) and the shadow mask (t14, s14); its
+		 *   permutation block (b4) is Permutation.hlsli's (DCLF_PULLED_ROWS).
+		 * A block's members become statics, which its function (DCLFPer<Block>Statics) assigns from the row; a texture or sampler
+		 * a function of its own, behind a macro of its name. Line by line, so each declaration's replacement stays in its #if
+		 * branch. Empty, logged, when a block's line is not one it knows.
+		 */
+		std::vector<std::byte> PulledLightingSource(std::span<const std::byte> a_source)
+		{
+			const std::string text(reinterpret_cast<const char*>(a_source.data()), a_source.size());
+			static const std::regex texture(R"(^(\s*)((?:Texture2D|TextureCube|Texture2DArray|Texture3D)(?:\s*<[^>]*>)?)\s+(\w+)\s*:\s*register\(\s*t(\d+)\s*\)\s*;(.*)$)");
+			static const std::regex sampler(R"(^(\s*)(SamplerState|SamplerComparisonState)\s+(\w+)\s*:\s*register\(\s*s(\d+)\s*\)\s*;(.*)$)");
+			static const std::regex cbuffer(R"(^\s*cbuffer\s+(PerTechnique|PerMaterial|PerGeometry)\s*:\s*register\(\s*b([012])\s*\).*$)");
+			static const std::regex member(
+				R"(^(\s*)(row_major\s+)?(float|float2|float3|float4|uint|int|float3x3|float3x4|float4x4)\s+(\w+)\s*(?:\[\s*(\d+)\s*\])?\s*:\s*packoffset\(\s*c(\d+)(?:\.([xyzw]))?\s*\)\s*;(.*)$)");
+			auto materialTexture = [](std::uint32_t a_register) {
+				return (a_register < kPixelTextureSlots && a_register != kShadowMaskSlot) || FeatureMaterialSlot(a_register) >= 0;
+			};
+			// A block's row and its stage's place in it (DCLFObjects.hlsli).
+			struct Block
+			{
+				const char* row = nullptr;
+				const char* offset = nullptr;
+			};
+			auto blockOf = [](const std::string& a_name) {
+				return a_name == "PerTechnique" ? Block{ "DCLFPipelineRowAddress", "kDCLFTechniqueBlock" } :
+				       a_name == "PerMaterial"  ? Block{ "DCLFMaterialRowAddress", "kDCLFMaterialBlock" } :
+				                                  Block{ "DCLFPipelineRowAddress", "kDCLFGeometryBlock" };
+			};
+			auto load = [](const std::string& a_type) -> const char* {
+				return a_type == "float4"   ? "DCLFRowFloat4" :
+				       a_type == "float3"   ? "DCLFRowFloat3" :
+				       a_type == "float2"   ? "DCLFRowFloat2" :
+				       a_type == "float"    ? "DCLFRowFloat" :
+				       a_type == "uint"     ? "DCLFRowUint" :
+				       a_type == "int"      ? "(int)DCLFRowUint" :
+				       a_type == "float3x3" ? "DCLFRowFloat3x3" :
+				       a_type == "float3x4" ? "DCLFRowFloat3x4" :
+				                              "DCLFRowFloat4x4";
+			};
+			std::istringstream in(text);
+			std::ostringstream out;
+			std::string line, blockName;
+			Block block{};
+			bool inBlock = false, opened = false;
+			std::ostringstream assignments;  // the block's DCLFPer<Block>Statics body, its #if lines with it
+			std::uint32_t textures = 0, samplers = 0, members = 0;
+			auto fail = [&](const std::string& a_line) {
+				logger::error("[DCLF] Pulled Lighting source: {} line not understood: {}", blockName, a_line);
+				return std::vector<std::byte>{};
+			};
+			while (std::getline(in, line)) {
+				if (!line.empty() && line.back() == '\r')
+					line.pop_back();
+				std::smatch m;
+				if (inBlock) {
+					const auto first = line.find_first_not_of(" \t");
+					const std::string trimmed = first == std::string::npos ? std::string{} : line.substr(first);
+					if (!opened && trimmed == "{") {
+						opened = true;
+						out << "\n";
+					} else if (trimmed.rfind("};", 0) == 0) {
+						// The block's members as statics, assigned from the row by the pulled entry points (Lighting.hlsl,
+						// DCLFRowStatics) once the row's address is known: a member's name is one other code reuses (a struct
+						// field), so not a macro.
+						inBlock = false;
+						out << "void DCLF" << blockName << "Statics()\n{\n" << assignments.str() << "}\n";
+					} else if (trimmed.empty() || trimmed[0] == '#' || trimmed.rfind("//", 0) == 0) {
+						out << line << "\n";
+						if (!trimmed.empty() && trimmed[0] == '#')
+							assignments << line << "\n";
+					} else if (std::regex_match(line, m, member)) {
+						const std::string type = m[3].str(), name = m[4].str();
+						const bool matrix = type.find('x') != std::string::npos;
+						// A column-major matrix's registers are its columns, and an array of matrices is none the shader has.
+						if (matrix && (!m[2].matched || m[5].matched))
+							return fail(line);
+						const std::uint32_t component = m[7].matched ? static_cast<std::uint32_t>(std::string("xyzw").find(m[7].str()[0])) : 0u;
+						const std::uint32_t offset = static_cast<std::uint32_t>(std::stoul(m[6].str())) * 16 + component * 4;
+						const auto source = [&](std::uint32_t a_offset) { return fmt::format("{}({}, {} + {})", load(type), block.row, block.offset, a_offset); };
+						out << m[1].str() << "static " << m[2].str() << type << " " << name << (m[5].matched ? "[" + m[5].str() + "]" : std::string{}) << ";" << m[8].str()
+							<< "\n";
+						if (m[5].matched) {
+							// An array's elements: a register each.
+							const auto count = static_cast<std::uint32_t>(std::stoul(m[5].str()));
+							for (std::uint32_t e = 0; e < count; ++e)
+								assignments << "\t" << name << "[" << e << "] = " << source(offset + 16 * e) << ";\n";
+						} else {
+							assignments << "\t" << name << " = " << source(offset) << ";\n";
+						}
+						++members;
+					} else {
+						return fail(line);
+					}
+					continue;
+				}
+				if (std::regex_match(line, m, cbuffer)) {
+					inBlock = true;
+					opened = false;
+					blockName = m[1].str();
+					block = blockOf(blockName);
+					assignments.str({});
+					out << "// " << blockName << ": the draw's " << (blockName == "PerMaterial" ? "material" : "pipeline") << " row's (DCLF_PULLED)\n";
+				} else if (std::regex_match(line, m, texture) &&
+						   (materialTexture(static_cast<std::uint32_t>(std::stoul(m[4].str()))) || std::stoul(m[4].str()) == kShadowMaskSlot)) {
+					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
+					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineTextureIndex()") : "DCLFMaterialTextureIndex(" + slot + ")";
+					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = ResourceDescriptorHeap[" << index << "]; return r; }\n#define " << name
+						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
+					++textures;
+				} else if (std::regex_match(line, m, sampler) && std::stoul(m[4].str()) < 16) {  // s0-s15
+					const std::string type = m[2].str(), name = m[3].str(), slot = m[4].str();
+					const std::string index = std::stoul(slot) == kShadowMaskSlot ? std::string("DCLFPipelineSamplerIndex()") : "DCLFMaterialSamplerIndex(" + slot + ")";
+					out << m[1].str() << type << " DCLFRow_" << name << "() { " << type << " r = SamplerDescriptorHeap[" << index << "]; return r; }\n#define " << name
+						<< " DCLFRow_" << name << "()" << m[5].str() << "\n";
+					++samplers;
+				} else {
+					out << line << "\n";
+				}
+			}
+			const std::string result = out.str();
+			logger::info("[DCLF] Pulled Lighting source: {} texture, {} sampler and {} block member declarations read from the draw's rows", textures, samplers, members);
+			std::vector<std::byte> bytes(result.size());
+			std::memcpy(bytes.data(), result.data(), result.size());
+			return bytes;
+		}
+	}
+
 	struct ShaderPrograms::ShadowEntry
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -83,6 +222,8 @@ namespace DCLF
 		std::shared_future<org::services::ShaderArtifact> vertex;
 		std::shared_future<org::services::ShaderArtifact> pixel;
 		std::shared_future<org::services::ShaderArtifact> depthPixel;
+		std::shared_future<org::services::ShaderArtifact> pulledVertex;
+		std::shared_future<org::services::ShaderArtifact> pulledDepthPixel;
 #endif
 		std::unique_ptr<Program> program;
 		bool failed = false;
@@ -93,7 +234,8 @@ namespace DCLF
 	std::string ShaderPrograms::OnDemandStages(std::uint8_t a_stages)
 	{
 		std::string text;
-		for (const auto& [bit, name] : { std::pair{ kOnDemandVertex, "VS" }, std::pair{ kOnDemandPixel, "PS" }, std::pair{ kOnDemandDepthPixel, "depth PS" } })
+		for (const auto& [bit, name] : { std::pair{ kOnDemandVertex, "VS" }, std::pair{ kOnDemandPixel, "PS" }, std::pair{ kOnDemandDepthPixel, "depth PS" },
+				 std::pair{ kOnDemandPulledVertex, "pulled VS" }, std::pair{ kOnDemandPulledDepthPixel, "pulled depth PS" } })
 			if (a_stages & bit)
 				text += fmt::format("{}{}", text.empty() ? "" : ", ", name);
 		return text;
@@ -123,6 +265,7 @@ namespace DCLF
 		}
 		source.resize(bytes.size());
 		std::memcpy(source.data(), bytes.data(), bytes.size());
+		pulledSource = PulledLightingSource(source);
 		// Every shader file is a potential include; the compiler re-hashes one only when it changes.
 		dependencies = RenderGraphRuntime::ShaderSourceFiles();
 		{
@@ -145,7 +288,7 @@ namespace DCLF
 	namespace
 	{
 		std::shared_future<org::services::ShaderArtifact> RequestStage(std::span<const std::byte> a_source, const std::vector<std::filesystem::path>& a_dependencies,
-			const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly = false, const char* a_sourceName = kSourcePath)
+			const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly, bool a_pulled, const char* a_sourceName)
 		{
 			org::services::ShaderCompileRequest request{};
 			ZoneScopedN("CS.DCLF.Shaders.RequestStage");
@@ -172,18 +315,22 @@ namespace DCLF
 			// reference, the emissive multiplier, and Light Limit Fix's room index and shadow bit mask.
 			request.defines.push_back({ L"DCLF_BINDLESS", L"1" });
 			request.defines.push_back({ L"DCLF_BINDLESS_DRAW", L"1" });
-			// The shadow views' Utility stages draw with plain indirect draws (ShadowViewPass) and fetch their own indices,
-			// vertices and per-draw words (Utility.hlsl).
-			if (a_sourceName != kSourcePath)
+			// The shadow views' Utility stages and the Z-prepass's Lighting ones draw with plain indirect draws (ShadowViewPass,
+			// MainOpaquePass) and fetch their own indices, vertices and per-draw words (Utility.hlsl, Lighting.hlsl).
+			if (a_pulled)
 				request.defines.push_back({ L"DCLF_PULLED", L"1" });
+			// A pulled Lighting stage reads its pipeline row's permutation block itself (Permutation.hlsli), as it does the rows'
+			// other inputs (PulledLightingSource).
+			if (a_pulled && a_sourceName == kSourcePath)
+				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
 			// The first few define sets, to reproduce builds with the DXC command line.
 			static std::atomic<std::uint32_t> logged = 0;
 			if (logged.fetch_add(1) < 4) {
 				std::string text;
 				for (const auto& define : request.defines)
 					text += fmt::format(" -D {}{}{}", Util::WStringToString(define.name), define.value.empty() ? "" : "=", Util::WStringToString(define.value));
-				logger::info("[DCLF] SPIR-V build of {} {} {:08X} defines:{}", a_sourceName == kSourcePath ? "Lighting" : "Utility",
-					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_descriptor, text);
+				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}", a_sourceName == kSourcePath ? "Lighting" : "Utility",
+					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_pulled ? " (pulled)" : "", a_descriptor, text);
 			}
 			const auto shift = [&](const wchar_t* a_flag, std::uint32_t a_value) {
 				request.arguments.insert(request.arguments.end(), { a_flag, std::to_wstring(a_value), L"0" });
@@ -207,11 +354,14 @@ namespace DCLF
 #if defined(DCLF_HAS_SHADER_COMPILER)
 		ankerl::unordered_dense::map<std::uint64_t, std::shared_future<org::services::ShaderArtifact>> futures;
 		// a_created: set when this call made the request (no earlier request, precompile or runtime, had).
+		// pulled: a Lighting stage's pulled build (Program::pulledVertex, pulledDepthPixel); a Utility stage's always is.
 		std::shared_future<org::services::ShaderArtifact> Request(ShaderPrograms& owner, const RE::BSShader& shader,
-			bool pixel, std::uint32_t descriptor, bool depth = false, bool* a_created = nullptr)
+			bool pixel, std::uint32_t descriptor, bool depth = false, bool* a_created = nullptr, bool pulled = false)
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
-			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34);
+			pulled = pulled || utility;
+			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
+			                          (std::uint64_t(pulled) << 35);
 			{
 				std::lock_guard lock(mutex);
 				if (const auto found = futures.find(key); found != futures.end())
@@ -224,12 +374,12 @@ namespace DCLF
 				if (const auto found = futures.find(key); found != futures.end())
 					return found->second;
 			}
-			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()))
+			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (pulled && !utility && owner.pulledSource.empty()))
 				return {};
 			// Like the program entries, stage futures live for this source set's lifetime.
 			// A VS shared by several PS permutations must not rescan the shader tree each time.
-			auto future = RequestStage(utility ? owner.utilitySource : owner.source, owner.dependencies, shader,
-				pixel, descriptor, depth, utility ? kUtilitySourcePath : kSourcePath);
+			auto future = RequestStage(utility ? owner.utilitySource : pulled ? owner.pulledSource : owner.source, owner.dependencies, shader,
+				pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				futures.emplace(key, future);
@@ -262,9 +412,12 @@ namespace DCLF
 		}
 		ZoneScopedN("CS.DCLF.Shaders.Precompile");
 		auto stage = stages->Request(*this, a_shader, a_pixel, a_descriptor);
-		auto depth = a_pixel && type == RE::BSShader::Type::Lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : decltype(stage){};
+		const bool lighting = type == RE::BSShader::Type::Lighting;
+		auto depth = a_pixel && lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : decltype(stage){};
+		// The Z-prepass's pulled builds: the vertex stage, and the depth pixel stage.
+		auto pulled = lighting ? stages->Request(*this, a_shader, a_pixel, a_descriptor, a_pixel, nullptr, true) : decltype(stage){};
 		// Stay inside CS's bounded compilation workers until this task is done, including cache hits.
-		for (const auto* future : { &stage, &depth }) {
+		for (const auto* future : { &stage, &depth, &pulled }) {
 			if (!future->valid()) continue;
 			const auto& artifact = future->get();
 			if (!artifact) {
@@ -305,11 +458,14 @@ namespace DCLF
 		if (inserted) {
 			it->second = std::make_unique<Entry>();
 #if defined(DCLF_HAS_SHADER_COMPILER)
-			bool created[3]{};
+			bool created[5]{};
 			it->second->vertex = stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &created[0]);
 			it->second->pixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, false, &created[1]);
 			it->second->depthPixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &created[2]);
-			it->second->onDemand = static_cast<std::uint8_t>((created[0] ? kOnDemandVertex : 0) | (created[1] ? kOnDemandPixel : 0) | (created[2] ? kOnDemandDepthPixel : 0));
+			it->second->pulledVertex = stages->Request(*this, a_lighting, false, a_key.vertexDescriptor, false, &created[3], true);
+			it->second->pulledDepthPixel = stages->Request(*this, a_lighting, true, a_key.pixelDescriptor, true, &created[4], true);
+			it->second->onDemand = static_cast<std::uint8_t>((created[0] ? kOnDemandVertex : 0) | (created[1] ? kOnDemandPixel : 0) | (created[2] ? kOnDemandDepthPixel : 0) |
+															 (created[3] ? kOnDemandPulledVertex : 0) | (created[4] ? kOnDemandPulledDepthPixel : 0));
 			it->second->requested = std::chrono::steady_clock::now();
 			if (a_onDemand)
 				*a_onDemand = it->second->onDemand;
@@ -383,27 +539,33 @@ namespace DCLF
 		};
 		for (auto& [id, entryPointer] : entries) {
 			auto& entry = *entryPointer;
-			if (entry.program || entry.failed || !ready(entry.vertex) || !ready(entry.pixel) || !ready(entry.depthPixel))
+			if (entry.program || entry.failed || !ready(entry.vertex) || !ready(entry.pixel) || !ready(entry.depthPixel) || !ready(entry.pulledVertex) ||
+				!ready(entry.pulledDepthPixel))
 				continue;
 			const auto& vertex = entry.vertex.get();
 			const auto& pixel = entry.pixel.get();
 			const auto& depthPixel = entry.depthPixel.get();
+			const auto& pulledVertex = entry.pulledVertex.get();
+			const auto& pulledDepthPixel = entry.pulledDepthPixel.get();
 			onDemandOutcome(fmt::format("Lighting VS {:08X} PS {:08X}", static_cast<std::uint32_t>(id >> 32), static_cast<std::uint32_t>(id)).c_str(), entry.onDemand,
-				entry.requested, { { kOnDemandVertex, &vertex }, { kOnDemandPixel, &pixel }, { kOnDemandDepthPixel, &depthPixel } });
-			if (!vertex || !pixel || !depthPixel) {
+				entry.requested, { { kOnDemandVertex, &vertex }, { kOnDemandPixel, &pixel }, { kOnDemandDepthPixel, &depthPixel },
+									 { kOnDemandPulledVertex, &pulledVertex }, { kOnDemandPulledDepthPixel, &pulledDepthPixel } });
+			if (!vertex || !pixel || !depthPixel || !pulledVertex || !pulledDepthPixel) {
 				entry.failed = true;
 				++stats.failed;
 				if (loggedFailures++ < kMaxLoggedFailures) {
-					const auto& failed = !vertex ? vertex : pixel;
+					const auto& failed = !vertex ? vertex : !pixel ? pixel : !depthPixel ? depthPixel : !pulledVertex ? pulledVertex : pulledDepthPixel;
+					const char* stage = !vertex ? "VS" : !pixel ? "PS" : !depthPixel ? "PS (depth)" : !pulledVertex ? "VS (pulled)" : "PS (pulled depth)";
 					std::string diagnostics = failed.diagnostics.substr(0, 1500);
-					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", !vertex ? "VS" : "PS",
-						static_cast<std::uint32_t>(!vertex ? (id >> 32) : id), diagnostics);
+					logger::warn("[DCLF] SPIR-V build of Lighting {} {:08X} failed:\n{}", stage,
+						static_cast<std::uint32_t>(!vertex || !pulledVertex ? (id >> 32) : id), diagnostics);
 				}
 				continue;
 			}
-			entry.program = std::make_unique<Program>(Program{ vertex.binary, pixel.binary, depthPixel.binary });
+			entry.program = std::make_unique<Program>(Program{ vertex.binary, pixel.binary, depthPixel.binary, pulledVertex.binary, pulledDepthPixel.binary });
 			++stats.ready;
-			stats.fromCache += (vertex.fromCache ? 1 : 0) + (pixel.fromCache ? 1 : 0) + (depthPixel.fromCache ? 1 : 0);
+			stats.fromCache += (vertex.fromCache ? 1 : 0) + (pixel.fromCache ? 1 : 0) + (depthPixel.fromCache ? 1 : 0) + (pulledVertex.fromCache ? 1 : 0) +
+			                   (pulledDepthPixel.fromCache ? 1 : 0);
 		}
 		for (auto& [technique, entryPointer] : shadowEntries) {
 			auto& entry = *entryPointer;

@@ -29,8 +29,9 @@ namespace DCLF
 	inline constexpr std::uint32_t kFramePushVS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 7) | (1u << 8) | (1u << 11) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushPS = (1u << 3) | (1u << 5) | (1u << 6) | (1u << 9) | (1u << 10) | (1u << 12) | (1u << 13);
 	inline constexpr std::uint32_t kFramePushBinding = 191;
-	// The draw's push range (below): under device-generated commands each draw's own words; the shadow views' plain draws push
-	// them once per draw call instead (ShadowViewPass): the call's first sequence, the material rows and the vertex layout.
+	// The draw's push range (below): under device-generated commands each draw's own words; the shadow views' and the Z-prepass's
+	// plain draws push them once per draw call instead (ShadowViewPass, MainOpaquePass): the call's first sequence and, a shadow
+	// view's, the material rows and the vertex layout.
 	inline constexpr std::uint32_t kDrawPushBinding = 190;
 	// First the frame record's address (every register a draw's rows do not give), then the registers' addresses.
 	inline constexpr std::uint32_t kFramePushRecord = 0;
@@ -41,6 +42,13 @@ namespace DCLF
 	 * word, and a pad word so the pass's push data after it starts 8-byte aligned (BasicRHI packs the ranges back to back).
 	 */
 	inline constexpr std::uint32_t kDrawPushPipelineRow = 0, kDrawPushMaterialRow = 2, kDrawPushObject = 4, kDrawPushArgumentWords = 5, kDrawPushWords = 6;
+	/*
+	 * The Z-prepass's plain draws' push words (in the draw's range, kDrawPushBinding), per call: the call's first sequence's
+	 * address, as the shadow views' (kShadowDrawPushSequences). Nothing else: a call draws every pipeline slot that shares its
+	 * depth pipeline (DrawPipelines.cpp, ZPipelineKey), so the rows and the vertex layout are each draw's, read through its
+	 * sequence (Lighting.hlsl, DCLF_PULLED).
+	 */
+	inline constexpr std::uint32_t kZDrawPushSequences = 0;
 	/*
 	 * A shadow view's plain draw's push words (in the draw's range, kDrawPushBinding): its first sequence's address, which the
 	 * vertex stage indexes by its instance (Utility.hlsl, DCLF_PULLED); the material rows' table, an address the layout's b1
@@ -77,7 +85,7 @@ namespace DCLF
 	 * blocks (b1), packed through its technique's constant tables, and its textures and samplers - the material's, a
 	 * projected technique's projected textures (t3, t8, t10, t11), the features' (t71, t74). A pipeline row is a pipeline
 	 * slot's: its technique blocks (b0), its PerGeometry template (b2), its permutation (b4), and its technique's shadow mask
-	 * (t14, s14).
+	 * (t14, s14), and its key's vertex layout.
 	 */
 	inline constexpr std::uint32_t kMaterialRowBytes = 1024;
 	inline constexpr std::uint32_t kMaterialRowVS = 0, kMaterialRowPS = 256, kMaterialRowHeader = 768;
@@ -102,6 +110,7 @@ namespace DCLF
 		std::uint64_t vsPermutation = 0, psPermutation = 0;  // b4: one block, both stages
 		std::uint32_t shadowMask = 0;                    // t14
 		std::uint32_t shadowMaskSampler = 0;             // s14
+		std::uint64_t vertexLayout = 0;                  // the slot's key's (PipelineKey::vertexLayout), which a pulled vertex stage decodes
 	};
 	static_assert(kPipelineRowHeader + sizeof(PipelineRowHeader) <= kPipelineRowBytes);
 	/*
@@ -219,6 +228,8 @@ namespace DCLF
 			std::uint32_t requested = 0;
 			std::uint32_t ready = 0;  // in the set
 			std::uint32_t failed = 0;
+			// The admitted pipelines' Z-prepass pipelines (DrawPipelines.cpp, ZPipelineKey): distinct, and of them without a pixel stage.
+			std::uint32_t zPipelines = 0, zDepthOnly = 0;
 			std::uint32_t targetChanges = 0;
 			std::uint32_t shadowRequested = 0;
 			std::uint32_t shadowReady = 0;

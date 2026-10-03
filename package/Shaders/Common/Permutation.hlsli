@@ -100,6 +100,19 @@ namespace Permutation
 		static const int TVMeshVariation = (1 << 10);
 	}
 
+#if defined(DCLF_PULLED_ROWS)
+	// Drawcall Limit Fix's pulled Lighting stages (DCLF_PULLED_ROWS): the block is the draw's pipeline row's, which a plain draw
+	// cannot bind per draw, so the stage's main assigns these from the row (Lighting.hlsl, DCLFPermutationStatics) before
+	// anything reads them.
+	static uint VertexShaderDescriptor;
+	static uint PixelShaderDescriptor;
+	static uint ExtraShaderDescriptor;
+	static uint ExtraFeatureDescriptor;
+	static float EffectRadius;
+	// Zero for every pulled draw: a world material (not a render-target texture, LinearLighting's SetupGeometry), not the UI.
+	static uint BaseTextureIsWorking;
+	static uint RenderToUI;
+#else
 	cbuffer PerShader : register(b4)
 	{
 		uint NSCB(Permutation, VertexShaderDescriptor);
@@ -120,6 +133,7 @@ namespace Permutation
 	NSCB_ALIAS(Permutation, uint, BaseTextureIsWorking)
 	NSCB_ALIAS(Permutation, uint, RenderToUI)
 	NSCB_ALIAS(Permutation, float, GrassCanopyHeight)
+#endif  // DCLF_PULLED_ROWS
 
 }
 #endif  // __PERMUTATION_DEPENDENCY_HLSL__

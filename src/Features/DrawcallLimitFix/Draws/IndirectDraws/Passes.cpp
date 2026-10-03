@@ -26,8 +26,17 @@ namespace DCLF::Draws
 			bindings.pipelineRows = a_builder.ShaderResource(resources->pipelineRows.buffer, noViews).Resource();
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects, noViews).Resource();
 			bindings.bones = a_builder.ShaderResource(resources->scene->bones, noViews).Resource();
-			// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
-			a_builder.VertexBuffer(resources->scene->facePositions);
+			if (segment == RenderGraphRuntime::Segment::ZPrepass) {
+				// The plain draws (DCLF_PULLED): the vertex stage reads the sequences and the face positions through their addresses,
+				// the draws index the pool, and each bucket's count word is its draw's count.
+				a_builder.ShaderResource(resources->sequences, noViews);
+				a_builder.ShaderResource(resources->scene->facePositions, noViews);
+				bindings.pool = a_builder.IndexBuffer(resources->pool->indices);
+				bindings.bucketCounts = a_builder.IndirectArguments(resources->zBucketCounts[phaseTwo ? 1 : 0]);
+			} else {
+				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
+				a_builder.VertexBuffer(resources->scene->facePositions);
+			}
 			for (const auto& frameBuffer : resources->frameBuffers)
 				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
 			if (resources->lightLimitFix) {
@@ -45,6 +54,7 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
+			a_out.push_back(resources->pool ? resources->pool->layout : 0);
 		}
 
 		PreparedDraws Prepare(const PassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -128,17 +138,38 @@ namespace DCLF::Draws
 				return &state;
 			};
 			if (zPrepass) {
-				// Phase 2 draws only the rescues, from the reserved half of the sequence buffer and
-				// its own counter word. Its argument offset has to be a constant the CPU knows, which
-				// is why the two phases have fixed ranges instead of sharing one.
-				const std::uint64_t argumentOffset = a_prepared.phaseTwo ? std::uint64_t(frame.sequenceDraws) * sizeof(DrawSequence) : 0;
-				const std::uint64_t countOffset = a_prepared.phaseTwo ? kCountDrawnPhaseTwoBytes : 0;
+				// Plain indexed indirect draws (DCLF_PULLED): one per bucket, a pipeline slot's range of the phase's sequences (phase 2's
+				// past sequenceDraws, its rescues), with the slot's pulled depth pipeline, its push words (kZDrawPush*: the range's first
+				// sequence, the slot's pipeline row, its vertex layout) and its count word, from the pool. The vertex stage fetches each
+				// draw's vertices and rows through the sequence its instance names (Lighting.hlsl), since a plain draw cannot bind a
+				// vertex buffer or push data of its own.
+				(void)count;
 				if (stats)
 					stats->Start(commands, statsSlot, depthKind);
-				beginDrawPass(commands, begin);
+				commands.BeginPass(begin);
+				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+				commands.BindLayout(frame.indirect.zLayout);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+				commands.SetIndexBuffer(rhi::IndexBufferView{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt });
 				if (stats)
 					stats->Begin(commands, statsSlot, depthKind);
-				commands.ExecuteIndirect(frame.indirect.depthPassSignature, sequences, argumentOffset, count, countOffset, frame.drawCapacity);
+				auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+				const auto counts = a_recording.Resolve(a_bindings.bucketCounts).GetHandle();
+				const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
+				const std::uint64_t phaseBase = a_prepared.phaseTwo ? std::uint64_t(frame.sequenceDraws) : 0;
+				auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
+					a_words[0] = static_cast<std::uint32_t>(a_value);
+					a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
+				};
+				for (const auto& call : frame.zCalls) {
+					const std::uint64_t first = (phaseBase + call.first) * sizeof(DrawSequence);
+					std::uint32_t words[kDrawPushWords]{};
+					split(words + kZDrawPushSequences, sequencesAddress + first);
+					commands.BindPipeline(call.pipeline);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(call.bucket) * sizeof(std::uint32_t),
+						call.capacity);
+				}
 				if (stats)
 					stats->End(commands, statsSlot, depthKind);
 				commands.EndPass();
@@ -271,6 +302,7 @@ namespace DCLF::Draws
 		org::DeclaredViewToken inputs, inputsDepth, geometries, objects, sequences, count, hzb, visibility, frustum;
 		org::DeclaredViewToken sortCounts, sortStaging, sortRanks;
 		org::DeclaredViewToken fadeRoots;
+		org::DeclaredViewToken bucketCounts, poolFirsts;  // the depth segment's buckets (Resources::zBucketCounts) and the pool's firsts
 	};
 
 	struct BuildDrawsFrame
@@ -321,6 +353,12 @@ namespace DCLF::Draws
 			// the build, which is why the ordering below is the whole design.
 			if (resources->hzb)
 				bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
+			// The depth segment's phases write their draws into the pipeline slots' buckets (Resources::zBucketCounts), indexed
+			// from the pool (PoolFirstsIndex), for the Z-prepass's plain draws.
+			if (segment == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
+				bindings.bucketCounts = a_builder.UnorderedAccess(resources->zBucketCounts[fixedPhase == 2 ? 1 : 0]).View();
+				bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
+			}
 			if (Sorts()) {
 				bindings.sortCounts = a_builder.UnorderedAccess(resources->sort->counts).View();
 				bindings.sortStaging = a_builder.UnorderedAccess(resources->sort->staging).View();
@@ -336,6 +374,7 @@ namespace DCLF::Draws
 			a_out.push_back(frame ? frame->generation : 0);
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(fixedPhase);
+			a_out.push_back(resources->pool ? resources->pool->layout : 0);
 		}
 
 		BuildDrawsFrame Prepare(const BuildDrawsBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -382,6 +421,10 @@ namespace DCLF::Draws
 				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
 				constants.hzbMips = resources->hzbMips;
 			}
+			if (now == RenderGraphRuntime::Segment::ZPrepass && resources->pool) {
+				constants.bucketCountsIndex = CaptureViewIndex(a_preparation, a_bindings.bucketCounts);
+				constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+			}
 			if (Sorts()) {
 				constants.sortCountsIndex = CaptureViewIndex(a_preparation, a_bindings.sortCounts);
 				constants.sortStagingIndex = CaptureViewIndex(a_preparation, a_bindings.sortStaging);
@@ -413,7 +456,8 @@ namespace DCLF::Draws
 
 	private:
 		// Phase 2 appends its few rescues into its own range, unsorted; the other builds are followed by the sort's passes.
-		bool Sorts() const { return resources->sort && fixedPhase != 2; }
+		// The colour segment's draws, sorted by pipeline for its device-generated draw; the depth segment's are bucketed instead.
+		bool Sorts() const { return resources->sort && segment != RenderGraphRuntime::Segment::ZPrepass; }
 
 		std::shared_ptr<Resources> resources;
 		RenderGraphRuntime::Segment segment;
@@ -1104,48 +1148,57 @@ namespace DCLF::Draws
 
 	struct IndexPoolPrepared
 	{
-		std::shared_ptr<const ShadowIndexPool> pool;
+		std::shared_ptr<const IndexPool> pool;
 		std::shared_ptr<const org::LatchBlock> latch;
 		std::uint32_t poolOffset = 0;  // ShadowLatchLayout::PoolOffset
 		IndexPoolConstants constants{};
 	};
 
 	/**
-	 * @brief The index pool's copies (ShadowIndexPool, IndexPoolCS.hlsl): the ranges the shadow commit gave out this frame,
+	 * @brief The index pool's copies (IndexPool, IndexPoolCS.hlsl): the ranges the shadow commit gave out this frame,
 	 * copied from their index buffers before the shadow epoch's views draw from the pool. Its dispatch is in the latch.
 	 */
 	class IndexPoolPass final : public org::TypedRenderGraphPass<IndexPoolPass, IndexPoolPrepared, IndexPoolBindings>
 	{
 	public:
-		explicit IndexPoolPass(std::shared_ptr<ShadowResources> a_resources) :
-			resources(std::move(a_resources)) {}
+		// The epoch's latch (its frame's) and the pool's dispatch in it, as of the shape the epoch runs: the shadow epoch's, or the
+		// depth segment's (whichever commit gave the pool's ranges out this frame wrote the copies).
+		struct LatchOf
+		{
+			std::uint64_t generation = 0;
+			std::shared_ptr<const org::LatchBlock> latch;
+			std::uint32_t poolOffset = 0;
+		};
+		IndexPoolPass(std::shared_ptr<IndexPool> a_pool, std::function<LatchOf()> a_latch) :
+			pool(std::move(a_pool)), latchOf(std::move(a_latch)) {}
 
 		IndexPoolBindings Declare(org::PassBuilder& a_builder)
 		{
 			a_builder.PreferQueue(org::QueueKind::Graphics);
 			IndexPoolBindings bindings{};
-			bindings.copies = a_builder.ShaderResource(resources->pool->copies).View();
-			bindings.indices = a_builder.UnorderedAccess(resources->pool->indices).View();
+			bindings.copies = a_builder.ShaderResource(pool->copies).View();
+			bindings.indices = a_builder.UnorderedAccess(pool->indices).View();
 			return bindings;
 		}
 
 		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
 		{
-			const auto frame = CurrentShadowFrame(*resources, false);
-			a_out.push_back(frame ? frame->generation : 0);
-			a_out.push_back(resources->pool->layout);
+			const auto latch = latchOf();
+			a_out.push_back(latch.generation);
+			a_out.push_back(latch.poolOffset);
+			a_out.push_back(pool->layout);
 		}
 
 		IndexPoolPrepared Prepare(const IndexPoolBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
 		{
 			IndexPoolPrepared prepared{};
-			const auto frame = CurrentShadowFrame(*resources, false);
-			if (!frame || !frame->latch)
+			const auto latch = latchOf();
+			if (!latch.latch)
 				return prepared;
-			prepared.pool = resources->pool;
-			prepared.latch = frame->latch;
-			prepared.poolOffset = resources->latchLayout.PoolOffset();
-			prepared.constants.latchIndex = frame->latch->SrvIndex();
+			prepared.pool = pool;
+			prepared.latch = latch.latch;
+			prepared.poolOffset = latch.poolOffset;
+			prepared.constants.latchIndex = latch.latch->SrvIndex();
 			prepared.constants.copiesIndex = CaptureViewIndex(a_preparation, a_bindings.copies);
 			prepared.constants.poolIndex = CaptureViewIndex(a_preparation, a_bindings.indices);
 			return prepared;
@@ -1168,14 +1221,15 @@ namespace DCLF::Draws
 		}
 
 	private:
-		std::shared_ptr<ShadowResources> resources;
+		std::shared_ptr<IndexPool> pool;
+		std::function<LatchOf()> latchOf;
 	};
 
 	struct ShadowPassBindings
 	{
 		std::array<std::vector<org::DeclaredViewToken>, kShadowDepthTargets> depthViews{};
 		std::vector<org::ResourceBindingToken> sequences, bucketCounts;  // per view slot
-		org::ResourceBindingToken pool;  // the index pool (ShadowIndexPool)
+		org::ResourceBindingToken pool;  // the index pool (IndexPool)
 		org::ResourceBindingToken materialRows, constants, viewBlocks, objects, bones;
 	};
 
@@ -1335,6 +1389,11 @@ namespace DCLF::Draws
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
 	{
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.objects"), a_scene.objects);
+		if (a_scene.pool) {
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.index-pool"), a_scene.pool->indices);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pool-firsts"), a_scene.pool->firsts);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pool-copies"), a_scene.pool->copies);
+		}
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.bones"), a_scene.bones);
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.geometries"), a_scene.geometries);
 		a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.face-positions"), a_scene.facePositions);
@@ -1371,9 +1430,6 @@ namespace DCLF::Draws
 			for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-inputs{}", m)), resources->inputs[m]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.view-blocks"), resources->viewBlocks.buffer);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.index-pool"), resources->pool->indices);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.pool-firsts"), resources->pool->firsts);
-			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.shadow.pool-copies"), resources->pool->copies);
 			for (std::size_t s = 0; s < resources->sequences.size(); ++s) {
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.sequences{}", s)), resources->sequences[s]);
 				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.shadow.draw-count{}", s)), resources->count[s]);
@@ -1389,7 +1445,10 @@ namespace DCLF::Draws
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
-				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources)))
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources] {
+					const auto frame = CurrentShadowFrame(*shadow, false);
+					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, shadow->latchLayout.PoolOffset() };
+				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.build-draws",
@@ -1430,6 +1489,8 @@ namespace DCLF::Draws
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
@@ -1485,7 +1546,15 @@ namespace DCLF::Draws
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));
-			addSort("cs.dclf.z.sort-scan", "cs.dclf.z.sort-scatter", depthSegment, depth);
+			// The pool's copies the depth commit gave out (in a frame whose shadow epoch has not already), before the builds name
+			// the ranges and the draws read them.
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.index-pool",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [main = resources] {
+					const auto frame = CurrentFrame(*main, RenderGraphRuntime::Segment::ZPrepass);
+					return IndexPoolPass::LatchOf{ frame ? frame->generation : 0, frame ? frame->latch : nullptr, main->latchLayout.PoolOffset() };
+				})))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
 					.Epoch(depth));

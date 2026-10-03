@@ -127,6 +127,49 @@ namespace DCLF
 			}
 		}
 
+		// A pulled Lighting stage (DCLF_PULLED) reads its rows' inputs itself: none of its bindings may be one the Z-prepass's
+		// layout leaves out (a row's: the PerTechnique, PerMaterial, PerGeometry and permutation blocks, the material textures and
+		// samplers, the shadow mask).
+		void CheckPulledBindings(const SpirvReflection& a_module, bool a_pixel)
+		{
+			CheckBindings(a_module, a_pixel);
+			using Kind = SpirvReflection::BindingKind;
+			for (const auto& binding : a_module.bindings) {
+				if (binding.binding >= kDescriptorHeapBindings)
+					continue;
+				const std::uint32_t b = binding.binding - kBindingShiftB, t = binding.binding - kBindingShiftT;
+				const bool row = (binding.kind == Kind::ConstantBuffer && (b <= 2 || b == 4)) ||
+				                 ((binding.kind == Kind::Texture || binding.kind == Kind::StorageBuffer) && InRange(binding.binding, kBindingShiftT, kTextureRegisters) &&
+									 (t < kPixelTextureSlots || FeatureMaterialSlot(t) >= 0)) ||
+				                 binding.kind == Kind::Sampler;
+				if (row)
+					throw std::runtime_error(fmt::format("pulled {} {} at binding {} is a row's", a_pixel ? "pixel" : "vertex", KindName(binding.kind), binding.binding));
+			}
+		}
+
+		/**
+		 * @brief What a main pipeline's Z-prepass pipeline is (Built::zKey): its pulled stages, by their SPIR-V, and its depth
+		 * state. Pipeline slots whose keys build the same one share a depth pipeline, and with it a Z-prepass bucket and draw call
+		 * (IndirectState::zGroups): everything else a slot's key selects - its rows, its vertex layout - each draw reads itself.
+		 * The pixel stage is none where the depth pixel stage cannot defer the depth test (FragmentDefersDepth): it only runs
+		 * the alpha test, and without one it has nothing to do.
+		 */
+		struct ZPipelineKey
+		{
+			std::uint64_t vertex = 0, pixel = 0;  // wyhash of the modules; pixel 0 without a pixel stage
+			std::uint32_t vertexBytes = 0, pixelBytes = 0;
+			std::uint32_t cull = 0, depthWrite = 0, depthFunc = 0;
+			std::uint32_t depthBias = 0, depthBiasClamp = 0, slopeScaledDepthBias = 0;  // the floats' bits
+
+			bool operator==(const ZPipelineKey&) const = default;
+		};
+		static_assert(std::has_unique_object_representations_v<ZPipelineKey>);
+		struct ZPipelineKeyHash
+		{
+			using is_avalanching = void;
+			std::uint64_t operator()(const ZPipelineKey& a_key) const noexcept { return ankerl::unordered_dense::detail::wyhash::hash(&a_key, sizeof(a_key)); }
+		};
+
 		void AddUsage(const SpirvReflection& a_module, bool a_pixel, RegisterUsage& a_usage)
 		{
 			using Kind = SpirvReflection::BindingKind;
@@ -245,7 +288,11 @@ namespace DCLF
 		{
 			std::array<rhi::IndirectPipelineSetPtr, kVariantCount> sets;  // one per variant; a key has the same index in both
 			std::array<rhi::CommandSignaturePtr, kVariantCount> signatures;
-			rhi::CommandSignaturePtr depthPassSignature;  // IndirectState::depthPassSignature, when it differs from the depth variant's
+			// The pipelines of [0, applied), held for as long as a recording holds the version (IndirectState::zPipelines).
+			std::vector<org::services::PipelinePayload> pipelines;
+			// Each pipeline's Z-prepass group (Impl::zGroupOf), and each group's first pipeline, whose pulled depth pipeline is
+			// the group's (IndirectState::zGroups, zPipelines).
+			std::vector<std::uint32_t> zGroupOf, zGroupFirst;
 			std::uint32_t applied = 0;
 		};
 		// The shadow views' pipelines, versioned the same way: their plain draws bind each by its index (ShadowIndirectState).
@@ -326,6 +373,9 @@ namespace DCLF
 		// (the view slot's VS_PerFrame at b12, the build's SharedData and FeatureData at b5 and b6) are not the main pass's
 		// frame slots. Without frame push the shadow views use the main layout.
 		rhi::PipelineLayoutPtr shadowLayout;
+		// The Z-prepass's plain draws (IndirectState::zPipelines): their layout and a DrawSequence tail's signature.
+		rhi::PipelineLayoutPtr zLayout;
+		rhi::CommandSignaturePtr zDrawSignature;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
 		// indexed draw from the index pool (BuildDrawsCS, StoreShadowSequence), whose vertex stage pulls its vertices.
@@ -384,6 +434,10 @@ namespace DCLF
 			// draw only has to supply what its own variant declares.
 			std::array<RegisterUsage, kVariantCount> usage;
 			bool discards = false;  // a shadow pipeline whose pixel stage defers the depth test (FragmentDefersDepth)
+			// A main pipeline's: its Z-prepass's plain-draw pipeline (the pulled stages, IndirectState::zPipelines), and what it
+			// is (ZPipelineKey), by which the pipelines that build the same one share it.
+			rhi::PipelinePtr pulledDepth;
+			ZPipelineKey zKey;
 		};
 
 		/**
@@ -478,6 +532,10 @@ namespace DCLF
 
 		Versions<SetVersion> versions;
 		std::vector<org::services::PipelinePayload> setPipelines;  // index -> Built, admitted (not necessarily published)
+		// The admitted pipelines' Z-prepass groups: by index, each pipeline's (its Built::zKey's, numbered as first admitted),
+		// and by group, its first pipeline.
+		std::vector<std::uint32_t> zGroupOf, zGroupFirst;
+		ankerl::unordered_dense::map<ZPipelineKey, std::uint32_t, ZPipelineKeyHash> zGroups;
 		std::uint32_t inFlight = 0;
 		std::uint32_t loggedFailures = 0;
 
@@ -531,12 +589,15 @@ namespace DCLF
 			auto pushed = [&](std::uint32_t a_binding, rhi::ShaderStage a_stage, std::uint32_t a_root, std::uint32_t a_word) {
 				return from(range(a_binding, 1, a_stage, rhi::LayoutRangeSource::PushAddress, 0), a_root, a_word);
 			};
-			auto fromPipelineRow = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 0, kDrawPushPipelineRow); };
 			auto fromMaterialRow = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 0, kDrawPushMaterialRow); };
 			auto fromFrameRecord = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 1, kFramePushRecord); };
 
 			// The main pass: per register, the pass-wide blocks by push address, the rows' (b0, b1, b2, b4) from the draw's rows,
 			// and everything else from the frame record.
+			auto buildRanges = [&](bool a_pulled) {
+			// A pulled draw (the Z-prepass's plain draws) reads its rows itself (DCLF_PULLED, ShaderPrograms.cpp PulledLightingSource):
+			// no row's range.
+			auto fromRow = [&](rhi::LayoutBindingRange a_range) { return from(a_range, 0, kDrawPushPipelineRow); };
 			std::vector<rhi::LayoutBindingRange> mainRanges;
 			std::uint32_t word = kFramePushRegisters;
 			for (const bool pixel : { false, true }) {
@@ -549,17 +610,19 @@ namespace DCLF
 					if ((mask >> r) & 1) {
 						mainRanges.push_back(pushed(b, stage, 1, word));
 						word += 2;
+					} else if (a_pulled && (r <= 2 || r == 4)) {
+						continue;
 					} else if (r == 0) {
-						mainRanges.push_back(fromPipelineRow(range(b, 1, stage, address,
+						mainRanges.push_back(fromRow(range(b, 1, stage, address,
 							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psTechnique) : offsetof(PipelineRowHeader, vsTechnique)))));
 					} else if (r == 1) {
 						mainRanges.push_back(fromMaterialRow(range(b, 1, stage, address,
 							kMaterialRowHeader + (pixel ? offsetof(MaterialRowHeader, psMaterial) : offsetof(MaterialRowHeader, vsMaterial)))));
 					} else if (r == 2) {
-						mainRanges.push_back(fromPipelineRow(range(b, 1, stage, address,
+						mainRanges.push_back(fromRow(range(b, 1, stage, address,
 							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psGeometry) : offsetof(PipelineRowHeader, vsGeometry)))));
 					} else if (r == 4) {
-						mainRanges.push_back(fromPipelineRow(range(b, 1, stage, address,
+						mainRanges.push_back(fromRow(range(b, 1, stage, address,
 							kPipelineRowHeader + (pixel ? offsetof(PipelineRowHeader, psPermutation) : offsetof(PipelineRowHeader, vsPermutation)))));
 					} else {
 						mainRanges.push_back(fromFrameRecord(range(b, 1, stage, address, frame + 8 * std::size_t{ r })));
@@ -571,9 +634,11 @@ namespace DCLF
 			const auto index = rhi::LayoutRangeSource::IndirectIndex;
 			const auto pixelStage = rhi::ShaderStage::Pixel;
 			for (std::uint32_t t = 0; t < kPixelTextureSlots; ++t) {
-				if (t == kShadowMaskSlot) {
-					mainRanges.push_back(fromPipelineRow(range(kBindingShiftT + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMask))));
-					mainRanges.push_back(fromPipelineRow(range(kBindingShiftS + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMaskSampler), true)));
+				if (a_pulled) {
+					continue;
+				} else if (t == kShadowMaskSlot) {
+					mainRanges.push_back(fromRow(range(kBindingShiftT + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMask))));
+					mainRanges.push_back(fromRow(range(kBindingShiftS + t, 1, pixelStage, index, kPipelineRowHeader + offsetof(PipelineRowHeader, shadowMaskSampler), true)));
 				} else {
 					mainRanges.push_back(fromMaterialRow(range(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, textures) + 4 * std::size_t{ t })));
 					mainRanges.push_back(fromMaterialRow(range(kBindingShiftS + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, samplers) + 4 * std::size_t{ t }, true)));
@@ -584,13 +649,18 @@ namespace DCLF
 				const std::uint32_t t = kFeatureMaterialRegisters[f];
 				if (t > first)
 					mainRanges.push_back(fromFrameRecord(range(kBindingShiftT + first, t - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
-				mainRanges.push_back(fromMaterialRow(range(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, features) + 4 * std::size_t{ f })));
+				if (!a_pulled)
+					mainRanges.push_back(fromMaterialRow(range(kBindingShiftT + t, 1, pixelStage, index, kMaterialRowHeader + offsetof(MaterialRowHeader, features) + 4 * std::size_t{ f })));
 				first = t + 1;
 			}
 			mainRanges.push_back(fromFrameRecord(range(kBindingShiftT + first, kTextureRegisters - first, pixelStage, index, offsetof(DrawBindings, textures) + 4 * std::size_t{ first })));
 			// The vertex stage's buffers (the object and bone tables), from the frame record.
 			mainRanges.push_back(fromFrameRecord(range(kVertexTextureBinding, kVertexTextureCount, rhi::ShaderStage::Vertex, index,
 				offsetof(DrawBindings, textures) + 4 * std::size_t{ kTreeWindRegister })));
+			return mainRanges;
+			};
+			const auto mainRanges = buildRanges(false);
+			const auto zRanges = buildRanges(true);
 			const rhi::PipelineLayoutDesc desc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ mainRanges.data(), static_cast<std::uint32_t>(mainRanges.size()) },
 				.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_AllowInputAssembler };
 			logger::info("[DCLF] main layout: {} ranges, {} frame push words", mainRanges.size(), kFramePushWords);
@@ -599,6 +669,16 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the indirect draw pipeline layout");
 				return false;
 			}
+			// The Z-prepass's plain draws (MainOpaquePass): the main layout's ranges but the rows', no input assembler.
+			const rhi::PipelineLayoutDesc zDesc{ .ranges = rhi::Span<rhi::LayoutBindingRange>{ zRanges.data(), static_cast<std::uint32_t>(zRanges.size()) },
+				.pushConstants = { pushConstants, 2u }, .staticSamplers = {}, .flags = rhi::PF_None };
+			if (device.CreatePipelineLayout(zDesc, zLayout) != rhi::Result::Ok) {
+				supported = false;
+				logger::error("[DCLF] Could not create the Z-prepass's pipeline layout");
+				return false;
+			}
+			const auto index = rhi::LayoutRangeSource::IndirectIndex;
+			const auto pixelStage = rhi::ShaderStage::Pixel;
 			// The shadow views (DrawPipelines.h, kShadowPushWords): the draw's words name its material row (the pipeline row's words
 			// are unused), the view's the rest.
 			rhi::PushConstantRangeDesc shadowPush[2] = { drawPush, pushConstants[1] };
@@ -646,19 +726,28 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the shadow views' draw signature");
 				return false;
 			}
+			if (device.CreateCommandSignature(drawDesc, zLayout->GetHandle(), zDrawSignature) != rhi::Result::Ok) {
+				supported = false;
+				logger::error("[DCLF] Could not create the Z-prepass's draw signature");
+				return false;
+			}
 			return true;
 		}
 
-		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, PipelineKey a_key, const ShaderPrograms::Program* a_program,
-			TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
+		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
+			const ShaderPrograms::Program* a_program, TargetFormats a_targets, EngineState a_state, bool a_frontCCW)
 		{
-			SpirvReflection vertex, pixel, depthPixel;
-			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel) || !depthPixel.Parse(a_program->depthPixel))
+			SpirvReflection vertex, pixel, depthPixel, pulledVertex, pulledDepthPixel;
+			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel) || !depthPixel.Parse(a_program->depthPixel) ||
+				!pulledVertex.Parse(a_program->pulledVertex) || !pulledDepthPixel.Parse(a_program->pulledDepthPixel))
 				throw std::runtime_error("not SPIR-V");
 			CheckBindings(vertex, false);
 			CheckBindings(pixel, true);
 			CheckBindings(depthPixel, true);
+			CheckPulledBindings(pulledVertex, false);
+			CheckPulledBindings(pulledDepthPixel, true);
 			auto built = std::make_shared<Built>();
+			const bool pulledPixel = FragmentDefersDepth(a_program->pulledDepthPixel);
 			AddUsage(vertex, false, built->usage[kColorVariant]);
 			AddUsage(pixel, true, built->usage[kColorVariant]);
 			AddUsage(vertex, false, built->usage[kDepthVariant]);
@@ -724,6 +813,35 @@ namespace DCLF
 				};
 				if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), built->pipelines[variant]); result != rhi::Result::Ok)
 					throw std::runtime_error(fmt::format("CreatePipeline ({}) failed ({})", depthOnly ? "depth" : "color", static_cast<int>(result)));
+				if (!depthOnly)
+					continue;
+				// The Z-prepass's plain-draw pipeline: the depth variant's state, the pulled stages, no vertex input, bound per call.
+				auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
+				auto& zKey = built->zKey;
+				zKey.vertex = hash(a_program->pulledVertex);
+				zKey.vertexBytes = static_cast<std::uint32_t>(a_program->pulledVertex.size());
+				zKey.pixel = pulledPixel ? hash(a_program->pulledDepthPixel) : 0;
+				zKey.pixelBytes = pulledPixel ? static_cast<std::uint32_t>(a_program->pulledDepthPixel.size()) : 0;
+				zKey.cull = static_cast<std::uint32_t>(raster.rs.cull);
+				zKey.depthWrite = depth.ds.depthWrite ? 1u : 0u;
+				zKey.depthFunc = static_cast<std::uint32_t>(depth.ds.depthFunc);
+				zKey.depthBias = std::bit_cast<std::uint32_t>(static_cast<float>(raster.rs.depthBias));
+				zKey.depthBiasClamp = std::bit_cast<std::uint32_t>(raster.rs.depthBiasClamp);
+				zKey.slopeScaledDepthBias = std::bit_cast<std::uint32_t>(raster.rs.slopeScaledDepthBias);
+				const rhi::SubobjLayout zLayout{ a_zLayout };
+				const rhi::SubobjShader pulledVertexShader{ rhi::ShaderStage::Vertex,
+					{ a_program->pulledVertex.data(), static_cast<std::uint32_t>(a_program->pulledVertex.size()) }, "main" };
+				const rhi::SubobjShader pulledPixelShader{ rhi::ShaderStage::Pixel,
+					{ a_program->pulledDepthPixel.data(), static_cast<std::uint32_t>(a_program->pulledDepthPixel.size()) }, "main" };
+				const rhi::SubobjInputLayout noInput{};
+				const rhi::SubobjFlags plain{};
+				const rhi::PipelineStreamItem pulledItems[] = {
+					rhi::Make(zLayout), rhi::Make(pulledVertexShader), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend),
+					rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(noInput), rhi::Make(plain), rhi::Make(pulledPixelShader),
+				};
+				const auto pulledCount = static_cast<std::uint32_t>(std::size(pulledItems)) - (pulledPixel ? 0u : 1u);
+				if (const auto result = a_device.CreatePipeline(pulledItems, pulledCount, built->pulledDepth); result != rhi::Result::Ok)
+					throw std::runtime_error(fmt::format("CreatePipeline (pulled depth) failed ({})", static_cast<int>(result)));
 			}
 			return built;
 		}
@@ -802,12 +920,7 @@ namespace DCLF
 			desc.byteStride = sizeof(DrawSequence);
 			desc.pipelineSet = a_version.sets[a_variant]->GetHandle();
 			desc.explicitPreprocess = true;
-			if (device.CreateCommandSignature(desc, layout->GetHandle(), a_version.signatures[a_variant]) != rhi::Result::Ok)
-				return false;
-			if (a_variant != kDepthVariant || !desc.explicitPreprocess)
-				return true;
-			desc.explicitPreprocess = false;
-			return device.CreateCommandSignature(desc, layout->GetHandle(), a_version.depthPassSignature) == rhi::Result::Ok;
+			return device.CreateCommandSignature(desc, layout->GetHandle(), a_version.signatures[a_variant]) == rhi::Result::Ok;
 		}
 
 		/**
@@ -873,10 +986,13 @@ namespace DCLF
 			impl->entries.clear();
 			impl->versions.Retire();
 			impl->setPipelines.clear();
+			impl->zGroupOf.clear();
+			impl->zGroupFirst.clear();
+			impl->zGroups.clear();
 			usage.clear();
 			++generation;
 			impl->inFlight = 0;
-			stats.requested = stats.ready = stats.failed = 0;
+			stats.requested = stats.ready = stats.failed = stats.zPipelines = stats.zDepthOnly = 0;
 			impl->recreatedBy = fmt::format("main pass targets {} -> {}", describe(targets), describe(a_formats));
 		}
 		targets = a_formats;
@@ -999,8 +1115,9 @@ namespace DCLF
 		const auto frontCCW = impl->EngineFrontCCW();
 		if (!frontCCW)
 			return kNotReady;
-		recipe.build = [device = impl->device, layout = impl->layout->GetHandle(), key = a_key, program = &a_program, formats = targets, state, frontCCW = *frontCCW] {
-			return Impl::Build(device, layout, key, program, formats, state, frontCCW);
+		recipe.build = [device = impl->device, layout = impl->layout->GetHandle(), zLayout = impl->zLayout->GetHandle(), key = a_key, program = &a_program, formats = targets,
+							state, frontCCW = *frontCCW] {
+			return Impl::Build(device, layout, zLayout, key, program, formats, state, frontCCW);
 		};
 		auto& entry = impl->entries[a_key];
 		entry.future = impl->service.Request(std::move(recipe));
@@ -1144,6 +1261,13 @@ namespace DCLF
 			}
 			const auto* built = static_cast<const Impl::Built*>(artifact.payload.get());
 			entry.slot = static_cast<std::uint32_t>(impl->setPipelines.size());
+			const auto [group, added] = impl->zGroups.try_emplace(built->zKey, static_cast<std::uint32_t>(impl->zGroupFirst.size()));
+			if (added) {
+				impl->zGroupFirst.push_back(entry.slot);
+				++stats.zPipelines;
+				stats.zDepthOnly += built->zKey.pixel == 0;
+			}
+			impl->zGroupOf.push_back(group->second);
 			impl->setPipelines.push_back(artifact.payload);
 			usage.push_back(built->usage);
 		}
@@ -1162,6 +1286,11 @@ namespace DCLF
 							[&] { return impl->CreateSignature(a_version, variant); }))
 						return false;
 				}
+				a_version.pipelines.assign(impl->setPipelines.begin(), impl->setPipelines.begin() + admitted);
+				a_version.zGroupOf.assign(impl->zGroupOf.begin(), impl->zGroupOf.begin() + admitted);
+				// A group's first pipeline is admitted before any other of it: the groups of [0, admitted) are a prefix.
+				const auto groups = static_cast<std::size_t>(std::ranges::lower_bound(impl->zGroupFirst, admitted) - impl->zGroupFirst.begin());
+				a_version.zGroupFirst.assign(impl->zGroupFirst.begin(), impl->zGroupFirst.begin() + static_cast<std::ptrdiff_t>(groups));
 				return true;
 			});
 			using Result = decltype(result);
@@ -1259,7 +1388,12 @@ namespace DCLF
 			state.sets[variant] = version->sets[variant]->GetHandle();
 			state.signatures[variant] = version->signatures[variant]->GetHandle();
 		}
-		state.depthPassSignature = version->depthPassSignature ? version->depthPassSignature->GetHandle() : state.signatures[kDepthVariant];
+		state.zGroups = version->zGroupOf;
+		state.zPipelines.reserve(version->zGroupFirst.size());
+		for (const auto first : version->zGroupFirst)
+			state.zPipelines.push_back(static_cast<const DrawPipelines::Impl::Built*>(version->pipelines[first].get())->pulledDepth->GetHandle());
+		state.zLayout = impl.zLayout->GetHandle();
+		state.zDrawSignature = impl.zDrawSignature->GetHandle();
 		state.version = std::move(version);
 		state.layout = impl.layout->GetHandle();
 		state.valid = true;

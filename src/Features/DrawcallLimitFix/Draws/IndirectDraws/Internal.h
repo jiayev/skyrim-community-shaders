@@ -122,7 +122,7 @@ namespace DCLF
 			for (std::size_t i = 0; i < a.sets.size(); ++i)
 				if (!SameHandle(a.sets[i], b.sets[i]) || !SameHandle(a.signatures[i], b.signatures[i]))
 					return false;
-			return SameHandle(a.depthPassSignature, b.depthPassSignature);
+			return SameHandle(a.zLayout, b.zLayout) && SameHandle(a.zDrawSignature, b.zDrawSignature);
 		}
 
 		// The dispatch signature every BuildDraws pass records with: one Dispatch argument, read from a latch.
@@ -214,10 +214,24 @@ namespace DCLF
 			// The latch block the epoch wrote (Resources::latch): a colour epoch with more cascades than it holds makes a new one
 			// (ReserveMainLatch), and a frame in flight keeps reading its own.
 			std::shared_ptr<const org::LatchBlock> latch;
+			// The depth segment's plain indirect draws (MainOpaquePass): one per bucket, a pipeline slot's range of the sequences
+			// (Resources::zBucketFirst, zBucketCapacity) drawn with its pulled depth pipeline (IndirectState::pulledDepth) and its
+			// pipeline row. Phase 2's ranges are the same past sequenceDraws.
+			// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline.
+			struct ZCall
+			{
+				std::uint32_t bucket = 0, first = 0, capacity = 0;
+				rhi::PipelineHandle pipeline{};
+				bool operator==(const ZCall& o) const
+				{
+					return bucket == o.bucket && first == o.first && capacity == o.capacity && SameHandle(pipeline, o.pipeline);
+				}
+			};
+			std::vector<ZCall> zCalls;
 
 			bool SameShape(const PassFrame& o) const
 			{
-				return drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
+				return zCalls == o.zCalls && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
@@ -383,6 +397,8 @@ namespace DCLF
 			std::vector<Slot> slots;
 		};
 
+		struct IndexPool;
+
 		/**
 		 * @brief The scene's tables on the GPU, one set for every epoch - the shadow views', Skylighting's, the Z-prepass's and
 		 * the colour segment's: the object records (t127), the bone rows (t126), the geometry table (BuildDraws' draws) and the
@@ -394,6 +410,9 @@ namespace DCLF
 		struct SceneBuffers
 		{
 			std::shared_ptr<org::Buffer> objects, bones, geometries, facePositions;
+			// The index pool every plain indexed draw binds (IndexPool): the shadow views' and the Z-prepass's, made by whichever
+			// sets up first (EnsureIndexPool) and kept current by every commit that draws from it (UpdateIndexPool).
+			std::shared_ptr<IndexPool> pool;
 			// Their SRVs' descriptor heap indices, and the positions' address: a growth gives the buffer new ones (the old ones
 			// are retired once the GPU is done with them), so every build takes them from here, after ReserveSceneTables.
 			std::uint32_t objectsIndex = 0, bonesIndex = 0;
@@ -539,6 +558,15 @@ namespace DCLF
 			// The scene's tables, every epoch's (SceneBuffers): the object records, bone rows, geometry table and face positions.
 			std::shared_ptr<SceneBuffers> scene;
 			std::shared_ptr<org::Buffer> inputs, sequences, count;  // BuildDraws: in, out, out (and the scene's geometries)
+			// The Z-prepass's plain draws (MainOpaquePass, DCLF_PULLED): per pipeline slot, its bucket's range of each phase's sequences
+			// - every draw the slot's objects can produce (ReserveMainSequences), held while they fit and grown to a power of two past
+			// it, so the recorded calls change only then (zBucketsLayout) - and each phase's count words, a word a slot, zeroed by the
+			// depth commit. The index pool is the scene's.
+			std::vector<std::uint32_t> zBucketCapacity, zBucketFirst;
+			std::uint64_t zBucketsLayout = 0;
+			std::array<std::shared_ptr<org::Buffer>, 2> zBucketCounts;
+			std::uint32_t zBucketCountWords = 0;
+			std::shared_ptr<IndexPool> pool;
 			// The objects the per-object buffers hold (inputs, inputsDepth, visibility, frustum): the scene's
 			// object capacity, grown with it (ReserveObjectBuffers).
 			std::uint32_t objectCapacity = 0;
@@ -578,8 +606,8 @@ namespace DCLF
 			// (occlusion aside: the engine's OnVisible semantics). Never cleared: a stale stamp is simply not this frame's.
 			std::shared_ptr<org::Buffer> frustum;
 			std::shared_ptr<PassStats> passStats;  // CS_DCLF_PASS_STATS
-			// The explicit DGC preprocesses' state list of the colour segment's passes. The depth pass
-			// has none: IndirectState::depthPassSignature.
+			// The explicit DGC preprocesses' state list of the colour segment's passes. The depth segment's draws are plain
+			// (PassFrame::zCalls).
 			std::shared_ptr<PreprocessStates> preprocessMain;
 			std::shared_ptr<org::PixelBuffer> hzb;
 			std::shared_ptr<const ComputeProgram> hzbProgram;
@@ -611,6 +639,7 @@ namespace DCLF
 			org::ResourceBindingToken sequences, count, materialRows, pipelineRows, objects, bones;
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
+			org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
 		};
 
 		/**
@@ -907,7 +936,7 @@ namespace DCLF
 		 * takes one back when its last slot lets go (UpdateIndexPool); the copies run in the shadow epoch before its draws
 		 * (IndexPoolCS). A pool that cannot fit a range doubles, and its ranges are laid out and copied again. Render thread.
 		 */
-		struct ShadowIndexPool
+		struct IndexPool
 		{
 			static constexpr std::uint32_t kNoRange = ~0u;
 			struct Range
@@ -950,7 +979,7 @@ namespace DCLF
 			// bound a view's buckets (bucketCountWords, grown with them).
 			std::vector<std::shared_ptr<org::Buffer>> bucketCounts;
 			std::uint32_t bucketCountWords = 0;
-			std::shared_ptr<ShadowIndexPool> pool;
+			std::shared_ptr<IndexPool> pool;
 			std::vector<winrt::com_ptr<ID3D11Buffer>> countD3D11;
 			// The view slots' blocks (kShadowViewSlotBytes a row: b0, b12), written by each epoch's commit.
 			GrowableRows viewBlocks;
@@ -1342,7 +1371,7 @@ namespace DCLF
 			};
 			struct PipelineState
 			{
-				std::array<std::uint32_t, 6> key{};
+				std::array<std::uint32_t, 8> key{};
 				bool written = false;
 				bool blocksOk = false;
 				bool shadowMask = false, shadowMaskSampler = false;  // t14, s14 given
@@ -2535,6 +2564,19 @@ namespace DCLF
 			std::shared_ptr<org::runtime::StagedUploadBatch> batch;
 		};
 
+		/**
+		 * @brief The index pool every plain indexed draw binds (IndexPool): the scene's (SceneBuffers::pool), made with its
+		 * copy program by whichever extension sets up first. Null, logged, when the program cannot be created.
+		 */
+		std::shared_ptr<IndexPool> EnsureIndexPool(SceneBuffers& a_scene, rhi::Device a_device, bool a_small);
+
+		/**
+		 * @brief Brings the index pool up to the tables (ShadowEpochs.cpp): whichever commit draws from it first in a frame gives the
+		 * ranges out and writes their copies' dispatch at a_poolOffset of its latch slot; a later commit finds nothing to copy.
+		 */
+		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, org::LatchBlock& a_latch,
+			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads);
+
 		// The graph extensions that add DCLF's passes (Passes.cpp).
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeMainOpaqueExtension(std::shared_ptr<Resources> a_resources);
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources);
@@ -2635,7 +2677,7 @@ namespace DCLF
 		 */
 		void ReserveShadowLatch(std::uint32_t a_views, std::uint32_t a_keys, std::uint32_t a_rasterStates, std::uint32_t a_sunProcesses);
 		// The main latch block's cascade region: a new block when the frame has more cascades than it holds.
-		static void ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes);
+		static void ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets = 0);
 		std::uint32_t shadowRowsWanted = 0;  // the last shadow build's (ShadowPayload::rowsWanted)
 		ShadowInputs PrepareShadowInputs(const SceneStore& a_store, const ShadowResources& a_resources, const std::array<bool, kShadowModeCount>& a_modeUsed,
 			const std::array<ModeRasterStates, kShadowModeCount>& a_modeRasterStates) const;
@@ -2889,6 +2931,8 @@ namespace DCLF
 		// The local shadow lights its BuildDraws selected against (LocalShadowLights), and their volumes as uploaded.
 		LocalShadowLights localShadows;
 		std::vector<GpuShadowVolume> shadowVolumes;
+		// The depth commit's scratch: its buckets' tables (both phases) and the zeros their count words take.
+		std::vector<std::uint32_t> zBucketTable, zBucketZeros, zBucketMap, zGroupBucket;
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**

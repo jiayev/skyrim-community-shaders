@@ -1,4 +1,4 @@
-// Drawcall Limit Fix: the shadow views' index pool (IndirectDraws: ShadowIndexPool). The shadow commit lists the index buffers
+// Drawcall Limit Fix: the shadow views' index pool (IndirectDraws: IndexPool). The shadow commit lists the index buffers
 // it gave a range of the pool this frame; a group copies one, word by word, from the buffer's device address into its range.
 // The shadow views' plain indexed draws then bind the pool alone (ShadowViewPass).
 
