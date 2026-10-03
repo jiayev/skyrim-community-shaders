@@ -322,6 +322,22 @@ namespace DCLF
 		{
 			return *reinterpret_cast<const float*>(static_cast<const std::byte*>(a_node) + a_offset);
 		}
+
+		// FUN_14147d640(node): the node's object (+0x118, through its vfunc 0x30), which FUN_140437e50 selects a tree for the near
+		// list by: its +0x128, that one's +0x18, and an int at +0x10 of that equal to 1.
+		REL::Relocation<std::uintptr_t (*)(const void*)> treeObjectOf{ REL::Offset(0x147d640) };
+
+		bool NearListSelectable(const void* a_node)
+		{
+			const std::uintptr_t object = treeObjectOf(a_node);
+			if (!object)
+				return false;
+			const auto first = *reinterpret_cast<const std::uintptr_t*>(object + 0x128);
+			if (!first)
+				return false;
+			const auto second = *reinterpret_cast<const std::uintptr_t*>(first + 0x18);
+			return second && *reinterpret_cast<const std::int32_t*>(second + 0x10) == 1;
+		}
 	}
 
 	const void* TreeStaticOf(const RE::BSShaderProperty& a_property, TreeStatic& a_out)
@@ -336,11 +352,16 @@ namespace DCLF
 		a_out.timer = TreeNodeFloat(node, 0x164);
 		a_out.previousTimer = TreeNodeFloat(node, 0x168);
 		a_out.amplitude = TreeNodeFloat(node, 0x15c);
-		// The manager advances only a node with a model (+0xF8, its +0x40), and scales the gust by the model's +0xB0.
+		// The manager advances a tree node only in its near loop (FUN_1404381e0's loop 2, over FUN_140437e50's near list): a node
+		// the near list selects (NearListSelectable), whose model (+0xF8, its +0x40) has bones (+0xB8). It scales the gust by that
+		// model's +0xB0. Any other node keeps its own clock and amplitude: its model's +0xB0 is no amplitude the engine ever reads
+		// (2.3e36 on trees whose leaves, gusted by it, covered the sun's cascades). Not replicated: the near list's cap on its
+		// count (the nearest first).
 		const auto* holder = *reinterpret_cast<const std::byte* const*>(bytes + 0xF8);
 		const auto* model = holder ? *reinterpret_cast<const std::byte* const*>(holder + 0x40) : nullptr;
-		a_out.animated = model ? 1u : 0u;
-		a_out.modelAmplitude = model ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
+		const bool bones = model && *reinterpret_cast<const void* const*>(model + 0xB8);
+		a_out.animated = bones && NearListSelectable(node) ? 1u : 0u;
+		a_out.modelAmplitude = a_out.animated ? *reinterpret_cast<const float*>(model + 0xB0) : 0.0f;
 		return node;
 	}
 

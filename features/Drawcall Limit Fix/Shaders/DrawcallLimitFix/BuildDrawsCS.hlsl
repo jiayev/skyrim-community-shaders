@@ -391,6 +391,12 @@ static const uint kInputDrawable = 1u << 16;
 static const uint kCountDrawn = 0;          // sequences written
 static const uint kCountCulled = 4;         // rejected by this frame's culling
 static const uint kCountTested = 8;         // looked at by the culling at all
+// What a shadow view drops before its culling: inputs of its caster class, then those outside the sun's entry processes, at
+// most the minimum radius, under a stood-in root fading.
+static const uint kCountSunEntryOut = 12;
+static const uint kCountMinRadius = 16;
+static const uint kCountStoodInFading = 20;
+static const uint kCountCasterClass = 64;
 // Words 3-5 and 16 are free (they counted against the engine's own culling, which no longer marks the objects).
 static const uint kCountOccluded = 24;      // rejected by the HZB rather than by the frustum
 // What the HZB actually held under the objects that were tested, so that a suspicious rejection count can
@@ -664,24 +670,32 @@ bool Occluded(float3 boundCentre, float boundRadius)
 		objectWord |= (LocalShadowMask(bound.xyz, bound.w, (input.w & kObjectLandscapeLights) != 0) & 0xFu) << kObjectLocalShadowShift;
 	}
 	const bool drawable = (input.w & kInputDrawable) != 0;
-	const uint phase = CullPhase();
 	uint scratch;
+	const uint phase = CullPhase();
 
 	// A shadow view draws one caster class: the mode's inputs hold both.
 	const bool volumetricCaster = (input.w & kObjectVolumetricOnly) != 0;
 	if ((CastersOnly() && volumetricCaster) || (VolumetricOnly() && !volumetricCaster))
 		return;
+	if (phase == kPhaseSingle)
+		count.InterlockedAdd(kCountCasterClass, 1, scratch);
 	// The sun's entry rule: the input's entry sphere (its fade row, IndirectDraws.cpp: SetSunEntryRow) outside every full-frustum
 	// process of the frame.
-	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow)))
+	if (SunEntry() && OutsideSunEntry(ObjectRow(objectIndex, kObjectSunEntryRow))) {
+		count.InterlockedAdd(kCountSunEntryOut, 1, scratch);
 		return;
-	if (MinRadius() && ObjectRow(objectIndex, kObjectBoundRow).w <= 32.0)
+	}
+	if (MinRadius() && ObjectRow(objectIndex, kObjectBoundRow).w <= 32.0) {
+		count.InterlockedAdd(kCountMinRadius, 1, scratch);
 		return;
+	}
 	// A shadow view's caster under a stood-in root, whose fade is FadeStateCS's alone: the engine casts no fading caster
 	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict took the material's alpha), nor one under a root
 	// faded out.
-	if (phase == kPhaseSingle && FadeRootsIndex != 0 && StoodInFading(inputs.Load(inputOffset + 48)))
+	if (phase == kPhaseSingle && FadeRootsIndex != 0 && StoodInFading(inputs.Load(inputOffset + 48))) {
+		count.InterlockedAdd(kCountStoodInFading, 1, scratch);
 		return;
+	}
 
 	// Decals: single-phase, fixed slot. Every decal input writes its slot, culled or not, so nothing a
 	// previous frame left there can be executed: a culled or undrawable decal writes the same sequence

@@ -83,6 +83,9 @@ namespace DCLF
 		{
 			std::vector<const void*> accumulators;
 			std::vector<std::shared_ptr<const PassCapture::ClaimSet>> claims;
+			std::vector<std::uint32_t> descriptors;  // per accumulator: its descriptor index
+			std::vector<SunAccumulation::CascadeRegistration> claimed;  // recorded on CS_DCLF_SET_PARITY's frames
+			bool record = false;
 			std::uint32_t count = 0;
 			int cascade = -1;  // the cascade FUN_1414f0920 is culling (index into accumulators), -1 between them
 			std::uint64_t skipped = 0;
@@ -220,10 +223,6 @@ namespace DCLF
 		frameState.probe = probe;
 		frameState.parity = SwitchEnabled(Switch::PersistentParity) && ParityDue(SceneStore::Get().GetFrame());
 		skipStats.parityFrames.fetch_add(frameState.parity ? 1 : 0, std::memory_order_relaxed);
-		for (auto& cascade : frameState.cascades)
-			cascade = {};
-		frameState.cascadeCount = 0;
-		frameState.sunBits = 0;
 		exclusionLive.store(true, std::memory_order_release);
 		stats.filterTicks += Now() - start;
 	}
@@ -250,8 +249,11 @@ namespace DCLF
 
 	void SunAccumulation::GpuCascades(std::vector<GpuCascade>& a_out) const
 	{
+		// The cascades the sun's Accumulate culled with this frame, whether or not the entry exclusion ran: the colour pass's sun
+		// test needs them every frame (without them every pass with the sun's bits would miss, and draw unshadowed). None when the
+		// sun did not accumulate this frame, when the engine gives no pass the sun's bits either.
 		a_out.clear();
-		if (!exclusionLive.load(std::memory_order_acquire))
+		if (frameState.cascadesFrame != SceneStore::Get().GetFrame())
 			return;
 		const auto& state = frameState;
 		for (std::uint32_t c = 0; c < state.cascadeCount && c < state.cascades.size(); ++c) {
@@ -371,6 +373,7 @@ namespace DCLF
 					if (!accumulator)
 						continue;
 					call.accumulators.push_back(accumulator);
+					call.descriptors.push_back(i);
 					// The claims PassCapture would withhold this accumulator's passes by: its batch renderer's
 					// render mode's, when the renderer is a shadow view's.
 					const auto* data = active ? accumulator->GetRuntimeData() : nullptr;
@@ -383,20 +386,28 @@ namespace DCLF
 				// is set, which the full-frustum cull cleared before this.
 				if (self.frameState.cascades.size() < call.count)
 					self.frameState.cascades.resize(call.count);
+				const std::uint32_t frame = SceneStore::Get().GetFrame();
+				call.record = SwitchEnabled(Switch::SetParity) && (frame % 30) == 0;
 				currentCall = &call;
 				const std::int64_t start = Now();
 				func(a_light, a_count, a_arg2, a_arg3);
 				const std::int64_t ticks = Now() - start;
 				currentCall = nullptr;
+				if (call.record) {
+					self.claimedRegistrations = std::move(call.claimed);
+					self.claimedRegistrationsFrame = frame;
+				}
 				// The cascades as the engine culled them: what a removed entry's geometries are tested against when the
 				// main camera registers them. From here until the next mask clear, those registrations take DCLF's bits.
-				if (self.exclusionLive.load(std::memory_order_relaxed)) {
+				{
 					auto& state = self.frameState;
 					state.cascadeCount = call.count;
+					state.cascadesFrame = frame;
 					state.sunBits = 0;
 					for (std::uint32_t i = 0; i < call.count; ++i)
 						state.sunBits |= state.cascades[i].captured ? state.cascades[i].bit : 0u;
-					self.bitsReady.store(true, std::memory_order_release);
+					if (self.exclusionLive.load(std::memory_order_relaxed))
+						self.bitsReady.store(true, std::memory_order_release);
 				}
 
 				auto& stats = self.stats;
@@ -470,6 +481,8 @@ namespace DCLF
 				if (underRemoved && !self.frameState.probe)
 					++self.stats.cascadeRegistrationsUnderRemoved;
 				if (claimed) {
+					if (call->record)
+						call->claimed.push_back({ geometry, call->descriptors[cascade] });
 					// An owned geometry's mask stays 0 (ClearOwnedMask); any other takes the cascade's bit for its main registration.
 					if (PrimaryCull::Get().Owned(*geometry))
 						ClearOwnedMask(a_geometry);
@@ -507,6 +520,10 @@ namespace DCLF
 				auto& self = SunAccumulation::Get();
 				self.bitsReady.store(false, std::memory_order_relaxed);
 				self.exclusionLive.store(false, std::memory_order_relaxed);
+				for (auto& cascade : self.frameState.cascades)
+					cascade = {};
+				self.frameState.cascadeCount = 0;
+				self.frameState.sunBits = 0;
 				const std::int64_t start = Now();
 				func(a_light, a_lists, a_arg);
 				const std::int64_t ticks = Now() - start;
@@ -542,7 +559,7 @@ namespace DCLF
 				if (call && a_descriptor) {
 					void* accumulator = At<void*>(a_descriptor, kDescriptorAccumulator);
 					call->cascade = call->IndexOf(accumulator);
-					if (call->cascade >= 0 && self.exclusionLive.load(std::memory_order_relaxed)) {
+					if (call->cascade >= 0) {
 						auto& cascade = self.frameState.cascades[call->cascade];
 						cascade = {};
 						// Accumulate has just set it: 1 << the shadow-light count.
@@ -593,7 +610,7 @@ namespace DCLF
 				// an empty objectArray it made none, and the planes are not this cascade's.
 				SunCall* call = currentCall;
 				auto& self = SunAccumulation::Get();
-				if (!call || call->cascade < 0 || !a_process || !self.exclusionLive.load(std::memory_order_relaxed))
+				if (!call || call->cascade < 0 || !a_process)
 					return;
 				auto& cascade = self.frameState.cascades[call->cascade];
 				if (cascade.captured || At<RE::BSTArray<RE::NiPointer<RE::NiAVObject>>>(a_fullProcess, kProcessObjectArray).empty())

@@ -153,6 +153,9 @@ namespace DCLF
 		// The culling's GPU counters of one sampled view (the count buffer read back a few frames after
 		// its epoch): what says the frustum test is doing something, and against which view.
 		std::uint32_t cullDrawn = 0, cullRejected = 0, cullTested = 0;
+		// Before the culling: the sampled view's inputs of its caster class, and those dropped outside the sun's entry processes, at
+		// most the minimum radius, under a stood-in root fading.
+		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullStoodInFading = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
 		// CS_DCLF_SHADOW_OWNERSHIP=static: casters claimed per render mode at the last publication.
 		std::array<std::uint32_t, 3> claimed{};

@@ -155,17 +155,15 @@ namespace DCLF
 			std::vector<std::uint32_t> changed;
 			bool allFirsts = false;
 			auto release = [&](std::uint32_t a_slot) {
-				const std::uint64_t address = p.slotAddress[a_slot];
-				p.slotAddress[a_slot] = 0;
+				auto& range = p.slots[a_slot];
 				p.slotFirst[a_slot] = IndexPool::kNoRange;
-				if (!address)
+				if (range.first == IndexPool::kNoRange) {
+					range = {};
 					return;
-				const auto it = p.ranges.find(address);
-				if (it == p.ranges.end() || --it->second.refs)
-					return;
+				}
 				// Back on the free list at once: this frame's copies are ordered after every earlier read of the pool (the
 				// graph's barrier between the views' index reads and the copy's writes).
-				auto [at, inserted] = p.free.emplace(it->second.first, it->second.count);
+				auto [at, inserted] = p.free.emplace(range.first, range.count);
 				if (auto next = std::next(at); next != p.free.end() && at->first + at->second == next->first) {
 					at->second += next->second;
 					p.free.erase(next);
@@ -176,8 +174,8 @@ namespace DCLF
 						p.free.erase(at);
 					}
 				}
-				p.indicesHeld -= it->second.count;
-				p.ranges.erase(it);
+				p.indicesHeld -= range.count;
+				range = {};
 			};
 			auto allocate = [&](std::uint32_t a_count) -> std::uint32_t {
 				for (auto it = p.free.begin(); it != p.free.end(); ++it) {
@@ -195,12 +193,13 @@ namespace DCLF
 				p.end += a_count;
 				return first;
 			};
-			auto copyOf = [&](std::uint64_t a_address, const IndexPool::Range& a_range, std::uint64_t a_bytes) {
-				copies.push_back({ static_cast<std::uint32_t>(a_address), static_cast<std::uint32_t>(a_address >> 32), a_range.first,
-					static_cast<std::uint32_t>((a_bytes + 3) / 4) });
+			auto copyOf = [&](const IndexPool::Range& a_range) {
+				copies.push_back({ static_cast<std::uint32_t>(a_range.address), static_cast<std::uint32_t>(a_range.address >> 32), a_range.first,
+					static_cast<std::uint32_t>((a_range.bytes + 3) / 4) });
 			};
 			// A full pool: twice what it must hold, every range laid out again from the start and copied again (a new backing,
-			// so frames in flight keep reading the old one).
+			// so frames in flight keep reading the old one). Only between the releases and the acquires below, so every range
+			// held is its slot's buffer as the tables have it now.
 			auto grow = [&](std::uint32_t a_more) {
 				std::uint64_t needed = std::uint64_t(p.indicesHeld) + a_more;
 				std::uint64_t capacity = std::max<std::uint64_t>(p.capacity, 2);
@@ -213,72 +212,89 @@ namespace DCLF
 				p.free.clear();
 				p.end = 0;
 				copies.clear();
-				ankerl::unordered_dense::map<std::uint64_t, std::uint32_t> moved;
-				for (auto& [address, range] : p.ranges) {
+				for (auto& range : p.slots) {
+					if (range.first == IndexPool::kNoRange)
+						continue;
 					range.first = p.end;
 					p.end += range.count;
-					moved.emplace(address, range.first);
+					copyOf(range);
 				}
-				for (std::uint32_t g = 0; g < p.slotAddress.size(); ++g) {
-					if (const auto it = moved.find(p.slotAddress[g]); it != moved.end())
-						p.slotFirst[g] = it->second;
-				}
-				for (const auto& [address, range] : p.ranges) {
-					// The bytes the range was given for: its count covers them (an even number of 2-byte indices).
-					copyOf(address, range, std::uint64_t(range.count) * 2);
-				}
+				for (std::size_t g = 0; g < p.slots.size(); ++g)
+					p.slotFirst[g] = p.slots[g].first;
 				allFirsts = true;
 			};
+			// A slot's own range of its index buffer, copied whenever the log names the slot: a range is never shared, because
+			// a buffer address is no identity - the device hands a freed buffer's address to the next buffer it creates, which a
+			// cell's load does while the unloaded cell's slots still hold theirs.
 			auto acquire = [&](std::uint32_t a_slot) {
 				const auto& geometry = a_tables.geometries[a_slot];
 				if (!geometry.indexAddress || !geometry.indexBytes)
 					return;
-				auto it = p.ranges.find(geometry.indexAddress);
-				if (it == p.ranges.end()) {
-					const std::uint32_t indices = static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
-					std::uint32_t first = allocate(indices);
-					if (first == IndexPool::kNoRange) {
-						grow(indices);
-						first = allocate(indices);
-					}
-					it = p.ranges.emplace(geometry.indexAddress, IndexPool::Range{ first, indices, 0 }).first;
-					p.indicesHeld += indices;
-					copyOf(geometry.indexAddress, it->second, geometry.indexBytes);
+				const std::uint32_t indices = static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
+				std::uint32_t first = allocate(indices);
+				if (first == IndexPool::kNoRange) {
+					grow(indices);
+					first = allocate(indices);
 				}
-				++it->second.refs;
-				p.slotAddress[a_slot] = geometry.indexAddress;
-				p.slotFirst[a_slot] = it->second.first;
+				auto& range = p.slots[a_slot];
+				range = { first, indices, geometry.indexAddress, geometry.indexBytes };
+				p.slotFirst[a_slot] = first;
+				p.indicesHeld += indices;
+				copyOf(range);
 			};
 
-			if (!p.cursor.Continues(a_tables.geometryLog, a_generation) || p.slotAddress.size() > count) {
+			if (!p.cursor.Continues(a_tables.geometryLog, a_generation) || p.slots.size() > count) {
 				// Every slot again, from an empty pool.
-				p.ranges.clear();
 				p.free.clear();
 				p.end = 0;
 				p.indicesHeld = 0;
-				p.slotAddress.assign(count, 0);
+				p.slots.assign(count, {});
 				p.slotFirst.assign(count, IndexPool::kNoRange);
 				for (std::uint32_t g = 0; g < count; ++g)
 					acquire(g);
 				p.cursor.Restart(a_generation);
 				allFirsts = true;
 			} else {
-				const auto first = static_cast<std::uint32_t>(p.slotAddress.size());
-				p.slotAddress.resize(count, 0);
+				const auto first = static_cast<std::uint32_t>(p.slots.size());
+				p.slots.resize(count);
 				p.slotFirst.resize(count, IndexPool::kNoRange);
-				for (std::uint32_t g = first; g < count; ++g) {
-					acquire(g);
-					changed.push_back(g);
-				}
-				for (const std::uint32_t g : p.cursor.Unread(a_tables.geometryLog)) {
-					if (g >= count || g >= first)
-						continue;
+				for (std::uint32_t g = 0; g < count; ++g)
+					if (g >= first)
+						changed.push_back(g);
+				for (const std::uint32_t g : p.cursor.Unread(a_tables.geometryLog))
+					if (g < first)
+						changed.push_back(g);
+				std::sort(changed.begin(), changed.end());
+				changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
+				// Every release before any acquire.
+				for (const std::uint32_t g : changed)
 					release(g);
+				for (const std::uint32_t g : changed)
 					acquire(g);
-					changed.push_back(g);
-				}
 			}
 			p.cursor.Advance(a_tables.geometryLog);
+			// Build parity: every range against its slot's buffer as the tables have it now (a slot whose buffer changed with no
+			// log entry would keep drawing the old buffer's indices).
+			if (SwitchEnabled(Switch::BuildParity) && (++p.checks % 300) == 0) {
+				std::uint32_t held = 0, stale = 0, unheld = 0, firstStale = IndexPool::kNoRange;
+				for (std::uint32_t g = 0; g < count; ++g) {
+					const auto& geometry = a_tables.geometries[g];
+					const auto& range = p.slots[g];
+					const bool wants = geometry.indexAddress && geometry.indexBytes;
+					if (range.first == IndexPool::kNoRange) {
+						unheld += wants ? 1 : 0;
+						continue;
+					}
+					++held;
+					if (!wants || range.address != geometry.indexAddress || range.bytes != geometry.indexBytes) {
+						if (stale++ == 0)
+							firstStale = g;
+					}
+				}
+				logger::info("[DCLF] index pool parity: {} slots, {} ranges ({} indices held of {}), {} stale, {} without a range{}{}", count, held, p.indicesHeld,
+					p.capacity, stale, unheld, stale || unheld ? " <- INDEX POOL" : " <- OK",
+					firstStale != IndexPool::kNoRange ? fmt::format("; first stale: slot {}", firstStale) : std::string());
+			}
 
 			// The slots' first indices: every one into a new backing, else the slots changed.
 			if (count > p.firstsCapacity) {
@@ -292,8 +308,6 @@ namespace DCLF
 				if (count)
 					a_uploads(p.firsts, p.slotFirst.data(), std::size_t(count) * sizeof(std::uint32_t), 0);
 			} else {
-				std::sort(changed.begin(), changed.end());
-				changed.erase(std::unique(changed.begin(), changed.end()), changed.end());
 				for (std::size_t i = 0; i < changed.size();) {
 					std::size_t j = i + 1;
 					while (j < changed.size() && changed[j] == changed[j - 1] + 1)
@@ -477,6 +491,173 @@ namespace DCLF
 		}
 	}
 
+	namespace
+	{
+		/** @brief BuildDrawsCS's Culled, on the CPU: the latch's planes, then its view-projection's frustum over the bound's box. */
+		bool CulledByLatch(const BuildDrawsLatch& a_latch, const RE::NiBound& a_bound)
+		{
+			const float c[3] = { a_bound.center.x, a_bound.center.y, a_bound.center.z };
+			const float r = a_bound.radius;
+			for (std::uint32_t p = 0; p < 6; ++p)
+				if ((a_latch.cullPlaneMask & (1u << p)) &&
+					a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3] < -r)
+					return true;
+			const bool noNear = (a_latch.cullFlags & kCullNoNearPlane) != 0;
+			bool out[6] = { true, true, true, true, true, true };
+			for (std::uint32_t corner = 0; corner < 8; ++corner) {
+				const float x = c[0] + ((corner & 1) ? r : -r), y = c[1] + ((corner & 2) ? r : -r), z = c[2] + ((corner & 4) ? r : -r);
+				float clip[4];
+				for (std::uint32_t row = 0; row < 4; ++row)
+					clip[row] = a_latch.viewProj[row * 4 + 0] * x + a_latch.viewProj[row * 4 + 1] * y + a_latch.viewProj[row * 4 + 2] * z + a_latch.viewProj[row * 4 + 3];
+				out[0] = out[0] && clip[0] < -clip[3];
+				out[1] = out[1] && clip[0] > clip[3];
+				out[2] = out[2] && clip[1] < -clip[3];
+				out[3] = out[3] && clip[1] > clip[3];
+				out[4] = out[4] && clip[2] < 0 && !noNear;
+				out[5] = out[5] && clip[2] > clip[3];
+			}
+			return out[0] || out[1] || out[2] || out[3] || out[4] || out[5];
+		}
+	}
+
+	/**
+	 * CS_DCLF_SET_PARITY: a sun view's culling against the engine's own cascade cull of the same frame - every claimed caster the
+	 * engine's cull of the view's cascade reached (SunAccumulation::ClaimedRegistrations) must pass the view's latch, or it is
+	 * drawn by nobody: the engine skips it as claimed, and DCLF's view rejects it.
+	 */
+	void IndirectDraws::Impl::CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload)
+	{
+		static std::uint64_t checks = 0, registered = 0, rejected = 0;
+		static std::string first;
+		if (!a_view.sunView || a_view.casterClass != 0)
+			return;
+		std::uint32_t frame = 0;
+		const auto& registrations = SunAccumulation::Get().ClaimedRegistrations(frame);
+		if (frame != a_frame)
+			return;
+		const auto* shadowView = ShadowViews::Get().At(a_view.viewId);
+		if (!shadowView)
+			return;
+		++checks;
+		for (const auto& registration : registrations) {
+			if (registration.descriptor != shadowView->descriptor || !registration.geometry)
+				continue;
+			++registered;
+			if (CulledByLatch(a_latch, registration.geometry->worldBound)) {
+				++rejected;
+				if (first.empty()) {
+					const auto& b = registration.geometry->worldBound;
+					first = fmt::format("'{}' in cascade {} (view {}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}", registration.geometry->name.c_str() ? registration.geometry->name.c_str() : "?",
+						shadowView->descriptor, a_view.viewId, b.center.x, b.center.y, b.center.z, b.radius);
+				}
+			}
+		}
+		// The other direction: what the view draws that covers most of the map at the light's near plane (a caster in front of
+		// everything), and anything drawn whose world transform is far from its own bound. From the records the GPU reads.
+		{
+			const auto& records = objectStore.records.Get();
+			const auto& tablesNow = SceneStore::Get().GetTables();
+			ankerl::unordered_dense::set<const RE::BSGeometry*> reached;
+			for (const auto& registration : registrations)
+				if (registration.descriptor == shadowView->descriptor)
+					reached.insert(registration.geometry);
+			struct Cover
+			{
+				float area;
+				std::uint32_t object;
+				float maxZ;
+			};
+			std::vector<Cover> covers;
+			std::uint32_t drawn = 0, farWorld = 0, staleBuffers = 0;
+			std::string farFirst, staleFirst;
+			a_payload.ForEachInput(a_view.modeIndex, [&](const DrawInput& a_input) {
+				const std::uint32_t object = a_input.objectIndex;
+				if (object >= records.size() || (a_input.flags & kObjectVolumetricOnly) || OutsideSunEntry(a_payload.inputs, tablesNow, object))
+					return;
+				const auto& record = records[object];
+				RE::NiBound bound;
+				bound.center = { record.bound[0], record.bound[1], record.bound[2] };
+				bound.radius = record.bound[3];
+				if (CulledByLatch(a_latch, bound))
+					return;
+				++drawn;
+				// The geometry row the draw pulls from against the buffers the object's TriShape holds now.
+				if (const auto* geometry = object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[object] : nullptr;
+					geometry && !geometry->GetGeometryRuntimeData().skinInstance && a_input.geometryIndex < tablesNow.geometries.size() &&
+					a_input.geometryIndex < tablesNow.geometryLayerKey.size() && !tablesNow.geometryLayerKey[a_input.geometryIndex]) {
+					const auto* triShape = geometry->GetGeometryRuntimeData().rendererData;
+					const auto& row = tablesNow.geometries[a_input.geometryIndex];
+					if (triShape && (reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer) != row.vertexBuffer || reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer) != row.indexBuffer)) {
+						if (staleBuffers++ == 0)
+							staleFirst = fmt::format("'{}' (object {}, slot {}): row vertex {} index {}, TriShape vertex {} index {}", geometry->name.c_str() ? geometry->name.c_str() : "?",
+								object, a_input.geometryIndex, static_cast<const void*>(row.vertexBuffer), static_cast<const void*>(row.indexBuffer),
+								static_cast<const void*>(triShape->vertexBuffer), static_cast<const void*>(triShape->indexBuffer));
+					}
+				}
+				const float dx = record.world[3] - bound.center.x, dy = record.world[7] - bound.center.y, dz = record.world[11] - bound.center.z;
+				if (std::sqrt(dx * dx + dy * dy + dz * dz) > 4.0f * bound.radius + 512.0f) {
+					if (farWorld++ == 0) {
+						const auto* geometry = object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[object] : nullptr;
+						farFirst = fmt::format("'{}' world at ({:.0f} {:.0f} {:.0f}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}", geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
+							record.world[3], record.world[7], record.world[11], bound.center.x, bound.center.y, bound.center.z, bound.radius);
+					}
+				}
+				float minX = 1, maxX = -1, minY = 1, maxY = -1, maxZ = -1e30f;
+				for (std::uint32_t corner = 0; corner < 8; ++corner) {
+					const float p[3] = { bound.center.x + ((corner & 1) ? bound.radius : -bound.radius), bound.center.y + ((corner & 2) ? bound.radius : -bound.radius),
+						bound.center.z + ((corner & 4) ? bound.radius : -bound.radius) };
+					float clip[4];
+					for (std::uint32_t row = 0; row < 4; ++row)
+						clip[row] = a_latch.viewProj[row * 4] * p[0] + a_latch.viewProj[row * 4 + 1] * p[1] + a_latch.viewProj[row * 4 + 2] * p[2] + a_latch.viewProj[row * 4 + 3];
+					const float w = clip[3] != 0.0f ? clip[3] : 1.0f;
+					minX = std::min(minX, clip[0] / w);
+					maxX = std::max(maxX, clip[0] / w);
+					minY = std::min(minY, clip[1] / w);
+					maxY = std::max(maxY, clip[1] / w);
+					maxZ = std::max(maxZ, clip[2] / w);
+				}
+				const float area = (std::clamp(maxX, -1.0f, 1.0f) - std::clamp(minX, -1.0f, 1.0f)) * (std::clamp(maxY, -1.0f, 1.0f) - std::clamp(minY, -1.0f, 1.0f)) / 4.0f;
+				if (area > 0.25f && maxZ < 0.02f)
+					covers.push_back({ area, object, maxZ });
+			});
+			std::sort(covers.begin(), covers.end(), [](const Cover& a, const Cover& b) { return a.area > b.area; });
+			if (!covers.empty() || farWorld || staleBuffers) {
+				std::string text;
+				for (std::size_t i = 0; i < covers.size() && i < 5; ++i) {
+					const auto& c = covers[i];
+					const auto* geometry = c.object < tablesNow.objectGeometry.size() ? tablesNow.objectGeometry[c.object] : nullptr;
+					const auto& r = records[c.object];
+					text += fmt::format("; '{}' (object {}) {:.0f}% of the map, depth at most {:.4f}, bound ({:.0f} {:.0f} {:.0f}) r {:.0f}, the engine's ({:.0f} {:.0f} {:.0f}) r {:.0f}, {}",
+						geometry && geometry->name.c_str() ? geometry->name.c_str() : "?", c.object, 100.0f * c.area, c.maxZ, r.bound[0], r.bound[1], r.bound[2], r.bound[3],
+						geometry ? geometry->worldBound.center.x : 0.0f, geometry ? geometry->worldBound.center.y : 0.0f, geometry ? geometry->worldBound.center.z : 0.0f,
+						geometry ? geometry->worldBound.radius : 0.0f, reached.contains(geometry) ? "the engine's cull reached it" : "the engine's cull did not reach it");
+					{
+						const auto& t = r.tree;
+						const std::uint32_t treeSlot = std::bit_cast<std::uint32_t>(t.windTimers[2]);
+						text += fmt::format(", tree params ({} {} {} {}), wind slot {:#x} generation {:#x}", t.treeParams[0], t.treeParams[1], t.treeParams[2], t.treeParams[3],
+							treeSlot, std::bit_cast<std::uint32_t>(t.windTimers[3]));
+						if (treeSlot < tablesNow.trees.size()) {
+							const auto& row = tablesNow.trees[treeSlot];
+							text += fmt::format(", tree row: model amplitude {}, amplitude {}, leaf frequency {}, animated {}, generation {:#x}, at ({:.0f} {:.0f} {:.0f})", row.modelAmplitude,
+								row.amplitude, row.leafFrequency, row.animated, row.generation, row.position[0], row.position[1], row.position[2]);
+						}
+					}
+				}
+				static std::uint32_t logged = 0;
+				if (logged++ < 40)
+					logger::warn("[DCLF] cascade cover: view {} (cascade {}) frame {}: {} drawn, {} cover over a quarter of the map at the near plane, {} with the world far from the bound{}, {} pulling from buffers their TriShape no longer holds{}{}",
+						a_view.viewId, shadowView->descriptor, a_frame, drawn, covers.size(), farWorld, farFirst.empty() ? "" : " (first " + farFirst + ")", staleBuffers,
+						staleFirst.empty() ? "" : " (first " + staleFirst + ")", text);
+			}
+		}
+		if (checks == 20) {
+			logger::info("[DCLF] cascade culling parity: {} sun views checked, {} claimed casters the engine's cascade culls reached, {} of them rejected by DCLF's view{}{}",
+				checks, registered, rejected, rejected ? " <- CASCADE CULL" : " <- OK", first.empty() ? "" : "; first " + first);
+			checks = registered = rejected = 0;
+			first.clear();
+		}
+	}
+
 	void IndirectDraws::BeginShadowFrame()
 	{
 		impl->pendingViews.clear();
@@ -585,6 +766,33 @@ namespace DCLF
 			view.viewBlock[8] = view.viewBlock[9] = view.viewBlock[10] = 0.0f;
 		}
 		CapturePerFrame(view);
+		// The capture check: the block's CameraPosAdjust (c40) against the eye the renderer's state has for the view now.
+		{
+			static std::uint64_t views = 0, fallback = 0, differ = 0;
+			static float largest = 0.0f;
+			static std::string first;
+			++views;
+			const auto* block = reinterpret_cast<const float*>(view.perFrame.data());
+			if (view.perFrameBytes >= 164 * sizeof(float)) {
+				const float d = std::max({ std::abs(block[160] - view.eye.x), std::abs(block[161] - view.eye.y), std::abs(block[162] - view.eye.z) });
+				if (d > 0.01f) {
+					++differ;
+					if (first.empty())
+						first = fmt::format("view {} mode {:#x}: block ({:.1f} {:.1f} {:.1f}), renderer ({:.1f} {:.1f} {:.1f})", a_viewId, a_renderMode, block[160], block[161],
+							block[162], view.eye.x, view.eye.y, view.eye.z);
+				}
+				largest = std::max(largest, d);
+			}
+			if (!ConstantMirror::Get().Contents(*globals::game::perFrame.get()).size())
+				++fallback;
+			if (views == 1000) {
+				logger::info("[DCLF] shadow view capture: {} views, {} from the cached copy, {} whose b12 eye is not the renderer's (largest {:.2f}){}{}", views, fallback, differ,
+					largest, differ ? " <- CAPTURE" : " <- OK", first.empty() ? "" : "; first " + first);
+				views = fallback = differ = 0;
+				largest = 0.0f;
+				first.clear();
+			}
+		}
 		shadowStats.captureMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
@@ -1026,6 +1234,7 @@ namespace DCLF
 				const std::vector<std::uint32_t> zeroBuckets(std::max<std::size_t>(viewBuckets.size(), 1), 0u);
 				uploads(resources->bucketCounts[slot], zeroBuckets.data(), zeroBuckets.size() * sizeof(std::uint32_t), 0);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
 				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex,
 					ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
@@ -1299,6 +1508,10 @@ namespace DCLF
 				a_stats.cullDrawn = words[0];
 				a_stats.cullRejected = words[1];
 				a_stats.cullTested = words[2];
+				a_stats.cullSunEntryOut = words[3];
+				a_stats.cullMinRadius = words[4];
+				a_stats.cullStoodInFading = words[5];
+				a_stats.cullClass = words[16];
 				a_stats.cullSampledView = shadowCullReadback->view;
 				a_stats.cullSampledMode = shadowCullReadback->mode;
 				context->Unmap(shadowCullReadback->count.get(), 0);
@@ -1353,6 +1566,32 @@ namespace DCLF
 		// The worker's set when its build was the one drawn, else built here from the same inputs.
 		auto claims = a_built ? std::move(a_built) : ShadowClaimSet(a_inputs, SceneStore::Get().GetTables());
 		a_stats.claimed[modeIndex] = static_cast<std::uint32_t>(claims->size());
+		// Holes: the casters this frame's selection withheld from the mode's views (the last epoch's claims) that this epoch did
+		// not draw either (not in its claims, which are its inputs) - drawn by nobody this frame.
+		{
+			static std::array<std::uint64_t, PassCapture::kShadowModes> frames{}, holeFrames{}, holes{}, withheld{};
+			static std::array<std::string, PassCapture::kShadowModes> first;
+			if (const auto selected = PassCapture::Get().SelectedShadowClaims(modeIndex)) {
+				std::uint32_t frameHoles = 0;
+				for (const auto* geometry : *selected) {
+					if (!claims->contains(geometry)) {
+						if (frameHoles++ == 0 && first[modeIndex].empty())
+							first[modeIndex] = geometry && geometry->name.c_str() ? geometry->name.c_str() : "?";
+					}
+				}
+				++frames[modeIndex];
+				withheld[modeIndex] += selected->size();
+				holes[modeIndex] += frameHoles;
+				holeFrames[modeIndex] += frameHoles ? 1 : 0;
+				if (frames[modeIndex] == 300) {
+					logger::info("[DCLF] shadow claim holes, mode {:#x}: {} of 300 frames withheld casters this epoch did not draw, {:.1f} a frame of {:.0f} withheld{}{}",
+						a_renderMode, holeFrames[modeIndex], holes[modeIndex] / 300.0, withheld[modeIndex] / 300.0, holes[modeIndex] ? " <- CLAIM HOLES" : " <- OK",
+						first[modeIndex].empty() ? "" : "; first '" + first[modeIndex] + "'");
+					frames[modeIndex] = holeFrames[modeIndex] = holes[modeIndex] = withheld[modeIndex] = 0;
+					first[modeIndex].clear();
+				}
+			}
+		}
 		PassCapture::Get().PublishShadowClaims(modeIndex, std::move(claims));
 		a_stats.claimMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}

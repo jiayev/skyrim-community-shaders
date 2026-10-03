@@ -121,6 +121,14 @@ namespace DCLF
 		 * epoch that submitted them, as the main claims are published by the colour epoch.
 		 */
 		void PublishShadowClaims(std::uint32_t a_modeIndex, std::shared_ptr<const ClaimSet> a_claims);
+		/** @brief The claims this frame's selection withholds from the shadow mode's views (null: none). */
+		std::shared_ptr<const ClaimSet> SelectedShadowClaims(std::uint32_t a_modeIndex) const
+		{
+			if (a_modeIndex >= kShadowModes)
+				return nullptr;
+			const auto selected = std::atomic_load(&frameClaims);
+			return selected ? selected->shadow[a_modeIndex] : std::atomic_load(&shadowClaims[a_modeIndex]);
+		}
 		/** @brief Whether the frame's selection withholds any caster from the shadow mode's views (a non-empty claim set). */
 		bool ShadowModeWithheld(std::uint32_t a_modeIndex) const;
 		/** @brief Whether a_batch is a shadow view's batch renderer this frame, and its mode index. */

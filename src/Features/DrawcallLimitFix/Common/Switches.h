@@ -89,6 +89,7 @@ namespace DCLF
 		DepthTrace,
 		DrawTrace,
 		TargetProbe,
+		FoliageParity,
 		ShadowMaskProbe,
 		ShadowMapProbe,
 		GBufferProbe,
@@ -124,6 +125,13 @@ namespace DCLF
 
 	/** @brief Whether a switch is set to "1". */
 	bool SwitchEnabled(Switch a_switch);
+
+	/** @brief CS_DCLF_FOLIAGE_PARITY: on with "1" (tree wind frozen) or "wind" (running). */
+	inline bool FoliageParityOn()
+	{
+		const auto& value = SwitchValue(Switch::FoliageParity);
+		return value == "1" || value == "wind";
+	}
 
 	/** @brief The directory the switches file lives in (the SKSE log directory), outside MO2's virtual file system. */
 	std::filesystem::path SwitchesDirectory();

@@ -7242,3 +7242,168 @@ There were no holes.
     -   The vertex stage: 9 modules (VC, skinned, model-space normals, projected UV, the TreeAnim technique), different
         code. Merged, there would be 9 groups.
     -   Cull: two-sided or back. With cull merged as well, 7 groups.
+
+## Striped foliage: the pulled Z-prepass's UNORM decode (fixed, 2026-10-02)
+
+**Symptom.** Alpha-tested foliage showed bluish-white stripes on some frames, much like Z-fighting, more often while the camera
+or the wind moved. It was not seen with DCLF off.
+
+**Cause.** The pulled Z-prepass's vertex stage decoded the 8-bit UNORM attributes (normal, bitangent, vertex colour) as
+`x / 255.0`. That compiles to a reciprocal and a multiply, which is an ulp off the input assembler's correctly rounded value for
+126 of the 256 inputs. The colour pass still reads them through the input assembler, and a tree's vertex moves along its
+normal, scaled by its vertex colour (`GetTreeShiftVector`). So the two passes' positions differed by a hair, and the colour
+pass's EQUAL depth test failed in stripes across the leaves. Those pixels were never shaded and kept what the G-buffer held.
+
+**Fix.** `DCLFUnorm4` (`Common/DCLFObjects.hlsli`) now computes c / 255 correctly rounded: the product by 1/255 corrected by
+its fused remainder (`precise` `mad`, which DXC emits as `Fma`). It is exact for all 256 values, and costs nothing measurable
+(the Z-prepass draw is 0.186 ms either way). A 256-entry table was just as exact but cost 21 us. The shadow views' pulled
+Utility stages use the same decode.
+
+**Result** (the fern scene, live wind): pixels whose depth an alpha-tested Z-prepass fragment owns but the colour pass left
+unshaded fell from 240-3,500 per frame (flagged on 136-300 of every 300 frames) to about 0.5 (none flagged).
+
+### The instrument: `CS_DCLF_FOLIAGE_PARITY`
+
+`1` freezes tree wind; `wind` keeps it running.
+
+-   **What the shaders record.**
+    -   The colour pass's alpha-tested stages (`DCLF_FOLIAGE_PARITY`, with `[earlydepthstencil]` so only the visible
+        fragment writes) record each pixel's object, albedo, diffuse, specular and motion vector. The motion vector also
+        carries its error against a static object's.
+    -   The Z-prepass's alpha-tested stages record each pixel's owner: the closest fragment their alpha test kept, as
+        depth and object, by a 64-bit atomic max.
+-   **What the compare pass checks** (`FoliageParityCS.hlsl`, after the colour pass). The counters and samples are read
+    back asynchronously per frame slot and reported every 300 frames.
+    -   **Within the frame, whatever the camera does:**
+        -   owned pixels the colour pass left unshaded, or shaded with another object;
+        -   foliage whose motion vector is more than a pixel off a static object's (with the wind frozen);
+        -   near-white albedo or diffuse.
+    -   **Against the frame before, reprojected through the motion vectors:** colour or brightness jumps over a
+        running average.
+-   **How it gets per-frame data.** The frame's buffer parity and tag are read on the GPU from the frame-lighting block (PS
+    b13, c14), because a pass's prepared constants only follow the frame's shape.
+
+**Readings worth knowing.** With the fix, coverage reads 0 to 1 pixel per frame. Motion vectors are within a pixel apart
+from a few dozen pixels per frame. Near white stays at the scene's own baseline. The reprojected comparison is about 1% of
+foliage pixels per frame while turning, at canopy edges.
+
+## Junk geometry after cell loads: the index pool's ranges were shared by address (fixed, 2026-10-02)
+
+**Symptom.** After cells loaded, broken geometry sometimes covered parts of the screen without shading. Every existing
+parity check passed.
+
+**Cause.** The index pool (`IndexPool`, which the shadow views and, since the plain Z-prepass draws, the depth segment
+draw from) shared one range between every geometry slot that named the same index buffer address. An address is no
+identity: DXVK gives a freed buffer's address to the next buffer it creates, and a cell's load creates new meshes while
+the unloaded cell's slots still hold their ranges. Newly appended slots were also acquired before the log's slots were
+released. A new mesh at a reused address therefore took the old mesh's range with no copy, so its draws read the old
+mesh's indices, or ran past the range into its neighbour's, against its own vertices.
+
+In the depth segment that is junk depth, and the colour pass's EQUAL test leaves those pixels unshaded. The colour pass
+binds the engine's own index buffers, which is why the geometry rendered unshaded. A flight across six cells
+(`CS_DCLF_TEST_MOVE='300:5000:5'`) logged 20 aliased slots, all at the cell loads. Most had a different size from the
+range they took, for example 32,208 bytes against 17,856.
+
+**Fix.** A range is a slot's own. Every slot the geometry log names gives back its old range, and only after all of
+those are released are new ranges given out and copied. A regrow copies each slot's range from the buffer recorded for
+it. Through the same flight the pool holds 4.6M to 5.2M of its 8.4M indices, without growing.
+
+**Check.** `CS_DCLF_BUILD_PARITY` now also compares every 300th pool update against the tables: each slot's range against
+the buffer address and size its geometry row has now. Its verdict is `index pool parity: ... <- OK`, and a slot whose
+buffer changed without a log entry reads `<- INDEX POOL`.
+
+**Open.** BuildDraws parity reports MISMATCH on every depth-segment check. Its CPU templates predate the plain Z-prepass
+draws: those draws carry pipeline 0, the pool's first index and the bucket slot as their instance. The check is blind for
+that segment until the templates learn the pool's firsts.
+
+## Shadows flickering in motion: the colour pass's sun test lost its cascades (fixed, 2026-10-03)
+
+**Symptom.** With DCLF on, shadows flickered while the camera moved and settled when it stopped. With only DCLF's shadow
+views off, the lighting was wrong outright: walls lit differently from both full DCLF and DCLF off.
+
+**Tracing.** Each stage got a check, run on a flight that moves, turns, and then stands still:
+- the claims (casters withheld from the engine that DCLF's epoch did not draw): none;
+- each view's captured b12 (its eye against the renderer's): consistent;
+- each sun view's culling against the engine's own cascade culls of the same frame: consistent, apart from the residual
+  below;
+- the engine's shadow mask, frame to frame (`CS_DCLF_SHADOWMASK_PROBE=flicker`): the same with DCLF on and off.
+
+So DCLF's shadow maps and the mask were right, and the defect was in the colour pass.
+
+**Cause.** The colour pass's sun test (BuildDrawsCS `InSunCascades`) clears `ShadowDir` on a pass whose bound meets no
+cascade (`kObjectSunMiss`). It reads the frame's cascades from `SunAccumulation::GpuCascades`, but those were captured,
+and returned, only on frames whose full-frustum cull applied the sun entry exclusion.
+
+The exclusion is skipped:
+- on a stale frame, when the sun candidates changed since it was built, which happens all the time in motion (13 to 41
+  frames in 300 on a flight);
+- with DCLF's shadow views off.
+
+The colour commit still set `kSunTestOn` on those frames. With zero cascades, every pass with the sun's bits drew
+unshadowed. In motion that is single frames of full sunlight. With the shadow views off it is every frame.
+
+**Fix.** The cascades are captured on every frame the sun accumulates, independent of the exclusion; only the bits path
+(`ApplySunBits`) still needs the exclusion. The capture is stamped with its scene frame, so a frame where the sun did not
+accumulate gives no cascades, as the engine then gives no pass the sun's bits. The colour commit reports
+`colour sun test: N of 300 frames without the sun's cascades`. It reads 0 through stale exclusions, and 0 with the shadow
+views off.
+
+**Residual.** About 0.2% of the casters the engine's cascade culls reach are rejected by DCLF's view test (the cascade
+culling parity under `CS_DCLF_SET_PARITY`, for example 'Spout', 'BlacksmithForge01:0', mountain pieces). Those are drawn
+by nobody for that frame. Not yet explained.
+
+**New instruments:**
+- shadow claim holes (always on with static shadow ownership);
+- the shadow view capture check;
+- cascade culling parity (`CS_DCLF_SET_PARITY`);
+- per-reason shadow culling counters;
+- `CS_DCLF_SHADOWMASK_PROBE=flicker`;
+- the shadow map probe's probe-to-probe diff.
+
+## Black terrain: trees gusted by a field the engine never reads (fixed, 2026-10-03)
+
+**Symptom.** In one area, with DCLF on, everything was in shadow; looking at the ground, the terrain was completely black.
+With DCLF off the area was lit.
+
+**Tracing.** The checks below ran on a save at that spot, with DCLF toggled off and on:
+- Set parity was clean (every depth draw had its colour draw), and the G-buffer barely differed.
+- The engine's shadow mask read 00 (shadowed) against FF.
+- DCLF's two sun cascades were covered almost entirely at the light's near plane: means 0.0049 and 0.0031 with 0% of
+  texels clear, against the engine's 0.12 and 0.32.
+- `CS_DCLF_TREES=0` restored the maps, and so did zeroing `TreeParams.z` in Utility's pulled vertex stage (a temporary
+  bisect). So a tree's amplitude was flinging its leaves across the cascades.
+- A scan of both tree wind buffers found 8 entries with amplitudes of about 1e36, against the engine's 1 for the same
+  nodes.
+
+**Cause.** `TreeStaticOf` marked every tree node with a model as animated, and `TreeWindCS` then scaled the gust by the
+model's `+0xB0`. The engine's manager advances a `BSTreeNode` only in loop 2 of `FUN_1404381e0`, which runs over the near
+list that `FUN_140437e50` builds every frame. A node gets onto that list:
+- within the manager's range (`+0x80`);
+- only if it passes `FUN_14147d640(node)`'s check: that function's result, then `+0x128`, then `+0x18`, then an int at
+  `+0x10` equal to 1;
+- sorted nearest first and capped;
+
+and loop 2 then gusts only nodes whose model has bones (`+0xB8`).
+
+Loop 1, the one the earlier doc section describes as scaling by `+0xB0`, walks the animation list (`+0x50`), which holds
+`BSLeafAnimNode`s, not trees. For these trees' model, `+0xB0` reads 2.29e36. The engine never reads it, so their leaves
+stayed put natively.
+
+**Fix.** A tree is animated (its clock advances, and its gust is scaled by `+0xB0`) only when its model has bones and the
+near list's check selects it. The check is evaluated when the tree is listed, by calling `FUN_14147d640`.
+
+Not replicated: the near list's cap on its count. More selectable trees within range than the cap would all be gusted by
+DCLF, where the engine gusts only the nearest. The earlier claim that every member tree advances is superseded for
+`BSTreeNode`s.
+
+**Check.** The tree wind readback now also scans both wind buffers whole, every 120th epoch, for every listed tree:
+- non-finite values, or amplitudes over 1000, as bad entries;
+- generations that don't match their listing;
+- the largest amplitude, against the listing's, the engine's live `+0x15C` and the engine's near list.
+
+It reads `0 bad, largest amplitude 4.3` at the spot.
+
+**Also new:** a cascade cover check on sun views (`CS_DCLF_SET_PARITY`). It logs drawn casters whose bound covers over a
+quarter of the map at the near plane, objects whose world matrix is far from their bound, and draws whose geometry row
+no longer matches their TriShape's buffers. It found 'leaves' (a near canopy, legitimately covering 30% of cascade 0)
+and four decals with their world origin off their bound (DirtDecal, harmless). It found no stale buffers.

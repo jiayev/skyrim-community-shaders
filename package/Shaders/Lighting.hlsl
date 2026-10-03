@@ -807,6 +807,12 @@ cbuffer DCLFFrameLighting : register(b13)
 	float4 DCLFLodFadeMetric : packoffset(c8);       // metric scale, default scale, the override metric, 1 when overridden
 	float4 DCLFLodFadeDivisors[4] : packoffset(c9);  // per LOD type
 	float4 DCLFLodFadeState : packoffset(c13);       // x: 1 when the engine updates the metric at all (else the property's fades stand)
+#	if defined(DCLF_FOLIAGE_PARITY)
+	// CS_DCLF_FOLIAGE_PARITY (IndirectDraws GpuLayouts.h, FoliageParityConstants): the frame's buffers' addresses (each pixel's
+	// object word; its albedo and diffuse), the render size, the frame's tag and the Z-prepass owners' UAV.
+	uint4 DCLFFoliageParityBuffers : packoffset(c14);
+	uint4 DCLFFoliageParityFrame : packoffset(c15);
+#	endif
 };
 #endif  // DCLF_BINDLESS
 
@@ -1273,6 +1279,11 @@ bool UseSkylightingShadowVisibility()
 #	if defined(DCLF_PULLED)
 PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 #	else
+#		if defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+// The parity write below must be the visible fragment's: the colour pass tests EQUAL and writes no depth, so testing first
+// changes nothing else.
+[earlydepthstencil]
+#		endif
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 {
@@ -3699,6 +3710,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		undef LANDSCAPE_PARALLAX_ENABLED
 #	endif
 
+#	if defined(DCLF_DEPTH_ONLY) && defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+	// CS_DCLF_FOLIAGE_PARITY: the fragment the alpha test kept, as its pixel's owner if it is the closest (its depth inverted
+	// above its object): the compare pass checks that the colour pass shaded the owner of each pixel whose depth it is.
+	{
+		const uint2 pixel = uint2(input.Position.xy);
+		if (pixel.x < DCLFFoliageParityFrame.x && pixel.y < DCLFFoliageParityFrame.y) {
+			RWStructuredBuffer<uint64_t> owners = ResourceDescriptorHeap[DCLFFoliageParityFrame.w];
+			const uint64_t owner = (uint64_t(0xFFFFFFFFu - asuint(input.Position.z)) << 32) | uint64_t((DCLFObjectIndex + 1) & 0x00FFFFFFu);
+			InterlockedMax(owners[pixel.y * DCLFFoliageParityFrame.x + pixel.x], owner);
+		}
+	}
+#	endif
 #	if defined(DCLF_DEPTH_ONLY)
 	// Drawcall Limit Fix's Z-prepass builds this permutation with DCLF_DEPTH_ONLY: the pass has no render
 	// targets and only needs the depth, so it keeps the alpha test and nothing else - the lighting before it
@@ -3707,6 +3730,43 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// while the native depth pass runs.
 	return (PS_OUTPUT)0;
 #	else
+#		if defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+	// CS_DCLF_FOLIAGE_PARITY: what this pixel shows of the object, for the compare pass (FoliageParityCS.hlsl).
+	{
+		const uint2 pixel = uint2(input.Position.xy);
+		if (pixel.x < DCLFFoliageParityFrame.x && pixel.y < DCLFFoliageParityFrame.y) {
+			const uint index = pixel.y * DCLFFoliageParityFrame.x + pixel.x;
+			const uint64_t ids = (uint64_t(DCLFFoliageParityBuffers.y) << 32) | uint64_t(DCLFFoliageParityBuffers.x);
+			const uint64_t colours = (uint64_t(DCLFFoliageParityBuffers.w) << 32) | uint64_t(DCLFFoliageParityBuffers.z);
+#			if defined(DEFERRED)
+			const uint4 albedo = uint4(round(saturate(psout.Albedo) * 255.0));
+#			else
+			const uint4 albedo = uint4(round(saturate(psout.Diffuse) * 255.0));
+#			endif
+			const uint4 diffuse = uint4(round(saturate(psout.Diffuse) * 255.0));
+			vk::RawBufferStore<uint>(ids + uint64_t(index) * 4, (DCLFFoliageParityFrame.z << 24) | ((DCLFObjectIndex + 1) & 0x00FFFFFFu));
+			// The motion vector against a static object's: the same point where the camera saw it the frame before (its absolute
+			// position, from this frame's eye, made relative to the frame before's). In pixels, with the motion vector itself.
+			float2 motionError = 0;
+#			if !defined(SKINNED)
+			const float4 staticPrevious = float4(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz - FrameBuffer::CameraPreviousPosAdjust.xyz, 1);
+			const float2 renderSize = float2(DCLFFoliageParityFrame.xy);
+			motionError = (psout.MotionVectors.xy - MotionBlur::GetSSMotionVector(input.WorldPosition, staticPrevious)) * renderSize;
+#			endif
+			const float2 motion = psout.MotionVectors.xy * float2(DCLFFoliageParityFrame.xy);
+			// The albedo's alpha byte carries the motion error's length (tenths of a pixel); the specular is the pass's.
+			const uint error = uint(min(round(length(motionError) * 10.0), 255.0));
+#			if defined(DEFERRED)
+			const uint4 specular = uint4(round(saturate(psout.Specular) * 255.0));
+#			else
+			const uint4 specular = 0;
+#			endif
+			vk::RawBufferStore<uint4>(colours + uint64_t(index) * 16,
+				uint4(albedo.x | (albedo.y << 8) | (albedo.z << 16) | (error << 24), diffuse.x | (diffuse.y << 8) | (diffuse.z << 16) | (diffuse.w << 24),
+					specular.x | (specular.y << 8) | (specular.z << 16) | (specular.w << 24), f32tof16(motion.x) | (f32tof16(motion.y) << 16)));
+		}
+	}
+#		endif
 	return psout;
 #	endif
 }

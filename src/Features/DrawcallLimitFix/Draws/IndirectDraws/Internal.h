@@ -214,10 +214,8 @@ namespace DCLF
 			// The latch block the epoch wrote (Resources::latch): a colour epoch with more cascades than it holds makes a new one
 			// (ReserveMainLatch), and a frame in flight keeps reading its own.
 			std::shared_ptr<const org::LatchBlock> latch;
-			// The depth segment's plain indirect draws (MainOpaquePass): one per bucket, a pipeline slot's range of the sequences
-			// (Resources::zBucketFirst, zBucketCapacity) drawn with its pulled depth pipeline (IndirectState::pulledDepth) and its
-			// pipeline row. Phase 2's ranges are the same past sequenceDraws.
-			// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline.
+			// The Z-prepass's plain draws (MainOpaquePass): a call per bucket, a group of pipeline slots sharing a depth pipeline. Phase
+			// 2's ranges are the same past sequenceDraws.
 			struct ZCall
 			{
 				std::uint32_t bucket = 0, first = 0, capacity = 0;
@@ -539,6 +537,9 @@ namespace DCLF
 			if (a_scene.treeFrame != a_frame) {
 				a_scene.treeFrame = a_frame;
 				a_scene.treeInputs = SampleTreeWindFrame();
+				// CS_DCLF_FOLIAGE_PARITY compares each frame's pixels with the frame before's: the trees' clocks stand still.
+				if (FoliageParityOn() && SwitchValue(Switch::FoliageParity) != "wind")
+					a_scene.treeInputs.deltaTime = 0.0f;
 			}
 			// The frame row (TreeWindFrameRow), every commit: the pass's invocation is prepared ahead of it.
 			if (a_scene.treeFrameBuffer) {
@@ -582,6 +583,33 @@ namespace DCLF
 			std::uint32_t frameLightingUploaded = 0;
 			std::shared_ptr<const ComputeProgram> buildDraws;
 			winrt::com_ptr<ID3D11Buffer> sequencesD3D11, countD3D11;  // CS_DCLF_BUILD_PARITY readback
+			// CS_DCLF_FOLIAGE_PARITY (GpuLayouts.h, FoliageParityConstants): by frame parity, each pixel's object and colours; the
+			// compare pass's results, and a host copy of them per frame slot, read when the slot comes round again.
+			struct FoliageParity
+			{
+				std::array<std::shared_ptr<org::Buffer>, 2> ids, colours;
+				std::array<std::uint64_t, 2> idsAddress{}, coloursAddress{};
+				std::shared_ptr<org::Buffer> results;
+				std::uint64_t resultsAddress = 0;
+				// The Z-prepass's alpha-tested fragments' owner per pixel (GpuLayouts.h, kFoliageOwned), its UAV's index.
+				std::shared_ptr<org::Buffer> owners;
+				std::uint32_t ownersIndex = 0;
+				std::uint32_t epoch = 0;  // colour commits so far: the buffers' parity and tag (the store's frame can repeat or skip)
+				std::shared_ptr<const ComputeProgram> program;
+				std::vector<std::shared_ptr<org::Buffer>> readback;
+				std::vector<std::uint32_t> readbackFrame;  // 1 where the slot's copy holds a frame's results
+				std::uint32_t width = 0, height = 0;
+				// The report: frames read, frames with a defect, the counters' sums, the worst frame.
+				std::uint64_t frames = 0, flagged = 0, inFrameFlagged = 0, whiteFlagged = 0;
+				double whiteAverage = -1.0;     // the near-white foliage pixels' running average (kFoliageWhiteAlbedo + kFoliageWhiteDiffuse)
+				std::uint32_t whiteLogged = 0, whiteMax = 0;
+				double changeAverage = 0.0;     // the reprojected changes' running average (recoloured, brightened, whitened)
+				std::uint32_t changeMax = 0;
+				std::array<std::uint64_t, kFoliageCounters> totals{};
+				std::uint32_t logged = 0, inFrameLogged = 0;
+				std::mutex mutex;
+			};
+			std::shared_ptr<FoliageParity> foliage;
 			winrt::com_ptr<ID3D11Buffer> visibilityD3D11;              // CS_DCLF_SET_PARITY readback
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
@@ -931,17 +959,21 @@ namespace DCLF
 		/** @brief The shadow views' graph resources: the main path's set, without targets or an HZB, per view slot. */
 		/**
 		 * @brief The shadow views' index pool: the index buffers of the geometry slots, copied into one DCLF buffer, so that the
-		 * views' plain indexed draws bind one index buffer (ShadowViewPass) and keep the hardware's vertex reuse. A range is
-		 * shared by every slot naming the same buffer. The shadow commit gives out ranges as the geometry log names slots, and
-		 * takes one back when its last slot lets go (UpdateIndexPool); the copies run in the shadow epoch before its draws
-		 * (IndexPoolCS). A pool that cannot fit a range doubles, and its ranges are laid out and copied again. Render thread.
+		 * views' and the Z-prepass's plain indexed draws bind one index buffer (ShadowViewPass, MainOpaquePass) and keep the
+		 * hardware's vertex reuse. A range is a slot's own, never shared: a buffer's address is no identity (the device reuses a
+		 * freed buffer's address at once). The first commit of a frame to draw from the pool gives a range out, and copies into
+		 * it, for every slot the geometry log names, after taking back every named slot's old range (UpdateIndexPool); the
+		 * copies run in that commit's epoch before its draws (IndexPoolCS). A pool that cannot fit a range doubles, and its
+		 * ranges are laid out and copied again. Render thread.
 		 */
 		struct IndexPool
 		{
 			static constexpr std::uint32_t kNoRange = ~0u;
+			// A geometry slot's range: its first index and count (even: 4-byte aligned), and the buffer it was copied from.
 			struct Range
 			{
-				std::uint32_t first = 0, count = 0, refs = 0;  // in indices; first and count even (4-byte aligned)
+				std::uint32_t first = kNoRange, count = 0;
+				std::uint64_t address = 0, bytes = 0;
 			};
 			std::shared_ptr<org::Buffer> indices;  // 16-bit
 			std::uint32_t capacity = 0;            // in indices
@@ -953,12 +985,12 @@ namespace DCLF
 			rhi::CommandSignaturePtr dispatchSignature;
 			std::uint64_t layout = 0;  // bumped whenever a buffer gets a new backing
 			LogCursor cursor;
-			ankerl::unordered_dense::map<std::uint64_t, Range> ranges;  // by index buffer address
-			std::vector<std::uint64_t> slotAddress;                     // per geometry slot: the buffer whose range it holds
-			std::vector<std::uint32_t> slotFirst;                       // per geometry slot: the range's first index
+			std::vector<Range> slots;                                   // per geometry slot: its range
+			std::vector<std::uint32_t> slotFirst;                       // per geometry slot: its range's first index (what firsts holds)
 			std::map<std::uint32_t, std::uint32_t> free;                // first -> count
 			std::uint32_t end = 0;                                      // past the last range ever given out
 			std::uint64_t indicesHeld = 0;                              // live indices, for the report
+			std::uint32_t checks = 0;                                   // the updates, for the parity check
 		};
 
 		struct ShadowResources
@@ -2638,6 +2670,7 @@ namespace DCLF
 		// input rebuild (the views of one frame that share a mode share the inputs and the claims).
 		/** @brief A shadow view not drawn: counts a hole when its mode withholds casters this frame, and hands the mode back. */
 		void GiveBackShadowMode(std::uint32_t a_modeIndex, IndirectDraws::ShadowStats& a_stats);
+		void CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload);
 		void PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,
 			IndirectDraws::ShadowStats& a_stats);
 		ShadowPayload shadowPayload;

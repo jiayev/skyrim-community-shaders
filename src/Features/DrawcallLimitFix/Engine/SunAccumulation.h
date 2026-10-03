@@ -123,6 +123,20 @@ namespace DCLF
 		bool ExclusionLive() const { return exclusionLive.load(std::memory_order_acquire); }
 		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit this frame. */
 		std::uint32_t SunBits() const { return frameState.sunBits; }
+		/**
+		 * @brief CS_DCLF_SET_PARITY (every 30th frame): the claimed casters the cascade culls of the frame's Accumulate reached,
+		 * each with its cascade's descriptor index - what DCLF's views of those cascades must draw. Render thread.
+		 */
+		struct CascadeRegistration
+		{
+			const RE::BSGeometry* geometry = nullptr;
+			std::uint32_t descriptor = 0;
+		};
+		const std::vector<CascadeRegistration>& ClaimedRegistrations(std::uint32_t& a_frame) const
+		{
+			a_frame = claimedRegistrationsFrame;
+			return claimedRegistrations;
+		}
 		/** @brief Whether a_node is an entry this frame's exclusion excludes (render thread, while it is live). */
 		bool Excluded(const void* a_node) const
 		{
@@ -252,6 +266,7 @@ namespace DCLF
 			// first cascadeCount are this frame's.
 			std::vector<Cascade> cascades;
 			std::uint32_t cascadeCount = 0;
+			std::uint32_t cascadesFrame = ~0u;        // the scene frame whose Accumulate captured them
 			std::uint32_t sunBits = 0;                // every cascade's bit
 		};
 		std::shared_ptr<SunExclusion> pendingExclusion;  // render thread
@@ -265,5 +280,7 @@ namespace DCLF
 		std::atomic<bool> exclusionLive{ false };        // frameState.exclusion is set for this frame
 		std::atomic<std::uint32_t> stampCounter{ 0 };
 		BitStats bitStats;
+		std::vector<CascadeRegistration> claimedRegistrations;  // render thread (ClaimedRegistrations)
+		std::uint32_t claimedRegistrationsFrame = ~0u;
 	};
 }
