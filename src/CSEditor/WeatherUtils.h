@@ -492,7 +492,7 @@ namespace TOD
 	float GetCurrentGameTime();
 
 	/**
-	 * @brief Calculate blend factors for each time period based on current game time.
+	 * @brief Blend factors the sky applies to each weather colour time at the current hour, from the active climate.
 	 * @param outFactors Output array of 4 floats (Sunrise, Day, Sunset, Night), each in [0, 1].
 	 */
 	void GetTimeOfDayFactors(float outFactors[4]);

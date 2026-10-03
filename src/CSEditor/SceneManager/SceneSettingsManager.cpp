@@ -7,6 +7,7 @@
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsOverwrites.h"
 #include "State.h"
+#include "Utils/Climate.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/Game.h"
@@ -266,6 +267,10 @@ namespace
 	{
 		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	}
+
+	/// Shift of each period's start in blend lengths, so blends start as the sky leaves night or day, finish as
+	/// it settles into day or night, and centre on the colour peaks. Indexed by TimeOfDayPeriod.
+	constexpr std::array<float, SceneSettingsManager::kPeriodCount> kBlendOffsets = { 0.5f, 0.0f, -0.5f, 0.5f, 0.0f, -0.5f };
 }
 
 float SceneSettingsManager::GetCurrentGameHour()
@@ -297,22 +302,45 @@ void SceneSettingsManager::SetGameHour(float hour)
 		calendar->gameHour->value = std::clamp(hour, 0.0f, 24.0f);
 }
 
-float SceneSettingsManager::GetPeriodMidHour(TimeOfDayPeriod period)
+SceneSettingsManager::PeriodStartHours SceneSettingsManager::GetPeriodStartHours()
+{
+	const auto sky = globals::game::sky;
+	if (!sky || !sky->currentClimate)
+		return kFallbackPeriodStartHours;
+
+	const auto day = Util::Climate::GetDayHours(*sky->currentClimate);
+	const PeriodStartHours starts = { day.nightEnd, day.sunrisePeak, day.dayStart,
+		day.dayEnd, day.sunsetPeak, day.nightStart };
+	// Every period needs some length, Night included across midnight.
+	const bool valid = std::ranges::adjacent_find(starts, std::greater_equal<>{}) == starts.end() &&
+	                   starts.back() < starts.front() + 24.0f;
+	return valid ? starts : kFallbackPeriodStartHours;
+}
+
+float SceneSettingsManager::GetPeriodEndHour(const PeriodStartHours& starts, int index)
+{
+	assert(index >= 0 && index < kPeriodCount);
+	return index + 1 < kPeriodCount ? starts[index + 1] : starts.front() + 24.0f;
+}
+
+float SceneSettingsManager::GetPeriodMidHour(TimeOfDayPeriod period) const
 {
 	const int index = static_cast<int>(period);
 	if (index < 0 || index >= kPeriodCount)
 		return GetCurrentGameHour();
 
+	// Blends are symmetric about the shifted starts, so this is also the middle of the full-weight hours.
 	// Night ends past 24, so its middle lands after midnight.
-	const float mid = (kPeriodHours[index][0] + kPeriodHours[index][1]) * 0.5f;
+	const auto starts = GetBlendedPeriods().starts;
+	const float mid = (starts[index] + GetPeriodEndHour(starts, index)) * 0.5f;
 	return mid >= 24.0f ? mid - 24.0f : mid;
 }
 
-SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(float hour)
+SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(const PeriodStartHours& starts, float hour)
 {
 	for (int index = 0; index < kPeriodCount; ++index) {
-		const float start = kPeriodHours[index][0];
-		const float end = kPeriodHours[index][1];
+		const float start = starts[index];
+		const float end = GetPeriodEndHour(starts, index);
 		// Night ends past 24, so pre-dawn hours have to be compared against hour + 24.
 		const float periodHour = (end > 24.0f && hour < start) ? hour + 24.0f : hour;
 		if (periodHour >= start && periodHour < end)
@@ -321,28 +349,47 @@ SceneSettingsManager::PeriodLookup SceneSettingsManager::FindPeriodForHour(float
 	return {};
 }
 
-static_assert(std::ranges::all_of(SceneSettingsManager::kPeriodHours, [](const auto& hours) {
-	return hours[1] - hours[0] >= SceneSettingsManager::kMaxTimeOfDayTransitionHours;
-}));
+SceneSettingsManager::BlendedPeriods SceneSettingsManager::GetBlendedPeriods() const
+{
+	const auto boundaries = GetPeriodStartHours();
+	// A shifted period must still fit a whole blend; periods that grow with the blend never limit it.
+	float blendHours = timeOfDayTransitionHours;
+	for (int index = 0; index < kPeriodCount; ++index) {
+		const float blendLengthsNeeded = 1.0f + kBlendOffsets[index] - kBlendOffsets[(index + 1) % kPeriodCount];
+		if (blendLengthsNeeded > 0.0f)
+			blendHours = std::min(blendHours, (GetPeriodEndHour(boundaries, index) - boundaries[index]) / blendLengthsNeeded);
+	}
+
+	BlendedPeriods blended{ .blendHours = blendHours };
+	for (int index = 0; index < kPeriodCount; ++index)
+		blended.starts[index] = boundaries[index] + kBlendOffsets[index] * blendHours;
+	return blended;
+}
 
 std::array<float, SceneSettingsManager::kPeriodCount> SceneSettingsManager::GetTimeOfDayFactors() const
 {
 	std::array<float, kPeriodCount> factors{};
-	const auto lookup = FindPeriodForHour(GetCurrentGameHour());
+	const auto [starts, blendHours] = GetBlendedPeriods();
+
+	// Blends are centred on the shifted starts.
+	float hour = GetCurrentGameHour() - blendHours * 0.5f;
+	if (hour < 0.0f)
+		hour += 24.0f;
+	const auto lookup = FindPeriodForHour(starts, hour);
 	if (lookup.index < 0) {
 		factors[static_cast<int>(TimeOfDayPeriod::Day)] = 1.0f;
 		return factors;
 	}
 
 	// A zero-length blend always takes this branch, so the division below never sees it.
-	const float hoursToEnd = kPeriodHours[lookup.index][1] - lookup.hour;
-	if (hoursToEnd >= timeOfDayTransitionHours) {
+	const float hoursToEnd = GetPeriodEndHour(starts, lookup.index) - lookup.hour;
+	if (hoursToEnd >= blendHours) {
 		factors[lookup.index] = 1.0f;
 		return factors;
 	}
 
 	// Inside the blend-out zone: cross-fade into the next period.
-	const float weight = hoursToEnd / timeOfDayTransitionHours;
+	const float weight = hoursToEnd / blendHours;
 	factors[lookup.index] = weight;
 	factors[(lookup.index + 1) % kPeriodCount] = 1.0f - weight;
 	return factors;
@@ -371,7 +418,7 @@ void SceneSettingsManager::RefreshTimeOfDayTransitionHours()
 
 SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetCurrentPeriod()
 {
-	const auto lookup = FindPeriodForHour(GetCurrentGameHour());
+	const auto lookup = FindPeriodForHour(GetPeriodStartHours(), GetCurrentGameHour());
 	return lookup.index < 0 ? TimeOfDayPeriod::Day : static_cast<TimeOfDayPeriod>(lookup.index);
 }
 

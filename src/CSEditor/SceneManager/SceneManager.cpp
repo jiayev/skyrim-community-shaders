@@ -398,7 +398,7 @@ void SceneManager::DrawSettings()
 	if (ImGui::IsItemActive())
 		HoldDeferredSceneChanges();
 	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
-		"Hours at the end of each time of day period spent blending into the next.\n"
+		"Hours spent blending between time of day periods, kept inside the sky's own colour transitions.\n"
 		"0 switches between periods instantly.\n"
 		"The active preset supplies this until you set your own."));
 	if (HasUserTimeOfDayTransitionHours()) {

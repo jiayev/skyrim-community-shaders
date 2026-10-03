@@ -66,19 +66,15 @@ public:
 		TimeOfDayPeriod::Sunset, TimeOfDayPeriod::Dusk, TimeOfDayPeriod::Night
 	};
 
-	/// Hour range [start, end) of each period; Night runs past midnight as 21-28.
-	static constexpr float kPeriodHours[kPeriodCount][2] = {
-		{ 4.0f, 6.0f },    // Dawn
-		{ 6.0f, 8.0f },    // Sunrise
-		{ 8.0f, 17.0f },   // Day
-		{ 17.0f, 19.0f },  // Sunset
-		{ 19.0f, 21.0f },  // Dusk
-		{ 21.0f, 28.0f }   // Night (wraps past midnight)
-	};
+	/// Start hour of each period in period order; each runs to the next start and Night wraps past midnight.
+	using PeriodStartHours = std::array<float, kPeriodCount>;
 
-	/// Default blend zone in hours at the end of each period, cross-fading into the next.
+	/// Vanilla SkyrimClimate's starts, used without a climate or when its timing leaves a period empty.
+	static constexpr PeriodStartHours kFallbackPeriodStartHours = { 5.0f, 7.5f, 10.0f, 16.0f, 18.5f, 21.0f };
+
+	/// Default blend zone in hours.
 	static constexpr float kDefaultTimeOfDayTransitionHours = 1.0f;
-	/// Shortest period's length: a longer blend would already be under way when a period begins.
+	/// Upper bound for the setting; the applied blend is also capped so every period fits it.
 	static constexpr float kMaxTimeOfDayTransitionHours = 2.0f;
 
 	/// Listens for LoadingMenu close to detect cell transitions, deferring reset work until then.
@@ -333,8 +329,11 @@ public:
 	/// Writes the game hour every reader, including GetCurrentGameHour, resolves against.
 	static void SetGameHour(float hour);
 
-	/// Middle of a period's hour range, wrapped into [0, 24): Night runs past midnight.
-	static float GetPeriodMidHour(TimeOfDayPeriod period);
+	/** @brief Period starts from the active climate's sky colour timing, see Util::Climate::DayHours. */
+	static PeriodStartHours GetPeriodStartHours();
+
+	/// Middle of a period's full-weight hours, wrapped into [0, 24): Night runs past midnight.
+	float GetPeriodMidHour(TimeOfDayPeriod period) const;
 
 	/// Per-period blend weights for the current game hour. Weights sum to 1.
 	std::array<float, kPeriodCount> GetTimeOfDayFactors() const;
@@ -1077,7 +1076,18 @@ private:
 		float hour = 0.0f;
 	};
 	/** @brief Period containing an hour; index -1 when none does. */
-	static PeriodLookup FindPeriodForHour(float hour);
+	static PeriodLookup FindPeriodForHour(const PeriodStartHours& starts, float hour);
+	/** @brief End hour of a period: the next start, with Night's pushed past midnight. */
+	static float GetPeriodEndHour(const PeriodStartHours& starts, int index);
+
+	/// Period starts shifted so each blend sits inside the sky's transition, with blends centred on them.
+	struct BlendedPeriods
+	{
+		PeriodStartHours starts{};
+		float blendHours = 0.0f;
+	};
+	/** @brief Starts shifted by the applied blend length, which is capped so every shifted period fits it. */
+	BlendedPeriods GetBlendedPeriods() const;
 
 	/// FindWinningContext's search against one period and weather (0 for none).
 	std::optional<SceneContextId> FindSupplyingContext(const SettingIdentity& setting, TimeOfDayPeriod period,

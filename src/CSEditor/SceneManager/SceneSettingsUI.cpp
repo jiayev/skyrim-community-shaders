@@ -211,7 +211,7 @@ namespace
 	void PinPeriodAndJump(int period)
 	{
 		periodBar.selected = period;
-		periodBar.lastHour = SceneSettingsManager::GetPeriodMidHour(static_cast<TimeOfDayPeriod>(period));
+		periodBar.lastHour = SceneSettingsManager::GetSingleton()->GetPeriodMidHour(static_cast<TimeOfDayPeriod>(period));
 		SceneSettingsManager::SetGameHour(periodBar.lastHour);
 	}
 

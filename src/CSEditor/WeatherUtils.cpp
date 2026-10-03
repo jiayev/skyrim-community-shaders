@@ -2,6 +2,7 @@
 #include "../I18n/I18n.h"
 #include "EditorWindow.h"
 #include "PaletteWindow.h"
+#include "Utils/Climate.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -654,38 +655,16 @@ namespace TOD
 
 	void GetTimeOfDayFactors(float outFactors[4])
 	{
-		// Initialize all to 0
-		for (int i = 0; i < 4; ++i)
-			outFactors[i] = 0.0f;
-
-		float currentTime = GetCurrentGameTime();
-
-		// Simplified time periods (matching Skyrim's 4-period system)
-		// Sunrise: 5-9, Day: 9-17, Sunset: 17-21, Night: 21-5
-		const float sunriseStart = 5.0f;
-		const float sunriseEnd = 9.0f;
-		const float dayStart = 9.0f;
-		const float dayEnd = 17.0f;
-		const float sunsetStart = 17.0f;
-		const float sunsetEnd = 21.0f;
-
-		if (currentTime >= sunriseStart && currentTime < sunriseEnd) {
-			// Sunrise period
-			float t = (currentTime - sunriseStart) / (sunriseEnd - sunriseStart);
-			outFactors[Sunrise] = 1.0f - t;
-			outFactors[Day] = t;
-		} else if (currentTime >= dayStart && currentTime < dayEnd) {
-			// Day period
-			outFactors[Day] = 1.0f;
-		} else if (currentTime >= sunsetStart && currentTime < sunsetEnd) {
-			// Sunset period
-			float t = (currentTime - sunsetStart) / (sunsetEnd - sunsetStart);
-			outFactors[Day] = 1.0f - t;
-			outFactors[Sunset] = t;
-		} else if (currentTime >= sunsetEnd || currentTime < sunriseStart) {
-			// Night period
-			outFactors[Night] = 1.0f;
-		}
+		using ColorTime = RE::TESWeather::ColorTime;
+		static_assert(Sunrise == static_cast<int>(ColorTime::kSunrise) && Day == static_cast<int>(ColorTime::kDay) &&
+					  Sunset == static_cast<int>(ColorTime::kSunset) && Night == static_cast<int>(ColorTime::kNight));
+		const auto sky = globals::game::sky;
+		Util::Climate::ColorTimeWeights weights{};
+		if (sky && sky->currentClimate)
+			weights = Util::Climate::GetColorTimeWeights(*sky->currentClimate, GetCurrentGameTime());
+		else
+			weights[Day] = 1.0f;
+		std::ranges::copy(weights, outFactors);
 	}
 
 	int GetActivePeriod()

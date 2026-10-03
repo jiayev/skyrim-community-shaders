@@ -2277,7 +2277,7 @@
     "feature.scene_manager.time_of_day_transition": "Time of Day Transition",
     "feature.scene_manager.time_of_day_transition_reset": "Reset##TimeOfDayTransition",
     "feature.scene_manager.time_of_day_transition_reset_tooltip": "Drop your value and use the active preset's, or the default when it sets none.",
-    "feature.scene_manager.time_of_day_transition_tooltip": "Hours at the end of each time of day period spent blending into the next.\n0 switches between periods instantly.\nThe active preset supplies this until you set your own.",
+    "feature.scene_manager.time_of_day_transition_tooltip": "Hours spent blending between time of day periods, kept inside the sky's own colour transitions.\n0 switches between periods instantly.\nThe active preset supplies this until you set your own.",
     "feature.screen_space_gi.ao_only": "AO only",
     "feature.screen_space_gi.ao_power": "AO Power",
     "feature.screen_space_gi.ao_radius": "AO radius",
