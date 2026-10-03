@@ -24,4 +24,7 @@ namespace SceneLayerHeader
 	 * @param featureShortName Feature the panel shows; the other layers in the stack open on it.
 	 */
 	void DrawScene(const SceneSettingsManager::SceneContextId& context, const std::string& featureShortName);
+
+	/** @brief Every layer of the stack the player is in, what applies on it now and how many settings it overrides across all features; each scene layer links to its page. */
+	void DrawSummary();
 }

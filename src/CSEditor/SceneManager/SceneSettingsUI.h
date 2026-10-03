@@ -53,8 +53,14 @@ namespace SceneSettingsUI
 	std::optional<SceneSettingsManager::SceneContextId> ResolveCurrentLayer(
 		SceneSettingsManager::SceneContextType layer, const std::string& featureShortName);
 
+	/** @brief ResolveCurrentLayer for any feature: nothing only when no weather is active or no listed place matches. */
+	std::optional<SceneSettingsManager::SceneContextId> ResolveCurrentContext(SceneSettingsManager::SceneContextType layer);
+
 	/** @brief Opens the CS Editor on its Locations page, to add a place to the list. */
 	void OpenLocationsPage();
+
+	/** @brief Opens the CS Editor on its Scene Manager page, keeping the selected feature. */
+	void OpenSceneManagerPage();
 
 	/**
 	 * @brief Ensures an override for the player's current place and opens its editor on a feature.

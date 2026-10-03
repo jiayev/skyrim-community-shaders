@@ -870,6 +870,21 @@ namespace
 			pendingLocationRemoval.reset();
 		}
 	}
+
+	/** @brief Opens the CS Editor on one of its browser categories, by stable id. */
+	void OpenEditorCategory(const char* id)
+	{
+		CSEditor::OpenEditorWindow();
+		if (auto* editorWindow = EditorWindow::GetSingleton(); editorWindow->open)
+			editorWindow->SelectCategory(id);
+	}
+
+	/** @brief Selects a feature on a page, keeping its current selection when none is given. */
+	void SelectFeature(std::string& selection, const std::string& featureShortName)
+	{
+		if (!featureShortName.empty())
+			selection = featureShortName;
+	}
 }
 
 void SceneSettingsUI::DrawWeatherSceneTab(RE::FormID weatherId)
@@ -993,20 +1008,20 @@ void SceneSettingsUI::OpenSceneContext(const SceneSettingsManager::SceneContextI
 				return candidate.type == context.locationType && candidate.formKey == context.locationFormKey;
 			});
 			if (target != targets.end())
-				OpenLocationWindow(*target).selectedFeature = featureShortName;
+				SelectFeature(OpenLocationWindow(*target).selectedFeature, featureShortName);
 			break;
 		}
 	case SceneSettingsManager::SceneContextType::Weather:
 		for (const auto& widget : editorWindow->weatherWidgets)
 			if (widget->form && widget->form->GetFormID() == context.weatherId) {
 				static_cast<WeatherWidget*>(widget.get())->OpenSceneManagerTab();
-				weatherSelectedFeature = featureShortName;
+				SelectFeature(weatherSelectedFeature, featureShortName);
 				break;
 			}
 		break;
 	default:
 		editorWindow->SelectCategory("Scene Manager");
-		panelSelectedFeature = featureShortName;
+		SelectFeature(panelSelectedFeature, featureShortName);
 		break;
 	}
 }
@@ -1021,9 +1036,14 @@ bool SceneSettingsUI::LayerListsFeature(SceneSettingsManager::SceneContextType l
 std::optional<SceneSettingsManager::SceneContextId> SceneSettingsUI::ResolveCurrentLayer(
 	SceneSettingsManager::SceneContextType layer, const std::string& featureShortName)
 {
+	return LayerListsFeature(layer, featureShortName) ? ResolveCurrentContext(layer) : std::nullopt;
+}
+
+std::optional<SceneSettingsManager::SceneContextId> SceneSettingsUI::ResolveCurrentContext(SceneSettingsManager::SceneContextType layer)
+{
 	using enum SceneSettingsManager::SceneContextType;
 	auto* manager = SceneSettingsManager::GetSingleton();
-	if (!manager || !LayerListsFeature(layer, featureShortName))
+	if (!manager)
 		return std::nullopt;
 
 	switch (layer) {
@@ -1058,9 +1078,12 @@ std::optional<SceneSettingsManager::SceneContextId> SceneSettingsUI::ResolveCurr
 
 void SceneSettingsUI::OpenLocationsPage()
 {
-	CSEditor::OpenEditorWindow();
-	if (auto* editorWindow = EditorWindow::GetSingleton(); editorWindow->open)
-		editorWindow->SelectCategory("Locations");
+	OpenEditorCategory("Locations");
+}
+
+void SceneSettingsUI::OpenSceneManagerPage()
+{
+	OpenEditorCategory("Scene Manager");
 }
 
 bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureShortName,

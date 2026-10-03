@@ -124,6 +124,15 @@ namespace
 		std::optional<SceneContextId> context;
 	};
 
+	/** @brief Link to a scene layer's live page, given the context that applies on it now. */
+	LayerLink LinkTo(Layer layer, const std::optional<SceneContextId>& context)
+	{
+		if (context)
+			return { Destination::Page, context };
+		// A place can only be edited once it is on the user's list, so lead to where it is added.
+		return layer == Layer::Location ? LayerLink{ Destination::PlacesList, std::nullopt } : LayerLink{};
+	}
+
 	LayerLink ResolveLink(Layer layer, const std::string& featureShortName)
 	{
 		if (featureShortName.empty())
@@ -132,10 +141,7 @@ namespace
 			return { Destination::Base, std::nullopt };
 		if (!SceneSettingsUI::LayerListsFeature(ContextTypeOf(layer), featureShortName))
 			return {};
-		if (auto context = SceneSettingsUI::ResolveCurrentLayer(ContextTypeOf(layer), featureShortName))
-			return { Destination::Page, context };
-		// A place can only be edited once it is on the user's list, so lead to where it is added.
-		return layer == Layer::Location ? LayerLink{ Destination::PlacesList, std::nullopt } : LayerLink{};
+		return LinkTo(layer, SceneSettingsUI::ResolveCurrentContext(ContextTypeOf(layer)));
 	}
 
 	void Follow(const LayerLink& link, const std::string& featureShortName)
@@ -178,6 +184,16 @@ namespace
 		Util::AddTooltip(text.c_str(), Util::kTooltipWhenDisabled);
 	}
 
+	/** @brief A layer's name as a link to where it leads, or greyed when it leads nowhere. */
+	void DrawLayerLink(Layer layer, const LayerLink& link, const std::string& featureShortName)
+	{
+		if (link.destination == Destination::None)
+			Util::Text::Disabled("%s", LayerName(layer));
+		else if (BrowserUI::Link("##layer", LayerName(layer)))
+			Follow(link, featureShortName);
+		DrawLayerTooltip(layer, link.destination);
+	}
+
 	/** @brief Breadcrumb of the stack: the current layer as an accent chip, the rest links to their pages. */
 	void DrawStack(Layer current, bool interior, const std::string& featureShortName)
 	{
@@ -202,17 +218,22 @@ namespace
 				BrowserUI::Chip(LayerName(layer), LayerName(layer), {}, nullptr, &accent);
 				Util::AddTooltip(LayerTooltip(layer));
 			} else {
-				const LayerLink link = ResolveLink(layer, featureShortName);
 				ImGui::AlignTextToFramePadding();
-				if (link.destination == Destination::None)
-					Util::Text::Disabled("%s", LayerName(layer));
-				else if (BrowserUI::Link("##layer", LayerName(layer)))
-					Follow(link, featureShortName);
-				DrawLayerTooltip(layer, link.destination);
+				DrawLayerLink(layer, ResolveLink(layer, featureShortName), featureShortName);
 			}
 			ImGui::PopID();
 		}
 		ImGui::PopID();
+	}
+
+	/** @brief Whether a cache stamped at cachedAt is due a refresh, restamping it when so. */
+	bool RefreshDue(double& cachedAt)
+	{
+		const double now = ImGui::GetTime();
+		if (now - cachedAt <= kWinnerRefreshSeconds)
+			return false;
+		cachedAt = now;
+		return true;
 	}
 
 	/** @brief The feature's overriding contexts, refreshed a few times a second rather than every frame. */
@@ -222,13 +243,79 @@ namespace
 		static double cachedAt = -1.0;
 		static std::vector<WinningContext> winners;
 
-		const double now = ImGui::GetTime();
-		if (cachedFeature != featureShortName || now - cachedAt > kWinnerRefreshSeconds) {
+		if (RefreshDue(cachedAt) || cachedFeature != featureShortName) {
 			cachedFeature = featureShortName;
-			cachedAt = now;
 			winners = manager.GetWinningContexts(featureShortName);
 		}
 		return winners;
+	}
+
+	constexpr size_t kLayerCount = static_cast<size_t>(Layer::Location) + 1;
+
+	constexpr ImGuiTableFlags kSummaryTableFlags =
+		ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
+
+	/** @brief One layer's row of the summary. */
+	struct LayerSummary
+	{
+		std::optional<SceneContextId> context;
+		std::string contextName;
+		std::string featureShortName;  ///< First feature the layer overrides, selected when its page opens.
+		size_t settings = 0;
+	};
+	using Summary = std::array<LayerSummary, kLayerCount>;
+
+	/** @brief Every layer's live context and override count across all scene features, refreshed like GetCachedWinners. */
+	const Summary& GetCachedSummary(SceneSettingsManager& manager)
+	{
+		static double cachedAt = -1.0;
+		static Summary summary;
+		if (!RefreshDue(cachedAt))
+			return summary;
+
+		summary = {};
+		for (const Layer layer : { Layer::TimeOfDay, Layer::Interior, Layer::Weather, Layer::Location }) {
+			auto& row = summary[static_cast<size_t>(layer)];
+			row.context = SceneSettingsUI::ResolveCurrentContext(ContextTypeOf(layer));
+			if (row.context)
+				row.contextName = manager.GetSceneContextDisplayName(*row.context);
+		}
+		for (const auto& featureShortName : SceneSettingsManager::GetLocationRelevantFeatureNames()) {
+			for (const auto& winner : manager.GetWinningContexts(featureShortName)) {
+				auto& row = summary[static_cast<size_t>(LayerOf(winner.context.type))];
+				if (row.featureShortName.empty())
+					row.featureShortName = featureShortName;
+				row.settings += winner.settings;
+			}
+		}
+		return summary;
+	}
+
+	void DrawSummaryRow(Layer layer, const LayerSummary& row)
+	{
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		if (layer == Layer::Base) {
+			ImGui::TextUnformatted(LayerName(layer));
+			Util::AddTooltip(LayerTooltip(layer));
+		} else {
+			DrawLayerLink(layer, LinkTo(layer, row.context), row.featureShortName);
+		}
+
+		ImGui::TableNextColumn();
+		if (layer == Layer::Base)
+			Util::Text::Secondary("%s", T(TKEY("summary_base"), "Each feature's own settings"));
+		else if (row.context)
+			ImGui::TextUnformatted(row.contextName.c_str());
+		else
+			Util::Text::Disabled("%s", T(TKEY("summary_none"), "Nothing applies here"));
+
+		ImGui::TableNextColumn();
+		if (row.settings != 0)
+			ImGui::TextUnformatted(I18n::GetSingleton()->Format(TKEY("summary_settings"),
+				{ { "count", std::to_string(row.settings) } }, "{count} settings").c_str());
+		else
+			Util::Text::Disabled("-");
 	}
 
 	/** @brief Lists the layers overriding the feature here, each a link to the page that edits it. */
@@ -330,6 +417,34 @@ void SceneLayerHeader::DrawScene(const SceneContextId& context, const std::strin
 	DrawStack(layer, interior, featureShortName);
 	Util::Text::WrappedSecondary("%s", DescribeSceneLayer(*manager, context).c_str());
 	DrawE11Handoff(featureShortName);
+}
+
+void SceneLayerHeader::DrawSummary()
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	if (!manager)
+		return;
+	const auto& summary = GetCachedSummary(*manager);
+	if (!ImGui::BeginTable("SceneLayerSummary", 3, kSummaryTableFlags))
+		return;
+
+	const auto stack = LayerStack(Util::IsInterior());
+	// Links clip to their cell, so an auto-fit column would only ever fit the plain Base row.
+	const char* layerHeader = T(TKEY("summary_layer"), "Layer");
+	float layerWidth = ImGui::CalcTextSize(layerHeader).x;
+	for (const Layer layer : stack)
+		layerWidth = std::max(layerWidth, ImGui::CalcTextSize(LayerName(layer)).x);
+
+	ImGui::TableSetupColumn(layerHeader, ImGuiTableColumnFlags_WidthFixed, layerWidth);
+	ImGui::TableSetupColumn(T(TKEY("summary_applies"), "Applies now"), ImGuiTableColumnFlags_WidthStretch);
+	ImGui::TableSetupColumn(T(TKEY("summary_overrides"), "Overrides"), ImGuiTableColumnFlags_WidthFixed);
+	ImGui::TableHeadersRow();
+	for (const Layer layer : stack) {
+		ImGui::PushID(static_cast<int>(layer));
+		DrawSummaryRow(layer, summary[static_cast<size_t>(layer)]);
+		ImGui::PopID();
+	}
+	ImGui::EndTable();
 }
 
 #undef I18N_KEY_PREFIX
