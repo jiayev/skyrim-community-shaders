@@ -193,13 +193,22 @@ PS_OUTPUT main(PS_INPUT input)
 	positionWS.xyz = positionWS.xyz / positionWS.w;
 	float4 exponentialHeightFog = (float4)0;
 	if (exponentialHeightFogEnabled) {
+#			if defined(HORIZON_FIX)
+		// The HorizonFix plugin's far water meets the sky at its own horizon, far beyond the far
+		// plane, so the sky is fogged out to that distance to match the water it sits on.
+		if (!isGeometryDepth) {
+			float skyRayLength = length(positionWS.xyz);
+			positionWS.xyz *= max(skyRayLength, SharedData::horizonFixSettings.farWaterDistance) / max(skyRayLength, 1e-4);
+		}
+#			endif
 		float4 fogScreenPosition = float4(monoUV * SharedData::BufferDim.xy, depth, 1.0f);
 		exponentialHeightFog = ExponentialHeightFog::GetExponentialHeightFog(positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz, fogColor, fogScreenPosition);
 	}
 	if (isGeometryDepth || exponentialHeightFogEnabled) {
 		float fogFade = exponentialHeightFogEnabled ? ExponentialHeightFog::GetVanillaFogFade(FogNearColor.w) : FogNearColor.w;
 		float3 fogSource = exponentialHeightFogEnabled && !isGeometryDepth ? composedColor.xyz : fogFade * composedColor.xyz;
-		if (exponentialHeightFogEnabled && !ExponentialHeightFog::ShouldDisableVanillaFog()) {
+		// Vanilla fog only ever applies to geometry; sky pixels take height fog alone.
+		if (exponentialHeightFogEnabled && isGeometryDepth && !ExponentialHeightFog::ShouldDisableVanillaFog()) {
 			// Apply vanilla fog first, then exp fog on top
 			composedColor.xyz = lerp(fogSource, fogFade * fogColor, Color::FogAlpha(fogFactor));
 			composedColor.xyz = lerp(composedColor.xyz, fogFade * exponentialHeightFog.xyz, exponentialHeightFog.w);

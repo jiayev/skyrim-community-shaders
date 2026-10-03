@@ -195,12 +195,19 @@ namespace Color
 		return ENABLE_LL ? LinearToSkyrimGamma(color) : color;
 	}
 
-	float3 Diffuse(float3 color)
+	/** @brief Applies the ENB ColorPow curve to a gamma-space diffuse color when Effects 11 is enabled. */
+	float3 EnbColorPow(float3 color)
 	{
 #	if defined(EFFECTS11)
 		if (SharedData::enbSettings.Enable)
 			color = pow(abs(color), SharedData::enbSettings.ColorPow);
 #	endif
+		return color;
+	}
+
+	float3 Diffuse(float3 color)
+	{
+		color = EnbColorPow(color);
 #	if defined(TRUE_PBR)
 		return ENABLE_LL ? color : LinearToSrgb(color);
 #	else

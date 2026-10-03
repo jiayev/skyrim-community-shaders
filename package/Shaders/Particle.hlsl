@@ -192,7 +192,8 @@ VS_OUTPUT main(VS_INPUT input)
 #	endif
 
 #		if defined(ENVCUBE) && defined(RAIN) && defined(EFFECTS11)
-	vsout.RaindropData.xy = input.TexCoord1.xy * 0.5 + 0.5;
+	// Corner offsets are +-particle size; their sign is the UV within the quad's atlas cell, so one drop fills each particle
+	vsout.RaindropData.xy = step(0, input.TexCoord1.xy);
 #		endif
 
 	return vsout;
@@ -245,6 +246,7 @@ cbuffer PerGeometry : register(b2)
 };
 
 #	define LinearSampler SampSourceTexture
+#	include "Common/Permutation.hlsli"
 #	include "Common/ShadowSampling.hlsli"
 
 #	if defined(IBL)
@@ -339,6 +341,9 @@ if (SharedData::enbSettings.EnableRain) {
 
 	float unusedDetailedShadow;
 	float3 dirLightColor = SharedData::DirLightColor.xyz * ShadowSampling::GetLightingShadow(positionWS.xyz, unusedDetailedShadow);
+	// Menu and reflection passes don't match the world heightmap and cloud state
+	if (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::InWorld)
+		dirLightColor *= ShadowSampling::GetWorldShadow(positionWS.xyz, FrameBuffer::CameraPosAdjust.xyz);
 	float3 ambientColor = max(0, SharedData::GetAmbient(float3(0, 0, 1)));
 #	if defined(IBL)
 	if (SharedData::iblSettings.EnableIBL) {

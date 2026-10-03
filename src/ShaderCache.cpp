@@ -284,6 +284,8 @@ namespace SIE
 			if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepthStencil) ||
 				technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth)) {
 				defines[lastIndex++] = { "RENDER_DEPTH", nullptr };
+			} else if (technique == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::TruePbr)) {
+				defines[lastIndex++] = { "TRUE_PBR", nullptr };
 			}
 			if (descriptor & static_cast<uint32_t>(ShaderCache::GrassShaderFlags::AlphaTest)) {
 				defines[lastIndex++] = { "DO_ALPHA_TEST", nullptr };
@@ -1315,6 +1317,13 @@ namespace SIE
 
 		std::wstring GetDiskPath(const std::string_view& name, uint32_t descriptor, ShaderClass shaderClass)
 		{
+			// Both grass depth techniques compile with identical defines and share one in-memory
+			// key, so they must also share one disk entry; separate files could load mismatched bytecode.
+			if (name == "RunGrass" &&
+				(descriptor & 0b1111) == static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepthStencil)) {
+				descriptor = (descriptor & ~0b1111u) | static_cast<uint32_t>(ShaderCache::GrassShaderTechniques::RenderDepth);
+			}
+
 			const auto suffixNarrow = Util::GetShaderDefinesSuffix(globals::state->shaderDefinesString);
 			const std::wstring suffix(suffixNarrow.begin(), suffixNarrow.end());
 
@@ -1349,9 +1358,50 @@ namespace SIE
 			std::string::size_type pos = a_key.find(':');
 			if (pos != std::string::npos)
 				type = a_key.substr(0, pos);
-			if (type.starts_with("IS") || type == "ReflectionsRayTracing")
+			if (type.starts_with("IS") || type == "ReflectionsRayTracing" || type == "LensFlareVisibility")
 				type = "ImageSpace";  // fix type for image space shaders
 			return type;
+		}
+
+		/** @brief True only for a whole DXBC container, so a torn or corrupt cache file never reaches CreateXShader. */
+		static bool IsIntactDxbc(ID3DBlob* blob)
+		{
+			constexpr size_t kHeaderSize = 32;
+			constexpr size_t kTotalSizeOffset = 24;
+			if (!blob || blob->GetBufferSize() < kHeaderSize)
+				return false;
+			const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
+			uint32_t totalSize = 0;
+			std::memcpy(&totalSize, bytes + kTotalSizeOffset, sizeof(totalSize));
+			return std::memcmp(bytes, "DXBC", 4) == 0 && totalSize == blob->GetBufferSize();
+		}
+
+		/** @brief Reads a cached blob, deleting the file and returning null when it is unreadable or not intact DXBC. */
+		static winrt::com_ptr<ID3DBlob> ReadIntactBlob(const std::wstring& diskPath)
+		{
+			winrt::com_ptr<ID3DBlob> blob;
+			if (FAILED(D3DReadFileToBlob(diskPath.c_str(), blob.put())))
+				return nullptr;
+			if (IsIntactDxbc(blob.get()))
+				return blob;
+			logger::warn("Discarding corrupt cached shader {}", Util::WStringToString(diskPath));
+			std::error_code ec;
+			std::filesystem::remove(diskPath, ec);
+			return nullptr;
+		}
+
+		/** @brief Writes through a sibling temp file and a rename, so a crash mid-write cannot leave a torn blob at diskPath. */
+		static bool WriteBlobAtomic(const std::wstring& diskPath, ID3DBlob* blob)
+		{
+			const std::wstring tempPath = diskPath + L".tmp";
+			std::error_code ec;
+			if (SUCCEEDED(D3DWriteBlobToFile(blob, tempPath.c_str(), true))) {
+				std::filesystem::rename(tempPath, diskPath, ec);
+				if (!ec)
+					return true;
+			}
+			std::filesystem::remove(tempPath, ec);
+			return false;
 		}
 
 		/**
@@ -1378,12 +1428,16 @@ namespace SIE
 
 			// Atomically check the shaderMap and either:
 			//  - return the blob if already Completed (cache hit),
+			//  - return nullptr if a previous attempt Failed,
 			//  - wait if another thread is compiling (Pending),
 			//  - claim the slot with Pending if nobody started yet.
 			auto [claimResult, cachedBlob] = cache.ClaimCompilation(key);
 			if (claimResult == ShaderCache::ClaimResult::CacheHit) {
 				cache.IncCacheHitTasks();
 				return cachedBlob;
+			}
+			if (claimResult == ShaderCache::ClaimResult::Failed) {
+				return nullptr;
 			}
 
 			const auto type = shader.shaderType.get();
@@ -1392,47 +1446,54 @@ namespace SIE
 			auto diskPath = GetDiskPath(shader.fxpFilename, descriptor, shaderClass);
 			ID3DBlob* shaderBlob = nullptr;
 
-			if (useDiskCache && std::filesystem::exists(diskPath)) {
+			// A failed filesystem probe is a cache miss, not a failed compilation task.
+			std::error_code diskCacheProbeError;
+			if (useDiskCache && std::filesystem::exists(diskPath, diskCacheProbeError)) {
 				// Determine whether the disk-cached shader is still valid.
 				bool diskCacheOutdated = false;
 				if (cache.UseFileWatcher()) {
 					// File watcher tracks runtime changes in memory: compare disk-cache mtime against tracked source mtime.
-					auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath));
-					diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
-					if (diskCacheOutdated)
-						logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					// An unreadable timestamp means freshness can't be verified; treat it as a miss.
+					std::error_code ec;
+					const auto diskCacheFileTime = std::filesystem::last_write_time(diskPath, ec);
+					if (ec) {
+						diskCacheOutdated = true;
+						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
+					} else {
+						auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(diskCacheFileTime);
+						diskCacheOutdated = cache.ShaderModifiedSince(shader.fxpFilename, diskCacheTime);
+						if (diskCacheOutdated)
+							logger::debug("Diskcached shader {} older than {}", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true), std::format("{:%Y%m%d%H%M}", diskCacheTime));
+					}
 				} else if (cache.IsSkipUnchangedShaders()) {
 					// No file watcher: compare disk-cache mtime directly against the .hlsl source file mtime.
 					std::error_code ec;
-					const auto diskCacheTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(diskPath, ec));
+					const auto diskCacheTime = std::filesystem::last_write_time(diskPath, ec);
 					if (ec) {
+						// An unreadable timestamp means freshness can't be verified; treat it as a miss.
+						diskCacheOutdated = true;
 						logger::debug("Failed to read disk cache mtime for {}: {}", Util::WStringToString(diskPath), ec.message());
 					} else {
 						const std::wstring shaderSourcePath = GetShaderPath(
 							shader.shaderType == RE::BSShader::Type::ImageSpace ?
 								static_cast<const RE::BSImagespaceShader&>(shader).originalShaderName :
 								shader.fxpFilename);
-						if (std::filesystem::exists(shaderSourcePath)) {
-							const auto sourceTime = std::chrono::clock_cast<std::chrono::system_clock>(std::filesystem::last_write_time(shaderSourcePath, ec));
-							if (ec) {
-								logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
-							} else if (sourceTime > diskCacheTime) {
-								diskCacheOutdated = true;
-								logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
-							}
+						const auto sourceTime = std::filesystem::last_write_time(shaderSourcePath, ec);
+						if (ec) {
+							logger::debug("Failed to read source mtime for {}: {}", Util::WStringToString(shaderSourcePath), ec.message());
+						} else if (sourceTime > diskCacheTime) {
+							diskCacheOutdated = true;
+							logger::debug("Disk-cached shader {} outdated: source is newer than cache", SIE::SShaderCache::GetShaderString(shaderClass, shader, descriptor, true));
 						}
 					}
 				}
 
 				if (diskCacheOutdated) {
 					// Fall through to recompile from source.
-				} else if (FAILED(D3DReadFileToBlob(diskPath.c_str(), &shaderBlob))) {
+				} else if (auto intactBlob = ReadIntactBlob(diskPath); !intactBlob) {
 					logger::error("Failed to load {} shader {}::{:X}", magic_enum::enum_name(shaderClass), magic_enum::enum_name(type), descriptor);
-
-					if (shaderBlob != nullptr) {
-						shaderBlob->Release();
-					}
 				} else {
+					shaderBlob = intactBlob.detach();
 					logger::debug("Loaded shader from {}", Util::WStringToString(diskPath));
 					cache.AddCompletedShader(shaderClass, shader, descriptor, shaderBlob, /*fromDisk=*/true);
 					return shaderBlob;
@@ -1565,8 +1626,7 @@ namespace SIE
 					}
 				}
 
-				const HRESULT saveResult = D3DWriteBlobToFile(shaderBlob, diskPath.c_str(), true);
-				if (FAILED(saveResult)) {
+				if (!WriteBlobAtomic(diskPath, shaderBlob)) {
 					logger::error("Failed to save shader to {}", Util::WStringToString(diskPath));
 				} else {
 					logger::debug("Saved shader to {}", Util::WStringToString(diskPath));
@@ -1744,6 +1804,7 @@ namespace SIE
 					RE::ImageSpaceManager::GetCurrentIndex(ISCompositeLensFlare) },
 				{ "BSImagespaceShaderISCompositeLensFlareVolumetricLighting",
 					RE::ImageSpaceManager::GetCurrentIndex(ISCompositeLensFlareVolumetricLighting) },
+				{ "BGSLensFlareVisibilityPass", RE::ImageSpaceManager::GetCurrentIndex(ISLensFlareVisibility) },
 				// { "BSImagespaceShaderISDebugSnow", RE::ImageSpaceManager::GetCurrentIndex(ISDebugSnow) },
 				{ "BSImagespaceShaderDepthOfField", RE::ImageSpaceManager::GetCurrentIndex(ISDepthOfField) },
 				{ "BSImagespaceShaderDepthOfFieldFogged",
@@ -2057,6 +2118,7 @@ namespace SIE
 			hlslToShaderMap.clear();
 		}
 		compilationSet.Clear();
+		Util::ClearShaderCompileFailures();
 		globals::deferred->ClearShaderCache();
 		for (auto* feature : Feature::GetFeatureList()) {
 			if (feature->loaded) {
@@ -2240,7 +2302,7 @@ namespace SIE
 					break;  // Completed with nullptr blob — re-compile
 				}
 				if (entry.status == ShaderCompilationTask::Status::Failed) {
-					break;  // Previous attempt failed — re-compile
+					return { ClaimResult::Failed, nullptr };
 				}
 				// Status is Pending — another thread is compiling this shader.
 				logger::debug("Shader compilation in progress, waiting: {}", key);
@@ -2406,6 +2468,16 @@ namespace SIE
 	void ShaderCache::SetSkipUnchangedShaders(bool value)
 	{
 		isSkipUnchangedShaders = value;
+	}
+
+	void ShaderCache::SetBackgroundCompilation(bool value)
+	{
+		{
+			// Serialize with WaitTake's predicate check and transition into wait.
+			std::scoped_lock lock{ compilationSet.compilationMutex };
+			backgroundCompilation = value;
+		}
+		compilationSet.conditionVariable.notify_one();
 	}
 
 	void ShaderCache::DeleteDiskCache()
@@ -3178,9 +3250,9 @@ namespace SIE
 		if (!conditionVariable.wait(
 				lock, stoken,
 				[this, &shaderCache]() { return !availableTasks.empty() &&
-			                                    // Dispatch when pool has room. Use < (not <=) so that after
-			                                    // push_task() the total never exceeds the limit.
-			                                    (int)shaderCache->compilationPool.get_tasks_total() <
+			                                    // Complete() erases this entry before notifying. The pool's count
+			                                    // only drops after the callback returns, without notifying us.
+			                                    static_cast<int>(tasksInProgress.size()) <
 			                                        (!shaderCache->backgroundCompilation ? shaderCache->compilationThreadCount : shaderCache->backgroundCompilationThreadCount); })) {
 			/*Woke up because of a stop request. */
 			return std::nullopt;
@@ -3593,6 +3665,8 @@ namespace SIE
 					if (fileDone)
 						continue;
 				}
+				// Feature shaders are not dependency-tracked, so any edit may fix a failed compile.
+				Util::ClearShaderCompileFailures();
 				if (clearCache) {
 					cache->DeleteDiskCache();
 					cache->Clear();

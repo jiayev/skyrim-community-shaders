@@ -7,6 +7,8 @@
 #include "Utils/D3D.h"
 #include "Utils/VersionedRelocation.h"
 
+#include <numbers>
+
 #define I18N_KEY_PREFIX "feature.skylighting."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -18,6 +20,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 void Skylighting::LoadSettings(json& o_json)
 {
 	settings = o_json;
+	// A negative or non-finite zenith turns the probe sample disc radius into NaN
+	settings.MaxZenith = std::isfinite(settings.MaxZenith) ? std::clamp(settings.MaxZenith, 0.0f, std::numbers::pi_v<float> / 2.0f) : Settings{}.MaxZenith;
 }
 
 void Skylighting::SaveSettings(json& o_json)
@@ -33,13 +37,22 @@ void Skylighting::RestoreDefaultSettings()
 void Skylighting::ResetSkylighting()
 {
 	auto context = globals::d3d::context;
-	UINT clr[1] = { 0 };
+	// Unit SH (fully unoccluded), matching Skylighting::UNIT_SH; probes the occlusion map does not reach would otherwise keep the previous location's values
+	const float unitSH[4] = { std::sqrt(4.0f * std::numbers::pi_v<float>), 0.0f, 0.0f, 0.0f };
+	context->ClearUnorderedAccessViewFloat(texProbeArray->uav.get(), unitSH);
+
+	// ClearUnorderedAccessViewUint always reads four values
+	const UINT clr[4] = { 0, 0, 0, 0 };
 	context->ClearUnorderedAccessViewUint(texAccumFramesArray->uav.get(), clr);
-	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), clr);
+	// All 32 history bits lit, so a reset does not fade in from black while the history refills
+	const UINT litHistory[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
+	context->ClearUnorderedAccessViewUint(texShadowBitmask->uav.get(), litHistory);
 
 	float clrf[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
 	context->ClearUnorderedAccessViewFloat(texShadowVisibility->uav.get(), clrf);
 
+	// Grid bottom is stale until the next in-world buffer update, so don't cull this frame
+	probeGridBottomZ = -FLT_MAX;
 	queuedResetSkylighting = false;
 }
 
@@ -57,7 +70,7 @@ void Skylighting::DrawSettings()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("rebuild_tooltip"), "Changes below require rebuilding, a loading screen, or moving away from the current location to apply."));
 
-	ImGui::SliderAngle(T(TKEY("max_zenith"), "Max Zenith Angle"), &settings.MaxZenith, 0, 90);
+	ImGui::SliderAngle(T(TKEY("max_zenith"), "Max Zenith Angle"), &settings.MaxZenith, 0, 90, "%.0f deg", ImGuiSliderFlags_AlwaysClamp);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("max_zenith_tooltip"), "Smaller angles creates more focused top-down shadow."));
 }
@@ -157,7 +170,7 @@ void Skylighting::ClearShaderCache()
 	};
 
 	for (auto shader : shaderPtrs)
-		shader = nullptr;
+		*shader = nullptr;
 
 	CompileComputeShaders();
 }
@@ -204,6 +217,7 @@ Skylighting::SkylightingCB Skylighting::GetCommonBufferData(bool a_inWorld)
 	auto cellID = eyePos / cellSize;
 	cellID = { round(cellID.x), round(cellID.y), round(cellID.z) };
 	auto cellOrigin = cellID * cellSize;
+	probeGridBottomZ = cellOrigin.z - cellSize.z * probeArrayDims[2] * .5f;
 	float3 cellIDDiff = prevCellID - cellID;
 	prevCellID = cellID;
 
@@ -258,8 +272,8 @@ void Skylighting::Prepass()
 			comparisonSampler.get()
 		};
 
-		// Update probe array
-		{
+		// Update probe array (skipped if the compute shader failed to compile)
+		if (probeUpdateCompute) {
 			context->CSSetSamplers(0, (uint)samplers.size(), samplers.data());
 			context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
 			context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
@@ -299,6 +313,9 @@ void Skylighting::PostPostLoad()
 	stl::write_thunk_call<Main_Precipitation_RenderOcclusion>(REL::RelocationID(35560, 36559).address() + Util::VersionedRelocation::Select(0x3A1, 0x3A1, 0x3BF));
 
 	stl::write_thunk_call<SetViewFrustum>(REL::RelocationID(25643, 26185).address() + REL::Relocate(0x5D9, 0x59D));
+
+	BSShaderAccumulator_StartGroupingAlphas::GrowPool();
+	stl::write_vfunc<0x28, BSShaderAccumulator_StartGroupingAlphas>(RE::VTABLE_BSShaderAccumulator[0]);
 
 	MenuOpenCloseEventHandler::Register();
 }
@@ -405,7 +422,18 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			return precipitationOcclusionMapRenderPassList;
 	}
 
+	constexpr float minOccluderRadius = 32.0f;
+	const bool validOccluder = property->flags.any(kZBufferWrite) &&
+		property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal) &&
+		(skylighting.inOcclusion || property->flags.none(kMultiTextureLandscape, kNoLODLandBlend));
+	if (!validOccluder || !(geometry->worldBound.radius > minOccluderRadius))
+		return precipitationOcclusionMapRenderPassList;
+
 	if (skylighting.inOcclusion) {
+		// Only occluders above a probe lie on its ray to the sky
+		if (geometry->worldBound.center.z + geometry->worldBound.radius < skylighting.probeGridBottomZ - OCCLUSION_BELOW_GRID_MARGIN)
+			return precipitationOcclusionMapRenderPassList;
+
 		if (auto userData = geometry->GetUserData()) {
 			RE::BSFadeNode* fadeNode = nullptr;
 
@@ -416,12 +444,12 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 			}
 
 			if (fadeNode) {
-				if (auto extraData = fadeNode->GetExtraData("BSX")) {
+				static const RE::BSFixedString bsxKey{ "BSX" };
+				if (auto extraData = fadeNode->GetExtraData(bsxKey)) {
 					auto bsxFlags = (RE::BSXFlags*)extraData;
 					auto value = static_cast<int32_t>(bsxFlags->value);
 
 					if (value & (static_cast<int32_t>(RE::BSXFlags::Flag::kRagdoll) |
-									static_cast<int32_t>(RE::BSXFlags::Flag::kEditorMarker) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kDynamic) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kAddon) |
 									static_cast<int32_t>(RE::BSXFlags::Flag::kNeedsTransformUpdate) |
@@ -436,44 +464,32 @@ RE::BSShaderProperty::RenderPassArray* Skylighting::BSLightingShaderProperty_Get
 		}
 	}
 
-	bool valid = false;
+	stl::enumeration<RE::BSUtilityShader::Flags> technique;
+	technique.set(RenderDepth);
 
-	if (skylighting.inOcclusion) {
-		valid = property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
-	} else {
-		valid = property->flags.any(kZBufferWrite) && property->flags.none(kRefraction, kTempRefraction, kMultiTextureLandscape, kNoLODLandBlend, kLODLandscape, kEyeReflect, kDecal, kDynamicDecal);
+	if (property->flags.any(kVertexColors)) {
+		technique.set(Vc);
 	}
 
-	if (valid) {
-		if (geometry->worldBound.radius > 32) {
-			stl::enumeration<RE::BSUtilityShader::Flags> technique;
-			technique.set(RenderDepth);
-
-			if (property->flags.any(kVertexColors)) {
-				technique.set(Vc);
-			}
-
-			const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get());
-			if (alphaProperty && alphaProperty->GetAlphaTesting()) {
-				technique.set(Texture);
-				technique.set(AlphaTest);
-			}
-
-			if (property->flags.any(kLODObjects, kHDLODObjects)) {
-				technique.set(LodObject);
-			}
-
-			if (property->flags.any(kTreeAnim)) {
-				technique.set(TreeAnim);
-			}
-
-			precipitationOcclusionMapRenderPassList->EmplacePass(
-				globals::game::utilityShader,
-				property,
-				geometry,
-				technique.underlying() + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
-		}
+	const auto alphaProperty = static_cast<RE::NiAlphaProperty*>(geometry->GetGeometryRuntimeData().alphaProperty.get());
+	if (alphaProperty && alphaProperty->GetAlphaTesting()) {
+		technique.set(Texture);
+		technique.set(AlphaTest);
 	}
+
+	if (property->flags.any(kLODObjects, kHDLODObjects)) {
+		technique.set(LodObject);
+	}
+
+	if (property->flags.any(kTreeAnim)) {
+		technique.set(TreeAnim);
+	}
+
+	precipitationOcclusionMapRenderPassList->EmplacePass(
+		globals::game::utilityShader,
+		property,
+		geometry,
+		technique.underlying() + static_cast<uint32_t>(ShaderTechnique::UtilityGeneralStart));
 	return precipitationOcclusionMapRenderPassList;
 }
 
@@ -651,6 +667,61 @@ void Skylighting::CaptureShadowCascadeSRV()
 void Skylighting::Main_Precipitation_RenderOcclusion::thunk()
 {
 	globals::features::skylighting.RenderOcclusion();
+}
+
+void Skylighting::BSShaderAccumulator_StartGroupingAlphas::GrowPool()
+{
+	// The pool base is only addressed by `lea reg, [rip + disp32]` in these functions (sort, allocate, peek, render)
+	constexpr std::size_t SCAN_BYTES = 0x100;
+	constexpr std::size_t LEA_SIZE = 7;
+	constexpr std::size_t LEA_DISP_OFFSET = 3;
+	constexpr std::size_t POOL_REFERENCES = 5;
+
+	const std::uintptr_t vanillaPool = REL::RelocationID(528327, 415278).address();
+	std::set<std::uintptr_t> leaSites;  // scan windows can overlap adjacent functions
+	for (const auto& function : { REL::RelocationID(100857, 107647), REL::RelocationID(100874, 107670), REL::RelocationID(100876, 107672), REL::RelocationID(100877, 107673) }) {
+		const auto* code = reinterpret_cast<const std::uint8_t*>(function.address());
+		for (const auto* lea = code; lea < code + SCAN_BYTES; ++lea) {
+			// REX.W/REX.WR 8D with a RIP-relative ModRM
+			const bool isRipLea = (lea[0] & 0xFB) == 0x48 && lea[1] == 0x8D && (lea[2] & 0xC7) == 0x05;
+			const auto site = reinterpret_cast<std::uintptr_t>(lea);
+			if (isRipLea && site + LEA_SIZE + *reinterpret_cast<const std::int32_t*>(lea + LEA_DISP_OFFSET) == vanillaPool)
+				leaSites.insert(site);
+		}
+	}
+	if (leaSites.size() != POOL_REFERENCES) {
+		logger::warn("[SKYLIGHTING] Found {}/{} alpha group pool references, keeping vanilla pool of {}", leaSites.size(), POOL_REFERENCES, VANILLA_POOL_SIZE);
+		return;
+	}
+
+	// Allocated near the executable so the patched rel32 displacements can reach it
+	constexpr std::size_t poolBytes = POOL_SIZE * sizeof(RE::BSBatchRenderer::GeometryGroup);
+	static SKSE::Trampoline poolMemory{ "Skylighting alpha group pool" };
+	poolMemory.create(poolBytes);
+	void* poolData = poolMemory.allocate(poolBytes);
+	std::memset(poolData, 0, poolBytes);  // Trampoline fills with int3, the engine expects a zeroed .bss pool
+	const auto pool = reinterpret_cast<std::uintptr_t>(poolData);
+	for (const auto site : leaSites) {
+		const auto displacement = static_cast<std::intptr_t>(pool) - static_cast<std::intptr_t>(site + LEA_SIZE);
+		assert(displacement >= INT32_MIN && displacement <= INT32_MAX);
+		const auto displacement32 = static_cast<std::int32_t>(displacement);
+		REL::safe_write(site + LEA_DISP_OFFSET, &displacement32, sizeof(displacement32));
+	}
+	poolCapacity = POOL_SIZE;
+	logger::info("[SKYLIGHTING] Alpha group pool grown from {} to {}", VANILLA_POOL_SIZE, POOL_SIZE);
+}
+
+RE::BSBatchRenderer::GeometryGroup* Skylighting::BSShaderAccumulator_StartGroupingAlphas::thunk(RE::BSShaderAccumulator* accumulator, RE::NiBound* bound)
+{
+	// The engine allocates from this pool without a bounds check; callers already handle a null group
+	static REL::Relocation<std::uint32_t*> poolCount{ REL::RelocationID(528319, 415271) };
+	if (*poolCount >= poolCapacity) {
+		static bool warned = false;
+		if (!std::exchange(warned, true))
+			logger::warn("[SKYLIGHTING] Alpha group pool full, extra ordered geometry renders unsorted");
+		return nullptr;
+	}
+	return func(accumulator, bound);
 }
 
 RE::BSEventNotifyControl Skylighting::MenuOpenCloseEventHandler::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)

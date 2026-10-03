@@ -1,6 +1,7 @@
 #include "Game.h"
 
 #include <atomic>
+#include <limits>
 
 #include "Globals.h"
 #include "State.h"
@@ -11,6 +12,23 @@ namespace
 	std::atomic_bool timeJumpTransitionRequested{ false };
 	std::atomic_bool gameLoadTransitionRequested{ false };
 	std::atomic_uint32_t completedCelestialTransitionGeneration{ 0 };
+
+	void ResetModelHandle(RE::ModelDBHandle& a_handle)
+	{
+		if (!a_handle)
+			return;
+
+		if (REL::Module::IsAE()) {
+			auto* entry = a_handle.get();
+			a_handle = {};
+			static REL::Relocation<void (*)(RE::ModelDBHandle::U_Entry*)> release{ REL::ID(15443) };
+			release(entry);
+		} else {
+			using Reset = RE::ModelDBHandle* (*)(RE::ModelDBHandle*, RE::ModelDBHandle::U_Entry*);
+			static REL::Relocation<Reset> reset{ REL::ID(25746) };
+			reset(&a_handle, nullptr);
+		}
+	}
 
 	void MarkCelestialTransitionComplete()
 	{
@@ -29,6 +47,30 @@ namespace
 
 namespace Util
 {
+	void ForceWeather(RE::Sky* a_sky, RE::TESWeather* a_weather, bool a_override)
+	{
+		if (!a_sky)
+			return;
+
+		a_sky->ForceWeather(a_weather, a_override);
+		if (a_sky->auroraRoot) {
+			if (a_sky->root)
+				a_sky->root->DetachChild(a_sky->auroraRoot.get());
+			a_sky->auroraRoot.reset();
+		}
+		ResetModelHandle(a_sky->auroraModel);
+
+		// Defer cloud-pass rebuilding until accumulation; render queues may still hold the current passes.
+		if (a_sky->clouds) {
+			for (const auto& cloud : a_sky->clouds->clouds) {
+				if (cloud) {
+					if (auto* property = skyrim_cast<RE::BSSkyShaderProperty*>(cloud->GetGeometryRuntimeData().shaderProperty.get()))
+						property->lastRenderPassState = (std::numeric_limits<std::int32_t>::max)();
+				}
+			}
+		}
+	}
+
 	void SetCelestialTransitionHandlerAvailable(bool a_available)
 	{
 		celestialTransitionHandlerAvailable.store(a_available, std::memory_order_release);

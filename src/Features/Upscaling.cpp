@@ -494,6 +494,10 @@ void Upscaling::LoadSettings(json& o_json)
 		logger::warn("[Upscaling] Loaded presetDLSS {} out of range, resetting to 0 (Default)", settings.presetDLSS);
 		settings.presetDLSS = 0;
 	}
+	if (settings.qualityMode > 4) {
+		logger::warn("[Upscaling] Loaded qualityMode {} out of range, clamping to 4 (Ultra Performance)", settings.qualityMode);
+		settings.qualityMode = 4;
+	}
 	const float originalReflexFPSLimit = settings.reflexFPSLimit;
 	if (!std::isfinite(settings.reflexFPSLimit)) {
 		settings.reflexFPSLimit = 60.0f;
@@ -564,9 +568,6 @@ void Upscaling::PostPostLoad()
 
 	// Performs upscaling in between volumetric lighting and post processing
 	stl::write_thunk_call<Main_PostProcessing>(REL::RelocationID(100430, 107148).address() + REL::Relocate(0x1F0, 0x1E7));
-
-	// Patches RSSetScissorRect calls to use dynamic resolution
-	stl::detour_thunk<SetScissorRect>(REL::RelocationID(75564, 77365));
 
 	// Patches facegen texture generation to not use dynamic resolution
 	stl::detour_thunk<BSFaceGenManager_UpdatePendingCustomizationTextures>(REL::RelocationID(26455, 27041));
@@ -1010,7 +1011,6 @@ void Upscaling::SetupResources()
 		dx12SwapChain.CreateSharedResources();
 
 	copyDepthToSharedBufferPS.attach((ID3D11PixelShader*)Util::CompileShader(L"Data\\Shaders\\Upscaling\\CopyDepthToSharedBufferPS.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
-
 }
 
 void Upscaling::ClearShaderCache()
@@ -1024,8 +1024,14 @@ void Upscaling::ClearShaderCache()
 	upscaleVS = nullptr;                 // com_ptr automatically releases
 }
 
-void Upscaling::CopySharedD3D12Resources()
+bool Upscaling::CopySharedD3D12Resources()
 {
+	// Frame generation must not run on inputs that were never copied this frame.
+	auto* vs = GetUpscaleVS();
+	auto* ps = copyDepthToSharedBufferPS.get();
+	if (!vs || !ps || !dx12SwapChain.motionVectorBufferShared12 || !dx12SwapChain.depthBufferShared12)
+		return false;
+
 	ZoneScoped;
 	TracyD3D11Zone(globals::state->tracyCtx, "Upscaling - Copy Shared D3D12 Resources");
 	globals::state->BeginPerfEvent("Copy Shared D3D12 Resources");
@@ -1058,7 +1064,7 @@ void Upscaling::CopySharedD3D12Resources()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
 		// Set up vertex shader
-		context->VSSetShader(GetUpscaleVS(), nullptr, 0);
+		context->VSSetShader(vs, nullptr, 0);
 
 		// Set up rasterizer and blend states
 		context->RSSetState(upscaleRasterizerState.get());
@@ -1072,7 +1078,7 @@ void Upscaling::CopySharedD3D12Resources()
 		ID3D11RenderTargetView* rtvs[1] = { dx12SwapChain.depthBufferShared12->rtv };
 		context->OMSetRenderTargets(ARRAYSIZE(rtvs), rtvs, nullptr);
 
-		context->PSSetShader(copyDepthToSharedBufferPS.get(), nullptr, 0);
+		context->PSSetShader(ps, nullptr, 0);
 
 		globals::profiler->BeginPass("Upscaling::CopyDepthD3D12");
 		context->Draw(3, 0);
@@ -1088,6 +1094,7 @@ void Upscaling::CopySharedD3D12Resources()
 	context->VSSetShader(nullptr, nullptr, 0);
 
 	globals::state->EndPerfEvent();
+	return true;
 }
 
 void UpdateCameraData()
@@ -1227,11 +1234,16 @@ bool Upscaling::IsFrameGenerationActive() const
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && fidelityFX.isFrameGenActive;
 }
 
-bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+bool Upscaling::ShouldPrepareFrameGeneration() const
 {
 	auto* state = globals::state;
 	const bool menuOpen = state && state->IsPausedOrMenuOpen(globals::game::ui);
 	return IsFrameGenerationDx12PathActive() && settings.frameGenerationMode && (settings.frameGenerationAllowInMenus || !menuOpen);
+}
+
+bool Upscaling::ShouldUseFrameGenerationThisFrame() const
+{
+	return frameGenerationPrepared;
 }
 
 bool Upscaling::IsUpscalingActive() const
@@ -1674,8 +1686,10 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 	auto& upscaling = globals::features::upscaling;
 	auto upscaleMethod = upscaling.GetUpscaleMethod();
 
-	if (upscaling.ShouldUseFrameGenerationThisFrame())
-		upscaling.CopySharedD3D12Resources();
+	// Decide frame generation once per frame, here, and hold that decision through Present.
+	// Re-evaluating at Present let loading transitions flip the answer in between, so Present
+	// interpolated with inputs that were never copied and flashed a stale frame.
+	upscaling.frameGenerationPrepared = upscaling.ShouldPrepareFrameGeneration() && upscaling.CopySharedD3D12Resources();
 
 	if (upscaleMethod != UpscaleMethod::kNONE && upscaleMethod != UpscaleMethod::kTAA)
 		upscaling.PerformUpscaling();
@@ -1698,22 +1712,6 @@ void Upscaling::Main_PostProcessing::thunk(RE::ImageSpaceManager* a_this, uint32
 		globals::features::hdrDisplay.RestoreFramebuffer();
 
 	Util::SetTemporal(false);
-}
-
-void Upscaling::SetScissorRect::thunk(RE::BSGraphics::Renderer* This, int a_left, int a_top, int a_right, int a_bottom)
-{
-	auto viewport = globals::game::graphicsState;
-	auto& runtimeData = viewport->GetRuntimeData();
-
-	if (!runtimeData.dynamicResolutionLock) {
-		a_left = static_cast<int>(a_left * runtimeData.dynamicResolutionWidthRatio);
-		a_right = static_cast<int>(a_right * runtimeData.dynamicResolutionWidthRatio);
-
-		a_top = static_cast<int>(a_top * runtimeData.dynamicResolutionHeightRatio);
-		a_bottom = static_cast<int>(a_bottom * runtimeData.dynamicResolutionHeightRatio);
-	}
-
-	func(This, a_left, a_top, a_right, a_bottom);
 }
 
 void Upscaling::Main_RenderPrecipitation::thunk()

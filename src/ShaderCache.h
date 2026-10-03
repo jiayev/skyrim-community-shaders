@@ -1,6 +1,7 @@
 #pragma once
 
 #include <BS_thread_pool.hpp>
+#include <atomic>
 #include <efsw/efsw.hpp>
 #include <vector>
 
@@ -225,6 +226,8 @@ namespace SIE
 
 	class CompilationSet
 	{
+		friend class ShaderCache;
+
 	public:
 		LARGE_INTEGER lastReset;
 		LARGE_INTEGER lastCalculation;
@@ -452,7 +455,8 @@ namespace SIE
 		enum class ClaimResult
 		{
 			CacheHit,  // Already compiled; use the returned blob
-			Claimed    // Claimed as Pending; caller must compile and call AddCompletedShader
+			Claimed,   // Claimed as Pending; caller must compile and call AddCompletedShader
+			Failed     // Previous attempt failed; skipped until invalidation drops the entry
 		};
 		std::pair<ClaimResult, ID3DBlob*> ClaimCompilation(const std::string& key);
 		void ResolvePendingFailure(const std::string& key);
@@ -537,7 +541,9 @@ namespace SIE
 		int32_t backgroundCompilationThreadCount = std::max(static_cast<int32_t>(Util::GetPerformanceCoreCount()) / 2, 1);
 		BS::thread_pool<> compilationPool{ static_cast<std::size_t>(compilationThreadCount) };
 		std::jthread managementJthread;  // dedicated thread for ManageCompilationSet (not in pool)
-		bool backgroundCompilation = false;
+		/** @brief Updates compilation mode and wakes the dispatcher to recheck its capacity. */
+		void SetBackgroundCompilation(bool value);
+		std::atomic_bool backgroundCompilation{ false };
 		bool menuLoaded = false;
 
 		enum class LightingShaderTechniques
@@ -626,6 +632,7 @@ namespace SIE
 		{
 			RenderDepthStencil = 7,
 			RenderDepth = 8,
+			TruePbr = 9,
 		};
 
 		enum class GrassShaderFlags

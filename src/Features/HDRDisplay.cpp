@@ -820,7 +820,7 @@ HDRDisplay::D3D12UIBufferMode HDRDisplay::GetD3D12UIBufferMode()
 	if (!globals::features::upscaling.d3d12SwapChainActive)
 		return mode;
 
-	const bool hdrReady = loaded && hdrDataCB && outputTexture;
+	const bool hdrReady = loaded && settings.enableHDR && hdrDataCB && outputTexture;
 	const bool hdrShaderAvailable = hdrReady && GetHDROutputCS() != nullptr;
 
 	mode.useUIBuffer = hdrShaderAvailable || IsFGCompositingThisFrame();
@@ -1089,7 +1089,7 @@ HRESULT HDRDisplay::HandleSwapChainPresent(
 	const std::function<HRESULT(IDXGISwapChain*, UINT, UINT)>& presentChain)
 {
 	const bool frameGenActive = globals::features::upscaling.d3d12SwapChainActive;
-	const bool hdrReady = loaded && hdrDataCB && outputTexture && (settings.enableHDR || frameGenActive);
+	const bool hdrReady = loaded && hdrDataCB && outputTexture && settings.enableHDR;
 
 	D3D11_VIEWPORT savedViewport{};
 	UINT viewportCount = 1;
@@ -1175,6 +1175,7 @@ void HDRDisplay::ApplyHDR()
 				}
 			}
 
+			RestoreCleanScene();
 			state->EndPerfEvent();
 			return;
 		}
@@ -1197,6 +1198,7 @@ void HDRDisplay::ApplyHDR()
 		}
 	}
 
+	RestoreCleanScene();
 	state->EndPerfEvent();
 }
 
@@ -1276,6 +1278,15 @@ void HDRDisplay::SnapshotCleanScene()
 
 	globals::d3d::context->CopyResource(cleanSceneCapture->resource.get(), hdrTexture->resource.get());
 	cleanSceneCaptureFrame = globals::state->frameCount;
+}
+
+void HDRDisplay::RestoreCleanScene()
+{
+	if (!IsCleanSceneCaptureFresh() || !hdrTexture || !hdrTexture->resource ||
+		!cleanSceneCapture || !cleanSceneCapture->resource)
+		return;
+
+	globals::d3d::context->CopyResource(hdrTexture->resource.get(), cleanSceneCapture->resource.get());
 }
 
 bool HDRDisplay::IsCleanSceneCaptureFresh() const
@@ -1594,8 +1605,8 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	bool skipUIComposite = IsFGCompositingThisFrame();
 
 	// Linear Lighting keeps the pipeline linear throughout.
-	// Without it, ISHDR gamma-encodes its output even in HDR mode.
-	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting;
+	// Without it, ISHDR gamma-encodes its output even in HDR mode. Linear Lighting stands down on the flat world map.
+	bool isSceneLinear = globals::features::linearLighting.settings.enableLinearLighting && !globals::state->IsFlatWorldMapOpen();
 
 	// Use user-specified peak brightness for highlights compression
 	float effectivePeakNits = static_cast<float>(settings.hdrPeakNits);

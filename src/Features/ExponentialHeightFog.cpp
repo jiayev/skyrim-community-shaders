@@ -105,14 +105,16 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 	linearLighting.DecodeColor(&data.volumetricFogAlbedo.x);
 	linearLighting.DecodeColor(&data.volumetricFogEmissive.x);
 
-	if (globals::features::effects11.loaded) {
-		auto& enb = globals::features::effects11;
-		if (enb.enableEffect) {
-			data.enabled = 0;
-		}
-	}
+	if (IsSuppressed())
+		data.enabled = 0;
 
 	return data;
+}
+
+bool ExponentialHeightFog::IsSuppressed() const
+{
+	// The flat world map keeps its vanilla fog; the 3D map runs on the scene kept from before it opened
+	return (globals::features::effects11.loaded && globals::features::effects11.enableEffect) || globals::state->IsFlatWorldMapOpen();
 }
 
 void ExponentialHeightFog::DrawSettings()
@@ -571,6 +573,9 @@ void ExponentialHeightFog::Prepass()
 		ReleaseVolumetricResources();
 		return;
 	}
+
+	if (IsSuppressed())
+		return;
 
 	EnsureVolumetricResources();
 

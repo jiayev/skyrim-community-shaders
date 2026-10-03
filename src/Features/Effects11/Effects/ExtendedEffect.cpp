@@ -6,14 +6,28 @@
 
 #include "../EffectManager.h"
 #include "../PresetManager.h"
+#include "../SettingManager.h"
 #include "../WeatherManager.h"
 #include "Globals.h"
 
 void ExtendedEffect::Unload()
 {
 	weatherData.clear();
+	dirtyWeatherFiles.clear();
 	bindingCache.clear();
+	weatherVarSlots.clear();
+	weatherSlotOfVariable.clear();
+	parsedWeatherData.clear();
+	timeOfDayGroups.clear();
 	Effect::Unload();
+}
+
+/** @brief Component count of a Float or FloatN variable. */
+static int GetComponentCount(Effect::UIVariableType type)
+{
+	return type == Effect::UIVariableType::Float ? 1 : type == Effect::UIVariableType::Float2 ? 2 :
+	                                               type == Effect::UIVariableType::Float3     ? 3 :
+	                                                                                            4;
 }
 
 // Technique evaluation
@@ -64,84 +78,106 @@ bool ExtendedEffect::IsTechniqueEnabled(TechniqueInfo& info)
 
 // Time-of-day interpolation
 
-float ExtendedEffect::GetPeriodWeight(const std::string& period)
+/** @brief Time period names, in the order of the weight table built in ApplyTimeOfDayInterpolation. */
+static constexpr std::string_view PeriodNames[] = { "Dawn", "Sunrise", "Day", "Sunset", "Dusk", "Night", "Interior" };
+
+int ExtendedEffect::GetPeriodIndex(const std::string& period)
 {
-	auto& cd = EffectManager::GetSingleton().commonData;
-	if (period == "Dawn") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Dawn)];
-	if (period == "Sunrise") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunrise)];
-	if (period == "Day") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Day)];
-	if (period == "Sunset") return cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunset)];
-	if (period == "Dusk") return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Dusk)];
-	if (period == "Night") return cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Night)];
-	if (period == "Interior") return cd.eInteriorFactor;
-	return 0.0f;
+	const auto it = std::ranges::find(PeriodNames, period);
+	return it != std::end(PeriodNames) ? static_cast<int>(it - std::begin(PeriodNames)) : -1;
 }
 
-void ExtendedEffect::ApplyTimeOfDayInterpolation()
+void ExtendedEffect::RebuildTimeOfDayGroups()
 {
-	struct PeriodVar
-	{
-		size_t index;
-		float weight;
-	};
-	std::unordered_map<std::string, std::vector<PeriodVar>> baseGroups;
+	timeOfDayGroups.clear();
+
+	// The first variable seen for a base decides the group's type and separation
+	std::unordered_map<std::string, size_t> groupOfBase;
 
 	for (size_t i = 0; i < uiVariables.size(); ++i) {
 		auto& uiVar = uiVariables[i];
 		if (uiVar.timePeriod.empty() || !uiVar.effectVariable)
 			continue;
-		auto& name = uiVar.name;
-		auto& period = uiVar.timePeriod;
+		const auto& name = uiVar.name;
+		const auto& period = uiVar.timePeriod;
 		if (name.size() <= period.size() || name.compare(name.size() - period.size(), period.size(), period) != 0)
 			continue;
-		baseGroups[name.substr(0, name.size() - period.size())].push_back({ i, GetPeriodWeight(period) });
+
+		std::string baseName = name.substr(0, name.size() - period.size());
+		auto groupIt = groupOfBase.find(baseName);
+		if (groupIt == groupOfBase.end()) {
+			auto baseVarIt = variables.find(baseName);
+			if (baseVarIt == variables.end())
+				continue;
+			auto* baseVar = baseVarIt->second.get();
+			if (!baseVar || !baseVar->IsValid())
+				continue;
+
+			groupIt = groupOfBase.emplace(std::move(baseName), timeOfDayGroups.size()).first;
+			timeOfDayGroups.push_back({ baseVar, GetComponentCount(uiVar.type), uiVar.separation == "ExteriorWeather", {} });
+		}
+		timeOfDayGroups[groupIt->second].entries.push_back({ i, GetPeriodIndex(period) });
 	}
+}
 
-	auto& cd = EffectManager::GetSingleton().commonData;
+void ExtendedEffect::ApplyTimeOfDayInterpolation()
+{
+	if (timeOfDayGroups.empty())
+		return;
 
-	for (auto& [baseName, entries] : baseGroups) {
-		auto baseVarIt = variables.find(baseName);
-		if (baseVarIt == variables.end())
-			continue;
-		auto* baseVar = baseVarIt->second.get();
-		if (!baseVar || !baseVar->IsValid())
-			continue;
+	const auto& cd = EffectManager::GetSingleton().commonData;
+	const float periodWeights[] = {
+		cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Dawn)],
+		cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunrise)],
+		cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Day)],
+		cd.timeOfDay1[static_cast<int>(TimeOfDay1Index::Sunset)],
+		cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Dusk)],
+		cd.timeOfDay2[static_cast<int>(TimeOfDay2Index::Night)],
+		cd.eInteriorFactor
+	};
+	static_assert(std::extent_v<decltype(periodWeights)> == std::size(PeriodNames));
+	auto weightOf = [&](const TimeOfDayEntry& entry) { return entry.period >= 0 ? periodWeights[entry.period] : 0.0f; };
+	const bool interior = cd.eInteriorFactor > 0.0f;
 
-		auto& sep = uiVariables[entries[0].index].separation;
-		if (sep == "ExteriorWeather" && cd.eInteriorFactor > 0.0f)
+	for (const auto& group : timeOfDayGroups) {
+		if (interior && group.exteriorWeather)
 			continue;
 
 		float totalWeight = 0.0f;
-		for (auto& e : entries)
-			totalWeight += e.weight;
+		for (const auto& entry : group.entries)
+			totalWeight += weightOf(entry);
 		if (totalWeight <= 0.0f)
 			continue;
 
-		auto& firstVar = uiVariables[entries[0].index];
-
-		if (firstVar.type == UIVariableType::Float) {
-			float result = 0.0f;
-			for (auto& e : entries)
-				result += uiVariables[e.index].floatValue * (e.weight / totalWeight);
-			baseVar->AsScalar()->SetFloat(result);
-		} else {
-			int comps = (firstVar.type == UIVariableType::Float2) ? 2 : (firstVar.type == UIVariableType::Float3) ? 3 : 4;
-			float result[4] = {};
-			for (auto& e : entries) {
-				float w = e.weight / totalWeight;
-				for (int c = 0; c < comps; ++c)
-					result[c] += uiVariables[e.index].vectorValue[c] * w;
-			}
-			baseVar->AsVector()->SetFloatVector(result);
+		float result[4] = {};
+		for (const auto& entry : group.entries) {
+			const float weight = weightOf(entry) / totalWeight;
+			const auto& uiVar = uiVariables[entry.index];
+			if (group.components == 1)
+				result[0] += uiVar.floatValue * weight;
+			else
+				for (int c = 0; c < group.components; ++c)
+					result[c] += uiVar.vectorValue[c] * weight;
 		}
+		if (group.components == 1)
+			group.baseVariable->AsScalar()->SetFloat(result[0]);
+		else
+			group.baseVariable->AsVector()->SetFloatVector(result);
 	}
 }
 
 // Weather blending
 
+/** @brief True when the preset's per-weather overrides are active. */
+static bool IsMultipleWeathersEnabled()
+{
+	return SettingManager::GetSingleton().GetValue<bool>(EffectManager::GetSingleton().ids.enableMultipleWeathers);
+}
+
 void ExtendedEffect::LoadWeatherData()
 {
 	weatherData.clear();
+	dirtyWeatherFiles.clear();
 
 	std::string section = GetName();
 	std::transform(section.begin(), section.end(), section.begin(), ::toupper);
@@ -162,7 +198,7 @@ void ExtendedEffect::LoadWeatherData()
 				continue;
 			if (!uiVar.effectVariable && !uiVar.isDefine)
 				continue;
-			if (uiVar.separation.empty() || uiVar.separation == "None")
+			if (!IsWeatherSeparated(uiVar))
 				continue;
 
 			std::string iniKey = GetVariableIniKey(uiVar);
@@ -171,7 +207,7 @@ void ExtendedEffect::LoadWeatherData()
 
 			if (IsPerComponentVector(uiVar)) {
 				static const char* suffixes[] = { "X", "Y", "Z", "W" };
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
+				int comps = GetComponentCount(uiVar.type);
 				for (int c = 0; c < comps; ++c) {
 					std::string compKey = iniKey + suffixes[c];
 					char buffer[256];
@@ -195,154 +231,214 @@ void ExtendedEffect::LoadWeatherData()
 
 	if (!weatherData.empty())
 		logger::info("[ExtendedEffect] Loaded weather data for '{}' ({} weathers)", GetName(), weatherData.size());
+
+	RebuildWeatherCaches();
+	RebuildTimeOfDayGroups();
 }
 
-void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWeatherID, uint32_t lastWeatherID)
+void ExtendedEffect::RebuildWeatherCaches()
 {
-	if (weatherData.empty())
-		return;
+	weatherVarSlots.clear();
+	weatherSlotOfVariable.assign(uiVariables.size(), -1);
+	parsedWeatherData.clear();
 
-	auto currentIt = weatherData.find(currentWeatherID);
-	auto lastIt = weatherData.find(lastWeatherID);
-
-	if (currentIt == weatherData.end() && lastIt == weatherData.end())
-		return;
-
-	auto safeStof = [](const std::string& s, float fallback) -> float {
-		try { return std::stof(s); } catch (...) { return fallback; }
-	};
-
-	for (auto& uiVar : uiVariables) {
+	for (size_t i = 0; i < uiVariables.size(); ++i) {
+		const auto& uiVar = uiVariables[i];
 		if (uiVar.isLabel)
 			continue;
 		if (!uiVar.effectVariable && !uiVar.isDefine)
 			continue;
-		if (uiVar.separation.empty() || uiVar.separation == "None")
+		if (!IsWeatherSeparated(uiVar))
+			continue;
+		if (uiVar.type != UIVariableType::Float && uiVar.type != UIVariableType::Float2 && uiVar.type != UIVariableType::Float3 && uiVar.type != UIVariableType::Float4)
 			continue;
 
 		std::string iniKey = GetVariableIniKey(uiVar);
 		if (iniKey.empty())
 			continue;
 
-		switch (uiVar.type) {
-		case UIVariableType::Float:
-			{
-				auto getVal = [&](const WeatherValues* vals) -> float {
-					if (!vals) return uiVar.floatValue;
-					auto it = vals->find(iniKey);
-					if (it == vals->end()) return uiVar.floatValue;
-					return safeStof(it->second, uiVar.floatValue);
-				};
+		weatherSlotOfVariable[i] = static_cast<int>(weatherVarSlots.size());
+		weatherVarSlots.push_back({ i, std::move(iniKey), GetComponentCount(uiVar.type), IsPerComponentVector(uiVar), uiVar.separation == "ExteriorWeather" });
+	}
 
-				float currentVal = getVal(currentIt != weatherData.end() ? &currentIt->second : nullptr);
-				float lastVal = getVal(lastIt != weatherData.end() ? &lastIt->second : nullptr);
-				uiVar.floatValue = lastVal + blendFactor * (currentVal - lastVal);
-				if (uiVar.effectVariable)
-					uiVar.effectVariable->AsScalar()->SetFloat(uiVar.floatValue);
-				break;
-			}
-		case UIVariableType::Float2:
-		case UIVariableType::Float3:
-		case UIVariableType::Float4:
-			{
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
-				bool perComp = IsPerComponentVector(uiVar);
-
-				auto parseVec = [&](const WeatherValues* vals, float* out) {
-					if (!vals) {
-						memcpy(out, uiVar.vectorValue, sizeof(float) * comps);
-						return;
-					}
-					if (perComp) {
-						static const char* suffixes[] = { "X", "Y", "Z", "W" };
-						for (int c = 0; c < comps; ++c) {
-							auto it = vals->find(iniKey + suffixes[c]);
-							out[c] = (it != vals->end()) ? safeStof(it->second, uiVar.vectorValue[c]) : uiVar.vectorValue[c];
-						}
-					} else {
-						auto it = vals->find(iniKey);
-						if (it != vals->end()) {
-							std::stringstream ss(it->second);
-							std::string item;
-							for (int c = 0; c < comps && std::getline(ss, item, ','); ++c)
-								out[c] = safeStof(item, uiVar.vectorValue[c]);
-						} else {
-							memcpy(out, uiVar.vectorValue, sizeof(float) * comps);
-						}
-					}
-				};
-
-				float currentVals[4] = {}, lastVals[4] = {};
-				parseVec(currentIt != weatherData.end() ? &currentIt->second : nullptr, currentVals);
-				parseVec(lastIt != weatherData.end() ? &lastIt->second : nullptr, lastVals);
-
-				for (int c = 0; c < comps; ++c)
-					uiVar.vectorValue[c] = lastVals[c] + blendFactor * (currentVals[c] - lastVals[c]);
-
-				if (uiVar.effectVariable)
-					uiVar.effectVariable->AsVector()->SetFloatVector(uiVar.vectorValue);
-				break;
-			}
-		default:
-			break;
-		}
+	for (const auto& [weatherID, values] : weatherData) {
+		auto& parsed = parsedWeatherData[weatherID];
+		parsed.resize(weatherVarSlots.size());
+		for (size_t slotIndex = 0; slotIndex < weatherVarSlots.size(); ++slotIndex)
+			ParseWeatherValue(values, weatherVarSlots[slotIndex], parsed[slotIndex]);
 	}
 }
 
-void ExtendedEffect::SyncWeatherDataFromUI(uint32_t weatherID)
+void ExtendedEffect::ParseWeatherValue(const WeatherValues& values, const WeatherVarSlot& slot, ParsedWeatherValue& out)
 {
-	auto weatherIt = weatherData.find(weatherID);
-	if (weatherIt == weatherData.end())
+	out = {};
+
+	auto parseComponent = [&](const std::string& text, int component) {
+		try {
+			out.values[component] = std::stof(text);
+			out.definedMask |= static_cast<uint8_t>(1u << component);
+		} catch (...) {
+		}
+	};
+
+	if (slot.perComponent) {
+		static const char* suffixes[] = { "X", "Y", "Z", "W" };
+		for (int c = 0; c < slot.components; ++c) {
+			if (auto it = values.find(slot.iniKey + suffixes[c]); it != values.end())
+				parseComponent(it->second, c);
+		}
+		return;
+	}
+
+	auto it = values.find(slot.iniKey);
+	if (it == values.end())
+		return;
+	std::stringstream ss(it->second);
+	std::string item;
+	for (int c = 0; c < slot.components && std::getline(ss, item, ','); ++c)
+		parseComponent(item, c);
+}
+
+void ExtendedEffect::ApplyWeatherBlending(float blendFactor, uint32_t currentWeatherID, uint32_t lastWeatherID)
+{
+	const std::vector<ParsedWeatherValue>* currentValues = nullptr;
+	const std::vector<ParsedWeatherValue>* lastValues = nullptr;
+	if (!parsedWeatherData.empty() && IsMultipleWeathersEnabled()) {
+		if (auto it = parsedWeatherData.find(currentWeatherID); it != parsedWeatherData.end())
+			currentValues = &it->second;
+		if (auto it = parsedWeatherData.find(lastWeatherID); it != parsedWeatherData.end())
+			lastValues = &it->second;
+	}
+	assert(!currentValues || currentValues->size() == weatherVarSlots.size());
+	assert(!lastValues || lastValues->size() == weatherVarSlots.size());
+
+	// Undefined components fall back to the base value, as an absent or unparsable key did
+	auto pick = [](const std::vector<ParsedWeatherValue>* parsed, size_t slotIndex, int c, float fallback) {
+		return parsed && ((*parsed)[slotIndex].definedMask & (1u << c)) ? (*parsed)[slotIndex].values[c] : fallback;
+	};
+	const bool interior = EffectManager::GetSingleton().GetCommonData().eInteriorFactor > 0.0f;
+
+	for (size_t slotIndex = 0; slotIndex < weatherVarSlots.size(); ++slotIndex) {
+		const auto& slot = weatherVarSlots[slotIndex];
+		auto& uiVar = uiVariables[slot.index];
+		float* blended = slot.components == 1 ? &uiVar.floatValue : uiVar.vectorValue;
+		const float* base = slot.components == 1 ? &uiVar.baseFloatValue : uiVar.baseVectorValue;
+
+		// Still written indoors, to undo any weather value
+		const bool useWeather = !(interior && slot.exteriorWeather);
+		const auto* slotCurrentValues = useWeather ? currentValues : nullptr;
+		const auto* slotLastValues = useWeather ? lastValues : nullptr;
+
+		for (int c = 0; c < slot.components; ++c) {
+			const float currentVal = pick(slotCurrentValues, slotIndex, c, base[c]);
+			const float lastVal = pick(slotLastValues, slotIndex, c, base[c]);
+			blended[c] = lastVal + blendFactor * (currentVal - lastVal);
+		}
+
+		if (!uiVar.effectVariable)
+			continue;
+		if (slot.components == 1)
+			uiVar.effectVariable->AsScalar()->SetFloat(uiVar.floatValue);
+		else
+			uiVar.effectVariable->AsVector()->SetFloatVector(uiVar.vectorValue);
+	}
+}
+
+void ExtendedEffect::SyncWeatherVarFromUI(size_t index, uint32_t weatherID)
+{
+	if (index >= uiVariables.size())
 		return;
 
-	auto& values = weatherIt->second;
+	auto& uiVar = uiVariables[index];
+	const bool isVector = uiVar.type == UIVariableType::Float2 || uiVar.type == UIVariableType::Float3 || uiVar.type == UIVariableType::Float4;
+	if (uiVar.type != UIVariableType::Float && !isVector)
+		return;
 
-	for (const auto& uiVar : uiVariables) {
-		if (uiVar.isLabel)
-			continue;
-		if (!uiVar.effectVariable && !uiVar.isDefine)
-			continue;
+	// Must match ApplyWeatherBlending: with weather overrides off, edits belong to the base value
+	const bool exteriorWeatherIndoors = uiVar.separation == "ExteriorWeather" && EffectManager::GetSingleton().GetCommonData().eInteriorFactor > 0.0f;
+	const bool usesWeather = IsWeatherSeparated(uiVar) && IsMultipleWeathersEnabled() && !exteriorWeatherIndoors;
+	auto* entry = usesWeather ? WeatherManager::GetSingleton().FindWeatherEntry(weatherID) : nullptr;
+	std::string iniKey = GetVariableIniKey(uiVar);
+	if (!entry || iniKey.empty()) {
+		CaptureBaseValue(uiVar);
+		return;
+	}
 
-		std::string iniKey = GetVariableIniKey(uiVar);
-		if (iniKey.empty() || values.find(iniKey) == values.end())
-			continue;
-
-		switch (uiVar.type) {
-		case UIVariableType::Float:
-			values[iniKey] = std::to_string(uiVar.floatValue);
-			break;
-		case UIVariableType::Float2:
-		case UIVariableType::Float3:
-		case UIVariableType::Float4:
-			{
-				int comps = (uiVar.type == UIVariableType::Float2) ? 2 : (uiVar.type == UIVariableType::Float3) ? 3 : 4;
-				if (IsPerComponentVector(uiVar)) {
-					static const char* suffixes[] = { "X", "Y", "Z", "W" };
-					for (int c = 0; c < comps; ++c) {
-						std::string compKey = iniKey + suffixes[c];
-						if (values.find(compKey) != values.end())
-							values[compKey] = std::to_string(uiVar.vectorValue[c]);
-					}
-				} else {
-					std::string val;
-					for (int c = 0; c < comps; ++c) {
-						if (c > 0) val += ", ";
-						val += std::to_string(uiVar.vectorValue[c]);
-					}
-					values[iniKey] = val;
-				}
-				break;
+	std::vector<std::pair<std::string, std::string>> updates;
+	if (uiVar.type == UIVariableType::Float) {
+		updates.emplace_back(iniKey, std::to_string(uiVar.floatValue));
+	} else {
+		int comps = GetComponentCount(uiVar.type);
+		if (IsPerComponentVector(uiVar)) {
+			static const char* suffixes[] = { "X", "Y", "Z", "W" };
+			for (int c = 0; c < comps; ++c)
+				updates.emplace_back(iniKey + suffixes[c], std::to_string(uiVar.vectorValue[c]));
+		} else {
+			std::string val;
+			for (int c = 0; c < comps; ++c) {
+				if (c > 0) val += ", ";
+				val += std::to_string(uiVar.vectorValue[c]);
 			}
-		default:
-			break;
+			updates.emplace_back(iniKey, val);
 		}
 	}
+
+	// Empty when the effect failed to load, since LoadWeatherData only runs on compiled effects
+	const int slotIndex = index < weatherSlotOfVariable.size() ? weatherSlotOfVariable[index] : -1;
+
+	for (uint32_t linkedID : entry->weatherIDs) {
+		auto& values = weatherData[linkedID];
+		for (const auto& [key, value] : updates)
+			values[key] = value;
+
+		if (slotIndex >= 0) {
+			auto& parsed = parsedWeatherData[linkedID];
+			parsed.resize(weatherVarSlots.size());
+			ParseWeatherValue(values, weatherVarSlots[slotIndex], parsed[slotIndex]);
+		}
+	}
+
+	auto& dirtyKeys = dirtyWeatherFiles[entry->fileName];
+	for (const auto& [key, value] : updates)
+		dirtyKeys[key] = weatherID;
+}
+
+void ExtendedEffect::SaveWeatherOverrides()
+{
+	if (dirtyWeatherFiles.empty())
+		return;
+
+	std::string section = GetName();
+	std::transform(section.begin(), section.end(), section.begin(), ::toupper);
+
+	for (const auto& [fileName, dirtyKeys] : dirtyWeatherFiles) {
+		std::string filePath = (PresetManager::GetSingleton().GetENBSeriesPath() / fileName).string();
+		for (const auto& [key, sourceWeatherID] : dirtyKeys) {
+			auto valuesIt = weatherData.find(sourceWeatherID);
+			if (valuesIt == weatherData.end())
+				continue;
+			auto it = valuesIt->second.find(key);
+			if (it != valuesIt->second.end() && !WritePrivateProfileStringA(section.c_str(), key.c_str(), it->second.c_str(), filePath.c_str()))
+				logger::warn("[EFFECTS11] Failed to write key '{}' to weather file '{}'", key, filePath);
+		}
+		WritePrivateProfileStringA(NULL, NULL, NULL, filePath.c_str());
+		logger::info("[EFFECTS11] Saved {} weather override(s) to '{}' for effect '{}'", dirtyKeys.size(), filePath, GetName());
+	}
+
+	dirtyWeatherFiles.clear();
 }
 
 // Rendering
 
+#include <format>
+
 #include "../ENBExtender.h"
+#include "../Editor/EditorWidgets.h"
 #include "../UITree.h"
+#include "I18n/I18n.h"
+#include "Utils/UI.h"
+
+#define I18N_KEY_PREFIX "feature.effects11.params."
 
 namespace
 {
@@ -438,112 +534,256 @@ namespace
 		std::unordered_map<std::string, UITree::VarRef>& uniqueNameMap;
 		FileUniqueNameMap& fileUniqueNameMap;
 		std::unordered_set<Effect*>& changedEffects;
+		std::vector<std::pair<Effect*, size_t>>& changedVars;
 		UITree::MetaMap& meta;
+		UITree::ViewOptions& view;
 		bool performanceMode = false;
 		int tableCounter = 0;
 
 		bool BeginVarTable()
 		{
 			std::string tableId = "##ut_" + std::to_string(tableCounter++);
-			if (ImGui::BeginTable(tableId.c_str(), 2, ImGuiTableFlags_SizingFixedFit)) {
-				float w = ImGui::GetContentRegionAvail().x;
-				ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, w * 0.45f);
-				ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, w * 0.55f);
-				return true;
-			}
-			return false;
+			return Effects11UI::BeginPropertyTable(tableId.c_str());
 		}
+
+		bool Filtering() const { return !view.filter.empty(); }
 	};
 
-	void RenderWidget(const std::string& label, const std::string& id,
-		Effect::UIVariable& uiVar, bool readOnly, Effect* effect,
-		std::unordered_set<Effect*>& changedEffects)
+	bool MatchesFilter(const Effect::UIVariable& uiVar, const RenderContext& ctx)
 	{
-		ImGui::TableNextRow();
-		ImGui::TableSetColumnIndex(0);
-		if (readOnly)
-			ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Disable);
-		ImGui::Text("%s", label.c_str());
+		return !ctx.Filtering() ||
+		       Effects11UI::ContainsNoCase(uiVar.displayName, ctx.view.filter) ||
+		       Effects11UI::ContainsNoCase(uiVar.name, ctx.view.filter);
+	}
 
-		ImGui::TableSetColumnIndex(1);
-		if (readOnly)
-			ImGui::BeginDisabled();
-		bool changed = false;
-		float floatStep = (uiVar.floatMax - uiVar.floatMin) / 100.0f;
+	bool IsPeriodShown(const Effect::UIVariable& uiVar, const RenderContext& ctx)
+	{
+		return uiVar.timePeriod.empty() || !ctx.view.showPeriod || ctx.view.showPeriod(uiVar.timePeriod);
+	}
+
+	std::string_view GroupDisplayName(const UITree::GroupNode& node, const UITree::MetaMap& meta)
+	{
+		auto it = meta.find(node.fullPath);
+		if (it != meta.end() && !it->second.displayName.empty())
+			return it->second.displayName;
+		return node.name;
+	}
+
+	bool GroupMatches(const UITree::GroupNode& node, const RenderContext& ctx)
+	{
+		return ctx.Filtering() && Effects11UI::ContainsNoCase(GroupDisplayName(node, ctx.meta), ctx.view.filter);
+	}
+
+	bool IsColorVector(const Effect::UIVariable& uiVar)
+	{
+		return uiVar.widgetType == Effect::UIWidgetType::Color &&
+		       (uiVar.type == Effect::UIVariableType::Float3 || uiVar.type == Effect::UIVariableType::Float4);
+	}
+
+	int ComponentCount(const Effect::UIVariable& uiVar)
+	{
+		switch (uiVar.type) {
+		case Effect::UIVariableType::Float2:
+			return 2;
+		case Effect::UIVariableType::Float3:
+			return 3;
+		case Effect::UIVariableType::Float4:
+			return 4;
+		default:
+			return 1;
+		}
+	}
+
+	std::string FormatVector(const float* a_values, int a_count)
+	{
+		std::string text = "(";
+		for (int i = 0; i < a_count; ++i) {
+			if (i > 0)
+				text += ", ";
+			text += std::format("{:.3f}", a_values[i]);
+		}
+		return text + ")";
+	}
+
+	std::string FormatDefault(const Effect::UIVariable& uiVar)
+	{
 		switch (uiVar.type) {
 		case Effect::UIVariableType::Float:
-			changed = ImGui::InputFloat(id.c_str(), &uiVar.floatValue, floatStep, floatStep * 10.0f, "%.3f");
-			if (changed)
-				uiVar.floatValue = std::clamp(uiVar.floatValue, uiVar.floatMin, uiVar.floatMax);
+			return std::format("{:.3f}", uiVar.defaultFloatValue);
+		case Effect::UIVariableType::Int:
+			{
+				const bool quality = uiVar.widgetType == Effect::UIWidgetType::Quality;
+				const int item = quality ? uiVar.defaultIntValue + 1 : uiVar.defaultIntValue;
+				if (!uiVar.dropdownItems.empty() && item >= 0 && item < static_cast<int>(uiVar.dropdownItems.size()))
+					return uiVar.dropdownItems[item];
+				return std::to_string(uiVar.defaultIntValue);
+			}
+		case Effect::UIVariableType::Bool:
+			return uiVar.defaultBoolValue ? T(TKEY("on"), "On") : T(TKEY("off"), "Off");
+		default:
+			return FormatVector(uiVar.defaultVectorValue, ComponentCount(uiVar));
+		}
+	}
+
+	const char* WeatherSeparatedTooltip()
+	{
+		return T(TKEY("weather_separated_tip"),
+			"Weather-separated: each weather file keeps its own value.\n"
+			"Edits change the value of the current weather.");
+	}
+
+	const char* CompileTimeTooltip()
+	{
+		return T(TKEY("compile_time_tip"),
+			"Compile-time option: save, then click Reload Shaders to apply it.");
+	}
+
+	void DrawParameterTooltip(const Effect::UIVariable& uiVar)
+	{
+		if (!ImGui::BeginTooltip())
+			return;
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30.0f);
+		ImGui::TextUnformatted(uiVar.displayName.c_str());
+		Util::TextUnformattedDisabled(uiVar.name.c_str());
+
+		const bool isDropdown = uiVar.type == Effect::UIVariableType::Int && !uiVar.dropdownItems.empty();
+		if (uiVar.type == Effect::UIVariableType::Int && !isDropdown)
+			ImGui::Text("%s %d - %d", T(TKEY("range"), "Range:"), uiVar.intMin, uiVar.intMax);
+		else if (uiVar.type != Effect::UIVariableType::Int && uiVar.type != Effect::UIVariableType::Bool && !IsColorVector(uiVar))
+			ImGui::Text("%s %.3f - %.3f", T(TKEY("range"), "Range:"), uiVar.floatMin, uiVar.floatMax);
+		if (uiVar.hasDefaultValue)
+			ImGui::Text("%s %s", T(TKEY("shader_default"), "Shader default:"), FormatDefault(uiVar).c_str());
+
+		if (Effect::IsWeatherSeparated(uiVar))
+			Util::Text::WrappedInfo("%s", WeatherSeparatedTooltip());
+		if (uiVar.isDefine)
+			Util::Text::WrappedWarning("%s", CompileTimeTooltip());
+		Util::TextUnformattedDisabled(T(TKEY("context_hint"), "Right-click for reset, copy and paste."));
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
+
+	/** @return True when a menu action changed the value. */
+	bool DrawParameterContextMenu(Effect::UIVariable& uiVar)
+	{
+		if (!ImGui::BeginPopupContextItem("##ctx"))
+			return false;
+
+		bool changed = false;
+		if (uiVar.hasDefaultValue) {
+			const std::string label = std::format("{} ({})", T(TKEY("reset_default"), "Reset to shader default"), FormatDefault(uiVar));
+			if (ImGui::MenuItem(label.c_str()))
+				changed = Effect::RestoreDefaultValue(uiVar);
+		}
+
+		if (uiVar.type == Effect::UIVariableType::Float) {
+			ImGui::Separator();
+			if (ImGui::MenuItem(T(TKEY("copy"), "Copy")))
+				Effects11UI::Clipboard::SetFloat(uiVar.floatValue);
+			if (ImGui::MenuItem(T(TKEY("paste"), "Paste"), nullptr, false, Effects11UI::Clipboard::HasFloat())) {
+				uiVar.floatValue = std::clamp(Effects11UI::Clipboard::GetFloat(), uiVar.floatMin, uiVar.floatMax);
+				changed = true;
+			}
+		} else if (IsColorVector(uiVar)) {
+			ImGui::Separator();
+			if (ImGui::MenuItem(T(TKEY("copy"), "Copy")))
+				Effects11UI::Clipboard::SetColor(uiVar.vectorValue);
+			if (ImGui::MenuItem(T(TKEY("paste"), "Paste"), nullptr, false, Effects11UI::Clipboard::HasColor())) {
+				Effects11UI::Clipboard::GetColor(uiVar.vectorValue);
+				for (int i = 0; i < Effects11UI::Clipboard::kColorComponents; ++i)
+					uiVar.vectorValue[i] = std::clamp(uiVar.vectorValue[i], uiVar.floatMin, uiVar.floatMax);
+				changed = true;
+			}
+		}
+
+		if (!uiVar.hasDefaultValue && uiVar.type != Effect::UIVariableType::Float && !IsColorVector(uiVar))
+			Util::TextUnformattedDisabled(T(TKEY("no_actions"), "No actions for this parameter"));
+
+		ImGui::EndPopup();
+		return changed;
+	}
+
+	void RenderWidget(UITree::VarRef& ref, bool readOnly, RenderContext& ctx)
+	{
+		auto& uiVar = ref.effect->uiVariables[ref.index];
+		ImGui::PushID(ref.effect);
+		ImGui::PushID(ref.index);
+
+		Effects11UI::LabelBadge badge;
+		if (uiVar.isDefine)
+			badge = { T(TKEY("badge_compile_time"), "reload"), Util::Colors::GetWarning(), CompileTimeTooltip() };
+		else if (Effect::IsWeatherSeparated(uiVar))
+			badge = { T(TKEY("badge_weather"), "W"), Util::Colors::GetInfo(), WeatherSeparatedTooltip() };
+		const bool labelHovered = Effects11UI::PropertyLabel(uiVar.displayName.c_str(), readOnly, badge);
+
+		ImGui::BeginDisabled(readOnly);
+		bool changed = false;
+		switch (uiVar.type) {
+		case Effect::UIVariableType::Float:
+			changed = Effects11UI::FloatValue("##v", &uiVar.floatValue, uiVar.floatMin, uiVar.floatMax);
 			break;
 		case Effect::UIVariableType::Int:
 			if ((uiVar.widgetType == Effect::UIWidgetType::Dropdown || uiVar.widgetType == Effect::UIWidgetType::Quality) && !uiVar.dropdownItems.empty()) {
-				int di = (uiVar.widgetType == Effect::UIWidgetType::Quality) ? uiVar.intValue + 1 : uiVar.intValue;
-				const char* cur = (di >= 0 && di < static_cast<int>(uiVar.dropdownItems.size())) ? uiVar.dropdownItems[di].c_str() : "";
-				if (ImGui::BeginCombo(id.c_str(), cur)) {
+				const bool quality = uiVar.widgetType == Effect::UIWidgetType::Quality;
+				const int selected = quality ? uiVar.intValue + 1 : uiVar.intValue;
+				const char* preview = (selected >= 0 && selected < static_cast<int>(uiVar.dropdownItems.size())) ? uiVar.dropdownItems[selected].c_str() : "";
+				if (ImGui::BeginCombo("##v", preview)) {
 					for (int j = 0; j < static_cast<int>(uiVar.dropdownItems.size()); ++j) {
-						int iv = (uiVar.widgetType == Effect::UIWidgetType::Quality) ? (j - 1) : j;
-						if (ImGui::Selectable(uiVar.dropdownItems[j].c_str(), uiVar.intValue == iv)) {
-							uiVar.intValue = iv;
+						const int value = quality ? j - 1 : j;
+						if (ImGui::Selectable(uiVar.dropdownItems[j].c_str(), uiVar.intValue == value)) {
+							uiVar.intValue = value;
 							changed = true;
 						}
+						if (uiVar.intValue == value)
+							ImGui::SetItemDefaultFocus();
 					}
 					ImGui::EndCombo();
 				}
 			} else {
-				changed = ImGui::InputInt(id.c_str(), &uiVar.intValue, 1, 10);
-				if (changed)
-					uiVar.intValue = std::clamp(uiVar.intValue, uiVar.intMin, uiVar.intMax);
+				changed = Effects11UI::IntValue("##v", &uiVar.intValue, uiVar.intMin, uiVar.intMax);
 			}
 			break;
 		case Effect::UIVariableType::Bool:
-			changed = ImGui::Checkbox(id.c_str(), &uiVar.boolValue);
+			changed = ImGui::Checkbox("##v", &uiVar.boolValue);
 			break;
 		case Effect::UIVariableType::Float2:
-			changed = ImGui::InputScalarN(id.c_str(), ImGuiDataType_Float, uiVar.vectorValue, 2, &floatStep, nullptr, "%.3f");
-			if (changed)
-				for (int i = 0; i < 2; ++i)
-					uiVar.vectorValue[i] = std::clamp(uiVar.vectorValue[i], uiVar.floatMin, uiVar.floatMax);
+			changed = Effects11UI::FloatNValue("##v", uiVar.vectorValue, 2, uiVar.floatMin, uiVar.floatMax);
 			break;
 		case Effect::UIVariableType::Float3:
-			if (uiVar.widgetType == Effect::UIWidgetType::Color) {
-				changed = ImGui::ColorEdit3(id.c_str(), uiVar.vectorValue);
-			} else {
-				float min3 = (uiVar.widgetType == Effect::UIWidgetType::Vector) ? -1.0f : uiVar.floatMin;
-				float max3 = (uiVar.widgetType == Effect::UIWidgetType::Vector) ? 1.0f : uiVar.floatMax;
-				float step3 = (max3 - min3) / 100.0f;
-				changed = ImGui::InputScalarN(id.c_str(), ImGuiDataType_Float, uiVar.vectorValue, 3, &step3, nullptr, "%.3f");
-				if (changed)
-					for (int i = 0; i < 3; ++i)
-						uiVar.vectorValue[i] = std::clamp(uiVar.vectorValue[i], min3, max3);
-			}
-			break;
 		case Effect::UIVariableType::Float4:
-			if (uiVar.widgetType == Effect::UIWidgetType::Color) {
-				changed = ImGui::ColorEdit4(id.c_str(), uiVar.vectorValue);
+			if (IsColorVector(uiVar)) {
+				changed = Effects11UI::ColorValue("##v", uiVar.vectorValue, ComponentCount(uiVar), uiVar.floatMax > 1.0f);
+			} else if (uiVar.widgetType == Effect::UIWidgetType::Vector && uiVar.type == Effect::UIVariableType::Float3) {
+				changed = Effects11UI::FloatNValue("##v", uiVar.vectorValue, 3, -1.0f, 1.0f);
 			} else {
-				changed = ImGui::InputScalarN(id.c_str(), ImGuiDataType_Float, uiVar.vectorValue, 4, &floatStep, nullptr, "%.3f");
-				if (changed)
-					for (int i = 0; i < 4; ++i)
-						uiVar.vectorValue[i] = std::clamp(uiVar.vectorValue[i], uiVar.floatMin, uiVar.floatMax);
+				changed = Effects11UI::FloatNValue("##v", uiVar.vectorValue, ComponentCount(uiVar), uiVar.floatMin, uiVar.floatMax);
 			}
 			break;
 		}
-		if (changed)
-			changedEffects.insert(effect);
-		if (readOnly)
-			ImGui::EndDisabled();
 
-		if (!uiVar.separation.empty() && uiVar.separation != "None") {
-			ImGui::SameLine();
-			ImGui::Text("W");
+		if (!readOnly) {
+			if (labelHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+				ImGui::OpenPopup("##ctx");
+			changed |= DrawParameterContextMenu(uiVar);
+		}
+		ImGui::EndDisabled();
+
+		if (labelHovered)
+			DrawParameterTooltip(uiVar);
+
+		if (changed) {
+			ctx.changedEffects.insert(ref.effect);
+			ctx.changedVars.emplace_back(ref.effect, static_cast<size_t>(ref.index));
+			ctx.view.changed = true;
+			if (uiVar.isDefine)
+				ctx.view.compileTimeChanged = true;
 		}
 
-		if (readOnly)
-			ImGui::PopStyleColor();
+		ImGui::PopID();
+		ImGui::PopID();
 	}
 
-	bool RenderVar(UITree::VarRef& ref, bool& inTable, RenderContext& ctx)
+	bool RenderVar(UITree::VarRef& ref, bool& inTable, bool ancestorMatched, RenderContext& ctx)
 	{
 		auto& uiVar = ref.effect->uiVariables[ref.index];
 
@@ -551,13 +791,20 @@ namespace
 			return false;
 		if (ctx.performanceMode && !uiVar.ignorePerfMode)
 			return false;
+		if (!IsPeriodShown(uiVar, ctx))
+			return false;
+		if (uiVar.isLabel ? ctx.Filtering() : !(ancestorMatched || MatchesFilter(uiVar, ctx)))
+			return false;
 
 		auto [bindVisible, bindReadOnly] = EvaluateBinding(uiVar, ctx.uniqueNameMap, ctx.fileUniqueNameMap);
 		if (!bindVisible)
 			return false;
 
 		if (uiVar.isLabel) {
-			if (inTable) { ImGui::EndTable(); inTable = false; }
+			if (inTable) {
+				Effects11UI::EndPropertyTable();
+				inTable = false;
+			}
 			if (uiVar.isReadOnly)
 				ImGui::PushStyleColor(ImGuiCol_Text, globals::menu->GetSettings().Theme.StatusPalette.Disable);
 			ImGui::TextWrapped("%s", uiVar.displayName.c_str());
@@ -569,40 +816,52 @@ namespace
 					return false;
 				inTable = true;
 			}
-			RenderWidget(uiVar.displayName, "##uv_" + std::to_string(ref.index) + "_" + ref.effect->GetName(),
-				uiVar, bindReadOnly, ref.effect, ctx.changedEffects);
+			RenderWidget(ref, bindReadOnly, ctx);
+			ctx.view.drawn++;
 		}
 		return true;
 	}
 
-	void RenderTechniqueDropdown(Effect* effect, std::unordered_set<Effect*>& changedEffects)
+	void RenderTechniqueDropdown(Effect* effect, RenderContext& ctx, bool ancestorMatched)
 	{
-		ImGui::Text("%s", effect->techniqueDropdown.name.c_str());
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(-1);
-		const char* current = effect->uiTechniques[effect->selectedTechniqueIndex].displayName.c_str();
-		if (ImGui::BeginCombo(("##TECHNIQUE_" + effect->GetName()).c_str(), current)) {
-			for (uint32_t i = 0; i < effect->uiTechniques.size(); ++i) {
-				if (ImGui::Selectable(effect->uiTechniques[i].displayName.c_str(), effect->selectedTechniqueIndex == i)) {
-					effect->selectedTechniqueIndex = i;
-					changedEffects.insert(effect);
+		if (ctx.Filtering() && !ancestorMatched && !Effects11UI::ContainsNoCase(effect->techniqueDropdown.name, ctx.view.filter))
+			return;
+
+		ImGui::PushID(effect);
+		if (Effects11UI::BeginPropertyTable("##technique")) {
+			const bool hovered = Effects11UI::PropertyLabel(effect->techniqueDropdown.name.c_str());
+			const char* current = effect->uiTechniques[effect->selectedTechniqueIndex].displayName.c_str();
+			if (ImGui::BeginCombo("##technique", current)) {
+				for (uint32_t i = 0; i < effect->uiTechniques.size(); ++i) {
+					if (ImGui::Selectable(effect->uiTechniques[i].displayName.c_str(), effect->selectedTechniqueIndex == i)) {
+						effect->selectedTechniqueIndex = i;
+						ctx.changedEffects.insert(effect);
+						ctx.view.changed = true;
+					}
+					if (effect->selectedTechniqueIndex == i)
+						ImGui::SetItemDefaultFocus();
 				}
-				if (effect->selectedTechniqueIndex == i)
-					ImGui::SetItemDefaultFocus();
+				ImGui::EndCombo();
 			}
-			ImGui::EndCombo();
+			Effects11UI::EndPropertyTable();
+			if (hovered)
+				ImGui::SetTooltip("%s", T(TKEY("technique_tip"), "Selects which technique of this shader file runs."));
+			ctx.view.drawn++;
 		}
+		ImGui::PopID();
 	}
 
-	bool HasVisibleContent(const UITree::GroupNode& node)
+	bool HasVisibleContent(const UITree::GroupNode& node, const RenderContext& ctx, bool ancestorMatched)
 	{
 		for (auto& item : node.items) {
 			if (item.type == UITree::Item::Type::Variable) {
 				auto& uiVar = item.var.effect->uiVariables[item.var.index];
-				if (IsVarVisible(uiVar))
+				if (!IsVarVisible(uiVar) || !IsPeriodShown(uiVar, ctx))
+					continue;
+				if (uiVar.isLabel ? !ctx.Filtering() : (ancestorMatched || MatchesFilter(uiVar, ctx)))
 					return true;
 			} else if (item.type == UITree::Item::Type::Group && item.group) {
-				if (HasVisibleContent(*item.group))
+				if (HasVisibleContent(*item.group, ctx, ancestorMatched || GroupMatches(*item.group, ctx)))
 					return true;
 			}
 		}
@@ -610,11 +869,11 @@ namespace
 	}
 
 	void RenderGroupNode(UITree::GroupNode& node, RenderContext& ctx,
-		const std::vector<std::pair<Effect*, std::string>>& techDropdowns)
+		const std::vector<std::pair<Effect*, std::string>>& techDropdowns, bool ancestorMatched)
 	{
 		for (auto& [effect, group] : techDropdowns)
 			if (!group.empty() && group == node.fullPath && !effect->techniqueDropdown.topLevel)
-				RenderTechniqueDropdown(effect, ctx.changedEffects);
+				RenderTechniqueDropdown(effect, ctx, ancestorMatched);
 
 		bool inTable = false;
 		bool lastWasSeparator = false;
@@ -622,36 +881,46 @@ namespace
 		for (auto& item : node.items) {
 			switch (item.type) {
 			case UITree::Item::Type::Variable:
-				if (RenderVar(item.var, inTable, ctx))
+				if (RenderVar(item.var, inTable, ancestorMatched, ctx))
 					lastWasSeparator = false;
 				break;
 
 			case UITree::Item::Type::Separator:
+				if (ctx.Filtering())
+					break;
 				if (!lastWasSeparator) {
-					if (inTable) { ImGui::EndTable(); inTable = false; }
+					if (inTable) {
+						Effects11UI::EndPropertyTable();
+						inTable = false;
+					}
 					ImGui::Separator();
 					lastWasSeparator = true;
 				}
 				break;
 
 			case UITree::Item::Type::Group:
-				if (!item.group || !HasVisibleContent(*item.group))
-					break;
-				if (inTable) { ImGui::EndTable(); inTable = false; }
-				lastWasSeparator = false;
-
 				{
-					std::string displayName = item.group->name;
-					ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None;
-					auto metaIt = ctx.meta.find(item.group->fullPath);
-					if (metaIt != ctx.meta.end()) {
-						if (!metaIt->second.displayName.empty())
-							displayName = metaIt->second.displayName;
-						if (metaIt->second.defaultOpen)
-							flags = ImGuiTreeNodeFlags_DefaultOpen;
+					if (!item.group)
+						break;
+					const bool groupMatched = ancestorMatched || GroupMatches(*item.group, ctx);
+					if (!HasVisibleContent(*item.group, ctx, groupMatched))
+						break;
+					if (inTable) {
+						Effects11UI::EndPropertyTable();
+						inTable = false;
 					}
-					if (ImGui::TreeNodeEx((displayName + "###ugrp_" + item.group->fullPath).c_str(), flags)) {
-						RenderGroupNode(*item.group, ctx, techDropdowns);
+					lastWasSeparator = false;
+
+					ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
+					auto metaIt = ctx.meta.find(item.group->fullPath);
+					if (metaIt != ctx.meta.end() && metaIt->second.defaultOpen)
+						flags |= ImGuiTreeNodeFlags_DefaultOpen;
+					if (ctx.Filtering())
+						ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+
+					const std::string label = std::format("{}###ugrp_{}", GroupDisplayName(*item.group, ctx.meta), item.group->fullPath);
+					if (ImGui::TreeNodeEx(label.c_str(), flags)) {
+						RenderGroupNode(*item.group, ctx, techDropdowns, groupMatched);
 						ImGui::TreePop();
 					}
 				}
@@ -660,7 +929,7 @@ namespace
 		}
 
 		if (inTable)
-			ImGui::EndTable();
+			Effects11UI::EndPropertyTable();
 	}
 }
 
@@ -670,8 +939,11 @@ void ExtendedEffect::RenderImGui()
 	RenderMergedUI({ &self, 1 });
 }
 
-void ExtendedEffect::RenderMergedUI(std::span<Effect*> effects, UITree::FilterMode filter)
+void ExtendedEffect::RenderMergedUI(std::span<Effect*> effects, UITree::FilterMode filter, UITree::ViewOptions* options)
 {
+	UITree::ViewOptions defaultView;
+	UITree::ViewOptions& view = options ? *options : defaultView;
+
 	UITree::Tree tree;
 	tree.Build(effects, filter);
 
@@ -695,34 +967,30 @@ void ExtendedEffect::RenderMergedUI(std::span<Effect*> effects, UITree::FilterMo
 	tree.Sort();
 
 	std::unordered_set<Effect*> changedEffects;
-	RenderContext ctx{ tree.uniqueNameMap, tree.fileUniqueNameMap, changedEffects, tree.meta,
+	std::vector<std::pair<Effect*, size_t>> changedVars;
+	RenderContext ctx{ tree.uniqueNameMap, tree.fileUniqueNameMap, changedEffects, changedVars, tree.meta, view,
 		EffectManager::GetSingleton().performanceMode };
 
 	if (filter != UITree::FilterMode::TopLevelOnly) {
 		for (auto& [effect, group] : techDropdowns)
 			if (effect->techniqueDropdown.topLevel || group.empty())
-				RenderTechniqueDropdown(effect, changedEffects);
+				RenderTechniqueDropdown(effect, ctx, false);
 	}
 
-	RenderGroupNode(tree.root, ctx, techDropdowns);
+	RenderGroupNode(tree.root, ctx, techDropdowns, false);
 
 	if (!changedEffects.empty()) {
-		auto& cd = EffectManager::GetSingleton().commonData;
-		uint32_t activeWeatherID = static_cast<uint32_t>(cd.weather[2] > 0.5f ? cd.weather[0] : cd.weather[1]);
-		for (auto* effect : changedEffects) {
+		const uint32_t activeWeatherID = EffectManager::GetSingleton().GetDominantWeatherID();
+		for (auto& [effect, index] : changedVars) {
 			if (auto* ext = dynamic_cast<ExtendedEffect*>(effect))
-				ext->SyncWeatherDataFromUI(activeWeatherID);
+				ext->SyncWeatherVarFromUI(index, activeWeatherID);
+		}
+		for (auto* effect : changedEffects)
 			effect->UpdateUIVariables();
-		}
-	}
-
-	for (auto* effect : effects) {
-		if (!effect->GetErrors().empty()) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Error, "%s:", effect->GetName().c_str());
-			for (const auto& err : effect->GetErrors())
-				ImGui::TextWrapped("%s", err.c_str());
-		}
+		view.changed = true;
 	}
 }
+
+#undef I18N_KEY_PREFIX
 
 #endif

@@ -57,7 +57,7 @@ void TextureManager::CreateCommonTextures()
 	commonTextureCache.insert({ "TextureBloom", CreateTexture(1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureBloom") });
 	commonTextureCache.insert({ "TextureLens", CreateTexture(screenWidth, screenHeight, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureLens") });
 
-	commonTextureCache.insert({ "TextureBloomTemp", CreateTexture(1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureBloomLensTemp") });
+	commonTextureCache.insert({ "TextureBloomTemp", CreateTexture(1024, 1024, DXGI_FORMAT_R16G16B16A16_FLOAT, "TextureManager::TextureBloomTemp") });
 
 	commonTextureCache.insert({ "TextureAdaptation", CreateTexture(1, 1, DXGI_FORMAT_R32_FLOAT, "TextureManager::TextureAdaptation") });
 	commonTextureCache.insert({ "TextureAdaptationSwap", CreateTexture(1, 1, DXGI_FORMAT_R32_FLOAT, "TextureManager::TextureAdaptationSwap") });
@@ -97,10 +97,6 @@ TextureManager::Texture TextureManager::CreateTexture(uint32_t width, uint32_t h
 
 	DX::ThrowIfFailed(globals::d3d::device->CreateTexture2D(&texDesc, nullptr, result.texture.put()));
 
-	if (!debugName.empty()) {
-		result.texture->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(debugName.length()), debugName.c_str());
-	}
-
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
 	rtvDesc.Format = format;
 	rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
@@ -115,6 +111,12 @@ TextureManager::Texture TextureManager::CreateTexture(uint32_t width, uint32_t h
 	srvDesc.Texture2D.MipLevels = 1;
 
 	DX::ThrowIfFailed(globals::d3d::device->CreateShaderResourceView(result.texture.get(), &srvDesc, result.srv.put()));
+
+	if (!debugName.empty()) {
+		Util::SetResourceName(result.texture.get(), debugName.c_str());
+		Util::SetResourceName(result.rtv.get(), (debugName + " RTV").c_str());
+		Util::SetResourceName(result.srv.get(), (debugName + " SRV").c_str());
+	}
 
 	return result;
 }

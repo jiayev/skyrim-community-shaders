@@ -1,8 +1,10 @@
 #include "EffectManager.h"
 
 #include "D3D11StateBackup.h"
+#include "Editor/Effects11Editor.h"
 #include "Features/Effects11.h"
 #include "Globals.h"
+#include "Menu.h"
 #include "State.h"
 
 #include "PresetManager.h"
@@ -186,8 +188,10 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterFloatSetting("AdaptationMin", "ADAPTATION", 0.1f, 0.0f, 65536.0f, 0.01f, false);
 	settingManager.RegisterFloatSetting("AdaptationMax", "ADAPTATION", 10.0f, 0.0f, 65536.0f, 0.01f, false);
 
-	settingManager.RegisterTimeOfDaySetting("FireIntensity", "FIRE", 1.0f, 0.0f, 30000.0f, 0.01f, true);
-	settingManager.RegisterTimeOfDaySetting("FireCurve", "FIRE", 1.0f, 0.1f, 8.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("Intensity", "FIRE", 1.0f, 0.0f, 30000.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("Curve", "FIRE", 1.0f, 0.1f, 8.0f, 0.01f, true);
+	settingManager.SetSettingLegacyKey("Intensity", "FIRE", "FireIntensity");
+	settingManager.SetSettingLegacyKey("Curve", "FIRE", "FireCurve");
 
 	settingManager.RegisterTimeOfDaySetting("Amount", "BLOOM", 0.1f, 0.0f, 10.0f, 0.01f, true);
 
@@ -235,8 +239,9 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterTimeOfDaySetting("MoonDesaturation", "SKY", 0.0f, -1.0f, 1.0f, 0.01f, true);
 	settingManager.RegisterColorTimeOfDaySetting("MoonColorFilter", "SKY", { 1.0f, 1.0f, 1.0f }, true);
 	settingManager.RegisterTimeOfDaySetting("StarsIntensity", "SKY", 1.0f, 0.0f, 30000.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("StarsCurve", "SKY", 1.0f, 0.1f, 8.0f, 0.01f, true);
 	settingManager.RegisterFloatSetting("CloudsEdgeIntensity", "SKY", 2.0f, 0.0f, 10.0f, 0.01f, false);
-	settingManager.RegisterFloatSetting("CloudsEdgeMoonMultiplier", "SKY", 0.0f, 0.0f, 10.0f, 0.01f, false);
+	settingManager.RegisterTimeOfDaySetting("CloudsEdgeMoonMultiplier", "SKY", 0.0f, 0.0f, 10.0f, 0.01f, true);
 	settingManager.RegisterBoolSetting("UseProceduralGradientWeights", "SKY", false, false);
 	settingManager.RegisterTimeOfDaySetting("ProceduralGradientWeightCurve", "SKY", 4.0f, 1.0f, 32.0f, 0.01f, true);
 
@@ -246,6 +251,7 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterTimeOfDaySetting("GlowCurve", "PROCEDURALSUN", 10.0f, 0.0f, 100.0f, 0.01f, true);
 
 	settingManager.RegisterTimeOfDaySetting("Intensity", "VOLUMETRICFOG", 1.0f, 0.0f, 30000.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("Curve", "VOLUMETRICFOG", 1.0f, 0.1f, 8.0f, 0.01f, true);
 	settingManager.RegisterColorTimeOfDaySetting("ColorFilter", "VOLUMETRICFOG", { 1.0f, 1.0f, 1.0f }, true);
 
 	settingManager.RegisterTimeOfDaySetting("MultiplicativeAmount", "IMAGEBASEDLIGHTING", 0.0f, 0.0f, 10.0f, 0.01f, true);
@@ -258,7 +264,9 @@ void EffectManager::RegisterSettings()
 	settingManager.RegisterTimeOfDaySetting("PointLightingInfluence", "PARTICLE", 1.0f, 0.0f, 10.0f, 0.01f, true);
 
 	settingManager.RegisterTimeOfDaySetting("Intensity", "LIGHTSPRITE", 1.0f, 0.0f, 30000.0f, 0.01f, true);
+	settingManager.RegisterTimeOfDaySetting("Curve", "LIGHTSPRITE", 1.0f, 0.1f, 8.0f, 0.01f, true);
 
+	settingManager.RegisterBoolSetting("Enable", "RAIN", true, false);
 	settingManager.RegisterTimeOfDaySetting("MotionStretch", "RAIN", 0.28f, 0.0f, 1.0f, 0.01f, true);
 	settingManager.RegisterTimeOfDaySetting("MotionTransparency", "RAIN", 0.1f, 0.0f, 1.0f, 0.01f, true);
 
@@ -312,21 +320,18 @@ void EffectManager::RegisterSettings()
 
 	ids.brightness = settingManager.GetSettingID("Brightness", "COLORCORRECTION");
 	ids.gammaCurve = settingManager.GetSettingID("GammaCurve", "COLORCORRECTION");
+
+	ids.enableRain = settingManager.GetSettingID("Enable", "RAIN");
 }
 
 void EffectManager::ExecuteEffect(EffectBase& a_effect, uint32_t enableSettingID)
 {
-	if (!a_effect.IsCompiled())
-		return;
-
-	if (enableSettingID != 0xFFFFFFFF && !SettingManager::GetSingleton().GetValue<bool>(enableSettingID))
+	if (!WillEffectRun(a_effect, enableSettingID))
 		return;
 
 	a_effect.profiler = globals::profiler;
 #ifdef ENABLE_ENB_EXTENDER
-	a_effect.ApplyWeatherBlending(commonData.weather[2],
-		static_cast<uint32_t>(commonData.weather[0]),
-		static_cast<uint32_t>(commonData.weather[1]));
+	a_effect.ApplyWeatherBlending(commonData.weather[2], currentWeatherID, previousWeatherID);
 	a_effect.ApplyTimeOfDayInterpolation();
 #endif
 	UpdateCommonVariablesForEffect(a_effect);
@@ -344,7 +349,9 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 
-	if (!rasterizerState || !blendState || !quadVertexBuffer || !inputLayout || !renderer)
+	// Without the copy shaders the result cannot reach a_output (e.g. a failed ReloadShaders),
+	// so leave the frame to the stock pass before touching kMAIN
+	if (!rasterizerState || !blendState || !quadVertexBuffer || !inputLayout || !renderer || !copyVertexShader || !copyPixelShader)
 		return false;
 
 	// Without a preset nothing writes TextureSDRTemp, so the output RT would be copied from a
@@ -366,7 +373,7 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 		if (a_input.texture && textureOriginal.texture && srcDesc.Format == dstDesc.Format && srcDesc.Width == dstDesc.Width && srcDesc.Height == dstDesc.Height && srcDesc.SampleDesc.Count == dstDesc.SampleDesc.Count) {
 			context->CopyResource(textureOriginal.texture, a_input.texture);
 		} else {
-			CopyTexture(a_input.SRV, textureOriginal.RTV);
+			CopyTexture(a_input.SRV, textureOriginal.RTV, false);
 			ID3D11RenderTargetView* nullRTV = nullptr;
 			context->OMSetRenderTargets(1, &nullRTV, nullptr);
 		}
@@ -390,7 +397,8 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 
 	auto& textureManager = TextureManager::GetSingleton();
 
-	textureManager.UpdateDownsampledTexture(textureOriginal.SRV);
+	if (WillEffectRun(enbBloom, ids.useBloom) || WillEffectRun(enbLens, ids.useLens) || WillEffectRun(enbAdaptation, ids.useAdaptation))
+		textureManager.UpdateDownsampledTexture(textureOriginal.SRV);
 
 	ExecuteEffect(enbBloom, ids.useBloom);
 	ExecuteEffect(enbLens, ids.useLens);
@@ -401,10 +409,10 @@ bool EffectManager::ExecuteEffects(RE::BSGraphics::RenderTargetData& a_input, RE
 	textureManager.IncrementTextureSwap();
 
 	auto* textureSDRTemp = textureManager.GetCommonTexture("TextureSDRTemp");
-	const bool wroteOutput = textureSDRTemp && a_output.RTV;
-	if (wroteOutput) {
+	bool wroteOutput = false;
+	if (textureSDRTemp && a_output.RTV) {
 		globals::profiler->BeginPass("Effects11::CopyToOutput");
-		CopyTexture(textureSDRTemp->srv.get(), a_output.RTV);
+		wroteOutput = CopyTexture(textureSDRTemp->srv.get(), a_output.RTV);
 		globals::profiler->EndPass();
 	}
 
@@ -545,6 +553,7 @@ void EffectManager::CreateCopyShaders()
 		return;
 
 	winrt::com_ptr<ID3DBlob> psBlob;
+	errorBlob = nullptr;  // Holds any vertex shader warnings, and put() requires an empty pointer
 	hr = D3DCompile(pixelShaderSource.data(), pixelShaderSource.size(), "CopyPS.hlsl", nullptr, nullptr,
 		"main", "ps_5_0", 0, 0, psBlob.put(), errorBlob.put());
 
@@ -613,6 +622,7 @@ void EffectManager::CreateColorCorrectionShader()
 void EffectManager::UpdateCommonData()
 {
 	commonData = {};
+	currentWeatherID = previousWeatherID = 0;
 
 	auto sky = globals::game::sky;
 
@@ -620,14 +630,19 @@ void EffectManager::UpdateCommonData()
 	{
 		auto delta = (*globals::game::deltaTime);
 
-		static double timer = 0.0f;
+		static double timer = 0.0;
 		timer += delta;
 
-		auto modifiedTimer = std::fmodf(static_cast<float>(timer) * 1000.0f, 16777216);
-		modifiedTimer /= 16777216.0f;
+		// Wrap in double: as a float, milliseconds lose sub-frame precision after a few hours of play
+		auto modifiedTimer = static_cast<float>(std::fmod(timer * 1000.0, 16777216.0) / 16777216.0);
+
+		// Exponential smoothing with a ~0.5s time constant so Timer.y doesn't jitter per frame
+		static constexpr float fpsSmoothingRate = 2.0f;
+		if (delta > 0.0f)
+			averageFps += (1.0f / delta - averageFps) * std::clamp(delta * fpsSmoothingRate, 0.0f, 1.0f);
 
 		commonData.timer[0] = modifiedTimer;
-		commonData.timer[1] = 60.0f;
+		commonData.timer[1] = averageFps;
 		commonData.timer[2] = static_cast<float>(frameCount % 9999);
 		commonData.timer[3] = delta;
 
@@ -636,20 +651,27 @@ void EffectManager::UpdateCommonData()
 
 	// Update weather
 	{
-		// Strip plugin index (2 leftmost digits) from form IDs
-		auto stripPluginIndex = [](uint32_t formID) -> uint32_t {
-			return formID & 0x00FFFFFF;  // Keep only the lower 6 hex digits
-		};
-
 		if (sky) {
-			auto& weatherManager = WeatherManager::GetSingleton();
-			uint32_t currentID = sky->currentWeather ? stripPluginIndex(sky->currentWeather->formID) : 0;
-			uint32_t lastID = sky->lastWeather ? stripPluginIndex(sky->lastWeather->formID) : 0;
+			if (sky->lastWeather)
+				cachedLastWeather = sky->lastWeather;
+			auto* lastWeather = sky->lastWeather ? sky->lastWeather : cachedLastWeather;
 
-			commonData.weather[0] = static_cast<float>(weatherManager.GetEffectiveWeatherID(currentID));
-			commonData.weather[1] = static_cast<float>(weatherManager.GetEffectiveWeatherID(lastID));
+			auto& weatherManager = WeatherManager::GetSingleton();
+			// Full form IDs, so same-numbered weathers from different plugins stay distinct
+			uint32_t currentID = sky->currentWeather ? sky->currentWeather->formID : 0;
+			uint32_t lastID = lastWeather ? lastWeather->formID : 0;
+
+			currentWeatherID = weatherManager.GetEffectiveWeatherID(currentID);
+			previousWeatherID = weatherManager.GetEffectiveWeatherID(lastID);
+			commonData.weather[0] = static_cast<float>(currentWeatherID);
+			commonData.weather[1] = static_cast<float>(previousWeatherID);
 			commonData.weather[2] = sky->currentWeatherPct;
 			commonData.weather[3] = sky->currentGameHour;
+
+			commonData.enbWeather[0] = static_cast<float>(weatherManager.GetWeatherIndex(currentWeatherID));
+			commonData.enbWeather[1] = static_cast<float>(weatherManager.GetWeatherIndex(previousWeatherID));
+			commonData.enbWeather[2] = commonData.weather[2];
+			commonData.enbWeather[3] = commonData.weather[3];
 		}
 	}
 
@@ -781,6 +803,88 @@ void EffectManager::UpdateCommonData()
 		commonData.timeOfDay2[static_cast<int>(TimeOfDay2Index::InteriorDay)] = commonData.eInteriorFactor * commonData.eNightDayFactor;
 		commonData.timeOfDay2[static_cast<int>(TimeOfDay2Index::InteriorNight)] = commonData.eInteriorFactor * (1.0f - commonData.eNightDayFactor);
 	}
+
+	if (auto camera = RE::PlayerCamera::GetSingleton())
+		commonData.fieldOfView = camera->GetRuntimeData2().worldFOV;
+
+	UpdateCursorData();
+	UpdateLightParameters();
+}
+
+void EffectManager::UpdateCursorData()
+{
+	commonData.tempInfo1[0] = cursorPosition[0];
+	commonData.tempInfo1[1] = cursorPosition[1];
+
+	// Shaders get the cursor while a UI that shows it is open, e.g. for click-to-focus depth of field
+	auto* menu = globals::menu;
+	const bool cursorVisible = (menu && menu->IsEnabled) || Effects11Editor::GetSingleton().IsOpen();
+	if (cursorVisible && ImGui::GetCurrentContext()) {
+		const auto& io = ImGui::GetIO();
+		if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
+			cursorPosition[0] = std::clamp(io.MousePos.x / io.DisplaySize.x, 0.0f, 1.0f);
+			cursorPosition[1] = std::clamp(io.MousePos.y / io.DisplaySize.y, 0.0f, 1.0f);
+			commonData.tempInfo1[0] = cursorPosition[0];
+			commonData.tempInfo1[1] = cursorPosition[1];
+			commonData.tempInfo1[2] = 1.0f;
+
+			if (!io.WantCaptureMouse) {
+				commonData.tempInfo1[3] = static_cast<float>((io.MouseDown[0] ? 1 : 0) | (io.MouseDown[1] ? 2 : 0) | (io.MouseDown[2] ? 4 : 0));
+				if (io.MouseClicked[0]) {
+					lastLeftClick[0] = cursorPosition[0];
+					lastLeftClick[1] = cursorPosition[1];
+				}
+				if (io.MouseClicked[1]) {
+					lastRightClick[0] = cursorPosition[0];
+					lastRightClick[1] = cursorPosition[1];
+				}
+			}
+		}
+	}
+
+	commonData.tempInfo2[0] = lastLeftClick[0];
+	commonData.tempInfo2[1] = lastLeftClick[1];
+	commonData.tempInfo2[2] = lastRightClick[0];
+	commonData.tempInfo2[3] = lastRightClick[1];
+}
+
+/** @brief Sun disc visibility in [0, 1] from its sky shader blend alpha; 0 when the sun is hidden. */
+static float GetSunVisibility(const RE::Sun* a_sun)
+{
+	if (!a_sun->sunBaseNode || !a_sun->sunBase)
+		return 0.0f;
+	if (a_sun->root->GetFlags().any(RE::NiAVObject::Flag::kHidden) || a_sun->sunBaseNode->GetFlags().any(RE::NiAVObject::Flag::kHidden))
+		return 0.0f;
+
+	const auto property = skyrim_cast<RE::BSSkyShaderProperty*>(a_sun->sunBase->GetGeometryRuntimeData().shaderProperty.get());
+	return property ? std::clamp(property->kBlendColor.alpha, 0.0f, 1.0f) : 0.0f;
+}
+
+void EffectManager::UpdateLightParameters()
+{
+	auto sky = globals::game::sky;
+	if (!sky || !sky->sun || !sky->sun->root || !sky->root)
+		return;
+
+	const float visibility = GetSunVisibility(sky->sun);
+	if (visibility <= 0.0f)
+		return;
+
+	// Sky Sync repositions the sun node, so its offset from the sky root is the synced sun direction
+	const auto sunDirection = sky->sun->root->world.translate - sky->root->world.translate;
+	const auto viewProj = globals::game::frameBufferCached.GetCameraViewProjUnjittered().Transpose();
+	const auto clip = DirectX::SimpleMath::Vector4::Transform(DirectX::SimpleMath::Vector4(sunDirection.x, sunDirection.y, sunDirection.z, 0.0f), viewProj);
+	if (clip.w <= 0.0f)
+		return;
+
+	commonData.lightParameters[0] = clip.x / clip.w * 0.5f + 0.5f;
+	commonData.lightParameters[1] = clip.y / clip.w * -0.5f + 0.5f;
+	commonData.lightParameters[3] = visibility;
+}
+
+bool EffectManager::WillEffectRun(EffectBase& a_effect, uint32_t enableSettingID)
+{
+	return a_effect.IsCompiled() && (enableSettingID == 0xFFFFFFFF || SettingManager::GetSingleton().GetValue<bool>(enableSettingID));
 }
 
 void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
@@ -818,14 +922,26 @@ void EffectManager::UpdateCommonVariablesForEffect(Effect& effect)
 	}
 
 	effect.SetVectorVariable("Timer", commonData.timer, sizeof(commonData.timer));
-	effect.SetVectorVariable("Weather", commonData.weather, sizeof(commonData.weather));
+	effect.SetVectorVariable("Weather", commonData.enbWeather, sizeof(commonData.enbWeather));
 	effect.SetVectorVariable("TimeOfDay1", commonData.timeOfDay1, sizeof(commonData.timeOfDay1));
 	effect.SetVectorVariable("TimeOfDay2", commonData.timeOfDay2, sizeof(commonData.timeOfDay2));
 	effect.SetVectorVariable("ENightDayFactor", &commonData.eNightDayFactor, sizeof(commonData.eNightDayFactor));
 	effect.SetVectorVariable("EInteriorFactor", &commonData.eInteriorFactor, sizeof(commonData.eInteriorFactor));
+	effect.SetVectorVariable("FieldOfView", &commonData.fieldOfView, sizeof(commonData.fieldOfView));
+	effect.SetVectorVariable("tempInfo1", commonData.tempInfo1, sizeof(commonData.tempInfo1));
+	effect.SetVectorVariable("tempInfo2", commonData.tempInfo2, sizeof(commonData.tempInfo2));
+	effect.SetVectorVariable("LightParameters", commonData.lightParameters, sizeof(commonData.lightParameters));
+
+	static constexpr float tempF[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	effect.SetVectorVariable("tempF1", tempF, sizeof(tempF));
+	effect.SetVectorVariable("tempF2", tempF, sizeof(tempF));
+	effect.SetVectorVariable("tempF3", tempF, sizeof(tempF));
+
+	static constexpr float bloomSize[4] = { 1024.0f, 1.0f / 1024.0f, 1.0f, 1.0f };
+	effect.SetVectorVariable("BloomSize", bloomSize, sizeof(bloomSize));
 }
 
-void EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11RenderTargetView* a_dest)
+bool EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11RenderTargetView* a_dest, bool a_dither)
 {
 	if (!a_source || !a_dest || !copyPixelShader || !copyVertexShader) {
 		static bool logged = false;
@@ -833,7 +949,7 @@ void EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11Render
 			logger::warn("[EFFECTS11] Invalid parameters or shaders not initialized for texture copy");
 			logged = true;
 		}
-		return;
+		return false;
 	}
 
 	auto context = globals::d3d::context;
@@ -844,7 +960,7 @@ void EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11Render
 	winrt::com_ptr<ID3D11Texture2D> texture;
 	if (!resource || !resource.try_as(texture) || !texture) {
 		logger::error("[EFFECTS11] Failed to get Texture2D from destination render target");
-		return;
+		return false;
 	}
 	D3D11_TEXTURE2D_DESC texDesc;
 	texture->GetDesc(&texDesc);
@@ -878,9 +994,17 @@ void EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11Render
 
 	// Update dither frame count
 	if (ditherConstantBuffer) {
+		const float ditherAmplitude = a_dither ? 1.0f / 255.0f : 0.0f;
+
 		D3D11_MAPPED_SUBRESOURCE mapped;
 		if (SUCCEEDED(context->Map(ditherConstantBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-			*static_cast<uint32_t*>(mapped.pData) = frameCount;
+			struct DitherCB
+			{
+				uint32_t frameCount;
+				float amplitude;
+				uint32_t pad[2];
+			};
+			*static_cast<DitherCB*>(mapped.pData) = { frameCount, ditherAmplitude, { 0, 0 } };
 			context->Unmap(ditherConstantBuffer.get(), 0);
 		}
 		ID3D11Buffer* cbs[] = { ditherConstantBuffer.get() };
@@ -896,6 +1020,7 @@ void EffectManager::CopyTexture(ID3D11ShaderResourceView* a_source, ID3D11Render
 	// Clean up SRV binding
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	context->PSSetShaderResources(0, 1, &nullSRV);
+	return true;
 }
 
 void EffectManager::ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV)
@@ -966,46 +1091,12 @@ void EffectManager::ApplyColorCorrection(ID3D11UnorderedAccessView* textureUAV)
 
 void EffectManager::ReloadShaders()
 {
+	// The Create* helpers also (re)create these buffers through com_ptr::put(), which requires them to be empty
 	copyVertexShader = nullptr;
 	copyPixelShader = nullptr;
+	ditherConstantBuffer = nullptr;
 	colorCorrectionComputeShader = nullptr;
+	colorCorrectionConstantBuffer = nullptr;
 	CreateCopyShaders();
 	CreateColorCorrectionShader();
-}
-
-void EffectManager::RenderEffectsList()
-{
-	Effect* allEffects[] = { &enbBloom, &enbLens, &enbAdaptation, &enbEffect, &enbEffectPostPass };
-
-	std::vector<Effect*> compiledEffects;
-	for (auto* effect : allEffects)
-		if (effect->IsCompiled())
-			compiledEffects.push_back(effect);
-
-#ifdef ENABLE_ENB_EXTENDER
-	if (!compiledEffects.empty())
-		ExtendedEffect::RenderMergedUI(compiledEffects, UITree::FilterMode::TopLevelOnly);
-#endif
-
-	for (auto* effect : compiledEffects) {
-		if (ImGui::TreeNodeEx(effect->GetName().c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-#ifdef ENABLE_ENB_EXTENDER
-			Effect* self = effect;
-			ExtendedEffect::RenderMergedUI({ &self, 1 }, UITree::FilterMode::NonTopLevelOnly);
-#else
-			effect->RenderImGui();
-#endif
-			ImGui::TreePop();
-		}
-	}
-
-	for (auto* effect : allEffects) {
-		if (!effect->IsFilePresent())
-			continue;
-		if (!effect->GetErrors().empty()) {
-			ImGui::TextColored(globals::menu->GetSettings().Theme.StatusPalette.Error, "%s:", effect->GetName().c_str());
-			for (const auto& err : effect->GetErrors())
-				ImGui::TextWrapped("%s", err.c_str());
-		}
-	}
 }
