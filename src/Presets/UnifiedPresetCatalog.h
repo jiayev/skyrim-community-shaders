@@ -9,6 +9,8 @@
 #include <vector>
 #include <winrt/base.h>
 
+#include "PresetCompatibility.h"
+
 /** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
 class UnifiedPresetCatalog
 {
@@ -54,6 +56,8 @@ public:
 		std::string csVersion;
 		/// Feature short names the pack expects loaded; missing ones surface as warnings in the browser.
 		std::vector<std::string> requiredFeatures;
+		/// csVersion and requiredFeatures checked against this session, refreshed by each Discover.
+		PresetCompatibility::Warning compat;
 
 		bool hasEffects11 = false;
 		bool hasCSPresets = false;

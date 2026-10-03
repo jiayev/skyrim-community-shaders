@@ -59,6 +59,9 @@ namespace PresetCompatibility
 		std::string versionMessageCompact;
 		std::vector<std::string> missingFeatures;
 		std::string featuresMessage;
+
+		/** @brief Whether any warning would be drawn. */
+		bool HasIssues() const { return versionGap != VersionGap::None || !missingFeatures.empty(); }
 	};
 
 	Warning Evaluate(std::string_view requiredCsVersion, const std::vector<std::string>& requiredFeatures);

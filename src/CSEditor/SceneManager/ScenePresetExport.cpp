@@ -241,10 +241,10 @@ namespace
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
 			form.csVersion = meta.csVersion;
-		// The pack's own list joins the detected one: it may require features this session has no
-		// settings for. Core entries from older exports are dropped.
+		// Loaded features follow detection, so ones whose settings were removed drop out. Features not
+		// loaded this session cannot be detected, so the pack's list is the only record of them.
 		for (const auto& shortName : meta.requiredFeatures) {
-			if (!shortName.empty() && !IsCoreFeature(shortName) && !IsFeatureRequired(shortName))
+			if (!shortName.empty() && !Feature::FindFeatureByShortName(shortName) && !IsFeatureRequired(shortName))
 				form.requiredFeatures.push_back(shortName);
 		}
 		existingLogo = meta.logo;

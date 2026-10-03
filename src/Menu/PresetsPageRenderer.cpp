@@ -72,6 +72,32 @@ namespace
 			logger::info("[Presets] Applied pack '{}'", pack.id);
 	}
 
+	Util::ConfirmationPopup applyConfirmation;
+	/// Pack awaiting applyConfirmation; looked up again on confirm since a rescan may replace it.
+	std::string pendingApplyPackId;
+
+	/** @brief Applies the pack, first asking for confirmation when its compatibility check found problems. */
+	void RequestApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		if (!pack.compat.HasIssues()) {
+			ApplyPack(pack);
+			return;
+		}
+		std::string message;
+		for (const auto* line : { &pack.compat.versionMessage, &pack.compat.featuresMessage }) {
+			if (!line->empty())
+				message += *line + "\n";
+		}
+		message += T("menu.presets.compat_apply_anyway", "Apply it anyway?");
+
+		pendingApplyPackId = pack.id;
+		applyConfirmation.title = T("menu.presets.compat_apply_title", "Compatibility warning");
+		applyConfirmation.message = std::move(message);
+		applyConfirmation.confirmLabel = T("menu.presets.apply", "Apply Preset");
+		applyConfirmation.cancelLabel = T("ui.cancel", "Cancel");
+		applyConfirmation.Request();
+	}
+
 	void DrawRoundedImage(ImDrawList* dl, ImTextureID texture, const ImVec2& p0, const ImVec2& p1, float rounding)
 	{
 		dl->AddImageRounded(texture, p0, p1, ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f), IM_COL32_WHITE, rounding);
@@ -276,7 +302,7 @@ void PresetsPageRenderer::RenderList(float width)
 		auto& pack = *packPtr;
 		const bool selected = selectedPackId == pack.id;
 		const bool isActive = catalog.GetActivePackId() == pack.id || catalog.IsBaselineEnabled(pack.id);
-		const auto compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
+		const auto& compat = pack.compat;
 		const int warnLines = (compat.versionGap != PresetCompatibility::VersionGap::None ? 1 : 0) +
 		                      (!compat.featuresMessage.empty() ? 1 : 0);
 		const float textLines = 2.0f + static_cast<float>(warnLines);
@@ -293,7 +319,7 @@ void PresetsPageRenderer::RenderList(float width)
 			lightboxImageIndex = -1;
 			lightboxSuppressClose = false;
 			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && CanApplyPack(pack))
-				ApplyPack(pack);
+				RequestApplyPack(pack);
 		}
 
 		// Draw contents inside the selectable bounds, then park the cursor past the row so the
@@ -460,8 +486,7 @@ void PresetsPageRenderer::RenderDetail()
 						ShellExecuteA(NULL, "open", pack->nexusUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 					Util::AddTooltip(T("menu.presets.nexus_link_tooltip", "Open this preset's Nexus Mods page."));
 				}
-				PresetCompatibility::DrawWarnings(
-					PresetCompatibility::Evaluate(pack->csVersion, pack->requiredFeatures), false);
+				PresetCompatibility::DrawWarnings(pack->compat, false);
 			}
 
 			ImGui::Spacing();
@@ -478,7 +503,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
 			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
-				ApplyPack(*pack);
+				RequestApplyPack(*pack);
 			ImGui::PopStyleColor(4);
 			ImGui::PopStyleVar();
 			ImGui::EndDisabled();
@@ -781,4 +806,9 @@ void PresetsPageRenderer::Render()
 	ImGui::EndChild();
 
 	RenderScreenshotLightbox();
+
+	if (applyConfirmation.Draw()) {
+		if (const auto* pack = catalog.FindPack(pendingApplyPackId))
+			ApplyPack(*pack);
+	}
 }

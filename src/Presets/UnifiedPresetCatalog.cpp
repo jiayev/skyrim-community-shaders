@@ -441,6 +441,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.valid = false;
 			pack.invalidReason = std::format("Invalid {}: {}", GetPackManifestPath(packRoot).filename().string(), e.what());
 		}
+		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
 
 		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
 		pack.hasEffects11 = !pack.effects11Root.empty();
