@@ -21,9 +21,9 @@ cbuffer FadeStateConstants : register(b0)
 	uint LogIndex;      // RWStructuredBuffer<FadeLogEntry> (CS_DCLF_FADE_PARITY)
 	uint OutIndex0;     // RWStructuredBuffer<FadeNodeState>: the published states of the even frames
 	uint OutIndex1;     // and of the odd
-	uint VisibilityIndex;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
-	uint Padding1;
-	uint Padding2;
+	uint VisibilityIndex;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
+	uint RootListsIndex;   // StructuredBuffer<uint>: each root's block, the list process that culls its entry
+	uint AnimatedIndex;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
 	uint Padding3;
 	uint Padding4;
 	uint Padding5;
@@ -98,6 +98,12 @@ struct FadeFrame
 	uint SceneFrame;
 	uint LogBase;
 	uint Reserved;
+	// The animation job's update's inputs (Records.h, FadeFrame anim*).
+	float3 AnimEye;
+	float AnimLodAdjust;
+	int AnimCounter;
+	float AnimDeltaTime;
+	uint2 AnimPadding;
 };
 
 struct FadeLogEntry
@@ -117,6 +123,7 @@ static const uint kFadeFlagFadedIn = 1u << 14;
 static const uint kFadeFlagSettled = 1u << 15;
 static const uint kFadeFlagLodInUpdate = 1u << 27;
 static const uint kFadeVerdictInView = 1u << 0;
+static const uint kFadeVerdictAnimated = 1u << 4;
 static const uint kFadeVerdictAboveLimit = 1u << 1;
 static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
@@ -399,16 +406,18 @@ static const uint kFadeVisibilityOpsOffset = 16;
 static const uint kFadeVisibilitySetsOffset = 16 + 256 * 16;
 static const uint kFadeVisibilitySetBytes = 112;
 static const uint kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + 64 * 112;
+static const uint kFadeVisibilityBytes = kFadeVisibilityViewOffset + 112;  // a block; one per list process
+static const uint kFadeVisibilityLists = 16;
 static const uint kFadeVisibilityViewPlanes = 1u << 4;
 
 // The process's own sphere test (FUN_140d3ff10): outside when the bound is wholly behind an active plane.
-bool ProcessInView(ByteAddressBuffer a_block, float3 a_centre, float a_radius)
+bool ProcessInView(ByteAddressBuffer a_block, uint a_base, float3 a_centre, float a_radius)
 {
-	const uint mask = a_block.Load(kFadeVisibilityViewOffset + 96u);
+	const uint mask = a_block.Load(a_base + kFadeVisibilityViewOffset + 96u);
 	[unroll] for (uint p = 0; p < 6u; ++p) {
 		if ((mask & (1u << p)) == 0u)
 			continue;
-		const float4 plane = asfloat(a_block.Load4(kFadeVisibilityViewOffset + p * 16u));
+		const float4 plane = asfloat(a_block.Load4(a_base + kFadeVisibilityViewOffset + p * 16u));
 		const float d = ((plane.y * a_centre.y + plane.x * a_centre.x) + a_centre.z * plane.z) - plane.w;
 		if (d <= -a_radius)
 			return false;
@@ -420,23 +429,23 @@ bool ProcessInView(ByteAddressBuffer a_block, float3 a_centre, float a_radius)
 // unless the bound is wholly outside an active plane of its set; type 8 passes unless the bound is wholly inside every
 // active plane of its set; either goes to its record's next-if-true or next-if-false. The planes the engine deactivates
 // as it goes (a bound wholly inside one) change no outcome within one call.
-bool CompoundVisible(ByteAddressBuffer a_block, uint4 a_header, float3 a_centre, float a_radius)
+bool CompoundVisible(ByteAddressBuffer a_block, uint a_base, uint4 a_header, float3 a_centre, float a_radius)
 {
 	uint op = a_header.w;
 	[loop] for (uint step = 0; step < 512u; ++step) {
 		if (op >= a_header.y)
 			return true;
-		const uint3 record = a_block.Load3(kFadeVisibilityOpsOffset + op * 16u);
+		const uint3 record = a_block.Load3(a_base + kFadeVisibilityOpsOffset + op * 16u);
 		if (record.x == 2u)
 			return true;
 		if (record.x == 3u)
 			return false;
 		bool result = false;
 		if (record.x == 7u || record.x == 8u) {
-			const uint set = op + 1u < a_header.y ? a_block.Load(kFadeVisibilityOpsOffset + (op + 1u) * 16u) : 0xFFFFFFFFu;
+			const uint set = op + 1u < a_header.y ? a_block.Load(a_base + kFadeVisibilityOpsOffset + (op + 1u) * 16u) : 0xFFFFFFFFu;
 			if (set >= a_header.z)
 				return true;
-			const uint base = kFadeVisibilitySetsOffset + set * kFadeVisibilitySetBytes;
+			const uint base = a_base + kFadeVisibilitySetsOffset + set * kFadeVisibilitySetBytes;
 			const uint mask = a_block.Load(base + 96u);
 			if (mask == 0u) {
 				result = record.x == 7u;
@@ -461,12 +470,14 @@ bool CompoundVisible(ByteAddressBuffer a_block, uint4 a_header, float3 a_centre,
 	return true;
 }
 
-bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
+// The cull test of the list process that culls the root's entry (a_list: its block; kFadeRootNoList: the frustum alone).
+bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_list)
 {
-	if (VisibilityIndex == 0)
+	if (VisibilityIndex == 0 || a_list >= kFadeVisibilityLists)
 		return InView(a_centre, a_radius);
 	ByteAddressBuffer block = ResourceDescriptorHeap[VisibilityIndex];
-	const uint4 header = block.Load4(0);
+	const uint base = a_list * kFadeVisibilityBytes;
+	const uint4 header = block.Load4(base);
 	if ((header.x & kFadeVisibilityValid) == 0u)
 		return InView(a_centre, a_radius);
 	if (a_radius == 0.0f && (a_rootBits & kFadeRootAlwaysDraw) == 0u)
@@ -478,9 +489,9 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 		return true;
 	if ((a_rootBits & kFadeRootPreprocessed) != 0u && (header.x & kFadeVisibilityIgnorePreprocess) == 0u)
 		return (a_rootBits & kFadeRootPreprocessHidden) == 0u;
-	const bool view = (header.x & kFadeVisibilityViewPlanes) != 0u ? ProcessInView(block, a_centre, a_radius) : InView(a_centre, a_radius);
+	const bool view = (header.x & kFadeVisibilityViewPlanes) != 0u ? ProcessInView(block, base, a_centre, a_radius) : InView(a_centre, a_radius);
 	if ((header.x & kFadeVisibilityCompound) != 0u)
-		return ((header.x & kFadeVisibilitySkipView) != 0u || view) && CompoundVisible(block, header, a_centre, a_radius);
+		return ((header.x & kFadeVisibilitySkipView) != 0u || view) && CompoundVisible(block, base, header, a_centre, a_radius);
 	return view;
 }
 
@@ -520,8 +531,36 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits)
 	const float entryRadius = objects[root.Object].Rows[kObjectSunEntryRow].w;
 	const float radius = entryRadius >= 0.0f && entryRadius < 1e30f ? entryRadius : root.Radius;
 	state.Verdict = 0;
-	if (EngineInView(centre, radius, root.Bits))
+	// The animation job's update since the last cull (FUN_1402cff60 -> FUN_14147a160): an animated reference its cull did not
+	// reach, from the camera and globals of that update; before this cull's test, as the engine's frame has it.
+	// The word: the batch's scene frame (low 28 bits) and its count of updates (Records.h, FadeAnimatedWord).
+	uint updates = 0;
+	if (AnimatedIndex != 0) {
+		StructuredBuffer<uint> stamps = ResourceDescriptorHeap[AnimatedIndex];
+		const uint word = stamps[index];
+		if ((word >> 4) == (F.SceneFrame & 0x0FFFFFFFu))
+			updates = word & 0xFu;
+	}
+	const bool animated = updates != 0;
+	if (animated) {
+		const FadeFrame frame = F;
+		F.Eye = F.AnimEye;
+		F.LodAdjust = F.AnimLodAdjust;
+		F.Counter = F.AnimCounter;
+		F.DeltaTime = F.AnimDeltaTime;
+		for (uint u = 0; u < updates; ++u)
+			FadeUpdate(state, root, centre, root.FadeAmount);
+		F = frame;
+	}
+	uint list = 0xFFFFFFFFu;
+	if (RootListsIndex != 0) {
+		StructuredBuffer<uint> rootLists = ResourceDescriptorHeap[RootListsIndex];
+		list = rootLists[index];
+	}
+	if (EngineInView(centre, radius, root.Bits, list))
 		state.Verdict = OnVisible(state, root, centre);
+	if (animated)
+		state.Verdict |= kFadeVerdictAnimated | (updates << 5);
 	state.Frame = F.SceneFrame;
 	states[index] = state;
 	published[index] = state;

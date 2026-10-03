@@ -720,8 +720,12 @@ namespace DCLF
 		}
 		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || buffers.treesHeld != tables.treesVersion)
 			return;
-		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's
-		// Z-prepass epoch wrote, copied into one staging buffer.
+		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's draws
+		// read (TreeWindReadIndex): the one the frame before wrote, from its inputs. Not this frame's own buffer: the compute
+		// queue writes that beside the epoch, and nothing orders a copy of it after the write. Only once a frame before this one
+		// has run the pass (the first frame's draws read the zeroed buffer).
+		if (buffers.previousTreeFrame + 1 != buffers.treeFrame || buffers.previousTreesHeld != tables.treesVersion)
+			return;
 		TreeReadback readback;
 		const std::size_t count = std::min<std::size_t>(64, tables.treeObjects.size());
 		D3D11_BUFFER_DESC sourceDesc{};
@@ -730,7 +734,7 @@ namespace DCLF
 		sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		sourceDesc.StructureByteStride = sizeof(std::uint32_t);
-		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[buffers.treeFrame & 1], sourceDesc);
+		const auto source = RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[(buffers.treeFrame + 1) & 1], sourceDesc);
 		if (!source)
 			return;
 		D3D11_BUFFER_DESC desc{};
@@ -748,7 +752,7 @@ namespace DCLF
 			context->CopySubresourceRegion(readback.records.get(), 0, static_cast<UINT>(i * 32), 0, 0, source.get(), 0, &box);
 			readback.samples.push_back({ member.object, member.tree, member.tree < tables.treeNode.size() ? tables.treeNode[member.tree] : nullptr });
 		}
-		readback.inputs = buffers.treeInputs;
+		readback.inputs = buffers.previousTreeInputs;
 		readback.framesLeft = 3;
 		treeReadback = std::move(readback);
 	}
@@ -767,12 +771,41 @@ namespace DCLF
 		readback.inputs = a_inputs;
 		readback.nodes.resize(readback.roots.size());
 		readback.engine.assign(readback.roots.size(), 0);
+		{
+			const auto& cull = PrimaryCull::Get();
+			readback.visibility.assign(cull.FadeVisibility().begin(), cull.FadeVisibility().begin() + std::size_t(cull.FadeVisibilityBlocks()) * kFadeVisibilityBytes);
+			std::vector<std::uint32_t> lists;
+			cull.FadeRootLists(a_tables.fadeRootNode, lists);
+			readback.lists.assign(readback.roots.size(), kFadeRootNoList);
+			readback.radii.assign(readback.roots.size(), 0.0f);
+			readback.nodeRadii.assign(readback.roots.size(), 0.0f);
+			readback.nodeFlags.assign(readback.roots.size(), 0u);
+			for (std::size_t i = 0; i < readback.roots.size(); ++i) {
+				readback.lists[i] = base + i < lists.size() ? lists[base + i] : kFadeRootNoList;
+				const auto object = readback.roots[i].object;
+				const float entry = object < a_tables.sunEntry.size() ? a_tables.sunEntry[object][3] : -1.0f;
+				readback.radii[i] = entry >= 0.0f && entry < 1e30f ? entry : readback.roots[i].radius;
+				if (const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i])) {
+					readback.nodeRadii[i] = node->worldBound.radius;
+					readback.nodeFlags[i] = node->GetFlags().underlying();
+				}
+			}
+		}
+		if (const auto* camera = RE::Main::WorldRootCamera())
+			readback.worldCamera = { camera->world.translate.x, camera->world.translate.y, camera->world.translate.z, Engine::At<float>(camera, 0x184) };
+		// The engine's nodes as the list jobs left them (PrimaryCull's snapshot): after this cull's OnVisible, before the next
+		// animation job's updates, which run beside the render thread.
+		const auto* snapshot = PrimaryCull::Get().NodeSnapshot(a_frame);
 		for (std::size_t i = 0; i < readback.roots.size(); ++i) {
 			const auto bits = readback.roots[i].bits;
 			const auto* node = static_cast<const RE::NiAVObject*>(a_tables.fadeRootNode[base + i]);
-			if (node && (bits & kFadeRootOwned) && !(bits & kFadeRootStoodIn)) {
-				readback.nodes[i] = FadeState::ReadNode(*node);
+			if (node && snapshot && base + i < snapshot->size() && (bits & kFadeRootOwned) && !(bits & kFadeRootStoodIn)) {
+				readback.nodes[i] = (*snapshot)[base + i];
 				readback.engine[i] = 1;
+				readback.nodeCentres.resize(readback.roots.size());
+				readback.nodeNames.resize(readback.roots.size());
+				readback.nodeCentres[i] = { node->worldBound.center.x, node->worldBound.center.y, node->worldBound.center.z };
+				readback.nodeNames[i] = node->name.c_str() ? node->name.c_str() : "";
 			}
 		}
 		fadeReadback = std::move(readback);
@@ -845,16 +878,66 @@ namespace DCLF
 					++p.engineRounding;
 				else {
 					++p.engineDiffer;
-					if (p.engineFirst.empty())
-						p.engineFirst = fmt::format("root {} (plan {}, verdict {:#x}): {}", entry.root, root.bits & kFadeRootPlanMask, g.verdict, engineDifferences);
+					if (p.engineFirst.empty()) {
+						// Where each metric was measured from: the distance it implies at the frame's scale, against the root's
+						// distance from the fade eye and from the world camera.
+						const auto& in = done.inputs;
+						const auto distanceTo = [&](const float* a_eye) {
+							const float dx = entry.centre[0] - a_eye[0], dy = entry.centre[1] - a_eye[1], dz = entry.centre[2] - a_eye[2];
+							return std::sqrt(dx * dx + dy * dy + dz * dz);
+						};
+						const float perMetric = g.metric != 0.0f ? distanceTo(in.eye) / g.metric : 0.0f;
+						p.engineFirst = fmt::format("root {} (plan {}, verdict {:#x}): {}; centre ({:.0f} {:.0f} {:.0f}), fade eye ({:.0f} {:.0f} {:.0f}) lodAdjust {} at {:.0f}, "
+													"world camera ({:.0f} {:.0f} {:.0f}) lodAdjust {} at {:.0f}; the engine's metric implies {:.0f} at the fade eye's scale",
+							entry.root, root.bits & kFadeRootPlanMask, g.verdict, engineDifferences, entry.centre[0], entry.centre[1], entry.centre[2], in.eye[0], in.eye[1],
+							in.eye[2], in.lodAdjust, distanceTo(in.eye), done.worldCamera[0], done.worldCamera[1], done.worldCamera[2], done.worldCamera[3],
+							distanceTo(done.worldCamera.data()), n.metric * perMetric);
+						// The metric at this frame's eye (the port's OnVisible on a copy): which side is current.
+						FadeNodeState now = entry.before;
+						FadeState::OnVisible(now, root, entry.centre, in);
+						p.engineFirst += fmt::format("; at this frame's eye the metric is {}; FadeStateCS's before {} lastVisible {} (after {}), the engine's lastVisible {}",
+							now.metric, entry.before.metric, entry.before.lastVisible, g.lastVisible, n.lastVisible);
+						{
+							// FadeStateCS's test again, on what it was given: the root's list block, its centre and the radius it read.
+							const std::uint32_t list = done.lists[i];
+							std::string why = "no list: the latch's frustum";
+							int port = -2;
+							if (list != kFadeRootNoList && (std::size_t(list) + 1) * kFadeVisibilityBytes <= done.visibility.size())
+								port = PrimaryCull::FadeVisibilityPort(done.visibility.data() + std::size_t(list) * kFadeVisibilityBytes, entry.centre, done.radii[i],
+									done.nodeFlags[i], why);
+							{
+								// How far below its listed entry the root is (the cut lists entries; the engine culls a child after its parents).
+								const auto* node = static_cast<const RE::NiAVObject*>(SceneStore::Get().GetTables().fadeRootNode[entry.root]);
+								std::uint32_t depth = 0;
+								const RE::NiAVObject* at = node;
+								while (at && !PrimaryCull::Get().IsEntry(at))
+									at = at->parent, ++depth;
+								p.engineFirst += fmt::format("; {} below its entry '{}'", at ? fmt::format("{} levels", depth) : std::string("no entry"),
+									at && at->name.c_str() ? at->name.c_str() : "");
+							}
+							p.engineFirst += fmt::format("; its list {} ({} blocks), radius read {} (the node's {}), the test on those {} ({})",
+								static_cast<std::int32_t>(list), done.visibility.size() / kFadeVisibilityBytes, done.radii[i], done.nodeRadii[i], port, why);
+						}
+						if (i < done.nodeCentres.size())
+							p.engineFirst += fmt::format("; the node '{}' centre ({:.0f} {:.0f} {:.0f}) at {:.0f}", done.nodeNames[i], done.nodeCentres[i][0], done.nodeCentres[i][1],
+								done.nodeCentres[i][2], distanceTo(done.nodeCentres[i].data()) * 0.0f + [&] {
+									const float dx = done.nodeCentres[i][0] - in.eye[0], dy = done.nodeCentres[i][1] - in.eye[1], dz = done.nodeCentres[i][2] - in.eye[2];
+									return std::sqrt(dx * dx + dy * dy + dz * dz);
+								}());
+					}
 				}
 			}
 			++p.updates;
 			FadeNodeState port = entry.before;
 			std::uint32_t verdict = 0;
+			if (entry.after.verdict & kFadeVerdictAnimated) {
+				const std::uint32_t updates = (entry.after.verdict >> 5) & kFadeAnimatedCountMask;
+				FadeState::AnimatedUpdate(port, root, entry.centre, done.inputs, updates);
+				verdict |= kFadeVerdictAnimated | (updates << 5);
+			}
 			if (entry.after.verdict & kFadeVerdictInView) {
 				++p.inView;
-				verdict = FadeState::OnVisible(port, root, entry.centre, done.inputs);
+				verdict |= FadeState::OnVisible(port, root, entry.centre, done.inputs);
 			}
 			p.serviced += (verdict & kFadeVerdictServiced) ? 1 : 0;
 			const auto differences = FadeState::Differences(port, entry.after);

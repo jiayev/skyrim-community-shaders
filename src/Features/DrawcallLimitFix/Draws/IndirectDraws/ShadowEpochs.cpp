@@ -494,14 +494,18 @@ namespace DCLF
 	namespace
 	{
 		/** @brief BuildDrawsCS's Culled, on the CPU: the latch's planes, then its view-projection's frustum over the bound's box. */
-		bool CulledByLatch(const BuildDrawsLatch& a_latch, const RE::NiBound& a_bound)
+		bool CulledByLatch(const BuildDrawsLatch& a_latch, const RE::NiBound& a_bound, std::string* a_why = nullptr)
 		{
 			const float c[3] = { a_bound.center.x, a_bound.center.y, a_bound.center.z };
 			const float r = a_bound.radius;
 			for (std::uint32_t p = 0; p < 6; ++p)
 				if ((a_latch.cullPlaneMask & (1u << p)) &&
-					a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3] < -r)
+					a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3] < -r) {
+					if (a_why)
+						*a_why = fmt::format("cull plane {} of mask {:#x}, distance {:.0f}", p, a_latch.cullPlaneMask,
+							a_latch.cullPlanes[p][0] * c[0] + a_latch.cullPlanes[p][1] * c[1] + a_latch.cullPlanes[p][2] * c[2] - a_latch.cullPlanes[p][3]);
 					return true;
+				}
 			const bool noNear = (a_latch.cullFlags & kCullNoNearPlane) != 0;
 			bool out[6] = { true, true, true, true, true, true };
 			for (std::uint32_t corner = 0; corner < 8; ++corner) {
@@ -516,6 +520,12 @@ namespace DCLF
 				out[4] = out[4] && clip[2] < 0 && !noNear;
 				out[5] = out[5] && clip[2] > clip[3];
 			}
+			if (a_why)
+				for (std::uint32_t side = 0; side < 6; ++side)
+					if (out[side]) {
+						*a_why = fmt::format("clip side {} (near plane {})", side, noNear ? "off" : "on");
+						break;
+					}
 			return out[0] || out[1] || out[2] || out[3] || out[4] || out[5];
 		}
 	}
@@ -527,7 +537,7 @@ namespace DCLF
 	 */
 	void IndirectDraws::Impl::CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload)
 	{
-		static std::uint64_t checks = 0, registered = 0, rejected = 0;
+		static std::uint64_t checks = 0, registered = 0, rejected = 0, offscreen = 0;
 		static std::string first;
 		if (!a_view.sunView || a_view.casterClass != 0)
 			return;
@@ -543,12 +553,19 @@ namespace DCLF
 			if (registration.descriptor != shadowView->descriptor || !registration.geometry)
 				continue;
 			++registered;
-			if (CulledByLatch(a_latch, registration.geometry->worldBound)) {
+			std::string why;
+			if (CulledByLatch(a_latch, registration.geometry->worldBound, &why)) {
+				// Wholly past a side of the view's own projection (the bound's box against its clip x or y): the engine's looser sphere
+				// cull registers it, but its draw would write no texel either. Not a caster nobody draws.
+				if (why.starts_with("clip side 0") || why.starts_with("clip side 1") || why.starts_with("clip side 2") || why.starts_with("clip side 3")) {
+					++offscreen;
+					continue;
+				}
 				++rejected;
 				if (first.empty()) {
 					const auto& b = registration.geometry->worldBound;
-					first = fmt::format("'{}' in cascade {} (view {}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}", registration.geometry->name.c_str() ? registration.geometry->name.c_str() : "?",
-						shadowView->descriptor, a_view.viewId, b.center.x, b.center.y, b.center.z, b.radius);
+					first = fmt::format("'{}' in cascade {} (view {}), bound ({:.0f} {:.0f} {:.0f}) r {:.0f}: {}", registration.geometry->name.c_str() ? registration.geometry->name.c_str() : "?",
+						shadowView->descriptor, a_view.viewId, b.center.x, b.center.y, b.center.z, b.radius, why);
 				}
 			}
 		}
@@ -651,9 +668,9 @@ namespace DCLF
 			}
 		}
 		if (checks == 20) {
-			logger::info("[DCLF] cascade culling parity: {} sun views checked, {} claimed casters the engine's cascade culls reached, {} of them rejected by DCLF's view{}{}",
-				checks, registered, rejected, rejected ? " <- CASCADE CULL" : " <- OK", first.empty() ? "" : "; first " + first);
-			checks = registered = rejected = 0;
+			logger::info("[DCLF] cascade culling parity: {} sun views checked, {} claimed casters the engine's cascade culls reached, {} of them outside the view's viewport (no texels), {} rejected by DCLF's view{}{}",
+				checks, registered, offscreen, rejected, rejected ? " <- CASCADE CULL" : " <- OK", first.empty() ? "" : "; first " + first);
+			checks = registered = rejected = offscreen = 0;
 			first.clear();
 		}
 	}
@@ -1567,27 +1584,36 @@ namespace DCLF
 		auto claims = a_built ? std::move(a_built) : ShadowClaimSet(a_inputs, SceneStore::Get().GetTables());
 		a_stats.claimed[modeIndex] = static_cast<std::uint32_t>(claims->size());
 		// Holes: the casters this frame's selection withheld from the mode's views (the last epoch's claims) that this epoch did
-		// not draw either (not in its claims, which are its inputs) - drawn by nobody this frame.
+		// not draw either (not in its claims, which are its inputs) - drawn by nobody this frame. Under CS_DCLF_SET_PARITY only those
+		// the engine's shadow registrations actually withheld this frame count (PassCapture::TakeWithheld); a claim the engine did
+		// not register anyway (an LOD child no longer selected, a reference unloaded) is dropped, not a hole.
 		{
-			static std::array<std::uint64_t, PassCapture::kShadowModes> frames{}, holeFrames{}, holes{}, withheld{};
+			static std::array<std::uint64_t, PassCapture::kShadowModes> frames{}, holeFrames{}, holes{}, withheld{}, dropped{};
 			static std::array<std::string, PassCapture::kShadowModes> first;
 			if (const auto selected = PassCapture::Get().SelectedShadowClaims(modeIndex)) {
+				const bool registered = SwitchEnabled(Switch::SetParity);
+				const auto taken = registered ? PassCapture::Get().TakeWithheld(modeIndex) : std::vector<const RE::BSGeometry*>{};
+				const ankerl::unordered_dense::set<const RE::BSGeometry*> reached(taken.begin(), taken.end());
 				std::uint32_t frameHoles = 0;
 				for (const auto* geometry : *selected) {
-					if (!claims->contains(geometry)) {
-						if (frameHoles++ == 0 && first[modeIndex].empty())
-							first[modeIndex] = geometry && geometry->name.c_str() ? geometry->name.c_str() : "?";
+					if (claims->contains(geometry))
+						continue;
+					if (registered && !reached.contains(geometry)) {
+						++dropped[modeIndex];
+						continue;
 					}
+					if (frameHoles++ == 0 && first[modeIndex].empty())
+						first[modeIndex] = geometry && geometry->name.c_str() ? geometry->name.c_str() : "?";
 				}
 				++frames[modeIndex];
 				withheld[modeIndex] += selected->size();
 				holes[modeIndex] += frameHoles;
 				holeFrames[modeIndex] += frameHoles ? 1 : 0;
 				if (frames[modeIndex] == 300) {
-					logger::info("[DCLF] shadow claim holes, mode {:#x}: {} of 300 frames withheld casters this epoch did not draw, {:.1f} a frame of {:.0f} withheld{}{}",
-						a_renderMode, holeFrames[modeIndex], holes[modeIndex] / 300.0, withheld[modeIndex] / 300.0, holes[modeIndex] ? " <- CLAIM HOLES" : " <- OK",
-						first[modeIndex].empty() ? "" : "; first '" + first[modeIndex] + "'");
-					frames[modeIndex] = holeFrames[modeIndex] = holes[modeIndex] = withheld[modeIndex] = 0;
+					logger::info("[DCLF] shadow claim holes, mode {:#x}: {} of 300 frames withheld casters this epoch did not draw, {:.1f} a frame of {:.0f} withheld; {:.1f} a frame left the claims unregistered{}{}",
+						a_renderMode, holeFrames[modeIndex], holes[modeIndex] / 300.0, withheld[modeIndex] / 300.0, dropped[modeIndex] / 300.0,
+						holes[modeIndex] ? " <- CLAIM HOLES" : " <- OK", first[modeIndex].empty() ? "" : "; first '" + first[modeIndex] + "'");
+					frames[modeIndex] = holeFrames[modeIndex] = holes[modeIndex] = withheld[modeIndex] = dropped[modeIndex] = 0;
 					first[modeIndex].clear();
 				}
 			}

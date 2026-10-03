@@ -545,7 +545,9 @@ namespace DCLF
 				buffers->fadeStatesOut[h] = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
 					buffers->fadeStatesOutIndex[h], true);
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
-			buffers->fadeVisibility = CreateWords(kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
+			buffers->fadeVisibility = CreateWords(kFadeVisibilityLists * kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
+			buffers->fadeRootLists = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused);
+			buffers->fadeAnimated = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused);
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
@@ -683,6 +685,8 @@ namespace DCLF
 		if (s.fadeRoots) {
 			if (grow("fade roots", s.fadeRootCapacity, a_tables.fadeRoots.size(), sizeof(FadeRootStatic) + sizeof(FadeNodeState), [&](std::uint32_t a_rows) {
 					s.fadeRoots->ResizeStructured(a_rows);
+					s.fadeRootLists->ResizeStructured(a_rows);
+					s.fadeAnimated->ResizeStructured(a_rows);
 					s.fadeStates->ResizeStructured(a_rows);
 					for (std::uint32_t h = 0; h < 2; ++h) {
 						s.fadeStatesOut[h]->ResizeStructured(a_rows);
@@ -690,6 +694,7 @@ namespace DCLF
 					}
 				})) {
 				s.fadeRootsHeld = ~0ull;
+				s.fadeRootListsHeld = ~0ull;
 				s.fadeStatesOutZeroed = false;
 			}
 		}

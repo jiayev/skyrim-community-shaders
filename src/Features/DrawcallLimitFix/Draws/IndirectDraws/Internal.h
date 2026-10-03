@@ -445,12 +445,20 @@ namespace DCLF
 			std::uint32_t treeCount = 0;
 			std::uint32_t treeFrame = 0;  // the scene frame of treeInputs
 			TreeWindFrame treeInputs{};
+			// The frame before's: what wrote the buffer this frame's draws read (TreeWindReadIndex). ~0u until a frame has run.
+			std::uint32_t previousTreeFrame = ~0u;
+			TreeWindFrame previousTreeInputs{};
+			std::uint64_t previousTreesHeld = ~0ull;  // the tree rows that frame's pass read
+			std::uint64_t frameTreesHeld = ~0ull;     // this frame's
 			std::shared_ptr<const ComputeProgram> treeWind;
 			// Fade roots (FadeStateCS; Records.h, FadeRootStatic): the static rows by root slot (the commits' uploads, against
 			// Tables::fadeRootsVersion), the GPU's state rows, the frame's inputs (a one-row buffer the depth commit writes once
 			// a frame), and CS_DCLF_FADE_PARITY's log (kFadeLogEntries roots from fadeLogBase, ~0u: none this frame).
 			std::shared_ptr<org::Buffer> fadeRoots, fadeStates, fadeFrameBuffer, fadeLog;
-			std::shared_ptr<org::Buffer> fadeVisibility;  // the main camera's cull test (Records.h, kFadeVisibilityBytes)
+			std::shared_ptr<org::Buffer> fadeVisibility;  // the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
+			std::shared_ptr<org::Buffer> fadeRootLists;   // per root slot: its block (PrimaryCull::FadeRootLists)
+			std::shared_ptr<org::Buffer> fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
+			std::uint64_t fadeRootListsHeld = ~0ull;      // the root and list versions it holds
 			// The states FadeStateCS publishes, one buffer per scene frame parity (the state rows are its own): the builds read the
 			// frame before's (FadeStatesReadIndex, through their latches). Zeroed once per backing (frameAheadZeroed): a zero
 			// generation is never a listing's, and the builds take the static row's state for it.
@@ -474,7 +482,7 @@ namespace DCLF
 		 */
 		template <class Uploads>
 		void UploadFadeRoots(const SceneStore::Tables& a_tables, std::uint32_t a_frame, const FadeFrame& a_inputs, std::uint32_t a_logBase, SceneBuffers& a_scene,
-			Uploads& a_uploads, const std::vector<std::byte>& a_visibility)
+			Uploads& a_uploads, const std::vector<std::byte>& a_visibility, std::uint32_t a_visibilityBlocks)
 		{
 			if (!a_scene.fadeState || !a_scene.fadeRoots)
 				return;
@@ -487,8 +495,8 @@ namespace DCLF
 			if (a_scene.fadeFrameNumber != a_frame) {
 				a_scene.fadeFrameNumber = a_frame;
 				a_scene.fadeFrame = a_inputs;
-				if (a_scene.fadeVisibility && a_visibility.size() == kFadeVisibilityBytes)
-					a_uploads(a_scene.fadeVisibility, a_visibility.data(), a_visibility.size(), 0);
+				if (a_scene.fadeVisibility && a_visibilityBlocks && std::size_t(a_visibilityBlocks) * kFadeVisibilityBytes <= a_visibility.size())
+					a_uploads(a_scene.fadeVisibility, a_visibility.data(), std::size_t(a_visibilityBlocks) * kFadeVisibilityBytes, 0);
 				a_scene.fadeLogBase = a_logBase;
 			}
 			// The frame row, with the pass's per-frame values, every commit.
@@ -534,7 +542,11 @@ namespace DCLF
 				a_scene.treesHeld = a_tables.treesVersion;
 			}
 			a_scene.treeCount = a_scene.treesHeld == a_tables.treesVersion ? static_cast<std::uint32_t>(a_tables.trees.size()) : 0u;
+			a_scene.frameTreesHeld = a_scene.treesHeld;
 			if (a_scene.treeFrame != a_frame) {
+				a_scene.previousTreeFrame = a_scene.treeFrame;
+				a_scene.previousTreeInputs = a_scene.treeInputs;
+				a_scene.previousTreesHeld = a_scene.frameTreesHeld;
 				a_scene.treeFrame = a_frame;
 				a_scene.treeInputs = SampleTreeWindFrame();
 				// CS_DCLF_FOLIAGE_PARITY compares each frame's pixels with the frame before's: the trees' clocks stand still.
@@ -3009,6 +3021,14 @@ namespace DCLF
 			// list jobs have run), which FadeStateCS's update for its members must equal.
 			std::vector<FadeNodeState> nodes;
 			std::vector<std::uint8_t> engine;
+			std::array<float, 4> worldCamera{};
+			std::vector<std::array<float, 3>> nodeCentres;  // the nodes' world bound centres, read with them
+			std::vector<std::string> nodeNames;
+			std::vector<std::uint32_t> nodeFlags;
+			// What FadeStateCS was given that frame: the list blocks, each root's list and the radius it read (the sun entry row).
+			std::vector<std::byte> visibility;
+			std::vector<std::uint32_t> lists;
+			std::vector<float> radii, nodeRadii;  // the engine's world root camera when the nodes were read: position, lodAdjust
 		};
 		std::optional<FadeReadback> fadeReadback;
 		std::uint32_t fadeLogCursor = 0;

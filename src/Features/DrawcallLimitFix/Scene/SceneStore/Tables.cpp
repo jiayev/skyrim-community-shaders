@@ -89,7 +89,7 @@ namespace DCLF
 		if (x.flags != y.flags || x.materialIndex != y.materialIndex || x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex ||
 			!same(a.fadeDistance, b.fadeDistance) || a.sceneFlags != b.sceneFlags)
 			causes |= kChangeBindings;
-		if (!same(a.shading, b.shading) || !same(a.emissiveMult, b.emissiveMult) || !same(a.wetness, b.wetness) || !same(a.lodFade, b.lodFade))
+		if (!same(a.shading, b.shading) || !same(a.emissiveMult, b.emissiveMult) || !same(a.wetness, b.wetness))
 			causes |= kChangeShading;
 		if (!same(a.lights, b.lights))
 			causes |= kChangeLights;

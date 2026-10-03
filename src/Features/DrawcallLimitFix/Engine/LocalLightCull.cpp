@@ -677,6 +677,17 @@ namespace DCLF::LocalLightCull
 						what += fmt::format(" object {} flags {:#x} reject {} technique {:#x}", o, tables.objects[o].flags, tables.shadowReject[o], tables.shadowTechnique[o]);
 						break;
 					}
+				{
+					const auto& candidates = *exclusion->candidates;
+					const auto it = candidates.geometries.find(a_pass->geometry);
+					what += it == candidates.geometries.end() ? std::string(" not a candidate geometry") :
+					                                            fmt::format(" candidate of entry {} (excluded {})", candidates.geometryEntry[it->second],
+																	Excluded(*exclusion, candidates.entryNodes[candidates.geometryEntry[it->second]]));
+				}
+				// How the cull reached it: the chain up, with the entries and the excluded ones marked.
+				for (const RE::NiAVObject* object = a_pass->geometry; object; object = object->parent)
+					what += fmt::format(" <- {}:{}{}{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "", Hidden(object) ? " hidden" : "",
+						exclusion->candidates->entries.contains(object) ? (Excluded(*exclusion, object) ? " [excluded entry]" : " [entry]") : "");
 				std::scoped_lock lock(firstMutex);
 				++lostByReject[std::min<std::uint32_t>(reject, 15)];
 				if (firstLost.empty())

@@ -249,6 +249,17 @@ namespace DCLF::FadeState
 		}
 	}
 
+	void AnimatedUpdate(FadeNodeState& a_state, const FadeRootStatic& a_root, const float a_centre[3], const FadeFrame& a_frame, std::uint32_t a_updates)
+	{
+		FadeFrame frame = a_frame;
+		std::copy_n(a_frame.animEye, 3, frame.eye);
+		frame.lodAdjust = a_frame.animLodAdjust;
+		frame.counter = a_frame.animCounter;
+		frame.deltaTime = a_frame.animDeltaTime;
+		for (std::uint32_t u = 0; u < a_updates; ++u)
+			FadeUpdate(a_state, a_root, a_centre, a_root.fadeAmount, frame);
+	}
+
 	std::uint32_t OnVisible(FadeNodeState& a_state, const FadeRootStatic& a_root, const float a_centre[3], const FadeFrame& a_frame)
 	{
 		std::uint32_t verdict = kFadeVerdictInView;

@@ -199,8 +199,10 @@ namespace DCLF::Draws
 		std::uint32_t rootsIndex = 0, statesIndex = 0, frameIndex = 0, objectsIndex = 0;
 		std::uint32_t latchIndex = 0, latchOffset = 0, logIndex = 0;
 		std::uint32_t outIndices[2]{};  // the published states, by the scene frame's parity
-		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the main camera's cull test (Records.h, kFadeVisibilityBytes)
-		std::uint32_t padding[6]{};
+		std::uint32_t visibilityIndex = 0;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
+		std::uint32_t rootListsIndex = 0;   // StructuredBuffer<uint>: each root's block (PrimaryCull::FadeRootLists)
+		std::uint32_t animatedIndex = 0;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
+		std::uint32_t padding[4]{};
 	};
 	static_assert(sizeof(FadeStateConstants) == 64);
 	constexpr std::uint32_t kFadeStateConstantWords = sizeof(FadeStateConstants) / 4;

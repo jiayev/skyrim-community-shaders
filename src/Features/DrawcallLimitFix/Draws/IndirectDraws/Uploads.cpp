@@ -325,9 +325,44 @@ namespace DCLF
 				const auto eye = PrimaryCull::Get().FadeEye();
 				std::copy_n(eye.data(), 3, inputs.eye);
 				inputs.lodAdjust = eye[3];
+				// The animation job's updates since the last cull: their roots stamped with this frame, their inputs in the frame row.
+				std::vector<const void*> nodes;
+				AnimatedFadeInputs anim{};
+				PrimaryCull::Get().TakeAnimatedBatch(nodes, anim);
+				std::copy_n(anim.eye, 3, inputs.animEye);
+				inputs.animLodAdjust = anim.lodAdjust;
+				inputs.animCounter = anim.counter;
+				inputs.animDeltaTime = anim.deltaTime;
+				// Each root once, with its count of updates.
+				const auto& index = a_store.GetTables().fadeRootIndex;
+				ankerl::unordered_dense::map<std::uint32_t, std::uint32_t> counts;
+				if (buffers.fadeAnimated && anim.valid)
+					for (const auto* node : nodes)
+						if (const auto it = index.find(node); it != index.end() && it->second < buffers.fadeRootCapacity)
+							++counts[it->second];
+				for (const auto& [root, count] : counts) {
+					const std::uint32_t word = FadeAnimatedWord(a_store.GetFrame(), count);
+					uploads(buffers.fadeAnimated, &word, sizeof(word), std::uint64_t(root) * sizeof(word));
+				}
+				if (anim.varied) {
+					static std::uint32_t reported = 0;
+					if (reported++ < 5)
+						logger::info("[DCLF] the animation job's fade updates of frame {} had differing inputs; the first's stand for all", a_store.GetFrame());
+				}
 				logBase = NextFadeLog(a_store.GetFrame(), a_store.GetTables(), inputs);
 			}
-			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, PrimaryCull::Get().FadeVisibility());
+			auto& cull = PrimaryCull::Get();
+			UploadFadeRoots(a_store.GetTables(), a_store.GetFrame(), inputs, logBase, buffers, uploads, cull.FadeVisibility(), cull.FadeVisibilityBlocks());
+			// Each root's list block, when the roots or an entry's list changed (rarely: a new snapshot, a cell's lists).
+			const auto& rootTables = a_store.GetTables();
+			const std::uint64_t listsKey = rootTables.fadeRootsVersion * 0x9E3779B97F4A7C15ull ^ cull.FadeRootListsVersion();
+			if (buffers.fadeRootLists && buffers.fadeRootListsHeld != listsKey && rootTables.fadeRootNode.size() <= buffers.fadeRootCapacity) {
+				std::vector<std::uint32_t> lists;
+				cull.FadeRootLists(rootTables.fadeRootNode, lists);
+				if (!lists.empty())
+					uploads(buffers.fadeRootLists, lists.data(), lists.size() * sizeof(std::uint32_t), 0);
+				buffers.fadeRootListsHeld = listsKey;
+			}
 		}
 		// The streams as the tables hold them now, whichever frame's build this is.
 		const auto streams = CommitSceneStreams(*a_resources->scene, a_store.GetTables(), a_store.GetFrame(), a_store.GetTablesGeneration(), uploads);
