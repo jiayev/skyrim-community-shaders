@@ -1,5 +1,7 @@
 #include "ExponentialHeightFog.h"
 
+#include <cmath>
+
 #include "Deferred.h"
 #include "Effects11.h"
 #include "Effects11/SettingManager.h"
@@ -100,10 +102,17 @@ ExponentialHeightFog::Settings ExponentialHeightFog::GetCommonBufferData() const
 {
 	Settings data = settings;
 	auto& linearLighting = globals::features::linearLighting;
-	linearLighting.DecodeColor(&data.inscatteringTint.x);
-	linearLighting.DecodeColor(&data.fogInscatteringColor.x);
-	linearLighting.DecodeColor(&data.volumetricFogAlbedo.x);
-	linearLighting.DecodeColor(&data.volumetricFogEmissive.x);
+	if (linearLighting.GetCommonBufferData().enableLinearLighting) {
+		for (auto* color : { &data.inscatteringTint, &data.fogInscatteringColor, &data.volumetricFogAlbedo, &data.volumetricFogEmissive }) {
+			for (auto* channel : { &color->x, &color->y, &color->z }) {
+				if (std::isfinite(*channel)) {
+					const float magnitude = std::abs(*channel);
+					const float linear = magnitude <= 0.04045f ? magnitude / 12.92f : std::pow((magnitude + 0.055f) / 1.055f, 2.4f);
+					*channel = std::copysign(linear, *channel);
+				}
+			}
+		}
+	}
 
 	if (IsSuppressed())
 		data.enabled = 0;
