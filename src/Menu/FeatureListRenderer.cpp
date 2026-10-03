@@ -87,14 +87,6 @@ namespace
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
 	}
 
-	// Color for the [ALPHA]/[BETA] stage marker. Alpha (less stable) reads as an error,
-	// Beta as a warning.
-	ImVec4 StageTagColor(Feature::ReleaseStage stage)
-	{
-		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
-		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
-	}
-
 	/**
 	 * @brief Determines if the left feature panel should be visible based on auto-hide settings and mouse position
 	 * @return true if panel should be visible, false if it should be hidden
@@ -701,7 +693,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	// Display the stage marker behind the name, regardless of loaded state
 	if (const auto stage = feat->GetReleaseStage(); stage != Feature::ReleaseStage::Release) {
 		ImGui::SameLine();
-		ImGui::TextColored(StageTagColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
+		ImGui::TextColored(Feature::GetReleaseStageColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
 	}
 
 	// A feature only authored for other scenes still gets a hollow dot, so its settings stay discoverable.
@@ -822,7 +814,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Returns title-only height for button alignment
 	const auto stage = feat->GetReleaseStage();
 	const std::string stageTag = Feature::GetReleaseStageTag(stage);  // empty for Release; color unused when tag is empty
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage));
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, Feature::GetReleaseStageColor(stage));
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();

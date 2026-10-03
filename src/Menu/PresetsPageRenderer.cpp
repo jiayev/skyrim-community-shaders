@@ -461,7 +461,7 @@ void PresetsPageRenderer::RenderDetail()
 				if (!stageTag.empty()) {
 					ImGui::SameLine(0.0f, style.ItemSpacing.x);
 					MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
-					ImGui::TextColored(PresetCompatibility::StageTagColor(stage), "%s", stageTag.c_str());
+					ImGui::TextColored(Feature::GetReleaseStageColor(stage), "%s", stageTag.c_str());
 				}
 				ImGui::SetWindowFontScale(1.0f);
 			}

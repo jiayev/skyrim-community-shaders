@@ -6,8 +6,6 @@
 #include <string_view>
 #include <vector>
 
-#include <imgui.h>
-
 #include "Feature.h"
 
 /// Shared Community Shaders / feature compatibility checks for unified packs and Scene Manager exports.
@@ -32,9 +30,6 @@ namespace PresetCompatibility
 
 	/** @brief 0.0.x → Alpha, 0.x.x → Beta, ≥1.0.0 (or unparsable) → Release. */
 	Feature::ReleaseStage ReleaseStageFromVersion(std::string_view version);
-
-	/** @brief Theme colour for a stage tag — Error for Alpha, Warning for Beta. */
-	ImVec4 StageTagColor(Feature::ReleaseStage stage);
 
 	/** @return Gap when the running CS build is older than required; None when equal/newer or unparsable. */
 	VersionGap CompareRequiredCsVersion(std::string_view requiredCsVersion);

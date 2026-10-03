@@ -144,6 +144,9 @@ public:
 	 */
 	static std::string GetReleaseStageTag(ReleaseStage stage);
 
+	/** @brief Theme colour for a stage tag: Error for Alpha, Warning for Beta. */
+	static ImVec4 GetReleaseStageColor(ReleaseStage stage);
+
 	/**
 	 * Whether the feature is disabled at boot by default (before any user override).
 	 * Only pre-release CORE features start disabled, since they ship with the base mod

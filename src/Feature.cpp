@@ -394,6 +394,12 @@ std::string Feature::GetReleaseStageTag(ReleaseStage stage)
 	}
 }
 
+ImVec4 Feature::GetReleaseStageColor(ReleaseStage stage)
+{
+	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
+	return stage == ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
+}
+
 void Feature::DrawUnloadedUI()
 {
 	// Prioritize detailed failure message if available

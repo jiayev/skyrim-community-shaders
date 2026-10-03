@@ -1,7 +1,6 @@
 #include "PresetCompatibility.h"
 
 #include "Feature.h"
-#include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
 #include "Plugin.h"
@@ -69,12 +68,6 @@ namespace PresetCompatibility
 		if (parsed.minor > 0)
 			return Beta;
 		return Alpha;
-	}
-
-	ImVec4 StageTagColor(Feature::ReleaseStage stage)
-	{
-		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
-		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
 	}
 
 	VersionGap CompareRequiredCsVersion(std::string_view requiredCsVersion)
