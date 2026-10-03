@@ -527,9 +527,10 @@ void EditorWindow::ShowObjectsWindow()
 	const float compactWidth = ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 4.0f;
 
 	if (ImGui::BeginTable("ObjectTable", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
-		// Not NoResize while compact: a fixed column that cannot be resized is sized to its content
-		// instead of its requested width, which is what kept the compact sidebar as wide as before.
-		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"), ImGuiTableColumnFlags_WidthFixed, expandedWidth);
+		// A NoResize fixed column is pinned to its init width each frame, overriding drags and imgui.ini.
+		ImGui::TableSetupColumn(T(TKEY("categories"), "Categories"),
+			ImGuiTableColumnFlags_WidthFixed | (compact ? ImGuiTableColumnFlags_NoResize : ImGuiTableColumnFlags_None),
+			compact ? compactWidth : expandedWidth);
 		ImGui::TableSetupColumn(T(TKEY("objects"), "Objects"), ImGuiTableColumnFlags_WidthStretch);
 
 		// Widths must be set before TableNextRow: the first row locks the layout, after which they are ignored.
@@ -538,8 +539,6 @@ void EditorWindow::ShowObjectsWindow()
 			// Remember the dragged width so expanding restores it rather than the default.
 			if (m_sidebarWasCompact != true && currentWidth > compactWidth)
 				m_sidebarExpandedWidth = currentWidth;
-			// Every frame: the column is NoResize here, and imgui.ini may hold any saved width.
-			ImGui::TableSetColumnWidth(0, compactWidth);
 		} else if (resetLayout || m_sidebarWasCompact != false) {
 			// On expand, and on the first frame, where imgui.ini may still hold the skinny compact width.
 			const bool restoreDragged = !resetLayout && m_sidebarExpandedWidth > compactWidth;
