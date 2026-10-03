@@ -182,16 +182,8 @@ void LerpDirectional(RE::BGSDirectionalAmbientLightingColors::Directional& oldCo
 void CSEditor::DrawSettings()
 {
 	EnsureWeatherListLoaded();
-	const bool canOpen = EditorWindow::CanBeOpen();
 
-	// Selecting this page opens the editor straight away; the button covers re-opening it
-	// after closing the editor while the page is still selected.
-	if (canOpen && s_autoOpenArmed) {
-		s_autoOpenArmed = false;
-		OpenEditorWindow();
-	}
-
-	ImGui::BeginDisabled(!canOpen);
+	ImGui::BeginDisabled(!EditorWindow::CanBeOpen());
 	if (ImGui::Button(T(TKEY("open_editor"), "Open CS Editor"), { -1, 0 }))
 		OpenEditorWindow();
 	ImGui::EndDisabled();
@@ -202,12 +194,6 @@ void CSEditor::Prepass()
 	if (ShouldPreloadEditorResources()) {
 		EnsureDataLoaded();
 	}
-
-	// Re-arm the page's auto-open once the menu has been closed. Not while either editor is open:
-	// both hide the menu, and closing one returns to it with this page still selected, which would
-	// open the CS Editor again straight away.
-	if (!Menu::GetSingleton()->ShouldSwallowInput())
-		s_autoOpenArmed = true;
 
 	EditorWindow::MaintainWeatherLock();
 }

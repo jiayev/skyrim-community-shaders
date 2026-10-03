@@ -620,7 +620,11 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 			selectedMenuRef = listId;
 
 		ImGui::PopStyleColor();
-	} else if (isCSEditor || isPresets) {
+	} else if (isCSEditor) {
+		// Launcher entry: opens the editor without leaving the current page.
+		if (PillSelectable(fmt::format(" {} ", menu.name), false))
+			CSEditor::OpenEditorWindow();
+	} else if (isPresets) {
 		if (PillSelectable(fmt::format(" {} ", menu.name), selectedMenuRef == listId))
 			selectedMenuRef = listId;
 	} else {

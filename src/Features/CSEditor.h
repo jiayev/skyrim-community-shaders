@@ -175,7 +175,6 @@ private:
 	static inline float s_accelerationRate = 5.0f;
 	static inline RE::TESWeather* s_cachedLastWeather = nullptr;
 	static inline bool s_isAcceleratingWeatherChange = false;
-	static inline bool s_autoOpenArmed = true;  // feature page opens the editor once per menu session
 	static inline float s_accelerationTime = 0.0f;
 
 	// Static helper for display name extraction
