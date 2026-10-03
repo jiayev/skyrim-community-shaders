@@ -2,6 +2,7 @@
 
 #include "Feature.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
 
 /**
  * @brief Drawcall Limit Fix: replaces the native opaque render loop with GPU-driven indirect draws
@@ -47,7 +48,8 @@ struct DrawcallLimitFix : Feature
 	 * @brief CS_DCLF_TARGET_PROBE=x,y (dclf-open-defects.md): every bound G-buffer target, averaged over a 64 x 64 block
 	 * at the pixel, where the opaque pass ends, DCLF on or off.
 	 */
-	void ProbeOpaqueTarget(bool a_afterDCLF);
+	void ProbeOpaqueTarget(std::uint32_t a_stage);
+	void ProbeTerrainPass(std::uint32_t a_index, const RE::BSRenderPass* a_pass) { DCLF::ProbeTerrainPassState(Running(), a_index, a_pass); }
 
 	/**
 	 * @brief Deferred::EndDeferred, before the deferred composite: publishes the claims the colour epoch's draws

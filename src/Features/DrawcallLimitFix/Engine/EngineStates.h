@@ -21,6 +21,11 @@ namespace DCLF
 
 	RasterStateArray& EngineRasterStates();
 	BlendStateArray& EngineBlendStates();
+	/**
+	 * @brief The blend state the G-buffer pass draws with at these indices: Deferred's variant (whatever the table holds when
+	 * this is called), null until Deferred has made them. DCLF's main-pass draws are that pass's.
+	 */
+	ID3D11BlendState* DeferredBlendState(std::uint32_t a_blendMode, std::uint32_t a_alphaToCoverage, std::uint32_t a_writeMode, std::uint32_t a_extra);
 
 	/**
 	 * @brief The depth-bias mode the engine's decal groups draw with (decompiled FUN_1414b3bb0 and

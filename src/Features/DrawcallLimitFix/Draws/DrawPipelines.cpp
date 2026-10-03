@@ -451,7 +451,13 @@ namespace DCLF
 			float slopeScaledDepthBias = 0.0f;
 			rhi::BlendState blend{};
 			bool valid = false;  // false: a state object was missing or used something the RHI cannot express
+			// An opaque key's: only the blend (its write masks) is the engine's; depth and bias stay the opaque pass's.
+			bool blendOnly = false;
 		};
+		// The main pass's opaque groups' write modes (alphaBlendWriteMode), as the engine draws them: the alpha-tested group
+		// (accumulation hint 2) writes every channel (mode 10); the plain opaque group (hint 0) leaves the first target's
+		// alpha alone (mode 1), and a shader's alpha below 1 (vertex alpha, say) never reaches the G-buffer.
+		static constexpr std::uint32_t kOpaqueWriteMode = 1, kAlphaTestedWriteMode = 10;
 		ankerl::unordered_dense::map<std::uint32_t, EngineState> engineStates;  // by RasterStateBits
 		std::uint32_t loggedStateFailures = 0;
 
@@ -500,9 +506,11 @@ namespace DCLF
 			// Fill solid, cull back, no scissor: the pipeline's own cull mode comes from the key, and the
 			// bias values are the same across the cull modes of the engine's table.
 			auto* raster = EngineRasterStates()[0][1][bias][0];
-			auto* blend = EngineBlendStates()[blendMode][alphaToCoverage][writeMode][extra];
+			// The deferred pass's variant: DCLF's main-pass draws are G-buffer draws, whenever this is read.
+			auto* blend = DeferredBlendState(blendMode, alphaToCoverage, writeMode, extra);
 			if (!raster || !blend) {
-				a_error = fmt::format("no engine state object at bias {} / blend [{}][{}][{}][{}]", bias, blendMode, alphaToCoverage, writeMode, extra);
+				a_error = fmt::format("no engine state object at bias {} / blend [{}][{}][{}][{}] (the deferred blend states are made on the first deferred pass)",
+					bias, blendMode, alphaToCoverage, writeMode, extra);
 				return state;
 			}
 			D3D11_RASTERIZER_DESC rasterDesc{};
@@ -798,7 +806,7 @@ namespace DCLF
 				if (!depthOnly) {
 					// A decal blends (or not) exactly as the engine's blend state for its indices says, per
 					// target, including the write masks. Everything else keeps the RHI default: no blending.
-					if (a_state.valid)
+					if (a_state.valid || a_state.blendOnly)
 						blend.bs = a_state.blend;
 					blend.bs.numAttachments = a_targets.colorCount;
 					targets.rt.count = a_targets.colorCount;
@@ -1105,6 +1113,29 @@ namespace DCLF
 			if (it == impl->engineStates.end() || !it->second.valid)
 				return kNotReady;
 			state = it->second;
+		} else {
+			// An opaque key: the blend state of its group's write mode, from the engine's own state object (read once, after the
+			// deferred pass has made its variants).
+			if (!DeferredBlendState(0, 0, Impl::kOpaqueWriteMode, 0))
+				return kNotReady;
+			constexpr std::uint32_t kDoAlphaTest = 1u << 20;
+			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
+			const std::uint32_t opaqueBits = writeMode << kRasterWriteModeShift;
+			auto it = impl->engineStates.find(opaqueBits);
+			if (it == impl->engineStates.end()) {
+				std::string error;
+				auto read = impl->ReadEngineState(opaqueBits, error);
+				if (!read.valid && impl->loggedStateFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] opaque write mode {} state cannot be read: {}; its objects stay native", writeMode, error);
+				else if (read.valid)
+					logger::info("[DCLF] opaque write mode {}: rt0 mask {:X}, rt1 mask {:X}", writeMode, static_cast<unsigned>(read.blend.attachments[0].writeMask),
+						static_cast<unsigned>(read.blend.attachments[1].writeMask));
+				it = impl->engineStates.emplace(opaqueBits, read).first;
+			}
+			if (!it->second.valid)
+				return kNotReady;
+			state.blend = it->second.blend;
+			state.blendOnly = true;
 		}
 
 		org::services::PipelineRecipe recipe;
@@ -1112,6 +1143,8 @@ namespace DCLF
 			a_key.vertexLayout);
 		recipe.shaderKey = PipelineKeyHash{}(a_key);
 		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&targets, sizeof(targets));
+		// And the blend state, whose write masks are the engine's (an opaque key's too): a build cached with other masks is another pipeline.
+		recipe.fixedFunctionKey ^= ankerl::unordered_dense::detail::wyhash::hash(&state.blend, sizeof(state.blend)) * 0x9E3779B97F4A7C15ull;
 		const auto frontCCW = impl->EngineFrontCCW();
 		if (!frontCCW)
 			return kNotReady;
@@ -1225,6 +1258,10 @@ namespace DCLF
 
 	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey> a_keys)
 	{
+		// The deferred pass's blend states (DeferredBlendState) exist from its first frame: until then nothing is read, so no
+		// state is recorded as unreadable for good.
+		if (!DeferredBlendState(0, 0, 10, 0))
+			return;
 		for (const auto& key : a_keys) {
 			const auto bits = RasterStateBits(key.rasterFlags);
 			if (!bits || impl->engineStates.contains(bits))

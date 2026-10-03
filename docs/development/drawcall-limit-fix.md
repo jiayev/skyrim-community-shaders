@@ -7407,3 +7407,42 @@ It reads `0 bad, largest amplitude 4.3` at the spot.
 quarter of the map at the near plane, objects whose world matrix is far from their bound, and draws whose geometry row
 no longer matches their TriShape's buffers. It found 'leaves' (a near canopy, legitimately covering 30% of cascade 0)
 and four decals with their world origin off their bound (DirtDecal, harmless). It found no stale buffers.
+
+## Dark terrain: TruePBR's landscape layers bound by the previous draw (fixed in TruePBR, 2026-10-03)
+
+**Symptom.** At one spot the terrain was much darker with DCLF on than off, and with DCLF off one terrain quadrant still
+looked different from its neighbours.
+
+**Tracing.** The target probe (`CS_DCLF_TARGET_PROBE`) reads the targets at four stages:
+1. before DCLF's colour epoch;
+2. after it;
+3. after Terrain Blending's replayed landscape passes;
+4. after the deferred composite.
+
+The probe found:
+- The G-buffer matched after DCLF's epoch, and so did the shadow mask.
+- The difference first appeared after Terrain Blending's replay of the engine's own landscape passes. With DCLF on, rt0
+  was 0.71 and the glossiness (rt2.z) was 0; with DCLF off they were 0.78 and 0.21.
+- `CS_DCLF_PRIMARY_EXCLUDE=0` made the two agree, so taking DCLF's objects out of the engine's main cull changed those
+  native draws.
+- A per-pass probe of the replay (`ProbeTerrainPassState`) recorded each pass's state: its textures, PS b1 and b2, VS b2,
+  and the pipeline state. Per material everything matched except TruePBR's per-tile slots: displacement t80-t85 and
+  RMAOS t86-t91.
+
+**Cause.** TruePBR's landscape `SetupMaterial` bound a tile's textures only when the material's pointer was non-null.
+Its extended slots are flushed by dirty bit, so a skipped tile kept whatever the previous landscape draw had bound:
+null, or the default white RMAOS. The result therefore depended on the order the passes were drawn in.
+- DCLF's stand-in walk (`PrimaryCull::StandIn`) registers the engine's members in its own order.
+- The native order varies from frame to frame.
+- White RMAOS (rough and metallic) is dark; null reads as zero.
+
+The pointers were null because the 11 vanilla landscape texture sets that TruePBR's configs mark as PBR have empty
+displacement and RMAOS paths in the loaded records (LandscapeFieldGrass01, LandscapeTundra01, and others). The likely
+cause is a plugin later in the load order overriding the PBR mod's texture-set records.
+
+**Fix.** The landscape `SetupMaterial` binds every tile's four slots on every call. A missing texture gets the default
+the material would otherwise have been given (`ReceiveValuesFromRootMaterial`): black base colour and displacement, the
+default normal map, and white RMAOS. DCLF on and off now agree (rt0 0.72, glossiness 0).
+
+They agree on the dark look: that is what TruePBR draws for a PBR tile with no RMAOS. The look is right only once the
+texture sets carry their RMAOS again, which is a load-order matter.
