@@ -454,6 +454,19 @@ namespace Util
 			}
 			return WriteFileAtomically(path, serialized, context);
 		}
+
+		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path, std::string_view context)
+		{
+			std::ifstream file(path);
+			if (!file.is_open())
+				return std::nullopt;
+			try {
+				return nlohmann::json::parse(file);
+			} catch (const std::exception& e) {
+				logger::warn("Could not read {} '{}': {}", context, path.string(), e.what());
+				return std::nullopt;
+			}
+		}
 	}
 }
 

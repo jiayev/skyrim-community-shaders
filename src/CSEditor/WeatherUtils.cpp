@@ -3,6 +3,7 @@
 #include "EditorWindow.h"
 #include "PaletteWindow.h"
 #include "Utils/Climate.h"
+#include "Utils/Format.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -14,9 +15,7 @@ namespace WeatherUtils::TexturePath
 {
 	std::string Normalize(std::string_view path)
 	{
-		std::string result(path);
-		std::transform(result.begin(), result.end(), result.begin(),
-			[](unsigned char c) { return std::tolower(c); });
+		auto result = Util::ToLower(std::string(path));
 		std::replace(result.begin(), result.end(), '/', '\\');
 		return result;
 	}

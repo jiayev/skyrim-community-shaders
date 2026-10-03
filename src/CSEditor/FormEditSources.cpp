@@ -5,7 +5,6 @@
 #include "Utils/FileSystem.h"
 #include "Widget.h"
 
-#include <fstream>
 #include <functional>
 #include <optional>
 
@@ -116,13 +115,10 @@ namespace FormEditSources
 		bool readAll = true;
 		for (const auto& key : GetEffectiveKeys()) {
 			const auto path = ResolveFile(key);
-			try {
-				std::ifstream file(path);
-				out.push_back({ key, nlohmann::json::parse(file) });
-			} catch (const std::exception& e) {
-				logger::warn("[FormEditSources] Skipping unreadable form edit '{}': {}", path.string(), e.what());
+			if (auto edit = Util::FileHelpers::ReadJsonFile(path, "form edit"))
+				out.push_back({ key, std::move(*edit) });
+			else
 				readAll = false;
-			}
 		}
 		return readAll;
 	}

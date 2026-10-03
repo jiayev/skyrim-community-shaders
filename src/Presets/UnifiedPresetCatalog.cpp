@@ -9,6 +9,7 @@
 #include "CSEditor/FormEditSources.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "CSEditor/WeatherUtils.h"
 #include "I18n/I18n.h"
 #include "PostProcessingMode.h"
 #include "Presets/PostProcessingPresets.h"
@@ -55,14 +56,6 @@ namespace
 		if (pack.source == SourceKind::Effects11Legacy)
 			return PresetManager::kLegacyPresetId;
 		return pack.id;
-	}
-
-	/** @brief Case-insensitive substring match; the needle must already be lowercase. */
-	bool ContainsCI(const std::string& haystack, const std::string& needleLower)
-	{
-		if (needleLower.empty())
-			return true;
-		return ToLower(haystack).find(needleLower) != std::string::npos;
 	}
 
 	/** @brief Sets manifest[objectKey][entryKey], creating the object when missing, and writes the manifest atomically. */
@@ -557,7 +550,6 @@ void UnifiedPresetCatalog::Discover()
 
 std::vector<size_t> UnifiedPresetCatalog::Query(std::optional<PresetType> typeFilter, const std::string& search) const
 {
-	const auto needle = ToLower(search);
 	std::vector<size_t> indices;
 	indices.reserve(packs.size());
 
@@ -566,11 +558,12 @@ std::vector<size_t> UnifiedPresetCatalog::Query(std::optional<PresetType> typeFi
 		if (typeFilter && !pack.IsType(*typeFilter))
 			continue;
 
-		if (!needle.empty()) {
-			bool match = ContainsCI(pack.name, needle) || ContainsCI(pack.author, needle) || ContainsCI(pack.description, needle);
+		if (!search.empty()) {
+			bool match = ContainsStringIgnoreCase(pack.name, search) || ContainsStringIgnoreCase(pack.author, search) ||
+			             ContainsStringIgnoreCase(pack.description, search);
 			if (!match) {
 				for (const auto& tag : pack.tags) {
-					if (ContainsCI(tag, needle)) {
+					if (ContainsStringIgnoreCase(tag, search)) {
 						match = true;
 						break;
 					}

@@ -1,7 +1,6 @@
 #include "PostProcessingPresets.h"
 
 #include <format>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -51,19 +50,6 @@ namespace
 		return overrides && overrides->IsValidOverrideDocument(document, path);
 	}
 
-	std::optional<json> ReadJsonFile(const std::filesystem::path& path)
-	{
-		try {
-			std::ifstream file(path);
-			if (!file.is_open())
-				return std::nullopt;
-			return json::parse(file);
-		} catch (const std::exception& e) {
-			logger::warn("[PostProcessingPresets] Could not read {}: {}", path.string(), e.what());
-			return std::nullopt;
-		}
-	}
-
 	bool WriteDocument(const std::filesystem::path& packRoot, const json& document)
 	{
 		const auto path = BaselinePath(packRoot);
@@ -102,7 +88,7 @@ void PostProcessingPresets::MigrateLegacyPresets()
 			continue;
 		}
 
-		auto document = ReadJsonFile(source);
+		auto document = Util::FileHelpers::ReadJsonFile(source, "post processing baseline");
 		if (!document)
 			continue;
 		if (!WriteDocument(packRoot, ToBaselineDocument(std::move(*document))) ||

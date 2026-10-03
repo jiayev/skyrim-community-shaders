@@ -517,23 +517,14 @@ namespace
 	/** @brief Ticks every listed setting, and a count of the ticks, including hidden ones, that clears them. */
 	void DrawSelectionFooter(FeatureExport& entry, const std::vector<size_t>& visible)
 	{
-		ImGui::AlignTextToFramePadding();
-		if (BrowserUI::Link("##selectShown", T("cs_editor.scene_copy_select_shown", "Select all shown")))
+		const auto selectedShown = static_cast<size_t>(std::ranges::count_if(visible, [&](size_t index) { return entry.ticked[index] != 0; }));
+		const auto action = BrowserUI::SelectionFooter(CountTicked(entry), selectedShown,
+			T(TKEY("export.clear_ticks_tooltip"), "Unticks every setting of this feature, shown or hidden."));
+		if (action == BrowserUI::SelectionAction::SelectShown)
 			for (const auto index : visible)
 				entry.ticked[index] = 1;
-		auto selected = CountTicked(entry);
-		if (selected == 0)
-			return;
-
-		auto hidden = selected - static_cast<size_t>(std::ranges::count_if(visible, [&](size_t index) { return entry.ticked[index] != 0; }));
-		const auto label = hidden == 0 ? std::vformat(T("cs_editor.scene_copy_selected", "{} selected"), std::make_format_args(selected)) :
-		                                 std::vformat(T("cs_editor.scene_copy_selected_hidden", "{} selected · {} hidden"),
-											 std::make_format_args(selected, hidden));
-		const ImVec4 accent = Util::Colors::GetAccent();
-		BrowserUI::RightAlign(BrowserUI::MeasureChip(label.c_str(), true));
-		if (BrowserUI::Chip("##clearTicks", label.c_str(), Icons::FA(ICON_FA_TIMES), nullptr, &accent))
+		else if (action == BrowserUI::SelectionAction::Clear)
 			std::ranges::fill(entry.ticked, uint8_t{ 0 });
-		Util::AddTooltip(T(TKEY("export.clear_ticks_tooltip"), "Unticks every setting of this feature, shown or hidden."));
 	}
 
 	void DrawSettings(FeatureExport& entry)

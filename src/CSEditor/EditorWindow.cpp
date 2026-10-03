@@ -24,6 +24,7 @@
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
+#include "Utils/Climate.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -192,12 +193,7 @@ void DrawIconFlag(ImVec2 center, float height, ImU32 color, bool filled)
 
 namespace
 {
-	// The editor can draw before globals are cached, so both fall back to the singleton.
-	RE::Calendar* GetCalendar()
-	{
-		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	}
-
+	// The editor can draw before globals are cached, so this falls back to the singleton.
 	RE::UI* GetUI()
 	{
 		return globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
@@ -1270,7 +1266,7 @@ void EditorWindow::RenderUI()
 			Util::AddTooltip(IsTimePaused() ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
 		}
 
-		auto calendar = GetCalendar();
+		auto calendar = Util::Climate::GetCalendar();
 		if (calendar && calendar->gameHour && calendar->timeScale) {
 			ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
 			ImGui::SetNextItemWidth(halfSliderWidth);
@@ -2064,7 +2060,7 @@ void EditorWindow::PauseTime()
 {
 	if (timePaused)
 		return;
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (calendar && calendar->timeScale) {
 		savedTimeScale = calendar->timeScale->value;
 		calendar->timeScale->value = 0.0f;
@@ -2077,7 +2073,7 @@ void EditorWindow::ResumeTime()
 {
 	if (!timePaused)
 		return;
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (calendar && calendar->timeScale) {
 		calendar->timeScale->value = savedTimeScale;
 		timePaused = false;
@@ -2087,7 +2083,7 @@ void EditorWindow::ResumeTime()
 
 void EditorWindow::ResetTimeScale()
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->timeScale)
 		return;
 	if (timePaused)
@@ -2119,7 +2115,7 @@ namespace
 
 void EditorWindow::SetTimeRunningForMenu(bool a_needsRunningTime)
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->timeScale)
 		return;
 
@@ -2173,7 +2169,7 @@ bool EditorWindow::MenuOpenCloseEventHandler::Register()
 
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
 	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
@@ -2243,7 +2239,7 @@ void EditorWindow::DrawTimeScaleSlider(const char* id, RE::Calendar* calendar)
 
 void EditorWindow::DrawTimeControls()
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour || !calendar->timeScale)
 		return;
 

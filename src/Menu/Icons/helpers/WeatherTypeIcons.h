@@ -22,6 +22,7 @@
 #include "Menu/Icons/helpers/IconFonts.h"
 
 #include "RE/T/TESWeather.h"
+#include "Utils/Format.h"
 
 #include <algorithm>
 #include <cctype>
@@ -75,9 +76,7 @@ namespace WeatherTypeIcons
 		if (label.empty())
 			return std::nullopt;
 
-		std::string lower(label);
-		std::transform(lower.begin(), lower.end(), lower.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const std::string lower = Util::ToLower(std::string(label));
 
 		auto has = [&](std::string_view token) {
 			return lower.find(token) != std::string::npos;

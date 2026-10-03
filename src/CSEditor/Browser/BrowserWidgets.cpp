@@ -8,7 +8,9 @@
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdio>
+#include <format>
 #include <utility>
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -464,6 +466,28 @@ namespace BrowserUI
 		const float target = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width;
 		if (target > ImGui::GetCursorPosX())
 			ImGui::SetCursorPosX(target);
+	}
+
+	SelectionAction SelectionFooter(size_t selected, size_t selectedShown, const char* clearTooltip)
+	{
+		assert(selectedShown <= selected);
+		auto action = SelectionAction::None;
+		ImGui::AlignTextToFramePadding();
+		if (Link("##selectShown", T(TKEY("scene_copy_select_shown"), "Select all shown")))
+			action = SelectionAction::SelectShown;
+		if (selected == 0)
+			return action;
+
+		const size_t hidden = selected - selectedShown;
+		const auto label = hidden == 0 ? std::vformat(T(TKEY("scene_copy_selected"), "{} selected"), std::make_format_args(selected)) :
+		                                 std::vformat(T(TKEY("scene_copy_selected_hidden"), "{} selected · {} hidden"),
+											 std::make_format_args(selected, hidden));
+		const ImVec4 accent = Util::Colors::GetAccent();
+		RightAlign(MeasureChip(label.c_str(), true));
+		if (Chip("##clearTicks", label.c_str(), Icons::FA(ICON_FA_TIMES), nullptr, &accent))
+			action = SelectionAction::Clear;
+		Util::AddTooltip(clearTooltip);
+		return action;
 	}
 
 	float RowHeight()
