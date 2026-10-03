@@ -174,6 +174,14 @@ size_t SettingsOverrideManager::DiscoverDirectory(const std::filesystem::path& o
 				continue;
 			}
 
+			// Pack files are per-feature only; this is what keeps Advanced/General/Menu keys (e.g. compiler threads) unshippable.
+			// Checked against the build rather than load state: discovery runs before features load at boot.
+			if (const auto featureName = ParseBaselineFeatureName(entry.path()); !packId.empty() && !Feature::IsFeatureKnown(featureName)) {
+				logger::warn("Baseline file {} targets '{}', which is not a feature in this build; skipping", entry.path().string(), featureName);
+				ReportOverrideFailure(packId, featureName, "Feature is not part of this Community Shaders build");
+				continue;
+			}
+
 			try {
 				auto overrideInfo = LoadOverrideFile(entry.path(), packId);
 				if (overrideInfo) {
@@ -509,16 +517,11 @@ std::unique_ptr<SettingsOverrideManager::OverrideInfo> SettingsOverrideManager::
 		auto [modName, featureName] = packId.empty() ?
 		                                  ParseOverrideFilename(filePath.filename().string()) :
 		                                  std::pair<std::string, std::string>{ packId, ParseBaselineFeatureName(filePath) };
+		assert(packId.empty() || Feature::IsFeatureKnown(featureName));
 
 		// Validate mod name and feature name
 		if (modName.empty() || modName.length() > MAX_STRING_LENGTH) {
 			logger::info("Invalid mod name in override file: {}", filePath.string());
-			return nullptr;
-		}
-
-		// Pack files are per-feature only; this is what keeps Advanced/General/Menu keys (e.g. compiler threads) unshippable.
-		if (!packId.empty() && !Feature::FindFeatureByShortName(featureName)) {
-			logger::warn("Baseline file {} targets '{}', which is not a feature; skipping", filePath.string(), featureName);
 			return nullptr;
 		}
 
