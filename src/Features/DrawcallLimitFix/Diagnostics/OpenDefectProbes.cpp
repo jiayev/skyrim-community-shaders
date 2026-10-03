@@ -1,5 +1,8 @@
 #include "OpenDefectProbes.h"
 
+#include <DirectXPackedVector.h>
+#include <map>
+
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/VolumetricShadows.h"
@@ -13,11 +16,131 @@ namespace DCLF
  * running or not, so one run with CS_DCLF_TEST_TOGGLE gives both sides. The pixel is in the main target's
  * coordinates and scaled to the mask's size (iShadowMaskQuarter).
  */
+/**
+ * CS_DCLF_SHADOWMASK_PROBE=flicker: the sun's shadow mask every frame (a ring of staging copies, read three frames later):
+ * the share of its texels (every 4th in each direction) whose first channel moved by more than half since the frame before,
+ * the frame's flicker. Every 300 frames its mean, 99th percentile and maximum, the frames above 2%, and the worst few.
+ */
+void ProbeShadowMaskFlicker(bool a_running)
+{
+	struct Slot
+	{
+		winrt::com_ptr<ID3D11Texture2D> staging;
+		std::uint32_t frame = 0;
+		bool running = false, pending = false;
+	};
+	static std::array<Slot, 4> ring;
+	static std::uint32_t frame = 0;
+	static std::vector<float> previous;
+	static std::uint32_t previousFrame = ~0u;
+	static std::vector<float> flickers;
+	static std::vector<std::pair<float, std::uint32_t>> worst;
+	static std::uint32_t onFrames = 0;
+	static bool formatLogged = false;
+	auto* context = globals::d3d::context;
+	const auto& targets = globals::game::renderer->GetRuntimeData().renderTargets;
+	auto* mask = reinterpret_cast<ID3D11Texture2D*>(targets[RE::RENDER_TARGETS::kSHADOW_MASK].texture);
+	if (!mask)
+		return;
+	D3D11_TEXTURE2D_DESC desc{};
+	mask->GetDesc(&desc);
+	auto& slot = ring[frame % ring.size()];
+	// The slot's last copy, three frames old.
+	if (slot.pending) {
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(context->Map(slot.staging.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+			std::vector<float> texels;
+			texels.reserve(std::size_t(desc.Width / 4 + 1) * (desc.Height / 4 + 1));
+			for (std::uint32_t row = 0; row < desc.Height; row += 4) {
+				const auto* line = static_cast<const std::uint8_t*>(mapped.pData) + std::size_t(row) * mapped.RowPitch;
+				for (std::uint32_t column = 0; column < desc.Width; column += 4) {
+					float value = 0.0f;
+					switch (desc.Format) {
+					case DXGI_FORMAT_R16G16B16A16_FLOAT:
+					case DXGI_FORMAT_R16G16_FLOAT:
+					case DXGI_FORMAT_R16_FLOAT:
+						{
+							const std::size_t stride = desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : desc.Format == DXGI_FORMAT_R16G16_FLOAT ? 4 : 2;
+							std::uint16_t h;
+							std::memcpy(&h, line + column * stride, 2);
+							value = DirectX::PackedVector::XMConvertHalfToFloat(h);
+							break;
+						}
+					case DXGI_FORMAT_R8_UNORM:
+						value = line[column] / 255.0f;
+						break;
+					default:  // 4-byte texels, the first byte the first channel (RGBA8 and the like)
+						value = line[column * 4] / 255.0f;
+						break;
+					}
+					texels.push_back(value);
+				}
+			}
+			context->Unmap(slot.staging.get(), 0);
+			if (!formatLogged) {
+				formatLogged = true;
+				logger::info("[DCLF] shadow mask flicker: mask {}x{} format {}", desc.Width, desc.Height, static_cast<std::uint32_t>(desc.Format));
+			}
+			if (previousFrame + 1 == slot.frame && previous.size() == texels.size()) {
+				std::size_t moved = 0;
+				for (std::size_t t = 0; t < texels.size(); ++t)
+					moved += std::abs(texels[t] - previous[t]) > 0.5f ? 1 : 0;
+				const float flicker = 100.0f * float(moved) / float(texels.size());
+				flickers.push_back(flicker);
+				onFrames += slot.running ? 1 : 0;
+				worst.emplace_back(flicker, slot.frame);
+				std::sort(worst.begin(), worst.end(), std::greater<>());
+				if (worst.size() > 5)
+					worst.resize(5);
+				if (flickers.size() == 300) {
+					auto sorted = flickers;
+					std::sort(sorted.begin(), sorted.end());
+					double sum = 0;
+					std::size_t spikes = 0;
+					for (const float f : sorted) {
+						sum += f;
+						spikes += f > 2.0f ? 1 : 0;
+					}
+					std::string worstText;
+					for (const auto& [f, at] : worst)
+						worstText += fmt::format(" {:.1f}% at {};", f, at);
+					logger::info("[DCLF] shadow mask flicker over 300 frames (DCLF on {}): texels moved by > 0.5 since the frame before: mean {:.2f}%, 99th {:.2f}%, max {:.2f}%, {} frames above 2%; worst:{}",
+						onFrames, sum / 300.0, sorted[296], sorted.back(), spikes, worstText);
+					flickers.clear();
+					worst.clear();
+					onFrames = 0;
+				}
+			}
+			previous = std::move(texels);
+			previousFrame = slot.frame;
+		}
+		slot.pending = false;
+	}
+	if (!slot.staging) {
+		D3D11_TEXTURE2D_DESC stagingDesc = desc;
+		stagingDesc.MipLevels = stagingDesc.ArraySize = 1;
+		stagingDesc.SampleDesc = { 1, 0 };
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.BindFlags = 0;
+		stagingDesc.MiscFlags = 0;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (FAILED(globals::d3d::device->CreateTexture2D(&stagingDesc, nullptr, slot.staging.put())))
+			return;
+	}
+	context->CopySubresourceRegion(slot.staging.get(), 0, 0, 0, 0, mask, 0, nullptr);
+	slot.frame = frame;
+	slot.running = a_running;
+	slot.pending = true;
+	++frame;
+}
+
 void ProbeShadowMask(bool a_running)
 {
 	const std::string& pixel = DCLF::SwitchValue(DCLF::Switch::ShadowMaskProbe);
 	if (pixel.empty())
 		return;
+	if (pixel == "flicker")
+		return ProbeShadowMaskFlicker(a_running);
 	static winrt::com_ptr<ID3D11Texture2D> staging;
 	static std::uint32_t framesLeft = 0, frames = 0, x = 0, y = 0, bytes = 0;
 	static bool stagingRunning = false;
@@ -99,6 +222,9 @@ void ProbeShadowMaps(bool a_running)
 	};
 	static std::optional<Pending> pending;
 	static std::uint32_t frames = 0;
+	// The previous probe's sampled texels, per label and slice, and whether DCLF ran then: each probe is diffed against it.
+	static std::map<std::string, std::vector<float>> previous;
+	static bool previousRunning = false;
 	auto* context = globals::d3d::context;
 	if (pending) {
 		if (--pending->framesLeft)
@@ -114,6 +240,8 @@ void ProbeShadowMaps(bool a_running)
 					continue;
 				double sum = 0;
 				std::uint64_t cleared = 0, count = 0;
+				std::vector<float> texels;
+				texels.reserve(std::size_t(desc.Width / 4 + 1) * (desc.Height / 4 + 1));
 				for (std::uint32_t row = 0; row < desc.Height; row += 4) {
 					const auto* line = static_cast<const std::uint8_t*>(mapped.pData) + std::size_t(row) * mapped.RowPitch;
 					for (std::uint32_t column = 0; column < desc.Width; column += 4) {
@@ -127,10 +255,31 @@ void ProbeShadowMaps(bool a_running)
 						sum += depth;
 						cleared += depth >= 0.99999 ? 1 : 0;
 						++count;
+						texels.push_back(static_cast<float>(depth));
 					}
 				}
 				context->Unmap(a_texture, sub);
-				text += fmt::format(" {}slice {}: mean {:.5f}, {:.1f}% clear;", a_label, slice, sum / double(count), 100.0 * double(cleared) / double(count));
+				text += fmt::format(" {}slice {}: mean {:.5f}, {:.1f}% clear", a_label, slice, sum / double(count), 100.0 * double(cleared) / double(count));
+				// Against the previous probe, texel by texel: the share differing by more than 1e-3, and how many of those only
+				// one side has a caster at (the other clear).
+				auto& before = previous[fmt::format("{}{}", a_label, slice)];
+				if (before.size() == texels.size()) {
+					std::uint64_t differ = 0, oneSided = 0;
+					double largest = 0;
+					for (std::size_t t = 0; t < texels.size(); ++t) {
+						const double d = std::abs(double(texels[t]) - double(before[t]));
+						if (d > 1e-3) {
+							++differ;
+							oneSided += (texels[t] >= 0.99999f) != (before[t] >= 0.99999f) ? 1 : 0;
+						}
+						largest = std::max(largest, d);
+					}
+					text += fmt::format(" (against the last probe, DCLF {}: {:.2f}% differ, {:.2f}% caster on one side only, largest {:.4f})",
+						previousRunning == pending->running ? "unchanged" : pending->running ? "off -> on" : "on -> off", 100.0 * double(differ) / double(texels.size()),
+						100.0 * double(oneSided) / double(texels.size()), largest);
+				}
+				before = std::move(texels);
+				text += ";";
 			}
 		};
 		summarise(pending->depth.get(), pending->depthDesc, "");
@@ -153,6 +302,7 @@ void ProbeShadowMaps(bool a_running)
 			}
 		}
 		logger::info("[DCLF] shadow maps, DCLF {} (depth format {}):{}", pending->running ? "on" : "off", static_cast<std::uint32_t>(pending->depthDesc.Format), text);
+		previousRunning = pending->running;
 		pending.reset();
 		return;
 	}

@@ -289,6 +289,35 @@ namespace DCLF
 
 		state->width = target.Width;
 		state->height = target.Height;
+		if (FoliageParityOn()) {
+			auto foliage = std::make_shared<Resources::FoliageParity>();
+			foliage->width = target.Width;
+			foliage->height = target.Height;
+			const std::uint64_t pixels = std::uint64_t(target.Width) * target.Height;
+			for (std::uint32_t h = 0; h < 2; ++h) {
+				foliage->ids[h] = CreateWords(pixels, true, fmt::format("cs.dclf.foliage-ids{}", h).c_str());
+				foliage->colours[h] = CreateWords(pixels * kFoliageColourWords, true, fmt::format("cs.dclf.foliage-colours{}", h).c_str());
+				foliage->idsAddress[h] = AddressOf(device, *foliage->ids[h]);
+				foliage->coloursAddress[h] = AddressOf(device, *foliage->colours[h]);
+			}
+			foliage->results = CreateWords(kFoliageResultWords, true, "cs.dclf.foliage-results");
+			foliage->owners = CreateWords(pixels * 2, true, "cs.dclf.foliage-owners");
+			foliage->ownersIndex = foliage->owners->GetUAVShaderVisibleInfo(0).slot.index;
+			foliage->resultsAddress = AddressOf(device, *foliage->results);
+			foliage->program = ComputeProgram::Load(device, { .source = kFoliageParityShader, .constantWords = kFoliageParityConstantWords });
+			const std::uint32_t slots = host->FrameSlots();
+			for (std::uint32_t i = 0; i < slots; ++i)
+				foliage->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, std::uint64_t(kFoliageResultWords) * sizeof(std::uint32_t)));
+			foliage->readbackFrame.assign(slots, 0u);
+			if (!foliage->program || !foliage->resultsAddress || !foliage->idsAddress[0] || !foliage->idsAddress[1] || !foliage->coloursAddress[0] ||
+				!foliage->coloursAddress[1]) {
+				logger::warn("[DCLF] foliage parity: its program or buffers could not be created; off");
+			} else {
+				logger::info("[DCLF] foliage parity on: {}x{}, {} frame slots, tree wind {}", target.Width, target.Height, slots,
+					SwitchValue(Switch::FoliageParity) == "wind" ? "running" : "frozen");
+				state->foliage = std::move(foliage);
+			}
+		}
 
 		// The main pass's targets and depth, imported.
 		state->targetCount = targets.colorCount;

@@ -149,9 +149,11 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.inputs, shadow.skippedPipeline,
 				shadow.skippedTexture, shadow.records, (shadow.cpuMs + shadow.captureMs) / frames, shadow.captureMs / frames, shadow.prepareMs / frames, shadow.inputsMs / frames, shadow.blocksMs / frames,
 				shadow.executeMs / frames, shadow.claimMs / frames);
-			if (shadow.cullTested)
-				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} tested, {} drawn, {} rejected by the frustum",
-					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
+			if (shadow.cullTested || shadow.cullClass)
+				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} stood-in fading; "
+							 "{} tested, {} drawn, {} rejected by the frustum",
+					shadow.cullSampledView, shadow.cullSampledMode, shadow.cullClass, shadow.cullSunEntryOut, shadow.cullMinRadius, shadow.cullStoodInFading,
+					shadow.cullTested, shadow.cullDrawn, shadow.cullRejected);
 			if (shadow.sunEntryChecks)
 				logger::info("[DCLF] sun entry on the GPU: {} inputs checked against the CPU's verdict (sampled frames), {} differ{}", shadow.sunEntryChecks,
 					shadow.sunEntryMismatches, shadow.sunEntryMismatches ? " <- DIFFER" : " <- OK");

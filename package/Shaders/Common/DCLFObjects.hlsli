@@ -129,7 +129,18 @@ uint64_t DCLFAttribute(uint a_attribute, uint a_index, DCLFStream a_first, DCLFS
 	return address + uint64_t(a_index) * stride + offset;
 }
 
-float4 DCLFUnorm4(uint a_word) { return float4(a_word & 0xFF, (a_word >> 8) & 0xFF, (a_word >> 16) & 0xFF, a_word >> 24) / 255.0; }
+// An 8-bit UNORM as the input assembler converts it (the colour pass reads the same attributes through one): c / 255 correctly
+// rounded. A plain division is not (it compiles to a reciprocal and a multiply, half the values an ulp off), and a tree's vertex
+// moves along its normal by its colour: an ulp of either moves the Z-prepass's depth off the colour pass's, whose EQUAL test
+// then fails in stripes across the leaves. The product by 1/255 corrected by its fused remainder is exact for all 256 values.
+float4 DCLFUnorm4(uint a_word)
+{
+	precise float4 c = float4(a_word & 0xFF, (a_word >> 8) & 0xFF, (a_word >> 16) & 0xFF, a_word >> 24);
+	precise float4 q = c * (1.0 / 255.0);
+	precise float4 r = mad(-q, 255.0, c);
+	precise float4 result = mad(r, 1.0 / 255.0, q);
+	return result;
+}
 float2 DCLFHalf2(uint a_word) { return float2(f16tof32(a_word), f16tof32(a_word >> 16)); }
 
 // The draw's rows (DrawPipelines.h, kMaterialRow*, kPipelineRow*), for a pulled Lighting stage: the material row's PerMaterial

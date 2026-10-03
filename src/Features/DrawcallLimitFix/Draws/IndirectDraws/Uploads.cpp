@@ -280,6 +280,19 @@ namespace DCLF
 		// epoch (the draw fades specular and envmap by distance, LodFadeFrame).
 		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
 		uploads(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
+		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
+		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
+		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.
+		if (const auto& foliage = a_resources->foliage; foliage && !depthOnly) {
+			const std::uint32_t epoch = ++foliage->epoch, h = epoch & 1;
+			const std::uint32_t words[8] = { static_cast<std::uint32_t>(foliage->idsAddress[h]), static_cast<std::uint32_t>(foliage->idsAddress[h] >> 32),
+				static_cast<std::uint32_t>(foliage->coloursAddress[h]), static_cast<std::uint32_t>(foliage->coloursAddress[h] >> 32), foliage->width, foliage->height,
+				epoch & 0xFFu, foliage->ownersIndex };
+			uploads(a_resources->frameConstants, words, sizeof(words),
+				std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
+			static const std::array<std::uint32_t, kFoliageCounters> zeros{};
+			uploads(foliage->results, zeros.data(), sizeof(zeros), 0);
+		}
 
 		lap(3);
 		// Upload (the graph's upload pass runs ahead of every pass of this epoch). The worker's build staged its
@@ -646,6 +659,16 @@ namespace DCLF
 		}
 		if (!depthOnly) {
 			SunAccumulation::Get().GpuCascades(sunCascades);
+			{
+				// Frames whose sun test runs without cascades: every pass with the sun's bits draws unshadowed (right only when the
+				// sun did not accumulate).
+				static std::uint32_t commits = 0, empty = 0;
+				empty += sunCascades.empty() ? 1 : 0;
+				if (++commits == 300) {
+					logger::info("[DCLF] colour sun test: {} of 300 frames without the sun's cascades{}", empty, empty ? " <- NO CASCADES" : " <- OK");
+					commits = empty = 0;
+				}
+			}
 			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
 			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
 			localShadows = LocalShadowLights::Sample();

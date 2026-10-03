@@ -3,6 +3,131 @@
 
 namespace DCLF::Draws
 {
+	// CS_DCLF_FOLIAGE_PARITY: one frame's results (GpuLayouts.h, FoliageCounter), read back; render thread.
+	void FoliageParityReport(Resources::FoliageParity& a_foliage, std::uint32_t a_frame, const std::uint32_t* a_results)
+	{
+		auto sampleAt = [&](std::uint32_t a_base, std::uint32_t a_slot) { return a_results + kFoliageCounters + (a_base + a_slot) * kFoliageSampleWords; };
+		auto half2 = [](std::uint32_t a_word) {
+			auto half = [](std::uint16_t a_h) {
+				const std::uint32_t sign = (a_h >> 15) & 1, exponent = (a_h >> 10) & 0x1F, mantissa = a_h & 0x3FF;
+				const float value = exponent == 0 ? std::ldexp(float(mantissa), -24) :
+				                    exponent == 31 ? std::numeric_limits<float>::infinity() :
+				                                     std::ldexp(float(mantissa | 0x400), int(exponent) - 25);
+				return sign ? -value : value;
+			};
+			return std::pair{ half(static_cast<std::uint16_t>(a_word)), half(static_cast<std::uint16_t>(a_word >> 16)) };
+		};
+		const std::lock_guard lock(a_foliage.mutex);
+		++a_foliage.frames;
+		for (std::uint32_t c = 0; c < kFoliageCounters; ++c)
+			a_foliage.totals[c] += a_results[c];
+
+		// Within the frame: coverage against the Z-prepass, and motion. A defect at any count past a few pixels.
+		constexpr std::uint32_t kFlaggedInFrame = 16, kFlagged = 256;
+		const std::uint32_t coverage = a_results[kFoliageUnshaded] + a_results[kFoliageOtherObject], motion = a_results[kFoliageMotion];
+		if (coverage >= kFlaggedInFrame || motion >= kFlaggedInFrame) {
+			++a_foliage.inFrameFlagged;
+			// The first few, then the first of each report's span (the first are often the load's).
+			if (a_foliage.inFrameLogged < 10 || a_foliage.inFrameFlagged == 1) {
+				++a_foliage.inFrameLogged;
+				std::map<std::uint32_t, std::uint32_t> objects;  // the sampled defects by object: one object's draw, or edges everywhere
+				std::string samples;
+				const std::uint32_t count = std::min(a_results[kFoliageInFrameSampleCount], kFoliageInFrameSamples);
+				for (std::uint32_t s = 0; s < count; ++s) {
+					const std::uint32_t* sample = sampleAt(kFoliageInFrameSampleBase, s);
+					++objects[sample[2]];
+					if (s >= 8)
+						continue;
+					if (sample[1] == kFoliageMotion) {
+						const auto [mx, my] = half2(sample[5]);
+						samples += fmt::format("; ({},{}) motion: object {} albedo {:08X}, error {:.1f} px of ({:.1f}, {:.1f})", sample[0] & 0xFFFF, sample[0] >> 16, sample[2],
+							sample[3], std::bit_cast<float>(sample[4]), mx, my);
+					} else {
+						samples += fmt::format("; ({},{}) {}: owner {} (depth {:.7f}), colour pass {}", sample[0] & 0xFFFF, sample[0] >> 16,
+							sample[1] == kFoliageUnshaded ? "unshaded" : "another object", sample[2], std::bit_cast<float>(sample[4]), sample[3]);
+					}
+				}
+				std::vector<std::pair<std::uint32_t, std::uint32_t>> byCount(objects.begin(), objects.end());
+				std::ranges::sort(byCount, [](const auto& a, const auto& b) { return a.second > b.second; });
+				std::string tally = fmt::format("{} objects in {} samples:", byCount.size(), count);
+				for (std::size_t o = 0; o < byCount.size() && o < 8; ++o)
+					tally += fmt::format(" {}x{}", byCount[o].first, byCount[o].second);
+				logger::warn("[DCLF] foliage parity: frame tag {}: of {} owned pixels {} unshaded and {} shaded by another object; {} foliage pixels with a motion vector "
+							 "off a static object's ({} by more than 8 px); {}{}",
+					a_frame, a_results[kFoliageOwned], a_results[kFoliageUnshaded], a_results[kFoliageOtherObject], motion, a_results[kFoliageMotionFar], tally, samples);
+			}
+		}
+
+		// Near-white foliage: a frame well above the running average (a jump, not the scene's own white flowers).
+		{
+			const std::uint32_t white = a_results[kFoliageWhiteAlbedo] + a_results[kFoliageWhiteDiffuse];
+			a_foliage.whiteMax = std::max(a_foliage.whiteMax, white);
+			if (a_foliage.frames > 16 && white > 4.0 * a_foliage.whiteAverage + 1000.0) {
+				++a_foliage.whiteFlagged;
+				if (a_foliage.whiteLogged < 20) {
+					++a_foliage.whiteLogged;
+					std::string samples;
+					const std::uint32_t count = std::min(a_results[kFoliageWhiteSampleCount], kFoliageWhiteSamples);
+					for (std::uint32_t s = 0; s < count && s < 8; ++s) {
+						const std::uint32_t* sample = sampleAt(kFoliageWhiteSampleBase, s);
+						samples += fmt::format("; ({},{}) object {} albedo {:08X} diffuse {:08X}", sample[0] & 0xFFFF, sample[0] >> 16, sample[2], sample[3], sample[4]);
+					}
+					logger::warn("[DCLF] foliage parity: frame tag {}: {} near-white foliage pixels ({} albedo, {} diffuse) against an average of {:.0f}{}", a_frame,
+						white, a_results[kFoliageWhiteAlbedo], a_results[kFoliageWhiteDiffuse], a_foliage.whiteAverage, samples);
+				}
+			}
+			a_foliage.whiteAverage = a_foliage.frames <= 16 ? white : 0.95 * a_foliage.whiteAverage + 0.05 * white;
+		}
+
+		// Against the frame before, reprojected: a frame whose foliage changes colour or flashes brighter all at once is a jump of
+		// these over their running average (the camera's own changes - shadows sweeping, specular angles - are the average).
+		{
+			const std::uint32_t changed = a_results[kFoliageRecoloured] + a_results[kFoliageBrightened] + a_results[kFoliageWhitened];
+			a_foliage.changeMax = std::max(a_foliage.changeMax, changed);
+			if (a_foliage.frames > 16 && changed >= kFlagged && changed > 4.0 * a_foliage.changeAverage + 1000.0) {
+				++a_foliage.flagged;
+				if (a_foliage.logged < 30) {
+					++a_foliage.logged;
+					std::map<std::uint32_t, std::uint32_t> objects;
+					std::string samples;
+					const std::uint32_t count = std::min(a_results[kFoliageFrameSampleCount], kFoliageFrameSamples);
+					for (std::uint32_t s = 0; s < count; ++s) {
+						const std::uint32_t* sample = sampleAt(kFoliageFrameSampleBase, s);
+						++objects[sample[2]];
+						if (s >= 8)
+							continue;
+						static const char* kKinds[] = { "", "vanished", "appeared", "recoloured", "whitened" };
+						const auto [mx, my] = half2(sample[7]);
+						samples += fmt::format("; ({},{}) {} object {}: diffuse {:08X} from {:08X}, specular {:08X} from {:08X}, motion ({:.1f}, {:.1f})", sample[0] & 0xFFFF,
+							sample[0] >> 16, sample[1] == kFoliageBrightened ? "brightened" : kKinds[std::min(sample[1], 4u)], sample[2], sample[3], sample[4], sample[5],
+							sample[6], mx, my);
+					}
+					logger::warn("[DCLF] foliage parity: frame tag {}: {} of {} foliage pixels changed from where they were the frame before ({} recoloured, {} brightened, "
+								 "{} whitened; {} vanished, {} appeared) against an average of {:.0f}; {} objects sampled{}",
+						a_frame, changed, a_results[kFoliageCompared], a_results[kFoliageRecoloured], a_results[kFoliageBrightened], a_results[kFoliageWhitened],
+						a_results[kFoliageVanished], a_results[kFoliageAppeared], a_foliage.changeAverage, objects.size(), samples);
+				}
+			}
+			a_foliage.changeAverage = a_foliage.frames <= 16 ? changed : 0.95 * a_foliage.changeAverage + 0.05 * changed;
+		}
+
+		if (a_foliage.frames % 300 == 0) {
+			const double n = 300.0;
+			const auto& t = a_foliage.totals;
+			logger::info("[DCLF] foliage parity over 300 frames: within the frame {} flagged; per frame {:.0f} owned, {:.1f} unshaded, {:.1f} by another object, "
+						 "{:.1f} with their motion off a static object's ({:.1f} by more than 8 px); near white: {} jumps, average {:.0f}, max {}; against the frame "
+						 "before, reprojected: {} jumps (average {:.0f}, max {}), per frame {:.0f} compared, {:.1f} recoloured, {:.1f} brightened, {:.1f} whitened, "
+						 "{:.1f} vanished, {:.1f} appeared",
+				a_foliage.inFrameFlagged, t[kFoliageOwned] / n, t[kFoliageUnshaded] / n, t[kFoliageOtherObject] / n, t[kFoliageMotion] / n, t[kFoliageMotionFar] / n,
+				a_foliage.whiteFlagged, a_foliage.whiteAverage, a_foliage.whiteMax, a_foliage.flagged, a_foliage.changeAverage, a_foliage.changeMax,
+				t[kFoliageCompared] / n, t[kFoliageRecoloured] / n, t[kFoliageBrightened] / n, t[kFoliageWhitened] / n, t[kFoliageVanished] / n,
+				t[kFoliageAppeared] / n);
+			a_foliage.totals = {};
+			a_foliage.flagged = a_foliage.inFrameFlagged = a_foliage.whiteFlagged = 0;
+			a_foliage.whiteMax = a_foliage.changeMax = 0;
+		}
+	}
+
 	class MainOpaquePass final : public org::TypedRenderGraphPass<MainOpaquePass, PreparedDraws, PassBindings>
 	{
 	public:
@@ -36,6 +161,14 @@ namespace DCLF::Draws
 			} else {
 				// Read by the input assembler (the face draws' second stream), after the commit's uploads into it.
 				a_builder.VertexBuffer(resources->scene->facePositions);
+				// CS_DCLF_FOLIAGE_PARITY: the alpha-tested draws write what each pixel shows, through the buffers' addresses.
+				if (const auto& foliage = resources->foliage) {
+					const std::span<const org::UavView> noUavs{};
+					for (std::uint32_t h = 0; h < 2; ++h) {
+						a_builder.UnorderedAccess(foliage->ids[h], noUavs);
+						a_builder.UnorderedAccess(foliage->colours[h], noUavs);
+					}
+				}
 			}
 			for (const auto& frameBuffer : resources->frameBuffers)
 				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
@@ -853,6 +986,155 @@ namespace DCLF::Draws
 		RenderGraphRuntime::Segment segment;
 	};
 
+	struct FoliageParityBindings
+	{
+		org::DeclaredViewToken results, owners, depth;
+	};
+	struct FoliageParityPrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		FoliageParityConstants constants{};
+		std::uint32_t groupsX = 0, groupsY = 0;
+	};
+
+	/**
+	 * @brief CS_DCLF_FOLIAGE_PARITY's compare pass (FoliageParityCS.hlsl), after the colour pass: this frame's pixels of the
+	 * alpha-tested draws against the frame before's, into the results (GpuLayouts.h, FoliageCounter).
+	 */
+	class FoliageParityPass final : public org::TypedRenderGraphPass<FoliageParityPass, FoliageParityPrepared, FoliageParityBindings>
+	{
+	public:
+		explicit FoliageParityPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		FoliageParityBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const std::span<const org::SrvView> noViews{};  // read through their addresses
+			const auto& foliage = *resources->foliage;
+			for (std::uint32_t h = 0; h < 2; ++h) {
+				a_builder.ShaderResource(foliage.ids[h], noViews);
+				a_builder.ShaderResource(foliage.colours[h], noViews);
+			}
+			FoliageParityBindings bindings{};
+			bindings.results = a_builder.UnorderedAccess(foliage.results).View();
+			bindings.owners = a_builder.UnorderedAccess(foliage.owners).View();
+			bindings.depth = a_builder.ShaderResource(resources->nativeDepth).View();
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		FoliageParityPrepared Prepare(const FoliageParityBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			FoliageParityPrepared prepared{};
+			const auto& foliage = *resources->foliage;
+			auto& constants = prepared.constants;
+			for (std::uint32_t h = 0; h < 2; ++h) {
+				constants.ids[h] = foliage.idsAddress[h];
+				constants.colours[h] = foliage.coloursAddress[h];
+			}
+			constants.frameBlock = resources->frameConstantsAddress + std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame);
+			constants.resultsIndex = CaptureViewIndex(a_preparation, a_bindings.results);
+			constants.ownersIndex = CaptureViewIndex(a_preparation, a_bindings.owners);
+			constants.depthIndex = CaptureViewIndex(a_preparation, a_bindings.depth);
+			constants.width = foliage.width;
+			constants.height = foliage.height;
+			prepared.program = foliage.program;
+			prepared.groupsX = (foliage.width + 7) / 8;
+			prepared.groupsY = (foliage.height + 7) / 8;
+			return prepared;
+		}
+
+		static void Record(const FoliageParityBindings&, const FoliageParityPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kFoliageParityConstantWords, reinterpret_cast<const std::uint32_t*>(&a_frame.constants));
+			commands.Dispatch(a_frame.groupsX, a_frame.groupsY, 1);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
+	struct FoliageReadbackBindings
+	{
+		org::ResourceBindingToken results;
+	};
+	struct FoliageReadbackPrepared
+	{
+		std::shared_ptr<Resources::FoliageParity> foliage;
+	};
+
+	/**
+	 * @brief CS_DCLF_FOLIAGE_PARITY's results, copied to the frame slot's host buffer; what that buffer held from the slot's last
+	 * frame (finished by now: the slot is the host's) is read first and reported (FoliageParityReport).
+	 */
+	class FoliageReadbackPass final : public org::TypedRenderGraphPass<FoliageReadbackPass, FoliageReadbackPrepared, FoliageReadbackBindings>
+	{
+	public:
+		explicit FoliageReadbackPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		FoliageReadbackBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			FoliageReadbackBindings bindings{};
+			bindings.results = a_builder.CopySource(resources->foliage->results);
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		FoliageReadbackPrepared Prepare(const FoliageReadbackBindings&, const org::PassPrepareContext&) const
+		{
+			FoliageReadbackPrepared prepared{};
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::MainOpaque);
+			if (!frame)
+				return prepared;
+			prepared.foliage = resources->foliage;
+			return prepared;
+		}
+
+		static void Record(const FoliageReadbackBindings& a_bindings, const FoliageReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.foliage)
+				return;
+			auto& foliage = *a_frame.foliage;
+			const std::uint32_t slot = a_recording.FrameSlot();
+			if (slot >= foliage.readback.size())
+				return;
+			auto resource = foliage.readback[slot]->GetAPIResource();
+			if (foliage.readbackFrame[slot]) {
+				void* mapped = nullptr;
+				resource.Map(&mapped);
+				if (mapped) {
+					const auto* results = static_cast<const std::uint32_t*>(mapped);
+					FoliageParityReport(foliage, results[kFoliageEpochTag], results);
+					resource.Unmap(0, 0);
+				}
+			}
+			a_recording.Commands().CopyBufferRegion(resource.GetHandle(), 0, a_recording.Resolve(a_bindings.results).GetHandle(), 0,
+				std::uint64_t(kFoliageResultWords) * sizeof(std::uint32_t));
+			foliage.readbackFrame[slot] = 1;
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
 	struct ProbeBindings
 	{
 		std::array<org::ResourceBindingToken, kColorTargets> sources;
@@ -1491,6 +1773,14 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
+			if (const auto& foliage = resources->foliage) {
+				for (std::uint32_t h = 0; h < 2; ++h) {
+					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.foliage-ids{}", h)), foliage->ids[h]);
+					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.foliage-colours{}", h)), foliage->colours[h]);
+				}
+				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.foliage-results"), foliage->results);
+				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.foliage-owners"), foliage->owners);
+			}
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), resources->visibility);
 			if (resources->frustum)
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frustum"), resources->frustum);
@@ -1574,6 +1864,15 @@ namespace DCLF::Draws
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.probe-after",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, colourSegment, true)))
 						.Epoch(colour));
+			if (resources->foliage) {
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.foliage-parity",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<FoliageParityPass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(colour));
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.foliage-readback",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<FoliageReadbackPass>(resources)))
+						.Epoch(colour));
+			}
 			// The two-phase tail, all of it inside the depth segment and all of it in this order:
 			//
 			//   build-draws (phase 1, against the HZB the previous frame left)

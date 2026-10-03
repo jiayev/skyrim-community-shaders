@@ -323,6 +323,10 @@ namespace DCLF
 			// other inputs (PulledLightingSource).
 			if (a_pulled && a_sourceName == kSourcePath)
 				request.defines.push_back({ L"DCLF_PULLED_ROWS", L"1" });
+			// CS_DCLF_FOLIAGE_PARITY: the colour pass's alpha-tested draws write what each pixel shows, and the Z-prepass's which of
+			// them owns its depth (Lighting.hlsl).
+			if (a_pixel && a_depthOnly == a_pulled && a_sourceName == kSourcePath && FoliageParityOn())
+				request.defines.push_back({ L"DCLF_FOLIAGE_PARITY", L"1" });
 			// The first few define sets, to reproduce builds with the DXC command line.
 			static std::atomic<std::uint32_t> logged = 0;
 			if (logged.fetch_add(1) < 4) {

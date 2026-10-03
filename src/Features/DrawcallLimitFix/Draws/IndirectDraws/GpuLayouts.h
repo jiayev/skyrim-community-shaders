@@ -79,7 +79,8 @@ namespace DCLF::Draws
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
 	constexpr std::uint32_t kNoSkip = ~0u;
-	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; [3]-[5] and [16] free.
+	// BuildDrawsCS's counter words: [0] drawn, [1] culled, [2] tested; a shadow view's [3] outside the sun's entry, [4] small, [5]
+	// stood-in fading, [16] of its caster class.
 	constexpr std::uint32_t kCountWords = 28;
 	/** @brief A count buffer's worth of zeros: what an epoch uploads to reset the counters it appends through. */
 	inline constexpr std::uint32_t kZeroCounts[kCountWords] = {};
@@ -122,6 +123,63 @@ namespace DCLF::Draws
 	static_assert(sizeof(TreeWindFrameRow) == 64);
 	constexpr std::uint32_t kTreeWindConstantWords = sizeof(TreeWindConstants) / 4;
 	constexpr std::uint32_t kTreeWindGroup = 64;
+	/*
+	 * CS_DCLF_FOLIAGE_PARITY (FoliageParityCS.hlsl): the colour pass's alpha-tested draws write each pixel they shade - its object
+	 * (index + 1 in the low 24 bits, the frame's low 8 bits above them, so a pixel no draw wrote this frame reads as none) and
+	 * its albedo and diffuse (RGBA8 each) - into the frame's pair of buffers, by the frame's parity; the compare pass reads
+	 * them against the frame before's.
+	 */
+	constexpr const char* kFoliageParityShader = "DrawcallLimitFix/FoliageParityCS.hlsl";
+	struct FoliageParityConstants
+	{
+		// Both pairs (by the epoch's parity): which is this frame's is the frame block's, as the colour pass read it.
+		std::uint64_t ids[2]{}, colours[2]{};
+		std::uint64_t frameBlock = 0;    // the colour epoch's words in the frame lighting block (PS b13, c14: DCLFFoliageParity)
+		std::uint32_t resultsIndex = 0;  // the results' UAV (RWByteAddressBuffer)
+		std::uint32_t ownersIndex = 0;   // the Z-prepass's owners (RWStructuredBuffer<uint64_t>), cleared as read
+		std::uint32_t depthIndex = 0;    // the main depth (SRV)
+		std::uint32_t padding0 = 0;
+		std::uint32_t width = 0, height = 0, padding1 = 0, padding2 = 0;
+	};
+	constexpr std::uint32_t kFoliageParityConstantWords = sizeof(FoliageParityConstants) / 4;
+	// The results (FoliageParityCS.hlsl): kFoliageCounters counters, then the samples, kFoliageSampleWords words each.
+	enum FoliageCounter : std::uint32_t
+	{
+		// Against the frame before (a still camera).
+		kFoliageCompared,    // pixels the frame before had a foliage object at
+		kFoliageVanished,    // ... and this frame has none of that object at or beside
+		kFoliageAppeared,    // pixels this frame has an object at that the frame before had none of at or beside
+		kFoliageRecoloured,  // the same object both frames, its albedo or diffuse moved by more than the pass's step
+		kFoliageWhitened,    // ... towards white (every albedo channel at least 0.85, from under 0.6)
+		kFoliageFrameSampleCount,
+		// Within the frame, whatever the camera does: the pixels whose depth an alpha-tested Z-prepass draw wrote (the closest
+		// fragment its alpha test kept: the owner), and of them those the colour pass shaded with no object or another one.
+		kFoliageOwned,
+		kFoliageUnshaded,
+		kFoliageOtherObject,
+		// This frame's foliage pixels whose albedo, or diffuse, is near white (every channel at least 0.85).
+		kFoliageWhiteAlbedo,
+		kFoliageWhiteDiffuse,
+		kFoliageEpochTag,  // the frame's tag, written by the pass
+		// Foliage pixels whose motion vector is more than a pixel (and more than 8) from a static object's: the trees' clocks are
+		// frozen, so the foliage is static.
+		kFoliageMotion,
+		kFoliageMotionFar,
+		kFoliageInFrameSampleCount,
+		kFoliageWhiteSampleCount,
+		// Against the frame before, reprojected: the lit colour (diffuse and specular) brighter by more than 0.3 in luminance.
+		kFoliageBrightened,
+		kFoliageCounters = 20
+	};
+	// A sample: x | y << 16, kind (its counter), then by kind - against the frame before: the object, its diffuse, the frame before's
+	// diffuse, its specular, the frame before's specular, its motion vector (half2 pixels); in-frame: the owner, the colour pass's
+	// object, the owner's depth, the albedo (unshaded, another object) or the object, its albedo, the motion vector's error
+	// (float pixels) and the motion vector (motion); near white: the object, its albedo and diffuse.
+	constexpr std::uint32_t kFoliageSampleWords = 8, kFoliageFrameSamples = 24, kFoliageInFrameSamples = 32, kFoliageWhiteSamples = 16;
+	constexpr std::uint32_t kFoliageFrameSampleBase = 0, kFoliageInFrameSampleBase = kFoliageFrameSampleBase + kFoliageFrameSamples,
+							kFoliageWhiteSampleBase = kFoliageInFrameSampleBase + kFoliageInFrameSamples;
+	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageWhiteSampleBase + kFoliageWhiteSamples) * kFoliageSampleWords;
+	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
 	// What the tree buffers hold at first (they double as the scene needs).
 	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";

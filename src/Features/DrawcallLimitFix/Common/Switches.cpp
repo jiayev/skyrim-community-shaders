@@ -123,6 +123,8 @@ namespace DCLF
 			{ DepthTrace, "CS_DCLF_DEPTH_TRACE", D, N, false, "1: the D3D11 calls that touch the main depth buffer, for five frames" },
 			{ DrawTrace, "CS_DCLF_DRAW_TRACE", D, N, false, "1: the callers of the D3D11 draws" },
 			{ TargetProbe, "CS_DCLF_TARGET_PROBE", D, N, false, "x,y: the G-buffer targets at a pixel where the opaque pass ends (open defect)" },
+			{ FoliageParity, "CS_DCLF_FOLIAGE_PARITY", P, N, false,
+				"1: the alpha-tested colour draws' pixels (object, albedo, diffuse) against the frame before's, tree wind frozen; wind: not frozen" },
 			{ ShadowMaskProbe, "CS_DCLF_SHADOWMASK_PROBE", D, N, false, "x,y: the shadow mask at a pixel (open defect)" },
 			{ ShadowMapProbe, "CS_DCLF_SHADOWMAP_PROBE", D, N, false, "1: the shadow maps' contents (open defect)" },
 			{ GBufferProbe, "CS_DCLF_GBUFFER_PROBE", D, N, false, "x,y: the G-buffer at a pixel after DCLF's colour epoch (open defect)" },

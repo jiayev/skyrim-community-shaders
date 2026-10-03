@@ -600,6 +600,124 @@ namespace DCLF
 			return;
 		}
 		auto& buffers = *a_resources->scene;
+		// Both wind buffers whole, every listed tree's entry: non-finite values, an amplitude far past its model's, or a
+		// generation that is not its listing's (a draw then falls back to its record).
+		{
+			struct WholeReadback
+			{
+				std::array<winrt::com_ptr<ID3D11Buffer>, 2> staging;
+				std::uint32_t framesLeft = 0, entries = 0, frame = 0;
+				std::vector<std::pair<std::uint32_t, std::uint32_t>> members;  // object, tree
+				std::vector<TreeStatic> rows;
+				std::vector<std::uint32_t> generations;
+				std::vector<float> engineAmplitude;  // per tree slot: the node's +0x15C when the copy was taken
+				std::vector<std::uint8_t> nearList;   // per tree slot: on the manager's near list (+0x38) when the copy was taken
+				std::uint32_t nearCount = 0, nearListed = 0;
+				float nearLargestModel = 0.0f;
+			};
+			static std::optional<WholeReadback> whole;
+			if (whole) {
+				if (--whole->framesLeft == 0) {
+					std::string text;
+					for (std::uint32_t h = 0; h < 2; ++h) {
+						D3D11_MAPPED_SUBRESOURCE mapped{};
+						if (!whole->staging[h] || FAILED(context->Map(whole->staging[h].get(), 0, D3D11_MAP_READ, 0, &mapped)))
+							continue;
+						const auto* rows = static_cast<const float*>(mapped.pData);
+						std::uint32_t bad = 0, stale = 0, checked = 0;
+						float largest = 0.0f;
+						std::string first, worst;
+						for (const auto& [object, tree] : whole->members) {
+							const std::uint32_t entry = tree == kNodelessTree ? 0u : tree + 1;
+							if (entry >= whole->entries)
+								continue;
+							const float* e = rows + std::size_t(entry) * kTreeWindEntryRows * 4;
+							++checked;
+							const std::uint32_t generation = std::bit_cast<std::uint32_t>(e[8]);
+							const bool listed = tree != kNodelessTree && tree < whole->generations.size();
+							if (listed && generation != whole->generations[tree])
+								++stale;
+							const float model = listed && tree < whole->rows.size() ? std::abs(whole->rows[tree].modelAmplitude) : 0.0f;
+							if (std::abs(e[2]) > largest) {
+								largest = std::abs(e[2]);
+								worst = fmt::format("object {} tree {:#x}: on the engine's near list {}, faded {} amplitude {}, listing amplitude {}, the engine's now {}, model amplitude {}, animated {}, distance {:.0f}",
+									object, tree, listed && tree < whole->nearList.size() ? whole->nearList[tree] : 0u, e[2], e[7], listed && tree < whole->rows.size() ? whole->rows[tree].amplitude : 0.0f,
+									listed && tree < whole->engineAmplitude.size() ? whole->engineAmplitude[tree] : 0.0f, model,
+									listed && tree < whole->rows.size() ? whole->rows[tree].animated : 0u, std::sqrt(std::max(e[6], 0.0f)));
+							}
+							bool finite = true;
+							for (int k = 0; k < 8; ++k)
+								finite = finite && std::isfinite(e[k]);
+							if (!finite || std::abs(e[2]) > 1000.0f || std::abs(e[7]) > 1000.0f) {
+								if (bad++ == 0)
+									first = fmt::format("object {} tree {:#x}: params ({} {} {} {}), timers ({} {} {} {}), generation {:#x} (listing {:#x}), model amplitude {}", object, tree,
+										e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7], generation, listed ? whole->generations[tree] : 0u, model);
+							}
+						}
+						context->Unmap(whole->staging[h].get(), 0);
+						text += fmt::format("; buffer {}: {} entries checked, {} bad, {} with another generation, largest amplitude {}{}{}", h, checked, bad, stale, largest,
+							first.empty() ? "" : " (first " + first + ")", worst.empty() ? "" : " (largest: " + worst + ")");
+					}
+					logger::info("[DCLF] tree wind buffers (frame {}, read index {}): the engine's near list holds {} nodes, {} of them DCLF's trees, their largest model amplitude {}{}",
+						whole->frame, whole->frame + 1, whole->nearCount, whole->nearListed, whole->nearLargestModel, text);
+					whole.reset();
+				}
+			} else if ((treeEpochs % 120) == 60 && buffers.treeWind && !tables.treeObjects.empty() && buffers.treesHeld == tables.treesVersion) {
+				WholeReadback next;
+				next.entries = buffers.treeCapacity + 1;
+				next.frame = buffers.treeFrame;
+				for (const auto& member : tables.treeObjects)
+					next.members.emplace_back(member.object, member.tree);
+				next.rows = tables.trees;
+				next.generations.reserve(tables.trees.size());
+				for (const auto& row : tables.trees)
+					next.generations.push_back(row.generation);
+				{
+					// The manager's near list (+0x38, count +0x48), FUN_140437e50's selection this frame.
+					const auto manager = *reinterpret_cast<const std::uintptr_t*>(REL::Offset(0x20F6A18).address());
+					ankerl::unordered_dense::set<const void*> nearNodes;
+					if (manager) {
+						const auto* nodes = *reinterpret_cast<const void* const* const*>(manager + 0x38);
+						const std::uint32_t count = *reinterpret_cast<const std::uint32_t*>(manager + 0x48);
+						for (std::uint32_t n = 0; nodes && n < count; ++n)
+							nearNodes.insert(nodes[n]);
+						next.nearCount = count;
+					}
+					next.nearList.assign(tables.trees.size(), 0);
+					for (std::size_t t = 0; t < tables.trees.size(); ++t) {
+						const void* node = t < tables.treeNode.size() ? tables.treeNode[t] : nullptr;
+						if (node && nearNodes.contains(node)) {
+							next.nearList[t] = 1;
+							++next.nearListed;
+							next.nearLargestModel = std::max(next.nearLargestModel, std::abs(tables.trees[t].modelAmplitude));
+						}
+					}
+				}
+				next.engineAmplitude.reserve(tables.trees.size());
+				for (std::size_t t = 0; t < tables.trees.size(); ++t) {
+					const void* node = t < tables.treeNode.size() ? tables.treeNode[t] : nullptr;
+					next.engineAmplitude.push_back(node ? *reinterpret_cast<const float*>(static_cast<const std::byte*>(node) + 0x15C) : 0.0f);
+				}
+				const UINT bytes = static_cast<UINT>(std::uint64_t(next.entries) * kTreeWindEntryRows * 16);
+				for (std::uint32_t h = 0; h < 2; ++h) {
+					D3D11_BUFFER_DESC sourceDesc{};
+					sourceDesc.ByteWidth = bytes;
+					sourceDesc.Usage = D3D11_USAGE_DEFAULT;
+					sourceDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+					sourceDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+					sourceDesc.StructureByteStride = sizeof(std::uint32_t);
+					const auto source = buffers.treeWindRows[h] ? RenderGraphRuntime::Get().WrapBuffer(*buffers.treeWindRows[h], sourceDesc) : nullptr;
+					D3D11_BUFFER_DESC desc{};
+					desc.ByteWidth = bytes;
+					desc.Usage = D3D11_USAGE_STAGING;
+					desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+					if (source && SUCCEEDED(globals::d3d::device->CreateBuffer(&desc, nullptr, next.staging[h].put())))
+						context->CopyResource(next.staging[h].get(), source.get());
+				}
+				next.framesLeft = 3;
+				whole = std::move(next);
+			}
+		}
 		if ((treeEpochs++ % 120) != 0 || !buffers.treeWind || tables.treeObjects.empty() || buffers.treesHeld != tables.treesVersion)
 			return;
 		// The first 64 members, each one's tree entry (TreeParams and WindTimers, 32 bytes) of the wind buffer this frame's
