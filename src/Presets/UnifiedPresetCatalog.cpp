@@ -62,6 +62,15 @@ namespace
 		return ToLower(haystack).find(needleLower) != std::string::npos;
 	}
 
+	/** @brief Sets manifest[objectKey][entryKey], creating the object when missing, and writes the manifest atomically. */
+	bool WriteManifestFlag(const std::filesystem::path& manifestPath, json& manifest, const char* objectKey, const std::string& entryKey, bool value)
+	{
+		if (!manifest.contains(objectKey) || !manifest[objectKey].is_object())
+			manifest[objectKey] = json::object();
+		manifest[objectKey][entryKey] = value;
+		return Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest");
+	}
+
 	std::filesystem::path ResolveRelative(const std::filesystem::path& root, const std::string& rel)
 	{
 		if (rel.empty())
@@ -785,11 +794,7 @@ bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packI
 		return false;
 	}
 
-	if (!manifest.contains(kDisableAtBootKey) || !manifest[kDisableAtBootKey].is_object())
-		manifest[kDisableAtBootKey] = json::object();
-	manifest[kDisableAtBootKey][featureShortName] = disabled;
-
-	if (!Util::FileHelpers::WriteJsonAtomically(manifestPath, manifest, 4, "preset pack manifest"))
+	if (!WriteManifestFlag(manifestPath, manifest, kDisableAtBootKey, featureShortName, disabled))
 		return false;
 
 	pack->disableAtBoot[featureShortName] = disabled;
@@ -799,6 +804,38 @@ bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packI
 		pack->type = PresetType::Baseline;
 
 	logger::info("[Presets] Pack '{}': {} '{}' at boot in manifest", packId, disabled ? "disable" : "enable", featureShortName);
+	return true;
+}
+
+void UnifiedPresetCatalog::LoadSceneControl() const
+{
+	const auto packRoot = GetActivePackRoot();
+	const auto manifest = packRoot.empty() ? json::object() : ReadPackManifest(packRoot);
+	const auto sceneControl = manifest.find(kSceneControlKey);
+	E11Handoff::ApplyManifest(sceneControl != manifest.end() ? *sceneControl : json::object());
+}
+
+bool UnifiedPresetCatalog::SetSceneControl(E11Handoff::Feature feature, bool handedOff)
+{
+	globals::features::effects11.SetHandedOff(feature, handedOff);
+
+	const auto packRoot = GetActivePackRoot();
+	const auto manifestPath = GetPackManifestPath(packRoot);
+	std::error_code ec;
+	if (packRoot.empty() || !std::filesystem::exists(manifestPath, ec))
+		return true;
+
+	std::string readError;
+	json manifest = ReadPackManifest(packRoot, &readError);
+	if (!readError.empty()) {
+		logger::warn("[Presets] Cannot update sceneControl for '{}': {}", activePackId, readError);
+		return false;
+	}
+	const std::string shortName(E11Handoff::GetShortName(feature));
+	if (!WriteManifestFlag(manifestPath, manifest, kSceneControlKey, shortName, handedOff))
+		return false;
+
+	logger::info("[Presets] Pack '{}': sceneControl '{}' = {} in manifest", activePackId, shortName, handedOff);
 	return true;
 }
 

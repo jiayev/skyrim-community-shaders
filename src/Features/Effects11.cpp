@@ -413,44 +413,47 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		dirLightColor = F3ToNi(dirLightColorF3);
 	}
 
-	{
-		auto& fogFarColor = colors[(uint)RE::TESWeather::ColorTypes::kFogFar];
+	// A preset handing fog to CS leaves the vanilla fog values for Exponential Height Fog's scene settings
+	if (!IsHandedOff(E11Handoff::Feature::HeightFog)) {
+		{
+			auto& fogFarColor = colors[(uint)RE::TESWeather::ColorTypes::kFogFar];
 
-		auto fogFarColorF3 = NiToF3(fogFarColor);
+			auto fogFarColorF3 = NiToF3(fogFarColor);
 
-		auto fogColorCurve = settingManager.GetInterpolatedTimeOfDayValue("FogColorCurve", "ENVIRONMENT");
-		auto fogColorMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogColorMultiplier", "ENVIRONMENT");
+			auto fogColorCurve = settingManager.GetInterpolatedTimeOfDayValue("FogColorCurve", "ENVIRONMENT");
+			auto fogColorMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogColorMultiplier", "ENVIRONMENT");
 
-		auto fogColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("FogColorFilter", "ENVIRONMENT");
-		auto fogColorFilterAmount = settingManager.GetInterpolatedTimeOfDayValue("FogColorFilterAmount", "ENVIRONMENT");
+			auto fogColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("FogColorFilter", "ENVIRONMENT");
+			auto fogColorFilterAmount = settingManager.GetInterpolatedTimeOfDayValue("FogColorFilterAmount", "ENVIRONMENT");
 
-		fogFarColorF3 = Curve(fogFarColorF3, fogColorCurve);
-		fogFarColorF3 = ColorFilter(fogFarColorF3, fogColorFilter, fogColorFilterAmount);
-		fogFarColorF3 = Intensity(fogFarColorF3, fogColorMultiplier);
+			fogFarColorF3 = Curve(fogFarColorF3, fogColorCurve);
+			fogFarColorF3 = ColorFilter(fogFarColorF3, fogColorFilter, fogColorFilterAmount);
+			fogFarColorF3 = Intensity(fogFarColorF3, fogColorMultiplier);
 
-		fogFarColor = F3ToNi(fogFarColorF3);
+			fogFarColor = F3ToNi(fogFarColorF3);
 
-		auto& fogNearColor = colors[(uint)RE::TESWeather::ColorTypes::kFogNear];
+			auto& fogNearColor = colors[(uint)RE::TESWeather::ColorTypes::kFogNear];
 
-		auto fogNearColorF3 = NiToF3(fogNearColor);
+			auto fogNearColorF3 = NiToF3(fogNearColor);
 
-		fogNearColorF3 = Curve(fogNearColorF3, fogColorCurve);
-		fogNearColorF3 = ColorFilter(fogNearColorF3, fogColorFilter, fogColorFilterAmount);
-		fogNearColorF3 = Intensity(fogNearColorF3, fogColorMultiplier);
+			fogNearColorF3 = Curve(fogNearColorF3, fogColorCurve);
+			fogNearColorF3 = ColorFilter(fogNearColorF3, fogColorFilter, fogColorFilterAmount);
+			fogNearColorF3 = Intensity(fogNearColorF3, fogColorMultiplier);
 
-		fogNearColor = F3ToNi(fogNearColorF3);
-	}
+			fogNearColor = F3ToNi(fogNearColorF3);
+		}
 
-	{
-		a_sky->fogPower *= settingManager.GetInterpolatedTimeOfDayValue("FogCurveMultiplier", "ENVIRONMENT");
-	}
+		{
+			a_sky->fogPower *= settingManager.GetInterpolatedTimeOfDayValue("FogCurveMultiplier", "ENVIRONMENT");
+		}
 
-	{
-		auto fogAmountMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogAmountMultiplier", "ENVIRONMENT");
-		fogAmountMultiplier = std::max(fogAmountMultiplier, FLT_MIN);
+		{
+			auto fogAmountMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogAmountMultiplier", "ENVIRONMENT");
+			fogAmountMultiplier = std::max(fogAmountMultiplier, FLT_MIN);
 
-		a_sky->fogNear /= fogAmountMultiplier;
-		a_sky->fogFar /= fogAmountMultiplier;
+			a_sky->fogNear /= fogAmountMultiplier;
+			a_sky->fogFar /= fogAmountMultiplier;
+		}
 	}
 
 	if (enableEffect) {

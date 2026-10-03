@@ -9,6 +9,7 @@
 #include <vector>
 #include <winrt/base.h>
 
+#include "Features/Effects11/SceneHandoff.h"
 #include "PresetCompatibility.h"
 
 /** @brief Discovers unified preset packs (Effects 11 and CS Presets payloads) plus orphan Effects 11 presets. */
@@ -34,6 +35,8 @@ public:
 	static constexpr const char* kPresetTypeKey = "type";
 	/** @brief Manifest object of feature short names → disabled-at-boot (same shape as Settings "Disable at Boot"). */
 	static constexpr const char* kDisableAtBootKey = "disableAtBoot";
+	/** @brief Manifest object of feature short names → handed from Effects 11 back to CS scene settings (E11Handoff). */
+	static constexpr const char* kSceneControlKey = "sceneControl";
 	/** @brief Default relative folder inside a pack that holds enbseries.ini + enbseries/. */
 	static constexpr const char* kEffects11PackSubdir = "effects11";
 	/** @brief Folder inside a pack holding baseline feature overwrites, one `<FeatureShortName>.json` per feature. */
@@ -162,6 +165,12 @@ public:
 	 * @return False when the pack is missing or the manifest could not be written.
 	 */
 	bool SetPackFeatureDisabledAtBoot(const std::string& packId, const std::string& featureShortName, bool disabled);
+
+	/** @brief Sets the Effects 11 handoff flags from the active pack's manifest sceneControl; no active pack hands nothing off. */
+	void LoadSceneControl() const;
+	/** @brief Sets a feature's Effects 11 handoff flag and writes it to the active pack's manifest, when there is one.
+	 *  @return False when the active pack's manifest could not be updated; the runtime flag is set either way. */
+	bool SetSceneControl(E11Handoff::Feature feature, bool handedOff);
 
 	/** @brief Writes a starter manifest for a pack folder that has none, so an exported Baseline shows up as a preset.
 	 *  @return True when a manifest exists afterwards. */

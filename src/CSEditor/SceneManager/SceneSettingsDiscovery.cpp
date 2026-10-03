@@ -387,6 +387,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	setOrErase(kPresetMetadataTagsKey, info.tags);
 	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
 	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
+	if (exportEffects11)
+		setOrErase(UnifiedPresetCatalog::kSceneControlKey, E11Handoff::ToManifest());
 
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
@@ -476,6 +478,8 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 	if (activePresetMetadata)
 		logger::info("[SceneSettings] Active scene preset: '{}'", activePresetMetadata->name);
 	RefreshTimeOfDayTransitionHours();
+	// Features the pack hands back from Effects 11 are driven by this layer, so they follow the same pack
+	UnifiedPresetCatalog::GetSingleton().LoadSceneControl();
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()

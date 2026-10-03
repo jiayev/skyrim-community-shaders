@@ -9,8 +9,11 @@
 #include "../../I18n/I18n.h"
 #include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
+#include "Features/Effects11.h"
+#include "Globals.h"
 #include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
+#include "Presets/UnifiedPresetCatalog.h"
 #include "SceneSettingsUI.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -279,6 +282,22 @@ namespace
 				"Overrides Base outdoors during {period}. Weather and location overrides still win over it.");
 		}
 	}
+
+	/** @brief Lets a preset author hand a feature Effects 11 replaces back to CS, saved to the active pack's manifest. */
+	void DrawE11Handoff(const std::string& featureShortName)
+	{
+		const auto& effects11 = globals::features::effects11;
+		const auto feature = E11Handoff::FromShortName(featureShortName);
+		if (!feature || !effects11.loaded || !effects11.enableEffect)
+			return;
+
+		bool handedOff = effects11.IsHandedOff(*feature);
+		if (ImGui::Checkbox(T(TKEY("e11_handoff"), "Control with Community Shaders"), &handedOff))
+			UnifiedPresetCatalog::GetSingleton().SetSceneControl(*feature, handedOff);
+		Util::AddTooltip(T(TKEY("e11_handoff_tooltip"),
+			"Effects 11 replaces this feature. Turn on to drive it from its Community Shaders settings and scene layers instead. "
+			"Saved to the active preset, and written by Effects 11 exports."));
+	}
 }
 
 void SceneLayerHeader::DrawBase(const std::string& featureShortName)
@@ -287,6 +306,7 @@ void SceneLayerHeader::DrawBase(const std::string& featureShortName)
 	Util::Text::WrappedSecondary("%s",
 		T(TKEY("layer_note_base"),
 			"Applies everywhere. The scene layers to the right override it while they match, and the narrowest one wins."));
+	DrawE11Handoff(featureShortName);
 
 	auto* manager = SceneSettingsManager::GetSingleton();
 	if (!manager || featureShortName.empty())
@@ -309,6 +329,7 @@ void SceneLayerHeader::DrawScene(const SceneContextId& context, const std::strin
 	const bool interior = layer == Layer::Interior || (layer == Layer::Location && Util::IsInterior());
 	DrawStack(layer, interior, featureShortName);
 	Util::Text::WrappedSecondary("%s", DescribeSceneLayer(*manager, context).c_str());
+	DrawE11Handoff(featureShortName);
 }
 
 #undef I18N_KEY_PREFIX

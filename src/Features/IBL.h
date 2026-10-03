@@ -73,7 +73,8 @@ public:
 		float SkyIBLSaturation;
 		float FogAmount;
 		uint DALCMode;
-		float pad0[2];
+		uint ENBSkyFalloff;
+		float pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -84,7 +85,7 @@ public:
 	PerFrame GetCommonBufferData() const;
 	/** @brief Returns true when IBL should be suppressed in the current scene per the DisableIn* toggles (loading screens, world map, interiors). */
 	bool IsDisabledForCurrentScene() const;
-	/** @brief Returns true when ENB is active with its own image based lighting enabled, overriding these settings. */
+	/** @brief Returns true when Effects 11 owns IBL (not handed off to CS) with its own image based lighting enabled, overriding these settings. */
 	bool IsManagedByENB() const;
 	/** @brief Returns the diffuse IBL spherical harmonics compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDiffuseIBLCS();

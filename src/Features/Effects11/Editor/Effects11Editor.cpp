@@ -753,6 +753,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const bool active = settingManager.IsCategoryEnabled(a_category);
 	const bool exteriorOnly = settingManager.IsCategoryExteriorOnly(a_category);
 	const bool weatherAware = settingManager.IsWeatherSystemEnabled() && settingManager.CategoryHasWeatherSupport(a_category);
+	const bool handedOff = E11Handoff::IsE11SettingHandedOff(a_category);
 
 	if (!settingsFilter.empty())
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -762,7 +763,9 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const std::string weatherTag = weatherAware ? EditTargetFile(a_category) : std::string();
 	const char* exteriorTag = exteriorOnly && IsInterior() ? T(TKEY("tag_exterior_only"), "Exterior only") : nullptr;
 	const char* offTag = active ? nullptr : T(TKEY("tag_off"), "Off");
-	Effects11UI::HeaderTags({ { weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
+	const char* sceneTag = handedOff ? T(TKEY("tag_scene"), "Scene") : nullptr;
+	Effects11UI::HeaderTags({ { sceneTag, Util::Colors::GetInfo() },
+		{ weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
 		{ exteriorTag, Util::Colors::GetWarning() },
 		{ offTag, Util::Colors::GetDisabled() } });
 
@@ -784,9 +787,11 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 		Util::TextUnformattedDisabled(a_description);
 	if (exteriorOnly && IsInterior())
 		Util::Text::WrappedWarning("%s", T(TKEY("exterior_only_note"), "These values only apply outdoors."));
+	if (handedOff)
+		Util::Text::WrappedWarning("%s", T(TKEY("handed_off_note"), "This preset hands this feature to Community Shaders scene settings, so these values have no effect."));
 	ImGui::PopTextWrapPos();
 
-	if (!active) {
+	if (!active && !handedOff) {
 		const auto [dependencyKey, dependencyCategory] = settingManager.GetCategoryDependency(a_category);
 		const uint32_t dependencyID = settingManager.GetSettingID(dependencyKey, dependencyCategory);
 		Util::Text::WrappedWarning("%s", T(TKEY("section_off"), "This section is switched off, so its values have no effect."));
@@ -813,7 +818,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 
 	if (Effects11UI::BeginPropertyTable("##rows")) {
 		for (const auto* setting : a_rows)
-			DrawSettingRow(*setting, active && usable);
+			DrawSettingRow(*setting, active && usable && !handedOff);
 		Effects11UI::EndPropertyTable();
 	}
 
@@ -909,7 +914,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	auto& settingManager = SettingManager::GetSingleton();
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
-	const bool editable = a_categoryActive && dependencyMet;
+	const bool editable = a_categoryActive && dependencyMet && !E11Handoff::IsE11SettingHandedOff(a_setting.category, a_setting.key);
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
 	bool labelHovered = false;
