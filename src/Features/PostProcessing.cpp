@@ -93,18 +93,20 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	auto drawEnabled = [this](const char* label, PostProcessFeature& feature) {
+	// Draws a read-only checkbox for a forced-on sub-feature and returns true. Otherwise callers bind
+	// `&feat->enabled` themselves: the scene catalog generator only recognises that form as a scene toggle.
+	auto drawForcedEnabled = [this](const char* label, PostProcessFeature& feature) {
 		const bool automatic = feature.IsAutoEnabled() ||
 		                       (&feature == GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure) && GetActivePhysicalCameraState());
+		if (!automatic)
+			return false;
 		bool active = feature.IsActive();
-		ImGui::BeginDisabled(automatic);
-		if (ImGui::Checkbox(label, &active))
-			feature.enabled = active;
+		ImGui::BeginDisabled();
+		ImGui::Checkbox(label, &active);
 		ImGui::EndDisabled();
-		if (automatic) {
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
-		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
+		return true;
 	};
 
 	if (pipelinePageNum == 0) {
@@ -114,7 +116,8 @@ void PostProcessing::DrawSettings()
 				auto displayName = feat->GetDisplayName();
 				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
-				drawEnabled("##Enabled", *feat);
+				if (!drawForcedEnabled("##Enabled", *feat))
+					ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
 				if (Icons::Button("##Bars", Icons::FA(ICON_FA_BARS))) {
 					pipelineFeatIdx = i;
@@ -154,7 +157,8 @@ void PostProcessing::DrawSettings()
 					ImGui::Text("%s", T("feature.post_processing.recompile_shaders_for_this_sub_feature_only", "Recompile shaders for this sub-feature only."));
 				ImGui::Separator();
 				ImGui::Spacing();
-				drawEnabled(T("feature.post_processing.enabled", "Enabled"), *feat);
+				if (!drawForcedEnabled(T("feature.post_processing.enabled", "Enabled"), *feat))
+					ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
 				if (feat->IsActive()) {
 					ImGui::Indent();
 					feat->DrawSettings();

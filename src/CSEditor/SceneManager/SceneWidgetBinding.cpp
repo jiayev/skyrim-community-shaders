@@ -1526,8 +1526,13 @@ bool SceneWidgetBinding::Guard::Finish(bool a_changed)
 	}
 	PopCompensatedItemWidth();
 
-	if (state == State::Unsupported)
+	if (state == State::Unsupported) {
+		// An untracked edit (e.g. a sub-feature's enabled toggle) still rewrites the base, so the cached apply
+		// document must go or the next scene apply replays the old value over it.
+		if (const auto* context = SceneWidgetInterceptor::GetArmedContext(); a_changed && context)
+			SceneSettingsManager::GetSingleton()->CaptureExternalFeatureChanges(context->feature);
 		return a_changed;
+	}
 	if (state == State::Baseline) {
 		if (a_changed) {
 			auto* manager = SceneSettingsManager::GetSingleton();
