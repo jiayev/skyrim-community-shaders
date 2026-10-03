@@ -328,11 +328,12 @@ PERSISTENT_CATEGORY_CONTROL_NAMES = {
     "SeparatorText",
 }
 
+# Scalar InputFloat is deliberately unmatched: the interceptor has no detour for it, so it stays hidden.
 DIRECT_UI_CONTROL_RE = re.compile(
     r"(?:ImGui|Util)::(Checkbox|InvertedCheckbox|CheckboxFlags|RadioButton|Combo|BeginCombo|"
     r"Drag(?:Float[234]?|Int[234]?|ScalarN?)|"
     r"Slider(?:Float[234]?|Int[234]?|ScalarN?|Angle)|"
-    r"Input(?:Float[234]?|Int[234]?|ScalarN?)|ColorEdit[34]|PercentageSlider)\s*\(")
+    r"Input(?:Float[234]|Int[234]?|ScalarN?)|ColorEdit[34]|PercentageSlider)\s*\(")
 
 SHIFT_UNIFIED_CONTROL_RE = re.compile(
     r"\bUtil::ShiftSlider\s*<\s*([234])\s*>\s*\(")
