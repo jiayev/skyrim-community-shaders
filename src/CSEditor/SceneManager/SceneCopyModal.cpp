@@ -5,11 +5,13 @@
 #include <bitset>
 #include <cassert>
 #include <format>
+#include <functional>
 #include <map>
 #include <optional>
 #include <ranges>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -52,6 +54,8 @@ namespace
 	constexpr float kPeriodDotRadiusEm = 0.16f;
 
 	constexpr size_t kSearchBufferSize = 256;
+	/// Decimals a float shows in the details, before trailing zeros are trimmed.
+	constexpr int kValueDecimals = 3;
 
 	constexpr ImGuiTableFlags kListTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
@@ -77,8 +81,17 @@ namespace
 		To
 	};
 
-	/** @brief A scene's glyph and its colour, resolved when the rows are built rather than every frame. */
-	struct SceneIcon
+	/** @brief How one setting fares in a copy; also the order the summary chips list them in. */
+	enum class CopyOutcome
+	{
+		Copy,
+		AlreadySet,
+		Dropped
+	};
+	constexpr std::array kOutcomes{ CopyOutcome::Copy, CopyOutcome::AlreadySet, CopyOutcome::Dropped };
+
+	/** @brief A glyph and its colour, resolved when the rows are built rather than every frame. */
+	struct TintedGlyph
 	{
 		Icons::GlyphRef glyph;
 		ImVec4 color;
@@ -89,7 +102,7 @@ namespace
 	{
 		SceneContextId scene;
 		std::string name;
-		SceneIcon icon;
+		TintedGlyph icon;
 		std::vector<CopySource> sets;
 		size_t settingCount = 0;
 		std::uint32_t weatherFlags = 0;
@@ -136,21 +149,30 @@ namespace
 		bool operator==(const CopyPlan&) const = default;
 	};
 
-	/** @brief One destination's dry-run rows, kept for the details table. */
-	struct DestinationCandidates
+	/** @brief One details-table row: a setting that fares the same way in every destination it names. */
+	struct DetailRow
 	{
+		std::string feature;
 		std::string name;
-		std::vector<CopyCandidate> candidates;
+		std::string value;
+		/// The destination's current value, which Overwrite would replace.
+		std::optional<std::string> previous;
+		CopyRejection rejection = CopyRejection::None;
+		CopyOutcome outcome = CopyOutcome::Copy;
+		size_t destinationCount = 0;
+		/// Newline-joined, ready for the tooltip.
+		std::string destinationNames;
 	};
 
 	/** @brief Setting counts across every destination, grouped the way the copy lands them. */
 	struct CopySummary
 	{
-		size_t willCopy = 0;
-		size_t alreadySet = 0;
-		size_t droppedTotal = 0;
+		std::array<size_t, kOutcomes.size()> counts{};
 		std::map<CopyRejection, size_t> dropped;
-		std::vector<DestinationCandidates> details;
+		/// Sorted by feature, so the table can head each run of rows with its feature.
+		std::vector<DetailRow> details;
+
+		size_t Count(CopyOutcome outcome) const { return counts[std::to_underlying(outcome)]; }
 	};
 
 	/** @brief One opening of the modal. Only the page that opened it draws it: a popup opened under one
@@ -159,7 +181,7 @@ namespace
 	{
 		SceneContextId page;
 		std::string pageName;
-		SceneIcon pageIcon;
+		TintedGlyph pageIcon;
 		char search[kSearchBufferSize]{};
 		/// Keyed by scene, so a ticked row stays ticked while a filter hides it.
 		std::set<SceneContextId> ticked;
@@ -174,6 +196,10 @@ namespace
 		bool pendingOpen = false;
 		/// Enter commits only from the search box or a row, never from a chip or button it would also press.
 		bool enterCommits = false;
+		/// The outcome chip narrowing the details table, if any.
+		std::optional<CopyOutcome> detailsFilter;
+		/// Set when a chip turns its filter on, so the rows it picks out are not left collapsed.
+		bool openDetails = false;
 		SceneSettingsManager::RevisionCache<std::vector<SceneRow>> rows;
 		SceneSettingsManager::RevisionCache<CopySummary> summary;
 		CopyPlan summaryPlan;
@@ -221,7 +247,7 @@ namespace
 	struct PreviewSide
 	{
 		std::string label;
-		SceneIcon icon;
+		TintedGlyph icon;
 	};
 
 	/** @brief Heading a scene's type is listed under. */
@@ -255,7 +281,7 @@ namespace
 	}
 
 	/** @brief A scene's own glyph: its weather class or location type, else its type's glyph. */
-	SceneIcon GetSceneIcon(const SceneContextId& scene)
+	TintedGlyph GetSceneIcon(const SceneContextId& scene)
 	{
 		const ImVec4 secondary = Util::Colors::GetSecondary();
 		switch (scene.type) {
@@ -331,27 +357,59 @@ namespace
 		return std::vformat(format, std::make_format_args(count));
 	}
 
-	/** @brief One details-table row: the setting, then its value, its old -> new change, or why it is dropped. */
-	void DrawCandidateRow(const CopyCandidate& candidate)
+	/** @brief A value as the details show it: strings unquoted, booleans as On / Off, floats without trailing zeros. */
+	std::string FormatValue(const json& value)
 	{
-		ImGui::TableNextRow();
-		ImGui::TableNextColumn();
-		if (candidate.compatible)
-			ImGui::TextUnformatted(candidate.displayName.c_str());
-		else
-			Util::Text::Disabled("%s", candidate.displayName.c_str());
+		if (value.is_string())
+			return value.get<std::string>();
+		if (value.is_boolean())
+			return value.get<bool>() ? T(TKEY("scene_copy_value_on"), "On") : T(TKEY("scene_copy_value_off"), "Off");
+		if (!value.is_number_float())
+			return value.dump();
+		auto text = std::format("{:.{}f}", value.get<double>(), kValueDecimals);
+		text.erase(text.find_last_not_of('0') + 1);
+		if (text.ends_with('.'))
+			text.pop_back();
+		return text;
+	}
 
-		ImGui::TableNextColumn();
-		const auto value = candidate.value.dump();
-		if (!candidate.compatible) {
-			// No arrow: nothing is going to happen to this row.
-			Util::Text::Disabled("%s", value.c_str());
-			ImGui::SameLine();
-			Util::Text::Warning("%s", GetRejectionText(candidate.rejection));
-		} else if (candidate.conflicts) {
-			ImGui::Text("%s -> %s", candidate.destinationValue->dump().c_str(), value.c_str());
-		} else {
-			ImGui::TextUnformatted(value.c_str());
+	/** @brief The glyph an outcome's chip and rows carry, in the outcome's colour. */
+	TintedGlyph GetOutcomeIcon(CopyOutcome outcome)
+	{
+		switch (outcome) {
+		case CopyOutcome::Copy:
+			return { Icons::FA(ICON_FA_CHECK), Util::Colors::GetSuccess() };
+		case CopyOutcome::AlreadySet:
+			return { Icons::FA(ICON_FA_SYNC_ALT), Util::Colors::GetInfo() };
+		default:
+			return { Icons::FA(ICON_FA_TIMES), Util::Colors::GetWarning() };
+		}
+	}
+
+	/** @brief The translated "{}" pattern an outcome's chip counts with. */
+	const char* GetOutcomeCountFormat(CopyOutcome outcome)
+	{
+		switch (outcome) {
+		case CopyOutcome::Copy:
+			return T(TKEY("scene_copy_will_copy"), "{} will copy");
+		case CopyOutcome::AlreadySet:
+			return T(TKEY("scene_copy_already_set"), "{} already set");
+		default:
+			return T(TKEY("scene_copy_dropped"), "{} dropped");
+		}
+	}
+
+	/** @brief What happens to one details row, for its glyph's tooltip. */
+	const char* GetDetailTooltip(const DetailRow& row)
+	{
+		switch (row.outcome) {
+		case CopyOutcome::Copy:
+			return T(TKEY("scene_copy_row_copy_tooltip"), "Copies into the destination.");
+		case CopyOutcome::AlreadySet:
+			return T(TKEY("scene_copy_row_already_set_tooltip"),
+				"The destination already holds this. Only Overwrite replaces it.");
+		default:
+			return GetRejectionText(row.rejection);
 		}
 	}
 
@@ -576,24 +634,46 @@ namespace
 	{
 		auto* manager = SceneSettingsManager::GetSingleton();
 		CopySummary summary;
+		// A setting that fares alike in several destinations is one row, so its key holds everything the row shows.
+		using RowKey = std::tuple<SceneSettingsManager::SettingIdentity, CopyOutcome, std::optional<std::string>, CopyRejection>;
+		std::map<RowKey, size_t> rowIndices;
 		for (const auto& destination : plan.destinations) {
-			auto candidates = manager->GetCopyCandidates(plan.source, destination.context);
+			const auto candidates = manager->GetCopyCandidates(plan.source, destination.context);
 			std::map<SceneSettingsContextRules::CopyGroupKey, std::vector<const CopyCandidate*>> groups;
 			for (const auto& candidate : candidates)
 				groups[SceneSettingsContextRules::GetCopyGroupKey(candidate.setting)].push_back(&candidate);
 			for (const auto& [groupKey, group] : groups) {
-				if (std::ranges::any_of(group, [](const auto* candidate) { return !candidate->compatible; })) {
-					for (const auto* candidate : group)
+				const auto outcome = std::ranges::any_of(group, std::logical_not{}, &CopyCandidate::compatible) ?
+				                         CopyOutcome::Dropped :
+				                     std::ranges::any_of(group, std::identity{}, &CopyCandidate::conflicts) ?
+				                         CopyOutcome::AlreadySet :
+				                         CopyOutcome::Copy;
+				summary.counts[std::to_underlying(outcome)] += group.size();
+				for (const auto* candidate : group) {
+					if (outcome == CopyOutcome::Dropped)
 						++summary.dropped[candidate->rejection];
-					summary.droppedTotal += group.size();
-				} else if (std::ranges::any_of(group, [](const auto* candidate) { return candidate->conflicts; })) {
-					summary.alreadySet += group.size();
-				} else {
-					summary.willCopy += group.size();
+					auto previous = outcome == CopyOutcome::AlreadySet && candidate->destinationValue ?
+					                    std::optional{ FormatValue(*candidate->destinationValue) } :
+					                    std::nullopt;
+					const auto [indexIt, inserted] = rowIndices.try_emplace(
+						RowKey{ candidate->setting, outcome, previous, candidate->rejection }, summary.details.size());
+					if (inserted)
+						summary.details.push_back({ .feature = SceneSettingsManager::GetFeatureDisplayName(
+														candidate->setting.featureShortName),
+							.name = candidate->displayName,
+							.value = FormatValue(candidate->value),
+							.previous = std::move(previous),
+							.rejection = candidate->rejection,
+							.outcome = outcome });
+					auto& row = summary.details[indexIt->second];
+					++row.destinationCount;
+					if (!row.destinationNames.empty())
+						row.destinationNames += '\n';
+					row.destinationNames += destination.name;
 				}
 			}
-			summary.details.push_back({ destination.name, std::move(candidates) });
 		}
+		std::ranges::stable_sort(summary.details, {}, &DetailRow::feature);
 		return summary;
 	}
 
@@ -682,11 +762,10 @@ namespace
 		ImGui::AlignTextToFramePadding();
 	}
 
-	/** @brief The scene's glyph in a font-sized box, so names line up whatever the glyph's width. */
-	void DrawSceneIcon(const SceneIcon& icon)
+	/** @brief A glyph in a font-sized box `height` tall, so the text after it lines up whatever the glyph's width. */
+	void DrawTintedGlyph(const TintedGlyph& icon, float height)
 	{
 		const float box = ImGui::GetFontSize();
-		const float height = ImGui::GetFrameHeight();
 		const ImVec2 min = ImGui::GetCursorScreenPos();
 		ImGui::Dummy(ImVec2(box, height));
 		Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), ImVec2(min.x, min.y + (height - box) * 0.5f),
@@ -745,7 +824,7 @@ namespace
 			}
 		}
 		EnterNameColumn(to);
-		DrawSceneIcon(row.icon);
+		DrawTintedGlyph(row.icon, ImGui::GetFrameHeight());
 		const char* live = T(TKEY("badge_live"), "LIVE");
 		const float badgeWidth = row.current ? Util::MeasureBadgeWidth(live) + ImGui::GetStyle().ItemSpacing.x : 0.0f;
 		BrowserUI::EllipsizedText(row.name.c_str(), std::max(1.0f, ImGui::GetContentRegionAvail().x - badgeWidth),
@@ -915,6 +994,14 @@ namespace
 			{ Icons::FA(ICON_FA_LAYER_GROUP), Util::Colors::GetSecondary() } };
 	}
 
+	/** @brief The dimmed arrow pointing from what a copy reads to what it writes. */
+	void DrawArrow()
+	{
+		const Icons::GlyphRef arrow = Icons::FA(ICON_FA_ANGLE_RIGHT);
+		Icons::FontGuard font(arrow);
+		Util::Text::Disabled("%s", arrow.utf8);
+	}
+
 	/** @brief Source chip, an arrow, then the destination chip; a hint stands in for the side not yet picked. */
 	void DrawPreview(const CopyPlan& plan, const std::vector<SceneRow>& rows, const SceneRow* cursorRow)
 	{
@@ -944,62 +1031,133 @@ namespace
 		BrowserUI::SectionLabel(T(TKEY("scene_copy_preview"), "Preview"));
 		drawSide("##source", source, nullptr);
 		ImGui::SameLine();
-		{
-			const Icons::GlyphRef arrow = Icons::FA(ICON_FA_ANGLE_RIGHT);
-			Icons::FontGuard font(arrow);
-			ImGui::AlignTextToFramePadding();
-			Util::Text::Disabled("%s", arrow.utf8);
-		}
+		ImGui::AlignTextToFramePadding();
+		DrawArrow();
 		ImGui::SameLine();
 		const ImVec4 accent = Util::Colors::GetAccent();
 		drawSide("##destination", destination, &accent);
 	}
 
-	/** @brief The counts as badges, the drop reasons in the dropped badge's tooltip, and the collapsible details table. */
-	void DrawSummary(const CopySummary& summary, bool picked)
+	/** @brief One outcome's count as a chip that narrows the details to its rows; Dropped's tooltip lists why. */
+	void DrawOutcomeChip(const CopySummary& summary, CopyOutcome outcome)
 	{
-		Util::Badge(FormatCount(T(TKEY("scene_copy_will_copy"), "{} will copy"), summary.willCopy).c_str(),
-			Util::Colors::GetSuccess());
-		ImGui::SameLine();
-		Util::Badge(FormatCount(T(TKEY("scene_copy_already_set"), "{} already set"), summary.alreadySet).c_str(),
-			Util::Colors::GetInfo());
-		if (summary.droppedTotal != 0) {
-			ImGui::SameLine();
-			Util::Badge(FormatCount(T(TKEY("scene_copy_dropped"), "{} dropped"), summary.droppedTotal).c_str(),
-				Util::Colors::GetWarning());
-			std::string reasons;
-			for (const auto& [rejection, count] : summary.dropped) {
-				const char* reason = GetRejectionText(rejection);
-				if (!reasons.empty())
-					reasons += '\n';
-				reasons += std::vformat(T(TKEY("scene_copy_dropped_reason"), "{} dropped: {}"),
-					std::make_format_args(count, reason));
+		const auto count = summary.Count(outcome);
+		const auto icon = GetOutcomeIcon(outcome);
+		const bool active = session.detailsFilter == outcome;
+		ImGui::PushID(static_cast<int>(outcome));
+		{
+			const Util::DisableGuard empty(count == 0);
+			if (BrowserUI::Chip("##outcome", FormatCount(GetOutcomeCountFormat(outcome), count).c_str(), icon.glyph,
+					&icon.color, active ? &icon.color : nullptr)) {
+				session.detailsFilter = active ? std::nullopt : std::optional{ outcome };
+				session.openDetails = !active;
 			}
-			Util::AddTooltip(reasons.c_str());
+		}
+		ImGui::PopID();
+
+		std::string tooltip;
+		if (outcome == CopyOutcome::Dropped)
+			for (const auto& [rejection, reasonCount] : summary.dropped) {
+				const char* reason = GetRejectionText(rejection);
+				tooltip += std::vformat(T(TKEY("scene_copy_dropped_reason"), "{} dropped: {}"),
+					std::make_format_args(reasonCount, reason));
+				tooltip += '\n';
+			}
+		tooltip += active ? T(TKEY("scene_copy_filter_clear_tooltip"), "Click to list every setting again.") :
+		                    T(TKEY("scene_copy_filter_tooltip"), "Click to list only these in the details.");
+		Util::AddTooltip(tooltip.c_str());
+	}
+
+	/** @brief One details row: outcome glyph and name, then the value, or the old value it replaces and the new.
+	 *  @param merged Whether the plan has several destinations, so the row says how many it stands for. */
+	void DrawDetailRow(const DetailRow& row, bool merged)
+	{
+		const char* tooltip = GetDetailTooltip(row);
+		const bool dropped = row.outcome == CopyOutcome::Dropped;
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		DrawTintedGlyph(GetOutcomeIcon(row.outcome), ImGui::GetTextLineHeight());
+		Util::AddTooltip(tooltip);
+		if (dropped)
+			Util::TextUnformattedDisabled(row.name.c_str());
+		else
+			ImGui::TextUnformatted(row.name.c_str());
+		if (merged) {
+			ImGui::SameLine();
+			Util::Text::Secondary("×%zu", row.destinationCount);
+			Util::AddTooltip(row.destinationNames.c_str());
 		}
 
+		ImGui::TableNextColumn();
+		if (row.previous) {
+			Util::TextUnformattedDisabled(row.previous->c_str());
+			ImGui::SameLine();
+			DrawArrow();
+			ImGui::SameLine();
+		}
+		if (dropped) {
+			Util::TextUnformattedDisabled(row.value.c_str());
+			Util::AddTooltip(tooltip);
+		} else {
+			ImGui::TextUnformatted(row.value.c_str());
+		}
+	}
+
+	/** @brief The collapsible table: the chip-filtered rows under a heading per feature, as tall as they need up to a cap. */
+	void DrawDetails(const CopySummary& summary, size_t destinationCount)
+	{
 		// Disabled rather than hidden, so picking a context does not shift the buttons.
-		const Util::DisableGuard unpicked(!picked);
+		const Util::DisableGuard unpicked(destinationCount == 0);
+		if (std::exchange(session.openDetails, false))
+			ImGui::SetNextItemOpen(true);
 		if (!ImGui::TreeNode("##details", "%s", T(TKEY("scene_copy_details"), "Details")))
 			return;
-		if (ImGui::BeginTable("##changes", 2, kDetailsTableFlags,
-				ImVec2(0.0f, ImGui::GetFontSize() * kDetailsHeightEm))) {
+
+		std::vector<const DetailRow*> rows;
+		for (const auto& row : summary.details)
+			if (!session.detailsFilter || row.outcome == *session.detailsFilter)
+				rows.push_back(&row);
+		auto sections = rows | std::views::chunk_by([](const DetailRow* lhs, const DetailRow* rhs) {
+			return lhs->feature == rhs->feature;
+		});
+		// Each feature heading and the column headers take a row as well.
+		const auto lineCount = rows.size() + static_cast<size_t>(std::ranges::distance(sections)) + 1;
+		const float lineHeight = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.0f;
+		const float maxHeight = ImGui::GetFontSize() * kDetailsHeightEm;
+		const bool scrolls = lineHeight * static_cast<float>(lineCount) > maxHeight;
+		if (ImGui::BeginTable("##changes", 2, scrolls ? kDetailsTableFlags : kDetailsTableFlags & ~ImGuiTableFlags_ScrollY,
+				ImVec2(0.0f, scrolls ? maxHeight : 0.0f))) {
 			ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_setting"), "Setting"));
 			ImGui::TableSetupColumn(T(TKEY("scene_page_copy_column_change"), "Change"));
 			ImGui::TableSetupScrollFreeze(0, 1);
 			ImGui::TableHeadersRow();
-			for (const auto& destination : summary.details) {
-				if (summary.details.size() > 1) {
-					ImGui::TableNextRow();
-					ImGui::TableNextColumn();
-					Util::TextUnformattedDisabled(destination.name.c_str());
-				}
-				for (const auto& candidate : destination.candidates)
-					DrawCandidateRow(candidate);
+			for (const auto section : sections) {
+				ImGui::TableNextRow();
+				ImGui::TableNextColumn();
+				BrowserUI::SectionLabel(section.front()->feature.c_str());
+				for (const auto* row : section)
+					DrawDetailRow(*row, destinationCount > 1);
 			}
 			ImGui::EndTable();
 		}
 		ImGui::TreePop();
+	}
+
+	/** @brief A chip per outcome count, then the details table they filter. */
+	void DrawSummary(const CopySummary& summary, size_t destinationCount)
+	{
+		// A filter whose rows went away would leave the table empty with nothing to click to clear it.
+		if (session.detailsFilter && summary.Count(*session.detailsFilter) == 0)
+			session.detailsFilter.reset();
+		for (const auto outcome : kOutcomes) {
+			// Unlike the other two, a zero drop count is not worth a chip.
+			if (outcome == CopyOutcome::Dropped && summary.Count(outcome) == 0)
+				continue;
+			if (outcome != kOutcomes.front())
+				ImGui::SameLine();
+			DrawOutcomeChip(summary, outcome);
+		}
+		DrawDetails(summary, destinationCount);
 	}
 
 	/** @brief Copy and Overwrite, each with the count it would write, then Cancel.
@@ -1007,9 +1165,11 @@ namespace
 	std::optional<CopyConflictPolicy> DrawButtons(const CopySummary& summary, bool commitRequested)
 	{
 		std::optional<CopyConflictPolicy> decision;
-		const bool canCopy = summary.willCopy != 0;
+		const auto copyCount = summary.Count(CopyOutcome::Copy);
+		const auto alreadySetCount = summary.Count(CopyOutcome::AlreadySet);
+		const bool canCopy = copyCount != 0;
 		ImGui::BeginDisabled(!canCopy);
-		if (ImGui::Button((FormatCount(T(TKEY("scene_copy_copy_count"), "Copy {}"), summary.willCopy) + "###copy").c_str()))
+		if (ImGui::Button((FormatCount(T(TKEY("scene_copy_copy_count"), "Copy {}"), copyCount) + "###copy").c_str()))
 			decision = CopyConflictPolicy::SkipExisting;
 		ImGui::EndDisabled();
 		Util::AddTooltip(T(TKEY("scene_copy_copy_tooltip"),
@@ -1017,9 +1177,9 @@ namespace
 			Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine();
-		ImGui::BeginDisabled(summary.alreadySet == 0);
+		ImGui::BeginDisabled(alreadySetCount == 0);
 		if (Util::WarningButton(
-				(FormatCount(T(TKEY("scene_copy_overwrite_count"), "Overwrite {}"), summary.alreadySet) + "###overwrite")
+				(FormatCount(T(TKEY("scene_copy_overwrite_count"), "Overwrite {}"), alreadySetCount) + "###overwrite")
 					.c_str()))
 			decision = CopyConflictPolicy::OverwriteExisting;
 		ImGui::EndDisabled();
@@ -1084,7 +1244,7 @@ namespace
 			plan != session.summaryPlan);
 		ImGui::Spacing();
 		DrawPreview(plan, rows, cursorRow);
-		DrawSummary(summary, !plan.destinations.empty());
+		DrawSummary(summary, plan.destinations.size());
 		ImGui::Spacing();
 
 		if (const auto decision = DrawButtons(summary, commitRequested)) {
