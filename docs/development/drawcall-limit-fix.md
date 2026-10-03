@@ -3344,8 +3344,9 @@ What the walk reads that changes between the hook and `BeforeShadowMaps`, each f
     Geometry under an `NiBillboardNode` now has its own ineligibility reason, `billboard`, and stays native.
     A census through the exterior, Dragonsreach and Riverwood found only effect-shader geometry under
     billboards (flares, fire jets, glow planes), which DCLF does not draw anyway: `billboard` never appears in
-    the histogram. Tree LOD is not billboard geometry. It is `BSDistantTreeShader`, which faces its quads to
-    the camera in its own vertex shader, and like all LOD it lives outside the loaded cells DCLF tracks.
+    the histogram. Tree LOD is not billboard geometry. It is `BSDistantTreeShader`, whose vertex shader places each
+    instance with a fixed rotation about Z from its instance data (no camera facing; `DistantTree.hlsl`), and like all
+    LOD it lives outside the loaded cells DCLF tracks.
 -   **Animated texture transforms.** `BSLightingShaderPropertyFloatController::Update` moves a material's UV
     offset in that window. The async scene probe found it, one frame behind on `antsMiddle01`. The walk no
     longer stores the texture transform: the shadow build, kicked at `BeforeShadowMaps`, reads it off the
@@ -7500,12 +7501,30 @@ one the engine would not have registered this frame (an LOD child no longer sele
 count as holes. The rest are "left the claims unregistered". What remains: one frame in a few minutes with a single
 caster.
 
-**Still open.**
-- *LIGHT EXCLUSION.* A harvestable mushroom stump's shape (`ReachTreeStump01_Mush:4`, under its `NiSwitchNode`) is
-  registered by a paraboloid light, unwithheld, under an excluded entry. It is a candidate of that entry, and the
-  exclusion's build counted it as an input, but the claims used for withholding lacked it. On a frame where the skip is
-  active it would cast no point-light shadow. Next step: compare the epochs of the exclusion and of the claims selected
-  that frame.
-- *MISSED.* A flickering candle's emissive changed on a slot the shading watch doesn't follow.
-- *A crash.* DXVK's `DxvkResourceAllocationPool::alloc` read a corrupted free list during an engine `CreateBuffer` on
-  the loading thread. It happened once in about ten runs (crash-trav26 in the session's scratchpad) and didn't recur.
+**LIGHT EXCLUSION: a fade that completes between the build and the cull.** A harvestable mushroom stump's shape
+(`ReachTreeStump01_Mush:4`) was registered by a paraboloid light, unwithheld, under an excluded entry. The probe
+(`LocalLightCull`'s lost-pass line: the exclusion's build frame, whether it was reused, and each candidate geometry of the
+entry with its object, flags and claim) showed a fresh build from the previous frame, with the shape unclaimed and
+`kObjectNoShadow` for `ShadowReject::Faded`: the stump was fading in. The exclusion is used a frame after it is built, and
+the point lights' culls update the fade themselves (`BSFadeNode::OnVisible`), so a fade that completes in between is cast
+by the engine while the entry is skipped. `BuildSunExclusion` now counts a faded object as an engine caster: an entry
+stays in the culls while anything under it fades, for the sun's exclusion as well. The switch node was ruled out on the
+way (the shape was the selected, current child; no index store was dropped off the render thread).
+
+**MISSED: a controller write after the drain.** The candle's emissive multiplier is written by
+`BSLightingShaderPropertyFloatController`, whose write is an event (`MaterialSources`). The animation job runs the
+controllers alongside the render thread, so a write could land between `RefreshFrameConstants`' drain and the parity
+compare right after it, with its event queued for the next frame. The compare now drains the queues again afterwards: a
+changed slot those late events cover is resampled and counted as "changed after the events were taken (queued)", and only
+the rest are missed.
+
+**A crash in DXVK's allocator.** `DxvkResourceAllocationPool::alloc` read a corrupted free list during an engine
+`CreateBuffer` on the loading thread (once in about ten runs). The pool is shared by every allocation and free under the
+allocator's `m_mutex`, but `importBufferResource`, `importImageResource` and the sparse `createAllocation` popped it
+unlocked (upstream DXVK, where imports are rare: 11on12 and the presenter). The ORG interop's
+`dxvkCreateBufferFromVkBuffer` imports on the render thread (`RenderGraphRuntime::WrapBuffer`: DCLF's buffer growth, and
+the parity diagnostics' readbacks every check) while the loader creates buffers, so two threads could pop the same node.
+All three now take `m_mutex` (`extern/dxvk/src/dxvk/dxvk_memory.cpp`). Details, and how upstream DXVK can hit it:
+[dxvk-allocation-pool-race.md](dxvk-allocation-pool-race.md).
+
+Traversal run trav30 after the three: 750 OK, 4 ENGINE FADE (the engine's own race above), no crash.

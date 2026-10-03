@@ -1,5 +1,6 @@
 #if defined(CS_HAS_RENDER_GRAPH) && defined(CS_HAS_ORG_MODULE_SERVICES)
 #	include "Internal.h"
+#	include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 #	include "Features/DrawcallLimitFix/Scene/MaterialSources.h"
 
 namespace DCLF::Draws
@@ -406,6 +407,7 @@ namespace DCLF::Draws
 			return nullptr;
 		auto exclusion = std::make_shared<SunExclusion>();
 		exclusion->candidates = a_candidates;
+		exclusion->builtFrame = a_payload.inputs.frameNumber;
 		const std::size_t count = a_candidates->entries.size();
 		const std::uint64_t membership = a_payload.kept ? a_payload.membership[a_mode] : 0;
 		bool wouldReuse = false;
@@ -428,6 +430,7 @@ namespace DCLF::Draws
 				reuse = false;
 			if (reuse) {
 				++c.reused;
+				exclusion->reused = true;
 				exclusion->excluded = c.excluded;
 				exclusion->excludedCount = c.excludedCount;
 				exclusion->version = c.version;
@@ -448,7 +451,13 @@ namespace DCLF::Draws
 		// every caster the scene phase found (a volumetric-only one too: a paraboloid light registers it like any other). A
 		// point light's registration also writes the light's bit into the activeLightMask of every geometry its cull reaches,
 		// which an engine-drawn main pass reads: LocalLightCull writes those of a skipped entry's geometries itself.
-		auto engineCaster = [&](std::size_t o) { return !(a_tables.objects[o].flags & kObjectNoShadow); };
+		// A fading object (ShadowReject::Faded) counts as a caster: the exclusion is used a frame after this build, and the culls
+		// that read it update the fade themselves (BSFadeNode::OnVisible), so a fade that completes in between is cast by the
+		// engine before the tables see it.
+		auto engineCaster = [&](std::size_t o) {
+			return !(a_tables.objects[o].flags & kObjectNoShadow) ||
+			       (o < a_tables.shadowReject.size() && a_tables.shadowReject[o] == static_cast<std::uint8_t>(ShadowReject::Faded));
+		};
 		for (std::size_t o = 0; o < a_tables.objects.size(); ++o) {
 			if (a_tables.objects[o].flags & kObjectFree)
 				continue;

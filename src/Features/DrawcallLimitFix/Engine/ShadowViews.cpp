@@ -26,7 +26,7 @@ namespace DCLF
 
 	const char* ShadowRejectName(ShadowReject a_reason)
 	{
-		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only", "decal-point-light", "layer" };
+		constexpr const char* kNames[] = { "eligible", "not-lighting", "decl-0", "faded", "refraction", "alpha-blended", "decal-no-zwrite", "no-cast-shadows", "volumetric-only", "decal-point-light", "layer", "lod" };
 		static_assert(std::size(kNames) == static_cast<std::size_t>(ShadowReject::Count));
 		const auto index = static_cast<std::size_t>(a_reason);
 		return index < std::size(kNames) ? kNames[index] : "?";
@@ -38,6 +38,8 @@ namespace DCLF
 		if (!lighting || !a_geometry)
 			return ShadowReject::NotLighting;
 		const std::uint64_t flags = lighting->flags.underlying();
+		if (IsLodObject(*lighting, *a_geometry))
+			return ShadowReject::Lod;
 		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
 		const bool blended = alpha && (alpha->alphaFlags & 1);
 		const bool decal = (flags & (Bit(26) | Bit(27))) != 0;
@@ -70,6 +72,8 @@ namespace DCLF
 		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
 		if (!lighting || !a_geometry)
 			return false;
+		if (IsLodObject(*lighting, *a_geometry))
+			return true;  // Lod
 		const std::uint64_t flags = lighting->flags.underlying();
 		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
 		const bool blended = alpha && (alpha->alphaFlags & 1);

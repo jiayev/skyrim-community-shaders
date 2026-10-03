@@ -135,9 +135,17 @@ namespace DCLF
 	 * the engine draws nothing of it at that level). The object stays a member with its bindings; BuildDraws writes no draw.
 	 */
 	inline constexpr std::uint32_t kNoPartitions = 1u << kMaxSkinPartitions;
+	/**
+	 * @brief Tables::skinPartitions for a chain: every geometry slot linked from the object's first (nextPartition) is drawn, the
+	 * count in the low bits. Object LOD's visible ranges (LodSegments), however many its hidden cells leave.
+	 */
+	inline constexpr std::uint32_t kPartitionChain = 1u << 15;
+	inline constexpr std::uint32_t kPartitionChainCount = kPartitionChain - 1;
 	/** @brief The draws a partition mask gives: one per partition it names, one for 0 (the one geometry), none for kNoPartitions. */
 	inline constexpr std::uint32_t PartitionDraws(std::uint32_t a_partitions)
 	{
+		if (a_partitions & kPartitionChain)
+			return a_partitions & kPartitionChainCount;
 		return a_partitions == kNoPartitions ? 0u : a_partitions ? static_cast<std::uint32_t>(std::popcount(a_partitions)) : 1u;
 	}
 

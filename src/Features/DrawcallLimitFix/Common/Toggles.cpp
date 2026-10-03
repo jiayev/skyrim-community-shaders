@@ -16,6 +16,7 @@ namespace DCLF
 			{ &S::projectedUv, Switch::ProjectedUv, kOn, "projected", {}, "Projected UV (CS_DCLF_PROJECTED_UV)", nullptr, true, {} },
 			{ &S::mtLand, Switch::MtLand, kOn, "terrain", {}, "Terrain (CS_DCLF_MTLAND)", nullptr, true, {} },
 			{ &S::switchNodes, Switch::SwitchNodes, kOn, "switch nodes", {}, "Under switch nodes: trees, harvestables (CS_DCLF_SWITCH_NODES)", nullptr, true, {} },
+			{ &S::lodObjects, Switch::LodObjects, kOn, "object LOD", {}, "Object LOD: distant objects (CS_DCLF_LOD_OBJECTS)", nullptr, true, {} },
 			{ &S::skinPartitions, Switch::SkinPartitions, kOn, "skin partitions", {}, "Skins of several partitions: LOD trees, actor bodies (CS_DCLF_SKIN_PARTITIONS)", nullptr, true, { &S::skinned } },
 			{ &S::actors, Switch::Actors, kOn, "actors", {}, "Actors (CS_DCLF_ACTORS)", nullptr, true, {} },
 			{ &S::fading, Switch::Fading, kOn, "fading", {}, "Fading objects: the screen-door fade (CS_DCLF_FADING)", nullptr, true, {} },

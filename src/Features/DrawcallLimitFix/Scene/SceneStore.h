@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#include "Features/DrawcallLimitFix/Scene/LodSegments.h"
 #include "ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Engine/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
@@ -1136,6 +1137,12 @@ namespace DCLF
 
 		/** @brief True when the geometry sits under a tracked category node (used by coverage checks). */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
+		/** @brief Object LOD: the index ranges a tracked BSSubIndexTriShape draws (its visible segments' runs), or null. */
+		const std::vector<LodSegments::Range>* LodRangesOf(const RE::BSGeometry* a_shape) const
+		{
+			const auto it = lodRanges.find(a_shape);
+			return it != lodRanges.end() ? &it->second : nullptr;
+		}
 
 		/** @brief How a tracked geometry came to be tracked (diagnostics: CaptureParity's untracked draws). */
 		enum class TrackSource : std::uint8_t
@@ -1993,10 +2000,22 @@ namespace DCLF
 		// CS_DCLF_PERSISTENT_PARITY: every 60 frames every slot is sampled against the tables after the watched resample.
 		struct ShadingParity
 		{
-			std::uint64_t checks = 0, slots = 0, missing = 0, watched = 0, resampled = 0, lodFadeEvents = 0, emittanceEvents = 0, frames = 0;
+			std::uint64_t checks = 0, slots = 0, missing = 0, late = 0, watched = 0, resampled = 0, lodFadeEvents = 0, emittanceEvents = 0, frames = 0;
 			std::string first;
 		} shadingParity;
 		std::vector<const void*> lodFadeChanged;
+		// Object LOD (dclf-lod.md): each tracked BSSubIndexTriShape's drawn index ranges (LodSegments::DrawnRanges), taken when it is
+		// tracked and again at each of its segment events (lodSegmentEvents); CS_DCLF_PERSISTENT_PARITY compares them with the
+		// shape's live state on parity frames.
+		ankerl::unordered_dense::map<const RE::BSGeometry*, std::vector<LodSegments::Range>> lodRanges;
+		struct LodSegmentStats
+		{
+			std::uint64_t events = 0, changed = 0, checks = 0, shapes = 0, differ = 0;
+			std::string first;
+		} lodSegmentStats;
+		std::uint32_t lodParityFrame = 0;
+		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
+		void ApplyLodSegmentEvents();
 		struct ChangeLogParity
 		{
 			std::vector<Tables::Columns> snapshot;
@@ -2187,13 +2206,19 @@ namespace DCLF
 			std::uint64_t vertexDesc = 0;
 			std::uint32_t vertexCount = 0;
 			std::uint32_t indexCount = 0;
-			bool layer = false;  // a layer's second index list (Tables::geometryLayerKey)
+			std::uint32_t firstIndex = 0;  // a range of the index list (object LOD's visible ranges); 0 for the whole
+			bool layer = false;            // a layer's second index list (Tables::geometryLayerKey)
 		};
 		std::uint32_t ResolveGeometrySource(const GeometrySource& a_source, PartTimer& a_timer);
 		/** @brief The geometry slot of a multi-index shape's second index list (its layer's draw), or Tables::kSlotFree. */
 		std::uint32_t ResolveLayerGeometrySlot(RE::BSGeometry& a_geometry, PartTimer& a_timer);
 		std::uint32_t ResolveGeometrySlot(RE::BSGeometry& a_geometry, const RE::BSGraphics::TriShape* a_triShape,
 			const RE::NiSkinPartition::Partition* a_skinPartition, PartTimer& a_timer);
+		/**
+		 * @brief Object LOD (dclf-lod.md): the geometry slots of a partly hidden shape's visible ranges, linked by nextPartition from
+		 * the returned first (Tables::kSlotFree when one cannot be resolved), each keyed by its range's first segment record.
+		 */
+		std::uint32_t ResolveLodRangeSlots(RE::BSGeometry& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer);
 		/** @brief Capture a new material slot; false when nothing can be evaluated. */
 		bool EvaluateMaterialForSlot(const RE::BSShaderMaterial* a_material, std::uint32_t a_pass, MaterialRecord& a_record);
 

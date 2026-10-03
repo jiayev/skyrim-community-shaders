@@ -104,6 +104,8 @@ namespace DCLF
 			if (auto* objRoot = tes->objRoot)
 				hash.Mix(objRoot->GetChildren().size());
 			mix(tes->objRoot);
+			// Object LOD's root (RefreshCategoryNodes), with the toggle that lists it.
+			mix(ActiveToggles().lodObjects ? tes->lodLandRoot : nullptr);
 			mix(tes->interiorCell);
 			if (tes->interiorCell) {
 				mixCell(tes->interiorCell);
@@ -175,6 +177,11 @@ namespace DCLF
 						current.insert(multiBound);
 				}
 			}
+			// Object LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode per block, its
+			// BSSubIndexTriShapes one segment per cell), attached and detached as the camera moves (dclf-lod.md). The root is
+			// the category node; what attaches under it is tracked by the same structural events as a cell's content.
+			if (ActiveToggles().lodObjects && tes->lodLandRoot)
+				current.insert(tes->lodLandRoot);
 			if (tes->interiorCell) {
 				addCell(tes->interiorCell);
 			} else if (auto* grid = tes->gridCells) {
@@ -341,6 +348,9 @@ namespace DCLF
 				MarkLightEntryDirty(lightEntry);
 			}
 		}
+		// Object LOD: its drawn ranges from now on, by its segment events (lodSegmentEvents).
+		if (a_geometry->GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape)
+			SampleLodRanges(*a_geometry, false);
 		pendingEvaluation.push_back(a_geometry);
 	}
 
@@ -450,7 +460,19 @@ namespace DCLF
 		// register the main property's passes alone (FUN_1414b2a60), so it casts as a tri-shape. One whose layer DCLF cannot
 		// draw is MultiIndex, a shadow-only caster (ShadowOnlyReason): its two main passes stay the engine's, together.
 		const bool multiIndex = type == RE::BSGeometry::Type::kMultiIndexTriShape;
-		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex) {
+		// Object LOD (dclf-lod.md): a BSSubIndexTriShape whose Lighting property has the LOD object flags, drawn by the segment
+		// runs the engine leaves visible (FUN_1414f2ad0, type 8): a tri-shape over the ranges LodSegments mirrors. Tracked under
+		// TES::lodLandRoot; LOD without its toggle. Any other sub-index shape is not one DCLF draws.
+		bool lodObject = false;
+		if (type == RE::BSGeometry::Type::kSubIndexTriShape) {
+			const auto* lodProperty = netimmerse_cast<RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+			if (lodProperty && IsLodObject(*lodProperty, a_geometry)) {
+				if (!ActiveToggles().lodObjects)
+					return Ineligible::Lod;
+				lodObject = true;
+			}
+		}
+		if (type != RE::BSGeometry::Type::kTriShape && !multiIndex && !lodObject) {
 			if (!face)
 				return Ineligible::NotTriShape;
 		}

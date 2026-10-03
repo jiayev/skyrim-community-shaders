@@ -32,6 +32,7 @@ namespace DCLF
 		MtLand,
 		ProjectedUv,
 		SwitchNodes,
+		LodObjects,
 		Shadows,
 		SunSkip,
 		SunExclude,

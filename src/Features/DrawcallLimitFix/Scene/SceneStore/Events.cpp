@@ -1,5 +1,7 @@
 #include "Internal.h"
 
+#include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+
 
 namespace DCLF::Scene
 {
@@ -619,6 +621,7 @@ namespace DCLF
 			else
 				switchPending[at->second].structural |= a_event.structural;
 		});
+		ApplyLodSegmentEvents();
 		if (propertyChanged.size() > kMaxStructuralEvents || nodeChanged.size() > kMaxStructuralEvents) {
 			propertyChanged.clear();
 			nodeChanged.clear();
@@ -627,6 +630,106 @@ namespace DCLF
 
 		stats.tracked = static_cast<std::uint32_t>(tracked.size());
 		stats.categoryNodes = static_cast<std::uint32_t>(categoryNodes.size());
+	}
+
+	namespace
+	{
+		// Object LOD's segment writers (LodSegments.h): each patched call makes the write, then names the shape.
+		struct LodSegmentShow
+		{
+			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
+			{
+				func(a_shape, a_segment);
+				lodSegmentEvents.Push(a_shape);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		struct LodSegmentHide
+		{
+			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
+			{
+				func(a_shape, a_segment);
+				lodSegmentEvents.Push(a_shape);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+		struct LodSegmentShowAll
+		{
+			static void thunk(RE::BSGeometry* a_shape)
+			{
+				func(a_shape);
+				lodSegmentEvents.Push(a_shape);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+	}
+
+	bool Scene::InstallLodSegmentHooks()
+	{
+		// Every call of the three writers (AE 1.6.1170, every xref): the active grid's and the large-reference grid's segment
+		// updates (FUN_1405110b0, FUN_1405112f0), two other show-all callers (FUN_1404fdcf0, FUN_140509550) and the LOD block
+		// builder (FUN_140e55790). None is patched unless every site calls what it should.
+		constexpr std::uintptr_t kShow = 0xe31130, kHide = 0xe31160, kShowAll = 0xe310b0;
+		constexpr std::uintptr_t kShowSites[] = { 0x511550, 0x511269 };
+		constexpr std::uintptr_t kHideSites[] = { 0x511544, 0x51125c };
+		constexpr std::uintptr_t kShowAllSites[] = { 0x4fde80, 0x509691, 0x511402, 0x5112b4, 0xe55ba3 };
+		auto at = [](std::uintptr_t a_offset) { return REL::Offset(a_offset).address(); };
+		bool ok = true;
+		for (const auto site : kShowSites)
+			ok = ok && Engine::CallsTo(at(site), at(kShow));
+		for (const auto site : kHideSites)
+			ok = ok && Engine::CallsTo(at(site), at(kHide));
+		for (const auto site : kShowAllSites)
+			ok = ok && Engine::CallsTo(at(site), at(kShowAll));
+		if (!ok) {
+			logger::warn("[DCLF] object LOD: a segment writer's call site differs; object LOD stays native");
+			return false;
+		}
+		for (const auto site : kShowSites)
+			stl::write_thunk_call<LodSegmentShow>(at(site));
+		for (const auto site : kHideSites)
+			stl::write_thunk_call<LodSegmentHide>(at(site));
+		for (const auto site : kShowAllSites)
+			stl::write_thunk_call<LodSegmentShowAll>(at(site));
+		return true;
+	}
+
+	void SceneStore::SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event)
+	{
+		std::vector<LodSegments::Range> next;
+		LodSegments::DrawnRanges(&a_shape, next);
+		auto& ranges = lodRanges[&a_shape];
+		// Changed by an event: its record again this frame (its range slots and their chain, WriteObject).
+		if (a_event && next != ranges) {
+			++lodSegmentStats.changed;
+			pendingEvaluation.push_back(const_cast<RE::BSGeometry*>(&a_shape));
+		}
+		ranges = std::move(next);
+	}
+
+	void SceneStore::ApplyLodSegmentEvents()
+	{
+		lodSegmentEvents.Drain([&](const void* a_key) {
+			++lodSegmentStats.events;
+			// Only a tracked shape is known to be alive (its entry holds it).
+			if (const auto it = lodRanges.find(static_cast<const RE::BSGeometry*>(a_key)); it != lodRanges.end())
+				SampleLodRanges(*it->first, true);
+		});
+		// CS_DCLF_PERSISTENT_PARITY: every tracked shape's ranges against its live state (once a frame: ProcessEvents runs twice).
+		if (lodRanges.empty() || !SwitchEnabled(Switch::PersistentParity) || !ParityDue(frame) || std::exchange(lodParityFrame, frame) == frame)
+			return;
+		++lodSegmentStats.checks;
+		std::vector<LodSegments::Range> live;
+		for (const auto& [shape, ranges] : lodRanges) {
+			++lodSegmentStats.shapes;
+			LodSegments::DrawnRanges(shape, live);
+			if (live == ranges)
+				continue;
+			if (lodSegmentStats.differ++ == 0)
+				lodSegmentStats.first = fmt::format("'{}' ({} segments, dirty {}): {} ranges held, {} live (first {}+{} against {}+{})", shape->name.c_str() ? shape->name.c_str() : "",
+					LodSegments::At<std::uint32_t>(shape, LodSegments::kSegmentCount), LodSegments::At<std::uint8_t>(shape, LodSegments::kDirty), ranges.size(), live.size(),
+					ranges.empty() ? 0u : ranges[0].firstIndex, ranges.empty() ? 0u : ranges[0].indexCount, live.empty() ? 0u : live[0].firstIndex, live.empty() ? 0u : live[0].indexCount);
+		}
 	}
 
 	void SceneStore::InstallSceneEvents()
@@ -674,6 +777,7 @@ namespace DCLF
 			onVisible - REL::Module::get().base() + 0x140000000);
 		InstallMoveEvents();
 		hiddenEventsInstalled = InstallHiddenStores();
+		lodSegmentEventsInstalled = InstallLodSegmentHooks();
 	}
 
 	void SceneStore::InstallMoveEvents()

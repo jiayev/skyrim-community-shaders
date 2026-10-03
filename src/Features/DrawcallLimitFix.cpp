@@ -781,6 +781,7 @@ void DrawcallLimitFix::Hooks::BSBatchRenderer_RenderPassImmediately<N>::thunk(RE
 		return;
 	}
 	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	DCLF::CensusNativePass(a_pass, a_technique, ~0u, feature.inDepthPass);
 	// CS_DCLF_TARGET_PROBE: the blend state a native Lighting draw of the main pass left bound (its write masks per target),
 	// and the renderer's alpha blend indices, once for each distinct write mode.
 	if (!feature.inDepthPass && !DCLF::SwitchValue(DCLF::Switch::TargetProbe).empty() && a_pass->shader &&

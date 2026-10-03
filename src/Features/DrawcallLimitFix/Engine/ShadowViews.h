@@ -59,9 +59,20 @@ namespace DCLF
 		// A multi-index shape's layer object (SceneStore::Tracked::layerSlot): the shadow modes register the main property's
 		// passes alone (FUN_1414b2a60), so the additional property never casts.
 		Layer,
+		// Object LOD (a BSSubIndexTriShape with the LOD object flags, under TES::lodLandRoot): no shadow cull reaches the LOD root,
+		// and measured, no shadow mode ever registers it (dclf-lod.md, the census).
+		Lod,
 		Count
 	};
 	const char* ShadowRejectName(ShadowReject a_reason);
+
+	/** @brief Object LOD: a BSSubIndexTriShape whose Lighting property has the LOD object flags (dclf-lod.md). */
+	inline bool IsLodObject(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	{
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		return const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape &&
+		       a_property.flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+	}
 
 	/**
 	 * @brief The engine's verdict on whether an object casts into a shadow map. a_fadeOnGpu: its fade node is stood in

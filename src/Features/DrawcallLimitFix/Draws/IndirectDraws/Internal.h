@@ -1782,6 +1782,13 @@ namespace DCLF
 			if (a_partitions == kNoPartitions)
 				return;
 			std::uint32_t slot = a_firstSlot;
+			if (a_partitions & kPartitionChain) {
+				for (std::uint32_t i = 0; i < (a_partitions & kPartitionChainCount) && slot < a_tables.geometries.size(); ++i) {
+					a_draw(slot);
+					slot = a_tables.geometries[slot].nextPartition;
+				}
+				return;
+			}
 			for (std::uint32_t i = 0; i < kMaxSkinPartitions && slot < a_tables.geometries.size(); ++i) {
 				if (a_partitions == 0 || ((a_partitions >> i) & 1))
 					a_draw(slot);

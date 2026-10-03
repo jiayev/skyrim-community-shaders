@@ -1,5 +1,7 @@
 #include "PassCapture.h"
 
+#include "Features/DrawcallLimitFix/Diagnostics/OpenDefectProbes.h"
+
 #include "LocalLightCull.h"
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
@@ -249,6 +251,8 @@ namespace DCLF
 			const bool withheld = capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
+			if (std::uint32_t mode = 0; !withheld && capture.ShadowModeOfBatch(a_this, mode))
+				CensusNativePass(a_pass, a_techniqueID, mode, false);
 			if (!withheld)
 				func(a_this, a_pass, a_techniqueID);
 		}

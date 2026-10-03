@@ -683,11 +683,36 @@ namespace DCLF::LocalLightCull
 					what += it == candidates.geometries.end() ? std::string(" not a candidate geometry") :
 					                                            fmt::format(" candidate of entry {} (excluded {})", candidates.geometryEntry[it->second],
 																	Excluded(*exclusion, candidates.entryNodes[candidates.geometryEntry[it->second]]));
+					// The exclusion's build, and each candidate geometry of the entry now (object, flags, claimed).
+					what += fmt::format(" [exclusion built frame {}{}, selected at {}]", exclusion->builtFrame, exclusion->reused ? " (reused)" : "", SceneStore::Get().GetFrame());
+					if (it != candidates.geometries.end()) {
+						const auto entry = candidates.geometryEntry[it->second];
+						const auto claims = PassCapture::Get().SelectedShadowClaims(kParabolicMode);
+						for (const auto& [geometry, index] : candidates.geometries) {
+							if (candidates.geometryEntry[index] != entry)
+								continue;
+							std::uint32_t object = ~0u;
+							for (std::uint32_t o = 0; o < tables.objectGeometry.size() && object == ~0u; ++o)
+								object = tables.objectGeometry[o] == geometry && !(tables.objects[o].flags & kObjectFree) ? o : object;
+							what += fmt::format(" {{'{}' object {} flags {:#x} claimed {}}}", geometry->name.c_str() ? geometry->name.c_str() : "", static_cast<std::int32_t>(object),
+								object != ~0u ? tables.objects[object].flags : 0u, claims && claims->contains(geometry));
+						}
+					}
 				}
-				// How the cull reached it: the chain up, with the entries and the excluded ones marked.
-				for (const RE::NiAVObject* object = a_pass->geometry; object; object = object->parent)
+				// How the cull reached it: the chain up, with the entries and the excluded ones marked, and each switch's selection.
+				const RE::NiAVObject* below = nullptr;
+				for (const RE::NiAVObject* object = a_pass->geometry; object; below = object, object = object->parent) {
 					what += fmt::format(" <- {}:{}{}{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "", Hidden(object) ? " hidden" : "",
 						exclusion->candidates->entries.contains(object) ? (Excluded(*exclusion, object) ? " [excluded entry]" : " [entry]") : "");
+					if (const auto* switchNode = below ? const_cast<RE::NiAVObject*>(object)->AsSwitchNode() : nullptr) {
+						const auto state = SceneStore::ReadSwitch(*switchNode);
+						std::int32_t path = -1;
+						const auto& children = switchNode->GetChildren();
+						for (std::uint16_t c = 0; c < children.size(); ++c)
+							path = children[c].get() == below ? static_cast<std::int32_t>(c) : path;
+						what += fmt::format(" [index {}, path child {}, selects it {}]", state.index, path, SceneStore::SwitchSelects(*switchNode, below));
+					}
+				}
 				std::scoped_lock lock(firstMutex);
 				++lostByReject[std::min<std::uint32_t>(reject, 15)];
 				if (firstLost.empty())

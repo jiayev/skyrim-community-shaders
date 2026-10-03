@@ -54,6 +54,9 @@ namespace DCLF
 		// The paraboloid mode's (LocalLightCull): per candidate index, three stamped words (LocalLightCull's reach kinds) of the
 		// point lights whose cull reached the entry this frame and skipped it (Process1). Null for the sun's.
 		std::unique_ptr<std::atomic<std::uint64_t>[]> lightReach;
+		// The scene frame of the shadow build it came from, and whether it reused that cache's verdict (diagnostics).
+		std::uint32_t builtFrame = 0;
+		bool reused = false;
 	};
 
 	/**

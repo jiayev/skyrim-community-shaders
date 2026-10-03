@@ -447,6 +447,9 @@ static const uint kMaxPartitions = 8;
 static const uint kNoPartition = 0xFFFFFFFFu;
 // The mask of a skin whose LOD level draws none of its partitions (Records.h): no draw at all.
 static const uint kNoPartitions = 1u << 8;
+// A chain (Records.h, kPartitionChain): every slot linked from the first, the count in the low bits (object LOD's visible ranges).
+static const uint kPartitionChain = 1u << 15;
+static const uint kPartitionChainCount = kPartitionChain - 1;
 // DrawSequence: 92 bytes, 4-byte packed. Words 1-5 are the root constants (the pipeline row's address, the material row's,
 // then the object index), which is why the object index sits between the rows' addresses and the vertex buffer.
 // The second vertex buffer view (slot 1) is a face shape's positions (FaceSnapshots), else the first again.
@@ -871,9 +874,11 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	const uint streamIndex = inputs.Load(inputOffset + 44);
 	const uint4 stream = streamIndex != kNoStream ? geometries.Load4(streamIndex * kGeometryStride) : uint4(0, 0, 0, 0);
 	uint geometryIndex = input.z;
-	[loop] for (uint partition = 0; partition < kMaxPartitions && geometryIndex != kNoPartition; ++partition) {
+	const bool chain = (partitions & kPartitionChain) != 0;
+	const uint links = chain ? (partitions & kPartitionChainCount) : kMaxPartitions;
+	[loop] for (uint partition = 0; partition < links && geometryIndex != kNoPartition; ++partition) {
 		const uint geometryOffset = geometryIndex * kGeometryStride;
-		if (partitions == 0 || ((partitions >> partition) & 1) != 0) {
+		if (chain || partitions == 0 || ((partitions >> partition) & 1) != 0) {
 			const uint4 vertexBuffer = geometries.Load4(geometryOffset);      // address lo, hi, size, stride
 			const uint4 indexBuffer = geometries.Load4(geometryOffset + 16);  // address lo, hi, size, index count
 			const uint firstIndex = geometries.Load(geometryOffset + 32);
@@ -918,7 +923,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 				}
 			}
 		}
-		if ((partitions >> (partition + 1)) == 0)
+		if (!chain && (partitions >> (partition + 1)) == 0)
 			break;
 		geometryIndex = geometries.Load(geometryOffset + 36);  // GeometryDraw::nextPartition
 	}

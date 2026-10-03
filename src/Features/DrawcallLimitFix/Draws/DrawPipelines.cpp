@@ -1119,7 +1119,11 @@ namespace DCLF
 			if (!DeferredBlendState(0, 0, Impl::kOpaqueWriteMode, 0))
 				return kNotReady;
 			constexpr std::uint32_t kDoAlphaTest = 1u << 20;
-			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
+			// Object LOD (LODObjects, LODObjectHD) is drawn in write mode 1 alpha-tested or not: the engine's main-pass draws of it
+			// all take it (dclf-lod.md, the census), so the G-buffer's alphas keep what lies beneath, as the native draw leaves them.
+			const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
+			const bool lodObject = technique == 13 || technique == 15;
+			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lodObject ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
 			const std::uint32_t opaqueBits = writeMode << kRasterWriteModeShift;
 			auto it = impl->engineStates.find(opaqueBits);
 			if (it == impl->engineStates.end()) {
