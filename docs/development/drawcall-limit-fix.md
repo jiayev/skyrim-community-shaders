@@ -7446,3 +7446,66 @@ default normal map, and white RMAOS. DCLF on and off now agree (rt0 0.72, glossi
 
 They agree on the dark look: that is what TruePBR draws for a PBR tile with no RMAOS. The look is right only once the
 texture sets carry their RMAOS again, which is a load-order matter.
+
+## The pre-existing parity verdicts, under the camera traversal (2026-10-03)
+
+The runs use the camera traversal (`CS_DCLF_TEST_MOVE=300:1000000:40`, `CS_DCLF_TEST_TURN=300:1000000:0.2`) with every
+parity check on. Rotation alone reaches few of these.
+
+**MISSING (change log parity): `lodFade` counted as shading.** `Tables::CausesBetween` put the LOD fade node row under both
+placement and shading. Every writer of that row (the placement takers, `TakeRoot`) notes it as placement. The log was
+right and the diff wasn't: `lodFade` is now placement only, as `ChangeCause`'s comment says.
+
+**TREE WIND at startup: the check read the buffer being written.** Wind is computed a frame ahead on the compute queue
+(`TreeWindCS` writes `treeWindRows[frame & 1]`), and the draws read the other buffer (`TreeWindReadIndex`). The check
+copied this frame's buffer, which nothing orders after the compute write. It now reads the buffer the draws read, against
+the inputs of the frame that wrote it (`previousTreeInputs`). It skips a frame where no earlier frame ran the pass, and one
+where the tree rows changed since. What remains is inherent to the frame-ahead design:
+- the first frame's draws read the zeroed buffer, so trees are still for one frame;
+- a tree whose row changes keeps the old wind for one frame.
+
+**ENGINE FADE: two engine paths FadeStateCS did not model.**
+- *A visibility block per list process.* Each scene list's culling process has its own view planes and compound frustum
+  (set up from its list's first entry). FadeStateCS tested every root against one sampled process.
+  - `PrimaryCull` now samples one block per list job slot (`kFadeVisibilityLists`), on each job's first stand-in call.
+  - It records each entry's slot (`Cut::entrySlot`).
+  - FadeStateCS reads each root's block through `fadeRootLists`, built by `PrimaryCull::FadeRootLists` and uploaded when
+    the roots or a slot change.
+  - A CPU port of the shader's test (`VisibilityPort`), run on the stand-in's engine-culled entries, agrees with the
+    engine every time (the "fade visibility parity" line).
+- *The animation job's fade update.* `UpdateAnimationJob` calls `FUN_1402cff60`, which runs the fade update
+  (`FUN_14147a160`) from the world root camera when an animated reference's fade root wasn't reached by the cull. That
+  covers doors, traps, puzzle pillars and ambient effects. It runs beside the render thread, between one cull and the
+  next, sometimes twice per root.
+  - `Hooks::AnimatedFade` (the call at `0x1402d0044`) records the nodes and the inputs (camera, lodAdjust, fade counter,
+    frame time).
+  - At the list jobs' end the batch is complete. The depth commit stamps its roots in `fadeAnimated` with the frame and
+    the update count (`FadeAnimatedWord`), and puts the inputs in `FadeFrame::anim*`.
+  - FadeStateCS applies `FadeUpdate` that many times, with those inputs, before its cull test (`kFadeVerdictAnimated`).
+  - The port does the same (`FadeState::AnimatedUpdate`).
+  - The engine-node check now reads the nodes as the list jobs left them (`PrimaryCull::NodeSnapshot`), not at the depth
+    commit, where they race with the animation job.
+
+  What remains: an animated root's update landing on the other side of the list jobs, so one update more or fewer, or
+  `lastVisible` off by one. That is the engine's own race between its animation job and its cull.
+
+**CASCADE CULL: casters outside the cascade's viewport.** The rejections were all by the view's clip box on x or y: the
+bound's box lies wholly past one side of the view's own projection. The engine's looser sphere cull registers such a
+caster, but its draw writes no texel either. They are now counted as "outside the view's viewport", not as a verdict.
+Rejections by the cull planes or the near plane stay a verdict.
+
+**CLAIM HOLES: claims the engine did not register.** The check counted every withheld claim this epoch didn't draw, even
+one the engine would not have registered this frame (an LOD child no longer selected, a reference unloaded). Under
+`CS_DCLF_SET_PARITY`, `PassCapture::TakeWithheld` logs what the shadow registrations actually withheld, and only those
+count as holes. The rest are "left the claims unregistered". What remains: one frame in a few minutes with a single
+caster.
+
+**Still open.**
+- *LIGHT EXCLUSION.* A harvestable mushroom stump's shape (`ReachTreeStump01_Mush:4`, under its `NiSwitchNode`) is
+  registered by a paraboloid light, unwithheld, under an excluded entry. It is a candidate of that entry, and the
+  exclusion's build counted it as an input, but the claims used for withholding lacked it. On a frame where the skip is
+  active it would cast no point-light shadow. Next step: compare the epochs of the exclusion and of the claims selected
+  that frame.
+- *MISSED.* A flickering candle's emissive changed on a slot the shading watch doesn't follow.
+- *A crash.* DXVK's `DxvkResourceAllocationPool::alloc` read a corrupted free list during an engine `CreateBuffer` on
+  the loading thread. It happened once in about ten runs (crash-trav26 in the session's scratchpad) and didn't recur.

@@ -25,6 +25,8 @@ namespace DCLF
 		 * OnVisible of its class. Returns the verdict bits (kFadeVerdict*), kFadeVerdictInView included.
 		 */
 		std::uint32_t OnVisible(FadeNodeState& a_state, const FadeRootStatic& a_root, const float a_centre[3], const FadeFrame& a_frame);
+		/** @brief The animation job's update (FUN_1402cff60's FUN_14147a160) with the frame's anim* inputs: FadeStateCS's AnimatedUpdate. */
+		void AnimatedUpdate(FadeNodeState& a_state, const FadeRootStatic& a_root, const float a_centre[3], const FadeFrame& a_frame, std::uint32_t a_updates);
 
 		/** @brief Render thread: this frame's inputs, from the main camera (null: none this frame) and the engine's globals. */
 		FadeFrame SampleFrame(const RE::NiCamera* a_camera);

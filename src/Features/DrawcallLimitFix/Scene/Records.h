@@ -386,8 +386,10 @@ namespace DCLF
 	 * @brief The main camera's cull test, as FadeStateCS repeats it for each root (the list processes' Process1, AE
 	 * 0x140e28390): the process's cull mode and flags, and its compound frustum (BSCompoundFrustum, the portal graph's portals
 	 * and occlusion planes), which Process1 evaluates (BSCompoundFrustum::Process, 0x140e320b0) before it runs the node's
-	 * OnVisible. The compound frustum exists only while a list job culls through it: the first job to see it samples the
-	 * block (PrimaryCull::StandIn), else the render thread does after the jobs; uploaded whole with the depth commit.
+	 * OnVisible. The compound frustum exists only while a list job culls through it, and each list's process has its own
+	 * (its planes and portals are set up from its list's first entry): one block per list process (kFadeVisibilityLists), each
+	 * sampled by its job's first stand-in call (PrimaryCull::StandIn), else by the render thread after the jobs; a fade root
+	 * is tested against its entry's list's (PrimaryCull::FadeRootLists). Uploaded with the depth commit.
 	 *
 	 * Layout (bytes): the header (mode, operator count, plane set count, first operator), then kFadeVisibilityOps operators
 	 * of four words (the engine's 12-byte {type, next if true, next if false}, padded; an operator of type 7 or 8 takes the
@@ -402,6 +404,8 @@ namespace DCLF
 	// Then the process's own view planes (NiCullingProcess::planes, +0x3C), which its sphere test uses (FUN_140d3ff10).
 	inline constexpr std::uint32_t kFadeVisibilityViewOffset = kFadeVisibilitySetsOffset + kFadeVisibilitySets * kFadeVisibilitySetBytes;
 	inline constexpr std::uint32_t kFadeVisibilityBytes = kFadeVisibilityViewOffset + kFadeVisibilitySetBytes;
+	inline constexpr std::uint32_t kFadeVisibilityLists = 16;       // blocks: one per list process (PrimaryCull's job slots)
+	inline constexpr std::uint32_t kFadeRootNoList = 0xFFFFFFFFu;  // a root no list job reached yet: the frustum alone
 	inline constexpr std::uint32_t kFadeVisibilityValid = 1u << 0;          // sampled this frame (else: the frustum alone)
 	inline constexpr std::uint32_t kFadeVisibilityCompound = 1u << 1;       // the compound frustum applies (cull mode not 3)
 	inline constexpr std::uint32_t kFadeVisibilitySkipView = 1u << 2;       // its skipViewFrustum: the frustum test is not made
@@ -441,6 +445,7 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeVerdictAboveLimit = 1u << 1;  // a tree above the height limit: no update
 	inline constexpr std::uint32_t kFadeVerdictServiced = 1u << 2;   // OnVisible ran
 	inline constexpr std::uint32_t kFadeVerdictDrawn = 1u << 3;      // OnVisible went on into the children
+	inline constexpr std::uint32_t kFadeVerdictAnimated = 1u << 4;   // the animation job's update ran first (FadeFrame anim*)
 
 	struct FadeRootStatic
 	{
@@ -518,8 +523,33 @@ namespace DCLF
 		// The pass's per-frame values, here rather than in its prepared invocation (which is prepared ahead of the commit):
 		// the root slots, the scene frame and the parity log's first root (~0u: none).
 		std::uint32_t rootCount = 0, sceneFrame = 0, logBase = ~0u, reserved = 0;
+		// The animation job's fade update (FUN_1402cff60 -> FUN_14147a160) on a root its last cull did not reach: the inputs it was
+		// made with (its camera, the fade counter and frame time then), for the roots stamped with this frame (the animated buffer).
+		float animEye[3]{};
+		float animLodAdjust = 0.0f;
+		std::int32_t animCounter = 0;
+		float animDeltaTime = 0.0f;
+		std::uint32_t animPadding[2]{};
 	};
-	static_assert(sizeof(FadeFrame) == 208);
+	// The animated buffer's word per root: the scene frame (its low 28 bits) of the batch that updated it, and how many updates
+	// that batch made (the job can update a node more than once between two culls).
+	inline constexpr std::uint32_t kFadeAnimatedCountBits = 4;
+	inline constexpr std::uint32_t kFadeAnimatedCountMask = (1u << kFadeAnimatedCountBits) - 1;
+	inline constexpr std::uint32_t FadeAnimatedWord(std::uint32_t a_frame, std::uint32_t a_count)
+	{
+		return (a_frame << kFadeAnimatedCountBits) | (a_count < kFadeAnimatedCountMask ? a_count : kFadeAnimatedCountMask);
+	}
+	static_assert(sizeof(FadeFrame) == 240);
+	/** @brief One animation update's inputs, as PrimaryCull records them (FadeFrame anim*). */
+	struct AnimatedFadeInputs
+	{
+		float eye[3]{};
+		float lodAdjust = 0.0f;
+		std::int32_t counter = 0;
+		float deltaTime = 0.0f;
+		std::uint32_t valid = 0;
+		std::uint32_t varied = 0;  // a later update of the batch had other inputs (the first's stand for all)
+	};
 
 	/** @brief CS_DCLF_FADE_PARITY: one root's update as FadeStateCS made it, for the C++ port to make again. */
 	struct FadeLogEntry

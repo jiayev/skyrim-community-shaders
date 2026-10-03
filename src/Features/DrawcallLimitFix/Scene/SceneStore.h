@@ -116,7 +116,7 @@ namespace DCLF
 	/** @brief What a change-log entry changed (SceneStore::Tables::changeLog), by the columns its consumers read. */
 	enum ChangeCause : std::uint32_t
 	{
-		kChangePlacement = 1u << 0,   // world, previous world, bound, the sun entry
+		kChangePlacement = 1u << 0,   // world, previous world, bound, the sun entry, the LOD fade node
 		kChangeBindings = 1u << 1,    // flags, material, pipeline (the draw's too), the fade distance
 		kChangeShading = 1u << 2,     // shading, emissive multiplier, wetness
 		kChangeLights = 1u << 3,      // Light Limit Fix's room index and shadow mask

@@ -131,6 +131,11 @@ namespace DCLF
 		}
 		/** @brief Whether the frame's selection withholds any caster from the shadow mode's views (a non-empty claim set). */
 		bool ShadowModeWithheld(std::uint32_t a_modeIndex) const;
+		/**
+		 * @brief CS_DCLF_SET_PARITY: the geometries the shadow registrations of a mode withheld since the last call (render thread,
+		 * once a frame after the registrations): what the engine's shadow culls reached and DCLF kept from them.
+		 */
+		std::vector<const RE::BSGeometry*> TakeWithheld(std::uint32_t a_modeIndex);
 		/** @brief Whether a_batch is a shadow view's batch renderer this frame, and its mode index. */
 		bool ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const;
 		/**
@@ -200,6 +205,10 @@ namespace DCLF
 		std::array<std::atomic<std::uint32_t>, kShadowModes> shadowWithheld{};
 		std::atomic<std::uint32_t> volumetricWithheld{ 0 };
 		std::atomic<std::uint32_t> directWithheld{ 0 };
+		// TakeWithheld's logs, by mode (CS_DCLF_SET_PARITY only).
+		std::array<std::mutex, kShadowModes> withheldLogMutex;
+		std::array<std::vector<const RE::BSGeometry*>, kShadowModes> withheldLog;
+		void NoteWithheld(std::uint32_t a_mode, const RE::BSGeometry* a_geometry);
 		/** @brief ShadowClaimsForBatch whatever the toggles, and the view's render mode (a_mode) when it is a shadow view's. */
 		std::shared_ptr<const ClaimSet> ShadowClaimsOf(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const;
 		/** @brief The shadow claim test at a direct group insertion: true when the pass is withheld. */

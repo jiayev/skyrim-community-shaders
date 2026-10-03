@@ -753,7 +753,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, objects, log, visibility;
+		org::DeclaredViewToken roots, states, frame, objects, log, visibility, rootLists, animated;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
 
@@ -786,6 +786,8 @@ namespace DCLF::Draws
 				bindings.published[h] = a_builder.UnorderedAccess(scene.fadeStatesOut[h]).View();
 			bindings.frame = a_builder.ShaderResource(scene.fadeFrameBuffer).View();
 			bindings.visibility = a_builder.ShaderResource(scene.fadeVisibility).View();
+			bindings.rootLists = a_builder.ShaderResource(scene.fadeRootLists).View();
+			bindings.animated = a_builder.ShaderResource(scene.fadeAnimated).View();
 			bindings.objects = a_builder.ShaderResource(scene.objects).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
 			return bindings;
@@ -816,6 +818,8 @@ namespace DCLF::Draws
 			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
 			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
 			constants.logIndex = CaptureViewIndex(a_preparation, a_bindings.log);
+			constants.rootListsIndex = CaptureViewIndex(a_preparation, a_bindings.rootLists);
+			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
 			constants.latchIndex = frame->latch->SrvIndex();

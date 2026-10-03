@@ -142,6 +142,25 @@ namespace DCLF
 			std::atomic_store(&shadowClaims[a_modeIndex], std::move(a_claims));
 	}
 
+	void PassCapture::NoteWithheld(std::uint32_t a_mode, const RE::BSGeometry* a_geometry)
+	{
+		static const bool enabled = SwitchEnabled(Switch::SetParity);
+		if (!enabled || a_mode >= kShadowModes)
+			return;
+		std::scoped_lock lock(withheldLogMutex[a_mode]);
+		if (withheldLog[a_mode].size() > (1u << 20))  // not taken (the mode not drawn): no unbounded growth
+			withheldLog[a_mode].clear();
+		withheldLog[a_mode].push_back(a_geometry);
+	}
+
+	std::vector<const RE::BSGeometry*> PassCapture::TakeWithheld(std::uint32_t a_modeIndex)
+	{
+		if (a_modeIndex >= kShadowModes)
+			return {};
+		std::scoped_lock lock(withheldLogMutex[a_modeIndex]);
+		return std::exchange(withheldLog[a_modeIndex], {});
+	}
+
 	bool PassCapture::ShadowModeWithheld(std::uint32_t a_modeIndex) const
 	{
 		if (a_modeIndex >= kShadowModes || !ShadowWithholdingEnabled())
@@ -195,6 +214,7 @@ namespace DCLF
 			std::uint32_t mode = 0;
 			if (const auto owned = ShadowClaimsOf(a_batch, mode); owned && owned->contains(a_pass->geometry)) {
 				shadowWithheld[mode].fetch_add(1, std::memory_order_relaxed);
+				NoteWithheld(mode, a_pass->geometry);
 				return true;
 			}
 		}
@@ -249,8 +269,10 @@ namespace DCLF
 		std::uint32_t mode = 0;
 		const auto owned = ShadowClaimsOf(a_batch, mode);
 		const bool claimed = owned && owned->contains(a_pass->geometry);
-		if (claimed)
+		if (claimed) {
 			a_counter.fetch_add(1, std::memory_order_relaxed);
+			NoteWithheld(mode, a_pass->geometry);
+		}
 		return claimed;
 	}
 

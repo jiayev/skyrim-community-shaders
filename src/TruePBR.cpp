@@ -1295,6 +1295,25 @@ void SetupLandscapeTexture(BSLightingShaderMaterialPBRLandscape& material, RE::T
 		textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::RmaosTexture, material.landscapeRMAOSTextures[textureIndex]);
 		textureSet->SetTexture(BSLightingShaderMaterialPBRLandscape::DisplacementTexture, material.landscapeDisplacementTextures[textureIndex]);
 		SetupPBRLandscapeTextureParameters(material, *textureSetData, textureIndex);
+		// Once per set: which plugin's record won and what its RMAOS and displacement slots name. A set configured as PBR
+		// whose record names no RMAOS draws with the default (rough and metallic): usually a plugin overriding the record.
+		static std::unordered_set<const RE::BGSTextureSet*> reported;
+		static std::mutex reportedMutex;
+		if (std::scoped_lock lock(reportedMutex); reported.insert(textureSet).second) {
+			const auto* file = textureSet->GetFile(-1);
+			// The record's TX00-TX07 are not in BSTextureSet::Texture's order: the RMAOS slot (the environment mask) is TX02, and
+			// the displacement slot (height) is TX04.
+			const char* rmaos = textureSet->textures[2].textureName.c_str();
+			const char* displacement = textureSet->textures[4].textureName.c_str();
+			const bool missing = material.landscapeRMAOSTextures[textureIndex] == nullptr;
+			const auto text = fmt::format("[TruePBR] landscape PBR set '{}' (record from '{}'): RMAOS '{}'{}, displacement '{}'{}", textureSet->GetFormEditorID(),
+				file ? file->GetFilename() : "?", rmaos ? rmaos : "", missing ? " (missing)" : "", displacement ? displacement : "",
+				material.landscapeDisplacementTextures[textureIndex] == nullptr ? " (missing)" : "");
+			if (missing)
+				logger::warn("{}", text);
+			else
+				logger::info("{}", text);
+		}
 	}
 	material.isPbr[textureIndex] = isPbr;
 
