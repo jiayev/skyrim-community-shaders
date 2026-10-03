@@ -836,6 +836,16 @@ namespace DCLF
 			return;
 		}
 		std::uint32_t slot = tables.objects[index].geometryIndex;
+		// Object LOD's chain (kPartitionChain): every link, however many.
+		if (partitions & kPartitionChain) {
+			for (std::uint32_t i = 0; i < (partitions & kPartitionChainCount) && i < pendingSlots.size() && slot < tables.geometries.size(); ++i) {
+				pendingSlots[pendingSlotCount++] = slot;
+				slot = tables.geometries[slot].nextPartition;
+			}
+			if (!pendingSlotCount)
+				pendingObject = -1;
+			return;
+		}
 		for (std::uint32_t i = 0; i < pendingSlots.size() && slot < tables.geometries.size(); ++i) {
 			if (partitions == 0 || ((partitions >> i) & 1))
 				pendingSlots[pendingSlotCount++] = slot;

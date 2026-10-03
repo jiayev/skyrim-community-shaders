@@ -451,6 +451,27 @@ namespace DCLF
 			}
 		};
 		std::uint64_t resampled = 0;
+		// The dependents of the event keys (properties, emittance colours), resampled; their slots into a_slots when given.
+		auto resampleKeys = [&](const std::vector<const void*>& a_keys, std::vector<std::uint32_t>* a_slots) {
+			for (const void* key : a_keys) {
+				const auto dependents = propertyDependents.find(key);
+				if (dependents == propertyDependents.end())
+					continue;
+				for (auto* geometry : dependents->second) {
+					const auto it = tracked.find(geometry);
+					if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
+						continue;
+					for (const std::uint32_t slot : { it->second.slot, it->second.layerSlot }) {
+						if (slot == kNoObjectSlot)
+							continue;
+						ResampleShading(slot, true);
+						++resampled;
+						if (a_slots)
+							a_slots->push_back(slot);
+					}
+				}
+			}
+		};
 		if (!constantsRefreshed || !lodFadeEventsInstalled) {
 			constantsRefreshed = true;
 			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
@@ -482,22 +503,7 @@ namespace DCLF
 			std::sort(lodFadeChanged.begin(), lodFadeChanged.end());
 			lodFadeChanged.erase(std::unique(lodFadeChanged.begin(), lodFadeChanged.end()), lodFadeChanged.end());
 			shadingParity.lodFadeEvents += lodFadeChanged.size();
-			for (const void* key : lodFadeChanged) {
-				const auto dependents = propertyDependents.find(key);
-				if (dependents == propertyDependents.end())
-					continue;
-				for (auto* geometry : dependents->second) {
-					const auto it = tracked.find(geometry);
-					if (it == tracked.end() || it->second.slot == kNoObjectSlot || it->second.objectStamp != objectStamp)
-						continue;
-					ResampleShading(it->second.slot, true);
-					++resampled;
-					if (it->second.layerSlot != kNoObjectSlot) {
-						ResampleShading(it->second.layerSlot, true);
-						++resampled;
-					}
-				}
-			}
+			resampleKeys(lodFadeChanged, nullptr);
 		}
 		// The watch's completeness: every slot sampled against what the tables hold now.
 		const bool shadingParityEnabled = SwitchEnabled(Switch::PersistentParity);
@@ -505,13 +511,33 @@ namespace DCLF
 		++sp.frames;
 		sp.watched += tables.watched.Size();
 		sp.resampled += resampled;
-		if (shadingParityEnabled && ParityDue(frame)) {
+		if (shadingParityEnabled && ParityDue(frame) && lodFadeEventsInstalled) {
 			++sp.checks;
+			std::vector<std::uint32_t> changed;
 			for (std::uint32_t o = 0; o < tables.objects.size() && o < tables.objectGeometry.size(); ++o) {
 				if ((tables.objects[o].flags & (kObjectFree | kObjectNoBindings)) || !tables.objectGeometry[o])
 					continue;
 				++sp.slots;
-				if (ResampleShading(o, false) && sp.missing++ == 0) {
+				if (ResampleShading(o, false))
+					changed.push_back(o);
+			}
+			// A write after the drain above (the animation job runs the controllers alongside the render thread) is not missed:
+			// its event is queued. Those events are taken now, and their dependents resampled, so each changed slot is either one.
+			std::vector<const void*> late;
+			DrainLodFadeEvents(late);
+			DrainEmittanceEvents(late);
+			MaterialSources::DrainShadingChanges(late);
+			std::sort(late.begin(), late.end());
+			late.erase(std::unique(late.begin(), late.end()), late.end());
+			std::vector<std::uint32_t> covered;
+			resampleKeys(late, &covered);
+			std::sort(covered.begin(), covered.end());
+			for (const std::uint32_t o : changed) {
+				if (std::binary_search(covered.begin(), covered.end(), o)) {
+					++sp.late;
+					continue;
+				}
+				if (sp.missing++ == 0) {
 					const auto* geometry = tables.objectGeometry[o];
 					const auto& held = tables.shading[o];
 					float emissiveMult = 0.0f;

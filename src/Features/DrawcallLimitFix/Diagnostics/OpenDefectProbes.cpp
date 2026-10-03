@@ -6,9 +6,13 @@
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/SceneStore.h"
+#include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #include "Features/TerrainBlending.h"
 #include "Features/VolumetricShadows.h"
 #include "State.h"
+#include "Deferred.h"
 
 namespace DCLF
 {
@@ -709,5 +713,122 @@ void DrawcallLimitFix::ProbeOpaqueTarget(std::uint32_t a_stage)
 			slot.x[t] = slot.y[t] = 0;
 		}
 		slot.format[t] = desc.Format;
+	}
+}
+
+namespace DCLF
+{
+	void CensusNativePass(const RE::BSRenderPass* a_pass, std::uint32_t a_technique, std::uint32_t a_mode, bool a_depth)
+	{
+		static const bool enabled = [] {
+			const char* value = std::getenv("CS_DCLF_LOD_CENSUS");
+			return value && *value && *value != '0';
+		}();
+		if (!enabled || !a_pass || !a_pass->geometry)
+			return;
+		// Where in the frame: the main-pass draws are numbered, and the first in the deferred pass marks its start.
+		static std::uint32_t phaseFrame = 0, sequence = 0, firstDeferred = ~0u;
+		if (a_mode == ~0u) {
+			if (const std::uint32_t now = SceneStore::Get().GetFrame(); now != phaseFrame) {
+				phaseFrame = now;
+				sequence = 0;
+				firstDeferred = ~0u;
+			}
+			if (globals::deferred->deferredPass && firstDeferred == ~0u)
+				firstDeferred = sequence;
+			++sequence;
+		}
+		struct Row
+		{
+			std::uint64_t draws = 0, triangles = 0;
+			ankerl::unordered_dense::set<const void*> geometries;
+			std::string example;
+		};
+		static std::mutex mutex;
+		static std::map<std::string, Row> rows;
+		static std::uint32_t lastFrame = 0, frames = 0;
+		const auto* geometry = a_pass->geometry;
+		const auto* shader = a_pass->shader;
+		const auto* property = a_pass->shaderProperty;
+		std::string lod = "-";
+		std::uint32_t technique = 0;
+		const auto type = shader ? static_cast<std::uint32_t>(shader->shaderType.get()) : 99u;
+		if (shader && shader->shaderType.get() == RE::BSShader::Type::Lighting && property) {
+			using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+			const auto& flags = property->flags;
+			lod = flags.all(Flag::kLODLandscape) ? "land" : flags.all(Flag::kHDLODObjects) ? "hdobj" : flags.all(Flag::kLODObjects) ? "obj" :
+			      flags.all(Flag::kMultiTextureLandscape)                                           ? "mtland" : "-";
+			if (const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(property->material))
+				lod += fmt::format(" feature {}", static_cast<std::uint32_t>(material->GetFeature()));
+			technique = (a_technique >> 24) & 0x3f;
+		}
+		// The scene root: the ancestor right under the ShadowSceneNode (or the topmost one).
+		const RE::NiAVObject* root = geometry;
+		for (const RE::NiAVObject* object = geometry; object; object = object->parent) {
+			root = object;
+			if (object->parent && object->parent->GetRTTI() && std::string_view(object->parent->GetRTTI()->name) == "ShadowSceneNode")
+				break;
+		}
+		std::string rootName = root && root->name.c_str() && *root->name.c_str() ? root->name.c_str() : (root && root->GetRTTI() ? root->GetRTTI()->name : "?");
+		if (const auto* tes = RE::TES::GetSingleton()) {
+			for (const RE::NiAVObject* object = geometry; object; object = object->parent) {
+				if (object == tes->lodLandRoot) { rootName = "lodLandRoot"; break; }
+				if (object == tes->objLODWaterRoot) { rootName = "objLODWaterRoot"; break; }
+				if (object == tes->objRoot) { rootName = "objRoot"; break; }
+			}
+		}
+		// Below the root: the node right under the named root, and the shape's parent class.
+		std::string below;
+		for (const RE::NiAVObject* object = geometry; object && object->parent; object = object->parent) {
+			const auto* tes = RE::TES::GetSingleton();
+			if (tes && (object->parent == tes->lodLandRoot || object->parent == tes->objLODWaterRoot || object->parent == tes->objRoot || object->parent == root)) {
+				below = fmt::format("{}:{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "");
+				break;
+			}
+		}
+		rootName += fmt::format(" / {} (parent {})", below, geometry->parent && geometry->parent->GetRTTI() ? geometry->parent->GetRTTI()->name : "-");
+		// DCLF's view of it (object LOD's native passes: why the skip left them).
+		if (lod != "-" && a_mode == ~0u) {
+			const auto object = SceneStore::Get().FindObject(geometry);
+			rootName += object < 0 ? " [no object]" :
+			            fmt::format(" [object, member {}, drew last frame {}, fading at registration {}, drawable {}, deferred pass {}, running {}]", SceneStore::Get().IsMember(object),
+							IndirectDraws::Get().DrewLastFrame(geometry, SceneStore::Get().GetFrame()), PassCapture::FadingAtRegistration(const_cast<RE::BSRenderPass*>(a_pass)),
+							SceneStore::Get().ObjectDrawable(object), globals::deferred->deferredPass, globals::features::drawcallLimitFix.loaded);
+			rootName += fmt::format(" [write mode {}, blend mode {}]", globals::game::shadowState->GetRuntimeData().alphaBlendWriteMode,
+				globals::game::shadowState->GetRuntimeData().alphaBlendMode);
+			rootName += fmt::format(" [{}, in world {}]", globals::deferred->deferredPass ? "deferred" : firstDeferred == ~0u ? "before the deferred pass" : "after the deferred pass",
+				globals::state->inWorld);
+		}
+		const auto key = fmt::format("{} type {} lod {} tech {} {} under {}", a_mode == ~0u ? (a_depth ? "main-depth" : "main-colour") : fmt::format("shadow-mode-{:x}", a_mode),
+			type, lod, technique, geometry->GetRTTI() ? geometry->GetRTTI()->name : "?", rootName);
+		std::uint64_t triangles = 0;
+		if (const auto* shape = const_cast<RE::BSGeometry*>(geometry)->AsTriShape())
+			triangles = shape->GetTrishapeRuntimeData().triangleCount;
+		std::scoped_lock lock(mutex);
+		if (a_mode == ~0u) {
+			const std::uint32_t frame = SceneStore::Get().GetFrame();
+			if (frame != lastFrame) {
+				lastFrame = frame;
+				if (++frames == 300) {
+					std::string text = "[DCLF] LOD census, per frame over 300 frames (draws, triangles, distinct geometries in all):";
+					for (const auto& [name, row] : rows)
+						text += fmt::format("\n    {}: {:.1f} draws, {:.0f} triangles, {} geometries; e.g. {}", name, row.draws / 300.0, row.triangles / 300.0, row.geometries.size(), row.example);
+					logger::info("{}", text);
+					rows.clear();  // examples too: each report samples afresh
+					frames = 0;
+				}
+			}
+		}
+		auto& row = rows[key];
+		if (row.example.empty()) {
+			std::string texture = "-";
+			if (shader && shader->shaderType.get() == RE::BSShader::Type::Lighting && property)
+				if (const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(property->material); material && material->diffuseTexture)
+					texture = material->diffuseTexture->name.c_str() ? material->diffuseTexture->name.c_str() : "?";
+			row.example = fmt::format("'{}' {}", geometry->name.c_str() ? geometry->name.c_str() : "", texture);
+		}
+		++row.draws;
+		row.triangles += triangles;
+		row.geometries.insert(geometry);
 	}
 }

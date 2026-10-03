@@ -570,9 +570,17 @@ namespace DCLF
 		const RE::NiSkinPartition::Partition* skinPartition = skinPartitions ? &skinPartitions->partitions[0] : nullptr;
 		// Which of them the engine draws, from the fade node's LOD level as both of its pass builders read it. A skin the
 		// engine draws no partition of at this level stays a member that draws nothing (kNoPartitions).
-		const std::uint16_t partitionMask = SkinPartitionsOf(*geometry);
+		std::uint16_t partitionMask = SkinPartitionsOf(*geometry);
 		auto* triShape = skinPartition ? skinPartition->buffData : data.rendererData;
-		const std::uint32_t geometrySlot = ResolveGeometrySlot(*geometry, triShape, skinPartition, timer);
+		// Object LOD (dclf-lod.md): the ranges its hidden cells leave. Whole, the TriShape's own slot; none, a member that draws
+		// nothing (kNoPartitions); else a chain of range slots (kPartitionChain), resolved again at each segment event.
+		const auto* shapeRanges = geometry->GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape ? LodRangesOf(geometry) : nullptr;
+		const bool lodChain = shapeRanges && !shapeRanges->empty() && !LodSegments::Whole(geometry, *shapeRanges);
+		if (shapeRanges && shapeRanges->empty())
+			partitionMask = static_cast<std::uint16_t>(kNoPartitions);
+		else if (lodChain)
+			partitionMask = static_cast<std::uint16_t>(kPartitionChain | std::min<std::size_t>(shapeRanges->size(), kPartitionChainCount));
+		const std::uint32_t geometrySlot = lodChain ? ResolveLodRangeSlots(*geometry, *shapeRanges, timer) : ResolveGeometrySlot(*geometry, triShape, skinPartition, timer);
 		if (geometrySlot == Tables::kSlotFree) {
 			--stats.ineligible[static_cast<std::size_t>(reason)];
 			++stats.ineligible[static_cast<std::size_t>(Ineligible::UnstableBuffer)];
@@ -896,6 +904,40 @@ namespace DCLF
 		return ResolveGeometrySource(source, a_timer);
 	}
 
+	std::uint32_t SceneStore::ResolveLodRangeSlots(RE::BSGeometry& a_geometry, const std::vector<LodSegments::Range>& a_ranges, PartTimer& a_timer)
+	{
+		// The draw (FUN_1414f2ad0, type 8): the renderer data's buffers, DrawIndexed(count, first, 0) per range.
+		const auto* triShape = a_geometry.GetGeometryRuntimeData().rendererData;
+		if (!triShape || a_ranges.empty())
+			return Tables::kSlotFree;
+		std::uint32_t first = Tables::kSlotFree, previous = Tables::kSlotFree;
+		for (const auto& range : a_ranges) {
+			GeometrySource source;
+			source.key = reinterpret_cast<const RE::BSGraphics::TriShape*>(range.key);
+			source.vertexBuffer = reinterpret_cast<ID3D11Buffer*>(triShape->vertexBuffer);
+			source.indexBuffer = reinterpret_cast<ID3D11Buffer*>(triShape->indexBuffer);
+			source.vertexDesc = std::bit_cast<std::uint64_t>(triShape->vertexDesc);
+			source.vertexCount = static_cast<RE::BSTriShape&>(a_geometry).GetTrishapeRuntimeData().vertexCount;
+			source.indexCount = range.indexCount;
+			source.firstIndex = range.firstIndex;
+			const std::uint32_t slot = range.key ? ResolveGeometrySource(source, a_timer) : Tables::kSlotFree;
+			if (slot == Tables::kSlotFree)
+				return Tables::kSlotFree;
+			if (previous == Tables::kSlotFree) {
+				first = slot;
+			} else if (tables.geometries[previous].nextPartition != slot) {
+				tables.geometries[previous].nextPartition = slot;
+				tables.NoteGeometry(previous);
+			}
+			previous = slot;
+		}
+		if (tables.geometries[previous].nextPartition != kNoPartition) {
+			tables.geometries[previous].nextPartition = kNoPartition;
+			tables.NoteGeometry(previous);
+		}
+		return first;
+	}
+
 	std::uint32_t SceneStore::ResolveLayerGeometrySlot(RE::BSGeometry& a_geometry, PartTimer& a_timer)
 	{
 		// The layer's draw (FUN_140e465d0 for a hint-12 pass): the renderer data's vertex buffer, the second index list
@@ -926,6 +968,8 @@ namespace DCLF
 		// address: it is resolved again into the same slot. So is one resolved while the render graph was off.
 		const bool staleGeometry = !newGeometry &&
 		                           ((resolveBuffers && tables.geometries[geometryIt->second].vertexAddress == 0) ||
+		                               tables.geometries[geometryIt->second].firstIndex != a_source.firstIndex ||
+		                               tables.geometries[geometryIt->second].indexCount != a_source.indexCount ||
 		                               (resolveBuffers && (!tables.geometryImports[geometryIt->second].vertexOwner || !tables.geometryImports[geometryIt->second].indexOwner)) ||
 		                               tables.geometries[geometryIt->second].vertexBuffer != a_source.vertexBuffer ||
 		                               tables.geometries[geometryIt->second].indexBuffer != a_source.indexBuffer);
@@ -962,7 +1006,7 @@ namespace DCLF
 			record.vertexStride = static_cast<std::uint32_t>(record.vertexDesc & 0xFu) * 4u;
 			record.vertexCount = a_source.vertexCount;
 			record.indexCount = a_source.indexCount;
-			record.firstIndex = 0;
+			record.firstIndex = a_source.firstIndex;
 			if (vertexLease && indexLease) {
 				record.vertexAddress = vertexLease->buffer.address;
 				record.vertexBytes = vertexLease->buffer.size;
@@ -1801,7 +1845,8 @@ namespace DCLF
 				// A skin of several partitions draws the chain of slots linked from its first (WriteObject).
 				bool stale = false;
 				std::uint32_t g = object.geometryIndex;
-				for (std::uint32_t link = 0; !stale && link < kMaxSkinPartitions && g != kNoPartition; ++link) {
+				const std::uint32_t links = (tables.skinPartitions[s] & kPartitionChain) ? (tables.skinPartitions[s] & kPartitionChainCount) : kMaxSkinPartitions;
+				for (std::uint32_t link = 0; !stale && link < links && g != kNoPartition; ++link) {
 					stale = g >= tables.geometries.size() || std::binary_search(staleGeometrySlots.begin(), staleGeometrySlots.end(), g);
 					if (!stale && !tables.skinPartitions[s] && !(object.flags & kObjectSkinned))
 						break;

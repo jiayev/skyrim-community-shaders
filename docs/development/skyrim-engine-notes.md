@@ -1308,3 +1308,52 @@ AE 1.6.1170. These are the choke points `SceneStore::InstallSceneEvents` detours
     drives the body. Dynamic clutter that never sleeps calls it every frame, about 10 nodes at Riverwood.
 -   **`NiAVObject::SetMotionType`** (`0x140e87270`) runs a subtree visitor (`FUN_140e87df0`, operation 5). On a
     static reference's fixed body it returned true and left the motion `kFixed`.
+
+## Object LOD: segments and where LOD is drawn
+
+All addresses are for AE 1.6.1170 (dclf-lod.md has the DCLF side).
+
+**The shapes.** Object LOD blocks hang under `TES::lodLandRoot`, each block a `BSMultiBoundNode` of `BSSubIndexTriShape`s
+(geometry type 8; names `obj`, `objHD`, `objsnow`, with `-LargeRef` for the large-reference grid's). Their Lighting
+properties carry `kLODObjects` (technique 13) or `kHDLODObjects` (technique 15). The engine never registers them into a
+shadow mode: no shadow cull reaches the LOD root.
+
+**Segments.** A shape has one segment per cell of its terrain node (`level²`, a `0x14`-byte record each: first index,
+triangles, an enabled byte at `+0x08`, a run's triangles at `+0x0C`, a run-start byte at `+0x10`). The shape holds:
+- the records at `+0x160`;
+- their count at `+0x168`;
+- the run count at `+0x16C`, which `OnVisible` reads (`BSSubIndexTriShape::OnVisible`, `0x140e312c0`: nothing when 0,
+  else the plain geometry cull);
+- a dirty byte at `+0x170`;
+- a non-segmented byte at `+0x171`.
+
+**The writers.**
+- `FUN_140e31130(shape, segment)` shows a segment (enabled when it has triangles), and `FUN_140e31160` hides one. Both
+  set the dirty byte.
+- `FUN_140e310b0` shows the shape whole: one run from segment 0 over `triangleCount`. It clears the dirty byte.
+- Their callers are the terrain manager's per-block updates, `FUN_1405110b0` (the active grid) and `FUN_1405112f0` (the
+  large-reference grid, through `BSDistantObjectLargeRefExtraData`). For a node with `kInActiveGrid` (or
+  `kInLargeRefGrid`), they hide the segment of every cell whose state is attached (`FUN_14019cdf0(tes, cell, 1)`: the
+  cell's `+0x44` state 6 or 7) and show the rest. A node outside the grid is shown whole.
+- Two other show-all callers (`FUN_1404fdcf0`, `FUN_140509550`) and the LOD block builder (`FUN_140e55790`, which also
+  writes records directly: `FUN_140e30ff0`, `FUN_140e31060`) complete the list. `FUN_140e30fb0` is the
+  `BSSubIndexLandTriShape` builder's (`FUN_141521890`).
+- So object LOD hides itself cell by cell under the loaded cells.
+
+**The draw.** `FUN_1414f2ad0`, the geometry draw's type switch, case 8:
+1. It rebuilds the runs when dirty (`FUN_140e31180`: walking back, consecutive enabled segments merge into one run whose
+   start is flagged with the run's triangles; an empty segment ahead of a run becomes its start).
+2. It draws each run: `FUN_140e464d0(renderer, buffers, firstIndex, triangles)`, which is
+   `DrawIndexed(triangles * 3, firstIndex, 0)`.
+
+A non-segmented shape (`+0x171`) draws whole. The global byte `0x143284cc0` draws every shape whole (a debug switch).
+
+**Where LOD is drawn.**
+- **The main view.** It draws object LOD in its depth prepass (Utility) and in the deferred main pass, in write mode 1
+  whether alpha-tested or not. Write mode 1 is the plain opaque group's: CS's deferred variant writes RGB only on every
+  target, so the G-buffer's alphas keep what lies beneath. The alpha-tested group's write mode 10 writes every channel.
+- **Water reflections.** `TESWaterReflections::Update` (`0x140520570`, via `FUN_140521c80`) renders a reflection view
+  before the world render. It draws far more LOD than the main view at a vista: about 57 object LOD, 17 HD object LOD and
+  50 terrain LOD draws a frame, through the same batch-renderer loops (write modes 1 and 11).
+- **The main menu's backdrop.** `FUN_140972590` (`UI3DSceneManager`'s scene, under a menu's `PostDisplay`) draws LOD
+  too, before gameplay.

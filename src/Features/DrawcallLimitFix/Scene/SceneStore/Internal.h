@@ -237,6 +237,16 @@ namespace DCLF
 		 */
 		inline EventQueue<const void*> emittanceEvents;
 
+		/**
+		 * @brief Object LOD's segment events (dclf-lod.md, LodSegments): the BSSubIndexTriShapes a segment write touched, as keys
+		 * (never dereferenced: the drain looks them up among the tracked shapes). Pushed after the write, by the patched calls
+		 * of the terrain manager's segment updates (InstallLodSegmentHooks), from whichever thread runs them; drained by the
+		 * render thread at ProcessEvents.
+		 */
+		inline EventQueue<const void*> lodSegmentEvents;
+		inline bool lodSegmentEventsInstalled = false;
+		bool InstallLodSegmentHooks();
+
 		inline void DrainEmittanceEvents(std::vector<const void*>& a_out)
 		{
 			emittanceEvents.Drain([&](const void* a_key) { a_out.push_back(a_key); });

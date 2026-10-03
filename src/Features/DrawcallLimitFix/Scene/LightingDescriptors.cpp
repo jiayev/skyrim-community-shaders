@@ -8,6 +8,7 @@
 #include "Features/TerrainBlending.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Engine/ShadowViews.h"
 
 namespace DCLF
 {
@@ -53,6 +54,11 @@ namespace DCLF
 			case Technique::MTLand:
 			case Technique::MTLandLODBlend:
 				return MtLandEnabled();
+			// Object LOD (dclf-lod.md): the LODOBJECTS / LODOBJECTSHD permutations, drawn by their visible segment ranges.
+			// Reached only for a BSSubIndexTriShape with the LOD object flags (DeriveLightingDescriptors).
+			case Technique::LODObjects:
+			case Technique::LODObjectHD:
+				return ActiveToggles().lodObjects;
 			default:
 				return false;
 			}
@@ -460,7 +466,11 @@ namespace DCLF
 	{
 		std::uint64_t f = a_property.flags.underlying();
 
-		if (f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects) | Bit(Flag::kLODLandscape)))
+		// LOD terrain stays the engine's; object LOD (a BSSubIndexTriShape: dclf-lod.md) is DCLF's with its toggle, drawn by
+		// the ranges its hidden cells leave (LodSegments).
+		if (f & Bit(Flag::kLODLandscape))
+			return Ineligible::Lod;
+		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property, a_geometry)))
 			return Ineligible::Lod;
 		const auto* alpha = a_geometry.GetGeometryRuntimeData().alphaProperty.get();
 		if (a_layer) {

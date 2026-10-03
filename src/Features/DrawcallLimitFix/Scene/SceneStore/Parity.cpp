@@ -72,10 +72,21 @@ namespace DCLF
 			g = {};
 		}
 		if (auto& sp = shadingParity; sp.frames) {
-			text += fmt::format("[DCLF] shading resample: {:.1f} slots watched, {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} resampled a frame; parity {} checks, {} slots compared, {} changed unsampled{}{}\n",
-				static_cast<double>(sp.watched) / sp.frames, static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks, sp.slots, sp.missing,
+			text += fmt::format("[DCLF] shading resample: {:.1f} slots watched, {:.1f} LOD fade events, {:.1f} emittance events, {:.1f} resampled a frame; parity {} checks, {} slots compared, {} changed after the events were taken (queued), {} changed unsampled{}{}\n",
+				static_cast<double>(sp.watched) / sp.frames, static_cast<double>(sp.lodFadeEvents) / sp.frames, static_cast<double>(sp.emittanceEvents) / sp.frames, static_cast<double>(sp.resampled) / sp.frames, sp.checks, sp.slots, sp.late, sp.missing,
 				sp.checks ? (sp.missing ? " <- MISSED; first: " : " <- OK") : "", sp.first);
 			sp = {};
+		}
+		if (auto& l = lodSegmentStats; l.events || l.checks || !lodRanges.empty()) {
+			std::size_t partial = 0;
+			for (const auto& [shape, ranges] : lodRanges) {
+				const std::uint32_t whole = LodSegments::At<std::uint16_t>(shape, LodSegments::kTriangleCount) * 3u;
+				partial += ranges.size() != 1 || ranges[0].firstIndex != 0 || ranges[0].indexCount != whole ? 1 : 0;
+			}
+			text += fmt::format("[DCLF] object LOD segments: {} shapes ({} partly hidden){}; {} segment events, {} drawn-range changes; parity {} checks, {} shapes compared, {} differ{}{}\n",
+				lodRanges.size(), partial, lodSegmentEventsInstalled ? "" : ", events not installed", l.events, l.changed, l.checks, l.shapes, l.differ,
+				l.checks ? (l.differ ? " <- LOD SEGMENTS; first: " : " <- OK") : "", l.first);
+			l = {};
 		}
 		if (auto& c = changeParity; c.checks || c.skipped) {
 			text += fmt::format("[DCLF] change log parity: {} checks ({} skipped), {} slots compared, {} changed, {} changed with no log entry{}{}\n", c.checks, c.skipped, c.slots,

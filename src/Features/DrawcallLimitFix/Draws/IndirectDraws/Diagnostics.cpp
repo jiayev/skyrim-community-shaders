@@ -151,11 +151,13 @@ namespace DCLF
 			store->updates = store->rewritten = store->resyncs = 0;
 			store->parity.Reset();
 		}
-		if (auto& c = impl->sunExclusionCache; c.builds) {
-			text += fmt::format("[DCLF] sun exclusion: {} builds, {} reused; parity {} checked, {} differ{}\n", c.builds, c.reused, c.parity.checks, c.parity.mismatches,
-				c.parity.Verdict());
-			c.builds = c.reused = 0;
-			c.parity.Reset();
+		for (auto* cache : { &impl->sunExclusionCache, &impl->parabolicExclusionCache }) {
+			if (auto& c = *cache; c.builds) {
+				text += fmt::format("[DCLF] {} exclusion: {} builds, {} reused; parity {} checked, {} differ{}\n", cache == &impl->sunExclusionCache ? "sun" : "paraboloid",
+					c.builds, c.reused, c.parity.checks, c.parity.mismatches, c.parity.Verdict());
+				c.builds = c.reused = 0;
+				c.parity.Reset();
+			}
 		}
 		static constexpr const char* kNames[3] = { "colour", "zprepass", "shadow" };
 		for (std::size_t i = 0; i < stats.async.size(); ++i) {

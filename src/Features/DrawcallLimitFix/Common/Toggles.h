@@ -39,6 +39,8 @@ namespace DCLF
 		bool mtLand = false;
 		// a leaf under an NiSwitchNode, in the frames every switch on its path selects it (trees, harvestables);
 		bool switchNodes = false;
+		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
+		bool lodObjects = false;
 		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
 		bool skinPartitions = false;
 		// geometry under an actor's 3D, and the FacegenRGBTint technique;
