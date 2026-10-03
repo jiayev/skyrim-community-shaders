@@ -1456,7 +1456,7 @@ void EditorWindow::UpdateOpenState()
 	if (open && !wasOpen) {
 		HideGameMenus();
 		BackgroundBlur::SetCSEditorActive(IsViewportActive());
-		LockWeatherForOverlay();
+		overlayWeatherLockPending = true;
 		Effects11Editor::GetSingleton().Close();  // Restores the menu first so returnToMenu below records it.
 		returnToMenu = globals::menu->IsEnabled;
 		globals::menu->IsEnabled = false;
@@ -1468,11 +1468,15 @@ void EditorWindow::UpdateOpenState()
 		Effects11Editor::GetSingleton().Close(false);
 		if (std::exchange(returnToMenu, false))
 			globals::menu->IsEnabled = true;
+		overlayWeatherLockPending = false;
 		if (weatherLockedByOverlay) {
 			UnlockWeather();
 			weatherLockedByOverlay = false;
 		}
 	}
+
+	if (overlayWeatherLockPending)
+		LockWeatherForOverlay();
 
 	wasOpen = open;
 }
@@ -2008,6 +2012,10 @@ void EditorWindow::LockWeather(RE::TESWeather* weather)
 	if (!weather)
 		return;
 
+	// ForceWeather clears the sky's region; UnlockWeather restores it so the engine doesn't reroll.
+	if (auto* sky = globals::game::sky; sky && !IsWeatherLocked())
+		regionBeforeLock = sky->region;
+
 	g_lockedWeather.store(weather, std::memory_order_release);
 	g_weatherLockActive.store(true, std::memory_order_release);
 	MaintainWeatherLock();
@@ -2019,11 +2027,18 @@ void EditorWindow::LockWeatherForOverlay()
 {
 	// Weather drifting mid-session changes the scene under whatever is being edited.
 	auto* sky = globals::game::sky;
-	if (!sky || IsWeatherLocked())
+	if (IsWeatherLocked()) {
+		overlayWeatherLockPending = false;
+		return;
+	}
+
+	// ForceWeather ends a transition instantly, snapping the sky to the incoming weather.
+	if (!sky || (sky->lastWeather && sky->currentWeatherPct < 1.0f))
 		return;
 
 	LockWeather(sky->currentWeather);
 	weatherLockedByOverlay = IsWeatherLocked();
+	overlayWeatherLockPending = !weatherLockedByOverlay;
 }
 
 void EditorWindow::UnlockWeather()
@@ -2035,8 +2050,14 @@ void EditorWindow::UnlockWeather()
 	g_weatherLockActive.store(false, std::memory_order_release);
 	g_lockedWeather.store(nullptr, std::memory_order_release);
 
-	if (auto* sky = globals::game::sky)
-		sky->ReleaseWeatherOverride();
+	// ReleaseWeatherOverride makes the next sky update pick a random region weather; hand the
+	// current weather back as the natural one instead so progression resumes from it.
+	if (auto* sky = globals::game::sky) {
+		sky->overrideWeather = nullptr;
+		sky->defaultWeather = sky->currentWeather;
+		sky->region = regionBeforeLock;
+	}
+	regionBeforeLock = nullptr;
 
 	logger::info("Weather unlocked: {}", locked->GetFormEditorID() ? locked->GetFormEditorID() : "Unknown");
 }

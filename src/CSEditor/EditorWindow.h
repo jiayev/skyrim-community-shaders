@@ -434,6 +434,8 @@ private:
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;
+	/// Sky region at lock time, restored on unlock since ForceWeather clears it.
+	RE::TESRegion* regionBeforeLock = nullptr;
 
 	// Time control state
 	bool timePaused = false;
