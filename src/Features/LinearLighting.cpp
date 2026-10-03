@@ -563,8 +563,6 @@ namespace
 namespace ImageSpaceColorManagement
 {
 	constexpr std::size_t VOLUMETRIC_LIGHTING_COLOR = 0;
-	constexpr std::size_t FOG_NEAR_COLOR = 4;
-	constexpr std::size_t FOG_FAR_COLOR = 8;
 
 	template <std::size_t... ColorOffsets>
 	class ScopedInputColors
@@ -680,16 +678,6 @@ void LinearLighting::Load()
 	}
 	if (DetourTransactionCommit() != NO_ERROR)
 		stl::report_and_fail("Linear Lighting: could not commit the menu hook."sv);
-	stl::write_vfunc<0x1,
-		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeFog,
-			ImageSpaceColorManagement::FOG_NEAR_COLOR,
-			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-		RE::VTABLE_BSImagespaceShaderISSAOCompositeFog[3]);
-	stl::write_vfunc<0x1,
-		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISSAOCompositeSAOFog,
-			ImageSpaceColorManagement::FOG_NEAR_COLOR,
-			ImageSpaceColorManagement::FOG_FAR_COLOR>>(
-		RE::VTABLE_BSImagespaceShaderISSAOCompositeSAOFog[3]);
 	stl::write_vfunc<0x1,
 		ImageSpaceColorManagement::BSImagespaceShader_Render<RE::ImageSpaceManager::ISCompositeVolumetricLighting,
 			ImageSpaceColorManagement::VOLUMETRIC_LIGHTING_COLOR>>(
