@@ -123,8 +123,6 @@ public:
 	// Accessors for Weather Picker Window
 	static std::vector<RE::TESWeather*>& GetFilteredWeathers() { return s_filteredWeathers; }
 	static int& GetSelectedWeatherIdx() { return s_selectedWeatherIdx; }
-	static bool GetAccelerateWeatherChange() { return s_accelerateWeatherChange; }
-	static RE::TESWeather*& GetCachedLastWeather() { return s_cachedLastWeather; }
 	static int FindWeatherIndex(RE::TESWeather* targetWeather);
 
 	// Shared weather-control backend, used by both the feature page and the Weather Picker Window.

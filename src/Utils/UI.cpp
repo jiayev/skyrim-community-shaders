@@ -704,11 +704,6 @@ namespace Util
 		ImGui::SameLine(0.0f, spacing);
 	}
 
-	float GetToolbarDividerWidth()
-	{
-		return ImGui::GetStyle().ItemSpacing.x * 4.0f + 1.0f;
-	}
-
 	// Static state for clear shader cache confirmation popup
 	static bool showClearCacheConfirmation = false;
 	static bool dontAskAgainCheckbox = false;

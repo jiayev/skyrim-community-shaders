@@ -302,9 +302,6 @@ namespace Util
 	 */
 	void ToolbarDivider(bool a_continueLine = true);
 
-	/** @brief Width ToolbarDivider() occupies, for toolbars that right-align before drawing. */
-	float GetToolbarDividerWidth();
-
 	/**
 	 * Confirmation popup for clearing shader cache.
 	 * Call RequestClearShaderCacheConfirmation() when the clear button is clicked.

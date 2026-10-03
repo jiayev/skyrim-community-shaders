@@ -124,9 +124,3 @@ bool PostProcessingPresets::WriteBaseline(const std::filesystem::path& packRoot)
 	SettingsOverrideManager::GetSingleton()->RefreshOverrides();
 	return true;
 }
-
-bool PostProcessingPresets::HasBaseline(const std::filesystem::path& packRoot)
-{
-	std::error_code ec;
-	return std::filesystem::is_regular_file(BaselinePath(packRoot), ec);
-}
