@@ -150,6 +150,11 @@ public:
 	void DrawOverlay() override;
 	bool IsOverlayVisible() const override;
 
+	/** @brief Re-resolves form edits after the active preset pack changed, reloading the built widgets it affects. */
+	static void ReloadFormEdits();
+	/** @brief Whether a form edit file exists, the user's or the active pack's; cached until ReloadFormEdits. */
+	static bool HasWidgetJsonFiles();
+
 private:
 	void DrawTimeControls();
 
@@ -196,7 +201,6 @@ private:
 	static void DisplayWindInfo(RE::TESWeather* weather);
 
 	// Helper functions
-	static bool HasWidgetJsonFiles();
 	static bool ShouldPreloadEditorResources();
 	static void EnsureWeatherListLoaded();
 	static void EnsureDataLoaded();

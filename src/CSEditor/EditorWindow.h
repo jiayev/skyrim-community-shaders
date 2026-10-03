@@ -3,6 +3,7 @@
 #include "Buffer.h"
 
 #include "Browser/BrowserState.h"
+#include "FormEditSources.h"
 #include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
@@ -156,6 +157,9 @@ public:
 
 	/** @brief Create widget instances for all game forms and load saved settings. */
 	void SetupResources();
+
+	/** @brief Reloads every built widget whose form is in @p keys from its resolved file, then refreshes the JSON markers. */
+	void ReloadFormEdits(const FormEditSources::FormKeySet& keys);
 
 	/** @brief Top-level draw entry point called once per frame when the editor is open. */
 	void Draw();

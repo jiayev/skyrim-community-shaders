@@ -63,7 +63,7 @@ namespace
 
 	bool CanApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
 	{
-		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline);
+		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline || pack.hasFormEdits);
 	}
 
 	void ApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
@@ -522,6 +522,14 @@ void PresetsPageRenderer::RenderDetail()
 					catalog.RemoveBaseline(pack->id);
 				Util::AddTooltip(T("menu.presets.remove_baseline_tooltip",
 					"Stops applying this pack's baseline settings on the next load. Values already in use are kept until you reset them."));
+			}
+
+			if (catalog.GetActivePackId() == pack->id) {
+				ImGui::SameLine(0.0f, style.ItemSpacing.x);
+				if (ImGui::Button(T("menu.presets.disable", "Disable Preset")))
+					catalog.DisableActivePack();
+				Util::AddTooltip(T("menu.presets.disable_tooltip",
+					"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
 			}
 
 			if (catalog.GetActivePackId() == pack->id) {

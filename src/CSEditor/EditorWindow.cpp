@@ -1434,6 +1434,20 @@ void EditorWindow::SetupResources()
 	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
 }
 
+void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)
+{
+	const auto reload = [&](Widget& widget) {
+		if (keys.contains(widget.GetFormKey()))
+			widget.Load(false);
+	};
+	for (auto* collection : GetWidgetCollections())
+		for (auto& widget : *collection)
+			reload(*widget);
+	if (currentCellLightingWidget)
+		reload(*currentCellLightingWidget);
+	InvalidateJsonAttachmentCache();
+}
+
 bool EditorWindow::IsViewportActive() const
 {
 	return settings.showViewport && !(globals::features::hdrDisplay.loaded && globals::features::hdrDisplay.settings.enableHDR);

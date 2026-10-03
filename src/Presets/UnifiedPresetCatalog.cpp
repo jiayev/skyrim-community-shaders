@@ -2,9 +2,11 @@
 #include "PCH.h"
 
 #include "Feature.h"
+#include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Globals.h"
+#include "CSEditor/FormEditSources.h"
 #include "CSEditor/SceneManager/SceneManager.h"
 #include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "I18n/I18n.h"
@@ -455,6 +457,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.effects11Root = ResolveEffects11Root(packRoot, meta);
 		pack.hasEffects11 = !pack.effects11Root.empty();
 		pack.hasCSPresets = SceneSettingsManager::HasScenePayload(packRoot);
+		pack.hasFormEdits = FormEditSources::HasPackFormFiles(packRoot);
 		pack.baselineFeatures = ListBaselineFeatures(packRoot);
 		pack.hasBaseline = !pack.baselineFeatures.empty() || !pack.disableAtBoot.empty() ||
 			(pack.type && *pack.type == PresetType::Baseline);
@@ -463,10 +466,10 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			pack.description = InferDescriptionFromReadme(packRoot);
 		InferMissingArtwork(pack);
 
-		if (!pack.hasEffects11 && !pack.hasCSPresets && !pack.hasBaseline) {
+		if (!pack.hasEffects11 && !pack.hasCSPresets && !pack.hasFormEdits && !pack.hasBaseline) {
 			pack.valid = false;
 			if (pack.invalidReason.empty())
-				pack.invalidReason = "No Effects11, CS Presets or Baseline payload found";
+				pack.invalidReason = "No Effects11, CS Presets, Forms or Baseline payload found";
 		}
 
 		packs.push_back(std::move(pack));
@@ -518,7 +521,7 @@ void UnifiedPresetCatalog::DiscoverEffects11Legacy()
 
 void UnifiedPresetCatalog::AdoptEffects11ActivePack()
 {
-	if (!activePackId.empty() || !globals::features::effects11.loaded)
+	if (!activePackId.empty() || !globals::features::effects11.loaded || PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11)
 		return;
 	const auto& e11Id = PresetManager::GetSingleton().GetActivePresetId();
 	const auto match = std::ranges::find_if(packs, [&](const PackInfo& pack) {
@@ -712,7 +715,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		}
 	}
 
-	if (pack->hasCSPresets)
+	if (pack->hasCSPresets || pack->hasFormEdits)
 		appliedAny = true;
 
 	// A Baseline-only pack is its own layer, so it must not displace the active Effects 11 / CS pack.
@@ -720,6 +723,7 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 		SetActivePackId(id);
 		// The scene layer always follows the active pack, so a pack without scene files clears it.
 		globals::features::sceneManager.ReloadOverwrites();
+		CSEditor::ReloadFormEdits();
 		// Applying a pack, even again, re-selects the pipeline it was authored for.
 		using PostProcessingMode::Mode;
 		PostProcessingMode::Set(pack->IsE11() && effects11Applied ? Mode::Effects11 : Mode::PostProcessing);
@@ -731,6 +735,23 @@ bool UnifiedPresetCatalog::ApplyPack(const std::string& id, bool saveEffects11Cu
 	}
 
 	return appliedAny;
+}
+
+void UnifiedPresetCatalog::DisableActivePack()
+{
+	assert(!activePackId.empty());
+	if (const auto* pack = FindPack(activePackId); pack && pack->hasEffects11) {
+		auto& presetManager = PresetManager::GetSingleton();
+		const bool switchedToLegacy = pack->source != SourceKind::Effects11Legacy && presetManager.HasLegacyInstall() &&
+		                              presetManager.SwitchPreset(PresetManager::kLegacyPresetId, true);
+		if (switchedToLegacy)
+			globals::features::effects11.PersistActivePreset();
+		else
+			PostProcessingMode::Set(PostProcessingMode::Mode::PostProcessing);
+	}
+	SetActivePackId("");
+	globals::features::sceneManager.ReloadOverwrites();
+	CSEditor::ReloadFormEdits();
 }
 
 bool UnifiedPresetCatalog::IsBaselineEnabled(const std::string& id) const

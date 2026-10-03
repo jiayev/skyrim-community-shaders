@@ -65,6 +65,7 @@ public:
 		bool hasEffects11 = false;
 		bool hasCSPresets = false;
 		bool hasBaseline = false;
+		bool hasFormEdits = false;  ///< Ships CS Editor form edits under Forms/; applied as CS content.
 		/// Feature short names the pack's Baseline folder sets, sorted; empty without a baseline payload.
 		std::vector<std::string> baselineFeatures;
 		/// Feature short names → disabled at boot when this baseline pack is enabled (manifest disableAtBoot).
@@ -89,8 +90,8 @@ public:
 
 		/** @brief Grouped as E11: the declared type, else whether an Effects 11 payload was found. */
 		bool IsE11() const { return type ? *type == PresetType::E11 : hasEffects11; }
-		/** @brief Grouped as CS: the declared type, else whether scene files were found. */
-		bool IsCS() const { return type ? *type == PresetType::CS : hasCSPresets; }
+		/** @brief Grouped as CS: the declared type, else whether scene files or form edits were found. */
+		bool IsCS() const { return type ? *type == PresetType::CS : hasCSPresets || hasFormEdits; }
 		/** @brief Grouped as Baseline: the declared type, else whether a Baseline folder was found. */
 		bool IsBaseline() const { return type ? *type == PresetType::Baseline : hasBaseline; }
 		/** @brief Grouped under the given type. */
@@ -150,6 +151,10 @@ public:
 	/** @brief Applies Effects11, swaps the Scene Manager overwrite layer to this pack's CS Presets files, and
 	 *  enables its Baseline overwrites. A Baseline-only pack leaves the active pack and scene layer untouched. */
 	bool ApplyPack(const std::string& id, bool saveEffects11Current = true);
+
+	/** @brief Turns the active pack off: Effects 11 returns to the Legacy install (Post Processing without one),
+	 *  and the scene layer and form edits fall back to the user's own. */
+	void DisableActivePack();
 
 	/** @brief Ids of packs whose Baseline overwrites are enabled, in layering order (a later pack wins conflicts). */
 	const std::vector<std::string>& GetBaselinePackIds() const { return baselinePackIds; }

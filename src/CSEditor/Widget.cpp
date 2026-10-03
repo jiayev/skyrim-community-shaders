@@ -54,9 +54,9 @@ void Widget::Save()
 
 void Widget::Load(bool showNotification)
 {
-	std::string filePath = GetSaveFilePath();
+	const std::string filePath = FormEditSources::ResolveFile(GetFormKey()).string();
 
-	if (!std::filesystem::exists(filePath)) {
+	if (filePath.empty()) {
 		js = json();
 		LoadSettings();
 
@@ -149,18 +149,18 @@ void Widget::Delete()
 	try {
 		std::filesystem::remove(filePath);
 
-		js = json();
-
-		// Reload settings from vanilla/mod defaults
-		LoadSettings();
-
-		// Apply the vanilla values to the game
+		// The active preset's file, when it has one, takes over from the deleted user file.
+		Load(false);
 		ApplyChanges();
 
 		EditorWindow::GetSingleton()->OnWidgetJsonAttachmentChanged(this);
 
+		auto editorId = GetEditorID();
+		const char* message = FormEditSources::GetPackFormKeys().contains(GetFormKey()) ?
+			T(TKEY("deleted_reverted_to_preset"), "Deleted {} - reverted to preset values") :
+			T(TKEY("deleted_reverted_to_vanilla"), "Deleted {} - reverted to vanilla values");
 		EditorWindow::GetSingleton()->ShowNotification(
-			std::format("Deleted {} - reverted to vanilla values", GetEditorID()),
+			std::vformat(message, std::make_format_args(editorId)),
 			Util::Colors::GetSuccess(),
 			3.0f);
 	} catch (const std::filesystem::filesystem_error& e) {
@@ -171,6 +171,34 @@ void Widget::Delete()
 bool Widget::HasSavedFile() const
 {
 	return std::filesystem::exists(GetSaveFilePath());
+}
+
+std::optional<Widget::PackBadge> Widget::GetPackBadge() const
+{
+	if (!FormEditSources::GetPackFormKeys().contains(GetFormKey()))
+		return std::nullopt;
+	assert(globals::menu);
+	const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
+	auto packName = FormEditSources::GetActivePackName();
+	if (HasSavedFile())
+		return PackBadge{ statusPalette.Warning,
+			std::vformat(T(TKEY("pack_override_tooltip"), "Your saved file overrides preset '{}'. Delete it to use the preset's values."),
+				std::make_format_args(packName)) };
+	return PackBadge{ statusPalette.InfoColor,
+		std::vformat(T(TKEY("pack_values_tooltip"), "Values from preset '{}'."), std::make_format_args(packName)) };
+}
+
+void Widget::DrawPackSourceBadge() const
+{
+	const auto packBadge = GetPackBadge();
+	if (!packBadge)
+		return;
+	ImGui::SameLine();
+	{
+		Icons::FontGuard font(Icons::Family::FontAwesome);
+		ImGui::TextColored(packBadge->color, "%s", ICON_FA_LAYER_GROUP);
+	}
+	Util::AddTooltip(packBadge->tooltip.c_str());
 }
 
 void Widget::DrawMenu()
@@ -233,7 +261,7 @@ void Widget::DrawDeleteConfirmationModal(const char* popupId)
 
 std::string Widget::GetSaveFilePath() const
 {
-	return std::format("{}\\{}\\{}.json", Util::PathHelpers::GetCommunityShaderPath().string(), GetFolderName(), GetSaveKey());
+	return FormEditSources::GetFilePath(Util::PathHelpers::GetCommunityShaderPath(), GetFormKey()).string();
 }
 
 std::string Widget::GetFolderName() const
@@ -354,6 +382,9 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 	const float scale = Util::GetUIScale();
 	using Kind = TitleBarAction::Kind;
 
+	// Outlives `actions`, whose tooltips point into it.
+	const auto packBadge = showSaveLoadRevert ? GetPackBadge() : std::nullopt;
+
 	std::vector<TitleBarAction> actions;
 
 	auto addIcon = [&](const char* id, ImTextureRef texture, const char* tooltip, std::function<void()> onClick) -> TitleBarAction& {
@@ -441,7 +472,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 			action.textColor = unsavedColor;
 		}
 
-		const char* loadTooltip = T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)");
+		const char* loadTooltip = T(TKEY("load_saved_file"), "Load saved file, else the active preset's values, else vanilla");
 		auto loadClick = [this]() { Load(); };
 		if (useIcons)
 			addFaIcon("##TitleLoad", ICON_FA_FOLDER_OPEN, loadTooltip, loadClick);
@@ -470,6 +501,11 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 				deleteAction->textColor = statusPalette.Error;
 			}
 			deleteAction->destructive = true;
+		}
+
+		if (packBadge) {
+			auto& action = addFaIcon("##TitlePackSource", ICON_FA_LAYER_GROUP, packBadge->tooltip.c_str(), []() {});
+			action.textColor = packBadge->color;
 		}
 
 		if (groupStart > 0)
@@ -776,7 +812,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 			if (unsaved)
 				ImGui::PopStyleColor();
 			Util::AddTooltip(saveTooltip);
-			iconButton("_Load", Util::IconLoader::GetIcons().loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
+			iconButton("_Load", Util::IconLoader::GetIcons().loadSettings.texture, T(TKEY("load_saved_file"), "Load saved file, else the active preset's values, else vanilla"), [&]() { Load(); });
 			iconButton("_Revert", Util::IconLoader::GetIcons().featureSettingRevert.texture, T(TKEY("revert_to_original"), "Revert to original game values"), [&]() { RevertChanges(); });
 
 			if (HasSavedFile()) {
@@ -789,6 +825,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 				}
 				Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
 			}
+
+			DrawPackSourceBadge();
 		}
 
 		ImGui::PopStyleColor(2);
@@ -825,7 +863,7 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 				if (unsaved)
 					ImGui::PopStyleColor();
 				Util::AddTooltip(saveTooltip);
-				textButton(T(TKEY("load"), "Load"), T(TKEY("load_saved_file"), "Load saved file (or reset to vanilla if no file)"), [&]() { Load(); });
+				textButton(T(TKEY("load"), "Load"), T(TKEY("load_saved_file"), "Load saved file, else the active preset's values, else vanilla"), [&]() { Load(); });
 				ImGui::SameLine();
 				if (Util::WarningButton(T(TKEY("revert"), "Revert")))
 					RevertChanges();
@@ -838,6 +876,8 @@ void Widget::DrawWidgetHeader(const char* searchId, bool showApply, bool showSav
 						ImGui::OpenPopup("DeleteConfirmation");
 					Util::AddTooltip(T(TKEY("delete_saved_file_tooltip"), "Delete saved file"));
 				}
+
+				DrawPackSourceBadge();
 			}
 		}
 	}

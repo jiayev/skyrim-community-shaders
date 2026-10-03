@@ -13,6 +13,7 @@
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
+#include "CSEditor/FormEditSources.h"
 #include "CSEditor/WeatherPickerWindow.h"
 #include "Features/PerformanceOverlay.h"
 #include "Menu/ThemeManager.h"
@@ -83,13 +84,23 @@ bool CSEditor::HasWidgetJsonFiles()
 		}
 	}
 
+	s_hasWidgetJsonFiles = FormEditSources::HasPackFormEdits();
 	s_checkedWidgetJsonFiles = true;
-	return false;
+	return s_hasWidgetJsonFiles;
 }
 
 bool CSEditor::ShouldPreloadEditorResources()
 {
 	return s_dataAvailable && !s_resourcesInitialized && EditorWindow::CanBeOpen() && HasWidgetJsonFiles();
+}
+
+void CSEditor::ReloadFormEdits()
+{
+	const auto changedKeys = FormEditSources::Refresh();
+	// Lets the next Prepass build the widgets when the new pack is the first source of form edits.
+	s_checkedWidgetJsonFiles = false;
+	if (s_resourcesInitialized)
+		EditorWindow::GetSingleton()->ReloadFormEdits(changedKeys);
 }
 
 void CSEditor::EnsureWeatherListLoaded()
