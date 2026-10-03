@@ -586,6 +586,64 @@ namespace DCLF
 		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (as
 		// many as the sun has: the block grows to hold them). The sun's Accumulate has run.
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
+		// The depth segment's plain draws (MainOpaquePass): the index pool brought up to the tables (unless the shadow commit did,
+		// earlier this frame); a bucket per group of pipeline slots that share a depth pipeline (IndirectState::zGroups), in the
+		// order the slots first name them, its range the slots' ranges together (Resources::zBucketCapacity, which the sequences'
+		// phase ranges hold); the slots' map to them and each phase's bucket table in the slot's region, their count words zeroed;
+		// and a draw call per bucket. A slot without a published pipeline maps to none: BuildDraws drops its draws.
+		if (depthOnly && a_resources->pool) {
+			const auto& layout = a_resources->latchLayout;
+			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), *a_resources->latch, latchSlot, layout.PoolOffset(), uploads);
+			const auto slots = static_cast<std::uint32_t>(a_resources->zBucketCapacity.size());
+			if (slots > layout.buckets)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
+			const auto& lookups = a_store.GetLookups();
+			const auto& pipelineKeys = a_store.GetTables().pipelines;
+			const auto& groups = frame->indirect.zGroups;
+			zBucketMap.assign(slots, kNoBucket);
+			zGroupBucket.assign(frame->indirect.zPipelines.size(), kNoBucket);
+			zBucketTable.clear();  // (group, capacity) per bucket, then (first, capacity) per phase
+			std::uint32_t buckets = 0;
+			for (std::uint32_t p = 0; p < slots; ++p) {
+				if (!a_resources->zBucketCapacity[p] || p >= lookups.pipelines.size() || p >= pipelineKeys.size())
+					continue;
+				const auto& entry = lookups.pipelines[p];
+				if (entry.setIndex == Lookups::kNone || !(entry.key == pipelineKeys[p]) || entry.setIndex >= groups.size())
+					continue;
+				auto& bucket = zGroupBucket[groups[entry.setIndex]];
+				if (bucket == kNoBucket) {
+					bucket = buckets++;
+					zBucketTable.insert(zBucketTable.end(), { groups[entry.setIndex], 0u });
+				}
+				zBucketTable[2 * bucket + 1] += a_resources->zBucketCapacity[p];
+				zBucketMap[p] = bucket;
+			}
+			const std::size_t calls = std::size_t(buckets) * 2;
+			zBucketTable.resize(calls + std::size_t(buckets) * 4, 0u);
+			std::uint32_t first = 0;
+			for (std::uint32_t b = 0; b < buckets; ++b) {
+				const std::uint32_t group = zBucketTable[2 * b], capacity = zBucketTable[2 * b + 1];
+				zBucketTable[calls + 2 * b] = first;
+				zBucketTable[calls + 2 * b + 1] = capacity;
+				zBucketTable[calls + 2 * (buckets + b)] = first + frame->sequenceDraws;
+				zBucketTable[calls + 2 * (buckets + b) + 1] = capacity;
+				frame->zCalls.push_back({ b, first, capacity, frame->indirect.zPipelines[group] });
+				first += capacity;
+			}
+			if (slots)
+				a_resources->latch->Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(zBucketMap.data(), slots)));
+			if (buckets) {
+				a_resources->latch->Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(zBucketTable.data() + calls, calls)));
+				a_resources->latch->Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(zBucketTable.data() + calls * 2, calls)));
+				zBucketZeros.resize(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
+				for (const auto& counts : a_resources->zBucketCounts)
+					uploads(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
+			}
+			const auto region = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot));
+			latch.bucketTableOffset = region + layout.BucketTableOffset();
+			latch.phaseTwoBucketTableOffset = region + layout.PhaseTwoBucketTableOffset();
+			latch.bucketMapOffset = region + layout.BucketMapOffset();
+		}
 		if (!depthOnly) {
 			SunAccumulation::Get().GpuCascades(sunCascades);
 			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for

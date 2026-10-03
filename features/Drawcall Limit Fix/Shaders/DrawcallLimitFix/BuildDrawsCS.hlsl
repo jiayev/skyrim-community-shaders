@@ -62,9 +62,11 @@ cbuffer BuildDrawsConstants : register(b0)
 	// OnVisible stops; a shadow view drops a caster under a stood-in root (kFadeRootStoodIn) while it fades. 0 elsewhere.
 	uint FadeRootsIndex;
 	uint FadeStatesUnused;  // the states a dispatch reads are its latch's (FadeStatesIndex)
-	// A shadow view: RWByteAddressBuffer, its slot's bucket counts, a word per bucket (BucketTableOffset). 0 elsewhere.
+	// A shadow view, and the depth segment's phases: RWByteAddressBuffer, the bucket counts, a word per bucket (BucketTableOffset). 0
+	// elsewhere.
 	uint BucketCountsIndex;
-	// A shadow view: ByteAddressBuffer, each geometry slot's first index in the index pool (ShadowIndexPool), ~0 without one.
+	// A shadow view and the depth segment: ByteAddressBuffer, each geometry slot's first index in the index pool (IndexPool), ~0
+	// without one.
 	uint PoolFirstsIndex;
 }
 
@@ -171,6 +173,8 @@ static float2 TreeHeight;
 // A shadow view: its bucket table, in bytes into the latch block (BuildDrawsLatch::bucketTableOffset): the view's map row names
 // a bucket for each key slot, and the table gives each bucket its range of the slot's sequences (first, capacity). 0 elsewhere.
 static uint BucketTableOffset;
+// The depth segment's phases: each pipeline slot's bucket, in bytes into the latch block (BuildDrawsLatch::bucketMapOffset).
+static uint BucketMapOffset;
 
 // The object record's rows the culling reads (LightingConstants.h, BindlessObject): the fade node's centre, the world bound,
 // the sun entry's sphere.
@@ -208,7 +212,10 @@ void LoadLatch()
 	SunCascadeOffset = sunRegions.x;
 	SunEntryOffset = sunRegions.y;
 	LocalShadowOffset = sunRegions.z;
-	BucketTableOffset = latch.Load(LatchOffset + 236);
+	// The depth segment's phases each have their table (BuildDrawsLatch::bucketTableOffset, phaseTwoBucketTableOffset), and
+	// share the pipeline slots' map to the buckets (bucketMapOffset).
+	BucketTableOffset = latch.Load(LatchOffset + (((PhaseBits >> 4) & 0xFu) == 2 ? 244 : 236));
+	BucketMapOffset = latch.Load(LatchOffset + 248);
 	FadeStatesIndex = latch.Load(LatchOffset + 240);
 }
 
@@ -816,7 +823,14 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	if (!drawable)
 		return;
 	const uint pipeline = DrawPipeline(input.x);  // a shadow view's: the draw's bucket
-	if (pipeline == kNoPipeline)
+	// A draw's bucket: a shadow view's is its pipeline map entry (above); the depth segment's is its pipeline slot's (the rows' top
+	// 12 bits) in the slots' map, the group of slots sharing its depth pipeline (MainOpaquePass), kNoPipeline for a slot with none.
+	uint bucketKey = pipeline;
+	if (phase == kPhaseOne || phase == kPhaseTwo) {
+		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
+		bucketKey = latch.Load(BucketMapOffset + (input.y >> 20) * 4);
+	}
+	if (pipeline == kNoPipeline || bucketKey == kNoPipeline)
 		return;
 	// Phase 2's sequences are few and draw from their own range; they are not sorted.
 	const bool secondRange = phase == kPhaseTwo;
@@ -825,7 +839,7 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	uint2 bucket = uint2(0, 0);
 	if (BucketTableOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
-		bucket = latch.Load2(BucketTableOffset + pipeline * 8);
+		bucket = latch.Load2(BucketTableOffset + bucketKey * 8);
 	}
 	if (sorted && pipeline >= kSortKeys)
 		return;  // outside the sets, like kNoPipeline; before any slot is taken, so the sorted range has no hole
@@ -856,14 +870,15 @@ bool Occluded(float3 boundCentre, float boundRadius)
 			const uint4 secondStream = streamIndex != kNoStream ? stream : vertexBuffer;
 			uint slot;
 			if (BucketTableOffset != 0) {
-				// A shadow view: the bucket's next slot, counted in its own word. One plain indexed indirect draw with the bucket's
-				// pipeline executes the range (ShadowViewPass); the slot is the draw's instance, by which the vertex stage finds the
-				// sequence (Utility.hlsl, DCLF_PULLED). The table sizes every bucket for all the draws its key slots can produce.
+				// A shadow view's or the depth segment's: the bucket's next slot, counted in its own word. One plain indexed indirect draw
+				// with the bucket's pipeline executes the range (ShadowViewPass, MainOpaquePass); the slot is the draw's instance, by
+				// which the vertex stage finds the sequence (Utility.hlsl, Lighting.hlsl: DCLF_PULLED). The table sizes every bucket for
+				// all the draws its key slots (a shadow view's) or its pipeline slot's objects (the depth segment's) can produce.
 				RWByteAddressBuffer bucketCounts = ResourceDescriptorHeap[BucketCountsIndex];
-				bucketCounts.InterlockedAdd(pipeline * 4, 1, slot);
+				bucketCounts.InterlockedAdd(bucketKey * 4, 1, slot);
 				if (slot < bucket.y) {
 					uint drawn;
-					count.InterlockedAdd(kCountDrawn, 1, drawn);
+					count.InterlockedAdd(phase == kPhaseTwo ? kCountDrawnPhaseTwo : kCountDrawn, 1, drawn);
 					ByteAddressBuffer poolFirsts = ResourceDescriptorHeap[PoolFirstsIndex];
 					StoreShadowSequence(sequences, bucket.x + slot, slot, rows, objectWord, vertexBuffer, secondStream, indexBuffer, indexBuffer.w,
 						firstIndex, poolFirsts.Load(geometryIndex * 4));

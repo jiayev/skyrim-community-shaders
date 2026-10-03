@@ -104,16 +104,24 @@ namespace DCLF::Draws
 		 * @brief Every draw the scene's tracked objects can produce: one per object, or one per partition a skin draws. A view's
 		 * draws are a part of it, whatever the culling keeps, so a sequence buffer that holds it holds any epoch's.
 		 */
-		std::uint32_t SceneDrawBound(const SceneStore::Tables& a_tables)
+		std::uint32_t SceneDrawBound(const SceneStore::Tables& a_tables, std::vector<std::uint32_t>* a_perPipeline = nullptr)
 		{
 			std::uint64_t draws = 0;
 			const std::size_t objects = a_tables.objects.size();
 			const bool partitioned = a_tables.skinPartitions.size() >= objects;
+			if (a_perPipeline)
+				a_perPipeline->assign(a_tables.pipelines.size(), 0u);
 			for (std::size_t o = 0; o < objects; ++o) {
-				if (a_tables.objects[o].flags & kObjectFree)
+				const auto& object = a_tables.objects[o];
+				if (object.flags & kObjectFree)
 					continue;
 				const std::uint32_t partitions = partitioned ? a_tables.skinPartitions[o] : 0u;
-				draws += PartitionDraws(partitions);
+				const std::uint32_t produced = PartitionDraws(partitions);
+				draws += produced;
+				// Per pipeline slot too, for the Z-prepass's buckets (Resources::zBucketCapacity): a decal's (a multi-index layer's too)
+				// never, as the depth segment is not given decals (BuildDrawsCS), so its slot needs no bucket and no draw call.
+				if (a_perPipeline && object.pipelineIndex < a_perPipeline->size() && !(object.flags & kObjectDecal))
+					(*a_perPipeline)[object.pipelineIndex] += produced;
 			}
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 		}
@@ -252,6 +260,14 @@ namespace DCLF
 		// The phase-1 and colour draws executed grouped by pipeline: BuildDraws appends in whatever order its threads
 		// finish, which made nearly every sequence of the indirect draw switch pipeline.
 		state->sort = DrawSort::Create(device, state->sequenceDraws);
+		// The Z-prepass's plain draws: their buckets' count words (grown with the pipeline slots, ReserveMainSequences) and the
+		// scene's index pool.
+		state->zBucketCountWords = 64;
+		state->zBucketCounts[0] = CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts");
+		state->zBucketCounts[1] = CreateWords(state->zBucketCountWords, true, "cs.dclf.z.bucket-counts2");
+		state->pool = EnsureIndexPool(*scene, device, smallTables);
+		if (!state->pool)
+			return NotReady(7, "the index pool's copy program could not be created");
 		if (BuildParityEnabled())
 			state->sequencesD3D11 = WrapWords(*state->sequences, SequenceSlots(state->sequenceDraws, state->sequenceDecals) * sizeof(DrawSequence));
 		if (!SwitchValue(Switch::GBufferProbe).empty()) {
@@ -371,7 +387,41 @@ namespace DCLF
 		if (!resources)
 			return;
 		auto& r = *resources;
-		const std::uint32_t draws = SceneDrawBound(a_tables);
+		std::vector<std::uint32_t> perPipeline;
+		std::uint32_t draws = SceneDrawBound(a_tables, &perPipeline);
+		// The Z-prepass's buckets: a pipeline slot's every draw, its capacity kept while they fit and grown to a power of two past
+		// them, so that its range, and the plain draws recorded over it, change only then. The sequences' phase ranges hold them all.
+		{
+			const auto slots = static_cast<std::uint32_t>(perPipeline.size());
+			bool moved = r.zBucketCapacity.size() < slots;
+			if (moved)
+				r.zBucketCapacity.resize(slots, 0u);
+			for (std::uint32_t p = 0; p < slots; ++p) {
+				if (perPipeline[p] > r.zBucketCapacity[p]) {
+					r.zBucketCapacity[p] = std::bit_ceil(perPipeline[p]);
+					moved = true;
+				}
+			}
+			if (moved) {
+				r.zBucketFirst.resize(r.zBucketCapacity.size());
+				std::uint64_t first = 0;
+				for (std::size_t p = 0; p < r.zBucketCapacity.size(); ++p) {
+					r.zBucketFirst[p] = static_cast<std::uint32_t>(first);
+					first += r.zBucketCapacity[p];
+				}
+				draws = static_cast<std::uint32_t>(std::max<std::uint64_t>(draws, std::min<std::uint64_t>(first, UINT32_MAX)));
+				++r.zBucketsLayout;
+			} else if (!r.zBucketFirst.empty()) {
+				draws = std::max(draws, r.zBucketFirst.back() + r.zBucketCapacity.back());
+			}
+			const auto buckets = static_cast<std::uint32_t>(r.zBucketCapacity.size());
+			if (buckets > r.zBucketCountWords) {
+				r.zBucketCountWords = Doubled(std::max(r.zBucketCountWords, 64u), buckets);
+				for (auto& counts : r.zBucketCounts)
+					counts->ResizeStructured(r.zBucketCountWords);
+			}
+			ReserveMainLatch(r, r.latchLayout.cascades, r.latchLayout.shadowVolumes, buckets);
+		}
 		std::uint32_t decals = 0;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
 			decals = std::max(decals, a_tables.decalCount[group]);
@@ -520,12 +570,17 @@ namespace DCLF
 			host->AddExtension(kShadowExtensionId, [state = shadow] { return MakeShadowExtension(state); });
 	}
 
-	void IndirectDraws::Impl::ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes)
+	void IndirectDraws::Impl::ReserveMainLatch(Resources& a_resources, std::uint32_t a_cascades, std::uint32_t a_shadowVolumes, std::uint32_t a_buckets)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
 		auto& layout = a_resources.latchLayout;
-		if (!host || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes))
+		if (!host || (a_cascades <= layout.cascades && a_shadowVolumes <= layout.shadowVolumes && a_buckets <= layout.buckets))
 			return;
+		if (a_buckets > layout.buckets) {
+			const std::uint32_t grown = Doubled(std::max(layout.buckets, 64u), a_buckets);
+			logger::info("[DCLF] Z-prepass buckets in the main latch: {} grown to {}", layout.buckets, grown);
+			layout.buckets = grown;
+		}
 		if (a_cascades > layout.cascades) {
 			const std::uint32_t grown = Doubled(layout.cascades, a_cascades);
 			logger::info("[DCLF] sun cascades in the main latch: {} grown to {}", layout.cascades, grown);
@@ -692,23 +747,12 @@ namespace DCLF
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the BuildDraws dispatch signature could not be created");
 		}
-		// The index pool (ShadowIndexPool), its copy program and its dispatch signature.
-		auto pool = std::make_shared<ShadowIndexPool>();
-		pool->program = ComputeProgram::Load(device, { .source = kIndexPoolShader, .constantWords = kIndexPoolConstantWords });
-		if (pool->program)
-			pool->dispatchSignature = CreateDispatchSignature(device, pool->program->layout->GetHandle());
-		if (!pool->dispatchSignature) {
+		// The index pool (IndexPool), the scene's.
+		state->pool = EnsureIndexPool(*state->scene, device, smallSlots);
+		if (!state->pool) {
 			shadowSetupFailed = true;
 			return ShadowNotReady(1, "the index pool's copy program could not be created");
 		}
-		pool->capacity = smallSlots ? 4096u : kInitialPoolIndices;
-		pool->indices = CreateWords(pool->capacity / 2, true, "cs.dclf.shadow.index-pool");
-		pool->firstsCapacity = smallSlots ? 64u : kInitialGeometries;
-		pool->firsts = CreateWords(pool->firstsCapacity, false, "cs.dclf.shadow.pool-firsts");
-		pool->copiesCapacity = smallSlots ? 16u : 1024u;
-		std::uint32_t unusedIndex = 0;
-		pool->copies = StructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), "cs.dclf.shadow.pool-copies", unusedIndex);
-		state->pool = std::move(pool);
 		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.shadow.latch", state->latchLayout.Bytes(), host->FrameSlots());
 		state->constantsAddress = AddressOf(device, *state->constants);
 		if (!state->constantsAddress) {

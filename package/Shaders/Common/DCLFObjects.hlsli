@@ -51,9 +51,10 @@ struct DCLFObjectRecord
 };
 
 #	if defined(DCLF_PULLED)
-// A shadow view's plain indirect draw (DrawPipelines.h, kShadowDrawPushSequences and after): pushed once per draw call, so
-// nothing in it is a draw's own. The draw's sequence (its first one's address here, indexed by the draw's instance) holds
-// its object word, its material row's address and its geometry's buffers, which the vertex stage reads (Utility.hlsl).
+// A plain indirect draw's push data (DrawPipelines.h, kPulledPush*): pushed once per draw call, so nothing in it is a draw's
+// own. The draw's sequence (its first one's address here, indexed by the draw's instance) holds its object word, its rows'
+// addresses and its geometry's buffers, which the vertex stage reads (Utility.hlsl, the shadow views; Lighting.hlsl, the
+// Z-prepass). The second address is the layout's: the shadow views' material rows, the Z-prepass's pipeline row.
 cbuffer DCLFPushData : register(b190)
 {
 	uint2 DCLFSequencesAddress : packoffset(c0.x);
@@ -98,6 +99,91 @@ StructuredBuffer<float4> DCLFBones : register(t126);
 // frame's into the other buffer). An entry is the object's only for the tree listing its record names (DCLFWindTimers.zw:
 // the tree slot and that listing's generation, never 0); otherwise the record's own values, those it joined with, are drawn.
 StructuredBuffer<float4> DCLFTreeWind : register(t124);
+
+#	if defined(DCLF_PULLED)
+// A pulled draw's own (its vertex stage reads them from its sequence, DCLF_PULLED above).
+static const uint kDCLFSequenceStride = 92;  // BuildDrawsCS's DrawSequence
+// The draw's vertex layout, which DCLFAttribute decodes: set by the stage's main before any attribute is read, from the push
+// data (Utility.hlsl: a shadow view's call is one pipeline's, so one layout's) or from the draw's pipeline row (Lighting.hlsl:
+// a Z-prepass call draws every pipeline slot that shares its depth pipeline, so each draw has its slot's).
+static uint2 DCLFDrawVertexLayout;
+
+uint64_t DCLFAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
+
+// A stream of the geometry: the vertex buffer (stream 0) or a dynamic shape's positions (stream 1).
+struct DCLFStream
+{
+	uint64_t address;
+	uint stride;
+};
+
+// The address of attribute a_attribute (BSGraphics::Vertex::Attribute) of vertex a_index: its stream as the layout flags it
+// (bit 44 + a in stream 0, else bit 54 + a), and its offset the layout's nibble times four, except the position's (0). As the
+// engine's input layout for the vertex layout has them (VertexInput.cpp, BuildVertexElements).
+uint64_t DCLFAttribute(uint a_attribute, uint a_index, DCLFStream a_first, DCLFStream a_second)
+{
+	const bool first = ((DCLFDrawVertexLayout.y >> (12 + a_attribute)) & 1) != 0;
+	const uint offset = a_attribute == 0 ? 0 : ((DCLFDrawVertexLayout.x >> (4 * a_attribute + 4)) & 0xF) * 4;
+	const uint64_t address = first ? a_first.address : a_second.address;
+	const uint stride = first ? a_first.stride : a_second.stride;
+	return address + uint64_t(a_index) * stride + offset;
+}
+
+float4 DCLFUnorm4(uint a_word) { return float4(a_word & 0xFF, (a_word >> 8) & 0xFF, (a_word >> 16) & 0xFF, a_word >> 24) / 255.0; }
+float2 DCLFHalf2(uint a_word) { return float2(f16tof32(a_word), f16tof32(a_word >> 16)); }
+
+// The draw's rows (DrawPipelines.h, kMaterialRow*, kPipelineRow*), for a pulled Lighting stage: the material row's PerMaterial
+// block (b1), textures and samplers, and the pipeline row's PerTechnique (b0), PerGeometry template (b2) and permutation (b4)
+// blocks and its shadow mask (t14, s14), which a device-generated draw's layout would map from the rows' addresses in the
+// draw's push data. A pulled build reads them itself, from the rows its sequence names (ShaderPrograms.cpp,
+// PulledLightingSource, which turns Lighting.hlsl's declarations of them into these reads; Permutation.hlsli, DCLF_PULLED_ROWS).
+static uint64_t DCLFMaterialRowAddress;
+static uint64_t DCLFPipelineRowAddress;
+static const uint kDCLFMaterialRowHeader = 768;
+static const uint kDCLFPipelineRowHeader = 1536;
+static const uint kDCLFPermutationBlock = 1280;  // one block, both stages
+#		if defined(VSHADER)
+static const uint kDCLFMaterialBlock = 0;
+static const uint kDCLFTechniqueBlock = 0;
+static const uint kDCLFGeometryBlock = 512;
+#		else
+static const uint kDCLFMaterialBlock = 256;
+static const uint kDCLFTechniqueBlock = 256;
+static const uint kDCLFGeometryBlock = 768;
+#		endif
+uint DCLFMaterialTextureIndex(uint a_register)
+{
+	// MaterialRowHeader: two addresses, textures[16], samplers[16], features (t71, t74).
+	const uint slot = a_register == 71 ? 32 : a_register == 74 ? 33 : a_register;
+	return vk::RawBufferLoad<uint>(DCLFMaterialRowAddress + kDCLFMaterialRowHeader + 16 + 4 * slot, 4);
+}
+uint DCLFMaterialSamplerIndex(uint a_register)
+{
+	return vk::RawBufferLoad<uint>(DCLFMaterialRowAddress + kDCLFMaterialRowHeader + 80 + 4 * a_register, 4);
+}
+// PipelineRowHeader: six addresses, the shadow mask's texture and sampler, the vertex layout.
+uint DCLFPipelineTextureIndex() { return vk::RawBufferLoad<uint>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 48, 4); }
+uint DCLFPipelineSamplerIndex() { return vk::RawBufferLoad<uint>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 52, 4); }
+uint2 DCLFPipelineVertexLayout() { return vk::RawBufferLoad<uint2>(DCLFPipelineRowAddress + kDCLFPipelineRowHeader + 56, 8); }
+float4 DCLFRowFloat4(uint64_t a_row, uint a_offset) { return asfloat(vk::RawBufferLoad<uint4>(a_row + a_offset, 4)); }
+float3 DCLFRowFloat3(uint64_t a_row, uint a_offset) { return asfloat(vk::RawBufferLoad<uint3>(a_row + a_offset, 4)); }
+float2 DCLFRowFloat2(uint64_t a_row, uint a_offset) { return asfloat(vk::RawBufferLoad<uint2>(a_row + a_offset, 4)); }
+float DCLFRowFloat(uint64_t a_row, uint a_offset) { return asfloat(vk::RawBufferLoad<uint>(a_row + a_offset, 4)); }
+uint DCLFRowUint(uint64_t a_row, uint a_offset) { return vk::RawBufferLoad<uint>(a_row + a_offset, 4); }
+// A row_major matrix: a register per row.
+float3x4 DCLFRowFloat3x4(uint64_t a_row, uint a_offset)
+{
+	return float3x4(DCLFRowFloat4(a_row, a_offset), DCLFRowFloat4(a_row, a_offset + 16), DCLFRowFloat4(a_row, a_offset + 32));
+}
+float4x4 DCLFRowFloat4x4(uint64_t a_row, uint a_offset)
+{
+	return float4x4(DCLFRowFloat4(a_row, a_offset), DCLFRowFloat4(a_row, a_offset + 16), DCLFRowFloat4(a_row, a_offset + 32), DCLFRowFloat4(a_row, a_offset + 48));
+}
+float3x3 DCLFRowFloat3x3(uint64_t a_row, uint a_offset)
+{
+	return float3x3(DCLFRowFloat3(a_row, a_offset), DCLFRowFloat3(a_row, a_offset + 16), DCLFRowFloat3(a_row, a_offset + 32));
+}
+#	endif  // DCLF_PULLED
 static const uint kDCLFNodelessTree = 0xFFFFFFFEu;
 
 bool DCLFTreeWindEntry(uint a_object, out uint a_entry)

@@ -35,6 +35,18 @@ uint PixelDescriptor()
 #include "Common/Skinned.hlsli"
 #include "Common/Triplanar.hlsli"
 
+#if defined(DCLF_PULLED_ROWS)
+// The permutation block (b4) as the draw's pipeline row holds it (Permutation.hlsli, DCLF_PULLED_ROWS).
+void DCLFPermutationStatics()
+{
+	Permutation::VertexShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock);
+	Permutation::PixelShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 4);
+	Permutation::ExtraShaderDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 8);
+	Permutation::ExtraFeatureDescriptor = DCLFRowUint(DCLFPipelineRowAddress, kDCLFPermutationBlock + 12);
+	Permutation::EffectRadius = DCLFRowFloat(DCLFPipelineRowAddress, kDCLFPermutationBlock + 16);
+}
+#endif  // DCLF_PULLED_ROWS
+
 #if defined(FACEGEN) || defined(FACEGEN_RGB_TINT)
 #	define SKIN
 #endif
@@ -112,6 +124,12 @@ struct VS_OUTPUT
 	float4 FogParam: COLOR1;
 
 	float3 ModelPosition: TEXCOORD12;
+#if defined(DCLF_PULLED)
+	// Drawcall Limit Fix's pulled Z-prepass (DCLF_PULLED): the draw's material and pipeline rows' addresses and its object word,
+	// which the pixel stage would otherwise have from the draw's push data.
+	nointerpolation uint4 DCLFDraw: TEXCOORD15;
+	nointerpolation uint DCLFDrawObject: TEXCOORD14;
+#endif
 };
 #ifdef VSHADER
 
@@ -165,24 +183,55 @@ cbuffer VS_PerFrame : register(b12)
 // does on the CPU for its own draws. `precise` keeps it the same single float subtraction (so the depth
 // and colour epochs, and the native draws, agree to the bit) rather than something folded into the
 // transform that follows.
-static precise float3x4 World = float3x4(
-	DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x),
-	DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y),
-	DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z));
-static precise float3x4 PreviousWorld = float3x4(
-	DCLFObjects[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x),
-	DCLFObjects[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y),
-	DCLFObjects[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z));
+#	define DCLF_VS_WORLD float3x4(                                         \
+		DCLFObjects[DCLFObjectIndex].World[0] - float4(0, 0, 0, BonesPivot.x), \
+		DCLFObjects[DCLFObjectIndex].World[1] - float4(0, 0, 0, BonesPivot.y), \
+		DCLFObjects[DCLFObjectIndex].World[2] - float4(0, 0, 0, BonesPivot.z))
+#	define DCLF_VS_PREVIOUS_WORLD float3x4(                                                 \
+		DCLFObjects[DCLFObjectIndex].PreviousWorld[0] - float4(0, 0, 0, PreviousBonesPivot.x), \
+		DCLFObjects[DCLFObjectIndex].PreviousWorld[1] - float4(0, 0, 0, PreviousBonesPivot.y), \
+		DCLFObjects[DCLFObjectIndex].PreviousWorld[2] - float4(0, 0, 0, PreviousBonesPivot.z))
 // Tree animation is per object for the same reason World is: with DCLF_BINDLESS the PerGeometry
 // buffer is one block for the whole pipeline, and a tree's wind amplitude and clock are its own.
-static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
-static float2 WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
 // Likewise the landscape blend parameters (MTLand) and the ProjectedUV texture matrix, from the object's
 // extras rows in the row buffer. An object without extras points at row 0, which nothing reads for it.
-static float4 LandBlendParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 0];
-static row_major float3x4 TextureProj = float3x4(DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 1],
-	DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 2], DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 3]);
+#	define DCLF_VS_LAND_BLEND_PARAMS DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 0]
+#	define DCLF_VS_TEXTURE_PROJ float3x4(DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 1], \
+		DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 2], DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 3])
+#	if defined(DCLF_PULLED)
+// A pulled draw's object word is its sequence's, which main reads first: these are assigned there (DCLFVertexObjectStatics).
+static precise float3x4 World;
+static precise float3x4 PreviousWorld;
+static float4 TreeParams;
+static float2 WindTimers;
+static float4 LandBlendParams;
+static row_major float3x4 TextureProj;
+void DCLFVertexObjectStatics()
+{
+	World = DCLF_VS_WORLD;
+	PreviousWorld = DCLF_VS_PREVIOUS_WORLD;
+	TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+	WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
+	LandBlendParams = DCLF_VS_LAND_BLEND_PARAMS;
+	TextureProj = DCLF_VS_TEXTURE_PROJ;
+}
+#	else
+static precise float3x4 World = DCLF_VS_WORLD;
+static precise float3x4 PreviousWorld = DCLF_VS_PREVIOUS_WORLD;
+static float4 TreeParams = DCLFTreeParamsOf(DCLFObjectIndex);
+static float2 WindTimers = DCLFWindTimersOf(DCLFObjectIndex);
+static float4 LandBlendParams = DCLF_VS_LAND_BLEND_PARAMS;
+static row_major float3x4 TextureProj = DCLF_VS_TEXTURE_PROJ;
+#	endif
 #endif  // DCLF_BINDLESS
+
+// Drawcall Limit Fix draws a pipeline's depth and colour from two vertex modules when the Z-prepass is pulled (DCLF_PULLED):
+// the colour pass tests EQUAL against that depth, so the clip position is precise in every DCLF build, to the bit the same.
+#if defined(DCLF_BINDLESS)
+#	define DCLF_PRECISE precise
+#else
+#	define DCLF_PRECISE
+#endif
 
 #	if defined(TREE_ANIM)
 float2 GetTreeShiftVector(float4 position, float4 color)
@@ -195,7 +244,11 @@ float2 GetTreeShiftVector(float4 position, float4 color)
 }
 #	endif  // TREE_ANIM
 
+#	if defined(DCLF_PULLED)
+VS_OUTPUT DCLFShade(VS_INPUT input)
+#	else
 VS_OUTPUT main(VS_INPUT input)
+#	endif
 {
 	VS_OUTPUT vsout;
 
@@ -235,13 +288,13 @@ VS_OUTPUT main(VS_INPUT input)
 #		endif
 	precise float4 worldPosition = float4(mul(inputPosition, transpose(worldMatrix)), 1);
 
-	float4 viewPos = mul(ViewProj, worldPosition);
+	DCLF_PRECISE float4 viewPos = mul(ViewProj, worldPosition);
 #	else   // !SKINNED
 	precise float4 previousWorldPosition = float4(mul(PreviousWorld, inputPosition), 1);
 	precise float4 worldPosition = float4(mul(World, inputPosition), 1);
 	precise float4x4 world4x4 = float4x4(World[0], World[1], World[2], float4(0, 0, 0, 1));
 	precise float4x4 modelView = mul(ViewProj, world4x4);
-	float4 viewPos = mul(modelView, inputPosition);
+	DCLF_PRECISE float4 viewPos = mul(modelView, inputPosition);
 #	endif  // SKINNED
 
 	vsout.Position = viewPos;
@@ -346,6 +399,73 @@ VS_OUTPUT main(VS_INPUT input)
 
 	return vsout;
 }
+
+#	if defined(DCLF_PULLED)
+// Drawcall Limit Fix's Z-prepass draws with plain indirect draws (MainOpaquePass): one per pipeline, which cannot bind a vertex
+// buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at DCLFSequencesAddress
+// plus its instance's stride), and through it the draw's object word, material row and geometry. The draw is indexed from the
+// index pool (IndexPool), with no vertex offset, so the stage's vertex index is the geometry's own, and the stage loads
+// the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them (VertexInput.cpp,
+// BuildVertexElements), then shades them as the input assembler's (DCLFShade).
+// The draw's rows (its sequence's: the pipeline row's address, then the material row's), and the blocks the pulled source reads
+// from them (ShaderPrograms.cpp, PulledLightingSource), before anything reads them.
+void DCLFRowStatics(uint4 a_rows)
+{
+	DCLFPipelineRowAddress = DCLFAddress(a_rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(a_rows.zw);
+	DCLFPerTechniqueStatics();
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+}
+
+VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
+{
+	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
+	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
+	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFRowStatics(rows);
+	DCLFDrawVertexLayout = DCLFPipelineVertexLayout();
+	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
+	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
+	DCLFStream first, second;
+	first.address = DCLFAddress(vertexBuffer.xy);
+	first.stride = vertexBuffer.w;
+	second.address = DCLFAddress(streamBuffer.xy);
+	second.stride = streamBuffer.w;
+
+	VS_INPUT input;
+	input.Position = asfloat(vk::RawBufferLoad<uint4>(DCLFAttribute(0, index, first, second)));
+	input.TexCoord0 = DCLFHalf2(vk::RawBufferLoad<uint>(DCLFAttribute(1, index, first, second)));
+#		if !defined(MODELSPACENORMALS)
+	input.Normal = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(3, index, first, second)));
+	input.Bitangent = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(4, index, first, second)));
+#		endif
+#		if defined(VC)
+	input.Color = DCLFUnorm4(vk::RawBufferLoad<uint>(DCLFAttribute(5, index, first, second)));
+#			if defined(LANDSCAPE)
+	const uint64_t landData = DCLFAttribute(7, index, first, second);
+	input.LandBlendWeights1 = DCLFUnorm4(vk::RawBufferLoad<uint>(landData));
+	input.LandBlendWeights2 = DCLFUnorm4(vk::RawBufferLoad<uint>(landData + 4));
+#			endif
+#		endif
+#		if defined(SKINNED)
+	const uint64_t skinning = DCLFAttribute(6, index, first, second);
+	const uint2 weights = vk::RawBufferLoad<uint2>(skinning);
+	input.BoneWeights = float4(DCLFHalf2(weights.x), DCLFHalf2(weights.y));
+	input.BoneIndices = DCLFUnorm4(vk::RawBufferLoad<uint>(skinning + 8));
+#		endif
+#		if defined(EYE)
+	input.EyeParameter = asfloat(vk::RawBufferLoad<uint>(DCLFAttribute(8, index, first, second)));
+#		endif
+
+	DCLFVertexObjectStatics();
+	VS_OUTPUT vsout = DCLFShade(input);
+	vsout.DCLFDraw = rows.zwxy;
+	vsout.DCLFDrawObject = DCLFObjectWord;
+	return vsout;
+}
+#	endif  // DCLF_PULLED
 #endif  // VSHADER
 
 typedef VS_OUTPUT PS_INPUT;
@@ -710,20 +830,38 @@ float DCLFLodFadeAt(float a_metric, float a_start, float a_end)
 		return 1;
 	return saturate((a_metric - a_end) / (a_start - a_end));
 }
-static const uint DCLFLodFades = DCLFLodFadeState.x != 0 ? DCLFObjects[DCLFObjectIndex].DCLFLodFadeFlags : 0;
-static const float DCLFLodMetricValue = DCLFLodFades ? DCLFLodMetric(DCLFObjects[DCLFObjectIndex].DCLFLodFadeNode, DCLFLodFades & 0xF) : 0;
-static const float DCLFSpecularLodFade = DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y);
-static float4 MaterialData = float4(
-	(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFObjects[DCLFObjectIndex].MaterialData.x,
-	(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFObjects[DCLFObjectIndex].MaterialData.y,
-	DCLFObjects[DCLFObjectIndex].MaterialData.zw);
-static float3 EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+#	define DCLF_PS_LOD_FADES (DCLFLodFadeState.x != 0 ? DCLFObjects[DCLFObjectIndex].DCLFLodFadeFlags : 0)
+#	define DCLF_PS_LOD_METRIC (DCLFLodFades ? DCLFLodMetric(DCLFObjects[DCLFObjectIndex].DCLFLodFadeNode, DCLFLodFades & 0xF) : 0)
+#	define DCLF_PS_SPECULAR_LOD_FADE DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.x, DCLFLodFadeThresholds.y)
+#	define DCLF_PS_MATERIAL_DATA float4(                                                                                                                 \
+		(DCLFLodFades & (1u << 5)) ? DCLFLodFadeAt(DCLFLodMetricValue, DCLFLodFadeThresholds.z, DCLFLodFadeThresholds.w) : DCLFObjects[DCLFObjectIndex].MaterialData.x, \
+		(DCLFLodFades & (1u << 4)) ? DCLFSpecularLodFade : DCLFObjects[DCLFObjectIndex].MaterialData.y,                                                             \
+		DCLFObjects[DCLFObjectIndex].MaterialData.zw)
 // Only the w of SSRParams is per-object; x, y and z stay in the per-pipeline buffer above.
-static float DCLFSSRSpecular = (DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFObjects[DCLFObjectIndex].EmitColor.w;
+#	define DCLF_PS_SSR_SPECULAR ((DCLFLodFades & (1u << 4)) ? ((DCLFLodFades & (1u << 6)) ? DCLFSpecularLodFade : 0) : DCLFObjects[DCLFObjectIndex].EmitColor.w)
 // ProjectedUV's three pixel parameters are per object too (the property's, plus two globals).
+#	if defined(DCLF_PULLED)
+// A pulled draw's object word is its vertex stage's, which main reads first: these are assigned there (DCLFPixelObjectStatics).
+static uint DCLFLodFades;
+static float DCLFLodMetricValue;
+static float DCLFSpecularLodFade;
+static float4 MaterialData;
+static float3 EmitColor;
+static float DCLFSSRSpecular;
+static float4 ProjectedUVParams;
+static float4 ProjectedUVParams2;
+static float4 ProjectedUVParams3;
+#	else
+static const uint DCLFLodFades = DCLF_PS_LOD_FADES;
+static const float DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
+static const float DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
+static float4 MaterialData = DCLF_PS_MATERIAL_DATA;
+static float3 EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+static float DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
 static float4 ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
 static float4 ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
 static float4 ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 6];
+#	endif
 #	define DCLF_SSR_SPECULAR DCLFSSRSpecular
 #else
 #	define DCLF_SSR_SPECULAR SSRParams.w
@@ -732,7 +870,11 @@ static float4 ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFEx
 #if defined(DCLF_BINDLESS_DRAW)
 // The reference comes from the per-object record instead of a constant buffer of its own, so that b11
 // stops being part of what makes a draw's binding record unique. Same value, same single read below.
+#	if defined(DCLF_PULLED)
+static float AlphaTestRefRS;  // DCLFPixelObjectStatics
+#	else
 static const float AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#	endif
 #else
 cbuffer AlphaTestRefBuffer : register(b11)
 {
@@ -1128,7 +1270,11 @@ bool UseSkylightingShadowVisibility()
 
 #	include "Common/LightingEval.hlsli"
 
+#	if defined(DCLF_PULLED)
+PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
+#	else
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+#	endif
 {
 	PS_OUTPUT psout;
 
@@ -3564,4 +3710,45 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	return psout;
 #	endif
 }
+#	if defined(DCLF_PULLED)
+// The draw's rows (its sequence's: the pipeline row's address, then the material row's), and the blocks the pulled source reads
+// from them (ShaderPrograms.cpp, PulledLightingSource), before anything reads them.
+void DCLFRowStatics(uint4 a_rows)
+{
+	DCLFPipelineRowAddress = DCLFAddress(a_rows.xy);
+	DCLFMaterialRowAddress = DCLFAddress(a_rows.zw);
+	DCLFPerTechniqueStatics();
+	DCLFPerMaterialStatics();
+	DCLFPerGeometryStatics();
+	DCLFPermutationStatics();
+}
+
+// The object's values the DCLF_BINDLESS build's statics hold, assigned once this draw's object word is known.
+void DCLFPixelObjectStatics()
+{
+#		if defined(DCLF_BINDLESS)
+	DCLFLodFades = DCLF_PS_LOD_FADES;
+	DCLFLodMetricValue = DCLF_PS_LOD_METRIC;
+	DCLFSpecularLodFade = DCLF_PS_SPECULAR_LOD_FADE;
+	MaterialData = DCLF_PS_MATERIAL_DATA;
+	EmitColor = DCLFObjects[DCLFObjectIndex].EmitColor.xyz;
+	DCLFSSRSpecular = DCLF_PS_SSR_SPECULAR;
+	ProjectedUVParams = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 4];
+	ProjectedUVParams2 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 5];
+	ProjectedUVParams3 = DCLFBones[DCLFObjects[DCLFObjectIndex].DCLFExtraOffset + 6];
+#		endif
+#		if defined(DCLF_BINDLESS_DRAW)
+	AlphaTestRefRS = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
+#		endif
+}
+
+// Drawcall Limit Fix's pulled Z-prepass (DCLF_PULLED): the draw's object word and rows are its vertex stage's.
+PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
+{
+	DCLFObjectWord = input.DCLFDrawObject;
+	DCLFRowStatics(input.DCLFDraw.zwxy);
+	DCLFPixelObjectStatics();
+	return DCLFShadePS(input, frontFace);
+}
+#	endif  // DCLF_PULLED
 #endif  // PSHADER

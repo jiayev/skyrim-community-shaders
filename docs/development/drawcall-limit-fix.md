@@ -7100,6 +7100,145 @@ since (`ExperimentalGraphCompiler.cpp`, `OrderUse`); a texture's uses stay seria
 Z-prepass event 0.591 (0.612, 0.609); ORG's Z-prepass span 0.508 ms (0.537, 0.542). Fade parity (`CS_DCLF_FADE_PARITY`):
 0 differ against the port and the engine's node; no holes.
 
+### The draw passes against the native draws they replace (investigation)
+
+Save5, nvperf, three captures a run, one run with DCLF on and one with it off from frame 2000 (`CS_DCLF_TEST_TOGGLE`).
+
+**The draws are not slower.** Measured against the native batches they replace, each counted directly with DCLF off:
+
+| | DCLF | Native batches replaced |
+| --- | --- | --- |
+| Colour (`cs.dclf.main-opaque` against `FinishAccumulatingDispatch [0] <65>`'s opaque share) | 1132 us, 2987 draws | about 1206 us |
+| Z-prepass (`cs.dclf.z.depth` against `RenderBatches (2031)`, `(2046)`, `(20C6)`, `(40020C6)`) | 364 us, 1936 draws | 387 us, about 1610 draws |
+| Shadow maps (GPU event timers) | 2.02 ms | 2.08 ms |
+
+The Z-prepass's fragment work is the native pass's: its alpha-tested draws launch 444 K pixel-shader warps and 10.9 M
+late-Z samples, the native `20C6` and `40020C6` batches 438 K and 10.8 M; its opaque draws launch none (the driver drops the
+depth variant's empty pixel stage, as the native pass has none). An earlier reading of 1.7 times the native warps came from
+subtracting the DCLF-on residual from the DCLF-off pass: 8 grass batches (`5C00005C`, 228 K warps, 6.8 M late-Z samples) stay
+native and do not cost the same in both. Neither drawing the opaque pipelines first (a depth-class sort key) nor the
+alpha-tested draws front to back changed the counters beyond 10%, so neither was kept.
+
+Device-generated commands' own cost, sequences written with no instances (nothing rasterized): `z.depth` 161 us for 3245
+sequences, `main-opaque` 318 us for 4291, about 50 and 74 ns a sequence. Raster hides most of it (both passes still beat the
+native draws), but it is a fixed cost the plain draws would not have. An empty `depth-phase2` costs 12 us; its usual 45-54 us
+is its draws.
+
+**Where the gap is** (GPU event timers, 16 blocks on, 4 off, by the toggle's timestamps):
+
+| Segment | On | Off | Gap |
+| --- | --- | --- | --- |
+| Depth | 0.953 | 0.653 | +0.30 |
+| World | 4.578 | 4.442 | +0.14 |
+| Water effects (the reflection cubemap) | 0.657 | 0.577 | +0.08 |
+| Shadow maps | 2.02 | 2.08 | -0.06 |
+
+-   **Depth:** the Z-prepass event is 0.58 ms against the native draws' 0.39: DCLF's compute and second phase (HZB 45 us,
+    phase-2 draw 50, builds and sorts about 50, phase-2 build 14) and about 0.07 ms between ORG's span of the passes (0.51)
+    and the event.
+-   **World:** the colour event is 1.26 ms against its pass's 1.13: builds and sorts about 0.05, and the same kind of 0.07 ms
+    outside the passes.
+-   **The cubemap** (`RenderPersistentPassList <8>`): 0.38-0.49 ms with DCLF on in every run since the first, 0.340-0.343
+    off. Its work is the same (nvperf: 354 against 361 us, 190 against 197 draws, the same warps and samples), the GPU is never
+    idle (`CS_GPU_IDLE_TRACE`), and it is neither the compute queue (it predates it) nor the early flush (`CS_ORG_EARLY_FLUSH=0`
+    leaves it). Not yet explained.
+
 Tools for this: the per-view nvperf ranges (a sub-range per view inside `cs.dclf.shadow.view`, selected by exact name,
 since a prefix that also matches the pass takes the pass instead) were a temporary change; the engine's own events
 are selectable by name (`BSShaderAccumulator::FinishAccumulatingDispatch [14]*`).
+
+### Plain indirect draws for the Z-prepass (done)
+
+The Z-prepass now draws the way the shadow views do. Its two phases are plain `DrawIndexedIndirectCount` calls, one per
+pipeline slot (a bucket), so device-generated commands are left to the colour segment.
+
+-   **Buckets.** The depth segment's builds (phase 1 and phase 2) count each draw into its pipeline slot's bucket
+    (`input.y >> 20`). The slot is the draw's instance.
+    -   Each phase has its own table in the main latch, and its own counts (`Resources::zBucketCounts[2]`). Phase 2's
+        table follows phase 1's sequences (`BuildDrawsLatch::phaseTwoBucketTableOffset`, +244).
+    -   `ReserveMainSequences` sizes a bucket for every draw its slot's objects can produce (`SceneDrawBound`, per
+        pipeline). The capacity is sticky, at a power of two.
+    -   The draws need no order, so the Z-prepass's sort is gone.
+-   **The index pool is the scene's.** The pool the shadow views built (`IndexPool`: each geometry's indices copied into
+    one R16 buffer) is now shared. Both the shadow commit and the depth commit keep it current (`UpdateIndexPool`). The
+    depth segment copies what its commit gave out in `cs.dclf.z.index-pool`.
+-   **Vertex pulling in Lighting (`DCLF_PULLED`).** The vertex stage finds its sequence by `SV_InstanceID`. It decodes
+    the attributes from the vertex layout, as Utility does: position, UV, normal/bitangent, colour, land blend weights,
+    skin weights and the eye parameter.
+    -   The material row is read in the shader. `PulledMaterialSource` rewrites the Lighting source when the pulled stages
+        are compiled:
+        -   the material textures and samplers become descriptor-heap reads through the row (`DCLFMaterialTextureIndex`,
+            `DCLFMaterialSamplerIndex`);
+        -   the `PerMaterial` members become statics, assigned from the row (`DCLFPerMaterialStatics`).
+    -   The pixel stage, which only the alpha-tested pipelines have, gets the draw's words through `DCLFDraw`
+        (`TEXCOORD15`).
+    -   `viewPos` is `precise` (`DCLF_PRECISE`) in both the pulled build and the colour pass's, so the colour pass's EQUAL
+        test holds.
+-   **The call.** The push range is the call's first sequence, the pipeline row and the vertex layout
+    (`kZDrawPushSequences`, `kZDrawPushPipelineRow`, `kZDrawPushVertexLayout`).
+    -   The pulled depth pipeline has no input layout and no material ranges. `CheckPulledBindings` rejects one that would
+        need them.
+    -   The depth variant's implicit-preprocess signature (`depthPassSignature`) is gone.
+
+**Result** (Save5, the same camera path as above):
+
+| | Before | After |
+| --- | --- | --- |
+| Depth segment | 0.953 ms | 0.906 ms |
+| Z-prepass event | 0.591 ms | 0.526 ms |
+| ORG's Z-prepass span | 0.508 ms | 0.46 ms |
+
+There were no holes over 300 frames.
+
+Phase 2 still costs about 45 us. Most of that is probably its fixed cost: about 99 bucket calls, mostly with a count of
+zero, each binding its pipeline.
+
+### Z-prepass buckets by depth pipeline (done)
+
+The Z-prepass's buckets are now its depth pipelines' rather than the colour pipeline slots'.
+
+-   **The depth pipeline's key** (`DrawPipelines.cpp`, `ZPipelineKey`) holds the pulled stages' SPIR-V (by hash and size)
+    and the depth variant's cull, depth write, compare and bias.
+    -   The pixel stage is left out where the depth pixel stage cannot defer the depth test (`FragmentDefersDepth`).
+    -   Pipelines are grouped as they are admitted (`DrawPipelines::Update`). A set version carries each pipeline's group and
+        each group's pipeline (`IndirectState::zGroups`, `zPipelines`).
+-   **Buckets.** The depth commit groups the pipeline slots by their pipeline's group.
+    -   Each bucket's range is its slots' ranges together (`Resources::zBucketCapacity`), so the sequences' reserve holds it
+        unchanged.
+    -   The slots' map to the buckets is in the latch (`BuildDrawsLatch::bucketMapOffset`, +248). BuildDraws reads it in both
+        phases.
+    -   A slot without a published pipeline maps to none, and its draws are dropped.
+-   **Every row input is the draw's own.** A call binds once for many pipeline slots, so the pulled Lighting stages read
+    everything a row gives through their sequence (`PulledLightingSource`, generalised from `PulledMaterialSource`):
+    -   the PerTechnique (b0), PerMaterial (b1) and PerGeometry (b2) blocks become statics assigned from the rows, including
+        arrays and row-major matrices;
+    -   the permutation block (b4) is `Permutation.hlsli`'s statics under `DCLF_PULLED_ROWS`;
+    -   the shadow mask (t14, s14) is read from the pipeline row;
+    -   the vertex layout is in the pipeline row's header (`PipelineRowHeader::vertexLayout`).
+
+    The Z layout has no row ranges, and `CheckPulledBindings` rejects any row binding. A call pushes only its first
+    sequence's address. The pixel stage gets both rows' addresses (`DCLFDraw`) and the object word (`DCLFDrawObject`).
+
+**Result** (95 main pipelines): 58 depth pipelines, 16 of them without a pixel stage.
+
+| Auto-runner camera, GPU event timers | Before | After |
+| --- | --- | --- |
+| ORG's Z-prepass span | 0.421 ms | 0.408 ms |
+| `cs.dclf.depth-phase2` | 32 us | 23-24 us |
+| `cs.dclf.z.depth` | 0.316 ms | 0.310 ms |
+
+There were no holes.
+
+**Why the groups did not converge.** Every admitted pipeline's key was logged next to its depth key:
+
+-   **Shader debug info** (`CS_DCLF_SHADER_DEBUG=1`, set in `CommunityShaders-DCLF.ini` beside the log) was the main cause.
+    Its SPIR-V embeds each stage's defines and source, so modules with identical code still differ by their bytes.
+    -   Offline, the depth pixel stages of `00100011` and `00100211` (Specular) compile to identical bytes.
+    -   With it off: 35 depth pipelines, the pixel stage 7 modules from 38 descriptors, and `depth-phase2` 15 us.
+-   **Decals** had buckets and calls they never filled. The depth segment is not given decals (BuildDrawsCS), but
+    `SceneDrawBound` sized a bucket for every object's slot, decals and multi-index layers included. Their slots now get
+    no Z-prepass capacity, so no call either: `depth-phase2` 15 to 13 us.
+-   **What remains** (non-decal pipelines: 27 depth pipelines, 15 with a pixel stage):
+    -   The vertex stage: 9 modules (VC, skinned, model-space normals, projected UV, the TreeAnim technique), different
+        code. Merged, there would be 9 groups.
+    -   Cull: two-sided or back. With cull merged as well, 7 groups.

@@ -261,8 +261,10 @@ namespace DCLF::Draws
 		// shadow mask's filter), its lookup entry (the tables, the shadow mask), and the shared lookups (the samplers).
 		auto& state = rows.pipelines[p];
 		const auto& techniqueRow = tables.TechniqueRowOf(p);
-		const std::array<std::uint32_t, 6> key{ p < tables.pipelineConstantsVersion.size() ? tables.pipelineConstantsVersion[p] : 0u, techniqueRow.constantsVersion,
-			techniqueRow.bindingVersion, lookups.pipelines[p].version, lookups.sharedVersion, 1u };
+		const std::uint64_t vertexLayout = tables.pipelines[p].vertexLayout;
+		const std::array<std::uint32_t, 8> key{ p < tables.pipelineConstantsVersion.size() ? tables.pipelineConstantsVersion[p] : 0u, techniqueRow.constantsVersion,
+			techniqueRow.bindingVersion, lookups.pipelines[p].version, lookups.sharedVersion, 1u, static_cast<std::uint32_t>(vertexLayout),
+			static_cast<std::uint32_t>(vertexLayout >> 32) };
 		if (state.written && state.key == key)
 			return;
 		const auto& technique = tables.TechniqueOf(p);
@@ -306,6 +308,7 @@ namespace DCLF::Draws
 		const std::uint32_t filter = technique.shadowMask && technique.filterModes[kShadowMaskSlot] != kUnwrittenFilterMode ? technique.filterModes[kShadowMaskSlot] : 0u;
 		const std::uint32_t sampler = lookups.Sampler(0, filter);
 		header.shadowMaskSampler = sampler == Lookups::kNone ? 0u : sampler;
+		header.vertexLayout = vertexLayout;
 		state.shadowMask = shadowMask != Lookups::kNone;
 		state.shadowMaskSampler = sampler != Lookups::kNone;
 		state.blocksOk = ok;

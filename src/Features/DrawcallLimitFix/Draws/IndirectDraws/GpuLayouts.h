@@ -74,7 +74,7 @@ namespace DCLF::Draws
 	// current then previous, then the extras; the face vertices every face shape's region.
 	constexpr std::uint32_t kInitialObjects = 32768;
 	constexpr std::uint32_t kInitialGeometries = 16384;
-	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (ShadowIndexPool): 16 MB
+	constexpr std::uint32_t kInitialPoolIndices = 1u << 23;  // the shadow views' index pool (IndexPool): 16 MB
 	constexpr std::uint32_t kInitialBoneRows = 131072;
 	constexpr std::uint32_t kInitialFaceVertices = 1u << 18;
 	constexpr std::uint32_t kNoRecord = ~0u;
@@ -259,9 +259,10 @@ namespace DCLF::Draws
 		// OnVisible verdict; the states are the latch's, BuildDrawsLatch::fadeStatesIndex). 0 elsewhere.
 		std::uint32_t fadeRootsIndex;
 		std::uint32_t fadeStatesUnused;
-		// A shadow view: its slot's bucket counts (ShadowResources::bucketCounts), a word per bucket. 0 elsewhere.
+		// A shadow view: its slot's bucket counts (ShadowResources::bucketCounts), a word per bucket; the depth segment's phases: theirs
+		// (Resources::zBucketCounts), a word per pipeline slot. 0 elsewhere.
 		std::uint32_t bucketCountsIndex;
-		// A shadow view: each geometry slot's first index in the index pool (ShadowIndexPool::firsts). 0 elsewhere.
+		// A shadow view and the depth segment: each geometry slot's first index in the index pool (IndexPool::firsts). 0 elsewhere.
 		std::uint32_t poolFirstsIndex;
 	};
 	static_assert(sizeof(BuildDrawsConstants) == 116);
@@ -317,14 +318,23 @@ namespace DCLF::Draws
 		// The depth segment's first phase and the shadow views: FadeStateCS's states as the frame before published them
 		// (SceneBuffers::FadeStatesReadIndex), whose descriptor depends on the frame and so is the latch's. 0 elsewhere.
 		std::uint32_t fadeStatesIndex;
-		std::uint32_t reserved[3];
+		// The depth segment's second phase: its bucket table (MainLatchLayout::PhaseTwoBucketTableOffset), as bucketTableOffset is
+		// the first phase's. 0 elsewhere.
+		std::uint32_t phaseTwoBucketTableOffset;
+		// The depth segment's phases: each pipeline slot's bucket (MainLatchLayout::BucketMapOffset), its Z-prepass group's in this
+		// frame's tables, kNoBucket for a slot with none (no published pipeline). 0 elsewhere.
+		std::uint32_t bucketMapOffset;
+		std::uint32_t reserved;
 	};
 	static_assert(sizeof(BuildDrawsLatch) == 256 && offsetof(BuildDrawsLatch, viewProj) == 32 && offsetof(BuildDrawsLatch, cullPlanes) == 96 &&
 				  offsetof(BuildDrawsLatch, pipelineMapOffset) == 192 && offsetof(BuildDrawsLatch, sunState) == 196 &&
 				  offsetof(BuildDrawsLatch, treeHeight) == 200 && offsetof(BuildDrawsLatch, fadeEye) == 208 &&
 				  offsetof(BuildDrawsLatch, sunCascadeOffset) == 224 && offsetof(BuildDrawsLatch, sunEntryOffset) == 228 &&
 				  offsetof(BuildDrawsLatch, localShadowOffset) == 232 && offsetof(BuildDrawsLatch, bucketTableOffset) == 236 &&
-				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240);
+				  offsetof(BuildDrawsLatch, fadeStatesIndex) == 240 && offsetof(BuildDrawsLatch, phaseTwoBucketTableOffset) == 244 &&
+				  offsetof(BuildDrawsLatch, bucketMapOffset) == 248);
+	// BuildDrawsLatch::bucketMapOffset: a pipeline slot without a bucket (BuildDrawsCS's kNoPipeline).
+	constexpr std::uint32_t kNoBucket = 0xFFFFFFFFu;
 	constexpr std::uint32_t kSunTestOn = 1u << 31;
 
 	/**
@@ -400,7 +410,7 @@ namespace DCLF::Draws
 		{
 			return SunEntryOffset() + SunRegionBytes<SunEntryProcess>(sunProcesses) + a_slot * BucketTableBytes();
 		}
-		// The index pool's copies (ShadowIndexPool): their dispatch's groups, then their count.
+		// The index pool's copies (IndexPool): their dispatch's groups, then their count.
 		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
 		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 		bool operator==(const ShadowLatchLayout&) const = default;
@@ -425,9 +435,17 @@ namespace DCLF::Draws
 	{
 		std::uint32_t cascades = 0;
 		std::uint32_t shadowVolumes = 0;
+		// The Z-prepass's buckets: one per group of pipeline slots sharing a depth pipeline (IndirectState::zGroups), at most a
+		// slot each, in each phase's table (first, capacity), and the slots' map to them.
+		std::uint32_t buckets = 0;
 		static constexpr std::uint32_t CascadeOffset() { return static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 		std::uint32_t ShadowVolumeOffset() const { return CascadeOffset() + SunRegionBytes<SunAccumulation::GpuCascade>(cascades); }
-		std::uint32_t Bytes() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
+		std::uint32_t BucketTableOffset() const { return ShadowVolumeOffset() + SunRegionBytes<GpuShadowVolume>(shadowVolumes); }
+		std::uint32_t PhaseTwoBucketTableOffset() const { return BucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t BucketMapOffset() const { return PhaseTwoBucketTableOffset() + buckets * 2 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// The index pool's copies' dispatch (IndexPool), as the shadow latch has it, for the depth commit's pool update.
+		std::uint32_t PoolOffset() const { return BucketMapOffset() + buckets * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
 	};
 	// cullFlags: a clamped shadow view (0xE) pancakes casters in front of its near plane onto it
 	// (Utility.hlsl: RENDER_SHADOWMAP_CLAMPED), so the near plane rejects nothing there.

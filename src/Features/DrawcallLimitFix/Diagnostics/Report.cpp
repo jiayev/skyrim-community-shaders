@@ -88,9 +88,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		logger::info("[DCLF] SPIR-V programs: {} requested, {} ready ({} stages from cache), {} failed; shadow (Utility): {} requested, {} ready, {} failed",
 			shaders.requested, shaders.ready, shaders.fromCache, shaders.failed, shaders.shadowRequested, shaders.shadowReady, shaders.shadowFailed);
 		const auto& indirect = DCLF::DrawPipelines::Get().GetStats();
-		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed; target changes {}; shadow: {} requested, {} in the set, {} failed; "
+		logger::info("[DCLF] indirect pipelines: {} requested, {} in the set, {} failed ({} Z-prepass pipelines, {} without a pixel stage); target changes {}; shadow: {} requested, {} in the set, {} failed; "
 					 "set versions published {} (waited {} frames), shadow {} (waited {})",
-			indirect.requested, indirect.ready, indirect.failed, indirect.targetChanges, indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
+			indirect.requested, indirect.ready, indirect.failed, indirect.zPipelines, indirect.zDepthOnly, indirect.targetChanges, indirect.shadowRequested, indirect.shadowReady, indirect.shadowFailed,
 			indirect.setPublishes, indirect.setWaits, indirect.shadowSetPublishes, indirect.shadowSetWaits);
 		const auto& draws = DCLF::IndirectDraws::Get().GetStats();
 		std::string skipped;

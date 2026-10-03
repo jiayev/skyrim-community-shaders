@@ -117,15 +117,39 @@ namespace DCLF
 		}
 
 		/**
-		 * @brief Brings the index pool (ShadowIndexPool) up to the tables: the slots the geometry log names since it last read it
+		 * @brief Brings the index pool (IndexPool) up to the tables: the slots the geometry log names since it last read it
 		 * (every slot when it cannot read on) let go of their ranges and take their buffers' ranges, a buffer with no range yet
 		 * getting one and a copy. The commit uploads the slots' first indices and the copies, and writes the copies' dispatch into
 		 * a_latchSlot's region of the latch; the epoch's IndexPoolPass runs them before the views draw.
 		 */
-		void UpdateIndexPool(ShadowResources& a_resources, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_latchSlot,
-			CommitUploads& a_uploads)
+		std::shared_ptr<IndexPool> EnsureIndexPool(SceneBuffers& a_scene, rhi::Device a_device, bool a_small)
 		{
-			auto& p = *a_resources.pool;
+			if (a_scene.pool)
+				return a_scene.pool;
+			auto pool = std::make_shared<IndexPool>();
+			pool->program = ComputeProgram::Load(a_device, { .source = kIndexPoolShader, .constantWords = kIndexPoolConstantWords });
+			if (pool->program)
+				pool->dispatchSignature = CreateDispatchSignature(a_device, pool->program->layout->GetHandle());
+			if (!pool->dispatchSignature) {
+				logger::warn("[DCLF] The index pool's copy program could not be created");
+				return nullptr;
+			}
+			pool->capacity = a_small ? 4096u : kInitialPoolIndices;
+			pool->indices = CreateWords(pool->capacity / 2, true, "cs.dclf.index-pool");
+			pool->firstsCapacity = a_small ? 64u : kInitialGeometries;
+			pool->firsts = CreateWords(pool->firstsCapacity, false, "cs.dclf.pool-firsts");
+			pool->copiesCapacity = a_small ? 16u : 1024u;
+			pool->copies = org::Buffer::CreateUnmaterializedStructuredBuffer(pool->copiesCapacity, 4 * sizeof(std::uint32_t), false);
+			pool->copies->SetName("cs.dclf.pool-copies");
+			pool->copies->Materialize();
+			a_scene.pool = pool;
+			return pool;
+		}
+
+		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, org::LatchBlock& a_latch,
+			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
+		{
+			auto& p = a_pool;
 			const auto count = static_cast<std::uint32_t>(a_tables.geometries.size());
 			std::vector<std::array<std::uint32_t, 4>> copies;
 			std::vector<std::uint32_t> changed;
@@ -133,7 +157,7 @@ namespace DCLF
 			auto release = [&](std::uint32_t a_slot) {
 				const std::uint64_t address = p.slotAddress[a_slot];
 				p.slotAddress[a_slot] = 0;
-				p.slotFirst[a_slot] = ShadowIndexPool::kNoRange;
+				p.slotFirst[a_slot] = IndexPool::kNoRange;
 				if (!address)
 					return;
 				const auto it = p.ranges.find(address);
@@ -166,12 +190,12 @@ namespace DCLF
 					return first;
 				}
 				if (std::uint64_t(p.end) + a_count > p.capacity)
-					return ShadowIndexPool::kNoRange;
+					return IndexPool::kNoRange;
 				const std::uint32_t first = p.end;
 				p.end += a_count;
 				return first;
 			};
-			auto copyOf = [&](std::uint64_t a_address, const ShadowIndexPool::Range& a_range, std::uint64_t a_bytes) {
+			auto copyOf = [&](std::uint64_t a_address, const IndexPool::Range& a_range, std::uint64_t a_bytes) {
 				copies.push_back({ static_cast<std::uint32_t>(a_address), static_cast<std::uint32_t>(a_address >> 32), a_range.first,
 					static_cast<std::uint32_t>((a_bytes + 3) / 4) });
 			};
@@ -182,7 +206,7 @@ namespace DCLF
 				std::uint64_t capacity = std::max<std::uint64_t>(p.capacity, 2);
 				while (capacity < needed * 2)
 					capacity *= 2;
-				logger::info("[DCLF] shadow index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
+				logger::info("[DCLF] index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
 				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
 				p.indices->ResizeStructured(p.capacity / 2);
 				++p.layout;
@@ -213,11 +237,11 @@ namespace DCLF
 				if (it == p.ranges.end()) {
 					const std::uint32_t indices = static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
 					std::uint32_t first = allocate(indices);
-					if (first == ShadowIndexPool::kNoRange) {
+					if (first == IndexPool::kNoRange) {
 						grow(indices);
 						first = allocate(indices);
 					}
-					it = p.ranges.emplace(geometry.indexAddress, ShadowIndexPool::Range{ first, indices, 0 }).first;
+					it = p.ranges.emplace(geometry.indexAddress, IndexPool::Range{ first, indices, 0 }).first;
 					p.indicesHeld += indices;
 					copyOf(geometry.indexAddress, it->second, geometry.indexBytes);
 				}
@@ -233,7 +257,7 @@ namespace DCLF
 				p.end = 0;
 				p.indicesHeld = 0;
 				p.slotAddress.assign(count, 0);
-				p.slotFirst.assign(count, ShadowIndexPool::kNoRange);
+				p.slotFirst.assign(count, IndexPool::kNoRange);
 				for (std::uint32_t g = 0; g < count; ++g)
 					acquire(g);
 				p.cursor.Restart(a_generation);
@@ -241,7 +265,7 @@ namespace DCLF
 			} else {
 				const auto first = static_cast<std::uint32_t>(p.slotAddress.size());
 				p.slotAddress.resize(count, 0);
-				p.slotFirst.resize(count, ShadowIndexPool::kNoRange);
+				p.slotFirst.resize(count, IndexPool::kNoRange);
 				for (std::uint32_t g = first; g < count; ++g) {
 					acquire(g);
 					changed.push_back(g);
@@ -289,7 +313,7 @@ namespace DCLF
 			if (copyCount)
 				a_uploads(p.copies, copies.data(), copies.size() * sizeof(copies[0]), 0);
 			const std::uint32_t dispatch[4] = { std::min(copyCount, kIndexPoolGroupsX), (copyCount + kIndexPoolGroupsX - 1) / kIndexPoolGroupsX, 1, copyCount };
-			a_resources.latch->Write(a_latchSlot, a_resources.latchLayout.PoolOffset(), std::as_bytes(std::span(dispatch)));
+			a_latch.Write(a_latchSlot, a_poolOffset, std::as_bytes(std::span(dispatch)));
 		}
 
 		/** @brief The previous shape's view of a slot, if it had one. */
@@ -936,7 +960,7 @@ namespace DCLF
 			const auto& previousShape = resources->published;
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 			// The index pool, which this epoch's views and the occlusion epoch's after it draw from.
-			UpdateIndexPool(*resources, store.GetTables(), store.GetTablesGeneration(), latchSlot, uploads);
+			UpdateIndexPool(*resources->pool, store.GetTables(), store.GetTablesGeneration(), *resources->latch, latchSlot, resources->latchLayout.PoolOffset(), uploads);
 			resources->labels.clear();
 			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();

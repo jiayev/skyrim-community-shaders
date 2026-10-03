@@ -303,39 +303,16 @@ VS_OUTPUT main(VS_INPUT input)
 // Drawcall Limit Fix's shadow views draw with plain indirect draws (ShadowViewPass): one per pipeline, which cannot bind a
 // vertex buffer, or push data, per draw. So this stage reads its draw's sequence (BuildDrawsCS: DrawSequence, at
 // DCLFSequencesAddress + its instance's stride), and through it the draw's object word, material row and geometry. The draw
-// is indexed from the index pool (ShadowIndexPool), with no vertex offset, so the stage's vertex index is the geometry's own,
+// is indexed from the index pool (IndexPool), with no vertex offset, so the stage's vertex index is the geometry's own,
 // and the stage loads the attributes at it, decoded as the engine's input layout for the pipeline's vertex layout has them
-// (VertexInput.cpp, BuildVertexElements).
-static const uint kDCLFSequenceStride = 92;
-
-uint64_t DCLFAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
-
-// A stream of the geometry: the vertex buffer (stream 0) or a dynamic shape's positions (stream 1).
-struct DCLFStream
-{
-	uint64_t address;
-	uint stride;
-};
-
-// The address of attribute a_attribute (BSGraphics::Vertex::Attribute) of vertex a_index: its stream as the layout flags it
-// (bit 44 + a in stream 0, else bit 54 + a), and its offset the layout's nibble times four, except the position's (0).
-uint64_t DCLFAttribute(uint a_attribute, uint a_index, DCLFStream a_first, DCLFStream a_second)
-{
-	const bool first = ((DCLFVertexLayout.y >> (12 + a_attribute)) & 1) != 0;
-	const uint offset = a_attribute == 0 ? 0 : ((DCLFVertexLayout.x >> (4 * a_attribute + 4)) & 0xF) * 4;
-	const uint64_t address = first ? a_first.address : a_second.address;
-	const uint stride = first ? a_first.stride : a_second.stride;
-	return address + uint64_t(a_index) * stride + offset;
-}
-
-float4 DCLFUnorm4(uint a_word) { return float4(a_word & 0xFF, (a_word >> 8) & 0xFF, (a_word >> 16) & 0xFF, a_word >> 24) / 255.0; }
-float2 DCLFHalf2(uint a_word) { return float2(f16tof32(a_word), f16tof32(a_word >> 16)); }
+// (VertexInput.cpp, BuildVertexElements), with Common/DCLFObjects.hlsli's DCLFAttribute.
 
 VS_OUTPUT main(uint index : SV_VertexID, uint a_instance : SV_InstanceID)
 {
 	const uint64_t sequence = DCLFAddress(DCLFSequencesAddress) + uint64_t(a_instance) * kDCLFSequenceStride;
 	const uint4 rows = vk::RawBufferLoad<uint4>(sequence + 4);  // the pipeline row's address, the material row's
 	DCLFObjectWord = vk::RawBufferLoad<uint>(sequence + 20);
+	DCLFDrawVertexLayout = DCLFVertexLayout;  // the call's pipeline's
 	const uint4 vertexBuffer = vk::RawBufferLoad<uint4>(sequence + 24);  // address, size, stride
 	const uint4 streamBuffer = vk::RawBufferLoad<uint4>(sequence + 40);
 	const uint64_t materialRow = DCLFAddress(rows.zw);

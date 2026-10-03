@@ -16,9 +16,13 @@ namespace DCLF
 		rhi::PipelineLayoutHandle layout{};
 		std::array<rhi::IndirectPipelineSetHandle, kVariantCount> sets{};  // by variant (DrawPipelines.h)
 		std::array<rhi::CommandSignatureHandle, kVariantCount> signatures{};
-		// The depth pass's: the depth variant's signature, preprocessed implicitly. It is one
-		// call over sequences written just before it, which an explicit preprocess only serialises (+17 us at Riverwood).
-		rhi::CommandSignatureHandle depthPassSignature{};
+		// The Z-prepass's plain indirect draws (MainOpaquePass): every published pipeline's group (the pipelines that build the
+		// same pulled depth pipeline, DrawPipelines.cpp ZPipelineKey) by its index, each group's pulled depth pipeline, their
+		// layout and the signature of a DrawSequence's tail as a plain draw.
+		std::vector<std::uint32_t> zGroups;
+		std::vector<rhi::PipelineHandle> zPipelines;
+		rhi::PipelineLayoutHandle zLayout{};
+		rhi::CommandSignatureHandle zDrawSignature{};
 		// The set version these handles belong to (DrawPipelines.cpp, SetVersion): while any copy of this state lives, the
 		// version's sets are not written, so hold it for as long as the handles are recorded with.
 		std::shared_ptr<const void> version;
