@@ -278,9 +278,7 @@ void EditorWindow::DrawActiveWeatherIndicator(bool drawTrailer)
 	Util::Text::Secondary("%s", T(TKEY("active"), "Active:"));
 	ImGui::SameLine();
 	const std::string weatherName = ResolveEditorId(weather, weatherWidgets);
-	Icons::GlyphRef icon = Icons::FA(ICON_FA_CLOUD);
-	if (const auto resolved = WeatherTypeIcons::Resolve(weather); resolved && resolved->IsValid())
-		icon = *resolved;
+	const Icons::GlyphRef icon = WeatherTypeIcons::ResolveGlyph(weather);
 	const ImVec4 iconColor = CSEditor::GetWeatherTypeColor(weather);
 	const ImVec4 live = Util::Colors::GetSuccess();
 	if (BrowserUI::Chip("##active_weather_name", weatherName.c_str(), icon, &iconColor, &live))

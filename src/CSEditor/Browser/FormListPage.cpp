@@ -179,21 +179,6 @@ namespace
 		ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
 	}
 
-	/// Badge sized to a frame-height line, so it sits level with AlignTextToFramePadding'd text.
-	void InlineBadge(const char* label, const ImVec4& tint)
-	{
-		ImGui::SameLine();
-		const ImVec4 text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-		constexpr float kFill = 0.22f;
-		constexpr float kTowardText = 0.35f;
-		const ImVec4 bg(tint.x, tint.y, tint.z, kFill);
-		const ImVec4 fg(tint.x + (text.x - tint.x) * kTowardText, tint.y + (text.y - tint.y) * kTowardText,
-			tint.z + (text.z - tint.z) * kTowardText, 1.0f);
-		const float height = ImGui::GetFrameHeight();
-		const float width = Util::DrawBadgeAt(ImGui::GetCursorScreenPos(), height, label, bg, fg);
-		ImGui::Dummy(ImVec2(width, height));
-	}
-
 	// ------------------------------------------------------------------------------------------ view
 
 	bool MatchesFilter(const FormRow& row, const FormListState& state)
@@ -419,8 +404,7 @@ namespace
 			ImVec4 iconColor = Util::Colors::GetSecondary();
 			if (record.category == kWeather) {
 				auto* weather = RE::TESForm::LookupByID<RE::TESWeather>(record.formId);
-				if (const auto weatherIcon = WeatherTypeIcons::Resolve(weather); weatherIcon && weatherIcon->IsValid())
-					icon = *weatherIcon;
+				icon = WeatherTypeIcons::ResolveGlyph(weather, icon);
 				iconColor = CSEditor::GetWeatherTypeColor(weather);
 			}
 
@@ -759,7 +743,7 @@ namespace
 		const float badgeWidth = badge ? Util::MeasureBadgeWidth(badge) + ImGui::GetStyle().ItemSpacing.x : 0.0f;
 		BrowserUI::EllipsizedText(row.display.c_str(), std::max(1.0f, ImGui::GetContentRegionAvail().x - badgeWidth), ImGui::GetStyleColorVec4(ImGuiCol_Text));
 		if (badge)
-			InlineBadge(badge, activeRecord->outgoing ? Util::Colors::GetSecondary() : Util::Colors::GetSuccess());
+			BrowserUI::InlineBadge(badge, activeRecord->outgoing ? Util::Colors::GetSecondary() : Util::Colors::GetSuccess());
 
 		if (ImGui::TableSetColumnIndex(2)) {
 			ImGui::AlignTextToFramePadding();
@@ -914,8 +898,7 @@ namespace
 		Icons::GlyphRef icon = context.icon;
 		ImVec4 iconColor = Util::Colors::GetAccent();
 		if (auto* weatherWidget = dynamic_cast<WeatherWidget*>(&widget); weatherWidget && weatherWidget->weather) {
-			if (const auto weatherIcon = WeatherTypeIcons::Resolve(weatherWidget->weather); weatherIcon && weatherIcon->IsValid())
-				icon = *weatherIcon;
+			icon = WeatherTypeIcons::ResolveGlyph(weatherWidget->weather, icon);
 			iconColor = CSEditor::GetWeatherTypeColor(weatherWidget->weather);
 		}
 		if (icon) {

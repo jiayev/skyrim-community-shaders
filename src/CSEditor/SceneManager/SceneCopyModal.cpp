@@ -14,10 +14,14 @@
 #include <vector>
 
 #include <imgui.h>
-#include <imgui_stdlib.h>
 
 #include "../../I18n/I18n.h"
+#include "../Browser/BrowserWidgets.h"
 #include "../EditorWindow.h"
+#include "Features/CSEditor.h"
+#include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/LocationTargetIcons.h"
+#include "Menu/Icons/helpers/WeatherTypeIcons.h"
 #include "SceneSettingsContextRules.h"
 #include "Utils/UI.h"
 
@@ -40,10 +44,14 @@ namespace
 	constexpr const char* kPopupId = "###SceneCopyModal";
 
 	/// Sizes in font heights, so the modal scales with the UI font.
-	constexpr float kModalWidthEm = 40.0f;
+	constexpr float kModalWidthEm = 44.0f;
 	constexpr float kListHeightEm = 14.0f;
 	constexpr float kDetailsHeightEm = 10.0f;
 	constexpr float kSearchWidthEm = 10.0f;
+	constexpr float kPeriodDotPitchEm = 0.5f;
+	constexpr float kPeriodDotRadiusEm = 0.16f;
+
+	constexpr size_t kSearchBufferSize = 256;
 
 	constexpr ImGuiTableFlags kListTableFlags =
 		ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersOuter | ImGuiTableFlags_ScrollY;
@@ -69,11 +77,19 @@ namespace
 		To
 	};
 
+	/** @brief A scene's glyph and its colour, resolved when the rows are built rather than every frame. */
+	struct SceneIcon
+	{
+		Icons::GlyphRef glyph;
+		ImVec4 color;
+	};
+
 	/** @brief One scene (a weather, a location, the interior or the time of day) with the sets it resolves. */
 	struct SceneRow
 	{
 		SceneContextId scene;
 		std::string name;
+		SceneIcon icon;
 		std::vector<CopySource> sets;
 		size_t settingCount = 0;
 		std::uint32_t weatherFlags = 0;
@@ -143,7 +159,8 @@ namespace
 	{
 		SceneContextId page;
 		std::string pageName;
-		std::string search;
+		SceneIcon pageIcon;
+		char search[kSearchBufferSize]{};
 		/// Keyed by scene, so a ticked row stays ticked while a filter hides it.
 		std::set<SceneContextId> ticked;
 		/// From's source, and To's target while nothing is ticked.
@@ -163,7 +180,7 @@ namespace
 	};
 	Session session;
 
-	/** @brief One line of the list: a section heading, a scene, or the row that reveals hidden scenes. */
+	/** @brief One line of the list: a section heading, a scene, or the link that reveals hidden scenes. */
 	struct ListLine
 	{
 		enum class Kind
@@ -192,6 +209,21 @@ namespace
 	};
 	std::map<SceneContextId, SourceCheck> sourceChecks;
 
+	/** @brief What a filter chip shows: its label, optionally led by a coloured glyph. */
+	struct ChipFace
+	{
+		const char* label = nullptr;
+		Icons::GlyphRef icon{};
+		std::optional<ImVec4> iconColor;
+	};
+
+	/** @brief What one side of the preview names, and the glyph leading it. */
+	struct PreviewSide
+	{
+		std::string label;
+		SceneIcon icon;
+	};
+
 	/** @brief Heading a scene's type is listed under. */
 	const char* GetContextTypeLabel(SceneContextType type)
 	{
@@ -204,6 +236,40 @@ namespace
 			return T(TKEY("scene_page_group_location"), "Location");
 		default:
 			return T(TKEY("scene_page_group_time_of_day"), "Time of Day");
+		}
+	}
+
+	/** @brief Glyph standing for a whole scene type. */
+	Icons::GlyphRef GetContextTypeIcon(SceneContextType type)
+	{
+		switch (type) {
+		case SceneContextType::Interior:
+			return Icons::FA(ICON_FA_HOME);
+		case SceneContextType::Weather:
+			return WeatherTypeIcons::kCloudy;
+		case SceneContextType::Location:
+			return Icons::FA(ICON_FA_MAP_MARKER_ALT);
+		default:
+			return Icons::FA(ICON_FA_CLOCK);
+		}
+	}
+
+	/** @brief A scene's own glyph: its weather class or location type, else its type's glyph. */
+	SceneIcon GetSceneIcon(const SceneContextId& scene)
+	{
+		const ImVec4 secondary = Util::Colors::GetSecondary();
+		switch (scene.type) {
+		case SceneContextType::Weather:
+			{
+				auto* weather = RE::TESForm::LookupByID<RE::TESWeather>(scene.weatherId);
+				return { WeatherTypeIcons::ResolveGlyph(weather), CSEditor::GetWeatherTypeColor(weather) };
+			}
+		case SceneContextType::Location:
+			return { LocationTargetIcons::Resolve({ .category = static_cast<LocationTargetIcons::Category>(scene.locationType),
+						 .formKey = scene.locationFormKey }),
+				secondary };
+		default:
+			return { GetContextTypeIcon(scene.type), secondary };
 		}
 	}
 
@@ -228,19 +294,41 @@ namespace
 		}
 	}
 
-	/** @brief Chip label for a weather classification flag. */
-	const char* GetWeatherClassLabel(WeatherFlag flag)
+	/** @brief Chip for a scene type. */
+	ChipFace DescribeContextType(SceneContextType type)
 	{
+		return { GetContextTypeLabel(type), GetContextTypeIcon(type) };
+	}
+
+	/** @brief Chip for a weather classification flag, in the flag's colour. */
+	ChipFace DescribeWeatherClass(WeatherFlag flag)
+	{
+		const auto face = [flag](const char* label, Icons::GlyphRef icon) {
+			return ChipFace{ label, icon, CSEditor::GetWeatherFlagColor(flag) };
+		};
 		switch (flag) {
 		case WeatherFlag::kPleasant:
-			return T("feature.cs_editor.pleasant", "Pleasant");
+			return face(T("feature.cs_editor.pleasant", "Pleasant"), WeatherTypeIcons::kPleasant);
 		case WeatherFlag::kCloudy:
-			return T("feature.cs_editor.cloudy", "Cloudy");
+			return face(T("feature.cs_editor.cloudy", "Cloudy"), WeatherTypeIcons::kCloudy);
 		case WeatherFlag::kRainy:
-			return T("feature.cs_editor.rainy", "Rainy");
+			return face(T("feature.cs_editor.rainy", "Rainy"), WeatherTypeIcons::kRain);
 		default:
-			return T("feature.cs_editor.snow", "Snow");
+			return face(T("feature.cs_editor.snow", "Snow"), WeatherTypeIcons::kSnow);
 		}
+	}
+
+	/** @brief Chip for a location target type. */
+	ChipFace DescribeLocationType(LocationTargetType type)
+	{
+		return { SceneSettingsContextRules::GetCopyLocationTypeName(type),
+			LocationTargetIcons::ResolveCategory(static_cast<LocationTargetIcons::Category>(type)) };
+	}
+
+	/** @brief A translated "{}" pattern filled with one count. */
+	std::string FormatCount(const char* format, size_t count)
+	{
+		return std::vformat(format, std::make_format_args(count));
 	}
 
 	/** @brief One details-table row: the setting, then its value, its old -> new change, or why it is dropped. */
@@ -306,6 +394,7 @@ namespace
 			if (inserted)
 				rows.push_back({ .scene = scene,
 					.name = GetSceneName(set),
+					.icon = GetSceneIcon(scene),
 					.weatherFlags = GetWeatherFlags(scene),
 					.flat = set.context.period == TimeOfDayPeriod::Count });
 			auto& row = rows[indexIt->second];
@@ -319,8 +408,15 @@ namespace
 		return rows;
 	}
 
+	/** @brief The row for a scene, or null when the list no longer holds it. */
+	const SceneRow* FindRow(const std::vector<SceneRow>& rows, const SceneContextId& scene)
+	{
+		const auto it = std::ranges::find(rows, scene, &SceneRow::scene);
+		return it == rows.end() ? nullptr : &*it;
+	}
+
 	/** @brief Whether a row passes the chips and the search. The authored filter is applied by the caller. */
-	bool MatchesFilters(const SceneRow& row)
+	bool MatchesFilters(const SceneRow& row, const std::string& query)
 	{
 		if (filters.type && row.scene.type != *filters.type)
 			return false;
@@ -330,18 +426,18 @@ namespace
 		if (filters.type == SceneContextType::Location && filters.locationType &&
 			row.scene.locationType != *filters.locationType)
 			return false;
-		return Util::StringMatchesSearch(row.name, session.search);
+		return Util::StringMatchesSearch(row.name, query);
 	}
 
 	/** @brief The lines the list draws: current scenes pinned first, the rest after, then the way to reveal hidden ones. */
-	VisibleList BuildVisibleList(const std::vector<SceneRow>& rows)
+	VisibleList BuildVisibleList(const std::vector<SceneRow>& rows, const std::string& query)
 	{
 		VisibleList list;
 		const bool authoredOnly = filters.direction == CopyDirection::To && !session.showUnauthored;
 		std::vector<const SceneRow*> currentRows;
 		std::vector<const SceneRow*> otherRows;
 		for (const auto& row : rows) {
-			if (!MatchesFilters(row))
+			if (!MatchesFilters(row, query))
 				continue;
 			// A current scene stays listed with nothing authored: it is the likeliest target.
 			if (row.current)
@@ -401,24 +497,27 @@ namespace
 		return 0;
 	}
 
-	/** @brief A toggle drawn as a text-sized selectable, so a row of them reads as one control. */
-	bool Chip(const char* label, bool selected)
+	/** @brief A filter toggle: a chip filled in the accent while selected. */
+	bool FilterChip(const char* id, const ChipFace& face, bool selected)
 	{
-		return ImGui::Selectable(label, selected, ImGuiSelectableFlags_NoAutoClosePopups, ImGui::CalcTextSize(label));
+		const ImVec4 accent = Util::Colors::GetAccent();
+		return BrowserUI::Chip(id, face.label, face.icon, face.iconColor ? &*face.iconColor : nullptr,
+			selected ? &accent : nullptr);
 	}
 
-	/** @brief An "All" chip, then one chip per option; picking one narrows the filter to it. */
-	template <typename Option, size_t Count, typename Label>
+	/** @brief An "All" chip, then one chip per option, wrapping as needed; picking one narrows the filter to it. */
+	template <typename Option, size_t Count, typename Describe>
 	void DrawFilterChips(const char* id, std::optional<Option>& filter, const std::array<Option, Count>& options,
-		Label label)
+		Describe describe)
 	{
 		ImGui::PushID(id);
-		if (Chip(T(TKEY("filter_all"), "All"), !filter))
+		if (FilterChip("##all", { T(TKEY("filter_all"), "All") }, !filter))
 			filter.reset();
 		for (const auto option : options) {
-			ImGui::SameLine();
+			const ChipFace face = describe(option);
+			BrowserUI::SameLineIfFits(BrowserUI::MeasureChip(face.label, face.icon.IsValid()));
 			ImGui::PushID(static_cast<int>(option));
-			if (Chip(label(option), filter == option))
+			if (FilterChip("##chip", face, filter == option))
 				filter = option;
 			ImGui::PopID();
 		}
@@ -449,13 +548,8 @@ namespace
 	/** @brief The copy the current picks describe; no destinations when nothing is picked. */
 	CopyPlan BuildPlan(const std::vector<SceneRow>& rows)
 	{
-		const auto findRow = [&](const SceneContextId& scene) -> const SceneRow* {
-			const auto it = std::ranges::find(rows, scene, &SceneRow::scene);
-			return it == rows.end() ? nullptr : &*it;
-		};
-
 		if (filters.direction == CopyDirection::From) {
-			const auto* row = session.cursor ? findRow(*session.cursor) : nullptr;
+			const auto* row = session.cursor ? FindRow(rows, *session.cursor) : nullptr;
 			if (!row)
 				return {};
 			const auto* set = row->FindSet(GetSourcePeriod(*row));
@@ -467,7 +561,7 @@ namespace
 		// With nothing ticked the highlighted row is the target, so a single copy needs no tick.
 		const auto targets = session.ticked.empty() && session.cursor ? std::set{ *session.cursor } : session.ticked;
 		for (const auto& scene : targets) {
-			const auto* row = findRow(scene);
+			const auto* row = FindRow(rows, scene);
 			if (!row)
 				continue;
 			for (const auto& set : row->sets)
@@ -522,54 +616,60 @@ namespace
 	/** @brief The From / To switch. Switching refetches the list and starts the picks over. */
 	void DrawDirectionChips()
 	{
-		const auto drawChip = [](const char* label, const char* tooltip, CopyDirection direction) {
-			if (Chip(label, filters.direction == direction) && filters.direction != direction) {
+		const auto drawChip = [](const char* id, const ChipFace& face, const char* tooltip, CopyDirection direction) {
+			if (FilterChip(id, face, filters.direction == direction) && filters.direction != direction) {
 				filters.direction = direction;
 				session.rows = {};
 				ResetSelection();
 			}
 			Util::AddTooltip(tooltip);
 		};
-		drawChip(T(TKEY("scene_page_copy_from"), "From"),
+		drawChip("##from", { T(TKEY("scene_page_copy_from"), "From"), Icons::FA(ICON_FA_ANGLE_LEFT) },
 			T(TKEY("scene_page_copy_from_tooltip"), "Copies another context's settings into this page."),
 			CopyDirection::From);
 		ImGui::SameLine();
-		drawChip(T(TKEY("scene_page_copy_to"), "To"),
+		drawChip("##to", { T(TKEY("scene_page_copy_to"), "To"), Icons::FA(ICON_FA_ANGLE_RIGHT) },
 			T(TKEY("scene_page_copy_to_tooltip"), "Copies this page's settings into another context."),
 			CopyDirection::To);
 	}
 
-	/** @brief Search, type chips and, in To, the authored-only toggle. */
+	/** @brief Search and the type chips. */
 	void DrawFilterRow()
 	{
 		if (std::exchange(session.focusSearch, false))
 			ImGui::SetKeyboardFocusHere();
-		ImGui::SetNextItemWidth(ImGui::GetFontSize() * kSearchWidthEm);
-		ImGui::InputTextWithHint("##search", T("ui.search", "Search..."), &session.search,
-			ImGuiInputTextFlags_CallbackHistory, OnSearchHistory, &session.cursorStep);
+		BrowserUI::SearchField("##search", session.search, sizeof(session.search), T("ui.search", "Search..."),
+			ImGui::GetFontSize() * kSearchWidthEm, true, ImGuiInputTextFlags_CallbackHistory, OnSearchHistory,
+			&session.cursorStep);
 		session.enterCommits = ImGui::IsItemFocused();
 		ImGui::SameLine();
-		DrawFilterChips("type", filters.type, kContextTypes, GetContextTypeLabel);
-
-		// From lists only scenes that hold settings, so there is nothing for the toggle to hide.
-		if (filters.direction == CopyDirection::To) {
-			ImGui::SameLine();
-			bool authoredOnly = !session.showUnauthored;
-			if (ImGui::Checkbox(T(TKEY("scene_copy_authored_only"), "Authored only"), &authoredOnly))
-				session.showUnauthored = !authoredOnly;
-			Util::AddTooltip(T(TKEY("scene_copy_authored_only_tooltip"),
-				"Hides weathers and locations that hold no settings yet."));
-		}
+		DrawFilterChips("type", filters.type, kContextTypes, DescribeContextType);
 	}
 
-	/** @brief The narrower chips the Weather and Location types offer. */
-	void DrawContextRow()
+	/** @brief The narrower chips the Weather and Location types offer and, in To, the authored-only toggle. */
+	void DrawContextRow(const std::vector<SceneRow>& rows, const std::string& query)
 	{
 		if (filters.type == SceneContextType::Weather)
-			DrawFilterChips("weatherClass", filters.weatherClass, kWeatherClasses, GetWeatherClassLabel);
+			DrawFilterChips("weatherClass", filters.weatherClass, kWeatherClasses, DescribeWeatherClass);
 		else if (filters.type == SceneContextType::Location)
 			DrawFilterChips("locationType", filters.locationType, SceneSettingsManager::kLocationTargetTypes,
-				SceneSettingsContextRules::GetCopyLocationTypeName);
+				DescribeLocationType);
+		else  // Holds the row's height, so the list does not jump as the type changes.
+			ImGui::Dummy(ImVec2(0.0f, ImGui::GetFrameHeight()));
+
+		// From lists only scenes that hold settings, so there is nothing for the toggle to hide.
+		if (filters.direction != CopyDirection::To)
+			return;
+		const auto authoredCount = static_cast<int>(
+			std::ranges::count_if(rows, [&](const SceneRow& row) { return row.authored && MatchesFilters(row, query); }));
+		const float width = BrowserUI::MeasureToggleChip(authoredCount);
+		BrowserUI::SameLineIfFits(width);
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - width));
+		const auto tooltip = std::format("{}\n{}", T(TKEY("scene_copy_authored_only"), "Authored only"),
+			T(TKEY("scene_copy_authored_only_tooltip"), "Hides weathers and locations that hold no settings yet."));
+		if (BrowserUI::ToggleChip("##authoredOnly", BrowserUI::GlyphIcon(Icons::FA(ICON_FA_PEN)), authoredCount,
+				!session.showUnauthored, Util::Colors::GetInfo(), tooltip.c_str()))
+			session.showUnauthored = !session.showUnauthored;
 	}
 
 	/** @brief Leaves a row-wide selectable for the name column: the next cell in To, beside it in From. */
@@ -582,10 +682,50 @@ namespace
 		ImGui::AlignTextToFramePadding();
 	}
 
+	/** @brief The scene's glyph in a font-sized box, so names line up whatever the glyph's width. */
+	void DrawSceneIcon(const SceneIcon& icon)
+	{
+		const float box = ImGui::GetFontSize();
+		const float height = ImGui::GetFrameHeight();
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(box, height));
+		Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), ImVec2(min.x, min.y + (height - box) * 0.5f),
+			ImVec2(box, box), icon.glyph, ImGui::GetColorU32(icon.color));
+		ImGui::SameLine();
+	}
+
+	/** @brief One dot per period, filled where that period's set holds settings; rings when one set covers them all. */
+	void DrawPeriodDots(const SceneRow& row)
+	{
+		const float pitch = ImGui::GetFontSize() * kPeriodDotPitchEm;
+		const float radius = ImGui::GetFontSize() * kPeriodDotRadiusEm;
+		const float height = ImGui::GetFrameHeight();
+		const ImVec2 origin = ImGui::GetCursorScreenPos();
+		ImGui::Dummy(ImVec2(pitch * SceneSettingsManager::kPeriodCount, height));
+
+		const ImU32 flatColor = ImGui::GetColorU32(Util::Colors::GetInfo());
+		const ImU32 setColor = ImGui::GetColorU32(Util::Colors::GetAccent());
+		const ImU32 emptyColor = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+		for (const auto period : SceneSettingsManager::kPeriods) {
+			const auto index = static_cast<float>(static_cast<size_t>(period));
+			const ImVec2 center(origin.x + pitch * (index + 0.5f), origin.y + height * 0.5f);
+			if (row.flat) {
+				Util::DrawIconCircle(center, radius, flatColor, false);
+				continue;
+			}
+			const auto* set = row.FindSet(period);
+			Util::DrawIconCircle(center, radius, set && set->settingCount != 0 ? setColor : emptyColor, true);
+		}
+		Util::AddTooltip(row.flat ? T(TKEY("scene_copy_dots_flat_tooltip"), "One set covers every period.") :
+		                            T(TKEY("scene_copy_dots_tooltip"), "Filled periods hold settings."));
+	}
+
 	/** @brief One scene: click highlights it, the tick box adds it to To's targets, double-click commits.
 	 *  @return Whether a double-click asked to commit. */
 	bool DrawSceneRow(const SceneRow& row, bool isCursor, bool to)
 	{
+		if (row.current)
+			BrowserUI::RowStripe(ImGui::GetColorU32(Util::Colors::GetSuccess()), BrowserUI::RowHeight());
 		const bool pressed = Util::TableRowSelectable("##row", isCursor, kRowFlags);
 		session.enterCommits |= ImGui::IsItemFocused();
 		const bool doubleClicked = pressed && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
@@ -605,19 +745,24 @@ namespace
 			}
 		}
 		EnterNameColumn(to);
-		ImGui::TextUnformatted(row.name.c_str());
+		DrawSceneIcon(row.icon);
+		const char* live = T(TKEY("badge_live"), "LIVE");
+		const float badgeWidth = row.current ? Util::MeasureBadgeWidth(live) + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+		BrowserUI::EllipsizedText(row.name.c_str(), std::max(1.0f, ImGui::GetContentRegionAvail().x - badgeWidth),
+			ImGui::GetStyleColorVec4(ImGuiCol_Text));
+		if (row.current)
+			BrowserUI::InlineBadge(live, Util::Colors::GetSuccess());
 
 		ImGui::TableNextColumn();
 		ImGui::AlignTextToFramePadding();
-		Util::TextUnformattedDisabled(GetContextTypeLabel(row.scene.type));
+		Util::Text::Secondary("%s", GetContextTypeLabel(row.scene.type));
+
+		ImGui::TableNextColumn();
+		DrawPeriodDots(row);
 
 		ImGui::TableNextColumn();
 		ImGui::AlignTextToFramePadding();
 		ImGui::Text("%zu", row.settingCount);
-		if (row.flat) {
-			ImGui::SameLine();
-			Util::TextUnformattedDisabled(T(TKEY("scene_copy_flat"), "flat"));
-		}
 		return doubleClicked;
 	}
 
@@ -625,22 +770,26 @@ namespace
 	bool DrawList(const VisibleList& list, int cursorLine)
 	{
 		const bool to = filters.direction == CopyDirection::To;
-		if (!ImGui::BeginTable("##rows", to ? 4 : 3, kListTableFlags,
+		BrowserUI::RowShadeScope shade;
+		// An empty list takes one column, so its hint centres across the whole table.
+		const int columnCount = list.lines.empty() ? 1 : (to ? 5 : 4);
+		if (!ImGui::BeginTable("##rows", columnCount, kListTableFlags,
 				ImVec2(0.0f, ImGui::GetFontSize() * kListHeightEm)))
 			return false;
+		if (list.lines.empty()) {
+			ImGui::TableNextRow();
+			ImGui::TableNextColumn();
+			BrowserUI::EmptyState(T(TKEY("scene_copy_empty"), "Nothing matches."));
+			ImGui::EndTable();
+			return false;
+		}
+
 		if (to)
 			ImGui::TableSetupColumn("##tick", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##name", ImGuiTableColumnFlags_WidthStretch);
 		ImGui::TableSetupColumn("##type", ImGuiTableColumnFlags_WidthFixed);
+		ImGui::TableSetupColumn("##periods", ImGuiTableColumnFlags_WidthFixed);
 		ImGui::TableSetupColumn("##count", ImGuiTableColumnFlags_WidthFixed);
-
-		if (list.lines.empty()) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			if (to)
-				ImGui::TableNextColumn();
-			Util::TextUnformattedDisabled(T(TKEY("scene_copy_empty"), "Nothing matches."));
-		}
 
 		bool commitRequested = false;
 		// Every line is frame-high, which the clipper's uniform-height assumption needs.
@@ -654,25 +803,22 @@ namespace
 				ImGui::PushID(index);
 				ImGui::TableNextRow();
 				ImGui::TableNextColumn();
-				switch (line.kind) {
-				case ListLine::Kind::Header:
+				if (line.kind != ListLine::Kind::Scene) {
 					if (to)
 						ImGui::TableNextColumn();
 					ImGui::AlignTextToFramePadding();
-					Util::TextUnformattedDisabled(line.text);
+				}
+				switch (line.kind) {
+				case ListLine::Kind::Header:
+					BrowserUI::SectionLabel(line.text);
 					break;
 				case ListLine::Kind::ShowUnauthored:
-					{
-						if (Util::TableRowSelectable("##showUnauthored", false, kRowFlags))
-							session.showUnauthored = true;
-						EnterNameColumn(to);
-						auto hiddenCount = list.hiddenUnauthored;
-						ImGui::TextUnformatted(std::vformat(T(TKEY("scene_copy_show_unauthored"),
-																"{} without settings, show all"),
-							std::make_format_args(hiddenCount))
-												   .c_str());
-						break;
-					}
+					if (BrowserUI::Link("##showUnauthored",
+							FormatCount(T(TKEY("scene_copy_show_unauthored"), "{} without settings, show all"),
+								list.hiddenUnauthored)
+								.c_str()))
+						session.showUnauthored = true;
+					break;
 				case ListLine::Kind::Scene:
 					commitRequested |= DrawSceneRow(*line.row, index == cursorLine, to);
 					break;
@@ -684,6 +830,32 @@ namespace
 		return commitRequested;
 	}
 
+	/** @brief To's tick controls: tick every listed scene, and a count of the ticks, including hidden ones, that clears them. */
+	void DrawSelectionFooter(const VisibleList& list)
+	{
+		auto sceneLines =
+			list.lines | std::views::filter([](const ListLine& line) { return line.kind == ListLine::Kind::Scene; });
+		ImGui::AlignTextToFramePadding();
+		if (BrowserUI::Link("##selectShown", T(TKEY("scene_copy_select_shown"), "Select all shown")))
+			for (const auto& line : sceneLines)
+				session.ticked.insert(line.row->scene);
+		if (session.ticked.empty())
+			return;
+
+		auto selected = session.ticked.size();
+		auto hidden = selected - static_cast<size_t>(std::ranges::count_if(sceneLines,
+									 [](const ListLine& line) { return session.ticked.contains(line.row->scene); }));
+		const auto label = hidden == 0 ? FormatCount(T(TKEY("scene_copy_selected"), "{} selected"), selected) :
+		                                 std::vformat(T(TKEY("scene_copy_selected_hidden"), "{} selected · {} hidden"),
+											 std::make_format_args(selected, hidden));
+		const Icons::GlyphRef clearIcon = Icons::FA(ICON_FA_TIMES);
+		const ImVec4 accent = Util::Colors::GetAccent();
+		BrowserUI::RightAlign(BrowserUI::MeasureChip(label.c_str(), true));
+		if (BrowserUI::Chip("##clearTicks", label.c_str(), clearIcon, nullptr, &accent))
+			session.ticked.clear();
+		Util::AddTooltip(T(TKEY("scene_copy_clear_ticks_tooltip"), "Unticks every scene, shown or hidden."));
+	}
+
 	/** @brief The shared period row: which periods receive in To, which one is copied out of in From. */
 	void DrawPeriodChips(const SceneRow* cursorRow)
 	{
@@ -692,18 +864,19 @@ namespace
 		const auto sourcePeriod = from && cursorRow && !cursorRow->flat ?
 		                              std::optional{ GetSourcePeriod(*cursorRow) } :
 		                              std::nullopt;
+		BrowserUI::SectionLabel(T(TKEY("scene_copy_periods"), "Periods"));
 		ImGui::PushID("periods");
-		ImGui::TextUnformatted(T(TKEY("scene_copy_periods"), "Periods:"));
 		{
 			// A flat source has one set for every period, so there is nothing to pick.
 			const Util::DisableGuard flatGuard(from && (!cursorRow || cursorRow->flat));
 			for (const auto period : SceneSettingsManager::kPeriods) {
 				const auto bit = static_cast<size_t>(period);
-				ImGui::SameLine();
+				if (bit != 0)
+					ImGui::SameLine();
 				ImGui::PushID(static_cast<int>(bit));
 				const Util::DisableGuard missingGuard(from && cursorRow && !cursorRow->FindSet(period));
 				const bool selected = sourcePeriod ? *sourcePeriod == period : session.periods.test(bit);
-				if (Chip(SceneSettingsContextRules::GetCopyPeriodName(period), selected)) {
+				if (FilterChip("##period", { SceneSettingsContextRules::GetCopyPeriodName(period) }, selected)) {
 					if (from)
 						session.periods.reset();
 					session.periods.set(bit, from || !session.periods.test(bit));
@@ -713,38 +886,100 @@ namespace
 		}
 		if (!from) {
 			ImGui::SameLine();
-			if (Chip(T(TKEY("filter_all"), "All"), session.periods.all()))
+			if (FilterChip("##all", { T(TKEY("filter_all"), "All") }, session.periods.all()))
 				session.periods.set();
 		}
 		ImGui::PopID();
 	}
 
-	/** @brief The plan in words, its counts, one warning per drop reason, and the collapsible details table. */
-	void DrawSummary(const CopyPlan& plan, const CopySummary& summary)
+	/** @brief To's destination side: one set by name, else how many sets across how many scenes. */
+	PreviewSide DescribeDestinations(const CopyPlan& plan, const std::vector<SceneRow>& rows)
 	{
-		if (plan.destinations.empty()) {
+		const auto& first = plan.destinations.front();
+		const auto* firstRow = FindRow(rows, GetSceneOf(first.context));
+		assert(firstRow);
+		if (plan.destinations.size() == 1)
+			return { first.name, firstRow->icon };
+
+		auto contextCount = plan.destinations.size();
+		const auto scenes = plan.destinations |
+		                    std::views::transform([](const Destination& destination) { return GetSceneOf(destination.context); }) |
+		                    std::ranges::to<std::set>();
+		if (scenes.size() == 1)
+			return { std::vformat(T(TKEY("scene_copy_scene_periods"), "{}, {} periods"),
+						 std::make_format_args(firstRow->name, contextCount)),
+				firstRow->icon };
+		auto sceneCount = scenes.size();
+		return { std::vformat(T(TKEY("scene_copy_contexts_in_scenes"), "{} contexts in {} scenes"),
+					 std::make_format_args(contextCount, sceneCount)),
+			{ Icons::FA(ICON_FA_LAYER_GROUP), Util::Colors::GetSecondary() } };
+	}
+
+	/** @brief Source chip, an arrow, then the destination chip; a hint stands in for the side not yet picked. */
+	void DrawPreview(const CopyPlan& plan, const std::vector<SceneRow>& rows, const SceneRow* cursorRow)
+	{
+		const PreviewSide page{ session.pageName, session.pageIcon };
+		const bool picked = !plan.destinations.empty();
+		std::optional<PreviewSide> source;
+		std::optional<PreviewSide> destination;
+		if (filters.direction == CopyDirection::From) {
+			assert(!picked || cursorRow);
+			if (picked)
+				source = PreviewSide{ plan.sourceName, cursorRow->icon };
+			destination = page;
+		} else {
+			source = page;
+			if (picked)
+				destination = DescribeDestinations(plan, rows);
+		}
+
+		const auto drawSide = [](const char* id, const std::optional<PreviewSide>& side, const ImVec4* tint) {
+			if (side) {
+				BrowserUI::Chip(id, side->label.c_str(), side->icon.glyph, &side->icon.color, tint);
+				return;
+			}
+			ImGui::AlignTextToFramePadding();
 			Util::TextUnformattedDisabled(T(TKEY("scene_copy_pick"), "Pick a context to copy."));
-			return;
+		};
+		BrowserUI::SectionLabel(T(TKEY("scene_copy_preview"), "Preview"));
+		drawSide("##source", source, nullptr);
+		ImGui::SameLine();
+		{
+			const Icons::GlyphRef arrow = Icons::FA(ICON_FA_ANGLE_RIGHT);
+			Icons::FontGuard font(arrow);
+			ImGui::AlignTextToFramePadding();
+			Util::Text::Disabled("%s", arrow.utf8);
+		}
+		ImGui::SameLine();
+		const ImVec4 accent = Util::Colors::GetAccent();
+		drawSide("##destination", destination, &accent);
+	}
+
+	/** @brief The counts as badges, the drop reasons in the dropped badge's tooltip, and the collapsible details table. */
+	void DrawSummary(const CopySummary& summary, bool picked)
+	{
+		Util::Badge(FormatCount(T(TKEY("scene_copy_will_copy"), "{} will copy"), summary.willCopy).c_str(),
+			Util::Colors::GetSuccess());
+		ImGui::SameLine();
+		Util::Badge(FormatCount(T(TKEY("scene_copy_already_set"), "{} already set"), summary.alreadySet).c_str(),
+			Util::Colors::GetInfo());
+		if (summary.droppedTotal != 0) {
+			ImGui::SameLine();
+			Util::Badge(FormatCount(T(TKEY("scene_copy_dropped"), "{} dropped"), summary.droppedTotal).c_str(),
+				Util::Colors::GetWarning());
+			std::string reasons;
+			for (const auto& [rejection, count] : summary.dropped) {
+				const char* reason = GetRejectionText(rejection);
+				if (!reasons.empty())
+					reasons += '\n';
+				reasons += std::vformat(T(TKEY("scene_copy_dropped_reason"), "{} dropped: {}"),
+					std::make_format_args(count, reason));
+			}
+			Util::AddTooltip(reasons.c_str());
 		}
 
-		auto destinationCount = plan.destinations.size();
-		const auto destinationName = destinationCount == 1 ?
-		                                 plan.destinations.front().name :
-		                                 std::vformat(T(TKEY("scene_copy_contexts"), "{} contexts"),
-											 std::make_format_args(destinationCount));
-		ImGui::TextWrapped("%s", std::vformat(T(TKEY("scene_page_copy_intro"), "Copying {} into {}."),
-									 std::make_format_args(plan.sourceName, destinationName))
-									 .c_str());
-		ImGui::TextUnformatted(std::vformat(T(TKEY("scene_copy_summary"), "{} will copy, {} already set, {} dropped"),
-			std::make_format_args(summary.willCopy, summary.alreadySet, summary.droppedTotal))
-								   .c_str());
-		for (const auto& [rejection, count] : summary.dropped) {
-			const char* reason = GetRejectionText(rejection);
-			Util::Text::Warning("%s", std::vformat(T(TKEY("scene_copy_dropped_reason"), "{} dropped: {}"),
-										  std::make_format_args(count, reason))
-										  .c_str());
-		}
-
+		// Disabled rather than hidden, so picking a context does not shift the buttons.
+		const Util::DisableGuard unpicked(!picked);
 		if (!ImGui::TreeNode("##details", "%s", T(TKEY("scene_copy_details"), "Details")))
 			return;
 		if (ImGui::BeginTable("##changes", 2, kDetailsTableFlags,
@@ -767,26 +1002,30 @@ namespace
 		ImGui::TreePop();
 	}
 
-	/** @brief Copy, Overwrite and Cancel. @return The policy to run, if the user chose one. */
+	/** @brief Copy and Overwrite, each with the count it would write, then Cancel.
+	 *  @return The policy to run, if the user chose one. */
 	std::optional<CopyConflictPolicy> DrawButtons(const CopySummary& summary, bool commitRequested)
 	{
 		std::optional<CopyConflictPolicy> decision;
 		const bool canCopy = summary.willCopy != 0;
 		ImGui::BeginDisabled(!canCopy);
-		if (ImGui::Button(T(TKEY("scene_page_copy"), "Copy")))
+		if (ImGui::Button((FormatCount(T(TKEY("scene_copy_copy_count"), "Copy {}"), summary.willCopy) + "###copy").c_str()))
 			decision = CopyConflictPolicy::SkipExisting;
 		ImGui::EndDisabled();
 		Util::AddTooltip(T(TKEY("scene_copy_copy_tooltip"),
 							 "Copies what is not already set. Enter or a double-click does the same."),
 			Util::kTooltipWhenDisabled);
 
-		if (summary.alreadySet != 0) {
-			ImGui::SameLine();
-			if (Util::WarningButton(T(TKEY("scene_page_copy_overwrite"), "Overwrite existing")))
-				decision = CopyConflictPolicy::OverwriteExisting;
-			Util::AddTooltip(T(TKEY("scene_copy_overwrite_tooltip"),
-				"Also replaces the values already set at the destination."));
-		}
+		ImGui::SameLine();
+		ImGui::BeginDisabled(summary.alreadySet == 0);
+		if (Util::WarningButton(
+				(FormatCount(T(TKEY("scene_copy_overwrite_count"), "Overwrite {}"), summary.alreadySet) + "###overwrite")
+					.c_str()))
+			decision = CopyConflictPolicy::OverwriteExisting;
+		ImGui::EndDisabled();
+		Util::AddTooltip(T(TKEY("scene_copy_overwrite_tooltip"),
+							 "Also replaces the values already set at the destination."),
+			Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("cancel"), "Cancel"))) {
@@ -809,21 +1048,25 @@ namespace
 			return;
 
 		DrawDirectionChips();
-		DrawFilterRow();
-		DrawContextRow();
-
 		auto* manager = SceneSettingsManager::GetSingleton();
 		const auto revision = manager->GetEntryPresentationRevision();
+		// Fetched after the direction chips, which drop the cached rows on a switch.
 		const auto& rows = session.rows.Get(revision, [&] {
 			return BuildRows(filters.direction == CopyDirection::From ? manager->GetCopySources(session.page) :
 			                                                            manager->GetCopyDestinations(session.page));
 		});
-		const auto list = BuildVisibleList(rows);
-		const bool commitRequested = DrawList(list, UpdateCursor(list));
+		DrawFilterRow();
+		const std::string query = session.search;
+		DrawContextRow(rows, query);
 
-		const auto cursorIt = session.cursor ? std::ranges::find(rows, *session.cursor, &SceneRow::scene) : rows.end();
-		DrawPeriodChips(cursorIt == rows.end() ? nullptr : &*cursorIt);
+		const auto list = BuildVisibleList(rows, query);
+		const bool commitRequested = DrawList(list, UpdateCursor(list));
+		if (filters.direction == CopyDirection::To)
+			DrawSelectionFooter(list);
+
+		const auto* cursorRow = session.cursor ? FindRow(rows, *session.cursor) : nullptr;
 		ImGui::Spacing();
+		DrawPeriodChips(cursorRow);
 
 		// A double-click commits alongside whatever is ticked, so its row joins this plan without staying ticked.
 		assert(!commitRequested || session.cursor);
@@ -839,7 +1082,9 @@ namespace
 				return BuildSummary(plan);
 			},
 			plan != session.summaryPlan);
-		DrawSummary(plan, summary);
+		ImGui::Spacing();
+		DrawPreview(plan, rows, cursorRow);
+		DrawSummary(summary, !plan.destinations.empty());
 		ImGui::Spacing();
 
 		if (const auto decision = DrawButtons(summary, commitRequested)) {
@@ -853,6 +1098,7 @@ void SceneCopyModal::Open(const SceneContextId& page)
 {
 	session = { .page = page,
 		.pageName = SceneSettingsManager::GetSingleton()->GetSceneContextDisplayName(page),
+		.pageIcon = GetSceneIcon(page),
 		.focusSearch = true,
 		.active = true,
 		.pendingOpen = true };

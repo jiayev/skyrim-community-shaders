@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/Browser/BrowserWidgets.h"
 #include "EditorWidgets.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/EffectManager.h"
@@ -287,13 +288,7 @@ namespace
 		ImGui::SetNextWindowSize(ImVec2(width, height), cond);
 	}
 
-	/** Puts the next item on the current line if it fits, otherwise on a new line. */
-	void SameLineIfFits(float a_width)
-	{
-		ImGui::SameLine();
-		if (ImGui::GetContentRegionAvail().x < a_width)
-			ImGui::NewLine();
-	}
+	using BrowserUI::SameLineIfFits;
 
 	bool MenuItemResetFloat(float& a_value, float a_default, int a_decimals)
 	{

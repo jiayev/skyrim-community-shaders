@@ -623,13 +623,7 @@ namespace
 		return lhs.type == rhs.type && lhs.formKey == rhs.formKey;
 	}
 
-	/// Puts the next item on the current line when `width` still fits, otherwise on a new one.
-	void SameLineIfFits(float width)
-	{
-		ImGui::SameLine();
-		if (ImGui::GetContentRegionAvail().x < width)
-			ImGui::NewLine();
-	}
+	using BrowserUI::SameLineIfFits;
 
 	/// The chain the player is standing in, outermost first, as a breadcrumb of addable chips.
 	void DrawLocationChain()

@@ -35,6 +35,9 @@ namespace
 	constexpr float kDotRadiusScale = 0.28f;
 	constexpr float kSectionLabelGap = 8.0f;
 	constexpr float kEmptyStateTopPad = 24.0f;
+	constexpr float kInlineBadgeFillAlpha = 0.22f;
+	/// How far an inline badge's label moves from the tint toward the text colour, for legibility.
+	constexpr float kInlineBadgeLabelTowardText = 0.35f;
 
 	ImU32 WithAlpha(const ImVec4& color, float alpha)
 	{
@@ -92,7 +95,8 @@ namespace BrowserUI
 		};
 	}
 
-	bool SearchField(const char* id, char* buffer, size_t bufferSize, const char* hint, float width, bool ctrlFFocus)
+	bool SearchField(const char* id, char* buffer, size_t bufferSize, const char* hint, float width, bool ctrlFFocus,
+		ImGuiInputTextFlags flags, ImGuiInputTextCallback callback, void* userData)
 	{
 		ImGui::PushID(id);
 		const auto& style = ImGui::GetStyle();
@@ -111,8 +115,10 @@ namespace BrowserUI
 			ImGui::SetNextItemAllowOverlap();
 		ImGui::SetNextItemWidth(width);
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(padLeft, style.FramePadding.y));
-		bool changed = ImGui::InputTextWithHint("##input", hint, buffer, bufferSize, ImGuiInputTextFlags_EscapeClearsAll);
+		bool changed = ImGui::InputTextWithHint("##input", hint, buffer, bufferSize,
+			ImGuiInputTextFlags_EscapeClearsAll | flags, callback, userData);
 		ImGui::PopStyleVar();
+		const ImGuiLastItemData inputItem = ImGui::GetCurrentContext()->LastItemData;
 
 		// Escape here belongs to the field; without this the same press would also close the editor.
 		if ((ImGui::IsItemActive() || ImGui::IsItemDeactivated()) && ImGui::IsKeyPressed(ImGuiKey_Escape, false))
@@ -137,6 +143,7 @@ namespace BrowserUI
 			Icons::DrawCenteredGlyph(ImGui::GetWindowDrawList(), clearMin, ImVec2(frameHeight, frameHeight),
 				Icons::FA(ICON_FA_TIMES), ImGui::GetColorU32(hovered ? ImGuiCol_Text : ImGuiCol_TextDisabled));
 			Util::AddTooltip(T(TKEY("search_clear"), "Clear search"));
+			ImGui::GetCurrentContext()->LastItemData = inputItem;
 		}
 
 		ImGui::PopID();
@@ -228,6 +235,26 @@ namespace BrowserUI
 		if (hovered)
 			ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
 		return clicked;
+	}
+
+	void SameLineIfFits(float width)
+	{
+		ImGui::SameLine();
+		if (ImGui::GetContentRegionAvail().x < width)
+			ImGui::NewLine();
+	}
+
+	void InlineBadge(const char* label, const ImVec4& tint)
+	{
+		ImGui::SameLine();
+		const ImVec4 text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+		const ImVec4 bg(tint.x, tint.y, tint.z, kInlineBadgeFillAlpha);
+		const ImVec4 fg(tint.x + (text.x - tint.x) * kInlineBadgeLabelTowardText,
+			tint.y + (text.y - tint.y) * kInlineBadgeLabelTowardText,
+			tint.z + (text.z - tint.z) * kInlineBadgeLabelTowardText, 1.0f);
+		const float height = ImGui::GetFrameHeight();
+		const float width = Util::DrawBadgeAt(ImGui::GetCursorScreenPos(), height, label, bg, fg);
+		ImGui::Dummy(ImVec2(width, height));
 	}
 
 	float IconButtonSize()

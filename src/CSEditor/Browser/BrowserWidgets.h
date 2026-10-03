@@ -32,11 +32,13 @@ namespace BrowserUI
 
 	/**
 	 * @brief Search input with a magnifier inside the frame and a clear button while it holds text.
-	 * Escape clears the text without closing the editor.
+	 * Escape clears the text without closing the editor. Item queries afterwards refer to the input.
 	 * @param ctrlFFocus Ctrl+F focuses the field while its window (or a child) is focused.
+	 * @param flags, callback, userData Passed on to the input, alongside EscapeClearsAll.
 	 * @return True when the text changed this frame.
 	 */
-	bool SearchField(const char* id, char* buffer, size_t bufferSize, const char* hint, float width, bool ctrlFFocus);
+	bool SearchField(const char* id, char* buffer, size_t bufferSize, const char* hint, float width, bool ctrlFFocus,
+		ImGuiInputTextFlags flags = 0, ImGuiInputTextCallback callback = nullptr, void* userData = nullptr);
 
 	/** @brief Width a ToggleChip with this count takes. */
 	float MeasureToggleChip(int count);
@@ -57,6 +59,12 @@ namespace BrowserUI
 	 */
 	bool Chip(const char* id, const char* label, Icons::GlyphRef icon = {}, const ImVec4* iconColor = nullptr,
 		const ImVec4* tint = nullptr);
+
+	/** @brief Stays on the current line when `width` more pixels fit, else wraps to the next. */
+	void SameLineIfFits(float width);
+
+	/** @brief Tinted badge on the current line, frame-high so it sits level with AlignTextToFramePadding'd text. */
+	void InlineBadge(const char* label, const ImVec4& tint);
 
 	/** @brief Square size of IconButton. */
 	float IconButtonSize();

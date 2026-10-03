@@ -493,13 +493,7 @@ namespace
 		return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
 	}
 
-	/// Puts the next item on the current line when `width` still fits, otherwise on a new one.
-	void SameLineIfFits(float width)
-	{
-		ImGui::SameLine();
-		if (ImGui::GetContentRegionAvail().x < width)
-			ImGui::NewLine();
-	}
+	using BrowserUI::SameLineIfFits;
 
 	float CheckboxWidth(const char* label)
 	{

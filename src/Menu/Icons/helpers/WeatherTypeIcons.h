@@ -141,4 +141,11 @@ namespace WeatherTypeIcons
 
 		return Icons::GlyphRef{};  // unknown → CloudSun
 	}
+
+	/** @brief Resolve() for font-only callers: CloudSun is painted, so it and a null weather give `fallback`. */
+	[[nodiscard]] inline Icons::GlyphRef ResolveGlyph(RE::TESWeather* weather, Icons::GlyphRef fallback = kCloudy) noexcept
+	{
+		const auto icon = Resolve(weather);
+		return icon && icon->IsValid() ? *icon : fallback;
+	}
 }
