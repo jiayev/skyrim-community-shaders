@@ -1,5 +1,7 @@
 #include "EngineStates.h"
 
+#include "Deferred.h"
+
 namespace DCLF
 {
 	RasterStateArray& EngineRasterStates()
@@ -12,6 +14,14 @@ namespace DCLF
 	{
 		static auto* states = reinterpret_cast<BlendStateArray*>(REL::RelocationID(524749, 411364).address());
 		return *states;
+	}
+
+	ID3D11BlendState* DeferredBlendState(std::uint32_t a_blendMode, std::uint32_t a_alphaToCoverage, std::uint32_t a_writeMode, std::uint32_t a_extra)
+	{
+		auto* deferred = globals::deferred;
+		if (!deferred || a_blendMode >= 7 || a_alphaToCoverage >= 2 || a_writeMode >= 13 || a_extra >= 2)
+			return nullptr;
+		return deferred->deferredBlendStates[a_blendMode][a_alphaToCoverage][a_writeMode][a_extra];
 	}
 
 	std::uint32_t DecalDepthBiasMode(std::uint32_t a_decalGroup)

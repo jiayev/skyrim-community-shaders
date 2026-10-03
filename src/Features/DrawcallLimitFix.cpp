@@ -781,6 +781,38 @@ void DrawcallLimitFix::Hooks::BSBatchRenderer_RenderPassImmediately<N>::thunk(RE
 		return;
 	}
 	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
+	// CS_DCLF_TARGET_PROBE: the blend state a native Lighting draw of the main pass left bound (its write masks per target),
+	// and the renderer's alpha blend indices, once for each distinct write mode.
+	if (!feature.inDepthPass && !DCLF::SwitchValue(DCLF::Switch::TargetProbe).empty() && a_pass->shader &&
+		a_pass->shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+		static std::uint32_t loggedModes = 0;
+		auto& state = globals::game::shadowState->GetRuntimeData();
+		const std::uint32_t writeMode = state.alphaBlendWriteMode;
+		if (writeMode < 32 && !((loggedModes >> writeMode) & 1)) {
+			loggedModes |= 1u << writeMode;
+			winrt::com_ptr<ID3D11BlendState> blend;
+			float factor[4];
+			UINT mask = 0;
+			globals::d3d::context->OMGetBlendState(blend.put(), factor, &mask);
+			std::string masks;
+			if (blend) {
+				D3D11_BLEND_DESC desc{};
+				blend->GetDesc(&desc);
+				for (std::uint32_t i = 0; i < 8; ++i) {
+					const auto& rt = desc.RenderTarget[desc.IndependentBlendEnable ? i : 0];
+					masks += fmt::format(" rt{} {}{:X}", i, rt.BlendEnable ? "blend " : "", rt.RenderTargetWriteMask);
+				}
+			}
+			ID3D11ShaderResourceView* t55 = nullptr;
+			globals::d3d::context->PSGetShaderResources(55, 1, &t55);
+			const auto& terrain = globals::features::terrainBlending;
+			logger::info("[DCLF] native main-pass blend: alphaBlendMode {}, alphaBlendWriteMode {}, alpha to coverage {}, '{}':{}; t55 {} (Terrain Blending's mask view {})",
+				state.alphaBlendMode, writeMode, state.alphaBlendAlphaToCoverage, a_pass->geometry && a_pass->geometry->name.c_str() ? a_pass->geometry->name.c_str() : "?", masks,
+				static_cast<const void*>(t55), static_cast<const void*>(terrain.terrainDepth.depthSRV));
+			if (t55)
+				t55->Release();
+		}
+	}
 }
 
 void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::BSGraphics::BSShaderAccumulator* a_accumulator, std::uint32_t a_renderFlags)

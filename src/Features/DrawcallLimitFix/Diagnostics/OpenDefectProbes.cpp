@@ -5,6 +5,8 @@
 
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
+#include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/TerrainBlending.h"
 #include "Features/VolumetricShadows.h"
 #include "State.h"
 
@@ -333,20 +335,203 @@ void ProbeShadowMaps(bool a_running)
 }
 }
 
-void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
+/**
+ * Under CS_DCLF_TARGET_PROBE: the pixel stage's state as each landscape pass Terrain Blending replays left it (the
+ * geometry, its textures, and the contents of the material and geometry constant buffers b1 and b2), every 240
+ * frames, with DCLF running or not, so one run with CS_DCLF_TEST_TOGGLE diffs the same geometry both ways.
+ */
+void DCLF::ProbeTerrainPassState(bool a_running, std::uint32_t a_index, const RE::BSRenderPass* a_pass)
 {
+	if (DCLF::SwitchValue(DCLF::Switch::TargetProbe).empty())
+		return;
+	struct Entry
+	{
+		std::string text;
+		std::array<winrt::com_ptr<ID3D11Buffer>, 3> staging;  // PS b1, PS b2, VS b2
+	};
+	struct Pending
+	{
+		std::vector<Entry> entries;
+		bool running = false;
+		std::uint32_t framesLeft = 0;
+	};
+	static std::optional<Pending> pending;
+	static bool capturing = false;
+	static std::uint32_t frames = 0;
+	auto* context = globals::d3d::context;
+	if (a_index == 0) {
+		capturing = false;
+		if (pending && pending->framesLeft && --pending->framesLeft == 0) {
+			std::string text;
+			for (auto& entry : pending->entries) {
+				text += "\n  " + entry.text;
+				for (std::uint32_t b = 0; b < 3; ++b) {
+					if (!entry.staging[b])
+						continue;
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					if (FAILED(context->Map(entry.staging[b].get(), 0, D3D11_MAP_READ, 0, &mapped)))
+						continue;
+					D3D11_BUFFER_DESC desc{};
+					entry.staging[b]->GetDesc(&desc);
+					text += fmt::format("\n    {}:", b == 2 ? "VS b2" : b ? "PS b2" : "PS b1");
+					const auto* words = static_cast<const float*>(mapped.pData);
+					for (std::uint32_t w = 0; w < desc.ByteWidth / 4; ++w)
+						text += fmt::format("{}{:.4g}", w % 4 ? " " : " | ", words[w]);
+					context->Unmap(entry.staging[b].get(), 0);
+				}
+			}
+			logger::info("[DCLF] terrain pass state, DCLF {}:{}", pending->running ? "on" : "off", text);
+			pending.reset();
+		}
+		if (!pending && (frames++ % 240) == 0) {
+			pending.emplace();
+			pending->running = a_running;
+			capturing = true;
+		}
+	}
+	if (!capturing)
+		return;
+	Entry entry;
+	const auto* geometry = a_pass ? a_pass->geometry : nullptr;
+	const auto* property = a_pass ? a_pass->shaderProperty : nullptr;
+	entry.text = fmt::format("pass {} '{}' material {} technique {:08X}", a_index, geometry && geometry->name.c_str() ? geometry->name.c_str() : "",
+		property ? static_cast<const void*>(property->material) : nullptr, a_pass ? a_pass->passEnum : 0u);
+	if (property) {
+		const auto* lighting = static_cast<const RE::BSLightingShaderProperty*>(property);
+		const auto* node = property->fadeNode;
+		entry.text += fmt::format(" fades specular {} envmap {}; fade node {} '{}' metric {} last visible {} flags {:08X}", lighting->specularLODFade, lighting->envmapLODFade,
+			static_cast<const void*>(node), node && node->name.c_str() ? node->name.c_str() : "", node ? Engine::At<float>(node, 0x144) : 0.0f,
+			node ? Engine::At<std::int32_t>(node, 0x13C) : 0, node ? Engine::At<std::uint32_t>(node, 0xF4) : 0u);
+	}
+	std::array<ID3D11ShaderResourceView*, 16> views{};
+	context->PSGetShaderResources(0, static_cast<UINT>(views.size()), views.data());
+	entry.text += " textures:";
+	for (std::uint32_t t = 0; t < views.size(); ++t) {
+		entry.text += fmt::format(" {}", static_cast<const void*>(views[t]));
+		if (views[t])
+			views[t]->Release();
+	}
+	// TruePBR's landscape layers: displacement t80-t85, RMAOS t86-t91.
+	std::array<ID3D11ShaderResourceView*, 12> layers{};
+	context->PSGetShaderResources(80, static_cast<UINT>(layers.size()), layers.data());
+	entry.text += " layers:";
+	for (std::uint32_t t = 0; t < layers.size(); ++t) {
+		entry.text += fmt::format(" {}", static_cast<const void*>(layers[t]));
+		if (layers[t])
+			layers[t]->Release();
+	}
+	// The rest of the pipeline's state, for the first pass only (the same for every one).
+	if (a_index == 0) {
+		ID3D11BlendState* blend = nullptr;
+		float factor[4]{};
+		UINT sampleMask = 0;
+		context->OMGetBlendState(&blend, factor, &sampleMask);
+		if (blend) {
+			D3D11_BLEND_DESC desc{};
+			blend->GetDesc(&desc);
+			entry.text += fmt::format(" blend {} a2c {} independent {}:", static_cast<const void*>(blend), desc.AlphaToCoverageEnable, desc.IndependentBlendEnable);
+			for (const auto& rt : desc.RenderTarget)
+				entry.text += fmt::format(" [{} {}/{}/{} {}/{}/{} m{:X}]", rt.BlendEnable, int(rt.SrcBlend), int(rt.DestBlend), int(rt.BlendOp), int(rt.SrcBlendAlpha),
+					int(rt.DestBlendAlpha), int(rt.BlendOpAlpha), rt.RenderTargetWriteMask);
+			blend->Release();
+		}
+		ID3D11DepthStencilState* depth = nullptr;
+		UINT stencilRef = 0;
+		context->OMGetDepthStencilState(&depth, &stencilRef);
+		if (depth) {
+			D3D11_DEPTH_STENCIL_DESC desc{};
+			depth->GetDesc(&desc);
+			entry.text += fmt::format(" depth {} test {} write {} func {} stencil {} ref {}", static_cast<const void*>(depth), desc.DepthEnable, int(desc.DepthWriteMask), int(desc.DepthFunc),
+				desc.StencilEnable, stencilRef);
+			depth->Release();
+		}
+		ID3D11RasterizerState* raster = nullptr;
+		context->RSGetState(&raster);
+		if (raster) {
+			D3D11_RASTERIZER_DESC desc{};
+			raster->GetDesc(&desc);
+			entry.text += fmt::format(" raster cull {} bias {} {} {}", int(desc.CullMode), desc.DepthBias, desc.SlopeScaledDepthBias, desc.DepthClipEnable);
+			raster->Release();
+		}
+		std::array<ID3D11SamplerState*, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT> samplers{};
+		context->PSGetSamplers(0, static_cast<UINT>(samplers.size()), samplers.data());
+		entry.text += "\n    samplers:";
+		for (std::uint32_t s = 0; s < samplers.size(); ++s) {
+			if (!samplers[s])
+				continue;
+			D3D11_SAMPLER_DESC desc{};
+			samplers[s]->GetDesc(&desc);
+			entry.text += fmt::format(" s{}={:X}/{}/{}/{}", s, int(desc.Filter), int(desc.AddressU), desc.MaxAnisotropy, desc.MipLODBias);
+			samplers[s]->Release();
+		}
+		std::array<ID3D11ShaderResourceView*, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> all{};
+		context->PSGetShaderResources(0, static_cast<UINT>(all.size()), all.data());
+		entry.text += "\n    all textures:";
+		for (std::uint32_t t = 16; t < all.size(); ++t) {
+			if (all[t])
+				entry.text += fmt::format(" t{}={}", t, static_cast<const void*>(all[t]));
+		}
+		for (auto* view : all)
+			if (view)
+				view->Release();
+		std::array<ID3D11Buffer*, 14> constants{};
+		context->PSGetConstantBuffers(0, static_cast<UINT>(constants.size()), constants.data());
+		entry.text += "\n    PS buffers:";
+		for (std::uint32_t b = 0; b < constants.size(); ++b) {
+			if (!constants[b])
+				continue;
+			entry.text += fmt::format(" b{}={}", b, static_cast<const void*>(constants[b]));
+			constants[b]->Release();
+		}
+		ID3D11RenderTargetView* targets[8]{};
+		context->OMGetRenderTargets(8, targets, nullptr);
+		entry.text += "\n    targets:";
+		for (auto* target : targets) {
+			entry.text += fmt::format(" {}", static_cast<const void*>(target));
+			if (target)
+				target->Release();
+		}
+	}
+	std::array<ID3D11Buffer*, 3> buffers{};
+	context->PSGetConstantBuffers(1, 2, buffers.data());
+	context->VSGetConstantBuffers(2, 1, &buffers[2]);
+	for (std::uint32_t b = 0; b < 3; ++b) {
+		if (!buffers[b])
+			continue;
+		D3D11_BUFFER_DESC desc{};
+		buffers[b]->GetDesc(&desc);
+		desc.Usage = D3D11_USAGE_STAGING;
+		desc.BindFlags = desc.MiscFlags = desc.StructureByteStride = 0;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		if (SUCCEEDED(globals::d3d::device->CreateBuffer(&desc, nullptr, entry.staging[b].put())))
+			context->CopyResource(entry.staging[b].get(), buffers[b]);
+		buffers[b]->Release();
+	}
+	pending->entries.push_back(std::move(entry));
+	pending->framesLeft = 4;
+}
+
+void DrawcallLimitFix::ProbeOpaqueTarget(std::uint32_t a_stage)
+{
+	const bool a_afterDCLF = a_stage != 0;
 	const std::string& pixel = DCLF::SwitchValue(DCLF::Switch::TargetProbe);
 	if (pixel.empty())
 		return;
-	constexpr std::uint32_t kTargets = 8;
+	// The eight colour targets, then the bound depth buffer (rt8) and the pixel stage's t55 (rt9: Terrain Blending's mask).
+	constexpr std::uint32_t kTargets = 10;
 	constexpr std::uint32_t kBlock = 64;  // the mean over a block: one pixel is too noisy under TAA jitter
 	struct Slot
 	{
 		std::array<winrt::com_ptr<ID3D11Texture2D>, kTargets> staging;
 		std::array<DXGI_FORMAT, kTargets> format{};
+		std::array<std::uint32_t, kTargets> x{}, y{};  // where the block is in the staging copy (a depth buffer is copied whole)
 		bool running = false;
 	};
-	static std::array<Slot, 2> slots;  // before and after DCLF's colour epoch
+	// Before and after DCLF's colour epoch, after Terrain Blending's passes, after the deferred composite.
+	constexpr std::uint32_t kStages = 4;
+	static std::array<Slot, kStages> slots;
+	static std::array<const char*, kStages> labels{ "before DCLF's colour epoch", "after DCLF's colour epoch", "after Terrain Blending's passes", "after the deferred composite" };
+	static std::string terrainPasses;
 	static std::uint32_t frames = 0, framesLeft = 0;
 	auto* context = globals::d3d::context;
 	auto half = [](std::uint16_t a_h) {
@@ -356,7 +541,7 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 	};
 	if (!a_afterDCLF) {
 		if (framesLeft && --framesLeft == 0) {
-			for (std::uint32_t i = 0; i < 2; ++i) {
+			for (std::uint32_t i = 0; i < kStages; ++i) {
 				auto& slot = slots[i];
 				std::string text;
 				for (std::uint32_t t = 0; t < kTargets; ++t) {
@@ -371,13 +556,29 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 						};
 						std::array<double, 4> sum{};
 						std::uint32_t channels = 0;
+						// The fourth channel's spread over the block: near 0, near 1, between.
+						std::array<std::uint32_t, 3> alphas{};
+						auto alphaOf = [&](double a_value) { ++alphas[a_value < 0.01 ? 0 : a_value > 0.99 ? 1 : 2]; };
 						for (std::uint32_t row = 0; row < kBlock; ++row) {
-							const auto* line = static_cast<const std::uint8_t*>(mapped.pData) + std::size_t(row) * mapped.RowPitch;
-							for (std::uint32_t column = 0; column < kBlock; ++column) {
+							const auto* line = static_cast<const std::uint8_t*>(mapped.pData) + std::size_t(row + slot.y[t]) * mapped.RowPitch;
+							for (std::uint32_t c0 = 0; c0 < kBlock; ++c0) {
+								const std::uint32_t column = c0 + slot.x[t];
 								switch (slot.format[t]) {
+								case DXGI_FORMAT_R24G8_TYPELESS:
+								case DXGI_FORMAT_D24_UNORM_S8_UINT:
+									sum[0] += (reinterpret_cast<const std::uint32_t*>(line)[column] & 0xFFFFFFu) / 16777215.0;
+									channels = 1;
+									break;
+								case DXGI_FORMAT_R32_TYPELESS:
+								case DXGI_FORMAT_R32_FLOAT:
+								case DXGI_FORMAT_D32_FLOAT:
+									sum[0] += reinterpret_cast<const float*>(line)[column];
+									channels = 1;
+									break;
 								case DXGI_FORMAT_R16G16B16A16_FLOAT:
 									for (std::uint32_t c = 0; c < 4; ++c)
 										sum[c] += half(reinterpret_cast<const std::uint16_t*>(line)[column * 4 + c]);
+									alphaOf(half(reinterpret_cast<const std::uint16_t*>(line)[column * 4 + 3]));
 									channels = 4;
 									break;
 								case DXGI_FORMAT_R16G16_FLOAT:
@@ -409,6 +610,7 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 								case DXGI_FORMAT_R8G8B8A8_UNORM:
 									for (std::uint32_t c = 0; c < 4; ++c)
 										sum[c] += line[column * 4 + c] / 255.0;
+									alphaOf(line[column * 4 + 3] / 255.0);
 									channels = 4;
 									break;
 								default:
@@ -420,18 +622,20 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 						if (channels == 0)
 							text += fmt::format(" rt{}=f{}", t, static_cast<std::uint32_t>(slot.format[t]));
 						else if (channels == 1)
-							text += fmt::format(" rt{}=({:.4f})", t, sum[0] / n);
+							text += fmt::format(" rt{}=({:.7f})", t, sum[0] / n);
 						else if (channels == 2)
 							text += fmt::format(" rt{}=({:.4f} {:.4f})", t, sum[0] / n, sum[1] / n);
 						else if (channels == 3)
 							text += fmt::format(" rt{}=({:.4f} {:.4f} {:.4f})", t, sum[0] / n, sum[1] / n, sum[2] / n);
 						else
-							text += fmt::format(" rt{}=({:.4f} {:.4f} {:.4f} {:.4f})", t, sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n);
+							text += fmt::format(" rt{}=({:.4f} {:.4f} {:.4f} {:.4f} | a0 {} a1 {} amid {})", t, sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n, alphas[0], alphas[1],
+								alphas[2]);
 						context->Unmap(slot.staging[t].get(), 0);
 					}
 					slot.staging[t] = nullptr;
 				}
-				logger::info("[DCLF] target probe: targets {} DCLF's colour epoch, DCLF {}:{}", i ? "after " : "before", slot.running ? "on" : "off", text);
+				if (!text.empty())
+					logger::info("[DCLF] target probe: targets {}, DCLF {}:{}{}", labels[i], slot.running ? "on" : "off", text, i == 2 ? terrainPasses : std::string());
 			}
 		}
 		if ((frames++ % 240) != 0)
@@ -443,9 +647,22 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 	// The epoch unbinds the targets, so the read after it reuses the textures the read before it found.
 	static std::array<winrt::com_ptr<ID3D11Texture2D>, kTargets> textures;
 	if (!a_afterDCLF) {
-		ID3D11RenderTargetView* views[kTargets] = {};
-		context->OMGetRenderTargets(kTargets, views, nullptr);
-		for (std::uint32_t t = 0; t < kTargets; ++t) {
+		ID3D11RenderTargetView* views[8] = {};
+		ID3D11DepthStencilView* depthView = nullptr;
+		context->OMGetRenderTargets(8, views, &depthView);
+		for (const std::uint32_t t : { 8u, 9u })
+			textures[t] = nullptr;
+		if (depthView) {
+			winrt::com_ptr<ID3D11Resource> resource;
+			depthView->GetResource(resource.put());
+			depthView->Release();
+			textures[8] = resource.try_as<ID3D11Texture2D>();
+		}
+		// Terrain Blending's mask texture itself (t55 of its passes; nothing need be bound to t55 here).
+		if (globals::features::terrainBlending.loaded && globals::features::terrainBlending.terrainDepth.texture) {
+			textures[9].copy_from(reinterpret_cast<ID3D11Texture2D*>(globals::features::terrainBlending.terrainDepth.texture));
+		}
+		for (std::uint32_t t = 0; t < 8; ++t) {
 			textures[t] = nullptr;
 			if (!views[t])
 				continue;
@@ -455,8 +672,12 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 			textures[t] = resource.try_as<ID3D11Texture2D>();
 		}
 	}
+	if (a_stage == 1 && globals::features::terrainBlending.loaded) {
+		const auto& blending = globals::features::terrainBlending;
+		terrainPasses = fmt::format(" (Terrain Blending replayed {} landscape and {} no-blend passes)", blending.terrainRenderPasses.size(), blending.renderPasses.size());
+	}
 	const auto sep = pixel.find_first_of(",x");
-	auto& slot = slots[a_afterDCLF ? 1 : 0];
+	auto& slot = slots[a_stage];
 	slot.running = Running();
 	for (std::uint32_t t = 0; t < kTargets; ++t) {
 		slot.staging[t] = nullptr;
@@ -466,8 +687,11 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 		textures[t]->GetDesc(&desc);
 		const auto x = std::min<std::uint32_t>(std::strtoul(pixel.substr(0, sep).c_str(), nullptr, 10), desc.Width - kBlock);
 		const auto y = std::min<std::uint32_t>(std::strtoul(pixel.substr(sep + 1).c_str(), nullptr, 10), desc.Height - kBlock);
+		// A depth buffer is copied whole (D3D11 copies no box of one).
+		const bool whole = (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0;
 		D3D11_TEXTURE2D_DESC stagingDesc = desc;
-		stagingDesc.Width = stagingDesc.Height = kBlock;
+		if (!whole)
+			stagingDesc.Width = stagingDesc.Height = kBlock;
 		stagingDesc.MipLevels = stagingDesc.ArraySize = 1;
 		stagingDesc.SampleDesc = { 1, 0 };
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
@@ -475,8 +699,15 @@ void DrawcallLimitFix::ProbeOpaqueTarget(bool a_afterDCLF)
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		if (FAILED(globals::d3d::device->CreateTexture2D(&stagingDesc, nullptr, slot.staging[t].put())))
 			continue;
-		const D3D11_BOX box{ x, y, 0, x + kBlock, y + kBlock, 1 };
-		context->CopySubresourceRegion(slot.staging[t].get(), 0, 0, 0, 0, textures[t].get(), 0, &box);
+		if (whole) {
+			context->CopyResource(slot.staging[t].get(), textures[t].get());
+			slot.x[t] = x;
+			slot.y[t] = y;
+		} else {
+			const D3D11_BOX box{ x, y, 0, x + kBlock, y + kBlock, 1 };
+			context->CopySubresourceRegion(slot.staging[t].get(), 0, 0, 0, 0, textures[t].get(), 0, &box);
+			slot.x[t] = slot.y[t] = 0;
+		}
 		slot.format[t] = desc.Format;
 	}
 }

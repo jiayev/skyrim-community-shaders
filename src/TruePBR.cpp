@@ -948,24 +948,25 @@ bool TruePBR::BSLightingShader_SetupMaterial(RE::BSLightingShader* shader, RE::B
 
 			constexpr size_t NormalStartIndex = 7;
 
+			// Every tile's slots are bound, a missing texture by the default the material would have been given
+			// (ReceiveValuesFromRootMaterial): a slot left alone keeps whatever the previous draw bound, so the
+			// result would depend on the order the landscape passes are drawn in.
+			const auto& stateData = graphicsState->GetRuntimeData();
+			const auto orDefault = [](const RE::NiPointer<RE::NiSourceTexture>& a_texture, const RE::NiPointer<RE::NiSourceTexture>& a_default) {
+				const auto& texture = a_texture != nullptr ? a_texture : a_default;
+				return texture != nullptr ? texture->rendererTexture : nullptr;
+			};
 			for (uint32_t textureIndex = 0; textureIndex < BSLightingShaderMaterialPBRLandscape::NumTiles; ++textureIndex) {
-				if (pbrMaterial->landscapeBaseColorTextures[textureIndex] != nullptr) {
-					shadowState->SetPSTexture(textureIndex, pbrMaterial->landscapeBaseColorTextures[textureIndex]->rendererTexture);
-					shadowState->SetPSTextureAddressMode(textureIndex, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
-					shadowState->SetPSTextureFilterMode(textureIndex, RE::BSGraphics::TextureFilterMode::kAnisotropic);
-				}
-				if (pbrMaterial->landscapeNormalTextures[textureIndex] != nullptr) {
-					const uint32_t normalTextureIndex = NormalStartIndex + textureIndex;
-					shadowState->SetPSTexture(normalTextureIndex, pbrMaterial->landscapeNormalTextures[textureIndex]->rendererTexture);
-					shadowState->SetPSTextureAddressMode(normalTextureIndex, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
-					shadowState->SetPSTextureFilterMode(normalTextureIndex, RE::BSGraphics::TextureFilterMode::kAnisotropic);
-				}
-				if (pbrMaterial->landscapeDisplacementTextures[textureIndex] != nullptr) {
-					extendedRendererState.SetPSTexture(textureIndex, pbrMaterial->landscapeDisplacementTextures[textureIndex]->rendererTexture);
-				}
-				if (pbrMaterial->landscapeRMAOSTextures[textureIndex] != nullptr) {
-					extendedRendererState.SetPSTexture(BSLightingShaderMaterialPBRLandscape::NumTiles + textureIndex, pbrMaterial->landscapeRMAOSTextures[textureIndex]->rendererTexture);
-				}
+				shadowState->SetPSTexture(textureIndex, orDefault(pbrMaterial->landscapeBaseColorTextures[textureIndex], stateData.defaultTextureBlack));
+				shadowState->SetPSTextureAddressMode(textureIndex, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
+				shadowState->SetPSTextureFilterMode(textureIndex, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+				const uint32_t normalTextureIndex = NormalStartIndex + textureIndex;
+				shadowState->SetPSTexture(normalTextureIndex, orDefault(pbrMaterial->landscapeNormalTextures[textureIndex], stateData.defaultTextureNormalMap));
+				shadowState->SetPSTextureAddressMode(normalTextureIndex, RE::BSGraphics::TextureAddressMode::kWrapSWrapT);
+				shadowState->SetPSTextureFilterMode(normalTextureIndex, RE::BSGraphics::TextureFilterMode::kAnisotropic);
+				extendedRendererState.SetPSTexture(textureIndex, orDefault(pbrMaterial->landscapeDisplacementTextures[textureIndex], stateData.defaultTextureBlack));
+				extendedRendererState.SetPSTexture(BSLightingShaderMaterialPBRLandscape::NumTiles + textureIndex,
+					orDefault(pbrMaterial->landscapeRMAOSTextures[textureIndex], stateData.defaultTextureWhite));
 			}
 
 			if (pbrMaterial->terrainOverlayTexture != nullptr) {

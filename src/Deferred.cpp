@@ -456,6 +456,8 @@ void Deferred::EndDeferred()
 		globals::features::drawcallLimitFix.PublishOwnership();
 
 	DeferredPasses();  // Perform deferred passes and composite forward buffers
+	if (globals::features::drawcallLimitFix.loaded)
+		globals::features::drawcallLimitFix.ProbeOpaqueTarget(3);
 
 	stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);  // Run OMSetRenderTargets again
 
@@ -703,9 +705,9 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		// The opaque batches are done: DCLF draws its objects where the engine would have, before anything
 		// that blends onto or tests against them.
 		if (globals::features::drawcallLimitFix.loaded) {
-			globals::features::drawcallLimitFix.ProbeOpaqueTarget(false);
+			globals::features::drawcallLimitFix.ProbeOpaqueTarget(0);
 			globals::features::drawcallLimitFix.AfterOpaquePass();
-			globals::features::drawcallLimitFix.ProbeOpaqueTarget(true);
+			globals::features::drawcallLimitFix.ProbeOpaqueTarget(1);
 		}
 
 		auto& terrainBlending = globals::features::terrainBlending;
@@ -713,6 +715,8 @@ void Deferred::Hooks::Main_RenderWorld_BlendedDecals::thunk(RE::BSShaderAccumula
 		if (terrainBlending.loaded && terrainBlending.settings.Enabled) {
 			terrainBlending.RenderTerrainBlendingPasses();
 		}
+		if (globals::features::drawcallLimitFix.loaded)
+			globals::features::drawcallLimitFix.ProbeOpaqueTarget(2);
 	}
 
 	// Deferred blended decals
