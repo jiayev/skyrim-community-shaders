@@ -21,9 +21,9 @@ namespace PresetCompatibility
 	/// How far the installed CS build lags behind a preset's required CS version.
 	enum class VersionGap : std::uint8_t
 	{
-		None,   ///< Current is newer/equal, or only a patch behind — no UI warning
-		Minor,  ///< Same major, lower minor — soft warning
-		Major   ///< Lower major — strong warning
+		None,   ///< Current is newer/equal, or only a patch behind: no UI warning
+		Minor,  ///< Same major, lower minor: soft warning
+		Major   ///< Lower major: strong warning
 	};
 
 	bool ParseSemVer(std::string_view text, SemVer& out);

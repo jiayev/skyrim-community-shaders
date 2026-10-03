@@ -83,7 +83,7 @@ namespace LocationTargetIcons
 		if (target.formId != 0) {
 			location = RE::TESForm::LookupByID<RE::BGSLocation>(target.formId);
 		} else if (!target.formKey.empty()) {
-			// Quiet resolve — SpidToFormId logs on miss, and authored lists redraw every frame.
+			// Quiet resolve: SpidToFormId logs on miss, and authored lists redraw every frame.
 			const auto components = Util::ParseSpid(std::string(target.formKey));
 			if (auto* handler = RE::TESDataHandler::GetSingleton();
 				handler && components.localFormId != 0 && !components.pluginName.empty())

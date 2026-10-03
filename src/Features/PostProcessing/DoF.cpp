@@ -160,7 +160,7 @@ void DoF::DrawSettings()
 	}
 	ImGui::EndDisabled();
 
-	if (ImGui::CollapsingHeader(T("feature.post_processing.do_f.debug", "Debug"))) {
+	if (Util::ShowDebugSections() && ImGui::CollapsingHeader(T("feature.post_processing.do_f.debug", "Debug"))) {
 		static float debugRescale = .3f;
 		ImGui::Text(T("feature.post_processing.do_f.debug_distance", "Debug Distance: %f"), debugDistance);
 		ImGui::Text(T("feature.post_processing.do_f.debug_focus_plane", "Debug Focus Plane: %f"), debugFocusPlane);

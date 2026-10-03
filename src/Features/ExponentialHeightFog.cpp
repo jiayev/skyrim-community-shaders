@@ -158,7 +158,7 @@ void ExponentialHeightFog::DrawSettings()
 		if (SceneWidgetInterceptor::IsArmed())
 			return;
 
-		if (ImGui::TreeNode(T(TKEY("debug"), "Debug"))) {
+		if (Util::ShowDebugSections() && ImGui::TreeNode(T(TKEY("debug"), "Debug"))) {
 			uint32_t minGridPixelSize = 4;
 			uint32_t maxGridPixelSize = 64;
 			uint32_t minGridSizeZ = 16;

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <format>
 #include <map>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -258,14 +259,8 @@ namespace
 			form.author = meta.author;
 		if (form.description.empty())
 			form.description = meta.description;
-		if (presetTags.empty() && !meta.tags.empty()) {
-			presetTags.clear();
-			for (size_t i = 0; i < meta.tags.size(); ++i) {
-				if (i > 0)
-					presetTags += ", ";
-				presetTags += meta.tags[i];
-			}
-		}
+		if (presetTags.empty())
+			presetTags = meta.tags | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 		if (!meta.version.empty())
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
@@ -471,7 +466,9 @@ namespace
 	{
 		if (path.empty())
 			return {};
-		return path.filename().string();
+		// u8string: string() throws on names outside the ANSI code page, and ImGui expects UTF-8.
+		const auto name = path.filename().u8string();
+		return { reinterpret_cast<const char*>(name.data()), name.size() };
 	}
 
 	/** @brief Opens the Windows image picker. @return Whether any file was chosen. */
@@ -520,9 +517,11 @@ namespace
 		std::string status;
 		if (multi) {
 			if (!form.screenshotSources.empty())
-				status = std::format("{} file(s) selected", form.screenshotSources.size());
+				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_selected",
+					{ { "count", std::to_string(form.screenshotSources.size()) } }, "{count} file(s) selected");
 			else if (!cleared && !existingScreenshots.empty())
-				status = std::format("{} existing", existingScreenshots.size());
+				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_existing",
+					{ { "count", std::to_string(existingScreenshots.size()) } }, "{count} existing");
 			else
 				status = T(TKEY("scene_export_artwork_none"), "None");
 		} else if (singleSource && !singleSource->empty()) {

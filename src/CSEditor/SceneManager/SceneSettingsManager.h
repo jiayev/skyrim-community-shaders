@@ -1053,6 +1053,7 @@ private:
 	std::map<std::string, LocationTransitionBatch> locationTransitionBatches;
 	bool locationTransitionBatchesDirty = true;
 	float lastLocationTransitionTick = -1.0f;
+	float lastBlendResolveTime = -1.0f;
 	ResolvedSettingMap lastLocationOverrideValues;
 	std::map<SettingAddress, float> lastLocationTransitionDurations;
 	std::map<SettingAddress, float> pendingLocationTransitionDurations;

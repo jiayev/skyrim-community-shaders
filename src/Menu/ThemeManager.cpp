@@ -648,7 +648,7 @@ bool ThemeManager::ReloadFont(const Menu& menu, float& cachedFontSize)
 		MenuFonts::AddPreviewFontsToAtlas(previewFontSize);
 	}
 
-	// Standalone icon fonts (full ranges; never MergeMode — PUA overlaps across families).
+	// Standalone icon fonts (full ranges; never MergeMode: PUA overlaps across families).
 	{
 		const float iconSize = atlas.cachedFontPixelSizesByRole[static_cast<size_t>(Menu::FontRole::Body)];
 		LoadStandaloneIconFonts(io.Fonts, atlas, iconSize > 0.f ? iconSize : fontSize);

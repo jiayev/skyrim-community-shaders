@@ -153,7 +153,9 @@ void Effects11::RestoreDefaultSettings()
 	auto& presetManager = PresetManager::GetSingleton();
 	presetManager.DiscoverPresets();
 	presetManager.SelectDefaultPreset();
-	PersistActivePreset();
+	settings.ActivePreset = presetManager.GetActivePresetId();
+	// Also reached from Feature::Load, where saving mid State::Load would clobber later features.
+	activePresetNeedsPersist = true;
 }
 
 bool Effects11::IsUseEffectEnabled() const

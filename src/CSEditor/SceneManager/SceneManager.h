@@ -19,6 +19,6 @@ struct SceneManager : Feature, SceneSettingsManager
 	void DrawSettings() override;
 	void SetupResources() override;
 	void DataLoaded() override;
-	/** @brief Per-frame scene resolution; forwards to SceneSettingsManager::Update. */
+	/** @brief Scene resolution, forwarded to SceneSettingsManager::Update; repeat calls within a frame are no-ops. */
 	void Update();
 };

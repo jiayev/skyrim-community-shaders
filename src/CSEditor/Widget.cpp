@@ -368,7 +368,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 	auto* menu = globals::menu;
 	auto* editorWindow = EditorWindow::GetSingleton();
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
-	// Docked windows share a tab bar — keep actions inline there unless a native title bar hosts them.
+	// Docked windows share a tab bar, so keep actions inline there unless a native title bar hosts them.
 	if (!menu || !editorWindow || !window || window->DockIsActive)
 		return false;
 
@@ -415,7 +415,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 		return actions.emplace_back(std::move(action));
 	};
 
-	// Force Weather / Unlock — lock badge matching the floating action bar
+	// Force Weather / Unlock: lock badge matching the floating action bar
 	if (showForceWeather && weather) {
 		const bool isLocked = editorWindow->IsWeatherLocked() && editorWindow->GetLockedWeather() == weather;
 		const char* tooltip = !EditorWindow::AreWeatherLockHooksInstalled() ?
@@ -461,7 +461,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 		std::optional<ImVec4> unsavedColor;
 		if (unsaved) {
 			auto color = statusPalette.Error;
-			color.w = 0.75f;  // muted red — dirty save affordance without a separate label
+			color.w = 0.75f;  // muted red: dirty save affordance without a separate label
 			unsavedColor = color;
 		}
 		if (useIcons) {
@@ -605,7 +605,7 @@ bool Widget::DrawTitleBarActions(bool showApply, bool showSaveLoadRevert, bool s
 		return true;  // Nothing to show; the title bar stays clean and no inline row is needed.
 
 	if (actionsLeft < cursorX && !actions.empty())
-		return false;  // Actions don't fit — caller draws them inline.
+		return false;  // Actions don't fit; caller draws them inline.
 
 	// Draw right-aligned actions left to right.
 	// Use InvisibleButton (same pattern as the main CS menu undocked header / close button) so hits

@@ -32,10 +32,6 @@
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
 
-#ifndef ICON_FA_PERSON_WALKING
-#define ICON_FA_PERSON_WALKING ICON_FA_WALKING  // FA5 name; FA6 calls this person-walking
-#endif
-
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -1037,7 +1033,7 @@ void EditorWindow::RenderUI()
 
 		ImGui::SameLine();
 
-		// Undo — FA glyph (not theme PNG)
+		// Undo: FA glyph (not theme PNG)
 		{
 			const bool canUndo = CanUndo();
 			ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, iconY));
@@ -1059,7 +1055,7 @@ void EditorWindow::RenderUI()
 			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
-		// Export preset — the one on-screen entry to the universal export dialog. It covers every
+		// Export preset: the one on-screen entry to the universal export dialog. It covers every
 		// context, so it sits with the other editor-wide actions instead of on each scene page.
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		{
@@ -1087,7 +1083,7 @@ void EditorWindow::RenderUI()
 			Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
 		}
 
-		// Delete authored scene changes — global action, same row as Undo.
+		// Delete authored scene changes: global action, same row as Undo.
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		{
 			auto* sceneManager = globals::sceneSettingsManager;
@@ -1123,7 +1119,7 @@ void EditorWindow::RenderUI()
 				Util::kTooltipWhenDisabled);
 		}
 
-		// Right-aligned items — X from the trailing edge; Y shares iconY / textY with the left cluster.
+		// Right-aligned items: X from the trailing edge; Y shares iconY / textY with the left cluster.
 		const float clipRight = barPos.x + ImGui::GetWindowSize().x - style.FramePadding.x;
 		const float barMinX = barPos.x;
 		const float barWidth = ImGui::GetWindowSize().x;
@@ -1176,7 +1172,7 @@ void EditorWindow::RenderUI()
 			previewStatusX = rightCursor;
 		}
 
-		// Weather lock + name, and period title — centered in the header
+		// Weather lock + name, and period title, centered in the header
 		const bool weatherLocked = IsWeatherLocked();
 		RE::TESWeather* statusWeather = GetLockedWeather();
 		if (!statusWeather) {
@@ -1237,7 +1233,7 @@ void EditorWindow::RenderUI()
 			ImGui::TextUnformatted(periodBuf);
 		}
 
-		// Toggle-style FA/Lucide/Tabler glyph button — same chrome as the old image toggles.
+		// Toggle-style FA/Lucide/Tabler glyph button: same chrome as the old image toggles.
 		auto PlaceToggleIconButton = [&](const char* id, Icons::GlyphRef glyph, bool isActive, float posX, const ImVec4& activeColor) -> bool {
 			ImGui::SetCursorScreenPos(ImVec2(posX, iconY));
 			return DrawToggleIconButton(id, glyph, isActive, activeColor, iconButtonSize, ImGui::GetColorU32(textColor));
@@ -1257,7 +1253,7 @@ void EditorWindow::RenderUI()
 		}
 		{
 			bool isActive = previewMode == PreviewMode::PlayMode;
-			if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_PERSON_WALKING), isActive, playModeX, enabledColor)) {
+			if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_WALKING), isActive, playModeX, enabledColor)) {
 				if (isActive)
 					ExitPreviewMode();
 				else
@@ -1280,21 +1276,12 @@ void EditorWindow::RenderUI()
 			ImGui::SetNextItemWidth(halfSliderWidth);
 			DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
 
-			if (timePaused)
-				timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
-			else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
-				timeScaleSlider = calendar->timeScale->value;
-
 			ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
 			ImGui::SetNextItemWidth(halfSliderWidth);
-			ImGui::BeginDisabled(timePaused);
-			if (ImGui::SliderFloat("##MenuBarTimeScaleSlider", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-					timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla") : "%.1fx", ImGuiSliderFlags_Logarithmic))
-				calendar->timeScale->value = timeScaleSlider;
-			ImGui::EndDisabled();
+			DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 		}
 
-		// Close — white cross, no red fill
+		// Close: white cross, no red fill
 		ImGui::SetCursorScreenPos(ImVec2(xButtonX, iconY));
 		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
 		{
@@ -2239,6 +2226,21 @@ bool EditorWindow::DrawTimePauseToggle(const char* id, const ImVec2& size)
 	return clicked;
 }
 
+void EditorWindow::DrawTimeScaleSlider(const char* id, RE::Calendar* calendar)
+{
+	assert(calendar && calendar->timeScale);
+	if (timePaused)
+		timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
+	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
+		timeScaleSlider = calendar->timeScale->value;
+
+	ImGui::BeginDisabled(timePaused);
+	if (ImGui::SliderFloat(id, &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
+			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
+		calendar->timeScale->value = timeScaleSlider;
+	ImGui::EndDisabled();
+}
+
 void EditorWindow::DrawTimeControls()
 {
 	auto calendar = GetCalendar();
@@ -2264,18 +2266,9 @@ void EditorWindow::DrawTimeControls()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("pause_time_tooltip"), "Pause or resume game time progression"));
 
-	if (timePaused)
-		timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
-	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
-		timeScaleSlider = calendar->timeScale->value;
-
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(sliderWidth);
-	ImGui::BeginDisabled(timePaused);
-	if (ImGui::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
-		calendar->timeScale->value = timeScaleSlider;
-	ImGui::EndDisabled();
+	DrawTimeScaleSlider("##TimeScale", calendar);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
 

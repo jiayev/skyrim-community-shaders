@@ -225,7 +225,7 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	if (ImGui::TreeNode(T("feature.post_processing.debug", "Debug"))) {
+	if (Util::ShowDebugSections() && ImGui::TreeNode(T("feature.post_processing.debug", "Debug"))) {
 		if (ImGui::TreeNode(T("feature.post_processing.game_imagespace_values", "Game ImageSpace Values"))) {
 			ImGui::Text(T("feature.post_processing.base_amount", "Base Amount: %.3f"), imageSpaceManager->gameISData.baseAmount);
 			ImGui::Text("%s", T("feature.post_processing.base_data", "Base Data:"));

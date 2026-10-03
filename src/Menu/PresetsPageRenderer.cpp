@@ -255,7 +255,7 @@ void PresetsPageRenderer::RenderToolbar()
 			ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
 	}
 
-	// CS Editor — same toolbar row, pinned to the right edge.
+	// CS Editor: same toolbar row, pinned to the right edge.
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
@@ -601,7 +601,7 @@ void PresetsPageRenderer::RenderDetail()
 						break;
 					}
 				}
-				ImGui::BulletText("%s — %s", label.c_str(),
+				ImGui::BulletText("%s: %s", label.c_str(),
 					disabled ? T("menu.features.disabled", "Disabled") : T("menu.features.enabled", "Enabled"));
 			}
 		}

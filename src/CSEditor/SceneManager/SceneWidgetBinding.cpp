@@ -1252,9 +1252,9 @@ void SceneWidgetBinding::Guard::NavigateGreyedSetting() const
 		if (feature.empty()) {
 			if (auto* editor = EditorWindow::GetSingleton())
 				editor->ShowNotification(
-					T(TKEY("scene_override_location_unsupported"),
-						"This place can't hold that setting — Location scenes don't support it either."),
-					Util::Colors::GetWarning(), 4.0f);
+					T(TKEY("scene_override_setting_unknown"),
+						"Couldn't identify this setting, so it can't be overridden for this place."),
+					Util::Colors::GetWarning(), EditorWindow::kLongNotificationDuration);
 			return;
 		}
 		SceneSettingsUI::OpenCurrentLocationForSetting(feature, path, key);

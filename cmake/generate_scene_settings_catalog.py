@@ -354,6 +354,12 @@ def masked_text(path: Path) -> str:
     return mask_cpp_source(read_text(path))
 
 
+def write_if_changed(path: Path, text: str) -> None:
+    """Leaves an unchanged output's timestamp alone so its dependents don't rebuild."""
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
+
+
 def cpp_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -4654,7 +4660,7 @@ def write_catalog(entries: list[dict[str, object]], out_dir: Path):
         key=lambda entry: (entry["feature"], entry["path"], entry["key"]),
     )
 
-    header.write_text("""#pragma once
+    write_if_changed(header, """#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -4769,7 +4775,7 @@ namespace SceneSettingsCatalog
 \tbool RegisterControlResolver(std::string_view featureShortName, ControlResolver resolver);
 \tconst SettingMetadata* FindSettingForControl(Feature* feature, const void* valueAddress);
 }
-""", encoding="utf-8")
+""")
     rows = []
     choice_arrays = []
     for index, e in enumerate(entries):
@@ -4859,7 +4865,7 @@ namespace SceneSettingsCatalog
     joined_feature_blocks = "\n".join(feature_blocks)
     entry_points = required_entry_points(entries)
     entry_point_rows = "\n".join(f'\t\t"{point}",' for point in entry_points)
-    source.write_text(f"""#include "SceneSettingsCatalog.generated.h"
+    write_if_changed(source, f"""#include "SceneSettingsCatalog.generated.h"
 
 #include <algorithm>
 #include <array>
@@ -4911,9 +4917,9 @@ namespace SceneSettingsCatalog
 \t}}
 
 }}
-""", encoding="utf-8")
+""")
 
-    adapters.write_text(f"""#include "SceneSettingsCatalog.generated.h"
+    write_if_changed(adapters, f"""#include "SceneSettingsCatalog.generated.h"
 
 #include "Feature.h"
 {includes}
@@ -4962,7 +4968,7 @@ namespace SceneSettingsCatalog
 \t\treturn resolver != resolvers.end() ? resolver->second(feature, valueAddress) : nullptr;
 \t}}
 }}
-""", encoding="utf-8")
+""")
 
 
 # Logical editor kind -> the ImGui entry points that can produce it. `sourceWidget` names an

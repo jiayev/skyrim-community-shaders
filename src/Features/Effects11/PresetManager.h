@@ -102,7 +102,7 @@ public:
 
 	/**
 	 * @brief Saves the live ENB settings (optional) and copies enbseries.ini + enbseries/ into destRoot.
-	 *  Only those ENB files are copied — never the whole Legacy game/Data root. No-ops when source == dest.
+	 *  Only those ENB files are copied, never the whole Legacy game/Data root. No-ops when source == dest.
 	 */
 	bool ExportActivePresetTo(const std::filesystem::path& destRoot, bool saveCurrent = true);
 

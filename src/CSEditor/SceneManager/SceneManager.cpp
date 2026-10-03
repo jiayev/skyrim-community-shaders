@@ -520,7 +520,7 @@ void SceneManager::DrawSettings()
 
 	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
 		FeatureOverwritesPanel::Draw();
-	if (ImGui::CollapsingHeader(T("feature.scene_manager.debug", "Debug")))
+	if (Util::ShowDebugSections() && ImGui::CollapsingHeader(T("feature.scene_manager.debug", "Debug")))
 		DrawDebug(*this);
 }
 

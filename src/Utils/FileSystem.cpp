@@ -208,9 +208,23 @@ namespace Util
 			return roots;
 		}
 
+		namespace
+		{
+			bool IsHiddenLibraryPrefix(wchar_t first)
+			{
+				return first == L'_' || first == L'.';
+			}
+		}
+
 		bool IsHiddenLibraryEntry(std::string_view name)
 		{
-			return name.starts_with('_') || name.starts_with('.');
+			return !name.empty() && IsHiddenLibraryPrefix(static_cast<unsigned char>(name.front()));
+		}
+
+		bool IsHiddenLibraryEntry(const std::filesystem::path& name)
+		{
+			const auto& native = name.native();
+			return !native.empty() && IsHiddenLibraryPrefix(native.front());
 		}
 
 		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories)
@@ -227,7 +241,7 @@ namespace Util
 					std::error_code typeEc;
 					const bool wantedType = directories ? entry.is_directory(typeEc) : entry.is_regular_file(typeEc);
 					const auto name = entry.path().filename();
-					if (wantedType && !name.empty() && !IsHiddenLibraryEntry(name.string()) && !isListed(name))
+					if (wantedType && !name.empty() && !IsHiddenLibraryEntry(name) && !isListed(name))
 						found.push_back(entry.path());
 				}
 			}

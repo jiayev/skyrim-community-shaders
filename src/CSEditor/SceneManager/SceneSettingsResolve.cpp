@@ -76,18 +76,23 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	RefreshBlendSnapshot(interior);
 	const auto& weather = blendSnapshot.weather;
 
+	const auto transitionTime = GetPauseAwareTime();
+	const bool blendAdvanced = std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
+	                           // Indoors resolves nothing from the hour, so time alone cannot change it.
+	                           (!interior && (lastResolvedHour < 0.0f ||
+	                                             std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
+	// Continuous blends reload every blended feature per resolve, so they share the transition tick rate.
+	const auto sinceLastBlendResolve = transitionTime - lastBlendResolveTime;
+	const bool blendResolveDue = blendAdvanced &&
+	                             (sinceLastBlendResolve < 0.0f || sinceLastBlendResolve >= kLocationTransitionTickInterval);
 	const bool contextChanged = interior != lastResolvedInterior ||
 	                            locationContextChanged ||
 	                            weather.currentWeatherId != lastResolvedCurrentWeatherId ||
 	                            weather.previousWeatherId != lastResolvedPreviousWeatherId ||
-	                            std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
-	                            // Indoors resolves nothing from the hour, so time alone cannot change it.
-	                            (!interior && (lastResolvedHour < 0.0f ||
-	                                              std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
+	                            blendResolveDue;
 	const auto now = std::chrono::steady_clock::now();
 	const bool applyRetryDue = std::any_of(applyFailures.begin(), applyFailures.end(),
 		[&](const auto& item) { return now >= item.second.retryAfter; });
-	const auto transitionTime = GetPauseAwareTime();
 	if (!force && !resolverDirty && !contextChanged && !applyRetryDue) {
 		AdvanceLocationTransitions(transitionTime);
 		return;
@@ -119,6 +124,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	lastResolvedCurrentWeatherId = weather.currentWeatherId;
 	lastResolvedPreviousWeatherId = weather.previousWeatherId;
 	lastResolvedWeatherLerp = weather.lerp;
+	lastBlendResolveTime = transitionTime;
 }
 
 float SceneSettingsManager::GetPauseAwareTime() const
@@ -289,7 +295,6 @@ bool SceneSettingsManager::AdvanceLocationTransitions(float now)
 			recordFailure(std::format("Failed to apply location transition for {}", featureShortName));
 			continue;
 		}
-		transitionApplyFailures.erase(featureShortName);
 		ScheduleApplyVerification(featureShortName, batch.updates, batch.signature, true);
 		appliedAny = true;
 
@@ -594,7 +599,6 @@ void SceneSettingsManager::ApplyResolvedSettings(const ResolvedSettingMap& resol
 			recordApplyFailure(now, std::format("Failed to apply resolved settings for {}", featureShortName));
 			continue;
 		}
-		applyFailures.erase(featureShortName);
 		ScheduleApplyVerification(featureShortName, updates, getSignature(), false);
 		restoreFailureWarnings.erase(featureShortName);
 

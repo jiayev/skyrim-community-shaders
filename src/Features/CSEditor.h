@@ -19,7 +19,7 @@ public:
 	virtual std::string GetDisplayName() override { return T("feature.cs_editor.name", "CS Editor"); }
 	virtual inline std::string GetShortName() override { return "CSEditor"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_EDITOR"; }
-	virtual inline std::string_view GetCategory() const override { return "CS Editor"; }
+	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return false; }
 

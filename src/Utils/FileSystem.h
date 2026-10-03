@@ -233,6 +233,8 @@ namespace Util
 
 		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
 		bool IsHiddenLibraryEntry(std::string_view name);
+		/** @brief Path overload: reads the native name, since path::string() throws outside the ANSI code page. */
+		bool IsHiddenLibraryEntry(const std::filesystem::path& name);
 
 		/** @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root; first root wins. */
 		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories);

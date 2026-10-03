@@ -147,6 +147,23 @@ namespace Util
 		~DisableGuard();
 	};
 
+	/** @brief Hides feature Debug sections while alive (CS Editor Features window); restores the previous state. */
+	class HideDebugSectionsGuard
+	{
+	public:
+		explicit HideDebugSectionsGuard(bool hide);
+		~HideDebugSectionsGuard();
+
+		HideDebugSectionsGuard(const HideDebugSectionsGuard&) = delete;
+		HideDebugSectionsGuard& operator=(const HideDebugSectionsGuard&) = delete;
+
+	private:
+		bool previous;
+	};
+
+	/** @brief False while a HideDebugSectionsGuard hides them; gate each feature's Debug header on this. */
+	bool ShowDebugSections();
+
 	/**
 	 * Renders text using the disabled text color.
 	 * @param a_text Start of the text
@@ -202,7 +219,7 @@ namespace Util
 		int a_marked = -1, bool a_muted = false);
 
 	/**
-	 * @brief Glass/mica pill tab bar — drop-in replacement for ImGui::BeginTabBar / BeginTabItem.
+	 * @brief Glass/mica pill tab bar: drop-in replacement for ImGui::BeginTabBar / BeginTabItem.
 	 * Draws a compact translucent track with a selected pill instead of classic folder tabs.
 	 * Nesting is supported (stack). Tab labels from the previous frame drive the strip layout.
 	 */

@@ -35,7 +35,7 @@ void CODBloom::DrawSettings()
 	}
 	ImGui::Unindent();
 
-	if (ImGui::CollapsingHeader(T("feature.post_processing.codbloom.debug", "Debug"))) {
+	if (Util::ShowDebugSections() && ImGui::CollapsingHeader(T("feature.post_processing.codbloom.debug", "Debug"))) {
 		static int mip = 0;
 		ImGui::SliderInt(T("feature.post_processing.codbloom.debug_mip_level", "Debug Mip Level"), &mip, 0, (int)s_BloomMips - 1, "%d", ImGuiSliderFlags_NoInput | ImGuiSliderFlags_AlwaysClamp);
 

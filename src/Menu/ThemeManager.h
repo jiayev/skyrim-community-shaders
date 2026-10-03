@@ -62,7 +62,7 @@ using json = nlohmann::json;
  *       "Disable": [0.5, 0.5, 0.5, 1.0],         // Disabled elements
  *       "Error": [1.0, 0.4, 0.4, 1.0],           // Error messages
  *       "Warning": [1.0, 0.6, 0.2, 1.0],         // Warning messages
- *       "RestartNeeded": [0.4, 1.0, 0.4, 1.0],   // Restart required indicator
+ *       "RestartNeeded": [0.45, 0.78, 0.48, 1.0], // Restart required indicator
  *       "CurrentHotkey": [1.0, 1.0, 0.0, 1.0],   // Active hotkey highlight
  *       "SuccessColor": [0.32, 0.68, 0.42, 1.0], // Success / positive (muted for text & button contrast)
  *       "InfoColor": [0.2, 0.6, 1.0, 1.0]        // Info messages

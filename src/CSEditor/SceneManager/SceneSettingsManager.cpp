@@ -156,9 +156,13 @@ void SceneSettingsManager::VerifyPendingApplies()
 		const bool retained = feature &&
 		                      FeatureRetainedUpdates(*feature, featureShortName, verification.updates, &observed);
 
-		if (!retained) {
-			logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
-				featureShortName);
+		auto& failures = verification.transition ? transitionApplyFailures : applyFailures;
+		if (retained) {
+			failures.erase(featureShortName);
+		} else {
+			if (failures[featureShortName].Record(verification.signature, std::chrono::steady_clock::now()))
+				logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
+					featureShortName);
 			featureApplyDocuments.erase(featureShortName);
 			// Record what the feature reports instead of dropping the address: the scene layer still owes it
 			// the baseline, and the mismatch against the resolved value drives the retry.
@@ -173,8 +177,6 @@ void SceneSettingsManager::VerifyPendingApplies()
 					appliedSettings.erase(address);
 			}
 			PruneAppliedFeatureName(featureShortName);
-			(verification.transition ? transitionApplyFailures : applyFailures)[featureShortName].Record(
-				verification.signature, std::chrono::steady_clock::now());
 			resolverDirty = true;
 		}
 		verificationIt = pendingApplyVerifications.erase(verificationIt);

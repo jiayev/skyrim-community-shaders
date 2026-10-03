@@ -653,7 +653,9 @@ void CSEditor::DrawWeatherTransitionBar(RE::Sky* sky, float width, bool verboseO
 				fromName = editorId;
 			else
 				fromName = std::format("{:08X}", lastWeather->GetFormID());
-			transitionOverlay = std::format("{:.1f}% | Transitioning from {}", transitionPct, fromName);
+			transitionOverlay = I18n::GetSingleton()->Format("feature.cs_editor.transition_overlay",
+				{ { "percent", std::format("{:.1f}", transitionPct) }, { "weather", fromName } },
+				"{percent}% | Transitioning from {weather}");
 		} else {
 			transitionOverlay = std::format("{:.0f}%", transitionPct);
 		}

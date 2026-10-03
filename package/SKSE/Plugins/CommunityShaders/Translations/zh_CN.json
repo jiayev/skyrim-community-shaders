@@ -130,6 +130,7 @@
     "cs_editor.falling_speed": "下落速度",
     "cs_editor.favorites": "收藏夹",
     "cs_editor.favourites": "收藏夹",
+    "cs_editor.features": "功能",
     "cs_editor.file": "文件",
     "cs_editor.file_label": "文件：%s",
     "cs_editor.filter_all": "全部",

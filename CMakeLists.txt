@@ -350,7 +350,6 @@ target_sources(
 # # Scene settings catalog
 # #######################################################################################################################
 
-set(SCENE_SETTINGS_PYTHON_ARGS "")
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(SCENE_SETTINGS_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
 
@@ -376,7 +375,6 @@ add_custom_command(
         "${SCENE_SETTINGS_ADAPTERS_SOURCE}"
     COMMAND
         ${SCENE_SETTINGS_PYTHON_EXECUTABLE}
-        ${SCENE_SETTINGS_PYTHON_ARGS}
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_scene_settings_catalog.py"
         --source-dir
         "${CMAKE_CURRENT_SOURCE_DIR}"

@@ -15,6 +15,7 @@
 #include "Presets/PresetCompatibility.h"
 #include "SettingsOverrideManager.h"
 #include "State.h"
+#include "Utils/D3D.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Format.h"
 #include "Utils/UI.h"
@@ -204,7 +205,7 @@ namespace
 			if (!std::filesystem::is_directory(dir, ec))
 				continue;
 			for (const auto& file : std::filesystem::directory_iterator(dir, ec)) {
-				if (ec || !file.is_regular_file() || !IsImageExtension(file.path()))
+				if (ec || !file.is_regular_file(ec) || !IsImageExtension(file.path()))
 					continue;
 				pack.screenshotPaths.push_back(file.path());
 			}
@@ -212,7 +213,7 @@ namespace
 
 		// Loose images at pack root (skip logo/cover already chosen).
 		for (const auto& file : std::filesystem::directory_iterator(pack.rootPath, ec)) {
-			if (ec || !file.is_regular_file() || !IsImageExtension(file.path()))
+			if (ec || !file.is_regular_file(ec) || !IsImageExtension(file.path()))
 				continue;
 			const auto path = file.path();
 			if ((!pack.logoPath.empty() && path == pack.logoPath) ||
@@ -344,6 +345,8 @@ void UnifiedPresetCatalog::LoadActiveState()
 		json j;
 		in >> j;
 		activePackId = j.value("activePackId", "");
+		if (!IsPackFolderId(activePackId))
+			activePackId.clear();
 		if (const auto ids = j.find(kBaselinePackIdsKey); ids != j.end() && ids->is_array()) {
 			for (const auto& id : *ids) {
 				if (id.is_string() && IsPackFolderId(id.get_ref<const std::string&>()) && !IsBaselineEnabled(id.get<std::string>()))
@@ -641,6 +644,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 			logger::warn("[Presets] CreateTexture2D failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrTex));
 			return false;
 		}
+		Util::SetResourceName(texture.get(), "UnifiedPresetCatalog::Artwork");
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Format = desc.Format;
@@ -651,6 +655,7 @@ bool UnifiedPresetCatalog::LoadTextureSRV(const std::filesystem::path& path, win
 			logger::warn("[Presets] CreateSRV failed for '{}' ({:x})", path.string(), static_cast<unsigned>(hrSrv));
 			return false;
 		}
+		Util::SetResourceName(srv, "UnifiedPresetCatalog::Artwork SRV");
 		size = ImVec2(static_cast<float>(width), static_cast<float>(height));
 		ok = true;
 	}

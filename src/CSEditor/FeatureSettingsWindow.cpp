@@ -14,7 +14,6 @@
 #include "EditorWindow.h"
 #include "Feature.h"
 #include "FeatureCategories.h"
-#include "FeatureDebugFilter.h"
 #include "FeatureListPicker.h"
 #include "Features/PostProcessing.h"
 #include "Globals.h"
@@ -132,8 +131,7 @@ namespace
 
 		ImGui::Spacing();
 		if (ImGui::BeginChild("##FeatureSettingsBody")) {
-			const bool hideDebug = !EditorWindow::GetSingleton()->settings.showFeatureDebug;
-			FeatureDebugFilter::Scope hideDebugScope(hideDebug);
+			Util::HideDebugSectionsGuard hideDebug(!EditorWindow::GetSingleton()->settings.showFeatureDebug);
 			FeatureListRenderer::DrawFeatureBody(feature);
 		}
 		ImGui::EndChild();
@@ -249,7 +247,6 @@ void FeatureSettingsWindow::Draw(bool& open)
 	if (!open)
 		return;
 
-	FeatureDebugFilter::Install();
 	DrawFeaturesWindow(open);
 
 	// Drawn at top level so the modal is not clipped by the window; navigating to another feature reopens it.
