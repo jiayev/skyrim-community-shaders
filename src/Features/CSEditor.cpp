@@ -13,6 +13,10 @@
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
+#include "CSEditor/WeatherPickerWindow.h"
+#include "Features/PerformanceOverlay.h"
+#include "Menu/ThemeManager.h"
+#include "imgui_internal.h"
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -25,10 +29,7 @@ namespace
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	CSEditor::WeatherDetailsWindowSettings,
-	Enabled,
-	ShowInOverlay,
-	Position,
-	PositionSet)
+	Enabled)
 
 void CSEditor::PostPostLoad()
 {
@@ -113,11 +114,16 @@ void CSEditor::EnsureDataLoaded()
 
 void CSEditor::OpenEditorWindow()
 {
+	auto* editorWindow = EditorWindow::GetSingleton();
+	if (!editorWindow->open && EditorWindow::IsOpeningBlocked()) {
+		editorWindow->WarnOpeningBlocked();
+		return;
+	}
 	if (!EditorWindow::CanBeOpen())
 		return;
 
 	EnsureDataLoaded();
-	EditorWindow::GetSingleton()->open = true;
+	editorWindow->open = true;
 }
 
 void CSEditor::ToggleEditorWindow()
@@ -126,6 +132,10 @@ void CSEditor::ToggleEditorWindow()
 	if (!editorWindow)
 		return;
 
+	if (!editorWindow->open && EditorWindow::IsOpeningBlocked()) {
+		editorWindow->WarnOpeningBlocked();
+		return;
+	}
 	if (!editorWindow->open && !EditorWindow::CanBeOpen())
 		return;
 	if (!editorWindow->open)
@@ -172,41 +182,11 @@ void LerpDirectional(RE::BGSDirectionalAmbientLightingColors::Directional& oldCo
 void CSEditor::DrawSettings()
 {
 	EnsureWeatherListLoaded();
-	bool canOpen = EditorWindow::CanBeOpen();
-	ImGui::BeginDisabled(!canOpen);
+
+	ImGui::BeginDisabled(!EditorWindow::CanBeOpen());
 	if (ImGui::Button(T(TKEY("open_editor"), "Open CS Editor"), { -1, 0 }))
 		OpenEditorWindow();
 	ImGui::EndDisabled();
-
-	ImGui::Spacing();
-	ImGui::SeparatorText(T(TKEY("weather_picker"), "Weather Picker"));
-
-	// Basic CS editor info
-	DrawWeatherStatusPanel();
-
-	// Integrated Weather Picker UI
-	DrawWeatherPickerSection();
-
-	ImGui::Spacing();
-	DrawShowInOverlayToggle();
-}
-
-void CSEditor::DrawShowInOverlayToggle()
-{
-	const auto& themeSettings = Menu::GetSingleton()->GetTheme();
-	const auto& menuSettings = Menu::GetSingleton()->GetSettings();
-
-	bool showInOverlay = WeatherDetailsWindow.ShowInOverlay;
-	if (ImGui::Checkbox(T(TKEY("show_rain_wetness_analysis_in_overlay"), "Show rain & wetness analysis in overlay"), &showInOverlay)) {
-		WeatherDetailsWindow.ShowInOverlay = showInOverlay;
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("show_rain_wetness_analysis_in_overlay_tooltip"),
-							  "Opens weather details and rain & wetness analysis in a separate window\nthat stays open even when the main menu is closed."));
-		ImGui::Text(T(TKEY("toggle_with"), "Toggle with "));
-		ImGui::SameLine();
-		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s", Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
-	}
 }
 
 void CSEditor::Prepass()
@@ -216,15 +196,6 @@ void CSEditor::Prepass()
 	}
 
 	EditorWindow::MaintainWeatherLock();
-}
-
-void CSEditor::DrawWeatherPickerSection()
-{
-	ImGui::Spacing();
-
-	// Render core weather details (interactive). Rain & wetness analysis lives in the overlay —
-	// the feature page only offers a toggle for that window.
-	RenderCoreWeatherDetails(true, false);
 }
 
 void CSEditor::LerpWeather(RE::TESWeather* oldWeather, RE::TESWeather* newWeather, float currentWeatherPct)
@@ -307,23 +278,6 @@ void CSEditor::DrawTimeControls()
 	ImGui::Spacing();
 }
 
-void CSEditor::DrawWeatherStatusPanel()
-{
-	ImGui::Spacing();
-
-	auto* sky = globals::game::sky;
-	auto* currentWeather = sky ? sky->currentWeather : nullptr;
-	const auto& theme = Menu::GetSingleton()->GetTheme();
-
-	if (currentWeather) {
-		if (globals::sceneSettingsManager->HasWeatherConfig(currentWeather->GetFormID())) {
-			ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T(TKEY("has_custom_settings"), "Has Custom Settings"));
-		}
-	} else {
-		ImGui::TextColored(theme.StatusPalette.Warning, "%s", T(TKEY("no_active_weather"), "No Active Weather"));
-	}
-}
-
 // ================================================================================
 // Weather Picker functionality (integrated from WeatherPicker feature)
 // ================================================================================
@@ -337,25 +291,20 @@ void CSEditor::RenderWeatherDetailsWindow(bool* open, bool showSectionHeaders)
 	if (!player || !player->parentCell)
 		return;
 
-	// Set initial position if not already set
+	// Start in the bottom-left corner so it doesn't open over the Performance Overlay (top-left).
+	// The window has no size until it has been drawn once, so keep anchoring until it reports
+	// one, then leave it where the user drags it.
 	const float scale = Util::GetUIScale();
-	if (!WeatherDetailsWindow.PositionSet) {
-		const float pos = 50.0f * scale;
-		ImGui::SetNextWindowPos(ImVec2(pos, pos));
-		WeatherDetailsWindow.Position = ImVec2(pos, pos);
-		WeatherDetailsWindow.PositionSet = true;
-	} else {
-		ImGui::SetNextWindowPos(WeatherDetailsWindow.Position, ImGuiCond_FirstUseEver);
+	static bool positioned = false;
+	if (!positioned) {
+		const float pad = ThemeManager::Constants::OVERLAY_WINDOW_POSITION * scale;
+		ImGui::SetNextWindowPos(ImVec2(pad, ImGui::GetIO().DisplaySize.y - pad), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+		if (ImGuiWindow* window = ImGui::FindWindowByName("Weather Details##Popup"); window && window->WasActive && window->Size.y > 0.0f)
+			positioned = true;
 	}
 
 	ImGui::SetNextWindowSize(ImVec2(600 * scale, 800 * scale), ImGuiCond_FirstUseEver);
 	if (Util::BeginWithRoundedClose("Weather Details##Popup", open, ImGuiWindowFlags_None)) {
-		// Remember window position for next frame
-		ImVec2 currentPos = ImGui::GetWindowPos();
-		if (currentPos.x != WeatherDetailsWindow.Position.x || currentPos.y != WeatherDetailsWindow.Position.y) {
-			WeatherDetailsWindow.Position = currentPos;
-		}
-
 		// Enable interactive elements when a menu is open
 		auto shouldEnableInteractiveElements = []() -> bool {
 			return (Menu::GetSingleton()->ShouldSwallowInput() ||
@@ -365,6 +314,36 @@ void CSEditor::RenderWeatherDetailsWindow(bool* open, bool showSectionHeaders)
 		RenderCoreWeatherDetails(shouldEnableInteractiveElements(), showSectionHeaders);
 
 		// Render weather analysis from features with collapsible headers
+		RenderFeatureWeatherAnalysis();
+	}
+	ImGui::End();
+}
+
+void CSEditor::DrawWeatherDebugWindow(bool* open)
+{
+	if (!open || !*open)
+		return;
+
+	const float scale = Util::GetUIScale();
+	ImGui::SetNextWindowPos(ImVec2(50.0f * scale, 100.0f * scale), ImGuiCond_FirstUseEver);
+	// Width 0 auto-fits to the text on first use; the window stays resizable afterwards.
+	ImGui::SetNextWindowSize(ImVec2(0.0f, 520.0f * scale), ImGuiCond_FirstUseEver);
+	ImGui::SetNextWindowSizeConstraints(ImVec2(260.0f * scale, 160.0f * scale), ImVec2(FLT_MAX, FLT_MAX));
+
+	// "Compact" in the ID drops sizes saved by the old 600x800 default.
+	const std::string title = std::string(T(TKEY("weather_debug"), "Weather Debug")) + "##CSEditorWeatherDebugCompact";
+	if (Util::BeginWithRoundedClose(title.c_str(), open, ImGuiWindowFlags_None)) {
+		const auto& theme = Menu::GetSingleton()->GetTheme();
+		auto* sky = globals::game::sky;
+
+		if (sky && sky->currentWeather) {
+			if (globals::sceneSettingsManager->HasWeatherConfig(sky->currentWeather->GetFormID()))
+				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T(TKEY("has_custom_settings"), "Has Custom Settings"));
+		} else {
+			ImGui::TextColored(theme.StatusPalette.Warning, "%s", T(TKEY("no_active_weather"), "No Active Weather"));
+		}
+
+		RenderCoreWeatherDetails(false, true);
 		RenderFeatureWeatherAnalysis();
 	}
 	ImGui::End();
@@ -592,239 +571,56 @@ void CSEditor::DisplayWeatherInfo(RE::TESWeather* weather, float weatherPct, boo
 	CSEditor::DisplayWindInfo(weather);
 }
 
-void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
+void CSEditor::SyncWeatherFilter()
 {
-	// Weather Selection Section (only show interactive elements in inline mode)
-	static bool weatherControlsExpanded = true;
-	if (showSectionHeader) {
-		Util::DrawSectionHeader(T(TKEY("weather_controls"), "Weather Controls"), false, true, &weatherControlsExpanded);
-
-		if (!weatherControlsExpanded)
-			return;
-	}
-
-	auto editorWindow = EditorWindow::GetSingleton();
-	const bool isLocked = editorWindow->IsWeatherLocked();
-	const char* selectAllLabel = T(TKEY("select_all"), "Select All");
-	const char* clearAllLabel = T(TKEY("clear_all"), "Clear All");
-	const char* resetLabel = T(TKEY("reset_weather"), "Reset Weather");
-	const char* lockLabel = isLocked ? T(TKEY("unlock_weather"), "Unlock Weather") : T(TKEY("lock_weather"), "Lock Weather");
-
-	{
-		const float padX = ImGui::GetStyle().FramePadding.x * 2.0f;
-		const float gap = ImGui::GetStyle().ItemSpacing.x;
-		const float totalW =
-			ImGui::CalcTextSize(selectAllLabel).x + padX + gap +
-			ImGui::CalcTextSize(clearAllLabel).x + padX + gap +
-			ImGui::CalcTextSize(resetLabel).x + padX + gap +
-			ImGui::CalcTextSize(lockLabel).x + padX;
-		const float avail = ImGui::GetContentRegionAvail().x;
-		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, avail - totalW));
-	}
-
-	if (ImGui::Button(selectAllLabel)) {
-		s_weatherFlagFilter = ALL_WEATHER_FLAGS;  // All weather flags (bits 0-6, including unclassified)
-	}
-	ImGui::SameLine();
-	if (ImGui::Button(clearAllLabel)) {
-		s_weatherFlagFilter = 0x00;  // No flags
-	}
-	ImGui::SameLine();
-	if (ImGui::Button(resetLabel)) {
-		sky->ResetWeather();
-		s_selectedWeatherIdx = FindWeatherIndex(sky->defaultWeather);
-		logger::info("[CSEditor] Reset weather to default");
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("reset_weather_tooltip"), "Resets weather to default"));
-	}
-	ImGui::SameLine();
-	if (isLocked) {
-		const auto& theme = Menu::GetSingleton()->GetTheme();
-		ImGui::PushStyleColor(ImGuiCol_Button, theme.StatusPalette.SuccessColor);
-	}
-	if (ImGui::Button(lockLabel)) {
-		if (isLocked) {
-			editorWindow->UnlockWeather();
-		} else if (sky->currentWeather) {
-			editorWindow->LockWeather(sky->currentWeather);
-		}
-	}
-	if (isLocked) {
-		ImGui::PopStyleColor();
-	}
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		if (EditorWindow::AreWeatherLockHooksInstalled()) {
-			ImGui::Text("%s", T(TKEY("lock_weather_tooltip"), isLocked ? "Unlock weather to allow natural changes" : "Lock current weather to prevent changes"));
-		} else {
-			ImGui::Text("%s", T(TKEY("lock_weather_unavailable_tooltip"), "Weather-lock hooks failed to install; the lock still works but weather may briefly flash before correcting"));
-		}
-	}
-
-	// Dynamic checkbox layout - calculate how many fit per row
-	float availableWidth = ImGui::GetContentRegionAvail().x;
-	float checkboxWidth = 110.0f;  // Fits "Aurora Sun" label
-	int checkboxesPerRow = std::max(1, static_cast<int>(availableWidth / checkboxWidth));
-
-	struct WeatherFilter
-	{
-		const char* label;
-		RE::TESWeather::WeatherDataFlag flag;
-		bool isUnclassified;
-	};
-
-	std::vector<WeatherFilter> filters = {
-		{ T(TKEY("pleasant"), "Pleasant"), RE::TESWeather::WeatherDataFlag::kPleasant, false },
-		{ T(TKEY("cloudy"), "Cloudy"), RE::TESWeather::WeatherDataFlag::kCloudy, false },
-		{ T(TKEY("rainy"), "Rainy"), RE::TESWeather::WeatherDataFlag::kRainy, false },
-		{ T(TKEY("snow"), "Snow"), RE::TESWeather::WeatherDataFlag::kSnow, false },
-		{ T(TKEY("aurora"), "Aurora"), RE::TESWeather::WeatherDataFlag::kPermAurora, false },
-		{ T(TKEY("aurora_sun"), "Aurora Sun"), RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun, false },
-		{ T(TKEY("none_filter"), "None"), RE::TESWeather::WeatherDataFlag::kNone, true }
-	};
-	for (size_t i = 0; i < filters.size(); ++i) {
-		if (i > 0 && i % checkboxesPerRow != 0) {
-			ImGui::SameLine();
-		}
-		ImVec4 filterColor;
-		if (filters[i].isUnclassified) {
-			filterColor = Menu::GetSingleton()->GetTheme().StatusPalette.Warning;
-		} else {
-			filterColor = GetWeatherFlagColor(filters[i].flag);
-		}
-
-		ImGui::PushStyleColor(ImGuiCol_Text, filterColor);
-		if (filters[i].isUnclassified) {
-			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, UNCLASSIFIED_FLAG);
-			if (auto _tt = Util::HoverTooltipWrapper()) {
-				Util::DrawMultiLineTooltip({ T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category."),
-					T(TKEY("none_filter_tooltip_1"), "Includes weathers with no flags or only untracked flags."),
-					T(TKEY("none_filter_tooltip_2"), "Categories tracked: Pleasant, Cloudy, Rainy, Snow, Aurora, Aurora Sun") });
-			}
-		} else {
-			ImGui::CheckboxFlags(filters[i].label, &s_weatherFlagFilter, static_cast<uint32_t>(filters[i].flag));
-		}
-		ImGui::PopStyleColor();
-	}
-
-	// Small muted accelerate toggle on the chip row
-	{
-		ImGui::SameLine();
-		const auto& mute = Menu::GetSingleton()->GetTheme().StatusPalette.Disable;
-		const float activeAlpha = s_accelerateWeatherChange ? 0.45f : 0.22f;
-		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x * 0.55f, ImGui::GetStyle().FramePadding.y * 0.45f));
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(mute.x, mute.y, mute.z, activeAlpha));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(mute.x, mute.y, mute.z, activeAlpha + 0.15f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(mute.x, mute.y, mute.z, activeAlpha + 0.25f));
-		ImGui::PushStyleColor(ImGuiCol_Text, mute);
-		if (ImGui::Button(T(TKEY("accelerate_transition"), "accelerate transition")))
-			s_accelerateWeatherChange = !s_accelerateWeatherChange;
-		ImGui::PopStyleColor(4);
-		ImGui::PopStyleVar();
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text("%s", T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly"));
-		}
-	}
-
 	if (s_lastWeatherFlagFilter != s_weatherFlagFilter) {
 		UpdateFilteredWeathers();
 		s_selectedWeatherIdx = -1;
 		s_lastWeatherFlagFilter = s_weatherFlagFilter;
 	}
+}
 
-	std::vector<std::string> weatherLabels;
-	weatherLabels.reserve(s_filteredWeathers.size());
-	for (const auto& weather : s_filteredWeathers) {
-		weatherLabels.push_back(Util::FormatWeather(weather));
-	}
+void CSEditor::SelectWeather(RE::Sky* sky, int filteredIdx)
+{
+	if (!sky || filteredIdx < 0 || filteredIdx >= static_cast<int>(s_filteredWeathers.size()))
+		return;
 
-	auto weatherShortName = [](RE::TESWeather* weather) -> std::string {
-		if (!weather)
-			return {};
-		if (auto* editorId = weather->GetFormEditorID(); editorId && editorId[0] != '\0')
-			return editorId;
-		return std::format("{:08X}", weather->GetFormID());
-	};
+	s_selectedWeatherIdx = filteredIdx;
+	auto selectedWeather = s_filteredWeathers[filteredIdx];
 
-	std::string comboPreviewStorage;
-	const char* comboPreview = T(TKEY("select_weather"), "Select Weather");
-	if (sky->currentWeather) {
-		comboPreviewStorage = std::format("{}: Currently {}",
-			T(TKEY("select_weather"), "Select Weather"),
-			weatherShortName(sky->currentWeather));
-		comboPreview = comboPreviewStorage.c_str();
-	}
+	if (s_accelerateWeatherChange)
+		sky->ForceWeather(selectedWeather, false);
+	else
+		sky->SetWeather(selectedWeather, true, false);
 
-	static constexpr const char* kWeatherSearchId = "WeatherPicker";
+	auto editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->IsWeatherLocked())
+		editorWindow->LockWeather(selectedWeather);
 
-	if (ImGui::BeginCombo("##WeatherPicker", comboPreview)) {
-		auto searchText = Util::DrawComboSearchInput(kWeatherSearchId);
+	logger::info("[CSEditor] Changed weather to: {}", Util::FormatWeather(selectedWeather));
+}
 
-		for (int i = 0; i < static_cast<int>(s_filteredWeathers.size()); ++i) {
-			const bool isSelected = (s_selectedWeatherIdx == i);
-			auto weather = s_filteredWeathers[i];
+void CSEditor::ResetWeatherToDefault(RE::Sky* sky)
+{
+	if (!sky)
+		return;
 
-			if (!searchText.empty()) {
-				auto editorId = weather->GetFormEditorID() ? std::string(weather->GetFormEditorID()) : "";
-				auto name = weather->GetName() ? std::string(weather->GetName()) : "";
-				auto formId = std::format("{:08X}", weather->GetFormID());
+	// A held lock redirects every engine SetWeather/ForceWeather back to the locked weather,
+	// which would swallow the reset.
+	auto editorWindow = EditorWindow::GetSingleton();
+	if (editorWindow->IsWeatherLocked())
+		editorWindow->UnlockWeather();
 
-				if (!Util::StringMatchesSearch(editorId, searchText) &&
-					!Util::StringMatchesSearch(name, searchText) &&
-					!Util::StringMatchesSearch(formId, searchText))
-					continue;
-			}
+	sky->ResetWeather();
+	s_selectedWeatherIdx = FindWeatherIndex(sky->defaultWeather);
+	logger::info("[CSEditor] Reset weather to default");
+}
 
-			const bool hasSceneSettings = globals::sceneSettingsManager->HasWeatherConfig(weather->GetFormID());
-			const bool isCurrentWeather = weather == sky->currentWeather;
+void CSEditor::DrawWeatherTransitionBar(RE::Sky* sky, float width, bool verboseOverlay)
+{
+	if (!sky)
+		return;
 
-			ImGui::PushStyleColor(ImGuiCol_Text, GetWeatherTypeColor(weather));
-			bool didSelect = ImGui::Selectable(weatherLabels[i].c_str(), isSelected);
-			ImGui::PopStyleColor();
-
-			if (didSelect) {
-				s_selectedWeatherIdx = i;
-				auto selectedWeather = s_filteredWeathers[i];
-
-				if (s_accelerateWeatherChange)
-					sky->ForceWeather(selectedWeather, false);
-				else
-					sky->SetWeather(selectedWeather, true, false);
-
-				if (editorWindow->IsWeatherLocked())
-					editorWindow->LockWeather(selectedWeather);
-
-				Util::ClearComboSearch(kWeatherSearchId);
-				logger::info("[CSEditor] Changed weather to: {}", Util::FormatWeather(selectedWeather));
-				break;
-			}
-
-			if (ImGui::IsItemHovered()) {
-				ImGui::BeginTooltip();
-				ImGui::Text(T(TKEY("tooltip_weather_name"), "Weather: %s"), weather->GetName() ? weather->GetName() : "Unnamed");
-				ImGui::Text(T(TKEY("tooltip_editor_id"), "Editor ID: %s"), weather->GetFormEditorID() ? weather->GetFormEditorID() : "None");
-				ImGui::Text(T(TKEY("tooltip_form_id"), "Form ID: 0x%08X"), weather->GetFormID());
-				if (hasSceneSettings)
-					ImGui::TextUnformatted(isCurrentWeather ?
-											   T(TKEY("tooltip_scene_settings_applying"), "Scene Manager settings applying now") :
-											   T(TKEY("tooltip_scene_settings"), "Has Scene Manager settings"));
-				ImGui::EndTooltip();
-			}
-
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
-
-			if (hasSceneSettings) {
-				ImGui::SameLine();
-				Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetInfo()), isCurrentWeather);
-			}
-		}
-		ImGui::EndCombo();
-	} else {
-		Util::ClearComboSearch(kWeatherSearchId);
-	}
-
-	// Transition progress under the weather combo
 	if (sky->lastWeather)
 		s_cachedLastWeather = sky->lastWeather;
 
@@ -840,15 +636,107 @@ void CSEditor::RenderWeatherControls(RE::Sky* sky, bool showSectionHeader)
 	std::string transitionOverlay;
 	if (isTransitioning) {
 		const float transitionPct = lerpFactor * 100.0f;
-		transitionOverlay = std::format("{:.1f}% | Transitioning from {}", transitionPct, weatherShortName(lastWeather));
+		if (verboseOverlay) {
+			std::string fromName = "?";
+			if (auto* editorId = lastWeather->GetFormEditorID(); editorId && editorId[0] != '\0')
+				fromName = editorId;
+			else
+				fromName = std::format("{:08X}", lastWeather->GetFormID());
+			transitionOverlay = std::format("{:.1f}% | Transitioning from {}", transitionPct, fromName);
+		} else {
+			transitionOverlay = std::format("{:.0f}%", transitionPct);
+		}
 	} else {
 		transitionOverlay = "100%";
 	}
-	ImGui::ProgressBar(displayPct, ImVec2(-1, 0), transitionOverlay.c_str());
+	ImGui::ProgressBar(displayPct, ImVec2(width, 0), transitionOverlay.c_str());
 
 	if (!isTransitioning) {
 		ImGui::PopStyleColor();
 	}
+}
+
+void CSEditor::DrawWeatherFilterChips()
+{
+	struct Chip
+	{
+		const char* label;
+		uint32_t bit;
+		ImVec4 color;
+		const char* tooltip;
+	};
+
+	const auto& theme = Menu::GetSingleton()->GetTheme();
+	const Chip chips[] = {
+		{ T(TKEY("pleasant"), "Pleasant"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPleasant), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kPleasant), nullptr },
+		{ T(TKEY("cloudy"), "Cloudy"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kCloudy), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kCloudy), nullptr },
+		{ T(TKEY("rainy"), "Rainy"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kRainy), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kRainy), nullptr },
+		{ T(TKEY("snow"), "Snow"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kSnow), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kSnow), nullptr },
+		{ T(TKEY("aurora"), "Aurora"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kPermAurora), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kPermAurora), nullptr },
+		{ T(TKEY("aurora_sun"), "Aurora Sun"), static_cast<uint32_t>(RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun), GetWeatherFlagColor(RE::TESWeather::WeatherDataFlag::kAuroraFollowsSun), nullptr },
+		{ T(TKEY("none_filter"), "None"), UNCLASSIFIED_FLAG, theme.StatusPalette.Warning, T(TKEY("none_filter_tooltip_0"), "Shows weathers that are not classified under any specific category.") },
+	};
+
+	const float scale = Util::GetUIScale();
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const char* accelerateLabel = T(TKEY("accelerate"), "Accelerate");
+
+	// Uniform cell size from the widest label so the grid lines up.
+	float cellW = ImGui::CalcTextSize(accelerateLabel).x;
+	for (const auto& chip : chips)
+		cellW = std::max(cellW, ImGui::CalcTextSize(chip.label).x);
+	cellW += style.FramePadding.x * 2.0f + 6.0f * scale;
+	const float cellH = ImGui::GetFrameHeight();
+
+	// One toggle: dim tint = off, bright tint + solid border = on.
+	auto drawChip = [&](const char* label, const ImVec4& color, bool active, const char* tooltip) -> bool {
+		const ImVec2 min = ImGui::GetCursorScreenPos();
+		const bool clicked = ImGui::InvisibleButton(label, ImVec2(cellW, cellH));
+		const bool hovered = ImGui::IsItemHovered();
+		const ImVec2 max(min.x + cellW, min.y + cellH);
+
+		const float bgAlpha = (active ? 0.50f : 0.10f) + (hovered ? 0.12f : 0.0f);
+		const float textAlpha = active ? 1.0f : 0.45f;
+		const float borderAlpha = active ? 0.95f : 0.30f;
+
+		auto* dl = ImGui::GetWindowDrawList();
+		dl->AddRectFilled(min, max, ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, bgAlpha)), style.FrameRounding);
+		dl->AddRect(min, max, ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, borderAlpha)), style.FrameRounding);
+
+		const ImVec2 textSize = ImGui::CalcTextSize(label);
+		dl->AddText(ImVec2(min.x + (cellW - textSize.x) * 0.5f, min.y + (cellH - textSize.y) * 0.5f),
+			ImGui::GetColorU32(ImVec4(color.x, color.y, color.z, textAlpha)), label);
+
+		if (tooltip) {
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::TextUnformatted(tooltip);
+		}
+		return clicked;
+	};
+
+	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.0f * scale, 3.0f * scale));
+	ImGui::PushID("WeatherFilterChips");
+
+	int cell = 0;
+	auto nextCell = [&]() {
+		if (cell % 2 != 0)
+			ImGui::SameLine();
+		++cell;
+	};
+
+	for (const auto& chip : chips) {
+		nextCell();
+		if (drawChip(chip.label, chip.color, (s_weatherFlagFilter & chip.bit) != 0, chip.tooltip))
+			s_weatherFlagFilter ^= chip.bit;
+	}
+
+	nextCell();
+	if (drawChip(accelerateLabel, theme.StatusPalette.Disable, s_accelerateWeatherChange,
+			T(TKEY("accelerate_weather_change_tooltip"), "When enabled, weather changes instantly")))
+		s_accelerateWeatherChange = !s_accelerateWeatherChange;
+
+	ImGui::PopID();
+	ImGui::PopStyleVar();
 }
 
 void CSEditor::RenderWeatherInformationDisplay(RE::Sky* sky, bool showInteractiveElements, bool showSectionHeader)
@@ -887,7 +775,8 @@ void CSEditor::RenderCoreWeatherDetails(bool showInteractiveElements, bool showS
 	if (auto sky = globals::game::sky) {
 		if (sky->mode.get() == RE::Sky::Mode::kFull) {
 			if (showInteractiveElements) {
-				RenderWeatherControls(sky, showSectionHeaders);
+				// Same picker as the editor's Weather Picker window (combo, filter chips, reset, transition).
+				WeatherPickerWindow::GetSingleton()->DrawContents();
 			}
 			RenderWeatherInformationDisplay(sky, showInteractiveElements, showSectionHeaders);
 			ImGui::Spacing();
@@ -1205,8 +1094,8 @@ void CSEditor::DrawOverlay()
 
 	bool overlayVisible = Menu::GetSingleton()->overlayVisible;
 	static bool s_prevOverlayVisible = false;
-	// If ShowInOverlay is true and overlay is visible, auto-enable the window if not already enabled
-	if (WeatherDetailsWindow.ShowInOverlay && overlayVisible) {
+	// Driven by the Performance Overlay's weather picker toggle; auto-enable the window when the overlay appears
+	if (IsOverlayVisible() && overlayVisible) {
 		if (!s_prevOverlayVisible && !WeatherDetailsWindow.Enabled) {
 			WeatherDetailsWindow.Enabled = true;
 		}
@@ -1218,5 +1107,5 @@ void CSEditor::DrawOverlay()
 
 bool CSEditor::IsOverlayVisible() const
 {
-	return WeatherDetailsWindow.ShowInOverlay;
+	return globals::features::performanceOverlay.settings.ShowWeatherPicker;
 }

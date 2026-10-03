@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <map>
 #include <set>
 
 namespace Util::Settings
 {
 	constexpr std::string_view kImGuiIdSeparator = "##";
+	/// Decimals FormatValue shows for a float, before trailing zeros are trimmed.
+	constexpr int kValueDecimals = 3;
 
 	std::string StripImGuiId(std::string_view label)
 	{
@@ -173,5 +176,26 @@ namespace Util::Settings
 			else if (value.is_object())
 				CollectUnknownSettingKeys(value, known[key], path, unknownKeys);
 		}
+	}
+
+	std::string FormatValue(const nlohmann::json& value)
+	{
+		if (value.is_string())
+			return value.get<std::string>();
+		if (value.is_boolean())
+			return value.get<bool>() ? T("cs_editor.scene_copy_value_on", "On") : T("cs_editor.scene_copy_value_off", "Off");
+		if (value.is_array()) {
+			std::string text = "[";
+			for (const auto& element : value)
+				text += (text.size() > 1 ? ", " : "") + FormatValue(element);
+			return text + "]";
+		}
+		if (!value.is_number_float())
+			return value.dump();
+		auto text = std::format("{:.{}f}", value.get<double>(), kValueDecimals);
+		text.erase(text.find_last_not_of('0') + 1);
+		if (text.ends_with('.'))
+			text.pop_back();
+		return text;
 	}
 }

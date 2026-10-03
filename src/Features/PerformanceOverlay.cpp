@@ -105,6 +105,7 @@ static std::tuple<float, float, float> CalculateSummaryData(float smoothedFrameT
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	PerformanceOverlay::Settings,
 	ShowInOverlay,
+	ShowWeatherPicker,
 	ShowDrawCalls,
 	ShowVRAM,
 	ShowCSPasses,
@@ -140,9 +141,20 @@ void PerformanceOverlay::DrawSettings()
 	auto menu = Menu::GetSingleton();
 	const auto& themeSettings = menu->GetTheme();
 	const auto& menuSettings = menu->GetSettings();
-	ImGui::Checkbox(T(TKEY("show_in_overlay"), "Show in Overlay"), &this->settings.ShowInOverlay);
+	ImGui::Checkbox(T(TKEY("show_in_overlay"), "Enable Performance Overlay"), &this->settings.ShowInOverlay);
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("show_in_overlay_tooltip"), "Opens performance overlay in a separate window that stays open\neven when the main menu is closed. "));
+		ImGui::Text("%s", T(TKEY("toggle_with"), "Toggle with "));
+		ImGui::SameLine();
+		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",
+			Util::Input::KeyIdToString(menuSettings.OverlayToggleKey).c_str());
+	}
+
+	// Independent of the performance overlay: works with the overlay above switched off.
+	ImGui::SameLine();
+	ImGui::Checkbox(T(TKEY("show_weather_picker"), "Enable Weather Picker Widget"), &this->settings.ShowWeatherPicker);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("show_weather_picker_tooltip"), "Opens the weather picker, with weather details and rain & wetness analysis,\nin a separate window that stays open even when the main menu is closed."));
 		ImGui::Text("%s", T(TKEY("toggle_with"), "Toggle with "));
 		ImGui::SameLine();
 		ImGui::TextColored(themeSettings.StatusPalette.CurrentHotkey, "%s",

@@ -1259,6 +1259,11 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
         self.assertNotIn("Hidden", lut_path["flags"])
         self.assertNotIn("Transitionable", lut_path["flags"])
 
+    def test_post_processing_sub_feature_enabled_is_scene_toggle(self):
+        enabled = self.entries_by_id[("PostProcessing", "COD Bloom", "enabled")]
+        self.assertEqual(enabled["type"], "Boolean")
+        self.assertIn("SceneControllable", enabled["flags"])
+
     def test_numeric_metadata_uses_raw_bounds_and_display_scale(self):
         percentage = self.entries_by_id[("GrassOptimizations", "", "EdgeFadeStart")]
         angle = self.entries_by_id[("Skylighting", "", "MaxZenith")]

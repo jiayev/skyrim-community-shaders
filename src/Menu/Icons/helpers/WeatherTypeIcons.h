@@ -8,7 +8,9 @@
  * wrong or used as catch-alls (many event / DLC weathers are tagged Cloudy).
  *
  * Precipitation flags (rain / snow) are still trusted when labels don't match.
- * Aurora flags are used the same way. Unassigned / unknown weathers use the
+ * Aurora flags are used the same way. Weathers with no class flag at all (the
+ * "None" filter: world map, window and other engine-support weathers) use a
+ * cloud with a gear. Classified weathers whose labels match nothing use the
  * custom CloudSun draw-list icon (Menu/Icons/helpers/Custom/imgui_cloud_sun_icon.h).
  *
  * Glyphs are family-tagged GlyphRefs from open-source icon fonts under Icons/glyphs.
@@ -41,6 +43,16 @@ namespace WeatherTypeIcons
 	inline constexpr Icons::GlyphRef kAurora = Icons::LC(ICON_LC_STARS);
 	inline constexpr Icons::GlyphRef kEclipse = Icons::LC(ICON_LC_ECLIPSE);
 	inline constexpr Icons::GlyphRef kPleasant = Icons::LC(ICON_LC_SUN_DIM);
+	/// Unclassified engine-support weathers (world map, windows, scripted utility weathers).
+	inline constexpr Icons::GlyphRef kSystem = Icons::LC(ICON_LC_CLOUD_COG);
+
+	/** @brief True when a weather carries none of the class flags, the editor's "None" category. */
+	[[nodiscard]] inline bool IsUnclassified(const RE::TESWeather* weather) noexcept
+	{
+		using Flag = RE::TESWeather::WeatherDataFlag;
+		return !weather->data.flags.any(Flag::kPleasant, Flag::kCloudy, Flag::kRainy, Flag::kSnow, Flag::kPermAurora,
+			Flag::kAuroraFollowsSun);
+	}
 
 	/**
 	 * @brief Draw a resolved weather icon into an axis-aligned size×size box.
@@ -95,13 +107,17 @@ namespace WeatherTypeIcons
 
 	/**
 	 * @brief Primary weather-class icon for a weather record.
-	 * @return nullopt when weather is null; empty GlyphRef for unknown (CloudSun);
-	 *         otherwise a family-tagged glyph.
+	 * @return nullopt when weather is null; kSystem for unclassified weathers; empty GlyphRef for
+	 *         unknown classified ones (CloudSun); otherwise a family-tagged glyph.
 	 */
 	[[nodiscard]] inline std::optional<Icons::GlyphRef> Resolve(RE::TESWeather* weather) noexcept
 	{
 		if (!weather)
 			return std::nullopt;
+
+		// Checked first so the icon always agrees with the "None" filter, whatever the label says.
+		if (IsUnclassified(weather))
+			return kSystem;
 
 		if (const char* editorId = weather->GetFormEditorID()) {
 			if (auto icon = ResolveFromLabel(editorId))
@@ -124,5 +140,12 @@ namespace WeatherTypeIcons
 			return kAurora;
 
 		return Icons::GlyphRef{};  // unknown → CloudSun
+	}
+
+	/** @brief Resolve() for font-only callers: CloudSun is painted, so it and a null weather give `fallback`. */
+	[[nodiscard]] inline Icons::GlyphRef ResolveGlyph(RE::TESWeather* weather, Icons::GlyphRef fallback = kCloudy) noexcept
+	{
+		const auto icon = Resolve(weather);
+		return icon && icon->IsValid() ? *icon : fallback;
 	}
 }

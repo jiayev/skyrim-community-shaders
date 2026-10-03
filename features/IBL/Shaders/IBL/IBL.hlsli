@@ -144,7 +144,7 @@ namespace ImageBasedLighting
 			linSky = GetSkyIBLColor(rayDir);
 		}
 #if defined(EFFECTS11)
-		if (SharedData::enbSettings.Enable)
+		if (SharedData::iblSettings.ENBSkyFalloff)
 			linSky *= saturate(-rayDir.z * 0.65 + 0.35);
 #endif
 		return ApplyIBLReflectionFallback(linEnv + linSky, linSky, positionMS);

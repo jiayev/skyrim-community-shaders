@@ -149,8 +149,9 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 
 	const bool exportEffects11 = info.type == PresetType::E11;
 	const bool hasScenePayload = HasAnyUserEntries() || !GetOverwriteModNames().empty();
-	// CS exports always bake scene files; E11 exports bake them when any scene layer exists.
-	bool exportScene = info.type == PresetType::CS || hasScenePayload;
+	// CS exports always bake scene files; E11 exports bake them when any scene layer exists. A Baseline
+	// export carries base settings only, so it leaves the pack's scene files alone.
+	bool exportScene = info.type == PresetType::CS || (info.type == PresetType::E11 && hasScenePayload);
 
 	if (exportEffects11 && (!globals::features::effects11.loaded || !PresetManager::GetSingleton().CanExportActivePreset())) {
 		logger::error("[SceneSettings] Preset '{}' not exported: Effects 11 has no valid active ENB layout to copy", info.name);
@@ -370,8 +371,11 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	if (!manifest.contains(kPresetMetadataNameKey))
 		manifest[kPresetMetadataNameKey] = safeModName;
 	manifest[kPresetMetadataVersionKey] = info.version;
-	manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
-	manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
+	// Base settings added to a CS or E11 pack do not turn it into a Baseline pack.
+	if (info.type != PresetType::Baseline || !manifest.contains(UnifiedPresetCatalog::kPresetTypeKey))
+		manifest[UnifiedPresetCatalog::kPresetTypeKey] = UnifiedPresetCatalog::GetPresetTypeName(info.type);
+	if (info.type != PresetType::Baseline)
+		manifest[kTimeOfDayTransitionHoursKey] = timeOfDayTransitionHours;
 	const auto setOrErase = [&](const char* key, const auto& value) {
 		if (value.empty())
 			manifest.erase(key);
@@ -383,6 +387,8 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	setOrErase(kPresetMetadataTagsKey, info.tags);
 	setOrErase(kPresetMetadataCsVersionKey, info.csVersion);
 	setOrErase(kPresetMetadataRequiredFeaturesKey, info.requiredFeatures);
+	if (exportEffects11)
+		setOrErase(UnifiedPresetCatalog::kSceneControlKey, E11Handoff::ToManifest());
 
 	// Artwork: newly picked files win; otherwise keep the manifest's paths unless the user cleared them.
 	const auto exportArtwork = [&](const char* key, const std::filesystem::path& source, bool clear, std::string_view stem) {
@@ -472,6 +478,8 @@ void SceneSettingsManager::DiscoverPresetMetadata()
 	if (activePresetMetadata)
 		logger::info("[SceneSettings] Active scene preset: '{}'", activePresetMetadata->name);
 	RefreshTimeOfDayTransitionHours();
+	// Features the pack hands back from Effects 11 are driven by this layer, so they follow the same pack
+	UnifiedPresetCatalog::GetSingleton().LoadSceneControl();
 }
 
 void SceneSettingsManager::DiscoverLocationOverwrites()

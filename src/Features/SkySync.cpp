@@ -3,6 +3,7 @@
 #include "RE/B/BSVolumetricLightingRenderData.h"
 
 #include "LinearLighting.h"
+#include "Utils/Climate.h"
 #include "Utils/Game.h"
 
 #define I18N_KEY_PREFIX "feature.sky_sync."
@@ -454,14 +455,10 @@ void SkySync::HideSunOutsideFadeWindow(const RE::Sky* sky)
 		return;
 
 	// Same float ops as Sun::Update so the bounds match its exactly, but made inclusive
-	constexpr float HoursPerTimingUnit = 1.0f / 6.0f;
-	auto middleHour = [](const RE::TESClimate::Timing::Interval& interval) {
-		return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
-	};
 	const auto& timing = sky->currentClimate->timing;
 	const float halfTransition = gSunAlphaTransTime->GetFloat() * 0.5f;
-	const float fadeInStart = middleHour(timing.sunrise) - halfTransition;
-	const float fadeOutEnd = middleHour(timing.sunset) + halfTransition;
+	const float fadeInStart = Util::Climate::GetMiddleHour(timing.sunrise) - halfTransition;
+	const float fadeOutEnd = Util::Climate::GetMiddleHour(timing.sunset) + halfTransition;
 	const float hour = sky->currentGameHour;
 	if (hour > fadeInStart && hour < fadeOutEnd)
 		return;

@@ -43,4 +43,7 @@ namespace Util::Settings
 	 */
 	void CollectUnknownSettingKeys(const nlohmann::json& incoming, const nlohmann::json& known,
 		const std::string& prefix, std::vector<std::string>& unknownKeys);
+
+	/** @brief A value as setting lists show it: strings unquoted, booleans as On / Off, floats without trailing zeros. */
+	std::string FormatValue(const nlohmann::json& value);
 }

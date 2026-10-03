@@ -1,4 +1,5 @@
 #include "ScenePresetExport.h"
+#include "SceneSettingsManager.h"
 
 #include <algorithm>
 #include <cctype>
@@ -19,14 +20,18 @@
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
 #include "Feature.h"
+#include "FeatureOverwritesPanel.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
+#include "Features/PostProcessing.h"
 #include "Menu/PresetsPageRenderer.h"
+#include "Presets/PostProcessingPresets.h"
 #include "Presets/PresetCompatibility.h"
 #include "Presets/UnifiedPresetCatalog.h"
-#include "SceneSettingsManager.h"
+#include "SettingsOverrideManager.h"
 #include "State.h"
 #include "Utils/FileSystem.h"
+#include "Utils/SettingsCatalog.h"
 #include "Utils/UI.h"
 
 #define I18N_KEY_PREFIX "cs_editor."
@@ -45,6 +50,9 @@ namespace
 	constexpr float kDescriptionLines = 3.0f;
 	constexpr float kPickerWidth = 420.0f;
 	constexpr float kPickerListHeight = 260.0f;
+	/// Rows of the base settings list: the full dialog shares space with the scene options, the simplified one does not.
+	constexpr float kFeatureLines = 4.5f;
+	constexpr float kSimplifiedFeatureLines = 9.0f;
 
 	/// Files a destructive confirmation names before it stops listing and counts the rest.
 	constexpr size_t kMaxListedFiles = 8;
@@ -70,6 +78,12 @@ namespace
 	bool dialogActive = false;
 	bool pendingOpen = false;
 	bool exportRequested = false;
+	/// Also write the base Post Processing settings as the pack's Baseline file: how Post Processing presets are made.
+	bool includePostProcessing = false;
+	/// Opened from Base Settings: a Baseline export with the form cut down to what a Baseline needs.
+	bool simplified = false;
+	/// Features whose base settings go into the pack's Baseline folder, ticked by the user.
+	std::vector<std::string> baselineFeatures;
 	Util::ConfirmationPopup exportConfirmation;
 
 	std::string DescribeCollision(std::string name, const std::vector<std::filesystem::path>& files)
@@ -111,6 +125,82 @@ namespace
 			form.type = type;
 	}
 
+	bool IsFeatureRequired(const std::string& shortName)
+	{
+		return std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName) !=
+		       form.requiredFeatures.end();
+	}
+
+	void SetFeatureRequired(const std::string& shortName, bool required)
+	{
+		const auto it = std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName);
+		if (required && it == form.requiredFeatures.end())
+			form.requiredFeatures.push_back(shortName);
+		else if (!required && it != form.requiredFeatures.end())
+			form.requiredFeatures.erase(it);
+	}
+
+	/// Core features ship with every Community Shaders install, so a pack never needs to require them.
+	bool IsCoreFeature(const std::string& shortName)
+	{
+		const auto* feature = Feature::FindFeatureByShortName(shortName);
+		return feature && feature->IsCore();
+	}
+
+	/// Features the required list offers: loaded, user-facing, and not core.
+	bool IsRequirableFeature(const Feature* feature)
+	{
+		return feature && feature->loaded && feature->IsInMenu() && !feature->IsCore();
+	}
+
+	/// Whether the export would carry settings for a feature, from the user or any mod layer.
+	bool HasExportedSettings(const std::string& shortName)
+	{
+		const auto* manager = SceneSettingsManager::GetSingleton();
+		return manager && manager->HasAnySceneEntriesForFeature(shortName);
+	}
+
+	/// Features whose base settings can go in a Baseline folder. Post Processing is its own option.
+	bool IsBaselineCandidate(Feature* feature)
+	{
+		return feature && feature->loaded && feature->GetShortName() != PostProcessingPresets::kFeatureShortName &&
+		       FeatureOverwritesPanel::HasExportableSettings(feature);
+	}
+
+	bool HasAnyBaselineCandidate()
+	{
+		const auto& features = Feature::GetFeatureList();
+		return std::ranges::any_of(features, IsBaselineCandidate);
+	}
+
+	bool IsBaselineSelected(const std::string& shortName)
+	{
+		return std::ranges::find(baselineFeatures, shortName) != baselineFeatures.end();
+	}
+
+	void SetBaselineSelected(const std::string& shortName, bool selected)
+	{
+		const auto it = std::ranges::find(baselineFeatures, shortName);
+		if (selected && it == baselineFeatures.end())
+			baselineFeatures.push_back(shortName);
+		else if (!selected && it != baselineFeatures.end())
+			baselineFeatures.erase(it);
+	}
+
+	/** @brief Every requirable feature the export carries settings for, which a fresh form starts with. */
+	std::vector<std::string> DetectRequiredFeatures()
+	{
+		std::vector<std::string> detected;
+		for (auto* feature : Feature::GetFeatureList()) {
+			if (!IsRequirableFeature(feature))
+				continue;
+			auto shortName = feature->GetShortName();
+			if (HasExportedSettings(shortName))
+				detected.push_back(std::move(shortName));
+		}
+		return detected;
+	}
+
 	/** @brief Clears the form and everything loaded from an existing preset; the type follows the live pipeline. */
 	void ResetFormFields()
 	{
@@ -121,7 +211,10 @@ namespace
 		                PresetType::E11 :
 		                PresetType::CS;
 		form.csVersion = PresetCompatibility::CurrentCsVersionString();
-		form.requiredFeatures.clear();
+		form.requiredFeatures = DetectRequiredFeatures();
+		includePostProcessing = false;
+		simplified = false;
+		baselineFeatures.clear();
 		presetTags.clear();
 		existingLogo.clear();
 		existingCover.clear();
@@ -148,8 +241,12 @@ namespace
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
 			form.csVersion = meta.csVersion;
-		if (form.requiredFeatures.empty())
-			form.requiredFeatures = meta.requiredFeatures;
+		// Loaded features follow detection, so ones whose settings were removed drop out. Features not
+		// loaded this session cannot be detected, so the pack's list is the only record of them.
+		for (const auto& shortName : meta.requiredFeatures) {
+			if (!shortName.empty() && !Feature::FindFeatureByShortName(shortName) && !IsFeatureRequired(shortName))
+				form.requiredFeatures.push_back(shortName);
+		}
 		existingLogo = meta.logo;
 		existingCover = meta.cover;
 		existingScreenshots = meta.screenshots;
@@ -165,6 +262,15 @@ namespace
 	void PrefillFromName()
 	{
 		const auto packId = Util::FileHelpers::SanitizeFileName(form.name);
+		// Re-exporting a pack keeps the base settings it already carries unless the user unticks them.
+		if (const auto* pack = UnifiedPresetCatalog::GetSingleton().FindPack(packId)) {
+			for (const auto& shortName : pack->baselineFeatures) {
+				if (shortName == PostProcessingPresets::kFeatureShortName)
+					includePostProcessing = true;
+				else if (IsBaselineCandidate(Feature::FindFeatureByShortName(shortName)))
+					SetBaselineSelected(shortName, true);
+			}
+		}
 		if (const auto meta = SceneSettingsManager::ReadPresetMetadata(Util::PathHelpers::GetUnifiedPackPath(packId)))
 			PrefillFromExisting(*meta);
 	}
@@ -258,21 +364,6 @@ namespace
 			ImGui::CloseCurrentPopup();
 	}
 
-	bool IsFeatureRequired(const std::string& shortName)
-	{
-		return std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName) !=
-		       form.requiredFeatures.end();
-	}
-
-	void SetFeatureRequired(const std::string& shortName, bool required)
-	{
-		const auto it = std::find(form.requiredFeatures.begin(), form.requiredFeatures.end(), shortName);
-		if (required && it == form.requiredFeatures.end())
-			form.requiredFeatures.push_back(shortName);
-		else if (!required && it != form.requiredFeatures.end())
-			form.requiredFeatures.erase(it);
-	}
-
 	/// Compact CS version + feature checklist, sized like the artwork column beside it.
 	void DrawCompatibilityBox()
 	{
@@ -296,14 +387,19 @@ namespace
 			std::sort(features.begin(), features.end(), [](Feature* a, Feature* b) {
 				return a->GetDisplayName() < b->GetDisplayName();
 			});
+			const char* usedLabel = T(TKEY("scene_export_feature_used"), "has settings");
 			for (auto* feature : features) {
-				if (!feature || !feature->loaded || !feature->IsInMenu())
+				if (!IsRequirableFeature(feature))
 					continue;
 				const auto shortName = feature->GetShortName();
 				bool required = IsFeatureRequired(shortName);
 				ImGui::PushID(shortName.c_str());
 				if (ImGui::Checkbox(feature->GetDisplayName().c_str(), &required))
 					SetFeatureRequired(shortName, required);
+				if (HasExportedSettings(shortName)) {
+					ImGui::SameLine();
+					ImGui::TextDisabled("%s", usedLabel);
+				}
 				ImGui::PopID();
 			}
 		}
@@ -313,6 +409,8 @@ namespace
 									{ { "count", std::to_string(form.requiredFeatures.size()) } },
 									"{count} selected")
 				.c_str());
+		Util::AddTooltip(T(TKEY("scene_export_features_tooltip"),
+			"Features this export has settings for start ticked. Core features ship with every install, so they are not listed."));
 		ImGui::EndChild();
 	}
 
@@ -430,56 +528,136 @@ namespace
 		}
 	}
 
+	/// Post Processing ships as a pack's Baseline file. Effects 11 replaces its pipeline, so E11 presets leave it out.
+	bool CanIncludePostProcessing()
+	{
+		return form.type != PresetType::E11 && globals::features::postProcessing.loaded;
+	}
+
+	/** @brief Opt-in that adds the base Post Processing settings to the pack. Absent for E11 presets. */
+	void DrawPostProcessingOption()
+	{
+		if (!CanIncludePostProcessing())
+			return;
+		bool include = includePostProcessing;
+		if (ImGui::Checkbox(T(TKEY("scene_export_include_pp"), "Include Post Processing settings"), &include))
+			includePostProcessing = include;
+		Util::AddTooltip(T(TKEY("scene_export_include_pp_tooltip"),
+			"Saves your current Post Processing settings in the pack, so applying it on the Presets page "
+			"sets them. This is how Post Processing presets are made."));
+	}
+
+	/** @brief Feature checklist for the Baseline folder: each ticked feature's base settings go in the pack. */
+	void DrawBaselineFeatureList(float visibleLines)
+	{
+		ImGui::TextUnformatted(T(TKEY("scene_export_baseline_features"), "Base settings to include"));
+		Util::AddTooltip(T(TKEY("scene_export_baseline_features_tooltip"),
+			"Saves each ticked feature's current base settings, and whether it loads at boot, in the preset's Baseline "
+			"folder. Applying the preset sets them. Scene layers are not part of this."));
+
+		const float listHeight = ImGui::GetTextLineHeightWithSpacing() * visibleLines + ImGui::GetStyle().FramePadding.y * 2.0f;
+		if (ImGui::BeginChild("##SceneExportBaselineFeatures", ImVec2(0.0f, listHeight), ImGuiChildFlags_Borders)) {
+			auto features = Feature::GetFeatureList();
+			std::sort(features.begin(), features.end(), [](Feature* a, Feature* b) {
+				return a->GetDisplayName() < b->GetDisplayName();
+			});
+			bool any = false;
+			for (auto* feature : features) {
+				if (!IsBaselineCandidate(feature))
+					continue;
+				any = true;
+				const auto shortName = feature->GetShortName();
+				bool selected = IsBaselineSelected(shortName);
+				ImGui::PushID(shortName.c_str());
+				if (ImGui::Checkbox(feature->GetDisplayName().c_str(), &selected))
+					SetBaselineSelected(shortName, selected);
+				ImGui::PopID();
+			}
+			if (!any)
+				ImGui::TextDisabled("%s", T(TKEY("scene_export_baseline_none"), "No loaded feature has base settings to export."));
+		}
+		ImGui::EndChild();
+		ImGui::TextDisabled("%s",
+			I18n::GetSingleton()->Format("cs_editor.scene_export_features_count",
+									{ { "count", std::to_string(baselineFeatures.size()) } },
+									"{count} selected")
+				.c_str());
+	}
+
+	/** @brief Whether the form carries any base settings: a ticked feature, or Post Processing. */
+	bool HasBaselinePayload()
+	{
+		return !baselineFeatures.empty() || (includePostProcessing && CanIncludePostProcessing());
+	}
+
 	/** @brief The form as export info, with the sanitized name and parsed tags. */
 	PresetExportInfo BuildExportInfo(const std::string& sanitizedName)
 	{
 		auto info = form;
 		info.name = sanitizedName;
 		info.tags = ParseTags(presetTags);
+		// A pack that sets a feature's base settings needs that feature to apply them.
+		if (simplified)
+			info.requiredFeatures.clear();
+		auto require = [&](const std::string& shortName) {
+			if (std::ranges::find(info.requiredFeatures, shortName) == info.requiredFeatures.end())
+				info.requiredFeatures.push_back(shortName);
+		};
+		for (const auto& shortName : baselineFeatures)
+			require(shortName);
+		if (includePostProcessing && CanIncludePostProcessing())
+			require(PostProcessingPresets::kFeatureShortName);
+		std::erase_if(info.requiredFeatures, IsCoreFeature);
 		return info;
 	}
-}
 
-bool ScenePresetExport::CanExport()
-{
-	auto* manager = SceneSettingsManager::GetSingleton();
-	if (!manager)
-		return false;
-	if (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty())
-		return true;
-	// E11-only export: no scene layer yet, but the live Effects 11 preset can still be written out.
-	return globals::features::effects11.loaded && PresetManager::GetSingleton().CanExportActivePreset();
-}
+	/** @brief Writes each ticked feature's base settings into the pack's Baseline folder. */
+	bool WriteBaselineFeatures(const std::string& packName)
+	{
+		auto* overrides = SettingsOverrideManager::GetSingleton();
+		bool wroteAll = true;
+		for (const auto& shortName : baselineFeatures) {
+			auto* feature = Feature::FindFeatureByShortName(shortName);
+			if (!IsBaselineCandidate(feature))
+				continue;
 
-void ScenePresetExport::Open()
-{
-	dialogActive = true;
-	pendingOpen = true;
-	ResetFormFields();
-	// The Presets page may never have scanned this session, and packs may have changed since.
-	UnifiedPresetCatalog::GetSingleton().Discover();
-}
+			json settings;
+			{
+				// The author's own values, not whatever scene layer is applying right now.
+				SceneSettingsManager::SceneLayerGuard sceneLayerGuard;
+				feature->SaveSettings(settings);
+			}
+			std::vector<std::string> paths;
+			for (const auto& setting : Util::Settings::GetExportSettings(shortName, settings))
+				paths.push_back(setting.path);
 
-void ScenePresetExport::Draw()
-{
-	if (!dialogActive)
-		return;
-
-	auto* manager = SceneSettingsManager::GetSingleton();
-	if (!manager) {
-		dialogActive = false;
-		return;
+			if (!overrides->ExportSettings(packName, shortName, paths, settings, true)) {
+				logger::error("[ScenePresetExport] Could not write the Baseline settings of {} into '{}'", shortName, packName);
+				wroteAll = false;
+			}
+		}
+		return wroteAll;
 	}
 
-	if (pendingOpen) {
-		ImGui::OpenPopup(kExportPopupId);
-		pendingOpen = false;
+	/** @brief Records whether each exported feature loads at boot, so applying the pack restores it. */
+	void WriteBootStates(const std::string& packId)
+	{
+		auto& catalog = UnifiedPresetCatalog::GetSingleton();
+		auto names = baselineFeatures;
+		if (includePostProcessing && CanIncludePostProcessing())
+			names.push_back(PostProcessingPresets::kFeatureShortName);
+		for (const auto& shortName : names) {
+			auto* feature = Feature::FindFeatureByShortName(shortName);
+			if (!feature || feature->IsAlwaysEnabled())
+				continue;
+			catalog.SetPackFeatureDisabledAtBoot(packId, shortName, globals::state->IsFeatureDisabled(shortName));
+		}
 	}
 
-	const float scale = Util::GetUIScale();
-	const ImGuiStyle& style = ImGui::GetStyle();
-	ImGui::SetNextWindowSize(ImVec2(kModalWidth * scale, 0.0f), ImGuiCond_Always);
-	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+	/** @brief Preset type choice: CS, E11 or Baseline. */
+	void DrawTypeSection()
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::TextUnformatted(T(TKEY("scene_export_type"), "Preset type"));
 		DrawPresetTypeOption(T(TKEY("scene_export_type_cs"), "CS Preset"), PresetType::CS);
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
@@ -494,6 +672,10 @@ void ScenePresetExport::Draw()
 									 "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11."),
 					Util::kTooltipWhenDisabled);
 		}
+		ImGui::SameLine(0.0f, style.ItemSpacing.x);
+		DrawPresetTypeOption(T(TKEY("scene_export_type_baseline"), "Baseline"), PresetType::Baseline);
+		Util::AddTooltip(T(TKEY("scene_export_type_baseline_tooltip"),
+			"Base settings only: the features you tick, without scene layers or Effects 11 files."));
 		if (!e11Ready && form.type == PresetType::E11)
 			form.type = PresetType::CS;
 		if (form.type == PresetType::E11) {
@@ -502,27 +684,37 @@ void ScenePresetExport::Draw()
 		}
 		ImGui::Separator();
 
-		ImGui::TextWrapped(
-			"%s", form.type == PresetType::E11 ?
-					  T(TKEY("scene_export_scope_e11"),
-						  "Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.") :
-					  T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page."));
-		ImGui::Separator();
+		const char* scope = T(TKEY("scene_export_scope"), "Exports every setting from every context, not just this page.");
+		if (form.type == PresetType::E11)
+			scope = T(TKEY("scene_export_scope_e11"),
+				"Exports the active Effects 11 ENB files, plus any Scene Manager settings that are present.");
+		else if (form.type == PresetType::Baseline)
+			scope = T(TKEY("scene_export_scope_baseline"),
+				"Exports the base settings of the features ticked below, as a Baseline preset.");
+		ImGui::TextWrapped("%s", scope);
+	}
 
+	/** @brief Mods supplying scene values, which a Baseline leaves out. */
+	void DrawModList(SceneSettingsManager* manager)
+	{
 		const auto& modNames = GetCachedModNames(manager);
 		if (modNames.empty()) {
 			Util::Text::Disabled("%s", T(TKEY("scene_export_no_mods"), "No mods are supplying values."));
-		} else {
-			ImGui::TextUnformatted(T(TKEY("scene_export_mod_list"), "Mods supplying values, last one wins:"));
-			if (ImGui::BeginChild("##ScenePresetExportMods",
-					ImVec2(0.0f, kModListHeight * scale), ImGuiChildFlags_Borders)) {
-				for (size_t index = 0; index < modNames.size(); ++index)
-					ImGui::Text("%zu. %s", index + 1, modNames[index].c_str());
-			}
-			ImGui::EndChild();
+			return;
 		}
+		ImGui::TextUnformatted(T(TKEY("scene_export_mod_list"), "Mods supplying values, last one wins:"));
+		if (ImGui::BeginChild("##ScenePresetExportMods",
+				ImVec2(0.0f, kModListHeight * Util::GetUIScale()), ImGuiChildFlags_Borders)) {
+			for (size_t index = 0; index < modNames.size(); ++index)
+				ImGui::Text("%zu. %s", index + 1, modNames[index].c_str());
+		}
+		ImGui::EndChild();
+	}
 
-		ImGui::Separator();
+	/** @brief Name, version, author, description and tags. */
+	void DrawMetadataFields()
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::TextUnformatted(T(TKEY("scene_export_name"), "Preset name"));
 		const char* existingLabel = T(TKEY("scene_export_existing"), "Existing...");
 		ImGui::SetNextItemWidth(-(ImGui::CalcTextSize(existingLabel).x + style.FramePadding.x * 2.0f + style.ItemInnerSpacing.x));
@@ -536,6 +728,8 @@ void ScenePresetExport::Draw()
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportVersion", &form.version);
+		Util::AddTooltip(T(TKEY("scene_export_version_tooltip"),
+			"MAJOR.MINOR.PATCH. 0.0.x is tagged Alpha and 0.x.x Beta on the Presets page; 1.0.0 and up is a full release."));
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_author"), "Author"));
 		ImGui::SetNextItemWidth(-1);
@@ -549,30 +743,39 @@ void ScenePresetExport::Draw()
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportTags", &presetTags);
 		Util::AddTooltip(T(TKEY("scene_export_tags_tooltip"), "Example: interior, weather, cinematic"));
+	}
 
-		ImGui::Separator();
-		if (ImGui::BeginTable("##SceneExportArtCompat", 2, ImGuiTableFlags_SizingStretchSame)) {
-			ImGui::TableNextRow();
-			ImGui::TableNextColumn();
-			ImGui::TextUnformatted(T(TKEY("scene_export_artwork"), "Artwork (optional)"));
-			ImGui::TextDisabled("%s", T(TKEY("scene_export_artwork_hint"),
-										  "Images are copied into Presets/<Name>/ for the Presets browser."));
-			DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
-			DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
-				existingCover);
-			DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
+	/** @brief Artwork slots beside the compatibility box. */
+	void DrawArtworkAndCompatibility()
+	{
+		if (!ImGui::BeginTable("##SceneExportArtCompat", 2, ImGuiTableFlags_SizingStretchSame))
+			return;
+		ImGui::TableNextRow();
+		ImGui::TableNextColumn();
+		DrawArtworkRow(T(TKEY("scene_export_logo"), "Logo"), false, &form.logoSource, form.clearLogo, existingLogo);
+		DrawArtworkRow(T(TKEY("scene_export_cover"), "Cover (poster)"), false, &form.coverSource, form.clearCover,
+			existingCover);
+		DrawArtworkRow(T(TKEY("scene_export_screenshots"), "Screenshots"), true, nullptr, form.clearScreenshots, {});
 
-			ImGui::TableNextColumn();
-			DrawCompatibilityBox();
-			ImGui::EndTable();
-		}
+		ImGui::TableNextColumn();
+		DrawCompatibilityBox();
+		ImGui::EndTable();
+	}
 
+	/** @brief The Export button with the reasons it can be disabled, and the confirmation it raises. */
+	void DrawExportButton(SceneSettingsManager* manager, bool hasMods)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
 		const bool reservedName = SceneSettingsManager::IsReservedPresetName(sanitizedName);
 		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(form.version);
 		const auto* existingPack = UnifiedPresetCatalog::GetSingleton().FindPack(sanitizedName);
 		const bool typeMismatch = existingPack && !existingPack->AcceptsExport(form.type);
-		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion || typeMismatch);
+		// A CS export with no scene settings and no base settings would write an empty pack.
+		const bool nothingToExport = form.type == PresetType::Baseline ? !HasBaselinePayload() :
+		                             form.type == PresetType::CS       ? !manager->HasAnyUserEntries() && !hasMods && !HasBaselinePayload() :
+		                                                                 false;
+		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion || typeMismatch || nothingToExport);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
@@ -600,17 +803,120 @@ void ScenePresetExport::Draw()
 			Util::AddTooltip(T(TKEY("scene_export_type_mismatch"),
 								 "A preset with this name already exists for the other pipeline. Pick a different name or switch the preset type."),
 				Util::kTooltipWhenDisabled);
+		else if (nothingToExport)
+			Util::AddTooltip(T(TKEY("scene_export_nothing"),
+								 "Nothing to export yet: author scene settings, or tick base settings to include."),
+				Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
 		if (ImGui::Button(T(TKEY("cancel"), "Cancel")))
 			ImGui::CloseCurrentPopup();
+	}
 
+	/** @brief Everything inside the export popup. */
+	void DrawForm(SceneSettingsManager& manager)
+	{
+		const bool baselineOnly = form.type == PresetType::Baseline;
+		if (!simplified) {
+			DrawTypeSection();
+			DrawPostProcessingOption();
+			ImGui::Separator();
+			if (!baselineOnly) {
+				DrawModList(&manager);
+				ImGui::Separator();
+			}
+		} else {
+			DrawPostProcessingOption();
+		}
+
+		DrawBaselineFeatureList(simplified ? kSimplifiedFeatureLines : kFeatureLines);
+		ImGui::Separator();
+		DrawMetadataFields();
+
+		if (!simplified) {
+			ImGui::Separator();
+			DrawArtworkAndCompatibility();
+		}
+
+		DrawExportButton(&manager, !GetCachedModNames(&manager).empty());
+	}
+}
+
+bool ScenePresetExport::CanExport()
+{
+	auto* manager = SceneSettingsManager::GetSingleton();
+	if (!manager)
+		return false;
+	if (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty())
+		return true;
+	// E11-only export: no scene layer yet, but the live Effects 11 preset can still be written out.
+	// Post Processing alone is enough: its base settings can always go out as a preset.
+	if (globals::features::postProcessing.loaded || HasAnyBaselineCandidate())
+		return true;
+	return globals::features::effects11.loaded && PresetManager::GetSingleton().CanExportActivePreset();
+}
+
+void ScenePresetExport::Open()
+{
+	dialogActive = true;
+	pendingOpen = true;
+	ResetFormFields();
+	// The Presets page may never have scanned this session, and packs may have changed since.
+	UnifiedPresetCatalog::GetSingleton().Discover();
+}
+
+void ScenePresetExport::OpenBaseline(const std::string& featureShortName)
+{
+	Open();
+	simplified = true;
+	form.type = PresetType::Baseline;
+	// The scene layer detection is not part of a Baseline; the base settings choose what is required.
+	form.requiredFeatures.clear();
+	if (featureShortName == PostProcessingPresets::kFeatureShortName)
+		includePostProcessing = globals::features::postProcessing.loaded;
+	else if (IsBaselineCandidate(Feature::FindFeatureByShortName(featureShortName)))
+		SetBaselineSelected(featureShortName, true);
+}
+
+void ScenePresetExport::Draw()
+{
+	if (!dialogActive)
+		return;
+
+	auto* manager = SceneSettingsManager::GetSingleton();
+	if (!manager) {
+		dialogActive = false;
+		return;
+	}
+
+	if (pendingOpen) {
+		ImGui::OpenPopup(kExportPopupId);
+		pendingOpen = false;
+	}
+
+	ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(kModalWidth * Util::GetUIScale(), 0.0f), ImGuiCond_Always);
+	if (ImGui::BeginPopupModal(kExportPopupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+		// The name picker is a popup of its own and takes the first Escape.
+		const bool closing = !ImGui::IsPopupOpen(kPickerPopupId) && EditorWindow::ClosePopupOnEscape();
+		if (!closing)
+			DrawForm(*manager);
 		ImGui::EndPopup();
 	}
 
 	if (exportConfirmation.Draw()) {
 		auto sanitizedName = Util::FileHelpers::SanitizeFileName(form.name);
-		ReportExportResult(sanitizedName, manager->ExportPreset(BuildExportInfo(sanitizedName)));
+		bool exported = manager->ExportPreset(BuildExportInfo(sanitizedName));
+		if (exported && includePostProcessing && CanIncludePostProcessing())
+			exported = PostProcessingPresets::WriteBaseline(Util::PathHelpers::GetUnifiedPackPath(sanitizedName));
+		if (exported)
+			exported = WriteBaselineFeatures(sanitizedName);
+		ReportExportResult(sanitizedName, exported);
+		// The Presets page lists the new or updated pack without a manual refresh.
+		UnifiedPresetCatalog::GetSingleton().Discover();
+		// After the scan: the boot states live in the manifest of a pack the catalog now knows.
+		if (exported)
+			WriteBootStates(sanitizedName);
 		exportRequested = false;
 	} else if (!exportConfirmation.IsOpen()) {
 		exportRequested = false;

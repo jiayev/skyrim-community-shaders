@@ -15,7 +15,7 @@ struct SceneManager : Feature, SceneSettingsManager
 	bool UsesMainSettings() const override { return false; }
 
 	std::pair<std::string, std::vector<std::string>> GetFeatureSummary() override;
-	/// Debug view of the resolver's live state until the real Scene Manager UI lands.
+	/// What applies now with links into the CS Editor, the transition durations, and the resolver's debug view.
 	void DrawSettings() override;
 	void SetupResources() override;
 	void DataLoaded() override;

@@ -1,13 +1,13 @@
 #include "UI.h"
 
 #include "../CSEditor/EditorWindow.h"
-#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "../I18n/I18n.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "D3D.h"
 #include "FileSystem.h"
+#include "IconsFontAwesome5.h"
 #include "Menu.h"
 #include "Menu/Fonts.h"
-#include "IconsFontAwesome5.h"
 #include "Menu/IconLoader.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/ThemeManager.h"
@@ -566,20 +566,59 @@ namespace Util
 		return clicked;
 	}
 
-	float MeasureHdrSdrCapabilityPillWidth(bool a_supportsHDR)
+	namespace
 	{
-		const char* label = a_supportsHDR ?
-			T("ui.badge.hdr", "HDR") :
-			T("ui.badge.sdr", "SDR");
-		const float padX = 5.0f * GetUIScale();
-		return ImGui::CalcTextSize(label).x + padX * 2.0f;
+		constexpr float kBadgePadX = 5.0f;
+		constexpr float kBadgePadY = 1.5f;
+		constexpr float kBadgeRounding = 3.0f;
+		constexpr float kBadgeFillAlpha = 0.22f;
+		constexpr float kBadgeLabelTowardText = 0.35f;
 	}
 
-	void DrawHdrSdrCapabilityPillAt(ImVec2 a_min, float a_rowHeight, bool a_supportsHDR, ImDrawList* a_drawList)
+	float MeasureBadgeWidth(const char* a_label)
+	{
+		return ImGui::CalcTextSize(a_label).x + kBadgePadX * GetUIScale() * 2.0f;
+	}
+
+	float DrawBadgeAt(ImVec2 a_min, float a_rowHeight, const char* a_label, const ImVec4& a_bg, const ImVec4& a_fg,
+		ImDrawList* a_drawList)
 	{
 		if (!a_drawList)
 			a_drawList = ImGui::GetWindowDrawList();
 
+		const float scale = GetUIScale();
+		const ImVec2 textSize = ImGui::CalcTextSize(a_label);
+		const float padX = kBadgePadX * scale;
+		const float padY = kBadgePadY * scale;
+		const float pillW = textSize.x + padX * 2.0f;
+		const float pillH = textSize.y + padY * 2.0f;
+		const float y = a_min.y + (a_rowHeight - pillH) * 0.5f;
+
+		a_drawList->AddRectFilled(ImVec2(a_min.x, y), ImVec2(a_min.x + pillW, y + pillH),
+			ImGui::ColorConvertFloat4ToU32(a_bg), kBadgeRounding * scale);
+		a_drawList->AddText(ImVec2(a_min.x + padX, y + padY), ImGui::ColorConvertFloat4ToU32(a_fg), a_label);
+		return pillW;
+	}
+
+	void Badge(const char* a_label, const ImVec4& a_tint)
+	{
+		const ImVec4 text = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+		const ImVec4 bg(a_tint.x, a_tint.y, a_tint.z, kBadgeFillAlpha);
+		const ImVec4 fg(a_tint.x + (text.x - a_tint.x) * kBadgeLabelTowardText,
+			a_tint.y + (text.y - a_tint.y) * kBadgeLabelTowardText,
+			a_tint.z + (text.z - a_tint.z) * kBadgeLabelTowardText, 1.0f);
+		const float lineH = ImGui::GetTextLineHeight();
+		const float width = DrawBadgeAt(ImGui::GetCursorScreenPos(), lineH, a_label, bg, fg);
+		ImGui::Dummy(ImVec2(width, lineH));
+	}
+
+	float MeasureHdrSdrCapabilityPillWidth(bool a_supportsHDR)
+	{
+		return MeasureBadgeWidth(a_supportsHDR ? T("ui.badge.hdr", "HDR") : T("ui.badge.sdr", "SDR"));
+	}
+
+	void DrawHdrSdrCapabilityPillAt(ImVec2 a_min, float a_rowHeight, bool a_supportsHDR, ImDrawList* a_drawList)
+	{
 		const char* label = a_supportsHDR ?
 			T("ui.badge.hdr", "HDR") :
 			T("ui.badge.sdr", "SDR");
@@ -591,18 +630,7 @@ namespace Util
 			ImVec4(0.72f, 0.86f, 1.00f, 0.95f) :
 			ImVec4(1.00f, 0.72f, 0.72f, 0.95f);
 
-		const float scale = GetUIScale();
-		const ImVec2 textSize = ImGui::CalcTextSize(label);
-		const float padX = 5.0f * scale;
-		const float padY = 1.5f * scale;
-		const float rounding = 3.0f * scale;
-		const float pillW = textSize.x + padX * 2.0f;
-		const float pillH = textSize.y + padY * 2.0f;
-		const float y = a_min.y + (a_rowHeight - pillH) * 0.5f;
-
-		a_drawList->AddRectFilled(ImVec2(a_min.x, y), ImVec2(a_min.x + pillW, y + pillH),
-			ImGui::ColorConvertFloat4ToU32(bg), rounding);
-		a_drawList->AddText(ImVec2(a_min.x + padX, y + padY), ImGui::ColorConvertFloat4ToU32(fg), label);
+		DrawBadgeAt(a_min, a_rowHeight, label, bg, fg, a_drawList);
 	}
 
 	void DrawHdrSdrCapabilityPill(bool a_supportsHDR)

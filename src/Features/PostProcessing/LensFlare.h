@@ -35,15 +35,15 @@ struct LensFlare : public PostProcessFeature
 
 	struct Settings
 	{
-		float Intensity = 0.1f;
+		float Intensity = 0.25f;
 		float ThresholdEV = 3.0f;  // EV100-based threshold (converted to linear luminance for shader)
 		float ThresholdRange = 1.0f;
 		float GhostStrength = 0.3f;
 		float GhostChromaShift = 0.015f;
-		int GhostModeInt = 0;  // 0 = Fast, 1 = Quality, 2 = Ultra
-		int FFTResolution = 256;
+		int GhostModeInt = 1;  // 0 = Fast, 1 = Quality, 2 = Ultra
+		int FFTResolution = 512;
 		float KernelScale = 0.1f;      // Fraction of FFT resolution for bokeh kernel size
-		float FStop = 2.8f;            // F-number for procedural aperture (e.g. F2.8)
+		float FStop = 14.3f;           // F-number for procedural aperture (e.g. F2.8)
 		int ApertureBlades = 6;        // Number of aperture blades (3-10)
 		float ApertureRotation = 0.f;  // Aperture rotation in degrees
 		float HaloStrength = 0.2f;

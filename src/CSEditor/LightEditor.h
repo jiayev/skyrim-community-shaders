@@ -20,6 +20,9 @@ struct LightEditor
 	/** @brief Draw the light editor ImGui settings panel. */
 	void DrawSettings();
 
+	/** @brief Number of lights in the current list (after the type and shadow filters). */
+	size_t GetLightCount() const { return lights.size(); }
+
 	/** @brief Gather all active scene lights into the internal list for display and editing. */
 	void GatherLights();
 
@@ -47,6 +50,10 @@ private:
 		bool isOther = false;
 		bool isSpotlight = false;
 		bool hasPosition = false;
+		/// Its LIGH form casts shadows (hemi, omni or spot).
+		bool isShadow = false;
+		/// Placed by Light Placer (the NiLight is named "LP_Light[...]").
+		bool isLP = false;
 		RE::NiPoint3 position;
 
 		bool operator==(const LightInfo& other) const noexcept
@@ -107,6 +114,9 @@ private:
 
 	FilterOption filterOption = FilterOption::RefLights;
 	SortOption sortOption = SortOption::Distance;
+	bool sortDescending = false;
+	/// Text filter over the light table (matches the display name).
+	char lightSearch[128] = {};
 
 	std::vector<LightInfo> lights = {};
 	std::unordered_map<RE::TESObjectREFR*, uint32_t> lightsAttached = {};
@@ -162,8 +172,14 @@ private:
 	float originalShadowDepthBias = 0.0f;
 	float cachedFadeBeforeToggle = 0.0f;
 
-	/** @brief Sorts the gathered light list by the active sort option. */
+	/** @brief Sorts the gathered light list by the active sort option and direction. */
 	void SortLights();
+	/** @brief Global toggles and Light Placer actions above the light table. */
+	void DrawToolbar();
+	/** @brief Sortable, searchable table of the gathered lights; selecting a row selects the light. */
+	void DrawLightTable(const ImVec2& size);
+	/** @brief Details and editing controls for the selected light, grouped into collapsible sections. */
+	void DrawInspector(const ImVec2& size);
 	/** @brief Restores the active light to its snapshotted original state. */
 	void RestoreOriginal();
 	/** @brief Writes shadowDepthBias to the active shadow light's runtime data. */

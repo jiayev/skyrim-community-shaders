@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui_stdlib.h>
 
+#include "CSEditor/Browser/BrowserWidgets.h"
 #include "EditorWidgets.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/EffectManager.h"
@@ -18,6 +19,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "PostProcessingMode.h"
 #include "Utils/UI.h"
 
@@ -286,13 +288,7 @@ namespace
 		ImGui::SetNextWindowSize(ImVec2(width, height), cond);
 	}
 
-	/** Puts the next item on the current line if it fits, otherwise on a new line. */
-	void SameLineIfFits(float a_width)
-	{
-		ImGui::SameLine();
-		if (ImGui::GetContentRegionAvail().x < a_width)
-			ImGui::NewLine();
-	}
+	using BrowserUI::SameLineIfFits;
 
 	bool MenuItemResetFloat(float& a_value, float a_default, int a_decimals)
 	{
@@ -431,8 +427,6 @@ void Effects11Editor::DrawSettingsWindow()
 void Effects11Editor::DrawNoPreset()
 {
 	const auto& mainEffect = EffectManager::GetSingleton().enbEffect;
-	auto& effects11 = globals::features::effects11;
-	effects11.EnforceOriginalPostProcessingIfNeeded();
 
 	Util::Text::Warning("%s", T(TKEY("no_preset_title"), "No preset loaded"));
 	ImGui::Spacing();
@@ -448,19 +442,6 @@ void Effects11Editor::DrawNoPreset()
 			"then click Reload Shaders."));
 	}
 	ImGui::PopTextWrapPos();
-
-	ImGui::Spacing();
-	if (effects11.IsUseOriginalPostProcessingForced()) {
-		const Util::LockedSection originalPPLock(true, T(TKEY("original_pp_forced"),
-														   "Use Original Post Processing is forced on until a usable preset is available."));
-		bool forcedOn = true;
-		ImGui::Checkbox(T(TKEY("use_original_post_processing"), "Use Original Post Processing"), &forcedOn);
-		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-							 "Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-							 "Use Original Post Processing stays on so the game keeps a working image.\n"
-							 "Install a preset and reload shaders to unlock it."),
-			Util::kTooltipWhenDisabled);
-	}
 
 	ImGui::Spacing();
 	ImGui::PushTextWrapPos(0.0f);
@@ -565,6 +546,12 @@ void Effects11Editor::DrawStatus()
 			Util::Text::Error("%s", text.c_str());
 			Util::AddTooltip(T(TKEY("status_failed_files_tip"), "See the Shader Parameters panel for the compiler errors."));
 		}
+		// Switching presets happens on the Presets page; this leaves the editor for it.
+		ImGui::SameLine();
+		if (const float slack = ImGui::GetContentRegionAvail().x - PresetsPageRenderer::MeasureOpenButton(); slack > 0.0f)
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + slack);
+		PresetsPageRenderer::DrawOpenButton("##Effects11EditorOpenPresets",
+			T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 	}
 
 	// Time of day
@@ -761,6 +748,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const bool active = settingManager.IsCategoryEnabled(a_category);
 	const bool exteriorOnly = settingManager.IsCategoryExteriorOnly(a_category);
 	const bool weatherAware = settingManager.IsWeatherSystemEnabled() && settingManager.CategoryHasWeatherSupport(a_category);
+	const bool handedOff = E11Handoff::IsE11SettingHandedOff(a_category);
 
 	if (!settingsFilter.empty())
 		ImGui::SetNextItemOpen(true, ImGuiCond_Always);
@@ -770,7 +758,9 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 	const std::string weatherTag = weatherAware ? EditTargetFile(a_category) : std::string();
 	const char* exteriorTag = exteriorOnly && IsInterior() ? T(TKEY("tag_exterior_only"), "Exterior only") : nullptr;
 	const char* offTag = active ? nullptr : T(TKEY("tag_off"), "Off");
-	Effects11UI::HeaderTags({ { weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
+	const char* sceneTag = handedOff ? T(TKEY("tag_scene"), "Scene") : nullptr;
+	Effects11UI::HeaderTags({ { sceneTag, Util::Colors::GetInfo() },
+		{ weatherTag.empty() ? nullptr : weatherTag.c_str(), Util::Colors::GetInfo() },
 		{ exteriorTag, Util::Colors::GetWarning() },
 		{ offTag, Util::Colors::GetDisabled() } });
 
@@ -792,9 +782,11 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 		Util::TextUnformattedDisabled(a_description);
 	if (exteriorOnly && IsInterior())
 		Util::Text::WrappedWarning("%s", T(TKEY("exterior_only_note"), "These values only apply outdoors."));
+	if (handedOff)
+		Util::Text::WrappedWarning("%s", T(TKEY("handed_off_note"), "This preset hands this feature to Community Shaders scene settings, so these values have no effect."));
 	ImGui::PopTextWrapPos();
 
-	if (!active) {
+	if (!active && !handedOff) {
 		const auto [dependencyKey, dependencyCategory] = settingManager.GetCategoryDependency(a_category);
 		const uint32_t dependencyID = settingManager.GetSettingID(dependencyKey, dependencyCategory);
 		Util::Text::WrappedWarning("%s", T(TKEY("section_off"), "This section is switched off, so its values have no effect."));
@@ -821,7 +813,7 @@ void Effects11Editor::DrawCategory(const std::string& a_category, const char* a_
 
 	if (Effects11UI::BeginPropertyTable("##rows")) {
 		for (const auto* setting : a_rows)
-			DrawSettingRow(*setting, active && usable);
+			DrawSettingRow(*setting, active && usable && !handedOff);
 		Effects11UI::EndPropertyTable();
 	}
 
@@ -917,10 +909,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	auto& settingManager = SettingManager::GetSingleton();
 	const std::string name = Effects11UI::PrettifyName(a_setting.key);
 	const bool dependencyMet = a_setting.dependsOnKey.empty() || settingManager.GetValue<bool>(a_setting.dependsOnKey, a_setting.dependsOnCategory);
-	const bool forcedOriginalPP = a_setting.type == SettingType::Bool &&
-	                              a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
-	                              globals::features::effects11.IsUseOriginalPostProcessingForced();
-	const bool editable = a_categoryActive && dependencyMet && !forcedOriginalPP;
+	const bool editable = a_categoryActive && dependencyMet && !E11Handoff::IsE11SettingHandedOff(a_setting.category, a_setting.key);
 
 	ImGui::PushID(static_cast<int>(a_setting.id));
 	bool labelHovered = false;
@@ -930,7 +919,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	case SettingType::Bool:
 		{
 			labelHovered = Effects11UI::PropertyLabel(name.c_str(), !editable);
-			bool value = forcedOriginalPP || settingManager.GetValue<bool>(a_setting.id, true);
+			bool value = settingManager.GetValue<bool>(a_setting.id, true);
 			bool changed = ImGui::Checkbox("##v", &value);
 
 			if (const auto* effect = EffectForToggle(a_setting); effect && !effect->IsFilePresent()) {
@@ -953,7 +942,7 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 				}
 			}
 
-			if (changed && !forcedOriginalPP) {
+			if (changed) {
 				settingManager.SetValue<bool>(a_setting.id, value);
 				dirty = true;
 			}
@@ -997,12 +986,6 @@ void Effects11Editor::DrawSettingRow(const Setting& a_setting, bool a_categoryAc
 	ImGui::EndDisabled();
 	if (labelHovered)
 		DrawSettingTooltip(a_setting, name, dependencyMet);
-	if (forcedOriginalPP)
-		Util::AddTooltip(T(TKEY("original_pp_forced_tooltip"),
-							 "Effects 11 has no compiled enbeffect.fx to replace the tonemap pass.\n"
-							 "Use Original Post Processing stays on so the game keeps a working image.\n"
-							 "Install a preset and reload shaders to unlock it."),
-			Util::kTooltipWhenDisabled);
 	ImGui::PopID();
 }
 
@@ -1211,11 +1194,6 @@ void Effects11Editor::DrawSettingTooltip(const Setting& a_setting, const std::st
 		const auto needs = I18n::GetSingleton()->Format(TKEY("needs_setting"), { { "setting", Effects11UI::PrettifyName(a_setting.dependsOnKey) } },
 			"Turn on \"{setting}\" to use this.");
 		Util::Text::WrappedWarning("%s", needs.c_str());
-	}
-	if (a_setting.category == "EFFECT" && a_setting.key == "UseOriginalPostProcessing" &&
-		globals::features::effects11.IsUseOriginalPostProcessingForced()) {
-		Util::Text::WrappedWarning("%s", T(TKEY("original_pp_forced"),
-											 "Use Original Post Processing is forced on until a usable preset is available."));
 	}
 	Util::TextUnformattedDisabled(T(TKEY("context_hint"), "Right-click a value for reset, copy and paste."));
 	ImGui::PopTextWrapPos();
@@ -1513,8 +1491,8 @@ void Effects11Editor::DrawLauncher()
 		RefreshPresetPaths();
 	Util::TextUnformattedDisabled(presetPaths.iniDisplay.c_str());
 	Util::AddTooltip(presetPaths.iniFull.c_str());
-	ImGui::TextWrapped("%s", T("feature.effects11.use_presets_tab",
-								 "Load and switch Effects11 presets from the Presets page in the left navigation."));
+	PresetsPageRenderer::DrawOpenButton("##Effects11OpenPresets",
+		T("feature.effects11.open_presets_tooltip", "Load and switch Effects 11 presets on the Presets page."));
 
 	ImGui::Spacing();
 	const float scale = Util::GetUIScale();

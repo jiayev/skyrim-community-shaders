@@ -2,6 +2,8 @@
 
 #include "Buffer.h"
 
+#include "Browser/BrowserState.h"
+#include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
 #include "Weather/LensFlareWidget.h"
@@ -10,10 +12,10 @@
 #include "Weather/ReferenceEffectWidget.h"
 #include "Weather/VolumetricLightingWidget.h"
 #include "Weather/WeatherWidget.h"
-#include "LightEditor.h"
 #include "WeatherUtils.h"
 #include "Widget.h"
 
+#include <optional>
 #include <unordered_map>
 
 class EditorWindow
@@ -36,6 +38,7 @@ public:
 	};
 
 	bool open = false;
+	bool showWeatherDebug = false;  // optional Weather Debug window, off by default (not persisted)
 	PreviewMode previewMode = PreviewMode::None;
 	const static int maxRecordMarkers = 10;
 
@@ -130,6 +133,13 @@ public:
 
 	/** @brief Draw the Objects browser window listing all editable form widgets. */
 	void ShowObjectsWindow();
+
+	/**
+	 * @brief Open the Cell Lighting editor for a cell, reusing the open one when it is the same cell.
+	 * @param cell The interior cell to edit.
+	 * @param notify Show the "loaded" notification when a saved file is read.
+	 */
+	void OpenCellLighting(RE::TESObjectCELL* cell, bool notify);
 
 	/** @brief Draw a compact "Active: <weather>" line matching the indicator atop other object categories.
 	 *  @param drawTrailer Follow with a separator; pass false to keep adding to the same row. */
@@ -245,8 +255,24 @@ public:
 	/** @brief Returns true if the editor can be opened (game is loaded and not in main menu). */
 	static bool CanBeOpen();
 
-	/** @brief Shows a category in the objects window, by its stable English ID. */
-	void SelectCategory(std::string category) { m_selectedCategory = std::move(category); }
+	/** @brief True while a loading screen or a game menu is up; the editor breaks if it opens over one. */
+	static bool IsOpeningBlocked();
+
+	/** @brief Shows the "cannot open here" warning card, once per press rather than stacking repeats. */
+	void WarnOpeningBlocked();
+
+	/** @brief True while a notification card is still on screen. */
+	bool HasNotifications() const { return !notifications.empty(); }
+
+	/** @brief Shows the Base Settings window on a feature and brings it to the front. */
+	void OpenBaseSettings(const std::string& featureShortName);
+
+	/** @brief Shows a category in the objects window, by its stable English ID, and brings that window to the front. */
+	void SelectCategory(std::string category)
+	{
+		m_selectedCategory = std::move(category);
+		m_focusBrowser = true;
+	}
 
 	/** @brief Hide the game HUD and menus (equivalent to the 'tm' console command). */
 	void HideGameMenus();
@@ -318,9 +344,13 @@ public:
 		std::map<std::string, std::vector<std::string>> recentWidgets;
 		int maxRecentWidgets = 10;
 		bool showViewport = true;
+		/// Base Settings window; the key predates the rename from Features.
 		bool showFeaturesWindow = false;
-		bool showPostProcessingWindow = false;
 		std::string selectedCategory = "Weather";
+		/// Browser form pages show the inspector beside (or under) the list.
+		bool browserShowInspector = true;
+		/// Browser category sidebar collapsed to icons.
+		bool browserSidebarCompact = false;
 
 		// Per-widget-type window sizes (serialized as JSON for persistence)
 		json widgetTypeSizes;
@@ -404,6 +434,8 @@ private:
 
 	/// True from overlay open until its weather lock engages or the overlay closes.
 	bool overlayWeatherLockPending = false;
+	/// Sky region at lock time, restored on unlock since ForceWeather clears it.
+	RE::TESRegion* regionBeforeLock = nullptr;
 
 	// Time control state
 	bool timePaused = false;
@@ -416,19 +448,6 @@ private:
 	double lastGameHourScrubRefreshTime = 0.0;
 	bool gameHourScrubRefreshIssued = false;
 
-	// Sorting state
-	enum class SortColumn
-	{
-		None,
-		EditorID,
-		FormID,
-		File,
-		Status,
-		JsonAttachment
-	};
-	SortColumn currentSortColumn = SortColumn::None;
-	bool sortAscending = true;
-
 	Widget* pendingDeleteWidget = nullptr;
 	bool pendingDeletePopupRequested = false;
 
@@ -438,23 +457,18 @@ private:
 	bool HasCachedJsonAttachment(Widget* widget) const;
 	void InvalidateJsonAttachmentCache(Widget* widget = nullptr);
 
-	// Objects window filter state
-	enum class FilterColumn : int
-	{
-		All = 0,
-		EditorID,
-		FormID,
-		File,
-		Status,
-		Count_  // Sentinel – must equal IM_ARRAYSIZE(kFilterColumnNames)
-	};
+	// Objects window (CS Editor Browser) state
 	std::string m_selectedCategory = "Weather";
 	std::string m_previousSelectedCategory = "Weather";
-	char m_filterBuffer[256] = {};
-	bool m_showOnlyFlagged = false;
-	bool m_showOnlyFavorites = false;
-	FilterColumn m_currentFilterColumn = FilterColumn::All;
-	void ResetObjectsFilter();
-	bool MatchesObjectFilter(Widget* w) const;
+	/// Set by SelectCategory; the objects window takes focus on its next Begin.
+	bool m_focusBrowser = false;
+	/// Filters, sort, cached rows and selection of the form-list pages.
+	Browser::FormListState m_formList;
+	/// Compact state the sidebar column was last sized for; unset until the first frame sizes it.
+	std::optional<bool> m_sidebarWasCompact;
+	/// Width the user had dragged the expanded sidebar to, restored when it expands again.
+	float m_sidebarExpandedWidth = 0.0f;
+	void DrawBrowserSidebar(bool compact);
+	void DrawBrowserPage();
 	static std::string ResolveEditorId(RE::TESForm* form, const WidgetVec& widgets);
 };

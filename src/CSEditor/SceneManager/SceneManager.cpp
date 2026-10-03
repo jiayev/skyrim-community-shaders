@@ -2,8 +2,17 @@
 
 #include <imgui.h>
 
+#include "../EditorWindow.h"
 #include "FeatureOverwritesPanel.h"
+#include "Features/CSEditor.h"
+#include "IconsFontAwesome5.h"
+#include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/Icons/helpers/SceneActionIcons.h"
+#include "Menu/PresetsPageRenderer.h"
+#include "SceneLayerHeader.h"
+#include "ScenePresetExport.h"
 #include "SceneSettingsManager.h"
+#include "SceneSettingsUI.h"
 #include "Utils/UI.h"
 
 // The debug view is developer-facing validation output and is intentionally not translated.
@@ -373,6 +382,90 @@ namespace
 			ImGui::PopID();
 		}
 	}
+
+	/** @brief Every resolver section, sampled only while the Debug header is open. */
+	void DrawDebug(const SceneSettingsManager& manager)
+	{
+		const auto snapshot = manager.GetDebugSnapshot();
+		ImGui::TextWrapped("Live debug view of the scene resolver. Sampled every frame while this section is open.");
+		ImGui::Indent();
+		if (ImGui::CollapsingHeader("Scene Context", ImGuiTreeNodeFlags_DefaultOpen))
+			DrawSceneContext(snapshot);
+		if (ImGui::CollapsingHeader("Time of Day", ImGuiTreeNodeFlags_DefaultOpen))
+			DrawTimeOfDay(snapshot);
+		if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen))
+			DrawWeather(snapshot);
+		if (ImGui::CollapsingHeader("Resolver State"))
+			DrawResolverState(snapshot);
+		if (ImGui::CollapsingHeader("Location Transitions", ImGuiTreeNodeFlags_DefaultOpen))
+			DrawLocationTransitions(snapshot);
+		if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
+			DrawResolvedSettings(snapshot);
+		if (ImGui::CollapsingHeader("Presets"))
+			DrawPresets(manager.GetActivePresetMetadata());
+		if (ImGui::CollapsingHeader("Scene Type Entries"))
+			DrawLayers(snapshot.sceneLayers);
+		if (ImGui::CollapsingHeader("Weather Entries"))
+			DrawLayers(snapshot.weatherLayers);
+		if (ImGui::CollapsingHeader("Location Entries"))
+			DrawLayers(snapshot.locationLayers);
+		ImGui::Unindent();
+	}
+
+	/** @brief Buttons into the CS Editor pages that author scene settings, which only open in game. */
+	void DrawEditorShortcuts()
+	{
+		if (Icons::LabeledButton("##SceneManagerOpenEditor", Icons::FA(ICON_FA_PAINT_BRUSH),
+				T("feature.scene_manager.open_editor", "Open Scene Manager")))
+			SceneSettingsUI::OpenSceneManagerPage();
+		Util::AddTooltip(T("feature.scene_manager.open_editor_tooltip",
+			"Open the CS Editor's Scene Manager page, to author time of day and interior settings."));
+
+		ImGui::SameLine();
+		if (Icons::LabeledButton("##SceneManagerOpenLocations", Icons::FA(ICON_FA_MAP_MARKER_ALT),
+				T("feature.scene_manager.open_locations", "Locations")))
+			SceneSettingsUI::OpenLocationsPage();
+		Util::AddTooltip(T("feature.scene_manager.open_locations_tooltip", "Open the CS Editor's Locations page, to add places to override."));
+
+		ImGui::SameLine();
+		{
+			Util::DisableGuard disable(!ScenePresetExport::CanExport());
+			if (Icons::LabeledButton("##SceneManagerExportPreset", SceneActionIcons::kExport,
+					T("cs_editor.export_preset", "Export Preset..."))) {
+				CSEditor::OpenEditorWindow();
+				// The export dialog is drawn by the editor window, so it only opens once the editor has.
+				if (EditorWindow::GetSingleton()->open)
+					ScenePresetExport::Open();
+			}
+		}
+		Util::AddTooltip(T("cs_editor.scene_page_export_tooltip",
+							 "Export scene settings as a preset, or update an existing pack's metadata and artwork."),
+			Util::kTooltipWhenDisabled);
+	}
+
+	/** @brief What applies now with links into the CS Editor, or a hint while no save is loaded. */
+	void DrawApplyingNow()
+	{
+		if (EditorWindow::CanBeOpen()) {
+			SceneLayerHeader::DrawSummary();
+			DrawEditorShortcuts();
+			ImGui::SameLine();
+		} else {
+			Util::Text::WrappedDisabled("%s",
+				T("feature.scene_manager.not_in_game", "Load a save to see what applies here and to open the CS Editor."));
+		}
+		PresetsPageRenderer::DrawOpenButton("##SceneManagerOpenPresets",
+			T("feature.scene_manager.open_presets_tooltip", "Apply scene presets on the Presets page."));
+	}
+
+	/** @brief Reset button on the line of the control before it. @return Whether it was clicked. */
+	bool DrawResetButton(const char* label, const char* tooltip)
+	{
+		ImGui::SameLine();
+		const bool clicked = Util::WarningButton(label);
+		Util::AddTooltip(tooltip);
+		return clicked;
+	}
 }
 
 std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary()
@@ -390,6 +483,10 @@ std::pair<std::string, std::vector<std::string>> SceneManager::GetFeatureSummary
 
 void SceneManager::DrawSettings()
 {
+	Util::DrawSectionHeader(T("feature.scene_manager.applying_now", "Applying Now"), false, false);
+	DrawApplyingNow();
+
+	Util::DrawSectionHeader(T("feature.scene_manager.transitions", "Transitions"), false, false);
 	auto transitionHours = GetTimeOfDayTransitionHours();
 	if (ImGui::SliderFloat(T("feature.scene_manager.time_of_day_transition", "Time of Day Transition"), &transitionHours,
 			0.0f, kMaxTimeOfDayTransitionHours, "%.2f h", ImGuiSliderFlags_AlwaysClamp))
@@ -398,46 +495,33 @@ void SceneManager::DrawSettings()
 	if (ImGui::IsItemActive())
 		HoldDeferredSceneChanges();
 	Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_tooltip",
-		"Hours at the end of each time of day period spent blending into the next.\n"
+		"Hours spent blending between time of day periods, kept inside the sky's own colour transitions.\n"
 		"0 switches between periods instantly.\n"
 		"The active preset supplies this until you set your own."));
-	if (HasUserTimeOfDayTransitionHours()) {
-		ImGui::SameLine();
-		if (Util::WarningButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition")))
-			SetTimeOfDayTransitionHours(std::nullopt);
-		Util::AddTooltip(T("feature.scene_manager.time_of_day_transition_reset_tooltip",
-			"Drop your value and use the active preset's, or the default when it sets none."));
-	}
-	ImGui::Separator();
+	if (HasUserTimeOfDayTransitionHours() &&
+		DrawResetButton(T("feature.scene_manager.time_of_day_transition_reset", "Reset##TimeOfDayTransition"),
+			T("feature.scene_manager.time_of_day_transition_reset_tooltip",
+				"Drop your value and use the active preset's, or the default when it sets none.")))
+		SetTimeOfDayTransitionHours(std::nullopt);
+
+	auto locationSeconds = GetLocationTransitionSeconds();
+	if (ImGui::SliderFloat(T("feature.scene_manager.location_transition", "Location Transition"), &locationSeconds,
+			0.0f, kMaxLocationTransitionSeconds, "%.1f s", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic))
+		SetLocationTransitionSeconds(locationSeconds, true);
+	if (ImGui::IsItemActive())
+		HoldDeferredSceneChanges();
+	Util::AddTooltip(T("feature.scene_manager.location_transition_tooltip",
+		"Seconds location overrides take to ease in and out when you move between places.\n"
+		"A single setting can override this from its own transition field in the CS Editor."));
+	if (locationSeconds != kDefaultLocationTransitionSeconds &&
+		DrawResetButton(T("feature.scene_manager.location_transition_reset", "Reset##LocationTransition"),
+			T("feature.scene_manager.location_transition_reset_tooltip", "Return to the default duration.")))
+		SetLocationTransitionSeconds(kDefaultLocationTransitionSeconds);
 
 	if (ImGui::CollapsingHeader(T("feature.scene_manager.overwrites.title", "Feature Overwrites"), ImGuiTreeNodeFlags_DefaultOpen))
 		FeatureOverwritesPanel::Draw();
-	ImGui::Separator();
-
-	const auto snapshot = GetDebugSnapshot();
-
-	ImGui::TextWrapped("Live debug view of the scene resolver. Sampled every frame while this panel is open.");
-
-	if (ImGui::CollapsingHeader("Scene Context", ImGuiTreeNodeFlags_DefaultOpen))
-		DrawSceneContext(snapshot);
-	if (ImGui::CollapsingHeader("Time of Day", ImGuiTreeNodeFlags_DefaultOpen))
-		DrawTimeOfDay(snapshot);
-	if (ImGui::CollapsingHeader("Weather", ImGuiTreeNodeFlags_DefaultOpen))
-		DrawWeather(snapshot);
-	if (ImGui::CollapsingHeader("Resolver State"))
-		DrawResolverState(snapshot);
-	if (ImGui::CollapsingHeader("Location Transitions", ImGuiTreeNodeFlags_DefaultOpen))
-		DrawLocationTransitions(snapshot);
-	if (ImGui::CollapsingHeader("Applied Settings", ImGuiTreeNodeFlags_DefaultOpen))
-		DrawResolvedSettings(snapshot);
-	if (ImGui::CollapsingHeader("Presets"))
-		DrawPresets(GetActivePresetMetadata());
-	if (ImGui::CollapsingHeader("Scene Type Entries"))
-		DrawLayers(snapshot.sceneLayers);
-	if (ImGui::CollapsingHeader("Weather Entries"))
-		DrawLayers(snapshot.weatherLayers);
-	if (ImGui::CollapsingHeader("Location Entries"))
-		DrawLayers(snapshot.locationLayers);
+	if (ImGui::CollapsingHeader(T("feature.scene_manager.debug", "Debug")))
+		DrawDebug(*this);
 }
 
 void SceneManager::SetupResources()

@@ -27,6 +27,7 @@
 #include "Features/VolumetricShadows.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "PostProcessingMode.h"
 #include "SettingsOverrideManager.h"
 #include "ShaderCache.h"
 #include "TruePBR.h"
@@ -562,6 +563,7 @@ void State::SaveToJson(nlohmann::json& settings)
 	general["Skip Unchanged Shaders"] = shaderCache->IsSkipUnchangedShaders();
 	general["Enable Async"] = shaderCache->IsAsync();
 	general["Language"] = I18n::GetSingleton()->GetCurrentLocale();
+	PostProcessingMode::Save(general);
 
 	settings["General"] = general;
 
@@ -647,6 +649,7 @@ void State::LoadFromJson(nlohmann::json& settings)
 			shaderCache->SetSkipUnchangedShaders(general["Skip Unchanged Shaders"]);
 		if (general.contains("Enable Async") && general["Enable Async"].is_boolean())
 			shaderCache->SetAsync(general["Enable Async"]);
+		PostProcessingMode::Load(general);
 
 		// Load i18n locale preference
 		if (general.contains("Language") && general["Language"].is_string()) {

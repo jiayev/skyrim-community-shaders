@@ -1,8 +1,10 @@
 #include "PresetsPageRenderer.h"
 #include "PCH.h"
 
+#include "CSEditor/EditorWindow.h"
 #include "Feature.h"
 #include "Features/CSEditor.h"
+#include "Features/Effects11/Editor/Effects11Editor.h"
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
@@ -68,6 +70,32 @@ namespace
 	{
 		if (UnifiedPresetCatalog::GetSingleton().ApplyPack(pack.id, true))
 			logger::info("[Presets] Applied pack '{}'", pack.id);
+	}
+
+	Util::ConfirmationPopup applyConfirmation;
+	/// Pack awaiting applyConfirmation; looked up again on confirm since a rescan may replace it.
+	std::string pendingApplyPackId;
+
+	/** @brief Applies the pack, first asking for confirmation when its compatibility check found problems. */
+	void RequestApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
+	{
+		if (!pack.compat.HasIssues()) {
+			ApplyPack(pack);
+			return;
+		}
+		std::string message;
+		for (const auto* line : { &pack.compat.versionMessage, &pack.compat.featuresMessage }) {
+			if (!line->empty())
+				message += *line + "\n";
+		}
+		message += T("menu.presets.compat_apply_anyway", "Apply it anyway?");
+
+		pendingApplyPackId = pack.id;
+		applyConfirmation.title = T("menu.presets.compat_apply_title", "Compatibility warning");
+		applyConfirmation.message = std::move(message);
+		applyConfirmation.confirmLabel = T("menu.presets.apply", "Apply Preset");
+		applyConfirmation.cancelLabel = T("ui.cancel", "Cancel");
+		applyConfirmation.Request();
 	}
 
 	void DrawRoundedImage(ImDrawList* dl, ImTextureID texture, const ImVec2& p0, const ImVec2& p1, float rounding)
@@ -274,7 +302,7 @@ void PresetsPageRenderer::RenderList(float width)
 		auto& pack = *packPtr;
 		const bool selected = selectedPackId == pack.id;
 		const bool isActive = catalog.GetActivePackId() == pack.id || catalog.IsBaselineEnabled(pack.id);
-		const auto compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
+		const auto& compat = pack.compat;
 		const int warnLines = (compat.versionGap != PresetCompatibility::VersionGap::None ? 1 : 0) +
 		                      (!compat.featuresMessage.empty() ? 1 : 0);
 		const float textLines = 2.0f + static_cast<float>(warnLines);
@@ -291,7 +319,7 @@ void PresetsPageRenderer::RenderList(float width)
 			lightboxImageIndex = -1;
 			lightboxSuppressClose = false;
 			if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && CanApplyPack(pack))
-				ApplyPack(pack);
+				RequestApplyPack(pack);
 		}
 
 		// Draw contents inside the selectable bounds, then park the cursor past the row so the
@@ -425,10 +453,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::BeginGroup();
 			{
 				const auto stage = PresetCompatibility::ReleaseStageFromVersion(pack->version);
-				const std::string stageTag = Feature::GetReleaseStageTag(
-					stage == PresetCompatibility::ReleaseStage::Alpha ? Feature::ReleaseStage::Alpha :
-					stage == PresetCompatibility::ReleaseStage::Beta  ? Feature::ReleaseStage::Beta :
-																		 Feature::ReleaseStage::Release);
+				const std::string stageTag = Feature::GetReleaseStageTag(stage);
 
 				MenuFonts::FontRoleGuard title(Menu::FontRole::Heading);
 				ImGui::SetWindowFontScale(1.35f);
@@ -436,7 +461,7 @@ void PresetsPageRenderer::RenderDetail()
 				if (!stageTag.empty()) {
 					ImGui::SameLine(0.0f, style.ItemSpacing.x);
 					MenuFonts::FontRoleGuard body(Menu::FontRole::Body);
-					ImGui::TextColored(PresetCompatibility::StageTagColor(stage), "%s", stageTag.c_str());
+					ImGui::TextColored(Feature::GetReleaseStageColor(stage), "%s", stageTag.c_str());
 				}
 				ImGui::SetWindowFontScale(1.0f);
 			}
@@ -458,8 +483,7 @@ void PresetsPageRenderer::RenderDetail()
 						ShellExecuteA(NULL, "open", pack->nexusUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
 					Util::AddTooltip(T("menu.presets.nexus_link_tooltip", "Open this preset's Nexus Mods page."));
 				}
-				PresetCompatibility::DrawWarnings(
-					PresetCompatibility::Evaluate(pack->csVersion, pack->requiredFeatures), false);
+				PresetCompatibility::DrawWarnings(pack->compat, false);
 			}
 
 			ImGui::Spacing();
@@ -476,7 +500,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.StatusPalette.InfoColor);
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.05f, 0.07f, 0.1f, 1.0f));
 			if (Util::ButtonWithFlash(T("menu.presets.apply", "Apply Preset")))
-				ApplyPack(*pack);
+				RequestApplyPack(*pack);
 			ImGui::PopStyleColor(4);
 			ImGui::PopStyleVar();
 			ImGui::EndDisabled();
@@ -611,6 +635,35 @@ void PresetsPageRenderer::RenderDetail()
 	}
 
 	ImGui::EndChild();
+}
+
+void PresetsPageRenderer::Open()
+{
+	// Both editors hide the main menu while open, so the page would be selected but never seen.
+	if (auto* editorWindow = EditorWindow::GetSingleton(); editorWindow && editorWindow->open)
+		editorWindow->open = false;
+	Effects11Editor::GetSingleton().Close(false);
+
+	auto* menu = globals::menu;
+	if (!menu)
+		return;
+	menu->IsEnabled = true;
+	// Addressed by display name, the same translation the left panel draws.
+	menu->SelectFeatureMenu(T("menu.features.presets", "Presets"));
+}
+
+float PresetsPageRenderer::MeasureOpenButton()
+{
+	const ImGuiStyle& style = ImGui::GetStyle();
+	return Icons::CalcGlyphSize(Icons::FA(ICON_FA_LAYER_GROUP)).x + style.ItemInnerSpacing.x +
+	       ImGui::CalcTextSize(T("menu.presets.open_presets", "Presets")).x + style.FramePadding.x * 2.0f;
+}
+
+void PresetsPageRenderer::DrawOpenButton(const char* id, const char* tooltip)
+{
+	if (Icons::LabeledButton(id, Icons::FA(ICON_FA_LAYER_GROUP), T("menu.presets.open_presets", "Presets")))
+		Open();
+	Util::AddTooltip(tooltip);
 }
 
 bool PresetsPageRenderer::CloseLightboxIfOpen()
@@ -750,4 +803,9 @@ void PresetsPageRenderer::Render()
 	ImGui::EndChild();
 
 	RenderScreenshotLightbox();
+
+	if (applyConfirmation.Draw()) {
+		if (const auto* pack = catalog.FindPack(pendingApplyPackId))
+			ApplyPack(*pack);
+	}
 }

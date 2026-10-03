@@ -1,5 +1,8 @@
 #pragma once
 
+#include <optional>
+#include <string>
+
 #include "RE/B/BSCoreTypes.h"  // RE::FormID
 #include "SceneSettingsManager.h"
 
@@ -35,6 +38,29 @@ namespace SceneSettingsUI
 
 	/** @brief Opens the CS Editor on the page authoring a scene context, with a feature selected. */
 	void OpenSceneContext(const SceneSettingsManager::SceneContextId& context, const std::string& featureShortName);
+
+	/**
+	 * @brief Whether the page authoring a layer lists a feature, so opening it can select that feature.
+	 * Weather pages list the transitionable set; the other layers list every scene feature.
+	 */
+	bool LayerListsFeature(SceneSettingsManager::SceneContextType layer, const std::string& featureShortName);
+
+	/**
+	 * @brief The context of a layer that applies where the player is now: the live period, the active
+	 * weather, the interior layer, or the narrowest place in the live chain on the user's Locations list.
+	 * @return Nothing when the layer cannot hold the feature or nothing matches here.
+	 */
+	std::optional<SceneSettingsManager::SceneContextId> ResolveCurrentLayer(
+		SceneSettingsManager::SceneContextType layer, const std::string& featureShortName);
+
+	/** @brief ResolveCurrentLayer for any feature: nothing only when no weather is active or no listed place matches. */
+	std::optional<SceneSettingsManager::SceneContextId> ResolveCurrentContext(SceneSettingsManager::SceneContextType layer);
+
+	/** @brief Opens the CS Editor on its Locations page, to add a place to the list. */
+	void OpenLocationsPage();
+
+	/** @brief Opens the CS Editor on its Scene Manager page, keeping the selected feature. */
+	void OpenSceneManagerPage();
 
 	/**
 	 * @brief Ensures an override for the player's current place and opens its editor on a feature.

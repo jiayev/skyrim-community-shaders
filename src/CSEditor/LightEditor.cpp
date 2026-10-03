@@ -5,13 +5,15 @@
 #include "../Menu.h"
 #include "../Utils/FileSystem.h"
 #include "../Utils/UI.h"
+#include "Browser/BrowserWidgets.h"
 #include "EditorWindow.h"
-#include "imgui_internal.h"
+#include "IconsFontAwesome5.h"
 #include "RE/B/BSLight.h"
 #include "RE/B/BSShadowLight.h"
 #include "RE/E/ExtraEmittanceSource.h"
 #include "RE/T/TESRegion.h"
 #include "WeatherUtils.h"
+#include "imgui_internal.h"
 
 #define I18N_KEY_PREFIX "feature.light_editor."
 
@@ -465,38 +467,119 @@ std::string LightEditor::LighEdidForFormId(RE::FormID formId)
 	return edid ? *edid : std::string{};
 }
 
+namespace
+{
+	/// Below this content width (1080p baseline) the inspector moves under the light table.
+	constexpr float kLightInspectorBesideMinWidth = 640.0f;
+	constexpr float kLightInspectorWidth = 380.0f;
+	/// Share of the page height the table keeps when the inspector sits under it.
+	constexpr float kLightTableHeightRatio = 0.45f;
+	constexpr float kLightSearchWidth = 220.0f;
+	constexpr float kInspectorBgAlpha = 0.5f;
+	constexpr int kFlagGridColumns = 3;
+
+	enum LightColumn : ImGuiID
+	{
+		LightColName,
+		LightColFormId,
+		LightColDistance,
+		LightColShadow,
+		LightColPlaced
+	};
+
+	/// Collapsible inspector group, open until the user folds it.
+	bool Section(const char* label)
+	{
+		return ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen);
+	}
+
+	using BrowserUI::SameLineIfFits;
+
+	float CheckboxWidth(const char* label)
+	{
+		return ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x + ImGui::CalcTextSize(label, nullptr, true).x;
+	}
+
+	float LabeledButtonWidth(Icons::GlyphRef glyph, const char* label)
+	{
+		const auto& style = ImGui::GetStyle();
+		return Icons::CalcGlyphSize(glyph).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+	}
+}
+
 void LightEditor::DrawSettings()
 {
-	ImGui::Text("%s", T(TKEY("header"), "Light Editor"));
-	ImGui::Separator();
+	const std::string subtitle = I18n::GetSingleton()->Format(TKEY("light_counts"),
+		{ { "total", std::to_string(totalLightCount) }, { "shadow", std::to_string(activeShadowLightCount) } },
+		"{total} lights \xC2\xB7 {shadow} casting shadows");
+	BrowserUI::PageHeader(Icons::FA(ICON_FA_LIGHTBULB), T(TKEY("header"), "Light Editor"), subtitle.c_str());
 
 	const bool isAttaching = (attachPhase != AttachPhase::Idle);
 	if (isAttaching) {
 		ImGui::TextColored(Util::Colors::GetInfo(), "%s", T(TKEY("attaching_light"), "Attaching light, please wait..."));
-		ImGui::Separator();
 		ImGui::BeginDisabled();
 	}
 
-	ImGui::Checkbox(T(TKEY("disable_regular_falloff_lights"), "Disable Regular Falloff Lights"), &disableRegularLights);
-	ImGui::Checkbox(T(TKEY("disable_inverse_square_falloff_lights"), "Disable Inverse Square Falloff Lights"), &disableInvSqLights);
+	DrawToolbar();
+	ImGui::Spacing();
 
-	if (ImGui::Button(T(TKEY("toggle_all_lp_lights"), "Toggle All LP Lights"))) {
+	const auto& style = ImGui::GetStyle();
+	const float scale = Util::GetUIScale();
+	const ImVec2 avail = ImGui::GetContentRegionAvail();
+	if (avail.x < kLightInspectorBesideMinWidth * scale) {
+		DrawLightTable(ImVec2(avail.x, std::floor(avail.y * kLightTableHeightRatio)));
+		DrawInspector(ImVec2(avail.x, 0.0f));
+	} else {
+		// The split is a two-column table so the divider is a native, remembered resize handle.
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x, 0.0f));
+		const bool split = ImGui::BeginTable("##LightSplit", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV, avail);
+		ImGui::PopStyleVar();
+		if (split) {
+			ImGui::TableSetupColumn("##Lights", ImGuiTableColumnFlags_WidthStretch);
+			ImGui::TableSetupColumn("##Inspector", ImGuiTableColumnFlags_WidthFixed, kLightInspectorWidth * scale);
+			ImGui::TableNextRow();
+			if (EditorWindow::GetSingleton()->resetLayout)
+				ImGui::TableSetColumnWidth(1, kLightInspectorWidth * scale);
+			ImGui::TableSetColumnIndex(0);
+			DrawLightTable(ImVec2(0.0f, ImGui::GetContentRegionAvail().y));
+			ImGui::TableSetColumnIndex(1);
+			DrawInspector(ImVec2(0.0f, 0.0f));
+			ImGui::EndTable();
+		}
+	}
+
+	if (isAttaching)
+		ImGui::EndDisabled();
+}
+
+void LightEditor::DrawToolbar()
+{
+	const char* disableRegularLabel = T(TKEY("disable_regular_falloff_lights"), "Disable Regular Falloff Lights");
+	const char* disableInvSqLabel = T(TKEY("disable_inverse_square_falloff_lights"), "Disable Inverse Square Falloff Lights");
+	ImGui::Checkbox(disableRegularLabel, &disableRegularLights);
+	SameLineIfFits(CheckboxWidth(disableInvSqLabel));
+	ImGui::Checkbox(disableInvSqLabel, &disableInvSqLights);
+
+	const char* toggleAllLabel = T(TKEY("toggle_all_lp_lights"), "Toggle All LP Lights");
+	if (Icons::LabeledButton("##ToggleAllLP", Icons::FA(ICON_FA_LIGHTBULB), toggleAllLabel)) {
 		ScheduleConsoleCommand("tlp 0");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("toggle_all_lp_lights_tooltip"), "Toggle all Light Placer lights on/off (tlp 0)."));
 	}
 
-	ImGui::SameLine();
-	if (ImGui::Button(T(TKEY("toggle_lp_markers"), "Toggle LP Markers"))) {
+	const char* markersLabel = T(TKEY("toggle_lp_markers"), "Toggle LP Markers");
+	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_EYE), markersLabel));
+	if (Icons::LabeledButton("##ToggleMarkers", Icons::FA(ICON_FA_EYE), markersLabel)) {
 		ScheduleConsoleCommand("tlp 1");
 	}
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T(TKEY("toggle_lp_markers_tooltip"), "Toggle Light Placer debug markers (tlp 1)."));
 	}
 
-	ImGui::SameLine();
-	if (ImGui::Button(T(TKEY("reload_lp"), "Reload LP"))) {
+	const char* reloadLabel = T(TKEY("reload_lp"), "Reload LP");
+	SameLineIfFits(LabeledButtonWidth(Icons::FA(ICON_FA_SYNC), reloadLabel));
+	if (Icons::LabeledButton("##ReloadLP", Icons::FA(ICON_FA_SYNC), reloadLabel)) {
 		QueueReselectCurrentLP();  // capture before RestoreOriginal clears lpInfo/activeRefr
 		RestoreOriginal();
 		previous = {};
@@ -508,7 +591,7 @@ void LightEditor::DrawSettings()
 		ImGui::Text("%s", T(TKEY("reload_lp_tooltip"), "Reload all Light Placer JSON configs in-game (reloadlp)."));
 	}
 
-	ImGui::SameLine();
+	SameLineIfFits(ImGui::CalcTextSize(T(TKEY("select_mesh"), "Select Mesh")).x + ImGui::GetStyle().FramePadding.x * 2.0f);
 	DrawAddLightButton();
 
 	if (picker.IsPicking()) {
@@ -517,84 +600,163 @@ void LightEditor::DrawSettings()
 
 	DrawAddLightPopup();
 
-	ImGui::Separator();
-
-	ImGui::Text(T(TKEY("total_lights"), "Total Lights: %u"), totalLightCount);
-	ImGui::Text(T(TKEY("active_shadow_lights"), "Active Shadow Lights: %u"), activeShadowLightCount);
-	ImGui::Separator();
-
-	{
-		const auto& style = ImGui::GetStyle();
-		const float arrowWidth = ImGui::GetFrameHeight();
-
+	// List filters: light kind, text, shadow casters only
 		const char* filterLabels[] = {
 			T(TKEY("filter_ref_lights"), "Ref Lights"),
 			T(TKEY("filter_attached_lights"), "Attached Lights"),
 			T(TKEY("filter_other_lights"), "Other Lights")
 		};
-		const char* sortLabels[] = {
-			T(TKEY("sort_none"), "None"),
-			T(TKEY("sort_distance"), "Distance"),
-			T(TKEY("sort_form_id"), "FormID"),
-			T(TKEY("sort_editor_id"), "EditorID")
-		};
+	ImGui::Spacing();
+	int selectedFilter = static_cast<int>(filterOption);
+	if (Util::SegmentedControl("##LightType", filterLabels, static_cast<int>(FilterOption::Count), selectedFilter))
+		filterOption = static_cast<FilterOption>(selectedFilter);
 
-		const float filterComboWidth = ImGui::CalcTextSize(filterLabels[static_cast<int>(FilterOption::AttachedLights)]).x + style.FramePadding.x * 2 + arrowWidth;
-		const float sortComboWidth = ImGui::CalcTextSize(sortLabels[static_cast<int>(SortOption::EditorID)]).x + style.FramePadding.x * 2 + arrowWidth;
+	const float scale = Util::GetUIScale();
+	SameLineIfFits(kLightSearchWidth * scale);
+	BrowserUI::SearchField("##LightSearch", lightSearch, sizeof(lightSearch), T(TKEY("filter_lights"), "Filter lights..."),
+		kLightSearchWidth * scale, false);
 
-		ImGui::SetNextItemWidth(filterComboWidth);
-		int selectedFilter = static_cast<int>(filterOption);
-		if (ImGui::Combo("##Type", &selectedFilter, filterLabels, static_cast<int>(FilterOption::Count))) {
-			filterOption = static_cast<FilterOption>(selectedFilter);
-		}
-
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(sortComboWidth);
-		int selectedSort = static_cast<int>(sortOption);
-		if (ImGui::Combo("##Sorting", &selectedSort, sortLabels, static_cast<int>(SortOption::Count))) {
-			sortOption = static_cast<SortOption>(selectedSort);
-		}
-
-		ImGui::SameLine();
-		ImGui::Checkbox(T(TKEY("shadows_only"), "Shadows Only"), &shadowsOnly);
+	const char* shadowsOnlyLabel = T(TKEY("shadows_only"), "Shadows Only");
+	SameLineIfFits(CheckboxWidth(shadowsOnlyLabel));
+	ImGui::Checkbox(shadowsOnlyLabel, &shadowsOnly);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("shadows_only_tooltip"), "Only show lights with HemiShadow or OmniShadow flags."));
 		}
 	}
 
-	static constexpr const char* kLightsComboId = "LightsCombo";
+void LightEditor::DrawLightTable(const ImVec2& size)
+{
+	const float rowHeight = BrowserUI::RowHeight();
+	const bool otherLights = filterOption == FilterOption::OtherLights;
+	constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+	                                   ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_Sortable | ImGuiTableFlags_SortTristate |
+	                                   ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
+
+	auto idText = [](const LightInfo& light) {
+		if (light.isRef)
+			return fmt::format("{:08X}", light.id);
+		if (light.isAttached)
+			return fmt::format("{:08X}|{}", light.id, light.index);
+		return fmt::format("{:p}", light.ptr);
+	};
+
 	LightInfo thisFrameHovered = {};
-	bool anyItemHovered = false;  // mouse over any combo entry this frame (flashable or not)
-	const bool lightsComboOpen = ImGui::BeginCombo(T(TKEY("lights"), "Lights"), selected.isSelected ? GetLightName(selected).c_str() : T(TKEY("select_a_light"), "Select a light"));
-	if (lightsComboOpen) {
-		auto searchText = Util::DrawComboSearchInput(kLightsComboId);
-		for (auto& light : lights) {
-			const auto displayName = GetLightName(light);
-			if (!searchText.empty() && !Util::StringMatchesSearch(displayName, searchText))
-				continue;
-			const bool isSelected = light == selected;
-			if (ImGui::Selectable(displayName.c_str(), isSelected)) {
-				selected = light;
-				Util::ClearComboSearch(kLightsComboId);
+	bool anyRowHovered = false;  // mouse over any row this frame (flashable or not)
+	bool tableHovered = false;
+	{
+		BrowserUI::RowShadeScope shade;
+		if (ImGui::BeginTable("##LightTable", 5, kFlags, size)) {
+			// Other lights have no form, so they cannot sort by name or form ID (see SortLights).
+			const ImGuiTableColumnFlags formSort = otherLights ? ImGuiTableColumnFlags_NoSort : ImGuiTableColumnFlags_None;
+			const float iconColumn = ImGui::GetFontSize() * 2.0f;
+			ImGui::TableSetupScrollFreeze(0, 1);
+			ImGui::TableSetupColumn(T(TKEY("column_light"), "Light"), ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoHide | formSort, 0.0f, LightColName);
+			ImGui::TableSetupColumn(T(TKEY("column_form_id"), "Form ID"), ImGuiTableColumnFlags_WidthFixed | formSort,
+				ImGui::CalcTextSize("00000000|00").x, LightColFormId);
+			ImGui::TableSetupColumn(T(TKEY("column_distance"), "Distance"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort,
+				ImGui::CalcTextSize("000000").x + ImGui::GetFontSize(), LightColDistance);
+			ImGui::TableSetupColumn(T(TKEY("column_shadow"), "Shadow"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, iconColumn, LightColShadow);
+			ImGui::TableSetupColumn(T(TKEY("column_lp"), "LP"), ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, iconColumn, LightColPlaced);
+			ImGui::TableHeadersRow();
+
+			if (ImGuiTableSortSpecs* specs = ImGui::TableGetSortSpecs(); specs && specs->SpecsDirty) {
+				sortOption = SortOption::None;
+				sortDescending = false;
+				if (specs->SpecsCount > 0) {
+					switch (specs->Specs[0].ColumnUserID) {
+					case LightColName:
+						sortOption = SortOption::EditorID;
+						break;
+					case LightColFormId:
+						sortOption = SortOption::FormID;
+						break;
+					case LightColDistance:
+						sortOption = SortOption::Distance;
+						break;
+					default:
+						break;
+					}
+					sortDescending = specs->Specs[0].SortDirection == ImGuiSortDirection_Descending;
+				}
+				specs->SpecsDirty = false;
+				SortLights();
 			}
+
+			const std::string search = lightSearch;
+			std::vector<size_t> visible;
+			visible.reserve(lights.size());
+			for (size_t i = 0; i < lights.size(); ++i)
+				if (search.empty() || Util::StringMatchesSearch(GetLightName(lights[i]), search))
+					visible.push_back(i);
+
+			const auto* player = RE::PlayerCharacter::GetSingleton();
+			const RE::NiPoint3 playerPos = player ? player->GetPosition() : RE::NiPoint3{};
+			ImGuiListClipper clipper;
+			clipper.Begin(static_cast<int>(visible.size()), rowHeight);
+			while (clipper.Step()) {
+				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+					const LightInfo& light = lights[visible[row]];
+					ImGui::PushID(static_cast<int>(visible[row]));
+					ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+
+					ImGui::TableSetColumnIndex(0);
+					const ImVec2 cellStart = ImGui::GetCursorScreenPos();
+			const bool isSelected = light == selected;
+					if (Util::TableRowSelectable("##light", isSelected,
+							ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap | ImGuiSelectableFlags_SelectOnNav))
+				selected = light;
 			// Flash only a flashable target: a ref/attached light (id != 0) other than the selected one
 			// (whose fade ApplyOverrides drives). Selected/Other hover leaves thisFrameHovered empty, clearing it.
 			if (ImGui::IsItemHovered()) {
-				anyItemHovered = true;
+						anyRowHovered = true;
 				if (!isSelected && light.id != 0)
 					thisFrameHovered = light;
 			}
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
+					ImGui::SetCursorScreenPos(cellStart);
+					ImGui::AlignTextToFramePadding();
+					BrowserUI::EllipsizedText(light.name.empty() ? T(TKEY("unnamed_light"), "(unnamed)") : light.name.c_str(), 0.0f,
+						ImGui::GetStyleColorVec4(ImGuiCol_Text));
+
+					if (ImGui::TableSetColumnIndex(1)) {
+						ImGui::AlignTextToFramePadding();
+						BrowserUI::MetaText(idText(light).c_str());
 		}
-		ImGui::EndCombo();
-	} else {
-		Util::ClearComboSearch(kLightsComboId);
+					if (ImGui::TableSetColumnIndex(2) && light.hasPosition) {
+						ImGui::AlignTextToFramePadding();
+						const std::string distance = fmt::format("{:.0f}", std::sqrt(light.position.GetSquaredDistance(playerPos)));
+						ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0f, ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(distance.c_str()).x));
+						BrowserUI::MetaText(distance.c_str());
+					}
+					if (ImGui::TableSetColumnIndex(3) && light.isShadow) {
+						ImGui::AlignTextToFramePadding();
+						Util::DrawInlineIndicatorDot(ImGui::GetColorU32(Util::Colors::GetWarning()), true);
+						Util::AddTooltip(T(TKEY("shadow_light_tooltip"), "Casts shadows"));
+					}
+					if (ImGui::TableSetColumnIndex(4) && light.isLP) {
+						const ImVec4 info = Util::Colors::GetInfo();
+						const float width = Util::DrawBadgeAt(ImGui::GetCursorScreenPos(), ImGui::GetFrameHeight(), T(TKEY("column_lp"), "LP"),
+							ImVec4(info.x, info.y, info.z, 0.22f), ImGui::GetStyleColorVec4(ImGuiCol_Text));
+						ImGui::Dummy(ImVec2(width, ImGui::GetFrameHeight()));
+					}
+					ImGui::PopID();
+				}
 	}
 
-	// Re-evaluate the hover flash whenever the mouse is over an entry or the combo closed. Moving onto
+			if (visible.empty()) {
+				ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+				ImGui::TableSetColumnIndex(0);
+				ImGui::AlignTextToFramePadding();
+				Util::Text::Disabled("%s", T(TKEY("no_lights"), "No lights match."));
+			}
+
+			ImGui::EndTable();
+			tableHovered = ImGui::IsItemHovered();
+		}
+	}
+
+	// Re-evaluate the hover flash whenever the mouse is over a row or has left the table. Moving onto
 	// a non-flashable target (empty thisFrameHovered) stops the blink; dead-space hover keeps it going.
-	if (anyItemHovered || !lightsComboOpen) {
+	if (anyRowHovered || !tableHovered) {
 		if (!(thisFrameHovered == comboHoveredLight)) {
 			if (hoverFlashNiLight) {
 				if (auto* rd = ISLCommon::RuntimeLightDataExt::Get(hoverFlashNiLight.get()))
@@ -613,30 +775,52 @@ void LightEditor::DrawSettings()
 			hoverFlashLastToggle = now;
 		}
 	}
+}
 
-	ImGui::Separator();
-
+void LightEditor::DrawInspector(const ImVec2& size)
+{
+	const auto& style = ImGui::GetStyle();
+	ImVec4 background = style.Colors[ImGuiCol_FrameBg];
+	background.w *= kInspectorBgAlpha;
+	ImGui::PushStyleColor(ImGuiCol_ChildBg, background);
+	ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, style.FrameRounding);
+	const bool visible = ImGui::BeginChild("##LightInspector", size, ImGuiChildFlags_AlwaysUseWindowPadding);
+	ImGui::PopStyleVar();
+	ImGui::PopStyleColor();
+	if (!visible) {
+		ImGui::EndChild();
+		return;
+	}
 	if (!selected.isSelected) {
-		if (isAttaching)
-			ImGui::EndDisabled();
+		BrowserUI::EmptyState(T(TKEY("select_a_light"), "Select a light"),
+			T(TKEY("select_a_light_hint"), "Pick one in the list, or use Select Mesh to attach a new bulb."));
+		ImGui::EndChild();
 		return;
 	}
 
-	if (selected.isRef || selected.isAttached) {
-		ImGui::Text(T(TKEY("owner"), "Owner: 0x%08X | %s"), selected.id, displayInfo.ownerEditorId.c_str());
-		ImGui::Text(T(TKEY("owner_last_edited_by"), "Owner last edited by: %s"), displayInfo.ownerLastEditedBy.c_str());
-		ImGui::Text(T(TKEY("base_object"), "Base Object: 0x%08X | %s"), displayInfo.baseObjectFormId, selected.name.c_str());
-		ImGui::Text(T(TKEY("ligh"), "LIGH: 0x%08X | %s"), displayInfo.lighFormId, displayInfo.lighEditorId.c_str());
-		ImGui::Text(T(TKEY("cell"), "Cell: 0x%08X | %s"), displayInfo.cellFormId, displayInfo.cellEditorId.c_str());
-		if (lpInfo.isLPLight)
-			ImGui::Text(T(TKEY("config"), "Config: Data\\LightPlacer\\%s.json"), lpInfo.configPath.c_str());
-	} else {
-		ImGui::Text(T(TKEY("memory_address"), "Memory Address: %p"), selected.ptr);
-		ImGui::Text(T(TKEY("ni_light_name"), "NiLight Name: %s"), selected.name.c_str());
+	// Title: the light, what kind it is, and whether it is placed by Light Placer or casts shadows
+	ImGui::AlignTextToFramePadding();
+	{
+		Icons::FontGuard font(Icons::FA(ICON_FA_LIGHTBULB));
+		ImGui::TextColored(Util::Colors::GetWarning(), "%s", ICON_FA_LIGHTBULB);
+	}
+	ImGui::SameLine();
+	BrowserUI::EllipsizedText(selected.name.empty() ? T(TKEY("unnamed_light"), "(unnamed)") : selected.name.c_str(), 0.0f,
+		ImGui::GetStyleColorVec4(ImGuiCol_Text));
+	const char* kindLabel = selected.isRef ? T(TKEY("badge_ref"), "Ref") :
+	                                         (selected.isAttached ? T(TKEY("badge_attached"), "Attached") : T(TKEY("badge_other"), "Other"));
+	Util::Badge(kindLabel, Util::Colors::GetSecondary());
+	if (lpInfo.isLPLight) {
+		ImGui::SameLine();
+		Util::Badge(T(TKEY("column_lp"), "LP"), Util::Colors::GetInfo());
+	}
+	if (HasShadowFlags(current.tesFlags.underlying())) {
+		ImGui::SameLine();
+		Util::Badge(T(TKEY("column_shadow"), "Shadow"), Util::Colors::GetWarning());
 	}
 
-	ImGui::Separator();
-
+	// Per-light actions
+	ImGui::Spacing();
 	if (ImGui::Button(T(TKEY("reset"), "Reset"))) {
 		current = original;
 		if (lpInfo.isLPLight) {
@@ -669,8 +853,28 @@ void LightEditor::DrawSettings()
 			ImGui::Text("%s", T(TKEY("toggle_light_tooltip"), "Toggle this light on/off."));
 	}
 
-	if (lpInfo.isLPLight) {
 		ImGui::SameLine();
+	ImGui::Checkbox(T(TKEY("log_mode"), "Log Mode"), &extendedLogMode);
+	if (auto _tt = Util::HoverTooltipWrapper()) {
+		ImGui::Text("%s", T(TKEY("log_mode_tooltip"), "Extend slider ranges and use a logarithmic scale."));
+	}
+
+	if (Section(T(TKEY("section_identity"), "Identity"))) {
+		if (selected.isRef || selected.isAttached) {
+			ImGui::Text(T(TKEY("owner"), "Owner: 0x%08X | %s"), selected.id, displayInfo.ownerEditorId.c_str());
+			ImGui::Text(T(TKEY("owner_last_edited_by"), "Owner last edited by: %s"), displayInfo.ownerLastEditedBy.c_str());
+			ImGui::Text(T(TKEY("base_object"), "Base Object: 0x%08X | %s"), displayInfo.baseObjectFormId, selected.name.c_str());
+			ImGui::Text(T(TKEY("ligh"), "LIGH: 0x%08X | %s"), displayInfo.lighFormId, displayInfo.lighEditorId.c_str());
+			ImGui::Text(T(TKEY("cell"), "Cell: 0x%08X | %s"), displayInfo.cellFormId, displayInfo.cellEditorId.c_str());
+			if (lpInfo.isLPLight)
+				ImGui::Text(T(TKEY("config"), "Config: Data\\LightPlacer\\%s.json"), lpInfo.configPath.c_str());
+		} else {
+			ImGui::Text(T(TKEY("memory_address"), "Memory Address: %p"), selected.ptr);
+			ImGui::Text(T(TKEY("ni_light_name"), "NiLight Name: %s"), selected.name.c_str());
+		}
+	}
+
+	if (lpInfo.isLPLight && Section(T(TKEY("section_light_placer"), "Light Placer"))) {
 		{
 			auto _style = Util::StatusButtonStyle(lpMatchFound ? Util::Colors::GetSuccess() : Util::Colors::GetError());
 			if (ImGui::Button(T(TKEY("save_to_light_placer"), "Save to Light Placer"))) {
@@ -696,15 +900,7 @@ void LightEditor::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper()) {
 			ImGui::Text("%s", T(TKEY("delete_entry_tooltip"), "Delete this light entry from the Light Placer JSON.\nIf it is the only light in its entry, the whole models/formIDs entry is removed too."));
 		}
-		DrawDeleteConfirmation();
-	}
-	ImGui::SameLine();
-	ImGui::Checkbox(T(TKEY("log_mode"), "Log Mode"), &extendedLogMode);
-	if (auto _tt = Util::HoverTooltipWrapper()) {
-		ImGui::Text("%s", T(TKEY("log_mode_tooltip"), "Extend slider ranges and use a logarithmic scale."));
-	}
 
-	if (lpInfo.isLPLight) {
 		auto doFilterButton = [&](bool isWhiteList) {
 			bool& inList = isWhiteList ? lpInWhitelist : lpInBlacklist;
 			const char* addLabel = isWhiteList ? T(TKEY("add_to_whitelist"), "Add to Whitelist") : T(TKEY("add_to_blacklist"), "Add to Blacklist");
@@ -737,7 +933,6 @@ void LightEditor::DrawSettings()
 		ImGui::SameLine();
 		doFilterButton(false);
 
-		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("save_as_separate_entry"), "Save as Separate Entry"))) {
 			const bool ok = SaveAsSeparateEntry(saveColorToLP);
 			if (ok) {
@@ -753,9 +948,11 @@ void LightEditor::DrawSettings()
 				FormatOwnerFormEntry(activeRefr).c_str());
 		}
 	}
+	// Outside the section so the confirmation survives the section being folded while it is open.
+	if (lpInfo.isLPLight)
+		DrawDeleteConfirmation();
 
-	ImGui::Separator();
-
+	if (Section(T(TKEY("section_appearance"), "Appearance"))) {
 	if (selected.isAttached) {
 		EnsureLighFormListBuilt();
 		const char* kOriginalLabel = T(TKEY("original"), "(Original)");
@@ -846,24 +1043,28 @@ void LightEditor::DrawSettings()
 		if (drawSlider(T(TKEY("shadow_depth_bias"), "Shadow Depth Bias"), shadowDepthBias, 0.0f, 50.0f, 0.01f, 50.f, "%.2f"))
 			ApplyShadowDepthBias();
 	}
+	}
 
-	ImGui::Separator();
-
-	if (!selected.isOther && current.data.lighFormId != 0 && selected.hasPosition) {
+	const bool hasTransform = !selected.isOther && current.data.lighFormId != 0 && selected.hasPosition;
+	if (hasTransform && Section(T(TKEY("section_position"), "Position"))) {
 		ImGui::Text(T(TKEY("position_format"), "X: %.2f, Y: %.2f, Z: %.2f"), displayInfo.pos.x, displayInfo.pos.y, displayInfo.pos.z);
 		ImGui::SliderFloat3(T(TKEY("position"), "Position"), &current.pos.x, -1000.f, 1000.f, "%.0f");
+	}
 
+	if (hasTransform && Section(T(TKEY("section_flags"), "Flags"))) {
 		auto* flags = reinterpret_cast<uint32_t*>(&current.tesFlags);
 		auto* runtimeFlags = reinterpret_cast<uint32_t*>(&current.data.flags);
 
 		if (lpInfo.isLPLight) {
-			ImGui::Text("%s", T(TKEY("lp_flags"), "LP Flags"));
+			BrowserUI::SectionLabel(T(TKEY("lp_flags"), "LP Flags"));
 			static constexpr const char* kLPFlagNames[] = {
 				"NoExternalEmittance", "PortalStrict", "IgnoreScale",
 				"InverseSquare", "Flicker", "Linear", "Shadow",
 				"RandomAnimStart", "SyncAddonNodes", "UpdateOnCellTransition", "UpdateOnWaiting"
 			};
+			if (ImGui::BeginTable("##LPFlags", kFlagGridColumns, ImGuiTableFlags_SizingStretchSame)) {
 			for (const char* flagName : kLPFlagNames) {
+					ImGui::TableNextColumn();
 				const bool isInvSqEntry = (std::string_view(flagName) == "InverseSquare");
 				const bool disabled = isInvSqEntry && selected.isSpotlight;
 				if (disabled)
@@ -883,38 +1084,52 @@ void LightEditor::DrawSettings()
 				if (disabled)
 					ImGui::EndDisabled();
 			}
+				ImGui::EndTable();
+			}
 		}
 
-		ImGui::Text("%s", T(TKEY("light_flags"), "Light Flags"));
+		BrowserUI::SectionLabel(T(TKEY("light_flags"), "Light Flags"));
 		ImGui::BeginDisabled(lpInfo.isLPLight);
-
+		if (ImGui::BeginTable("##LightFlags", kFlagGridColumns, ImGuiTableFlags_SizingStretchSame)) {
 		if (!lpInfo.isLPLight) {
 			// Inverse Square is disabled for spotlights since they have their own falloff model.
+				ImGui::TableNextColumn();
 			ImGui::BeginDisabled(selected.isSpotlight);
 			ImGui::CheckboxFlags(T(TKEY("inverse_square"), "Inverse Square"), runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::InverseSquare));
 			ImGui::EndDisabled();
+				ImGui::TableNextColumn();
 			ImGui::CheckboxFlags(T(TKEY("linear"), "Linear"), runtimeFlags, static_cast<uint32_t>(LightLimitFix::LightFlags::Linear));
 		}
 
 		// Dynamic and Negative are always shown; Flicker/OmniShadow/PortalStrict are hidden for LP lights.
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_dynamic"), "Dynamic"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kDynamic));
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_negative"), "Negative"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kNegative));
-		if (!lpInfo.isLPLight)
+			if (!lpInfo.isLPLight) {
+				ImGui::TableNextColumn();
 			ImGui::CheckboxFlags(T(TKEY("tes_flag_flicker"), "Flicker"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlicker));
+			}
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_flicker_slow"), "Flicker Slow"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kFlickerSlow));
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_pulse"), "Pulse"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulse));
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_pulse_slow"), "Pulse Slow"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPulseSlow));
+			ImGui::TableNextColumn();
 		ImGui::CheckboxFlags(T(TKEY("tes_flag_hemi_shadow"), "Hemi Shadow"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kHemiShadow));
-		if (!lpInfo.isLPLight)
+			if (!lpInfo.isLPLight) {
+				ImGui::TableNextColumn();
 			ImGui::CheckboxFlags(T(TKEY("tes_flag_omni_shadow"), "Omni Shadow"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kOmniShadow));
-		if (!lpInfo.isLPLight)
+				ImGui::TableNextColumn();
 			ImGui::CheckboxFlags(T(TKEY("tes_flag_portal_strict"), "Portal Strict"), flags, static_cast<uint32_t>(RE::TES_LIGHT_FLAGS::kPortalStrict));
-
+			}
+			ImGui::EndTable();
+		}
 		ImGui::EndDisabled();
 	}
 
-	if (isAttaching)
-		ImGui::EndDisabled();
+	ImGui::EndChild();
 }
 
 static constexpr std::string_view kPopupPrefsPath =
@@ -1764,6 +1979,9 @@ void LightEditor::GatherLights()
 
 		info.isSpotlight = ligh && ligh->data.flags.any(RE::TES_LIGHT_FLAGS::kSpotlight, RE::TES_LIGHT_FLAGS::kSpotShadow);
 		const bool isShadow = ligh && HasShadowFlags(ligh->data.flags.underlying());
+		info.isShadow = isShadow;
+		const char* niName = niLight->name.c_str();
+		info.isLP = niName && std::string_view(niName).starts_with("LP_Light[");
 
 		totalLightCount++;
 		if (isShadow)
@@ -2642,26 +2860,41 @@ void LightEditor::SortLights()
 	if (filterOption == FilterOption::OtherLights && (sortOption == SortOption::FormID || sortOption == SortOption::EditorID))
 		sortOption = SortOption::None;
 
+	// The identity breaks ties: the list is re-sorted every frame, and an unstable order would make
+	// equal rows (several bulbs of one LIGH) swap places in the table.
+	const auto identityLess = [](const LightInfo& a, const LightInfo& b) {
+		return std::tie(a.id, a.index, a.ptr) < std::tie(b.id, b.index, b.ptr);
+	};
+	const auto sortBy = [&](auto&& compare) {
+		std::ranges::sort(lights, [&](const LightInfo& a, const LightInfo& b) {
+			const int order = compare(a, b);
+			if (order != 0)
+				return sortDescending ? order > 0 : order < 0;
+			return identityLess(a, b);
+		});
+	};
+
 	switch (sortOption) {
 	case SortOption::Distance:
 		{
 			const auto playerPos = RE::PlayerCharacter::GetSingleton()->GetPosition();
-			std::ranges::sort(lights, [&](const LightInfo& a, const LightInfo& b) {
+			sortBy([&](const LightInfo& a, const LightInfo& b) {
+				// Lights without a position always go last.
 				if (a.hasPosition != b.hasPosition)
-					return a.hasPosition;
-				return a.position.GetSquaredDistance(playerPos) < b.position.GetSquaredDistance(playerPos);
+					return a.hasPosition != sortDescending ? -1 : 1;
+				const float da = a.position.GetSquaredDistance(playerPos);
+				const float db = b.position.GetSquaredDistance(playerPos);
+				return da < db ? -1 : (da > db ? 1 : 0);
 			});
 			break;
 		}
 	case SortOption::FormID:
-		std::ranges::sort(lights, [](const LightInfo& a, const LightInfo& b) {
-			return std::tie(a.id, a.index) < std::tie(b.id, b.index);
+		sortBy([](const LightInfo& a, const LightInfo& b) {
+			return a.id < b.id ? -1 : (a.id > b.id ? 1 : (a.index < b.index ? -1 : (a.index > b.index ? 1 : 0)));
 		});
 		break;
 	case SortOption::EditorID:
-		std::ranges::sort(lights, [](const LightInfo& a, const LightInfo& b) {
-			return a.name < b.name;
-		});
+		sortBy([](const LightInfo& a, const LightInfo& b) { return a.name.compare(b.name); });
 		break;
 	case SortOption::None:
 	default:

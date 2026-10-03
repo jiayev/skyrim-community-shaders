@@ -25,14 +25,14 @@ struct HistogramAutoExposure : public PostProcessFeature
 		float ExposureCompensation = 0.f;
 
 		// auto exposure
-		float2 AdaptationRange = { -3.f, 5.f };  // EV100 (0 EV100 = 0.125 linear luminance)
+		float2 AdaptationRange = { -2.f, 6.f };  // EV100 (0 EV100 = 0.125 linear luminance)
 		float2 AdaptArea = { .6f, .6f };
 
 		float AdaptSpeed = 1.5f;
 
 		// purkinje
-		float PurkinjeStartEV = -1.5f;  // EV100 (0 EV100 = 0.125 linear luminance)
-		float PurkinjeMaxEV = -4.f;     // EV100 (0 EV100 = 0.125 linear luminance)
+		float PurkinjeStartEV = 1.5f;  // EV100 (0 EV100 = 0.125 linear luminance)
+		float PurkinjeMaxEV = -1.f;    // EV100 (0 EV100 = 0.125 linear luminance)
 		float PurkinjeStrength = 0.f;
 	} settings;
 

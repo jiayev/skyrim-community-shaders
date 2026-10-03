@@ -169,7 +169,8 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 		.DALCMode = settings.DALCMode,
 		.SkylightingAffectsEnv = settings.SkylightingAffectsEnv,
 		.EnableReflectionFallback = settings.EnableReflectionFallback,
-		.ReflectionFallbackDistance = settings.ReflectionFallbackDistance
+		.ReflectionFallbackDistance = settings.ReflectionFallbackDistance,
+		.ENBSkyFalloff = globals::features::effects11.OwnsFeature(E11Handoff::Feature::IBL)
 	};
 
 	if (!sceneDisabled && IsManagedByENB()) {
@@ -189,10 +190,7 @@ IBL::PerFrame IBL::GetCommonBufferData() const
 
 bool IBL::IsManagedByENB() const
 {
-	auto& enb = globals::features::effects11;
-	if (!enb.loaded || !enb.enableEffect)
-		return false;
-	return SettingManager::GetSingleton().GetValue<bool>("EnableImageBasedLighting", "EFFECT");
+	return globals::features::effects11.OwnsFeature(E11Handoff::Feature::IBL) && SettingManager::GetSingleton().GetValue<bool>("EnableImageBasedLighting", "EFFECT");
 }
 
 bool IBL::IsDisabledForCurrentScene() const

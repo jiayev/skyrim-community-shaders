@@ -169,9 +169,14 @@ Within a layer, `EntrySource::Overwrite` (mod-shipped files) is overlaid first a
 overrides it, so a shipped overwrite acts as that layer's default and the user's own entry for the same
 address always wins. `SettingsUser.json` remains the baseline beneath all of this.
 
--   **Time of day** — six periods (`Dawn`, `Sunrise`, `Day`, `Sunset`, `Dusk`, `Night`) with hour ranges in
-    `kPeriodHours`; `Night` wraps midnight as `21..28`. Floats cross-fade across a `kTransitionHours` (0.5h)
-    zone at each boundary. Non-float settings snap.
+-   **Time of day** — six periods (`Dawn`, `Sunrise`, `Day`, `Sunset`, `Dusk`, `Night`) whose starts come
+    from the active climate's sky colour windows (`GetPeriodStartHours`): Dawn when the sky leaves night
+    colours, Sunrise at the sunrise colour peak, Day when fully day, Sunset when the sky leaves day, Dusk at
+    the sunset colour peak, Night when fully night again. Without a valid climate, `kFallbackPeriodStartHours` (vanilla
+    `SkyrimClimate`) applies. Floats cross-fade over `timeOfDayTransitionHours`: blends out of night or
+    day start at the boundary, blends into day or night finish at it, and blends at the colour peaks are
+    centred, so every blend stays inside the sky's own transition. The blend is capped so each period fits
+    one. Non-float settings snap.
 -   **Weather**: floats blend across `Sky::currentWeatherPct` between the outgoing and incoming weather.
 -   **Location**: see [Location targets](#location-targets); the chain resolves broadest to narrowest, so a
     cell entry wins over the location that contains it, which wins over the region that contains them both.

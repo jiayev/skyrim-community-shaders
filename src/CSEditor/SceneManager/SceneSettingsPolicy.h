@@ -70,7 +70,10 @@ namespace SceneSettingsPolicy
 		{ "PhysicalSky", "cloudLayer", "cirrus", "patternWarp" },
 		{ "PhysicalSky", "cloudLayer", "cirrus", "patternDetail" },
 		{ "PostProcessing", "Border" },
+		// Auto-enabled each frame from its inputs, so a scene value would never be retained.
+		{ "PostProcessing", "Composite" },
 		{ "PostProcessing", "Depth of Field", "HighlightShape" },
+		{ "PostProcessing", "Color Grading and Tone Mapping", "enabled" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "enableTonemap" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "useOpenDrt" },
 		{ "PostProcessing", "Color Grading and Tone Mapping", "currentTonemapper" },

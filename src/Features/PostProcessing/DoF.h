@@ -20,10 +20,10 @@ struct DoF : public PostProcessFeature
 		float2 FocusCoord = float2(0.5f, 0.5f);
 		float ManualFocusPlane = 0.4f;
 		float FocalLength = 50.0f;
-		float FNumber = 2.8f;
+		float FNumber = 5.6f;
 		float SensorWidthMM = 36.0f;
 		float FarPlaneMaxBlur = 1.0f;
-		float NearPlaneMaxBlur = 1.0f;
+		float NearPlaneMaxBlur = 0.2f;
 		bool UseAdaptiveGather = true;
 		int GatherQuality = 0;
 		int BokehMode = 0;
@@ -42,7 +42,7 @@ struct DoF : public PostProcessFeature
 		float MaxFarCoCRadius = 0.025f;
 		bool targetFocus = false;
 		float targetFocusFocalLength = 50.0f;
-		bool consoleSelection = false;
+		bool consoleSelection = true;
 	} settings;
 
 	struct alignas(16) DoFCB

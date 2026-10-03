@@ -226,6 +226,10 @@ namespace SharedData
 		uint SkylightingAffectsEnv;
 		uint EnableReflectionFallback;
 		float ReflectionFallbackDistance;
+		uint ENBSkyFalloff;
+		float pad0;
+		float pad1;
+		float pad2;
 	};
 
 	struct ExtendedTranslucencySettings

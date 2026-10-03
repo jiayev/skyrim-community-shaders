@@ -6,6 +6,7 @@
 #include <format>
 #include <imgui.h>
 #include <ranges>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "CSEditor/SceneManager/FeatureOverwritesPanel.h"
@@ -18,7 +19,6 @@
 #include "Fonts.h"
 #include "Globals.h"
 #include "I18n/I18n.h"
-#include "IconsLucide.h"
 #include "Menu.h"
 #include "Menu/HomePageRenderer.h"
 #include "Menu/IconLoader.h"
@@ -38,6 +38,29 @@ namespace
 	constexpr std::array<const char*, 7> CORE_MENU_NAMES = {
 		"Home", "Presets", "General", "Advanced", "Profiling", "CS Editor", "Display"
 	};
+
+	/** @brief Draws a full-width Selectable with a rounded accent pill that also carries its hover/selected state. @return True when clicked. */
+	bool PillSelectable(const std::string& label, bool selected)
+	{
+		constexpr float idleAlpha = 0.18f, hoveredAlpha = 0.28f, selectedAlpha = 0.35f;
+		// Last frame's Selectable rect per row: the pill must sit under the text, so it is drawn first
+		static std::unordered_map<ImGuiID, std::pair<ImVec2, ImVec2>> rowRects;
+		auto& [rowMin, rowMax] = rowRects[ImGui::GetID(label.c_str())];
+
+		const bool hovered = ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect(rowMin, rowMax);
+		ImVec4 pill = globals::menu->GetSettings().Theme.StatusPalette.InfoColor;
+		pill.w = selected ? selectedAlpha : (hovered ? hoveredAlpha : idleAlpha);
+		ImGui::GetWindowDrawList()->AddRectFilled(rowMin, rowMax, ImGui::ColorConvertFloat4ToU32(pill), (rowMax.y - rowMin.y) * 0.5f);
+
+		for (auto col : { ImGuiCol_Header, ImGuiCol_HeaderHovered, ImGuiCol_HeaderActive })
+			ImGui::PushStyleColor(col, ImVec4(0, 0, 0, 0));
+		const bool clicked = ImGui::Selectable(label.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns);
+		ImGui::PopStyleColor(3);
+
+		rowMin = ImGui::GetItemRectMin();
+		rowMax = ImGui::GetItemRectMax();
+		return clicked;
+	}
 
 	const char* GetCoreMenuDisplayName(const char* canonicalName)
 	{
@@ -61,14 +84,6 @@ namespace
 	bool IsCoreMenu(const std::string& menuName)
 	{
 		return std::find(CORE_MENU_NAMES.begin(), CORE_MENU_NAMES.end(), menuName) != CORE_MENU_NAMES.end();
-	}
-
-	// Color for the [ALPHA]/[BETA] stage marker. Alpha (less stable) reads as an error,
-	// Beta as a warning.
-	ImVec4 StageTagColor(Feature::ReleaseStage stage)
-	{
-		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
-		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
 	}
 
 	/**
@@ -507,6 +522,11 @@ void FeatureListRenderer::HandlePendingFeatureSelection(
 					logger::info("Navigated to {} feature menu", pendingFeatureSelection);
 					break;
 				}
+			} else if (const auto* page = std::get_if<BuiltInMenu>(&menuList[i]); page && page->name == pendingFeatureSelection) {
+				// Built-in pages such as Presets are addressed by their display name.
+				selectedMenu = i;
+				logger::info("Navigated to {} page", pendingFeatureSelection);
+				break;
 			}
 		}
 		pendingFeatureSelection.clear();  // Clear after processing
@@ -589,6 +609,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 	// Use error color for Feature Issues menu item
 	bool isFeatureIssues = (menu.name == T("menu.features.feature_issues", "Feature Issues"));
 	bool isCSEditor = (menu.name == T("menu.features.cs_editor", "CS Editor"));
+	bool isPresets = (menu.name == T("menu.features.presets", "Presets"));
 
 	if (isFeatureIssues) {
 		auto& themeSettings = globals::menu->GetSettings().Theme;
@@ -599,22 +620,12 @@ void FeatureListRenderer::ListMenuVisitor::operator()(const BuiltInMenu& menu)
 
 		ImGui::PopStyleColor();
 	} else if (isCSEditor) {
-		const auto& info = globals::menu->GetSettings().Theme.StatusPalette.InfoColor;
-		ImVec4 pill = info;
-		pill.w = selectedMenuRef == listId ? 0.35f : 0.18f;
-		const ImVec2 rowMin = ImGui::GetCursorScreenPos();
-		const float rowH = ImGui::GetTextLineHeightWithSpacing();
-		ImGui::GetWindowDrawList()->AddRectFilled(
-			rowMin,
-			ImVec2(rowMin.x + ImGui::GetContentRegionAvail().x, rowMin.y + rowH),
-			ImGui::ColorConvertFloat4ToU32(pill),
-			rowH * 0.5f);
-		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
-		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(info.x, info.y, info.z, 0.28f));
-		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(info.x, info.y, info.z, 0.40f));
-		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
+		// Launcher entry: opens the editor without leaving the current page.
+		if (PillSelectable(fmt::format(" {} ", menu.name), false))
+			CSEditor::OpenEditorWindow();
+	} else if (isPresets) {
+		if (PillSelectable(fmt::format(" {} ", menu.name), selectedMenuRef == listId))
 			selectedMenuRef = listId;
-		ImGui::PopStyleColor(3);
 	} else {
 		if (ImGui::Selectable(fmt::format(" {} ", menu.name).c_str(), selectedMenuRef == listId, ImGuiSelectableFlags_SpanAllColumns))
 			selectedMenuRef = listId;
@@ -685,7 +696,7 @@ void FeatureListRenderer::ListMenuVisitor::operator()(Feature* feat)
 	// Display the stage marker behind the name, regardless of loaded state
 	if (const auto stage = feat->GetReleaseStage(); stage != Feature::ReleaseStage::Release) {
 		ImGui::SameLine();
-		ImGui::TextColored(StageTagColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
+		ImGui::TextColored(Feature::GetReleaseStageColor(stage), "%s", Feature::GetReleaseStageTag(stage).c_str());
 	}
 
 	// A feature only authored for other scenes still gets a hollow dot, so its settings stay discoverable.
@@ -806,7 +817,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Returns title-only height for button alignment
 	const auto stage = feat->GetReleaseStage();
 	const std::string stageTag = Feature::GetReleaseStageTag(stage);  // empty for Release; color unused when tag is empty
-	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, StageTagColor(stage));
+	float titleOnlyHeight = DrawFeatureHeader(feat->GetDisplayName(), isLoaded ? feat->version : "", description, stageTag, Feature::GetReleaseStageColor(stage));
 
 	// Save cursor position after header (for restoring after buttons are drawn)
 	ImVec2 cursorPosAfterHeader = ImGui::GetCursorScreenPos();
@@ -821,18 +832,7 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	// Export overwrite (icon) sits left of the boot toggle
 	if (canExport) {
-		{
-			auto _style = Util::TransparentIconButtonStyle();
-			if (Icons::Button("##ExportOverwrite", Icons::LC(ICON_LC_SHARE), ImVec2(exportIconSize, exportIconSize)))
-				FeatureOverwritesPanel::BeginExport(feat);
-		}
-		if (auto _tt = Util::HoverTooltipWrapper()) {
-			ImGui::Text(
-				"%s",
-				T("menu.features.export_overwrite_tooltip",
-					"Export selected settings as a feature overwrite file.\n"
-					"Overwrites are loaded at startup."));
-		}
+		FeatureOverwritesPanel::DrawExportButton(feat, "##ExportOverwrite");
 		ImGui::SameLine();
 	}
 

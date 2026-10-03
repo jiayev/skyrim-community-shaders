@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Effects11/SceneHandoff.h"
 
+#include <array>
 #include <memory>
 #include <winrt/base.h>
 
@@ -95,6 +97,13 @@ public:
 
 	bool enableEffect = false;
 
+	/** @brief Whether the active preset hands this feature back to CS through its manifest sceneControl. */
+	bool IsHandedOff(E11Handoff::Feature feature) const { return handedOff[static_cast<size_t>(feature)]; }
+	/** @brief Sets the runtime handoff flag; UnifiedPresetCatalog owns persisting it to the manifest. */
+	void SetHandedOff(E11Handoff::Feature feature, bool value) { handedOff[static_cast<size_t>(feature)] = value; }
+	/** @brief Whether Effects 11 drives a feature it can hand to CS. */
+	bool OwnsFeature(E11Handoff::Feature feature) const { return loaded && enableEffect && !IsHandedOff(feature); }
+
 	ID3D11PixelShader* raymarchVolumetricRaysPS = nullptr;
 	ID3D11PixelShader* applyVolumetricRaysPS = nullptr;
 	ID3D11ComputeShader* blurHCS = nullptr;
@@ -129,13 +138,6 @@ public:
 	bool IsUseEffectEnabled() const;
 	/** @brief UseEffect on and a compiled preset is ready (Effects 11 actually drives the frame). */
 	bool IsPresetEnabled() const;
-	/**
-	 * @brief Use Original Post Processing cannot be turned off: Effects 11 is selected but no
-	 * usable preset is loaded, so the game's tonemap must keep running.
-	 */
-	bool IsUseOriginalPostProcessingForced() const;
-	/** @brief Writes UseOriginalPostProcessing=true while IsUseOriginalPostProcessingForced(). */
-	void EnforceOriginalPostProcessingIfNeeded();
 	bool IsActive() const { return presetActive; }
 
 	void DrawVolumetricRays();
@@ -180,6 +182,7 @@ private:
 	bool presetActive = false;
 	bool resourcesReady = false;
 	uint tonemapReplacedFrame = UINT32_MAX;  ///< frameCount when the effect chain last wrote the tonemap output
+	std::array<bool, static_cast<size_t>(E11Handoff::Feature::Count)> handedOff{};
 
 	/** @brief Point light settings, resolved once per frame in CheckCommonData since OverridePointLightColor runs per light. */
 	struct PointLightingParams

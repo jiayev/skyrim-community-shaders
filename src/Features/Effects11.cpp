@@ -167,28 +167,9 @@ bool Effects11::IsPresetEnabled() const
 	return IsUseEffectEnabled() && manager.IsInitialized() && manager.IsPresetLoaded();
 }
 
-bool Effects11::IsUseOriginalPostProcessingForced() const
-{
-	// Selected as the pipeline with nothing for enbeffect.fx to run — keep vanilla tonemap.
-	return IsUseEffectEnabled() && !EffectManager::GetSingleton().IsPresetLoaded();
-}
-
-void Effects11::EnforceOriginalPostProcessingIfNeeded()
-{
-	if (!IsUseOriginalPostProcessingForced())
-		return;
-	auto& settingManager = SettingManager::GetSingleton();
-	const uint32_t id = settingManager.GetSettingID("UseOriginalPostProcessing", "EFFECT");
-	if (id == 0xFFFFFFFF)
-		return;
-	if (!settingManager.GetValue<bool>(id))
-		settingManager.SetValue<bool>(id, true);
-}
-
 void Effects11::ToggleEnabled()
 {
 	using PostProcessingMode::Mode;
-	// Toggle the UseEffect pipeline slot even when no preset is loaded; original PP stays forced then.
 	PostProcessingMode::Set(IsUseEffectEnabled() ? Mode::Vanilla : Mode::Effects11);
 }
 
@@ -196,7 +177,6 @@ void Effects11::SetUseEffect(bool enabled)
 {
 	auto& settingManager = SettingManager::GetSingleton();
 	settingManager.SetValue<bool>(settingManager.GetSettingID("UseEffect", "GLOBAL"), enabled);
-	EnforceOriginalPostProcessingIfNeeded();
 }
 
 void Effects11::LoadRaindropTexture()
@@ -297,16 +277,16 @@ void Effects11::Reset()
 {
 	if (!resourcesReady)
 		return;
-	EnforceOriginalPostProcessingIfNeeded();
+	PostProcessingMode::ApplyPending();
 	const bool enabled = IsPresetEnabled();
 	if (enabled != presetActive) {
 		// UseEffect can also turn on from an ini reload or preset switch; Post Processing must still yield.
 		if (enabled)
 			PostProcessingMode::Set(PostProcessingMode::Mode::Effects11);
 		globals::shaderCache->Reload([this, enabled] { presetActive = enabled; });
-	} else if (IsUseEffectEnabled() && PostProcessingMode::Get() != PostProcessingMode::Mode::Effects11) {
-		// UseEffect on without a compiled preset still claims the pipeline slot (original PP forced).
-		PostProcessingMode::Set(PostProcessingMode::Mode::Effects11);
+	} else if (!enabled && IsUseEffectEnabled() && EffectManager::GetSingleton().IsInitialized()) {
+		// UseEffect with no compiled preset has nothing to run, so fall back to the game's own post processing.
+		PostProcessingMode::Set(PostProcessingMode::Mode::Vanilla);
 	}
 }
 
@@ -433,44 +413,47 @@ void Effects11::OverrideWeather(RE::Sky* a_sky)
 		dirLightColor = F3ToNi(dirLightColorF3);
 	}
 
-	{
-		auto& fogFarColor = colors[(uint)RE::TESWeather::ColorTypes::kFogFar];
+	// A preset handing fog to CS leaves the vanilla fog values for Exponential Height Fog's scene settings
+	if (!IsHandedOff(E11Handoff::Feature::HeightFog)) {
+		{
+			auto& fogFarColor = colors[(uint)RE::TESWeather::ColorTypes::kFogFar];
 
-		auto fogFarColorF3 = NiToF3(fogFarColor);
+			auto fogFarColorF3 = NiToF3(fogFarColor);
 
-		auto fogColorCurve = settingManager.GetInterpolatedTimeOfDayValue("FogColorCurve", "ENVIRONMENT");
-		auto fogColorMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogColorMultiplier", "ENVIRONMENT");
+			auto fogColorCurve = settingManager.GetInterpolatedTimeOfDayValue("FogColorCurve", "ENVIRONMENT");
+			auto fogColorMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogColorMultiplier", "ENVIRONMENT");
 
-		auto fogColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("FogColorFilter", "ENVIRONMENT");
-		auto fogColorFilterAmount = settingManager.GetInterpolatedTimeOfDayValue("FogColorFilterAmount", "ENVIRONMENT");
+			auto fogColorFilter = settingManager.GetInterpolatedColorTimeOfDayValue("FogColorFilter", "ENVIRONMENT");
+			auto fogColorFilterAmount = settingManager.GetInterpolatedTimeOfDayValue("FogColorFilterAmount", "ENVIRONMENT");
 
-		fogFarColorF3 = Curve(fogFarColorF3, fogColorCurve);
-		fogFarColorF3 = ColorFilter(fogFarColorF3, fogColorFilter, fogColorFilterAmount);
-		fogFarColorF3 = Intensity(fogFarColorF3, fogColorMultiplier);
+			fogFarColorF3 = Curve(fogFarColorF3, fogColorCurve);
+			fogFarColorF3 = ColorFilter(fogFarColorF3, fogColorFilter, fogColorFilterAmount);
+			fogFarColorF3 = Intensity(fogFarColorF3, fogColorMultiplier);
 
-		fogFarColor = F3ToNi(fogFarColorF3);
+			fogFarColor = F3ToNi(fogFarColorF3);
 
-		auto& fogNearColor = colors[(uint)RE::TESWeather::ColorTypes::kFogNear];
+			auto& fogNearColor = colors[(uint)RE::TESWeather::ColorTypes::kFogNear];
 
-		auto fogNearColorF3 = NiToF3(fogNearColor);
+			auto fogNearColorF3 = NiToF3(fogNearColor);
 
-		fogNearColorF3 = Curve(fogNearColorF3, fogColorCurve);
-		fogNearColorF3 = ColorFilter(fogNearColorF3, fogColorFilter, fogColorFilterAmount);
-		fogNearColorF3 = Intensity(fogNearColorF3, fogColorMultiplier);
+			fogNearColorF3 = Curve(fogNearColorF3, fogColorCurve);
+			fogNearColorF3 = ColorFilter(fogNearColorF3, fogColorFilter, fogColorFilterAmount);
+			fogNearColorF3 = Intensity(fogNearColorF3, fogColorMultiplier);
 
-		fogNearColor = F3ToNi(fogNearColorF3);
-	}
+			fogNearColor = F3ToNi(fogNearColorF3);
+		}
 
-	{
-		a_sky->fogPower *= settingManager.GetInterpolatedTimeOfDayValue("FogCurveMultiplier", "ENVIRONMENT");
-	}
+		{
+			a_sky->fogPower *= settingManager.GetInterpolatedTimeOfDayValue("FogCurveMultiplier", "ENVIRONMENT");
+		}
 
-	{
-		auto fogAmountMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogAmountMultiplier", "ENVIRONMENT");
-		fogAmountMultiplier = std::max(fogAmountMultiplier, FLT_MIN);
+		{
+			auto fogAmountMultiplier = settingManager.GetInterpolatedTimeOfDayValue("FogAmountMultiplier", "ENVIRONMENT");
+			fogAmountMultiplier = std::max(fogAmountMultiplier, FLT_MIN);
 
-		a_sky->fogNear /= fogAmountMultiplier;
-		a_sky->fogFar /= fogAmountMultiplier;
+			a_sky->fogNear /= fogAmountMultiplier;
+			a_sky->fogFar /= fogAmountMultiplier;
+		}
 	}
 
 	if (enableEffect) {
@@ -667,12 +650,9 @@ bool Effects11::WantsTonemapOwnership()
 		return false;
 
 	// Post Processing tonemapping and Effects 11 tonemapping cannot share the frame; when PP
-	// wants ownership, force UseOriginalPostProcessing on so this preset yields (avoids a black screen).
+	// wants ownership, this preset yields (avoids a black screen).
 	auto& postProcessing = globals::features::postProcessing;
 	if (postProcessing.loaded && postProcessing.WantsTonemapOwnership())
-		return false;
-
-	if (IsUseOriginalPostProcessingForced())
 		return false;
 
 	return enableEffect && !SettingManager::GetSingleton().GetValue<bool>("UseOriginalPostProcessing", "EFFECT");

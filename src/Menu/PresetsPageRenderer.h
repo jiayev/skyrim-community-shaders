@@ -18,6 +18,19 @@ public:
 	/** @brief One colored pill per backend the pack carries. */
 	static void DrawBackendBadges(bool hasE11, bool hasCSPresets, bool hasBaseline, bool compact);
 
+	/** @brief Shows the main menu on the Presets page, leaving the CS Editor or Effects 11 editor if one hides it. */
+	static void Open();
+
+	/**
+	 * @brief Labelled button that opens the Presets page, for feature pages whose presets live there.
+	 * @param id Unique ImGui id for the button.
+	 * @param tooltip Explains what the page holds for this feature.
+	 */
+	static void DrawOpenButton(const char* id, const char* tooltip);
+
+	/** @brief Width DrawOpenButton takes, for right-aligning it beside other controls. */
+	static float MeasureOpenButton();
+
 private:
 	/** @brief Search box and backend filter chips. */
 	static void RenderToolbar();

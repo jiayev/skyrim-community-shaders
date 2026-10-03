@@ -14,21 +14,28 @@
 #define ICON_FA_CHECK "\xef\x80\x8c"	// U+f00c
 #define ICON_FA_TIMES "\xef\x80\x8d"	// U+f00d
 #define ICON_FA_HOME "\xef\x80\x95"	// U+f015
+#define ICON_FA_CLOCK "\xef\x80\x97"	// U+f017
 #define ICON_FA_SYNC "\xef\x80\xa1"	// U+f021
 #define ICON_FA_LOCK "\xef\x80\xa3"	// U+f023
 #define ICON_FA_FLAG "\xef\x80\xa4"	// U+f024
 #define ICON_FA_TAG "\xef\x80\xab"	// U+f02b
+#define ICON_FA_PLAY "\xef\x81\x8b"	// U+f04b
+#define ICON_FA_PAUSE "\xef\x81\x8c"	// U+f04c
 #define ICON_FA_ARROW_LEFT "\xef\x81\xa0"	// U+f060
 #define ICON_FA_PLUS "\xef\x81\xa7"	// U+f067
 #define ICON_FA_LEAF "\xef\x81\xac"	// U+f06c
+#define ICON_FA_EYE "\xef\x81\xae"	// U+f06e
 #define ICON_FA_FOLDER_OPEN "\xef\x81\xbc"	// U+f07c
 #define ICON_FA_UNLOCK "\xef\x82\x9c"	// U+f09c
 #define ICON_FA_USERS "\xef\x83\x80"	// U+f0c0
 #define ICON_FA_CLOUD "\xef\x83\x82"	// U+f0c2
+#define ICON_FA_COPY "\xef\x83\x85"	// U+f0c5
 #define ICON_FA_SAVE "\xef\x83\x87"	// U+f0c7
 #define ICON_FA_SQUARE "\xef\x83\x88"	// U+f0c8
 #define ICON_FA_BARS "\xef\x83\x89"	// U+f0c9
+#define ICON_FA_COLUMNS "\xef\x83\x9b"	// U+f0db
 #define ICON_FA_UNDO "\xef\x83\xa2"	// U+f0e2
+#define ICON_FA_LIGHTBULB "\xef\x83\xab"	// U+f0eb
 #define ICON_FA_ANGLE_LEFT "\xef\x84\x84"	// U+f104
 #define ICON_FA_ANGLE_RIGHT "\xef\x84\x85"	// U+f105
 #define ICON_FA_UNIVERSITY "\xef\x86\x9c"	// U+f19c
@@ -39,6 +46,7 @@
 #define ICON_FA_MAP "\xef\x89\xb9"	// U+f279
 #define ICON_FA_TRASH_ALT "\xef\x8b\xad"	// U+f2ed
 #define ICON_FA_SYNC_ALT "\xef\x8b\xb1"	// U+f2f1
+#define ICON_FA_PEN "\xef\x8c\x84"	// U+f304
 #define ICON_FA_EXTERNAL_LINK_ALT "\xef\x8d\x9d"	// U+f35d
 #define ICON_FA_MAP_MARKER_ALT "\xef\x8f\x85"	// U+f3c5
 #define ICON_FA_SHIELD_ALT "\xef\x8f\xad"	// U+f3ed
@@ -50,7 +58,9 @@
 #define ICON_FA_SKULL "\xef\x95\x8c"	// U+f54c
 #define ICON_FA_STORE "\xef\x95\x8e"	// U+f54e
 #define ICON_FA_WALKING "\xef\x95\x94"	// U+f554
+#define ICON_FA_FILE_EXPORT "\xef\x95\xae"	// U+f56e
 #define ICON_FA_HOTEL "\xef\x96\x94"	// U+f594
+#define ICON_FA_LAYER_GROUP "\xef\x97\xbd"	// U+f5fd
 #define ICON_FA_CROSS "\xef\x99\x94"	// U+f654
 #define ICON_FA_LANDMARK "\xef\x99\xaf"	// U+f66f
 #define ICON_FA_CAMPGROUND "\xef\x9a\xbb"	// U+f6bb
@@ -72,21 +82,27 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf00c, 0xf00c,
 	0xf00d, 0xf00d,
 	0xf015, 0xf015,
+	0xf017, 0xf017,
 	0xf021, 0xf021,
 	0xf023, 0xf023,
 	0xf024, 0xf024,
 	0xf02b, 0xf02b,
+	0xf04b, 0xf04c,
 	0xf060, 0xf060,
 	0xf067, 0xf067,
 	0xf06c, 0xf06c,
+	0xf06e, 0xf06e,
 	0xf07c, 0xf07c,
 	0xf09c, 0xf09c,
 	0xf0c0, 0xf0c0,
 	0xf0c2, 0xf0c2,
+	0xf0c5, 0xf0c5,
 	0xf0c7, 0xf0c7,
 	0xf0c8, 0xf0c8,
 	0xf0c9, 0xf0c9,
+	0xf0db, 0xf0db,
 	0xf0e2, 0xf0e2,
+	0xf0eb, 0xf0eb,
 	0xf104, 0xf104,
 	0xf105, 0xf105,
 	0xf19c, 0xf19c,
@@ -97,6 +113,7 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf279, 0xf279,
 	0xf2ed, 0xf2ed,
 	0xf2f1, 0xf2f1,
+	0xf304, 0xf304,
 	0xf35d, 0xf35d,
 	0xf3c5, 0xf3c5,
 	0xf3ed, 0xf3ed,
@@ -108,7 +125,9 @@ inline constexpr unsigned short ICON_FA_GLYPH_RANGES[] = {
 	0xf54c, 0xf54c,
 	0xf54e, 0xf54e,
 	0xf554, 0xf554,
+	0xf56e, 0xf56e,
 	0xf594, 0xf594,
+	0xf5fd, 0xf5fd,
 	0xf654, 0xf654,
 	0xf66f, 0xf66f,
 	0xf6bb, 0xf6bb,

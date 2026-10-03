@@ -1,8 +1,11 @@
 #include "PostProcessing.h"
 
+#include "CSEditor/EditorWindow.h"
+#include "CSEditor/SceneManager/SceneWidgetInterceptor.h"
 #include "Features/CSEditor.h"
 #include "IconsFontAwesome5.h"
 #include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/PresetsPageRenderer.h"
 #include "imgui_stdlib.h"
 
 #include "JiayeStatement.h"
@@ -25,64 +28,32 @@ void PostProcessing::DrawSettings()
 {
 	static int pipelinePageNum = 0;
 	static int pipelineFeatIdx = 0;
-	static int presetIdx = -1;
 
-	ImGui::BeginGroup();
-	std::string currentPreset = (presetIdx >= 0 && presetIdx < presets.size()) ? presets[presetIdx] : T("feature.post_processing.select_a_preset", "Select a preset");
+	// Presets live on the Presets page like every other pack; a scene replica of this page edits a
+	// scene layer rather than the base settings a preset sets, so it leaves the row out.
+	if (!SceneWidgetInterceptor::IsArmed()) {
+		PresetsPageRenderer::DrawOpenButton("##PostProcessingOpenPresets",
+			T("feature.post_processing.open_presets_tooltip",
+				"Apply Post Processing presets on the Presets page. To save your current settings as one, use "
+				"Export Preset in the CS Editor with Post Processing ticked."));
 
-	if (ImGui::BeginCombo("##PresetCombo", currentPreset.c_str())) {
-		presets = LoadPresets();
-
-		for (int i = 0; i < presets.size(); ++i) {
-			bool isSelected = presetIdx == i;
-			if (ImGui::Selectable(presets[i].c_str(), isSelected))
-				presetIdx = i;
-			if (isSelected)
-				ImGui::SetItemDefaultFocus();
+		// Inside the CS Editor (its Base Settings window draws this page too) the editor is already open.
+		if (const auto* editor = EditorWindow::GetSingleton(); !editor || !editor->open) {
+			const ImGuiStyle& style = ImGui::GetStyle();
+			const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
+			const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
+			const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
+			                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
+			ImGui::SameLine();
+			if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
+				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
+			if (Icons::LabeledButton("##PostProcessingOpenCSEditor", brush, csEditorTitle))
+				CSEditor::OpenEditorWindow();
+			Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
 		}
-		ImGui::EndCombo();
+
+		ImGui::Separator();
 	}
-
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.load", "Load"))) {
-		if (presetIdx >= 0 && presetIdx < presets.size()) {
-			LoadPresetFrom(presets[presetIdx]);
-		}
-	}
-
-	// CS Editor button
-	{
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
-		const Icons::GlyphRef brush = Icons::FA(ICON_FA_PAINT_BRUSH);
-		const float buttonWidth = Icons::CalcGlyphSize(brush).x + style.ItemInnerSpacing.x +
-		                          ImGui::CalcTextSize(csEditorTitle).x + style.FramePadding.x * 2.0f;
-		ImGui::SameLine();
-		if (const float avail = ImGui::GetContentRegionAvail().x; avail > buttonWidth)
-			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - buttonWidth);
-		if (Icons::LabeledButton("##PostProcessingOpenCSEditor", brush, csEditorTitle))
-			CSEditor::OpenEditorWindow();
-		Util::AddTooltip(T("menu.presets.open_cs_editor_tooltip", "Open the CS Editor for weather, lighting, and scene editing."));
-	}
-
-	ImGui::EndGroup();
-	ImGui::BeginGroup();
-	static std::string newPresetName = "";
-	ImGui::SetNextItemWidth(220.0f);
-	ImGui::InputTextWithHint("##NewPresetName", T("feature.post_processing.save_name_hint", "Save as name..."), &newPresetName);
-
-	ImGui::SameLine();
-	if (ImGui::Button(T("feature.post_processing.save", "Save"))) {
-		if (!newPresetName.empty())
-			SavePresetTo(newPresetName);
-	}
-	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("%s", T("feature.post_processing.save_tooltip",
-									"Writes a JSON under PostProcessing/."));
-
-	ImGui::EndGroup();
-
-	ImGui::Separator();
 
 	PostProcessingMode::DrawSelector();
 
@@ -123,18 +94,20 @@ void PostProcessing::DrawSettings()
 
 	ImGui::Separator();
 
-	auto drawEnabled = [this](const char* label, PostProcessFeature& feature) {
+	// Draws a read-only checkbox for a forced-on sub-feature and returns true. Otherwise callers bind
+	// `&feat->enabled` themselves: the scene catalog generator only recognises that form as a scene toggle.
+	auto drawForcedEnabled = [this](const char* label, PostProcessFeature& feature) {
 		const bool automatic = feature.IsAutoEnabled() ||
 		                       (&feature == GetPipelineFeature<HistogramAutoExposure>(FeaturePipelineIndex::AutoExposure) && GetActivePhysicalCameraState());
+		if (!automatic)
+			return false;
 		bool active = feature.IsActive();
-		ImGui::BeginDisabled(automatic);
-		if (ImGui::Checkbox(label, &active))
-			feature.enabled = active;
+		ImGui::BeginDisabled();
+		ImGui::Checkbox(label, &active);
 		ImGui::EndDisabled();
-		if (automatic) {
-			if (auto _tt = Util::HoverTooltipWrapper())
-				ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
-		}
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::TextUnformatted(T("feature.post_processing.cinematic_camera.exposure_required", "Exposure processing is required by Cinematic Camera. Disable Cinematic Camera to restore the saved enable state."));
+		return true;
 	};
 
 	if (pipelinePageNum == 0) {
@@ -144,7 +117,8 @@ void PostProcessing::DrawSettings()
 				auto displayName = feat->GetDisplayName();
 				auto description = feat->GetDesc();
 				ImGui::PushID(feat->GetType().c_str());
-				drawEnabled("##Enabled", *feat);
+				if (!drawForcedEnabled("##Enabled", *feat))
+					ImGui::Checkbox("##Enabled", &feat->enabled);
 				ImGui::SameLine();
 				if (Icons::Button("##Bars", Icons::FA(ICON_FA_BARS))) {
 					pipelineFeatIdx = i;
@@ -184,7 +158,8 @@ void PostProcessing::DrawSettings()
 					ImGui::Text("%s", T("feature.post_processing.recompile_shaders_for_this_sub_feature_only", "Recompile shaders for this sub-feature only."));
 				ImGui::Separator();
 				ImGui::Spacing();
-				drawEnabled(T("feature.post_processing.enabled", "Enabled"), *feat);
+				if (!drawForcedEnabled(T("feature.post_processing.enabled", "Enabled"), *feat))
+					ImGui::Checkbox(T("feature.post_processing.enabled", "Enabled"), &feat->enabled);
 				if (feat->IsActive()) {
 					ImGui::Indent();
 					feat->DrawSettings();
@@ -377,113 +352,30 @@ void PostProcessing::SaveSettings(json& o_json)
 	o_json.erase("ppsettings");
 }
 
-std::vector<std::string> PostProcessing::LoadPresets()
+void PostProcessing::ApplyDefaultEnabledStates()
 {
-	std::vector<std::string> o_presets = {};
-
-	try {
-		std::filesystem::create_directories(ppPresetPath);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating preset directory during Load ({}) : {}\n", ppPresetPath, e.what());
-		return o_presets;
+	using enum FeaturePipelineIndex;
+	constexpr std::array kOffByDefault = { LUT, MotionBlur, PhysicalGlare, Camera, Border };
+	for (size_t index = 0; index < pipeline.size(); ++index) {
+		if (auto& pipe = pipeline[index]; pipe && !pipe->IsAutoEnabled())
+			pipe->enabled = std::ranges::find(kOffByDefault, static_cast<FeaturePipelineIndex>(index)) == kOffByDefault.end();
 	}
-
-	for (const auto& entry : std::filesystem::directory_iterator(ppPresetPath)) {
-		if (entry.is_regular_file() && entry.path().extension() == ".json") {
-			o_presets.push_back(entry.path().stem().string());
-		}
-	}
-
-	return o_presets;
-}
-
-void PostProcessing::LoadPresetFrom(std::string a_name)
-{
-	json a_presets = {};
-
-	// if the name has .json, remove it
-	if (a_name.ends_with(".json"))
-		a_name = a_name.substr(0, a_name.size() - 5);
-
-	try {
-		logger::info("Loading preset: {}", a_name);
-		std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, a_name) };
-		i >> a_presets;
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load preset: {}. Error: {}", a_name, e.what());
-		return;
-	}
-
-	ProcessSettings(a_presets);
-}
-
-void PostProcessing::SavePresetTo(std::string a_name)
-{
-	// Check if the name is valid
-	if (a_name.empty()) {
-		logger::warn("Invalid preset name.");
-		return;
-	}
-
-	json a_presets = {};
-	SaveSettings(a_presets);
-	a_presets["preset_name"] = a_name;
-
-	try {
-		std::filesystem::create_directories(ppPresetPath);
-	} catch (const std::filesystem::filesystem_error& e) {
-		logger::warn("Error creating preset directory during Save ({}) : {}\n", ppPresetPath, e.what());
-		return;
-	}
-
-	const std::string presetPath = std::format("{}\\{}.json", ppPresetPath, a_name);
-	if (Util::FileHelpers::WriteJsonAtomically(presetPath, a_presets, 4, "post processing preset"))
-		logger::info("Saved preset to {}", presetPath);
-	else
-		logger::warn("Failed to write preset file: {}", presetPath);
 }
 
 void PostProcessing::RestoreDefaultSettings()
 {
-	// If pipeline isn't initialized yet (called during early loading before SetupResources),
-	// load default.json into pendingSettings for deferred application in SetupResources.
-	// This ensures first-startup defaults match what "Restore Defaults" produces later.
-	bool pipelineReady = pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] != nullptr;
-	if (!pipelineReady) {
-		try {
-			std::ifstream i{ std::format("{}\\{}.json", ppPresetPath, "default") };
-			json defaultPreset;
-			i >> defaultPreset;
-			pendingSettings = defaultPreset;
-			logger::info("Pipeline not ready, loaded default preset into pending settings");
-		} catch (const std::exception& e) {
-			logger::info("No default preset available during early load, C++ defaults will be used. Error: {}", e.what());
-			pendingSettings = {};
-		}
+	// A restore supersedes any load still waiting for Prepass.
+	pendingSettings = {};
+	cinematicCamera.RestoreDefaultSettings();
+
+	// Before SetupResources there is no pipeline yet; it is built from these same defaults.
+	if (!pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)])
 		return;
-	}
 
-	try {
-		LoadPresetFrom("default");
-	} catch (const std::exception& e) {
-		logger::warn("Failed to load default preset. Error: {}", e.what());
-		cinematicCamera.RestoreDefaultSettings();
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
-
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
-		pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
-
-		for (auto& pipe : pipeline) {
-			if (pipe) {
-				pipe->RestoreDefaultSettings();
-			}
-		}
+	ApplyDefaultEnabledStates();
+	for (auto& pipe : pipeline) {
+		if (pipe)
+			pipe->RestoreDefaultSettings();
 	}
 }
 
@@ -554,32 +446,19 @@ void PostProcessing::SetupResources()
 		stl::report_and_fail("Post Processing requires its input/output shaders."sv);
 
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)] = std::make_shared<LocalExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LocalExposure)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)] = std::make_shared<HistogramAutoExposure>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::AutoExposure)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)] = std::make_shared<ColorGrading>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::ColorGrading)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)] = std::make_shared<LUT>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LUT)].get()->enabled = false;
-
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)] = std::make_shared<MotionBlur>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::MotionBlur)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)] = std::make_shared<DoF>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::DoF)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)] = std::make_shared<PhysicalGlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::PhysicalGlare)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)] = std::make_shared<CODBloom>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::CODBloom)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)] = std::make_shared<LensFlare>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::LensFlare)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)] = std::make_shared<Composite>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Composite)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)] = std::make_shared<Vignette>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Vignette)].get()->enabled = true;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)] = std::make_shared<Camera>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Camera)].get()->enabled = false;
 	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)] = std::make_shared<Border>();
-	pipeline[static_cast<size_t>(FeaturePipelineIndex::Border)].get()->enabled = false;
+	ApplyDefaultEnabledStates();
 
 	for (auto& pipe : pipeline) {
 		if (pipe) {
