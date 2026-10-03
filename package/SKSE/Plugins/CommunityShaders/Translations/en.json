@@ -463,6 +463,7 @@
     "cs_editor.scene_export_type_e11_unavailable": "Load Effects 11 with a valid ENB preset (enbseries.ini + enbseries/) to export as E11.",
     "cs_editor.scene_export_type_mismatch": "A preset with this name already exists for the other pipeline. Pick a different name or switch the preset type.",
     "cs_editor.scene_export_version": "Version",
+    "cs_editor.scene_export_version_tooltip": "MAJOR.MINOR.PATCH. 0.0.x is tagged Alpha and 0.x.x Beta on the Presets page; 1.0.0 and up is a full release.",
     "cs_editor.scene_feature_has_settings": "Has settings on this page.",
     "cs_editor.scene_feature_list_empty": "No loaded feature exposes scene settings.",
     "cs_editor.scene_feature_unloaded": "This feature is not loaded, so it has nothing to edit.",

@@ -58,22 +58,23 @@ namespace PresetCompatibility
 		return true;
 	}
 
-	ReleaseStage ReleaseStageFromVersion(std::string_view version)
+	Feature::ReleaseStage ReleaseStageFromVersion(std::string_view version)
 	{
+		using enum Feature::ReleaseStage;
 		SemVer parsed{};
 		if (!ParseSemVer(version, parsed))
-			return ReleaseStage::Release;
+			return Release;
 		if (parsed.major > 0)
-			return ReleaseStage::Release;
+			return Release;
 		if (parsed.minor > 0)
-			return ReleaseStage::Beta;
-		return ReleaseStage::Alpha;
+			return Beta;
+		return Alpha;
 	}
 
-	ImVec4 StageTagColor(ReleaseStage stage)
+	ImVec4 StageTagColor(Feature::ReleaseStage stage)
 	{
 		const auto& statusPalette = globals::menu->GetTheme().StatusPalette;
-		return stage == ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
+		return stage == Feature::ReleaseStage::Alpha ? statusPalette.Error : statusPalette.Warning;
 	}
 
 	VersionGap CompareRequiredCsVersion(std::string_view requiredCsVersion)

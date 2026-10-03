@@ -8,6 +8,8 @@
 
 #include <imgui.h>
 
+#include "Feature.h"
+
 /// Shared Community Shaders / feature compatibility checks for unified packs and Scene Manager exports.
 namespace PresetCompatibility
 {
@@ -16,15 +18,6 @@ namespace PresetCompatibility
 		int major = 0;
 		int minor = 0;
 		int patch = 0;
-	};
-
-	/// Pre-release maturity inferred from a pack's MAJOR.MINOR.PATCH version:
-	/// 0.0.x → Alpha, 0.x.x → Beta, ≥1.0.0 → Release.
-	enum class ReleaseStage : std::uint8_t
-	{
-		Release,
-		Beta,
-		Alpha
 	};
 
 	/// How far the installed CS build lags behind a preset's required CS version.
@@ -38,10 +31,10 @@ namespace PresetCompatibility
 	bool ParseSemVer(std::string_view text, SemVer& out);
 
 	/** @brief 0.0.x → Alpha, 0.x.x → Beta, ≥1.0.0 (or unparsable) → Release. */
-	ReleaseStage ReleaseStageFromVersion(std::string_view version);
+	Feature::ReleaseStage ReleaseStageFromVersion(std::string_view version);
 
 	/** @brief Theme colour for a stage tag — Error for Alpha, Warning for Beta. */
-	ImVec4 StageTagColor(ReleaseStage stage);
+	ImVec4 StageTagColor(Feature::ReleaseStage stage);
 
 	/** @return Gap when the running CS build is older than required; None when equal/newer or unparsable. */
 	VersionGap CompareRequiredCsVersion(std::string_view requiredCsVersion);

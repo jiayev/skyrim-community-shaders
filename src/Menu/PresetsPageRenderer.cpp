@@ -453,10 +453,7 @@ void PresetsPageRenderer::RenderDetail()
 			ImGui::BeginGroup();
 			{
 				const auto stage = PresetCompatibility::ReleaseStageFromVersion(pack->version);
-				const std::string stageTag = Feature::GetReleaseStageTag(
-					stage == PresetCompatibility::ReleaseStage::Alpha ? Feature::ReleaseStage::Alpha :
-					stage == PresetCompatibility::ReleaseStage::Beta  ? Feature::ReleaseStage::Beta :
-																		 Feature::ReleaseStage::Release);
+				const std::string stageTag = Feature::GetReleaseStageTag(stage);
 
 				MenuFonts::FontRoleGuard title(Menu::FontRole::Heading);
 				ImGui::SetWindowFontScale(1.35f);

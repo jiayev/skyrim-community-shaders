@@ -727,6 +727,8 @@ namespace
 		ImGui::TextUnformatted(T(TKEY("scene_export_version"), "Version"));
 		ImGui::SetNextItemWidth(-1);
 		ImGui::InputText("##ScenePresetExportVersion", &form.version);
+		Util::AddTooltip(T(TKEY("scene_export_version_tooltip"),
+			"MAJOR.MINOR.PATCH. 0.0.x is tagged Alpha and 0.x.x Beta on the Presets page; 1.0.0 and up is a full release."));
 
 		ImGui::TextUnformatted(T(TKEY("scene_export_author"), "Author"));
 		ImGui::SetNextItemWidth(-1);
