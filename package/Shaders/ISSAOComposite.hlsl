@@ -181,7 +181,7 @@ PS_OUTPUT main(PS_INPUT input)
 	if (!SharedData::PostWaterComposite) {
 		float fogDistanceFactor = (2 * CameraNearFar.x * CameraNearFar.y) / ((CameraNearFar.y + CameraNearFar.x) - (2 * (1.01 * depth - 0.01) - 1) * (CameraNearFar.y - CameraNearFar.x));
 		float fogFactor = min(FogParam.w, pow(saturate(fogDistanceFactor * FogParam.y - FogParam.x), FogParam.z));
-		float3 fogColor = lerp(FogNearColor.xyz, FogFarColor.xyz, fogFactor);
+		float3 fogColor = lerp(ColorManagement::SRGBToWorking(FogNearColor.xyz), ColorManagement::SRGBToWorking(FogFarColor.xyz), fogFactor);
 #		if defined(IBL)
 		if (SharedData::iblSettings.EnableIBL) {
 			float2 fogUV = input.TexCoord.xy;
