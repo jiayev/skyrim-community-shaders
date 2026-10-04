@@ -4791,11 +4791,17 @@ it with its own `OnVisible`, and a change of ownership is a readiness event (`fa
 
 -   **With the stand-in off** (`CS_DCLF_PRIMARY_EXCLUDE=0`) every comparison is exact, because no root is owned and the
     engine draws every fade-node occluder.
--   **With the stand-in on**, a stood-in root's node keeps the fade the engine last left there (often 0 from the load),
-    which the reference cull reads; the GPU's state is what the main camera's cull would have left. So on a parity frame
-    the occlusion views read the roots' node states instead (`SceneBuffers::nodeFadeStates`, `FadeState::ReadNode`,
-    uploaded by `ExecuteOcclusion`), and the comparison takes the same fades on both sides. The fade update itself is
-    checked by `CS_DCLF_FADE_PARITY`.
+-   **With the stand-in on**, the reference cull reads a stood-in root's node, which the fade write-back keeps at the
+    GPU's milestones (faded out, fading, faded in: "The fade write-back"), and those decide the rule. The occlusion views
+    read the GPU's states on every frame, parity frames included. The fade update itself is checked by
+    `CS_DCLF_FADE_PARITY`. (Before the write-back, the node kept the fade the engine last left there, and parity frames
+    read the nodes' states instead, through a buffer of their own.)
+
+    The nodes take a milestone a few frames after the GPU (the readback's frame slots, then the next frame's job), so
+    the reference lags while many roots start fading at once. On the teleport route (2026-10-04, two runs), each map
+    was within 15 texels by more than 1/256 except in the first 17 s after the last teleport, while the camera turned
+    newly loaded roots into view: there, a few maps had 2,500-19,000 texels, DCLF nearer. That is the
+    reference's latency, not DCLF's map, which reads the current state.
 -   **The cost.** The engine runs `SetupMask` on every frame that has an occluder under a root DCLF does not service,
     which is most frames.
 
@@ -6577,6 +6583,9 @@ is the walk through what is not excluded: cells, actors, native objects.
 
 ## No fade write-back (2026-10-01)
 
+Superseded in part: the engine's tree LOD reads the node every frame, so the milestones are written back again ("The fade
+write-back", below).
+
 With the point lights' and the sun's culls skipping DCLF's entries ("Point lights' shadow culls without DCLF's entries"),
 nothing reads a stood-in root's node in steady state. So the write-back (E2b), the last functional readback, is deleted:
 `FadeChange` and FadeStateCS's append, `FeedbackPass`, the feedback ring and its timeline, `DrainVisibilityFeedback`,
@@ -6621,6 +6630,49 @@ R2's other views:
 -   8,551 stood-in roots outside and 612 inside. None has a `kMeshLOD` skin among its members.
 -   Stale tickets: 6 of 600 epochs outside, 0 inside, as before.
 -   Gone: the feedback copy (`cs.dclf.feedback`, about 7 us a preparation), the decode job and the node writes.
+
+## The fade write-back (2026-10-04)
+
+"No fade write-back" missed a reader: the tree LOD. `BGSDistantTreeBlock::UpdateBlockVisibility` (`0x140503FF0`) gives a
+tree's LOD instance the alpha `1 - currentFade` of the full tree's node, hidden at 0 (dclf-lod.md, "Tree instance
+hiding"). A stood-in tree's node kept the fade the engine last wrote (often 0 from the load), so its LOD stayed drawn
+over the tree DCLF had faded in. On the teleport route about 200 trees stayed overlapped to the end of the run. The
+occlusion maps' engine cull reads the node as well ("The fade roots").
+
+**What is written.** Only milestones, not every step: 0 faded out, 1 fading, 2 faded in (`currentFade` at or above 1).
+For each of these, the node gets the GPU's `currentFade` and the fade bits of its flags (`kFadeFlagMask`, atomically:
+the engine owns the other bits). That is what the engine's readers decide by: the tree LOD hides at fade 1, and the
+occlusion cull goes in while the fade is above 0, or the root is settled at 1. The tree LOD does not crossfade: its
+instance stays at alpha 1 while the tree fades in, and goes when the tree reaches 1. A root's node, mid-fade, keeps the
+value of the step where it started fading.
+
+**How.**
+-   `FadeStateCS` appends a `FadeEvent` (root, generation, flags, fade) to the event list (`cs.dclf.fade-events`, a count
+    word then the events) when a stood-in root's milestone differs from the one it last reported
+    (`cs.dclf.fade-reported`: per root, generation and milestone). Any other root's node is the engine's, so its
+    reported milestone just follows. A root whose event does not fit reports nothing and tries again next frame.
+-   Every depth commit zeroes the count, and the pass stamps the list with its scene frame. `FadeEventReadbackPass`
+    (`cs.dclf.z.fade-events`) copies the list to the frame slot's host buffer, after first reading what that buffer held
+    from the slot's last execution (finished by then). The events go to the host in batches, through a lock-free stack
+    (`FadeWriteBack`).
+-   The job writes the batches in frame order. A root never takes an event older than the last one written to it,
+    whatever order the recordings finish in.
+-   The list grows to the largest count a readback saw past it (`wanted`, `ReserveSceneTables`). Each slot takes its
+    larger host buffer at its next recording, after reading the old one. The shader appends at most the fewest any slot
+    holds (`capacity`), so no execution's events are lost to a growth.
+-   **The "fade write-back" job** (`IndirectDraws::KickFadeWriteBack`, at the end of the scene tables) writes them onto
+    the nodes on the worker:
+    -   an event whose root was listed again, or is no longer stood in, is stale and dropped;
+    -   it is joined (`JoinFadeWriteBack`) at BeforeShadowMaps, the accumulate phase, and before the next frame's events;
+    -   between the kick and the join the tables are the frame's and no node is freed;
+    -   a late join stops the job, and its remaining events go to the next one, not to the render thread.
+
+    The fade watch is not told: a stood-in root's dependents read its fade from the GPU's state.
+
+**Measured** (teleport route, `CS_DCLF_TREE_LOD_AUDIT`): at the last location, the trees shown over their LOD went from
+about 200, all to the end of the run, to 3 within 15 s of the camera turning to them. That is what the engine does with
+the stand-in off. The report: some tens to a few hundred milestones written every few seconds, a few dozen stale after a
+teleport, no join late, the job about a microsecond.
 
 ## Point lights' culls: the category filter, and the light candidates (2026-10-01)
 

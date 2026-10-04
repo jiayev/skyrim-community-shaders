@@ -39,6 +39,14 @@ Two deployment targets for different workflows:
 - **`COPY_SHADERS`** - Fast shader-only deployment (seconds)
 - **`DEPLOY_ALL`** - Full build + tests + deployment (minutes)
 
+With `AUTO_PLUGIN_DEPLOYMENT=ON`, building the plugin alone (`--target CommunityShaders`) deploys too:
+-   its DLL and PDB, on every link;
+-   the changed shaders (`DEPLOY_SHADERS`), copied straight from `package/Shaders` and every feature's `Shaders` folder,
+    whenever an `.hlsl` or `.hlsli` changed.
+
+So the deployed DLL and shaders match after any plugin build. `DEPLOY_SHADERS` does not go through the AIO staging,
+whose rules depend on the plugin.
+
 ### Requirements
 
 - Must have `AUTO_PLUGIN_DEPLOYMENT=ON` in your CMake preset

@@ -576,6 +576,23 @@ namespace DCLF
 	inline constexpr std::uint32_t kFadeLogEntries = 64;
 
 	/**
+	 * @brief The fade write-back (drawcall-limit-fix.md, "The fade write-back"): a stood-in root whose fade crossed a milestone
+	 * in FadeStateCS's update (faded out, fading, faded in), with the state the engine's readers of the node take from it.
+	 * The pass appends them after a header (the count, the scene frame, two of padding) in the event list; the host writes
+	 * them onto the nodes in frame order.
+	 */
+	struct FadeEvent
+	{
+		std::uint32_t root = 0;        // the root slot
+		std::uint32_t generation = 0;  // its static row's: a slot listed again since is not the event's
+		std::uint32_t flags = 0;       // the state's (kFadeFlagMask)
+		float currentFade = 0.0f;
+	};
+	static_assert(sizeof(FadeEvent) == 16);
+	inline constexpr std::uint32_t kFadeEventHeaderWords = 4;
+	inline constexpr std::uint32_t kInitialFadeEvents = 1024;
+
+	/**
 	 * @brief One indirect draw, in the argument order of the command signature (BasicRHI packs arguments
 	 * like D3D12, 4-byte aligned): pipeline set index, push data (its pipeline row's and material row's addresses and
 	 * the object word), two vertex buffer views, index buffer view (D3D12 VBV / IBV layouts), DrawIndexed.

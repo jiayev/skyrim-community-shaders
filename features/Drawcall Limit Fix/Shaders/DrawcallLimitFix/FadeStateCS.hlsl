@@ -24,10 +24,10 @@ cbuffer FadeStateConstants : register(b0)
 	uint VisibilityIndex;  // ByteAddressBuffer: the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
 	uint RootListsIndex;   // StructuredBuffer<uint>: each root's block, the list process that culls its entry
 	uint AnimatedIndex;    // StructuredBuffer<uint>: per root, the scene frame whose animation batch updated it
+	uint EventsIndex;      // RWStructuredBuffer<uint>: the write-back's events, after a count word (Records.h, FadeEvent)
+	uint ReportedIndex;    // RWStructuredBuffer<uint2>: per root, the generation and the milestone last reported
+	uint EventCapacity;    // the events the list holds (and every readback of it)
 	uint Padding3;
-	uint Padding4;
-	uint Padding5;
-	uint Padding6;
 }
 
 struct FadeNodeState
@@ -138,6 +138,8 @@ static const uint kFadeRootTreeThresholds = 1u << 17;
 static const uint kObjectFadeNodeRow = 13;
 static const uint kObjectSunEntryRow = 15;
 static const uint kNoObject = 0xFFFFFFFFu;
+static const uint kFadeRootStoodIn = 1u << 19;
+static const uint kFadeEventHeaderWords = 4;
 
 static FadeFrame F;
 
@@ -495,6 +497,47 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_list)
 	return view;
 }
 
+// The fade write-back (drawcall-limit-fix.md, "The fade write-back"): the engine reads a stood-in root's node (the tree LOD's
+// crossfade, the occlusion maps' cull, the next listing), which only this pass updates. Its milestones: 0 faded out, 1 fading,
+// 2 faded in.
+uint FadeMilestone(FadeNodeState a_state)
+{
+	return a_state.CurrentFade <= 0.0 ? 0u : (a_state.CurrentFade >= 1.0 ? 2u : 1u);
+}
+
+// A stood-in root whose milestone is not the one last reported appends an event, and counts it reported once it is in the
+// list; one that does not fit tries again next frame (the count tells the host to grow the list). Any other root's node is
+// the engine's own, so its milestone is what the node holds.
+void ReportMilestone(uint a_index, FadeRootStatic a_root, FadeNodeState a_state)
+{
+	if (EventsIndex == 0 || ReportedIndex == 0)
+		return;
+	RWStructuredBuffer<uint2> reported = ResourceDescriptorHeap[ReportedIndex];
+	uint2 last = reported[a_index];
+	// A new listing seeds the state from the node (FadeState::ReadNode): the node holds that milestone.
+	if (last.x != a_root.Generation)
+		last = uint2(a_root.Generation, FadeMilestone(a_root.Initial));
+	const uint milestone = FadeMilestone(a_state);
+	if ((a_root.Bits & kFadeRootStoodIn) == 0 || last.y == milestone) {
+		reported[a_index] = uint2(a_root.Generation, milestone);
+		return;
+	}
+	RWStructuredBuffer<uint> events = ResourceDescriptorHeap[EventsIndex];
+	events[1] = F.SceneFrame;  // the list's frame: the host applies the lists in frame order
+	uint slot;
+	InterlockedAdd(events[0], 1u, slot);
+	if (slot >= EventCapacity) {
+		reported[a_index] = last;
+		return;
+	}
+	const uint at = kFadeEventHeaderWords + slot * 4u;
+	events[at] = a_index;
+	events[at + 1u] = a_root.Generation;
+	events[at + 2u] = a_state.Flags;
+	events[at + 3u] = asuint(a_state.CurrentFade);
+	reported[a_index] = uint2(a_root.Generation, milestone);
+}
+
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
 {
 	const uint index = dispatchID.x;
@@ -564,6 +607,7 @@ bool EngineInView(float3 a_centre, float a_radius, uint a_rootBits, uint a_list)
 	state.Frame = F.SceneFrame;
 	states[index] = state;
 	published[index] = state;
+	ReportMilestone(index, root, state);
 	if (F.LogBase != 0xFFFFFFFFu && index >= F.LogBase && index - F.LogBase < 64u) {
 		RWStructuredBuffer<FadeLogEntry> log = ResourceDescriptorHeap[LogIndex];
 		FadeLogEntry entry;

@@ -40,7 +40,8 @@ namespace DCLF
 	 *   scene tables; BeforeShadowMaps);
 	 * - "shadow": the shadow views' build (IndirectDraws::KickShadowBuild at BeforeShadowMaps; the shadow epoch);
 	 * - "primary synthetic passes": PrimaryCull's stand-in passes (the cut; the accumulate phase at EarlyPrepass);
-	 * - "primary feedback": the decode of FadeStateCS's changes copied back (after the registration jobs; Present);
+	 * - "fade write-back": FadeStateCS's milestones of the stood-in roots onto their nodes (IndirectDraws::KickFadeWriteBack at
+	 *   the end of the scene tables; BeforeShadowMaps, the accumulate phase, or the next scene frame);
 	 * - "zprepass": the Z-prepass epoch's build (EarlyPrepass; Main_RenderDepth);
 	 * - "colour": the colour epoch's build (Prepass; the end of the opaque batches).
 	 *

@@ -1407,12 +1407,57 @@ if(AUTO_PLUGIN_DEPLOYMENT)
                     "Full shader deploy to ${DEPLOY_TARGET}/Shaders (with PREPARE_AIO)"
             )
 
+            # The shaders straight from their sources, for the plugin's own build (DEPLOY_SHADERS, below): the same tree as
+            # AIO/Shaders (package/Shaders, then every feature's Shaders, less Tests), without going through the AIO
+            # staging, whose rules depend on the plugin.
+            set(_direct_shader_cmds)
+            foreach(_shader_source IN ITEMS "${CMAKE_SOURCE_DIR}/package/Shaders" ${FEATURE_PATHS})
+                if(NOT _shader_source MATCHES "/Shaders$")
+                    set(_shader_source "${_shader_source}/Shaders")
+                endif()
+                if(EXISTS "${_shader_source}")
+                    list(
+                        APPEND _direct_shader_cmds
+                        COMMAND
+                            ${ROBOCOPY_WRAPPER} "${_shader_source}"
+                            "${DEPLOY_TARGET}/Shaders" "/E" "/XD" "Tests"
+                            "/COPY:DAT" "/R:1" "/W:1" "/NFL" "/NDL" "/NJH" "/NJS"
+                    )
+                endif()
+            endforeach()
+            add_custom_command(
+                OUTPUT ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+                COMMAND
+                    ${CMAKE_COMMAND} -E make_directory
+                    "${DEPLOY_TARGET}/Shaders"
+                ${_direct_shader_cmds}
+                COMMAND
+                    ${CMAKE_COMMAND} -E touch
+                    ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+                DEPENDS ${HLSL_FILES}
+                COMMENT "Shader deploy from the sources to ${DEPLOY_TARGET}/Shaders"
+            )
+            list(
+                APPEND SHADER_DIRECT_HASHES
+                ${DEPLOY_TARGET_HASH}_shaders_direct.stamp
+            )
+
             list(APPEND DEPLOY_TARGET_HASHES ${DEPLOY_TARGET_HASH}_deploy.stamp)
             list(
                 APPEND DEPLOY_TARGET_HASHES
                 ${DEPLOY_TARGET_HASH}_shaders_full.stamp
             )
         endforeach()
+
+        # The plugin's build deploys the changed shaders too, so building the plugin alone (--target CommunityShaders) leaves
+        # the deploy targets' DLL and shaders matching. Every other writer of the deployed Shaders runs after the plugin (their
+        # rules reach prepare_aio.stamp, which depends on it), so none copies beside this one.
+        add_custom_target(
+            DEPLOY_SHADERS
+            DEPENDS ${SHADER_DIRECT_HASHES}
+            COMMENT "Shader deploy from the sources (part of the plugin's build)"
+        )
+        add_dependencies(${PROJECT_NAME} DEPLOY_SHADERS)
     else()
         # AUTO_PLUGIN_DEPLOYMENT is enabled but the host is not Windows. Do
         # not attempt to deploy to local Skyrim directories on non-Windows

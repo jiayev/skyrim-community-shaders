@@ -177,6 +177,7 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// Called every frame, loaded or not: the one place an unload (which stops Reset from being called) is
 	// noticed.
 	UpdateActive();
+	DCLF::AuditTreeLod();
 	if (!Running())
 		return false;
 	// The scene half of the tables, before the main camera's cull: everything the walk reads is final from
@@ -199,6 +200,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// geometry was tracked by its attach event at that frame's Present). Nothing of DCLF's is in flight here,
 	// as after Reset: the previous frame's jobs were joined there, and this frame's start below.
 	const auto eventsStart = std::chrono::steady_clock::now();
+	// A write-back job no join reached, before the events change the tables it reads.
+	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	store.ProcessEvents();
 	timing.eventsMs += MillisecondsSince(eventsStart);
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
@@ -212,6 +215,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
 	store.EndSceneFrame();
+	// The stood-in fade roots' milestones read back since the last kick, onto their nodes on the worker (joined at
+	// BeforeShadowMaps or the accumulate phase, before the engine's readers of the nodes).
+	DCLF::IndirectDraws::Get().KickFadeWriteBack();
 	// The roots this frame's scene lists leave out, before Main::Draw queues their build.
 	DCLF::PrimaryCull::Get().PublishListFilter();
 	// The shadow build, behind the placement job (KickPlacements, at the walk's end): kept at BeforeShadowMaps when nothing
@@ -235,6 +241,7 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	// shadow build, which reads the tables the join writes, is done first.
 	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	DCLF::SceneStore::Get().JoinPlacements();
+	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().Rebuild();
@@ -273,6 +280,7 @@ void DrawcallLimitFix::EarlyPrepass()
 	// A frame without shadow maps: the early shadow build is still out, and reads the tables the join writes.
 	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	store.JoinPlacements();
+	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	ScopedPerfEvent event("CS DCLF: accumulator tables and pipelines");
 	const auto start = std::chrono::steady_clock::now();
 	store.BuildFrame(DCLF::SceneStore::Phase::Accumulate);
@@ -527,7 +535,7 @@ void DrawcallLimitFix::DrawOcclusion()
 	// engine render a parity frame kept.
 	const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
 	DCLF::PassCapture::Get().SetOcclusionPhase(0);
-	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted, occlusionParityWaiting) : 0u;
+	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
 	for (std::uint32_t map = 0; map < 2; ++map)
 		if (occlusionParityWaiting & (1u << map)) {
 			if (drawn & (1u << map))

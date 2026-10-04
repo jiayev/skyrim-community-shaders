@@ -544,12 +544,27 @@ namespace DCLF
 			for (std::uint32_t h = 0; h < 2; ++h)
 				buffers->fadeStatesOut[h] = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
 					buffers->fadeStatesOutIndex[h], true);
-			buffers->nodeFadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.node-fade-states", buffers->nodeFadeStatesIndex);
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
 			buffers->fadeVisibility = CreateWords(kFadeVisibilityLists * kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
 			buffers->fadeRootLists = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused);
 			buffers->fadeAnimated = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-animated", unused);
 			buffers->fadeLog = StructuredBuffer(kFadeLogEntries, sizeof(FadeLogEntry), "cs.dclf.fade-log", unused, true);
+			// The write-back (FadeWriteBack): the event list, the roots' reported milestones, a host buffer per frame slot.
+			if (auto* host = RenderGraphRuntime::Get().Host()) {
+				buffers->fadeEventCapacity = smallStart ? 4u : kInitialFadeEvents;
+				buffers->fadeEvents = CreateWords(FadeWriteBack::BytesFor(buffers->fadeEventCapacity) / 4, true, "cs.dclf.fade-events");
+				buffers->fadeReported = StructuredBuffer(buffers->fadeRootCapacity, 2 * sizeof(std::uint32_t), "cs.dclf.fade-reported", unused, true);
+				auto writeBack = std::make_shared<FadeWriteBack>();
+				const std::uint32_t slots = host->FrameSlots();
+				for (std::uint32_t i = 0; i < slots; ++i) {
+					writeBack->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(buffers->fadeEventCapacity)));
+					writeBack->readbackEvents.push_back(buffers->fadeEventCapacity);
+				}
+				writeBack->filled.assign(slots, 0u);
+				writeBack->next = std::make_unique<std::atomic<std::shared_ptr<org::Buffer>>[]>(slots);
+				writeBack->capacity.store(buffers->fadeEventCapacity, std::memory_order_release);
+				buffers->fadeWriteBack = std::move(writeBack);
+			}
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
 		}
@@ -689,8 +704,8 @@ namespace DCLF
 					s.fadeRootLists->ResizeStructured(a_rows);
 					s.fadeAnimated->ResizeStructured(a_rows);
 					s.fadeStates->ResizeStructured(a_rows);
-					s.nodeFadeStates->ResizeStructured(a_rows);
-					s.nodeFadeStatesIndex = s.nodeFadeStates->GetSRVInfo(0).slot.index;
+					if (s.fadeReported)
+						s.fadeReported->ResizeStructured(a_rows);
 					for (std::uint32_t h = 0; h < 2; ++h) {
 						s.fadeStatesOut[h]->ResizeStructured(a_rows);
 						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->GetSRVInfo(0).slot.index;
@@ -699,7 +714,17 @@ namespace DCLF
 				s.fadeRootsHeld = ~0ull;
 				s.fadeRootListsHeld = ~0ull;
 				s.fadeStatesOutZeroed = false;
+				s.fadeReportedZeroed = false;
 			}
+		}
+		// The write-back's event list, to the most a frame appended past it; each slot's host buffer follows at its next recording.
+		if (s.fadeEvents && s.fadeWriteBack) {
+			auto& writeBack = *s.fadeWriteBack;
+			if (grow("fade events", s.fadeEventCapacity, writeBack.wanted.load(std::memory_order_acquire), sizeof(FadeEvent), [&](std::uint32_t a_rows) {
+					s.fadeEvents->ResizeStructured(static_cast<std::uint32_t>(FadeWriteBack::BytesFor(a_rows) / 4));
+					for (std::size_t i = 0; i < writeBack.readback.size(); ++i)
+						writeBack.next[i].store(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(a_rows)), std::memory_order_release);
+				})) {}
 		}
 		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
 				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);

@@ -112,6 +112,19 @@ namespace DCLF
 		void KickZPrepassBuild();
 
 		/**
+		 * @brief Render thread, at the end of the scene tables: the fade write-back's events read back since the last kick (and any
+		 * the last job did not reach), written onto their roots' nodes on the worker (the "fade write-back" job;
+		 * drawcall-limit-fix.md, "The fade write-back"). A stood-in root's node is otherwise left as the engine last wrote it, and
+		 * the engine's readers of it (the tree LOD's crossfade, the occlusion maps' cull, its next listing) would take that.
+		 */
+		void KickFadeWriteBack();
+		/**
+		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
+		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.
+		 */
+		void JoinFadeWriteBack();
+
+		/**
 		 * @brief CS_DCLF_ASYNC: at BeforeShadowMaps, after the scene phase and BeginShadowFrame, submits the shadow
 		 * epoch's build for last frame's render modes. ExecuteShadowFrame joins it; a change of modes is stale.
 		 */
@@ -172,13 +185,11 @@ namespace DCLF
 		 * clears its map, and CaptureOcclusion takes the view at its FinishAccumulating hook (render mode 0x1C);
 		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
 		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
-		 * The views a_nodeFades names (CS_DCLF_SKYLIGHT_PARITY's) take the fade roots' states from their nodes, as the engine's
-		 * reference render of the same frame does.
 		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
 		 */
 		void CaptureOcclusion(std::uint32_t a_view);
 		bool OcclusionReady(std::uint32_t a_view) const;
-		std::uint32_t ExecuteOcclusion(std::uint32_t a_views, std::uint32_t a_nodeFades = 0);
+		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
 
 		const ShadowStats& GetShadowStats() const { return shadowStats; }
 		void ResetShadowStats() { shadowStats = {}; }
