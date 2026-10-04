@@ -4791,12 +4791,33 @@ it with its own `OnVisible`, and a change of ownership is a readiness event (`fa
 
 -   **With the stand-in off** (`CS_DCLF_PRIMARY_EXCLUDE=0`) every comparison is exact, because no root is owned and the
     engine draws every fade-node occluder.
--   **With the stand-in on**, the check cannot judge a stood-in root. The engine does not cull such a root, its node keeps
-    the fade the engine last left there (often 0 from the load), and the reference cull reads that. DCLF's map draws the
-    root by the GPU's state, which is what the main camera's cull would have left. The fade update itself is checked by
-    `CS_DCLF_FADE_PARITY`.
+-   **With the stand-in on**, a stood-in root's node keeps the fade the engine last left there (often 0 from the load),
+    which the reference cull reads; the GPU's state is what the main camera's cull would have left. So on a parity frame
+    the occlusion views read the roots' node states instead (`SceneBuffers::nodeFadeStates`, `FadeState::ReadNode`,
+    uploaded by `ExecuteOcclusion`), and the comparison takes the same fades on both sides. The fade update itself is
+    checked by `CS_DCLF_FADE_PARITY`.
 -   **The cost.** The engine runs `SetupMask` on every frame that has an occluder under a root DCLF does not service,
     which is most frames.
+
+**The rule was never applied (2026-10-04).** The occlusion views' latch never named a states buffer (`fadeStatesIndex`
+was left 0), and their build (`ShadowBuildDrawsPass` with `sky`) bound no fade roots (`FadeRows` was `!sky`, from when
+the occlusion views followed no fades), so `BuildDrawsCS` skipped the test (`FadeRootsIndex != 0`). Both are set now.
+A probe that took the engine's registrations against the CPU's evaluation of the same rule found them in agreement
+while the maps differed by up to 70% of their texels; after the fix no map differs by more than 0.8%.
+
+**The depth pass's alpha reference.** What was left was single texels in foliage, DCLF always nearer. Under
+`RENDER_DEPTH` with `ALPHA_TEST`, `Utility.hlsl` also discards below `PerGeometry AlphaTestRef.x`, which the shadow
+maps (`RENDER_SHADOWMAP`) do not test and DCLF's shadow layout binds to the zero block. `BSUtilityShader::SetupGeometry`
+(`0x1414fae40`) writes it from the Lighting property's alpha property: `0x3F7EFEFF` (about 0.996) while it blends, else
+`threshold * (1/255) + 0x3B80802C` (just under one more step), and another `1/255` for a threshold of 4. The depth pass
+now computes it from the object record (`DCLFDepthAlphaTestRef`: the threshold from `AlphaTestRef`, the blend from
+`kRecordAlphaBlended`, which `kObjectAlphaBlended` sets). On the teleport route no map then has more than 10 texels
+apart by more than 1/256; the rest differ by one 16-bit step (vertex transform precision).
+
+**Skylighting's quadrants.** Skylighting's `SetViewFrustum` hook narrows the occlusion camera to one quarter of the
+square each frame (`frameCount % 4`), before the projection is built, so the map covers that quarter at twice the
+resolution, and `UpdateProbesCS` updates only the probes it covers (the others keep their accumulated values). The
+captured view projection is that quarter's, so DCLF culls the same quarter with no planes of its own.
 
 ## The primary's cull without DCLF's objects (Phase 1 of the GPU-driven frame)
 

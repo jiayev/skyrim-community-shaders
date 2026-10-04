@@ -1402,9 +1402,10 @@ namespace DCLF::Draws
 			bindings.objects = a_builder.ShaderResource(resources->scene->objects).View();
 			bindings.visibility = a_builder.UnorderedAccess(resources->visibility).View();
 			bindings.poolFirsts = a_builder.ShaderResource(resources->pool->firsts).View();
-			// The shadow views' casters under stood-in roots follow FadeStateCS's state (the occlusion views' do not): the static
-			// rows, and the states published the frame before (the latch's, undeclared like the depth segment's).
-			if (!sky && resources->scene->fadeRoots)
+			// The fade roots' rows: a shadow view's casters under stood-in roots follow FadeStateCS's state, and an occlusion view's
+			// occluders their roots' OnVisible (kCullFadeOnVisible); the states are the latch's (published the frame before, or a
+			// parity frame's node states), undeclared like the depth segment's.
+			if (resources->scene->fadeRoots)
 				bindings.fadeRoots = a_builder.ShaderResource(resources->scene->fadeRoots).View();
 			return bindings;
 		}
@@ -1475,7 +1476,7 @@ namespace DCLF::Draws
 
 	private:
 		// The fade roots' rows hold the tables' (the depth commit's upload), so a root slot names its row.
-		bool FadeRows() const { return !sky && resources->scene->fadeRoots && resources->scene->fadeRootCount; }
+		bool FadeRows() const { return resources->scene->fadeRoots && resources->scene->fadeRootCount; }
 
 		std::shared_ptr<ShadowResources> resources;
 		bool sky = false;

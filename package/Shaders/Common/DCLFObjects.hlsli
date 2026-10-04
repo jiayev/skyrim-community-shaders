@@ -22,7 +22,7 @@ struct DCLFObjectRecord
 	// multiplier (b8). Only read when DCLF_BINDLESS_DRAW is also defined; the record carries them either
 	// way so that the two builds share one layout.
 	int RoomIndex;
-	uint DCLFRecordFlags;  // bit 0: Subsurface Scattering's IsBeastRace, per actor (LightingConstants.h, kRecordBeastRace)
+	uint DCLFRecordFlags;  // bit 0: Subsurface Scattering's IsBeastRace, per actor; bit 1: alpha blended (LightingConstants.h, kRecord*)
 	float AlphaTestRef;
 	float EmissiveMult;
 	// Tree animation (technique 12). Per object: under DCLF_BINDLESS the PerGeometry buffer is one

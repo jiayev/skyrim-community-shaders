@@ -527,7 +527,7 @@ void DrawcallLimitFix::DrawOcclusion()
 	// engine render a parity frame kept.
 	const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
 	DCLF::PassCapture::Get().SetOcclusionPhase(0);
-	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
+	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted, occlusionParityWaiting) : 0u;
 	for (std::uint32_t map = 0; map < 2; ++map)
 		if (occlusionParityWaiting & (1u << map)) {
 			if (drawn & (1u << map))

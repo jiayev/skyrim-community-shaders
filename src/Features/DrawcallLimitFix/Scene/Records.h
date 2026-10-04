@@ -62,7 +62,9 @@ namespace DCLF
 		// BindlessObject::extraOffset (Records: kExtraRows rows, layout in SceneStore::RefreshFrameConstants):
 		// the ProjectedUV texture matrix and pixel parameters (CS_DCLF_PROJECTED_UV), and the landscape
 		// blend parameters of the MTLand techniques (CS_DCLF_MTLAND).
-		// Bit 17 is free: an owned fade root's faded-out state is the GPU's (FadeStateCS, kFadeRootOwned).
+		// An alpha-tested object whose alpha property also blends: the engine's depth pass tests it against a reference of its
+		// own (BSUtilityShader::SetupGeometry's PerGeometry AlphaTestRef; Utility.hlsl, DCLFDepthAlphaTestRef).
+		kObjectAlphaBlended = 1u << 17,
 		kObjectProjectedUV = 1u << 18,
 		kObjectLandBlend = 1u << 19,
 		kObjectDecalGroupShift = 20,

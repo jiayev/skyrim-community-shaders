@@ -458,6 +458,7 @@ namespace DCLF
 				              (ExternalEmittance::ShouldSuppress(interior, property, geometry) ? kObjectSuppressExternalEmittance : 0u) |
 				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
 				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
+				              (alphaTest && alpha->GetAlphaBlending() ? kObjectAlphaBlended : 0u) |
 				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
 				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
 				              (BeastRaceFace(*property, *geometry) ? kObjectBeastRace : 0u);
