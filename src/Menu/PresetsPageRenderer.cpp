@@ -63,7 +63,7 @@ namespace
 
 	bool CanApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
 	{
-		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline);
+		return pack.valid && (pack.hasEffects11 || pack.hasCSPresets || pack.hasBaseline || pack.hasFormEdits);
 	}
 
 	void ApplyPack(const UnifiedPresetCatalog::PackInfo& pack)
@@ -255,7 +255,7 @@ void PresetsPageRenderer::RenderToolbar()
 			ImGui::SetTooltip("%s", T("menu.presets.open_folder_tooltip", "Open the unified Presets library folder in Explorer."));
 	}
 
-	// CS Editor — same toolbar row, pinned to the right edge.
+	// CS Editor: same toolbar row, pinned to the right edge.
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const char* csEditorTitle = T("menu.presets.open_cs_editor", "CS Editor");
@@ -525,6 +525,14 @@ void PresetsPageRenderer::RenderDetail()
 			}
 
 			if (catalog.GetActivePackId() == pack->id) {
+				ImGui::SameLine(0.0f, style.ItemSpacing.x);
+				if (ImGui::Button(T("menu.presets.disable", "Disable Preset")))
+					catalog.DisableActivePack();
+				Util::AddTooltip(T("menu.presets.disable_tooltip",
+					"Turns this preset off. Scene settings and form edits fall back to your own, and an Effects 11 preset returns to the Legacy install."));
+			}
+
+			if (catalog.GetActivePackId() == pack->id) {
 				MenuFonts::FontRoleGuard sub(Menu::FontRole::Subtext);
 				ImGui::TextColored(theme.StatusPalette.SuccessColor, "%s", T("menu.presets.active_pack", "This pack is currently active."));
 			} else if (baselineEnabled) {
@@ -593,7 +601,7 @@ void PresetsPageRenderer::RenderDetail()
 						break;
 					}
 				}
-				ImGui::BulletText("%s — %s", label.c_str(),
+				ImGui::BulletText("%s: %s", label.c_str(),
 					disabled ? T("menu.features.disabled", "Disabled") : T("menu.features.enabled", "Enabled"));
 			}
 		}

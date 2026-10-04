@@ -13,6 +13,7 @@
 #include "Menu/FeatureListRenderer.h"
 #include "Menu/Fonts.h"
 #include "Menu/Icons/helpers/IconFonts.h"
+#include "Menu/ThemeManager.h"
 #include "State.h"
 #include "Utils/UI.h"
 
@@ -20,9 +21,6 @@ namespace
 {
 	using Marker = FeatureListPicker::Marker;
 	using Options = FeatureListPicker::Options;
-
-	/// Dot radius as a share of the line height, matching the main menu's scene indicator.
-	constexpr float kMarkerRadiusRatio = 0.18f;
 
 	/// A pinned row's accent: the tint behind it, as a share of the accent's opacity, and its edge bar.
 	constexpr float kPinnedTintAlpha = 0.14f;
@@ -54,10 +52,10 @@ namespace
 		const bool pinned = IsPinned(options, feature);
 		auto* drawList = ImGui::GetWindowDrawList();
 		// Pinned rows are the ones most edits start from, so they carry an accent behind the label.
-		if (pinned)
+		if (pinned) {
 			drawList->ChannelsSplit(2);
-		if (pinned)
 			drawList->ChannelsSetCurrent(1);
+		}
 
 		ImGui::PushStyleColor(ImGuiCol_Text, color);
 		if (ImGui::Selectable(std::format("{}##{}", name, shortName).c_str(), shortName == selected))
@@ -95,14 +93,10 @@ namespace
 		// Painted rather than laid out: the selectable spans the row, so a following item would sit past its edge.
 		const ImVec2 rowMin = ImGui::GetItemRectMin();
 		const float lineHeight = ImGui::GetTextLineHeight();
-		const float radius = lineHeight * kMarkerRadiusRatio;
+		const float radius = lineHeight * ThemeManager::Constants::SCENE_INDICATOR_RADIUS_RATIO;
 		const ImVec2 center(rowMin.x + ImGui::CalcTextSize(name.c_str()).x + ImGui::GetStyle().ItemInnerSpacing.x + radius,
 			(rowMin.y + ImGui::GetItemRectMax().y) * 0.5f);
-		const ImU32 dotColor = ImGui::GetColorU32(Util::Colors::GetInfo());
-		if (marker == Marker::Filled)
-			drawList->AddCircleFilled(center, radius, dotColor);
-		else
-			drawList->AddCircle(center, radius, dotColor, 0, std::max(1.0f, radius * 0.4f));
+		Util::DrawIconCircle(center, radius, ImGui::GetColorU32(Util::Colors::GetInfo()), marker == Marker::Filled);
 
 		if (options.markerTooltip && ImGui::IsItemHovered() &&
 			ImGui::IsMouseHoveringRect(ImVec2(center.x - lineHeight * 0.5f, center.y - lineHeight * 0.5f),

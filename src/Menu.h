@@ -510,7 +510,7 @@ private:
 	// the modifier is released first.
 	std::unordered_set<uint32_t> _comboFiredKeys;
 
-	// Skyrim AFK vanity camera — delayed spin while idle. Held off while any CS UI is open.
+	// Skyrim AFK vanity camera: delayed spin while idle. Held off while any CS UI is open.
 	bool vanityCameraDisabled = false;
 	float savedVanityCameraDelay = 180.0f;
 

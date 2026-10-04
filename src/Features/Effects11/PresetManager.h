@@ -15,8 +15,6 @@ public:
 	/** @brief Prefix for unified-pack effects11 folders registered in the library. */
 	static constexpr const char* kUnifiedPackIdPrefix = "pack:";
 
-	/** @brief Display / docs path (under Data via MO2 VFS). */
-	static constexpr const char* kPresetsRootRelative = "Data\\SKSE\\Plugins\\CommunityShaders\\Effects11\\Presets";
 	static constexpr const char* kEnbSeriesDirName = "enbseries";
 	static constexpr const char* kEnbSeriesIniName = "enbseries.ini";
 	/** @brief Required FX file for a valid library preset (matches ENBEffect::GetName()). */
@@ -55,9 +53,6 @@ public:
 	/** @brief Every preset found by the last DiscoverPresets. */
 	const std::vector<PresetInfo>& GetPresets() const { return presets; }
 
-	/** @brief Count of valid non-Legacy library presets. */
-	size_t GetValidLibraryPresetCount() const;
-
 	/** @brief The selected preset's id; kLegacyPresetId for Legacy. */
 	const std::string& GetActivePresetId() const { return activePresetId; }
 
@@ -85,9 +80,6 @@ public:
 	/** @brief Creates the presets root if needed and opens its real path in Explorer. */
 	bool OpenPresetsFolder() const;
 
-	/** @brief "DisplayName - enbseries path" for the status line. */
-	std::string GetActivePresetStatusSummary() const;
-
 	/** @brief Library id for a unified pack's effects11 folder. */
 	static std::string MakeUnifiedPackPresetId(const std::string& packId);
 
@@ -102,7 +94,7 @@ public:
 
 	/**
 	 * @brief Saves the live ENB settings (optional) and copies enbseries.ini + enbseries/ into destRoot.
-	 *  Only those ENB files are copied — never the whole Legacy game/Data root. No-ops when source == dest.
+	 *  Only those ENB files are copied, never the whole Legacy game/Data root. No-ops when source == dest.
 	 */
 	bool ExportActivePresetTo(const std::filesystem::path& destRoot, bool saveCurrent = true);
 

@@ -65,14 +65,11 @@ namespace
 			return false;
 		}
 
-		try {
-			std::ifstream input(path);
-			input >> document;
-			return document.is_object();
-		} catch (const std::exception& e) {
-			logger::error("Could not read override file {}: {}", path.string(), e.what());
+		auto parsed = Util::FileHelpers::ReadJsonFile(path, "override file");
+		if (!parsed || !parsed->is_object())
 			return false;
-		}
+		document = std::move(*parsed);
+		return true;
 	}
 
 	/** @brief Erases one setting leaf, then any groups it leaves empty. */

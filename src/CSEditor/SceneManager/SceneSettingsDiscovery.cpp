@@ -2,6 +2,8 @@
 
 #include "SceneSettingsInternal.h"
 #include "SceneSettingsLocationTargets.h"
+#include "CSEditor/FormEditSources.h"
+#include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Presets/UnifiedPresetCatalog.h"
@@ -217,6 +219,24 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	size_t sceneFileCount = 0;
 	bool wroteAll = true;
 
+	// Read before any sweep: exporting into the active pack reads its own Forms files as sources.
+	const bool exportForms = info.type != PresetType::Baseline;
+	std::vector<FormEditSources::FormEdit> formEdits;
+	bool formSourcesRead = true;
+	if (exportForms)
+		wroteAll = formSourcesRead = FormEditSources::ReadEffectiveFormEdits(formEdits);
+
+	const auto removeStaleFiles = [&](const std::vector<std::filesystem::path>& paths) {
+		for (const auto& path : paths) {
+			std::error_code ec;
+			std::filesystem::remove(path, ec);
+			if (ec) {
+				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
+				wroteAll = false;
+			}
+		}
+	};
+
 	if (exportScene) {
 		const auto resolveEntryFileSource = [](const SettingEntry* entry) -> std::optional<std::filesystem::path> {
 			if (entry->deleted || !entry->value.is_string() || entry->value.get_ref<const std::string&>().empty())
@@ -330,17 +350,10 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 		for (auto& [fileKey, file] : files)
 			std::ranges::transform(file.entries, file.entries.begin(), packFile);
 
-		wroteAll = !fileCopyFailed;
+		wroteAll &= !fileCopyFailed;
 		// The sweep runs only once every output is known, so a failure above costs nothing on disk. A file
 		// that survives it would be merged into rather than replaced, silently reviving a deleted setting.
-		for (const auto& path : FindPresetFiles(safeModName)) {
-			std::error_code ec;
-			std::filesystem::remove(path, ec);
-			if (ec) {
-				logger::error("[SceneSettings] Could not remove stale preset file '{}': {}", path.string(), ec.message());
-				wroteAll = false;
-			}
-		}
+		removeStaleFiles(FindPresetFiles(safeModName));
 
 		for (const auto& [key, file] : files) {
 			const auto& [directory, featureShortName] = key;
@@ -352,6 +365,21 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 			}
 		}
 		sceneFileCount = files.size();
+	}
+
+	if (exportForms) {
+		// The sweep would delete an unreadable source with nothing to replace it.
+		if (formSourcesRead)
+			removeStaleFiles(FormEditSources::ListPackFormFiles(packRoot));
+		const auto formsRoot = FormEditSources::GetPackFormsRoot(packRoot);
+		for (const auto& edit : formEdits) {
+			const auto path = FormEditSources::GetFilePath(formsRoot, edit.key);
+			Util::FileHelpers::EnsureDirectoryExists(path.parent_path());
+			if (!Util::FileHelpers::WriteJsonAtomically(path, edit.content, kOverwriteJsonIndent, "preset form edit")) {
+				logger::error("[SceneSettings] Preset '{}' failed to write '{}'", safeModName, path.string());
+				wroteAll = false;
+			}
+		}
 	}
 
 	if (exportEffects11) {
@@ -423,11 +451,14 @@ bool SceneSettingsManager::ExportPreset(const PresetExportInfo& info)
 	}
 
 	std::error_code activeEc;
-	if (exportScene && std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc))
+	const bool exportedIntoActivePack = std::filesystem::equivalent(packRoot, GetActiveScenePackRoot(), activeEc);
+	if (exportScene && exportedIntoActivePack)
 		ReloadOverwrites();
+	if (exportForms && exportedIntoActivePack)
+		CSEditor::ReloadFormEdits();
 
-	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s){}, type {}) to '{}'",
-		safeModName, sceneFileCount, exportEffects11 ? ", Effects 11" : "",
+	logger::info("[SceneSettings] Exported preset '{}' ({} scene file(s), {} form edit(s){}, type {}) to '{}'",
+		safeModName, sceneFileCount, formEdits.size(), exportEffects11 ? ", Effects 11" : "",
 		UnifiedPresetCatalog::GetPresetTypeName(info.type), packRoot.string());
 	return wroteAll;
 }

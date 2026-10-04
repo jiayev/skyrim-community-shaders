@@ -131,6 +131,7 @@
     "cs_editor.falling_speed": "Скорость падения",
     "cs_editor.favorites": "Избранное",
     "cs_editor.favourites": "Избранное",
+    "cs_editor.features": "Функции",
     "cs_editor.file": "Файл",
     "cs_editor.file_label": "Файл: %s",
     "cs_editor.filter_all": "Все",

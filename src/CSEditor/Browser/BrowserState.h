@@ -46,6 +46,10 @@ namespace Browser
 		bool favorite = false;
 		bool hasSavedFile = false;
 		bool unsaved = false;
+		/// The active preset pack has a file for the form; the badge fields come from Widget::GetPackBadge.
+		bool fromPack = false;
+		ImVec4 packBadgeColor{};
+		std::string packBadgeTooltip;
 	};
 
 	/** @brief A weather that references the inspected record, and in which of its slots. */
@@ -65,6 +69,7 @@ namespace Browser
 		bool onlyFlagged = false;
 		bool onlySaved = false;
 		bool onlyUnsaved = false;
+		bool onlyPreset = false;
 		/// Plugin filename to show, empty for every plugin.
 		std::string plugin;
 
@@ -85,6 +90,7 @@ namespace Browser
 		int flaggedCount = 0;
 		int savedCount = 0;
 		int unsavedCount = 0;
+		int presetCount = 0;
 		/// Plugins present in the category, with their record counts, sorted by name.
 		std::vector<std::pair<std::string, int>> plugins;
 
@@ -105,7 +111,7 @@ namespace Browser
 		{
 			filter[0] = '\0';
 			scope = FilterScope::All;
-			onlyFavorites = onlyFlagged = onlySaved = onlyUnsaved = false;
+			onlyFavorites = onlyFlagged = onlySaved = onlyUnsaved = onlyPreset = false;
 			plugin.clear();
 		}
 

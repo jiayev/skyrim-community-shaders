@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <filesystem>
 #include <format>
+#include <map>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -19,8 +21,10 @@
 
 #include "../../I18n/I18n.h"
 #include "../EditorWindow.h"
+#include "../FormEditSources.h"
 #include "Feature.h"
 #include "FeatureOverwritesPanel.h"
+#include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Features/PostProcessing.h"
@@ -73,6 +77,9 @@ namespace
 	std::string existingCover;
 	std::vector<std::string> existingScreenshots;
 	std::vector<std::filesystem::path> collidingFiles;
+	/// Form edits a CS or E11 export carries, read once when the dialog opens.
+	FormEditSources::FormKeySet formEditKeys;
+	std::string formEditSummary;
 	std::string pickerSearch;
 
 	bool dialogActive = false;
@@ -103,6 +110,29 @@ namespace
 								"them and writes this preset in their place. If another mod owns "
 								"these files, they are gone.{}"),
 			std::make_format_args(name, count, listed));
+	}
+
+	/** @brief "N edited forms included (Weathers 8, ImageSpaces 4)". */
+	std::string DescribeFormEdits(const FormEditSources::FormKeySet& keys)
+	{
+		std::map<std::string, size_t> countByFolder;
+		for (const auto& [folder, saveKey] : keys)
+			++countByFolder[folder];
+		std::string breakdown;
+		for (const auto& [folder, count] : countByFolder)
+			breakdown += std::format("{}{} {}", breakdown.empty() ? "" : ", ", folder, count);
+		auto total = keys.size();
+		return std::vformat(T(TKEY("scene_export_form_edits"), "{} edited forms included ({})"),
+			std::make_format_args(total, breakdown));
+	}
+
+	/** @brief The CS Editor form edits a CS or E11 export carries. */
+	void DrawFormEditSummary()
+	{
+		if (formEditKeys.empty())
+			Util::Text::Disabled("%s", T(TKEY("scene_export_no_form_edits"), "No edited forms to include."));
+		else
+			ImGui::TextUnformatted(formEditSummary.c_str());
 	}
 
 	/** @brief Shows a success or failure notification for an export. */
@@ -229,14 +259,8 @@ namespace
 			form.author = meta.author;
 		if (form.description.empty())
 			form.description = meta.description;
-		if (presetTags.empty() && !meta.tags.empty()) {
-			presetTags.clear();
-			for (size_t i = 0; i < meta.tags.size(); ++i) {
-				if (i > 0)
-					presetTags += ", ";
-				presetTags += meta.tags[i];
-			}
-		}
+		if (presetTags.empty())
+			presetTags = meta.tags | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 		if (!meta.version.empty())
 			form.version = meta.version;
 		if (!meta.csVersion.empty())
@@ -442,7 +466,9 @@ namespace
 	{
 		if (path.empty())
 			return {};
-		return path.filename().string();
+		// u8string: string() throws on names outside the ANSI code page, and ImGui expects UTF-8.
+		const auto name = path.filename().u8string();
+		return { reinterpret_cast<const char*>(name.data()), name.size() };
 	}
 
 	/** @brief Opens the Windows image picker. @return Whether any file was chosen. */
@@ -492,9 +518,11 @@ namespace
 		std::string status;
 		if (multi) {
 			if (!form.screenshotSources.empty())
-				status = std::format("{} file(s) selected", form.screenshotSources.size());
+				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_selected",
+					{ { "count", std::to_string(form.screenshotSources.size()) } }, "{count} file(s) selected");
 			else if (!cleared && !existingScreenshots.empty())
-				status = std::format("{} existing", existingScreenshots.size());
+				status = I18n::GetSingleton()->Format("cs_editor.scene_export_artwork_existing",
+					{ { "count", std::to_string(existingScreenshots.size()) } }, "{count} existing");
 			else
 				status = T(TKEY("scene_export_artwork_none"), "None");
 		} else if (singleSource && !singleSource->empty()) {
@@ -771,13 +799,16 @@ namespace
 		const bool validVersion = SceneSettingsManager::IsValidPresetVersion(form.version);
 		const auto* existingPack = UnifiedPresetCatalog::GetSingleton().FindPack(sanitizedName);
 		const bool typeMismatch = existingPack && !existingPack->AcceptsExport(form.type);
-		// A CS export with no scene settings and no base settings would write an empty pack.
+		// A CS export with no scene settings, base settings or form edits would write an empty pack.
 		const bool nothingToExport = form.type == PresetType::Baseline ? !HasBaselinePayload() :
-		                             form.type == PresetType::CS       ? !manager->HasAnyUserEntries() && !hasMods && !HasBaselinePayload() :
+		                             form.type == PresetType::CS       ? !manager->HasAnyUserEntries() && !hasMods && !HasBaselinePayload() && formEditKeys.empty() :
 		                                                                 false;
 		ImGui::BeginDisabled(sanitizedName.empty() || reservedName || !validVersion || typeMismatch || nothingToExport);
 		if (ImGui::Button(T(TKEY("scene_export_confirm"), "Export"))) {
 			collidingFiles = SceneSettingsManager::FindPresetFiles(sanitizedName);
+			if (form.type != PresetType::Baseline)
+				std::ranges::copy(FormEditSources::ListPackFormFiles(Util::PathHelpers::GetUnifiedPackPath(sanitizedName)),
+					std::back_inserter(collidingFiles));
 			exportConfirmation.title = T(TKEY("scene_export_title"), "Export preset");
 			exportConfirmation.message = collidingFiles.empty() ?
 			                                 std::vformat(T(TKEY("scene_export_create_message"),
@@ -805,7 +836,7 @@ namespace
 				Util::kTooltipWhenDisabled);
 		else if (nothingToExport)
 			Util::AddTooltip(T(TKEY("scene_export_nothing"),
-								 "Nothing to export yet: author scene settings, or tick base settings to include."),
+								 "Nothing to export yet: author scene settings, edit forms, or tick base settings to include."),
 				Util::kTooltipWhenDisabled);
 
 		ImGui::SameLine(0.0f, style.ItemSpacing.x);
@@ -823,6 +854,7 @@ namespace
 			ImGui::Separator();
 			if (!baselineOnly) {
 				DrawModList(&manager);
+				DrawFormEditSummary();
 				ImGui::Separator();
 			}
 		} else {
@@ -847,7 +879,7 @@ bool ScenePresetExport::CanExport()
 	auto* manager = SceneSettingsManager::GetSingleton();
 	if (!manager)
 		return false;
-	if (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty())
+	if (manager->HasAnyUserEntries() || !GetCachedModNames(manager).empty() || CSEditor::HasWidgetJsonFiles())
 		return true;
 	// E11-only export: no scene layer yet, but the live Effects 11 preset can still be written out.
 	// Post Processing alone is enough: its base settings can always go out as a preset.
@@ -863,6 +895,8 @@ void ScenePresetExport::Open()
 	ResetFormFields();
 	// The Presets page may never have scanned this session, and packs may have changed since.
 	UnifiedPresetCatalog::GetSingleton().Discover();
+	formEditKeys = FormEditSources::GetEffectiveKeys();
+	formEditSummary = DescribeFormEdits(formEditKeys);
 }
 
 void ScenePresetExport::OpenBaseline(const std::string& featureShortName)

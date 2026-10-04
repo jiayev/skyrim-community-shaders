@@ -25,6 +25,7 @@
 #include "SceneManager/SceneSettingsManager.h"
 #include "SceneManager/SceneSettingsUI.h"
 #include "State.h"
+#include "Utils/Climate.h"
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
@@ -32,10 +33,6 @@
 #include "WeatherPickerWindow.h"
 #include "WeatherUtils.h"
 #include "imgui_internal.h"
-
-#ifndef ICON_FA_PERSON_WALKING
-#	define ICON_FA_PERSON_WALKING ICON_FA_WALKING  // FA5 name; FA6 calls this person-walking
-#endif
 
 #include <atomic>
 #include <cmath>
@@ -197,12 +194,7 @@ void DrawIconFlag(ImVec2 center, float height, ImU32 color, bool filled)
 
 namespace
 {
-	// The editor can draw before globals are cached, so both fall back to the singleton.
-	RE::Calendar* GetCalendar()
-	{
-		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	}
-
+	// The editor can draw before globals are cached, so this falls back to the singleton.
 	RE::UI* GetUI()
 	{
 		return globals::game::ui ? globals::game::ui : RE::UI::GetSingleton();
@@ -1266,7 +1258,7 @@ void EditorWindow::RenderUI()
 			}
 			{
 				bool isActive = previewMode == PreviewMode::PlayMode;
-				if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_PERSON_WALKING), isActive, playModeX, enabledColor)) {
+				if (PlaceToggleIconButton("##PlayMode", Icons::FA(ICON_FA_WALKING), isActive, playModeX, enabledColor)) {
 					if (isActive)
 						ExitPreviewMode();
 					else
@@ -1283,24 +1275,15 @@ void EditorWindow::RenderUI()
 				Util::AddTooltip(IsTimePaused() ? T(TKEY("resume_time"), "Resume Time") : T(TKEY("pause_time"), "Pause Time"));
 			}
 
-			auto calendar = GetCalendar();
+			auto calendar = Util::Climate::GetCalendar();
 			if (calendar && calendar->gameHour && calendar->timeScale) {
 				ImGui::SetCursorScreenPos(ImVec2(gameTimeSliderX, iconY));
 				ImGui::SetNextItemWidth(halfSliderWidth);
 				DrawPausedAwareGameHourSlider("##MenuBarGameTimeSlider");
 
-				if (timePaused)
-					timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
-				else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
-					timeScaleSlider = calendar->timeScale->value;
-
 				ImGui::SetCursorScreenPos(ImVec2(timeSpeedSliderX, iconY));
 				ImGui::SetNextItemWidth(halfSliderWidth);
-				ImGui::BeginDisabled(timePaused);
-				if (ImGui::SliderFloat("##MenuBarTimeScaleSlider", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-						timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla") : "%.1fx", ImGuiSliderFlags_Logarithmic))
-					calendar->timeScale->value = timeScaleSlider;
-				ImGui::EndDisabled();
+				DrawTimeScaleSlider("##MenuBarTimeScaleSlider", calendar);
 			}
 
 			// Close — white cross, no red fill
@@ -1441,6 +1424,20 @@ void EditorWindow::SetupResources()
 	// Cache simple form widgets for form picker performance
 	WidgetFactory::PopulateSimpleWidgets<RE::BGSArtObject>(artObjectWidgets);
 	WidgetFactory::PopulateSimpleWidgets<RE::TESEffectShader>(effectShaderWidgets);
+}
+
+void EditorWindow::ReloadFormEdits(const FormEditSources::FormKeySet& keys)
+{
+	const auto reload = [&](Widget& widget) {
+		if (keys.contains(widget.GetFormKey()))
+			widget.Load(false);
+	};
+	for (auto* collection : GetWidgetCollections())
+		for (auto& widget : *collection)
+			reload(*widget);
+	if (currentCellLightingWidget)
+		reload(*currentCellLightingWidget);
+	InvalidateJsonAttachmentCache();
 }
 
 bool EditorWindow::IsViewportActive() const
@@ -2072,7 +2069,7 @@ void EditorWindow::PauseTime()
 {
 	if (timePaused)
 		return;
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (calendar && calendar->timeScale) {
 		savedTimeScale = calendar->timeScale->value;
 		calendar->timeScale->value = 0.0f;
@@ -2085,7 +2082,7 @@ void EditorWindow::ResumeTime()
 {
 	if (!timePaused)
 		return;
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (calendar && calendar->timeScale) {
 		calendar->timeScale->value = savedTimeScale;
 		timePaused = false;
@@ -2095,7 +2092,7 @@ void EditorWindow::ResumeTime()
 
 void EditorWindow::ResetTimeScale()
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->timeScale)
 		return;
 	if (timePaused)
@@ -2127,7 +2124,7 @@ namespace
 
 void EditorWindow::SetTimeRunningForMenu(bool a_needsRunningTime)
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->timeScale)
 		return;
 
@@ -2181,7 +2178,7 @@ bool EditorWindow::MenuOpenCloseEventHandler::Register()
 
 bool EditorWindow::DrawGameHourSlider(const char* label, const char* format)
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour)
 		return false;
 	const bool changed = ImGui::SliderFloat(label, &calendar->gameHour->value, 0.0f, kGameHourMax, format);
@@ -2237,9 +2234,24 @@ bool EditorWindow::DrawTimePauseToggle(const char* id, const ImVec2& size)
 	return clicked;
 }
 
+void EditorWindow::DrawTimeScaleSlider(const char* id, RE::Calendar* calendar)
+{
+	assert(calendar && calendar->timeScale);
+	if (timePaused)
+		timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
+	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
+		timeScaleSlider = calendar->timeScale->value;
+
+	ImGui::BeginDisabled(timePaused);
+	if (ImGui::SliderFloat(id, &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
+			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
+		calendar->timeScale->value = timeScaleSlider;
+	ImGui::EndDisabled();
+}
+
 void EditorWindow::DrawTimeControls()
 {
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (!calendar || !calendar->gameHour || !calendar->timeScale)
 		return;
 
@@ -2262,18 +2274,9 @@ void EditorWindow::DrawTimeControls()
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text("%s", T(TKEY("pause_time_tooltip"), "Pause or resume game time progression"));
 
-	if (timePaused)
-		timeScaleSlider = std::max(savedTimeScale, kTimeScaleMin);
-	else if (std::abs(calendar->timeScale->value - timeScaleSlider) > 0.01f)
-		timeScaleSlider = calendar->timeScale->value;
-
 	ImGui::SameLine();
 	ImGui::SetNextItemWidth(sliderWidth);
-	ImGui::BeginDisabled(timePaused);
-	if (ImGui::SliderFloat("##TimeScale", &timeScaleSlider, kTimeScaleMin, kTimeScaleMax,
-			timeScaleSlider == kVanillaTimeScale ? T(TKEY("vanilla_speed"), "Vanilla Speed") : "%.1fx", ImGuiSliderFlags_Logarithmic))
-		calendar->timeScale->value = timeScaleSlider;
-	ImGui::EndDisabled();
+	DrawTimeScaleSlider("##TimeScale", calendar);
 	if (auto _tt = Util::HoverTooltipWrapper())
 		ImGui::Text(T(TKEY("time_scale_tooltip"), "Adjust how fast time passes (vanilla: %.1fx)"), kVanillaTimeScale);
 

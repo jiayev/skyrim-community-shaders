@@ -296,7 +296,7 @@ namespace
 	{
 		if (!ShouldIntercept())
 			return RealRadioButton(label, v, buttonValue);
-		// A radio group is several calls against one address; only the last owns the gutter.
+		// A radio group is several calls against one address; only the first owns the gutter.
 		InterceptedCall interceptedCall;
 		SceneWidgetBinding::Guard guard(label, SceneWidgetBinding::Value::Int(v),
 			SceneWidgetBinding::GutterPolicy::GroupMember);

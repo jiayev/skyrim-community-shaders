@@ -24,7 +24,7 @@ void PaletteWindow::Draw()
 	const float bottomY = displaySize.y - pad;
 	const auto layoutCond = editor->resetLayout ? ImGuiCond_Always : ImGuiCond_FirstUseEver;
 
-	// Bottom-right anchor. AlwaysAutoResize sizes to this frame's scaled content — no fixed
+	// Bottom-right anchor. AlwaysAutoResize sizes to this frame's scaled content; no fixed
 	// pixel size, so res / UI scale changes stay proportional automatically.
 	ImGui::SetNextWindowPos(ImVec2(displaySize.x - pad, bottomY), layoutCond, ImVec2(1.0f, 1.0f));
 
@@ -38,7 +38,7 @@ void PaletteWindow::Draw()
 		ImGuiWindowFlags_NoSavedSettings |
 		ImGuiWindowFlags_NoCollapse;
 
-	// No title/close chrome — toggle via the action-bar Palette checkbox.
+	// No title/close chrome; toggle via the action-bar Palette checkbox.
 	if (ImGui::Begin("##CSEditorPalette", nullptr, kFlags)) {
 		DrawContents();
 	}

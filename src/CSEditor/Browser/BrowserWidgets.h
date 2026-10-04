@@ -137,6 +137,22 @@ namespace BrowserUI
 	/** @brief Moves the cursor on the current line so the next `width` pixels end at the right edge. */
 	void RightAlign(float width);
 
+	/** @brief What the user asked of a SelectionFooter. */
+	enum class SelectionAction
+	{
+		None,
+		SelectShown,
+		Clear
+	};
+
+	/**
+	 * @brief Footer of a tickable list: a select-all-shown link and, once anything is ticked, a chip counting the
+	 * ticks, hidden ones included, that clears them.
+	 * @param selected Every tick. @param selectedShown Ticks among the rows currently listed.
+	 * @param clearTooltip Tooltip of the clear chip.
+	 */
+	SelectionAction SelectionFooter(size_t selected, size_t selectedShown, const char* clearTooltip);
+
 	/** @brief Table row height that fits one frame-height control plus cell padding. */
 	float RowHeight();
 }

@@ -7,7 +7,7 @@ struct ImFont;
 
 namespace MenuFonts
 {
-	/** Must match Menu::FontRole::Count — kept here so FontAtlasState.h need not include Menu.h. */
+	/** Must match Menu::FontRole::Count; kept here so FontAtlasState.h need not include Menu.h. */
 	inline constexpr size_t kFontRoleCount = 5;
 
 	/**
@@ -30,7 +30,7 @@ namespace MenuFonts
 		mutable std::array<float, kFontRoleCount> cachedFontPixelSizesByRole = {};
 		std::string cachedFontSignature;
 		mutable std::array<ImFont*, kFontRoleCount> loadedFontRoles = {};
-		/** Standalone icon typefaces — not MergeMode; PUA ranges overlap across families. */
+		/** Standalone icon typefaces, not MergeMode; PUA ranges overlap across families. */
 		mutable ImFont* fontAwesomeIconFont = nullptr;
 		mutable ImFont* lucideIconFont = nullptr;
 		mutable ImFont* tablerIconFont = nullptr;

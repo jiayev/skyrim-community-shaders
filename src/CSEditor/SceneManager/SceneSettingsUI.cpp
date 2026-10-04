@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <list>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -115,7 +116,8 @@ namespace
 		bool open = true;
 		bool pendingFocus = false;
 	};
-	std::vector<LocationWindow> locationWindows;
+	/// A list because a drawn window can open another mid-iteration (greyed-setting navigation).
+	std::list<LocationWindow> locationWindows;
 
 	struct LocationPickerState
 	{
@@ -1095,22 +1097,22 @@ bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureSh
 	if (!editorWindow || !editorWindow->open || !manager)
 		return false;
 
+	const auto warn = [editorWindow](const char* message) {
+		editorWindow->ShowNotification(message, Util::Colors::GetWarning(), EditorWindow::kLongNotificationDuration);
+	};
+
 	const auto& targets = manager->GetCurrentLocationTargets();
 	if (targets.empty()) {
-		editorWindow->ShowNotification(
-			T(TKEY("scene_override_location_unknown"),
-				"Can't tell where you are yet. Step into the world, then try again."),
-			Util::Colors::GetWarning(), 4.0f);
+		warn(T(TKEY("scene_override_location_unknown"),
+			"Can't tell where you are yet. Step into the world, then try again."));
 		return false;
 	}
 
 	// Flat Location is the layer that accepts non-blendable settings Weather/TOD grey out.
 	if (!SceneSettingsManager::IsSettingAllowedForType(SceneSettingsManager::SceneType::Location,
 			featureShortName, settingPath, settingKey, false)) {
-		editorWindow->ShowNotification(
-			T(TKEY("scene_override_location_unsupported"),
-				"This place can't hold that setting — Location scenes don't support it either."),
-			Util::Colors::GetWarning(), 4.0f);
+		warn(T(TKEY("scene_override_location_unsupported"),
+			"This place can't hold that setting: Location scenes don't support it either."));
 		return false;
 	}
 
@@ -1118,10 +1120,8 @@ bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureSh
 	const auto& target = targets.back();
 	const bool alreadyAuthored = manager->IsLocationTargetAuthored(target.type, target.formKey);
 	if (!alreadyAuthored && !manager->AddLocationTarget(target)) {
-		editorWindow->ShowNotification(
-			T(TKEY("scene_override_location_add_failed"),
-				"Couldn't add an override for where you are. Check the log."),
-			Util::Colors::GetWarning(), 4.0f);
+		warn(T(TKEY("scene_override_location_add_failed"),
+			"Couldn't add an override for where you are. Check the log."));
 		return false;
 	}
 
@@ -1146,14 +1146,14 @@ bool SceneSettingsUI::OpenCurrentLocationForSetting(const std::string& featureSh
 		editorWindow->ShowNotification(
 			I18n::GetSingleton()->Format("cs_editor.scene_override_location_added",
 				{ { "place", target.name } },
-				"Added {place} — edit this setting here."),
-			Util::Colors::GetInfo(), 3.0f);
+				"Added {place}. Edit this setting here."),
+			Util::Colors::GetInfo());
 	} else if (turnedOffTod) {
 		editorWindow->ShowNotification(
 			I18n::GetSingleton()->Format("cs_editor.scene_override_location_flat",
 				{ { "place", target.name } },
 				"Opened {place}. Time of Day is off here so this setting can be edited."),
-			Util::Colors::GetInfo(), 3.5f);
+			Util::Colors::GetInfo(), EditorWindow::kLongNotificationDuration);
 	}
 
 	return true;

@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "FormEditSources.h"
 #include "Util.h"
 #include "Utils/Form.h"
 #include <array>
@@ -109,6 +110,9 @@ public:
 
 	/** @brief Full path to this widget's save file. */
 	std::string GetSaveFilePath() const;
+
+	/** @brief Save folder and save key, the form's identity in user and pack form edit folders. */
+	FormEditSources::FormKey GetFormKey() const { return { GetFolderName(), GetSaveKey() }; }
 
 	/** @brief Get the form ID as an 8-character hex string. */
 	virtual std::string GetFormID() const
@@ -226,6 +230,17 @@ public:
 
 	/** @brief Delete this widget's saved JSON file from disk. */
 	virtual void Delete();
+
+	/** @brief Colour and tooltip of the badge marking a form the active preset pack supplies. */
+	struct PackBadge
+	{
+		ImVec4 color;
+		std::string tooltip;
+	};
+	/** @brief The pack badge for this form, or nullopt when the active pack has no file for it. */
+	std::optional<PackBadge> GetPackBadge() const;
+	/** @brief Draws the pack badge on the current line; nothing when the active pack has no file for this form. */
+	void DrawPackSourceBadge() const;
 
 	/** @brief Load widget-specific settings from the internal JSON object. Must be implemented by subclasses. */
 	virtual void LoadSettings() = 0;

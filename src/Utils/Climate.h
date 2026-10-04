@@ -26,6 +26,9 @@ namespace Util::Climate
 		return (interval.end * HoursPerTimingUnit + interval.begin * HoursPerTimingUnit) * 0.5f;
 	}
 
+	/** @brief The game calendar; the editor can draw before globals are cached, so the singleton is the fallback. */
+	RE::Calendar* GetCalendar();
+
 	/** @brief Key hours of a climate's day; falls back to the vanilla game setting before it is loaded. */
 	DayHours GetDayHours(const RE::TESClimate& climate);
 

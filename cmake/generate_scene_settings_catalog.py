@@ -354,6 +354,35 @@ def masked_text(path: Path) -> str:
     return mask_cpp_source(read_text(path))
 
 
+_CLASS_DEFINITION_PATTERN = re.compile(r"\b(?:struct|class)\s+(\w+)\b(?=[^{;]*\{)")
+
+
+@functools.lru_cache(maxsize=None)
+def class_definition_braces(path: Path) -> dict[str, int]:
+    """Opening brace of each class's first definition in a file, so lookups skip a per-class rescan."""
+    text = read_text(path)
+    braces: dict[str, int] = {}
+    for match in _CLASS_DEFINITION_PATTERN.finditer(text):
+        braces.setdefault(match.group(1), text.find("{", match.end()))
+    return braces
+
+
+def class_body(path: Path, class_name: str) -> str | None:
+    """Body of a class's first definition in a file, excluding its braces."""
+    start = class_definition_braces(path).get(class_name)
+    if start is None:
+        return None
+    text = read_text(path)
+    end = find_matching_brace(text, start)
+    return text[start + 1:end] if end >= 0 else None
+
+
+def write_if_changed(path: Path, text: str) -> None:
+    """Leaves an unchanged output's timestamp alone so its dependents don't rebuild."""
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.write_text(text, encoding="utf-8")
+
+
 def cpp_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -660,16 +689,11 @@ def collect_feature_struct_fields(paths: list[Path], features: dict[str, dict[st
     raw_feature_fields: dict[str, dict[str, dict[str, str]]] = {}
     feature_bases: dict[str, dict[str, list[str]]] = {}
     for path in paths:
-        text = read_text(path)
         for feature_class in features:
-            feature_match = re.search(rf"\b(?:struct|class)\s+{re.escape(feature_class)}\b[^\{{;]*\{{", text)
-            if not feature_match:
-                continue
-            feature_end = find_matching_brace(text, feature_match.end() - 1)
-            if feature_end < 0:
+            feature_body = class_body(path, feature_class)
+            if feature_body is None:
                 continue
 
-            feature_body = text[feature_match.end():feature_end]
             for struct_match in re.finditer(STRUCT_DECL_RE, feature_body):
                 body_start = struct_match.end()
                 body_end = find_matching_brace(feature_body, body_start - 1)
@@ -708,16 +732,11 @@ def collect_feature_struct_fields(paths: list[Path], features: dict[str, dict[st
 def collect_feature_member_fields(paths: list[Path], features: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
     feature_members: dict[str, dict[str, str]] = {}
     for path in paths:
-        text = read_text(path)
         for feature_class in features:
-            feature_match = re.search(rf"\b(?:struct|class)\s+{re.escape(feature_class)}\b[^\{{;]*\{{", text)
-            if not feature_match:
-                continue
-            feature_end = find_matching_brace(text, feature_match.end() - 1)
-            if feature_end < 0:
+            raw_feature_body = class_body(path, feature_class)
+            if raw_feature_body is None:
                 continue
 
-            raw_feature_body = text[feature_match.end():feature_end]
             members = parse_top_level_fields(raw_feature_body)
             for struct_match in re.finditer(STRUCT_DECL_RE, raw_feature_body):
                 body_end = find_matching_brace(raw_feature_body, struct_match.end() - 1)
@@ -736,17 +755,11 @@ def collect_feature_member_fields(paths: list[Path], features: dict[str, dict[st
 def collect_feature_type_aliases(paths: list[Path], features: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
     feature_aliases: dict[str, dict[str, str]] = {}
     for path in paths:
-        text = read_text(path)
         for feature_class in features:
-            feature_match = re.search(rf"\b(?:struct|class)\s+{re.escape(feature_class)}\b[^\{{;]*\{{", text)
-            if not feature_match:
-                continue
-            feature_end = find_matching_brace(text, feature_match.end() - 1)
-            if feature_end < 0:
-                continue
-
             # Class-scoped: two features may declare same-named aliases in one combined scan.
-            feature_body = text[feature_match.end():feature_end]
+            feature_body = class_body(path, feature_class)
+            if feature_body is None:
+                continue
             feature_aliases.setdefault(feature_class, {}).update(collect_type_aliases(feature_body))
     return feature_aliases
 
@@ -950,6 +963,9 @@ def collect_serialized_settings_components(
     components: list[SerializedSettingsComponent] = []
     for feature_class in features:
         for text, masked in sources:
+            # Substring prefilter: the regex below would otherwise scan every file for every feature.
+            if f"{feature_class}::SaveSettings" not in masked:
+                continue
             method = re.search(
                 rf"\bvoid\s+{re.escape(feature_class)}::SaveSettings"
                 rf"\s*\([^)]*&\s*(\w+)\s*\)\s*(?:const\s*)?\{{", masked)
@@ -1569,7 +1585,9 @@ def normalize_setting_path(value: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
+@functools.lru_cache(maxsize=None)
 def collect_local_setting_aliases(body: str) -> dict[str, tuple[str, ...]]:
+    """Cached: every control in a function body asks for the same aliases."""
     aliases: dict[str, tuple[str, ...]] = {}
     pattern = re.compile(
         r"\b(?:bool|int|unsigned|uint(?:32_t)?|float|double|auto)\s*(&?)\s*"
@@ -2277,7 +2295,9 @@ def _collect_indirect_table_wrappers(
     return wrappers
 
 
-def _collect_scoped_categories(body: str, prefix: str) -> list[tuple[int, int, str, str]]:
+@functools.lru_cache(maxsize=None)
+def _collect_scoped_categories(body: str, prefix: str) -> tuple[tuple[int, int, str, str], ...]:
+    """Cached: every control in a function body asks for the same categories."""
     categories = []
     pattern = re.compile(
         r"\b(?:ImGui|Util)::(?:" + "|".join(sorted(CATEGORY_CONTROL_NAMES)) + r")\s*\(")
@@ -2294,7 +2314,7 @@ def _collect_scoped_categories(body: str, prefix: str) -> list[tuple[int, int, s
         translated = extract_i18n_call(body[category.start():close + 1], prefix)
         if block_end >= 0 and translated:
             categories.append((block_start, block_end, translated[1], translated[0]))
-    return categories
+    return tuple(categories)
 
 
 def collect_indirect_numeric_projections(paths: list[Path]):
@@ -2303,11 +2323,10 @@ def collect_indirect_numeric_projections(paths: list[Path]):
     collected_aggregate_all = {}
 
     texts = {path: read_text(path) for path in paths}
-    source_functions = collect_source_functions(paths)
     definitions = {}
-    for path, text in texts.items():
+    for path in texts:
         constants = source_numeric_constants(path)
-        for function in (value for value in source_functions if value.source == path):
+        for function in collect_source_functions([path]):
             parameters = tuple(
                 (value.type_name, value.name, value.default)
                 for value in function.parameters)
@@ -2760,7 +2779,7 @@ def _control_category(
     pattern = re.compile(
         r"\b(?:ImGui|Util)::(?:" +
         "|".join(sorted(PERSISTENT_CATEGORY_CONTROL_NAMES)) + r")\s*\(")
-    masked = mask_cpp_source(body[:position])
+    masked = mask_cpp_source(body)[:position]
     for category in pattern.finditer(masked):
         close = find_matching_paren(body, category.end() - 1)
         if close < 0 or close >= position:
@@ -2775,7 +2794,9 @@ def _control_category(
     return label, key
 
 
+@functools.lru_cache(maxsize=None)
 def collect_member_selector_helpers(text: str):
+    """Cached: the projection and context passes both scan every source."""
     candidates = {}
     constants = collect_numeric_constants(text)
     pattern = re.compile(
@@ -4697,7 +4718,7 @@ def write_catalog(entries: list[dict[str, object]], out_dir: Path):
         key=lambda entry: (entry["feature"], entry["path"], entry["key"]),
     )
 
-    header.write_text("""#pragma once
+    write_if_changed(header, """#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -4812,7 +4833,7 @@ namespace SceneSettingsCatalog
 \tbool RegisterControlResolver(std::string_view featureShortName, ControlResolver resolver);
 \tconst SettingMetadata* FindSettingForControl(Feature* feature, const void* valueAddress);
 }
-""", encoding="utf-8")
+""")
     rows = []
     choice_arrays = []
     for index, e in enumerate(entries):
@@ -4902,7 +4923,7 @@ namespace SceneSettingsCatalog
     joined_feature_blocks = "\n".join(feature_blocks)
     entry_points = required_entry_points(entries)
     entry_point_rows = "\n".join(f'\t\t"{point}",' for point in entry_points)
-    source.write_text(f"""#include "SceneSettingsCatalog.generated.h"
+    write_if_changed(source, f"""#include "SceneSettingsCatalog.generated.h"
 
 #include <algorithm>
 #include <array>
@@ -4954,9 +4975,9 @@ namespace SceneSettingsCatalog
 \t}}
 
 }}
-""", encoding="utf-8")
+""")
 
-    adapters.write_text(f"""#include "SceneSettingsCatalog.generated.h"
+    write_if_changed(adapters, f"""#include "SceneSettingsCatalog.generated.h"
 
 #include "Feature.h"
 {includes}
@@ -5005,7 +5026,7 @@ namespace SceneSettingsCatalog
 \t\treturn resolver != resolvers.end() ? resolver->second(feature, valueAddress) : nullptr;
 \t}}
 }}
-""", encoding="utf-8")
+""")
 
 
 # Logical editor kind -> the ImGui entry points that can produce it. `sourceWidget` names an

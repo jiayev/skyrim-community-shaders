@@ -4,7 +4,7 @@
  * @file LocationTypeIcons.h
  * @brief Icon glyphs for vanilla LocType* keywords.
  *
- * Locations don't use a fixed DATA bitfield like weather — they carry BGSKeyword
+ * Locations don't use a fixed DATA bitfield like weather; they carry BGSKeyword
  * forms whose editor IDs start with "LocType". A single location may hold several;
  * callers that want "one icon" should pick a primary (e.g. dungeon-ish over
  * habitation, or the first match in kLocationTypeIcons order).
@@ -56,7 +56,7 @@ namespace LocationTypeIcons
 	inline constexpr Entry kGuild{ "LocTypeGuild", Icons::FA(ICON_FA_UNIVERSITY), "Guild" };
 	inline constexpr Entry kCastle{ "LocTypeCastle", Icons::FA(ICON_FA_CHESS_ROOK), "Castle" };
 	inline constexpr Entry kBarracks{ "LocTypeBarracks", Icons::FA(ICON_FA_SHIELD_ALT), "Barracks" };
-	inline constexpr Entry kJail{ "LocTypeJail", Icons::GI(ICON_GI_HANDCUFFS), "Jail" };  // Game Icons — handcuffs by Lorc
+	inline constexpr Entry kJail{ "LocTypeJail", Icons::GI(ICON_GI_HANDCUFFS), "Jail" };  // Game Icons: handcuffs by Lorc
 	inline constexpr Entry kCemetery{ "LocTypeCemetery", Icons::FA(ICON_FA_CROSS), "Cemetery" };
 
 	// ---------------------------------------------------------------------------
@@ -79,12 +79,12 @@ namespace LocationTypeIcons
 	inline constexpr Entry kBanditCamp{ "LocTypeBanditCamp", Icons::FA(ICON_FA_CAMPGROUND), "Bandit Camp" };
 	inline constexpr Entry kForswornCamp{ "LocTypeForswornCamp", Icons::FA(ICON_FA_CAMPGROUND), "Forsworn Camp" };
 	inline constexpr Entry kGiantCamp{ "LocTypeGiantCamp", Icons::FA(ICON_FA_MOUNTAIN), "Giant Camp" };
-	inline constexpr Entry kFalmerHive{ "LocTypeFalmerHive", Icons::GI(ICON_GI_ELF_EAR), "Falmer Hive" };  // Game Icons — elf-ear by Delapouite
+	inline constexpr Entry kFalmerHive{ "LocTypeFalmerHive", Icons::GI(ICON_GI_ELF_EAR), "Falmer Hive" };  // Game Icons: elf-ear by Delapouite
 	inline constexpr Entry kHagravenNest{ "LocTypeHagravenNest", Icons::FA(ICON_FA_CROW), "Hagraven Nest" };
-	inline constexpr Entry kVampireLair{ "LocTypeVampireLair", Icons::GI(ICON_GI_FANGS), "Vampire Lair" };  // Game Icons — fangs by Skoll
+	inline constexpr Entry kVampireLair{ "LocTypeVampireLair", Icons::GI(ICON_GI_FANGS), "Vampire Lair" };  // Game Icons: fangs by Skoll
 	inline constexpr Entry kWarlockLair{ "LocTypeWarlockLair", Icons::FA(ICON_FA_HAT_WIZARD), "Warlock Lair" };
-	inline constexpr Entry kWerewolfLair{ "LocTypeWerewolfLair", Icons::GI(ICON_GI_WOLF_HOWL), "Werewolf Lair" };  // Game Icons — wolf-howl by Lorc
-	inline constexpr Entry kWerebearLair{ "LocTypeWerebearLair", Icons::GI(ICON_GI_CAVE_ENTRANCE), "Werebear Lair" };  // Game Icons — cave-entrance by Delapouite
+	inline constexpr Entry kWerewolfLair{ "LocTypeWerewolfLair", Icons::GI(ICON_GI_WOLF_HOWL), "Werewolf Lair" };  // Game Icons: wolf-howl by Lorc
+	inline constexpr Entry kWerebearLair{ "LocTypeWerebearLair", Icons::GI(ICON_GI_CAVE_ENTRANCE), "Werebear Lair" };  // Game Icons: cave-entrance by Delapouite
 	inline constexpr Entry kAnimalDen{ "LocTypeAnimalDen", Icons::FA(ICON_FA_PAW), "Animal Den" };
 	inline constexpr Entry kSprigganGrove{ "LocTypeSprigganGrove", Icons::FA(ICON_FA_LEAF), "Spriggan Grove" };
 	inline constexpr Entry kDwarvenAutomatons{ "LocTypeDwarvenAutomatons", Icons::FA(ICON_FA_ROBOT), "Dwarven Automatons" };
@@ -93,15 +93,15 @@ namespace LocationTypeIcons
 	// ---------------------------------------------------------------------------
 	// Waterborne
 	// ---------------------------------------------------------------------------
-	inline constexpr Entry kShip{ "LocTypeShip", Icons::GI(ICON_GI_SAILBOAT), "Ship" };  // Game Icons — sailboat by Delapouite
-	inline constexpr Entry kShipwreck{ "LocTypeShipwreck", Icons::GI(ICON_GI_SHIP_WRECK), "Shipwreck" };  // Game Icons — ship-wreck by Delapouite
+	inline constexpr Entry kShip{ "LocTypeShip", Icons::GI(ICON_GI_SAILBOAT), "Ship" };  // Game Icons: sailboat by Delapouite
+	inline constexpr Entry kShipwreck{ "LocTypeShipwreck", Icons::GI(ICON_GI_SHIP_WRECK), "Shipwreck" };  // Game Icons: ship-wreck by Delapouite
 
 	/** @brief Fallback when the keyword isn't a known LocType (or is mod-added). */
 	inline constexpr Icons::GlyphRef kUnknownIcon = Icons::FA(ICON_FA_MAP_MARKER_ALT);
 
 	/**
 	 * @brief How specific a LocType is when a location carries several.
-	 * Higher wins — dungeon descriptors beat City/Habitation/Clearable so Bleak Falls
+	 * Higher wins: dungeon descriptors beat City/Habitation/Clearable so Bleak Falls
 	 * shows a dungeon glyph rather than a generic habitation or clearable mark.
 	 */
 	[[nodiscard]] inline int GetLocationTypeIconPriority(std::string_view editorId) noexcept
@@ -141,7 +141,7 @@ namespace LocationTypeIcons
 			return 40;
 		if (editorId == kHabitationHasInn.editorId || editorId == kHabitation.editorId)
 			return 30;
-		// Nearly every dungeon is also Clearable — keep it weakest so it never steals the icon.
+		// Nearly every dungeon is also Clearable, so keep it weakest so it never steals the icon.
 		if (editorId == kClearable.editorId)
 			return 10;
 		return 0;

@@ -4,7 +4,7 @@
  * @file WeatherTypeIcons.h
  * @brief Weather-class glyphs for TESWeather records.
  *
- * Prefer editor ID / display-name tokens over DATA flags — vanilla flags are often
+ * Prefer editor ID / display-name tokens over DATA flags: vanilla flags are often
  * wrong or used as catch-alls (many event / DLC weathers are tagged Cloudy).
  *
  * Precipitation flags (rain / snow) are still trusted when labels don't match.
@@ -22,6 +22,7 @@
 #include "Menu/Icons/helpers/IconFonts.h"
 
 #include "RE/T/TESWeather.h"
+#include "Utils/Format.h"
 
 #include <algorithm>
 #include <cctype>
@@ -75,15 +76,13 @@ namespace WeatherTypeIcons
 		if (label.empty())
 			return std::nullopt;
 
-		std::string lower(label);
-		std::transform(lower.begin(), lower.end(), lower.begin(),
-			[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		const std::string lower = Util::ToLower(std::string(label));
 
 		auto has = [&](std::string_view token) {
 			return lower.find(token) != std::string::npos;
 		};
 
-		// Most specific tokens first — e.g. SkyrimOvercastRain is rain, not cloudy.
+		// Most specific tokens first, e.g. SkyrimOvercastRain is rain, not cloudy.
 		if (has("storm") || has("thunder") || has("lightning"))
 			return kStorm;
 		if (has("blizzard") || has("snow") || has("ice"))
@@ -129,7 +128,7 @@ namespace WeatherTypeIcons
 		}
 
 		using Flag = RE::TESWeather::WeatherDataFlag;
-		// Only trust precipitation / aurora flags — Cloudy and Pleasant are widely
+		// Only trust precipitation / aurora flags: Cloudy and Pleasant are widely
 		// mis-set on event, scripted, and DLC weathers, which made the cloud glyph
 		// show up everywhere. Those fall through to CloudSun instead.
 		if (weather->data.flags.any(Flag::kRainy))

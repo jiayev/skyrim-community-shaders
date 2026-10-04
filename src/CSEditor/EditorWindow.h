@@ -3,6 +3,7 @@
 #include "Buffer.h"
 
 #include "Browser/BrowserState.h"
+#include "FormEditSources.h"
 #include "LightEditor.h"
 #include "Weather/CellLightingWidget.h"
 #include "Weather/ImageSpaceWidget.h"
@@ -86,6 +87,10 @@ public:
 	static constexpr float kTimeScaleMax = 4000.0f;
 	static constexpr float kMenuBarSliderWidth = 400.0f;
 
+	// Notification durations, in seconds; the long one suits messages that explain what to do next.
+	static constexpr float kNotificationDuration = 3.0f;
+	static constexpr float kLongNotificationDuration = 4.0f;
+
 	// Preview mode constants
 	static constexpr float kDefaultFlySpeed = 10.0f;
 	static constexpr float kMinFlySpeed = 1.0f;
@@ -156,6 +161,9 @@ public:
 
 	/** @brief Create widget instances for all game forms and load saved settings. */
 	void SetupResources();
+
+	/** @brief Reloads every built widget whose form is in @p keys from its resolved file, then refreshes the JSON markers. */
+	void ReloadFormEdits(const FormEditSources::FormKeySet& keys);
 
 	/** @brief Top-level draw entry point called once per frame when the editor is open. */
 	void Draw();
@@ -240,6 +248,9 @@ public:
 	 */
 	bool DrawTimePauseToggle(const char* id, const ImVec2& size = ImVec2(0, 0));
 
+	/** @brief Logarithmic time-scale slider synced to the calendar, disabled while time is paused. */
+	void DrawTimeScaleSlider(const char* id, RE::Calendar* calendar);
+
 	/** @brief Draw the full time controls panel (pause, game time, timescale). */
 	void DrawTimeControls();
 
@@ -321,7 +332,7 @@ public:
 	 * @param color   Text color (defaults to error red).
 	 * @param duration How long the notification remains visible, in seconds.
 	 */
-	void ShowNotification(const std::string& message, const ImVec4& color = Util::Colors::GetError(), float duration = 3.0f);
+	void ShowNotification(const std::string& message, const ImVec4& color = Util::Colors::GetError(), float duration = kNotificationDuration);
 
 	/** @brief Draw all active notifications and expire old ones. */
 	void RenderNotifications();

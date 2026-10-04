@@ -3,16 +3,17 @@
 
 #define I18N_KEY_PREFIX "feature.cs_editor."
 
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "Deferred.h"
 #include "Feature.h"
 #include "Menu.h"
-#include "CSEditor/SceneManager/SceneSettingsManager.h"
 #include "State.h"
 #include "Util.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
 #include "CSEditor/EditorWindow.h"
+#include "CSEditor/FormEditSources.h"
 #include "CSEditor/WeatherPickerWindow.h"
 #include "Features/PerformanceOverlay.h"
 #include "Menu/ThemeManager.h"
@@ -83,13 +84,23 @@ bool CSEditor::HasWidgetJsonFiles()
 		}
 	}
 
+	s_hasWidgetJsonFiles = FormEditSources::HasPackFormEdits();
 	s_checkedWidgetJsonFiles = true;
-	return false;
+	return s_hasWidgetJsonFiles;
 }
 
 bool CSEditor::ShouldPreloadEditorResources()
 {
 	return s_dataAvailable && !s_resourcesInitialized && EditorWindow::CanBeOpen() && HasWidgetJsonFiles();
+}
+
+void CSEditor::ReloadFormEdits()
+{
+	const auto changedKeys = FormEditSources::Refresh();
+	// Lets the next Prepass build the widgets when the new pack is the first source of form edits.
+	s_checkedWidgetJsonFiles = false;
+	if (s_resourcesInitialized)
+		EditorWindow::GetSingleton()->ReloadFormEdits(changedKeys);
 }
 
 void CSEditor::EnsureWeatherListLoaded()
@@ -642,7 +653,9 @@ void CSEditor::DrawWeatherTransitionBar(RE::Sky* sky, float width, bool verboseO
 				fromName = editorId;
 			else
 				fromName = std::format("{:08X}", lastWeather->GetFormID());
-			transitionOverlay = std::format("{:.1f}% | Transitioning from {}", transitionPct, fromName);
+			transitionOverlay = I18n::GetSingleton()->Format("feature.cs_editor.transition_overlay",
+				{ { "percent", std::format("{:.1f}", transitionPct) }, { "weather", fromName } },
+				"{percent}% | Transitioning from {weather}");
 		} else {
 			transitionOverlay = std::format("{:.0f}%", transitionPct);
 		}

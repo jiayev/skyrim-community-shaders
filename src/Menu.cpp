@@ -1046,7 +1046,7 @@ void Menu::ProcessInputEventQueue()
 				}
 			} else if (flying) {
 				// Right-click exits free-cam / play mode (alongside the CSEditorToggleKey combo).
-				if (event.keyCode == 1 && event.IsPressed())
+				if (event.keyCode == ImGuiMouseButton_Right && event.IsPressed())
 					ew->ExitPreviewMode();
 			} else {
 				if (event.keyCode > 5)

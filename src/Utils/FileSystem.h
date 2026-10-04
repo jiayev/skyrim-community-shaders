@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -233,6 +234,8 @@ namespace Util
 
 		/** @brief Whether a library folder or file is hidden from preset scans ('_' or '.' prefix). */
 		bool IsHiddenLibraryEntry(std::string_view name);
+		/** @brief Path overload: reads the native name, since path::string() throws outside the ANSI code page. */
+		bool IsHiddenLibraryEntry(const std::filesystem::path& name);
 
 		/** @brief Visible child folders (or files) of a CommunityShaders subfolder across every scan root; first root wins. */
 		std::vector<std::filesystem::path> ListCommunityShaderEntries(const std::filesystem::path& relativePath, bool directories);
@@ -313,6 +316,13 @@ namespace Util
 
 		/** @brief Serializes JSON and writes it through WriteFileAtomically; a serialization failure leaves the target untouched. */
 		bool WriteJsonAtomically(const std::filesystem::path& path, const nlohmann::json& data, int indent, std::string_view context);
+
+		/**
+		 * @brief Parses a JSON file.
+		 * @param context Human-readable description used in the log message
+		 * @return The document, or nullopt when the file cannot be opened or parsed (parse failures are logged)
+		 */
+		std::optional<nlohmann::json> ReadJsonFile(const std::filesystem::path& path, std::string_view context);
 	}
 
 	/**

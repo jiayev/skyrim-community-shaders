@@ -156,9 +156,13 @@ void SceneSettingsManager::VerifyPendingApplies()
 		const bool retained = feature &&
 		                      FeatureRetainedUpdates(*feature, featureShortName, verification.updates, &observed);
 
-		if (!retained) {
-			logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
-				featureShortName);
+		auto& failures = verification.transition ? transitionApplyFailures : applyFailures;
+		if (retained) {
+			failures.erase(featureShortName);
+		} else {
+			if (failures[featureShortName].Record(verification.signature, std::chrono::steady_clock::now()))
+				logger::warn("[SceneSettings] {} did not retain settings after reporting a successful apply",
+					featureShortName);
 			featureApplyDocuments.erase(featureShortName);
 			// Record what the feature reports instead of dropping the address: the scene layer still owes it
 			// the baseline, and the mismatch against the resolved value drives the retry.
@@ -173,8 +177,6 @@ void SceneSettingsManager::VerifyPendingApplies()
 					appliedSettings.erase(address);
 			}
 			PruneAppliedFeatureName(featureShortName);
-			(verification.transition ? transitionApplyFailures : applyFailures)[featureShortName].Record(
-				verification.signature, std::chrono::steady_clock::now());
 			resolverDirty = true;
 		}
 		verificationIt = pendingApplyVerifications.erase(verificationIt);
@@ -262,12 +264,6 @@ SceneSettingsManager::TimeOfDayPeriod SceneSettingsManager::GetPeriodFromName(co
 
 namespace
 {
-	/// The editor can run before globals are cached, so the singleton is the fallback.
-	RE::Calendar* GetCalendar()
-	{
-		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	}
-
 	/// Shift of each period's start in blend lengths, so blends start as the sky leaves night or day, finish as
 	/// it settles into day or night, and centre on the colour peaks. Indexed by TimeOfDayPeriod.
 	constexpr std::array<float, SceneSettingsManager::kPeriodCount> kBlendOffsets = { 0.5f, 0.0f, -0.5f, 0.5f, 0.0f, -0.5f };
@@ -277,7 +273,7 @@ float SceneSettingsManager::GetCurrentGameHour()
 {
 	// Prefer calendar (ground truth), which the Weather Editor slider writes to.
 	// sky->currentGameHour may lag when timeScale is 0 (time paused).
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	float hour = 12.0f;
 	if (calendar && calendar->gameHour)
 		hour = calendar->gameHour->value;
@@ -297,7 +293,7 @@ void SceneSettingsManager::SetGameHour(float hour)
 {
 	if (!std::isfinite(hour))
 		return;
-	auto calendar = GetCalendar();
+	auto calendar = Util::Climate::GetCalendar();
 	if (calendar && calendar->gameHour)
 		calendar->gameHour->value = std::clamp(hour, 0.0f, 24.0f);
 }

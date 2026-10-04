@@ -190,16 +190,6 @@ void PresetManager::DiscoverPresets()
 		presets.size(), FormatPresetIdForLog(activePresetId));
 }
 
-size_t PresetManager::GetValidLibraryPresetCount() const
-{
-	size_t count = 0;
-	for (const auto& preset : presets) {
-		if (!preset.isLegacy && preset.valid)
-			++count;
-	}
-	return count;
-}
-
 std::filesystem::path PresetManager::GetActiveLibraryRoot() const
 {
 	if (IsLegacyActive())
@@ -381,11 +371,4 @@ bool PresetManager::ExportActivePresetTo(const std::filesystem::path& destRoot, 
 	logger::info("[Effects11] Exported active preset '{}' to '{}'",
 		FormatPresetIdForLog(activePresetId), destRoot.string());
 	return true;
-}
-
-std::string PresetManager::GetActivePresetStatusSummary() const
-{
-	const auto* preset = FindPreset(activePresetId);
-	const std::string name = preset ? preset->displayName : "Unknown";
-	return std::format("{} - {}", name, GetENBSeriesPath().string());
 }

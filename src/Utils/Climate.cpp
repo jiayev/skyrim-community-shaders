@@ -66,4 +66,9 @@ namespace Util::Climate
 			weights[ColorTime::kNight] = 1.0f;
 		return weights;
 	}
+
+	RE::Calendar* GetCalendar()
+	{
+		return globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	}
 }

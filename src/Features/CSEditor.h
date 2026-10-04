@@ -19,7 +19,7 @@ public:
 	virtual std::string GetDisplayName() override { return T("feature.cs_editor.name", "CS Editor"); }
 	virtual inline std::string GetShortName() override { return "CSEditor"; }
 	virtual inline std::string_view GetShaderDefineName() override { return "CS_EDITOR"; }
-	virtual inline std::string_view GetCategory() const override { return "CS Editor"; }
+	virtual inline std::string_view GetCategory() const override { return FeatureCategories::kUtility; }
 	virtual bool IsCore() const override { return true; }
 	virtual bool IsInMenu() const override { return false; }
 
@@ -123,8 +123,6 @@ public:
 	// Accessors for Weather Picker Window
 	static std::vector<RE::TESWeather*>& GetFilteredWeathers() { return s_filteredWeathers; }
 	static int& GetSelectedWeatherIdx() { return s_selectedWeatherIdx; }
-	static bool GetAccelerateWeatherChange() { return s_accelerateWeatherChange; }
-	static RE::TESWeather*& GetCachedLastWeather() { return s_cachedLastWeather; }
 	static int FindWeatherIndex(RE::TESWeather* targetWeather);
 
 	// Shared weather-control backend, used by both the feature page and the Weather Picker Window.
@@ -149,6 +147,11 @@ public:
 	// Implement OverlayFeature interface
 	void DrawOverlay() override;
 	bool IsOverlayVisible() const override;
+
+	/** @brief Re-resolves form edits after the active preset pack changed, reloading the built widgets it affects. */
+	static void ReloadFormEdits();
+	/** @brief Whether a form edit file exists, the user's or the active pack's; cached until ReloadFormEdits. */
+	static bool HasWidgetJsonFiles();
 
 private:
 	void DrawTimeControls();
@@ -196,7 +199,6 @@ private:
 	static void DisplayWindInfo(RE::TESWeather* weather);
 
 	// Helper functions
-	static bool HasWidgetJsonFiles();
 	static bool ShouldPreloadEditorResources();
 	static void EnsureWeatherListLoaded();
 	static void EnsureDataLoaded();

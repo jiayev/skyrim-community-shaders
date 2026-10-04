@@ -885,25 +885,15 @@ namespace
 	{
 		auto sceneLines =
 			list.lines | std::views::filter([](const ListLine& line) { return line.kind == ListLine::Kind::Scene; });
-		ImGui::AlignTextToFramePadding();
-		if (BrowserUI::Link("##selectShown", T(TKEY("scene_copy_select_shown"), "Select all shown")))
+		const auto selectedShown = static_cast<size_t>(std::ranges::count_if(sceneLines,
+			[](const ListLine& line) { return session.ticked.contains(line.row->scene); }));
+		const auto action = BrowserUI::SelectionFooter(session.ticked.size(), selectedShown,
+			T(TKEY("scene_copy_clear_ticks_tooltip"), "Unticks every scene, shown or hidden."));
+		if (action == BrowserUI::SelectionAction::SelectShown)
 			for (const auto& line : sceneLines)
 				session.ticked.insert(line.row->scene);
-		if (session.ticked.empty())
-			return;
-
-		auto selected = session.ticked.size();
-		auto hidden = selected - static_cast<size_t>(std::ranges::count_if(sceneLines,
-									 [](const ListLine& line) { return session.ticked.contains(line.row->scene); }));
-		const auto label = hidden == 0 ? FormatCount(T(TKEY("scene_copy_selected"), "{} selected"), selected) :
-		                                 std::vformat(T(TKEY("scene_copy_selected_hidden"), "{} selected · {} hidden"),
-											 std::make_format_args(selected, hidden));
-		const Icons::GlyphRef clearIcon = Icons::FA(ICON_FA_TIMES);
-		const ImVec4 accent = Util::Colors::GetAccent();
-		BrowserUI::RightAlign(BrowserUI::MeasureChip(label.c_str(), true));
-		if (BrowserUI::Chip("##clearTicks", label.c_str(), clearIcon, nullptr, &accent))
+		else if (action == BrowserUI::SelectionAction::Clear)
 			session.ticked.clear();
-		Util::AddTooltip(T(TKEY("scene_copy_clear_ticks_tooltip"), "Unticks every scene, shown or hidden."));
 	}
 
 	/** @brief The shared period row: which periods receive in To, which one is copied out of in From. */

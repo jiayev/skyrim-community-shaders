@@ -148,6 +148,25 @@ namespace Util
 			ImGui::EndDisabled();
 	}
 
+	namespace
+	{
+		bool debugSectionsHidden = false;
+	}
+
+	HideDebugSectionsGuard::HideDebugSectionsGuard(bool hide) :
+		previous(std::exchange(debugSectionsHidden, hide))
+	{}
+
+	HideDebugSectionsGuard::~HideDebugSectionsGuard()
+	{
+		debugSectionsHidden = previous;
+	}
+
+	bool ShowDebugSections()
+	{
+		return !debugSectionsHidden;
+	}
+
 	void TextUnformattedDisabled(const char* a_text, const char* a_textEnd)
 	{
 		ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -683,11 +702,6 @@ namespace Util
 		ImGui::SameLine(0.0f, spacing);
 		ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical, 1.0f);
 		ImGui::SameLine(0.0f, spacing);
-	}
-
-	float GetToolbarDividerWidth()
-	{
-		return ImGui::GetStyle().ItemSpacing.x * 4.0f + 1.0f;
 	}
 
 	// Static state for clear shader cache confirmation popup
@@ -1329,7 +1343,7 @@ namespace Util
 		ImGui::SetCursorScreenPos(rowStart);
 		// AllowOverlap so title/extras/close drawn afterward still receive hover/click.
 		ImGui::InvisibleButton("##CustomHeaderDrag", ImVec2(avail, rowHeight), ImGuiButtonFlags_AllowOverlap);
-		// Drag only while actively dragging this item — a click on the close button must not start a move.
+		// Drag only while actively dragging this item: a click on the close button must not start a move.
 		if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
 			ImGui::StartMouseMovingWindow(window);
 
@@ -1365,7 +1379,7 @@ namespace Util
 				*p_open = false;
 		}
 
-		// Separator is the bottom edge of the bar — no ItemInnerSpacing above it (that was
+		// Separator is the bottom edge of the bar; no ItemInnerSpacing above it (that was
 		// doubling the bottom air vs the top). Zero ItemSpacing so Separator itself doesn't
 		// insert another half-gap; restore WindowPadding below for the body, matching native
 		// title-bar → content layout.

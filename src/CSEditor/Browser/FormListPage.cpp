@@ -55,6 +55,8 @@ namespace
 	constexpr float kPluginPopupMinWidth = 260.0f;
 	constexpr float kPluginPopupMaxRows = 14.0f;
 	constexpr float kStatusColumnWidth = 110.0f;
+	/// Icons DrawStateIcons lays out: open, unsaved, saved, preset.
+	constexpr int kStateSlotCount = 4;
 	constexpr float kPeriodColumnWidth = 70.0f;
 	constexpr int kUsageListLimit = 12;
 	/// Active records shown at most; ImageSpace and Volumetric Lighting have one per time of day.
@@ -203,8 +205,8 @@ namespace
 
 	std::string MakeViewKey(const FormListState& state, const Context& context)
 	{
-		return std::format("{}\x1f{}\x1f{}{}{}{}{}\x1f{}\x1f{}{}\x1f{}", context.category, std::string_view(state.filter),
-			static_cast<int>(state.scope), state.onlyFavorites, state.onlyFlagged, state.onlySaved, state.onlyUnsaved,
+		return std::format("{}\x1f{}\x1f{}{}{}{}{}{}\x1f{}\x1f{}{}\x1f{}", context.category, std::string_view(state.filter),
+			static_cast<int>(state.scope), state.onlyFavorites, state.onlyFlagged, state.onlySaved, state.onlyUnsaved, state.onlyPreset,
 			state.plugin, static_cast<int>(state.sortKey), state.sortAscending, state.dataGeneration);
 	}
 
@@ -232,6 +234,8 @@ namespace
 			case SortKey::Saved:
 				comparison = static_cast<int>(a.hasSavedFile) - static_cast<int>(b.hasSavedFile);
 				if (comparison == 0)
+					comparison = static_cast<int>(a.fromPack) - static_cast<int>(b.fromPack);
+				if (comparison == 0)
 					comparison = static_cast<int>(a.unsaved) - static_cast<int>(b.unsaved);
 				break;
 			default:
@@ -258,7 +262,7 @@ namespace
 
 		state.rows.clear();
 		state.total = static_cast<int>(all.size());
-		state.favoriteCount = state.flaggedCount = state.savedCount = state.unsavedCount = 0;
+		state.favoriteCount = state.flaggedCount = state.savedCount = state.unsavedCount = state.presetCount = 0;
 		std::map<std::string, int, decltype([](const std::string& a, const std::string& b) {
 			return _stricmp(a.c_str(), b.c_str()) < 0;
 		})>
@@ -277,18 +281,25 @@ namespace
 			row.favorite = editor.IsFavorite(row.editorId);
 			row.hasSavedFile = context.hasSavedFile(widget);
 			row.unsaved = widget->HasUnsavedChanges();
+			if (auto packBadge = widget->GetPackBadge()) {
+				row.fromPack = true;
+				row.packBadgeColor = packBadge->color;
+				row.packBadgeTooltip = std::move(packBadge->tooltip);
+			}
 
 			++plugins[row.file];
 			state.favoriteCount += row.favorite;
 			state.flaggedCount += !row.marker.empty();
 			state.savedCount += row.hasSavedFile;
 			state.unsavedCount += row.unsaved;
+			state.presetCount += row.fromPack;
 
 			if (!MatchesFilter(row, state) ||
 				(state.onlyFavorites && !row.favorite) ||
 				(state.onlyFlagged && row.marker.empty()) ||
 				(state.onlySaved && !row.hasSavedFile) ||
 				(state.onlyUnsaved && !row.unsaved) ||
+				(state.onlyPreset && !row.fromPack) ||
 				(!state.plugin.empty() && row.file != state.plugin))
 				continue;
 			state.rows.push_back(std::move(row));
@@ -445,7 +456,7 @@ namespace
 		const float pluginWidth = kPluginComboWidth * scale;
 		const float chipsWidth = BrowserUI::MeasureToggleChip(state.favoriteCount) + BrowserUI::MeasureToggleChip(state.flaggedCount) +
 		                         BrowserUI::MeasureToggleChip(state.savedCount) + BrowserUI::MeasureToggleChip(state.unsavedCount) +
-		                         spacing * 3.0f;
+		                         BrowserUI::MeasureToggleChip(state.presetCount) + spacing * 4.0f;
 
 		const float avail = ImGui::GetContentRegionAvail().x;
 		const float fixedWidth = scopeWidth + pluginWidth + spacing * 2.0f;
@@ -514,6 +525,10 @@ namespace
 		if (BrowserUI::ToggleChip("##OnlyUnsaved", BrowserUI::DotIcon(), state.unsavedCount, state.onlyUnsaved, Util::Colors::GetWarning(),
 				T(TKEY("filter_unsaved_tooltip"), "Unsaved: edited since it was last saved")))
 			state.onlyUnsaved = !state.onlyUnsaved;
+		ImGui::SameLine();
+		if (BrowserUI::ToggleChip("##OnlyPreset", BrowserUI::GlyphIcon(Icons::FA(ICON_FA_LAYER_GROUP)), state.presetCount, state.onlyPreset,
+				Util::Colors::GetInfo(), T(TKEY("filter_preset_tooltip"), "Preset: the active preset ships a file for it")))
+			state.onlyPreset = !state.onlyPreset;
 	}
 
 	void OpenRecent(FormListState& state, const Context& context, const std::string& editorId)
@@ -654,7 +669,7 @@ namespace
 		ImGui::EndPopup();
 	}
 
-	/// Saved / unsaved / open markers, each in a fixed slot so they line up down the column.
+	/// Preset / saved / unsaved / open markers, each in a fixed slot so they line up down the column.
 	void DrawStateIcons(const FormRow& row)
 	{
 		const float box = ImGui::GetFontSize();
@@ -683,6 +698,8 @@ namespace
 			T(TKEY("state_unsaved_tooltip"), "Edited since it was last saved"));
 		slot(row.hasSavedFile, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_SAVE)), ImGui::GetColorU32(Util::Colors::GetSecondary()),
 			T(TKEY("state_saved_tooltip"), "Has a JSON override on disk"));
+		slot(row.fromPack, BrowserUI::GlyphIcon(Icons::FA(ICON_FA_LAYER_GROUP)), ImGui::GetColorU32(row.packBadgeColor),
+			row.packBadgeTooltip.c_str());
 	}
 
 	void DrawRow(FormListState& state, const Context& context, const FormRow& row, RE::FormID selectedId,
@@ -782,7 +799,7 @@ namespace
 			return;
 
 		const char* stateLabel = T(TKEY("state_column"), "State");
-		const float stateWidth = std::max(ImGui::GetFontSize() * 3.0f + style.ItemSpacing.x,
+		const float stateWidth = std::max(ImGui::GetFontSize() * kStateSlotCount + style.ItemSpacing.x * 0.5f * (kStateSlotCount - 1),
 			ImGui::CalcTextSize(stateLabel).x + ImGui::GetFontSize());
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("##fav", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort | ImGuiTableColumnFlags_NoHide | ImGuiTableColumnFlags_NoResize,
@@ -935,6 +952,10 @@ namespace
 			badge(T(TKEY("badge_unsaved"), "Unsaved"), Util::Colors::GetWarning());
 		if (context.hasSavedFile(&widget))
 			badge(T(TKEY("badge_saved"), "Saved"), Util::Colors::GetInfo());
+		if (const auto packBadge = widget.GetPackBadge()) {
+			badge(T(TKEY("badge_preset"), "Preset"), packBadge->color);
+			Util::AddTooltip(packBadge->tooltip.c_str());
+		}
 		if (widget.HasFallbackEditorID())
 			badge(T(TKEY("badge_no_editor_id"), "No editor ID"), Util::Colors::GetSecondary());
 		if (widget.IsOpen())
