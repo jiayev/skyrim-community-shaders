@@ -1048,7 +1048,7 @@ void EditorWindow::RenderUI()
 					Icons::FA(ICON_FA_UNDO), ImGui::GetColorU32(undoCol));
 			}
 			ImGui::PopStyleVar(2);
-			Util::AddTooltip(canUndo ? std::format("Undo (Ctrl+Z) - {} states", (int)undoStack.size()).c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
+			Util::AddTooltip(canUndo ? I18n::GetSingleton()->Format(TKEY("undo_states"), { { "count", std::to_string(undoStack.size()) } }, "Undo (Ctrl+Z) - {count} states").c_str() : T(TKEY("undo_no_changes"), "Undo (Ctrl+Z) - No changes to undo"));
 		}
 
 		// Export preset: the one on-screen entry to the universal export dialog. It covers every
@@ -1075,7 +1075,7 @@ void EditorWindow::RenderUI()
 			const std::string exportTooltip = std::format("{} (Ctrl+Shift+S)\n{}", T(TKEY("export_preset"), "Export Preset..."),
 				canExport ?
 					T(TKEY("scene_page_export_tooltip"), "Export scene settings as a preset, or update an existing pack's metadata and artwork.") :
-					T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings or load an Effects 11 preset first."));
+					T(TKEY("export_preset_empty_tooltip"), "Nothing to export yet: author scene settings, save form edits, or load Post Processing or an Effects 11 preset first."));
 			Util::AddTooltip(exportTooltip.c_str(), Util::kTooltipWhenDisabled);
 		}
 
