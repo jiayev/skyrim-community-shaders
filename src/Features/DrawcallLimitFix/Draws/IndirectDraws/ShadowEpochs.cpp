@@ -1613,6 +1613,8 @@ namespace DCLF
 		const auto& store = SceneStore::Get();
 		const auto& tables = store.GetTables();
 		const auto& lookups = store.GetLookups();
+		if (a_phase == kSetReflection)
+			return impl->ReflectionPhaseReady(a_slot);
 		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())
 			return false;
 		const auto& object = tables.objects[a_slot];

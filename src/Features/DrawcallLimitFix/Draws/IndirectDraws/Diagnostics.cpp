@@ -101,6 +101,7 @@ namespace DCLF
 				writeBack.applied = writeBack.stale = writeBack.late = 0;
 			}
 		}
+		text += ReflectionReport();
 		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
 			auto& scene = *impl->scene;
 			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
@@ -108,6 +109,18 @@ namespace DCLF
 				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, scene.treeLodShapeCapacity, scene.treeLodMeshCapacity,
 				impl->treeLodMissed, impl->treeLodMissed ? " <- TREE LOD HOLES" : "");
 			scene.treeLodUploads = scene.treeLodSlotsSent = 0;
+			// Its two-phase cull: in view, drawn by phase 1, occluded by the last frame's HZB, brought back by the rebuilt one.
+			if (auto& counts = scene.treeLodCounts) {
+				if (const auto frames = counts->frames.exchange(0, std::memory_order_relaxed)) {
+					const double phaseOne = double(counts->phaseOne.exchange(0, std::memory_order_relaxed)) / frames;
+					const double retests = double(counts->retests.exchange(0, std::memory_order_relaxed)) / frames;
+					const double phaseTwo = double(counts->phaseTwo.exchange(0, std::memory_order_relaxed)) / frames;
+					text += fmt::format("[DCLF] tree LOD cull over {} frames: per frame {:.0f} instances in view, {:.0f} drawn by phase 1, {:.0f} occluded by the last "
+										"frame's HZB, {:.0f} of them brought back by phase 2 ({:.0f} drawn, {:.1f}% occluded)\n",
+						frames, phaseOne + retests, phaseOne, retests, phaseTwo, phaseOne + phaseTwo,
+						phaseOne + retests > 0.0 ? 100.0 * (retests - phaseTwo) / (phaseOne + retests) : 0.0);
+				}
+			}
 		}
 		if (auto& rows = impl->mainRows; rows.builds) {
 			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "

@@ -1105,7 +1105,8 @@ namespace DCLF
 			// Why a bound object waits, summed over the commits: its pipeline, its material, its pipeline's shadow mask, the shared
 			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
 			// or occlusion pipelines (or an alpha-tested caster's diffuse).
-			std::array<std::uint64_t, 8> waitingBy{};
+			// The reflection phase (8): its forward pipeline, or the object was no main member at the last commit.
+			std::array<std::uint64_t, 9> waitingBy{};
 			std::string firstWaiting;
 		};
 		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
@@ -2228,6 +2229,9 @@ namespace DCLF
 		std::vector<std::uint32_t> setWaiting;
 		std::vector<std::uint8_t> setWaitingMark;  // parallel to objects: in setWaiting
 		std::vector<std::uint32_t> setQueue;
+		// Slots that joined the main phase at the last commit and take part in the reflection's: evaluated again at this one, when
+		// their last frame's main membership gives them the phase.
+		std::vector<std::uint32_t> setLagged, setLaggedNext;
 		std::vector<std::uint8_t> setQueueMark;    // parallel to objects: in setQueue
 		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
 		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder phases it takes part in and is no member of

@@ -43,12 +43,12 @@ namespace DCLF::Draws
 			return a_device.GetBufferDeviceAddress({ a_buffer.GetAPIResource().GetHandle(), 0 });
 		}
 
-		// Tree LOD's tables' sizes in words (Scene/TreeLod.h): by shape slot, its row, its records and its place in the list; by
-		// mesh slot, its row; the list's arguments first.
+		// Tree LOD's tables' sizes in words (Scene/TreeLod.h): by shape slot, its row, its records and their places in the visible
+		// and retest lists; by mesh slot, its row; the list's header first.
 		std::uint32_t TreeLodShapeWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::ShapeRow) / 4); }
 		std::uint32_t TreeLodInstanceWords(std::uint32_t a_slots) { return a_slots * TreeLod::kMaxGroupInstances * static_cast<std::uint32_t>(sizeof(TreeLod::Instance) / 4); }
 		std::uint32_t TreeLodMeshWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::MeshRow) / 4); }
-		std::uint32_t TreeLodVisibleWords(std::uint32_t a_slots) { return TreeLod::kVisibleHeaderWords + a_slots * TreeLod::kMaxGroupInstances; }
+		std::uint32_t TreeLodVisibleWords(std::uint32_t a_slots) { return TreeLod::kVisibleHeaderWords + 2 * a_slots * TreeLod::kMaxGroupInstances; }
 	}
 }
 
@@ -595,6 +595,13 @@ namespace DCLF
 				logger::warn("[DCLF] Tree LOD's tables have no device address; tree LOD stays native");
 				buffers->treeLodCull = nullptr;
 			}
+			if (auto* host = RenderGraphRuntime::Get().Host(); host && buffers->treeLodCull) {
+				auto counts = std::make_shared<SceneBuffers::TreeLodCounts>();
+				for (std::uint32_t i = 0; i < host->FrameSlots(); ++i)
+					counts->readback.push_back(org::Buffer::CreateShared(rhi::HeapType::Readback, sizeof(TreeLod::VisibleHeader)));
+				counts->filled.assign(host->FrameSlots(), 0u);
+				buffers->treeLodCounts = std::move(counts);
+			}
 			// A new set of tables holds nothing: every slot and mesh again.
 			SceneStore::Get().TreeLodMirror().MarkAllChanged();
 		} else {
@@ -876,6 +883,143 @@ namespace DCLF
 		shadow = state;
 		host->AddExtension(kShadowExtensionId, [state] { return MakeShadowExtension(state); });
 		logger::info("[DCLF] shadow view graph resources created");
+		return true;
+	}
+
+	bool IndirectDraws::Impl::SetupReflection()
+	{
+		auto& r = reflection;
+		if (r.resources)
+			return true;
+		if (r.setupFailed || !resources || !scene || !scene->pool)
+			return false;
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!host)
+			return false;
+		auto device = host->GetDesc().device;
+		auto state = std::make_shared<ReflectionResources>();
+		state->main = resources;
+		state->buildDraws = ComputeProgram::Load(device, { .source = kBuildDrawsShader, .constantWords = kBuildDrawsConstantWords });
+		if (state->buildDraws)
+			state->dispatchSignature = CreateDispatchSignature(device, state->buildDraws->layout->GetHandle());
+		if (!state->dispatchSignature) {
+			r.setupFailed = true;
+			logger::warn("[DCLF] The reflection faces' BuildDraws program could not be created; the faces stay native");
+			return false;
+		}
+		state->count = CreateWords(kCountWords, true, "cs.dclf.reflection.draw-count");
+		state->bucketCountWords = 16;
+		for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+			state->bucketCounts[f] = CreateWords(state->bucketCountWords, true, fmt::format("cs.dclf.reflection.bucket-counts{}", f).c_str());
+			state->treeRows[f] = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, fmt::format("cs.dclf.reflection.tree-row{}", f).c_str());
+			state->treeRowsAddress[f] = AddressOf(device, *state->treeRows[f]);
+		}
+		state->sequenceDraws = 64;
+		state->sequences = CreateWords(std::uint64_t(kReflectionFaces) * state->sequenceDraws * sizeof(DrawSequence) / 4, true, "cs.dclf.reflection.sequences");
+		state->faceBlocks = DeviceBuffer(std::uint64_t(kReflectionFaces) * kReflectionFaceBlockBytes, "cs.dclf.reflection.face-blocks");
+		state->faceBlocksAddress = AddressOf(device, *state->faceBlocks);
+		state->latchLayout = { 64, 4 };
+		state->latch = std::make_shared<org::LatchBlock>("cs.dclf.reflection.latch", state->latchLayout.Bytes(), host->FrameSlots());
+		if (!state->faceBlocksAddress || std::any_of(state->treeRowsAddress.begin(), state->treeRowsAddress.end(), [](std::uint64_t a) { return !a; })) {
+			r.setupFailed = true;
+			logger::warn("[DCLF] The reflection faces' buffers have no device address; the faces stay native");
+			return false;
+		}
+		r.resources = std::move(state);
+		ReserveReflection(0, 0, 0);
+		logger::info("[DCLF] reflection face graph resources created");
+		return true;
+	}
+
+	void IndirectDraws::Impl::ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!reflection.resources || !host)
+			return;
+		auto& r = *reflection.resources;
+		auto device = host->GetDesc().device;
+		bool rebuild = false;
+		// The main pass's resources the faces draw from: recreated, the passes bind the new ones.
+		if (r.main != resources) {
+			r.main = resources;
+			rebuild = true;
+		}
+		ReflectionLatchLayout layout = r.latchLayout;
+		if (a_slots > layout.slots)
+			layout.slots = Doubled(layout.slots, a_slots);
+		if (a_buckets > layout.buckets)
+			layout.buckets = Doubled(layout.buckets, a_buckets);
+		if (!(layout == r.latchLayout)) {
+			// A new block: a frame in flight keeps reading its own (ReflectionFrame::latch).
+			r.latchLayout = layout;
+			r.latch = std::make_shared<org::LatchBlock>("cs.dclf.reflection.latch", layout.Bytes(), host->FrameSlots());
+			logger::info("[DCLF] reflection latch: {} pipeline slots, {} buckets", layout.slots, layout.buckets);
+		}
+		if (layout.buckets > r.bucketCountWords) {
+			r.bucketCountWords = layout.buckets;
+			for (auto& counts : r.bucketCounts)
+				counts->ResizeStructured(r.bucketCountWords);
+		}
+		if (a_draws > r.sequenceDraws) {
+			r.sequenceDraws = Doubled(r.sequenceDraws, a_draws);
+			r.sequences->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(kReflectionFaces) * r.sequenceDraws * sizeof(DrawSequence) / 4));
+			logger::info("[DCLF] reflection sequences: {} draws a face", r.sequenceDraws);
+		}
+		// The faces' tree LOD lists hold every record of the scene's shape slots (the cull's phase 1 alone: no retest list).
+		if (scene && scene->treeLodCull && r.treeShapeCapacity != scene->treeLodShapeCapacity) {
+			const std::uint32_t words = TreeLod::kVisibleHeaderWords + scene->treeLodShapeCapacity * TreeLod::kMaxGroupInstances;
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				if (r.treeVisible[f])
+					r.treeVisible[f]->ResizeStructured(words);
+				else
+					r.treeVisible[f] = CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str());
+				r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]);
+			}
+			r.treeShapeCapacity = scene->treeLodShapeCapacity;
+			rebuild = true;
+		}
+		if (rebuild && r.cube)
+			host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeReflectionExtension(state); });
+	}
+
+	bool IndirectDraws::Impl::ImportReflectionCube(ID3D11Texture2D* a_texture)
+	{
+		auto* host = RenderGraphRuntime::Get().Host();
+		if (!reflection.resources || !host || !a_texture)
+			return false;
+		auto& r = *reflection.resources;
+		if (r.cube && r.cubeTexture == a_texture)
+			return true;
+		DxvkOrgInteropResourceInfo info{};
+		if (!RenderGraphRuntime::Get().DescribeResource(a_texture, info) || info.kind != DXVK_ORG_INTEROP_RESOURCE_IMAGE)
+			return false;
+		org::TextureDescription desc{};
+		desc.format = rhi::helpers::ToRHI(reflection.targets.colour);
+		desc.channels = 4;
+		desc.hasRTV = true;
+		desc.rtvFormat = desc.format;
+		auto cube = ImportImage(host->GetDesc().device, info.image, desc, "DCLF reflection cube");
+		if (!cube) {
+			static std::uint32_t logged = 0;
+			if (logged++ < 4)
+				logger::warn("[DCLF] the reflection cube could not be imported (not in the general layout?); the faces stay native");
+			return false;
+		}
+		// DCLF's own depth for the faces, at the engine's precision (its depth target 6 is R24G8).
+		org::TextureDescription depthDesc{};
+		depthDesc.imageDimensions.push_back({ info.image.extent.width, info.image.extent.height, 0, 0 });
+		depthDesc.format = rhi::helpers::ToRHI(reflection.targets.depth);
+		depthDesc.channels = 1;
+		depthDesc.hasDSV = true;
+		depthDesc.dsvFormat = depthDesc.format;
+		r.depth = org::PixelBuffer::CreateSharedUnmaterialized(depthDesc);
+		r.depth->SetName("cs.dclf.reflection.depth");
+		r.cube = std::move(cube);
+		r.cubeTexture = a_texture;
+		r.width = info.image.extent.width;
+		r.height = info.image.extent.height;
+		host->AddExtension(kReflectionExtensionId, [state = reflection.resources] { return MakeReflectionExtension(state); });
+		logger::info("[DCLF] reflection cube imported: {}x{}, {} faces, format {}", r.width, r.height, info.image.arrayLayers, static_cast<int>(reflection.targets.colour));
 		return true;
 	}
 

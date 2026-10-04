@@ -229,6 +229,15 @@ namespace DCLF
 		bool failed = false;
 	};
 
+	struct ShaderPrograms::ForwardEntry
+	{
+#if defined(DCLF_HAS_SHADER_COMPILER)
+		std::shared_future<org::services::ShaderArtifact> vertex, pixel;
+#endif
+		std::unique_ptr<ForwardProgram> program;
+		bool failed = false;
+	};
+
 	struct ShaderPrograms::Entry
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -566,6 +575,42 @@ namespace DCLF
 		return treeLodEntry->program.get();
 	}
 
+	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting)
+	{
+		if (!Enabled())
+			return nullptr;
+		auto [it, inserted] = forwardEntries.try_emplace((std::uint64_t(a_vertexDescriptor) << 32) | a_pixelDescriptor);
+		if (inserted) {
+			it->second = std::make_unique<ForwardEntry>();
+#if defined(DCLF_HAS_SHADER_COMPILER)
+			// The pulled vertex stage is the Z-prepass's (the stage cache's key is the descriptor's); the pixel stage the colour one.
+			it->second->vertex = stages->Request(*this, a_lighting, false, a_vertexDescriptor, false, nullptr, true);
+			it->second->pixel = stages->Request(*this, a_lighting, true, a_pixelDescriptor, false, nullptr, true);
+#else
+			(void)a_lighting;
+			it->second->failed = true;
+#endif
+		}
+		return it->second->program.get();
+	}
+
+	const ShaderPrograms::ForwardProgram* ShaderPrograms::FindForwardTreeLod(RE::BSShader& a_distantTree)
+	{
+		if (!Enabled())
+			return nullptr;
+		if (!forwardTreeLodEntry) {
+			forwardTreeLodEntry = std::make_unique<ForwardEntry>();
+#if defined(DCLF_HAS_SHADER_COMPILER)
+			forwardTreeLodEntry->vertex = stages->Request(*this, a_distantTree, false, kDistantTreeAlphaTest);
+			forwardTreeLodEntry->pixel = stages->Request(*this, a_distantTree, true, kDistantTreeAlphaTest);
+#else
+			(void)a_distantTree;
+			forwardTreeLodEntry->failed = true;
+#endif
+		}
+		return forwardTreeLodEntry->program.get();
+	}
+
 	void ShaderPrograms::Update()
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -655,6 +700,26 @@ namespace DCLF
 				logger::info("[DCLF] tree LOD programs ready (DistantTree, pulled)");
 			}
 		}
+		// The forward views' programs: a Lighting pair, or tree LOD's.
+		const auto finishForward = [&](ForwardEntry& a_entry, const std::string& a_what) {
+			if (a_entry.program || a_entry.failed || !ready(a_entry.vertex) || !ready(a_entry.pixel))
+				return;
+			const auto& vertex = a_entry.vertex.get();
+			const auto& pixel = a_entry.pixel.get();
+			if (!vertex || !pixel) {
+				a_entry.failed = true;
+				++stats.failed;
+				if (loggedFailures++ < kMaxLoggedFailures)
+					logger::warn("[DCLF] SPIR-V build of the forward {} {} failed:\n{}", a_what, !vertex ? "VS" : "PS", (!vertex ? vertex : pixel).diagnostics.substr(0, 1500));
+				return;
+			}
+			a_entry.program = std::make_unique<ForwardProgram>(ForwardProgram{ vertex.binary, pixel.binary });
+			stats.fromCache += (vertex.fromCache ? 1 : 0) + (pixel.fromCache ? 1 : 0);
+		};
+		for (auto& [id, entry] : forwardEntries)
+			finishForward(*entry, fmt::format("Lighting VS {:08X} PS {:08X}", static_cast<std::uint32_t>(id >> 32), static_cast<std::uint32_t>(id)));
+		if (forwardTreeLodEntry)
+			finishForward(*forwardTreeLodEntry, "DistantTree");
 #endif
 	}
 }

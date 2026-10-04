@@ -119,6 +119,21 @@ namespace DCLF
 		};
 		const TreeLodProgram* FindTreeLod(RE::BSShader& a_distantTree);
 
+		/**
+		 * @brief A forward view's program (the water reflection's cube map faces: dclf-lod.md, "Water reflections"): one forward
+		 * pass, colour and depth together, drawn with plain draws like the Z-prepass's. So both stages are pulled builds (DCLF_PULLED):
+		 * the vertex stage of a main pipeline's vertex descriptor, and the colour pixel stage of its forward pixel descriptor (the
+		 * main one without Deferred: LightingShaderDescriptors).
+		 */
+		struct ForwardProgram
+		{
+			std::vector<std::byte> vertex, pixel;
+		};
+		/** @brief The Lighting forward program of these descriptors, requesting it; null until both stages are compiled. Never freed. */
+		const ForwardProgram* FindForward(std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor, RE::BSShader& a_lighting);
+		/** @brief Tree LOD's forward program: DistantTree's DistantTreeBlock technique with AlphaTest and without Deferred, pulled. */
+		const ForwardProgram* FindForwardTreeLod(RE::BSShader& a_distantTree);
+
 		/** @brief Collects finished compilations (call once per frame). */
 		void Update();
 
@@ -143,6 +158,9 @@ namespace DCLF
 		ankerl::unordered_dense::map<std::uint32_t, std::unique_ptr<ShadowEntry>> shadowEntries;
 		struct TreeLodEntry;
 		std::unique_ptr<TreeLodEntry> treeLodEntry;
+		struct ForwardEntry;
+		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<ForwardEntry>> forwardEntries;
+		std::unique_ptr<ForwardEntry> forwardTreeLodEntry;
 		std::vector<std::byte> distantTreeSource;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made

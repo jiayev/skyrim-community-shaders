@@ -32,6 +32,11 @@ namespace DCLF
 	void IndirectDraws::KickZPrepassBuild() {}
 	void IndirectDraws::KickFadeWriteBack() {}
 	bool IndirectDraws::DecideTreeLod() { return false; }
+	void IndirectDraws::CaptureReflectionFace() {}
+	void IndirectDraws::PrepareReflection() {}
+	bool IndirectDraws::ReflectionDrawable() const { return false; }
+	void IndirectDraws::ExecuteReflection() {}
+	std::string IndirectDraws::ReflectionReport() { return {}; }
 	void IndirectDraws::JoinFadeWriteBack() {}
 	void IndirectDraws::KickShadowBuild() {}
 	void IndirectDraws::KickShadowBuildEarly() {}

@@ -235,6 +235,21 @@ namespace DCLF
 		lodFade.envmapEnd = ReadSetting("fEnvmapLODFadeEnd:LightingShader", 0.10f);
 	}
 
+	static_assert(kLightingPixelDeferred == static_cast<std::uint32_t>(SIE::ShaderCache::LightingShaderFlags::Deferred));
+
+	void LightingShaderDescriptors(std::uint32_t a_pass, bool a_deferred, std::uint32_t& a_vertex, std::uint32_t& a_pixel)
+	{
+		uint vertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(a_pass));
+		uint pixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(a_pass));
+		// Forced, so the result does not depend on whether the deferred pass happens to be running; ModifyShaderLookup only adds the
+		// bit, so a forward view's descriptor is the same without it.
+		globals::state->ModifyShaderLookup(RE::BSShader::Type::Lighting, vertex, pixel, true);
+		if (!a_deferred)
+			pixel &= ~kLightingPixelDeferred;
+		a_vertex = vertex;
+		a_pixel = pixel;
+	}
+
 	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass)
 	{
 		const std::uint32_t technique = a_pass & 0x3f000000u;
@@ -631,11 +646,10 @@ namespace DCLF
 				return Ineligible::Fading;
 		}
 
-		uint vertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
-		uint pixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(d));
-		a_out.rawVertex = vertex;
-		a_out.rawPixel = pixel;
-		globals::state->ModifyShaderLookup(RE::BSShader::Type::Lighting, vertex, pixel, true);
+		a_out.rawVertex = VertexDescriptorFromPass(SetupTechniqueDescriptor(d));
+		a_out.rawPixel = PixelDescriptorFromPass(SetupTechniqueDescriptor(d));
+		std::uint32_t vertex = 0, pixel = 0;
+		LightingShaderDescriptors(d, true, vertex, pixel);
 
 		a_out.technique = (d >> 24) & 0x3f;
 		a_out.pass = d;

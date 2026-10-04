@@ -68,6 +68,8 @@ namespace DCLF
 			std::uint32_t mainWithheld = 0, mainCrossfadeCopies = 0, mainUnmodelledFades = 0;
 			std::uint32_t occlusionWithheld = 0;  // the occlusion maps' registrations: members' passes withheld
 			std::uint32_t treeLodWithheld = 0;    // tree LOD's passes into the main camera's views, while DCLF draws it
+			// The water reflection's faces: reflection-phase members' passes, and tree LOD's while DCLF draws the faces' tree LOD.
+			std::uint32_t reflectionWithheld = 0, reflectionTreeLodWithheld = 0;
 		};
 
 		/**
@@ -76,6 +78,18 @@ namespace DCLF
 		 */
 		void SetTreeLodOwned(bool a_owned) { treeLodOwned.store(a_owned, std::memory_order_release); }
 		bool TreeLodOwned() const { return treeLodOwned.load(std::memory_order_acquire); }
+
+		/**
+		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"). SetReflectionCamera: render thread, at a face render,
+		 * the cube camera whose accumulators' batch renderers are the faces' (made again only when they change). SetReflectionFace:
+		 * around a face render in the plain render mode (0), the one whose registrations the hooks see (mode 0x19's are
+		 * FUN_1414b2b90's); only then is anything withheld. SetReflectionTreeLodOwned: once a frame, whether DCLF draws the faces'
+		 * tree LOD (IndirectDraws::PrepareReflection).
+		 */
+		void SetReflectionCamera(const RE::NiCamera* a_camera);
+		void SetReflectionFace(bool a_plain) { reflectionFace.store(a_plain, std::memory_order_release); }
+		void SetReflectionTreeLodOwned(bool a_owned) { reflectionTreeLodOwned.store(a_owned, std::memory_order_release); }
+		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
 
 		static constexpr std::uint32_t kShadowModes = 3;
 
@@ -196,6 +210,12 @@ namespace DCLF
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, mainCrossfadeCopies{ 0 }, mainUnmodelledFades{ 0 }, occlusionWithheld{ 0 };
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<bool> treeLodOwned{ false };
+		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
+		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false };
+		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;
+		std::array<const void*, 2> reflectionAccumulators{};  // what reflectionRenderers was made from (render thread)
+		/** @brief The reflection test at every main-mode insertion point: a reflection-phase member's pass into a face's renderer. */
+		bool WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass);
 		std::atomic<std::uint8_t> occlusionPhase{ 0 };
 		struct OcclusionGroupHook;
 		friend struct OcclusionGroupHook;

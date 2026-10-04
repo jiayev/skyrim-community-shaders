@@ -544,7 +544,44 @@ namespace DCLF
 			std::atomic<std::shared_ptr<const TreeLodPipelines>> treeLodPipelines;
 			std::atomic<bool> treeLodReady{ false };
 			std::uint64_t treeLodUploads = 0, treeLodSlotsSent = 0;  // since the last report
+			/**
+			 * @brief Tree LOD's cull counts (TreeLodReadbackPass): the list's header copied to a host buffer per frame slot after the
+			 * depth segment's second phase, read when the slot comes round again (the graph host's thread), summed for the report.
+			 */
+			struct TreeLodCounts
+			{
+				std::vector<std::shared_ptr<org::Buffer>> readback;
+				std::vector<std::uint8_t> filled;
+				std::atomic<std::uint64_t> frames{ 0 }, phaseOne{ 0 }, retests{ 0 }, phaseTwo{ 0 };
+			};
+			std::shared_ptr<TreeLodCounts> treeLodCounts;
+			// The draw row the last depth commit uploaded (render thread): the reflection's faces draw from the same tables with
+			// their own lists (ExecuteReflection).
+			TreeLod::DrawRow treeLodRow{};
 		};
+
+		/**
+		 * @brief Tree LOD's texture and sampler into a_row (UploadTreeLod): the engine's tree LOD atlas (BSDistantTreeShader::
+		 * SetupTechnique's static at 0x1433dcd18) and slot 0's sampler as its draws leave it (address mode 0, filter 2). The bindings'
+		 * owners go to the execution. False when there is no texture.
+		 */
+		inline bool TreeLodTextureBinding(TreeLod::DrawRow& a_row, std::vector<std::shared_ptr<const void>>& a_owners)
+		{
+			const auto* texture = Engine::Global<RE::NiSourceTexture*>(0x33dcd18);
+			auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
+			if (!view)
+				return false;
+			auto& textures = GpuTextures::Get();
+			auto textureBinding = textures.ResolveBinding(view, 0);
+			auto samplerBinding = textures.SamplerBinding(0, 2);
+			if (textureBinding.index == GpuTextures::kInvalid || samplerBinding.index == GpuTextures::kInvalid)
+				return false;
+			a_owners.push_back(std::move(textureBinding.owner));
+			a_owners.push_back(std::move(samplerBinding.owner));
+			a_row.textureIndex = textureBinding.index;
+			a_row.samplerIndex = samplerBinding.index;
+			return true;
+		}
 
 		/**
 		 * @brief The depth commit's tree LOD uploads (render thread): the shape slots and meshes the mirror changed since the last
@@ -579,7 +616,7 @@ namespace DCLF
 			}
 			a_scene.treeLodSlotsSent += slots.size();
 			++a_scene.treeLodUploads;
-			// The draw row and the list's arguments with no instances, every depth commit. The cull appends only while the row names
+			// The draw row and the list's header with no instances, every depth commit. The cull appends only while the row names
 			// shape slots: 0 when tree LOD does not draw this frame (toggle off, no texture), so both passes draw nothing together.
 			TreeLod::DrawRow row{};
 			row.instances = a_scene.treeLodInstancesAddress;
@@ -588,26 +625,15 @@ namespace DCLF
 			row.visible = a_scene.treeLodVisibleAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 			row.alphaRef = 128.0f / 255.0f;
 			row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
-			// The engine's texture for its tree LOD draws (BSDistantTreeShader::SetupTechnique: its static at 0x1433dcd18, the
-			// worldspace's tree LOD atlas), slot 0's sampler as its draws leave it (address mode 0, filter 2), and the alpha
+			// The engine's texture for its tree LOD draws (the worldspace's tree LOD atlas, TreeLodTextureBinding) and the alpha
 			// reference they draw with (128/255): measured at the engine's draws (dclf-lod.md, "Tree LOD: what the engine does").
-			const auto* texture = a_draw && a_mirror.MaxIndices() ? Engine::Global<RE::NiSourceTexture*>(0x33dcd18) : nullptr;
-			auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
-			if (view) {
-				auto& textures = GpuTextures::Get();
-				auto textureBinding = textures.ResolveBinding(view, 0);
-				auto samplerBinding = textures.SamplerBinding(0, 2);
-				if (textureBinding.index != GpuTextures::kInvalid && samplerBinding.index != GpuTextures::kInvalid) {
-					a_owners.push_back(std::move(textureBinding.owner));
-					a_owners.push_back(std::move(samplerBinding.owner));
-					row.textureIndex = textureBinding.index;
-					row.samplerIndex = samplerBinding.index;
-					row.shapeSlots = a_scene.treeLodShapeCapacity;
-				}
-			}
+			if (a_draw && a_mirror.MaxIndices() && TreeLodTextureBinding(row, a_owners))
+				row.shapeSlots = a_scene.treeLodShapeCapacity;
 			a_uploads(a_scene.treeLodDraw, &row, sizeof(row), 0);
-			const std::uint32_t arguments[TreeLod::kVisibleHeaderWords] = { row.maxIndices, 0, 0, 0 };
-			a_uploads(a_scene.treeLodVisible, arguments, sizeof(arguments), 0);
+			a_scene.treeLodRow = row;
+			TreeLod::VisibleHeader header{};
+			header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = row.maxIndices;
+			a_uploads(a_scene.treeLodVisible, &header, sizeof(header), 0);
 			if (row.shapeSlots)
 				a_scene.treeLodReady.store(true, std::memory_order_release);
 		}
@@ -817,6 +843,16 @@ namespace DCLF
 			rhi::CommandSignaturePtr dispatchSignature;
 			// The sort by pipeline of phase 1's and the colour segment's sequences (one view); null when it is off.
 			std::shared_ptr<DrawSort> sort;
+			// Per drawing segment, its last commit (render thread): the scene frame, its inputs, and the backings it wrote into (the
+			// scene tables' growths, the per-object buffers' capacity). The reflection's faces draw from the depth segment's inputs
+			// and the colour segment's frame record as the frame before left them, and only while nothing has grown since.
+			struct Committed
+			{
+				std::uint32_t frame = ~0u, inputs = 0;
+				std::uint64_t sceneGeneration = 0;
+				std::uint32_t objectCapacity = 0;
+			};
+			std::array<Committed, 2> committed;
 		};
 
 		struct PassBindings
@@ -2703,6 +2739,94 @@ namespace DCLF
 		// The graph extensions that add DCLF's passes (Passes.cpp).
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeMainOpaqueExtension(std::shared_ptr<Resources> a_resources);
 		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources);
+
+		/*
+		 * The water reflection's cube map faces drawn by DCLF (dclf-lod.md, "Water reflections"; Reflection.cpp). One epoch per
+		 * reflection update (TESWaterReflections::Update), after the engine's face loop. The faces render before this frame's
+		 * builds, so they draw from what the frame before left: the depth segment's inputs, the main rows, the object records and
+		 * geometry, the index pool, the colour segment's frame constants, tree LOD's tables. Each face culls the depth inputs
+		 * through BuildDraws' bucket path (frustum only), its map sending each LOD pipeline slot to the bucket of its forward
+		 * pipeline and every other slot to none; tree LOD is culled into a list of the face's. The shape always has all six faces,
+		 * so the recordings hold across updates: a face the update does not render culls nothing (its latch's dispatch is 0, its
+		 * tree row names no slots) and draws nothing.
+		 */
+		constexpr std::uint32_t kReflectionFaces = 6;
+		// A face's PerFrame (b12, VS and PS), as the engine wrote it for the face: at most a D3D11 block's worth DCLF captures.
+		constexpr std::uint32_t kReflectionFaceBlockBytes = 1024;
+
+		/** @brief The reflection latch block's region per frame slot: the faces' BuildDrawsLatch, the slots' map, each face's bucket table. */
+		struct ReflectionLatchLayout
+		{
+			std::uint32_t slots = 0;    // pipeline slots the map holds a word for
+			std::uint32_t buckets = 0;  // buckets a face's table holds (first, capacity)
+			static constexpr std::uint32_t MapOffset() { return kReflectionFaces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
+			std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
+			std::uint32_t Bytes() const { return TableOffset(kReflectionFaces); }
+			bool operator==(const ReflectionLatchLayout&) const = default;
+		};
+
+		/** @brief What the reflection epoch's passes record against; per-update values are in its latch and buffers. */
+		struct ReflectionFrame
+		{
+			std::uint64_t generation = 0;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			IndirectState indirect{};  // zLayout and zDrawSignature (the version holds them)
+			std::shared_ptr<const org::LatchBlock> latch;
+			std::uint32_t width = 0, height = 0;   // a face
+			std::uint64_t materialRows = 0, pipelineRows = 0;  // the main rows' tables (BuildDraws' RowsOf)
+			std::uint32_t sequenceDraws = 0;       // a face's range of the sequences
+			// A face's buckets: a forward pipeline, its range in the face's sequences.
+			struct Bucket
+			{
+				rhi::PipelineHandle pipeline{};
+				std::uint32_t first = 0, capacity = 0;
+				bool operator==(const Bucket& o) const { return SameHandle(pipeline, o.pipeline) && first == o.first && capacity == o.capacity; }
+			};
+			std::vector<Bucket> buckets;
+			// Per face, the frame push data: the colour segment's frame constants with VS and PS b12 the face's block.
+			std::array<std::array<std::uint32_t, kFramePushWords>, kReflectionFaces> push{};
+			// Tree LOD: the forward pipeline and its draw's signature (invalid: no tree LOD in the faces), the cull's groups.
+			rhi::PipelineHandle tree{};
+			rhi::CommandSignatureHandle treeSignature{};
+			std::uint32_t treeGroups = 0;
+
+			bool SameShape(const ReflectionFrame& o) const
+			{
+				return latch == o.latch && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) &&
+				       width == o.width && height == o.height && materialRows == o.materialRows && pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws &&
+				       buckets == o.buckets && push == o.push && SameHandle(tree, o.tree) && SameHandle(treeSignature, o.treeSignature) && treeGroups == o.treeGroups;
+			}
+		};
+
+		struct ReflectionResources
+		{
+			// The main pass's (its depth inputs, rows, visibility, frame constants) and, through it, the scene's.
+			std::shared_ptr<Resources> main;
+			std::shared_ptr<org::LatchBlock> latch;
+			ReflectionLatchLayout latchLayout;
+			std::shared_ptr<org::Buffer> sequences, count;
+			std::uint32_t sequenceDraws = 0;  // per face
+			std::array<std::shared_ptr<org::Buffer>, kReflectionFaces> bucketCounts;
+			std::uint32_t bucketCountWords = 0;
+			std::shared_ptr<org::Buffer> faceBlocks;  // kReflectionFaceBlockBytes per face
+			std::uint64_t faceBlocksAddress = 0;
+			// DCLF's depth for the faces, cleared per face, and the engine's cube target, with a render target view per face.
+			std::shared_ptr<org::PixelBuffer> depth;
+			std::shared_ptr<org::ExternalTextureResource> cube;
+			ID3D11Texture2D* cubeTexture = nullptr;
+			std::uint32_t width = 0, height = 0;
+			// Tree LOD: per face a draw row (TreeLod::DrawRow, its visible list the face's) and a visible list, for the scene's shape slots.
+			std::array<std::shared_ptr<org::Buffer>, kReflectionFaces> treeRows, treeVisible;
+			std::array<std::uint64_t, kReflectionFaces> treeRowsAddress{}, treeVisibleAddress{};
+			std::uint32_t treeShapeCapacity = 0;
+			std::shared_ptr<const ComputeProgram> buildDraws;
+			rhi::CommandSignaturePtr dispatchSignature;
+			std::atomic<std::shared_ptr<const ReflectionFrame>> frame;
+			std::shared_ptr<const ReflectionFrame> published;
+			std::uint64_t shapeGenerations = 0;
+		};
+
+		std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeReflectionExtension(std::shared_ptr<ReflectionResources> a_resources);
 	}
 
 	// What was one translation unit's anonymous namespace: its names resolve here as they did there.
@@ -2849,6 +2973,51 @@ namespace DCLF
 		// The frame's tree LOD decision (DecideTreeLod), which the depth commit draws on; and the commits that could not.
 		bool treeLodOwned = false;
 		std::uint32_t treeLodMissed = 0;
+		// The water reflection's faces (Reflection.cpp; dclf-lod.md, "Water reflections"): their targets as the last face had them,
+		// and the forward programs and pipelines of the LOD they draw (PrepareReflection); faces captured since the last report.
+		struct ReflectionState
+		{
+			ForwardTargets targets;
+			std::uint32_t lodSlots = 0, programsReady = 0, pipelinesReady = 0;
+			bool treeReady = false;
+			// Per pipeline slot, its forward pipeline when it is a LOD slot whose pipeline is built (PrepareReflection): what the faces'
+			// map draws, and the reflection phase's readiness (PhaseReady). readinessKey changes with it.
+			std::vector<rhi::PipelineHandle> slotPipelines;
+			std::uint64_t readinessKey = 0;
+			rhi::PipelineHandle treePipeline{};
+			bool treeOwned = false;  // the faces' tree LOD is DCLF's this frame (PassCapture::SetReflectionTreeLodOwned)
+			// This update's faces (CaptureReflectionFace), until ExecuteReflection takes them.
+			struct Face
+			{
+				bool captured = false;
+				std::array<std::byte, kReflectionFaceBlockBytes> perFrame{};
+				std::uint32_t perFrameBytes = 0;
+				std::array<float, 16> viewProj{};
+				RE::NiPoint3 eye;
+			};
+			std::array<Face, kReflectionFaces> faces;
+			winrt::com_ptr<ID3D11Texture2D> cube;  // the cube target the faces render into
+			std::uint32_t width = 0, height = 0;
+			std::shared_ptr<ReflectionResources> resources;
+			bool setupFailed = false;
+			// Since the last report: faces captured, updates, epochs and faces drawn, and the updates not drawn by cause.
+			std::uint32_t facesCaptured = 0, updates = 0, epochs = 0, facesDrawn = 0;
+			std::array<std::uint32_t, 6> skipped{};  // not drawable, unused, no faces, stale inputs, no resources, the epoch failed
+			// The scene frame of the last ExecuteReflection, and the faces captured after it in the same frame (none: every update
+			// of a frame runs before BeforeShadowMaps).
+			std::uint32_t executedFrame = ~0u, lateFaces = 0;
+		} reflection;
+		/** @brief The reflection's graph resources, created once its targets are known (render thread). */
+		bool SetupReflection();
+		/** @brief The reflection phase's readiness of an object (PhaseReady): its pipeline slot's forward pipeline is built. */
+		bool ReflectionPhaseReady(std::uint32_t a_slot) const;
+		/**
+		 * @brief The reflection's resources grown before its epoch: the latch for a_slots pipeline slots and a_buckets buckets, the
+		 * sequences for a_draws a face, the faces' tree LOD lists for the scene's shape slots.
+		 */
+		void ReserveReflection(std::uint32_t a_slots, std::uint32_t a_buckets, std::uint32_t a_draws);
+		/** @brief The engine's cube target imported (again when it changes). */
+		bool ImportReflectionCube(ID3D11Texture2D* a_texture);
 		/** @brief The scene tables, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
 		/**

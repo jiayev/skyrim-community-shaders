@@ -182,18 +182,23 @@ namespace DCLF::Draws
 		}
 	}
 
-	/** @brief Tree LOD's draw (dclf-lod.md, "Tree LOD: the draws"): its pipeline, the draw row's address as its push data, the list's arguments. */
-	void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, std::uint64_t a_draw, rhi::ResourceHandle a_visible)
+	/**
+	 * @brief Tree LOD's draw (dclf-lod.md, "Tree LOD: the draws"): its pipeline, its push data (the draw row's address, and whether
+	 * its instances start after phase 1's: phase 2's depth draw), its arguments in the list's header (TreeLod::VisibleHeader).
+	 */
+	void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, bool a_phaseTwo, std::uint64_t a_draw, rhi::ResourceHandle a_visible)
 	{
-		std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32) };
+		std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32), a_phaseTwo ? 1u : 0u };
+		const std::uint64_t arguments = a_colour ? offsetof(TreeLod::VisibleHeader, colour) :
+		                                a_phaseTwo ? offsetof(TreeLod::VisibleHeader, phaseTwo) : offsetof(TreeLod::VisibleHeader, phaseOne);
 		a_commands.BindPipeline(a_colour ? a_pipelines.colour : a_pipelines.depth);
 		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
-		a_commands.ExecuteIndirect(a_pipelines.drawSignature, a_visible, 0, {}, 0, 1);
+		a_commands.ExecuteIndirect(a_pipelines.drawSignature, a_visible, arguments, {}, 0, 1);
 	}
 
 	struct TreeLodCullBindings
 	{
-		org::DeclaredViewToken shapes, instances, draw, visible;
+		org::DeclaredViewToken shapes, instances, draw, visible, hzb;
 	};
 
 	struct TreeLodCullPrepared
@@ -205,15 +210,16 @@ namespace DCLF::Draws
 	};
 
 	/**
-	 * @brief Tree LOD's cull (TreeLodCullCS.hlsl): every instance record against the depth segment's frustum, the visible ones
-	 * appended to the list both passes draw. In the depth epoch, before its draw; the depth commit uploaded the tables' changes,
-	 * the draw row and the list's arguments with no instances.
+	 * @brief Tree LOD's cull (TreeLodCullCS.hlsl), in the depth segment's two phases like BuildDraws': phase 1 tests every instance
+	 * record against the frustum and the HZB the previous frame left, before the Z-prepass's draw; phase 2 tests phase 1's
+	 * occluded ones against the HZB rebuilt from this frame's depth, before the rescues' draw. Both append to the list the passes
+	 * draw. The depth commit uploaded the tables' changes, the draw row and the list's header with no instances.
 	 */
 	class TreeLodCullPass final : public org::TypedRenderGraphPass<TreeLodCullPass, TreeLodCullPrepared, TreeLodCullBindings>
 	{
 	public:
-		explicit TreeLodCullPass(std::shared_ptr<Resources> a_resources) :
-			resources(std::move(a_resources)) {}
+		TreeLodCullPass(std::shared_ptr<Resources> a_resources, std::uint32_t a_phase) :
+			resources(std::move(a_resources)), phase(a_phase) {}
 
 		TreeLodCullBindings Declare(org::PassBuilder& a_builder)
 		{
@@ -224,6 +230,10 @@ namespace DCLF::Draws
 			bindings.instances = a_builder.ShaderResource(scene.treeLodInstances).View();
 			bindings.draw = a_builder.ShaderResource(scene.treeLodDraw).View();
 			bindings.visible = a_builder.UnorderedAccess(scene.treeLodVisible).View();
+			// As BuildDraws': phase 1 sees the HZB the previous frame left, phase 2 the one just rebuilt; their places around the
+			// build (GatherStructuralPasses) are what makes the difference.
+			if (resources->hzb)
+				bindings.hzb = a_builder.ShaderResource(resources->hzb).View();
 			return bindings;
 		}
 
@@ -251,8 +261,17 @@ namespace DCLF::Draws
 			constants.drawIndex = CaptureViewIndex(a_preparation, a_bindings.draw);
 			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
 			constants.latchIndex = frame->latch->SrvIndex();
-			// Every record the tables hold: the shader stops at the draw row's slots and each slot's count.
-			prepared.groups = static_cast<std::uint32_t>((std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
+			constants.phase = phase;
+			const std::uint64_t records = std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances;
+			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader) + records * sizeof(std::uint32_t));
+			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
+				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
+				constants.hzbSizePacked = (resources->hzbWidth & 0xFFFF) | (resources->hzbHeight << 16);
+				constants.hzbMips = resources->hzbMips;
+			}
+			// Every record the tables hold (phase 1), or every retest entry they can (phase 2): the shader stops at the draw row's
+			// slots and each slot's count, or at the retest count.
+			prepared.groups = static_cast<std::uint32_t>((records + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
 			return prepared;
 		}
 
@@ -272,6 +291,73 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<Resources> resources;
+		std::uint32_t phase = 1;
+	};
+
+	struct TreeLodReadbackBindings
+	{
+		org::ResourceBindingToken visible;
+	};
+
+	struct TreeLodReadbackPrepared
+	{
+		std::shared_ptr<SceneBuffers::TreeLodCounts> counts;
+	};
+
+	/**
+	 * @brief Tree LOD's cull counts (SceneBuffers::TreeLodCounts): the list's header after the depth segment's second phase, to the
+	 * frame slot's host buffer; what the slot held from its last frame is summed first.
+	 */
+	class TreeLodReadbackPass final : public org::TypedRenderGraphPass<TreeLodReadbackPass, TreeLodReadbackPrepared, TreeLodReadbackBindings>
+	{
+	public:
+		explicit TreeLodReadbackPass(std::shared_ptr<SceneBuffers> a_scene) :
+			scene(std::move(a_scene)) {}
+
+		TreeLodReadbackBindings Declare(org::PassBuilder& a_builder)
+		{
+			return { a_builder.CopySource(scene->treeLodVisible) };
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			a_out.push_back(scene->layout.load(std::memory_order_acquire));
+		}
+
+		TreeLodReadbackPrepared Prepare(const TreeLodReadbackBindings&, const org::PassPrepareContext&) const
+		{
+			return { scene->treeLodCounts };
+		}
+
+		static void Record(const TreeLodReadbackBindings& a_bindings, const TreeLodReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.counts)
+				return;
+			auto& counts = *a_frame.counts;
+			const std::uint32_t slot = a_recording.FrameSlot();
+			if (slot >= counts.readback.size())
+				return;
+			if (counts.filled[slot]) {
+				auto resource = counts.readback[slot]->GetAPIResource();
+				void* mapped = nullptr;
+				resource.Map(&mapped);
+				if (mapped) {
+					TreeLod::VisibleHeader header;
+					std::memcpy(&header, mapped, sizeof(header));
+					counts.frames.fetch_add(1, std::memory_order_relaxed);
+					counts.phaseOne.fetch_add(header.phaseOne[1], std::memory_order_relaxed);
+					counts.retests.fetch_add(header.retests, std::memory_order_relaxed);
+					counts.phaseTwo.fetch_add(header.phaseTwo[1], std::memory_order_relaxed);
+					resource.Unmap(0, 0);
+				}
+			}
+			a_recording.Commands().CopyBufferRegion(counts.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.visible).GetHandle(), 0,
+				sizeof(TreeLod::VisibleHeader));
+			counts.filled[slot] = 1;
+		}
+
+	private:
+		std::shared_ptr<SceneBuffers> scene;
 	};
 
 	class MainOpaquePass final : public org::TypedRenderGraphPass<MainOpaquePass, PreparedDraws, PassBindings>
@@ -461,9 +547,9 @@ namespace DCLF::Draws
 					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(call.bucket) * sizeof(std::uint32_t),
 						call.capacity);
 				}
-				// Tree LOD's depth (phase 1 only: its list is culled once, by the frustum): one instanced draw of the culled records.
-				if (a_prepared.treeLod && !a_prepared.phaseTwo)
-					RecordTreeLodDraw(commands, *a_prepared.treeLod, false, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
+				// Tree LOD's depth: one instanced draw of the phase's culled records (TreeLodCullPass).
+				if (a_prepared.treeLod)
+					RecordTreeLodDraw(commands, *a_prepared.treeLod, false, a_prepared.phaseTwo, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
 				if (stats)
 					stats->End(commands, statsSlot, depthKind);
 				commands.EndPass();
@@ -555,7 +641,7 @@ namespace DCLF::Draws
 				const bool treePart = subRange("cs.dclf.colour.tree-lod");
 				commands.BindLayout(frame.indirect.zLayout);
 				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
-				RecordTreeLodDraw(commands, *a_prepared.treeLod, true, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
+				RecordTreeLodDraw(commands, *a_prepared.treeLod, true, false, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
 				endSubRange(treePart);
 			}
 			if (stats)
@@ -1937,6 +2023,358 @@ namespace DCLF::Draws
 		bool sky = false;
 	};
 
+	/** @brief The shape the reflection epoch's passes draw (ExecuteReflection), null while it has none. */
+	std::shared_ptr<const ReflectionFrame> CurrentReflectionFrame(const ReflectionResources& a_resources)
+	{
+		return a_resources.frame.load(std::memory_order_acquire);
+	}
+
+	struct ReflectionBuildBindings
+	{
+		org::DeclaredViewToken inputs, geometries, objects, sequences, count, visibility, poolFirsts;
+		std::array<org::DeclaredViewToken, kReflectionFaces> bucketCounts;
+	};
+
+	struct ReflectionBuildPrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		std::shared_ptr<const org::LatchBlock> latch;
+		rhi::CommandSignatureHandle signature{};
+		BuildDrawsConstants constants{};
+		std::array<std::uint32_t, kReflectionFaces> bucketCountsIndex{};
+	};
+
+	/**
+	 * @brief The reflection faces' culling (ExecuteReflection): BuildDrawsCS in its single phase over the depth segment's inputs the
+	 * frame before left, one dispatch per face, frustum only; its latch's slots' map sends a LOD slot to its forward pipeline's
+	 * bucket and every other slot to none. A face the update does not render has a dispatch of 0 groups.
+	 */
+	class ReflectionBuildDrawsPass final : public org::TypedRenderGraphPass<ReflectionBuildDrawsPass, ReflectionBuildPrepared, ReflectionBuildBindings>
+	{
+	public:
+		explicit ReflectionBuildDrawsPass(std::shared_ptr<ReflectionResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		ReflectionBuildBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const auto& main = *resources->main;
+			ReflectionBuildBindings bindings{};
+			bindings.inputs = a_builder.ShaderResource(main.inputsDepth).View();
+			bindings.geometries = a_builder.ShaderResource(main.scene->geometries).View();
+			bindings.objects = a_builder.ShaderResource(main.scene->objects).View();
+			bindings.sequences = a_builder.UnorderedAccess(resources->sequences).View();
+			bindings.count = a_builder.UnorderedAccess(resources->count).View();
+			// Read only in the single phase (an input's published verdict), never written.
+			bindings.visibility = a_builder.UnorderedAccess(main.visibility).View();
+			bindings.poolFirsts = a_builder.ShaderResource(main.scene->pool->firsts).View();
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
+				bindings.bucketCounts[f] = a_builder.UnorderedAccess(resources->bucketCounts[f]).View();
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentReflectionFrame(*resources);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->main->scene->pool->layout);
+		}
+
+		ReflectionBuildPrepared Prepare(const ReflectionBuildBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			ReflectionBuildPrepared prepared{};
+			const auto frame = CurrentReflectionFrame(*resources);
+			if (!frame || !frame->latch || !resources->buildDraws || !resources->dispatchSignature)
+				return prepared;
+			prepared.program = resources->buildDraws;
+			prepared.latch = frame->latch;
+			prepared.signature = resources->dispatchSignature->GetHandle();
+			auto& constants = prepared.constants;
+			constants.latchIndex = frame->latch->SrvIndex();
+			constants.inputsIndex = CaptureViewIndex(a_preparation, a_bindings.inputs);
+			constants.geometriesIndex = CaptureViewIndex(a_preparation, a_bindings.geometries);
+			constants.objectsIndex = CaptureViewIndex(a_preparation, a_bindings.objects);
+			constants.sequencesIndex = CaptureViewIndex(a_preparation, a_bindings.sequences);
+			constants.countIndex = CaptureViewIndex(a_preparation, a_bindings.count);
+			constants.visibilityIndex = CaptureViewIndex(a_preparation, a_bindings.visibility);
+			constants.poolFirstsIndex = CaptureViewIndex(a_preparation, a_bindings.poolFirsts);
+			// The main rows, which the inputs' y names (RowsOf).
+			constants.materialRowsAddressLo = static_cast<std::uint32_t>(frame->materialRows);
+			constants.materialRowsAddressHi = static_cast<std::uint32_t>(frame->materialRows >> 32);
+			constants.materialRowStride = kMaterialRowBytes;
+			constants.pipelineRowsAddressLo = static_cast<std::uint32_t>(frame->pipelineRows);
+			constants.pipelineRowsAddressHi = static_cast<std::uint32_t>(frame->pipelineRows >> 32);
+			constants.pipelineRowStride = kPipelineRowBytes;
+			constants.phaseBits = 0;  // the single phase: frustum only (the latch's mode), nothing published
+			// The bucket path's draws are bounded by their buckets (the latch's tables); this bounds the other, which no face takes.
+			constants.phaseTwoBase = kReflectionFaces * frame->sequenceDraws;
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
+				prepared.bucketCountsIndex[f] = CaptureViewIndex(a_preparation, a_bindings.bucketCounts[f]);
+			return prepared;
+		}
+
+		static void Record(const ReflectionBuildBindings&, const ReflectionBuildPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.program || !a_prepared.latch)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_prepared.program->layout->GetHandle());
+			commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				auto constants = a_prepared.constants;
+				constants.bucketCountsIndex = a_prepared.bucketCountsIndex[f];
+				RecordLatchedDispatch(constants, *a_prepared.latch, a_prepared.signature, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), a_recording);
+			}
+		}
+
+	private:
+		std::shared_ptr<ReflectionResources> resources;
+	};
+
+	struct ReflectionTreeBindings
+	{
+		org::DeclaredViewToken shapes, instances;
+		std::array<org::DeclaredViewToken, kReflectionFaces> rows, visible;
+	};
+
+	struct ReflectionTreePrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		std::shared_ptr<const org::LatchBlock> latch;
+		TreeLodCullConstants constants{};
+		std::array<std::uint32_t, kReflectionFaces> rowIndex{}, visibleIndex{};
+		std::uint32_t groups = 0;
+	};
+
+	/**
+	 * @brief The reflection faces' tree LOD (ExecuteReflection): TreeLodCullCS's phase 1 per face, against the face's latch entry
+	 * (cull mode 1: no occlusion), into the face's list; a face's row names no shape slot when it is not drawn.
+	 */
+	class ReflectionTreeCullPass final : public org::TypedRenderGraphPass<ReflectionTreeCullPass, ReflectionTreePrepared, ReflectionTreeBindings>
+	{
+	public:
+		explicit ReflectionTreeCullPass(std::shared_ptr<ReflectionResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		ReflectionTreeBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const auto& scene = *resources->main->scene;
+			ReflectionTreeBindings bindings{};
+			bindings.shapes = a_builder.ShaderResource(scene.treeLodShapes).View();
+			bindings.instances = a_builder.ShaderResource(scene.treeLodInstances).View();
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				bindings.rows[f] = a_builder.ShaderResource(resources->treeRows[f]).View();
+				bindings.visible[f] = a_builder.UnorderedAccess(resources->treeVisible[f]).View();
+			}
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentReflectionFrame(*resources);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->main->scene->layout.load(std::memory_order_acquire));
+		}
+
+		ReflectionTreePrepared Prepare(const ReflectionTreeBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			ReflectionTreePrepared prepared{};
+			const auto& scene = *resources->main->scene;
+			const auto frame = CurrentReflectionFrame(*resources);
+			if (!frame || !frame->latch || !frame->treeGroups || !scene.treeLodCull)
+				return prepared;
+			prepared.program = scene.treeLodCull;
+			prepared.latch = frame->latch;
+			prepared.groups = frame->treeGroups;
+			auto& constants = prepared.constants;
+			constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
+			constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
+			constants.latchIndex = frame->latch->SrvIndex();
+			constants.phase = 1;
+			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader));  // never written: no occlusion test
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				prepared.rowIndex[f] = CaptureViewIndex(a_preparation, a_bindings.rows[f]);
+				prepared.visibleIndex[f] = CaptureViewIndex(a_preparation, a_bindings.visible[f]);
+			}
+			return prepared;
+		}
+
+		static void Record(const ReflectionTreeBindings&, const ReflectionTreePrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.program || !a_prepared.groups || !a_prepared.latch)
+				return;
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_prepared.program->layout->GetHandle());
+			commands.BindPipeline(a_prepared.program->pipeline->GetHandle());
+			const auto region = static_cast<std::uint32_t>(a_prepared.latch->Offset(a_recording.FrameSlot()));
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				auto constants = a_prepared.constants;
+				constants.latchOffset = region + f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch));
+				constants.drawIndex = a_prepared.rowIndex[f];
+				constants.visibleIndex = a_prepared.visibleIndex[f];
+				commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+				commands.Dispatch(a_prepared.groups, 1, 1);
+			}
+		}
+
+	private:
+		std::shared_ptr<ReflectionResources> resources;
+	};
+
+	struct ReflectionDrawBindings
+	{
+		std::array<org::DeclaredViewToken, kReflectionFaces> faces;
+		org::DeclaredViewToken depth;
+		org::ResourceBindingToken sequences, pool;
+		std::array<org::ResourceBindingToken, kReflectionFaces> bucketCounts, treeVisible;
+	};
+
+	struct ReflectionDrawPrepared
+	{
+		std::shared_ptr<const ReflectionFrame> frame;
+		std::array<org::PreparedDescriptorReference, kReflectionFaces> faces{};
+		org::PreparedDescriptorReference depth{};
+		std::array<std::uint64_t, kReflectionFaces> treeRows{};
+	};
+
+	/**
+	 * @brief The reflection faces' draws: per face, a pass on its slice of the engine's cube target (loaded and stored: the engine's
+	 * sky is there) with DCLF's depth cleared; per bucket a plain indirect draw with its forward pipeline over the face's range of the
+	 * sequences, as the Z-prepass's (DCLF_PULLED), then the face's tree LOD.
+	 */
+	class ReflectionDrawPass final : public org::TypedRenderGraphPass<ReflectionDrawPass, ReflectionDrawPrepared, ReflectionDrawBindings>
+	{
+	public:
+		explicit ReflectionDrawPass(std::shared_ptr<ReflectionResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		ReflectionDrawBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const std::span<const org::SrvView> noViews{};
+			const auto& main = *resources->main;
+			const auto& scene = *main.scene;
+			ReflectionDrawBindings bindings{};
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
+				bindings.faces[f] = a_builder.RenderTarget(resources->cube, org::RtvView{ UINT32_MAX, 0, f }).View();
+			bindings.depth = a_builder.DepthReadWrite(resources->depth).View();
+			// The sequences are the draws' arguments and what the vertex stage reads by device address (DCLF_PULLED).
+			bindings.sequences = a_builder.IndirectArguments(resources->sequences);
+			a_builder.ShaderResource(resources->sequences, noViews);
+			bindings.pool = a_builder.IndexBuffer(scene.pool->indices);
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f)
+				bindings.bucketCounts[f] = a_builder.IndirectArguments(resources->bucketCounts[f]);
+			// Read through device addresses; declared so the graph orders them after their uploads.
+			a_builder.ShaderResource(main.materialRows.buffer, noViews);
+			a_builder.ShaderResource(main.pipelineRows.buffer, noViews);
+			a_builder.ShaderResource(scene.objects, noViews);
+			a_builder.ShaderResource(scene.bones, noViews);
+			a_builder.ShaderResource(scene.facePositions, noViews);
+			a_builder.ShaderResource(resources->faceBlocks, noViews);
+			if (scene.treeLodCull && resources->treeVisible[0]) {
+				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes })
+					a_builder.ShaderResource(table, noViews);
+				for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+					a_builder.ShaderResource(resources->treeRows[f], noViews);
+					bindings.treeVisible[f] = a_builder.IndirectArguments(resources->treeVisible[f]);
+					a_builder.ShaderResource(resources->treeVisible[f], noViews);
+				}
+			}
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentReflectionFrame(*resources);
+			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->main->scene->pool->layout);
+		}
+
+		ReflectionDrawPrepared Prepare(const ReflectionDrawBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			ReflectionDrawPrepared prepared{};
+			auto frame = CurrentReflectionFrame(*resources);
+			if (!frame || !frame->indirect.valid || !frame->width || !frame->height)
+				return prepared;
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				prepared.faces[f] = a_preparation.Capture(a_bindings.faces[f]);
+				prepared.treeRows[f] = resources->treeRowsAddress[f];
+			}
+			prepared.depth = a_preparation.Capture(a_bindings.depth);
+			prepared.frame = std::move(frame);
+			return prepared;
+		}
+
+		static void Record(const ReflectionDrawBindings& a_bindings, const ReflectionDrawPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame)
+				return;
+			const auto& frame = *a_prepared.frame;
+			auto& commands = a_recording.Commands();
+			commands.SetDescriptorHeaps(frame.resourceHeap, frame.samplerHeap);
+			auto device = RenderGraphRuntime::Get().Host()->GetDesc().device;
+			const auto sequences = a_recording.Resolve(a_bindings.sequences).GetHandle();
+			const std::uint64_t sequencesAddress = device.GetBufferDeviceAddress({ sequences, 0 });
+			const rhi::IndexBufferView pool{ a_recording.Resolve(a_bindings.pool).GetHandle(), 0, 0, rhi::Format::R16_UInt };
+			auto split = [](std::uint32_t* a_words, std::uint64_t a_value) {
+				a_words[0] = static_cast<std::uint32_t>(a_value);
+				a_words[1] = static_cast<std::uint32_t>(a_value >> 32);
+			};
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				rhi::ColorAttachment colour{};
+				colour.rtv = a_recording.Resolve(a_prepared.faces[f]);
+				colour.loadOp = rhi::LoadOp::Load;
+				colour.storeOp = rhi::StoreOp::Store;
+				rhi::DepthAttachment depth{};
+				depth.dsv = a_recording.Resolve(a_prepared.depth);
+				depth.depthLoad = rhi::LoadOp::Clear;
+				depth.depthStore = rhi::StoreOp::Store;
+				depth.clear.type = rhi::ClearValueType::DepthStencil;
+				depth.clear.format = rhi::Format::D24_UNorm_S8_UInt;
+				depth.clear.depthStencil = { 1.0f, 0 };
+				rhi::PassBeginInfo begin{};
+				begin.colors = { &colour, 1 };
+				begin.depth = &depth;
+				begin.width = frame.width;
+				begin.height = frame.height;
+				begin.minDepth = 0.0f;
+				begin.maxDepth = 1.0f;
+				begin.debugName = "DCLF reflection face";
+				commands.BeginPass(begin);
+				commands.SetPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+				commands.BindLayout(frame.indirect.zLayout);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, frame.push[f].data());
+				commands.SetIndexBuffer(pool);
+				const auto counts = a_recording.Resolve(a_bindings.bucketCounts[f]).GetHandle();
+				for (std::uint32_t b = 0; b < frame.buckets.size(); ++b) {
+					const auto& bucket = frame.buckets[b];
+					if (!bucket.capacity)
+						continue;
+					const std::uint64_t first = (std::uint64_t(f) * frame.sequenceDraws + bucket.first) * sizeof(DrawSequence);
+					std::uint32_t words[kDrawPushWords]{};
+					split(words + kZDrawPushSequences, sequencesAddress + first);
+					commands.BindPipeline(bucket.pipeline);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(b) * sizeof(std::uint32_t),
+						bucket.capacity);
+				}
+				// Tree LOD: one instanced draw of the face's list, its row the face's (phase 1's arguments, and its instances from the list's start).
+				if (frame.tree.valid() && frame.treeGroups) {
+					std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_prepared.treeRows[f]), static_cast<std::uint32_t>(a_prepared.treeRows[f] >> 32), 0u };
+					commands.BindPipeline(frame.tree);
+					commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+					commands.ExecuteIndirect(frame.treeSignature, a_recording.Resolve(a_bindings.treeVisible[f]).GetHandle(), offsetof(TreeLod::VisibleHeader, phaseOne), {},
+						0, 1);
+				}
+				commands.EndPass();
+			}
+		}
+
+	private:
+		std::shared_ptr<ReflectionResources> resources;
+	};
+
 	/** @brief The scene tables, which both extensions register (the same identifiers: the second registration is an update). */
 	void RegisterSceneBuffers(org::RenderGraph& a_graph, const SceneBuffers& a_scene)
 	{
@@ -2131,10 +2569,10 @@ namespace DCLF::Draws
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));
-			// Tree LOD's list, before the depth draw that draws it.
+			// Tree LOD's list, phase 1's, before the depth draw that draws it.
 			if (resources->scene->treeLodCull)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.tree-lod-cull",
-					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodCullPass>(resources)))
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodCullPass>(resources, 1)))
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
@@ -2171,6 +2609,7 @@ namespace DCLF::Draws
 			//   main-opaque (the phase-1 depth draw)
 			//   hzb         (rebuilt from the depth that draw has just finished)
 			//   build-draws-phase2 (phase 1's rejects, re-tested against the rebuilt HZB)
+			//   tree-lod-cull-phase2 (tree LOD's, the same)
 			//   depth-phase2       (the rescues, so their depth is in the frame too)
 			//
 			// Phase 1 tests against a depth buffer that is a frame old, which is what makes it cheap and
@@ -2186,10 +2625,20 @@ namespace DCLF::Draws
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment, 2)))
 						.PreferQueue(org::QueueKind::Graphics)
 						.Epoch(depth));
+				if (resources->scene->treeLodCull)
+					a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.tree-lod-cull-phase2",
+						std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodCullPass>(resources, 2)))
+							.PreferQueue(org::QueueKind::Graphics)
+							.Epoch(depth));
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.depth-phase2",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment, true)))
 						.Epoch(depth));
 			}
+			// Tree LOD's cull counts, after both phases.
+			if (resources->scene->treeLodCull && resources->scene->treeLodCounts)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.tree-lod-counts",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodReadbackPass>(resources->scene)))
+						.Epoch(depth));
 			if (resources->probe)
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.probe-after",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<ProbePass>(resources, depthSegment, true)))
@@ -2214,6 +2663,61 @@ namespace DCLF::Draws
 	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeShadowExtension(std::shared_ptr<ShadowResources> a_resources)
 	{
 		return std::make_unique<ShadowExtension>(std::move(a_resources));
+	}
+
+	class ReflectionExtension final : public org::RenderGraph::IRenderGraphExtension
+	{
+	public:
+		explicit ReflectionExtension(std::shared_ptr<ReflectionResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		void PrepareForBuild(org::RenderGraph& a_graph) override
+		{
+			// The main pass's, under the main extension's identifiers (the same registration again).
+			const auto& main = *resources->main;
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.material-rows"), main.materialRows.buffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.pipeline-rows"), main.pipelineRows.buffer);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), main.inputsDepth);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.visibility"), main.visibility);
+			RegisterSceneBuffers(a_graph, *main.scene);
+			// Its own.
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.sequences"), resources->sequences);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.draw-count"), resources->count);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.face-blocks"), resources->faceBlocks);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.depth"), resources->depth);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.reflection.cube"), resources->cube);
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.bucket-counts{}", f)), resources->bucketCounts[f]);
+				a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-row{}", f)), resources->treeRows[f]);
+				if (resources->treeVisible[f])
+					a_graph.RegisterResource(org::ResourceIdentifier(fmt::format("cs.dclf.reflection.tree-visible{}", f)), resources->treeVisible[f]);
+			}
+		}
+
+		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
+		{
+			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::Reflection);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.reflection.build-draws",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<ReflectionBuildDrawsPass>(resources)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
+			if (resources->main->scene->treeLodCull && resources->treeVisible[0])
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.reflection.tree-lod-cull",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<ReflectionTreeCullPass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(epoch));
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.reflection.faces",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<ReflectionDrawPass>(resources)))
+					.Epoch(epoch));
+		}
+
+	private:
+		std::shared_ptr<ReflectionResources> resources;
+	};
+
+	std::unique_ptr<org::RenderGraph::IRenderGraphExtension> MakeReflectionExtension(std::shared_ptr<ReflectionResources> a_resources)
+	{
+		return std::make_unique<ReflectionExtension>(std::move(a_resources));
 	}
 }
 

@@ -126,6 +126,21 @@ namespace DCLF
 		 */
 		bool DecideTreeLod();
 		/**
+		 * @brief The water reflection's faces (dclf-lod.md, "Water reflections"). CaptureReflectionFace: render thread, at a face's
+		 * accumulator render's end (ReflectionFaces::InFace), after the engine's draws: the face's targets, and in a plain face render
+		 * the face's camera for this update's epoch. PrepareReflection: render thread, once a frame, after DecideTreeLod: the forward
+		 * programs and pipelines of the LOD pipeline slots in use, and tree LOD's, for those targets (the reflection phase's
+		 * readiness), and whether the faces' tree LOD is DCLF's. ReflectionDrawable: the set draws the reflection phase (SceneStore::
+		 * SetPhasesDrawn). ExecuteReflection: render thread, once a frame at BeforeShadowMaps, after the frame's reflection updates
+		 * (TESWaterReflections::Update runs twice a frame, a face each): one epoch drawing the frame's faces' reflection-phase
+		 * members and tree LOD into the cube target.
+		 */
+		void CaptureReflectionFace();
+		void PrepareReflection();
+		bool ReflectionDrawable() const;
+		void ExecuteReflection();
+		std::string ReflectionReport();
+		/**
 		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
 		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.
 		 */

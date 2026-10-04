@@ -1201,6 +1201,16 @@ Decompiled 2026-10-01 for moving the fade and LOD state machine to the GPU.
     accumulation hints 6 and 7 (`FUN_1414b2b90`).
 -   **The targets:** cube target 0 (`kREFLECTIONS`), depth 6.
 -   **`Update` hides the player** and every water shape while a face draws, and gives the sky root `kAlwaysDraw`.
+-   **The camera's place.** At the player's eye (`Actor::CalculateLOSLocation`, `kEye`), its far plane the main camera's.
+-   **The face render** is `BSCubeMapCamera` vfunc `0x35` (`0x1A8`; `0x1414ed4e0`, a jump to `FUN_1414ed920`), called
+    with a face mask, from `0x1405209c9`. Per face it:
+    1.  binds the cube target's face (`FUN_140e4fe50(rtm, 0, 0, face, 0)`) and depth target 6, and clears;
+    2.  sets depth mode 3 (test and write);
+    3.  orients the camera to the face (`FUN_1414ed500`: the six cube rotations);
+    4.  culls each root into the accumulator at `+0x1A0` (cull mode 3), with render mode `0x1B`, `0x19` or 0;
+    5.  renders the accumulator (`FUN_1414a90f0(camera, accumulator, 8)`), with the raster cull mode at 2.
+
+    There is no depth prepass: the face is one forward pass, colour and depth together.
 -   CS Dynamic Cubemaps draws no geometry: it is a compute pass over the main colour and depth.
 
 ### Point lights' shadow culls

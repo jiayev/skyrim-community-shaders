@@ -769,6 +769,8 @@ namespace DCLF
 		}
 		a_resources->latch->WriteValue(latchSlot, 0, latch);
 		frame->latch = a_resources->latch;
+		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
+		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
 
 		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations);
 		lap(6);

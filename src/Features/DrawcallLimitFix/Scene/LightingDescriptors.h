@@ -189,6 +189,23 @@ namespace DCLF
 	 * occlusion global (0x142035500) is. Its shaders, its samplers and what SetupGeometry reads (+0x94) are that technique's.
 	 */
 	std::uint32_t SetupTechniqueDescriptor(std::uint32_t a_pass);
+	/**
+	 * @brief The shader descriptors a pass descriptor draws with: SetupTechnique's split into the vertex and pixel descriptors, then
+	 * Community Shaders' lookup change (State::ModifyShaderLookup), with the pixel stage's Deferred bit when a_deferred (the main
+	 * view's deferred pass) and without it otherwise (a forward view: the water reflection's cube map).
+	 */
+	void LightingShaderDescriptors(std::uint32_t a_pass, bool a_deferred, std::uint32_t& a_vertex, std::uint32_t& a_pixel);
+	/** @brief The pixel descriptor's Deferred bit (ShaderCache.h, LightingShaderFlags::Deferred): the G-buffer variant. */
+	inline constexpr std::uint32_t kLightingPixelDeferred = 1u << 4;
+	/**
+	 * @brief Whether a pass descriptor's Lighting technique is one the water reflection's cube map draws (SelectLightingTechnique):
+	 * LODLand, LODObjects, LODObjectHD, LODLandNoise (dclf-lod.md, "The census").
+	 */
+	inline constexpr bool LodLightingTechnique(std::uint32_t a_passDescriptor)
+	{
+		const std::uint32_t technique = (a_passDescriptor >> 24) & 0x3f;
+		return technique == 9 || technique == 13 || technique == 15 || technique == 18;
+	}
 	/** @brief The Lighting techniques by id (SelectLightingTechnique), and kRefractionReject's name. */
 	constexpr std::array<std::string_view, 20> kLightingTechniqueNames{ "none", "envmap", "glowmap", "parallax", "facegen",
 		"facegenRGBTint", "hair", "parallaxOcc", "MTLand", "LODLand", "snow", "multilayerParallax", "treeAnim", "LODObjects",

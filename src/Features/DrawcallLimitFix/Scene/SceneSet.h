@@ -30,6 +30,9 @@ namespace DCLF
 		kSetOccluderSky = 1u << 2,             // Skylighting's occlusion map
 		kSetOccluderPrecipitation = 1u << 3,   // the precipitation occlusion mask
 		kSetCasterPoint = 1u << 4,             // the paraboloid shadow views (point lights)
+		// The water reflection's cube map faces (dclf-lod.md, "Water reflections"): a LOD member whose forward pipeline is ready
+		// and that was a main member at the last commit too (the faces draw from the last frame's depth inputs).
+		kSetReflection = 1u << 5,
 	};
 
 	/**

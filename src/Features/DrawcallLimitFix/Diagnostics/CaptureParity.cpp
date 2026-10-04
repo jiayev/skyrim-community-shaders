@@ -208,7 +208,8 @@ namespace DCLF
 		// A block is only compared when the buffer the draw binds is the one the Map/Unmap detours
 		// snapshotted; otherwise there is nothing to compare against and the draw silently counts as OK.
 		// The counts are reported, because a block that is never compared is not a passing check.
-		auto& coverage = blockCoverage[a_what];
+		const std::string what = labelPrefix + a_what;
+		auto& coverage = blockCoverage[what];
 		if (!a_native.valid || a_boundBuffer != a_native.buffer) {
 			++coverage.second;
 			return true;
@@ -229,7 +230,7 @@ namespace DCLF
 			for (std::uint32_t c = 0; c < a_layout.size[i]; ++c)
 				anyWritten |= a_expected.Written(ourOffset + c);
 			if (!anyWritten) {
-				++unevaluated[fmt::format("{} {}", a_what, i)];
+				++unevaluated[fmt::format("{} {}", what, i)];
 				continue;
 			}
 			bool differs = false;
@@ -252,10 +253,10 @@ namespace DCLF
 				// were brought in: 83,396 per-geometry mismatches and not one of them in the samples.
 				// Two samples per variable: a standing difference in one variable (PS PerMaterial 29) used
 				// to fill the capped list on its own, and every other variable's mismatches went unsampled.
-				if (++mismatchByVariable[fmt::format("{} {}", a_what, i)] <= 2) {
+				if (++mismatchByVariable[fmt::format("{} {}", what, i)] <= 2) {
 					float native = 0;
 					std::memcpy(&native, &a_native.bytes[(nativeOffset + firstComponent) * 4], 4);
-					NoteMismatch(fmt::format("{} {} variable {} component {}: DCLF {}, native {}{}", Describe(a_geometry), a_what, i, firstComponent,
+					NoteMismatch(fmt::format("{} {} variable {} component {}: DCLF {}, native {}{}", Describe(a_geometry), what, i, firstComponent,
 						a_expected.floats[ourOffset + firstComponent], native, compareContext));
 				}
 			}
@@ -687,6 +688,35 @@ namespace DCLF
 			seen.push_back(value);
 	}
 
+	void CaptureParity::OnFaceLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags)
+	{
+		pendingObject = -1;
+		if (ConstantEvaluator::Evaluating() || !a_pass || !a_pass->geometry)
+			return;
+		++faceDraws;
+		auto& store = SceneStore::Get();
+		const auto* geometry = a_pass->geometry;
+		const std::int32_t index = store.FindObject(geometry);
+		if (index < 0) {
+			++faceUntracked;
+			return;
+		}
+		const auto& tables = store.GetTables();
+		const auto& object = tables.objects[index];
+		if (object.flags & kObjectNoBindings)
+			return;
+		++faceChecked;
+		labelPrefix = "face ";
+		compareContext = fmt::format(" (face pass {:08X}, DCLF's main {:08X})", PassDescriptorOf(a_pass->passEnum), tables.pipelines[object.pipelineIndex].passDescriptor);
+		bool ok = CompareMaterial(geometry, object.materialIndex);
+		ok &= CompareTechnique(geometry, static_cast<std::uint32_t>(index));
+		ok &= CompareGeometry(geometry, static_cast<std::uint32_t>(index), a_renderFlags);
+		labelPrefix.clear();
+		compareContext.clear();
+		if (!ok)
+			++faceMismatched;
+	}
+
 	void CaptureParity::OnNativeLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags)
 	{
 		pendingObject = -1;
@@ -1054,6 +1084,10 @@ namespace DCLF
 			diffs += fmt::format(" {} {:X} x{}", kFieldNames[key >> 32], static_cast<std::uint32_t>(key), count);
 		logger::info("[DCLF] permutation parity {}: {} draws checked, {} differ; material textures with inherited filter modes: {};{}",
 			permutationMismatches == 0 ? "OK" : "MISMATCH", permutationChecks, permutationMismatches, inheritedFilters, diffs.empty() ? " no differing bits" : diffs);
+		if (faceDraws)
+			logger::info("[DCLF] face capture parity: {} reflection face Lighting draws, {} of objects in the tables checked against their main rows, {} differ, {} untracked",
+				faceDraws, faceChecked, faceMismatched, faceUntracked);
+		faceDraws = faceChecked = faceMismatched = faceUntracked = 0;
 		std::string blocks;
 		for (const auto& [what, counts] : blockCoverage)
 			blocks += fmt::format("{}{}: {} compared, {} not", blocks.empty() ? "" : ", ", what, counts.first, counts.second);

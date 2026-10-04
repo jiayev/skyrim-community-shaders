@@ -66,9 +66,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events, {} "
 					 "resyncs), {} left while their binding was taken again, {} publications; waiting for: pipeline {}, material {}, shadow mask {}, shared lookups {}, "
-					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}{}{}; members patched by the accumulate phase {}{}",
+					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}, reflection (forward pipeline or last frame's membership) {}{}{}; members patched by the accumulate phase {}{}",
 			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.resyncs, set.rebinding,
-			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7],
+			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
 			set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
 		std::string samples;
 		for (const auto& sample : leaks.samples)

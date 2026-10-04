@@ -183,6 +183,18 @@ namespace DCLF
 	inline constexpr std::uint32_t kShadowDiscards = 1;
 	inline constexpr std::uint32_t kShadowClasses = 2;
 
+	/**
+	 * @brief A forward view's targets (the water reflection's cube faces: dclf-lod.md, "Water reflections"): its one colour
+	 * target's format and its depth's (a depth-stencil view's format, not a typeless resource's).
+	 */
+	struct ForwardTargets
+	{
+		DXGI_FORMAT colour = DXGI_FORMAT_UNKNOWN;
+		DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN;
+
+		bool operator==(const ForwardTargets&) const = default;
+	};
+
 	/** @brief Render target and depth formats of the native main (deferred) pass. */
 	struct TargetFormats
 	{
@@ -301,6 +313,13 @@ namespace DCLF
 		 */
 		bool FindTreeLod(const ShaderPrograms::TreeLodProgram& a_program, struct TreeLodPipelines& a_out);
 
+		/** @brief Forward pipelines: requested, built, failed (FindForwardPipeline). */
+		struct ForwardStats
+		{
+			std::uint32_t requested = 0, ready = 0, failed = 0;
+		};
+		const ForwardStats& GetForwardStats() const { return forwardStats; }
+
 		/**
 		 * @brief Reads the engine's rasterizer and blend state objects behind the state bits of these keys
 		 * (decals: Records.h PipelineRasterFlags), so that Find can build them.
@@ -342,8 +361,10 @@ namespace DCLF
 		std::vector<std::uint64_t> shadowLayouts;                     // by shadow set index: its key's vertex layout
 		std::uint32_t generation = 0;
 		Stats stats;
+		ForwardStats forwardStats;
 
 		friend struct IndirectState GetIndirectState();
+		friend struct ForwardPipelineAccess;  // FindForwardPipeline (DrawPipelinesRhi.h)
 		friend struct ShadowIndirectState GetShadowIndirectState();
 	};
 }

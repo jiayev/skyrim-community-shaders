@@ -2,6 +2,8 @@
 // from the per-draw inputs and the geometry table, appending them with an atomic count. Compiled to SPIR-V at runtime
 // (ComputeProgram) for the render graph, with BasicRHI's descriptor-heap ABI; buffers are fetched from the descriptor heap by index.
 
+#include "DrawcallLimitFix/HzbTest.hlsli"
+
 // Push constants: only what is fixed for a pass across executions (descriptor indices, addresses, the
 // culling phase, the HZB's shape). Everything that changes from one execution to the next is read from
 // the pass's region of the latch block (org::LatchBlock), which the host writes just before submission;
@@ -377,9 +379,6 @@ bool MinRadius() { return (CullFlags & 0x2000) != 0; }
 // cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's stood-in fading test.
 bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
 
-uint2 HzbBaseSize() { return uint2(HzbSizePacked & 0xFFFF, HzbSizePacked >> 16); }
-float2 HzbUvScale() { return float2(HzbUvScalePacked & 0xFFFF, HzbUvScalePacked >> 16) / 65535.0; }
-
 // Object flags (Records.h), as the draw input carries them.
 // A synthetic main pass with the sun's bits (Records.h), and the object word's mark for a draw that misses every
 // cascade (kObjectSunMiss), which the pixel stage reads (DCLFObjects.hlsli).
@@ -558,109 +557,43 @@ bool Culled(float3 boundCentre, float boundRadius)
 	return any(planes != 0) || any(depthPlanes != 0);
 }
 
-// The bounding sphere's screen-space extent and its nearest depth, in the same clip space the draws use.
-// Returns false when the projection cannot be trusted - a corner behind the near plane - so that the
-// object is kept.
-bool ScreenExtent(float3 boundCentre, float boundRadius, out float2 uvMin, out float2 uvMax, out float nearestZ)
-{
-	uvMin = float2(1, 1);
-	uvMax = float2(0, 0);
-	nearestZ = 1;
-	const float3 centre = boundCentre;
-	float2 ndcMin = float2(1e30, 1e30);
-	float2 ndcMax = float2(-1e30, -1e30);
-	float minZ = 1e30;
-	[unroll] for (uint corner = 0; corner < 8; ++corner) {
-		const float3 offset = float3((corner & 1) ? boundRadius : -boundRadius,
-			(corner & 2) ? boundRadius : -boundRadius,
-			(corner & 4) ? boundRadius : -boundRadius);
-		const float4 clip = mul(ViewProj, float4(centre + offset, 1.0));
-		if (clip.w <= 1e-4)
-			return false;
-		const float3 ndc = clip.xyz / clip.w;
-		ndcMin = min(ndcMin, ndc.xy);
-		ndcMax = max(ndcMax, ndc.xy);
-		minZ = min(minZ, ndc.z);
-	}
-	// Clip space to texture space. The y axis flips: clip space is y-up, the depth buffer y-down.
-	// Clip space to texture space. The y axis flips: the draws use a y-flipped viewport, which puts clip
-	// y = +1 at the top of the image, where v = 0. Measured: the other orientation gives 571 false
-	// negatives against 45, so this is not a guess.
-	uvMin = saturate(float2(ndcMin.x, -ndcMax.y) * 0.5 + 0.5);
-	uvMax = saturate(float2(ndcMax.x, -ndcMin.y) * 0.5 + 0.5);
-	nearestZ = minZ;
-	return true;
-}
-
-// True when every depth under the object's screen extent is NEARER than the object's nearest point, which
-// means the object is entirely behind what has already been drawn.
-//
-// The HZB holds the FARTHEST depth under each texel, so one value per corner of the extent at a mip whose
-// texels are large enough that four of them cover it. Taking the maximum of those four and requiring it to
-// be nearer than the object is conservative twice over: the mip is a max reduction, and the object is
-// represented by the nearest point of a box that already contains its sphere.
+// Occlusion against the HZB (HzbTest.hlsli), with the dispatch's counters: what the HZB held under the objects tested, and one
+// rejection in full.
 bool Occluded(float3 boundCentre, float boundRadius)
 {
-	if (HzbIndex == 0 || HzbMips == 0)
+	HzbView view;
+	view.ViewProj = ViewProj;
+	view.Index = HzbIndex;
+	view.BaseSize = HzbUnpackSize(HzbSizePacked);
+	view.Mips = HzbMips;
+	view.UvScale = HzbUnpackUvScale(HzbUvScalePacked);
+	const HzbResult result = HzbTest(view, boundCentre, boundRadius);
+	if (!result.Sampled)
 		return false;
-	float2 uvMin, uvMax;
-	float nearestZ;
-	if (!ScreenExtent(boundCentre, boundRadius, uvMin, uvMax, nearestZ))
-		return false;
-	if (nearestZ <= 0.0)
-		return false;  // in front of the near plane: nothing can occlude it
-
-	// Image texture space to HZB texture space, before anything is measured in HZB texels.
-	const float2 scale = HzbUvScale();
-	uvMin *= scale;
-	uvMax *= scale;
-
-	const uint2 baseSize = HzbBaseSize();
-	const float2 extent = (uvMax - uvMin) * float2(baseSize);
-	// A mip whose texels are at least half the extent, so the four corner taps cover the whole rectangle.
-	int mip = (int)ceil(log2(max(max(extent.x, extent.y), 1.0)));
-	mip = clamp(mip, 0, (int)HzbMips - 1);
-	const int2 mipSize = max(int2(baseSize) >> mip, int2(1, 1));
-	const int2 texelMin = clamp(int2(uvMin * float2(mipSize)), int2(0, 0), mipSize - 1);
-	const int2 texelMax = clamp(int2(uvMax * float2(mipSize)), int2(0, 0), mipSize - 1);
-
-	Texture2D<float> hzb = ResourceDescriptorHeap[HzbIndex];
-	const float farthest = max(
-		max(hzb.Load(int3(texelMin.x, texelMin.y, mip)), hzb.Load(int3(texelMax.x, texelMin.y, mip))),
-		max(hzb.Load(int3(texelMin.x, texelMax.y, mip)), hzb.Load(int3(texelMax.x, texelMax.y, mip))));
 
 	RWByteAddressBuffer counters = ResourceDescriptorHeap[CountIndex];
 	uint scratch;
 	counters.InterlockedAdd(kCountHzbSampled, 1, scratch);
-	if (farthest <= 1e-6)
+	if (result.Farthest <= 1e-6)
 		counters.InterlockedAdd(kCountHzbNear, 1, scratch);
-	else if (farthest >= 0.9999)
+	else if (result.Farthest >= 0.9999)
 		counters.InterlockedAdd(kCountHzbFar, 1, scratch);
-
-	// A margin, because the two sides of this comparison are not in the same space. nearestZ is raw clip
-	// space, while the HZB holds what was actually stored, which the viewport depth range has scaled - and
-	// the native depth pass and DCLF's own draws do not even use the same range ([0, 0.999968] against
-	// [0, 0.999998]). The gap is small but it is systematically in the direction that culls, and it bites
-	// hardest on flat objects lying against the surface behind them, whose nearest corner is barely in
-	// front of their own stored depth. Erring towards drawing is free; erring the other way loses objects.
-	const float kDepthMargin = 1e-4;
-	const bool occluded = farthest < nearestZ - kDepthMargin;
 
 	// One sample of a rejection, so that a suspicious count can be read rather than guessed at: what the
 	// HZB held, what the object's nearest corner was, where it was sampled and at which level. Written by
 	// whichever thread gets there first; only the first rejection of the dispatch lands.
-	if (occluded) {
+	if (result.Occluded) {
 		uint previous;
 		counters.InterlockedCompareExchange(kSampleTaken, 0, 1, previous);
 		if (previous == 0) {
-			counters.Store(kSampleFarthest, asuint(farthest));
-			counters.Store(kSampleNearestZ, asuint(nearestZ));
-			counters.Store(kSampleUvMin, (uint(saturate(uvMin.x) * 65535.0) & 0xFFFF) | (uint(saturate(uvMin.y) * 65535.0) << 16));
-			counters.Store(kSampleUvMax, (uint(saturate(uvMax.x) * 65535.0) & 0xFFFF) | (uint(saturate(uvMax.y) * 65535.0) << 16));
-			counters.Store(kSampleMip, uint(mip));
+			counters.Store(kSampleFarthest, asuint(result.Farthest));
+			counters.Store(kSampleNearestZ, asuint(result.NearestZ));
+			counters.Store(kSampleUvMin, (uint(saturate(result.UvMin.x) * 65535.0) & 0xFFFF) | (uint(saturate(result.UvMin.y) * 65535.0) << 16));
+			counters.Store(kSampleUvMax, (uint(saturate(result.UvMax.x) * 65535.0) & 0xFFFF) | (uint(saturate(result.UvMax.y) * 65535.0) << 16));
+			counters.Store(kSampleMip, uint(result.Mip));
 		}
 	}
-	return occluded;
+	return result.Occluded;
 }
 
 [numthreads(64, 1, 1)] void main(uint3 dispatchID : SV_DispatchThreadID)
@@ -868,8 +801,10 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	const uint pipeline = DrawPipeline(input.x);  // a shadow view's: the draw's bucket
 	// A draw's bucket: a shadow view's is its pipeline map entry (above); the depth segment's is its pipeline slot's (the rows' top
 	// 12 bits) in the slots' map, the group of slots sharing its depth pipeline (MainOpaquePass), kNoPipeline for a slot with none.
+	// A reflection face's likewise, its map sending a LOD slot to the bucket of its forward pipeline and every other slot to none
+	// (IndirectDraws::ExecuteReflection): whoever's latch names a slots' map.
 	uint bucketKey = pipeline;
-	if (phase == kPhaseOne || phase == kPhaseTwo) {
+	if (BucketMapOffset != 0) {
 		ByteAddressBuffer latch = ResourceDescriptorHeap[LatchIndex];
 		bucketKey = latch.Load(BucketMapOffset + (input.y >> 20) * 4);
 	}

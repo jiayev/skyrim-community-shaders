@@ -24,6 +24,7 @@
 #include "DrawcallLimitFix/Common/Toggles.h"
 #include "DrawcallLimitFix/Engine/LocalLightCull.h"
 #include "DrawcallLimitFix/Engine/PassCapture.h"
+#include "DrawcallLimitFix/Engine/ReflectionFaces.h"
 #include "DrawcallLimitFix/Scene/SceneStore.h"
 #include "DrawcallLimitFix/Engine/SceneTracker.h"
 #include "DrawcallLimitFix/Common/Switches.h"
@@ -85,6 +86,12 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::SceneStore::InstallSceneEvents();
 	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
 	DCLF::PassCapture::Get().Install();
+	DCLF::ReflectionFaces::Install();
+	DCLF::ReflectionFaces::SetAfterFaceDraws([] {
+		if (globals::features::drawcallLimitFix.Running())
+			DCLF::IndirectDraws::Get().CaptureReflectionFace();
+	});
+	DCLF::InstallReflectionCensus();
 	DCLF::MaterialSources::Install();
 	DCLF::FaceSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
@@ -213,6 +220,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	store.CommitSet();
 	// Tree LOD's for the frame, before the main camera's cull registers its passes (dclf-lod.md, "Tree LOD: the draws").
 	DCLF::IndirectDraws::Get().DecideTreeLod();
+	// The water reflection's forward programs and pipelines (dclf-lod.md, "Water reflections").
+	DCLF::IndirectDraws::Get().PrepareReflection();
 	const double sceneMs = MillisecondsSince(start);
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
@@ -237,6 +246,9 @@ void DrawcallLimitFix::BeforeShadowMaps()
 {
 	if (!Running())
 		return;
+	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
+	// in one epoch, before the placement join writes the tables and before the water reads the cube (dclf-lod.md, "Water reflections").
+	DCLF::IndirectDraws::Get().ExecuteReflection();
 	ScopedPerfEvent event("CS DCLF: shadow views");
 	const auto start = std::chrono::steady_clock::now();
 	// The kept records' placements and palettes (the scene placement job), before the shadow views read them; the early
@@ -871,8 +883,12 @@ void DrawcallLimitFix::OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint3
 			DCLF::IndirectDraws::Get().CheckCapturePoint();
 		}
 	}
-	if (DCLF::CaptureParity::Enabled())
-		DCLF::CaptureParity::Get().OnNativeLightingDraw(a_pass, a_renderFlags);
+	if (DCLF::CaptureParity::Enabled()) {
+		if (DCLF::ReflectionFaces::InFace())
+			DCLF::CaptureParity::Get().OnFaceLightingDraw(a_pass, a_renderFlags);
+		else
+			DCLF::CaptureParity::Get().OnNativeLightingDraw(a_pass, a_renderFlags);
+	}
 }
 
 void DrawcallLimitFix::BeforeOpaquePass()

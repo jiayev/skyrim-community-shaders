@@ -19,6 +19,13 @@ light culling is the first feature that does this. Its D3D11 path stays in place
 -   **Epoch.** `RenderGraphRuntime::ExecuteEpoch` runs the graph once, on the thread that drives the
     D3D11 immediate context (LLF calls it from `UpdateLights`). CPU data for a frame, such as the light
     list, is uploaded by the graph's own `BUFFER_UPLOAD` path inside the epoch.
+-   **Frames in flight.** `PersistentGraphHost::Desc::framesInFlight` is game frames: whole frames of the epoch order
+    (4, `kGameFramesInFlight`). The host's frame slots are that many frames of every epoch (`FrameSlots`, 24 with six
+    segments), one ring that every execution takes the next slot of. A slot's next execution waits for its last one's GPU
+    work: the "ticket wait" in `CS_ORG_EPOCH_STATS`, on the host's thread, which the render thread sees only when the ring
+    is shorter than the CPU's lead over the GPU. The ring used to be a fixed 16 slots: the reflection faces' sixth epoch
+    shortened it to 2.7 frames, and every few frames the render thread waited 2-7 ms on whichever epoch came round
+    (p99 frame time 25 ms instead of 12). Sized by the epochs, a new segment needs no change here.
 
 ## Ordering against D3D11
 

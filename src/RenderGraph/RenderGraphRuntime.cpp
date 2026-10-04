@@ -32,8 +32,10 @@
 
 namespace
 {
-	// ORG host frames (epochs) in flight: up to five epochs per game frame, ~3 game frames.
-	constexpr std::uint32_t kHostFramesInFlight = 16;
+	// Game frames the graph's work may run behind the render thread (PersistentGraphHost::Desc::framesInFlight). The host sizes its
+	// frame slot ring from it, a slot per epoch of every frame (FrameSlots), and each epoch's next slot waits for that slot's last
+	// GPU work: fewer frames than the CPU runs ahead of the GPU (DXVK's frame latency) would stall the render thread every few frames.
+	constexpr std::uint32_t kGameFramesInFlight = 4;
 
 	// Everything BasicRHI's Vulkan backend needs beyond what DXVK enables for itself.
 	// DXVK already requires the rest (timeline semaphores, buffer device address,
@@ -217,7 +219,8 @@ struct RenderGraphRuntime::Impl
 	// ORG's pass timestamps, per segment. An epoch is one host frame; the segment it ran is remembered by
 	// frame number until its timestamps come back, framesInFlight frames later.
 	static constexpr std::size_t kSegments = static_cast<std::size_t>(Segment::Count);
-	static constexpr std::size_t kSegmentRing = 64;  // > kHostFramesInFlight: a frame's segment outlives its slot's reuse
+	// Past the host's frame slots (kGameFramesInFlight frames of at most every segment): a frame's segment outlives its slot's reuse.
+	static constexpr std::size_t kSegmentRing = 2 * std::size_t(kGameFramesInFlight) * kSegments;
 	struct PassTime
 	{
 		double inclusiveMs = 0.0;
@@ -370,6 +373,8 @@ struct RenderGraphRuntime::Impl
 			return "DrawcallLimitFix::Shadow views / " + a_pass;
 		case Segment::SkyOcclusion:
 			return "DrawcallLimitFix::Skylighting occlusion / " + a_pass;
+		case Segment::Reflection:
+			return "DrawcallLimitFix::Reflection faces / " + a_pass;
 		}
 		return "RenderGraph::" + a_pass;
 	}
@@ -544,6 +549,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: shadow view";
 		case Segment::SkyOcclusion:
 			return "CS DCLF: Skylighting occlusion";
+		case Segment::Reflection:
+			return "CS DCLF: reflection faces";
 		}
 		return "CS render graph";
 	}
@@ -563,6 +570,8 @@ struct RenderGraphRuntime::Impl
 			return "CS DCLF: shadow view inputs";
 		case Segment::SkyOcclusion:
 			return "CS DCLF: Skylighting occlusion inputs";
+		case Segment::Reflection:
+			return "CS DCLF: reflection faces inputs";
 		}
 		return "CS render graph: feature inputs";
 	}
@@ -788,18 +797,17 @@ bool RenderGraphRuntime::Initialize()
 		// Everything DXVK submitted before an epoch and everything it submits after
 		// is ordered against the graph by these barriers (same queue, submission order).
 		desc.queueBoundary = { .entry = true, .exit = true };
-		// Host frames are epochs: several per game frame. Slots are reused this many epochs later, so the
-		// ring covers ~3 game frames of epochs and the slot wait is backpressure, not a wait on the GPU
-		// finishing an earlier epoch of the same frame.
-		desc.framesInFlight = kHostFramesInFlight;
+		// Game frames in flight: the host's frame slots are this many frames of every epoch in the order (FrameSlots), so a new
+		// segment keeps the same lead over the GPU, and a slot's wait is backpressure from that many frames back.
+		desc.framesInFlight = kGameFramesInFlight;
 		// CS_ORG_CLOSED (default on with epochs, =0 off): each epoch leaves every resource in its home state
 		// and starts with a full barrier, so its admission is independent of the epochs before it and cached.
 		desc.closedExecutions = EpochsEnabled() && !EnvEquals("CS_ORG_CLOSED", "0");
-		// The segments in the order a frame runs them: the shadow views at AfterShadowMaps, the Z-prepass at
+		// The segments in the order a frame runs them: the water reflection's faces (TESWaterReflections::Update), the shadow views at AfterShadowMaps, the Z-prepass at
 		// the depth pass, Skylighting's map, Light Limit Fix's culling at Prepass, the colour pass where the main
 		// pass's opaque batches end.
 		if (EpochsEnabled())
-			desc.epochOrder = { EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
+			desc.epochOrder = { EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion), EpochOf(Segment::LightCulling),
 				EpochOf(Segment::MainOpaque) };
 		const bool closed = desc.closedExecutions;
 		state->host = std::make_unique<org::PersistentGraphHost>(std::move(desc));
@@ -817,7 +825,7 @@ bool RenderGraphRuntime::Initialize()
 	});
 	if (state->asyncEpochs) {
 		try {
-			std::vector<std::uint32_t> epochs{ EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
+			std::vector<std::uint32_t> epochs{ EpochOf(Segment::Reflection), EpochOf(Segment::ShadowView), EpochOf(Segment::ZPrepass), EpochOf(Segment::SkyOcclusion),
 				EpochOf(Segment::LightCulling), EpochOf(Segment::MainOpaque) };
 			state->host->SetAsyncEpochs(std::move(epochs));
 			logger::info("[ORG] Async epochs: each epoch is prepared and recorded ahead on the graph host's thread; the render thread submits");

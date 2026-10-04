@@ -10,7 +10,8 @@ namespace DCLF
 	{
 		// The main camera's passes are DCLF's whenever it runs; a shadow mode's views once its last shadow epoch drew them (a kind of
 		// view seen for the first time, or a frame it could not draw, leaves the next frame's casters of the mode to the engine).
-		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowPhasesDrawn() : 0u);
+		return kSetMain | (ActiveToggles().shadows ? IndirectDraws::Get().ShadowPhasesDrawn() : 0u) |
+		       (IndirectDraws::Get().ReflectionDrawable() ? kSetReflection : 0u);
 	}
 
 	std::uint8_t SceneStore::SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const
@@ -21,6 +22,10 @@ namespace DCLF
 		std::uint32_t phases = 0;
 		if (!(flags & kObjectShadowOnly))
 			phases |= kSetMain;
+		// The reflection's faces draw the LOD techniques (dclf-lod.md, "The census").
+		if (const auto p = tables.objects[a_slot].pipelineIndex; !(flags & kObjectShadowOnly) && p < tables.pipelines.size() &&
+			LodLightingTechnique(tables.pipelines[p].passDescriptor))
+			phases |= kSetReflection;
 		if (!(flags & kObjectNoShadow))
 			phases |= kSetCaster | kSetCasterPoint;
 		if (a_slot < tables.occlusionTechnique[kOcclusionSky].size() && tables.occlusionTechnique[kOcclusionSky][a_slot])
@@ -116,6 +121,13 @@ namespace DCLF
 					QueueSet(change.slot);
 		}
 		setCursor.Advance(tables.changeLog);
+		// The reflection's joiners of the last commit, whose main membership is now a frame old.
+		std::swap(setLagged, setLaggedNext);
+		setLaggedNext.clear();
+		for (const std::uint32_t slot : setLagged)
+			if (slot < objects)
+				QueueSet(slot);
+		setLagged.clear();
 		// Readiness moved: anything the lookups resolve is a new version of them (Lookups::NextVersion), the shadow lookups
 		// have their own generation.
 		const std::uint64_t readiness = (std::uint64_t(lookups.versionCounter) << 32) ^ (std::uint64_t(lookups.shadowGeneration) << 1) ^ lookups.generation;
@@ -225,6 +237,19 @@ namespace DCLF
 				if (!main)
 					phases &= ~kSetMain;
 			}
+			// The reflection's faces draw from the last frame's depth inputs (IndirectDraws::ExecuteReflection): a member of the main
+			// phase now and at the last commit, whose pipeline slot's forward pipeline is ready. A joiner is the engine's for a frame.
+			if (phases & kSetReflection) {
+				const bool wasMain = (setPhases[a_slot] & kSetMain) != 0;
+				if (!(phases & kSetMain) || !wasMain || !IndirectDraws::Get().PhaseReady(a_slot, kSetReflection)) {
+					if (phases & kSetMain) {
+						waiting(8);
+						if (!wasMain)
+							setLaggedNext.push_back(a_slot);
+					}
+					phases &= ~kSetReflection;
+				}
+			}
 			for (const std::uint8_t phase : { kSetCaster, kSetCasterPoint, kSetOccluderSky, kSetOccluderPrecipitation })
 				if ((phases & phase) && !IndirectDraws::Get().PhaseReady(a_slot, phase)) {
 					waiting(7);
@@ -294,8 +319,8 @@ namespace DCLF
 				std::uint8_t partnerPhases = wanted(partner, partnerWait);
 				if (!(phases & kSetMain) != !(partnerPhases & kSetMain)) {
 					++setStats.waitingBy[6];
-					phases &= ~kSetMain;
-					partnerPhases &= ~kSetMain;
+					phases &= ~(kSetMain | kSetReflection);
+					partnerPhases &= ~(kSetMain | kSetReflection);
 				}
 				apply(partner, partnerPhases, partnerWait);
 			}

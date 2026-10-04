@@ -27,6 +27,12 @@ namespace DCLF
 		static CaptureParity& Get();
 
 		void OnNativeLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
+		/**
+		 * @brief The same comparisons for a Lighting draw of the water reflection's cube map faces (ReflectionFaces): the object's
+		 * main material, technique and PerGeometry constants against what the face binds, under labels of their own ("face ..."),
+		 * which say what a face's rows must hold differently (dclf-lod.md, "Water reflections").
+		 */
+		void OnFaceLightingDraw(const RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 		/** @brief Map/Unmap detours: keep a copy of the native constants as the engine unmaps them. */
 		void OnMap(ID3D11Resource* a_resource, void* a_data);
@@ -63,6 +69,9 @@ namespace DCLF
 		void ComparePermutation(const RE::BSGeometry* a_geometry, std::uint32_t a_objectIndex);
 
 		std::array<std::array<ConstantSnapshot, 3>, 2> snapshots;
+		// The face comparisons' label prefix while they run (OnFaceLightingDraw), and their counts.
+		std::string labelPrefix;
+		std::uint64_t faceDraws = 0, faceChecked = 0, faceMismatched = 0, faceUntracked = 0;
 
 		void InstallDrawHook();
 		bool drawHookInstalled = false;
