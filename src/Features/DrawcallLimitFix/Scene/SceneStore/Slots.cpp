@@ -188,7 +188,12 @@ namespace DCLF
 		}
 		geometryIndex.erase(tables.geometrySlotKey[a_slot]);
 		tables.geometrySlotKey[a_slot] = nullptr;
-		tables.geometryImports[a_slot] = {};
+		// The leases outlive the frames in flight (TakeRetiredImports).
+		auto& import = tables.geometryImports[a_slot];
+		for (auto* owner : { &import.vertexOwner, &import.indexOwner })
+			if (*owner)
+				retiredImports.push_back(std::move(*owner));
+		import = {};
 		tables.geometryLastUsed[a_slot] = Tables::kSlotFree;
 	}
 

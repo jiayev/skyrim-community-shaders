@@ -295,6 +295,18 @@ skyrim-engine-notes.md has the details: "Terrain LOD: registration, constants an
   draws of the frame before, let the engine draw its colour against DCLF's depth. Fixed by the DCLF set: an object is a main
   member only once both passes can draw it, and then the engine's passes are withheld. The teleport route
   (`landjump.sh`, `CS_DCLF_FOLIAGE_PARITY=land`) gives 0 unshaded terrain LOD pixels in every report.
+- **One-frame holes 1-4 s after a teleport** (up to 2.1 million pixels), on 7 of 9 runs of the teleport route. The two
+  segments selected the same chunks, it was not the async builds, and the hole's owner slot was always taken by a new
+  object two frames later: a chunk the engine was swapping out.
+
+  DCLF draws the game's vertex and index buffers by their device addresses, which DXVK does not see. A geometry slot's
+  import leases were dropped the moment the walk cleared the slot. The engine had already released the chunk, so DXVK
+  freed the buffer and gave its memory to the next buffer the game created (a chunk streamed in), while a frame already
+  submitted still had its colour pass to run. That pass drew other vertices than its Z-prepass had, and failed EQUAL.
+
+  A cleared slot's leases (and a stale slot's old ones) now go to the next execution committed
+  (`SceneStore::TakeRetiredImports`), which holds them until the GPU retires it. The route then gave 0 unshaded pixels
+  in all 63 reports of three runs. Shadow views draw the same slots and get the same protection.
 
 ### Open
 

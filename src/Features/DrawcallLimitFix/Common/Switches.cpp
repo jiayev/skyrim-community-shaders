@@ -178,10 +178,17 @@ namespace DCLF
 
 		std::string Environment(std::string_view a_name)
 		{
-			char buffer[1024] = {};
+			// Whatever its length (a test command list can run to kilobytes): the size first, then the value.
 			const std::string name(a_name);
-			const auto length = GetEnvironmentVariableA(name.c_str(), buffer, sizeof(buffer));
-			return length && length < sizeof(buffer) ? std::string(buffer, length) : std::string();
+			const DWORD size = GetEnvironmentVariableA(name.c_str(), nullptr, 0);
+			if (!size)
+				return {};
+			std::string value(size, char{});
+			const DWORD length = GetEnvironmentVariableA(name.c_str(), value.data(), size);
+			if (!length || length >= size)
+				return {};
+			value.resize(length);
+			return value;
 		}
 
 		struct Values

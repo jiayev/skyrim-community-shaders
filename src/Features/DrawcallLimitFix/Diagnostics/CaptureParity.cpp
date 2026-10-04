@@ -429,7 +429,8 @@ namespace DCLF
 		                                        (face ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u) |
 		                                        static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) | static_cast<std::uint32_t>(Extra::AdditiveLighting);
 		const std::uint32_t extra = (expected.extraShaderDescriptor & lightingExtraBits) |
-		                            ((object.flags & kObjectSuppressExternalEmittance) ? static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) : 0u);
+		                            ((object.flags & kObjectSuppressExternalEmittance) ? static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) : 0u) |
+		                            (face && (object.flags & kObjectBeastRace) ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u);
 		// The ProjectedUV bit of hair, which DCLF drops (HairProjection), is left out of the descriptors' comparison, and the
 		// bits DCLF's draw decides (PerDrawBits).
 		const std::uint32_t hairProjection = HairProjection(native.VertexShaderDescriptor) ? kPassProjectedUV : 0u;

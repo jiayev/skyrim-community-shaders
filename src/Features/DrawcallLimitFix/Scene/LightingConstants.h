@@ -171,13 +171,13 @@ namespace DCLF
 		float previousWorld[12];
 		ObjectShading shading;  // MaterialData, EmitColor, and SSRParams.w in the last float
 		// The values the native shaders read from constant buffers of their own, which would make the binding
-		// record per-object: Light Limit Fix's room index and shadow bit mask (PS b3), the alpha
+		// record per-object: Light Limit Fix's room index (PS b3; its shadow bit mask is the draw's object word), the alpha
 		// test reference (PS b11) and Linear Lighting's emissive multiplier (PS b8). Deliberately a row of
 		// their own rather than packed into the spare ObjectShading::materialData[3]: that struct is shared
 		// with ObjectGeometryConstants and PatchObjectGeometry, so anything parked there would leak into
 		// the non-bindless build's MaterialData.w and into the parity comparison of that group.
 		std::int32_t roomIndex;
-		std::uint32_t shadowBitMask;
+		std::uint32_t recordFlags;  // kRecordBeastRace
 		float alphaTestRef;
 		float emissiveMult;
 		// Tree animation, per object (technique 12). Under bindless the PerGeometry block is one pair for
@@ -206,6 +206,8 @@ namespace DCLF
 		float sunEntry[4];
 	};
 	static_assert(sizeof(BindlessObject) == 256);
+	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
+	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
 	// BuildDrawsCS.hlsl reads these by their float4 index in the record (kObjectFadeNodeRow, kObjectBoundRow, kObjectSunEntryRow).
 	static_assert(offsetof(BindlessObject, lodFadeNode) == 13 * 16 && offsetof(BindlessObject, bound) == 14 * 16 && offsetof(BindlessObject, sunEntry) == 15 * 16);
 

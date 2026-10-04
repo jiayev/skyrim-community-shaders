@@ -1022,6 +1022,10 @@ namespace DCLF
 			if (staleGeometry)
 				refreshedGeometry.push_back(slot);
 			tables.geometries[slot] = record;
+			// A stale slot's old leases outlive the frames in flight (TakeRetiredImports).
+			for (auto* owner : { &tables.geometryImports[slot].vertexOwner, &tables.geometryImports[slot].indexOwner })
+				if (*owner)
+					retiredImports.push_back(std::move(*owner));
 			tables.geometryImports[slot] = vertexLease && indexLease ? Tables::GeometryImport{ vertexLease->generation, indexLease->generation,
 				vertexLease->owner, indexLease->owner } : Tables::GeometryImport{};
 			tables.NoteGeometry(slot);
