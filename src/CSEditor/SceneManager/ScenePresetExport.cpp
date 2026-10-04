@@ -112,6 +112,27 @@ namespace
 			std::make_format_args(name, count, listed));
 	}
 
+	const char* GetFormFolderLabel(std::string_view folder)
+	{
+		if (folder == Widget::kWeatherFolderName)
+			return T(TKEY("category_weather"), "Weather");
+		if (folder == Widget::kLightingTemplateFolderName)
+			return T(TKEY("category_lighting_templates"), "Lighting Templates");
+		if (folder == Widget::kImageSpaceFolderName)
+			return T(TKEY("category_imagespaces"), "ImageSpaces");
+		if (folder == Widget::kVolumetricLightingFolderName)
+			return T(TKEY("category_volumetric_lighting"), "Volumetric Lighting");
+		if (folder == Widget::kPrecipitationFolderName)
+			return T(TKEY("category_precipitation"), "Precipitation");
+		if (folder == Widget::kVisualEffectsFolderName)
+			return T(TKEY("category_visual_effects"), "Visual Effects");
+		if (folder == Widget::kCellLightingFolderName)
+			return T(TKEY("category_cell_lighting"), "Cell Lighting");
+		if (folder == Widget::kOtherEditorWidgetsFolderName)
+			return T(TKEY("category_other_widgets"), "Other Editor Widgets");
+		return T(TKEY("unknown"), "Unknown");
+	}
+
 	/** @brief "N edited forms included (Weathers 8, ImageSpaces 4)". */
 	std::string DescribeFormEdits(const FormEditSources::FormKeySet& keys)
 	{
@@ -120,7 +141,7 @@ namespace
 			++countByFolder[folder];
 		std::string breakdown;
 		for (const auto& [folder, count] : countByFolder)
-			breakdown += std::format("{}{} {}", breakdown.empty() ? "" : ", ", folder, count);
+			breakdown += std::format("{}{} {}", breakdown.empty() ? "" : ", ", GetFormFolderLabel(folder), count);
 		auto total = keys.size();
 		return std::vformat(T(TKEY("scene_export_form_edits"), "{} edited forms included ({})"),
 			std::make_format_args(total, breakdown));
@@ -481,9 +502,15 @@ namespace
 		OPENFILENAMEW ofn{};
 		ofn.lStructSize = sizeof(ofn);
 		ofn.hwndOwner = GetActiveWindow();
-		ofn.lpstrFilter =
-			L"Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds)\0*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds\0"
-			L"All Files (*.*)\0*.*\0";
+		std::wstring filter = winrt::to_hstring(T(TKEY("scene_export_image_filter"), "Images (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds)")).c_str();
+		filter.push_back(L'\0');
+		filter.append(L"*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.dds");
+		filter.push_back(L'\0');
+		filter.append(winrt::to_hstring(T(TKEY("scene_export_all_files_filter"), "All Files (*.*)")).c_str());
+		filter.push_back(L'\0');
+		filter.append(L"*.*");
+		filter.append(2, L'\0');
+		ofn.lpstrFilter = filter.c_str();
 		ofn.lpstrFile = buffer.data();
 		ofn.nMaxFile = kBufferChars;
 		ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER | OFN_NOCHANGEDIR;

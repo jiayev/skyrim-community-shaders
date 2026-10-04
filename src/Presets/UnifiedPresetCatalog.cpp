@@ -1,15 +1,15 @@
 #include "UnifiedPresetCatalog.h"
 #include "PCH.h"
 
+#include "CSEditor/FormEditSources.h"
+#include "CSEditor/SceneManager/SceneManager.h"
+#include "CSEditor/SceneManager/SceneSettingsManager.h"
+#include "CSEditor/WeatherUtils.h"
 #include "Feature.h"
 #include "Features/CSEditor.h"
 #include "Features/Effects11.h"
 #include "Features/Effects11/PresetManager.h"
 #include "Globals.h"
-#include "CSEditor/FormEditSources.h"
-#include "CSEditor/SceneManager/SceneManager.h"
-#include "CSEditor/SceneManager/SceneSettingsManager.h"
-#include "CSEditor/WeatherUtils.h"
 #include "I18n/I18n.h"
 #include "PostProcessingMode.h"
 #include "Presets/PostProcessingPresets.h"
@@ -21,6 +21,7 @@
 #include "Utils/Format.h"
 #include "Utils/UI.h"
 
+#include <Windows.h>
 #include <algorithm>
 #include <format>
 #include <fstream>
@@ -28,7 +29,6 @@
 #include <nlohmann/json.hpp>
 #include <stb_image.h>
 #include <vector>
-#include <Windows.h>
 
 using json = nlohmann::json;
 
@@ -274,12 +274,13 @@ json UnifiedPresetCatalog::ReadPackManifest(const std::filesystem::path& packRoo
 		auto manifest = json::parse(in);
 		if (manifest.is_object())
 			return manifest;
-		error = "not a JSON object";
+		error = T("menu.presets.manifest_not_object", "not a JSON object");
 	} catch (const json::exception& e) {
 		error = e.what();
 	}
 	if (outError)
-		*outError = std::format("Invalid {}: {}", manifestPath.filename().string(), error);
+		*outError = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
+			{ { "file", manifestPath.filename().string() }, { "error", error } }, "Invalid {file}: {error}");
 	return json::object();
 }
 
@@ -446,7 +447,8 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 			}
 		} catch (const std::exception& e) {
 			pack.valid = false;
-			pack.invalidReason = std::format("Invalid {}: {}", GetPackManifestPath(packRoot).filename().string(), e.what());
+			pack.invalidReason = I18n::GetSingleton()->Format("menu.presets.invalid_manifest",
+				{ { "file", GetPackManifestPath(packRoot).filename().string() }, { "error", e.what() } }, "Invalid {file}: {error}");
 		}
 		pack.compat = PresetCompatibility::Evaluate(pack.csVersion, pack.requiredFeatures);
 
@@ -456,7 +458,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		pack.hasFormEdits = FormEditSources::HasPackFormFiles(packRoot);
 		pack.baselineFeatures = ListBaselineFeatures(packRoot);
 		pack.hasBaseline = !pack.baselineFeatures.empty() || !pack.disableAtBoot.empty() ||
-			(pack.type && *pack.type == PresetType::Baseline);
+		                   (pack.type && *pack.type == PresetType::Baseline);
 
 		if (pack.description.empty())
 			pack.description = InferDescriptionFromReadme(packRoot);
@@ -465,7 +467,7 @@ void UnifiedPresetCatalog::DiscoverUnifiedPacks()
 		if (!pack.hasEffects11 && !pack.hasCSPresets && !pack.hasFormEdits && !pack.hasBaseline) {
 			pack.valid = false;
 			if (pack.invalidReason.empty())
-				pack.invalidReason = "No Effects11, CS Presets, Forms or Baseline payload found";
+				pack.invalidReason = T("menu.presets.missing_payload", "No Effects11, CS Presets, Forms or Baseline payload found");
 		}
 
 		packs.push_back(std::move(pack));
@@ -488,12 +490,12 @@ void UnifiedPresetCatalog::DiscoverEffects11Orphans()
 		pack.rootPath = presetRoot;
 		pack.effects11Root = presetRoot;
 		pack.hasEffects11 = std::filesystem::exists(presetRoot / PresetManager::kEnbSeriesIniName) &&
-							std::filesystem::is_directory(presetRoot / PresetManager::kEnbSeriesDirName);
+		                    std::filesystem::is_directory(presetRoot / PresetManager::kEnbSeriesDirName);
 		if (!pack.hasEffects11) {
 			pack.valid = false;
-			pack.invalidReason = "Missing enbseries.ini / enbseries";
+			pack.invalidReason = T("menu.presets.missing_effects11_files", "Missing enbseries.ini / enbseries");
 		}
-		pack.description = "Effects11 library preset";
+		pack.description = T("menu.presets.effects11_library_description", "Effects11 library preset");
 		packs.push_back(std::move(pack));
 	}
 }
@@ -818,7 +820,7 @@ bool UnifiedPresetCatalog::SetPackFeatureDisabledAtBoot(const std::string& packI
 
 	pack->disableAtBoot[featureShortName] = disabled;
 	pack->hasBaseline = !pack->baselineFeatures.empty() || !pack->disableAtBoot.empty() ||
-		(pack->type && *pack->type == PresetType::Baseline);
+	                    (pack->type && *pack->type == PresetType::Baseline);
 	if (!pack->type)
 		pack->type = PresetType::Baseline;
 

@@ -321,6 +321,7 @@ void State::Setup()
 	Feature::ForEachLoadedFeature("SetupResources", [](Feature* feature) { feature->SetupResources(); });
 	globals::deferred->SetupResources();
 	Feature::ForEachLoadedFeature("PostSetupResources", [](Feature* feature) { feature->PostSetupResources(); });
+	PostProcessingMode::ApplyPending();
 	tonemapOwner.reset();
 }
 
