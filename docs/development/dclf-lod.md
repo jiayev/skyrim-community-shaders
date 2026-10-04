@@ -81,8 +81,8 @@ Still to find (reverse engineering, before the step that needs each one):
    - per-segment bound culling (per view);
    - persistent per-segment hiding for loaded large references (the write that hides a segment, and its thread);
    - how the pass draws the visible segments (one draw per run of segments, or an index list rebuilt per frame).
-5. **Tree instance hiding.** Which function sets `hidden`/`alpha` when a full tree loads or unloads, and how the
-   instance buffer reaches the GPU (a dynamic buffer rewritten from `instances`, and when).
+5. **Tree instance hiding.** Found (2026-10-04), below; still to find: how the instance buffer reaches the GPU (a dynamic
+   buffer rewritten from `instances`, and when).
 6. **The handover to full models.** At what point the engine switches between LOD and the full model:
    - objects: the large reference's cell load against the segment hide;
    - trees: the full tree's fade-in against the instance hide;
@@ -92,6 +92,31 @@ Still to find (reverse engineering, before the step that needs each one):
    DCLF must hand over on the same frame as the engine, or there are gaps or double draws.
 7. **Which views draw LOD.** Reflections, Skylighting, the maps. The main camera's own cull of the LOD roots (what to
    cut later).
+
+### Tree instance hiding (2026-10-04)
+
+`BGSDistantTreeBlock::UpdateBlockVisibility` (AE `0x140503FF0`, ID 31660; Engine Fixes replaces it with
+`bTreeLodReferenceCaching`, to the same rule) runs over every instance of a block:
+
+- **The reference.** `InstanceData::hidden` is a byte on AE: bit 0 hidden, bit 1 the form ID is exact, bit 2 searched.
+  Without bit 1 the engine scans the loaded files (`i << 24 | id & 0xFFFFFF`) for the first reference whose base has tree
+  LOD, then stores the full ID and sets bits 1 and 2. Engine Fixes keeps its own cache (misses included) and writes the
+  byte as a bool, which drops bits 1 and 2.
+- **The rule.** With the reference's 3D loaded, not app-culled (`+0xF4` bit 0), and its cell attached (state 7): under
+  `bEnableStippleFade` the instance's alpha is `1 - currentFade` of the 3D's fade node (`+0x130`), hidden at 0; without
+  stipple fade, hidden at once. A disabled or deleted reference (`0x820`) is hidden. A change clears the group's
+  `shaderPropertyUpToDate` (+0x24); a hidden instance clears the block's `allVisible`.
+
+So the LOD instance crossfades with its full tree, by the fade the engine's main cull writes on the tree's node.
+`CS_DCLF_TREE_LOD_AUDIT` counts instances shown over a loaded, visible full tree.
+
+**The stand-in left tree LOD over its trees** (fixed: drawcall-limit-fix.md, "The fade write-back"). A tree root DCLF stands in for (`kFadeRootStoodIn`) is not culled by
+the engine, so its node keeps the fade the engine last wrote (often 0 from the load), and its LOD instance stays at alpha
+1 while DCLF draws the faded-in tree. On the teleport route's last location (cell (1, -13), above the Guardian Stones),
+about 200 instances stayed shown over loaded trees to the end of the run with the stand-in on, with or without Engine
+Fixes' cache. With the stand-in off (`CS_DCLF_PRIMARY_EXCLUDE=0`) they faded out within about 15 s as the camera turned
+to them, to 3. It is the stale node fade that the Skylighting reference also reads ("The fade roots",
+drawcall-limit-fix.md).
 
 ## Design
 

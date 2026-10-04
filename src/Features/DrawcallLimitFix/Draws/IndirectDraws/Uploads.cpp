@@ -767,3 +767,85 @@ namespace DCLF
 }
 
 #endif
+
+namespace DCLF
+{
+	void IndirectDraws::KickFadeWriteBack()
+	{
+		JoinFadeWriteBack();  // one no join reached (a frame that rendered neither shadows nor the accumulate phase)
+		if (!impl->scene || !impl->scene->fadeWriteBack)
+			return;
+		auto& writeBack = *impl->scene->fadeWriteBack;
+		// The batches after what the last job left, in frame order (the stack hands them back newest first, and two recordings
+		// need not finish in their frames' order).
+		std::vector<FadeWriteBack::Batch*> batches;
+		for (auto* batch = writeBack.batches.exchange(nullptr, std::memory_order_acquire); batch; batch = batch->next)
+			batches.push_back(batch);
+		std::reverse(batches.begin(), batches.end());
+		std::stable_sort(batches.begin(), batches.end(), [](const auto* a_a, const auto* a_b) { return a_a->frame < a_b->frame; });
+		for (auto* batch : batches) {
+			writeBack.pending.insert(writeBack.pending.end(), batch->events.begin(), batch->events.end());
+			writeBack.pendingFrames.insert(writeBack.pendingFrames.end(), batch->events.size(), batch->frame);
+			delete batch;
+		}
+		if (writeBack.pending.empty())
+			return;
+		writeBack.done.store(0, std::memory_order_relaxed);
+		// Between here and the join the tables are the frame's and no node is freed: the scene events are applied at the next
+		// frame's start, after the join.
+		auto apply = [scene = impl->scene](std::stop_token a_stop) {
+			auto& state = *scene->fadeWriteBack;
+			const auto& tables = SceneStore::Get().GetTables();
+			for (std::size_t i = state.done.load(std::memory_order_relaxed); i < state.pending.size(); ++i) {
+				if (a_stop.stop_requested())
+					return;
+				const auto& event = state.pending[i];
+				const std::uint32_t frame = state.pendingFrames[i];
+				if (event.root >= state.appliedFrame.size())
+					state.appliedFrame.resize(std::size_t(event.root) + 1, 0u);
+				// The root the event was of, still stood in: one listed again since, or the engine's own again, keeps its node; and
+				// an event older than the one written last is not written over it.
+				if (event.root >= tables.fadeRoots.size() || tables.fadeRoots[event.root].generation != event.generation ||
+					!(tables.fadeRoots[event.root].bits & kFadeRootStoodIn) || !tables.fadeRootNode[event.root] ||
+					frame < state.appliedFrame[event.root]) {
+					++state.stale;
+				} else {
+					state.appliedFrame[event.root] = frame;
+					// The fade, and the fade bits of the flags (atomically: the engine owns the others). The fade watch is not told:
+					// a stood-in root's dependents read its fade from FadeStateCS's state (SceneStore::MarkFadeRootOwned).
+					auto* node = static_cast<std::byte*>(const_cast<void*>(tables.fadeRootNode[event.root]));
+					std::atomic_ref<std::uint32_t> flags(*reinterpret_cast<std::uint32_t*>(node + 0xF4));
+					flags.fetch_and(~kFadeFlagMask, std::memory_order_relaxed);
+					flags.fetch_or(event.flags & kFadeFlagMask, std::memory_order_relaxed);
+					*reinterpret_cast<float*>(node + 0x130) = event.currentFade;
+					++state.applied;
+				}
+				state.done.store(i + 1, std::memory_order_release);
+			}
+		};
+		if (!AsyncEnabled()) {
+			apply(std::stop_token{});
+			writeBack.pending.clear();
+			writeBack.pendingFrames.clear();
+			return;
+		}
+		writeBack.job = std::make_shared<AsyncWorker::JobHandle>(AsyncWorker::Get().Submit("fade write-back", std::move(apply)));
+	}
+
+	void IndirectDraws::JoinFadeWriteBack()
+	{
+		if (!impl->scene || !impl->scene->fadeWriteBack || !impl->scene->fadeWriteBack->job)
+			return;
+		auto& writeBack = *impl->scene->fadeWriteBack;
+		auto& worker = AsyncWorker::Get();
+		const auto job = std::exchange(writeBack.job, nullptr);
+		// Late: stopped (waited for while it runs); the rest is the next job's, not this thread's.
+		if (worker.Wait(*job, AsyncWaitBudget()) != AsyncWorker::WaitResult::Done) {
+			worker.Cancel(*job);
+			++writeBack.late;
+		}
+		const std::size_t done = std::min(writeBack.done.load(std::memory_order_acquire), writeBack.pending.size());
+		writeBack.pending.erase(writeBack.pending.begin(), writeBack.pending.begin() + static_cast<std::ptrdiff_t>(done));
+		writeBack.pendingFrames.erase(writeBack.pendingFrames.begin(), writeBack.pendingFrames.begin() + static_cast<std::ptrdiff_t>(done));
+	}
+}

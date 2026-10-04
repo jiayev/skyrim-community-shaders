@@ -92,6 +92,15 @@ namespace DCLF
 	std::string IndirectDraws::AsyncReport()
 	{
 		std::string text = AsyncWorker::Get().Report() + AsyncWorker::Get().RenderWaitReport();
+		if (impl->scene && impl->scene->fadeWriteBack) {
+			auto& writeBack = *impl->scene->fadeWriteBack;
+			if (writeBack.applied || writeBack.stale || writeBack.late) {
+				text += fmt::format("[DCLF] fade write-back: {} milestones written onto stood-in roots' nodes, {} stale (the root listed again or no longer stood in), "
+									"{} joins late (their rest carried over); event list {} events\n",
+					writeBack.applied, writeBack.stale, writeBack.late, writeBack.capacity.load(std::memory_order_relaxed));
+				writeBack.applied = writeBack.stale = writeBack.late = 0;
+			}
+		}
 		if (auto& rows = impl->mainRows; rows.builds) {
 			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
 								"(tables {} and {} rows), {} resyncs\n",

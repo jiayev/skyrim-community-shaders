@@ -405,6 +405,57 @@ namespace DCLF
 		 * before the next is kicked - so each commit sends what changed since the version the buffers hold, which the commit
 		 * before it wrote. Created with the first epoch's resources and kept across their recreation.
 		 */
+		/**
+		 * @brief The fade write-back's host side (drawcall-limit-fix.md, "The fade write-back"): the event list's readback per
+		 * frame slot, read when the slot comes round again (FadeEventReadbackPass, recording), and its events handed to the main
+		 * thread in batches through a lock-free stack (IndirectDraws::ApplyFadeWriteBack).
+		 */
+		struct FadeWriteBack
+		{
+			struct Batch
+			{
+				std::vector<FadeEvent> events;
+				std::uint32_t frame = 0;  // the scene frame whose FadeStateCS appended them (the list's header)
+				Batch* next = nullptr;
+			};
+			// The recording's: a host buffer per frame slot, the events it holds, and whether it holds an execution's.
+			std::vector<std::shared_ptr<org::Buffer>> readback;
+			std::vector<std::uint32_t> readbackEvents;
+			std::vector<std::uint8_t> filled;
+			// A larger host buffer per slot once the list has grown (the render thread's), which the slot's next recording takes
+			// after reading the one it holds: no execution's events are lost to a growth.
+			std::unique_ptr<std::atomic<std::shared_ptr<org::Buffer>>[]> next;
+			// The events FadeStateCS may append: the fewest any slot's host buffer holds (never more than the list).
+			std::atomic<std::uint32_t> capacity{ 0 };
+			// The largest count a recording read past its buffer's events: the list grows to it (the roots it left out try again).
+			std::atomic<std::uint32_t> wanted{ 0 };
+			std::atomic<Batch*> batches{ nullptr };
+			// The write-back job's (IndirectDraws::KickFadeWriteBack): the events taken from the batches in order, those of them it
+			// has written (or found stale), and its tallies. The render thread touches them only with no job out.
+			std::vector<FadeEvent> pending;
+			std::vector<std::uint32_t> pendingFrames;  // each pending event's scene frame
+			std::atomic<std::size_t> done{ 0 };
+			// Per root slot, the scene frame of the event last written: an older one (a list read late) is not written over it.
+			std::vector<std::uint32_t> appliedFrame;
+			std::shared_ptr<AsyncWorker::JobHandle> job;
+			std::uint64_t applied = 0, stale = 0, late = 0;
+
+			void Push(Batch* a_batch)
+			{
+				a_batch->next = batches.load(std::memory_order_relaxed);
+				while (!batches.compare_exchange_weak(a_batch->next, a_batch, std::memory_order_release, std::memory_order_relaxed)) {}
+			}
+			~FadeWriteBack()
+			{
+				for (Batch* b = batches.exchange(nullptr); b;) {
+					Batch* following = b->next;
+					delete b;
+					b = following;
+				}
+			}
+			static std::uint64_t BytesFor(std::uint32_t a_events) { return (kFadeEventHeaderWords + std::uint64_t(a_events) * 4) * sizeof(std::uint32_t); }
+		};
+
 		struct SceneBuffers
 		{
 			std::shared_ptr<org::Buffer> objects, bones, geometries, facePositions;
@@ -467,11 +518,6 @@ namespace DCLF
 			bool fadeStatesOutZeroed = false;
 			/** @brief The published states a frame's builds read: the frame before's (FadeStateCS writes by the frame's parity). */
 			std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
-			// CS_DCLF_SKYLIGHT_PARITY: the owned roots' states as their nodes hold them (FadeState::ReadNode), written on a parity
-			// frame for the occlusion views to read in place of the GPU's: the engine's reference cull of the map reads the nodes,
-			// and a stood-in root's node keeps what the engine last left there, so the comparison takes the same fades on both sides.
-			std::shared_ptr<org::Buffer> nodeFadeStates;
-			std::uint32_t nodeFadeStatesIndex = 0;
 			std::uint32_t fadeRootCapacity = 0;
 			std::uint64_t fadeRootsHeld = ~0ull;
 			std::uint32_t fadeRootCount = 0;
@@ -479,6 +525,12 @@ namespace DCLF
 			FadeFrame fadeFrame{};
 			std::uint32_t fadeLogBase = ~0u;
 			std::shared_ptr<const ComputeProgram> fadeState;
+			// The fade write-back: the event list (a count word, then FadeEvents; the count zeroed by every depth commit), the
+			// events it holds, each root's last reported generation and milestone (zeroed once per backing), and the host side.
+			std::shared_ptr<org::Buffer> fadeEvents, fadeReported;
+			std::uint32_t fadeEventCapacity = 0;
+			bool fadeReportedZeroed = false;
+			std::shared_ptr<FadeWriteBack> fadeWriteBack;
 		};
 
 		/**
@@ -509,6 +561,11 @@ namespace DCLF
 			a_scene.fadeFrame.sceneFrame = a_scene.fadeFrameNumber;
 			a_scene.fadeFrame.logBase = a_scene.fadeLogBase;
 			a_uploads(a_scene.fadeFrameBuffer, &a_scene.fadeFrame, sizeof(FadeFrame), 0);
+			// The write-back's count, for this execution's FadeStateCS to append from (its readback copies what it appended).
+			if (a_scene.fadeEvents) {
+				static constexpr std::uint32_t kZeroCount[kFadeEventHeaderWords]{};
+				a_uploads(a_scene.fadeEvents, kZeroCount, sizeof(kZeroCount), 0);
+			}
 		}
 
 		/**
@@ -533,6 +590,12 @@ namespace DCLF
 				for (const auto& states : a_scene.fadeStatesOut)
 					a_uploads(states, zeros.data(), zeros.size(), 0);
 				a_scene.fadeStatesOutZeroed = true;
+			}
+			// No root reported yet: a zero generation is never a listing's.
+			if (!a_scene.fadeReportedZeroed && a_scene.fadeReported) {
+				const std::vector<std::byte> zeros(std::size_t(a_scene.fadeRootCapacity) * 2 * sizeof(std::uint32_t));
+				a_uploads(a_scene.fadeReported, zeros.data(), zeros.size(), 0);
+				a_scene.fadeReportedZeroed = true;
 			}
 		}
 

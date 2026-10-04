@@ -807,7 +807,7 @@ namespace DCLF::Draws
 
 	struct FadeStateBindings
 	{
-		org::DeclaredViewToken roots, states, frame, objects, log, visibility, rootLists, animated;
+		org::DeclaredViewToken roots, states, frame, objects, log, visibility, rootLists, animated, events, reported;
 		std::array<org::DeclaredViewToken, 2> published;
 	};
 
@@ -844,6 +844,10 @@ namespace DCLF::Draws
 			bindings.animated = a_builder.ShaderResource(scene.fadeAnimated).View();
 			bindings.objects = a_builder.ShaderResource(scene.objects).View();
 			bindings.log = a_builder.UnorderedAccess(scene.fadeLog).View();
+			if (scene.fadeEvents) {
+				bindings.events = a_builder.UnorderedAccess(scene.fadeEvents).View();
+				bindings.reported = a_builder.UnorderedAccess(scene.fadeReported).View();
+			}
 			return bindings;
 		}
 
@@ -854,6 +858,7 @@ namespace DCLF::Draws
 			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
 			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
 			a_out.push_back(frame ? frame->generation : 0);
+			a_out.push_back(resources->scene->fadeWriteBack ? resources->scene->fadeWriteBack->capacity.load(std::memory_order_acquire) : 0u);
 		}
 
 		FadeStatePrepared Prepare(const FadeStateBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -876,6 +881,11 @@ namespace DCLF::Draws
 			constants.animatedIndex = CaptureViewIndex(a_preparation, a_bindings.animated);
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.outIndices[h] = CaptureViewIndex(a_preparation, a_bindings.published[h]);
+			if (scene.fadeEvents && scene.fadeWriteBack) {
+				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
+				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
+				constants.eventCapacity = scene.fadeWriteBack->capacity.load(std::memory_order_acquire);
+			}
 			constants.latchIndex = frame->latch->SrvIndex();
 			// Every slot the buffers hold: the shader stops at the frame row's count.
 			prepared.groups = (scene.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
@@ -898,6 +908,91 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<Resources> resources;
+	};
+
+	struct FadeEventReadbackBindings
+	{
+		org::ResourceBindingToken events;
+	};
+	struct FadeEventReadbackPrepared
+	{
+		std::shared_ptr<FadeWriteBack> writeBack;
+	};
+
+	/**
+	 * @brief The fade write-back's events (FadeStateCS), copied to the frame slot's host buffer after the pass; what that buffer
+	 * held from the slot's last execution (finished by now: the slot is the host's) is read first and handed to the main thread
+	 * (FadeWriteBack, IndirectDraws::ApplyFadeWriteBack).
+	 */
+	class FadeEventReadbackPass final : public org::TypedRenderGraphPass<FadeEventReadbackPass, FadeEventReadbackPrepared, FadeEventReadbackBindings>
+	{
+	public:
+		explicit FadeEventReadbackPass(std::shared_ptr<SceneBuffers> a_scene) :
+			scene(std::move(a_scene)) {}
+
+		FadeEventReadbackBindings Declare(org::PassBuilder& a_builder)
+		{
+			FadeEventReadbackBindings bindings{};
+			bindings.events = a_builder.CopySource(scene->fadeEvents);
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			a_out.push_back(scene->layout.load(std::memory_order_acquire));
+		}
+
+		FadeEventReadbackPrepared Prepare(const FadeEventReadbackBindings&, const org::PassPrepareContext&) const
+		{
+			return { scene->fadeWriteBack };
+		}
+
+		static void Record(const FadeEventReadbackBindings& a_bindings, const FadeEventReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.writeBack)
+				return;
+			auto& writeBack = *a_frame.writeBack;
+			const std::uint32_t slot = a_recording.FrameSlot();
+			if (slot >= writeBack.readback.size())
+				return;
+			if (writeBack.filled[slot]) {
+				auto resource = writeBack.readback[slot]->GetAPIResource();
+				void* mapped = nullptr;
+				resource.Map(&mapped);
+				if (mapped) {
+					const auto* words = static_cast<const std::uint32_t*>(mapped);
+					const std::uint32_t count = words[0];
+					const std::uint32_t events = std::min(count, writeBack.readbackEvents[slot]);
+					// The roots past the list's end try again; the list grows to them (ReserveSceneTables).
+					if (count > writeBack.readbackEvents[slot]) {
+						std::uint32_t wanted = writeBack.wanted.load(std::memory_order_relaxed);
+						while (wanted < count && !writeBack.wanted.compare_exchange_weak(wanted, count, std::memory_order_release, std::memory_order_relaxed)) {}
+					}
+					if (events) {
+						auto* batch = new FadeWriteBack::Batch();
+						batch->events.resize(events);
+						std::memcpy(batch->events.data(), words + kFadeEventHeaderWords, std::size_t(events) * sizeof(FadeEvent));
+						batch->frame = words[1];
+						writeBack.Push(batch);
+					}
+					resource.Unmap(0, 0);
+				}
+			}
+			// A larger buffer after a growth, once this one is read; the shader may append to the fewest every slot now holds.
+			if (auto larger = writeBack.next[slot].exchange(nullptr, std::memory_order_acq_rel)) {
+				writeBack.readback[slot] = std::move(larger);
+				writeBack.readbackEvents[slot] = static_cast<std::uint32_t>(writeBack.readback[slot]->GetSize() / sizeof(std::uint32_t) - kFadeEventHeaderWords) / 4;
+				writeBack.capacity.store(*std::min_element(writeBack.readbackEvents.begin(), writeBack.readbackEvents.end()), std::memory_order_release);
+			}
+			// The count and the events the shader may have appended (never more than any slot's buffer or the list hold).
+			const std::uint32_t copied = std::min(writeBack.readbackEvents[slot], writeBack.capacity.load(std::memory_order_acquire));
+			a_recording.Commands().CopyBufferRegion(writeBack.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
+				FadeWriteBack::BytesFor(copied));
+			writeBack.filled[slot] = 1;
+		}
+
+	private:
+		std::shared_ptr<SceneBuffers> scene;
 	};
 
 	struct HzbBindings
@@ -1753,6 +1848,10 @@ namespace DCLF::Draws
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-frame"), a_scene.fadeFrameBuffer);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-visibility"), a_scene.fadeVisibility);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-log"), a_scene.fadeLog);
+			if (a_scene.fadeEvents) {
+				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-events"), a_scene.fadeEvents);
+				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
+			}
 		}
 	}
 
@@ -1890,6 +1989,11 @@ namespace DCLF::Draws
 				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.fade-state",
 					std::static_pointer_cast<org::RenderPass>(std::make_shared<FadeStatePass>(resources)))
 						.PreferQueue(org::QueueKind::Compute)
+						.Epoch(depth));
+			// Its write-back's events, to the host (FadeWriteBack).
+			if (resources->scene->fadeState && resources->scene->fadeRoots && resources->scene->fadeEvents && resources->scene->fadeWriteBack)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.fade-events",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<FadeEventReadbackPass>(resources->scene)))
 						.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<BuildDrawsPass>(resources, depthSegment)))

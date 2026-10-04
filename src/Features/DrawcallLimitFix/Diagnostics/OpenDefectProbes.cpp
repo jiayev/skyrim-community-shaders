@@ -780,7 +780,7 @@ namespace DCLF
 		// Below the root: the node right under the named root, and the shape's parent class.
 		std::string below;
 		for (const RE::NiAVObject* object = geometry; object && object->parent; object = object->parent) {
-			const auto* tes = RE::TES::GetSingleton();
+			auto* tes = RE::TES::GetSingleton();
 			if (tes && (object->parent == tes->lodLandRoot || object->parent == tes->objLODWaterRoot || object->parent == tes->objRoot || object->parent == root)) {
 				below = fmt::format("{}:{}", object->GetRTTI() ? object->GetRTTI()->name : "?", object->name.c_str() ? object->name.c_str() : "");
 				break;
@@ -830,5 +830,95 @@ namespace DCLF
 		++row.draws;
 		row.triangles += triangles;
 		row.geometries.insert(geometry);
+	}
+}
+
+namespace DCLF
+{
+	void AuditTreeLod()
+	{
+		static std::uint32_t frame = 0;
+		// Reference form ID -> the frame it was first seen stuck, and the stuck set reported last.
+		static ankerl::unordered_dense::map<RE::FormID, std::uint32_t> stuckSince;
+		static std::size_t reported = ~std::size_t{};
+		if (!SwitchEnabled(Switch::TreeLodAudit) || (++frame % 60) != 0)
+			return;
+		auto* tes = RE::TES::GetSingleton();
+		const auto* world = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
+		const auto* manager = world ? world->GetTerrainManager() : nullptr;
+		if (!manager || !manager->rootNode)
+			return;
+		std::uint32_t exact = 0, overlapped = 0, blocks = 0, mismatched = 0, loading = 0, instances = 0, hidden = 0, noRef = 0, loaded = 0, stuck = 0, holes = 0;
+		ankerl::unordered_dense::set<RE::FormID> stuckNow;
+		std::string samples;
+		std::vector<const RE::BGSTerrainNode*> stack{ manager->rootNode };
+		while (!stack.empty()) {
+			const auto* node = stack.back();
+			stack.pop_back();
+			// The four children are stored together, the field pointing at the first (CommonLib types it as an array of pointers).
+			if (const auto* children = reinterpret_cast<const RE::BGSTerrainNode*>(node->children))
+				for (std::uint32_t c = 0; c < 4; ++c)
+					stack.push_back(children + c);
+			const auto* block = node->trees ? node->trees->block : nullptr;
+			if (!block)
+				continue;
+			if (block->node != node) {
+				++mismatched;  // the layer's layout is not CommonLib's
+				continue;
+			}
+			if (!block->doneLoading || !block->attached) {
+				++loading;
+				continue;
+			}
+			++blocks;
+			for (const auto* group : block->treeGroups) {
+				if (!group)
+					continue;
+				for (const auto& instance : group->instances) {
+					++instances;
+					// AE's byte, not a bool: bit 0 hidden, bit 1 the instance's form ID is exact (no scan of the files).
+					const std::uint8_t flags = std::bit_cast<std::uint8_t>(instance.hidden);
+					const bool instanceHidden = (flags & 1) != 0;
+					exact += (flags & 2) ? 1 : 0;
+					hidden += instanceHidden ? 1 : 0;
+					auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>((flags & 2) ? instance.id : instance.id & 0x00FFFFFF);
+					if (!ref) {
+						++noRef;
+						continue;
+					}
+					auto* full = ref->Get3D();
+					const bool visible = full && !full->GetFlags().any(RE::NiAVObject::Flag::kHidden) && !ref->IsDisabled();
+					loaded += visible ? 1 : 0;
+					if (instanceHidden && !visible && full)
+						++holes;
+					if (instanceHidden || !visible)
+						continue;
+					++stuck;
+					const auto* fadeNode = full->AsFadeNode();
+					const float fullFade = fadeNode ? *reinterpret_cast<const float*>(reinterpret_cast<const std::byte*>(fadeNode) + 0x130) : 1.0f;
+					if (!(fullFade > 0.0f))
+						continue;  // the full tree is faded out: the LOD stands in for it
+					++overlapped;
+					stuckNow.insert(ref->GetFormID());
+					const auto [it, first] = stuckSince.try_emplace(ref->GetFormID(), frame);
+					if (overlapped <= 8) {
+						const auto* fade = full->AsFadeNode();
+						auto* cell = ref->GetParentCell();
+						const auto* coords = cell && cell->IsExteriorCell() ? cell->GetCoordinates() : nullptr;
+						samples += fmt::format("; {:08X} '{}' cell ({}, {}) block node ({}, {}) level {} alpha {} fade {} allVisible {} upToDate {} stuck {} frames",
+							ref->GetFormID(), ref->GetBaseObject() ? ref->GetBaseObject()->GetName() : "?", coords ? coords->cellX : 0, coords ? coords->cellY : 0,
+							node->baseCellX, node->baseCellY, node->GetLODLevel(), instance.alpha,
+							fade ? *reinterpret_cast<const float*>(reinterpret_cast<const std::byte*>(fade) + 0x130) : -1.0f, block->allVisible,
+							group->shaderPropertyUpToDate, frame - it->second);
+					}
+				}
+			}
+		}
+		std::erase_if(stuckSince, [&](const auto& a_entry) { return !stuckNow.contains(a_entry.first); });
+		if (overlapped == reported && overlapped == 0)
+			return;
+		reported = overlapped;
+		logger::info("[DCLF] tree LOD audit: {} blocks attached ({} loading, {} not their node's), {} instances ({} exact), {} hidden; {} without a loaded reference, {} with a visible full tree; {} shown over it ({} with its fade above 0), {} hidden over a hidden full tree{}",
+			blocks, loading, mismatched, instances, exact, hidden, noRef, loaded, stuck, overlapped, holes, samples);
 	}
 }
