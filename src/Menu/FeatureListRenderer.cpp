@@ -17,6 +17,7 @@
 #include "Globals.h"
 #include "I18n/I18n.h"
 #include "Menu.h"
+#include "IconsFontAwesome5.h"
 #include "Menu/IconLoader.h"
 #include "Menu/Icons/helpers/IconFonts.h"
 #include "Menu/HomePageRenderer.h"
@@ -766,9 +767,6 @@ void FeatureListRenderer::DrawMenuVisitor::operator()(Feature* feat)
 
 		// Render feature settings content
 		RenderFeatureSettings(feat, isDisabled, isLoaded, hasFailedMessage);
-
-		// Render restore defaults button (floating in bottom-right)
-		RenderRestoreDefaultsButton(feat, isDisabled, isLoaded);
 	}
 	ImGui::EndChild();
 	// Render reactive constraint warning outside the child window so it can appear as a top-level popup
@@ -795,7 +793,12 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 
 	const bool canExport = !isDisabled && isLoaded && FeatureOverwritesPanel::HasExportableSettings(feat);
 
+	const bool canRestore = !isDisabled && isLoaded;
+
 	float totalButtonWidth = bootToggleWidth;
+	if (canRestore) {
+		totalButtonWidth += exportIconSize + buttonSpacing;
+	}
 	if (canExport) {
 		totalButtonWidth += exportIconSize + buttonSpacing;
 	}
@@ -833,6 +836,11 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureHeader(Feature* feat, bo
 	// Export overwrite (icon) sits left of the boot toggle
 	if (canExport) {
 		FeatureOverwritesPanel::DrawExportButton(feat, "##ExportOverwrite");
+		ImGui::SameLine();
+	}
+
+	if (canRestore) {
+		RenderRestoreDefaultsButton(feat);
 		ImGui::SameLine();
 	}
 
@@ -963,39 +971,18 @@ void FeatureListRenderer::DrawMenuVisitor::RenderFeatureSettings(Feature* feat, 
 	}
 }
 
-void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat, bool isDisabled, bool isLoaded)
+void FeatureListRenderer::DrawMenuVisitor::RenderRestoreDefaultsButton(Feature* feat)
 {
-	if (isDisabled || !isLoaded) {
-		return;
+	const float size = ImGui::GetFrameHeight();
+	{
+		auto style = Util::TransparentIconButtonStyle();
+		if (Icons::Button("##RestoreDefaults", Icons::FA(ICON_FA_UNDO), ImVec2(size, size))) {
+			feat->RestoreDefaultSettings();
+			// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
+			// the next resolve restores the pre-default values.
+			globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
+		}
 	}
-
-	// Position button in bottom-right corner, accounting for full button frame size
-	const auto& style = ImGui::GetStyle();
-	ImVec2 windowPos = ImGui::GetWindowPos();
-	ImVec2 windowSize = ImGui::GetWindowSize();
-	float scrollbarWidth = ImGui::GetScrollMaxY() > 0 ? style.ScrollbarSize : 0.0f;
-	float iconDimension = ImGui::GetFrameHeight() * 1.2f;
-	ImVec2 iconSize(iconDimension, iconDimension);
-	ImVec2 frameSize(iconSize.x + style.FramePadding.x * 2, iconSize.y + style.FramePadding.y * 2);
-	ImGui::SetCursorScreenPos(ImVec2(
-		windowPos.x + windowSize.x - frameSize.x - style.WindowPadding.x - scrollbarWidth,
-		windowPos.y + windowSize.y - frameSize.y - style.WindowPadding.y));
-
-	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 1.0f, 1.0f, 0.3f));
-	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 1.0f, 1.0f, 0.5f));
-
-	const bool restore = Util::IconLoader::GetIcons().featureSettingRevert.texture ?
-	                         ImGui::ImageButton("##RestoreDefaults", Util::IconLoader::GetIcons().featureSettingRevert.texture, iconSize) :
-	                         ImGui::Button("R##RestoreDefaults", iconSize);
-	if (restore) {
-		feat->RestoreDefaultSettings();
-		// Rewrites the base values behind a live scene layer, so the resolver has to re-baseline or
-		// the next resolve restores the pre-default values.
-		globals::sceneSettingsManager->CaptureExternalFeatureChanges(feat);
-	}
-
-	ImGui::PopStyleColor(3);
 
 	if (auto _tt = Util::HoverTooltipWrapper()) {
 		ImGui::Text("%s", T("menu.features.restore_defaults_tooltip", "Restore default settings for this feature"));
