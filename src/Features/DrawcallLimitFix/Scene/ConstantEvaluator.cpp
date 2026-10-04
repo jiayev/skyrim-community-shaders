@@ -370,9 +370,44 @@ namespace DCLF
 		return RunStandIn(kPerGeometry, a_passDescriptor, a_out.vs, a_out.ps, call);
 	}
 
+	namespace
+	{
+		// The frame's range, held from the Z-prepass's refresh (HoldLodHighDetailRange) to the next.
+		std::array<float, 4> heldLodRange{};
+		bool lodRangeHeld = false;
+	}
+
+	void HoldLodHighDetailRange()
+	{
+		lodRangeHeld = false;
+		LodHighDetailRange(heldLodRange.data());
+		lodRangeHeld = true;
+	}
+
+	void LodHighDetailRange(float* a_out)
+	{
+		// The grid can move between the Z-prepass and the colour pass of one frame (a load finishing after a teleport): both draw
+		// with the range the Z-prepass took, or a lowered vertex fails the colour pass's EQUAL test.
+		if (lodRangeHeld) {
+			std::memcpy(a_out, heldLodRange.data(), sizeof(heldLodRange));
+			return;
+		}
+		// The loaded grid's centre and half extents (0x142033094, written by FUN_141480ab0 from the terrain manager's update), less
+		// 15 units in z and w (0x141ad28d0). SetupTechnique also takes the camera's posAdjust off the centre; DCLF's draws take
+		// their own eye off it in the vertex shader (Lighting.hlsl, DCLF_BINDLESS), so the value changes only with the grid.
+		static const REL::Relocation<const float*> highDetailRange{ REL::Offset(0x2033094) };
+		static const REL::Relocation<const float*> margin{ REL::Offset(0x1ad28d0) };
+		const float* range = highDetailRange.get();
+		a_out[0] = range[0];
+		a_out[1] = range[1];
+		a_out[2] = range[2] - *margin.get();
+		a_out[3] = range[3] - *margin.get();
+	}
+
 	void EvaluateTechnique(std::uint32_t a_passDescriptor, TechniqueConstants& a_out)
 	{
 		// Lighting variable indices (ShaderConstants::LightingVS / LightingPS).
+		constexpr std::uint32_t kVSHighDetailRange = 12;
 		constexpr std::uint32_t kVSFogParam = 13;
 		constexpr std::uint32_t kVSFogNearColor = 14;
 		constexpr std::uint32_t kVSFogFarColor = 15;
@@ -401,6 +436,15 @@ namespace DCLF
 		case 11:  // MultilayerParallax: the cube map, its mask and the inner layer
 			a_out.filterModes[4] = a_out.filterModes[5] = a_out.filterModes[8] = kAnisotropic;
 			break;
+		case 9:   // LODLand
+		case 18:  // LODLandNoise
+		{
+			// Bilinear diffuse and normal, and HighDetailRange (LodHighDetailRange), its centre absolute.
+			constexpr auto kBilinear = static_cast<std::uint32_t>(RE::BSGraphics::TextureFilterMode::kBilinear);
+			a_out.filterModes[0] = a_out.filterModes[1] = kBilinear;
+			LodHighDetailRange(&a_out.vs.floats[LightingVSLayout().offset[kVSHighDetailRange]]);
+			break;
+		}
 		default:
 			break;
 		}

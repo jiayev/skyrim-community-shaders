@@ -13,8 +13,9 @@ namespace DCLF
 		static IndirectDraws draws;
 		return draws;
 	}
-	void IndirectDraws::PublishClaims() {}
-	bool IndirectDraws::DrewLastFrame(const RE::BSGeometry*, std::uint32_t) const { return false; }
+	std::uint8_t IndirectDraws::ShadowPhasesDrawn() const { return 0; }
+	bool IndirectDraws::PhaseReady(std::uint32_t, std::uint8_t) const { return false; }
+	std::uint64_t IndirectDraws::ShadowReadinessSerial() const { return 0; }
 	void IndirectDraws::CaptureMainPass() {}
 	void IndirectDraws::CheckCapturePoint() {}
 	void IndirectDraws::CaptureDepthPass() {}

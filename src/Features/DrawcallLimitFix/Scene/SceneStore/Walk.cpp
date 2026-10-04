@@ -619,7 +619,7 @@ namespace DCLF
 
 		ObjectRecord object{};
 		StoreTransform(geometry->world, object.world);
-		StoreTransform(geometry->previousWorld, object.previousWorld);
+		StoreTransform(DrawnPreviousWorld(*geometry), object.previousWorld);
 		object.boundCenter[0] = geometry->worldBound.center.x;
 		object.boundCenter[1] = geometry->worldBound.center.y;
 		object.boundCenter[2] = geometry->worldBound.center.z;
@@ -740,9 +740,13 @@ namespace DCLF
 		// each, by Skylighting's rule for that map. Its size test (a bound radius of 32 or less draws nothing) is the view's
 		// BuildDraws' (kCullMinRadius), against the record's bound, so an animated actor's bound crossing it is no
 		// classification input.
+		// LOD (the land and object blocks under the LOD root) is no occluder of either map: Precipitation::SetupMask culls the scene
+		// lists, which do not hold the LOD root, so the engine never draws it there.
+		using LodFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+		const bool lod = shadowProperty && shadowProperty->flags.any(LodFlag::kLODLandscape, LodFlag::kLODObjects, LodFlag::kHDLODObjects);
 		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 			std::uint32_t occlusion = 0;
-			if (OcclusionEnabled(v))
+			if (OcclusionEnabled(v) && !lod)
 				if (const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(shadowProperty))
 					occlusion = Skylighting::OcclusionTechnique(lighting, geometry, v == kOcclusionSky, true);
 			tables.occlusionTechnique[v][objectId] = occlusion;
@@ -1646,7 +1650,7 @@ namespace DCLF
 				ListFadeDependent(geometry, entry);
 				// A static's previous transform is its current one from its second update on; until then it is
 				// written again.
-				if (!entry.perFrame && !SameTransform(geometry->world, geometry->previousWorld)) {
+				if (!entry.perFrame && !SameTransform(geometry->world, DrawnPreviousWorld(*geometry))) {
 					pendingEvaluation.push_back(geometry);
 					++delta.settling;
 				}

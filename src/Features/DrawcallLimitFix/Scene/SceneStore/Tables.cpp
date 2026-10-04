@@ -311,6 +311,7 @@ namespace DCLF
 		transformWatch.clear();
 		transformWatchFrame.clear();
 		objects.clear();
+		setPhases.clear();
 		objectGeometry.clear();
 		objectIdentity.clear();
 		objectGroup.clear();

@@ -46,7 +46,7 @@ namespace DCLF
 		constexpr std::size_t kGeometryType = 0x150;
 		constexpr std::size_t kDismemberSkinReady = 0x98;
 
-		/** @brief Whether M1 applies this frame: the claims it skips registrations by exist and are in force. */
+		/** @brief Whether M1 applies this frame: the set it skips registrations by withholds casters. */
 		bool M1Active(const ToggleSet& a_toggles)
 		{
 			return a_toggles.skipSunAccumulation && PassCapture::ShadowWithholdingEnabled() &&
@@ -77,12 +77,12 @@ namespace DCLF
 
 		/**
 		 * @brief The sun's Accumulate in progress on this thread: its cascade accumulators and, per accumulator, the
-		 * claim set its registrations are skipped for (null: registered as usual).
+		 * set its registrations are skipped for (null: registered as usual).
 		 */
 		struct SunCall
 		{
 			std::vector<const void*> accumulators;
-			std::vector<std::shared_ptr<const PassCapture::ClaimSet>> claims;
+			std::vector<std::shared_ptr<const SetSnapshot>> claims;  // per cascade: the frame's set when DCLF draws its casters
 			std::vector<std::uint32_t> descriptors;  // per accumulator: its descriptor index
 			std::vector<SunAccumulation::CascadeRegistration> claimed;  // recorded on CS_DCLF_SET_PARITY's frames
 			bool record = false;
@@ -162,7 +162,7 @@ namespace DCLF
 			++stats.exclusionMissing;
 			return;
 		}
-		// Built for other candidates: the scene changed since the claims it follows, and an entry may hold a caster no
+		// Built for other candidates: the scene changed since the set it follows, and an entry may hold a caster no
 		// epoch has drawn yet. The engine culls everything this frame.
 		if (exclusion->candidates->generation != SceneStore::Get().GetSunCandidatesGeneration()) {
 			++stats.exclusionStale;
@@ -374,10 +374,9 @@ namespace DCLF
 						continue;
 					call.accumulators.push_back(accumulator);
 					call.descriptors.push_back(i);
-					// The claims PassCapture would withhold this accumulator's passes by: its batch renderer's
-					// render mode's, when the renderer is a shadow view's.
+					// The set PassCapture would withhold this accumulator's passes by, when the renderer is a shadow view's.
 					const auto* data = active ? accumulator->GetRuntimeData() : nullptr;
-					call.claims.push_back(data ? PassCapture::Get().ShadowClaimsForBatch(data->batchRenderer) : nullptr);
+					call.claims.push_back(data ? PassCapture::Get().CastersForBatch(data->batchRenderer) : nullptr);
 					++call.count;
 				}
 				if (const auto known = knownAccumulators.load(std::memory_order_acquire); !known || *known != call.accumulators)
@@ -473,7 +472,7 @@ namespace DCLF
 				}
 				std::uint64_t result = 1;
 				const auto& claims = call->claims[cascade];
-				const bool claimed = claims && claims->contains(geometry);
+				const bool claimed = claims && (claims->PhasesOf(geometry) & kSetCaster);
 				// A removed entry's geometry reaching a cascade: live, it means the entry was culled through another path
 				// (checked every 64th cull); dry, an unclaimed one that builds a pass is a caster the exclusion would lose.
 				const bool underRemoved = self.exclusionLive.load(std::memory_order_relaxed) &&

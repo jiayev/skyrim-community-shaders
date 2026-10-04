@@ -475,10 +475,14 @@ namespace DCLF
 			patch.pipeline = pipelineSlot;
 			patch.projectedUV = descriptors.projectedUV;
 			patch.landBlend = landBlendRecord;
-			// The sun's bits are decided by the draw (the synthetic pass's kObjectSunTest).
+			// The sun's bits are decided by the draw (the synthetic pass's kObjectSunTest). Membership of the set is CommitSet's, which
+			// keeps a record being bound out of it: a join never patches a member (SetStats::patchedMember).
 			patch.flags = (object.flags & kSceneKeptFlags) | staticFlags | (accumulated->sunTest ? kObjectSunTest : 0u) |
 			              (accumulated->fadeDistance != 0.0f ? kObjectFadeTest : 0u) | (accumulated->heightTest ? kObjectHeightTest : 0u) |
-			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) | kObjectMember;
+			              (patch.projectedUV ? kObjectProjectedUV : 0u) | (patch.landBlend ? kObjectLandBlend : 0u) |
+			              ((SetPhasesOf(static_cast<std::int32_t>(objectId)) & kSetMain) ? kObjectMember : 0u);
+			if (SetPhasesOf(static_cast<std::int32_t>(objectId)) & kSetMain)
+				++setStats.patchedMember;
 			patch.fadeDistance = accumulated->fadeDistance;
 			timer.Add(BuildPart::Record);
 			float emissiveMult = 1.0f;
@@ -509,10 +513,6 @@ namespace DCLF
 			ApplyAccumulatePatch(patch);
 			timer.Add(BuildPart::ApplyPatch);
 			MarkResidentSlot(objectId, { *accumulated, pipelineSlot, materialSlot });
-			// A pipeline still compiling: until it is drawable, the member's entry is walked and the member handed to the
-			// engine's registration (PrimaryCull::MemberDrawable), so a stood-in entry never leaves it to nobody.
-			if (!layer && !PipelineDrawable(pipelineSlot))
-				PrimaryCull::Get().NoteMemberUndrawable(geometry);
 			(layer ? residentLayerJoining : residentJoining).erase(geometry);
 			++residentStats.joined;
 			timer.Add(BuildPart::Record);
@@ -543,8 +543,8 @@ namespace DCLF
 				DropResidentSlot(entry->second.layerSlot, true);
 		}
 		residentLayerJoining.clear();
-		// A base and its layer are members together: the engine draws both passes of one it does not own (the claims are by
-		// geometry), so a base whose layer did not join leaves again, and a layer whose base did not.
+		// A base and its layer are bound together: the engine's passes of both are its geometry's (the set is by geometry), so a
+		// base whose layer did not join leaves again, and a layer whose base did not.
 		for (const auto& entry : accumulateOrder) {
 			const auto& t = *entry.tracked;
 			if (t.layerSlot == kNoObjectSlot || t.slot == kNoObjectSlot || IsResidentSlot(t.slot) == IsResidentSlot(t.layerSlot))

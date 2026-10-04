@@ -114,7 +114,7 @@ namespace DCLF
 
 	bool SceneStore::SunEntryAllows(const Tracked& a_tracked, bool a_switchNodes)
 	{
-		// A table object: its shadow is the shadow epoch's (the claims decide, per frame), or the caster rule rejects it.
+		// A table object: its shadow is the shadow epoch's (the set decides, per frame), or the caster rule rejects it.
 		if (a_tracked.slot != kNoObjectSlot)
 			return true;
 		if (a_tracked.candidateFrame == 0)

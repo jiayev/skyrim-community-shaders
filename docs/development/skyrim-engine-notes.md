@@ -969,7 +969,10 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
     scene lists (`DAT_14338c870`, count `DAT_14338c880`, 0x18 bytes each) `FUN_1414bf320(ctx, 1)`: the list culled
     by `FUN_140e28f70` with the occlusion data's `BSGeometryListCullingProcess`, cull mode 3, and
     `cameraRelatedUpdates` 0, then registered through the occlusion accumulator (`FUN_140e28af0`), on the render
-    thread.
+    thread. Without `cameraRelatedUpdates`, `BSFadeNode::OnVisible` (`0x141479f50`) updates no fade: with fades on
+    (`0x142032dfd`) it goes into a node that is not settled (flags bit 15, `fadeAmount` and `currentFade` at 1) only
+    while `currentFade > 0` and `fadeAmount != 0`. The map leaves out what the main camera's cull faded out, and the
+    roots of a new cell before the main camera has seen them.
 -   **The registration**, render mode `0x1C` (`FUN_1414b2c20` in the table at `0x14332b020`): the property's vfunc
     `0x2D` (`GetRenderPasses_Occlusion`), each pass inserted straight into batch group 14 with `FUN_1414f5090`. It
     never reaches `BSBatchRenderer::RegisterPass`. The accumulator's `+0x160` is 0, so no mask is written.
@@ -1030,6 +1033,18 @@ Measured at Riverwood (clear weather, so Skylighting's alone), render thread per
     draw binds `*altIndexBuffer` (`+0x160`, its first qword the `ID3D11Buffer`) as R16 over the renderer data's vertex
     buffer and draws `altPrimCount` (`+0x168`) triangles from index 0. Hint 12 alone selects it; `useAdditionalTriList`
     is not read there.
+-   **The registration table** (`0x14332b020`, a function per render mode, filled by `FUN_14147e2c0`): modes 0-11 take the
+    main modes' registration (`FUN_1414b2330`), 0xC-0x11 the shadow modes' (`FUN_1414b2a60`), so the Z-prepass's
+    accumulator (mode 0xC) registers as a shadow view does; 0x1C (the precipitation accumulator, both occlusion maps)
+    takes `FUN_1414b2c20`, which inserts every pass of the property's `0x168` (the occlusion map's passes) into geometry
+    group 14 with `FUN_1414f5090` at `0x1414b2c71`, and nothing else.
+-   **The main modes' insertions** (`FUN_1414b2330`, by the pass's hint): hint 1 `FUN_1414f50b0(batch, pass, list)` at
+    `0x1414b2478`; then `FUN_1414f5090(batch, pass, group, flag)` at `0x1414b24a2` (hint 2, group 3, only while
+    `accumulator+0x12c` is set), `0x1414b24bd` (3, 4), `0x1414b24d8` (4, 5), `0x1414b24f3` (5, 6), `0x1414b250d` (6, 0),
+    `0x1414b2528` (7, 1), `0x1414b2543` (9, 7), `0x1414b255e` (11, 9), `0x1414b2579` (13, 10), `0x1414b2591` (14, 11),
+    `0x1414b25a9` (15, 8), `0x1414b25c1` (16, 12), `0x1414b25db` (17 and 18, 13); every other hint (8, 10, 12) through the
+    batch renderer's `RegisterPass` (vfunc 0x10) at `0x1414b25f4`; a multi-index shape's layer (hint 12) into group 2 at
+    `0x1414b2667`. The batch renderer is `accumulator+0x130`.
 -   **The shadow modes' registration** (`FUN_1414b2a60`) asks only the geometry's own property for passes, so a multi-index
     shape's additional property never casts.
 -   **The main modes' registration** (`FUN_1414b2330`, render modes 0-3 of the table at `0x14332b020`): after the
@@ -1357,3 +1372,44 @@ A non-segmented shape (`+0x171`) draws whole. The global byte `0x143284cc0` draw
   50 terrain LOD draws a frame, through the same batch-renderer loops (write modes 1 and 11).
 - **The main menu's backdrop.** `FUN_140972590` (`UI3DSceneManager`'s scene, under a menu's `PostDisplay`) draws LOD
   too, before gameplay.
+
+## Terrain LOD: registration, constants and placement
+
+All addresses are for AE 1.6.1170 (dclf-lod.md, "Terrain LOD", has the DCLF side).
+
+**The shapes.** A terrain LOD block is a loaded BTR: a `BSMultiBoundNode` named `chunk` holding one `BSTriShape` `Land`,
+under a level node (`4`, `8`, …) under `LandLOD` (`TES::lodLandRoot`), which hangs from `LODRoot` (a `BSClearZNode`). Its
+Lighting property has `kLODLandscape` (technique 18, LODLandNoise; `SetupTechnique` draws it as LODLand, 9, unless the
+noise global `0x142032fdb` is set). No shadow mode registers it.
+
+**Registration.** `BSLightingShaderProperty::GetRenderPasses` gives its main pass accumulation hint 6. The main mode's
+registration (`FUN_1414b2330`) maps hints to geometry groups with direct calls to `FUN_1414f5090` (not through
+`BSBatchRenderer::RegisterPass`):
+
+| hint | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 9 | 11 | 13 | 14 | 15 | 16 | 17, 18 | other |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| group | `FUN_1414f50b0` | 3 (only with `+0x12c`) | 4 | 5 | 6 | 0 | 1 | 7 | 9 | 10 | 11 | 8 | 12 | 13 | `RegisterPass` |
+
+So terrain LOD (hint 6) is in group 0 and object LOD (hint 7) in group 1. A multi-index shape's layer goes into group 2
+with hint 12.
+
+**Where it is drawn.** The deferred pass (`FUN_1414b2d90`) draws groups 9, 8 and 1 with depth mode 4, then group 0 with
+depth mode 3 (test and write). A group whose `+0x26` bit 0 is set draws its plain pass list through
+`FUN_1414f19d0`, which calls `RenderPassImmediately` (`FUN_1414f3dc0`) at `0x1414f1acd`. Terrain LOD's colour draws come
+from there, after object LOD's. Its depth prepass draw is a Utility pass through the usual batch loops.
+
+**Technique state** (`BSLightingShader::SetupTechnique`, `0x1414db810`, case 9 and 0x12):
+- Slots 0 and 1 (diffuse, normal): address mode 3, filter mode 1 (bilinear).
+- `HighDetailRange` (VS PerTechnique) = (`x − posAdjust.x`, `y − posAdjust.y`, `w − 15`, `h − 15`) from the globals at
+  `0x142033094`. `FUN_141480ab0` writes them from the loaded grid's bounds, four integers `(minX, maxY, maxX, minY)`:
+  the centre in x and y, and the half extents in z and w. The 15 is `0x141ad28d0`. The vertex shader lowers the LOD land
+  inside this range, under the loaded cells. The writers are the terrain manager's update (`FUN_14050e430`) and the
+  map (`FUN_1409892e0`).
+
+**Geometry state** (`BSLightingShader::SetupGeometry`, `0x1414dd040`, case 9, 0xd, 0xf and 0x12: all LOD):
+`World` is the geometry's world transform less `posAdjust`; `PreviousWorld` is the **current** world transform less the
+previous `posAdjust`, not `NiAVObject::previousWorld`. A chunk keeps the `previousWorld` it was loaded with (the origin)
+when the terrain manager places it, so `previousWorld` is wrong for LOD and the engine never reads it.
+
+**Textures.** The LOD diffuse maps (`Textures\Terrain\<world>\<world>.<level>.<x>.<y>.DDS`) can be
+`DXGI_FORMAT_B8G8R8X8_UNORM`.

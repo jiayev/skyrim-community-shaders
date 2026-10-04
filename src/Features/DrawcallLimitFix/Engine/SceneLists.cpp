@@ -1,6 +1,7 @@
 #include "PrimaryCull.h"
 
 #include "EngineAccess.h"
+#include "PassCapture.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -139,7 +140,7 @@ namespace DCLF
 	std::shared_ptr<const PrimaryCull::ListFilter> PrimaryCull::CurrentListFilter()
 	{
 		const auto toggles = ActiveToggles();
-		if (!toggles.ownership || !toggles.excludePrimaryEntries) {
+		if (PassCapture::ParityBoth() || !toggles.excludePrimaryEntries) {
 			++listStats.notToggled;
 			return nullptr;
 		}

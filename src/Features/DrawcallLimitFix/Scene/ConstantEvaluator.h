@@ -114,6 +114,14 @@ namespace DCLF
 	/** @brief Texture slot SetupTechnique binds the shadow mask to. */
 	inline constexpr std::uint32_t kShadowMaskSlot = 14;
 
+	/**
+	 * @brief Terrain LOD's HighDetailRange (VS PerTechnique) as DCLF draws it: the loaded grid's centre, absolute (the engine's less
+	 * posAdjust; DCLF's vertex shader takes the draw's eye off it), and its half extents less 15 (dclf-lod.md, "Terrain LOD").
+	 */
+	void LodHighDetailRange(float* a_out);
+	/** @brief Takes the frame's HighDetailRange now (RefreshLodTechniqueRanges, before the Z-prepass): LodHighDetailRange serves it until the next call. */
+	void HoldLodHighDetailRange();
+
 	/** @brief Evaluates SetupTechnique's writes for a pass descriptor from the current frame's fog and settings. */
 	void EvaluateTechnique(std::uint32_t a_passDescriptor, TechniqueConstants& a_out);
 

@@ -851,8 +851,8 @@ namespace DCLF
 
 		/**
 		 * CS_DCLF_SET_PARITY=1: every frame, the per-object visibility words read back after the colour epoch,
-		 * with BuildDrawsCS's two drawn bits (depth, colour), against what the two builds and the native
-		 * withholding decided on the CPU. See CheckSetParity.
+		 * with BuildDrawsCS's two drawn bits (depth, colour), against the frame's DCLF set (kObjectMember) and what the two
+		 * builds decided on the CPU. See CheckSetParity.
 		 */
 		bool SetParityEnabled();
 
@@ -878,6 +878,10 @@ namespace DCLF
 			float cullPlanes[6][4] = {};
 			std::uint32_t cullPlaneMask = 0;
 			std::uint32_t rasterState = 0;  // DrawPipelines::ShadowRasterStateId of the state the engine draws it with
+			// The same state under either cull mode the Utility shader sets per pass (0: none, 1: back; engine notes, shadow maps), 0
+			// where the table has none: which of them the renderer holds when the view is captured is its last pass's, so the
+			// mode's views can draw with both, and both are prepared from the first view on (ExecuteShadowFrame).
+			std::array<std::uint32_t, 2> cullStates{};
 			// 0: ordinary casters (kObjectVolumetricOnly inputs skipped); 1: the volumetric lighting copy, which
 			// draws the volumetric-only casters alone.
 			std::uint32_t casterClass = 0;
@@ -1366,15 +1370,6 @@ namespace DCLF
 		void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
 			std::uint32_t a_frame, ObjectRecordsOut& a_out);
 
-		/** @brief Per object slot, what the colour epoch drew (IndirectDraws' drawn state, render thread). */
-		struct SlotDrawn
-		{
-			const RE::BSGeometry* geometry = nullptr;  // what it was last drawn as
-			std::uint32_t last = 0;                     // the last frame it was drawn, when it is not now
-			bool drawn = false;
-			bool DrewLast(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const { return geometry == a_geometry && (drawn || a_frame - last <= 1); }
-		};
-
 		/**
 		 * @brief A main-pass row's bytes (DrawPipelines.h: kMaterialRowBytes, kPipelineRowBytes). Its header's addresses hold the
 		 * blocks' offsets in the row until the upload adds the row's own address (EmitMainRows): a table that grows is sent again
@@ -1486,15 +1481,9 @@ namespace DCLF
 			std::uint32_t frameNumber = 0;
 			bool depthOnly = false;
 			bool bindlessParity = false;
-			bool withholding = false;
 			RE::NiPoint3 eye, previousEye;
 			std::uint32_t vsFrameMask = 0, psFrameMask = 0;  // the frame slots the commit supplies
 			std::array<std::uint32_t, kDecalGroups> decalCount{};
-			// The colour epoch's drawn state (render thread's, read while no colour commit can run): the Z-prepass's gate
-			// without withholding. The colour build's DrawnMarks are sent relative to drawnCommitted, all of them on drawnResync.
-			const std::vector<SlotDrawn>* drawnSlots = nullptr;
-			std::uint64_t drawnCommitted = 0;
-			bool drawnResync = false;
 			// The PerMaterial floats that are the frame's rather than the material's (SceneStore::
 			// GetMaterialPatchedFloats / GetMaterialPatchedVSFloats, MaterialSources): the build cache leaves them
 			// out of a pair's signature and repacks the group, so a drifting IBLParams or a scrolling
@@ -1529,17 +1518,6 @@ namespace DCLF
 			// The frame's textures (t16 and up) the drawn pipelines read, which only the commit can resolve (into the frame
 			// record): the commit counts the ones it could not.
 			std::array<std::uint64_t, 2> frameRegisters{};
-			// The colour build's drawn changes (DrawnMarks): each slot whose drawn state changed since version drawnBase, with its
-			// state now; all of them when drawnFull. The commit applies them when drawnBase is what it applied last.
-			struct DrawnChange
-			{
-				std::uint32_t slot = 0;
-				const RE::BSGeometry* geometry = nullptr;
-				bool drawn = false;
-			};
-			std::vector<DrawnChange> drawnChanges;
-			std::uint64_t drawnVersion = 0, drawnBase = 0;
-			bool drawnFull = false, drawnValid = false;
 			// Per object in the tables: what this build did with it - kObjectStateDrawable, kObjectStateDecal,
 			// a Skip reason, or kObjectStateAbsent when it never reached the inputs (CS_DCLF_SET_PARITY explains
 			// its mismatches with this).
@@ -1589,9 +1567,6 @@ namespace DCLF
 				geometryDraws.Reset();
 				faceStreams.clear();
 				frameRegisters = {};
-				drawnChanges.clear();
-				drawnVersion = drawnBase = 0;
-				drawnFull = drawnValid = false;
 				objectState.clear();
 				materialRows.Reset();
 				pipelineRows.Reset();
@@ -1665,7 +1640,7 @@ namespace DCLF
 			// many there are: the sun views' latches name them in a shared region of the latch block (ReserveShadowLatch).
 			std::vector<SunEntryProcess> sunEntryProcesses;
 			// The sun entries the scene store found DCLF could take out of the cascade culls (SunAccumulation): the build
-			// turns them into the next frame's exclusion, with the claims.
+			// turns them into the next frame's exclusion.
 			std::shared_ptr<const SunCandidates> sunCandidates;
 			// And those it could take out of the point lights' culls (LocalLightCull): the paraboloid exclusion's.
 			std::shared_ptr<const SunCandidates> lightCandidates;
@@ -1728,17 +1703,17 @@ namespace DCLF
 			GeometryDrawsOut geometries;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
-			// Per occlusion view, its occluders left out (no record, no pipeline yet): the map is then the engine's this frame.
-			std::array<std::uint32_t, kOcclusionViews> occlusionSkipped{};
 			// The worker's build stages its uploads itself (StageShadowPayload): everything but the arena's view
 			// head, and the records of the first stagedSlots view slots. For the resources it was staged against.
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
 			const void* stagedFor = nullptr;
 			std::uint32_t stagedSlots = 0;
-			// The worker's build also builds each used mode's claim set (ShadowClaimSet), which the epoch
-			// publishes; empty for a build made on the render thread, which builds them at the publish.
-			std::array<std::shared_ptr<const PassCapture::ClaimSet>, kShadowModeCount> claims;
-			std::shared_ptr<SunExclusion> sunExclusion;  // likewise, from the cascades' mode (BuildSunExclusion)
+			// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
+			std::uint32_t setWaiting = 0;
+			std::string setWaitingFirst;  // the first, and why
+			// The worker's build also builds the next frame's exclusions, which the epoch publishes; empty for a build made on the
+			// render thread, which builds them at the publish.
+			std::shared_ptr<SunExclusion> sunExclusion;  // from the cascades' mode (BuildSunExclusion)
 			std::shared_ptr<SunExclusion> parabolicExclusion;  // and from the paraboloid mode (LocalLightCull)
 
 			void Reset()
@@ -1746,7 +1721,8 @@ namespace DCLF
 				staged.reset();
 				stagedFor = nullptr;
 				stagedSlots = 0;
-				claims = {};
+				setWaiting = 0;
+				setWaitingFirst.clear();
 				sunExclusion.reset();
 				parabolicExclusion.reset();
 				arena.Reset(kShadowConstantBytes);
@@ -1767,7 +1743,6 @@ namespace DCLF
 				geometries.Reset();
 				faceStreams.clear();
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
-				occlusionSkipped = {};
 			}
 		};
 
@@ -2065,7 +2040,7 @@ namespace DCLF
 		struct ResidentRegion : KeptRegion
 		{
 			LogCursor cursor;               // the change log, and the tables generation it was read from
-			bool depth = false;             // the Z-prepass's: a join waits for the colour epoch's first draw of it
+			bool depth = false;             // the Z-prepass's
 			std::vector<std::uint64_t> pairOf;   // per entry: its (material, pipeline)
 			// Per entry: its sequences, 0 when it cannot be drawn this frame; a drawable decal is kRegionDecal (its sequence is in
 			// its group's range, not the draws').
@@ -2101,7 +2076,6 @@ namespace DCLF
 			// The pairs that cannot draw, by skip reason: the report counts them every build without visiting them.
 			std::array<std::uint32_t, static_cast<std::size_t>(IndirectDraws::Skip::Count)> skipCounts{};
 			ankerl::unordered_dense::map<std::uint32_t, std::pair<std::uint32_t, std::uint32_t>> pipelines;  // pipeline -> (set index, entries)
-			MarkedList pending;  // depth: joined slots the colour epoch has not drawn yet
 			std::size_t draws = 0;
 			std::size_t decals = 0;               // drawable decal entries
 			std::size_t undrawable = 0;           // entries with no draw this frame
@@ -2130,38 +2104,7 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief The colour segment's drawn state as its builds leave it (Step 5): per slot, whether the epoch draws it and as
-		 * which geometry. A build changes the marks of the slots whose inputs it changed, and of the per-frame loop's objects;
-		 * the payload carries the slots changed since the version the render thread applied (a ChangeJournal, whose holder is
-		 * the render thread), so the render thread's state follows without ever seeing the whole set.
-		 */
-		struct DrawnMarks
-		{
-			bool active = false;
-			std::uint32_t generation = 0;
-			std::vector<std::uint8_t> drawn;
-			std::vector<const RE::BSGeometry*> geometry;
-			ChangeJournal changes;
-			std::vector<std::uint32_t> loopDrawn;  // the slots the per-frame loop drew in the last build
-			std::vector<std::uint32_t> loopStamp;  // per slot: the build that last drew it in the loop
-			std::uint32_t serial = 0;
-			void Set(std::uint32_t a_slot, const RE::BSGeometry* a_geometry, bool a_drawn)
-			{
-				if (drawn.size() <= a_slot) {
-					drawn.resize(std::size_t(a_slot) + 1, 0);
-					geometry.resize(std::size_t(a_slot) + 1, nullptr);
-				}
-				if ((drawn[a_slot] != 0) == a_drawn && (!a_drawn || geometry[a_slot] == a_geometry))
-					return;
-				drawn[a_slot] = a_drawn;
-				if (a_drawn)
-					geometry[a_slot] = a_geometry;
-				changes.Mark(a_slot);
-			}
-		};
-
-		/**
-		 * @brief What BuildMainPayload keeps per segment across frames: the resident region and the drawn marks. The blocks and
+		 * @brief What BuildMainPayload keeps per segment across frames: the resident region. The blocks and
 		 * descriptors a draw reads are the rows' (MainRows), which both segments share.
 		 *
 		 * One per epoch kind (colour, Z-prepass), used by one build at a time: the worker's, or the render
@@ -2177,7 +2120,6 @@ namespace DCLF
 			};
 			std::vector<std::byte> scratch;
 			ResidentRegion region;
-			DrawnMarks drawnMarks;
 		};
 
 		/** @brief Packs a constant group into a cached group (at least 16 bytes, the rest zero). */
@@ -2230,17 +2172,6 @@ namespace DCLF
 			BuildCache* a_cache = nullptr, ObjectRecordStore* a_objects = nullptr, BonesStore* a_bones = nullptr, GeometryStore* a_geometries = nullptr);
 
 		// The objects a mode's inputs draw, as the geometry the native shadow loop withholds (PassCapture).
-		inline std::shared_ptr<const PassCapture::ClaimSet> ShadowClaimSet(const std::vector<DrawInput>& a_inputs, const SceneStore::Tables& a_tables)
-		{
-			auto claims = std::make_shared<PassCapture::ClaimSet>();
-			claims->reserve(a_inputs.size());
-			for (const auto& input : a_inputs) {
-				if (input.objectIndex < a_tables.objectGeometry.size())
-					if (const auto* geometry = a_tables.objectGeometry[input.objectIndex])
-						claims->insert(geometry);
-			}
-			return claims;
-		}
 
 		// The cascades' render mode (0xE, ShadowMapClamped) as an index of the shadow modes.
 		constexpr std::uint32_t kSunShadowMode = 0xE - PassCapture::kFirstShadowMode;
@@ -2308,8 +2239,8 @@ namespace DCLF
 		};
 
 		/**
-		 * @brief The next frame's sun entry exclusion, from the candidates and the cascades' mode's inputs, which are
-		 * what that mode's claims hold: a candidate stays in the cascade culls when one of its table objects casts (no
+		 * @brief The next frame's sun entry exclusion, from the candidates and the cascades' mode's inputs, which are the set's
+		 * casters (SceneSet.h): a candidate stays in the cascade culls when one of its table objects casts (no
 		 * kObjectNoShadow) and is not an input, since the engine must then still draw it. Null without candidates.
 		 */
 		std::shared_ptr<SunExclusion> BuildSunExclusion(const std::shared_ptr<const SunCandidates>& a_candidates, const ShadowPayload& a_payload, std::uint32_t a_mode,
@@ -2371,7 +2302,6 @@ namespace DCLF
 			{
 				bool active = false;
 				ModeRasterStates rasterStates;
-				std::vector<const RE::BSGeometry*> claimedOf;  // per object: the geometry its entry claims
 				std::vector<std::uint32_t> waiting;  // objects waiting for a pipeline or a texture
 				std::vector<std::uint8_t> waitingMark;
 				std::vector<std::uint32_t> faces;    // objects the frame's list writes (face shapes, second-stream positions)
@@ -2379,20 +2309,12 @@ namespace DCLF
 				// The build version at which an object last joined or left the mode's inputs (the region or the faces): what
 				// the sun exclusion's reuse reads (BuildSunExclusion).
 				std::uint64_t membership = 0;
-				// The region's geometries, each with the object whose entry claims it: a geometry that moves between slots is
-				// claimed by its new slot before its old one's entry goes, and only its owner's removal drops it.
-				ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> claims;
-				bool claimsChanged = true;
-				std::vector<const RE::BSGeometry*> lastFaces;
-				std::shared_ptr<const PassCapture::ClaimSet> published;
-				/** @brief Empty, for every object to be read again; the published claims stay, and the inputs' journal counts on. */
+				/** @brief Empty, for every object to be read again; the inputs' journal counts on. */
 				void Reset()
 				{
 					auto kept = std::move(inputs);
-					auto keptClaims = std::move(published);
 					*this = Mode{};
 					inputs = std::move(kept);
-					published = std::move(keptClaims);
 					inputs.Clear();
 				}
 			};
@@ -2446,7 +2368,7 @@ namespace DCLF
 		/**
 		 * @brief CS_DCLF_PERSISTENT_PARITY: a kept shadow build against the same build made the per-frame way. Per used mode, the
 		 * same casters with the same inputs (the record's number apart), records binding the same textures and samplers with the
-		 * same texcoord values, and the same claims.
+		 * same texcoord values.
 		 */
 		void CheckKeptShadow(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, const ShadowPayload& a_kept, ShadowKept& k);
 
@@ -2480,10 +2402,9 @@ namespace DCLF
 		{
 			auto sameEye = [](const RE::NiPoint3& a, const RE::NiPoint3& b) { return std::memcmp(&a, &b, sizeof(RE::NiPoint3)) == 0; };
 			return a_job.frameNumber == a_epoch.frameNumber && a_job.depthOnly == a_epoch.depthOnly &&
-			       a_job.bindlessParity == a_epoch.bindlessParity && a_job.withholding == a_epoch.withholding &&
+			       a_job.bindlessParity == a_epoch.bindlessParity &&
 			       sameEye(a_job.eye, a_epoch.eye) && sameEye(a_job.previousEye, a_epoch.previousEye) &&
 			       a_job.vsFrameMask == a_epoch.vsFrameMask && a_job.psFrameMask == a_epoch.psFrameMask && a_job.decalCount == a_epoch.decalCount &&
-			       a_job.drawnCommitted == a_epoch.drawnCommitted && a_job.drawnResync == a_epoch.drawnResync &&
 			       a_job.materialPatchedFloats == a_epoch.materialPatchedFloats &&
 			       a_job.materialPatchedVSFloats == a_epoch.materialPatchedVSFloats &&
 			       a_job.addresses == a_epoch.addresses &&
@@ -2685,13 +2606,20 @@ namespace DCLF
 				viewFormats[v] = occlusion[v].dsvFormat;
 			return viewFormats;
 		}
-		// CS_DCLF_SHADOW_OWNERSHIP=static: the claim set built from the inputs of a mode, published once per
-		// input rebuild (the views of one frame that share a mode share the inputs and the claims).
 		/** @brief A shadow view not drawn: counts a hole when its mode withholds casters this frame, and hands the mode back. */
-		void GiveBackShadowMode(std::uint32_t a_modeIndex, IndirectDraws::ShadowStats& a_stats);
+		/**
+		 * @brief A shadow view this frame's epoch cannot draw: the casters the engine withheld from it are a hole this frame, and the
+		 * next commit leaves the casters to the engine until an epoch draws the views again (ShadowsDrawable).
+		 */
+		void ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats);
+		bool shadowsDrawable = false;
+		// Per occlusion view: its last ExecuteOcclusion drew it, so its occluders are the set's from the next commit on.
+		std::array<bool, kOcclusionViews> occlusionDrawable{};
+		// The modes and rasterizer states the last epoch drew (CasterReady's), and their serial.
+		std::array<bool, kShadowModeCount> readyModes{};
+		std::array<ModeRasterStates, kShadowModeCount> readyStates{};
+		std::uint64_t shadowReadinessSerial = 0;
 		void CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload);
-		void PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,
-			IndirectDraws::ShadowStats& a_stats);
 		ShadowPayload shadowPayload;
 		std::shared_ptr<const void> shadowExecutionOwner;  // reused by the sky epoch's copy of the shadow records
 		// The shadow job (CS_DCLF_ASYNC): kicked at BeforeShadowMaps, joined by ExecuteShadowFrame. The render
@@ -2836,69 +2764,6 @@ namespace DCLF
 			const std::shared_ptr<Resources>& a_resources, SceneStore& a_store, IndirectDraws::Stats& a_stats,
 			std::vector<std::shared_ptr<const void>>& a_bindingOwners);
 
-		// What the colour epoch draws (drawcall-limit-fix.md, "Persistent draw state", Step 5): the native loop skips a pass
-		// whose geometry the epoch drew, and the claims are what it draws. Only the colour epoch records it, so the native
-		// loop never skips an object that the Z-prepass drew but the colour pass then left out (a missing texture, say),
-		// which would leave a hole that writes depth and shows the background. Kept from the colour builds' changes alone
-		// (DrawnMarks): per geometry and per object slot, whether it is drawn now and, when not, the last frame it was.
-		struct DrawnGeometry
-		{
-			std::uint32_t last = 0;
-			std::uint32_t slot = ~0u;  // the slot that draws it: a geometry moves between slots, and only its own slot undraws it
-			bool drawn = false;
-		};
-		ankerl::unordered_dense::map<const RE::BSGeometry*, DrawnGeometry> drawnGeometry;
-		std::vector<SlotDrawn> slotDrawn;
-		std::uint64_t drawnCommitted = 0;       // the DrawnMarks version applied
-		bool drawnResync = true;                // the next colour build sends every slot
-		std::uint32_t drawnCommitFrame = ~0u;   // the frame of the last colour commit
-		// The claims (PassCapture), kept: a geometry is claimed from its draw until a frame after its last one.
-		PassCapture::ClaimSet claimSet;
-		std::shared_ptr<const PassCapture::ClaimSet> publishedClaims;
-		bool claimsChanged = true;
-		std::vector<std::pair<const RE::BSGeometry*, std::uint32_t>> pendingUnclaims;  // (geometry, the frame it is unclaimed from)
-		std::uint32_t claimsAdded = 0, claimsDropped = 0, claimsDroppedAfterCull = 0;
-		std::uint64_t drawnChangesApplied = 0, drawnResyncs = 0;
-		std::vector<const RE::BSGeometry*> newlyDrawn;  // geometries whose drawn mark turned on since PublishClaims (PrimaryCull::Admit)
-		bool DrawnThisFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const
-		{
-			if (drawnCommitFrame != a_frame)
-				return false;
-			const auto it = drawnGeometry.find(a_geometry);
-			return it != drawnGeometry.end() && it->second.drawn;
-		}
-		/** @brief A colour build's change for one slot: drawn as a_geometry now, or not drawn. */
-		void ApplyDrawn(std::uint32_t a_slot, const RE::BSGeometry* a_geometry, bool a_drawn, std::uint32_t a_frame)
-		{
-			if (slotDrawn.size() <= a_slot)
-				slotDrawn.resize(std::size_t(a_slot) + 1);
-			auto& slot = slotDrawn[a_slot];
-			if (slot.drawn && slot.geometry && (slot.geometry != a_geometry || !a_drawn)) {
-				// Its geometry is undrawn only while this slot is the one drawing it (the order of a build's changes is the
-				// order of its slots, so a geometry that moved may already be drawn by its new slot).
-				if (auto held = drawnGeometry.find(slot.geometry); held != drawnGeometry.end() && held->second.slot == a_slot) {
-					held->second.drawn = false;
-					held->second.last = a_frame - 1;
-					held->second.slot = ~0u;
-					pendingUnclaims.emplace_back(slot.geometry, a_frame + 1);
-				}
-				slot.last = a_frame - 1;
-			}
-			if (a_drawn && a_geometry && (!slot.drawn || slot.geometry != a_geometry)) {
-				newlyDrawn.push_back(a_geometry);
-				auto& held = drawnGeometry[a_geometry];
-				held.drawn = true;
-				held.slot = a_slot;
-				if (claimSet.insert(a_geometry).second) {
-					claimsChanged = true;
-					++claimsAdded;
-				}
-			}
-			if (a_drawn)
-				slot.geometry = a_geometry;
-			slot.drawn = a_drawn;
-			++drawnChangesApplied;
-		}
 		// The vertex-stage inputs the Z-prepass wrote its depth with. The colour pass tests EQUAL against
 		// that depth, so it has to transform the geometry to exactly the same place - and it cannot simply
 		// read the buffers again, because the engine rewrites the per-frame constants between the depth
@@ -3054,8 +2919,8 @@ namespace DCLF
 			std::uint32_t frame = 0;
 			std::uint32_t framesLeft = 0;
 			std::vector<std::uint8_t> depthState, colourState;  // MainPayload::objectState of the two builds
-			// Per object: bit 0 withheld from the native loop this frame (claimed, and registered by the
-			// engine), bit 1 native-visible, bit 2 alpha tested, bit 3 claimed.
+			// Per object: bit 0 in the frame's set (the main phase), bit 1 bound, bit 2 alpha tested, bit 3 its record's kObjectMember
+			// disagrees with the set.
 			std::vector<std::uint8_t> flags;
 			std::vector<const RE::BSGeometry*> geometry;
 		};
@@ -3067,6 +2932,8 @@ namespace DCLF
 			std::uint32_t depthOnly = 0, colourOnly = 0, colourUnpublished = 0, withheldUndrawn = 0, withheldCulled = 0;
 			std::uint32_t colourDrawnTotal = 0, depthDrawnTotal = 0;
 			std::uint32_t alphaDepthOnly = 0, alphaColourOnly = 0, alphaWithheldUndrawn = 0;
+			// Drawn by DCLF outside the set (the engine draws it too: a double draw), and records whose kObjectMember is not the set.
+			std::uint32_t outsideDrawn = 0, recordDisagrees = 0;
 			std::uint32_t samples = 0;
 			// One-frame gaps: an object the engine kept on three consecutive frames, drawn on the first and the
 			// third and withheld and GPU-culled on the second - a flicker, unless it really was hidden for that

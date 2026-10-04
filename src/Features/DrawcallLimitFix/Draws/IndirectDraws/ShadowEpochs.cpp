@@ -531,9 +531,9 @@ namespace DCLF
 	}
 
 	/**
-	 * CS_DCLF_SET_PARITY: a sun view's culling against the engine's own cascade cull of the same frame - every claimed caster the
+	 * CS_DCLF_SET_PARITY: a sun view's culling against the engine's own cascade cull of the same frame - every caster of the set the
 	 * engine's cull of the view's cascade reached (SunAccumulation::ClaimedRegistrations) must pass the view's latch, or it is
-	 * drawn by nobody: the engine skips it as claimed, and DCLF's view rejects it.
+	 * drawn by nobody: the engine skips it as the set's, and DCLF's view rejects it.
 	 */
 	void IndirectDraws::Impl::CheckCascadeCulling(const PendingView& a_view, const BuildDrawsLatch& a_latch, std::uint32_t a_frame, const ShadowPayload& a_payload)
 	{
@@ -695,7 +695,7 @@ namespace DCLF
 			++shadowStats.notReady;
 			++shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)];
 			if (a_renderMode >= PassCapture::kFirstShadowMode)
-				impl->GiveBackShadowMode(a_renderMode - PassCapture::kFirstShadowMode, shadowStats);
+				impl->ShadowsNotDrawn(shadowStats);
 		};
 		if (!pipelines.Enabled() || !utility || !impl->SetupShadow())
 			return notReady(ShadowNotReady::Setup);
@@ -748,6 +748,9 @@ namespace DCLF
 		view.targetIndex = targetIndex;
 		view.slice = slice;
 		view.rasterState = rasterState;
+		for (std::uint32_t cull = 0; cull < view.cullStates.size(); ++cull)
+			view.cullStates[cull] = EngineRasterStateId(shadowState.rasterStateFillMode, cull, shadowState.rasterStateDepthBiasMode, shadowState.rasterStateScissorMode,
+				a_renderMode);
 		view.casterClass = volumetricCopy ? 1u : 0u;
 		view.sunView = shadowView->kind == ShadowViews::Kind::Directional;
 		CaptureViewTarget(view, target);
@@ -848,13 +851,11 @@ namespace DCLF
 
 	bool IndirectDraws::OcclusionReady(std::uint32_t a_view) const
 	{
-		// This frame's shadow commit uploaded every occluder (none left out for a pipeline or a texture not yet resolved), and
-		// the map's target is imported.
+		// This frame's shadow commit uploaded the view's occluders (the set's, of its phase), and the map's target is imported.
 		if (a_view >= kOcclusionViews || failed || !ActiveToggles().shadows || !SceneStore::OcclusionEnabled(a_view) || !impl->shadow)
 			return false;
 		const auto& occlusion = impl->occlusion[a_view];
-		return occlusion.rasterState && occlusion.committedFrame == SceneStore::Get().GetFrame() && occlusion.skipped == 0 &&
-		       impl->shadow->depth[OcclusionDepthTarget(a_view)];
+		return occlusion.rasterState && occlusion.committedFrame == SceneStore::Get().GetFrame() && impl->shadow->depth[OcclusionDepthTarget(a_view)];
 	}
 
 	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views)
@@ -873,6 +874,8 @@ namespace DCLF
 				drawable |= 1u << v;
 			else
 				++shadowStats.occlusionNotReady[v];
+			// Drawn or not, the next commit takes the map's occluders into the set only after a frame that drew it.
+			impl->occlusionDrawable[v] = (drawable >> v) & 1;
 		}
 		const auto indirect = GetShadowIndirectState();
 		if (!drawable || !indirect.valid) {
@@ -911,9 +914,12 @@ namespace DCLF
 				uploads(resources->viewBlocks.buffer, view.perFrame.data(), view.perFrameBytes, perFrameOffset);
 				uploads(resources->count[slot], kZeroCounts, sizeof(kZeroCounts), 0);
 				// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn, and the rule's
-				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound.
+				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound, and the fade roots as the
+				// engine's cull of the map leaves them (kCullFadeOnVisible): it never draws a root the main camera has faded out, nor
+				// the roots of a new cell before the main camera has seen them.
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
-				latch.cullFlags = 1u | kCullMinRadius;
+				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
+				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
 				const auto buckets = BucketsOfRow(lookups.ShadowMapRow(view.rasterState), indirect);
 				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, true, latch);
 				const auto* previous = PreviousView(previousShape, slot);
@@ -937,6 +943,7 @@ namespace DCLF
 				if (drawable & (1u << v)) {
 					--shadowStats.occlusionDrawn[v];
 					++shadowStats.occlusionNotReady[v];
+					impl->occlusionDrawable[v] = false;
 				}
 			return 0;
 		}
@@ -957,8 +964,8 @@ namespace DCLF
 		auto notReady = [&](ShadowNotReady a_reason) {
 			shadowStats.notReady += static_cast<std::uint32_t>(pending.size());
 			shadowStats.notReadyReasons[static_cast<std::size_t>(a_reason)] += static_cast<std::uint32_t>(pending.size());
-			for (const auto& view : pending)
-				impl->GiveBackShadowMode(view.modeIndex, shadowStats);
+			if (!pending.empty())
+				impl->ShadowsNotDrawn(shadowStats);
 			pending.clear();
 			impl->DropShadowJob(stats);
 		};
@@ -981,10 +988,17 @@ namespace DCLF
 		// Per mode and caster class, every rasterizer state its views have drawn with (DrawPipelines' ids, which only
 		// grow): the build's inputs and the shadow pipelines are for all of them, so which of its views a frame draws -
 		// the sun's cascades alternate their depth-bias states frame by frame, a local light's culling-off view comes and
-		// goes - changes nothing the build reads. It grows when a state first appears. Each view's latch row is its own.
+		// goes - changes nothing the build reads. It grows when a state first appears, with its sibling under the other cull
+		// mode (PendingView::cullStates): a view's state is its last pass's cull mode, and the set withholds a phase's casters
+		// before the frame's views are seen, so a sibling first met mid-frame would leave them to nobody that frame. Each
+		// view's latch row is its own.
 		for (const auto& view : pending) {
 			modeUsed[view.modeIndex] = true;
-			impl->shadowStatesSeen[view.modeIndex].Add(view.rasterState, view.casterClass != 0);
+			auto& seen = impl->shadowStatesSeen[view.modeIndex];
+			seen.Add(view.rasterState, view.casterClass != 0);
+			for (const std::uint32_t state : view.cullStates)
+				if (state)
+					seen.Add(state, view.casterClass != 0);
 		}
 		std::array<ModeRasterStates, kShadowModeCount> modeRasterStates{};
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
@@ -1010,6 +1024,12 @@ namespace DCLF
 		impl->ReserveShadowRows();
 		ShadowInputs in = impl->PrepareShadowInputs(store, *resources, modeUsed, modeRasterStates);
 		impl->shadowJob.modes = modeUsed;
+		// What the set's caster readiness reads (CasterReady): a new kind of view seen is a readiness event.
+		if (impl->readyModes != modeUsed || impl->readyStates != modeRasterStates) {
+			impl->readyModes = modeUsed;
+			impl->readyStates = modeRasterStates;
+			++impl->shadowReadinessSerial;
+		}
 		impl->shadowJob.rasterStates = modeRasterStates;
 		impl->shadowJob.modesKnown = true;
 		impl->shadowJob.views = static_cast<std::uint32_t>(pending.size());
@@ -1300,23 +1320,23 @@ namespace DCLF
 				auto& occlusion = impl->occlusion[v];
 				occlusion.committedFrame = frameNumber;
 				occlusion.inputs = static_cast<std::uint32_t>(payload.ModeInputs(OcclusionModeOf(v)));
-				occlusion.skipped = payload.occlusionSkipped[v];
 			}
 			impl->ReadShadowCullCounters(frameNumber, shadowStats);
-			// Static shadow ownership: what this frame's epoch drew for a mode is what that mode's views'
-			// registrations are withheld for, from the next frame on.
+			// The views are drawn: the set's casters stay DCLF's (SetPhasesDrawn).
+			impl->shadowsDrawable = true;
+			for (std::uint32_t m = 0; m < kFirstOcclusionMode && m < shadowStats.casters.size(); ++m)
+				if (modeUsed[m])
+					shadowStats.casters[m] = static_cast<std::uint32_t>(payload.ModeInputs(m));
+			shadowStats.setWaiting += payload.setWaiting;
+			if (shadowStats.setWaitingFirst.empty())
+				shadowStats.setWaitingFirst = payload.setWaitingFirst;
 			if (PassCapture::ShadowWithholdingEnabled()) {
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
-					if (modeUsed[m] && !IsOcclusionMode(m))
-						impl->PublishShadowClaims(PassCapture::kFirstShadowMode + m, payload.inputList[m], usedWorkerBuild || payload.kept ? payload.claims[m] : nullptr,
-							shadowStats);
-				}
-				// The cascades' claims decide which sun entries the next frame's cascade culls may skip.
+				// The cascades' casters decide which sun entries the next frame's cascade culls may skip.
 				if (modeUsed[kSunShadowMode])
 					SunAccumulation::Get().PublishExclusion(usedWorkerBuild ? payload.sunExclusion :
 					                                                          BuildSunExclusion(payload.inputs.sunCandidates, payload, kSunShadowMode, SceneStore::Get().GetTables(), &impl->sunExclusionCache));
-				// The paraboloid views' claims decide which entries the next frame's point-light culls may skip (none when no
-				// point light was drawn: a light new next frame is culled by the engine, as its claims are not live yet).
+				// The paraboloid views' casters decide which entries the next frame's point-light culls may skip (none when no
+				// point light was drawn: a light new next frame is culled by the engine).
 				LocalLightCull::Publish(!modeUsed[kParabolicShadowMode] ? nullptr :
 				                        usedWorkerBuild                ? payload.parabolicExclusion :
 				                                                         BuildSunExclusion(payload.inputs.lightCandidates, payload, kParabolicShadowMode, SceneStore::Get().GetTables(), &impl->parabolicExclusionCache));
@@ -1479,21 +1499,18 @@ namespace DCLF
 		auto* parabolicCache = &impl->parabolicExclusionCache;
 		auto* kept = impl->ShadowKeptState();
 		const ShadowInputs inputs = job.inputs;
-		const bool claims = PassCapture::ShadowWithholdingEnabled();
+		const bool exclusions = PassCapture::ShadowWithholdingEnabled();
 		// The count buffers the worker zeroes: those of the slots last frame's views took, taken here, because the render thread
 		// adds slots (ReserveShadowLatch) while the worker runs.
 		std::vector<std::shared_ptr<org::Buffer>> counts;
 		for (std::uint32_t v = 0; v < job.views && kFirstShadowViewSlot + v < impl->shadow->count.size(); ++v)
 			counts.push_back(impl->shadow->count[kFirstShadowViewSlot + v]);
 		job.handle = AsyncWorker::Get().Submit("shadow", [inputs, tablesPtr, lookups, payload, pool, objects, bonesStore, kept, geometriesStore, exclusionCache, parabolicCache, target = impl->shadow,
-																counts = std::move(counts), claims](std::stop_token) {
+																counts = std::move(counts), exclusions](std::stop_token) {
 			BuildShadowPayload(inputs, *tablesPtr, *lookups, *payload, objects, bonesStore, kept, geometriesStore);
 			StageShadowPayload(*payload, *target, counts, *pool);
-			if (claims) {
-				ZoneScopedN("CS.DCLF.BuildShadow.Claims");
-				for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
-					if (inputs.modeUsed[m] && !IsOcclusionMode(m) && !payload->kept)
-						payload->claims[m] = ShadowClaimSet(payload->inputList[m], *tablesPtr);
+			if (exclusions) {
+				ZoneScopedN("CS.DCLF.BuildShadow.Exclusions");
 				if (inputs.modeUsed[kSunShadowMode])
 					payload->sunExclusion = BuildSunExclusion(inputs.sunCandidates, *payload, kSunShadowMode, *tablesPtr, exclusionCache);
 				if (inputs.modeUsed[kParabolicShadowMode])
@@ -1561,65 +1578,78 @@ namespace DCLF
 		shadowCullReadback = std::move(readback);
 	}
 
-	void IndirectDraws::Impl::GiveBackShadowMode(std::uint32_t a_modeIndex, IndirectDraws::ShadowStats& a_stats)
+	void IndirectDraws::Impl::ShadowsNotDrawn(IndirectDraws::ShadowStats& a_stats)
 	{
-		// A claim stands only while DCLF draws its view: the engine withheld this view's casters (last frame's claims), so it
-		// is a hole this frame, and the mode is handed back to the engine from the next frame until an epoch draws it again.
-		auto& capture = PassCapture::Get();
-		if (a_modeIndex >= PassCapture::kShadowModes || !capture.ShadowModeWithheld(a_modeIndex))
-			return;
-		++a_stats.notReadyWithheld;
-		capture.PublishShadowClaims(a_modeIndex, nullptr);
-		a_stats.claimed[a_modeIndex] = 0;
+		if (const auto set = PassCapture::Get().CurrentSet(); set && (set->drawn & (kSetCaster | kSetCasterPoint)) && PassCapture::ShadowWithholdingEnabled())
+			++a_stats.notReadyWithheld;
+		shadowsDrawable = false;
 	}
 
-	void IndirectDraws::Impl::PublishShadowClaims(std::uint32_t a_renderMode, const std::vector<DrawInput>& a_inputs, std::shared_ptr<const PassCapture::ClaimSet> a_built,
-		IndirectDraws::ShadowStats& a_stats)
+	std::uint8_t IndirectDraws::ShadowPhasesDrawn() const
 	{
-		if (a_renderMode < PassCapture::kFirstShadowMode || a_renderMode >= PassCapture::kFirstShadowMode + PassCapture::kShadowModes)
-			return;
-		const auto start = std::chrono::steady_clock::now();
-		const auto modeIndex = a_renderMode - PassCapture::kFirstShadowMode;
-		// The worker's set when its build was the one drawn, else built here from the same inputs.
-		auto claims = a_built ? std::move(a_built) : ShadowClaimSet(a_inputs, SceneStore::Get().GetTables());
-		a_stats.claimed[modeIndex] = static_cast<std::uint32_t>(claims->size());
-		// Holes: the casters this frame's selection withheld from the mode's views (the last epoch's claims) that this epoch did
-		// not draw either (not in its claims, which are its inputs) - drawn by nobody this frame. Under CS_DCLF_SET_PARITY only those
-		// the engine's shadow registrations actually withheld this frame count (PassCapture::TakeWithheld); a claim the engine did
-		// not register anyway (an LOD child no longer selected, a reference unloaded) is dropped, not a hole.
-		{
-			static std::array<std::uint64_t, PassCapture::kShadowModes> frames{}, holeFrames{}, holes{}, withheld{}, dropped{};
-			static std::array<std::string, PassCapture::kShadowModes> first;
-			if (const auto selected = PassCapture::Get().SelectedShadowClaims(modeIndex)) {
-				const bool registered = SwitchEnabled(Switch::SetParity);
-				const auto taken = registered ? PassCapture::Get().TakeWithheld(modeIndex) : std::vector<const RE::BSGeometry*>{};
-				const ankerl::unordered_dense::set<const RE::BSGeometry*> reached(taken.begin(), taken.end());
-				std::uint32_t frameHoles = 0;
-				for (const auto* geometry : *selected) {
-					if (claims->contains(geometry))
-						continue;
-					if (registered && !reached.contains(geometry)) {
-						++dropped[modeIndex];
-						continue;
-					}
-					if (frameHoles++ == 0 && first[modeIndex].empty())
-						first[modeIndex] = geometry && geometry->name.c_str() ? geometry->name.c_str() : "?";
-				}
-				++frames[modeIndex];
-				withheld[modeIndex] += selected->size();
-				holes[modeIndex] += frameHoles;
-				holeFrames[modeIndex] += frameHoles ? 1 : 0;
-				if (frames[modeIndex] == 300) {
-					logger::info("[DCLF] shadow claim holes, mode {:#x}: {} of 300 frames withheld casters this epoch did not draw, {:.1f} a frame of {:.0f} withheld; {:.1f} a frame left the claims unregistered{}{}",
-						a_renderMode, holeFrames[modeIndex], holes[modeIndex] / 300.0, withheld[modeIndex] / 300.0, dropped[modeIndex] / 300.0,
-						holes[modeIndex] ? " <- CLAIM HOLES" : " <- OK", first[modeIndex].empty() ? "" : "; first '" + first[modeIndex] + "'");
-					frames[modeIndex] = holeFrames[modeIndex] = holes[modeIndex] = withheld[modeIndex] = dropped[modeIndex] = 0;
-					first[modeIndex].clear();
-				}
+		if (!impl->shadowsDrawable || failed)
+			return 0;
+		std::uint8_t phases = 0;
+		for (std::uint32_t m = 0; m < kFirstOcclusionMode; ++m)
+			phases |= impl->readyModes[m] ? SetPhaseOfMode(m) : 0;
+		// An occlusion map's once its last ExecuteOcclusion drew it.
+		for (std::uint32_t v = 0; v < kOcclusionViews; ++v)
+			phases |= impl->readyModes[OcclusionModeOf(v)] && impl->occlusionDrawable[v] && SceneStore::OcclusionEnabled(v) ? SetPhaseOfMode(OcclusionModeOf(v)) : 0;
+		return phases;
+	}
+
+	std::uint64_t IndirectDraws::ShadowReadinessSerial() const
+	{
+		return impl->shadowReadinessSerial;
+	}
+
+	bool IndirectDraws::PhaseReady(std::uint32_t a_slot, std::uint8_t a_phase) const
+	{
+		const auto& store = SceneStore::Get();
+		const auto& tables = store.GetTables();
+		const auto& lookups = store.GetLookups();
+		if (a_slot >= tables.objects.size() || a_slot >= tables.shadowTechnique.size())
+			return false;
+		const auto& object = tables.objects[a_slot];
+		if (object.geometryIndex >= tables.geometries.size())
+			return false;
+		// An occluder under a fade node: the engine's cull of the map goes into it only as the node's fade allows
+		// (BuildDrawsCS, FadedOutOfOcclusion), which DCLF knows for a root it services (kFadeRootOwned, FadeStateCS) and no other.
+		if (a_phase & (kSetOccluderSky | kSetOccluderPrecipitation)) {
+			const auto* geometry = a_slot < tables.objectGeometry.size() ? tables.objectGeometry[a_slot] : nullptr;
+			const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+			if (const auto* node = property ? property->fadeNode : nullptr) {
+				const std::uint32_t root = a_slot < tables.objectFadeRoot.size() ? tables.objectFadeRoot[a_slot] : kNoFadeRoot;
+				if (root >= tables.fadeRoots.size() || tables.fadeRootNode[root] != node || !(tables.fadeRoots[root].bits & kFadeRootOwned))
+					return false;
 			}
 		}
-		PassCapture::Get().PublishShadowClaims(modeIndex, std::move(claims));
-		a_stats.claimMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+		// The shadow build's rule (BuildKeptShadow's evaluate): every view of the object's class in each of the phase's modes drawn
+		// has its pipeline, and an alpha-tested technique's diffuse is imported.
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			if (SetPhaseOfMode(m) != a_phase || !impl->readyModes[m])
+				continue;
+			const std::uint32_t technique = ModeTechnique(tables, m, a_slot);
+			if (!technique)
+				continue;
+			const auto& states = impl->readyStates[m].Of(VolumetricClass(m, object.flags));
+			if (states.empty())
+				continue;
+			const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u, VertexLayoutOf(tables.geometries[object.geometryIndex].vertexDesc) };
+			const auto slot = lookups.shadowSlots.find(key);
+			if (slot == lookups.shadowSlots.end())
+				return false;
+			for (const std::uint32_t state : states)
+				if (lookups.ShadowMapPipeline(state, slot->second) == Lookups::kNone)
+					return false;
+			if (technique & 0x80) {
+				auto* diffuse = a_slot < tables.shadowDiffuse.size() ? tables.shadowDiffuse[a_slot] : nullptr;
+				const auto texture = diffuse ? lookups.shadowTextures.find(diffuse) : lookups.shadowTextures.end();
+				if (texture == lookups.shadowTextures.end() || texture->second == Lookups::kNone)
+					return false;
+			}
+		}
+		return true;
 	}
 }
 

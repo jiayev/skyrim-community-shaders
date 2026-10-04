@@ -755,7 +755,10 @@ namespace DCLF
 			CheckPulledBindings(pulledVertex, false);
 			CheckPulledBindings(pulledDepthPixel, true);
 			auto built = std::make_shared<Built>();
-			const bool pulledPixel = FragmentDefersDepth(a_program->pulledDepthPixel);
+			// CS_DCLF_FOLIAGE_PARITY: terrain LOD's depth stage records the pixels it owns (Lighting.hlsl, DCLF_OWNED_PARITY), so it
+			// keeps its pixel stage.
+			const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
+			const bool pulledPixel = FragmentDefersDepth(a_program->pulledDepthPixel) || (FoliageParityOn() && (technique == 9 || technique == 18));
 			AddUsage(vertex, false, built->usage[kColorVariant]);
 			AddUsage(pixel, true, built->usage[kColorVariant]);
 			AddUsage(vertex, false, built->usage[kDepthVariant]);
@@ -1119,11 +1122,12 @@ namespace DCLF
 			if (!DeferredBlendState(0, 0, Impl::kOpaqueWriteMode, 0))
 				return kNotReady;
 			constexpr std::uint32_t kDoAlphaTest = 1u << 20;
-			// Object LOD (LODObjects, LODObjectHD) is drawn in write mode 1 alpha-tested or not: the engine's main-pass draws of it
-			// all take it (dclf-lod.md, the census), so the G-buffer's alphas keep what lies beneath, as the native draw leaves them.
+			// LOD (LODLand 9, LODObjects 13, LODObjectHD 15, LODLandNoise 18) is drawn in write mode 1 alpha-tested or not: the
+			// engine's main-pass draws of it all take it (dclf-lod.md, the census), so the G-buffer's alphas keep what lies beneath,
+			// as the native draw leaves them.
 			const std::uint32_t technique = (a_key.passDescriptor >> 24) & 0x3f;
-			const bool lodObject = technique == 13 || technique == 15;
-			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lodObject ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
+			const bool lod = technique == 9 || technique == 13 || technique == 15 || technique == 18;
+			const std::uint32_t writeMode = (a_key.pixelDescriptor & kDoAlphaTest) && !lod ? Impl::kAlphaTestedWriteMode : Impl::kOpaqueWriteMode;
 			const std::uint32_t opaqueBits = writeMode << kRasterWriteModeShift;
 			auto it = impl->engineStates.find(opaqueBits);
 			if (it == impl->engineStates.end()) {

@@ -103,7 +103,7 @@ namespace DCLF
 			float world[12];
 			float previousWorld[12];
 			StoreTransform(geometry->world, world);
-			StoreTransform(geometry->previousWorld, previousWorld);
+			StoreTransform(DrawnPreviousWorld(*geometry), previousWorld);
 			const float center[3]{ geometry->worldBound.center.x, geometry->worldBound.center.y, geometry->worldBound.center.z };
 			const float radius = geometry->worldBound.radius;
 			// SunEntryOf, for a resolved entry.

@@ -27,7 +27,7 @@ namespace DCLF
 	 * views draw and the registration then withholds (PassCapture). The exclusion is BuildSunExclusion's for the
 	 * paraboloid mode, over the light candidates (SceneStore::GetLightCandidates): an entry all of whose shadow casters are that
 	 * mode's inputs. The process's Process1 (vtable slot 0x16)
-	 * skips such an entry while that mode's claims are live this frame and the exclusion was built for the current candidates.
+	 * skips such an entry while the set withholds that mode's casters this frame and the exclusion was built for the current candidates.
 	 * CS_DCLF_LIGHT_EXCLUDE=0 turns it off; =probe skips nothing and counts. On persistent-parity frames nothing is skipped
 	 * and a paraboloid pass the registration did not withhold under an excluded entry counts as one the skip would lose.
 	 */
@@ -36,7 +36,7 @@ namespace DCLF
 		void Install();
 		/** @brief Render thread, after the shadow epoch drew the paraboloid views: next frame's exclusion (null: none). */
 		void Publish(std::shared_ptr<SunExclusion> a_exclusion);
-		/** @brief Render thread, at the scene frame's start (after the frame's claims are selected): this frame's exclusion. */
+		/** @brief Render thread, at the scene frame's start: this frame's exclusion. */
 		void SelectFrame(std::uint32_t a_frame);
 		/** @brief PassCapture's registration hook, on parity frames: a pass the skip would have kept from the engine. */
 		void NoteRegistration(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_withheld, std::uint32_t a_source = 0);

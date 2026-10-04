@@ -59,8 +59,8 @@ namespace DCLF
 		// A multi-index shape's layer object (SceneStore::Tracked::layerSlot): the shadow modes register the main property's
 		// passes alone (FUN_1414b2a60), so the additional property never casts.
 		Layer,
-		// Object LOD (a BSSubIndexTriShape with the LOD object flags, under TES::lodLandRoot): no shadow cull reaches the LOD root,
-		// and measured, no shadow mode ever registers it (dclf-lod.md, the census).
+		// Object and terrain LOD (under TES::lodLandRoot: IsLodObject, IsLodLand): no shadow cull reaches the LOD root, and
+		// measured, no shadow mode ever registers either (dclf-lod.md, the census).
 		Lod,
 		Count
 	};
@@ -72,6 +72,26 @@ namespace DCLF
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 		return const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kSubIndexTriShape &&
 		       a_property.flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+	}
+
+	/**
+	 * @brief The previous transform BSLightingShader::SetupGeometry (0x1414dd040) draws a_geometry with: for LOD (techniques 9, 13, 15
+	 * and 18: IsLodObject, IsLodLand) its current one with the previous posAdjust, else NiAVObject::previousWorld. A terrain LOD
+	 * chunk the terrain manager placed keeps the previousWorld it was loaded with (the origin) for good.
+	 */
+	inline const RE::NiTransform& DrawnPreviousWorld(const RE::BSGeometry& a_geometry);
+
+	/** @brief Terrain LOD: a BSTriShape whose Lighting property has the LOD landscape flag (dclf-lod.md, "Terrain LOD"). */
+	inline bool IsLodLand(const RE::BSLightingShaderProperty& a_property, const RE::BSGeometry& a_geometry)
+	{
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		return const_cast<RE::BSGeometry&>(a_geometry).GetType().get() == RE::BSGeometry::Type::kTriShape && a_property.flags.all(Flag::kLODLandscape);
+	}
+
+	inline const RE::NiTransform& DrawnPreviousWorld(const RE::BSGeometry& a_geometry)
+	{
+		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_geometry.GetGeometryRuntimeData().shaderProperty.get());
+		return lighting && (IsLodObject(*lighting, a_geometry) || IsLodLand(*lighting, a_geometry)) ? a_geometry.world : a_geometry.previousWorld;
 	}
 
 	/**
@@ -151,7 +171,7 @@ namespace DCLF
 			/**
 			 * @brief The accumulator's render mode as it stands at Rebuild - the mode the view was drawn
 			 * with LAST frame (0xD plain, 0xE clamped, 0xF paraboloid), which is stable for a descriptor;
-			 * 0 before its first draw. It is what attributes a registration to a mode's claim set.
+			 * 0 before its first draw. It is what attributes a registration to a mode's phase of the set.
 			 */
 			std::uint32_t renderMode = 0;
 		};

@@ -201,6 +201,7 @@ namespace DCLF
 		std::map<std::uint8_t, std::uint64_t> notInTablesBy;  // by its verdict now (Ineligible), and the first of each named
 		std::map<std::uint8_t, std::string> notInTablesFirst;
 		std::uint64_t nativeOnlyPasses = 0;    // native passes of objects DCLF draws that DCLF does not model (hint 10)
+		std::uint64_t perDrawNormalised = 0;   // checked passes whose descriptor differs only in the bits DCLF's draw decides (PerDrawBits): another technique's state, so only the descriptors are compared
 		ankerl::unordered_dense::set<std::uint32_t> renderFlagsSeen;
 		std::vector<std::string> samples;  // first few mismatch descriptions per report
 	};

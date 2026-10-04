@@ -50,8 +50,7 @@ namespace DCLF::Draws
 		if (rowsDiffer("material rows", a.materialRows, b.materialRows, sizeof(MaterialRow)) ||
 			rowsDiffer("pipeline rows", a.pipelineRows, b.pipelineRows, sizeof(PipelineRow)) ||
 			vectorDiffers("sequences", a.sequences, b.sequences) || vectorDiffers("inputs", a.inputList, b.inputList) ||
-			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || a.frameRegisters != b.frameRegisters ||
-			a.drawnChanges.size() != b.drawnChanges.size())
+			vectorDiffers("geometries", a.geometryDraws.Flat(), b.geometryDraws.Flat()) || a.frameRegisters != b.frameRegisters)
 			return false;
 		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
 			if (vectorDiffers("decal templates", a.decalTemplates[group], b.decalTemplates[group]))
@@ -293,6 +292,15 @@ namespace DCLF
 				counts.colourDrawnTotal += colourDrawn;
 				const char* kind = nullptr;
 				const bool decal = o < snapshot.colourState.size() && snapshot.colourState[o] == kObjectStateDecal;
+				counts.recordDisagrees += (flags & 8) ? 1 : 0;
+				if (!withheld && (depthDrawn || colourDrawn)) {
+					++counts.outsideDrawn;
+					if (counts.samples++ < 40) {
+						const auto* geometry = o < snapshot.geometry.size() ? snapshot.geometry[o] : nullptr;
+						logger::info("[DCLF] set parity, frame {}: drawn outside the set - object {} '{}' ({}{})", snapshot.frame, o,
+							geometry && store.IsTracked(geometry) ? geometry->name.c_str() : "?", depthDrawn ? "depth" : "", colourDrawn ? " colour" : "");
+					}
+				}
 				// A decal is drawn by the colour segment's decal pass only (the depth segment never draws one), so it
 				// is only checked for being withheld and undrawn.
 				if (!decal && depthDrawn && !colourDrawn) {
@@ -308,7 +316,7 @@ namespace DCLF
 					if (verdict == 0 || verdict == 2) {
 						++counts.withheldCulled;  // the GPU culling rejected it: not drawn by anyone, as intended
 					} else {
-						kind = "withheld natively, drawn by nobody";
+						kind = "in the set, drawn by nobody";
 						++counts.withheldUndrawn;
 						counts.alphaWithheldUndrawn += alpha;
 					}
@@ -323,16 +331,18 @@ namespace DCLF
 						const std::uint32_t gapVerdict = history.last >> 4;
 						counts.gapsRetest += gapVerdict == 0;
 						counts.gapsRejected += gapVerdict == 2;
+						// The snapshot is frames old: a geometry released since (a teleport, a cell unloading) is not read.
+						const bool alive = store.IsTracked(geometry);
 						const RE::TESObjectREFR* owner = nullptr;
-						for (const RE::NiAVObject* node = geometry; node && !owner; node = node->parent)
+						for (const RE::NiAVObject* node = alive ? geometry : nullptr; node && !owner; node = node->parent)
 							owner = node->GetUserData();
 						const auto* base = owner ? owner->GetBaseObject() : nullptr;
 						const bool tree = base && base->GetFormType() == RE::FormType::Tree;
 						counts.gapsTree += tree;
 						if (counts.gapSamples++ < 12)
 							logger::info("[DCLF] set parity, frame {}: one-frame gap - '{}' ({}{}), culled in frame {} with verdict {}", snapshot.frame,
-								geometry->name.c_str() ? geometry->name.c_str() : "?", base ? RE::FormTypeToString(base->GetFormType()) : "no ref",
-								geometry->GetGeometryRuntimeData().skinInstance ? ", skinned" : "", snapshot.frame - 1,
+								alive && geometry->name.c_str() ? geometry->name.c_str() : "?", base ? RE::FormTypeToString(base->GetFormType()) : "no ref",
+								alive && geometry->GetGeometryRuntimeData().skinInstance ? ", skinned" : "", snapshot.frame - 1,
 								gapVerdict == 0 ? "occluded (retest)" : gapVerdict == 2 ? "rejected" : "other");
 					}
 					history.before = history.frame + 1 == snapshot.frame ? history.last : 0;
@@ -350,7 +360,7 @@ namespace DCLF
 						alive ? geometry->name.c_str() : "?", alpha ? " (alpha tested)" : "", current ? kVerdicts[verdict] : "not this frame's",
 						stateName(o < snapshot.depthState.size() ? snapshot.depthState[o] : kObjectStateAbsent),
 						stateName(o < snapshot.colourState.size() ? snapshot.colourState[o] : kObjectStateAbsent),
-						(flags & 2) ? "member" : "not bound", (flags & 8) ? ", claimed" : "", withheld ? ", withheld" : "");
+						(flags & 2) ? "bound" : "not bound", withheld ? ", in the set" : "", (flags & 8) ? ", RECORD DISAGREES" : "");
 				}
 			}
 			context->Unmap(snapshot.staging.get(), 0);
@@ -358,10 +368,11 @@ namespace DCLF
 			++counts.frames;
 			counts.framesWithDamage += damaged;
 			if (counts.frames == 300) {
-				logger::info("[DCLF] set parity over {} frames ({} with damage, {} unread): depth without colour {} ({} alpha tested), colour without depth {} ({} alpha tested, {} with no verdict), withheld and drawn by nobody {} ({} alpha tested); withheld and GPU-culled {}; per frame {:.0f} depth draws, {:.0f} colour draws",
+				logger::info("[DCLF] set parity over {} frames ({} with damage, {} unread): depth without colour {} ({} alpha tested), colour without depth {} ({} alpha tested, {} with no verdict), in the set and drawn by nobody {} ({} alpha tested); in the set and GPU-culled {}; drawn outside the set {}; records disagreeing with the set {}; per frame {:.0f} depth draws, {:.0f} colour draws{}",
 					counts.frames, counts.framesWithDamage, counts.skipped, counts.depthOnly, counts.alphaDepthOnly, counts.colourOnly, counts.alphaColourOnly,
-					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, double(counts.depthDrawnTotal) / counts.frames,
-					double(counts.colourDrawnTotal) / counts.frames);
+					counts.colourUnpublished, counts.withheldUndrawn, counts.alphaWithheldUndrawn, counts.withheldCulled, counts.outsideDrawn, counts.recordDisagrees,
+					double(counts.depthDrawnTotal) / counts.frames, double(counts.colourDrawnTotal) / counts.frames,
+					counts.depthOnly || counts.colourOnly || counts.withheldUndrawn || counts.outsideDrawn || counts.recordDisagrees ? " <- SET PARITY" : " <- OK");
 				if (counts.gaps)
 					logger::info("[DCLF] set parity over {} frames: {} one-frame gaps (kept, drawn, withheld and GPU-culled, drawn again): {} occluded (retest), {} rejected; {} of them trees",
 						counts.frames, counts.gaps, counts.gapsRetest, counts.gapsRejected, counts.gapsTree);
@@ -401,11 +412,9 @@ namespace DCLF
 		snapshot.depthState = a_depth.objectState;
 		snapshot.colourState = a_colour.objectState;
 		const auto& tables = store.GetTables();
-		const auto claims = PassCapture::Get().CurrentClaims();
 		const std::size_t objects = tables.objects.size();
-		// Left out of the engine's cull or registration this frame (PrimaryCull): the native loop does not draw it.
-		const auto& stoodIn = PrimaryCull::Get().StoodInMembers();
-		const ankerl::unordered_dense::set<const RE::BSGeometry*> leftOut(stoodIn.begin(), stoodIn.end());
+		// The frame's set: the engine withholds every member from the main camera's views, so one the GPU culling kept and
+		// neither segment drew is drawn by nobody.
 		snapshot.flags.assign(objects, 0);
 		snapshot.geometry.assign(objects, nullptr);
 		for (std::size_t o = 0; o < objects && o < tables.objectGeometry.size(); ++o) {
@@ -413,15 +422,15 @@ namespace DCLF
 			snapshot.geometry[o] = geometry;
 			const auto objectFlags = tables.objects[o].flags;
 			std::uint8_t flags = 0;
-			if (objectFlags & kObjectMember)
+			if (store.SetPhasesOf(static_cast<std::int32_t>(o)) & kSetMain)
+				flags |= 1;
+			if (store.IsMember(static_cast<std::int32_t>(o)))
 				flags |= 2;
 			if (objectFlags & kObjectAlphaTest)
 				flags |= 4;
-			if (geometry && claims && claims->contains(geometry)) {
+			// The record the builds read must say the same (kObjectMember is the set's bit).
+			if (((objectFlags & kObjectMember) != 0) != ((flags & 1) != 0))
 				flags |= 8;
-				if (leftOut.contains(geometry))
-					flags |= 1;
-			}
 			snapshot.flags[o] = flags;
 		}
 		setParityFrames.push_back(std::move(snapshot));

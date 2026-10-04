@@ -452,9 +452,6 @@ void Deferred::EndDeferred()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	if (globals::features::drawcallLimitFix.loaded)
-		globals::features::drawcallLimitFix.PublishOwnership();
-
 	DeferredPasses();  // Perform deferred passes and composite forward buffers
 	if (globals::features::drawcallLimitFix.loaded)
 		globals::features::drawcallLimitFix.ProbeOpaqueTarget(3);

@@ -104,8 +104,9 @@ namespace DCLF
 			if (auto* objRoot = tes->objRoot)
 				hash.Mix(objRoot->GetChildren().size());
 			mix(tes->objRoot);
-			// Object LOD's root (RefreshCategoryNodes), with the toggle that lists it.
-			mix(ActiveToggles().lodObjects ? tes->lodLandRoot : nullptr);
+			// The LOD root (RefreshCategoryNodes), with the toggles that list it.
+			mix(ActiveToggles().lodObjects || ActiveToggles().lodTerrain ? tes->lodLandRoot : nullptr);
+			hash.Mix((ActiveToggles().lodObjects ? 1u : 0u) | (ActiveToggles().lodTerrain ? 2u : 0u));
 			mix(tes->interiorCell);
 			if (tes->interiorCell) {
 				mixCell(tes->interiorCell);
@@ -177,10 +178,11 @@ namespace DCLF
 						current.insert(multiBound);
 				}
 			}
-			// Object LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode per block, its
-			// BSSubIndexTriShapes one segment per cell), attached and detached as the camera moves (dclf-lod.md). The root is
-			// the category node; what attaches under it is tracked by the same structural events as a cell's content.
-			if (ActiveToggles().lodObjects && tes->lodLandRoot)
+			// Object and terrain LOD: TES::lodLandRoot holds the terrain manager's LOD blocks (a BSMultiBoundNode per block: object
+			// LOD's BSSubIndexTriShapes, one segment per cell, and the land's BSTriShapes), attached and detached as the camera moves
+			// (dclf-lod.md). The root is the category node; what attaches under it is tracked by the same structural events as a
+			// cell's content. A class whose toggle is off classifies as Lod.
+			if ((ActiveToggles().lodObjects || ActiveToggles().lodTerrain) && tes->lodLandRoot)
 				current.insert(tes->lodLandRoot);
 			if (tes->interiorCell) {
 				addCell(tes->interiorCell);

@@ -5,6 +5,15 @@
 
 namespace DCLF::Draws
 {
+	namespace
+	{
+		/** @brief In the frame's DCLF set with the mode's phase (Tables::setPhases): the only objects the mode's views draw. */
+		bool SetCaster(const SceneStore::Tables& a_tables, std::uint32_t a_object, std::uint32_t a_mode)
+		{
+			return a_object < a_tables.setPhases.size() && (a_tables.setPhases[a_object] & SetPhaseOfMode(a_mode)) != 0;
+		}
+	}
+
 	/** @brief The kept path of BuildShadowPayload: the material rows and the inputs from the kept state (ShadowKept). */
 	void BuildKeptShadow(const ShadowInputs& a_in, const SceneStore::Tables& a_tables, const Lookups& a_lookups, ShadowPayload& a_out, ShadowKept& k,
 		const ShadowMaterialRow& a_plain)
@@ -156,11 +165,20 @@ namespace DCLF::Draws
 				return 0;
 			if (occlusionMode ? !ModeTechnique(a_tables, m, o) : (object.flags & kObjectNoShadow) != 0)
 				return 0;
+			// A shadow view draws the set's casters, every one of them: the engine draws the rest. A member it cannot draw is a
+			// defect (the set's readiness covers its pipelines and its diffuse), counted with what waits.
+			if (!SetCaster(a_tables, o, m))
+				return 0;
 			const std::uint32_t record = k.objectRecord[o];
 			if (record == ShadowKept::kNoRecord)
 				return 0;
-			if (record != 0 && !(record < k.slotReady.size() && k.slotReady[record]))
+			auto wait = [&](const char* a_why, std::uint32_t a_value) {
+				if (a_out.setWaitingFirst.empty())
+					a_out.setWaitingFirst = fmt::format("object {} mode {}: {} {} (row capacity {})", o, m, a_why, a_value, a_in.addresses.recordCapacity);
 				return 2;
+			};
+			if (record != 0 && !(record < k.slotReady.size() && k.slotReady[record]))
+				return wait("material row", record);
 			const bool volumetricOnly = VolumetricClass(m, object.flags);
 			const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
 			if (classStates.empty())
@@ -170,10 +188,10 @@ namespace DCLF::Draws
 				VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
 			const auto slotIt = a_lookups.shadowSlots.find(key);
 			if (slotIt == a_lookups.shadowSlots.end())
-				return 2;
+				return wait("no key slot for technique", technique);
 			for (const std::uint32_t state : classStates)
 				if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone)
-					return 2;
+					return wait("no pipeline under state", state);
 			if (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))
 				return 3;
 			a_input = { slotIt->second, record, object.geometryIndex, InputFlagsOf(m, object.flags),
@@ -183,12 +201,6 @@ namespace DCLF::Draws
 		auto removeEntry = [&](ShadowKept::Mode& a_mode, std::uint32_t o) {
 			if (!a_mode.Holds(o))
 				return;
-			if (o < a_mode.claimedOf.size() && a_mode.claimedOf[o]) {
-				if (const auto held = a_mode.claims.find(a_mode.claimedOf[o]); held != a_mode.claims.end() && held->second == o)
-					a_mode.claims.erase(held);
-				a_mode.claimedOf[o] = nullptr;
-				a_mode.claimsChanged = true;
-			}
 			a_mode.Remove(o);
 			a_mode.membership = build;
 			++k.entriesWritten;
@@ -203,12 +215,9 @@ namespace DCLF::Draws
 				a_mark[o] = 0;  // dropped from the list at its next pass
 			}
 		};
-		// Claims hold a geometry: the one a slot draws now (a slot reused by another object removed its entry first).
 		auto take = [&](std::uint32_t m, std::uint32_t o) {
 			auto& mode = k.modes[m];
 			mode.Cover(objects);
-			if (mode.claimedOf.size() < objects)
-				mode.claimedOf.resize(objects, nullptr);
 			DrawInput input{};
 			const int result = o < a_tables.objects.size() ? evaluate(m, o, input) : 0;
 			setMark(mode.waiting, mode.waitingMark, o, result == 2);
@@ -228,18 +237,6 @@ namespace DCLF::Draws
 			} else if (mode.inputs.Set(i, input)) {
 				++k.entriesWritten;
 			}
-			// Its claim: the geometry the slot draws now.
-			const auto* geometry = o < a_tables.objectGeometry.size() ? a_tables.objectGeometry[o] : nullptr;
-			if (mode.claimedOf[o] != geometry) {
-				if (mode.claimedOf[o])
-					if (const auto held = mode.claims.find(mode.claimedOf[o]); held != mode.claims.end() && held->second == o)
-						mode.claims.erase(held);
-				if (geometry)
-					mode.claims[geometry] = o;
-				mode.claimedOf[o] = geometry;
-				mode.claimsChanged = true;
-			}
-			return;
 		};
 
 		// The objects the log names (or every object on a resync, or when a mode's views changed their states - a record
@@ -346,7 +343,6 @@ namespace DCLF::Draws
 				continue;
 			// The frame's list: the face shapes, with their positions of this walk.
 			auto& list = a_out.inputList[m];
-			std::vector<const RE::BSGeometry*> faceGeometries;
 			std::size_t keptFaces = 0;
 			for (const std::uint32_t o : mode.faces) {
 				if (o >= mode.faceMark.size() || !mode.faceMark[o])
@@ -364,36 +360,15 @@ namespace DCLF::Draws
 					continue;
 				list.push_back({ slotIt->second, k.objectRecord[o], object.geometryIndex, (object.flags & ~kObjectDecal) | kInputDrawable,
 					{}, 0.0f, o, 0, PartitionsOf(a_tables, o), streamIndex, FadeRootOf(a_tables, o) });
-				if (o < a_tables.objectGeometry.size() && a_tables.objectGeometry[o])
-					faceGeometries.push_back(a_tables.objectGeometry[o]);
 			}
 			mode.faces.resize(keptFaces);
-			// The claims: the region's, and the frame's list's; a new set only when either changed.
-			std::sort(faceGeometries.begin(), faceGeometries.end());
-			if (mode.claimsChanged || faceGeometries != mode.lastFaces || !mode.published) {
-				auto claims = std::make_shared<PassCapture::ClaimSet>();
-				claims->reserve(mode.claims.size() + faceGeometries.size());
-				for (const auto& [geometry, owner] : mode.claims)
-					claims->insert(geometry);
-				claims->insert(faceGeometries.begin(), faceGeometries.end());
-				mode.published = std::move(claims);
-				mode.lastFaces = std::move(faceGeometries);
-				mode.claimsChanged = false;
-			}
-			if (!IsOcclusionMode(m))
-				a_out.claims[m] = mode.published;
 			a_out.regionInputs[m] = mode.inputs.View();
 			a_out.membership[m] = mode.membership;
-			// The skip counters, as the loop kept them: what waits.
+			// The skip counters, as the loop kept them: what waits (only set members: a defect).
 			a_out.deferredPipelines += static_cast<std::uint32_t>(mode.waiting.size());
 			a_out.skippedPipeline += static_cast<std::uint32_t>(mode.waiting.size());
-		}
-		// An occlusion map is DCLF's only when every occluder is drawn: what waits leaves it to the engine this frame.
-		for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
-			const std::uint32_t m = OcclusionModeOf(v);
-			if (a_in.modeUsed[m])
-				for (const std::uint32_t o : k.modes[m].waiting)
-					a_out.occlusionSkipped[v] += o < k.modes[m].waitingMark.size() && k.modes[m].waitingMark[o] ? 1 : 0;
+			for (const std::uint32_t o : mode.waiting)
+				a_out.setWaiting += o < mode.waitingMark.size() && mode.waitingMark[o] ? 1 : 0;
 		}
 		a_out.kept = true;
 		a_out.materialRows = k.rows.View();
@@ -549,11 +524,6 @@ namespace DCLF::Draws
 			}
 			if (matched != keptInputs.size())
 				fail(~0u, fmt::format("mode {}: {} inputs of the kept build only", m, keptInputs.size() - matched));
-			if (!IsOcclusionMode(m) && a_kept.claims[m]) {
-				const auto claims = ShadowClaimSet(reference.inputList[m], a_tables);
-				if (*claims != *a_kept.claims[m])
-					fail(~0u, fmt::format("mode {}: the claims differ ({} against {})", m, a_kept.claims[m]->size(), claims->size()));
-			}
 		}
 	}
 
@@ -719,16 +689,30 @@ namespace DCLF::Draws
 				const auto& object = a_tables.objects[o];
 				if (occlusionMode ? !ModeTechnique(a_tables, m, o) : (object.flags & kObjectNoShadow) != 0)
 					continue;
+				// The set's members of the mode's phase alone (BuildKeptShadow's rule); a member skipped below is a defect.
+				const bool member = SetCaster(a_tables, static_cast<std::uint32_t>(o), m);
+				if (!member)
+					continue;
+				struct MemberSkip
+				{
+					bool armed;
+					std::uint32_t& count;
+					~MemberSkip() { count += armed ? 1 : 0; }
+				} memberSkip{ member, a_out.setWaiting };
 				if (objectRecord[o] == ~0u) {
-					a_out.occlusionSkipped[occlusionMode ? OcclusionOfMode(m) : 0] += occlusionMode ? 1 : 0;
 					continue;
 				}
 				// The states of the views that draw this caster's class. A volumetric-only caster with no view
-				// of the copy under this mode is no input at all: it is then the engine's, unclaimed.
+				// of the copy under this mode is no input at all.
 				const bool volumetricOnly = VolumetricClass(m, object.flags);
 				const auto& classStates = a_in.modeRasterStates[m].Of(volumetricOnly);
-				if (volumetricOnly && classStates.empty())
+				if (volumetricOnly && classStates.empty()) {
+					memberSkip.armed = false;
 					continue;
+				}
+				// No view of the caster's class under this mode: no input, and nothing of it withheld there.
+				if (classStates.empty())
+					memberSkip.armed = false;
 				const std::uint32_t technique = ModeTechnique(a_tables, m, o);
 				const ShadowPipelineKey key{ technique, (object.flags & kObjectTwoSided) ? kRasterTwoSided : 0u,
 					VertexLayoutOf(a_tables.geometries[object.geometryIndex].vertexDesc) };
@@ -736,11 +720,10 @@ namespace DCLF::Draws
 				if (slotIt == a_lookups.shadowSlots.end()) {
 					++a_out.deferredPipelines;
 					++a_out.skippedPipeline;
-					a_out.occlusionSkipped[occlusionMode ? OcclusionOfMode(m) : 0] += occlusionMode ? 1 : 0;
 					continue;
 				}
-				// Every view of the mode has to be able to draw it: the claim withholds the engine's pass
-				// from all of them, so a view without the pipeline would leave the caster to nobody.
+				// Every view of the mode has to be able to draw it: the set withholds the engine's pass from all of them, so a view
+				// without the pipeline would leave the caster to nobody (the set's readiness covers it: IndirectDraws::PhaseReady).
 				bool deferred = false, missing = false;
 				for (const std::uint32_t state : classStates) {
 					if (a_lookups.ShadowMapPipeline(state, slotIt->second) == Lookups::kNone) {
@@ -752,7 +735,6 @@ namespace DCLF::Draws
 				if (deferred || missing || classStates.empty()) {
 					a_out.deferredPipelines += deferred ? 1 : 0;
 					++a_out.skippedPipeline;
-					a_out.occlusionSkipped[occlusionMode ? OcclusionOfMode(m) : 0] += occlusionMode ? 1 : 0;
 					continue;
 				}
 				// A face shape draws only with its positions: without them (no buffer, the geometry table full) it
@@ -761,7 +743,6 @@ namespace DCLF::Draws
 				// geometry's own buffer and draw its other attributes as positions.
 				const std::uint32_t streamIndex = FaceStreamGeometry(a_tables, o, a_in.addresses.facePositions);
 				if (streamIndex == ~0u && (IsFaceObject(a_tables, o) || (key.vertexLayout & kPositionInSecondStream))) {
-					a_out.occlusionSkipped[occlusionMode ? OcclusionOfMode(m) : 0] += occlusionMode ? 1 : 0;
 					continue;
 				}
 				// The sun's entry rule (kCullSunEntry): BuildDraws tests the entry's sphere, carried in the fade row, against the
@@ -769,6 +750,7 @@ namespace DCLF::Draws
 				inputs.push_back({ slotIt->second, objectRecord[o], object.geometryIndex, InputFlagsOf(m, object.flags),
 					{}, 0.0f, static_cast<std::uint32_t>(o), 0,
 					PartitionsOf(a_tables, static_cast<std::uint32_t>(o)), streamIndex, FadeRootOf(a_tables, static_cast<std::uint32_t>(o)) });
+				memberSkip.armed = false;
 			}
 		}
 		CountModeDraws(a_out);

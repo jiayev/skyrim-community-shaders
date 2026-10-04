@@ -106,6 +106,7 @@ static const uint kFadeRootOwned = 1u << 18;
 static const uint kFadeRootStoodIn = 1u << 19;
 static const uint kFadeVerdictServiced = 1u << 2;
 static const uint kFadeVerdictDrawn = 1u << 3;
+static const uint kFadeFlagSettled = 1u << 15;
 
 // Whether a fade root slot (~0u: none) is stood in (kFadeRootStoodIn) and not fully faded in: its state row's fade, or the
 // static row's as listed until FadeStateCS's first update of a new generation.
@@ -120,6 +121,27 @@ bool StoodInFading(uint a_root)
 	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
 	const FadeNodeState state = fadeStates[a_root];
 	return (state.Generation == row.Generation ? state.CurrentFade : row.Initial.CurrentFade) < 1.0;
+}
+
+// Whether BSFadeNode::OnVisible stops at a fade root slot (~0u: none) for a culling process without cameraRelatedUpdates
+// (Precipitation::SetupMask's, Skylighting's occlusion map): with fades on, a root that is not settled goes on into its
+// children only while its fade is above 0 and its fadeAmount is not 0 - the fade as the main camera's cull left it, which
+// FadeStateCS keeps for an owned root (the occluder phase holds no other: IndirectDraws::PhaseReady).
+bool FadedOutOfOcclusion(uint a_root)
+{
+	if (a_root == 0xFFFFFFFFu)
+		return false;
+	StructuredBuffer<FadeRootStatic> fadeRoots = ResourceDescriptorHeap[FadeRootsIndex];
+	const FadeRootStatic row = fadeRoots[a_root];
+	if ((row.Bits & kFadeRootOwned) == 0)
+		return false;
+	StructuredBuffer<FadeNodeState> fadeStates = ResourceDescriptorHeap[FadeStatesIndex];
+	FadeNodeState state = fadeStates[a_root];
+	if (state.Generation != row.Generation)
+		state = row.Initial;
+	if ((state.Flags & kFadeFlagSettled) != 0 && row.FadeAmount == 1.0 && state.CurrentFade == 1.0)
+		return false;
+	return !(state.CurrentFade > 0.0) || row.FadeAmount == 0.0;
 }
 
 // The execution's values, from the latch (BuildDrawsLatch): read once per thread at the top of main. The
@@ -351,6 +373,9 @@ bool SunEntry() { return (CullFlags & 0x1000) != 0; }
 // Skylighting's size test, for its occlusion map's view (IndirectDraws.cpp: kCullMinRadius): a bound radius of 32 or less draws
 // nothing, as Skylighting::OcclusionTechnique has it.
 bool MinRadius() { return (CullFlags & 0x2000) != 0; }
+// The occlusion map's view (kCullFadeOnVisible): its occluders' fade roots as BSFadeNode::OnVisible tests them without
+// cameraRelatedUpdates (FadedOutOfOcclusion), instead of a shadow view's stood-in fading test.
+bool FadeOnVisible() { return (CullFlags & 0x4000) != 0; }
 
 uint2 HzbBaseSize() { return uint2(HzbSizePacked & 0xFFFF, HzbSizePacked >> 16); }
 float2 HzbUvScale() { return float2(HzbUvScalePacked & 0xFFFF, HzbUvScalePacked >> 16) / 65535.0; }
@@ -392,7 +417,7 @@ static const uint kCountDrawn = 0;          // sequences written
 static const uint kCountCulled = 4;         // rejected by this frame's culling
 static const uint kCountTested = 8;         // looked at by the culling at all
 // What a shadow view drops before its culling: inputs of its caster class, then those outside the sun's entry processes, at
-// most the minimum radius, under a stood-in root fading.
+// most the minimum radius, under a stood-in root fading (an occlusion map's view: under a root its OnVisible stops at).
 static const uint kCountSunEntryOut = 12;
 static const uint kCountMinRadius = 16;
 static const uint kCountStoodInFading = 20;
@@ -695,7 +720,8 @@ bool Occluded(float3 boundCentre, float boundRadius)
 	// A shadow view's caster under a stood-in root, whose fade is FadeStateCS's alone: the engine casts no fading caster
 	// (ShadowReject::Faded, fade * materialAlpha < 1; the CPU's verdict took the material's alpha), nor one under a root
 	// faded out.
-	if (phase == kPhaseSingle && FadeRootsIndex != 0 && StoodInFading(inputs.Load(inputOffset + 48))) {
+	if (phase == kPhaseSingle && FadeRootsIndex != 0 &&
+		(FadeOnVisible() ? FadedOutOfOcclusion(inputs.Load(inputOffset + 48)) : StoodInFading(inputs.Load(inputOffset + 48)))) {
 		count.InterlockedAdd(kCountStoodInFading, 1, scratch);
 		return;
 	}

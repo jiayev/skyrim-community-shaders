@@ -38,7 +38,7 @@ namespace DCLF
 		if (!lighting || !a_geometry)
 			return ShadowReject::NotLighting;
 		const std::uint64_t flags = lighting->flags.underlying();
-		if (IsLodObject(*lighting, *a_geometry))
+		if (IsLodObject(*lighting, *a_geometry) || IsLodLand(*lighting, *a_geometry))
 			return ShadowReject::Lod;
 		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
 		const bool blended = alpha && (alpha->alphaFlags & 1);
@@ -72,7 +72,7 @@ namespace DCLF
 		const auto* lighting = netimmerse_cast<const RE::BSLightingShaderProperty*>(a_property);
 		if (!lighting || !a_geometry)
 			return false;
-		if (IsLodObject(*lighting, *a_geometry))
+		if (IsLodObject(*lighting, *a_geometry) || IsLodLand(*lighting, *a_geometry))
 			return true;  // Lod
 		const std::uint64_t flags = lighting->flags.underlying();
 		const auto* alpha = a_geometry->GetGeometryRuntimeData().alphaProperty.get();
@@ -201,9 +201,8 @@ namespace DCLF
 			++lightIndex;
 		}
 		valid = true;
-		// The shadow renderers by render mode, for the registration hook's withholding (static shadow
-		// ownership). Published whole, as the main camera's set is; the hook runs on the engine's
-		// registration threads.
+		// The shadow renderers by render mode, for the registration hook's withholding (the set's shadow phases). Published
+		// whole; the hook runs on the engine's registration threads.
 		auto renderers = std::make_shared<PassCapture::ShadowRendererMap>();
 		for (const auto& [batch, id] : batchToView) {
 			const auto& view = views[id];

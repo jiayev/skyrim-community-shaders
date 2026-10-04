@@ -6,6 +6,7 @@
 
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
+#include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 
 #include <span>
 
@@ -105,84 +106,75 @@ namespace DCLF
 			stats.shadowWithheld[m] = shadowWithheld[m].exchange(0, std::memory_order_relaxed);
 		stats.volumetricWithheld = volumetricWithheld.exchange(0, std::memory_order_relaxed);
 		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
+		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
+		stats.mainCrossfadeCopies = mainCrossfadeCopies.exchange(0, std::memory_order_relaxed);
+		stats.mainUnmodelledFades = mainUnmodelledFades.exchange(0, std::memory_order_relaxed);
+		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
 		lastDrain = { entries.data(), count };
 		return lastDrain;
 	}
 
-	void PassCapture::PublishClaims(std::shared_ptr<const ClaimSet> a_claims)
+	bool PassCapture::ParityBoth()
 	{
-		std::atomic_store(&claims, std::move(a_claims));
+		static const bool both = SwitchEnabled(Switch::ParityBoth);
+		return both;
 	}
 
-	void PassCapture::SelectLegacyFrameClaims()
+	void PassCapture::RefreshMainRenderers()
 	{
-		auto selected = std::make_shared<FrameClaims>();
-		for (std::uint32_t mode = 0; mode < kShadowModes; ++mode)
-			selected->shadow[mode] = std::atomic_load(&shadowClaims[mode]);
-		InstallFrameClaims(std::move(selected));
+		// The Z-prepass's accumulator (render mode 0xC) and the main camera's (render mode 0), as the registration jobs
+		// (FUN_1414cbff0) take them (skyrim-engine-notes.md, "The primary's cull: the scene lists").
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> depthAccumulator{ REL::Offset(0x338c828) };
+		static REL::Relocation<RE::BSGraphics::BSShaderAccumulator**> mainAccumulator{ REL::Offset(0x338c830) };
+		const std::array<const void*, 2> accumulators{ *depthAccumulator, *mainAccumulator };
+		if (accumulators == mainAccumulators && std::atomic_load(&mainRenderers))
+			return;
+		mainAccumulators = accumulators;
+		auto renderers = std::make_shared<RendererSet>();
+		for (auto* accumulator : { *depthAccumulator, *mainAccumulator }) {
+			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
+			if (!batch)
+				continue;
+			renderers->insert(batch);
+			for (auto* group : batch->geometryGroups)
+				if (group && group->batchRenderer)
+					renderers->insert(group->batchRenderer);
+		}
+		logger::info("[DCLF] the main camera's views: {} batch renderers (Z-prepass accumulator {}, main {})", renderers->size(), accumulators[0], accumulators[1]);
+		std::atomic_store(&mainRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
 	}
 
-	void PassCapture::InstallFrameClaims(std::shared_ptr<const FrameClaims> a_claims)
+	bool PassCapture::WithholdMain(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
 	{
-		std::atomic_store(&frameClaims, std::move(a_claims));
+		if (!a_pass || !a_pass->geometry || ParityBoth() || !IsMainRenderer(a_batch))
+			return false;
+		const auto set = std::atomic_load(&frameSet);
+		if (!set || !(set->PhasesOf(a_pass->geometry) & kSetMain))
+			return false;
+		// A LOD cross-fade's copy of the old level is another draw than the member's own: the engine's.
+		if (a_pass->accumulationHint == 10) {
+			mainCrossfadeCopies.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		// A fade DCLF does not model (blended, or a decal's): the engine draws it, and the member leaves the set at the next commit
+		// until the fade ends (SceneStore::CommitSet).
+		if (FadingAtRegistration(a_pass)) {
+			unmodelledFades.Push(a_pass->geometry);
+			mainUnmodelledFades.fetch_add(1, std::memory_order_relaxed);
+			return false;
+		}
+		mainWithheld.fetch_add(1, std::memory_order_relaxed);
+		return true;
 	}
 
 	bool PassCapture::ShadowWithholdingEnabled()
 	{
-		const auto toggles = ActiveToggles();
-		return toggles.shadows && toggles.shadowOwnership;
+		return ActiveToggles().shadows && !ParityBoth();
 	}
 
 	void PassCapture::SetShadowBatchRenderers(std::shared_ptr<const ShadowRendererMap> a_renderers)
 	{
 		std::atomic_store(&shadowRenderers, std::move(a_renderers));
-	}
-
-	void PassCapture::PublishShadowClaims(std::uint32_t a_modeIndex, std::shared_ptr<const ClaimSet> a_claims)
-	{
-		if (a_modeIndex < kShadowModes)
-			std::atomic_store(&shadowClaims[a_modeIndex], std::move(a_claims));
-	}
-
-	void PassCapture::NoteWithheld(std::uint32_t a_mode, const RE::BSGeometry* a_geometry)
-	{
-		static const bool enabled = SwitchEnabled(Switch::SetParity);
-		if (!enabled || a_mode >= kShadowModes)
-			return;
-		std::scoped_lock lock(withheldLogMutex[a_mode]);
-		if (withheldLog[a_mode].size() > (1u << 20))  // not taken (the mode not drawn): no unbounded growth
-			withheldLog[a_mode].clear();
-		withheldLog[a_mode].push_back(a_geometry);
-	}
-
-	std::vector<const RE::BSGeometry*> PassCapture::TakeWithheld(std::uint32_t a_modeIndex)
-	{
-		if (a_modeIndex >= kShadowModes)
-			return {};
-		std::scoped_lock lock(withheldLogMutex[a_modeIndex]);
-		return std::exchange(withheldLog[a_modeIndex], {});
-	}
-
-	bool PassCapture::ShadowModeWithheld(std::uint32_t a_modeIndex) const
-	{
-		if (a_modeIndex >= kShadowModes || !ShadowWithholdingEnabled())
-			return false;
-		const auto selected = std::atomic_load(&frameClaims);
-		const auto modeClaims = selected ? selected->shadow[a_modeIndex] : std::atomic_load(&shadowClaims[a_modeIndex]);
-		return modeClaims && !modeClaims->empty();
-	}
-
-	std::shared_ptr<const PassCapture::ClaimSet> PassCapture::ShadowClaimsOf(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const
-	{
-		const auto renderers = std::atomic_load(&shadowRenderers);
-		if (!renderers)
-			return nullptr;
-		const auto it = renderers->find(a_batch);
-		if (it == renderers->end() || it->second >= kShadowModes)
-			return nullptr;
-		a_mode = it->second;
-		const auto selected = std::atomic_load(&frameClaims);
-		return selected ? selected->shadow[a_mode] : std::atomic_load(&shadowClaims[a_mode]);
 	}
 
 	bool PassCapture::ShadowModeOfBatch(const RE::BSBatchRenderer* a_batch, std::uint32_t& a_mode) const
@@ -197,28 +189,36 @@ namespace DCLF
 		return true;
 	}
 
-	std::shared_ptr<const PassCapture::ClaimSet> PassCapture::ShadowClaimsForBatch(const RE::BSBatchRenderer* a_batch) const
+	bool PassCapture::CastersWithheld(std::uint8_t a_phase) const
+	{
+		const auto set = std::atomic_load(&frameSet);
+		return set && (set->drawn & a_phase) && ShadowWithholdingEnabled();
+	}
+
+	std::shared_ptr<const SetSnapshot> PassCapture::CastersForBatch(const RE::BSBatchRenderer* a_batch, std::uint8_t* a_phase) const
 	{
 		std::uint32_t mode = 0;
-		return ShadowWithholdingEnabled() ? ShadowClaimsOf(a_batch, mode) : nullptr;
+		if (!ShadowModeOfBatch(a_batch, mode) || !ShadowWithholdingEnabled())
+			return nullptr;
+		const std::uint8_t phase = SetPhaseOfMode(mode);
+		if (a_phase)
+			*a_phase = phase;
+		auto set = std::atomic_load(&frameSet);
+		return set && (set->drawn & phase) ? set : nullptr;
 	}
 
 	bool PassCapture::Withhold(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, bool a_fading)
 	{
 		if (!a_pass || !a_pass->geometry)
 			return false;
-		const auto toggles = ActiveToggles();
-		// A shadow camera's renderers, with the claims of its render mode. The main camera's registration never sees
-		// what DCLF draws (PrimaryCull's leaf exclusion); a pass into any other renderer (reflections, cubemaps, the
-		// focus shadows) is never withheld.
+		// A shadow view's renderers: the set's casters. A pass into any other renderer (reflections, cubemaps, the focus shadows)
+		// is never withheld; the main camera's are WithholdMain's.
 		(void)a_fading;
-		if (toggles.shadows && toggles.shadowOwnership) {
-			std::uint32_t mode = 0;
-			if (const auto owned = ShadowClaimsOf(a_batch, mode); owned && owned->contains(a_pass->geometry)) {
-				shadowWithheld[mode].fetch_add(1, std::memory_order_relaxed);
-				NoteWithheld(mode, a_pass->geometry);
-				return true;
-			}
+		std::uint32_t mode = 0;
+		std::uint8_t phase = 0;
+		if (const auto set = CastersForBatch(a_batch, &phase); set && ShadowModeOfBatch(a_batch, mode) && (set->PhasesOf(a_pass->geometry) & phase)) {
+			shadowWithheld[mode].fetch_add(1, std::memory_order_relaxed);
+			return true;
 		}
 		return false;
 	}
@@ -245,10 +245,9 @@ namespace DCLF
 			}
 			// Per-frame state is read once, here, and both decisions below use it.
 			const bool fading = FadingAtRegistration(a_pass);
-			// Withholding is the whole of static ownership: the pass is built, lit and shadowed exactly as
-			// before - only the batch renderer never receives it, so the native loop has nothing to draw
-			// and DCLF owns the object outright. Everything the tables need is taken by Record.
-			const bool withheld = capture.Withhold(a_this, a_pass, fading);
+			// Withholding is the whole of ownership: the pass is built, lit and shadowed exactly as before - only the batch
+			// renderer never receives it, so the native loop has nothing to draw. Everything the tables need is taken by Record.
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
 			if (std::uint32_t mode = 0; !withheld && capture.ShadowModeOfBatch(a_this, mode))
@@ -262,22 +261,19 @@ namespace DCLF
 	/**
 	 * @brief The shadow modes' registration inserting an accumulation hint 8 pass (a volumetric-only caster)
 	 * into batch group 15: AE FUN_1414b2a60's direct call to FUN_1414f5090(batch, pass, 15, 0) at +0xFF. The
-	 * pass is withheld when the batch renderer is a shadow view's and DCLF's epoch drew the geometry under that
-	 * view's render mode; the claim set is the mode's one, which holds these casters only while DCLF draws the
-	 * copy's views (the inputs of a mode carry them only then).
+	 * pass is withheld when the batch renderer is a shadow view's and the geometry is in the frame's set with the phase of
+	 * that view's render mode (SetPhaseOfMode).
 	 */
 	bool PassCapture::WithholdAtGroup(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass, std::atomic<std::uint32_t>& a_counter)
 	{
-		if (!a_pass || !a_pass->geometry || bypassed.load(std::memory_order_acquire) || !ShadowWithholdingEnabled())
+		if (!a_pass || !a_pass->geometry || bypassed.load(std::memory_order_acquire))
 			return false;
-		std::uint32_t mode = 0;
-		const auto owned = ShadowClaimsOf(a_batch, mode);
-		const bool claimed = owned && owned->contains(a_pass->geometry);
-		if (claimed) {
+		std::uint8_t phase = 0;
+		const auto set = CastersForBatch(a_batch, &phase);
+		const bool member = set && (set->PhasesOf(a_pass->geometry) & phase);
+		if (member)
 			a_counter.fetch_add(1, std::memory_order_relaxed);
-			NoteWithheld(mode, a_pass->geometry);
-		}
-		return claimed;
+		return member;
 	}
 
 	struct PassCapture::VolumetricGroupHook
@@ -286,7 +282,8 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			const bool withheld = capture.WithholdAtGroup(a_batch, a_pass, capture.volumetricWithheld);
+			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
+			                      capture.WithholdAtGroup(a_batch, a_pass, capture.volumetricWithheld);
 			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, 8);
 			if (withheld)
 				return;
@@ -298,8 +295,8 @@ namespace DCLF
 	/**
 	 * @brief The same registration's other direct insertions (FUN_1414b2a60): accumulation hint 11 into batch
 	 * group 9 (+0xC9), hint 7 into group 1 (+0xDB) and hint 3, a decal-flagged caster such as an NPC's face
-	 * part, into group 4 (+0xED). None of them reaches RegisterPass, so a claimed caster registered with one of
-	 * these hints was drawn by both DCLF and the engine until they were withheld here as well.
+	 * part, into group 4 (+0xED). None of them reaches RegisterPass, so a member registered with one of these hints is
+	 * withheld here.
 	 */
 	template <std::uint32_t Hint>
 	struct PassCapture::DirectGroupHook
@@ -308,7 +305,8 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			const bool withheld = capture.WithholdAtGroup(a_batch, a_pass, capture.directWithheld);
+			const bool withheld = (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass)) ||
+			                      capture.WithholdAtGroup(a_batch, a_pass, capture.directWithheld);
 			LocalLightCull::NoteRegistration(a_batch, a_pass, withheld, Hint);
 			if (withheld)
 				return;
@@ -316,6 +314,75 @@ namespace DCLF
 		}
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
+
+	/**
+	 * @brief The main modes' registration (FUN_1414b2330, render modes 0-11: the main camera's accumulator among them) inserting a
+	 * pass straight into a geometry group by its accumulation hint (FUN_1414f5090(batch, pass, group, flag)): hints 2-7, 9, 11,
+	 * 13-18, and a multi-index shape's layer (hint 12, group 2). None of them reaches RegisterPass, so a member's pass with one of
+	 * these hints (terrain LOD's 6 into group 0, object LOD's 7 into group 1) is withheld here. The Z-prepass's accumulator
+	 * (render mode 0xC) registers through the shadow modes' function (FUN_1414b2a60), whose insertions are the hooks above.
+	 */
+	template <std::uint32_t Group>
+	struct PassCapture::MainGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass))
+				return;
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/** @brief The same registration's hint 1, into a pass list of the batch renderer (FUN_1414f50b0(batch, pass, list)). */
+	struct PassCapture::MainListHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, void* a_list)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass))
+				return;
+			func(a_batch, a_pass, a_list);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	/**
+	 * @brief The occlusion maps' registration (FUN_1414b2c20, render mode 0x1C: Precipitation::SetupMask's accumulator) inserting a
+	 * pass into geometry group 14 (FUN_1414f5090(batch, pass, 14), its one insertion): a member of the map's occluder phase is
+	 * withheld, DCLF drawing it into the map (DrawcallLimitFix::DrawOcclusion); the engine draws every other occluder.
+	 */
+	struct PassCapture::OcclusionGroupHook
+	{
+		static void thunk(RE::BSBatchRenderer* a_batch, RE::BSRenderPass* a_pass, std::uint32_t a_group, std::uint32_t a_arg)
+		{
+			++passesOnThisThread;
+			auto& capture = PassCapture::Get();
+			const std::uint8_t phase = capture.occlusionPhase.load(std::memory_order_acquire);
+			if (phase && a_pass && a_pass->geometry && !ParityBoth() && !capture.bypassed.load(std::memory_order_acquire))
+				if (const auto set = std::atomic_load(&capture.frameSet); set && (set->drawn & phase) && (set->PhasesOf(a_pass->geometry) & phase)) {
+					capture.occlusionWithheld.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+			func(a_batch, a_pass, a_group, a_arg);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+
+	namespace
+	{
+		template <std::uint32_t Group, class Hook>
+		bool InstallMainGroup(std::uintptr_t a_site, std::uintptr_t a_callee)
+		{
+			if (!Engine::CallsTo(REL::Offset(a_site).address(), REL::Offset(a_callee).address()))
+				return false;
+			stl::write_thunk_call<Hook>(REL::Offset(a_site).address());
+			return true;
+		}
+	}
 
 	void PassCapture::Install()
 	{
@@ -329,6 +396,19 @@ namespace DCLF
 		stl::write_thunk_call<DirectGroupHook<11>>(REL::Offset(kDirectGroupCalls[0]).address());
 		stl::write_thunk_call<DirectGroupHook<7>>(REL::Offset(kDirectGroupCalls[1]).address());
 		stl::write_thunk_call<DirectGroupHook<3>>(REL::Offset(kDirectGroupCalls[2]).address());
+		// The main modes' registration's (FUN_1414b2330) group insertions, by the group each inserts into, and its hint 1 list
+		// insertion. Each call site is checked against its callee before it is patched.
+		constexpr std::uintptr_t kInsertGroup = 0x14f5090, kInsertList = 0x14f50b0;
+		const bool all = InstallMainGroup<3, MainGroupHook<3>>(0x14b24a2, kInsertGroup) & InstallMainGroup<4, MainGroupHook<4>>(0x14b24bd, kInsertGroup) &
+		                 InstallMainGroup<5, MainGroupHook<5>>(0x14b24d8, kInsertGroup) & InstallMainGroup<6, MainGroupHook<6>>(0x14b24f3, kInsertGroup) &
+		                 InstallMainGroup<0, MainGroupHook<0>>(0x14b250d, kInsertGroup) & InstallMainGroup<1, MainGroupHook<1>>(0x14b2528, kInsertGroup) &
+		                 InstallMainGroup<7, MainGroupHook<7>>(0x14b2543, kInsertGroup) & InstallMainGroup<9, MainGroupHook<9>>(0x14b255e, kInsertGroup) &
+		                 InstallMainGroup<10, MainGroupHook<10>>(0x14b2579, kInsertGroup) & InstallMainGroup<11, MainGroupHook<11>>(0x14b2591, kInsertGroup) &
+		                 InstallMainGroup<8, MainGroupHook<8>>(0x14b25a9, kInsertGroup) & InstallMainGroup<12, MainGroupHook<12>>(0x14b25c1, kInsertGroup) &
+		                 InstallMainGroup<13, MainGroupHook<13>>(0x14b25db, kInsertGroup) & InstallMainGroup<2, MainGroupHook<2>>(0x14b2667, kInsertGroup) &
+		                 InstallMainGroup<1, MainListHook>(0x14b2478, kInsertList) & InstallMainGroup<14, OcclusionGroupHook>(0x14b2c71, kInsertGroup);
+		if (!all)
+			stl::report_and_fail("Drawcall Limit Fix: the main registration's group insertions are not where expected (AE 1.6.1170 only)");
 		installed = true;
 		logger::info("[DCLF] pass capture installed on BSBatchRenderer::RegisterPass");
 	}

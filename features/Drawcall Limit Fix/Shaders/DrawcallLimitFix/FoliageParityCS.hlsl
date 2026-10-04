@@ -39,10 +39,12 @@ static uint Frame;
 // GpuLayouts.h, FoliageCounter.
 static const uint kCompared = 0, kVanished = 1, kAppeared = 2, kRecoloured = 3, kWhitened = 4, kFrameSampleCount = 5, kOwned = 6, kUnshaded = 7,
 				  kOtherObject = 8, kWhiteAlbedo = 9, kWhiteDiffuse = 10, kEpochTag = 11, kMotion = 12, kMotionFarCount = 13, kInFrameSampleCount = 14,
-				  kWhiteSampleCount = 15, kBrightened = 16, kCounters = 20;
+				  kLandOwned = 17, kLandUnshaded = 18, kLandOtherObject = 19, kLandSampleCount = 20,
+				  kWhiteSampleCount = 15, kBrightened = 16, kCounters = 24;
 // The samples, kSampleWords each: the frame before's comparisons', the in-frame checks', the near-white pixels'.
-static const uint kSampleWords = 8, kFrameSamples = 24, kInFrameSamples = 32, kWhiteSamples = 16;
-static const uint kFrameSampleBase = 0, kInFrameSampleBase = kFrameSampleBase + kFrameSamples, kWhiteSampleBase = kInFrameSampleBase + kInFrameSamples;
+static const uint kSampleWords = 8, kFrameSamples = 24, kInFrameSamples = 32, kWhiteSamples = 16, kLandSamples = 16;
+static const uint kFrameSampleBase = 0, kInFrameSampleBase = kFrameSampleBase + kFrameSamples, kWhiteSampleBase = kInFrameSampleBase + kInFrameSamples,
+				  kLandSampleBase = kWhiteSampleBase + kWhiteSamples;
 static const uint kColourWords = 4;
 static const float kColourStep = 0.35;
 static const float kBrightStep = 0.3;
@@ -124,11 +126,25 @@ void Sample(RWByteAddressBuffer a_results, uint a_counter, uint a_base, uint a_c
 		Texture2D<float> depthBuffer = ResourceDescriptorHeap[DepthIndex];
 		const float ownerDepth = asfloat(0xFFFFFFFFu - uint(owner >> 32));
 		const uint ownerObject = uint(owner) & 0x00FFFFFFu;
-		if (abs(depthBuffer.Load(int3(pixel, 0)) - ownerDepth) <= 1.5 * kDepthUnit) {
+		// The owner's depth as the buffer stores it (D24): one of the two levels either side of it, as the conversion rounds. Another
+		// fragment a unit or more in front (a draw the engine keeps, which records nothing) is not the owner's depth: with the
+		// former 1.5-unit tolerance it was, and counted as the owner left unshaded.
+		if (abs(round(depthBuffer.Load(int3(pixel, 0)) * 16777215.0) - ownerDepth * 16777215.0) < 1.0) {
 			results.InterlockedAdd(kOwned * 4, 1);
 			const uint failure = object == 0 ? kUnshaded : object != ownerObject ? kOtherObject : 0;
+			// Terrain LOD's owners (bit 31, Lighting.hlsl) are counted apart as well.
+			const bool land = (uint(owner) & 0x80000000u) != 0;
+			if (land)
+				results.InterlockedAdd(kLandOwned * 4, 1);
 			if (failure != 0) {
 				results.InterlockedAdd(failure * 4, 1);
+				if (land) {
+					results.InterlockedAdd((failure == kUnshaded ? kLandUnshaded : kLandOtherObject) * 4, 1);
+					// Terrain LOD's own samples of the pixels no draw shaded (the others are its equal-depth ties).
+					if (failure == kUnshaded)
+						Sample(results, kLandSampleCount, kLandSampleBase, kLandSamples, pixel, false, uint4(position, failure, ownerObject, object),
+							uint4(asuint(ownerDepth), colours.x, 0, 0));
+				}
 				Sample(results, kInFrameSampleCount, kInFrameSampleBase, kInFrameSamples, pixel, true, uint4(position, failure, ownerObject, object),
 					uint4(asuint(ownerDepth), colours.x, 0, 0));
 			}
