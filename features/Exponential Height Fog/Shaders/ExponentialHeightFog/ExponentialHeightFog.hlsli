@@ -80,7 +80,8 @@ namespace ExponentialHeightFog
 			}
 		}
 
-		[branch] if (sceneDepth > GetVolumetricNearGridEndDistance())
+		[branch] if (GetVolumetricNearGridEndDistance() + 1.0f < GetVolumetricTotalFarPlane() &&
+					 sceneDepth > GetVolumetricNearGridEndDistance())
 		{
 			uint volumeWidth;
 			uint volumeHeight;
@@ -136,12 +137,14 @@ namespace ExponentialHeightFog
 			ExponentialHeightFogIntegratedLightScattering.GetDimensions(volumeWidth, volumeHeight, volumeDepth);
 			if (volumeWidth != 0 && volumeHeight != 0 && volumeDepth != 0)
 				volumeSize = float2(volumeWidth, volumeHeight);
-			else {
+			else if (GetVolumetricNearGridEndDistance() + 1.0f < GetVolumetricTotalFarPlane()) {
 				ExponentialHeightFogIntegratedLightScatteringFar.GetDimensions(volumeWidth, volumeHeight, volumeDepth);
 				if (volumeWidth != 0 && volumeHeight != 0 && volumeDepth != 0)
 					volumeSize = float2(volumeWidth, volumeHeight);
 				else
 					return float4(0.0f, 0.0f, 0.0f, 1.0f);
+			} else {
+				return float4(0.0f, 0.0f, 0.0f, 1.0f);
 			}
 		}
 

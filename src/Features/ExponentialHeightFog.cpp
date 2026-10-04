@@ -833,6 +833,8 @@ void ExponentialHeightFog::Prepass()
 			temporalHistoryValidFar && hasConservativeDepthFarHistory,
 			"ExponentialHeightFog::FarVolume" });
 	} else {
+		const float clearValue[4]{ 0.0f, 0.0f, 0.0f, 1.0f };
+		context->ClearUnorderedAccessViewFloat(integratedLightScatteringFar->uav.get(), clearValue);
 		hasLightScatteringFarHistory = false;
 		hasConservativeDepthFarHistory = false;
 	}
