@@ -18,7 +18,6 @@ RWTexture3D<float4> LightScattering : register(u0);
 #endif
 #if defined(LIGHT_LIMIT_FIX)
 #	include "LightLimitFix/LightLimitFix.hlsli"
-#	include "InverseSquareLighting/InverseSquareLighting.hlsli"
 #endif
 #define SKYLIGHTING_PROBE_REGISTER t50
 #include "Skylighting/Skylighting.hlsli"
@@ -242,7 +241,7 @@ float ComputeLocalLightAttenuation(float distanceSqr, float cellRadius, LightLim
 		distance = sqrt(max(distanceSqr, cellRadius * cellRadius));
 	}
 
-	return InverseSquareLighting::GetAttenuation(distance, light);
+	return LightLimitFix::GetAttenuation(distance, light);
 }
 
 float3 AccumulateLocalLightScattering(
