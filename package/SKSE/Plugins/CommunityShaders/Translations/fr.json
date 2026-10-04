@@ -117,12 +117,5 @@
     "cs_editor.fog_power_short": "Puissance",
     "cs_editor.force_this_weather": "Forcez cette météo",
     "cs_editor.form_id": "ID du formulaire",
-    "cs_editor.form_id_label": "ID du formulaire : %08X",
-    "cs_editor.colors_3_plus": "(Les couleurs utilisées 3 fois ou plus apparaîtront ici)",
-    "cs_editor.colours": "Couleurs",
-    "cs_editor.cs_editor": "Éditeur CS",
-    "cs_editor.fav_most_colours": "Couleurs préférées/les plus fréquemment utilisées ici.",
-    "cs_editor.fav_most_values": "Valeurs favorites/les plus fréquemment utilisées ici.",
-    "cs_editor.favorites_count": "Favoris : %d",
-    "cs_editor.force_weather": "Force Météo"
+    "cs_editor.form_id_label": "ID du formulaire : %08X"
 }

@@ -43,6 +43,5 @@
     "ui.copy": "コピー",
     "ui.dont_ask_again": "もう表示しない",
     "ui.search": "検索…",
-    "ui.search_features": "機能を検索…",
-    "cs_editor.cs_editor": "CSエディター"
+    "ui.search_features": "機能を検索…"
 }

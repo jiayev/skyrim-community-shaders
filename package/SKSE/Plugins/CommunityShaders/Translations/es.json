@@ -104,8 +104,5 @@
     "cs_editor.directional_z": "Direccional Z",
     "cs_editor.drag_colours_here": "Arrastre colores aquí para guardar como favoritos.",
     "cs_editor.drag_to_favourites": "Arrastre un color aquí para añadir a favoritos",
-    "cs_editor.edit_current_cell_lighting": "Editar Iluminación de Celda Actual",
-    "cs_editor.colors_3_plus": "(Colores usados + de 3 veces apareceran aquí)",
-    "cs_editor.colours": "Colores",
-    "cs_editor.cs_editor": "Editor CS"
+    "cs_editor.edit_current_cell_lighting": "Editar Iluminación de Celda Actual"
 }
