@@ -202,6 +202,8 @@ public:
 		std::string csVersion;
 		/// Feature short names the pack expects loaded.
 		std::vector<std::string> requiredFeatures;
+		/// Plugin file names (.esp/.esm/.esl) the pack was made with.
+		std::vector<std::string> requiredPlugins;
 		std::filesystem::path logoSource;
 		std::filesystem::path coverSource;
 		std::vector<std::filesystem::path> screenshotSources;
@@ -225,6 +227,7 @@ public:
 		std::vector<std::string> tags;
 		std::string csVersion;
 		std::vector<std::string> requiredFeatures;
+		std::vector<std::string> requiredPlugins;
 		std::string logo;
 		std::string cover;
 		std::vector<std::string> screenshots;

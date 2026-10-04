@@ -304,7 +304,8 @@ void PresetsPageRenderer::RenderList(float width)
 		const bool isActive = catalog.GetActivePackId() == pack.id || catalog.IsBaselineEnabled(pack.id);
 		const auto& compat = pack.compat;
 		const int warnLines = (compat.versionGap != PresetCompatibility::VersionGap::None ? 1 : 0) +
-		                      (!compat.featuresMessage.empty() ? 1 : 0);
+		                      (!compat.featuresMessage.empty() ? 1 : 0) +
+		                      (!compat.pluginsMessage.empty() ? 1 : 0);
 		const float textLines = 2.0f + static_cast<float>(warnLines);
 		const float textBlockH = ImGui::GetTextLineHeightWithSpacing() * textLines;
 		const float rowHeight = std::max(logoSize, textBlockH) + rowPad * 2.0f;

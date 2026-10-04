@@ -59,7 +59,9 @@ public:
 		std::string csVersion;
 		/// Feature short names the pack expects loaded; missing ones surface as warnings in the browser.
 		std::vector<std::string> requiredFeatures;
-		/// csVersion and requiredFeatures checked against this session, refreshed by each Discover.
+		/// Plugin file names the pack was made with; missing ones surface as soft warnings in the browser.
+		std::vector<std::string> requiredPlugins;
+		/// csVersion, requiredFeatures and requiredPlugins checked against this session, refreshed by each Discover.
 		PresetCompatibility::Warning compat;
 
 		bool hasEffects11 = false;

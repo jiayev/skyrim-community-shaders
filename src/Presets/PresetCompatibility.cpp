@@ -9,6 +9,7 @@
 #include <cctype>
 #include <charconv>
 #include <format>
+#include <ranges>
 #include <system_error>
 
 namespace PresetCompatibility
@@ -31,6 +32,11 @@ namespace PresetCompatibility
 				return false;
 			out = value;
 			return true;
+		}
+
+		std::string JoinNames(const std::vector<std::string>& names)
+		{
+			return names | std::views::join_with(std::string_view(", ")) | std::ranges::to<std::string>();
 		}
 	}
 
@@ -105,16 +111,31 @@ namespace PresetCompatibility
 		return missing;
 	}
 
+	std::vector<std::string> MissingRequiredPlugins(const std::vector<std::string>& requiredPlugins)
+	{
+		std::vector<std::string> missing;
+		auto* dataHandler = RE::TESDataHandler::GetSingleton();
+		if (!dataHandler)
+			return missing;
+		for (const auto& plugin : requiredPlugins) {
+			if (!plugin.empty() && !dataHandler->LookupLoadedModByName(plugin) && !dataHandler->LookupLoadedLightModByName(plugin))
+				missing.push_back(plugin);
+		}
+		return missing;
+	}
+
 	std::string CurrentCsVersionString()
 	{
 		return Util::GetFormattedVersion(Plugin::VERSION);
 	}
 
-	Warning Evaluate(std::string_view requiredCsVersion, const std::vector<std::string>& requiredFeatures)
+	Warning Evaluate(std::string_view requiredCsVersion, const std::vector<std::string>& requiredFeatures,
+		const std::vector<std::string>& requiredPlugins)
 	{
 		Warning warning;
 		warning.versionGap = CompareRequiredCsVersion(requiredCsVersion);
 		warning.missingFeatures = MissingRequiredFeatures(requiredFeatures);
+		warning.missingPlugins = MissingRequiredPlugins(requiredPlugins);
 
 		if (warning.versionGap == VersionGap::Major) {
 			warning.versionMessage = I18n::GetSingleton()->Format("menu.presets.compat_cs_major",
@@ -135,15 +156,14 @@ namespace PresetCompatibility
 		}
 
 		if (!warning.missingFeatures.empty()) {
-			std::string list;
-			for (size_t i = 0; i < warning.missingFeatures.size(); ++i) {
-				if (i > 0)
-					list += ", ";
-				list += warning.missingFeatures[i];
-			}
 			warning.featuresMessage = I18n::GetSingleton()->Format("menu.presets.compat_features_missing",
-				{ { "features", list } },
+				{ { "features", JoinNames(warning.missingFeatures) } },
 				"Missing required feature(s): {features}");
+		}
+		if (!warning.missingPlugins.empty()) {
+			warning.pluginsMessage = I18n::GetSingleton()->Format("menu.presets.compat_plugins_missing",
+				{ { "plugins", JoinNames(warning.missingPlugins) } },
+				"Made with plugin(s) not in your load order: {plugins}");
 		}
 		return warning;
 	}
@@ -153,37 +173,29 @@ namespace PresetCompatibility
 		const auto& theme = Menu::GetSingleton()->GetTheme();
 		bool drew = false;
 
+		const auto drawLine = [&](const ImVec4& color, const std::string& text) {
+			if (text.empty())
+				return;
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
+			if (compact)
+				ImGui::TextUnformatted(text.c_str());
+			else
+				ImGui::TextWrapped("%s", text.c_str());
+			ImGui::PopStyleColor();
+			drew = true;
+		};
+
 		const auto& versionText = compact && !warning.versionMessageCompact.empty() ?
 		                              warning.versionMessageCompact :
 		                              warning.versionMessage;
 
-		if (warning.versionGap == VersionGap::Major && !versionText.empty()) {
-			ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.Error);
-			if (compact)
-				ImGui::TextUnformatted(versionText.c_str());
-			else
-				ImGui::TextWrapped("%s", versionText.c_str());
-			ImGui::PopStyleColor();
-			drew = true;
-		} else if (warning.versionGap == VersionGap::Minor && !versionText.empty()) {
-			ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.Warning);
-			if (compact)
-				ImGui::TextUnformatted(versionText.c_str());
-			else
-				ImGui::TextWrapped("%s", versionText.c_str());
-			ImGui::PopStyleColor();
-			drew = true;
-		}
+		if (warning.versionGap == VersionGap::Major)
+			drawLine(theme.StatusPalette.Error, versionText);
+		else if (warning.versionGap == VersionGap::Minor)
+			drawLine(theme.StatusPalette.Warning, versionText);
 
-		if (!warning.featuresMessage.empty()) {
-			ImGui::PushStyleColor(ImGuiCol_Text, theme.StatusPalette.Warning);
-			if (compact)
-				ImGui::TextUnformatted(warning.featuresMessage.c_str());
-			else
-				ImGui::TextWrapped("%s", warning.featuresMessage.c_str());
-			ImGui::PopStyleColor();
-			drew = true;
-		}
+		drawLine(theme.StatusPalette.Warning, warning.featuresMessage);
+		drawLine(theme.StatusPalette.Warning, warning.pluginsMessage);
 		return drew;
 	}
 }
