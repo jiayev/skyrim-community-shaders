@@ -101,6 +101,14 @@ namespace DCLF
 				writeBack.applied = writeBack.stale = writeBack.late = 0;
 			}
 		}
+		if (impl->scene && impl->scene->treeLodCull && impl->scene->treeLodUploads) {
+			auto& scene = *impl->scene;
+			text += fmt::format("[DCLF] tree LOD draws: {} ({} depth commits, {} shape slots sent; tables {} shape and {} mesh slots; {} commits that could not draw a "
+								"withheld frame){}\n",
+				impl->treeLodOwned ? "DCLF's" : "the engine's", scene.treeLodUploads, scene.treeLodSlotsSent, scene.treeLodShapeCapacity, scene.treeLodMeshCapacity,
+				impl->treeLodMissed, impl->treeLodMissed ? " <- TREE LOD HOLES" : "");
+			scene.treeLodUploads = scene.treeLodSlotsSent = 0;
+		}
 		if (auto& rows = impl->mainRows; rows.builds) {
 			text += fmt::format("[DCLF] main rows: {} builds; a build: {:.1f} material and {:.1f} pipeline rows written; {} material and {} pipeline rows held "
 								"(tables {} and {} rows), {} resyncs\n",

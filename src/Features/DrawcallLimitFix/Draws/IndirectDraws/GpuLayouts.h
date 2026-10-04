@@ -190,6 +190,16 @@ namespace DCLF::Draws
 	// What the tree buffers hold at first (they double as the scene needs).
 	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
+	// Tree LOD's cull (TreeLodCullCS.hlsl; Scene/TreeLod.h): the tables' and the latch's indices; a thread per instance record.
+	constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/TreeLodCullCS.hlsl";
+	struct TreeLodCullConstants
+	{
+		std::uint32_t shapesIndex = 0, instancesIndex = 0, visibleIndex = 0, latchIndex = 0, latchOffset = 0, drawIndex = 0, padding[2]{};
+	};
+	constexpr std::uint32_t kTreeLodCullConstantWords = sizeof(TreeLodCullConstants) / 4;
+	constexpr std::uint32_t kTreeLodCullGroup = 64;
+	// What the tree LOD tables hold at first (shape slots, mesh slots); they double as the mirror needs.
+	constexpr std::uint32_t kInitialTreeLodShapes = 1024, kInitialTreeLodMeshes = 256;
 	constexpr const char* kIndexPoolShader = "DrawcallLimitFix/IndexPoolCS.hlsl";
 	// IndexPoolCS.hlsl's constants: the latch block and its copies' dispatch (ShadowLatchLayout::PoolOffset), the copies, the pool.
 	struct IndexPoolConstants

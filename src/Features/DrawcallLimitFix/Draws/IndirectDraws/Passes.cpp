@@ -182,6 +182,98 @@ namespace DCLF::Draws
 		}
 	}
 
+	/** @brief Tree LOD's draw (dclf-lod.md, "Tree LOD: the draws"): its pipeline, the draw row's address as its push data, the list's arguments. */
+	void RecordTreeLodDraw(rhi::CommandList& a_commands, const TreeLodPipelines& a_pipelines, bool a_colour, std::uint64_t a_draw, rhi::ResourceHandle a_visible)
+	{
+		std::uint32_t words[kDrawPushWords]{ static_cast<std::uint32_t>(a_draw), static_cast<std::uint32_t>(a_draw >> 32) };
+		a_commands.BindPipeline(a_colour ? a_pipelines.colour : a_pipelines.depth);
+		a_commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kDrawPushBinding, 0, kDrawPushWords, words);
+		a_commands.ExecuteIndirect(a_pipelines.drawSignature, a_visible, 0, {}, 0, 1);
+	}
+
+	struct TreeLodCullBindings
+	{
+		org::DeclaredViewToken shapes, instances, draw, visible;
+	};
+
+	struct TreeLodCullPrepared
+	{
+		std::shared_ptr<const ComputeProgram> program;
+		TreeLodCullConstants constants{};
+		std::shared_ptr<const org::LatchBlock> latch;
+		std::uint32_t groups = 0;
+	};
+
+	/**
+	 * @brief Tree LOD's cull (TreeLodCullCS.hlsl): every instance record against the depth segment's frustum, the visible ones
+	 * appended to the list both passes draw. In the depth epoch, before its draw; the depth commit uploaded the tables' changes,
+	 * the draw row and the list's arguments with no instances.
+	 */
+	class TreeLodCullPass final : public org::TypedRenderGraphPass<TreeLodCullPass, TreeLodCullPrepared, TreeLodCullBindings>
+	{
+	public:
+		explicit TreeLodCullPass(std::shared_ptr<Resources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		TreeLodCullBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			const auto& scene = *resources->scene;
+			TreeLodCullBindings bindings{};
+			bindings.shapes = a_builder.ShaderResource(scene.treeLodShapes).View();
+			bindings.instances = a_builder.ShaderResource(scene.treeLodInstances).View();
+			bindings.draw = a_builder.ShaderResource(scene.treeLodDraw).View();
+			bindings.visible = a_builder.UnorderedAccess(scene.treeLodVisible).View();
+			return bindings;
+		}
+
+		// What the recording depends on: the tables' layout (a growth gives them new views and a larger dispatch) and the depth
+		// segment's shape (its latch).
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			a_out.push_back(resources->scene->layout.load(std::memory_order_acquire));
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		TreeLodCullPrepared Prepare(const TreeLodCullBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
+		{
+			TreeLodCullPrepared prepared{};
+			const auto& scene = *resources->scene;
+			const auto frame = CurrentFrame(*resources, RenderGraphRuntime::Segment::ZPrepass);
+			if (!scene.treeLodCull || !scene.treeLodShapeCapacity || !frame || !frame->latch)
+				return prepared;
+			prepared.program = scene.treeLodCull;
+			prepared.latch = frame->latch;
+			auto& constants = prepared.constants;
+			constants.shapesIndex = CaptureViewIndex(a_preparation, a_bindings.shapes);
+			constants.instancesIndex = CaptureViewIndex(a_preparation, a_bindings.instances);
+			constants.drawIndex = CaptureViewIndex(a_preparation, a_bindings.draw);
+			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
+			constants.latchIndex = frame->latch->SrvIndex();
+			// Every record the tables hold: the shader stops at the draw row's slots and each slot's count.
+			prepared.groups = static_cast<std::uint32_t>((std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances + kTreeLodCullGroup - 1) / kTreeLodCullGroup);
+			return prepared;
+		}
+
+		static void Record(const TreeLodCullBindings&, const TreeLodCullPrepared& a_frame, org::PassRecordContext& a_recording)
+		{
+			if (!a_frame.program || !a_frame.groups || !a_frame.latch)
+				return;
+			auto constants = a_frame.constants;
+			// The depth segment's BuildDrawsLatch in this frame slot (RecordLatchedDispatch's offset 0).
+			constants.latchOffset = static_cast<std::uint32_t>(a_frame.latch->Offset(a_recording.FrameSlot()));
+			auto& commands = a_recording.Commands();
+			commands.BindLayout(a_frame.program->layout->GetHandle());
+			commands.BindPipeline(a_frame.program->pipeline->GetHandle());
+			commands.PushConstants(rhi::ShaderStage::Compute, 0, 0, 0, kTreeLodCullConstantWords, reinterpret_cast<const std::uint32_t*>(&constants));
+			commands.Dispatch(a_frame.groups, 1, 1);
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+	};
+
 	class MainOpaquePass final : public org::TypedRenderGraphPass<MainOpaquePass, PreparedDraws, PassBindings>
 	{
 	public:
@@ -226,6 +318,12 @@ namespace DCLF::Draws
 			}
 			for (const auto& frameBuffer : resources->frameBuffers)
 				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
+			// Tree LOD's draw: its arguments, and the tables its vertex stage reads through their addresses.
+			if (const auto& scene = *resources->scene; scene.treeLodCull) {
+				bindings.treeLodVisible = a_builder.IndirectArguments(scene.treeLodVisible);
+				for (const auto& table : { scene.treeLodShapes, scene.treeLodInstances, scene.treeLodMeshes, scene.treeLodDraw })
+					a_builder.ShaderResource(table, noViews);
+			}
 			if (resources->lightLimitFix) {
 				bindings.lights = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.lights"), noViews).Resource();
 				bindings.lightIndexList = a_builder.ShaderResource(org::ResourceIdentifier("cs.llf.light-index-list"), noViews).Resource();
@@ -242,6 +340,8 @@ namespace DCLF::Draws
 			a_out.push_back(static_cast<std::uint64_t>(now));
 			a_out.push_back(phaseTwo ? 1 : 0);
 			a_out.push_back(resources->pool ? resources->pool->layout : 0);
+			// Tree LOD's pipelines, once built (and again after a target change).
+			a_out.push_back(reinterpret_cast<std::uintptr_t>(resources->scene->treeLodPipelines.load(std::memory_order_acquire).get()));
 		}
 
 		PreparedDraws Prepare(const PassBindings& a_bindings, const org::PassPrepareContext& a_preparation) const
@@ -260,6 +360,10 @@ namespace DCLF::Draws
 			if (!prepared.zPrepass)
 				prepared.preprocess = resources->preprocessMain.get();
 			prepared.framePushWords = FramePushWords(resources->frameConstantsAddress);
+			if (resources->scene->treeLodCull) {
+				prepared.treeLod = resources->scene->treeLodPipelines.load(std::memory_order_acquire);
+				prepared.treeLodDraw = resources->scene->treeLodDrawAddress;
+			}
 			prepared.frame = std::move(frame);
 			prepared.targetCount = resources->targetCount;
 			for (std::uint32_t i = 0; i < prepared.targetCount; ++i)
@@ -357,6 +461,9 @@ namespace DCLF::Draws
 					commands.ExecuteIndirect(frame.indirect.zDrawSignature, sequences, first + kSequenceDrawOffset, counts, std::uint64_t(call.bucket) * sizeof(std::uint32_t),
 						call.capacity);
 				}
+				// Tree LOD's depth (phase 1 only: its list is culled once, by the frustum): one instanced draw of the culled records.
+				if (a_prepared.treeLod && !a_prepared.phaseTwo)
+					RecordTreeLodDraw(commands, *a_prepared.treeLod, false, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
 				if (stats)
 					stats->End(commands, statsSlot, depthKind);
 				commands.EndPass();
@@ -441,6 +548,15 @@ namespace DCLF::Draws
 				const bool drawPart = subRange("cs.dclf.colour.main-draws");
 				commands.ExecuteIndirect(colourSignature, sequences, 0, count, 0, frame.drawCapacity);
 				endSubRange(drawPart);
+			}
+			// Tree LOD's colour, testing EQUAL against its Z-prepass draw: the pulled pipeline under the Z-prepass's layout, whose
+			// frame push data is the main layout's.
+			if (a_prepared.treeLod) {
+				const bool treePart = subRange("cs.dclf.colour.tree-lod");
+				commands.BindLayout(frame.indirect.zLayout);
+				commands.PushConstants(rhi::ShaderStage::AllGraphics, 0, kFramePushBinding, 0, kFramePushWords, a_prepared.framePushWords.data());
+				RecordTreeLodDraw(commands, *a_prepared.treeLod, true, a_prepared.treeLodDraw, a_recording.Resolve(a_bindings.treeLodVisible).GetHandle());
+				endSubRange(treePart);
 			}
 			if (stats)
 				stats->End(commands, statsSlot, PassStats::kColour);
@@ -1853,6 +1969,13 @@ namespace DCLF::Draws
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.fade-reported"), a_scene.fadeReported);
 			}
 		}
+		if (a_scene.treeLodCull) {
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-shapes"), a_scene.treeLodShapes);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-instances"), a_scene.treeLodInstances);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-meshes"), a_scene.treeLodMeshes);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-draw"), a_scene.treeLodDraw);
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.tree-lod-visible"), a_scene.treeLodVisible);
+		}
 	}
 
 	class ShadowExtension final : public org::RenderGraph::IRenderGraphExtension
@@ -2008,6 +2131,12 @@ namespace DCLF::Draws
 				})))
 					.PreferQueue(org::QueueKind::Graphics)
 					.Epoch(depth));
+			// Tree LOD's list, before the depth draw that draws it.
+			if (resources->scene->treeLodCull)
+				a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.z.tree-lod-cull",
+					std::static_pointer_cast<org::RenderPass>(std::make_shared<TreeLodCullPass>(resources)))
+						.PreferQueue(org::QueueKind::Graphics)
+						.Epoch(depth));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Render("cs.dclf.z.depth",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainOpaquePass>(resources, depthSegment)))
 					.Epoch(depth));

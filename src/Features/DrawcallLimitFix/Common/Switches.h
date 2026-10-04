@@ -32,6 +32,7 @@ namespace DCLF
 		SwitchNodes,
 		LodObjects,
 		LodTerrain,
+		LodTrees,
 		Shadows,
 		SunSkip,
 		SunExclude,

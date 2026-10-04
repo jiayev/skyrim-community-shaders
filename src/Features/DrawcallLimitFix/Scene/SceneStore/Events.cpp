@@ -615,6 +615,7 @@ namespace DCLF
 				switchPending[at->second].structural |= a_event.structural;
 		});
 		ApplyLodSegmentEvents();
+		treeLod.Drain(frame);
 		if (propertyChanged.size() > kMaxStructuralEvents || nodeChanged.size() > kMaxStructuralEvents) {
 			propertyChanged.clear();
 			nodeChanged.clear();
@@ -771,6 +772,7 @@ namespace DCLF
 		InstallMoveEvents();
 		hiddenEventsInstalled = InstallHiddenStores();
 		lodSegmentEventsInstalled = InstallLodSegmentHooks();
+		TreeLod::Install();
 	}
 
 	void SceneStore::InstallMoveEvents()

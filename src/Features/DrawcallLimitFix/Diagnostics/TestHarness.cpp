@@ -1,3 +1,4 @@
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "TestHarness.h"
 
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -55,6 +56,22 @@ namespace DCLF
 				while (next < commands.size() && a_frame >= commands[next].frame) {
 					auto command = commands[next++].command;
 					logger::info("[DCLF] test command at frame {}: {}", a_frame, command);
+					// "dclf:<toggle name>=<0|1>": a live toggle (Toggles.h, ToggleInfo::name), as the menu sets it, so one run can
+					// compare a class drawn by DCLF and by the engine from the same camera.
+					if (command.rfind("dclf:", 0) == 0) {
+						const auto equals = command.find('=');
+						const auto name = command.substr(5, equals == std::string::npos ? std::string::npos : equals - 5);
+						const bool on = equals != std::string::npos && command.substr(equals + 1) != "0";
+						bool found = false;
+						for (const auto& info : DCLF::ToggleTable())
+							if (info.name == name) {
+								DCLF::Toggles::Get().Requested().*info.member = on;
+								found = true;
+							}
+						if (!found)
+							logger::warn("[DCLF] test command: no toggle named '{}'", name);
+						continue;
+					}
 					if (auto* tasks = SKSE::GetTaskInterface()) {
 						tasks->AddTask([command] {
 							const auto factory = RE::IFormFactory::GetConcreteFormFactoryByType<RE::Script>();

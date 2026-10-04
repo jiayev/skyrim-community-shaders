@@ -68,6 +68,7 @@ namespace DCLF
 			{ SwitchNodes, "CS_DCLF_SWITCH_NODES", F, Reduced::UnlessOne, false, "0: objects under switch nodes stay native (live toggle's seed)" },
 			{ LodObjects, "CS_DCLF_LOD_OBJECTS", F, Reduced::UnlessOne, false, "0: object LOD stays native and untracked (live toggle's seed)" },
 			{ LodTerrain, "CS_DCLF_LOD_TERRAIN", F, Reduced::UnlessOne, false, "0: terrain LOD stays native (live toggle's seed)" },
+			{ LodTrees, "CS_DCLF_LOD_TREES", F, Reduced::UnlessOne, false, "0: tree LOD stays native (live toggle's seed)" },
 			{ Shadows, "CS_DCLF_SHADOWS", F, Reduced::UnlessOne, false, "0: DCLF does not draw the shadow views (live toggle's seed)" },
 			{ SunSkip, "CS_DCLF_SUN_SKIP", F, Reduced::UnlessOne, false, "0: the engine keeps culling and registering the sun's casters (live toggle's seed)" },
 			{ SunExclude, "CS_DCLF_SUN_EXCLUDE", F, Reduced::UnlessOne, false, "0: DCLF's objects stay in the sun's culls; probe: the exclusion runs dry (live toggle's seed)" },

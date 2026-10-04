@@ -88,6 +88,8 @@ namespace DCLF
 				l.checks ? (l.differ ? " <- LOD SEGMENTS; first: " : " <- OK") : "", l.first);
 			l = {};
 		}
+		if (treeLod.Size() || TreeLod::installed)
+			text += treeLod.Report();
 		if (auto& c = changeParity; c.checks || c.skipped) {
 			text += fmt::format("[DCLF] change log parity: {} checks ({} skipped), {} slots compared, {} changed, {} changed with no log entry{}{}\n", c.checks, c.skipped, c.slots,
 				c.changed, c.missing, c.missing ? " <- MISSING; first: " : " <- OK", c.first);

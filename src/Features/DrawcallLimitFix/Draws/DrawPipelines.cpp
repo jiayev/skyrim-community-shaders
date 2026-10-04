@@ -376,6 +376,17 @@ namespace DCLF
 		// The Z-prepass's plain draws (IndirectState::zPipelines): their layout and a DrawSequence tail's signature.
 		rhi::PipelineLayoutPtr zLayout;
 		rhi::CommandSignaturePtr zDrawSignature;
+		// Tree LOD (FindTreeLod): its draw's signature, a plain DrawInstanced under zLayout; its pipelines' build, and the builds a
+		// target change replaced (kept: a frame in flight may still draw with them).
+		rhi::CommandSignaturePtr treeLodDrawSignature;
+		std::shared_future<org::services::PipelineArtifact> treeLodFuture;
+		org::services::PipelinePayload treeLod;
+		std::vector<org::services::PipelinePayload> treeLodRetired;
+		bool treeLodFailed = false;
+		struct TreeLodBuilt
+		{
+			rhi::PipelinePtr depth, colour;
+		};
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
 		// indexed draw from the index pool (BuildDrawsCS, StoreShadowSequence), whose vertex stage pulls its vertices.
@@ -739,7 +750,65 @@ namespace DCLF
 				logger::error("[DCLF] Could not create the Z-prepass's draw signature");
 				return false;
 			}
+			rhi::IndirectArg treeDraw{};
+			treeDraw.kind = rhi::IndirectArgKind::Draw;
+			rhi::CommandSignatureDesc treeDesc{};
+			treeDesc.args = { &treeDraw, 1 };
+			treeDesc.byteStride = 4 * sizeof(std::uint32_t);
+			if (device.CreateCommandSignature(treeDesc, zLayout->GetHandle(), treeLodDrawSignature) != rhi::Result::Ok)
+				logger::warn("[DCLF] Could not create tree LOD's draw signature; tree LOD stays native");
 			return true;
+		}
+
+		/** @brief Tree LOD's pipelines (DrawPipelines::FindTreeLod). */
+		static org::services::PipelinePayload BuildTreeLod(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::TreeLodProgram* a_program,
+			TargetFormats a_targets, rhi::BlendState a_blend, bool a_frontCCW)
+		{
+			SpirvReflection vertex, pixel, depthVertex, depthPixel;
+			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel) || !depthVertex.Parse(a_program->depthVertex) || !depthPixel.Parse(a_program->depthPixel))
+				throw std::runtime_error("not SPIR-V");
+			CheckPulledBindings(vertex, false);
+			CheckPulledBindings(pixel, true);
+			CheckPulledBindings(depthVertex, false);
+			CheckPulledBindings(depthPixel, true);
+			auto built = std::make_shared<TreeLodBuilt>();
+			const rhi::SubobjLayout layout{ a_zLayout };
+			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_targets.depth) };
+			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
+			const rhi::SubobjInputLayout noInput{};
+			const rhi::SubobjFlags plain{};
+			for (const bool colour : { false, true }) {
+				const auto& vs = colour ? a_program->vertex : a_program->depthVertex;
+				const auto& ps = colour ? a_program->pixel : a_program->depthPixel;
+				const rhi::SubobjShader vertexShader{ rhi::ShaderStage::Vertex, { vs.data(), static_cast<std::uint32_t>(vs.size()) }, "main" };
+				const rhi::SubobjShader pixelShader{ rhi::ShaderStage::Pixel, { ps.data(), static_cast<std::uint32_t>(ps.size()) }, "main" };
+				rhi::SubobjRaster raster{};
+				raster.rs.cull = rhi::CullMode::None;  // the engine draws tree LOD with culling off (cull mode 0) in both passes
+				raster.rs.frontCCW = a_frontCCW;
+				rhi::SubobjDepth depth{};
+				depth.ds.depthEnable = true;
+				depth.ds.depthWrite = !colour;
+				depth.ds.depthFunc = colour ? rhi::CompareOp::Equal : rhi::CompareOp::Less;
+				rhi::SubobjBlend blend{};
+				rhi::SubobjRTVs targets{};
+				if (colour) {
+					blend.bs = a_blend;
+					blend.bs.numAttachments = a_targets.colorCount;
+					targets.rt.count = a_targets.colorCount;
+					for (std::uint32_t i = 0; i < a_targets.colorCount; ++i)
+						targets.rt.formats[i] = rhi::helpers::ToRHI(a_targets.colors[i]);
+				} else {
+					blend.bs.numAttachments = 0;
+				}
+				const rhi::PipelineStreamItem items[] = {
+					rhi::Make(layout), rhi::Make(vertexShader), rhi::Make(pixelShader), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend),
+					rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(noInput), rhi::Make(plain),
+				};
+				auto& out = colour ? built->colour : built->depth;
+				if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), out); result != rhi::Result::Ok)
+					throw std::runtime_error(fmt::format("CreatePipeline (tree LOD {}) failed ({})", colour ? "colour" : "depth", static_cast<int>(result)));
+			}
+			return built;
 		}
 
 		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_layout, rhi::PipelineLayoutHandle a_zLayout, PipelineKey a_key,
@@ -1005,6 +1074,11 @@ namespace DCLF
 			impl->inFlight = 0;
 			stats.requested = stats.ready = stats.failed = stats.zPipelines = stats.zDepthOnly = 0;
 			impl->recreatedBy = fmt::format("main pass targets {} -> {}", describe(targets), describe(a_formats));
+			if (impl->treeLod)
+				impl->treeLodRetired.push_back(std::move(impl->treeLod));
+			impl->treeLod = {};
+			impl->treeLodFuture = {};
+			impl->treeLodFailed = false;
 		}
 		targets = a_formats;
 	}
@@ -1169,6 +1243,53 @@ namespace DCLF
 		return kNotReady;
 	}
 
+	bool DrawPipelines::FindTreeLod(const ShaderPrograms::TreeLodProgram& a_program, TreeLodPipelines& a_out)
+	{
+		if (!HasTargetFormats() || !Enabled() || !impl->treeLodDrawSignature || impl->treeLodFailed)
+			return false;
+		if (impl->treeLod) {
+			const auto* built = static_cast<const Impl::TreeLodBuilt*>(impl->treeLod.get());
+			a_out = TreeLodPipelines{ built->depth->GetHandle(), built->colour->GetHandle(), impl->treeLodDrawSignature->GetHandle() };
+			return true;
+		}
+		if (impl->treeLodFuture.valid()) {
+			if (impl->treeLodFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+				return false;
+			// A copy: the future may hold the last reference to its state.
+			const auto artifact = impl->treeLodFuture.get();
+			impl->treeLodFuture = {};
+			if (!artifact) {
+				impl->treeLodFailed = true;
+				logger::warn("[DCLF] tree LOD's pipelines failed: {}; tree LOD stays native", artifact.error);
+				return false;
+			}
+			impl->treeLod = artifact.payload;
+			logger::info("[DCLF] tree LOD pipelines ready");
+			return FindTreeLod(a_program, a_out);
+		}
+		// The opaque write mode's blend (the engine's tree LOD colour draws are in write mode 1), as an opaque Lighting key's.
+		const std::uint32_t opaqueBits = Impl::kOpaqueWriteMode << kRasterWriteModeShift;
+		auto state = impl->engineStates.find(opaqueBits);
+		if (state == impl->engineStates.end() || !state->second.valid)
+			return false;  // read by the first opaque Lighting key (Find)
+		const auto frontCCW = impl->EngineFrontCCW();
+		if (!frontCCW)
+			return false;
+		org::services::PipelineRecipe recipe;
+		recipe.id = "dclf.tree-lod";
+		recipe.shaderKey = ankerl::unordered_dense::detail::wyhash::hash(a_program.vertex.data(), a_program.vertex.size()) ^
+		                   ankerl::unordered_dense::detail::wyhash::hash(a_program.pixel.data(), a_program.pixel.size()) * 0x9E3779B97F4A7C15ull ^
+		                   ankerl::unordered_dense::detail::wyhash::hash(a_program.depthPixel.data(), a_program.depthPixel.size());
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&targets, sizeof(targets)) ^
+		                          ankerl::unordered_dense::detail::wyhash::hash(&state->second.blend, sizeof(state->second.blend)) * 0x9E3779B97F4A7C15ull;
+		recipe.build = [device = impl->device, zLayout = impl->zLayout->GetHandle(), program = &a_program, formats = targets, blend = state->second.blend,
+							frontCCW = *frontCCW] {
+			return Impl::BuildTreeLod(device, zLayout, program, formats, blend, frontCCW);
+		};
+		impl->treeLodFuture = impl->service.Request(std::move(recipe));
+		return false;
+	}
+
 	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,
 		bool* a_requested)
 	{
@@ -1295,7 +1416,8 @@ namespace DCLF
 			if (entry.index != kNotReady || entry.failed || !entry.future.valid() || entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
 				continue;
 			--impl->inFlight;
-			const auto& artifact = entry.future.get();
+			// A copy: the future may hold the last reference to its state (PipelineService::PublishReady drops its own).
+			const auto artifact = entry.future.get();
 			entry.future = {};
 			if (!artifact) {
 				entry.failed = true;
@@ -1359,7 +1481,8 @@ namespace DCLF
 			if (entry.index != kNotReady || entry.failed || !entry.future.valid() || entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
 				continue;
 			--impl->shadowInFlight;
-			const auto& artifact = entry.future.get();
+			// A copy: the future may hold the last reference to its state (PipelineService::PublishReady drops its own).
+			const auto artifact = entry.future.get();
 			entry.future = {};
 			if (!artifact) {
 				entry.failed = true;
@@ -1482,6 +1605,7 @@ namespace DCLF
 	std::uint32_t DrawPipelines::ShadowRasterStateId(const D3D11_RASTERIZER_DESC&, std::uint32_t) { return 0; }
 	std::vector<std::uint32_t> DrawPipelines::ShadowRasterStatesOfMode(std::uint32_t) const { return {}; }
 	void DrawPipelines::Update() {}
+	bool DrawPipelines::FindTreeLod(const ShaderPrograms::TreeLodProgram&, TreeLodPipelines&) { return false; }
 	void DrawPipelines::CaptureEngineStates(std::span<const PipelineKey>) {}
 }
 

@@ -42,6 +42,13 @@ namespace DCLF::Draws
 		{
 			return a_device.GetBufferDeviceAddress({ a_buffer.GetAPIResource().GetHandle(), 0 });
 		}
+
+		// Tree LOD's tables' sizes in words (Scene/TreeLod.h): by shape slot, its row, its records and its place in the list; by
+		// mesh slot, its row; the list's arguments first.
+		std::uint32_t TreeLodShapeWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::ShapeRow) / 4); }
+		std::uint32_t TreeLodInstanceWords(std::uint32_t a_slots) { return a_slots * TreeLod::kMaxGroupInstances * static_cast<std::uint32_t>(sizeof(TreeLod::Instance) / 4); }
+		std::uint32_t TreeLodMeshWords(std::uint32_t a_slots) { return a_slots * static_cast<std::uint32_t>(sizeof(TreeLod::MeshRow) / 4); }
+		std::uint32_t TreeLodVisibleWords(std::uint32_t a_slots) { return TreeLod::kVisibleHeaderWords + a_slots * TreeLod::kMaxGroupInstances; }
 	}
 }
 
@@ -568,6 +575,31 @@ namespace DCLF
 		} else {
 			logger::warn("[DCLF] The fade state program could not be created; fades stay the CPU's");
 		}
+		// Tree LOD (TreeLodCullCS; Scene/TreeLod.h): without its program tree LOD stays the engine's.
+		buffers->treeLodCull = ComputeProgram::Load(a_device, { .source = kTreeLodCullShader, .constantWords = kTreeLodCullConstantWords });
+		if (buffers->treeLodCull) {
+			buffers->treeLodShapeCapacity = smallStart ? 4u : kInitialTreeLodShapes;
+			buffers->treeLodMeshCapacity = smallStart ? 4u : kInitialTreeLodMeshes;
+			buffers->treeLodShapes = CreateWords(TreeLodShapeWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-shapes");
+			buffers->treeLodInstances = CreateWords(TreeLodInstanceWords(buffers->treeLodShapeCapacity), false, "cs.dclf.tree-lod-instances");
+			buffers->treeLodMeshes = CreateWords(TreeLodMeshWords(buffers->treeLodMeshCapacity), false, "cs.dclf.tree-lod-meshes");
+			buffers->treeLodDraw = CreateWords(sizeof(TreeLod::DrawRow) / 4, false, "cs.dclf.tree-lod-draw");
+			buffers->treeLodVisible = CreateWords(TreeLodVisibleWords(buffers->treeLodShapeCapacity), true, "cs.dclf.tree-lod-visible");
+			buffers->treeLodShapesAddress = AddressOf(a_device, *buffers->treeLodShapes);
+			buffers->treeLodInstancesAddress = AddressOf(a_device, *buffers->treeLodInstances);
+			buffers->treeLodMeshesAddress = AddressOf(a_device, *buffers->treeLodMeshes);
+			buffers->treeLodDrawAddress = AddressOf(a_device, *buffers->treeLodDraw);
+			buffers->treeLodVisibleAddress = AddressOf(a_device, *buffers->treeLodVisible);
+			if (!buffers->treeLodShapesAddress || !buffers->treeLodInstancesAddress || !buffers->treeLodMeshesAddress || !buffers->treeLodDrawAddress ||
+				!buffers->treeLodVisibleAddress) {
+				logger::warn("[DCLF] Tree LOD's tables have no device address; tree LOD stays native");
+				buffers->treeLodCull = nullptr;
+			}
+			// A new set of tables holds nothing: every slot and mesh again.
+			SceneStore::Get().TreeLodMirror().MarkAllChanged();
+		} else {
+			logger::warn("[DCLF] The tree LOD cull program could not be created; tree LOD stays native");
+		}
 		scene = std::move(buffers);
 		return true;
 	}
@@ -725,6 +757,26 @@ namespace DCLF
 					for (std::size_t i = 0; i < writeBack.readback.size(); ++i)
 						writeBack.next[i].store(org::Buffer::CreateShared(rhi::HeapType::Readback, FadeWriteBack::BytesFor(a_rows)), std::memory_order_release);
 				})) {}
+		}
+		// Tree LOD's tables, by the mirror's shape and mesh slots. A new backing holds nothing: every slot and mesh again.
+		if (s.treeLodCull) {
+			auto& mirror = SceneStore::Get().TreeLodMirror();
+			const auto device = host->GetDesc().device;
+			const bool shapes = grow("tree LOD shape slots", s.treeLodShapeCapacity, mirror.ShapeSlots(),
+				sizeof(TreeLod::ShapeRow) + TreeLod::kMaxGroupInstances * (sizeof(TreeLod::Instance) + 4), [&](std::uint32_t a_rows) {
+					s.treeLodShapes->ResizeStructured(TreeLodShapeWords(a_rows));
+					s.treeLodInstances->ResizeStructured(TreeLodInstanceWords(a_rows));
+					s.treeLodVisible->ResizeStructured(TreeLodVisibleWords(a_rows));
+					s.treeLodShapesAddress = AddressOf(device, *s.treeLodShapes);
+					s.treeLodInstancesAddress = AddressOf(device, *s.treeLodInstances);
+					s.treeLodVisibleAddress = AddressOf(device, *s.treeLodVisible);
+				});
+			const bool meshes = grow("tree LOD mesh slots", s.treeLodMeshCapacity, mirror.MeshSlots(), sizeof(TreeLod::MeshRow), [&](std::uint32_t a_rows) {
+				s.treeLodMeshes->ResizeStructured(TreeLodMeshWords(a_rows));
+				s.treeLodMeshesAddress = AddressOf(device, *s.treeLodMeshes);
+			});
+			if (shapes || meshes)
+				mirror.MarkAllChanged();
 		}
 		if (grow("face position vertices", s.faceVertices, faceVertices, 16, [&](std::uint32_t a_rows) {
 				s.facePositions->ResizeBytes(std::uint64_t(a_rows) * 16);

@@ -531,7 +531,86 @@ namespace DCLF
 			std::uint32_t fadeEventCapacity = 0;
 			bool fadeReportedZeroed = false;
 			std::shared_ptr<FadeWriteBack> fadeWriteBack;
+			// Tree LOD (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h): the shape rows, the instance records (75 a shape
+			// slot), the mesh rows, the draw row and the visible list (the draw's arguments, then the culled records), every one read
+			// through its address by the draws' vertex stage. The depth commit uploads what the mirror changed (UploadTreeLod);
+			// TreeLodCullPass fills the list in the depth epoch, and both main passes draw it once the pipelines exist. treeLodReady: the
+			// last depth commit's draw row named its slots (the frame draws tree LOD).
+			std::shared_ptr<org::Buffer> treeLodShapes, treeLodInstances, treeLodMeshes, treeLodDraw, treeLodVisible;
+			std::uint64_t treeLodInstancesAddress = 0, treeLodShapesAddress = 0, treeLodMeshesAddress = 0, treeLodDrawAddress = 0, treeLodVisibleAddress = 0;
+			std::uint32_t treeLodShapeCapacity = 0, treeLodMeshCapacity = 0;
+			std::shared_ptr<const ComputeProgram> treeLodCull;
+			// The pipelines the passes record with, published by the depth commit once built (read on the graph host's thread).
+			std::atomic<std::shared_ptr<const TreeLodPipelines>> treeLodPipelines;
+			std::atomic<bool> treeLodReady{ false };
+			std::uint64_t treeLodUploads = 0, treeLodSlotsSent = 0;  // since the last report
 		};
+
+		/**
+		 * @brief The depth commit's tree LOD uploads (render thread): the shape slots and meshes the mirror changed since the last
+		 * commit, the draw row (the tables' addresses, the frame's texture and sampler) and the list's arguments with no instances.
+		 * The leases of meshes no shape draws any more, and the texture's and sampler's bindings, go to the execution (a_owners).
+		 */
+		template <class Uploads>
+		void UploadTreeLod(TreeLod::Mirror& a_mirror, SceneBuffers& a_scene, Uploads& a_uploads, std::vector<std::shared_ptr<const void>>& a_owners, bool a_draw)
+		{
+			a_scene.treeLodReady.store(false, std::memory_order_release);
+			if (!a_scene.treeLodCull || !a_scene.treeLodShapes)
+				return;
+			for (auto& owner : a_mirror.TakeRetired())
+				a_owners.push_back(std::move(owner));
+			// Reserved before the epoch (ReserveSceneTables); a mirror past them waits a commit, its changes kept, drawing nothing.
+			std::vector<std::uint32_t> slots, meshes;
+			const bool fits = a_mirror.ShapeSlots() <= a_scene.treeLodShapeCapacity && a_mirror.MeshSlots() <= a_scene.treeLodMeshCapacity;
+			if (!fits)
+				a_draw = false;
+			else
+				a_mirror.TakeChanges(slots, meshes);
+			for (const std::uint32_t slot : slots) {
+				const auto& row = a_mirror.SlotRow(slot);
+				a_uploads(a_scene.treeLodShapes, &row, sizeof(row), std::uint64_t(slot) * sizeof(TreeLod::ShapeRow));
+				if (const auto* instances = a_mirror.SlotInstances(slot); instances && !instances->empty())
+					a_uploads(a_scene.treeLodInstances, instances->data(), instances->size() * sizeof(TreeLod::Instance),
+						std::uint64_t(slot) * TreeLod::kMaxGroupInstances * sizeof(TreeLod::Instance));
+			}
+			for (const std::uint32_t mesh : meshes) {
+				const auto& row = a_mirror.MeshSlotRow(mesh);
+				a_uploads(a_scene.treeLodMeshes, &row, sizeof(row), std::uint64_t(mesh) * sizeof(TreeLod::MeshRow));
+			}
+			a_scene.treeLodSlotsSent += slots.size();
+			++a_scene.treeLodUploads;
+			// The draw row and the list's arguments with no instances, every depth commit. The cull appends only while the row names
+			// shape slots: 0 when tree LOD does not draw this frame (toggle off, no texture), so both passes draw nothing together.
+			TreeLod::DrawRow row{};
+			row.instances = a_scene.treeLodInstancesAddress;
+			row.shapes = a_scene.treeLodShapesAddress;
+			row.meshes = a_scene.treeLodMeshesAddress;
+			row.visible = a_scene.treeLodVisibleAddress + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
+			row.alphaRef = 128.0f / 255.0f;
+			row.maxIndices = std::max(a_mirror.MaxIndices(), 1u);
+			// The engine's texture for its tree LOD draws (BSDistantTreeShader::SetupTechnique: its static at 0x1433dcd18, the
+			// worldspace's tree LOD atlas), slot 0's sampler as its draws leave it (address mode 0, filter 2), and the alpha
+			// reference they draw with (128/255): measured at the engine's draws (dclf-lod.md, "Tree LOD: what the engine does").
+			const auto* texture = a_draw && a_mirror.MaxIndices() ? Engine::Global<RE::NiSourceTexture*>(0x33dcd18) : nullptr;
+			auto* view = texture && texture->rendererTexture ? texture->rendererTexture->resourceView : nullptr;
+			if (view) {
+				auto& textures = GpuTextures::Get();
+				auto textureBinding = textures.ResolveBinding(view, 0);
+				auto samplerBinding = textures.SamplerBinding(0, 2);
+				if (textureBinding.index != GpuTextures::kInvalid && samplerBinding.index != GpuTextures::kInvalid) {
+					a_owners.push_back(std::move(textureBinding.owner));
+					a_owners.push_back(std::move(samplerBinding.owner));
+					row.textureIndex = textureBinding.index;
+					row.samplerIndex = samplerBinding.index;
+					row.shapeSlots = a_scene.treeLodShapeCapacity;
+				}
+			}
+			a_uploads(a_scene.treeLodDraw, &row, sizeof(row), 0);
+			const std::uint32_t arguments[TreeLod::kVisibleHeaderWords] = { row.maxIndices, 0, 0, 0 };
+			a_uploads(a_scene.treeLodVisible, arguments, sizeof(arguments), 0);
+			if (row.shapeSlots)
+				a_scene.treeLodReady.store(true, std::memory_order_release);
+		}
 
 		/**
 		 * @brief The depth commit's fade uploads (render thread): the static rows where the buffer does not hold the tables'
@@ -748,6 +827,7 @@ namespace DCLF
 			org::ResourceBindingToken lights, lightIndexList, lightGrid;
 			std::vector<org::ResourceBindingToken> frameBuffers;
 			org::ResourceBindingToken pool, bucketCounts;  // the depth segment's plain draws
+			org::ResourceBindingToken treeLodVisible;      // tree LOD's draw's arguments (UploadTreeLod, TreeLodCullPass)
 		};
 
 		/**
@@ -847,6 +927,9 @@ namespace DCLF
 			std::uint32_t targetCount = 0;
 			bool phaseTwo = false;
 			bool zPrepass = false;
+			// Tree LOD's draw (UploadTreeLod): its pipelines and the draw row's address, which its push data names.
+			std::shared_ptr<const TreeLodPipelines> treeLod;
+			std::uint64_t treeLodDraw = 0;
 		};
 
 		// The shape of the segment a pass serves, or null when that segment does not draw (or, without epochs,
@@ -2763,6 +2846,9 @@ namespace DCLF
 		// The scene tables (SceneBuffers) and their stores, every epoch's: the builds run in frame order, each joined before
 		// the next is kicked (KickShadowBuild and KickMainJob drop a job still outstanding).
 		std::shared_ptr<SceneBuffers> scene;
+		// The frame's tree LOD decision (DecideTreeLod), which the depth commit draws on; and the commits that could not.
+		bool treeLodOwned = false;
+		std::uint32_t treeLodMissed = 0;
 		/** @brief The scene tables, created once (render thread). False when they have no device address. */
 		bool EnsureSceneBuffers(rhi::Device a_device);
 		/**

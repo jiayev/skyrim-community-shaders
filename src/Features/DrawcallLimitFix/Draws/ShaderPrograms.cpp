@@ -26,6 +26,10 @@ namespace DCLF
 	{
 		constexpr const char* kSourcePath = "Data/Shaders/Lighting.hlsl";
 		constexpr const char* kUtilitySourcePath = "Data/Shaders/Utility.hlsl";
+		constexpr const char* kDistantTreeSourcePath = "Data/Shaders/DistantTree.hlsl";
+		// DistantTree's descriptors (ShaderCache.h, DistantTreeShaderTechniques and DistantTreeShaderFlags): the technique in bit 0
+		// (1: Depth), Deferred and AlphaTest, as the engine's main view draws tree LOD (BSDistantTreeShader::SetupTechnique).
+		constexpr std::uint32_t kDistantTreeDepth = 1, kDistantTreeDeferred = 1u << 8, kDistantTreeAlphaTest = 1u << 16;
 		constexpr const char* kShaderDirectory = RenderGraphRuntime::kShaderDirectory;
 		constexpr std::size_t kMaxLoggedFailures = 8;
 
@@ -216,6 +220,15 @@ namespace DCLF
 		std::chrono::steady_clock::time_point requested;
 	};
 
+	struct ShaderPrograms::TreeLodEntry
+	{
+#if defined(DCLF_HAS_SHADER_COMPILER)
+		std::shared_future<org::services::ShaderArtifact> vertex, pixel, depthVertex, depthPixel;
+#endif
+		std::unique_ptr<TreeLodProgram> program;
+		bool failed = false;
+	};
+
 	struct ShaderPrograms::Entry
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -277,6 +290,15 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; the shadow views stay native", kUtilitySourcePath);
 		}
+		{
+			std::ifstream distantTree(kDistantTreeSourcePath, std::ios::binary);
+			std::vector<char> treeBytes((std::istreambuf_iterator<char>(distantTree)), std::istreambuf_iterator<char>());
+			distantTreeSource.resize(treeBytes.size());
+			if (!treeBytes.empty())
+				std::memcpy(distantTreeSource.data(), treeBytes.data(), treeBytes.size());
+			else
+				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
+		}
 		sourcesLoaded = true;
 		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies", kSourcePath, dependencies.size());
 		if (ShaderDebug())
@@ -336,7 +358,7 @@ namespace DCLF
 				std::string text;
 				for (const auto& define : request.defines)
 					text += fmt::format(" -D {}{}{}", Util::WStringToString(define.name), define.value.empty() ? "" : "=", Util::WStringToString(define.value));
-				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}", a_sourceName == kSourcePath ? "Lighting" : "Utility",
+				logger::info("[DCLF] SPIR-V build of {} {}{} {:08X} defines:{}", a_sourceName == kSourcePath ? "Lighting" : a_sourceName == kUtilitySourcePath ? "Utility" : "DistantTree",
 					a_pixel ? (a_depthOnly ? "PS (depth)" : "PS") : "VS", a_pulled ? " (pulled)" : "", a_descriptor, text);
 			}
 			const auto shift = [&](const wchar_t* a_flag, std::uint32_t a_value) {
@@ -366,9 +388,10 @@ namespace DCLF
 			bool pixel, std::uint32_t descriptor, bool depth = false, bool* a_created = nullptr, bool pulled = false)
 		{
 			const bool utility = shader.shaderType.get() == RE::BSShader::Type::Utility;
-			pulled = pulled || utility;
+			const bool distantTree = shader.shaderType.get() == RE::BSShader::Type::DistantTree;
+			pulled = pulled || utility || distantTree;
 			const std::uint64_t key = descriptor | (std::uint64_t(pixel) << 32) | (std::uint64_t(depth) << 33) | (std::uint64_t(utility) << 34) |
-			                          (std::uint64_t(pulled) << 35);
+			                          (std::uint64_t(pulled) << 35) | (std::uint64_t(distantTree) << 36);
 			{
 				std::lock_guard lock(mutex);
 				if (const auto found = futures.find(key); found != futures.end())
@@ -381,12 +404,13 @@ namespace DCLF
 				if (const auto found = futures.find(key); found != futures.end())
 					return found->second;
 			}
-			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (pulled && !utility && owner.pulledSource.empty()))
+			if (!owner.Enabled() || !owner.LoadSources() || (utility && owner.utilitySource.empty()) || (distantTree && owner.distantTreeSource.empty()) ||
+				(pulled && !utility && !distantTree && owner.pulledSource.empty()))
 				return {};
 			// Like the program entries, stage futures live for this source set's lifetime.
 			// A VS shared by several PS permutations must not rescan the shader tree each time.
-			auto future = RequestStage(utility ? owner.utilitySource : pulled ? owner.pulledSource : owner.source, owner.dependencies, shader,
-				pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : kSourcePath);
+			auto future = RequestStage(utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : pulled ? owner.pulledSource : owner.source, owner.dependencies,
+				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				futures.emplace(key, future);
@@ -522,6 +546,26 @@ namespace DCLF
 		return it->second->program.get();
 	}
 
+	const ShaderPrograms::TreeLodProgram* ShaderPrograms::FindTreeLod(RE::BSShader& a_distantTree)
+	{
+		if (!Enabled())
+			return nullptr;
+		if (!treeLodEntry) {
+			treeLodEntry = std::make_unique<TreeLodEntry>();
+#if defined(DCLF_HAS_SHADER_COMPILER)
+			const std::uint32_t colour = kDistantTreeDeferred | kDistantTreeAlphaTest, depth = kDistantTreeDepth | kDistantTreeAlphaTest;
+			treeLodEntry->vertex = stages->Request(*this, a_distantTree, false, colour);
+			treeLodEntry->pixel = stages->Request(*this, a_distantTree, true, colour);
+			treeLodEntry->depthVertex = stages->Request(*this, a_distantTree, false, depth);
+			treeLodEntry->depthPixel = stages->Request(*this, a_distantTree, true, depth);
+#else
+			(void)a_distantTree;
+			treeLodEntry->failed = true;
+#endif
+		}
+		return treeLodEntry->program.get();
+	}
+
 	void ShaderPrograms::Update()
 	{
 #if defined(DCLF_HAS_SHADER_COMPILER)
@@ -594,6 +638,22 @@ namespace DCLF
 			entry.program = std::make_unique<ShadowProgram>(ShadowProgram{ vertex.binary, pixel.binary });
 			++stats.shadowReady;
 			stats.fromCache += (vertex.fromCache ? 1 : 0) + (pixel.fromCache ? 1 : 0);
+		}
+		if (auto* tree = treeLodEntry.get(); tree && !tree->program && !tree->failed && ready(tree->vertex) && ready(tree->pixel) && ready(tree->depthVertex) &&
+											 ready(tree->depthPixel)) {
+			const auto& vertex = tree->vertex.get();
+			const auto& pixel = tree->pixel.get();
+			const auto& depthVertex = tree->depthVertex.get();
+			const auto& depthPixel = tree->depthPixel.get();
+			if (!vertex || !pixel || !depthVertex || !depthPixel) {
+				tree->failed = true;
+				const auto& failed = !vertex ? vertex : !pixel ? pixel : !depthVertex ? depthVertex : depthPixel;
+				logger::warn("[DCLF] SPIR-V build of DistantTree {} failed; tree LOD stays native:\n{}", !vertex ? "VS" : !pixel ? "PS" : !depthVertex ? "VS (depth)" : "PS (depth)",
+					failed.diagnostics.substr(0, 1500));
+			} else {
+				tree->program = std::make_unique<TreeLodProgram>(TreeLodProgram{ vertex.binary, pixel.binary, depthVertex.binary, depthPixel.binary });
+				logger::info("[DCLF] tree LOD programs ready (DistantTree, pulled)");
+			}
 		}
 #endif
 	}

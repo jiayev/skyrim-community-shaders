@@ -211,6 +211,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// for its registrations.
 	DCLF::PassCapture::Get().RefreshMainRenderers();
 	store.CommitSet();
+	// Tree LOD's for the frame, before the main camera's cull registers its passes (dclf-lod.md, "Tree LOD: the draws").
+	DCLF::IndirectDraws::Get().DecideTreeLod();
 	const double sceneMs = MillisecondsSince(start);
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);

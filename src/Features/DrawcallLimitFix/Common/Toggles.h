@@ -41,6 +41,8 @@ namespace DCLF
 		bool lodObjects = false;
 		// terrain LOD (TES::lodLandRoot's land blocks, the LODLand and LODLandNoise techniques): tracked under the LOD root;
 		bool lodTerrain = false;
+		// tree LOD (the LOD trees root's instanced shapes): drawn by DCLF's own cull and draws from the mirrored instance records;
+		bool lodTrees = false;
 		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
 		bool skinPartitions = false;
 		// geometry under an actor's 3D, and the FacegenRGBTint technique;

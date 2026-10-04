@@ -47,4 +47,11 @@ namespace DCLF
 	};
 
 	ShadowIndirectState GetShadowIndirectState();
+
+	/** @brief Tree LOD's pipelines and its draw's signature (DrawPipelines::FindTreeLod). */
+	struct TreeLodPipelines
+	{
+		rhi::PipelineHandle depth{}, colour{};
+		rhi::CommandSignatureHandle drawSignature{};  // one non-indexed DrawInstanced's arguments (16 bytes)
+	};
 }

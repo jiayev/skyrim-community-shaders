@@ -75,9 +75,9 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			samples += fmt::format("{}{}", samples.empty() ? "" : ", ", sample);
 		const auto leaked = leaks.leakedInDepth + leaks.leakedInOpaque;
 		logger::info("[DCLF] main camera since the last report: {} native passes drawn, {} of them set members' ({} depth, {} opaque){}{}; last frame's registrations: {} "
-					 "member passes withheld, {} cross-fade copies and {} fades DCLF does not model left to the engine",
+					 "member passes withheld, {} cross-fade copies and {} fades DCLF does not model left to the engine; {} tree LOD passes withheld",
 			leaks.offered, leaked, leaks.leakedInDepth, leaks.leakedInOpaque, leaked ? " <- LEAK" : " <- OK", samples.empty() ? "" : "; first: " + samples,
-			capture.mainWithheld, capture.mainCrossfadeCopies, capture.mainUnmodelledFades);
+			capture.mainWithheld, capture.mainCrossfadeCopies, capture.mainUnmodelledFades, capture.treeLodWithheld);
 		leaks = {};
 	}
 	// What the GPU spent on each segment, measured by the graph itself; the menu shows the latest window.

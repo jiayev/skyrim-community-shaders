@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Common/Toggles.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/TreeLod.h"
 
 #include <span>
 
@@ -107,6 +108,7 @@ namespace DCLF
 		stats.volumetricWithheld = volumetricWithheld.exchange(0, std::memory_order_relaxed);
 		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
+		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainCrossfadeCopies = mainCrossfadeCopies.exchange(0, std::memory_order_relaxed);
 		stats.mainUnmodelledFades = mainUnmodelledFades.exchange(0, std::memory_order_relaxed);
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
@@ -148,6 +150,13 @@ namespace DCLF
 	{
 		if (!a_pass || !a_pass->geometry || ParityBoth() || !IsMainRenderer(a_batch))
 			return false;
+		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): DCLF draws every instance the mirror holds this frame, so the engine's
+		// passes of every tree LOD shape (its Z-prepass's, hint 7 into group 1 through the shadow modes' registration; its colour
+		// pass's, hint 7 into group 1) are withheld.
+		if (treeLodOwned.load(std::memory_order_acquire) && TreeLod::IsTreeLodShape(a_pass->geometry)) {
+			treeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
 		const auto set = std::atomic_load(&frameSet);
 		if (!set || !(set->PhasesOf(a_pass->geometry) & kSetMain))
 			return false;
