@@ -453,6 +453,27 @@ static float DCLFAlphaTestRef = DCLFObjects[DCLFObjectIndex].AlphaTestRef;
 #		define AlphaTestRefRS DCLFAlphaTestRef
 #	endif
 
+#	if defined(DCLF_BINDLESS) && defined(RENDER_DEPTH) && defined(ALPHA_TEST)
+// The depth pass's own reference (PerGeometry AlphaTestRef.x), which DCLF's PerGeometry block does not hold: what
+// BSUtilityShader::SetupGeometry writes for a Lighting property's alpha property, from the object's threshold (AlphaTestRefRS
+// is threshold / 255): 0x3F7EFEFF while it blends, else threshold * (1 / 255) + 0x3B80802C, and 1 / 255 more for a threshold
+// of 4. The shadow maps (RENDER_SHADOWMAP) do not test it.
+float DCLFDepthAlphaTestRef()
+{
+	if (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 2u)
+		return asfloat(0x3F7EFEFFu);
+	const uint threshold = (uint)round(AlphaTestRefRS * 255.0);
+	precise float reference = (float)threshold * asfloat(0x3B808081u);
+	reference += asfloat(0x3B80802Cu);
+	if (threshold == 4u)
+		reference += asfloat(0x3B808081u);
+	return reference;
+}
+#		define DepthAlphaTestRef DCLFDepthAlphaTestRef()
+#	else
+#		define DepthAlphaTestRef AlphaTestRef.x
+#	endif
+
 float SampleShadowPCF(Texture2DArray<float4> tex, SamplerComparisonState samp, float2 baseUV, float layerIndex, float compareValue, float2x2 rotationMatrix, float radius)
 {
 	float visibility = 0.0;
@@ -578,7 +599,7 @@ PS_OUTPUT main(PS_INPUT input)
 		discard;
 	}
 #		elif !defined(RENDER_SHADOWMAP)
-	if (alpha - AlphaTestRef.x < 0) {
+	if (alpha - DepthAlphaTestRef < 0) {
 		discard;
 	}
 #		endif

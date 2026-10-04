@@ -27,7 +27,7 @@ namespace DCLF
 	void IndirectDraws::ExecuteShadowFrame() {}
 	void IndirectDraws::CaptureOcclusion(std::uint32_t) {}
 	bool IndirectDraws::OcclusionReady(std::uint32_t) const { return false; }
-	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t) { return 0; }
+	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t, std::uint32_t) { return 0; }
 	void IndirectDraws::KickColourBuild() {}
 	void IndirectDraws::KickZPrepassBuild() {}
 	void IndirectDraws::KickShadowBuild() {}

@@ -253,7 +253,7 @@ namespace DCLF
 
 		const auto& lights = a_tables.lights[a_objectIndex];
 		a_out.roomIndex = lights.roomIndex;
-		a_out.recordFlags = (object.flags & kObjectBeastRace) ? kRecordBeastRace : 0u;
+		a_out.recordFlags = ((object.flags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((object.flags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u);
 		// The same reference the native draw's AlphaTestRefBuffer carries: threshold / 255, and 0 when the
 		// object is not alpha tested (the shader's test is then compiled out anyway).
 		a_out.alphaTestRef = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;

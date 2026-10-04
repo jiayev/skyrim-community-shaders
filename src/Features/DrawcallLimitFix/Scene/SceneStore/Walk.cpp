@@ -638,7 +638,8 @@ namespace DCLF
 		// Likewise the alpha test and its threshold: a shadow caster's alpha reference comes from the
 		// object record (Utility.hlsl, DCLFAlphaTestRef), which is packed before the accumulate phase.
 		if (const auto* sceneAlpha = data.alphaProperty.get(); sceneAlpha && sceneAlpha->GetAlphaTesting())
-			object.flags |= kObjectAlphaTest | (static_cast<std::uint32_t>(sceneAlpha->alphaThreshold) << kObjectAlphaThresholdShift);
+			object.flags |= kObjectAlphaTest | (static_cast<std::uint32_t>(sceneAlpha->alphaThreshold) << kObjectAlphaThresholdShift) |
+			                (sceneAlpha->GetAlphaBlending() ? kObjectAlphaBlended : 0u);
 
 		// Skinning: the engine's own palette. Its per-frame update (AE FUN_140e4ff90) is what the bone
 		// setter runs from the native draw this object no longer gets; it is idempotent within a frame
@@ -1307,6 +1308,11 @@ namespace DCLF
 			UnlistHiddenChain(a_geometry, a_tracked);
 		if (a_root && a_tracked.lightRoot) {
 			MarkLightEntryDirty(a_tracked.lightRoot);
+			// A candidate losing a geometry may be on its way out of the scene (a cell unloading frees the entry after its
+			// geometries): the snapshots that name it are stale now, not at the next walk, since the point lights' selection
+			// (LocalLightCull::SelectFrame) reads their entries' nodes.
+			if (lightCandidateSet.contains(a_tracked.lightRoot))
+				++lightCandidatesGeneration;
 			Unlist(lightDependents, a_tracked.lightRoot, a_geometry);
 			a_tracked.lightRoot = nullptr;
 		}

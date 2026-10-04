@@ -544,6 +544,7 @@ namespace DCLF
 			for (std::uint32_t h = 0; h < 2; ++h)
 				buffers->fadeStatesOut[h] = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), h ? "cs.dclf.fade-states-out1" : "cs.dclf.fade-states-out0",
 					buffers->fadeStatesOutIndex[h], true);
+			buffers->nodeFadeStates = StructuredBuffer(buffers->fadeRootCapacity, sizeof(FadeNodeState), "cs.dclf.node-fade-states", buffers->nodeFadeStatesIndex);
 			buffers->fadeFrameBuffer = StructuredBuffer(1, sizeof(FadeFrame), "cs.dclf.fade-frame", unused);
 			buffers->fadeVisibility = CreateWords(kFadeVisibilityLists * kFadeVisibilityBytes / 4, false, "cs.dclf.fade-visibility");
 			buffers->fadeRootLists = StructuredBuffer(buffers->fadeRootCapacity, sizeof(std::uint32_t), "cs.dclf.fade-root-lists", unused);
@@ -688,6 +689,8 @@ namespace DCLF
 					s.fadeRootLists->ResizeStructured(a_rows);
 					s.fadeAnimated->ResizeStructured(a_rows);
 					s.fadeStates->ResizeStructured(a_rows);
+					s.nodeFadeStates->ResizeStructured(a_rows);
+					s.nodeFadeStatesIndex = s.nodeFadeStates->GetSRVInfo(0).slot.index;
 					for (std::uint32_t h = 0; h < 2; ++h) {
 						s.fadeStatesOut[h]->ResizeStructured(a_rows);
 						s.fadeStatesOutIndex[h] = s.fadeStatesOut[h]->GetSRVInfo(0).slot.index;

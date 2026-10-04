@@ -208,6 +208,8 @@ namespace DCLF
 	static_assert(sizeof(BindlessObject) == 256);
 	// BindlessObject::recordFlags (DCLFObjects.hlsli, DCLFRecordFlags): Subsurface Scattering's IsBeastRace (kObjectBeastRace).
 	inline constexpr std::uint32_t kRecordBeastRace = 1u << 0;
+	// ... and an alpha-tested object whose alpha property blends (kObjectAlphaBlended): the depth pass's reference (Utility.hlsl).
+	inline constexpr std::uint32_t kRecordAlphaBlended = 1u << 1;
 	// BuildDrawsCS.hlsl reads these by their float4 index in the record (kObjectFadeNodeRow, kObjectBoundRow, kObjectSunEntryRow).
 	static_assert(offsetof(BindlessObject, lodFadeNode) == 13 * 16 && offsetof(BindlessObject, bound) == 14 * 16 && offsetof(BindlessObject, sunEntry) == 15 * 16);
 

@@ -44,7 +44,8 @@ namespace DCLF::Draws
 				logger::warn("[DCLF] bindless record parity: {} differs for object {}", a_name, a_objectIndex);
 		};
 		expect(a_record.roomIndex == lights.roomIndex, "RoomIndex");
-		expect(a_record.recordFlags == ((object.flags & kObjectBeastRace) ? kRecordBeastRace : 0u), "RecordFlags");
+		expect(a_record.recordFlags == (((object.flags & kObjectBeastRace) ? kRecordBeastRace : 0u) | ((object.flags & kObjectAlphaBlended) ? kRecordAlphaBlended : 0u)),
+			"RecordFlags");
 		const float threshold = (object.flags & kObjectAlphaTest) ? ((object.flags >> kObjectAlphaThresholdShift) & 0xFF) / 255.0f : 0.0f;
 		expect(std::bit_cast<std::uint32_t>(a_record.alphaTestRef) == std::bit_cast<std::uint32_t>(threshold), "AlphaTestRef");
 		const bool skinned = (object.flags & kObjectSkinned) && a_objectIndex < a_tables.boneOffset.size();

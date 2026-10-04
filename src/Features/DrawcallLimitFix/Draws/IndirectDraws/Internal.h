@@ -467,6 +467,11 @@ namespace DCLF
 			bool fadeStatesOutZeroed = false;
 			/** @brief The published states a frame's builds read: the frame before's (FadeStateCS writes by the frame's parity). */
 			std::uint32_t FadeStatesReadIndex(std::uint32_t a_frame) const { return fadeStatesOutIndex[(a_frame + 1) & 1]; }
+			// CS_DCLF_SKYLIGHT_PARITY: the owned roots' states as their nodes hold them (FadeState::ReadNode), written on a parity
+			// frame for the occlusion views to read in place of the GPU's: the engine's reference cull of the map reads the nodes,
+			// and a stood-in root's node keeps what the engine last left there, so the comparison takes the same fades on both sides.
+			std::shared_ptr<org::Buffer> nodeFadeStates;
+			std::uint32_t nodeFadeStatesIndex = 0;
 			std::uint32_t fadeRootCapacity = 0;
 			std::uint64_t fadeRootsHeld = ~0ull;
 			std::uint32_t fadeRootCount = 0;

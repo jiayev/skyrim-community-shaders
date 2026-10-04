@@ -858,7 +858,7 @@ namespace DCLF
 		return occlusion.rasterState && occlusion.committedFrame == SceneStore::Get().GetFrame() && impl->shadow->depth[OcclusionDepthTarget(a_view)];
 	}
 
-	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views)
+	std::uint32_t IndirectDraws::ExecuteOcclusion(std::uint32_t a_views, std::uint32_t a_nodeFades)
 	{
 		ZoneScopedN("CS.DCLF.ExecuteOcclusion");
 		const auto start = std::chrono::steady_clock::now();
@@ -900,6 +900,23 @@ namespace DCLF
 			frame->latch = resources->latch;
 			const auto& previousShape = resources->occlusionPublished;
 			const auto& lookups = store.GetLookups();
+			// A parity frame's: the owned roots' states from their nodes (SceneBuffers::nodeFadeStates).
+			auto& scene = *resources->scene;
+			const bool nodeFades = (a_nodeFades & drawable) && scene.nodeFadeStates;
+			if (nodeFades) {
+				const auto& tables = store.GetTables();
+				std::vector<FadeNodeState> states(tables.fadeRoots.size());
+				for (std::size_t r = 0; r < states.size(); ++r) {
+					if (const auto* node = static_cast<const RE::NiAVObject*>(tables.fadeRootNode[r])) {
+						states[r] = FadeState::ReadNode(*node);
+						states[r].generation = tables.fadeRoots[r].generation;
+					} else {
+						states[r].generation = 0;  // a free slot: the static row's (no member draws under it)
+					}
+				}
+				if (!states.empty())
+					uploads(scene.nodeFadeStates, states.data(), states.size() * sizeof(FadeNodeState), 0);
+			}
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
 					continue;
@@ -920,6 +937,7 @@ namespace DCLF
 				auto latch = ShadowViewLatch(view, inputCount, frameNumber);
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
+				latch.fadeStatesIndex = nodeFades && (a_nodeFades & (1u << v)) ? scene.nodeFadeStatesIndex : scene.FadeStatesReadIndex(frameNumber);
 				const auto buckets = BucketsOfRow(lookups.ShadowMapRow(view.rasterState), indirect);
 				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, true, latch);
 				const auto* previous = PreviousView(previousShape, slot);

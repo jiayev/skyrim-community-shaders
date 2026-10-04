@@ -172,11 +172,13 @@ namespace DCLF
 		 * clears its map, and CaptureOcclusion takes the view at its FinishAccumulating hook (render mode 0x1C);
 		 * ExecuteOcclusion then draws every occluder of the frame's shadow build (the objects' Skylighting::OcclusionTechnique
 		 * for that map) into the views a_views names (a bit per view), GPU-culled, in one epoch, and returns the ones it drew.
+		 * The views a_nodeFades names (CS_DCLF_SKYLIGHT_PARITY's) take the fade roots' states from their nodes, as the engine's
+		 * reference render of the same frame does.
 		 * OcclusionReady says whether a view can be drawn this frame; when it cannot, the engine's SetupMask registers them.
 		 */
 		void CaptureOcclusion(std::uint32_t a_view);
 		bool OcclusionReady(std::uint32_t a_view) const;
-		std::uint32_t ExecuteOcclusion(std::uint32_t a_views);
+		std::uint32_t ExecuteOcclusion(std::uint32_t a_views, std::uint32_t a_nodeFades = 0);
 
 		const ShadowStats& GetShadowStats() const { return shadowStats; }
 		void ResetShadowStats() { shadowStats = {}; }
