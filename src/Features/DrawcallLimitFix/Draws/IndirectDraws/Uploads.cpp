@@ -141,6 +141,9 @@ namespace DCLF
 		std::vector<std::shared_ptr<const void>>& a_bindingOwners)
 	{
 		ZoneScopedN("CS.DCLF.CommitMainPayload");
+		// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
+		for (auto& owner : a_store.TakeRetiredImports())
+			a_bindingOwners.push_back(std::move(owner));
 		const auto& in = a_payload.inputs;
 		const auto& tables = a_store.GetTables();
 		const bool depthOnly = in.depthOnly;

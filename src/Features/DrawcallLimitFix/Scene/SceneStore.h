@@ -1232,7 +1232,17 @@ namespace DCLF
 		/** @brief Every lighting pass the main-camera accumulator holds this frame, by geometry (diagnostics). */
 		const ankerl::unordered_dense::map<const RE::BSGeometry*, AccumulatedPass>& GetAccumulatedPasses() const { return accumulatedPasses; }
 
+		/**
+		 * @brief Render thread, at an execution's commit: the import leases of the geometry slots cleared since the last call, for
+		 * the execution to hold until the GPU retires it. The frames already submitted read those buffers by their device
+		 * addresses, which DXVK does not see: a lease released at once let it free the buffer and give its memory to the next one
+		 * the game created (a LOD chunk streamed in after a teleport), so an in-flight frame's colour pass drew other vertices
+		 * than its Z-prepass had. Any execution submitted after the clear completes after every one before it (one queue).
+		 */
+		std::vector<std::shared_ptr<const void>> TakeRetiredImports() { return std::exchange(retiredImports, {}); }
+
 	private:
+		std::vector<std::shared_ptr<const void>> retiredImports;  // TakeRetiredImports
 		struct Tracked
 		{
 			RE::NiPointer<RE::BSGeometry> geometry;

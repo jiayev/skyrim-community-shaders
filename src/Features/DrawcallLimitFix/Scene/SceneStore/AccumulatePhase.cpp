@@ -1,7 +1,30 @@
 #include "Internal.h"
 
+#include "Features/SubsurfaceScattering.h"
+
 namespace DCLF
 {
+	namespace
+	{
+		/**
+		 * @brief Subsurface Scattering's IsBeastRace for the object (SubsurfaceScattering::BSLightingShader_SetupSkin): a face's
+		 * (kFace or kFaceGenRGBTint), from its actor's race keyword, and set without an actor or a race. Lighting.hlsl reads it
+		 * under SKIN alone, so it is nothing for any other property.
+		 */
+		bool BeastRaceFace(const RE::BSShaderProperty& a_property, RE::BSGeometry& a_geometry)
+		{
+			using enum RE::BSShaderProperty::EShaderPropertyFlag;
+			const auto& sss = globals::features::subsurfaceScattering;
+			if (!sss.loaded || !sss.isBeastRaceKeyword || !a_property.flags.any(kFace, kFaceGenRGBTint))
+				return false;
+			if (auto* userData = a_geometry.GetUserData())
+				if (auto* actor = userData->As<RE::Actor>())
+					if (auto* race = actor->GetRace())
+						return race->HasKeyword(sss.isBeastRaceKeyword);
+			return true;
+		}
+	}
+
 	void SceneStore::LatchAccumulator()
 	{
 		auto* accumulator = *globals::game::currentAccumulator.get();
@@ -384,6 +407,11 @@ namespace DCLF
 					permutation.vertexShaderDescriptor = descriptors.rawVertex;
 					permutation.pixelShaderDescriptor = descriptors.rawPixel & ~descriptors.pixel;
 					permutation.extraShaderDescriptor = static_cast<std::uint32_t>(State::ExtraShaderDescriptors::InWorld);
+					// AdditiveLighting (State::UpdateLightingShaderPermutation): a pass whose alpha property blends onto the target
+					// (destination ONE). Only a blended decal (group 2) applies its alpha property, and its key carries the blend
+					// mode, which the blend functions decide: the same for every object of the key.
+					if (descriptors.decalGroup == 2 && alpha && alpha->GetAlphaBlending() && alpha->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kOne)
+						permutation.extraShaderDescriptor |= static_cast<std::uint32_t>(State::ExtraShaderDescriptors::AdditiveLighting);
 					// Extended Translucency's material model, as its SetupGeometry hook sets it (the key carries it):
 					// disabled for opaque geometry, the default or the mesh's own for blended geometry.
 					permutation.extraFeatureDescriptor = globals::features::extendedTranslucency.loaded ?
@@ -431,7 +459,8 @@ namespace DCLF
 				              (descriptors.technique == kTechniqueTreeAnim ? kObjectTreeAnim : 0u) |
 				              (alphaTest ? static_cast<std::uint32_t>(alpha->alphaThreshold) << kObjectAlphaThresholdShift : 0u) |
 				              (descriptors.decalGroup ? kObjectDecal | (descriptors.decalGroup << kObjectDecalGroupShift) : 0u) |
-				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u);
+				              ((property->flags.underlying() & ((1ull << 14) | (1ull << 46))) ? kObjectLandscapeLights : 0u) |
+				              (BeastRaceFace(*property, *geometry) ? kObjectBeastRace : 0u);
 				{
 					if (derivedHit && derivedProbe) {
 						++stats.derivedChecked;

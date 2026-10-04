@@ -32,7 +32,10 @@ namespace DCLF
 		kObjectAlphaTest = 1u << 0,  // alpha test on, reference = threshold / 255 (as the native draw's AlphaTestRef)
 		kObjectTwoSided = 1u << 1,   // no culling (the native main pass culls back faces otherwise)
 		kObjectSuppressExternalEmittance = 1u << 2,  // ExtraShaderDescriptors::SuppressExternalEmittance in the permutation buffer
-		// Bit 3 is free.
+		// Subsurface Scattering's IsBeastRace for a face (BSLightingShader_SetupSkin: kFace or kFaceGenRGBTint, its actor's race
+		// keyword, set without an actor or race): per actor, so the object record's (BindlessObject::recordFlags), not the
+		// pipeline's permutation, where the native draw has it.
+		kObjectBeastRace = 1u << 3,
 		// A skinned object (CS_DCLF_SKINNED): its vertices come from the skin partition's own buffer and its
 		// vertex shader reads the bone palette rows at BindlessObject::boneOffset / previousBoneOffset.
 		kObjectSkinned = 1u << 4,

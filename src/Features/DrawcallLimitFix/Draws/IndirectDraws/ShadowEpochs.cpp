@@ -1135,6 +1135,9 @@ namespace DCLF
 				BuildShadowPayload(in, tables, lookups, payload, impl->SceneObjects(), impl->SceneBones(), impl->ShadowKeptState(), impl->SceneGeometries());
 			}
 			*frameOwners = std::move(payload.bindingOwners);
+			// The cleared geometry slots' buffers, held until this execution retires (SceneStore::TakeRetiredImports).
+			for (auto& owner : store.TakeRetiredImports())
+				frameOwners->push_back(std::move(owner));
 			impl->shadowExecutionOwner = frameOwners;
 			prepareMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
 			TracyCZoneEnd(shadowPrepareZone);

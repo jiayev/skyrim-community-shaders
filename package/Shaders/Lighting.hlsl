@@ -3679,7 +3679,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #		if defined(SSS) && defined(SKIN)
-	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
+#			if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix: per actor, from the object record (the permutation is the pipeline's).
+	const bool beastRace = (DCLFObjects[DCLFObjectIndex].DCLFRecordFlags & 1u) != 0;
+#			else
+	const bool beastRace = (Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace) != 0;
+#			endif
+	psout.Masks = float4(saturate(baseColor.a), !beastRace, masksZ, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif

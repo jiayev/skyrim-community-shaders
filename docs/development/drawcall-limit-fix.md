@@ -1075,10 +1075,16 @@ The same fix applies elsewhere:
   checked by draw parity).
 
 **Result** (`tourcapy`, 15 reports, 255k-405k draws each): 0 mismatched draws in every technique; light data, bone
-palettes, draw and skin parity OK. The permutation residue is 0-1,449 draws a report and real:
-- IsBeastRace on the Khajiit player's face and body (DCLF never sets it, so Subsurface Scattering's mask treats a beast
-  race's skin as not one).
-- AdditiveLighting on `EdgeBlood01`, which the engine blends additively and DCLF draws through an opaque key.
+palettes, draw and skin parity OK. The permutation residue was 0-1,449 draws a report, and both causes were real
+defects:
+- **IsBeastRace** was never set on DCLF's face and body draws (the Khajiit player's), so Subsurface Scattering's mask
+  treated a beast race's skin as not one. It is per actor, so it is now an object flag (`kObjectBeastRace`, set by the
+  accumulate phase with Subsurface Scattering's rule) carried in the object record's flag word (`recordFlags`, which
+  replaces the unused ShadowBitMask). Lighting.hlsl reads it there under `DCLF_BINDLESS`.
+- **AdditiveLighting** was missing on additively blended decals (`EdgeBlood01`). A blended decal's key carries the
+  blend mode, so the pipeline's permutation now takes the bit from the alpha property, by CS's own rule.
+
+With both fixed, capture parity is OK in every report (11 of 11), with every sub-check OK.
 
 ## Static ownership: capture at registration, then withhold
 
