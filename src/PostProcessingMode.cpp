@@ -22,7 +22,7 @@ namespace PostProcessingMode
 
 		/** @brief Mode read from the user settings, held until Effects 11 can take it. */
 		std::optional<Mode> pendingMode;
-		/** @brief The pending mode is only the default, so an installed Effects 11 preset may still take over. */
+		/** @brief The pending mode is only a placeholder, so ApplyPending() picks the default from what is installed. */
 		bool detectPreset = false;
 
 		/** @brief Effects 11 is initialized, so its UseEffect setting can be written. */
@@ -35,6 +35,14 @@ namespace PostProcessingMode
 		bool CanUseEffects11()
 		{
 			return IsEffects11Ready() && EffectManager::GetSingleton().IsPresetLoaded();
+		}
+
+		/** @brief Effects 11 with a loaded preset, else Post Processing if installed, else Vanilla. */
+		Mode ResolveDefaultMode()
+		{
+			if (CanUseEffects11())
+				return Mode::Effects11;
+			return globals::features::postProcessing.loaded ? Mode::PostProcessing : Mode::Vanilla;
 		}
 
 		/** @brief Switches the pipeline flags without the user-facing side effects of Set(). */
@@ -94,7 +102,7 @@ namespace PostProcessingMode
 	{
 		if (!pendingMode)
 			return;
-		const Mode mode = detectPreset && globals::features::effects11.IsUseEffectEnabled() ? Mode::Effects11 : *pendingMode;
+		const Mode mode = detectPreset ? ResolveDefaultMode() : *pendingMode;
 		Apply(mode == Mode::Effects11 && !CanUseEffects11() ? Mode::Vanilla : mode);
 		pendingMode.reset();
 	}

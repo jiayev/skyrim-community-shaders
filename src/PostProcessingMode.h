@@ -16,7 +16,7 @@ namespace PostProcessingMode
 	/** @brief Enables the chosen pipeline and disables the other; Effects 11 is ignored without a loaded preset. */
 	void Set(Mode mode);
 
-	/** @brief Reads the saved mode from the "General" section, defaulting to Vanilla; applied fully by ApplyPending(). */
+	/** @brief Reads the saved mode from the "General" section, defaulting to what is installed (Effects 11 with a preset, else Post Processing, else Vanilla); applied fully by ApplyPending(). */
 	void Load(const json& a_general);
 
 	/** @brief Writes the current mode into the user settings "General" section once it is known. */
