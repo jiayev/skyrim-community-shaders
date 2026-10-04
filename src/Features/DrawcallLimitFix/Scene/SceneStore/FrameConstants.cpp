@@ -869,6 +869,24 @@ namespace DCLF
 			a_slot == ~0u ? std::string() : fmt::format(" in slot {}", a_slot), fmt::ptr(a_key.first), a_key.second, what.substr(0, 600));
 	}
 
+	void SceneStore::RefreshLodTechniqueRanges()
+	{
+		HoldLodHighDetailRange();
+		float range[4];
+		LodHighDetailRange(range);
+		const auto offset = LightingVSLayout().offset[kVSHighDetailRange];
+		for (auto& row : tables.techniques) {
+			const std::uint32_t technique = row.key >> 1;  // TechniqueKey
+			if (technique != 9 && technique != 18)
+				continue;
+			float* out = &row.value.vs.floats[offset];
+			if (std::memcmp(out, range, sizeof(range)) == 0)
+				continue;
+			std::memcpy(out, range, sizeof(range));
+			row.constantsVersion = tables.NextVersion();
+		}
+	}
+
 	std::uint32_t SceneStore::TechniqueRowFor(std::uint32_t a_passDescriptor)
 	{
 		const std::uint32_t key = TechniqueKey(a_passDescriptor);

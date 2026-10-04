@@ -18,8 +18,6 @@ namespace DCLF
 	 */
 	struct ToggleSet
 	{
-		// Claimed passes are withheld from the main camera's batch renderer (PassCapture).
-		bool ownership = false;
 		// How BuildDrawsCS filters the frame's draws before it writes their sequences: 0 off, 1 frustum, 2 frustum then
 		// the HZB. The inputs are the whole tracked set, so the culling has real work to do.
 		std::uint8_t cullMode = 0;
@@ -41,6 +39,8 @@ namespace DCLF
 		bool switchNodes = false;
 		// object LOD (TES::lodLandRoot's BSSubIndexTriShape blocks): tracked under the LOD root, drawn by their visible segments;
 		bool lodObjects = false;
+		// terrain LOD (TES::lodLandRoot's land blocks, the LODLand and LODLandNoise techniques): tracked under the LOD root;
+		bool lodTerrain = false;
 		// skins of several partitions (LOD trees, actor bodies), one draw per partition the engine would draw;
 		bool skinPartitions = false;
 		// geometry under an actor's 3D, and the FacegenRGBTint technique;
@@ -52,9 +52,7 @@ namespace DCLF
 
 		// The shadow views are drawn by the render graph.
 		bool shadows = false;
-		// Claimed casters are withheld from the shadow views of their render mode.
-		bool shadowOwnership = false;
-		// The engine does not build sun shadow passes for DCLF's casters (SunAccumulation).
+		// The engine does not build sun shadow passes for the set's casters (SunAccumulation).
 		bool skipSunAccumulation = false;
 		// The sun's cascade culls skip the references whose shadows DCLF draws entirely (SunAccumulation).
 		bool excludeSunEntries = false;

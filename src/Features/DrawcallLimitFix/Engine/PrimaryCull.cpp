@@ -314,20 +314,10 @@ namespace DCLF
 	void PrimaryCull::PrepareFrame()
 	{
 		++cutStats.frames;
-		// The membership witness, before the list jobs: a change rebinds every resident in this frame's accumulate phase
-		// (BindByMembership reads this same sample), so this frame's stand-in hands every member to the engine.
-		sampledWitness = MembershipWitness();
-		sampledWitnessFrame = SceneStore::Get().GetFrame();
-		rebindAll = sampledWitness != SceneStore::Get().BoundMembershipWitness();
-		// Which pipelines a build can draw with now, for MemberDrawable (the stand-in's member test and Owned, the leaf
-		// exclusion's): every frame the list jobs run, whether the stand-in does or not.
-		{
-			auto& store = SceneStore::Get();
-			const auto& tables = store.GetTables();
-			drawablePipelines.assign(tables.pipelines.size(), 0);
-			for (std::uint32_t p = 0; p < tables.pipelines.size(); ++p)
-				drawablePipelines[p] = tables.PipelineUsed(p) && store.PipelineDrawable(p) ? 1 : 0;
-		}
+		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
+		// here), and BindByMembership reads the same sample.
+		if (sampledWitnessFrame != SceneStore::Get().GetFrame())
+			SampleMembershipWitness();
 		// The switches whose selection the walks applied since the last frame; a frame the cut skips drops them, so the
 		// next one reads every switch again.
 		const bool switchResync = SceneStore::Get().TakeSwitchChanges(switchChanges);
@@ -336,7 +326,7 @@ namespace DCLF
 		const std::uint32_t count = Global<std::uint32_t>(kSceneListCount);
 		auto** processes = Global<RE::NiCullingProcess**>(kListProcesses);
 		++frameCounter;
-		frameClaims = PassCapture::Get().CurrentClaims();
+		frameSet = PassCapture::Get().CurrentSet();
 		standInLive = false;
 		// The camera the fade roots' distances are measured from (BuildDraws' fade test).
 		fadeEye = {};
@@ -462,26 +452,8 @@ namespace DCLF
 		}
 		standInLive = true;
 		walkEverything = SwitchEnabled(Switch::PersistentParity);
-		// The members joined with a pipeline still compiling are walked again once it is drawable, so their entries stop walking.
-		{
-			auto& store = SceneStore::Get();
-			// A member bound again every frame (an actor's part) is noted every frame its pipeline is still compiling.
-			std::sort(undrawableMembers.begin(), undrawableMembers.end());
-			undrawableMembers.erase(std::unique(undrawableMembers.begin(), undrawableMembers.end()), undrawableMembers.end());
-			std::size_t kept = 0;
-			for (const auto* geometry : undrawableMembers) {
-				const std::int32_t object = store.IsTracked(geometry) ? store.FindObject(geometry) : -1;
-				if (object >= 0 && store.IsMember(object) && !MemberDrawable(object)) {
-					undrawableMembers[kept++] = geometry;
-					continue;
-				}
-				if (const auto it = candidates->geometries.find(geometry); it != candidates->geometries.end() && it->second < candidates->geometryEntry.size())
-					walkRefresh.push_back(candidates->geometryEntry[it->second]);
-			}
-			undrawableMembers.resize(kept);
-		}
 		// Which entries the stand-in walks: a new snapshot's, from their members once memberLive is current; the entries a
-		// member's binding left since.
+		// member joined or left the set in since.
 		if (newSnapshot) {
 			for (std::uint32_t e = 0; e < cut.walk.size(); ++e)
 				RefreshWalk(e);
@@ -489,6 +461,8 @@ namespace DCLF
 			for (const std::uint32_t e : std::exchange(walkRefresh, {}))
 				RefreshWalk(e);
 		}
+		// The entries whose members are all in the set now are left out of the engine's cull from this frame on.
+		RunAdmission();
 		// The fade roots DCLF services: a new snapshot's, and every one again from its node after frames the engine culled
 		// them all (its OnVisible ran on them meanwhile).
 		if (newSnapshot)
@@ -662,34 +636,38 @@ namespace DCLF
 
 	bool PrimaryCull::Owned(const RE::BSGeometry& a_geometry) const
 	{
-		// And the colour build can draw it this frame: a member whose pipeline is still compiling, or every member on the frame
-		// the residents are all bound again (rebindAll), is the engine's registration's, whoever's cull reached it.
-		if (!frameClaims || !frameClaims->contains(&a_geometry))
-			return false;
-		const std::int32_t object = SceneStore::Get().FindObject(&a_geometry);
-		return SceneStore::Get().IsMember(object) && !rebindAll && MemberDrawable(object);
+		return frameSet && (frameSet->PhasesOf(&a_geometry) & kSetMain) != 0;
 	}
 
-	void PrimaryCull::Admit(const std::function<bool(const RE::BSGeometry*)>& a_drawn, const std::vector<const RE::BSGeometry*>& a_newlyDrawn)
+	void PrimaryCull::NoteSetChanges(const std::vector<const RE::BSGeometry*>& a_joined, const std::vector<const RE::BSGeometry*>& a_left)
 	{
 		auto& store = SceneStore::Get();
-		// A geometry the colour build starts drawing is no longer main-registered, so nothing would read and clear the bits a
-		// shadow light wrote into its mask while it was the engine's or not yet drawn (out of view, say): cleared once here,
-		// and kept 0 from now on by SunAccumulation (ClearOwnedMask). Only tracked ones are touched, so they are alive.
-		for (const auto* geometry : a_newlyDrawn)
+		// A geometry that joins the set is no longer main-registered, so nothing would read and clear the bits a shadow light
+		// wrote into its mask while it was the engine's: cleared once here, and kept 0 from now on by SunAccumulation
+		// (ClearOwnedMask). Only tracked ones are touched, so they are alive.
+		for (const auto* geometry : a_joined)
 			if (store.IsTracked(geometry))
 				if (const auto* property = geometry->GetGeometryRuntimeData().shaderProperty.get())
 					if (void* lightData = At<void*>(property, kPropertyLightData))
 						At<std::uint32_t>(lightData, kLightDataActiveMask) = 0;
-		if (!cut.candidates || cut.candidates->generation != store.GetSunCandidatesGeneration())
+		for (const auto* geometry : a_left)
+			NoteMemberLost(geometry);
+		if (!cut.candidates)
 			return;
-		// The entries of the geometries newly drawn (by pointer alone: nothing here is dereferenced).
+		// The entries of the geometries that joined (by pointer alone: nothing here is dereferenced).
 		const auto& candidates = *cut.candidates;
-		for (const auto* geometry : a_newlyDrawn)
+		for (const auto* geometry : a_joined)
 			if (const auto it = candidates.geometries.find(geometry); it != candidates.geometries.end() && it->second < candidates.geometryEntry.size()) {
 				cut.pendingAdmission.push_back(candidates.geometryEntry[it->second]);
 				walkRefresh.push_back(candidates.geometryEntry[it->second]);
 			}
+	}
+
+	void PrimaryCull::RunAdmission()
+	{
+		auto& store = SceneStore::Get();
+		if (!cut.candidates || cut.candidates->generation != store.GetSunCandidatesGeneration())
+			return;
 		bool admittedAny = false;
 		for (const std::uint32_t e : cut.pendingAdmission) {
 			if (e >= cut.admitted.size() || cut.admitted[e] || cut.plans[e] == EntryPlan::Rejected)
@@ -702,7 +680,7 @@ namespace DCLF
 					all = false;
 					break;
 				}
-				all = cut.members[m].engine || !MemberShown(m, cut.roots[e]) || a_drawn(geometry);
+				all = cut.members[m].engine || !MemberShown(m, cut.roots[e]) || MemberDrawable(cut.memberObject[m]);
 			}
 			if (all) {
 				cut.admitted[e] = 1;
@@ -726,7 +704,7 @@ namespace DCLF
 		bool walk = cut.mixed[a_e] != 0;
 		auto& store = SceneStore::Get();
 		for (std::uint32_t m = cut.memberOffsets[a_e]; m < cut.memberOffsets[a_e + 1] && !walk; ++m)
-			if (!cut.members[m].engine && (!store.IsMember(cut.memberObject[m]) || !MemberDrawable(cut.memberObject[m])) && store.IsTracked(cut.members[m].geometry) &&
+			if (!cut.members[m].engine && !MemberDrawable(cut.memberObject[m]) && store.IsTracked(cut.members[m].geometry) &&
 				MemberShown(m, cut.roots[a_e]))
 				walk = true;
 		cutVersion += cut.walk[a_e] != (walk ? 1 : 0) ? 1 : 0;
@@ -754,20 +732,14 @@ namespace DCLF
 
 	bool PrimaryCull::MemberDrawable(std::int32_t a_object) const
 	{
-		if (a_object < 0)
-			return false;
-		const auto& tables = SceneStore::Get().GetTables();
-		if (static_cast<std::size_t>(a_object) >= tables.objects.size())
-			return false;
-		const auto& record = tables.objects[a_object];
-		return !(record.flags & kObjectNoBindings) && record.pipelineIndex < drawablePipelines.size() && drawablePipelines[record.pipelineIndex];
+		return (SceneStore::Get().SetPhasesOf(a_object) & kSetMain) != 0;
 	}
 
-	void PrimaryCull::NoteMemberUndrawable(const RE::BSGeometry* a_geometry)
+	std::uint32_t PrimaryCull::SampleMembershipWitness()
 	{
-
-		undrawableMembers.push_back(a_geometry);
-		NoteMemberLost(a_geometry);
+		sampledWitness = MembershipWitness();
+		sampledWitnessFrame = SceneStore::Get().GetFrame();
+		return sampledWitness;
 	}
 
 	std::uint32_t PrimaryCull::FrameMembershipWitness() const
@@ -918,8 +890,8 @@ namespace DCLF
 		}
 		++out.skipped;
 		// An entry with nothing for the registration (Cut::walk): the GPU culls and draws its members, and their fade is
-		// FadeStateCS's. Under CS_DCLF_PERSISTENT_PARITY every entry is walked, for the hole and light mask checks.
-		if (!cut.walk[e] && !walkEverything && !rebindAll)
+		// FadeStateCS's. Under CS_DCLF_PERSISTENT_PARITY every entry is walked, for the light mask check.
+		if (!cut.walk[e] && !walkEverything)
 			return true;
 		++out.walked;
 		// The root's state (fade, LOD) is FadeStateCS's; what is left here is what the frame draws, by the cull's
@@ -946,10 +918,9 @@ namespace DCLF
 				++out.hidden;
 				continue;
 			}
-			// Bound by scene membership: drawn from its record whenever the GPU finds it, unless the colour build cannot draw it this
-			// frame (its pipeline still compiling, or every binding taken again this frame: rebindAll). Then the engine registers
-			// it, and the native skip leaves its pass to the engine while DCLF cannot draw it (DrawableThisFrame).
-			if (!member.engine && SceneStore::Get().IsMember(cut.memberObject[m]) && !rebindAll && MemberDrawable(cut.memberObject[m])) {
+			// In the frame's set: drawn from its record whenever the GPU finds it. A member not in it (not ready, or its binding taken
+			// again this frame) is the engine's to register.
+			if (!member.engine && MemberDrawable(cut.memberObject[m])) {
 				out.visible.push_back(geometry);
 				continue;
 			}
@@ -1001,7 +972,6 @@ namespace DCLF
 		const std::int64_t start = Now();
 		const std::uint32_t sunBits = SunAccumulation::Get().SunBits();
 		frameVisible.clear();
-		cutStats.rebindFrames += rebindAll ? 1 : 0;
 		for (std::uint32_t i = 0; i < cut.processCount; ++i) {
 			auto& out = jobOut[i];
 			frameVisible.insert(frameVisible.end(), out.visible.begin(), out.visible.end());
@@ -1058,7 +1028,8 @@ namespace DCLF
 		gpuSunFrame = false;
 		if (ListsFiltered() && !SunAccumulation::Get().ExclusionLive())
 			++listStats.unexcluded;
-		if (ActiveToggles().ownership)
+		// CS_DCLF_PARITY_BOTH: the engine culls and registers everything.
+		if (!PassCapture::ParityBoth())
 			PrepareFrame();
 		CheckFadePort();
 		if (!Probe())
@@ -1343,11 +1314,11 @@ namespace DCLF
 			const double applied = std::max<double>(static_cast<double>(s.appliedFrames), 1.0);
 			logger::info("[DCLF] primary exclusion: applied on {} of {} frames ({} stale, {} preconditions); per frame {:.0f} eligible entries reached, "
 						 "{:.0f} stood in for ({:.0f} walked, {:.0f} of them in view), {:.1f} cross-fading LOD (stood in), {:.1f} not yet admitted ({:.1f} admitted); {:.0f} members in view, {:.1f} not bound yet (the engine's), "
-						 "{:.1f} bound but not drawable this frame (the engine's: a pipeline compiling; {} frames rebinding every member), {:.1f} hidden;  {:.1f} owned geometries left out of the engine's registration; {} holes; "
+						 "{:.1f} bound but not in the set (the engine's), {:.1f} hidden;  {:.1f} owned geometries left out of the engine's registration; "
 						 "{:.0f} of the engine's members in view registered by it; switches: {:.1f} entries culled by the engine (stale child), {:.0f} members unselected, selection read from every switch on {} frames and from {} events' entries; render thread: prepare {:.3f} ms, after the jobs {:.3f} ms",
 				s.appliedFrames, s.frames, s.skippedStale, s.skippedPreconditions, s.seen / applied, s.skipped / applied, s.walked / applied, s.visibleEntries / applied,
 				s.notSettled / applied, s.notAdmitted / applied, s.admittedNow / applied, s.members / applied, s.unbound / applied,
-				s.undrawable / applied, s.rebindFrames, s.hiddenSkipped / applied, s.excluded / applied, s.holes,
+				s.undrawable / applied, s.hiddenSkipped / applied, s.excluded / applied,
 				s.engineMembers / applied, s.switchStale / applied, s.unselected / applied, s.liveAll, s.liveEntries, s.prepareTicks * toMs / applied, s.afterTicks * toMs / applied);
 			{
 				const auto r = SceneStore::Get().TakeResidentStats();

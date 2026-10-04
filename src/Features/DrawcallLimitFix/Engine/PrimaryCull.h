@@ -17,6 +17,7 @@
 #include "Features/DrawcallLimitFix/Engine/LocalLightCull.h"
 #include "Features/DrawcallLimitFix/Scene/FadeState.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
+#include "Features/DrawcallLimitFix/Scene/SceneSet.h"
 
 namespace DCLF
 {
@@ -40,17 +41,17 @@ namespace DCLF
 	 * the list job's own thread. For an admitted, settled entry in view (the job's own planes) it:
 	 *   - leaves the root's OnVisible update to FadeStateCS (the fade, a leaf node's LOD step, a tree's LOD fix-up), written
 	 *     back onto the node, and tests a tree's height;
-	 *   - does nothing for its geometries bound by scene membership (SceneStore::IsMember): their records are drawn
-	 *     whenever the GPU finds them;
+	 *   - does nothing for its geometries in the DCLF set (SceneSet.h, the frame's): their records are drawn whenever the GPU
+	 *     finds them;
 	 *   - hands every other geometry in view to the engine's registration as the cull would (the process's
-	 *     AppendVirtual, in the traversal's order): decals, effects and blended objects, and a DCLF geometry not bound yet.
+	 *     AppendVirtual, in the traversal's order): decals, effects and blended objects, and a DCLF geometry not in the set.
 	 * Switch nodes are followed by event (a member is drawn while every switch above it selects its path: memberLive,
 	 * updated from SceneStore's switch events, which also bring a newly selected child up to date), and a root that is
 	 * fading or cross-fading LOD leaves the entry to the engine's Process1 that frame. An entry with engine-drawn parts
 	 * (Cut::mixed) is the engine's Process1's whole: its OnVisible updates the node the engine's draws read, the AppendVirtual
 	 * hook keeps DCLF's members from the registration, and FadeStateCS runs the same update for those members. An entry is eligible when its nodes are plain (NiNode, BSMultiBoundNode, switch
 	 * nodes; a fade, leaf or tree root) and its geometries use BSGeometry's OnVisible, with at least one DCLF draws;
-	 * it is admitted once the colour epoch has drawn all of those (Admit). After the jobs the render thread only
+	 * it is admitted once all of those it shows are in the set (RunAdmission). After the jobs the render thread only
 	 * gathers the jobs' output and clears the activeLightMask of what DCLF draws, as the main registration would.
 	 * Frame precondition: the sun's entry exclusion is live (its cascades are captured).
 	 */
@@ -139,13 +140,8 @@ namespace DCLF
 		static bool SyntheticPass(const RE::BSGeometry& a_geometry, std::uint32_t a_derivedPass, AccumulatedPass& a_out, bool a_sunOnGpu = false,
 			const RE::BSLightingShaderProperty* a_layer = nullptr);
 
-		/**
-		 * @brief This frame's members in view under the entries the list jobs stood in for: nothing registered them, so one
-		 * the colour epoch did not draw is a hole (IndirectDraws::PublishClaims).
-		 */
+		/** @brief This frame's members in view under the entries the list jobs stood in for (nothing registered them). */
 		const std::vector<const RE::BSGeometry*>& StoodInMembers() const { return frameVisible; }
-		/** @brief The hole test (IndirectDraws::PublishClaims): a stood-in member the colour epoch did not draw. */
-		void CountHole() { ++cutStats.holes; }
 		/**
 		 * @brief Render thread (SceneStore, a member's residency dropped): the geometry's entry is walked again (Cut::walk) until
 		 * the next frame says whether it still needs it.
@@ -154,34 +150,36 @@ namespace DCLF
 		/** @brief Render thread: every residency ended (SceneStore::EndAllResidency): every entry walked until the next snapshot. */
 		void NoteAllMembersLost();
 		/**
-		 * @brief Render thread (SceneStore, a member joined with a pipeline still compiling): its entry is walked, the member
-		 * handed to the engine's registration, until the pipeline is drawable.
+		 * @brief The frame's MembershipWitness, sampled once (SceneStore::CommitSet, at the scene phase): the commit keeps every
+		 * resident out of the set on the frame it changes, and BindByMembership binds them all again from the same sample.
 		 */
-		void NoteMemberUndrawable(const RE::BSGeometry* a_geometry);
-		/**
-		 * @brief MembershipWitness as PrepareFrame sampled it this frame, before the list jobs (else now): BindByMembership rebinds
-		 * every resident on the frame the stand-in hands them all to the engine.
-		 */
+		std::uint32_t SampleMembershipWitness();
+		/** @brief The frame's sample (SampleMembershipWitness), else now. */
 		std::uint32_t FrameMembershipWitness() const;
+		/**
+		 * @brief Render thread, SceneStore::CommitSet: the geometries that joined the set's main phase and those that left it. An
+		 * entry with one that joined is checked for admission before the list jobs; one with a member that left is walked, so the
+		 * stand-in hands that member to the engine's registration.
+		 */
+		void NoteSetChanges(const std::vector<const RE::BSGeometry*>& a_joined, const std::vector<const RE::BSGeometry*>& a_left);
 		/**
 		 * @brief Render thread, after the registration jobs: CS_DCLF_PERSISTENT_PARITY's light mask check of the owned members in
 		 * view.
 		 */
 		void CheckLightMasks();
 		/**
-		 * @brief After the colour epoch, render thread: admission by readiness. An entry is admitted, and left out of the
-		 * engine's cull from the next frame on, once the colour build draws every DCLF member it shows (a_drawn), in view or
-		 * not. Checked when one of its members starts being drawn (a_newlyDrawn, the build's drawn marks), and once for every
-		 * entry of a new snapshot. Only against a current snapshot: a stale one's geometries may have been released since (a
-		 * cell unloading), and its successor queues its entries again.
+		 * @brief Before the list jobs, render thread: admission by the set. An entry is admitted, and left out of the engine's cull,
+		 * once every DCLF member it shows is in the frame's set, in view or not. Checked when one of its members joins
+		 * (NoteSetChanges), and once for every entry of a new snapshot. Only against a current snapshot: a stale one's geometries
+		 * may have been released since (a cell unloading), and its successor queues its entries again.
 		 */
-		void Admit(const std::function<bool(const RE::BSGeometry*)>& a_drawn, const std::vector<const RE::BSGeometry*>& a_newlyDrawn);
+		void RunAdmission();
 
 		/**
 		 * @brief Any thread from the full-frustum cull to the frame's end (a list process's AppendVirtual, the shadow lights' registrations): whether the geometry is DCLF's to draw, so the engine's cull does not
-		 * hand it to the registration (leaf exclusion). Owned: bound by scene membership and drawn by the colour build (the
-		 * claims). Wherever the engine still culls (an entry not stood in for: actors, a LOD cross-fade), its members are
-		 * left out here.
+		 * hand it to the registration (leaf exclusion): in the frame's set, with the main phase. Wherever the engine still culls
+		 * (an entry not stood in for: actors, a LOD cross-fade), its members are left out here. An optimisation only: the
+		 * registration withholds a member's passes whoever's cull reaches it (PassCapture).
 		 */
 		bool Owned(const RE::BSGeometry& a_geometry) const;
 		void Report(std::uint32_t a_frame, std::uint32_t a_interval);
@@ -524,13 +522,11 @@ namespace DCLF
 			std::uint64_t seen = 0, skipped = 0, visibleEntries = 0;
 			std::uint64_t notSettled = 0, notAdmitted = 0, admittedNow = 0;
 			std::uint64_t members = 0, unbound = 0, hiddenSkipped = 0;
-			std::uint64_t undrawable = 0;    // bound members in view handed to the engine: a pipeline compiling, or rebindAll
-			std::uint64_t rebindFrames = 0;  // frames every member was handed to the engine (the membership witness changed)
+			std::uint64_t undrawable = 0;    // bound members in view handed to the engine: not in the set (not ready, rebinding)
 			std::uint64_t maskChecked = 0, maskSun = 0, maskOther = 0;
 			std::uint64_t walked = 0;  // entries the stand-in walked (Cut::walk, or every one under the parity)
 			std::uint64_t walkMissed = 0;  // CS_DCLF_PERSISTENT_PARITY: geometries handed to the registration from entries Cut::walk leaves  // CS_DCLF_PERSISTENT_PARITY: owned members in view, and their masks not 0
 			std::uint64_t excluded = 0;     // owned geometries the engine's own cull reached and did not register (leaf exclusion)
-			std::uint64_t holes = 0;
 			std::uint64_t filterChecked = 0, filterMissed = 0;
 			std::uint64_t mixed = 0, visibilityChecked = 0, visibilityDiffer = 0;
 			std::string visibilityFirst;
@@ -547,7 +543,7 @@ namespace DCLF
 		std::vector<const RE::BSGeometry*> frameVisible;  // this frame's members in view under stood-in entries
 		std::vector<const RE::NiAVObject*> switchChanges;  // scratch: SceneStore::TakeSwitchChanges
 		std::array<float, 4> fadeEye{};  // FadeEye, captured in PrepareFrame
-		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSGeometry*>> frameClaims;  // the claims, for Owned (PrepareFrame)
+		std::shared_ptr<const SetSnapshot> frameSet;  // the frame's set, for Owned (PrepareFrame)
 		std::array<float, 2> treeHeight{ 0.0f, std::numeric_limits<float>::infinity() };  // TreeHeightTest, captured in PrepareFrame
 		// FadeVisibility: a block per list job slot, sampled by each job's first stand-in call, else AfterListJobs.
 		std::vector<std::byte> fadeVisibility = std::vector<std::byte>(std::size_t(kFadeVisibilityLists) * kFadeVisibilityBytes);
@@ -583,17 +579,10 @@ namespace DCLF
 		void RefreshWalk(std::uint32_t a_e);
 		std::vector<std::uint32_t> walkRefresh;  // entries whose member lost its binding: refreshed at the next PrepareFrame
 		bool walkEverything = false;             // CS_DCLF_PERSISTENT_PARITY: every entry walked (the hole and light mask checks)
-		// The membership witness PrepareFrame sampled (FrameMembershipWitness), the frame it did, and whether it differs from the
-		// one the residents were bound with: then every entry is walked and every member handed to the engine's registration,
-		// since this frame's accumulate phase binds them all again, with pipelines that may still be compiling.
+		// The membership witness the frame's commit sampled (SampleMembershipWitness), and the frame it did.
 		std::uint32_t sampledWitness = 0;
 		std::uint32_t sampledWitnessFrame = ~0u;
-		bool rebindAll = false;
-		// Per pipeline slot, whether a build can draw with it (SceneStore::PipelineDrawable), sampled in PrepareFrame for the
-		// list jobs: a member whose pipeline is not is handed to the engine's registration (MemberDrawable).
-		std::vector<std::uint8_t> drawablePipelines;
-		std::vector<const RE::BSGeometry*> undrawableMembers;  // NoteMemberUndrawable: re-walked when their pipeline is drawable
-		/** @brief List jobs and render thread: a bound member the colour build can draw this frame (its pipeline as sampled). */
+		/** @brief List jobs and render thread: a member of the frame's set with the main phase (SceneStore::SetPhasesOf). */
 		bool MemberDrawable(std::int32_t a_object) const;
 
 		/** @brief The derived pass descriptor per geometry, recomputed when what it reads changes. */

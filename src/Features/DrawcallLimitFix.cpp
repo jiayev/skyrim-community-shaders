@@ -83,9 +83,7 @@ void DrawcallLimitFix::PostPostLoad()
 	}
 	DCLF::SceneTracker::Get().Install();
 	DCLF::SceneStore::InstallSceneEvents();
-	// Capture at registration, the foundation for static ownership: withholding a pass from the batch
-	// renderer removes the very data the tables are built from today, so the capture has to prove itself
-	// first (it claims nothing and withholds nothing yet).
+	// Capture at registration: where the set's members' passes are withheld from the views DCLF draws.
 	DCLF::PassCapture::Get().Install();
 	DCLF::MaterialSources::Install();
 	DCLF::FaceSnapshots::Get().Install();
@@ -158,16 +156,12 @@ void DrawcallLimitFix::SetActive(bool a_active)
 	if (!a_active)
 		DCLF::IndirectDraws::Get().DrainAsync();
 	auto& capture = DCLF::PassCapture::Get();
-	// Off: every pass reaches the batch renderers again, and no claim outlives the switch. Back on, the claims
-	// are empty until the first frame republishes them, so nothing is withheld that DCLF has not drawn.
+	// Off: every pass reaches the batch renderers again, and no set or claim outlives the switch. Back on, nothing is
+	// withheld until the first frame's commit publishes the set again.
 	capture.SetBypassed(!a_active);
-	capture.ClearFrameClaims();
-	capture.PublishClaims(nullptr);
-	for (std::uint32_t mode = 0; mode < DCLF::PassCapture::kShadowModes; ++mode)
-		capture.PublishShadowClaims(mode, nullptr);
+	capture.PublishSet(nullptr);
 	if (a_active)
 		DCLF::SceneStore::Get().InvalidateVerdicts();
-	skipCounters = {};
 	logger::info("[DCLF] {} from the menu", a_active ? "Switched on" : "Switched off; the game renders natively");
 }
 
@@ -207,12 +201,13 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	const auto eventsStart = std::chrono::steady_clock::now();
 	store.ProcessEvents();
 	timing.eventsMs += MillisecondsSince(eventsStart);
-	// Registration hooks may run on cull workers. They must all read one
-	// ownership selection even when an epoch publishes next frame's claims.
-	DCLF::PassCapture::Get().SelectLegacyFrameClaims();
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
 	const auto start = std::chrono::steady_clock::now();
 	store.BuildFrame(DCLF::SceneStore::Phase::Scene);
+	// The frame's DCLF set, before the main camera's cull: who draws what, for every phase of the frame, and the engine's copy
+	// for its registrations.
+	DCLF::PassCapture::Get().RefreshMainRenderers();
+	store.CommitSet();
 	const double sceneMs = MillisecondsSince(start);
 	timing.sceneMs += sceneMs;
 	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
@@ -241,7 +236,7 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	DCLF::SceneStore::Get().JoinPlacements();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
-	// the capture's attribution, the claims, the epochs - identifies a view by this list.
+	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().Rebuild();
 	if (DCLF::ActiveToggles().shadows) {
 		DCLF::IndirectDraws::Get().BeginShadowFrame();
@@ -409,6 +404,8 @@ void DrawcallLimitFix::EarlyPrepass()
 	}
 
 
+	// Terrain LOD's HighDetailRange moves vertices: the Z-prepass draws with this frame's, as the colour pass does.
+	DCLF::SceneStore::Get().RefreshLodTechniqueRanges();
 	// The Z-prepass epoch's build, on the worker, from here to the Z-prepass in Main_RenderDepth (CS_DCLF_ASYNC).
 	DCLF::IndirectDraws::Get().KickZPrepassBuild();
 }
@@ -509,16 +506,18 @@ namespace
 bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 {
 	static_assert(kSkyOcclusion == DCLF::kOcclusionSky && kPrecipitationOcclusion == DCLF::kOcclusionPrecipitation);
-	if (!Running() || !DCLF::SceneStore::OcclusionEnabled(a_map)) {
-		DCLF::PrimaryCull::Get().RestoreSceneLists();
+	auto& capture = DCLF::PassCapture::Get();
+	capture.SetOcclusionPhase(0);
+	if (!Running() || !DCLF::SceneStore::OcclusionEnabled(a_map))
 		return false;
-	}
+	// DCLF draws the map's members of the set this frame (none until its phase is drawn: a frame after the first that drew it).
 	const bool ready = DCLF::IndirectDraws::Get().OcclusionReady(a_map);
 	occlusionNativeFrames[a_map] += ready ? 0 : 1;
-	// The engine draws this map from the scene lists: whole again.
-	if (!ready)
-		DCLF::PrimaryCull::Get().RestoreSceneLists();
 	occlusionWanted |= ready ? 1u << a_map : 0u;
+	const std::uint8_t phase = a_map == kSkyOcclusion ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation;
+	const auto set = capture.CurrentSet();
+	if (ready && set && (set->drawn & phase))
+		capture.SetOcclusionPhase(phase);
 	return ready;
 }
 
@@ -527,6 +526,7 @@ void DrawcallLimitFix::DrawOcclusion()
 	// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch; then DCLF's render of each map whose
 	// engine render a parity frame kept.
 	const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
+	DCLF::PassCapture::Get().SetOcclusionPhase(0);
 	const std::uint32_t drawn = wanted ? DCLF::IndirectDraws::Get().ExecuteOcclusion(wanted) : 0u;
 	for (std::uint32_t map = 0; map < 2; ++map)
 		if (occlusionParityWaiting & (1u << map)) {
@@ -538,13 +538,28 @@ void DrawcallLimitFix::DrawOcclusion()
 	occlusionParityWaiting = 0;
 }
 
+bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
+{
+	const std::uint8_t phase = a_map == kSkyOcclusion ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation;
+	const auto set = DCLF::PassCapture::Get().CurrentSet();
+	const bool needed = !Running() || !DCLF::SceneStore::OcclusionEnabled(a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
+	                    DCLF::SceneStore::Get().SetLacking(phase) > 0;
+	// The engine's cull of the map reads the scene lists: whole again.
+	if (needed)
+		DCLF::PrimaryCull::Get().RestoreSceneLists();
+	occlusionEngineFrames[a_map] += needed ? 1 : 0;
+	return needed;
+}
+
 bool DrawcallLimitFix::OcclusionParityFrame(OcclusionMap a_map)
 {
 	auto& parity = occlusionParity[a_map];
 	const bool due = SkyParityEnabled() && !parity.pending && (parity.frames++ % 120) == 60;
-	// The engine's reference map culls the scene lists: whole again.
-	if (due)
+	// The engine's reference map registers every occluder, from the whole scene lists.
+	if (due) {
 		DCLF::PrimaryCull::Get().RestoreSceneLists();
+		DCLF::PassCapture::Get().SetOcclusionPhase(0);
+	}
 	return due;
 }
 
@@ -606,10 +621,6 @@ void DrawcallLimitFix::Prepass()
 	store.RefreshFrameConstants();
 	// The colour epoch's build, on the worker, from here to the epoch (CS_DCLF_ASYNC).
 	DCLF::IndirectDraws::Get().KickColourBuild();
-	skipStats = skipCounters;
-	skipCounters = {};
-	if ((store.GetFrame() % kReportInterval) == 1)
-		skipSamples.clear();  // collected again for the next report
 
 	const std::uint32_t frame = store.GetFrame();
 	if (DCLF::CaptureParity::Enabled())
@@ -618,12 +629,6 @@ void DrawcallLimitFix::Prepass()
 	DCLF::PrimaryCull::Get().Report(frame, kReportInterval);
 
 	ReportStats(frame);
-}
-
-bool DrawcallLimitFix::DrawableThisFrame(const RE::BSGeometry* a_geometry)
-{
-	const auto& store = DCLF::SceneStore::Get();
-	return store.ObjectDrawable(store.FindObject(a_geometry));
 }
 
 void DrawcallLimitFix::NoteNativeDraw(const RE::BSShader* a_shader, std::uint32_t a_vertexDescriptor, std::uint32_t a_pixelDescriptor)
@@ -706,43 +711,24 @@ std::uint32_t DrawcallLimitFix::RequestLightingPipeline(std::uint32_t a_slot, RE
 	return setIndex;
 }
 
-bool DrawcallLimitFix::SkipNativePass(RE::BSRenderPass* a_pass)
+void DrawcallLimitFix::NoteNativePass(const RE::BSRenderPass* a_pass, std::uint32_t a_technique)
 {
-	if (!Running() || !a_pass || !a_pass->geometry)
-		return false;
+	if (!Running() || !a_pass || !a_pass->geometry || DCLF::PassCapture::ParityBoth())
+		return;
 	if (!inDepthPass && !globals::deferred->deferredPass)
-		return false;  // shadows, reflections and cubemaps keep drawing everything
-	static const bool skipOff = DCLF::SwitchValue(DCLF::Switch::NativeSkip) == "0";
-	if (skipOff)
-		return false;
-	// A decal's passes offered in the depth pass (blended ones with kZBufferWrite) draw nothing there: the Lighting shader
-	// never reaches SetupGeometry in the depth pass (engine notes, "Decals"), so they are skipped like any other pass.
-	// Never a pass DCLF does not model, whoever draws its object: a LOD cross-fade's copy of the old level
-	// (hint 10) is the native loop's while DCLF draws the object's own pass.
-	if (DCLF::PassCapture::FadingAtRegistration(a_pass))
-		return false;
-	auto& store = DCLF::SceneStore::Get();
-	if (!DCLF::IndirectDraws::Get().DrewLastFrame(a_pass->geometry, store.GetFrame()))
-		return false;
-	// A geometry the epoch drew in the frame before but that is not in this frame's tables would be left
-	// out of the frame entirely: the pass stays native and the mismatch is reported.
-	if (store.FindObject(a_pass->geometry) < 0) {
-		++skipCounters.notInTables;
-		if (skipCounters.notInTables == 1 && a_pass->geometry->name.c_str())
-			logger::warn("[DCLF] skip: '{}' was drawn last frame but is not in this frame's tables; it stays native", a_pass->geometry->name.c_str());
-		return false;
-	}
-	// Nor one DCLF cannot draw this frame although it has a record: the accumulate phase gave it no bindings
-	// (it started fading - a tree's LOD cross-fade begins at a fixed distance - or its switch no longer
-	// selects it) or its pipeline is not built. The skip set is last frame's draws, so this is the frame it
-	// would be drawn by nobody: the flicker trees showed at their LOD distances.
-	if (!DrawableThisFrame(a_pass->geometry)) {
-		++skipCounters.undrawable;
-		return false;
-	}
-	if (skipSamples.size() < 12 && a_pass->geometry->name.c_str())
-		skipSamples.emplace_back(a_pass->geometry->name.c_str());
-	return true;
+		return;  // shadows, reflections and cubemaps: not the main camera's views
+	++leaks.offered;
+	// The passes the registration leaves to the engine on purpose: a cross-fade's copy of the old level, a fade DCLF does not
+	// model (whose member leaves the set at the next commit).
+	if (a_pass->accumulationHint == 10 || DCLF::PassCapture::FadingAtRegistration(a_pass))
+		return;
+	const auto set = DCLF::PassCapture::Get().CurrentSet();
+	if (!set || !(set->PhasesOf(a_pass->geometry) & DCLF::kSetMain))
+		return;
+	++(inDepthPass ? leaks.leakedInDepth : leaks.leakedInOpaque);
+	if (leaks.samples.size() < 8)
+		leaks.samples.push_back(fmt::format("'{}' ({}, hint {}, technique {:08X})", a_pass->geometry->name.c_str() ? a_pass->geometry->name.c_str() : "?",
+			inDepthPass ? "depth" : "opaque", static_cast<std::uint32_t>(a_pass->accumulationHint), a_technique));
 }
 
 void DrawcallLimitFix::Hooks::Main_RenderDepth::thunk(bool a_firstPerson, bool a_a2)
@@ -774,12 +760,7 @@ template <int N>
 void DrawcallLimitFix::Hooks::BSBatchRenderer_RenderPassImmediately<N>::thunk(RE::BSRenderPass* a_pass, std::uint32_t a_technique, bool a_alphaTest, std::uint32_t a_renderFlags)
 {
 	auto& feature = globals::features::drawcallLimitFix;
-	++feature.skipCounters.offered;
-	if (feature.SkipNativePass(a_pass)) {
-		++(feature.inDepthPass ? feature.skipCounters.skippedInDepth : feature.skipCounters.skippedInOpaque);
-		++feature.skipCounters.skipped;
-		return;
-	}
+	feature.NoteNativePass(a_pass, a_technique);
 	func(a_pass, a_technique, a_alphaTest, a_renderFlags);
 	DCLF::CensusNativePass(a_pass, a_technique, ~0u, feature.inDepthPass);
 	// CS_DCLF_TARGET_PROBE: the blend state a native Lighting draw of the main pass left bound (its write masks per target),
@@ -850,6 +831,13 @@ void DrawcallLimitFix::Hooks::Install()
 	logger::info("[DCLF] Z-prepass hook installed inside Main::RenderDepth, after the world's depth draws");
 	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<1>>(REL::RelocationID(100877, 107667).address() + REL::Relocate(0x1E5, 0xED));
 	stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<2>>(REL::RelocationID(100852, 107642).address() + REL::Relocate(0x29E, 0x28F));
+	// A geometry group's pass list (FUN_1414f19d0, AE 1.6.1170): the main pass's groups 9, 8, 1, 0 and 13 when they hold a
+	// plain list, which is where terrain LOD's colour passes are drawn (dclf-lod.md, "Terrain LOD").
+	constexpr std::uintptr_t kGeometryGroupDraw = 0x14f1acd, kRenderPassImmediately = 0x14f3dc0;
+	if (DCLF::Engine::CallsTo(REL::Offset(kGeometryGroupDraw).address(), REL::Offset(kRenderPassImmediately).address()))
+		stl::write_thunk_call<BSBatchRenderer_RenderPassImmediately<3>>(REL::Offset(kGeometryGroupDraw).address());
+	else
+		logger::warn("[DCLF] the geometry groups' pass draw is not where expected; their passes stay native (terrain LOD among them)");
 	stl::write_thunk_call<Main_Draw_Early>(REL::RelocationID(35560, 36559).address() + 0xD3);
 	logger::info("[DCLF] scene phase hook installed on Main::Draw");
 	logger::info("[DCLF] Native pass hooks installed");
@@ -932,16 +920,6 @@ void DrawcallLimitFix::AfterOpaquePass()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 }
 
-void DrawcallLimitFix::PublishOwnership()
-{
-	if (!Running())
-		return;
-	// Publish what DCLF owns now that the colour epoch has said what it actually drew. The registration
-	// hook reads this on the next frame, before BuildFrame - which is the point: a claim is a standing
-	// statement of ownership, not a per-frame decision.
-	DCLF::IndirectDraws::Get().PublishClaims();
-}
-
 void DrawcallLimitFix::DrawSettings()
 {
 	const auto& stats = DCLF::SceneStore::Get().GetStats();
@@ -965,6 +943,9 @@ void DrawcallLimitFix::DrawSettings()
 	const auto active = DCLF::ActiveToggles();
 	if (ImGui::TreeNodeEx("Live toggles (A/B)", ImGuiTreeNodeFlags_DefaultOpen)) {
 		ImGui::TextWrapped("Each is seeded from its CS_DCLF_* switch and applied at the next frame. A change to an object class drops the classification caches, so the frame after it re-classifies everything.");
+		int cull = toggles.cullMode;
+		if (ImGui::Combo("GPU culling (CS_DCLF_CULL)", &cull, "off\0frustum\0frustum + occlusion\0"))
+			toggles.cullMode = static_cast<std::uint8_t>(cull);
 		for (const auto& toggle : DCLF::ToggleTable()) {
 			if (!toggle.section.empty())
 				ImGui::SeparatorText(toggle.section.data());
@@ -974,11 +955,6 @@ void DrawcallLimitFix::DrawSettings()
 				if (auto _tt = Util::HoverTooltipWrapper())
 					ImGui::TextUnformatted(toggle.tooltip);
 			ImGui::EndDisabled();
-			if (toggle.member == &DCLF::ToggleSet::ownership) {
-				int cull = toggles.cullMode;
-				if (ImGui::Combo("GPU culling (CS_DCLF_CULL)", &cull, "off\0frustum\0frustum + occlusion\0"))
-					toggles.cullMode = static_cast<std::uint8_t>(cull);
-			}
 		}
 		ImGui::TreePop();
 	}
@@ -999,15 +975,14 @@ void DrawcallLimitFix::DrawSettings()
 		if (const auto& gpu = RenderGraphRuntime::Get().GpuTimingSummary(); !gpu.empty())
 			ImGui::TextUnformatted(("GPU (ORG pass timestamps, last report):\n" + gpu).c_str());
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
-		if (active.ownership)
-			ImGui::Text("Ownership: %u claimed, %u holes", capture.claimed, capture.holes);
+		const auto set = DCLF::PassCapture::Get().CurrentSet();
+		ImGui::Text("DCLF set: %u members; main-view passes withheld %u", set ? static_cast<std::uint32_t>(set->phases.size()) : 0u, capture.mainWithheld);
 		if (active.shadows) {
 			const auto& shadow = DCLF::IndirectDraws::Get().GetShadowStats();
 			ImGui::Text("Shadow views (since the last report): %u offered, %u drawn, %u not ready; last view %u inputs, %u records; sampled culling: %u tested, %u rejected",
 				shadow.views, shadow.viewsDrawn, shadow.notReady, shadow.inputs, shadow.records, shadow.cullTested, shadow.cullRejected);
-			if (active.shadowOwnership)
-				ImGui::Text("Shadow ownership: withheld %u / %u / %u (plain / clamped / paraboloid), claimed %u / %u / %u",
-					capture.shadowWithheld[0], capture.shadowWithheld[1], capture.shadowWithheld[2], shadow.claimed[0], shadow.claimed[1], shadow.claimed[2]);
+			ImGui::Text("Shadow views: withheld %u / %u / %u passes (plain / clamped / paraboloid); the set's casters %u / %u / %u",
+				capture.shadowWithheld[0], capture.shadowWithheld[1], capture.shadowWithheld[2], shadow.casters[0], shadow.casters[1], shadow.casters[2]);
 		}
 		ImGui::TreePop();
 	}

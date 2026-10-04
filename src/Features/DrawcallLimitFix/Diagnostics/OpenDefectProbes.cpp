@@ -791,8 +791,8 @@ namespace DCLF
 		if (lod != "-" && a_mode == ~0u) {
 			const auto object = SceneStore::Get().FindObject(geometry);
 			rootName += object < 0 ? " [no object]" :
-			            fmt::format(" [object, member {}, drew last frame {}, fading at registration {}, drawable {}, deferred pass {}, running {}]", SceneStore::Get().IsMember(object),
-							IndirectDraws::Get().DrewLastFrame(geometry, SceneStore::Get().GetFrame()), PassCapture::FadingAtRegistration(const_cast<RE::BSRenderPass*>(a_pass)),
+			            fmt::format(" [object, bound {}, set phases {}, fading at registration {}, drawable {}, deferred pass {}, running {}]", SceneStore::Get().IsMember(object),
+							SceneStore::Get().SetPhasesOf(object), PassCapture::FadingAtRegistration(const_cast<RE::BSRenderPass*>(a_pass)),
 							SceneStore::Get().ObjectDrawable(object), globals::deferred->deferredPass, globals::features::drawcallLimitFix.loaded);
 			rootName += fmt::format(" [write mode {}, blend mode {}]", globals::game::shadowState->GetRuntimeData().alphaBlendWriteMode,
 				globals::game::shadowState->GetRuntimeData().alphaBlendMode);

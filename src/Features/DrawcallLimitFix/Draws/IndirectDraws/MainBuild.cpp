@@ -46,8 +46,9 @@ namespace DCLF::Draws
 
 		/**
 		 * @brief One build of a main segment's payload (BuildMainPayload). Its members are what the build's parts share;
-		 * Run calls the parts in order: the pipelines' blocks, the drawn marks, the object records, the resident region,
-		 * the object loop (each draw's record through AssembleRecord), then the marks' changes and the kept stores.
+		 * Run calls the parts in order: the pipelines' blocks, the per-object states, the object records, the resident region,
+		 * the object loop (each draw's record through AssembleRecord), then the kept stores. Both segments draw the frame's DCLF
+		 * set (kObjectMember) and nothing else: every other object is the engine's in the main camera's views.
 		 */
 		class MainBuild
 		{
@@ -90,9 +91,6 @@ namespace DCLF::Draws
 			// Per (material, pipeline) pair: its verdict this build (ResolvedBindings).
 			ankerl::unordered_dense::map<std::uint64_t, ResolvedBindings> resolvedBindings;
 			ankerl::unordered_dense::map<std::uint32_t, GeometryTemplate> geometryTemplates;  // pipeline: the bindless parity's
-			// The colour segment's drawn marks (DrawnMarks): kept across builds, sent as changes.
-			DrawnMarks* marks = nullptr;
-			std::vector<std::uint32_t> loopDrawn;  // what the loop draws this build (DrawnMarks)
 			std::uint32_t currentObject = ~0u;
 			std::chrono::steady_clock::time_point partStart;
 			// Scratch for the bindless check only, reused across objects so it costs no allocation per draw.
@@ -106,14 +104,12 @@ namespace DCLF::Draws
 			void BeginRows();
 			void FrameRegisters();
 			void PackPipelines();
-			void BeginMarks();
+			void BeginStates();
 			void PrepareObjects();
 			void Skipped(Skip a_reason);
 			void Mark(std::size_t a_part);
-			// Drawn, for the marks: a member, which BuildDraws writes a sequence for wherever the culling finds it.
-			bool NativeDrawn(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectMember); }
-			// The Z-prepass's gate without withholding: what the colour epoch drew last frame.
-			bool DrewLastFrame(std::uint32_t o) const;
+			// In the frame's set (SceneStore::CommitSet): the only objects either segment draws.
+			bool InSet(std::uint32_t o) const { return o < tables.objects.size() && (tables.objects[o].flags & kObjectMember); }
 
 			// The (material, pipeline) pair's rows, checked once per build: RowsOf(pipeline, material), or kNoRecord after
 			// Skipped() recorded why (per draw).
@@ -134,7 +130,7 @@ namespace DCLF::Draws
 			// face stream, no position in the second stream) - a resident's, or with the whole scene anyone's - and with the
 			// whole scene, the depth segment's cull-only candidates.
 			bool RegionEligible(std::uint32_t o) const;
-			// The input the loop would write for it, drawable while its pipeline is in the set and its pair's record built.
+			// The input the loop would write for it, drawable while it is in the set and its pair's record is built.
 			std::uint8_t RegionEntry(std::uint32_t o, DrawInput& a_input);
 			void RegionAcquire(std::uint64_t a_key);
 			void RegionRelease(std::uint64_t a_key);
@@ -142,7 +138,6 @@ namespace DCLF::Draws
 			void RegionSetDraws(std::uint32_t i, std::uint8_t a_draws);
 			void RegionRemove(std::uint32_t o);
 			void RegionUpsert(std::uint32_t o);
-			// A resident the depth segment has not seen the colour epoch draw waits (the loop's rule); anything else is written.
 			void RegionTake(std::uint32_t o);
 			/** @brief The entries the change log names since the region's last build, or every slot on a resync. */
 			void UpdateRegionEntries();
@@ -158,7 +153,6 @@ namespace DCLF::Draws
 			void RunObjectLoop();
 			/** @brief One object of the loop: its draw input, and its sequence and record when it is drawn. */
 			void LoopObject(std::uint32_t o);
-			void FinishMarks();
 			void Finish();
 		};
 	}
@@ -169,12 +163,11 @@ namespace DCLF::Draws
 		Reset();
 		FrameRegisters();
 		PackPipelines();
-		BeginMarks();
+		BeginStates();
 		partStart = std::chrono::steady_clock::now();
 		PrepareObjects();
 		BuildResidentRegion();
 		RunObjectLoop();
-		FinishMarks();
 		Finish();
 	}
 
@@ -319,34 +312,11 @@ namespace DCLF::Draws
 		++rows.pipelinesWritten;
 	}
 
-	void MainBuild::BeginMarks()
+	void MainBuild::BeginStates()
 	{
 		// The per-object states are set parity's alone (CS_DCLF_SET_PARITY).
 		if (SetParityEnabled())
 			out.objectState.assign(tables.objects.size(), kObjectStateAbsent);
-		// The colour segment's drawn marks (DrawnMarks): kept across builds, sent as changes.
-		marks = cache && !depthOnly ? &cache->drawnMarks : nullptr;
-		if (marks) {
-			auto& m = *marks;
-			// What the render thread applied is the version it holds: what changes from here on is sent alone.
-			m.changes.BeginBuild(in.drawnCommitted);
-			if (!m.active || m.generation != in.tablesGeneration || in.drawnResync) {
-				// Every slot again: the first build, new tables, or the render thread asked for it. Whatever the old marks
-				// held is withdrawn by the full send, which covers every slot either knows. The journal counts on.
-				const auto known = std::max(m.drawn.size(), tables.objects.size());
-				auto changes = std::move(m.changes);
-				m = {};
-				m.changes = std::move(changes);
-				m.changes.Resync();
-				m.active = true;
-				m.generation = in.tablesGeneration;
-				m.drawn.assign(known, 0);
-				m.geometry.assign(known, nullptr);
-				if (cache->region.cursor.active)
-					cache->region.Reset();  // its entries are marked as it reads them again
-			}
-			++m.serial;
-		}
 	}
 
 	void MainBuild::PrepareObjects()
@@ -362,13 +332,6 @@ namespace DCLF::Draws
 				decalTemplates[group].resize(decalCount[group]);
 			}
 		}
-	}
-
-	bool MainBuild::DrewLastFrame(std::uint32_t o) const
-	{
-		return in.withholding ||
-		       (in.drawnSlots && o < in.drawnSlots->size() && o < tables.objectGeometry.size() &&
-				   (*in.drawnSlots)[o].DrewLast(tables.objectGeometry[o], in.frameNumber));
 	}
 
 	void MainBuild::Skipped(Skip a_reason)
@@ -617,9 +580,8 @@ namespace DCLF::Draws
 		region = cache && !BuildParityEnabled() ? &cache->region : nullptr;
 		if (!region && cache && cache->region.cursor.active)
 			cache->region.Reset();
-		// The whole scene (every pair's rows are the scene's); the Z-prepass's only where its gate is not the colour epoch's last
-		// frame (withholding): with that gate, what is not resident stays the loop's.
-		wholeScene = region && (!depthOnly || in.withholding);
+		// The whole scene (every pair's rows are the scene's), in both segments: the two draw the same set.
+		wholeScene = region != nullptr;
 		TracyCZoneN(residentRegionZone, "CS.DCLF.BuildMain.ResidentRegion", true);
 		if (region) {
 			{
@@ -688,7 +650,7 @@ namespace DCLF::Draws
 		const bool decal = ObjectDecalGroup(object.flags) != 0;
 		const std::uint32_t ordinal = decal ? tables.decalOrdinal[o] : 0u;
 		const std::uint32_t partitions = decal ? 0u : PartitionsOf(tables, o);
-		const bool drawable = blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
+		const bool drawable = InSet(o) && blocks.setIndex != Lookups::kNone && pair != r.pairs.end() && pair->second.ok && !(decal && PartitionsOf(tables, o));
 		// The pair's slot is its rows (RowsOf).
 		a_input = { drawable ? blocks.setIndex : 0u, drawable ? pair->second.slot : 0u, object.geometryIndex, object.flags | (drawable ? kInputDrawable : 0u),
 			{}, 0.0f, o, ordinal, partitions, FaceStreamGeometry(tables, o, in.addresses.facePositions) };
@@ -811,8 +773,6 @@ namespace DCLF::Draws
 		auto& r = *region;
 		if (!ResidentAt(o) && !wholeScene)
 			RegionRemove(o);
-		else if (depthOnly && ResidentAt(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion) && !DrewLastFrame(o))
-			r.pending.Add(o);
 		else
 			RegionUpsert(o);
 		r.touched.push_back(o);
@@ -837,21 +797,6 @@ namespace DCLF::Draws
 			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
 				RegionTake(o);
 		} else {
-			if (depthOnly) {
-				// Joins the colour epoch has drawn since: their depth may be drawn now.
-				for (std::size_t k = 0; k < r.pending.Size();) {
-					const std::uint32_t slot = r.pending.list[k];
-					if (slot >= tables.residentSlot.size() || !tables.residentSlot[slot] || (slot < r.indexOf.size() && r.indexOf[slot] != kNoRegion)) {
-						r.pending.RemoveAt(k);
-					} else if (DrewLastFrame(slot)) {
-						r.pending.RemoveAt(k);
-						RegionUpsert(slot);
-						r.touched.push_back(slot);
-					} else {
-						++k;
-					}
-				}
-			}
 			// The log since this region's last build, whenever its changes were made.
 			// What a draw input carries: its fade distance and bindings, its geometry and partitions, its residency. Not its
 			// placement: the bound, the sun entry and the fade node are its object record's.
@@ -1076,7 +1021,7 @@ namespace DCLF::Draws
 				}
 			}
 			for (std::uint32_t o = 0; o < tables.objects.size(); ++o)
-				if (RegionEligible(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion) && !r.pending.Contains(o))
+				if (RegionEligible(o) && (o >= r.indexOf.size() || r.indexOf[o] == kNoRegion))
 					++out.residentMissing;
 			// Every pair's witness as UpdateRegionPairs makes it, against the one it holds: a difference is a change no event named.
 			for (const auto& [key, pair] : r.pairs) {
@@ -1137,20 +1082,16 @@ namespace DCLF::Draws
 	void MainBuild::PublishRegion()
 	{
 		auto& r = *region;
-		// What the region draws: the colour segment's marks for the slots this build touched (the rest are as they were),
-		// and the build's per-object states for set parity alone.
+		// What the region draws: the build's per-object states, for set parity alone.
 		const auto& inputs = r.inputs.Get();
-		if (marks)
-			for (const std::uint32_t o : r.touched) {
-				const bool on = o < r.indexOf.size() && r.indexOf[o] != kNoRegion && r.drawsOf[r.indexOf[o]] && NativeDrawn(o);
-				marks->Set(o, on && o < tables.objectGeometry.size() && !tables.IsLayer(o) ? tables.objectGeometry[o] : nullptr, on);
-			}
 		if (!out.objectState.empty()) {
 			for (std::uint32_t i = 0; i < inputs.size(); ++i)
 				if (inputs[i].objectIndex < out.objectState.size())
 					out.objectState[inputs[i].objectIndex] = r.drawsOf[i] == kRegionDecal ? kObjectStateDecal :
 					                                         r.drawsOf[i]                  ? kObjectStateDrawable :
-					                                                                         static_cast<std::uint8_t>(r.pairOf[i] == kNoPair ? Skip::CandidateOnly : Skip::Pipeline);
+					                                         r.pairOf[i] == kNoPair        ? static_cast<std::uint8_t>(Skip::CandidateOnly) :
+					                                         !InSet(inputs[i].objectIndex) ? static_cast<std::uint8_t>(Skip::NotInSet) :
+					                                                                         static_cast<std::uint8_t>(Skip::Pipeline);
 			// The candidates nobody submits.
 			for (std::uint32_t o = 0; o < r.candidate.size() && o < out.objectState.size(); ++o)
 				if (r.candidate[o] && out.objectState[o] == kObjectStateAbsent)
@@ -1247,22 +1188,20 @@ namespace DCLF::Draws
 			Skipped(Skip::Geometry);
 			return;
 		}
-		// The Z-prepass must write depth for exactly the objects the native loop is leaving to DCLF,
-		// which is the set the colour epoch drew in the frame before (SkipNativePass uses the same
-		// rule). Writing depth for anything else strands it: the colour epoch may not draw it, and
-		// the native draw that would have cannot either, because its own EQUAL test now compares
-		// against a depth DCLF computed rather than the one the native prepass wrote. Such an object
-		// keeps its depth but is never shaded, which is what left the architecture flat and grey.
-		if (depthOnly && !DrewLastFrame(o)) {
-			// Cull-only: the object still goes to the culling, because the depth segment is where the
-			// verdict for every candidate is decided and published, and a candidate left out here
-			// would reach the colour segment with no verdict at all. What it does not get is a
-			// bindings record, which is the expensive part and the only part a draw needs.
-			drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
-				{}, 0.0f,
-				static_cast<std::uint32_t>(o), 0 });
-			SetFadeRow(drawInputs.back(), tables, o);
-			Skipped(Skip::NotSkippedNatively);
+		// Both segments draw the frame's set and nothing else: an object outside it is the engine's, which draws its depth and
+		// its colour. Writing depth for one would strand it - the engine's draw tests EQUAL against the depth its own
+		// prepass wrote - and a member is drawn by both segments or neither.
+		if (!InSet(o)) {
+			// Cull-only: the object still goes to the culling, because the depth segment is where the verdict for every
+			// candidate is decided and published, and a candidate left out here would reach the colour segment with no
+			// verdict at all.
+			if (depthOnly) {
+				drawInputs.push_back({ 0, 0, object.geometryIndex, object.flags,
+					{}, 0.0f,
+					static_cast<std::uint32_t>(o), 0 });
+				SetFadeRow(drawInputs.back(), tables, o);
+			}
+			Skipped(Skip::NotInSet);
 			return;
 		}
 		// A skin of several partitions writes one sequence per partition drawn. A decal has one slot,
@@ -1325,16 +1264,6 @@ namespace DCLF::Draws
 				});
 			}
 		}
-		// Only what BuildDraws will actually write a sequence for counts as drawn: the Z-prepass draws exactly what the
-		// colour epoch drew last frame, so a stale mark would write depth for an object nothing then shades.
-		if (marks && o < tables.objectGeometry.size() && NativeDrawn(o)) {
-			// A layer claims nothing: its geometry is its base's, which the base's draw claims (they are members together).
-			marks->Set(o, tables.IsLayer(o) ? nullptr : tables.objectGeometry[o], true);
-			if (marks->loopStamp.size() <= o)
-				marks->loopStamp.resize(std::size_t(o) + 1, 0);
-			marks->loopStamp[o] = marks->serial;
-			loopDrawn.push_back(o);
-		}
 		// The indirect draw fetches vertices and indices through the buffer's device address and size:
 		// a slice that does not cover the draw reads zeros, and the object collapses without any
 		// other sign. Checked here because nothing on the D3D11 side sees the Vulkan slice.
@@ -1344,37 +1273,8 @@ namespace DCLF::Draws
 			if (out.shortBuffers++ == 0)
 				out.shortBuffer = { o, vertexNeeded, indexNeeded };
 		}
-		// Per DRAW: the sequence, the draw input, the drawn mark and the slice check.
+		// Per DRAW: the sequence, the draw input and the slice check.
 		Mark(3);
-	}
-
-	void MainBuild::FinishMarks()
-	{
-		// The loop's marks: what it drew last build and not now is not drawn, unless the region draws it.
-		if (marks) {
-			auto& m = *marks;
-			for (const std::uint32_t o : m.loopDrawn) {
-				if (o < m.loopStamp.size() && m.loopStamp[o] == m.serial)
-					continue;
-				const auto* regionOf = region && o < region->indexOf.size() && region->indexOf[o] != kNoRegion ? region : nullptr;
-				if (regionOf && regionOf->drawsOf[regionOf->indexOf[o]] && NativeDrawn(o))
-					continue;
-				m.Set(o, nullptr, false);
-			}
-			m.loopDrawn = std::move(loopDrawn);
-			// The changes since the version the render thread applied, or every slot when it holds nothing the journal can
-			// build on.
-			const auto snapshot = m.changes.Take();
-			const std::uint64_t held = in.drawnCommitted;
-			out.drawnValid = true;
-			out.drawnFull = held < snapshot.floor || held > snapshot.version;
-			out.drawnVersion = snapshot.version;
-			out.drawnBase = held;
-			snapshot.ForEachRun(held, m.drawn.size(), [&](std::uint64_t a_first, std::uint64_t a_count) {
-				for (auto slot = static_cast<std::uint32_t>(a_first); slot < a_first + a_count; ++slot)
-					out.drawnChanges.push_back({ slot, m.geometry[slot], m.drawn[slot] != 0 });
-			});
-		}
 	}
 
 	void MainBuild::Finish()

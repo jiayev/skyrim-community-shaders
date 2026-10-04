@@ -33,10 +33,9 @@ namespace DCLF
 	 * read by the build as plain tables parallel to SceneStore's slot tables. Each entry keeps the key of the
 	 * slot it was resolved for, so a swept and reused slot is never served a previous tenant's indices.
 	 *
-	 * A slot without an entry is not skipped silently: the build defers the draw with a reason, and the
-	 * render thread resolves the entry at its next opportunity, so the draw lands a frame later (the same
-	 * class of delay as a pipeline still compiling, and never a hole: the native loop is only told to
-	 * withhold what DCLF has drawn).
+	 * An object joins the DCLF set only once the entries it draws with are resolved (SceneStore::CommitSet), and a resolved
+	 * entry stays drawable (a view re-imported keeps the old one until the new one arrives), so a build never finds a member's
+	 * entry missing; one that does defers the draw with a reason, which set parity reports as a defect.
 	 *
 	 * `generation` changes whenever an entry a main-pass build may have read changes its value (a descriptor evicted
 	 * and re-imported, the pipeline set recreated, the tables reset); a payload built against an older generation is

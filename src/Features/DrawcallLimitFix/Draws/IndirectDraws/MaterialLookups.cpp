@@ -117,6 +117,11 @@ namespace DCLF::Draws
 				// A new record version is most often one texture: a view the entry already holds, resolved, is kept as it is,
 				// without asking the registry again.
 				const bool sameGeneration = entry.texturesGeneration == textures.Generation();
+				// Readiness is held (the DCLF set: a member joined because its material resolved, and the engine no longer draws it):
+				// a resolved entry whose view changed keeps drawing with the previous view, whose import its owner still holds, until
+				// the new one has arrived. Then the next refresh takes it.
+				const bool wasResolved = entry.resolved && sameGeneration;
+				bool held = false;
 				// A character-light pass's t11 is the frame's (kCharacterLightRegister): the record holds its modes, no view.
 				const std::uint32_t textureWritten = material.textureWritten & ~(MaterialSources::FrameCharacterLight(key.second) ? 1u << kCharacterLightMaterialRegister : 0u);
 				bool importsPending = false;  // a texture the import thread has not finished (RequestBinding)
@@ -135,6 +140,10 @@ namespace DCLF::Draws
 					if (sameGeneration && entry.views[t] == view && entry.textureOwners[t] && entry.textureIndex[t] != Lookups::kNone)
 						continue;
 					const auto binding = textures.RequestBinding(material.textures[t], t);
+					if (binding.pending && wasResolved && entry.textureOwners[t] && entry.textureIndex[t] != Lookups::kNone) {
+						held = true;
+						continue;
+					}
 					importsPending |= binding.pending;
 					const bool tracePaths = !SwitchValue(Switch::TraceTexturePaths).empty();
 					if (tracePaths && t < 2 && (entry.views[t] != view || entry.textureOwners[t].get() != binding.owner.get())) {
@@ -172,6 +181,10 @@ namespace DCLF::Draws
 					if (sameGeneration && entry.featureViews[f] == material.featureTextures[f] && (!material.featureTextures[f] || (entry.featureOwners[f] && entry.featureIndex[f] != Lookups::kNone)))
 						continue;
 					const auto binding = material.featureTextures[f] ? textures.RequestBinding(material.featureTextures[f], 16 + f) : GpuTextures::Binding{ Lookups::kNone, {} };
+					if (binding.pending && wasResolved && entry.featureOwners[f] && entry.featureIndex[f] != Lookups::kNone) {
+						held = true;
+						continue;
+					}
 					importsPending |= binding.pending;
 					const std::uint32_t index = binding.index;
 					const bool ownerChanged = entry.featureOwners[f].get() != binding.owner.get();
@@ -196,7 +209,8 @@ namespace DCLF::Draws
 				a_lookups.materialVersions[slot] = entry.version;
 				entry.written = material.textureWritten;  // the record's, so a character-light pass's is not resolved every refresh
 				entry.texturesGeneration = textures.Generation();
-				entry.recordVersion = a_tables.materialVersion[slot];
+				// A held view is asked for again by the next refresh (no record version is 0).
+				entry.recordVersion = held ? 0 : a_tables.materialVersion[slot];
 				if (bindingDirty) {
 					std::vector<std::shared_ptr<const void>> owners;
 					owners.reserve(entry.textureOwners.size() + entry.featureOwners.size());
@@ -224,6 +238,10 @@ namespace DCLF::Draws
 					(view ? entry.shadowMaskOwner && entry.shadowMaskIndex != Lookups::kNone : entry.shadowMaskIndex == Lookups::kNone))
 					continue;
 				const auto binding = technique.shadowMask ? textures.RequestBinding(technique.shadowMaskTexture, 48) : GpuTextures::Binding{ Lookups::kNone, {} };
+				// Held while the new view imports, as a material's textures are (the set's members draw with it).
+				if (binding.pending && entry.shadowMaskOwner && entry.shadowMaskIndex != Lookups::kNone &&
+					entry.shadowMaskTextureGeneration == textures.Generation())
+					continue;
 				const bool ownerChanged = entry.shadowMaskOwner.get() != binding.owner.get();
 				if (ownerChanged) ++a_lookups.generation;
 				if (note(entry.shadowMaskIndex, binding.index) || ownerChanged)

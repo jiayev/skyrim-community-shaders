@@ -169,16 +169,23 @@ namespace DCLF::Draws
 		kFoliageWhiteSampleCount,
 		// Against the frame before, reprojected: the lit colour (diffuse and specular) brighter by more than 0.3 in luminance.
 		kFoliageBrightened,
-		kFoliageCounters = 20
+		// Of the owned pixels, terrain LOD's (whose depth the Z-prepass and the colour pass each compute from HighDetailRange),
+		// and of them those left unshaded or shaded with another object.
+		kFoliageLandOwned,
+		kFoliageLandUnshaded,
+		kFoliageLandOtherObject,
+		kFoliageLandSampleCount,
+		kFoliageCounters = 24
 	};
 	// A sample: x | y << 16, kind (its counter), then by kind - against the frame before: the object, its diffuse, the frame before's
 	// diffuse, its specular, the frame before's specular, its motion vector (half2 pixels); in-frame: the owner, the colour pass's
 	// object, the owner's depth, the albedo (unshaded, another object) or the object, its albedo, the motion vector's error
 	// (float pixels) and the motion vector (motion); near white: the object, its albedo and diffuse.
-	constexpr std::uint32_t kFoliageSampleWords = 8, kFoliageFrameSamples = 24, kFoliageInFrameSamples = 32, kFoliageWhiteSamples = 16;
+	constexpr std::uint32_t kFoliageSampleWords = 8, kFoliageFrameSamples = 24, kFoliageInFrameSamples = 32, kFoliageWhiteSamples = 16, kFoliageLandSamples = 16;
 	constexpr std::uint32_t kFoliageFrameSampleBase = 0, kFoliageInFrameSampleBase = kFoliageFrameSampleBase + kFoliageFrameSamples,
-							kFoliageWhiteSampleBase = kFoliageInFrameSampleBase + kFoliageInFrameSamples;
-	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageWhiteSampleBase + kFoliageWhiteSamples) * kFoliageSampleWords;
+							kFoliageWhiteSampleBase = kFoliageInFrameSampleBase + kFoliageInFrameSamples,
+							kFoliageLandSampleBase = kFoliageWhiteSampleBase + kFoliageWhiteSamples;
+	constexpr std::uint32_t kFoliageResultWords = kFoliageCounters + (kFoliageLandSampleBase + kFoliageLandSamples) * kFoliageSampleWords;
 	constexpr std::uint32_t kFoliageColourWords = 4;  // a pixel's: albedo, diffuse, motion error, motion vector
 	// What the tree buffers hold at first (they double as the scene needs).
 	constexpr std::uint32_t kInitialTrees = 1024;
@@ -520,4 +527,8 @@ namespace DCLF::Draws
 	// cullFlags: Skylighting's size test (Skylighting::OcclusionTechnique), for its occlusion map's view: an input whose bound
 	// radius is 32 or less draws nothing.
 	constexpr std::uint32_t kCullMinRadius = 0x2000;
+	// cullFlags: the occlusion map's view: an occluder under a fade root BSFadeNode::OnVisible stops at without
+	// cameraRelatedUpdates (Precipitation::SetupMask's cull; FadeStateCS's state) draws nothing, in place of the shadow views'
+	// stood-in fading test. Set while the engine's fades are on (0x142032dfd).
+	constexpr std::uint32_t kCullFadeOnVisible = 0x4000;
 }

@@ -283,7 +283,7 @@ fails on the baseline is listed in [dclf-open-defects.md](./dclf-open-defects.md
 | `CS_DCLF_BUILD_PARITY` | The GPU's draw sequences against the CPU's templates |
 | `CS_DCLF_SKYLIGHT_PARITY` | DCLF's Skylighting occlusion map against the engine's |
 | `CS_DCLF_ASYNC=probe` | Each worker build against an inline one |
-| `CS_DCLF_CAPTURE_PARITY` (with `CS_DCLF_OWNERSHIP=off`) | The tables against the engine's own lighting draws: descriptors, transforms, every constant group, textures |
+| `CS_DCLF_CAPTURE_PARITY` (with `CS_DCLF_PARITY_BOTH=1`) | The tables against the engine's own lighting draws: descriptors, transforms, every constant group, textures |
 | `CS_DCLF_SET_PARITY`, `CS_DCLF_BINDLESS_PARITY`, `CS_DCLF_PASS_PARITY`, `CS_DCLF_CAPTURE_POINT_PARITY` | Narrower checks of one mechanism each (see their registry rows) |
 
 The standard validation is two 60-second runs on the same save:

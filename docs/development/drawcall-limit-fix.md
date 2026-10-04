@@ -984,6 +984,102 @@ any per-draw work exists.
 new 68-byte layout, and the frame is unchanged. Only 21 sites in `Lighting.hlsl` reference those five
 variables, so the shader change is small.
 
+## The DCLF set (2026-10-03)
+
+This section supersedes how ownership worked in the sections that follow it chronologically: "Static ownership", the
+claims, the native skip and the drawn marks are gone.
+
+**The rule.** An object in the DCLF set is drawn by DCLF in every phase it is a member of, and the engine never draws it in
+a view of that phase. Before this, who drew an object was decided by about eight gates in four or five stores, each per
+pass: the main claims, the colour build's drawn marks (read back as `DrewLastFrame`), `SkipNativePass`, PrimaryCull's
+admission, three shadow claim sets, and the occlusion maps' whole-map handoff. They lagged each other by a frame and
+disagreed, and every disagreement was a hole or a double draw. The terrain LOD holes were one: the Z-prepass wrote depth
+for a new chunk whose colour pair was not ready, the native skip let the engine draw its colour against DCLF's depth, and
+triangles dropped (dclf-lod.md, "Terrain LOD").
+
+**The phases** (`Scene/SceneSet.h`): main (the Z-prepass and the colour pass), casters in the plain and clamped shadow views
+(the sun's cascades, spot lights), casters in the paraboloid views (point lights), and each occlusion map. An object is a
+member of a phase for a frame when:
+- it is eligible (its verdict is None);
+- it takes part in the phase: for main, it is bound (its record has its pipeline and material slots); for the shadow and
+  occlusion phases, its record casts or occludes;
+- it is ready for the phase: for main, its pipeline is compiled, its material's textures are imported, its pipeline's
+  shadow mask and the shared lookups are resolved, its geometry is resolved, and a decal has its slot; for a shadow or
+  occlusion phase, its Utility pipeline exists under every rasterizer state of its class in each of the phase's modes the
+  last epoch drew, and an alpha-tested technique's diffuse is imported (`IndirectDraws::PhaseReady`).
+
+Each phase is whole: its views withhold exactly what its draws draw. A base and its multi-index layer are main members
+together. A phase is DCLF's (`SetSnapshot::drawn`) for the main camera always; for a shadow mode once its last epoch drew
+its views; for an occlusion map once its last `ExecuteOcclusion` drew it. A kind of view seen for the first time is the
+engine's for that frame, so its casters are never withheld from views DCLF has no pipelines for.
+
+**Decided once a frame** (`SceneStore::CommitSet`), at the scene phase, after the walk and before the main camera's cull.
+Readiness is taken by events, never by a scan: the tables' change log (every write of a record, its residency or its
+bindings, whoever made it), the lookups' version when it moves (the slots waiting for readiness are evaluated again), the
+shadow modes' serial (a new mode or rasterizer state), the bind queue (a member whose binding is taken again this frame
+leaves before the accumulate phase rebinds it), and the membership witness (a change rebinds every resident). Readiness
+held is never lost: a material or a shadow mask whose view is re-imported keeps drawing with the old one until the new one
+arrives (`RefreshMaterialLookups`).
+
+**One GPU-resident source of truth.** The set is `Tables::setPhases` (per slot), with the main phase also in the record's
+`kObjectMember`, which the GPU reads. Every build selects by it: a main build's input is drawable iff the object is a main
+member and its pair resolved; a shadow or occlusion mode's inputs are the members of its phase. A member a build cannot
+draw is a defect, counted and reported (set parity, "members a shadow build could not draw").
+
+**The engine's copy.** The commit publishes an immutable snapshot (geometry -> phases, and the phases DCLF draws) to
+`PassCapture::PublishSet`, lock-free. The registration hooks withhold a member's passes from the views of its phases:
+- the main camera's: `RegisterPass`, the main modes' direct group insertions in `FUN_1414b2330` (hints 1-7, 9, 11, 13-18,
+  and the layer's hint 12) and, for the Z-prepass's accumulator (render mode 0xC, which registers through the shadow
+  modes' `FUN_1414b2a60`), its group insertions (hints 3, 7, 8, 11). A LOD cross-fade's copy of the old level (hint 10)
+  is the engine's; a fade DCLF does not model (blended, or a decal's) is left to the engine and its member leaves the set
+  at the next commit until the fade ends.
+- the shadow views': the same hooks, by the view's render mode's phase.
+- the occlusion maps': `FUN_1414b2c20`'s one insertion (group 14). The engine still culls and registers a map's scene when
+  some occluder of it is not a member (`SetLacking`); when every one is, `SetupMask` is skipped as before.
+
+The stand-in's admission (PrimaryCull), the leaf exclusion, the list filter, the sun's cascade skip and the point lights'
+exclusion are optimisations keyed by the same snapshot. Correctness does not depend on them.
+
+**Checks.** `[DCLF] DCLF set:` (members, waiting and why, joins and leaves, defects); `main camera since the last report`
+(a native draw of a main member: `<- LEAK`, must be 0); `CS_DCLF_SET_PARITY` (the GPU's visibility words against the set:
+in the set and drawn by nobody, depth without colour, drawn outside the set, a record disagreeing with the set);
+`CS_DCLF_PARITY_BOTH=1` withholds nothing, so the engine draws everything while DCLF draws its set too (capture parity).
+
+**Measured** (the teleport route, `landjump.sh`, every 300 frames): LEAK 0; set parity OK; terrain LOD coverage 0
+unshaded pixels; cascade culling parity OK; shadow views all drawn.
+
+**A view's rasterizer state and its sibling.** At first, a shadow view whose rasterizer state was new in a frame left that
+frame's members unready for it (`<- SET SHADOW`, one frame: 8,085 members at startup, 1,957 at the first point light). The
+set withholds a phase's casters before the frame's views are seen. The new states were each a known state's sibling under
+the other cull mode. The renderer's cull mode when a view is captured is its last pass's (the Utility shader sets it per
+pass: none for a two-sided property, back otherwise). So a mode's views draw with both, and the first view of a state now
+registers its sibling as well (`PendingView::cullStates`), so both are ready together. The route then had 0 members a
+shadow build could not draw in every report.
+
+**Capture parity and the bits the draw decides.** Under `CS_DCLF_PARITY_BOTH=1` most non-LOD draws mismatched in the pass
+descriptor's sun bits, Specular, and the Envmap technique, and trees in TreeParams. None of these are the pipeline's:
+- BuildDraws drops a sun-test record's ShadowDir, DefShadow and light count on a cascade miss.
+- The draw fades Specular and Envmap by the LOD fades, where `GetRenderPasses` drops them.
+- TreeWindCS writes a resident tree's wind on the GPU.
+
+Capture parity now leaves those bits to their own checks: `PerDrawBits` covers the sun test's counters and the accumulate
+phase's LOD fade check, and `GpuTreeWind` defers to the tree wind parity. A native pass that lacks those bits was built with
+another technique (no shadow mask, the faded features dropped), so for such a draw only the descriptors are compared. It
+is counted as "whose pass differs only in the bits the draw decides", and the same object is compared whole on the frames
+its native pass has the bits.
+
+The same fix applies elsewhere:
+- **The permutation buffer**, which also leaves out IsBeastRace except on the face techniques. Subsurface Scattering writes
+  it only at a face's SetupGeometry, and Lighting.hlsl reads it only under `SKIN`.
+- **StrictLightData's ShadowBitMask**, which a DCLF draw takes from its object word (BuildDrawsCS's local shadow lights,
+  checked by draw parity).
+
+**Result** (`tourcapy`, 15 reports, 255k-405k draws each): 0 mismatched draws in every technique; light data, bone
+palettes, draw and skin parity OK. The permutation residue is 0-1,449 draws a report and real:
+- IsBeastRace on the Khajiit player's face and body (DCLF never sets it, so Subsurface Scattering's mask treats a beast
+  race's skin as not one).
+- AdditiveLighting on `EdgeBlood01`, which the engine blends additively and DCLF draws through an opaque key.
+
 ## Static ownership: capture at registration, then withhold
 
 DCLF was a guest in the engine's per-frame loop. It now owns a set of objects outright: their passes are
@@ -1500,7 +1596,7 @@ names the switches that reduce it. The ones most runs use:
 | --- | --- |
 | `CS_DCLF=0` | DCLF does not install. The menu's toggle, by contrast, applies live. |
 | `CS_DCLF_ASYNC=off\|probe` | The builds run inline on the render thread; `probe` also runs the worker's and compares the two. |
-| `CS_DCLF_OWNERSHIP=off`, `CS_DCLF_SHADOW_OWNERSHIP=off` | Nothing is withheld from the engine: the capture parity configuration. |
+| `CS_DCLF_PARITY_BOTH=1` | Nothing is withheld from the engine, which draws everything while DCLF draws its set too: the capture parity configuration (it double-draws). |
 | `CS_DCLF_CULL=off\|frustum` | Less GPU culling than the default (frustum and HZB occlusion). |
 | `CS_DCLF_STATS=1` | The periodic report, with the GPU time of each render-graph segment and pass. |
 | `CS_DCLF_*_PARITY` | The parity checks ([dclf-architecture.md](./dclf-architecture.md), "Parity gates"). |
@@ -4674,6 +4770,27 @@ The differences above 1/256 are isolated single texels in tree canopies: alpha-t
 -   The engine's precipitation mask (when there is precipitation) is still the engine's.
 -   Switches: the menu's "Draw Skylighting's occlusion map" (`CS_DCLF_SKYLIGHT`, default on) needs DCLF's shadow
     views.
+
+**The fade roots (2026-10-03).** On the teleport route the parity had DCLF nearer over up to 98% of the map, never
+farther, at every teleported location. The dumped maps showed every tree, and some rocks, in DCLF's map and none in the
+engine's. `SetupMask`'s cull runs without `cameraRelatedUpdates`, and `BSFadeNode::OnVisible` (`0x141479f50`) then does
+not update the fade. With fades on, it goes into a node that is not settled only while `currentFade > 0` and
+`fadeAmount != 0`. So the engine's map leaves out every root the main camera has faded out, and every root of a new cell
+the main camera has not seen yet (its fade starts at 0).
+
+DCLF's view now applies that rule (`kCullFadeOnVisible`, `BuildDrawsCS`'s `FadedOutOfOcclusion`, in place of the shadow
+views' stood-in fading test). It uses `FadeStateCS`'s state, which only a root DCLF services has (`kFadeRootOwned`). An
+occluder under any other fade node is not ready for the occluder phases (`IndirectDraws::PhaseReady`). The engine draws
+it with its own `OnVisible`, and a change of ownership is a readiness event (`fadeOwnershipSerial`).
+
+-   **With the stand-in off** (`CS_DCLF_PRIMARY_EXCLUDE=0`) every comparison is exact, because no root is owned and the
+    engine draws every fade-node occluder.
+-   **With the stand-in on**, the check cannot judge a stood-in root. The engine does not cull such a root, its node keeps
+    the fade the engine last left there (often 0 from the load), and the reference cull reads that. DCLF's map draws the
+    root by the GPU's state, which is what the main camera's cull would have left. The fade update itself is checked by
+    `CS_DCLF_FADE_PARITY`.
+-   **The cost.** The engine runs `SetupMask` on every frame that has an occluder under a root DCLF does not service,
+    which is most frames.
 
 ## The primary's cull without DCLF's objects (Phase 1 of the GPU-driven frame)
 

@@ -15,167 +15,6 @@ namespace DCLF
 		return draws;
 	}
 
-	void IndirectDraws::PublishClaims()
-	{
-		auto& capture = PassCapture::Get();
-		// Without the render graph (it failed, or is not running) no shadow epoch draws, and the shadow claims are only
-		// republished by one that does: the last ones would withhold their casters from views the engine now draws.
-		if (!GpuResources::Get().Enabled())
-			for (std::uint32_t mode = 0; mode < PassCapture::kShadowModes; ++mode)
-				capture.PublishShadowClaims(mode, nullptr);
-		if (!ActiveToggles().ownership)
-			return;
-		const auto frame = SceneStore::Get().GetFrame();
-		// No colour epoch committed this frame (the render graph failed or is not running, or the epoch was not ready), so DCLF
-		// drew nothing: every drawn slot is undrawn, which unclaims its geometry from the next frame on the usual path (below),
-		// and the next colour build sends every slot again.
-		if (impl->drawnCommitFrame != frame) {
-			for (std::uint32_t slot = 0; slot < impl->slotDrawn.size(); ++slot)
-				if (impl->slotDrawn[slot].drawn)
-					impl->ApplyDrawn(slot, nullptr, false, frame);
-			impl->drawnResync = true;
-		}
-
-		// Hole detector: what the engine's cull or registration left out this frame (PrimaryCull: the stood-in entries' members
-		// in view and the leaf exclusion's geometries) should have been drawn by the colour epoch that has just run. Counted on
-		// the CPU, exactly, with no readback.
-		auto& store = SceneStore::Get();
-		auto& captureStats = capture.MutableStats();
-		captureStats.holes = 0;
-		// The report's own interval, so a hole in any frame is seen rather than only in the last one.
-		struct HoleReport
-		{
-			std::uint32_t frames = 0, framesWithHoles = 0, holes = 0, samples = 0;
-			std::array<std::uint32_t, static_cast<std::size_t>(Ineligible::Count)> byReason{};
-			std::uint32_t memberPasses = 0;  // main-pass registrations of scene members: the engine draws what DCLF draws too
-			std::uint32_t memberSamples = 0;
-		};
-		static HoleReport report;
-		std::uint32_t frameHoles = 0;
-		{
-			const auto& mainRenderers = store.GetMainBatchRenderers();
-			for (const auto& entry : capture.LastDrain()) {
-				if (!entry.geometry || !mainRenderers.contains(entry.batch) || !store.IsMember(store.FindObject(entry.geometry)) ||
-					!impl->DrawnThisFrame(entry.geometry, frame))
-					continue;
-				++report.memberPasses;
-				if (report.memberSamples++ < 5)
-					logger::info("[DCLF] a scene member's pass registered by the engine, frame {}: '{}' under '{}', hint {}", frame, entry.geometry->name.c_str() ? entry.geometry->name.c_str() : "",
-						entry.geometry->parent && entry.geometry->parent->name.c_str() ? entry.geometry->parent->name.c_str() : "", entry.hint);
-			}
-		}
-		// The claimed objects, for the reports alone: every 16th frame, held in between.
-		if (frame % 16 == 0) {
-			const auto previous = capture.CurrentClaims();
-			captureStats.claimed = previous ? static_cast<std::uint32_t>(previous->size()) : 0u;
-		}
-		// The members in view under the entries the primary's cull stood in for (PrimaryCull): nothing registered them, so
-		// one the colour epoch did not draw is a hole whatever the claims say.
-		for (const auto* geometry : PrimaryCull::Get().StoodInMembers()) {
-			if (impl->DrawnThisFrame(geometry, frame))
-				continue;
-			PrimaryCull::Get().CountHole();
-			++captureStats.holes;
-			++frameHoles;
-			bool fromAccumulate = false;
-			const Ineligible reason = store.ReasonThisFrame(geometry, &fromAccumulate);
-			++report.byReason[static_cast<std::size_t>(reason)];
-			if (report.samples++ < 30) {
-				const auto& tables = store.GetTables();
-				const std::int32_t object = store.FindObject(geometry);
-				const bool inTables = object >= 0 && static_cast<std::size_t>(object) < tables.objects.size();
-				const std::uint32_t flags = inTables ? tables.objects[object].flags : 0u;
-				const std::uint32_t ordinal = inTables && static_cast<std::size_t>(object) < tables.decalOrdinal.size() ? tables.decalOrdinal[object] : ~0u;
-				logger::info("[DCLF] hole, frame {}: member '{}' left out of the primary's cull and not drawn - {} ({}); object {}, flags {:#x}, member {}, decal ordinal {} of {}/{}/{}, "
-							 "last drawn {}, colour build state {}, material slot {} ({}); pipeline {}",
-					frame, geometry->name.c_str(), kIneligibleNames[static_cast<std::size_t>(reason)], fromAccumulate ? "this frame's accumulate phase" : "the scene phase", object,
-					flags, store.IsMember(object), ordinal, tables.decalCount[0], tables.decalCount[1], tables.decalCount[2],
-					impl->drawnGeometry.contains(geometry) ? fmt::format("{} frames ago", frame - impl->drawnGeometry.find(geometry)->second.last) : std::string("never"),
-					inTables && static_cast<std::size_t>(object) < impl->mainPayload[kAsyncColour].objectState.size() ?
-						static_cast<int>(impl->mainPayload[kAsyncColour].objectState[object]) : -1,
-					inTables ? tables.objects[object].materialIndex : ~0u, [&]() -> std::string {
-						const std::uint32_t m = inTables ? tables.objects[object].materialIndex : ~0u;
-						const auto& lookups = store.GetLookups();
-						if (m >= lookups.materials.size() || m >= tables.materialSlotKey.size())
-							return "no lookup";
-						const auto& lookup = lookups.materials[m];
-						return fmt::format("resolved {}, key {}, material version {}, lookup record version {}; slot alive {}, keyed {}, used {} (frame {}), references {}", lookup.resolved,
-							lookup.key == tables.materialSlotKey[m] ? "current" : "stale", m < tables.materialVersion.size() ? tables.materialVersion[m] : 0ull, lookup.recordVersion,
-							tables.materialSlots.Alive(m), tables.materialSlotKey[m].first != nullptr, tables.MaterialUsed(m), frame,
-							tables.materialSlots.References(m));
-					}(),
-					[&]() -> std::string {
-						// The pipeline as the builds' PackPipelines reads it: used, compiled into the set, and compiled for this key.
-						const std::uint32_t p = inTables ? tables.objects[object].pipelineIndex : ~0u;
-						const auto& lookups = store.GetLookups();
-						if (p >= tables.pipelines.size() || p >= lookups.pipelines.size())
-							return fmt::format("{} (no lookup)", p);
-						const auto& entry = lookups.pipelines[p];
-						return fmt::format("{} (descriptor {:08X}, vertex {:08X}, pixel {:08X}; used {}, set index {}, lookup key {}, lookup descriptor {:08X})", p,
-							tables.pipelines[p].passDescriptor, tables.pipelines[p].vertexDescriptor, tables.pipelines[p].pixelDescriptor, tables.PipelineUsed(p),
-							entry.setIndex == Lookups::kNone ? -1 : static_cast<std::int64_t>(entry.setIndex), entry.key == tables.pipelines[p] ? "current" : "stale",
-							entry.key.passDescriptor);
-					}());
-			}
-		}
-		// The entries whose members the colour build draws in full are left out of the primary's cull from the next frame on.
-		{
-			PrimaryCull::Get().Admit([&](const RE::BSGeometry* a_geometry) { return impl->DrawnThisFrame(a_geometry, frame); }, impl->newlyDrawn);
-			impl->newlyDrawn.clear();
-		}
-		++report.frames;
-		report.holes += frameHoles;
-		report.framesWithHoles += frameHoles != 0;
-		if (report.frames == 300) {
-			std::string reasons;
-			for (std::size_t r = 0; r < report.byReason.size(); ++r)
-				if (report.byReason[r])
-					reasons += fmt::format(" {}={}", kIneligibleNames[r], report.byReason[r]);
-			logger::info("[DCLF] holes over {} frames: {} in {} frames; by reason:{}; {} passes of drawn scene members registered by the engine as well",
-				report.frames, report.holes, report.framesWithHoles, reasons.empty() ? " -" : reasons, report.memberPasses);
-			report = {};
-		}
-
-		// The claims, kept (Impl::claims): a geometry is added when the colour epoch starts drawing it, and dropped a frame
-		// after its last draw (the same one-frame tolerance the native skip uses). Published only when they changed.
-		std::size_t kept = 0;
-		for (const auto& [geometry, from] : impl->pendingUnclaims) {
-			if (from > frame) {
-				impl->pendingUnclaims[kept++] = { geometry, from };
-				continue;
-			}
-			const auto held = impl->drawnGeometry.find(geometry);
-			if (held != impl->drawnGeometry.end() && (held->second.drawn || frame - held->second.last <= 1))
-				continue;  // drawn again since
-			if (held != impl->drawnGeometry.end())
-				impl->drawnGeometry.erase(held);
-			if (impl->claimSet.erase(geometry)) {
-				impl->claimsChanged = true;
-				++impl->claimsDropped;
-				// Still registered by the engine, so the engine will draw it from now on: this is the signature of
-				// culling undoing itself.
-				if (store.FindAccumulatedPass(geometry))
-					++impl->claimsDroppedAfterCull;
-			}
-		}
-		impl->pendingUnclaims.resize(kept);
-		captureStats.claimsAdded = std::exchange(impl->claimsAdded, 0);
-		captureStats.claimsDropped = std::exchange(impl->claimsDropped, 0);
-		captureStats.droppedAfterCull = std::exchange(impl->claimsDroppedAfterCull, 0);
-		// Republished when they changed, or when someone else published over them (a load publishes an empty set).
-		if (impl->claimsChanged || capture.CurrentClaims() != impl->publishedClaims) {
-			impl->publishedClaims = std::make_shared<const PassCapture::ClaimSet>(impl->claimSet);
-			capture.PublishClaims(impl->publishedClaims);
-			impl->claimsChanged = false;
-		}
-	}
-
-	bool IndirectDraws::DrewLastFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const
-	{
-		const auto drawn = impl->drawnGeometry.find(a_geometry);
-		return drawn != impl->drawnGeometry.end() && (drawn->second.drawn || a_frame - drawn->second.last <= 1);
-	}
-
 	void IndirectDraws::CaptureMainPass()
 	{
 		if (impl->pending)
@@ -618,12 +457,11 @@ namespace DCLF
 		if (job.loggedStale++ >= 4)
 			return;
 		const auto& k = job.inputs;
-		logger::info("[DCLF] async {}: the job's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), drew last frame {}, tables {} vs {}, lookups {} vs {}, resources {})",
+		logger::info("[DCLF] async {}: the job's inputs are stale (frame {} vs {}, VS mask {:#x} vs {:#x}, PS mask {:#x} vs {:#x}, eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), previous eye ({:.3f} {:.3f} {:.3f}) vs ({:.3f} {:.3f} {:.3f}), tables {} vs {}, lookups {} vs {}, resources {})",
 			a_job == kAsyncZPrepass ? "zprepass" : "colour",
 			k.frameNumber, a_actual.frameNumber, k.vsFrameMask, a_actual.vsFrameMask, k.psFrameMask, a_actual.psFrameMask,
 			k.eye.x, k.eye.y, k.eye.z, a_actual.eye.x, a_actual.eye.y, a_actual.eye.z,
 			k.previousEye.x, k.previousEye.y, k.previousEye.z, a_actual.previousEye.x, a_actual.previousEye.y, a_actual.previousEye.z,
-			k.drawnCommitted == a_actual.drawnCommitted ? "same" : "differs",
 			k.tablesGeneration, a_actual.tablesGeneration, k.lookupGeneration, a_actual.lookupGeneration,
 			k.addresses == a_actual.addresses ? "same" : "changed");
 	}
@@ -725,7 +563,6 @@ namespace DCLF
 		in.residentUploaded = a_resources.residentUploaded[a_depthOnly && a_resources.inputsDepth ? 0 : 1];
 		in.tablesHeld = a_resources.scene->held;
 		in.bindlessParity = bindlessParity;
-		in.withholding = ActiveToggles().ownership;
 		// Camera-relative world matrices: the colour epoch must use the eye the Z-prepass used, or the
 		// same vertex lands somewhere else and the EQUAL test rejects it. Without a capture (the job kicked
 		// ahead of the epoch) the replay is the only source, which KickColourBuild requires.
@@ -760,11 +597,6 @@ namespace DCLF
 		in.lookupGeneration = a_store.GetLookups().generation;
 		in.materialPatchedFloats = a_store.GetMaterialPatchedFloats();
 		in.materialPatchedVSFloats = a_store.GetMaterialPatchedVSFloats();
-		// The Z-prepass's gate without withholding reads the colour epoch's drawn state, which only a colour commit writes
-		// (none runs between here and the Z-prepass); the colour build sends its drawn changes relative to what is applied.
-		in.drawnSlots = &slotDrawn;
-		in.drawnCommitted = drawnCommitted;
-		in.drawnResync = drawnResync;
 		return in;
 	}
 }

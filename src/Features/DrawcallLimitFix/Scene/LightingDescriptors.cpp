@@ -59,6 +59,11 @@ namespace DCLF
 			case Technique::LODObjects:
 			case Technique::LODObjectHD:
 				return ActiveToggles().lodObjects;
+			// Terrain LOD (dclf-lod.md): the LODLAND / LODLANDNOISE permutations. Reached only for a land block's shape under the
+			// LOD root (IsLodLand).
+			case Technique::LODLand:
+			case Technique::LODLandNoise:
+				return ActiveToggles().lodTerrain;
 			default:
 				return false;
 			}
@@ -466,9 +471,9 @@ namespace DCLF
 	{
 		std::uint64_t f = a_property.flags.underlying();
 
-		// LOD terrain stays the engine's; object LOD (a BSSubIndexTriShape: dclf-lod.md) is DCLF's with its toggle, drawn by
-		// the ranges its hidden cells leave (LodSegments).
-		if (f & Bit(Flag::kLODLandscape))
+		// Terrain LOD (a land block's BSTriShape) is DCLF's with its toggle; object LOD (a BSSubIndexTriShape: dclf-lod.md) with its
+		// own, drawn by the ranges its hidden cells leave (LodSegments).
+		if ((f & Bit(Flag::kLODLandscape)) && !(ActiveToggles().lodTerrain && IsLodLand(a_property, a_geometry)))
 			return Ineligible::Lod;
 		if ((f & (Bit(Flag::kLODObjects) | Bit(Flag::kHDLODObjects))) && !(ActiveToggles().lodObjects && IsLodObject(a_property, a_geometry)))
 			return Ineligible::Lod;

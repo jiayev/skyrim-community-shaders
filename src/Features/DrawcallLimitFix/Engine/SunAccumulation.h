@@ -33,9 +33,8 @@ namespace DCLF
 	};
 
 	/**
-	 * @brief One shadow epoch's verdict on the candidates: the entries whose casters it all drew (claimed), which the
-	 * next frame's full-frustum cull leaves out of the cascade culls. Built with the claims (IndirectDraws: the shadow
-	 * build), used once.
+	 * @brief One shadow epoch's verdict on the candidates: the entries whose casters it all drew (the set's), which the
+	 * next frame's full-frustum cull leaves out of the cascade culls. Built by the shadow build (IndirectDraws), used once.
 	 */
 	struct SunExclusion
 	{
@@ -64,12 +63,12 @@ namespace DCLF
 	 * (docs/development/skyrim-engine-notes.md, "The sun's accumulation"). AE only.
 	 *
 	 * M1, registration-free accumulation (toggle `skipSunAccumulation`, CS_DCLF_SUN_SKIP): the engine still culls
-	 * the sun's cascades, but a geometry DCLF claims for the sun's views is not registered. BSShadowDirectionalLight::
+	 * the sun's cascades, but a geometry in the set's caster phase is not registered. BSShadowDirectionalLight::
 	 * Accumulate culls each cascade and hands every geometry it reaches to the accumulator's registration
 	 * (FUN_1414b2140, called from FUN_140e28af0). That builds the geometry's shadow passes, which PassCapture then
 	 * withholds one by one, and ORs the cascade's bit into the property's activeLightMask, which the main pass reads.
-	 * For a claimed geometry the thunks on those calls replicate the registration's early-outs and its mask write,
-	 * and skip the passes. Everything else calls the original, so an unclaimed caster is registered and drawn by
+	 * For a member the thunks on those calls replicate the registration's early-outs and its mask write,
+	 * and skip the passes. Everything else calls the original, so any other caster is registered and drawn by
 	 * the engine, and no frame-wide verdict is needed.
 	 *
 	 * The entry exclusion (toggle `excludeSunEntries`, CS_DCLF_SUN_EXCLUDE; drawcall-limit-fix.md, "The sun's cascades
@@ -94,7 +93,7 @@ namespace DCLF
 		void Report(std::uint32_t a_frame, std::uint32_t a_interval);
 
 		/**
-		 * @brief Render thread, at the shadow epoch's claim publication: the exclusion the next full-frustum cull
+		 * @brief Render thread, after the shadow epoch drew: the exclusion the next full-frustum cull
 		 * applies, once. Null: nothing is excluded.
 		 */
 		void PublishExclusion(std::shared_ptr<SunExclusion> a_exclusion) { pendingExclusion = std::move(a_exclusion); }
@@ -127,7 +126,7 @@ namespace DCLF
 		/** @brief After the sun's Accumulate: every cascade's activeLightMask bit this frame. */
 		std::uint32_t SunBits() const { return frameState.sunBits; }
 		/**
-		 * @brief CS_DCLF_SET_PARITY (every 30th frame): the claimed casters the cascade culls of the frame's Accumulate reached,
+		 * @brief CS_DCLF_SET_PARITY (every 30th frame): the set's casters the cascade culls of the frame's Accumulate reached,
 		 * each with its cascade's descriptor index - what DCLF's views of those cascades must draw. Render thread.
 		 */
 		struct CascadeRegistration

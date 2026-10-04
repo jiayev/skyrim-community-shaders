@@ -514,7 +514,7 @@ namespace DCLF::LocalLightCull
 		std::shared_ptr<SunExclusion> next = pending;
 		if (!next || !next->candidates)
 			++stats.noExclusion, next.reset();
-		else if (!PassCapture::Get().ShadowModeWithheld(kParabolicMode))
+		else if (!PassCapture::Get().CastersWithheld(kSetCasterPoint))
 			++stats.noClaims, next.reset();  // the registration withholds nothing of the mode: the engine draws its casters
 		else if (next->candidates->generation != SceneStore::Get().GetLightCandidatesGeneration())
 			++stats.stale, next.reset();  // built for other candidates: an entry may hold a caster no epoch has drawn yet
@@ -687,7 +687,7 @@ namespace DCLF::LocalLightCull
 					what += fmt::format(" [exclusion built frame {}{}, selected at {}]", exclusion->builtFrame, exclusion->reused ? " (reused)" : "", SceneStore::Get().GetFrame());
 					if (it != candidates.geometries.end()) {
 						const auto entry = candidates.geometryEntry[it->second];
-						const auto claims = PassCapture::Get().SelectedShadowClaims(kParabolicMode);
+						const auto claims = PassCapture::Get().CurrentSet();
 						for (const auto& [geometry, index] : candidates.geometries) {
 							if (candidates.geometryEntry[index] != entry)
 								continue;
@@ -695,7 +695,7 @@ namespace DCLF::LocalLightCull
 							for (std::uint32_t o = 0; o < tables.objectGeometry.size() && object == ~0u; ++o)
 								object = tables.objectGeometry[o] == geometry && !(tables.objects[o].flags & kObjectFree) ? o : object;
 							what += fmt::format(" {{'{}' object {} flags {:#x} claimed {}}}", geometry->name.c_str() ? geometry->name.c_str() : "", static_cast<std::int32_t>(object),
-								object != ~0u ? tables.objects[object].flags : 0u, claims && claims->contains(geometry));
+								object != ~0u ? tables.objects[object].flags : 0u, claims && (claims->PhasesOf(geometry) & kSetCasterPoint));
 						}
 					}
 				}

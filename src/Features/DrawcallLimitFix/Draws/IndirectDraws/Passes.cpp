@@ -43,15 +43,35 @@ namespace DCLF::Draws
 						samples += fmt::format("; ({},{}) motion: object {} albedo {:08X}, error {:.1f} px of ({:.1f}, {:.1f})", sample[0] & 0xFFFF, sample[0] >> 16, sample[2],
 							sample[3], std::bit_cast<float>(sample[4]), mx, my);
 					} else {
+						// An object word (index + 1): its name, and its chain up to the LOD root (each node's name and app-culled bit).
+						auto describe = [&](std::uint32_t a_word) -> std::string {
+							const auto& tables = SceneStore::Get().GetTables();
+							const std::uint32_t index = a_word - 1;
+							const auto* geometry = a_word && index < tables.objectGeometry.size() ? tables.objectGeometry[index] : nullptr;
+							if (!geometry)
+								return fmt::format("{}", a_word);
+							std::string chain = fmt::format("{} '{}'{}", a_word, geometry->name.c_str() ? geometry->name.c_str() : "", geometry->GetFlags().any(RE::NiAVObject::Flag::kHidden) ? " culled" : "");
+							std::uint32_t depth = 0;
+							for (const RE::NiAVObject* node = geometry->parent; node && depth < 4; node = node->parent, ++depth)
+								chain += fmt::format(" < '{}'{}", node->name.c_str() ? node->name.c_str() : "", node->GetFlags().any(RE::NiAVObject::Flag::kHidden) ? " culled" : "");
+							return chain;
+						};
 						samples += fmt::format("; ({},{}) {}: owner {} (depth {:.7f}), colour pass {}", sample[0] & 0xFFFF, sample[0] >> 16,
-							sample[1] == kFoliageUnshaded ? "unshaded" : "another object", sample[2], std::bit_cast<float>(sample[4]), sample[3]);
+							sample[1] == kFoliageUnshaded ? "unshaded" : "another object", describe(sample[2]), std::bit_cast<float>(sample[4]), describe(sample[3]));
 					}
 				}
 				std::vector<std::pair<std::uint32_t, std::uint32_t>> byCount(objects.begin(), objects.end());
 				std::ranges::sort(byCount, [](const auto& a, const auto& b) { return a.second > b.second; });
 				std::string tally = fmt::format("{} objects in {} samples:", byCount.size(), count);
-				for (std::size_t o = 0; o < byCount.size() && o < 8; ++o)
-					tally += fmt::format(" {}x{}", byCount[o].first, byCount[o].second);
+				// The sampled objects by name (their words are the object's index + 1), and whether each is terrain LOD.
+				const auto& tables = SceneStore::Get().GetTables();
+				for (std::size_t o = 0; o < byCount.size() && o < 8; ++o) {
+					const std::uint32_t index = byCount[o].first - 1;
+					const auto* geometry = byCount[o].first && index < tables.objectGeometry.size() ? tables.objectGeometry[index] : nullptr;
+					const auto* property = geometry ? geometry->GetGeometryRuntimeData().shaderProperty.get() : nullptr;
+					tally += fmt::format(" {}x{} ('{}'{})", byCount[o].first, byCount[o].second, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?",
+						property && property->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kLODLandscape) ? ", terrain LOD" : "");
+				}
 				logger::warn("[DCLF] foliage parity: frame tag {}: of {} owned pixels {} unshaded and {} shaded by another object; {} foliage pixels with a motion vector "
 							 "off a static object's ({} by more than 8 px); {}{}",
 					a_frame, a_results[kFoliageOwned], a_results[kFoliageUnshaded], a_results[kFoliageOtherObject], motion, a_results[kFoliageMotionFar], tally, samples);
@@ -111,9 +131,43 @@ namespace DCLF::Draws
 			a_foliage.changeAverage = a_foliage.frames <= 16 ? changed : 0.95 * a_foliage.changeAverage + 0.05 * changed;
 		}
 
+		// Terrain LOD's coverage (its owners, bit 31): the frames it lost pixels in, and the most in one. Its pixels no draw shaded are
+		// sampled apart (the others are equal-depth ties), and a frame with a few dozen of them is logged with its samples.
+		static std::uint32_t landFrames = 0, landMax = 0, landLogged = 0;
+		if (const std::uint32_t lost = a_results[kFoliageLandUnshaded] + a_results[kFoliageLandOtherObject]) {
+			++landFrames;
+			landMax = std::max(landMax, lost);
+		}
+		if (a_results[kFoliageLandUnshaded] >= 32 && landLogged < 40) {
+			++landLogged;
+			const auto& tables = SceneStore::Get().GetTables();
+			std::string samples;
+			const std::uint32_t count = std::min(a_results[kFoliageLandSampleCount], kFoliageLandSamples);
+			for (std::uint32_t s = 0; s < count; ++s) {
+				const std::uint32_t* sample = sampleAt(kFoliageLandSampleBase, s);
+				const std::uint32_t index = sample[2] - 1;
+				const auto* geometry = sample[2] && index < tables.objectGeometry.size() ? tables.objectGeometry[index] : nullptr;
+				samples += fmt::format("; ({},{}) owner {} {} level '{}' bound ({:.0f} {:.0f}) r {:.0f} depth {:.7f}", sample[0] & 0xFFFF, sample[0] >> 16, sample[2],
+					fmt::ptr(geometry), geometry && geometry->parent && geometry->parent->parent && geometry->parent->parent->name.c_str() ? geometry->parent->parent->name.c_str() : "?",
+					geometry ? geometry->worldBound.center.x : 0.0f, geometry ? geometry->worldBound.center.y : 0.0f, geometry ? geometry->worldBound.radius : 0.0f,
+					std::bit_cast<float>(sample[4]));
+			}
+			float range[4];
+			LodHighDetailRange(range);
+			const auto eye = RE::Main::WorldRootCamera() ? RE::Main::WorldRootCamera()->world.translate : RE::NiPoint3{};
+			logger::warn("[DCLF] terrain LOD coverage: frame tag {}: {} of {} owned pixels unshaded (no draw), {} by another object; loaded range centre ({:.0f} {:.0f}) "
+						 "half ({:.0f} {:.0f}), camera ({:.0f} {:.0f} {:.0f}){}",
+				a_frame, a_results[kFoliageLandUnshaded], a_results[kFoliageLandOwned], a_results[kFoliageLandOtherObject], range[0], range[1], range[2], range[3], eye.x,
+				eye.y, eye.z, samples);
+		}
 		if (a_foliage.frames % 300 == 0) {
 			const double n = 300.0;
 			const auto& t = a_foliage.totals;
+			logger::info("[DCLF] terrain LOD coverage over 300 frames: per frame {:.0f} owned pixels, {:.1f} unshaded, {:.1f} by another object; {} frames lost "
+						 "some (at most {}){}",
+				t[kFoliageLandOwned] / n, t[kFoliageLandUnshaded] / n, t[kFoliageLandOtherObject] / n, landFrames, landMax,
+				landFrames ? " <- TERRAIN LOD COVERAGE" : " <- OK");
+			landFrames = landMax = 0;
 			logger::info("[DCLF] foliage parity over 300 frames: within the frame {} flagged; per frame {:.0f} owned, {:.1f} unshaded, {:.1f} by another object, "
 						 "{:.1f} with their motion off a static object's ({:.1f} by more than 8 px); near white: {} jumps, average {:.0f}, max {}; against the frame "
 						 "before, reprojected: {} jumps (average {:.0f}, max {}), per frame {:.0f} compared, {:.1f} recoloured, {:.1f} brightened, {:.1f} whitened, "

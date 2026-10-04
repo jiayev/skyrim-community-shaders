@@ -19,7 +19,7 @@ namespace DCLF
 		Sampler,
 		Constants,  // a constant buffer the shaders read is not available
 		Capacity,
-		NotSkippedNatively,  // Z-prepass only: the native loop still draws this object, so it owns its depth
+		NotInSet,            // bound, but not in the DCLF set this frame (SceneSet.h): the engine draws it
 		CandidateOnly,       // kept for the GPU culling to reject, but not drawable, so it has no bindings
 		Count
 	};
@@ -157,9 +157,11 @@ namespace DCLF
 		// most the minimum radius, under a stood-in root fading.
 		std::uint32_t cullClass = 0, cullSunEntryOut = 0, cullMinRadius = 0, cullStoodInFading = 0;
 		std::uint32_t cullSampledView = ~0u, cullSampledMode = 0;
-		// CS_DCLF_SHADOW_OWNERSHIP=static: casters claimed per render mode at the last publication.
-		std::array<std::uint32_t, 3> claimed{};
-		double claimMs = 0.0;              // per report interval, building and publishing the claim sets
+		// The set's casters each render mode's inputs held at the last epoch, and set members a mode's build could not draw (a
+		// pipeline or a texture its readiness did not cover: a defect, the engine having withheld them), per report interval.
+		std::array<std::uint32_t, 3> casters{};
+		std::uint64_t setWaiting = 0;
+		std::string setWaitingFirst;
 		std::uint32_t inputs = 0;          // casters submitted, last view
 		std::uint32_t skippedPipeline = 0; // casters without a ready shadow pipeline, last view
 		std::uint32_t skippedTexture = 0;  // alpha-tested casters whose diffuse could not be resolved, last view
@@ -191,5 +193,5 @@ namespace DCLF
 	};
 
 	inline constexpr std::array<const char*, static_cast<std::size_t>(DrawSkip::Count)> kSkipNames{ "pipeline", "geometry", "texture", "sampler",
-		"constants", "capacity", "not-skipped-natively", "candidate-only" };
+		"constants", "capacity", "not-in-set", "candidate-only" };
 }

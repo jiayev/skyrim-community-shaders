@@ -445,27 +445,6 @@ namespace DCLF
 		                      a_payload.inputList.size() * sizeof(DrawInput) + geometryBytes + objectBytes;
 		a_stats.records = static_cast<std::uint32_t>(a_payload.materialRows.Count());
 		lap(6);
-		// What the colour epoch drew: the native loop's skip set and the claims, from the build's changes alone. A build made
-		// against another applied version than this one asks for every slot again.
-		if (!depthOnly && a_payload.drawnValid) {
-			if (a_payload.drawnFull || a_payload.drawnBase == drawnCommitted) {
-				if (a_payload.drawnFull) {
-					++drawnResyncs;
-					// Slots past the full send's end were not known to the build: nothing draws them.
-					for (std::uint32_t slot = static_cast<std::uint32_t>(a_payload.drawnChanges.size()); slot < slotDrawn.size(); ++slot)
-						if (slotDrawn[slot].drawn)
-							ApplyDrawn(slot, nullptr, false, frameNumber);
-				}
-				for (const auto& change : a_payload.drawnChanges)
-					ApplyDrawn(change.slot, change.geometry, change.drawn, frameNumber);
-				drawnCommitted = a_payload.drawnVersion;
-				drawnResync = false;
-			} else {
-				drawnResync = true;
-			}
-		}
-		if (!depthOnly)
-			drawnCommitFrame = frameNumber;
 		lap(5);
 
 		// The resident region's draws and inputs lead the frame's own (ResidentRegion).

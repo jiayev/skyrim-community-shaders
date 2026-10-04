@@ -562,7 +562,7 @@ void Skylighting::RenderOcclusion()
 					auto& dclf = globals::features::drawcallLimitFix;
 					const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kPrecipitationOcclusion);
 					const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kPrecipitationOcclusion);
-					if (!dclfDraws || parity) {
+					if (dclf.OcclusionNeedsEngine(DrawcallLimitFix::kPrecipitationOcclusion) || parity) {
 						precip->SetupMask();
 					} else {
 						// What SetupMask sets: the projection, and the accumulator's camera.
@@ -653,10 +653,11 @@ void Skylighting::RenderOcclusion()
 				auto& dclf = globals::features::drawcallLimitFix;
 				const bool dclfDraws = dclf.OcclusionReady(DrawcallLimitFix::kSkyOcclusion);
 				const bool parity = dclfDraws && dclf.OcclusionParityFrame(DrawcallLimitFix::kSkyOcclusion);
+				const bool engine = dclf.OcclusionNeedsEngine(DrawcallLimitFix::kSkyOcclusion) || parity;
 				{
 					ZoneScopedN("Skylighting - Setup Projection");
 					_computeProjection(precip, precip->occlusionData.camera);
-					if (!dclfDraws || parity)
+					if (engine)
 						precip->SetupMask();
 					else if (auto* accumulator = precip->occlusionData.accumulator.get())
 						accumulator->camera = precip->occlusionData.camera.get();  // what SetupMask sets

@@ -22,6 +22,7 @@
 #include "ConstantEvaluator.h"
 #include "Lookups.h"
 #include "Records.h"
+#include "SceneSet.h"
 
 namespace DCLF
 {
@@ -382,6 +383,9 @@ namespace DCLF
 			std::vector<float> fadeDistance;  // parallel to objects
 			// Which slots hold a resident record (PrimaryCull's).
 			std::vector<std::uint8_t> residentSlot;  // parallel to objects
+			// The DCLF set's phases of each slot (SetPhase bits, 0: not a member), CommitSet's alone; every build selects by them (the
+			// record's kObjectMember is the main phase's copy the GPU reads).
+			std::vector<std::uint8_t> setPhases;  // parallel to objects
 			// The change log (drawcall-limit-fix.md, "Persistent draw state"): every write that changes a slot's columns
 			// appends the slot with what changed (ChangeCause), whenever it happens. The persistent structures built from
 			// the tables read it from their own position (LogCursor); one that fell behind the trimmed head, or whose tables
@@ -907,10 +911,20 @@ namespace DCLF
 		 * and stay where they are built; only this is deferred.
 		 *
 		 * Call from Prepass. The Z-prepass epoch runs in between and so uses the previous frame's values
-		 * for these - harmless, because vertex position comes from World, which is patched per object at
-		 * epoch time with that epoch's own eye, and never from these.
+		 * for these - harmless only for what the vertex position does not depend on: World is patched per
+		 * object at epoch time with that epoch's own eye. Terrain LOD's HighDetailRange moves vertices, so it is
+		 * camera-independent and taken before the Z-prepass too (RefreshLodTechniqueRanges).
 		 */
 		void RefreshFrameConstants();
+		/**
+		 * @brief Terrain LOD's HighDetailRange in its technique rows (LodHighDetailRange), before the Z-prepass build is kicked.
+		 *
+		 * The vertex shader lowers the LOD land inside it, so the Z-prepass and the colour pass must draw a frame with the same
+		 * range: a vertex lowered in one and not the other fails the colour pass's EQUAL test, and the triangle is not shaded
+		 * (dclf-lod.md, "Terrain LOD"). The terrain manager writes it in Main::Update; RefreshFrameConstants evaluates the
+		 * same value again.
+		 */
+		void RefreshLodTechniqueRanges();
 
 		/**
 		 * @brief The four textures the engine binds for a ProjectedUV draw (pixel slots 3, 8, 10 and 11:
@@ -1063,6 +1077,43 @@ namespace DCLF
 			return a_pipeline < tables.pipelines.size() && a_pipeline < lookups.pipelines.size() && lookups.pipelines[a_pipeline].setIndex != Lookups::kNone &&
 			       lookups.pipelines[a_pipeline].key == tables.pipelines[a_pipeline];
 		}
+		/**
+		 * @brief The DCLF set (SceneSet.h): decided once a frame by CommitSet, at the scene phase, after the walk and before the
+		 * main camera's cull. Every phase of the frame reads the same decision: the record's kObjectMember, which the builds select
+		 * by, and the snapshot the engine's registration hooks withhold by. Nothing between two commits changes it.
+		 *
+		 * Readiness is part of it: an object joins only once everything its phases draw with is ready (its pipeline compiled, its
+		 * material's textures imported), and readiness is taken by events (a lookups generation, the tables' change log), never by
+		 * a scan of the scene. A member whose binding is taken again this frame (its record's inputs changed) leaves before the
+		 * accumulate phase rebinds it, so no frame's builds draw a member from a binding that is not ready.
+		 */
+		void CommitSet();
+		/** @brief The set's phases of an object slot (SetPhase bits), 0 when it is not a member. Render thread, or any thread between commits. */
+		std::uint8_t SetPhasesOf(std::int32_t a_object) const
+		{
+			return a_object >= 0 && static_cast<std::size_t>(a_object) < tables.setPhases.size() ? tables.setPhases[a_object] : std::uint8_t{ 0 };
+		}
+		/** @brief The frame's set as the engine's hooks read it (CommitSet's publication). */
+		std::shared_ptr<const SetSnapshot> GetSet() const { return setSnapshot; }
+		struct SetStats
+		{
+			std::uint64_t commits = 0, evaluated = 0, joined = 0, left = 0, readinessEvents = 0, resyncs = 0;
+			std::uint64_t members = 0, waiting = 0, rebinding = 0;  // summed over the commits
+			std::uint64_t publications = 0;
+			std::uint64_t patchedMember = 0;  // must be 0: the accumulate phase patched a member's binding (CommitSet keeps rebinds out)
+			// Why a bound object waits, summed over the commits: its pipeline, its material, its pipeline's shadow mask, the shared
+			// lookups (samplers, null and projected textures), its geometry, its decal slot, its layer partner, its shadow pipelines
+			// or occlusion pipelines (or an alpha-tested caster's diffuse).
+			std::array<std::uint64_t, 8> waitingBy{};
+			std::string firstWaiting;
+		};
+		SetStats TakeSetStats() { return std::exchange(setStats, {}); }
+		/**
+		 * @brief How many objects take part in an occlusion map's phase this frame without being its members (not ready): the engine
+		 * must then register the map's scene, and its registration withholds the members (PassCapture). 0: every occluder DCLF knows
+		 * is drawn by DCLF, and the engine's cull of the map can be skipped.
+		 */
+		std::uint32_t SetLacking(std::uint8_t a_phase) const { return a_phase == kSetOccluderSky ? setLackingCount[0] : a_phase == kSetOccluderPrecipitation ? setLackingCount[1] : 0u; }
 		/** @brief Whether a main-pass build can draw the object now: it has bindings and its pipeline is drawable. */
 		bool ObjectDrawable(std::int32_t a_object) const
 		{
@@ -2120,6 +2171,8 @@ namespace DCLF
 		std::vector<const RE::BSFadeNode*> fadeChanged;  // drained from FadeWatch at ProcessEvents
 		// SetFadeRootsOwned's set (kFadeRootOwned), by node: whether each is stood in (kFadeRootStoodIn).
 		ankerl::unordered_dense::map<const void*, bool> fadeRootOwned;
+		// Counts the fade roots that became owned or stopped being: an occluder's readiness reads it (IndirectDraws::PhaseReady).
+		std::uint64_t fadeOwnershipSerial = 0;
 		/**
 		 * @brief The root's row owned or not; a root newly owned is seeded again from its node (a new generation). One whose
 		 * stood-in state changes is reported to the fade watch: its dependents' shadow verdicts read its fade from elsewhere.
@@ -2153,6 +2206,37 @@ namespace DCLF
 		ankerl::unordered_dense::set<const RE::BSGeometry*> residentJoining;  // this frame's resident passes, until patched
 		ankerl::unordered_dense::set<const RE::BSGeometry*> residentLayerJoining;  // the layers' (accumulatedLayerPasses)
 		ResidentStats residentStats;
+		// The DCLF set (CommitSet): each object slot's committed phases, the bound slots waiting for readiness, and the
+		// publication. The commit reads the change log from its own cursor, and the waiting slots again when a lookups
+		// generation moved.
+		std::vector<std::uint32_t> setWaiting;
+		std::vector<std::uint8_t> setWaitingMark;  // parallel to objects: in setWaiting
+		std::vector<std::uint32_t> setQueue;
+		std::vector<std::uint8_t> setQueueMark;    // parallel to objects: in setQueue
+		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
+		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder phases it takes part in and is no member of
+		std::array<std::uint32_t, 2> setLackingCount{};  // SetLacking's, per occlusion map
+		std::vector<const RE::BSGeometry*> setGeometry;  // parallel to objects: the geometry a base member is published under
+		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
+		// Members whose registration met a fade DCLF does not model (PassCapture::TakeUnmodelledFades): out of the set until it ends.
+		ankerl::unordered_dense::set<const RE::BSGeometry*> setFadeHeld;
+		LogCursor setCursor;
+		std::uint64_t setReadiness = ~0ull;        // the lookups' generations the waiting slots were last checked against
+		std::uint64_t setShadowModes = ~0ull;      // the shadow modes and states caster readiness was last taken under
+		std::uint64_t setFadeOwnership = ~0ull;    // fadeOwnershipSerial as occluder readiness was last taken under
+		std::uint32_t setPhaseMask = ~0u;          // the phases DCLF draws (toggles) the last commit evaluated with
+		std::shared_ptr<SetSnapshot> setBuilding;  // the next publication, kept up to date by each commit
+		std::shared_ptr<const SetSnapshot> setSnapshot;
+		bool setSnapshotDirty = true;
+		SetStats setStats;
+		/** @brief Queues a slot for the next commit. */
+		void QueueSet(std::uint32_t a_slot);
+		/** @brief The phases DCLF draws this frame (toggles, the render graph): an object's mask is its participation within them. */
+		static std::uint32_t SetPhasesDrawn();
+		/** @brief The phases an object takes part in among a_drawn, from its record (no readiness). */
+		std::uint8_t SetParticipation(std::uint32_t a_slot, std::uint32_t a_drawn) const;
+		/** @brief Whether everything the object's main phase draws with is ready; a_why: SetStats::waitingBy's index when not. */
+		bool MainReady(std::uint32_t a_slot, std::uint32_t& a_why) const;
 		// Sun entry nodes something was attached under or detached from since the last walk (keys).
 		std::vector<const RE::NiAVObject*> dirtyRoots;
 		ankerl::unordered_dense::map<const void*, std::vector<RE::BSGeometry*>> propertyDependents;

@@ -59,6 +59,27 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				logger::info("[DCLF] bindless record parity OK: {} components match the constant groups", draws.bindlessParityChecks);
 		}
 	}
+	if ((frame % kReportInterval) == 0) {
+		// The set, and the engine's side of it: what the registrations withheld, and any native draw of a member (LEAK).
+		const auto set = store.TakeSetStats();
+		const double commits = std::max<double>(static_cast<double>(set.commits), 1.0);
+		const auto& capture = DCLF::PassCapture::Get().GetStats();
+		logger::info("[DCLF] DCLF set: {:.0f} members and {:.1f} bound objects waiting a frame over {} commits; {} joined, {} left, {} evaluated ({} readiness events, {} "
+					 "resyncs), {} left while their binding was taken again, {} publications; waiting for: pipeline {}, material {}, shadow mask {}, shared lookups {}, "
+					 "geometry {}, decal slot {}, layer partner {}, shadow pipelines {}{}{}; members patched by the accumulate phase {}{}",
+			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.resyncs, set.rebinding,
+			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7],
+			set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
+		std::string samples;
+		for (const auto& sample : leaks.samples)
+			samples += fmt::format("{}{}", samples.empty() ? "" : ", ", sample);
+		const auto leaked = leaks.leakedInDepth + leaks.leakedInOpaque;
+		logger::info("[DCLF] main camera since the last report: {} native passes drawn, {} of them set members' ({} depth, {} opaque){}{}; last frame's registrations: {} "
+					 "member passes withheld, {} cross-fade copies and {} fades DCLF does not model left to the engine",
+			leaks.offered, leaked, leaks.leakedInDepth, leaks.leakedInOpaque, leaked ? " <- LEAK" : " <- OK", samples.empty() ? "" : "; first: " + samples,
+			capture.mainWithheld, capture.mainCrossfadeCopies, capture.mainUnmodelledFades);
+		leaks = {};
+	}
 	// What the GPU spent on each segment, measured by the graph itself; the menu shows the latest window.
 	if ((frame % kReportInterval) == 0)
 		RenderGraphRuntime::Get().ReportGpuTimings(kReportInterval, DCLF::SwitchEnabled(DCLF::Switch::Stats));
@@ -145,10 +166,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				if (shadow.notReadyReasons[r])
 					notReadyReasons += fmt::format(" {}={}", DCLF::kShadowNotReadyNames[r], shadow.notReadyReasons[r]);
 			}
-			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs, {} not ready ({}), {} focus views left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph, {:.3f} claiming)",
+			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs, {} not ready ({}), {} focus views left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph)",
 				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.inputs, shadow.skippedPipeline,
 				shadow.skippedTexture, shadow.records, (shadow.cpuMs + shadow.captureMs) / frames, shadow.captureMs / frames, shadow.prepareMs / frames, shadow.inputsMs / frames, shadow.blocksMs / frames,
-				shadow.executeMs / frames, shadow.claimMs / frames);
+				shadow.executeMs / frames);
 			if (shadow.cullTested || shadow.cullClass)
 				logger::info("[DCLF] shadow culling (view {} mode {:#x}, sampled): {} of the caster class, {} outside the sun's entry, {} small, {} stood-in fading; "
 							 "{} tested, {} drawn, {} rejected by the frustum",
@@ -159,18 +180,21 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 					shadow.sunEntryMismatches, shadow.sunEntryMismatches ? " <- DIFFER" : " <- OK");
 			if (DCLF::PassCapture::ShadowWithholdingEnabled()) {
 				const auto& captured = DCLF::PassCapture::Get().GetStats();
-				logger::info("[DCLF] shadow ownership: withheld plain {} / clamped {} / paraboloid {} passes, {} volumetric-only passes and {} of hints 11, 7 and 3 (last frame); claimed {} / {} / {} casters; {} face regions uploaded; {} views not ready under ownership, {} of them with withheld casters{}",
-					captured.shadowWithheld[0], captured.shadowWithheld[1], captured.shadowWithheld[2], captured.volumetricWithheld, captured.directWithheld, shadow.claimed[0], shadow.claimed[1],
-					shadow.claimed[2], shadow.faceUploads, shadow.notReady, shadow.notReadyWithheld, shadow.notReadyWithheld ? " <- HOLES" : "");
+				logger::info("[DCLF] shadow views by the set: withheld plain {} / clamped {} / paraboloid {} passes, {} volumetric-only passes and {} of hints 11, 7 and 3 (last frame); the set's casters {} / {} / {} (last epoch); {} members a shadow build could not draw{}{}; {} face regions uploaded; {} views not ready, {} of them with withheld casters{}",
+					captured.shadowWithheld[0], captured.shadowWithheld[1], captured.shadowWithheld[2], captured.volumetricWithheld, captured.directWithheld, shadow.casters[0], shadow.casters[1],
+					shadow.casters[2], shadow.setWaiting, shadow.setWaiting ? " <- SET SHADOW" : "", shadow.setWaitingFirst.empty() ? "" : " (first: " + shadow.setWaitingFirst + ")", shadow.faceUploads, shadow.notReady, shadow.notReadyWithheld, shadow.notReadyWithheld ? " <- HOLES" : "");
 			}
 			for (std::uint32_t v = 0; v < DCLF::kOcclusionViews; ++v)
 				if (shadow.occlusionDrawn[v] || shadow.occlusionNotReady[v] || occlusionNativeFrames[v])
-					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} occluders, last), {} it could not draw, {} left to the engine",
+					logger::info("[DCLF] {} occlusion: DCLF drew {} maps ({} of the set's occluders, last), {} it could not draw, {} left to the engine whole; the engine "
+								 "registered the map's other occluders on {} frames ({} not members now); {} member passes withheld (last frame)",
 						v == DCLF::kOcclusionSky ? "Skylighting" : "precipitation", shadow.occlusionDrawn[v], shadow.occlusionInputs[v], shadow.occlusionNotReady[v],
-						occlusionNativeFrames[v]);
+						occlusionNativeFrames[v], occlusionEngineFrames[v], store.SetLacking(v == DCLF::kOcclusionSky ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation),
+						DCLF::PassCapture::Get().GetStats().occlusionWithheld);
 			if (shadow.occlusionEpochs)
 				logger::info("[DCLF] occlusion maps: {} epochs, render thread {:.3f} ms per epoch", shadow.occlusionEpochs, shadow.occlusionMs / shadow.occlusionEpochs);
 			occlusionNativeFrames = {};
+			occlusionEngineFrames = {};
 			DCLF::IndirectDraws::Get().ResetShadowStats();
 		}
 		if (stats.projectedUV || stats.landBlend)
@@ -198,18 +222,6 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (draws.fadeTested)
 			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; {} roots",
 				draws.fadeTested, draws.fadeHidden, draws.fadeRoots);
-		logger::info("[DCLF] skip (last frame): {} of {} native passes left to the indirect draws ({} in the depth pass, {} in the opaque pass)",
-			skipStats.skipped, skipStats.offered, skipStats.skippedInDepth, skipStats.skippedInOpaque);
-		if (!skipSamples.empty()) {
-			std::string names;
-			for (const auto& name : skipSamples)
-				names += fmt::format("{}'{}'", names.empty() ? "" : ", ", name);
-			logger::info("[DCLF] skip: passes left to the indirect draws include {}", names);
-		}
-		if (skipStats.notInTables)
-			logger::warn("[DCLF] skip (last frame): {} native passes were kept because their geometry left the tables", skipStats.notInTables);
-		if (skipStats.undrawable)
-			logger::info("[DCLF] skip (last frame): {} native passes were kept because DCLF could not draw their object this frame", skipStats.undrawable);
 		if (draws.shortBuffers)
 			logger::warn("[DCLF] {} draws of the last epoch reach past their vertex or index buffer slice", draws.shortBuffers);
 		const auto& gpu = DCLF::GpuResources::Get().GetStats();
@@ -239,12 +251,6 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		}
 		const auto& capture = DCLF::PassCapture::Get().GetStats();
 		logger::info("[DCLF] pass capture: {} registrations from {} threads ({} overflowed)", capture.captured, capture.threads, capture.overflowed);
-		if (DCLF::ActiveToggles().ownership)
-			logger::info("[DCLF] static ownership: {} objects claimed, {} left out of the engine's cull and not drawn{}",
-				capture.claimed, capture.holes, capture.holes ? " <- HOLES" : "");
-		if (DCLF::ActiveToggles().ownership)
-			logger::info("[DCLF] claim churn: +{} -{} ({} of the drops still had an engine pass, so the native loop takes them back)",
-				capture.claimsAdded, capture.claimsDropped, capture.droppedAfterCull);
 		logger::info("[DCLF] derived cache (last frame): {} served, {} recomputed and compared, {} differ{}; slots alive {} geometries / {} pipelines / {} materials, {} swept, {} geometries refreshed in place, {} slot violations{}",
 			stats.derivedHits, stats.derivedChecked, stats.derivedDiffers, stats.derivedDiffers ? " <- STALE" : "",
 			stats.geometriesAlive, stats.pipelinesAlive, stats.materialsAlive, stats.slotsSwept, stats.geometriesRefreshed,

@@ -490,16 +490,9 @@ namespace DCLF
 			// eagerly. The entries hold NiPointers, so holding them across the load is the safe direction,
 			// and the rescan below replaces them on a normal frame.
 			rescanPending = true;
-			// Claims do not survive a load. They name geometry from the cell being torn down, and a claim
-			// withholds the pass from the native loop - so a stale one means nobody draws that object in
-			// the new cell. The hole detector caught exactly this at a `coc`: six claimed objects went
-			// undrawn on the first frame after the transition. Publishing an empty set hands everything
-			// back to the native loop until DCLF has drawn it again and re-earned the claim.
-			auto& capture = PassCapture::Get();
-			capture.ClearFrameClaims();
-			capture.PublishClaims(std::make_shared<const PassCapture::ClaimSet>());
-			for (std::uint32_t mode = 0; mode < PassCapture::kShadowModes; ++mode)
-				capture.PublishShadowClaims(mode, nullptr);
+			// The set does not survive a load: it names geometry from the cell being torn down, and withholds its passes from the
+			// engine. Nothing is withheld until the next commit publishes the set again.
+			PassCapture::Get().PublishSet(nullptr);
 			SceneTracker::FreeEvents(tracker.Drain());
 			DrainFadeEvents(fadeChanged);
 			fadeChanged.clear();

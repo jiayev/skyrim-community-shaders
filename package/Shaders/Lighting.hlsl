@@ -255,7 +255,13 @@ VS_OUTPUT main(VS_INPUT input)
 	precise float4 inputPosition = float4(input.Position.xyz, 1.0);
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
+#		if defined(DCLF_BINDLESS)
+	// Drawcall Limit Fix keeps HighDetailRange's centre absolute (EvaluateTechnique): relative here to the draw's eye, as World is,
+	// so the Z-prepass and the colour pass lower the same vertices whichever frame's camera their rows were written with.
+	inputPosition = LodLandscape::AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World, float4(0, 0, 0, 1)), HighDetailRange - float4(BonesPivot.xy, 0, 0));
+#		else
 	inputPosition = LodLandscape::AdjustLodLandscapeVertexPositionMS(inputPosition, float4x4(World, float4(0, 0, 0, 1)), HighDetailRange);
+#		endif
 #	endif  // defined(LODLANDNOISE) || defined(LODLANDSCAPE)                                                                   \
 
 	precise float4 previousInputPosition = inputPosition;
@@ -300,7 +306,12 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Position = viewPos;
 
 #	if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
-	vsout.Position.z += min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
+	// Precise like viewPos: Drawcall Limit Fix's Z-prepass and colour pass compile this from two modules, and the colour pass tests
+	// EQUAL against the prepass's depth. Contracted differently in one of them (a fused multiply-add), the distant LOD land's depth
+	// moved by an ulp and its pixels went unshaded.
+	DCLF_PRECISE float lodDepthOffset = min(1, 1e-4 * max(0, viewPos.z - 70000)) * 0.5;
+	DCLF_PRECISE float lodDepth = viewPos.z + lodDepthOffset;
+	vsout.Position.z = lodDepth;
 #	endif
 
 	float2 uv = input.TexCoord0.xy * TexcoordOffset.zw + TexcoordOffset.xy;
@@ -807,6 +818,13 @@ cbuffer DCLFFrameLighting : register(b13)
 	float4 DCLFLodFadeMetric : packoffset(c8);       // metric scale, default scale, the override metric, 1 when overridden
 	float4 DCLFLodFadeDivisors[4] : packoffset(c9);  // per LOD type
 	float4 DCLFLodFadeState : packoffset(c13);       // x: 1 when the engine updates the metric at all (else the property's fades stand)
+// CS_DCLF_FOLIAGE_PARITY's draws: the alpha-tested ones, and terrain LOD (whose depth the Z-prepass and the colour pass each
+// compute from HighDetailRange); with CS_DCLF_FOLIAGE_PARITY=land every draw (DCLF_FOLIAGE_PARITY_ALL), so that a pixel no draw
+// shaded is told from one another object took at the same depth. Each records the pixels it owns in the Z-prepass (those with a
+// pixel stage there) and those the colour pass shaded.
+#	if defined(DCLF_FOLIAGE_PARITY) && (defined(DO_ALPHA_TEST) || defined(LODLANDNOISE) || defined(LODLANDSCAPE) || defined(DCLF_FOLIAGE_PARITY_ALL))
+#		define DCLF_OWNED_PARITY
+#	endif
 #	if defined(DCLF_FOLIAGE_PARITY)
 	// CS_DCLF_FOLIAGE_PARITY (IndirectDraws GpuLayouts.h, FoliageParityConstants): the frame's buffers' addresses (each pixel's
 	// object word; its albedo and diffuse), the render size, the frame's tag and the Z-prepass owners' UAV.
@@ -1279,7 +1297,7 @@ bool UseSkylightingShadowVisibility()
 #	if defined(DCLF_PULLED)
 PS_OUTPUT DCLFShadePS(PS_INPUT input, bool frontFace)
 #	else
-#		if defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+#		if defined(DCLF_OWNED_PARITY)
 // The parity write below must be the visible fragment's: the colour pass tests EQUAL and writes no depth, so testing first
 // changes nothing else.
 [earlydepthstencil]
@@ -3710,14 +3728,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		undef LANDSCAPE_PARALLAX_ENABLED
 #	endif
 
-#	if defined(DCLF_DEPTH_ONLY) && defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+#	if defined(DCLF_DEPTH_ONLY) && defined(DCLF_OWNED_PARITY)
 	// CS_DCLF_FOLIAGE_PARITY: the fragment the alpha test kept, as its pixel's owner if it is the closest (its depth inverted
 	// above its object): the compare pass checks that the colour pass shaded the owner of each pixel whose depth it is.
 	{
 		const uint2 pixel = uint2(input.Position.xy);
 		if (pixel.x < DCLFFoliageParityFrame.x && pixel.y < DCLFFoliageParityFrame.y) {
 			RWStructuredBuffer<uint64_t> owners = ResourceDescriptorHeap[DCLFFoliageParityFrame.w];
-			const uint64_t owner = (uint64_t(0xFFFFFFFFu - asuint(input.Position.z)) << 32) | uint64_t((DCLFObjectIndex + 1) & 0x00FFFFFFu);
+			// Bit 31: terrain LOD's, counted on its own by the compare pass.
+#		if defined(LODLANDNOISE) || defined(LODLANDSCAPE)
+			const uint ownerTag = 0x80000000u;
+#		else
+			const uint ownerTag = 0;
+#		endif
+			const uint64_t owner = (uint64_t(0xFFFFFFFFu - asuint(input.Position.z)) << 32) | uint64_t(((DCLFObjectIndex + 1) & 0x00FFFFFFu) | ownerTag);
 			InterlockedMax(owners[pixel.y * DCLFFoliageParityFrame.x + pixel.x], owner);
 		}
 	}
@@ -3730,7 +3754,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// while the native depth pass runs.
 	return (PS_OUTPUT)0;
 #	else
-#		if defined(DCLF_FOLIAGE_PARITY) && defined(DO_ALPHA_TEST)
+#		if defined(DCLF_OWNED_PARITY)
 	// CS_DCLF_FOLIAGE_PARITY: what this pixel shows of the object, for the compare pass (FoliageParityCS.hlsl).
 	{
 		const uint2 pixel = uint2(input.Position.xy);

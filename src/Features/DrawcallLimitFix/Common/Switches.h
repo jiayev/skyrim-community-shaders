@@ -19,8 +19,6 @@ namespace DCLF
 		AsyncPriority,
 		Precompile,
 		Cull,
-		Ownership,
-		ShadowOwnership,
 		Skinned,
 		SkinPartitions,
 		Actors,
@@ -33,6 +31,7 @@ namespace DCLF
 		ProjectedUv,
 		SwitchNodes,
 		LodObjects,
+		LodTerrain,
 		Shadows,
 		SunSkip,
 		SunExclude,
@@ -62,7 +61,7 @@ namespace DCLF
 		SetParity,
 		BindlessParity,
 		CaptureParity,
-		NativeSkip,
+		ParityBoth,
 		CapturePointParity,
 		SkylightParity,
 		ClassifyCache,
@@ -127,11 +126,14 @@ namespace DCLF
 	/** @brief Whether a switch is set to "1". */
 	bool SwitchEnabled(Switch a_switch);
 
-	/** @brief CS_DCLF_FOLIAGE_PARITY: on with "1" (tree wind frozen) or "wind" (running). */
+	/**
+	 * @brief CS_DCLF_FOLIAGE_PARITY: on with "1" (tree wind frozen), "wind" (running) or "land" (tree wind frozen, and every colour
+	 * draw records the pixels it shades: terrain LOD's coverage against any draw, Lighting.hlsl DCLF_FOLIAGE_PARITY_ALL).
+	 */
 	inline bool FoliageParityOn()
 	{
 		const auto& value = SwitchValue(Switch::FoliageParity);
-		return value == "1" || value == "wind";
+		return value == "1" || value == "wind" || value == "land";
 	}
 
 	/** @brief The directory the switches file lives in (the SKSE log directory), outside MO2's virtual file system. */

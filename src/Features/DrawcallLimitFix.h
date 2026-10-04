@@ -52,12 +52,6 @@ struct DrawcallLimitFix : Feature
 	void ProbeTerrainPass(std::uint32_t a_index, const RE::BSRenderPass* a_pass) { DCLF::ProbeTerrainPassState(Running(), a_index, a_pass); }
 
 	/**
-	 * @brief Deferred::EndDeferred, before the deferred composite: publishes the claims the colour epoch's draws
-	 * earned, for the next frame's registrations (IndirectDraws::PublishClaims).
-	 */
-	void PublishOwnership();
-
-	/**
 	 * @brief Main_RenderShadowMaps, before the engine draws the shadow maps: the scene graph and the main
 	 * camera's culling are final, the main accumulator's passes are not yet (their registration jobs run
 	 * concurrently with the shadow draws). The shadow views are drawn between this and EarlyPrepass. The
@@ -71,16 +65,10 @@ struct DrawcallLimitFix : Feature
 	void OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint32_t a_renderFlags);
 
 	/**
-	 * @brief Whether the native loop leaves this pass to DCLF.
-	 *
-	 * True only inside the main camera's depth and opaque ranges, and only for geometry the indirect draws
-	 * drew in the frame before. Shadow, reflection and cubemap passes go through the same batch renderer and
-	 * are never skipped.
+	 * @brief A native draw of the main camera's depth or opaque range: a pass of a member of the frame's DCLF set is a LEAK (its
+	 * registration should have withheld it), counted with the first few for the report. Nothing is skipped here.
 	 */
-	bool SkipNativePass(RE::BSRenderPass* a_pass);
-	// Whether DCLF can draw the geometry this frame: a record with bindings and a built pipeline. Valid from
-	// EarlyPrepass (the accumulate phase and the pipeline lookups) to the end of the frame.
-	static bool DrawableThisFrame(const RE::BSGeometry* a_geometry);
+	void NoteNativePass(const RE::BSRenderPass* a_pass, std::uint32_t a_technique);
 	/**
 	 * @brief CS_DCLF_DRAW_CENSUS: one native draw (State::Draw, the engine's SetDirtyStates), counted by the pass it is in,
 	 * the shader type and its technique, and reported every 300 frames (Reset).
@@ -100,17 +88,12 @@ struct DrawcallLimitFix : Feature
 	 */
 	static std::uint32_t RequestLightingPipeline(std::uint32_t a_slot, RE::BSShader& a_lighting);
 
-	/** @brief How many native passes were skipped in the last frame, and how many were offered. */
-	struct SkipStats
+	/** @brief The main camera's native draws since the last report, and the set members' among them (LEAK, must be 0). */
+	struct LeakStats
 	{
-		std::uint32_t skipped = 0;
-		std::uint32_t offered = 0;
-		std::uint32_t skippedInDepth = 0;
-		std::uint32_t skippedInOpaque = 0;
-		std::uint32_t notInTables = 0;
-		std::uint32_t undrawable = 0;  // drawn last frame, in the tables, but not drawable this frame: kept native
+		std::uint64_t offered = 0, leakedInDepth = 0, leakedInOpaque = 0;
+		std::vector<std::string> samples;  // the first few leaks
 	};
-	const SkipStats& GetSkipStats() const { return skipStats; }
 
 	/**
 	 * @brief The occlusion maps, drawn by DCLF (Skylighting::RenderOcclusion's variant while DCLF runs;
@@ -125,6 +108,13 @@ struct DrawcallLimitFix : Feature
 		kPrecipitationOcclusion = 1,  // DCLF::kOcclusionPrecipitation
 	};
 	bool OcclusionReady(OcclusionMap a_map);
+	/**
+	 * @brief After OcclusionReady: whether the engine must still cull and register the map's scene (Precipitation::SetupMask): DCLF
+	 * does not draw the map, or some occluder of it is not a member of the set's phase for it yet. The registration then withholds
+	 * the members (PassCapture::SetOcclusionPhase), so each occluder is drawn once, by one of the two. The scene lists the frame's
+	 * filter left out are put back first.
+	 */
+	bool OcclusionNeedsEngine(OcclusionMap a_map);
 	void DrawOcclusion();
 	/**
 	 * @brief CS_DCLF_SKYLIGHT_PARITY=1: every 120th frame a map is rendered both ways, the engine's first; CopyOcclusion(map, 0)
@@ -231,12 +221,11 @@ private:
 	// Per occlusion view (DCLF::kOcclusionSky, kOcclusionPrecipitation), the maps left to the engine (DCLF not ready) per
 	// report interval; and the views this frame's Ready calls said DCLF draws (DrawOcclusion's epoch draws them).
 	std::array<std::uint32_t, 2> occlusionNativeFrames{};
+	std::array<std::uint32_t, 2> occlusionEngineFrames{};  // frames the engine registered the map's non-members (OcclusionNeedsEngine)
 	std::uint32_t occlusionWanted = 0;
 	std::uint32_t occlusionParityWaiting = 0;  // the maps whose engine render was kept this frame (CopyOcclusion stage 0)
 	/** @brief The periodic report (DrawcallLimitFix/Report.cpp): every kReportInterval frames. */
 	void ReportStats(std::uint32_t a_frame);
 	static constexpr std::uint32_t kReportInterval = 300;
-	SkipStats skipStats;
-	SkipStats skipCounters;  // accumulating; published into skipStats every frame
-	std::vector<std::string> skipSamples;  // names of a few skipped passes, for the report
+	LeakStats leaks;  // since the last report
 };

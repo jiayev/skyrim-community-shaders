@@ -53,23 +53,19 @@ namespace DCLF
 		static IndirectDraws& Get();
 
 		/**
-		 * @brief Whether the epoch drew this geometry in the frame before, which is what the native loop
-		 * skips: the epoch runs after the native passes, so its decision is one frame old. An object that
-		 * has just become ineligible is missing for one frame; one that has just become eligible is drawn
-		 * twice for one frame.
+		 * @brief The set's shadow phases DCLF draws next frame (SetPhase bits; SceneStore::SetPhasesDrawn): a mode's, once its last
+		 * shadow epoch drew the mode's views and left none undrawn. A mode seen for the first time is the engine's for that frame,
+		 * so its casters are never withheld from a view DCLF has no pipelines for.
 		 */
-		bool DrewLastFrame(const RE::BSGeometry* a_geometry, std::uint32_t a_frame) const;
-
-
+		std::uint8_t ShadowPhasesDrawn() const;
 		/**
-		 * @brief Publishes what DCLF owns, for the registration hook to withhold.
-		 *
-		 * The claim is what the colour epoch actually drew, not what DCLF would like to draw: withholding
-		 * a pass means the native loop will not draw it either, so claiming something DCLF then fails to
-		 * draw (a pipeline still compiling, a texture not resolved) leaves a hole. Drawing it once is the
-		 * evidence that it can be drawn again.
+		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
+		 * pipeline under every rasterizer state of its caster class in each of the phase's modes the last epoch drew, and an
+		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h).
 		 */
-		void PublishClaims();
+		bool PhaseReady(std::uint32_t a_slot, std::uint8_t a_phase) const;
+		/** @brief Changes when the shadow modes or their views' rasterizer states that PhaseReady reads change. */
+		std::uint64_t ShadowReadinessSerial() const;
 
 		/**
 		 * @brief What the main pass binds (buffers, views, targets, viewport), for this frame's colour epoch: where its opaque

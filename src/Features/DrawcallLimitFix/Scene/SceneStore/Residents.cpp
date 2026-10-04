@@ -249,6 +249,8 @@ namespace DCLF
 		if (it == tables.fadeRootIndex.end())
 			return;
 		auto& row = tables.fadeRoots[it->second];
+		if (((row.bits & kFadeRootOwned) != 0) != a_owned)
+			++fadeOwnershipSerial;
 		if (a_owned) {
 			// From here the GPU's state is the members': it starts from the node as the engine left it.
 			const std::uint32_t object = row.object;

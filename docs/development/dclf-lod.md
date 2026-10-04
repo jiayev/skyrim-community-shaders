@@ -232,6 +232,79 @@ pass: with object LOD on, the census finds none left there. The water reflection
 - **`CS_DCLF_LOD_CENSUS`** (`OpenDefectProbes.cpp`) stays as the LOD steps' measuring tool: per draw class, pass, write
   mode and frame phase.
 
+## Terrain LOD: built (L3, 2026-10-03)
+
+### What the engine does
+
+skyrim-engine-notes.md has the details: "Terrain LOD: registration, constants and placement". In short:
+- **The shapes.** Each block is a `chunk` node with one `Land` `BSTriShape` under `TES::lodLandRoot`, technique
+  LODLandNoise (18).
+- **The draws.** Its main pass has accumulation hint 6, which the main registration puts straight into geometry group 0
+  (`FUN_1414f5090`, not `RegisterPass`). The deferred pass draws group 0 last, through the group draw at `0x1414f1acd`,
+  in write mode 1. That is the "other call site" the census could not see. Its depth prepass draw is an ordinary Utility
+  pass.
+- **The technique.** It writes `HighDetailRange` (the loaded grid's centre less the camera, and its half extents
+  less 15), which the vertex shader uses to lower the LOD land under the loaded cells. It samples the diffuse and normal
+  maps bilinear.
+- **`PreviousWorld`.** For every LOD technique (9, 13, 15, 18) `SetupGeometry` writes it from the current world
+  transform with the previous camera, never from `previousWorld`. A placed chunk keeps the origin there.
+
+### What DCLF does
+
+- **Toggle.** `CS_DCLF_LOD_TERRAIN` / the `lodTerrain` toggle ("terrain LOD"), on when unset. `lodLandRoot` is a category
+  node while either LOD toggle is on; a class whose toggle is off classifies as `Lod`.
+- **Classification and shading.** `IsLodLand` (a `BSTriShape` with `kLODLandscape`) lets the land through
+  `DeriveLightingDescriptors`, and LODLand and LODLandNoise are supported techniques under the toggle. The pipelines
+  take write mode 1, as for object LOD. Terrain LOD never casts (`ShadowReject::Lod`).
+- **Technique constants** (`EvaluateTechnique`, once a frame): bilinear filtering on slots 0 and 1, and `HighDetailRange`:
+  the loaded grid's centre, absolute (the vertex shader takes the draw's eye off it). It moves vertices, so the Z-prepass
+  and the colour pass must draw a frame with the same value: it is taken once, before the Z-prepass build is kicked
+  (`RefreshLodTechniqueRanges`, `HoldLodHighDetailRange`), and the colour pass's evaluation serves the held value. The grid
+  can move between the two in one frame (a load finishing after a teleport): with each pass reading the globals, about
+  600,000 pixels of terrain LOD failed the colour pass's EQUAL test for one frame.
+- **`PreviousWorld`** (`DrawnPreviousWorld`, the shared contract): the record's previous transform is the current one for
+  LOD, as the engine draws it. The walk's settling check uses the same rule, so a placed chunk no longer re-evaluates
+  every frame.
+- **The engine's draws.** Terrain LOD is a member of the DCLF set like any object (drawcall-limit-fix.md, "The DCLF set"): its
+  passes into the main camera's views are withheld at registration, and never reach the batch renderers. The group draw at
+  `0x1414f1acd` (`BSBatchRenderer_RenderPassImmediately<3>`) only counts a native draw of a member (LEAK). The water
+  reflection's stay the engine's.
+- **No occlusion.** LOD is no occluder of the occlusion maps: `Precipitation::SetupMask` culls the scene lists, which do not
+  hold the LOD root, so the engine never draws it there.
+- **Textures.** BGRX diffuse maps were rejected by the texture import (no format), so no terrain LOD pair could draw.
+  BasicRHI now has `B8G8R8X8_Typeless`/`UNorm`/`UNorm_sRGB`: DXGI's own format on D3D12, and on Vulkan the B8G8R8A8 format
+  with alpha swizzled to one, in both SRV paths. Any other object with a BGRX texture can now be drawn by DCLF as well.
+
+### Results
+
+- **Capture parity** from the high vantage (`tourcapy`, `player.setpos z 25000`): LODLandNoise 0 mismatched of about
+  9,000–11,000 checked draws in every report but the first. The first report (at load) has 2 in `HighDetailRange`.
+  Before the fixes, every draw mismatched (the filter mode), then about 1.5% (`PreviousWorld`). Object LOD stays at 0.
+- **The census.** In the deferred pass, no engine terrain LOD draws are left (about 17–31 a frame before), and none in
+  the depth prepass.
+- **Screenshots**, terrain LOD on against off: a mean difference of 0.5/255, 0.12% of pixels over 16, max 71. The
+  differences are where small object LOD (snow, rock) meets the terrain at the same depth. The engine draws terrain LOD
+  (group 0) after object LOD (group 1), so the terrain wins those ties; DCLF orders its colour draws by pipeline.
+- **Traversal with every parity check** (`junk-landFinal`, 60 s): 786 OK, 13 ENGINE FADE, 1 CLAIM HOLES, 1 STAND-IN WALK.
+  The same traversal with terrain LOD off (`junk-landCtl`) gives 787 OK, 13 ENGINE FADE, 1 CLAIM HOLES, and also MISSED,
+  CASCADE CULL and 4 RESIDENT PARITY (a fade LOD row on two ordinary objects). None names a LOD shape: they are the
+  route's, not terrain LOD's.
+
+- **The holes at transitions** (triangles dropped as LOD chunks met the loaded terrain): a new chunk's Z-prepass draw wrote
+  depth while its colour pair was not ready (its textures still importing), and the native skip, which read the colour pass's
+  draws of the frame before, let the engine draw its colour against DCLF's depth. Fixed by the DCLF set: an object is a main
+  member only once both passes can draw it, and then the engine's passes are withheld. The teleport route
+  (`landjump.sh`, `CS_DCLF_FOLIAGE_PARITY=land`) gives 0 unshaded terrain LOD pixels in every report.
+
+### Open
+
+- **Equal-depth ties with object LOD** (above). Matching them needs the engine's group order between LOD classes in
+  DCLF's colour pass.
+- **`HighDetailRange` at load**: two draws in the first report differ from the engine's: DCLF draws a frame with the range
+  taken before the Z-prepass, the engine with its own at its draw.
+- **The water reflection view** still draws its own terrain LOD (about 60 draws a frame at the vista): L5.
+- **`CS_DCLF_LOD_CENSUS`** is a temporary probe.
+
 ## Steps
 
 | Step | What | Gate |

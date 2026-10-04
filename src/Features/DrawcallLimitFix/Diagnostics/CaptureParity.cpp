@@ -27,6 +27,53 @@ namespace DCLF
 		constexpr std::uint32_t kPerDrawVSBuffers = (1u << 4) | (1u << 9) | (1u << 10);
 		constexpr std::uint32_t kPerDrawPSBuffers = (1u << 3) | (1u << 4) | (1u << 7) | (1u << 8) | (1u << 11);
 
+		/**
+		 * @brief The descriptor bits a DCLF object's draw decides on the GPU, not its pipeline: the native pass carries the engine's
+		 * verdict for the frame, DCLF's pipeline the bits it may draw with.
+		 * - The sun's shadow bits of a sun-test record (kObjectSunTest): ShadowDir, DefShadow and the shadow light count, dropped by
+		 *   BuildDraws on a cascade miss (StaticShadowBits). The sun test's own parity checks them (IndirectDraws, the culling
+		 *   readback's sun counters).
+		 * - The LOD fades (LodFadeFrame): an object whose fades apply keeps Specular and the Envmap technique at any distance and
+		 *   the draw fades them to zero, where GetRenderPasses drops them from the pass. The accumulate phase checks the draw's
+		 *   fades against the engine's own (lodFadeDiffers).
+		 */
+		struct PerDrawBits
+		{
+			std::uint32_t pass = 0, vertex = 0, pixel = 0;
+			bool envmap = false;  // the Envmap technique (1) faded by the draw: the engine's pass is None (0) past the fade's end
+
+			/** @brief The native descriptor with the technique DCLF draws, where the engine dropped a faded Envmap. */
+			std::uint32_t Native(std::uint32_t a_native, std::uint32_t a_dclf) const
+			{
+				return envmap && ((a_dclf >> 24) & 0x3f) == 1 && ((a_native >> 24) & 0x3f) == 0 ? a_native | (1u << 24) : a_native;
+			}
+		};
+
+		PerDrawBits PerDrawBitsOf(const SceneStore::Tables& a_tables, std::uint32_t a_object, std::uint32_t a_pass)
+		{
+			PerDrawBits bits;
+			if (a_tables.objects[a_object].flags & kObjectSunTest) {
+				bits.pass |= kShadowBits;
+				bits.pixel |= kShadowBits & ~0x1c0u;  // the pixel stage drops the count
+				bits.vertex |= kShadowBits & 0x48007u;  // DefShadow (VertexDescriptorFromPass)
+			}
+			if (a_object < a_tables.lodFade.size() && LodFadesApply(a_tables.lodFade[a_object])) {
+				if (a_pass & 0x200u) {
+					bits.pass |= 0x200u;
+					bits.pixel |= 0x200u;
+					bits.vertex |= 0x200u;
+				}
+				bits.envmap = ((a_pass >> 24) & 0x3f) == 1;
+			}
+			return bits;
+		}
+
+		/** @brief A tree whose TreeParams and WindTimers TreeWindCS writes (a resident listed under its tree: Tables::treeObjects). */
+		bool GpuTreeWind(const SceneStore::Tables& a_tables, std::uint32_t a_object)
+		{
+			return SceneStore::Get().IsMember(static_cast<std::int32_t>(a_object)) && a_object < a_tables.objectTree.size() && a_tables.objectTree[a_object] != kNoTree;
+		}
+
 		std::string Describe(const RE::BSGeometry* a_geometry)
 		{
 			const char* name = a_geometry->name.c_str();
@@ -286,32 +333,16 @@ namespace DCLF
 		// TreeParams and WindTimers are written by SetupGeometry for technique 12 only; for anything else
 		// the native buffer holds whatever the last tree left there, and the shader never reads them, so they are
 		// compared for technique 12 alone (decals, drawn after everything, would otherwise mismatch on the leftover).
+		// A resident tree's are not the record's at all: TreeWindCS writes them on the GPU every frame from its own clock,
+		// and the tree wind parity checks those against the engine's (IndirectDraws::Impl::ReadTreeWind).
 		// Likewise World and PreviousWorld for a skinned object: SetupGeometry writes them for everything
 		// that is not skinned (engine notes), and the SKINNED vertex shader positions from the palette.
 		const std::uint64_t vsMask = kVSGroups[kPerGeometry] &
-		                             ((object.flags & kObjectTreeAnim) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
+		                             ((object.flags & kObjectTreeAnim) && !GpuTreeWind(tables, a_objectIndex) ? ~0ull : ~((1ull << kVSTreeParams) | (1ull << kVSWindTimers))) &
 		                             ((object.flags & kObjectSkinned) ? ~((1ull << kVSWorld) | (1ull << kVSPreviousWorld)) : ~0ull);
 		if (vs)
 			ok &= CompareBlock(a_geometry, "VS PerGeometry", expected.vs, vsLayout, vs->constantTable.data(),
 				vs->constantTable.size(), Slot(0, kPerGeometry), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerGeometry].buffer), kVSWorld, vsMask, 0);
-		// A tree whose amplitude differs: say what the derivation saw against what the node holds now.
-		if (vs && !ok && (object.flags & kObjectTreeAnim) && a_objectIndex < tables.treeAnim.size() && treeSamples < 4) {
-			const auto& tree = tables.treeAnim[a_objectIndex];
-			const auto* fadeNode = a_geometry->GetGeometryRuntimeData().shaderProperty ? a_geometry->GetGeometryRuntimeData().shaderProperty->fadeNode : nullptr;
-			float liveDistance = -2.0f, liveAmplitude = -2.0f;
-			if (fadeNode) {
-				const auto* vtable = *reinterpret_cast<const std::uintptr_t* const*>(fadeNode);
-				using Fn = const void* (*)(const RE::BSFadeNode*);
-				if (const void* node = reinterpret_cast<Fn>(vtable[0x1f8 / 8])(fadeNode)) {
-					liveDistance = *reinterpret_cast<const float*>(static_cast<const std::byte*>(node) + 0x158);
-					liveAmplitude = *reinterpret_cast<const float*>(static_cast<const std::byte*>(node) + 0x15c);
-				}
-			}
-			++treeSamples;
-			logger::warn("[DCLF] tree parity: '{}' derived amplitude {} from distance^2 {} / max {} at BuildFrame; the node now holds {} / {} (fade node {})",
-				a_geometry->name.c_str() ? a_geometry->name.c_str() : "?", tree.treeParams[2], tree.windTimers[2], tree.windTimers[3], liveDistance, liveAmplitude,
-				fmt::ptr(fadeNode));
-		}
 		if (ps)
 			ok &= CompareBlock(a_geometry, "PS PerGeometry", expected.ps, psLayout, ps->constantTable.data(), ps->constantTable.size(), Slot(1, kPerGeometry),
 				reinterpret_cast<ID3D11Resource*>(ps->constantBuffers[kPerGeometry].buffer), kPSDirLightDirection,
@@ -334,8 +365,16 @@ namespace DCLF
 		auto* vs = *globals::game::currentVertexShader;
 		auto* ps = *globals::game::currentPixelShader;
 		bool ok = true;
+		// Terrain LOD's HighDetailRange: DCLF keeps its centre absolute (LodHighDetailRange); the engine's is less this draw's posAdjust.
+		ConstantBlock techniqueVS = technique.vs;
+		if (const std::uint32_t t = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f; t == 9 || t == 18) {
+			const auto eye = globals::game::shadowState->GetRuntimeData().posAdjust.getEye();
+			float* range = &techniqueVS.floats[LightingVSLayout().offset[kVSHighDetailRange]];
+			range[0] -= eye.x;
+			range[1] -= eye.y;
+		}
 		if (vs)
-			ok &= CompareBlock(a_geometry, "VS PerTechnique", technique.vs, LightingVSLayout(), vs->constantTable.data(), vs->constantTable.size(),
+			ok &= CompareBlock(a_geometry, "VS PerTechnique", techniqueVS, LightingVSLayout(), vs->constantTable.data(), vs->constantTable.size(),
 				Slot(0, kPerTechnique), reinterpret_cast<ID3D11Resource*>(vs->constantBuffers[kPerTechnique].buffer), kVSHighDetailRange, kVSGroups[kPerTechnique], 0);
 		if (ps)
 			ok &= CompareBlock(a_geometry, "PS PerTechnique", technique.ps, LightingPSLayout(), ps->constantTable.data(), ps->constantTable.size(),
@@ -381,18 +420,26 @@ namespace DCLF
 		const auto& native = globals::state->permutationData;
 		using Extra = State::ExtraShaderDescriptors;
 		// Extra bits the Lighting shader or DCLF's model covers; the rest (IsSun, GrassSphereNormal) are other
-		// shaders' and stay set from their last draw.
-		constexpr std::uint32_t kLightingExtraBits = static_cast<std::uint32_t>(Extra::InWorld) | static_cast<std::uint32_t>(Extra::IsReflections) |
-		                                             static_cast<std::uint32_t>(Extra::IsBeastRace) | static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) |
-		                                             static_cast<std::uint32_t>(Extra::AdditiveLighting);
-		const std::uint32_t extra = expected.extraShaderDescriptor |
+		// shaders' and stay set from their last draw. IsBeastRace likewise but for the face techniques: Subsurface
+		// Scattering writes it at a face's SetupGeometry, and Lighting.hlsl reads it under SKIN alone, so every other draw
+		// carries the last face's.
+		const std::uint32_t technique = (tables.pipelines[object.pipelineIndex].passDescriptor >> 24) & 0x3f;
+		const bool face = technique == 4 || technique == 5;
+		const std::uint32_t lightingExtraBits = static_cast<std::uint32_t>(Extra::InWorld) | static_cast<std::uint32_t>(Extra::IsReflections) |
+		                                        (face ? static_cast<std::uint32_t>(Extra::IsBeastRace) : 0u) |
+		                                        static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) | static_cast<std::uint32_t>(Extra::AdditiveLighting);
+		const std::uint32_t extra = (expected.extraShaderDescriptor & lightingExtraBits) |
 		                            ((object.flags & kObjectSuppressExternalEmittance) ? static_cast<std::uint32_t>(Extra::SuppressExternalEmittance) : 0u);
-		// The ProjectedUV bit of hair, which DCLF drops (HairProjection), is left out of the descriptors' comparison.
+		// The ProjectedUV bit of hair, which DCLF drops (HairProjection), is left out of the descriptors' comparison, and the
+		// bits DCLF's draw decides (PerDrawBits).
 		const std::uint32_t hairProjection = HairProjection(native.VertexShaderDescriptor) ? kPassProjectedUV : 0u;
+		const PerDrawBits perDraw = PerDrawBitsOf(tables, a_objectIndex, tables.pipelines[object.pipelineIndex].passDescriptor);
 		const std::array<std::pair<std::uint32_t, std::uint32_t>, 4> fields{ {
-			{ expected.vertexShaderDescriptor, native.VertexShaderDescriptor & ~hairProjection },
-			{ expected.pixelShaderDescriptor, native.PixelShaderDescriptor & ~hairProjection },
-			{ extra, native.ExtraShaderDescriptor & kLightingExtraBits },
+			{ expected.vertexShaderDescriptor & ~perDraw.vertex,
+				perDraw.Native(native.VertexShaderDescriptor, expected.vertexShaderDescriptor) & ~(hairProjection | perDraw.vertex) },
+			{ expected.pixelShaderDescriptor & ~perDraw.pixel,
+				perDraw.Native(native.PixelShaderDescriptor, expected.pixelShaderDescriptor) & ~(hairProjection | perDraw.pixel) },
+			{ extra, native.ExtraShaderDescriptor & lightingExtraBits },
 			{ expected.extraFeatureDescriptor, native.ExtraFeatureDescriptor },
 		} };
 		++permutationChecks;
@@ -603,12 +650,14 @@ namespace DCLF
 			}
 		}
 
-		// Light Limit Fix's StrictLightData as its SetupGeometry hook left it (it uploads when these change).
+		// Light Limit Fix's StrictLightData as its SetupGeometry hook left it (it uploads when these change). Not ShadowBitMask:
+		// a DCLF draw's is the local shadow lights BuildDrawsCS selects (the object word, LightLimitFix.hlsli under
+		// DCLF_BINDLESS_DRAW), which draw parity checks (expectedLocalShadows).
 		if (globals::features::lightLimitFix.loaded) {
 			const auto& native = globals::features::lightLimitFix.strictLightDataTemp;
 			const auto& expected = tables.lights[index];
 			++lightChecks;
-			if (native.NumStrictLights != 0 || native.RoomIndex != expected.roomIndex || native.ShadowBitMask != expected.shadowBitMask) {
+			if (native.NumStrictLights != 0 || native.RoomIndex != expected.roomIndex) {
 				++lightMismatches;
 				NoteMismatch(fmt::format("{} strict light data: DCLF room {} shadow mask {:X}, native {} strict lights, room {} shadow mask {:X}", Describe(geometry),
 					expected.roomIndex, expected.shadowBitMask, native.NumStrictLights, native.RoomIndex, native.ShadowBitMask));
@@ -774,7 +823,15 @@ namespace DCLF
 		// carries this frame (DrawnPassDescriptor), so the native side is compared as DCLF normalises it.
 		const std::uint32_t list = accumulated ? accumulated->subPass : 0u;
 		const std::uint32_t nativeDescriptor = DrawnPassDescriptor(PassDescriptorOf(a_pass->passEnum), list);
-		if (key.passDescriptor != nativeDescriptor) {
+		const PerDrawBits drawBits = PerDrawBitsOf(tables, static_cast<std::uint32_t>(index), key.passDescriptor);
+		const std::uint32_t passDiffers = key.passDescriptor ^ drawBits.Native(nativeDescriptor, key.passDescriptor);
+		// A native pass without the bits DCLF's draw decides is another technique's: its material, PerGeometry and technique state
+		// are that technique's (no shadow mask, the LOD-faded features dropped), so only the descriptors are compared. The same
+		// object is compared whole on the frames its native pass has them.
+		const bool otherTechnique = passDiffers && !(passDiffers & ~drawBits.pass);
+		if (otherTechnique)
+			++perDrawNormalised;
+		if (passDiffers & ~drawBits.pass) {
 			mismatch = true;
 			NoteMismatch(fmt::format("{} pass descriptor: DCLF {:08X}, native {:08X} (flags {:016X}; accumulated technique {:08X} list {} passEnum then {:08X})",
 				Describe(geometry), key.passDescriptor, PassDescriptorOf(a_pass->passEnum), a_pass->shaderProperty ? a_pass->shaderProperty->flags.underlying() : 0ull,
@@ -783,7 +840,9 @@ namespace DCLF
 		// The shader descriptors likewise, with that one bit left out of the comparison in an alpha-test list, and the
 		// ProjectedUV bit of hair, which DCLF drops (HairProjection).
 		const std::uint32_t ignored = DrawnPassDescriptor(0, list) | (HairProjection(PassDescriptorOf(a_pass->passEnum)) ? kPassProjectedUV : 0u);
-		if (((key.vertexDescriptor ^ state->modifiedVertexDescriptor) & ~ignored) != 0 || ((key.pixelDescriptor ^ state->modifiedPixelDescriptor) & ~ignored) != 0) {
+		const PerDrawBits& perDraw = drawBits;
+		if (((key.vertexDescriptor ^ perDraw.Native(state->modifiedVertexDescriptor, key.vertexDescriptor)) & ~(ignored | perDraw.vertex)) != 0 ||
+			((key.pixelDescriptor ^ perDraw.Native(state->modifiedPixelDescriptor, key.pixelDescriptor)) & ~(ignored | perDraw.pixel)) != 0) {
 			mismatch = true;
 			NoteMismatch(fmt::format("{} descriptors: DCLF VS {:08X} PS {:08X}, native VS {:08X} PS {:08X} (pass {:08X}, flags {:016X})",
 				Describe(geometry), key.vertexDescriptor, key.pixelDescriptor, state->modifiedVertexDescriptor, state->modifiedPixelDescriptor,
@@ -793,7 +852,7 @@ namespace DCLF
 			mismatch = true;
 			NoteMismatch(fmt::format("{} world transform changed after the tables were built", Describe(geometry)));
 		}
-		if (!mismatch && !CompareMaterial(geometry, object.materialIndex)) {
+		if (!mismatch && !otherTechnique && !CompareMaterial(geometry, object.materialIndex)) {
 			mismatch = true;
 			++materialMismatches;
 			const auto* drawn = a_pass->shaderProperty ? a_pass->shaderProperty->material : nullptr;
@@ -808,11 +867,11 @@ namespace DCLF
 			follow.keyDiffers |= drawn != recorded;
 			follow.writtenBefore |= store.GetWrittenMaterials().contains(drawn);
 		}
-		if (!mismatch && !CompareGeometry(geometry, static_cast<std::uint32_t>(index), a_renderFlags)) {
+		if (!mismatch && !otherTechnique && !CompareGeometry(geometry, static_cast<std::uint32_t>(index), a_renderFlags)) {
 			mismatch = true;
 			++geometryMismatches;
 		}
-		if (!mismatch && !CompareTechnique(geometry, static_cast<std::uint32_t>(index))) {
+		if (!mismatch && !otherTechnique && !CompareTechnique(geometry, static_cast<std::uint32_t>(index))) {
 			mismatch = true;
 			++techniqueMismatches;
 		}
@@ -940,9 +999,9 @@ namespace DCLF
 		const char* cellName = cell ? cell->GetName() : nullptr;
 		logger::info("[DCLF] location: cell {:08X} '{}' ({})", cell ? cell->GetFormID() : 0u, cellName ? cellName : "",
 			cell && cell->IsInteriorCell() ? "interior" : "exterior");
-		logger::info("[DCLF] capture parity {}: {} native main-pass lighting draws, {} checked against the tables, {} mismatched ({} material, {} per-geometry, {} technique), {} untracked eligible, {} tracked but excluded, {} native-only passes of DCLF objects; tables hold {} objects / {} geometries / {} pipelines ({} with shadow mask) / {} materials from {} tracked; render flags seen:{}",
+		logger::info("[DCLF] capture parity {}: {} native main-pass lighting draws, {} checked against the tables, {} mismatched ({} material, {} per-geometry, {} technique), {} untracked eligible, {} tracked but excluded, {} native-only passes of DCLF objects, {} whose pass differs only in the bits the draw decides (descriptors compared alone); tables hold {} objects / {} geometries / {} pipelines ({} with shadow mask) / {} materials from {} tracked; render flags seen:{}",
 			ok ? "OK" : "MISMATCH", nativeDraws, checkedDraws, mismatchedDraws, materialMismatches, geometryMismatches, techniqueMismatches, untrackedEligible,
-			notInTables, nativeOnlyPasses, stats.objects, stats.geometries, stats.pipelines, stats.shadowMaskPipelines, stats.materials, stats.tracked, flags);
+			notInTables, nativeOnlyPasses, perDrawNormalised, stats.objects, stats.geometries, stats.pipelines, stats.shadowMaskPipelines, stats.materials, stats.tracked, flags);
 		{
 			std::string byTechnique;
 			for (std::uint32_t t = 0; t < checkedByTechnique.size(); ++t)
@@ -1034,7 +1093,7 @@ namespace DCLF
 		for (const auto& sample : samples)
 			logger::info("[DCLF]   {}", sample);
 
-		nativeDraws = checkedDraws = mismatchedDraws = untrackedEligible = notInTables = nativeOnlyPasses = materialMismatches = geometryMismatches = 0;
+		nativeDraws = checkedDraws = mismatchedDraws = untrackedEligible = notInTables = nativeOnlyPasses = perDrawNormalised = materialMismatches = geometryMismatches = 0;
 		drawMismatches = drawsChecked = 0;
 		techniqueMismatches = inheritedFilters = permutationChecks = permutationMismatches = lightChecks = lightMismatches = 0;
 		skinTextureChecks = skinTextureMismatches = skinWetnessChecks = skinWetnessMismatches = skinWetDraws = skinOwnerMismatches = 0;
