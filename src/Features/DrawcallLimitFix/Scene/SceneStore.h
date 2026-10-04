@@ -12,6 +12,7 @@
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
 #include "Features/DrawcallLimitFix/Scene/LodSegments.h"
+#include "Features/DrawcallLimitFix/Scene/TreeLod.h"
 #include "ActorValueIndex.h"
 #include "Features/DrawcallLimitFix/Engine/FaceSnapshots.h"
 #include "Features/DrawcallLimitFix/Common/KeptState.h"
@@ -1186,6 +1187,9 @@ namespace DCLF
 		/** @brief The main camera's batch renderers, as of the last BuildFrame. */
 		const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>& GetMainBatchRenderers() const { return mainBatchRenderers; }
 
+		/** @brief Tree LOD's mirror of the engine's groups (TreeLod.h): the depth commit uploads what it changed. Render thread. */
+		TreeLod::Mirror& TreeLodMirror() { return treeLod; }
+
 		/** @brief True when the geometry sits under a tracked category node (used by coverage checks). */
 		bool IsTracked(const RE::BSGeometry* a_geometry) const;
 		/** @brief Object LOD: the index ranges a tracked BSSubIndexTriShape draws (its visible segments' runs), or null. */
@@ -2075,6 +2079,8 @@ namespace DCLF
 			std::string first;
 		} lodSegmentStats;
 		std::uint32_t lodParityFrame = 0;
+		// Tree LOD (dclf-lod.md, L4): the engine's tree LOD groups and their instance records, by events (TreeLod.h).
+		TreeLod::Mirror treeLod;
 		void SampleLodRanges(const RE::BSGeometry& a_shape, bool a_event);
 		void ApplyLodSegmentEvents();
 		struct ChangeLogParity

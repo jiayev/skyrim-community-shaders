@@ -31,6 +31,7 @@ namespace DCLF
 	void IndirectDraws::KickColourBuild() {}
 	void IndirectDraws::KickZPrepassBuild() {}
 	void IndirectDraws::KickFadeWriteBack() {}
+	bool IndirectDraws::DecideTreeLod() { return false; }
 	void IndirectDraws::JoinFadeWriteBack() {}
 	void IndirectDraws::KickShadowBuild() {}
 	void IndirectDraws::KickShadowBuildEarly() {}

@@ -47,6 +47,77 @@ the image does not change. It is still a parity gap.
 **Fix:** build opaque pipelines from the engine's blend state for their write mode, as decal pipelines
 already do (`DrawPipelines::ReadEngineState`).
 
+## Accepted differences
+
+Differences from the engine that are known, measured and left as they are, with the reason. Each one names what would
+remove it if it ever matters.
+
+### A root seen again is drawn for one frame with its old fade
+
+**What.** The engine updates a fade root only when its cull reaches it (`BSFadeNode::OnVisible`). A root seen again after
+more than a frame unseen is re-evaluated on that same frame, before the draw. A root that should have faded out while it
+was out of view snaps out, and is never drawn. `FadeStateCS` runs a frame ahead: frame N's update, from frame N's camera,
+is what frame N+1's builds read (`FadeStatesReadIndex`). So on the frame a stood-in root comes back into view, DCLF draws
+it with the state from when it was last seen, and it disappears on the next frame.
+
+**Measured** (2026-10-04, teleport route with the camera turning, the engine's own fades, `CS_DCLF_PRIMARY_EXCLUDE=0`).
+Over five 10-second reports, 2,126 roots were seen again with a fade above 0 (BSFadeNode 1,286, BSLeafAnimNode 840):
+-   1,291 snapped out on that frame (BSFadeNode 780, BSLeafAnimNode 511), each a one-frame draw under DCLF;
+-   20 faded out while in view, as the engine's fade update does;
+-   the rest stayed in.
+
+Settled, at one place, none snapped.
+
+**Why it is accepted.** A root comes back into view when its bounding sphere first touches the frustum. The sphere
+encloses the mesh with a margin, so in one frame the mesh itself has usually not yet reached the screen.
+
+**What would remove it.** The depth build reading this frame's `FadeStateCS` output, ordered after the pass in the same
+epoch (the pass on the build's critical path). Or `BuildDraws` applying the engine's re-entry snap to a root whose
+published state is long unseen.
+
+### Skylighting parity lags while roots start fading
+
+**What.** The engine's reference render of an occlusion map (`CS_DCLF_SKYLIGHT_PARITY`) culls stood-in roots by their
+nodes. Those carry the GPU's fade milestones only a few frames after the GPU state ("The fade write-back" in
+[drawcall-limit-fix.md](./drawcall-limit-fix.md): the readback's frame slots, then the next frame's job). DCLF's map
+reads the current state.
+
+**Measured** (2026-10-04, two runs). Every map was within 15 texels by more than 1/256, except in the first 17 s after
+the last teleport, while the turning camera brought newly loaded roots into view. There a few maps had 2,500-19,000
+texels, DCLF always nearer.
+
+**Why it is accepted.** The difference is the reference's latency, not DCLF's map. The engine's own readers of the nodes
+(the tree LOD's crossfade) take the same few frames.
+
+**What would remove it.** A parity check that skips roots whose milestone changed within the write-back's latency.
+
+### Tree LOD instances the engine leaves hidden after `allVisible`
+
+**What.** The terrain manager's node update (`FUN_140510730`) sets a tree LOD block's `allVisible` (`+0x82`) when the block
+no longer needs per-instance hiding (its flags bit 14 clear), then calls the block's update (`FUN_140503f70`). That update
+refills only the groups whose `shaderPropertyUpToDate` (`+0x24`) is clear, and nothing cleared it. So the engine keeps
+drawing the records it packed before: every instance that was hidden (scale 0) stays hidden, although `allVisible` says
+every instance should show. DCLF draws by the intended rule: when the update finds `allVisible` set, DCLF repacks those
+groups with every instance shown (dclf-lod.md, "Tree LOD: the mirror").
+
+**Measured** (2026-10-04, teleport route, three runs). 10-52 shapes in the reports after each load; none once the
+camera had stayed at one place.
+
+**Why it is accepted.** The engine's records are stale, not intended: hiding is for instances whose full tree is loaded,
+and `allVisible` is the block saying none are. If the engine's behaviour is visible, it shows as holes in the tree LOD where
+full trees have since unloaded, which DCLF does not reproduce.
+
+**What would remove it.** Nothing in DCLF; it is the engine's. Not yet confirmed visible on screen. To investigate:
+-   **Starting point.** `FUN_140510730` at the `allVisible = 1` write (the branch on the node flags' bit 14), and its call of
+    `FUN_140503f70` (`0x1405108ff`). Find what bits 13 and 14 of the node's flags (`+0x40`) mean: which grid the node is in,
+    and when they change as the player moves away from a loaded area.
+-   **Count it.** `CS_DCLF_PERSISTENT_PARITY`'s "tree LOD mirror" line, `shown by allVisible without a refill`, counts the
+    shapes where DCLF and the engine differ. `CS_DCLF_TREE_LOD_AUDIT` (`OpenDefectProbes.cpp`) counts instances by their
+    reference's state.
+-   **See it.** With DCLF's tree LOD off, teleport away from a forest and look back at it: an engine bug shows as gaps in
+    the LOD forest where trees were loaded, lasting until the block is refilled for another reason. Then compare with
+    DCLF's tree LOD on.
+
 ## Resolved: DCLF's draws carry the TAA / upscaler jitter
 
 The earlier evidence was that every G-buffer target DCLF wrote at one road pixel held the same value frame after

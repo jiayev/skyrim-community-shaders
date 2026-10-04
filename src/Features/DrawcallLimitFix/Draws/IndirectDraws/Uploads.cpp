@@ -317,6 +317,16 @@ namespace DCLF
 		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
 		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
 		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads);
+		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): the mirror's changes, the draw row and the list's arguments, for the depth
+		// epoch's cull and both passes' draws; it draws while its toggle is on and its programs and pipelines are built.
+		if (depthOnly && a_resources->scene->treeLodCull) {
+			auto& sceneBuffers = *a_resources->scene;
+			UploadTreeLod(a_store.TreeLodMirror(), sceneBuffers, uploads, a_bindingOwners, treeLodOwned);
+			// The registrations withheld the engine's passes on the frame's decision: a commit that cannot draw leaves a hole.
+			if (treeLodOwned && !sceneBuffers.treeLodReady.load(std::memory_order_acquire) && treeLodMissed++ < 8)
+				logger::warn("[DCLF] tree LOD: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} shape slots)", frameNumber,
+					a_store.TreeLodMirror().ShapeSlots(), sceneBuffers.treeLodShapeCapacity);
+		}
 		// The fade roots, and once a frame their inputs, for FadeStateCS ahead of the depth segment's culling: the main camera
 		// the list jobs cull with (PrimaryCull::FadeEye) and the engine's fade globals.
 		if (depthOnly && a_resources->scene->fadeState) {
@@ -770,6 +780,27 @@ namespace DCLF
 
 namespace DCLF
 {
+	bool IndirectDraws::DecideTreeLod()
+	{
+		bool owned = false;
+		auto* buffers = impl->scene.get();
+		if (buffers && buffers->treeLodCull && ActiveToggles().lodTrees && SceneStore::Get().TreeLodMirror().Size()) {
+			auto* shader = Engine::Global<RE::BSShader*>(0x33dcd10);  // the BSDistantTreeShader
+			const auto* program = shader ? ShaderPrograms::Get().FindTreeLod(*shader) : nullptr;
+			const auto* texture = Engine::Global<RE::NiSourceTexture*>(0x33dcd18);  // its tree LOD atlas (UploadTreeLod)
+			TreeLodPipelines pipelines;
+			if (program && DrawPipelines::Get().FindTreeLod(*program, pipelines) && texture && texture->rendererTexture && texture->rendererTexture->resourceView) {
+				const auto published = buffers->treeLodPipelines.load(std::memory_order_acquire);
+				if (!published || !SameHandle(published->depth, pipelines.depth) || !SameHandle(published->colour, pipelines.colour))
+					buffers->treeLodPipelines.store(std::make_shared<const TreeLodPipelines>(pipelines), std::memory_order_release);
+				owned = true;
+			}
+		}
+		impl->treeLodOwned = owned;
+		PassCapture::Get().SetTreeLodOwned(owned);
+		return owned;
+	}
+
 	void IndirectDraws::KickFadeWriteBack()
 	{
 		JoinFadeWriteBack();  // one no join reached (a frame that rendered neither shadows nor the accumulate phase)

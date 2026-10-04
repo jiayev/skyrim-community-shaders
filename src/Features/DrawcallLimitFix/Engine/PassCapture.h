@@ -67,7 +67,15 @@ namespace DCLF
 			// not model, left to the engine.
 			std::uint32_t mainWithheld = 0, mainCrossfadeCopies = 0, mainUnmodelledFades = 0;
 			std::uint32_t occlusionWithheld = 0;  // the occlusion maps' registrations: members' passes withheld
+			std::uint32_t treeLodWithheld = 0;    // tree LOD's passes into the main camera's views, while DCLF draws it
 		};
+
+		/**
+		 * @brief Render thread, at the frame's first DCLF point (before the main camera's cull): whether DCLF draws tree LOD this
+		 * frame (IndirectDraws::DecideTreeLod). While it does, every tree LOD pass into the main camera's views is withheld.
+		 */
+		void SetTreeLodOwned(bool a_owned) { treeLodOwned.store(a_owned, std::memory_order_release); }
+		bool TreeLodOwned() const { return treeLodOwned.load(std::memory_order_acquire); }
 
 		static constexpr std::uint32_t kShadowModes = 3;
 
@@ -186,6 +194,8 @@ namespace DCLF
 		std::atomic<std::uint32_t> volumetricWithheld{ 0 };
 		std::atomic<std::uint32_t> directWithheld{ 0 };
 		std::atomic<std::uint32_t> mainWithheld{ 0 }, mainCrossfadeCopies{ 0 }, mainUnmodelledFades{ 0 }, occlusionWithheld{ 0 };
+		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
+		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint8_t> occlusionPhase{ 0 };
 		struct OcclusionGroupHook;
 		friend struct OcclusionGroupHook;

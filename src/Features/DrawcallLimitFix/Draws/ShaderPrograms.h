@@ -107,6 +107,18 @@ namespace DCLF
 		const ShadowProgram* FindShadow(std::uint32_t a_technique, RE::BSShader& a_utility, bool a_allowRequest = true, bool* a_requested = nullptr,
 			std::uint8_t* a_onDemand = nullptr);
 
+		/**
+		 * @brief Tree LOD's programs (dclf-lod.md, "Tree LOD: the draws"): `Data/Shaders/DistantTree.hlsl`'s pulled builds
+		 * (DCLF_PULLED), the colour technique (deferred) and the depth technique, each a vertex and a pixel stage. Requested on the
+		 * first call; null until all four are compiled. Never freed.
+		 */
+		struct TreeLodProgram
+		{
+			std::vector<std::byte> vertex, pixel;            // DistantTreeBlock, deferred
+			std::vector<std::byte> depthVertex, depthPixel;  // Depth (RENDER_DEPTH)
+		};
+		const TreeLodProgram* FindTreeLod(RE::BSShader& a_distantTree);
+
 		/** @brief Collects finished compilations (call once per frame). */
 		void Update();
 
@@ -129,6 +141,9 @@ namespace DCLF
 
 		ankerl::unordered_dense::map<std::uint64_t, std::unique_ptr<Entry>> entries;
 		ankerl::unordered_dense::map<std::uint32_t, std::unique_ptr<ShadowEntry>> shadowEntries;
+		struct TreeLodEntry;
+		std::unique_ptr<TreeLodEntry> treeLodEntry;
+		std::vector<std::byte> distantTreeSource;
 		std::vector<std::byte> source;
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;

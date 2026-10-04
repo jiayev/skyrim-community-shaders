@@ -119,6 +119,13 @@ namespace DCLF
 		 */
 		void KickFadeWriteBack();
 		/**
+		 * @brief Render thread, at the frame's first DCLF point, after the scene events (the tree LOD mirror's drain) and before the
+		 * main camera's cull: whether DCLF draws tree LOD this frame - its toggle on, its programs, pipelines and tables built, the
+		 * engine's tree LOD texture there. The registrations withhold the engine's tree LOD passes on it (PassCapture), and the
+		 * depth commit draws on it (UploadTreeLod).
+		 */
+		bool DecideTreeLod();
+		/**
 		 * @brief Render thread, before anything reads the nodes or changes the tables (BeforeShadowMaps, the accumulate phase, the
 		 * next scene frame's events): the job joined, or stopped; what it did not reach goes to the next one.
 		 */

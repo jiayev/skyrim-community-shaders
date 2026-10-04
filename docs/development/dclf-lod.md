@@ -81,8 +81,8 @@ Still to find (reverse engineering, before the step that needs each one):
    - per-segment bound culling (per view);
    - persistent per-segment hiding for loaded large references (the write that hides a segment, and its thread);
    - how the pass draws the visible segments (one draw per run of segments, or an index list rebuilt per frame).
-5. **Tree instance hiding.** Found (2026-10-04), below; still to find: how the instance buffer reaches the GPU (a dynamic
-   buffer rewritten from `instances`, and when).
+5. **Tree instance hiding.** Found (2026-10-04), below, with how the records reach the GPU ("Tree LOD: what the engine
+   does").
 6. **The handover to full models.** At what point the engine switches between LOD and the full model:
    - objects: the large reference's cell load against the segment hide;
    - trees: the full tree's fade-in against the instance hide;
@@ -117,6 +117,136 @@ about 200 instances stayed shown over loaded trees to the end of the run with th
 Fixes' cache. With the stand-in off (`CS_DCLF_PRIMARY_EXCLUDE=0`) they faded out within about 15 s as the camera turned
 to them, to 3. It is the stale node fade that the Skylighting reference also reads ("The fade roots",
 drawcall-limit-fix.md).
+
+## Tree LOD: what the engine does (2026-10-04)
+
+All addresses are AE 1.6.1170.
+
+- **The shapes.** A block's attach (`FUN_140503630`) makes one `BSMultiStreamInstanceTriShape` per `TreeGroup`, cloned from
+  its tree type's base shape (the type table at `0x14314d170`, 0x28 bytes an entry: width `+4`, height `+8`, base shape
+  `+0x20`). Each shape gets a new `BSDistantTreeShaderProperty` (two-sided) and its translation from the block's terrain
+  node, and is attached under the LOD trees root (`*0x14315b880`, `AttachChild`).
+- **The records.** The refill (`FUN_140504a40(block, group)`) packs at most 75 of the group's instances (`0x4B`) into 32-byte
+  records of 16 halfs:
+  - position (`x`, `y`, `z` copied, block-relative);
+  - scale, or 0 when hidden (the hidden byte's bit 0, ignored while the block's `allVisible` is set);
+  - `cos` and `sin` of `rotZ`;
+  - alpha (copied);
+  - 1.0;
+  - eight zeros.
+
+  It gives them to the shape's `AddGroup` (vfunc `0x1E0`), which makes the group's vertex buffer and its AABB (padded by the
+  type's larger extent times the largest scale), then sets the group's `shaderPropertyUpToDate`. The refill is called from
+  the attach and from the block's update (`FUN_140503f70`), which refills each group whose `shaderPropertyUpToDate` is
+  clear, after removing its old group (`RemoveGroup`, vfunc `0x1E8`). The detach (`FUN_1405033d0`) removes the group, then
+  detaches and releases the shape. These run on the terrain manager's threads, not the render thread.
+- **The draw.** `OnVisible` (`0x140e1e480`) tests each group's AABB against the view (with the far plane moved to the shape's
+  `renderDistance` when it has one) and draws the shape if any group passed. `GetRenderPasses` gives the colour pass technique
+  `0x5c00002e` and render modes `0xC`-`0xF` (the depth prepass among them) `0x5c00002f`, both with accumulation hint 7: in
+  the main view that is geometry group 1, which the deferred pass draws with depth mode 4 (`kTestEqual`) against the depth
+  prepass. The depth technique is the one that reads the instance alpha: `DistantTree.hlsl`'s `RENDER_DEPTH` discards by a
+  4x4 stipple of it. So the crossfade with a full tree shows in colour only through the prepass's depth.
+- **Constants.** `SetupTechnique` (`0x1414eca50`) writes the fog (VS `PerTechnique`) and the sun's colour, the ambient and
+  the sun's direction. `SetupGeometry` (`0x1414ecef0`) writes `WorldViewProj`, `World` and `PreviousWorld`, the last from
+  the current world transform and the previous `posAdjust`, as for the other LOD techniques.
+- **allVisible without a refill.** The node update (`FUN_140510730`) sets a block's `allVisible` without clearing its
+  groups' `shaderPropertyUpToDate`, so no refill follows: the engine keeps drawing the records it packed before, with
+  the instances that were hidden still at scale 0, until something else changes the group. On the teleport route this was
+  10-52 shapes after each load. DCLF draws by the rule instead (an accepted difference: dclf-open-defects.md, "Tree LOD
+  instances the engine leaves hidden after `allVisible`").
+
+## Tree LOD: the mirror (L4a, 2026-10-04)
+
+`TreeLod.h` / `TreeLod.cpp`. The mirror is not under a toggle: it changes nothing the engine does.
+
+- **Events.** The refill's two calls are patched (`0x1405037f6`, `0x140503fbf`); each names the block and group it packs,
+  per thread. The `AddGroup` and `RemoveGroup` slots of `BSMultiStreamInstanceTriShape` are patched too:
+  - an `AddGroup` made inside a refill pushes the records it was given, the exact bytes of the engine's vertex buffer;
+  - a `RemoveGroup` on a shape with a `BSDistantTreeShaderProperty` pushes a removal.
+
+  The block update's one call (`0x1405108ff`, in the node update) is patched too: after it, every group of the block is
+  packed again by the rule with the block's current `allVisible`, on that thread, and pushed as an intended event. The drain
+  applies one only where it changes the records, which is where the engine kept hidden records (above).
+
+  The events go through a lock-free `EventQueue`, from the terrain manager's threads. `ProcessEvents` drains them in push
+  order into a map of shape to records.
+- **Parity** (`CS_DCLF_PERSISTENT_PARITY`, every 60 frames). The root's tree LOD shapes are compared with the mirror:
+  - a shape it lacks (missing), or one it holds that the root does not (stale);
+  - each group's records against the group's instances packed again by the refill's rule, with the engine's own half
+    conversions and `cosf`/`sinf`. A group whose refill is due (`shaderPropertyUpToDate` clear) is skipped. A shape that
+    differs is confirmed at the next drain, unless an event for it arrived (refilled after the drain).
+- **Results** (the teleport route, `landjump.sh`, three runs). Up to 597 shapes and 10,139 instances; up to 2,297 events in a
+  10-second report while loading, all from other threads, and none once settled. Every report: 0 missing, 0 stale, 0 differ.
+  Before the block update's events, the only differences were `allVisible` without a refill (10-52 shapes in the reports
+  after each load); with them, the rule overrode 8-13 groups after the loads and parity stayed at 0.
+
+## Tree LOD: the engine's draw state (2026-10-04)
+
+Measured at `BSDistantTreeShader::SetupGeometry` (a temporary probe), over the teleport route:
+- **The main view.** Its depth prepass draws tree LOD with the depth technique (`0x5c00002f`), depth test and write, culling
+  off. Its colour pass draws it with `0x5c00002e`, depth EQUAL, write mode 1, culling off. Every tree LOD shape takes both.
+- **Other views.** Most of the calls are 256x256 views with no colour target (the cube map renders). They stay the engine's.
+- **State.** The texture is always the worldspace's atlas (`Textures\Terrain\Tamriel\Trees\TamrielTreeLOD.DDS`), which
+  `SetupTechnique` binds from the shader's static at `0x1433dcd18` (an `NiSourceTexture`; the property's own `+0x90` is null).
+  Slot 0's address mode is 0. Its filter mode is whatever the last draw left: 2 in most colour draws, 3 in some. The alpha
+  test is on, reference 128/255.
+- **The meshes.** Every type's base mesh is two crossed quads: 8 vertices, 4 triangles, vertex layout `0x0000300000000405`
+  (a float4 position and a half2 texture coordinate at byte 16, 20 bytes a vertex).
+
+## Tree LOD: the draws (L4b, 2026-10-04)
+
+Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
+
+- **The tables** (`SceneBuffers`, `Scene/TreeLod.h`). The mirror gives each shape a slot and each mesh (a type's base
+  shape's renderer data) a slot of its own:
+  - a shape row per slot: translation, mesh slot, record count, its type's extent;
+  - 75 instance records per slot, the engine's 32-byte records;
+  - a mesh row per mesh slot: its vertex and index buffers' device addresses (leased through `GpuResources`, the buffers held
+    from the hook until the render thread leases them), stride, index count and texture coordinate offset;
+  - a draw row: the tables' addresses, the atlas's and sampler's descriptors, the alpha reference, the slot count;
+  - the visible list: a non-indexed `DrawInstanced`'s arguments, then the culled records' indices.
+
+  The depth commit uploads only the slots and meshes the drain changed (`UploadTreeLod`). A slot freed by a detach is
+  rewritten with a count of 0. The tables grow with the mirror (`ReserveSceneTables`), and a new backing gets every slot
+  again. A mesh no shape uses any more hands its leases to the next execution.
+- **The cull** (`TreeLodCullCS.hlsl`, the depth epoch, before the Z-prepass draw). One thread per record: a record past its
+  slot's count, or hidden (scale 0), is skipped. The rest are tested against the depth segment's frustum (a sphere of the
+  type's extent times the scale, about the instance's position) and appended to the visible list.
+- **The draws.** One instanced draw in each main pass, of the largest mesh's index count per instance. Both pipelines are
+  pulled, under the Z-prepass's layout: the draw's push data holds the draw row's address, and the vertex stage fetches its
+  record, its shape's row, its mesh's index and vertex through it (`DistantTree.hlsl`, `DCLF_PULLED`). The engine's
+  instance math is kept as is, `precise`, with `World` as the shape's translation, `PreviousWorld` from the previous
+  `posAdjust`. The Z-prepass draws the depth technique (the 4x4 stipple of the instance's alpha, then the alpha test), depth
+  LESS with writes. The colour pass draws the deferred technique, depth EQUAL, the engine's write mode 1. Both draw
+  two-sided. The pixel stages take the atlas, the sampler (address mode 0, filter 2) and 128/255 from the draw row.
+- **Ownership.** At the frame's first DCLF point, after the scene events and before the main camera's cull,
+  `IndirectDraws::DecideTreeLod` decides whether DCLF draws tree LOD this frame: the toggle, the programs, the pipelines and
+  the tables built, and the atlas loaded. On it, the registration withholds every tree LOD pass into the main camera's
+  views (`PassCapture::WithholdMain`: hint 7 into group 1, from both the colour pass's registration and the Z-prepass's), and
+  the depth commit names the slots in the draw row. Otherwise the draw row names none, the cull appends nothing, and both
+  passes draw no instances. So the passes, which are prepared ahead of the commits, never disagree within a frame.
+- **Programs and pipelines.** `ShaderPrograms::FindTreeLod` compiles `DistantTree.hlsl` with `DCLF_PULLED` for descriptors
+  `0x10100` (deferred) and `0x10001` (depth). A pulled DistantTree build takes `Permutation.hlsli`'s values as zero statics
+  (`DCLF_PULLED_ROWS`): DCLF draws no reflection. `DrawPipelines::FindTreeLod` builds the two pipelines through the pipeline
+  service.
+- **A defect fixed on the way.** `DrawPipelines::Update` took a reference to a finished build's artifact, then reset the
+  future. When `PipelineService::PublishReady` had already dropped its own reference, that destroyed the artifact under the
+  reference (tree LOD's build failed with an empty error). It is copied now, at all three sites.
+
+### Results
+
+- **The teleport route** (`landjump.sh`, `CS_DCLF_PERSISTENT_PARITY`, 60 s): DCLF drew tree LOD in every report, up to 414
+  engine passes withheld a frame and no frame withheld but undrawn. Mirror parity was OK in all 21 reports, with no main
+  camera leak and no crash. The depth commits sent 0 shape slots once settled, and 550-1,100 per report after a teleport.
+- **The vista** (Lake Ilinalta, tree LOD on against off): no difference visible.
+
+### Open
+
+- **No occlusion culling.** The cull tests the frustum only. The HZB test (phase 1 against the last frame's, as BuildDraws
+  does) is next.
+- **Other views.** The cube map renders, the water reflections and Skylighting's occlusion map keep the engine's tree LOD.
+- **Capture parity.** The constants are not compared with the engine's draws: the filter mode (stale engine state) and the
+  alpha reference are as measured.
 
 ## Design
 
@@ -351,6 +481,8 @@ skyrim-engine-notes.md has the details: "Terrain LOD: registration, constants an
 | L2 | Object LOD and HD object LOD drawn by DCLF (Lighting, segments, Z-prepass), native passes withheld | capture parity, membership parity, traversal screenshots |
 | L3 | Terrain LOD drawn by DCLF | as L2 |
 | L4 | Tree LOD: the DistantTree program, instance table, cull pass, few draws | instance parity, capture parity, screenshots |
+| L4a | The mirror of the groups' records, by events (done) | mirror parity clean under the teleport route |
+| L4b | DCLF's tree LOD tables, cull and draws, the engine's passes withheld (done) | no holes, parity, the vista |
 | L5 | The engine's LOD culls cut in the main view; other views decided (native variants, or the engine's) | the main-camera cull's time against the L0 baseline |
 
 ### Order

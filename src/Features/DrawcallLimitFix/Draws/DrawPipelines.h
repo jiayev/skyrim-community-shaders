@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <dxgiformat.h>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <bit>
@@ -291,6 +292,14 @@ namespace DCLF
 
 		/** @brief Adds finished pipelines to the set (call once per frame). */
 		void Update();
+
+		/**
+		 * @brief Tree LOD's two pipelines (dclf-lod.md, "Tree LOD: the draws"), both under the Z-prepass's layout (pulled: the
+		 * draw's push data holds the draw row's address): the Z-prepass's (DistantTree's depth technique, depth LESS with writes)
+		 * and the colour pass's (its deferred technique, depth EQUAL, the engine's opaque write mode 1). Both draw two-sided, as
+		 * the engine's do. Requested on the first call with the program; false until built, and again after a target change.
+		 */
+		bool FindTreeLod(const ShaderPrograms::TreeLodProgram& a_program, struct TreeLodPipelines& a_out);
 
 		/**
 		 * @brief Reads the engine's rasterizer and blend state objects behind the state bits of these keys
