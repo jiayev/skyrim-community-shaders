@@ -109,6 +109,8 @@ namespace DCLF
 		stats.directWithheld = directWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainWithheld = mainWithheld.exchange(0, std::memory_order_relaxed);
 		stats.treeLodWithheld = treeLodWithheld.exchange(0, std::memory_order_relaxed);
+		stats.reflectionWithheld = reflectionWithheld.exchange(0, std::memory_order_relaxed);
+		stats.reflectionTreeLodWithheld = reflectionTreeLodWithheld.exchange(0, std::memory_order_relaxed);
 		stats.mainCrossfadeCopies = mainCrossfadeCopies.exchange(0, std::memory_order_relaxed);
 		stats.mainUnmodelledFades = mainUnmodelledFades.exchange(0, std::memory_order_relaxed);
 		stats.occlusionWithheld = occlusionWithheld.exchange(0, std::memory_order_relaxed);
@@ -173,6 +175,50 @@ namespace DCLF
 			return false;
 		}
 		mainWithheld.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+
+	void PassCapture::SetReflectionCamera(const RE::NiCamera* a_camera)
+	{
+		// BSCubeMapCamera's two accumulators (+0x1A0, +0x1A8; skyrim-engine-notes.md, "Water reflections: the cube map"): the faces
+		// cull into the first.
+		if (!a_camera)
+			return;
+		const auto* bytes = reinterpret_cast<const std::byte*>(a_camera);
+		const std::array<const void*, 2> accumulators{ *reinterpret_cast<void* const*>(bytes + 0x1A0), *reinterpret_cast<void* const*>(bytes + 0x1A8) };
+		if (accumulators == reflectionAccumulators && std::atomic_load(&reflectionRenderers))
+			return;
+		reflectionAccumulators = accumulators;
+		auto renderers = std::make_shared<RendererSet>();
+		for (const void* entry : accumulators) {
+			const auto* accumulator = static_cast<const RE::BSGraphics::BSShaderAccumulator*>(entry);
+			auto* batch = accumulator ? accumulator->GetRuntimeData().batchRenderer : nullptr;
+			if (!batch)
+				continue;
+			renderers->insert(batch);
+			for (auto* group : batch->geometryGroups)
+				if (group && group->batchRenderer)
+					renderers->insert(group->batchRenderer);
+		}
+		logger::info("[DCLF] the reflection faces: {} batch renderers (accumulators {}, {})", renderers->size(), accumulators[0], accumulators[1]);
+		std::atomic_store(&reflectionRenderers, std::shared_ptr<const RendererSet>(std::move(renderers)));
+	}
+
+	bool PassCapture::WithholdReflection(const RE::BSBatchRenderer* a_batch, const RE::BSRenderPass* a_pass)
+	{
+		if (!a_pass || !a_pass->geometry || ParityBoth() || !reflectionFace.load(std::memory_order_acquire))
+			return false;
+		const auto renderers = std::atomic_load(&reflectionRenderers);
+		if (!renderers || !renderers->contains(a_batch))
+			return false;
+		if (reflectionTreeLodOwned.load(std::memory_order_acquire) && TreeLod::IsTreeLodShape(a_pass->geometry)) {
+			reflectionTreeLodWithheld.fetch_add(1, std::memory_order_relaxed);
+			return true;
+		}
+		const auto set = std::atomic_load(&frameSet);
+		if (!set || !(set->drawn & kSetReflection) || !(set->PhasesOf(a_pass->geometry) & kSetReflection))
+			return false;
+		reflectionWithheld.fetch_add(1, std::memory_order_relaxed);
 		return true;
 	}
 
@@ -256,7 +302,7 @@ namespace DCLF
 			const bool fading = FadingAtRegistration(a_pass);
 			// Withholding is the whole of ownership: the pass is built, lit and shadowed exactly as before - only the batch
 			// renderer never receives it, so the native loop has nothing to draw. Everything the tables need is taken by Record.
-			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
+			const bool withheld = capture.WithholdMain(a_this, a_pass) || capture.WithholdReflection(a_this, a_pass) || capture.Withhold(a_this, a_pass, fading);
 			capture.Record(a_this, a_pass, a_techniqueID, fading, withheld);
 			LocalLightCull::NoteRegistration(a_this, a_pass, withheld);
 			if (std::uint32_t mode = 0; !withheld && capture.ShadowModeOfBatch(a_this, mode))
@@ -338,7 +384,7 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass))
+			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
 				return;
 			func(a_batch, a_pass, a_group, a_arg);
 		}
@@ -352,7 +398,7 @@ namespace DCLF
 		{
 			++passesOnThisThread;
 			auto& capture = PassCapture::Get();
-			if (!capture.bypassed.load(std::memory_order_acquire) && capture.WithholdMain(a_batch, a_pass))
+			if (!capture.bypassed.load(std::memory_order_acquire) && (capture.WithholdMain(a_batch, a_pass) || capture.WithholdReflection(a_batch, a_pass)))
 				return;
 			func(a_batch, a_pass, a_list);
 		}

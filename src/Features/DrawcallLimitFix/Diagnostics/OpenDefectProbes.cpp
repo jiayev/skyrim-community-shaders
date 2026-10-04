@@ -6,9 +6,12 @@
 #include "Features/DrawcallLimitFix.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
+#include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Engine/EngineStates.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
+#include "Features/DrawcallLimitFix/Engine/ReflectionFaces.h"
 #include "Features/TerrainBlending.h"
 #include "Features/VolumetricShadows.h"
 #include "State.h"
@@ -920,5 +923,206 @@ namespace DCLF
 		reported = overlapped;
 		logger::info("[DCLF] tree LOD audit: {} blocks attached ({} loading, {} not their node's), {} instances ({} exact), {} hidden; {} without a loaded reference, {} with a visible full tree; {} shown over it ({} with its fade above 0), {} hidden over a hidden full tree{}",
 			blocks, loading, mismatched, instances, exact, hidden, noRef, loaded, stuck, overlapped, holes, samples);
+	}
+}
+
+namespace DCLF
+{
+	namespace
+	{
+		// The reflection census's state: the face being rendered (render thread), its rows, the frames and faces counted.
+		struct ReflectionCensus
+		{
+			struct Row
+			{
+				std::uint64_t draws = 0, triangles = 0;
+				ankerl::unordered_dense::set<const void*> geometries;
+				std::string example;
+			};
+			std::map<std::string, Row> rows;
+			std::map<std::string, std::uint64_t> faces;  // by target, depth target, viewport and render mode
+			// The Lighting draws' descriptors (the pass's, forward) against the draw's DCLF record's main pipeline without Deferred.
+			std::uint64_t descriptorsChecked = 0, descriptorsDiffer = 0, noRecord = 0;
+			std::string firstDiffer;
+			bool faceSeen = false;  // the face's first draw read the targets
+			std::uint64_t updates = 0, faceCount = 0, faceDraws = 0;
+			std::uint32_t lastFrame = 0, frames = 0;
+		};
+		ReflectionCensus reflection;
+
+		std::string TextureDesc(ID3D11View* a_view)
+		{
+			if (!a_view)
+				return "none";
+			winrt::com_ptr<ID3D11Resource> resource;
+			a_view->GetResource(resource.put());
+			winrt::com_ptr<ID3D11Texture2D> texture;
+			if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(texture.put()))))
+				return "not 2D";
+			D3D11_TEXTURE2D_DESC desc{};
+			texture->GetDesc(&desc);
+			return fmt::format("{}x{} format {} mips {} array {}", desc.Width, desc.Height, static_cast<int>(desc.Format), desc.MipLevels, desc.ArraySize);
+		}
+
+		std::string ClassOf(const RE::BSRenderPass* a_pass)
+		{
+			const auto* shader = a_pass->shader;
+			const auto* property = a_pass->shaderProperty;
+			if (!shader)
+				return "no shader";
+			const auto type = shader->shaderType.get();
+			if (type == RE::BSShader::Type::Lighting && property) {
+				using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+				const auto& flags = property->flags;
+				return flags.all(Flag::kLODLandscape) ? "terrain LOD" : flags.all(Flag::kHDLODObjects) ? "HD object LOD" : flags.all(Flag::kLODObjects) ? "object LOD" :
+				                                                                                                                       "other Lighting";
+			}
+			return fmt::format("shader type {}", static_cast<std::uint32_t>(type));
+		}
+
+		/**
+		 * @brief The D3D11 states the shadow state selects, as the renderer applies them at the draw: the rasterizer's (cull, front
+		 * winding, depth clip) and the blend's (enable, target 0's write mask), from the engine's tables (EngineStates.h).
+		 */
+		std::string EngineStates(const RE::BSGraphics::RendererShadowState::FLAT_RUNTIME_DATA& a_state)
+		{
+			std::string text;
+			if (auto* raster = EngineRasterStates()[a_state.rasterStateFillMode][a_state.rasterStateCullMode][a_state.rasterStateDepthBiasMode][a_state.rasterStateScissorMode]) {
+				D3D11_RASTERIZER_DESC desc{};
+				raster->GetDesc(&desc);
+				text += fmt::format("raster cull {} front {} clip {}", static_cast<int>(desc.CullMode), desc.FrontCounterClockwise ? "CCW" : "CW", desc.DepthClipEnable);
+			}
+			if (auto* blend = EngineBlendStates()[a_state.alphaBlendMode][a_state.alphaBlendAlphaToCoverage][a_state.alphaBlendWriteMode][a_state.alphaBlendModeExtra]) {
+				D3D11_BLEND_DESC desc{};
+				blend->GetDesc(&desc);
+				text += fmt::format(", blend {} {}/{} mask {:x}", desc.RenderTarget[0].BlendEnable, static_cast<int>(desc.RenderTarget[0].SrcBlend),
+					static_cast<int>(desc.RenderTarget[0].DestBlend), desc.RenderTarget[0].RenderTargetWriteMask);
+			}
+			return text;
+		}
+
+		/** @brief The engine's pass draw (FUN_1414f2ad0(pass)), at its six calls: one draw of a pass, its state set up. */
+		struct PassDraw
+		{
+			static void thunk(RE::BSRenderPass* a_pass)
+			{
+				if (ReflectionFaces::InFace() && a_pass && a_pass->geometry)
+					Note(a_pass);
+				func(a_pass);
+			}
+			static void Note(const RE::BSRenderPass* a_pass)
+			{
+				auto& state = globals::game::shadowState->GetRuntimeData();
+				if (!reflection.faceSeen) {
+					reflection.faceSeen = true;
+					ID3D11RenderTargetView* targets[8]{};
+					ID3D11DepthStencilView* depth = nullptr;
+					globals::d3d::context->OMGetRenderTargets(8, targets, &depth);
+					D3D11_VIEWPORT viewport{};
+					UINT viewports = 1;
+					globals::d3d::context->RSGetViewports(&viewports, &viewport);
+					std::string key;
+					for (std::uint32_t i = 0; i < 8; ++i)
+						if (targets[i])
+							key += fmt::format("target {}: {}; ", i, TextureDesc(targets[i]));
+					const auto* accumulator = *reinterpret_cast<const std::byte* const*>(reinterpret_cast<const std::byte*>(ReflectionFaces::Camera()) + 0x1A0);
+					key += fmt::format("depth: {}; viewport {}x{} at {},{} depth {}-{}; render mode {:x}", TextureDesc(depth), viewport.Width, viewport.Height, viewport.TopLeftX,
+						viewport.TopLeftY, viewport.MinDepth, viewport.MaxDepth, accumulator ? *reinterpret_cast<const std::uint32_t*>(accumulator + 0x150) : 0xFFFFFFFFu);
+					for (auto* target : targets)
+						if (target)
+							target->Release();
+					if (depth)
+						depth->Release();
+					++reflection.faces[key];
+				}
+				++reflection.faceDraws;
+				const auto* geometry = a_pass->geometry;
+				// The scene root: the topmost ancestor's name or class.
+				const RE::NiAVObject* root = geometry;
+				while (root->parent)
+					root = root->parent;
+				std::string rootName = root->name.c_str() && *root->name.c_str() ? root->name.c_str() : (root->GetRTTI() ? root->GetRTTI()->name : "?");
+				// The D3D11 state the draw will apply: the renderer's shadow state is flushed at the draw, so it is read from the shadow
+				// state's selection rather than the context (EngineStates below).
+				std::string d3d = EngineStates(state);
+				std::string descriptors;
+				const auto* shader = a_pass->shader;
+				if (shader && shader->shaderType.get() == RE::BSShader::Type::Lighting) {
+					std::uint32_t vertex = 0, pixel = 0;
+					LightingShaderDescriptors(PassDescriptorOf(a_pass->passEnum), false, vertex, pixel);
+					descriptors = fmt::format(" VS {:08x} PS {:08x}", vertex, pixel);
+					auto& store = SceneStore::Get();
+					if (const auto object = store.FindObject(geometry); object >= 0) {
+						const auto& tables = store.GetTables();
+						const auto& record = tables.objects[object];
+						if (!(record.flags & kObjectNoBindings) && record.pipelineIndex < tables.pipelines.size()) {
+							const auto& key = tables.pipelines[record.pipelineIndex];
+							const std::uint32_t forwardPixel = key.pixelDescriptor & ~kLightingPixelDeferred;
+							++reflection.descriptorsChecked;
+							if (key.vertexDescriptor != vertex || forwardPixel != pixel) {
+								if (reflection.descriptorsDiffer++ == 0)
+									reflection.firstDiffer = fmt::format("'{}' face VS {:08x} PS {:08x}, DCLF's main VS {:08x} PS {:08x} (pass {:08x}, the face's {:08x})",
+										geometry->name.c_str() ? geometry->name.c_str() : "", vertex, pixel, key.vertexDescriptor, key.pixelDescriptor, key.passDescriptor,
+										PassDescriptorOf(a_pass->passEnum));
+							}
+						} else {
+							++reflection.noRecord;
+						}
+					} else {
+						++reflection.noRecord;
+					}
+				}
+				const auto key = fmt::format("{} technique {:08x}{} hint {} {} under {}; depth mode {} write mode {} blend {} alpha test {} cull {}; {}", ClassOf(a_pass),
+					a_pass->passEnum, descriptors, a_pass->accumulationHint, geometry->GetRTTI() ? geometry->GetRTTI()->name : "?", rootName,
+					static_cast<int>(state.depthStencilDepthMode), state.alphaBlendWriteMode, state.alphaBlendMode, state.alphaTestEnabled, state.rasterStateCullMode, d3d);
+				auto& row = reflection.rows[key];
+				if (row.example.empty())
+					row.example = geometry->name.c_str() ? geometry->name.c_str() : "";
+				++row.draws;
+				if (const auto* shape = const_cast<RE::BSGeometry*>(geometry)->AsTriShape())
+					row.triangles += shape->GetTrishapeRuntimeData().triangleCount;
+				row.geometries.insert(geometry);
+			}
+			static inline REL::Relocation<decltype(thunk)> func;
+		};
+
+		/** @brief After each face render (ReflectionFaces): the next face reads its targets again; every 300 frames, the report. */
+		void AfterFaces(std::uint32_t a_faces)
+		{
+			++reflection.updates;
+			reflection.faceCount += std::popcount(a_faces);
+			reflection.faceSeen = false;
+			const std::uint32_t frame = SceneStore::Get().GetFrame();
+			if (frame == reflection.lastFrame)
+				return;
+			reflection.lastFrame = frame;
+			if (++reflection.frames < 300)
+				return;
+			std::string text = fmt::format("[DCLF] reflection census over 300 frames: {} updates, {} faces, {:.1f} draws a frame; INI bReflectLODLand {} bReflectLODObjects {} "
+										   "bReflectLODTrees {} bReflectSky {}",
+				reflection.updates, reflection.faceCount, reflection.faceDraws / 300.0, *REL::Relocation<bool*>(REL::Offset(0x20104a0)), *REL::Relocation<bool*>(REL::Offset(0x20104b8)),
+				*REL::Relocation<bool*>(REL::Offset(0x20104d0)), *REL::Relocation<bool*>(REL::Offset(0x20104e8)));
+			text += fmt::format("\n    Lighting draws' descriptors against DCLF's main pipelines without Deferred: {} checked, {} differ, {} without a record{}",
+				reflection.descriptorsChecked, reflection.descriptorsDiffer, reflection.noRecord, reflection.firstDiffer.empty() ? "" : "; first: " + reflection.firstDiffer);
+			for (const auto& [key, count] : reflection.faces)
+				text += fmt::format("\n    face x{}: {}", count, key);
+			for (const auto& [key, row] : reflection.rows)
+				text += fmt::format("\n    {:.2f} draws a frame, {:.0f} triangles, {} geometries: {}; e.g. '{}'", row.draws / 300.0, row.triangles / 300.0, row.geometries.size(), key,
+					row.example);
+			logger::info("{}", text);
+			reflection = {};
+			reflection.lastFrame = frame;
+		}
+	}
+
+	void InstallReflectionCensus()
+	{
+		if (SwitchValue(Switch::ReflectionCensus) != "1")
+			return;
+		// FUN_1414f2ad0's calls: FUN_1414f3dc0 (three), FUN_1414f44b0, FUN_1414f4560, FUN_1414f4700.
+		for (const std::uintptr_t site : { 0x14f3fea, 0x14f406b, 0x14f40d7, 0x14f4522, 0x14f46b9, 0x14f4765 })
+			stl::write_thunk_call<PassDraw>(REL::Offset(site).address());
+		ReflectionFaces::SetAfterFaces(&AfterFaces);
+		logger::info("[DCLF] reflection census on");
 	}
 }

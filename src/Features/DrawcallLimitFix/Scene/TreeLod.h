@@ -88,8 +88,9 @@ namespace DCLF::TreeLod
 	 * - a shape row per shape slot, and kMaxGroupInstances instance records per shape slot (slot * 75 + i);
 	 * - a mesh row per mesh slot;
 	 * - the draw row, one, every depth commit's: the tables' addresses and the frame's texture, sampler and alpha reference;
-	 * - the visible list: the draw's arguments (a non-indexed DrawInstanced: the meshes' largest index count, the visible count),
-	 *   then the visible instances' indices, which the cull appends and the draws' vertex stage reads by its instance.
+	 * - the visible list (VisibleHeader): the draws' arguments and the retest count, then the visible instances' indices, which
+	 *   the cull appends and the draws' vertex stage reads by its instance, then the retest list (phase 1's occluded instances,
+	 *   which phase 2 tests again against the rebuilt HZB), each a word per instance record the tables hold.
 	 */
 	struct ShapeRow
 	{
@@ -122,7 +123,18 @@ namespace DCLF::TreeLod
 		std::uint32_t pad[3]{};
 	};
 	static_assert(sizeof(DrawRow) == 64);
-	inline constexpr std::uint32_t kVisibleHeaderWords = 4;  // the draw's arguments: vertices per instance, instances, 0, 0
+	/**
+	 * @brief The visible list's header (TreeLodCullCS.hlsl): three non-indexed DrawInstanced's arguments (the meshes' largest index
+	 * count, the instances, 0, 0) - phase 1's depth draw, phase 2's (its instances follow phase 1's in the list), the colour
+	 * pass's (both) - and the retest list's count. The depth commit writes it with no instances.
+	 */
+	struct VisibleHeader
+	{
+		std::uint32_t phaseOne[4]{}, phaseTwo[4]{}, colour[4]{};
+		std::uint32_t retests = 0, pad[3]{};
+	};
+	static_assert(sizeof(VisibleHeader) == 64);
+	inline constexpr std::uint32_t kVisibleHeaderWords = sizeof(VisibleHeader) / 4;
 
 	/**
 	 * @brief A mirrored group: its shape's records by the refill's rule, the block and group they were packed from, and its slot.

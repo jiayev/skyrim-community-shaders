@@ -387,6 +387,32 @@ namespace DCLF
 		{
 			rhi::PipelinePtr depth, colour;
 		};
+		/*
+		 * The forward views' pipelines (FindForwardPipeline), by what builds them: the stages (their SPIR-V's hashes and sizes), the
+		 * targets and the cull. Kept for the process, as the main set's are until a target change: a frame in flight may draw with
+		 * any of them.
+		 */
+		struct ForwardKey
+		{
+			std::uint64_t vertex = 0, pixel = 0;
+			std::uint32_t vertexBytes = 0, pixelBytes = 0;
+			std::uint32_t colour = 0, depth = 0, cull = 0, pad = 0;
+
+			bool operator==(const ForwardKey&) const = default;
+		};
+		static_assert(std::has_unique_object_representations_v<ForwardKey>);
+		struct ForwardKeyHash
+		{
+			using is_avalanching = void;
+			std::uint64_t operator()(const ForwardKey& a_key) const noexcept { return ankerl::unordered_dense::detail::wyhash::hash(&a_key, sizeof(a_key)); }
+		};
+		struct ForwardEntry
+		{
+			std::shared_future<org::services::PipelineArtifact> future;
+			org::services::PipelinePayload payload;
+			bool failed = false;
+		};
+		ankerl::unordered_dense::map<ForwardKey, ForwardEntry, ForwardKeyHash> forward;
 		rhi::PipelineLayoutHandle ShadowLayout() const { return shadowLayout->GetHandle(); }
 		// The shadow views' plain indirect draw (ShadowIndirectState::drawSignature): a DrawSequence's last words read as an
 		// indexed draw from the index pool (BuildDrawsCS, StoreShadowSequence), whose vertex stage pulls its vertices.
@@ -808,6 +834,46 @@ namespace DCLF
 				if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), out); result != rhi::Result::Ok)
 					throw std::runtime_error(fmt::format("CreatePipeline (tree LOD {}) failed ({})", colour ? "colour" : "depth", static_cast<int>(result)));
 			}
+			return built;
+		}
+
+		/** @brief A forward view's pipeline (FindForwardPipeline). */
+		static org::services::PipelinePayload BuildForward(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
+			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
+		{
+			SpirvReflection vertex, pixel;
+			if (!vertex.Parse(a_program->vertex) || !pixel.Parse(a_program->pixel))
+				throw std::runtime_error("not SPIR-V");
+			CheckPulledBindings(vertex, false);
+			CheckPulledBindings(pixel, true);
+			auto built = std::make_shared<rhi::PipelinePtr>();
+			const rhi::SubobjLayout layout{ a_zLayout };
+			const rhi::SubobjShader vertexShader{ rhi::ShaderStage::Vertex, { a_program->vertex.data(), static_cast<std::uint32_t>(a_program->vertex.size()) }, "main" };
+			const rhi::SubobjShader pixelShader{ rhi::ShaderStage::Pixel, { a_program->pixel.data(), static_cast<std::uint32_t>(a_program->pixel.size()) }, "main" };
+			rhi::SubobjRaster raster{};
+			raster.rs.cull = a_cull;
+			raster.rs.frontCCW = a_frontCCW;
+			// The engine's depth mode 3 for the face's LOD: test and write, LESS_EQUAL.
+			rhi::SubobjDepth depth{};
+			depth.ds.depthEnable = true;
+			depth.ds.depthWrite = true;
+			depth.ds.depthFunc = rhi::CompareOp::LessEqual;
+			// No blending, every channel written (the engine's write mask there is stale state, and the cube's alpha is not read).
+			rhi::SubobjBlend blend{};
+			blend.bs.numAttachments = 1;
+			rhi::SubobjRTVs targets{};
+			targets.rt.count = 1;
+			targets.rt.formats[0] = rhi::helpers::ToRHI(a_targets.colour);
+			const rhi::SubobjDSV depthFormat{ rhi::helpers::ToRHI(a_targets.depth) };
+			const rhi::SubobjPrimitiveTopology topology{ rhi::PrimitiveTopology::TriangleList };
+			const rhi::SubobjInputLayout noInput{};
+			const rhi::SubobjFlags plain{};
+			const rhi::PipelineStreamItem items[] = {
+				rhi::Make(layout), rhi::Make(vertexShader), rhi::Make(pixelShader), rhi::Make(raster), rhi::Make(depth), rhi::Make(blend),
+				rhi::Make(targets), rhi::Make(depthFormat), rhi::Make(topology), rhi::Make(noInput), rhi::Make(plain),
+			};
+			if (const auto result = a_device.CreatePipeline(items, static_cast<std::uint32_t>(std::size(items)), *built); result != rhi::Result::Ok)
+				throw std::runtime_error(fmt::format("CreatePipeline (forward) failed ({})", static_cast<int>(result)));
 			return built;
 		}
 
@@ -1288,6 +1354,70 @@ namespace DCLF
 		};
 		impl->treeLodFuture = impl->service.Request(std::move(recipe));
 		return false;
+	}
+
+	struct ForwardPipelineAccess
+	{
+		static DrawPipelines::Impl& Impl(DrawPipelines& a_pipelines) { return *a_pipelines.impl; }
+		static DrawPipelines::ForwardStats& Stats(DrawPipelines& a_pipelines) { return a_pipelines.forwardStats; }
+		static org::services::PipelinePayload Build(rhi::Device a_device, rhi::PipelineLayoutHandle a_zLayout, const ShaderPrograms::ForwardProgram* a_program,
+			ForwardTargets a_targets, rhi::CullMode a_cull, bool a_frontCCW)
+		{
+			return DrawPipelines::Impl::BuildForward(a_device, a_zLayout, a_program, a_targets, a_cull, a_frontCCW);
+		}
+	};
+
+	rhi::PipelineHandle FindForwardPipeline(const ShaderPrograms::ForwardProgram& a_program, const ForwardTargets& a_targets, rhi::CullMode a_cull)
+	{
+		auto& pipelines = DrawPipelines::Get();
+		auto& impl = ForwardPipelineAccess::Impl(pipelines);
+		auto& stats = ForwardPipelineAccess::Stats(pipelines);
+		if (!pipelines.Enabled() || !impl.zLayout || a_targets.colour == DXGI_FORMAT_UNKNOWN || a_targets.depth == DXGI_FORMAT_UNKNOWN)
+			return {};
+		auto hash = [](const std::vector<std::byte>& a_module) { return ankerl::unordered_dense::detail::wyhash::hash(a_module.data(), a_module.size()); };
+		typename std::remove_reference_t<decltype(impl.forward)>::key_type key;
+		key.vertex = hash(a_program.vertex);
+		key.pixel = hash(a_program.pixel);
+		key.vertexBytes = static_cast<std::uint32_t>(a_program.vertex.size());
+		key.pixelBytes = static_cast<std::uint32_t>(a_program.pixel.size());
+		key.colour = static_cast<std::uint32_t>(a_targets.colour);
+		key.depth = static_cast<std::uint32_t>(a_targets.depth);
+		key.cull = static_cast<std::uint32_t>(a_cull);
+		auto [it, inserted] = impl.forward.try_emplace(key);
+		auto& entry = it->second;
+		if (entry.payload)
+			return (*static_cast<const rhi::PipelinePtr*>(entry.payload.get()))->GetHandle();
+		if (entry.failed)
+			return {};
+		if (entry.future.valid()) {
+			if (entry.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+				return {};
+			// A copy: the future may hold the last reference to its state.
+			const auto artifact = entry.future.get();
+			entry.future = {};
+			if (!artifact) {
+				entry.failed = true;
+				++stats.failed;
+				logger::warn("[DCLF] a forward pipeline failed: {}", artifact.error);
+				return {};
+			}
+			entry.payload = artifact.payload;
+			++stats.ready;
+			return (*static_cast<const rhi::PipelinePtr*>(entry.payload.get()))->GetHandle();
+		}
+		const auto frontCCW = impl.EngineFrontCCW();
+		if (!frontCCW)
+			return {};
+		org::services::PipelineRecipe recipe;
+		recipe.id = "dclf.forward";
+		recipe.shaderKey = key.vertex ^ key.pixel * 0x9E3779B97F4A7C15ull;
+		recipe.fixedFunctionKey = ankerl::unordered_dense::detail::wyhash::hash(&key.colour, 3 * sizeof(std::uint32_t));
+		recipe.build = [device = impl.device, zLayout = impl.zLayout->GetHandle(), program = &a_program, targets = a_targets, cull = a_cull, frontCCW = *frontCCW] {
+			return ForwardPipelineAccess::Build(device, zLayout, program, targets, cull, frontCCW);
+		};
+		entry.future = impl.service.Request(std::move(recipe));
+		++stats.requested;
+		return {};
 	}
 
 	std::uint32_t DrawPipelines::FindShadow(const ShadowPipelineKey& a_key, const ShaderPrograms::ShadowProgram& a_program, DXGI_FORMAT a_depthFormat,

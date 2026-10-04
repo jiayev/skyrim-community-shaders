@@ -38,6 +38,8 @@ namespace DCLF
 			{ &S::precipitationOcclusion, Switch::Precipitation, kOn, "precipitation occlusion", {}, "Draw the precipitation occlusion mask (CS_DCLF_PRECIPITATION)",
 				"With Skylighting loaded, DCLF draws the precipitation occlusion mask (where rain and snow stop) from its own tables on the GPU, and the engine no longer culls or registers the scene for it.", true,
 				{ &S::shadows } },
+			{ &S::reflections, Switch::Reflections, kOn, "reflections", "Reflections", "Draw the water reflection's distant land, objects and trees (CS_DCLF_REFLECTIONS)",
+				"DCLF draws the LOD the water's cube map reflects from its own tables on the GPU; the engine draws the sky, and any LOD DCLF cannot draw yet.", false, {} },
 		};
 
 		// The packed word: cullMode in the low two bits, then each flag in kToggles order.

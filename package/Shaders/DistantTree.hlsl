@@ -21,11 +21,13 @@
 // Drawcall Limit Fix's tree LOD draws (dclf-lod.md, "Tree LOD: the draws"; Scene/TreeLod.h): one non-indexed instanced draw
 // per pass, whose instances are the culled list's records. The vertex stage fetches its record, its shape's row, its mesh's
 // index and vertex through the device addresses in the draw row; the pixel stages take the texture, the sampler and the
-// alpha reference from it. The draw's push data (DrawPipelines.h, kDrawPushBinding) holds the draw row's address.
+// alpha reference from it. The draw's push data (DrawPipelines.h, kDrawPushBinding) holds the draw row's address, and whether
+// the draw is the Z-prepass's second phase, whose instances follow phase 1's in the list (TreeLodCullCS.hlsl).
 cbuffer DCLFTreePush : register(b190)
 {
 	uint2 DCLFTreeDrawAddress : packoffset(c0.x);
-	uint2 DCLFTreePushUnused0 : packoffset(c0.z);
+	uint DCLFTreePhaseTwo : packoffset(c0.z);
+	uint DCLFTreePushUnused0 : packoffset(c0.w);
 	uint2 DCLFTreePushUnused1 : packoffset(c1.x);
 };
 uint64_t DCLFTreeAddress(uint2 a_words) { return (uint64_t(a_words.y) << 32) | uint64_t(a_words.x); }
@@ -35,6 +37,8 @@ uint64_t DCLFTreeTable(uint a_offset) { return DCLFTreeAddress(vk::RawBufferLoad
 static const uint kDCLFTreeInstances = 0, kDCLFTreeShapes = 8, kDCLFTreeMeshes = 16, kDCLFTreeVisible = 24;
 static const uint kDCLFTreeTexture = 32, kDCLFTreeSampler = 36, kDCLFTreeAlphaRef = 40;
 static const uint kDCLFTreeGroupInstances = 75;
+// TreeLod::VisibleHeader, before the visible list: phase 1's instance count, where phase 2's instances start.
+static const uint kDCLFTreeHeaderBytes = 64, kDCLFTreePhaseOneInstances = 4;
 #endif
 
 #if defined(VSHADER)
@@ -71,7 +75,9 @@ struct VS_OUTPUT
 VS_OUTPUT main(uint a_vertex : SV_VertexID, uint a_instance : SV_InstanceID)
 {
 	VS_OUTPUT vsout = (VS_OUTPUT)0;
-	const uint index = vk::RawBufferLoad<uint>(DCLFTreeTable(kDCLFTreeVisible) + 4 * uint64_t(a_instance), 4);
+	const uint64_t visible = DCLFTreeTable(kDCLFTreeVisible);
+	const uint first = DCLFTreePhaseTwo != 0 ? vk::RawBufferLoad<uint>(visible - kDCLFTreeHeaderBytes + kDCLFTreePhaseOneInstances, 4) : 0;
+	const uint index = vk::RawBufferLoad<uint>(visible + 4 * uint64_t(first + a_instance), 4);
 	const uint64_t shape = DCLFTreeTable(kDCLFTreeShapes) + 32 * uint64_t(index / kDCLFTreeGroupInstances);
 	const float3 translate = asfloat(vk::RawBufferLoad<uint3>(shape, 4));
 	const uint meshSlot = vk::RawBufferLoad<uint>(shape + 12, 4);

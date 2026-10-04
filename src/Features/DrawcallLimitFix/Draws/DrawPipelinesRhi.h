@@ -48,6 +48,12 @@ namespace DCLF
 
 	ShadowIndirectState GetShadowIndirectState();
 
+	/**
+	 * @brief A forward view's pipeline (DrawPipelines::FindForward): the forward program's pulled stages, the view's targets, depth
+	 * LESS_EQUAL with writes, the cull a_cull, the engine's winding, no blending. Null until built (or when it failed).
+	 */
+	rhi::PipelineHandle FindForwardPipeline(const ShaderPrograms::ForwardProgram& a_program, const ForwardTargets& a_targets, rhi::CullMode a_cull);
+
 	/** @brief Tree LOD's pipelines and its draw's signature (DrawPipelines::FindTreeLod). */
 	struct TreeLodPipelines
 	{

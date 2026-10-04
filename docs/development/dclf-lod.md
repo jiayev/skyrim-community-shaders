@@ -209,9 +209,8 @@ Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
   The depth commit uploads only the slots and meshes the drain changed (`UploadTreeLod`). A slot freed by a detach is
   rewritten with a count of 0. The tables grow with the mirror (`ReserveSceneTables`), and a new backing gets every slot
   again. A mesh no shape uses any more hands its leases to the next execution.
-- **The cull** (`TreeLodCullCS.hlsl`, the depth epoch, before the Z-prepass draw). One thread per record: a record past its
-  slot's count, or hidden (scale 0), is skipped. The rest are tested against the depth segment's frustum (a sphere of the
-  type's extent times the scale, about the instance's position) and appended to the visible list.
+- **The cull** (`TreeLodCullCS.hlsl`, the depth epoch, in the depth segment's two phases): see "LOD in the two-phase
+  occlusion" below.
 - **The draws.** One instanced draw in each main pass, of the largest mesh's index count per instance. Both pipelines are
   pulled, under the Z-prepass's layout: the draw's push data holds the draw row's address, and the vertex stage fetches its
   record, its shape's row, its mesh's index and vertex through it (`DistantTree.hlsl`, `DCLF_PULLED`). The engine's
@@ -242,11 +241,215 @@ Under the `lodTrees` toggle (`CS_DCLF_LOD_TREES`, "tree LOD"), on when unset.
 
 ### Open
 
-- **No occlusion culling.** The cull tests the frustum only. The HZB test (phase 1 against the last frame's, as BuildDraws
-  does) is next.
 - **Other views.** The cube map renders, the water reflections and Skylighting's occlusion map keep the engine's tree LOD.
 - **Capture parity.** The constants are not compared with the engine's draws: the filter mode (stale engine state) and the
   alpha reference are as measured.
+
+## LOD in the two-phase occlusion (2026-10-04)
+
+Every LOD class takes part in the main camera's two-phase occlusion, as the other objects do (Passes.cpp, "The two-phase
+tail"): phase 1 tests against the HZB the previous frame left, the HZB is rebuilt from the depth phase 1 drew, and phase 2
+tests what phase 1 occluded against the rebuilt one. What phase 1 draws is in the HZB, so LOD occludes as well.
+
+- **Object and terrain LOD** are records of the DCLF set, in the depth segment's inputs like any member, so BuildDrawsCS
+  tests them in both phases with their record's bound. An object LOD shape's bound is its whole block's, segments and all:
+  a partly hidden shape's visible ranges are not tested one by one.
+- **Tree LOD** has its own cull (`TreeLodCullCS.hlsl`), now in the same two phases:
+  - phase 1 (`cs.dclf.z.tree-lod-cull`, before the Z-prepass draw): one thread per record. A record past its slot's count,
+    or hidden (scale 0), is skipped. The rest are tested against the frustum, then against the last frame's HZB. One in
+    view and not occluded is appended to the visible list; one occluded goes on the retest list;
+  - phase 2 (`cs.dclf.tree-lod-cull-phase2`, after `cs.dclf.hzb`, before `cs.dclf.depth-phase2`): one thread per retest
+    entry, tested against the rebuilt HZB. One brought back is appended after phase 1's.
+
+  The list's header (`TreeLod::VisibleHeader`) holds three draws' arguments: phase 1's depth draw, phase 2's (whose vertex
+  stage starts after phase 1's count, from its push data's phase word) and the colour pass's, which counts both. The
+  retest list follows the visible list, a word per record each.
+- **The test is shared.** `HzbTest.hlsli` holds the HZB test (the bound's cube projected, a mip whose four taps cover it, the
+  depth margin) for BuildDrawsCS and TreeLodCullCS, so the two classes cannot drift apart. BuildDrawsCS keeps its counters
+  and its rejection sample around it.
+- **Tree LOD's bound.** The engine pads each instance's position by its type's larger extent times its scale (its group
+  AABB). The HZB test projects that box (the cube of the sphere); the frustum test uses the sphere that holds it (radius
+  times sqrt 3; it was the inscribed sphere before).
+- **Counters.** `TreeLodReadbackPass` copies the list's header to a host buffer per frame slot after phase 2, read when the
+  slot comes round: "[DCLF] tree LOD cull over N frames: ... in view, ... drawn by phase 1, ... occluded by the last frame's
+  HZB, ... brought back by phase 2".
+
+### Results
+
+- **The teleport route** (`landjump.sh`, `CS_DCLF_PERSISTENT_PARITY`, 60 s): 6-25% of the tree LOD instances in view
+  occluded per report (for example 1,859 in view, 476 occluded by phase 1, 5 brought back by phase 2), no main camera
+  leak, no tree LOD holes, mirror parity OK. The verdict tags are those of the run before the change: the terrain LOD
+  coverage flag counts pixels another object shades (0 unshaded), as before.
+
+### Open
+
+- **Object LOD's segments.** A shape is tested whole. Testing each visible range's own bound would take a verdict per
+  geometry slot, since the colour pass must draw what the depth phases drew.
+
+## Water reflections: what the cube map draws (L5, 2026-10-04)
+
+skyrim-engine-notes.md, "Water reflections: the cube map", has the engine's side. It is the only reflection the engine
+renders (plane reflections are dead), and the only other view that draws LOD in a normal frame. CS's Dynamic Cubemaps draws
+no geometry: it is a compute pass over the main colour and depth. So "the reflections and the cube maps" are one view.
+
+### The census
+
+`CS_DCLF_REFLECTION_CENSUS=1` (TEMP, `OpenDefectProbes.cpp`): the engine's pass draw (`FUN_1414f2ad0`) thunked at its six
+calls and the face render (vfunc `0x35`) flagged. Riverwood by the river, camera turning, 300 frames:
+- **The faces.** 2 a frame (one update a frame), render mode 0. The target is the cube's face, 256x256 `R16G16B16A16_FLOAT`
+  (an array of 6), the depth 256x256 `R24G8_TYPELESS`, the viewport 256x256 at depth 0-1. All four INI switches are on
+  (`bReflectLODLand`, `bReflectLODObjects`, `bReflectLODTrees`, `bReflectSky`).
+- **The draws,** about 333 a frame:
+
+  | Class | Technique | Draws a frame | Triangles a frame | Geometries |
+  | --- | --- | --- | --- | --- |
+  | Tree LOD (`DistantTree`) | `5c00002e` (the main view's colour technique) | 237 | 950 | 558 |
+  | Object LOD | `5510002d`, `5510802d` (snow) | 35 | 173,000 | 84 |
+  | HD object LOD | `5710002e`, `5710802e` (snow) | 5 | 15,000 | 14 |
+  | Terrain LOD | `5a000031` (LODLandNoise) | 31 | 64,000 | 52 |
+  | Sky (`Sky`) | `5c00005e` (dome), `5c000061`, `5c000062` (clouds, hint 17) | 25 | 1,500 | 14 |
+
+- **The state** (the engine's state tables at each draw's indices):
+  - LOD, tree LOD included: depth mode 3 (test and write), alpha test on, blending off;
+  - every draw, the sky included: `D3D11_CULL_FRONT` with counter-clockwise fronts. The face render sets the raster cull
+    mode to 2 around the accumulator's render: a cube face's projection mirrors the image, so the front faces it culls
+    are the main view's back faces. Tree LOD too, which the main view draws two-sided;
+  - the write mask is RGB (write mode 1) or RGBA (11) for the same shapes, about a quarter of the draws at 1: stale
+    state, as the tree LOD filter mode is in the main view. `Water.hlsl` reads the cube's RGB alone
+    (`CubeMapTex.SampleLevel(...).xyz`), so the alpha is never read;
+  - the sky: depth mode 1 (test, no write), blending on.
+- **The descriptors.** Each Lighting face draw's shader descriptors (its pass split by SetupTechnique, then CS's lookup
+  change, `LightingShaderDescriptors`) against its DCLF record's main pipeline with the pixel stage's `Deferred` bit
+  cleared: 21,256 checked over 300 frames, 0 differ. So a face's program is the main one's forward build.
+- **The cost** (dclf-gpu-driven-frame.md, drawcall-limit-fix.md): about 0.5 ms of render thread a frame (0.35 of it the
+  draws), and about 0.35-0.49 ms of GPU.
+
+So the cube map is LOD and the sky. Tree LOD is 70% of its draws, one draw per shape as in the main view.
+
+### What DCLF needs to draw it
+
+A DCLF native variant of the face, as for Skylighting's map, with the sky left to the engine:
+1. **The point.** The face render (vfunc `0x35`) runs on the render thread inside `TESWaterReflections::Update`, before the
+   world render. DCLF draws a face after the engine's clear and before its accumulator renders (the sky tests depth, and
+   the engine draws its LOD groups before the sky's), so an epoch of its own per face, or one per update with each face's
+   targets. The face's camera (transform and frustum) is read once the engine has oriented it.
+2. **Leaving the engine the sky.** The LOD roots are not added to the cube camera while DCLF draws the face (the add-root
+   calls at `0x14052080d`-`0x14052083f`, under the three `bReflectLOD*` switches): no LOD cull, no LOD registration, no LOD
+   draw. The sky root stays.
+3. **Forward programs.** Every colour pipeline DCLF has is a G-buffer draw (the deferred pass). The face is one forward pass,
+   so it needs forward variants of the LOD techniques: Lighting `LODOBJECTS`, `LODOBJECTSHD`, `LODLANDNOISE` without the
+   deferred path, and `DistantTree` without `Deferred`. Their constants (the sun's light and ambient, the fog, the face's
+   camera block) under capture parity against the engine's face draws, and the face's targets (`R16G16B16A16_FLOAT`,
+   `R24G8`) and state (depth test and write, the write mode).
+4. **Culling.** Object and terrain LOD: the DCLF set's LOD records through BuildDraws against the face's frustum (a view of
+   its own, as the shadow views are: the frustum, no HZB). Tree LOD: `TreeLodCullCS` against the face's frustum into a list
+   of the face's. About 70 LOD draws and 237 tree draws a frame become a few bucketed draws and one instanced tree draw a
+   face.
+5. **Membership.** Nothing new: the LOD records and the tree mirror are the main view's. The segments the engine hides
+   under the loaded cells are hidden in the reflection too, as now.
+
+### The design (L5b, L5c, as built)
+
+- **When the faces render.** `TESWaterReflections::Update` runs after the scene phase and before the shadow maps, so before
+  this frame's Z-prepass and colour builds. The newest complete draw data on the GPU is the frame before's: the depth
+  segment's inputs, the main rows, the object records and geometry, the index pool, the colour segment's frame constants,
+  tree LOD's tables. The tables are stable then (written again at the placement join, BeforeShadowMaps), but this frame's
+  rows don't exist yet. So the faces draw from the frame before's, and the design follows from that.
+- **Programs** (L5b). `ShaderPrograms::FindForward(vertex, pixel)`: a main pipeline's pulled vertex stage and the pulled
+  colour pixel stage of its pixel descriptor without `Deferred`. `FindForwardTreeLod`: DistantTree's `DistantTreeBlock` with
+  `AlphaTest`, pulled.
+- **Pipelines** (L5b). `FindForwardPipeline(program, targets, cull)`: the forward program's stages under the Z-prepass's
+  layout (plain draws), the face's colour and depth formats, depth LESS_EQUAL with writes, front faces culled (none for a
+  two-sided key), the engine's winding, no blending. Built once per distinct stages, targets and cull.
+- **Ownership: a set phase, `kSetReflection`** (SceneSet.h). A main member with a LOD technique (`LodLightingTechnique`: 9, 13,
+  15, 18) whose pipeline slot's forward pipeline is built (`PhaseReady`), and which was a main member at the last commit too:
+  it was drawable in the depth inputs the faces read. The phase is drawn while the faces' resources and a forward pipeline
+  exist (`IndirectDraws::ReflectionDrawable`) and the toggle is on (`CS_DCLF_REFLECTIONS`, live).
+  - **Withholding** (`PassCapture::WithholdReflection`): the cube camera's accumulators' batch renderers (`+0x1A0`, `+0x1A8`)
+    withhold exactly the phase's members' passes, at the main modes' insertion points (RegisterPass, the group and list
+    insertions of `FUN_1414b2330`). The engine keeps culling the LOD roots and drawing everything else: the sky, and any LOD
+    outside the phase. Skipping the three add-root calls (`0x14052080d`-`0x14052083f`) is a later step, once everything is owned.
+  - **Only plain face renders** (render mode 0). Mode `0x19` (no sky) registers through `FUN_1414b2b90` and `0x1B` draws
+    silhouettes; neither is withheld nor drawn by DCLF (`ReflectionFaces::Plain`).
+  - **Tree LOD in the faces** is DCLF's (every tree LOD pass into the faces withheld) while the main view's is
+    (`DecideTreeLod`), the last depth commit drew it, the forward tree pipeline is built and the phase is drawn
+    (`PrepareReflection`).
+- **The one-frame lag, accepted.**
+  - A joiner of the main phase is the engine's in the faces for one frame (the phase needs last frame's membership), so no hole.
+  - An object that leaves the set is drawn by both for one frame: identical pixels, or a one-frame ghost of a detached LOD
+    block in the 256-pixel reflection.
+  - Tree LOD's tables are as the last depth commit left them: a block attached or detached this frame is a one-frame hole or
+    ghost in the reflection.
+- **The capture** (`Engine/ReflectionFaces`). The face render (vfunc `0x35`) is flagged, and the face's accumulator render
+  (`FUN_1414a90f0` at `0x1414edbf8`) is thunked: after it, with the face's colour target still bound,
+  `IndirectDraws::CaptureReflectionFace` takes the face's slice (the render target view's array slice), the cube texture,
+  and the face's VS_PerFrame (b12) from the mirror: its view-projection and its eye (CameraPosAdjust).
+- **One epoch a frame** (`Segment::Reflection`, first in the epoch order), at `BeforeShadowMaps`
+  (`IndirectDraws::ExecuteReflection`). `TESWaterReflections::Update` runs twice a frame and renders one face each (one
+  call of vfunc `0x35` per update), all before `BeforeShadowMaps` (the report's "captured after their frame's epoch" is
+  0), and nothing between the face render and the water reads the cube (`FUN_140e44c60` after it only restores four
+  renderer words; the cube has one mip). An epoch per update was two a frame: each epoch is a slot of the host's ring
+  (render-graph.md, "Frames in flight"). It draws only while the depth and colour commits it reads are the frame
+  before's, into the same backings (`Resources::committed`). The shape always has all six faces, so the recordings hold
+  across frames; a face the frame doesn't render culls and draws nothing (zero dispatch, no tree slots).
+  - **Culling:** BuildDraws over the depth inputs in its single phase, frustum only, one latched dispatch per face. The
+    latch's slots' map (`bucketMapOffset`, which BuildDrawsCS now reads whenever a latch names one) sends each LOD slot
+    to the bucket of its forward pipeline and every other slot to none. The bucket tables give each face its range of
+    one sequence buffer; the sequences are the Z-prepass's plain draws from the index pool.
+  - **Tree LOD:** `TreeLodCullCS`'s phase 1 per face against the face's latch entry (cull mode 1, no occlusion), into a
+    list of the face's, its draw row the last depth commit's with the face's list.
+  - **Drawing:** per face a pass on its slice of the engine's cube target (loaded: the engine's sky is there) and DCLF's
+    own D24S8 depth (cleared); per bucket a plain indirect draw with its forward pipeline; then the face's tree LOD with
+    the forward tree pipeline. LOD drawn after the sky is the engine's result: the sky writes no depth and lies at the far
+    plane.
+- **Constants** (measured: "The constants" below). The material and pipeline rows are the main view's. The frame push data is
+  the colour segment's frame constants as the frame before left them, with VS and PS b12 the face's block. The frame
+  lighting (PS b13) stays the main pass's: its sun direction is a frame old, a difference in about the fifth digit, the
+  size capture parity measured between a face's draws and the main rows.
+
+### The constants (L5b, 2026-10-04)
+
+Capture parity's face mode (`CaptureParity::OnFaceLightingDraw`, under `CS_DCLF_CAPTURE_PARITY`): each Lighting draw of a face
+against its object's main rows, with the main view's comparisons (PerMaterial, PerTechnique with the shadow mask and filter
+modes, PerGeometry with the object's values and the face's eye), labelled "face ...". Over the run, 21,200 draws per report,
+every block compared:
+- **One variable differs:** PS PerGeometry `DirLightDirection`, in the fifth digit (-0.389653 at the face, -0.389596 in the
+  row). The faces render early in the frame (`Main::Draw`, before the world), so they light with another moment's sun.
+- **Everything else is equal:** the material blocks, textures and address modes; the technique blocks, the shadow mask and
+  the filter modes; the rest of PerGeometry, the face's eye included.
+- `DirLightDirection` is not a PerGeometry member in DCLF's builds (`DCLF_BINDLESS`): the draws read it from the frame lighting
+  block (PS b13), pushed once a pass. So a face's difference is a frame block, not a row.
+- Lighting.hlsl's blocks have explicit packoffsets that do not depend on `DEFERRED`, so the main rows' layout is the forward
+  stages' too.
+
+### Results (L5b)
+
+- **Programs and pipelines** (`IndirectDraws::PrepareReflection`, once a frame for the LOD pipeline slots in use; the report's
+  "reflection faces" line): at Riverwood, 5 LOD pipeline slots, 5 forward programs and 5 forward pipelines, and tree LOD's,
+  built: 6 pipelines requested, 6 built, 0 failed. The faces' targets: colour `R16G16B16A16_FLOAT`, DCLF's depth
+  `D24_UNORM_S8_UINT`.
+
+### Results (L5c, 2026-10-04)
+
+Riverwood, by the river and on the bridge, camera turning, 50 s runs:
+- **The epochs:** 300 a report (one a frame), 600 faces drawn; none skipped (stale inputs, resources, failures: 0), none
+  captured after the frame's epoch. Render thread: about 0.06 ms an epoch (`CS_ORG_EPOCH_STATS`); GPU about 0.09 ms a frame.
+- **The census** (`CS_DCLF_REFLECTION_CENSUS`): the engine's face draws fell from about 333 a frame to 25.3, the sky's 25. About
+  0.2 LOD draws a frame are left to the engine: joiners in their lag frame.
+- **Withheld:** 50-140 member passes and 100-450 tree LOD passes a frame (the report's "reflection faces drawn" line).
+- **Face capture parity** under `CS_DCLF_PARITY_BOTH` (the engine draws the faces' LOD too): 22,900 face draws a report against
+  the rows DCLF draws them with. Only PS PerGeometry `DirLightDirection` differs (-0.46806 against -0.46812), the frame lighting
+  difference above. Main-view capture parity stays OK (326,669 draws, 0 mismatched).
+- **The water** from the bridge, DCLF's faces against `CS_DCLF_REFLECTIONS=0`: no visible difference.
+- **GPU preparation:** the faces' BuildDraws 3 us and tree cull 2 us a call (the graph host's preparation cost).
+
+### Steps
+
+| Step | What | Gate |
+| --- | --- | --- |
+| L5a | The census (done) | what the faces draw |
+| L5b | Forward LOD and tree programs and pipelines for the face's targets; capture parity of their constants against the engine's face draws (done) | built; the differences named |
+| L5c | DCLF draws the faces' reflection-phase LOD and tree LOD, withheld from the cube camera's accumulator (done) | the census showing the sky; the water against the engine's; face capture parity |
 
 ## Design
 

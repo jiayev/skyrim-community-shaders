@@ -7,6 +7,7 @@ namespace DCLF::Draws
 {
 	constexpr const char* kExtensionId = "cs.dclf.main-opaque";
 	constexpr const char* kShadowExtensionId = "cs.dclf.shadow";
+	constexpr const char* kReflectionExtensionId = "cs.dclf.reflection";
 	// The shadow views' material rows (ShadowMaterialRow): row 0 for every draw without alpha testing, and one per material
 	// of the alpha-tested casters (their texture offset and diffuse). One table for every view, grown when the kept state
 	// needs more rows (GrowableRows), from this many.
@@ -190,11 +191,16 @@ namespace DCLF::Draws
 	// What the tree buffers hold at first (they double as the scene needs).
 	constexpr std::uint32_t kInitialTrees = 1024;
 	constexpr const char* kFadeStateShader = "DrawcallLimitFix/FadeStateCS.hlsl";
-	// Tree LOD's cull (TreeLodCullCS.hlsl; Scene/TreeLod.h): the tables' and the latch's indices; a thread per instance record.
+	// Tree LOD's cull (TreeLodCullCS.hlsl; Scene/TreeLod.h), in the depth segment's two phases: the tables' and the latch's
+	// indices, the phase, the retest list's place, and the HZB as BuildDrawsConstants has it; a thread per instance record (phase
+	// 1) or per retest entry (phase 2).
 	constexpr const char* kTreeLodCullShader = "DrawcallLimitFix/TreeLodCullCS.hlsl";
 	struct TreeLodCullConstants
 	{
-		std::uint32_t shapesIndex = 0, instancesIndex = 0, visibleIndex = 0, latchIndex = 0, latchOffset = 0, drawIndex = 0, padding[2]{};
+		std::uint32_t shapesIndex = 0, instancesIndex = 0, visibleIndex = 0, latchIndex = 0, latchOffset = 0, drawIndex = 0;
+		std::uint32_t phase = 0;
+		std::uint32_t retestOffset = 0;  // bytes into the visible list
+		std::uint32_t hzbIndex = 0, hzbSizePacked = 0, hzbMips = 0, padding = 0;
 	};
 	constexpr std::uint32_t kTreeLodCullConstantWords = sizeof(TreeLodCullConstants) / 4;
 	constexpr std::uint32_t kTreeLodCullGroup = 64;
@@ -402,7 +408,8 @@ namespace DCLF::Draws
 		// the first phase's. 0 elsewhere.
 		std::uint32_t phaseTwoBucketTableOffset;
 		// The depth segment's phases: each pipeline slot's bucket (MainLatchLayout::BucketMapOffset), its Z-prepass group's in this
-		// frame's tables, kNoBucket for a slot with none (no published pipeline). 0 elsewhere.
+		// frame's tables, kNoBucket for a slot with none (no published pipeline); a reflection face's, each LOD slot's forward pipeline's bucket
+		// (IndirectDraws::ExecuteReflection). 0 elsewhere.
 		std::uint32_t bucketMapOffset;
 		std::uint32_t reserved;
 	};
