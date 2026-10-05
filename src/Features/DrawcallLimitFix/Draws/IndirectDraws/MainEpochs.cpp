@@ -408,17 +408,34 @@ namespace DCLF
 		auto* rows = &mainRows;
 		auto* pool = &stagedPools[index];
 		const MainInputs inputs = job.inputs;
+		const rhi::Device device = RecordingDevice();
 		job.handle = AsyncWorker::Get().Submit(a_depthOnly ? "zprepass" : "colour", [inputs, tables, lookups, payload, rows, cache, objects, bonesStore, geometriesStore, pool,
-																							target = resources](std::stop_token) {
+																							target = resources, device](std::stop_token) {
 			BuildMainPayload(inputs, *tables, *lookups, *payload, *rows, cache, objects, bonesStore, geometriesStore);
 			if (target)
-				StageMainPayload(*payload, *target, *pool);
+				StageMainPayload(*payload, *target, *pool, device);
 		});
+	}
+
+	void IndirectDraws::KickSceneStreams()
+	{
+		if (impl && !failed)
+			impl->KickSceneStreams();
+	}
+
+	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats()
+	{
+		if (!impl)
+			return {};
+		auto& job = impl->streamsJob;
+		return { std::exchange(job.kicked, 0), std::exchange(job.used, 0), std::exchange(job.dropped, 0) };
 	}
 
 	void IndirectDraws::EndFrame()
 	{
 		AsyncWorker::Get().NoteFrame();
+		// Never taken this frame (no commit ran after it): its inputs name this frame's tables.
+		impl->DropSceneStreams();
 		// A job kicked this frame and never joined (the epoch did not run: a load screen, a failed setup) must
 		// not outlive the frame: its inputs name this frame's tables.
 		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j) {
@@ -435,6 +452,7 @@ namespace DCLF
 
 	void IndirectDraws::DrainAsync()
 	{
+		impl->DropSceneStreams();
 		for (std::size_t j = 0; j < impl->mainJobs.size(); ++j)
 			impl->DropMainJob(j, stats);
 		impl->DropShadowJob(stats);

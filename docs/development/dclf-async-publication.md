@@ -297,6 +297,142 @@ The engine's own remaining work that DCLF's hooks time is out of scope; it belon
 - the sun's full-frustum cull and Accumulate, about 0.11 ms;
 - the point lights' Accumulate, about 0.04 ms.
 
+**Phase 6, step 1: the commits' uploads off the render thread** (2026-10-05, p6-base, ab-off/ab-on).
+
+The baseline (bridge, turning camera): 0.79–0.92 ms a frame on the render thread. Each epoch's ORG time split into the
+commit (the feature's inputs, about 130 µs a frame over all epochs), and **recording the commit's uploads, one copy
+command per staged entry, about 90 µs**. A Tracy capture showed the recording as `RecordCopies`, and a count of the
+commits' entries showed where they came from:
+
+| Commit | Entries | Mostly |
+|---|---|---|
+| Shadow | ~115 | object records (70) and bone rows (28): the frame's first commit sends the scene streams |
+| Z-prepass | ~110 | **single 4-byte words of `fade-animated`**, one per animated fade root |
+| Colour | 25–38 | object records changed since |
+| Reflection | 21 | per-face rows |
+
+What changed:
+- **The workers' batches are recorded on the workers** (ORG, persistent-epochs.md, "Recorded ahead by the producer").
+  The main and shadow builds record their staged batch where they stage it, and the commit hands the list over with
+  `SubmitWorkerBatch`.
+- **The fade-animated words go up as one copy**: a CPU copy of the buffer (the GPU only reads it), and the span from the
+  frame's lowest root to its highest.
+- **The scene streams are staged on the worker** (`IndirectDraws::Impl::StreamsJob`). The job is kicked where nothing
+  writes the tables until the next commit: after the placements' join at BeforeShadowMaps, and after
+  RefreshFrameConstants at Prepass. It updates the object and bone stores, stages the changed runs, and records them.
+  `CommitSceneStreams` submits its batch when the buffers still hold what the job started from, takes its versions as
+  held, and sends only what changed since. Otherwise the batch is dropped, and the commit sends everything since the
+  held versions, the job's changes included (the stores keep them). Off under the persistent parity, which checks what
+  the render thread uploads.
+
+Results:
+- **Entries recorded on the render thread:** shadow 115 → 15, Z-prepass 110 → 18, colour 25–38 → 13. Every streams job was
+  taken by its commit (600 of 600).
+- **Render thread, alternating A/B** (the streams job off and on, two runs each, with the other two changes in both):
+
+  | | Off | On |
+  |---|---|---|
+  | Total, ms/frame | 0.823, 0.833 | 0.809, 0.750 |
+  | Shadow epoch | 0.139, 0.145 | 0.084, 0.078 |
+  | Colour epoch | 0.088, 0.088 | 0.078, 0.079 |
+
+  The two kicks cost about 6 µs each. The job runs about 70 µs on the worker, and is done by its join (0.5 µs).
+- Single runs are not comparable: two runs of one build differed by more than this step's gain on hooks it does not touch.
+  Compare alternating runs.
+
+**Phase 6, step 2: per-frame work bounded by what changed** (2026-10-05, q-streams → q-p6b → q-p6c, Tracy medians).
+
+Before moving the shadow commit, a capture split the shadow epoch's 103 µs. Three parts redid every frame what only
+changes with the scene:
+
+- **The scene's draw bound** (`SceneDrawBound`) scanned every object slot (8,300 at the bridge) before each epoch's sequence
+  reserve: shadow, occlusion and main, about 10 µs each. It is now kept in `DrawBoundStore` (`Impl::drawBound`), from the
+  tables' change log like the record stores: a slot the log names has its share (its draws, and the pipeline slot they count
+  toward) taken out and put back. It is resynced by a scan only for new tables, a log it fell behind, or fewer slots. The
+  scan stays as its parity under `CS_DCLF_PERSISTENT_PARITY` (0 differ, 0 resyncs at the bridge), and the report prints a
+  "scene draw bound" line.
+- **The shadow pipeline lookups** (`RefreshShadowLookups`) asked for every key under every raster state of every used
+  mode, about 170 requests (12 µs). A refresh that found every pipeline records what it was made for: the pipeline set's
+  generation, and each used mode's format, keys and states (`Lookups::shadowPipelinesResolvedFor`). The same again is
+  skipped. A missing pipeline clears it, so the next refresh asks again.
+- **The views' bucket rows** (`BucketsOfRow`: sort, partition and map the pipelines of a state's map row) were rebuilt for
+  each state in each frame (11 µs in the shadow epoch, the same per occlusion view). They are kept per state
+  (`Impl::ShadowRowBuckets`) while the lookups (`Lookups::instance`, new on a reset), their shadow generation (which every
+  map-row change advances) and the published shadow pipeline version are the same.
+
+| Render thread, µs (median) | Before | After |
+|---|---|---|
+| Shadow epoch | 103 | 58 |
+| … its commit body | 46 | 24 |
+| Occlusion epoch | 50 | 31 |
+| Z-prepass epoch | 47 | 37 |
+| Colour epoch | 36 | 27 |
+
+Shadow views 1800 of 1800 drawn, 0 not ready; bridge screenshots unchanged.
+
+**Phase 6, step 3: per-frame values through the latch, copied by the ticket** (2026-10-05, p6d, p6e).
+
+After step 2, a temporary count of every commit's staged entries showed what the render thread still recorded as copies:
+about 75 a frame, nearly all either a counter zeroed every frame or a per-frame block rewritten whole (shadow 15–21, each
+occlusion view 4, Z-prepass 18, colour 13, reflection 20). Neither needs a copy recorded at the submission: the values can go
+into the latch with a plain store, and the copies from the latch can be recorded with the ticket, on ORG's host thread, since
+a latch region's place depends only on the frame slot (LatchBlock: "also valid ... as a copy source").
+
+- **`ShadowLatchedCopiesPass`** (shadow and occlusion epochs) and **`ReflectionLatchedCopiesPass`**, the first pass of each
+  epoch: per view (face), its blocks from the latch's region for it to the buffer the draws read, and its draw count and
+  bucket counts from a zero source (a one-slot `LatchBlock` never written: `ShadowResources::zeros`,
+  `ReflectionResources::zeros`). They declare their targets as copy destinations, so the graph orders them before the
+  passes that read them; their revision is the frame shape's generation, which names every copy they make.
+- **Layouts:** `ShadowLatchLayout::ViewBlockOffset(slot)` (a view slot's 1280 bytes), `ReflectionLatchLayout::FaceOffset(f)`
+  (the face block, its tree LOD row and visible list header). The frames carry the regions' offset and the zeros, both in
+  their `SameShape`.
+- **The commits** write the values into the latch (`WriteViewBlocks`, the reflection's face loop) and stage none of them.
+  The shadow worker no longer stages zeroed counters (`ShadowPayload::stagedSlots` is gone).
+- An uncaptured reflection face draws nothing, so its block is copied as the latch holds it.
+
+Results (bridge, Tracy medians, one capture each):
+- Copies recorded per commit: shadow 15–21 → 3–5 (SharedData and FeatureData, the tree frame, face positions), occlusion
+  4 → 0, reflection 20 → 0.
+- Render thread: shadow epoch 58 → 53 µs, reflection epoch 62 → 48 µs; the occlusion epoch read 23 µs in one capture and
+  28 µs in another, against 29 before.
+- 1800 of 1800 shadow views and 600 of 600 reflection faces drawn; shadows and water reflections unchanged at the bridge.
+
+**The main commits** (Z-prepass, colour) and the shadow commit's SharedData and FeatureData blocks go through one
+mechanism, `LatchedUploads`, which a commit calls as it calls its staged uploads:
+- A target the epoch's latched-copies pass declared (`Resources::latchedTargets`, published by `MainLatchedCopiesPass` from
+  `MainLatchedTargets`; the shadow constants for `ShadowLatchedCopiesPass`) has its bytes written straight into the
+  segment's latch block (`Resources::latchedBlocks`, one per segment: both main commits write in the same frame slot, and the
+  first one's copies may not have run when the second writes; grown with what is written so far) and a copy in the frame's
+  `LatchedList`, part of its shape. Anything else is staged as before.
+- A copy is in the list only in a frame that writes it, so a target not written keeps what it holds, as with staging. The
+  frame lighting, written only when it changed, is now written by every main commit: a copy written now and then would
+  change the shape with it.
+- The frame constants were read only through device addresses, ordered after the upload pass by its barrier. They are now a
+  graph resource (`cs.dclf.frame-constants`), declared by their readers (both main draws, the reflection faces, the foliage
+  parity pass), so the graph orders them after the latched copies.
+- Left staged, as the compute queue reads them (a closed execution rejects a resource on two queues): the tree frame row (now
+  the Z-prepass commit's alone: only its TreeWindPass reads it), the fade frame row, the fade events' header and the fade
+  visibility. Also staged: what changes now and then (the tree and fade root tables, tree LOD's shape and mesh rows, the fade
+  root lists), the fade-animated span, the sort's first zeroing, and an inline build's payload.
+
+**ORG**: `IUploadService::RecordStagedUploads(list, slot, afterWork)` now records the barrier that orders the staged copies
+after the work before them only when it has a copy. `RecordPendingUploads` recorded one before calling it in every epoch,
+copies or not; it was the list's first command, about 2.4 µs. ORG's persistent, copy-queue and Vulkan host tests pass.
+
+Results (bridge, Tracy medians; before step 3 → now):
+
+| Render thread, µs | Before | After | Of it: recording the pending uploads |
+|---|---|---|---|
+| Shadow epoch | 48.0 | 40.4 | 11.5 → 2.7 |
+| Z-prepass epoch | 83.5 | 79.8 | 13.4 → 11.0 |
+| Colour epoch | 44.9 | 36.6 | 9.5 → 2.2 |
+| Reflection epoch | 55.9 | 38.9 | 19.8 → 4.6 |
+| Occlusion epoch | ~29 | 21.5 | |
+
+About 44 µs a frame. Copies the commits record: shadow 0–1 (face positions), occlusion and reflection 0, colour 0, Z-prepass
+5 (the fade rows, the tree frame row, fade-animated). Every view and face drawn, no ticket prepared again for a changed list,
+screenshots unchanged.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

@@ -499,7 +499,14 @@ namespace DCLF::Draws
 		}
 		// The index pool's copies (IndexPool): their dispatch's groups, then their count.
 		std::uint32_t PoolOffset() const { return BucketOffset(viewSlots); }
-		std::uint32_t Bytes() const { return PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)); }
+		// A view slot's blocks (its view block, then its per-frame block at kShadowPerFrameOffset), as the view-blocks buffer holds
+		// them: the epoch's latched copies (ShadowLatchedCopiesPass) copy them there, so the commit records no copy.
+		std::uint32_t ViewBlockOffset(std::uint32_t a_slot) const
+		{
+			const std::uint32_t first = (PoolOffset() + 4 * static_cast<std::uint32_t>(sizeof(std::uint32_t)) + 255u) & ~255u;
+			return first + a_slot * static_cast<std::uint32_t>(kShadowViewSlotBytes);
+		}
+		std::uint32_t Bytes() const { return ViewBlockOffset(viewSlots); }
 		bool operator==(const ShadowLatchLayout&) const = default;
 	};
 	/** @brief The main latch block's region per frame slot: the passes' BuildDrawsLatch, then the colour pass's cascades. */

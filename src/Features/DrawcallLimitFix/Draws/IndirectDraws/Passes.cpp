@@ -404,6 +404,7 @@ namespace DCLF::Draws
 			}
 			for (const auto& frameBuffer : resources->frameBuffers)
 				bindings.frameBuffers.push_back(a_builder.ShaderResource(frameBuffer.copy, noViews).Resource());
+			a_builder.ShaderResource(resources->frameConstants, noViews);  // the frame record's slots, by address
 			// Tree LOD's draw: its arguments, and the tables its vertex stage reads through their addresses.
 			if (const auto& scene = *resources->scene; scene.treeLodCull) {
 				bindings.treeLodVisible = a_builder.IndirectArguments(scene.treeLodVisible);
@@ -1373,6 +1374,7 @@ namespace DCLF::Draws
 			}
 			FoliageParityBindings bindings{};
 			bindings.results = a_builder.UnorderedAccess(foliage.results).View();
+			a_builder.ShaderResource(resources->frameConstants, std::span<const org::SrvView>{});  // its frame block, by address
 			bindings.owners = a_builder.UnorderedAccess(foliage.owners).View();
 			bindings.depth = a_builder.ShaderResource(resources->nativeDepth).View();
 			return bindings;
@@ -1775,6 +1777,91 @@ namespace DCLF::Draws
 		// The fade roots' rows hold the tables' (the depth commit's upload), so a root slot names its row.
 		bool FadeRows() const { return resources->scene->fadeRoots && resources->scene->fadeRootCount; }
 
+		std::shared_ptr<ShadowResources> resources;
+		bool sky = false;
+	};
+
+	struct ShadowLatchedCopiesBindings
+	{
+		org::ResourceBindingToken viewBlocks, constants;
+		std::vector<org::ResourceBindingToken> count, bucketCounts;  // per view slot
+	};
+
+	struct ShadowLatchedCopiesPrepared
+	{
+		std::shared_ptr<const ShadowFrame> frame;
+	};
+
+	/**
+	 * @brief The views' per-frame values the commit wrote into the latch, copied to where the views read them: each view's blocks
+	 * (ShadowLatchLayout::ViewBlockOffset) to its slot of the view-blocks buffer, and its draw count and bucket counts zeroed from
+	 * the zeros (ShadowResources::zeros). The copies depend on the frame's shape alone, so they are recorded with the epoch's
+	 * ticket on ORG's host thread, and the commit records none.
+	 */
+	class ShadowLatchedCopiesPass final : public org::TypedRenderGraphPass<ShadowLatchedCopiesPass, ShadowLatchedCopiesPrepared, ShadowLatchedCopiesBindings>
+	{
+	public:
+		ShadowLatchedCopiesPass(std::shared_ptr<ShadowResources> a_resources, bool a_sky) :
+			resources(std::move(a_resources)), sky(a_sky) {}
+
+		ShadowLatchedCopiesBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			ShadowLatchedCopiesBindings bindings{};
+			bindings.viewBlocks = a_builder.CopyDestination(resources->viewBlocks.buffer);
+			// The shadow commit's latched values (ShadowFrame::latched) go to the constants alone.
+			bindings.constants = a_builder.CopyDestination(resources->constants);
+			resources->latchedTargets.store(std::make_shared<const std::vector<const org::Buffer*>>(1, resources->constants.get()), std::memory_order_release);
+			for (std::size_t s = 0; s < resources->count.size(); ++s) {
+				bindings.count.push_back(a_builder.CopyDestination(resources->count[s]));
+				bindings.bucketCounts.push_back(a_builder.CopyDestination(resources->bucketCounts[s]));
+			}
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentShadowFrame(*resources, sky);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		ShadowLatchedCopiesPrepared Prepare(const ShadowLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		{
+			ShadowLatchedCopiesPrepared prepared{};
+			if (auto frame = CurrentShadowFrame(*resources, sky); frame && frame->latch && frame->zeros && (!frame->views.empty() || !frame->latched.copies.empty()))
+				prepared.frame = std::move(frame);
+			return prepared;
+		}
+
+		static void Record(const ShadowLatchedCopiesBindings& a_bindings, const ShadowLatchedCopiesPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame)
+				return;
+			const auto& frame = *a_prepared.frame;
+			auto& commands = a_recording.Commands();
+			const auto latch = frame.latch->Resource()->GetAPIResource().GetHandle();
+			const auto zeros = frame.zeros->Resource()->GetAPIResource().GetHandle();
+			const std::uint64_t region = frame.latch->Offset(a_recording.FrameSlot()) + frame.viewBlocksOffset;
+			const auto viewBlocks = a_recording.Resolve(a_bindings.viewBlocks).GetHandle();
+			for (const auto& view : frame.views) {
+				if (view.slot >= a_bindings.count.size())
+					continue;
+				commands.CopyBufferRegion(viewBlocks, std::uint64_t(view.slot) * kShadowViewSlotBytes, latch, region + std::uint64_t(view.slot) * kShadowViewSlotBytes,
+					kShadowViewSlotBytes);
+				commands.CopyBufferRegion(a_recording.Resolve(a_bindings.count[view.slot]).GetHandle(), 0, zeros, 0, sizeof(kZeroCounts));
+				const std::uint64_t bucketBytes = std::max<std::size_t>(view.buckets.size(), 1) * sizeof(std::uint32_t);
+				commands.CopyBufferRegion(a_recording.Resolve(a_bindings.bucketCounts[view.slot]).GetHandle(), 0, zeros, 0, bucketBytes);
+			}
+			if (const auto& list = frame.latched; list.latch) {
+				const auto source = list.latch->Resource()->GetAPIResource().GetHandle();
+				const std::uint64_t latched = list.latch->Offset(a_recording.FrameSlot());
+				const auto constants = a_recording.Resolve(a_bindings.constants).GetHandle();
+				for (const auto& copy : list.copies)
+					commands.CopyBufferRegion(constants, copy.dstOffset, source, latched + copy.latchOffset, copy.bytes);
+			}
+		}
+
+	private:
 		std::shared_ptr<ShadowResources> resources;
 		bool sky = false;
 	};
@@ -2267,6 +2354,7 @@ namespace DCLF::Draws
 				bindings.bucketCounts[f] = a_builder.IndirectArguments(resources->bucketCounts[f]);
 			// Read through device addresses; declared so the graph orders them after their uploads.
 			a_builder.ShaderResource(main.materialRows.buffer, noViews);
+			a_builder.ShaderResource(main.frameConstants, noViews);  // the colour segment's frame slots, by address
 			a_builder.ShaderResource(main.pipelineRows.buffer, noViews);
 			a_builder.ShaderResource(scene.objects, noViews);
 			a_builder.ShaderResource(scene.bones, noViews);
@@ -2445,6 +2533,10 @@ namespace DCLF::Draws
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::ShadowView);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.shadow.latched-copies",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<ShadowLatchedCopiesPass>(resources, false)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.shadow.index-pool",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<IndexPoolPass>(resources->pool, [shadow = resources] {
 					const auto frame = CurrentShadowFrame(*shadow, false);
@@ -2461,6 +2553,10 @@ namespace DCLF::Draws
 					.Epoch(epoch));
 			// Skylighting's occlusion map: the same passes over its one view, in its own epoch after RenderMask.
 			const auto skyEpoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::SkyOcclusion);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.sky.latched-copies",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<ShadowLatchedCopiesPass>(resources, true)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(skyEpoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.sky.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<ShadowBuildDrawsPass>(resources, true)))
 					.PreferQueue(org::QueueKind::Graphics)
@@ -2472,6 +2568,91 @@ namespace DCLF::Draws
 
 	private:
 		std::shared_ptr<ShadowResources> resources;
+	};
+
+	/** @brief The buffers a main commit's per-frame values go to through the latch (LatchedUploads), as the passes declare them. */
+	std::vector<std::shared_ptr<org::Buffer>> MainLatchedTargets(const Resources& a_resources)
+	{
+		std::vector<std::shared_ptr<org::Buffer>> out{ a_resources.frameConstants, a_resources.count, a_resources.zBucketCounts[0], a_resources.zBucketCounts[1] };
+		for (const auto& frameBuffer : a_resources.frameBuffers)
+			out.push_back(frameBuffer.copy);
+		// Tree LOD's draw row and its list's header; not the trees' or the fades' frame rows, which the compute queue reads.
+		if (const auto& scene = *a_resources.scene; scene.treeLodCull) {
+			out.push_back(scene.treeLodDraw);
+			out.push_back(scene.treeLodVisible);
+		}
+		std::erase(out, nullptr);
+		return out;
+	}
+
+	struct MainLatchedCopiesBindings
+	{
+		std::vector<std::pair<const org::Buffer*, org::ResourceBindingToken>> targets;
+	};
+
+	struct MainLatchedCopiesPrepared
+	{
+		std::shared_ptr<const PassFrame> frame;
+	};
+
+	/**
+	 * @brief A main epoch's first pass: the copies of its commit's per-frame values (PassFrame::latched) from the latch to where its
+	 * passes read them. Recorded with the epoch's ticket, on ORG's host thread: the commit records no copy for them. It declares
+	 * every target a commit may latch (MainLatchedTargets) and publishes them (Resources::latchedTargets), so a commit latches only
+	 * what a pass will copy.
+	 */
+	class MainLatchedCopiesPass final : public org::TypedRenderGraphPass<MainLatchedCopiesPass, MainLatchedCopiesPrepared, MainLatchedCopiesBindings>
+	{
+	public:
+		MainLatchedCopiesPass(std::shared_ptr<Resources> a_resources, RenderGraphRuntime::Segment a_segment) :
+			resources(std::move(a_resources)), segment(a_segment) {}
+
+		MainLatchedCopiesBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			MainLatchedCopiesBindings bindings{};
+			auto declared = std::make_shared<std::vector<const org::Buffer*>>();
+			for (const auto& target : MainLatchedTargets(*resources)) {
+				bindings.targets.emplace_back(target.get(), a_builder.CopyDestination(target));
+				declared->push_back(target.get());
+			}
+			resources->latchedTargets.store(std::move(declared), std::memory_order_release);
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentFrame(*resources, segment);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		MainLatchedCopiesPrepared Prepare(const MainLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		{
+			MainLatchedCopiesPrepared prepared{};
+			if (auto frame = CurrentFrame(*resources, segment); frame && frame->latched.latch && !frame->latched.copies.empty())
+				prepared.frame = std::move(frame);
+			return prepared;
+		}
+
+		static void Record(const MainLatchedCopiesBindings& a_bindings, const MainLatchedCopiesPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame)
+				return;
+			const auto& list = a_prepared.frame->latched;
+			auto& commands = a_recording.Commands();
+			const auto latch = list.latch->Resource()->GetAPIResource().GetHandle();
+			const std::uint64_t region = list.latch->Offset(a_recording.FrameSlot());
+			for (const auto& copy : list.copies) {
+				const auto target = std::find_if(a_bindings.targets.begin(), a_bindings.targets.end(), [&](const auto& a_target) { return a_target.first == copy.target; });
+				if (target == a_bindings.targets.end())
+					continue;  // latched only for a declared target (LatchedUploads)
+				commands.CopyBufferRegion(a_recording.Resolve(target->second).GetHandle(), copy.dstOffset, latch, region + copy.latchOffset, copy.bytes);
+			}
+		}
+
+	private:
+		std::shared_ptr<Resources> resources;
+		RenderGraphRuntime::Segment segment;
 	};
 
 	class MainOpaqueExtension final : public org::RenderGraph::IRenderGraphExtension
@@ -2490,6 +2671,9 @@ namespace DCLF::Draws
 				a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-inputs-depth"), resources->inputsDepth);
 			RegisterSceneBuffers(a_graph, *resources->scene);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.draw-count"), resources->count);
+			// Read through device addresses (the frame record's slots), declared by their readers so the graph orders them after
+			// the epochs' latched copies.
+			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.frame-constants"), resources->frameConstants);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts"), resources->zBucketCounts[0]);
 			a_graph.RegisterResource(org::ResourceIdentifier("cs.dclf.z.bucket-counts2"), resources->zBucketCounts[1]);
 			if (const auto& foliage = resources->foliage) {
@@ -2524,6 +2708,15 @@ namespace DCLF::Draws
 			const auto depth = RenderGraphRuntime::EpochOf(Segment::ZPrepass);
 			const auto colourSegment = Segment::MainOpaque;
 			const auto depthSegment = Segment::ZPrepass;
+			// Each epoch's first pass: its commit's per-frame values, from the latch (MainLatchedCopiesPass).
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.z.latched-copies",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainLatchedCopiesPass>(resources, depthSegment)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(depth));
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.latched-copies",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<MainLatchedCopiesPass>(resources, colourSegment)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(colour));
 			// A pass instance runs only in its own epoch and its segment is fixed here, so the Z-prepass has its own
 			// build-draws and draw pass.
 			// The sort by pipeline after a build (SortDraws): the counts' prefix sum, then the scatter. The scan runs in every
@@ -2665,6 +2858,90 @@ namespace DCLF::Draws
 		return std::make_unique<ShadowExtension>(std::move(a_resources));
 	}
 
+	struct ReflectionLatchedCopiesBindings
+	{
+		org::ResourceBindingToken count, faceBlocks;
+		std::array<org::ResourceBindingToken, kReflectionFaces> bucketCounts{}, treeRows{}, treeVisible{};
+		bool trees = false;
+	};
+
+	struct ReflectionLatchedCopiesPrepared
+	{
+		std::shared_ptr<const ReflectionFrame> frame;
+	};
+
+	/**
+	 * @brief The reflection commit's per-update values, copied from the latch to where the faces read them: each face's block, its
+	 * tree LOD row and visible list header (ReflectionLatchLayout::FaceOffset), and the draw count and bucket counts zeroed. Recorded
+	 * with the epoch's ticket on ORG's host thread: the commit records no copy.
+	 */
+	class ReflectionLatchedCopiesPass final : public org::TypedRenderGraphPass<ReflectionLatchedCopiesPass, ReflectionLatchedCopiesPrepared, ReflectionLatchedCopiesBindings>
+	{
+	public:
+		explicit ReflectionLatchedCopiesPass(std::shared_ptr<ReflectionResources> a_resources) :
+			resources(std::move(a_resources)) {}
+
+		ReflectionLatchedCopiesBindings Declare(org::PassBuilder& a_builder)
+		{
+			a_builder.PreferQueue(org::QueueKind::Graphics);
+			ReflectionLatchedCopiesBindings bindings{};
+			bindings.count = a_builder.CopyDestination(resources->count);
+			bindings.faceBlocks = a_builder.CopyDestination(resources->faceBlocks);
+			bindings.trees = resources->main->scene->treeLodCull && resources->treeVisible[0];
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				bindings.bucketCounts[f] = a_builder.CopyDestination(resources->bucketCounts[f]);
+				if (bindings.trees) {
+					bindings.treeRows[f] = a_builder.CopyDestination(resources->treeRows[f]);
+					bindings.treeVisible[f] = a_builder.CopyDestination(resources->treeVisible[f]);
+				}
+			}
+			return bindings;
+		}
+
+		void InvocationRevision(const org::PassPrepareContext&, std::vector<std::uint64_t>& a_out) const
+		{
+			const auto frame = CurrentReflectionFrame(*resources);
+			a_out.push_back(frame ? frame->generation : 0);
+		}
+
+		ReflectionLatchedCopiesPrepared Prepare(const ReflectionLatchedCopiesBindings&, const org::PassPrepareContext&) const
+		{
+			ReflectionLatchedCopiesPrepared prepared{};
+			if (auto frame = CurrentReflectionFrame(*resources); frame && frame->latch && frame->zeros)
+				prepared.frame = std::move(frame);
+			return prepared;
+		}
+
+		static void Record(const ReflectionLatchedCopiesBindings& a_bindings, const ReflectionLatchedCopiesPrepared& a_prepared, org::PassRecordContext& a_recording)
+		{
+			if (!a_prepared.frame)
+				return;
+			const auto& frame = *a_prepared.frame;
+			auto& commands = a_recording.Commands();
+			const auto latch = frame.latch->Resource()->GetAPIResource().GetHandle();
+			const auto zeros = frame.zeros->Resource()->GetAPIResource().GetHandle();
+			const std::uint64_t faces = frame.latch->Offset(a_recording.FrameSlot()) + frame.facesOffset;
+			commands.CopyBufferRegion(a_recording.Resolve(a_bindings.count).GetHandle(), 0, zeros, 0, sizeof(kZeroCounts));
+			const auto faceBlocks = a_recording.Resolve(a_bindings.faceBlocks).GetHandle();
+			const std::uint64_t bucketBytes = std::max<std::size_t>(frame.buckets.size(), 1) * sizeof(std::uint32_t);
+			const bool trees = a_bindings.trees && frame.tree.valid();
+			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
+				commands.CopyBufferRegion(a_recording.Resolve(a_bindings.bucketCounts[f]).GetHandle(), 0, zeros, 0, bucketBytes);
+				const std::uint64_t face = faces + std::uint64_t(f) * ReflectionLatchLayout::kFaceBytes;
+				commands.CopyBufferRegion(faceBlocks, std::uint64_t(f) * kReflectionFaceBlockBytes, latch, face, kReflectionFaceBlockBytes);
+				if (trees) {
+					commands.CopyBufferRegion(a_recording.Resolve(a_bindings.treeRows[f]).GetHandle(), 0, latch, face + ReflectionLatchLayout::kTreeRowInFace,
+						sizeof(TreeLod::DrawRow));
+					commands.CopyBufferRegion(a_recording.Resolve(a_bindings.treeVisible[f]).GetHandle(), 0, latch, face + ReflectionLatchLayout::kTreeHeaderInFace,
+						sizeof(TreeLod::VisibleHeader));
+				}
+			}
+		}
+
+	private:
+		std::shared_ptr<ReflectionResources> resources;
+	};
+
 	class ReflectionExtension final : public org::RenderGraph::IRenderGraphExtension
 	{
 	public:
@@ -2697,6 +2974,10 @@ namespace DCLF::Draws
 		void GatherStructuralPasses(org::RenderGraph&, std::vector<org::RenderGraph::ExternalPassDesc>& a_out) override
 		{
 			const auto epoch = RenderGraphRuntime::EpochOf(RenderGraphRuntime::Segment::Reflection);
+			a_out.push_back(org::RenderGraph::ExternalPassDesc::Copy("cs.dclf.reflection.latched-copies",
+				std::static_pointer_cast<org::RenderPass>(std::make_shared<ReflectionLatchedCopiesPass>(resources)))
+					.PreferQueue(org::QueueKind::Graphics)
+					.Epoch(epoch));
 			a_out.push_back(org::RenderGraph::ExternalPassDesc::Compute("cs.dclf.reflection.build-draws",
 				std::static_pointer_cast<org::RenderPass>(std::make_shared<ReflectionBuildDrawsPass>(resources)))
 					.PreferQueue(org::QueueKind::Graphics)

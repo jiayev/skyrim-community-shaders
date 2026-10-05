@@ -42,6 +42,8 @@ namespace DCLF
 	void IndirectDraws::KickShadowBuildEarly() {}
 	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
 	void IndirectDraws::BeforePlacementJoin() {}
+	void IndirectDraws::KickSceneStreams() {}
+	std::array<std::uint64_t, 3> IndirectDraws::TakeStreamsStats() { return {}; }
 	void IndirectDraws::EndFrame() {}
 	void IndirectDraws::DrainAsync() {}
 	std::string IndirectDraws::AsyncReport() { return {}; }

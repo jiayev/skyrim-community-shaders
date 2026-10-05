@@ -122,6 +122,21 @@ namespace DCLF::Draws
 		 * @brief Every draw the scene's tracked objects can produce: one per object, or one per partition a skin draws. A view's
 		 * draws are a part of it, whatever the culling keeps, so a sequence buffer that holds it holds any epoch's.
 		 */
+		/**
+		 * @brief One object slot's share of SceneDrawBound: its draws, and the pipeline slot they count toward. Per pipeline
+		 * slot, for the Z-prepass's buckets (Resources::zBucketCapacity): a decal's (a multi-index layer's too) never, as the
+		 * depth segment is not given decals (BuildDrawsCS), so its slot needs no bucket and no draw call.
+		 */
+		std::pair<std::uint32_t, std::uint32_t> DrawShareOf(const SceneStore::Tables& a_tables, std::size_t a_slot, bool a_partitioned)
+		{
+			const auto& object = a_tables.objects[a_slot];
+			if (object.flags & kObjectFree)
+				return { 0u, DrawBoundStore::kNoPipeline };
+			const std::uint32_t produced = PartitionDraws(a_partitioned ? a_tables.skinPartitions[a_slot] : 0u);
+			return { produced, (object.flags & kObjectDecal) ? DrawBoundStore::kNoPipeline : object.pipelineIndex };
+		}
+
+		/** @brief SceneDrawBound by a scan of every slot: drawBound's parity reference. */
 		std::uint32_t SceneDrawBound(const SceneStore::Tables& a_tables, std::vector<std::uint32_t>* a_perPipeline = nullptr)
 		{
 			std::uint64_t draws = 0;
@@ -130,16 +145,10 @@ namespace DCLF::Draws
 			if (a_perPipeline)
 				a_perPipeline->assign(a_tables.pipelines.size(), 0u);
 			for (std::size_t o = 0; o < objects; ++o) {
-				const auto& object = a_tables.objects[o];
-				if (object.flags & kObjectFree)
-					continue;
-				const std::uint32_t partitions = partitioned ? a_tables.skinPartitions[o] : 0u;
-				const std::uint32_t produced = PartitionDraws(partitions);
+				const auto [produced, pipeline] = DrawShareOf(a_tables, o, partitioned);
 				draws += produced;
-				// Per pipeline slot too, for the Z-prepass's buckets (Resources::zBucketCapacity): a decal's (a multi-index layer's too)
-				// never, as the depth segment is not given decals (BuildDrawsCS), so its slot needs no bucket and no draw call.
-				if (a_perPipeline && object.pipelineIndex < a_perPipeline->size() && !(object.flags & kObjectDecal))
-					(*a_perPipeline)[object.pipelineIndex] += produced;
+				if (a_perPipeline && pipeline < a_perPipeline->size())
+					(*a_perPipeline)[pipeline] += produced;
 			}
 			return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX));
 		}
@@ -429,23 +438,93 @@ namespace DCLF
 		return true;
 	}
 
+	void IndirectDraws::Impl::UpdateDrawBound(const SceneStore::Tables& a_tables)
+	{
+		auto& s = drawBound;
+		const std::size_t count = a_tables.objects.size();
+		const bool partitioned = a_tables.skinPartitions.size() >= count;
+		const std::uint32_t generation = SceneStore::Get().GetTablesGeneration();
+		constexpr auto kNoPipeline = DrawBoundStore::kNoPipeline;
+		auto set = [&](std::size_t a_slot) {
+			const auto [produced, pipeline] = DrawShareOf(a_tables, a_slot, partitioned);
+			s.draws -= s.produced[a_slot];
+			if (s.pipeline[a_slot] != kNoPipeline)
+				s.perPipeline[s.pipeline[a_slot]] -= s.produced[a_slot];
+			s.produced[a_slot] = produced;
+			s.pipeline[a_slot] = pipeline;
+			s.draws += produced;
+			if (pipeline != kNoPipeline) {
+				if (pipeline >= s.perPipeline.size())
+					s.perPipeline.resize(std::size_t(pipeline) + 1, 0u);
+				s.perPipeline[pipeline] += produced;
+			}
+		};
+		++s.updates;
+		// Every slot again: the first update, new tables, a log this store fell behind, fewer slots, or the partition column
+		// coming or going (which changes every slot's share without naming one).
+		if (!s.cursor.Continues(a_tables.changeLog, generation) || s.produced.size() > count || s.partitioned != partitioned) {
+			s.produced.assign(count, 0u);
+			s.pipeline.assign(count, kNoPipeline);
+			s.perPipeline.clear();
+			s.draws = 0;
+			s.partitioned = partitioned;
+			for (std::size_t o = 0; o < count; ++o)
+				set(o);
+			s.cursor.Restart(generation);
+			++s.resyncs;
+		} else {
+			// Slots the tables grew by since (the log names them too).
+			if (const std::size_t first = s.produced.size(); first < count) {
+				s.produced.resize(count, 0u);
+				s.pipeline.resize(count, kNoPipeline);
+				for (std::size_t o = first; o < count; ++o)
+					set(o);
+			}
+			// Whatever the cause: a share reads the flags, the pipeline and the partitions (kChangeBindings, kChangeSkin,
+			// kChangeMembership), and taking one out and putting it back unchanged costs nothing.
+			for (const auto& change : s.cursor.Unread(a_tables.changeLog)) {
+				if (change.slot >= count)
+					continue;
+				set(change.slot);
+				++s.changes;
+			}
+		}
+		s.cursor.Advance(a_tables.changeLog);
+		// CS_DCLF_PERSISTENT_PARITY: the kept bound against a scan.
+		if (PersistentParityEnabled() && ParityDue(SceneStore::Get().GetFrame())) {
+			std::vector<std::uint32_t> perPipeline;
+			const std::uint32_t scanned = SceneDrawBound(a_tables, &perPipeline);
+			bool same = scanned == s.Draws();
+			std::size_t differs = perPipeline.size();
+			for (std::size_t p = 0; same && p < perPipeline.size(); ++p)
+				if (perPipeline[p] != s.PipelineDraws(p)) {
+					same = false;
+					differs = p;
+				}
+			s.parity.Check(same, [&] {
+				return differs < perPipeline.size() ? fmt::format("pipeline slot {}: {} kept, {} scanned", differs, s.PipelineDraws(differs), perPipeline[differs]) :
+				                                      fmt::format("{} draws kept, {} scanned", s.Draws(), scanned);
+			});
+		}
+	}
+
 	void IndirectDraws::Impl::ReserveMainSequences(const SceneStore::Tables& a_tables)
 	{
 		if (!resources)
 			return;
 		auto& r = *resources;
-		std::vector<std::uint32_t> perPipeline;
-		std::uint32_t draws = SceneDrawBound(a_tables, &perPipeline);
+		UpdateDrawBound(a_tables);
+		std::uint32_t draws = drawBound.Draws();
 		// The Z-prepass's buckets: a pipeline slot's every draw, its capacity kept while they fit and grown to a power of two past
 		// them, so that its range, and the plain draws recorded over it, change only then. The sequences' phase ranges hold them all.
 		{
-			const auto slots = static_cast<std::uint32_t>(perPipeline.size());
+			const auto slots = static_cast<std::uint32_t>(a_tables.pipelines.size());
 			bool moved = r.zBucketCapacity.size() < slots;
 			if (moved)
 				r.zBucketCapacity.resize(slots, 0u);
 			for (std::uint32_t p = 0; p < slots; ++p) {
-				if (perPipeline[p] > r.zBucketCapacity[p]) {
-					r.zBucketCapacity[p] = std::bit_ceil(perPipeline[p]);
+				if (const std::uint32_t pipelineDraws = drawBound.PipelineDraws(p); pipelineDraws > r.zBucketCapacity[p]) {
+					r.zBucketCapacity[p] = std::bit_ceil(pipelineDraws);
 					moved = true;
 				}
 			}
@@ -505,7 +584,8 @@ namespace DCLF
 	{
 		if (!shadow)
 			return;
-		const std::uint32_t draws = SceneDrawBound(a_tables);
+		UpdateDrawBound(a_tables);
+		const std::uint32_t draws = drawBound.Draws();
 		CheckSequenceLimits("a shadow view", draws, false);
 		for (std::uint32_t slot = a_first; slot < std::min<std::size_t>(a_first + a_slots, shadow->sequences.size()); ++slot) {
 			auto& capacity = shadow->sequenceDraws[slot];
@@ -653,6 +733,9 @@ namespace DCLF
 			for (auto& counts : r.bucketCounts)
 				counts->ResizeStructured(r.bucketCountWords);
 		}
+		// The latched copies' zeros (ShadowLatchedCopiesPass): a view's draw count and its bucket counts.
+		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(r.bucketCountWords * 4, sizeof(kZeroCounts)); !r.zeros || r.zeros->Stride() < zeroBytes)
+			r.zeros = std::make_shared<org::LatchBlock>("cs.dclf.shadow.zeros", zeroBytes, 1);
 		if (a_rasterStates > layout.rasterStates) {
 			layout.rasterStates = Doubled(layout.rasterStates, a_rasterStates);
 			logger::info("[DCLF] shadow view rasterizer state rows: {} grown to {}", r.latchLayout.rasterStates, layout.rasterStates);
@@ -983,6 +1066,9 @@ namespace DCLF
 			for (auto& counts : r.bucketCounts)
 				counts->ResizeStructured(r.bucketCountWords);
 		}
+		// The latched copies' zeros: the draw count and a face's bucket counts.
+		if (const std::uint32_t zeroBytes = std::max<std::uint32_t>(r.bucketCountWords * 4, sizeof(kZeroCounts)); !r.zeros || r.zeros->Stride() < zeroBytes)
+			r.zeros = std::make_shared<org::LatchBlock>("cs.dclf.reflection.zeros", zeroBytes, 1);
 		if (a_draws > r.sequenceDraws) {
 			r.sequenceDraws = Doubled(r.sequenceDraws, a_draws);
 			const auto mutation = MutateBackings();

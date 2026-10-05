@@ -195,6 +195,25 @@ namespace DCLF
 		 * the commit before the epoch prepares and replaced only when it changes, so its identity is what
 		 * the passes' invocation revisions carry.
 		 */
+		/**
+		 * @brief A copy a main epoch's latched-copies pass (MainLatchedCopiesPass) records: bytes of the latch block's slot region, at
+		 * latchOffset, to a target the pass declared, at dstOffset. The commit wrote the bytes (LatchedUploads).
+		 */
+		struct LatchedCopy
+		{
+			const org::Buffer* target = nullptr;
+			std::uint32_t latchOffset = 0, bytes = 0;
+			std::uint64_t dstOffset = 0;
+			bool operator==(const LatchedCopy&) const = default;
+		};
+		/** @brief A commit's latched copies: the block they read, and the list (part of the frame's shape). */
+		struct LatchedList
+		{
+			std::shared_ptr<const org::LatchBlock> latch;
+			std::vector<LatchedCopy> copies;
+			bool operator==(const LatchedList& o) const { return latch == o.latch && copies == o.copies; }
+		};
+
 		struct PassFrame
 		{
 			std::uint64_t generation = 0;
@@ -228,10 +247,12 @@ namespace DCLF
 				}
 			};
 			std::vector<ZCall> zCalls;
+			// The commit's per-frame values the epoch's first pass copies from the latch (MainLatchedCopiesPass).
+			LatchedList latched;
 
 			bool SameShape(const PassFrame& o) const
 			{
-				return zCalls == o.zCalls && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
+				return zCalls == o.zCalls && latched == o.latched && drawCapacity == o.drawCapacity && decalCapacity == o.decalCapacity && sequenceDraws == o.sequenceDraws &&
 				       sequenceDecals == o.sequenceDecals && materialRows == o.materialRows && pipelineRows == o.pipelineRows && cullMode == o.cullMode &&
 				       probePixel == o.probePixel && probeX == o.probeX && probeY == o.probeY && width == o.width && height == o.height &&
 				       minDepth == o.minDepth && maxDepth == o.maxDepth && SameHandle(resourceHeap, o.resourceHeap) &&
@@ -511,6 +532,9 @@ namespace DCLF
 			std::shared_ptr<org::Buffer> fadeVisibility;  // the list processes' cull tests (Records.h, kFadeVisibilityLists blocks)
 			std::shared_ptr<org::Buffer> fadeRootLists;   // per root slot: its block (PrimaryCull::FadeRootLists)
 			std::shared_ptr<org::Buffer> fadeAnimated;    // per root slot: the scene frame whose animation batch updated it
+			// What fadeAnimated holds, as the commits wrote it (the GPU only reads it): a frame's words go up as one copy, the span
+			// from its lowest root to its highest, rather than a copy per root (about a hundred a frame at the bridge).
+			std::vector<std::uint32_t> fadeAnimatedMirror;
 			std::uint64_t fadeRootListsHeld = ~0ull;      // the root and list versions it holds
 			// The states FadeStateCS publishes, one buffer per scene frame parity (the state rows are its own): the builds read the
 			// frame before's (FadeStatesReadIndex, through their latches). Zeroed once per backing (frameAheadZeroed): a zero
@@ -677,7 +701,8 @@ namespace DCLF
 
 		/**
 		 * @brief A commit's tree uploads (render thread): the rows and the list where the buffers do not hold the tables'
-		 * versions, whole (they change when a tree member joins or leaves), and the frame's inputs once a frame.
+		 * versions, whole (they change when a tree member joins or leaves), and the frame's inputs once a frame. a_frameRow: the
+		 * frame row too, for the epoch whose TreeWindPass reads it (the Z-prepass's: no other pass reads it).
 		 */
 		/**
 		 * @brief A commit's zeroing of the frame-ahead outputs (the trees' wind, the published fade states) in a new backing, before
@@ -707,7 +732,7 @@ namespace DCLF
 		}
 
 		template <class Uploads>
-		void UploadTrees(const SceneStore::Tables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads)
+		void UploadTrees(const SceneStore::Tables& a_tables, std::uint32_t a_frame, SceneBuffers& a_scene, Uploads& a_uploads, bool a_frameRow)
 		{
 			if (!a_scene.treeWind || !a_scene.trees)
 				return;
@@ -728,8 +753,8 @@ namespace DCLF
 				if (FoliageParityOn() && SwitchValue(Switch::FoliageParity) != "wind")
 					a_scene.treeInputs.deltaTime = 0.0f;
 			}
-			// The frame row (TreeWindFrameRow), every commit: the pass's invocation is prepared ahead of it.
-			if (a_scene.treeFrameBuffer) {
+			// The frame row (TreeWindFrameRow), every Z-prepass commit: the pass's invocation is prepared ahead of it.
+			if (a_frameRow && a_scene.treeFrameBuffer) {
 				const TreeWindFrameRow row{ a_scene.treeCount, 0, a_scene.treeFrame, 0, a_scene.treeInputs, {} };
 				a_uploads(a_scene.treeFrameBuffer, &row, sizeof(row), 0);
 			}
@@ -801,6 +826,11 @@ namespace DCLF
 			// The per-frame constant blocks at fixed slots (FrameSlotOffset), so a build can name them before
 			// their contents exist.
 			std::shared_ptr<org::Buffer> frameConstants;
+			// The commits' latched copies (MainLatchedCopiesPass): per segment (kDepthShape, kColourShape) a latch block of its own -
+			// both commits write in the same frame slot, and the first one's copies may not have run when the second writes - and the
+			// targets the passes declared, which a commit's LatchedUploads take; anything else is staged.
+			std::array<std::shared_ptr<org::LatchBlock>, 2> latchedBlocks;
+			std::atomic<std::shared_ptr<const std::vector<const org::Buffer*>>> latchedTargets;
 			std::uint64_t frameConstantsAddress = 0;
 			// The main pass's own targets and depth, imported: DCLF draws into them, and the native loop skips the
 			// objects it drew (DrawcallLimitFix's RenderPassImmediately hooks).
@@ -1135,11 +1165,17 @@ namespace DCLF
 			// The latch block the views' values were written to (ShadowResources::latch, replaced when the slots grow): read by
 			// the passes' preparation from here, on whichever thread prepares them.
 			std::shared_ptr<const org::LatchBlock> latch;
+			// The latched copies' sources (ShadowLatchedCopiesPass): the views' blocks at viewBlocksOffset of the latch's slot region
+			// (ShadowLatchLayout::ViewBlockOffset(0)), and the counters' zeros.
+			std::uint32_t viewBlocksOffset = 0;
+			std::shared_ptr<const org::LatchBlock> zeros;
+			// The commit's other per-frame values (CS's SharedData and FeatureData blocks in the constants), latched (LatchedUploads).
+			LatchedList latched;
 
 			bool SameShape(const ShadowFrame& o) const
 			{
 				// The version holds the pipelines the views' buckets bind (ShadowIndirectState::pipelines).
-				return latch == o.latch && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
+				return latch == o.latch && viewBlocksOffset == o.viewBlocksOffset && zeros == o.zeros && latched == o.latched && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && indirect.valid == o.indirect.valid &&
 				       SameHandle(indirect.layout, o.indirect.layout) && indirect.version == o.indirect.version && views == o.views;
 			}
 		};
@@ -1241,6 +1277,12 @@ namespace DCLF
 			// Per frame slot, one BuildDrawsLatch per view slot and the pipeline map rows (latchLayout); a new block when either
 			// grows. The passes read it from the published frame (ShadowFrame::latch).
 			std::shared_ptr<org::LatchBlock> latch;
+			// Zeros, never written: the source the epochs' latched copies zero the views' counters from (a word per count and
+			// per bucket, as many as bucketCountWords; a new one when that grows).
+			std::shared_ptr<org::LatchBlock> zeros;
+			// The shadow commit's latched values (LatchedUploads): their block, and the targets the pass declared (the constants).
+			std::shared_ptr<org::LatchBlock> latchedBlock;
+			std::atomic<std::shared_ptr<const std::vector<const org::Buffer*>>> latchedTargets;
 			rhi::CommandSignaturePtr dispatchSignature;
 			// This frame's views as the engine named them (render thread), for the culling readback's report.
 			struct ViewLabel
@@ -1421,6 +1463,43 @@ namespace DCLF
 			std::uint64_t streamOnly = 0, structural = 0;
 			std::array<std::uint64_t, kChangeCauseCount> byCause{};
 			ParityCounter parity;
+		};
+
+		/**
+		 * @brief A view rasterizer state's buckets (ShadowBucket): the distinct pipelines its map row names, the depth-only class's
+		 * first (DrawPipelines::ShadowDiscards) - a view draws them before the alpha-tested casters, whose fragments then fail
+		 * the depth test sooner - each class in index order; and each key slot's bucket. A pipeline the epoch's state does not
+		 * hold yet (published after it was taken) has no bucket: its key slots draw nothing this frame, as before its index.
+		 */
+		struct RowBuckets
+		{
+			std::vector<std::uint32_t> pipelines;     // by bucket
+			std::vector<std::uint32_t> bucketOfSlot;  // by key slot: its bucket, or Lookups::kNone
+		};
+
+		/**
+		 * @brief The draws the scene's objects can produce (SceneDrawBound), in all and per pipeline slot, kept from the change log:
+		 * a slot the log names has its share taken out and put back, so a reserve reads what changed rather than every slot. One,
+		 * render thread: every epoch's reserve (shadow, occlusion, main) brings it up to date before reading it.
+		 */
+		struct DrawBoundStore
+		{
+			static constexpr std::uint32_t kNoPipeline = ~0u;
+			LogCursor cursor;
+			bool partitioned = false;                 // the tables had a skin partition column (SceneDrawBound reads it only then)
+			std::vector<std::uint32_t> produced;      // by object slot: its draws (a free slot's none)
+			std::vector<std::uint32_t> pipeline;      // by object slot: the pipeline slot they count toward (kNoPipeline: a decal's)
+			std::vector<std::uint64_t> perPipeline;   // by pipeline slot
+			std::uint64_t draws = 0;
+			// Since the last report.
+			std::uint64_t updates = 0, changes = 0, resyncs = 0;
+			ParityCounter parity;
+
+			std::uint32_t Draws() const { return static_cast<std::uint32_t>(std::min<std::uint64_t>(draws, UINT32_MAX)); }
+			std::uint32_t PipelineDraws(std::size_t a_pipeline) const
+			{
+				return a_pipeline < perPipeline.size() ? static_cast<std::uint32_t>(std::min<std::uint64_t>(perPipeline[a_pipeline], UINT32_MAX)) : 0u;
+			}
 		};
 
 		/** @brief A build's view of the object records: the store's, or a full set of its own without one (version 0). */
@@ -1892,11 +1971,10 @@ namespace DCLF
 			GeometryDrawsOut geometries;
 			std::vector<SceneStore::Tables::FaceStream> faceStreams;  // the tables', for the commit's uploads
 			std::uint32_t skippedTexture = 0, skippedPipeline = 0, deferredTextures = 0, deferredPipelines = 0;
-			// The worker's build stages its uploads itself (StageShadowPayload): everything but the arena's view
-			// head, and the records of the first stagedSlots view slots. For the resources it was staged against.
+			// The worker's build stages its uploads itself (StageShadowPayload): everything but the views' blocks and counters,
+			// which the epoch's latched copies write. For the resources it was staged against.
 			std::shared_ptr<org::runtime::StagedUploadBatch> staged;
 			const void* stagedFor = nullptr;
-			std::uint32_t stagedSlots = 0;
 			// Set members a mode could not draw (waiting on a pipeline or a texture): a defect, the engine having withheld them.
 			std::uint32_t setWaiting = 0;
 			std::string setWaitingFirst;  // the first, and why
@@ -1909,7 +1987,6 @@ namespace DCLF
 			{
 				staged.reset();
 				stagedFor = nullptr;
-				stagedSlots = 0;
 				setWaiting = 0;
 				setWaitingFirst.clear();
 				sunExclusion.reset();
@@ -2700,6 +2777,25 @@ namespace DCLF
 			return batch;
 		}
 
+		/**
+		 * @brief The commit's hand-over of a batch a worker staged: its recorded list, which the submission takes as it is with nothing
+		 * recorded on this thread, when the upload service can take it in its place (nothing queued before it, no backing released
+		 * since its recording); otherwise the batch as staged, recorded at the submission as before.
+		 */
+		/** @brief Render thread, at a job's kick: the device its staged batch is recorded with (null without the graph host). */
+		inline rhi::Device RecordingDevice()
+		{
+			auto* host = RenderGraphRuntime::Get().Host();
+			return host ? host->Device() : rhi::Device{};
+		}
+
+		inline void SubmitWorkerBatch(std::shared_ptr<org::runtime::StagedUploadBatch> a_batch)
+		{
+			auto* service = org::runtime::GetActiveUploadService();
+			if (!service->SubmitRecordedUploads(a_batch))
+				service->SubmitStagedUploads(std::move(a_batch));
+		}
+
 		class CommitUploads
 		{
 		public:
@@ -2723,6 +2819,63 @@ namespace DCLF
 
 		private:
 			std::shared_ptr<org::runtime::StagedUploadBatch> batch;
+		};
+
+		/**
+		 * @brief A main commit's uploads of per-frame values (a block written whole, a counter zeroed): a target the epoch's latched
+		 * copies declared (Resources::latchedTargets) gets its bytes in the commit's latch block and a copy in the frame's list, which
+		 * the epoch's first pass records with the ticket, on ORG's host thread; any other goes to a_fallback, staged. A copy is in the
+		 * list only in a frame that writes it, so a target not written keeps what it holds, as with staging.
+		 */
+		class LatchedUploads
+		{
+		public:
+			/** @brief a_block: the segment's latch block (Resources::latchedBlocks), written at a_slot, replaced by a larger one when full. */
+			LatchedUploads(const std::atomic<std::shared_ptr<const std::vector<const org::Buffer*>>>& a_targets, CommitUploads& a_fallback,
+				std::shared_ptr<org::LatchBlock>& a_block, std::uint32_t a_slot, std::uint32_t a_slots) :
+				targets(a_targets.load(std::memory_order_acquire)), fallback(a_fallback), block(a_block), slot(a_slot), slots(a_slots)
+			{}
+
+			void operator()(const std::shared_ptr<org::Buffer>& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
+			{
+				if (!a_data || !a_bytes)
+					return;
+				if (!targets || std::find(targets->begin(), targets->end(), a_target.get()) == targets->end()) {
+					fallback(a_target, a_data, a_bytes, a_offset);
+					return;
+				}
+				const std::size_t at = (used + 15) & ~std::size_t(15);
+				if (!block || at + a_bytes > block->Stride()) {
+					// A larger block, with what this commit has written so far: frames in flight keep the old one (LatchedList::latch).
+					auto grown = std::make_shared<org::LatchBlock>("cs.dclf.latched-copies",
+						static_cast<std::uint32_t>(std::bit_ceil(std::max<std::size_t>(2 * (at + a_bytes), 4096))), slots);
+					if (block && used)
+						std::memcpy(grown->Slot(slot).data(), block->Slot(slot).data(), used);
+					block = std::move(grown);
+				}
+				std::memcpy(block->Slot(slot).data() + at, a_data, a_bytes);
+				used = at + a_bytes;
+				copies.push_back({ a_target.get(), static_cast<std::uint32_t>(at), static_cast<std::uint32_t>(a_bytes), a_offset });
+			}
+
+			/** @brief The frame's list: the copies of what this commit latched, from the block it wrote. */
+			LatchedList Finish()
+			{
+				LatchedList out;
+				if (copies.empty())
+					return out;
+				out.latch = block;
+				out.copies = std::move(copies);
+				return out;
+			}
+
+		private:
+			std::shared_ptr<const std::vector<const org::Buffer*>> targets;
+			CommitUploads& fallback;
+			std::shared_ptr<org::LatchBlock>& block;
+			std::uint32_t slot = 0, slots = 0;
+			std::size_t used = 0;
+			std::vector<LatchedCopy> copies;
 		};
 
 		/**
@@ -2763,7 +2916,13 @@ namespace DCLF
 			std::uint32_t buckets = 0;  // buckets a face's table holds (first, capacity)
 			static constexpr std::uint32_t MapOffset() { return kReflectionFaces * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)); }
 			std::uint32_t TableOffset(std::uint32_t a_face) const { return MapOffset() + slots * 4 + a_face * buckets * 8; }
-			std::uint32_t Bytes() const { return TableOffset(kReflectionFaces); }
+			// A face's values the latched copies take to its buffers (ReflectionLatchedCopiesPass): its per-frame block, its tree LOD
+			// row and its visible list's header.
+			static constexpr std::uint32_t kTreeRowInFace = kReflectionFaceBlockBytes;
+			static constexpr std::uint32_t kTreeHeaderInFace = kTreeRowInFace + static_cast<std::uint32_t>(sizeof(TreeLod::DrawRow));
+			static constexpr std::uint32_t kFaceBytes = (kTreeHeaderInFace + static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader)) + 255u) & ~255u;
+			std::uint32_t FaceOffset(std::uint32_t a_face) const { return ((TableOffset(kReflectionFaces) + 255u) & ~255u) + a_face * kFaceBytes; }
+			std::uint32_t Bytes() const { return FaceOffset(kReflectionFaces); }
 			bool operator==(const ReflectionLatchLayout&) const = default;
 		};
 
@@ -2791,10 +2950,14 @@ namespace DCLF
 			rhi::PipelineHandle tree{};
 			rhi::CommandSignatureHandle treeSignature{};
 			std::uint32_t treeGroups = 0;
+			// The latched copies' sources (ReflectionLatchedCopiesPass): the faces' values at facesOffset of the latch's slot region
+			// (ReflectionLatchLayout::FaceOffset(0)), and the zeros (ReflectionResources::zeros).
+			std::uint32_t facesOffset = 0;
+			std::shared_ptr<const org::LatchBlock> zeros;
 
 			bool SameShape(const ReflectionFrame& o) const
 			{
-				return latch == o.latch && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) &&
+				return latch == o.latch && facesOffset == o.facesOffset && zeros == o.zeros && SameHandle(resourceHeap, o.resourceHeap) && SameHandle(samplerHeap, o.samplerHeap) && SameIndirect(indirect, o.indirect) &&
 				       width == o.width && height == o.height && materialRows == o.materialRows && pipelineRows == o.pipelineRows && sequenceDraws == o.sequenceDraws &&
 				       buckets == o.buckets && push == o.push && SameHandle(tree, o.tree) && SameHandle(treeSignature, o.treeSignature) && treeGroups == o.treeGroups;
 			}
@@ -2810,6 +2973,8 @@ namespace DCLF
 			std::uint32_t sequenceDraws = 0;  // per face
 			std::array<std::shared_ptr<org::Buffer>, kReflectionFaces> bucketCounts;
 			std::uint32_t bucketCountWords = 0;
+			// Zeros, never written: what the latched copies zero the draw count and the faces' bucket counts from.
+			std::shared_ptr<org::LatchBlock> zeros;
 			std::shared_ptr<org::Buffer> faceBlocks;  // kReflectionFaceBlockBytes per face
 			std::uint64_t faceBlocksAddress = 0;
 			// DCLF's depth for the faces, cleared per face, and the engine's cube target, with a render target view per face.
@@ -2834,9 +2999,12 @@ namespace DCLF
 	// What was one translation unit's anonymous namespace: its names resolve here as they did there.
 	using namespace Draws;
 
-	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool);
-	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::span<const std::shared_ptr<org::Buffer>> a_counts,
-		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool);
+	// a_device: records the batch's copies on the worker as well (StagedUploadBatch::Record), so the commit hands the list over
+	// as it is (SubmitWorkerBatch); null leaves them to be recorded at the submission.
+	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
+		rhi::Device a_device);
+	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
+		rhi::Device a_device);
 
 	struct IndirectDraws::Impl
 	{
@@ -2920,9 +3088,25 @@ namespace DCLF
 		ShadowPayload shadowProbePayload;
 		/**
 		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked
-		 * objects can produce (SceneDrawBound). A bound over the device's max sequence count, or over the sort's rank field,
+		 * objects can produce (SceneDrawBound, kept in drawBound). A bound over the device's max sequence count, or over the sort's rank field,
 		 * is a hard failure.
 		 */
+		/**
+		 * @brief Per view rasterizer state, its map row's buckets (BucketsOfRow), kept while what they are made from holds: the
+		 * lookups (a map row changes only with their shadow generation) and the published shadow pipeline set (its count and
+		 * classes). Render thread: the shadow and occlusion epochs' views.
+		 */
+		struct
+		{
+			std::uint64_t lookups = 0;
+			std::uint32_t generation = 0;
+			std::shared_ptr<const void> version;
+			std::vector<std::optional<RowBuckets>> rows;
+		} shadowRowBuckets;
+		const RowBuckets& ShadowRowBuckets(std::uint32_t a_state, const Lookups& a_lookups, const ShadowIndirectState& a_indirect);
+		DrawBoundStore drawBound;
+		/** @brief drawBound brought up to date with a_tables' change log (render thread, the reserves). */
+		void UpdateDrawBound(const SceneStore::Tables& a_tables);
 		void ReserveMainSequences(const SceneStore::Tables& a_tables);
 		void ReserveShadowSequences(const SceneStore::Tables& a_tables, std::uint32_t a_slots, std::uint32_t a_first = 0);
 		/** @brief Grows the shadow material rows' table to what the last build wanted (render thread, before the inputs are taken). */
@@ -3045,6 +3229,32 @@ namespace DCLF
 		{
 			std::size_t objects = 0, boneRows = 0, objectBytes = 0, boneRowsSent = 0;
 		};
+		/**
+		 * @brief The streams' job (KickSceneStreams): the object records and bone rows the tables hold, updated and staged on the
+		 * worker - with the copies recorded there too - while nothing writes the tables (after the placements' join, while the
+		 * engine draws the shadow maps; after RefreshFrameConstants). The next CommitSceneStreams submits its batch when the buffers
+		 * still hold what it started from, takes its versions as held, and sends only what changed since. Otherwise the batch is
+		 * dropped and the commit sends everything since the held versions, the job's changes included (the stores keep them).
+		 */
+		struct StreamsJob
+		{
+			AsyncWorker::JobHandle handle;
+			const SceneBuffers* scene = nullptr;
+			TablesHeld from;                          // what the buffers held at the kick
+			std::uint32_t tablesGeneration = 0;
+			std::uint64_t sceneGeneration = 0;
+			// The job's result: its batch and the versions it brings the buffers to (0: that stream unchanged).
+			std::shared_ptr<org::runtime::StagedUploadBatch> batch;
+			std::uint64_t objects = 0, bones = 0;
+			bool staged = false;
+			std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>> pool;
+			// Since the last report: kicks, batches submitted, batches dropped.
+			std::uint64_t kicked = 0, used = 0, dropped = 0;
+		} streamsJob;
+		/** @brief Render thread, where nothing writes the tables until the next commit: the streams' job (StreamsJob). */
+		void KickSceneStreams();
+		/** @brief Render thread: the streams' job, waited for or cancelled, and its result dropped. */
+		void DropSceneStreams();
 		SceneStreams CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame, std::uint32_t a_generation,
 			CommitUploads& a_uploads);
 		GeometryStore* SceneGeometries() { return &geometryStore; }

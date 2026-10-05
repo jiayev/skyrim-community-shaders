@@ -312,6 +312,8 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	DCLF::IndirectDraws::Get().BeforePlacementJoin();
 	DCLF::SceneStore::Get().JoinPlacements();
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
+	// The tables hold still from here to the accumulate phase: the streams the shadow commit uploads, staged on the worker meanwhile.
+	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().Rebuild();
@@ -710,6 +712,9 @@ void DrawcallLimitFix::Prepass()
 	// The camera-dependent half of the per-frame constants, now that the main camera's shadow state is
 	// current (BuildFrame ran at EarlyPrepass, where it still belonged to the shadow-map camera).
 	store.RefreshFrameConstants();
+	// RefreshFrameConstants was the tables' last writer before the colour commit: the streams it changed, staged meanwhile. Before
+	// the colour build, whose staging is against the capacities this reserves.
+	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The colour epoch's build, on the worker, from here to the epoch (CS_DCLF_ASYNC).
 	DCLF::IndirectDraws::Get().KickColourBuild();
 

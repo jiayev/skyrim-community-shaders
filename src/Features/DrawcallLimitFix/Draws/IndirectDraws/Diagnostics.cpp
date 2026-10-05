@@ -169,6 +169,13 @@ namespace DCLF
 			k.builds = k.entriesWritten = k.rowsWritten = k.resyncs = 0;
 			k.parity.Reset();
 		}
+		if (auto& bound = impl->drawBound; bound.updates) {
+			text += fmt::format("[DCLF] scene draw bound: {} updates, {:.1f} slots changed an update, {} draws over {} slots, {} resyncs; parity {} checked, {} differ{}\n",
+				bound.updates, static_cast<double>(bound.changes) / bound.updates, bound.draws, bound.produced.size(), bound.resyncs, bound.parity.checks,
+				bound.parity.mismatches, bound.parity.Verdict(true));
+			bound.updates = bound.changes = bound.resyncs = 0;
+			bound.parity.Reset();
+		}
 		if (auto* store = &impl->boneStore; store->updates) {
 			text += fmt::format("[DCLF] persistent bone rows: {} updates, {} resyncs, {} capacity rows; parity {} checked, {} differ{}\n", store->updates, store->resyncs,
 				store->capacity, store->parity.checks, store->parity.mismatches, store->parity.Verdict());

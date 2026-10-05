@@ -534,9 +534,9 @@ struct RenderGraphRuntime::Impl
 		}
 		if (asyncEpochs) {
 			const auto async = host->TakeAsyncStats();
-			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads; "
+			logger::info("[ORG] Async epochs: {} submitted, {} waited for their ticket, {} prepared again after the feature's inputs changed, {} carried uploads ({} lists recorded ahead by their producers); "
 						 "{} completions left to the host's next GPU wake-up instead of a signal; {} backing changes, {} of them waited out a ticket preparation, {} preparations held off for one, {} tickets stale only by a changed backing",
-				async.submitted, async.waited, async.stale, async.uploads, async.wakesSkipped, async.backingMutations, async.backingWaits,
+				async.submitted, async.waited, async.stale, async.uploads, async.recordedUploadLists, async.wakesSkipped, async.backingMutations, async.backingWaits,
 				async.preparationWaits, async.staleBacking);
 		}
 		epochCount = 0;

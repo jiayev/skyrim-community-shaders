@@ -248,14 +248,14 @@ namespace DCLF
 		std::uint32_t drawn = 0;
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::Reflection, [&](org::RenderGraph&) {
 			resources->frame.store(nullptr, std::memory_order_release);
-			CommitUploads uploads(impl->commitStagedPool);
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 			const auto& layout = resources->latchLayout;
 			const auto region = static_cast<std::uint32_t>(resources->latch->Offset(latchSlot));
 			if (slots)
 				resources->latch->Write(latchSlot, ReflectionLatchLayout::MapOffset(), std::as_bytes(std::span(map)));
-			std::vector<std::uint32_t> table, zeros(std::max<std::size_t>(buckets.size(), 1), 0u);
-			uploads(resources->count, kZeroCounts, sizeof(kZeroCounts), 0);
+			// Every value the faces' buffers take goes into the latch; the epoch's latched copies (ReflectionLatchedCopiesPass) take
+			// them there and zero the counters, so this commit records no copy.
+			std::vector<std::uint32_t> table;
 			// Tree LOD's row as the last depth commit uploaded it, its texture bound again for this execution.
 			TreeLod::DrawRow treeRow = scene.treeLodRow;
 			const bool treeRowBound = trees && reflection.treeOwned && treeRow.shapeSlots && TreeLodTextureBinding(treeRow, *owners);
@@ -280,18 +280,18 @@ namespace DCLF
 				if (!table.empty())
 					resources->latch->Write(latchSlot, layout.TableOffset(f), std::as_bytes(std::span(table)));
 				resources->latch->WriteValue(latchSlot, f * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
-				uploads(resources->bucketCounts[f], zeros.data(), zeros.size() * sizeof(std::uint32_t), 0);
+				// A face not captured draws nothing (no inputs): its block is copied as the latch holds it.
 				if (face.captured)
-					uploads(resources->faceBlocks, face.perFrame.data(), face.perFrameBytes, std::uint64_t(f) * kReflectionFaceBlockBytes);
+					resources->latch->Write(latchSlot, layout.FaceOffset(f), std::span(face.perFrame.data(), face.perFrameBytes));
 				if (trees) {
 					// The face's row (its own list), naming no slot when the face is not drawn or the faces' tree LOD is the engine's.
 					TreeLod::DrawRow row = treeRow;
 					row.visible = resources->treeVisibleAddress[f] + TreeLod::kVisibleHeaderWords * sizeof(std::uint32_t);
 					row.shapeSlots = face.captured && treeRowBound ? treeRow.shapeSlots : 0u;
-					uploads(resources->treeRows[f], &row, sizeof(row), 0);
+					resources->latch->WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeRowInFace, row);
 					TreeLod::VisibleHeader header{};
 					header.phaseOne[0] = header.phaseTwo[0] = header.colour[0] = std::max(row.maxIndices, 1u);
-					uploads(resources->treeVisible[f], &header, sizeof(header), 0);
+					resources->latch->WriteValue(latchSlot, layout.FaceOffset(f) + ReflectionLatchLayout::kTreeHeaderInFace, header);
 				}
 				drawn += face.captured ? 1u : 0u;
 			}
@@ -301,6 +301,8 @@ namespace DCLF
 			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
 			frame->indirect = indirect;
 			frame->latch = resources->latch;
+			frame->facesOffset = layout.FaceOffset(0);
+			frame->zeros = resources->zeros;
 			frame->width = resources->width;
 			frame->height = resources->height;
 			frame->materialRows = main->materialRows.address;
