@@ -147,6 +147,9 @@ namespace DCLF
 		ankerl::unordered_dense::map<ID3D11ShaderResourceView*, std::shared_ptr<const void>> shadowTextureOwners;
 		ankerl::unordered_dense::set<ID3D11ShaderResourceView*> pendingShadowTextures;
 		std::uint32_t pipelineSetGeneration = ~0u;
+		// What the last shadow refresh that found every shadow pipeline was made for (RefreshShadowLookups), empty when one is
+		// still missing: the same again is skipped.
+		std::vector<std::uint64_t> shadowPipelinesResolvedFor;
 		// The builds' kept bindings (IndirectDraws' PersistentBindings) key on versions rather than on the entries: a
 		// pipeline's and a material's own (Pipeline::version, Material::version), and this one for the entries every
 		// record reads (the null texture, the samplers, the projected textures). Unique across all of them.
@@ -156,8 +159,16 @@ namespace DCLF
 		std::uint32_t generation = 0;
 		std::uint32_t shadowGeneration = 0;
 		bool shadowRefreshDue = true;
+		// Which lookups these are: a reset makes new ones, whose generations start again, so what is kept against a generation
+		// (IndirectDraws' shadow row buckets) keys on this too.
+		std::uint64_t instance = NextInstance();
 
 		Lookups() { samplers.fill(kNone); }
+		static std::uint64_t NextInstance()
+		{
+			static std::atomic<std::uint64_t> next{ 0 };
+			return next.fetch_add(1, std::memory_order_relaxed) + 1;
+		}
 
 		static std::uint32_t SamplerIndex(std::uint32_t a_addressMode, std::uint32_t a_filterMode)
 		{

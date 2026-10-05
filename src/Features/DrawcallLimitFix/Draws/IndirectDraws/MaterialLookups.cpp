@@ -316,6 +316,30 @@ namespace DCLF::Draws
 		std::array<std::vector<std::uint32_t>, kShadowModeCount> modeStates;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			modeStates[m] = a_modeRasterStates[m].All();
+		// What the pipelines are found for: the pipeline set, each used mode's keys, states and format. A refresh for the same
+		// as the last one, which found every pipeline, would find the same ones again (a found pipeline stays in the set until
+		// the set is recreated, a new generation): it is skipped, and a frame pays only when a key, a state or the set changes.
+		std::vector<std::uint64_t> resolvedFor;
+		resolvedFor.push_back(DrawPipelines::Get().Generation());
+		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
+			if (!a_modeUsed[m])
+				continue;
+			const auto& keys = IsOcclusionMode(m) ? a_tables.occlusionKeysUsed[OcclusionOfMode(m)] : a_tables.shadowKeysUsed;
+			resolvedFor.push_back((std::uint64_t(m) << 32) | (IsOcclusionMode(m) ? a_occlusionFormats[OcclusionOfMode(m)] : a_dsvFormat));
+			resolvedFor.push_back((std::uint64_t(keys.size()) << 32) | modeStates[m].size());
+			for (const auto& key : keys) {
+				resolvedFor.push_back((std::uint64_t(key.technique) << 32) | key.rasterFlags);
+				resolvedFor.push_back(key.vertexLayout);
+			}
+			for (const std::uint32_t state : modeStates[m])
+				resolvedFor.push_back(state);
+		}
+		if (resolvedFor == a_lookups.shadowPipelinesResolvedFor) {
+			TracyCZoneEnd(shadowPipelinesZone);
+			a_lookups.shadowRefreshDue = false;
+			return;
+		}
+		bool resolved = true;
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m) {
 			if (!a_modeUsed[m])
 				continue;
@@ -351,6 +375,7 @@ namespace DCLF::Draws
 						return program ? RequestShadowPipeline(viewKey, *program, format, key, occlusion) : DrawPipelines::kNotReady;
 					}();
 					const std::uint32_t index = set == DrawPipelines::kNotReady ? Lookups::kNone : set;
+					resolved &= set != DrawPipelines::kNotReady;
 					auto [it, inserted] = a_lookups.shadowPipelines.try_emplace(viewKey, index);
 					if (inserted || it->second != index) {
 						++a_lookups.shadowGeneration;
@@ -366,6 +391,8 @@ namespace DCLF::Draws
 			}
 		}
 		TracyCZoneEnd(shadowPipelinesZone);
+		// A pipeline not found yet (its program or its build still pending, or rejected) is asked for again next refresh.
+		a_lookups.shadowPipelinesResolvedFor = resolved ? std::move(resolvedFor) : std::vector<std::uint64_t>{};
 		a_lookups.shadowRefreshDue = false;
 	}
 }

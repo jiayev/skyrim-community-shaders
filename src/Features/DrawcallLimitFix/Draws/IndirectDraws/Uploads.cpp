@@ -56,7 +56,8 @@ namespace DCLF
 
 	// On the worker, after the build: the payload's uploads into a staged batch (a released one from the job's
 	// pool, or a new one), so the commit copies nothing.
-	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool)
+	void StageMainPayload(MainPayload& a_payload, const Resources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
+		rhi::Device a_device)
 	{
 		ZoneScopedN("CS.DCLF.StageMainPayload");
 		auto batch = AcquireStagedBatch(a_pool);
@@ -66,15 +67,16 @@ namespace DCLF
 		a_payload.stagedFor = &a_resources;
 		a_payload.stagedRowsGeneration = RowsGeneration(a_resources);
 		a_payload.stagedSceneGeneration = a_resources.scene->generation;
+		if (a_device)
+			batch->Record(a_device);
 		a_payload.staged = std::move(batch);
 	}
 
 	// On the worker, after the shadow build: what the commit would upload that does not depend on the views it
-	// captures - the shared tables, the material rows, the used modes' inputs, the arena (the frame record and the blocks) -
-	// and the zeroed counters of the views the job expects (a_counts, the first views' slots in order). The commit uploads the
-	// views' blocks, and the counters of any view past them, itself.
-	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::span<const std::shared_ptr<org::Buffer>> a_counts,
-		std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool)
+	// captures - the shared tables, the material rows, the used modes' inputs, the arena (the frame record and the blocks). The
+	// views' blocks and counters are the epoch's latched copies (ShadowLatchedCopiesPass).
+	void StageShadowPayload(ShadowPayload& a_payload, const ShadowResources& a_resources, std::vector<std::shared_ptr<org::runtime::StagedUploadBatch>>& a_pool,
+		rhi::Device a_device)
 	{
 		ZoneScopedN("CS.DCLF.StageShadowPayload");
 		using org::runtime::UploadTarget;
@@ -99,17 +101,99 @@ namespace DCLF
 		});
 		if (const auto& bytes = a_payload.arena.Bytes(); !bytes.empty())
 			batch->Stage(UploadTarget::FromShared(a_resources.constants), 0, bytes.data(), bytes.size());
-		for (const auto& count : a_counts)
-			batch->Stage(UploadTarget::FromShared(count), 0, kZeroCounts, sizeof(kZeroCounts));
-		a_payload.stagedSlots = static_cast<std::uint32_t>(a_counts.size());
 		a_payload.stagedFor = &a_resources;
+		if (a_device)
+			batch->Record(a_device);
 		a_payload.staged = std::move(batch);
+	}
+
+	void IndirectDraws::Impl::KickSceneStreams()
+	{
+		ZoneScopedN("CS.DCLF.KickSceneStreams");
+		DropSceneStreams();
+		// The persistent parity checks what this thread uploads; the job's batch would bypass it.
+		if (!AsyncEnabled() || PersistentParityEnabled() || !resources || !resources->scene)
+			return;
+		auto& store = SceneStore::Get();
+		const auto& tables = store.GetTables();
+		if (tables.objects.empty())
+			return;
+		// The capacities the job stages against, grown now (the first reserve of the frame does the growing).
+		ReserveSceneTables(tables);
+		auto& job = streamsJob;
+		const auto& sceneBuffers = *resources->scene;
+		job.scene = &sceneBuffers;
+		job.from = sceneBuffers.held;
+		job.tablesGeneration = store.GetTablesGeneration();
+		job.sceneGeneration = sceneBuffers.generation;
+		job.objects = job.bones = 0;
+		job.staged = false;
+		job.batch = AcquireStagedBatch(job.pool);
+		++job.kicked;
+		const rhi::Device device = RecordingDevice();
+		job.handle = AsyncWorker::Get().Submit("streams", [result = &job, batch = job.batch, objectsBuffer = sceneBuffers.objects, bonesBuffer = sceneBuffers.bones,
+															objectCapacity = sceneBuffers.objectCapacity, boneRows = sceneBuffers.boneRows, tables = &tables, objects = SceneObjects(),
+															bonesStore = SceneBones(), from = job.from, generation = job.tablesGeneration, frame = store.GetFrame(), device](std::stop_token) {
+			ZoneScopedN("CS.DCLF.StageSceneStreams");
+			using org::runtime::UploadTarget;
+			ObjectRecordsOut records;
+			UpdateObjectRecords(objects, from.objects, *tables, generation, frame, records);
+			BonesOut bones;
+			UpdateBones(bonesStore, from.bones, *tables, generation, bones);
+			// Past a buffer: the commit's own update reports it (CheckSceneCapacity).
+			if (records.Count() > objectCapacity || bones.Rows() > boneRows)
+				return;
+			records.Emit(from.objects, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				batch->Stage(UploadTarget::FromShared(objectsBuffer), a_offset, a_data, a_bytes);
+			});
+			EmitBones(bones, from.bones, nullptr, [&](const void* a_data, std::size_t a_bytes, std::size_t a_offset) {
+				batch->Stage(UploadTarget::FromShared(bonesBuffer), a_offset, a_data, a_bytes);
+			});
+			if (device && !batch->Entries().empty())
+				batch->Record(device);
+			result->objects = records.Version();
+			result->bones = bones.Version();
+			result->staged = true;
+		});
+	}
+
+	void IndirectDraws::Impl::DropSceneStreams()
+	{
+		auto& job = streamsJob;
+		if (job.handle) {
+			AsyncWorker::Get().Cancel(job.handle);
+			job.handle = {};
+			++job.dropped;
+		}
+		job.batch.reset();
+		job.staged = false;
 	}
 
 	IndirectDraws::Impl::SceneStreams IndirectDraws::Impl::CommitSceneStreams(SceneBuffers& a_scene, const SceneStore::Tables& a_tables, std::uint32_t a_frame,
 		std::uint32_t a_generation, CommitUploads& a_uploads)
 	{
 		ZoneScopedN("CS.DCLF.CommitSceneStreams");
+		// The streams' job, if one is out: its batch first (ahead of this commit's own, submitted when it ends), when the buffers
+		// still hold what it started from.
+		if (auto& job = streamsJob; job.handle) {
+			ZoneScopedN("CS.DCLF.CommitSceneStreams.JoinJob");
+			const auto joined = JoinJob(job.handle);
+			job.handle = {};
+			if (joined == AsyncWorker::WaitResult::Done && job.staged && job.scene == &a_scene && a_scene.held.objects == job.from.objects &&
+				a_scene.held.bones == job.from.bones && job.tablesGeneration == a_generation && job.sceneGeneration == a_scene.generation) {
+				if (!job.batch->Entries().empty())
+					SubmitWorkerBatch(std::move(job.batch));
+				if (job.objects)
+					a_scene.held.objects = job.objects;
+				if (job.bones)
+					a_scene.held.bones = job.bones;
+				++job.used;
+			} else {
+				++job.dropped;
+			}
+			job.batch.reset();
+			job.staged = false;
+		}
 		SceneStreams sent;
 		ObjectRecordsOut objects;
 		UpdateObjectRecords(SceneObjects(), a_scene.held.objects, a_tables, a_generation, a_frame, objects);
@@ -152,6 +236,11 @@ namespace DCLF
 		auto& mirror = ConstantMirror::Get();
 		const bool replayVertexInputs = !depthOnly && prepassInputs;
 		CommitUploads uploads(commitStagedPool);
+		// The per-frame values (the frame constants, the counters, the frame buffers' copies, tree LOD's row): copied from the
+		// latch by the epoch's first pass, so this commit records no copy for them.
+		const std::size_t latchedShape = a_payload.inputs.depthOnly ? kDepthShape : kColourShape;
+		LatchedUploads latched(a_resources->latchedTargets, uploads, a_resources->latchedBlocks[latchedShape], RenderGraphRuntime::Get().Host()->CurrentFrameSlot(),
+			RenderGraphRuntime::Get().Host()->FrameSlots());
 		auto lap = [&, last = std::chrono::steady_clock::now()](std::size_t a_part) mutable {
 			const auto now = std::chrono::steady_clock::now();
 			a_stats.commitUs[a_part] += std::chrono::duration<double, std::micro>(now - last).count();
@@ -202,7 +291,7 @@ namespace DCLF
 						frameBuffer.elements, frameBuffer.stride, contents.size(), unfilled[frameBuffer.textureRegister]);
 				continue;  // not written since it is watched
 			}
-			uploads(frameBuffer.copy, contents.data() + offset, bytes, 0);
+			latched(frameBuffer.copy, contents.data() + offset, bytes, 0);
 			frameTextures[frameBuffer.textureRegister] = frameBuffer.copy->GetSRVInfo(0).slot.index;
 		}
 		// The frame textures the drawn pipelines read but the commit could not resolve: they read zero, as an unbound view does
@@ -259,30 +348,31 @@ namespace DCLF
 			frameRecord.textures[kObjectBufferRegister] = in.addresses.objectsIndex;
 			frameRecord.textures[kBonesBufferRegister] = in.addresses.bonesIndex;
 			frameRecord.textures[kTreeWindRegister] = in.addresses.treeWindIndex;
-			uploads(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
+			latched(a_resources->frameConstants, &frameRecord, sizeof(frameRecord), std::uint64_t(kFrameSlotRecord) * kFrameSlotBytes);
 		}
 		lap(2);
 
 		// The frame slots: each block into its slot, and the zeroed light block every draw's b3 reads.
 		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
 			if (!a_blocks.vs[slot].empty())
-				uploads(a_resources->frameConstants, a_blocks.vs[slot].data(), a_blocks.vs[slot].size(), FrameSlotOffset(false, slot));
+				latched(a_resources->frameConstants, a_blocks.vs[slot].data(), a_blocks.vs[slot].size(), FrameSlotOffset(false, slot));
 			if (!a_blocks.ps[slot].empty())
-				uploads(a_resources->frameConstants, a_blocks.ps[slot].data(), a_blocks.ps[slot].size(), FrameSlotOffset(true, slot));
+				latched(a_resources->frameConstants, a_blocks.ps[slot].data(), a_blocks.ps[slot].size(), FrameSlotOffset(true, slot));
 		}
 		{
 			static const std::array<std::uint32_t, kStrictLightDataBytes / 4> zeroLight{};
-			uploads(a_resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
+			latched(a_resources->frameConstants, zeroLight.data(), sizeof(zeroLight), std::uint64_t(kFrameSlotSharedLight) * kFrameSlotBytes);
 		}
-		// The frame lighting, only when it changed (RefreshFrameConstants versions it).
-		if (const auto& lightingTables = a_store.GetTables(); a_resources->frameLightingUploaded != lightingTables.frameLightingVersion) {
-			uploads(a_resources->frameConstants, lightingTables.frameLighting.data(), sizeof(lightingTables.frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
+		// The frame lighting, every commit: a latched copy written only when it changed would change the frame's shape with it.
+		{
+			const auto& lightingTables = a_store.GetTables();
+			latched(a_resources->frameConstants, lightingTables.frameLighting.data(), sizeof(lightingTables.frameLighting), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes);
 			a_resources->frameLightingUploaded = lightingTables.frameLightingVersion;
 		}
 		// The LOD fades' frame inputs, after the frame lighting in the same block (PS b13, c6): this frame's camera, every
 		// epoch (the draw fades specular and envmap by distance, LodFadeFrame).
 		const LodFadeFrame lodFadeFrame = SampleLodFadeFrame();
-		uploads(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
+		latched(a_resources->frameConstants, &lodFadeFrame, sizeof(lodFadeFrame), std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting));
 		// CS_DCLF_FOLIAGE_PARITY: the colour epoch's buffers (by its parity) and its tag, after the LOD fades in the same block (PS
 		// b13, c14: DCLFFoliageParity), and the compare pass's counters zeroed.
 		// The Z-prepass's stages read the owners' index and the size from it too, as the colour commit before them left it.
@@ -291,7 +381,7 @@ namespace DCLF
 			const std::uint32_t words[8] = { static_cast<std::uint32_t>(foliage->idsAddress[h]), static_cast<std::uint32_t>(foliage->idsAddress[h] >> 32),
 				static_cast<std::uint32_t>(foliage->coloursAddress[h]), static_cast<std::uint32_t>(foliage->coloursAddress[h] >> 32), foliage->width, foliage->height,
 				epoch & 0xFFu, foliage->ownersIndex };
-			uploads(a_resources->frameConstants, words, sizeof(words),
+			latched(a_resources->frameConstants, words, sizeof(words),
 				std::uint64_t(kFrameSlotLighting) * kFrameSlotBytes + sizeof(FrameLighting) + sizeof(LodFadeFrame));
 			static const std::array<std::uint32_t, kFoliageCounters> zeros{};
 			uploads(foliage->results, zeros.data(), sizeof(zeros), 0);
@@ -313,15 +403,15 @@ namespace DCLF
 		const bool staged = a_payload.staged && a_payload.stagedFor == a_resources.get() && a_payload.stagedRowsGeneration == RowsGeneration(*a_resources) &&
 		                    a_payload.stagedSceneGeneration == a_resources->scene->generation;
 		if (staged)
-			org::runtime::GetActiveUploadService()->SubmitStagedUploads(std::move(a_payload.staged));
+			SubmitWorkerBatch(std::move(a_payload.staged));
 		UploadFaceStreams(a_payload.faceStreams, a_resources->scene->facePositions, a_resources->scene->faceUploaded, uploads);
 		ZeroFrameAheadOutputs(*a_resources->scene, uploads);
-		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads);
+		UploadTrees(a_store.GetTables(), a_store.GetFrame(), *a_resources->scene, uploads, depthOnly);
 		// Tree LOD (dclf-lod.md, "Tree LOD: the draws"): the mirror's changes, the draw row and the list's arguments, for the depth
 		// epoch's cull and both passes' draws; it draws while its toggle is on and its programs and pipelines are built.
 		if (depthOnly && a_resources->scene->treeLodCull) {
 			auto& sceneBuffers = *a_resources->scene;
-			UploadTreeLod(a_store.TreeLodMirror(), sceneBuffers, uploads, a_bindingOwners, treeLodOwned);
+			UploadTreeLod(a_store.TreeLodMirror(), sceneBuffers, latched, a_bindingOwners, treeLodOwned);
 			// The registrations withheld the engine's passes on the frame's decision: a commit that cannot draw leaves a hole.
 			if (treeLodOwned && !sceneBuffers.treeLodReady.load(std::memory_order_acquire) && treeLodMissed++ < 8)
 				logger::warn("[DCLF] tree LOD: frame {} withheld the engine's passes but the depth commit could not draw (tables {} of {} shape slots)", frameNumber,
@@ -353,10 +443,18 @@ namespace DCLF
 					for (const auto* node : nodes)
 						if (const auto it = index.find(node); it != index.end() && it->second < buffers.fadeRootCapacity)
 							++counts[it->second];
+				auto& animatedWords = buffers.fadeAnimatedMirror;
+				if (animatedWords.size() < buffers.fadeRootCapacity)
+					animatedWords.resize(buffers.fadeRootCapacity, 0u);
+				std::uint32_t lowest = ~0u, highest = 0;
 				for (const auto& [root, count] : counts) {
-					const std::uint32_t word = FadeAnimatedWord(a_store.GetFrame(), count);
-					uploads(buffers.fadeAnimated, &word, sizeof(word), std::uint64_t(root) * sizeof(word));
+					animatedWords[root] = FadeAnimatedWord(a_store.GetFrame(), count);
+					lowest = (std::min)(lowest, root);
+					highest = (std::max)(highest, root);
 				}
+				if (lowest <= highest)
+					uploads(buffers.fadeAnimated, animatedWords.data() + lowest, std::size_t(highest - lowest + 1) * sizeof(std::uint32_t),
+						std::uint64_t(lowest) * sizeof(std::uint32_t));
 				if (anim.varied) {
 					static std::uint32_t reported = 0;
 					if (reported++ < 5)
@@ -384,7 +482,7 @@ namespace DCLF
 		// whole buffer again here would erase the phase 1 and phase 2 numbers before anything read them
 		// - they are written earlier in the same frame.
 		const std::size_t zeroBytes = depthOnly ? sizeof(kZeroCounts) : sizeof(std::uint32_t);
-		uploads(a_resources->count, kZeroCounts, zeroBytes, 0);
+		latched(a_resources->count, kZeroCounts, zeroBytes, 0);
 		// The sort's counts start at zero; from then on the scan that reads them clears them.
 		if (a_resources->sort)
 			a_resources->sort->ZeroCountsOnce(uploads);
@@ -398,8 +496,8 @@ namespace DCLF
 		// colour segment only, which is the one that submits decals.
 		if (!depthOnly) {
 			decalWords = { a_payload.decalCount[0], a_payload.decalCount[1], 0u, 0u, a_payload.decalCount[2] };
-			uploads(a_resources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
-			uploads(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
+			latched(a_resources->count, decalWords.data(), 4 * sizeof(std::uint32_t), kCountDecalGroupWord * sizeof(std::uint32_t));
+			latched(a_resources->count, &decalWords[4], sizeof(std::uint32_t), kCountDecalLayerWord * sizeof(std::uint32_t));
 		}
 		if (!staged)
 			UploadMainPayload(a_payload, *a_resources, uploads);
@@ -715,7 +813,7 @@ namespace DCLF
 				a_resources->latch->Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(zBucketTable.data() + calls * 2, calls)));
 				zBucketZeros.resize(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
 				for (const auto& counts : a_resources->zBucketCounts)
-					uploads(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
+					latched(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
 			}
 			const auto region = static_cast<std::uint32_t>(a_resources->latch->Offset(latchSlot));
 			latch.bucketTableOffset = region + layout.BucketTableOffset();
@@ -772,6 +870,7 @@ namespace DCLF
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
 
+		frame->latched = latched.Finish();
 		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations);
 		lap(6);
 		return true;

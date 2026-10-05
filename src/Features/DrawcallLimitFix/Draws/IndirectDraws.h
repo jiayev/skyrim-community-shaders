@@ -161,6 +161,14 @@ namespace DCLF
 		 * is waited for up to the async budget, or dropped.
 		 */
 		void BeforePlacementJoin();
+		/**
+		 * @brief Render thread, where nothing writes the tables until the next epoch's commit (after the placements' join; after
+		 * RefreshFrameConstants): the object records and bone rows staged and recorded on the worker, which that commit submits
+		 * instead of uploading them itself (Impl::StreamsJob). CS_DCLF_ASYNC.
+		 */
+		void KickSceneStreams();
+		/** @brief Since the last call: the streams' jobs kicked, taken by a commit, and dropped. */
+		std::array<std::uint64_t, 3> TakeStreamsStats();
 
 		/** @brief At Present: a job the frame never joined is dropped and counted (Stats::Async::leaked). */
 		void EndFrame();
