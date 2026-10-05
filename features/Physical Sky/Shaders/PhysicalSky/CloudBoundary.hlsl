@@ -14,6 +14,8 @@ cbuffer CloudBoundaryParameters : register(b0)
 	float bottomZ;
 	uint gridCellCount;
 	uint cloudFrameIndex;
+	float4 localRect;
+	float4 localAltitude;
 };
 
 Texture2D<float2> CloudHeight : register(t0);
@@ -47,6 +49,11 @@ BoundaryVertex vertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_Inst
 		const float thicknessScale = max(0.2, pow(saturate(max(coverage, upstream)), 0.1));
 		altitude += heightRange * thicknessScale * (heights.y - lower);
 	}
+	// Enclose complete neighboring cells so small authored patches cannot fall between vertices.
+	const float2 localUv = (worldXY * GAME_UNIT_TO_M - localRect.xy) * localRect.zw;
+	const float2 margin = gridOriginSpacing.zw * GAME_UNIT_TO_M * localRect.zw;
+	if (localAltitude.z > 0.0 && all(localUv >= -margin) && all(localUv <= 1.0 + margin))
+		altitude = instanceId == 0u ? max(shearAltitude.w, (localAltitude.x + localAltitude.y) / GAME_UNIT_TO_M) : min(shearAltitude.z, localAltitude.x / GAME_UNIT_TO_M);
 	const float2 relativeXY = worldXY - FrameBuffer::CameraPosAdjust.xy;
 	// Use the same spherical altitude as density sampling, without subtracting two large radii.
 	const float heightNumerator = altitude * (2.0 * planetRadius + altitude) - dot(relativeXY, relativeXY);

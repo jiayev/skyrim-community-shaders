@@ -7,13 +7,18 @@ struct TextureManager
 	std::string name;
 	uint64_t revision = 0;
 	ankerl::unordered_dense::map<std::string, winrt::com_ptr<ID3D11ShaderResourceView>> texList;
+	ankerl::unordered_dense::map<std::string, HRESULT> loadResults;
 
 	bool LoadTexture(std::filesystem::path path);
+	void EnsureLoaded(const std::string& path);
+	void Reload();
+	static std::string Key(const std::filesystem::path& path);
 
 	inline ID3D11ShaderResourceView* Query(const std::string& path) const
 	{
-		if (texList.contains(path))
-			return texList.at(path).get();
+		const auto key = Key(std::filesystem::u8path(path));
+		if (texList.contains(key))
+			return texList.at(key).get();
 		return nullptr;
 	}
 
@@ -21,6 +26,7 @@ struct TextureManager
 	{
 		std::vector<std::string> retval;
 		std::ranges::transform(texList, std::back_inserter(retval), [](auto& pair) { return pair.first; });
+		std::ranges::sort(retval);
 		return retval;
 	}
 
@@ -116,11 +122,33 @@ enum class NdfType : uint32_t
 	Procedural = 1
 };
 
+struct LocalNdfInstance
+{
+	std::string id;
+	std::string name = "Cloud";
+	std::string asset;
+	std::string worldspace;
+	bool enabled = true;
+	float2 center = {};
+	float2 size = { 8000.f, 8000.f };
+	float rotation = 0.f;
+	float altitude = 256.f;
+	float heightSpan = 1792.f;
+	float strength = 1.f;
+	float modelingWeight = 1.f;
+	float heightWeight = 1.f;
+	float feather = 200.f;
+	bool modelingAlpha = true;
+	int priority = 0;
+};
+
 struct NdfSettings
 {
 	NdfType type = NdfType::Procedural;
 	TexNdfSettings texture;
 	ProceduralNdfSettings procedural;
+	std::vector<LocalNdfInstance> instances;
+	float localTexelSize = 32.f;
 };
 
 struct NdfTextureSet
@@ -152,6 +180,8 @@ struct NdfManager
 	void DrawPreview();
 
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
+	static bool IsLinearFormat(DXGI_FORMAT format, uint32_t channels);
+	static bool IsTexturePair(NdfTextureSet maps);
 
 private:
 	static NdfTextureSet QueryTextures(const TexNdfSettings& settings, TextureManager& textures);

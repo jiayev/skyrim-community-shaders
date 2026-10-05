@@ -38,7 +38,7 @@ namespace
 			return false;
 		D3D11_SHADER_RESOURCE_VIEW_DESC desc{};
 		srv->GetDesc(&desc);
-		return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D;
+		return desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE3D && NdfManager::IsLinearFormat(desc.Format, 4);
 	}
 
 	bool LoadProfileImage(const wchar_t* path, DirectX::ScratchImage& image, bool* hasGreen = nullptr)
@@ -49,25 +49,10 @@ namespace
 		const auto* base = source.GetImage(0, 0, 0);
 		if (!base || source.GetMetadata().dimension != DirectX::TEX_DIMENSION_TEXTURE2D || source.GetMetadata().arraySize != 1)
 			return false;
-		if (hasGreen) {
-			switch (base->format) {
-			case DXGI_FORMAT_R8G8_UNORM:
-			case DXGI_FORMAT_R16G16_UNORM:
-			case DXGI_FORMAT_R16G16_FLOAT:
-			case DXGI_FORMAT_R32G32_FLOAT:
-			case DXGI_FORMAT_R8G8B8A8_UNORM:
-			case DXGI_FORMAT_R16G16B16A16_UNORM:
-			case DXGI_FORMAT_R16G16B16A16_FLOAT:
-			case DXGI_FORMAT_R32G32B32A32_FLOAT:
-			case DXGI_FORMAT_BC5_UNORM:
-			case DXGI_FORMAT_BC7_UNORM:
-				*hasGreen = true;
-				break;
-			default:
-				*hasGreen = false;
-				break;
-			}
-		}
+		if (!NdfManager::IsLinearFormat(base->format, 1))
+			return false;
+		if (hasGreen)
+			*hasGreen = NdfManager::IsLinearFormat(base->format, 2);
 		if (base->format == DXGI_FORMAT_R32G32B32A32_FLOAT) {
 			image = std::move(source);
 			return true;
@@ -172,30 +157,45 @@ float CirrusSettings::GetAltitudeKm() const
 void PhysicalSky::LoadCloudTextures()
 {
 	volMainHistoryValid = false;
-	auto device = globals::d3d::device;
-	auto context = globals::d3d::context;
-
 	auto loadDDS = [&](const wchar_t* path, winrt::com_ptr<ID3D11ShaderResourceView>& srv, bool required = false) {
 		srv = nullptr;
-		HRESULT hr = DirectX::CreateDDSTextureFromFile(device, context, path, nullptr, srv.put());
-		if (FAILED(hr) && required)
-			logger::warn("Failed to load DDS texture: {}", std::filesystem::path(path).string());
+		const auto key = TextureManager::Key(path);
+		std::error_code error;
+		if (!std::filesystem::exists(path, error) && !error && !required) {
+			if (ndfTexManager.texList.erase(key))
+				++ndfTexManager.revision;
+			ndfTexManager.loadResults.erase(key);
+			return;
+		}
+		ndfTexManager.EnsureLoaded(key);
+		srv.copy_from(ndfTexManager.Query(key));
 	};
 
 	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisCloudShapeNoise.dds", importedShapeNoiseSrv, !settings.cloudNoise.procedural);
 	if (importedShapeNoiseSrv && !IsVolumeTexture(importedShapeNoiseSrv.get())) {
-		logger::warn("Ignoring Nubis noise composite because it is not a 3D texture.");
+		logger::warn("Ignoring Nubis noise composite because it is not a linear RGBA 3D texture.");
 		importedShapeNoiseSrv = nullptr;
 	}
 
 	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisVerticalProfile.dds", cloudProfileLutSrv);
 	loadDDS(L"Data\\Textures\\PhysicalSky\\NubisVerticalAdjustment.dds", importedAdjustmentLutSrv);
-	if (!NdfManager::IsTextureNdf(cloudProfileLutSrv.get(), 2))
+	if (cloudProfileLutSrv && !NdfManager::IsTextureNdf(cloudProfileLutSrv.get(), 2)) {
+		logger::warn("Cloud profile DDS must be a linear 2D texture with at least RG channels.");
 		cloudProfileLutSrv = nullptr;
-	if (!NdfManager::IsTextureNdf(importedAdjustmentLutSrv.get(), 3))
+	}
+	if (importedAdjustmentLutSrv && !NdfManager::IsTextureNdf(importedAdjustmentLutSrv.get(), 3)) {
+		logger::warn("Cloud adjustment DDS must be a linear 2D texture with at least RGB channels.");
 		importedAdjustmentLutSrv = nullptr;
+	}
+	cloudProfileGenerated = !cloudProfileLutSrv;
 	cloudAdjustmentGenerated = !importedAdjustmentLutSrv;
 	CreateProfileFallbacks(cloudProfileLutSrv, importedAdjustmentLutSrv);
+	for (const auto* filename : { "top_lut.dds", "bottom_lut.dds" }) {
+		const auto path = std::filesystem::path("Data/Textures/PhysicalSky") / filename;
+		std::error_code error;
+		if (std::filesystem::exists(path, error))
+			ndfTexManager.LoadTexture(path);
+	}
 	baseShapeNoiseSrv = importedShapeNoiseSrv;
 	cloudAdjustmentLutSrv = importedAdjustmentLutSrv;
 }
@@ -474,6 +474,7 @@ void PhysicalSky::SetupVolumetricResources()
 	// Load textures and NDF
 	LoadCloudTextures();
 	ndfManager.SetupResources();
+	localNdfManager.SetupResources();
 	cirrusMapManager.SetupResources();
 	cloudNoiseGenerator.SetupResources();
 
@@ -514,6 +515,7 @@ void PhysicalSky::CompileVolumetricShaders()
 			info.csPtr->attach(rawPtr);
 	}
 	ndfManager.CompileShaders();
+	localNdfManager.CompileShaders();
 	cirrusMapManager.CompileShaders();
 	cloudNoiseGenerator.CompileShaders();
 	vsCloudBoundary = nullptr;
@@ -671,8 +673,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float2 lowAltitudeRange = low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
-	const float lowCloudTraceTopKm = lowCloudTopKm;
-	const float traceBottomKm = cirrus.enabled ? std::min(lowCloudBaseKm, cirrus.GetAltitudeKm()) : lowCloudBaseKm;
+	const auto localRect = localNdfManager.GetRect();
+	const auto localAltitude = localNdfManager.GetAltitude();
+	const float lowCloudTraceBottomKm = localAltitude.z > 0.f ? std::min(lowCloudBaseKm, localAltitude.x * 0.001f) : lowCloudBaseKm;
+	const float lowCloudTraceTopKm = localAltitude.z > 0.f ? std::max(lowCloudTopKm, (localAltitude.x + localAltitude.y) * 0.001f) : lowCloudTopKm;
+	const float traceBottomKm = cirrus.enabled ? std::min(lowCloudTraceBottomKm, cirrus.GetAltitudeKm()) : lowCloudTraceBottomKm;
 	const float traceTopKm = cirrus.enabled ? std::max(lowCloudTraceTopKm, cirrus.GetAltitudeKm()) : lowCloudTraceTopKm;
 
 	const uint32_t lowW = (renderW + 3u) / 4u;
@@ -734,8 +739,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.ambientBase = std::clamp(lighting.ambientBase, 0.f, 1.f),
 		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
-		.shadowVolumeBottom = KilometersToGameUnits(lowCloudBaseKm),
-		.shadowVolumeTop = KilometersToGameUnits(lowCloudTopKm),
+		.shadowVolumeBottom = KilometersToGameUnits(lowCloudTraceBottomKm),
+		.shadowVolumeTop = KilometersToGameUnits(lowCloudTraceTopKm),
 		.cloudWindDelta = windDelta,
 		.cloudShapeShear = volWind.shear / Util::Units::GAME_UNIT_TO_M,
 		.previousViewProj = volHistoryViewProj,
@@ -748,6 +753,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.cloudEvolution = { static_cast<float>(std::fmod(volWind.phase, phasePeriod)), volWind.disturbance,
 			static_cast<float>(std::fmod(previousWind.phase, phasePeriod)), previousWind.disturbance },
 		.cloudEvolutionDelta = static_cast<float>((volWind.phase - previousWind.phase) / (phasePeriod * 0.0034834063 * Util::Units::GAME_UNIT_TO_M)),
+		.localNdfRect = localRect,
+		.localNdfAltitude = localAltitude,
 	};
 	volCloudSb->Update(&sbData, sizeof(sbData));
 
@@ -796,6 +803,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	std::array<ID3D11ShaderResourceView*, 3> outputSrvs = { texVolTr->srv.get(), texVolLum->srv.get(), texShadowVolume->srv.get() };
 
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
+	const auto localMaps = localNdfManager.GetTextures();
+	ID3D11ShaderResourceView* localSrvs[] = { localMaps.height, localMaps.modeling };
+	context->CSSetShaderResources(32, 2, localSrvs);
 
 	if (a_pass == VolumetricCloudPass::kShadowVolume) {
 		// Shadow path: accumulate the cloud extinction column into the 3D shadow
@@ -811,7 +821,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 		// Dispatch based on dominant light direction component
 		const float shadowRangeGu = KilometersToGameUnits(settings.shadowVolumeRange);
-		const float shadowThicknessGu = KilometersToGameUnits(lowCloudTopKm - lowCloudBaseKm);
+		const float shadowThicknessGu = KilometersToGameUnits(lowCloudTraceTopKm - lowCloudTraceBottomKm);
 		float3 ray_px_dir = { -cloudLightDir.x, -cloudLightDir.y, -cloudLightDir.z };
 		ray_px_dir.x *= kShadowVolW / shadowRangeGu;
 		ray_px_dir.y *= kShadowVolH / shadowRangeGu;
@@ -868,7 +878,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 				.planetRadius = sbData.planetRadius,
 				.bottomZ = sbData.bottomZ,
 				.gridCellCount = kCloudBoundaryCells,
-				.cloudFrameIndex = volFrameIndex
+				.cloudFrameIndex = volFrameIndex,
+				.localRect = localRect,
+				.localAltitude = localAltitude
 			};
 			RenderCloudBoundary(boundaryData, ndfTextures);
 			auto* boundarySrv = texCloudBoundary->srv.get();
@@ -979,7 +991,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[32] = {};
+		ID3D11ShaderResourceView* nullSrvs[34] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};

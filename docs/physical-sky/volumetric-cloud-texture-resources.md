@@ -22,33 +22,30 @@ the internal and boundary variation of that mass.
 
 ## Runtime bindings
 
-| Resource                  | Binding | Type                      | Default source                |
-| ------------------------- | ------: | ------------------------- | ----------------------------- |
-| Nubis noise composite     |    `t5` | `Texture3D<unorm float4>` | `NubisCloudShapeNoise.dds`    |
-| Aerial-perspective sun    |    `t6` | `Texture3D<float4>`       | GPU-generated                 |
-| Low-cloud height          |    `t7` | `Texture2D<float4>`       | GPU-generated                 |
-| Low-cloud modeling        |    `t8` | `Texture2D<float3>`       | GPU-generated                 |
-| Aerial-perspective shadow |    `t9` | `Texture2D<unorm float>`  | renderer                      |
-| Sky view                  |   `t10` | `Texture2D<float4>`       | renderer                      |
-| Cirrus weather            |   `t11` | `Texture2D<float2>`       | generated / DDS               |
-| Low-cloud distance        |   `t12` | `Texture2D<float>`        | GPU-generated                 |
-| Cirrus patterns           |   `t13` | `Texture2D<float3>`       | generated / DDS               |
-| Cloud ambient SH          |   `t16` | `Texture2D<sh2>`          | renderer                      |
-| Vertical profile          |   `t17` | `Texture2D<unorm float2>` | `NubisVerticalProfile.dds`    |
-| Profile adjustment        |   `t18` | `Texture2D<unorm float3>` | `NubisVerticalAdjustment.dds` |
+| Resource                         |                   Binding | Type                              |
+| -------------------------------- | ------------------------: | --------------------------------- |
+| Cloud shape noise                |                      `t4` | linear RGBA 3D                    |
+| Global NDF height / modeling     |               `t5` / `t6` | linear 2D RG / RGB                |
+| AP shadow / sky view             |               `t7` / `t8` | renderer textures                 |
+| Cirrus weather / patterns        |              `t9` / `t10` | linear 2D RG / RGB                |
+| Vertical profile / adjustment    |             `t11` / `t12` | linear 2D RG / RGB                |
+| Ambient SH / shadow volume       |             `t13` / `t14` | generated                         |
+| Boundary / global height bounds  |             `t15` / `t16` | generated                         |
+| Main history / traces            | `t17`–`t19` / `t20`–`t22` | transmittance, radiance, metadata |
+| Cube history / traces            | `t23`–`t25` / `t26`–`t28` | transmittance, radiance, metadata |
+| Composed local height / modeling |             `t32` / `t33` | premultiplied RGBA16_FLOAT 2D     |
 
-Temporal reconstruction reads screen history at t26–t28 and compact screen
-traces at t29–t31. Cube history occupies t32–t34 and compact cube traces t35–t37.
-Each group is transmittance, radiance, metadata, with R16_FLOAT, RGBA16_FLOAT,
-RGBA16_FLOAT storage respectively. See [cloud sampling](cloud-sampling.md) and
-[cloud lighting](cloud-lighting.md) for scheduling and history contracts.
+Main reconstruction output is read at t29–t31 by the foreground refinement pass.
+See [local NDF assets](local-ndf.md) for finite world-space placement, alpha masks,
+priority composition, persistence and future controller integration. See
+[cloud sampling](cloud-sampling.md) for temporal scheduling.
 
 The three optional packed assets are loaded from `Data/Textures/PhysicalSky/` and live in
 `features/Physical Sky/Textures/PhysicalSky/` in the source tree.
 
 ## Two-texture NDF
 
-Both generated and imported NDFs use two linear 2D textures, sampled with wrap
+Global generated and imported NDFs use two linear 2D textures, sampled with wrap
 filtering at mip 0. Generated maps are 512 x 512: height and modeling use
 RGBA16_FLOAT with unused A zero. The external height input remains RG; runtime
 conversion adds the shaping-start value in B.
@@ -81,7 +78,7 @@ enter the same density query as generated maps.
 ## Shape and reserved noise volumes
 
 `NubisCloudShapeNoise.dds` is a 128³ linear RGBA8 volume with eight mips,
-sampled at t5. Its R/A billow and B/G/A wisp signals are combined with NDF
+sampled at t4. Its R/A billow and B/G/A wisp signals are combined with NDF
 profile, top type and height. The result is eroded, then receives a separate
 base-density response. Noise coordinates, channel formulas, profile-dependent
 mip selection, and parameter defaults are specified in the
@@ -108,8 +105,8 @@ and wind displacement, with an independent pattern repeat length (default
 
 | Texture       | Channels                                                  |
 | ------------- | --------------------------------------------------------- |
-| Weather, t11  | R coverage, G type; remap outputs                         |
-| Patterns, t13 | R wispy, G round, B streaky; squared by the density query |
+| Weather, t9   | R coverage, G type; remap outputs                         |
+| Patterns, t10 | R wispy, G round, B streaky; squared by the density query |
 
 Both default to local GPU generation. Weather uses two independently selectable
 slots from the four shared main-weather inputs, with signed remapping, frequency
@@ -151,12 +148,12 @@ its maps and invalidate cloud history. Disabled cirrus skips generation.
 
 ## Static validation checklist
 
--   `NubisCloudShapeNoise.dds` loads as a tileable 3D RGBA texture and is bound at `t5`.
--   Low NDF uses linear height RG and modeling RGB textures at t7/t8.
+-   `NubisCloudShapeNoise.dds` loads as a tileable 3D RGBA texture and is bound at `t4`.
+-   Low NDF uses linear height RG and modeling RGB textures at t5/t6.
 -   NDF coverage is generated independently from `NubisCloudShapeNoise.dds`.
 -   Empty or reversed height intervals are rejected by the density query.
 -   Noise is queried only inside positive NDF/profile support, with zero density outside it.
--   Cirrus weather/pattern inputs are linear 2D RG/RGB resources at t11/t13.
+-   Cirrus weather/pattern inputs are linear 2D RG/RGB resources at t9/t10.
 
 ## Implementation references
 
@@ -224,3 +221,12 @@ not transparency. Scalar weather inputs start in R mode. Conversion dispatches
 only for expanded, visible images, and preserves the compute bindings it uses.
 NDF component previews retain their separate selector. All new controls and
 messages have English and Simplified Chinese translations (`en`, `zh_CN`).
+
+Shape and adjustment fallback selection is independent: a missing adjustment
+source does not override a valid imported shape volume in DDS mode. Fixed 3D
+shape input requires linear RGBA; profile inputs and top/bottom packing reject
+sRGB and incompatible formats. Reload also refreshes custom NDF/noise/cirrus paths
+and local assets. Invalid selected global pairs require matching dimensions and
+fall back together. The input manager normalizes separators, dot segments and
+ASCII case, supports UTF-8 paths, lists successful loads only, and retains failed
+load diagnostics separately for explicit retry.

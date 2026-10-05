@@ -1,0 +1,46 @@
+#pragma once
+
+#include "Ndf.h"
+
+struct LocalNdfManager
+{
+	void SetupResources();
+	void CompileShaders();
+	bool Update(const NdfSettings& settings, TextureManager& textures, const std::string& worldspace);
+	void DrawSettings(NdfSettings& settings, const std::string& worldspace, float2 cameraMeters);
+	void DrawDebug(TextureManager& textures, float scale);
+	void RefreshAssets();
+	static std::filesystem::path AssetPath(const std::string& asset);
+	float4 GetRect() const { return rect; }
+	float4 GetAltitude() const { return altitude; }
+	NdfTextureSet GetTextures() const;
+
+private:
+	struct Parameters
+	{
+		float4 rect;
+		float4 centerSize;
+		float4 rotationWeights;
+		float4 heightFeather;
+		float4 altitude;
+		float4 auxiliary;
+		uint32_t hasMask;
+		uint32_t modelingAlpha;
+		uint32_t dimension;
+		uint32_t padding;
+	};
+	static_assert(sizeof(Parameters) == 112);
+	eastl::unique_ptr<Texture2D> height, modeling, scratchHeight, scratchModeling;
+	eastl::unique_ptr<ConstantBuffer> cb;
+	winrt::com_ptr<ID3D11ComputeShader> program;
+	winrt::com_ptr<ID3D11SamplerState> sampler;
+	std::vector<std::string> assets;
+	std::vector<std::string> activeAssets;
+	std::vector<std::string> rejectedAssets;
+	std::string key;
+	uint64_t textureRevision = 0;
+	float4 rect = {};
+	float4 altitude = {};
+	float effectiveTexelSize = 0.f;
+	bool scanned = false;
+};
