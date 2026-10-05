@@ -349,6 +349,18 @@ bool Effect::LoadFXFile()
 	}
 	mainFile.close();
 
+	if (ENBExtender::IsEncryptedSource(sourceCode)) {
+		uiDefines.clear();
+		std::string error;
+		if (!ENBExtender::CreateEncryptedEffect(GetName(), effect, error)) {
+			errors.push_back(error);
+			return false;
+		}
+		ReflectCompiledEffect();
+		ENBExtender::ResolveCompiledGroups(*this, filePath.parent_path() / (GetName() + ".ini"));
+		logger::info("[EFFECTS11] Loaded encrypted FX file through ENB Extender: {}", filePath.string());
+		return true;
+	}
 
 	auto enbseriesPath = filePath.parent_path();
 	auto iniFilePath = enbseriesPath / (GetName() + ".ini");
@@ -463,15 +475,20 @@ bool Effect::LoadFXFile()
 		}
 	}
 
+	ReflectCompiledEffect();
+
+	logger::info("[EFFECTS11] Successfully loaded FX file: {}", filePathStr);
+	return true;
+}
+
+void Effect::ReflectCompiledEffect()
+{
 	EnumerateAllVariables();
 	SetupCustomTextures();
 	LoadTechniques();
 	LoadUITechniques();
 
 	LoadUIVariables();
-
-	logger::info("[EFFECTS11] Successfully loaded FX file: {}", filePathStr);
-	return true;
 }
 
 Effect::TechniqueSequenceResult Effect::ExecuteTechniqueSequence(const std::string& a_baseTechniqueName, ID3D11ShaderResourceView* a_input, TextureManager::Texture& a_output, TextureManager::Texture& a_temp)

@@ -296,6 +296,8 @@ protected:
 
 private:
 	bool LoadFXFile();
+	/** @brief Builds variable, texture, technique and UI state from the created effect. */
+	void ReflectCompiledEffect();
 
 	std::unordered_map<std::string, ID3DX11EffectVariable*> variableCache;
 	std::unordered_map<std::string, TextureManager::Texture*> commonTexturePointerCache;
