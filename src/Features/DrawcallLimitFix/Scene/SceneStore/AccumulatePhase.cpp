@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/SubsurfaceScattering.h"
 
@@ -152,6 +153,7 @@ namespace DCLF
 	 */
 	void SceneStore::BuildAccumulatePhase()
 	{
+		DCLF_FRAME_TRACE("BuildAccumulatePhase");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Accumulate.Tables");
 		if (!sceneBuilt) {
 			// A load screen, or the feature installed mid-frame: nothing to patch.

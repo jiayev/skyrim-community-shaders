@@ -17,10 +17,10 @@ T Ready(std::future<T>& future)
 	return future.get();
 }
 
-void TestLanesAndBounds()
+void TestLanesAndQueues()
 {
-	Executor executor(2, 2), foreign;
-	const auto scope = executor.CreateScope("bounded");
+	Executor executor(2), foreign;
+	const auto scope = executor.CreateScope("unbounded");
 	const auto caller = std::this_thread::get_id();
 	std::promise<void> release;
 	const auto gate = release.get_future().share();
@@ -41,7 +41,8 @@ void TestLanesAndBounds()
 	std::atomic_uint unexpectedlyRun{ 0 };
 	for (unsigned i = 0; i != 2; ++i)
 		assert(executor.ScheduleAfter(scope, 1h, 0, 1, "timer", [&](const auto&) { ++unexpectedlyRun; }));
-	assert(!executor.SubmitCpu(scope, 0, 1, "full", [](const auto&) {}));
+	// No bound: queued behind the two blocked workers and the two timers.
+	assert(executor.SubmitCpu(scope, 0, 1, "queued", [&](const auto&) { ++unexpectedlyRun; }));
 	assert(!foreign.Submit(scope, 0, 0, "foreign", [](const auto&) {}));
 	assert(!executor.Submit(scope, 1, 0, "invalid class", [](const auto&) {}));
 	auto waiting = std::async(std::launch::async, [&] { scope->Wait(); });
@@ -51,7 +52,7 @@ void TestLanesAndBounds()
 	Ready(waiting);
 	assert(unexpectedlyRun == 0);
 	const auto stats = executor.GetStatistics();
-	assert(stats.highWater[1] == 2 && stats.queued[1] == 0 && stats.active[1] == 0 && stats.cancelled == 2);
+	assert(stats.highWater[1] == 3 && stats.queued[1] == 0 && stats.active[1] == 0 && stats.cancelled == 3 && stats.rejected == 1);
 	assert(!executor.Submit(scope, 0, 0, "cancelled", [](const auto&) {}));
 }
 
@@ -119,7 +120,7 @@ void TestLifetimeAndShutdown()
 
 int main()
 {
-	TestLanesAndBounds();
+	TestLanesAndQueues();
 	TestOrderingAndFailures();
 	TestLifetimeAndShutdown();
 }

@@ -2,13 +2,14 @@
 
 #include <algorithm>
 #include <atomic>
-#include <bit>
 #include <exception>
 #include <mutex>
 #include <semaphore>
 #include <stdexcept>
 #include <thread>
 #include <vector>
+
+#include <tbb/concurrent_queue.h>
 
 namespace DCLF
 {
@@ -26,99 +27,44 @@ namespace DCLF
 			Task task;
 		};
 
-		// A bounded multi-producer multi-consumer ring (Vyukov): each cell's sequence says whose turn it is, so a push and
-		// a pop are one compare-exchange on their cursor each and never wait for one another.
-		struct Ring
+		// Unbounded and lock-free for producers: any thread pushes, every worker of the domain pops.
+		struct Queue
 		{
-			struct Cell
+			tbb::concurrent_queue<Job> jobs;
+			std::atomic<std::size_t> size{ 0 };  // pushed and not yet popped: the statistics' queued count
+			void Push(Job&& a_job)
 			{
-				std::atomic<std::size_t> sequence;
-				Job job;
-			};
-			std::unique_ptr<Cell[]> cells;
-			std::size_t mask = 0;
-			std::size_t capacity = 0;  // the requested bound; the ring is the power of two above it
-			alignas(64) std::atomic<std::size_t> head{ 0 };  // the next push
-			alignas(64) std::atomic<std::size_t> tail{ 0 };  // the next pop
-
-			explicit Ring(std::size_t a_capacity) : capacity(a_capacity)
-			{
-				const std::size_t size = std::bit_ceil(std::max<std::size_t>(a_capacity, 2));
-				cells = std::make_unique<Cell[]>(size);
-				mask = size - 1;
-				for (std::size_t i = 0; i < size; ++i)
-					cells[i].sequence.store(i, std::memory_order_relaxed);
-			}
-			std::size_t Size() const
-			{
-				const auto pushed = head.load(std::memory_order_acquire);
-				const auto popped = tail.load(std::memory_order_acquire);
-				return pushed > popped ? pushed - popped : 0;
-			}
-			bool Push(Job&& a_job)
-			{
-				std::size_t position = head.load(std::memory_order_relaxed);
-				for (;;) {
-					if (position - tail.load(std::memory_order_acquire) >= capacity)
-						return false;
-					auto& cell = cells[position & mask];
-					const std::size_t sequence = cell.sequence.load(std::memory_order_acquire);
-					const auto difference = static_cast<std::ptrdiff_t>(sequence) - static_cast<std::ptrdiff_t>(position);
-					if (difference == 0) {
-						if (head.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
-							cell.job = std::move(a_job);
-							cell.sequence.store(position + 1, std::memory_order_release);
-							return true;
-						}
-					} else if (difference < 0) {
-						return false;  // full
-					} else {
-						position = head.load(std::memory_order_relaxed);
-					}
-				}
+				size.fetch_add(1, std::memory_order_relaxed);
+				jobs.push(std::move(a_job));
 			}
 			bool Pop(Job& a_job)
 			{
-				std::size_t position = tail.load(std::memory_order_relaxed);
-				for (;;) {
-					auto& cell = cells[position & mask];
-					const std::size_t sequence = cell.sequence.load(std::memory_order_acquire);
-					const auto difference = static_cast<std::ptrdiff_t>(sequence) - static_cast<std::ptrdiff_t>(position + 1);
-					if (difference == 0) {
-						if (tail.compare_exchange_weak(position, position + 1, std::memory_order_relaxed)) {
-							a_job = std::move(cell.job);
-							cell.job = {};
-							cell.sequence.store(position + mask + 1, std::memory_order_release);
-							return true;
-						}
-					} else if (difference < 0) {
-						return false;  // empty
-					} else {
-						position = tail.load(std::memory_order_relaxed);
-					}
-				}
+				if (!jobs.try_pop(a_job))
+					return false;
+				size.fetch_sub(1, std::memory_order_relaxed);
+				return true;
 			}
+			std::size_t Size() const { return size.load(std::memory_order_relaxed); }
 		};
 
 		struct Domain
 		{
-			Ring ring;
+			Queue ring;
 			std::counting_semaphore<> available{ 0 };  // one release per pushed job, and per wake-up (Cancel, Shutdown)
 			unsigned workers = 0;
 			std::atomic<std::size_t> active{ 0 }, highWater{ 0 };
-			explicit Domain(std::size_t a_capacity) : ring(a_capacity) {}
 		};
 
 		std::atomic_bool stopping{ false };
 		std::array<std::unique_ptr<Domain>, 2> domains;
 		std::atomic<std::uint64_t> accepted{ 0 }, completed{ 0 }, cancelled{ 0 }, rejected{ 0 }, failed{ 0 };
 
-		State(std::size_t coordinator, std::size_t preparation, unsigned preparationWorkers)
+		explicit State(unsigned preparationWorkers)
 		{
-			if (!coordinator || !preparation || !preparationWorkers)
-				throw std::invalid_argument("scene executor capacity and workers must be positive");
-			domains[0] = std::make_unique<Domain>(coordinator);
-			domains[1] = std::make_unique<Domain>(preparation);
+			if (!preparationWorkers)
+				throw std::invalid_argument("scene executor needs a preparation worker");
+			domains[0] = std::make_unique<Domain>();
+			domains[1] = std::make_unique<Domain>();
 			domains[0]->workers = 1;
 			domains[1]->workers = preparationWorkers;
 		}
@@ -239,14 +185,22 @@ namespace DCLF
 		}
 	}
 
-	PublishedSceneExecutor::PublishedSceneExecutor(std::size_t coordinatorCapacity, std::size_t preparationCapacity, unsigned preparationWorkers) :
-		state(std::make_shared<State>(coordinatorCapacity, preparationCapacity, preparationWorkers)), threads(std::make_unique<Threads>())
+	PublishedSceneExecutor::PublishedSceneExecutor(unsigned preparationWorkers, ThreadStart onThreadStart) :
+		state(std::make_shared<State>(preparationWorkers)), threads(std::make_unique<Threads>())
 	{
 		threads->workers.reserve(1 + preparationWorkers);
 		try {
-			threads->workers.emplace_back([shared = state] { shared->Run(0); });
+			threads->workers.emplace_back([shared = state, onThreadStart] {
+				if (onThreadStart)
+					onThreadStart(Coordinator, 0);
+				shared->Run(0);
+			});
 			for (unsigned i = 0; i < preparationWorkers; ++i)
-				threads->workers.emplace_back([shared = state] { shared->Run(1); });
+				threads->workers.emplace_back([shared = state, onThreadStart, i] {
+					if (onThreadStart)
+						onThreadStart(Preparation, i);
+					shared->Run(1);
+				});
 		} catch (...) {
 			Shutdown();
 			throw;
@@ -279,12 +233,7 @@ namespace DCLF
 		auto& domain = *state->domains[cls.domain];
 		// Counted before the push: a worker may finish the job before this returns.
 		own->pending.fetch_add(1, std::memory_order_acq_rel);
-		if (!domain.ring.Push({ now + (std::max)(delay, std::chrono::steady_clock::duration::zero()), own, std::move(task) })) {
-			if (own->pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
-				own->pending.notify_all();
-			state->rejected.fetch_add(1, std::memory_order_relaxed);
-			return false;
-		}
+		domain.ring.Push({ now + (std::max)(delay, std::chrono::steady_clock::duration::zero()), own, std::move(task) });
 		state->accepted.fetch_add(1, std::memory_order_relaxed);
 		const std::size_t queued = domain.ring.Size();
 		for (std::size_t high = domain.highWater.load(std::memory_order_relaxed); queued > high &&

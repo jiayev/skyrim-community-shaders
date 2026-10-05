@@ -5,15 +5,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace DCLF
 {
 
 	// Dedicated to scene publication: one coordinator and a configurable number of preparation threads.
-	// Each domain's queue (including its timers) is bounded independently. Dispatch is lock-free: a job goes into its
-	// domain's bounded MPMC ring and a semaphore wakes a worker; it never executes work inline or waits for capacity
-	// (a full ring rejects). Scope waits and Shutdown are teardown/test APIs, not normal-frame operations.
+	// Dispatch never waits and never runs work inline: a job goes into its domain's unbounded MPMC queue
+	// (tbb::concurrent_queue, as BasicRenderer's scheduler) and a semaphore wakes a worker. Nothing is rejected for want of
+	// room; only an invalid scope, class or task is. Scope waits and Shutdown are teardown/test APIs, not normal-frame
+	// operations.
 	class PublishedSceneExecutor final : public org::async::GraphScheduler
 	{
 	public:
@@ -27,7 +29,10 @@ namespace DCLF
 			std::array<std::size_t, 2> queued{}, active{}, highWater{};
 		};
 
-		explicit PublishedSceneExecutor(std::size_t coordinatorCapacity = 256, std::size_t preparationCapacity = 256, unsigned preparationWorkers = 2);
+		// Called on each worker thread before it takes work (a name, a priority): its class, and its index within the class.
+		using ThreadStart = std::function<void(org::async::TaskClass, unsigned)>;
+
+		explicit PublishedSceneExecutor(unsigned preparationWorkers = 2, ThreadStart onThreadStart = {});
 		~PublishedSceneExecutor() override;
 		PublishedSceneExecutor(const PublishedSceneExecutor&) = delete;
 		PublishedSceneExecutor& operator=(const PublishedSceneExecutor&) = delete;

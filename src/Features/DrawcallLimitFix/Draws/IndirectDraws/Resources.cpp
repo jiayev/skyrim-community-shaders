@@ -54,6 +54,14 @@ namespace DCLF::Draws
 
 namespace DCLF::Draws
 {
+	std::optional<org::PersistentGraphHost::BackingMutation> MutateBackings()
+	{
+		std::optional<org::PersistentGraphHost::BackingMutation> scope;
+		if (auto* host = RenderGraphRuntime::Get().Host())
+			scope.emplace(host->MutateBackings());
+		return scope;
+	}
+
 	bool GrowableRows::Create(std::uint32_t a_stride, std::uint32_t a_rows, const char* a_name)
 	{
 		auto* host = RenderGraphRuntime::Get().Host();
@@ -81,7 +89,10 @@ namespace DCLF::Draws
 			rows *= 2;
 		// A new backing for the same graph resource: the old one is released through ORG's deletion queue, frames in flight
 		// after the GPU last used it.
-		buffer->ResizeBytes(std::uint64_t(rows) * stride);
+		{
+			const auto mutation = MutateBackings();
+			buffer->ResizeBytes(std::uint64_t(rows) * stride);
+		}
 		buffer->SetName(name.c_str());
 		address = AddressOf(host->GetDesc().device, *buffer);
 		logger::info("[DCLF] {}: {} rows grown to {} ({} KB)", name, capacity, rows, std::uint64_t(rows) * stride / 1024);
@@ -453,6 +464,7 @@ namespace DCLF
 			const auto buckets = static_cast<std::uint32_t>(r.zBucketCapacity.size());
 			if (buckets > r.zBucketCountWords) {
 				r.zBucketCountWords = Doubled(std::max(r.zBucketCountWords, 64u), buckets);
+				const auto mutation = MutateBackings();
 				for (auto& counts : r.zBucketCounts)
 					counts->ResizeStructured(r.zBucketCountWords);
 			}
@@ -475,6 +487,7 @@ namespace DCLF
 		const std::uint64_t slots = SequenceSlots(newDraws, newDecals);
 		// New backings for the same graph resources: the epochs rewrite them whole, and the old ones are released through ORG's
 		// deletion queue once the GPU is done with them.
+		const auto mutation = MutateBackings();
 		r.sequences->ResizeStructured(static_cast<std::uint32_t>(slots * sizeof(DrawSequence) / 4));
 		if (r.sort) {
 			r.sort->staging->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(newDraws) * sizeof(DrawSequence) / 4));
@@ -501,7 +514,10 @@ namespace DCLF
 			// Twice the bound: a view's buckets each hold every draw their key slots can produce, grown by doubling (ShadowBucket).
 			const std::uint32_t grown = Doubled(capacity, draws);
 			const std::uint64_t bytes = std::uint64_t(kShadowClasses) * grown * sizeof(DrawSequence);
-			shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(bytes / 4));
+			{
+				const auto mutation = MutateBackings();
+				shadow->sequences[slot]->ResizeStructured(static_cast<std::uint32_t>(bytes / 4));
+			}
 			logger::info("[DCLF] shadow view slot {} sequences: {} draws grown to {} ({} KB)", slot, capacity, grown, bytes / 1024);
 			capacity = grown;
 		}
@@ -633,6 +649,7 @@ namespace DCLF
 		// A word per bucket, and a view has at most a bucket per key slot.
 		if (layout.keySlots > r.bucketCountWords) {
 			r.bucketCountWords = layout.keySlots;
+			const auto mutation = MutateBackings();
 			for (auto& counts : r.bucketCounts)
 				counts->ResizeStructured(r.bucketCountWords);
 		}
@@ -693,7 +710,10 @@ namespace DCLF
 			if (a_needed <= a_capacity)
 				return false;
 			const std::uint32_t rows = Doubled(a_capacity, static_cast<std::uint32_t>(std::min<std::uint64_t>(a_needed, UINT32_MAX)));
-			a_resize(rows);
+			{
+				const auto mutation = MutateBackings();
+				a_resize(rows);
+			}
 			logger::info("[DCLF] scene {}: {} grown to {} ({} KB)", a_name, a_capacity, rows, std::uint64_t(rows) * a_rowBytes / 1024);
 			a_capacity = rows;
 			++s.generation;
@@ -801,6 +821,7 @@ namespace DCLF
 		const auto inputWords = [&] { return static_cast<std::uint32_t>(std::uint64_t(objects) * sizeof(DrawInput) / 4); };
 		if (resources && resources->objectCapacity < objects) {
 			auto& r = *resources;
+			const auto mutation = MutateBackings();
 			r.visibility->ResizeStructured(objects);
 			if (r.frustum)
 				r.frustum->ResizeStructured(objects);
@@ -814,6 +835,7 @@ namespace DCLF
 		}
 		if (shadow && shadow->objectCapacity < objects) {
 			auto& r = *shadow;
+			const auto mutation = MutateBackings();
 			r.visibility->ResizeStructured(objects);
 			for (auto& inputs : r.inputs)
 				inputs->ResizeStructured(inputWords());
@@ -957,11 +979,13 @@ namespace DCLF
 		}
 		if (layout.buckets > r.bucketCountWords) {
 			r.bucketCountWords = layout.buckets;
+			const auto mutation = MutateBackings();
 			for (auto& counts : r.bucketCounts)
 				counts->ResizeStructured(r.bucketCountWords);
 		}
 		if (a_draws > r.sequenceDraws) {
 			r.sequenceDraws = Doubled(r.sequenceDraws, a_draws);
+			const auto mutation = MutateBackings();
 			r.sequences->ResizeStructured(static_cast<std::uint32_t>(std::uint64_t(kReflectionFaces) * r.sequenceDraws * sizeof(DrawSequence) / 4));
 			logger::info("[DCLF] reflection sequences: {} draws a face", r.sequenceDraws);
 		}
@@ -969,8 +993,10 @@ namespace DCLF
 		if (scene && scene->treeLodCull && r.treeShapeCapacity != scene->treeLodShapeCapacity) {
 			const std::uint32_t words = TreeLod::kVisibleHeaderWords + scene->treeLodShapeCapacity * TreeLod::kMaxGroupInstances;
 			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-				if (r.treeVisible[f])
+				if (r.treeVisible[f]) {
+					const auto mutation = MutateBackings();
 					r.treeVisible[f]->ResizeStructured(words);
+				}
 				else
 					r.treeVisible[f] = CreateWords(words, true, fmt::format("cs.dclf.reflection.tree-visible{}", f).c_str());
 				r.treeVisibleAddress[f] = AddressOf(device, *r.treeVisible[f]);

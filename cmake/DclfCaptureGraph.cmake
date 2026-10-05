@@ -5,6 +5,8 @@ if(NOT TARGET ORGModuleServices::AsyncStateGraph)
 endif()
 add_library(DclfCaptureGraph STATIC
     ${CMAKE_CURRENT_LIST_DIR}/../src/Features/DrawcallLimitFix/Published/CaptureGraph.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/../src/Features/DrawcallLimitFix/Published/CaptureGraph.h)
+    ${CMAKE_CURRENT_LIST_DIR}/../src/Features/DrawcallLimitFix/Published/CaptureGraph.h
+    ${CMAKE_CURRENT_LIST_DIR}/../src/Features/DrawcallLimitFix/Published/SceneGraph.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../src/Features/DrawcallLimitFix/Published/SceneGraph.h)
 target_link_libraries(DclfCaptureGraph PUBLIC DclfSceneExecutor PRIVATE ORGModuleServices::AsyncStateGraph)
 target_compile_features(DclfCaptureGraph PUBLIC cxx_std_23)

@@ -22,10 +22,12 @@ include("${CS_ORG_ROOT}/ORGModuleServices/cmake/AsyncPrimitives.cmake")
 target_link_libraries(${PROJECT_NAME} PRIVATE ORGModuleServices::AsyncPrimitives)
 include(${CMAKE_CURRENT_LIST_DIR}/DclfSceneExecutor.cmake)
 target_link_libraries(${PROJECT_NAME} PRIVATE DclfSceneExecutor)
+# Unbounded lock-free queues (tbb::concurrent_queue): the render graph's compute submitter. Static, as the executor's.
+target_link_libraries(${PROJECT_NAME} PRIVATE TBB::tbb)
 # The plugin's existing source glob also discovers this file. Compile it only
 # in the independently testable library, without the game's PCH.
 get_target_property(_cs_dclf_plugin_sources ${PROJECT_NAME} SOURCES)
-list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(PublishedSceneExecutor|CapturedScene|CaptureAdmission|CapturePreparation|CaptureService|CaptureGraph|FaceCapture)\\.cpp$")
+list(FILTER _cs_dclf_plugin_sources EXCLUDE REGEX "/(PublishedSceneExecutor|CapturedScene|CaptureAdmission|CapturePreparation|CaptureService|CaptureGraph|SceneGraph|FaceCapture)\\.cpp$")
 set_property(TARGET ${PROJECT_NAME} PROPERTY SOURCES ${_cs_dclf_plugin_sources})
 
 if(CS_RENDER_GRAPH)
@@ -53,6 +55,7 @@ if(CS_RENDER_GRAPH)
         # CS links the compiled spdlog library (SPDLOG_COMPILED_LIB); header-only copies would collide.
         set(BASICRHI_SPDLOG_TARGET spdlog::spdlog CACHE STRING "" FORCE)
         set(OPENRENDERGRAPH_SPDLOG_TARGET spdlog::spdlog CACHE STRING "" FORCE)
+        set(ORG_ASYNC_STATE_GRAPH_SPDLOG_TARGET spdlog::spdlog CACHE STRING "" FORCE)
         set(BASICTELEMETRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(BASICTELEMETRY_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
         set(BASICTELEMETRY_BUILD_ARTIFACTS OFF CACHE BOOL "" FORCE)

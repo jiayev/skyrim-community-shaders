@@ -1,4 +1,5 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 #include "Features/DrawcallLimitFix/Diagnostics/HiddenWatch.h"
 
 namespace DCLF
@@ -26,11 +27,12 @@ namespace DCLF
 	 */
 	void SceneStore::BuildScenePhase()
 	{
+		DCLF_FRAME_TRACE("BuildScenePhase");  // TEMP frame trace
 		// Normally joined at BeforeShadowMaps already; a frame that did not get there joins before the walk.
 		JoinPlacements();
 		{
 			DCLF_SCENE_PART(Prologue, "CS.DCLF.Scene.Prologue");
-			++frame;
+			// The frame number moved at BeginFrame, before the work was kicked: what the engine's hooks read in the window.
 			// The change log keeps its tail (Tables::changeLog): a reader that has not read past the trimmed half reads every
 			// slot again.
 			tables.changeLog.Trim(1u << 17);

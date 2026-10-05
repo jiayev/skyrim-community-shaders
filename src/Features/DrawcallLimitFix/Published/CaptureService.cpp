@@ -1,6 +1,8 @@
 #include "CaptureService.h"
 #include "PublishedSceneExecutor.h"
 
+#include <deque>
+
 #include <ORGModuleServices/Async/SerializedTaskPump.h>
 #include <atomic>
 #include <mutex>
@@ -22,8 +24,8 @@ namespace DCLF::Published
 		Backend backend;
 		std::size_t reservation, ingressBudget, ingressBytes = 0;
 		std::mutex mailbox;
-		std::vector<CapturedSceneEvent> ingress;
-		std::size_t head = 0, count = 0;
+		std::deque<CapturedSceneEvent> ingress;  // grows; ingressLimit bounds it only when one was asked for
+		std::size_t ingressLimit;
 		std::optional<Completion> completion;
 		std::optional<Ack> acknowledgement;
 		std::shared_ptr<const PreparedCapture> outgoing;
@@ -33,7 +35,7 @@ namespace DCLF::Published
 		bool retryBlocked = false;
 
 		Impl(Builder fn, BackendFactory factory, std::size_t outputReservation, std::size_t budget, std::size_t limit) :
-			preparation(budget, limit), builder(std::move(fn)), reservation(outputReservation), ingressBudget(budget), ingress(limit)
+			preparation(budget, limit), builder(std::move(fn)), reservation(outputReservation), ingressBudget(budget), ingressLimit(limit)
 		{
 			if (factory) backend = factory(executor);
 			if (!builder && (!backend.start || !backend.shutdown)) throw std::invalid_argument("capture service needs a builder/backend");
@@ -49,8 +51,8 @@ namespace DCLF::Published
 				CapturedSceneEvent event;
 				{
 					std::lock_guard lock(mailbox);
-					if (!count) return;
-					event = ingress[head];
+					if (ingress.empty()) return;
+					event = ingress.front();
 				}
 				const auto result = preparation.Post(event);
 				if (result == CaptureAdmission::Result::Pressure) return;
@@ -64,10 +66,8 @@ namespace DCLF::Published
 						retired = std::move(outgoing);
 						offered = 0;
 					}
-					ingress[head] = {}; // event still owns its page outside the lock
 					if (event.update) ingressBytes -= event.update->OwnedBytes();
-					head = (head + 1) % ingress.size();
-					--count;
+					ingress.pop_front(); // event still owns its page outside the lock
 				}
 				retryBlocked = false;
 			}
@@ -135,13 +135,12 @@ namespace DCLF::Published
 		const auto bytes = event.update ? event.update->OwnedBytes() : 0;
 		{
 			std::lock_guard lock(impl->mailbox);
-			if (impl->stopping.load() || impl->faulted.load() || impl->count == impl->ingress.size()) return false;
+			if (impl->stopping.load() || impl->faulted.load() || impl->ingress.size() >= impl->ingressLimit) return false;
 			// Independently bounded ingress, with one isolated oversized page. Total
 			// pipeline accounting still needs to include this mailbox's retained bytes.
-			if (impl->count && (impl->ingressBytes > impl->ingressBudget || bytes > impl->ingressBudget - impl->ingressBytes)) return false;
-			impl->ingress[(impl->head + impl->count) % impl->ingress.size()] = event;
+			if (!impl->ingress.empty() && (impl->ingressBytes > impl->ingressBudget || bytes > impl->ingressBudget - impl->ingressBytes)) return false;
+			impl->ingress.push_back(event);
 			impl->ingressBytes += bytes;
-			++impl->count;
 		}
 		// An accepted envelope remains owned even if scheduling subsequently faults.
 		(void)impl->pump.Notify();

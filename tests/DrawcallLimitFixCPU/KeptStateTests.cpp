@@ -83,37 +83,37 @@ namespace
     void TestReferenceDrivenMaterialRetirement()
     {
         DCLF::SlotTable slots;
-        const auto material = slots.Allocate(1).slot;
+        const auto material = slots.Allocate().slot;
         auto generation = slots.Generation(material);
         slots.AddRef(material, generation);
         slots.AddRef(material, generation); // Two objects share a material.
         std::vector<std::uint32_t> freed;
         auto release = [&](auto slot) { freed.push_back(slot); };
-        slots.Release(material, generation, 2);
+        slots.Release(material, generation);
         assert(slots.DrainUnreferenced(release) == 0);
-        slots.Release(material, generation, 3);
+        slots.Release(material, generation);
         slots.AddRef(material, generation); // Reparent/equipment batch acquires a successor user.
         assert(slots.DrainUnreferenced(release) == 0);
-        slots.Release(material, generation, 3);
+        slots.Release(material, generation);
         assert(slots.DrainUnreferenced(release) == 1);
         assert(freed == std::vector<std::uint32_t>{material});
         assert(slots.DrainUnreferenced(release) == 0);
 
-        const auto reused = slots.Allocate(3).slot;
+        const auto reused = slots.Allocate().slot;
         assert(reused == material && slots.Generation(reused) != generation);
         slots.AddRef(reused, slots.Generation(reused));
-        slots.Release(reused, generation, 3); // Old incarnation cannot retire the replacement.
+        slots.Release(reused, generation); // Old incarnation cannot retire the replacement.
         assert(slots.DrainUnreferenced(release) == 0);
-        slots.ResetReferences(4);
+        slots.ResetReferences();
         slots.AddRef(reused, slots.Generation(reused));
         assert(slots.DrainUnreferenced(release) == 0); // Recovery recount is one atomic batch.
-        slots.ResetReferences(5);
+        slots.ResetReferences();
         assert(slots.DrainUnreferenced(release) == 1);
 
         // A stale allocation event must not free a referenced reused slot.
-        const auto abandoned = slots.Allocate(6).slot;
+        const auto abandoned = slots.Allocate().slot;
         slots.Free(abandoned);
-        const auto successor = slots.Allocate(6).slot;
+        const auto successor = slots.Allocate().slot;
         slots.AddRef(successor, slots.Generation(successor));
         assert(slots.DrainUnreferenced(release) == 0);
     }

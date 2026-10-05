@@ -75,6 +75,7 @@ namespace DCLF::Draws
 
 	Capture CaptureBindings()
 	{
+		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::Capture);
 		auto* context = globals::d3d::context;
 		Capture capture;
 		context->VSGetConstantBuffers(0, kConstantBufferRegisters, capture.vsBuffers.data());

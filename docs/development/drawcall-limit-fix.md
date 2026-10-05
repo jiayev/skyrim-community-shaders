@@ -1021,6 +1021,17 @@ leaves before the accumulate phase rebinds it), and the membership witness (a ch
 held is never lost: a material or a shadow mask whose view is re-imported keeps drawing with the old one until the new one
 arrives (`RefreshMaterialLookups`).
 
+**Applied a frame later** (2026-10-04, dclf-async-publication.md, "Phase 3"). `CommitSet` decides the next frame's set into
+`setPhasesNext` and the snapshot. `ApplySet`, at the next `BeginSceneFrame` before the frame's events, makes it the frame's:
+- it writes the changed slots' `Tables::setPhases`, `kObjectMember` and lacking counts;
+- it publishes the snapshot to `PassCapture`.
+
+The claims must be in place at `Main::Draw`, before the frame's scene work can have run once that work is on a worker, and
+the frame draws exactly the set its claims are. So an object joins or leaves the set one frame after the walk that decided
+it. A slot freed or given to another geometry between the commit and `ApplySet` takes no phase. A slot freed after
+`ApplySet` loses its phases with its record (`Tables::ResetObject`), so the shadow builds, which read `setPhases`, never draw
+a freed slot.
+
 **One GPU-resident source of truth.** The set is `Tables::setPhases` (per slot), with the main phase also in the record's
 `kObjectMember`, which the GPU reads. Every build selects by it: a main build's input is drawable iff the object is a main
 member and its pair resolved; a shadow or occlusion mode's inputs are the members of its phase. A member a build cannot

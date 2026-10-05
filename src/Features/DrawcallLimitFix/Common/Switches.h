@@ -17,6 +17,7 @@ namespace DCLF
 		Async,
 		AsyncWaitMs,
 		AsyncPriority,
+		Workers,
 		Precompile,
 		Cull,
 		Skinned,
@@ -104,6 +105,7 @@ namespace DCLF
 		TestMove,
 		TestTurn,
 		TestToggle,
+		TestExit,
 
 		// Other features' switches, read through the same file.
 		UpscaleSubmit,

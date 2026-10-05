@@ -5,6 +5,298 @@ same-frame AsyncWorker jobs, scene joins, mutable tables/lookups, and the existi
 ORG epoch submission path. There is no `published` mode yet and no performance
 improvement is claimed by this foundational change.
 
+## The design (2026-10-04): an asynchronous scene, a submit-only render thread
+
+DCLF took about 1.2 ms of the render thread a frame (Riverwood bridge, 86-93 fps). Its one worker (`AsyncWorker`) built
+for about 0.4 ms, kicked and joined within the frame. The direction: everything but ORG submission moves to workers, and
+the scene is maintained asynchronously, as BasicRenderer's is:
+- posted intents;
+- one serialized coordinator draining them;
+- producers on a pool sized from the hardware;
+- immutable publications the frame takes the newest of.
+
+**The render thread** does three things a frame:
+1. **Accept** the newest complete publication P at `BeginSceneFrame`, a `PublicationExchange` select. Installing it
+   means pointer swaps for its claims, list filter and sun exclusion. It then opens the engine-read window W(N).
+2. **Capture and submit** each epoch. The capture is a plain copy of what only the render thread can read: D3D11
+   bindings, constant mirrors, a shadow view's state, the eye. The submission is a reserved ticket.
+3. **The engine boundary**, bounded by changes:
+   - closing W(N) at Present, which waits only for an item a worker is reading;
+   - `ConstantEvaluator`'s stand-in calls of the engine's SetupMaterial/SetupGeometry;
+   - engine writes the workers listed, such as the fade write-back.
+
+`RenderThreadBudget` reports DCLF's render-thread time every 300 frames by those buckets. The rest, "other", is what is
+still to move.
+
+**A frame N.** The update's hooks only push events into the existing lock-free queues. At `Main::Draw` the render thread
+accepts P (built in W(N-1)) and opens W(N). Then the workers do two things:
+- the coordinator drains frame N's events into the scene state and builds P(N), which takes effect at frame N+1;
+- the pool builds **FrameValues(N)**, uploaded on the copy queue, whose batch signals timeline value N.
+
+Each epoch's GPU work waits on that value (`FrameProducerWait`). A late FrameValues costs GPU idle, never render-thread
+time, and the frame is still exact. The wait is spec-safe because the copy submission makes the host writes visible.
+The value is always signalled, with an empty batch on failure.
+
+**What each carries.**
+- FrameValues(N): every input that decides whether or where a claimed member is drawn this frame:
+  - placements, palettes and root bounds;
+  - per-frame shading samples;
+  - faces and tree LOD;
+  - visibility: detached this frame, hidden, unselected switch children.
+- P(N): everything else (membership and claims, records, materials, pipelines, lookups, per-segment payloads and their
+  ticket uploads), effective at N+1.
+- Frame N draws exactly claims(N).
+- An object joins DCLF a frame later than before; the engine draws it meanwhile.
+- A leaving member is drawn from its retained record one more frame, and hidden by FrameValues if the engine stopped
+  drawing it.
+- A member's structural change (material, pipeline) shows a frame late.
+
+**The engine-read window.** From `Main::Draw` to Present the engine reads its scene graph but does not write it; the
+exceptions are known (`currentFade`, billboards, texture transforms). A worker reading engine memory holds a per-item
+lease and checks that the window is open before each item. Present closes the window and waits only for the items in
+flight; the rest resumes in the next window, by index, as `RunPlacements` resumes today.
+
+**The phases.** Each phase builds, passes the CPU tests and an in-game run of 60 s or less, and is committed before the
+next:
+
+| Phase | Work |
+|---|---|
+| 0 | The `RenderThreadBudget` report; ORG's "other" epoch time attributed (native flush, completions, stream close, post, rebuild check) |
+| 1 | `PublishedSceneExecutor` as DCLF's scheduler, with lock-free queues and no caps; the DCLF `AsyncStateGraph`; `EngineReadWindow`; the existing jobs moved onto it unchanged |
+| 2 | ORG's render-thread overhead that needs no DCLF change: the host's wake after each submission, and the compute queue's submissions (done, below). Reserved submission, upload recording on the host's thread and the timeline wait need inputs that exist before the epoch, so they move to phases 4 and 6 |
+| 3 | `SceneStore` split into coordinator-owned state and an immutable `ScenePublication`; events, the scene phase and the set commit moved to W(N) |
+| 4 | FrameValues(N), fed by change-gated, slot-resolved writer events instead of per-frame polling (below): partitioned producers, copy-queue upload, the per-frame region the shaders read, and the epochs' GPU wait on its timeline (`FrameProducerWait`) |
+| 5 | The accumulate phase, lookups, pipeline requests and frame constants moved to producers. `EvaluateTechnique` is a port reading engine globals, so a worker can run it; SetupMaterial/SetupGeometry stay at the boundary. The ProjectedUV and land-blend extras rows move to the shader; `ValidateSlice` becomes parity-only |
+| 6 | Per-segment payloads built once per publication, in parallel; their uploads recorded into the tickets on the host's thread (`TryPostOwnedPreparation`) and the epochs submitted reserved (`TryReserveReadyEpochs`, `TrySubmitReservedEpoch`); shadow views from a capture; the scene lists built off the engine's job; `AsyncWorker` and every join deleted |
+| 7 | Pool sizing against the engine's job threads; same-input parity; load, equipment and water stress; a starved-pool run for the GPU wait |
+
+**Phase 0 baseline** (2026-10-04, p0-budget2: Riverwood bridge, turning camera, 75–93 fps, 50 s). DCLF's render
+thread took 1.11–1.27 ms a frame (max 1.8–4 ms, one 11.8 ms load spike).
+
+| Bucket | ms/frame |
+|---|---|
+| accept | 0 |
+| capture | 0.016 |
+| submit | 0.048 |
+| ORG overhead | 0.20 |
+| engine boundary | 0.019 |
+| other | 0.83–0.99 |
+
+| Hook | ms/frame |
+|---|---|
+| scene frame | 0.28–0.43 |
+| Z-prepass | 0.16 |
+| shadow epoch | 0.15 |
+| EarlyPrepass | 0.11 |
+| colour epoch | 0.095 |
+| Prepass | 0.09 |
+| occlusion (4 calls) | 0.077 |
+| BeforeShadowMaps (the reflection epoch) | 0.075 |
+| Present | 0.046 |
+| shadow view capture | 0.027 |
+| reflection faces | 0.007 |
+
+ORG's per-epoch render-thread time is now attributed in full: the "other" phase is 0.
+
+| Phase | µs per epoch |
+|---|---|
+| upload recording | 10–38 |
+| the host's completion post (mailbox and wake) | 7–12 |
+| Z-prepass submit (its five queue submissions) | 31 |
+| native flush | 1 or less |
+| completions | 1–3 |
+| stream close | 1–3 |
+
+Phase 2 takes the upload recording and the post off the render thread; with them the ORG overhead goes.
+
+**Phase 1** (2026-10-04, p1-exec).
+
+- **The executor.** `PublishedSceneExecutor` is DCLF's scheduler (`SceneScheduler`): one coordinator thread and a
+  preparation pool of `hardware_concurrency` minus 2 threads (14 on the test machine; `CS_DCLF_WORKERS` sets the count).
+  Its queues are unbounded `tbb::concurrent_queue`s (static TBB), so a dispatch is rejected only for an invalid scope,
+  class or task.
+- **`AsyncWorker`.** It keeps its API and job order, but its jobs now run on the coordinator lane. Its render-thread side
+  takes no mutex: a job's state is one atomic, and its end is a semaphore.
+- **The state graph.** `Published::SceneGraph` instantiates DCLF's `AsyncStateGraph` on the executor. It has the artifact
+  kinds; `SceneState` alone does not coalesce. No producer is registered yet.
+- **Build change.** The state graph now links CS's compiled spdlog (`ORG_ASYNC_STATE_GRAPH_SPDLOG_TARGET`, an
+  ORGModuleServices change); the header-only copy collided with it once the graph's code was linked.
+- **The read window.** `EngineReadWindow` opens at `BeginSceneFrame` and closes at Present. The scene placement job and
+  the fade write-back take a lease for each item they handle on a worker.
+- **The capture service.** Its admission limits default to unbounded, and its ingress is a growable queue.
+
+The late-join cancel is not removed yet. Callers still `Cancel` a late job before building inline over its payload, and
+`Cancel` waits for the running job, so a late join blocks. Removing it needs the inline builds gone (phase 6); the header
+says so. No join was late in any run.
+
+The 50 s run on the bridge matched Phase 0:
+- 1.15–1.22 ms of render-thread time a frame;
+- the same pacing;
+- 0 render-thread waits and 0 member passes drawn natively;
+- 300 window closes, none waiting on an item, and 0 leases refused.
+
+**Phase 2** (2026-10-04, p2-wake2 to p2-wake4).
+
+- **The host's wake.** After each submission the render thread signalled a Vulkan semaphore (`vkSignalSemaphore`) to wake
+  the host's thread: 7–12 µs per epoch. The host's sleep already includes the GPU timelines of the frames in flight, so a
+  submission now leaves that wake to the next GPU completion (`Async::wakesOnGpu`, a Dekker pair with the mailbox). A
+  signal is still sent in three cases:
+  - the host sleeps with nothing in flight;
+  - a control message is posted;
+  - the render thread is about to wait for a ticket.
+
+  588 of 600 submissions needed no signal. The "post" phase fell to 0.1–0.3 µs.
+- **The compute queue's submissions.** These go to a thread of their own (`ComputeSubmitter`, first in first out, an
+  unbounded TBB queue), because the compute queue is ORG's alone. The stream's exit wait may precede the signal. The
+  Z-prepass's submit fell from 31 µs to 13 µs.
+
+**Why the rest of phase 2 moved.** An epoch's uploads exist only once DCLF's commit has run, in `beforeSubmit` on the
+render thread. So recording them on the host's thread has to wait for payloads built ahead of the epoch (phase 6).
+Likewise, a reserved ticket must not go stale, and today the commit grows resources (a stale reserved ticket throws).
+The timeline wait belongs with the first consumer of the copy queue, FrameValues (phase 4).
+
+**Results.**
+
+| | Phase 0 baseline | Phase 2 |
+|---|---|---|
+| DCLF render-thread time, ms/frame (`CS_DCLF_PROFILE` on) | 1.11–1.27 | 0.92–1.08 |
+| ORG overhead, ms/frame | 0.20 | 0.10–0.15 |
+
+The profile itself costs about 0.3 ms: without it the total was 0.69–0.71 ms (p2-wake3 and p2-wake4).
+
+**Fixed: a GPU device loss.** From the first Phase 2 run (p2-wake), some startups lost the device on the first DCLF frames:
+a page fault at address 0, with no shader running. The cause was the compute submitter: its `vkQueueSubmit2` ran at the
+same time as DXVK's submission thread, which something below DXVK does not tolerate. It now submits under DXVK's
+submission lock, on its own thread. See crash-catalog.md, "GPU device loss: a page fault at address 0".
+
+**Phase 3, step 1: the claims a frame late** (2026-10-04, p3-lag2).
+
+- **The split.** `CommitSet` decides; `ApplySet` (at `BeginSceneFrame`, before the events) applies the last decision to
+  the records and publishes it as the claims. So frame N draws, and the engine withholds, the set the walk of frame N−1
+  decided. This is the membership half of "What each carries", still on the render thread.
+- **The bug the parity check found.** A slot freed after `ApplySet` kept its applied phases until the next one. 69 freed
+  slots a run were reported "in the set, drawn by nobody, record disagrees", and the shadow builds read those phases.
+  `Tables::ResetObject` now clears them.
+- **Validation.** With `CS_DCLF_SET_PARITY=1`, every 300-frame window was clean:
+  - 0 objects in the set and drawn by nobody;
+  - 0 drawn outside the set;
+  - 0 records disagreeing;
+  - 0 members' passes drawn natively.
+
+  The one-frame "kept, GPU-culled, drawn again" gaps (about 1,400 a window at the bridge) are as before: the older runs
+  show the same count, all with the culling's "rejected" verdict.
+
+**The frame's order** (`CS_DCLF_FRAME_TRACE=1`, TEMP: each traced site's first call, from Main::Draw, one frame in 600). On
+the render thread:
+
+| µs | Step |
+|---|---|
+| 11–150 | the scene work (`ApplySet`, events, walk, `CommitSet`) |
+| 166–470 | the water-reflection faces, whose culls run LocalLightCull's, the sun's and the pass capture's hooks |
+| 478–540 | the sun's full-frustum cull, with PrimaryCull's per-frame setup (`PrepareFrame`) at 522 |
+| 691 | `AfterListJobs` |
+| 704 | BeforeShadowMaps |
+
+Elsewhere, the scene lists' job reads the list filter at 150 µs, and the list jobs (the stand-ins) run from 488 µs.
+
+**Step 2, next: the window's readers on published data.** For the scene work to run on the coordinator from Main::Draw,
+nothing in that ~700 µs may read the store the walk is changing:
+- PrimaryCull's setup, which reads tracked geometries, object indices, set phases, sun candidates and switch changes, writes
+  fade ownership back, and is called by the commit (`NoteSetChanges`). It moves into the scene task, which builds the cut
+  as immutable data; the render thread keeps only the cull-time inputs (the list processes, the fade eye).
+- LocalLightCull's category filter (category nodes, light entries).
+- The sun's and the scene lists' candidate generations.
+- `GetFrame` (an atomic).
+
+**Phase 3, step 2: the walk on the coordinator** (2026-10-04, p3-task2).
+
+**`BeginSceneFrame`** now runs in this order:
+1. `BeginFrame`: the frame number, and the published sun-candidate generation the window's hooks read
+   (`GetPublishedSunGeneration`).
+2. `ApplySet`, which also hands the last commit's set changes to PrimaryCull.
+3. The frame's events (`ProcessEvents`), on the render thread.
+4. The point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the list filter.
+5. The kick of the walk and the set's commit onto the coordinator (`SceneStore::KickSceneTask`). The placements run
+   inside the task, under read leases.
+
+**The join** comes at the first reader that needs the frame's walk: PrimaryCull's full-frustum hook (`JoinSceneTask`).
+Every later DCLF hook joins too, a no-op once joined. At the join (`FinishSceneWork`):
+- PrimaryCull receives what the work held for it: hidden keys and lost members;
+- claims whose record stopped drawing are revoked (`RevokeUndrawnClaims`, from the change log since `ApplySet`), so the
+  engine draws them that frame;
+- the fade write-back and the early shadow build are kicked.
+
+Capture, walk and persistent parity run the work inline.
+
+**Why the events stay on the render thread.** With the list filter published before the frame's events, every run
+crashed within its first 40 frames. Present released a root in the scene lists' graveyard that something had already
+freed. The bisect, inline (`CS_DCLF_ASYNC=off`):
+- the list filter before the events: crashed in 5 of 5 runs;
+- after the events and before the walk, or after the walk: 0 of 4.
+
+The list decisions logged per frame were the same in both orders, and no root the instrumentation saw buried had a
+reference count below 6, so the mechanism is not identified (crash catalog). The events also walk newly attached subtrees
+and drop the last reference to detached ones, which runs the engine's destructors: main-thread work either way. They cost
+about 0.05 ms a frame.
+
+**Results** (`CS_DCLF_PROFILE` on):
+
+| | Phase 2 | Step 2 |
+|---|---|---|
+| Scene frame, ms/frame | 0.28–0.39 | 0.06 |
+| DCLF render-thread total, ms/frame | 0.92–1.08 | 0.76–0.79 |
+
+- The join waited on 0.24 frames in each, 0.006 ms a frame.
+- Set parity was clean in every window.
+- 0 members' passes were drawn natively, and 0 claims were revoked.
+
+**What of the walk is synchronous** (amendment, 2026-10-04). Measured at the bridge (b-ring2; p3-trace2; p3-probe):
+
+| | ms/frame | What |
+|---|---|---|
+| Lag-tolerant, P(N) | ~0.17 | structural events 0.056, validation 0.018, sweeps, sun and light candidates 0.010, shadow sets, the set commit. The events for all of it already exist; moving it to the coordinator is enough. |
+| Synchronous by nature, FrameValues(N) | ~0.21 render thread, 0.2 worker | placements, palettes and root bounds of what moved; visibility; per-frame shading |
+
+Most of the synchronous cost is polling:
+- Graph animation and the update pass push about 1,500 move events a frame whether or not anything moved. 620 still roots
+  a frame are re-read, and 193 of 243 reference-event placements do not change.
+- About 650 per-frame entries are re-scheduled every frame (`perFrameSet`, `MoveReasonOf`, `QueueRoots`' scan).
+- The Prepass extras watch re-derives about 1,009 ProjectedUV and land-blend rows from the eye and a clock.
+
+**Where the writers run.** The update's writers run on the engine's job threads, but some run inside the render phase too.
+In one traced frame:
+
+| Writer | µs after Main::Draw |
+|---|---|
+| Havok's node transform | 135 |
+| sky cell skin | 326 |
+| graph animation | 1,038 |
+| `Update3DPosition` | 1,045 |
+| `AnimationGraphPlace` | 4,374 |
+
+So the read window is not strictly quiescent. The placement probe found 0 of DCLF's placements moved between the sample
+and the join in 300 joins (p3-probe), and stays as FrameValues' standing check.
+
+**Adopted.**
+- **Change-gated, slot-resolved writer events.** Each move writer's hook keeps a stack copy of the reference root's
+  transform and bound, and compares after the engine's call. It pushes only for keys in the latest publication's
+  immutable key index, tagged "root bound changed" or "subtree updated", with the resolved placement slots, into a
+  per-thread buffer. Lock-free. The RE (Ghidra) of each writer must confirm that it finishes its subtree's world update,
+  and name the writers that move children without the root (those are not compare-gated).
+- **FrameValues samples exactly those slots**, partitioned across the pool at W(N)'s start. Polling remains only for
+  entries with no writer event: switches without switch events, and `kMoveAlways`.
+- **The extras rows go to the shader**: static parameters written with the record, plus the frame block.
+- **Tree-wind skins** become evented, or GPU-animated like the owned trees.
+- **`ValidateSlice` becomes a parity check** once the reports show the detach and parent-reason events complete.
+
+**Rejected: capturing transforms or palettes in the handlers.** A writer cannot know it is its subtree's last of the frame
+(the writers run in varying order across job threads, and an unhooked one is possible), so sampling at W(N)'s start stays.
+The engine's face-morph publications remain the one capture.
+
+The engine's own remaining work that DCLF's hooks time is out of scope; it belongs to the "native work first" direction:
+- the sun's full-frustum cull and Accumulate, about 0.11 ms;
+- the point lights' Accumulate, about 0.04 ms.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.
@@ -280,31 +572,7 @@ stable-ID assignment, graph producers, bounded capture admission and rendered mo
 history are still required. The reducer neither proves GPU readiness nor grants
 native ownership, and is not called by the live renderer.
 
-1. Wire the tested shared graph/executor combination into the DCLF capture and
-   coordinator service, using posted-only engine-thread
-   entry points. The shared engine intentionally retains its legacy synchronous
-   APIs and teardown drains for other hosts; DCLF must not call those on its
-   published normal-frame path. SARP streaming count comparisons remain runtime
-   validation work, not something proven by the extraction's CPU tests.
-2. Populate the immutable CapturedSceneUpdate/group contracts from verified engine
-   hooks, with complete actor/object membership. Eliminate deferred live engine reads before allowing jobs to outlive
-   frames. Keep engine-affine sampling at verified hooks.
-3. Move scene/accumulator derivation, shader/pipeline lookup preparation, payload
-   construction and staging to coordinator-owned state plus two preparation
-   workers. Replace mutable KeptView commit patches with separate frame patches.
-4. Build PreparedScenePublication roots containing exact resources, payloads,
-   ownership/exclusion data, and upload prerequisites. Add the 128 MiB admission
-   budget and ordered lifecycle handling; storage leases alone do not bound memory.
-5. Implement ORG publication-qualified ticket preparation and nonblocking
-   all-segment reservation before native suppression. Move bulk upload recording
-   to workers. Preserve DXVK/native ordering and depth/colour consistency.
-6. Wire PublicationExchange into frame selection, retain one FrameSceneLease
-   across shadows/depth/colour, and remove normal-frame joins/inline fallbacks
-   from the new path. Add the startup legacy/published rollout switch only when
-   both paths actually exist.
-7. Validate with same-input parity, delayed workers, ownership coverage,
-   lifecycle/resource stress, then <=60-second game captures before enabling by
-   default. The existing shadow-membership parity discrepancy remains separate.
+The continuation is "The design (2026-10-04)" above, phase by phase; the steps that stood here are folded into its phases.
 
 ## Tests
 

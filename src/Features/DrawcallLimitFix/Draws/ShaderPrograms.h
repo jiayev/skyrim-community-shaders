@@ -166,6 +166,9 @@ namespace DCLF
 		std::vector<std::byte> pulledSource;  // source for the pulled builds (PulledMaterialSource); empty when it could not be made
 		std::vector<std::byte> utilitySource;
 		std::vector<std::filesystem::path> dependencies;
+		// Each source's ShaderCompiler::FingerprintInputs with the dependencies, taken once when they load: every request's key
+		// starts from it instead of hashing the source and checking the dependency files again (2,000 keys a launch).
+		std::uint64_t sourceFingerprint = 0, pulledFingerprint = 0, utilityFingerprint = 0, distantTreeFingerprint = 0;
 		bool sourcesLoaded = false;
 		std::atomic<bool> sourcesMissing{ false };
 		std::uint32_t loggedFailures = 0;

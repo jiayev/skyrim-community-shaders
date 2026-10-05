@@ -104,6 +104,19 @@ public:
 	bool ExecuteEpoch(Segment a_segment, const std::function<void(org::RenderGraph&)>& a_beforePrepare = {},
 		std::shared_ptr<const void> a_resourceOwner = {});
 
+	/**
+	 * @brief The render thread's ExecuteEpoch time since startup, every segment's, split three ways. Render thread. A feature
+	 * takes the difference across its own call to attribute what the epoch cost it (DCLF's render-thread budget).
+	 */
+	struct EpochCpuTotals
+	{
+		double inputsUs = 0.0;    // the feature's a_beforePrepare
+		double submitUs = 0.0;    // the submission proper: the ticket (and any wait for it), the queue submission, the stream's close
+		double overheadUs = 0.0;  // the rest: releases, the ticket's check, upload recording, the native flush, completions, posts
+		std::uint64_t epochs = 0;
+	};
+	const EpochCpuTotals& RenderThreadEpochTotals() const { return epochTotals; }
+
 	/** @brief The segment of the epoch being executed (valid while passes prepare and record). */
 	Segment CurrentSegment() const { return segment; }
 
@@ -171,6 +184,7 @@ private:
 	std::unique_ptr<Impl> impl;
 	std::string disabledReason = "not initialized";
 	std::string gpuTimingSummary;
+	EpochCpuTotals epochTotals;
 	Segment segment = Segment::LightCulling;
 	bool attempted = false;
 };

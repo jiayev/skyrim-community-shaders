@@ -27,28 +27,32 @@ namespace DCLF
 	std::chrono::microseconds AsyncWaitBudget();
 
 	/**
-	 * @brief The one worker thread DCLF's per-frame builds run on.
+	 * @brief DCLF's per-frame builds, on the coordinator lane of DCLF's executor (SceneScheduler).
 	 *
 	 * The jobs of a frame form a serial chain, each kicked at the point of the frame where its inputs are final
-	 * and joined at the hook that consumes it, so one thread with a short FIFO gives deterministic latency and a
-	 * trivial cancellation story. It is deliberately not ORG's task service (that is what the graph's own frame
-	 * preparation fans onto while the render thread waits on it) nor the shader cache's pool (saturated at
-	 * startup and at every new cell, exactly when a late join would bring the bubble back).
+	 * and joined at the hook that consumes it: the coordinator lane is one thread, first in first out, which gives
+	 * deterministic latency and a trivial cancellation story. It is deliberately not ORG's task service (that is
+	 * what the graph's own frame preparation fans onto while the render thread waits on it) nor the shader cache's
+	 * pool (saturated at startup and at every new cell, exactly when a late join would bring the bubble back).
+	 *
+	 * This is the frame-synchronous model the asynchronous scene replaces (dclf-async-publication.md, "The design"):
+	 * its kicks and joins go in phase 6.
 	 *
 	 * The jobs, in frame order, each with where it is kicked and joined:
 	 * - "scene placement": the kept records' placements and palettes (SceneStore::KickPlacements at the end of the
 	 *   scene tables; BeforeShadowMaps);
 	 * - "shadow": the shadow views' build (IndirectDraws::KickShadowBuild at BeforeShadowMaps; the shadow epoch);
-	 * - "primary synthetic passes": PrimaryCull's stand-in passes (the cut; the accumulate phase at EarlyPrepass);
 	 * - "fade write-back": FadeStateCS's milestones of the stood-in roots onto their nodes (IndirectDraws::KickFadeWriteBack at
 	 *   the end of the scene tables; BeforeShadowMaps, the accumulate phase, or the next scene frame);
 	 * - "zprepass": the Z-prepass epoch's build (EarlyPrepass; Main_RenderDepth);
 	 * - "colour": the colour epoch's build (Prepass; the end of the opaque batches).
 	 *
-	 * A job that is late at its join is not cancelled: the render thread builds inline instead and the worker's
-	 * result is dropped by the caller. `Drain` is the only unbounded wait, for teardown and the live toggle.
+	 * A job that is late at its join is waited for no longer than the budget, but the callers then Cancel it before
+	 * building inline over its payload, and Cancel waits for a running job to reach its next stop check: a late join
+	 * still blocks for the rest of the job. Never seen in the reports so far (0 late); phase 6 deletes the joins.
 	 *
-	 * Render thread: Submit, Wait, CancelPending, Drain, Idle and the stats. The worker thread only runs jobs.
+	 * Render thread: Submit, Wait, CancelPending, Drain, WaitIdle and the stats. No mutex on its side: a job's state
+	 * is one atomic the coordinator and a canceller race for, and its end a semaphore.
 	 */
 	class AsyncWorker
 	{

@@ -308,6 +308,14 @@ namespace DCLF
 			else
 				logger::warn("[DCLF] {} is missing; tree LOD stays native", kDistantTreeSourcePath);
 		}
+#if defined(DCLF_HAS_SHADER_COMPILER)
+		if (auto* compiler = RenderGraphRuntime::Get().ShaderCompiler()) {
+			sourceFingerprint = compiler->FingerprintInputs(source, dependencies);
+			pulledFingerprint = pulledSource.empty() ? 0 : compiler->FingerprintInputs(pulledSource, dependencies);
+			utilityFingerprint = utilitySource.empty() ? 0 : compiler->FingerprintInputs(utilitySource, dependencies);
+			distantTreeFingerprint = distantTreeSource.empty() ? 0 : compiler->FingerprintInputs(distantTreeSource, dependencies);
+		}
+#endif
 		sourcesLoaded = true;
 		logger::info("[DCLF] SPIR-V builds of {}: {} shader files tracked as dependencies", kSourcePath, dependencies.size());
 		if (ShaderDebug())
@@ -319,9 +327,10 @@ namespace DCLF
 	namespace
 	{
 		std::shared_future<org::services::ShaderArtifact> RequestStage(std::span<const std::byte> a_source, const std::vector<std::filesystem::path>& a_dependencies,
-			const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly, bool a_pulled, const char* a_sourceName)
+			std::uint64_t a_fingerprint, const RE::BSShader& a_lighting, bool a_pixel, std::uint32_t a_descriptor, bool a_depthOnly, bool a_pulled, const char* a_sourceName)
 		{
 			org::services::ShaderCompileRequest request{};
+			request.inputsFingerprint = a_fingerprint;
 			ZoneScopedN("CS.DCLF.Shaders.RequestStage");
 			request.sourceName = a_sourceName;
 			request.source = a_source;
@@ -419,7 +428,7 @@ namespace DCLF
 			// Like the program entries, stage futures live for this source set's lifetime.
 			// A VS shared by several PS permutations must not rescan the shader tree each time.
 			auto future = RequestStage(utility ? owner.utilitySource : distantTree ? owner.distantTreeSource : pulled ? owner.pulledSource : owner.source, owner.dependencies,
-				shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : kSourcePath);
+				utility ? owner.utilityFingerprint : distantTree ? owner.distantTreeFingerprint : pulled ? owner.pulledFingerprint : owner.sourceFingerprint, shader, pixel, descriptor, depth, pulled, utility ? kUtilitySourcePath : distantTree ? kDistantTreeSourcePath : kSourcePath);
 			{
 				std::lock_guard lock(mutex);
 				futures.emplace(key, future);
@@ -451,6 +460,7 @@ namespace DCLF
 			}
 		}
 		ZoneScopedN("CS.DCLF.Shaders.Precompile");
+
 		auto stage = stages->Request(*this, a_shader, a_pixel, a_descriptor);
 		const bool lighting = type == RE::BSShader::Type::Lighting;
 		auto depth = a_pixel && lighting ? stages->Request(*this, a_shader, true, a_descriptor, true) : decltype(stage){};
@@ -483,6 +493,7 @@ namespace DCLF
 			SIE::ShaderCache::Instance().compilationPool.detach_task([this, request] {
 				try { Precompile(*request.shader, request.pixel, request.descriptor); }
 				catch (const std::exception& e) { logger::warn("[DCLF] ORG shader precompile failed: {}", e.what()); }
+
 				SIE::ShaderCache::Instance().NotifyPoolProgress();
 			});
 	}

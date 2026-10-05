@@ -92,6 +92,8 @@ namespace DCLF
 	std::string IndirectDraws::AsyncReport()
 	{
 		std::string text = AsyncWorker::Get().Report() + AsyncWorker::Get().RenderWaitReport();
+		if (auto window = EngineReadWindow::Report(); !window.empty())
+			text += window + "\n";
 		if (impl->scene && impl->scene->fadeWriteBack) {
 			auto& writeBack = *impl->scene->fadeWriteBack;
 			if (writeBack.applied || writeBack.stale || writeBack.late) {

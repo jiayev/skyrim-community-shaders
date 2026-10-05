@@ -1,4 +1,5 @@
 #include "PrimaryCull.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 #include "PassCapture.h"
@@ -313,6 +314,7 @@ namespace DCLF
 
 	void PrimaryCull::PrepareFrame()
 	{
+		DCLF_FRAME_TRACE("PrimaryCull::PrepareFrame");  // TEMP frame trace
 		++cutStats.frames;
 		// The membership witness, before the list jobs: the commit sampled it at the scene phase (a frame without one samples it
 		// here), and BindByMembership reads the same sample.
@@ -942,6 +944,7 @@ namespace DCLF
 
 	void PrimaryCull::AfterListJobs()
 	{
+		DCLF_FRAME_TRACE("PrimaryCull::AfterListJobs");  // TEMP frame trace
 		// The animation job's updates since the last list jobs: complete now (the job runs between two culls), this frame's batch.
 		{
 			std::scoped_lock lock(animatedMutex);
@@ -1023,6 +1026,8 @@ namespace DCLF
 
 	void PrimaryCull::AfterFullFrustum()
 	{
+		// The first reader that needs the frame's walk: the scene task joins here (SceneStore::KickSceneTask).
+		SceneStore::Get().JoinSceneTask();
 		ZoneScopedN("CS.DCLF.AfterFullFrustum");
 		frameLive.store(false, std::memory_order_relaxed);
 		gpuSunFrame = false;
@@ -1204,6 +1209,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("PrimaryCull.cpp:1205");  // TEMP frame trace
 				auto& self = PrimaryCull::Get();
 				if (a_object && self.frameLive.load(std::memory_order_acquire))
 					if (const int slot = self.SlotOf(a_process); slot >= 0 && self.StandIn(slot, a_process, a_object, a_arg))
@@ -1218,6 +1224,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::BSGeometry& a_geometry, std::int32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("PrimaryCull.cpp:1219");  // TEMP frame trace
 				auto& self = PrimaryCull::Get();
 				if (self.frameLive.load(std::memory_order_acquire))
 					if (const int slot = self.SlotOf(a_process); slot >= 0 && self.Owned(a_geometry)) {
@@ -1239,6 +1246,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_node, float a_amount, const float* a_camera)
 			{
+				DCLF_FRAME_TRACE("PrimaryCull.cpp:1240");  // TEMP frame trace
 				PrimaryCull::Get().NoteAnimatedFade(a_node, a_camera);
 				func(a_node, a_amount, a_camera);
 			}
@@ -1250,6 +1258,7 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
+				DCLF_FRAME_TRACE("PrimaryCull.cpp:1251");  // TEMP frame trace
 				PrimaryCull::Get().AfterFullFrustum();
 				return func(a_1, a_2, a_3, a_4);
 			}
@@ -1261,6 +1270,7 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
+				DCLF_FRAME_TRACE("PrimaryCull.cpp:1262");  // TEMP frame trace
 				const auto result = func(a_1, a_2, a_3, a_4);
 				PrimaryCull::Get().AfterListJobs();
 				return result;

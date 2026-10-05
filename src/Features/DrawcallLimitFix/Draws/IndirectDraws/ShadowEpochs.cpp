@@ -207,7 +207,10 @@ namespace DCLF
 					capacity *= 2;
 				logger::info("[DCLF] index pool: {} indices grown to {} ({} MB)", p.capacity, capacity, capacity * 2 >> 20);
 				p.capacity = static_cast<std::uint32_t>(std::min<std::uint64_t>(capacity, UINT32_MAX & ~1u));
-				p.indices->ResizeStructured(p.capacity / 2);
+				{
+					const auto mutation = MutateBackings();
+					p.indices->ResizeStructured(p.capacity / 2);
+				}
 				++p.layout;
 				p.free.clear();
 				p.end = 0;
@@ -300,7 +303,10 @@ namespace DCLF
 			if (count > p.firstsCapacity) {
 				while (p.firstsCapacity < count)
 					p.firstsCapacity *= 2;
-				p.firsts->ResizeStructured(p.firstsCapacity);
+				{
+					const auto mutation = MutateBackings();
+					p.firsts->ResizeStructured(p.firstsCapacity);
+				}
 				++p.layout;
 				allFirsts = true;
 			}
@@ -321,7 +327,10 @@ namespace DCLF
 			if (copyCount > p.copiesCapacity) {
 				while (p.copiesCapacity < copyCount)
 					p.copiesCapacity *= 2;
-				p.copies->ResizeStructured(p.copiesCapacity);
+				{
+					const auto mutation = MutateBackings();
+					p.copies->ResizeStructured(p.copiesCapacity);
+				}
 				++p.layout;
 			}
 			if (copyCount)

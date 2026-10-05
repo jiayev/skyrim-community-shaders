@@ -7,6 +7,8 @@
 #	include <rhi_interop_vulkan.h>
 #	include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
 #	include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#	include "Features/DrawcallLimitFix/Common/RenderThreadBudget.h"
+#	include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 #	include "Features/DrawcallLimitFix/Engine/ConstantMirror.h"
 #	include "Features/DrawcallLimitFix/Draws/DrawPipelines.h"
 #	include "Features/DrawcallLimitFix/Draws/DrawPipelinesRhi.h"

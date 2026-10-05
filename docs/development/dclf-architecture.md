@@ -112,7 +112,9 @@ on, and every row is a constant-buffer block (256-byte aligned), so a table can 
 
 The table grows on the render thread before the shadow build is taken, to what the last build wanted plus a quarter
 (`IndirectDraws::Impl::ReserveShadowRows`), through `Buffer::ResizeBytes`: the graph resource stays the same, and the
-old backing goes through ORG's deletion queue. A new backing holds nothing, so every row is sent again. A material
+old backing goes through ORG's deletion queue. Every resize runs inside `MutateBackings` (`GrowableRows.h`), which keeps
+it apart from ORG's host thread while that thread prepares tickets (ORG's `persistent-epochs.md`, "Backing changes").
+A new backing holds nothing, so every row is sent again. A material
 past the capacity waits one frame and its casters stay the engine's meanwhile. `CS_DCLF_TABLE_START=small` starts the
 table at 4 rows, to exercise the growth.
 
