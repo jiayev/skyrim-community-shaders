@@ -1,4 +1,5 @@
 #include "SunAccumulation.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "PassCapture.h"
@@ -164,7 +165,8 @@ namespace DCLF
 		}
 		// Built for other candidates: the scene changed since the set it follows, and an entry may hold a caster no
 		// epoch has drawn yet. The engine culls everything this frame.
-		if (exclusion->candidates->generation != SceneStore::Get().GetSunCandidatesGeneration()) {
+		// The candidates as the frame's claims were installed: the scene task may be updating them now.
+		if (exclusion->candidates->generation != SceneStore::Get().GetPublishedSunGeneration()) {
 			++stats.exclusionStale;
 			return;
 		}
@@ -357,6 +359,7 @@ namespace DCLF
 		{
 			static void thunk(RE::BSShadowDirectionalLight* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:358");  // TEMP frame trace
 				auto* node = globals::game::smState ? globals::game::smState->shadowSceneNode[0] : nullptr;
 				if (!node || node->GetRuntimeData().sunShadowDirLight != a_light) {
 					func(a_light, a_count, a_arg2, a_arg3);
@@ -438,6 +441,7 @@ namespace DCLF
 		{
 			static std::uint64_t thunk(void* a_accumulator, void* a_geometry, std::uint64_t a_arg)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:439");  // TEMP frame trace
 				SunCall* call = currentCall;
 				const int cascade = call ? call->IndexOf(a_accumulator) : -1;
 				auto& self = SunAccumulation::Get();
@@ -516,6 +520,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_light, void* a_lists, void* a_arg)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:517");  // TEMP frame trace
 				auto& self = SunAccumulation::Get();
 				self.bitsReady.store(false, std::memory_order_relaxed);
 				self.exclusionLive.store(false, std::memory_order_relaxed);
@@ -542,6 +547,7 @@ namespace DCLF
 		{
 			static void thunk(std::uint64_t a_1, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:543");  // TEMP frame trace
 				func(a_1, a_2, a_3, a_4);
 				SunAccumulation::Get().bitsReady.store(false, std::memory_order_relaxed);
 			}
@@ -553,6 +559,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_light, void* a_descriptor, std::uint32_t* a_count, void* a_processes, std::uint32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:554");  // TEMP frame trace
 				SunCall* call = currentCall;
 				auto& self = SunAccumulation::Get();
 				if (call && a_descriptor) {
@@ -582,6 +589,7 @@ namespace DCLF
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:583");  // TEMP frame trace
 				if (SunCall* call = currentCall; call && call->cascade >= 0 && a_object) {
 					auto& self = SunAccumulation::Get();
 					const auto& state = self.frameState;
@@ -604,6 +612,7 @@ namespace DCLF
 		{
 			static void thunk(void* a_fullProcess, RE::NiCullingProcess* a_process, std::uint64_t a_arg)
 			{
+				DCLF_FRAME_TRACE("SunAccumulation.cpp:605");  // TEMP frame trace
 				func(a_fullProcess, a_process, a_arg);
 				// After it: the traversal's first call (vfunc 0xB8) has set the process up from the cascade's camera. With
 				// an empty objectArray it made none, and the planes are not this cascade's.

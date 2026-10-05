@@ -44,7 +44,9 @@ namespace DCLF
 		residentPos[a_slot] = kNotResident;
 		UnlistTree(a_slot);
 		UnlistFadeRoot(a_slot);
-		if (a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot])
+		// The scene work's drops reach PrimaryCull as set changes (ApplySet) or as revoked claims (RevokeUndrawnClaims); the
+		// accumulate phase's, at once.
+		if (!holdPrimaryNotes && a_slot < tables.objectGeometry.size() && tables.objectGeometry[a_slot])
 			PrimaryCull::Get().NoteMemberLost(tables.objectGeometry[a_slot]);
 		if (a_slot < tables.residentSlot.size()) {
 			tables.residentSlot[a_slot] = 0;
@@ -63,7 +65,10 @@ namespace DCLF
 	void SceneStore::EndAllResidency()
 	{
 		residentMaintenanceDirty = true;
-		PrimaryCull::Get().NoteAllMembersLost();
+		if (holdPrimaryNotes)
+			allMembersLostHeld = true;
+		else
+			PrimaryCull::Get().NoteAllMembersLost();
 		memberDecals.clear();
 		memberDecalsChanged = true;
 		for (const std::uint32_t slot : residents) {

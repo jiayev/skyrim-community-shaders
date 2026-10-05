@@ -214,6 +214,15 @@ namespace DCLF
 
 	void RunTestHarness(std::string_view a_feature)
 	{
+		// CS_DCLF_TEST_EXIT=<frame>: a startup loop's run ends here, loading screens not counted. The log is flushed, then the
+		// process ends without the engine's shutdown, which is slow and not what such a run tests.
+		static const std::uint32_t exitFrame = static_cast<std::uint32_t>(std::strtoul(DCLF::SwitchValue(DCLF::Switch::TestExit).c_str(), nullptr, 10));
+		static std::uint32_t exitCount = 0;
+		if (exitFrame && !DCLF::SceneStore::IsLoadingScreenUp() && ++exitCount >= exitFrame) {
+			logger::info("[DCLF] test exit at frame {}", exitCount);
+			spdlog::apply_all([](const std::shared_ptr<spdlog::logger>& a_logger) { a_logger->flush(); });
+			::TerminateProcess(::GetCurrentProcess(), 0);
+		}
 		static TestCommands testCommands;
 		testCommands.OnFrame();
 		static TestToggle testToggle;

@@ -5,6 +5,19 @@
 namespace DCLF::Draws
 {
 	/**
+	 * @brief The scope in which the render thread may change a graph buffer's backing (ResizeBytes, ResizeStructured).
+	 *
+	 * ORG's host thread prepares the next tickets while the render thread commits an epoch's inputs, and each preparation
+	 * captures every slot's backing. A resize has no backing between releasing the old one and creating the new one: a
+	 * preparation in that window bound nothing, or materialized the buffer itself, and its ticket wrote through a null or
+	 * released buffer (crash-catalog.md, "the Z-prepass device loss"). The scope keeps the two apart
+	 * (PersistentGraphHost::MutateBackings: it waits out a preparation in progress), and the tickets prepared before it are
+	 * prepared again. Opened only where a backing does change, so a frame that grows nothing never waits; ORG throws on a
+	 * resize outside it while async epochs run.
+	 */
+	std::optional<org::PersistentGraphHost::BackingMutation> MutateBackings();
+
+	/**
 	 * @brief A table of fixed-stride rows in one device buffer the shaders read by address, which grows instead of capping.
 	 *
 	 * Each row is a constant-buffer block (the stride a multiple of kConstantAlignment), so the table is an array of them.
@@ -15,7 +28,7 @@ namespace DCLF::Draws
 	 * nothing, so after a growth (the generation changes) every row is sent again. A row past the capacity waits for the
 	 * next Reserve, as a caster waits for its texture: nothing is dropped and nothing falls back.
 	 *
-	 * Render thread, between epochs (a frame boundary): the one place a backing may change.
+	 * Render thread, between epochs, inside MutateBackings (Reserve opens it when the backing changes).
 	 */
 	struct GrowableRows
 	{

@@ -52,7 +52,8 @@ namespace DCLF
 			{ Dclf, "CS_DCLF", F, Reduced::Zero, false, "0: DCLF does not install" },
 			{ Async, "CS_DCLF_ASYNC", F, Reduced::Async, false, "off|0: builds inline on the render thread; probe: the worker's builds, compared against inline ones" },
 			{ AsyncWaitMs, "CS_DCLF_ASYNC_WAIT_MS", F, N, false, "how long the render thread waits for a worker build before building inline (default 3)" },
-			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the worker thread keeps normal priority instead of above normal" },
+			{ AsyncPriority, "CS_DCLF_ASYNC_PRIORITY", F, N, false, "normal: the coordinator thread keeps normal priority instead of above normal" },
+			{ Workers, "CS_DCLF_WORKERS", F, N, false, "the preparation pool's threads (default hardware threads - 2, at least 1)" },
 			{ Precompile, "CS_DCLF_PRECOMPILE", F, Reduced::Zero, false, "0: DCLF's SPIR-V programs compile on first use instead of alongside the engine's shaders" },
 			{ Cull, "CS_DCLF_CULL", F, Reduced::Cull, false, "off|frustum|occlusion (default): GPU culling, the live toggle's seed" },
 			{ Skinned, "CS_DCLF_SKINNED", F, Reduced::UnlessOne, false, "0: skinned objects stay native (live toggle's seed)" },
@@ -138,6 +139,7 @@ namespace DCLF
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },
 			{ TestTurn, "CS_DCLF_TEST_TURN", T, N, false, "<start>:<end>:<degrees per frame>;...: turns the player" },
 			{ TestToggle, "CS_DCLF_TEST_TOGGLE", T, N, false, "<off frame>:<on frame>...: switches DCLF off and on" },
+			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },
 			{ StreamlineReflex, "CS_STREAMLINE_REFLEX", O, N, false, "1: Streamline loads Reflex (and with it DLSS-G)" },

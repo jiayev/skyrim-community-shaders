@@ -1,5 +1,6 @@
 #include "ConstantEvaluator.h"
 
+#include "Features/DrawcallLimitFix/Common/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Common/Switches.h"
 #include "Features/DrawcallLimitFix/Scene/LightingDescriptors.h"
 
@@ -200,6 +201,7 @@ namespace DCLF
 	{
 		if (!lightingShader)
 			return false;
+		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::EngineBoundary);
 
 		auto& state = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData();
 		auto* context = globals::d3d::context;

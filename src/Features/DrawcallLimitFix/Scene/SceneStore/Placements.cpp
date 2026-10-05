@@ -1,6 +1,8 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#include "Features/DrawcallLimitFix/Engine/EngineReadWindow.h"
 
 namespace DCLF
 {
@@ -172,12 +174,16 @@ namespace DCLF
 		return changed;
 	}
 
-	void SceneStore::RunPlacements()
+	void SceneStore::RunPlacements(bool a_worker)
 	{
 		// The items, then the roots, in one sequence the join resumes.
 		const auto items = static_cast<std::uint32_t>(placements.size());
 		const auto count = items + static_cast<std::uint32_t>(rootPlacements.size());
 		for (std::uint32_t i = placementsDone.load(std::memory_order_acquire); i < count; ++i) {
+			// A worker reads the engine's nodes only inside the window; the join takes what it left.
+			std::optional<EngineReadWindow::Lease> lease;
+			if (a_worker && !lease.emplace())
+				return;
 			placementChanges[i] = i < items ? TakePlacement(placements[i]) : TakeRoot(rootPlacements[i - items], false);
 			placementsDone.store(i + 1, std::memory_order_release);
 		}
@@ -219,18 +225,20 @@ namespace DCLF
 		if (placements.empty() && rootPlacements.empty())
 			return;
 		// The walk parity reads every record right after the walk, so its frames take them here.
-		const bool inline_ = !AsyncEnabled() || (SwitchEnabled(Switch::WalkParity) && ParityDue(frame));
+		// The scene task takes them itself, on the coordinator, under read leases (it is a worker).
+		const bool inline_ = inSceneTask || !AsyncEnabled() || (SwitchEnabled(Switch::WalkParity) && ParityDue(frame));
 		if (inline_) {
-			RunPlacements();
+			RunPlacements(inSceneTask);
 			ApplyPlacements(false);
 			return;
 		}
 		placementJob = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
-			AsyncWorker::Get().Submit("scene placement", [this](std::stop_token) { RunPlacements(); })));
+			AsyncWorker::Get().Submit("scene placement", [this](std::stop_token) { RunPlacements(true); })));
 	}
 
 	void SceneStore::JoinPlacements()
 	{
+		DCLF_FRAME_TRACE("JoinPlacements");  // TEMP frame trace
 		if (!placementJob && placements.empty() && rootPlacements.empty())
 			return;
 		DCLF_SCENE_PART(PlacementJoin, "CS.DCLF.Scene.PlacementJoin");

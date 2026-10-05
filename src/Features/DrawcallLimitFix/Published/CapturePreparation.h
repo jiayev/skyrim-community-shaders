@@ -25,7 +25,7 @@ namespace DCLF::Published
 	class CapturePreparation
 	{
 	public:
-		explicit CapturePreparation(std::size_t byteBudget = 128u * 1024u * 1024u, std::size_t eventLimit = 4096);
+		explicit CapturePreparation(std::size_t byteBudget = SIZE_MAX, std::size_t eventLimit = SIZE_MAX);
 		CaptureAdmission::Result Post(const CapturedSceneEvent&);
 		std::optional<CaptureBuildRequest> Begin(std::size_t reservedOutputBytes);
 		// True means the matching completion was consumed, not necessarily ready:

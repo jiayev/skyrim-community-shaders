@@ -24,9 +24,9 @@ namespace DCLF::Published
 		};
 		using BackendFactory = std::function<Backend(std::shared_ptr<org::async::GraphScheduler>)>;
 		CaptureService(Builder, std::size_t outputReservation,
-			std::size_t byteBudget = 128u * 1024u * 1024u, std::size_t eventLimit = 4096);
+			std::size_t byteBudget = SIZE_MAX, std::size_t eventLimit = SIZE_MAX);
 		CaptureService(BackendFactory, std::size_t outputReservation,
-			std::size_t byteBudget = 128u * 1024u * 1024u, std::size_t eventLimit = 4096);
+			std::size_t byteBudget = SIZE_MAX, std::size_t eventLimit = SIZE_MAX);
 		~CaptureService();
 		CaptureService(const CaptureService&) = delete;
 		CaptureService& operator=(const CaptureService&) = delete;

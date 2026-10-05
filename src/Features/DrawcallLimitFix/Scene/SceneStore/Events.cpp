@@ -1,4 +1,6 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Engine/EngineAccess.h"
 
@@ -9,6 +11,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::BSFadeNode* a_this, RE::NiCullingProcess* a_process, std::int32_t a_alphaGroup)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:11");  // TEMP frame trace
 			const float before = CurrentFade(a_this);
 			func(a_this, a_process, a_alphaGroup);
 			if (CurrentFade(a_this) != before)
@@ -21,6 +24,7 @@ namespace DCLF::Scene
 	{
 		static std::uint64_t thunk(RE::BSFadeNode* a_this, float a_fadeAmount, void* a_camera)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:23");  // TEMP frame trace
 			const float before = CurrentFade(a_this);
 			const auto result = func(a_this, a_fadeAmount, a_camera);
 			if (CurrentFade(a_this) != before)
@@ -38,6 +42,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::BSFadeNode* a_this, float a_level)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:40");  // TEMP frame trace
 			const std::uint8_t before = a_this->GetRuntimeData().unk152 & 0xF;
 			func(a_this, a_level);
 			if ((a_this->GetRuntimeData().unk152 & 0xF) != before)
@@ -52,6 +57,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::Sky* a_sky, RE::NiColor* a_colour, void* a_blend, float a_flash)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:54");  // TEMP frame trace
 			const RE::NiColor before = a_colour ? *a_colour : RE::NiColor{};
 			func(a_sky, a_colour, a_blend, a_flash);
 			if (a_colour && std::memcmp(&before, a_colour, sizeof(before)) != 0)
@@ -67,6 +73,7 @@ namespace DCLF::Scene
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_object, RE::NiColor** a_colour)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:69");  // TEMP frame trace
 			auto* geometry = a_object ? a_object->AsGeometry() : nullptr;
 			auto* property = geometry ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get()) : nullptr;
 			const RE::NiColor* before = property ? property->emissiveColor : nullptr;
@@ -83,6 +90,7 @@ namespace DCLF::Scene
 	{
 		static std::uint64_t thunk(RE::NiAVObject* a_node, void* a_camera)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:85");  // TEMP frame trace
 			const auto result = func(a_node, a_camera);
 			if (a_node)
 				fadeSnapEvents.Push(a_node);
@@ -115,6 +123,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::BSShaderProperty* a_this, RE::BSShaderProperty::EShaderPropertyFlag8 a_flag, bool a_set)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:117");  // TEMP frame trace
 			const auto before = a_this->flags.underlying();
 			func(a_this, a_flag, a_set);
 			if (a_this->flags.underlying() != before)
@@ -127,6 +136,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::BSShaderProperty* a_this, RE::BSShaderMaterial* a_material, bool a_unique)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:129");  // TEMP frame trace
 			const auto* before = a_this->material;
 			func(a_this, a_material, a_unique);
 			if (a_this->material != before)
@@ -140,6 +150,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::BSLightingShaderProperty* a_this, float a_alpha)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:142");  // TEMP frame trace
 			const auto* material = static_cast<const RE::BSLightingShaderMaterialBase*>(a_this->material);
 			const float before = material ? material->materialAlpha : 0.0f;
 			func(a_this, a_alpha);
@@ -154,6 +165,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiObjectNET* a_target, RE::NiTimeController* a_controller)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:156");  // TEMP frame trace
 			func(a_target, a_controller);
 			if (!a_target)
 				return;
@@ -169,6 +181,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiCollisionObject* a_this, const void* a_transform)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:171");  // TEMP frame trace
 			func(a_this, a_transform);
 			PushNode(a_this->sceneObject);
 		}
@@ -180,6 +193,7 @@ namespace DCLF::Scene
 	{
 		static bool thunk(RE::TESObjectREFR* a_reference)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:182");  // TEMP frame trace
 			const bool result = func(a_reference);
 			PushMove(a_reference);
 			CountMove(0);
@@ -192,6 +206,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::TESObjectREFR* a_reference, bool a_warp)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:194");  // TEMP frame trace
 			func(a_reference, a_warp);
 			PushMove(a_reference);
 			CountMove(1);
@@ -203,6 +218,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::Actor* a_actor)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:205");  // TEMP frame trace
 			func(a_actor);
 			PushMove(a_actor);
 			CountMove(2);
@@ -214,6 +230,7 @@ namespace DCLF::Scene
 	{
 		static std::uint64_t thunk(RE::Actor* a_actor)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:216");  // TEMP frame trace
 			const auto result = func(a_actor);
 			PushMove(a_actor);
 			CountMove(3);
@@ -227,6 +244,7 @@ namespace DCLF::Scene
 		// FUN_140770dc0's list: the actors' handles at +0x30, their count at +0x40.
 		static void thunk(std::byte* a_list)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:229");  // TEMP frame trace
 			func(a_list);
 			const auto* handles = *reinterpret_cast<const RE::RefHandle* const*>(a_list + 0x30);
 			const auto count = *reinterpret_cast<const std::uint32_t*>(a_list + 0x40);
@@ -244,6 +262,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::TESObjectREFR* a_reference)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:246");  // TEMP frame trace
 			func(a_reference);
 			PushMove(a_reference);
 			CountMove(5);
@@ -256,6 +275,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiAVObject* a_node, void* a_data, std::uint32_t a_arg)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:258");  // TEMP frame trace
 			using UpdateSelectedDownwardPass = void (*)(RE::NiAVObject*, void*, std::uint32_t);
 			(*reinterpret_cast<UpdateSelectedDownwardPass* const*>(a_node))[0x2D](a_node, a_data, a_arg);
 			if (const auto* reference = a_node->GetUserData())
@@ -270,6 +290,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, bool a_firstAvail)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:272");  // TEMP frame trace
 			func(a_this, a_child, a_firstAvail);
 			PushSwitchStructural(a_this);
 		}
@@ -279,6 +300,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:281");  // TEMP frame trace
 			func(a_this, a_child, a_out);
 			PushSwitchStructural(a_this);
 		}
@@ -288,6 +310,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, RE::NiAVObject* a_child)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:290");  // TEMP frame trace
 			func(a_this, a_child);
 			PushSwitchStructural(a_this);
 		}
@@ -297,6 +320,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiPointer<RE::NiAVObject>& a_out)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:299");  // TEMP frame trace
 			func(a_this, a_index, a_out);
 			PushSwitchStructural(a_this);
 		}
@@ -306,6 +330,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, std::uint32_t a_index)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:308");  // TEMP frame trace
 			func(a_this, a_index);
 			PushSwitchStructural(a_this);
 		}
@@ -315,6 +340,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child, RE::NiPointer<RE::NiAVObject>& a_out)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:317");  // TEMP frame trace
 			func(a_this, a_index, a_child, a_out);
 			PushSwitchStructural(a_this);
 		}
@@ -324,6 +350,7 @@ namespace DCLF::Scene
 	{
 		static void thunk(RE::NiNode* a_this, std::uint32_t a_index, RE::NiAVObject* a_child)
 		{
+			DCLF_FRAME_TRACE("Events.cpp:326");  // TEMP frame trace
 			func(a_this, a_index, a_child);
 			PushSwitchStructural(a_this);
 		}
@@ -467,10 +494,13 @@ namespace DCLF
 
 	void SceneStore::ProcessEvents()
 	{
+		DCLF_FRAME_TRACE("ProcessEvents");  // TEMP frame trace
 		// A scene placement job no BeforeShadowMaps joined (a frame without shadow maps): its items name tracked
 		// entries, which the events below may erase.
 		JoinPlacements();
-		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+		// The render thread's: the scene task runs this on the coordinator, and BeginFrame records it then.
+		if (!inSceneTask)
+			switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
 		// Nothing here may walk the scene graph while a load screen is up. A load tears down and rebuilds
 		// TES::objRoot and the cell 3D under it, and the attach events queued across it name subtrees that
 		// are still being assembled; walking either gives a pointer that is stale or simply garbage. That
@@ -633,6 +663,7 @@ namespace DCLF
 		{
 			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
 			{
+				DCLF_FRAME_TRACE("Events.cpp:636");  // TEMP frame trace
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
 			}
@@ -642,6 +673,7 @@ namespace DCLF
 		{
 			static void thunk(RE::BSGeometry* a_shape, std::uint64_t a_segment)
 			{
+				DCLF_FRAME_TRACE("Events.cpp:645");  // TEMP frame trace
 				func(a_shape, a_segment);
 				lodSegmentEvents.Push(a_shape);
 			}
@@ -651,6 +683,7 @@ namespace DCLF
 		{
 			static void thunk(RE::BSGeometry* a_shape)
 			{
+				DCLF_FRAME_TRACE("Events.cpp:654");  // TEMP frame trace
 				func(a_shape);
 				lodSegmentEvents.Push(a_shape);
 			}

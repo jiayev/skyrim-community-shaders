@@ -1,4 +1,5 @@
 #include "LocalLightCull.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
@@ -315,6 +316,7 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(RE::NiNode* a_node, RE::NiCullingProcess* a_process, std::int32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("LocalLightCull.cpp:316");  // TEMP frame trace
 				// The frame's filter (built on parity frames too): the light reaching its nodes is what its bits follow.
 				if (const auto* filter = currentLight != kNoLight ? filterCurrent.load(std::memory_order_acquire) : nullptr)
 					if (const auto it = filter->nodes.find(a_node); it != filter->nodes.end()) {
@@ -394,6 +396,7 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(void* a_light, std::uint32_t* a_count, std::uint32_t* a_arg2, RE::NiAVObject* a_arg3)
 			{
+				DCLF_FRAME_TRACE("LocalLightCull.cpp:395");  // TEMP frame trace
 				LARGE_INTEGER start{}, end{};
 				QueryPerformanceCounter(&start);
 				// A light DCLF cannot give its bits to (past the mask's 32) culls everything.
@@ -441,6 +444,7 @@ namespace DCLF::LocalLightCull
 		{
 			static void thunk(RE::NiCullingProcess* a_process, RE::NiAVObject* a_object, std::int32_t a_arg)
 			{
+				DCLF_FRAME_TRACE("LocalLightCull.cpp:442");  // TEMP frame trace
 				if (a_object && currentLight != kNoLight)
 					if (const auto* exclusion = frameExclusion.load(std::memory_order_acquire)) {
 						stats.visited.fetch_add(1, std::memory_order_relaxed);

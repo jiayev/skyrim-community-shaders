@@ -826,11 +826,15 @@ namespace DCLF
 		writeBack.done.store(0, std::memory_order_relaxed);
 		// Between here and the join the tables are the frame's and no node is freed: the scene events are applied at the next
 		// frame's start, after the join.
-		auto apply = [scene = impl->scene](std::stop_token a_stop) {
+		auto apply = [scene = impl->scene](std::stop_token a_stop, bool a_worker) {
 			auto& state = *scene->fadeWriteBack;
 			const auto& tables = SceneStore::Get().GetTables();
 			for (std::size_t i = state.done.load(std::memory_order_relaxed); i < state.pending.size(); ++i) {
 				if (a_stop.stop_requested())
+					return;
+				// A worker writes the engine's nodes only inside the window; the next job takes what it left.
+				std::optional<EngineReadWindow::Lease> lease;
+				if (a_worker && !lease.emplace())
 					return;
 				const auto& event = state.pending[i];
 				const std::uint32_t frame = state.pendingFrames[i];
@@ -857,12 +861,13 @@ namespace DCLF
 			}
 		};
 		if (!AsyncEnabled()) {
-			apply(std::stop_token{});
+			apply(std::stop_token{}, false);
 			writeBack.pending.clear();
 			writeBack.pendingFrames.clear();
 			return;
 		}
-		writeBack.job = std::make_shared<AsyncWorker::JobHandle>(AsyncWorker::Get().Submit("fade write-back", std::move(apply)));
+		writeBack.job = std::make_shared<AsyncWorker::JobHandle>(
+			AsyncWorker::Get().Submit("fade write-back", [apply = std::move(apply)](std::stop_token a_stop) { apply(a_stop, true); }));
 	}
 
 	void IndirectDraws::JoinFadeWriteBack()

@@ -1087,8 +1087,43 @@ namespace DCLF
 		 * material's textures imported), and readiness is taken by events (a lookups generation, the tables' change log), never by
 		 * a scan of the scene. A member whose binding is taken again this frame (its record's inputs changed) leaves before the
 		 * accumulate phase rebinds it, so no frame's builds draw a member from a binding that is not ready.
+		 *
+		 * The commit decides the next frame's set; ApplySet makes it the frame's (dclf-async-publication.md, "What each
+		 * carries"): the engine's claims are installed at Main::Draw, before the frame's scene work can have run, so the frame
+		 * draws exactly the set its claims are - the last commit's. The commit writes setPhasesNext and the snapshot; the
+		 * records, Tables::setPhases and the lacking counts change only at ApplySet.
 		 */
 		void CommitSet();
+		/**
+		 * @brief The last commit's set made the frame's: its phases into the records (kObjectMember, Tables::setPhases) and the
+		 * lacking counts, and its snapshot published as the engine's claims (PassCapture). Main::Draw (BeginSceneFrame), before the
+		 * frame's events. A slot freed or given to another geometry since the commit (an event at Present) takes no phase.
+		 */
+		void ApplySet();
+
+		/**
+		 * @brief The frame's scene work on DCLF's coordinator (dclf-async-publication.md, "Phase 3"): the walk (its placements
+		 * inline, under EngineReadWindow leases) and the set's commit, from Main::Draw to the first reader that needs this frame's
+		 * walk (PrimaryCull's full-frustum hook; every later DCLF hook joins too). The frame's events stay on the render thread,
+		 * before the kick (ProcessEvents).
+		 *
+		 * Render thread, in order: BeginFrame (the frame number, the published sun candidates' generation), ApplySet, the frame's
+		 * events, what the frame's claims need (the filters), then KickSceneTask. Between the kick and JoinSceneTask
+		 * nothing on the render thread or the engine's threads reads the store but GetFrame, GetPublishedSunGeneration and the
+		 * immutable publications (the set snapshot, the filters). What the walk has for other modules is held and handed over at
+		 * the join (FinishSceneWork): PrimaryCull's hidden keys and lost members, and the claims whose record stopped drawing.
+		 */
+		void BeginFrame();
+		/** @brief Coordinator (or inline): the scene work itself. a_task: on the coordinator (its placements take read leases). */
+		void RunSceneWork(bool a_task);
+		/** @brief Render thread: runs a_work on the coordinator, joined by JoinSceneTask. */
+		void KickSceneTask(std::function<void()> a_work);
+		/** @brief Render thread: waits for the scene task if one runs, then FinishSceneWork. Cheap when there is none. */
+		void JoinSceneTask();
+		/** @brief The sun candidates' generation as the frame's claims were installed (BeginFrame): the engine's hooks in the window. */
+		std::uint32_t GetPublishedSunGeneration() const { return publishedSunGeneration; }
+		/** @brief Claims revoked mid-frame since the last call (RevokeUndrawnClaims): geometries, and the phases taken back. */
+		std::pair<std::uint64_t, std::uint64_t> TakeRevokedClaims() { return { std::exchange(revokedGeometries, 0), std::exchange(revokedMain, 0) }; }
 		/** @brief The set's phases of an object slot (SetPhase bits), 0 when it is not a member. Render thread, or any thread between commits. */
 		std::uint8_t SetPhasesOf(std::int32_t a_object) const
 		{
@@ -1927,7 +1962,8 @@ namespace DCLF
 		} placementStats;
 		void QueuePlacement(RE::BSGeometry* a_geometry, Tracked& a_tracked, std::uint8_t a_take, MoveReason a_reason);
 		std::uint8_t TakePlacement(const Placement& a_item);
-		void RunPlacements();
+		/** @brief The placements not yet taken, resumably. a_worker: each item under an EngineReadWindow lease (stops at a refused one). */
+		void RunPlacements(bool a_worker = false);
 		void KickPlacements();
 		void ApplyPlacements(bool a_probe);
 		/**
@@ -2236,6 +2272,37 @@ namespace DCLF
 		std::vector<std::uint8_t> setRebinding;    // parallel to objects: this commit's, its binding is taken again this frame
 		std::vector<std::uint8_t> setLacking;      // parallel to objects: the occluder phases it takes part in and is no member of
 		std::array<std::uint32_t, 2> setLackingCount{};  // SetLacking's, per occlusion map
+		// The last commit's decision, applied at the next ApplySet: each slot's phases and lacking phases, and the slots it changed
+		// with the geometry each held when the commit decided (a slot that holds another one at ApplySet takes nothing).
+		std::vector<std::uint8_t> setPhasesNext, setLackingNext;
+		std::vector<std::pair<std::uint32_t, const RE::BSGeometry*>> setApply;
+		std::vector<std::uint8_t> setApplyMark;  // parallel to objects: in setApply
+		// The last commit's main-phase changes, handed to PrimaryCull when they take effect (ApplySet).
+		std::vector<const RE::BSGeometry*> setJoinedApply, setLeftApply;
+		// The claims as applied (the frame's), kept apart from Tables::setPhases, which a freed slot clears: what RevokeUndrawnClaims
+		// checks the records against, with the geometry each base slot is claimed under.
+		std::vector<std::uint8_t> setPhasesApplied;
+		std::vector<const RE::BSGeometry*> setGeometryApplied;
+		LogCursor revokeCursor;
+		std::uint64_t revokedGeometries = 0, revokedMain = 0;
+		/**
+		 * @brief After the frame's scene work: a claimed phase whose record the work stopped drawing (a slot freed, a main member
+		 * whose binding went) is taken back from the snapshot the engine's hooks read, so the engine draws it this frame. By the
+		 * tables' change log since ApplySet.
+		 */
+		void RevokeUndrawnClaims();
+		/** @brief Render thread, after the scene work (the task's or inline): the held hand-overs, the revocations, the kicks. */
+		void FinishSceneWork();
+
+		// The scene task (KickSceneTask): its job, and what the work holds for the render thread while it runs.
+		std::shared_ptr<void> sceneTask;  // AsyncWorker::JobHandle
+		bool sceneTaskFailedLogged = false;
+		bool sceneWorkPending = false;  // RunSceneWork ran; FinishSceneWork has not
+		bool inSceneTask = false;       // RunSceneWork on the coordinator
+		bool holdPrimaryNotes = false;  // RunSceneWork: PrimaryCull's notes are held until FinishSceneWork
+		std::vector<const void*> hiddenKeysHeld;
+		bool allMembersLostHeld = false;
+		std::uint32_t publishedSunGeneration = 0;
 		std::vector<const RE::BSGeometry*> setGeometry;  // parallel to objects: the geometry a base member is published under
 		ankerl::unordered_dense::map<const RE::BSGeometry*, std::uint32_t> setMemberSlot;  // published geometry -> its slot
 		// Members whose registration met a fade DCLF does not model (PassCapture::TakeUnmodelledFades): out of the set until it ends.

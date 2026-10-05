@@ -1,6 +1,9 @@
 #include "Internal.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Common/AsyncWorker.h"
+#include "Features/DrawcallLimitFix/Common/Toggles.h"
 
 // The DCLF set (SceneSet.h; drawcall-limit-fix.md, "The DCLF set"): who draws an object, decided once a frame.
 
@@ -77,17 +80,27 @@ namespace DCLF
 
 	void SceneStore::CommitSet()
 	{
+		DCLF_FRAME_TRACE("CommitSet");  // TEMP frame trace
 		ZoneScopedN("CS.DCLF.Scene.CommitSet");
 		++setStats.commits;
 		const std::size_t objects = tables.objects.size();
 		// A load screen: nothing is drawn, and the set is empty.
 		const bool live = sceneBuilt;
 		const std::uint32_t drawn = live ? SetPhasesDrawn() : 0u;
-		auto& setPhases = tables.setPhases;
+		// The commit's own copy: the records and Tables::setPhases take it at the next ApplySet.
+		auto& setPhases = setPhasesNext;
 		setQueueMark.resize(objects, 0);
 		setWaitingMark.resize(objects, 0);
 		setRebinding.resize(objects, 0);
-		setLacking.resize(objects, 0);
+		setLackingNext.resize(objects, 0);
+		setApplyMark.resize(objects, 0);
+		// A slot whose phases or lacking phases this commit changed, for ApplySet, with the geometry it holds now.
+		auto markApply = [&](std::uint32_t a_slot) {
+			if (setApplyMark[a_slot])
+				return;
+			setApplyMark[a_slot] = 1;
+			setApply.emplace_back(a_slot, tables.objectGeometry[a_slot]);
+		};
 		if (!setBuilding)
 			setBuilding = std::make_shared<SetSnapshot>();
 
@@ -101,9 +114,11 @@ namespace DCLF
 			setCursor.Restart(tablesGeneration);
 			setPhases.assign(objects, 0);
 			setGeometry.assign(objects, nullptr);
-			setLacking.assign(objects, 0);
-			setLackingCount = {};
+			setLackingNext.assign(objects, 0);
 			setMemberSlot.clear();
+			// Every slot's record and lacking phases are taken again by ApplySet, whatever this commit decides for it.
+			for (std::uint32_t slot = 0; slot < objects; ++slot)
+				markApply(slot);
 			setBuilding->phases.clear();
 			setSnapshotDirty = true;
 			for (const std::uint32_t slot : setWaiting)
@@ -115,6 +130,7 @@ namespace DCLF
 		} else {
 			setPhases.resize(objects, 0);
 			setGeometry.resize(objects, nullptr);
+			setLackingNext.resize(objects, 0);
 			constexpr std::uint32_t kSetCauses = kChangeBindings | kChangeMembership | kChangeGeometry | kChangeShadow | kChangeSkin;
 			for (const auto& change : setCursor.Unread(tables.changeLog))
 				if (change.causes & kSetCauses)
@@ -262,12 +278,9 @@ namespace DCLF
 		auto apply = [&](std::uint32_t a_slot, std::uint8_t a_phases, bool a_wait) {
 			// The occluder phases it takes part in and misses (SetLacking).
 			const std::uint8_t lacking = live ? static_cast<std::uint8_t>(SetParticipation(a_slot, drawn) & ~a_phases & (kSetOccluderSky | kSetOccluderPrecipitation)) : 0;
-			if (lacking != setLacking[a_slot]) {
-				for (std::uint32_t v = 0; v < 2; ++v) {
-					const std::uint8_t bit = v ? kSetOccluderPrecipitation : kSetOccluderSky;
-					setLackingCount[v] += ((lacking & bit) ? 1u : 0u) - ((setLacking[a_slot] & bit) ? 1u : 0u);
-				}
-				setLacking[a_slot] = lacking;
+			if (lacking != setLackingNext[a_slot]) {
+				setLackingNext[a_slot] = lacking;
+				markApply(a_slot);
 			}
 			if (a_wait != (setWaitingMark[a_slot] != 0)) {
 				setWaitingMark[a_slot] = a_wait ? 1 : 0;
@@ -278,10 +291,7 @@ namespace DCLF
 			if (before == a_phases)
 				return;
 			setPhases[a_slot] = a_phases;
-			// The record's bit is the main phase's (what the main builds' GPU inputs carry); the shadow builds read the phases.
-			auto& object = tables.objects[a_slot];
-			object.flags = (a_phases & kSetMain) ? (object.flags | kObjectMember) : (object.flags & ~kObjectMember);
-			tables.NoteChange(a_slot, kChangeBindings);
+			markApply(a_slot);  // the record's kObjectMember and Tables::setPhases, at ApplySet
 			if (!before || !a_phases)
 				++(a_phases ? setStats.joined : setStats.left);
 			// The engine's copy is by geometry, a base's alone: a layer draws its base's geometry and is a member with it.
@@ -337,8 +347,9 @@ namespace DCLF
 		// Dropped once: a slot can be pushed again after it left and came back within one commit.
 		std::sort(setWaiting.begin(), setWaiting.end());
 		setWaiting.erase(std::unique(setWaiting.begin(), setWaiting.end()), setWaiting.end());
-		if (!joined.empty() || !left.empty())
-			PrimaryCull::Get().NoteSetChanges(joined, left);
+		// PrimaryCull learns them when they take effect, with the claims (ApplySet).
+		setJoinedApply.insert(setJoinedApply.end(), joined.begin(), joined.end());
+		setLeftApply.insert(setLeftApply.end(), left.begin(), left.end());
 		setStats.members += setMemberSlot.size();
 		setStats.waiting += setWaiting.size();
 
@@ -350,6 +361,180 @@ namespace DCLF
 			setSnapshotDirty = false;
 			++setStats.publications;
 		}
+	}
+
+	void SceneStore::ApplySet()
+	{
+		DCLF_FRAME_TRACE("ApplySet");  // TEMP frame trace
+		ZoneScopedN("CS.DCLF.Scene.ApplySet");
+		const std::size_t objects = tables.objects.size();
+		auto& applied = tables.setPhases;
+		applied.resize(objects, 0);
+		setLacking.resize(objects, 0);
+		setPhasesNext.resize(objects, 0);
+		setLackingNext.resize(objects, 0);
+		setPhasesApplied.resize(objects, 0);
+		setGeometryApplied.resize(objects, nullptr);
+		for (const auto& [slot, geometry] : setApply) {
+			if (slot < setApplyMark.size())
+				setApplyMark[slot] = 0;
+			if (slot >= objects)
+				continue;
+			// The record the commit decided for: a slot freed since (a detach at Present) or holding another geometry takes nothing.
+			const bool same = !(tables.objects[slot].flags & kObjectFree) && tables.objectGeometry[slot] == geometry;
+			const std::uint8_t phases = same ? setPhasesNext[slot] : std::uint8_t{ 0 };
+			const std::uint8_t lacking = same ? setLackingNext[slot] : std::uint8_t{ 0 };
+			// The claim as the engine's hooks read it, by its base geometry (a layer is claimed with its base).
+			setPhasesApplied[slot] = phases;
+			setGeometryApplied[slot] = phases && !tables.IsLayer(slot) ? geometry : nullptr;
+			if (lacking != setLacking[slot]) {
+				for (std::uint32_t v = 0; v < 2; ++v) {
+					const std::uint8_t bit = v ? kSetOccluderPrecipitation : kSetOccluderSky;
+					setLackingCount[v] += ((lacking & bit) ? 1u : 0u) - ((setLacking[slot] & bit) ? 1u : 0u);
+				}
+				setLacking[slot] = lacking;
+			}
+			if (applied[slot] == phases)
+				continue;
+			applied[slot] = phases;
+			// The record's bit is the main phase's (what the main builds' GPU inputs carry); the shadow builds read the phases.
+			if (!(tables.objects[slot].flags & kObjectFree)) {
+				auto& object = tables.objects[slot];
+				object.flags = (phases & kSetMain) ? (object.flags | kObjectMember) : (object.flags & ~kObjectMember);
+				tables.NoteChange(slot, kChangeBindings);
+			}
+		}
+		setApply.clear();
 		PassCapture::Get().PublishSet(setSnapshot);
+		if (!setJoinedApply.empty() || !setLeftApply.empty())
+			PrimaryCull::Get().NoteSetChanges(setJoinedApply, setLeftApply);
+		setJoinedApply.clear();
+		setLeftApply.clear();
+		// What the frame's work changes from here is what RevokeUndrawnClaims checks.
+		revokeCursor.Restart(tablesGeneration);
+		revokeCursor.Advance(tables.changeLog);
+	}
+
+	void SceneStore::RevokeUndrawnClaims()
+	{
+		ZoneScopedN("CS.DCLF.Scene.RevokeUndrawnClaims");
+		std::vector<std::pair<const RE::BSGeometry*, std::uint8_t>> revoked;
+		auto check = [&](std::uint32_t a_slot) {
+			if (a_slot >= setPhasesApplied.size() || a_slot >= setGeometryApplied.size())
+				return;
+			const std::uint8_t claimed = setPhasesApplied[a_slot];
+			const auto* geometry = setGeometryApplied[a_slot];
+			if (!claimed || !geometry)
+				return;
+			const bool same = a_slot < tables.objects.size() && !(tables.objects[a_slot].flags & kObjectFree) && tables.objectGeometry[a_slot] == geometry;
+			std::uint8_t drawn = 0;
+			if (same) {
+				const auto flags = tables.objects[a_slot].flags;
+				const bool main = (flags & kObjectMember) && !(flags & kObjectNoBindings);
+				drawn = static_cast<std::uint8_t>((main ? (kSetMain | kSetReflection) : 0u) | (tables.setPhases[a_slot] & ~(kSetMain | kSetReflection)));
+			}
+			const std::uint8_t lost = claimed & ~drawn;
+			if (!lost)
+				return;
+			setPhasesApplied[a_slot] &= ~lost;
+			if (same) {
+				// Out of the frame's set in what it no longer draws: the accumulate phase must not make it a member again.
+				tables.setPhases[a_slot] &= ~lost;
+				if ((lost & kSetMain) && (tables.objects[a_slot].flags & kObjectMember)) {
+					tables.objects[a_slot].flags &= ~kObjectMember;
+					tables.NoteChange(a_slot, kChangeBindings);
+				}
+			}
+			revoked.emplace_back(geometry, lost);
+		};
+		if (revokeCursor.Continues(tables.changeLog, tablesGeneration)) {
+			for (const auto& change : revokeCursor.Unread(tables.changeLog))
+				check(change.slot);
+		} else {
+			// The log broke (new tables): every claim is checked.
+			for (std::uint32_t slot = 0; slot < setPhasesApplied.size(); ++slot)
+				check(slot);
+		}
+		revokeCursor.Restart(tablesGeneration);
+		revokeCursor.Advance(tables.changeLog);
+		if (revoked.empty())
+			return;
+		auto& capture = PassCapture::Get();
+		if (const auto current = capture.CurrentSet()) {
+			auto snapshot = std::make_shared<SetSnapshot>(*current);
+			for (const auto& [geometry, lost] : revoked) {
+				const auto it = snapshot->phases.find(geometry);
+				if (it == snapshot->phases.end())
+					continue;
+				it->second &= ~lost;
+				if (!it->second)
+					snapshot->phases.erase(it);
+			}
+			capture.PublishSet(std::move(snapshot));
+		}
+		for (const auto& [geometry, lost] : revoked) {
+			++revokedGeometries;
+			if (lost & kSetMain) {
+				++revokedMain;
+				PrimaryCull::Get().NoteMemberLost(geometry);
+			}
+		}
+	}
+
+	void SceneStore::BeginFrame()
+	{
+		// Switch events are taken on the render thread only (PushSwitch); ProcessEvents may run on the coordinator.
+		switchEventThread.store(::GetCurrentThreadId(), std::memory_order_relaxed);
+		++frame;
+		publishedSunGeneration = sunCandidatesGeneration;
+	}
+
+	void SceneStore::RunSceneWork(bool a_task)
+	{
+		// The frame's events were processed on the render thread before the kick (BeginSceneFrame).
+		inSceneTask = a_task;
+		holdPrimaryNotes = true;
+		BuildFrame(Phase::Scene);
+		CommitSet();
+		EndSceneFrame();
+		holdPrimaryNotes = false;
+		inSceneTask = false;
+		sceneWorkPending = true;
+	}
+
+	void SceneStore::KickSceneTask(std::function<void()> a_work)
+	{
+		sceneTask = std::static_pointer_cast<void>(std::make_shared<AsyncWorker::JobHandle>(
+			AsyncWorker::Get().Submit("scene", [work = std::move(a_work)](std::stop_token) { work(); })));
+	}
+
+	void SceneStore::JoinSceneTask()
+	{
+		if (auto job = std::static_pointer_cast<AsyncWorker::JobHandle>(std::exchange(sceneTask, nullptr))) {
+			// The frame's work must be done before anything reads the store: no budget, no inline fallback.
+			const auto result = AsyncWorker::Get().Wait(*job, std::chrono::hours(1));
+			if (result == AsyncWorker::WaitResult::Failed && !std::exchange(sceneTaskFailedLogged, true))
+				logger::error("[DCLF] the scene task threw; the frame's tables are whatever it left");
+		}
+		FinishSceneWork();
+	}
+
+	void SceneStore::FinishSceneWork()
+	{
+		if (!std::exchange(sceneWorkPending, false))
+			return;
+		auto& primary = PrimaryCull::Get();
+		for (const void* key : hiddenKeysHeld)
+			primary.NoteHiddenKey(key);
+		hiddenKeysHeld.clear();
+		if (std::exchange(allMembersLostHeld, false))
+			primary.NoteAllMembersLost();
+		RevokeUndrawnClaims();
+		// What the work's results start: the stood-in fade roots' write-back, and the shadow build kept at BeforeShadowMaps when
+		// nothing it read moves.
+		auto& draws = IndirectDraws::Get();
+		draws.KickFadeWriteBack();
+		if (ActiveToggles().shadows)
+			draws.KickShadowBuildEarly();
 	}
 }

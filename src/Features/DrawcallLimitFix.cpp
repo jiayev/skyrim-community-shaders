@@ -2,6 +2,10 @@
 
 #include "Deferred.h"
 #include "DrawcallLimitFix/Common/AsyncWorker.h"
+#include "DrawcallLimitFix/Common/RenderThreadBudget.h"
+#include "DrawcallLimitFix/Common/SceneScheduler.h"
+#include "DrawcallLimitFix/Common/FrameTrace.h"
+#include "DrawcallLimitFix/Engine/EngineReadWindow.h"
 #include "DrawcallLimitFix/Diagnostics/CaptureParity.h"
 #include "DrawcallLimitFix/Scene/ConstantEvaluator.h"
 #include "DrawcallLimitFix/Scene/MaterialSources.h"
@@ -64,6 +68,16 @@ namespace
 	{
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a_start).count();
 	}
+
+	/**
+	 * @brief The scene work on the render thread, as before the scene task: CS_DCLF_ASYNC=off, and the diagnostics that read the
+	 * store from the engine's hooks while the work would run (capture parity's face draws, the walk and persistent parities).
+	 */
+	bool SceneWorkInline()
+	{
+		return !DCLF::AsyncEnabled() || DCLF::SwitchEnabled(DCLF::Switch::PersistentParity) || DCLF::SwitchEnabled(DCLF::Switch::WalkParity) ||
+		       DCLF::CaptureParity::Enabled();
+	}
 }
 
 void DrawcallLimitFix::PostPostLoad()
@@ -88,6 +102,7 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::PassCapture::Get().Install();
 	DCLF::ReflectionFaces::Install();
 	DCLF::ReflectionFaces::SetAfterFaceDraws([] {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ReflectionFace);
 		if (globals::features::drawcallLimitFix.Running())
 			DCLF::IndirectDraws::Get().CaptureReflectionFace();
 	});
@@ -96,6 +111,8 @@ void DrawcallLimitFix::PostPostLoad()
 	DCLF::FaceSnapshots::Get().Install();
 	DCLF::SunAccumulation::Get().Install();
 	DCLF::PrimaryCull::Get().Install();
+	// DCLF's threads and its scene graph, before the first frame kicks a job (dclf-async-publication.md, "The design").
+	(void)DCLF::SceneScheduler::Graph();
 	Hooks::Install();
 	installed = true;
 	// The switches this process actually sees, once. Several reports below are gated on them, so without
@@ -139,14 +156,33 @@ void DrawcallLimitFix::Reset()
 	// must not grow while the world is not rendered.
 	if (!installed)
 		return;
-	const auto start = std::chrono::steady_clock::now();
-	DCLF::PrimaryCull::Get().EndFrame();
-	DCLF::IndirectDraws::Get().EndFrame();
-	DCLF::SceneStore::Get().ProcessEvents();
-	timing.eventsMs += MillisecondsSince(start);
-	// The menu's toggle, between frames. Scene events keep flowing above while off, so the tracked set is
-	// current the moment it comes back on.
-	UpdateActive();
+	{
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Present);
+		DCLF::SceneStore::Get().JoinSceneTask();
+		// The engine's next update follows Present: no worker may be inside its memory from here (EngineReadWindow).
+		{
+			DCLF::RenderThreadBudget::Part boundary(DCLF::RenderThreadBudget::Bucket::EngineBoundary);
+			DCLF::EngineReadWindow::Close();
+		}
+		const auto start = std::chrono::steady_clock::now();
+		DCLF::PrimaryCull::Get().EndFrame();
+		DCLF::IndirectDraws::Get().EndFrame();
+		DCLF::SceneStore::Get().ProcessEvents();
+		timing.eventsMs += MillisecondsSince(start);
+		// The menu's toggle, between frames. Scene events keep flowing above while off, so the tracked set is
+		// current the moment it comes back on.
+		UpdateActive();
+	}
+	DCLF::RenderThreadBudget::Get().EndFrame();
+	if (DCLF::FrameTrace::Enabled())  // TEMP frame trace
+		DCLF::FrameTrace::EndFrame([](const DCLF::FrameTrace::Entry* a_entries, std::uint32_t a_count) {
+			std::vector<DCLF::FrameTrace::Entry> sorted(a_entries, a_entries + a_count);
+			std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.us < b.us; });
+			std::string text;
+			for (const auto& entry : sorted)
+				text += fmt::format("\n    {:8} us  thread {:6}  {}", entry.us, entry.thread, entry.site ? entry.site : "?");
+			logger::info("[DCLF] frame trace (TEMP): {} sites, first call each, from Main::Draw:{}", a_count, text);
+		});
 }
 
 void DrawcallLimitFix::UpdateActive()
@@ -160,6 +196,7 @@ void DrawcallLimitFix::UpdateActive()
 void DrawcallLimitFix::SetActive(bool a_active)
 {
 	switchedOn = a_active;
+	DCLF::SceneStore::Get().JoinSceneTask();
 	if (!a_active)
 		DCLF::IndirectDraws::Get().DrainAsync();
 	auto& capture = DCLF::PassCapture::Get();
@@ -174,6 +211,10 @@ void DrawcallLimitFix::SetActive(bool a_active)
 
 std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
 {
+	if (DCLF::FrameTrace::Enabled()) {  // TEMP frame trace
+		DCLF::FrameTrace::BeginFrame();
+		DCLF::FrameTrace::Note("Main::Draw (early hook, before the engine's call)");
+	}
 	const auto result = func(a_main);
 	globals::features::drawcallLimitFix.BeginSceneFrame();
 	return result;
@@ -181,12 +222,15 @@ std::int64_t DrawcallLimitFix::Hooks::Main_Draw_Early::thunk(void* a_main)
 
 bool DrawcallLimitFix::BeginSceneFrame()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::SceneFrame);
 	// Called every frame, loaded or not: the one place an unload (which stops Reset from being called) is
 	// noticed.
 	UpdateActive();
 	DCLF::AuditTreeLod();
 	if (!Running())
 		return false;
+	// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
+	DCLF::EngineReadWindow::Open();
 	// The scene half of the tables, before the main camera's cull: everything the walk reads is final from
 	// Main::Draw on (the world update is done, and the palette update's frame counter moves only at
 	// Renderer::End), except what is written between here and BeforeShadowMaps: BSFadeNode::currentFade (the
@@ -195,55 +239,67 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// build reads off the material itself. The accumulator's half follows at EarlyPrepass, once the
 	// registration jobs have finished.
 	auto& store = DCLF::SceneStore::Get();
+	// Nothing of the last frame's work may still run (it was joined by the frame's hooks, at the latest at Present).
+	store.JoinSceneTask();
 	// The frame's toggles, before anything reads them. A change that enters the classification drops the
 	// cached verdicts, so the next frame classifies every object under the new switches.
 	if (DCLF::Toggles::Get().BeginFrame())
 		store.InvalidateVerdicts();
 	ScopedPerfEvent event("CS DCLF: scene tables");
-	const auto tablesStart = std::chrono::steady_clock::now();
-	// The scene events of this frame's world update, before the walk reads the tracked set. Present's Reset
-	// applies them too, but a cell attached during the update would otherwise be drawn natively for its first
-	// frame and join the tables only on the next one (capture parity's "untracked eligible": every such
-	// geometry was tracked by its attach event at that frame's Present). Nothing of DCLF's is in flight here,
-	// as after Reset: the previous frame's jobs were joined there, and this frame's start below.
-	const auto eventsStart = std::chrono::steady_clock::now();
-	// A write-back job no join reached, before the events change the tables it reads.
+	// What the frame's claims need, from the last walk's state, before the scene work is kicked (the coordinator is idle here):
+	// the frame number, the last commit's set as the frame's (the claims the registration withholds by, and the records this
+	// frame draws), the point lights' filter, the main renderers, tree LOD's and the reflection's preparation, and the roots
+	// this frame's scene lists leave out (before Main::Draw queues their build).
+	store.BeginFrame();
+	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
-	store.ProcessEvents();
-	timing.eventsMs += MillisecondsSince(eventsStart);
+	store.ApplySet();
+	// The frame's events, here on the render thread: they walk the subtrees attached since the last frame, and dropping the last
+	// reference to a detached one runs the engine's destructors, which belong on the engine's main thread. They also come before
+	// the list filter: published ahead of them, the kept scene lists released a freed root at Present on every run (dclf-async-
+	// publication.md, "Phase 3, step 2").
+	{
+		const auto eventsStart = std::chrono::steady_clock::now();
+		store.ProcessEvents();
+		timing.eventsMs += MillisecondsSince(eventsStart);
+	}
 	DCLF::LocalLightCull::SelectFrame(store.GetFrame());
-	const auto start = std::chrono::steady_clock::now();
-	store.BuildFrame(DCLF::SceneStore::Phase::Scene);
-	// The frame's DCLF set, before the main camera's cull: who draws what, for every phase of the frame, and the engine's copy
-	// for its registrations.
 	DCLF::PassCapture::Get().RefreshMainRenderers();
-	store.CommitSet();
 	// Tree LOD's for the frame, before the main camera's cull registers its passes (dclf-lod.md, "Tree LOD: the draws").
 	DCLF::IndirectDraws::Get().DecideTreeLod();
 	// The water reflection's forward programs and pipelines (dclf-lod.md, "Water reflections").
 	DCLF::IndirectDraws::Get().PrepareReflection();
-	const double sceneMs = MillisecondsSince(start);
-	timing.sceneMs += sceneMs;
-	timing.sceneMaxMs = std::max(timing.sceneMaxMs, sceneMs);
-	store.EndSceneFrame();
-	// The stood-in fade roots' milestones read back since the last kick, onto their nodes on the worker (joined at
-	// BeforeShadowMaps or the accumulate phase, before the engine's readers of the nodes).
-	DCLF::IndirectDraws::Get().KickFadeWriteBack();
-	// The roots this frame's scene lists leave out, before Main::Draw queues their build.
 	DCLF::PrimaryCull::Get().PublishListFilter();
-	// The shadow build, behind the placement job (KickPlacements, at the walk's end): kept at BeforeShadowMaps when nothing
-	// it read moved.
-	if (DCLF::ActiveToggles().shadows)
-		DCLF::IndirectDraws::Get().KickShadowBuildEarly();
-	const double tablesMs = MillisecondsSince(tablesStart);
-	timing.sceneTablesMs += tablesMs;
-	timing.sceneTablesMaxMs = std::max(timing.sceneTablesMaxMs, tablesMs);
-	++timing.sceneTablesFrames;
+	// The frame's scene work: the walk and the set's commit, for the next frame's claims. On DCLF's coordinator while
+	// the engine culls (SceneStore::KickSceneTask), joined by the first reader that needs it: everything the walk reads is final
+	// from Main::Draw on (the world update is done, and the palette update's frame counter moves only at Renderer::End), except
+	// BSFadeNode::currentFade (the main cull), whose changes reach the walk as fade events; a billboard's rotation (the main cull),
+	// which keeps billboards native (SceneStore::FindCategoryNode); and animated texture transforms, which the shadow build reads
+	// off the material itself. The accumulator's half follows at EarlyPrepass, once the registration jobs have finished.
+	const bool inline_ = SceneWorkInline();
+	auto work = [this, &store, inline_] {
+		const auto start = std::chrono::steady_clock::now();
+		store.RunSceneWork(!inline_);
+		const double ms = MillisecondsSince(start);
+		timing.sceneMs += ms;
+		timing.sceneMaxMs = std::max(timing.sceneMaxMs, ms);
+		timing.sceneTablesMs += ms;
+		timing.sceneTablesMaxMs = std::max(timing.sceneTablesMaxMs, ms);
+		++timing.sceneTablesFrames;
+	};
+	if (inline_) {
+		work();
+		store.JoinSceneTask();
+	} else {
+		store.KickSceneTask(std::move(work));
+	}
 	return true;
 }
 
 void DrawcallLimitFix::BeforeShadowMaps()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::BeforeShadowMaps);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	if (!Running())
 		return;
 	// The frame's reflection faces (every TESWaterReflections::Update of the frame has run: two a frame, a face each), drawn by DCLF
@@ -271,6 +327,8 @@ void DrawcallLimitFix::BeforeShadowMaps()
 
 void DrawcallLimitFix::AfterShadowMaps()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::AfterShadowMaps);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	RenderGraphRuntime::EpochBodyScope body(RenderGraphRuntime::Segment::ShadowView);
 	if (!Running())
 		return;
@@ -280,6 +338,8 @@ void DrawcallLimitFix::AfterShadowMaps()
 
 void DrawcallLimitFix::EarlyPrepass()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::EarlyPrepass);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	if (!Running())
 		return;
 
@@ -527,6 +587,8 @@ namespace
 
 bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	static_assert(kSkyOcclusion == DCLF::kOcclusionSky && kPrecipitationOcclusion == DCLF::kOcclusionPrecipitation);
 	auto& capture = DCLF::PassCapture::Get();
 	capture.SetOcclusionPhase(0);
@@ -545,6 +607,8 @@ bool DrawcallLimitFix::OcclusionReady(OcclusionMap a_map)
 
 void DrawcallLimitFix::DrawOcclusion()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	// Every occlusion map whose Ready said DCLF draws it this frame, in one epoch; then DCLF's render of each map whose
 	// engine render a parity frame kept.
 	const std::uint32_t wanted = std::exchange(occlusionWanted, 0u);
@@ -562,6 +626,8 @@ void DrawcallLimitFix::DrawOcclusion()
 
 bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	const std::uint8_t phase = a_map == kSkyOcclusion ? DCLF::kSetOccluderSky : DCLF::kSetOccluderPrecipitation;
 	const auto set = DCLF::PassCapture::Get().CurrentSet();
 	const bool needed = !Running() || !DCLF::SceneStore::OcclusionEnabled(a_map) || !(occlusionWanted & (1u << a_map)) || !set || !(set->drawn & phase) ||
@@ -575,6 +641,7 @@ bool DrawcallLimitFix::OcclusionNeedsEngine(OcclusionMap a_map)
 
 bool DrawcallLimitFix::OcclusionParityFrame(OcclusionMap a_map)
 {
+	DCLF::SceneStore::Get().JoinSceneTask();
 	auto& parity = occlusionParity[a_map];
 	const bool due = SkyParityEnabled() && !parity.pending && (parity.frames++ % 120) == 60;
 	// The engine's reference map registers every occluder, from the whole scene lists.
@@ -625,6 +692,8 @@ void DrawcallLimitFix::CopyOcclusion(OcclusionMap a_map, std::uint32_t a_stage)
 
 void DrawcallLimitFix::Prepass()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Prepass);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	for (std::uint32_t map = 0; map < 2; ++map)
 		CompareSkyParity(map);
 	DCLF::ProbeShadowMask(Running());
@@ -756,6 +825,7 @@ void DrawcallLimitFix::NoteNativePass(const RE::BSRenderPass* a_pass, std::uint3
 void DrawcallLimitFix::Hooks::Main_RenderDepth::thunk(bool a_firstPerson, bool a_a2)
 {
 	auto& feature = globals::features::drawcallLimitFix;
+	DCLF::SceneStore::Get().JoinSceneTask();
 	feature.inDepthPass = true;
 	func(a_firstPerson, a_a2);
 	feature.inDepthPass = false;
@@ -767,6 +837,7 @@ void DrawcallLimitFix::Hooks::Main_RenderDepth_WorldDrawn::thunk(void* a_accumul
 	auto& feature = globals::features::drawcallLimitFix;
 	if (!feature.inDepthPass || !feature.Running())
 		return;
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ZPrepass);
 	// The world's depth draws are done and its camera is still current. The engine's own copy of the depth
 	// (kPOST_ZPREPASS_COPY), at the end of the pass, now includes DCLF's objects, and the first-person model's
 	// depth goes in after the world's, as it does natively, so there is nothing to refresh.
@@ -824,10 +895,12 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 	func(a_accumulator, a_renderFlags);
 	if (!globals::features::drawcallLimitFix.Running())
 		return;
+	DCLF::SceneStore::Get().JoinSceneTask();
 	const auto mode = static_cast<std::uint32_t>(a_accumulator->GetRuntimeData().renderMode);
 	// The occlusion maps (render mode 0x1C, the precipitation accumulator): Skylighting's own map while it draws it
 	// (inOcclusion), else the precipitation mask.
 	if (mode == 0x1C) {
+		DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::Occlusion);
 		auto* sky = globals::game::sky;
 		auto* precip = sky ? sky->precip : nullptr;
 		if (precip && precip->occlusionData.accumulator.get() == reinterpret_cast<RE::BSShaderAccumulator*>(a_accumulator))
@@ -836,6 +909,7 @@ void DrawcallLimitFix::Hooks::BSShaderAccumulator_FinishAccumulating::thunk(RE::
 	}
 	if (mode < 0xD || mode > 0xF)
 		return;  // shadow-map modes only: plain, clamped, paraboloid (engine notes: shadow maps)
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::ShadowViewCapture);
 	const auto view = DCLF::ShadowViews::Get().ViewOfAccumulator(a_accumulator);
 	if (view != ~0u)
 		DCLF::IndirectDraws::Get().CaptureShadowView(view, mode);
@@ -893,6 +967,8 @@ void DrawcallLimitFix::OnNativeLightingDraw(RE::BSRenderPass* a_pass, std::uint3
 
 void DrawcallLimitFix::BeforeOpaquePass()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::BeforeOpaque);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	if (!Running())
 		return;
 	// The main pass's bindings for this frame's colour epoch, where the opaque batches start. The engine binds the
@@ -928,6 +1004,8 @@ bool DrawcallLimitFix::CaptureMainPass()
 
 void DrawcallLimitFix::AfterOpaquePass()
 {
+	DCLF::RenderThreadBudget::Hook budget(DCLF::RenderThreadBudget::Site::AfterOpaque);
+	DCLF::SceneStore::Get().JoinSceneTask();
 	if (!Running())
 		return;
 	// Natively, DCLF's objects are drawn among the opaque batches, so they are in the G-buffer and the depth

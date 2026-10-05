@@ -7,6 +7,7 @@
 #include "Features/DrawcallLimitFix/Draws/GpuResources.h"
 #include "Features/DrawcallLimitFix/Draws/GpuTextures.h"
 #include "Features/DrawcallLimitFix/Draws/IndirectDraws.h"
+#include "Features/DrawcallLimitFix/Common/RenderThreadBudget.h"
 #include "Features/DrawcallLimitFix/Engine/PassCapture.h"
 #include "Features/DrawcallLimitFix/Engine/PrimaryCull.h"
 #include "Features/DrawcallLimitFix/Scene/SceneStore.h"
@@ -21,6 +22,10 @@
 void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 {
 	auto& store = DCLF::SceneStore::Get();
+	// DCLF's render-thread time, by what the asynchronous scene leaves on it (RenderThreadBudget): always reported.
+	if ((frame % kReportInterval) == 0)
+		if (const auto line = DCLF::RenderThreadBudget::Get().Report(); !line.empty())
+			logger::info("{}", line);
 	// The culling's counters, reported whether or not the full statistics are on: they are what says
 	// whether GPU culling is running and how much it rejects.
 	if ((frame % kReportInterval) == 0) {
@@ -70,6 +75,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			set.members / commits, set.waiting / commits, set.commits, set.joined, set.left, set.evaluated, set.readinessEvents, set.resyncs, set.rebinding,
 			set.publications, set.waitingBy[0], set.waitingBy[1], set.waitingBy[2], set.waitingBy[3], set.waitingBy[4], set.waitingBy[5], set.waitingBy[6], set.waitingBy[7], set.waitingBy[8],
 			set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
+		// Claims the frame's scene work took back because their record stopped drawing (SceneStore::RevokeUndrawnClaims).
+		const auto [revoked, revokedMain] = store.TakeRevokedClaims();
+		logger::info("[DCLF] claims revoked mid-frame (their record stopped drawing; the engine drew them that frame): {} geometries, {} of them in the main phase",
+			revoked, revokedMain);
 		std::string samples;
 		for (const auto& sample : leaks.samples)
 			samples += fmt::format("{}{}", samples.empty() ? "" : ", ", sample);

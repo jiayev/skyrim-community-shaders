@@ -1,4 +1,5 @@
 #include "TreeAnimation.h"
+#include "Features/DrawcallLimitFix/Common/FrameTrace.h"
 
 #include "EngineAccess.h"
 #include "Features/DrawcallLimitFix/Common/EventQueue.h"
@@ -76,6 +77,7 @@ namespace DCLF::TreeAnimation
 			{
 				static void thunk(std::byte* a_manager, RE::NiAVObject* a_node, std::uint64_t a_3, std::uint64_t a_4)
 				{
+					DCLF_FRAME_TRACE("TreeAnimation.cpp:77");  // TEMP frame trace
 					func(a_manager, a_node, a_3, a_4);
 					if (a_node && enabled) {
 						added.Push(a_node);
@@ -89,6 +91,7 @@ namespace DCLF::TreeAnimation
 			{
 				static std::uint64_t thunk(std::byte* a_manager, RE::NiAVObject* a_node)
 				{
+					DCLF_FRAME_TRACE("TreeAnimation.cpp:90");  // TEMP frame trace
 					// A node DCLF holds off the list is the engine's to drop: forgotten, with the list's reference.
 					RE::NiAVObject* release = nullptr;
 					if (a_node && a_manager) {
@@ -115,6 +118,7 @@ namespace DCLF::TreeAnimation
 			{
 				static std::uint64_t thunk(std::byte* a_manager, std::uint64_t a_2, std::uint64_t a_3, std::uint64_t a_4)
 				{
+					DCLF_FRAME_TRACE("TreeAnimation.cpp:116");  // TEMP frame trace
 					const auto result = func(a_manager, a_2, a_3, a_4);
 					std::vector<RE::NiAVObject*> release;
 					if (a_manager) {

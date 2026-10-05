@@ -679,8 +679,11 @@ namespace DCLF
 		// A node's key only: an entry listing it is announced, and the address is never read.
 		auto& primary = PrimaryCull::Get();
 		stats.hiddenEvents += hiddenEvents.Drain([&](const void* a_key) {
-			// A cell's or a category node's: the kept scene lists are built again.
-			primary.NoteHiddenKey(a_key);
+			// A cell's or a category node's: the kept scene lists are built again (held while the scene list job may run).
+			if (holdPrimaryNotes)
+				hiddenKeysHeld.push_back(a_key);
+			else
+				primary.NoteHiddenKey(a_key);
 			const auto dependents = hiddenDependents.find(a_key);
 			if (dependents == hiddenDependents.end())
 				return;

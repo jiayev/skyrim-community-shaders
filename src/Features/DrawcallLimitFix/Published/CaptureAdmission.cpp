@@ -9,7 +9,8 @@ namespace DCLF::Published
 	CaptureAdmission::CaptureAdmission(std::size_t byteBudget, std::size_t eventLimit) : budget(byteBudget), limit(eventLimit)
 	{
 		if (!budget || !limit) throw std::invalid_argument("capture admission limits must be positive");
-		pending.events.reserve(limit);
+		if (limit != SIZE_MAX)
+			pending.events.reserve(limit);  // a bound: room for it now; unbounded (the default) grows
 	}
 
 	CaptureAdmission::Result CaptureAdmission::TryPush(const CapturedSceneEvent& event, std::size_t otherPreparationBytes)
@@ -50,7 +51,8 @@ namespace DCLF::Published
 		// Allocate the next bounded envelope before transferring ownership, so an
 		// allocation failure cannot consume pending lifecycle records.
 		CapturedSceneUpdate replacement;
-		replacement.events.reserve(limit);
+		if (limit != SIZE_MAX)
+			replacement.events.reserve(limit);
 		std::swap(replacement, pending);
 		pendingBytes = 0;
 		return replacement;

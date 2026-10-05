@@ -468,6 +468,7 @@ namespace DCLF
 
 	void IndirectDraws::Impl::PackFrameBlocks(const Capture& a_capture, bool a_depthOnly, FrameBlocks& a_out)
 	{
+		RenderThreadBudget::Part budget(RenderThreadBudget::Bucket::Capture);
 		// Per-frame constant buffers: whatever the main pass binds outside the per-draw slots.
 		// On the Z-prepass the pixel-stage per-frame bindings are skipped entirely: the native depth pass
 		// has not bound the main pass's yet, and the DCLF_DEPTH_ONLY build of the pixel stage compiles

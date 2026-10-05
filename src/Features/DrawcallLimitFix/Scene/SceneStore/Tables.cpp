@@ -165,6 +165,10 @@ namespace DCLF
 		FreeBones(a_slot);
 		objects[a_slot] = FreeObjectRecord();
 		objectGeometry[a_slot] = nullptr;
+		// Out of the frame's set with its record: the set is applied once a frame (ApplySet), and a slot freed after it must draw
+		// in no phase (the shadow builds read setPhases).
+		if (a_slot < setPhases.size())
+			setPhases[a_slot] = 0;
 		objectIdentity[a_slot] = 0;
 		objectGroup[a_slot] = 0;
 		shading[a_slot] = ObjectShading{};
