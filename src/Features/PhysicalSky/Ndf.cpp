@@ -13,41 +13,75 @@
 
 #define I18N_KEY_PREFIX "feature.physical_sky."
 
+std::string TextureManager::Key(const std::filesystem::path& path)
+{
+	if (path.empty())
+		return {};
+	const auto utf8 = path.lexically_normal().generic_u8string();
+	std::string result(utf8.begin(), utf8.end());
+	std::ranges::transform(result, result.begin(), [](unsigned char c) { return static_cast<char>(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c); });
+	return result;
+}
+
+void TextureManager::EnsureLoaded(const std::string& path)
+{
+	if (!path.empty() && !loadResults.contains(Key(std::filesystem::u8path(path))))
+		LoadTexture(std::filesystem::u8path(path));
+}
+
+void TextureManager::Reload()
+{
+	std::vector<std::string> paths;
+	for (const auto& [path, result] : loadResults)
+		paths.push_back(path);
+	for (const auto& path : paths)
+		LoadTexture(std::filesystem::u8path(path));
+}
+
 bool TextureManager::LoadTexture(std::filesystem::path path)
 {
-	auto device = globals::d3d::device;
-	auto context = globals::d3d::context;
-
-	auto path_str = path.string();
-	if (!texList.contains(path_str))
-		texList.emplace(path_str, nullptr);
-
-	winrt::com_ptr<ID3D11ShaderResourceView> loaded;
-	if (FAILED(DirectX::CreateDDSTextureFromFile(device, context, path.wstring().c_str(), nullptr, loaded.put())))
+	if (path.empty())
 		return false;
-	texList.at(path_str) = std::move(loaded);
+	const auto key = Key(path);
+	winrt::com_ptr<ID3D11ShaderResourceView> loaded;
+	const HRESULT result = DirectX::CreateDDSTextureFromFile(globals::d3d::device, globals::d3d::context,
+		path.wstring().c_str(), nullptr, loaded.put());
+	loadResults[key] = result;
+	if (FAILED(result)) {
+		texList.erase(key);
+		logger::warn("Cloud texture load failed: {} (0x{:08X})", key, static_cast<uint32_t>(result));
+	} else {
+		texList[key] = std::move(loaded);
+	}
 	++revision;
-	return true;
+	return SUCCEEDED(result);
 }
 
 void TextureManager::DrawUI()
 {
 	ImGui::InputText(T(TKEY("path"), "Path"), &uiPath, 0);
 	if (ImGui::Button(T(TKEY("load"), "Load"))) {
-		LoadTexture(uiPath);
+		LoadTexture(std::filesystem::u8path(uiPath));
 	}
 	ImGui::SameLine();
 	if (ImGui::Button(T(TKEY("remove"), "Remove"))) {
-		if (texList.erase(uiPath))
+		loadResults[Key(std::filesystem::u8path(uiPath))] = S_FALSE;
+		if (texList.erase(Key(std::filesystem::u8path(uiPath))))
 			++revision;
 	}
 
 	if (ImGui::BeginListBox(T(TKEY("loaded_textures"), "Loaded Textures"))) {
-		for (auto& [path, srv] : texList) {
+		for (const auto& path : ListPaths()) {
 			if (ImGui::Selectable(path.c_str(), uiPath == path))
 				uiPath = path;
 		}
 		ImGui::EndListBox();
+	}
+	for (const auto& [path, result] : loadResults) {
+		if (FAILED(result)) {
+			ImGui::TextColored({ 1, 0.6f, 0.2f, 1 }, "%s: %s (0x%08X)",
+				T(TKEY("texture_load_failed"), "Texture load failed; reload after correcting the file"), path.c_str(), static_cast<unsigned>(result));
+		}
 	}
 }
 
@@ -66,7 +100,7 @@ namespace nlohmann
 			return;
 		std::vector<std::string> tex_list = j;
 		for (auto& tex : tex_list)
-			if (!v.LoadTexture(tex))
+			if (!v.LoadTexture(std::filesystem::u8path(tex)))
 				logger::warn("Loading texture manager from config: Texture {} missing.", tex);
 	}
 }
@@ -190,8 +224,8 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 	if (settings.type == NdfType::Texture) {
 		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), settings.texture.heightPath, 2);
 		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), settings.texture.modelingPath, 3);
-		if (settings.texture.heightPath.empty() || settings.texture.modelingPath.empty())
-			ImGui::TextWrapped("%s", T(TKEY("ndf_select_both_textures"), "Select both textures; missing inputs use the procedural cloud map."));
+		if (!IsTexturePair({ textures.Query(settings.texture.heightPath), textures.Query(settings.texture.modelingPath) }))
+			ImGui::TextWrapped("%s", T(TKEY("ndf_select_both_textures"), "Select matching linear 2D Height RG and Modeling RGB textures; invalid pairs use the procedural cloud map."));
 	}
 	auto& procedural = settings.procedural;
 	auto& parameters = procedural.parameters;
@@ -233,7 +267,8 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 		parameters.heightFromCoverage = fromCoverage ? 1u : 0u;
 	layerControl(T(TKEY("ndf_bottom_height_variation"), "Bottom height variation"), parameters.heightVariation, true);
 	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
-	if (ImGui::TreeNode(T(TKEY("ndf_local_influence"), "Local NDF influence"))) {
+	if (ImGui::TreeNode(T(TKEY("ndf_local_influence"), "Global generator overlay"))) {
+		ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field. Use Local Cloud Instances for world placement."));
 		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), procedural.local.heightPath, 2);
 		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), procedural.local.modelingPath, 3);
 		textureChoice(T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), procedural.localMaskPath, 1);
@@ -319,10 +354,8 @@ bool NdfManager::UpdateNdf(const NdfSettings& settings, TextureManager& textures
 		paths[7] = settings.procedural.local.modelingPath;
 		paths[8] = settings.procedural.localMaskPath;
 	}
-	for (size_t i = 0; i < paths.size(); ++i)
-		if (paths[i] != sourcePaths[i] && !paths[i].empty() && !textures.texList.contains(paths[i]))
-			if (!textures.LoadTexture(paths[i]))
-				logger::warn("NDF input could not be loaded: {}", paths[i]);
+	for (const auto& path : paths)
+		textures.EnsureLoaded(path);
 	sourcePaths = std::move(paths);
 	if (!generatorProgram || !noiseProgram || !generatorCb || !noiseCb || !sampler || !texHeight || !texModeling)
 		return false;
@@ -475,7 +508,12 @@ bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)
 	srv->GetDesc(&desc);
 	if (desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D)
 		return false;
-	switch (desc.Format) {
+	return IsLinearFormat(desc.Format, channels);
+}
+
+bool NdfManager::IsLinearFormat(DXGI_FORMAT format, uint32_t channels)
+{
+	switch (format) {
 	case DXGI_FORMAT_R8_UNORM:
 	case DXGI_FORMAT_R16_UNORM:
 	case DXGI_FORMAT_R16_FLOAT:
@@ -488,11 +526,14 @@ bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)
 	case DXGI_FORMAT_R32G32_FLOAT:
 	case DXGI_FORMAT_BC5_UNORM:
 		return channels <= 2u;
+	case DXGI_FORMAT_R32G32B32_FLOAT:
+	case DXGI_FORMAT_B8G8R8X8_UNORM:
+		return channels <= 3u;
 	case DXGI_FORMAT_R8G8B8A8_UNORM:
+	case DXGI_FORMAT_B8G8R8A8_UNORM:
 	case DXGI_FORMAT_R16G16B16A16_UNORM:
 	case DXGI_FORMAT_R16G16B16A16_FLOAT:
 	case DXGI_FORMAT_R32G32B32A32_FLOAT:
-	case DXGI_FORMAT_R32G32B32_FLOAT:
 	case DXGI_FORMAT_BC1_UNORM:
 	case DXGI_FORMAT_BC2_UNORM:
 	case DXGI_FORMAT_BC3_UNORM:
@@ -503,10 +544,26 @@ bool NdfManager::IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels)
 	}
 }
 
+bool NdfManager::IsTexturePair(NdfTextureSet maps)
+{
+	if (!IsTextureNdf(maps.height, 2) || !IsTextureNdf(maps.modeling, 3))
+		return false;
+	auto dimensions = [](ID3D11ShaderResourceView* srv) {
+		D3D11_SHADER_RESOURCE_VIEW_DESC view;
+		srv->GetDesc(&view);
+		winrt::com_ptr<ID3D11Resource> resource;
+		srv->GetResource(resource.put());
+		D3D11_TEXTURE2D_DESC desc;
+		resource.as<ID3D11Texture2D>()->GetDesc(&desc);
+		return std::pair{ std::max(desc.Width >> view.Texture2D.MostDetailedMip, 1u), std::max(desc.Height >> view.Texture2D.MostDetailedMip, 1u) };
+	};
+	return dimensions(maps.height) == dimensions(maps.modeling);
+}
+
 NdfTextureSet NdfManager::QueryTextures(const TexNdfSettings& settings, TextureManager& textures)
 {
 	NdfTextureSet maps{ textures.Query(settings.heightPath), textures.Query(settings.modelingPath) };
-	return IsTextureNdf(maps.height, 2) && IsTextureNdf(maps.modeling, 3) ? maps : NdfTextureSet{};
+	return IsTexturePair(maps) ? maps : NdfTextureSet{};
 }
 
 NdfTextureSet NdfManager::GetNdf(const NdfSettings& settings, TextureManager& textures)
@@ -569,10 +626,8 @@ bool CirrusMapManager::Update(const CirrusSettings& settings, TextureManager& te
 	if (!ShadersReady(settings))
 		return false;
 	const std::array<std::string, 2> paths{ settings.weatherPath, settings.patternsPath };
-	for (size_t i = 0; i < paths.size(); ++i)
-		if (paths[i] != sourcePaths[i] && !paths[i].empty() && !textures.texList.contains(paths[i]))
-			if (!textures.LoadTexture(paths[i]))
-				logger::warn("Cirrus input could not be loaded: {}", paths[i]);
+	for (const auto& path : paths)
+		textures.EnsureLoaded(path);
 	sourcePaths = paths;
 	std::array<ID3D11ShaderResourceView*, 6> sources = {};
 	std::copy(ndf.GetNoiseInputs().begin(), ndf.GetNoiseInputs().end(), sources.begin());

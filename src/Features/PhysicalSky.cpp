@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <cmath>
 #include <imgui_stdlib.h>
+#include <set>
 
 #include "CloudShadows.h"
 #include "Deferred.h"
@@ -58,9 +59,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ProceduralNdfSettings,
 	parameters, noise, local, localMaskPath)
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	LocalNdfInstance,
+	id, name, asset, worldspace, enabled, center, size, rotation, altitude, heightSpan,
+	strength, modelingWeight, heightWeight, feather, modelingAlpha, priority)
+
 void to_json(nlohmann::json& j, const NdfSettings& value)
 {
-	j = { { "version", 2 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural } };
+	j = { { "version", 2 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural }, { "instances", value.instances }, { "localTexelSize", value.localTexelSize } };
 }
 
 void from_json(const nlohmann::json& j, NdfSettings& value)
@@ -71,6 +77,8 @@ void from_json(const nlohmann::json& j, NdfSettings& value)
 	value.type = j.value("type", NdfType::Procedural) == NdfType::Texture ? NdfType::Texture : NdfType::Procedural;
 	value.texture = j.value("texture", TexNdfSettings{});
 	value.procedural = j.value("procedural", ProceduralNdfSettings{});
+	value.instances = j.value("instances", std::vector<LocalNdfInstance>{});
+	value.localTexelSize = j.value("localTexelSize", 32.f);
 }
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -674,9 +682,19 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("cloud_map"), "Cloud Map"));
 	{
 		ndfManager.DrawNdfSettings(settings.cloudMap, ndfTexManager);
+		const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+		localNdfManager.DrawSettings(settings.cloudMap, GetCurrentWorldspaceEditorID(),
+			{ camera.x * Util::Units::GAME_UNIT_TO_M, camera.y * Util::Units::GAME_UNIT_TO_M });
 		cloudNoiseGenerator.DrawSettings(settings.cloudNoise);
-		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 }))
+		if (ImGui::Button(T(TKEY("reload_cloud_textures"), "Reload Cloud Textures"), { -FLT_MIN, 0 })) {
+			ndfTexManager.Reload();
+			localNdfManager.RefreshAssets();
 			LoadCloudTextures();
+		}
+		ImGui::Text("%s: %s", T(TKEY("cloud_shape_source"), "Shape source"),
+			(settings.cloudNoise.procedural || !importedShapeNoiseSrv) ? T(TKEY("cloud_source_generated"), "Generated") : T(TKEY("cloud_source_dds"), "DDS"));
+		ImGui::Text("%s: %s", T(TKEY("cloud_profile_source"), "Profile source"), cloudProfileGenerated ? T(TKEY("cloud_source_packed"), "Packed top/bottom or analytic fallback") : T(TKEY("cloud_source_dds"), "DDS"));
+		ImGui::Text("%s: %s", T(TKEY("cloud_adjustment_source"), "Adjustment source"), (settings.cloudNoise.procedural || cloudAdjustmentGenerated) ? T(TKEY("cloud_source_generated"), "Generated") : T(TKEY("cloud_source_dds"), "DDS"));
 		if (baseShapeNoiseSrv && cloudProfileLutSrv && cloudAdjustmentLutSrv)
 			ImGui::TextColored({ 0, 1, 0, 1 }, "%s", T(TKEY("cloud_textures_loaded"), "Cloud Textures: Loaded"));
 		else
@@ -718,6 +736,7 @@ void PhysicalSky::SettingsDebug()
 
 		if (ImGui::TreeNode(T(TKEY("cloud_shape"), "Cloud Shape"))) {
 			ndfManager.DrawPreview();
+			localNdfManager.DrawDebug(ndfTexManager, debugScale);
 			const auto ndf = ndfManager.GetNdf(settings.cloudMap, ndfTexManager);
 			DrawDebugCloudTexture(ndf.height, "ndfHeight", T(TKEY("debug_ndf_height"), "NDF height / shaping start"), debugScale);
 			DrawDebugCloudTexture(ndf.modeling, "ndfModeling", T(TKEY("debug_ndf_modeling"), "NDF coverage / types"), debugScale);
@@ -743,6 +762,8 @@ void PhysicalSky::SettingsDebug()
 			if (ImGui::TreeNode(T(TKEY("debug_noise_sources"), "Generated and source textures"))) {
 				DrawDebugCloudTexture(cloudNoiseGenerator.Shape(), "generatedShape", T(TKEY("debug_generated_shape"), "Generated cloud shape noise"), debugScale);
 				DrawDebugCloudTexture(cloudNoiseGenerator.Adjustment(), "generatedAdjustment", T(TKEY("debug_generated_adjustment"), "Generated top expansion / warp LUT"), debugScale);
+				DrawDebugCloudTexture(ndfTexManager.Query("Data/Textures/PhysicalSky/top_lut.dds"), "topSource", T(TKEY("cloud_top_source"), "Top profile source"), debugScale);
+				DrawDebugCloudTexture(ndfTexManager.Query("Data/Textures/PhysicalSky/bottom_lut.dds"), "bottomSource", T(TKEY("cloud_bottom_source"), "Bottom profile source"), debugScale);
 				DrawDebugCloudTexture(importedShapeNoiseSrv.get(), "importedShape", T(TKEY("debug_imported_shape"), "Cloud shape DDS input"), debugScale);
 				DrawDebugCloudTexture(importedAdjustmentLutSrv.get(), "sourceAdjustment", T(TKEY("debug_source_adjustment"), "Adjustment source (DDS or fallback)"), debugScale);
 				ImGui::TreePop();
@@ -972,12 +993,26 @@ bool PhysicalSky::ShadersOK()
 	return baseShadersOk && volumetricShadersOk;
 }
 
+bool PhysicalSky::SetLocalCloudInstances(std::vector<LocalNdfInstance> instances)
+{
+	std::set<std::string> ids;
+	for (const auto& instance : instances) {
+		if (instance.id.empty() || !ids.insert(instance.id).second || instance.worldspace.empty() || LocalNdfManager::AssetPath(instance.asset).empty())
+			return false;
+	}
+	settings.cloudMap.instances = std::move(instances);
+	return true;
+}
+
 void PhysicalSky::Reset()
 {
 	UpdateCloudWind();
+	if (settings.enabled && settings.enableVolumetricClouds && localNdfManager.Update(settings.cloudMap, ndfTexManager, GetCurrentWorldspaceEditorID()))
+		volMainHistoryValid = false;
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
-	const float lowCloudBaseKm = lowAltitudeRange.x;
-	const float lowCloudTopKm = lowAltitudeRange.y;
+	const auto localAltitude = localNdfManager.GetAltitude();
+	const float lowCloudBaseKm = localAltitude.z > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
+	const float lowCloudTopKm = localAltitude.z > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
 	const float traceBottomKm = settings.cloudLayer.cirrus.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudBaseKm;
 	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
 	const float lowCloudThicknessKm = lowCloudTopKm - lowCloudBaseKm;
@@ -1136,11 +1171,13 @@ void PhysicalSky::ReflectionsPrepass()
 void PhysicalSky::Prepass()
 {
 	if (settings.enabled && settings.enableVolumetricClouds) {
-		const bool generatedNoise = settings.cloudNoise.procedural || !importedShapeNoiseSrv || cloudAdjustmentGenerated;
+		const bool generatedShape = settings.cloudNoise.procedural || !importedShapeNoiseSrv;
+		const bool generatedAdjustment = settings.cloudNoise.procedural || cloudAdjustmentGenerated;
+		const bool generatedNoise = generatedShape || generatedAdjustment;
 		if (generatedNoise)
 			cloudNoiseGenerator.Update(settings.cloudNoise, importedAdjustmentLutSrv.get());
-		auto* shape = generatedNoise && cloudNoiseGenerator.Shape() ? cloudNoiseGenerator.Shape() : importedShapeNoiseSrv.get();
-		auto* adjustment = generatedNoise && cloudNoiseGenerator.Adjustment() ? cloudNoiseGenerator.Adjustment() : importedAdjustmentLutSrv.get();
+		auto* shape = generatedShape && cloudNoiseGenerator.Shape() ? cloudNoiseGenerator.Shape() : importedShapeNoiseSrv.get();
+		auto* adjustment = generatedAdjustment && cloudNoiseGenerator.Adjustment() ? cloudNoiseGenerator.Adjustment() : importedAdjustmentLutSrv.get();
 		if (baseShapeNoiseSrv.get() != shape || cloudAdjustmentLutSrv.get() != adjustment) {
 			baseShapeNoiseSrv.copy_from(shape);
 			cloudAdjustmentLutSrv.copy_from(adjustment);

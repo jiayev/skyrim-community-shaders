@@ -2,6 +2,7 @@
 
 #include "PhysicalSky/Aerosol.h"
 #include "PhysicalSky/CloudNoiseGenerator.h"
+#include "PhysicalSky/LocalNdf.h"
 #include "PhysicalSky/Ndf.h"
 
 struct PhysicalSky final : public Feature
@@ -256,8 +257,10 @@ struct PhysicalSky final : public Feature
 		float bottomZ;
 		uint gridCellCount;
 		uint cloudFrameIndex;
+		float4 localRect;
+		float4 localAltitude;
 	};
-	static_assert(sizeof(CloudBoundaryCB) == 96);
+	static_assert(sizeof(CloudBoundaryCB) == 128);
 	eastl::unique_ptr<ConstantBuffer> cloudBoundaryCB = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolTr = nullptr;           // full-resolution volumetric transmittance result
@@ -320,9 +323,12 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ShaderResourceView> importedShapeNoiseSrv = nullptr;
 	winrt::com_ptr<ID3D11ShaderResourceView> importedAdjustmentLutSrv = nullptr;
 	CloudNoiseGenerator cloudNoiseGenerator;
+	bool cloudProfileGenerated = true;
 	bool cloudAdjustmentGenerated = false;
 	TextureManager ndfTexManager{ "Cloud Map" };
+	bool SetLocalCloudInstances(std::vector<LocalNdfInstance> instances);
 	NdfManager ndfManager;
+	LocalNdfManager localNdfManager;
 	CirrusMapManager cirrusMapManager;
 
 	// Volumetric cloud StructuredBuffer (compute-only)
@@ -388,8 +394,10 @@ struct PhysicalSky final : public Feature
 		float2 previousShapeShear;
 		float4 cloudEvolution;
 		float cloudEvolutionDelta;
+		float4 localNdfRect;
+		float4 localNdfAltitude;
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 372);
+	static_assert(sizeof(VolumetricCloudSB) == 404);
 	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
