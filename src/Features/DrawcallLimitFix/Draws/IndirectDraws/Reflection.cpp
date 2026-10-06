@@ -42,23 +42,6 @@ namespace DCLF
 			}
 			return out;
 		}
-
-		/** @brief The frame push word of a stage's constant buffer register (FramePushWords' order), or ~0u when it is not pushed. */
-		std::uint32_t FramePushWord(bool a_pixel, std::uint32_t a_register)
-		{
-			std::uint32_t word = kFramePushRegisters;
-			for (const bool pixel : { false, true }) {
-				const std::uint32_t mask = pixel ? kFramePushPS : kFramePushVS;
-				for (std::uint32_t r = 0; r < kConstantBufferRegisters; ++r) {
-					if (!((mask >> r) & 1))
-						continue;
-					if (pixel == a_pixel && r == a_register)
-						return word;
-					word += 2;
-				}
-			}
-			return ~0u;
-		}
 	}
 
 	void IndirectDraws::CaptureReflectionFace()
@@ -211,27 +194,13 @@ namespace DCLF
 		if (!indirect.valid || !impl->SetupReflection() || !impl->ImportReflectionCube(reflection.cube.get()))
 			return skip(4);
 
-		// The buckets: per distinct forward pipeline, the LOD slots that draw with it, each slot's range what its objects can produce
-		// (the Z-prepass's bucket capacity, which ReserveMainSequences holds every draw of the slot's objects in).
-		const auto slots = static_cast<std::uint32_t>(main->zBucketCapacity.size());
-		std::vector<std::uint32_t> map(slots, kNoBucket);
-		std::vector<ReflectionFrame::Bucket> buckets;
-		for (std::uint32_t p = 0; p < slots; ++p) {
-			if (p >= reflection.slotPipelines.size() || !reflection.slotPipelines[p].valid() || !main->zBucketCapacity[p])
-				continue;
-			const auto pipeline = reflection.slotPipelines[p];
-			auto it = std::find_if(buckets.begin(), buckets.end(), [&](const auto& a_bucket) { return SameHandle(a_bucket.pipeline, pipeline); });
-			if (it == buckets.end())
-				it = buckets.insert(buckets.end(), ReflectionFrame::Bucket{ pipeline, 0, 0 });
-			it->capacity += main->zBucketCapacity[p];
-			map[p] = static_cast<std::uint32_t>(it - buckets.begin());
-		}
-		std::uint32_t draws = 0;
-		for (auto& bucket : buckets) {
-			bucket.first = draws;
-			draws += bucket.capacity;
-		}
-		impl->ReserveReflection(slots, static_cast<std::uint32_t>(buckets.size()), draws);
+		// The buckets (PlanReflectionBuckets), and the resources reserved for them.
+		ReflectionPlan plan;
+		PlanReflectionBuckets(*main, reflection.slotPipelines, plan);
+		const auto slots = static_cast<std::uint32_t>(plan.map.size());
+		const auto& map = plan.map;
+		const auto& buckets = plan.buckets;
+		impl->ReserveReflection(slots, static_cast<std::uint32_t>(buckets.size()), plan.draws);
 		auto resources = reflection.resources;
 		auto& scene = *impl->scene;
 		const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
@@ -296,38 +265,18 @@ namespace DCLF
 				drawn += face.captured ? 1u : 0u;
 			}
 
-			auto frame = std::make_shared<ReflectionFrame>();
-			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-			frame->indirect = indirect;
-			frame->latch = resources->latch;
-			frame->facesOffset = layout.FaceOffset(0);
-			frame->zeros = resources->zeros;
-			frame->width = resources->width;
-			frame->height = resources->height;
-			frame->materialRows = main->materialRows.address;
-			frame->pipelineRows = main->pipelineRows.address;
-			frame->sequenceDraws = resources->sequenceDraws;
-			frame->buckets = buckets;
-			// The colour segment's frame constants, VS and PS b12 the face's (its camera): the frame lighting (PS b13) is the main
-			// pass's, its sun a frame old (dclf-lod.md, "The constants").
-			const auto base = FramePushWords(main->frameConstantsAddress);
-			for (std::uint32_t f = 0; f < kReflectionFaces; ++f) {
-				auto& push = frame->push[f];
-				push = base;
-				const std::uint64_t block = resources->faceBlocksAddress + std::uint64_t(f) * kReflectionFaceBlockBytes;
-				for (const bool pixel : { false, true })
-					if (const std::uint32_t word = FramePushWord(pixel, kPerFrameVertexRegister); word != ~0u) {
-						push[word] = static_cast<std::uint32_t>(block);
-						push[word + 1] = static_cast<std::uint32_t>(block >> 32);
-					}
-			}
+			ReflectionShapeInputs shapeIn;
+			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+			shapeIn.indirect = indirect;
+			shapeIn.buckets = buckets;
 			if (trees) {
-				frame->tree = reflection.treePipeline;
-				frame->treeSignature = treeLod->drawSignature;
-				frame->treeGroups = static_cast<std::uint32_t>((std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances + kTreeLodCullGroup - 1) /
-																kTreeLodCullGroup);
+				shapeIn.tree = reflection.treePipeline;
+				shapeIn.treeSignature = treeLod->drawSignature;
+				shapeIn.treeShapes = scene.treeLodShapeCapacity;
 			}
+			auto frame = MakeReflectionShape(*resources, shapeIn);
+			impl->NoteReflectionParity(*frame, frameNumber);
 			PublishShape(std::move(frame), resources->published, resources->frame, resources->shapeGenerations, resources->recentShapes);
 		}, owners);
 		if (!ok) {

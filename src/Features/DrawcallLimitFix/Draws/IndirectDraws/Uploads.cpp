@@ -236,9 +236,24 @@ namespace DCLF
 		auto& mirror = ConstantMirror::Get();
 		const bool replayVertexInputs = !depthOnly && prepassInputs;
 		CommitUploads uploads(commitStagedPool);
+		// What the segment's shape is made of that this commit fixes before writing anything (MakeMainShape): the pipeline set,
+		// the Z-prepass's buckets (PlanZBuckets) and the latched copies' layout (MainLatchedLayout), its block reserved to hold it.
+		const std::size_t latchedShape = a_payload.inputs.depthOnly ? kDepthShape : kColourShape;
+		const auto indirect = GetIndirectState();
+		auto& zPlan = zBucketPlan;
+		zPlan = {};
+		if (depthOnly && a_resources->pool)
+			PlanZBuckets(*a_resources, a_store.GetLookups(), tables, indirect, zPlan);
+		FrameBlockSizes blockSizes;
+		for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+			blockSizes.vs[slot] = static_cast<std::uint32_t>(a_blocks.vs[slot].size());
+			blockSizes.ps[slot] = static_cast<std::uint32_t>(a_blocks.ps[slot].size());
+		}
+		const auto latchedLayout = MainLatchedLayout(*a_resources, depthOnly, blockSizes, zPlan.Buckets());
+		ReserveLatchedBlock(a_resources->latchedBlocks[latchedShape], LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
+		shapeParity.blockSizes[latchedShape] = blockSizes;
 		// The per-frame values (the frame constants, the counters, the frame buffers' copies, tree LOD's row): copied from the
 		// latch by the epoch's first pass, so this commit records no copy for them.
-		const std::size_t latchedShape = a_payload.inputs.depthOnly ? kDepthShape : kColourShape;
 		LatchedUploads latched(a_resources->latchedTargets, uploads, a_resources->latchedBlocks[latchedShape], RenderGraphRuntime::Get().Host()->CurrentFrameSlot(),
 			RenderGraphRuntime::Get().Host()->FrameSlots());
 		auto lap = [&, last = std::chrono::steady_clock::now()](std::size_t a_part) mutable {
@@ -284,11 +299,15 @@ namespace DCLF
 			const std::size_t offset = std::size_t(frameBuffer.firstElement) * frameBuffer.stride;
 			const std::size_t bytes = std::size_t(frameBuffer.elements) * frameBuffer.stride;
 			if (contents.size() < offset + bytes) {
-				// A structured buffer the commit cannot fill: its copy reads zero.
+				// A structured buffer the commit cannot fill: its copy reads zero (written, as the shape's latched copies name it).
 				static std::array<std::uint32_t, kTextureRegisters> unfilled{};
 				if ((unfilled[frameBuffer.textureRegister]++ % 600) == 0)
 					logger::warn("[DCLF] frame buffer t{} ({} elements of {} bytes) not filled: the mirror holds {} bytes of it ({} times)", frameBuffer.textureRegister,
 						frameBuffer.elements, frameBuffer.stride, contents.size(), unfilled[frameBuffer.textureRegister]);
+				static std::vector<std::byte> zeros;
+				if (zeros.size() < bytes)
+					zeros.resize(bytes);
+				latched(frameBuffer.copy, zeros.data(), bytes, 0);
 				continue;  // not written since it is watched
 			}
 			latched(frameBuffer.copy, contents.data() + offset, bytes, 0);
@@ -564,32 +583,68 @@ namespace DCLF
 		// Inputs the culling dispatch covers. In the depth segment this exceeds drawCount, because that
 		// segment submits a cull-only input for every candidate it is not allowed to draw.
 		const std::uint32_t inputCount = static_cast<std::uint32_t>(a_payload.inputList.size() + (a_payload.resident.Count()));
-		const auto& previousShape = a_resources->published[shapeIndex];
-		auto frame = std::make_shared<PassFrame>();
-		// The max counts within the sequence buffer's ranges, which hold every draw the scene can produce (ReserveMainSequences,
-		// before the epoch): a count past them is a defect of that bound, never a draw to drop.
-		frame->sequenceDraws = a_resources->sequenceDraws;
-		frame->sequenceDecals = a_resources->sequenceDecals;
-		frame->materialRows = a_resources->materialRows.address;
-		frame->pipelineRows = a_resources->pipelineRows.address;
-		if (drawCount > frame->sequenceDraws)
-			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, frame->sequenceDraws));
-		frame->drawCapacity = GrowCapacity(previousShape ? previousShape->drawCapacity : 0u, drawCount, frame->sequenceDraws);
-		for (std::uint32_t group = 0; group < kDecalGroups; ++group) {
-			if (decalCount[group] > frame->sequenceDecals)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], frame->sequenceDecals));
-			frame->decalCapacity[group] = GrowCapacity(previousShape ? previousShape->decalCapacity[group] : 0u, decalCount[group], frame->sequenceDecals);
+		// The sequence buffer's ranges hold every draw the scene can produce (ReserveMainSequences, before the epoch): a count past
+		// them is a defect of that bound, never a draw to drop.
+		if (drawCount > a_resources->sequenceDraws)
+			stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} draws past the sequence buffer's {} (the scene's draw bound missed them)", drawCount, a_resources->sequenceDraws));
+		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+			if (decalCount[group] > a_resources->sequenceDecals)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} decals past the sequence buffer's {} per group", decalCount[group], a_resources->sequenceDecals));
+		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn): the main
+		// latch grown to hold them before the shape names it.
+		if (!depthOnly) {
+			SunAccumulation::Get().GpuCascades(sunCascades);
+			{
+				// Frames whose sun test runs without cascades: every pass with the sun's bits draws unshadowed (right only when the
+				// sun did not accumulate).
+				static std::uint32_t commits = 0, empty = 0;
+				empty += sunCascades.empty() ? 1 : 0;
+				if (++commits == 300) {
+					logger::info("[DCLF] colour sun test: {} of 300 frames without the sun's cascades{}", empty, empty ? " <- NO CASCADES" : " <- OK");
+					commits = empty = 0;
+				}
+			}
+			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
+			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
+			localShadows = LocalShadowLights::Sample();
+			shadowVolumes.clear();
+			for (const auto& light : localShadows.lights) {
+				for (const auto& volume : light.volumes) {
+					auto& out = shadowVolumes.emplace_back();
+					out.masks[0] = volume.masks[0];
+					out.masks[1] = volume.masks[1];
+					out.maskBit = light.maskBit;
+					out.affectsLand = light.affectsLand ? 1u : 0u;
+					out.sphere[0] = light.center[0];
+					out.sphere[1] = light.center[1];
+					out.sphere[2] = light.center[2];
+					out.sphere[3] = light.radius;
+					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
+				}
+			}
+			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
 		}
-		frame->width = a_capture.viewportWidth;
-		frame->height = a_capture.viewportHeight;
+		// The shape (MakeMainShape), from this commit's inputs; a scene revision makes it from its own (MakeRevisionShapes). Its max
+		// counts hold this frame's draws whatever the bound says (a draw past the bound is the bound's defect, the parity's to show).
+		auto shapeIn = MainShapeInputsOf(*a_resources, depthOnly, tables, std::max(drawBound.Draws(), drawCount));
+		for (std::uint32_t group = 0; group < kDecalGroups; ++group)
+			shapeIn.decalBound[group] = std::max(shapeIn.decalBound[group], decalCount[group]);
 		// Both epochs rasterise with the main pass's depth range; see Impl::mainMinDepth.
 		const bool useMainRange = mainMaxDepth > 0.0f;
-		frame->minDepth = useMainRange ? mainMinDepth : a_capture.minDepth;
-		frame->maxDepth = useMainRange ? mainMaxDepth : a_capture.maxDepth;
-		frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-		frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-		frame->indirect = GetIndirectState();
-		frame->cullMode = ActiveToggles().cullMode;
+		shapeIn.viewport = { a_capture.viewportWidth, a_capture.viewportHeight, useMainRange ? mainMinDepth : a_capture.minDepth,
+			useMainRange ? mainMaxDepth : a_capture.maxDepth };
+		shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+		shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+		shapeIn.indirect = indirect;
+		shapeIn.zCalls = zPlan.calls;
+		shapeIn.latched.copies = latchedLayout;
+		if (!latchedLayout.empty())
+			shapeIn.latched.latch = a_resources->latchedBlocks[latchedShape];
+		auto frame = MakeMainShape(shapeIn);
+		shapeParity.known[shapeIndex] = true;
+		shapeParity.viewport[shapeIndex] = shapeIn.viewport;
+		shapeParity.resourceHeap = shapeIn.resourceHeap;
+		shapeParity.samplerHeap = shapeIn.samplerHeap;
 		// The main pass's ViewProj (VS_PerFrame c8), which the draws project with: the culling has to
 		// use the same matrix or it would reject what the draws would have put on screen.
 		std::array<float, 16> viewProj{};
@@ -606,13 +661,6 @@ namespace DCLF
 			loggedNoViewProj = true;
 			logger::info("[DCLF] culling setup: mode {}, ViewProj {}, VS_PerFrame b{} {}", frame->cullMode, hasViewProj ? "yes" : "no",
 				kPerFrameVertexRegister, a_capture.vsBuffers[kPerFrameVertexRegister] ? "bound" : "not bound");
-		}
-		if (const auto pixel = SwitchValue(Switch::GBufferProbe); !pixel.empty()) {
-			if (const auto sep = pixel.find_first_of(",x"); sep != std::string::npos) {
-				frame->probeX = static_cast<std::uint32_t>(std::strtoul(pixel.substr(0, sep).c_str(), nullptr, 10));
-				frame->probeY = static_cast<std::uint32_t>(std::strtoul(pixel.substr(sep + 1).c_str(), nullptr, 10));
-				frame->probePixel = frame->probeX < frame->width && frame->probeY < frame->height;
-			}
 		}
 		// The two epochs must rasterise into the same pixels for the colour pass's EQUAL test to have any
 		// chance: a different viewport or depth range between the depth pass and the main pass puts the
@@ -759,58 +807,25 @@ namespace DCLF
 			latch.treeHeight[1] = treeHeight[1];
 			latch.fadeStatesIndex = a_resources->scene->FadeStatesReadIndex(frameNumber);
 		}
-		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (as
-		// many as the sun has: the block grows to hold them). The sun's Accumulate has run.
+		// The colour pass: this frame's cascades, for the synthetic passes' sun test, in the slot's region after the latch (the
+		// block holds them: ReserveMainLatch, before the shape). The sun's Accumulate has run.
 		const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 		// The depth segment's plain draws (MainOpaquePass): the index pool brought up to the tables (unless the shadow commit did,
-		// earlier this frame); a bucket per group of pipeline slots that share a depth pipeline (IndirectState::zGroups), in the
-		// order the slots first name them, its range the slots' ranges together (Resources::zBucketCapacity, which the sequences'
-		// phase ranges hold); the slots' map to them and each phase's bucket table in the slot's region, their count words zeroed;
-		// and a draw call per bucket. A slot without a published pipeline maps to none: BuildDraws drops its draws.
+		// earlier this frame); the buckets' map and each phase's table (PlanZBuckets, whose calls are the shape's) in the slot's
+		// region, and their count words zeroed. A slot without a published pipeline maps to none: BuildDraws drops its draws.
 		if (depthOnly && a_resources->pool) {
 			const auto& layout = a_resources->latchLayout;
 			UpdateIndexPool(*a_resources->pool, a_store.GetTables(), a_store.GetTablesGeneration(), *a_resources->latch, latchSlot, layout.PoolOffset(), uploads);
-			const auto slots = static_cast<std::uint32_t>(a_resources->zBucketCapacity.size());
+			const auto slots = static_cast<std::uint32_t>(zPlan.map.size());
 			if (slots > layout.buckets)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} Z-prepass pipeline slots past the latch's {}", slots, layout.buckets));
-			const auto& lookups = a_store.GetLookups();
-			const auto& pipelineKeys = a_store.GetTables().pipelines;
-			const auto& groups = frame->indirect.zGroups;
-			zBucketMap.assign(slots, kNoBucket);
-			zGroupBucket.assign(frame->indirect.zPipelines.size(), kNoBucket);
-			zBucketTable.clear();  // (group, capacity) per bucket, then (first, capacity) per phase
-			std::uint32_t buckets = 0;
-			for (std::uint32_t p = 0; p < slots; ++p) {
-				if (!a_resources->zBucketCapacity[p] || p >= lookups.pipelines.size() || p >= pipelineKeys.size())
-					continue;
-				const auto& entry = lookups.pipelines[p];
-				if (entry.setIndex == Lookups::kNone || !(entry.key == pipelineKeys[p]) || entry.setIndex >= groups.size())
-					continue;
-				auto& bucket = zGroupBucket[groups[entry.setIndex]];
-				if (bucket == kNoBucket) {
-					bucket = buckets++;
-					zBucketTable.insert(zBucketTable.end(), { groups[entry.setIndex], 0u });
-				}
-				zBucketTable[2 * bucket + 1] += a_resources->zBucketCapacity[p];
-				zBucketMap[p] = bucket;
-			}
-			const std::size_t calls = std::size_t(buckets) * 2;
-			zBucketTable.resize(calls + std::size_t(buckets) * 4, 0u);
-			std::uint32_t first = 0;
-			for (std::uint32_t b = 0; b < buckets; ++b) {
-				const std::uint32_t group = zBucketTable[2 * b], capacity = zBucketTable[2 * b + 1];
-				zBucketTable[calls + 2 * b] = first;
-				zBucketTable[calls + 2 * b + 1] = capacity;
-				zBucketTable[calls + 2 * (buckets + b)] = first + frame->sequenceDraws;
-				zBucketTable[calls + 2 * (buckets + b) + 1] = capacity;
-				frame->zCalls.push_back({ b, first, capacity, frame->indirect.zPipelines[group] });
-				first += capacity;
-			}
+			const std::uint32_t buckets = zPlan.Buckets();
 			if (slots)
-				a_resources->latch->Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(zBucketMap.data(), slots)));
+				a_resources->latch->Write(latchSlot, layout.BucketMapOffset(), std::as_bytes(std::span(zPlan.map.data(), slots)));
 			if (buckets) {
-				a_resources->latch->Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(zBucketTable.data() + calls, calls)));
-				a_resources->latch->Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(zBucketTable.data() + calls * 2, calls)));
+				const std::size_t words = std::size_t(buckets) * 2;
+				a_resources->latch->Write(latchSlot, layout.BucketTableOffset(), std::as_bytes(std::span(zPlan.table.data(), words)));
+				a_resources->latch->Write(latchSlot, layout.PhaseTwoBucketTableOffset(), std::as_bytes(std::span(zPlan.table.data() + words, words)));
 				zBucketZeros.resize(std::max<std::size_t>(zBucketZeros.size(), buckets), 0u);
 				for (const auto& counts : a_resources->zBucketCounts)
 					latched(counts, zBucketZeros.data(), std::size_t(buckets) * sizeof(std::uint32_t), 0);
@@ -821,36 +836,6 @@ namespace DCLF
 			latch.bucketMapOffset = region + layout.BucketMapOffset();
 		}
 		if (!depthOnly) {
-			SunAccumulation::Get().GpuCascades(sunCascades);
-			{
-				// Frames whose sun test runs without cascades: every pass with the sun's bits draws unshadowed (right only when the
-				// sun did not accumulate).
-				static std::uint32_t commits = 0, empty = 0;
-				empty += sunCascades.empty() ? 1 : 0;
-				if (++commits == 300) {
-					logger::info("[DCLF] colour sun test: {} of 300 frames without the sun's cascades{}", empty, empty ? " <- NO CASCADES" : " <- OK");
-					commits = empty = 0;
-				}
-			}
-			// And the local shadow lights that accumulated this frame (LocalShadowLights), a volume per shadowmap descriptor, for
-			// each input's Light Limit Fix shadow mask. They have accumulated: the shadow maps are drawn.
-			localShadows = LocalShadowLights::Sample();
-			shadowVolumes.clear();
-			for (const auto& light : localShadows.lights) {
-				for (const auto& volume : light.volumes) {
-					auto& out = shadowVolumes.emplace_back();
-					out.masks[0] = volume.masks[0];
-					out.masks[1] = volume.masks[1];
-					out.maskBit = light.maskBit;
-					out.affectsLand = light.affectsLand ? 1u : 0u;
-					out.sphere[0] = light.center[0];
-					out.sphere[1] = light.center[1];
-					out.sphere[2] = light.center[2];
-					out.sphere[3] = light.radius;
-					std::memcpy(out.planes, volume.planes.data(), sizeof(out.planes));
-				}
-			}
-			ReserveMainLatch(*a_resources, static_cast<std::uint32_t>(sunCascades.size()), static_cast<std::uint32_t>(shadowVolumes.size()));
 			const auto& layout = a_resources->latchLayout;
 			const std::uint32_t header[4] = { static_cast<std::uint32_t>(sunCascades.size()), 0, 0, 0 };
 			a_resources->latch->Write(latchSlot, MainLatchLayout::CascadeOffset(), std::as_bytes(std::span(header)));
@@ -866,11 +851,11 @@ namespace DCLF
 			sunUpload = latch;
 		}
 		a_resources->latch->WriteValue(latchSlot, 0, latch);
-		frame->latch = a_resources->latch;
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
 		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
 
 		frame->latched = latched.Finish();
+		NoteShapeParity(shapeIndex, *frame, latchedLayout, frameNumber);
 		PublishShape(std::move(frame), a_resources->published[shapeIndex], a_resources->frames[shapeIndex], a_resources->shapeGenerations,
 			a_resources->recentShapes[shapeIndex]);
 		lap(6);

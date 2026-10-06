@@ -153,6 +153,12 @@ namespace DCLF
 		void KickShadowBuild();
 		/** @brief The end of the scene phase: the shadow build kicked there, kept at BeforeShadowMaps when nothing it read moved. */
 		void KickShadowBuildEarly();
+		/**
+		 * @brief Render thread, at the scene work's join (SceneStore::FinishSceneWork): the main segments' shapes as a scene revision
+		 * made now would have them (R3c), with the capacities reserved for the tables as they are; compared with the commits' own
+		 * (Impl::ShapeParity). Counts only: nothing draws with them yet.
+		 */
+		void MakeRevisionShapes();
 		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */
 		bool KeepEarlyShadowBuild();
 		/**
