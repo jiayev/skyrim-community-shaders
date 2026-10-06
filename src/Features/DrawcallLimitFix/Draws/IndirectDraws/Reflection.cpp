@@ -188,7 +188,8 @@ namespace DCLF
 		const auto& depthCommit = main ? main->committed[kDepthShape] : Resources::Committed{};
 		const auto& colourCommit = main ? main->committed[kColourShape] : Resources::Committed{};
 		if (!main || !main->inputsDepth || !impl->scene || depthCommit.frame != colourCommit.frame || frameNumber - depthCommit.frame > 1 ||
-			depthCommit.sceneGeneration != impl->scene->generation || depthCommit.objectCapacity != main->objectCapacity)
+			depthCommit.sceneGeneration != impl->scene->generation || depthCommit.objectCapacity != main->objectCapacity ||
+			depthCommit.rowsGeneration != main->MainRowsGeneration() || colourCommit.rowsGeneration != main->MainRowsGeneration())
 			return skip(3);
 		const auto indirect = GetIndirectState();
 		if (!indirect.valid || !impl->SetupReflection() || !impl->ImportReflectionCube(reflection.cube.get()))

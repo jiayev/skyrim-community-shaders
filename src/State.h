@@ -545,6 +545,8 @@ public:
 
 	/** @brief The last FeatureData uploaded to featureDataCB, for the same reason as lastSharedData. */
 	std::vector<std::byte> lastFeatureData;
+	/** @brief featureDataCB's size (FeatureBuffer.cpp's packed size, fixed at build time): where Drawcall Limit Fix lays the block out. */
+	std::uint32_t featureDataBytes = 0;
 
 	PermutationCB permutationData{};
 	PermutationCB permutationDataPrevious{};

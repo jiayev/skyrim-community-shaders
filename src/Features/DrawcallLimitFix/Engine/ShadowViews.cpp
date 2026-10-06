@@ -222,6 +222,13 @@ namespace DCLF
 		PassCapture::Get().SetShadowBatchRenderers(std::move(renderers));
 	}
 
+	void ShadowViews::UncoverAll()
+	{
+		for (auto& view : views)
+			view.covered = false;
+		PassCapture::Get().SetShadowBatchRenderers(std::make_shared<PassCapture::ShadowRendererMap>());
+	}
+
 	std::uint32_t ShadowViews::ViewOfAccumulator(const void* a_accumulator) const
 	{
 		const auto it = accumulatorToView.find(a_accumulator);

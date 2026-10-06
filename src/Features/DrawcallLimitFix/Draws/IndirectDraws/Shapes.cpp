@@ -261,10 +261,22 @@ namespace DCLF
 		impl->ReserveSceneTables(tables);
 		impl->ReserveMainSequences(tables);
 		impl->ReserveIndexPool(tables, store.GetTablesGeneration());
+		// The colour commit's sun cascades and local shadow light volumes, a shadow view each (the last Rebuild's candidates): the latch
+		// a revision names holds them from its join on, not from a colour commit's growth (which a frame without claims never runs).
+		{
+			const std::uint32_t views = ShadowViews::Get().Candidates();
+			impl->ReserveMainLatch(r, std::max(views, r.latchLayout.cascades), std::max(views, r.latchLayout.shadowVolumes), r.latchLayout.buckets);
+		}
 		// The growths the graph finished (G2): what the revision made now names, its shapes' addresses included. One still pending
 		// keeps the revision from being sealed (AssembleRevision).
 		impl->revisions.growthPending = Growths::Get().Settle();
 		const auto indirect = GetIndirectState();
+		// The heaps every recording binds: the graph's own, as built.
+		decltype(PassFrame::resourceHeap) resourceHeap{}, samplerHeap{};
+		if (auto* descriptors = host->Descriptors()) {
+			resourceHeap = descriptors->GetSRVDescriptorHeap().GetHandle();
+			samplerHeap = descriptors->GetSamplerDescriptorHeap().GetHandle();
+		}
 		auto& parity = impl->shapeParity;
 		const std::uint32_t frameNumber = store.GetFrame();
 		for (const std::size_t shape : { kDepthShape, kColourShape }) {
@@ -280,8 +292,8 @@ namespace DCLF
 			const bool depthOnly = shape == kDepthShape;
 			auto in = MainShapeInputsOf(r, depthOnly, tables, impl->drawBound.Draws(), true);
 			in.viewport = parity.viewport[shape];
-			in.resourceHeap = parity.resourceHeap;
-			in.samplerHeap = parity.samplerHeap;
+			in.resourceHeap = resourceHeap;
+			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
 			ZBucketPlan plan;
 			if (depthOnly && r.pool)
@@ -307,7 +319,18 @@ namespace DCLF
 			frames[0] = ~0u;
 		}
 		const auto shadowIndirect = GetShadowIndirectState();
-		if (auto shadow = impl->shadow; sp.known && shadow && shadowIndirect.valid) {
+		// The occlusion maps' layout as last captured: one the revisions make a shape for (OcclusionReady asks for it).
+		if (RevisionClaims()) {
+			auto layouts = impl->PredictedOcclusion();
+			auto& recent = impl->recentOcclusionLayouts;
+			if (!layouts.empty()) {
+				std::erase(recent, layouts);
+				recent.insert(recent.begin(), std::move(layouts));
+				if (recent.size() > RecentShapes<ShadowFrame>::kShapes)
+					recent.resize(RecentShapes<ShadowFrame>::kShapes);
+			}
+		}
+		if (auto shadow = impl->shadow; (sp.known || !impl->recentShadowLayouts.empty() || !impl->recentOcclusionLayouts.empty()) && shadow && shadowIndirect.valid) {
 			auto& payload = impl->shadowPayload;
 			// The slots the layouts name hold every draw the scene can produce, as the epochs reserve them.
 			std::uint32_t slots = 0;
@@ -316,23 +339,44 @@ namespace DCLF
 					if (shape)
 						for (const auto& view : shape->views)
 							slots = std::max(slots, view.slot + 1);
+			for (const auto* recentLayouts : { &impl->recentShadowLayouts, &impl->recentOcclusionLayouts })
+				for (const auto& layouts : *recentLayouts)
+					for (const auto& view : layouts)
+						slots = std::max(slots, view.slot + 1);
 			impl->ReserveShadowSequences(tables, slots, 0);
+			// The latch for what the frame's epochs can name (as the shadow epoch reserves it, over every mode): its views, key slots,
+			// the states registered and the sun's processes, a view's each at most. A growth at the epoch instead would leave the
+			// revision's latch behind.
+			{
+				const auto& lookups = store.GetLookups();
+				std::size_t keys = lookups.shadowSlotKeys.size() + tables.shadowKeysUsed.size();
+				for (const auto& used : tables.occlusionKeysUsed)
+					keys += used.size();
+				const std::uint32_t views = ShadowViews::Get().Candidates();
+				impl->ReserveShadowLatch(views, static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
+					std::max(views, shadow->latchLayout.sunProcesses));
+			}
 			const auto bounds = ShadowBoundsOf(impl->drawBound, store.GetLookups());
 			for (std::size_t kind = 0; kind < 2; ++kind) {
 				const bool occlusion = kind == 1;
-				const auto& recent = occlusion ? shadow->recentOcclusionShapes : shadow->recentShapes;
+				// The layouts the epoch may draw: with scene revisions the shadow views' predicted ones (DecideShadowCoverage: a frame's
+				// views are DCLF's only once a revision has a shape for theirs), else those its commits drew lately.
+				std::vector<std::vector<ShadowViewLayout>> sources;
+				if (RevisionClaims())
+					sources = occlusion ? impl->recentOcclusionLayouts : impl->recentShadowLayouts;
+				else
+					for (const auto& shape : (occlusion ? shadow->recentOcclusionShapes : shadow->recentShapes).shapes)
+						if (shape)
+							sources.push_back(LayoutOf(*shape));
 				std::vector<std::vector<ShadowViewLayout>> seen;
-				for (const auto& shape : recent.shapes) {
-					if (!shape)
-						continue;
-					auto layouts = LayoutOf(*shape);
+				for (auto& layouts : sources) {
 					const ShadowSizing& sizing = Growths::Get().RevisionSizing<ShadowSizing>(*shadow);
 					if (std::find(seen.begin(), seen.end(), layouts) != seen.end() ||
 						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadow->sequences.size() || a_view.slot >= sizing.viewSlots; }))
 						continue;
 					ShadowShapeInputs in;
-					in.resourceHeap = sp.resourceHeap;
-					in.samplerHeap = sp.samplerHeap;
+					in.resourceHeap = resourceHeap;
+					in.samplerHeap = samplerHeap;
 					in.indirect = shadowIndirect;
 					for (const auto& layout : layouts)
 						in.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), shadowIndirect));
@@ -344,7 +388,7 @@ namespace DCLF
 					in.viewBlocks = shadow->viewBlocks.RevisionAddress();
 					in.previous = occlusion ? shadow->occlusionPublished : shadow->published;
 					if (!occlusion) {
-						in.latched.copies = ShadowLatchedLayout(*shadow, payload, payload.inputs);
+						in.latched.copies = ShadowLatchedLayout(*shadow);
 						ReserveLatchedBlock(shadow->latchedBlock, LatchedBytes(in.latched.copies), host->FrameSlots());
 						if (!in.latched.copies.empty())
 							in.latched.latch = shadow->latchedBlock;
@@ -369,14 +413,15 @@ namespace DCLF
 			PlanReflectionBuckets(Growths::Get().LatestSizing<MainSizing>(r), reflection.slotPipelines, latest);
 			impl->ReserveReflection(static_cast<std::uint32_t>(latest.map.size()), static_cast<std::uint32_t>(latest.buckets.size()), latest.draws);
 		}
-		if (rp.known && reflection.resources && indirect.valid) {
+		// Without a commit's: what a reflection shape is made from is the faces' resources and the main sizing (the heaps the graph's).
+		if ((rp.known || RevisionClaims()) && reflection.resources && indirect.valid) {
 			ReflectionPlan plan;
 			PlanReflectionBuckets(Growths::Get().RevisionSizing<MainSizing>(r), reflection.slotPipelines, plan);
 			auto& scene = *impl->scene;
 			const auto treeLod = scene.treeLodPipelines.load(std::memory_order_acquire);
 			ReflectionShapeInputs in;
-			in.resourceHeap = rp.resourceHeap;
-			in.samplerHeap = rp.samplerHeap;
+			in.resourceHeap = resourceHeap;
+			in.samplerHeap = samplerHeap;
 			in.indirect = indirect;
 			in.buckets = std::move(plan.buckets);
 			in.map = std::make_shared<const std::vector<std::uint32_t>>(std::move(plan.map));

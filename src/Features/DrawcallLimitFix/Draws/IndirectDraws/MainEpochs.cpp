@@ -184,6 +184,30 @@ namespace DCLF
 		// slot mask is an input of the build; their bytes are uploaded by the commit.
 		FrameBlocks blocks;
 		impl->PackFrameBlocks(capture, depthOnly, blocks);
+		// What a scene revision's shape of the segment is made from that only the frame's capture has (MakeRevisionShapes): its
+		// viewport, both segments at the main pass's depth range (Impl::mainMinDepth), and its frame blocks' sizes, the largest seen
+		// (a revision's latched copies hold every block a frame binds: a commit's smaller or absent block is zeroed past its bytes,
+		// never staged). Taken here, whether or not the epoch is submitted, so revisions never wait for a commit.
+		{
+			auto& parity = impl->shapeParity;
+			const std::size_t shape = depthOnly ? kDepthShape : kColourShape;
+			const bool mainRange = impl->mainMaxDepth > 0.0f;
+			parity.viewport[shape] = { capture.viewportWidth, capture.viewportHeight, mainRange ? impl->mainMinDepth : capture.minDepth,
+				mainRange ? impl->mainMaxDepth : capture.maxDepth };
+			for (std::uint32_t slot = 0; slot < kConstantBufferRegisters; ++slot) {
+				auto& sizes = parity.blockSizes[shape];
+				sizes.vs[slot] = std::max(sizes.vs[slot], static_cast<std::uint32_t>(blocks.vs[slot].size()));
+				sizes.ps[slot] = std::max(sizes.ps[slot], static_cast<std::uint32_t>(blocks.ps[slot].size()));
+			}
+			parity.known[shape] = true;
+		}
+		// Strict epochs: a frame without claims (SceneStore::WithdrawSet: no revision covers it) has nothing of DCLF's to draw, and
+		// is not submitted.
+		if (RevisionClaims() && store.SetWithdrawn()) {
+			capture.Release();
+			impl->DropMainJob(jobIndex, stats);
+			return;
+		}
 		MainInputs in = impl->PrepareMainInputs(&capture, depthOnly, *resources, blocks.vsMask, blocks.psMask, store);
 		auto& job = impl->mainJobs[jobIndex];
 		job.vsMask = blocks.vsMask;

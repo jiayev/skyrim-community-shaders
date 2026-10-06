@@ -57,7 +57,7 @@ namespace DCLF
 		/** @brief The rows' backings a staged batch was staged against: one of them grown since, and it is not submitted. */
 		std::uint64_t RowsGeneration(const Resources& a_resources)
 		{
-			return (a_resources.materialRows.generation << 32) ^ a_resources.pipelineRows.generation;
+			return a_resources.MainRowsGeneration();
 		}
 	}
 
@@ -260,7 +260,6 @@ namespace DCLF
 		}
 		const auto latchedLayout = MainLatchedLayout(*a_resources, depthOnly, blockSizes, zPlan.Buckets());
 		ReserveLatchedBlock(a_resources->latchedBlocks[latchedShape], LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
-		shapeParity.blockSizes[latchedShape] = blockSizes;
 		// The colour pass's cascades and local shadow volumes (the sun's Accumulate has run, the shadow maps are drawn): the main
 		// latch grown to hold them before the shape names it.
 		if (!depthOnly) {
@@ -704,10 +703,6 @@ namespace DCLF
 		if (!latchedLayout.empty())
 			shapeIn.latched.latch = a_resources->latchedBlocks[latchedShape];
 		auto frame = MakeMainShape(shapeIn);
-		shapeParity.known[shapeIndex] = true;
-		shapeParity.viewport[shapeIndex] = shapeIn.viewport;
-		shapeParity.resourceHeap = shapeIn.resourceHeap;
-		shapeParity.samplerHeap = shapeIn.samplerHeap;
 		// The main pass's ViewProj (VS_PerFrame c8), which the draws project with: the culling has to
 		// use the same matrix or it would reject what the draws would have put on screen.
 		std::array<float, 16> viewProj{};
@@ -924,7 +919,7 @@ namespace DCLF
 		}
 		latchBlock.WriteValue(latchSlot, 0, latch);
 		// What the reflection's faces, early next frame, draw from (ExecuteReflection): this commit's inputs and the buffers' backings.
-		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity };
+		a_resources->committed[shapeIndex] = { frameNumber, inputCount, a_resources->scene->generation, a_resources->objectCapacity, a_resources->MainRowsGeneration() };
 
 		if (revisionShape) {
 			// The values went into the revision's shape; the commit's own shape is published as its producer laid it out.

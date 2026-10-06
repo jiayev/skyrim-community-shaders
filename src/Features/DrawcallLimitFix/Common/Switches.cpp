@@ -140,6 +140,7 @@ namespace DCLF
 			{ TestMove, "CS_DCLF_TEST_MOVE", T, N, false, "<start>:<end>:<units per frame>;...: carries the player forward" },
 			{ TestTurn, "CS_DCLF_TEST_TURN", T, N, false, "<start>:<end>:<degrees per frame>;...: turns the player" },
 			{ TestToggle, "CS_DCLF_TEST_TOGGLE", T, N, false, "<off frame>:<on frame>...: switches DCLF off and on" },
+			{ TestRowsGrowth, "CS_DCLF_TEST_ROWS_GROWTH", T, N, false, "<frame>: the main material and pipeline rows grow at that frame (a growth's fill under claims)" },
 			{ TestExit, "CS_DCLF_TEST_EXIT", T, N, false, "<frame>: the game exits at once after that many frames (startup loops)" },
 
 			{ UpscaleSubmit, "CS_UPSCALE_SUBMIT", O, N, false, "direct: upscaling's ring submissions wait for DXVK's command stream" },

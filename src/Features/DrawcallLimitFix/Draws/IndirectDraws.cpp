@@ -15,6 +15,7 @@ namespace DCLF
 	}
 	std::uint8_t IndirectDraws::ShadowPhasesDrawn() const { return 0; }
 	std::uint32_t IndirectDraws::ShadowViewCapacity() { return UINT32_MAX; }
+	void IndirectDraws::DecideShadowCoverage() {}
 	bool IndirectDraws::PhaseReady(std::uint32_t, std::uint8_t) const { return false; }
 	std::uint64_t IndirectDraws::ShadowReadinessSerial() const { return 0; }
 	void IndirectDraws::CaptureMainPass() {}

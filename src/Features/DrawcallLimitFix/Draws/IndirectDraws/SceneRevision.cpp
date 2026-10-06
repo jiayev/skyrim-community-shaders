@@ -406,7 +406,17 @@ namespace DCLF
 		rv.withdrawn += main ? 0 : 1;
 		// The faces' withholding (PassCapture), before the engine renders them: the claims stand and the cube the epoch draws into is
 		// in the graph as built (its import, at the epoch, is built at the next build point).
-		impl->reflectionCovered = main && reflection.resources && reflection.resources->cube && !host->RebuildRequested();
+		const auto& resources = impl->resources;
+		const std::uint32_t frame = SceneStore::Get().GetFrame();
+		// The faces draw from the frame before's main commits (ExecuteReflection), whose inputs name the main rows by address: not
+		// after a frame whose main epochs were not submitted (no claims), nor once a growth of the rows was adopted since (this frame's
+		// selection), which leaves those addresses on a version nothing holds.
+		const bool inputs = resources && resources->committed[kDepthShape].frame == resources->committed[kColourShape].frame &&
+		                    frame - resources->committed[kDepthShape].frame <= 1 && resources->committed[kDepthShape].rowsGeneration == resources->MainRowsGeneration() &&
+		                    resources->committed[kColourShape].rowsGeneration == resources->MainRowsGeneration() &&
+		                    impl->scene && resources->committed[kDepthShape].sceneGeneration == impl->scene->generation &&
+		                    resources->committed[kDepthShape].objectCapacity == resources->objectCapacity;
+		impl->reflectionCovered = main && inputs && rv.covered[4] && reflection.resources && reflection.resources->cube && !host->RebuildRequested();
 		PassCapture::Get().SetReflectionCovered(impl->reflectionCovered);
 		return main;
 	}
@@ -533,8 +543,12 @@ namespace DCLF
 			for (std::uint32_t e = 0; e < SceneRevisions::kEpochs; ++e)
 				uncovered += fmt::format("{}{} {}", e ? ", " : "", SceneRevisions::kNames[e], std::exchange(rv.uncovered[e], 0));
 			text += fmt::format("[DCLF] strict epochs: {} frames without the selected revision's main recordings (claims withdrawn: the engine's), {} graph builds at the "
-								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}\n",
-				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered);
+								"build point, {} tickets of epochs not submitted given back for recordings; frames whose revision lacked an epoch's current recordings: {}; "
+								"shadow views left to the engine: {} frames with a view not seen yet, {} with a layout no revision had a shape for; {} covered frames "
+								"whose views did not come as predicted{}; occlusion maps left to the engine for want of the revision's shape: {}\n",
+				std::exchange(rv.withdrawn, 0), std::exchange(rv.builds, 0), std::exchange(rv.ticketsReleased, 0), uncovered, std::exchange(shadowUnobserved, 0),
+				std::exchange(shadowUnrecorded, 0), shadowMispredicted, shadowMispredicted ? " <- MISPREDICTED" : "", std::exchange(occlusionUnrecorded, 0));
+			shadowMispredicted = 0;
 		}
 		return text;
 	}

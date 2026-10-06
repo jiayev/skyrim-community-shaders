@@ -106,6 +106,7 @@ namespace DCLF
 		TestMove,
 		TestTurn,
 		TestToggle,
+		TestRowsGrowth,
 		TestExit,
 
 		// Other features' switches, read through the same file.

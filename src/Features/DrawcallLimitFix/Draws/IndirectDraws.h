@@ -64,6 +64,12 @@ namespace DCLF
 		 */
 		std::uint32_t ShadowViewCapacity();
 		/**
+		 * @brief BeforeShadowMaps, after ShadowViews::Rebuild and before the engine draws a view (scene revisions): the frame's views stay
+		 * DCLF's only when the selected revision has a shape for their predicted layout (Impl::observedViews); else every one is the
+		 * engine's this frame (ShadowViews::UncoverAll), and the layout is one the next revisions make a shape for.
+		 */
+		void DecideShadowCoverage();
+		/**
 		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
 		 * pipeline under every rasterizer state of its caster class in each of the phase's modes the last epoch drew, and an
 		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h).
