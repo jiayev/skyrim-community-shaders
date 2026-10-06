@@ -254,6 +254,8 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	store.ApplySet();
+	// The newest complete scene revision (R3c; counts only: the epochs draw the commits' shapes).
+	DCLF::IndirectDraws::Get().SelectRevision();
 	// The frame's events, here on the render thread: they walk the subtrees attached since the last frame, and dropping the last
 	// reference to a detached one runs the engine's destructors, which belong on the engine's main thread. They also come before
 	// the list filter: published ahead of them, the kept scene lists released a freed root at Present on every run (dclf-async-

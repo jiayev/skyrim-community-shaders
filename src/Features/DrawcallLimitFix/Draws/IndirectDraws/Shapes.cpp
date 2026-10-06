@@ -362,6 +362,8 @@ namespace DCLF
 			rp.revisions[0] = MakeReflectionShape(*reflection.resources, in);
 			rp.revisionFrames[0] = frameNumber;
 		}
+		// The revision of these shapes (R3c b): assembled, its changed epochs recorded for it.
+		impl->AssembleRevision(frameNumber);
 	}
 
 	void IndirectDraws::Impl::NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber)

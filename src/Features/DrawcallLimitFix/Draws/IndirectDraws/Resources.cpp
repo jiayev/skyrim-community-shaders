@@ -58,6 +58,8 @@ namespace DCLF::Draws
 	{
 		for (const auto& [buffer, version] : a_growth.versions)
 			buffer->Adopt(version);
+		if (!a_growth.versions.empty())
+			++VersionRegistry::Get().changes;
 		if (a_adopted)
 			a_adopted();
 		if (auto* host = RenderGraphRuntime::Get().Host())

@@ -32,6 +32,7 @@
 #	include "RE/B/BSCullingProcess.h"
 #	include "RE/N/NiCamera.h"
 #	include "Features/DrawcallLimitFix/Common/Toggles.h"
+#	include <ORGModuleServices/Async/RevisionAssembly.h>
 #	include "Features/DrawcallLimitFix/Common/Switches.h"
 #	include "Features/DrawcallLimitFix/Scene/VertexInput.h"
 #	include "Deferred.h"
@@ -1130,12 +1131,46 @@ namespace DCLF
 			return nullptr;
 		}
 
+		struct ShadowFrame;
+		struct ReflectionFrame;
+		/**
+		 * @brief The shapes a scene revision's recording of an epoch is prepared for (R3c; SceneRevision.cpp): what its passes read
+		 * from the preparation's host data (PassPrepareContext::preparationData) instead of the segments' published shapes. A
+		 * preparation without one (a live ticket) reads the published ones.
+		 */
+		struct RevisionShapes
+		{
+			std::array<std::shared_ptr<const PassFrame>, 2> main;  // kDepthShape, kColourShape
+			std::shared_ptr<const ShadowFrame> shadow, occlusion;
+			std::shared_ptr<const ReflectionFrame> reflection;
+		};
+		inline const RevisionShapes* RevisionShapesOf(const org::PassPrepareContext& a_preparation)
+		{
+			return a_preparation.preparationData ? a_preparation.preparationData->Get<RevisionShapes>() : nullptr;
+		}
+		/** @brief The shape a_preparation prepares the segment's passes for: its revision's, else the published one. */
+		inline std::shared_ptr<const PassFrame> CurrentFrame(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
+		{
+			if (const auto* shapes = RevisionShapesOf(a_preparation)) {
+				if (a_segment == RenderGraphRuntime::Segment::ZPrepass)
+					return shapes->main[kDepthShape];
+				if (a_segment == RenderGraphRuntime::Segment::MainOpaque)
+					return shapes->main[kColourShape];
+				return nullptr;
+			}
+			return CurrentFrame(a_resources, a_segment);
+		}
+
 		static_assert(DrawPipelines::kMaxPipelines == 4096, "BuildDrawsCS.hlsl's kSortKeys");
 
 		/** @brief Whether BuildDraws runs in the segment (BuildDrawsPass::Prepare's conditions), which is when a sort follows it. */
 		inline bool BuildsDraws(const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
 		{
 			return a_resources.buildDraws && a_resources.latch && a_resources.dispatchSignature && CurrentFrame(a_resources, a_segment);
+		}
+		inline bool BuildsDraws(const org::PassPrepareContext& a_preparation, const Resources& a_resources, RenderGraphRuntime::Segment a_segment)
+		{
+			return a_resources.buildDraws && a_resources.latch && a_resources.dispatchSignature && CurrentFrame(a_preparation, a_resources, a_segment);
 		}
 
 		/**
@@ -3234,6 +3269,44 @@ namespace DCLF
 			std::uint32_t treeShapes = 0;
 		};
 		std::shared_ptr<ReflectionFrame> MakeReflectionShape(const ReflectionResources& a_resources, const ReflectionShapeInputs& a_in);
+
+		/**
+		 * @brief The versions of every versioned buffer (VersionRegistry) as a scene revision names them (R3c): a preparation for the
+		 * revision resolves each buffer to its version here (org::IResourceVersions), whatever is current when it runs.
+		 */
+		struct VersionSet final : org::IResourceVersions
+		{
+			std::vector<std::pair<const void*, std::shared_ptr<const org::BufferVersion>>> versions;  // by VersionedBuffer::Key
+			std::shared_ptr<const org::BufferVersion> Find(const org::VersionedBuffer& a_buffer) const noexcept override;
+			/** @brief Render thread: the registry's buffers' current versions. */
+			static std::shared_ptr<const VersionSet> Snapshot();
+		};
+
+		/** @brief A scene revision's recording of one epoch prepares for this (host data): the revision's versions and its epoch's shape. */
+		struct EpochRevisionData final : org::IHostExecutionData
+		{
+			std::shared_ptr<const VersionSet> versions;
+			RevisionShapes shapes;
+			const void* TryGet(std::type_index a_type) const noexcept override
+			{
+				if (a_type == typeid(RevisionShapes))
+					return &shapes;
+				if (a_type == typeid(org::IResourceVersions))
+					return static_cast<const org::IResourceVersions*>(versions.get());
+				return nullptr;
+			}
+		};
+
+		/** @brief A shadow or occlusion epoch's shapes in a revision: one per view layout it has seen (ShadowViewLayout). */
+		struct ShadowVariants
+		{
+			std::vector<std::shared_ptr<const ShadowFrame>> shapes;
+		};
+		/** @brief An epoch's recordings for a revision: one per shape (a shadow epoch's variants), by the shapes' order. */
+		struct RevisionRecordings
+		{
+			std::vector<std::shared_ptr<const org::PersistentGraphHost::EpochRecording>> recordings;
+		};
 	}
 
 	// What was one translation unit's anonymous namespace: its names resolve here as they did there.
@@ -3712,6 +3785,44 @@ namespace DCLF
 			std::uint32_t logged = 0;
 		} shadowParity;
 		void NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber);
+
+		/**
+		 * @brief R3c (b), the scene revisions (SceneRevision.cpp), assembled and selected but not drawn with yet. At the scene work's
+		 * join (AssembleRevision) a draft names the versions (VersionSet), each epoch's shape (MakeRevisionShapes': a fragment kept
+		 * while the shape is the same) and each epoch's recording, which requires exactly its shape and the versions: an epoch whose
+		 * shape and versions are unchanged inherits the last one's, and any other is recorded for the revision on ORG's host thread
+		 * (PersistentGraphHost::RequestEpochRecording; a live epoch's recording is made but never admitted). BeginSceneFrame takes the
+		 * newest complete revision (SelectRevision). Render thread, but for the recordings' completions (the host's thread).
+		 */
+		struct SceneRevisions
+		{
+			static constexpr std::uint32_t kEpochs = 5;  // kDepthShape, kColourShape, shadow, occlusion, reflection
+			static constexpr std::uint32_t kVersionsSlot = 0, kShapeSlot = 1, kRecordingSlot = kShapeSlot + kEpochs, kSlots = kRecordingSlot + kEpochs;
+			static constexpr std::array<RenderGraphRuntime::Segment, kEpochs> kSegments = { RenderGraphRuntime::Segment::ZPrepass, RenderGraphRuntime::Segment::MainOpaque,
+				RenderGraphRuntime::Segment::ShadowView, RenderGraphRuntime::Segment::SkyOcclusion, RenderGraphRuntime::Segment::Reflection };
+			static constexpr std::array<const char*, kEpochs> kNames = { "Z-prepass", "colour", "shadow", "occlusion", "reflection" };
+			org::async::RevisionAssembler assembler{ kSlots };
+			std::uint64_t versionChanges = ~0ull;  // VersionRegistry::changes the versions fragment was made at
+			// Per sequence (a ring), the scene frame whose join made it: the selected revision's age.
+			std::array<std::pair<std::uint64_t, std::uint32_t>, 64> madeAt{};
+			std::uint64_t selected = 0;
+			// Since the last report: drafts sealed, published, selections, the frames between a selected revision's join and its
+			// selection; per epoch the shapes that changed, the recordings requested, refused (no async epochs), recorded (a request
+			// whose every shape is recorded) and failed, and the shapes recorded.
+			std::uint64_t sealed = 0, published = 0, selections = 0, selectedAge = 0, versionSets = 0, sealFailures = 0;
+			struct Epoch
+			{
+				std::uint64_t changed = 0, requested = 0, refused = 0;
+				std::atomic<std::uint64_t> recorded = 0, failed = 0, shapes = 0;
+			};
+			std::array<Epoch, kEpochs> epochs;
+			std::atomic<std::uint32_t> failuresLogged = 0;
+			// Per epoch, the inputs (versions, shape) whose recording failed: not asked for again until they change.
+			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
+		} revisions;
+		/** @brief The scene work's join: the revision of MakeRevisionShapes' shapes, sealed (SceneRevisions). */
+		void AssembleRevision(std::uint32_t a_frame);
+		std::string RevisionReport();
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**
