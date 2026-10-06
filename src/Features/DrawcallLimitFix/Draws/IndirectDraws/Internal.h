@@ -934,7 +934,12 @@ namespace DCLF
 				std::uint32_t frame = ~0u, inputs = 0;
 				std::uint64_t sceneGeneration = 0;
 				std::uint32_t objectCapacity = 0;
+				// The main rows' backings its inputs name by address (MainRowsGeneration): a growth adopted since leaves them on a
+				// version nothing holds.
+				std::uint64_t rowsGeneration = 0;
 			};
+			/** @brief The main rows' backings (material and pipeline rows' generations): what draw inputs embed the addresses of. */
+			std::uint64_t MainRowsGeneration() const { return (materialRows.generation << 32) ^ pipelineRows.generation; }
 			std::array<Committed, 2> committed;
 		};
 
@@ -2289,8 +2294,6 @@ namespace DCLF
 			std::array<std::uint32_t, kShadowModeCount> modeDraws{};
 			// Per mode, the same by key slot (DrawInput::pipelineIndex): what sizes a view's buckets (ShadowBucket).
 			std::array<std::vector<std::uint32_t>, kShadowModeCount> keySlotDraws;
-			// The blocks every view's push data names besides its own (kShadowPushZeros and after), in the arena.
-			std::uint64_t zerosAddress = 0, sharedDataAddress = 0, featureDataAddress = 0;
 			std::vector<std::uint32_t> objectRecord;  // per object: its material row, or ~0u when it cannot draw
 			std::array<std::vector<DrawInput>, kShadowModeCount> inputList;  // per render mode: the frame's own (after the kept region)
 			// The kept state (ShadowKept): per mode the region's inputs at the head of the mode's buffer, sent as what changed
@@ -2352,7 +2355,6 @@ namespace DCLF
 				modeDraws = {};
 				for (auto& slots : keySlotDraws)
 					slots.clear();
-				zerosAddress = sharedDataAddress = featureDataAddress = 0;
 				bindingOwners.clear();
 				objectRecord.clear();
 				for (auto& modeInputs : inputList)
@@ -2379,6 +2381,20 @@ namespace DCLF
 			bool operator==(const ShadowViewLayout&) const = default;
 		};
 		std::vector<ShadowViewLayout> LayoutOf(const ShadowFrame& a_frame);
+		/** @brief A shadow view as Impl::observedViews keys it (DecideShadowCoverage). */
+		struct ObservedViewKey
+		{
+			const void* accumulator = nullptr;
+			std::uint32_t descriptor = 0, renderMode = 0, occurrence = 0;
+			bool operator==(const ObservedViewKey&) const = default;
+		};
+		struct ObservedViewKeyHash
+		{
+			std::size_t operator()(const ObservedViewKey& a_key) const noexcept
+			{
+				return std::hash<const void*>{}(a_key.accumulator) ^ (std::size_t(a_key.descriptor) << 20) ^ (std::size_t(a_key.renderMode) << 28) ^ (std::size_t(a_key.occurrence) << 36);
+			}
+		};
 
 		/**
 		 * @brief What a shadow or occlusion epoch's shape is made from (MakeShadowShape): the views' layout, each view's map row's
@@ -2414,10 +2430,21 @@ namespace DCLF
 		};
 		std::shared_ptr<ShadowFrame> MakeShadowShape(const ShadowResources& a_resources, const ShadowShapeInputs& a_in);
 		/**
-		 * @brief The shadow commit's latched copies (CS's SharedData and FeatureData in the constants, a_in's), as its LatchedUploads
-		 * makes them.
+		 * @brief The shadow commit's latched copies (CS's SharedData and FeatureData at their places in the constants, ShadowArenaBlocksOf),
+		 * as its LatchedUploads makes them.
 		 */
-		std::vector<LatchedCopy> ShadowLatchedLayout(const ShadowResources& a_resources, const ShadowPayload& a_payload, const ShadowInputs& a_in);
+		std::vector<LatchedCopy> ShadowLatchedLayout(const ShadowResources& a_resources);
+		/**
+		 * @brief The blocks every shadow view's push data names besides its own (kShadowPushZeros and after), as offsets into the shadow
+		 * constants: the zero block, then CS's SharedData and FeatureData at the places their sizes (fixed for the session) give. A
+		 * block CS does not have reads the zero block.
+		 */
+		struct ShadowArenaBlocks
+		{
+			std::uint64_t zeros = 0, sharedData = 0, featureData = 0;
+			std::uint32_t sharedBytes = 0, featureBytes = 0;
+		};
+		ShadowArenaBlocks ShadowArenaBlocksOf();
 
 		/**
 		 * @brief The geometry slots an object's draw writes a sequence for, in BuildDrawsCS's order: its one
@@ -3716,6 +3743,31 @@ namespace DCLF
 		// for kRetainedViewFrames frames after (ExecuteShadowFrame).
 		static constexpr std::uint32_t kRetainedViewFrames = 600;
 		std::vector<std::uint32_t> shadowSlotDrawn;
+		/**
+		 * @brief Strict shadow coverage (DecideShadowCoverage). What each shadow view drew with when the engine last drew it, DCLF's
+		 * or not (CaptureShadowView: its mode, target, slice, viewport and rasterizer state; the slot is the frame's), by view: its
+		 * accumulator, descriptor and render mode, and which of the views that share them it is in the engine's order (a sun cascade's
+		 * volumetric copy is a view of its own, drawn before the cascade with the same three). From them, before the engine draws a view, the frame's layout is predicted (its
+		 * covered views in order, then the retained slots, as ExecuteShadowFrame lays them out); the layouts predicted lately are
+		 * what a scene revision makes the shadow epoch's shapes for (MakeRevisionShapes), newest first.
+		 */
+		ankerl::unordered_dense::map<ObservedViewKey, ShadowViewLayout, ObservedViewKeyHash> observedViews;
+		// The frame's captures so far, per view key with occurrence 0: an accumulator the engine draws twice (a cascade's volumetric
+		// copy, then the cascade: ShadowViews lists both, the accumulator names one) is that view's first, then its second occurrence.
+		ankerl::unordered_dense::map<ObservedViewKey, std::uint32_t, ObservedViewKeyHash> capturedViews;
+		std::vector<std::vector<ShadowViewLayout>> recentShadowLayouts;
+		// Since the last report: frames whose views were all left to the engine, as a view had not been seen yet or the selected
+		// revision had no shape for the predicted layout; and covered frames whose views did not come as predicted.
+		std::uint64_t shadowUnobserved = 0, shadowUnrecorded = 0, shadowMispredicted = 0;
+		std::vector<ShadowViewLayout> predictedShadow;  // the frame's, when its views are DCLF's (else empty)
+		/**
+		 * @brief The occlusion maps' layout as their last captures drew (CaptureOcclusion, taken whether DCLF draws a map or not): what
+		 * a revision makes the occlusion epoch's shapes for (recentOcclusionLayouts, newest first), and what OcclusionReady asks the
+		 * selected revision to have a shape for.
+		 */
+		std::vector<ShadowViewLayout> PredictedOcclusion() const;
+		std::vector<std::vector<ShadowViewLayout>> recentOcclusionLayouts;
+		std::uint64_t occlusionUnrecorded = 0;  // maps left to the engine for want of the revision's shape, since the last report
 		ShadowPayload shadowProbePayload;
 		/**
 		 * @brief The sequence buffers' reserves (render thread, before an epoch): each grown to hold every draw the scene's tracked

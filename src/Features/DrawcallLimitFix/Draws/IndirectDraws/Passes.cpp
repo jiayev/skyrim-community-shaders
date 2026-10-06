@@ -1824,7 +1824,6 @@ namespace DCLF::Draws
 			bindings.viewBlocks = a_builder.CopyDestination(*resources->viewBlocks.buffer).Resource();
 			// The shadow commit's latched values (ShadowFrame::latched) go to the constants alone.
 			bindings.constants = a_builder.CopyDestination(resources->constants);
-			resources->latchedTargets.store(std::make_shared<const std::vector<const void*>>(1, resources->constants.get()), std::memory_order_release);
 			for (std::size_t s = 0; s < resources->count.size(); ++s) {
 				bindings.count.push_back(a_builder.CopyDestination(resources->count[s]));
 				bindings.bucketCounts.push_back(a_builder.CopyDestination(*resources->bucketCounts[s]).Resource());

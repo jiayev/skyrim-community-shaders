@@ -47,6 +47,9 @@ namespace DCLF::Draws
 	// data names, then the arena's blocks (the zero block, SharedData, FeatureData).
 	constexpr std::uint64_t kShadowFrameRecordOffset = 0;
 	constexpr std::uint64_t kShadowArenaBlocksOffset = 1024;
+	// The arena's blocks at fixed places (ShadowArenaBlocksOf): the zero block first, then SharedData and FeatureData at offsets
+	// CS's block sizes fix, so a revision's shapes name them without a build.
+	constexpr std::uint64_t kShadowZeroBlockBytes = 1024;
 	// [0] kSHADOWMAPS_ESRAM (cascades, spot lights), [1] kSHADOWMAPS (point and focus lights), and
 	// [2] kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM, the volumetric lighting copy: the engine's second draw of
 	// each cascade's accumulator, with flag 0x100, draws batch group 15 alone (FUN_1414b44f0) - the passes

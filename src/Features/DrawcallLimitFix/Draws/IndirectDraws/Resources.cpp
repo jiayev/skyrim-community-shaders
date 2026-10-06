@@ -854,7 +854,12 @@ namespace DCLF
 			pipelines.bytes = [rows = committedPipelineRows](std::uint64_t a_address) { return CapturedMainRows(rows, a_address); };
 		}
 		r.materialRows.Reserve(materialSlots + materialSlots / 4, [&r](std::uint64_t a_held) { r.materialRowsHeld = a_held; }, &materials);
-		r.pipelineRows.Reserve(pipelineSlots + pipelineSlots / 4, [&r](std::uint64_t a_held) { r.pipelineRowsHeld = a_held; }, &pipelines);
+		// CS_DCLF_TEST_ROWS_GROWTH: both grown at that frame, whatever they hold (a growth's fill, mid-run, under claims).
+		std::uint32_t forced = 0;
+		if (const auto& at = SwitchValue(Switch::TestRowsGrowth); !at.empty() && SceneStore::Get().GetFrame() == static_cast<std::uint32_t>(std::strtoul(at.c_str(), nullptr, 10)))
+			forced = 1;
+		r.materialRows.Reserve(forced ? r.materialRows.capacity + 1 : 0u, [&r](std::uint64_t a_held) { r.materialRowsHeld = a_held; }, &materials);
+		r.pipelineRows.Reserve(std::max(pipelineSlots + pipelineSlots / 4, forced ? r.pipelineRows.capacity + 1 : 0u), [&r](std::uint64_t a_held) { r.pipelineRowsHeld = a_held; }, &pipelines);
 		if (draws > next.sequenceDraws || decals > next.sequenceDecals) {
 			const std::uint32_t newDraws = Doubled(next.sequenceDraws, draws), newDecals = Doubled(next.sequenceDecals, decals);
 			const std::uint64_t slots = SequenceSlots(newDraws, newDecals);
@@ -1301,6 +1306,9 @@ namespace DCLF
 		auto device = host->GetDesc().device;
 		auto state = std::make_shared<ShadowResources>();
 		state->constants = DeviceBuffer(kShadowConstantBytes, "cs.dclf.shadow.constants");
+		// The shadow commit's latched values go to the constants alone (ShadowLatchedCopiesPass copies them): known before any graph
+		// declares the pass, so a revision's first shadow shape latches them.
+		state->latchedTargets.store(std::make_shared<const std::vector<const void*>>(1, state->constants.get()), std::memory_order_release);
 		// One table of material rows for every view (kShadowMaterialRowsInitial), grown as the kept state needs.
 		const std::uint32_t initialRows = SwitchValue(Switch::TableStart) == "small" ? 4u : kShadowMaterialRowsInitial;
 		if (!state->materialRows.Create(sizeof(ShadowMaterialRow), initialRows, "cs.dclf.shadow.material-rows")) {

@@ -193,6 +193,11 @@ namespace DCLF
 		void Rebuild();
 		/** @brief Drops the list (the frame's shadow draws are over, or the feature is off). */
 		void Clear();
+		/**
+		 * @brief After Rebuild, before the engine draws a view: none of the frame's views is DCLF's (IndirectDraws::DecideShadowCoverage:
+		 * the scene revision has no shape for their layout). The engine draws every one whole; nothing is withheld.
+		 */
+		void UncoverAll();
 
 		std::span<const View> All() const { return views; }
 		bool Valid() const { return valid; }

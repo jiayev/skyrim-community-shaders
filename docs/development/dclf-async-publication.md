@@ -817,6 +817,66 @@ tables r3se2-3, default r3sd1: no losses, steady play 300/300 by the revision, e
 - Left: the first sighting of a shadow or occlusion layout and the reflection's first shape (own preparation, 2-4 at startup,
   one 4-frame shadow layout per run); the own-preparation path itself goes with R4's shapes from revision inputs.
 
+**R4, first step: the main epochs' shapes from revision inputs; a growth's fill on its own queue's family** (2026-10-06; small
+tables r4v1-3 with a forced mid-run growth and spawned NPCs, default r4d1: no losses, steady play 300/300 by the revision).
+- *Main shape inputs without a commit.* What a revision's Z-prepass and colour shapes take from the frame's capture - the viewport
+  (the main pass's depth range) and the frame blocks' sizes - is recorded in `RunEpoch` before anything is submitted. Block sizes
+  are the largest seen, so a revision's latched copies hold every block a frame binds (a smaller or absent block is zeroed past its
+  bytes, never staged). The heaps are the graph's own (`PersistentGraphHost::Descriptors`, new), not a commit's. The main latch
+  holds a cascade and a local shadow volume for each of the last Rebuild's shadow view candidates from the join on, not from a
+  colour commit's growth. So a frame without claims submits no main epoch (it has nothing to draw), and the main epochs have no
+  own preparation left: the first report's Z-prepass and colour are all "by the revision", the withdrawn frames not submitted.
+- *Reflection.* Its faces draw from the frame before's main commits, whose inputs name the main rows by address. They are covered
+  only when those commits exist, are of the current scene buffers, and no growth of the rows was adopted since
+  (`Committed::rowsGeneration`, `Resources::MainRowsGeneration`); else the engine renders them, decided before it does.
+- *Device loss on a mid-run growth of the main rows* (found here, older than this step: the committed state lost the device too).
+  A spawned NPC's pipelines grew the pipeline rows 128 -> 256 as graph work; the GPU faulted at VA 0 about 10 ms after the request,
+  before any adoption, and only with the growth's fill (no fill, no loss; revisions off, no loss). The fill's copy runs on the
+  dedicated upload queue, a spare queue of DXVK's transfer family, but `CopyQueueUploadService` made its command pools for
+  `QueueKind::Copy`, which BasicRHI resolves to the device's primary copy queue: the graphics family. Startup fills had always been
+  empty, so the path had never copied. Fixed in BasicRHI: `Device::CreateCommandAllocator(const Queue&)` (the queue's own family;
+  D3D12 by kind), used by the copy service; and a Vulkan submission now rejects a command list whose pool is of another family than
+  the queue, loudly, instead of losing the device. `CS_DCLF_TEST_ROWS_GROWTH=<frame>` grows both main row tables at that frame, to
+  exercise the fill under claims on demand.
+- Left at startup: one Z-prepass commit stages the bucket counts' values (frame ~31: the count buffers exist before the graph that
+  declares them is built; an undeclared target is staged by design), and the shadow, occlusion and reflection epochs' first
+  shapes still come from their commits (layouts drawn, `known`): their own preparation at a first sighting, next.
+
+**R4, second step: shadow, occlusion and reflection coverage from revision inputs** (2026-10-06; small tables r4f1 with spawned
+NPCs, r4f2 with a forced growth, default r4f3: no losses, every report "<- OK", every steady epoch by the revision).
+- *Shadow views by predicted layout.* `CaptureShadowView` records what every view draws with - mode, target, slice, viewport,
+  rasterizer state - whether DCLF draws it or not (`Impl::observedViews`). A view is keyed by its accumulator, descriptor, render
+  mode and occurrence: a sun cascade's volumetric copy is a view of its own that the engine draws first with the same accumulator,
+  so the captures count per key within the frame and `ShadowViews::All()`'s order counts the same way. `DecideShadowCoverage`,
+  right after `Rebuild` and before the engine draws a view, predicts the frame's layout (the covered views in order, then the
+  retained slots as `ExecuteShadowFrame` lays them out). The views stay DCLF's only when the selected revision has that shape,
+  recorded on the graph as built; else `ShadowViews::UncoverAll` leaves every view to the engine that frame. The predicted
+  layouts, newest first, are what the revisions make the shadow epoch's shapes for, not the commits' shapes. A layout first
+  seen mid-run (a light coming or going) is now 1-3 frames of the engine's views, where it was 4 frames of own preparation;
+  mispredictions (views not drawn as predicted) are counted and logged: none.
+- *Occlusion maps* likewise: their layout from the maps' last captures (`PredictedOcclusion`, taken whether DCLF draws a map or
+  not), the revisions' occlusion shapes from those, and `OcclusionReady` only with the selected revision's shape for it.
+- *Reflection*: its revision shape no longer waits for a reflection commit (the heaps are the graph's), and the faces are DCLF's
+  only when the selected revision has their recordings.
+- Left at startup, once per run: one shadow and one occlusion commit whose push data differs from the revision's (the payload's
+  shared and feature data addresses: the first revision's shapes are made before any shadow commit had a payload), and the Z-
+  prepass's staged bucket counts. Next: those addresses from resources, not the payload; then the own-preparation path goes
+  (R6: a revision that does not cover an epoch is decided before the engine draws, so nothing is left for it).
+
+**R4, third step: the shadow arena's blocks and latch from resources** (2026-10-06; small tables r4g4 with spawned NPCs, r4g5 with
+a forced growth, default r4g6: no losses, 0 epochs on own preparation in the whole run, startup included, 0 mispredictions).
+- *Fixed blocks.* The zero block, CS's SharedData and FeatureData sit at fixed offsets in the shadow constants
+  (`ShadowArenaBlocksOf`: after the frame record, at places CS's block sizes give; FeatureData's size is fixed for the session,
+  `State::featureDataBytes`). A view's push data and the latched layout (`ShadowLatchedLayout(resources)`) come from them, not
+  from a payload, so the first revision's shapes match the first commit's. A commit's copy of another size is a loud failure.
+  The shadow constants are published as the latched target when made, not when the graph first declares the pass.
+- *The shadow latch reserved at the join* (`ReserveShadowLatch` in the shape producer: views, key slots over every mode, states
+  registered, sun processes), as the main latch already was: the first commit's latch growth had left the revision's latch behind
+  ("values past its latch").
+- Left: the Z-prepass bucket counts staged once at startup (969 values, benign); the reflection epoch's first 8 recordings fail at
+  startup as "not replayable" (pre-existing, also in r4f1-3; the faces stay the engine's those frames). Next: R6, the
+  own-preparation path deleted (nothing reaches it now), then R5 and R7.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

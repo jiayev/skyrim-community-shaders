@@ -332,6 +332,8 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
 	DCLF::ShadowViews::Get().SetViewCapacity(DCLF::ActiveToggles().shadows ? DCLF::IndirectDraws::Get().ShadowViewCapacity() : UINT32_MAX);
 	DCLF::ShadowViews::Get().Rebuild();
+	if (DCLF::ActiveToggles().shadows)
+		DCLF::IndirectDraws::Get().DecideShadowCoverage();
 	if (DCLF::ActiveToggles().shadows) {
 		DCLF::IndirectDraws::Get().BeginShadowFrame();
 		// The shadow epoch's build, on the worker, while the engine draws the shadow maps (CS_DCLF_ASYNC).

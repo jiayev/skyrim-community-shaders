@@ -590,13 +590,16 @@ namespace DCLF::Draws
 		// their slots' rows, the commit's). No register the Utility shaders declare may be left at address zero: a pipeline that reads one arrives
 		// from the background compiler seconds after the first epoch, and a null read is a device loss. Everything not
 		// supplied below reads zeros.
-		(void)arena.Allocate(kShadowArenaBlocksOffset);
-		static constexpr std::size_t kZeroBlockBytes = 1024;
-		a_out.zerosAddress = block(nullptr, kZeroBlockBytes);
-		// Community Shaders' SharedData (b5) and FeatureData (b6): the alpha-tested pixel stage samples
-		// its diffuse with SharedData::MipBias. Packed from the copies the inputs carry, as the main epochs do.
-		a_out.sharedDataAddress = a_in.sharedData.empty() ? a_out.zerosAddress : block(a_in.sharedData.data(), a_in.sharedData.size());
-		a_out.featureDataAddress = a_in.featureData.empty() ? a_out.zerosAddress : block(a_in.featureData.data(), a_in.featureData.size());
+		// Community Shaders' SharedData (b5) and FeatureData (b6) follow, at their fixed places (ShadowArenaBlocksOf): the alpha-tested
+		// pixel stage samples its diffuse with SharedData::MipBias. Their values are the commit's latched copies.
+		const auto blocks = ShadowArenaBlocksOf();
+		const std::uint64_t end = std::max({ blocks.zeros + kShadowZeroBlockBytes, blocks.sharedData + blocks.sharedBytes, blocks.featureData + blocks.featureBytes });
+		if (block(nullptr, static_cast<std::size_t>(end)) != base)
+			stl::report_and_fail("Drawcall Limit Fix: the shadow arena's blocks were not laid out from its start");
+		if (a_in.sharedData.size() == blocks.sharedBytes)
+			std::memcpy(arena.At(blocks.sharedData, blocks.sharedBytes).data(), a_in.sharedData.data(), blocks.sharedBytes);
+		if (blocks.featureBytes && a_in.featureData.size() == blocks.featureBytes)
+			std::memcpy(arena.At(blocks.featureData, blocks.featureBytes).data(), a_in.featureData.data(), blocks.featureBytes);
 		// The frame record: every texture and sampler but the diffuse, which is the draw's material row's.
 		auto& frameRecord = a_out.frameRecord;
 		const std::uint32_t nullIndex = a_lookups.nullTexture == Lookups::kNone ? 0u : a_lookups.nullTexture;
