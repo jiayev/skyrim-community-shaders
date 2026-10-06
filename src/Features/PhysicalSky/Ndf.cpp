@@ -196,10 +196,14 @@ const char* NdfManager::GetSettingsHint(const NdfSettings& settings)
 				   "Two coverage signals and a shared type signal drive the profiles. Height variation changes only the bottom bound. Noise slots can be generated locally or supplied as DDS textures.");
 }
 
-static void DrawNdfLayer(const char* label, NdfNoiseLayer& layer, bool power)
+static void DrawNdfLayer(const char* label, NdfNoiseLayer& layer, bool power, const NdfNoiseLayer* defaults = nullptr)
 {
 	if (!ImGui::TreeNode(label))
 		return;
+	if (defaults && !SceneWidgetInterceptor::IsArmed() && ImGui::Button(T(TKEY("ndf_reset_response"), "Restore default response"))) {
+		layer.range = defaults->range;
+		layer.exponent = defaults->exponent;
+	}
 	if (!SceneWidgetInterceptor::IsArmed()) {
 		const char* slotNames[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
 		int slot = static_cast<int>(std::min(layer.noise, 4u));
@@ -221,7 +225,8 @@ static void DrawNdfParameters(NdfGenerationParameters& parameters)
 	DrawNdfLayer(T(TKEY("ndf_primary_coverage"), "Primary coverage"), parameters.primary, true);
 	DrawNdfLayer(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), parameters.secondary, true);
 	DrawNdfLayer(T(TKEY("ndf_coverage_gain"), "Coverage gain"), parameters.coverageGain, false);
-	DrawNdfLayer(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true);
+	const auto defaultType = NdfGenerationParameters{}.modeling;
+	DrawNdfLayer(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true, &defaultType);
 	if (ImGui::TreeNode(T(TKEY("ndf_bottom_type"), "Bottom type"))) {
 		ImGui::DragFloat2(T(TKEY("ndf_input_interval"), "Input interval"), &parameters.bottomTypeRange.x, 0.01f, -16.f, 16.f);
 		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &parameters.bottomTypeRange.z, 0.01f, -16.f, 16.f);

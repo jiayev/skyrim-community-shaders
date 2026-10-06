@@ -1086,33 +1086,3 @@ void SceneSettingsManager::LoadWeatherData()
 	LoadWeatherUserSettings();
 	RefreshTimeOfDayModes();
 }
-
-float SceneSettingsManager::GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
-	const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const
-{
-	const json* value = nullptr;
-	EntrySource source = EntrySource::Overwrite;
-	const auto period = static_cast<TimeOfDayPeriod>(periodIndex);
-
-	for (const auto& entry : GetEntries(SceneType::TimeOfDay)) {
-		// A tombstone supplies nothing; skipping it here lets a weather capture fall through to base.
-		if (!IsEntryActive(entry) || entry.period != period || entry.deleted ||
-			!IsSameSetting(entry, featureShortName, settingPath, settingKey))
-			continue;
-		if (!value || (entry.source == EntrySource::User && source != EntrySource::User)) {
-			value = &entry.value;
-			source = entry.source;
-		}
-	}
-
-	if (!value)
-		return baseValue;
-	if (!IsNumericValue(*value)) {
-		logger::warn("[SceneSettings] Time of day fallback value for '{}' is not a float",
-			GetSettingLogName(featureShortName, settingPath, settingKey));
-		return baseValue;
-	}
-
-	const float result = value->get<float>();
-	return std::isfinite(result) ? result : baseValue;
-}

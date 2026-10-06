@@ -122,14 +122,14 @@ public:
 	/** @brief One scene override of a single feature setting, user-authored or from a mod's file. */
 	struct SettingEntry
 	{
-		std::string featureShortName;  // Feature's GetShortName()
-		std::vector<std::string> settingPath;  // Feature-owned subfeature/object path
-		std::string settingKey;        // Feature-owned scene setting key
-		std::string displayName;       // Cached UI label
-		json value;                    // Override value (bool, float, int, etc.)
-		json originalValue;            // Value at time of creation, for revert
+		std::string featureShortName;              // Feature's GetShortName()
+		std::vector<std::string> settingPath;      // Feature-owned subfeature/object path
+		std::string settingKey;                    // Feature-owned scene setting key
+		std::string displayName;                   // Cached UI label
+		json value;                                // Override value (bool, float, int, etc.)
+		json originalValue;                        // Value at time of creation, for revert
 		json serializedTemplate = json::object();  // Preserved forward-compatible fields
-		bool paused = false;           // Temporarily disabled
+		bool paused = false;                       // Temporarily disabled
 		/// Suppresses every lower layer at this address instead of supplying a value. An explicit
 		/// state, not an empty `value`: the resolve, copy and export paths all read `value` unguarded.
 		bool deleted = false;
@@ -787,8 +787,8 @@ public:
 		std::string path;
 		std::string key;
 		std::string value;
-		std::string period;                       // Empty when the entry is not per-period
-		std::optional<float> transitionSeconds;   // Only set when the entry overrides the global duration
+		std::string period;                      // Empty when the entry is not per-period
+		std::optional<float> transitionSeconds;  // Only set when the entry overrides the global duration
 		bool overwrite = false;
 		bool paused = false;
 		bool active = false;
@@ -812,9 +812,9 @@ public:
 		std::string key;
 		std::string baseline;
 		std::string applied;
-		std::array<std::optional<float>, kPeriodCount> timeOfDayValues{};
-		std::array<std::optional<float>, kPeriodCount> currentWeatherValues{};
-		std::array<std::optional<float>, kPeriodCount> previousWeatherValues{};
+		std::array<std::optional<json>, kPeriodCount> timeOfDayValues{};
+		std::array<std::optional<json>, kPeriodCount> currentWeatherValues{};
+		std::array<std::optional<json>, kPeriodCount> previousWeatherValues{};
 	};
 
 	/// One location float transition mid-flight, sampled for the debug UI.
@@ -1113,9 +1113,6 @@ private:
 	RE::FormID GetEffectivePreviousWeatherId(const RE::Sky* sky, float weatherLerp) const;
 	/** @brief Samples the sky's current and outgoing weather and their blend factor. */
 	WeatherBlend GetWeatherBlend() const;
-	/** @brief The time-of-day layer's value for one period, user over overwrite, else the base value. */
-	float GetTimeOfDayPeriodFallbackFloat(float baseValue, const std::string& featureShortName,
-		const std::vector<std::string>& settingPath, const std::string& settingKey, int periodIndex) const;
 
 	/// Live sky/time state sampled once per resolve so every setting blends against identical factors.
 	struct BlendSnapshot
@@ -1128,7 +1125,7 @@ private:
 	BlendSnapshot blendSnapshot;
 
 	/// Active per-period values for one address, indexed by period.
-	using PeriodValues = std::array<std::optional<float>, kPeriodCount>;
+	using PeriodValues = std::array<std::optional<json>, kPeriodCount>;
 	using PeriodSettingMap = std::map<SettingAddress, PeriodValues>;
 	/** @brief Period values valid while revision matches sceneValueRevision. */
 	struct CachedPeriodSettingMap
@@ -1191,7 +1188,7 @@ private:
 	void OverlayAllEntries(ResolvedSettingMap& resolved, const std::vector<SettingEntry>& sourceEntries,
 		SceneType type, std::map<SettingAddress, float>* transitionDurations = nullptr) const;
 	/** @brief The time-of-day value a weather entry stacks on; a flat entry uses the current period. */
-	std::optional<float> ResolveWeatherLowerValue(RE::FormID weatherId, const SettingAddress& address,
+	std::optional<json> ResolveWeatherLowerValue(RE::FormID weatherId, const SettingAddress& address,
 		TimeOfDayPeriod period, EntrySource selectedSource);
 	/** @brief The feature's own value at an address, null when the catalog does not allow it. */
 	json GetBaselineValue(const SettingAddress& address);

@@ -80,7 +80,7 @@ void SceneSettingsManager::ResolveAndApply(bool force, bool allowLocationTransit
 	const bool blendAdvanced = std::abs(weather.lerp - lastResolvedWeatherLerp) >= kBlendEpsilon ||
 	                           // Indoors resolves nothing from the hour, so time alone cannot change it.
 	                           (!interior && (lastResolvedHour < 0.0f ||
-	                                             std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
+												 std::abs(hour - lastResolvedHour) >= kHourUpdateThreshold));
 	// Continuous blends reload every blended feature per resolve, so they share the transition tick rate.
 	const auto sinceLastBlendResolve = transitionTime - lastBlendResolveTime;
 	const bool blendResolveDue = blendAdvanced &&
@@ -203,8 +203,8 @@ void SceneSettingsManager::StartLocationTransitions(
 		const auto resolvedIt = resolved.find(address);
 		const bool restoreAtEnd = nextIt == nextOverrideValues.end() && resolvedIt == resolved.end();
 		const auto& targetJson = nextIt != nextOverrideValues.end() ? nextIt->second :
-		                         resolvedIt != resolved.end()      ? resolvedIt->second :
-		                                                             baselineIt->second;
+		                         resolvedIt != resolved.end()       ? resolvedIt->second :
+		                                                              baselineIt->second;
 		if (!IsNumericValue(targetJson))
 			continue;
 		const auto targetValue = targetJson.get<float>();
@@ -216,12 +216,12 @@ void SceneSettingsManager::StartLocationTransitions(
 			continue;
 		}
 		activeLocationTransitions.insert_or_assign(address, LocationTransition{
-															   .startValue = startValue,
-															   .targetValue = targetValue,
-															   .startTime = now,
-															   .duration = duration,
-															   .restoreAtEnd = restoreAtEnd,
-														   });
+																.startValue = startValue,
+																.targetValue = targetValue,
+																.startTime = now,
+																.duration = duration,
+																.restoreAtEnd = restoreAtEnd,
+															});
 		locationTransitionBatchesDirty = true;
 	}
 	lastLocationOverrideValues = std::move(nextOverrideValues);
@@ -428,7 +428,7 @@ bool SceneSettingsManager::IsResolvableEntry(const SettingEntry& entry, SceneTyp
 	// and this gate is what gets that baseline collected.
 	return IsEntryActive(entry) &&
 	       IsSettingAllowedForType(type, entry.featureShortName, entry.settingPath, entry.settingKey, floatsOnly) &&
-	       (!floatsOnly || IsNumericValue(entry.value));
+	       (!floatsOnly || SceneBlend::IsBlendable(entry.value));
 }
 
 bool SceneSettingsManager::HasActiveSceneEntriesCached()
@@ -636,8 +636,7 @@ void SceneSettingsManager::RestoreAppliedSettings()
 	for (const auto& [address, _] : appliedSettings) {
 		auto baselineIt = baselineSettings.find(address);
 		if (baselineIt != baselineSettings.end())
-			updatesByFeature[address.featureShortName].push_back({
-				address, { address.settingPath, address.settingKey, baselineIt->second, false } });
+			updatesByFeature[address.featureShortName].push_back({ address, { address.settingPath, address.settingKey, baselineIt->second, false } });
 	}
 
 	for (const auto& [featureShortName, pending] : updatesByFeature) {
@@ -725,12 +724,12 @@ void SceneSettingsManager::CollectPeriodValueGroups(
 			}
 			if (!IsResolvableEntry(entry, type))
 				continue;
-			const auto value = entry.value.get<float>();
-			if (!std::isfinite(value))
+			const auto& value = entry.value;
+			if (!SceneBlend::IsBlendable(value))
 				continue;
 			auto& periodValues = values[GetEntryAddress(entry)];
 			for (int slot = firstPeriod; slot < lastPeriod; ++slot)
-				periodValues[slot] = value;
+				periodValues[slot].emplace(value);
 		}
 	}
 }
@@ -765,12 +764,12 @@ void SceneSettingsManager::ResolveTimeOfDaySettings(
 	const auto& factors = blendSnapshot.timeOfDayFactors;
 	for (const auto& [address, periodValues] : values) {
 		auto baselineIt = baselineSettings.find(address);
-		if (baselineIt == baselineSettings.end() || !IsNumericValue(baselineIt->second))
+		if (baselineIt == baselineSettings.end() || !SceneBlend::IsBlendable(baselineIt->second))
 			continue;
-		const auto baseline = baselineIt->second.get<float>();
-		float result = 0.0f;
+		const auto baseline = baselineIt->second;
+		json result = SceneBlend::EmptyLike(baseline);
 		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-			result += factors[periodIndex] * periodValues[periodIndex].value_or(baseline);
+			SceneBlend::Accumulate(result, periodValues[periodIndex].value_or(baseline), factors[periodIndex]);
 		resolved[address] = result;
 	}
 }
@@ -787,31 +786,31 @@ void SceneSettingsManager::ResolveWeatherSettings(
 	const auto& previousValues = BuildWeatherValueGroups(weather.previousWeatherId);
 
 	const auto resolveWeather = [&](const SettingAddress& address, const PeriodSettingMap& weatherValues,
-								   float baseline) -> std::optional<float> {
+									const json& baseline) -> std::optional<json> {
 		auto weatherIt = weatherValues.find(address);
 		if (weatherIt == weatherValues.end())
 			return std::nullopt;
 		auto timeOfDayIt = timeOfDayValues.find(address);
-		float result = 0.0f;
+		json result = SceneBlend::EmptyLike(baseline);
 		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex) {
 			const auto lower = timeOfDayIt != timeOfDayValues.end() ?
 			                       timeOfDayIt->second[periodIndex].value_or(baseline) :
 			                       baseline;
-			result += factors[periodIndex] * weatherIt->second[periodIndex].value_or(lower);
+			SceneBlend::Accumulate(result, weatherIt->second[periodIndex].value_or(lower), factors[periodIndex]);
 		}
-		return result;
+		return std::optional<json>{ std::in_place, std::move(result) };
 	};
 
 	const auto blendAddress = [&](const SettingAddress& address) {
 		auto baselineIt = baselineSettings.find(address);
-		if (baselineIt == baselineSettings.end() || !IsNumericValue(baselineIt->second))
+		if (baselineIt == baselineSettings.end() || !SceneBlend::IsBlendable(baselineIt->second))
 			return;
-		const auto baseline = baselineIt->second.get<float>();
+		const auto baseline = baselineIt->second;
 		// Where the time-of-day layer left this address is what an unconfigured weather blends from.
-		float lowerValue = baseline;
+		json lowerValue = baseline;
 		if (auto resolvedIt = resolved.find(address);
-			resolvedIt != resolved.end() && IsNumericValue(resolvedIt->second))
-			lowerValue = resolvedIt->second.get<float>();
+			resolvedIt != resolved.end() && SceneBlend::IsBlendable(resolvedIt->second))
+			lowerValue = resolvedIt->second;
 
 		const auto currentValue = resolveWeather(address, currentValues, baseline);
 		const auto previousValue = resolveWeather(address, previousValues, baseline);
@@ -819,7 +818,7 @@ void SceneSettingsManager::ResolveWeatherSettings(
 			return;
 		const auto from = previousValue.value_or(lowerValue);
 		const auto to = currentValue.value_or(lowerValue);
-		resolved[address] = from + (to - from) * weather.lerp;
+		resolved[address] = SceneBlend::Interpolate(from, to, weather.lerp);
 	};
 
 	for (const auto& [address, _] : currentValues)
@@ -857,11 +856,11 @@ void SceneSettingsManager::ResolveLocationLink(const std::vector<SettingEntry>& 
 		// A broader flat value is what this link's unset periods keep; a flat tombstone keeps the baseline.
 		if (auto flatIt = resolved.find(address); flatIt != resolved.end()) {
 			auto baselineIt = baselineSettings.find(address);
-			const auto* seed = IsNumericValue(flatIt->second)    ? &flatIt->second :
-			                   baselineIt != baselineSettings.end() ? &baselineIt->second :
-			                                                          nullptr;
-			if (seed && IsNumericValue(*seed))
-				periodValues[address].fill(seed->get<float>());
+			const auto* seed = SceneBlend::IsBlendable(flatIt->second) ? &flatIt->second :
+			                   baselineIt != baselineSettings.end()    ? &baselineIt->second :
+			                                                             nullptr;
+			if (seed && SceneBlend::IsBlendable(*seed))
+				periodValues[address].fill(std::optional<json>{ std::in_place, *seed });
 			resolved.erase(flatIt);
 		}
 		if (transitionDurations && !entry.deleted)
@@ -876,16 +875,16 @@ void SceneSettingsManager::BlendLocationPeriodValues(ResolvedSettingMap& resolve
 	const auto& factors = blendSnapshot.timeOfDayFactors;
 	for (const auto& [address, values] : periodValues) {
 		auto baselineIt = baselineSettings.find(address);
-		if (baselineIt == baselineSettings.end() || !IsNumericValue(baselineIt->second))
+		if (baselineIt == baselineSettings.end() || !SceneBlend::IsBlendable(baselineIt->second))
 			continue;
 		// Unset periods fall through to whatever time of day and weather resolved beneath.
-		float lowerValue = baselineIt->second.get<float>();
+		json lowerValue = baselineIt->second;
 		if (auto resolvedIt = resolved.find(address);
-			resolvedIt != resolved.end() && IsNumericValue(resolvedIt->second))
-			lowerValue = resolvedIt->second.get<float>();
-		float result = 0.0f;
+			resolvedIt != resolved.end() && SceneBlend::IsBlendable(resolvedIt->second))
+			lowerValue = resolvedIt->second;
+		json result = SceneBlend::EmptyLike(lowerValue);
 		for (int periodIndex = 0; periodIndex < kPeriodCount; ++periodIndex)
-			result += factors[periodIndex] * values[periodIndex].value_or(lowerValue);
+			SceneBlend::Accumulate(result, values[periodIndex].value_or(lowerValue), factors[periodIndex]);
 		resolved[address] = result;
 	}
 }

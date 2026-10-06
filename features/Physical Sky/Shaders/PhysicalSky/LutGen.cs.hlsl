@@ -65,19 +65,22 @@ void rayMarch(
 	const float3 sunDir = data.sunDir;
 #endif
 
-	float tGround = RayIntersectSphere(pos, rayDir, 0, data.rPlanet);
+	const float originRadius = length(pos);
+	const float projectedOrigin = dot(pos, rayDir);
+	const float groundOffset = (originRadius - data.rPlanet) * (originRadius + data.rPlanet);
+	const float groundDiscriminant = projectedOrigin * projectedOrigin - groundOffset;
+	const bool hitGround = projectedOrigin < 0.0 && groundOffset >= 0.0 && groundDiscriminant >= 0.0;
+	const float tGround = hitGround ? groundOffset / max(-projectedOrigin + sqrt(max(groundDiscriminant, 0.0)), 1e-6) : -1.0;
 
 	float tAtmos = RayIntersectSphere(pos, rayDir, 0, data.rAtmosphere);
 #if LUTGEN == 0
 	// All transmittance texels describe unoccluded paths to the outer boundary.
 	// Planet visibility is evaluated analytically when sampling the LUT.
-	const float originRadius = length(pos);
-	const float projectedOrigin = dot(pos, rayDir);
 	float tMax = max(0.0, -projectedOrigin + sqrt(max(0.0, projectedOrigin * projectedOrigin +
 															   (data.rAtmosphere - originRadius) * (data.rAtmosphere + originRadius))));
 	const float tClosest = clamp(-projectedOrigin, 0.0, tMax);
 #elif LUTGEN != 3
-	float tMax = tGround > 0 ? tGround : tAtmos;
+	float tMax = hitGround ? tGround : tAtmos;
 #endif
 #if LUTGEN != 3 && LUTGEN != 0
 	float dt = tMax / float(nsteps);
@@ -120,6 +123,8 @@ void rayMarch(
 		const float tFar = TransmittanceRayDistance(float(i + 1) / nsteps, tMax, tClosest);
 		const float dt = tFar - tNear;
 		curr_pos = pos + (0.5 * (tNear + tFar)) * rayDir;
+#elif LUTGEN == 2
+		curr_pos = pos + (i + 0.5) * stride;
 #else
 		curr_pos += stride;
 #endif
@@ -137,7 +142,7 @@ void rayMarch(
 		float3 trSample = exp(-dt * extinction);
 
 #if LUTGEN != 0
-		float3 scatterFactor = (1 - trSample) / extinction;
+		float3 scatterFactor = (1 - trSample) / max(extinction, 1e-20);
 
 		float3 scatterNoPhase = muSRayleigh + muSAerosol;
 #	if LUTGEN == 1  // multiscatter
@@ -194,15 +199,16 @@ void rayMarch(
 [numthreads(8, 8, 1)] void main(uint3 tid : SV_DispatchThreadID) {
 	const SharedData::PhysSkyData data = SharedData::physSkyData;
 
-#if LUTGEN == 3
-	RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
-#endif
-
 	uint3 outDims;
 #if LUTGEN == 3
 	RWTexOutput.GetDimensions(outDims.x, outDims.y, outDims.z);
 #else
 	RWTexOutput.GetDimensions(outDims.x, outDims.y);
+#endif
+	if (any(tid.xy >= outDims.xy))
+		return;
+#if LUTGEN == 3
+	RWTexOutput[uint3(tid.xy, 0)] = float4(0, 0, 0, 1);
 #endif
 	float2 uv = (tid.xy + 0.5) / outDims.xy;
 
@@ -220,9 +226,9 @@ void rayMarch(
 	float zenithCos = lerp(horZenithCos, 1, uv.x);
 	float3 sunDir = float3(0, sqrt(1 - zenithCos * zenithCos), zenithCos);
 #else
-	float3 rayDir = InvSkyViewLutUv(uv);
+	float3 rayDir = InvSkyViewLutUv(uv, outDims.y);
 	float3 sunDir = data.sunDir;
-	float3 pos = float3(0, 0, data.zCameraPlanet);
+	float3 pos = float3(0, 0, max(data.zCameraPlanet, data.rPlanet));
 #endif
 
 	float3 tr = 1.0;

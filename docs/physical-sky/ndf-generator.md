@@ -53,6 +53,16 @@ constant and bypass power. Secondary settings then have no effect. Types share
 one sampled noise but use independent remaps/exponents. Slot 4 returns zero
 before signed conversion, hence S = -1.
 
+The default top-type response maps signed noise from `[-0.5, 0.6]` to `[0, 0.5]`
+before applying exponent `1.6`, with unit type gain. Its final type range is
+`[0, 0.32988]`. This selects lower profiles across the default fine type field;
+using most of the LUT's type range there produces narrow, tall columns even with
+unchanged coverage. These are project weather defaults, not a restriction on
+authored types or the height interval. Higher types remain available for weather
+authoring and imported maps. **Restore default response** in **Top type / shared
+type noise** resets only the remap and exponent, retaining noise selection,
+frequency, offset, coverage, height and local instances.
+
 Local maps are sampled at `uv - wind * localWindScale`:
 
 ```text

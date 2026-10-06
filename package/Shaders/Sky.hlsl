@@ -92,6 +92,16 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float4 inputPosition = float4(input.Position.xyz, 1.0);
 
+#	if defined(PHYSICAL_SKY) && defined(DITHER) && !defined(TEX)
+	if (SharedData::physSkyData.enabled) {
+		// The atmosphere mesh ends at the equator; the LUT covers the whole sky.
+		const float radius = length(inputPosition.xyz);
+		const float cosZenith = saturate(inputPosition.z / max(radius, 1e-6));
+		inputPosition.xy *= 2.0 * cosZenith;
+		inputPosition.z = radius * (2.0 * cosZenith * cosZenith - 1.0);
+	}
+#	endif
+
 #	if defined(OCCLUSION)
 
 	// Intentionally left blank

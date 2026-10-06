@@ -1,5 +1,6 @@
 #include "Common/FrameBuffer.hlsli"
 #include "Common/Game.hlsli"
+#include "PhysicalSky/CloudGeometry.hlsli"
 #include "PhysicalSky/CloudMotion.hlsli"
 #include "PhysicalSky/CloudPhase.hlsli"
 
@@ -10,7 +11,7 @@ cbuffer CloudBoundaryParameters : register(b0)
 	float4 shearAltitude;
 	float4 evolution;
 	float4 frameDimensions;
-	float planetRadius;
+	float cloudCurvatureRadius;
 	float bottomZ;
 	uint gridCellCount;
 	uint cloudFrameIndex;
@@ -44,20 +45,22 @@ BoundaryVertex vertexMain(uint vertexId : SV_VertexID, uint instanceId : SV_Inst
 	float altitude = shearAltitude.z + heightRange * lower;
 	[branch] if (instanceId == 0u)
 	{
-		const float coverage = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY), 0).r;
-		const float upstream = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY) - shearAltitude.xy * 60.0 * fieldFrequencyWind.xy, 0).r;
-		const float thicknessScale = max(0.2, pow(saturate(max(coverage, upstream)), 0.1));
+		const float topType = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY), 0).g;
+		const float upstream = CloudModeling.SampleLevel(FieldSampler, FieldUv(worldXY) - shearAltitude.xy * 60.0 * fieldFrequencyWind.xy, 0).g;
+		const float thicknessScale = max(0.2, pow(saturate(max(topType, upstream)), 0.1));
 		altitude += heightRange * thicknessScale * (heights.y - lower);
 	}
 	// Enclose complete neighboring cells so small authored patches cannot fall between vertices.
 	const float2 localUv = (worldXY * GAME_UNIT_TO_M - localRect.xy) * localRect.zw;
-	const float2 margin = gridOriginSpacing.zw * GAME_UNIT_TO_M * localRect.zw;
-	if (localAltitude.z > 0.0 && all(localUv >= -margin) && all(localUv <= 1.0 + margin))
-		altitude = instanceId == 0u ? max(shearAltitude.w, (localAltitude.x + localAltitude.y) / GAME_UNIT_TO_M) : min(shearAltitude.z, localAltitude.x / GAME_UNIT_TO_M);
+	const float2 margin = (gridOriginSpacing.zw + abs(shearAltitude.xy) * 61.0) * GAME_UNIT_TO_M * localRect.zw;
+	if (localAltitude.z > 0.0 && all(localUv >= -margin) && all(localUv <= 1.0 + margin)) {
+		const float bottom = localAltitude.y > 0.0 ? min(shearAltitude.z, localAltitude.x / GAME_UNIT_TO_M) : shearAltitude.z;
+		const float top = localAltitude.y > 0.0 ? max(shearAltitude.w, (localAltitude.x + localAltitude.y) / GAME_UNIT_TO_M) : shearAltitude.w;
+		altitude = instanceId == 0u ? top : bottom;
+	}
 	const float2 relativeXY = worldXY - FrameBuffer::CameraPosAdjust.xy;
-	// Use the same spherical altitude as density sampling, without subtracting two large radii.
-	const float heightNumerator = altitude * (2.0 * planetRadius + altitude) - dot(relativeXY, relativeXY);
-	const float height = heightNumerator / (sqrt(max(planetRadius * planetRadius + heightNumerator, 0.0)) + planetRadius);
+	const float curvatureMargin = instanceId == 0u ? dot(gridOriginSpacing.zw, gridOriginSpacing.zw) / (4.0 * cloudCurvatureRadius) : 0.0;
+	const float height = altitude - CloudCurvatureOffset(relativeXY, cloudCurvatureRadius) + curvatureMargin;
 	const float3 relative = float3(relativeXY, bottomZ + height - FrameBuffer::CameraPosAdjust.z);
 	BoundaryVertex output;
 	output.position = mul(FrameBuffer::CameraViewProj, float4(relative, 1));

@@ -45,6 +45,7 @@ namespace SceneSettingsPolicy
 		{ "PhysicalSky", "cloudShadowRemapRange" },
 		{ "PhysicalSky", "cloudLayer", "lighting" },
 		{ "PhysicalSky", "cloudMap", "type" },
+		{ "PhysicalSky", "cloudMap", "localTexelSize" },
 		{ "PhysicalSky", "cloudMap", "texture" },
 		{ "PhysicalSky", "cloudMap", "procedural", "noise" },
 		{ "PhysicalSky", "cloudMap", "procedural", "local" },

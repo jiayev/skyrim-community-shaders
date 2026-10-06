@@ -1,114 +1,75 @@
-# Local NDF weather transitions — design only
+# Local cloud scene transitions
 
-## Scope
+## Authored state
 
-The implemented side provides optional assets, persistent instances, composition,
-renderer bindings and `SetLocalCloudInstances`. This document specifies the future
-controller interface. No weather scheduler, asynchronous loader, state blending,
-storm controller, savegame integration or transition code is implemented here.
+A scene stores one atomic local-cloud state at `PhysicalSky/cloudMap/localCloud`.
+Asset identity, worldspace, placement, altitude decoding and composition options
+belong to that state. They cannot be interpolated as unrelated scalar entries.
+The menu has one state editor, with explicit override/inherit and enable controls.
+There is no instance list, priority stack, asset-slot limit or external manifest.
 
-The controller owns weather identity, time, easing and interruption policy.
-Physical Sky owns resource validation, GPU fields, coherent bounds and history.
-The controller must not manipulate SRVs or infer altitude from DDS contents.
+## Scene Manager
 
-## Proposed API
+The catalog supports a `Blend` value and editor semantic backed by `SceneBlend`.
+It is a persisted, transitionable atomic value. A serialized value has a `states`
+array, each element containing a complete `value` object and a nonnegative finite
+`weight`; total weight is at most one (within floating-point tolerance).
+An empty array is the identity state.
 
-```cpp
-PrepareCloudState(requestId, CloudStateDescriptor);  // main/render-thread handoff
-QueryCloudState(requestId);                         // Pending / Ready / Failed + diagnostics
-BeginCloudTransition(fromHandle, toHandle, durationSeconds, easing);
-SetCloudTransitionWeight(weight);                   // normalized absolute weight
-CommitCloudState(handle);
-CancelCloudTransition(policy);                     // retain current mixed state or revert
-```
+The ordinary baseline, time-of-day, weather, location and user-overwrite ordering
+is retained. Period resolution accumulates endpoint weights using the same time
+factors as numeric settings. Weather resolution then blends those distributions
+using the weather factor. Equal state objects merge instead of becoming duplicate
+render endpoints. Thus overlapping weather and period transitions retain all
+contributing resources, not merely whichever two entries were resolved last.
+The feature-independent resolver does not interpret cloud resource names or
+placement data. Numeric weather interpolation keeps its existing formula.
 
-A descriptor contains global NDF settings, noise/profile source IDs, low-cloud
-height mapping, cirrus settings, lighting/wind settings and local instances. Asset
-IDs are resource identity; stable instance IDs are placement identity. A state
-handle retains a complete immutable resource set and generation counters. Readiness
-requires valid required pairs and all generated replacements to be complete.
-Invalid optional inputs have a recorded fallback decision; no partly loaded pair
-may be presented as Ready. The proposed calls enqueue work; only the renderer
-thread may mutate D3D11 resources or publish handles.
+Scene saving, loading, copying, overwrite traversal, baseline restoration and
+export treat the blend envelope as one value. Cloud DDS files remain ordinary
+texture-mod dependencies under `Textures/PhysicalSky/LocalNdf`; the scene pack
+exports settings, not those asset directories.
 
-Existing `SetLocalCloudInstances` remains an immediate authoring/layout API. A
-controller should not approximate transitions by repeatedly replacing the saved
-configuration: it would rebuild maps and reset cloud history every frame. Active
-runtime state and editable persistent settings must be separated in that phase.
+Flat location changes apply this resource state immediately; the existing
+location movement easing remains for scalar settings. Weather and time-of-day
+transitions blend it continuously. A new weather uses the endpoints and weights
+provided by Scene Manager; no independent cloud weather clock or scheduler is
+introduced. The implementation does not add an interruption policy beyond the
+existing weather resolver.
 
-## Interpolation semantics
+## Rendering
 
--   Scalars such as influence, altitude, dimensions and lighting interpolate in
-    their documented physical domains. Rotation follows the shortest angular arc.
-    Worldspace, asset IDs, source mode and blend ordering are discrete.
--   Instances with the same stable ID and asset may interpolate transforms and
-    influence, provided their worldspace is identical. Teleports require explicit
-    reset semantics. Source texture replacement must not masquerade as movement.
--   Unmatched instances fade their influence in or out. An instance with zero
-    coverage can intentionally clear the background; opacity cannot be derived
-    from coverage. Local modeling and height weights retain separate meanings.
--   Fading premultiplied fields must also fade their weights. Decode each endpoint's
-    height into metres before interpolation, or normalize both to a common envelope.
-    Never interpolate encoded heights from different altitude ranges directly.
--   Independent maps have no correspondence. Crossfade of NDF controls can make
-    surfaces rise or merge; crossfade of density avoids that deformation but doubles
-    density-query cost. Default to control-field transitions for compatible maps;
-    expose density transition as an explicit future quality mode, not a hidden cost.
--   Keep wind integrators continuous while interpolating velocities. Do not restart
-    accumulated offsets or linearly interpolate wrapped phases across their seam.
-    Local macro anchoring and global detail evolution remain separate decisions.
+Each active endpoint is validated independently and cached in a texture-array
+slice. The current worldspace filters compatible endpoints. Missing/invalid
+resources fall back to the global NDF for their share of the transition.
+Resource loading uses the existing synchronous texture cache; weight-only ticks
+neither reload DDS files nor dispatch the local map generator.
 
-## GPU strategy and performance
+All slices share the union footprint and altitude envelope. Encoded heights are
+converted into that common physical interval. Each endpoint first applies its
+Interpolate or Maximum operator to the current global NDF, then the resulting
+control fields are blended by scene weights. Mixing maximum floors before
+applying the operator would produce incorrect intermediate cloud shapes.
 
-Prepare both endpoint fields before starting. Choose a fixed common XY rectangle,
-texel size and altitude envelope for the complete transition. Resample endpoints
-once if their atlas grids differ. During the transition, combine endpoint maps in
-a dedicated compute pass only when weight changes. Ray samples still read one
-composed height/modeling pair. Dispatch rate can be limited by a measured bound on
-screen-space change; do not rebuild every individual patch at every frame.
+Different transforms crossfade their stationary world-space fields. This avoids
+interpolating incompatible rotations, dimensions or DDS height encodings, and
+requires no artificial patch velocity. Fading to a disabled or empty state
+restores global clouds continuously. This is a control-field transition, not a
+crossfade of independently lit volumes or a guarantee of topology-preserving
+cloud morphing.
 
-Moving instances require rebuilding their affected region or a separate placement
-pass. The first implementation should prioritize a bounded instance count and
-full-atlas recomposition over complex dirty-rectangle tracking. Expose memory and
-composition cost in Debug. Two endpoint maps plus output/scratch increase memory;
-reserve a budget before preparation and report failure rather than silently losing
-resolution midway through a transition. Widely separated instances may eventually
-need tiled fields, but should not add an unbounded per-ray texture loop.
+A structured weight buffer changes during blending; cached slice content changes
+only with endpoint identity/content, source revision or atlas settings. Local
+weights are excluded from the whole-cloud history-reset key. Explicit authoring
+edits still reset history. Debug exposes endpoint weights, cached slices and the
+source textures. Simultaneous weather/time blends can cost more than a stable
+single state because each contributing operator must be evaluated.
 
-## Bounds, shadows and history
+## Shared weather shape
 
-The published state is a tuple of maps, XY rectangle, height encoding, acceleration
-bounds, worldspace and revision. Switch the tuple atomically at a frame boundary,
-before both shared constants and shadow-volume dispatch. Use the union of endpoint
-bounds for the transition lifetime, so growing clouds cannot escape predraw or
-cubemap acceleration. Shrink bounds only when committing the destination.
-
-Ordinary authoring edits use history invalidation today. Smooth transitions need
-an additional continuous change signal, distinct from structural revision. Track
-placement displacement for matched instances; reject/reduce history where source
-identity or local influence changes invalidate that motion. Derive reconstruction
-uncertainty from change in density/support, rather than resetting the complete
-screen every tick or accepting history indefinitely. The main view and cube share
-the same state generation even if their samples update on different schedules.
-
-## Failure and interruption
-
-Preparation failure leaves the currently published state untouched and returns
-asset-specific diagnostics. Cancellation never releases resources still referenced
-by submitted GPU work. A new transition during a blend should capture the current
-mixed control field as its new source; reverting to the previous endpoint would
-produce a visible jump. Worldspace changes cancel incompatible transitions and
-publish the destination world's prepared layout or procedural fallback.
-
-Persist endpoint descriptors and controller progress only when a scene/savegame
-controller defines that contract. Do not add a second Physical Sky JSON format.
-The current feature settings remain the editable default layout.
-
-## Acceptance criteria
-
-Test 0/1 endpoints, interrupted/reversed transitions, all assets missing, one invalid
-pair, optional mask addition/removal, identical IDs with changed assets, different
-altitude scales, rotations through ±180°, worldspace changes, cloud growth beyond
-current bounds, camera movement and sun occlusion. Compare all views/shadows at a
-fixed weight; measure preparation spikes, steady GPU time, VRAM and reconstruction
-stability. A continuous weight must not trigger full history reset every frame.
+`bottomSpreadScale`, `bottomSpreadHeight`, `bottomSoftness`,
+`bottomSoftnessHeight`, `topExpansionScale` and `densityScale` remain independent
+Scene Manager scalar controls. They resolve with curvature, global NDF controls,
+wind and cirrus state before GPU coefficient conversion. Local endpoint objects
+carry NDF placement/composition only; they do not define independently lit or
+independently shaped weather volumes.

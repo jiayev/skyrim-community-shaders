@@ -149,6 +149,17 @@ float2 LowCloudSettings::GetNdfAltitudeRangeKm() const
 	return { offset * 0.001f, (offset + scale) * 0.001f };
 }
 
+float LowCloudSettings::GetCurvatureRadiusKm() const
+{
+	return std::isfinite(curvatureRadius) ? std::clamp(curvatureRadius, 25.f, 10000.f) : 74.946f;
+}
+
+float LowCloudSettings::GetShadowBottomKm(float bottomKm, float rangeKm, uint32_t resolution) const
+{
+	const float extent = rangeKm * (0.5f + 1.f / static_cast<float>(resolution));
+	return bottomKm - 2.f * extent * extent / GetCurvatureRadiusKm();
+}
+
 float CirrusSettings::GetAltitudeKm() const
 {
 	return (std::isfinite(altitude) ? std::clamp(altitude, 1.f, 24000.f) : 2048.f) * 0.001f;
@@ -248,10 +259,9 @@ void PhysicalSky::SetupVolumetricResources()
 		DX::ThrowIfFailed(device->CreateSamplerState(&desc, sampTileable.put()));
 	}
 
-	// Volumetric cloud StructuredBuffer
+	// Volumetric cloud constants
 	{
-		volCloudSb = eastl::make_unique<StructuredBuffer>(StructuredBufferDesc<VolumetricCloudSB>(), 1);
-		volCloudSb->CreateSRV();
+		volCloudCb = eastl::make_unique<ConstantBuffer>(ConstantBufferDesc<VolumetricCloudCB>());
 	}
 
 	{
@@ -673,10 +683,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const float2 lowAltitudeRange = low.GetNdfAltitudeRangeKm();
 	const float lowCloudBaseKm = lowAltitudeRange.x;
 	const float lowCloudTopKm = lowAltitudeRange.y;
+	const float cloudCurvatureRadius = KilometersToGameUnits(low.GetCurvatureRadiusKm());
+	if (cloudCurvatureRadius != volHistoryCurvatureRadius)
+		volMainHistoryValid = false;
 	const auto localRect = localNdfManager.GetRect();
 	const auto localAltitude = localNdfManager.GetAltitude();
-	const float lowCloudTraceBottomKm = localAltitude.z > 0.f ? std::min(lowCloudBaseKm, localAltitude.x * 0.001f) : lowCloudBaseKm;
-	const float lowCloudTraceTopKm = localAltitude.z > 0.f ? std::max(lowCloudTopKm, (localAltitude.x + localAltitude.y) * 0.001f) : lowCloudTopKm;
+	const float lowCloudTraceBottomKm = localAltitude.y > 0.f ? std::min(lowCloudBaseKm, localAltitude.x * 0.001f) : lowCloudBaseKm;
+	const float lowCloudTraceTopKm = localAltitude.y > 0.f ? std::max(lowCloudTopKm, (localAltitude.x + localAltitude.y) * 0.001f) : lowCloudTopKm;
 	const float traceBottomKm = cirrus.enabled ? std::min(lowCloudTraceBottomKm, cirrus.GetAltitudeKm()) : lowCloudTraceBottomKm;
 	const float traceTopKm = cirrus.enabled ? std::max(lowCloudTraceTopKm, cirrus.GetAltitudeKm()) : lowCloudTraceTopKm;
 
@@ -693,8 +706,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	const auto cirrusTextures = cirrusMapManager.GetTextures();
 	const bool renderCirrus = cirrus.enabled && bool(cirrusTextures);
 
-	// Update StructuredBuffer
-	VolumetricCloudSB sbData = {
+	VolumetricCloudCB cloudData = {
 		.rayMarchRange = KilometersToGameUnits(std::clamp(settings.rayMarchRange, 1.f, 64.f)),
 		.shadowVolumeRange = KilometersToGameUnits(settings.shadowVolumeRange),
 		.marchStepScale = std::clamp(settings.marchStepScale, 0.0625f, 4.f),
@@ -712,11 +724,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.lowNdfFrequency = { Util::Units::GAME_UNIT_TO_KM / low.ndfScale.x, Util::Units::GAME_UNIT_TO_KM / low.ndfScale.y },
 		.noiseWindOffset = noiseWindOffset,
 		.lowDensityScale = std::max(low.densityScale, 0.f),
-		.coverageBottomPower = std::clamp(low.coverageBottomPower, 0.01f, 4.f),
-		.coverageHeightRange = std::clamp(low.coverageHeightRange, 0.001f, 1.f),
-		.bottomDensityPower = std::clamp(low.bottomDensityPower, 0.f, 10.f),
-		.bottomDensityWidth = std::clamp(low.bottomDensityWidth, 1.f, 10.f),
-		.topExpansion = std::clamp(low.topExpansion, 0.f, 1.f),
+		.coverageBottomPower = 1.f - 0.75f * std::clamp(low.bottomSpreadScale, 0.f, 1.f),
+		.coverageHeightRange = std::clamp(low.bottomSpreadHeight, 0.001f, 1.f),
+		.bottomDensityPower = 2.f + 4.f * std::clamp(low.bottomSoftness, 0.f, 1.f),
+		.bottomDensityWidth = 10.f * std::clamp(low.bottomSoftnessHeight, 0.f, 1.f),
+		.topExpansion = std::clamp(low.topExpansionScale, 0.f, 1.f),
 		.cirrusEnabled = renderCirrus ? 1u : 0u,
 		.cirrusAltitude = KilometersToGameUnits(cirrus.GetAltitudeKm()),
 		.cirrusPatternFrequency = Util::Units::GAME_UNIT_TO_M / std::clamp(cirrus.patternScale, 100.f, 64000.f),
@@ -739,7 +751,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.ambientBase = std::clamp(lighting.ambientBase, 0.f, 1.f),
 		.lowFrameDim = { static_cast<float>(lowW), static_cast<float>(lowH) },
 		.historyValid = volMainHistoryValid ? 1u : 0u,
-		.shadowVolumeBottom = KilometersToGameUnits(lowCloudTraceBottomKm),
+		.shadowVolumeBottom = KilometersToGameUnits(low.GetShadowBottomKm(lowCloudTraceBottomKm, settings.shadowVolumeRange, kShadowVolW)),
 		.shadowVolumeTop = KilometersToGameUnits(lowCloudTraceTopKm),
 		.cloudWindDelta = windDelta,
 		.cloudShapeShear = volWind.shear / Util::Units::GAME_UNIT_TO_M,
@@ -755,8 +767,11 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		.cloudEvolutionDelta = static_cast<float>((volWind.phase - previousWind.phase) / (phasePeriod * 0.0034834063 * Util::Units::GAME_UNIT_TO_M)),
 		.localNdfRect = localRect,
 		.localNdfAltitude = localAltitude,
+		.localNdfAuxiliary = ndfManager.GetHeightAuxiliaryRange(),
+		.cloudCurvatureRadius = cloudCurvatureRadius,
+		.lowCloudTraceBottomAltitude = KilometersToGameUnits(lowCloudTraceBottomKm),
 	};
-	volCloudSb->Update(&sbData, sizeof(sbData));
+	volCloudCb->Update(cloudData);
 
 	const auto depthTarget = globals::deferred->MediumCompositeEnabled() && a_pass == VolumetricCloudPass::kMainViewAndCubemap ?
 	                             RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN :
@@ -767,8 +782,9 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	if (!ndfTextures)
 		return;
 
-	std::array<ID3D11ShaderResourceView*, 13> srvs = {
-		volCloudSb->SRV(),                                                    // t0
+	auto* cloudConstants = volCloudCb->CB();
+	context->CSSetConstantBuffers(1, 1, &cloudConstants);
+	std::array<ID3D11ShaderResourceView*, 12> srvs = {
 		texTrLut->srv.get(),                                                  // t1
 		texApLut->srv.get(),                                                  // t2
 		renderer->GetDepthStencilData().depthStencils[depthTarget].depthSRV,  // t3
@@ -786,7 +802,7 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 	if (a_pass == VolumetricCloudPass::kMainViewAndCubemap && texVolCloudAmbientSH) {
 		state->BeginPerfEvent("Volumetric Clouds: Ambient SH");
 		std::array<ID3D11UnorderedAccessView*, 1> ambientUavs = { texVolCloudAmbientSH->uav.get() };
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)ambientUavs.size(), ambientUavs.data(), nullptr);
 		context->CSSetShader(csVolAmbientSH.get(), nullptr, 0);
 		globals::profiler->BeginPass("PhysicalSky::VolumetricCloudAmbientSH");
@@ -804,8 +820,8 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 
 	context->CSSetSamplers(2, (uint)samplers.size(), samplers.data());
 	const auto localMaps = localNdfManager.GetTextures();
-	ID3D11ShaderResourceView* localSrvs[] = { localMaps.height, localMaps.modeling };
-	context->CSSetShaderResources(32, 2, localSrvs);
+	ID3D11ShaderResourceView* localSrvs[] = { localMaps.height, localMaps.modeling, localNdfManager.GetMaximum(), localNdfManager.GetWeights() };
+	context->CSSetShaderResources(32, 4, localSrvs);
 
 	if (a_pass == VolumetricCloudPass::kShadowVolume) {
 		// Shadow path: accumulate the cloud extinction column into the 3D shadow
@@ -815,13 +831,13 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		ID3D11ShaderResourceView* nullPsShadowSrv = nullptr;
 		context->PSSetShaderResources(112, 1, &nullPsShadowSrv);
 
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetUnorderedAccessViews(0, (uint)uavs.size(), uavs.data(), nullptr);
 		context->CSSetShader(csVolShadowVolume.get(), nullptr, 0);
 
 		// Dispatch based on dominant light direction component
 		const float shadowRangeGu = KilometersToGameUnits(settings.shadowVolumeRange);
-		const float shadowThicknessGu = KilometersToGameUnits(lowCloudTraceTopKm - lowCloudTraceBottomKm);
+		const float shadowThicknessGu = std::max(cloudData.shadowVolumeTop - cloudData.shadowVolumeBottom, 1.f);
 		float3 ray_px_dir = { -cloudLightDir.x, -cloudLightDir.y, -cloudLightDir.z };
 		ray_px_dir.x *= kShadowVolW / shadowRangeGu;
 		ray_px_dir.y *= kShadowVolH / shadowRangeGu;
@@ -865,18 +881,18 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		texVolCubeTr.swap(texVolCubeHistoryTr);
 		texVolCubeLum.swap(texVolCubeHistoryLum);
 		texVolCubeAux.swap(texVolCubeHistoryAux);
-		context->CSSetShaderResources(0, (uint)srvs.size(), srvs.data());
+		context->CSSetShaderResources(1, (uint)srvs.size(), srvs.data());
 		context->CSSetShaderResources(13, 1, &ambientShSrv);
 		std::array<ID3D11UnorderedAccessView*, 3> uavs = {};
 		if (!state->isMapMenuOpen) {
 			const CloudBoundaryCB boundaryData = {
 				.gridOriginSpacing = { boundaryOrigin.x, boundaryOrigin.y, boundarySpacing.x, boundarySpacing.y },
-				.fieldFrequencyWind = { sbData.lowNdfFrequency.x, sbData.lowNdfFrequency.y, noiseWindOffset.x, noiseWindOffset.y },
-				.shearAltitude = { sbData.cloudShapeShear.x, sbData.cloudShapeShear.y, sbData.lowCloudBaseAltitude, sbData.lowCloudTopAltitude },
-				.evolution = sbData.cloudEvolution,
+				.fieldFrequencyWind = { cloudData.lowNdfFrequency.x, cloudData.lowNdfFrequency.y, noiseWindOffset.x, noiseWindOffset.y },
+				.shearAltitude = { cloudData.cloudShapeShear.x, cloudData.cloudShapeShear.y, cloudData.lowCloudBaseAltitude, cloudData.lowCloudTopAltitude },
+				.evolution = cloudData.cloudEvolution,
 				.frameDimensions = { textureDim.x, textureDim.y, static_cast<float>(lowW), static_cast<float>(lowH) },
-				.planetRadius = sbData.planetRadius,
-				.bottomZ = sbData.bottomZ,
+				.cloudCurvatureRadius = cloudData.cloudCurvatureRadius,
+				.bottomZ = cloudData.bottomZ,
 				.gridCellCount = kCloudBoundaryCells,
 				.cloudFrameIndex = volFrameIndex,
 				.localRect = localRect,
@@ -985,13 +1001,14 @@ void PhysicalSky::RenderVolumetricClouds(VolumetricCloudPass a_pass)
 		volHistoryWind = volWind;
 		volHistoryViewProj = globals::game::frameBufferCached.GetCameraViewProj();
 		volHistoryCamera = { cameraPosition.x, cameraPosition.y, cameraPosition.z };
+		volHistoryCurvatureRadius = cloudCurvatureRadius;
 		volHistoryFrameDim = state->isMapMenuOpen ? float2{} : frameDim;
 		++volFrameIndex;
 	}
 
 	// Cleanup
 	{
-		ID3D11ShaderResourceView* nullSrvs[34] = {};
+		ID3D11ShaderResourceView* nullSrvs[36] = {};
 		ID3D11UnorderedAccessView* nullUavs[3] = {};
 		ID3D11Buffer* nullCb[1] = {};
 		ID3D11SamplerState* nullSamplers[3] = {};

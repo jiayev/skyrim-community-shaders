@@ -74,6 +74,7 @@ PRIMITIVE_TYPES = {
     "unsigned long long": "Integer",
     "size_t": "Integer",
     "std::size_t": "Integer",
+    "SceneBlend": "Blend",
     "std::string": "String",
     "string": "String",
 }
@@ -4326,6 +4327,8 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             label, label_key = "", ""
         else:
             label, label_key = fallback_label or prettify(key), ""
+        if value_type == "Blend":
+            label, label_key = "Scene State", "feature.scene_manager.state_blend"
         ui_category = binding.category.text if binding else ""
         category_key = binding.category.key if binding else ""
         control_kind = binding.control_kind if binding else ""
@@ -4337,8 +4340,10 @@ def build_entries(source_dir: Path) -> list[dict[str, object]]:
             (context.field_class, setting_address)) or resolve_editor_semantic(
             binding, value_type, force_hidden)
 
+        if value_type == "Blend" and not force_hidden:
+            editor_semantic = "Blend"
         flags = ["SceneSettingsCatalog::SettingFlag::Persisted"]
-        if value_type == "Float" and editor_semantic in {"Numeric", "Generic"}:
+        if editor_semantic == "Blend" or (value_type == "Float" and editor_semantic in {"Numeric", "Generic"}):
             flags.append("SceneSettingsCatalog::SettingFlag::Transitionable")
         if editor_semantic == "Toggle":
             flags.append("SceneSettingsCatalog::SettingFlag::BooleanControl")
@@ -4735,6 +4740,7 @@ namespace SceneSettingsCatalog
 \t\tInteger,
 \t\tFloat,
 \t\tString,
+\t\tBlend,
 \t};
 
 \tenum class EditorSemantic : std::uint8_t
@@ -4745,6 +4751,7 @@ namespace SceneSettingsCatalog
 \t\tNumeric,
 \t\tChoice,
 \t\tText,
+\t\tBlend,
 \t};
 
 \tenum class AggregateSemantic : std::uint8_t
@@ -5104,7 +5111,7 @@ def validate_entries(
         semantic = entry["editorSemantic"]
         if allowed == (semantic == "None"):
             errors.append(f"invalid editor for {identity}")
-        if allowed and semantic != "Text":  # Text settings draw their own UI, no interceptor entry point
+        if allowed and semantic not in {"Text", "Blend"}:  # Custom controls bind through the context API.
             widget = entry.get("sourceWidget", "")
             if widget not in SOURCE_WIDGET_ENTRY_POINTS:
                 errors.append(

@@ -113,6 +113,49 @@ class SceneSettingsCatalogGeneratorTests(unittest.TestCase):
                     self.assertEqual((entry["minimum"], entry["maximum"]),
                                      (input_min, input_max) if component < 2 else (output_min, output_max))
 
+    def test_local_cloud_is_one_blendable_scene_value(self):
+        entry = self.entries_by_id[("PhysicalSky", "cloudMap", "localCloud")]
+        self.assertEqual(entry["type"], "Blend")
+        self.assertEqual(entry["editorSemantic"], "Blend")
+        self.assertEqual(entry["serializedPath"], "cloudMap")
+        self.assertEqual(entry["serializedKey"], "localCloud")
+        self.assertEqual(entry["access"], "settings.cloudMap.localCloud")
+        for flag in ("Persisted", "SceneControllable", "Transitionable"):
+            self.assertIn(flag, entry["flags"])
+        self.assertTrue(entry["displayNameKey"])
+        self.assertFalse(any(item["feature"] == "PhysicalSky" and
+                             item["path"].startswith("cloudMap/localCloud/") for item in self.entries))
+
+    def test_physical_sky_weather_shape_binds_authoring_fields(self):
+        fields = {
+            "bottomSpreadScale": "cloud_bottom_spread_scale",
+            "bottomSpreadHeight": "cloud_bottom_spread_height",
+            "bottomSoftness": "cloud_bottom_softness",
+            "bottomSoftnessHeight": "cloud_bottom_softness_height",
+            "topExpansionScale": "cloud_top_expansion",
+            "densityScale": "cloud_density_scale",
+        }
+        for key, label in fields.items():
+            with self.subTest(setting=key):
+                entry = self.entries_by_id[("PhysicalSky", "cloudLayer/low", key)]
+                self.assertEqual(entry["type"], "Float")
+                for flag in ("Persisted", "Transitionable", "SceneControllable"):
+                    self.assertIn(flag, entry["flags"])
+                self.assertEqual(entry["serializedPath"], "cloudLayer/low")
+                self.assertEqual(entry["serializedKey"], key)
+                self.assertEqual(entry["serializedComponent"], -1)
+                self.assertEqual(entry["access"], f"settings.cloudLayer.low.{key}")
+                self.assertTrue(entry["addressable"])
+                self.assertEqual(entry["sourceWidget"], "SliderFloat")
+                self.assertEqual(entry["numericTransform"], "Identity")
+                self.assertEqual(entry["displayNameKey"], f"feature.physical_sky.{label}")
+                self.assertIn("feature.physical_sky.cloud_weather_shape", entry["displayPathKeys"])
+                self.assertEqual((entry["minimum"], entry["maximum"]),
+                                 (0.001 if key == "bottomSpreadHeight" else 0.0, 1.0))
+        for key in ("coverageBottomPower", "coverageHeightRange", "bottomDensityPower",
+                    "bottomDensityWidth", "topExpansion", "lowDensityScale"):
+            self.assertNotIn(("PhysicalSky", "cloudLayer/low", key), self.entries_by_id)
+
     def test_multiline_and_cast_initializers_preserve_field_types(self):
         fields = GENERATOR.parse_struct_fields("""
             uint mode = (uint)Mode::Default;

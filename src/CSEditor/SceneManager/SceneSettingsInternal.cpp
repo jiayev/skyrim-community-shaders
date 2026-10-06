@@ -41,11 +41,13 @@ namespace SceneSettingsInternal
 			CombineHash(signature, std::hash<double>{}(value.get<double>()));
 		else if (value.is_string())
 			CombineHash(signature, std::hash<std::string_view>{}(value.get_ref<const std::string&>()));
+		else if (SceneBlend::IsValid(value))
+			CombineHash(signature, std::hash<std::string>{}(value.dump()));
 	}
 
 	bool IsSceneSettingPrimitive(const json& value)
 	{
-		return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string();
+		return value.is_boolean() || value.is_number_integer() || value.is_number_float() || value.is_string() || SceneBlend::IsValid(value);
 	}
 
 	bool IsEntryListSceneType(SceneSettingsManager::SceneType type)
@@ -325,7 +327,7 @@ namespace SceneSettingsInternal
 		for (auto& part : selectorDefaults)
 			part = NormalizeDisplayPart(std::move(part));
 		while (!parts.empty() && !selectorDefaults.empty() &&
-		       Util::IEquals(parts.front(), selectorDefaults.front())) {
+			   Util::IEquals(parts.front(), selectorDefaults.front())) {
 			parts.erase(parts.begin());
 			selectorDefaults.erase(selectorDefaults.begin());
 			++rawOffset;
@@ -447,8 +449,9 @@ namespace SceneSettingsInternal
 		if (!reported.insert(signature).second)
 			return;
 
-		logger::warn("[SceneSettings] {}.{} clamped from {} to {} on apply; the value is outside the range "
-					 "its control allows. The scene entry keeps the authored value.",
+		logger::warn(
+			"[SceneSettings] {}.{} clamped from {} to {} on apply; the value is outside the range "
+			"its control allows. The scene entry keeps the authored value.",
 			featureShortName, setting.settingKey, authored.dump(), clamped.dump());
 	}
 
@@ -544,8 +547,8 @@ namespace SceneSettingsInternal
 			return T("feature.scene_manager.channel.all", "All");
 
 		auto componentIndex = static_cast<std::int8_t>(setting.aggregateCount > 1 ?
-		                                                     setting.serializedComponent - setting.aggregateStart :
-		                                                     setting.serializedComponent);
+														   setting.serializedComponent - setting.aggregateStart :
+														   setting.serializedComponent);
 		const auto* storedAll = FindStoredAllComponent(setting);
 		if (storedAll && storedAll->serializedComponent < setting.serializedComponent)
 			--componentIndex;
@@ -564,7 +567,8 @@ namespace SceneSettingsInternal
 		                       SplitCatalogPath(setting.settingPath) :
 		                       SplitCatalogPath(setting.serializedPath);
 		info.settingKey = std::string(info.controlType == SceneSettingControlType::Scalar ?
-		                                  setting.settingKey : setting.serializedKey);
+										  setting.settingKey :
+										  setting.serializedKey);
 		info.displayName = GetCatalogLeafDisplayName(setting);
 		info.componentDisplayName = GetCatalogComponentDisplayName(setting, info.controlType);
 		info.displayPath = GetCatalogContextPath(setting);
@@ -589,6 +593,8 @@ namespace SceneSettingsInternal
 			return value.is_number_float() || value.is_number_integer();
 		case String:
 			return value.is_string();
+		case Blend:
+			return SceneBlend::IsValid(value);
 		default:
 			return false;
 		}
@@ -719,9 +725,9 @@ namespace SceneSettingsInternal
 	{
 		return SceneSettingsCatalog::IsSceneControllable(setting) &&
 		       !IsBlacklistedSceneSetting(
-			       std::string(setting.featureShortName),
-			       SplitCatalogPath(setting.settingPath),
-			       std::string(setting.settingKey));
+				   std::string(setting.featureShortName),
+				   SplitCatalogPath(setting.settingPath),
+				   std::string(setting.settingKey));
 	}
 
 	bool IsCatalogSettingAllowedByPolicy(const SceneSettingsCatalog::SettingMetadata& setting)
@@ -752,17 +758,17 @@ namespace SceneSettingsInternal
 				auto& allowed = allowedByType[index];
 				allowed.reserve(SceneSettingsCatalog::GetSettings().size());
 				for (const auto& candidate : SceneSettingsCatalog::GetSettings()) {
-					// Time-of-day blending interpolates, so only transitionable floats qualify.
+					// Time-of-day blending interpolates, so only transitionable values qualify.
 					const bool transitionable = sceneType != SceneSettingsManager::SceneType::TimeOfDay ||
 					                            SceneSettingsCatalog::HasFlag(candidate.flags,
 													SceneSettingsCatalog::SettingFlag::Transitionable);
 					allowed.push_back(IsCatalogSettingAllowedByPolicy(candidate) && transitionable &&
-										  IsSettingAllowedBySceneTypePolicy(sceneType,
-											  std::string(candidate.featureShortName),
-											  SplitCatalogPath(candidate.settingPath),
-											  std::string(candidate.settingKey)) ?
-					                      1 :
-					                      0);
+											  IsSettingAllowedBySceneTypePolicy(sceneType,
+												  std::string(candidate.featureShortName),
+												  SplitCatalogPath(candidate.settingPath),
+												  std::string(candidate.settingKey)) ?
+										  1 :
+										  0);
 				}
 			}
 			return allowedByType;
@@ -927,7 +933,7 @@ namespace SceneSettingsInternal
 		}
 
 		if (requireNumeric && (!SceneSettingsCatalog::HasFlag(setting.flags, SceneSettingsCatalog::SettingFlag::Transitionable) ||
-			                      !IsNumericValue(featureValue) || !IsNumericValue(value) || !std::isfinite(value.get<float>())))
+								  !SceneBlend::IsBlendable(featureValue) || !SceneBlend::IsBlendable(value)))
 			return false;
 		if (!requireNumeric && !IsSceneSettingPrimitive(value))
 			return false;
