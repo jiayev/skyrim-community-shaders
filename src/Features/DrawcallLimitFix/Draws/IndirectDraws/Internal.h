@@ -1262,6 +1262,7 @@ namespace DCLF
 			std::array<std::uint32_t, kShadowPushWords> push{};
 			// Its draws, one per bucket with a capacity, the depth-only class's pipelines first (ShadowEpochs.cpp, ShadowBuckets).
 			std::vector<ShadowBucket> buckets;
+			std::uint32_t rasterState = 0;  // the state whose pipeline map row the buckets are (ShadowViewLayout)
 
 			bool operator==(const ShadowFrameView&) const = default;
 		};
@@ -2169,6 +2170,41 @@ namespace DCLF
 				skippedTexture = skippedPipeline = deferredTextures = deferredPipelines = 0;
 			}
 		};
+
+		/**
+		 * @brief A shadow or occlusion view as its epoch's shape names it: its slot, mode, target, slice and rectangle, and the
+		 * rasterizer state whose pipeline map row its buckets are (ShadowRowBuckets). What the shape producer (MakeShadowShape) makes
+		 * the rest of the view from; a frame's views are one of the layouts its revision has seen (the recent shapes).
+		 */
+		struct ShadowViewLayout
+		{
+			std::uint32_t slot = 0, modeIndex = 0, target = 0, slice = 0;
+			std::uint32_t x = 0, y = 0, width = 0, height = 0;
+			std::uint32_t rasterState = 0;
+			bool operator==(const ShadowViewLayout&) const = default;
+		};
+		std::vector<ShadowViewLayout> LayoutOf(const ShadowFrame& a_frame);
+
+		/**
+		 * @brief What a shadow or occlusion epoch's shape is made from (MakeShadowShape): the views' layout, each view's map row's
+		 * buckets, and the revision's payload (its modes' and key slots' draws, the arena's blocks), with the slots' resources.
+		 */
+		struct ShadowShapeInputs
+		{
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			ShadowIndirectState indirect{};
+			std::vector<ShadowViewLayout> views;
+			std::vector<RowBuckets> rows;  // per view
+			const ShadowPayload* payload = nullptr;
+			std::shared_ptr<const ShadowFrame> previous;  // the last published shape: its slots' capacities only grow
+			LatchedList latched;
+		};
+		std::shared_ptr<ShadowFrame> MakeShadowShape(const ShadowResources& a_resources, const ShadowShapeInputs& a_in);
+		/**
+		 * @brief The shadow commit's latched copies (CS's SharedData and FeatureData in the constants, a_in's), as its LatchedUploads
+		 * makes them.
+		 */
+		std::vector<LatchedCopy> ShadowLatchedLayout(const ShadowResources& a_resources, const ShadowPayload& a_payload, const ShadowInputs& a_in);
 
 		/**
 		 * @brief The geometry slots an object's draw writes a sequence for, in BuildDrawsCS's order: its one
@@ -3640,6 +3676,42 @@ namespace DCLF
 			std::uint32_t logged = 0;
 		} reflectionParity;
 		void NoteReflectionParity(const ReflectionFrame& a_frame, std::uint32_t a_frameNumber);
+		/**
+		 * @brief The shadow and occlusion epochs' (ShapeParity's). Their views come and go with the engine's (a local light's pair,
+		 * the cascades' alternating states), so a revision holds a shape per view layout it has seen: at the join each recent shape's
+		 * layout is made again from the revision's inputs (MakeShadowShape), and a commit is compared with the one of its layout
+		 * ("without one": a layout the revision has not seen, whose views a revision's frame would leave to the engine).
+		 */
+		struct ShadowParity
+		{
+			enum Field : std::uint32_t
+			{
+				kCapacity,
+				kBuckets,
+				kPush,
+				kRows,
+				kLatch,
+				kLatched,
+				kHeaps,
+				kPipelines,
+				kFields
+			};
+			static constexpr std::array<const char*, kFields> kFieldNames = { "capacity", "buckets", "push", "rows", "latch", "latched copies", "heaps", "pipelines" };
+			bool known = false;
+			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
+			// Per epoch (shadow, occlusion): the revisions made at this frame's join and the frame before's, a shape per layout.
+			std::array<std::array<std::vector<std::shared_ptr<const ShadowFrame>>, 2>, 2> revisions;
+			std::array<std::array<std::uint32_t, 2>, 2> revisionFrames{ { { ~0u, ~0u }, { ~0u, ~0u } } };
+			struct Counts
+			{
+				std::uint64_t compared = 0, same = 0, missing = 0;
+				std::array<std::uint64_t, kFields> differ{};
+			};
+			std::array<std::array<Counts, 2>, 2> counts{};
+			std::uint64_t layoutMisses = 0;
+			std::uint32_t logged = 0;
+		} shadowParity;
+		void NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber);
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);
 		/**

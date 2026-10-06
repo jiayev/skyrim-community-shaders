@@ -547,8 +547,18 @@ before (the one `BeginSceneFrame` would select).
   the pipeline set growing (pipelines arriving) and the Z-prepass's calls following the lookups as they resolve, plus about
   one frame in 3,000 where a pipeline resolves between the join and the Z-prepass. Both are R4's: a revision names its
   pipeline set and lookups. Members, draws, growths and warnings are as in r3bs.
-- **Left: shadows and occlusion.** Their shape depends on the frame's views (which slots, rects and rasterizer states:
-  today a handful of recent variants), on the payload's per-key-slot draws and on its arena's addresses.
+- **Shadows and occlusion** (r3ca4). Their views come and go with the engine's: a local light's paraboloid pair, and the
+  cascades' rasterizer states. So a revision holds a shape per view layout it has seen, not one shape. `ShadowViewLayout`
+  is a view's slot, mode, target, slice, rectangle and rasterizer state. `MakeShadowShape` makes the views from it, from
+  their map rows' buckets and from the payload: the modes' and key slots' draws, and the arena's blocks. At the join,
+  each recent shape's layout is made again, and a commit is compared with the variant of its own layout. Retained views
+  (the slots kept with no work) are made by the producer like the others; their capacities now follow the payload instead
+  of staying as they were copied. A union of every state's buckets per view was rejected: each key slot would need a range
+  per state, more than the slots' sequences hold (twice the draw bound). Result: steady play 100% for both lags. The
+  startup differences are pipelines and buckets. During play, buckets differ 1–3 times in 300 frames, when the payload's
+  key-slot draws grow between the join and the epoch (the revision's payload, built for it, removes that). A layout
+  appears that no revision has seen only when retained views expire: the coverage case, whose views a revision's frame
+  leaves to the engine.
 
 ## Implemented foundations
 

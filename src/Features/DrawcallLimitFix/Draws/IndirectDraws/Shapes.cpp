@@ -282,6 +282,60 @@ namespace DCLF
 			revisions[0] = MakeMainShape(in);
 			frames[0] = frameNumber;
 		}
+		// The shadow and occlusion epochs': a shape for each view layout they drew recently, from the last shadow build's payload
+		// (a revision's own, once the payload is a revision's).
+		auto& sp = impl->shadowParity;
+		for (std::size_t kind = 0; kind < 2; ++kind) {
+			auto& revisions = sp.revisions[kind];
+			auto& frames = sp.revisionFrames[kind];
+			revisions[1] = std::move(revisions[0]);
+			frames[1] = frames[0];
+			revisions[0].clear();
+			frames[0] = ~0u;
+		}
+		const auto shadowIndirect = GetShadowIndirectState();
+		if (auto shadow = impl->shadow; sp.known && shadow && shadowIndirect.valid) {
+			auto& payload = impl->shadowPayload;
+			// The slots the layouts name hold every draw the scene can produce, as the epochs reserve them.
+			std::uint32_t slots = 0;
+			for (const auto* recent : { &shadow->recentShapes, &shadow->recentOcclusionShapes })
+				for (const auto& shape : recent->shapes)
+					if (shape)
+						for (const auto& view : shape->views)
+							slots = std::max(slots, view.slot + 1);
+			impl->ReserveShadowSequences(tables, slots, 0);
+			for (std::size_t kind = 0; kind < 2; ++kind) {
+				const bool occlusion = kind == 1;
+				const auto& recent = occlusion ? shadow->recentOcclusionShapes : shadow->recentShapes;
+				std::vector<std::vector<ShadowViewLayout>> seen;
+				for (const auto& shape : recent.shapes) {
+					if (!shape)
+						continue;
+					auto layouts = LayoutOf(*shape);
+					if (std::find(seen.begin(), seen.end(), layouts) != seen.end() ||
+						std::any_of(layouts.begin(), layouts.end(), [&](const auto& a_view) { return a_view.slot >= shadow->sequenceDraws.size(); }))
+						continue;
+					ShadowShapeInputs in;
+					in.resourceHeap = sp.resourceHeap;
+					in.samplerHeap = sp.samplerHeap;
+					in.indirect = shadowIndirect;
+					for (const auto& layout : layouts)
+						in.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), shadowIndirect));
+					in.views = layouts;
+					in.payload = &payload;
+					in.previous = occlusion ? shadow->occlusionPublished : shadow->published;
+					if (!occlusion) {
+						in.latched.copies = ShadowLatchedLayout(*shadow, payload, payload.inputs);
+						ReserveLatchedBlock(shadow->latchedBlock, LatchedBytes(in.latched.copies), host->FrameSlots());
+						if (!in.latched.copies.empty())
+							in.latched.latch = shadow->latchedBlock;
+					}
+					sp.revisions[kind][0].push_back(MakeShadowShape(*shadow, in));
+					seen.push_back(std::move(layouts));
+				}
+				sp.revisionFrames[kind][0] = frameNumber;
+			}
+		}
 		// The reflection's, from the same resources (its faces draw from the main epochs' inputs).
 		auto& reflection = impl->reflection;
 		auto& rp = impl->reflectionParity;
@@ -307,6 +361,63 @@ namespace DCLF
 			}
 			rp.revisions[0] = MakeReflectionShape(*reflection.resources, in);
 			rp.revisionFrames[0] = frameNumber;
+		}
+	}
+
+	void IndirectDraws::Impl::NoteShadowParity(bool a_occlusion, const ShadowFrame& a_frame, const std::vector<LatchedCopy>& a_layout, std::uint32_t a_frameNumber)
+	{
+		auto& p = shadowParity;
+		p.known = true;
+		if (!a_occlusion && a_frame.latched.copies != a_layout)
+			++p.layoutMisses;
+		const std::size_t kind = a_occlusion ? 1 : 0;
+		const auto layouts = LayoutOf(a_frame);
+		for (std::size_t lag = 0; lag < 2; ++lag) {
+			auto& counts = p.counts[kind][lag];
+			const ShadowFrame* revision = nullptr;
+			for (std::size_t i = 0; i < 2 && !revision; ++i)
+				if (p.revisionFrames[kind][i] + lag == a_frameNumber)
+					for (const auto& shape : p.revisions[kind][i])
+						if (LayoutOf(*shape) == layouts)
+							revision = shape.get();
+			if (!revision) {
+				++counts.missing;
+				continue;
+			}
+			++counts.compared;
+			if (revision->SameShape(a_frame)) {
+				++counts.same;
+				continue;
+			}
+			std::uint32_t differences = 0;
+			auto note = [&](ShadowParity::Field a_field, bool a_differs) {
+				if (a_differs)
+					differences |= 1u << a_field;
+			};
+			for (std::size_t v = 0; v < a_frame.views.size(); ++v) {
+				const auto& a = a_frame.views[v];
+				const auto& b = revision->views[v];
+				note(ShadowParity::kCapacity, a.capacity != b.capacity);
+				note(ShadowParity::kBuckets, a.buckets != b.buckets);
+				note(ShadowParity::kPush, a.push != b.push);
+				note(ShadowParity::kRows, a.materialRows != b.materialRows || a.sequenceDraws != b.sequenceDraws);
+			}
+			note(ShadowParity::kLatch, a_frame.latch != revision->latch || a_frame.zeros != revision->zeros || a_frame.viewBlocksOffset != revision->viewBlocksOffset);
+			note(ShadowParity::kLatched, !(a_frame.latched == revision->latched));
+			note(ShadowParity::kHeaps, !SameHandle(a_frame.resourceHeap, revision->resourceHeap) || !SameHandle(a_frame.samplerHeap, revision->samplerHeap));
+			note(ShadowParity::kPipelines, a_frame.indirect.valid != revision->indirect.valid || !SameHandle(a_frame.indirect.layout, revision->indirect.layout) ||
+											   a_frame.indirect.version != revision->indirect.version);
+			std::string fields;
+			for (std::uint32_t f = 0; f < ShadowParity::kFields; ++f)
+				if ((differences >> f) & 1) {
+					++counts.differ[f];
+					fields += fmt::format("{}{}", fields.empty() ? "" : ", ", ShadowParity::kFieldNames[f]);
+				}
+			if (p.logged < 24) {
+				++p.logged;
+				logger::info("[DCLF] shape parity: frame {} {} commit ({} views) against the revision {} frame{} before: {} differ", a_frameNumber, a_occlusion ? "occlusion" : "shadow",
+					a_frame.views.size(), lag ? "made a" : "made the same", lag ? "" : "'s join", fields.empty() ? "(none named)" : fields);
+			}
 		}
 	}
 
