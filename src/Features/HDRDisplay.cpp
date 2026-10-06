@@ -494,7 +494,14 @@ void HDRDisplay::DrawSettings()
 			ImGui::TextUnformatted(T(TKEY("paper_white_tooltip_1"), "203 nits is the ITU BT.2408 reference. Increase for a brighter image."));
 		}
 
-		ImGui::SliderInt(T(TKEY("peak_brightness_nits"), "Peak Brightness (nits)"), reinterpret_cast<int*>(&currentPeakNits), 400, 10000);
+		// Under AutoHDR, show the capped range without overwriting the stored native peak unless edited
+		const bool autoHDRActive = globals::features::effects11.ReplacedTonemapperThisFrame();
+		const uint peakSliderMax = autoHDRActive ? kAutoHDRMaxNits : kHdrPeakNitsMax;
+		int displayedPeakNits = static_cast<int>(std::min(currentPeakNits, peakSliderMax));
+		// Logarithmic spreads the common 600-1000 nit range across more of the native slider
+		if (ImGui::SliderInt(T(TKEY("peak_brightness_nits"), "Peak Brightness (nits)"), &displayedPeakNits, kHdrPeakNitsMin, peakSliderMax, "%d",
+				autoHDRActive ? ImGuiSliderFlags_None : ImGuiSliderFlags_Logarithmic))
+			currentPeakNits = static_cast<uint>(displayedPeakNits);
 		{
 			std::lock_guard<std::mutex> lock(settingsMutex);
 			if (currentPeakNits <= settings.hdrPaperWhite) {
@@ -509,6 +516,9 @@ void HDRDisplay::DrawSettings()
 			ImGui::TextUnformatted(T(TKEY("peak_brightness_tooltip_0"), "Maximum brightness your display can produce."));
 			ImGui::TextUnformatted(T(TKEY("peak_brightness_tooltip_1"), "Set to match your display's actual peak brightness."));
 		}
+
+		if (autoHDRActive)
+			Util::Text::WrappedWarning(T(TKEY("auto_hdr_peak_cap"), "Effects11 AutoHDR is active: peak brightness is capped at %u nits."), kAutoHDRMaxNits);
 
 		ImGui::TextDisabled(T(TKEY("display_reports_max_nits"), "Display reports: %.0f nits max"), cachedDisplayMaxLuminance);
 		if (auto _tt = Util::HoverTooltipWrapper()) {
@@ -1607,8 +1617,8 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	// Without it, ISHDR gamma-encodes its output even in HDR mode.
 	bool isSceneLinear = globals::features::linearLighting.IsLinearLightingActive() && !isMainOrLoadingMenu && !globals::state->IsFlatWorldMapOpen();
 
-	// Use user-specified peak brightness for highlights compression
-	float effectivePeakNits = static_cast<float>(settings.hdrPeakNits);
+	const bool effects11AutoHDR = globals::features::effects11.ReplacedTonemapperThisFrame();
+	float effectivePeakNits = static_cast<float>(effects11AutoHDR ? std::min(settings.hdrPeakNits, kAutoHDRMaxNits) : settings.hdrPeakNits);
 
 	HDRDataCB data{};
 	data.enableHDR = settings.enableHDR ? 1.f : 0.f;
@@ -1622,7 +1632,7 @@ HDRDisplay::HDRDataCB HDRDisplay::BuildHDRData() const
 	data.fgTweenMenuMidAlphaBoost = (ui && ui->IsMenuOpen(RE::TweenMenu::MENU_NAME)) ? 1.f : 0.f;
 	data.previewSDR = 0.f;
 	// Effects11 ENB presets are SDR; Jiaye SDR-only tonemappers opt in via Color Grading AutoHDR.
-	data.applyAutoHDR = (globals::features::effects11.ReplacedTonemapperThisFrame() ||
+	data.applyAutoHDR = (effects11AutoHDR ||
 							globals::features::postProcessing.WantsAutoHDR()) ?
 	                        1.f :
 	                        0.f;

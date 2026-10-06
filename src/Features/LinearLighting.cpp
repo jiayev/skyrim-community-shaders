@@ -8,7 +8,7 @@
 
 #include "Effects11.h"
 #include "Globals.h"
-#include "InverseSquareLighting/Common.h"
+#include "LightLimitFix/Common.h"
 #include "PhysicalSky.h"
 #include "PostProcessing.h"
 #include "PostProcessingMode.h"
@@ -303,7 +303,7 @@ RE::NiColor LinearLighting::LightColorToWorking(const RE::NiLight* light, bool e
 	if (!IsLinearLightingActive())
 		return color;
 	auto* const point = skyrim_cast<RE::NiPointLight*>(const_cast<RE::NiLight*>(light));
-	const bool linear = point && ISLCommon::RuntimeLightDataExt::Get(point)->flags.any(LightLimitFix::LightFlags::Linear);
+	const bool linear = point && LLFCommon::RuntimeLightDataExt::Get(point)->flags.any(LightLimitFix::LightFlags::Linear);
 	if (!linear)
 		Util::ColorSpace::SRGBToLinear(&color.red);
 	if (IsACEScgActive())

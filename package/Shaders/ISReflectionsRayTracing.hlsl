@@ -175,13 +175,16 @@ PS_OUTPUT main(PS_INPUT input)
 		return psout;
 	}
 
-	float4 reflectionPosition = float4(viewPosition + reflectionDirection, 1.0);
-	float4 projReflectionPosition = mul(FrameBuffer::CameraProj, reflectionPosition);
-	projReflectionPosition /= projReflectionPosition.w;
-	projReflectionPosition.xy = projReflectionPosition.xy * float2(0.5, -0.5) + float2(0.5, 0.5);
+	float4 clipReflectionDirection = mul(FrameBuffer::CameraProj, float4(reflectionDirection, 0.0));
+	float3 ndcPosition = float3(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), depth);
+	float3 projReflectionDirection = clipReflectionDirection.xyz - ndcPosition * clipReflectionDirection.w;
+	projReflectionDirection.xy *= float2(0.5, -0.5);
+	float directionLengthSquared = dot(projReflectionDirection, projReflectionDirection);
+	if (directionLengthSquared <= 0.0)
+		return psout;
+	projReflectionDirection *= rsqrt(directionLengthSquared) * rayLength;
 
 	float3 projPosition = float3(uv, depth);
-	float3 projReflectionDirection = normalize(projReflectionPosition.xyz - projPosition) * rayLength;
 
 	psout.Color = GetReflectionColor(projReflectionDirection, projPosition);
 

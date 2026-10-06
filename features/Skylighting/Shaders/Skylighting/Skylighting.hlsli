@@ -27,7 +27,7 @@ namespace Skylighting
 
 	float GetFadeOutFactor(float3 positionMS)
 	{
-		float3 uvw = saturate(positionMS / ARRAY_SIZE + .5);
+		float3 uvw = saturate((positionMS - SharedData::skylightingSettings.PosOffset.xyz) / ARRAY_SIZE + .5);
 		float3 dists = min(uvw, 1 - uvw);
 		float edgeDist = min(dists.x, min(dists.y, dists.z));
 		return saturate(edgeDist * 20);
@@ -91,7 +91,7 @@ namespace Skylighting
 	sh2 Sample(float3 positionMS, float3 normalWS
 #	if defined(SKYLIGHTING_SHADOW_VIS)
 		,
-		out float shadowVisibility
+		out float shadowVisibility, bool sampleShadowVisibility = true
 #	endif
 	)
 	{
@@ -147,8 +147,11 @@ namespace Skylighting
 					shWsum += shW;
 
 #	if defined(SKYLIGHTING_SHADOW_VIS)
-					shadowSum += ShadowVisibilityProbeArray[cellTexID] * triW;
-					shadowWsum += triW;
+					[branch] if (sampleShadowVisibility)
+					{
+						shadowSum += ShadowVisibilityProbeArray[cellTexID] * triW;
+						shadowWsum += triW;
+					}
 #	endif
 				}
 
