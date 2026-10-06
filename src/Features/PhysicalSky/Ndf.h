@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Utils/SceneBlend.h"
+#include "Utils/Serialize.h"
 
 struct TextureManager
 {
@@ -85,7 +87,7 @@ struct NdfGenerationParameters
 	NdfNoiseLayer primary = { .noise = 3, .exponent = 1.4f, .range = { -0.4f, 0.65f, 0.f, 0.65f } };
 	NdfNoiseLayer secondary = { .noise = 1, .range = { -0.2f, 0.8f, 0.f, 0.4f } };
 	NdfNoiseLayer coverageGain = { .range = { -1.f, 1.f, 1.f, 1.f } };
-	NdfNoiseLayer modeling = { .range = { -0.5f, 0.6f, 0.05f, 0.85f } };
+	NdfNoiseLayer modeling = { .exponent = 1.6f, .range = { -0.5f, 0.6f, 0.f, 0.5f } };
 	NdfNoiseLayer modelingGain = { .range = { -1.f, 1.f, 1.f, 1.f } };
 	NdfNoiseLayer heightVariation = { .range = { 0.f, 1.f, 0.f, 0.02f } };
 	float4 heightAuxiliaryRange = { 0.f, 1.f, 0.f, 0.f };
@@ -122,15 +124,19 @@ enum class NdfType : uint32_t
 	Procedural = 1
 };
 
-struct LocalNdfInstance
+enum class LocalNdfBlendMode : uint32_t
 {
-	std::string id;
-	std::string name = "Cloud";
+	Interpolate = 0,
+	Maximum = 1
+};
+
+struct LocalNdfState
+{
 	std::string asset;
 	std::string worldspace;
 	bool enabled = true;
 	float2 center = {};
-	float2 size = { 8000.f, 8000.f };
+	float2 size = { 16384.f, 16384.f };
 	float rotation = 0.f;
 	float altitude = 256.f;
 	float heightSpan = 1792.f;
@@ -139,15 +145,20 @@ struct LocalNdfInstance
 	float heightWeight = 1.f;
 	float feather = 200.f;
 	bool modelingAlpha = true;
-	int priority = 0;
+	LocalNdfBlendMode modelingBlend = LocalNdfBlendMode::Interpolate;
 };
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
+	LocalNdfState,
+	asset, worldspace, enabled, center, size, rotation, altitude, heightSpan,
+	strength, modelingWeight, heightWeight, feather, modelingAlpha, modelingBlend)
 
 struct NdfSettings
 {
 	NdfType type = NdfType::Procedural;
 	TexNdfSettings texture;
 	ProceduralNdfSettings procedural;
-	std::vector<LocalNdfInstance> instances;
+	SceneBlend localCloud;
 	float localTexelSize = 32.f;
 };
 
@@ -177,6 +188,7 @@ struct NdfManager
 	const std::array<ID3D11ShaderResourceView*, 4>& GetNoiseInputs() const { return noiseInputs; }
 	uint64_t GetRevision() const { return generatedRevision; }
 	float2 GetWeatherOffset() const { return generatedData.windOffset; }
+	float4 GetHeightAuxiliaryRange() const { return generatedData.heightAuxiliaryRange; }
 	void DrawPreview();
 
 	static bool IsTextureNdf(ID3D11ShaderResourceView* srv, uint32_t channels);
@@ -207,15 +219,18 @@ struct LowCloudSettings
 {
 	float ndfAltitudeOffset = 256.f;
 	float ndfAltitudeScale = 1792.f;
+	float curvatureRadius = 74.946f;
 	float2 ndfScale = { 16.f, 16.f };
-	float coverageBottomPower = 0.39f;
-	float coverageHeightRange = 0.30f;
-	float bottomDensityPower = 6.f;
-	float bottomDensityWidth = 6.8f;
-	float topExpansion = 1.f;
+	float bottomSpreadScale = (1.f - 0.39f) / 0.75f;
+	float bottomSpreadHeight = 0.30f;
+	float bottomSoftness = 1.f;
+	float bottomSoftnessHeight = 0.68f;
+	float topExpansionScale = 1.f;
 	float densityScale = 0.125f;
 
 	float2 GetNdfAltitudeRangeKm() const;
+	float GetCurvatureRadiusKm() const;
+	float GetShadowBottomKm(float bottomKm, float rangeKm, uint32_t resolution) const;
 };
 
 struct CirrusSettings

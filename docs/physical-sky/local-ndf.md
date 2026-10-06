@@ -9,156 +9,157 @@ procedural or imported global NDF. No cloud DDS is required for ordinary clouds.
 Data/Textures/PhysicalSky/
   LocalNdf/
     MyCloud/
-      Height.dds
+      Height.dds     (required only with nonzero height influence)
       Modeling.dds
       Mask.dds       (optional)
 ```
 
 An asset ID is one folder name using ASCII letters, digits, `_` or `-`. It is not
 a filesystem path. There is no per-asset manifest. Use distinct IDs ignoring case.
-Assets can be reused by multiple instances, and can be installed as ordinary
+Assets can be reused by different saved cloud states, and can be installed as ordinary
 texture mods. Scan Asset Folders discovers directories; Reload Cloud Textures
 reloads selected inputs, retries failed loads, and rescans directories. Loading
 failures show the path and HRESULT in Texture Inputs. A bad local pair skips that
-instance; it never replaces the global procedural fallback with a null texture.
+endpoint; it never replaces the global procedural fallback with a null texture.
 
-| Input          | Channels | Meaning                                              |
-| -------------- | -------- | ---------------------------------------------------- |
-| Height         | RG       | Bottom and top, normalized to 0–1                    |
-| Modeling       | RGB      | Coverage, top profile type, bottom profile type      |
-| Modeling       | A        | Influence mask by default; independent from coverage |
-| Mask, optional | R        | Multiplier on the influence mask                     |
+| Input          | Channels | Meaning                                           |
+| -------------- | -------- | ------------------------------------------------- |
+| Height         | RG       | Bottom and top, normalized to 0–1                 |
+| Modeling       | RGB      | Coverage, top profile type, bottom profile type   |
+| Modeling       | A        | Interpolation/height mask; ignored by RGB Maximum |
+| Mask, optional | R        | Multiplier on the influence mask                  |
 
-Height and Modeling must have matching dimensions and be linear, single 2D
+When height influence is nonzero, Height and Modeling must have matching dimensions and be linear, single 2D
 textures. UNORM/float and suitable BC formats are accepted; sRGB, integer,
 SNORM, arrays, cubemaps and volumes are rejected. Mask dimensions may differ;
 it uses the same normalized UVs. BC5 Height and BC7 Modeling with full mip chains
 are supported directly. RGB-only Modeling has alpha 1. Disable Use Modeling Alpha
 as Mask if A contains unrelated data. An explicitly present but invalid Mask
-rejects the instance instead of silently removing its influence constraint.
+rejects the endpoint instead of silently removing its influence constraint.
+With zero height influence, Height.dds is neither loaded nor validated, and its
+altitude/span do not expand the cloud height envelope. Modeling remains required.
 
 Empty and reversed height intervals are empty cloud, not automatically reordered.
-Transparent influence leaves the underlying field unchanged. Zero coverage with
+In Interpolate mode, transparent influence leaves the underlying field unchanged. Zero coverage with
 nonzero influence clears cloud coverage; coverage must not be reused as a mask.
+Maximum mode never clears a channel: it takes the larger value of the existing
+channel and the weighted source. RGB remains effective even where Modeling A is zero.
+Alpha interpolation preserves the background NDF where alpha is zero; disabling
+alpha at full strength replaces it, including clearing coverage where source R
+is zero. Height influence uses the same alpha, so a taller background interval
+remains outside the mask and transitions toward the source interval at its edge.
+These are control-field operations, not alpha blending of rendered cloud volumes.
+
+Maximum can combine coverage from one input with top/bottom types from another.
+It retains the background height when height influence is zero. Consequently a
+local high top type over a tall background interval can produce a much taller
+cloud than the same source with full height replacement. Maximum does not mean
+a union of independently rendered clouds. An authored overlay needs its
+background weather's heights and shape controls as well as its texture and blend
+mode. The [weather shape controls](noise-contract.md#weather-shape-controls) apply
+to every endpoint; they are not inferred from alpha or supplied per endpoint.
+
 No vertical flip is performed on NDF input. UV (0,0) is the negative local X/Y
 corner, and positive rotation turns local +X toward world +Y.
 
 ## Placement and persistence
 
-Physical Sky > Cloud Map > Local Cloud Instances provides creation, removal,
-asset selection, a worldspace Editor ID, Move to Camera, X/Y position, dimensions,
-rotation, altitude, height span, strength, independent modeling/height influence,
-edge feather and priority. The older Global Generator Overlay remains a tileable
-generator input and is separate from world placement. A newly added instance belongs to the current worldspace.
-Empty or different worldspaces are inactive. Coordinates are in metres, converted
-from game units without camera-relative anchoring. Atlas sampling clamps and never
-repeats the patch outside its finite footprint.
+The Physical Sky menu edits one complete local cloud state: asset ID, worldspace, enabled,
+centre, size, rotation, altitude/span, strength, modeling/height influence,
+modeling alpha, blend mode and edge feather. There are no instance IDs, names,
+priorities or ordered layout lists. The Global Generator Overlay remains a
+separate tileable input to global map generation.
 
-Height is decoded as `altitude + Height.RG * heightSpan`, relative to the same
-atmosphere ground datum as ordinary clouds. It does not inherit the global NDF
-altitude scale. For an authoring convention centered at 0.5, set
-`altitude = desiredCenterHeight - heightSpan / 2`. The texture cannot tell the
-renderer its intended physical scale or datum; these belong to the instance.
-Edge feather is measured inward from the rotated rectangle, in metres.
+Positions and dimensions use metres; altitude is relative to the atmosphere
+base for the selected worldspace. Rotation is around world Z. The cloud remains
+anchored independently of global weather advection. Move to Camera also assigns
+the current worldspace. The stationary Maximum preset retains its existing
+world-origin, 16384 m, zero-height-influence behavior.
 
-Instances have stable IDs; their editable display names do not define identity.
-All properties live in `Physical Sky.cloudMap.instances` in the existing settings
-serialization. Use the existing settings Save action to persist a layout. This is
-configuration persistence, not per-savegame storage. No additional JSON format is
-introduced. Texture bytes remain external assets.
+Physical Sky stores the state under `cloudMap.localCloud`. Its serialized
+value is a `SceneBlend` envelope containing weighted endpoint objects. The
+editor writes one endpoint with weight 1. An empty envelope, or a disabled
+endpoint, supplies no local contribution. Disabled states retain their placement
+for later editing. An old `instances` list is no longer read; existing global
+map settings are retained when loading version 2. The new map schema is version 3.
 
-`PhysicalSky::SetLocalCloudInstances(vector<LocalNdfInstance>)` replaces the layout
-on the render/settings thread. It rejects missing or duplicate IDs, empty
-worldspace IDs and malformed asset IDs. The next feature Reset resolves resources,
-composes the field and publishes its bounds before shared sky constants are built.
-File loading and rendering must not be called from a background controller thread.
-An empty vector clears the layout. Missing assets are reported and skipped while
-valid instances remain usable. This API does not animate a weather transition.
+Open Physical Sky's Clouds tab and expand Local Cloud to edit the resource and
+placement directly. Disabling the cloud preserves its settings while restoring
+global clouds. The state uses the ordinary Physical Sky save/load path; no
+per-asset JSON or Scene Manager is required.
+
+`PhysicalSky::SetLocalCloudState(const LocalNdfState&)` sets a single state
+immediately. This branch does not schedule weather/time transitions for local
+clouds. The weighted envelope remains supported by the renderer and serializer.
 
 ## Composition and renderer contract
 
-Active patches are sorted by ascending priority, then their saved vector order.
-Higher priorities are applied last. The fixed finite atlas encloses all active
-rotated rectangles in the current worldspace, with transparent guard texels. It
-is independent of the camera, global weather repeat scale, wind and frame index.
-It rebuilds only after sanitized placement, inputs, source revision or shader
-changes. Renaming an instance alone does not change cloud density.
-
-For a source mask `a` including alpha, optional Mask and edge feather:
+For mask and feather combined as `m`, source alpha `a` (or 1 when disabled),
+strength `s`, modeling influence `wm`, and height influence `wh`, an endpoint is:
 
 ```text
-wm = a * strength * modelingWeight
-wh = a * strength * heightWeight
-model.rgb = source.rgb * wm + previous.rgb * (1 - wm)
-model.a   = wm + previous.a * (1 - wm)
-height.rg = normalizedAbsoluteHeight * wh + previous.rg * (1 - wh)
-height.b  = wh + previous.b * (1 - wh)
-height.a  = shapingStart * wm + previous.a * (1 - wm)
+Interpolate: F(X) = X * (1 - m*a*s*wm) + source.rgb * m*a*s*wm
+Maximum:     F(X) = max(X, source.rgb * m*s*wm)
+Height:      H(Z) = Z * (1 - m*a*s*wh) + sourceAbsoluteHeight * m*a*s*wh
 ```
 
-Atlas heights are normalized to a published local altitude interval; they are not
-kilometres or game units stored in half precision. The modeling atlas is
-premultiplied by influence, independently from height. At density sampling, height
-RG is decoded to absolute altitude and blended with the global field using B.
-Model RGB blends with the global field using A. The internal shaping-start channel
-uses the same top-type remap as the ordinary generator. No extra cellular noise,
-storm animation or local weather controller is introduced.
+Endpoint weights are independent of these authoring influences. For endpoint
+weights `ti`, rendering evaluates `X + sum(ti * (Fi(X) - X))`. Any missing
+weight retains the global field. In particular Maximum is applied before the
+endpoint blend. Blending maximum floors before applying `max` is not equivalent.
+A failed asset or an endpoint in another worldspace contributes the global field
+at its original weight; other endpoints are not renormalized to hide the failure.
 
-Both atlases are RGBA16_FLOAT, with SRV ping-pong for composition. There are no
-RGBA16 typed UAV reads, which are not guaranteed by the baseline D3D11 contract.
-Source mips follow the atlas footprint; the resulting atlases use bilinear mip 0.
-Requested texel size defaults to 32 m. The maximum dimension is 2048, so very large
-or widely separated layouts increase the effective texel size; Debug reports it.
-Four textures, including two composition scratch textures, cost at most 128 MiB.
-No instance loop is added to each ray sample: within the finite atlas, density
-uses two additional 2D reads regardless of the number of instances.
+The renderer caches three RGBA16_FLOAT texture arrays, one slice per valid
+endpoint: height RG / influence B, modeling additive RGB / opacity A, and maximum
+floor RGB. Height values are normalized to the common altitude envelope, then
+decoded to absolute metres before blending with global heights. They are not
+independently lerped in incompatible encoded ranges. Source mips follow the
+atlas footprint; endpoint slices use bilinear mip 0. No typed UAV reads are used.
 
-Main view, cubemap and shadow volume use the same composed maps and interval.
-The shared ground-shadow constants use the same interval as volume generation.
-Cubemap height reduction continues to constrain the global field, conservatively
-including local heights for rays that intersect the finite atlas in XY. Boundary
-predraw expands neighboring grid cells to the union of global and local height envelopes so a
-small patch cannot fall between grid vertices. This is conservative acceleration,
-not a second density definition; large sparse layouts can reduce its effectiveness.
+The finite atlas encloses the active rotated rectangles with guard texels and
+is independent of the camera. Requested texel size defaults to 32 m, with a
+maximum dimension of 2048. Inputs, placement, source revision, shader reload or
+endpoint membership changes rebuild the cached slices. Weight changes only
+update a small structured buffer. Three arrays replace the old six ping-pong
+textures; memory and density sampling cost scale with active transition endpoints.
+Debug preview copies are allocated only when their resources are inspected.
 
-Local macro shape stays anchored while detail noise can still evolve. Temporal
-motion reduces global advection according to local modeling influence and counts
-the competing detail motion as reconstruction uncertainty. Editing/reloading an
-instance invalidates main and cube history through their existing shared validity
-flag. This is a project approximation for mixed anchored/advection fields, not an
-exact velocity decomposition of superimposed densities.
+Main view, cubemap, shadows and height bounds use the same endpoint weights and
+union altitude envelope. Rays outside the local footprint skip local samples.
+Zero height influence skips Height.dds and does not expand altitude bounds.
+Local model sampling retains the common shear and upstream density conventions.
+Temporal motion weights local anchoring by each endpoint's influence. Local state
+changes and resource rebuilds invalidate cloud history in this standalone branch.
+
+This blends NDF control fields, not separately rendered cloud radiance. Different
+positions crossfade in world space instead of making a patch travel between
+positions. Global coverage-driven height variation is not regenerated from local
+coverage. Source filtering and finite support do not promise bitwise equivalence
+to a fully baked repeating global NDF.
 
 ## Debug and validation
 
-Debug > Cloud Shape > Local NDF Resources shows both composed atlases, the active
-instance count, effective texel size, world origin and altitude interval, plus
-source Height, Modeling/alpha and optional Mask. Existing per-channel, display
-range and mip controls apply. English and Simplified Chinese labels are provided.
+Debug > Cloud Shape > Local NDF Resources shows every active endpoint's weight,
+height, modeling and maximum slices, effective texel size, common rectangle and
+altitude interval. Source Height, Modeling and Mask views remain available.
+Both English and Simplified Chinese labels are provided.
 
-An inspection/staging tool is available:
+Inspect and stage source assets with:
 
 ```powershell
 python tools/validate-local-ndf.py HeightInput.dds ModelingInput.dds --output build/local-ndf-check --stage-root build/local-ndf-test/Data/Textures/PhysicalSky/LocalNdf/MyCloud
 ```
 
-It validates headers, formats, dimensions and mip payload sizes, optionally writes
-channel previews using Pillow/NumPy, and stages byte-identical resources with the
-required names. It does not execute the renderer or compile shaders. Legacy
-uncompressed DDS can be loaded by the runtime but is not decoded by this tool's
-header validator; use DX10 headers for automated inspection.
+Check endpoint composition and optional DDS channel semantics with:
 
-The supplied acceptance pair was validated as 512², ten mips, BC5_UNORM Height and
-BC7_UNORM Modeling. Its alpha footprint covers about 33.27% of the image at the
-0.01 threshold; no reversed or empty height interval was found inside that
-footprint after inspection decoding. The staged fixture is under the ignored
-`build/local-ndf-fixture/Data/Textures/PhysicalSky/LocalNdf/StormBackTest` directory.
-Reference assets are not added to the distributed feature. The channel sheet and
-text report are in `build/local-ndf-fixture/inspection`.
+```powershell
+python tools/test-local-ndf-composition.py --modeling ModelingInput.dds --output build/local-ndf-composition-check
+```
 
-In-game acceptance still needs: no-texture startup; loading the fixture; moving
-and rotating it with wind on/off; overlapping two priorities; zero alpha/strength;
-leaving/reentering the worldspace; saving/reloading settings; replacing/removing
-DDS files and reloading; and agreement between main view, cubemap, ground shadows
-and boundary predraw above/below the global height range. Static and CPU checks
-cannot establish GPU output or frame time. See [transition design](local-ndf-transitions.md)
-for the deferred weather-controller integration.
+These CPU checks cover endpoint weights, identity/empty states, Maximum versus
+Interpolate, independent height decoding, endpoint order and FP16 storage error.
+They do not execute GPU shaders or establish frame time. Game validation should
+cover different placements and altitude ranges, missing assets, worldspace
+changes, saved settings reload, and main/cubemap/shadow agreement. See
+[weighted local states](local-ndf-transitions.md).

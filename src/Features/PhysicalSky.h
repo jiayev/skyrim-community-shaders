@@ -253,7 +253,7 @@ struct PhysicalSky final : public Feature
 		float4 shearAltitude;
 		float4 evolution;
 		float4 frameDimensions;
-		float planetRadius;
+		float cloudCurvatureRadius;
 		float bottomZ;
 		uint gridCellCount;
 		uint cloudFrameIndex;
@@ -326,19 +326,20 @@ struct PhysicalSky final : public Feature
 	bool cloudProfileGenerated = true;
 	bool cloudAdjustmentGenerated = false;
 	TextureManager ndfTexManager{ "Cloud Map" };
-	bool SetLocalCloudInstances(std::vector<LocalNdfInstance> instances);
+	bool SetLocalCloudState(const LocalNdfState& state);
 	NdfManager ndfManager;
 	LocalNdfManager localNdfManager;
 	CirrusMapManager cirrusMapManager;
 
-	// Volumetric cloud StructuredBuffer (compute-only)
-	struct VolumetricCloudSB
+	// Volumetric cloud constants (compute-only)
+	struct VolumetricCloudCB
 	{
 		float rayMarchRange;
 		float shadowVolumeRange;
 		float marchStepScale;
 		uint cloudFrameIndex;
 		float2 rcpFrameDim;
+		uint pad0[2] = {};
 		float3 dirlightDir;
 		float bottomZ;
 		float planetRadius;
@@ -383,27 +384,41 @@ struct PhysicalSky final : public Feature
 		uint historyValid;
 		float shadowVolumeBottom;
 		float shadowVolumeTop;
+		uint pad1 = 0;
 		float2 cloudWindDelta;
 		float2 cloudShapeShear;
 		float4x4 previousViewProj;
 		float3 previousCamera;
+		uint pad2 = 0;
 		float2 previousFrameDim;
+		uint pad3[2] = {};
 		float4 ndfBoundaryRect;
 		float2 cirrusWindOffset;
 		float2 cirrusWindDelta;
 		float2 previousShapeShear;
+		uint pad4[2] = {};
 		float4 cloudEvolution;
 		float cloudEvolutionDelta;
+		uint pad5[3] = {};
 		float4 localNdfRect;
 		float4 localNdfAltitude;
+		float4 localNdfAuxiliary;
+		float cloudCurvatureRadius;
+		float lowCloudTraceBottomAltitude;
+		uint pad6[2] = {};
 	};
-	static_assert(sizeof(VolumetricCloudSB) == 404);
-	eastl::unique_ptr<StructuredBuffer> volCloudSb = nullptr;
+	static_assert(sizeof(VolumetricCloudCB) == 480);
+	static_assert(offsetof(VolumetricCloudCB, dirlightDir) == 32);
+	static_assert(offsetof(VolumetricCloudCB, previousViewProj) == 240);
+	static_assert(offsetof(VolumetricCloudCB, localNdfRect) == 416);
+	static_assert(offsetof(VolumetricCloudCB, cloudCurvatureRadius) == 464);
+	eastl::unique_ptr<ConstantBuffer> volCloudCb = nullptr;
 
 	eastl::unique_ptr<Texture2D> texVolCloudAmbientSH = nullptr;
 	uint32_t volFrameIndex = 0;
 	bool volMainHistoryValid = false;
 	float2 volHistoryFrameDim = {};
+	float volHistoryCurvatureRadius = 0.f;
 	struct CloudWindState
 	{
 		std::array<double, 2> lowOffset = {};
@@ -456,6 +471,7 @@ struct PhysicalSky final : public Feature
 	winrt::com_ptr<ID3D11ComputeShader> csShadowAccumHalfRes = nullptr;
 
 	ID3D11SamplerState* originalPSSamplers[2] = { nullptr, nullptr };
+	winrt::com_ptr<ID3D11Buffer> originalVSSkyFeatureBuffer = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> originalPSGrassSampler = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> originalPSWaterSampler = nullptr;
 	uint32_t originalPSWaterSamplerModifiedBits = 0;

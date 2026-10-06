@@ -236,9 +236,13 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 		ImGui::DragFloat2(T(TKEY("ndf_output_interval"), "Output interval"), &range.z, 0.01f, -16.f, 16.f);
 		ImGui::PopID();
 	};
-	const auto layerControl = [&](const char* label, NdfNoiseLayer& layer, bool power) {
+	const auto layerControl = [&](const char* label, NdfNoiseLayer& layer, bool power, const NdfNoiseLayer* defaults = nullptr) {
 		if (!ImGui::TreeNode(label))
 			return;
+		if (defaults && ImGui::Button(T(TKEY("ndf_reset_response"), "Restore default response"))) {
+			layer.range = defaults->range;
+			layer.exponent = defaults->exponent;
+		}
 		const char* slotNames[] = { "0", "1", "2", "3", T(TKEY("ndf_noise_slot_zero"), "Zero") };
 		int slot = static_cast<int>(std::min(layer.noise, 4u));
 		if (ImGui::Combo(T(TKEY("ndf_noise_slot"), "Noise slot"), &slot, slotNames, IM_ARRAYSIZE(slotNames)))
@@ -253,7 +257,8 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 	layerControl(T(TKEY("ndf_primary_coverage"), "Primary coverage"), parameters.primary, true);
 	layerControl(T(TKEY("ndf_secondary_coverage"), "Secondary coverage"), parameters.secondary, true);
 	layerControl(T(TKEY("ndf_coverage_gain"), "Coverage gain"), parameters.coverageGain, false);
-	layerControl(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true);
+	const auto defaultType = NdfGenerationParameters{}.modeling;
+	layerControl(T(TKEY("ndf_top_type_noise"), "Top type / shared type noise"), parameters.modeling, true, &defaultType);
 	if (ImGui::TreeNode(T(TKEY("ndf_bottom_type"), "Bottom type"))) {
 		rangeControl(T(TKEY("ndf_remap"), "Remap"), parameters.bottomTypeRange);
 		ImGui::SliderFloat(T(TKEY("ndf_exponent"), "Exponent"), &parameters.bottomTypeExponent, 0.01f, 8.f);
@@ -268,7 +273,7 @@ void NdfManager::DrawNdfSettings(NdfSettings& settings, TextureManager& textures
 	layerControl(T(TKEY("ndf_bottom_height_variation"), "Bottom height variation"), parameters.heightVariation, true);
 	ImGui::DragFloat2(T(TKEY("ndf_weather_offset"), "Weather offset (m)"), &parameters.windOffset.x, 1.f);
 	if (ImGui::TreeNode(T(TKEY("ndf_local_influence"), "Global generator overlay"))) {
-		ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field. Use Local Cloud Instances for world placement."));
+		ImGui::TextWrapped("%s", T(TKEY("ndf_overlay_hint"), "This overlay repeats with the generated global field. Use Local Cloud for world placement."));
 		textureChoice(T(TKEY("ndf_height_rg"), "Height RG"), procedural.local.heightPath, 2);
 		textureChoice(T(TKEY("ndf_modeling_rgb"), "Modeling RGB"), procedural.local.modelingPath, 3);
 		textureChoice(T(TKEY("ndf_influence_mask"), "Influence mask R (optional)"), procedural.localMaskPath, 1);

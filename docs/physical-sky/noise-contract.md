@@ -29,7 +29,7 @@ for runtime LUT packing and operation without DDS files.
 
 ## Dimensional profile
 
-NDF inputs remain height RG and coverage/top-type/bottom-type RGB. The spherical
+NDF inputs remain height RG and coverage/top-type/bottom-type RGB. The curved
 layer maps the height pair into physical altitude before noise evaluation. The
 internal height B channel stores the start fraction for bottom density shaping;
 it is generated from top type, including for imported pairs.
@@ -80,40 +80,54 @@ Positive eroded density `e` receives the base response:
 ```text
 boost = 8 * (1-e)^10
 width = 10 - 9 * saturate((bottomDensityWidth-1)/9)
-base = height^0.3 * saturate(height*width)^bottomDensityPower
+profileHeight = saturate((height-shapingStart) / max(1-shapingStart, 1e-6))
+base = profileHeight^0.3 * saturate(profileHeight*width)^bottomDensityPower
 density = (lerp(boost, 1, saturate(height*5)) * e * base)
           ^(0.35 + 0.3*saturate((height-0.25)*4))
 viewExtinction = density * densityScale
 lightDensity = viewExtinction * (1 + 3*height^4)
 ```
 
-Empty eroded samples return exactly zero before the power response. The RG
-height contract has no additional per-column base-raising channel; this path
-uses zero base raising. Storm modifications are not implemented.
+Empty eroded samples return exactly zero before the power response. The internal
+height B channel supplies `shapingStart`, remapped from the composed top type.
+It is separate from the public RG height input. Storm modifications are not implemented.
 
 Each local sunlight probe retains the originating view sample's distance for
 the B/G transition. Ground-shadow queries use distance from the camera. View
 opacity, sunlight occlusion and ground shadows share the same reconstruction.
 
-The current initial values below were copied from a single captured frame.
-They are provisional reproduction values, not calibrated project defaults.
-The capture alone cannot distinguish an authored preset from an interpolated
-weather state; decimal precision is not evidence of either. Rounding these
-values would not establish suitable defaults.
+## Weather shape controls
 
-| Control               | Provisional initial value |
-| --------------------- | ------------------------: |
-| Coverage Bottom Power |               0.390888989 |
-| Coverage Height Range |               0.306688964 |
-| Bottom Density Power  |                         6 |
-| Bottom Density Width  |                6.74295807 |
-| Top Expansion         |                         1 |
-| Density Scale         |                   0.75 /m |
+The editable `cloudLayer.low` values describe the current weather's cloud
+shape. They apply to both global and local NDF samples. They are distinct from
+renderer quality, texture encoding and per-endpoint influence weights. A DDS
+pair does not specify these values and cannot reproduce a weather by itself.
 
-Project defaults need evaluation with the bundled noise and LUTs across low and
-high coverage, multiple top/bottom types, and thin and thick layers. Coverage
-response and base shaping should be assessed before optical density is tuned.
-The captured density scale is not a required setting for existing configurations.
+| Authoring field        | Shader coefficient    | Conversion                     | Initial authoring value |
+| ---------------------- | --------------------- | ------------------------------ | ----------------------: |
+| `bottomSpreadScale`    | `coverageBottomPower` | `1 - 0.75 * bottomSpreadScale` |               0.8133333 |
+| `bottomSpreadHeight`   | `coverageHeightRange` | identity                       |                    0.30 |
+| `bottomSoftness`       | `bottomDensityPower`  | `2 + 4 * bottomSoftness`       |                       1 |
+| `bottomSoftnessHeight` | `bottomDensityWidth`  | `10 * bottomSoftnessHeight`    |                    0.68 |
+| `topExpansionScale`    | `topExpansion`        | identity                       |                       1 |
+| `densityScale`         | `lowDensityScale`     | identity, extinction per metre |                   0.125 |
+
+Spread, softness, softness height and expansion are authored in 0–1. Spread
+height is a local-height fraction, bounded away from zero for its division.
+The initial values retain the renderer's previous coefficients (0.39, 0.30,
+6, 6.8, 1 and 0.125). They are a project preset, not constants of the model.
+The serialized authoring keys replace the old shader-coefficient keys; there
+is no legacy-key migration. The shader constant buffer retains coefficient
+names and layout.
+
+All six controls are stored under `cloudLayer.low` in Physical Sky settings
+and edited directly in the Clouds tab. Authoring values are converted to shader
+coefficients when preparing cloud constants.
+
+Local NDF resources and placement use the complete states described in
+[weighted local states](local-ndf-transitions.md). Endpoint Interpolate and
+Maximum combine NDF controls before endpoint weights blend their results; they
+do not interpolate independent density models.
 
 ## Verification
 

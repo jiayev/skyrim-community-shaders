@@ -201,15 +201,23 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return TrLutUv(r, dot(sunDir, up));
 	}
 
-	// cylinder map
-	float2 SkyViewLutUv(float3 rayDir)
+	float SkyViewHorizonZenith()
 	{
-		float azimuth = atan2(rayDir.y, rayDir.x);
-		float u = azimuth * .5 * RCP_PI;  // sampler wraps around so ok
-		float zenith = asin(rayDir.z);
-		float v = 0.5 - 0.5 * sign(zenith) * sqrt(abs(zenith) * 2 * RCP_PI);
-		v = max(v, 0.01);
-		return frac(float2(u, v));
+		const float radius = SharedData::physSkyData.rPlanet;
+		const float viewRadius = max(SharedData::physSkyData.zCameraPlanet, radius);
+		const float horizonDistance = sqrt(max(0.0, (viewRadius - radius) * (viewRadius + radius)));
+		return acos(clamp(-horizonDistance / viewRadius, -1.0, 0.0));
+	}
+
+	float2 SkyViewLutUv(float3 rayDir, uint lutHeight)
+	{
+		const float u = atan2(rayDir.y, rayDir.x) * 0.5 * RCP_PI;
+		const float zenith = acos(clamp(rayDir.z, -1.0, 1.0));
+		const float horizon = SkyViewHorizonZenith();
+		const float v = zenith <= horizon ?
+		                    0.5 * (1.0 - sqrt(saturate(1.0 - zenith / horizon))) :
+		                    0.5 + 0.5 * sqrt(saturate((zenith - horizon) / (Math::PI - horizon)));
+		return float2(frac(u), (0.5 + v * (lutHeight - 1.0)) / lutHeight);
 	}
 
 	// url: http://www.physics.hmc.edu/faculty/esin/a101/limbdarkening.pdf
@@ -234,11 +242,14 @@ Texture2D<unorm float> TexApShadow : register(t64);
 		return factor;
 	}
 
-	float3 InvSkyViewLutUv(float2 uv)
+	float3 InvSkyViewLutUv(float2 uv, uint lutHeight)
 	{
-		float azimuth = uv.x * 2 * Math::PI;
-		float vm = 1 - 2 * uv.y;
-		float zenith = Math::PI * .5 * (1 - sign(vm) * vm * vm);
+		const float azimuth = uv.x * 2.0 * Math::PI;
+		const float v = saturate((uv.y * lutHeight - 0.5) / (lutHeight - 1.0));
+		const float horizon = SkyViewHorizonZenith();
+		const float vm = 1.0 - 2.0 * v;
+		const float zenith = v <= 0.5 ? horizon * (1.0 - vm * vm) :
+		                                horizon + (Math::PI - horizon) * vm * vm;
 		return SphericalDir(azimuth, zenith);
 	}
 
@@ -363,7 +374,9 @@ Texture2D<unorm float> TexApShadow : register(t64);
 #	ifndef PS_DEFERRED_RSRCS
 	float3 SampleSky(float3 viewDir, float shadow, SamplerState sampSv)
 	{
-		const float2 skyLutUv = SkyViewLutUv(viewDir);
+		uint2 skyDims;
+		TexSvLut.GetDimensions(skyDims.x, skyDims.y);
+		const float2 skyLutUv = SkyViewLutUv(viewDir, skyDims.y);
 		float3 skyColor = TexSvLut.SampleLevel(sampSv, skyLutUv, 0).rgb;
 
 		skyColor *= 1 - shadow;
@@ -487,10 +500,9 @@ Texture2D<unorm float> TexApShadow : register(t64);
 	{
 		SharedData::PhysSkyData data = SharedData::physSkyData;
 
-		const float2 skyLutUv = SkyViewLutUv(viewDir);
-
 		uint3 apDims;
 		TexApLut.GetDimensions(apDims.x, apDims.y, apDims.z);
+		const float2 skyLutUv = SkyViewLutUv(viewDir, apDims.y);
 		const float depth_slice = ApDepthUv(dist, apDims.z);
 		float4 apColor = TexApLut.SampleLevel(sampSv, float3(skyLutUv, depth_slice), 0);
 		apColor.rgb *= 1.0 - saturate(shadow);

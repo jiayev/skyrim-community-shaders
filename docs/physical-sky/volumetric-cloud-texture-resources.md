@@ -24,6 +24,7 @@ the internal and boundary variation of that mass.
 
 | Resource                         |                   Binding | Type                              |
 | -------------------------------- | ------------------------: | --------------------------------- |
+| Cloud parameters                 |                      `b1` | 480-byte constant buffer          |
 | Cloud shape noise                |                      `t4` | linear RGBA 3D                    |
 | Global NDF height / modeling     |               `t5` / `t6` | linear 2D RG / RGB                |
 | AP shadow / sky view             |               `t7` / `t8` | renderer textures                 |
@@ -33,11 +34,13 @@ the internal and boundary variation of that mass.
 | Boundary / global height bounds  |             `t15` / `t16` | generated                         |
 | Main history / traces            | `t17`–`t19` / `t20`–`t22` | transmittance, radiance, metadata |
 | Cube history / traces            | `t23`–`t25` / `t26`–`t28` | transmittance, radiance, metadata |
-| Composed local height / modeling |             `t32` / `t33` | premultiplied RGBA16_FLOAT 2D     |
+| Composed local height / modeling |             `t32` / `t33` | premultiplied RGBA16_FLOAT arrays |
+| Local modeling maximum floor     |                     `t34` | RGB floor, RGBA16_FLOAT array     |
+| Local endpoint weights / mode | `t35` | StructuredBuffer float4 |
 
 Main reconstruction output is read at t29–t31 by the foreground refinement pass.
 See [local NDF assets](local-ndf.md) for finite world-space placement, alpha masks,
-priority composition, persistence and future controller integration. See
+endpoint composition and standalone settings persistence. See
 [cloud sampling](cloud-sampling.md) for temporal scheduling.
 
 The three optional packed assets are loaded from `Data/Textures/PhysicalSky/` and live in
@@ -190,6 +193,11 @@ These envelopes are fallback approximations, not reconstructions of missing LUT
 texels. In particular, retaining only the two original scalar images does not preserve the
 independent top-profile channel of a packed vertical-profile texture. Supplying
 Top G or complete LUT overrides preserves that independently authored profile.
+The original scalar Bottom also contains a zero-density band at low normalized
+heights that is absent from the bundled packed profile. It can suppress low-type
+clouds even when Top G is supplied. These scalar assets are alternative profiles,
+not lossless split versions of the packed LUTs; changing weather type ranges
+therefore does not produce equivalent shapes across the two sets.
 
 Packing produces 64-square linear RGBA float textures with mip chains; the
 adjustment's neutral GB channels are replaced by the noise generator. No new DDS

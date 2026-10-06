@@ -56,6 +56,7 @@ float CloudScatteringPhase(float cosine)
 struct CloudAmbient
 {
 	float3 skyRadiance;
+	float3 groundRadiance;
 	float3 groundVerticalTransmittance;
 };
 
@@ -64,7 +65,11 @@ CloudAmbient MakeCloudAmbient()
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	const float3 groundPoint = float3(0.0, 0.0, info.planetRadius);
 	CloudAmbient ambient;
-	ambient.skyRadiance = SampleCloudAmbientRadiance();
+	const float layerRadius = info.planetRadius + 0.5 * (info.lowestCloudAltitude + info.highestCloudAltitude);
+	const float layerRatio = info.planetRadius / max(layerRadius, 1.0);
+	const float layerCos = sqrt(saturate(1.0 - layerRatio * layerRatio));
+	ambient.skyRadiance = SampleCloudAmbientRadiance() / max(0.5 * (1.0 + layerCos), 1e-4);
+	ambient.groundRadiance = SharedData::physSkyData.groundAlbedo * ambient.skyRadiance;
 	ambient.groundVerticalTransmittance = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, groundPoint, float3(0.0, 0.0, 1.0));
 	return ambient;
 }
@@ -75,18 +80,13 @@ CloudAmbient MakeCloudAmbient()
 float3 CloudAmbientRadiance(float3 planetPos, CloudAmbient ambient)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
-	const float layerRadius = info.planetRadius + 0.5 * (info.lowestCloudAltitude + info.highestCloudAltitude);
-	const float layerRatio = info.planetRadius / max(layerRadius, 1.0);
-	const float layerCos = sqrt(saturate(1.0 - layerRatio * layerRatio));
-	const float3 skyRadiance = ambient.skyRadiance / max(0.5 * (1.0 + layerCos), 1e-4);
-
 	const float radius = max(length(planetPos), info.planetRadius);
 	const float ratio = info.planetRadius / radius;
 	const float cosDisc = sqrt(saturate(1.0 - ratio * ratio));
 	const float3 sampleVerticalTransmittance = SampleAtmosphereLightTr(TexTransmittance, TransmittanceSampler, planetPos, float3(0.0, 0.0, 1.0));
 	const float3 columnTransmittance = min(ambient.groundVerticalTransmittance / max(sampleVerticalTransmittance, 1e-4), 1.0);
-	const float3 groundRadiance = SharedData::physSkyData.groundAlbedo * skyRadiance * columnTransmittance;
-	return 0.5 * (1.0 + cosDisc) * skyRadiance + 0.5 * (1.0 - cosDisc) * groundRadiance;
+	const float3 groundRadiance = ambient.groundRadiance * columnTransmittance;
+	return 0.5 * (1.0 + cosDisc) * ambient.skyRadiance + 0.5 * (1.0 - cosDisc) * groundRadiance;
 }
 
 float2 CloudLightResponse(float cosine, float height, float profile, float lightDensity, float product, float occlusion)

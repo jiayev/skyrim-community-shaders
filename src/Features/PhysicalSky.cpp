@@ -59,25 +59,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	ProceduralNdfSettings,
 	parameters, noise, local, localMaskPath)
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	LocalNdfInstance,
-	id, name, asset, worldspace, enabled, center, size, rotation, altitude, heightSpan,
-	strength, modelingWeight, heightWeight, feather, modelingAlpha, priority)
-
 void to_json(nlohmann::json& j, const NdfSettings& value)
 {
-	j = { { "version", 2 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural }, { "instances", value.instances }, { "localTexelSize", value.localTexelSize } };
+	j = { { "version", 3 }, { "type", value.type }, { "texture", value.texture }, { "procedural", value.procedural }, { "localCloud", value.localCloud }, { "localTexelSize", value.localTexelSize } };
 }
 
 void from_json(const nlohmann::json& j, NdfSettings& value)
 {
 	value = {};
-	if (j.value("version", 0u) != 2u)
+	if (j.value("version", 0u) != 2u && j.value("version", 0u) != 3u)
 		return;
 	value.type = j.value("type", NdfType::Procedural) == NdfType::Texture ? NdfType::Texture : NdfType::Procedural;
 	value.texture = j.value("texture", TexNdfSettings{});
 	value.procedural = j.value("procedural", ProceduralNdfSettings{});
-	value.instances = j.value("instances", std::vector<LocalNdfInstance>{});
+	value.localCloud = j.value("localCloud", SceneBlend{});
 	value.localTexelSize = j.value("localTexelSize", 32.f);
 }
 
@@ -85,12 +80,13 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	LowCloudSettings,
 	ndfAltitudeOffset,
 	ndfAltitudeScale,
+	curvatureRadius,
 	ndfScale,
-	coverageBottomPower,
-	coverageHeightRange,
-	bottomDensityPower,
-	bottomDensityWidth,
-	topExpansion,
+	bottomSpreadScale,
+	bottomSpreadHeight,
+	bottomSoftness,
+	bottomSoftnessHeight,
+	topExpansionScale,
 	densityScale)
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -605,6 +601,8 @@ void PhysicalSky::SettingsVolumetricClouds()
 	ImGui::SeparatorText(T(TKEY("performance"), "Performance"));
 	{
 		ImGui::SliderFloat(T(TKEY("ray_march_range"), "Ray March Range"), &settings.rayMarchRange, 1.f, 64.f, "%.1f km");
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("ray_march_range_desc"), "Maximum low-cloud distance from the camera, including clear space before and between clouds."));
 		ImGui::SliderFloat(T(TKEY("shadow_volume_range"), "Shadow Volume Range"), &settings.shadowVolumeRange, 1.f, 16.f, "%.1f km");
 		ImGui::SliderFloat(T(TKEY("cloud_march_step_scale"), "Cloud March Step Scale"), &settings.marchStepScale, 0.125f, 2.f, "%.3f", ImGuiSliderFlags_Logarithmic);
 	}
@@ -616,11 +614,17 @@ void PhysicalSky::SettingsVolumetricClouds()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("ndf_altitude_encoding"), "Altitude = base altitude + NDF height * height span. Applies to both generated and imported maps."));
 		ImGui::SliderFloat2(T(TKEY("ndf_scale"), "NDF Scale"), &low.ndfScale.x, 1.f, 50.f, "%.2f km");
-		ImGui::SliderFloat(T(TKEY("cloud_coverage_bottom_power"), "Coverage Bottom Power"), &low.coverageBottomPower, 0.01f, 4.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_coverage_height_range"), "Coverage Height Range"), &low.coverageHeightRange, 0.001f, 1.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_power"), "Bottom Density Power"), &low.bottomDensityPower, 0.f, 10.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_bottom_density_width"), "Bottom Density Width"), &low.bottomDensityWidth, 1.f, 10.f, "%.3f");
-		ImGui::SliderFloat(T(TKEY("cloud_top_expansion"), "Top Expansion"), &low.topExpansion, 0.f, 1.f, "%.3f");
+		if (ImGui::SliderFloat(T(TKEY("cloud_curvature_radius"), "Cloud Curvature Radius"), &low.curvatureRadius, 25.f, 10000.f, "%.2f km", ImGuiSliderFlags_Logarithmic))
+			volMainHistoryValid = false;
+		if (auto _tt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloud_curvature_radius_desc"), "Controls how far clouds bend below the horizon. Smaller radii increase the curvature; NDF thickness stays fixed."));
+		ImGui::SeparatorText(T(TKEY("cloud_weather_shape"), "Weather Cloud Shape"));
+		ImGui::TextWrapped("%s", T(TKEY("cloud_weather_shape_desc"), "These weather controls shape both global and local NDF clouds. A local map changes coverage, types and heights; it does not carry a separate density or softness preset."));
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_spread_scale"), "Bottom Spread"), &low.bottomSpreadScale, 0.f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_spread_height"), "Bottom Spread Height"), &low.bottomSpreadHeight, 0.001f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_softness"), "Bottom Softness"), &low.bottomSoftness, 0.f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_bottom_softness_height"), "Bottom Softness Height"), &low.bottomSoftnessHeight, 0.f, 1.f, "%.3f");
+		ImGui::SliderFloat(T(TKEY("cloud_top_expansion"), "Top Expansion"), &low.topExpansionScale, 0.f, 1.f, "%.3f");
 		ImGui::SliderFloat(T(TKEY("cloud_density_scale"), "Density Scale"), &low.densityScale, 0.f, 1.f, "%.3f 1/m");
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cloud_density_scale_desc"), "Converts reconstructed density to extinction per metre. Shared by view opacity, light sampling and cloud shadows. NDF heights stay fixed."));
@@ -993,14 +997,12 @@ bool PhysicalSky::ShadersOK()
 	return baseShadersOk && volumetricShadersOk;
 }
 
-bool PhysicalSky::SetLocalCloudInstances(std::vector<LocalNdfInstance> instances)
+bool PhysicalSky::SetLocalCloudState(const LocalNdfState& state)
 {
-	std::set<std::string> ids;
-	for (const auto& instance : instances) {
-		if (instance.id.empty() || !ids.insert(instance.id).second || instance.worldspace.empty() || LocalNdfManager::AssetPath(instance.asset).empty())
-			return false;
-	}
-	settings.cloudMap.instances = std::move(instances);
+	if (state.enabled && (state.worldspace.empty() || LocalNdfManager::AssetPath(state.asset).empty()))
+		return false;
+	settings.cloudMap.localCloud.states = nlohmann::json::array({ { { "value", state }, { "weight", 1.f } } });
+	volMainHistoryValid = false;
 	return true;
 }
 
@@ -1011,11 +1013,12 @@ void PhysicalSky::Reset()
 		volMainHistoryValid = false;
 	const float2 lowAltitudeRange = settings.cloudLayer.low.GetNdfAltitudeRangeKm();
 	const auto localAltitude = localNdfManager.GetAltitude();
-	const float lowCloudBaseKm = localAltitude.z > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
-	const float lowCloudTopKm = localAltitude.z > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
+	const float lowCloudBaseKm = localAltitude.y > 0.f ? std::min(lowAltitudeRange.x, localAltitude.x * 0.001f) : lowAltitudeRange.x;
+	const float lowCloudTopKm = localAltitude.y > 0.f ? std::max(lowAltitudeRange.y, (localAltitude.x + localAltitude.y) * 0.001f) : lowAltitudeRange.y;
 	const float traceBottomKm = settings.cloudLayer.cirrus.enabled ? std::min(lowCloudBaseKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudBaseKm;
 	const float traceTopKm = settings.cloudLayer.cirrus.enabled ? std::max(lowCloudTopKm, settings.cloudLayer.cirrus.GetAltitudeKm()) : lowCloudTopKm;
-	const float lowCloudThicknessKm = lowCloudTopKm - lowCloudBaseKm;
+	const float shadowBottomKm = settings.cloudLayer.low.GetShadowBottomKm(lowCloudBaseKm, settings.shadowVolumeRange, kShadowVolW);
+	const float lowCloudThicknessKm = lowCloudTopKm - shadowBottomKm;
 	auto& skySync = globals::features::skySync;
 	skySync.lightColors = std::nullopt;
 
@@ -1111,7 +1114,7 @@ void PhysicalSky::Reset()
 		.volCloudScatter = float3(std::max(settings.cloudLayer.lighting.sunExtinction, 0.f) * Util::Units::GAME_UNIT_TO_M),
 		.volCloudUseSun = 0u,
 		.volCloudAbsorption = float3(0.f),
-		.volCloudLowBottom = lowCloudBaseKm / Util::Units::GAME_UNIT_TO_KM,
+		.volCloudLowBottom = shadowBottomKm / Util::Units::GAME_UNIT_TO_KM,
 		.volCloudLowThickness = lowCloudThicknessKm / Util::Units::GAME_UNIT_TO_KM,
 		.lightSkyStatics = settings.lightSkyStatics ? 1u : 0u,
 		.skyStaticsBrightness = settings.skyStaticsBrightness,
@@ -1398,6 +1401,9 @@ void PhysicalSky::ModifySky()
 {
 	auto context = globals::d3d::context;
 	context->PSGetSamplers(3, 2, originalPSSamplers);
+	context->VSGetConstantBuffers(6, 1, originalVSSkyFeatureBuffer.put());
+	auto* featureBuffer = globals::state->featureDataCB->CB();
+	context->VSSetConstantBuffers(6, 1, &featureBuffer);
 
 	auto samplers = std::array{ sampTr.get(), sampSv.get() };
 	context->PSSetSamplers(3, static_cast<UINT>(samplers.size()), samplers.data());
@@ -1407,6 +1413,9 @@ void PhysicalSky::RestoreSamplers()
 {
 	auto context = globals::d3d::context;
 	context->PSSetSamplers(3, 2, originalPSSamplers);
+	auto* featureBuffer = originalVSSkyFeatureBuffer.get();
+	context->VSSetConstantBuffers(6, 1, &featureBuffer);
+	originalVSSkyFeatureBuffer = nullptr;
 }
 
 void PhysicalSky::ModifyGrass()

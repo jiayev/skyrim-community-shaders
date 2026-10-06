@@ -12,6 +12,7 @@
 #define PS_NO_RSRCS
 #define OMIT_PS_NAMESPACE
 #include "Common/Spherical Harmonics/SphericalHarmonics.hlsli"
+#include "PhysicalSky/CloudGeometry.hlsli"
 #include "PhysicalSky/CloudMotion.hlsli"
 #include "PhysicalSky/CloudNoise.hlsli"
 #include "PhysicalSky/Common.hlsli"
@@ -102,17 +103,23 @@ struct VolumetricCloudData
 	float cloudEvolutionDelta;
 	float4 localNdfRect;
 	float4 localNdfAltitude;
+	float4 localNdfAuxiliary;
+	float cloudCurvatureRadius;
+	float lowCloudTraceBottomAltitude;
 };
 
 CloudLayer GetCloudLayer(VolumetricCloudData info)
 {
 	CloudLayer cloud;
-	cloud.lowestAltitude = info.shadowVolumeBottom;
+	cloud.lowestAltitude = info.lowCloudTraceBottomAltitude;
 	cloud.highestAltitude = info.shadowVolumeTop;
 	return cloud;
 }
 
-StructuredBuffer<VolumetricCloudData> VolumetricCloudBuffer : register(t0);
+cbuffer VolumetricCloudConstants : register(b1)
+{
+	VolumetricCloudData VolumetricCloudBuffer[1];
+};
 Texture2D<float4> TexTransmittance : register(t1);
 Texture3D<float4> TexAerialPerspective : register(t2);
 
@@ -144,8 +151,10 @@ TextureCube<float4> TexCubeHistoryAux : register(t25);
 TextureCube<float> TexCubeTraceTr : register(t26);
 TextureCube<float4> TexCubeTraceLum : register(t27);
 TextureCube<float4> TexCubeTraceAux : register(t28);
-Texture2D<float4> TexLocalNdfHeight : register(t32);
-Texture2D<float4> TexLocalNdfModeling : register(t33);
+Texture2DArray<float4> TexLocalNdfHeight : register(t32);
+Texture2DArray<float4> TexLocalNdfModeling : register(t33);
+Texture2DArray<float4> TexLocalNdfMaximum : register(t34);
+StructuredBuffer<float4> LocalNdfWeights : register(t35);
 
 float2 LocalNdfUV(float2 worldXY, VolumetricCloudData info)
 {
@@ -157,23 +166,89 @@ bool InLocalNdf(float2 uv, VolumetricCloudData info)
 	return info.localNdfAltitude.z > 0.0 && all(uv >= 0.0) && all(uv <= 1.0);
 }
 
-float4 LocalNdfModel(float2 worldXY, VolumetricCloudData info)
+struct LocalNdfModelSample
 {
-	const float2 uv = LocalNdfUV(worldXY, info);
-	[branch] if (!InLocalNdf(uv, info)) return 0.0;
-	return TexLocalNdfModeling.SampleLevel(TransmittanceSampler, uv, 0);
+	float2 uv;
+	uint count;
+};
+
+LocalNdfModelSample SampleLocalNdfModel(float2 worldXY, VolumetricCloudData info)
+{
+	LocalNdfModelSample value;
+	value.uv = LocalNdfUV(worldXY, info);
+	value.count = InLocalNdf(value.uv, info) ? (uint)info.localNdfAltitude.w : 0u;
+	return value;
 }
 
-float3 LocalNdfHeight(float3 height, float2 worldXY, float modelingWeight, VolumetricCloudData info)
+float3 ApplyLocalNdfModel(float3 model, LocalNdfModelSample local)
+{
+	float3 result = model;
+	[loop] for (uint i = 0u; i < local.count; ++i)
+	{
+		const float4 endpoint = LocalNdfWeights[i];
+		float3 shaped;
+		[branch] if (endpoint.y > 0.0)
+			shaped = max(model, TexLocalNdfMaximum.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0).rgb);
+		else
+		{
+			const float4 layer = TexLocalNdfModeling.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0);
+			shaped = model * (1.0 - layer.a) + layer.rgb;
+		}
+		result += endpoint.x * (shaped - model);
+	}
+	return saturate(result);
+}
+
+bool HasLocalNdfInfluence(LocalNdfModelSample local)
+{
+	[loop] for (uint i = 0u; i < local.count; ++i)
+	{
+		[branch] if (LocalNdfWeights[i].y > 0.0)
+		{
+			if (any(TexLocalNdfMaximum.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0).rgb > 0.0))
+				return true;
+		}
+		else if (TexLocalNdfModeling.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0).a > 0.0) return true;
+	}
+	return false;
+}
+
+float3 LocalNdfHeight(float3 height, float2 worldXY, VolumetricCloudData info)
 {
 	const float2 uv = LocalNdfUV(worldXY, info);
-	[branch] if (InLocalNdf(uv, info))
+	[branch] if (info.localNdfAltitude.y > 0.0 && InLocalNdf(uv, info))
 	{
-		const float4 local = TexLocalNdfHeight.SampleLevel(TransmittanceSampler, uv, 0);
+		float4 local = 0.0;
+		[loop] for (uint i = 0u; i < (uint)info.localNdfAltitude.w; ++i)
+			local += LocalNdfWeights[i].x * TexLocalNdfHeight.SampleLevel(TransmittanceSampler, float3(uv, i), 0);
 		height.xy = height.xy * (1.0 - local.b) + (local.rg * info.localNdfAltitude.y + info.localNdfAltitude.x * local.b) * GAME_UNITS_PER_METER;
-		height.z = height.z * (1.0 - modelingWeight) + local.a;
 	}
 	return height;
+}
+
+float LocalNdfMotionWeight(float2 worldXY, float height, VolumetricCloudData info)
+{
+	const float2 shear = info.cloudShapeShear * smoothstep(0.0, 1.0, height);
+	const LocalNdfModelSample local = SampleLocalNdfModel(worldXY - shear, info);
+	if (local.count == 0u)
+		return 0.0;
+	float coverage = -1.0;
+	float weight = 0.0;
+	[loop] for (uint i = 0u; i < local.count; ++i)
+	{
+		const float4 endpoint = LocalNdfWeights[i];
+		[branch] if (endpoint.y > 0.0)
+		{
+			if (coverage < 0.0) {
+				const float2 field = CloudFieldPosition((worldXY - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy) * GAME_UNITS_PER_METER;
+				coverage = saturate(TexCloudModeling.SampleLevel(TileableSampler, (field - shear) * info.lowNdfFrequency + 0.5, 0).r);
+			}
+			const float floor = TexLocalNdfMaximum.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0).r;
+			weight += endpoint.x * (floor > coverage ? 1.0 : 0.0);
+		}
+		else weight += endpoint.x * TexLocalNdfModeling.SampleLevel(TransmittanceSampler, float3(local.uv, i), 0).a;
+	}
+	return saturate(weight);
 }
 
 bool LocalNdfIntersectsRay(float2 origin, float2 direction, VolumetricCloudData info)
@@ -182,15 +257,18 @@ bool LocalNdfIntersectsRay(float2 origin, float2 direction, VolumetricCloudData 
 		return false;
 	const float2 uv = LocalNdfUV(origin, info);
 	const float2 velocity = direction * GAME_UNIT_TO_M * info.localNdfRect.zw;
+	const float2 shear = info.cloudShapeShear * 61.0 * GAME_UNIT_TO_M * info.localNdfRect.zw;
+	const float2 lower = min(shear, 0.0);
+	const float2 upper = 1.0 + max(shear, 0.0);
 	float enter = 0.0;
 	float rayExit = 3.402823466e+38;
 	[unroll] for (uint axis = 0u; axis < 2u; ++axis)
 	{
 		if (abs(velocity[axis]) < 1e-20) {
-			if (uv[axis] < 0.0 || uv[axis] > 1.0)
+			if (uv[axis] < lower[axis] || uv[axis] > upper[axis])
 				return false;
 		} else {
-			const float2 interval = (float2(0.0, 1.0) - uv[axis]) / velocity[axis];
+			const float2 interval = (float2(lower[axis], upper[axis]) - uv[axis]) / velocity[axis];
 			enter = max(enter, min(interval.x, interval.y));
 			rayExit = min(rayExit, max(interval.x, interval.y));
 		}
@@ -258,7 +336,7 @@ float4 SampleCloudAerialPerspective(float3 viewDir, float distance, float shadow
 	if (any(apDims == 0u))
 		return float4(0.0, 0.0, 0.0, 1.0);
 	const float depthSlice = ApDepthUv(distance, apDims.z);
-	const float3 apUv = float3(SkyViewLutUv(viewDir), depthSlice);
+	const float3 apUv = float3(SkyViewLutUv(viewDir, apDims.y), depthSlice);
 	float4 ap = TexAerialPerspective.SampleLevel(SkyViewSampler, apUv, 0);
 	ap.rgb *= 1.0 - saturate(shadow);
 	ap.rgb *= data.apLumMix;
@@ -277,7 +355,9 @@ groupshared sh2 gCloudAmbientSHB[256];
 	const float3 rayDir = float3(shSampleDir.x, shSampleDir.z, shSampleDir.y);
 	const float3 cloudCenterPlanet = float3(0.0, 0.0, info.planetRadius + 0.5 * (info.lowestCloudAltitude + info.highestCloudAltitude));
 	const float planetVisibility = RayIntersectSphereCentered(cloudCenterPlanet, rayDir, info.planetRadius) > 0.0 ? 0.0 : 1.0;
-	const float3 skyColor = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(rayDir), 0).rgb * planetVisibility;
+	uint2 skyDims;
+	TexSkyView.GetDimensions(skyDims.x, skyDims.y);
+	const float3 skyColor = TexSkyView.SampleLevel(SkyViewSampler, SkyViewLutUv(rayDir, skyDims.y), 0).rgb * planetVisibility;
 	const float shFactor = 4.0 * Math::PI / 256.0;
 	const sh2 sh = SphericalHarmonics::Evaluate(shSampleDir);
 
@@ -318,16 +398,15 @@ CloudRaySegments GetCloudRaySegments(float3 origin, float3 dir, float bottomAlti
 	CloudRaySegments segments = (CloudRaySegments)0;
 	if (topAltitude <= bottomAltitude)
 		return segments;
-	const float2 outer = IntersectSpherePair(origin, dir, info.planetRadius + topAltitude);
+	const float2 outer = IntersectCloudBelow(origin, dir, topAltitude, info.cloudCurvatureRadius);
 	const float entry = max(outer.x, 50.0 * GAME_UNITS_PER_METER);
-	const float exit = outer.y;
+	const float exit = min(outer.y, info.rayMarchRange);
 	if (exit <= entry)
 		return segments;
 
-	const float2 inner = IntersectSpherePair(origin, dir, info.planetRadius + bottomAltitude);
+	const float2 inner = IntersectCloudBelow(origin, dir, bottomAltitude, info.cloudCurvatureRadius);
 	segments.nearSegment = float2(entry, exit);
-	// Subtract the inner sphere. A grazing ray can cross the shell twice without
-	// hitting the planet; keep both pieces and jump over the clear gap between them.
+	// A grazing ray can cross the layer twice; skip the clear gap between crossings.
 	if (inner.y > entry && inner.x < exit) {
 		segments.nearSegment.y = clamp(inner.x, entry, exit);
 		segments.farSegment = float2(clamp(inner.y, entry, exit), exit);
@@ -336,11 +415,8 @@ CloudRaySegments GetCloudRaySegments(float3 origin, float3 dir, float bottomAlti
 			segments.farSegment = 0.0;
 		}
 	}
-	segments.nearLength = min(segments.nearSegment.y - segments.nearSegment.x, info.rayMarchRange);
-	segments.nearSegment.y = segments.nearSegment.x + segments.nearLength;
-	const float farLength = min(segments.farSegment.y - segments.farSegment.x, info.rayMarchRange - segments.nearLength);
-	segments.farSegment.y = segments.farSegment.x + farLength;
-	segments.length = segments.nearLength + farLength;
+	segments.nearLength = segments.nearSegment.y - segments.nearSegment.x;
+	segments.length = segments.nearLength + segments.farSegment.y - segments.farSegment.x;
 	return segments;
 }
 
@@ -400,28 +476,38 @@ void initNDFInfo(out NDFInfo ndf)
 	ndf.bottom_type = 0.0;
 }
 
-NDFInfo sampleNDF(float2 worldXY, float2 anchoredXY, float planetHeight)
+NDFInfo sampleNDF(float2 worldXY, float2 anchoredXY, float profileAltitude)
 {
 	const VolumetricCloudData info = VolumetricCloudBuffer[0];
 	NDFInfo ndf;
 	initNDFInfo(ndf);
 	float3 heights = saturate(TexCloudHeight.SampleLevel(TileableSampler, LowNdfUV(worldXY, info), 0).rgb);
 	heights.xy = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, heights.xy);
-	const float4 localModel = LocalNdfModel(anchoredXY, info);
-	heights = LocalNdfHeight(heights, anchoredXY, localModel.a, info);
-	ndf.shaping_start = heights.b;
+	heights = LocalNdfHeight(heights, anchoredXY, info);
 	const float minAltitude = heights.r;
 	const float maxAltitude = heights.g;
-	if (maxAltitude <= minAltitude || planetHeight <= minAltitude || planetHeight >= maxAltitude)
+	if (maxAltitude <= minAltitude || profileAltitude <= minAltitude || profileAltitude >= maxAltitude)
 		return ndf;
-	ndf.height_fraction = saturate((planetHeight - minAltitude) / (maxAltitude - minAltitude));
+	ndf.shaping_start = heights.b;
+	const float4 range = info.localNdfAuxiliary;
+	[branch] if (range.z != range.w && InLocalNdf(LocalNdfUV(anchoredXY, info), info))
+	{
+		const LocalNdfModelSample local = SampleLocalNdfModel(anchoredXY, info);
+		if (HasLocalNdfInfluence(local)) {
+			const float3 baseModel = saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(worldXY, info), 0));
+			const float topType = ApplyLocalNdfModel(baseModel, local).g;
+			ndf.shaping_start = saturate(lerp(range.z, range.w, saturate((topType - range.x) / (range.y - range.x))));
+		}
+	}
+	ndf.height_fraction = saturate((profileAltitude - minAltitude) / (maxAltitude - minAltitude));
 	const float2 modelingXY = worldXY - info.cloudShapeShear * smoothstep(0.0, 1.0, ndf.height_fraction);
 	float3 model = saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(modelingXY, info), 0));
 	float3 upstream = model;
 	if (any(info.cloudShapeShear != 0.0))
 		upstream = saturate(TexCloudModeling.SampleLevel(TileableSampler, LowNdfUV(modelingXY - info.cloudShapeShear * 60.0, info), 0));
-	model = model * (1.0 - localModel.a) + localModel.rgb;
-	upstream = upstream * (1.0 - localModel.a) + localModel.rgb;
+	const float2 anchoredModelXY = anchoredXY - info.cloudShapeShear * smoothstep(0.0, 1.0, ndf.height_fraction);
+	model = ApplyLocalNdfModel(model, SampleLocalNdfModel(anchoredModelXY, info));
+	upstream = any(info.cloudShapeShear != 0.0) ? ApplyLocalNdfModel(upstream, SampleLocalNdfModel(anchoredModelXY - info.cloudShapeShear * 60.0, info)) : model;
 	const float shearBlend = smoothstep(0.0, 1.0, saturate((ndf.height_fraction - 0.1) * 1.5384616));
 	ndf.coverage = lerp(model.r, max(model.r, upstream.r), shearBlend);
 	if (ndf.coverage < 1e-8)
@@ -471,19 +557,24 @@ float sampleCloudDensity(
 	density_context.noise_coordinates = 0.0;
 	density_context.eye_distance = 0.0;
 
-	const float planetHeight = length(pos + float3(-FrameBuffer::CameraPosAdjust.xy, info.planetRadius)) - info.planetRadius;
-	if (planetHeight < cloud.lowestAltitude || planetHeight > cloud.highestAltitude)
+	const float profileAltitude = CloudProfileAltitude(pos, FrameBuffer::CameraPosAdjust.xy, info.cloudCurvatureRadius);
+	if (profileAltitude < cloud.lowestAltitude || profileAltitude > cloud.highestAltitude)
 		return 0.0;
 
 	const float2 fieldMeters = CloudFieldPosition((pos.xy - info.noiseWindOffset) * GAME_UNIT_TO_M, info.cloudEvolution.xy);
-	density_context.ndf = sampleNDF(fieldMeters * GAME_UNITS_PER_METER, pos.xy, planetHeight);
+	density_context.ndf = sampleNDF(fieldMeters * GAME_UNITS_PER_METER, pos.xy, profileAltitude);
 	if (!density_context.ndf.in_layer || density_context.ndf.dimension_profile <= 0.0)
 		return 0;
 
 	const float bottomFade = saturate((density_context.ndf.height_fraction - 0.02) * 33.333332);
 	const float2 xy = fieldMeters;
-	const float2 displacement = TexCloudAdjustmentLUT.SampleLevel(TileableSampler, xy * 0.004, 0).gb;
-	density_context.noise_coordinates = float3(xy * 0.0043545123 + (displacement * 2.0 - 1.0) * (0.125 - bottomFade * 0.125),
+	float2 noiseXY = xy * 0.0043545123;
+	[branch] if (bottomFade < 1.0)
+	{
+		const float2 displacement = TexCloudAdjustmentLUT.SampleLevel(TileableSampler, xy * 0.004, 0).gb;
+		noiseXY += (displacement * 2.0 - 1.0) * (0.125 - bottomFade * 0.125);
+	}
+	density_context.noise_coordinates = float3(noiseXY,
 		(pos.z * GAME_UNIT_TO_M - 20.0 + bottomFade * 10.0) * 0.0034834063 - info.cloudEvolution.x * (1.0 / 6.283185307179586));
 	density_context.eye_distance = viewDistance;
 	return sampleCloudDensityFromContext(density_context, mipBias, minimumMip);
@@ -588,20 +679,21 @@ VolumetricCloudResult RenderVolumetricCloudRay(float3 direction, float3 eye, flo
 		sceneLimited = true;
 	}
 	const bool localRay = LocalNdfIntersectsRay(eye.xy, direction.xy, info);
-	const float traceBottom = localRay ? info.shadowVolumeBottom : info.lowCloudBaseAltitude;
+	const float traceBottom = localRay ? info.lowCloudTraceBottomAltitude : info.lowCloudBaseAltitude;
 	const float traceTop = localRay ? info.lowCloudTraceTopAltitude : info.lowCloudTopAltitude;
-	const CloudRaySegments bounds = GetCloudRaySegments(planetEye, direction, traceBottom, traceTop, info);
+	const float3 cloudEye = float3(eye.xy - FrameBuffer::CameraPosAdjust.xy, eye.z);
+	const CloudRaySegments bounds = GetCloudRaySegments(cloudEye, direction, traceBottom, traceTop, info);
 	CloudRaySegments low = bounds;
 	if (angularFootprint > 0.0) {
 		const float2 heights = TexCloudHeightBounds[uint2(0, 0)];
 		float2 altitude = lerp(info.lowCloudBaseAltitude, info.lowCloudTopAltitude, heights);
-		if (localRay) {
+		if (localRay && info.localNdfAltitude.y > 0.0) {
 			altitude.x = min(altitude.x, info.localNdfAltitude.x * GAME_UNITS_PER_METER);
 			altitude.y = max(altitude.y, (info.localNdfAltitude.x + info.localNdfAltitude.y) * GAME_UNITS_PER_METER);
 		}
-		// Enclose bilinear NDF samples, including roundoff at planetary coordinates.
-		const float padding = max(GAME_UNITS_PER_METER, info.planetRadius * 4.7683716e-7);
-		low = GetCloudRaySegments(planetEye, direction, max(traceBottom, altitude.x - padding),
+		// Enclose bilinear NDF samples.
+		const float padding = GAME_UNITS_PER_METER;
+		low = GetCloudRaySegments(cloudEye, direction, max(traceBottom, altitude.x - padding),
 			min(traceTop, altitude.y + padding), info);
 		const float end = bounds.farSegment.y > bounds.farSegment.x ? bounds.farSegment.y : bounds.nearSegment.y;
 		low.nearSegment.y = max(low.nearSegment.x, min(low.nearSegment.y, end));

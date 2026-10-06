@@ -59,13 +59,17 @@ float3 CloudSampleDisplacement(float3 ray, float4 metadata, float opacity, out f
 	const float2 fieldDelta = CloudPreviousFieldOffset(position, -shearChange * GAME_UNIT_TO_M, info.cloudEvolution);
 	float3 lowDisplacement = float3(info.cloudWindDelta - fieldDelta * GAME_UNITS_PER_METER,
 		info.cloudEvolutionDelta * (4.0 * height * (1.0 - height)));
-	const float localWeight = LocalNdfModel(FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth, info).a;
+	const float localWeight = LocalNdfMotionWeight(FrameBuffer::CameraPosAdjust.xy + ray.xy * lowDepth, height, info);
 	const float localMotionUncertainty = length(lowDisplacement) * localWeight;
 	lowDisplacement *= 1.0 - localWeight;
+	const float2 currentRelativeXY = ray.xy * lowDepth;
+	const float2 previousRelativeXY = currentRelativeXY + FrameBuffer::CameraPosAdjust.xy - info.previousCamera.xy - lowDisplacement.xy;
+	const float curvatureDisplacement = dot(previousRelativeXY - currentRelativeXY, previousRelativeXY + currentRelativeXY) / info.cloudCurvatureRadius;
+	lowDisplacement.z += curvatureDisplacement;
 	const float3 highDisplacement = float3(info.cirrusWindDelta, 0);
 	const float3 disagreement = lowDisplacement - highDisplacement;
 	const float transverseDisagreement = length(disagreement - ray * dot(disagreement, ray));
-	uncertainty = (1.0 - cirrusFraction) * (abs(info.cloudEvolutionDelta) + length(shearChange) * 60.0 + localMotionUncertainty) +
+	uncertainty = (1.0 - cirrusFraction) * (abs(info.cloudEvolutionDelta) + abs(curvatureDisplacement) + length(shearChange) * 60.0 + localMotionUncertainty) +
 	              cirrusFraction * (1.0 - cirrusFraction) * transverseDisagreement;
 	return lerp(lowDisplacement, highDisplacement, cirrusFraction);
 }
