@@ -3,11 +3,14 @@
 
 namespace DCLF::Draws
 {
-	void UpdateBones(BonesStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, BonesOut& a_out)
+	void UpdateBones(BonesStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation, std::uint32_t a_region,
+		BonesOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateBones");
 		a_out = {};
-		a_out.capacity = a_tables.BoneCapacity();
+		// Laid out by the buffer's region, not the tables' capacity: the tables' growth moves nothing until the buffer's is adopted.
+		a_out.capacity = a_region;
+		a_out.tableRows = a_tables.BoneCapacity();
 		a_out.extraRows = static_cast<std::uint32_t>(a_tables.extraRows.size() / 4);
 		a_out.bones = a_tables.bones.data();
 		a_out.previous = a_tables.previousBones.data();
@@ -38,14 +41,14 @@ namespace DCLF::Draws
 	}
 
 	void UpdateObjectRecords(ObjectRecordStore* a_store, std::uint64_t a_uploaded, const SceneStore::Tables& a_tables, std::uint32_t a_generation,
-		std::uint32_t a_frame, ObjectRecordsOut& a_out)
+		std::uint32_t a_frame, std::uint32_t a_boneRegion, ObjectRecordsOut& a_out)
 	{
 		ZoneScopedN("CS.DCLF.Build.UpdateObjectRecords");
 		const std::size_t count = a_tables.objects.size();
 		if (!a_store) {
 			auto records = std::make_shared<std::vector<BindlessObject>>(count);
 			for (std::size_t r = 0; r < count; ++r)
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, (*records)[r]);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, (*records)[r], a_boneRegion);
 			a_out = {};
 			a_out.elements = std::move(records);
 			return;
@@ -56,12 +59,13 @@ namespace DCLF::Draws
 		++s.updates;
 		s.records.BeginBuild(a_uploaded);
 		TracyCZoneN(updateRecordsZone, "CS.DCLF.Build.Objects.ApplyChanges", true);
-		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count) {
+		if (!s.cursor.Continues(a_tables.changeLog, a_generation) || s.records.Size() > count || s.boneRegion != a_boneRegion) {
+			s.boneRegion = a_boneRegion;
 			// Every record again: the first build, new tables, or a log this store fell behind.
 			auto& records = s.records.Mutable();
 			records.resize(count);
 			for (std::size_t r = 0; r < count; ++r)
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r], a_boneRegion);
 			s.records.Resync();
 			s.cursor.Restart(a_generation);
 			++s.resyncs;
@@ -72,7 +76,7 @@ namespace DCLF::Draws
 				const auto first = records.size();
 				records.resize(count);
 				for (std::size_t r = first; r < count; ++r) {
-					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r]);
+					BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, records[r], a_boneRegion);
 					s.records.Mark(r);
 				}
 			}
@@ -92,7 +96,7 @@ namespace DCLF::Draws
 				// Every event reads the final immutable table row, not an intermediate value.
 				if (!(change.causes & kObjectRecordCauses) || change.slot >= count || (reuseKeptStorage && !s.changedObjects.Add(change.slot)))
 					continue;
-				BuildObjectRecord(a_tables, change.slot, SceneStore::kMainPassRenderFlags, fresh);
+				BuildObjectRecord(a_tables, change.slot, SceneStore::kMainPassRenderFlags, fresh, a_boneRegion);
 				s.rewritten += s.records.Set(change.slot, fresh) ? 1u : 0u;
 			}
 		}
@@ -103,7 +107,7 @@ namespace DCLF::Draws
 			BindlessObject fresh;
 			const auto& records = s.records.Get();
 			for (std::size_t r = 0; r < count; ++r) {
-				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, fresh);
+				BuildObjectRecord(a_tables, static_cast<std::uint32_t>(r), SceneStore::kMainPassRenderFlags, fresh, a_boneRegion);
 				s.parity.Check(std::memcmp(&fresh, &records[r], sizeof(fresh)) == 0, [&] {
 					const auto* geometry = r < a_tables.objectGeometry.size() ? a_tables.objectGeometry[r] : nullptr;
 					return fmt::format("record {} '{}'", r, geometry && geometry->name.c_str() ? geometry->name.c_str() : "?");

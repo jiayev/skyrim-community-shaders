@@ -697,6 +697,126 @@ revision naming it is selected. The shared pieces:
 - In game (r3cg1): `[ORG] Queues: graphics 0:0, compute 2:0, upload 1:1`; the graph's copy queue stays 0:0; every epoch from the
   revision in steady play, no errors.
 
+**G2, first slice: the main rows' growth as graph work** (2026-10-06, r3cg4). The main material and pipeline rows
+(`GrowableRows`, `ReserveMainSequences`) grow on the scene graph in revision mode; every other growth still adopts at once.
+- **The producer**: `SceneArtifact::BufferVersion`, registered by `Published::SceneGraph` on the preparation pool.
+  `SceneGraph::PostGrowth` posts an exact request (its own address, fingerprinted) and an `AwaitExact(GpuReady)` on the
+  coordinator lane, both lock-free. The producer calls `GrowVersion`, whose new `contentsOf` lays the rows out for the made
+  version's own address (`CapturedMainRows`, the patch `EmitMainRows` applies). `TokenForTickets` marks its token
+  authoritative: the uploader notifies every ticket transition, so the graph needs no recovery polling.
+- **`Growths`** (render thread): the outstanding growths. `Settle` (at the join, before the shapes) takes in what the graph
+  finished. A ready growth's version is what a revision made then names: `VersionSet::Snapshot` overlays it, taking a
+  version-registry value of its own (`VersionRegistry::next`), and `GrowableRows::RevisionAddress` gives the shapes its address.
+  While one is pending, no revision is sealed (`growthPending`), so the commit's claims wait (`SetApplicable`).
+  `SelectRevision` adopts the growths the selected revision names (`AdoptNamed`): the version becomes current, the table's
+  capacity, address and generation move, and it holds the captured rows' version (`held`), so only rows changed since are sent.
+  When the selection makes exactly the set's versions current, the registry takes the set's value: no "versions moved" miss.
+- **Rows past the current version wait**: the build skips a pair past either table (`Skip::Capacity`), and the emission stops
+  at the tables' capacity without advancing `held`, until the adoption. The resident region's cached verdicts include the
+  capacities (`PipelineWitness`), so they resolve again after a growth. The commit's hard failure on rows past the tables is
+  gone.
+- In game (r3cg4, small tables): both growths requested, filled on the upload queue and adopted at selection (`growths as graph
+  work: 2 requested, 2 adopted`). No join had to wait. Steady play is 300/300 on every epoch except one interval with 4 shadow
+  frames (a first-sighting layout, as before). No capacity skips; image normal. Startup still has 3–5 "versions moved" per
+  epoch from the growths that still adopt at once.
+- Next: the other growth sites (scene tables, sequences, latches, index pool, shadow rows and buckets) as requests. A fill comes
+  from a kept capture, or there is none for buffers rewritten whole; their writers and per-object dispatches are bounded by the
+  current version (G3).
+
+**G2/G3: the main sequences, the scene tables and the object buffers as graph work** (2026-10-06). A change is an owner's
+sizing (`MainSizing`, `SceneSizing`, `ShadowSizing`) and the buffers that grow with it (`Growths::Change`), adopted with the
+revision that names it; revision shapes take the revision's sizing (`RevisionShapes::scene`, `SceneSizingOf`). The writers
+and per-object work are bounded by the current version (`SceneFit`, `ObjectFits`; bounded emission whose `held` waits), and
+passes size dispatches and copies by the sizing their recording was made for, never the live one.
+
+*The device loss this exposed, and its cause (ORG).* Deferred, the main sequences lost the device within ~200 ms of their
+first growth, every run (and the scene tables, intermittently, through the bone rows); every change adopted at once never did.
+Not the deletion queue (8x its retirement depth still lost it) and not where versions are made. A probe of the main pass found
+the Z-prepass recording of a revision binding the **old** 64-draw sequences while drawing by the **new** layout (16384 draws,
+512 per decal group): an indirect fetch ~190x past the buffer, with no shader active. ORG lowers a pass's resolvers as groups,
+re-resolved by every preparation under its capture context (a revision's versions), or as direct entries, bound to the set
+resolved when the pass was lowered. A pass declaring one resolver two ways (the Z-prepass's sequences: indirect arguments and
+an address read) failed the patch recipe (its two declared templates merge into one requirement) and was lowered direct, so a
+revision's recording took the revision's layout with the live version. Fixed in ORG:
+- `PrepareIncrementalResolverPatchRecipe`: the members' merged requirements are the recipe when the declared templates merged,
+  so such a pass is a group (z.depth, depth-phase2, shadow.view, sky.view and reflection.faces were the direct ones).
+- Fail loudly: `PersistentGraph` records the resolvers each pass binds directly with the set they resolved to, and every
+  preparation checks them under its own context; one that resolves another set throws ("binds a resolver's resources
+  directly ... this preparation resolves another set"), never a GPU fault. With the fix disabled it fired on the first
+  recording after the growth (r3cv1) and the graph stopped cleanly.
+- Test (`PersistentVulkanHostTests revision`): a pass declaring a versioned buffer two ways, recorded for a revision naming a
+  pending (unadopted) version, copies that version. Without the fix the test fails at the check.
+- In game, every growth deferred (main rows, sequences, scene tables, object buffers): 0 device losses and 0 check failures in
+  r3cf1-5 and r3cz1-3 (before the fix: 3 of 3 lost with the sequences deferred); 6-7 growths requested and adopted per run;
+  steady play submits every epoch by the revision (300/300 Z-prepass, colour, shadow, occlusion, reflection).
+- Versions are made by the producer again (`GrowVersions` on the preparation pool; render-thread making was a guess at this
+  loss): r3cw1-2 clean, 7 growths per run. `VersionGrowthRequest::version` and `Growths::Post`'s `a_deferrable` are gone.
+- What still grows at once in revision mode is reported by buffer ("adopted at once: ..." on the growth line). At startup (r3cg4b):
+  the shadow sequences, bucket counts, material rows and view blocks, the reflection sequences, counts and tree-visible lists,
+  and the index pool (indices, firsts, copies) - once each, the cause of the 2-3 "versions moved" per epoch left at startup.
+
+**G4: every growth a request; per-view coverage** (2026-10-06). In revision mode nothing grows at once any more ("adopted at
+once" is empty; small tables r3cp3-4: 0 "versions moved" at startup, every epoch 300/300 in steady play, screenshots normal).
+- *Shadow* (`ShadowSizing`): the slots' sequences (one size for every slot; a slot added while a growth is pending is made at the
+  size asked for), the bucket counts (a shape's rows are trimmed to the sizing's words, keeping every bucket the payload's own
+  draws need: `TrimmedRow`; a claimed draw past them is logged as a defect), the material rows (deferred with nothing to fill: a
+  new version is sent whole after its adoption; a worker-staged batch is used only if the rows' generation has not moved), and
+  the view blocks (`viewSlots`). Live shapes size by the current sizing, revision shapes by the revision's (`ShadowShapeInputs::
+  sizing`, `materialRows`, `viewBlocks`); the scene bound only sizes ahead within the slot.
+- *Per-view coverage*: `ShadowViews::Rebuild` marks DCLF's views (`covered`): its candidates in the engine's order within the slots
+  its buffers hold now (`IndirectDraws::ShadowViewCapacity`, which also asks for the slots the last frame's candidates need). Only
+  they are withheld and captured; the rest the engine draws whole (`uncovered`, counted: 30 at startup with small tables, 0 after).
+- *Reflection* (`ReflectionSizing`): sequences, bucket counts and tree lists, asked for at every join from the main sizing's
+  newest change, so both are adopted with the same revision; the faces' buffers are made at the plan's size; a commit past them
+  is a logged skip. The graph rebuild after new tree lists stays in the reflection epoch (`rebuildPending`).
+- *Index pool* (`PoolSizing`): room for every geometry the tables have (a bound kept from the geometry log at the join), a first
+  index per slot and a copy per range; adoption lays every range out again in the new version (`relayout`). A range that does not
+  fit until then waits (`waiting`; unclaimed geometry: the claims' was asked room for); a fragmented pool asks for a relayout.
+- *Graph builds* (ORG): a recording is of the build it was made on. `PersistentGraphHost::BuildGeneration` moves with every build,
+  and a revision's version set (and so its recordings) is made again when it moves; buffer creation no longer counts as a version
+  change (no revision before names the buffer). `PersistentGraphHost::CanUseEpochRecording` (RenderGraph::
+  CanBindPersistentTicketRecording: the bind's rules, the ticket unchanged), asked inside the commit before it writes into a
+  revision's shape: a recording the ticket would not take is a miss ("not its ticket's"), never SubmitEpoch's throw. Found when the
+  reflection cube's import rebuilt the graph between a shadow epoch's choice and its submission. Test: `PersistentVulkanHostTests
+  revision` (a live epoch's recording refused after its graph is built again).
+- Left at startup: frames before the first revision, "not its ticket's" after the startup builds (new view slots, the reflection
+  extension), and with default tables one "versions moved" from growths made before the async epochs start.
+
+**R3b structural stamps; strict epochs: a frame's claims always within a revision of the graph that runs** (2026-10-06; small
+tables r3se2-3, default r3sd1: no losses, steady play 300/300 by the revision, every report "<- OK", screenshots normal).
+- *Structural stamps.* A new change cause, `kChangeStructure`, noted (by `Tables::CausesBetween`, and by the writers that change
+  those columns directly) when what a revision's shapes are made from changes: the record's and the draw's pipelines, the geometry
+  half and partitions, the shadow and occlusion techniques and rejection. Not flags, materials or the fade distance (bindings
+  counted those: 14-35 needless revocations an interval). `RevokeUndrawnClaims` takes back, at the join, every claim whose slot
+  had one since the selected revision's join: read off the revoke cursor before `ApplySet`'s own notes (`NoteStructureChanges`)
+  and at the join. The engine draws it until a revision made after the change is applied. 25 at startup, 0-9 an interval after.
+- *Explicit builds* (ORG). `PersistentGraphHost::SetExplicitBuilds`: an extension added or removed waits for the caller's build
+  point, `BuildIfRequested`; until then every submission runs the graph as built (its passes resolve only what they declared, so
+  the state an extension grew meanwhile - new view slots, a new import - is unused). `EpochRecording::buildGeneration` and
+  `EpochRecordingCurrent`. DCLF's build point is the first thing `BeginSceneFrame` does, every frame (`IndirectDraws::BuildPoint`).
+  Mid-frame no build can invalidate the frame's recordings. The one exception is new main resources (resize, Light Limit Fix
+  toggled), built at once by the colour epoch, the frame's last, as before.
+- *Frame coverage.* `IndirectDraws::DecideCoverage`, after `SelectRevision`: the selected revision covers an epoch when it has its
+  recordings, all of the graph as built now, and its versions are current. Without the main epochs' the frame has no claims:
+  `SceneStore::WithdrawSet` takes every claim back as if every member left (records, `PassCapture`'s set with nothing drawn,
+  `PrimaryCull`'s admission, the sun exclusion), and tree LOD is the engine's. The next covered `ApplySet` applies the whole set
+  again (`setGeometryNext`: the geometry each slot was last decided for). So frames before the first revision and after a build
+  are the engine's: 9-10 at startup over 6 builds, none after. Their epochs still commit (counted "a frame without claims"): the
+  revision shapes are still made from the commits' observations (viewport, block sizes, heaps, the shadow layouts drawn), so the
+  epochs cannot be skipped until the shapes come from revision inputs alone (R4).
+- *Shadow, occlusion, reflection.* Decided before the engine draws them: no shadow views (`ShadowViewCapacity` 0) and no occlusion
+  map while a build is pending or the frame has no claims; the shadow maps are imported at that point, not at the view's capture.
+  The faces are withheld only when the claims stand and the cube is imported into the graph as built
+  (`PassCapture::SetReflectionCovered`); else the epoch skips ("the engine's").
+- *Recordings for an epoch not submitted* (ORG). A live epoch's recording waits for the slot its ready, unsubmitted ticket holds;
+  an epoch the caller stopped submitting (the faces while not covered, no water in view) held it for good, and no revision
+  published. Strict epochs turned this latent stall into a deadlock: no revision, so no coverage, so no reflection epoch.
+  `PersistentGraphHost::ReleaseEpochTicket` hands that ticket back (abandoned, re-prepared); the build point releases the
+  tickets of epochs the last frame did not submit (`RenderGraphRuntime::TakeSubmittedSegments`) while a revision waits. Tests:
+  `PersistentVulkanHostTests revision` (explicit builds; a recording completing for an epoch not submitted).
+- Left: the first sighting of a shadow or occlusion layout and the reflection's first shape (own preparation, 2-4 at startup,
+  one 4-frame shadow layout per run); the own-preparation path itself goes with R4's shapes from revision inputs.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

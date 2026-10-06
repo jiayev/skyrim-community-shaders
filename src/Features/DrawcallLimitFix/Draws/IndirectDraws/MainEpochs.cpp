@@ -148,8 +148,15 @@ namespace DCLF
 			return;
 		}
 		bool ready = false;
+		const auto resourcesBefore = impl->resources;
 		try {
 			ready = impl->Setup(capture, depthOnly);
+			// New main resources (the targets or the frame buffers changed) under claims: the graph is built for them now, not at the
+			// next build point - the colour epoch, the frame's last, draws its own preparation with them; the next frame's revision
+			// recordings are then of the build before, and that frame is the engine's (DecideCoverage).
+			if (ready && impl->resources != resourcesBefore && resourcesBefore)
+				if (auto* host = RenderGraphRuntime::Get().Host())
+					(void)host->BuildIfRequested();
 		} catch (const std::exception& e) {
 			// Never retried: the feature stays on the native path.
 			logger::error("[DCLF] Main-pass graph resources could not be created: {}", e.what());
@@ -604,6 +611,8 @@ namespace DCLF
 		in.addresses.records = a_resources.materialRows.address;
 		in.addresses.pipelineRows = a_resources.pipelineRows.address;
 		in.addresses.recordCapacity = a_resources.materialRows.capacity;
+		in.addresses.pipelineCapacity = a_resources.pipelineRows.capacity;
+		in.addresses.sequenceDecals = a_resources.sequenceDecals;
 		in.materialRowsHeld = a_resources.materialRowsHeld;
 		in.pipelineRowsHeld = a_resources.pipelineRowsHeld;
 		in.addresses.frameConstants = a_resources.frameConstantsAddress;
@@ -611,6 +620,7 @@ namespace DCLF
 		in.addresses.bonesIndex = a_resources.scene->bonesIndex;
 		in.addresses.treeWindIndex = a_resources.scene->TreeWindReadIndex(a_store.GetFrame());
 		in.addresses.facePositions = FaceSnapshots::Enabled() ? a_resources.scene->facePositionsAddress : 0;
+		in.addresses.fit = SceneFitOf(*a_resources.scene, a_resources.objectCapacity);
 		in.addresses.identity = &a_resources;
 		in.tablesGeneration = a_store.GetTablesGeneration();
 		in.lookupGeneration = a_store.GetLookups().generation;

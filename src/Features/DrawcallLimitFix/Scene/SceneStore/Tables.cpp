@@ -117,6 +117,10 @@ namespace DCLF
 			causes |= kChangeAll;
 		if (a.resident != b.resident)
 			causes |= kChangeMembership;
+		if (x.pipelineIndex != y.pipelineIndex || a.draw.pipelineIndex != b.draw.pipelineIndex || x.geometryIndex != y.geometryIndex ||
+			!same(geometryHalf(a.draw), geometryHalf(b.draw)) || a.skinPartitions != b.skinPartitions || a.shadowTechnique != b.shadowTechnique ||
+			a.shadowReject != b.shadowReject || a.occlusionTechnique != b.occlusionTechnique)
+			causes |= kChangeStructure;
 		return causes;
 	}
 

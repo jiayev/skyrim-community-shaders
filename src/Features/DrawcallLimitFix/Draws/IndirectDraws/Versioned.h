@@ -12,13 +12,18 @@ namespace DCLF::Draws
 	 */
 	using Versioned = std::shared_ptr<org::VersionedBuffer>;
 	/**
-	 * @brief Every versioned buffer DCLF made, and a count of the changes to their current versions (a buffer made, a growth
-	 * adopted): what a scene revision's version set snapshots (VersionSet), again only when the count moved. Render thread.
+	 * @brief Every versioned buffer DCLF made, and a count of the changes to their current versions (a growth adopted): what a
+	 * scene revision's version set snapshots (VersionSet), again when the count moved or the graph was built again. A buffer
+	 * made is no change: no revision before it names it, and the passes that declare it come with a graph build.
 	 */
 	struct VersionRegistry
 	{
 		std::vector<std::weak_ptr<org::VersionedBuffer>> buffers;
-		std::uint64_t changes = 0;
+		// Names the current versions: a version set taken with this value is current while it holds. Every value is new (`next`),
+		// so a set that names versions not yet current (a growth's: Growths) takes one of its own, and the selection that makes
+		// exactly its versions current makes it the registry's again.
+		std::uint64_t changes = 0, next = 0;
+		void Changed() { changes = ++next; }
 		static VersionRegistry& Get()
 		{
 			static VersionRegistry registry;
@@ -33,7 +38,6 @@ namespace DCLF::Draws
 		auto versioned = org::VersionedBuffer::Create(std::move(a_buffer));
 		auto& registry = VersionRegistry::Get();
 		registry.buffers.push_back(versioned);
-		++registry.changes;
 		return versioned;
 	}
 	/** @brief Where a write goes: the buffer, or a versioned buffer's current version. */

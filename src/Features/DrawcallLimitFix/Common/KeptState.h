@@ -266,16 +266,25 @@ namespace DCLF
 		std::size_t Count() const { return elements ? elements->size() : 0; }
 		const T* At(std::size_t a_index) const { return elements && a_index < elements->size() ? &(*elements)[a_index] : nullptr; }
 		std::uint64_t Version() const { return changes.version; }
-		/** @brief The uploads a holder at a_held lacks: a_emit(data, bytes, offset). Returns the bytes sent. */
+		/**
+		 * @brief The uploads a holder at a_held lacks: a_emit(data, bytes, offset). Returns the bytes sent. A holder of a_capacity
+		 * elements is sent none past them (they wait for its growth: it holds a_held's version of them only once it holds them all).
+		 */
 		template <class Emit>
-		std::size_t Emit(std::uint64_t a_held, Emit&& a_emit) const
+		std::size_t Emit(std::uint64_t a_held, Emit&& a_emit, std::size_t a_capacity = ~std::size_t(0)) const
 		{
 			if (!elements)
 				return 0;
 			const auto* data = elements->data();
-			return static_cast<std::size_t>(changes.ForEachRun(a_held, Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+			std::size_t sent = 0;
+			changes.ForEachRun(a_held, Count(), [&](std::uint64_t a_first, std::uint64_t a_count) {
+				if (a_first >= a_capacity)
+					return;
+				a_count = std::min<std::uint64_t>(a_count, a_capacity - a_first);
 				a_emit(static_cast<const void*>(data + a_first), static_cast<std::size_t>(a_count * sizeof(T)), static_cast<std::size_t>(a_first * sizeof(T)));
-			}) * sizeof(T));
+				sent += static_cast<std::size_t>(a_count * sizeof(T));
+			});
+			return sent;
 		}
 		void Reset() { *this = {}; }
 	};

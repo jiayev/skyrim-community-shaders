@@ -59,6 +59,11 @@ namespace DCLF
 		 */
 		std::uint8_t ShadowPhasesDrawn() const;
 		/**
+		 * @brief Render thread, before ShadowViews::Rebuild: how many shadow views DCLF's view slots hold now (their buffers and view
+		 * blocks, ShadowSizing::viewSlots) - the views past them stay the engine's while the slots grow; UINT32_MAX without a bound.
+		 */
+		std::uint32_t ShadowViewCapacity();
+		/**
 		 * @brief Render thread, SceneStore::CommitSet: whether the object is ready for a shadow phase (SetPhaseOfMode's): its Utility
 		 * pipeline under every rasterizer state of its caster class in each of the phase's modes the last epoch drew, and an
 		 * alpha-tested caster's diffuse imported. Part of the set's readiness (SceneSet.h).
@@ -159,14 +164,28 @@ namespace DCLF
 		 * (Impl::ShapeParity). Counts only: nothing draws with them yet.
 		 */
 		void MakeRevisionShapes();
+		/**
+		 * @brief Render thread, first at BeginSceneFrame, every frame: the graph's build point (CS_DCLF_REVISIONS). Its builds are explicit
+		 * (PersistentGraphHost::SetExplicitBuilds): an extension added or removed during a frame waits for this point, so the graph a
+		 * frame's revision was recorded on runs through that frame.
+		 */
+		void BuildPoint();
 		/** @brief Render thread, BeginSceneFrame: the newest complete scene revision selected (Impl::SceneRevisions; counts only). */
 		void SelectRevision();
+		/**
+		 * @brief Render thread, BeginSceneFrame, after SelectRevision: whether the selected revision covers the frame's main epochs - it has
+		 * their recordings, of the graph as built now (strict epochs). False: the frame has no claims (SceneStore::WithdrawSet) and DCLF
+		 * draws nothing. Also decides the other epochs' coverage (Impl::EpochCovered). True without revisions.
+		 */
+		bool DecideCoverage();
 		/**
 		 * @brief Render thread, BeginSceneFrame, after SelectRevision: whether the set committed at a_commitFrame may become the
 		 * frame's claims (SceneStore::ApplySet) - the selected revision was made at or after it, so its shapes and pipelines hold
 		 * every claim. True without revisions, or when none was made for that commit (no resources yet).
 		 */
 		bool SetApplicable(std::uint32_t a_commitFrame) const;
+		/** @brief Whether the frame's claims are a scene revision's (CS_DCLF_REVISIONS): a structural change after its join revokes one. */
+		bool RevisionClaims() const;
 		/** @brief The set committed at a_commitFrame was applied: the frame's claims are its (RevisionHoldsClaims). */
 		void NoteSetApplied(std::uint32_t a_commitFrame);
 		/** @brief BeforeShadowMaps: whether the early shadow build stands (counted by cause when it does not). */

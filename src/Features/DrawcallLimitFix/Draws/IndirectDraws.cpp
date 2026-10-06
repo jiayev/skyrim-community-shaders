@@ -14,6 +14,7 @@ namespace DCLF
 		return draws;
 	}
 	std::uint8_t IndirectDraws::ShadowPhasesDrawn() const { return 0; }
+	std::uint32_t IndirectDraws::ShadowViewCapacity() { return UINT32_MAX; }
 	bool IndirectDraws::PhaseReady(std::uint32_t, std::uint8_t) const { return false; }
 	std::uint64_t IndirectDraws::ShadowReadinessSerial() const { return 0; }
 	void IndirectDraws::CaptureMainPass() {}
@@ -41,8 +42,11 @@ namespace DCLF
 	void IndirectDraws::KickShadowBuild() {}
 	void IndirectDraws::KickShadowBuildEarly() {}
 	void IndirectDraws::MakeRevisionShapes() {}
+	void IndirectDraws::BuildPoint() {}
 	void IndirectDraws::SelectRevision() {}
+	bool IndirectDraws::DecideCoverage() { return true; }
 	bool IndirectDraws::SetApplicable(std::uint32_t) const { return true; }
+	bool IndirectDraws::RevisionClaims() const { return false; }
 	void IndirectDraws::NoteSetApplied(std::uint32_t) {}
 	bool IndirectDraws::KeepEarlyShadowBuild() { return false; }
 	void IndirectDraws::BeforePlacementJoin() {}

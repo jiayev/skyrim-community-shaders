@@ -251,7 +251,8 @@ namespace DCLF::Draws
 			TreeLodCullPrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
-			if (!scene.treeLodCull || !scene.treeLodShapeCapacity || !frame || !frame->latch)
+			const auto& sizing = SceneSizingOf(a_preparation, scene);
+			if (!scene.treeLodCull || !sizing.treeLodShapeCapacity || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.treeLodCull;
 			prepared.latch = frame->latch;
@@ -262,7 +263,7 @@ namespace DCLF::Draws
 			constants.visibleIndex = CaptureViewIndex(a_preparation, a_bindings.visible);
 			constants.latchIndex = frame->latch->SrvIndex();
 			constants.phase = phase;
-			const std::uint64_t records = std::uint64_t(scene.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances;
+			const std::uint64_t records = std::uint64_t(sizing.treeLodShapeCapacity) * TreeLod::kMaxGroupInstances;
 			constants.retestOffset = static_cast<std::uint32_t>(sizeof(TreeLod::VisibleHeader) + records * sizeof(std::uint32_t));
 			if (resources->hzb && frame->cullMode >= 2 && frame->width && frame->height) {
 				constants.hzbIndex = CaptureViewIndex(a_preparation, a_bindings.hzb);
@@ -990,7 +991,7 @@ namespace DCLF::Draws
 			for (std::uint32_t h = 0; h < 2; ++h)
 				constants.windIndices[h] = CaptureViewIndex(a_preparation, a_bindings.wind[h]);
 			// Every entry the buffers hold (the nodeless one, then the tree slots): the shader stops at the frame row's count.
-			prepared.groups = (scene->treeCapacity + 1 + kTreeWindGroup - 1) / kTreeWindGroup;
+			prepared.groups = (SceneSizingOf(a_preparation, *scene).treeCapacity + 1 + kTreeWindGroup - 1) / kTreeWindGroup;
 			return prepared;
 		}
 
@@ -1070,7 +1071,8 @@ namespace DCLF::Draws
 			FadeStatePrepared prepared{};
 			const auto& scene = *resources->scene;
 			const auto frame = CurrentFrame(a_preparation, *resources, RenderGraphRuntime::Segment::ZPrepass);
-			if (!scene.fadeState || !scene.fadeRootCapacity || !frame || !frame->latch)
+			const auto& sizing = SceneSizingOf(a_preparation, scene);
+			if (!scene.fadeState || !sizing.fadeRootCapacity || !frame || !frame->latch)
 				return prepared;
 			prepared.program = scene.fadeState;
 			prepared.latch = frame->latch;
@@ -1088,11 +1090,12 @@ namespace DCLF::Draws
 			if (scene.fadeEvents && scene.fadeWriteBack) {
 				constants.eventsIndex = CaptureViewIndex(a_preparation, a_bindings.events);
 				constants.reportedIndex = CaptureViewIndex(a_preparation, a_bindings.reported);
-				constants.eventCapacity = scene.fadeWriteBack->capacity.load(std::memory_order_acquire);
+				// The bound event list's, and no more than every slot's host buffer takes.
+				constants.eventCapacity = std::min(scene.fadeWriteBack->capacity.load(std::memory_order_acquire), sizing.fadeEventCapacity);
 			}
 			constants.latchIndex = frame->latch->SrvIndex();
 			// Every slot the buffers hold: the shader stops at the frame row's count.
-			prepared.groups = (scene.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
+			prepared.groups = (sizing.fadeRootCapacity + kFadeStateGroup - 1) / kFadeStateGroup;
 			return prepared;
 		}
 
@@ -1121,6 +1124,7 @@ namespace DCLF::Draws
 	struct FadeEventReadbackPrepared
 	{
 		std::shared_ptr<FadeWriteBack> writeBack;
+		std::uint32_t listEvents = 0;  // the bound event list's capacity (the preparation's scene sizing)
 	};
 
 	/**
@@ -1148,7 +1152,7 @@ namespace DCLF::Draws
 
 		FadeEventReadbackPrepared Prepare(const FadeEventReadbackBindings&, [[maybe_unused]] const org::PassPrepareContext& a_preparation) const
 		{
-			return { scene->fadeWriteBack };
+			return { scene->fadeWriteBack, SceneSizingOf(a_preparation, *scene).fadeEventCapacity };
 		}
 
 		static void Record(const FadeEventReadbackBindings& a_bindings, const FadeEventReadbackPrepared& a_frame, org::PassRecordContext& a_recording)
@@ -1189,7 +1193,8 @@ namespace DCLF::Draws
 				writeBack.capacity.store(*std::min_element(writeBack.readbackEvents.begin(), writeBack.readbackEvents.end()), std::memory_order_release);
 			}
 			// The count and the events the shader may have appended (never more than any slot's buffer or the list hold).
-			const std::uint32_t copied = std::min(writeBack.readbackEvents[slot], writeBack.capacity.load(std::memory_order_acquire));
+			// The bound list's too: the host buffers grow with the list's adoption, and a list of an older version is smaller.
+			const std::uint32_t copied = std::min({ writeBack.readbackEvents[slot], writeBack.capacity.load(std::memory_order_acquire), a_frame.listEvents });
 			a_recording.Commands().CopyBufferRegion(writeBack.readback[slot]->GetAPIResource().GetHandle(), 0, a_recording.Resolve(a_bindings.events).GetHandle(), 0,
 				FadeWriteBack::BytesFor(copied));
 			writeBack.filled[slot] = 1;

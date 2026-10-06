@@ -89,6 +89,8 @@ namespace DCLF
 		void SetReflectionCamera(const RE::NiCamera* a_camera);
 		void SetReflectionFace(bool a_plain) { reflectionFace.store(a_plain, std::memory_order_release); }
 		void SetReflectionTreeLodOwned(bool a_owned) { reflectionTreeLodOwned.store(a_owned, std::memory_order_release); }
+		/** @brief Render thread, BeginSceneFrame: whether the frame's faces are DCLF's at all (IndirectDraws::DecideCoverage). */
+		void SetReflectionCovered(bool a_covered) { reflectionCovered.store(a_covered, std::memory_order_release); }
 		bool ReflectionTreeLodOwned() const { return reflectionTreeLodOwned.load(std::memory_order_acquire); }
 
 		static constexpr std::uint32_t kShadowModes = 3;
@@ -211,7 +213,7 @@ namespace DCLF
 		std::atomic<std::uint32_t> treeLodWithheld{ 0 };
 		std::atomic<bool> treeLodOwned{ false };
 		std::atomic<std::uint32_t> reflectionWithheld{ 0 }, reflectionTreeLodWithheld{ 0 };
-		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false };
+		std::atomic<bool> reflectionFace{ false }, reflectionTreeLodOwned{ false }, reflectionCovered{ true };
 		std::shared_ptr<const ankerl::unordered_dense::set<const RE::BSBatchRenderer*>> reflectionRenderers;
 		std::array<const void*, 2> reflectionAccumulators{};  // what reflectionRenderers was made from (render thread)
 		/** @brief The reflection test at every main-mode insertion point: a reflection-phase member's pass into a face's renderer. */

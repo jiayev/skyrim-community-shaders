@@ -137,6 +137,7 @@ namespace DCLF
 		batchToView.clear();
 		accumulatorToView.clear();
 		valid = false;
+		candidates = 0;
 	}
 
 	void ShadowViews::Rebuild()
@@ -201,12 +202,20 @@ namespace DCLF
 			++lightIndex;
 		}
 		valid = true;
-		// The shadow renderers by render mode, for the registration hook's withholding (the set's shadow phases). Published
-		// whole; the hook runs on the engine's registration threads.
+		// DCLF's views: its candidates in the engine's order, within the slots its buffers hold (SetViewCapacity).
+		candidates = 0;
+		for (auto& view : views) {
+			const bool candidate = !view.focus && view.renderMode >= PassCapture::kFirstShadowMode &&
+			                       view.renderMode < PassCapture::kFirstShadowMode + PassCapture::kShadowModes;
+			view.covered = candidate && candidates < viewCapacity;
+			candidates += candidate ? 1u : 0u;
+		}
+		// The shadow renderers by render mode, for the registration hook's withholding (the set's shadow phases): DCLF's views'.
+		// Published whole; the hook runs on the engine's registration threads.
 		auto renderers = std::make_shared<PassCapture::ShadowRendererMap>();
 		for (const auto& [batch, id] : batchToView) {
 			const auto& view = views[id];
-			if (view.focus || view.renderMode < PassCapture::kFirstShadowMode || view.renderMode >= PassCapture::kFirstShadowMode + PassCapture::kShadowModes)
+			if (!view.covered)
 				continue;
 			renderers->emplace(batch, static_cast<std::uint8_t>(view.renderMode - PassCapture::kFirstShadowMode));
 		}

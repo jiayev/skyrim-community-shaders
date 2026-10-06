@@ -27,11 +27,14 @@ namespace DCLF::Draws
 		k.rows.BeginBuild(a_in.materialRowsHeld);
 		for (std::uint32_t m = 0; m < kShadowModeCount; ++m)
 			k.modes[m].inputs.BeginBuild(a_in.inputsHeld[m]);
-		bool resync = !k.cursor.Continues(a_tables.changeLog, a_in.tablesGeneration) || k.identity != a_in.addresses.identity || k.objectRecord.size() > objects;
+		// The scene's buffers grown (what fits them moved: ObjectFits) reads every object again too.
+		bool resync = !k.cursor.Continues(a_tables.changeLog, a_in.tablesGeneration) || k.identity != a_in.addresses.identity || k.objectRecord.size() > objects ||
+		              k.fit != a_in.addresses.fit;
 		if (resync) {
 			k.Reset();
 			k.cursor.Restart(a_in.tablesGeneration);
 			k.identity = a_in.addresses.identity;
+			k.fit = a_in.addresses.fit;
 			++k.resyncs;
 		}
 		if (k.objectRecord.size() < objects) {
@@ -177,6 +180,9 @@ namespace DCLF::Draws
 					a_out.setWaitingFirst = fmt::format("object {} mode {}: {} {} (row capacity {})", o, m, a_why, a_value, a_in.addresses.recordCapacity);
 				return 2;
 			};
+			// Past what the scene's buffers hold: it waits for their growth (a resync reads it again then).
+			if (!ObjectFits(a_tables, o, a_in.addresses.fit))
+				return wait("scene buffers", o);
 			if (record != 0 && !(record < k.slotReady.size() && k.slotReady[record]))
 				return wait("material row", record);
 			const bool volumetricOnly = VolumetricClass(m, object.flags);
@@ -699,7 +705,7 @@ namespace DCLF::Draws
 					std::uint32_t& count;
 					~MemberSkip() { count += armed ? 1 : 0; }
 				} memberSkip{ member, a_out.setWaiting };
-				if (objectRecord[o] == ~0u) {
+				if (objectRecord[o] == ~0u || !ObjectFits(a_tables, static_cast<std::uint32_t>(o), a_in.addresses.fit)) {
 					continue;
 				}
 				// The states of the views that draw this caster's class. A volumetric-only caster with no view

@@ -227,6 +227,9 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// noticed.
 	UpdateActive();
 	DCLF::AuditTreeLod();
+	// The graph's build point, every frame (loaded or not): an extension added or removed during the last frame is built here, before
+	// anything decides what the frame's recordings cover.
+	DCLF::IndirectDraws::Get().BuildPoint();
 	if (!Running())
 		return false;
 	// The engine's update is done: workers may read its scene graph until Present (EngineReadWindow).
@@ -254,10 +257,14 @@ bool DrawcallLimitFix::BeginSceneFrame()
 	// A write-back job no join reached, before anything changes the tables it reads.
 	DCLF::IndirectDraws::Get().JoinFadeWriteBack();
 	// The newest complete scene revision (R3c), then the last commit's set as the frame's claims once that revision was made at or
-	// after it; until then the claims applied last stand (the frame draws within the revision's shapes).
+	// after it; until then the claims applied last stand (the frame draws within the revision's shapes). A frame the selected revision
+	// does not cover - none selected yet, or its recordings are of the graph before the build point built - has no claims: the
+	// engine draws everything, and the next covered frame applies the whole set again.
 	auto& draws = DCLF::IndirectDraws::Get();
 	draws.SelectRevision();
-	if (const auto commitFrame = store.SetCommitFrame(); draws.SetApplicable(commitFrame)) {
+	if (!draws.DecideCoverage()) {
+		store.WithdrawSet();
+	} else if (const auto commitFrame = store.SetCommitFrame(); draws.SetApplicable(commitFrame)) {
 		store.ApplySet();
 		draws.NoteSetApplied(commitFrame);
 	}
@@ -323,6 +330,7 @@ void DrawcallLimitFix::BeforeShadowMaps()
 	DCLF::IndirectDraws::Get().KickSceneStreams();
 	// The frame's shadow views, in the order the engine is about to render them. Everything downstream -
 	// the capture's attribution, the withholding, the epochs - identifies a view by this list.
+	DCLF::ShadowViews::Get().SetViewCapacity(DCLF::ActiveToggles().shadows ? DCLF::IndirectDraws::Get().ShadowViewCapacity() : UINT32_MAX);
 	DCLF::ShadowViews::Get().Rebuild();
 	if (DCLF::ActiveToggles().shadows) {
 		DCLF::IndirectDraws::Get().BeginShadowFrame();

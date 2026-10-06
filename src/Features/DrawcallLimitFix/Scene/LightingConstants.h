@@ -218,7 +218,12 @@ namespace DCLF
 	 * PreviousWorld are absolute: the shaders subtract the drawing camera's eye (VS_PerFrame c40/c41), so
 	 * one record serves every epoch and every camera.
 	 */
-	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out);
+	/**
+	 * a_boneRegion: the bone rows' layout the record addresses (the buffer's: SceneSizing::boneRegion), its previous palette and
+	 * extras past it; ~0u: the tables' own capacity.
+	 */
+	void BuildObjectRecord(const SceneStore::Tables& a_tables, std::uint32_t a_objectIndex, std::uint32_t a_renderFlags, BindlessObject& a_out,
+		std::uint32_t a_boneRegion = ~0u);
 
 	/** @brief World made relative to an eye the way the engine does it (and the shaders do for a record). */
 	void StoreRelativeTo(float* a_out, const float (&a_world)[12], const RE::NiPoint3& a_eye);

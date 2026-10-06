@@ -77,8 +77,10 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 			set.firstWaiting.empty() ? "" : "; first: ", set.firstWaiting, set.patchedMember, set.patchedMember ? " <- SET PATCHED" : "");
 		// Claims the frame's scene work took back because their record stopped drawing (SceneStore::RevokeUndrawnClaims).
 		const auto [revoked, revokedMain] = store.TakeRevokedClaims();
-		logger::info("[DCLF] claims revoked mid-frame (their record stopped drawing; the engine drew them that frame): {} geometries, {} of them in the main phase",
-			revoked, revokedMain);
+		const auto structural = store.TakeStructureRevocations();
+		logger::info("[DCLF] claims revoked mid-frame (the engine drew them that frame): {} geometries, {} of them in the main phase; {} for a structural change "
+					 "after the selected revision's join",
+			revoked, revokedMain, structural);
 		std::string samples;
 		for (const auto& sample : leaks.samples)
 			samples += fmt::format("{}{}", samples.empty() ? "" : ", ", sample);
@@ -177,8 +179,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 				if (shadow.notReadyReasons[r])
 					notReadyReasons += fmt::format(" {}={}", DCLF::kShadowNotReadyNames[r], shadow.notReadyReasons[r]);
 			}
-			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs ({} slots kept with no work), {} not ready ({}), {} focus views left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph)",
-				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.retainedViews, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.inputs, shadow.skippedPipeline,
+			logger::info("[DCLF] shadow views: {} offered, {} drawn in {} epochs ({} slots kept with no work), {} not ready ({}), {} focus views and {} uncovered left native; last mode {} inputs ({} without a pipeline, {} without a texture), {} records; CPU {:.3f} ms per frame ({:.3f} capturing, {:.3f} preparing, {:.3f} inputs, {:.3f} blocks, {:.3f} graph)",
+				shadow.views, shadow.viewsDrawn, shadow.epochs, shadow.retainedViews, shadow.notReady, notReadyReasons.empty() ? "-" : notReadyReasons.c_str() + 1, shadow.focusSkipped, shadow.uncovered, shadow.inputs, shadow.skippedPipeline,
 				shadow.skippedTexture, shadow.records, (shadow.cpuMs + shadow.captureMs) / frames, shadow.captureMs / frames, shadow.prepareMs / frames, shadow.inputsMs / frames, shadow.blocksMs / frames,
 				shadow.executeMs / frames);
 			if (shadow.cullTested || shadow.cullClass)
@@ -233,6 +235,8 @@ void DrawcallLimitFix::ReportStats(std::uint32_t frame)
 		if (draws.fadeTested)
 			logger::info("[DCLF] fade on the GPU (sampled frame): {} resident draws under a fade root in view, {} dropped by their root's fade; {} roots",
 				draws.fadeTested, draws.fadeHidden, draws.fadeRoots);
+		if (draws.drawsWaiting)
+			logger::info("[DCLF] {} draws so far waited for the sequences' growth (past the current ones, dropped by BuildDraws)", draws.drawsWaiting);
 		if (draws.shortBuffers)
 			logger::warn("[DCLF] {} draws of the last epoch reach past their vertex or index buffer slice", draws.shortBuffers);
 		const auto& gpu = DCLF::GpuResources::Get().GetStats();

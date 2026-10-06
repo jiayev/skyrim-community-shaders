@@ -1123,7 +1123,7 @@ namespace DCLF
 		++stats.lightSkins;
 		const std::uint16_t partitionMask = SkinPartitionsOf(*a_geometry);
 		if (tables.skinPartitions[slot] != partitionMask)
-			tables.NoteChange(slot, kChangeSkin);
+			tables.NoteChange(slot, kChangeSkin | kChangeStructure);
 		tables.skinPartitions[slot] = partitionMask;
 		++stats.skinned;
 		stats.boneRows += rows;
