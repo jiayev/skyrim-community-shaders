@@ -394,12 +394,12 @@ namespace DCLF
 		 * @brief Where a view draws: its slot's buffers, its viewport and depth range in its target's slice, and its push data
 		 * (DrawPipelines.h, kShadowPushWords): the frame record, its own blocks at its slot's row of the view blocks, and the build's.
 		 */
-		ShadowFrameView FrameViewOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target, std::uint32_t a_capacity,
-			const ShadowResources& a_resources, const ShadowPayload& a_payload)
+		ShadowFrameView FrameViewOf(const ShadowViewLayout& a_view, std::uint32_t a_capacity, const ShadowResources& a_resources, const ShadowPayload& a_payload)
 		{
+			const std::uint32_t a_slot = a_view.slot;
 			ShadowFrameView out{};
 			out.slot = a_slot;
-			out.modeIndex = a_mode;
+			out.modeIndex = a_view.modeIndex;
 			out.capacity = a_capacity;
 			out.x = a_view.x;
 			out.y = a_view.y;
@@ -408,8 +408,9 @@ namespace DCLF
 			// [0, 1]: the view's depth range is its draws' (DCLFDepthRange, WriteViewBlocks).
 			out.minDepth = 0.0f;
 			out.maxDepth = 1.0f;
-			out.target = a_target;
+			out.target = a_view.target;
 			out.slice = a_view.slice;
+			out.rasterState = a_view.rasterState;
 			out.materialRows = a_resources.materialRows.address;
 			out.sequenceDraws = a_resources.sequenceDraws[a_slot];
 			const std::uint64_t base = a_resources.constantsAddress;
@@ -439,6 +440,66 @@ namespace DCLF
 			return GrowCapacity(a_previous, a_draws, a_slotDraws);
 		}
 
+		/** @brief A pending view's layout in a_slot (ShadowViewLayout). */
+		ShadowViewLayout LayoutOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target)
+		{
+			return { a_slot, a_mode, a_target, a_view.slice, a_view.x, a_view.y, a_view.width, a_view.height, a_view.rasterState };
+		}
+	}
+
+	std::vector<ShadowViewLayout> Draws::LayoutOf(const ShadowFrame& a_frame)
+	{
+		std::vector<ShadowViewLayout> out;
+		out.reserve(a_frame.views.size());
+		for (const auto& view : a_frame.views)
+			out.push_back({ view.slot, view.modeIndex, view.target, view.slice, view.x, view.y, view.width, view.height, view.rasterState });
+		return out;
+	}
+
+	std::shared_ptr<ShadowFrame> Draws::MakeShadowShape(const ShadowResources& a_resources, const ShadowShapeInputs& a_in)
+	{
+		const auto& payload = *a_in.payload;
+		auto frame = std::make_shared<ShadowFrame>();
+		frame->resourceHeap = a_in.resourceHeap;
+		frame->samplerHeap = a_in.samplerHeap;
+		frame->indirect = a_in.indirect;
+		frame->latch = a_resources.latch;
+		frame->viewBlocksOffset = a_resources.latchLayout.ViewBlockOffset(0);
+		frame->zeros = a_resources.zeros;
+		frame->latched = a_in.latched;
+		for (std::size_t v = 0; v < a_in.views.size(); ++v) {
+			const auto& view = a_in.views[v];
+			const auto* previous = PreviousView(a_in.previous, view.slot);
+			// The view's max count and its buckets: what its mode's inputs can produce, within its slot's sequences (reserved before).
+			const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], a_resources.sequenceDraws[view.slot]);
+			auto& out = frame->views.emplace_back(FrameViewOf(view, capacity, a_resources, payload));
+			out.buckets = SizeShadowBuckets(a_in.rows[v], payload.keySlotDraws[view.modeIndex], previous, std::uint64_t(kShadowClasses) * a_resources.sequenceDraws[view.slot]);
+		}
+		return frame;
+	}
+
+	std::vector<LatchedCopy> Draws::ShadowLatchedLayout(const ShadowResources& a_resources, const ShadowPayload& a_payload, const ShadowInputs& a_in)
+	{
+		std::vector<LatchedCopy> out;
+		const auto targets = a_resources.latchedTargets.load(std::memory_order_acquire);
+		const void* key = a_resources.constants.get();
+		if (!targets || std::find(targets->begin(), targets->end(), key) == targets->end())
+			return out;
+		const std::uint64_t base = a_in.addresses.constants;
+		std::size_t used = 0;
+		// As the commit's writeBlock: the blocks the build gave their own address, in its order.
+		for (const auto& [address, bytes] : { std::pair{ a_payload.sharedDataAddress, a_in.sharedData.size() }, std::pair{ a_payload.featureDataAddress, a_in.featureData.size() } }) {
+			if (!address || address == a_payload.zerosAddress || !bytes || address < base)
+				continue;
+			const std::size_t at = (used + 15) & ~std::size_t(15);
+			out.push_back({ key, static_cast<std::uint32_t>(at), static_cast<std::uint32_t>(bytes), address - base });
+			used = at + bytes;
+		}
+		return out;
+	}
+
+	namespace Draws
+	{
 		/**
 		 * @brief The id DCLF's pipelines give the engine's rasterizer state at (fill, cull, bias, scissor) for a_renderMode: 0
 		 * when an index is out of the engine's table or its entry is empty.
@@ -906,18 +967,30 @@ namespace DCLF
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::SkyOcclusion, [&](org::RenderGraph&) {
 			resources->occlusionFrame.store(nullptr, std::memory_order_release);
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			auto frame = std::make_shared<ShadowFrame>();
-			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-			frame->indirect = indirect;
-			frame->latch = resources->latch;
-			const auto& previousShape = resources->occlusionPublished;
+			// The shape (MakeShadowShape): the drawable views' layout, their map rows' buckets, the shadow commit's payload.
 			const auto& lookups = store.GetLookups();
-			auto& scene = *resources->scene;
+			ShadowShapeInputs shapeIn;
+			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+			shapeIn.indirect = indirect;
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
 					continue;
 				const auto& view = impl->occlusion[v].view;
+				shapeIn.views.push_back(LayoutOf(view, OcclusionSlot(v), OcclusionModeOf(v), OcclusionDepthTarget(v)));
+				shapeIn.rows.push_back(impl->ShadowRowBuckets(view.rasterState, lookups, indirect));
+			}
+			shapeIn.payload = &payload;
+			shapeIn.previous = resources->occlusionPublished;
+			auto frame = MakeShadowShape(*resources, shapeIn);
+			auto& scene = *resources->scene;
+			std::size_t index = 0;
+			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
+				if (!(drawable & (1u << v)))
+					continue;
+				const auto& view = impl->occlusion[v].view;
+				const auto& shapeView = frame->views[index];
+				const auto& buckets = shapeIn.rows[index++];
 				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(mode));
 				// The view slot's blocks, which its push data names, into the latch (its counters are zeroed by the latched copies).
@@ -931,18 +1004,13 @@ namespace DCLF
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
-				const auto& buckets = impl->ShadowRowBuckets(view.rasterState, lookups, indirect);
 				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, true, latch);
-				const auto* previous = PreviousView(previousShape, slot);
-				auto viewBuckets = SizeShadowBuckets(buckets, payload.keySlotDraws[mode], previous, std::uint64_t(kShadowClasses) * resources->sequenceDraws[slot]);
-				WriteBucketTable(*resources, latchSlot, slot, viewBuckets, latch);
+				WriteBucketTable(*resources, latchSlot, slot, shapeView.buckets, latch);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
-				const std::uint32_t capacity = ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[mode], resources->sequenceDraws[slot]);
-				frame->views.push_back(FrameViewOf(view, slot, mode, OcclusionDepthTarget(v), capacity, *resources, payload));
-				frame->views.back().buckets = std::move(viewBuckets);
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
+			impl->NoteShadowParity(true, *frame, {}, frameNumber);
 			PublishShape(std::move(frame), resources->occlusionPublished, resources->occlusionFrame, resources->shapeGenerations, resources->recentOcclusionShapes);
 		}, impl->shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -1054,7 +1122,26 @@ namespace DCLF
 			impl->ReserveShadowLatch(static_cast<std::uint32_t>(pending.size()), static_cast<std::uint32_t>(keys), DrawPipelines::Get().ShadowRasterStateCount(),
 				static_cast<std::uint32_t>(in.sunEntryProcesses.size()));
 		}
-		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(pending.size()), kFirstShadowViewSlot);
+		// The epoch's views (ShadowViewLayout): the frame's, then the view slots the last shape had past them (a local light's
+		// paraboloid pair, which comes and goes with the light), kept in the shape with no work - a zero latch (no dispatch, no
+		// draw), their counters zeroed by the latched copies, and their render passes loading and storing what the engine left - so
+		// a view's coming and going changes no shape and the epoch's ticket stays current. One whose light comes back finds its
+		// capacity and buckets. A slot not drawn for kRetainedViewFrames frames leaves the shape.
+		std::vector<ShadowViewLayout> layouts;
+		layouts.reserve(pending.size());
+		for (std::uint32_t index = 0; index < pending.size(); ++index)
+			layouts.push_back(LayoutOf(pending[index], kFirstShadowViewSlot + index, pending[index].modeIndex, pending[index].targetIndex));
+		if (const auto& previousShape = resources->published) {
+			for (std::uint32_t index = static_cast<std::uint32_t>(pending.size()); index < previousShape->views.size(); ++index) {
+				const auto& retained = previousShape->views[index];
+				const std::uint32_t slot = kFirstShadowViewSlot + index;
+				if (retained.slot != slot || slot >= impl->shadowSlotDrawn.size() || frameNumber - impl->shadowSlotDrawn[slot] > Impl::kRetainedViewFrames)
+					break;
+				layouts.push_back({ retained.slot, retained.modeIndex, retained.target, retained.slice, retained.x, retained.y, retained.width, retained.height,
+					retained.rasterState });
+			}
+		}
+		impl->ReserveShadowSequences(tables, static_cast<std::uint32_t>(layouts.size()), kFirstShadowViewSlot);
 		const bool ok = RenderGraphRuntime::Get().ExecuteEpoch(RenderGraphRuntime::Segment::ShadowView, [&](org::RenderGraph&) {
 			ZoneScopedN("CS.DCLF.ShadowInputs");
 			struct BodyTimer
@@ -1204,8 +1291,6 @@ namespace DCLF
 
 			TracyCZoneN(shadowViewsZone, "CS.DCLF.ShadowInputs.BuildViews", true);
 			const auto blocksStart = std::chrono::steady_clock::now();
-			auto frame = std::make_shared<ShadowFrame>();
-			const auto& previousShape = resources->published;
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
 			// The index pool, which this epoch's views and the occlusion epoch's after it draw from.
 			{
@@ -1213,12 +1298,26 @@ namespace DCLF
 				UpdateIndexPool(*resources->pool, store.GetTables(), store.GetTablesGeneration(), *resources->latch, latchSlot, resources->latchLayout.PoolOffset(), uploads);
 			}
 			resources->labels.clear();
-			frame->resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
-			frame->samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
-			frame->indirect = indirect;
-			frame->latch = resources->latch;
+			// The shape (MakeShadowShape), from the views' layout, their map rows' buckets and the payload; a scene revision makes it
+			// from its own (MakeRevisionShapes). The views' values go into the latch below.
+			ShadowShapeInputs shapeIn;
+			shapeIn.resourceHeap = org::runtime::GetActiveSRVDescriptorHeap().GetHandle();
+			shapeIn.samplerHeap = org::runtime::GetActiveSamplerDescriptorHeap().GetHandle();
+			shapeIn.indirect = indirect;
+			shapeIn.views = layouts;
+			for (const auto& layout : layouts)
+				shapeIn.rows.push_back(impl->ShadowRowBuckets(layout.rasterState, store.GetLookups(), indirect));
+			shapeIn.payload = &payload;
+			shapeIn.previous = resources->published;
+			const auto latchedLayout = ShadowLatchedLayout(*resources, payload, in);
+			ReserveLatchedBlock(resources->latchedBlock, LatchedBytes(latchedLayout), RenderGraphRuntime::Get().Host()->FrameSlots());
+			shapeIn.latched.copies = latchedLayout;
+			if (!latchedLayout.empty())
+				shapeIn.latched.latch = resources->latchedBlock;
+			auto frame = MakeShadowShape(*resources, shapeIn);
+			impl->shadowParity.resourceHeap = shapeIn.resourceHeap;
+			impl->shadowParity.samplerHeap = shapeIn.samplerHeap;
 			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
-			auto bucketsOf = [&](std::uint32_t a_state) -> const RowBuckets& { return impl->ShadowRowBuckets(a_state, store.GetLookups(), indirect); };
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			for (std::uint32_t index = 0; index < pending.size(); ++index) {
 				ZoneScopedN("CS.DCLF.ShadowInputs.View");
@@ -1258,37 +1357,18 @@ namespace DCLF
 				const bool rowWritten = view.rasterState < mapRowsWritten.size() && mapRowsWritten[view.rasterState];
 				if (view.rasterState < mapRowsWritten.size())
 					mapRowsWritten[view.rasterState] = true;
-				const auto& buckets = bucketsOf(view.rasterState);
-				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, !rowWritten, latch);
-				const auto* previous = PreviousView(previousShape, slot);
-				TracyCZoneN(viewBucketsZone, "CS.DCLF.ShadowInputs.View.Buckets", true);
-				auto viewBuckets = SizeShadowBuckets(buckets, payload.keySlotDraws[view.modeIndex], previous,
-					std::uint64_t(kShadowClasses) * resources->sequenceDraws[slot]);
-				WriteBucketTable(*resources, latchSlot, slot, viewBuckets, latch);
-				TracyCZoneEnd(viewBucketsZone);
+				UseShadowMapRow(*resources, shapeIn.rows[index], latchSlot, view.rasterState, !rowWritten, latch);
+				WriteBucketTable(*resources, latchSlot, slot, frame->views[index].buckets, latch);
 				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
-				frame->views.push_back(FrameViewOf(view, slot, view.modeIndex, view.targetIndex,
-					ShadowViewCapacity(previous ? previous->capacity : 0, payload.modeDraws[view.modeIndex], resources->sequenceDraws[slot]),
-					*resources, payload));
-				frame->views.back().buckets = std::move(viewBuckets);
 				if (impl->shadowSlotDrawn.size() <= slot)
 					impl->shadowSlotDrawn.resize(std::size_t(slot) + 1, 0u);
 				impl->shadowSlotDrawn[slot] = frameNumber;
 			}
-			// The view slots the previous shape had past this frame's views (a local light's paraboloid pair, which comes and goes
-			// with the light): kept in the shape, as they were, with no work - a zero latch (no dispatch, no draw), their counters
-			// zeroed by the latched copies, and their render passes loading and storing what the engine left - so a view's
-			// coming and going changes no shape and the epoch's ticket stays current. One whose light comes back finds its
-			// capacity and buckets. A slot not drawn for kRetainedViewFrames frames leaves the shape.
-			for (std::uint32_t index = static_cast<std::uint32_t>(pending.size()); previousShape && index < previousShape->views.size(); ++index) {
-				const auto& retained = previousShape->views[index];
-				const std::uint32_t slot = kFirstShadowViewSlot + index;
-				if (retained.slot != slot || slot >= impl->shadowSlotDrawn.size() || frameNumber - impl->shadowSlotDrawn[slot] > Impl::kRetainedViewFrames)
-					break;
-				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
-				frame->views.push_back(retained);
+			// The retained views (the layouts past the frame's): a zero latch, no work.
+			for (std::size_t index = pending.size(); index < layouts.size(); ++index) {
+				resources->latch->WriteValue(latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
 				++shadowStats.retainedViews;
 			}
 			// The arena (the frame record and the blocks), when the worker did not stage it.
@@ -1305,6 +1385,7 @@ namespace DCLF
 			writeBlock(payload.sharedDataAddress, in.sharedData);
 			writeBlock(payload.featureDataAddress, in.featureData);
 			frame->latched = latched.Finish();
+			impl->NoteShadowParity(false, *frame, latchedLayout, frameNumber);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			static std::uint32_t logged = 0;
 			if (logged++ % 600 == 0) {

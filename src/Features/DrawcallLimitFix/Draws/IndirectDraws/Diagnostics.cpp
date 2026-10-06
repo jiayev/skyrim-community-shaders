@@ -211,6 +211,20 @@ namespace DCLF
 						p.layoutMisses[shape]);
 				p.layoutMisses[shape] = 0;
 			}
+			auto& sp = impl->shadowParity;
+			for (std::size_t kind = 0; kind < 2; ++kind)
+				for (std::size_t lag = 0; lag < 2; ++lag) {
+					auto& c = sp.counts[kind][lag];
+					std::string fields;
+					for (std::uint32_t f = 0; f < Impl::ShadowParity::kFields; ++f)
+						if (c.differ[f])
+							fields += fmt::format("{}{} {}", fields.empty() ? "" : ", ", Impl::ShadowParity::kFieldNames[f], c.differ[f]);
+					segments += fmt::format("{}{} against {}: {} compared, {} same, {} without its layout{}", lag ? "; " : " | ", kind ? "occlusion" : "shadow",
+						lag ? "the frame before's" : "the frame's own", c.compared, c.same, c.missing, fields.empty() ? std::string() : " (differ: " + fields + ")");
+					c = {};
+				}
+			segments += fmt::format("; shadow layout misses {}", sp.layoutMisses);
+			sp.layoutMisses = 0;
 			auto& rp = impl->reflectionParity;
 			for (std::size_t lag = 0; lag < 2; ++lag) {
 				auto& c = rp.counts[lag];
