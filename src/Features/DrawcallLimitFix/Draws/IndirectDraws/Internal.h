@@ -232,6 +232,7 @@ namespace DCLF
 			bool operator==(const LatchedList& o) const { return latch == o.latch && copies == o.copies; }
 		};
 
+		struct ZBucketPlan;
 		struct PassFrame
 		{
 			std::uint64_t generation = 0;
@@ -267,6 +268,10 @@ namespace DCLF
 			std::vector<ZCall> zCalls;
 			// The commit's per-frame values the epoch's first pass copies from the latch (MainLatchedCopiesPass).
 			LatchedList latched;
+			// Not compared (the latch block's layout, and the bucket plan zCalls are the calls of): what a commit writing its values
+			// into this shape writes them against - a scene revision's shape, which that commit did not make (R3c).
+			MainLatchLayout latchLayout;
+			std::shared_ptr<const ZBucketPlan> zPlan;
 
 			bool SameShape(const PassFrame& o) const
 			{
@@ -987,7 +992,9 @@ namespace DCLF
 			IndirectState indirect{};
 			std::uint32_t cullMode = 0;
 			std::shared_ptr<const org::LatchBlock> latch;  // the main latch (ReserveMainLatch)
+			MainLatchLayout latchLayout;                   // its layout
 			std::vector<PassFrame::ZCall> zCalls;          // the depth segment's (PlanZBuckets)
+			std::shared_ptr<const ZBucketPlan> zPlan;      // the plan they are the calls of
 			LatchedList latched;                           // MainLatchedLayout, in its reserved block
 		};
 		/**
@@ -1309,6 +1316,7 @@ namespace DCLF
 		 * frame. Each view's matrices and input count are in its BuildDrawsLatch; the shape changes only when the engine's
 		 * view layout or the pipelines do, and its identity is the shadow passes' revision.
 		 */
+		struct RowBuckets;
 		struct ShadowFrame
 		{
 			std::uint64_t generation = 0;
@@ -1325,6 +1333,10 @@ namespace DCLF
 			std::shared_ptr<const org::LatchBlock> zeros;
 			// The commit's other per-frame values (CS's SharedData and FeatureData blocks in the constants), latched (LatchedUploads).
 			LatchedList latched;
+			// Not compared (implied by the latch block and the views' buckets): what a commit writing its values into this shape writes
+			// them against (R3c) - the latch's layout, and each view's map row (its key slots' buckets).
+			ShadowLatchLayout latchLayout;
+			std::shared_ptr<const std::vector<RowBuckets>> rows;
 
 			bool SameShape(const ShadowFrame& o) const
 			{
@@ -1669,6 +1681,7 @@ namespace DCLF
 		{
 			std::vector<std::uint32_t> pipelines;     // by bucket
 			std::vector<std::uint32_t> bucketOfSlot;  // by key slot: its bucket, or Lookups::kNone
+			bool operator==(const RowBuckets&) const = default;
 		};
 
 		/**
@@ -3067,8 +3080,18 @@ namespace DCLF
 			/** @brief a_block: the segment's latch block (Resources::latchedBlocks), written at a_slot, replaced by a larger one when full. */
 			LatchedUploads(const std::atomic<std::shared_ptr<const std::vector<const void*>>>& a_targets, CommitUploads& a_fallback,
 				std::shared_ptr<org::LatchBlock>& a_block, std::uint32_t a_slot, std::uint32_t a_slots) :
-				targets(a_targets.load(std::memory_order_acquire)), fallback(a_fallback), block(a_block), slot(a_slot), slots(a_slots)
+				targets(a_targets.load(std::memory_order_acquire)), fallback(a_fallback), block(&a_block), slot(a_slot), slots(a_slots)
 			{}
+			/**
+			 * @brief Into a shape's latched copies (a scene revision's, R3c): each value at its copy's place in the list's block, the rest
+			 * of the copy zeroed; a value the list has no copy for is staged (a_fallback), as a target no pass declared is. Finish zeroes
+			 * the copies no value was written to, and returns the list.
+			 */
+			LatchedUploads(const LatchedList& a_layout, CommitUploads& a_fallback, std::uint32_t a_slot) :
+				fallback(a_fallback), slot(a_slot), layout(&a_layout), written(a_layout.copies.size(), 0)
+			{}
+			/** @brief Values the layout had no copy for (staged instead). */
+			std::uint32_t Misses() const { return misses; }
 
 			void operator()(const std::shared_ptr<org::Buffer>& a_target, const void* a_data, std::size_t a_bytes, std::uint64_t a_offset)
 			{
@@ -3086,20 +3109,37 @@ namespace DCLF
 			{
 				if (!a_data || !a_bytes)
 					return;
+				if (layout) {
+					const auto& listed = layout->copies;
+					for (std::size_t i = 0; i < listed.size(); ++i) {
+						const auto& copy = listed[i];
+						if (copy.target != a_key || copy.dstOffset != a_offset || a_bytes > copy.bytes || !layout->latch)
+							continue;
+						auto region = layout->latch->Slot(slot).subspan(copy.latchOffset, copy.bytes);
+						std::memcpy(region.data(), a_data, a_bytes);
+						std::memset(region.data() + a_bytes, 0, copy.bytes - a_bytes);
+						written[i] = 1;
+						return;
+					}
+					++misses;
+					a_fallback();
+					return;
+				}
 				if (!targets || std::find(targets->begin(), targets->end(), a_key) == targets->end()) {
 					a_fallback();
 					return;
 				}
 				const std::size_t at = (used + 15) & ~std::size_t(15);
-				if (!block || at + a_bytes > block->Stride()) {
+				auto& current = *block;
+				if (!current || at + a_bytes > current->Stride()) {
 					// A larger block, with what this commit has written so far: frames in flight keep the old one (LatchedList::latch).
 					auto grown = std::make_shared<org::LatchBlock>("cs.dclf.latched-copies",
 						static_cast<std::uint32_t>(std::bit_ceil(std::max<std::size_t>(2 * (at + a_bytes), 4096))), slots);
-					if (block && used)
-						std::memcpy(grown->Slot(slot).data(), block->Slot(slot).data(), used);
-					block = std::move(grown);
+					if (current && used)
+						std::memcpy(grown->Slot(slot).data(), current->Slot(slot).data(), used);
+					current = std::move(grown);
 				}
-				std::memcpy(block->Slot(slot).data() + at, a_data, a_bytes);
+				std::memcpy(current->Slot(slot).data() + at, a_data, a_bytes);
 				used = at + a_bytes;
 				copies.push_back({ a_key, static_cast<std::uint32_t>(at), static_cast<std::uint32_t>(a_bytes), a_offset });
 			}
@@ -3108,10 +3148,20 @@ namespace DCLF
 			/** @brief The frame's list: the copies of what this commit latched, from the block it wrote. */
 			LatchedList Finish()
 			{
+				if (layout) {
+					// A copy no value was written to this commit copies zeros, never what an older frame left in the slot.
+					for (std::size_t i = 0; i < written.size(); ++i)
+						if (!written[i] && layout->latch) {
+							const auto& copy = layout->copies[i];
+							auto region = layout->latch->Slot(slot).subspan(copy.latchOffset, copy.bytes);
+							std::memset(region.data(), 0, region.size());
+						}
+					return *layout;
+				}
 				LatchedList out;
 				if (copies.empty())
 					return out;
-				out.latch = block;
+				out.latch = *block;
 				out.copies = std::move(copies);
 				return out;
 			}
@@ -3119,10 +3169,13 @@ namespace DCLF
 		private:
 			std::shared_ptr<const std::vector<const void*>> targets;
 			CommitUploads& fallback;
-			std::shared_ptr<org::LatchBlock>& block;
+			std::shared_ptr<org::LatchBlock>* block = nullptr;
 			std::uint32_t slot = 0, slots = 0;
 			std::size_t used = 0;
 			std::vector<LatchedCopy> copies;
+			const LatchedList* layout = nullptr;
+			std::vector<std::uint8_t> written;
+			std::uint32_t misses = 0;
 		};
 
 		/**
@@ -3135,7 +3188,7 @@ namespace DCLF
 		 * @brief Brings the index pool up to the tables (ShadowEpochs.cpp): whichever commit draws from it first in a frame gives the
 		 * ranges out and writes their copies' dispatch at a_poolOffset of its latch slot; a later commit finds nothing to copy.
 		 */
-		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, org::LatchBlock& a_latch,
+		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads);
 
 		// The graph extensions that add DCLF's passes (Passes.cpp).
@@ -3201,6 +3254,10 @@ namespace DCLF
 			// (ReflectionLatchLayout::FaceOffset(0)), and the zeros (ReflectionResources::zeros).
 			std::uint32_t facesOffset = 0;
 			std::shared_ptr<const org::LatchBlock> zeros;
+			// Not compared (implied by the latch block and the buckets): what a commit writing its values into this shape writes them
+			// against (R3c) - the latch's layout, and each pipeline slot's bucket (PlanReflectionBuckets).
+			ReflectionLatchLayout latchLayout;
+			std::shared_ptr<const std::vector<std::uint32_t>> map;
 
 			bool SameShape(const ReflectionFrame& o) const
 			{
@@ -3263,6 +3320,7 @@ namespace DCLF
 			rhi::DescriptorHeapHandle resourceHeap{}, samplerHeap{};
 			IndirectState indirect{};
 			std::vector<ReflectionFrame::Bucket> buckets;
+			std::shared_ptr<const std::vector<std::uint32_t>> map;  // each pipeline slot's bucket
 			// Tree LOD in the faces: its forward pipeline and draw signature, and the scene's shape slots (none: invalid pipeline).
 			rhi::PipelineHandle tree{};
 			rhi::CommandSignatureHandle treeSignature{};
@@ -3277,6 +3335,7 @@ namespace DCLF
 		struct VersionSet final : org::IResourceVersions
 		{
 			std::vector<std::pair<const void*, std::shared_ptr<const org::BufferVersion>>> versions;  // by VersionedBuffer::Key
+			std::uint64_t changes = 0;  // VersionRegistry::changes when it was taken: the versions are current while that holds
 			std::shared_ptr<const org::BufferVersion> Find(const org::VersionedBuffer& a_buffer) const noexcept override;
 			/** @brief Render thread: the registry's buffers' current versions. */
 			static std::shared_ptr<const VersionSet> Snapshot();
@@ -3817,11 +3876,66 @@ namespace DCLF
 			};
 			std::array<Epoch, kEpochs> epochs;
 			std::atomic<std::uint32_t> failuresLogged = 0;
+			// The selected revision, for the frame's epochs (SelectRevision), and the scene frame whose join made it.
+			org::async::RevisionAssembler::Lease active;
+			std::uint32_t activeFrame = ~0u;
+			// R3c (c), per epoch since the last report: commits that submitted the selected revision's recording (it covered the
+			// frame), and those that submitted their own preparation, by why (ChooseRevisionRecording).
+			enum Miss : std::uint32_t
+			{
+				kNoRevision,
+				kNoRecording,
+				kVersions,
+				kShape,
+				kPipelines,
+				kViewport,
+				kCapacity,
+				kLatch,
+				kMisses
+			};
+			static constexpr std::array<const char*, kMisses> kMissNames = { "no revision", "no recording", "versions moved", "shape differs", "pipelines moved",
+				"viewport moved", "draws past its capacity", "values past its latch" };
+			std::uint64_t latchedMisses = 0;  // values a commit writing into a revision's shape staged: its latched copies lacked them
+			struct Coverage
+			{
+				std::uint64_t covered = 0;
+				std::array<std::uint64_t, kMisses> missed{};
+			};
+			std::array<Coverage, kEpochs> coverage{};
 			// Per epoch, the inputs (versions, shape) whose recording failed: not asked for again until they change.
 			std::array<std::pair<std::shared_ptr<const org::async::RevisionFragment>, std::shared_ptr<const org::async::RevisionFragment>>, kEpochs> failedFor;
 		} revisions;
 		/** @brief The scene work's join: the revision of MakeRevisionShapes' shapes, sealed (SceneRevisions). */
 		void AssembleRevision(std::uint32_t a_frame);
+		/**
+		 * @brief R3c (c), inside an epoch's commit, its shape made (CS_DCLF_REVISIONS): when the selected revision covers the frame
+		 * - its versions are the current ones, it has the epoch's recording, and a_match finds the commit's shape among its shapes
+		 * (SameShape: the latch blocks, layouts and addresses the commit wrote into are the recording's) - that recording is
+		 * submitted instead of the ticket's own preparation (PersistentGraphHost::UseEpochRecording). a_match: the shape's index
+		 * in the epoch's shapes (a shadow epoch's variants), or SIZE_MAX.
+		 */
+		void ChooseRevisionRecording(std::uint32_t a_epoch, const std::function<std::size_t(const org::async::RevisionFragment&)>& a_match);
+		/**
+		 * @brief R3c (c): the selected revision's shape fragment and recordings for epoch a_epoch, when it has them and its versions are
+		 * current (CS_DCLF_REVISIONS); else false, the miss counted. A commit that writes its values into the shape (it covers the
+		 * frame) submits a recording with SubmitRevisionRecording; one that does not counts why (NoteRevisionMiss).
+		 */
+		bool ActiveRevision(std::uint32_t a_epoch, std::shared_ptr<const org::async::RevisionFragment>& a_shape, std::shared_ptr<const RevisionRecordings>& a_recordings);
+		void NoteRevisionMiss(std::uint32_t a_epoch, std::uint32_t a_miss) { ++revisions.coverage[a_epoch].missed[a_miss]; }
+		void SubmitRevisionRecording(std::uint32_t a_epoch, const RevisionRecordings& a_recordings, std::size_t a_index);
+		/**
+		 * @brief R3c: the selected revision's variant of a shadow or occlusion epoch's shape (a_epoch 2 or 3) that covers the frame, or
+		 * null (the miss counted): the variant of the commit's own shape's view layout, with the same heaps, pipeline layout and map
+		 * rows, push addresses and slots' buffers, a latch that holds the frame's states, key slots and a_sunProcesses, and capacities
+		 * that hold the payload's draws. a_variant: its index among the revision's variants (and recordings).
+		 */
+		std::shared_ptr<const ShadowFrame> ShadowRevisionFor(std::uint32_t a_epoch, const ShadowFrame& a_own, const ShadowPayload& a_payload, const ShadowIndirectState& a_indirect,
+			std::size_t a_sunProcesses, std::shared_ptr<const RevisionRecordings>& a_recordings, std::size_t& a_variant);
+		/**
+		 * @brief Whether the selected revision's pipeline set holds every pipeline the frame's claims draw with, though a newer set
+		 * is published: the sets only append (DrawPipelines' versions), and the claims were committed before the revision was made.
+		 */
+		bool RevisionHoldsClaims() const;
 		std::string RevisionReport();
 
 		void ReadCullCounters(const std::shared_ptr<Resources>& a_resources, IndirectDraws::Stats& a_stats, const MainPayload& a_payload);

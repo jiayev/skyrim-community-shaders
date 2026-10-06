@@ -585,6 +585,59 @@ draw the commits' shapes; the revision is made and recorded beside them, counts 
   frame after its join. The live epochs were unaffected: 0 ticket waits after startup (5–6 in the first interval, as
   before), nothing prepared again, and the members, draws and warnings as in r3ca4.
 
+**Phase 6b, R3c (c), part 1: the revision's recordings drawn where it covers the frame** (2026-10-05, r3cc3).
+`CS_DCLF_REVISIONS` (on unless 0) lets each epoch's commit, its shape made, submit the selected revision's recording
+instead of its own ticket's preparation (`ChooseRevisionRecording`; ORG's `UseEpochRecording`). The revision covers the
+epoch when:
+- its version set is still current (`VersionSet::changes` against `VersionRegistry`), so every buffer its recording reads
+  is the one the commit wrote;
+- it has the epoch's recording;
+- its shape for the epoch, or one of its shadow variants, is the commit's shape (`SameShape`), so the latch blocks,
+  layouts and addresses the commit wrote are the ones the recording reads.
+
+Otherwise the ticket's own preparation draws, as before, and the commit counts why.
+
+- **Result** (small tables, r3cc3). Startup interval: about 90% of every epoch's submissions are the revision's. The rest
+  are "no revision" for the first 3–5 frames, and "shape differs" (22–27) while pipelines arrive faster than recordings
+  follow. Steady play: 100% for colour, shadow, occlusion and reflection; the Z-prepass is 296–300 of 300 (a lookup
+  resolving between the join and the epoch). The live tickets: 0 waits, nothing prepared again. Members, draws, the
+  parity reports and the image are as in r3cb2.
+- **Found and fixed on the way.**
+  - The first run crashed on ORG's host thread, in a live preparation's poll of a slot's backing. The slot named a
+    versioned buffer's old version that nothing held any more: the index pool had grown six times in one commit, and
+    each growth dropped the version before it. A latent R3a race, fixed in ORG: slots own their group members.
+  - The index pool now grows once per batch of acquires (`reserveFor`): a cell's load used to double it once per
+    acquire that did not fit.
+**Phase 6b, R3c (c), part 2a: commits write into the revision's shape** (2026-10-05, r3cc4–r3cc6). A commit no longer needs
+to make the same shape as the revision. When the selected revision covers the frame, the commit writes its values into the
+revision's shape:
+- its latch block, through the layout the shape now carries (`PassFrame::latchLayout`, `ShadowFrame::latchLayout`,
+  `ReflectionFrame::latchLayout`);
+- its bucket plan and map (`PassFrame::zPlan`, `ShadowFrame::rows`, `ReflectionFrame::map`);
+- its latched copies, through `LatchedUploads`' layout mode. A value the list lacks is staged, which is still correct, and
+  a copy the frame did not write copies zeros.
+
+Then it submits the revision's recording; its own shape is still made and published for the live path. "Covers" is now
+decided from what the values must fit, at the start of the commit:
+- **Main:** the heaps and pipeline layout; the viewport and cull mode; the max counts holding the frame's draws; the latch
+  holding the cascades, shadow volumes and bucket slots.
+- **Reflection:** the targets, tree LOD and pipeline slots.
+- **Shadows and occlusion:** the variant of the frame's view layout, with the same map rows, push addresses and slot
+  buffers; a latch holding the states, key slots and sun processes; capacities holding the payload's draws, per view and
+  per bucket.
+- **An older pipeline set is accepted when it holds the frame's claims** (`RevisionHoldsClaims`). Sets only append (the
+  versions of `DrawPipelines`), and the frame's claims were committed at the join before the revision was made, so a
+  revision made at that join or later has every pipeline they draw with.
+- A pipeline slot the tables gained since the revision maps to no bucket (none of its draws is the frame's).
+- **Result** (r3cc6). Startup misses: Z-prepass, colour and reflection 3 each (from 22–27); shadow and occlusion 25 (their
+  rows change while shadow pipelines arrive). Startup re-preparations: 136 → 81. Steady play: every main and reflection
+  frame, and shadows 294–300 of 300. The shadow misses are a bucket outgrowing the revision's when the caster set crosses a
+  power of two (the revision's payload sizes them), and a layout the revision has not seen when a retained view expires.
+  No value was staged for lack of a copy; the image, members and draws are as before.
+- **Next (part 2).** Strict revision-driven epochs. The commit writes its values into the revision's shape instead of
+  making its own. Growths are adopted when their revision is selected. Structural stamps revoke a changed member's claim.
+  What the revision does not cover is decided before the engine draws. Then the epochs' own preparations go.
+
 ## Implemented foundations
 
 - `ORGModuleServices::AsyncPrimitives` is a backend-independent header-only target.

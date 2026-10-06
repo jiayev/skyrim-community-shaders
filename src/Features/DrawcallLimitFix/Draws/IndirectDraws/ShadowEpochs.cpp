@@ -85,23 +85,22 @@ namespace DCLF
 		}
 
 		/** @brief Writes a view's bucket table into its slot's region of the frame slot's latch, and points a_latch at it. */
-		void WriteBucketTable(ShadowResources& a_resources, std::uint32_t a_latchSlot, std::uint32_t a_slot, std::span<const ShadowBucket> a_buckets,
-			BuildDrawsLatch& a_latch)
+		void WriteBucketTable(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, std::uint32_t a_slot,
+			std::span<const ShadowBucket> a_buckets, BuildDrawsLatch& a_latch)
 		{
-			const auto& layout = a_resources.latchLayout;
 			// A view has at most a bucket per key slot, and the layout a table's worth per key slot (ReserveShadowLatch).
-			if (a_buckets.size() > layout.keySlots)
-				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow buckets past the latch's {} key slots", a_buckets.size(), layout.keySlots));
+			if (a_buckets.size() > a_layout.keySlots)
+				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow buckets past the latch's {} key slots", a_buckets.size(), a_layout.keySlots));
 			std::vector<std::uint32_t> table;
 			table.reserve(a_buckets.size() * 2);
 			for (const auto& bucket : a_buckets) {
 				table.push_back(bucket.first);
 				table.push_back(bucket.capacity);
 			}
-			const std::uint32_t offset = layout.BucketOffset(a_slot);
+			const std::uint32_t offset = a_layout.BucketOffset(a_slot);
 			if (!table.empty())
-				a_resources.latch->Write(a_latchSlot, offset, std::as_bytes(std::span(table)));
-			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + offset;
+				a_latchBlock.Write(a_latchSlot, offset, std::as_bytes(std::span(table)));
+			a_latch.bucketTableOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + offset;
 		}
 
 		/**
@@ -135,7 +134,7 @@ namespace DCLF
 			return pool;
 		}
 
-		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, org::LatchBlock& a_latch,
+		void UpdateIndexPool(IndexPool& a_pool, const SceneStore::Tables& a_tables, std::uint32_t a_generation, const org::LatchBlock& a_latch,
 			std::uint32_t a_latchSlot, std::uint32_t a_poolOffset, CommitUploads& a_uploads)
 		{
 			auto& p = a_pool;
@@ -217,11 +216,25 @@ namespace DCLF
 			// A slot's own range of its index buffer, copied whenever the log names the slot: a range is never shared, because
 			// a buffer address is no identity - the device hands a freed buffer's address to the next buffer it creates, which a
 			// cell's load does while the unloaded cell's slots still hold theirs.
-			auto acquire = [&](std::uint32_t a_slot) {
+			auto indicesOf = [&](std::uint32_t a_slot) -> std::uint32_t {
 				const auto& geometry = a_tables.geometries[a_slot];
 				if (!geometry.indexAddress || !geometry.indexBytes)
+					return 0;
+				return static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
+			};
+			// Before a batch of acquires: one growth for all of them (a cell's load names hundreds of slots), not one per doubling.
+			auto reserveFor = [&](auto&& a_slots) {
+				std::uint64_t more = 0;
+				for (const std::uint32_t g : a_slots)
+					more += indicesOf(g);
+				if (more && (std::uint64_t(p.indicesHeld) + more) * 2 > p.capacity)
+					grow(static_cast<std::uint32_t>(std::min<std::uint64_t>(more, UINT32_MAX)));
+			};
+			auto acquire = [&](std::uint32_t a_slot) {
+				const auto& geometry = a_tables.geometries[a_slot];
+				const std::uint32_t indices = indicesOf(a_slot);
+				if (!indices)
 					return;
-				const std::uint32_t indices = static_cast<std::uint32_t>(std::min<std::uint64_t>((geometry.indexBytes + 3) / 4 * 2, UINT32_MAX & ~1u));
 				std::uint32_t first = allocate(indices);
 				if (first == IndexPool::kNoRange) {
 					grow(indices);
@@ -241,6 +254,7 @@ namespace DCLF
 				p.indicesHeld = 0;
 				p.slots.assign(count, {});
 				p.slotFirst.assign(count, IndexPool::kNoRange);
+				reserveFor(std::views::iota(0u, count));
 				for (std::uint32_t g = 0; g < count; ++g)
 					acquire(g);
 				p.cursor.Restart(a_generation);
@@ -260,6 +274,7 @@ namespace DCLF
 				// Every release before any acquire.
 				for (const std::uint32_t g : changed)
 					release(g);
+				reserveFor(changed);
 				for (const std::uint32_t g : changed)
 					acquire(g);
 			}
@@ -337,15 +352,15 @@ namespace DCLF
 		 * an offset into the whole latch block, so the offset carries the frame slot's base: a slot-relative one read slot 0's
 		 * rows, which async epochs never write (every draw got bucket 0).
 		 */
-		void UseShadowMapRow(ShadowResources& a_resources, const RowBuckets& a_buckets, std::uint32_t a_latchSlot, std::uint32_t a_rasterState, bool a_write,
-			BuildDrawsLatch& a_latch)
+		void UseShadowMapRow(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, const RowBuckets& a_buckets, std::uint32_t a_latchSlot,
+			std::uint32_t a_rasterState, bool a_write, BuildDrawsLatch& a_latch)
 		{
-			const auto& layout = a_resources.latchLayout;
+			const auto& layout = a_layout;
 			// Every registered state has its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
 			if (a_rasterState == 0 || a_rasterState > layout.rasterStates)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: shadow view rasterizer state {} past the latch's {} rows", a_rasterState, layout.rasterStates));
 			const std::uint32_t mapRowOffset = layout.MapOffset() + (a_rasterState - 1) * layout.MapRowBytes();
-			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + mapRowOffset;
+			a_latch.pipelineMapOffset = static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + mapRowOffset;
 			if (!a_write)
 				return;
 			// Every key slot fits its row (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
@@ -353,41 +368,41 @@ namespace DCLF
 			if (row.size() > layout.keySlots)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} shadow key slots past the latch's {}", row.size(), layout.keySlots));
 			if (!row.empty())
-				a_resources.latch->Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
+				a_latchBlock.Write(a_latchSlot, mapRowOffset, std::as_bytes(std::span(row)));
 		}
 
 		/**
 		 * @brief Writes the sun's full-frustum processes into a frame slot's region of the shadow latch block (ShadowLatchLayout::
 		 * SunEntryOffset) and returns where, in bytes into the block, as a sun view's latch names it (BuildDrawsLatch::sunEntryOffset).
 		 */
-		std::uint32_t WriteSunEntryRegion(ShadowResources& a_resources, std::uint32_t a_latchSlot, std::span<const SunEntryProcess> a_processes)
+		std::uint32_t WriteSunEntryRegion(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot,
+			std::span<const SunEntryProcess> a_processes)
 		{
-			const auto& layout = a_resources.latchLayout;
+			const auto& layout = a_layout;
 			// Every process fits (ReserveShadowLatch, before the epoch): past it is a defect of that reserve.
 			if (a_processes.size() > layout.sunProcesses)
 				stl::report_and_fail(fmt::format("Drawcall Limit Fix: {} sun full-frustum processes past the latch's {}", a_processes.size(), layout.sunProcesses));
 			const std::uint32_t header[4] = { static_cast<std::uint32_t>(a_processes.size()), 0, 0, 0 };
-			a_resources.latch->Write(a_latchSlot, layout.SunEntryOffset(), std::as_bytes(std::span(header)));
+			a_latchBlock.Write(a_latchSlot, layout.SunEntryOffset(), std::as_bytes(std::span(header)));
 			if (!a_processes.empty())
-				a_resources.latch->Write(a_latchSlot, layout.SunEntryOffset() + kSunRegionHeader, std::as_bytes(a_processes));
-			return static_cast<std::uint32_t>(a_resources.latch->Offset(a_latchSlot)) + layout.SunEntryOffset();
+				a_latchBlock.Write(a_latchSlot, layout.SunEntryOffset() + kSunRegionHeader, std::as_bytes(a_processes));
+			return static_cast<std::uint32_t>(a_latchBlock.Offset(a_latchSlot)) + layout.SunEntryOffset();
 		}
 
 		/**
 		 * @brief Writes a view's blocks (its view block, its per-frame block) into its slot's region of the frame slot's latch, where
 		 * the epoch's latched copies (ShadowLatchedCopiesPass) take them to the view-blocks buffer, and points the frame there.
 		 */
-		void WriteViewBlocks(const ShadowResources& a_resources, std::uint32_t a_latchSlot, std::uint32_t a_slot, const PendingView& a_view, ShadowFrame& a_frame)
+		void WriteViewBlocks(const org::LatchBlock& a_latchBlock, const ShadowLatchLayout& a_layout, std::uint32_t a_latchSlot, std::uint32_t a_slot,
+			const PendingView& a_view)
 		{
-			const std::uint32_t offset = a_resources.latchLayout.ViewBlockOffset(a_slot);
-			a_resources.latch->Write(a_latchSlot, offset, std::as_bytes(std::span(a_view.viewBlock)));
+			const std::uint32_t offset = a_layout.ViewBlockOffset(a_slot);
+			a_latchBlock.Write(a_latchSlot, offset, std::as_bytes(std::span(a_view.viewBlock)));
 			// PerTechnique's c3, DCLFDepthRange (Utility.hlsl): the view's viewport depth range, which its draws apply under a [0, 1]
 			// viewport (FrameViewOf), so the engine changing it changes no recording.
 			const float depthRange[4] = { a_view.minDepth, a_view.maxDepth - a_view.minDepth, 0.0f, 0.0f };
-			a_resources.latch->Write(a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
-			a_resources.latch->Write(a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
-			a_frame.viewBlocksOffset = a_resources.latchLayout.ViewBlockOffset(0);
-			a_frame.zeros = a_resources.zeros;
+			a_latchBlock.Write(a_latchSlot, offset + static_cast<std::uint32_t>(sizeof(a_view.viewBlock)), std::as_bytes(std::span(depthRange)));
+			a_latchBlock.Write(a_latchSlot, offset + static_cast<std::uint32_t>(kShadowPerFrameOffset), std::span(a_view.perFrame.data(), a_view.perFrameBytes));
 		}
 
 		/**
@@ -440,6 +455,16 @@ namespace DCLF
 			return GrowCapacity(a_previous, a_draws, a_slotDraws);
 		}
 
+		/** @brief The revision's variant (ShadowVariants) that is a_frame's shape, or SIZE_MAX. */
+		std::size_t VariantOf(const org::async::RevisionFragment& a_shapes, const ShadowFrame& a_frame)
+		{
+			if (const auto variants = a_shapes.Value<ShadowVariants>())
+				for (std::size_t v = 0; v < variants->shapes.size(); ++v)
+					if (variants->shapes[v]->SameShape(a_frame))
+						return v;
+			return SIZE_MAX;
+		}
+
 		/** @brief A pending view's layout in a_slot (ShadowViewLayout). */
 		ShadowViewLayout LayoutOf(const PendingView& a_view, std::uint32_t a_slot, std::uint32_t a_mode, std::uint32_t a_target)
 		{
@@ -467,6 +492,8 @@ namespace DCLF
 		frame->viewBlocksOffset = a_resources.latchLayout.ViewBlockOffset(0);
 		frame->zeros = a_resources.zeros;
 		frame->latched = a_in.latched;
+		frame->latchLayout = a_resources.latchLayout;
+		frame->rows = std::make_shared<const std::vector<RowBuckets>>(a_in.rows);
 		for (std::size_t v = 0; v < a_in.views.size(); ++v) {
 			const auto& view = a_in.views[v];
 			const auto* previous = PreviousView(a_in.previous, view.slot);
@@ -983,19 +1010,26 @@ namespace DCLF
 			shapeIn.payload = &payload;
 			shapeIn.previous = resources->occlusionPublished;
 			auto frame = MakeShadowShape(*resources, shapeIn);
+			// R3c: the selected revision's variant when it covers the maps (ShadowRevisionFor): the values go into it.
+			std::shared_ptr<const RevisionRecordings> revisionRecordings;
+			std::size_t revisionVariant = 0;
+			const auto revisionShape = impl->ShadowRevisionFor(3, *frame, payload, indirect, 0, revisionRecordings, revisionVariant);
+			const ShadowFrame& target = revisionShape ? *revisionShape : *frame;
+			const auto& latchBlock = *target.latch;
+			const auto& latchLayout = target.latchLayout;
 			auto& scene = *resources->scene;
 			std::size_t index = 0;
 			for (std::uint32_t v = 0; v < kOcclusionViews; ++v) {
 				if (!(drawable & (1u << v)))
 					continue;
 				const auto& view = impl->occlusion[v].view;
-				const auto& shapeView = frame->views[index];
-				const auto& buckets = shapeIn.rows[index++];
+				const auto& shapeView = target.views[index];
+				const auto& buckets = (*target.rows)[index++];
 				const std::uint32_t slot = OcclusionSlot(v), mode = OcclusionModeOf(v);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(mode));
 				// The view slot's blocks, which its push data names, into the latch (its counters are zeroed by the latched copies).
 				// The occluders, material rows, frame record, objects and geometries were uploaded by this frame's shadow commit.
-				WriteViewBlocks(*resources, latchSlot, slot, view, *frame);
+				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
 				// Its latch: frustum culling alone, near plane included as the rasterizer clips, every input drawn, and the rule's
 				// size test (Skylighting::OcclusionTechnique's bound radius above 32) on the record's bound, and the fade roots as the
 				// engine's cull of the map leaves them (kCullFadeOnVisible): it never draws a root the main camera has faded out, nor
@@ -1004,13 +1038,15 @@ namespace DCLF
 				static const REL::Relocation<const std::uint8_t*> fadesOn{ REL::Offset(0x2032dfd) };
 				latch.cullFlags = 1u | kCullMinRadius | (*fadesOn.get() ? kCullFadeOnVisible : 0u);
 				latch.fadeStatesIndex = scene.FadeStatesReadIndex(frameNumber);
-				UseShadowMapRow(*resources, buckets, latchSlot, view.rasterState, true, latch);
-				WriteBucketTable(*resources, latchSlot, slot, shapeView.buckets, latch);
-				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				UseShadowMapRow(latchBlock, latchLayout, buckets, latchSlot, view.rasterState, true, latch);
+				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, shapeView.buckets, latch);
+				latchBlock.WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				shadowStats.occlusionInputs[v] = inputCount;
 				++shadowStats.occlusionDrawn[v];
 			}
 			impl->NoteShadowParity(true, *frame, {}, frameNumber);
+			if (revisionShape)
+				impl->SubmitRevisionRecording(3, *revisionRecordings, revisionVariant);
 			PublishShape(std::move(frame), resources->occlusionPublished, resources->occlusionFrame, resources->shapeGenerations, resources->recentOcclusionShapes);
 		}, impl->shadowExecutionOwner);
 		shadowStats.occlusionMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -1292,11 +1328,6 @@ namespace DCLF
 			TracyCZoneN(shadowViewsZone, "CS.DCLF.ShadowInputs.BuildViews", true);
 			const auto blocksStart = std::chrono::steady_clock::now();
 			const std::uint32_t latchSlot = RenderGraphRuntime::Get().Host()->CurrentFrameSlot();
-			// The index pool, which this epoch's views and the occlusion epoch's after it draw from.
-			{
-				ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
-				UpdateIndexPool(*resources->pool, store.GetTables(), store.GetTablesGeneration(), *resources->latch, latchSlot, resources->latchLayout.PoolOffset(), uploads);
-			}
 			resources->labels.clear();
 			// The shape (MakeShadowShape), from the views' layout, their map rows' buckets and the payload; a scene revision makes it
 			// from its own (MakeRevisionShapes). The views' values go into the latch below.
@@ -1317,6 +1348,18 @@ namespace DCLF
 			auto frame = MakeShadowShape(*resources, shapeIn);
 			impl->shadowParity.resourceHeap = shapeIn.resourceHeap;
 			impl->shadowParity.samplerHeap = shapeIn.samplerHeap;
+			// R3c: the selected revision's variant when it covers the views (ShadowRevisionFor): the values go into it.
+			std::shared_ptr<const RevisionRecordings> revisionRecordings;
+			std::size_t revisionVariant = 0;
+			const auto revisionShape = impl->ShadowRevisionFor(2, *frame, payload, indirect, payload.inputs.sunEntryProcesses.size(), revisionRecordings, revisionVariant);
+			const ShadowFrame& target = revisionShape ? *revisionShape : *frame;
+			const auto& latchBlock = *target.latch;
+			const auto& latchLayout = target.latchLayout;
+			// The index pool, which this epoch's views and the occlusion epoch's after it draw from.
+			{
+				ZoneScopedN("CS.DCLF.ShadowInputs.IndexPool");
+				UpdateIndexPool(*resources->pool, store.GetTables(), store.GetTablesGeneration(), latchBlock, latchSlot, latchLayout.PoolOffset(), uploads);
+			}
 			std::vector<bool> mapRowsWritten(std::size_t(DrawPipelines::Get().ShadowRasterStateCount()) + 1);  // per state: its row is in the latch
 			std::uint32_t sunEntryOffset = 0;  // the slot's sun entry region, once written
 			for (std::uint32_t index = 0; index < pending.size(); ++index) {
@@ -1324,7 +1367,7 @@ namespace DCLF
 				const auto& view = pending[index];
 				const std::uint32_t slot = kFirstShadowViewSlot + index;
 				// Its blocks into the latch; the epoch's latched copies take them to the view-blocks buffer and zero its counters.
-				WriteViewBlocks(*resources, latchSlot, slot, view, *frame);
+				WriteViewBlocks(latchBlock, latchLayout, latchSlot, slot, view);
 				const auto inputCount = static_cast<std::uint32_t>(payload.ModeInputs(view.modeIndex));
 				// The view's values into its latch: frustum culling alone (mode 1), the single phase, and no
 				// engine-visibility gate - a caster is drawn whether or not the main camera kept it.
@@ -1338,7 +1381,7 @@ namespace DCLF
 				// loop's first sun view), which BuildDraws tests every input's entry sphere against (SetSunEntryRow).
 				if (view.sunView) {
 					if (!sunEntryOffset)
-						sunEntryOffset = WriteSunEntryRegion(*resources, latchSlot, payload.inputs.sunEntryProcesses);
+						sunEntryOffset = WriteSunEntryRegion(latchBlock, latchLayout, latchSlot, payload.inputs.sunEntryProcesses);
 					latch.sunEntryOffset = sunEntryOffset;
 					// CS_DCLF_PERSISTENT_PARITY: the test BuildDraws makes on the object record's entry sphere (the kept records the
 					// epoch uploads), against the CPU's verdict from the tables' entry, per input.
@@ -1357,9 +1400,9 @@ namespace DCLF
 				const bool rowWritten = view.rasterState < mapRowsWritten.size() && mapRowsWritten[view.rasterState];
 				if (view.rasterState < mapRowsWritten.size())
 					mapRowsWritten[view.rasterState] = true;
-				UseShadowMapRow(*resources, shapeIn.rows[index], latchSlot, view.rasterState, !rowWritten, latch);
-				WriteBucketTable(*resources, latchSlot, slot, frame->views[index].buckets, latch);
-				resources->latch->WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
+				UseShadowMapRow(latchBlock, latchLayout, (*target.rows)[index], latchSlot, view.rasterState, !rowWritten, latch);
+				WriteBucketTable(latchBlock, latchLayout, latchSlot, slot, target.views[index].buckets, latch);
+				latchBlock.WriteValue(latchSlot, slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), latch);
 				impl->CheckCascadeCulling(view, latch, frameNumber, payload);
 				resources->labels.push_back({ view.viewId, view.renderMode, slot });
 				if (impl->shadowSlotDrawn.size() <= slot)
@@ -1368,7 +1411,7 @@ namespace DCLF
 			}
 			// The retained views (the layouts past the frame's): a zero latch, no work.
 			for (std::size_t index = pending.size(); index < layouts.size(); ++index) {
-				resources->latch->WriteValue(latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
+				latchBlock.WriteValue(latchSlot, layouts[index].slot * static_cast<std::uint32_t>(sizeof(BuildDrawsLatch)), BuildDrawsLatch{});
 				++shadowStats.retainedViews;
 			}
 			// The arena (the frame record and the blocks), when the worker did not stage it.
@@ -1377,15 +1420,24 @@ namespace DCLF
 			// CS's SharedData and FeatureData as the frame has them now, over the build's copies (it may have been kicked before
 			// the water reflections' prepasses refreshed them).
 			// Latched (LatchedUploads): the epoch's first pass copies them, after the arena a build here staged above.
-			LatchedUploads latched(resources->latchedTargets, uploads, resources->latchedBlock, latchSlot, RenderGraphRuntime::Get().Host()->FrameSlots());
+			auto latched = revisionShape ? LatchedUploads(revisionShape->latched, uploads, latchSlot) :
+			                               LatchedUploads(resources->latchedTargets, uploads, resources->latchedBlock, latchSlot, RenderGraphRuntime::Get().Host()->FrameSlots());
 			const auto writeBlock = [&](std::uint64_t a_address, const std::vector<std::byte>& a_bytes) {
 				if (a_address && a_address != payload.zerosAddress && !a_bytes.empty() && a_address >= in.addresses.constants)
 					latched(resources->constants, a_bytes.data(), a_bytes.size(), a_address - in.addresses.constants);
 			};
 			writeBlock(payload.sharedDataAddress, in.sharedData);
 			writeBlock(payload.featureDataAddress, in.featureData);
-			frame->latched = latched.Finish();
+			if (revisionShape) {
+				// The values went into the revision's variant; the commit's own shape is published as its producer laid it out.
+				(void)latched.Finish();
+				impl->revisions.latchedMisses += latched.Misses();
+			} else {
+				frame->latched = latched.Finish();
+			}
 			impl->NoteShadowParity(false, *frame, latchedLayout, frameNumber);
+			if (revisionShape)
+				impl->SubmitRevisionRecording(2, *revisionRecordings, revisionVariant);
 			blocksMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - blocksStart).count();
 			static std::uint32_t logged = 0;
 			if (logged++ % 600 == 0) {
@@ -1466,6 +1518,65 @@ namespace DCLF
 			row = BucketsOfRow(a_lookups.ShadowMapRow(a_state), a_indirect);
 		}
 		return *row;
+	}
+
+	std::shared_ptr<const ShadowFrame> IndirectDraws::Impl::ShadowRevisionFor(std::uint32_t a_epoch, const ShadowFrame& a_own, const ShadowPayload& a_payload,
+		const ShadowIndirectState& a_indirect, std::size_t a_sunProcesses, std::shared_ptr<const RevisionRecordings>& a_recordings, std::size_t& a_variant)
+	{
+		using R = SceneRevisions;
+		std::shared_ptr<const org::async::RevisionFragment> fragment;
+		if (!ActiveRevision(a_epoch, fragment, a_recordings))
+			return nullptr;
+		auto miss = [&](std::uint32_t a_miss) -> std::shared_ptr<const ShadowFrame> {
+			NoteRevisionMiss(a_epoch, a_miss);
+			return nullptr;
+		};
+		// The variant of the frame's view layout.
+		const auto variants = fragment->Value<ShadowVariants>();
+		const auto layouts = LayoutOf(a_own);
+		std::shared_ptr<const ShadowFrame> shape;
+		for (std::size_t v = 0; variants && v < variants->shapes.size() && !shape; ++v)
+			if (variants->shapes[v] && LayoutOf(*variants->shapes[v]) == layouts) {
+				shape = variants->shapes[v];
+				a_variant = v;
+			}
+		if (!shape || !shape->latch || !shape->rows || !a_own.rows)
+			return miss(R::kShape);
+		// The pipelines its buckets bind and its map rows route the key slots to: its rows are the frame's, so every key slot draws
+		// where the frame's own shape would (a newer set only appends; the recording holds its own).
+		if (!SameHandle(shape->resourceHeap, a_own.resourceHeap) || !SameHandle(shape->samplerHeap, a_own.samplerHeap) || !shape->indirect.valid ||
+			!SameHandle(shape->indirect.layout, a_indirect.layout) || !SameHandle(shape->indirect.drawSignature, a_indirect.drawSignature) || *shape->rows != *a_own.rows)
+			return miss(R::kPipelines);
+		// The same blocks and buffers its push data and passes name.
+		for (std::size_t v = 0; v < a_own.views.size(); ++v) {
+			const auto& own = a_own.views[v];
+			const auto& theirs = shape->views[v];
+			if (own.push != theirs.push || own.materialRows != theirs.materialRows || own.sequenceDraws != theirs.sequenceDraws)
+				return miss(R::kShape);
+		}
+		// Its latch holds the frame's states, key slots and the sun's processes.
+		const auto& layout = shape->latchLayout;
+		if (a_sunProcesses > layout.sunProcesses)
+			return miss(R::kLatch);
+		for (std::size_t v = 0; v < a_own.views.size(); ++v)
+			if (a_own.views[v].rasterState > layout.rasterStates || (*shape->rows)[v].bucketOfSlot.size() > layout.keySlots)
+				return miss(R::kLatch);
+		// Its capacities hold the payload's draws: each view's mode's, and each bucket's key slots'.
+		for (std::size_t v = 0; v < a_own.views.size(); ++v) {
+			const auto& view = shape->views[v];
+			if (a_payload.modeDraws[view.modeIndex] > view.capacity)
+				return miss(R::kCapacity);
+			const auto& row = (*shape->rows)[v];
+			const auto& slotDraws = a_payload.keySlotDraws[view.modeIndex];
+			std::vector<std::uint64_t> need(view.buckets.size(), 0);
+			for (std::size_t k = 0; k < row.bucketOfSlot.size() && k < slotDraws.size(); ++k)
+				if (row.bucketOfSlot[k] != Lookups::kNone && row.bucketOfSlot[k] < need.size())
+					need[row.bucketOfSlot[k]] += slotDraws[k];
+			for (std::size_t b = 0; b < need.size(); ++b)
+				if (need[b] > view.buckets[b].capacity)
+					return miss(R::kCapacity);
+		}
+		return shape;
 	}
 
 	void IndirectDraws::Impl::ReserveShadowRows()
